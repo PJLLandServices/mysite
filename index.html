@@ -242,7 +242,7 @@
   width: 100%;
   margin-bottom: 0;
 }
-.hero-headline {
+.hero-headline-wrap .hero-headline {
   display: inline-block;
   margin: 0;
   max-width: min(20ch, 100%);
@@ -307,6 +307,9 @@
   height: 7px;
   flex: 0 0 auto;
   margin-top: 0.45em;
+  border-radius: 50%;
+  background: var(--amber);
+  box-shadow: 0 0 6px rgba(224,123,36,0.6);
 }
 @media (max-width: 768px) {
   .hero {
@@ -352,7 +355,7 @@
     font-size: 10px;
     padding: 7px 14px;
   }
-  .hero-headline {
+  .hero-headline-wrap .hero-headline {
     max-width: 100%;
   }
   .hero-trust {

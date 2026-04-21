@@ -900,22 +900,3 @@ img { max-width: 100%; height: auto; display: block; }
     margin: -36px 0 -52px -14px;
   }
 }
-
-.hero-headline--fixed {
-  text-wrap: nowrap;
-}
-.hero-headline em::after {
-  content: "";
-  display: block;
-}
-
-.hero-trust-item {
-  display: flex;
-  align-items: center;
-  gap: 0.6rem;
-}
-
-.hero-trust-item .dot {
-  flex: 0 0 auto;
-  align-self: center;
-}
