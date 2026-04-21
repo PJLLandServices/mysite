@@ -1,0 +1,1227 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="description" content="Get a free installation estimate for a lawn sprinkler system or landscape lighting from PJL Land Services — Newmarket & GTA.">
+<title>Free Installation Estimate | PJL Land Services</title>
+<link rel="stylesheet" href="style.css">
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;600&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+.page-hero { padding: 150px 0 56px; background: linear-gradient(135deg, var(--dark), var(--green)); }
+.page-hero h1 {
+  color: #fff;
+  margin-bottom: 12px;
+  max-width: min(14ch, 100%);
+  font-size: clamp(38px, 5vw, 66px);
+  line-height: 1.02;
+  letter-spacing: -0.04em;
+}
+.page-hero p {
+  color: rgba(255,255,255,0.8);
+  font-size: clamp(16px, 2vw, 18px);
+  max-width: 46ch;
+  line-height: 1.7;
+}
+.est-wrap { background: #FAFAF5; padding: 36px 0 80px; }
+/* ── Inline estimator styles ── */
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --green-dark:   #1B4D2E;
+    --green-mid:    #2D6A42;
+    --green-light:  #EAF3DE;
+    --amber:        #E07B24;
+    --amber-light:  #FDF0E4;
+    --cream:        #FAFAF7;
+    --white:        #FFFFFF;
+    --text-dark:    #1A1A1A;
+    --text-mid:     #4A4A4A;
+    --text-muted:   #888880;
+    --border:       #E2E0D8;
+    --radius:       12px;
+    --radius-lg:    20px;
+    --shadow:       0 4px 24px rgba(27,77,46,0.10);
+    --shadow-card:  0 2px 12px rgba(27,77,46,0.08);
+    --bundle-gold:  #C49A00;
+    --bundle-bg:    #FFFBEA;
+  }
+
+  html { scroll-behavior: smooth; }
+  body { font-family: 'DM Sans', sans-serif; background: var(--cream); color: var(--text-dark); min-height: 100vh; }
+  .header, .hero { display: none; }
+
+  .wrapper { max-width:680px; margin:0 auto; padding:32px 16px 60px; }
+
+  /* Service selector */
+  .service-select { display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-bottom:28px; }
+  .service-btn { background:var(--white); border:2px solid var(--border); border-radius:var(--radius-lg); padding:24px 16px; cursor:pointer; text-align:center; transition:all 0.2s ease; position:relative; overflow:hidden; }
+  .service-btn:hover { border-color:var(--green-mid); transform:translateY(-2px); box-shadow:var(--shadow-card); }
+  .service-btn.active { border-color:var(--green-dark); background:var(--green-light); }
+  .service-btn.active::after { content:'✓'; position:absolute; top:10px; right:12px; width:20px; height:20px; background:var(--green-dark); color:#fff; border-radius:50%; font-size:11px; line-height:20px; text-align:center; }
+  .service-icon { font-size:32px; margin-bottom:10px; display:block; }
+  .service-btn h3 { font-size:15px; font-weight:600; color:var(--text-dark); margin-bottom:4px; }
+  .service-btn p { font-size:13px; color:var(--text-muted); line-height:1.45; }
+
+  /* Steps */
+  .step { display:none; animation:fadeIn 0.3s ease; }
+  .step.active { display:block; }
+  @keyframes fadeIn { from{opacity:0;transform:translateY(8px)} to{opacity:1;transform:translateY(0)} }
+
+  /* Progress */
+  .progress-bar { background:var(--border); border-radius:99px; height:4px; margin-bottom:28px; overflow:hidden; }
+  .progress-fill { height:100%; background:linear-gradient(90deg,var(--green-dark),var(--green-mid)); border-radius:99px; transition:width 0.4s ease; }
+  .step-label { font-size:13px; color:var(--text-muted); margin-bottom:8px; font-weight:500; letter-spacing:0.04em; text-transform:uppercase; }
+
+  /* Cards */
+  .card { background:var(--white); border-radius:var(--radius-lg); border:1px solid var(--border); padding:28px 24px; margin-bottom:16px; box-shadow:var(--shadow-card); }
+  .card h2 { font-family:'Playfair Display',serif; font-size:22px; color:var(--text-dark); margin-bottom:6px; line-height:1.3; }
+  .card .subtitle { font-size:15px; color:var(--text-muted); margin-bottom:22px; line-height:1.55; }
+
+  /* Options */
+  .options { display:grid; gap:10px; }
+  .options.cols-2 { grid-template-columns:1fr 1fr; }
+  .option { border:1.5px solid var(--border); border-radius:var(--radius); padding:14px 16px; cursor:pointer; transition:all 0.18s ease; background:var(--white); text-align:left; position:relative; }
+  .option:hover { border-color:var(--green-mid); background:var(--green-light); }
+  .option.selected { border-color:var(--green-dark); background:var(--green-light); }
+  .option.selected::after { content:'✓'; position:absolute; top:8px; right:10px; width:18px; height:18px; background:var(--green-dark); color:#fff; border-radius:50%; font-size:10px; line-height:18px; text-align:center; }
+  .option-icon { font-size:22px; margin-bottom:6px; display:block; }
+  .option h4 { font-size:14px; font-weight:600; color:var(--text-dark); margin-bottom:2px; }
+  .option p { font-size:13px; color:var(--text-muted); line-height:1.45; }
+  .option .price-hint { font-size:12px; color:var(--green-dark); font-weight:600; margin-top:4px; }
+  .option .price-save { font-size:12px; color:#2D6A42; font-weight:600; margin-top:4px; }
+
+  /* Slider */
+  .slider-wrap { padding:8px 0; }
+  .slider-labels { display:flex; justify-content:space-between; font-size:12px; color:var(--text-muted); margin-bottom:10px; }
+  .slider-value { text-align:center; font-size:28px; font-weight:600; color:var(--green-dark); margin-bottom:12px; font-family:'Playfair Display',serif; }
+  .slider-value span { font-size:14px; font-weight:400; color:var(--text-muted); }
+  input[type=range] { width:100%; -webkit-appearance:none; height:6px; border-radius:99px; background:var(--border); outline:none; cursor:pointer; }
+  input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:22px; height:22px; border-radius:50%; background:var(--green-dark); border:3px solid white; box-shadow:0 2px 8px rgba(27,77,46,0.3); cursor:pointer; }
+
+  /* Extras / checkboxes */
+  .extras { display:grid; gap:10px; }
+  .extra-item { display:flex; align-items:center; gap:14px; border:1.5px solid var(--border); border-radius:var(--radius); padding:14px 16px; cursor:pointer; transition:all 0.18s ease; background:var(--white); }
+  .extra-item:hover { border-color:var(--green-mid); }
+  .extra-item.checked { border-color:var(--green-dark); background:var(--green-light); }
+  .extra-check { width:20px; height:20px; border:2px solid var(--border); border-radius:5px; flex-shrink:0; display:flex; align-items:center; justify-content:center; transition:all 0.15s; font-size:12px; color:#fff; }
+  .extra-item.checked .extra-check { background:var(--green-dark); border-color:var(--green-dark); }
+  .extra-info { flex:1; }
+  .extra-info h4 { font-size:14px; font-weight:600; color:var(--text-dark); }
+  .extra-info p { font-size:13px; color:var(--text-muted); margin-top:1px; }
+  .extra-cost { font-size:13px; font-weight:600; color:var(--amber); white-space:nowrap; }
+
+  /* Info note */
+  .info-note { background:var(--amber-light); border:1px solid #F0C898; border-radius:var(--radius); padding:14px 16px; display:flex; gap:12px; align-items:flex-start; margin-top:12px; font-size:13px; color:#7A4A10; line-height:1.5; }
+  .info-note .note-icon { font-size:18px; flex-shrink:0; margin-top:1px; }
+  .info-note.green { background:var(--green-light); border-color:#9FCC9A; color:#1B4D2E; }
+
+  /* Bundle card */
+  .bundle-card {
+    background: var(--bundle-bg);
+    border: 2px solid var(--bundle-gold);
+    border-radius: var(--radius-lg);
+    padding: 24px;
+    margin-bottom: 16px;
+    position: relative;
+    overflow: hidden;
+  }
+  .bundle-card::before { content:''; position:absolute; top:-30px; right:-30px; width:120px; height:120px; background:rgba(196,154,0,0.06); border-radius:50%; }
+  .bundle-badge { display:inline-block; background:var(--bundle-gold); color:#fff; font-size:11px; font-weight:600; letter-spacing:0.08em; text-transform:uppercase; padding:4px 12px; border-radius:99px; margin-bottom:12px; }
+  .bundle-card h2 { font-family:'Playfair Display',serif; font-size:20px; color:#5A3A00; margin-bottom:6px; }
+  .bundle-card .subtitle { font-size:14px; color:#7A5A10; margin-bottom:18px; line-height:1.5; }
+  .bundle-savings { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:16px; }
+  .bundle-saving-item { background:rgba(196,154,0,0.08); border:1px solid rgba(196,154,0,0.25); border-radius:var(--radius); padding:12px; text-align:center; }
+  .bundle-saving-item .saving-pct { font-size:24px; font-weight:600; color:var(--bundle-gold); font-family:'Playfair Display',serif; }
+  .bundle-saving-item .saving-label { font-size:12px; color:#7A5A10; margin-top:2px; }
+  .bundle-option { border:1.5px solid rgba(196,154,0,0.3); border-radius:var(--radius); padding:14px 16px; cursor:pointer; transition:all 0.18s ease; background:rgba(255,255,255,0.7); position:relative; margin-bottom:8px; }
+  .bundle-option:hover { border-color:var(--bundle-gold); background:#fff; }
+  .bundle-option.selected { border-color:var(--bundle-gold); background:#fff; }
+  .bundle-option.selected::after { content:'✓'; position:absolute; top:8px; right:10px; width:18px; height:18px; background:var(--bundle-gold); color:#fff; border-radius:50%; font-size:10px; line-height:18px; text-align:center; }
+  .bundle-option h4 { font-size:14px; font-weight:600; color:#5A3A00; margin-bottom:2px; }
+  .bundle-option p { font-size:12px; color:#7A5A10; line-height:1.4; }
+
+  /* Estimate */
+  .estimate-card { background:linear-gradient(135deg,var(--green-dark) 0%,var(--green-mid) 100%); border-radius:var(--radius-lg); padding:32px 28px; color:#fff; text-align:center; margin-bottom:16px; position:relative; overflow:hidden; }
+  .estimate-card::before { content:''; position:absolute; top:-40px; right:-40px; width:150px; height:150px; background:rgba(255,255,255,0.05); border-radius:50%; }
+  .estimate-label { font-size:12px; text-transform:uppercase; letter-spacing:0.1em; opacity:0.7; margin-bottom:8px; }
+  .estimate-range { font-family:'Playfair Display',serif; font-size:clamp(28px,7vw,48px); font-weight:600; line-height:1; margin-bottom:8px; }
+  .estimate-disclaimer { font-size:13px; opacity:0.72; line-height:1.55; max-width:380px; margin:0 auto; }
+
+  .bundle-savings-banner { background:linear-gradient(135deg,#C49A00,#E8B800); border-radius:var(--radius-lg); padding:20px 24px; color:#fff; text-align:center; margin-bottom:16px; }
+  .bundle-savings-banner .bsb-label { font-size:12px; opacity:0.85; text-transform:uppercase; letter-spacing:0.08em; margin-bottom:4px; }
+  .bundle-savings-banner .bsb-amount { font-family:'Playfair Display',serif; font-size:32px; font-weight:600; }
+  .bundle-savings-banner .bsb-sub { font-size:12px; opacity:0.8; margin-top:4px; }
+
+  .breakdown-card { background:var(--white); border:1px solid var(--border); border-radius:var(--radius-lg); padding:20px 24px; margin-bottom:16px; }
+  .breakdown-card h3 { font-size:14px; font-weight:600; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.06em; margin-bottom:14px; }
+  .breakdown-row { display:flex; justify-content:space-between; align-items:center; padding:8px 0; border-bottom:1px solid var(--border); font-size:14px; }
+  .breakdown-row:last-child { border-bottom:none; font-weight:600; font-size:15px; padding-top:12px; }
+  .breakdown-row.discount { color:#2D6A42; }
+  .breakdown-row .label { color:var(--text-mid); }
+  .breakdown-row.discount .label { color:#2D6A42; }
+  .breakdown-row .amount { color:var(--text-dark); }
+  .breakdown-row:last-child .amount { color:var(--green-dark); }
+  .breakdown-row.discount .amount { color:#2D6A42; }
+
+  /* Form */
+  .form-grid { display:grid; gap:14px; }
+  .form-grid.cols-2 { grid-template-columns:1fr 1fr; }
+  .form-group { display:flex; flex-direction:column; gap:6px; }
+  .form-group label { font-size:13px; font-weight:500; color:var(--text-mid); }
+  .form-group input, .form-group textarea, .form-group select { padding:12px 14px; border:1.5px solid var(--border); border-radius:var(--radius); font-size:15px; font-family:'DM Sans',sans-serif; color:var(--text-dark); background:var(--white); transition:border-color 0.15s; outline:none; width:100%; min-height:48px; }
+  .form-group input:focus, .form-group textarea:focus, .form-group select:focus { border-color:var(--green-dark); }
+  .form-group textarea { resize:vertical; min-height:90px; }
+  .required { color:var(--amber); }
+
+  /* Buttons */
+  .btn-row { display:flex; gap:12px; margin-top:20px; }
+  .btn { padding:14px 28px; border-radius:var(--radius); font-size:15px; font-weight:600; font-family:'DM Sans',sans-serif; cursor:pointer; border:none; transition:all 0.18s ease; flex:1; }
+  .btn-primary { background:var(--green-dark); color:#fff; }
+  .btn-primary:hover { background:var(--green-mid); transform:translateY(-1px); box-shadow:0 4px 16px rgba(27,77,46,0.25); }
+  .btn-secondary { background:transparent; color:var(--text-mid); border:1.5px solid var(--border); }
+  .btn-secondary:hover { border-color:var(--green-mid); color:var(--green-dark); background:var(--green-light); }
+  .btn-amber { background:var(--amber); color:#fff; }
+  .btn-amber:hover { background:#C96D1A; transform:translateY(-1px); box-shadow:0 4px 16px rgba(224,123,36,0.3); }
+  .btn-gold { background:var(--bundle-gold); color:#fff; }
+  .btn-gold:hover { background:#A88000; transform:translateY(-1px); }
+  .btn:disabled { opacity:0.4; cursor:not-allowed; transform:none; box-shadow:none; }
+
+  /* Success */
+  .success-card { background:var(--white); border:1px solid var(--border); border-radius:var(--radius-lg); padding:48px 28px; text-align:center; box-shadow:var(--shadow); }
+  .success-icon { font-size:56px; margin-bottom:20px; display:block; }
+  .success-card h2 { font-family:'Playfair Display',serif; font-size:26px; color:var(--green-dark); margin-bottom:12px; }
+  .success-card p { font-size:15px; color:var(--text-mid); line-height:1.6; max-width:380px; margin:0 auto 24px; }
+  .success-detail { background:var(--green-light); border-radius:var(--radius); padding:16px; font-size:14px; color:var(--green-dark); margin-bottom:20px; }
+
+  .footer-note { text-align:center; font-size:13px; color:var(--text-muted); margin-top:32px; line-height:1.6; padding:0 16px; }
+  .footer-note a { color:var(--green-dark); text-decoration:none; }
+
+  @media (max-width:700px) {
+    .options.cols-2, .form-grid.cols-2, .service-select, .bundle-savings { grid-template-columns:1fr; }
+    .btn-row { flex-direction:column; }
+    .estimate-range { font-size:28px; }
+  }
+  @media (max-width:640px) {
+    .page-hero { padding: 132px 0 48px; }
+    .page-hero h1 { font-size: clamp(32px, 9.5vw, 44px); }
+    .page-hero p { font-size: 16px; }
+    .wrapper { padding: 24px 12px 56px; }
+    .card { padding: 24px 18px; }
+  }
+
+</style>
+</head>
+<body>
+
+<nav class="nav nav-solid">
+  <div class="nav-inner">
+  <a href="index.html" class="nav-logo"><img src="logo.svg" alt="PJL Land Services"></a>
+  <div class="nav-main">
+    <ul class="nav-links">
+      <li><a href="index.html">Home</a></li>
+      <li><a href="sprinkler-systems.html">Sprinkler Systems</a></li>
+      <li><a href="landscape-lighting.html">Landscape Lighting</a></li>
+      <li><a href="estimate.html">Get Estimate</a></li>
+      <li><a href="faq.html">FAQ</a></li>
+      <li><a href="contact.html">Contact</a></li>
+    </ul>
+    <div class="nav-utility">
+      <a href="https://calendar.app.google/ktWefWX55H1fqGCHA" target="_blank" class="nav-cta">Book Online</a>
+      <a href="tel:+19059600181" class="phone-strip-link nav-phone-link">
+        <span class="phone-strip-icon">📞</span>
+        <span>(905) 960-0181</span>
+      </a>
+    </div>
+  </div>
+  <div class="nav-hamburger"><span></span><span></span><span></span></div>
+  </div>
+</nav>
+<div class="nav-mobile">
+  <a href="index.html">Home</a>
+  <a href="sprinkler-systems.html">Sprinkler Systems</a>
+  <a href="landscape-lighting.html">Landscape Lighting</a>
+  <a href="estimate.html">Get a Free Estimate</a>
+  <a href="faq.html">FAQ</a>
+  <a href="contact.html">Contact</a>
+  <a href="tel:+19059600181">📞 (905) 960-0181</a>
+  <a href="https://calendar.app.google/ktWefWX55H1fqGCHA" target="_blank" class="nav-mobile-cta">Book Online →</a>
+</div>
+
+<section class="page-hero">
+  <div class="container">
+    <span class="section-tag amber">Free Estimate Tool</span>
+    <h1>Get Your Free Installation Estimate</h1>
+    <p>Answer a few quick questions about your property and get a ballpark price range instantly — no obligation, no sales call required.</p>
+  </div>
+</section>
+
+<div class="est-wrap">
+  <div class="container" style="max-width:860px;">
+    <!-- Estimator — fully inlined, no fetch, works locally and hosted -->
+    
+
+<div class="header">
+  <div class="header-logo">PJL <span>Land Services</span></div>
+</div>
+
+<div class="hero">
+  <div class="hero-tag">Free Estimate Tool</div>
+  <h1>Get a Rough Installation Estimate Instantly</h1>
+  <p>Answer a few quick questions about your property and we'll give you a ballpark price range — no obligation, no sales call required.</p>
+  <div class="trust-pills">
+    <span class="trust-pill">⚡ Takes 2 minutes</span>
+    <span class="trust-pill">📍 Newmarket & GTA</span>
+    <span class="trust-pill">✅ No obligation</span>
+  </div>
+</div>
+
+<div class="wrapper">
+
+  <!-- STEP 0: Choose service -->
+  <div class="step active" id="step-0">
+    <div class="step-label">Step 1 — Choose your service</div>
+    <div class="progress-bar"><div class="progress-fill" style="width:14%"></div></div>
+    <div class="card">
+      <h2>What can we help you with?</h2>
+      <p class="subtitle">Select the service you're interested in. You can explore a bundle discount at the end.</p>
+      <div class="service-select">
+        <button class="service-btn" id="srv-sprinkler" onclick="selectService('sprinkler')">
+          <span class="service-icon">💧</span>
+          <h3>Lawn Sprinkler System</h3>
+          <p>New installation with smart Hydrawise controller</p>
+        </button>
+        <button class="service-btn" id="srv-lighting" onclick="selectService('lighting')">
+          <span class="service-icon">✨</span>
+          <h3>Landscape Lighting</h3>
+          <p>Custom LED design and full installation</p>
+        </button>
+      </div>
+    </div>
+    <div class="btn-row">
+      <button class="btn btn-primary" id="btn-step0-next" onclick="goStep(1)" disabled>Continue →</button>
+    </div>
+  </div>
+
+  <!-- STEP 1S: Zones -->
+  <div class="step" id="step-s1">
+    <div class="step-label">Step 2 — Property size</div>
+    <div class="progress-bar"><div class="progress-fill" style="width:28%"></div></div>
+    <div class="card">
+      <h2>How many irrigation zones do you need?</h2>
+      <p class="subtitle">Each zone covers roughly 2,000–2,500 sq ft of lawn. Not sure? We'll assess during your free consultation.</p>
+      <div class="slider-wrap">
+        <div class="slider-value" id="zone-display">4 <span>zones</span></div>
+        <div class="slider-labels"><span>1 zone</span><span>12 zones</span></div>
+        <input type="range" min="1" max="12" value="4" step="1" id="zone-slider" oninput="updateZones(this.value)">
+        <div class="slider-labels" style="margin-top:8px;font-size:11px;">
+          <span>Small urban lot</span><span>Large / commercial</span>
+        </div>
+      </div>
+    </div>
+    <div class="btn-row">
+      <button class="btn btn-secondary" onclick="goStep(0)">← Back</button>
+      <button class="btn btn-primary" onclick="goStep('s2')">Continue →</button>
+    </div>
+  </div>
+
+  <!-- STEP 2S: Water supply -->
+  <div class="step" id="step-s2">
+    <div class="step-label">Step 3 — Water supply</div>
+    <div class="progress-bar"><div class="progress-fill" style="width:42%"></div></div>
+    <div class="card">
+      <h2>How will the system connect to your water supply?</h2>
+      <p class="subtitle">The water supply connection is a key factor in installation complexity and cost.</p>
+      <div class="options">
+        <div class="option" id="ws-unfinished" onclick="selectWaterSupply('unfinished', this)">
+          <span class="option-icon">🏗️</span>
+          <h4>Unfinished basement — interior connection</h4>
+          <p>Open, accessible plumbing with no finished walls or ceilings to work around. Simplest and most straightforward connection.</p>
+          <div class="price-save">Most cost-effective option</div>
+        </div>
+        <div class="option" id="ws-finished" onclick="selectWaterSupply('finished', this)">
+          <span class="option-icon">🏠</span>
+          <h4>Finished basement — interior connection</h4>
+          <p>Finished walls, ceilings and flooring require more careful routing and additional labour. Approximate — subject to on-site assessment.</p>
+          <div class="price-hint">Higher complexity — pricing approximate</div>
+        </div>
+        <div class="option" id="ws-hosebibnew" onclick="selectWaterSupply('hosebibnew', this)">
+          <span class="option-icon">🚿</span>
+          <h4>Existing frost-free exterior hose bib</h4>
+          <p>Connects directly to an existing exterior hose bib. Some complexity depending on location, pressure and accessibility.</p>
+          <div class="price-hint">Moderate complexity — subject to on-site assessment</div>
+        </div>
+      </div>
+    </div>
+    <div class="info-note">
+      <span class="note-icon">💡</span>
+      <span>All installations include a check valve as standard — this is always part of a properly completed system at no extra charge.</span>
+    </div>
+    <div class="btn-row">
+      <button class="btn btn-secondary" onclick="goStep('s1')">← Back</button>
+      <button class="btn btn-primary" id="btn-s2-next" onclick="goStep('s3')" disabled>Continue →</button>
+    </div>
+  </div>
+
+  <!-- STEP 3S: Landscape complexity -->
+  <div class="step" id="step-s3">
+    <div class="step-label">Step 4 — Property condition</div>
+    <div class="progress-bar"><div class="progress-fill" style="width:57%"></div></div>
+    <div class="card">
+      <h2>What best describes your property?</h2>
+      <p class="subtitle">Mature landscapes and tight clearances increase installation time and complexity.</p>
+      <div class="options">
+        <div class="option" id="c-new" onclick="selectComplexity('new', this)">
+          <span class="option-icon">🏗️</span>
+          <h4>New build / freshly landscaped</h4>
+          <p>Open soil, no obstacles — cleanest installation possible</p>
+          <div class="price-save">Standard pricing</div>
+        </div>
+        <div class="option" id="c-established" onclick="selectComplexity('established', this)">
+          <span class="option-icon">🌿</span>
+          <h4>Established lawn with some plantings</h4>
+          <p>Existing grass and garden beds, moderate obstacles</p>
+          <div class="price-hint">+10–15% complexity</div>
+        </div>
+        <div class="option" id="c-mature" onclick="selectComplexity('mature', this)">
+          <span class="option-icon">🌳</span>
+          <h4>Mature landscape with trees & dense gardens</h4>
+          <p>Roots, tight clearances, premium routing required</p>
+          <div class="price-hint">+20–30% complexity</div>
+        </div>
+      </div>
+    </div>
+    <div class="btn-row">
+      <button class="btn btn-secondary" onclick="goStep('s2')">← Back</button>
+      <button class="btn btn-primary" id="btn-s3-next" onclick="goStep('s4')" disabled>Continue →</button>
+    </div>
+  </div>
+
+  <!-- STEP 4S: Sprinkler add-ons -->
+  <div class="step" id="step-s4">
+    <div class="step-label">Step 5 — Upgrades & add-ons</div>
+    <div class="progress-bar"><div class="progress-fill" style="width:71%"></div></div>
+    <div class="card">
+      <h2>Any upgrades for your system?</h2>
+      <p class="subtitle">All systems already include a smart Hydrawise WiFi controller and high-efficiency components as standard. These are optional extras on top.</p>
+      <div class="extras">
+
+        <div class="extra-item" onclick="toggleExtra('pots', this, 185)" id="ex-pots-wrap">
+          <div class="extra-check" id="ex-pots"></div>
+          <div class="extra-info">
+            <h4>🪴 Flower pot & planter drip zones</h4>
+            <p>Front entrance planters and pots watered automatically — no more daily hand-watering. Custom drip lines to each container.</p>
+          </div>
+          <div class="extra-cost">+$185</div>
+        </div>
+
+        <div class="extra-item" onclick="toggleExtra('remotebib', this, 395)" id="ex-remotebib-wrap">
+          <div class="extra-check" id="ex-remotebib"></div>
+          <div class="extra-info">
+            <h4>🚰 Remote hose bib installation</h4>
+            <p>A convenient exterior hose bib added at the rear or front of your property — no more dragging hoses across the yard.</p>
+          </div>
+          <div class="extra-cost">+$395</div>
+        </div>
+
+        <div class="extra-item" onclick="toggleExtra('drip', this, 210)" id="ex-drip-wrap">
+          <div class="extra-check" id="ex-drip"></div>
+          <div class="extra-info">
+            <h4>🌱 Garden bed drip zone</h4>
+            <p>Targeted low-volume drip irrigation for flower beds and shrub borders — uses less water, healthier plants.</p>
+          </div>
+          <div class="extra-cost">+$210</div>
+        </div>
+
+      </div>
+    </div>
+    <div class="btn-row">
+      <button class="btn btn-secondary" onclick="goStep('s3')">← Back</button>
+      <button class="btn btn-primary" onclick="goStep('bundle')">Continue →</button>
+    </div>
+  </div>
+
+  <!-- STEP 1L: Fixtures -->
+  <div class="step" id="step-l1">
+    <div class="step-label">Step 2 — Fixture count</div>
+    <div class="progress-bar"><div class="progress-fill" style="width:28%"></div></div>
+    <div class="card">
+      <h2>How many lighting fixtures are you looking for?</h2>
+      <p class="subtitle">Each professionally installed fixture is $245, including wiring, placement, transformer and setup. Not sure of the exact count? Estimate and we'll refine on-site.</p>
+      <div class="slider-wrap">
+        <div class="slider-value" id="fixture-display">8 <span>fixtures</span></div>
+        <div class="slider-labels"><span>3 fixtures</span><span>40 fixtures</span></div>
+        <input type="range" min="3" max="40" value="8" step="1" id="fixture-slider" oninput="updateFixtures(this.value)">
+        <div class="slider-labels" style="margin-top:8px;font-size:11px;">
+          <span>Accent / entry</span><span>Full property</span>
+        </div>
+      </div>
+    </div>
+    <div class="btn-row">
+      <button class="btn btn-secondary" onclick="goStep(0)">← Back</button>
+      <button class="btn btn-primary" onclick="goStep('l2')">Continue →</button>
+    </div>
+  </div>
+
+  <!-- STEP 2L: Lighting styles -->
+  <div class="step" id="step-l2">
+    <div class="step-label">Step 3 — Lighting style</div>
+    <div class="progress-bar"><div class="progress-fill" style="width:42%"></div></div>
+    <div class="card">
+      <h2>What type of lighting are you after?</h2>
+      <p class="subtitle">Select all that apply — helps us understand your project scope.</p>
+      <div class="extras" id="lighting-types">
+        <div class="extra-item" onclick="toggleLightType('path', this)">
+          <div class="extra-check" id="lt-path"></div>
+          <div class="extra-info"><h4>🚶 Path & walkway lighting</h4><p>Low fixtures lining driveways, pathways and garden edges</p></div>
+        </div>
+        <div class="extra-item" onclick="toggleLightType('uplight', this)">
+          <div class="extra-check" id="lt-uplight"></div>
+          <div class="extra-info"><h4>🌲 Tree & architectural uplighting</h4><p>Dramatic accent lighting on trees, pillars and facade features</p></div>
+        </div>
+        <div class="extra-item" onclick="toggleLightType('wash', this)">
+          <div class="extra-check" id="lt-wash"></div>
+          <div class="extra-info"><h4>🏡 Wall & garden wash lighting</h4><p>Broad, even light across fences, walls and garden beds</p></div>
+        </div>
+        <div class="extra-item" onclick="toggleLightType('deck', this)">
+          <div class="extra-check" id="lt-deck"></div>
+          <div class="extra-info"><h4>🪑 Deck, patio & step lighting</h4><p>Integrated fixtures in steps, railings and outdoor living areas</p></div>
+        </div>
+      </div>
+    </div>
+    <div class="btn-row">
+      <button class="btn btn-secondary" onclick="goStep('l1')">← Back</button>
+      <button class="btn btn-primary" onclick="goStep('l3')">Continue →</button>
+    </div>
+  </div>
+
+  <!-- STEP 3L: Lighting add-ons -->
+  <div class="step" id="step-l3">
+    <div class="step-label">Step 4 — Upgrades & add-ons</div>
+    <div class="progress-bar"><div class="progress-fill" style="width:57%"></div></div>
+    <div class="card">
+      <h2>Any lighting upgrades?</h2>
+      <p class="subtitle">Optional additions to elevate your system.</p>
+      <div class="extras">
+        <div class="extra-item" onclick="toggleExtra('ltimer', this, 195)">
+          <div class="extra-check" id="ex-ltimer"></div>
+          <div class="extra-info"><h4>📱 Smart timer & app control</h4><p>Schedule and control your lights remotely from your phone</p></div>
+          <div class="extra-cost">+$195</div>
+        </div>
+        <div class="extra-item" onclick="toggleExtra('lcolour', this, 280)">
+          <div class="extra-check" id="ex-lcolour"></div>
+          <div class="extra-info"><h4>🎨 Colour-changing RGB fixtures</h4><p>Add seasonal colour — white in summer, orange in fall, etc.</p></div>
+          <div class="extra-cost">+$280</div>
+        </div>
+        <div class="extra-item" onclick="toggleExtra('lmotion', this, 165)">
+          <div class="extra-check" id="ex-lmotion"></div>
+          <div class="extra-info"><h4>🔒 Motion sensor security zones</h4><p>Motion-activated zones for added security around the property</p></div>
+          <div class="extra-cost">+$165</div>
+        </div>
+      </div>
+    </div>
+    <div class="btn-row">
+      <button class="btn btn-secondary" onclick="goStep('l2')">← Back</button>
+      <button class="btn btn-primary" onclick="goStep('bundle')">Continue →</button>
+    </div>
+  </div>
+
+  <!-- BUNDLE STEP -->
+  <div class="step" id="step-bundle">
+    <div class="step-label">Special offer — bundle & save</div>
+    <div class="progress-bar"><div class="progress-fill" style="width:85%"></div></div>
+
+    <div class="bundle-card">
+      <div class="bundle-badge">⭐ Limited Time Bundle</div>
+      <h2>Add a second service and save 15% on both</h2>
+      <p class="subtitle">Customers who bundle their lawn sprinkler system and landscape lighting together receive 15% off both services — because one crew, one visit, one great result.</p>
+      <div class="bundle-savings">
+        <div class="bundle-saving-item">
+          <div class="saving-pct">15%</div>
+          <div class="saving-label">off Lawn Sprinklers</div>
+        </div>
+        <div class="bundle-saving-item">
+          <div class="saving-pct">15%</div>
+          <div class="saving-label">off Landscape Lighting</div>
+        </div>
+      </div>
+      <div id="bundle-options-wrap"><!-- filled by JS --></div>
+    </div>
+
+    <div class="info-note green">
+      <span class="note-icon">✅</span>
+      <span>Bundle pricing is subject to final on-site consultation and is applied to your written quote. The discount reflects real savings from combined installation efficiency.</span>
+    </div>
+
+    <div class="btn-row">
+      <button class="btn btn-secondary" id="btn-bundle-back" onclick="goBundleBack()">← Back</button>
+      <button class="btn btn-primary" onclick="goStep(4)">See My Estimate →</button>
+    </div>
+  </div>
+
+  <!-- ESTIMATE RESULT -->
+  <div class="step" id="step-4">
+    <div class="step-label">Your estimate</div>
+    <div class="progress-bar"><div class="progress-fill" style="width:100%"></div></div>
+
+    <div class="estimate-card">
+      <div class="estimate-label">Estimated Investment Range</div>
+      <div class="estimate-range" id="estimate-range">—</div>
+      <div class="estimate-disclaimer">Rough estimate based on your inputs. Final pricing confirmed after a free on-site consultation. All systems include smart Hydrawise controllers and high-efficiency components as standard.</div>
+    </div>
+
+    <div id="bundle-savings-banner-wrap"></div>
+
+    <div class="breakdown-card">
+      <h3>Estimate Breakdown</h3>
+      <div id="breakdown-rows"></div>
+    </div>
+
+    <div class="card">
+      <h2>Ready for a precise quote?</h2>
+      <p class="subtitle">Fill in your details and We will personally follow up to schedule your free on-site consultation — no pressure, no obligation.</p>
+      <div class="form-grid cols-2">
+        <div class="form-group"><label>First name <span class="required">*</span></label><input type="text" id="f-first" placeholder="First name"></div>
+        <div class="form-group"><label>Last name</label><input type="text" id="f-last" placeholder="Last name"></div>
+      </div>
+      <div class="form-grid" style="margin-top:14px">
+        <div class="form-group"><label>Email address <span class="required">*</span></label><input type="email" id="f-email" placeholder="you@example.com"></div>
+        <div class="form-group" style="margin-top:14px"><label>Phone number <span class="required">*</span></label><input type="tel" id="f-phone" placeholder="(905) 555-0100"></div>
+        <div class="form-group" style="margin-top:14px"><label>Property address / city</label><input type="text" id="f-address" placeholder="Newmarket, ON"></div>
+        <div class="form-group" style="margin-top:14px"><label>Best time to call</label>
+          <select id="f-time">
+            <option value="">No preference</option>
+            <option>Morning (8am–12pm)</option>
+            <option>Afternoon (12pm–5pm)</option>
+            <option>Evening (5pm–7pm)</option>
+          </select>
+        </div>
+        <div class="form-group" style="margin-top:14px"><label>Additional notes</label><textarea id="f-notes" placeholder="Anything else about your property or project..."></textarea></div>
+      </div>
+      <div class="btn-row">
+        <button class="btn btn-secondary" onclick="goStep('bundle')">← Adjust estimate</button>
+        <button class="btn btn-amber" onclick="submitForm()">Send My Enquiry →</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- SUCCESS -->
+  <div class="step" id="step-5">
+    <div class="success-card">
+      <span class="success-icon">🌱</span>
+      <h2>We've received your enquiry!</h2>
+      <p>Thank you for reaching out to PJL Land Services. We will personally review your estimate and follow up within 1 business day.</p>
+      <div class="success-detail">📧 Your estimate details have been sent. 📞 We'll call you at your preferred time.</div>
+      <p style="font-size:13px;color:var(--text-muted)">In the meantime, feel free to reach us directly:</p>
+      <div class="btn-row" style="margin-top:20px">
+        <a href="tel:+19059600181" style="text-decoration:none;flex:1">
+          <button class="btn btn-primary" style="width:100%">📞 (905) 960-0181</button>
+        </a>
+      </div>
+    </div>
+  </div>
+
+  <div class="footer-note">
+    All estimates are approximate and subject to on-site assessment.
+    <a href="mailto:info@pjllandservices.com">info@pjllandservices.com</a> · <a href="tel:+19059600181">(905) 960-0181</a> · Newmarket, Ontario
+  </div>
+
+</div><!-- /wrapper -->
+
+<script>
+// ── State ──────────────────────────────────────────────
+const state = {
+  service: null,
+  zones: 4,
+  waterSupply: null,
+  complexity: null,
+  fixtures: 8,
+  lightTypes: new Set(),
+  extras: new Set(),
+  extraCosts: {},
+  bundle: null   // null | 'add-lighting' | 'add-sprinkler' | 'no'
+};
+
+// ── Pricing ────────────────────────────────────────────
+const BASE_FEE = 585; // flat base fee per system installation
+const PPZ = 525;      // price per zone
+const PPF = 245;      // price per fixture
+const BUNDLE_DISC = 0.15;
+
+const WATER_COST = { unfinished: 0, finished: 225, hosebibnew: 175 };
+const WATER_LABEL = {
+  unfinished: 'Unfinished basement — interior connection (standard)',
+  finished:   'Finished basement — interior connection (+$225 complexity)',
+  hosebibnew: 'Existing frost-free exterior hose bib (+$175)'
+};
+
+const COMPLEXITY_MULT  = { new:1.0, established:1.125, mature:1.25 };
+const COMPLEXITY_LABEL = { new:'New build — standard pricing', established:'Established landscape +12.5%', mature:'Mature landscape +25%' };
+
+// ── Navigation ─────────────────────────────────────────
+function showStep(id) {
+  document.querySelectorAll('.step').forEach(s => s.classList.remove('active'));
+  const el = document.getElementById('step-' + id);
+  if (el) { el.classList.add('active'); window.scrollTo({top:0,behavior:'smooth'}); }
+}
+
+function goStep(n) {
+  if (n === 0)        { showStep(0); return; }
+  if (n === 1)        { showStep(state.service === 'sprinkler' ? 's1' : 'l1'); return; }
+  if (n === 's1')     { showStep('s1'); return; }
+  if (n === 's2')     { showStep('s2'); return; }
+  if (n === 's3')     { showStep('s3'); return; }
+  if (n === 's4')     { showStep('s4'); return; }
+  if (n === 'l1')     { showStep('l1'); return; }
+  if (n === 'l2')     { showStep('l2'); return; }
+  if (n === 'l3')     { showStep('l3'); return; }
+  if (n === 'bundle') { buildBundleStep(); showStep('bundle'); return; }
+  if (n === 4)        { buildEstimate(); showStep(4); return; }
+  if (n === 5)        { showStep(5); return; }
+}
+
+function goBundleBack() {
+  state.service === 'sprinkler' ? showStep('s4') : showStep('l3');
+}
+
+// ── Service ────────────────────────────────────────────
+function selectService(svc) {
+  state.service = svc;
+  document.getElementById('srv-sprinkler').classList.toggle('active', svc === 'sprinkler');
+  document.getElementById('srv-lighting').classList.toggle('active', svc === 'lighting');
+  document.getElementById('btn-step0-next').disabled = false;
+}
+
+// ── Zones ──────────────────────────────────────────────
+function updateZones(v) {
+  state.zones = parseInt(v);
+  document.getElementById('zone-display').innerHTML = v + ' <span>' + (v==1?'zone':'zones') + '</span>';
+}
+
+// ── Water supply ───────────────────────────────────────
+function selectWaterSupply(val, el) {
+  state.waterSupply = val;
+  ['unfinished','finished','hosebibnew'].forEach(k => document.getElementById('ws-'+k)?.classList.remove('selected'));
+  el.classList.add('selected');
+  document.getElementById('btn-s2-next').disabled = false;
+}
+
+// ── Complexity ─────────────────────────────────────────
+function selectComplexity(val, el) {
+  state.complexity = val;
+  ['new','established','mature'].forEach(k => document.getElementById('c-'+k)?.classList.remove('selected'));
+  el.classList.add('selected');
+  document.getElementById('btn-s3-next').disabled = false;
+}
+
+// ── Fixtures ───────────────────────────────────────────
+function updateFixtures(v) {
+  state.fixtures = parseInt(v);
+  document.getElementById('fixture-display').innerHTML = v + ' <span>fixtures</span>';
+}
+
+// ── Light types ────────────────────────────────────────
+function toggleLightType(type, el) {
+  if (state.lightTypes.has(type)) { state.lightTypes.delete(type); el.classList.remove('checked'); document.getElementById('lt-'+type).textContent=''; }
+  else { state.lightTypes.add(type); el.classList.add('checked'); document.getElementById('lt-'+type).textContent='✓'; }
+}
+
+// ── Extras ─────────────────────────────────────────────
+function toggleExtra(id, el, cost) {
+  const chk = el.querySelector('.extra-check') || document.getElementById('ex-'+id);
+  if (state.extras.has(id)) {
+    state.extras.delete(id);
+    delete state.extraCosts[id];
+    el.classList.remove('checked');
+    if (chk) chk.textContent = '';
+  } else {
+    state.extras.add(id);
+    state.extraCosts[id] = cost;
+    el.classList.add('checked');
+    if (chk) chk.textContent = '✓';
+  }
+}
+
+// ── Bundle ─────────────────────────────────────────────
+function buildBundleStep() {
+  const other = state.service === 'sprinkler' ? 'Landscape Lighting' : 'Lawn Sprinkler System';
+  const otherKey = state.service === 'sprinkler' ? 'add-lighting' : 'add-sprinkler';
+  const html = `
+    <div class="bundle-option ${state.bundle===otherKey?'selected':''}" onclick="selectBundle('${otherKey}', this)" id="bopt-add">
+      <h4>✨ Yes — add ${other} to my quote</h4>
+      <p>Get 15% off both services. We'll include a separate estimate for ${other} in your consultation.</p>
+    </div>
+    <div class="bundle-option ${state.bundle==='no'?'selected':''}" onclick="selectBundle('no', this)" id="bopt-no">
+      <h4>Not right now — just the one service</h4>
+      <p>No problem at all. You can always ask about adding the second service during your consultation.</p>
+    </div>`;
+  document.getElementById('bundle-options-wrap').innerHTML = html;
+}
+
+function selectBundle(val, el) {
+  state.bundle = val;
+  document.querySelectorAll('.bundle-option').forEach(o => o.classList.remove('selected'));
+  el.classList.add('selected');
+}
+
+// ── Estimate ───────────────────────────────────────────
+function buildEstimate() {
+  let rows = [];
+  let sprinklerBase = 0, lightingBase = 0, extrasTotal = 0;
+
+  // ── Sprinkler calc ──
+  if (state.service === 'sprinkler') {
+    const mult       = COMPLEXITY_MULT[state.complexity] || 1.0;
+    const baseZones  = state.zones * PPZ;
+    const complexAdj = Math.round((mult - 1) * baseZones);
+    const waterAdj   = WATER_COST[state.waterSupply] || 0;
+    sprinklerBase    = BASE_FEE + baseZones + complexAdj + waterAdj;
+
+    rows.push({ label: 'System base fee (includes smart Hydrawise controller)', amount: BASE_FEE });
+    rows.push({ label: `${state.zones} zone${state.zones > 1 ? 's' : ''} × $${PPZ}`, amount: baseZones });
+    if (complexAdj > 0) rows.push({ label: COMPLEXITY_LABEL[state.complexity], amount: complexAdj });
+    if (waterAdj > 0)   rows.push({ label: WATER_LABEL[state.waterSupply],     amount: waterAdj });
+
+    state.extras.forEach(id => {
+      const cost = state.extraCosts[id] || 0;
+      extrasTotal += cost;
+      const labels = { pots:'Flower pot & planter drip zones', remotebib:'Remote hose bib installation', drip:'Garden bed drip zone' };
+      rows.push({ label: labels[id] || id, amount: cost });
+    });
+    sprinklerBase += extrasTotal;
+  }
+
+  // ── Lighting calc ──
+  if (state.service === 'lighting') {
+    lightingBase = state.fixtures * PPF;
+    rows.push({ label: `${state.fixtures} fixtures × $${PPF}`, amount: lightingBase });
+
+    state.extras.forEach(id => {
+      const cost = state.extraCosts[id] || 0;
+      extrasTotal += cost;
+      const labels = { ltimer:'Smart timer & app control', lcolour:'Colour-changing RGB fixtures', lmotion:'Motion sensor security zones' };
+      rows.push({ label: labels[id] || id, amount: cost });
+    });
+    lightingBase += extrasTotal;
+  }
+
+  let total = sprinklerBase + lightingBase;
+
+  // ── Bundle ──
+  let bundleSaving = 0;
+  let bundleSavingBannerHtml = '';
+  if (state.bundle && state.bundle !== 'no') {
+    // Apply 15% discount to the primary service total
+    bundleSaving = Math.round(total * BUNDLE_DISC);
+    const discountedPrimary = total - bundleSaving;
+    // Rough estimate for second service
+    const secondEst = state.service === 'sprinkler'
+      ? Math.round(8 * PPF * (1 - BUNDLE_DISC))  // avg 8 fixtures
+      : Math.round(4 * PPZ * (1 - BUNDLE_DISC));  // avg 4 zones
+    rows.push({ label: `Bundle discount — 15% off ${state.service === 'sprinkler' ? 'sprinkler system' : 'landscape lighting'}`, amount: -bundleSaving, discount: true });
+    total = discountedPrimary;
+
+    bundleSavingBannerHtml = `
+      <div class="bundle-savings-banner">
+        <div class="bsb-label">Bundle discount applied</div>
+        <div class="bsb-amount">You save $${bundleSaving.toLocaleString()}+</div>
+        <div class="bsb-sub">15% off your ${state.service === 'sprinkler' ? 'sprinkler system' : 'landscape lighting'} — and 15% off the added ${state.service === 'sprinkler' ? 'landscape lighting' : 'sprinkler system'} quoted at consultation</div>
+      </div>`;
+  }
+
+  const low  = Math.round(total * 0.90);
+  const high = Math.round(total * 1.15);
+  document.getElementById('estimate-range').textContent = '$' + low.toLocaleString() + ' – $' + high.toLocaleString();
+  document.getElementById('bundle-savings-banner-wrap').innerHTML = bundleSavingBannerHtml;
+
+  rows.push({ label: 'Estimated total range', amount: '$' + low.toLocaleString() + ' – $' + high.toLocaleString(), total: true });
+
+  let rowHtml = '';
+  rows.forEach(r => {
+    const amt = typeof r.amount === 'number'
+      ? (r.amount < 0 ? '−$' + Math.abs(r.amount).toLocaleString() : '$' + r.amount.toLocaleString())
+      : r.amount;
+    rowHtml += `<div class="breakdown-row${r.total?' ':''}${r.discount?' discount':''}">
+      <span class="label">${r.label}</span>
+      <span class="amount">${amt}</span>
+    </div>`;
+  });
+  document.getElementById('breakdown-rows').innerHTML = rowHtml;
+}
+
+// ── Submit ─────────────────────────────────────────────
+function submitForm() {
+  const first   = document.getElementById('f-first').value.trim();
+  const last    = document.getElementById('f-last').value.trim();
+  const email   = document.getElementById('f-email').value.trim();
+  const phone   = document.getElementById('f-phone').value.trim();
+  const address = document.getElementById('f-address').value.trim();
+  const time    = document.getElementById('f-time').value;
+  const notes   = document.getElementById('f-notes').value.trim();
+  const range   = document.getElementById('estimate-range').textContent;
+
+  if (!first || !email || !phone) { alert('Please fill in your name, email and phone number to continue.'); return; }
+
+  const svcLabel = state.service === 'sprinkler' ? 'Lawn Sprinkler System' : 'Landscape Lighting';
+  const waterLabel = WATER_LABEL[state.waterSupply] || 'Not specified';
+  const bundleLabel = state.bundle === 'no' || !state.bundle ? 'No bundle requested' : `Yes — interested in adding ${state.service === 'sprinkler' ? 'Landscape Lighting' : 'Lawn Sprinkler System'} (15% bundle discount)`;
+
+  const sprinklerDetails = state.service === 'sprinkler'
+    ? `Zones: ${state.zones}\nWater supply: ${waterLabel}\nComplexity: ${COMPLEXITY_LABEL[state.complexity]}\nAdd-ons: ${[...state.extras].join(', ') || 'none'}`
+    : '';
+  const lightingDetails = state.service === 'lighting'
+    ? `Fixtures: ${state.fixtures}\nTypes: ${[...state.lightTypes].join(', ') || 'not specified'}\nAdd-ons: ${[...state.extras].join(', ') || 'none'}`
+    : '';
+
+  const subject = encodeURIComponent(`New Installation Enquiry — ${svcLabel} | ${first} ${last}`);
+  const body = encodeURIComponent(
+`New Installation Enquiry — pjllandservices.com
+━━━━━━━━━━━━━━━━━━━━━━━━━
+CUSTOMER
+━━━━━━━━━━━━━━━━━━━━━━━━━
+Name:     ${first} ${last}
+Email:    ${email}
+Phone:    ${phone}
+Address:  ${address || 'Not provided'}
+Best time: ${time || 'No preference'}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━
+SERVICE: ${svcLabel}
+━━━━━━━━━━━━━━━━━━━━━━━━━
+${sprinklerDetails}${lightingDetails}
+Estimate: ${range}
+Bundle:   ${bundleLabel}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━
+NOTES
+━━━━━━━━━━━━━━━━━━━━━━━━━
+${notes || 'None'}
+
+Sent from the PJL Land Services Installation Estimator.`
+  );
+
+  window.location.href = `mailto:info@pjllandservices.com?subject=${subject}&body=${body}`;
+  goStep(5);
+}
+
+// ── Init ───────────────────────────────────────────────
+updateZones(4);
+updateFixtures(8);
+</script>
+
+  </div>
+</div>
+
+<footer class="footer">
+  <div class="container">
+    <div class="footer-grid">
+      <div class="footer-brand">
+        <img src="logo.svg" alt="PJL Land Services">
+        <p>Newmarket's trusted lawn sprinkler and landscape lighting experts. Serving the GTA with honest service, smart technology, and a 3-year warranty.</p>
+        <div class="footer-social">
+          <a href="https://www.facebook.com/pjllandservices" target="_blank" style="font-family:serif;font-weight:bold;font-size:15px;">f</a>
+          <a href="https://www.instagram.com/pjllandservices" target="_blank" style="font-style:italic;font-weight:bold;font-size:13px;">ig</a>
+        </div>
+      </div>
+      <div class="footer-col"><h5>Services</h5><ul><li><a href="sprinkler-systems.html">Spring Openings</a></li><li><a href="sprinkler-systems.html">Fall Closings</a></li><li><a href="sprinkler-systems.html#repair">Sprinkler Repair</a></li><li><a href="estimate.html">New Installations</a></li><li><a href="landscape-lighting.html">Landscape Lighting</a></li></ul></div>
+      <div class="footer-col"><h5>Company</h5><ul><li><a href="index.html">Home</a></li><li><a href="faq.html">FAQ</a></li><li><a href="contact.html">Contact</a></li><li><a href="https://calendar.app.google/ktWefWX55H1fqGCHA" target="_blank">Book Online</a></li></ul></div>
+      <div class="footer-col">
+        <h5>Contact</h5>
+        <div class="footer-contact-item"><span>📞</span><a href="tel:+19059600181" style="color:rgba(255,255,255,0.65)">(905) 960-0181</a></div>
+        <div class="footer-contact-item"><span>✉️</span><a href="mailto:info@pjllandservices.com" style="color:rgba(255,255,255,0.65)">info@pjllandservices.com</a></div>
+        <div class="footer-contact-item"><span>📍</span><span>Newmarket, Ontario</span></div>
+      </div>
+    </div>
+    <div class="footer-bottom">
+      <p>© 2026 PJL Land Services. All rights reserved.</p>
+      <div class="footer-bottom-links"><a href="#">Privacy Policy</a><a href="#">Terms of Service</a></div>
+    </div>
+  </div>
+</footer>
+
+<script src="nav.js"></script>
+<script>
+
+// ── State ──────────────────────────────────────────────
+const state = {
+  service: null,
+  zones: 4,
+  waterSupply: null,
+  complexity: null,
+  fixtures: 8,
+  lightTypes: new Set(),
+  extras: new Set(),
+  extraCosts: {},
+  bundle: null   // null | 'add-lighting' | 'add-sprinkler' | 'no'
+};
+
+// ── Pricing ────────────────────────────────────────────
+const BASE_FEE = 585; // flat base fee per system installation
+const PPZ = 525;      // price per zone
+const PPF = 245;      // price per fixture
+const BUNDLE_DISC = 0.15;
+
+const WATER_COST = { unfinished: 0, finished: 225, hosebibnew: 175 };
+const WATER_LABEL = {
+  unfinished: 'Unfinished basement — interior connection (standard)',
+  finished:   'Finished basement — interior connection (+$225 complexity)',
+  hosebibnew: 'Existing frost-free exterior hose bib (+$175)'
+};
+
+const COMPLEXITY_MULT  = { new:1.0, established:1.125, mature:1.25 };
+const COMPLEXITY_LABEL = { new:'New build — standard pricing', established:'Established landscape +12.5%', mature:'Mature landscape +25%' };
+
+// ── Navigation ─────────────────────────────────────────
+function showStep(id) {
+  document.querySelectorAll('.step').forEach(s => s.classList.remove('active'));
+  const el = document.getElementById('step-' + id);
+  if (el) { el.classList.add('active'); window.scrollTo({top:0,behavior:'smooth'}); }
+}
+
+function goStep(n) {
+  if (n === 0)        { showStep(0); return; }
+  if (n === 1)        { showStep(state.service === 'sprinkler' ? 's1' : 'l1'); return; }
+  if (n === 's1')     { showStep('s1'); return; }
+  if (n === 's2')     { showStep('s2'); return; }
+  if (n === 's3')     { showStep('s3'); return; }
+  if (n === 's4')     { showStep('s4'); return; }
+  if (n === 'l1')     { showStep('l1'); return; }
+  if (n === 'l2')     { showStep('l2'); return; }
+  if (n === 'l3')     { showStep('l3'); return; }
+  if (n === 'bundle') { buildBundleStep(); showStep('bundle'); return; }
+  if (n === 4)        { buildEstimate(); showStep(4); return; }
+  if (n === 5)        { showStep(5); return; }
+}
+
+function goBundleBack() {
+  state.service === 'sprinkler' ? showStep('s4') : showStep('l3');
+}
+
+// ── Service ────────────────────────────────────────────
+function selectService(svc) {
+  state.service = svc;
+  document.getElementById('srv-sprinkler').classList.toggle('active', svc === 'sprinkler');
+  document.getElementById('srv-lighting').classList.toggle('active', svc === 'lighting');
+  document.getElementById('btn-step0-next').disabled = false;
+}
+
+// ── Zones ──────────────────────────────────────────────
+function updateZones(v) {
+  state.zones = parseInt(v);
+  document.getElementById('zone-display').innerHTML = v + ' <span>' + (v==1?'zone':'zones') + '</span>';
+}
+
+// ── Water supply ───────────────────────────────────────
+function selectWaterSupply(val, el) {
+  state.waterSupply = val;
+  ['unfinished','finished','hosebibnew'].forEach(k => document.getElementById('ws-'+k)?.classList.remove('selected'));
+  el.classList.add('selected');
+  document.getElementById('btn-s2-next').disabled = false;
+}
+
+// ── Complexity ─────────────────────────────────────────
+function selectComplexity(val, el) {
+  state.complexity = val;
+  ['new','established','mature'].forEach(k => document.getElementById('c-'+k)?.classList.remove('selected'));
+  el.classList.add('selected');
+  document.getElementById('btn-s3-next').disabled = false;
+}
+
+// ── Fixtures ───────────────────────────────────────────
+function updateFixtures(v) {
+  state.fixtures = parseInt(v);
+  document.getElementById('fixture-display').innerHTML = v + ' <span>fixtures</span>';
+}
+
+// ── Light types ────────────────────────────────────────
+function toggleLightType(type, el) {
+  if (state.lightTypes.has(type)) { state.lightTypes.delete(type); el.classList.remove('checked'); document.getElementById('lt-'+type).textContent=''; }
+  else { state.lightTypes.add(type); el.classList.add('checked'); document.getElementById('lt-'+type).textContent='✓'; }
+}
+
+// ── Extras ─────────────────────────────────────────────
+function toggleExtra(id, el, cost) {
+  const chk = el.querySelector('.extra-check') || document.getElementById('ex-'+id);
+  if (state.extras.has(id)) {
+    state.extras.delete(id);
+    delete state.extraCosts[id];
+    el.classList.remove('checked');
+    if (chk) chk.textContent = '';
+  } else {
+    state.extras.add(id);
+    state.extraCosts[id] = cost;
+    el.classList.add('checked');
+    if (chk) chk.textContent = '✓';
+  }
+}
+
+// ── Bundle ─────────────────────────────────────────────
+function buildBundleStep() {
+  const other = state.service === 'sprinkler' ? 'Landscape Lighting' : 'Lawn Sprinkler System';
+  const otherKey = state.service === 'sprinkler' ? 'add-lighting' : 'add-sprinkler';
+  const html = `
+    <div class="bundle-option ${state.bundle===otherKey?'selected':''}" onclick="selectBundle('${otherKey}', this)" id="bopt-add">
+      <h4>✨ Yes — add ${other} to my quote</h4>
+      <p>Get 15% off both services. We'll include a separate estimate for ${other} in your consultation.</p>
+    </div>
+    <div class="bundle-option ${state.bundle==='no'?'selected':''}" onclick="selectBundle('no', this)" id="bopt-no">
+      <h4>Not right now — just the one service</h4>
+      <p>No problem at all. You can always ask about adding the second service during your consultation.</p>
+    </div>`;
+  document.getElementById('bundle-options-wrap').innerHTML = html;
+}
+
+function selectBundle(val, el) {
+  state.bundle = val;
+  document.querySelectorAll('.bundle-option').forEach(o => o.classList.remove('selected'));
+  el.classList.add('selected');
+}
+
+// ── Estimate ───────────────────────────────────────────
+function buildEstimate() {
+  let rows = [];
+  let sprinklerBase = 0, lightingBase = 0, extrasTotal = 0;
+
+  // ── Sprinkler calc ──
+  if (state.service === 'sprinkler') {
+    const mult       = COMPLEXITY_MULT[state.complexity] || 1.0;
+    const baseZones  = state.zones * PPZ;
+    const complexAdj = Math.round((mult - 1) * baseZones);
+    const waterAdj   = WATER_COST[state.waterSupply] || 0;
+    sprinklerBase    = BASE_FEE + baseZones + complexAdj + waterAdj;
+
+    rows.push({ label: 'System base fee (includes smart Hydrawise controller)', amount: BASE_FEE });
+    rows.push({ label: `${state.zones} zone${state.zones > 1 ? 's' : ''} × $${PPZ}`, amount: baseZones });
+    if (complexAdj > 0) rows.push({ label: COMPLEXITY_LABEL[state.complexity], amount: complexAdj });
+    if (waterAdj > 0)   rows.push({ label: WATER_LABEL[state.waterSupply],     amount: waterAdj });
+
+    state.extras.forEach(id => {
+      const cost = state.extraCosts[id] || 0;
+      extrasTotal += cost;
+      const labels = { pots:'Flower pot & planter drip zones', remotebib:'Remote hose bib installation', drip:'Garden bed drip zone' };
+      rows.push({ label: labels[id] || id, amount: cost });
+    });
+    sprinklerBase += extrasTotal;
+  }
+
+  // ── Lighting calc ──
+  if (state.service === 'lighting') {
+    lightingBase = state.fixtures * PPF;
+    rows.push({ label: `${state.fixtures} fixtures × $${PPF}`, amount: lightingBase });
+
+    state.extras.forEach(id => {
+      const cost = state.extraCosts[id] || 0;
+      extrasTotal += cost;
+      const labels = { ltimer:'Smart timer & app control', lcolour:'Colour-changing RGB fixtures', lmotion:'Motion sensor security zones' };
+      rows.push({ label: labels[id] || id, amount: cost });
+    });
+    lightingBase += extrasTotal;
+  }
+
+  let total = sprinklerBase + lightingBase;
+
+  // ── Bundle ──
+  let bundleSaving = 0;
+  let bundleSavingBannerHtml = '';
+  if (state.bundle && state.bundle !== 'no') {
+    // Apply 15% discount to the primary service total
+    bundleSaving = Math.round(total * BUNDLE_DISC);
+    const discountedPrimary = total - bundleSaving;
+    // Rough estimate for second service
+    const secondEst = state.service === 'sprinkler'
+      ? Math.round(8 * PPF * (1 - BUNDLE_DISC))  // avg 8 fixtures
+      : Math.round(4 * PPZ * (1 - BUNDLE_DISC));  // avg 4 zones
+    rows.push({ label: `Bundle discount — 15% off ${state.service === 'sprinkler' ? 'sprinkler system' : 'landscape lighting'}`, amount: -bundleSaving, discount: true });
+    total = discountedPrimary;
+
+    bundleSavingBannerHtml = `
+      <div class="bundle-savings-banner">
+        <div class="bsb-label">Bundle discount applied</div>
+        <div class="bsb-amount">You save $${bundleSaving.toLocaleString()}+</div>
+        <div class="bsb-sub">15% off your ${state.service === 'sprinkler' ? 'sprinkler system' : 'landscape lighting'} — and 15% off the added ${state.service === 'sprinkler' ? 'landscape lighting' : 'sprinkler system'} quoted at consultation</div>
+      </div>`;
+  }
+
+  const low  = Math.round(total * 0.90);
+  const high = Math.round(total * 1.15);
+  document.getElementById('estimate-range').textContent = '$' + low.toLocaleString() + ' – $' + high.toLocaleString();
+  document.getElementById('bundle-savings-banner-wrap').innerHTML = bundleSavingBannerHtml;
+
+  rows.push({ label: 'Estimated total range', amount: '$' + low.toLocaleString() + ' – $' + high.toLocaleString(), total: true });
+
+  let rowHtml = '';
+  rows.forEach(r => {
+    const amt = typeof r.amount === 'number'
+      ? (r.amount < 0 ? '−$' + Math.abs(r.amount).toLocaleString() : '$' + r.amount.toLocaleString())
+      : r.amount;
+    rowHtml += `<div class="breakdown-row${r.total?' ':''}${r.discount?' discount':''}">
+      <span class="label">${r.label}</span>
+      <span class="amount">${amt}</span>
+    </div>`;
+  });
+  document.getElementById('breakdown-rows').innerHTML = rowHtml;
+}
+
+// ── Submit ─────────────────────────────────────────────
+function submitForm() {
+  const first   = document.getElementById('f-first').value.trim();
+  const last    = document.getElementById('f-last').value.trim();
+  const email   = document.getElementById('f-email').value.trim();
+  const phone   = document.getElementById('f-phone').value.trim();
+  const address = document.getElementById('f-address').value.trim();
+  const time    = document.getElementById('f-time').value;
+  const notes   = document.getElementById('f-notes').value.trim();
+  const range   = document.getElementById('estimate-range').textContent;
+
+  if (!first || !email || !phone) { alert('Please fill in your name, email and phone number to continue.'); return; }
+
+  const svcLabel = state.service === 'sprinkler' ? 'Lawn Sprinkler System' : 'Landscape Lighting';
+  const waterLabel = WATER_LABEL[state.waterSupply] || 'Not specified';
+  const bundleLabel = state.bundle === 'no' || !state.bundle ? 'No bundle requested' : `Yes — interested in adding ${state.service === 'sprinkler' ? 'Landscape Lighting' : 'Lawn Sprinkler System'} (15% bundle discount)`;
+
+  const sprinklerDetails = state.service === 'sprinkler'
+    ? `Zones: ${state.zones}\nWater supply: ${waterLabel}\nComplexity: ${COMPLEXITY_LABEL[state.complexity]}\nAdd-ons: ${[...state.extras].join(', ') || 'none'}`
+    : '';
+  const lightingDetails = state.service === 'lighting'
+    ? `Fixtures: ${state.fixtures}\nTypes: ${[...state.lightTypes].join(', ') || 'not specified'}\nAdd-ons: ${[...state.extras].join(', ') || 'none'}`
+    : '';
+
+  const subject = encodeURIComponent(`New Installation Enquiry — ${svcLabel} | ${first} ${last}`);
+  const body = encodeURIComponent(
+`New Installation Enquiry — pjllandservices.com
+━━━━━━━━━━━━━━━━━━━━━━━━━
+CUSTOMER
+━━━━━━━━━━━━━━━━━━━━━━━━━
+Name:     ${first} ${last}
+Email:    ${email}
+Phone:    ${phone}
+Address:  ${address || 'Not provided'}
+Best time: ${time || 'No preference'}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━
+SERVICE: ${svcLabel}
+━━━━━━━━━━━━━━━━━━━━━━━━━
+${sprinklerDetails}${lightingDetails}
+Estimate: ${range}
+Bundle:   ${bundleLabel}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━
+NOTES
+━━━━━━━━━━━━━━━━━━━━━━━━━
+${notes || 'None'}
+
+Sent from the PJL Land Services Installation Estimator.`
+  );
+
+  window.location.href = `mailto:info@pjllandservices.com?subject=${subject}&body=${body}`;
+  goStep(5);
+}
+
+// ── Init ───────────────────────────────────────────────
+updateZones(4);
+updateFixtures(8);
+
+</script>
+</body>
+</html>

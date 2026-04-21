@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="description" content="PJL Land Services — Professional lawn sprinkler system installation, repair, spring openings and fall closings in Newmarket and the GTA. Smart Hydrawise technology, 3-year warranty.">
+<title>Lawn Sprinkler Systems | PJL Land Services — Newmarket & GTA</title>
+<link rel="stylesheet" href="style.css">
+<style>
+.page-hero {
+  padding: 156px 0 72px;
+  background: linear-gradient(135deg, var(--dark) 0%, var(--green) 100%);
+  position: relative;
+  overflow: hidden;
+}
+.page-hero::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image: url('sprinkler-tech.png');
+  background-size: cover;
+  background-position: center;
+  opacity: 0.2;
+}
+.page-hero-content { position: relative; z-index: 2; max-width: 680px; }
+.page-hero h1 {
+  color: #fff;
+  margin-bottom: 16px;
+  max-width: min(14ch, 100%);
+  font-size: clamp(38px, 5vw, 68px);
+  line-height: 1.02;
+  letter-spacing: -0.04em;
+}
+.page-hero p {
+  color: rgba(255,255,255,0.82);
+  font-size: clamp(16px, 2vw, 18px);
+  max-width: 46ch;
+  margin-bottom: 32px;
+  line-height: 1.7;
+}
+
+.seasonal-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: clamp(20px, 3vw, 32px);
+}
+.seasonal-card {
+  border-radius: var(--r-xl);
+  overflow: hidden;
+  position: relative;
+  height: clamp(300px, 34vw, 400px);
+  cursor: pointer;
+  transition: transform 0.3s;
+}
+.seasonal-card:hover { transform: translateY(-4px); }
+.seasonal-card img {
+  width: 100%; height: 100%;
+  object-fit: cover;
+  transition: transform 0.4s;
+}
+.seasonal-card:hover img { transform: scale(1.04); }
+.seasonal-card-overlay {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(to top, rgba(15,31,20,0.85) 0%, transparent 60%);
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  padding: 32px;
+}
+.seasonal-card-overlay h3 { color: #fff; margin-bottom: 8px; }
+.seasonal-card-overlay p { color: rgba(255,255,255,0.8); font-size: 14px; margin-bottom: 20px; line-height: 1.6; }
+.seasonal-badge {
+  display: inline-block;
+  background: var(--amber);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 5px 12px;
+  border-radius: 99px;
+  margin-bottom: 16px;
+  width: fit-content;
+}
+.seasonal-badge.spring { background: var(--green-mid); }
+
+.service-detail-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: clamp(32px, 5vw, 64px);
+  align-items: center;
+}
+.service-detail-grid.reverse { direction: rtl; }
+.service-detail-grid.reverse > * { direction: ltr; }
+.service-detail-img {
+  border-radius: var(--r-xl);
+  overflow: hidden;
+  height: clamp(320px, 38vw, 420px);
+}
+.service-detail-img img { width: 100%; height: 100%; object-fit: cover; }
+.service-detail-content h2 { margin-bottom: 16px; }
+.service-detail-content p { margin-bottom: 16px; }
+.checklist { margin: 24px 0 32px; display: flex; flex-direction: column; gap: 12px; }
+.checklist-item { display: flex; align-items: flex-start; gap: 12px; font-size: 15px; color: var(--text-mid); }
+.checklist-item::before {
+  content: '✓';
+  width: 22px; height: 22px;
+  border-radius: 50%;
+  background: var(--green-pale);
+  color: var(--green);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 12px;
+  font-weight: 700;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.pricing-card {
+  background: var(--white);
+  border: 2px solid var(--green);
+  border-radius: var(--r-xl);
+  padding: 40px;
+  text-align: center;
+  max-width: 480px;
+  margin: 0 auto;
+}
+.pricing-card .price {
+  font-family: 'Playfair Display', serif;
+  font-size: 56px;
+  font-weight: 700;
+  color: var(--green);
+  line-height: 1;
+  margin: 16px 0 8px;
+}
+.pricing-card .price-sub { font-size: 14px; color: var(--text-muted); margin-bottom: 24px; }
+.pricing-features { list-style: none; margin-bottom: 32px; }
+.pricing-features li {
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 15px;
+  color: var(--text-mid);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.pricing-features li:last-child { border-bottom: none; }
+.pricing-features li::before { content: '✓'; color: var(--green); font-weight: 700; }
+
+@media (max-width: 1024px) {
+  .seasonal-grid, .service-detail-grid { grid-template-columns: 1fr; }
+  .seasonal-card { height: 320px; }
+  .service-detail-grid.reverse { direction: ltr; }
+}
+@media (max-width: 640px) {
+  .page-hero {
+    padding: 136px 0 56px;
+  }
+  .page-hero h1 {
+    font-size: clamp(32px, 9.5vw, 44px);
+    max-width: min(13.5ch, 100%);
+  }
+  .page-hero p {
+    font-size: 16px;
+    margin-bottom: 24px;
+  }
+  .seasonal-card-overlay {
+    padding: 24px;
+  }
+}
+</style>
+</head>
+<body>
+
+<nav class="nav nav-solid">
+  <div class="nav-inner">
+  <a href="index.html" class="nav-logo"><img src="logo.svg" alt="PJL Land Services"></a>
+  <div class="nav-main">
+    <ul class="nav-links">
+      <li><a href="index.html">Home</a></li>
+      <li><a href="sprinkler-systems.html">Sprinkler Systems</a></li>
+      <li><a href="landscape-lighting.html">Landscape Lighting</a></li>
+      <li><a href="estimate.html">Get Estimate</a></li>
+      <li><a href="faq.html">FAQ</a></li>
+      <li><a href="contact.html">Contact</a></li>
+    </ul>
+    <div class="nav-utility">
+      <a href="https://calendar.app.google/ktWefWX55H1fqGCHA" target="_blank" class="nav-cta">Book Online</a>
+      <a href="tel:+19059600181" class="phone-strip-link nav-phone-link">
+        <span class="phone-strip-icon">📞</span>
+        <span>(905) 960-0181</span>
+      </a>
+    </div>
+  </div>
+  <div class="nav-hamburger"><span></span><span></span><span></span></div>
+  </div>
+</nav>
+<div class="nav-mobile">
+  <a href="index.html">Home</a>
+  <a href="sprinkler-systems.html">Sprinkler Systems</a>
+  <a href="landscape-lighting.html">Landscape Lighting</a>
+  <a href="estimate.html">Get a Free Estimate</a>
+  <a href="faq.html">FAQ</a>
+  <a href="contact.html">Contact</a>
+  <a href="tel:+19059600181">📞 (905) 960-0181</a>
+  <a href="https://calendar.app.google/ktWefWX55H1fqGCHA" target="_blank" class="nav-mobile-cta">Book Online →</a>
+</div>
+
+<!-- Page Hero -->
+<section class="page-hero">
+  <div class="container">
+    <div class="page-hero-content">
+      <span class="section-tag amber">Sprinkler Systems</span>
+      <h1>Smart Irrigation for Every Property</h1>
+      <p>From spring start-ups to full system installations — PJL Land Services delivers expert sprinkler care throughout the GTA, with smart Hydrawise technology and a 3-year warranty on every installation.</p>
+      <div class="page-hero-actions">
+        <a href="https://calendar.app.google/ktWefWX55H1fqGCHA" target="_blank" class="btn btn-primary">Book a Service</a>
+        <a href="estimate.html" class="btn btn-outline">Get an Install Estimate</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Seasonal Services -->
+<section class="section">
+  <div class="container">
+    <div class="text-center reveal mb-48">
+      <span class="section-tag">Seasonal Care</span>
+      <h2>Year-Round System Protection</h2>
+      <p style="max-width:500px;margin:0 auto;">Proper seasonal maintenance is the most important thing you can do for the longevity of your irrigation system.</p>
+    </div>
+    <div class="seasonal-grid">
+      <a href="https://calendar.app.google/ktWefWX55H1fqGCHA" target="_blank" class="seasonal-card reveal reveal-delay-1">
+        <img src="sprinkler-tech.png" alt="Spring Opening Service — Professional Sprinkler Start-Up GTA">
+        <div class="seasonal-card-overlay">
+          <span class="seasonal-badge spring">🌱 Spring</span>
+          <h3>Spring Opening Service</h3>
+          <p>Safe, professional system start-up after winter. We slowly pressurize, inspect every zone, check all heads, and program your Hydrawise controller for the season.</p>
+          <span class="btn btn-primary btn-sm" style="width:fit-content;">Book Spring Opening →</span>
+        </div>
+      </a>
+      <a href="https://calendar.app.google/ktWefWX55H1fqGCHA" target="_blank" class="seasonal-card reveal reveal-delay-2">
+        <img src="https://static.wixstatic.com/media/10e473_b8e7a877e515482eb3fac2d3f79aba0e~mv2.jpg" alt="Fall Closing Service">
+        <div class="seasonal-card-overlay">
+          <span class="seasonal-badge">🍂 Fall</span>
+          <h3>Fall Closing Service</h3>
+          <p>Complete winterization to protect your system from Ontario's freeze. We blow out all zones and ensure your pipes and heads are safe for winter.</p>
+          <span class="btn btn-primary btn-sm" style="width:fit-content;">Book Fall Closing →</span>
+        </div>
+      </a>
+    </div>
+    <div class="text-center mt-32 reveal">
+      <p style="color:var(--text-muted);font-size:14px;">⚡ Spring slots fill up fast — book early to secure your preferred date</p>
+    </div>
+  </div>
+</section>
+
+<!-- Repair Section -->
+<section class="section bg-cream" id="repair">
+  <div class="container">
+    <div class="service-detail-grid">
+      <div class="service-detail-img reveal">
+        <img src="sprinkler-tech.png" alt="Sprinkler System Repair">
+      </div>
+      <div class="service-detail-content reveal reveal-delay-2">
+        <span class="section-tag">Repair & Diagnosis</span>
+        <h2>Fast. Transparent. Reliable.</h2>
+        <p>We diagnose and repair all sprinkler systems — any brand, any design, any size. From minor leaks to full system failures, PJL delivers clear solutions, accurate timelines, and honest pricing every time.</p>
+        <p>No upsells, no delays — just repairs done right, the first time.</p>
+        <div class="checklist">
+          <div class="checklist-item">Broken or leaking sprinkler heads</div>
+          <div class="checklist-item">Low water pressure diagnosis</div>
+          <div class="checklist-item">Zone valve failures</div>
+          <div class="checklist-item">Controller and timer issues</div>
+          <div class="checklist-item">Uneven or poor coverage</div>
+          <div class="checklist-item">Pipe and fitting repairs</div>
+          <div class="checklist-item">Smart controller upgrades</div>
+        </div>
+        <a href="https://calendar.app.google/ktWefWX55H1fqGCHA" target="_blank" class="btn btn-green">Book a Service Call</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Installation Section -->
+<section class="section" id="installation">
+  <div class="container">
+    <div class="service-detail-grid reverse">
+      <div class="service-detail-img reveal">
+        <img src="https://static.wixstatic.com/media/10e473_cc6e778790984c69813edb47effb377c~mv2.jpg" alt="Sprinkler System Installation">
+      </div>
+      <div class="service-detail-content reveal reveal-delay-2">
+        <span class="section-tag">New Installation</span>
+        <h2>Tailored Systems. Built to Last.</h2>
+        <p>We design and install efficient, long-lasting sprinkler systems for new landscapes and retrofit properties alike. Every system is customized for your layout — ensuring optimal performance, full coverage, and water savings.</p>
+        <div class="checklist">
+          <div class="checklist-item">Free on-site consultation and custom design</div>
+          <div class="checklist-item">Professional-grade Hydrawise smart controller — included standard</div>
+          <div class="checklist-item">High-efficiency heads and components throughout</div>
+          <div class="checklist-item">Low-disruption installation with minimal landscape impact</div>
+          <div class="checklist-item">Full system walkthrough and Hydrawise app setup</div>
+          <div class="checklist-item">3-year parts and labour warranty on all installed systems</div>
+        </div>
+        <div class="page-hero-actions">
+          <a href="estimate.html" class="btn btn-primary">Get a Free Estimate</a>
+          <a href="contact.html" class="btn btn-outline-green">Ask a Question</a>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Upgrades Section -->
+<section class="section bg-cream" id="upgrades">
+  <div class="container">
+    <div class="service-detail-grid">
+      <div class="service-detail-img reveal">
+        <img src="https://static.wixstatic.com/media/10e473_6ed6296a7c6c46ccb007bb93844b9269~mv2.png" alt="Smart Sprinkler Upgrades">
+      </div>
+      <div class="service-detail-content reveal reveal-delay-2">
+        <span class="section-tag">Smart Upgrades</span>
+        <h2>Smarter Systems. Greater Efficiency.</h2>
+        <p>Outdated sprinkler systems waste water, time, and money. We retrofit existing irrigation systems with advanced Hydrawise smart controllers that bring modern efficiency to any landscape.</p>
+        <div class="checklist">
+          <div class="checklist-item">Hydrawise WiFi smart controller installation</div>
+          <div class="checklist-item">Weather-based automatic schedule adjustments</div>
+          <div class="checklist-item">Remote monitoring and control via smartphone</div>
+          <div class="checklist-item">Flow monitoring and leak detection</div>
+          <div class="checklist-item">Compatible with all major irrigation brands</div>
+        </div>
+        <a href="https://calendar.app.google/ktWefWX55H1fqGCHA" target="_blank" class="btn btn-green">Book an Upgrade</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Pricing -->
+<section class="section" id="pricing">
+  <div class="container">
+    <div class="text-center reveal mb-48">
+      <span class="section-tag">Transparent Pricing</span>
+      <h2>Simple, Honest Installation Pricing</h2>
+      <p style="max-width:480px;margin:0 auto;">No hidden fees, no surprises. Every new system installation is priced simply and clearly.</p>
+    </div>
+    <div class="pricing-card reveal">
+      <span class="section-tag">New System Installation</span>
+      <div class="price">$585</div>
+      <div class="price-sub">Base system fee + $525 per zone</div>
+      <ul class="pricing-features">
+        <li>Professional site assessment and custom zone design</li>
+        <li>Hydrawise smart WiFi controller — included standard</li>
+        <li>High-efficiency heads and all components</li>
+        <li>Low-disruption installation by experienced technicians</li>
+        <li>Full system walkthrough and app setup</li>
+        <li>3-year parts and labour warranty</li>
+      </ul>
+      <a href="estimate.html" class="btn btn-primary btn-lg" style="width:100%;justify-content:center;">Calculate Your Estimate →</a>
+      <p style="font-size:12px;color:var(--text-muted);margin-top:16px;">Final pricing confirmed after free on-site consultation. Pricing may vary based on property complexity and water supply access.</p>
+    </div>
+  </div>
+</section>
+
+<!-- CTA -->
+<section class="cta-banner">
+  <div class="container">
+    <div class="reveal">
+      <h2>Ready to Get Started?</h2>
+      <p>Book your free consultation today or use our online estimator to get a ballpark price in 2 minutes.</p>
+      <div class="btn-row">
+        <a href="estimate.html" class="btn btn-primary btn-lg">Get a Free Estimate</a>
+        <a href="tel:+19059600181" class="btn btn-outline btn-lg">📞 (905) 960-0181</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer class="footer">
+  <div class="container">
+    <div class="footer-grid">
+      <div class="footer-brand">
+        <img src="logo.svg" alt="PJL Land Services">
+        <p>Newmarket's trusted lawn sprinkler and landscape lighting experts. Serving the GTA with honest service, smart technology, and a 3-year warranty.</p>
+        <div class="footer-social">
+          <a href="https://www.facebook.com/pjllandservices" target="_blank">f</a>
+          <a href="https://www.instagram.com/pjllandservices" target="_blank">in</a>
+        </div>
+      </div>
+      <div class="footer-col">
+        <h5>Services</h5>
+        <ul>
+          <li><a href="sprinkler-systems.html">Spring Openings</a></li>
+          <li><a href="sprinkler-systems.html">Fall Closings</a></li>
+          <li><a href="sprinkler-systems.html#repair">Sprinkler Repair</a></li>
+          <li><a href="estimate.html">New Installations</a></li>
+          <li><a href="landscape-lighting.html">Landscape Lighting</a></li>
+        </ul>
+      </div>
+      <div class="footer-col">
+        <h5>Company</h5>
+        <ul>
+          <li><a href="index.html">Home</a></li>
+          <li><a href="estimate.html">Get an Estimate</a></li>
+          <li><a href="faq.html">FAQ</a></li>
+          <li><a href="contact.html">Contact Us</a></li>
+        </ul>
+      </div>
+      <div class="footer-col">
+        <h5>Contact</h5>
+        <div class="footer-contact-item"><span>📞</span><a href="tel:+19059600181" style="color:rgba(255,255,255,0.65)">(905) 960-0181</a></div>
+        <div class="footer-contact-item"><span>✉️</span><a href="mailto:info@pjllandservices.com" style="color:rgba(255,255,255,0.65)">info@pjllandservices.com</a></div>
+        <div class="footer-contact-item"><span>📍</span><span>Newmarket, Ontario</span></div>
+      </div>
+    </div>
+    <div class="footer-bottom">
+      <p>© 2026 PJL Land Services. All rights reserved.</p>
+      <div class="footer-bottom-links"><a href="#">Privacy Policy</a><a href="#">Terms of Service</a></div>
+    </div>
+  </div>
+</footer>
+<script src="nav.js"></script>
+</body>
+</html>
