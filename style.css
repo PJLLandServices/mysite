@@ -742,10 +742,14 @@ section.hero[aria-label="PJL Land Services hero"] {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: clamp(5rem, 8vw, 7rem) clamp(1.25rem, 4vw, 3rem);
+  padding: clamp(4rem, 6cqh, 8rem) clamp(1.25rem, 4cqi, 3rem);
   color: #fff;
   text-align: center;
   overflow: visible;
+  min-height: 100svh;
+  max-height: clamp(100svh, 100svh + 0px, 1100px);
+  container-type: size;
+  container-name: hero;
 }
 
 section.hero[aria-label="PJL Land Services hero"] .hero__media {
@@ -775,7 +779,7 @@ section.hero[aria-label="PJL Land Services hero"] .hero__inner {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: clamp(1rem, 2.4vw, 1.9rem);
+  gap: clamp(0.9rem, 2.5cqh, 2.25rem);
   max-width: 76rem;
   width: 100%;
 }
@@ -784,12 +788,12 @@ section.hero[aria-label="PJL Land Services hero"] .hero__headline {
   display: inline-block;
   font-family: inherit;
   font-weight: 700;
-  font-size: clamp(1.85rem, 4vw + 0.7rem, 4.65rem);
+  font-size: clamp(1.75rem, 7cqi, 5rem);
   line-height: 1.03;
   letter-spacing: -0.02em;
   margin: 0;
   text-wrap: balance;
-  white-space: nowrap;
+  white-space: normal;
   text-shadow: 0 8px 28px rgba(0, 0, 0, 0.28);
 }
 
@@ -799,7 +803,7 @@ section.hero[aria-label="PJL Land Services hero"] .hero__headline em {
 }
 
 section.hero[aria-label="PJL Land Services hero"] .hero__sub {
-  font-size: clamp(1rem, 0.5vw + 0.9rem, 1.12rem);
+  font-size: clamp(0.95rem, 1.6cqi, 1.25rem);
   line-height: 1.6;
   max-width: 42ch;
   margin: 0;
@@ -822,7 +826,7 @@ section.hero[aria-label="PJL Land Services hero"] .hero__cta {
   min-height: 48px;
   padding: 0.9rem 1.75rem;
   border-radius: 10px;
-  font-size: clamp(0.95rem, 0.4vw + 0.85rem, 1.05rem);
+  font-size: clamp(0.95rem, 1.4cqi, 1.1rem);
   font-weight: 600;
   text-decoration: none;
   transition: transform 0.15s ease, background 0.2s ease, border-color 0.2s ease;
@@ -864,7 +868,7 @@ section.hero[aria-label="PJL Land Services hero"] .hero__services {
   justify-content: center;
   gap: clamp(0.75rem, 2vw, 1.5rem);
   margin: clamp(0.5rem, 2vw, 1rem) 0 0;
-  font-size: clamp(1rem, 1.2vw + 0.7rem, 1.5rem);
+  font-size: clamp(1rem, 1.8cqi, 1.65rem);
   font-weight: 600;
   letter-spacing: 0.08em;
   text-transform: uppercase;
