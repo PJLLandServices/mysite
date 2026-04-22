@@ -8,360 +8,7 @@
 <link rel="stylesheet" href="style.css">
 <style>
 /* ── Hero — full-screen background photo like landscape lighting page ── */
-.hero {
-  position: relative;
-  box-sizing: border-box;
-}
-.hero-content {
-  position: relative;
-  z-index: 2;
-  max-width: 800px;
-  margin-left: auto;
-  margin-right: auto;
-  text-align: center;
-  padding: 0 16px;
-}
-.hero-tag {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  background: rgba(255,255,255,0.1);
-  border: 1px solid rgba(255,255,255,0.2);
-  color: rgba(255,255,255,0.88);
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  padding: 7px 16px;
-  border-radius: 99px;
-  margin-bottom: 24px;
-  animation: fadeUp .7s ease .2s both;
-}
-.hero-headline-wrap {
-  display: grid;
-  place-items: center;
-  margin-bottom: 14px;
-  max-width: 100%;
-}
-/* Stack both headlines in same grid cell */
-.hero-headline-wrap .hero-headline {
-  grid-area: 1 / 1;
-  color: #fff;
-  font-size: clamp(40px, 5.7vw, 78px);
-  line-height: 1.04;
-  font-weight: 900;
-  letter-spacing: -0.02em;
-  text-shadow: 0 2px 32px rgba(0,0,0,0.55), 0 1px 4px rgba(0,0,0,0.4);
-  margin: 0;
-  max-width: 100%;
-}
-.hero-headline em {
-  font-style: normal;
-  font-weight: 900;
-  color: var(--amber-light);
-  font-size: 0.97em;
-}
-@media (max-width: 1320px) {
-  .hero {
-    padding-top: 170px;
-    padding-bottom: 96px;
-  }
-  .hero-content {
-    max-width: 720px;
-  }
-  .hero-headline-wrap .hero-headline {
-    font-size: clamp(48px, 7.1vw, 72px);
-  }
-}
-@media (max-width: 900px) {
-  .hero {
-    padding-top: 148px;
-    padding-bottom: 112px;
-  }
-  .hero-content {
-    max-width: 680px;
-    padding: 0 14px 24px;
-  }
-  .hero-tag {
-    margin-bottom: 20px;
-  }
-  .hero-buttons .btn {
-    min-width: 240px;
-    justify-content: center;
-  }
-}
-@media (max-width: 600px) {
-  .hero-headline-wrap .hero-headline {
-    font-size: clamp(22px, 6.8vw, 32px);
-    line-height: 1.03;
-    letter-spacing: -0.025em;
-  }
-  .hero {
-    padding-top: 118px;
-    padding-bottom: 144px;
-  }
-  .hero-content {
-    max-width: 392px;
-    padding-inline: 14px;
-    padding-bottom: 18px;
-  }
-  .hero-tag {
-    margin-bottom: 16px;
-  }
-  .hero-sub {
-    font-size: 16px;
-    line-height: 1.55;
-    margin-bottom: 22px;
-    max-width: 34ch;
-  }
-  .hero-buttons {
-    gap: 12px;
-    flex-direction: column;
-    align-items: center;
-    margin-bottom: 0;
-  }
-  .hero-buttons .btn {
-    width: min(100%, 320px);
-    min-width: 0;
-    padding: 14px 16px;
-    font-size: 15px;
-    justify-content: center;
-  }
-  .hero-trust {
-    padding: 18px 0 10px;
-  }
-  .hero-trust-inner {
-    width: auto;
-    max-width: calc(100% - 24px);
-    gap: 10px 12px;
-    padding: 12px 14px;
-  }
-  .hero-trust-item {
-    width: calc(50% - 6px);
-    font-size: 12px;
-    gap: 8px;
-    align-items: flex-start;
-  }
-}
-@media (max-width: 420px) {
-  .hero-headline-wrap .hero-headline {
-    font-size: clamp(18px, 6.4vw, 24px);
-  }
-  .hero {
-    padding-top: 104px;
-    padding-bottom: 154px;
-  }
-  .hero-content {
-    max-width: 340px;
-    padding-inline: 12px;
-    padding-bottom: 14px;
-  }
-  .hero-sub {
-    font-size: 16px;
-    margin-bottom: 20px;
-  }
-  .hero-trust-inner {
-    max-width: calc(100% - 20px);
-    gap: 8px 10px;
-    padding: 10px 12px;
-  }
-  .hero-trust-item {
-    font-size: 11px;
-    line-height: 1.35;
-  }
-}
-@media (max-width: 375px) {
-  .hero-content {
-    max-width: 312px;
-    padding-inline: 8px;
-  }
-  .hero-headline-wrap .hero-headline {
-    font-size: clamp(16px, 5.6vw, 20px);
-  }
-}
-@media (max-width: 340px) {
-  .hero-headline-wrap .hero-headline {
-    font-size: clamp(15px, 5.2vw, 18px);
-  }
-}
-.hero-sub {
-  font-size: 18px;
-  color: rgba(255,255,255,0.78);
-  line-height: 1.65;
-  margin-bottom: 36px;
-  max-width: 540px;
-  font-weight: 300;
-  animation: fadeUp .7s ease .5s both;
-  margin-left: auto;
-  margin-right: auto;
-}
-.hero-buttons {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 14px;
-  justify-content: center;
-  animation: fadeUp .7s ease .62s both;
-}
 /* ── Hero overrides — Phase 2 root-cause responsive fix ── */
-.hero {
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  padding: clamp(7rem, 12vw, 11rem) clamp(1rem, 4vw, 3rem) clamp(3rem, 6vw, 5rem);
-  background-image:
-    linear-gradient(105deg, rgba(10,25,15,0.82) 0%, rgba(10,25,15,0.65) 45%, rgba(10,25,15,0.25) 100%),
-    url('https://static.wixstatic.com/media/10e473_b8e7a877e515482eb3fac2d3f79aba0e~mv2.jpg');
-  background-size: cover;
-  background-position: center 40%;
-}
-.hero-shell {
-  position: relative;
-  z-index: 1;
-  width: min(100%, 1150px);
-  margin: 0 auto;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: clamp(1.5rem, 3vw, 2.5rem);
-}
-.hero-content {
-  z-index: 1;
-  width: min(100%, 46rem);
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: clamp(0.9rem, 1.8vw, 1.5rem);
-}
-.hero-tag {
-  margin-bottom: 0;
-}
-.hero-headline-wrap {
-  display: flex;
-  justify-content: center;
-  width: 100%;
-  margin-bottom: 0;
-}
-.hero-headline-wrap .hero-headline {
-  display: inline-block;
-  margin: 0;
-  max-width: min(20ch, 100%);
-  font-size: clamp(2rem, 1.4rem + 3.3vw, 5.5rem);
-  line-height: 1.05;
-  font-weight: 700;
-  letter-spacing: -0.04em;
-  text-align: center;
-}
-.hero-headline em {
-  font-weight: 700;
-  font-size: 1em;
-}
-.hero-headline strong {
-  font-weight: 700;
-}
-.hero-sub {
-  margin-bottom: 0;
-  max-width: 40ch;
-  font-size: clamp(1rem, 0.9vw + 0.75rem, 1.125rem);
-}
-.hero-buttons {
-  gap: clamp(0.875rem, 2vw, 1rem);
-  width: 100%;
-}
-.hero-buttons .btn {
-  min-width: clamp(220px, 22vw, 270px);
-  justify-content: center;
-}
-.hero-trust {
-  position: static;
-  align-self: stretch;
-  width: min(100%, 1150px);
-  margin-top: clamp(1.5rem, 4vw, 2.5rem);
-  padding: clamp(1rem, 3vw, 1.75rem);
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: clamp(0.75rem, 2vw, 1.5rem);
-  border-radius: 22px;
-  border: 1px solid rgba(255,255,255,0.09);
-  background: rgba(10,25,15,0.42);
-  backdrop-filter: blur(10px);
-  box-shadow: 0 18px 42px rgba(0,0,0,0.18);
-}
-.hero-trust-inner {
-  display: contents;
-}
-.hero-trust-item {
-  display: flex;
-  align-items: flex-start;
-  gap: 0.75rem;
-  min-height: 44px;
-  padding: 0;
-  color: rgba(255,255,255,0.94);
-  font-size: clamp(0.9rem, 1vw + 0.6rem, 1.05rem);
-  line-height: 1.4;
-  font-weight: 600;
-  text-shadow: 0 1px 4px rgba(0,0,0,0.28);
-}
-.hero-trust-item .dot {
-  width: 7px;
-  height: 7px;
-  flex: 0 0 auto;
-  margin-top: 0.45em;
-  border-radius: 50%;
-  background: var(--amber);
-  box-shadow: 0 0 6px rgba(224,123,36,0.6);
-}
-@media (max-width: 768px) {
-  .hero {
-    padding-top: clamp(6.75rem, 16vw, 8.5rem);
-    padding-bottom: clamp(2.75rem, 7vw, 4rem);
-    background-position: center 45%;
-  }
-  .hero-shell {
-    gap: clamp(1.25rem, 4vw, 2rem);
-  }
-  .hero-content {
-    max-width: min(100%, 30rem);
-  }
-  .hero-buttons {
-    flex-direction: column;
-    align-items: stretch;
-  }
-  .hero-buttons .btn {
-    width: 100%;
-    min-width: 0;
-  }
-}
-@media (max-width: 900px) and (min-width: 601px) {
-  .hero-trust {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-@media (min-width: 901px) {
-  .hero-trust {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-  }
-  .hero-trust-item {
-    justify-content: center;
-    text-align: center;
-  }
-}
-@media (max-width: 600px) {
-  .hero {
-    padding-top: clamp(6.25rem, 18vw, 7.5rem);
-    padding-inline: clamp(1rem, 4.5vw, 1.5rem);
-  }
-  .hero-tag {
-    font-size: 10px;
-    padding: 7px 14px;
-  }
-  .hero-headline-wrap .hero-headline {
-    max-width: 100%;
-  }
-  .hero-trust {
-    grid-template-columns: 1fr;
-  }
-}
 @keyframes fadeUp{from{opacity:0;transform:translateY(22px);}to{opacity:1;transform:translateY(0);}}
 @keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(76,175,80,0.5);}50%{box-shadow:0 0 0 7px rgba(76,175,80,0);}}
 /* Trust bar */
@@ -797,9 +444,6 @@
   .smart-tech-visual-shell{margin:0 auto;width:min(100%,760px);}
 }
 @media(max-width:900px){
-  .hero-inner{grid-template-columns:1fr;}
-  .hero-image{display:none;}
-  .hero-content{padding:0 0 24px;}
   .proc-g{grid-template-columns:1fr 1fr;}
   .proc-line{display:none;}
   .stats-row{grid-template-columns:1fr 1fr;}
@@ -870,34 +514,39 @@
   <a href="https://calendar.app.google/ktWefWX55H1fqGCHA" target="_blank" class="nav-mobile-cta">Book Online →</a>
 </div>
 
-<!-- Hero — full screen background, matches landscape lighting page quality -->
-<section class="hero">
-  <div class="container hero-shell">
-    <div class="hero-content">
-      <div class="hero-tag">
-        <span>📍</span> Newmarket &amp; Greater Toronto Area
-      </div>
-      <div class="hero-headline-wrap">
-        <h1 class="hero-headline" id="heroHeadline">Your <em>LANDSCAPE.</em><br>Perfectly <em>WATERED.</em><br>Beautifully <em>LIT.</em></h1>
-      </div>
-      <p class="hero-sub">Professional lawn sprinkler systems and landscape lighting for Newmarket and the GTA. Smart technology, honest service, and a 3-year warranty you can count on.</p>
-      <div class="hero-buttons">
-        <a href="estimate.html" class="btn btn-primary btn-lg">Get a Free Estimate</a>
-        <a href="https://calendar.app.google/ktWefWX55H1fqGCHA" target="_blank" class="btn btn-outline btn-lg">Book a Consultation</a>
-      </div>
+<section class="hero" aria-label="PJL Land Services hero">
+  <div class="hero__media" aria-hidden="true">
+    <img src="https://static.wixstatic.com/media/10e473_b8e7a877e515482eb3fac2d3f79aba0e~mv2.jpg" alt="" class="hero__image">
+    <div class="hero__scrim"></div>
+  </div>
+  <div class="hero__inner">
+    <h1 class="hero__headline">
+      Your <em>LANDSCAPE.</em><br>
+      Perfectly <em>WATERED.</em><br>
+      Beautifully <em>LIT.</em>
+    </h1>
+    <p class="hero__sub">
+      Professional lawn sprinkler systems and landscape lighting for 
+      Newmarket and the GTA. Smart technology, honest service, and a 
+      3-year warranty you can count on.
+    </p>
+    <div class="hero__ctas">
+      <a href="estimate.html" class="hero__cta hero__cta--primary">
+        Get a Free Estimate
+      </a>
+      <a href="#book" class="hero__cta hero__cta--secondary">
+        Book a Consultation
+      </a>
     </div>
-    <div class="hero-trust">
-      <div class="hero-trust-inner">
-        <div class="hero-trust-item"><span class="dot"></span> 10+ Years Experience</div>
-        <div class="hero-trust-item"><span class="dot"></span> 3-Year Parts & Labour Warranty</div>
-        <div class="hero-trust-item"><span class="dot"></span> Certified Hydrawise Installer</div>
-        <div class="hero-trust-item"><span class="dot"></span> High-Efficiency Components</div>
-      </div>
-    </div>
+    <p class="hero__services" role="text">
+      <span>Design</span>
+      <span class="hero__services-sep" aria-hidden="true">|</span>
+      <span>Installation</span>
+      <span class="hero__services-sep" aria-hidden="true">|</span>
+      <span>Service</span>
+    </p>
   </div>
 </section>
-
-
 
 <!-- Logo bridge section — flows from hero into services -->
 <div class="logo-bridge">
@@ -1227,3 +876,4 @@ function submitQuickBook() {
 </script>
 </body>
 </html>
+
