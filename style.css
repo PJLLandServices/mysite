@@ -779,7 +779,7 @@ section.hero[aria-label="PJL Land Services hero"] .hero__inner {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: clamp(3.5rem, 5cqh, 5.5rem);
+  gap: clamp(1.5rem, 5cqh, 5.5rem);
   max-width: 76rem;
   width: 100%;
 }
