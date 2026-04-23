@@ -108,7 +108,7 @@ img { max-width: 100%; height: auto; display: block; }
   align-items: center;
 }
 .nav-logo img {
-  height: 148px;
+  height: 175px;
   width: auto;
   display: block;
   object-fit: contain;
@@ -129,7 +129,7 @@ img { max-width: 100%; height: auto; display: block; }
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: 12.5px;
+  font-size: 15.5px;
   font-weight: 600;
   color: rgba(255,255,255,0.88);
   letter-spacing: 0.03em;
@@ -160,7 +160,7 @@ img { max-width: 100%; height: auto; display: block; }
   padding: 8px 15px;
   border-radius: 6px;
   font-weight: 600 !important;
-  font-size: 13px;
+  font-size: 18px;
   white-space: nowrap;
   min-height: 44px;
 }
@@ -170,7 +170,7 @@ img { max-width: 100%; height: auto; display: block; }
   display: flex;
   flex-direction: column;
   align-items: flex-end;
-  gap: 6px;
+  gap: 8px;
   flex-shrink: 0;
 }
 .nav-hamburger { display: none; }
@@ -746,7 +746,7 @@ section.hero[aria-label="PJL Land Services hero"] {
   color: #fff;
   text-align: center;
   overflow: visible;
-  min-height: 100svh;
+  min-height: max(430px, 100svh);
   max-height: clamp(100svh, 100svh + 0px, 1100px);
   container-type: size;
   container-name: hero;
@@ -779,7 +779,7 @@ section.hero[aria-label="PJL Land Services hero"] .hero__inner {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: clamp(1.5rem, 5cqh, 5.5rem);
+  gap: clamp(1.5rem, 8cqh, 1.5rem);
   max-width: 76rem;
   width: 100%;
 }
@@ -788,7 +788,7 @@ section.hero[aria-label="PJL Land Services hero"] .hero__headline {
   display: inline-block;
   font-family: inherit;
   font-weight: 700;
-  font-size: clamp(2.1rem, 10cqi, 5rem);
+  font-size: clamp(2.1rem, 4vw + 0.6rem, 4.65rem);
   line-height: 1.03;
   letter-spacing: -0.02em;
   margin: 0;
@@ -903,6 +903,8 @@ section.hero[aria-label="PJL Land Services hero"] .hero__services-sep {
     transition: none;
   }
 }
+
+
 
 /* ── Logo bridge — flows from hero into content ── */
 .logo-bridge {
