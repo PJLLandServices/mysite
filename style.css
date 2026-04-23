@@ -779,7 +779,7 @@ section.hero[aria-label="PJL Land Services hero"] .hero__inner {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: clamp(0.9rem, 2.5cqh, 2.25rem);
+  gap: clamp(3.5rem, 5cqh, 5.5rem);
   max-width: 76rem;
   width: 100%;
 }
@@ -788,7 +788,7 @@ section.hero[aria-label="PJL Land Services hero"] .hero__headline {
   display: inline-block;
   font-family: inherit;
   font-weight: 700;
-  font-size: clamp(1.75rem, 10cqi, 5rem);
+  font-size: clamp(2.1rem, 10cqi, 5rem);
   line-height: 1.03;
   letter-spacing: -0.02em;
   margin: 0;
