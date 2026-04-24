@@ -147,10 +147,462 @@
 .pricing-features li:last-child { border-bottom: none; }
 .pricing-features li::before { content: '✓'; color: var(--green); font-weight: 700; }
 
+/* Zone price estimator — split card */
+.sprk-zone {
+  max-width: 840px;
+  margin: 0 auto 40px;
+  background: #fff;
+  border: 1px solid rgba(74,140,92,0.18);
+  border-radius: var(--r-xl);
+  padding: 0;
+  display: grid;
+  grid-template-columns: 1.1fr 1fr;
+  overflow: hidden;
+  box-shadow: 0 18px 48px rgba(27,77,46,0.12);
+}
+
+/* Left: inputs */
+.sprk-zone__inputs {
+  padding: 32px 32px 34px;
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+  background: linear-gradient(180deg, #f7faf2 0%, #edf4e4 100%);
+}
+.sprk-zone__field {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.sprk-zone__field-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+/* Toggle */
+.sprk-zone__toggle {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 4px;
+  gap: 2px;
+}
+.sprk-zone__tab {
+  border: none;
+  background: transparent;
+  padding: 11px 14px;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text-mid);
+  border-radius: 9px;
+  cursor: pointer;
+  transition: background 0.2s, color 0.2s, box-shadow 0.2s;
+  letter-spacing: 0.01em;
+}
+.sprk-zone__tab:hover { color: var(--green); }
+.sprk-zone__tab.is-active {
+  background: var(--green);
+  color: #fff;
+  box-shadow: 0 4px 12px rgba(27,77,46,0.22);
+}
+
+/* Zone stepper */
+.sprk-zone__controls {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 12px;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 8px;
+}
+.sprk-zone__btn {
+  width: 42px; height: 42px;
+  border-radius: 9px;
+  border: none;
+  background: var(--green);
+  color: #fff;
+  font-size: 22px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.2s, transform 0.15s;
+  display: flex; align-items: center; justify-content: center;
+  line-height: 1;
+}
+.sprk-zone__btn:hover { background: var(--green-mid); transform: scale(1.04); }
+.sprk-zone__btn:disabled { background: var(--border); color: rgba(0,0,0,0.25); cursor: not-allowed; transform: none; }
+.sprk-zone__value {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  line-height: 1;
+}
+.sprk-zone__value span {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 32px;
+  font-weight: 800;
+  color: var(--green);
+  letter-spacing: -0.01em;
+}
+.sprk-zone__value small {
+  font-size: 10px;
+  color: var(--text-muted);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  margin-top: 4px;
+  font-weight: 600;
+}
+
+/* Right: readout */
+.sprk-zone__readout {
+  padding: 36px 32px;
+  background:
+    radial-gradient(ellipse 80% 60% at 50% 0%, rgba(74,140,92,0.18) 0%, transparent 60%),
+    linear-gradient(160deg, var(--green) 0%, var(--green-mid) 100%);
+  color: #fff;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  gap: 10px;
+  position: relative;
+  isolation: isolate;
+}
+.sprk-zone__readout::before {
+  content: '';
+  position: absolute;
+  inset: 0; z-index: -1;
+  background-image: radial-gradient(circle, rgba(255,255,255,0.06) 1px, transparent 1px);
+  background-size: 22px 22px;
+  opacity: 0.6;
+}
+.sprk-zone__readout-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: rgba(255,255,255,0.72);
+}
+.sprk-zone__amount {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: clamp(48px, 5vw, 64px);
+  font-weight: 800;
+  color: #fff;
+  letter-spacing: -0.02em;
+  line-height: 1;
+  text-shadow: 0 4px 18px rgba(0,0,0,0.22);
+}
+.sprk-zone__per {
+  font-family: 'DM Sans', sans-serif;
+  font-size: 14px;
+  font-weight: 500;
+  color: rgba(255,255,255,0.75);
+  margin-left: 6px;
+  letter-spacing: 0;
+  text-shadow: none;
+  vertical-align: middle;
+}
+.sprk-zone__tier-pill {
+  display: inline-block;
+  background: rgba(255,255,255,0.14);
+  border: 1px solid rgba(255,255,255,0.22);
+  color: #fff;
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  padding: 6px 14px;
+  border-radius: 99px;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  margin-top: 4px;
+}
+.sprk-zone__services {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: rgba(255,255,255,0.88);
+  margin-top: 8px;
+  font-weight: 500;
+}
+.sprk-zone__services-sep { color: rgba(255,255,255,0.45); }
+
+/* Custom Quote state */
+.sprk-zone--quote .sprk-zone__amount {
+  font-size: clamp(30px, 3.5vw, 40px);
+  color: #FFD79A;
+}
+.sprk-zone--quote .sprk-zone__readout {
+  background:
+    radial-gradient(ellipse 80% 60% at 50% 0%, rgba(245,155,74,0.22) 0%, transparent 60%),
+    linear-gradient(160deg, #7a3710 0%, #5a2909 100%);
+}
+
+@media (max-width: 720px) {
+  .sprk-zone { grid-template-columns: 1fr; max-width: 480px; }
+  .sprk-zone__inputs { padding: 26px 22px; }
+  .sprk-zone__readout { padding: 30px 22px; }
+}
+
+/* Seasonal star section */
+.sprk-seasonal__grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: clamp(20px, 3vw, 32px);
+  margin-bottom: clamp(28px, 4vw, 40px);
+}
+.sprk-seasonal__card {
+  background: var(--white);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xl);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  transition: transform 0.35s cubic-bezier(.2,.8,.2,1), box-shadow 0.35s ease, border-color 0.35s ease;
+}
+.sprk-seasonal__card:hover { transform: translateY(-6px); box-shadow: 0 24px 60px rgba(27,77,46,0.16); border-color: transparent; }
+.sprk-seasonal__header {
+  padding: 18px 28px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  color: #fff;
+}
+.sprk-seasonal__header--spring { background: linear-gradient(135deg, #4A8C5C 0%, #2D6A42 100%); }
+.sprk-seasonal__header--fall   { background: linear-gradient(135deg, #C96A2A 0%, #8E3F14 100%); }
+.sprk-seasonal__badge {
+  font-size: 13px; font-weight: 700;
+  letter-spacing: 0.06em; text-transform: uppercase;
+}
+.sprk-seasonal__price { font-size: 14px; font-weight: 500; opacity: 0.92; }
+.sprk-seasonal__price strong { font-size: 22px; font-weight: 800; letter-spacing: -0.01em; }
+.sprk-seasonal__body { padding: 28px; display: flex; flex-direction: column; flex: 1; }
+.sprk-seasonal__body h3 { font-size: 22px; margin-bottom: 12px; }
+.sprk-seasonal__body p { color: var(--text-mid); font-size: 15px; line-height: 1.65; margin-bottom: 22px; }
+
+/* Process list */
+.sprk-process {
+  background: var(--green-pale);
+  border-radius: var(--r-lg);
+  padding: 18px 22px;
+  margin-bottom: 24px;
+}
+.sprk-process h4 {
+  font-size: 12px; font-weight: 700;
+  letter-spacing: 0.12em; text-transform: uppercase;
+  color: var(--green);
+  margin-bottom: 12px;
+}
+.sprk-process ol {
+  list-style: none;
+  counter-reset: step;
+  display: flex; flex-direction: column; gap: 10px;
+}
+.sprk-process ol li {
+  counter-increment: step;
+  position: relative;
+  padding-left: 34px;
+  font-size: 14px;
+  color: var(--text-mid);
+  line-height: 1.55;
+}
+.sprk-process ol li::before {
+  content: counter(step);
+  position: absolute;
+  left: 0; top: 0;
+  width: 24px; height: 24px;
+  background: var(--green);
+  color: #fff;
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-family: 'DM Sans', sans-serif;
+  font-size: 12px; font-weight: 700;
+  letter-spacing: 0;
+}
+.sprk-process ol li strong { color: var(--text); font-weight: 700; }
+
+/* DIY warning callout */
+.sprk-diy {
+  display: flex;
+  gap: 20px;
+  align-items: flex-start;
+  background: linear-gradient(135deg, #FDF0E4 0%, #FAE6D1 100%);
+  border: 1px solid rgba(224, 123, 36, 0.28);
+  border-left: 4px solid var(--amber);
+  border-radius: var(--r-lg);
+  padding: 24px 28px;
+  margin-bottom: 24px;
+}
+.sprk-diy__icon { font-size: 32px; line-height: 1; flex-shrink: 0; }
+.sprk-diy__body h4 {
+  font-size: 18px;
+  margin-bottom: 8px;
+  color: #8E3F14;
+}
+.sprk-diy__body p { font-size: 14.5px; color: var(--text-mid); line-height: 1.65; margin-bottom: 8px; }
+.sprk-diy__close {
+  font-weight: 600;
+  color: #8E3F14 !important;
+  border-top: 1px solid rgba(224, 123, 36, 0.25);
+  padding-top: 10px;
+  margin-top: 6px;
+}
+
+.sprk-seasonal__note {
+  text-align: center;
+  font-size: 13.5px;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+/* AI callout on services */
+.sprk-ai {
+  background: linear-gradient(135deg, rgba(74,140,92,0.12) 0%, rgba(243,144,25,0.10) 100%);
+  border: 1px solid rgba(74,140,92,0.22);
+  border-radius: var(--r-lg);
+  padding: 18px 22px;
+  margin: 24px 0 28px;
+}
+.sprk-ai__badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--green);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  padding: 5px 12px;
+  border-radius: 99px;
+  margin-bottom: 10px;
+}
+.sprk-ai__dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: #f39019;
+  box-shadow: 0 0 0 3px rgba(243,144,25,0.3);
+  animation: pulse 2s infinite;
+}
+.sprk-ai p { font-size: 14.5px; color: var(--text); line-height: 1.6; margin: 0; }
+
+/* Property range grid */
+.sprk-property-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 20px;
+}
+.sprk-property {
+  background: var(--white);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  padding: 28px 24px;
+  text-align: center;
+  transition: transform 0.3s, box-shadow 0.3s, border-color 0.3s;
+}
+.sprk-property:hover { transform: translateY(-4px); box-shadow: 0 16px 40px rgba(27,77,46,0.14); border-color: transparent; }
+.sprk-property__icon { font-size: 40px; display: block; margin-bottom: 12px; }
+.sprk-property h4 { font-size: 16px; margin-bottom: 8px; }
+.sprk-property p { font-size: 13.5px; color: var(--text-muted); line-height: 1.55; }
+
+/* Pricing grid */
+.sprk-pricing-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 24px;
+}
+.sprk-pricing {
+  background: var(--white);
+  border: 2px solid var(--border);
+  border-radius: var(--r-xl);
+  padding: 32px 28px;
+  text-align: center;
+  transition: transform 0.3s, box-shadow 0.3s, border-color 0.3s;
+  display: flex;
+  flex-direction: column;
+}
+.sprk-pricing:hover { transform: translateY(-4px); box-shadow: 0 16px 40px rgba(27,77,46,0.14); }
+.sprk-pricing--featured {
+  border-color: var(--green);
+  background: linear-gradient(180deg, #fff 0%, #f7faf2 100%);
+  box-shadow: 0 8px 28px rgba(27,77,46,0.12);
+}
+.sprk-pricing__tag {
+  display: inline-block;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--green);
+  margin-bottom: 12px;
+}
+.sprk-pricing__price {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 60px;
+  font-weight: 800;
+  color: var(--green);
+  line-height: 1;
+  margin: 6px 0 4px;
+  letter-spacing: -0.02em;
+}
+.sprk-pricing__price [data-zone-suffix] {
+  font-size: 34px;
+  vertical-align: top;
+  color: var(--amber);
+  margin-left: 2px;
+}
+.sprk-pricing__sub { font-size: 13.5px; color: var(--text-muted); margin-bottom: 22px; }
+.sprk-pricing__features {
+  list-style: none;
+  text-align: left;
+  margin-bottom: 26px;
+  flex: 1;
+}
+.sprk-pricing__features li {
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 14px;
+  color: var(--text-mid);
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  line-height: 1.5;
+}
+.sprk-pricing__features li:last-child { border-bottom: none; }
+.sprk-pricing__features li::before { content: '✓'; color: var(--green); font-weight: 700; flex-shrink: 0; }
+.sprk-pricing__note {
+  text-align: center;
+  margin-top: 32px;
+  font-size: 14px;
+  color: var(--text-mid);
+  background: var(--cream);
+  padding: 14px 22px;
+  border-radius: 99px;
+  display: inline-block;
+  position: relative;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
 @media (max-width: 1024px) {
   .seasonal-grid, .service-detail-grid { grid-template-columns: 1fr; }
   .seasonal-card { height: 320px; }
   .service-detail-grid.reverse { direction: ltr; }
+  .sprk-seasonal__grid { grid-template-columns: 1fr; }
+  .sprk-pricing-grid { grid-template-columns: 1fr; max-width: 480px; margin: 0 auto; }
+}
+@media (max-width: 640px) {
+  .sprk-diy { flex-direction: column; padding: 20px; }
+  .sprk-seasonal__header { flex-direction: column; align-items: flex-start; gap: 8px; padding: 16px 20px; }
+  .sprk-seasonal__body { padding: 22px; }
+  .sprk-pricing { padding: 28px 22px; }
 }
 @media (max-width: 640px) {
   .page-hero {
@@ -206,131 +658,270 @@
   <a href="https://calendar.app.google/ktWefWX55H1fqGCHA" target="_blank" class="nav-mobile-cta">Book Online →</a>
 </div>
 
-<!-- Page Hero -->
-<section class="page-hero">
+<!-- Page Hero — seasonality-driven -->
+<section class="page-hero sprk-hero">
   <div class="container">
     <div class="page-hero-content">
       <span class="section-tag amber">Sprinkler Systems</span>
-      <h1>Smart Irrigation for Every Property</h1>
-      <p>From spring start-ups to full system installations — PJL Land Services delivers expert sprinkler care throughout the GTA, with smart Hydrawise technology and a 3-year warranty on every installation.</p>
+      <h1 data-season-heading>Spring Opening Season Is On.</h1>
+      <p data-season-sub>Time to wake your system up right. Seasonal care starts at $90. Same-day repairs across Newmarket and the GTA.</p>
       <div class="page-hero-actions">
-        <a href="https://calendar.app.google/ktWefWX55H1fqGCHA" target="_blank" class="btn btn-primary">Book a Service</a>
-        <a href="estimate.html" class="btn btn-outline">Get an Install Estimate</a>
+        <a href="#seasonal" class="btn btn-primary" data-season-primary>Book Spring Opening — From $90</a>
+        <a href="#seasonal" class="btn btn-outline" data-season-secondary>Book Fall Closing →</a>
       </div>
     </div>
   </div>
 </section>
 
-<!-- Seasonal Services -->
-<section class="section">
+<!-- Seasonal Services — star section -->
+<section class="section" id="seasonal">
   <div class="container">
     <div class="text-center reveal mb-48">
       <span class="section-tag">Seasonal Care</span>
-      <h2>Year-Round System Protection</h2>
-      <p style="max-width:500px;margin:0 auto;">Proper seasonal maintenance is the most important thing you can do for the longevity of your irrigation system.</p>
+      <h2>Starts at $90. Done right.</h2>
+      <p style="max-width:560px;margin:0 auto;">Two moments decide whether your system survives the year. Here's exactly how we handle both.</p>
     </div>
-    <div class="seasonal-grid">
-      <a href="https://calendar.app.google/ktWefWX55H1fqGCHA" target="_blank" class="seasonal-card reveal reveal-delay-1">
-        <img src="sprinkler-tech.png" alt="Spring Opening Service — Professional Sprinkler Start-Up GTA">
-        <div class="seasonal-card-overlay">
-          <span class="seasonal-badge spring">🌱 Spring</span>
-          <h3>Spring Opening Service</h3>
-          <p>Safe, professional system start-up after winter. We slowly pressurize, inspect every zone, check all heads, and program your Hydrawise controller for the season.</p>
-          <span class="btn btn-primary btn-sm" style="width:fit-content;">Book Spring Opening →</span>
+
+    <!-- Zone price estimator -->
+    <div class="sprk-zone reveal">
+      <div class="sprk-zone__inputs">
+        <div class="sprk-zone__field">
+          <label class="sprk-zone__field-label">Property Type</label>
+          <div class="sprk-zone__toggle" role="tablist" aria-label="Property type">
+            <button type="button" class="sprk-zone__tab is-active" data-mode="residential" role="tab" aria-selected="true">🏡 Residential</button>
+            <button type="button" class="sprk-zone__tab" data-mode="commercial" role="tab" aria-selected="false">🏢 Commercial</button>
+          </div>
         </div>
-      </a>
-      <a href="https://calendar.app.google/ktWefWX55H1fqGCHA" target="_blank" class="seasonal-card reveal reveal-delay-2">
-        <img src="https://static.wixstatic.com/media/10e473_b8e7a877e515482eb3fac2d3f79aba0e~mv2.jpg" alt="Fall Closing Service">
-        <div class="seasonal-card-overlay">
-          <span class="seasonal-badge">🍂 Fall</span>
-          <h3>Fall Closing Service</h3>
-          <p>Complete winterization to protect your system from Ontario's freeze. We blow out all zones and ensure your pipes and heads are safe for winter.</p>
-          <span class="btn btn-primary btn-sm" style="width:fit-content;">Book Fall Closing →</span>
+        <div class="sprk-zone__field">
+          <label class="sprk-zone__field-label">Number of Zones</label>
+          <div class="sprk-zone__controls">
+            <button type="button" class="sprk-zone__btn" data-zone-dec aria-label="Decrease zones">−</button>
+            <div class="sprk-zone__value"><span data-zone-count>4</span><small>zones</small></div>
+            <button type="button" class="sprk-zone__btn" data-zone-inc aria-label="Increase zones">+</button>
+          </div>
         </div>
-      </a>
+      </div>
+      <div class="sprk-zone__readout">
+        <div class="sprk-zone__readout-label">Your Estimate</div>
+        <div class="sprk-zone__amount">$<span data-zone-display>90</span><span class="sprk-zone__per">/service</span></div>
+        <div class="sprk-zone__tier-pill" data-zone-note>Residential • Up to 4 zones</div>
+        <div class="sprk-zone__services">
+          <span>🌱 Spring Opening</span>
+          <span class="sprk-zone__services-sep">•</span>
+          <span>🍂 Fall Closing</span>
+        </div>
+      </div>
     </div>
-    <div class="text-center mt-32 reveal">
-      <p style="color:var(--text-muted);font-size:14px;">⚡ Spring slots fill up fast — book early to secure your preferred date</p>
+
+    <div class="sprk-seasonal__grid">
+      <!-- Spring Opening -->
+      <article class="sprk-seasonal__card reveal reveal-delay-1">
+        <div class="sprk-seasonal__header sprk-seasonal__header--spring">
+          <span class="sprk-seasonal__badge">🌱 Spring Opening</span>
+          <span class="sprk-seasonal__price"><span data-zone-prefix>From </span><strong>$<span data-zone-display>90</span></strong></span>
+        </div>
+        <div class="sprk-seasonal__body">
+          <h3>A proper wake-up — not just flipping a switch.</h3>
+          <p>We pressurize slowly, inspect every zone, check every head, and program your controller for the season. What took you 10 minutes with the valve is a 45-minute professional start-up with us — and your system thanks you.</p>
+
+          <div class="sprk-process">
+            <h4>Our Process</h4>
+            <ol>
+              <li><strong>Inspect</strong> — valves, heads, controller, visible lines</li>
+              <li><strong>Pressurize</strong> — slowly, zone by zone, checking for leaks</li>
+              <li><strong>Program</strong> — seasonal schedule set, walkthrough done</li>
+            </ol>
+          </div>
+
+          <a href="https://calendar.app.google/ktWefWX55H1fqGCHA" target="_blank" class="btn btn-primary">Book Spring Opening →</a>
+        </div>
+      </article>
+
+      <!-- Fall Closing -->
+      <article class="sprk-seasonal__card reveal reveal-delay-2">
+        <div class="sprk-seasonal__header sprk-seasonal__header--fall">
+          <span class="sprk-seasonal__badge">🍂 Fall Closing</span>
+          <span class="sprk-seasonal__price"><span data-zone-prefix>From </span><strong>$<span data-zone-display>90</span></strong></span>
+        </div>
+        <div class="sprk-seasonal__body">
+          <h3>The non-negotiable. Every system needs this.</h3>
+          <p>Winterization is reinsurance for your entire system. Miss it or do it wrong, and the spring call isn't a start-up — it's a repair quote. We blow out every zone properly, so nothing cracks, splits, or fails over winter.</p>
+
+          <div class="sprk-process">
+            <h4>Our Process</h4>
+            <ol>
+              <li><strong>Inspect</strong> — full walkthrough, flag issues before closing</li>
+              <li><strong>Blow out</strong> — commercial compressor, zone by zone, fully evacuated</li>
+              <li><strong>Secure</strong> — controller set, valves positioned, ready for freeze</li>
+            </ol>
+          </div>
+
+          <a href="https://calendar.app.google/ktWefWX55H1fqGCHA" target="_blank" class="btn btn-primary">Book Fall Closing →</a>
+        </div>
+      </article>
     </div>
+
+    <!-- DIY consequences callout -->
+    <aside class="sprk-diy reveal">
+      <div class="sprk-diy__icon" aria-hidden="true">⚠️</div>
+      <div class="sprk-diy__body">
+        <h4>Why you don't DIY your Fall Closing.</h4>
+        <p>Proper winterization needs <strong>commercial-grade compressors</strong> — not the compressor in your garage. Too little pressure, water stays in the lines. Too much, you destroy heads, valves, and fittings. And that's before the professional knowledge of what <em>should</em> happen during a closing — and what happens when it doesn't.</p>
+        <p class="sprk-diy__close">There is no substitute for a professional closing. The equipment and the knowledge sell themselves.</p>
+      </div>
+    </aside>
+
+    <p class="sprk-seasonal__note reveal">Condo properties may require a remote compressor setup — we handle that on-site.</p>
   </div>
 </section>
 
-<!-- Repair Section -->
+<!-- Sprinkler System Services -->
 <section class="section bg-cream" id="repair">
   <div class="container">
     <div class="service-detail-grid">
       <div class="service-detail-img reveal">
-        <img src="sprinkler-tech.png" alt="Sprinkler System Repair">
+        <img src="sprinkler-tech.png" alt="Sprinkler System Services">
       </div>
       <div class="service-detail-content reveal reveal-delay-2">
-        <span class="section-tag">Repair & Diagnosis</span>
-        <h2>Fast. Transparent. Reliable.</h2>
-        <p>We diagnose and repair all sprinkler systems — any brand, any design, any size. From minor leaks to full system failures, PJL delivers clear solutions, accurate timelines, and honest pricing every time.</p>
-        <p>No upsells, no delays — just repairs done right, the first time.</p>
+        <span class="section-tag">Sprinkler System Services</span>
+        <h2>Inoperable to operable. Manual to smart. Smart to efficient.</h2>
+        <p>Whatever state your system's in, we move it forward. Repairs, modifications, upgrades — full smart-controller retrofits — whatever the system needs, we've got the fix for it.</p>
         <div class="checklist">
-          <div class="checklist-item">Broken or leaking sprinkler heads</div>
-          <div class="checklist-item">Low water pressure diagnosis</div>
-          <div class="checklist-item">Zone valve failures</div>
-          <div class="checklist-item">Controller and timer issues</div>
-          <div class="checklist-item">Uneven or poor coverage</div>
-          <div class="checklist-item">Pipe and fitting repairs</div>
-          <div class="checklist-item">Smart controller upgrades</div>
+          <div class="checklist-item">Diagnosis + repair (any brand, any size)</div>
+          <div class="checklist-item">Zone, valve, head, and pipe fixes</div>
+          <div class="checklist-item">Controller and timer upgrades</div>
+          <div class="checklist-item">Hydrawise smart controller retrofits</div>
+          <div class="checklist-item">Flow monitoring + leak detection setup</div>
+          <div class="checklist-item">Coverage and pressure optimization</div>
         </div>
-        <a href="https://calendar.app.google/ktWefWX55H1fqGCHA" target="_blank" class="btn btn-green">Book a Service Call</a>
+
+        <!-- AI-intake callout -->
+        <div class="sprk-ai">
+          <span class="sprk-ai__badge"><span class="sprk-ai__dot" aria-hidden="true"></span>AI-Smart Intake</span>
+          <p><strong>First hour of labour on us.</strong> Describe your problem through our AI intake and we'll arrive ready — and cover your first hour of labour. Otherwise, mobilization + 1-hour on-site diagnosis is <strong>$95</strong>.</p>
+        </div>
+
+        <a href="https://calendar.app.google/ktWefWX55H1fqGCHA" target="_blank" class="btn btn-green">Book a Service Call — $95</a>
       </div>
     </div>
   </div>
 </section>
 
-<!-- Installation Section -->
-<section class="section" id="installation">
+<!-- Sprinkler System Retrofit -->
+<section class="section" id="retrofit">
   <div class="container">
     <div class="service-detail-grid reverse">
       <div class="service-detail-img reveal">
-        <img src="https://static.wixstatic.com/media/10e473_cc6e778790984c69813edb47effb377c~mv2.jpg" alt="Sprinkler System Installation">
+        <img src="installation-design.jpg" alt="Sprinkler System Retrofit — Landscape Coordination">
       </div>
       <div class="service-detail-content reveal reveal-delay-2">
-        <span class="section-tag">New Installation</span>
-        <h2>Tailored Systems. Built to Last.</h2>
-        <p>We design and install efficient, long-lasting sprinkler systems for new landscapes and retrofit properties alike. Every system is customized for your layout — ensuring optimal performance, full coverage, and water savings.</p>
+        <span class="section-tag">Sprinkler System Retrofit</span>
+        <h2>Old landscape to new. Timed with the build — not after it.</h2>
+        <p>From landscape design phase through preparation for plant and grass material — we coordinate with contractors because we know <em>jobsite flows</em>, not just water flows. Retrofits that slot into the construction calendar cleanly.</p>
         <div class="checklist">
-          <div class="checklist-item">Free on-site consultation and custom design</div>
-          <div class="checklist-item">Professional-grade Hydrawise smart controller — included standard</div>
-          <div class="checklist-item">High-efficiency heads and components throughout</div>
-          <div class="checklist-item">Low-disruption installation with minimal landscape impact</div>
-          <div class="checklist-item">Full system walkthrough and Hydrawise app setup</div>
-          <div class="checklist-item">3-year parts and labour warranty on all installed systems</div>
+          <div class="checklist-item">Landscape design-phase consultation</div>
+          <div class="checklist-item">Coordination with landscapers, builders, and trades</div>
+          <div class="checklist-item">Staged installation before sod and plantings go down</div>
+          <div class="checklist-item">System re-layout for new designs and additions</div>
+          <div class="checklist-item">Full integration with existing or new controllers</div>
         </div>
-        <div class="page-hero-actions">
-          <a href="estimate.html" class="btn btn-primary">Get a Free Estimate</a>
-          <a href="contact.html" class="btn btn-outline-green">Ask a Question</a>
-        </div>
+        <a href="estimate.html" class="btn btn-primary">Get a Retrofit Estimate</a>
       </div>
     </div>
   </div>
 </section>
 
-<!-- Upgrades Section -->
-<section class="section bg-cream" id="upgrades">
+<!-- Sprinkler System Installations -->
+<section class="section bg-cream" id="installation">
   <div class="container">
-    <div class="service-detail-grid">
-      <div class="service-detail-img reveal">
-        <img src="https://static.wixstatic.com/media/10e473_6ed6296a7c6c46ccb007bb93844b9269~mv2.png" alt="Smart Sprinkler Upgrades">
+    <div class="text-center reveal mb-48">
+      <span class="section-tag">Sprinkler System Installations</span>
+      <h2>Simple landscapes to complex designs.</h2>
+      <p style="max-width:620px;margin:0 auto;">Residential townhomes, condo terraces, corner lots, estate properties, commercial plazas. Wherever irrigation is needed — we design it smart and install it efficient.</p>
+    </div>
+
+    <div class="sprk-property-grid">
+      <div class="sprk-property reveal reveal-delay-1">
+        <span class="sprk-property__icon" aria-hidden="true">🏘️</span>
+        <h4>Residential Townhomes</h4>
+        <p>Efficient smart systems for tight lots and shared landscapes.</p>
       </div>
-      <div class="service-detail-content reveal reveal-delay-2">
-        <span class="section-tag">Smart Upgrades</span>
-        <h2>Smarter Systems. Greater Efficiency.</h2>
-        <p>Outdated sprinkler systems waste water, time, and money. We retrofit existing irrigation systems with advanced Hydrawise smart controllers that bring modern efficiency to any landscape.</p>
-        <div class="checklist">
-          <div class="checklist-item">Hydrawise WiFi smart controller installation</div>
-          <div class="checklist-item">Weather-based automatic schedule adjustments</div>
-          <div class="checklist-item">Remote monitoring and control via smartphone</div>
-          <div class="checklist-item">Flow monitoring and leak detection</div>
-          <div class="checklist-item">Compatible with all major irrigation brands</div>
-        </div>
-        <a href="https://calendar.app.google/ktWefWX55H1fqGCHA" target="_blank" class="btn btn-green">Book an Upgrade</a>
+      <div class="sprk-property reveal reveal-delay-2">
+        <span class="sprk-property__icon" aria-hidden="true">🏙️</span>
+        <h4>Condo Terraces</h4>
+        <p>Specialized solutions for balcony and rooftop irrigation.</p>
+      </div>
+      <div class="sprk-property reveal reveal-delay-3">
+        <span class="sprk-property__icon" aria-hidden="true">🌳</span>
+        <h4>Corner Lots</h4>
+        <p>Full coverage for expanded frontage and side yards.</p>
+      </div>
+      <div class="sprk-property reveal reveal-delay-4">
+        <span class="sprk-property__icon" aria-hidden="true">🏡</span>
+        <h4>Estate Properties</h4>
+        <p>Multi-zone, multi-controller builds for large acreage.</p>
+      </div>
+      <div class="sprk-property reveal reveal-delay-5">
+        <span class="sprk-property__icon" aria-hidden="true">🏢</span>
+        <h4>Commercial Plazas</h4>
+        <p>High-volume systems built for maintenance efficiency.</p>
       </div>
     </div>
+
+    <div class="text-center mt-32 reveal">
+      <a href="estimate.html" class="btn btn-primary">Get an Installation Estimate</a>
+    </div>
+  </div>
+</section>
+
+<!-- Pricing -->
+<section class="section" id="pricing">
+  <div class="container">
+    <div class="text-center reveal mb-48">
+      <span class="section-tag">Transparent Pricing</span>
+      <h2>Starts where you'd expect. Not where they gouge.</h2>
+      <p style="max-width:520px;margin:0 auto;">No panic prices. No hidden fees. Clear numbers on our three most common services.</p>
+    </div>
+
+    <div class="sprk-pricing-grid">
+      <div class="sprk-pricing reveal reveal-delay-1">
+        <span class="sprk-pricing__tag">🌱 Spring Opening</span>
+        <div class="sprk-pricing__price">$<span data-zone-display>90</span><span data-zone-suffix>+</span></div>
+        <p class="sprk-pricing__sub" data-zone-sub>Up to 4 zones. Tiered pricing beyond.</p>
+        <ul class="sprk-pricing__features">
+          <li>Full inspection + slow pressurize</li>
+          <li>Controller programmed for season</li>
+          <li>Zone-by-zone leak check</li>
+        </ul>
+        <a href="https://calendar.app.google/ktWefWX55H1fqGCHA" target="_blank" class="btn btn-primary">Book Spring Opening</a>
+      </div>
+
+      <div class="sprk-pricing sprk-pricing--featured reveal reveal-delay-2">
+        <span class="sprk-pricing__tag">🍂 Fall Closing</span>
+        <div class="sprk-pricing__price">$<span data-zone-display>90</span><span data-zone-suffix>+</span></div>
+        <p class="sprk-pricing__sub" data-zone-sub>Up to 4 zones. Commercial equipment included.</p>
+        <ul class="sprk-pricing__features">
+          <li>Commercial-grade blow-out compressor</li>
+          <li>Full system evacuation</li>
+          <li>Winter-ready controller setup</li>
+        </ul>
+        <a href="https://calendar.app.google/ktWefWX55H1fqGCHA" target="_blank" class="btn btn-primary">Book Fall Closing</a>
+      </div>
+
+      <div class="sprk-pricing reveal reveal-delay-3">
+        <span class="sprk-pricing__tag">🔧 Service Call</span>
+        <div class="sprk-pricing__price">$95</div>
+        <p class="sprk-pricing__sub">Mobilization + 1-hour on-site diagnosis.</p>
+        <ul class="sprk-pricing__features">
+          <li>On-site diagnosis, any brand</li>
+          <li><strong>AI-intake? First hour labour free.</strong></li>
+          <li>Transparent quote before any work</li>
+        </ul>
+        <a href="https://calendar.app.google/ktWefWX55H1fqGCHA" target="_blank" class="btn btn-primary">Book a Service Call</a>
+      </div>
+    </div>
+
+    <p class="sprk-pricing__note reveal"><strong>💡 Smart Pricing AI — coming soon.</strong> Instant quote for any property, any zone count. Stay tuned.</p>
   </div>
 </section>
 
@@ -418,5 +1009,118 @@
   </div>
 </footer>
 <script src="nav.js"></script>
+<script>
+// Zone price estimator
+(function(){
+  var MIN = 1, MAX = 16; // 16 = "16+"
+  var zones = 4;
+
+  var mode = 'residential';
+
+  function priceFor(n){
+    if (mode === 'commercial') {
+      if (n <= 4) return { price: 145, tier: "Commercial • Up to 4 zones", quote: false };
+      if (n <= 8) return { price: 255, tier: "Commercial • 5–8 zones", quote: false };
+      return { price: null, tier: "Commercial • 9+ zones", quote: true };
+    }
+    if (n <= 4)  return { price: 90,  tier: "Residential • Up to 4 zones", quote: false };
+    if (n <= 6)  return { price: 105, tier: "Residential • 5–6 zones",    quote: false };
+    if (n <= 8)  return { price: 120, tier: "Residential • 7–8 zones",    quote: false };
+    if (n <= 15) return { price: 165, tier: "Residential • 9–15 zones",   quote: false, timeNote: n > 10 };
+    return { price: null, tier: "Residential • 16+ zones", quote: true };
+  }
+
+  function update(){
+    var r = priceFor(zones);
+    var countEl = document.querySelector('[data-zone-count]');
+    if (countEl) countEl.textContent = zones >= MAX ? '16+' : zones;
+
+    var all = document.querySelectorAll('[data-zone-display]');
+    all.forEach(function(el){
+      el.textContent = r.quote ? '—' : r.price;
+    });
+
+    // Hide "+" suffixes when a specific price is selected
+    var suffixes = document.querySelectorAll('[data-zone-suffix]');
+    suffixes.forEach(function(el){ el.style.display = 'none'; });
+
+    // Change "From " to "Now: " for specificity
+    var prefixes = document.querySelectorAll('[data-zone-prefix]');
+    prefixes.forEach(function(el){ el.textContent = ''; });
+
+    // Update pricing-card sub text
+    var subs = document.querySelectorAll('[data-zone-sub]');
+    subs.forEach(function(el){ el.textContent = r.tier + (r.timeNote ? ' • Extended time may apply.' : ''); });
+
+    // Big estimator amount
+    var amount = document.querySelector('.sprk-zone__amount');
+    if (amount) {
+      amount.innerHTML = r.quote
+        ? 'Custom Quote<span class="sprk-zone__per">contact us</span>'
+        : '$<span data-zone-display>' + r.price + '</span><span class="sprk-zone__per">/service</span>';
+    }
+    var toolEl = document.querySelector('.sprk-zone');
+    if (toolEl) toolEl.classList.toggle('sprk-zone--quote', !!r.quote);
+
+    // Note line
+    var note = document.querySelector('[data-zone-note]');
+    if (note) {
+      if (r.quote)  note.textContent = "For systems beyond 15 zones, we'll price it right — just contact us.";
+      else if (r.timeNote) note.textContent = r.tier + " • Extended time fees may apply for 10+ zone systems.";
+      else note.textContent = r.tier + " • Spring Opening or Fall Closing at this zone count.";
+    }
+
+    // Disable buttons at limits
+    var dec = document.querySelector('[data-zone-dec]');
+    var inc = document.querySelector('[data-zone-inc]');
+    if (dec) dec.disabled = zones <= MIN;
+    if (inc) inc.disabled = zones >= MAX;
+  }
+
+  document.addEventListener('click', function(e){
+    if (e.target.closest('[data-zone-dec]') && zones > MIN) { zones--; update(); }
+    if (e.target.closest('[data-zone-inc]') && zones < MAX) { zones++; update(); }
+    var tab = e.target.closest('.sprk-zone__tab');
+    if (tab) {
+      mode = tab.getAttribute('data-mode');
+      document.querySelectorAll('.sprk-zone__tab').forEach(function(t){
+        var active = t === tab;
+        t.classList.toggle('is-active', active);
+        t.setAttribute('aria-selected', active ? 'true' : 'false');
+      });
+      update();
+    }
+  });
+
+  update();
+})();
+
+(function(){
+  var month = new Date().getMonth(); // 0=Jan, 11=Dec
+  var springPrimary = month >= 2 && month <= 6; // Mar-Jul: Spring leads; Aug-Feb: Fall leads
+
+  var heading = springPrimary
+    ? "Spring Opening Season Is On."
+    : "Fall Closing Season Is On.";
+  var sub = springPrimary
+    ? "Time to wake your system up right. Seasonal care starts at $90. Same-day repairs across Newmarket and the GTA."
+    : "Winter's closing in. Proper winterization starts at $90. Same-day repairs across Newmarket and the GTA.";
+  var ctaPrimary = springPrimary
+    ? "Book Spring Opening — From $90"
+    : "Book Fall Closing — From $90";
+  var ctaSecondary = springPrimary
+    ? "Book Fall Closing →"
+    : "Book Spring Opening →";
+
+  var h = document.querySelector('[data-season-heading]');
+  if (h) h.textContent = heading;
+  var s = document.querySelector('[data-season-sub]');
+  if (s) s.textContent = sub;
+  var p = document.querySelector('[data-season-primary]');
+  if (p) p.textContent = ctaPrimary;
+  var sec = document.querySelector('[data-season-secondary]');
+  if (sec) sec.textContent = ctaSecondary;
+})();
+</script>
 </body>
 </html>
