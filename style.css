@@ -794,6 +794,77 @@ section.hero[aria-label="PJL Land Services hero"] .hero__inner {
   width: 100%;
 }
 
+section.hero[aria-label="PJL Land Services hero"] .hero__badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 16px 8px 12px;
+  background: rgba(15, 31, 20, 0.55);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(243, 144, 25, 0.5);
+  border-radius: 999px;
+  color: #fff;
+  text-decoration: none;
+  font-size: clamp(12px, 1.2vw, 14px);
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+  transition: transform 0.25s ease, border-color 0.25s ease, background 0.25s ease;
+  max-width: min(92vw, 640px);
+  text-align: left;
+}
+section.hero[aria-label="PJL Land Services hero"] .hero__badge:hover {
+  transform: translateY(-2px);
+  border-color: #f39019;
+  background: rgba(15, 31, 20, 0.7);
+}
+section.hero[aria-label="PJL Land Services hero"] .hero__badge-pulse {
+  position: relative;
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: #f39019;
+  box-shadow: 0 0 0 0 rgba(243, 144, 25, 0.7);
+  animation: heroPulse 1.8s infinite;
+  flex-shrink: 0;
+}
+@keyframes heroPulse {
+  0% { box-shadow: 0 0 0 0 rgba(243, 144, 25, 0.7); }
+  70% { box-shadow: 0 0 0 10px rgba(243, 144, 25, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(243, 144, 25, 0); }
+}
+section.hero[aria-label="PJL Land Services hero"] .hero__badge-new {
+  display: inline-block;
+  padding: 2px 8px;
+  background: #f39019;
+  color: #0f1f14;
+  font-family: 'Barlow Condensed', sans-serif;
+  font-weight: 800;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  border-radius: 4px;
+  text-transform: uppercase;
+  flex-shrink: 0;
+}
+section.hero[aria-label="PJL Land Services hero"] .hero__badge-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+section.hero[aria-label="PJL Land Services hero"] .hero__badge-arrow {
+  font-weight: 700;
+  transition: transform 0.25s ease;
+  flex-shrink: 0;
+}
+section.hero[aria-label="PJL Land Services hero"] .hero__badge:hover .hero__badge-arrow {
+  transform: translateX(4px);
+}
+@media (max-width: 600px) {
+  section.hero[aria-label="PJL Land Services hero"] .hero__badge-text {
+    white-space: normal;
+  }
+}
+
 section.hero[aria-label="PJL Land Services hero"] .hero__headline {
   display: inline-block;
   font-family: inherit;
@@ -810,6 +881,17 @@ section.hero[aria-label="PJL Land Services hero"] .hero__headline {
 section.hero[aria-label="PJL Land Services hero"] .hero__headline em {
   font-style: normal;
   color: #f39019;
+}
+
+section.hero[aria-label="PJL Land Services hero"] .hero__tagline {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-weight: 500;
+  font-size: clamp(1rem, 1.4vw + 0.3rem, 1.5rem);
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: #f39019;
+  margin: 0;
+  text-shadow: 0 2px 12px rgba(0, 0, 0, 0.45);
 }
 
 section.hero[aria-label="PJL Land Services hero"] .hero__sub {
