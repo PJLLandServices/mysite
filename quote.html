@@ -1,0 +1,1268 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="description" content="Build your sprinkler system quote in minutes. Tell us about your property and we'll estimate your install — Newmarket and the GTA.">
+<title>Sprinkler Quote Tool | PJL Land Services</title>
+<link rel="stylesheet" href="style.css">
+<style>
+/* ============================================
+   QUOTE TOOL — Interactive Sprinkler Estimate
+   ============================================ */
+
+/* Page hero (compact) */
+.quote-hero {
+  padding: 132px 0 36px;
+  background: linear-gradient(135deg, var(--dark) 0%, var(--green) 100%);
+  position: relative;
+  overflow: hidden;
+}
+.quote-hero::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image:
+    radial-gradient(circle at 15% 20%, rgba(74,140,92,0.3), transparent 40%),
+    radial-gradient(circle at 85% 80%, rgba(243,144,25,0.18), transparent 40%);
+}
+.quote-hero-content { position: relative; z-index: 2; max-width: 760px; }
+.quote-hero h1 {
+  color: #fff;
+  margin-bottom: 12px;
+  font-size: clamp(32px, 4vw, 52px);
+  letter-spacing: -0.02em;
+  line-height: 1.05;
+  text-shadow: 0 4px 18px rgba(0,0,0,0.35);
+}
+.quote-hero p {
+  color: rgba(255,255,255,0.82);
+  font-size: clamp(15px, 1.6vw, 17px);
+  max-width: 56ch;
+  margin: 0;
+  line-height: 1.65;
+}
+
+/* Wrapper */
+.quote-wrapper {
+  padding: 48px 0 96px;
+  background:
+    radial-gradient(ellipse 70% 55% at 8% 5%, rgba(74,140,92,0.10), transparent 55%),
+    radial-gradient(ellipse 60% 50% at 95% 95%, rgba(224,123,36,0.06), transparent 55%),
+    linear-gradient(180deg, #f7faf2 0%, #fafdf5 100%);
+  min-height: 60vh;
+}
+
+/* Progress bar */
+.quote-progress {
+  max-width: 1100px;
+  margin: 0 auto 28px;
+  background: #fff;
+  border: 1px solid rgba(74,140,92,0.18);
+  border-radius: 99px;
+  padding: 14px 22px;
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  box-shadow: 0 8px 24px rgba(27,77,46,0.08);
+}
+.quote-progress__step {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--green);
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+.quote-progress__bar {
+  flex: 1;
+  height: 8px;
+  background: var(--green-pale);
+  border-radius: 99px;
+  overflow: hidden;
+  position: relative;
+}
+.quote-progress__fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--green) 0%, var(--green-light) 70%, var(--amber) 100%);
+  width: 0%;
+  border-radius: 99px;
+  transition: width 0.45s cubic-bezier(.2,.8,.2,1);
+}
+.quote-progress__pct {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  min-width: 40px;
+  text-align: right;
+}
+
+/* Main layout */
+.quote-layout {
+  max-width: 1100px;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 28px;
+  align-items: stretch;
+}
+
+/* Visualization panel */
+.quote-visual {
+  background: linear-gradient(180deg, #eef6e2 0%, #f7faf2 100%);
+  border: 1px solid rgba(74,140,92,0.22);
+  border-radius: var(--r-xl);
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  position: sticky;
+  top: 24px;
+  align-self: start;
+  box-shadow: 0 14px 38px rgba(27,77,46,0.10);
+}
+.quote-visual__stage {
+  position: relative;
+}
+.quote-visual__inner {
+  background: #fff;
+  border-radius: var(--r-lg);
+  padding: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 360px;
+  position: relative;
+  overflow: hidden;
+  border: 1px solid rgba(74,140,92,0.10);
+}
+.quote-visual__caption {
+  font-size: 13.5px;
+  text-align: center;
+  color: var(--text-mid);
+  line-height: 1.5;
+  padding: 0 8px;
+}
+.quote-visual__caption strong { color: var(--green); }
+
+/* Form panel */
+.quote-form {
+  background: #fff;
+  border: 1px solid rgba(74,140,92,0.18);
+  border-radius: var(--r-xl);
+  padding: 32px;
+  display: flex;
+  flex-direction: column;
+  min-height: 460px;
+  box-shadow: 0 14px 38px rgba(27,77,46,0.10);
+}
+.quote-step { display: none; flex-direction: column; flex: 1; }
+.quote-step.is-active { display: flex; animation: stepIn 0.35s ease; }
+@keyframes stepIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.quote-step__eyebrow {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--green);
+  margin-bottom: 8px;
+}
+.quote-step__q {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: clamp(24px, 3vw, 32px);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: -0.01em;
+  line-height: 1.1;
+  color: var(--text);
+  margin-bottom: 8px;
+}
+.quote-step__hint {
+  font-size: 14px;
+  color: var(--text-muted);
+  margin-bottom: 24px;
+  line-height: 1.55;
+}
+.quote-step__body { flex: 1; }
+
+/* Choice cards (single-select) */
+.quote-choices {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: 1fr 1fr;
+}
+.quote-choices--full { grid-template-columns: 1fr; }
+.quote-choice {
+  background: #fff;
+  border: 1.5px solid var(--border);
+  border-radius: 14px;
+  padding: 18px 20px;
+  cursor: pointer;
+  transition: border-color 0.2s, transform 0.15s, box-shadow 0.2s, background 0.2s;
+  text-align: left;
+  font-family: inherit;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  position: relative;
+}
+.quote-choice:hover {
+  border-color: var(--green-light);
+  transform: translateY(-2px);
+  box-shadow: 0 8px 20px rgba(27,77,46,0.08);
+}
+.quote-choice.is-selected {
+  border-color: var(--green);
+  background: linear-gradient(135deg, rgba(74,140,92,0.08) 0%, rgba(74,140,92,0.04) 100%);
+  box-shadow: 0 8px 20px rgba(27,77,46,0.12);
+}
+.quote-choice.is-selected::after {
+  content: '✓';
+  position: absolute;
+  top: 12px; right: 14px;
+  width: 22px; height: 22px;
+  background: var(--green);
+  color: #fff;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 12px;
+}
+.quote-choice__title {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 17px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  color: var(--text);
+}
+.quote-choice__sub {
+  font-size: 13px;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+.quote-choice__icon {
+  font-size: 22px;
+  margin-bottom: 4px;
+}
+
+/* Multi-select chips */
+.quote-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.quote-chip {
+  background: #fff;
+  border: 1.5px solid var(--border);
+  border-radius: 99px;
+  padding: 10px 16px;
+  cursor: pointer;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text-mid);
+  transition: all 0.2s;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-family: inherit;
+}
+.quote-chip:hover { border-color: var(--green-light); color: var(--green); transform: translateY(-1px); }
+.quote-chip.is-selected {
+  background: var(--green);
+  color: #fff;
+  border-color: var(--green);
+  box-shadow: 0 6px 14px rgba(27,77,46,0.18);
+}
+.quote-chip.is-selected::before { content: '✓'; font-weight: 700; }
+
+.quote-chip-group { margin-bottom: 18px; }
+.quote-chip-group__label {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--green);
+  margin-bottom: 10px;
+  display: block;
+}
+
+/* Wizard nav */
+.quote-nav {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 28px;
+  padding-top: 24px;
+  border-top: 1px solid var(--border);
+}
+.quote-btn {
+  padding: 12px 22px;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 700;
+  border: none;
+  cursor: pointer;
+  font-family: inherit;
+  letter-spacing: 0.02em;
+  transition: background 0.2s, transform 0.15s, box-shadow 0.2s;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.quote-btn--back {
+  background: transparent;
+  color: var(--text-mid);
+}
+.quote-btn--back:hover { color: var(--green); }
+.quote-btn--back:disabled { opacity: 0.3; cursor: not-allowed; }
+.quote-btn--next {
+  background: var(--green);
+  color: #fff;
+  margin-left: auto;
+  padding: 12px 28px;
+  box-shadow: 0 6px 16px rgba(27,77,46,0.22);
+}
+.quote-btn--next:hover { background: var(--green-mid); transform: translateY(-1px); }
+.quote-btn--next:disabled { background: var(--border); color: rgba(0,0,0,0.3); cursor: not-allowed; box-shadow: none; transform: none; }
+
+/* SVG house */
+.house-svg { width: 100%; height: 100%; max-height: 360px; display: block; }
+.house-svg .lawn { fill: #d8e7c4; transition: fill 0.4s ease, opacity 0.4s ease; opacity: 0.55; }
+.house-svg .lawn.is-active { fill: #5fa371; opacity: 1; }
+.house-svg .garden { fill: #d2c6a4; transition: fill 0.4s ease, opacity 0.4s ease; opacity: 0.55; }
+.house-svg .garden.is-active { fill: #c79a3a; opacity: 1; }
+.house-svg .pool { fill: #b8d6e8; transition: opacity 0.4s ease; opacity: 0; }
+.house-svg .pool.is-active { opacity: 1; }
+.house-svg .tree { fill: #4a8c5c; transition: opacity 0.4s ease; opacity: 0; }
+.house-svg .tree.is-active { opacity: 1; }
+.house-svg .hedge { fill: #6a9a55; transition: opacity 0.4s ease; opacity: 0; }
+.house-svg .hedge.is-active { opacity: 1; }
+.house-svg .plant { fill: #88a86b; transition: opacity 0.4s ease; opacity: 0; }
+.house-svg .plant.is-active { opacity: 1; }
+.house-svg .sprinkler {
+  fill: #1f5d8a;
+  transition: opacity 0.5s ease, transform 0.5s ease;
+  opacity: 0;
+  transform-origin: center;
+}
+.house-svg .sprinkler.is-active { opacity: 1; }
+.house-svg .house-base { fill: #d4cfc1; }
+.house-svg .house-roof { fill: #8a7a5c; }
+.house-svg .garage { fill: #b8b09c; }
+.house-svg .driveway { fill: #b5b5b5; }
+.house-svg .street { fill: #6e6e6e; }
+.house-svg .sidewalk { fill: #d0d0d0; }
+.house-svg .door { fill: #5a4a36; }
+.house-svg .window { fill: #c8d8e0; }
+
+.quote-visual__view-tag {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  background: rgba(15,31,20,0.85);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  padding: 5px 10px;
+  border-radius: 99px;
+  z-index: 10;
+}
+
+/* Summary card */
+.quote-summary {
+  background: linear-gradient(180deg, #f7faf2 0%, #edf4e4 100%);
+  border: 1px solid rgba(74,140,92,0.22);
+  border-radius: var(--r-lg);
+  padding: 22px;
+  margin-bottom: 18px;
+}
+.quote-summary__title {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--green);
+  margin-bottom: 14px;
+}
+.quote-summary__rows {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 18px;
+}
+.quote-summary__row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 13.5px;
+  gap: 16px;
+}
+.quote-summary__row-label { color: var(--text-mid); }
+.quote-summary__row-value { color: var(--text); font-weight: 600; text-align: right; }
+.quote-summary__price-block {
+  background: linear-gradient(160deg, var(--green) 0%, var(--green-mid) 100%);
+  color: #fff;
+  border-radius: var(--r-lg);
+  padding: 22px;
+  text-align: center;
+  margin-top: 8px;
+}
+.quote-summary__price-label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  opacity: 0.78;
+  margin-bottom: 6px;
+}
+.quote-summary__price {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: clamp(36px, 4.5vw, 52px);
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  line-height: 1;
+}
+.quote-summary__price-note {
+  font-size: 12.5px;
+  opacity: 0.84;
+  margin-top: 10px;
+  line-height: 1.5;
+}
+.quote-summary__price--quote {
+  background: linear-gradient(160deg, #8E3F14 0%, #5a2909 100%);
+}
+.quote-summary__price--quote .quote-summary__price { font-size: clamp(24px, 3.5vw, 36px); color: #FFD79A; }
+
+/* Customer form */
+.quote-customer {
+  display: grid;
+  gap: 14px;
+}
+.quote-customer__row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.quote-customer__field { display: flex; flex-direction: column; gap: 6px; }
+.quote-customer__field label {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.quote-customer__field input,
+.quote-customer__field textarea {
+  padding: 12px 14px;
+  border: 1.5px solid var(--border);
+  border-radius: 10px;
+  font-size: 14px;
+  font-family: inherit;
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+  background: #fff;
+}
+.quote-customer__field input:focus,
+.quote-customer__field textarea:focus {
+  border-color: var(--green);
+  box-shadow: 0 0 0 3px rgba(46,169,90,0.12);
+}
+.quote-customer__field textarea { resize: vertical; min-height: 80px; }
+
+/* Success state */
+.quote-success {
+  text-align: center;
+  padding: 32px 12px;
+}
+.quote-success__check {
+  width: 72px; height: 72px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--green) 0%, var(--green-light) 100%);
+  color: #fff;
+  font-size: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 18px;
+  box-shadow: 0 12px 28px rgba(27,77,46,0.22);
+}
+.quote-success h2 {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 28px;
+  text-transform: uppercase;
+  margin-bottom: 10px;
+}
+.quote-success p { color: var(--text-mid); margin-bottom: 18px; }
+
+@media (max-width: 880px) {
+  .quote-layout { grid-template-columns: 1fr; }
+  .quote-visual { position: static; }
+  .quote-progress { padding: 12px 16px; gap: 12px; }
+  .quote-progress__step { font-size: 11.5px; }
+  .quote-customer__row { grid-template-columns: 1fr; }
+  .quote-choices { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+
+<nav class="nav nav-solid">
+  <div class="nav-inner">
+  <a href="index.html" class="nav-logo"><img src="logo.svg" alt="PJL Land Services"></a>
+  <div class="nav-main">
+    <ul class="nav-links">
+      <li><a href="index.html">Home</a></li>
+      <li><a href="sprinkler-systems.html">Sprinkler Systems</a></li>
+      <li><a href="landscape-lighting.html">Landscape Lighting</a></li>
+      <li><a href="estimate.html">Get Estimate</a></li>
+      <li><a href="faq.html">FAQ</a></li>
+      <li><a href="contact.html">Contact</a></li>
+    </ul>
+    <div class="nav-utility">
+      <a href="https://calendar.app.google/ktWefWX55H1fqGCHA" target="_blank" class="nav-cta">Book Online</a>
+      <a href="tel:+19059600181" class="phone-strip-link nav-phone-link">
+        <span class="phone-strip-icon">📞</span>
+        <span>(905) 960-0181</span>
+      </a>
+    </div>
+  </div>
+  <div class="nav-hamburger"><span></span><span></span><span></span></div>
+  </div>
+</nav>
+<div class="nav-mobile">
+  <a href="index.html">Home</a>
+  <a href="sprinkler-systems.html">Sprinkler Systems</a>
+  <a href="landscape-lighting.html">Landscape Lighting</a>
+  <a href="estimate.html">Get a Free Estimate</a>
+  <a href="faq.html">FAQ</a>
+  <a href="contact.html">Contact</a>
+  <a href="tel:+19059600181">📞 (905) 960-0181</a>
+  <a href="https://calendar.app.google/ktWefWX55H1fqGCHA" target="_blank" class="nav-mobile-cta">Book Online →</a>
+</div>
+
+<!-- Hero -->
+<section class="page-hero quote-hero">
+  <div class="container">
+    <div class="quote-hero-content">
+      <span class="section-tag amber">Sprinkler Quote Tool</span>
+      <h1>Build your sprinkler quote in minutes.</h1>
+      <p>Tell us about your property — your house, your yard, the zones you want covered. We'll give you a price range on the spot, or send you straight to an on-site visit if your property needs a custom plan.</p>
+    </div>
+  </div>
+</section>
+
+<!-- Wizard -->
+<section class="quote-wrapper">
+  <div class="container">
+
+    <!-- Progress -->
+    <div class="quote-progress">
+      <span class="quote-progress__step" id="qProgressStep">Step 1 of 8</span>
+      <div class="quote-progress__bar"><div class="quote-progress__fill" id="qProgressFill"></div></div>
+      <span class="quote-progress__pct" id="qProgressPct">12%</span>
+    </div>
+
+    <!-- Layout: visual + form -->
+    <div class="quote-layout">
+
+      <!-- Visualization -->
+      <div class="quote-visual">
+        <div class="quote-visual__stage">
+          <span class="quote-visual__view-tag" id="qViewTag" style="display:none;">Property View</span>
+          <div class="quote-visual__inner" id="qVisual">
+            <!-- SVG injected by JS -->
+          </div>
+        </div>
+        <div class="quote-visual__caption" id="qCaption">Choose your property type to begin →</div>
+      </div>
+
+      <!-- Form -->
+      <div class="quote-form">
+
+        <!-- Step 1: Property Type -->
+        <div class="quote-step is-active" data-step="1">
+          <span class="quote-step__eyebrow">Step 1</span>
+          <h2 class="quote-step__q">Property Type</h2>
+          <p class="quote-step__hint">Is this for a residential or commercial property?</p>
+          <div class="quote-step__body">
+            <div class="quote-choices">
+              <button class="quote-choice" data-field="propertyType" data-value="residential">
+                <span class="quote-choice__icon">🏡</span>
+                <span class="quote-choice__title">Residential</span>
+                <span class="quote-choice__sub">Single-family home, townhouse, condo</span>
+              </button>
+              <button class="quote-choice" data-field="propertyType" data-value="commercial">
+                <span class="quote-choice__icon">🏢</span>
+                <span class="quote-choice__title">Commercial</span>
+                <span class="quote-choice__sub">Plaza, office, multi-unit — needs custom quote</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Step 2: Project Type -->
+        <div class="quote-step" data-step="2">
+          <span class="quote-step__eyebrow">Step 2</span>
+          <h2 class="quote-step__q">New System or Existing?</h2>
+          <p class="quote-step__hint">Are we starting from scratch or modifying an existing system?</p>
+          <div class="quote-step__body">
+            <div class="quote-choices">
+              <button class="quote-choice" data-field="projectType" data-value="new">
+                <span class="quote-choice__icon">✨</span>
+                <span class="quote-choice__title">Complete New System</span>
+                <span class="quote-choice__sub">No sprinklers in the ground today</span>
+              </button>
+              <button class="quote-choice" data-field="projectType" data-value="existing">
+                <span class="quote-choice__icon">🔧</span>
+                <span class="quote-choice__title">Existing System</span>
+                <span class="quote-choice__sub">Already have sprinklers, modifying or expanding</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Step 3: Landscape Status -->
+        <div class="quote-step" data-step="3">
+          <span class="quote-step__eyebrow">Step 3</span>
+          <h2 class="quote-step__q">Landscape Status</h2>
+          <p class="quote-step__hint">Is the landscape established or still being built?</p>
+          <div class="quote-step__body">
+            <div class="quote-choices">
+              <button class="quote-choice" data-field="landscapeStatus" data-value="existing">
+                <span class="quote-choice__icon">🌳</span>
+                <span class="quote-choice__title">Existing Landscape</span>
+                <span class="quote-choice__sub">Mature property — lawn and plantings established</span>
+              </button>
+              <button class="quote-choice" data-field="landscapeStatus" data-value="new">
+                <span class="quote-choice__icon">🚧</span>
+                <span class="quote-choice__title">New Landscape</span>
+                <span class="quote-choice__sub">New build or full landscape redo in progress</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Step 4: Property Size -->
+        <div class="quote-step" data-step="4">
+          <span class="quote-step__eyebrow">Step 4</span>
+          <h2 class="quote-step__q">Property Size</h2>
+          <p class="quote-step__hint">Helps us match scope to your home — pick the closest match.</p>
+          <div class="quote-step__body">
+            <div class="quote-choices">
+              <button class="quote-choice" data-field="propertySize" data-value="small">
+                <span class="quote-choice__icon">🏠</span>
+                <span class="quote-choice__title">Small</span>
+                <span class="quote-choice__sub">Single-car driveway · Compact lot</span>
+              </button>
+              <button class="quote-choice" data-field="propertySize" data-value="medium">
+                <span class="quote-choice__icon">🏡</span>
+                <span class="quote-choice__title">Medium</span>
+                <span class="quote-choice__sub">Double-car driveway · Standard suburban lot</span>
+              </button>
+              <button class="quote-choice" data-field="propertySize" data-value="large">
+                <span class="quote-choice__icon">🏘️</span>
+                <span class="quote-choice__title">Large</span>
+                <span class="quote-choice__sub">Triple-car driveway · Larger lot, more frontage</span>
+              </button>
+              <button class="quote-choice" data-field="propertySize" data-value="acreage">
+                <span class="quote-choice__icon">🌲</span>
+                <span class="quote-choice__title">Acreage</span>
+                <span class="quote-choice__sub">Estate property · Multiple-acre site</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Step 5: Basement -->
+        <div class="quote-step" data-step="5">
+          <span class="quote-step__eyebrow">Step 5</span>
+          <h2 class="quote-step__q">Basement Status</h2>
+          <p class="quote-step__hint">This affects where we install your controller and how we route the water line.</p>
+          <div class="quote-step__body">
+            <div class="quote-choices">
+              <button class="quote-choice" data-field="basement" data-value="finished">
+                <span class="quote-choice__icon">🛋️</span>
+                <span class="quote-choice__title">Finished Basement</span>
+                <span class="quote-choice__sub">Drywall, finished ceiling — careful access required</span>
+              </button>
+              <button class="quote-choice" data-field="basement" data-value="unfinished">
+                <span class="quote-choice__icon">🔨</span>
+                <span class="quote-choice__title">Unfinished Basement</span>
+                <span class="quote-choice__sub">Open joists — clean run for the water line</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Step 6: Front of House -->
+        <div class="quote-step" data-step="6">
+          <span class="quote-step__eyebrow">Step 6 · Front of House</span>
+          <h2 class="quote-step__q">Front Yard Zones</h2>
+          <p class="quote-step__hint">Pick everything you want covered. Add as many as apply.</p>
+          <div class="quote-step__body">
+            <div class="quote-chip-group">
+              <span class="quote-chip-group__label">Front of House</span>
+              <div class="quote-chips">
+                <button class="quote-chip" data-zone="front-lawn">🌱 Front Lawn</button>
+                <button class="quote-chip" data-zone="front-garden">🌷 Front Garden</button>
+              </div>
+            </div>
+            <div class="quote-chip-group">
+              <span class="quote-chip-group__label">Driveway Sides</span>
+              <div class="quote-chips">
+                <button class="quote-chip" data-zone="drive-grass">🌱 Grass</button>
+                <button class="quote-chip" data-zone="drive-hedges">🌿 Hedges</button>
+                <button class="quote-chip" data-zone="drive-trees">🌳 Trees</button>
+              </div>
+            </div>
+            <div class="quote-chip-group">
+              <span class="quote-chip-group__label">Side of House</span>
+              <div class="quote-chips">
+                <button class="quote-chip" data-zone="side-grass">🌱 Grass</button>
+                <button class="quote-chip" data-zone="side-plants">🌿 Plants</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Step 7: Back of House -->
+        <div class="quote-step" data-step="7">
+          <span class="quote-step__eyebrow">Step 7 · Back of House</span>
+          <h2 class="quote-step__q">Back Yard Zones</h2>
+          <p class="quote-step__hint">What needs irrigation back there?</p>
+          <div class="quote-step__body">
+            <div class="quote-chip-group">
+              <span class="quote-chip-group__label">Backyard</span>
+              <div class="quote-chips">
+                <button class="quote-chip" data-zone="back-lawn">🌱 Backyard Lawn</button>
+                <button class="quote-chip" data-zone="back-plants">🌿 Backyard Plants</button>
+                <button class="quote-chip" data-zone="back-pool">🏊 Pool Perimeter</button>
+                <button class="quote-chip" data-zone="back-trees">🌳 Trees</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Step 8: Summary + CTA -->
+        <div class="quote-step" data-step="8">
+          <span class="quote-step__eyebrow">Step 8 · Your Estimate</span>
+          <h2 class="quote-step__q">Here's Your Quote</h2>
+          <p class="quote-step__hint">Based on what you've told us — refined when we visit on-site.</p>
+          <div class="quote-step__body">
+            <div class="quote-summary" id="qSummary">
+              <div class="quote-summary__title">Your Selections</div>
+              <div class="quote-summary__rows" id="qSummaryRows"></div>
+              <div class="quote-summary__price-block" id="qPriceBlock">
+                <div class="quote-summary__price-label">Estimated Range</div>
+                <div class="quote-summary__price" id="qPrice">$—</div>
+                <div class="quote-summary__price-note" id="qPriceNote">Final price confirmed on-site.</div>
+              </div>
+            </div>
+            <button class="quote-btn quote-btn--next" id="qToContact" style="width:100%;justify-content:center;margin-left:0;">Book My On-Site Estimate →</button>
+          </div>
+        </div>
+
+        <!-- Step 9: Customer Capture -->
+        <div class="quote-step" data-step="9">
+          <span class="quote-step__eyebrow">Almost Done</span>
+          <h2 class="quote-step__q">Your Contact Info</h2>
+          <p class="quote-step__hint">We'll be in touch within 1 business day to confirm your on-site visit.</p>
+          <div class="quote-step__body">
+            <form class="quote-customer" id="qContactForm" onsubmit="return false;">
+              <div class="quote-customer__row">
+                <div class="quote-customer__field">
+                  <label for="qName">Full Name</label>
+                  <input type="text" id="qName" name="name" required>
+                </div>
+                <div class="quote-customer__field">
+                  <label for="qPhone">Phone</label>
+                  <input type="tel" id="qPhone" name="phone" required>
+                </div>
+              </div>
+              <div class="quote-customer__field">
+                <label for="qEmail">Email</label>
+                <input type="email" id="qEmail" name="email" required>
+              </div>
+              <div class="quote-customer__field">
+                <label for="qAddress">Property Address</label>
+                <input type="text" id="qAddress" name="address" placeholder="Street, City" required>
+              </div>
+              <div class="quote-customer__field">
+                <label for="qNotes">Anything we should know? (optional)</label>
+                <textarea id="qNotes" name="notes" placeholder="Specifics about your property, timing, or anything else"></textarea>
+              </div>
+            </form>
+          </div>
+        </div>
+
+        <!-- Step 10: Success -->
+        <div class="quote-step" data-step="10">
+          <div class="quote-success">
+            <div class="quote-success__check">✓</div>
+            <h2>Thanks — we got it.</h2>
+            <p>We'll be in touch within 1 business day to confirm your on-site visit. In the meantime, your details have been emailed and saved.</p>
+            <a href="index.html" class="quote-btn quote-btn--next" style="margin:0 auto;">Back to Homepage</a>
+          </div>
+        </div>
+
+        <!-- Wizard nav (hidden on success) -->
+        <div class="quote-nav" id="qNav">
+          <button class="quote-btn quote-btn--back" id="qBack">← Back</button>
+          <button class="quote-btn quote-btn--next" id="qNext" disabled>Next →</button>
+        </div>
+
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer class="footer">
+  <div class="container">
+    <div class="footer-grid">
+      <div class="footer-brand">
+        <img src="logo.svg" alt="PJL Land Services">
+        <p>Newmarket's trusted lawn sprinkler and landscape lighting experts. Serving the GTA with honest service and smart technology.</p>
+        <div class="footer-social">
+          <a href="https://www.facebook.com/pjllandservices" target="_blank">f</a>
+          <a href="https://www.instagram.com/pjllandservices" target="_blank">in</a>
+        </div>
+      </div>
+      <div class="footer-col">
+        <h5>Services</h5>
+        <ul>
+          <li><a href="sprinkler-systems.html">Spring Openings</a></li>
+          <li><a href="sprinkler-systems.html">Fall Closings</a></li>
+          <li><a href="sprinkler-systems.html#repair">Sprinkler Repair</a></li>
+          <li><a href="quote.html">Get a Quote</a></li>
+          <li><a href="landscape-lighting.html">Landscape Lighting</a></li>
+        </ul>
+      </div>
+      <div class="footer-col">
+        <h5>Company</h5>
+        <ul>
+          <li><a href="index.html">Home</a></li>
+          <li><a href="estimate.html">Get an Estimate</a></li>
+          <li><a href="faq.html">FAQ</a></li>
+          <li><a href="contact.html">Contact Us</a></li>
+        </ul>
+      </div>
+      <div class="footer-col">
+        <h5>Contact</h5>
+        <div class="footer-contact-item"><span>📞</span><a href="tel:+19059600181" style="color:rgba(255,255,255,0.65)">(905) 960-0181</a></div>
+        <div class="footer-contact-item"><span>✉️</span><a href="mailto:info@pjllandservices.com" style="color:rgba(255,255,255,0.65)">info@pjllandservices.com</a></div>
+        <div class="footer-contact-item"><span>📍</span><span>Newmarket, Ontario</span></div>
+      </div>
+    </div>
+    <div class="footer-bottom">
+      <p>© 2026 PJL Land Services. All rights reserved.</p>
+      <div class="footer-bottom-links"><a href="#">Privacy Policy</a><a href="#">Terms of Service</a></div>
+    </div>
+  </div>
+</footer>
+
+<script src="nav.js"></script>
+<script>
+/* ============================================
+   QUOTE WIZARD JS
+   ============================================ */
+(function(){
+  var TOTAL_STEPS = 8;
+  var state = {
+    step: 1,
+    propertyType: null,
+    projectType: null,
+    landscapeStatus: null,
+    propertySize: null,
+    basement: null,
+    zones: []
+  };
+
+  // Restore from localStorage if present
+  try {
+    var saved = localStorage.getItem('pjl_quote');
+    if (saved) Object.assign(state, JSON.parse(saved));
+  } catch(e){}
+
+  /* ===== House SVG generators ===== */
+  // Each returns SVG string. Top-down isometric-ish view of property.
+  // Common zone classes (lawn, garden, pool, tree, hedge, plant, sprinkler) — toggled via .is-active
+  // data-zone attributes mark which zone each element belongs to.
+
+  function houseSvg(size) {
+    // Define dimensions per size
+    var P = {
+      small:    { w: 320, h: 400, drive: 60,  hx: 80,  hy: 150, hw: 160, hh: 110, garage: 60, lawnPad: 18 },
+      medium:   { w: 360, h: 420, drive: 110, hx: 70,  hy: 150, hw: 220, hh: 130, garage: 110, lawnPad: 22 },
+      large:    { w: 400, h: 440, drive: 160, hx: 60,  hy: 150, hw: 280, hh: 150, garage: 160, lawnPad: 26 },
+      acreage:  { w: 460, h: 480, drive: 180, hx: 60,  hy: 170, hw: 340, hh: 180, garage: 180, lawnPad: 36 }
+    }[size] || { w: 360, h: 420, drive: 110, hx: 70,  hy: 150, hw: 220, hh: 130, garage: 110, lawnPad: 22 };
+
+    var w = P.w, h = P.h;
+    var streetH = 24;
+    var sidewalkH = 14;
+    var driveX = (w - P.drive) / 2;
+    var driveY = h - streetH - sidewalkH;
+    var driveTop = P.hy + P.hh; // driveway runs from front of house to sidewalk
+
+    // House footprint
+    var hx = (w - P.hw) / 2, hy = P.hy, hw = P.hw, hh = P.hh;
+    // Garage: right portion of front wall
+    var garageX = hx + hw - P.garage, garageY = hy + hh - 28, garageW = P.garage, garageH = 28;
+
+    return [
+      '<svg class="house-svg" viewBox="0 0 ' + w + ' ' + h + '" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid meet">',
+      // Background (yard base)
+      '<rect x="0" y="0" width="' + w + '" height="' + h + '" fill="#f4f8ec"/>',
+      // Backyard lawn (always shown faintly, brightens when selected)
+      '<rect class="lawn" data-zone-target="back-lawn" x="' + P.lawnPad + '" y="' + (P.lawnPad) + '" width="' + (w - 2*P.lawnPad) + '" height="' + (hy - P.lawnPad - 6) + '" rx="8"/>',
+      // Backyard plants strip (along back of house)
+      '<rect class="plant" data-zone-target="back-plants" x="' + (hx + 12) + '" y="' + (hy - 14) + '" width="' + (hw - 24) + '" height="10" rx="3"/>',
+      // Backyard pool
+      '<rect class="pool" data-zone-target="back-pool" x="' + (w/2 - 50) + '" y="' + (P.lawnPad + 30) + '" width="100" height="60" rx="10"/>',
+      // Backyard trees (4 corners-ish)
+      '<circle class="tree" data-zone-target="back-trees" cx="' + (P.lawnPad + 20) + '" cy="' + (P.lawnPad + 20) + '" r="12"/>',
+      '<circle class="tree" data-zone-target="back-trees" cx="' + (w - P.lawnPad - 20) + '" cy="' + (P.lawnPad + 20) + '" r="12"/>',
+      '<circle class="tree" data-zone-target="back-trees" cx="' + (P.lawnPad + 25) + '" cy="' + (hy - 30) + '" r="10"/>',
+      '<circle class="tree" data-zone-target="back-trees" cx="' + (w - P.lawnPad - 25) + '" cy="' + (hy - 30) + '" r="10"/>',
+      // Side house grass (left + right strips between house and lot edge)
+      '<rect class="lawn" data-zone-target="side-grass" x="' + P.lawnPad + '" y="' + hy + '" width="' + (hx - P.lawnPad - 2) + '" height="' + hh + '" rx="4"/>',
+      '<rect class="lawn" data-zone-target="side-grass" x="' + (hx + hw + 2) + '" y="' + hy + '" width="' + (w - hx - hw - P.lawnPad - 2) + '" height="' + hh + '" rx="4"/>',
+      // Side house plants (small strips against house)
+      '<rect class="plant" data-zone-target="side-plants" x="' + (hx - 6) + '" y="' + (hy + 8) + '" width="6" height="' + (hh - 16) + '" rx="2"/>',
+      '<rect class="plant" data-zone-target="side-plants" x="' + (hx + hw) + '" y="' + (hy + 8) + '" width="6" height="' + (hh - 16) + '" rx="2"/>',
+      // House base
+      '<rect class="house-base" x="' + hx + '" y="' + hy + '" width="' + hw + '" height="' + hh + '" rx="3"/>',
+      // House roof (visible top edge)
+      '<rect class="house-roof" x="' + (hx - 2) + '" y="' + hy + '" width="' + (hw + 4) + '" height="6"/>',
+      // Garage door
+      '<rect class="garage" x="' + garageX + '" y="' + garageY + '" width="' + garageW + '" height="' + garageH + '" rx="2"/>',
+      // Front door
+      '<rect class="door" x="' + (hx + 18) + '" y="' + (hy + hh - 22) + '" width="14" height="22" rx="2"/>',
+      // Windows
+      '<rect class="window" x="' + (hx + 42) + '" y="' + (hy + 14) + '" width="22" height="14" rx="2"/>',
+      '<rect class="window" x="' + (hx + 76) + '" y="' + (hy + 14) + '" width="22" height="14" rx="2"/>',
+      // Driveway
+      '<rect class="driveway" x="' + driveX + '" y="' + driveTop + '" width="' + P.drive + '" height="' + (driveY - driveTop) + '"/>',
+      // Driveway-side grass (left of driveway)
+      '<rect class="lawn" data-zone-target="drive-grass" x="' + P.lawnPad + '" y="' + driveTop + '" width="' + (driveX - P.lawnPad - 2) + '" height="' + (driveY - driveTop) + '" rx="3"/>',
+      '<rect class="lawn" data-zone-target="drive-grass" x="' + (driveX + P.drive + 2) + '" y="' + driveTop + '" width="' + (w - driveX - P.drive - P.lawnPad - 2) + '" height="' + (driveY - driveTop) + '" rx="3"/>',
+      // Driveway-side hedges
+      '<rect class="hedge" data-zone-target="drive-hedges" x="' + (driveX - 10) + '" y="' + driveTop + '" width="6" height="' + (driveY - driveTop) + '" rx="2"/>',
+      '<rect class="hedge" data-zone-target="drive-hedges" x="' + (driveX + P.drive + 4) + '" y="' + driveTop + '" width="6" height="' + (driveY - driveTop) + '" rx="2"/>',
+      // Driveway-side trees
+      '<circle class="tree" data-zone-target="drive-trees" cx="' + (driveX - 18) + '" cy="' + (driveTop + 30) + '" r="9"/>',
+      '<circle class="tree" data-zone-target="drive-trees" cx="' + (driveX + P.drive + 18) + '" cy="' + (driveTop + 30) + '" r="9"/>',
+      // Front lawn (strips beside driveway forward of house — different zone vs drive-grass)
+      // Actually front-lawn is the lawn area BETWEEN house and driveway, and beside driveway forward
+      // We'll re-use side strips as the "front lawn" — separate zone target via two thin layers in front of house line
+      // Front lawn — area right in front of house, beside garage
+      '<rect class="lawn" data-zone-target="front-lawn" x="' + hx + '" y="' + (hy + hh + 2) + '" width="' + (garageX - hx - 4) + '" height="' + (driveTop - hy - hh - 4) + '" rx="3"/>',
+      // Front garden (strip in front of house entrance)
+      '<rect class="garden" data-zone-target="front-garden" x="' + (hx + 12) + '" y="' + (hy + hh + 1) + '" width="' + (garageX - hx - 18) + '" height="6" rx="2"/>',
+      // Sidewalk
+      '<rect class="sidewalk" x="0" y="' + (h - streetH - sidewalkH) + '" width="' + w + '" height="' + sidewalkH + '"/>',
+      // Street
+      '<rect class="street" x="0" y="' + (h - streetH) + '" width="' + w + '" height="' + streetH + '"/>',
+      // Street dashed line
+      '<line x1="0" y1="' + (h - streetH/2) + '" x2="' + w + '" y2="' + (h - streetH/2) + '" stroke="#ffd95a" stroke-width="2" stroke-dasharray="10,8"/>',
+      // Sprinkler heads — placed at zone centers, activated when zones picked
+      '<circle class="sprinkler" data-sprinkler="front-lawn" cx="' + (hx + (garageX - hx - 4)/2) + '" cy="' + (hy + hh + 2 + (driveTop - hy - hh - 4)/2) + '" r="3"/>',
+      '<circle class="sprinkler" data-sprinkler="front-garden" cx="' + (hx + 12 + (garageX - hx - 18)/2) + '" cy="' + (hy + hh + 4) + '" r="2.5"/>',
+      '<circle class="sprinkler" data-sprinkler="back-lawn" cx="' + (w/2) + '" cy="' + (P.lawnPad + (hy - P.lawnPad)/2) + '" r="3"/>',
+      '<circle class="sprinkler" data-sprinkler="back-plants" cx="' + (w/2) + '" cy="' + (hy - 9) + '" r="2.5"/>',
+      '<circle class="sprinkler" data-sprinkler="side-grass" cx="' + (P.lawnPad + (hx - P.lawnPad)/2) + '" cy="' + (hy + hh/2) + '" r="2.5"/>',
+      '<circle class="sprinkler" data-sprinkler="side-grass" cx="' + (hx + hw + (w - hx - hw - P.lawnPad)/2) + '" cy="' + (hy + hh/2) + '" r="2.5"/>',
+      '<circle class="sprinkler" data-sprinkler="drive-grass" cx="' + (driveX/2 + P.lawnPad/2) + '" cy="' + (driveTop + (driveY - driveTop)/2) + '" r="2.5"/>',
+      '<circle class="sprinkler" data-sprinkler="drive-grass" cx="' + (driveX + P.drive + (w - driveX - P.drive - P.lawnPad)/2) + '" cy="' + (driveTop + (driveY - driveTop)/2) + '" r="2.5"/>',
+      '</svg>'
+    ].join('');
+  }
+
+  /* ===== Pricing logic ===== */
+  // Base $585 + zones * $525
+  // Each selection maps to estimated zone count, scaled by property size
+  function zonesFor(zoneId) {
+    var sizeMult = ({ small: 0.8, medium: 1, large: 1.4, acreage: 2.0 })[state.propertySize] || 1;
+    var base = ({
+      'front-lawn': 1.5,
+      'front-garden': 1,
+      'drive-grass': 1,
+      'drive-hedges': 0.5,
+      'drive-trees': 0.5,
+      'side-grass': 1,
+      'side-plants': 0.5,
+      'back-lawn': 2.5,
+      'back-plants': 1,
+      'back-pool': 1.5,
+      'back-trees': 1
+    })[zoneId] || 1;
+    return base * sizeMult;
+  }
+
+  function calcPrice() {
+    if (state.propertyType === 'commercial' || state.propertySize === 'acreage') {
+      return { quote: true, totalZones: null, low: null, high: null };
+    }
+    var zoneTotal = state.zones.reduce(function(sum, z){ return sum + zonesFor(z); }, 0);
+    var roundedZones = Math.max(1, Math.round(zoneTotal));
+    var subtotal = 585 + (roundedZones * 525);
+    if (roundedZones > 8) return { quote: true, totalZones: roundedZones, low: null, high: null };
+    return {
+      quote: false,
+      totalZones: roundedZones,
+      low: Math.round(subtotal * 0.92 / 25) * 25,
+      high: Math.round(subtotal * 1.12 / 25) * 25
+    };
+  }
+
+  /* ===== Step rendering ===== */
+  function renderStep() {
+    document.querySelectorAll('.quote-step').forEach(function(el){
+      el.classList.toggle('is-active', parseInt(el.dataset.step, 10) === state.step);
+    });
+
+    // Progress
+    var pct = Math.round((state.step / TOTAL_STEPS) * 100);
+    document.getElementById('qProgressFill').style.width = pct + '%';
+    document.getElementById('qProgressStep').textContent = 'Step ' + Math.min(state.step, TOTAL_STEPS) + ' of ' + TOTAL_STEPS;
+    document.getElementById('qProgressPct').textContent = pct + '%';
+
+    // Selected indicators
+    document.querySelectorAll('.quote-choice').forEach(function(c){
+      var f = c.dataset.field;
+      c.classList.toggle('is-selected', state[f] === c.dataset.value);
+    });
+    document.querySelectorAll('.quote-chip').forEach(function(c){
+      c.classList.toggle('is-selected', state.zones.indexOf(c.dataset.zone) !== -1);
+    });
+
+    // Visualization
+    renderVisual();
+
+    // Caption
+    document.getElementById('qCaption').innerHTML = captionFor(state.step);
+
+    // View tag
+    var vt = document.getElementById('qViewTag');
+    if (vt) {
+      if (state.step === 6) { vt.style.display = 'inline-block'; vt.textContent = 'Front of House'; }
+      else if (state.step === 7) { vt.style.display = 'inline-block'; vt.textContent = 'Back of House'; }
+      else if (state.step >= 4) { vt.style.display = 'inline-block'; vt.textContent = 'Property View'; }
+      else { vt.style.display = 'none'; }
+    }
+
+    // Nav buttons
+    var nav = document.getElementById('qNav');
+    nav.style.display = (state.step === 10) ? 'none' : 'flex';
+    document.getElementById('qBack').disabled = state.step === 1 || state.step === 10;
+    document.getElementById('qNext').disabled = !canAdvance();
+    var nextBtn = document.getElementById('qNext');
+    if (state.step === 8) { nextBtn.textContent = 'Continue →'; }
+    else if (state.step === 9) { nextBtn.textContent = 'Submit Request →'; }
+    else if (state.step === 7) { nextBtn.textContent = 'See My Quote →'; }
+    else { nextBtn.textContent = 'Next →'; }
+
+    // Summary on step 8
+    if (state.step === 8) renderSummary();
+
+    // Save
+    saveState();
+  }
+
+  function captionFor(step) {
+    if (step === 1) return 'Choose your property type to begin →';
+    if (step === 2) return 'Tell us if this is new or existing.';
+    if (step === 3) return 'Established landscape or new build?';
+    if (step === 4) return 'Pick the closest property size — your house view will appear here.';
+    if (step === 5) return 'Basement type affects controller placement.';
+    if (step === 6) return '<strong>Front yard</strong> — pick everything to cover. Watch your selections light up.';
+    if (step === 7) return '<strong>Back yard</strong> — same idea.';
+    if (step === 8) return 'Your estimated quote based on the selections.';
+    if (step === 9) return 'Last step — your contact info.';
+    if (step === 10) return 'All set!';
+    return '';
+  }
+
+  function renderVisual() {
+    var visual = document.getElementById('qVisual');
+    if (!visual) return;
+    var size = state.propertySize;
+    if (!size) {
+      visual.innerHTML = '<div style="text-align:center;color:var(--text-muted);font-size:14px;padding:32px;">Your property visualization will appear here as you answer questions.<br><br>🏡</div>';
+      return;
+    }
+    visual.innerHTML = houseSvg(size);
+    // Activate selected zones
+    state.zones.forEach(function(z){
+      visual.querySelectorAll('[data-zone-target="' + z + '"]').forEach(function(el){ el.classList.add('is-active'); });
+      visual.querySelectorAll('[data-sprinkler="' + z + '"]').forEach(function(el){ el.classList.add('is-active'); });
+    });
+  }
+
+  function renderSummary() {
+    var rows = document.getElementById('qSummaryRows');
+    rows.innerHTML = '';
+    function row(l, v) {
+      rows.innerHTML += '<div class="quote-summary__row"><span class="quote-summary__row-label">' + l + '</span><span class="quote-summary__row-value">' + v + '</span></div>';
+    }
+    row('Property type', cap(state.propertyType));
+    row('Project', cap(state.projectType) + ' system');
+    row('Landscape', cap(state.landscapeStatus));
+    row('Property size', cap(state.propertySize));
+    row('Basement', cap(state.basement));
+    row('Zones selected', state.zones.length || 'None');
+
+    var p = calcPrice();
+    var priceEl = document.getElementById('qPrice');
+    var noteEl = document.getElementById('qPriceNote');
+    var blockEl = document.getElementById('qPriceBlock');
+    blockEl.classList.remove('quote-summary__price--quote');
+    if (p.quote) {
+      blockEl.classList.add('quote-summary__price--quote');
+      priceEl.textContent = 'Custom Quote';
+      noteEl.textContent = 'Your property needs an on-site visit for accurate pricing — no obligation, no pressure.';
+    } else {
+      priceEl.textContent = '$' + p.low.toLocaleString() + ' – $' + p.high.toLocaleString();
+      noteEl.textContent = 'Estimated based on ~' + p.totalZones + ' zone' + (p.totalZones === 1 ? '' : 's') + '. Final price confirmed on-site.';
+    }
+  }
+
+  function cap(s) {
+    if (!s) return '—';
+    return s.charAt(0).toUpperCase() + s.slice(1);
+  }
+
+  function canAdvance() {
+    if (state.step === 1) return !!state.propertyType;
+    if (state.step === 2) return !!state.projectType;
+    if (state.step === 3) return !!state.landscapeStatus;
+    if (state.step === 4) return !!state.propertySize;
+    if (state.step === 5) return !!state.basement;
+    if (state.step === 6 || state.step === 7) return true; // optional zones
+    if (state.step === 8) return true;
+    if (state.step === 9) return validateContact();
+    return true;
+  }
+
+  function validateContact() {
+    var name = document.getElementById('qName').value.trim();
+    var phone = document.getElementById('qPhone').value.trim();
+    var email = document.getElementById('qEmail').value.trim();
+    var address = document.getElementById('qAddress').value.trim();
+    return name && phone && email.indexOf('@') > 0 && address;
+  }
+
+  function saveState() {
+    try { localStorage.setItem('pjl_quote', JSON.stringify(state)); } catch(e){}
+  }
+
+  /* ===== Event handlers ===== */
+  // Choice buttons (single-select)
+  document.querySelectorAll('.quote-choice').forEach(function(btn){
+    btn.addEventListener('click', function(){
+      state[btn.dataset.field] = btn.dataset.value;
+      // Commercial → jump to summary CTA path
+      if (btn.dataset.field === 'propertyType' && btn.dataset.value === 'commercial') {
+        state.step = 8;
+        renderStep();
+        return;
+      }
+      renderStep();
+    });
+  });
+
+  // Chip buttons (multi-select)
+  document.querySelectorAll('.quote-chip').forEach(function(btn){
+    btn.addEventListener('click', function(){
+      var z = btn.dataset.zone;
+      var idx = state.zones.indexOf(z);
+      if (idx >= 0) state.zones.splice(idx, 1);
+      else state.zones.push(z);
+      renderStep();
+    });
+  });
+
+  // Back / Next
+  document.getElementById('qBack').addEventListener('click', function(){
+    if (state.step > 1) { state.step--; renderStep(); }
+  });
+  document.getElementById('qNext').addEventListener('click', function(){
+    if (state.step === 9) {
+      submitQuote();
+      return;
+    }
+    if (state.step < 10) {
+      state.step++;
+      renderStep();
+    }
+  });
+  document.getElementById('qToContact').addEventListener('click', function(){
+    state.step = 9;
+    renderStep();
+  });
+
+  // Re-validate next on input
+  ['qName','qPhone','qEmail','qAddress'].forEach(function(id){
+    document.getElementById(id).addEventListener('input', function(){
+      document.getElementById('qNext').disabled = !canAdvance();
+    });
+  });
+
+  function submitQuote() {
+    saveState();
+    var name = document.getElementById('qName').value.trim();
+    var phone = document.getElementById('qPhone').value.trim();
+    var email = document.getElementById('qEmail').value.trim();
+    var address = document.getElementById('qAddress').value.trim();
+    var notes = document.getElementById('qNotes').value.trim();
+    var p = calcPrice();
+    var priceLine = p.quote ? 'Custom Quote (on-site visit required)' : ('$' + p.low + ' – $' + p.high + ' (~' + p.totalZones + ' zones)');
+
+    var body = [
+      'New sprinkler quote request from PJL Quote Tool',
+      '',
+      '— CUSTOMER —',
+      'Name: ' + name,
+      'Phone: ' + phone,
+      'Email: ' + email,
+      'Address: ' + address,
+      'Notes: ' + (notes || '(none)'),
+      '',
+      '— PROPERTY —',
+      'Property type: ' + cap(state.propertyType),
+      'Project type: ' + cap(state.projectType),
+      'Landscape: ' + cap(state.landscapeStatus),
+      'Property size: ' + cap(state.propertySize),
+      'Basement: ' + cap(state.basement),
+      '',
+      '— ZONES SELECTED —',
+      (state.zones.length ? state.zones.map(function(z){ return '• ' + z; }).join('\n') : '(none)'),
+      '',
+      '— ESTIMATE —',
+      priceLine
+    ].join('\n');
+
+    var subject = 'Sprinkler Quote Request — ' + name;
+    var mailto = 'mailto:info@pjllandservices.com?subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(body);
+    window.location.href = mailto;
+
+    // Show success regardless (mailto fires off, user sees thank you)
+    setTimeout(function(){
+      state.step = 10;
+      renderStep();
+    }, 400);
+  }
+
+  // Initial render
+  renderStep();
+})();
+</script>
+</body>
+</html>
