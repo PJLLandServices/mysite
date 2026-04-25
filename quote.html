@@ -52,10 +52,14 @@
     linear-gradient(180deg, #f7faf2 0%, #fafdf5 100%);
   min-height: 60vh;
 }
+/* Override container max-width inside the quote tool — give the interactive tool room to breathe */
+.quote-wrapper > .container {
+  max-width: 1480px;
+}
 
 /* Progress bar */
 .quote-progress {
-  max-width: 1100px;
+  max-width: 1400px;
   margin: 0 auto 28px;
   background: #fff;
   border: 1px solid rgba(74,140,92,0.18);
@@ -95,15 +99,34 @@
   min-width: 40px;
   text-align: right;
 }
+.quote-progress__reset {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  padding: 7px 13px;
+  border-radius: 99px;
+  cursor: pointer;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+.quote-progress__reset:hover {
+  border-color: var(--amber);
+  color: var(--amber);
+  transform: translateY(-1px);
+}
 
 /* Main layout */
 .quote-layout {
-  max-width: 1100px;
+  max-width: 1400px;
   margin: 0 auto;
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 28px;
-  align-items: stretch;
+  grid-template-columns: minmax(0, 1.45fr) minmax(0, 1fr);
+  gap: 32px;
+  align-items: start; /* prevent vertical stretching/jumping when form content changes */
 }
 
 /* Visualization panel */
@@ -111,10 +134,10 @@
   background: linear-gradient(180deg, #eef6e2 0%, #f7faf2 100%);
   border: 1px solid rgba(74,140,92,0.22);
   border-radius: var(--r-xl);
-  padding: 24px;
+  padding: 20px;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 14px;
   position: sticky;
   top: 24px;
   align-self: start;
@@ -122,18 +145,21 @@
 }
 .quote-visual__stage {
   position: relative;
+  width: 100%;
+  /* lock the stage to 16:9 so the image has a predictable height regardless of step */
+  aspect-ratio: 16 / 9;
+  border-radius: var(--r-lg);
+  overflow: hidden;
+  background: #fff;
+  border: 1px solid rgba(74,140,92,0.10);
 }
 .quote-visual__inner {
-  background: #fff;
-  border-radius: var(--r-lg);
-  padding: 16px;
+  position: absolute;
+  inset: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  min-height: 360px;
-  position: relative;
   overflow: hidden;
-  border: 1px solid rgba(74,140,92,0.10);
 }
 .quote-visual__caption {
   font-size: 13.5px;
@@ -152,7 +178,9 @@
   padding: 32px;
   display: flex;
   flex-direction: column;
-  min-height: 460px;
+  /* Match the natural height of the visualization so the layout doesn't jump between steps.
+     With wider layout (1400px), 16:9 stage runs ~450px tall + pills + caption + padding ≈ 600px */
+  min-height: 600px;
   box-shadow: 0 14px 38px rgba(27,77,46,0.10);
 }
 .quote-step { display: none; flex-direction: column; flex: 1; }
@@ -291,12 +319,12 @@
   display: block;
 }
 
-/* Wizard nav */
+/* Wizard nav — sticks to bottom of form panel when content is short */
 .quote-nav {
   display: flex;
   justify-content: space-between;
   gap: 12px;
-  margin-top: 28px;
+  margin-top: auto;
   padding-top: 24px;
   border-top: 1px solid var(--border);
 }
@@ -330,35 +358,108 @@
 .quote-btn--next:hover { background: var(--green-mid); transform: translateY(-1px); }
 .quote-btn--next:disabled { background: var(--border); color: rgba(0,0,0,0.3); cursor: not-allowed; box-shadow: none; transform: none; }
 
-/* SVG house */
-.house-svg { width: 100%; height: 100%; max-height: 360px; display: block; }
-.house-svg .lawn { fill: #d8e7c4; transition: fill 0.4s ease, opacity 0.4s ease; opacity: 0.55; }
-.house-svg .lawn.is-active { fill: #5fa371; opacity: 1; }
-.house-svg .garden { fill: #d2c6a4; transition: fill 0.4s ease, opacity 0.4s ease; opacity: 0.55; }
-.house-svg .garden.is-active { fill: #c79a3a; opacity: 1; }
-.house-svg .pool { fill: #b8d6e8; transition: opacity 0.4s ease; opacity: 0; }
-.house-svg .pool.is-active { opacity: 1; }
-.house-svg .tree { fill: #4a8c5c; transition: opacity 0.4s ease; opacity: 0; }
-.house-svg .tree.is-active { opacity: 1; }
-.house-svg .hedge { fill: #6a9a55; transition: opacity 0.4s ease; opacity: 0; }
-.house-svg .hedge.is-active { opacity: 1; }
-.house-svg .plant { fill: #88a86b; transition: opacity 0.4s ease; opacity: 0; }
-.house-svg .plant.is-active { opacity: 1; }
-.house-svg .sprinkler {
-  fill: #1f5d8a;
-  transition: opacity 0.5s ease, transform 0.5s ease;
-  opacity: 0;
-  transform-origin: center;
+/* House image — fills the 16:9 stage exactly */
+.house-img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+  animation: houseFade 0.4s ease;
 }
+@keyframes houseFade {
+  from { opacity: 0; transform: scale(1.02); }
+  to { opacity: 1; transform: scale(1); }
+}
+.house-img-wrap {
+  width: 100%;
+  height: 100%;
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+}
+.house-zones-pills {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 30px;
+}
+.house-zones-pills__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  background: var(--green-pale);
+  color: var(--green);
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: 99px;
+  border: 1px solid rgba(74,140,92,0.22);
+  animation: chipPop 0.3s ease;
+}
+@keyframes chipPop {
+  from { opacity: 0; transform: scale(0.8); }
+  to { opacity: 1; transform: scale(1); }
+}
+.house-zones-pills__empty {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-style: italic;
+}
+.house-view-tag {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  z-index: 5;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: linear-gradient(135deg, var(--green) 0%, var(--green-mid) 100%);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  padding: 6px 12px;
+  border-radius: 99px;
+  box-shadow: 0 6px 14px rgba(0,0,0,0.30);
+}
+
+/* Legacy SVG house (unused but retained) */
+.house-svg { width: 100%; height: 100%; max-height: 380px; display: block; }
+.house-svg .lawn { fill: #c8ddb0; transition: fill 0.4s ease, opacity 0.4s ease; opacity: 0.55; }
+.house-svg .lawn.is-active { fill: #7cb26a; opacity: 1; }
+.house-svg .garden { fill: #d8c48a; transition: fill 0.4s ease, opacity 0.4s ease; opacity: 0.55; }
+.house-svg .garden.is-active { fill: #c79a3a; opacity: 1; }
+.house-svg .pool { transition: opacity 0.4s ease; opacity: 0; }
+.house-svg .pool.is-active { opacity: 1; }
+.house-svg .tree { transition: opacity 0.4s ease; opacity: 0; }
+.house-svg .tree.is-active { opacity: 1; }
+.house-svg .hedge { fill: #5a8747; transition: opacity 0.4s ease; opacity: 0; }
+.house-svg .hedge.is-active { opacity: 1; }
+.house-svg .plant { fill: #7aa05a; transition: opacity 0.4s ease; opacity: 0; }
+.house-svg .plant.is-active { opacity: 1; }
+.house-svg .sprinkler { transition: opacity 0.5s ease; opacity: 0; }
 .house-svg .sprinkler.is-active { opacity: 1; }
-.house-svg .house-base { fill: #d4cfc1; }
-.house-svg .house-roof { fill: #8a7a5c; }
-.house-svg .garage { fill: #b8b09c; }
-.house-svg .driveway { fill: #b5b5b5; }
-.house-svg .street { fill: #6e6e6e; }
-.house-svg .sidewalk { fill: #d0d0d0; }
-.house-svg .door { fill: #5a4a36; }
-.house-svg .window { fill: #c8d8e0; }
+.house-svg .ground { fill: #e8efd8; }
+.house-svg .wall-front { fill: #f3ead8; }
+.house-svg .wall-side { fill: #d9cfb8; }
+.house-svg .roof-front { fill: #b25a3e; }
+.house-svg .roof-side { fill: #8e4530; }
+.house-svg .roof-ridge { stroke: #5c2b1c; stroke-width: 1.5; }
+.house-svg .chimney-body { fill: #c4a88b; }
+.house-svg .chimney-top { fill: #8a6a4c; }
+.house-svg .garage-door { fill: #a89a7e; stroke: #7a6e55; stroke-width: 1; }
+.house-svg .garage-panel { stroke: #7a6e55; stroke-width: 0.8; fill: none; }
+.house-svg .driveway { fill: #c7c3b8; }
+.house-svg .street { fill: #7a7871; }
+.house-svg .sidewalk { fill: #d8d6ce; }
+.house-svg .door { fill: #4a3826; stroke: #2e1f10; stroke-width: 1; }
+.house-svg .door-handle { fill: #d4a64a; }
+.house-svg .window { fill: #b8cbd4; stroke: #f3ead8; stroke-width: 1.5; }
+.house-svg .shadow { fill: rgba(0,0,0,0.10); }
 
 .quote-visual__view-tag {
   position: absolute;
@@ -501,13 +602,18 @@
 }
 .quote-success p { color: var(--text-mid); margin-bottom: 18px; }
 
-@media (max-width: 880px) {
-  .quote-layout { grid-template-columns: 1fr; }
+@media (max-width: 1024px) {
+  .quote-layout { grid-template-columns: 1fr; gap: 24px; }
   .quote-visual { position: static; }
-  .quote-progress { padding: 12px 16px; gap: 12px; }
+  .quote-form { min-height: 480px; }
+}
+@media (max-width: 720px) {
+  .quote-progress { padding: 12px 16px; gap: 10px; flex-wrap: wrap; }
   .quote-progress__step { font-size: 11.5px; }
+  .quote-progress__reset { font-size: 11px; padding: 6px 11px; }
   .quote-customer__row { grid-template-columns: 1fr; }
   .quote-choices { grid-template-columns: 1fr; }
+  .quote-form { padding: 24px; }
 }
 </style>
 </head>
@@ -567,6 +673,7 @@
       <span class="quote-progress__step" id="qProgressStep">Step 1 of 8</span>
       <div class="quote-progress__bar"><div class="quote-progress__fill" id="qProgressFill"></div></div>
       <span class="quote-progress__pct" id="qProgressPct">12%</span>
+      <button type="button" class="quote-progress__reset" id="qReset" title="Clear all selections and start over">↺ Start Over</button>
     </div>
 
     <!-- Layout: visual + form -->
@@ -577,9 +684,10 @@
         <div class="quote-visual__stage">
           <span class="quote-visual__view-tag" id="qViewTag" style="display:none;">Property View</span>
           <div class="quote-visual__inner" id="qVisual">
-            <!-- SVG injected by JS -->
+            <!-- Image injected by JS -->
           </div>
         </div>
+        <div class="house-zones-pills" id="qZonePills"></div>
         <div class="quote-visual__caption" id="qCaption">Choose your property type to begin →</div>
       </div>
 
@@ -896,93 +1004,272 @@
   // data-zone attributes mark which zone each element belongs to.
 
   function houseSvg(size) {
-    // Define dimensions per size
-    var P = {
-      small:    { w: 320, h: 400, drive: 60,  hx: 80,  hy: 150, hw: 160, hh: 110, garage: 60, lawnPad: 18 },
-      medium:   { w: 360, h: 420, drive: 110, hx: 70,  hy: 150, hw: 220, hh: 130, garage: 110, lawnPad: 22 },
-      large:    { w: 400, h: 440, drive: 160, hx: 60,  hy: 150, hw: 280, hh: 150, garage: 160, lawnPad: 26 },
-      acreage:  { w: 460, h: 480, drive: 180, hx: 60,  hy: 170, hw: 340, hh: 180, garage: 180, lawnPad: 36 }
-    }[size] || { w: 360, h: 420, drive: 110, hx: 70,  hy: 150, hw: 220, hh: 130, garage: 110, lawnPad: 22 };
+    // Isometric 3/4 view — view from upper-front-right (camera looks at front + right side)
+    // Fixed 600x480 viewBox; house scales subtly per size; camera angle constant.
+    var s = ({ small: 0.85, medium: 1.00, large: 1.15, acreage: 1.30 })[size] || 1;
+    var driveCarFactor = ({ small: 1, medium: 2, large: 3, acreage: 3 })[size] || 2;
 
-    var w = P.w, h = P.h;
-    var streetH = 24;
-    var sidewalkH = 14;
-    var driveX = (w - P.drive) / 2;
-    var driveY = h - streetH - sidewalkH;
-    var driveTop = P.hy + P.hh; // driveway runs from front of house to sidewalk
+    // Anchor (house center on canvas)
+    var CX = 300, CY = 250;
 
-    // House footprint
-    var hx = (w - P.hw) / 2, hy = P.hy, hw = P.hw, hh = P.hh;
-    // Garage: right portion of front wall
-    var garageX = hx + hw - P.garage, garageY = hy + hh - 28, garageW = P.garage, garageH = 28;
+    // House footprint corners (parallelogram in iso 3/4 view)
+    // SW = front-left (closest-left), SE = front-right (closest-right)
+    // NW = back-left, NE = back-right
+    var SW = [CX - 95*s, CY + 60*s];
+    var SE = [CX + 95*s, CY + 50*s];
+    var NE = [CX + 130*s, CY - 50*s];
+    var NW = [CX - 60*s, CY - 60*s];
 
-    return [
-      '<svg class="house-svg" viewBox="0 0 ' + w + ' ' + h + '" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid meet">',
-      // Background (yard base)
-      '<rect x="0" y="0" width="' + w + '" height="' + h + '" fill="#f4f8ec"/>',
-      // Backyard lawn (always shown faintly, brightens when selected)
-      '<rect class="lawn" data-zone-target="back-lawn" x="' + P.lawnPad + '" y="' + (P.lawnPad) + '" width="' + (w - 2*P.lawnPad) + '" height="' + (hy - P.lawnPad - 6) + '" rx="8"/>',
-      // Backyard plants strip (along back of house)
-      '<rect class="plant" data-zone-target="back-plants" x="' + (hx + 12) + '" y="' + (hy - 14) + '" width="' + (hw - 24) + '" height="10" rx="3"/>',
-      // Backyard pool
-      '<rect class="pool" data-zone-target="back-pool" x="' + (w/2 - 50) + '" y="' + (P.lawnPad + 30) + '" width="100" height="60" rx="10"/>',
-      // Backyard trees (4 corners-ish)
-      '<circle class="tree" data-zone-target="back-trees" cx="' + (P.lawnPad + 20) + '" cy="' + (P.lawnPad + 20) + '" r="12"/>',
-      '<circle class="tree" data-zone-target="back-trees" cx="' + (w - P.lawnPad - 20) + '" cy="' + (P.lawnPad + 20) + '" r="12"/>',
-      '<circle class="tree" data-zone-target="back-trees" cx="' + (P.lawnPad + 25) + '" cy="' + (hy - 30) + '" r="10"/>',
-      '<circle class="tree" data-zone-target="back-trees" cx="' + (w - P.lawnPad - 25) + '" cy="' + (hy - 30) + '" r="10"/>',
-      // Side house grass (left + right strips between house and lot edge)
-      '<rect class="lawn" data-zone-target="side-grass" x="' + P.lawnPad + '" y="' + hy + '" width="' + (hx - P.lawnPad - 2) + '" height="' + hh + '" rx="4"/>',
-      '<rect class="lawn" data-zone-target="side-grass" x="' + (hx + hw + 2) + '" y="' + hy + '" width="' + (w - hx - hw - P.lawnPad - 2) + '" height="' + hh + '" rx="4"/>',
-      // Side house plants (small strips against house)
-      '<rect class="plant" data-zone-target="side-plants" x="' + (hx - 6) + '" y="' + (hy + 8) + '" width="6" height="' + (hh - 16) + '" rx="2"/>',
-      '<rect class="plant" data-zone-target="side-plants" x="' + (hx + hw) + '" y="' + (hy + 8) + '" width="6" height="' + (hh - 16) + '" rx="2"/>',
-      // House base
-      '<rect class="house-base" x="' + hx + '" y="' + hy + '" width="' + hw + '" height="' + hh + '" rx="3"/>',
-      // House roof (visible top edge)
-      '<rect class="house-roof" x="' + (hx - 2) + '" y="' + hy + '" width="' + (hw + 4) + '" height="6"/>',
-      // Garage door
-      '<rect class="garage" x="' + garageX + '" y="' + garageY + '" width="' + garageW + '" height="' + garageH + '" rx="2"/>',
-      // Front door
-      '<rect class="door" x="' + (hx + 18) + '" y="' + (hy + hh - 22) + '" width="14" height="22" rx="2"/>',
-      // Windows
-      '<rect class="window" x="' + (hx + 42) + '" y="' + (hy + 14) + '" width="22" height="14" rx="2"/>',
-      '<rect class="window" x="' + (hx + 76) + '" y="' + (hy + 14) + '" width="22" height="14" rx="2"/>',
-      // Driveway
-      '<rect class="driveway" x="' + driveX + '" y="' + driveTop + '" width="' + P.drive + '" height="' + (driveY - driveTop) + '"/>',
-      // Driveway-side grass (left of driveway)
-      '<rect class="lawn" data-zone-target="drive-grass" x="' + P.lawnPad + '" y="' + driveTop + '" width="' + (driveX - P.lawnPad - 2) + '" height="' + (driveY - driveTop) + '" rx="3"/>',
-      '<rect class="lawn" data-zone-target="drive-grass" x="' + (driveX + P.drive + 2) + '" y="' + driveTop + '" width="' + (w - driveX - P.drive - P.lawnPad - 2) + '" height="' + (driveY - driveTop) + '" rx="3"/>',
-      // Driveway-side hedges
-      '<rect class="hedge" data-zone-target="drive-hedges" x="' + (driveX - 10) + '" y="' + driveTop + '" width="6" height="' + (driveY - driveTop) + '" rx="2"/>',
-      '<rect class="hedge" data-zone-target="drive-hedges" x="' + (driveX + P.drive + 4) + '" y="' + driveTop + '" width="6" height="' + (driveY - driveTop) + '" rx="2"/>',
-      // Driveway-side trees
-      '<circle class="tree" data-zone-target="drive-trees" cx="' + (driveX - 18) + '" cy="' + (driveTop + 30) + '" r="9"/>',
-      '<circle class="tree" data-zone-target="drive-trees" cx="' + (driveX + P.drive + 18) + '" cy="' + (driveTop + 30) + '" r="9"/>',
-      // Front lawn (strips beside driveway forward of house — different zone vs drive-grass)
-      // Actually front-lawn is the lawn area BETWEEN house and driveway, and beside driveway forward
-      // We'll re-use side strips as the "front lawn" — separate zone target via two thin layers in front of house line
-      // Front lawn — area right in front of house, beside garage
-      '<rect class="lawn" data-zone-target="front-lawn" x="' + hx + '" y="' + (hy + hh + 2) + '" width="' + (garageX - hx - 4) + '" height="' + (driveTop - hy - hh - 4) + '" rx="3"/>',
-      // Front garden (strip in front of house entrance)
-      '<rect class="garden" data-zone-target="front-garden" x="' + (hx + 12) + '" y="' + (hy + hh + 1) + '" width="' + (garageX - hx - 18) + '" height="6" rx="2"/>',
-      // Sidewalk
-      '<rect class="sidewalk" x="0" y="' + (h - streetH - sidewalkH) + '" width="' + w + '" height="' + sidewalkH + '"/>',
-      // Street
-      '<rect class="street" x="0" y="' + (h - streetH) + '" width="' + w + '" height="' + streetH + '"/>',
-      // Street dashed line
-      '<line x1="0" y1="' + (h - streetH/2) + '" x2="' + w + '" y2="' + (h - streetH/2) + '" stroke="#ffd95a" stroke-width="2" stroke-dasharray="10,8"/>',
-      // Sprinkler heads — placed at zone centers, activated when zones picked
-      '<circle class="sprinkler" data-sprinkler="front-lawn" cx="' + (hx + (garageX - hx - 4)/2) + '" cy="' + (hy + hh + 2 + (driveTop - hy - hh - 4)/2) + '" r="3"/>',
-      '<circle class="sprinkler" data-sprinkler="front-garden" cx="' + (hx + 12 + (garageX - hx - 18)/2) + '" cy="' + (hy + hh + 4) + '" r="2.5"/>',
-      '<circle class="sprinkler" data-sprinkler="back-lawn" cx="' + (w/2) + '" cy="' + (P.lawnPad + (hy - P.lawnPad)/2) + '" r="3"/>',
-      '<circle class="sprinkler" data-sprinkler="back-plants" cx="' + (w/2) + '" cy="' + (hy - 9) + '" r="2.5"/>',
-      '<circle class="sprinkler" data-sprinkler="side-grass" cx="' + (P.lawnPad + (hx - P.lawnPad)/2) + '" cy="' + (hy + hh/2) + '" r="2.5"/>',
-      '<circle class="sprinkler" data-sprinkler="side-grass" cx="' + (hx + hw + (w - hx - hw - P.lawnPad)/2) + '" cy="' + (hy + hh/2) + '" r="2.5"/>',
-      '<circle class="sprinkler" data-sprinkler="drive-grass" cx="' + (driveX/2 + P.lawnPad/2) + '" cy="' + (driveTop + (driveY - driveTop)/2) + '" r="2.5"/>',
-      '<circle class="sprinkler" data-sprinkler="drive-grass" cx="' + (driveX + P.drive + (w - driveX - P.drive - P.lawnPad)/2) + '" cy="' + (driveTop + (driveY - driveTop)/2) + '" r="2.5"/>',
-      '</svg>'
-    ].join('');
+    var WALL_H = 60 * s;
+    var ROOF_H = 35 * s;
+
+    // Wall tops
+    function up(p, h) { return [p[0], p[1] - h]; }
+    var SW_t = up(SW, WALL_H), SE_t = up(SE, WALL_H);
+    var NW_t = up(NW, WALL_H), NE_t = up(NE, WALL_H);
+
+    // Roof ridge (along depth axis: front-to-back)
+    var ridgeFront = [(SW_t[0] + SE_t[0]) / 2, (SW_t[1] + SE_t[1]) / 2 - ROOF_H];
+    var ridgeBack  = [(NW_t[0] + NE_t[0]) / 2, (NW_t[1] + NE_t[1]) / 2 - ROOF_H];
+
+    // Polygon helper
+    function poly(points, cls, dataAttr) {
+      var str = points.map(function(p){ return p[0].toFixed(1)+','+p[1].toFixed(1); }).join(' ');
+      return '<polygon class="'+cls+'"'+(dataAttr||'')+' points="'+str+'"/>';
+    }
+
+    // Garage on front wall, right portion
+    // Garage occupies fraction `gw` of front wall starting from the right end (SE side)
+    var gw = Math.min(0.78, 0.18 + 0.18 * driveCarFactor);
+    var gEndT = [SW_t[0] + (SE_t[0]-SW_t[0]) * (1 - gw), SW_t[1] + (SE_t[1]-SW_t[1]) * (1 - gw)];
+    var gStartT = SE_t;
+    var garageH = 36 * s;
+    var gEndB = [gEndT[0], gEndT[1] + garageH];
+    var gStartB = [gStartT[0], gStartT[1] + garageH];
+
+    // Garage base on ground (project gEndT/gStartT down to footprint front edge)
+    var gBaseEnd = [SW[0] + (SE[0]-SW[0]) * (1 - gw), SW[1] + (SE[1]-SW[1]) * (1 - gw)];
+    var gBaseStart = SE;
+
+    // Driveway runs from garage out toward the camera/street
+    var driveExt = 95;
+    var drOutEnd = [gBaseEnd[0] - 30, gBaseEnd[1] + driveExt];
+    var drOutStart = [gBaseStart[0] + 5, gBaseStart[1] + driveExt - 8];
+
+    // Sidewalk/street strip — runs across bottom-front
+    var sidewalkLeft = [drOutEnd[0] - 90, drOutEnd[1] + 20];
+    var sidewalkRight = [drOutStart[0] + 110, drOutStart[1] + 10];
+    var sidewalkBL = [sidewalkLeft[0] - 30, sidewalkLeft[1] + 18];
+    var sidewalkBR = [sidewalkRight[0] + 50, sidewalkRight[1] + 18];
+
+    // Lot boundary (slightly bigger than house spread)
+    var lotNW = [60, 110];
+    var lotNE = [510, 80];
+    var lotSE = [560, 360];
+    var lotSW = [40, 400];
+
+    // ZONES (ground-level polygons)
+    // Back lawn — between back wall and lot back edge
+    var backLawn = [NW, NE, [lotNE[0]-10, NE[1] - 60*s], [lotNW[0]+10, NW[1] - 60*s]];
+    // Back plants — thin strip behind back wall
+    var backPlants = [NW, NE, [NE[0]+2, NE[1]-10], [NW[0]-2, NW[1]-10]];
+    // Side grass — east side of house (right side, visible)
+    var sideGrass = [SE, NE, [lotSE[0]-30, NE[1]+8], [lotSE[0]-15, SE[1]+8]];
+    // Side plants — thin strip against right wall
+    var sidePlants = [SE, NE, [NE[0]+8, NE[1]+4], [SE[0]+8, SE[1]+4]];
+    // Front lawn — area in front of house, west of driveway
+    var frontLawn = [
+      SW,
+      gBaseEnd,
+      [drOutEnd[0]+10, drOutEnd[1]],
+      [SW[0]-10, SW[1]+50]
+    ];
+    // Front garden — thin strip directly in front of front wall
+    var frontGarden = [SW, gBaseEnd, [gBaseEnd[0], gBaseEnd[1]+8], [SW[0], SW[1]+8]];
+    // Drive grass — strips left & right of driveway
+    var driveGrassLeft = [gBaseEnd, [gBaseEnd[0]-22, gBaseEnd[1]+4], [drOutEnd[0]-10, drOutEnd[1]+6], drOutEnd];
+    var driveGrassRight = [gBaseStart, drOutStart, [drOutStart[0]+30, drOutStart[1]+8], [gBaseStart[0]+30, gBaseStart[1]+12]];
+
+    // Pool position (in backyard, behind & left of house)
+    var poolCX = (lotNW[0] + NW[0]) / 2 + 20;
+    var poolCY = (lotNW[1] + NW[1]) / 2;
+    var poolPts = [
+      [poolCX - 40, poolCY],
+      [poolCX, poolCY - 18],
+      [poolCX + 40, poolCY],
+      [poolCX, poolCY + 18]
+    ];
+
+    // Build SVG
+    var svg = [];
+    svg.push('<svg class="house-svg" viewBox="0 0 600 480" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid meet">');
+
+    // Subtle ground gradient for depth
+    svg.push('<defs><linearGradient id="gg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#eef5da"/><stop offset="1" stop-color="#dde6c8"/></linearGradient></defs>');
+
+    // Ground / lot
+    svg.push('<polygon points="'+ [lotNW, lotNE, lotSE, lotSW].map(function(p){return p.join(',');}).join(' ') +'" fill="url(#gg)"/>');
+
+    // Sidewalk + street (drawn before zones so zones sit on top of grass area)
+    svg.push(poly([sidewalkLeft, sidewalkRight, sidewalkBR, sidewalkBL], 'sidewalk'));
+    var streetTopL = sidewalkBL, streetTopR = sidewalkBR;
+    svg.push(poly([streetTopL, streetTopR, [streetTopR[0]+40, streetTopR[1]+50], [streetTopL[0]-40, streetTopL[1]+50]], 'street'));
+    // Yellow dash line
+    svg.push('<line x1="'+(streetTopL[0]+10)+'" y1="'+(streetTopL[1]+24)+'" x2="'+(streetTopR[0]+30)+'" y2="'+(streetTopR[1]+24)+'" stroke="#f4c842" stroke-width="2" stroke-dasharray="10,8"/>');
+
+    // ZONES
+    svg.push(poly(backLawn, 'lawn', ' data-zone-target="back-lawn"'));
+    svg.push(poly(sideGrass, 'lawn', ' data-zone-target="side-grass"'));
+    svg.push(poly(frontLawn, 'lawn', ' data-zone-target="front-lawn"'));
+    svg.push(poly(driveGrassLeft, 'lawn', ' data-zone-target="drive-grass"'));
+    svg.push(poly(driveGrassRight, 'lawn', ' data-zone-target="drive-grass"'));
+    svg.push(poly(frontGarden, 'garden', ' data-zone-target="front-garden"'));
+    svg.push(poly(sidePlants, 'plant', ' data-zone-target="side-plants"'));
+    svg.push(poly(backPlants, 'plant', ' data-zone-target="back-plants"'));
+
+    // Pool — separate group to fade in
+    svg.push('<g class="pool" data-zone-target="back-pool">');
+    svg.push('<polygon points="'+ poolPts.map(function(p){return p.join(',');}).join(' ') +'" fill="#6ebcd6" stroke="#3e7e9c" stroke-width="1.5"/>');
+    svg.push('<polygon points="'+ poolPts.map(function(p){return p.join(',');}).join(' ') +'" fill="none" stroke="#fff" stroke-width="1" opacity="0.4"/>');
+    svg.push('</g>');
+
+    // Hedges along driveway (small accent strips)
+    var hedgeL = [[gBaseEnd[0]-26, gBaseEnd[1]+5], [gBaseEnd[0]-22, gBaseEnd[1]+1], [drOutEnd[0]-12, drOutEnd[1]+2], [drOutEnd[0]-16, drOutEnd[1]+8]];
+    var hedgeR = [[gBaseStart[0]+10, gBaseStart[1]+4], [gBaseStart[0]+14, gBaseStart[1]], [drOutStart[0]+22, drOutStart[1]+2], [drOutStart[0]+18, drOutStart[1]+8]];
+    svg.push(poly(hedgeL, 'hedge', ' data-zone-target="drive-hedges"'));
+    svg.push(poly(hedgeR, 'hedge', ' data-zone-target="drive-hedges"'));
+
+    // Driveway
+    svg.push(poly([gBaseEnd, gBaseStart, drOutStart, drOutEnd], 'driveway'));
+
+    // Soft house shadow
+    svg.push('<ellipse class="shadow" cx="'+CX+'" cy="'+(CY + 65*s)+'" rx="'+(110*s)+'" ry="14"/>');
+
+    // === HOUSE STRUCTURE ===
+    // (Right side wall — visible because camera is upper-front-right)
+    svg.push(poly([SE, NE, NE_t, SE_t], 'wall-side'));
+    // Front wall (faces camera)
+    svg.push(poly([SW, SE, SE_t, SW_t], 'wall-front'));
+
+    // Front door — left portion of front wall (left of garage)
+    var doorT = 0.10; // along front wall left-to-right
+    var doorAnchorTop = [SW_t[0] + (SE_t[0]-SW_t[0])*doorT, SW_t[1] + (SE_t[1]-SW_t[1])*doorT];
+    var doorAnchorBot = [SW[0] + (SE[0]-SW[0])*doorT, SW[1] + (SE[1]-SW[1])*doorT];
+    var doorH = 38 * s, doorW = 12 * s;
+    var doorTopL = [doorAnchorTop[0] - doorW/2, doorAnchorTop[1] + (WALL_H - doorH) * 0.55];
+    var doorTopR = [doorAnchorTop[0] + doorW/2, doorAnchorTop[1] + (WALL_H - doorH) * 0.55 - 1];
+    var doorBotL = [doorAnchorBot[0] - doorW/2, doorAnchorBot[1] - 1];
+    var doorBotR = [doorAnchorBot[0] + doorW/2, doorAnchorBot[1] - 2];
+    svg.push(poly([doorBotL, doorBotR, doorTopR, doorTopL], 'door'));
+    svg.push('<circle class="door-handle" cx="'+(doorTopR[0] - 2)+'" cy="'+(doorTopR[1] + doorH * 0.55)+'" r="1.4"/>');
+
+    // Front windows (avoid garage zone)
+    var gStartT_X = gEndT[0]; // garage starts at this x along front wall
+    function frontWin(t, isUpper) {
+      var anchorT = [SW_t[0] + (SE_t[0]-SW_t[0])*t, SW_t[1] + (SE_t[1]-SW_t[1])*t];
+      var w = 11 * s, h = 13 * s;
+      var yOff = isUpper ? 8 * s : 28 * s;
+      return poly([
+        [anchorT[0]-w/2, anchorT[1]+yOff],
+        [anchorT[0]+w/2, anchorT[1]+yOff-1],
+        [anchorT[0]+w/2, anchorT[1]+yOff+h-1],
+        [anchorT[0]-w/2, anchorT[1]+yOff+h]
+      ], 'window');
+    }
+    // Upper-storey windows above ground floor (always shown)
+    svg.push(frontWin(0.10, true));
+    svg.push(frontWin(0.28, true));
+    if (gw < 0.7) svg.push(frontWin(0.46, true));
+    // Ground-floor window left of door (only if room)
+    if (doorT > 0.04) svg.push(frontWin(0.05, false));
+    // Ground-floor windows right of door, before garage
+    if ((1 - gw) > 0.32) svg.push(frontWin(0.28, false));
+
+    // Side windows (right wall, NE-SE face)
+    function sideWin(t, isUpper) {
+      var anchor = [SE_t[0] + (NE_t[0]-SE_t[0])*t, SE_t[1] + (NE_t[1]-SE_t[1])*t];
+      var w = 11 * s, h = 13 * s;
+      var yOff = isUpper ? 8 * s : 28 * s;
+      return poly([
+        [anchor[0]-w/2, anchor[1]+yOff],
+        [anchor[0]+w/2, anchor[1]+yOff-2],
+        [anchor[0]+w/2, anchor[1]+yOff+h-2],
+        [anchor[0]-w/2, anchor[1]+yOff+h]
+      ], 'window');
+    }
+    svg.push(sideWin(0.30, true));
+    svg.push(sideWin(0.65, true));
+    svg.push(sideWin(0.30, false));
+    svg.push(sideWin(0.65, false));
+
+    // Garage door
+    svg.push(poly([gEndT, gStartT, gStartB, gEndB], 'garage-door'));
+    // Garage door panel lines
+    for (var i = 1; i <= 3; i++) {
+      var t = i / 4;
+      var leftP = [gEndT[0], gEndT[1] + (gEndB[1]-gEndT[1]) * t];
+      var rightP = [gStartT[0], gStartT[1] + (gStartB[1]-gStartT[1]) * t];
+      svg.push('<line class="garage-panel" x1="'+leftP[0]+'" y1="'+leftP[1]+'" x2="'+rightP[0]+'" y2="'+rightP[1]+'"/>');
+    }
+
+    // === ROOF ===
+    // Front gable triangle (small, on top of front wall)
+    svg.push(poly([SW_t, SE_t, ridgeFront], 'roof-front'));
+    // Right (long) roof slope — visible side, brighter
+    svg.push(poly([SE_t, NE_t, ridgeBack, ridgeFront], 'roof-front'));
+    // Left roof slope — partly visible, darker
+    svg.push(poly([SW_t, NW_t, ridgeBack, ridgeFront], 'roof-side'));
+    // Back gable (mostly hidden but adds depth)
+    svg.push(poly([NW_t, NE_t, ridgeBack], 'roof-side'));
+    // Roof ridge line
+    svg.push('<line class="roof-ridge" x1="'+ridgeFront[0]+'" y1="'+ridgeFront[1]+'" x2="'+ridgeBack[0]+'" y2="'+ridgeBack[1]+'"/>');
+    // Eave shadow line (under roof overhang on front)
+    svg.push('<line stroke="rgba(0,0,0,0.18)" stroke-width="1.5" x1="'+SW_t[0]+'" y1="'+SW_t[1]+'" x2="'+SE_t[0]+'" y2="'+SE_t[1]+'"/>');
+
+    // Chimney — on right roof slope, near back
+    var chimX = SE_t[0] * 0.30 + ridgeBack[0] * 0.70;
+    var chimY = SE_t[1] * 0.30 + ridgeBack[1] * 0.70;
+    var chimW = 12 * s, chimH = 24 * s;
+    svg.push('<rect class="chimney-body" x="'+(chimX - chimW/2)+'" y="'+(chimY - chimH)+'" width="'+chimW+'" height="'+chimH+'" rx="1"/>');
+    svg.push('<rect class="chimney-top" x="'+(chimX - chimW/2 - 2)+'" y="'+(chimY - chimH - 4)+'" width="'+(chimW + 4)+'" height="5" rx="1"/>');
+
+    // === TREES ===
+    // Drive-side trees (2)
+    svg.push(treeSvg(drOutEnd[0]-30, drOutEnd[1]-4, 14, 'drive-trees'));
+    svg.push(treeSvg(drOutStart[0]+38, drOutStart[1]-4, 14, 'drive-trees'));
+    // Backyard trees (4)
+    svg.push(treeSvg(lotNW[0]+45, lotNW[1]+40, 18, 'back-trees'));
+    svg.push(treeSvg(lotNE[0]-45, lotNE[1]+50, 18, 'back-trees'));
+    svg.push(treeSvg(NW[0]-25, NW[1]-30, 14, 'back-trees'));
+    svg.push(treeSvg(NE[0]+30, NE[1]-25, 14, 'back-trees'));
+
+    // === SPRINKLER HEADS ===
+    function sprinkler(x, y, zone) {
+      return '<g class="sprinkler" data-sprinkler="'+zone+'">' +
+        '<circle cx="'+x+'" cy="'+y+'" r="6" fill="none" stroke="#2d6a9e" stroke-width="0.8" stroke-dasharray="2,2" opacity="0.55"/>' +
+        '<circle cx="'+x+'" cy="'+y+'" r="3" fill="#2d6a9e" stroke="#fff" stroke-width="1"/>' +
+      '</g>';
+    }
+    svg.push(sprinkler((SW[0] + gBaseEnd[0]) / 2, (SW[1] + drOutEnd[1]) / 2 + 8, 'front-lawn'));
+    svg.push(sprinkler((SW[0] + gBaseEnd[0]) / 2, SW[1] + 4, 'front-garden'));
+    svg.push(sprinkler((NW[0] + NE[0]) / 2 + 8, NW[1] - 30, 'back-lawn'));
+    svg.push(sprinkler((NW[0] + NE[0]) / 2 + 4, NW[1] - 4, 'back-plants'));
+    svg.push(sprinkler((NE[0] + lotSE[0]) / 2 - 8, (NE[1] + SE[1]) / 2, 'side-grass'));
+    svg.push(sprinkler((drOutStart[0] + drOutEnd[0]) / 2 + 35, (drOutStart[1] + drOutEnd[1]) / 2 + 4, 'drive-grass'));
+
+    svg.push('</svg>');
+    return svg.join('');
+  }
+
+  // Iso tree: foliage (layered ellipses) + trunk
+  function treeSvg(x, y, size, zone) {
+    return '<g class="tree" data-zone-target="'+zone+'">' +
+      '<ellipse cx="'+x+'" cy="'+(y+size*0.6)+'" rx="'+(size*0.35)+'" ry="'+(size*0.14)+'" fill="rgba(0,0,0,0.12)"/>' + // shadow
+      '<rect x="'+(x-size*0.08)+'" y="'+(y+size*0.12)+'" width="'+(size*0.16)+'" height="'+(size*0.5)+'" fill="#6b4a2b"/>' + // trunk
+      '<ellipse cx="'+x+'" cy="'+y+'" rx="'+(size*0.6)+'" ry="'+(size*0.45)+'" fill="#4a8c5c"/>' + // foliage main
+      '<ellipse cx="'+(x-size*0.25)+'" cy="'+(y-size*0.2)+'" rx="'+(size*0.35)+'" ry="'+(size*0.3)+'" fill="#5fa371"/>' + // highlight blob
+      '<ellipse cx="'+(x+size*0.2)+'" cy="'+(y-size*0.15)+'" rx="'+(size*0.3)+'" ry="'+(size*0.26)+'" fill="#5fa371"/>' + // highlight blob
+    '</g>';
   }
 
   /* ===== Pricing logic ===== */
@@ -1049,14 +1336,9 @@
     // Caption
     document.getElementById('qCaption').innerHTML = captionFor(state.step);
 
-    // View tag
+    // View tag — superseded by the in-image .house-view-tag pill; keep hidden
     var vt = document.getElementById('qViewTag');
-    if (vt) {
-      if (state.step === 6) { vt.style.display = 'inline-block'; vt.textContent = 'Front of House'; }
-      else if (state.step === 7) { vt.style.display = 'inline-block'; vt.textContent = 'Back of House'; }
-      else if (state.step >= 4) { vt.style.display = 'inline-block'; vt.textContent = 'Property View'; }
-      else { vt.style.display = 'none'; }
-    }
+    if (vt) vt.style.display = 'none';
 
     // Nav buttons
     var nav = document.getElementById('qNav');
@@ -1090,20 +1372,112 @@
     return '';
   }
 
+  var ZONE_LABELS = {
+    'front-lawn': '🌱 Front Lawn',
+    'front-garden': '🌷 Front Garden',
+    'drive-grass': '🌱 Driveway Grass',
+    'drive-hedges': '🌿 Driveway Hedges',
+    'drive-trees': '🌳 Driveway Trees',
+    'side-grass': '🌱 Side Grass',
+    'side-plants': '🌿 Side Plants',
+    'back-lawn': '🌱 Backyard Lawn',
+    'back-plants': '🌿 Backyard Plants',
+    'back-pool': '🏊 Pool Perimeter',
+    'back-trees': '🌳 Backyard Trees'
+  };
+
+  // Default single-image fallback (used for sizes without layered scenes yet)
+  var HOUSE_IMG = {
+    small:   'Home-small.png',
+    medium:  'Home-medium.png',
+    large:   'Home-large.png',
+    acreage: 'Home-estate.png'
+  };
+
+  // Sizes that have full layered scene sets ready
+  var LAYERED_SIZES = { small: true, medium: true, large: true, acreage: true };
+
+  // Decide which scene level (0-3) to show based on selected zones + view
+  function frontLevel(zones) {
+    if (zones.indexOf('drive-trees') !== -1) return 3;
+    if (zones.indexOf('drive-hedges') !== -1) return 2;
+    if (zones.indexOf('front-garden') !== -1) return 1;
+    return 0;
+  }
+  function backLevel(zones) {
+    if (zones.indexOf('back-pool') !== -1) return 3;
+    if (zones.indexOf('back-plants') !== -1) return 2;
+    if (zones.indexOf('back-trees') !== -1) return 1;
+    return 0;
+  }
+
+  // Build a layered-scene image path based on size, view, and zone selections
+  function layeredImgSrc(size, view, zones) {
+    var lvl = (view === 'back') ? backLevel(zones) : frontLevel(zones);
+    return 'home-' + size + '-' + view + '-' + lvl + '.png';
+  }
+
+  // Pick the right image for the current step
+  function pickImg() {
+    var size = state.propertySize;
+    if (!size) return null;
+
+    // For sizes with full layered sets:
+    if (LAYERED_SIZES[size]) {
+      // Step 7 = back yard view; everything else = front view
+      var view = (state.step === 7) ? 'back' : 'front';
+      // For step 4 (size pick) and step 5 (basement), show richest front so they see "potential"
+      if (state.step <= 5) return 'home-' + size + '-front-3.png';
+      // Step 6 — front view, level driven by their front-yard picks
+      // Step 7 — back view, level driven by back-yard picks
+      // Step 8 — show richest configured scene (back wins if any back zones picked, else front)
+      if (state.step >= 8) {
+        var hasBack = ['back-trees','back-plants','back-pool'].some(function(z){ return state.zones.indexOf(z) !== -1; });
+        if (hasBack) view = 'back';
+        else view = 'front';
+      }
+      return layeredImgSrc(size, view, state.zones);
+    }
+
+    // Sizes without layered scenes — use the single fallback image
+    return HOUSE_IMG[size] || HOUSE_IMG.medium;
+  }
+
   function renderVisual() {
     var visual = document.getElementById('qVisual');
     if (!visual) return;
+    var pills = document.getElementById('qZonePills');
     var size = state.propertySize;
+
     if (!size) {
       visual.innerHTML = '<div style="text-align:center;color:var(--text-muted);font-size:14px;padding:32px;">Your property visualization will appear here as you answer questions.<br><br>🏡</div>';
+      if (pills) pills.innerHTML = '';
       return;
     }
-    visual.innerHTML = houseSvg(size);
-    // Activate selected zones
-    state.zones.forEach(function(z){
-      visual.querySelectorAll('[data-zone-target="' + z + '"]').forEach(function(el){ el.classList.add('is-active'); });
-      visual.querySelectorAll('[data-sprinkler="' + z + '"]').forEach(function(el){ el.classList.add('is-active'); });
-    });
+
+    var imgSrc = pickImg();
+    var viewLabel = '';
+    if (LAYERED_SIZES[size]) {
+      if (state.step === 6) viewLabel = '<span class="house-view-tag">📍 Front of House</span>';
+      else if (state.step === 7) viewLabel = '<span class="house-view-tag">📍 Back of House</span>';
+    }
+
+    visual.innerHTML =
+      '<div class="house-img-wrap">' +
+        viewLabel +
+        '<img class="house-img" src="' + imgSrc + '" alt="' + size + ' property illustration">' +
+      '</div>';
+
+    // Render zone pills below the stage (in their dedicated container)
+    if (pills) {
+      if (state.zones.length === 0) {
+        pills.innerHTML = '<span class="house-zones-pills__empty">No zones selected yet — pick some on the next steps.</span>';
+      } else {
+        pills.innerHTML = state.zones.map(function(z){
+          return '<span class="house-zones-pills__chip">' + (ZONE_LABELS[z] || z) + '</span>';
+        }).join('');
+      }
+    }
   }
 
   function renderSummary() {
@@ -1213,6 +1587,30 @@
     document.getElementById(id).addEventListener('input', function(){
       document.getElementById('qNext').disabled = !canAdvance();
     });
+  });
+
+  // Reset / start over
+  document.getElementById('qReset').addEventListener('click', function(){
+    if (!confirm('Clear all your selections and start over?')) return;
+    state = {
+      step: 1,
+      propertyType: null,
+      projectType: null,
+      landscapeStatus: null,
+      propertySize: null,
+      basement: null,
+      zones: []
+    };
+    try { localStorage.removeItem('pjl_quote'); } catch(e){}
+    // Clear contact form fields too
+    ['qName','qPhone','qEmail','qAddress','qNotes'].forEach(function(id){
+      var el = document.getElementById(id);
+      if (el) el.value = '';
+    });
+    renderStep();
+    // Smooth scroll back to top of wizard
+    var top = document.querySelector('.quote-progress');
+    if (top && top.scrollIntoView) top.scrollIntoView({ behavior: 'smooth', block: 'start' });
   });
 
   function submitQuote() {
