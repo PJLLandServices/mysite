@@ -1,0 +1,24 @@
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*~
+
+# Working / archive folder (originals before being copied to project root)
+Website Build/
+
+# Audit artifacts
+responsive-audit/
+
+# Temp files
+*.tmp
+*.log
+
+# Memory / Claude project files (don't commit private notes)
+memory/
+.claude/

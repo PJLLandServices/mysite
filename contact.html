@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="description" content="Contact PJL Land Services — Newmarket's lawn sprinkler and landscape lighting experts. Call (905) 960-0181 or book online.">
+<title>Contact Us | PJL Land Services — Newmarket & GTA</title>
+<link rel="stylesheet" href="style.css">
+<style>
+.page-hero {
+  padding: 150px 0 68px;
+  background: linear-gradient(135deg, var(--dark), var(--green));
+  position: relative;
+}
+.page-hero h1 {
+  color: #fff;
+  margin-bottom: 12px;
+  max-width: min(14ch, 100%);
+  font-size: clamp(38px, 5vw, 64px);
+  line-height: 1.02;
+  letter-spacing: -0.04em;
+}
+.page-hero p {
+  color: rgba(255,255,255,0.8);
+  font-size: clamp(16px, 2vw, 18px);
+  max-width: 46ch;
+  line-height: 1.7;
+}
+
+.contact-grid {
+  display: grid;
+  grid-template-columns: minmax(280px, 0.92fr) minmax(0, 1.08fr);
+  gap: 48px;
+  align-items: start;
+}
+.contact-info-card {
+  background: var(--green);
+  border-radius: var(--r-xl);
+  padding: 40px;
+  color: #fff;
+  position: sticky;
+  top: clamp(112px, 11vw, 148px);
+}
+.contact-info-card h3 { color: #fff; margin-bottom: 8px; }
+.contact-info-card > p { color: rgba(255,255,255,0.75); font-size: 14px; margin-bottom: 32px; }
+.contact-detail {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  margin-bottom: 20px;
+  padding-bottom: 20px;
+  border-bottom: 1px solid rgba(255,255,255,0.12);
+}
+.contact-detail:last-of-type { border-bottom: none; }
+.contact-detail-icon {
+  width: 40px; height: 40px;
+  border-radius: 10px;
+  background: rgba(255,255,255,0.12);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 18px;
+  flex-shrink: 0;
+}
+.contact-detail-text h5 { color: #fff; font-family: 'DM Sans', sans-serif; font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 4px; opacity: 0.6; }
+.contact-detail-text a, .contact-detail-text p { color: rgba(255,255,255,0.9); font-size: 15px; font-weight: 500; margin-bottom: 0; overflow-wrap: anywhere; }
+.contact-detail-text a:hover { color: var(--amber-light); }
+.hours-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 6px; }
+.hours-row { font-size: 13px; color: rgba(255,255,255,0.75); }
+.hours-row strong { color: rgba(255,255,255,0.95); }
+
+.booking-section {
+  background: var(--white);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xl);
+  padding: 40px;
+  margin-bottom: 24px;
+}
+.booking-section h3 { margin-bottom: 8px; }
+.booking-section p { font-size: 14px; color: var(--text-muted); margin-bottom: 24px; }
+.booking-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+.booking-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 18px 20px;
+  border-radius: var(--r-lg);
+  border: 1.5px solid var(--border);
+  transition: all 0.2s;
+  cursor: pointer;
+  background: var(--white);
+  text-decoration: none;
+}
+.booking-btn:hover { border-color: var(--green); background: var(--green-pale); transform: translateY(-2px); }
+.booking-btn .bb-icon { font-size: 24px; margin-bottom: 6px; }
+.booking-btn .bb-title { font-size: 14px; font-weight: 600; color: var(--text); }
+.booking-btn .bb-sub { font-size: 12px; color: var(--text-muted); }
+
+.contact-form-section {
+  background: var(--white);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xl);
+  padding: 40px;
+}
+.contact-form-section h3 { margin-bottom: 8px; }
+.contact-form-section > p { font-size: 14px; color: var(--text-muted); margin-bottom: 28px; }
+.form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.form-group { display: flex; flex-direction: column; gap: 6px; }
+.form-group.full { grid-column: 1 / -1; }
+.form-group label { font-size: 13px; font-weight: 500; color: var(--text-mid); }
+.form-group input,
+.form-group select,
+.form-group textarea {
+  padding: 13px 16px;
+  border: 1.5px solid var(--border);
+  border-radius: var(--r);
+  font-size: 15px;
+  font-family: 'DM Sans', sans-serif;
+  color: var(--text);
+  background: var(--cream);
+  outline: none;
+  transition: border-color 0.15s;
+  width: 100%;
+}
+.form-group input:focus,
+.form-group select:focus,
+.form-group textarea:focus { border-color: var(--green); background: var(--white); }
+.form-group textarea { resize: vertical; min-height: 100px; }
+.req { color: var(--amber); }
+.form-submit-row { grid-column: 1 / -1; margin-top: 8px; }
+
+.map-wrap {
+  border-radius: var(--r-xl);
+  overflow: hidden;
+  height: 320px;
+  border: 1px solid var(--border);
+  margin-top: 24px;
+  background: var(--green-pale);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+}
+.map-placeholder {
+  text-align: center;
+  color: var(--green);
+}
+.map-placeholder .map-icon { font-size: 48px; margin-bottom: 12px; }
+.map-placeholder h4 { font-family: 'DM Sans', sans-serif; margin-bottom: 4px; }
+.map-placeholder p { font-size: 14px; color: var(--text-muted); }
+
+@media (max-width: 1040px) {
+  .contact-grid { grid-template-columns: 1fr; }
+  .contact-info-card { position: static; }
+}
+@media (max-width: 760px) {
+  .booking-grid { grid-template-columns: 1fr; }
+  .form-grid { grid-template-columns: 1fr; }
+  .form-group.full { grid-column: 1; }
+}
+@media (max-width: 640px) {
+  .page-hero {
+    padding: 132px 0 52px;
+  }
+  .page-hero h1 {
+    font-size: clamp(32px, 9vw, 42px);
+  }
+  .page-hero p {
+    font-size: 16px;
+  }
+  .contact-info-card,
+  .booking-section,
+  .contact-form-section {
+    padding: 28px 22px;
+  }
+}
+</style>
+</head>
+<body>
+
+<nav class="nav nav-solid">
+  <div class="nav-inner">
+  <a href="index.html" class="nav-logo"><img src="logo.svg" alt="PJL Land Services"></a>
+  <div class="nav-main">
+    <ul class="nav-links">
+      <li><a href="index.html">Home</a></li>
+      <li><a href="sprinkler-systems.html">Sprinkler Systems</a></li>
+      <li><a href="landscape-lighting.html">Landscape Lighting</a></li>
+      <li><a href="estimate.html">Get Estimate</a></li>
+      <li><a href="faq.html">FAQ</a></li>
+      <li><a href="contact.html">Contact</a></li>
+    </ul>
+    <div class="nav-utility">
+      <a href="https://calendar.app.google/ktWefWX55H1fqGCHA" target="_blank" class="nav-cta">Book Online</a>
+      <a href="tel:+19059600181" class="phone-strip-link nav-phone-link">
+        <span class="phone-strip-icon">📞</span>
+        <span>(905) 960-0181</span>
+      </a>
+    </div>
+  </div>
+  <div class="nav-hamburger"><span></span><span></span><span></span></div>
+  </div>
+</nav>
+<div class="nav-mobile">
+  <a href="index.html">Home</a>
+  <a href="sprinkler-systems.html">Sprinkler Systems</a>
+  <a href="landscape-lighting.html">Landscape Lighting</a>
+  <a href="estimate.html">Get a Free Estimate</a>
+  <a href="faq.html">FAQ</a>
+  <a href="contact.html">Contact</a>
+  <a href="tel:+19059600181">📞 (905) 960-0181</a>
+  <a href="https://calendar.app.google/ktWefWX55H1fqGCHA" target="_blank" class="nav-mobile-cta">Book Online →</a>
+</div>
+
+<section class="page-hero">
+  <div class="container">
+    <span class="section-tag amber">Get In Touch</span>
+    <h1>Let's Talk About Your Project</h1>
+    <p>Whether you need a quick service call or want to plan a full installation, we're here to help. No pressure, no obligation.</p>
+  </div>
+</section>
+
+<section class="section">
+  <div class="container">
+    <div class="contact-grid">
+
+      <!-- Left: Contact Info -->
+      <div>
+        <div class="contact-info-card">
+          <h3>Contact Information</h3>
+          <p>Reach us directly or book online — we respond to all enquiries within 1 business day.</p>
+
+          <div class="contact-detail">
+            <div class="contact-detail-icon">📞</div>
+            <div class="contact-detail-text">
+              <h5>Phone</h5>
+              <a href="tel:+19059600181">(905) 960-0181</a>
+            </div>
+          </div>
+          <div class="contact-detail">
+            <div class="contact-detail-icon">✉️</div>
+            <div class="contact-detail-text">
+              <h5>Email</h5>
+              <a href="mailto:info@pjllandservices.com">info@pjllandservices.com</a>
+            </div>
+          </div>
+          <div class="contact-detail">
+            <div class="contact-detail-icon">📍</div>
+            <div class="contact-detail-text">
+              <h5>Location</h5>
+              <p>Newmarket, Ontario, Canada</p>
+              <p style="font-size:13px;opacity:0.7;margin-top:2px;">Serving the Greater Toronto Area</p>
+            </div>
+          </div>
+          <div class="contact-detail">
+            <div class="contact-detail-icon">🕐</div>
+            <div class="contact-detail-text">
+              <h5>Hours</h5>
+              <div class="hours-grid">
+                <span class="hours-row"><strong>Mon–Fri</strong></span>
+                <span class="hours-row">8am – 6pm</span>
+                <span class="hours-row"><strong>Saturday</strong></span>
+                <span class="hours-row">8am – 4pm</span>
+                <span class="hours-row"><strong>Sunday</strong></span>
+                <span class="hours-row">Closed</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="map-wrap" style="margin-top:24px;">
+          <div class="map-placeholder">
+            <div class="map-icon">📍</div>
+            <h4>Newmarket, Ontario</h4>
+            <p>Serving Newmarket, Aurora, Barrie, Richmond Hill, Bradford &amp; the GTA</p>
+            <a href="https://maps.google.com/?q=Newmarket,Ontario" target="_blank" class="btn btn-green btn-sm" style="margin-top:14px;display:inline-flex;">Open in Google Maps</a>
+          </div>
+        </div>
+      </div>
+
+      <!-- Right: Booking + Form -->
+      <div>
+
+        <!-- Booking options -->
+        <div class="booking-section">
+          <h3>Book a Service</h3>
+          <p>Use our online booking for seasonal services, or send us an enquiry for installations and quotes.</p>
+          <div class="booking-grid">
+            <a href="https://calendar.app.google/ktWefWX55H1fqGCHA" target="_blank" class="booking-btn">
+              <span class="bb-icon">🌿</span>
+              <span class="bb-title">Spring Opening</span>
+              <span class="bb-sub">Book your seasonal start-up</span>
+            </a>
+            <a href="https://calendar.app.google/ktWefWX55H1fqGCHA" target="_blank" class="booking-btn">
+              <span class="bb-icon">🍂</span>
+              <span class="bb-title">Fall Closing</span>
+              <span class="bb-sub">Schedule your winterization</span>
+            </a>
+            <a href="https://calendar.app.google/ktWefWX55H1fqGCHA" target="_blank" class="booking-btn">
+              <span class="bb-icon">🔧</span>
+              <span class="bb-title">Service Call</span>
+              <span class="bb-sub">Repair or diagnosis visit</span>
+            </a>
+            <a href="estimate.html" class="booking-btn">
+              <span class="bb-icon">📋</span>
+              <span class="bb-title">Get an Estimate</span>
+              <span class="bb-sub">New installation quote</span>
+            </a>
+          </div>
+        </div>
+
+        <!-- Contact form -->
+        <div class="contact-form-section">
+          <h3>Send Us a Message</h3>
+          <p>Have a question or want to discuss your project? Fill in your details and we'll get back to you promptly.</p>
+          <form onsubmit="handleSubmit(event)">
+            <div class="form-grid">
+              <div class="form-group">
+                <label>First name <span class="req">*</span></label>
+                <input type="text" id="cf-first" placeholder="Patrick" required>
+              </div>
+              <div class="form-group">
+                <label>Last name</label>
+                <input type="text" id="cf-last" placeholder="Smith">
+              </div>
+              <div class="form-group">
+                <label>Email address <span class="req">*</span></label>
+                <input type="email" id="cf-email" placeholder="you@example.com" required>
+              </div>
+              <div class="form-group">
+                <label>Phone number <span class="req">*</span></label>
+                <input type="tel" id="cf-phone" placeholder="(905) 555-0100" required>
+              </div>
+              <div class="form-group full">
+                <label>Property address / city</label>
+                <input type="text" id="cf-address" placeholder="Newmarket, ON">
+              </div>
+              <div class="form-group full">
+                <label>What can we help you with?</label>
+                <select id="cf-service">
+                  <option value="">Select a service...</option>
+                  <option>Spring Opening</option>
+                  <option>Fall Closing</option>
+                  <option>Sprinkler Repair / Diagnosis</option>
+                  <option>New Sprinkler System Installation</option>
+                  <option>Smart Controller Upgrade</option>
+                  <option>Landscape Lighting Installation</option>
+                  <option>General Inquiry</option>
+                </select>
+              </div>
+              <div class="form-group full">
+                <label>Message</label>
+                <textarea id="cf-message" placeholder="Tell us about your property and what you're looking for..."></textarea>
+              </div>
+              <div class="form-submit-row">
+                <button type="submit" class="btn btn-green" style="width:100%;justify-content:center;">Send Message →</button>
+              </div>
+            </div>
+          </form>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<footer class="footer">
+  <div class="container">
+    <div class="footer-grid">
+      <div class="footer-brand">
+        <img src="logo.svg" alt="PJL Land Services">
+        <p>Newmarket's trusted lawn sprinkler and landscape lighting experts.</p>
+        <div class="footer-social">
+          <a href="https://www.facebook.com/pjllandservices" target="_blank">f</a>
+          <a href="https://www.instagram.com/pjllandservices" target="_blank">in</a>
+        </div>
+      </div>
+      <div class="footer-col"><h5>Services</h5><ul><li><a href="sprinkler-systems.html">Sprinkler Systems</a></li><li><a href="landscape-lighting.html">Landscape Lighting</a></li><li><a href="estimate.html">Get an Estimate</a></li></ul></div>
+      <div class="footer-col"><h5>Company</h5><ul><li><a href="index.html">Home</a></li><li><a href="faq.html">FAQ</a></li><li><a href="contact.html">Contact</a></li></ul></div>
+      <div class="footer-col">
+        <h5>Contact</h5>
+        <div class="footer-contact-item"><span>📞</span><a href="tel:+19059600181" style="color:rgba(255,255,255,0.65)">(905) 960-0181</a></div>
+        <div class="footer-contact-item"><span>✉️</span><a href="mailto:info@pjllandservices.com" style="color:rgba(255,255,255,0.65)">info@pjllandservices.com</a></div>
+        <div class="footer-contact-item"><span>📍</span><span>Newmarket, Ontario</span></div>
+      </div>
+    </div>
+    <div class="footer-bottom">
+      <p>© 2026 PJL Land Services. All rights reserved.</p>
+      <div class="footer-bottom-links"><a href="#">Privacy Policy</a><a href="#">Terms of Service</a></div>
+    </div>
+  </div>
+</footer>
+
+<script src="nav.js"></script>
+<script>
+function handleSubmit(e) {
+  e.preventDefault();
+  const first   = document.getElementById('cf-first').value.trim();
+  const last    = document.getElementById('cf-last').value.trim();
+  const email   = document.getElementById('cf-email').value.trim();
+  const phone   = document.getElementById('cf-phone').value.trim();
+  const address = document.getElementById('cf-address').value.trim();
+  const service = document.getElementById('cf-service').value;
+  const message = document.getElementById('cf-message').value.trim();
+  const subj = encodeURIComponent('Website Enquiry — ' + service + ' | ' + first + ' ' + last);
+  const body = encodeURIComponent(
+    'Website Enquiry — pjllandservices.com\n\n' +
+    'Name: ' + first + ' ' + last + '\n' +
+    'Email: ' + email + '\n' +
+    'Phone: ' + phone + '\n' +
+    'Address: ' + (address || 'Not provided') + '\n' +
+    'Service: ' + (service || 'Not selected') + '\n\n' +
+    'Message:\n' + (message || 'No message provided.')
+  );
+  window.location.href = 'mailto:info@pjllandservices.com?subject=' + subj + '&body=' + body;
+}
+</script>
+</body>
+</html>

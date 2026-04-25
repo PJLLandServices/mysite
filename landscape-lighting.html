@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="description" content="PJL Land Services — Professional landscape lighting design and installation in Newmarket and the GTA. Custom LED systems that enhance curb appeal, improve safety, and transform your property after dark.">
+<title>Landscape Lighting | PJL Land Services — Newmarket & GTA</title>
+<link rel="stylesheet" href="style.css">
+<style>
+.page-hero {
+  padding: 156px 0 72px;
+  position: relative;
+  overflow: hidden;
+}
+.page-hero::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image: url('https://static.wixstatic.com/media/10e473_2c40a267495c45a584eeff8d88795a1c~mv2.png');
+  background-size: cover;
+  background-position: center;
+}
+.page-hero::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(135deg, rgba(15,31,20,0.88) 0%, rgba(15,31,20,0.6) 100%);
+}
+.page-hero-content { position: relative; z-index: 2; max-width: 700px; }
+.page-hero h1 {
+  color: #fff;
+  margin-bottom: 16px;
+  max-width: min(14.5ch, 100%);
+  font-size: clamp(38px, 5vw, 68px);
+  line-height: 1.02;
+  letter-spacing: -0.04em;
+}
+.page-hero p {
+  color: rgba(255,255,255,0.82);
+  font-size: clamp(16px, 2vw, 18px);
+  max-width: 46ch;
+  margin-bottom: 32px;
+  line-height: 1.7;
+}
+
+.benefits-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 24px;
+}
+.benefit-card {
+  background: var(--white);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  padding: 28px 24px;
+  transition: all 0.3s;
+}
+.benefit-card:hover { transform: translateY(-4px); box-shadow: var(--shadow); border-color: var(--green-pale); }
+.benefit-icon { font-size: 32px; margin-bottom: 16px; display: block; }
+.benefit-card h4 { font-family: 'DM Sans', sans-serif; font-size: 17px; font-weight: 600; margin-bottom: 8px; }
+.benefit-card p { font-size: 14px; color: var(--text-muted); line-height: 1.6; margin-bottom: 0; }
+
+.techniques-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  background: var(--border);
+}
+.technique-item {
+  padding: 32px;
+  background: var(--white);
+  transition: background 0.2s;
+}
+.technique-item:hover { background: var(--green-pale); }
+.technique-icon { font-size: 28px; margin-bottom: 14px; display: block; }
+.technique-item h4 { font-family: 'DM Sans', sans-serif; font-size: 16px; font-weight: 600; margin-bottom: 8px; color: var(--text); }
+.technique-item p { font-size: 14px; color: var(--text-muted); line-height: 1.6; margin-bottom: 0; }
+
+.lighting-pricing {
+  background: var(--dark);
+  border-radius: var(--r-xl);
+  padding: 48px;
+  text-align: center;
+  position: relative;
+  overflow: hidden;
+}
+.lighting-pricing::before {
+  content: '';
+  position: absolute;
+  top: -60px; right: -60px;
+  width: 300px; height: 300px;
+  background: radial-gradient(circle, rgba(27,77,46,0.4) 0%, transparent 70%);
+  border-radius: 50%;
+}
+.lighting-pricing h3 { color: #fff; font-size: 28px; margin-bottom: 8px; }
+.lighting-pricing .lp-price {
+  font-family: 'Playfair Display', serif;
+  font-size: 64px;
+  font-weight: 700;
+  color: var(--amber-light);
+  line-height: 1;
+  margin: 16px 0 8px;
+}
+.lighting-pricing .lp-sub { color: rgba(255,255,255,0.6); font-size: 14px; margin-bottom: 32px; }
+
+.service-detail-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: clamp(32px, 5vw, 64px);
+  align-items: center;
+}
+.service-detail-img {
+  border-radius: var(--r-xl);
+  overflow: hidden;
+  height: clamp(320px, 42vw, 480px);
+}
+.service-detail-img img { width: 100%; height: 100%; object-fit: cover; }
+.checklist { margin: 24px 0 32px; display: flex; flex-direction: column; gap: 12px; }
+.checklist-item { display: flex; align-items: flex-start; gap: 12px; font-size: 15px; color: var(--text-mid); }
+.checklist-item::before {
+  content: '✓';
+  width: 22px; height: 22px;
+  border-radius: 50%;
+  background: var(--green-pale);
+  color: var(--green);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 12px;
+  font-weight: 700;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+@media (max-width: 1024px) {
+  .techniques-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 1024px) {
+  .service-detail-grid { grid-template-columns: 1fr; gap: 32px; }
+  .lighting-pricing { padding: 32px 24px; }
+  .lighting-pricing .lp-price { font-size: 48px; }
+}
+@media (max-width: 640px) {
+  .page-hero {
+    padding: 136px 0 56px;
+  }
+  .page-hero h1 {
+    font-size: clamp(32px, 9.5vw, 44px);
+    max-width: min(13.5ch, 100%);
+  }
+  .page-hero p {
+    font-size: 16px;
+    margin-bottom: 24px;
+  }
+  .techniques-grid { grid-template-columns: 1fr; }
+  .technique-item { padding: 24px; }
+}
+</style>
+</head>
+<body>
+
+<nav class="nav nav-solid">
+  <div class="nav-inner">
+  <a href="index.html" class="nav-logo"><img src="logo.svg" alt="PJL Land Services"></a>
+  <div class="nav-main">
+    <ul class="nav-links">
+      <li><a href="index.html">Home</a></li>
+      <li><a href="sprinkler-systems.html">Sprinkler Systems</a></li>
+      <li><a href="landscape-lighting.html">Landscape Lighting</a></li>
+      <li><a href="estimate.html">Get Estimate</a></li>
+      <li><a href="faq.html">FAQ</a></li>
+      <li><a href="contact.html">Contact</a></li>
+    </ul>
+    <div class="nav-utility">
+      <a href="https://calendar.app.google/ktWefWX55H1fqGCHA" target="_blank" class="nav-cta">Book Online</a>
+      <a href="tel:+19059600181" class="phone-strip-link nav-phone-link">
+        <span class="phone-strip-icon">📞</span>
+        <span>(905) 960-0181</span>
+      </a>
+    </div>
+  </div>
+  <div class="nav-hamburger"><span></span><span></span><span></span></div>
+  </div>
+</nav>
+<div class="nav-mobile">
+  <a href="index.html">Home</a>
+  <a href="sprinkler-systems.html">Sprinkler Systems</a>
+  <a href="landscape-lighting.html">Landscape Lighting</a>
+  <a href="estimate.html">Get a Free Estimate</a>
+  <a href="faq.html">FAQ</a>
+  <a href="contact.html">Contact</a>
+  <a href="tel:+19059600181">📞 (905) 960-0181</a>
+  <a href="https://calendar.app.google/ktWefWX55H1fqGCHA" target="_blank" class="nav-mobile-cta">Book Online →</a>
+</div>
+
+<section class="page-hero">
+  <div class="container">
+    <div class="page-hero-content">
+      <span class="section-tag amber">Landscape Lighting</span>
+      <h1>Light Up Your Landscape — Beautifully &amp; Safely</h1>
+      <p>We design, install, and maintain high-quality LED landscape lighting systems that enhance curb appeal, improve security, and transform your property after dark.</p>
+      <div class="page-hero-actions">
+        <a href="estimate.html" class="btn btn-primary">Get a Free Estimate</a>
+        <a href="contact.html" class="btn btn-outline">Book a Consultation</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Benefits -->
+<section class="section">
+  <div class="container">
+    <div class="text-center reveal mb-48">
+      <span class="section-tag">Why Landscape Lighting</span>
+      <h2>Transform Your Property After Dark</h2>
+      <p style="max-width:520px;margin:0 auto;">A professionally designed lighting system does far more than just illuminate — it completely changes how your property looks, feels, and functions.</p>
+    </div>
+    <div class="benefits-grid">
+      <div class="benefit-card reveal reveal-delay-1">
+        <span class="benefit-icon">🏡</span>
+        <h4>Curb Appeal & Property Value</h4>
+        <p>A well-lit home stands out in the neighbourhood and consistently increases perceived property value. Make a lasting first impression — day or night.</p>
+      </div>
+      <div class="benefit-card reveal reveal-delay-2">
+        <span class="benefit-icon">🔒</span>
+        <h4>Safety & Security</h4>
+        <p>Illuminated pathways prevent trips and falls, while well-lit exteriors deter trespassers and eliminate dark hiding spots. Peace of mind, built into the design.</p>
+      </div>
+      <div class="benefit-card reveal reveal-delay-3">
+        <span class="benefit-icon">🌿</span>
+        <h4>Extended Outdoor Living</h4>
+        <p>Enjoy your patio, deck, or garden well into the evening. Good lighting extends the usable hours of your outdoor space and creates a warm, inviting atmosphere.</p>
+      </div>
+      <div class="benefit-card reveal reveal-delay-4">
+        <span class="benefit-icon">✨</span>
+        <h4>Highlight Your Best Features</h4>
+        <p>Strategically placed lights draw attention to your home's architectural features, mature trees, gardens, and water features — creating dramatic visual effects.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Lighting Techniques -->
+<section class="section bg-cream">
+  <div class="container">
+    <div class="text-center reveal mb-48">
+      <span class="section-tag">Lighting Techniques</span>
+      <h2>Custom Solutions for Every Property</h2>
+    </div>
+    <div class="techniques-grid" style="border:1px solid var(--border);border-radius:var(--r-xl);overflow:hidden;">
+      <div class="technique-item reveal">
+        <span class="technique-icon">⬆️</span>
+        <h4>Uplighting</h4>
+        <p>Fixtures at the base of trees or architectural features casting light upward — creates dramatic silhouettes and depth.</p>
+      </div>
+      <div class="technique-item reveal reveal-delay-1">
+        <span class="technique-icon">🚶</span>
+        <h4>Path & Walkway Lighting</h4>
+        <p>Low fixtures lining driveways, pathways and garden edges — guides visitors safely and elegantly.</p>
+      </div>
+      <div class="technique-item reveal reveal-delay-2">
+        <span class="technique-icon">🌊</span>
+        <h4>Wall Wash Lighting</h4>
+        <p>Broad, even light across fences, walls and garden beds — highlights texture and colour beautifully.</p>
+      </div>
+      <div class="technique-item reveal reveal-delay-3">
+        <span class="technique-icon">🎯</span>
+        <h4>Accent & Spot Lighting</h4>
+        <p>Focused beams on specific plants, sculptures, or water features — draws the eye to your favourite elements.</p>
+      </div>
+      <div class="technique-item reveal reveal-delay-4">
+        <span class="technique-icon">🪑</span>
+        <h4>Deck & Patio Lighting</h4>
+        <p>Integrated fixtures in steps, railings, and overhead structures — perfect for outdoor entertaining.</p>
+      </div>
+      <div class="technique-item reveal">
+        <span class="technique-icon">🌳</span>
+        <h4>Moonlighting</h4>
+        <p>Fixtures mounted high in trees to cast gentle, natural-looking light downward — mimics soft moonlight beautifully.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Process -->
+<section class="section">
+  <div class="container">
+    <div class="service-detail-grid">
+      <div class="service-detail-img reveal">
+        <img src="https://static.wixstatic.com/media/10e473_2c40a267495c45a584eeff8d88795a1c~mv2.png" alt="Landscape Lighting Installation" loading="lazy">
+      </div>
+      <div class="reveal reveal-delay-2">
+        <span class="section-tag">Our Process</span>
+        <h2>Designed for Your Property. Built to Last.</h2>
+        <p>At PJL Land Services, we don't just install lights — we design a lighting experience tailored to your specific property. Every project begins with a thorough consultation to understand what you love about your outdoor space and what you want to achieve.</p>
+        <p>We use only high-quality LED components selected for durability in Ontario's demanding climate — from freezing winters to hot, humid summers.</p>
+        <div class="checklist">
+          <div class="checklist-item">Free on-site consultation and design walkthrough</div>
+          <div class="checklist-item">Custom lighting plan designed for your property</div>
+          <div class="checklist-item">High-quality LED fixtures built for Canadian winters</div>
+          <div class="checklist-item">Professional trenching and low-voltage wiring</div>
+          <div class="checklist-item">Transformer sizing and placement for optimal performance</div>
+          <div class="checklist-item">Full system demo and handover</div>
+        </div>
+        <a href="estimate.html" class="btn btn-primary">Get a Free Estimate</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Pricing -->
+<section class="section bg-cream">
+  <div class="container" style="max-width:640px;">
+    <div class="lighting-pricing reveal">
+      <h3>Landscape Lighting Pricing</h3>
+      <div class="lp-price">$245</div>
+      <div class="lp-sub">per professionally installed fixture — including wiring, transformer & setup</div>
+      <p style="color:rgba(255,255,255,0.7);font-size:15px;max-width:440px;margin:0 auto 28px;line-height:1.7;">All fixtures include professional placement, low-voltage wiring, and full system setup. Pricing may vary based on property complexity and fixture type.</p>
+      <a href="estimate.html" class="btn btn-primary btn-lg">Calculate Your Estimate →</a>
+    </div>
+  </div>
+</section>
+
+<!-- CTA -->
+<section class="cta-banner">
+  <div class="container">
+    <div class="reveal">
+      <h2>Ready to See Your Home in a New Light?</h2>
+      <p>Book your free landscape lighting consultation today. We'll visit your property, walk through your vision, and design a system that fits your budget.</p>
+      <div class="btn-row">
+        <a href="estimate.html" class="btn btn-primary btn-lg">Get a Free Estimate</a>
+        <a href="tel:+19059600181" class="btn btn-outline btn-lg">📞 (905) 960-0181</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer class="footer">
+  <div class="container">
+    <div class="footer-grid">
+      <div class="footer-brand">
+        <img src="logo.svg" alt="PJL Land Services">
+        <p>Newmarket's trusted lawn sprinkler and landscape lighting experts.</p>
+        <div class="footer-social">
+          <a href="https://www.facebook.com/pjllandservices" target="_blank">f</a>
+          <a href="https://www.instagram.com/pjllandservices" target="_blank">in</a>
+        </div>
+      </div>
+      <div class="footer-col"><h5>Services</h5><ul><li><a href="sprinkler-systems.html">Sprinkler Systems</a></li><li><a href="landscape-lighting.html">Landscape Lighting</a></li><li><a href="estimate.html">Get an Estimate</a></li></ul></div>
+      <div class="footer-col"><h5>Company</h5><ul><li><a href="index.html">Home</a></li><li><a href="faq.html">FAQ</a></li><li><a href="contact.html">Contact</a></li></ul></div>
+      <div class="footer-col">
+        <h5>Contact</h5>
+        <div class="footer-contact-item"><span>📞</span><a href="tel:+19059600181" style="color:rgba(255,255,255,0.65)">(905) 960-0181</a></div>
+        <div class="footer-contact-item"><span>✉️</span><a href="mailto:info@pjllandservices.com" style="color:rgba(255,255,255,0.65)">info@pjllandservices.com</a></div>
+        <div class="footer-contact-item"><span>📍</span><span>Newmarket, Ontario</span></div>
+      </div>
+    </div>
+    <div class="footer-bottom">
+      <p>© 2026 PJL Land Services. All rights reserved.</p>
+      <div class="footer-bottom-links"><a href="#">Privacy Policy</a><a href="#">Terms of Service</a></div>
+    </div>
+  </div>
+</footer>
+<script src="nav.js"></script>
+</body>
+</html>
