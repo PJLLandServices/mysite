@@ -390,6 +390,57 @@ img { max-width: 100%; height: auto; display: block; }
   font-size: 14px;
 }
 
+/* ── Section banner — gradient header bar (reusable) ── */
+.sprk-banner {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 26px;
+  border-radius: 14px 14px 0 0;
+  color: #fff;
+  margin: 0 auto 32px;
+  max-width: 100%;
+  box-shadow: 0 14px 32px -10px rgba(15, 31, 20, 0.28);
+  position: relative;
+}
+.sprk-banner__icon {
+  font-size: 22px;
+  line-height: 1;
+}
+.sprk-banner__label {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: clamp(16px, 1.5vw, 20px);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: #fff;
+}
+.sprk-banner__meta {
+  font-size: 13px;
+  font-weight: 600;
+  color: rgba(255,255,255,0.88);
+  letter-spacing: 0.02em;
+}
+.sprk-banner--green  { background: linear-gradient(135deg, #4A8C5C 0%, #2D6A42 100%); }
+.sprk-banner--forest { background: linear-gradient(135deg, #2D6A42 0%, #1B4D2E 100%); }
+.sprk-banner--amber  { background: linear-gradient(135deg, #C96A2A 0%, #8E3F14 100%); }
+.sprk-banner--gold   { background: linear-gradient(135deg, #C79A3A 0%, #8B6A1F 100%); }
+.sprk-banner--dark   { background: linear-gradient(135deg, #1B4D2E 0%, #0F1F14 100%); }
+.sprk-banner--steel  { background: linear-gradient(135deg, #3a5a6e 0%, #1f3645 100%); }
+@media (max-width: 640px) {
+  .sprk-banner {
+    grid-template-columns: auto 1fr;
+    padding: 12px 18px;
+    gap: 10px;
+  }
+  .sprk-banner__meta {
+    grid-column: 1 / -1;
+    font-size: 12px;
+    opacity: 0.85;
+  }
+}
+
 /* ── Sections ── */
 .section { padding: var(--section-space) 0; }
 .section-sm { padding: clamp(48px, 7vw, 64px) 0; }
