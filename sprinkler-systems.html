@@ -650,12 +650,11 @@
   border-color: transparent;
 }
 .sprk-comp__visual {
-  height: 130px;
+  height: 220px;
   background: linear-gradient(135deg, #f7faf2 0%, #edf4e4 100%);
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 56px;
   position: relative;
   overflow: hidden;
 }
@@ -663,8 +662,20 @@
   content: '';
   position: absolute;
   inset: 0;
-  background: radial-gradient(circle at 30% 30%, rgba(255,255,255,0.5) 0%, transparent 60%);
+  background: radial-gradient(circle at 30% 30%, rgba(255,255,255,0.55) 0%, transparent 60%);
+  pointer-events: none;
 }
+.sprk-comp__visual img {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+  /* contain preserves the product's full silhouette without cropping */
+  object-fit: contain;
+  padding: 18px;
+  transition: transform 0.4s cubic-bezier(.2,.8,.2,1);
+}
+.sprk-comp:hover .sprk-comp__visual img { transform: scale(1.05); }
 .sprk-comp__body {
   padding: 22px;
   display: flex;
@@ -1695,7 +1706,9 @@
 
     <div class="sprk-components">
       <article class="sprk-comp sprk-comp--hunter reveal reveal-delay-1">
-        <div class="sprk-comp__visual" aria-hidden="true">📡</div>
+        <div class="sprk-comp__visual">
+          <img src="hunter-hpc-400.png" alt="Hunter HPC-400 Hydrawise smart irrigation controller" loading="lazy">
+        </div>
         <div class="sprk-comp__body">
           <span class="sprk-comp__brand">Hunter</span>
           <h3 class="sprk-comp__name">Smart Irrigation Timer</h3>
@@ -1706,7 +1719,9 @@
       </article>
 
       <article class="sprk-comp sprk-comp--hunter reveal reveal-delay-2">
-        <div class="sprk-comp__visual" aria-hidden="true">⚙️</div>
+        <div class="sprk-comp__visual">
+          <img src="hunter-pgv-valve.jpg" alt="Hunter PGV electronic control valve" loading="lazy">
+        </div>
         <div class="sprk-comp__body">
           <span class="sprk-comp__brand">Hunter</span>
           <h3 class="sprk-comp__name">Electronic Control Valves</h3>
@@ -1717,7 +1732,9 @@
       </article>
 
       <article class="sprk-comp sprk-comp--hunter reveal reveal-delay-3">
-        <div class="sprk-comp__visual" aria-hidden="true">💦</div>
+        <div class="sprk-comp__visual">
+          <img src="hunter-pgp-rotor.jpg" alt="Hunter PGP-ADJ rotating sprinkler head" loading="lazy">
+        </div>
         <div class="sprk-comp__body">
           <span class="sprk-comp__brand">Hunter</span>
           <h3 class="sprk-comp__name">Rotating Sprinkler Heads</h3>
@@ -1728,7 +1745,9 @@
       </article>
 
       <article class="sprk-comp sprk-comp--hunter reveal reveal-delay-4">
-        <div class="sprk-comp__visual" aria-hidden="true">🌫️</div>
+        <div class="sprk-comp__visual">
+          <img src="hunter-pro-spray.jpg" alt="Hunter Pro-Spray PRS30 pressure-regulated pop-up spray head" loading="lazy">
+        </div>
         <div class="sprk-comp__body">
           <span class="sprk-comp__brand">Hunter</span>
           <h3 class="sprk-comp__name">Pop-Up Spray Heads</h3>
@@ -1739,7 +1758,9 @@
       </article>
 
       <article class="sprk-comp sprk-comp--rainbird reveal reveal-delay-5">
-        <div class="sprk-comp__visual" aria-hidden="true">🎯</div>
+        <div class="sprk-comp__visual">
+          <img src="rainbird-mpr-nozzle.jpg" alt="RainBird MPR matched-precipitation-rate spray nozzle" loading="lazy">
+        </div>
         <div class="sprk-comp__body">
           <span class="sprk-comp__brand">RainBird</span>
           <h3 class="sprk-comp__name">Spray Head Nozzles</h3>
@@ -1750,7 +1771,9 @@
       </article>
 
       <article class="sprk-comp sprk-comp--rainbird reveal reveal-delay-6">
-        <div class="sprk-comp__visual" aria-hidden="true">🌱</div>
+        <div class="sprk-comp__visual">
+          <img src="rainbird-xfd-dripline.jpg" alt="RainBird XFD pressure-compensating dripline" loading="lazy">
+        </div>
         <div class="sprk-comp__body">
           <span class="sprk-comp__brand">RainBird</span>
           <h3 class="sprk-comp__name">Drip Irrigation Systems</h3>
