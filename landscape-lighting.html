@@ -16,7 +16,7 @@
   content: '';
   position: absolute;
   inset: 0;
-  background-image: url('https://static.wixstatic.com/media/10e473_2c40a267495c45a584eeff8d88795a1c~mv2.png');
+  background-image: url('lighting-page-hero.png');
   background-size: cover;
   background-position: center;
 }
@@ -103,18 +103,47 @@
 }
 .lighting-pricing .lp-sub { color: rgba(255,255,255,0.6); font-size: 14px; margin-bottom: 32px; }
 
+/* ─── Service Detail — magazine-style feature spread ─── */
 .service-detail-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: clamp(32px, 5vw, 64px);
-  align-items: center;
+  grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr);
+  gap: 0;
+  align-items: start;
+  position: relative;
 }
 .service-detail-img {
-  border-radius: var(--r-xl);
+  grid-column: 1;
+  grid-row: 1;
+  position: relative;
+  aspect-ratio: 4 / 3;
+  border-radius: 20px;
   overflow: hidden;
-  height: clamp(320px, 42vw, 480px);
+  border: 1px solid rgba(74,140,92,0.10);
+  box-shadow: 0 30px 60px rgba(27,77,46,0.20);
 }
-.service-detail-img img { width: 100%; height: 100%; object-fit: cover; }
+.service-detail-img img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transition: transform 0.6s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.service-detail-img:hover img { transform: scale(1.04); }
+.service-detail-content {
+  grid-column: 2;
+  grid-row: 1;
+  position: relative;
+  z-index: 2;
+  margin-left: -80px;
+  background: rgba(255,255,255,0.97);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(74,140,92,0.18);
+  border-radius: 20px;
+  padding: clamp(28px, 3vw, 44px);
+  box-shadow: 0 28px 64px rgba(27,77,46,0.20), inset 0 0 0 1px rgba(255,255,255,0.50);
+}
 .checklist { margin: 24px 0 32px; display: flex; flex-direction: column; gap: 12px; }
 .checklist-item { display: flex; align-items: flex-start; gap: 12px; font-size: 15px; color: var(--text-mid); }
 .checklist-item::before {
@@ -134,7 +163,19 @@
   .techniques-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 1024px) {
-  .service-detail-grid { grid-template-columns: 1fr; gap: 32px; }
+  .service-detail-grid { grid-template-columns: 1fr; gap: 0; }
+  .service-detail-img {
+    grid-column: 1;
+    grid-row: 1;
+    height: clamp(280px, 50vw, 420px);
+  }
+  .service-detail-content {
+    grid-column: 1;
+    grid-row: 2;
+    margin-left: 0;
+    margin-top: -32px;
+    z-index: 2;
+  }
   .lighting-pricing { padding: 32px 24px; }
   .lighting-pricing .lp-price { font-size: 48px; }
 }
@@ -339,9 +380,9 @@
   <div class="container">
     <div class="service-detail-grid">
       <div class="service-detail-img reveal">
-        <img src="https://static.wixstatic.com/media/10e473_2c40a267495c45a584eeff8d88795a1c~mv2.png" alt="Landscape Lighting Installation" loading="lazy">
+        <img src="lighting-page-hero.png" alt="Landscape Lighting Installation" loading="lazy">
       </div>
-      <div class="reveal reveal-delay-2">
+      <div class="service-detail-content reveal reveal-delay-2">
         <span class="section-tag">Our Process</span>
         <h2>Designed for Your Property. Built to Last.</h2>
         <p>At PJL Land Services, we don't just install lights — we design a lighting experience tailored to your specific property. Every project begins with a thorough consultation to understand what you love about your outdoor space and what you want to achieve.</p>

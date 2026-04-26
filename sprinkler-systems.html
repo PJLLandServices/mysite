@@ -85,22 +85,63 @@
 }
 .seasonal-badge.spring { background: var(--green-mid); }
 
+/* ─── Service Detail — magazine-style feature spread ───
+   Image keeps its natural landscape aspect ratio (4:3) so the photo is
+   never cropped. AI/value callout lifts out of the card and sits below
+   the image, filling what would otherwise be bare space and rebalancing
+   the visual heights. Card stays in row 1 of column 2 with overlap. */
 .service-detail-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: clamp(32px, 5vw, 64px);
-  align-items: center;
+  grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  column-gap: 0;
+  row-gap: 24px;
+  align-items: start;
+  position: relative;
 }
-.service-detail-grid.reverse { direction: rtl; }
-.service-detail-grid.reverse > * { direction: ltr; }
 .service-detail-img {
-  border-radius: var(--r-xl);
+  grid-column: 1;
+  grid-row: 1;
+  position: relative;        /* anchor for absolutely-positioned img */
+  aspect-ratio: 4 / 3;       /* image keeps natural landscape proportions */
+  border-radius: 20px;
   overflow: hidden;
-  height: clamp(320px, 38vw, 420px);
+  border: 1px solid rgba(74,140,92,0.10);
+  box-shadow: 0 30px 60px rgba(27,77,46,0.20);
 }
-.service-detail-img img { width: 100%; height: 100%; object-fit: cover; }
+.service-detail-img img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transition: transform 0.6s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.service-detail-img:hover img { transform: scale(1.04); }
 .service-detail-content h2 { margin-bottom: 16px; }
-.service-detail-content p { margin-bottom: 16px; }
+.service-detail-content p  { margin-bottom: 16px; }
+
+/* AI callout — lifted out of the card, placed below the image in row 2 */
+.service-detail-grid > .sprk-ai {
+  grid-column: 1;
+  grid-row: 2;
+  margin: 0;
+  /* keep right edge clear of the card's -80px overlap so content stays visible */
+  padding-right: clamp(20px, 4vw, 96px);
+}
+
+/* Reverse — image on right, card on left, overlap from the right side */
+.service-detail-grid.reverse {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr);
+}
+.service-detail-grid.reverse .service-detail-img {
+  grid-column: 2;
+}
+.service-detail-grid.reverse > .sprk-ai {
+  grid-column: 2;
+  padding-right: 20px;
+  padding-left: clamp(20px, 4vw, 96px);
+}
 .checklist { margin: 24px 0 32px; display: flex; flex-direction: column; gap: 12px; }
 .checklist-item { display: flex; align-items: flex-start; gap: 12px; font-size: 15px; color: var(--text-mid); }
 .checklist-item::before {
@@ -919,21 +960,33 @@
     linear-gradient(180deg, #edf4e4 0%, #f4f8ec 100%);
 }
 
-/* Service-detail content gets a soft card shell */
+/* Service-detail card — overlaps the image's inside edge by 80px with
+   strong elevation so it reads as "lifted off the page". Reverse flips
+   the overlap direction. */
 .service-detail-content {
-  background: rgba(255,255,255,0.88);
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
+  grid-column: 2;
+  grid-row: 1 / span 2;        /* span both rows so card matches left column's full height */
+  align-self: stretch;
+  position: relative;
+  z-index: 2;
+  margin-left: -80px;
+  display: flex;
+  flex-direction: column;
+  background: rgba(255,255,255,0.97);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
   border: 1px solid rgba(74,140,92,0.18);
-  border-radius: var(--r-xl);
-  padding: clamp(28px, 3.5vw, 40px);
-  box-shadow: 0 18px 44px rgba(27,77,46,0.10);
+  border-radius: 20px;
+  padding: clamp(28px, 3vw, 44px);
+  box-shadow: 0 28px 64px rgba(27,77,46,0.20), 0 0 0 1px rgba(255,255,255,0.50) inset;
 }
-
-/* Service-detail image: deeper rounded card with shadow */
-.service-detail-img {
-  box-shadow: 0 18px 44px rgba(27,77,46,0.14);
-  border: 1px solid rgba(74,140,92,0.10);
+.service-detail-content > .btn,
+.service-detail-content > a.btn { margin-top: auto; }   /* push the CTA to the bottom of the card */
+.service-detail-grid.reverse .service-detail-content {
+  grid-column: 1;
+  grid-row: 1 / span 2;
+  margin-left: 0;
+  margin-right: -80px;
 }
 
 /* Property cards: colored top stripe + softer card shell */
@@ -995,9 +1048,40 @@
 }
 
 @media (max-width: 1024px) {
-  .seasonal-grid, .service-detail-grid { grid-template-columns: 1fr; }
+  .seasonal-grid { grid-template-columns: 1fr; }
   .seasonal-card { height: 320px; }
-  .service-detail-grid.reverse { direction: ltr; }
+  /* Stack image > card > callout cleanly, no overlap or asymmetric grid */
+  .service-detail-grid,
+  .service-detail-grid.reverse {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto auto auto;
+    column-gap: 0;
+    row-gap: 16px;
+  }
+  .service-detail-img,
+  .service-detail-grid.reverse .service-detail-img {
+    grid-column: 1;
+    grid-row: 1;
+    aspect-ratio: 4 / 3;
+  }
+  .service-detail-content,
+  .service-detail-grid.reverse .service-detail-content {
+    grid-column: 1;
+    grid-row: 2;
+    margin-left: 0;
+    margin-right: 0;
+    /* Pull the card up slightly so it overlaps the image bottom — keeps
+       the "layered" feel even when stacked vertically on tablet/mobile */
+    margin-top: -32px;
+    z-index: 2;
+  }
+  .service-detail-grid > .sprk-ai,
+  .service-detail-grid.reverse > .sprk-ai {
+    grid-column: 1;
+    grid-row: 3;
+    padding-left: 0;
+    padding-right: 0;
+  }
   .sprk-seasonal__grid { grid-template-columns: 1fr; }
   .sprk-pricing-grid { grid-template-columns: 1fr; max-width: 480px; margin: 0 auto; }
 }
@@ -1460,13 +1544,12 @@
           </div>
         </div>
 
-        <!-- AI-intake callout -->
-        <div class="sprk-ai">
-          <span class="sprk-ai__badge"><span class="sprk-ai__dot" aria-hidden="true"></span>AI-Smart Intake</span>
-          <p><strong>First hour of labour on us.</strong> Describe your problem through our AI intake and we'll arrive ready — and cover your first hour of labour. Otherwise, mobilization + 1-hour on-site diagnosis is <strong>$95</strong>.</p>
-        </div>
-
         <a href="https://calendar.app.google/ktWefWX55H1fqGCHA" target="_blank" class="btn btn-green">Book a Service Call — $95</a>
+      </div>
+      <!-- AI-intake callout — lifted out of the card to fill the space below the image -->
+      <div class="sprk-ai reveal reveal-delay-1">
+        <span class="sprk-ai__badge"><span class="sprk-ai__dot" aria-hidden="true"></span>AI-Smart Intake</span>
+        <p><strong>First hour of labour on us.</strong> Describe your problem through our AI intake and we'll arrive ready — and cover your first hour of labour. Otherwise, mobilization + 1-hour on-site diagnosis is <strong>$95</strong>.</p>
       </div>
     </div>
   </div>
@@ -1515,12 +1598,12 @@
           </div>
         </div>
 
-        <div class="sprk-ai" style="background:linear-gradient(135deg, rgba(199,154,58,0.14) 0%, rgba(224,123,36,0.10) 100%);border-color:rgba(199,154,58,0.30);">
-          <span class="sprk-ai__badge" style="background:#8E3F14;"><span class="sprk-ai__dot" aria-hidden="true" style="background:#FFD79A;box-shadow:0 0 0 3px rgba(255,215,154,0.3);"></span>Jobsite-Aware</span>
-          <p>We know <em>jobsite flows</em>, not just water flows. We slot into your build calendar — landscape crews, hardscape, sod, plantings — without holding up the rest of the trades.</p>
-        </div>
-
         <a href="estimate.html" class="btn btn-primary">Get a Retrofit Estimate</a>
+      </div>
+      <!-- Jobsite-Aware callout — lifted out of the card to fill the space below the image -->
+      <div class="sprk-ai reveal reveal-delay-1" style="background:linear-gradient(135deg, rgba(199,154,58,0.14) 0%, rgba(224,123,36,0.10) 100%);border-color:rgba(199,154,58,0.30);">
+        <span class="sprk-ai__badge" style="background:#8E3F14;"><span class="sprk-ai__dot" aria-hidden="true" style="background:#FFD79A;box-shadow:0 0 0 3px rgba(255,215,154,0.3);"></span>Jobsite-Aware</span>
+        <p>We know <em>jobsite flows</em>, not just water flows. We slot into your build calendar — landscape crews, hardscape, sod, plantings — without holding up the rest of the trades.</p>
       </div>
     </div>
   </div>
@@ -1541,7 +1624,7 @@
 
     <div class="service-detail-grid">
       <div class="service-detail-img reveal">
-        <img src="https://static.wixstatic.com/media/10e473_cc6e778790984c69813edb47effb377c~mv2.jpg" alt="Sprinkler System Installation Newmarket GTA">
+        <img src="sprinkler-installation.jpg" alt="Sprinkler System Installation Newmarket GTA">
       </div>
       <div class="service-detail-content reveal reveal-delay-2">
         <h2>Tailored installations. Built to last.</h2>
@@ -1574,12 +1657,12 @@
           </div>
         </div>
 
-        <div class="sprk-ai" style="background:linear-gradient(135deg, rgba(74,140,92,0.14) 0%, rgba(199,154,58,0.10) 100%);border-color:rgba(74,140,92,0.28);">
-          <span class="sprk-ai__badge" style="background:var(--green);"><span class="sprk-ai__dot" aria-hidden="true"></span>Tech-Grade Standard</span>
-          <p><strong>Pressure-regulated heads + low-pressure nozzles on every install.</strong> Most companies upcharge for this. We don't — because efficient water means a system that lasts longer and runs cleaner from day one.</p>
-        </div>
-
         <a href="estimate.html" class="btn btn-primary">Get an Installation Estimate</a>
+      </div>
+      <!-- Tech-Grade Standard callout — lifted out of the card to fill the space below the image -->
+      <div class="sprk-ai reveal reveal-delay-1" style="background:linear-gradient(135deg, rgba(74,140,92,0.14) 0%, rgba(199,154,58,0.10) 100%);border-color:rgba(74,140,92,0.28);">
+        <span class="sprk-ai__badge" style="background:var(--green);"><span class="sprk-ai__dot" aria-hidden="true"></span>Tech-Grade Standard</span>
+        <p><strong>Pressure-regulated heads + low-pressure nozzles on every install.</strong> Most companies upcharge for this. We don't — because efficient water means a system that lasts longer and runs cleaner from day one.</p>
       </div>
     </div>
 
