@@ -578,106 +578,7 @@
 }
 .sprk-ai p { font-size: 14.5px; color: var(--text); line-height: 1.6; margin: 0; }
 
-/* Quote tool teaser */
-.sprk-quote-teaser {
-  background:
-    radial-gradient(ellipse 60% 60% at 90% 20%, rgba(243,144,25,0.18), transparent 55%),
-    linear-gradient(135deg, #1B4D2E 0%, #2D6A42 60%, #1B4D2E 100%);
-  border-radius: var(--r-xl);
-  padding: clamp(28px, 4vw, 48px);
-  display: grid;
-  grid-template-columns: 1.3fr 1fr;
-  gap: clamp(20px, 4vw, 44px);
-  align-items: center;
-  color: #fff;
-  box-shadow: 0 24px 60px rgba(15,31,20,0.22);
-  position: relative;
-  overflow: hidden;
-}
-.sprk-quote-teaser::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background-image: radial-gradient(circle, rgba(255,255,255,0.05) 1px, transparent 1px);
-  background-size: 24px 24px;
-  opacity: 0.5;
-  pointer-events: none;
-}
-.sprk-quote-teaser__copy { position: relative; z-index: 2; }
-.sprk-quote-teaser__eyebrow {
-  display: inline-block;
-  background: rgba(243,144,25,0.22);
-  color: #FFD79A;
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  padding: 6px 14px;
-  border-radius: 99px;
-  margin-bottom: 14px;
-}
-.sprk-quote-teaser__copy h2 {
-  color: #fff;
-  font-size: clamp(26px, 3.5vw, 42px);
-  margin-bottom: 14px;
-  line-height: 1.08;
-  text-shadow: 0 2px 12px rgba(0,0,0,0.22);
-}
-.sprk-quote-teaser__copy p {
-  color: rgba(255,255,255,0.85);
-  font-size: 15px;
-  line-height: 1.65;
-  margin-bottom: 22px;
-  max-width: 54ch;
-}
-.sprk-quote-teaser__actions {
-  display: flex;
-  align-items: center;
-  gap: 18px;
-  flex-wrap: wrap;
-}
-.sprk-quote-teaser__meta {
-  font-size: 12.5px;
-  color: rgba(255,255,255,0.72);
-  letter-spacing: 0.02em;
-}
-.sprk-quote-teaser__art {
-  position: relative;
-  z-index: 2;
-  text-align: center;
-}
-.sprk-quote-teaser__house {
-  font-size: 110px;
-  line-height: 1;
-  filter: drop-shadow(0 12px 24px rgba(0,0,0,0.25));
-  margin-bottom: 18px;
-  animation: teaserFloat 4s ease-in-out infinite;
-}
-@keyframes teaserFloat {
-  0%,100% { transform: translateY(0); }
-  50% { transform: translateY(-8px); }
-}
-.sprk-quote-teaser__chips {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: 8px;
-}
-.sprk-quote-teaser__chips span {
-  background: rgba(255,255,255,0.14);
-  color: #fff;
-  padding: 7px 13px;
-  border-radius: 99px;
-  font-size: 12.5px;
-  font-weight: 600;
-  border: 1px solid rgba(255,255,255,0.18);
-  backdrop-filter: blur(4px);
-}
-@media (max-width: 760px) {
-  .sprk-quote-teaser { grid-template-columns: 1fr; text-align: center; }
-  .sprk-quote-teaser__actions { justify-content: center; }
-  .sprk-quote-teaser__copy p { margin-left: auto; margin-right: auto; }
-}
+/* (Quote tool teaser styles moved to global style.css — used on multiple pages) */
 
 /* Sprinkler Components grid */
 .sprk-components {
@@ -1129,45 +1030,99 @@
 </head>
 <body>
 
-<nav class="nav nav-solid">
-  <div class="nav-inner">
-  <a href="index.html" class="nav-logo"><img src="logo.svg" alt="PJL Land Services"></a>
-  <div class="nav-main">
-    <ul class="nav-links">
-      <li><a href="index.html">Home</a></li>
-      <li><a href="sprinkler-systems.html">Sprinkler Systems</a></li>
-      <li><a href="landscape-lighting.html">Landscape Lighting</a></li>
-      <li><a href="estimate.html">Get Estimate</a></li>
-      <li><a href="faq.html">FAQ</a></li>
-      <li><a href="contact.html">Contact</a></li>
-    </ul>
-    <div class="nav-utility">
-      <a href="https://calendar.app.google/ktWefWX55H1fqGCHA" target="_blank" class="nav-cta">Book Online</a>
-      <a href="tel:+19059600181" class="phone-strip-link nav-phone-link">
-        <span class="phone-strip-icon">📞</span>
+<nav class="nav nav-v2 nav-solid">
+  <!-- Tier 1: Utility strip — local, urgent, contact-first -->
+  <div class="nav-utility-strip">
+    <div class="nav-utility-strip__inner">
+      <span class="nav-utility-strip__location">
+        <span class="nav-utility-strip__icon" aria-hidden="true">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M8 14.5s5.5-5 5.5-9a5.5 5.5 0 1 0-11 0c0 4 5.5 9 5.5 9Z"/><circle cx="8" cy="5.5" r="2"/></svg>
+        </span>
+        Newmarket &amp; GTA
+      </span>
+      <span class="nav-utility-strip__same-day">
+        <span class="nav-utility-strip__pulse" aria-hidden="true"></span>
+        Same-day repair available
+      </span>
+      <a href="tel:+19059600181" class="nav-utility-strip__phone">
+        <span class="nav-utility-strip__icon" aria-hidden="true">
+          <svg viewBox="0 0 16 16" fill="currentColor"><path d="M3.654 1.328a.678.678 0 0 0-1.015-.063L1.605 2.3c-.483.484-.661 1.169-.45 1.77a17.6 17.6 0 0 0 4.168 6.608 17.6 17.6 0 0 0 6.608 4.168c.601.211 1.286.033 1.77-.45l1.034-1.034a.678.678 0 0 0-.063-1.015l-2.307-1.794a.68.68 0 0 0-.58-.122l-2.19.547a1.75 1.75 0 0 1-1.657-.459L5.482 8.062a1.75 1.75 0 0 1-.46-1.657l.548-2.19a.68.68 0 0 0-.122-.58L3.654 1.328Z"/></svg>
+        </span>
         <span>(905) 960-0181</span>
       </a>
     </div>
   </div>
-  <div class="nav-hamburger"><span></span><span></span><span></span></div>
+  <!-- Tier 2: Main bar -->
+  <div class="nav-inner">
+    <a href="index.html" class="nav-logo"><img src="logo.svg" alt="PJL Land Services"></a>
+    <div class="nav-main">
+      <ul class="nav-links">
+        <li><a href="index.html">Home</a></li>
+        <li><a href="sprinkler-systems.html">
+          <span class="nav-link-icon" aria-hidden="true">
+            <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 1.5C8 1.5 3.5 6.8 3.5 10A4.5 4.5 0 0 0 12.5 10C12.5 6.8 8 1.5 8 1.5Z"/></svg>
+          </span>Sprinklers
+        </a></li>
+        <li><a href="landscape-lighting.html">
+          <span class="nav-link-icon" aria-hidden="true">
+            <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 0.5L9.3 6.7L15.5 8L9.3 9.3L8 15.5L6.7 9.3L0.5 8L6.7 6.7Z"/></svg>
+          </span>Lighting
+        </a></li>
+        <li><a href="faq.html">FAQ</a></li>
+        <li><a href="contact.html">Contact</a></li>
+      </ul>
+      <a href="quote.html" class="nav-cta nav-cta--quote">
+        <span>Get a Quote</span>
+        <span class="nav-cta-arrow" aria-hidden="true">→</span>
+      </a>
+    </div>
+    <div class="nav-hamburger"><span></span><span></span><span></span></div>
   </div>
 </nav>
 <div class="nav-mobile">
-  <a href="index.html">Home</a>
-  <a href="sprinkler-systems.html">Sprinkler Systems</a>
-  <a href="landscape-lighting.html">Landscape Lighting</a>
-  <a href="estimate.html">Get a Free Estimate</a>
-  <a href="faq.html">FAQ</a>
-  <a href="contact.html">Contact</a>
-  <a href="tel:+19059600181">📞 (905) 960-0181</a>
-  <a href="https://calendar.app.google/ktWefWX55H1fqGCHA" target="_blank" class="nav-mobile-cta">Book Online →</a>
+  <div class="nav-mobile__badge">
+    <span class="nav-mobile__badge-pulse" aria-hidden="true"></span>
+    Same-day repair · Newmarket &amp; GTA
+  </div>
+  <nav class="nav-mobile__nav">
+    <a href="index.html" class="nav-mobile__link">Home</a>
+    <div class="nav-mobile__group">
+      <span class="nav-mobile__group-label">Services</span>
+      <a href="sprinkler-systems.html" class="nav-mobile__link">
+        <span class="nav-mobile__link-icon" aria-hidden="true">
+          <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 1.5C8 1.5 3.5 6.8 3.5 10A4.5 4.5 0 0 0 12.5 10C12.5 6.8 8 1.5 8 1.5Z"/></svg>
+        </span>
+        <span>Sprinklers</span>
+      </a>
+      <a href="landscape-lighting.html" class="nav-mobile__link">
+        <span class="nav-mobile__link-icon" aria-hidden="true">
+          <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 0.5L9.3 6.7L15.5 8L9.3 9.3L8 15.5L6.7 9.3L0.5 8L6.7 6.7Z"/></svg>
+        </span>
+        <span>Lighting</span>
+      </a>
+    </div>
+    <a href="faq.html" class="nav-mobile__link">FAQ</a>
+    <a href="contact.html" class="nav-mobile__link">Contact</a>
+  </nav>
+  <div class="nav-mobile__actions">
+    <a href="tel:+19059600181" class="nav-mobile__action nav-mobile__action--call">
+      <span class="nav-mobile__action-icon" aria-hidden="true">
+        <svg viewBox="0 0 16 16" fill="currentColor"><path d="M3.654 1.328a.678.678 0 0 0-1.015-.063L1.605 2.3c-.483.484-.661 1.169-.45 1.77a17.6 17.6 0 0 0 4.168 6.608 17.6 17.6 0 0 0 6.608 4.168c.601.211 1.286.033 1.77-.45l1.034-1.034a.678.678 0 0 0-.063-1.015l-2.307-1.794a.68.68 0 0 0-.58-.122l-2.19.547a1.75 1.75 0 0 1-1.657-.459L5.482 8.062a1.75 1.75 0 0 1-.46-1.657l.548-2.19a.68.68 0 0 0-.122-.58L3.654 1.328Z"/></svg>
+      </span>
+      Call
+    </a>
+    <a href="quote.html" class="nav-mobile__action nav-mobile__action--quote">
+      <span>Get a Quote</span>
+      <span class="nav-mobile__action-arrow" aria-hidden="true">→</span>
+    </a>
+  </div>
 </div>
 
 <!-- Page Hero — seasonality-driven -->
 <section class="page-hero sprk-hero">
   <div class="container">
     <div class="page-hero-content">
-      <span class="section-tag amber">Sprinkler Systems</span>
+      <div class="page-eyebrow">Spring + Fall · Service · Install · Repair</div>
       <h1 data-season-heading>Spring Opening Season Is On.</h1>
       <p data-season-sub>Time to wake your system up right. Seasonal care starts at $90. Same-day repairs across Newmarket and the GTA.</p>
       <div class="page-hero-actions">
@@ -1347,32 +1302,120 @@
   </div>
 </section>
 
-<!-- Quote Tool Teaser -->
+<!-- Quote Tool Teaser — auto-cycling live preview of the new builder -->
 <section class="section" id="quote-teaser" style="padding-top:48px;padding-bottom:48px;">
   <div class="container">
     <div class="sprk-quote-teaser reveal">
       <div class="sprk-quote-teaser__copy">
-        <span class="sprk-quote-teaser__eyebrow">✨ New · Interactive Quote Tool</span>
-        <h2>Build your sprinkler quote in minutes.</h2>
-        <p>Tell us about your property — house size, yard zones, pool, trees — and watch your system come together on screen. We'll estimate your range on the spot, or send you straight to an on-site visit if the property needs a custom plan.</p>
+        <span class="sprk-quote-teaser__eyebrow">
+          <span class="sprk-quote-teaser__pulse" aria-hidden="true"></span>
+          New · Interactive Quote Builder
+        </span>
+        <h2>Your property, <span class="accent">visualized.</span></h2>
+        <p>Pick the home that looks closest to yours, toggle the features that match your property, and watch your sprinkler system come together in real time. We'll send a custom quote within one business day.</p>
+
         <div class="sprk-quote-teaser__actions">
-          <a href="quote.html" class="btn btn-primary">Start My Quote →</a>
-          <span class="sprk-quote-teaser__meta">Takes ~2 minutes · No obligation</span>
+          <a href="quote.html" class="sprk-quote-teaser__cta">
+            <span>Build My Quote</span>
+            <span class="sprk-quote-teaser__cta-arrow" aria-hidden="true">→</span>
+          </a>
         </div>
+
+        <ul class="sprk-quote-teaser__bullets">
+          <li>Custom to your property</li>
+          <li>Takes about 2 minutes</li>
+          <li>Zero obligation</li>
+        </ul>
       </div>
+
       <div class="sprk-quote-teaser__art" aria-hidden="true">
-        <div class="sprk-quote-teaser__house">🏡</div>
-        <div class="sprk-quote-teaser__chips">
-          <span>🌱 Front Lawn</span>
-          <span>🌷 Garden</span>
-          <span>🏊 Pool</span>
-          <span>🌳 Trees</span>
-          <span>🌿 Plants</span>
+        <div class="sprk-quote-teaser__frame">
+          <img id="teaserImg" src="images/builder/T2_FRONT_TCG.png" alt="Live preview of the sprinkler quote builder">
+          <span class="sprk-quote-teaser__tag" id="teaserTag">Front Yard</span>
+          <span class="sprk-quote-teaser__ribbon">
+            <span class="sprk-quote-teaser__ribbon-dot" aria-hidden="true"></span>
+            Live preview
+          </span>
+          <div class="sprk-quote-teaser__caption" id="teaserCaption">
+            <span class="sprk-quote-teaser__caption-dot" aria-hidden="true"></span>
+            <span id="teaserCaptionText">Family Home · Trees, Cedars, Garden</span>
+          </div>
         </div>
       </div>
     </div>
   </div>
 </section>
+
+<script>
+/* Auto-cycle the teaser image every ~2.6s, demonstrating the live-swap
+   magic of the quote builder. Pauses on hover so users can read.
+   Pauses when out of viewport (perf). Respects prefers-reduced-motion. */
+(function () {
+  const FRAMES = [
+    { src: 'images/builder/T1_FRONT_TCG.png', tag: 'Front Yard', side: 'front', caption: 'Starter Home · Trees, Cedars, Garden' },
+    { src: 'images/builder/T2_BACK_PCG.png',  tag: 'Back Yard',  side: 'back',  caption: 'Family Home · Pool, Cedars, Garden' },
+    { src: 'images/builder/T3_FRONT_TG.png',  tag: 'Front Yard', side: 'front', caption: 'Executive Home · Trees, Garden' },
+    { src: 'images/builder/T4_BACK_PC.png',   tag: 'Back Yard',  side: 'back',  caption: 'Luxury Estate · Pool, Cedars' },
+    { src: 'images/builder/T2_FRONT_TC.png',  tag: 'Front Yard', side: 'front', caption: 'Family Home · Trees, Cedars' },
+    { src: 'images/builder/T3_BACK_PCG.png',  tag: 'Back Yard',  side: 'back',  caption: 'Executive Home · Pool, Cedars, Garden' }
+  ];
+
+  const img         = document.getElementById('teaserImg');
+  const tag         = document.getElementById('teaserTag');
+  const captionText = document.getElementById('teaserCaptionText');
+  const teaser      = document.querySelector('.sprk-quote-teaser');
+  if (!img || !tag || !captionText || !teaser) return;
+
+  // Respect reduced motion — show first frame and stop
+  const prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  // Preload all frames so swaps are instant
+  FRAMES.forEach(f => { const i = new Image(); i.src = f.src; });
+
+  let frame = 0;
+  let timer = null;
+  let paused = false;
+  let inView = true;
+
+  function swap() {
+    if (paused || !inView) return;
+    frame = (frame + 1) % FRAMES.length;
+    const f = FRAMES[frame];
+
+    img.classList.add('is-swapping');
+    setTimeout(() => {
+      img.src = f.src;
+      tag.textContent = f.tag;
+      tag.classList.toggle('is-back', f.side === 'back');
+      captionText.textContent = f.caption;
+      img.classList.remove('is-swapping');
+    }, 220);
+  }
+
+  function start() {
+    if (prefersReduced) return;
+    stop();
+    timer = setInterval(swap, 2600);
+  }
+  function stop() { if (timer) { clearInterval(timer); timer = null; } }
+
+  // Pause on hover/focus, resume on leave/blur
+  teaser.addEventListener('mouseenter', () => { paused = true;  });
+  teaser.addEventListener('mouseleave', () => { paused = false; });
+  teaser.addEventListener('focusin',    () => { paused = true;  });
+  teaser.addEventListener('focusout',   () => { paused = false; });
+
+  // Pause when scrolled out of view
+  if ('IntersectionObserver' in window) {
+    const io = new IntersectionObserver((entries) => {
+      entries.forEach(e => { inView = e.isIntersecting; });
+    }, { threshold: 0.15 });
+    io.observe(teaser);
+  }
+
+  start();
+})();
+</script>
 
 <!-- Sprinkler System Services -->
 <section class="section bg-cream" id="repair">
@@ -1699,15 +1742,34 @@
   </div>
 </section>
 
-<!-- CTA -->
+<!-- End-of-page CTA -->
 <section class="cta-banner">
   <div class="container">
     <div class="reveal">
-      <h2>Ready to Get Started?</h2>
-      <p>Book your free consultation today or use our online estimator to get a ballpark price in 2 minutes.</p>
+      <span class="cta-banner__eyebrow">
+        <span class="cta-banner__pulse" aria-hidden="true"></span>
+        Same-Day Appointments Available
+      </span>
+      <h2>Sprinkler Down? <span class="accent">We Show Up Today.</span></h2>
+      <p>Service, install, repair — built to last and backed by a 3-year workmanship warranty. Most repairs scheduled same-day across Newmarket and the GTA.</p>
       <div class="btn-row">
-        <a href="estimate.html" class="btn btn-primary btn-lg">Get a Free Estimate</a>
-        <a href="tel:+19059600181" class="btn btn-outline btn-lg">📞 (905) 960-0181</a>
+        <a href="quote.html" class="cta-banner__primary">
+          <span>Get a Custom Quote</span>
+          <span class="cta-banner__primary-arrow" aria-hidden="true">→</span>
+        </a>
+        <a href="tel:+19059600181" class="cta-banner__secondary">
+          <span class="cta-banner__secondary-icon" aria-hidden="true">
+            <svg viewBox="0 0 16 16" fill="currentColor"><path d="M3.654 1.328a.678.678 0 0 0-1.015-.063L1.605 2.3c-.483.484-.661 1.169-.45 1.77a17.6 17.6 0 0 0 4.168 6.608 17.6 17.6 0 0 0 6.608 4.168c.601.211 1.286.033 1.77-.45l1.034-1.034a.678.678 0 0 0-.063-1.015l-2.307-1.794a.68.68 0 0 0-.58-.122l-2.19.547a1.75 1.75 0 0 1-1.657-.459L5.482 8.062a1.75 1.75 0 0 1-.46-1.657l.548-2.19a.68.68 0 0 0-.122-.58L3.654 1.328Z"/></svg>
+          </span>
+          <span>(905) 960-0181</span>
+        </a>
+      </div>
+      <div class="cta-banner__meta">
+        <span>10+ Years in Business</span>
+        <span class="cta-banner__meta-divider" aria-hidden="true"></span>
+        <span>3-Year Warranty</span>
+        <span class="cta-banner__meta-divider" aria-hidden="true"></span>
+        <span>Newmarket &amp; GTA</span>
       </div>
     </div>
   </div>

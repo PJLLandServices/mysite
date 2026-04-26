@@ -1,0 +1,667 @@
+/* ════════════════════════════════════════════════════════════════════
+   SPRINKLER BUILDER — Page-specific styles
+   Builds on style.css (which provides v2 nav, footer, page-eyebrow,
+   button system, color tokens, etc.). This file is for builder-only UI:
+   tier cards, yard toggle, image stage, feature toggles, quote form.
+   ════════════════════════════════════════════════════════════════════ */
+
+/* ─── PAGE HERO ─────────────────────────────────────────── */
+.builder-hero {
+  position: relative;
+  padding: 168px 0 56px;
+  background:
+    radial-gradient(ellipse 60% 80% at 12% 20%, rgba(243,144,25,0.18), transparent 60%),
+    radial-gradient(ellipse 60% 80% at 90% 80%, rgba(74,140,92,0.20), transparent 60%),
+    linear-gradient(180deg, #0F1F14 0%, #112418 100%);
+  color: #fff;
+  overflow: hidden;
+  isolation: isolate;
+}
+.builder-hero::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image: radial-gradient(rgba(255,255,255,0.04) 1px, transparent 1px);
+  background-size: 32px 32px;
+  pointer-events: none;
+  z-index: -1;
+}
+.builder-hero h1 {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: clamp(34px, 4.5vw, 56px);
+  font-weight: 800;
+  line-height: 1.02;
+  letter-spacing: -0.01em;
+  text-transform: uppercase;
+  color: #fff;
+  margin: 0 0 14px;
+  text-shadow: 0 4px 20px rgba(0,0,0,0.4);
+  max-width: 16ch;
+}
+.builder-hero h1 .accent {
+  background: linear-gradient(135deg, #F5B14A 0%, #F59B4A 50%, #C96A2A 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.builder-hero__lede {
+  font-size: clamp(15px, 1.4vw, 17px);
+  color: rgba(255,255,255,0.78);
+  max-width: 60ch;
+  line-height: 1.6;
+  margin: 0;
+}
+
+/* ─── BUILDER SECTIONS — light background ────────────────── */
+.builder {
+  padding: 64px 0 48px;
+  background:
+    radial-gradient(ellipse 70% 55% at 8% 5%, rgba(74,140,92,0.10), transparent 55%),
+    radial-gradient(ellipse 60% 50% at 95% 95%, rgba(224,123,36,0.06), transparent 55%),
+    linear-gradient(180deg, #f7faf2 0%, #fafdf5 100%);
+  position: relative;
+}
+.builder--tier  { padding-bottom: 40px; }
+.builder--front { padding-top: 32px; padding-bottom: 32px; }
+.builder--back  {
+  padding-top: 32px;
+  padding-bottom: 56px;
+  /* slight tonal shift so Step 3 feels like a different beat from Step 2 */
+  background:
+    radial-gradient(ellipse 70% 55% at 92% 5%, rgba(74,140,92,0.10), transparent 55%),
+    radial-gradient(ellipse 60% 50% at 5% 95%, rgba(224,123,36,0.07), transparent 55%),
+    linear-gradient(180deg, #fafdf5 0%, #f3f8eb 100%);
+  position: relative;
+}
+/* Subtle hairline divider between Step 2 and Step 3 */
+.builder--back::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 50%;
+  width: min(60%, 600px);
+  height: 1px;
+  transform: translateX(-50%);
+  background: linear-gradient(90deg, transparent 0%, rgba(74,140,92,0.30) 50%, transparent 100%);
+}
+
+/* Smooth reveal animation when sections appear after tier select */
+.builder--front:not([hidden]),
+.builder--back:not([hidden]),
+.builder-form:not([hidden]) {
+  animation: builderSlideIn 0.5s ease;
+}
+@keyframes builderSlideIn {
+  from { opacity: 0; transform: translateY(16px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* ─── STEP HEADING ──────────────────────────────────────── */
+.builder__heading {
+  text-align: center;
+  margin: 0 auto 32px;
+  max-width: 720px;
+}
+.builder__step-num {
+  display: inline-block;
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.20em;
+  text-transform: uppercase;
+  color: var(--amber);
+  background: var(--amber-pale);
+  padding: 5px 14px;
+  border-radius: 99px;
+  margin-bottom: 12px;
+}
+.builder__title {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: clamp(28px, 3.5vw, 42px);
+  font-weight: 800;
+  line-height: 1.05;
+  letter-spacing: -0.01em;
+  text-transform: uppercase;
+  color: var(--text);
+  margin: 0 0 8px;
+}
+.builder__title .accent {
+  background: linear-gradient(135deg, #F5B14A 0%, #F59B4A 50%, #C96A2A 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.builder__hint {
+  font-size: 14.5px;
+  color: var(--text-muted);
+  margin: 0;
+  line-height: 1.55;
+}
+.builder__heading--light .builder__step-num {
+  color: #fff;
+  background: rgba(243,144,25,0.18);
+  border: 1px solid rgba(243,144,25,0.40);
+}
+.builder__heading--light .builder__title { color: #fff; }
+.builder__heading--light .builder__hint { color: rgba(255,255,255,0.72); }
+
+/* ─── TIER SELECTOR ─────────────────────────────────────── */
+.tier-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 18px;
+  margin: 0 auto;
+  max-width: 1200px;
+}
+.tier-card {
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+  border: 2px solid var(--border);
+  border-radius: 16px;
+  padding: 0;
+  cursor: pointer;
+  font-family: inherit;
+  text-align: left;
+  overflow: hidden;
+  transition: transform 0.25s ease, border-color 0.2s ease, box-shadow 0.25s ease;
+  box-shadow: 0 4px 14px rgba(27,77,46,0.06);
+  position: relative;
+}
+.tier-card:hover {
+  transform: translateY(-4px);
+  border-color: var(--green-light);
+  box-shadow: 0 14px 32px rgba(27,77,46,0.14);
+}
+.tier-card.is-selected {
+  border-color: var(--amber);
+  box-shadow: 0 14px 32px rgba(224,123,36,0.22), 0 0 0 4px rgba(243,144,25,0.10);
+}
+.tier-card__thumb-wrap {
+  position: relative;
+  aspect-ratio: 16 / 10;
+  overflow: hidden;
+  background: var(--green-pale);
+}
+.tier-card__thumb {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  transition: transform 0.4s ease;
+}
+.tier-card:hover .tier-card__thumb { transform: scale(1.04); }
+.tier-card__check {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--amber);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 800;
+  font-size: 16px;
+  box-shadow: 0 6px 14px rgba(224,123,36,0.45);
+  opacity: 0;
+  transform: scale(0.6);
+  transition: opacity 0.25s ease, transform 0.25s cubic-bezier(.34,1.56,.64,1);
+}
+.tier-card.is-selected .tier-card__check {
+  opacity: 1;
+  transform: scale(1);
+}
+.tier-card__body {
+  padding: 16px 18px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.tier-card__title {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 19px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  color: var(--text);
+}
+.tier-card__sub {
+  font-size: 13px;
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+/* ─── IMAGE STAGE ───────────────────────────────────────── */
+.image-stage {
+  max-width: 1100px;
+  margin: 0 auto 36px;
+}
+.image-stage__frame {
+  position: relative;
+  aspect-ratio: 16 / 9;
+  border-radius: 18px;
+  overflow: hidden;
+  background: linear-gradient(180deg, #eef6e2 0%, #d8e7c5 100%);
+  box-shadow: 0 24px 60px rgba(27,77,46,0.18), 0 0 0 1px rgba(74,140,92,0.18);
+}
+.image-stage__img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  opacity: 1;
+  /* Used only when the new image isn't cached and load is slow (>80ms).
+     Partial dim, not a full fade — image stays readable, just signals
+     "loading". Cached swaps bypass this entirely (instant). */
+  transition: opacity 0.16s ease;
+}
+.image-stage__img.is-fading {
+  opacity: 0.45;
+}
+.image-stage__tag {
+  position: absolute;
+  top: 14px;
+  left: 14px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 13px;
+  background: linear-gradient(135deg, var(--green) 0%, var(--green-mid) 100%);
+  color: #fff;
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  border-radius: 99px;
+  box-shadow: 0 6px 14px rgba(0,0,0,0.30);
+}
+/* Back-yard tag uses an amber accent so the two steps feel visually distinct */
+.image-stage__tag--back {
+  background: linear-gradient(135deg, var(--amber-light) 0%, var(--amber) 100%);
+  box-shadow: 0 6px 14px rgba(224,123,36,0.45);
+}
+.image-stage__caption {
+  text-align: center;
+  margin-top: 14px;
+  font-size: 13px;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+/* ─── FEATURE GRID ──────────────────────────────────────── */
+.feature-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 14px;
+  max-width: 1100px;
+  margin: 0 auto;
+}
+.feature-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 18px 20px;
+  background: #fff;
+  border: 2px solid var(--border);
+  border-radius: 14px;
+  cursor: pointer;
+  font-family: inherit;
+  text-align: left;
+  transition: border-color 0.2s ease, background 0.25s ease, box-shadow 0.2s ease, transform 0.15s ease;
+  position: relative;
+  min-height: 88px;
+}
+.feature-card:hover {
+  transform: translateY(-2px);
+  border-color: var(--green-light);
+  box-shadow: 0 10px 24px rgba(27,77,46,0.10);
+}
+.feature-card.is-on {
+  background: linear-gradient(135deg, rgba(243,144,25,0.06) 0%, rgba(224,123,36,0.10) 100%);
+  border-color: var(--amber);
+  box-shadow: 0 8px 22px rgba(224,123,36,0.15);
+}
+.feature-card__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: var(--green-pale);
+  color: var(--green);
+  flex-shrink: 0;
+  transition: background 0.25s ease, color 0.25s ease;
+}
+.feature-card__icon svg { width: 22px; height: 22px; display: block; }
+.feature-card.is-on .feature-card__icon {
+  background: var(--amber);
+  color: #fff;
+}
+.feature-card__body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.feature-card__title {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 16px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  color: var(--text);
+  line-height: 1.2;
+}
+.feature-card__sub {
+  font-size: 12.5px;
+  color: var(--text-muted);
+  font-weight: 500;
+  line-height: 1.4;
+}
+.feature-card__indicator {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  border: 2px solid var(--border);
+  background: #fff;
+  flex-shrink: 0;
+  color: #fff;
+  transition: background 0.2s ease, border-color 0.2s ease;
+}
+.feature-card.is-on .feature-card__indicator {
+  background: var(--amber);
+  border-color: var(--amber);
+}
+.feature-card__check {
+  width: 14px;
+  height: 14px;
+  opacity: 0;
+  transform: scale(0.6);
+  transition: opacity 0.2s ease, transform 0.2s cubic-bezier(.34,1.56,.64,1);
+}
+.feature-card.is-on .feature-card__check {
+  opacity: 1;
+  transform: scale(1);
+}
+
+/* ─── QUOTE FORM SECTION ────────────────────────────────── */
+.builder-form {
+  position: relative;
+  padding: 80px 0 100px;
+  background:
+    radial-gradient(ellipse 60% 80% at 12% 25%, rgba(243,144,25,0.18), transparent 60%),
+    radial-gradient(ellipse 70% 90% at 92% 85%, rgba(74,140,92,0.22), transparent 60%),
+    linear-gradient(180deg, #112418 0%, #0a1810 100%);
+  color: #fff;
+  overflow: hidden;
+  isolation: isolate;
+}
+.builder-form::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent 0%, rgba(243,144,25,0.45) 50%, transparent 100%);
+}
+.builder-form::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image: radial-gradient(rgba(255,255,255,0.04) 1px, transparent 1px);
+  background-size: 32px 32px;
+  pointer-events: none;
+  z-index: -1;
+}
+
+.quote-form {
+  max-width: 760px;
+  margin: 0 auto;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.10);
+  border-radius: 18px;
+  padding: 32px;
+  backdrop-filter: blur(8px);
+}
+.quote-form__grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-bottom: 22px;
+}
+.quote-form__field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.quote-form__field--full { grid-column: 1 / -1; }
+.quote-form__field label {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: rgba(255,255,255,0.78);
+}
+.quote-form__optional {
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: none;
+  color: rgba(255,255,255,0.45);
+  font-size: 11.5px;
+}
+.quote-form__field input,
+.quote-form__field select,
+.quote-form__field textarea {
+  padding: 13px 16px;
+  border-radius: 10px;
+  border: 1.5px solid rgba(255,255,255,0.18);
+  background: rgba(255,255,255,0.06);
+  color: #fff;
+  font-family: inherit;
+  font-size: 15px;
+  outline: none;
+  transition: border-color 0.18s ease, background 0.18s ease, box-shadow 0.18s ease;
+  min-height: 48px;
+}
+.quote-form__field input::placeholder,
+.quote-form__field textarea::placeholder {
+  color: rgba(255,255,255,0.40);
+}
+.quote-form__field input:focus,
+.quote-form__field select:focus,
+.quote-form__field textarea:focus {
+  border-color: var(--amber-light);
+  background: rgba(255,255,255,0.10);
+  box-shadow: 0 0 0 3px rgba(243,144,25,0.20);
+}
+.quote-form__field input.is-error,
+.quote-form__field select.is-error,
+.quote-form__field textarea.is-error {
+  border-color: #ef6363;
+  box-shadow: 0 0 0 3px rgba(239,99,99,0.18);
+}
+.quote-form__field textarea {
+  resize: vertical;
+  min-height: 92px;
+  font-family: inherit;
+}
+.quote-form__field select {
+  appearance: none;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='%23ffffff' opacity='.6'><path d='M4 6l4 4 4-4z'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 14px center;
+  padding-right: 38px;
+}
+
+.quote-form__error {
+  margin: 0 0 16px;
+  padding: 12px 16px;
+  background: rgba(239,99,99,0.12);
+  border: 1px solid rgba(239,99,99,0.40);
+  border-radius: 10px;
+  color: #ffd0d0;
+  font-size: 13.5px;
+}
+
+.quote-form__submit {
+  width: 100%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 18px 28px;
+  background: linear-gradient(135deg, #F59B4A 0%, #C96A2A 100%);
+  color: #fff;
+  font-family: inherit;
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  border: none;
+  border-radius: 12px;
+  cursor: pointer;
+  box-shadow: 0 12px 28px rgba(224,123,36,0.40), inset 0 1px 0 rgba(255,255,255,0.22);
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  min-height: 56px;
+  position: relative;
+  overflow: hidden;
+}
+.quote-form__submit::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(135deg, #ffb54a 0%, #d97a2a 100%);
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+.quote-form__submit > * { position: relative; z-index: 1; }
+.quote-form__submit:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 16px 36px rgba(224,123,36,0.55);
+}
+.quote-form__submit:hover::before { opacity: 1; }
+.quote-form__submit:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  transform: none;
+}
+.quote-form__submit-arrow {
+  transition: transform 0.25s ease;
+  display: inline-block;
+}
+.quote-form__submit:hover .quote-form__submit-arrow {
+  transform: translateX(4px);
+}
+.quote-form__legal {
+  text-align: center;
+  margin: 16px 0 0;
+  font-size: 12px;
+  color: rgba(255,255,255,0.55);
+}
+
+/* ─── SUCCESS STATE ─────────────────────────────────────── */
+.quote-success {
+  max-width: 580px;
+  margin: 0 auto;
+  text-align: center;
+  padding: 32px 24px;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(74,140,92,0.32);
+  border-radius: 18px;
+  animation: builderSlideIn 0.4s ease;
+}
+.quote-success__check {
+  width: 72px;
+  height: 72px;
+  margin: 0 auto 18px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--green-light) 0%, var(--green-mid) 100%);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 12px 28px rgba(27,77,46,0.32);
+}
+.quote-success__check svg { width: 36px; height: 36px; }
+.quote-success__title {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 32px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: -0.01em;
+  color: #fff;
+  margin: 0 0 8px;
+}
+.quote-success__title #qsName { color: var(--amber-light); }
+.quote-success__text {
+  color: rgba(255,255,255,0.78);
+  margin: 0 0 22px;
+  line-height: 1.6;
+}
+.quote-success__cta {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 22px;
+  background: rgba(255,255,255,0.08);
+  border: 1.5px solid rgba(255,255,255,0.25);
+  border-radius: 10px;
+  color: #fff;
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  transition: background 0.2s ease, border-color 0.2s ease, transform 0.2s ease;
+}
+.quote-success__cta:hover {
+  background: rgba(255,255,255,0.14);
+  border-color: rgba(255,255,255,0.45);
+  transform: translateY(-1px);
+}
+
+/* ─── RESPONSIVE ────────────────────────────────────────── */
+@media (max-width: 1024px) {
+  .tier-grid { grid-template-columns: repeat(2, 1fr); gap: 16px; }
+  .feature-grid { grid-template-columns: 1fr; max-width: 640px; }
+  .image-stage { max-width: 880px; }
+}
+
+@media (max-width: 720px) {
+  .builder-hero { padding: 144px 0 44px; }
+  .builder { padding: 48px 0 36px; }
+  .builder-form { padding: 56px 0 80px; }
+  .builder__heading { margin-bottom: 24px; }
+  .quote-form { padding: 24px 20px; }
+  .quote-form__grid { grid-template-columns: 1fr; gap: 14px; }
+  .yard-pill { padding: 10px 18px; font-size: 13px; }
+  .feature-card { padding: 16px; min-height: 72px; }
+  .feature-card__icon { width: 32px; height: 32px; }
+  .feature-card__icon svg { width: 18px; height: 18px; }
+}
+
+@media (max-width: 460px) {
+  .tier-grid { grid-template-columns: 1fr; }
+  .builder-hero { padding: 116px 0 36px; }
+  .builder-hero h1 { max-width: none; }
+  .image-stage__caption { font-size: 12px; }
+}
+
+/* ─── A11Y: focus-visible ────────────────────────────────── */
+.tier-card:focus-visible,
+.feature-card:focus-visible {
+  outline: 3px solid var(--amber-light);
+  outline-offset: 3px;
+}
+.quote-form__submit:focus-visible {
+  outline: 3px solid #fff;
+  outline-offset: 3px;
+}

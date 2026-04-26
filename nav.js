@@ -31,7 +31,7 @@ if (nav) {
 const hamburger = document.querySelector('.nav-hamburger');
 const mobileNav = document.querySelector('.nav-mobile');
 if (hamburger && mobileNav) {
-  const tabletNavQuery = window.matchMedia('(max-width: 1400px)');
+  const tabletNavQuery = window.matchMedia('(max-width: 1024px)');
   const spans = hamburger.querySelectorAll('span');
   const resetHamburger = () => {
     spans[0].style.transform = '';
@@ -137,9 +137,10 @@ if (counterEls.length) {
 
 // ── Active nav link ──
 const currentPage = window.location.pathname.split('/').pop() || 'index.html';
-document.querySelectorAll('.nav-links a, .nav-mobile a').forEach(a => {
+document.querySelectorAll('.nav-links a, .nav-mobile a, .nav-mobile__link').forEach(a => {
   const href = a.getAttribute('href');
   if (href === currentPage || (currentPage === '' && href === 'index.html')) {
+    a.classList.add('is-active');
     a.style.color = '#fff';
     a.style.opacity = '1';
   }

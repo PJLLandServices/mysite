@@ -157,44 +157,98 @@
 </head>
 <body>
 
-<nav class="nav nav-solid">
-  <div class="nav-inner">
-  <a href="index.html" class="nav-logo"><img src="logo.svg" alt="PJL Land Services"></a>
-  <div class="nav-main">
-    <ul class="nav-links">
-      <li><a href="index.html">Home</a></li>
-      <li><a href="sprinkler-systems.html">Sprinkler Systems</a></li>
-      <li><a href="landscape-lighting.html">Landscape Lighting</a></li>
-      <li><a href="estimate.html">Get Estimate</a></li>
-      <li><a href="faq.html">FAQ</a></li>
-      <li><a href="contact.html">Contact</a></li>
-    </ul>
-    <div class="nav-utility">
-      <a href="https://calendar.app.google/ktWefWX55H1fqGCHA" target="_blank" class="nav-cta">Book Online</a>
-      <a href="tel:+19059600181" class="phone-strip-link nav-phone-link">
-        <span class="phone-strip-icon">📞</span>
+<nav class="nav nav-v2 nav-solid">
+  <!-- Tier 1: Utility strip — local, urgent, contact-first -->
+  <div class="nav-utility-strip">
+    <div class="nav-utility-strip__inner">
+      <span class="nav-utility-strip__location">
+        <span class="nav-utility-strip__icon" aria-hidden="true">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M8 14.5s5.5-5 5.5-9a5.5 5.5 0 1 0-11 0c0 4 5.5 9 5.5 9Z"/><circle cx="8" cy="5.5" r="2"/></svg>
+        </span>
+        Newmarket &amp; GTA
+      </span>
+      <span class="nav-utility-strip__same-day">
+        <span class="nav-utility-strip__pulse" aria-hidden="true"></span>
+        Same-day repair available
+      </span>
+      <a href="tel:+19059600181" class="nav-utility-strip__phone">
+        <span class="nav-utility-strip__icon" aria-hidden="true">
+          <svg viewBox="0 0 16 16" fill="currentColor"><path d="M3.654 1.328a.678.678 0 0 0-1.015-.063L1.605 2.3c-.483.484-.661 1.169-.45 1.77a17.6 17.6 0 0 0 4.168 6.608 17.6 17.6 0 0 0 6.608 4.168c.601.211 1.286.033 1.77-.45l1.034-1.034a.678.678 0 0 0-.063-1.015l-2.307-1.794a.68.68 0 0 0-.58-.122l-2.19.547a1.75 1.75 0 0 1-1.657-.459L5.482 8.062a1.75 1.75 0 0 1-.46-1.657l.548-2.19a.68.68 0 0 0-.122-.58L3.654 1.328Z"/></svg>
+        </span>
         <span>(905) 960-0181</span>
       </a>
     </div>
   </div>
-  <div class="nav-hamburger"><span></span><span></span><span></span></div>
+  <!-- Tier 2: Main bar -->
+  <div class="nav-inner">
+    <a href="index.html" class="nav-logo"><img src="logo.svg" alt="PJL Land Services"></a>
+    <div class="nav-main">
+      <ul class="nav-links">
+        <li><a href="index.html">Home</a></li>
+        <li><a href="sprinkler-systems.html">
+          <span class="nav-link-icon" aria-hidden="true">
+            <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 1.5C8 1.5 3.5 6.8 3.5 10A4.5 4.5 0 0 0 12.5 10C12.5 6.8 8 1.5 8 1.5Z"/></svg>
+          </span>Sprinklers
+        </a></li>
+        <li><a href="landscape-lighting.html">
+          <span class="nav-link-icon" aria-hidden="true">
+            <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 0.5L9.3 6.7L15.5 8L9.3 9.3L8 15.5L6.7 9.3L0.5 8L6.7 6.7Z"/></svg>
+          </span>Lighting
+        </a></li>
+        <li><a href="faq.html">FAQ</a></li>
+        <li><a href="contact.html">Contact</a></li>
+      </ul>
+      <a href="quote.html" class="nav-cta nav-cta--quote">
+        <span>Get a Quote</span>
+        <span class="nav-cta-arrow" aria-hidden="true">→</span>
+      </a>
+    </div>
+    <div class="nav-hamburger"><span></span><span></span><span></span></div>
   </div>
 </nav>
 <div class="nav-mobile">
-  <a href="index.html">Home</a>
-  <a href="sprinkler-systems.html">Sprinkler Systems</a>
-  <a href="landscape-lighting.html">Landscape Lighting</a>
-  <a href="estimate.html">Get a Free Estimate</a>
-  <a href="faq.html">FAQ</a>
-  <a href="contact.html">Contact</a>
-  <a href="tel:+19059600181">📞 (905) 960-0181</a>
-  <a href="https://calendar.app.google/ktWefWX55H1fqGCHA" target="_blank" class="nav-mobile-cta">Book Online →</a>
+  <div class="nav-mobile__badge">
+    <span class="nav-mobile__badge-pulse" aria-hidden="true"></span>
+    Same-day repair · Newmarket &amp; GTA
+  </div>
+  <nav class="nav-mobile__nav">
+    <a href="index.html" class="nav-mobile__link">Home</a>
+    <div class="nav-mobile__group">
+      <span class="nav-mobile__group-label">Services</span>
+      <a href="sprinkler-systems.html" class="nav-mobile__link">
+        <span class="nav-mobile__link-icon" aria-hidden="true">
+          <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 1.5C8 1.5 3.5 6.8 3.5 10A4.5 4.5 0 0 0 12.5 10C12.5 6.8 8 1.5 8 1.5Z"/></svg>
+        </span>
+        <span>Sprinklers</span>
+      </a>
+      <a href="landscape-lighting.html" class="nav-mobile__link">
+        <span class="nav-mobile__link-icon" aria-hidden="true">
+          <svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 0.5L9.3 6.7L15.5 8L9.3 9.3L8 15.5L6.7 9.3L0.5 8L6.7 6.7Z"/></svg>
+        </span>
+        <span>Lighting</span>
+      </a>
+    </div>
+    <a href="faq.html" class="nav-mobile__link">FAQ</a>
+    <a href="contact.html" class="nav-mobile__link">Contact</a>
+  </nav>
+  <div class="nav-mobile__actions">
+    <a href="tel:+19059600181" class="nav-mobile__action nav-mobile__action--call">
+      <span class="nav-mobile__action-icon" aria-hidden="true">
+        <svg viewBox="0 0 16 16" fill="currentColor"><path d="M3.654 1.328a.678.678 0 0 0-1.015-.063L1.605 2.3c-.483.484-.661 1.169-.45 1.77a17.6 17.6 0 0 0 4.168 6.608 17.6 17.6 0 0 0 6.608 4.168c.601.211 1.286.033 1.77-.45l1.034-1.034a.678.678 0 0 0-.063-1.015l-2.307-1.794a.68.68 0 0 0-.58-.122l-2.19.547a1.75 1.75 0 0 1-1.657-.459L5.482 8.062a1.75 1.75 0 0 1-.46-1.657l.548-2.19a.68.68 0 0 0-.122-.58L3.654 1.328Z"/></svg>
+      </span>
+      Call
+    </a>
+    <a href="quote.html" class="nav-mobile__action nav-mobile__action--quote">
+      <span>Get a Quote</span>
+      <span class="nav-mobile__action-arrow" aria-hidden="true">→</span>
+    </a>
+  </div>
 </div>
 
 <section class="page-hero">
   <div class="container">
     <div class="page-hero-content">
-      <span class="section-tag amber">Landscape Lighting</span>
+      <div class="page-eyebrow">Lighting Design · Install · Built to Last</div>
       <h1>Light Up Your Landscape — Beautifully &amp; Safely</h1>
       <p>We design, install, and maintain high-quality LED landscape lighting systems that enhance curb appeal, improve security, and transform your property after dark.</p>
       <div class="page-hero-actions">
@@ -319,15 +373,34 @@
   </div>
 </section>
 
-<!-- CTA -->
+<!-- End-of-page CTA -->
 <section class="cta-banner">
   <div class="container">
     <div class="reveal">
-      <h2>Ready to See Your Home in a New Light?</h2>
-      <p>Book your free landscape lighting consultation today. We'll visit your property, walk through your vision, and design a system that fits your budget.</p>
+      <span class="cta-banner__eyebrow">
+        <span class="cta-banner__pulse" aria-hidden="true"></span>
+        Free Lighting Design Consultation
+      </span>
+      <h2>Light Your Home <span class="accent">Beautifully.</span></h2>
+      <p>We design, install, and maintain landscape lighting that turns your property into something memorable after dark. Free on-site consultation — no pressure, no obligation.</p>
       <div class="btn-row">
-        <a href="estimate.html" class="btn btn-primary btn-lg">Get a Free Estimate</a>
-        <a href="tel:+19059600181" class="btn btn-outline btn-lg">📞 (905) 960-0181</a>
+        <a href="quote.html" class="cta-banner__primary">
+          <span>Get a Custom Quote</span>
+          <span class="cta-banner__primary-arrow" aria-hidden="true">→</span>
+        </a>
+        <a href="tel:+19059600181" class="cta-banner__secondary">
+          <span class="cta-banner__secondary-icon" aria-hidden="true">
+            <svg viewBox="0 0 16 16" fill="currentColor"><path d="M3.654 1.328a.678.678 0 0 0-1.015-.063L1.605 2.3c-.483.484-.661 1.169-.45 1.77a17.6 17.6 0 0 0 4.168 6.608 17.6 17.6 0 0 0 6.608 4.168c.601.211 1.286.033 1.77-.45l1.034-1.034a.678.678 0 0 0-.063-1.015l-2.307-1.794a.68.68 0 0 0-.58-.122l-2.19.547a1.75 1.75 0 0 1-1.657-.459L5.482 8.062a1.75 1.75 0 0 1-.46-1.657l.548-2.19a.68.68 0 0 0-.122-.58L3.654 1.328Z"/></svg>
+          </span>
+          <span>(905) 960-0181</span>
+        </a>
+      </div>
+      <div class="cta-banner__meta">
+        <span>Premium LED Fixtures</span>
+        <span class="cta-banner__meta-divider" aria-hidden="true"></span>
+        <span>5-Year Warranty</span>
+        <span class="cta-banner__meta-divider" aria-hidden="true"></span>
+        <span>Newmarket &amp; GTA</span>
       </div>
     </div>
   </div>
