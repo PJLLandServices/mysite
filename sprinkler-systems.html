@@ -650,9 +650,10 @@
   border-color: transparent;
 }
 .sprk-comp__visual {
-  /* Tall enough that portrait product photos display at meaningful size
-     while keeping cards a sensible aspect ratio overall. */
-  height: clamp(280px, 28vw, 340px);
+  /* Locked to a 1:1 (square) aspect ratio. Photos should be cropped
+     to square (e.g., 1000x1000) before upload so they fill the frame
+     edge-to-edge with no whitespace or cropping. */
+  aspect-ratio: 1 / 1;
   background: linear-gradient(135deg, #f7faf2 0%, #edf4e4 100%);
   display: flex;
   align-items: center;
@@ -664,21 +665,20 @@
   content: '';
   position: absolute;
   inset: 0;
-  background: radial-gradient(circle at 30% 30%, rgba(255,255,255,0.55) 0%, transparent 60%);
+  background: radial-gradient(circle at 30% 30%, rgba(255,255,255,0.45) 0%, transparent 65%);
   pointer-events: none;
+  z-index: 2;
 }
 .sprk-comp__visual img {
   position: relative;
   z-index: 1;
   width: 100%;
   height: 100%;
-  /* contain preserves the product's full silhouette without cropping */
-  object-fit: contain;
-  /* Tighter padding so the product fills more of its frame */
-  padding: 10px;
-  transition: transform 0.4s cubic-bezier(.2,.8,.2,1);
+  /* cover fills the square; photos pre-cropped to 1:1 fit perfectly */
+  object-fit: cover;
+  transition: transform 0.5s cubic-bezier(.2,.8,.2,1);
 }
-.sprk-comp:hover .sprk-comp__visual img { transform: scale(1.05); }
+.sprk-comp:hover .sprk-comp__visual img { transform: scale(1.06); }
 .sprk-comp__body {
   padding: 22px;
   display: flex;
