@@ -284,21 +284,16 @@
   filter:drop-shadow(0 24px 42px rgba(23,34,23,0.12));
 }
 /* ════════════════════════════════════════════════════
-   CERTIFICATE TRUST DISPLAY — full redesign
-   Side-by-side layout. Certificate dominates the right column
-   with a big circular "VERIFIED" notary stamp anchored to the
-   bottom-right corner. Left column has copy + 3 credential
-   bullets that translate the certificate's significance.
+   CERTIFICATE TRUST DISPLAY — centered hero layout
+   Single column: heading + intro at top, big certificate as
+   the hero in the middle, 3 credential cards as a horizontal
+   strip below. Generous breathing room throughout.
    ════════════════════════════════════════════════════ */
 .about-cert-band{
   position:relative;
   z-index:1;
-  display:grid;
-  grid-template-columns:minmax(0,1fr) minmax(440px,580px);
-  gap:56px;
-  align-items:center;
   margin:0 58px 34px;
-  padding:48px 52px;
+  padding:clamp(40px, 5vw, 64px) clamp(28px, 4vw, 56px);
   border-radius:30px;
   background:
     radial-gradient(ellipse 70% 55% at 8% 5%, rgba(74,140,92,0.14), transparent 55%),
@@ -308,9 +303,9 @@
   box-shadow:0 18px 48px rgba(23,34,23,0.10);
   isolation:isolate;
   overflow:hidden;
+  text-align:center;
 }
 .about-cert-band::before{
-  /* dot grid texture */
   content:'';
   position:absolute;
   inset:0;
@@ -320,7 +315,6 @@
   z-index:-1;
 }
 .about-cert-band::after{
-  /* amber hairline at the top */
   content:'';
   position:absolute;
   top:0; left:0; right:0;
@@ -328,12 +322,16 @@
   background:linear-gradient(90deg, transparent 0%, rgba(243,144,25,0.55) 50%, transparent 100%);
 }
 
-/* Eyebrow with amber bracket-line — matches v2 brand language */
+/* Header copy — centered above the certificate */
+.about-cert-copy{
+  max-width:660px;
+  margin:0 auto clamp(28px, 3.5vw, 44px);
+}
 .about-cert-copy .section-tag{
   display:inline-flex;
   align-items:center;
   gap:10px;
-  margin-bottom:18px;
+  margin-bottom:16px;
   padding:6px 14px;
   background:rgba(27,77,46,0.10);
   color:#1B4D2E;
@@ -345,76 +343,33 @@
   border-radius:99px;
 }
 .about-cert-copy h3{
-  margin:0 0 16px;
-  max-width:17ch;
+  margin:0 0 14px;
   color:#0F1F14;
   font-family:'Barlow Condensed', sans-serif;
-  font-size:clamp(32px, 3.4vw, 48px);
+  font-size:clamp(30px, 3.4vw, 44px);
   font-weight:800;
-  line-height:1.02;
+  line-height:1.05;
   letter-spacing:-0.005em;
   text-transform:uppercase;
 }
 .about-cert-copy p{
-  margin:0 0 24px;
-  max-width:44ch;
+  margin:0 auto;
+  max-width:58ch;
   color:#5b6a58;
   font-size:16px;
-  line-height:1.7;
+  line-height:1.65;
 }
 .about-cert-copy strong{color:#0F1F14;}
 
-/* Credential bullets — translate the certificate into 3 trust signals */
-.about-cert-creds{
-  list-style:none;
-  margin:0;
-  padding:0;
-  display:flex;
-  flex-direction:column;
-  gap:14px;
-}
-.about-cert-creds li{
-  display:flex;
-  align-items:flex-start;
-  gap:12px;
-}
-.about-cert-creds__icon{
-  display:inline-flex;
-  align-items:center;
-  justify-content:center;
-  width:26px;
-  height:26px;
-  border-radius:50%;
-  background:linear-gradient(135deg, #2D6A42 0%, #1B4D2E 100%);
-  color:var(--amber-light);
-  font-weight:900;
-  font-size:12px;
-  flex-shrink:0;
-  margin-top:1px;
-  box-shadow:0 4px 10px rgba(27,77,46,0.22);
-}
-.about-cert-creds__body{display:flex; flex-direction:column; gap:1px;}
-.about-cert-creds__title{
-  font-family:'Barlow Condensed', sans-serif;
-  font-size:14px;
-  font-weight:700;
-  letter-spacing:0.06em;
-  text-transform:uppercase;
-  color:#0F1F14;
-}
-.about-cert-creds__detail{
-  font-size:13.5px;
-  color:#5b6a58;
-  line-height:1.4;
-}
-
-/* Right column — certificate display with prominent verified stamp */
+/* Certificate display — the hero, centered with breathing room */
 .about-cert-visual{
   position:relative;
+  max-width:720px;
+  margin:0 auto clamp(36px, 4vw, 52px);
 }
 .about-cert-card{
   position:relative;
-  padding:18px;
+  padding:16px;
   border-radius:18px;
   background:rgba(255,255,255,0.98);
   border:1px solid rgba(27,77,46,0.10);
@@ -436,38 +391,95 @@
   border-radius:10px;
 }
 
-/* Big circular VERIFIED stamp — notary-style, hand-stamped feel */
+/* Credential cards — 3-across horizontal strip below the certificate */
+.about-cert-creds{
+  list-style:none;
+  margin:0;
+  padding:0;
+  display:grid;
+  grid-template-columns:repeat(3, 1fr);
+  gap:16px;
+  max-width:900px;
+  margin:0 auto;
+}
+.about-cert-creds li{
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  text-align:center;
+  gap:12px;
+  padding:24px 20px 22px;
+  background:rgba(255,255,255,0.70);
+  border:1px solid rgba(27,77,46,0.12);
+  border-radius:14px;
+  backdrop-filter:blur(4px);
+  transition:transform 0.25s ease, box-shadow 0.25s ease, border-color 0.25s ease;
+}
+.about-cert-creds li:hover{
+  transform:translateY(-3px);
+  border-color:rgba(243,144,25,0.30);
+  box-shadow:0 12px 28px rgba(27,77,46,0.10);
+}
+.about-cert-creds__icon{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  width:42px;
+  height:42px;
+  border-radius:50%;
+  background:linear-gradient(135deg, #2D6A42 0%, #1B4D2E 100%);
+  color:var(--amber-light);
+  font-weight:900;
+  font-size:18px;
+  flex-shrink:0;
+  box-shadow:0 6px 14px rgba(27,77,46,0.25);
+}
+.about-cert-creds__body{display:flex; flex-direction:column; gap:3px;}
+.about-cert-creds__title{
+  font-family:'Barlow Condensed', sans-serif;
+  font-size:14px;
+  font-weight:800;
+  letter-spacing:0.10em;
+  text-transform:uppercase;
+  color:#0F1F14;
+}
+.about-cert-creds__detail{
+  font-size:13px;
+  color:#5b6a58;
+  line-height:1.45;
+}
+
+/* Circular VERIFIED stamp — anchored to top-right of the certificate card */
 .about-cert-stamp{
   position:absolute;
-  bottom:-32px;
-  right:-32px;
-  width:160px;
-  height:160px;
+  top:-22px;
+  right:-22px;
+  width:118px;
+  height:118px;
   display:flex;
   flex-direction:column;
   align-items:center;
   justify-content:center;
-  gap:4px;
+  gap:2px;
   background:
     radial-gradient(circle at 30% 25%, rgba(255,255,255,0.18), transparent 50%),
     linear-gradient(135deg, #2D6A42 0%, #1B4D2E 100%);
   border-radius:50%;
   color:#fff;
   z-index:3;
-  transform:rotate(-12deg);
+  transform:rotate(-10deg);
   transition:transform 0.5s cubic-bezier(0.2, 0.8, 0.2, 1);
   box-shadow:
-    0 18px 40px rgba(27,77,46,0.40),
-    inset 0 0 0 4px rgba(255,255,255,0.18),
-    inset 0 0 0 5px rgba(255,255,255,0.06),
-    inset 0 0 0 12px rgba(255,255,255,0.00);
+    0 14px 32px rgba(27,77,46,0.40),
+    inset 0 0 0 3px rgba(255,255,255,0.18),
+    inset 0 0 0 4px rgba(255,255,255,0.06);
 }
 .about-cert-card:hover ~ .about-cert-stamp,
 .about-cert-stamp:hover{
-  transform:rotate(-8deg) scale(1.06);
+  transform:rotate(-6deg) scale(1.06);
 }
 .about-cert-stamp__check{
-  font-size:42px;
+  font-size:30px;
   line-height:1;
   font-weight:900;
   color:var(--amber-light);
@@ -475,20 +487,20 @@
 }
 .about-cert-stamp__label{
   font-family:'Barlow Condensed', sans-serif;
-  font-size:14px;
+  font-size:11px;
   font-weight:800;
-  letter-spacing:0.20em;
+  letter-spacing:0.18em;
   text-transform:uppercase;
   color:#fff;
 }
 .about-cert-stamp__sub{
   font-family:'Barlow Condensed', sans-serif;
-  font-size:9.5px;
+  font-size:8px;
   font-weight:600;
-  letter-spacing:0.18em;
+  letter-spacing:0.16em;
   text-transform:uppercase;
-  color:rgba(255,255,255,0.70);
-  margin-top:-2px;
+  color:rgba(255,255,255,0.65);
+  margin-top:-1px;
 }
 @media(max-width:1280px){
   .about-main{
@@ -1271,34 +1283,14 @@
       </div>
 
       <div class="about-cert-band reveal reveal-delay-2">
+        <!-- Header copy (centered) -->
         <div class="about-cert-copy">
           <span class="section-tag">Certified Hydrawise Specialist</span>
           <h3>Smart upgrades, retrofits, and tailored controller setups.</h3>
           <p><strong>PJL Land Services</strong> is a certified installer of <strong>Hydrawise</strong> technology, offering full system upgrades, smarter retrofits, and configurations designed to suit the way each property is actually used.</p>
-          <ul class="about-cert-creds">
-            <li>
-              <span class="about-cert-creds__icon" aria-hidden="true">✓</span>
-              <span class="about-cert-creds__body">
-                <span class="about-cert-creds__title">Hunter University Trained</span>
-                <span class="about-cert-creds__detail">Hydrawise-Ready Controllers Specialist program</span>
-              </span>
-            </li>
-            <li>
-              <span class="about-cert-creds__icon" aria-hidden="true">✓</span>
-              <span class="about-cert-creds__body">
-                <span class="about-cert-creds__title">Online Training Program</span>
-                <span class="about-cert-creds__detail">Completed certification — credential active</span>
-              </span>
-            </li>
-            <li>
-              <span class="about-cert-creds__icon" aria-hidden="true">✓</span>
-              <span class="about-cert-creds__body">
-                <span class="about-cert-creds__title">Authorized Installer</span>
-                <span class="about-cert-creds__detail">Active across Newmarket &amp; the GTA</span>
-              </span>
-            </li>
-          </ul>
         </div>
+
+        <!-- Certificate as the centered hero with the verified stamp -->
         <div class="about-cert-visual">
           <div class="about-cert-card">
             <img src="hydrawise-certificate.png" alt="Hydrawise Specialist certificate awarded to PJL Land Services">
@@ -1309,6 +1301,31 @@
             <span class="about-cert-stamp__sub">Active Credential</span>
           </div>
         </div>
+
+        <!-- Credential cards — horizontal 3-up strip -->
+        <ul class="about-cert-creds">
+          <li>
+            <span class="about-cert-creds__icon" aria-hidden="true">✓</span>
+            <span class="about-cert-creds__body">
+              <span class="about-cert-creds__title">Hunter University Trained</span>
+              <span class="about-cert-creds__detail">Hydrawise-Ready Controllers Specialist program</span>
+            </span>
+          </li>
+          <li>
+            <span class="about-cert-creds__icon" aria-hidden="true">✓</span>
+            <span class="about-cert-creds__body">
+              <span class="about-cert-creds__title">Online Training Program</span>
+              <span class="about-cert-creds__detail">Completed certification — credential active</span>
+            </span>
+          </li>
+          <li>
+            <span class="about-cert-creds__icon" aria-hidden="true">✓</span>
+            <span class="about-cert-creds__body">
+              <span class="about-cert-creds__title">Authorized Installer</span>
+              <span class="about-cert-creds__detail">Active across Newmarket &amp; the GTA</span>
+            </span>
+          </li>
+        </ul>
       </div>
     </div>
   </div>
