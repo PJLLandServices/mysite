@@ -854,21 +854,106 @@ a.sprk-comp:focus-visible {
   .sprk-components { grid-template-columns: 1fr; }
 }
 
-/* Why these brands callout */
+/* "Engineered By" — premium brand showcase panel */
 .sprk-brands-note {
-  margin-top: 28px;
-  padding: 22px 28px;
-  background: linear-gradient(135deg, rgba(45,106,66,0.08) 0%, rgba(31,93,138,0.06) 100%);
-  border: 1px solid rgba(45,106,66,0.18);
-  border-left: 4px solid #2d6a42;
+  margin-top: 40px;
+  padding: clamp(56px, 6.5vw, 88px) clamp(28px, 4vw, 56px);
+  background:
+    radial-gradient(ellipse 70% 55% at 8% 5%, rgba(74,140,92,0.10), transparent 55%),
+    radial-gradient(ellipse 60% 50% at 95% 95%, rgba(224,123,36,0.08), transparent 55%),
+    linear-gradient(180deg, #f7faf2 0%, #edf4e4 100%);
   border-radius: var(--r-lg);
-  display: flex;
-  gap: 18px;
-  align-items: center;
+  border: 1px solid rgba(45,106,66,0.15);
+  text-align: center;
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+  box-shadow: 0 16px 44px rgba(27,77,46,0.10);
 }
-.sprk-brands-note__icon { font-size: 28px; flex-shrink: 0; }
-.sprk-brands-note__copy { font-size: 14.5px; color: var(--text); line-height: 1.6; }
-.sprk-brands-note__copy strong { color: var(--green); }
+.sprk-brands-note::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image: radial-gradient(rgba(45,106,66,0.05) 1px, transparent 1px);
+  background-size: 32px 32px;
+  pointer-events: none;
+  z-index: -1;
+}
+.sprk-brands-note::after {
+  /* amber hairline along the top edge */
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent 0%, rgba(243,144,25,0.55) 50%, transparent 100%);
+}
+
+/* Eyebrow flanked by amber bracket-lines for an editorial header feel */
+.sprk-brands-note__eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 14px;
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--green);
+  margin-bottom: 44px;
+}
+.sprk-brands-note__eyebrow::before,
+.sprk-brands-note__eyebrow::after {
+  content: '';
+  display: inline-block;
+  width: 40px;
+  height: 2px;
+  border-radius: 99px;
+}
+.sprk-brands-note__eyebrow::before {
+  background: linear-gradient(90deg, transparent 0%, var(--amber) 100%);
+}
+.sprk-brands-note__eyebrow::after {
+  background: linear-gradient(90deg, var(--amber) 0%, transparent 100%);
+}
+
+/* Big logos — the visual centerpiece */
+.sprk-brands-note__logos {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: clamp(48px, 9vw, 140px);
+  margin-bottom: 40px;
+  flex-wrap: wrap;
+}
+.sprk-brands-note__logos img {
+  height: clamp(80px, 10vw, 120px);
+  width: auto;
+  display: block;
+  filter: drop-shadow(0 3px 8px rgba(0,0,0,0.10));
+  transition: filter 0.4s ease, transform 0.3s ease;
+}
+.sprk-brands-note__logos img:hover {
+  filter:
+    drop-shadow(0 0 14px rgba(243,144,25,0.55))
+    drop-shadow(0 3px 10px rgba(0,0,0,0.15));
+  transform: translateY(-3px);
+}
+
+/* Punchy editorial copy — Barlow Condensed at hero-supporting scale */
+.sprk-brands-note__copy {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: clamp(20px, 2vw, 26px);
+  color: var(--text);
+  line-height: 1.4;
+  max-width: 56ch;
+  margin: 0 auto;
+  font-weight: 500;
+  letter-spacing: 0.005em;
+}
+.sprk-brands-note__copy strong {
+  color: var(--green);
+  font-weight: 700;
+}
 
 /* Property types — compact closer strip */
 .sprk-properties {
@@ -1931,10 +2016,12 @@ a.sprk-comp:focus-visible {
     </div>
 
     <div class="sprk-brands-note reveal">
-      <div class="sprk-brands-note__icon" aria-hidden="true">🏆</div>
-      <div class="sprk-brands-note__copy">
-        <strong>Why Hunter and RainBird?</strong> Two of the most trusted manufacturers in irrigation. Field-proven, parts-available, and built to last decades — not seasons. We choose the brands that hold up so your system holds up.
+      <span class="sprk-brands-note__eyebrow">Built With</span>
+      <div class="sprk-brands-note__logos">
+        <img src="hunter-logo.svg" alt="Hunter Industries">
+        <img src="rainbird-logo.svg" alt="Rain Bird">
       </div>
+      <p class="sprk-brands-note__copy"><strong>The two most trusted names in irrigation.</strong> Field-proven for decades, parts available everywhere, built to outlast the systems they're installed in.</p>
     </div>
   </div>
 </section>
@@ -2053,7 +2140,7 @@ a.sprk-comp:focus-visible {
         <ul>
           <li><a href="index.html">Home</a></li>
           <li><a href="estimate.html">Get an Estimate</a></li>
-          <li><a href="faq.html">FAQ</a></li>
+          <li><a href="blog.html">Blog</a></li><li><a href="faq.html">FAQ</a></li>
           <li><a href="contact.html">Contact Us</a></li>
         </ul>
       </div>

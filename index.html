@@ -275,6 +275,29 @@
 .stat:last-child{border-right:none;}
 .stat-n{font-family:'Playfair Display',serif;font-size:56px;font-weight:700;color:#fff;line-height:1;margin-bottom:10px;}
 .stat-l{font-size:13px;color:rgba(255,255,255,0.65);font-weight:500;letter-spacing:.04em;}
+/* Integrity callout below the stats — calls out that these aren't inflated marketing numbers */
+.stats-disclaimer{
+  position:relative; z-index:2;
+  display:flex; align-items:center; justify-content:center; gap:10px;
+  margin-top:36px;
+  font-size:13px;
+  font-weight:500;
+  letter-spacing:.04em;
+  color:rgba(255,255,255,0.62);
+  font-style:italic;
+  text-align:center;
+  padding:0 24px;
+}
+.stats-disclaimer__icon{
+  display:inline-flex; align-items:center; justify-content:center;
+  width:20px; height:20px;
+  border-radius:50%;
+  background:rgba(243,144,25,0.22);
+  color:var(--amber-light);
+  font-size:11px; font-weight:800;
+  font-style:normal;
+  flex-shrink:0;
+}
 /* About */
 .about-sec{padding:96px 0;}
 .about-shell{
@@ -393,53 +416,224 @@
   display:block;
   filter:drop-shadow(0 24px 42px rgba(23,34,23,0.12));
 }
+/* ════════════════════════════════════════════════════
+   CERTIFICATE TRUST DISPLAY — centered hero layout
+   Single column: heading + intro at top, big certificate as
+   the hero in the middle, 3 credential cards as a horizontal
+   strip below. Generous breathing room throughout.
+   ════════════════════════════════════════════════════ */
 .about-cert-band{
   position:relative;
   z-index:1;
-  display:grid;
-  grid-template-columns:minmax(0,1fr) minmax(280px,380px);
-  gap:28px;
-  align-items:center;
   margin:0 58px 34px;
-  padding:26px 28px;
+  padding:clamp(40px, 5vw, 64px) clamp(28px, 4vw, 56px);
   border-radius:30px;
-  background:linear-gradient(135deg, rgba(233,239,223,0.94), rgba(245,248,239,0.92));
-  border:1px solid rgba(27,77,46,0.08);
-  box-shadow:0 16px 40px rgba(23,34,23,0.08);
+  background:
+    radial-gradient(ellipse 70% 55% at 8% 5%, rgba(74,140,92,0.14), transparent 55%),
+    radial-gradient(ellipse 60% 50% at 95% 95%, rgba(243,144,25,0.10), transparent 55%),
+    linear-gradient(135deg, rgba(233,239,223,0.96), rgba(245,248,239,0.94));
+  border:1px solid rgba(27,77,46,0.10);
+  box-shadow:0 18px 48px rgba(23,34,23,0.10);
+  isolation:isolate;
+  overflow:hidden;
+  text-align:center;
+}
+.about-cert-band::before{
+  content:'';
+  position:absolute;
+  inset:0;
+  background-image:radial-gradient(rgba(45,106,66,0.05) 1px, transparent 1px);
+  background-size:28px 28px;
+  pointer-events:none;
+  z-index:-1;
+}
+.about-cert-band::after{
+  content:'';
+  position:absolute;
+  top:0; left:0; right:0;
+  height:1px;
+  background:linear-gradient(90deg, transparent 0%, rgba(243,144,25,0.55) 50%, transparent 100%);
+}
+
+/* Header copy — centered above the certificate */
+.about-cert-copy{
+  max-width:660px;
+  margin:0 auto clamp(28px, 3.5vw, 44px);
 }
 .about-cert-copy .section-tag{
-  margin-bottom:14px;
-  background:rgba(27,77,46,0.08);
+  display:inline-flex;
+  align-items:center;
+  gap:10px;
+  margin-bottom:16px;
+  padding:6px 14px;
+  background:rgba(27,77,46,0.10);
+  color:#1B4D2E;
+  font-family:'Barlow Condensed', sans-serif;
+  font-size:11px;
+  font-weight:800;
+  letter-spacing:0.20em;
+  text-transform:uppercase;
+  border-radius:99px;
 }
 .about-cert-copy h3{
   margin:0 0 14px;
-  max-width:17ch;
-  color:#101610;
-  font-family:'Playfair Display',serif;
-  font-size:clamp(30px,3vw,50px);
-  line-height:1.02;
-  letter-spacing:-0.04em;
+  color:#0F1F14;
+  font-family:'Barlow Condensed', sans-serif;
+  font-size:clamp(30px, 3.4vw, 44px);
+  font-weight:800;
+  line-height:1.05;
+  letter-spacing:-0.005em;
+  text-transform:uppercase;
 }
 .about-cert-copy p{
-  margin:0;
-  max-width:42ch;
+  margin:0 auto;
+  max-width:58ch;
   color:#5b6a58;
   font-size:16px;
-  line-height:1.72;
+  line-height:1.65;
 }
-.about-cert-copy strong{color:#101610;}
+.about-cert-copy strong{color:#0F1F14;}
+
+/* Certificate display — the hero, centered with breathing room */
+.about-cert-visual{
+  position:relative;
+  max-width:720px;
+  margin:0 auto clamp(36px, 4vw, 52px);
+}
 .about-cert-card{
-  padding:12px;
-  border-radius:28px;
-  background:rgba(255,255,255,0.94);
-  border:1px solid rgba(27,77,46,0.1);
-  box-shadow:0 20px 40px rgba(23,34,23,0.14);
-  transform:rotate(5deg);
+  position:relative;
+  padding:16px;
+  border-radius:18px;
+  background:rgba(255,255,255,0.98);
+  border:1px solid rgba(27,77,46,0.10);
+  box-shadow:
+    0 32px 70px rgba(23,34,23,0.22),
+    inset 0 0 0 1px rgba(255,255,255,0.55);
+  transition:transform 0.4s cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 0.4s ease;
+}
+.about-cert-card:hover{
+  transform:translateY(-4px);
+  box-shadow:
+    0 40px 80px rgba(23,34,23,0.26),
+    inset 0 0 0 1px rgba(255,255,255,0.60);
 }
 .about-cert-card img{
   width:100%;
+  height:auto;
   display:block;
-  border-radius:18px;
+  border-radius:10px;
+}
+
+/* Credential cards — 3-across horizontal strip below the certificate */
+.about-cert-creds{
+  list-style:none;
+  margin:0;
+  padding:0;
+  display:grid;
+  grid-template-columns:repeat(3, 1fr);
+  gap:16px;
+  max-width:900px;
+  margin:0 auto;
+}
+.about-cert-creds li{
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  text-align:center;
+  gap:12px;
+  padding:24px 20px 22px;
+  background:rgba(255,255,255,0.70);
+  border:1px solid rgba(27,77,46,0.12);
+  border-radius:14px;
+  backdrop-filter:blur(4px);
+  transition:transform 0.25s ease, box-shadow 0.25s ease, border-color 0.25s ease;
+}
+.about-cert-creds li:hover{
+  transform:translateY(-3px);
+  border-color:rgba(243,144,25,0.30);
+  box-shadow:0 12px 28px rgba(27,77,46,0.10);
+}
+.about-cert-creds__icon{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  width:42px;
+  height:42px;
+  border-radius:50%;
+  background:linear-gradient(135deg, #2D6A42 0%, #1B4D2E 100%);
+  color:var(--amber-light);
+  font-weight:900;
+  font-size:18px;
+  flex-shrink:0;
+  box-shadow:0 6px 14px rgba(27,77,46,0.25);
+}
+.about-cert-creds__body{display:flex; flex-direction:column; gap:3px;}
+.about-cert-creds__title{
+  font-family:'Barlow Condensed', sans-serif;
+  font-size:14px;
+  font-weight:800;
+  letter-spacing:0.10em;
+  text-transform:uppercase;
+  color:#0F1F14;
+}
+.about-cert-creds__detail{
+  font-size:13px;
+  color:#5b6a58;
+  line-height:1.45;
+}
+
+/* Circular VERIFIED stamp — anchored to top-right of the certificate card */
+.about-cert-stamp{
+  position:absolute;
+  top:-22px;
+  right:-22px;
+  width:118px;
+  height:118px;
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  justify-content:center;
+  gap:2px;
+  background:
+    radial-gradient(circle at 30% 25%, rgba(255,255,255,0.18), transparent 50%),
+    linear-gradient(135deg, #2D6A42 0%, #1B4D2E 100%);
+  border-radius:50%;
+  color:#fff;
+  z-index:3;
+  transform:rotate(-10deg);
+  transition:transform 0.5s cubic-bezier(0.2, 0.8, 0.2, 1);
+  box-shadow:
+    0 14px 32px rgba(27,77,46,0.40),
+    inset 0 0 0 3px rgba(255,255,255,0.18),
+    inset 0 0 0 4px rgba(255,255,255,0.06);
+}
+.about-cert-card:hover ~ .about-cert-stamp,
+.about-cert-stamp:hover{
+  transform:rotate(-6deg) scale(1.06);
+}
+.about-cert-stamp__check{
+  font-size:30px;
+  line-height:1;
+  font-weight:900;
+  color:var(--amber-light);
+  filter:drop-shadow(0 2px 4px rgba(0,0,0,0.25));
+}
+.about-cert-stamp__label{
+  font-family:'Barlow Condensed', sans-serif;
+  font-size:11px;
+  font-weight:800;
+  letter-spacing:0.18em;
+  text-transform:uppercase;
+  color:#fff;
+}
+.about-cert-stamp__sub{
+  font-family:'Barlow Condensed', sans-serif;
+  font-size:8px;
+  font-weight:600;
+  letter-spacing:0.16em;
+  text-transform:uppercase;
+  color:rgba(255,255,255,0.65);
+  margin-top:-1px;
 }
 @media(max-width:1280px){
   .about-main{
@@ -492,17 +686,27 @@
   }
   .about-cert-band{
     grid-template-columns:1fr;
-    gap:20px;
+    gap:32px;
     margin:0 28px 26px;
+    padding:36px 32px;
   }
   .about-cert-copy h3,
   .about-cert-copy p{
     max-width:none;
   }
-  .about-cert-card{
-    width:min(100%, 340px);
-    margin-left:auto;
+  .about-cert-visual{
+    width:min(100%, 480px);
+    margin:0 auto;
   }
+  .about-cert-stamp{
+    width:128px;
+    height:128px;
+    bottom:-22px;
+    right:-22px;
+  }
+  .about-cert-stamp__check{font-size:34px;}
+  .about-cert-stamp__label{font-size:12px;}
+  .about-cert-stamp__sub{font-size:8.5px;}
 }
 @media(max-width:760px){
   .about-shell{
@@ -703,6 +907,136 @@
   .smart-tech-visual-shell{padding:16px;border-radius:22px;}
   .smart-tech-visual-art{width:min(100%,360px);}
 }
+
+/* ─── From the Blog — homepage CTA strip ─── */
+.blog-strip { padding: clamp(48px, 6vw, 80px) 0; }
+.blog-strip__head {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: end;
+  gap: 24px;
+  margin-bottom: 32px;
+}
+.blog-strip__eyebrow {
+  display: block;
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.20em;
+  text-transform: uppercase;
+  color: var(--amber);
+  margin-bottom: 8px;
+}
+.blog-strip__title {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: clamp(28px, 3.5vw, 42px);
+  font-weight: 800;
+  line-height: 1.05;
+  text-transform: uppercase;
+  margin: 0;
+  color: var(--text);
+  max-width: 24ch;
+}
+.blog-strip__all-link {
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--green);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  transition: color 0.2s, transform 0.2s;
+}
+.blog-strip__all-link:hover { color: var(--amber); transform: translateX(2px); }
+.blog-strip__grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 24px;
+}
+.blog-strip__card {
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: var(--r-xl);
+  overflow: hidden;
+  transition: transform 0.3s ease, box-shadow 0.3s ease, border-color 0.3s ease;
+  text-decoration: none;
+  color: inherit;
+  box-shadow: 0 6px 20px rgba(15,31,20,0.06);
+}
+.blog-strip__card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 16px 36px rgba(15,31,20,0.10);
+  border-color: rgba(74,140,92,0.30);
+}
+.blog-strip__img {
+  position: relative;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+}
+.blog-strip__img img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transition: transform 0.5s ease;
+}
+.blog-strip__card:hover .blog-strip__img img { transform: scale(1.05); }
+.blog-strip__tag {
+  position: absolute;
+  top: 14px;
+  left: 14px;
+  background: rgba(45,106,66,0.92);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 6px 12px;
+  border-radius: 99px;
+}
+.blog-strip__body {
+  padding: 24px 26px 26px;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+}
+.blog-strip__body h3 {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: clamp(20px, 2vw, 24px);
+  font-weight: 700;
+  text-transform: uppercase;
+  line-height: 1.15;
+  letter-spacing: 0.005em;
+  color: var(--green);
+  margin: 0 0 10px;
+}
+.blog-strip__body h3 em { color: var(--amber); font-style: italic; }
+.blog-strip__body p {
+  font-size: 14.5px;
+  color: var(--text-mid);
+  line-height: 1.6;
+  margin: 0 0 16px;
+  flex: 1;
+}
+.blog-strip__cta {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--amber);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+@media (max-width: 760px) {
+  .blog-strip__head { grid-template-columns: 1fr; align-items: start; }
+  .blog-strip__grid { grid-template-columns: 1fr; }
+}
 </style>
 </head>
 <body>
@@ -851,9 +1185,13 @@
     <div class="stats-row">
       <div class="stat reveal"><div class="stat-n" data-target="10" data-suffix="+">10+</div><div class="stat-l">Years Experience</div></div>
       <div class="stat reveal reveal-delay-1"><div class="stat-n">100's</div><div class="stat-l">of Systems Serviced Each Season</div></div>
-      <div class="stat reveal reveal-delay-2"><div class="stat-n">Dozens</div><div class="stat-l">of Systems Upgraded to Smart Each Month</div></div>
+      <div class="stat reveal reveal-delay-2"><div class="stat-n">Dozens</div><div class="stat-l">of Smart System Upgrades Each Month</div></div>
       <div class="stat reveal reveal-delay-3"><div class="stat-n" data-target="100" data-suffix="%">100%</div><div class="stat-l">Satisfaction Focused</div></div>
     </div>
+    <p class="stats-disclaimer reveal">
+      <span class="stats-disclaimer__icon" aria-hidden="true">✓</span>
+      Accurate numbers — not the inflated kind. Just the truth, like the rest of our work.
+    </p>
   </div>
 </section>
 
@@ -1079,14 +1417,49 @@
       </div>
 
       <div class="about-cert-band reveal reveal-delay-2">
+        <!-- Header copy (centered) -->
         <div class="about-cert-copy">
-          <span class="section-tag">Certified Hydrawise</span>
+          <span class="section-tag">Certified Hydrawise Specialist</span>
           <h3>Smart upgrades, retrofits, and tailored controller setups.</h3>
           <p><strong>PJL Land Services</strong> is a certified installer of <strong>Hydrawise</strong> technology, offering full system upgrades, smarter retrofits, and configurations designed to suit the way each property is actually used.</p>
         </div>
-        <div class="about-cert-card">
-          <img src="hydrawise-certificate.png" alt="Hydrawise smart controller specialist certificate">
+
+        <!-- Certificate as the centered hero with the verified stamp -->
+        <div class="about-cert-visual">
+          <div class="about-cert-card">
+            <img src="hydrawise-certificate.png" alt="Hydrawise Specialist certificate awarded to PJL Land Services">
+          </div>
+          <div class="about-cert-stamp" aria-hidden="true">
+            <span class="about-cert-stamp__check">✓</span>
+            <span class="about-cert-stamp__label">Verified</span>
+            <span class="about-cert-stamp__sub">Active Credential</span>
+          </div>
         </div>
+
+        <!-- Credential cards — horizontal 3-up strip -->
+        <ul class="about-cert-creds">
+          <li>
+            <span class="about-cert-creds__icon" aria-hidden="true">✓</span>
+            <span class="about-cert-creds__body">
+              <span class="about-cert-creds__title">Hunter University Trained</span>
+              <span class="about-cert-creds__detail">Hydrawise-Ready Controllers Specialist program</span>
+            </span>
+          </li>
+          <li>
+            <span class="about-cert-creds__icon" aria-hidden="true">✓</span>
+            <span class="about-cert-creds__body">
+              <span class="about-cert-creds__title">Online Training Program</span>
+              <span class="about-cert-creds__detail">Completed certification — credential active</span>
+            </span>
+          </li>
+          <li>
+            <span class="about-cert-creds__icon" aria-hidden="true">✓</span>
+            <span class="about-cert-creds__body">
+              <span class="about-cert-creds__title">Authorized Installer</span>
+              <span class="about-cert-creds__detail">Active across Newmarket &amp; the GTA</span>
+            </span>
+          </li>
+        </ul>
       </div>
     </div>
   </div>
@@ -1207,6 +1580,43 @@
   </div>
 </section>
 
+<!-- From the Blog — local insight + lead magnet -->
+<section class="section blog-strip">
+  <div class="container">
+    <div class="blog-strip__head reveal">
+      <div>
+        <span class="blog-strip__eyebrow">From the Blog</span>
+        <h2 class="blog-strip__title">Local insight, straight from the field.</h2>
+      </div>
+      <a href="blog.html" class="blog-strip__all-link">All posts <span aria-hidden="true">→</span></a>
+    </div>
+    <div class="blog-strip__grid">
+      <a href="blog-tree-irrigation-newmarket-gta.html" class="blog-strip__card reveal">
+        <div class="blog-strip__img">
+          <img src="spring-fall-service.jpg" alt="Tree irrigation retrofit on a Newmarket property">
+          <span class="blog-strip__tag">🌳 Tree Irrigation</span>
+        </div>
+        <div class="blog-strip__body">
+          <h3>Are Your Sprinklers <em>Killing</em> Your Trees?</h3>
+          <p>Standard lawn sprinklers don't water trees properly — and on GTA clay soil it's a slow-motion problem. The four pro methods, what they cost, and which fits your property.</p>
+          <span class="blog-strip__cta">Read post <span aria-hidden="true">→</span></span>
+        </div>
+      </a>
+      <a href="blog-signs-sprinkler-needs-repair-newmarket-gta.html" class="blog-strip__card reveal reveal-delay-1">
+        <div class="blog-strip__img">
+          <img src="technician-diagnoses-hero.png" alt="PJL technician diagnosing a sprinkler problem">
+          <span class="blog-strip__tag" style="background:rgba(142,63,20,0.92);">🔧 Repair</span>
+        </div>
+        <div class="blog-strip__body">
+          <h3>7 Signs Your Sprinkler System Needs an <em>Expert</em></h3>
+          <p>From soggy spots and brown patches to mystery puddles in the basement — the seven warning signs every homeowner should know before damage starts.</p>
+          <span class="blog-strip__cta">Read post <span aria-hidden="true">→</span></span>
+        </div>
+      </a>
+    </div>
+  </div>
+</section>
+
 <!-- FAQ Preview -->
 <section class="faq-sec">
   <div class="container">
@@ -1263,7 +1673,7 @@
         </div>
       </div>
       <div class="footer-col"><h5>Services</h5><ul><li><a href="sprinkler-systems.html">Spring Openings</a></li><li><a href="sprinkler-systems.html">Fall Closings</a></li><li><a href="sprinkler-systems.html#repair">Sprinkler Repair</a></li><li><a href="estimate.html">New Installations</a></li><li><a href="sprinkler-systems.html#upgrades">Smart Upgrades</a></li><li><a href="landscape-lighting.html">Landscape Lighting</a></li></ul></div>
-      <div class="footer-col"><h5>Company</h5><ul><li><a href="index.html">Home</a></li><li><a href="estimate.html">Get an Estimate</a></li><li><a href="faq.html">FAQ</a></li><li><a href="contact.html">Contact Us</a></li><li><a href="https://calendar.app.google/ktWefWX55H1fqGCHA" target="_blank">Book Online</a></li></ul></div>
+      <div class="footer-col"><h5>Company</h5><ul><li><a href="index.html">Home</a></li><li><a href="estimate.html">Get an Estimate</a></li><li><a href="blog.html">Blog</a></li><li><a href="faq.html">FAQ</a></li><li><a href="contact.html">Contact Us</a></li><li><a href="https://calendar.app.google/ktWefWX55H1fqGCHA" target="_blank">Book Online</a></li></ul></div>
       <div class="footer-col">
         <h5>Contact</h5>
         <div class="footer-contact-item"><span>📞</span><a href="tel:+19059600181" style="color:rgba(255,255,255,0.65)">(905) 960-0181</a></div>
