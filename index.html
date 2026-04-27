@@ -142,6 +142,29 @@
 .stat:last-child{border-right:none;}
 .stat-n{font-family:'Playfair Display',serif;font-size:56px;font-weight:700;color:#fff;line-height:1;margin-bottom:10px;}
 .stat-l{font-size:13px;color:rgba(255,255,255,0.65);font-weight:500;letter-spacing:.04em;}
+/* Integrity callout below the stats — calls out that these aren't inflated marketing numbers */
+.stats-disclaimer{
+  position:relative; z-index:2;
+  display:flex; align-items:center; justify-content:center; gap:10px;
+  margin-top:36px;
+  font-size:13px;
+  font-weight:500;
+  letter-spacing:.04em;
+  color:rgba(255,255,255,0.62);
+  font-style:italic;
+  text-align:center;
+  padding:0 24px;
+}
+.stats-disclaimer__icon{
+  display:inline-flex; align-items:center; justify-content:center;
+  width:20px; height:20px;
+  border-radius:50%;
+  background:rgba(243,144,25,0.22);
+  color:var(--amber-light);
+  font-size:11px; font-weight:800;
+  font-style:normal;
+  flex-shrink:0;
+}
 /* About */
 .about-sec{padding:96px 0;}
 .about-shell{
@@ -847,9 +870,13 @@
     <div class="stats-row">
       <div class="stat reveal"><div class="stat-n" data-target="10" data-suffix="+">10+</div><div class="stat-l">Years Experience</div></div>
       <div class="stat reveal reveal-delay-1"><div class="stat-n">100's</div><div class="stat-l">of Systems Serviced Each Season</div></div>
-      <div class="stat reveal reveal-delay-2"><div class="stat-n">Dozens</div><div class="stat-l">of Systems Upgraded to Smart Each Month</div></div>
+      <div class="stat reveal reveal-delay-2"><div class="stat-n">Dozens</div><div class="stat-l">of Smart System Upgrades Each Month</div></div>
       <div class="stat reveal reveal-delay-3"><div class="stat-n" data-target="100" data-suffix="%">100%</div><div class="stat-l">Satisfaction Focused</div></div>
     </div>
+    <p class="stats-disclaimer reveal">
+      <span class="stats-disclaimer__icon" aria-hidden="true">✓</span>
+      Accurate numbers — not the inflated kind. Just the truth, like the rest of our work.
+    </p>
   </div>
 </section>
 
