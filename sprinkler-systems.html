@@ -636,6 +636,13 @@
   flex-direction: column;
   transition: transform 0.3s cubic-bezier(.2,.8,.2,1), box-shadow 0.3s ease, border-color 0.3s ease;
   position: relative;
+  /* Card-as-link: reset anchor styling so the article looks unchanged */
+  text-decoration: none;
+  color: inherit;
+}
+a.sprk-comp:focus-visible {
+  outline: 3px solid var(--amber-light);
+  outline-offset: 4px;
 }
 .sprk-comp::before {
   content: '';
@@ -690,14 +697,65 @@
   display: inline-flex;
   align-self: flex-start;
   align-items: center;
-  font-size: 10.5px;
-  font-weight: 700;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: #fff;
-  background: var(--comp-accent, var(--green));
-  padding: 4px 10px;
+  justify-content: center;
+  padding: 7px 14px;
+  background: #fff;
+  border: 1px solid rgba(0,0,0,0.08);
   border-radius: 99px;
+  box-shadow: 0 4px 10px rgba(27,77,46,0.08);
+  height: 30px;
+  transition: box-shadow 0.35s ease, transform 0.25s ease, border-color 0.35s ease;
+}
+.sprk-comp__brand img {
+  height: 14px;
+  width: auto;
+  display: block;
+  filter: drop-shadow(0 1px 2px rgba(0,0,0,0.10));
+  transition: filter 0.35s ease;
+}
+/* Illuminate effect on card hover — amber glow ring + lifted logo */
+.sprk-comp:hover .sprk-comp__brand {
+  box-shadow: 0 0 0 3px rgba(243,144,25,0.20), 0 8px 22px rgba(224,123,36,0.22);
+  border-color: rgba(243,144,25,0.45);
+  transform: translateY(-1px);
+}
+.sprk-comp:hover .sprk-comp__brand img {
+  filter: drop-shadow(0 0 6px rgba(243,144,25,0.55));
+}
+
+/* "Learn More" overlay slides up from the bottom of the photo on hover */
+.sprk-comp__overlay {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  padding: 14px 18px;
+  background: linear-gradient(180deg, transparent 0%, rgba(15,31,20,0.78) 45%, rgba(15,31,20,0.95) 100%);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 12.5px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  transform: translateY(100%);
+  transition: transform 0.4s cubic-bezier(0.2, 0.8, 0.2, 1);
+  z-index: 3;
+  pointer-events: none;
+}
+.sprk-comp:hover .sprk-comp__overlay {
+  transform: translateY(0);
+}
+.sprk-comp__overlay-arrow {
+  display: inline-block;
+  transition: transform 0.3s ease;
+  font-size: 14px;
+  letter-spacing: 0;
+}
+.sprk-comp:hover .sprk-comp__overlay-arrow {
+  transform: translateX(5px);
 }
 .sprk-comp__name {
   font-family: 'Barlow Condensed', sans-serif;
@@ -1708,83 +1766,107 @@
     </div>
 
     <div class="sprk-components">
-      <article class="sprk-comp sprk-comp--hunter reveal reveal-delay-1">
+      <a class="sprk-comp sprk-comp--hunter reveal reveal-delay-1" href="https://www.hunterindustries.com/irrigation-product/controllers/hpc-400" target="_blank" rel="noopener noreferrer">
         <div class="sprk-comp__visual">
           <img src="hunter-hpc-400.jpg" alt="Hunter HPC-400 Hydrawise smart irrigation controller" loading="lazy">
+          <div class="sprk-comp__overlay" aria-hidden="true">
+            <span>Learn More</span>
+            <span class="sprk-comp__overlay-arrow">→</span>
+          </div>
         </div>
         <div class="sprk-comp__body">
-          <span class="sprk-comp__brand">Hunter</span>
+          <span class="sprk-comp__brand"><img src="hunter-logo.svg" alt="Hunter Industries"></span>
           <h3 class="sprk-comp__name">Smart Irrigation Timer</h3>
           <span class="sprk-comp__model">HPC-400 · Hydrawise</span>
           <p class="sprk-comp__copy">The brain. WiFi-connected, weather-adaptive, app-controlled — adjusts your schedule automatically based on real-time conditions across the GTA.</p>
           <span class="sprk-comp__spec">Standard on every install</span>
         </div>
-      </article>
+      </a>
 
-      <article class="sprk-comp sprk-comp--hunter reveal reveal-delay-2">
+      <a class="sprk-comp sprk-comp--hunter reveal reveal-delay-2" href="https://www.hunterindustries.com/irrigation-product/valves/pgv" target="_blank" rel="noopener noreferrer">
         <div class="sprk-comp__visual">
           <img src="hunter-pgv-valve.jpg" alt="Hunter PGV electronic control valve" loading="lazy">
+          <div class="sprk-comp__overlay" aria-hidden="true">
+            <span>Learn More</span>
+            <span class="sprk-comp__overlay-arrow">→</span>
+          </div>
         </div>
         <div class="sprk-comp__body">
-          <span class="sprk-comp__brand">Hunter</span>
+          <span class="sprk-comp__brand"><img src="hunter-logo.svg" alt="Hunter Industries"></span>
           <h3 class="sprk-comp__name">Electronic Control Valves</h3>
           <span class="sprk-comp__model">PGV Series · Sized to zone</span>
           <p class="sprk-comp__copy">The workhorse. Industry-standard residential globe valves — built for daily cycling, easy field service, and decade-long reliability.</p>
           <span class="sprk-comp__spec">Properly sized to your flow</span>
         </div>
-      </article>
+      </a>
 
-      <article class="sprk-comp sprk-comp--hunter reveal reveal-delay-3">
+      <a class="sprk-comp sprk-comp--hunter reveal reveal-delay-3" href="https://www.hunterindustries.com/irrigation-product/rotors/pgp-adj" target="_blank" rel="noopener noreferrer">
         <div class="sprk-comp__visual">
           <img src="hunter-pgp-rotor.jpg" alt="Hunter PGP-ADJ rotating sprinkler head" loading="lazy">
+          <div class="sprk-comp__overlay" aria-hidden="true">
+            <span>Learn More</span>
+            <span class="sprk-comp__overlay-arrow">→</span>
+          </div>
         </div>
         <div class="sprk-comp__body">
-          <span class="sprk-comp__brand">Hunter</span>
+          <span class="sprk-comp__brand"><img src="hunter-logo.svg" alt="Hunter Industries"></span>
           <h3 class="sprk-comp__name">Rotating Sprinkler Heads</h3>
           <span class="sprk-comp__model">PGP-ADJ Rotors</span>
           <p class="sprk-comp__copy">For large turf areas. Adjustable arc, 360° coverage, gear-driven precision — even watering across wide spaces with minimal head count.</p>
           <span class="sprk-comp__spec">Coverage: up to 50 ft radius</span>
         </div>
-      </article>
+      </a>
 
-      <article class="sprk-comp sprk-comp--hunter reveal reveal-delay-4">
+      <a class="sprk-comp sprk-comp--hunter reveal reveal-delay-4" href="https://www.hunterindustries.com/irrigation-product/sprays/pro-spray-prs30" target="_blank" rel="noopener noreferrer">
         <div class="sprk-comp__visual">
           <img src="hunter-pro-spray.jpg" alt="Hunter Pro-Spray PRS30 pressure-regulated pop-up spray head" loading="lazy">
+          <div class="sprk-comp__overlay" aria-hidden="true">
+            <span>Learn More</span>
+            <span class="sprk-comp__overlay-arrow">→</span>
+          </div>
         </div>
         <div class="sprk-comp__body">
-          <span class="sprk-comp__brand">Hunter</span>
+          <span class="sprk-comp__brand"><img src="hunter-logo.svg" alt="Hunter Industries"></span>
           <h3 class="sprk-comp__name">Pop-Up Spray Heads</h3>
           <span class="sprk-comp__model">Pro-Spray PRS30</span>
           <p class="sprk-comp__copy">Pressure-regulated at 30 PSI. Stops misting, prevents runoff, keeps watering uniform — the difference between a system that runs and one that runs <em>right</em>.</p>
           <span class="sprk-comp__spec">Pressure-regulated · Standard</span>
         </div>
-      </article>
+      </a>
 
-      <article class="sprk-comp sprk-comp--rainbird reveal reveal-delay-5">
+      <a class="sprk-comp sprk-comp--rainbird reveal reveal-delay-5" href="https://www.rainbird.com/products/mpr-pro-nozzles" target="_blank" rel="noopener noreferrer">
         <div class="sprk-comp__visual">
           <img src="rainbird-mpr-nozzle.jpg" alt="RainBird MPR matched-precipitation-rate spray nozzle" loading="lazy">
+          <div class="sprk-comp__overlay" aria-hidden="true">
+            <span>Learn More</span>
+            <span class="sprk-comp__overlay-arrow">→</span>
+          </div>
         </div>
         <div class="sprk-comp__body">
-          <span class="sprk-comp__brand">RainBird</span>
+          <span class="sprk-comp__brand"><img src="rainbird-logo.svg" alt="Rain Bird"></span>
           <h3 class="sprk-comp__name">Spray Head Nozzles</h3>
           <span class="sprk-comp__model">Matched Precipitation Rate (MPR)</span>
           <p class="sprk-comp__copy">Even water across every nozzle in a zone — no dry spots, no flooded ones. The unsung hero of an efficient system.</p>
           <span class="sprk-comp__spec">Matched precipitation rate</span>
         </div>
-      </article>
+      </a>
 
-      <article class="sprk-comp sprk-comp--rainbird reveal reveal-delay-6">
+      <a class="sprk-comp sprk-comp--rainbird reveal reveal-delay-6" href="https://www.rainbird.com/products/xfd-dripline" target="_blank" rel="noopener noreferrer">
         <div class="sprk-comp__visual">
           <img src="rainbird-xfd-dripline.jpg" alt="RainBird XFD pressure-compensating dripline" loading="lazy">
+          <div class="sprk-comp__overlay" aria-hidden="true">
+            <span>Learn More</span>
+            <span class="sprk-comp__overlay-arrow">→</span>
+          </div>
         </div>
         <div class="sprk-comp__body">
-          <span class="sprk-comp__brand">RainBird</span>
+          <span class="sprk-comp__brand"><img src="rainbird-logo.svg" alt="Rain Bird"></span>
           <h3 class="sprk-comp__name">Drip Irrigation Systems</h3>
           <span class="sprk-comp__model">XFD / XFDe Dripline</span>
           <p class="sprk-comp__copy">For shrub beds, trees, and tight planted zones. Pressure-compensating dripline delivers water exactly where it's needed — none wasted to evaporation or wind.</p>
           <span class="sprk-comp__spec">Pressure-compensating</span>
         </div>
-      </article>
+      </a>
     </div>
 
     <div class="sprk-brands-note reveal">
