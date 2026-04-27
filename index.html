@@ -287,11 +287,13 @@
   position:relative;
   z-index:1;
   display:grid;
-  grid-template-columns:minmax(0,1fr) minmax(280px,380px);
-  gap:28px;
+  /* Card column grew to better fit the 4:3 landscape certificate;
+     copy column gets a tighter cap so the visual balance works. */
+  grid-template-columns:minmax(0,1fr) minmax(420px,520px);
+  gap:36px;
   align-items:center;
   margin:0 58px 34px;
-  padding:26px 28px;
+  padding:32px 36px;
   border-radius:30px;
   background:linear-gradient(135deg, rgba(233,239,223,0.94), rgba(245,248,239,0.92));
   border:1px solid rgba(27,77,46,0.08);
@@ -320,25 +322,26 @@
 .about-cert-copy strong{color:#101610;}
 .about-cert-card{
   position:relative;
-  padding:14px;
-  border-radius:20px;
+  padding:16px;
+  border-radius:18px;
   background:rgba(255,255,255,0.98);
   border:1px solid rgba(27,77,46,0.10);
   box-shadow:
-    0 24px 50px rgba(23,34,23,0.18),
+    0 28px 60px rgba(23,34,23,0.20),
     inset 0 0 0 1px rgba(255,255,255,0.55);
   transition:transform 0.4s cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 0.4s ease;
 }
 .about-cert-card:hover{
   transform:translateY(-4px);
   box-shadow:
-    0 32px 64px rgba(23,34,23,0.22),
+    0 36px 72px rgba(23,34,23,0.24),
     inset 0 0 0 1px rgba(255,255,255,0.60);
 }
 .about-cert-card img{
   width:100%;
+  height:auto;
   display:block;
-  border-radius:12px;
+  border-radius:10px;
 }
 /* "Verified" seal anchored to the top-right corner of the certificate card */
 .about-cert-card__seal{
@@ -425,8 +428,9 @@
     max-width:none;
   }
   .about-cert-card{
-    width:min(100%, 340px);
+    width:min(100%, 460px);
     margin-left:auto;
+    margin-right:auto;
   }
 }
 @media(max-width:760px){
