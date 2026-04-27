@@ -1,0 +1,25 @@
+# PJL Land Services — robots.txt
+# Allow all reputable search engines to crawl everything
+# except internal/legacy assets.
+
+User-agent: *
+Allow: /
+
+# Block legacy / orphaned assets
+Disallow: /quote-legacy.html
+Disallow: /.claude/
+Disallow: /memory/
+
+# Block aggressive AI training crawlers (optional — remove if you want
+# the site indexed by AI tools like Perplexity, SearchGPT etc.).
+# Most local-business sites benefit from being indexed by AI search,
+# so these are commented out by default. Uncomment to opt out.
+# User-agent: GPTBot
+# Disallow: /
+# User-agent: ClaudeBot
+# Disallow: /
+# User-agent: CCBot
+# Disallow: /
+
+# Sitemap location
+Sitemap: https://www.pjllandservices.com/sitemap.xml

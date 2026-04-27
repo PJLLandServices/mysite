@@ -1,0 +1,197 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9"
+        xmlns:image="http://www.google.com/schemas/sitemap-image/1.1">
+
+  <!-- Homepage — top priority, weekly updates -->
+  <url>
+    <loc>https://www.pjllandservices.com/</loc>
+    <lastmod>2026-04-26</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>1.0</priority>
+    <image:image>
+      <image:loc>https://www.pjllandservices.com/homepage-hero.jpg</image:loc>
+      <image:title>PJL Land Services — Lawn Sprinklers &amp; Landscape Lighting in Newmarket &amp; GTA</image:title>
+    </image:image>
+  </url>
+
+  <!-- Core service pages — high priority -->
+  <url>
+    <loc>https://www.pjllandservices.com/sprinkler-systems.html</loc>
+    <lastmod>2026-04-26</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.9</priority>
+    <image:image>
+      <image:loc>https://www.pjllandservices.com/sprinkler-tech.png</image:loc>
+      <image:title>Lawn sprinkler systems — install, repair, seasonal service</image:title>
+    </image:image>
+  </url>
+  <url>
+    <loc>https://www.pjllandservices.com/landscape-lighting.html</loc>
+    <lastmod>2026-04-26</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.9</priority>
+    <image:image>
+      <image:loc>https://www.pjllandservices.com/landscape-lighting-hero.jpg</image:loc>
+      <image:title>Landscape lighting — custom LED design &amp; installation</image:title>
+    </image:image>
+  </url>
+
+  <!-- Conversion / utility pages -->
+  <url>
+    <loc>https://www.pjllandservices.com/estimate.html</loc>
+    <lastmod>2026-04-26</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.85</priority>
+  </url>
+  <url>
+    <loc>https://www.pjllandservices.com/quote.html</loc>
+    <lastmod>2026-04-26</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.85</priority>
+  </url>
+  <url>
+    <loc>https://www.pjllandservices.com/contact.html</loc>
+    <lastmod>2026-04-26</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.8</priority>
+  </url>
+  <url>
+    <loc>https://www.pjllandservices.com/faq.html</loc>
+    <lastmod>2026-04-26</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.7</priority>
+  </url>
+
+  <!-- Blog index -->
+  <url>
+    <loc>https://www.pjllandservices.com/blog.html</loc>
+    <lastmod>2026-04-26</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.85</priority>
+  </url>
+
+  <!-- Individual blog posts (chronological, newest first) -->
+  <url>
+    <loc>https://www.pjllandservices.com/blog-tree-irrigation-newmarket-gta.html</loc>
+    <lastmod>2026-04-26</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.75</priority>
+    <image:image>
+      <image:loc>https://www.pjllandservices.com/spring-fall-service.jpg</image:loc>
+      <image:title>Tree irrigation for Newmarket &amp; GTA homes</image:title>
+    </image:image>
+  </url>
+  <url>
+    <loc>https://www.pjllandservices.com/blog-landscape-renovation-sprinkler-prep-gta.html</loc>
+    <lastmod>2026-04-22</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.75</priority>
+    <image:image>
+      <image:loc>https://www.pjllandservices.com/installation-design.jpg</image:loc>
+      <image:title>Landscape renovation sprinkler prep — Newmarket &amp; GTA</image:title>
+    </image:image>
+  </url>
+  <url>
+    <loc>https://www.pjllandservices.com/blog-spring-sprinkler-opening.html</loc>
+    <lastmod>2026-04-16</lastmod>
+    <changefreq>yearly</changefreq>
+    <priority>0.7</priority>
+  </url>
+  <url>
+    <loc>https://www.pjllandservices.com/blog-landscape-lighting-newmarket.html</loc>
+    <lastmod>2026-04-16</lastmod>
+    <changefreq>yearly</changefreq>
+    <priority>0.7</priority>
+  </url>
+  <url>
+    <loc>https://www.pjllandservices.com/blog-sprinkler-installation-newmarket.html</loc>
+    <lastmod>2026-04-16</lastmod>
+    <changefreq>yearly</changefreq>
+    <priority>0.7</priority>
+  </url>
+  <url>
+    <loc>https://www.pjllandservices.com/blog-spring-fertilization-sprinkler-timing-gta.html</loc>
+    <lastmod>2026-03-08</lastmod>
+    <changefreq>yearly</changefreq>
+    <priority>0.7</priority>
+  </url>
+  <url>
+    <loc>https://www.pjllandservices.com/blog-lawn-irrigation-myths-busted-gta.html</loc>
+    <lastmod>2025-09-18</lastmod>
+    <changefreq>yearly</changefreq>
+    <priority>0.7</priority>
+  </url>
+  <url>
+    <loc>https://www.pjllandservices.com/blog-lawn-underwatering-signs-newmarket-gta.html</loc>
+    <lastmod>2025-07-24</lastmod>
+    <changefreq>yearly</changefreq>
+    <priority>0.7</priority>
+  </url>
+  <url>
+    <loc>https://www.pjllandservices.com/blog-signs-sprinkler-needs-repair-newmarket-gta.html</loc>
+    <lastmod>2025-06-12</lastmod>
+    <changefreq>yearly</changefreq>
+    <priority>0.7</priority>
+  </url>
+
+  <!-- About / E-E-A-T -->
+  <url>
+    <loc>https://www.pjllandservices.com/about.html</loc>
+    <lastmod>2026-04-27</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.85</priority>
+    <image:image>
+      <image:loc>https://www.pjllandservices.com/patrick-lalande.jpg</image:loc>
+      <image:title>Patrick Lalande — owner of PJL Land Services in Newmarket</image:title>
+    </image:image>
+  </url>
+
+  <!-- Reviews -->
+  <url>
+    <loc>https://www.pjllandservices.com/reviews.html</loc>
+    <lastmod>2026-04-27</lastmod>
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+  </url>
+
+  <!-- Service-area landing pages — high priority for local SEO -->
+  <url>
+    <loc>https://www.pjllandservices.com/sprinkler-service-newmarket.html</loc>
+    <lastmod>2026-04-27</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.9</priority>
+  </url>
+  <url>
+    <loc>https://www.pjllandservices.com/sprinkler-service-aurora.html</loc>
+    <lastmod>2026-04-27</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.9</priority>
+  </url>
+  <url>
+    <loc>https://www.pjllandservices.com/sprinkler-service-king-city.html</loc>
+    <lastmod>2026-04-27</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.9</priority>
+  </url>
+  <url>
+    <loc>https://www.pjllandservices.com/sprinkler-service-richmond-hill.html</loc>
+    <lastmod>2026-04-27</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.9</priority>
+  </url>
+  <url>
+    <loc>https://www.pjllandservices.com/sprinkler-service-vaughan.html</loc>
+    <lastmod>2026-04-27</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.9</priority>
+  </url>
+
+  <!--
+    Pages coming next (will be added when published):
+      - sprinkler-winterization-newmarket-gta.html
+      - commercial-irrigation-gta.html
+      - gallery.html
+      - additional service-area pages (East Gwillimbury, Bradford, Stouffville)
+  -->
+
+</urlset>
