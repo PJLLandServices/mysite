@@ -636,7 +636,7 @@
 }
 
 @media (max-width: 720px) {
-  .builder-hero { padding: 144px 0 44px; }
+  .builder-hero { padding: 168px 0 44px; }
   .builder { padding: 48px 0 36px; }
   .builder-form { padding: 56px 0 80px; }
   .builder__heading { margin-bottom: 24px; }
@@ -650,7 +650,7 @@
 
 @media (max-width: 460px) {
   .tier-grid { grid-template-columns: 1fr; }
-  .builder-hero { padding: 116px 0 36px; }
+  .builder-hero { padding: 156px 0 36px; }
   .builder-hero h1 { max-width: none; }
   .image-stage__caption { font-size: 12px; }
 }

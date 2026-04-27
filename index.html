@@ -743,6 +743,31 @@
   .about-cert-copy p{
     font-size:15px;
   }
+  .about-cert-creds{
+    grid-template-columns:1fr;
+    gap:12px;
+    max-width:460px;
+  }
+  .about-cert-creds li{
+    flex-direction:row;
+    align-items:center;
+    text-align:left;
+    gap:14px;
+    padding:16px 18px;
+  }
+  .about-cert-creds__icon{
+    width:38px;
+    height:38px;
+    font-size:16px;
+  }
+  .about-cert-creds__title{
+    font-size:13.5px;
+    letter-spacing:0.08em;
+  }
+  .about-cert-creds__detail{
+    font-size:12.5px;
+    line-height:1.4;
+  }
 }
 @media(max-width:480px){
   .about-shell{
@@ -1244,7 +1269,7 @@
         <div class="svc-body"><h3>Spring Openings & Fall Closings</h3><p>Protect your investment with professional seasonal start-up and winterization. We'll have your system running perfectly from the first warm day to the last.</p><span class="svc-link">Learn More <span class="svc-arrow">→</span></span></div>
       </a>
       <a href="sprinkler-systems.html#repair" class="svc svc--repair reveal reveal-delay-2">
-        <div class="svc-img"><img src="technician-diagnoses-hero.png" alt="Sprinkler System Repair and Diagnosis GTA"><span class="svc-tag">Repair</span></div>
+        <div class="svc-img"><img src="technician-diagnoses-hero.jpg" alt="Sprinkler System Repair and Diagnosis GTA"><span class="svc-tag">Repair</span></div>
         <div class="svc-body"><h3>Sprinkler Diagnosis & Repair</h3><p>Fast, honest diagnosis on any brand or system. We fix leaks, broken heads, pressure issues, and controller failures with clear timelines and upfront pricing.</p><span class="svc-link">Learn More <span class="svc-arrow">→</span></span></div>
       </a>
       <a href="estimate.html" class="svc svc--install reveal reveal-delay-3">
@@ -1266,14 +1291,14 @@
       <div class="sprk-quote-teaser__copy">
         <span class="sprk-quote-teaser__eyebrow">
           <span class="sprk-quote-teaser__pulse" aria-hidden="true"></span>
-          New · Interactive Quote Builder
+          New · Interactive Quote Estimator
         </span>
-        <h2>See your sprinkler system <span class="accent">before we build it.</span></h2>
-        <p>Our new quote builder lets you pick the home that matches yours, toggle the features that apply, and watch your custom system come together in real time — all in under two minutes.</p>
+        <h2>Match your property. <span class="accent">Get a tailored estimate.</span></h2>
+        <p>Our new estimator lets you match your property to a comparable, mark the features that apply, and get a tailored starting estimate — all in under two minutes. The final quote is calibrated on-site.</p>
 
         <div class="sprk-quote-teaser__actions">
           <a href="quote.html" class="sprk-quote-teaser__cta">
-            <span>Build My Quote</span>
+            <span>Start My Estimate</span>
             <span class="sprk-quote-teaser__cta-arrow" aria-hidden="true">→</span>
           </a>
         </div>
@@ -1345,13 +1370,13 @@
       tag.classList.toggle('is-back', f.side === 'back');
       captionText.textContent = f.caption;
       img.classList.remove('is-swapping');
-    }, 220);
+    }, 380);
   }
 
   function start() {
     if (prefersReduced) return;
     if (timer) clearInterval(timer);
-    timer = setInterval(swap, 2600);
+    timer = setInterval(swap, 5500);
   }
 
   teaser.addEventListener('mouseenter', () => { paused = true;  });
@@ -1411,7 +1436,7 @@
 
         <div class="about-stage reveal reveal-delay-1">
           <div class="about-photo-card">
-            <img src="about-section-picture.svg" alt="PJL Land Services about section feature graphic">
+            <img src="about-section-picture.jpg" alt="PJL Land Services about section feature graphic" loading="lazy">
           </div>
         </div>
       </div>
@@ -1604,7 +1629,7 @@
       </a>
       <a href="blog-signs-sprinkler-needs-repair-newmarket-gta.html" class="blog-strip__card reveal reveal-delay-1">
         <div class="blog-strip__img">
-          <img src="technician-diagnoses-hero.png" alt="PJL technician diagnosing a sprinkler problem">
+          <img src="technician-diagnoses-hero.jpg" alt="PJL technician diagnosing a sprinkler problem">
           <span class="blog-strip__tag" style="background:rgba(142,63,20,0.92);">🔧 Repair</span>
         </div>
         <div class="blog-strip__body">
