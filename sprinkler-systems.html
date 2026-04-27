@@ -650,7 +650,9 @@
   border-color: transparent;
 }
 .sprk-comp__visual {
-  height: 220px;
+  /* Tall enough that portrait product photos display at meaningful size
+     while keeping cards a sensible aspect ratio overall. */
+  height: clamp(280px, 28vw, 340px);
   background: linear-gradient(135deg, #f7faf2 0%, #edf4e4 100%);
   display: flex;
   align-items: center;
@@ -672,7 +674,8 @@
   height: 100%;
   /* contain preserves the product's full silhouette without cropping */
   object-fit: contain;
-  padding: 18px;
+  /* Tighter padding so the product fills more of its frame */
+  padding: 10px;
   transition: transform 0.4s cubic-bezier(.2,.8,.2,1);
 }
 .sprk-comp:hover .sprk-comp__visual img { transform: scale(1.05); }
