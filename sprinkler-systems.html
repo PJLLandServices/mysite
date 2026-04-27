@@ -693,34 +693,33 @@ a.sprk-comp:focus-visible {
   flex: 1;
   gap: 10px;
 }
+/* Bare logo — no pill, no background. Logo sits directly on the card
+   body with a subtle baseline drop-shadow so it doesn't feel disconnected. */
 .sprk-comp__brand {
   display: inline-flex;
   align-self: flex-start;
   align-items: center;
-  justify-content: center;
-  padding: 10px 20px;
-  background: #fff;
-  border: 1px solid rgba(0,0,0,0.08);
-  border-radius: 99px;
-  box-shadow: 0 4px 12px rgba(27,77,46,0.10);
-  height: 48px;
-  transition: box-shadow 0.35s ease, transform 0.25s ease, border-color 0.35s ease;
+  padding: 0;
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  height: auto;
+  margin-bottom: 4px;
+  transition: transform 0.3s ease;
 }
 .sprk-comp__brand img {
-  height: 28px;
+  height: 40px;
   width: auto;
   display: block;
-  filter: drop-shadow(0 1px 2px rgba(0,0,0,0.10));
-  transition: filter 0.35s ease;
+  filter: drop-shadow(0 2px 4px rgba(0,0,0,0.10));
+  transition: filter 0.4s ease, transform 0.4s ease;
 }
-/* Illuminate effect on card hover — amber glow ring + lifted logo */
-.sprk-comp:hover .sprk-comp__brand {
-  box-shadow: 0 0 0 3px rgba(243,144,25,0.20), 0 8px 22px rgba(224,123,36,0.22);
-  border-color: rgba(243,144,25,0.45);
-  transform: translateY(-1px);
-}
+/* Illuminate on card hover — amber halo around the logo + slight lift */
+.sprk-comp:hover .sprk-comp__brand { transform: translateY(-1px); }
 .sprk-comp:hover .sprk-comp__brand img {
-  filter: drop-shadow(0 0 6px rgba(243,144,25,0.55));
+  filter:
+    drop-shadow(0 0 10px rgba(243,144,25,0.55))
+    drop-shadow(0 2px 6px rgba(0,0,0,0.18));
 }
 
 /* "Learn More" overlay slides up from the bottom of the photo on hover */
