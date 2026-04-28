@@ -1231,11 +1231,11 @@
         <span class="sd-bridge__pill-dot"></span>
         <span>Same-Day Service Available</span>
       </div>
-      <form class="sd-bridge__form" onsubmit="event.preventDefault(); submitQuickBook();">
-        <input type="text" id="qb-name" placeholder="First &amp; Last Name" class="sd-bridge__input">
-        <input type="email" id="qb-email" placeholder="Email address" class="sd-bridge__input">
-        <input type="tel" id="qb-phone" placeholder="📞 Phone number" class="sd-bridge__input">
-        <select id="qb-service" class="sd-bridge__input sd-bridge__select">
+      <form class="sd-bridge__form" id="quickBookForm" action="https://formspree.io/f/mvzdjolv" method="POST">
+        <input type="text" id="qb-name" name="name" placeholder="First &amp; Last Name" class="sd-bridge__input" required autocomplete="name">
+        <input type="email" id="qb-email" name="email" placeholder="Email address" class="sd-bridge__input" autocomplete="email">
+        <input type="tel" id="qb-phone" name="phone" placeholder="📞 Phone number" class="sd-bridge__input" required autocomplete="tel">
+        <select id="qb-service" name="service" class="sd-bridge__input sd-bridge__select" required>
           <option value="">Select Required Service</option>
           <option>Spring Opening</option>
           <option>Fall Closing</option>
@@ -1244,8 +1244,13 @@
           <option>Smart Upgrade</option>
           <option>Landscape Lighting</option>
         </select>
-        <input type="text" id="qb-address" placeholder="Address or Jobsite Address" class="sd-bridge__input sd-bridge__input--full">
-        <button type="submit" class="sd-bridge__submit">Book Now — Same Day Available</button>
+        <input type="text" id="qb-address" name="address" placeholder="Address or Jobsite Address" class="sd-bridge__input sd-bridge__input--full" autocomplete="street-address">
+        <input type="hidden" name="_subject" value="Same-Day Service Request — pjllandservices.com (Homepage)">
+        <input type="hidden" name="_source" value="Homepage Quick-Book">
+        <input type="text" name="_gotcha" tabindex="-1" autocomplete="off" style="display:none !important;" aria-hidden="true">
+        <button type="submit" class="sd-bridge__submit" id="qb-submit">Book Now — Same Day Available</button>
+        <p class="sd-bridge__result sd-bridge__result--success" id="qb-success" hidden>✓ Thanks — we've got your request and will be in touch shortly. For urgent service, call <a href="tel:+19059600181">(905) 960-0181</a>.</p>
+        <p class="sd-bridge__result sd-bridge__result--error" id="qb-error" hidden>Something went wrong. Please call <a href="tel:+19059600181">(905) 960-0181</a> or email <a href="mailto:info@pjllandservices.com">info@pjllandservices.com</a>.</p>
       </form>
     </div>
   </div>
@@ -1716,27 +1721,44 @@
 <script src="nav.js"></script>
 
 <script>
-function submitQuickBook() {
-  var name    = document.getElementById('qb-name').value.trim();
-  var email   = document.getElementById('qb-email').value.trim();
-  var phone   = document.getElementById('qb-phone').value.trim();
-  var address = document.getElementById('qb-address').value.trim();
-  var service = document.getElementById('qb-service').value;
-  if (!name || !phone || !service) {
-    alert('Please fill in your name, phone number, and select a service.');
-    return;
-  }
-  var subj = encodeURIComponent('Service Request — ' + service + ' | ' + name);
-  var body = encodeURIComponent(
-    'New Service Request — pjllandservices.com\n\n' +
-    'Name: ' + name + '\n' +
-    'Email: ' + (email || 'Not provided') + '\n' +
-    'Phone: ' + phone + '\n' +
-    'Address: ' + (address || 'Not provided') + '\n' +
-    'Service Requested: ' + service
-  );
-  window.location.href = 'mailto:info@pjllandservices.com?subject=' + subj + '&body=' + body;
-}
+/* Homepage Quick-Book — Formspree submission via fetch().
+   Posts to the form's action URL, swaps in a success or error message,
+   keeps the user on the page. No mailto: bounce. */
+(function () {
+  const form    = document.getElementById('quickBookForm');
+  const submit  = document.getElementById('qb-submit');
+  const success = document.getElementById('qb-success');
+  const error   = document.getElementById('qb-error');
+  if (!form) return;
+
+  form.addEventListener('submit', async function (e) {
+    e.preventDefault();
+    error.hidden = true;
+    submit.disabled = true;
+    const originalText = submit.textContent;
+    submit.textContent = 'Sending…';
+
+    try {
+      const data = new FormData(form);
+      const res = await fetch(form.action, {
+        method: 'POST',
+        body: data,
+        headers: { 'Accept': 'application/json' }
+      });
+      if (res.ok) {
+        form.querySelectorAll('input, select, button').forEach(el => { if (el.type !== 'hidden') el.hidden = true; });
+        success.hidden = false;
+      } else {
+        throw new Error('Submission failed: ' + res.status);
+      }
+    } catch (err) {
+      error.hidden = false;
+      submit.disabled = false;
+      submit.textContent = originalText;
+      console.error('Quick-Book form error:', err);
+    }
+  });
+})();
 </script>
 </body>
 </html>

@@ -985,35 +985,39 @@ function submitForm() {
     ? `Fixtures: ${state.fixtures}\nTypes: ${[...state.lightTypes].join(', ') || 'not specified'}\nAdd-ons: ${[...state.extras].join(', ') || 'none'}`
     : '';
 
-  const subject = encodeURIComponent(`New Installation Enquiry — ${svcLabel} | ${first} ${last}`);
-  const body = encodeURIComponent(
-`New Installation Enquiry — pjllandservices.com
-━━━━━━━━━━━━━━━━━━━━━━━━━
-CUSTOMER
-━━━━━━━━━━━━━━━━━━━━━━━━━
-Name:     ${first} ${last}
-Email:    ${email}
-Phone:    ${phone}
-Address:  ${address || 'Not provided'}
-Best time: ${time || 'No preference'}
+  // Submit to Formspree (no mailto: bounce). Sends structured fields plus a
+  // formatted "details" block so Patrick can read either the table or the summary.
+  const formData = new FormData();
+  formData.append('first_name', first);
+  formData.append('last_name', last);
+  formData.append('email', email);
+  formData.append('phone', phone);
+  formData.append('address', address || 'Not provided');
+  formData.append('preferred_time', time || 'No preference');
+  formData.append('service_type', svcLabel);
+  formData.append('details', (sprinklerDetails || '') + (lightingDetails || ''));
+  formData.append('estimate_range', range);
+  formData.append('bundle', bundleLabel);
+  formData.append('notes', notes || 'None');
+  formData.append('_subject', `Installation Estimate — ${svcLabel} | ${first} ${last}`);
+  formData.append('_source', 'Installation Estimate Builder');
 
-━━━━━━━━━━━━━━━━━━━━━━━━━
-SERVICE: ${svcLabel}
-━━━━━━━━━━━━━━━━━━━━━━━━━
-${sprinklerDetails}${lightingDetails}
-Estimate: ${range}
-Bundle:   ${bundleLabel}
-
-━━━━━━━━━━━━━━━━━━━━━━━━━
-NOTES
-━━━━━━━━━━━━━━━━━━━━━━━━━
-${notes || 'None'}
-
-Sent from the PJL Land Services Installation Estimator.`
-  );
-
-  window.location.href = `mailto:info@pjllandservices.com?subject=${subject}&body=${body}`;
-  goStep(5);
+  fetch('https://formspree.io/f/mvzdjolv', {
+    method: 'POST',
+    body: formData,
+    headers: { 'Accept': 'application/json' }
+  })
+    .then(res => {
+      if (res.ok) {
+        goStep(5);
+      } else {
+        alert('Sorry — your request didn\'t send. Please call (905) 960-0181 or email info@pjllandservices.com.');
+      }
+    })
+    .catch(err => {
+      console.error('Estimate submit failed:', err);
+      alert('Sorry — your request didn\'t send. Please call (905) 960-0181 or email info@pjllandservices.com.');
+    });
 }
 
 // ── Init ───────────────────────────────────────────────
@@ -1298,35 +1302,39 @@ function submitForm() {
     ? `Fixtures: ${state.fixtures}\nTypes: ${[...state.lightTypes].join(', ') || 'not specified'}\nAdd-ons: ${[...state.extras].join(', ') || 'none'}`
     : '';
 
-  const subject = encodeURIComponent(`New Installation Enquiry — ${svcLabel} | ${first} ${last}`);
-  const body = encodeURIComponent(
-`New Installation Enquiry — pjllandservices.com
-━━━━━━━━━━━━━━━━━━━━━━━━━
-CUSTOMER
-━━━━━━━━━━━━━━━━━━━━━━━━━
-Name:     ${first} ${last}
-Email:    ${email}
-Phone:    ${phone}
-Address:  ${address || 'Not provided'}
-Best time: ${time || 'No preference'}
+  // Submit to Formspree (no mailto: bounce). Sends structured fields plus a
+  // formatted "details" block so Patrick can read either the table or the summary.
+  const formData = new FormData();
+  formData.append('first_name', first);
+  formData.append('last_name', last);
+  formData.append('email', email);
+  formData.append('phone', phone);
+  formData.append('address', address || 'Not provided');
+  formData.append('preferred_time', time || 'No preference');
+  formData.append('service_type', svcLabel);
+  formData.append('details', (sprinklerDetails || '') + (lightingDetails || ''));
+  formData.append('estimate_range', range);
+  formData.append('bundle', bundleLabel);
+  formData.append('notes', notes || 'None');
+  formData.append('_subject', `Installation Estimate — ${svcLabel} | ${first} ${last}`);
+  formData.append('_source', 'Installation Estimate Builder');
 
-━━━━━━━━━━━━━━━━━━━━━━━━━
-SERVICE: ${svcLabel}
-━━━━━━━━━━━━━━━━━━━━━━━━━
-${sprinklerDetails}${lightingDetails}
-Estimate: ${range}
-Bundle:   ${bundleLabel}
-
-━━━━━━━━━━━━━━━━━━━━━━━━━
-NOTES
-━━━━━━━━━━━━━━━━━━━━━━━━━
-${notes || 'None'}
-
-Sent from the PJL Land Services Installation Estimator.`
-  );
-
-  window.location.href = `mailto:info@pjllandservices.com?subject=${subject}&body=${body}`;
-  goStep(5);
+  fetch('https://formspree.io/f/mvzdjolv', {
+    method: 'POST',
+    body: formData,
+    headers: { 'Accept': 'application/json' }
+  })
+    .then(res => {
+      if (res.ok) {
+        goStep(5);
+      } else {
+        alert('Sorry — your request didn\'t send. Please call (905) 960-0181 or email info@pjllandservices.com.');
+      }
+    })
+    .catch(err => {
+      console.error('Estimate submit failed:', err);
+      alert('Sorry — your request didn\'t send. Please call (905) 960-0181 or email info@pjllandservices.com.');
+    });
 }
 
 // ── Init ───────────────────────────────────────────────

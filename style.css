@@ -1434,6 +1434,29 @@ section.hero[aria-label="PJL Land Services hero"] .hero__services-sep {
   transform: translateY(-1px);
   box-shadow: 0 12px 24px -4px rgba(26, 71, 40, 0.45);
 }
+.sd-bridge__submit:disabled { opacity: 0.6; cursor: not-allowed; transform: none; box-shadow: none; }
+.sd-bridge__result {
+  grid-column: 1 / -1;
+  margin: 8px 0 0;
+  padding: 14px 16px;
+  border-radius: 10px;
+  font-size: 14px;
+  line-height: 1.55;
+  font-weight: 500;
+}
+.sd-bridge__result a { text-decoration: underline; font-weight: 600; }
+.sd-bridge__result--success {
+  background: rgba(74,140,92,0.12);
+  border: 1px solid rgba(74,140,92,0.30);
+  color: var(--green);
+}
+.sd-bridge__result--success a { color: var(--green); }
+.sd-bridge__result--error {
+  background: rgba(224,123,36,0.10);
+  border: 1px solid rgba(224,123,36,0.30);
+  color: var(--amber);
+}
+.sd-bridge__result--error a { color: var(--amber); }
 @media (max-width: 1000px) {
   .sd-bridge__grid {
     grid-template-columns: 1fr;

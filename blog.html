@@ -929,8 +929,11 @@
         <div class="blog-engage-icon" aria-hidden="true">📬</div>
         <h3>Get the seasonal heads-up.</h3>
         <p>One email at the start of spring, one at the close of fall. Booking windows, frost dates, smart-controller updates and a discount on the first service of each season — exclusive to subscribers in Newmarket and the GTA.</p>
-        <form class="blog-engage-form" onsubmit="event.preventDefault(); this.querySelector('button').textContent='✓ Subscribed'; this.querySelector('button').disabled=true;">
-          <input type="email" name="email" placeholder="your@email.com" required aria-label="Email address">
+        <form class="blog-engage-form blog-engage-form--ajax" action="https://formspree.io/f/mvzdjolv" method="POST">
+          <input type="email" name="email" placeholder="your@email.com" required aria-label="Email address" autocomplete="email">
+          <input type="hidden" name="_subject" value="Newsletter Subscription — pjllandservices.com">
+          <input type="hidden" name="_source" value="Blog Newsletter Signup">
+          <input type="text" name="_gotcha" tabindex="-1" autocomplete="off" style="display:none !important;" aria-hidden="true">
           <button type="submit">Subscribe</button>
           <div class="form-fineprint">No spam. Two emails a year. Unsubscribe anytime.</div>
         </form>
@@ -941,9 +944,12 @@
         <div class="blog-engage-icon" aria-hidden="true">💬</div>
         <h3>Got an irrigation or lighting question?</h3>
         <p>Send it in. If it's good, Patrick will turn it into a blog post answering it — and we'll email you the link first. The fastest way to get a real answer to a real problem at your property.</p>
-        <form class="blog-engage-form" onsubmit="event.preventDefault(); this.querySelector('button').textContent='✓ Sent — thanks!'; this.querySelector('button').disabled=true;">
-          <input type="email" name="email" placeholder="your@email.com" required aria-label="Email address">
+        <form class="blog-engage-form blog-engage-form--ajax" action="https://formspree.io/f/mvzdjolv" method="POST">
+          <input type="email" name="email" placeholder="your@email.com" required aria-label="Email address" autocomplete="email">
           <textarea name="question" placeholder="What do you want to know? (e.g., 'Why is one zone always wet?')" required aria-label="Your question"></textarea>
+          <input type="hidden" name="_subject" value="Ask-the-Pro Question — pjllandservices.com">
+          <input type="hidden" name="_source" value="Blog Ask-the-Pro">
+          <input type="text" name="_gotcha" tabindex="-1" autocomplete="off" style="display:none !important;" aria-hidden="true">
           <button type="submit">Send my question</button>
           <div class="form-fineprint">We answer every email within 1 business day.</div>
         </form>
@@ -1023,6 +1029,44 @@
   }
   window.addEventListener('scroll', update, { passive: true });
   update();
+})();
+
+/* Engagement forms (newsletter + ask-the-pro) — Formspree submission via fetch.
+   Posts the form, swaps the submit button into a confirmation, no page reload. */
+(function () {
+  document.querySelectorAll('form.blog-engage-form--ajax').forEach(form => {
+    const button   = form.querySelector('button[type="submit"]');
+    const original = button ? button.textContent : '';
+
+    form.addEventListener('submit', async function (e) {
+      e.preventDefault();
+      if (!button) return;
+      button.disabled = true;
+      button.textContent = 'Sending…';
+
+      try {
+        const data = new FormData(form);
+        const res = await fetch(form.action, {
+          method: 'POST',
+          body: data,
+          headers: { 'Accept': 'application/json' }
+        });
+        if (res.ok) {
+          // Success: hide inputs, swap button into a confirmation chip
+          form.querySelectorAll('input:not([type="hidden"]), textarea').forEach(el => el.hidden = true);
+          button.textContent = '✓ Got it — thanks!';
+          button.classList.add('is-success');
+        } else {
+          throw new Error('Submission failed: ' + res.status);
+        }
+      } catch (err) {
+        button.disabled = false;
+        button.textContent = original;
+        alert("Sorry — couldn't send. Please email info@pjllandservices.com or call (905) 960-0181.");
+        console.error('Blog form submit failed:', err);
+      }
+    });
+  });
 })();
 </script>
 </body>
