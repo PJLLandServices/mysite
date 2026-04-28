@@ -256,12 +256,12 @@ For each task you'll see:
 - **Tracker IDs:** 45, 46, 47
 
 ### 4.5 Build 2 specialty service pages
-- **Backflow Testing** (Patrick is licensed; not currently captured)
+- ~~**Backflow Testing**~~ — **CANCELLED 2026-04-27.** PJL does NOT hold an Ontario backflow tester certification; building this page would have been false advertising. Instead, the seasonal-service pages (Spring Opening / Fall Winterization) now display a "Backflow Cert. Extra Charge" notice making clear that backflow testing is a separately-certified trade we refer out to. See memory/backflow_not_certified.md.
 - **Commercial Irrigation** (homepage schema mentions; no page)
 
-- **Files:** new `backflow-testing.html`, `commercial-irrigation.html`
-- **Time:** 3.5 hr · **Difficulty:** Easy · **Who:** M
-- **Tracker IDs:** 48, 49
+- **Files:** new `commercial-irrigation.html`
+- **Time:** 2 hr · **Difficulty:** Easy · **Who:** M
+- **Tracker IDs:** 49 (48 cancelled)
 
 ### 4.6 Publish 4 more blog posts
 1. Sprinkler frost depth Ontario (Tracker ID 50) — 1.5 hr

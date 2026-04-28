@@ -250,7 +250,7 @@ When you add a new service-specific page (Spring Opening, Fall Winterization, Re
 | **Medium** | Pricing Guide | Captures research-stage traffic. | 2 hr |
 | **Medium** | Coverage / Service Area Map | Geographic clarity. | 2 hr |
 | **Low** | Caledon / Innisfil / Whitchurch-Stouffville | Premium / completeness. | 3 hr each |
-| **Low** | Backflow Testing / Commercial Irrigation | Niche but credentialed | 1.5–2 hr |
+| **Low** | Commercial Irrigation | Captures commercial / property-management traffic | 2 hr |
 
 **Total page-expansion estimate:** 50–80 hours of focused work. See `SEO_IMPLEMENTATION_PLAN.md` for the phased schedule.
 
@@ -325,7 +325,7 @@ See Tracker IDs 26-29, 50-51 plus:
 9. Smart sprinkler controller buying guide
 10. New construction sprinkler-prep timing
 11. Why your water bill went up — sprinkler edition
-12. Backflow prevention basics for Ontario homeowners
+12. ~~Backflow prevention basics~~ — **REMOVED 2026-04-27.** PJL does not hold an Ontario backflow tester cert; we should not be authoring authoritative content on a regulated trade we don't practice. See memory/backflow_not_certified.md.
 
 ---
 
@@ -497,6 +497,10 @@ If you are picking up this project:
 - `quote-legacy.html` — robots-disallowed backup of the old wizard
 - The full PJL logo lockup (`logo.svg`) — owner explicitly rejected stripping "LAND SERVICES" from the wordmark; use `logo-mark.svg` only for tight contexts like favicons
 - "Engineered By" as eyebrow text — liability concern, owner rejected
+
+### Hard accuracy rules (do not violate)
+- **Backflow assembly testing / certification — PJL is NOT certified.** It's a regulated Ontario trade PJL does not practice. Never claim PJL "tests", "certifies", "tags", "inspects" or "pulls a permit for" backflow assemblies in any page, FAQ, schema (`hasCredential`, `knowsAbout`), blog post, or service description. The correct framing is: PJL coordinates with / refers out to a certified Ontario backflow tester (separate trade — extra charge, billed separately). Seasonal-service pages display a "Backflow Cert. Extra Charge" notice. See [memory/backflow_not_certified.md].
+- **Pipe terminology — PJL uses HDPE poly, not PVC.** ~99% of installs and repairs use HDPE poly pipe. Never describe the system as PVC. Use **"irrigation pipe"** generically, or **"poly fittings"** specifically when referring to the lateral lines. See [memory/irrigation_pipe_not_pvc.md].
 
 ### Brand decisions to preserve
 - **Barlow Condensed** for all headings (matches the logo). Don't substitute.
