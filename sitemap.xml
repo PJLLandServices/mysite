@@ -245,6 +245,24 @@
       <image:title>Sprinkler service in Markham, Ontario — install, repair, seasonal</image:title>
     </image:image>
   </url>
+  <url>
+    <loc>https://www.pjllandservices.com/sprinkler-service-stouffville.html</loc>
+    <lastmod>2026-04-28</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.85</priority>
+  </url>
+  <url>
+    <loc>https://www.pjllandservices.com/sprinkler-service-east-gwillimbury.html</loc>
+    <lastmod>2026-04-28</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.85</priority>
+  </url>
+  <url>
+    <loc>https://www.pjllandservices.com/sprinkler-service-thornhill.html</loc>
+    <lastmod>2026-04-28</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.85</priority>
+  </url>
 
   <!-- Human-readable sitemap (low priority — supplemental to this XML feed) -->
   <url>
@@ -259,7 +277,6 @@
       - sprinkler-systems-spring-opening.html  (Phase 2 task 2.2)
       - sprinkler-systems-fall-winterization.html  (Phase 2 task 2.3)
       - sprinkler-systems-repair.html  (Phase 2 task 2.4)
-      - sprinkler-service-stouffville.html, sprinkler-service-east-gwillimbury.html, sprinkler-service-thornhill.html  (Phase 3)
       - hydrawise-installation.html, drip-irrigation.html  (Phase 3)
       - warranty.html, process.html, pricing.html  (Phase 3)
       - commercial-irrigation.html, backflow-testing.html  (Phase 4)
