@@ -195,13 +195,35 @@
     <changefreq>monthly</changefreq>
     <priority>0.9</priority>
   </url>
+  <url>
+    <loc>https://www.pjllandservices.com/sprinkler-service-markham.html</loc>
+    <lastmod>2026-04-27</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.9</priority>
+    <image:image>
+      <image:loc>https://www.pjllandservices.com/sprinkler-tech.png</image:loc>
+      <image:title>Sprinkler service in Markham, Ontario — install, repair, seasonal</image:title>
+    </image:image>
+  </url>
+
+  <!-- Human-readable sitemap (low priority — supplemental to this XML feed) -->
+  <url>
+    <loc>https://www.pjllandservices.com/sitemap.html</loc>
+    <lastmod>2026-04-27</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.4</priority>
+  </url>
 
   <!--
     Pages coming next (will be added when published):
-      - sprinkler-winterization-newmarket-gta.html
-      - commercial-irrigation-gta.html
-      - gallery.html
-      - additional service-area pages (East Gwillimbury, Bradford, Stouffville)
+      - sprinkler-systems-spring-opening.html  (Phase 2 task 2.2)
+      - sprinkler-systems-fall-winterization.html  (Phase 2 task 2.3)
+      - sprinkler-systems-repair.html  (Phase 2 task 2.4)
+      - sprinkler-service-stouffville.html, sprinkler-service-east-gwillimbury.html, sprinkler-service-thornhill.html  (Phase 3)
+      - hydrawise-installation.html, drip-irrigation.html  (Phase 3)
+      - warranty.html, process.html, pricing.html  (Phase 3)
+      - commercial-irrigation.html, backflow-testing.html  (Phase 4)
+      - gallery.html  (when project photos are available)
   -->
 
 </urlset>
