@@ -158,12 +158,16 @@
 .callout-cta{display:inline-flex;align-items:center;gap:10px;background:var(--amber);color:#fff !important;font-weight:700;padding:12px 22px;border-radius:99px;text-decoration:none !important;transition:background .2s ease,transform .2s ease;}
 .callout-cta:hover{background:var(--amber-light);transform:translateY(-2px);color:#fff !important;}
 
-.warning-box{margin:32px 0;background:linear-gradient(135deg,#3a1a14 0%,#5a2317 50%,#3a1a14 100%);color:#fff;border-radius:var(--r-lg);padding:26px 30px;position:relative;overflow:hidden;}
+.warning-box{margin:32px 0;background:linear-gradient(135deg,#3a1a14 0%,#5a2317 50%,#3a1a14 100%);color:#fff;border-radius:var(--r-lg);padding:30px 32px 26px;position:relative;overflow:hidden;}
 .warning-box::before{content:'⚠️';position:absolute;top:-20px;right:-20px;font-size:140px;opacity:.08;}
-.warning-box__tag{display:inline-block;background:#c0392b;color:#fff;font-size:11px;font-weight:800;letter-spacing:.14em;text-transform:uppercase;padding:5px 14px;border-radius:99px;margin-bottom:14px;}
-.warning-box h3{color:#fff !important;font-size:20px !important;margin:0 0 12px !important;text-transform:none !important;letter-spacing:-.01em !important;}
-.warning-box p{color:rgba(255,255,255,.88) !important;font-size:15px !important;line-height:1.6 !important;margin-bottom:10px !important;}
-.warning-box p:last-child{margin-bottom:0 !important;}
+.warning-box__tag{display:inline-block;background:#c0392b;color:#fff;font-size:11px;font-weight:800;letter-spacing:.14em;text-transform:uppercase;padding:5px 14px;border-radius:99px;margin-bottom:16px;}
+.warning-box h3{color:#fff !important;font-size:20px !important;margin:0 0 22px !important;text-transform:none !important;letter-spacing:-.01em !important;}
+.warning-box__list{list-style:none;padding:0;margin:0;counter-reset:dontdiy;}
+.warning-box__list li{position:relative;padding:0 0 18px 48px;margin:0 0 18px;border-bottom:1px solid rgba(255,255,255,.08);counter-increment:dontdiy;}
+.warning-box__list li:last-child{margin-bottom:0;padding-bottom:0;border-bottom:none;}
+.warning-box__list li::before{content:counter(dontdiy);position:absolute;left:0;top:-2px;width:32px;height:32px;border-radius:50%;background:#c0392b;color:#fff;display:inline-flex;align-items:center;justify-content:center;font-family:'Barlow Condensed',sans-serif;font-weight:800;font-size:18px;}
+.warning-box__list h4{color:#fff !important;font-size:16px !important;font-weight:700 !important;margin:0 0 6px !important;text-transform:none !important;letter-spacing:-.005em !important;line-height:1.3 !important;}
+.warning-box__list p{color:rgba(255,255,255,.82) !important;font-size:14.5px !important;line-height:1.6 !important;margin:0 !important;}
 
 .post-footer{padding:clamp(48px,7vw,80px) 0;background:var(--cream);border-top:1px solid var(--border);}
 .post-author-card{display:flex;gap:20px;align-items:center;background:#fff;border:1px solid var(--border);border-radius:var(--r-lg);padding:22px 26px;margin-bottom:40px;}
@@ -356,11 +360,28 @@
         <div class="warning-box" id="warning">
           <span class="warning-box__tag">⚠️ Don't DIY these</span>
           <h3>The five tasks that will cost you money if you try them yourself.</h3>
-          <p><strong>1. Winterizing with a shop air compressor.</strong> Shop compressors deliver 100-150 psi; sprinkler valves and fittings are rated for 30-50 psi. Crushed diaphragms, blown seals, ruptured fittings. The cost of "I'll just borrow my buddy's compressor" averages $600-$1,500 in spring repairs.</p>
-          <p><strong>2. Testing or servicing the backflow assembly.</strong> Ontario regulates backflow testing — only certified testers can perform or sign off on the test. PJL refers out for this; trying to service it yourself is illegal in most municipalities and risky if anything goes wrong.</p>
-          <p><strong>3. Replacing valve diaphragms or solenoids on live pressure.</strong> Doable, but if you forget to shut off the main, you're flooding a basement. We do this in 20 minutes; we've seen homeowners do it in 4 hours with water damage.</p>
-          <p><strong>4. Splicing irrigation pipe with the wrong fittings.</strong> Compression fittings, hose clamps, electrical tape — none of these are pipe-rated. They leak under pressure within weeks. Use proper barbed or insert fittings, or call us.</p>
-          <p><strong>5. Re-wiring zones at the controller.</strong> Mis-wiring a zone won't kill you (24V), but it can fry a controller or short two zones together. Worth the $90 service call to do it right.</p>
+          <ol class="warning-box__list">
+            <li>
+              <h4>Winterizing with a shop air compressor</h4>
+              <p>Shop compressors deliver 100-150 psi; sprinkler valves and fittings are rated for 30-50 psi. Crushed diaphragms, blown seals, ruptured fittings. The cost of "I'll just borrow my buddy's compressor" averages $600-$1,500 in spring repairs.</p>
+            </li>
+            <li>
+              <h4>Testing or servicing the backflow assembly</h4>
+              <p>Ontario regulates backflow testing — only certified testers can perform or sign off on the test. PJL refers out for this; trying to service it yourself is illegal in most municipalities and risky if anything goes wrong.</p>
+            </li>
+            <li>
+              <h4>Replacing valve diaphragms or solenoids on live pressure</h4>
+              <p>Doable, but if you forget to shut off the main, you're flooding a basement. We do this in 20 minutes; we've seen homeowners do it in 4 hours with water damage.</p>
+            </li>
+            <li>
+              <h4>Splicing irrigation pipe with the wrong fittings</h4>
+              <p>Compression fittings, hose clamps, electrical tape — none of these are pipe-rated. They leak under pressure within weeks. Use proper barbed or insert fittings, or call us.</p>
+            </li>
+            <li>
+              <h4>Re-wiring zones at the controller</h4>
+              <p>Mis-wiring a zone won't kill you (24V), but it can fry a controller or short two zones together. Worth the $90 service call to do it right.</p>
+            </li>
+          </ol>
         </div>
 
         <div class="from-the-truck">
