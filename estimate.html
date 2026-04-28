@@ -755,8 +755,12 @@ const state = {
 };
 
 // ── Pricing ────────────────────────────────────────────
-const BASE_FEE = 585; // flat base fee per system installation
-const PPZ = 525;      // price per zone
+// Sprinkler install pricing — 3-tier system (locked 2026-04-28, source: install_pricing_tiers_v2.xlsx)
+const TIER1_BASE = 585;   // 1-4 zones base fee
+const TIER2_BASE = 749;   // 5-7 zones base fee (+$140 covers PCM-300 expansion module)
+const PPZ        = 549;   // per-zone price (Tiers 1 & 2)
+const TIER3_MIN  = 8;     // 8+ zones triggers custom quote
+const BASE_FEE   = TIER1_BASE; // legacy alias kept for any external references
 const PPF = 245;      // price per fixture
 const BUNDLE_DISC = 0.15;
 
@@ -883,24 +887,35 @@ function buildEstimate() {
 
   // ── Sprinkler calc ──
   if (state.service === 'sprinkler') {
+    state.customQuote = false; // reset on each rebuild
     const mult       = COMPLEXITY_MULT[state.complexity] || 1.0;
-    const baseZones  = state.zones * PPZ;
-    const complexAdj = Math.round((mult - 1) * baseZones);
-    const waterAdj   = WATER_COST[state.waterSupply] || 0;
-    sprinklerBase    = BASE_FEE + baseZones + complexAdj + waterAdj;
 
-    rows.push({ label: 'System base fee (includes smart Hydrawise controller)', amount: BASE_FEE });
-    rows.push({ label: `${state.zones} zone${state.zones > 1 ? 's' : ''} × $${PPZ}`, amount: baseZones });
-    if (complexAdj > 0) rows.push({ label: COMPLEXITY_LABEL[state.complexity], amount: complexAdj });
-    if (waterAdj > 0)   rows.push({ label: WATER_LABEL[state.waterSupply],     amount: waterAdj });
+    // Tier 3 short-circuit: 8+ zones → custom quote, no instant pricing
+    if (state.zones >= TIER3_MIN) {
+      state.customQuote = true;
+      sprinklerBase = 0;
+      rows.push({ label: 'Tier 3 — 8+ zones · Site visit and drawings required', amount: 'Custom quote', customQuote: true });
+    } else {
+      const tier       = state.zones <= 4 ? 1 : 2;
+      const tierBase   = tier === 1 ? TIER1_BASE : TIER2_BASE;
+      const baseZones  = state.zones * PPZ;
+      const complexAdj = Math.round((mult - 1) * baseZones);
+      const waterAdj   = WATER_COST[state.waterSupply] || 0;
+      sprinklerBase    = tierBase + baseZones + complexAdj + waterAdj;
 
-    state.extras.forEach(id => {
-      const cost = state.extraCosts[id] || 0;
-      extrasTotal += cost;
-      const labels = { pots:'Flower pot & planter drip zones', remotebib:'Remote hose bib installation', drip:'Garden bed drip zone' };
-      rows.push({ label: labels[id] || id, amount: cost });
-    });
-    sprinklerBase += extrasTotal;
+      rows.push({ label: `System base fee — Tier ${tier} (${tier === 1 ? '1-4' : '5-7'} zones, includes smart Hydrawise controller)`, amount: tierBase });
+      rows.push({ label: `${state.zones} zone${state.zones > 1 ? 's' : ''} × $${PPZ}`, amount: baseZones });
+      if (complexAdj > 0) rows.push({ label: COMPLEXITY_LABEL[state.complexity], amount: complexAdj });
+      if (waterAdj > 0)   rows.push({ label: WATER_LABEL[state.waterSupply],     amount: waterAdj });
+
+      state.extras.forEach(id => {
+        const cost = state.extraCosts[id] || 0;
+        extrasTotal += cost;
+        const labels = { pots:'Flower pot & planter drip zones', remotebib:'Remote hose bib installation', drip:'Garden bed drip zone' };
+        rows.push({ label: labels[id] || id, amount: cost });
+      });
+      sprinklerBase += extrasTotal;
+    }
   }
 
   // ── Lighting calc ──
@@ -941,12 +956,18 @@ function buildEstimate() {
       </div>`;
   }
 
-  const low  = Math.round(total * 0.90);
-  const high = Math.round(total * 1.15);
-  document.getElementById('estimate-range').textContent = '$' + low.toLocaleString() + ' – $' + high.toLocaleString();
-  document.getElementById('bundle-savings-banner-wrap').innerHTML = bundleSavingBannerHtml;
-
-  rows.push({ label: 'Estimated total range', amount: '$' + low.toLocaleString() + ' – $' + high.toLocaleString(), total: true });
+  // Tier 3 custom-quote display path
+  if (state.customQuote) {
+    document.getElementById('estimate-range').textContent = 'Custom quote — site visit required';
+    document.getElementById('bundle-savings-banner-wrap').innerHTML = '';
+    rows.push({ label: 'Larger systems (8+ zones) require an on-site assessment with drawings. Use the form below to request your free consultation.', amount: '—', total: true });
+  } else {
+    const low  = Math.round(total * 0.90);
+    const high = Math.round(total * 1.15);
+    document.getElementById('estimate-range').textContent = '$' + low.toLocaleString() + ' – $' + high.toLocaleString();
+    document.getElementById('bundle-savings-banner-wrap').innerHTML = bundleSavingBannerHtml;
+    rows.push({ label: 'Estimated total range', amount: '$' + low.toLocaleString() + ' – $' + high.toLocaleString(), total: true });
+  }
 
   let rowHtml = '';
   rows.forEach(r => {
@@ -1072,8 +1093,12 @@ const state = {
 };
 
 // ── Pricing ────────────────────────────────────────────
-const BASE_FEE = 585; // flat base fee per system installation
-const PPZ = 525;      // price per zone
+// Sprinkler install pricing — 3-tier system (locked 2026-04-28, source: install_pricing_tiers_v2.xlsx)
+const TIER1_BASE = 585;   // 1-4 zones base fee
+const TIER2_BASE = 749;   // 5-7 zones base fee (+$140 covers PCM-300 expansion module)
+const PPZ        = 549;   // per-zone price (Tiers 1 & 2)
+const TIER3_MIN  = 8;     // 8+ zones triggers custom quote
+const BASE_FEE   = TIER1_BASE; // legacy alias kept for any external references
 const PPF = 245;      // price per fixture
 const BUNDLE_DISC = 0.15;
 
@@ -1200,24 +1225,35 @@ function buildEstimate() {
 
   // ── Sprinkler calc ──
   if (state.service === 'sprinkler') {
+    state.customQuote = false; // reset on each rebuild
     const mult       = COMPLEXITY_MULT[state.complexity] || 1.0;
-    const baseZones  = state.zones * PPZ;
-    const complexAdj = Math.round((mult - 1) * baseZones);
-    const waterAdj   = WATER_COST[state.waterSupply] || 0;
-    sprinklerBase    = BASE_FEE + baseZones + complexAdj + waterAdj;
 
-    rows.push({ label: 'System base fee (includes smart Hydrawise controller)', amount: BASE_FEE });
-    rows.push({ label: `${state.zones} zone${state.zones > 1 ? 's' : ''} × $${PPZ}`, amount: baseZones });
-    if (complexAdj > 0) rows.push({ label: COMPLEXITY_LABEL[state.complexity], amount: complexAdj });
-    if (waterAdj > 0)   rows.push({ label: WATER_LABEL[state.waterSupply],     amount: waterAdj });
+    // Tier 3 short-circuit: 8+ zones → custom quote, no instant pricing
+    if (state.zones >= TIER3_MIN) {
+      state.customQuote = true;
+      sprinklerBase = 0;
+      rows.push({ label: 'Tier 3 — 8+ zones · Site visit and drawings required', amount: 'Custom quote', customQuote: true });
+    } else {
+      const tier       = state.zones <= 4 ? 1 : 2;
+      const tierBase   = tier === 1 ? TIER1_BASE : TIER2_BASE;
+      const baseZones  = state.zones * PPZ;
+      const complexAdj = Math.round((mult - 1) * baseZones);
+      const waterAdj   = WATER_COST[state.waterSupply] || 0;
+      sprinklerBase    = tierBase + baseZones + complexAdj + waterAdj;
 
-    state.extras.forEach(id => {
-      const cost = state.extraCosts[id] || 0;
-      extrasTotal += cost;
-      const labels = { pots:'Flower pot & planter drip zones', remotebib:'Remote hose bib installation', drip:'Garden bed drip zone' };
-      rows.push({ label: labels[id] || id, amount: cost });
-    });
-    sprinklerBase += extrasTotal;
+      rows.push({ label: `System base fee — Tier ${tier} (${tier === 1 ? '1-4' : '5-7'} zones, includes smart Hydrawise controller)`, amount: tierBase });
+      rows.push({ label: `${state.zones} zone${state.zones > 1 ? 's' : ''} × $${PPZ}`, amount: baseZones });
+      if (complexAdj > 0) rows.push({ label: COMPLEXITY_LABEL[state.complexity], amount: complexAdj });
+      if (waterAdj > 0)   rows.push({ label: WATER_LABEL[state.waterSupply],     amount: waterAdj });
+
+      state.extras.forEach(id => {
+        const cost = state.extraCosts[id] || 0;
+        extrasTotal += cost;
+        const labels = { pots:'Flower pot & planter drip zones', remotebib:'Remote hose bib installation', drip:'Garden bed drip zone' };
+        rows.push({ label: labels[id] || id, amount: cost });
+      });
+      sprinklerBase += extrasTotal;
+    }
   }
 
   // ── Lighting calc ──
@@ -1258,12 +1294,18 @@ function buildEstimate() {
       </div>`;
   }
 
-  const low  = Math.round(total * 0.90);
-  const high = Math.round(total * 1.15);
-  document.getElementById('estimate-range').textContent = '$' + low.toLocaleString() + ' – $' + high.toLocaleString();
-  document.getElementById('bundle-savings-banner-wrap').innerHTML = bundleSavingBannerHtml;
-
-  rows.push({ label: 'Estimated total range', amount: '$' + low.toLocaleString() + ' – $' + high.toLocaleString(), total: true });
+  // Tier 3 custom-quote display path
+  if (state.customQuote) {
+    document.getElementById('estimate-range').textContent = 'Custom quote — site visit required';
+    document.getElementById('bundle-savings-banner-wrap').innerHTML = '';
+    rows.push({ label: 'Larger systems (8+ zones) require an on-site assessment with drawings. Use the form below to request your free consultation.', amount: '—', total: true });
+  } else {
+    const low  = Math.round(total * 0.90);
+    const high = Math.round(total * 1.15);
+    document.getElementById('estimate-range').textContent = '$' + low.toLocaleString() + ' – $' + high.toLocaleString();
+    document.getElementById('bundle-savings-banner-wrap').innerHTML = bundleSavingBannerHtml;
+    rows.push({ label: 'Estimated total range', amount: '$' + low.toLocaleString() + ' – $' + high.toLocaleString(), total: true });
+  }
 
   let rowHtml = '';
   rows.forEach(r => {
