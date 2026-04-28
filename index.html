@@ -1064,6 +1064,19 @@
 </style>
 </head>
 <body>
+<script>
+/* Hero estimator — set data-season ASAP so the right block paints first.
+   Spring   : Jan 1  – Jun 14 → spring opening estimator
+   Midseason: Jun 15 – Aug 24 → $95 service-call CTA (links to sprinkler-repair)
+   Fall     : Aug 25 – Dec 31 → fall winterization estimator */
+(function(){
+  var d = new Date(), m = d.getMonth(), day = d.getDate();
+  var s = 'spring';
+  if ((m === 5 && day >= 15) || m === 6 || (m === 7 && day < 25)) s = 'midseason';
+  else if ((m === 7 && day >= 25) || m >= 8) s = 'fall';
+  document.documentElement.setAttribute('data-season', s);
+})();
+</script>
 
 <nav class="nav nav-v2">
   <!-- Tier 1: Utility strip — local, urgent, contact-first -->
@@ -1200,6 +1213,51 @@
       <span class="hero__services-sep" aria-hidden="true">|</span>
       <span>Service</span>
     </p>
+
+    <!-- Seasonal estimator — compact glass-card. JS picks which block shows
+         based on data-season on <html> (set in inline script after <body>). -->
+    <div class="hero__estimator" role="complementary" aria-label="Seasonal service estimator">
+      <!-- Spring/Fall estimator (zone stepper + price) -->
+      <div class="hero-est hero-est--seasonal">
+        <div class="hero-est__head">
+          <span class="hero-est__pulse" aria-hidden="true"></span>
+          <span class="hero-est__eyebrow" data-est-eyebrow>Spring service · book by mid-april</span>
+        </div>
+        <div class="hero-est__body">
+          <div class="hero-est__stepper" role="group" aria-label="Number of zones">
+            <button type="button" class="hero-est__btn" data-est-dec aria-label="Decrease zones">−</button>
+            <div class="hero-est__count"><span data-est-zones>4</span><small>zones</small></div>
+            <button type="button" class="hero-est__btn" data-est-inc aria-label="Increase zones">+</button>
+          </div>
+          <div class="hero-est__readout">
+            <div class="hero-est__amount" data-est-amount>$<span data-est-price>90</span><small>/service</small></div>
+            <div class="hero-est__tier" data-est-tier>Residential · up to 4 zones</div>
+          </div>
+          <a class="hero-est__cta" data-est-cta href="sprinkler-spring-opening.html">
+            <span data-est-cta-text>Book spring opening</span>
+            <span class="hero-est__cta-arrow" aria-hidden="true">→</span>
+          </a>
+        </div>
+      </div>
+
+      <!-- Mid-season ($95 service call, no stepper) -->
+      <div class="hero-est hero-est--midseason">
+        <div class="hero-est__head">
+          <span class="hero-est__pulse" aria-hidden="true"></span>
+          <span class="hero-est__eyebrow">Summer service · same-day available</span>
+        </div>
+        <div class="hero-est__body hero-est__body--midseason">
+          <div class="hero-est__readout">
+            <div class="hero-est__amount">$<span>95</span><small>service call</small></div>
+            <div class="hero-est__tier">Diagnosis on-site · repairs $35–$220 quoted before work</div>
+          </div>
+          <a class="hero-est__cta" href="sprinkler-repair.html">
+            <span>Book a service call</span>
+            <span class="hero-est__cta-arrow" aria-hidden="true">→</span>
+          </a>
+        </div>
+      </div>
+    </div>
   </div>
 </section>
 
@@ -1757,6 +1815,81 @@
       console.error('Quick-Book form error:', err);
     }
   });
+})();
+</script>
+
+<script>
+/* Hero seasonal estimator controller —
+   Reads data-season from <html> (set by inline script after <body>). For
+   spring/fall, wires up a +/- zone stepper that mirrors the residential
+   pricing tiers used on sprinkler-spring-opening.html and sprinkler-fall-
+   winterization.html. Mid-season is static ($95 service call), no JS needed. */
+(function(){
+  var season = document.documentElement.getAttribute('data-season') || 'spring';
+  if (season === 'midseason') return; // static block, nothing to wire up
+
+  var COPY = {
+    spring: {
+      eyebrow: 'Spring service · book by mid-april',
+      ctaText: 'Book spring opening',
+      ctaHref: 'sprinkler-spring-opening.html'
+    },
+    fall: {
+      eyebrow: 'Fall service · book before freeze',
+      ctaText: 'Book fall winterization',
+      ctaHref: 'sprinkler-fall-winterization.html'
+    }
+  };
+
+  var MIN = 1, MAX = 16;
+  var zones = 4;
+
+  // Residential tiers (matches sprinkler-spring-opening.html / sprinkler-fall-winterization.html)
+  function priceFor(n){
+    if (n <= 4)  return { price: 90,  tier: 'Residential · up to 4 zones', quote: false };
+    if (n <= 6)  return { price: 105, tier: 'Residential · 5–6 zones',     quote: false };
+    if (n <= 8)  return { price: 120, tier: 'Residential · 7–8 zones',     quote: false };
+    if (n <= 15) return { price: 165, tier: 'Residential · 9–15 zones',    quote: false };
+    return { price: null, tier: 'Residential · 16+ zones — custom quote', quote: true };
+  }
+
+  var seasonalEl = document.querySelector('.hero-est--seasonal');
+  if (!seasonalEl) return;
+
+  var copy   = COPY[season] || COPY.spring;
+  var eyeEl  = seasonalEl.querySelector('[data-est-eyebrow]');
+  var ctaEl  = seasonalEl.querySelector('[data-est-cta]');
+  var ctaTxt = seasonalEl.querySelector('[data-est-cta-text]');
+  var amtEl  = seasonalEl.querySelector('[data-est-amount]');
+  var tierEl = seasonalEl.querySelector('[data-est-tier]');
+  var zonEl  = seasonalEl.querySelector('[data-est-zones]');
+  var dec    = seasonalEl.querySelector('[data-est-dec]');
+  var inc    = seasonalEl.querySelector('[data-est-inc]');
+
+  if (eyeEl)  eyeEl.textContent = copy.eyebrow;
+  if (ctaEl)  ctaEl.setAttribute('href', copy.ctaHref);
+  if (ctaTxt) ctaTxt.textContent = copy.ctaText;
+
+  function render(){
+    var r = priceFor(zones);
+    if (zonEl) zonEl.textContent = zones >= MAX ? '16+' : zones;
+    if (amtEl) {
+      amtEl.innerHTML = r.quote
+        ? 'Custom Quote<small>contact us</small>'
+        : '$<span data-est-price>' + r.price + '</span><small>/service</small>';
+    }
+    if (tierEl) tierEl.textContent = r.tier;
+    seasonalEl.classList.toggle('hero-est--quote', !!r.quote);
+    if (dec) dec.disabled = zones <= MIN;
+    if (inc) inc.disabled = zones >= MAX;
+  }
+
+  seasonalEl.addEventListener('click', function(e){
+    if (e.target.closest('[data-est-dec]') && zones > MIN) { zones--; render(); }
+    if (e.target.closest('[data-est-inc]') && zones < MAX) { zones++; render(); }
+  });
+
+  render();
 })();
 </script>
 </body>
