@@ -1286,6 +1286,17 @@ section.hero[aria-label="PJL Land Services hero"] .hero__services-sep {
   }
 }
 
+/* On phones the hero packs in 7+ stacked elements (badge, headline, tagline,
+   sub, 2 CTAs, services strip, seasonal estimator). Locking max-height to
+   100svh causes content to overflow into the next section on small viewports.
+   Below 768px we let the hero grow with content — min-height: 100svh still
+   ensures it fills the fold on first paint. */
+@media (max-width: 768px) {
+  section.hero[aria-label="PJL Land Services hero"] {
+    max-height: none;
+  }
+}
+
 /* ── Hero seasonal estimator (compact glass-card)
    Three states picked via [data-season] on <html>:
      spring    → .hero-est--seasonal visible, JS sets eyebrow + CTA + price for spring
@@ -1475,6 +1486,24 @@ section.hero[aria-label="PJL Land Services hero"] .hero__services-sep {
 .hero-est--quote .hero-est__amount {
   font-size: 22px;
   color: #FFD79A;
+}
+
+/* Tablet (561-900px) — iPad portrait, small laptops. Body stays single-row.
+   Sits between mobile and full desktop in every dimension so the card looks
+   proportionate to the headline at this viewport size. */
+@media (min-width: 561px) and (max-width: 900px) {
+  .hero__estimator { max-width: 620px; }
+  .hero-est { padding: 14px 18px 16px; border-radius: 13px; }
+  .hero-est__head { margin-bottom: 12px; font-size: 11.5px; }
+  .hero-est__body { gap: 13px; }
+  .hero-est__btn { width: 34px; height: 34px; font-size: 18px; }
+  .hero-est__stepper { padding: 4px; gap: 3px; }
+  .hero-est__count { min-width: 50px; padding: 0 4px; }
+  .hero-est__count span { font-size: 23px; }
+  .hero-est__amount { font-size: 30px; }
+  .hero-est__amount small { font-size: 12.5px; }
+  .hero-est__tier { font-size: 12px; }
+  .hero-est__cta { font-size: 14px; padding: 11px 16px; }
 }
 
 /* Mobile: keep stepper + readout side-by-side, CTA wraps to its own row.
