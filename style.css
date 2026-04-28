@@ -1117,6 +1117,97 @@ img { max-width: 100%; height: auto; display: block; }
   .post-services-cta-inner { grid-template-columns: 1fr; }
 }
 
+/* ── Service Areas tile block ──────────────────────────────────
+   Drops in near the bottom of core service pages (sprinkler-systems,
+   landscape-lighting) so localized prospects find their city's
+   dedicated area page from the broad service hub. */
+.service-areas-block {
+  padding: clamp(56px, 7vw, 80px) 0;
+  background: var(--cream);
+  border-top: 1px solid var(--border);
+}
+.service-areas-block .container { max-width: 1080px; }
+.service-areas-block__head {
+  text-align: center;
+  margin-bottom: 32px;
+}
+.service-areas-block__eyebrow {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--green);
+  margin-bottom: 10px;
+}
+.service-areas-block__head h2 {
+  font-size: clamp(28px, 3.6vw, 40px);
+  color: var(--green);
+  margin: 0 0 10px;
+  letter-spacing: -0.005em;
+}
+.service-areas-block__head p {
+  color: var(--text-mid);
+  font-size: 16px;
+  max-width: 56ch;
+  margin: 0 auto;
+  line-height: 1.6;
+}
+.service-areas-block__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 16px;
+}
+.service-areas-block__tile {
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  padding: 22px 24px 18px;
+  text-decoration: none;
+  transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+}
+.service-areas-block__tile:hover {
+  transform: translateY(-3px);
+  border-color: rgba(74,140,92,0.30);
+  box-shadow: 0 12px 30px rgba(15,31,20,0.08);
+}
+.service-areas-block__tile-pin {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px; height: 32px;
+  background: rgba(74,140,92,0.10);
+  color: var(--green);
+  border-radius: 8px;
+  font-size: 14px;
+  margin-bottom: 10px;
+}
+.service-areas-block__tile h4 {
+  color: var(--green) !important;
+  font-size: 17px !important;
+  margin: 0 0 4px !important;
+  letter-spacing: -0.005em !important;
+  text-transform: none !important;
+}
+.service-areas-block__tile p {
+  color: var(--text-mid) !important;
+  font-size: 13.5px !important;
+  margin: 0 !important;
+  line-height: 1.45 !important;
+}
+.service-areas-block__tile-arrow {
+  margin-top: auto;
+  padding-top: 12px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--amber);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
 /* ── Responsive ── */
 @media (max-width: 1024px) {
   .footer-grid { grid-template-columns: 1fr 1fr; }
