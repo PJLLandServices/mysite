@@ -998,6 +998,79 @@ a.sprk-comp:focus-visible {
   box-shadow: 0 8px 18px rgba(27,77,46,0.14);
 }
 
+/* Planning-an-install deep-dive callout — links from this overview to the
+   dedicated sprinkler-installation.html page. The whole element is the link. */
+.install-deep-callout {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 24px;
+  align-items: center;
+  background: linear-gradient(135deg, var(--dark) 0%, var(--green) 70%, var(--green-mid) 100%);
+  color: #fff;
+  padding: 28px 32px;
+  border-radius: var(--r-xl);
+  text-decoration: none;
+  position: relative;
+  overflow: hidden;
+  transition: transform 0.25s ease, box-shadow 0.25s ease;
+  box-shadow: 0 14px 36px rgba(27,77,46,0.18);
+}
+.install-deep-callout::before {
+  content: '';
+  position: absolute; inset: 0;
+  background:
+    radial-gradient(ellipse 50% 60% at 90% 20%, rgba(245,155,74,0.18), transparent 60%),
+    radial-gradient(ellipse 40% 50% at 10% 80%, rgba(74,140,92,0.18), transparent 60%);
+  pointer-events: none;
+}
+.install-deep-callout:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 22px 48px rgba(27,77,46,0.26);
+}
+.install-deep-callout__copy { position: relative; z-index: 1; }
+.install-deep-callout__eyebrow {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--amber-light);
+  margin-bottom: 6px;
+}
+.install-deep-callout h3 {
+  color: #fff !important;
+  font-size: clamp(22px, 2.6vw, 28px) !important;
+  margin: 0 0 8px !important;
+  text-transform: none !important;
+  letter-spacing: -0.005em !important;
+}
+.install-deep-callout p {
+  color: rgba(255,255,255,0.85) !important;
+  font-size: 14.5px !important;
+  margin: 0 !important;
+  line-height: 1.55 !important;
+  max-width: 60ch;
+}
+.install-deep-callout__cta {
+  position: relative; z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--amber);
+  color: #fff;
+  padding: 14px 24px;
+  border-radius: 99px;
+  font-weight: 700;
+  font-size: 15px;
+  white-space: nowrap;
+  box-shadow: 0 8px 20px rgba(224,123,36,0.40);
+  transition: background 0.2s ease;
+}
+.install-deep-callout:hover .install-deep-callout__cta { background: var(--amber-light); }
+@media (max-width: 720px) {
+  .install-deep-callout { grid-template-columns: 1fr; }
+  .install-deep-callout__cta { justify-content: center; }
+}
+
 /* Property range grid (legacy, retained in case still used elsewhere) */
 .sprk-property-grid {
   display: grid;
@@ -1895,6 +1968,19 @@ a.sprk-comp:focus-visible {
         <span class="sprk-properties__chip">🏢 Commercial Plazas</span>
       </div>
     </div>
+
+    <!-- Planning an install? Deep-dive callout linking to dedicated installation page -->
+    <a href="sprinkler-installation.html" class="install-deep-callout reveal" style="margin-top:40px;">
+      <div class="install-deep-callout__copy">
+        <div class="install-deep-callout__eyebrow">Planning an install?</div>
+        <h3>Read the full installation guide.</h3>
+        <p>Planning-first design, contractor coordination, future-proofing, the 7-step install process and what separates a good install from a bad one — all on the dedicated installation page.</p>
+      </div>
+      <div class="install-deep-callout__cta">
+        <span>See the installation guide</span>
+        <span aria-hidden="true">→</span>
+      </div>
+    </a>
   </div>
 </section>
 
@@ -2131,7 +2217,7 @@ a.sprk-comp:focus-visible {
           <li><a href="sprinkler-spring-opening.html">Spring Openings</a></li>
           <li><a href="sprinkler-fall-winterization.html">Fall Closings</a></li>
           <li><a href="sprinkler-repair.html">Sprinkler Repair</a></li>
-          <li><a href="estimate.html">New Installations</a></li>
+          <li><a href="sprinkler-installation.html">New Installations</a></li>
           <li><a href="landscape-lighting.html">Landscape Lighting</a></li>
         </ul>
       </div>
