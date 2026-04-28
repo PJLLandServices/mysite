@@ -1286,20 +1286,17 @@ section.hero[aria-label="PJL Land Services hero"] .hero__services-sep {
   }
 }
 
-/* On phones the hero packs in 7+ stacked elements (badge, headline, tagline,
-   sub, 2 CTAs, services strip, seasonal estimator). Locking max-height to
-   100svh causes content to overflow into the next section on small viewports.
-   Below 768px we let the hero grow with content — min-height: 100svh still
-   ensures it fills the fold on first paint.
+/* On phones (≤768px) the estimator moves OUT of the hero and into a
+   scroll-revealed band immediately below — the hero stays at one fold,
+   the cost callout becomes the first thing visitors see when they scroll.
+   Tablets/desktops keep the estimator inside the hero where it has room.
 
-   Also: enforce the project-wide rule (per memory/hero_nav_clearance.md) that
-   mobile hero padding-top MUST use var(--hero-nav-clearance). The original
-   homepage hero used a hardcoded clamp that was too small (~64px) to clear
-   the 2-tier mobile nav (~100-130px). The old max-height was masking the
-   overlap by overflowing content above the viewport. */
+   We still enforce the project-wide rule (per memory/hero_nav_clearance.md):
+   mobile hero padding-top MUST use var(--hero-nav-clearance) to clear the
+   2-tier mobile nav. */
 @media (max-width: 768px) {
   section.hero[aria-label="PJL Land Services hero"] {
-    max-height: none;
+    max-height: none;       /* let hero grow with content (matches the other landing-page heroes) */
     padding-top: var(--hero-nav-clearance);
   }
 }
@@ -1548,6 +1545,45 @@ section.hero[aria-label="PJL Land Services hero"] .hero__services-sep {
   .hero-est__count span { font-size: 18px; }
   .hero-est__amount { font-size: 22px; }
   .hero-est__tier { display: none; }   /* hide on tiny screens to save a row */
+}
+
+/* ── Scroll-band estimator (mobile-only)
+   On phones (≤768px) the in-hero estimator is hidden and this band picks
+   it up — appears immediately below the hero as the first scroll reveal.
+   Tablets and desktops keep the in-hero estimator instead. */
+.hero-est-band {
+  display: none;             /* hidden by default; toggled on at ≤768px */
+  background: linear-gradient(180deg, #0F1F14 0%, #122A18 100%);
+  padding: 24px 0 28px;
+  border-bottom: 1px solid rgba(243, 144, 25, 0.18);
+  position: relative;
+}
+.hero-est-band::before {
+  /* subtle dot-grid texture echoing the cta-banner pattern */
+  content: '';
+  position: absolute; inset: 0;
+  background-image: radial-gradient(circle, rgba(255,255,255,0.04) 1px, transparent 1px);
+  background-size: 22px 22px;
+  pointer-events: none;
+}
+.hero-est-band__inner {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  max-width: 640px;
+  padding-inline: 16px;
+}
+.hero-est-band .hero-est {
+  width: 100%;
+  background: rgba(15, 31, 20, 0.72);
+}
+
+/* Visibility toggle by viewport
+   - In-hero estimator: shown on >768px, hidden on ≤768px
+   - Scroll-band estimator: opposite */
+@media (max-width: 768px) {
+  .hero__estimator { display: none; }
+  .hero-est-band   { display: block; }
 }
 
 @media (prefers-reduced-motion: reduce) {
