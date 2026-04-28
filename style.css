@@ -1042,7 +1042,10 @@ section.hero[aria-label="PJL Land Services hero"] {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: clamp(4rem, 6cqh, 8rem) clamp(1.25rem, 4cqi, 3rem);
+  /* padding-top uses --hero-nav-clearance per memory/hero_nav_clearance.md
+     so the headline always clears the 2-tier nav, regardless of viewport */
+  padding-block: var(--hero-nav-clearance) clamp(4rem, 6cqh, 8rem);
+  padding-inline: clamp(1.25rem, 4cqi, 3rem);
   color: #fff;
   text-align: center;
   overflow: visible;
@@ -1294,10 +1297,18 @@ section.hero[aria-label="PJL Land Services hero"] .hero__services-sep {
    We still enforce the project-wide rule (per memory/hero_nav_clearance.md):
    mobile hero padding-top MUST use var(--hero-nav-clearance) to clear the
    2-tier mobile nav. */
-@media (max-width: 768px) {
+/* Relax the hero (drop fold-locking + size containment) whenever the
+   viewport is constrained on EITHER axis. Short viewports (landscape phones,
+   1280x800 laptops, iPad landscape at 1024x768) suffer the same overflow
+   problem as narrow phones because hero content needs ~700px + 236px padding. */
+@media (max-width: 768px), (max-height: 900px) {
   section.hero[aria-label="PJL Land Services hero"] {
-    max-height: none;       /* let hero grow with content (matches the other landing-page heroes) */
-    padding-top: var(--hero-nav-clearance);
+    container-type: inline-size;
+    min-height: 0;
+    max-height: none;
+  }
+  section.hero[aria-label="PJL Land Services hero"] .hero__inner {
+    gap: 1.25rem;
   }
 }
 
@@ -1578,10 +1589,10 @@ section.hero[aria-label="PJL Land Services hero"] .hero__services-sep {
   background: rgba(15, 31, 20, 0.72);
 }
 
-/* Visibility toggle by viewport
-   - In-hero estimator: shown on >768px, hidden on ≤768px
-   - Scroll-band estimator: opposite */
-@media (max-width: 768px) {
+/* Visibility toggle by viewport — match the hero-relax breakpoints.
+   Whenever the hero gets constrained (narrow OR short), in-hero estimator
+   would crowd the content. Use the scroll-band in those cases instead. */
+@media (max-width: 768px), (max-height: 900px) {
   .hero__estimator { display: none; }
   .hero-est-band   { display: block; }
 }
