@@ -25,8 +25,13 @@
   --r-lg:         18px;
   --r-xl:         28px;
   --touch-target: 44px;
-  --container-gutter: clamp(16px, 3vw, 40px);
+  --container-gutter: clamp(22px, 3vw, 40px);
   --section-space: clamp(64px, 9vw, 96px);
+  /* Top padding for any hero section on mobile — clears the two-tier v2 nav
+     (utility strip + main bar) with ~40px of breathing room. Use this for the
+     padding-top of every page's hero at mobile breakpoints. If the nav grows,
+     bump this one value. */
+  --hero-nav-clearance: 172px;
 }
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -994,11 +999,14 @@ img { max-width: 100%; height: auto; display: block; }
   .nav-links { gap: 24px; }
 }
 @media (max-width: 768px) {
-  .container, .container-wide { padding: 0 20px; }
+  .container, .container-wide { padding: 0 28px; }
   .section { padding: clamp(56px, 10vw, 72px) 0; }
   .footer-grid { grid-template-columns: 1fr; gap: 32px; }
   .stats-row { grid-template-columns: 1fr 1fr; }
   .trust-bar-inner { gap: 24px; }
+  .page-hero {
+    padding-block: clamp(var(--hero-nav-clearance), 22vw, 196px) clamp(48px, 6vw, 64px);
+  }
   .page-hero h1 {
     font-size: clamp(32px, 8.5vw, 48px);
     line-height: 1.04;
@@ -1426,6 +1434,29 @@ section.hero[aria-label="PJL Land Services hero"] .hero__services-sep {
   transform: translateY(-1px);
   box-shadow: 0 12px 24px -4px rgba(26, 71, 40, 0.45);
 }
+.sd-bridge__submit:disabled { opacity: 0.6; cursor: not-allowed; transform: none; box-shadow: none; }
+.sd-bridge__result {
+  grid-column: 1 / -1;
+  margin: 8px 0 0;
+  padding: 14px 16px;
+  border-radius: 10px;
+  font-size: 14px;
+  line-height: 1.55;
+  font-weight: 500;
+}
+.sd-bridge__result a { text-decoration: underline; font-weight: 600; }
+.sd-bridge__result--success {
+  background: rgba(74,140,92,0.12);
+  border: 1px solid rgba(74,140,92,0.30);
+  color: var(--green);
+}
+.sd-bridge__result--success a { color: var(--green); }
+.sd-bridge__result--error {
+  background: rgba(224,123,36,0.10);
+  border: 1px solid rgba(224,123,36,0.30);
+  color: var(--amber);
+}
+.sd-bridge__result--error a { color: var(--amber); }
 @media (max-width: 1000px) {
   .sd-bridge__grid {
     grid-template-columns: 1fr;
@@ -2188,7 +2219,7 @@ section.hero[aria-label="PJL Land Services hero"] .hero__services-sep {
   object-fit: cover;
   display: block;
   opacity: 1;
-  transition: opacity 0.30s ease;
+  transition: opacity 0.55s ease;
 }
 .sprk-quote-teaser__frame img.is-swapping { opacity: 0.0; }
 

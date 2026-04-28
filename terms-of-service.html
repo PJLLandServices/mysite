@@ -3,9 +3,44 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta name="description" content="PJL Land Services Terms of Service — The agreement governing services, estimates, payment, warranty, cancellation, and liability for residential and commercial work in Newmarket and the GTA.">
+<meta name="description" content="PJL Land Services Terms of Service — Service, estimate, payment, warranty, cancellation, and liability terms for Newmarket & GTA work.">
+<link rel="canonical" href="https://www.pjllandservices.com/terms-of-service.html">
+<link rel="alternate" hreflang="en-ca" href="https://www.pjllandservices.com/terms-of-service.html">
+<link rel="icon" type="image/svg+xml" href="logo-mark.svg">
+<link rel="apple-touch-icon" href="logo-mark.svg">
+
+<!-- Open Graph -->
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="PJL Land Services">
+<meta property="og:title" content="Terms of Service | PJL Land Services">
+<meta property="og:description" content="PJL Land Services Terms of Service — Service, estimate, payment, warranty, cancellation, and liability terms for Newmarket & GTA work.">
+<meta property="og:url" content="https://www.pjllandservices.com/terms-of-service.html">
+<meta property="og:image" content="https://www.pjllandservices.com/homepage-hero.jpg">
+<meta property="og:image:alt" content="PJL Land Services — Newmarket & GTA">
+<meta property="og:locale" content="en_CA">
+
+<!-- Twitter Card -->
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Terms of Service | PJL Land Services">
+<meta name="twitter:description" content="PJL Land Services Terms of Service — Service, estimate, payment, warranty, cancellation, and liability terms for Newmarket & GTA work.">
+<meta name="twitter:image" content="https://www.pjllandservices.com/homepage-hero.jpg">
+
 <title>Terms of Service | PJL Land Services</title>
 <link rel="stylesheet" href="style.css">
+
+<!-- WebPage schema referencing the homepage LocalBusiness via @id -->
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "WebPage",
+  "name": "Terms of Service",
+  "description": "PJL Land Services Terms of Service — Service, estimate, payment, warranty, cancellation, and liability terms for Newmarket & GTA work.",
+  "url": "https://www.pjllandservices.com/terms-of-service.html",
+  "inLanguage": "en-CA",
+  "isPartOf": { "@type": "WebSite", "name": "PJL Land Services", "url": "https://www.pjllandservices.com/" },
+  "publisher": { "@id": "https://www.pjllandservices.com/#business" }
+}
+</script>
 <style>
 .page-hero {
   padding: 150px 0 68px;
@@ -227,7 +262,7 @@
   .legal-toc ol { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 24px; }
 }
 @media (max-width: 720px) {
-  .page-hero { padding: 132px 0 52px; }
+  .page-hero { padding: var(--hero-nav-clearance) 0 52px; }
   .page-hero h1 { font-size: clamp(32px, 9vw, 42px); }
   .legal-toc ol { grid-template-columns: 1fr; }
   .legal-prose h2 {

@@ -743,6 +743,31 @@
   .about-cert-copy p{
     font-size:15px;
   }
+  .about-cert-creds{
+    grid-template-columns:1fr;
+    gap:12px;
+    max-width:460px;
+  }
+  .about-cert-creds li{
+    flex-direction:row;
+    align-items:center;
+    text-align:left;
+    gap:14px;
+    padding:16px 18px;
+  }
+  .about-cert-creds__icon{
+    width:38px;
+    height:38px;
+    font-size:16px;
+  }
+  .about-cert-creds__title{
+    font-size:13.5px;
+    letter-spacing:0.08em;
+  }
+  .about-cert-creds__detail{
+    font-size:12.5px;
+    line-height:1.4;
+  }
 }
 @media(max-width:480px){
   .about-shell{
@@ -1206,11 +1231,11 @@
         <span class="sd-bridge__pill-dot"></span>
         <span>Same-Day Service Available</span>
       </div>
-      <form class="sd-bridge__form" onsubmit="event.preventDefault(); submitQuickBook();">
-        <input type="text" id="qb-name" placeholder="First &amp; Last Name" class="sd-bridge__input">
-        <input type="email" id="qb-email" placeholder="Email address" class="sd-bridge__input">
-        <input type="tel" id="qb-phone" placeholder="📞 Phone number" class="sd-bridge__input">
-        <select id="qb-service" class="sd-bridge__input sd-bridge__select">
+      <form class="sd-bridge__form" id="quickBookForm" action="https://formspree.io/f/mvzdjolv" method="POST">
+        <input type="text" id="qb-name" name="name" placeholder="First &amp; Last Name" class="sd-bridge__input" required autocomplete="name">
+        <input type="email" id="qb-email" name="email" placeholder="Email address" class="sd-bridge__input" autocomplete="email">
+        <input type="tel" id="qb-phone" name="phone" placeholder="📞 Phone number" class="sd-bridge__input" required autocomplete="tel">
+        <select id="qb-service" name="service" class="sd-bridge__input sd-bridge__select" required>
           <option value="">Select Required Service</option>
           <option>Spring Opening</option>
           <option>Fall Closing</option>
@@ -1219,8 +1244,13 @@
           <option>Smart Upgrade</option>
           <option>Landscape Lighting</option>
         </select>
-        <input type="text" id="qb-address" placeholder="Address or Jobsite Address" class="sd-bridge__input sd-bridge__input--full">
-        <button type="submit" class="sd-bridge__submit">Book Now — Same Day Available</button>
+        <input type="text" id="qb-address" name="address" placeholder="Address or Jobsite Address" class="sd-bridge__input sd-bridge__input--full" autocomplete="street-address">
+        <input type="hidden" name="_subject" value="Same-Day Service Request — pjllandservices.com (Homepage)">
+        <input type="hidden" name="_source" value="Homepage Quick-Book">
+        <input type="text" name="_gotcha" tabindex="-1" autocomplete="off" style="display:none !important;" aria-hidden="true">
+        <button type="submit" class="sd-bridge__submit" id="qb-submit">Book Now — Same Day Available</button>
+        <p class="sd-bridge__result sd-bridge__result--success" id="qb-success" hidden>✓ Thanks — we've got your request and will be in touch shortly. For urgent service, call <a href="tel:+19059600181">(905) 960-0181</a>.</p>
+        <p class="sd-bridge__result sd-bridge__result--error" id="qb-error" hidden>Something went wrong. Please call <a href="tel:+19059600181">(905) 960-0181</a> or email <a href="mailto:info@pjllandservices.com">info@pjllandservices.com</a>.</p>
       </form>
     </div>
   </div>
@@ -1244,7 +1274,7 @@
         <div class="svc-body"><h3>Spring Openings & Fall Closings</h3><p>Protect your investment with professional seasonal start-up and winterization. We'll have your system running perfectly from the first warm day to the last.</p><span class="svc-link">Learn More <span class="svc-arrow">→</span></span></div>
       </a>
       <a href="sprinkler-systems.html#repair" class="svc svc--repair reveal reveal-delay-2">
-        <div class="svc-img"><img src="technician-diagnoses-hero.png" alt="Sprinkler System Repair and Diagnosis GTA"><span class="svc-tag">Repair</span></div>
+        <div class="svc-img"><img src="technician-diagnoses-hero.jpg" alt="Sprinkler System Repair and Diagnosis GTA"><span class="svc-tag">Repair</span></div>
         <div class="svc-body"><h3>Sprinkler Diagnosis & Repair</h3><p>Fast, honest diagnosis on any brand or system. We fix leaks, broken heads, pressure issues, and controller failures with clear timelines and upfront pricing.</p><span class="svc-link">Learn More <span class="svc-arrow">→</span></span></div>
       </a>
       <a href="estimate.html" class="svc svc--install reveal reveal-delay-3">
@@ -1266,14 +1296,14 @@
       <div class="sprk-quote-teaser__copy">
         <span class="sprk-quote-teaser__eyebrow">
           <span class="sprk-quote-teaser__pulse" aria-hidden="true"></span>
-          New · Interactive Quote Builder
+          New · Interactive Quote Estimator
         </span>
-        <h2>See your sprinkler system <span class="accent">before we build it.</span></h2>
-        <p>Our new quote builder lets you pick the home that matches yours, toggle the features that apply, and watch your custom system come together in real time — all in under two minutes.</p>
+        <h2>Match your property. <span class="accent">Get a tailored estimate.</span></h2>
+        <p>Our new estimator lets you match your property to a comparable, mark the features that apply, and get a tailored starting estimate — all in under two minutes. The final quote is calibrated on-site.</p>
 
         <div class="sprk-quote-teaser__actions">
           <a href="quote.html" class="sprk-quote-teaser__cta">
-            <span>Build My Quote</span>
+            <span>Start My Estimate</span>
             <span class="sprk-quote-teaser__cta-arrow" aria-hidden="true">→</span>
           </a>
         </div>
@@ -1345,13 +1375,13 @@
       tag.classList.toggle('is-back', f.side === 'back');
       captionText.textContent = f.caption;
       img.classList.remove('is-swapping');
-    }, 220);
+    }, 380);
   }
 
   function start() {
     if (prefersReduced) return;
     if (timer) clearInterval(timer);
-    timer = setInterval(swap, 2600);
+    timer = setInterval(swap, 5500);
   }
 
   teaser.addEventListener('mouseenter', () => { paused = true;  });
@@ -1411,7 +1441,7 @@
 
         <div class="about-stage reveal reveal-delay-1">
           <div class="about-photo-card">
-            <img src="about-section-picture.svg" alt="PJL Land Services about section feature graphic">
+            <img src="about-section-picture.jpg" alt="PJL Land Services about section feature graphic" loading="lazy">
           </div>
         </div>
       </div>
@@ -1604,7 +1634,7 @@
       </a>
       <a href="blog-signs-sprinkler-needs-repair-newmarket-gta.html" class="blog-strip__card reveal reveal-delay-1">
         <div class="blog-strip__img">
-          <img src="technician-diagnoses-hero.png" alt="PJL technician diagnosing a sprinkler problem">
+          <img src="technician-diagnoses-hero.jpg" alt="PJL technician diagnosing a sprinkler problem">
           <span class="blog-strip__tag" style="background:rgba(142,63,20,0.92);">🔧 Repair</span>
         </div>
         <div class="blog-strip__body">
@@ -1691,27 +1721,44 @@
 <script src="nav.js"></script>
 
 <script>
-function submitQuickBook() {
-  var name    = document.getElementById('qb-name').value.trim();
-  var email   = document.getElementById('qb-email').value.trim();
-  var phone   = document.getElementById('qb-phone').value.trim();
-  var address = document.getElementById('qb-address').value.trim();
-  var service = document.getElementById('qb-service').value;
-  if (!name || !phone || !service) {
-    alert('Please fill in your name, phone number, and select a service.');
-    return;
-  }
-  var subj = encodeURIComponent('Service Request — ' + service + ' | ' + name);
-  var body = encodeURIComponent(
-    'New Service Request — pjllandservices.com\n\n' +
-    'Name: ' + name + '\n' +
-    'Email: ' + (email || 'Not provided') + '\n' +
-    'Phone: ' + phone + '\n' +
-    'Address: ' + (address || 'Not provided') + '\n' +
-    'Service Requested: ' + service
-  );
-  window.location.href = 'mailto:info@pjllandservices.com?subject=' + subj + '&body=' + body;
-}
+/* Homepage Quick-Book — Formspree submission via fetch().
+   Posts to the form's action URL, swaps in a success or error message,
+   keeps the user on the page. No mailto: bounce. */
+(function () {
+  const form    = document.getElementById('quickBookForm');
+  const submit  = document.getElementById('qb-submit');
+  const success = document.getElementById('qb-success');
+  const error   = document.getElementById('qb-error');
+  if (!form) return;
+
+  form.addEventListener('submit', async function (e) {
+    e.preventDefault();
+    error.hidden = true;
+    submit.disabled = true;
+    const originalText = submit.textContent;
+    submit.textContent = 'Sending…';
+
+    try {
+      const data = new FormData(form);
+      const res = await fetch(form.action, {
+        method: 'POST',
+        body: data,
+        headers: { 'Accept': 'application/json' }
+      });
+      if (res.ok) {
+        form.querySelectorAll('input, select, button').forEach(el => { if (el.type !== 'hidden') el.hidden = true; });
+        success.hidden = false;
+      } else {
+        throw new Error('Submission failed: ' + res.status);
+      }
+    } catch (err) {
+      error.hidden = false;
+      submit.disabled = false;
+      submit.textContent = originalText;
+      console.error('Quick-Book form error:', err);
+    }
+  });
+})();
 </script>
 </body>
 </html>

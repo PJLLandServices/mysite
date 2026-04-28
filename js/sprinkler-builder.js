@@ -348,50 +348,40 @@
       back_features:   qfBackFeatures.value
     };
 
-    // ── TODO: Replace with real form handler ──
-    //   Recommended: Formspree, Netlify Forms, or PJL's CRM webhook.
-    //   Endpoint placeholder: /api/quote-request
-    //
-    //   Example fetch call (uncomment + configure when ready):
-    //
-    //   fetch('/api/quote-request', {
-    //     method: 'POST',
-    //     headers: { 'Content-Type': 'application/json' },
-    //     body: JSON.stringify(payload)
-    //   })
-    //   .then(res => res.ok ? showSuccess(payload.name) : showError("Couldn't send. Please call (905) 960-0181."))
-    //   .catch(()  => showError("Couldn't send. Please call (905) 960-0181."));
-
-    // ── Mailto fallback (works without backend) ──
-    submitViaMailto(payload);
-    showSuccess(payload.name);
+    // ── Submit to Formspree ──
+    submitToFormspree(payload);
   }
 
-  function submitViaMailto(p) {
-    const subject = `New Sprinkler Quote Request — ${p.name}`;
-    const body = [
-      'New sprinkler quote request from PJL Quote Builder',
-      '',
-      '— CUSTOMER —',
-      `Name: ${p.name}`,
-      `Phone: ${p.phone}`,
-      `Email: ${p.email}`,
-      `Address: ${p.address}`,
-      `Best time to call: ${p.best_time}`,
-      `Notes: ${p.notes || '(none)'}`,
-      '',
-      '— SELECTIONS —',
-      `Tier: ${p.selected_tier}`,
-      `Front yard features: ${p.front_features}`,
-      `Back yard features: ${p.back_features}`
-    ].join('\n');
+  function submitToFormspree(p) {
+    const formData = new FormData();
+    formData.append('name', p.name);
+    formData.append('phone', p.phone);
+    formData.append('email', p.email);
+    formData.append('address', p.address);
+    formData.append('best_time', p.best_time || 'No preference');
+    formData.append('notes', p.notes || '(none)');
+    formData.append('selected_tier', p.selected_tier);
+    formData.append('front_yard_features', p.front_features);
+    formData.append('back_yard_features', p.back_features);
+    formData.append('_subject', `Sprinkler Quote Request — ${p.name}`);
+    formData.append('_source', 'Sprinkler Quote Builder');
 
-    const mailto =
-      'mailto:info@pjllandservices.com' +
-      '?subject=' + encodeURIComponent(subject) +
-      '&body='    + encodeURIComponent(body);
-
-    setTimeout(() => { window.location.href = mailto; }, 100);
+    fetch('https://formspree.io/f/mvzdjolv', {
+      method: 'POST',
+      body: formData,
+      headers: { 'Accept': 'application/json' }
+    })
+      .then(res => {
+        if (res.ok) {
+          showSuccess(p.name);
+        } else {
+          showError("Sorry — your request didn't send. Please call (905) 960-0181 or email info@pjllandservices.com.");
+        }
+      })
+      .catch(err => {
+        console.error('Quote submit failed:', err);
+        showError("Sorry — your request didn't send. Please call (905) 960-0181 or email info@pjllandservices.com.");
+      });
   }
 
   function showSuccess(name) {

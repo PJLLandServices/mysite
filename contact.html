@@ -17,7 +17,7 @@
 <!-- Open Graph -->
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="PJL Land Services">
-<meta property="og:title" content="Contact PJL Land Services — Newmarket & GTA Sprinkler Experts">
+<meta property="og:title" content="Contact PJL Land Services — Newmarket Sprinkler Experts">
 <meta property="og:description" content="Same-day sprinkler repair across Newmarket & the GTA. Call (905) 960-0181 or book online.">
 <meta property="og:url" content="https://www.pjllandservices.com/contact.html">
 <meta property="og:image" content="https://www.pjllandservices.com/homepage-hero.jpg">
@@ -26,11 +26,11 @@
 
 <!-- Twitter Card -->
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="Contact PJL Land Services — Newmarket & GTA">
+<meta name="twitter:title" content="Contact PJL Land Services — Newmarket Sprinkler Experts">
 <meta name="twitter:description" content="Same-day sprinkler repair, free quotes. Call (905) 960-0181.">
 <meta name="twitter:image" content="https://www.pjllandservices.com/homepage-hero.jpg">
 
-<title>Contact Us | PJL Land Services — Newmarket & GTA</title>
+<title>Contact PJL Land Services — Newmarket Sprinkler Experts</title>
 <link rel="stylesheet" href="style.css">
 
 <!-- ContactPage + LocalBusiness reference -->
@@ -190,6 +190,48 @@
 .req { color: var(--amber); }
 .form-submit-row { grid-column: 1 / -1; margin-top: 8px; }
 
+.cf-result {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 8px;
+  padding: 32px 28px;
+  border-radius: var(--r-lg);
+  margin-top: 4px;
+  border: 1px solid;
+}
+.cf-result h4 { font-size: 22px; margin: 4px 0 2px; }
+.cf-result p  { font-size: 15px; color: var(--text-mid); margin: 0; max-width: 44ch; line-height: 1.55; }
+.cf-result a  { color: var(--green); text-decoration: underline; }
+.cf-result__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 52px; height: 52px;
+  border-radius: 50%;
+  font-size: 26px;
+  font-weight: 800;
+  color: #fff;
+  margin-bottom: 4px;
+}
+.cf-result--success {
+  background: linear-gradient(135deg, rgba(74,140,92,0.10) 0%, rgba(74,140,92,0.04) 100%);
+  border-color: rgba(74,140,92,0.30);
+}
+.cf-result--success .cf-result__icon {
+  background: linear-gradient(135deg, var(--green-light) 0%, var(--green) 100%);
+  box-shadow: 0 8px 18px rgba(27,77,46,0.22);
+}
+.cf-result--error {
+  background: rgba(224,123,36,0.06);
+  border-color: rgba(224,123,36,0.30);
+}
+.cf-result--error .cf-result__icon {
+  background: linear-gradient(135deg, var(--amber-light) 0%, var(--amber) 100%);
+  box-shadow: 0 8px 18px rgba(224,123,36,0.22);
+}
+
 .map-wrap {
   border-radius: var(--r-xl);
   overflow: hidden;
@@ -221,7 +263,7 @@
 }
 @media (max-width: 640px) {
   .page-hero {
-    padding: 132px 0 52px;
+    padding: var(--hero-nav-clearance) 0 52px;
   }
   .page-hero h1 {
     font-size: clamp(32px, 9vw, 42px);
@@ -432,31 +474,34 @@
         <div class="contact-form-section">
           <h3>Send Us a Message</h3>
           <p>Have a question or want to discuss your project? Fill in your details and we'll get back to you promptly.</p>
-          <form onsubmit="handleSubmit(event)">
+          <!-- Formspree-backed form. On submit, the form posts via fetch and shows a success message
+               in-page; the user is never bounced to their email client. To change the destination form,
+               update the action URL with a new Formspree endpoint from the Formspree dashboard. -->
+          <form id="contactForm" action="https://formspree.io/f/mvzdjolv" method="POST">
             <div class="form-grid">
               <div class="form-group">
-                <label>First name <span class="req">*</span></label>
-                <input type="text" id="cf-first" placeholder="Patrick" required>
+                <label for="cf-first">First name <span class="req">*</span></label>
+                <input type="text" id="cf-first" name="first_name" placeholder="Patrick" required autocomplete="given-name">
               </div>
               <div class="form-group">
-                <label>Last name</label>
-                <input type="text" id="cf-last" placeholder="Smith">
+                <label for="cf-last">Last name</label>
+                <input type="text" id="cf-last" name="last_name" placeholder="Smith" autocomplete="family-name">
               </div>
               <div class="form-group">
-                <label>Email address <span class="req">*</span></label>
-                <input type="email" id="cf-email" placeholder="you@example.com" required>
+                <label for="cf-email">Email address <span class="req">*</span></label>
+                <input type="email" id="cf-email" name="email" placeholder="you@example.com" required autocomplete="email">
               </div>
               <div class="form-group">
-                <label>Phone number <span class="req">*</span></label>
-                <input type="tel" id="cf-phone" placeholder="(905) 555-0100" required>
+                <label for="cf-phone">Phone number <span class="req">*</span></label>
+                <input type="tel" id="cf-phone" name="phone" placeholder="(905) 555-0100" required autocomplete="tel">
               </div>
               <div class="form-group full">
-                <label>Property address / city</label>
-                <input type="text" id="cf-address" placeholder="Newmarket, ON">
+                <label for="cf-address">Property address / city</label>
+                <input type="text" id="cf-address" name="address" placeholder="Newmarket, ON" autocomplete="street-address">
               </div>
               <div class="form-group full">
-                <label>What can we help you with?</label>
-                <select id="cf-service">
+                <label for="cf-service">What can we help you with?</label>
+                <select id="cf-service" name="service">
                   <option value="">Select a service...</option>
                   <option>Spring Opening</option>
                   <option>Fall Closing</option>
@@ -468,14 +513,28 @@
                 </select>
               </div>
               <div class="form-group full">
-                <label>Message</label>
-                <textarea id="cf-message" placeholder="Tell us about your property and what you're looking for..."></textarea>
+                <label for="cf-message">Message</label>
+                <textarea id="cf-message" name="message" placeholder="Tell us about your property and what you're looking for..."></textarea>
               </div>
+              <!-- Formspree-only meta fields: subject line + spam honeypot + reply-to -->
+              <input type="hidden" name="_subject" value="Website Enquiry — pjllandservices.com">
+              <input type="text" name="_gotcha" tabindex="-1" autocomplete="off" style="display:none !important;" aria-hidden="true">
               <div class="form-submit-row">
-                <button type="submit" class="btn btn-green" style="width:100%;justify-content:center;">Send Message →</button>
+                <button type="submit" id="cf-submit" class="btn btn-green" style="width:100%;justify-content:center;">Send Message →</button>
               </div>
             </div>
           </form>
+          <!-- Success / error states — shown by JS after submit -->
+          <div id="cf-success" class="cf-result cf-result--success" hidden>
+            <span class="cf-result__icon" aria-hidden="true">✓</span>
+            <h4>Message sent — thanks!</h4>
+            <p>We've received your enquiry and will get back to you within one business day. If it's urgent, call <a href="tel:+19059600181">(905) 960-0181</a>.</p>
+          </div>
+          <div id="cf-error" class="cf-result cf-result--error" hidden>
+            <span class="cf-result__icon" aria-hidden="true">!</span>
+            <h4>Something went wrong</h4>
+            <p>Your message didn't send. Please try again, or email <a href="mailto:info@pjllandservices.com">info@pjllandservices.com</a> directly. We're sorry for the trouble.</p>
+          </div>
         </div>
       </div>
 
@@ -512,27 +571,45 @@
 
 <script src="nav.js"></script>
 <script>
-function handleSubmit(e) {
-  e.preventDefault();
-  const first   = document.getElementById('cf-first').value.trim();
-  const last    = document.getElementById('cf-last').value.trim();
-  const email   = document.getElementById('cf-email').value.trim();
-  const phone   = document.getElementById('cf-phone').value.trim();
-  const address = document.getElementById('cf-address').value.trim();
-  const service = document.getElementById('cf-service').value;
-  const message = document.getElementById('cf-message').value.trim();
-  const subj = encodeURIComponent('Website Enquiry — ' + service + ' | ' + first + ' ' + last);
-  const body = encodeURIComponent(
-    'Website Enquiry — pjllandservices.com\n\n' +
-    'Name: ' + first + ' ' + last + '\n' +
-    'Email: ' + email + '\n' +
-    'Phone: ' + phone + '\n' +
-    'Address: ' + (address || 'Not provided') + '\n' +
-    'Service: ' + (service || 'Not selected') + '\n\n' +
-    'Message:\n' + (message || 'No message provided.')
-  );
-  window.location.href = 'mailto:info@pjllandservices.com?subject=' + subj + '&body=' + body;
-}
+/* Contact form — Formspree submission via fetch().
+   Posts to the form's action URL, swaps in a success or error panel,
+   keeps the user on the page. No mailto: bounce. */
+(function () {
+  const form    = document.getElementById('contactForm');
+  const submit  = document.getElementById('cf-submit');
+  const success = document.getElementById('cf-success');
+  const error   = document.getElementById('cf-error');
+  if (!form) return;
+
+  form.addEventListener('submit', async function (e) {
+    e.preventDefault();
+    error.hidden = true;
+    submit.disabled = true;
+    const originalText = submit.innerHTML;
+    submit.innerHTML = 'Sending…';
+
+    try {
+      const data = new FormData(form);
+      const res = await fetch(form.action, {
+        method: 'POST',
+        body: data,
+        headers: { 'Accept': 'application/json' }
+      });
+      if (res.ok) {
+        form.hidden = true;
+        success.hidden = false;
+        success.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      } else {
+        throw new Error('Submission failed: ' + res.status);
+      }
+    } catch (err) {
+      error.hidden = false;
+      submit.disabled = false;
+      submit.innerHTML = originalText;
+      console.error('Contact form error:', err);
+    }
+  });
+})();
 </script>
 </body>
 </html>
