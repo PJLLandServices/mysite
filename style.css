@@ -2850,22 +2850,99 @@ section.hero[aria-label="PJL Land Services hero"] .hero__services-sep {
    Used on: coverage-map.html, quote.html, estimate.html, contact.html
    Variants: hero (dark, frosted glass) — used in all 4 page heroes
    ============================================ */
-.cov-hero-checker { background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.14); backdrop-filter: blur(6px); border-radius: 18px; padding: 22px 24px; margin: 6px 0 22px; max-width: 720px; box-shadow: 0 12px 32px rgba(0,0,0,0.18); }
-.cov-hero-checker__label { display: block; font-size: 13px; font-weight: 700; color: #fff; letter-spacing: 0.04em; margin-bottom: 12px; }
-.cov-hero-checker__row { display: flex; gap: 10px; align-items: stretch; flex-wrap: wrap; }
-.cov-hero-checker__input-wrap { position: relative; flex: 1 1 320px; min-width: 0; display: flex; align-items: center; }
-.cov-hero-checker__icon { position: absolute; left: 16px; top: 50%; transform: translateY(-50%); font-size: 18px; pointer-events: none; opacity: 0.7; z-index: 1; }
-.cov-hero-checker__input { flex: 1; width: 100%; padding: 15px 44px 15px 46px; font-size: 16px; font-family: inherit; color: var(--text); background: #fff; border: 2px solid transparent; border-radius: 12px; transition: border-color 0.2s ease, box-shadow 0.2s ease; }
-.cov-hero-checker__input::placeholder { color: var(--text-muted); }
-.cov-hero-checker__input:focus { outline: none; border-color: var(--amber-light); box-shadow: 0 0 0 4px rgba(245,155,74,0.30); }
-.cov-hero-checker__clear { position: absolute; right: 10px; top: 50%; transform: translateY(-50%); background: rgba(15,31,20,0.10); color: var(--text-mid); border: none; width: 28px; height: 28px; border-radius: 50%; font-size: 18px; font-weight: 700; cursor: pointer; line-height: 1; display: flex; align-items: center; justify-content: center; transition: background 0.15s ease; z-index: 1; }
+.cov-hero-checker {
+  position: relative;
+  background: linear-gradient(135deg, rgba(255,255,255,0.10) 0%, rgba(255,255,255,0.04) 100%);
+  border: 1px solid rgba(255,255,255,0.18);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border-radius: 22px;
+  padding: 30px 32px;
+  margin: 18px 0 26px;
+  max-width: 760px;
+  box-shadow: 0 20px 50px rgba(0,0,0,0.25), inset 0 1px 0 rgba(255,255,255,0.10);
+  overflow: hidden;
+}
+/* Decorative amber accent stripe at top of card */
+.cov-hero-checker::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 3px;
+  background: linear-gradient(90deg, var(--amber) 0%, var(--amber-light) 50%, var(--amber) 100%);
+  opacity: 0.85;
+}
+.cov-hero-checker__label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 17px;
+  font-weight: 700;
+  color: #fff;
+  margin-bottom: 16px;
+  font-family: 'Barlow Condensed', sans-serif;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.cov-hero-checker__row { display: flex; gap: 12px; align-items: stretch; flex-wrap: wrap; }
+.cov-hero-checker__input-wrap { position: relative; flex: 1 1 340px; min-width: 0; display: flex; align-items: center; }
+.cov-hero-checker__icon { position: absolute; left: 18px; top: 50%; transform: translateY(-50%); font-size: 20px; pointer-events: none; opacity: 0.75; z-index: 1; }
+.cov-hero-checker__input {
+  flex: 1;
+  width: 100%;
+  padding: 18px 48px 18px 52px;
+  font-size: 17px;
+  font-family: 'DM Sans', sans-serif;
+  font-weight: 500;
+  color: var(--text);
+  background: #fff;
+  border: 2px solid transparent;
+  border-radius: 14px;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.15s ease;
+  box-shadow: 0 6px 18px rgba(0,0,0,0.18);
+}
+.cov-hero-checker__input::placeholder { color: var(--text-muted); font-weight: 400; }
+.cov-hero-checker__input:focus { outline: none; border-color: var(--amber-light); box-shadow: 0 0 0 4px rgba(245,155,74,0.35), 0 6px 18px rgba(0,0,0,0.25); }
+.cov-hero-checker__clear { position: absolute; right: 12px; top: 50%; transform: translateY(-50%); background: rgba(15,31,20,0.10); color: var(--text-mid); border: none; width: 30px; height: 30px; border-radius: 50%; font-size: 20px; font-weight: 700; cursor: pointer; line-height: 1; display: flex; align-items: center; justify-content: center; transition: background 0.15s ease; z-index: 1; }
 .cov-hero-checker__clear:hover { background: rgba(15,31,20,0.25); color: #fff; }
-.cov-hero-checker__phone { display: inline-flex; align-items: center; gap: 8px; padding: 0 22px; background: rgba(255,255,255,0.10); border: 1px solid rgba(255,255,255,0.20); color: #fff !important; font-weight: 700; font-size: 14px; border-radius: 12px; text-decoration: none; white-space: nowrap; transition: background 0.15s ease; }
-.cov-hero-checker__phone:hover { background: rgba(255,255,255,0.18); }
-.cov-hero-checker__hint { font-size: 12.5px !important; color: rgba(255,255,255,0.62) !important; margin: 12px 0 0 !important; line-height: 1.5; }
+.cov-hero-checker__phone {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 26px;
+  background: linear-gradient(135deg, rgba(224,123,36,0.95) 0%, rgba(245,155,74,0.95) 100%);
+  border: 1px solid rgba(245,155,74,0.40);
+  color: #fff !important;
+  font-weight: 700;
+  font-size: 15px;
+  border-radius: 14px;
+  text-decoration: none;
+  white-space: nowrap;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+  box-shadow: 0 6px 18px rgba(224,123,36,0.40);
+  letter-spacing: 0.01em;
+}
+.cov-hero-checker__phone:hover { transform: translateY(-1px); box-shadow: 0 8px 22px rgba(224,123,36,0.55); color: #fff !important; }
+.cov-hero-checker__hint {
+  font-size: 13px !important;
+  color: rgba(255,255,255,0.70) !important;
+  margin: 16px 0 0 !important;
+  line-height: 1.55;
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+.cov-hero-checker__hint::before {
+  content: '🔒';
+  font-size: 12px;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
 @media (max-width: 600px) {
-  .cov-hero-checker { padding: 18px 16px; }
-  .cov-hero-checker__phone { width: 100%; justify-content: center; padding: 12px 22px; }
+  .cov-hero-checker { padding: 22px 20px; border-radius: 18px; margin: 14px 0 22px; }
+  .cov-hero-checker__label { font-size: 14px; }
+  .cov-hero-checker__input { font-size: 16px; padding: 16px 44px 16px 46px; }
+  .cov-hero-checker__phone { width: 100%; justify-content: center; padding: 14px 22px; }
 }
 
 /* Result panel — light card on any background */
