@@ -21,29 +21,42 @@
 
   var input, resultEl, clearBtn, autocomplete;
 
+  // Reusable bounding box for Ontario bias
+  function southernOntarioBounds() {
+    return new google.maps.LatLngBounds(
+      new google.maps.LatLng(43.0, -80.7),  // SW corner
+      new google.maps.LatLng(44.7, -78.5)   // NE corner
+    );
+  }
+
   // Called by Google Maps script via &callback=initCoverageCheck
+  // Runs on every page that loads this script — handles BOTH:
+  //   1. Full coverage checker (with verification UI) on pages that have
+  //      #cov-address-input + #cov-checker-result
+  //   2. Form-fill-only autocomplete on any input.js-address-autocomplete
+  //      (e.g. the homepage booking form — no verification, just clean
+  //      address formatting in form submissions)
   window.initCoverageCheck = function () {
+    initFullChecker();
+    initFormFillAutocomplete();
+  };
+
+  function initFullChecker() {
     input = document.getElementById('cov-address-input');
     resultEl = document.getElementById('cov-checker-result');
     clearBtn = document.getElementById('cov-clear-btn');
-    if (!input || !resultEl) return;
+    if (!input || !resultEl) return;  // Page doesn't have the full checker — skip.
 
-    // Bias autocomplete to Ontario, Canada — addresses only
     autocomplete = new google.maps.places.Autocomplete(input, {
       componentRestrictions: { country: 'ca' },
       fields: ['formatted_address', 'geometry', 'name'],
       types: ['address'],
-      // Bias toward southern Ontario (rough rectangle around Newmarket)
-      bounds: new google.maps.LatLngBounds(
-        new google.maps.LatLng(43.0, -80.7),  // SW corner
-        new google.maps.LatLng(44.7, -78.5)   // NE corner
-      ),
+      bounds: southernOntarioBounds(),
       strictBounds: false
     });
 
     autocomplete.addListener('place_changed', handlePlaceChanged);
 
-    // Show clear button when typing
     input.addEventListener('input', function () {
       if (clearBtn) clearBtn.hidden = !input.value;
     });
@@ -56,9 +69,31 @@
       });
     }
 
-    // Suppress browser autofill on this single field (won't fight Places dropdown)
     input.setAttribute('autocomplete', 'new-password');
-  };
+  }
+
+  // Form-fill autocomplete (NO verification UI) — for any input tagged
+  // with class "js-address-autocomplete". Used on the homepage booking
+  // form so addresses arrive cleanly formatted in form submissions.
+  function initFormFillAutocomplete() {
+    var fillInputs = document.querySelectorAll('input.js-address-autocomplete');
+    for (var i = 0; i < fillInputs.length; i++) {
+      (function (el) {
+        var fillAc = new google.maps.places.Autocomplete(el, {
+          componentRestrictions: { country: 'ca' },
+          fields: ['formatted_address'],
+          types: ['address'],
+          bounds: southernOntarioBounds(),
+          strictBounds: false
+        });
+        fillAc.addListener('place_changed', function () {
+          var p = fillAc.getPlace();
+          if (p && p.formatted_address) el.value = p.formatted_address;
+        });
+        el.setAttribute('autocomplete', 'new-password');
+      })(fillInputs[i]);
+    }
+  }
 
   function handlePlaceChanged() {
     var place = autocomplete.getPlace();

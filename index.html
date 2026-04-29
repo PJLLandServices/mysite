@@ -33,7 +33,7 @@
 <meta name="twitter:image" content="https://www.pjllandservices.com/homepage-hero.jpg">
 
 <title>PJL Land Services | Lawn Sprinklers & Landscape Lighting — Newmarket & GTA</title>
-<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="style.css?v=cov2">
 
 <!-- ─────────────────────────────────────────────
      LocalBusiness JSON-LD — the single most important
@@ -1349,7 +1349,7 @@
           <option>Smart Upgrade</option>
           <option>Landscape Lighting</option>
         </select>
-        <input type="text" id="qb-address" name="address" placeholder="Address or Jobsite Address" class="sd-bridge__input sd-bridge__input--full" autocomplete="street-address">
+        <input type="text" id="qb-address" name="address" placeholder="Start typing your address…" class="sd-bridge__input sd-bridge__input--full js-address-autocomplete" autocomplete="off">
         <input type="hidden" name="_subject" value="Same-Day Service Request — pjllandservices.com (Homepage)">
         <input type="hidden" name="_source" value="Homepage Quick-Book">
         <input type="text" name="_gotcha" tabindex="-1" autocomplete="off" style="display:none !important;" aria-hidden="true">
@@ -1823,6 +1823,9 @@
     </div>
   </div>
 </footer>
+<!-- Address autocomplete for the homepage Quick-Book form (no verification, just clean address formatting in submissions) -->
+<script src="coverage-checker.js"></script>
+<script async defer src="https://maps.googleapis.com/maps/api/js?key=AIzaSyBrORBeXbpNTJvoi2PDhDDs6Iy-BGSU30M&libraries=places&callback=initCoverageCheck&loading=async"></script>
 <script src="nav.js"></script>
 
 <script>
