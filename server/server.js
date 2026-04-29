@@ -29,7 +29,13 @@ const { sendNewLeadEmail } = require("./lib/notify-email");
 const { sendNewLeadSms } = require("./lib/notify-sms");
 
 const PORT = Number(process.env.PORT || 4173);
-const HOST = process.env.HOST || "127.0.0.1";
+// 0.0.0.0 = listen on every network interface. Required on Render (and most
+// cloud hosts), where 127.0.0.1 means "this container only" and external
+// traffic can't reach it. For local dev this is also fine — the server is
+// reachable at http://127.0.0.1:4173 the same as before; setting HOST=127.0.0.1
+// is only needed if you specifically want to block other devices on your
+// home network from connecting.
+const HOST = process.env.HOST || "0.0.0.0";
 // SITE_DIR   = the public PJL website (repo root): index.html, sprinkler-systems.html, blog posts, css/, images.
 // SERVER_DIR = this server/ folder: CRM dashboard, customer portal, login page, their JS/CSS/images.
 // DATA_DIR   = runtime data (NEVER committed — see .gitignore): leads.json + auth.json.
