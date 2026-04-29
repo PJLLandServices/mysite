@@ -1,0 +1,165 @@
+:root {
+  --green: #1B4D2E;
+  --green-mid: #2D6A42;
+  --amber: #E07B24;
+  --amber-light: #F59B4A;
+  --dark: #0F1F14;
+  --text: #1A1A1A;
+  --text-mid: #4A4A4A;
+  --border: #E2E0D4;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  color: var(--text);
+  font-family: "DM Sans", sans-serif;
+  background:
+    linear-gradient(90deg, rgba(15,31,20,0.90), rgba(15,31,20,0.70)),
+    url("/pjl-homepage-hero.jpg") center / cover;
+}
+
+.login-shell {
+  width: min(100%, 520px);
+}
+
+.login-panel {
+  position: relative;
+  padding: clamp(28px, 6vw, 46px);
+  border-radius: 28px;
+  background:
+    radial-gradient(ellipse 60% 80% at 12% 20%, rgba(243,144,25,0.18), transparent 60%),
+    radial-gradient(ellipse 60% 80% at 90% 80%, rgba(74,140,92,0.20), transparent 60%),
+    linear-gradient(180deg, #0F1F14 0%, #112418 100%);
+  color: #fff;
+  overflow: hidden;
+  box-shadow: 0 24px 80px rgba(0,0,0,0.36);
+}
+
+.login-panel::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image: radial-gradient(rgba(255,255,255,0.045) 1px, transparent 1px);
+  background-size: 32px 32px;
+}
+
+.login-panel > * {
+  position: relative;
+}
+
+.login-logo {
+  display: inline-flex;
+  margin-bottom: 28px;
+}
+
+.login-logo img {
+  width: auto;
+  height: 92px;
+}
+
+.login-eyebrow {
+  display: inline-flex;
+  margin: 0 0 14px;
+  padding: 7px 14px;
+  border: 1px solid rgba(243,144,25,0.32);
+  border-radius: 999px;
+  background: rgba(243,144,25,0.10);
+  color: rgba(255,255,255,0.82);
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+
+h1 {
+  margin: 0;
+  max-width: 11ch;
+  color: #fff;
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: clamp(42px, 10vw, 64px);
+  font-weight: 800;
+  line-height: 1.02;
+  text-transform: uppercase;
+}
+
+.login-copy {
+  margin: 16px 0 28px;
+  color: rgba(255,255,255,0.76);
+  line-height: 1.65;
+}
+
+.login-form {
+  display: grid;
+  gap: 14px;
+}
+
+.login-form label {
+  display: grid;
+  gap: 7px;
+}
+
+.login-form span {
+  color: rgba(255,255,255,0.68);
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.login-form input {
+  min-height: 52px;
+  width: 100%;
+  padding: 13px 15px;
+  border: 1.5px solid rgba(255,255,255,0.18);
+  border-radius: 10px;
+  background: rgba(255,255,255,0.08);
+  color: #fff;
+  font: inherit;
+  outline: none;
+}
+
+.login-form input:focus {
+  border-color: var(--amber-light);
+  box-shadow: 0 0 0 3px rgba(243,144,25,0.20);
+}
+
+.login-form button {
+  min-height: 52px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  border: 0;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #F59B4A 0%, #C96A2A 100%);
+  color: #fff;
+  font: inherit;
+  font-weight: 800;
+  cursor: pointer;
+  box-shadow: 0 10px 28px rgba(224,123,36,0.38);
+}
+
+.login-form button:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+.login-error {
+  margin: 0;
+  padding: 11px 12px;
+  border: 1px solid rgba(239,99,99,0.40);
+  border-radius: 10px;
+  background: rgba(239,99,99,0.12);
+  color: #ffd2cc;
+  font-size: 14px;
+}

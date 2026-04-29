@@ -495,10 +495,10 @@
         <div class="contact-form-section">
           <h3>Send Us a Message</h3>
           <p>Have a question or want to discuss your project? Fill in your details and we'll get back to you promptly.</p>
-          <!-- Formspree-backed form. On submit, the form posts via fetch and shows a success message
-               in-page; the user is never bounced to their email client. To change the destination form,
-               update the action URL with a new Formspree endpoint from the Formspree dashboard. -->
-          <form id="contactForm" action="https://formspree.io/f/mvzdjolv" method="POST">
+          <!-- Posts to the PJL backend at /api/quotes. The "service" dropdown auto-tags
+               the lead source so it lands in the right CRM pipeline (sprinkler repair
+               vs spring opening vs new install vs general contact, etc.). -->
+          <form id="contactForm" novalidate>
             <div class="form-grid">
               <div class="form-group">
                 <label for="cf-first">First name <span class="req">*</span></label>
@@ -524,21 +524,20 @@
                 <label for="cf-service">What can we help you with?</label>
                 <select id="cf-service" name="service">
                   <option value="">Select a service...</option>
-                  <option>Spring Opening</option>
-                  <option>Fall Closing</option>
-                  <option>Sprinkler Repair / Diagnosis</option>
-                  <option>New Sprinkler System Installation</option>
-                  <option>Smart Controller Upgrade</option>
-                  <option>Landscape Lighting Installation</option>
-                  <option>General Inquiry</option>
+                  <option value="spring_opening">Spring Opening</option>
+                  <option value="fall_closing">Fall Closing</option>
+                  <option value="sprinkler_repair">Sprinkler Repair / Diagnosis</option>
+                  <option value="sprinkler_quote">New Sprinkler System Installation</option>
+                  <option value="sprinkler_quote">Smart Controller Upgrade</option>
+                  <option value="landscape_lighting">Landscape Lighting Installation</option>
+                  <option value="general_contact">General Inquiry</option>
                 </select>
               </div>
               <div class="form-group full">
                 <label for="cf-message">Message</label>
                 <textarea id="cf-message" name="message" placeholder="Tell us about your property and what you're looking for..."></textarea>
               </div>
-              <!-- Formspree-only meta fields: subject line + spam honeypot + reply-to -->
-              <input type="hidden" name="_subject" value="Website Enquiry — pjllandservices.com">
+              <!-- Honeypot for bot filtering — real users won't fill a hidden field. -->
               <input type="text" name="_gotcha" tabindex="-1" autocomplete="off" style="display:none !important;" aria-hidden="true">
               <div class="form-submit-row">
                 <button type="submit" id="cf-submit" class="btn btn-green" style="width:100%;justify-content:center;">Send Message →</button>
@@ -608,23 +607,54 @@
   form.addEventListener('submit', async function (e) {
     e.preventDefault();
     error.hidden = true;
+
+    // Bot honeypot — real users never fill this hidden field. Pretend success silently.
+    if (form.elements._gotcha && form.elements._gotcha.value) {
+      form.hidden = true;
+      success.hidden = false;
+      return;
+    }
+
     submit.disabled = true;
     const originalText = submit.innerHTML;
     submit.innerHTML = 'Sending…';
 
+    // The "service" select carries the source key directly (general_contact,
+    // sprinkler_repair, spring_opening, etc.). If left blank, default to general_contact.
+    const data = new FormData(form);
+    const firstName = String(data.get('first_name') || '').trim();
+    const lastName  = String(data.get('last_name')  || '').trim();
+    const fullName  = [firstName, lastName].filter(Boolean).join(' ');
+    const source    = String(data.get('service') || '').trim() || 'general_contact';
+
+    const payload = {
+      source,
+      contact: {
+        name:    fullName,
+        firstName,
+        lastName,
+        phone:   String(data.get('phone')   || '').trim(),
+        email:   String(data.get('email')   || '').trim(),
+        address: String(data.get('address') || '').trim(),
+        notes:   String(data.get('message') || '').trim()
+      },
+      pageUrl: window.location.href,
+      userAgent: navigator.userAgent
+    };
+
     try {
-      const data = new FormData(form);
-      const res = await fetch(form.action, {
+      const res = await fetch('/api/quotes', {
         method: 'POST',
-        body: data,
-        headers: { 'Accept': 'application/json' }
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+        body: JSON.stringify(payload)
       });
-      if (res.ok) {
+      const body = await res.json().catch(() => ({}));
+      if (res.ok && body.ok) {
         form.hidden = true;
         success.hidden = false;
         success.scrollIntoView({ behavior: 'smooth', block: 'center' });
       } else {
-        throw new Error('Submission failed: ' + res.status);
+        throw new Error((body.errors || ['Submission failed']).join(' '));
       }
     } catch (err) {
       error.hidden = false;

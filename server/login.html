@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PJL CRM Login</title>
+  <link rel="icon" type="image/svg+xml" href="/crm/pjl-logo-mark.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/crm/login.css">
+</head>
+<body>
+  <main class="login-shell">
+    <section class="login-panel">
+      <a href="/" class="login-logo"><img src="/crm/pjl-logo.svg" alt="PJL Land Services"></a>
+      <p class="login-eyebrow">Private CRM Access</p>
+      <h1>Sign in to the PJL lead center.</h1>
+      <p class="login-copy">Customer portals remain public by private link. Lead exports, contact vCards, and CRM details require this password.</p>
+
+      <form id="loginForm" class="login-form">
+        <label>
+          <span>Password</span>
+          <input type="password" name="password" autocomplete="current-password" required autofocus>
+        </label>
+        <p id="loginError" class="login-error" hidden></p>
+        <button type="submit">Unlock CRM <span aria-hidden="true">&rarr;</span></button>
+      </form>
+    </section>
+  </main>
+
+  <script src="/crm/login.js"></script>
+</body>
+</html>

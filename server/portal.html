@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PJL Customer Portal</title>
+  <link rel="icon" type="image/svg+xml" href="/crm/pjl-logo-mark.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/crm/portal.css">
+</head>
+<body class="portal-body">
+  <nav class="portal-nav">
+    <a href="/" class="portal-logo"><img src="/crm/pjl-logo.svg" alt="PJL Land Services"></a>
+    <a class="portal-call" href="tel:+19059600181">(905) 960-0181</a>
+  </nav>
+
+  <main class="portal-shell">
+    <section class="portal-hero">
+      <p class="portal-eyebrow">Customer Portal</p>
+      <h1 id="portalTitle">Loading your project...</h1>
+      <p id="portalIntro">One moment while we open your PJL project details.</p>
+    </section>
+
+    <section class="portal-grid" id="portalContent" hidden>
+      <article class="portal-card portal-status">
+        <span>Current stage</span>
+        <strong id="projectStatus"></strong>
+        <p id="followUpText"></p>
+      </article>
+
+      <article class="portal-card">
+        <h2>Project request</h2>
+        <ul class="portal-services" id="serviceList"></ul>
+        <div class="portal-total">
+          <span>Estimated value</span>
+          <strong id="projectTotal"></strong>
+        </div>
+      </article>
+
+      <article class="portal-card">
+        <h2>Contact details</h2>
+        <dl class="portal-contact">
+          <div><dt>Phone</dt><dd id="customerPhone"></dd></div>
+          <div><dt>Email</dt><dd id="customerEmail"></dd></div>
+          <div><dt>Home address</dt><dd id="customerAddress"></dd></div>
+        </dl>
+      </article>
+
+      <article class="portal-card portal-help">
+        <h2>Need to update something?</h2>
+        <p>Call or email PJL Land Services and mention this portal. We will keep your request moving.</p>
+        <div class="portal-actions">
+          <a href="tel:+19059600181">Call PJL</a>
+          <a href="mailto:info@pjllandservices.com">Email PJL</a>
+        </div>
+      </article>
+    </section>
+
+    <section class="portal-card portal-error" id="portalError" hidden>
+      <h2>Portal unavailable</h2>
+      <p>This customer portal link could not be found. Please contact PJL Land Services directly.</p>
+      <a href="tel:+19059600181">Call PJL</a>
+    </section>
+  </main>
+
+  <script src="/crm/portal.js"></script>
+</body>
+</html>

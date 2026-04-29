@@ -348,34 +348,50 @@
       back_features:   qfBackFeatures.value
     };
 
-    // ── Submit to Formspree ──
-    submitToFormspree(payload);
+    // ── Submit to PJL backend ──
+    submitToBackend(payload);
   }
 
-  function submitToFormspree(p) {
-    const formData = new FormData();
-    formData.append('name', p.name);
-    formData.append('phone', p.phone);
-    formData.append('email', p.email);
-    formData.append('address', p.address);
-    formData.append('best_time', p.best_time || 'No preference');
-    formData.append('notes', p.notes || '(none)');
-    formData.append('selected_tier', p.selected_tier);
-    formData.append('front_yard_features', p.front_features);
-    formData.append('back_yard_features', p.back_features);
-    formData.append('_subject', `Sprinkler Quote Request — ${p.name}`);
-    formData.append('_source', 'Sprinkler Quote Builder');
+  function submitToBackend(p) {
+    // The interactive builder collects tier + per-yard feature selections that
+    // don't map 1:1 to the backend's master FEATURES catalog (those are flat-priced
+    // service items, this is a tier-based new-install quote). So we send the rich
+    // selection data as customer notes and let PJL price it on-site — source is
+    // sprinkler_quote so it lands in the New Sprinkler Quote pipeline.
+    const noteLines = [
+      "Selected tier: " + (p.selected_tier || "(none)"),
+      "Front-yard features: " + (p.front_features || "(none)"),
+      "Back-yard features: " + (p.back_features || "(none)"),
+      "Best time to call: " + (p.best_time || "No preference")
+    ];
+    if (p.notes) noteLines.push("", "Customer notes:", p.notes);
 
-    fetch('https://formspree.io/f/mvzdjolv', {
+    const body = JSON.stringify({
+      source: "sprinkler_quote",
+      contact: {
+        name:    p.name,
+        phone:   p.phone,
+        email:   p.email,
+        address: p.address,
+        notes:   noteLines.join("\n")
+      },
+      pageUrl: window.location.href,
+      userAgent: navigator.userAgent,
+      mode: "sprinkler-quote-builder"
+    });
+
+    fetch('/api/quotes', {
       method: 'POST',
-      body: formData,
-      headers: { 'Accept': 'application/json' }
+      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+      body
     })
-      .then(res => {
-        if (res.ok) {
+      .then(async (res) => {
+        const data = await res.json().catch(() => ({}));
+        if (res.ok && data.ok) {
           showSuccess(p.name);
         } else {
-          showError("Sorry — your request didn't send. Please call (905) 960-0181 or email info@pjllandservices.com.");
+          const message = (data.errors || []).join(" ") || "Submission failed.";
+          showError("Sorry — " + message + " Please call (905) 960-0181 or email info@pjllandservices.com.");
         }
       })
       .catch(err => {

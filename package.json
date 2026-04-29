@@ -1,0 +1,17 @@
+{
+  "name": "pjl-land-services",
+  "version": "1.0.0",
+  "private": true,
+  "description": "PJL Land Services public site, lead intake, and CRM. Static pages + Node backend.",
+  "main": "server/server.js",
+  "scripts": {
+    "start": "node server/server.js",
+    "setup-password": "node server/setup-password.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "nodemailer": "^8.0.7"
+  }
+}

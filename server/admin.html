@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PJL Quote CRM</title>
+  <link rel="icon" type="image/svg+xml" href="/crm/pjl-logo-mark.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/crm/crm.css">
+</head>
+<body class="pjl-crm-body">
+  <nav class="pjl-admin-nav" aria-label="PJL CRM">
+    <div class="pjl-nav-strip">
+      <span>Newmarket &amp; GTA</span>
+      <span class="pjl-strip-live"><span aria-hidden="true"></span>Lead receiver online</span>
+      <a href="tel:+19059600181">(905) 960-0181</a>
+    </div>
+    <div class="pjl-nav-main">
+      <a href="/" class="pjl-nav-logo"><img src="/crm/pjl-logo.svg" alt="PJL Land Services"></a>
+      <div class="pjl-nav-links">
+        <a href="/admin" class="is-active">CRM</a>
+        <a href="/api/contacts.vcf">Contacts VCF</a>
+        <a href="/api/quotes.csv" class="pjl-nav-cta">Export CSV <span aria-hidden="true">&rarr;</span></a>
+        <button class="pjl-nav-logout" type="button" id="logoutButton">Log out</button>
+      </div>
+    </div>
+  </nav>
+
+  <main class="pjl-crm-shell">
+    <header class="pjl-crm-hero">
+      <div>
+        <p class="pjl-page-eyebrow">Lead Contact Center</p>
+        <h1>Create clean contacts and customer portals.</h1>
+        <p>Extract vCards in the exact PJL format, keep follow-ups organized, and give every new customer a private portal link for their project request.</p>
+        <div class="pjl-hero-actions">
+          <button class="pjl-btn pjl-btn-outline" type="button" id="refreshLeads">Refresh Leads</button>
+          <a class="pjl-btn pjl-btn-outline" href="/api/quotes.csv">Export CSV</a>
+          <a class="pjl-btn pjl-btn-primary" href="/api/contacts.vcf">Export Contacts <span aria-hidden="true">&rarr;</span></a>
+        </div>
+      </div>
+      <div class="pjl-hero-card" aria-hidden="true">
+        <div class="pjl-hero-frame">
+          <img src="/crm/pjl-builder-preview.png" alt="">
+          <span class="pjl-frame-tag">Live pipeline</span>
+          <span class="pjl-frame-ribbon"><span></span>Quote receiver</span>
+        </div>
+      </div>
+    </header>
+
+    <section class="crm-stats" aria-label="Pipeline stats">
+      <div>
+        <span>Open leads</span>
+        <strong id="openCount">0</strong>
+      </div>
+      <div>
+        <span>Pipeline value</span>
+        <strong id="pipelineValue">$0</strong>
+      </div>
+      <div>
+        <span>Due follow-ups</span>
+        <strong id="dueCount">0</strong>
+      </div>
+      <div>
+        <span>Won value</span>
+        <strong id="wonValue">$0</strong>
+      </div>
+    </section>
+
+    <section class="crm-workspace">
+      <aside class="crm-sidebar" aria-label="CRM filters">
+        <input type="search" id="leadSearch" placeholder="Search leads">
+        <div class="filter-group">
+          <label for="statusFilter">Stage</label>
+          <select id="statusFilter">
+            <option value="all">All stages</option>
+            <option value="new">New</option>
+            <option value="contacted">Contacted</option>
+            <option value="site_visit">Site visit</option>
+            <option value="quoted">Quoted</option>
+            <option value="won">Won</option>
+            <option value="lost">Lost</option>
+          </select>
+        </div>
+        <div class="filter-group">
+          <label for="priorityFilter">Priority</label>
+          <select id="priorityFilter">
+            <option value="all">All priorities</option>
+            <option value="urgent">Urgent</option>
+            <option value="high">High</option>
+            <option value="normal">Normal</option>
+          </select>
+        </div>
+        <div class="filter-group">
+          <label for="sourceFilter">Source</label>
+          <select id="sourceFilter">
+            <option value="all">All sources</option>
+            <!-- Source options are populated from /api/quotes by admin.js so the
+                 catalog stays in sync with server.js without duplication. -->
+          </select>
+        </div>
+      </aside>
+
+      <section class="crm-main" aria-label="Lead list">
+        <div class="pipeline-tabs" id="pipelineTabs"></div>
+        <div class="lead-list" id="leadList"></div>
+        <p class="admin-empty" id="emptyState" hidden>No matching quote requests yet.</p>
+      </section>
+
+      <aside class="lead-detail" id="leadDetail" aria-label="Lead detail">
+        <div class="lead-detail-empty" id="detailEmpty">
+          <p class="eyebrow">Select a lead</p>
+          <h2>Open a quote request to work it.</h2>
+        </div>
+
+        <form class="lead-editor" id="leadEditor" hidden>
+          <div class="detail-head">
+            <div>
+              <p class="eyebrow" id="detailStage">New lead</p>
+              <h2 id="detailName"></h2>
+              <p id="detailAddress"></p>
+              <p class="detail-source" id="detailSource"></p>
+            </div>
+            <strong id="detailValue">$0</strong>
+          </div>
+
+          <div class="quick-actions">
+            <a class="mini-action" id="callLink" href="#">Call</a>
+            <a class="mini-action" id="emailLink" href="#">Email</a>
+            <a class="mini-action" id="vcardLink" href="#">VCF</a>
+            <a class="mini-action" id="portalLink" href="#" target="_blank" rel="noopener">Portal</a>
+          </div>
+
+          <section class="detail-section">
+            <h3>Customer contact</h3>
+            <div class="editor-grid editor-grid--contact">
+              <label>
+                <span>First name</span>
+                <input type="text" name="firstName" autocomplete="given-name">
+              </label>
+              <label>
+                <span>Last name</span>
+                <input type="text" name="lastName" autocomplete="family-name">
+              </label>
+              <label>
+                <span>Telephone</span>
+                <input type="tel" name="phone" autocomplete="tel">
+              </label>
+              <label>
+                <span>Email</span>
+                <input type="email" name="email" autocomplete="email">
+              </label>
+              <label>
+                <span>Street number</span>
+                <input type="text" name="streetNumber" autocomplete="address-line1">
+              </label>
+              <label>
+                <span>Street name</span>
+                <input type="text" name="streetName" autocomplete="address-line1">
+              </label>
+              <label>
+                <span>Town / city</span>
+                <input type="text" name="town" autocomplete="address-level2">
+              </label>
+              <label>
+                <span>Postal code</span>
+                <input type="text" name="postalCode" autocomplete="postal-code">
+              </label>
+            </div>
+          </section>
+
+          <div class="editor-grid">
+            <label>
+              <span>Stage</span>
+              <select name="status">
+                <option value="new">New</option>
+                <option value="contacted">Contacted</option>
+                <option value="site_visit">Site visit</option>
+                <option value="quoted">Quoted</option>
+                <option value="won">Won</option>
+                <option value="lost">Lost</option>
+              </select>
+            </label>
+            <label>
+              <span>Priority</span>
+              <select name="priority">
+                <option value="normal">Normal</option>
+                <option value="high">High</option>
+                <option value="urgent">Urgent</option>
+              </select>
+            </label>
+            <label>
+              <span>Owner</span>
+              <input type="text" name="owner" placeholder="Estimator name">
+            </label>
+            <label>
+              <span>Next follow-up</span>
+              <input type="date" name="nextFollowUp">
+            </label>
+          </div>
+
+          <section class="detail-section">
+            <h3>Contact extractor</h3>
+            <div class="contact-preview" id="contactPreview"></div>
+          </section>
+
+          <section class="detail-section">
+            <h3>Requested work</h3>
+            <ul class="detail-features" id="detailFeatures"></ul>
+          </section>
+
+          <section class="detail-section">
+            <h3>Customer notes</h3>
+            <p id="customerNotes"></p>
+          </section>
+
+          <label class="full-editor">
+            <span>Internal notes</span>
+            <textarea name="internalNotes" rows="5" placeholder="Call outcome, site constraints, quote assumptions"></textarea>
+          </label>
+
+          <label class="full-editor">
+            <span>Add activity note</span>
+            <textarea name="activityNote" rows="3" placeholder="Example: Left voicemail and sent intro email"></textarea>
+          </label>
+
+          <div class="editor-actions">
+            <button class="cta-button" type="submit">Save lead</button>
+            <span id="saveMessage" role="status"></span>
+          </div>
+
+          <section class="detail-section">
+            <h3>Activity</h3>
+            <ol class="activity-list" id="activityList"></ol>
+          </section>
+        </form>
+      </aside>
+    </section>
+  </main>
+
+  <script src="/crm/admin.js"></script>
+</body>
+</html>

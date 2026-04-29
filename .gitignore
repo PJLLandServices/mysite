@@ -22,3 +22,13 @@ responsive-audit/
 # Memory / Claude project files (don't commit private notes)
 memory/
 .claude/
+
+# Backend runtime data — never commit. Contains the hashed admin password
+# (auth.json) and all real customer leads (leads.json).
+server/data/
+
+# Backend secrets — never commit. Holds Gmail and Twilio credentials.
+.env
+
+# Node packages (we have none right now, but in case we add any later)
+node_modules/

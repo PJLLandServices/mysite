@@ -459,11 +459,24 @@ GitHub Pages auto-deploys from the main branch of `PJLLandServices/mysite`. Afte
 
 ## 13. Deployment Notes
 
+> **⚠ In transition (Apr 2026).** The site is moving from GitHub Pages (static-only) to **Render** (Node.js web service) so the in-house lead-receiver / CRM in `server/` can run alongside the static pages. Until cutover happens, both states are documented below — current state first, target state second. **Section 15.10 has the canonical post-cutover deployment notes.**
+
+### Current state (pre-cutover)
+
 - **Hosting:** GitHub Pages from `PJLLandServices/mysite` repo
-- **Domain:** `pjllandservices.com` (Wix-managed DNS, but the GitHub Pages site is the source of truth — the public Wix site is incidental and the owner does not edit it)
+- **Domain:** `pjllandservices.com` (currently still pointing at Wix as the live public site; GitHub repo is the canonical source of truth for code)
 - **HTTPS:** GitHub Pages auto-provisions via Let's Encrypt
 - **Build step:** none
 - **CDN:** GitHub Pages includes CDN
+
+### Target state (post-cutover)
+
+- **Hosting:** Render Web Service (paid plan, ~$7/mo) running `npm start` from the repo root. Auto-deploys on push to `main`.
+- **Persistent storage:** Render Disk mounted at `/server/data/` (1 GB). Holds `leads.json` and `auth.json`. **Required** — without it, every deploy wipes leads.
+- **Domain:** `pjllandservices.com` A/AAAA records pointed at Render. Wix dropped.
+- **HTTPS:** Render auto-provisions via Let's Encrypt.
+- **Env vars:** Set in Render dashboard (NOT `.env`). See §15.9 for the full list.
+- **Build step:** `npm install` (Render runs it automatically). No bundler / no transpile.
 
 ### Deploy checklist
 
@@ -518,6 +531,270 @@ Once page count exceeds ~40 or maintenance burden becomes painful, migrate to **
 
 ### Contact Patrick
 For questions about the business / brand / clients, contact Patrick Lalande directly. Phone and email are in the master schema on `index.html`.
+
+---
+
+## 15. CRM Backend & Lead Pipeline
+
+> **Read this entire section before touching anything in `server/`.** This is the in-house lead-receiver / CRM that replaced Formspree. When a customer submits a form on the public site, this backend stores the lead, alerts Patrick by email + SMS, and lets him work the lead through stages in a private dashboard.
+
+### 15.1 Why this exists
+
+Originally the site used Formspree (`formspree.io/f/mvzdjolv`) to receive form submissions. That had two problems:
+1. Leads got emailed to Patrick but were never categorized, searchable, or trackable beyond inbox sorting.
+2. PJL was paying a third party for something simple.
+
+The replacement (this `server/` folder) is a small Node.js HTTP server that:
+- Serves the **public site** (the same static HTML that was previously hosted on GitHub Pages / Wix)
+- Provides a **lead-intake API** (`POST /api/quotes`) that the public forms now post to
+- Sends a **"new lead" email + SMS** to Patrick when a submission arrives
+- Provides a **private CRM dashboard** at `/admin` (password-gated) where Patrick works leads through stages
+- Provides a **per-customer portal** at `/portal/<token>` showing the customer's project status
+
+Zero ongoing third-party costs (Render hosting + Twilio SMS only — see §15.10).
+
+### 15.2 Architecture at a glance
+
+```
+                                            ┌────────────────────┐
+   Customer submits form on public site ────│  POST /api/quotes  │
+                                            │   (server.js)      │
+                                            └─────────┬──────────┘
+                                                      │ 1. validates
+                                                      │ 2. saves to leads.json
+                                                      │ 3. fires email + SMS
+                                                      ▼
+                                            ┌──────────────────────┐
+   Patrick's phone buzzes (Twilio) ◄────────│  notify-sms.js       │
+   Patrick's inbox dings (Gmail) ◄──────────│  notify-email.js     │
+                                            └──────────────────────┘
+                                                      │
+                                                      ▼
+   Patrick opens /admin in browser ─────────► CRM dashboard reads
+                                              leads.json, lets him
+                                              update stage / notes /
+                                              follow-up date.
+```
+
+### 15.3 Repo layout (`server/` folder)
+
+```
+server/
+├── server.js              ← The Node HTTP server. Entry point. Handles routing,
+│                            auth, lead intake, CRM API, and serves both the
+│                            public PJL site (from repo root) and the CRM/portal
+│                            HTML files. Read top-to-bottom — it's ~800 lines and
+│                            heavily commented.
+├── admin.html             ← CRM dashboard UI (the page at /admin).
+├── admin.js               ← CRM dashboard JS — fetches leads, renders cards,
+│                            handles filters, saves edits via PATCH /api/quotes/:id.
+├── crm.css                ← CRM-only styling.
+├── login.html / .js / .css ← The /login page Patrick uses to access /admin.
+├── portal.html / .js      ← Customer-facing /portal/<token> page.
+├── portal.css
+├── setup-password.js      ← One-shot script to set or rotate the admin password.
+│                            See §15.6.
+├── lib/
+│   ├── notify-email.js    ← Sends "new lead" email via Gmail SMTP. Degrades
+│   │                        gracefully if env vars not set (logs only).
+│   └── notify-sms.js      ← Sends "new lead" SMS via Twilio HTTP API. Same
+│                            graceful degradation.
+├── data/                  ← RUNTIME DATA. NEVER commit this folder.
+│   ├── leads.json         ← All customer leads. Hand-edit at your own risk —
+│   │                        the CRM is the supported way to modify.
+│   └── auth.json          ← Hashed admin password + session secret. Created
+│                            by setup-password.js. If lost, re-run that script
+│                            to set a new one.
+└── pjl-logo.svg / pjl-logo-mark.svg / pjl-builder-preview.png
+                            ← CRM/login/portal page assets.
+```
+
+Plus, at the **repo root**:
+- `package.json` — declares `nodemailer` as a dependency, exposes `npm start` and `npm run setup-password`.
+- `.env` — credentials (Gmail, Twilio). **Never committed.** See `.env.example` for the full template.
+- `.env.example` — checked-in template documenting what each env var is for.
+- `.gitignore` — excludes `server/data/`, `.env`, and `node_modules/`.
+
+### 15.4 URL routing (what lives where)
+
+| URL | What's served | Auth? |
+|---|---|---|
+| `/` | `index.html` (PJL homepage) | Public |
+| `/sprinkler-systems.html`, `/contact.html`, etc. | The corresponding HTML file from the repo root | Public |
+| `/style.css`, `/logo.svg`, `/images/...` | Public site assets from the repo root | Public |
+| `/api/quotes` (POST) | Lead intake (creates a lead, fires notifications) | Public |
+| `/login` | CRM login page | Public |
+| `/admin` | CRM dashboard | **Admin password required** |
+| `/portal/<token>` | Customer's private portal page | Public, but the URL contains a 24-character per-customer token derived from the lead ID — unguessable in practice |
+| `/crm/*` | CRM-only assets (admin.js, crm.css, login.css, etc.) | Public (no sensitive data — the lead data behind them IS gated) |
+| `/api/quotes` (GET), `/api/contacts*`, `/api/quotes/:id` | Lead-data APIs | **Admin password required** |
+
+The auth gate is in `needsAuth()` in `server.js`. The full source-of-truth for routing is `resolveStaticTarget()` in the same file.
+
+### 15.5 Running it locally
+
+**Prerequisites:**
+- Node.js v18 or newer (project tested on v24). Install from https://nodejs.org/ — pick the LTS download.
+
+**One-time setup:**
+```cmd
+cd C:\path\to\pjl-land-services-v39
+npm install
+npm run setup-password
+```
+
+`npm install` fetches the one dependency (nodemailer). `setup-password` prompts for an admin password and writes `server/data/auth.json`.
+
+**Start the server:**
+```cmd
+npm start
+```
+
+Server runs at `http://127.0.0.1:4173`. Public site at `/`, CRM at `/admin`. Stop with **Ctrl+C** in the terminal window.
+
+**To rotate the admin password later:**
+```cmd
+npm run setup-password
+```
+(Just runs again — overwrites `server/data/auth.json` with the new password.)
+
+### 15.6 Adding a new form to the public site
+
+Pattern — every form on the public site posts to `POST /api/quotes` with this JSON shape:
+
+```js
+{
+  source: "sprinkler_repair",      // one of the keys in SOURCES (server.js)
+  contact: {
+    name: "Jane Smith",
+    firstName: "Jane",              // optional
+    lastName: "Smith",              // optional
+    phone: "905-555-0100",
+    email: "jane@example.com",
+    address: "123 Main St, Newmarket ON L3Y 1A1",
+    notes: "Optional message from the customer"
+  },
+  features: [                       // optional — items the customer ticked
+    "service_call",                 // ← key from FEATURES (server.js)
+    { key: "head_replacement", qty: 3 }   // ← with quantity
+  ],
+  pageUrl: window.location.href,    // optional, just helpful context
+  userAgent: navigator.userAgent,   // optional
+  mode: "homepage-quickbook"        // optional, identifies which form
+}
+```
+
+Required: `contact.name`, `contact.phone`, valid `contact.email`. Everything else is optional. If `source` is missing or invalid, it defaults to `general_lead`.
+
+**Reference implementations** (look at these to copy the pattern):
+- `contact.html` (lines ~480 + the inline `<script>` near the bottom)
+- `index.html` `quickBookForm` (lines ~1339 + the `<script>` near line ~1830)
+- `js/sprinkler-builder.js` `submitToBackend()` (more complex — interactive builder)
+
+### 15.7 Adding a new lead source (form type)
+
+If the new form represents a new *kind* of inquiry (one not covered by `sprinkler_repair`, `sprinkler_quote`, etc.), add it to the `SOURCES` map near the top of `server/server.js`:
+
+```js
+const SOURCES = {
+  // ...existing entries...
+  winterization: { label: "Winterization", category: "seasonal" },
+};
+```
+
+Categories drive the colored pill in the CRM (see `crm.css` `.source-*` classes). Stick to one of the existing categories (`repair`, `install`, `lighting`, `seasonal`, `inquiry`) unless you also add CSS for a new one.
+
+Then in the form HTML, set `source: "winterization"` in the JSON payload. Restart the server. New filter option appears automatically in the CRM sidebar.
+
+### 15.8 Adding or changing pricing
+
+Service catalog is `FEATURES` near the top of `server/server.js`. Each entry has `label`, `price`, `category`, `quoteType`:
+- `quoteType: "flat"` — single fixed price
+- `quoteType: "per-unit"` — price × qty (e.g. heads, valves)
+- `quoteType: "custom"` — price always shown as $0 in totals; "custom quote" recorded for PJL to price on-site
+
+**Source of truth is `memory/master_pricing.md`.** Update that first, then mirror into `FEATURES`. Don't let them drift.
+
+After editing, restart the server (`npm start` again). No build step.
+
+### 15.9 The .env file (credentials)
+
+`.env` lives at the repo root and is git-ignored. It holds the credentials for email/SMS notifications. **Never commit it.**
+
+Without `.env` (or with empty values), lead intake **still works** — emails and SMS get logged to the server console with a "skipping" warning, instead of being sent. This is by design: the site doesn't break just because notifications aren't configured.
+
+To turn notifications on, copy `.env.example` to `.env` and fill in:
+
+| Variable | Where to get it |
+|---|---|
+| `GMAIL_USER` | Your Google Workspace email address (`info@pjllandservices.com`). |
+| `GMAIL_APP_PASSWORD` | Create at https://myaccount.google.com/apppasswords. **Requires 2-Step Verification first.** This is NOT your regular Gmail password. |
+| `NOTIFY_TO_EMAIL` | Where alerts go. Defaults to `GMAIL_USER` if blank. |
+| `TWILIO_ACCOUNT_SID` | https://console.twilio.com → "Account Info." Starts with `AC`. |
+| `TWILIO_AUTH_TOKEN` | Same place, paired with the SID. |
+| `TWILIO_FROM_NUMBER` | The Twilio number you bought, in E.164 (e.g. `+14165550100`). |
+| `NOTIFY_TO_PHONE` | Patrick's cell, E.164 (`+19059600181`). |
+| `PUBLIC_BASE_URL` | The site's public URL (e.g. `https://pjllandservices.com`). Used to build the "Open in CRM" link in emails/SMS. |
+
+**On Render (production):** the `.env` file isn't used at all. Set these in the Render dashboard under "Environment" instead. Render injects them as real env vars at boot.
+
+### 15.10 Deployment & hosting
+
+(See **Section 13** for the canonical deployment notes — keep it in sync with this section.)
+
+**TL;DR of where things run:**
+- **Public site + backend** — single Render web service ($7/mo), Node 20+ runtime. Auto-deploys on push to `PJLLandServices/mysite` `main` branch.
+- **Persistent disk** — Render disk at `/server/data/` (1 GB, ~$0.25/mo). Holds `leads.json` and `auth.json` across deploys. **Without this disk, every deploy wipes the leads.**
+- **Domain** — `pjllandservices.com` DNS A/AAAA records point at Render. Render handles TLS automatically.
+- **Email** — Gmail SMTP (free, uses Patrick's existing Google Workspace).
+- **SMS** — Twilio Canadian number (~$1.15/mo + ~$0.008/text).
+
+Total: ~$10/mo all-in.
+
+### 15.11 Backups
+
+`server/data/leads.json` is the source of truth for your sales pipeline. **Back it up regularly.**
+
+**On Render:** the persistent disk is auto-backed-up by Render daily as part of the paid plan. Snapshots retained 7 days.
+
+**Manual export from the CRM** (recommended weekly while volume is low):
+1. Log in at `/admin`.
+2. Click "Export CSV" — downloads `quote-requests.csv` with every lead.
+3. Save somewhere durable (cloud drive, email it to yourself, etc.).
+
+The CSV is more useful than the raw JSON for archiving — opens in Excel, structured columns.
+
+### 15.12 Troubleshooting
+
+**The site loads but `/admin` redirects to `/login` and the password doesn't work.**
+→ The `auth.json` file is missing or stale. Re-run `npm run setup-password` to create a fresh one. (This won't touch existing leads.)
+
+**Submitting a form on the live site does nothing / errors out.**
+→ Check the browser's developer console (F12 → Console tab). Common cause: server isn't running, or `/api/quotes` is returning a 4xx/5xx. Check Render logs (`Render dashboard → Logs`).
+
+**No "new lead" email arrives.**
+→ Check the server log for `[email]` lines. If you see `GMAIL_USER / GMAIL_APP_PASSWORD not set`, fill them in (`.env` locally, Render dashboard in production). If you see `[email] Failed to send`, the credentials are probably wrong or the Google account doesn't have an App Password set up — see §15.9.
+
+**No SMS arrives.**
+→ Same as above but `[sms]` lines. Most common: `NOTIFY_TO_PHONE` or `TWILIO_FROM_NUMBER` isn't in E.164 format (must start with `+1` for North America, no spaces or dashes).
+
+**Render deploy fails with "module not found: nodemailer".**
+→ Render didn't run `npm install`. Check the build command in Render dashboard is `npm install`, not blank. Default for a Node service should be correct.
+
+**A real lead shows up in the CRM but with no source pill / "General Lead" pill.**
+→ The form on the public page didn't include a `source` field in its payload. Either the form needs updating, or `source` was set to a key not in `SOURCES`. Check `server.js` `SOURCES` for the canonical list.
+
+**`leads.json` got corrupted (file is no longer valid JSON).**
+→ Stop the server. Open `server/data/leads.json` in a text editor. If it's truncated, paste the last good copy from your CSV exports (rebuild as JSON — tedious but doable). If it's totally broken, replace contents with `[]` and restart — you'll lose any leads not yet exported. **This is why §15.11 backups matter.**
+
+### 15.13 Things to absolutely never do
+
+1. **Never commit `.env` or `server/data/`.** Both are in `.gitignore`. If `.env` is ever pushed to GitHub, **rotate every credential in it immediately** (Gmail app password, Twilio auth token).
+2. **Never disable HTTPS** in production. Render does this for free; don't override it.
+3. **Never log raw passwords** anywhere. The login flow uses scrypt + salt; if you change auth code, preserve that.
+4. **Never expose `/api/quotes/:id` GET, `/api/contacts*`, `/api/quotes.csv`, or `/admin` without authentication.** Those endpoints contain customer PII (names, phones, addresses). The auth gate in `needsAuth()` is the only thing protecting them — don't punch holes in it.
+5. **Never edit `auth.json` by hand.** Use `setup-password.js`.
+6. **Never set the admin password to anything you use elsewhere.** It's stored hashed but treat it like any production password.
 
 ---
 

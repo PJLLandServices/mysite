@@ -1336,22 +1336,20 @@
         <span class="sd-bridge__pill-dot"></span>
         <span>Same-Day Service Available</span>
       </div>
-      <form class="sd-bridge__form" id="quickBookForm" action="https://formspree.io/f/mvzdjolv" method="POST">
+      <form class="sd-bridge__form" id="quickBookForm" novalidate>
         <input type="text" id="qb-name" name="name" placeholder="First &amp; Last Name" class="sd-bridge__input" required autocomplete="name">
         <input type="email" id="qb-email" name="email" placeholder="Email address" class="sd-bridge__input" autocomplete="email">
         <input type="tel" id="qb-phone" name="phone" placeholder="📞 Phone number" class="sd-bridge__input" required autocomplete="tel">
         <select id="qb-service" name="service" class="sd-bridge__input sd-bridge__select" required>
           <option value="">Select Required Service</option>
-          <option>Spring Opening</option>
-          <option>Fall Closing</option>
-          <option>Sprinkler Repair</option>
-          <option>New Installation</option>
-          <option>Smart Upgrade</option>
-          <option>Landscape Lighting</option>
+          <option value="spring_opening">Spring Opening</option>
+          <option value="fall_closing">Fall Closing</option>
+          <option value="sprinkler_repair">Sprinkler Repair</option>
+          <option value="sprinkler_quote">New Installation</option>
+          <option value="sprinkler_quote">Smart Upgrade</option>
+          <option value="landscape_lighting">Landscape Lighting</option>
         </select>
         <input type="text" id="qb-address" name="address" placeholder="Start typing your address…" class="sd-bridge__input sd-bridge__input--full js-address-autocomplete" autocomplete="off">
-        <input type="hidden" name="_subject" value="Same-Day Service Request — pjllandservices.com (Homepage)">
-        <input type="hidden" name="_source" value="Homepage Quick-Book">
         <input type="text" name="_gotcha" tabindex="-1" autocomplete="off" style="display:none !important;" aria-hidden="true">
         <button type="submit" class="sd-bridge__submit" id="qb-submit">Book Now — Same Day Available</button>
         <p class="sd-bridge__result sd-bridge__result--success" id="qb-success" hidden>✓ Thanks — we've got your request and will be in touch shortly. For urgent service, call <a href="tel:+19059600181">(905) 960-0181</a>.</p>
@@ -1829,9 +1827,9 @@
 <script src="nav.js"></script>
 
 <script>
-/* Homepage Quick-Book — Formspree submission via fetch().
-   Posts to the form's action URL, swaps in a success or error message,
-   keeps the user on the page. No mailto: bounce. */
+/* Homepage Quick-Book — posts to the PJL backend at /api/quotes.
+   The "service" select carries the source key (spring_opening, sprinkler_repair, etc.)
+   so the lead lands directly in the right CRM pipeline. */
 (function () {
   const form    = document.getElementById('quickBookForm');
   const submit  = document.getElementById('qb-submit');
@@ -1842,22 +1840,44 @@
   form.addEventListener('submit', async function (e) {
     e.preventDefault();
     error.hidden = true;
+
+    if (form.elements._gotcha && form.elements._gotcha.value) {
+      form.querySelectorAll('input, select, button').forEach(el => { if (el.type !== 'hidden') el.hidden = true; });
+      success.hidden = false;
+      return;
+    }
+
     submit.disabled = true;
     const originalText = submit.textContent;
     submit.textContent = 'Sending…';
 
+    const data = new FormData(form);
+    const source = String(data.get('service') || '').trim() || 'general_lead';
+    const payload = {
+      source,
+      contact: {
+        name:    String(data.get('name')    || '').trim(),
+        phone:   String(data.get('phone')   || '').trim(),
+        email:   String(data.get('email')   || '').trim(),
+        address: String(data.get('address') || '').trim()
+      },
+      pageUrl: window.location.href,
+      userAgent: navigator.userAgent,
+      mode: 'homepage-quickbook'
+    };
+
     try {
-      const data = new FormData(form);
-      const res = await fetch(form.action, {
+      const res = await fetch('/api/quotes', {
         method: 'POST',
-        body: data,
-        headers: { 'Accept': 'application/json' }
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+        body: JSON.stringify(payload)
       });
-      if (res.ok) {
+      const body = await res.json().catch(() => ({}));
+      if (res.ok && body.ok) {
         form.querySelectorAll('input, select, button').forEach(el => { if (el.type !== 'hidden') el.hidden = true; });
         success.hidden = false;
       } else {
-        throw new Error('Submission failed: ' + res.status);
+        throw new Error((body.errors || ['Submission failed']).join(' '));
       }
     } catch (err) {
       error.hidden = false;
