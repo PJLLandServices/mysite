@@ -158,6 +158,27 @@
     <div class="page-eyebrow">Free Estimate · Built for Your Property</div>
     <h1>Build Your <span class="accent">Sprinkler Estimate.</span></h1>
     <p class="builder-hero__lede">Pick the home that looks closest to yours, toggle the features that match your property, and we'll prep a custom estimate and call you back within one business day. Free of charge, no obligation.</p>
+
+    <!-- Live coverage checker — confirm we cover your address before you build the quote -->
+    <div class="cov-hero-checker">
+      <label for="cov-address-input" class="cov-hero-checker__label">✅ First — confirm we cover your address</label>
+      <div class="cov-hero-checker__row">
+        <div class="cov-hero-checker__input-wrap">
+          <span class="cov-hero-checker__icon" aria-hidden="true">📍</span>
+          <input
+            type="text"
+            id="cov-address-input"
+            class="cov-hero-checker__input"
+            placeholder="Start typing your address…"
+            autocomplete="off"
+            aria-describedby="cov-checker-hint">
+          <button type="button" id="cov-clear-btn" class="cov-hero-checker__clear" aria-label="Clear address" hidden>×</button>
+        </div>
+        <a href="tel:+19059600181" class="cov-hero-checker__phone">📞 (905) 960-0181</a>
+      </div>
+      <p id="cov-checker-hint" class="cov-hero-checker__hint">Pick from the dropdown for an instant drive-time check from our Newmarket base. We never store your address.</p>
+      <div id="cov-checker-result" class="cov-checker__result" hidden></div>
+    </div>
   </div>
 </section>
 
@@ -451,6 +472,9 @@
   </div>
 </footer>
 
+<!-- Live coverage checker — Google Places Autocomplete + Distance Matrix (shared) -->
+<script src="coverage-checker.js"></script>
+<script async defer src="https://maps.googleapis.com/maps/api/js?key=AIzaSyBrORBeXbpNTJvoi2PDhDDs6Iy-BGSU30M&libraries=places&callback=initCoverageCheck&loading=async"></script>
 <script src="nav.js"></script>
 <script src="js/sprinkler-builder.js"></script>
 </body>

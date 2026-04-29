@@ -365,6 +365,27 @@
     <div class="page-eyebrow">Free On-Site Visit · No Pressure · No Obligation</div>
     <h1>Get Your Free Installation Estimate</h1>
     <p>Answer a few quick questions about your property and get a ballpark price range instantly — no obligation, no sales call required.</p>
+
+    <!-- Live coverage checker — confirm we cover your address before estimating -->
+    <div class="cov-hero-checker">
+      <label for="cov-address-input" class="cov-hero-checker__label">✅ First — confirm we cover your address</label>
+      <div class="cov-hero-checker__row">
+        <div class="cov-hero-checker__input-wrap">
+          <span class="cov-hero-checker__icon" aria-hidden="true">📍</span>
+          <input
+            type="text"
+            id="cov-address-input"
+            class="cov-hero-checker__input"
+            placeholder="Start typing your address…"
+            autocomplete="off"
+            aria-describedby="cov-checker-hint">
+          <button type="button" id="cov-clear-btn" class="cov-hero-checker__clear" aria-label="Clear address" hidden>×</button>
+        </div>
+        <a href="tel:+19059600181" class="cov-hero-checker__phone">📞 (905) 960-0181</a>
+      </div>
+      <p id="cov-checker-hint" class="cov-hero-checker__hint">Pick from the dropdown for an instant drive-time check from our Newmarket base. We never store your address.</p>
+      <div id="cov-checker-result" class="cov-checker__result" hidden></div>
+    </div>
   </div>
 </section>
 
@@ -1076,6 +1097,9 @@ updateFixtures(8);
   </div>
 </footer>
 
+<!-- Live coverage checker — Google Places Autocomplete + Distance Matrix (shared) -->
+<script src="coverage-checker.js"></script>
+<script async defer src="https://maps.googleapis.com/maps/api/js?key=AIzaSyBrORBeXbpNTJvoi2PDhDDs6Iy-BGSU30M&libraries=places&callback=initCoverageCheck&loading=async"></script>
 <script src="nav.js"></script>
 <script>
 
