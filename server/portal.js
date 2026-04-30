@@ -23,6 +23,13 @@ const workOrderDiagnosis = document.getElementById("workOrderDiagnosis");
 const workOrderDiagnosisSource = document.getElementById("workOrderDiagnosisSource");
 const workOrderDiagnosisSummary = document.getElementById("workOrderDiagnosisSummary");
 const workOrderDiagnosisDetail = document.getElementById("workOrderDiagnosisDetail");
+const messageHeading = document.getElementById("messageHeading");
+const helpHeading = document.getElementById("helpHeading");
+
+// Customer first name captured from the portal payload — used to personalize
+// every customer-facing copy block on the page (greetings, confirmation
+// messages, "need to update something?" headings, etc.).
+let customerFirstName = "";
 const acceptCard = document.getElementById("acceptCard");
 const acceptButton = document.getElementById("acceptButton");
 const acceptStatus = document.getElementById("acceptStatus");
@@ -227,15 +234,32 @@ function renderPortal(data) {
   const services = Array.isArray(project.services) ? project.services : [];
 
   const hasBooking = Boolean(data.booking);
-  portalTitle.textContent = customer.firstName
+  customerFirstName = customer.firstName || "";
+
+  portalTitle.textContent = customerFirstName
     ? (hasBooking
-        ? `Hi ${customer.firstName}, your service is scheduled.`
-        : `Hi ${customer.firstName}, your PJL request is open.`)
+        ? `Hi ${customerFirstName}, your service is scheduled.`
+        : `Hi ${customerFirstName}, your PJL request is open.`)
     : (hasBooking ? "Your service is scheduled." : "Your PJL request is open.");
   portalIntro.textContent = hasBooking
     ? "Your appointment details are below. Anything you need to share before we arrive, drop us a message."
     : "Track your project below. Anything you need to share, drop us a message and we'll get back to you.";
   projectStatus.textContent = statusLabelFor(project.status, hasBooking);
+
+  // Personalize the secondary card headings when we know who they are.
+  // The "Send PJL a message" + "Need to update something?" cards both work
+  // generically, but reading the customer's name in the heading makes the
+  // page feel addressed to them rather than templated.
+  if (messageHeading) {
+    messageHeading.textContent = customerFirstName
+      ? `Send PJL a message, ${customerFirstName}`
+      : "Send PJL a message";
+  }
+  if (helpHeading) {
+    helpHeading.textContent = customerFirstName
+      ? `Need to update something, ${customerFirstName}?`
+      : "Need to update something?";
+  }
   followUpText.textContent = project.nextFollowUp
     ? `Next follow-up: ${formatDate(project.nextFollowUp)}`
     : "PJL will follow up as soon as your request is reviewed.";
@@ -264,7 +288,9 @@ function renderPortal(data) {
   if (project.status === "won") {
     acceptCard.hidden = false;
     acceptCard.classList.add("is-accepted");
-    acceptCard.querySelector("h2").textContent = "Quote accepted — thank you";
+    acceptCard.querySelector("h2").textContent = customerFirstName
+      ? `Thank you, ${customerFirstName} — quote accepted.`
+      : "Quote accepted — thank you";
     const p = acceptCard.querySelector("p");
     if (p) p.textContent = "Your project is booked. Patrick will confirm the exact arrival window with you directly.";
     acceptButton.hidden = true;
@@ -310,7 +336,9 @@ acceptButton.addEventListener("click", async () => {
     });
     const data = await response.json();
     if (!response.ok || !data.ok) throw new Error((data.errors || ["Unable to accept right now."]).join(" "));
-    acceptStatus.textContent = "Quote accepted — PJL has been notified.";
+    acceptStatus.textContent = customerFirstName
+      ? `Thank you, ${customerFirstName} — PJL has been notified.`
+      : "Quote accepted — PJL has been notified.";
     setTimeout(loadPortal, 600);
   } catch (error) {
     acceptStatus.textContent = error.message || "Unable to accept right now. Please call PJL.";
@@ -335,7 +363,9 @@ messageForm.addEventListener("submit", async (event) => {
     });
     const data = await response.json();
     if (!response.ok || !data.ok) throw new Error((data.errors || ["Unable to send message."]).join(" "));
-    messageStatus.textContent = "Sent — Patrick will get back to you.";
+    messageStatus.textContent = customerFirstName
+      ? `Thanks, ${customerFirstName} — Patrick will get back to you.`
+      : "Sent — Patrick will get back to you.";
     messageBody.value = "";
     setTimeout(loadPortal, 600);
   } catch (error) {

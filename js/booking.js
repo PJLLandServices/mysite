@@ -57,6 +57,9 @@
   const addressInput = document.getElementById("bookAddress");
   const addressNextBtn = document.getElementById("addressNextBtn");
   const whenHeading = document.getElementById("whenHeading");
+  const zonesHeading = document.getElementById("zonesHeading");
+  const addressHeading = document.getElementById("addressHeading");
+  const contactHeading = document.getElementById("contactHeading");
   const dayLoading = document.getElementById("dayLoading");
   const dayStrip = document.getElementById("dayStrip");
   const timeSection = document.getElementById("timeSection");
@@ -86,6 +89,29 @@
       .replace(/>/g, "&gt;")
       .replace(/"/g, "&quot;")
       .replace(/'/g, "&#039;");
+  }
+
+  // Lower-case the first character so we can splice family headings into
+  // a greeting cleanly: "Pick your spring opening." → "pick your spring opening."
+  function lowerFirst(text) {
+    if (!text) return "";
+    return text.charAt(0).toLowerCase() + text.slice(1);
+  }
+
+  // Greet the customer by name on every step that has a heading we can
+  // personalize. Called once we know the first name (after session prefill,
+  // or after the customer fills in the contact step manually). Static
+  // fallback copy is preserved when no name is available so cold visitors
+  // don't see "Hi , how many zones..." weirdness.
+  function personalizeStepHeadings() {
+    const name = state.customerFirstName;
+    if (!name) return;
+    if (zonesHeading)   zonesHeading.textContent   = `Hi ${name}, how many zones does your system have?`;
+    if (addressHeading) addressHeading.textContent = `Hi ${name}, where's the property?`;
+    if (contactHeading) contactHeading.textContent = `Last bit, ${name} — your contact info.`;
+    // The service-step heading is set by renderServiceCards (it depends on
+    // the active family filter); the time-step heading is set by
+    // loadAvailability. Both check state.customerFirstName at render time.
   }
 
   function showStep(name) {
@@ -189,12 +215,18 @@
       : allEntries;
 
     // Update heading + lead text. If the family has a custom copy block use
-    // it; otherwise fall back to the generic catalog view.
+    // it; otherwise fall back to the generic catalog view. When we know the
+    // customer's first name (via session handoff), the heading is prefixed
+    // with a greeting so the page feels addressed to them, not generic.
+    const name = state.customerFirstName;
     if (state.familyFilter && FAMILY_COPY[state.familyFilter]) {
-      serviceHeading.textContent = FAMILY_COPY[state.familyFilter].heading;
-      serviceLead.textContent = FAMILY_COPY[state.familyFilter].lead;
+      const family = FAMILY_COPY[state.familyFilter];
+      serviceHeading.textContent = name ? `Hi ${name} — ${lowerFirst(family.heading)}` : family.heading;
+      serviceLead.textContent = family.lead;
     } else {
-      serviceHeading.textContent = "What do you need done?";
+      serviceHeading.textContent = name
+        ? `Hi ${name}, what can we help with today?`
+        : "What do you need done?";
       serviceLead.textContent = "Pick the closest match. If you're not sure, choose \"Site visit\" and Patrick will scope it for you.";
     }
 
@@ -465,9 +497,18 @@
       });
       const data = await response.json();
       if (!response.ok || !data.ok) throw new Error((data.errors || ["Couldn't reserve. Please try a different slot."]).join(" "));
-      // Success
-      confirmTitle.textContent = `${bookFirst.value.trim()}, you're booked!`;
-      confirmDetail.innerHTML = `Your ${escapeHtml(state.serviceMeta.label)} is set for <strong>${escapeHtml(state.selectedSlot.dayLabel)}</strong> at <strong>${escapeHtml(state.selectedSlot.timeLabel)}</strong>.`;
+      // Success — personalize the confirmation copy with the name they
+      // just typed in the contact step (or that was prefilled from the
+      // session handoff). Falls back to a generic greeting if somehow
+      // first name is empty.
+      const finalFirstName = bookFirst.value.trim() || state.customerFirstName;
+      confirmTitle.textContent = finalFirstName
+        ? `${finalFirstName}, you're booked!`
+        : "You're booked!";
+      const detailIntro = finalFirstName
+        ? `Thanks ${escapeHtml(finalFirstName)} — your `
+        : "Your ";
+      confirmDetail.innerHTML = `${detailIntro}${escapeHtml(state.serviceMeta.label)} is set for <strong>${escapeHtml(state.selectedSlot.dayLabel)}</strong> at <strong>${escapeHtml(state.selectedSlot.timeLabel)}</strong>.`;
       portalCta.href = data.portalUrl || "#";
       showStep("confirm");
     } catch (error) {
@@ -482,6 +523,16 @@
   document.addEventListener("click", (event) => {
     const back = event.target.closest("[data-back-to]");
     if (back) showStep(back.dataset.backTo);
+  });
+
+  // Capture first name as soon as the customer types it manually, so if they
+  // navigate back to an earlier step, the headings update with their name.
+  bookFirst.addEventListener("input", () => {
+    const trimmed = bookFirst.value.trim();
+    if (trimmed && trimmed !== state.customerFirstName) {
+      state.customerFirstName = trimmed;
+      personalizeStepHeadings();
+    }
   });
 
   bookAnotherBtn.addEventListener("click", () => {
@@ -512,6 +563,8 @@
     if (hints.firstName) {
       state.customerFirstName = hints.firstName;
       if (bookFirst) bookFirst.value = hints.firstName;
+      // Greet by name on every step that has a personalizable heading.
+      personalizeStepHeadings();
     }
     if (hints.lastName  && bookLast)  bookLast.value  = hints.lastName;
     if (hints.email     && bookEmail) bookEmail.value = hints.email;

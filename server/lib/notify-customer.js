@@ -82,7 +82,7 @@ const TEMPLATES = {
       "Hi {firstName}, this is PJL Land Services confirming we've received your request. " +
       "Patrick personally reviews every inquiry — you'll hear back within one business day. " +
       "If it's urgent, call (905) 960-0181.",
-    sms: "PJL Land Services received your request. Patrick will be in touch within 1 business day. Track it: {portalUrl}"
+    sms: "{namePrefix}PJL Land Services received your request. Patrick will be in touch within 1 business day. Track it: {portalUrl}"
   },
   reviewed: {
     subject: "PJL Land Services has reviewed your request",
@@ -90,7 +90,7 @@ const TEMPLATES = {
     body:
       "Hi {firstName}, Patrick at PJL Land Services has reviewed your request and will reach out " +
       "to walk through next steps. Your project details are saved in your portal.",
-    sms: "PJL has reviewed your request. Patrick will reach out next. Portal: {portalUrl}"
+    sms: "{namePrefix}PJL has reviewed your request. Patrick will reach out next. Portal: {portalUrl}"
   },
   quoted: {
     subject: "Your PJL quote is ready",
@@ -98,7 +98,7 @@ const TEMPLATES = {
     body:
       "Hi {firstName}, your PJL Land Services quote is ready to review. Open your portal to see the " +
       "scope, the price, and accept the quote when you're ready. Estimated total: {total}.",
-    sms: "Your PJL quote is ready ({total}). Review and accept in your portal: {portalUrl}"
+    sms: "{namePrefix}your PJL quote is ready ({total}). Review and accept in your portal: {portalUrl}"
   },
 
   // --- Service track (confirmed bookings from /book.html) ---
@@ -110,7 +110,7 @@ const TEMPLATES = {
       "Your work order ({workOrderId}) is ready in your portal. We'll send a reminder the day before " +
       "and your technician will keep you updated as they head out to your property. " +
       "If anything changes, call (905) 960-0181 — we're happy to reschedule.",
-    sms: "PJL service confirmed: {serviceLabel} on {dateStr} at {timeStr}. Work order {workOrderId}. Details: {portalUrl}"
+    sms: "{namePrefix}your PJL service is confirmed: {serviceLabel} on {dateStr} at {timeStr}. Work order {workOrderId}. Details: {portalUrl}"
   },
   site_visit: {
     subject: "Your PJL site visit is scheduled — {dateStr}",
@@ -119,7 +119,7 @@ const TEMPLATES = {
       "Hi {firstName}, your PJL Land Services site visit is scheduled for {dateStr} at {timeStr}. " +
       "Patrick will walk your property, scope the work, and follow up with a written quote. " +
       "Your work order ({workOrderId}) is in your portal — no charge for the visit.",
-    sms: "PJL site visit scheduled: {dateStr} at {timeStr}. Free walkaround. Details: {portalUrl}"
+    sms: "{namePrefix}your PJL site visit is scheduled: {dateStr} at {timeStr}. Free walkaround. Details: {portalUrl}"
   }
 };
 
@@ -145,13 +145,17 @@ function bookingDateTime(lead) {
 function buildEmail(event, lead, baseUrl) {
   const tpl = TEMPLATES[event];
   if (!tpl) return null;
-  const firstName = lead.contact?.firstName || (lead.contact?.name || "").split(" ")[0] || "there";
+  const rawName = lead.contact?.firstName || (lead.contact?.name || "").split(" ")[0] || "";
+  const firstName = rawName || "there";
+  // {namePrefix} resolves to "Hi Patrick, " when we know their name and to ""
+  // when we don't — keeps SMS / short copy from reading "Hi , your service…".
+  const namePrefix = rawName ? `Hi ${rawName}, ` : "";
   const portalUrl = lead.portalUrl || `${baseUrl}/portal/${lead.portal?.token || ""}`;
   const total = moneyText(lead.totals?.expectedTotal);
   const { dateStr, timeStr } = bookingDateTime(lead);
   const serviceLabel = lead.booking?.serviceLabel || "your appointment";
   const workOrderId = lead.booking?.workOrder?.id || "";
-  const vars = { firstName, portalUrl, total, dateStr, timeStr, serviceLabel, workOrderId };
+  const vars = { firstName, namePrefix, portalUrl, total, dateStr, timeStr, serviceLabel, workOrderId };
 
   const subject = fill(tpl.subject, vars);
   const headline = fill(tpl.headline, vars);
@@ -194,12 +198,14 @@ function buildEmail(event, lead, baseUrl) {
 function buildSms(event, lead, baseUrl) {
   const tpl = TEMPLATES[event];
   if (!tpl) return "";
+  const rawName = lead.contact?.firstName || (lead.contact?.name || "").split(" ")[0] || "";
+  const namePrefix = rawName ? `Hi ${rawName}, ` : "";
   const portalUrl = lead.portalUrl || `${baseUrl}/portal/${lead.portal?.token || ""}`;
   const total = moneyText(lead.totals?.expectedTotal);
   const { dateStr, timeStr } = bookingDateTime(lead);
   const serviceLabel = lead.booking?.serviceLabel || "your appointment";
   const workOrderId = lead.booking?.workOrder?.id || "";
-  return fill(tpl.sms, { portalUrl, total, dateStr, timeStr, serviceLabel, workOrderId });
+  return fill(tpl.sms, { namePrefix, portalUrl, total, dateStr, timeStr, serviceLabel, workOrderId });
 }
 
 async function sendCustomerEmail(event, lead, baseUrl) {
