@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PJL — Manual Booking Handoff</title>
+  <link rel="icon" type="image/svg+xml" href="/crm/pjl-logo-mark.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/crm/crm.css">
+  <link rel="stylesheet" href="/crm/handoff.css">
+</head>
+<body class="pjl-crm-body">
+  <nav class="pjl-admin-nav" aria-label="PJL Handoff">
+    <div class="pjl-nav-strip">
+      <span>Newmarket &amp; GTA</span>
+      <span class="pjl-strip-live"><span aria-hidden="true"></span>Manual booking handoff</span>
+      <a href="tel:+19059600181">(905) 960-0181</a>
+    </div>
+    <div class="pjl-nav-main">
+      <a href="/" class="pjl-nav-logo"><img src="/crm/pjl-logo.svg" alt="PJL Land Services"></a>
+      <div class="pjl-nav-links">
+        <a href="/admin">CRM</a>
+        <a href="/admin/schedule">Schedule</a>
+        <a href="/admin/handoff" class="is-active">Handoff</a>
+        <button class="pjl-nav-logout" type="button" id="logoutButton">Log out</button>
+      </div>
+    </div>
+  </nav>
+
+  <main class="pjl-crm-shell">
+    <header class="pjl-crm-hero">
+      <div>
+        <p class="pjl-page-eyebrow">Manual Handoff</p>
+        <h1>Send a customer their booking link.</h1>
+        <p>After a phone call: fill in what the customer said, suggest a service, paste your diagnosis. We'll create a session, fire it to their phone &amp; email, and they land on a booking page that's already filled in.</p>
+      </div>
+    </header>
+
+    <section class="handoff-grid">
+      <form class="handoff-form" id="handoffForm">
+        <fieldset class="handoff-section">
+          <legend>Customer</legend>
+          <div class="handoff-row">
+            <label>
+              <span>First name *</span>
+              <input type="text" name="firstName" required autocomplete="given-name">
+            </label>
+            <label>
+              <span>Last name</span>
+              <input type="text" name="lastName" autocomplete="family-name">
+            </label>
+          </div>
+          <div class="handoff-row">
+            <label>
+              <span>Phone *</span>
+              <input type="tel" name="phone" required autocomplete="tel" placeholder="(905) 555-0100">
+            </label>
+            <label>
+              <span>Email *</span>
+              <input type="email" name="email" required autocomplete="email" placeholder="customer@example.com">
+            </label>
+          </div>
+          <label class="handoff-full">
+            <span>Property address</span>
+            <input type="text" name="address" autocomplete="street-address" placeholder="123 Main Street, Newmarket ON">
+          </label>
+        </fieldset>
+
+        <fieldset class="handoff-section">
+          <legend>What they need</legend>
+          <div class="handoff-row">
+            <label>
+              <span>Suggested service</span>
+              <select name="suggestedService" id="suggestedService">
+                <option value="">Let customer choose</option>
+                <!-- populated from /api/booking/services -->
+              </select>
+            </label>
+            <label>
+              <span>Zone count (if known)</span>
+              <select name="zoneCount" id="zoneCountSelect">
+                <option value="">Not collected</option>
+                <option value="unsure">Customer unsure</option>
+                <!-- 1-24 added by JS -->
+              </select>
+            </label>
+          </div>
+          <label class="handoff-full">
+            <span>Severity</span>
+            <select name="severity">
+              <option value="normal">Normal</option>
+              <option value="urgent">Urgent</option>
+            </select>
+          </label>
+        </fieldset>
+
+        <fieldset class="handoff-section">
+          <legend>Diagnosis</legend>
+          <label class="handoff-full">
+            <span>Short summary (one line — shown bold on the work order)</span>
+            <input type="text" name="diagnosisSummary" maxlength="280" placeholder="e.g. Zone 3 valve diaphragm failure — recommend manifold rebuild">
+          </label>
+          <label class="handoff-full">
+            <span>Full diagnosis (long-form notes — what you'd write on a paper work order)</span>
+            <textarea name="diagnosis" rows="5" placeholder="Customer reports zone 3 not popping up. Spoke at 2:15pm. Solenoid clicks but no flow. Likely diaphragm failure on Hunter PGV-100G. Recommend pulling all 6 valves, full manifold rebuild while we're in there. About 90 min. They have 6 zones total."></textarea>
+          </label>
+          <label class="handoff-full">
+            <span>Customer notes (optional — gate code, dog, hidden valve box, etc.)</span>
+            <textarea name="notes" rows="2" maxlength="1500" placeholder="Gate code 1234. Dog usually out back."></textarea>
+          </label>
+        </fieldset>
+
+        <fieldset class="handoff-section handoff-send">
+          <legend>Send to customer</legend>
+          <label class="handoff-checkbox">
+            <input type="checkbox" name="sendSms" checked>
+            <span>📱 SMS to phone above</span>
+          </label>
+          <label class="handoff-checkbox">
+            <input type="checkbox" name="sendEmail" checked>
+            <span>✉️ Email to address above</span>
+          </label>
+          <p class="handoff-help">
+            Uncheck both to just generate a link you can copy/paste manually.
+          </p>
+        </fieldset>
+
+        <div class="handoff-actions">
+          <button type="submit" class="pjl-btn pjl-btn-primary" id="submitBtn">Generate &amp; Send Link</button>
+          <button type="reset" class="pjl-btn pjl-btn-outline" id="resetBtn">Clear form</button>
+        </div>
+      </form>
+
+      <aside class="handoff-result" id="handoffResult" hidden>
+        <h2 id="handoffResultTitle">Link ready.</h2>
+        <p id="handoffResultMsg"></p>
+        <div class="handoff-link-box">
+          <label for="handoffLinkInput">Booking link (1 hour validity)</label>
+          <div class="handoff-link-row">
+            <input type="text" id="handoffLinkInput" readonly>
+            <button type="button" class="pjl-btn pjl-btn-outline" id="handoffCopyBtn">Copy</button>
+          </div>
+          <p class="handoff-help"><a id="handoffOpenBtn" href="#" target="_blank" rel="noopener">Open in new tab to verify →</a></p>
+        </div>
+        <ul class="handoff-status" id="handoffStatus"></ul>
+        <button type="button" class="pjl-btn pjl-btn-outline" id="handoffDoneBtn">Send another link</button>
+      </aside>
+    </section>
+  </main>
+
+  <script src="/crm/handoff.js"></script>
+</body>
+</html>

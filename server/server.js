@@ -274,11 +274,14 @@ function clearSessionCookie(req, res) {
 function needsAuth(method, pathname) {
   if (pathname === "/admin" || pathname === "/admin/") return true;
   if (pathname === "/admin/schedule" || pathname === "/admin/schedule/") return true;
+  if (pathname === "/admin/handoff" || pathname === "/admin/handoff/") return true;
   if (pathname === "/api/quotes" && method === "GET") return true;
   if (pathname === "/api/quotes.csv" || pathname === "/api/contacts" || pathname === "/api/contacts.vcf") return true;
   if (/^\/api\/quotes\/[^/]+/.test(pathname)) return true;
   // Schedule management is admin-only.
   if (pathname.startsWith("/api/schedule/")) return true;
+  // Manual handoff (admin sends booking link to customer) is admin-only.
+  if (pathname === "/api/admin/send-booking-link") return true;
   // Availability lookups + the public booking endpoint stay public.
   return false;
 }
@@ -1356,6 +1359,116 @@ async function handleApi(req, res, pathname) {
     return sendJson(res, 200, { ok: true, session });
   }
 
+  // Admin manual-handoff: Patrick fills out a form in /admin/handoff after
+  // a phone call, server creates a booking session AND optionally pushes
+  // the URL to the customer via SMS + email. Same machinery the AI agent
+  // will use, just driven by Patrick's hands instead of an LLM.
+  //
+  // Body shape:
+  //   {
+  //     diagnosis, diagnosisSummary, suggestedService, severity,
+  //     customerHints: { firstName, lastName, email, phone, address, zoneCount, notes },
+  //     sendSms:   bool,
+  //     sendEmail: bool
+  //   }
+  if (req.method === "POST" && pathname === "/api/admin/send-booking-link") {
+    try {
+      const payload = await parseRequestBody(req);
+      // Force the source so it's clear in the audit trail this came from
+      // Patrick's hands, not the AI.
+      payload.source = "admin_manual";
+      const session = await bookingSessions.createSession(payload);
+      const baseUrl = process.env.PUBLIC_BASE_URL || baseUrlFromReq(req);
+      const bookingUrl = `${baseUrl}/book.html?session=${encodeURIComponent(session.token)}`;
+
+      const hints = session.payload.customerHints || {};
+      const firstName = hints.firstName || "";
+      const phone = (hints.phone || "").trim();
+      const email = (hints.email || "").trim();
+      const summary = session.payload.diagnosisSummary || "";
+
+      const results = { smsSent: false, smsError: null, emailSent: false, emailError: null };
+
+      // SMS — short, link-forward.
+      if (payload.sendSms && phone && process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_FROM_NUMBER) {
+        const smsBody = `Hi${firstName ? " " + firstName : ""}, this is PJL Land Services. ${summary ? summary + ". " : ""}Book your appointment here: ${bookingUrl}`;
+        try {
+          const sid = process.env.TWILIO_ACCOUNT_SID;
+          const tok = process.env.TWILIO_AUTH_TOKEN;
+          const url = `https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(sid)}/Messages.json`;
+          const auth = Buffer.from(`${sid}:${tok}`).toString("base64");
+          const body = new URLSearchParams({ To: phone, From: process.env.TWILIO_FROM_NUMBER, Body: smsBody });
+          const r = await fetch(url, {
+            method: "POST",
+            headers: { Authorization: `Basic ${auth}`, "Content-Type": "application/x-www-form-urlencoded" },
+            body: body.toString()
+          });
+          const data = await r.json().catch(() => ({}));
+          if (!r.ok) results.smsError = data?.message || `HTTP ${r.status}`;
+          else results.smsSent = true;
+        } catch (err) {
+          results.smsError = err.message;
+        }
+      }
+
+      // Email — branded handoff message.
+      if (payload.sendEmail && email && process.env.GMAIL_USER && process.env.GMAIL_APP_PASSWORD) {
+        try {
+          let nodemailer;
+          try { nodemailer = require("nodemailer"); } catch { nodemailer = null; }
+          if (nodemailer) {
+            const transporter = nodemailer.createTransport({
+              service: "gmail",
+              auth: { user: process.env.GMAIL_USER, pass: process.env.GMAIL_APP_PASSWORD }
+            });
+            const safeFirst = firstName || "there";
+            const html = `
+<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 560px; color: #1a1a1a; line-height: 1.55;">
+  <div style="padding: 24px 28px; background: #1B4D2E; border-radius: 8px 8px 0 0;">
+    <div style="color: #EAF3DE; font-size: 12px; letter-spacing: 0.12em; text-transform: uppercase; font-weight: 600;">PJL Land Services</div>
+    <h1 style="margin: 6px 0 0; color: #fff; font-size: 22px;">Your booking link is ready.</h1>
+  </div>
+  <div style="padding: 24px 28px; background: #FAFAF5; border: 1px solid #e5e5dd; border-top: none; border-radius: 0 0 8px 8px;">
+    <p style="margin: 0 0 14px;">Hi ${safeFirst},</p>
+    <p style="margin: 0 0 18px;">Following up on our conversation${summary ? `: <strong>${summary.replace(/</g, "&lt;")}</strong>` : "."}. Click below to pick a time that works for you — your details are already filled in.</p>
+    <p style="margin: 0 0 18px;">
+      <a href="${bookingUrl}" style="display: inline-block; padding: 12px 22px; background: #E07B24; color: #fff; text-decoration: none; border-radius: 6px; font-weight: 600;">Book your appointment</a>
+    </p>
+    <p style="margin: 18px 0 0; font-size: 13px; color: #777;">If the button doesn't work, paste this link into your browser:<br><span style="color: #1B4D2E; word-break: break-all;">${bookingUrl}</span></p>
+    <p style="margin: 24px 0 0; font-size: 13px; color: #777;">Questions? Call <a href="tel:+19059600181" style="color: #1B4D2E;">(905) 960-0181</a>.</p>
+  </div>
+  <p style="margin: 16px 0 0; font-size: 11px; color: #999; text-align: center;">PJL Land Services · Newmarket, Ontario · pjllandservices.com</p>
+</div>`.trim();
+            const text = `Hi ${safeFirst},\n\nFollowing up on our conversation${summary ? ": " + summary : ""}.\n\nBook your appointment: ${bookingUrl}\n\nQuestions? Call (905) 960-0181.\n\nPJL Land Services`;
+            await transporter.sendMail({
+              from: `"PJL Land Services" <${process.env.GMAIL_USER}>`,
+              to: email,
+              replyTo: process.env.GMAIL_USER,
+              subject: "Your PJL booking link is ready",
+              html,
+              text
+            });
+            results.emailSent = true;
+          } else {
+            results.emailError = "nodemailer not installed";
+          }
+        } catch (err) {
+          results.emailError = err.message;
+        }
+      }
+
+      return sendJson(res, 201, {
+        ok: true,
+        token: session.token,
+        bookingUrl,
+        expiresAt: new Date(session.expiresAt).toISOString(),
+        ...results
+      });
+    } catch (error) {
+      return sendJson(res, 400, { ok: false, errors: [error.message || "Couldn't send link."] });
+    }
+  }
+
   // Public availability lookup. Query: ?service=<key>&address=<text>
   // Returns slots grouped by day so the UI can render "pick a day, then a time".
   if (req.method === "GET" && pathname === "/api/booking/availability") {
@@ -1656,6 +1769,9 @@ function resolveStaticTarget(pathname) {
   }
   if (pathname === "/admin/schedule" || pathname === "/admin/schedule/") {
     return { dir: SERVER_DIR, relative: "/schedule.html" };
+  }
+  if (pathname === "/admin/handoff" || pathname === "/admin/handoff/") {
+    return { dir: SERVER_DIR, relative: "/handoff.html" };
   }
   if (pathname === "/book" || pathname === "/book/") {
     return { dir: SITE_DIR, relative: "/book.html" };
