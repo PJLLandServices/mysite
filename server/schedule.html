@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PJL Schedule</title>
+  <link rel="icon" type="image/svg+xml" href="/crm/pjl-logo-mark.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/crm/crm.css">
+  <link rel="stylesheet" href="/crm/schedule.css">
+</head>
+<body class="pjl-crm-body">
+  <nav class="pjl-admin-nav" aria-label="PJL Schedule">
+    <div class="pjl-nav-strip">
+      <span>Newmarket &amp; GTA</span>
+      <span class="pjl-strip-live"><span aria-hidden="true"></span>Booking calendar online</span>
+      <a href="tel:+19059600181">(905) 960-0181</a>
+    </div>
+    <div class="pjl-nav-main">
+      <a href="/" class="pjl-nav-logo"><img src="/crm/pjl-logo.svg" alt="PJL Land Services"></a>
+      <div class="pjl-nav-links">
+        <a href="/admin">CRM</a>
+        <a href="/admin/schedule" class="is-active">Schedule</a>
+        <button class="pjl-nav-logout" type="button" id="logoutButton">Log out</button>
+      </div>
+    </div>
+  </nav>
+
+  <main class="pjl-crm-shell">
+    <header class="pjl-crm-hero">
+      <div>
+        <p class="pjl-page-eyebrow">Schedule</p>
+        <h1>Book windows, blocks &amp; bookings on one canvas.</h1>
+        <p>Drag a range to block time off. Existing bookings show in green. Customer-side availability respects every block here.</p>
+      </div>
+    </header>
+
+    <section class="schedule-toolbar">
+      <button type="button" class="pjl-btn pjl-btn-outline" id="prevWeek">&larr; Prev week</button>
+      <span class="schedule-range" id="weekRange"></span>
+      <button type="button" class="pjl-btn pjl-btn-outline" id="nextWeek">Next week &rarr;</button>
+      <button type="button" class="pjl-btn pjl-btn-primary" id="addBlock">Block off time</button>
+    </section>
+
+    <section class="schedule-stats">
+      <div><span>Bookings this week</span><strong id="weekBookings">0</strong></div>
+      <div><span>Hours blocked</span><strong id="weekBlockHours">0</strong></div>
+      <div><span>Bookable hours left</span><strong id="weekFreeHours">0</strong></div>
+    </section>
+
+    <section class="schedule-week" id="scheduleWeek" aria-label="Weekly calendar"></section>
+
+    <section class="schedule-blocks">
+      <h2>Active blocks</h2>
+      <ul class="schedule-block-list" id="blockList">
+        <li class="empty">No blocked time. Use the &ldquo;Block off time&rdquo; button to add a vacation, holiday, or appointment.</li>
+      </ul>
+    </section>
+
+    <section class="schedule-settings" id="settingsCard">
+      <h2>Working hours &amp; rules</h2>
+      <p class="settings-note">Defaults shown. Override per day if your real schedule differs from the spec.</p>
+      <div class="settings-grid" id="hoursGrid"></div>
+      <div class="settings-engine">
+        <label>
+          <span>Lead time (hours before earliest slot)</span>
+          <input type="number" min="0" max="48" step="1" id="settingLeadHours" value="5">
+        </label>
+        <label>
+          <span>Buffer between jobs (minutes)</span>
+          <input type="number" min="0" max="60" step="5" id="settingBuffer" value="15">
+        </label>
+        <label>
+          <span>Slot increment (minutes)</span>
+          <input type="number" min="15" max="120" step="15" id="settingIncrement" value="30">
+        </label>
+      </div>
+      <div class="settings-actions">
+        <button type="button" class="pjl-btn pjl-btn-primary" id="saveSettings">Save rules</button>
+        <span id="settingsStatus" role="status"></span>
+      </div>
+    </section>
+  </main>
+
+  <!-- Block-off dialog -->
+  <dialog id="blockDialog" class="schedule-dialog">
+    <form method="dialog" id="blockForm">
+      <h3>Block off time</h3>
+      <label>
+        <span>Label</span>
+        <input type="text" id="blockLabel" placeholder="Vacation, dentist, holiday..." maxlength="120" required>
+      </label>
+      <div class="dialog-grid">
+        <label>
+          <span>Start</span>
+          <input type="datetime-local" id="blockStart" required>
+        </label>
+        <label>
+          <span>End</span>
+          <input type="datetime-local" id="blockEnd" required>
+        </label>
+      </div>
+      <p class="dialog-error" id="blockError" hidden></p>
+      <div class="dialog-actions">
+        <button type="button" class="pjl-btn pjl-btn-outline" id="blockCancel">Cancel</button>
+        <button type="submit" class="pjl-btn pjl-btn-primary">Save block</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="/crm/schedule.js"></script>
+</body>
+</html>

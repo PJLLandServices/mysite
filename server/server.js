@@ -28,6 +28,9 @@ const crypto = require("node:crypto");
 const { sendNewLeadEmail } = require("./lib/notify-email");
 const { sendNewLeadSms } = require("./lib/notify-sms");
 const { notifyCustomer, eventForTransition } = require("./lib/notify-customer");
+const { geocode, PJL_BASE } = require("./lib/geocode");
+const { BOOKABLE_SERVICES, DEFAULT_HOURS, DEFAULT_SETTINGS, listAvailableSlots, groupByDay } = require("./lib/availability");
+const scheduleStore = require("./lib/schedule-store");
 
 const PORT = Number(process.env.PORT || 4173);
 // 0.0.0.0 = listen on every network interface. Required on Render (and most
@@ -241,9 +244,13 @@ function clearSessionCookie(req, res) {
 // What IS gated: the /admin dashboard page and any API that exposes lead data.
 function needsAuth(method, pathname) {
   if (pathname === "/admin" || pathname === "/admin/") return true;
+  if (pathname === "/admin/schedule" || pathname === "/admin/schedule/") return true;
   if (pathname === "/api/quotes" && method === "GET") return true;
   if (pathname === "/api/quotes.csv" || pathname === "/api/contacts" || pathname === "/api/contacts.vcf") return true;
   if (/^\/api\/quotes\/[^/]+/.test(pathname)) return true;
+  // Schedule management is admin-only.
+  if (pathname.startsWith("/api/schedule/")) return true;
+  // Availability lookups + the public booking endpoint stay public.
   return false;
 }
 
@@ -780,6 +787,24 @@ function applyCrmUpdate(lead, payload) {
   return lead;
 }
 
+// Returns the array of active bookings extracted from the current leads file.
+// Each entry is { start, end, coords, leadId } in the shape availability.js
+// expects. Filters out cancelled (lost) and archived leads.
+async function activeBookings() {
+  const leads = await readLeads();
+  return leads
+    .filter((lead) => !lead.archived && (lead.crm?.status || lead.status) !== "lost" && lead.booking)
+    .map((lead) => ({
+      start: lead.booking.start,
+      end: lead.booking.end,
+      coords: lead.booking.coords || PJL_BASE,
+      leadId: lead.id,
+      serviceKey: lead.booking.serviceKey,
+      serviceLabel: lead.booking.serviceLabel
+    }))
+    .filter((b) => b.start && b.end);
+}
+
 async function handleApi(req, res, pathname) {
   if (req.method === "POST" && pathname === "/api/quotes") {
     try {
@@ -1044,6 +1069,211 @@ async function handleApi(req, res, pathname) {
     return;
   }
 
+  // ============= Booking calendar =============
+
+  // Public catalog of bookable services (used by the booking page UI).
+  if (req.method === "GET" && pathname === "/api/booking/services") {
+    return sendJson(res, 200, { ok: true, services: BOOKABLE_SERVICES });
+  }
+
+  // Public availability lookup. Query: ?service=<key>&address=<text>
+  // Returns slots grouped by day so the UI can render "pick a day, then a time".
+  if (req.method === "GET" && pathname === "/api/booking/availability") {
+    try {
+      const url = new URL(req.url, baseUrlFromReq(req));
+      const serviceKey = normalizeString(url.searchParams.get("service"), 60);
+      const address = normalizeString(url.searchParams.get("address"), 320);
+      const daysAhead = Math.min(60, Math.max(1, Number(url.searchParams.get("days")) || 14));
+
+      if (!serviceKey || !BOOKABLE_SERVICES[serviceKey]) {
+        return sendJson(res, 422, { ok: false, errors: ["Pick a service to see availability."] });
+      }
+      if (!address) {
+        return sendJson(res, 422, { ok: false, errors: ["Address is required to compute drive times."] });
+      }
+
+      const geo = await geocode(address);
+      const customerCoords = geo.coords;
+      const [bookings, scheduleData] = await Promise.all([activeBookings(), scheduleStore.read()]);
+
+      const mergedHours = { ...DEFAULT_HOURS, ...(scheduleData.hours || {}) };
+      const mergedSettings = { ...DEFAULT_SETTINGS, ...(scheduleData.settings || {}) };
+
+      const slots = await listAvailableSlots({
+        serviceKey,
+        customerCoords,
+        bookings,
+        blocks: scheduleData.blocks,
+        daysAhead,
+        hours: mergedHours,
+        settings: mergedSettings
+      });
+
+      return sendJson(res, 200, {
+        ok: true,
+        service: { key: serviceKey, ...BOOKABLE_SERVICES[serviceKey] },
+        address: geo.coords?.formattedAddress || address,
+        geocodeOk: geo.ok === true,
+        days: groupByDay(slots),
+        totalSlots: slots.length
+      });
+    } catch (error) {
+      return sendJson(res, 500, { ok: false, errors: [error.message || "Availability lookup failed."] });
+    }
+  }
+
+  // Public booking endpoint — creates a lead AND reserves the chosen slot.
+  // Body: { serviceKey, slotStart, contact:{firstName,lastName,phone,email,
+  //         address,notes}, addressLat, addressLng }
+  if (req.method === "POST" && pathname === "/api/booking/reserve") {
+    try {
+      const payload = await parseRequestBody(req);
+      const serviceKey = normalizeString(payload.serviceKey, 60);
+      const slotStart = normalizeString(payload.slotStart, 40);
+      const service = BOOKABLE_SERVICES[serviceKey];
+      if (!service) return sendJson(res, 422, { ok: false, errors: ["Unknown service."] });
+      const startDate = new Date(slotStart);
+      if (Number.isNaN(startDate.getTime())) return sendJson(res, 422, { ok: false, errors: ["Invalid slot time."] });
+      const endDate = new Date(startDate.getTime() + service.minutes * 60 * 1000);
+
+      // Re-validate: the same slot must still be available now (someone else might
+      // have grabbed it in the seconds since the calendar was rendered).
+      const contact = payload.contact && typeof payload.contact === "object" ? payload.contact : {};
+      const address = normalizeString(contact.address, 320);
+      if (!address) return sendJson(res, 422, { ok: false, errors: ["Address is required for booking."] });
+      const geo = await geocode(address);
+      const customerCoords = geo.coords;
+
+      const [bookings, scheduleData] = await Promise.all([activeBookings(), scheduleStore.read()]);
+      const mergedHours = { ...DEFAULT_HOURS, ...(scheduleData.hours || {}) };
+      const mergedSettings = { ...DEFAULT_SETTINGS, ...(scheduleData.settings || {}) };
+      const stillAvailable = await listAvailableSlots({
+        serviceKey,
+        customerCoords,
+        bookings,
+        blocks: scheduleData.blocks,
+        daysAhead: 30,
+        hours: mergedHours,
+        settings: mergedSettings
+      });
+      const matched = stillAvailable.find((s) => s.start === startDate.toISOString());
+      if (!matched) {
+        return sendJson(res, 409, { ok: false, errors: ["That slot was just taken. Please pick another time."] });
+      }
+
+      // Build the lead. Status is set to a category that maps to "scheduled" —
+      // for site visits we go "site_visit", for direct work we go "won" (because
+      // the customer has effectively committed to the booking).
+      const isSiteVisit = service.category === "consult";
+      const intakePayload = {
+        source: serviceKey === "site_visit" ? "general_lead" : (
+          service.category === "seasonal" && serviceKey.startsWith("spring") ? "spring_opening"
+          : service.category === "seasonal" ? "fall_closing"
+          : service.category === "controller" ? "sprinkler_quote"
+          : "sprinkler_repair"
+        ),
+        contact,
+        features: [],
+        pageUrl: normalizeString(payload.pageUrl, 500),
+        userAgent: normalizeString(payload.userAgent, 500),
+        mode: "booking"
+      };
+      const result = validateLead(intakePayload);
+      if (!result.ok) return sendJson(res, 422, { ok: false, errors: result.errors });
+
+      // Attach the booking to the lead.
+      result.lead.booking = {
+        start: startDate.toISOString(),
+        end: endDate.toISOString(),
+        durationMinutes: service.minutes,
+        serviceKey,
+        serviceLabel: service.label,
+        coords: { lat: customerCoords.lat, lng: customerCoords.lng, formattedAddress: customerCoords.formattedAddress }
+      };
+      // Status starts at site_visit for consults, won for committed direct bookings.
+      result.lead.status = isSiteVisit ? "site_visit" : "won";
+      result.lead.crm.status = result.lead.status;
+      result.lead.crm.activity.unshift({
+        at: new Date().toISOString(),
+        type: "update",
+        text: `Booked online: ${service.label} on ${matched.dayLabel} at ${matched.timeLabel}.`
+      });
+
+      const all = await readLeads();
+      all.unshift(result.lead);
+      await writeLeads(all);
+
+      // Notify Patrick (admin) and the customer.
+      const baseUrl = process.env.PUBLIC_BASE_URL || baseUrlFromReq(req);
+      const decorated = decorateLeadForAdmin(result.lead, req);
+      Promise.allSettled([
+        sendNewLeadEmail({ ...decorated, sourceLabel: `BOOKED · ${service.label} · ${matched.dayLabel} ${matched.timeLabel}` }, { baseUrl }),
+        sendNewLeadSms({ ...decorated, sourceLabel: `BOOKED ${matched.timeLabel}` }, { baseUrl }),
+        notifyCustomer(isSiteVisit ? "site_visit" : "booked", decorated, { baseUrl })
+      ]).catch(() => {});
+
+      return sendJson(res, 201, {
+        ok: true,
+        leadId: result.lead.id,
+        booking: result.lead.booking,
+        portalUrl: decorated.portalUrl
+      });
+    } catch (error) {
+      return sendJson(res, 400, { ok: false, errors: [error.message || "Booking failed."] });
+    }
+  }
+
+  // Admin: list all schedule blocks.
+  if (req.method === "GET" && pathname === "/api/schedule/blocks") {
+    const blocks = await scheduleStore.listBlocks();
+    return sendJson(res, 200, { ok: true, blocks });
+  }
+
+  // Admin: add a schedule block. Body: { start, end, label }
+  if (req.method === "POST" && pathname === "/api/schedule/blocks") {
+    try {
+      const payload = await parseRequestBody(req);
+      const block = await scheduleStore.addBlock({
+        start: payload.start,
+        end: payload.end,
+        label: normalizeString(payload.label, 120)
+      });
+      return sendJson(res, 201, { ok: true, block });
+    } catch (error) {
+      return sendJson(res, 400, { ok: false, errors: [error.message] });
+    }
+  }
+
+  // Admin: delete a schedule block.
+  const blockMatch = pathname.match(/^\/api\/schedule\/blocks\/([^/]+)$/);
+  if (blockMatch && req.method === "DELETE") {
+    const id = decodeURIComponent(blockMatch[1]);
+    const removed = await scheduleStore.removeBlock(id);
+    if (!removed) return sendJson(res, 404, { ok: false, errors: ["Block not found."] });
+    return sendJson(res, 200, { ok: true });
+  }
+
+  // Admin: read schedule settings (working hours + engine settings).
+  if (req.method === "GET" && pathname === "/api/schedule/settings") {
+    const data = await scheduleStore.settings();
+    return sendJson(res, 200, {
+      ok: true,
+      defaults: { hours: DEFAULT_HOURS, settings: DEFAULT_SETTINGS, services: BOOKABLE_SERVICES },
+      overrides: data
+    });
+  }
+
+  // Admin: update schedule settings. Body: { settings:{...}, hours:{...} }
+  if (req.method === "PUT" && pathname === "/api/schedule/settings") {
+    try {
+      const payload = await parseRequestBody(req);
+      const updated = await scheduleStore.updateSettings(payload);
+      return sendJson(res, 200, { ok: true, schedule: updated });
+    } catch (error) {
+      return sendJson(res, 400, { ok: false, errors: [error.message] });
+    }
+  }
+
   sendJson(res, 404, { ok: false, errors: ["API endpoint not found."] });
 }
 
@@ -1061,6 +1291,12 @@ function resolveStaticTarget(pathname) {
   }
   if (pathname === "/admin" || pathname === "/admin/") {
     return { dir: SERVER_DIR, relative: "/admin.html" };
+  }
+  if (pathname === "/admin/schedule" || pathname === "/admin/schedule/") {
+    return { dir: SERVER_DIR, relative: "/schedule.html" };
+  }
+  if (pathname === "/book" || pathname === "/book/") {
+    return { dir: SITE_DIR, relative: "/book.html" };
   }
   if (pathname === "/login" || pathname === "/login/") {
     return { dir: SERVER_DIR, relative: "/login.html" };
