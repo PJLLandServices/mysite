@@ -10,6 +10,15 @@ const projectTotal = document.getElementById("projectTotal");
 const customerPhone = document.getElementById("customerPhone");
 const customerEmail = document.getElementById("customerEmail");
 const customerAddress = document.getElementById("customerAddress");
+const workOrderCard = document.getElementById("workOrderCard");
+const workOrderId = document.getElementById("workOrderId");
+const workOrderStatus = document.getElementById("workOrderStatus");
+const workOrderService = document.getElementById("workOrderService");
+const workOrderWhen = document.getElementById("workOrderWhen");
+const workOrderDuration = document.getElementById("workOrderDuration");
+const workOrderPrice = document.getElementById("workOrderPrice");
+const workOrderNote = document.getElementById("workOrderNote");
+const workOrderDocStatus = document.getElementById("workOrderDocStatus");
 const acceptCard = document.getElementById("acceptCard");
 const acceptButton = document.getElementById("acceptButton");
 const acceptStatus = document.getElementById("acceptStatus");
@@ -106,6 +115,48 @@ function renderActivity(activity) {
   activityCard.hidden = false;
 }
 
+function renderWorkOrder(data) {
+  // Surface the work-order envelope when the lead came in via the booking
+  // flow. Older leads (Formspree-era contact requests) don't have one and
+  // the card stays hidden.
+  const wo = data.workOrder;
+  const booking = data.booking;
+  if (!wo || !booking) {
+    workOrderCard.hidden = true;
+    return;
+  }
+  workOrderId.textContent = wo.id || "WO-—";
+  workOrderStatus.textContent = (wo.status || "scheduled").replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+  workOrderService.textContent = booking.serviceLabel || "—";
+  workOrderPrice.textContent = wo.priceLabel || (wo.total ? `$${wo.total}` : "Custom quote");
+  workOrderDuration.textContent = booking.durationMinutes ? `${booking.durationMinutes} min` : "—";
+
+  if (booking.start) {
+    const start = new Date(booking.start);
+    workOrderWhen.textContent = start.toLocaleString("en-CA", {
+      weekday: "long", month: "long", day: "numeric", hour: "numeric", minute: "2-digit"
+    });
+  } else {
+    workOrderWhen.textContent = "—";
+  }
+
+  if (wo.priceNote) {
+    workOrderNote.textContent = wo.priceNote;
+    workOrderNote.hidden = false;
+  } else {
+    workOrderNote.hidden = true;
+  }
+
+  // Document state — placeholder messaging until we attach a real doc.
+  if (wo.documentReady && wo.documentUrl) {
+    workOrderDocStatus.innerHTML = `<a href="${wo.documentUrl}" target="_blank" rel="noopener">Open work order document →</a>`;
+  } else {
+    workOrderDocStatus.textContent = "Your detailed work order will be available here closer to your appointment.";
+  }
+
+  workOrderCard.hidden = false;
+}
+
 function renderPortal(data) {
   const customer = data.customer || {};
   const project = data.project || {};
@@ -152,6 +203,7 @@ function renderPortal(data) {
 
   renderTimeline(project.status);
   renderActivity(project.activity);
+  renderWorkOrder(data);
 
   portalContent.hidden = false;
 }

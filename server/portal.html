@@ -40,6 +40,30 @@
         <p id="followUpText"></p>
       </article>
 
+      <article class="portal-card portal-workorder" id="workOrderCard" hidden>
+        <header class="workorder-head">
+          <div>
+            <span class="workorder-eyebrow">Work Order</span>
+            <strong class="workorder-id" id="workOrderId">WO-XXXXXXXX</strong>
+          </div>
+          <span class="workorder-status" id="workOrderStatus">Scheduled</span>
+        </header>
+        <dl class="workorder-grid">
+          <div><dt>Service</dt><dd id="workOrderService">—</dd></div>
+          <div><dt>Scheduled</dt><dd id="workOrderWhen">—</dd></div>
+          <div><dt>Estimated time</dt><dd id="workOrderDuration">—</dd></div>
+          <div><dt>Price</dt><dd id="workOrderPrice">—</dd></div>
+        </dl>
+        <p class="workorder-note" id="workOrderNote" hidden></p>
+        <div class="workorder-doc" id="workOrderDoc">
+          <span class="workorder-doc-icon" aria-hidden="true">📄</span>
+          <div>
+            <strong>Work order document</strong>
+            <p id="workOrderDocStatus">Your detailed work order will be available here closer to your appointment.</p>
+          </div>
+        </div>
+      </article>
+
       <article class="portal-card portal-accept" id="acceptCard" hidden>
         <h2>Your quote is ready</h2>
         <p>Review the scope and price below. When you're ready, accept the quote and PJL will schedule the work.</p>

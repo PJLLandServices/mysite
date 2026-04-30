@@ -339,6 +339,125 @@ h1 {
   font-weight: 700;
 }
 
+/* ============= Work-order card ============= */
+.portal-workorder {
+  background: linear-gradient(135deg, rgba(27, 77, 46, 0.06) 0%, rgba(27, 77, 46, 0.01) 100%);
+  border: 1px solid rgba(27, 77, 46, 0.22);
+}
+.workorder-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  padding-bottom: 14px;
+  margin-bottom: 14px;
+  border-bottom: 1px solid rgba(27, 77, 46, 0.10);
+}
+.workorder-eyebrow {
+  display: block;
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 12px;
+  letter-spacing: 0.10em;
+  text-transform: uppercase;
+  color: rgba(15, 31, 20, 0.55);
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+.workorder-id {
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 22px;
+  letter-spacing: 0.04em;
+  color: #1B4D2E;
+  font-weight: 700;
+}
+.workorder-status {
+  background: rgba(74, 140, 92, 0.18);
+  color: #1B4D2E;
+  padding: 6px 14px;
+  border-radius: 999px;
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.workorder-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px 24px;
+  margin: 0;
+  padding: 0;
+}
+.workorder-grid > div {
+  margin: 0;
+}
+.workorder-grid dt {
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: rgba(15, 31, 20, 0.55);
+  margin-bottom: 2px;
+}
+.workorder-grid dd {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: #1B4D2E;
+}
+.workorder-note {
+  margin: 14px 0 0;
+  padding: 12px 14px;
+  background: rgba(224, 123, 36, 0.06);
+  border-left: 3px solid var(--amber, #E07B24);
+  border-radius: 6px;
+  font-size: 13px;
+  color: rgba(15, 31, 20, 0.75);
+  line-height: 1.55;
+}
+.workorder-doc {
+  margin-top: 16px;
+  padding: 14px 16px;
+  background: #fff;
+  border: 1px dashed rgba(27, 77, 46, 0.25);
+  border-radius: 8px;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+.workorder-doc-icon {
+  font-size: 24px;
+  line-height: 1;
+}
+.workorder-doc strong {
+  display: block;
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 15px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #1B4D2E;
+  margin-bottom: 2px;
+}
+.workorder-doc p {
+  margin: 0;
+  font-size: 13px;
+  color: rgba(15, 31, 20, 0.65);
+  line-height: 1.5;
+}
+.workorder-doc a {
+  color: var(--amber, #E07B24);
+  font-weight: 600;
+  text-decoration: none;
+}
+.workorder-doc a:hover { text-decoration: underline; }
+
+@media (max-width: 540px) {
+  .workorder-head { flex-direction: column; align-items: flex-start; gap: 10px; }
+  .workorder-grid { grid-template-columns: 1fr; }
+}
+
 /* ============= Accept-quote card ============= */
 .portal-accept {
   background: linear-gradient(135deg, rgba(224, 123, 36, 0.08) 0%, rgba(224, 123, 36, 0.02) 100%);

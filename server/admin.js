@@ -42,6 +42,14 @@ const vcardLink = document.getElementById("vcardLink");
 const portalLink = document.getElementById("portalLink");
 const contactPreview = document.getElementById("contactPreview");
 const detailFeatures = document.getElementById("detailFeatures");
+const detailWorkOrderSection = document.getElementById("detailWorkOrderSection");
+const detailWorkOrderId = document.getElementById("detailWorkOrderId");
+const detailWorkOrderStatus = document.getElementById("detailWorkOrderStatus");
+const detailWorkOrderWhen = document.getElementById("detailWorkOrderWhen");
+const detailWorkOrderService = document.getElementById("detailWorkOrderService");
+const detailWorkOrderZones = document.getElementById("detailWorkOrderZones");
+const detailWorkOrderPrice = document.getElementById("detailWorkOrderPrice");
+const detailWorkOrderNote = document.getElementById("detailWorkOrderNote");
 const customerNotes = document.getElementById("customerNotes");
 const activityList = document.getElementById("activityList");
 const saveMessage = document.getElementById("saveMessage");
@@ -341,6 +349,7 @@ function renderDetail() {
   });
 
   customerNotes.textContent = lead.contact?.notes || "No customer notes.";
+  renderWorkOrderDetail(lead);
   renderContactPreview(lead);
   activityList.innerHTML = "";
   (lead.crm?.activity || []).slice(0, 12).forEach((activity) => {
@@ -348,6 +357,44 @@ function renderDetail() {
     item.innerHTML = `<strong>${escapeHtml(formatDateTime(activity.at))}</strong><span>${escapeHtml(activity.text)}</span>`;
     activityList.append(item);
   });
+}
+
+function renderWorkOrderDetail(lead) {
+  const booking = lead.booking;
+  const wo = booking?.workOrder;
+  if (!booking || !wo) {
+    detailWorkOrderSection.hidden = true;
+    return;
+  }
+  detailWorkOrderSection.hidden = false;
+  detailWorkOrderId.textContent = wo.id || "WO-—";
+  detailWorkOrderStatus.textContent = (wo.status || "scheduled").replace(/_/g, " ");
+  detailWorkOrderService.textContent = booking.serviceLabel || "—";
+  detailWorkOrderPrice.textContent = wo.priceLabel || (wo.total ? moneyText(wo.total) : "Custom");
+
+  if (booking.start) {
+    const d = new Date(booking.start);
+    detailWorkOrderWhen.textContent = d.toLocaleString("en-CA", {
+      weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit"
+    });
+  } else {
+    detailWorkOrderWhen.textContent = "—";
+  }
+
+  if (booking.zoneCount === "unsure") {
+    detailWorkOrderZones.textContent = "Customer unsure";
+  } else if (typeof booking.zoneCount === "number") {
+    detailWorkOrderZones.textContent = `${booking.zoneCount} zone${booking.zoneCount === 1 ? "" : "s"}`;
+  } else {
+    detailWorkOrderZones.textContent = "Not collected";
+  }
+
+  if (wo.priceNote) {
+    detailWorkOrderNote.textContent = wo.priceNote;
+    detailWorkOrderNote.hidden = false;
+  } else {
+    detailWorkOrderNote.hidden = true;
+  }
 }
 
 function renderContactPreview(lead) {

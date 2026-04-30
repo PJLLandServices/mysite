@@ -39,6 +39,17 @@ const { notifyCustomer, eventForTransition } = require("./lib/notify-customer");
 const { geocode, PJL_BASE } = require("./lib/geocode");
 const { BOOKABLE_SERVICES, DEFAULT_HOURS, DEFAULT_SETTINGS, listAvailableSlots, groupByDay } = require("./lib/availability");
 const scheduleStore = require("./lib/schedule-store");
+const { priceForBooking } = require("./lib/pricing");
+
+// Short, customer-friendly work order ID. Eight chars from a UUIDv4 base32-ish
+// alphabet (no I/O/0/1 to keep them unambiguous when read aloud or hand-written).
+function makeWorkOrderId() {
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  let id = "WO-";
+  const bytes = crypto.randomBytes(8);
+  for (let i = 0; i < 8; i++) id += alphabet[bytes[i] % alphabet.length];
+  return id;
+}
 
 const PORT = Number(process.env.PORT || 4173);
 // 0.0.0.0 = listen on every network interface. Required on Render (and most
@@ -694,6 +705,25 @@ function portalPayloadForLead(lead, req) {
       canAccept: status === "quoted",
       activity: visibleActivity
     },
+    booking: lead.booking ? {
+      start: lead.booking.start,
+      end: lead.booking.end,
+      durationMinutes: lead.booking.durationMinutes,
+      serviceLabel: lead.booking.serviceLabel,
+      zoneCount: lead.booking.zoneCount
+    } : null,
+    workOrder: lead.booking?.workOrder ? {
+      id: lead.booking.workOrder.id,
+      status: lead.booking.workOrder.status,
+      total: lead.booking.workOrder.total,
+      priceLabel: lead.booking.workOrder.priceLabel,
+      priceNote: lead.booking.workOrder.priceNote,
+      custom: lead.booking.workOrder.custom,
+      currency: lead.booking.workOrder.currency,
+      documentReady: lead.booking.workOrder.documentReady,
+      documentUrl: lead.booking.workOrder.documentUrl,
+      createdAt: lead.booking.workOrder.createdAt
+    } : null,
     portal: {
       token: lead.portal?.token || portalTokenForId(lead.id),
       url: contact.portalUrl
@@ -1201,7 +1231,35 @@ async function handleApi(req, res, pathname) {
         if (n >= 1 && n <= 24) zoneCount = n;
       }
 
-      // Attach the booking to the lead.
+      // Compute price from the booked service tier + customer-confirmed zone
+      // count. This runs server-side so customers can't tamper with the
+      // total. The price feeds two places:
+      //   1. lead.features — so the existing portal "Project request" card
+      //      shows the service + price line item
+      //   2. lead.booking.workOrder — the work-order envelope visible in
+      //      both the customer portal and the CRM
+      const pricing = priceForBooking(serviceKey, zoneCount);
+
+      // Replace the empty intake features array with the booked service so
+      // the customer portal renders it on first load.
+      result.lead.features = [{
+        key: serviceKey,
+        label: service.label,
+        qty: 1,
+        price: pricing.price,
+        category: service.category,
+        quoteType: pricing.custom ? "custom" : "flat"
+      }];
+      result.lead.totals = {
+        expectedTotal: pricing.custom ? 0 : pricing.price,
+        submittedTotal: pricing.custom ? 0 : pricing.price,
+        currency: "CAD"
+      };
+
+      // Attach the booking to the lead. workOrder is the customer-facing
+      // wrapper around the booking — short ID, status, total, and a
+      // placeholder for the document we'll attach later (PDF, signed copy).
+      const now = new Date().toISOString();
       result.lead.booking = {
         start: startDate.toISOString(),
         end: endDate.toISOString(),
@@ -1209,7 +1267,19 @@ async function handleApi(req, res, pathname) {
         serviceKey,
         serviceLabel: service.label,
         zoneCount,
-        coords: { lat: customerCoords.lat, lng: customerCoords.lng, formattedAddress: customerCoords.formattedAddress }
+        coords: { lat: customerCoords.lat, lng: customerCoords.lng, formattedAddress: customerCoords.formattedAddress },
+        workOrder: {
+          id: makeWorkOrderId(),
+          status: "scheduled",
+          total: pricing.custom ? 0 : pricing.price,
+          priceLabel: pricing.label,
+          priceNote: pricing.note || null,
+          custom: Boolean(pricing.custom),
+          currency: pricing.currency,
+          documentReady: false,
+          documentUrl: null,
+          createdAt: now
+        }
       };
       // Status starts at site_visit for consults, won for committed direct bookings.
       result.lead.status = isSiteVisit ? "site_visit" : "won";

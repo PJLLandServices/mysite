@@ -1514,6 +1514,79 @@
 }
 
 body.crm-drawer-locked { overflow: hidden; }
+
+/* === Work Order section in lead detail === */
+.detail-workorder {
+  background: linear-gradient(135deg, rgba(27, 77, 46, 0.05) 0%, rgba(27, 77, 46, 0.01) 100%);
+  border: 1px solid rgba(27, 77, 46, 0.18);
+  border-radius: 10px;
+  padding: 14px 16px;
+}
+.detail-workorder h3 {
+  margin: 0 0 10px;
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 14px;
+  letter-spacing: 0.10em;
+  text-transform: uppercase;
+  color: rgba(15, 31, 20, 0.55);
+}
+.detail-workorder__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.detail-workorder__head strong {
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 18px;
+  letter-spacing: 0.04em;
+  color: #1B4D2E;
+  font-weight: 700;
+}
+.detail-workorder__status {
+  background: rgba(74, 140, 92, 0.18);
+  color: #1B4D2E;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.detail-workorder__grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px 16px;
+  margin: 0;
+  padding: 0;
+}
+.detail-workorder__grid > div { margin: 0; }
+.detail-workorder__grid dt {
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(15, 31, 20, 0.55);
+  margin-bottom: 1px;
+}
+.detail-workorder__grid dd {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: #1B4D2E;
+}
+.detail-workorder__note {
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  background: rgba(224, 123, 36, 0.08);
+  border-left: 3px solid #E07B24;
+  border-radius: 4px;
+  font-size: 12px;
+  color: rgba(15, 31, 20, 0.75);
+  line-height: 1.5;
+}
 .kanban-column {
   background: rgba(27, 77, 46, 0.04);
   border: 1px solid rgba(27, 77, 46, 0.10);
