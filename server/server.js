@@ -583,7 +583,16 @@ async function readPhotoFile(leadId, n) {
 // from the Render API). After the DNS cutover, both will be on the same
 // origin and CORS becomes a no-op. /api/quotes only accepts new leads (no
 // credentialed reads), so a permissive policy is safe.
-const PUBLIC_API_PATHS = new Set(["/api/quotes", "/api/chat-transcripts"]);
+const PUBLIC_API_PATHS = new Set([
+  "/api/quotes",
+  "/api/chat-transcripts",
+  // Customer-facing booking flow (book.html). Pre-DNS-cutover this is
+  // cross-origin (book.html on github.io → /api on Render); after cutover
+  // it's same-origin and CORS becomes a no-op. Either way, safe.
+  "/api/booking/services",
+  "/api/booking/availability",
+  "/api/booking/reserve"
+]);
 function isPublicApiPath(pathname) {
   if (PUBLIC_API_PATHS.has(pathname)) return true;
   // Photo fetches by portal token are also public (token is the auth).
