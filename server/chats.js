@@ -20,7 +20,7 @@ const counts = {
 let activeStatus = "all";
 let allChats = [];
 
-document.getElementById("logoutBtn").addEventListener("click", async () => {
+document.getElementById("logoutButton").addEventListener("click", async () => {
   try { await fetch("/api/logout", { method: "POST", credentials: "include" }); }
   catch (e) {}
   window.location.href = "/login";
