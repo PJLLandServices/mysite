@@ -213,20 +213,13 @@
             <p class="pjl-chat-ty-portal-note">Bookmark this — you can check status, message Patrick, accept future quotes, and pre-book seasonal service from here.</p>
           </div>
           <div class="pjl-chat-ty-upsell">
-            <h3>Set yourself up for the year</h3>
-            <p>Sprinkler systems need spring opening + fall winterization annually. Pre-book now and you're locked in — no chasing us in April or October.</p>
-            <div class="pjl-chat-ty-upsell-grid">
-              <a href="sprinkler-spring-opening.html" class="pjl-chat-ty-upsell-card">
-                <span class="pjl-chat-ty-upsell-tag">SPRING</span>
-                <strong>Spring Opening</strong>
-                <span class="pjl-chat-ty-upsell-price">From $90</span>
-              </a>
-              <a href="sprinkler-fall-winterization.html" class="pjl-chat-ty-upsell-card">
-                <span class="pjl-chat-ty-upsell-tag">FALL</span>
-                <strong>Fall Winterization</strong>
-                <span class="pjl-chat-ty-upsell-price">From $90</span>
-              </a>
-            </div>
+            <h3>Lock in your fall winterization</h3>
+            <p>Every sprinkler system in Ontario needs to be blown out before the first hard freeze — skip it and the valves crack over winter. Get on our fall list now and we'll handle it in October.</p>
+            <a href="sprinkler-fall-winterization.html" class="pjl-chat-ty-upsell-primary">
+              <span class="pjl-chat-ty-upsell-primary-tag">FALL WINTERIZATION</span>
+              <strong>Pre-book my fall closing</strong>
+              <span class="pjl-chat-ty-upsell-primary-price">From $90 — locked-in scheduling, no chasing us in September</span>
+            </a>
           </div>
           <button data-action="restart-ty" type="button">Start a New Diagnosis</button>
         </div>

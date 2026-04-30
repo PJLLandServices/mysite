@@ -589,51 +589,48 @@
   margin: 0 0 12px !important;
   line-height: 1.45 !important;
 }
-.pjl-chat-ty-upsell-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 10px;
-}
-.pjl-chat-ty-upsell-card {
+.pjl-chat-ty-upsell-primary {
   display: block;
-  background: var(--pjl-chat-white);
-  border: 1.5px solid var(--pjl-chat-line);
-  border-radius: 8px;
-  padding: 14px 12px;
+  background: var(--pjl-chat-green);
+  color: var(--pjl-chat-cream);
+  border: none;
+  border-radius: 10px;
+  padding: 18px 18px 16px;
   text-decoration: none;
-  color: var(--pjl-chat-ink);
-  transition: border-color .15s, transform .12s, box-shadow .15s;
-  text-align: center;
+  text-align: left;
+  transition: transform .12s, box-shadow .15s, background .15s;
+  box-shadow: 0 4px 14px rgba(15, 31, 20, .18);
 }
-.pjl-chat-ty-upsell-card:hover {
-  border-color: var(--pjl-chat-amber);
+.pjl-chat-ty-upsell-primary:hover {
+  background: var(--pjl-chat-green-mid);
   transform: translateY(-1px);
-  box-shadow: 0 4px 12px rgba(224, 123, 36, .15);
+  box-shadow: 0 6px 18px rgba(15, 31, 20, .25);
 }
-.pjl-chat-ty-upsell-tag {
+.pjl-chat-ty-upsell-primary-tag {
   display: inline-block;
   font-family: 'Barlow Condensed', 'Outfit', system-ui, sans-serif;
   font-size: 11px;
-  letter-spacing: 1.5px;
+  letter-spacing: 1.8px;
   font-weight: 700;
   color: var(--pjl-chat-amber);
   margin-bottom: 6px;
 }
-.pjl-chat-ty-upsell-card strong {
+.pjl-chat-ty-upsell-primary strong {
   display: block;
   font-family: 'Barlow Condensed', 'Outfit', system-ui, sans-serif;
-  font-size: 16px;
+  font-size: 22px;
   letter-spacing: 0.4px;
   text-transform: uppercase;
-  color: var(--pjl-chat-green);
-  margin-bottom: 4px;
+  color: var(--pjl-chat-cream);
+  margin-bottom: 6px;
   line-height: 1.05;
 }
-.pjl-chat-ty-upsell-price {
+.pjl-chat-ty-upsell-primary-price {
   display: block;
   font-size: 12px;
-  color: var(--pjl-chat-ink-soft);
+  color: var(--pjl-chat-green-pale);
   font-weight: 500;
+  line-height: 1.4;
 }
 
 /* ---------- Error toast (inside the panel) ---------- */
