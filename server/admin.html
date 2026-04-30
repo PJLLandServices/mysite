@@ -100,11 +100,44 @@
                  catalog stays in sync with server.js without duplication. -->
           </select>
         </div>
+        <div class="filter-group">
+          <label class="archive-toggle">
+            <input type="checkbox" id="showArchived">
+            <span>Show archived (<span id="archivedCount">0</span>)</span>
+          </label>
+        </div>
       </aside>
 
       <section class="crm-main" aria-label="Lead list">
-        <div class="pipeline-tabs" id="pipelineTabs"></div>
+        <div class="crm-toolbar">
+          <div class="pipeline-tabs" id="pipelineTabs"></div>
+          <div class="crm-view-toggle" role="group" aria-label="View mode">
+            <button type="button" class="is-active" data-view="list" id="viewList">List</button>
+            <button type="button" data-view="kanban" id="viewKanban">Kanban</button>
+          </div>
+        </div>
+        <div class="bulk-toolbar" id="bulkToolbar" hidden>
+          <span><strong id="bulkCount">0</strong> selected</span>
+          <select id="bulkStatus">
+            <option value="">Set stage…</option>
+            <option value="new">New</option>
+            <option value="contacted">Contacted</option>
+            <option value="site_visit">Site visit</option>
+            <option value="quoted">Quoted</option>
+            <option value="won">Won</option>
+            <option value="lost">Lost</option>
+          </select>
+          <select id="bulkPriority">
+            <option value="">Set priority…</option>
+            <option value="urgent">Urgent</option>
+            <option value="high">High</option>
+            <option value="normal">Normal</option>
+          </select>
+          <button type="button" class="pjl-btn pjl-btn-outline" id="bulkArchive">Archive</button>
+          <button type="button" class="pjl-btn pjl-btn-outline" id="bulkClear">Clear</button>
+        </div>
         <div class="lead-list" id="leadList"></div>
+        <div class="kanban-board" id="kanbanBoard" hidden></div>
         <p class="admin-empty" id="emptyState" hidden>No matching quote requests yet.</p>
       </section>
 
@@ -227,6 +260,7 @@
 
           <div class="editor-actions">
             <button class="cta-button" type="submit">Save lead</button>
+            <button type="button" class="pjl-btn pjl-btn-outline" id="archiveButton">Archive</button>
             <span id="saveMessage" role="status"></span>
           </div>
 

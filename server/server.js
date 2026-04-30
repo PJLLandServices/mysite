@@ -27,6 +27,7 @@ const crypto = require("node:crypto");
 
 const { sendNewLeadEmail } = require("./lib/notify-email");
 const { sendNewLeadSms } = require("./lib/notify-sms");
+const { notifyCustomer, eventForTransition } = require("./lib/notify-customer");
 
 const PORT = Number(process.env.PORT || 4173);
 // 0.0.0.0 = listen on every network interface. Required on Render (and most
@@ -358,6 +359,7 @@ function hydrateLead(lead) {
   return {
     ...lead,
     status,
+    archived: Boolean(lead.archived),
     // Older leads written before source-tagging existed get the default source.
     source: resolveSource(lead.source),
     portal: {
@@ -641,6 +643,21 @@ function decorateLeadForAdmin(lead, req) {
 
 function portalPayloadForLead(lead, req) {
   const contact = contactRecordForLead(lead, req);
+  const status = lead.crm?.status || lead.status || "new";
+  // Customer-visible activity: portal messages, status changes, and the
+  // initial "Quote request received" entry. Filters out internal-only notes
+  // that Patrick has typed in the CRM Internal-Notes field.
+  const visibleActivity = (lead.crm?.activity || [])
+    .filter((entry) => {
+      const t = (entry.text || "").toLowerCase();
+      if (entry.type === "created") return true;
+      if (t.startsWith("status changed")) return true;
+      if (t.startsWith("customer message via portal:")) return true;
+      if (t.startsWith("customer accepted the quote")) return true;
+      return false;
+    })
+    .slice(0, 30);
+
   return {
     customer: {
       name: contact.fullName || lead.contact?.name || "PJL Customer",
@@ -651,14 +668,16 @@ function portalPayloadForLead(lead, req) {
       address: contact.address.formatted || lead.contact?.address || ""
     },
     project: {
-      status: lead.crm?.status || lead.status || "new",
+      status,
       priority: lead.crm?.priority || "normal",
       nextFollowUp: lead.crm?.nextFollowUp || "",
       requestedAt: lead.createdAt,
       services: lead.features || [],
       total: lead.totals?.expectedTotal || 0,
       currency: lead.totals?.currency || "CAD",
-      customerNotes: lead.contact?.notes || ""
+      customerNotes: lead.contact?.notes || "",
+      canAccept: status === "quoted",
+      activity: visibleActivity
     },
     portal: {
       token: lead.portal?.token || portalTokenForId(lead.id),
@@ -669,7 +688,16 @@ function portalPayloadForLead(lead, req) {
 
 function applyCrmUpdate(lead, payload) {
   const crm = { ...lead.crm };
+  const previousStatus = crm.status || lead.status || "new";
   const changes = [];
+
+  if (Object.prototype.hasOwnProperty.call(payload, "archived")) {
+    const archived = Boolean(payload.archived);
+    if (Boolean(lead.archived) !== archived) {
+      changes.push(archived ? "Lead archived." : "Lead restored from archive.");
+    }
+    lead.archived = archived;
+  }
 
   if (payload.contact && typeof payload.contact === "object") {
     const contact = { ...(lead.contact || {}) };
@@ -746,6 +774,9 @@ function applyCrmUpdate(lead, payload) {
   crm.activity = activity;
   crm.lastUpdated = now;
   lead.crm = crm;
+  // Track stage transitions so the API layer can fire customer notifications
+  // only when something actually changed. Not stored on the lead itself.
+  lead._statusTransition = { from: previousStatus, to: crm.status };
   return lead;
 }
 
@@ -775,11 +806,13 @@ async function handleApi(req, res, pathname) {
       const decoratedLead = decorateLeadForAdmin(result.lead, req);
       Promise.allSettled([
         sendNewLeadEmail(decoratedLead, { baseUrl }),
-        sendNewLeadSms(decoratedLead, { baseUrl })
+        sendNewLeadSms(decoratedLead, { baseUrl }),
+        notifyCustomer("received", decoratedLead, { baseUrl })
       ]).then((results) => {
+        const labels = ["admin-email", "admin-sms", "customer"];
         results.forEach((r, i) => {
           if (r.status === "rejected") {
-            console.error(`[notify] ${i === 0 ? "email" : "sms"} threw:`, r.reason?.message || r.reason);
+            console.error(`[notify] ${labels[i]} threw:`, r.reason?.message || r.reason);
           }
         });
       });
@@ -792,10 +825,20 @@ async function handleApi(req, res, pathname) {
 
   if (req.method === "GET" && pathname === "/api/quotes") {
     const leads = await readLeads();
+    // Admin can opt-in to archived leads via ?include=archived. By default
+    // archived leads are filtered out to keep the dashboard focused.
+    const url = new URL(req.url, baseUrlFromReq(req));
+    const include = url.searchParams.get("include") || "";
+    const showArchived = include === "archived" || include === "all";
+    const filtered = showArchived ? leads : leads.filter((lead) => !lead.archived);
     return sendJson(res, 200, {
       ok: true,
-      leads: leads.map((lead) => decorateLeadForAdmin(lead, req)),
-      sources: SOURCES
+      leads: filtered.map((lead) => decorateLeadForAdmin(lead, req)),
+      sources: SOURCES,
+      counts: {
+        active: leads.filter((l) => !l.archived).length,
+        archived: leads.filter((l) => l.archived).length
+      }
     });
   }
 
@@ -859,10 +902,134 @@ async function handleApi(req, res, pathname) {
       const index = leads.findIndex((lead) => lead.id === leadId);
       if (index === -1) return sendJson(res, 404, { ok: false, errors: ["Lead not found."] });
       leads[index] = applyCrmUpdate(leads[index], payload);
+      const transition = leads[index]._statusTransition;
+      delete leads[index]._statusTransition;
       await writeLeads(leads);
+
+      // Fire customer notification only on real status transitions.
+      if (transition && transition.from !== transition.to) {
+        const event = eventForTransition(transition.from, transition.to);
+        if (event) {
+          const baseUrl = process.env.PUBLIC_BASE_URL || baseUrlFromReq(req);
+          const decorated = decorateLeadForAdmin(leads[index], req);
+          notifyCustomer(event, decorated, { baseUrl }).catch((err) => {
+            console.error(`[notify] customer notify (${event}) failed:`, err?.message || err);
+          });
+        }
+      }
+
       return sendJson(res, 200, { ok: true, lead: decorateLeadForAdmin(leads[index], req) });
     } catch (error) {
       return sendJson(res, 400, { ok: false, errors: [error.message || "Unable to update lead."] });
+    }
+  }
+
+  // Bulk update — apply the same patch (status, priority, owner, archived) to
+  // many leads at once. Body shape: { ids: ["leadId", ...], patch: {...} }.
+  // Notifications still fire per lead when status transitions.
+  if (req.method === "POST" && pathname === "/api/quotes/bulk") {
+    try {
+      const payload = await parseRequestBody(req);
+      const ids = Array.isArray(payload.ids) ? payload.ids.filter((id) => typeof id === "string") : [];
+      const patch = payload.patch && typeof payload.patch === "object" ? payload.patch : null;
+      if (!ids.length || !patch) {
+        return sendJson(res, 422, { ok: false, errors: ["Provide ids[] and a patch object."] });
+      }
+      const leads = await readLeads();
+      const baseUrl = process.env.PUBLIC_BASE_URL || baseUrlFromReq(req);
+      const updatedIds = [];
+      for (const id of ids) {
+        const idx = leads.findIndex((l) => l.id === id);
+        if (idx === -1) continue;
+        leads[idx] = applyCrmUpdate(leads[idx], patch);
+        const transition = leads[idx]._statusTransition;
+        delete leads[idx]._statusTransition;
+        updatedIds.push(id);
+        if (transition && transition.from !== transition.to) {
+          const event = eventForTransition(transition.from, transition.to);
+          if (event) {
+            const decorated = decorateLeadForAdmin(leads[idx], req);
+            notifyCustomer(event, decorated, { baseUrl }).catch((err) => {
+              console.error(`[notify] bulk customer notify (${event}) failed:`, err?.message || err);
+            });
+          }
+        }
+      }
+      await writeLeads(leads);
+      return sendJson(res, 200, { ok: true, updated: updatedIds.length });
+    } catch (error) {
+      return sendJson(res, 400, { ok: false, errors: [error.message || "Unable to bulk update."] });
+    }
+  }
+
+  // Customer-side endpoints, authenticated by portal token (NOT admin cookie).
+  // Match path: /api/portal/<token>/<action>
+  const portalActionMatch = pathname.match(/^\/api\/portal\/([^/]+)\/(accept|message)$/);
+  if (portalActionMatch && req.method === "POST") {
+    try {
+      const token = decodeURIComponent(portalActionMatch[1]);
+      const action = portalActionMatch[2];
+      const payload = await parseRequestBody(req);
+      const leads = await readLeads();
+      const idx = leads.findIndex((l) => (l.portal?.token || portalTokenForId(l.id)) === token);
+      if (idx === -1) return sendJson(res, 404, { ok: false, errors: ["Customer portal not found."] });
+      const lead = leads[idx];
+      const now = new Date().toISOString();
+      const baseUrl = process.env.PUBLIC_BASE_URL || baseUrlFromReq(req);
+
+      if (action === "accept") {
+        // Customer accepts the quote -> bump status to "won".
+        const currentStatus = lead.crm?.status || lead.status || "new";
+        if (currentStatus !== "quoted") {
+          return sendJson(res, 422, { ok: false, errors: ["This quote isn't ready to accept yet."] });
+        }
+        leads[idx] = applyCrmUpdate(lead, {
+          status: "won",
+          activityNote: "Customer accepted the quote via the portal."
+        });
+        const transition = leads[idx]._statusTransition;
+        delete leads[idx]._statusTransition;
+        await writeLeads(leads);
+
+        // Notify Patrick that the customer just accepted.
+        const decorated = decorateLeadForAdmin(leads[idx], req);
+        Promise.allSettled([
+          sendNewLeadEmail({ ...decorated, sourceLabel: "Quote ACCEPTED — " + (decorated.sourceLabel || "") }, { baseUrl }),
+          sendNewLeadSms({ ...decorated, sourceLabel: "Quote ACCEPTED" }, { baseUrl })
+        ]).catch(() => {});
+
+        if (transition && transition.from !== transition.to) {
+          const event = eventForTransition(transition.from, transition.to);
+          if (event) notifyCustomer(event, decorated, { baseUrl }).catch(() => {});
+        }
+        return sendJson(res, 200, { ok: true, status: "won" });
+      }
+
+      if (action === "message") {
+        const message = normalizeString(payload.message, 1500);
+        if (!message) return sendJson(res, 422, { ok: false, errors: ["Please write a message."] });
+        leads[idx] = applyCrmUpdate(lead, {
+          activityNote: `Customer message via portal: ${message}`
+        });
+        delete leads[idx]._statusTransition;
+        await writeLeads(leads);
+
+        // Bounce a short admin alert so Patrick sees the message immediately.
+        const decorated = decorateLeadForAdmin(leads[idx], req);
+        const aliasLead = {
+          ...decorated,
+          sourceLabel: "Portal Message — " + (decorated.sourceLabel || ""),
+          contact: { ...decorated.contact, notes: message }
+        };
+        Promise.allSettled([
+          sendNewLeadEmail(aliasLead, { baseUrl }),
+          sendNewLeadSms(aliasLead, { baseUrl })
+        ]).catch(() => {});
+
+        return sendJson(res, 200, { ok: true });
+      }
+    } catch (error) {
+      return sendJson(res, 400, { ok: false, errors: [error.message || "Unable to process portal action."] });
     }
   }
 

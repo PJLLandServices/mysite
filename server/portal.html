@@ -23,11 +23,28 @@
       <p id="portalIntro">One moment while we open your PJL project details.</p>
     </section>
 
+    <section class="portal-timeline" id="portalTimeline" hidden aria-label="Project status">
+      <ol class="timeline-track">
+        <li data-step="received"><span class="timeline-dot"></span><span class="timeline-label">Request received</span></li>
+        <li data-step="reviewed"><span class="timeline-dot"></span><span class="timeline-label">Reviewed</span></li>
+        <li data-step="site_visit"><span class="timeline-dot"></span><span class="timeline-label">Site visit</span></li>
+        <li data-step="quoted"><span class="timeline-dot"></span><span class="timeline-label">Quote ready</span></li>
+        <li data-step="booked"><span class="timeline-dot"></span><span class="timeline-label">Booked</span></li>
+      </ol>
+    </section>
+
     <section class="portal-grid" id="portalContent" hidden>
       <article class="portal-card portal-status">
         <span>Current stage</span>
         <strong id="projectStatus"></strong>
         <p id="followUpText"></p>
+      </article>
+
+      <article class="portal-card portal-accept" id="acceptCard" hidden>
+        <h2>Your quote is ready</h2>
+        <p>Review the scope and price below. When you're ready, accept the quote and PJL will schedule the work.</p>
+        <button type="button" class="portal-btn portal-btn-primary" id="acceptButton">Accept this quote</button>
+        <p class="portal-accept-note" id="acceptStatus" role="status"></p>
       </article>
 
       <article class="portal-card">
@@ -46,6 +63,22 @@
           <div><dt>Email</dt><dd id="customerEmail"></dd></div>
           <div><dt>Home address</dt><dd id="customerAddress"></dd></div>
         </dl>
+      </article>
+
+      <article class="portal-card portal-message-card">
+        <h2>Send PJL a message</h2>
+        <p>Got a question, photo to share, or a change to your project? Drop a note and Patrick will get back to you.</p>
+        <form id="messageForm" class="portal-message-form">
+          <label for="messageBody">Your message</label>
+          <textarea id="messageBody" name="message" rows="4" maxlength="1500" placeholder="Example: We have a Bell utility line we want flagged before the site visit." required></textarea>
+          <button type="submit" class="portal-btn portal-btn-primary">Send to PJL</button>
+          <p class="portal-message-status" id="messageStatus" role="status"></p>
+        </form>
+      </article>
+
+      <article class="portal-card portal-activity" id="activityCard" hidden>
+        <h2>Project activity</h2>
+        <ol class="portal-activity-list" id="activityList"></ol>
       </article>
 
       <article class="portal-card portal-help">

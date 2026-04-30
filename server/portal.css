@@ -251,3 +251,208 @@ h1 {
     grid-template-columns: 1fr;
   }
 }
+
+/* ============= Status timeline ============= */
+.portal-timeline {
+  margin: 0 auto 28px;
+  max-width: 920px;
+  padding: 22px 28px;
+  background: #fff;
+  border: 1px solid rgba(27, 77, 46, 0.12);
+  border-radius: 14px;
+  box-shadow: 0 6px 24px rgba(15, 31, 20, 0.05);
+}
+.timeline-track {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 0;
+  position: relative;
+}
+.timeline-track::before {
+  content: "";
+  position: absolute;
+  top: 14px;
+  left: 10%;
+  right: 10%;
+  height: 3px;
+  background: rgba(27, 77, 46, 0.10);
+  border-radius: 999px;
+}
+.timeline-track li {
+  position: relative;
+  text-align: center;
+  padding: 0 6px;
+}
+.timeline-dot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: #fff;
+  border: 3px solid rgba(27, 77, 46, 0.18);
+  margin-bottom: 8px;
+  position: relative;
+  z-index: 1;
+  transition: all 0.2s ease;
+}
+.timeline-track li.is-complete .timeline-dot {
+  background: #1B4D2E;
+  border-color: #1B4D2E;
+}
+.timeline-track li.is-complete .timeline-dot::after {
+  content: "✓";
+  color: #fff;
+  font-weight: 700;
+  font-size: 14px;
+}
+.timeline-track li.is-current .timeline-dot {
+  background: #E07B24;
+  border-color: #E07B24;
+  box-shadow: 0 0 0 6px rgba(224, 123, 36, 0.18);
+}
+.timeline-track li.is-current .timeline-dot::after {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #fff;
+}
+.timeline-label {
+  display: block;
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 13px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: rgba(15, 31, 20, 0.55);
+  font-weight: 600;
+}
+.timeline-track li.is-complete .timeline-label,
+.timeline-track li.is-current .timeline-label {
+  color: #1B4D2E;
+}
+.timeline-track li.is-current .timeline-label {
+  font-weight: 700;
+}
+
+/* ============= Accept-quote card ============= */
+.portal-accept {
+  background: linear-gradient(135deg, rgba(224, 123, 36, 0.08) 0%, rgba(224, 123, 36, 0.02) 100%);
+  border: 1px solid rgba(224, 123, 36, 0.30);
+}
+.portal-accept.is-accepted {
+  background: linear-gradient(135deg, rgba(74, 140, 92, 0.10) 0%, rgba(74, 140, 92, 0.02) 100%);
+  border-color: rgba(74, 140, 92, 0.30);
+}
+.portal-btn {
+  display: inline-block;
+  padding: 12px 22px;
+  border-radius: 8px;
+  border: none;
+  font-family: inherit;
+  font-weight: 700;
+  font-size: 15px;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+}
+.portal-btn-primary {
+  background: linear-gradient(135deg, #F59B4A 0%, #E07B24 100%);
+  color: #fff;
+  box-shadow: 0 6px 14px rgba(224, 123, 36, 0.25);
+}
+.portal-btn-primary:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 18px rgba(224, 123, 36, 0.32);
+}
+.portal-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.portal-accept-note {
+  margin-top: 12px;
+  font-size: 14px;
+  color: rgba(15, 31, 20, 0.65);
+  min-height: 18px;
+}
+
+/* ============= Message PJL form ============= */
+.portal-message-card textarea {
+  width: 100%;
+  padding: 12px 14px;
+  border-radius: 8px;
+  border: 1px solid rgba(15, 31, 20, 0.18);
+  font-family: inherit;
+  font-size: 15px;
+  line-height: 1.5;
+  resize: vertical;
+  margin: 6px 0 12px;
+  background: #fff;
+}
+.portal-message-card textarea:focus {
+  outline: none;
+  border-color: #1B4D2E;
+  box-shadow: 0 0 0 3px rgba(27, 77, 46, 0.12);
+}
+.portal-message-card label {
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 13px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  font-weight: 600;
+  color: rgba(15, 31, 20, 0.65);
+}
+.portal-message-status {
+  margin-top: 10px;
+  font-size: 14px;
+  color: rgba(15, 31, 20, 0.65);
+  min-height: 18px;
+}
+
+/* ============= Activity log ============= */
+.portal-activity-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.portal-activity-list li {
+  display: grid;
+  grid-template-columns: 160px 1fr;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid rgba(15, 31, 20, 0.06);
+  font-size: 14px;
+}
+.portal-activity-list li:last-child {
+  border-bottom: none;
+}
+.portal-activity-list strong {
+  font-family: "Barlow Condensed", sans-serif;
+  font-weight: 600;
+  font-size: 13px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: rgba(15, 31, 20, 0.55);
+}
+
+@media (max-width: 760px) {
+  .portal-timeline {
+    padding: 18px 14px;
+  }
+  .timeline-label {
+    font-size: 11px;
+    letter-spacing: 0.02em;
+  }
+  .timeline-track::before {
+    left: 14%;
+    right: 14%;
+  }
+  .portal-activity-list li {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+}

@@ -1,4 +1,5 @@
 const leadList = document.getElementById("leadList");
+const kanbanBoard = document.getElementById("kanbanBoard");
 const emptyState = document.getElementById("emptyState");
 const openCount = document.getElementById("openCount");
 const pipelineValue = document.getElementById("pipelineValue");
@@ -10,7 +11,17 @@ const logoutButton = document.getElementById("logoutButton");
 const statusFilter = document.getElementById("statusFilter");
 const priorityFilter = document.getElementById("priorityFilter");
 const sourceFilter = document.getElementById("sourceFilter");
+const showArchived = document.getElementById("showArchived");
+const archivedCount = document.getElementById("archivedCount");
 const pipelineTabs = document.getElementById("pipelineTabs");
+const viewListBtn = document.getElementById("viewList");
+const viewKanbanBtn = document.getElementById("viewKanban");
+const bulkToolbar = document.getElementById("bulkToolbar");
+const bulkCount = document.getElementById("bulkCount");
+const bulkStatus = document.getElementById("bulkStatus");
+const bulkPriority = document.getElementById("bulkPriority");
+const bulkArchive = document.getElementById("bulkArchive");
+const bulkClear = document.getElementById("bulkClear");
 const detailEmpty = document.getElementById("detailEmpty");
 const leadEditor = document.getElementById("leadEditor");
 const detailStage = document.getElementById("detailStage");
@@ -27,6 +38,7 @@ const detailFeatures = document.getElementById("detailFeatures");
 const customerNotes = document.getElementById("customerNotes");
 const activityList = document.getElementById("activityList");
 const saveMessage = document.getElementById("saveMessage");
+const archiveButton = document.getElementById("archiveButton");
 
 const STAGES = [
   ["all", "All"],
@@ -38,10 +50,14 @@ const STAGES = [
   ["lost", "Lost"]
 ];
 
+// Stages shown as Kanban columns. "all" is excluded — board is one column per
+// real stage. "lost" is included so dragging there is one motion.
+const KANBAN_STAGES = STAGES.slice(1);
+
 let leads = [];
 let activeLeadId = "";
-// Source catalog from /api/quotes (key -> { label, category }). Populated on load
-// so the filter dropdown stays in sync with server.js without hardcoded duplication.
+let viewMode = "list"; // "list" | "kanban"
+let selectedIds = new Set();
 let sources = {};
 
 const money = new Intl.NumberFormat("en-CA", {
@@ -88,6 +104,25 @@ function stageLabel(status) {
   return STAGES.find(([key]) => key === status)?.[1] || "New";
 }
 
+// Days since the lead's CRM record was last updated. Used to color-code aging
+// leads — fresh = green, getting stale = amber, ignored = red. Closed leads
+// (won/lost) and archived leads never show as aging.
+function daysSinceUpdate(lead) {
+  const lastUpdated = lead.crm?.lastUpdated || lead.createdAt;
+  if (!lastUpdated) return 0;
+  const ms = Date.now() - new Date(lastUpdated).getTime();
+  return Math.floor(ms / (1000 * 60 * 60 * 24));
+}
+
+function ageClass(lead) {
+  const status = lead.crm?.status || lead.status;
+  if (status === "won" || status === "lost" || lead.archived) return "";
+  const days = daysSinceUpdate(lead);
+  if (days >= 7) return "age-stale";
+  if (days >= 3) return "age-warm";
+  return "age-fresh";
+}
+
 function searchableLead(lead) {
   return [
     lead.contact?.name,
@@ -103,9 +138,7 @@ function searchableLead(lead) {
 }
 
 function renderSourceFilterOptions() {
-  // Preserve current selection across re-renders.
   const current = sourceFilter.value;
-  // Wipe everything except the "All sources" first option.
   while (sourceFilter.options.length > 1) sourceFilter.remove(1);
   Object.entries(sources).forEach(([key, meta]) => {
     const option = document.createElement("option");
@@ -174,6 +207,33 @@ function renderStats() {
   wonValue.textContent = moneyText(closedWonValue);
 }
 
+function leadCardMarkup(lead, { withCheckbox = false } = {}) {
+  const status = lead.crm?.status || lead.status || "new";
+  const sourceLabel = lead.sourceLabel || sources[lead.source]?.label || "General Lead";
+  const sourceCategory = lead.sourceCategory || sources[lead.source]?.category || "inquiry";
+  const ageBadge = ageClass(lead);
+  const archivedBadge = lead.archived ? `<span class="archive-pill">Archived</span>` : "";
+  const checkbox = withCheckbox
+    ? `<label class="card-check" onclick="event.stopPropagation()"><input type="checkbox" data-bulk-id="${escapeHtml(lead.id)}" ${selectedIds.has(lead.id) ? "checked" : ""}><span></span></label>`
+    : "";
+  return `
+    ${checkbox}
+    <span class="card-topline">
+      <span class="stage-pill">${escapeHtml(stageLabel(status))}</span>
+      <span class="priority-pill priority-${escapeHtml(lead.crm?.priority || "normal")}">${escapeHtml(lead.crm?.priority || "normal")}</span>
+      <span class="source-pill source-${escapeHtml(sourceCategory)}">${escapeHtml(sourceLabel)}</span>
+      ${archivedBadge}
+    </span>
+    <strong>${escapeHtml(lead.contact?.name)}</strong>
+    <span>${escapeHtml(lead.contact?.address) || "No address provided"}</span>
+    <span class="card-meta">
+      <span>${moneyText(lead.totals?.expectedTotal)}</span>
+      <span>${escapeHtml(formatDate(lead.crm?.nextFollowUp))}</span>
+    </span>
+    ${ageBadge ? `<span class="age-bar ${ageBadge}" aria-hidden="true"></span>` : ""}
+  `;
+}
+
 function renderLeadCards() {
   const shown = filteredLeads();
   leadList.innerHTML = "";
@@ -181,26 +241,45 @@ function renderLeadCards() {
 
   shown.forEach((lead) => {
     const status = lead.crm?.status || lead.status || "new";
-    const card = document.createElement("button");
-    card.type = "button";
-    card.className = `crm-card ${activeLeadId === lead.id ? "is-active" : ""}`;
+    const card = document.createElement("div");
+    const ageBadge = ageClass(lead);
+    card.className = `crm-card ${activeLeadId === lead.id ? "is-active" : ""} ${ageBadge} ${lead.archived ? "is-archived" : ""}`;
     card.dataset.leadId = lead.id;
-    const sourceLabel = lead.sourceLabel || sources[lead.source]?.label || "General Lead";
-    const sourceCategory = lead.sourceCategory || sources[lead.source]?.category || "inquiry";
-    card.innerHTML = `
-      <span class="card-topline">
-        <span class="stage-pill">${escapeHtml(stageLabel(status))}</span>
-        <span class="priority-pill priority-${escapeHtml(lead.crm?.priority || "normal")}">${escapeHtml(lead.crm?.priority || "normal")}</span>
-        <span class="source-pill source-${escapeHtml(sourceCategory)}">${escapeHtml(sourceLabel)}</span>
-      </span>
-      <strong>${escapeHtml(lead.contact?.name)}</strong>
-      <span>${escapeHtml(lead.contact?.address) || "No address provided"}</span>
-      <span class="card-meta">
-        <span>${moneyText(lead.totals?.expectedTotal)}</span>
-        <span>${escapeHtml(formatDate(lead.crm?.nextFollowUp))}</span>
-      </span>
-    `;
+    card.dataset.stage = status;
+    card.draggable = false;
+    card.innerHTML = leadCardMarkup(lead, { withCheckbox: true });
     leadList.append(card);
+  });
+}
+
+function renderKanban() {
+  const shown = filteredLeads();
+  kanbanBoard.innerHTML = "";
+  KANBAN_STAGES.forEach(([key, label]) => {
+    const column = document.createElement("div");
+    column.className = "kanban-column";
+    column.dataset.stage = key;
+    const stageLeads = shown.filter((lead) => (lead.crm?.status || lead.status) === key);
+    const stageValue = stageLeads.reduce((sum, l) => sum + Number(l.totals?.expectedTotal || 0), 0);
+    column.innerHTML = `
+      <header class="kanban-head">
+        <strong>${escapeHtml(label)}</strong>
+        <span>${stageLeads.length} · ${moneyText(stageValue)}</span>
+      </header>
+      <div class="kanban-cards" data-drop-stage="${escapeHtml(key)}"></div>
+    `;
+    const list = column.querySelector(".kanban-cards");
+    stageLeads.forEach((lead) => {
+      const card = document.createElement("div");
+      const ageBadge = ageClass(lead);
+      card.className = `crm-card kanban-card ${activeLeadId === lead.id ? "is-active" : ""} ${ageBadge}`;
+      card.dataset.leadId = lead.id;
+      card.dataset.stage = key;
+      card.draggable = true;
+      card.innerHTML = leadCardMarkup(lead);
+      list.append(card);
+    });
+    kanbanBoard.append(column);
   });
 }
 
@@ -212,11 +291,11 @@ function renderDetail() {
   if (!lead) return;
 
   const status = lead.crm?.status || lead.status || "new";
-  detailStage.textContent = stageLabel(status);
+  detailStage.textContent = stageLabel(status) + (lead.archived ? " · Archived" : "");
   detailName.textContent = text(lead.contact?.name);
   detailAddress.textContent = text(lead.contact?.address) || "No address provided";
   const sourceLabel = lead.sourceLabel || sources[lead.source]?.label || "General Lead";
-  detailSource.textContent = `Source: ${sourceLabel}`;
+  detailSource.textContent = `Source: ${sourceLabel} · ${daysSinceUpdate(lead)}d since update`;
   detailValue.textContent = moneyText(lead.totals?.expectedTotal);
   callLink.href = `tel:${text(lead.contact?.phone).replace(/[^\d+]/g, "")}`;
   emailLink.href = `mailto:${text(lead.contact?.email)}`;
@@ -229,6 +308,8 @@ function renderDetail() {
   leadEditor.elements.nextFollowUp.value = lead.crm?.nextFollowUp || "";
   leadEditor.elements.internalNotes.value = lead.crm?.internalNotes || "";
   leadEditor.elements.activityNote.value = "";
+
+  archiveButton.textContent = lead.archived ? "Restore from archive" : "Archive";
 
   const exportContact = lead.contactExport || {};
   const exportAddress = exportContact.address || {};
@@ -244,7 +325,8 @@ function renderDetail() {
   detailFeatures.innerHTML = "";
   (lead.features || []).forEach((feature) => {
     const item = document.createElement("li");
-    item.innerHTML = `<span>${escapeHtml(feature.label)}</span><strong>${moneyText(feature.price)}</strong>`;
+    const priceText = feature.quoteType === "custom" ? "Custom" : moneyText(feature.price);
+    item.innerHTML = `<span>${escapeHtml(feature.label)}</span><strong>${priceText}</strong>`;
     detailFeatures.append(item);
   });
 
@@ -286,35 +368,67 @@ function renderContactPreview(lead) {
   vcardLink.setAttribute("aria-disabled", String(!contact.ready));
 }
 
+function renderBulkToolbar() {
+  bulkToolbar.hidden = selectedIds.size === 0;
+  bulkCount.textContent = String(selectedIds.size);
+}
+
+function applyView() {
+  viewListBtn.classList.toggle("is-active", viewMode === "list");
+  viewKanbanBtn.classList.toggle("is-active", viewMode === "kanban");
+  leadList.hidden = viewMode !== "list";
+  kanbanBoard.hidden = viewMode !== "kanban";
+  bulkToolbar.classList.toggle("is-list-only", true);
+  // Bulk select only works in list view (kanban uses drag).
+  if (viewMode !== "list") selectedIds.clear();
+}
+
 function render() {
+  applyView();
   renderStats();
   renderTabs();
-  renderLeadCards();
+  if (viewMode === "list") renderLeadCards();
+  else renderKanban();
   renderDetail();
+  renderBulkToolbar();
 }
 
 async function loadLeads() {
   refreshLeads.disabled = true;
   try {
-    const response = await fetch("/api/quotes", { cache: "no-store" });
+    const include = showArchived.checked ? "archived" : "";
+    const url = `/api/quotes${include ? `?include=${include}` : ""}`;
+    const response = await fetch(url, { cache: "no-store" });
     const data = await response.json();
     leads = Array.isArray(data.leads) ? data.leads : [];
     if (data.sources && typeof data.sources === "object") {
       sources = data.sources;
       renderSourceFilterOptions();
     }
+    if (data.counts) archivedCount.textContent = data.counts.archived || 0;
     if (activeLeadId && !leads.some((lead) => lead.id === activeLeadId)) activeLeadId = "";
+    selectedIds = new Set([...selectedIds].filter((id) => leads.some((l) => l.id === id)));
     render();
   } finally {
     refreshLeads.disabled = false;
   }
 }
 
+async function patchLead(id, payload) {
+  const response = await fetch(`/api/quotes/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+  const data = await response.json();
+  if (!response.ok || !data.ok) throw new Error((data.errors || ["Unable to save."]).join(" "));
+  return data.lead;
+}
+
 async function saveLead(event) {
   event.preventDefault();
   const lead = leads.find((item) => item.id === activeLeadId);
   if (!lead) return;
-
   const submitButton = leadEditor.querySelector("button[type='submit']");
   submitButton.disabled = true;
   saveMessage.textContent = "Saving...";
@@ -340,14 +454,8 @@ async function saveLead(event) {
   };
 
   try {
-    const response = await fetch(`/api/quotes/${encodeURIComponent(activeLeadId)}`, {
-      method: "PATCH",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(payload)
-    });
-    const data = await response.json();
-    if (!response.ok || !data.ok) throw new Error((data.errors || ["Unable to save lead."]).join(" "));
-    leads = leads.map((item) => item.id === data.lead.id ? data.lead : item);
+    const updated = await patchLead(activeLeadId, payload);
+    leads = leads.map((item) => item.id === updated.id ? updated : item);
     saveMessage.textContent = "Saved";
     render();
   } catch (error) {
@@ -357,10 +465,32 @@ async function saveLead(event) {
   }
 }
 
+async function bulkUpdate(patch) {
+  if (!selectedIds.size) return;
+  const ids = Array.from(selectedIds);
+  bulkArchive.disabled = true;
+  try {
+    const response = await fetch("/api/quotes/bulk", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ids, patch })
+    });
+    const data = await response.json();
+    if (!response.ok || !data.ok) throw new Error((data.errors || ["Bulk update failed."]).join(" "));
+    selectedIds.clear();
+    await loadLeads();
+  } catch (error) {
+    saveMessage.textContent = error.message;
+  } finally {
+    bulkArchive.disabled = false;
+  }
+}
+
 leadSearch.addEventListener("input", render);
 statusFilter.addEventListener("change", render);
 priorityFilter.addEventListener("change", render);
 sourceFilter.addEventListener("change", render);
+showArchived.addEventListener("change", loadLeads);
 refreshLeads.addEventListener("click", loadLeads);
 leadEditor.addEventListener("submit", saveLead);
 
@@ -376,11 +506,99 @@ pipelineTabs.addEventListener("click", (event) => {
   render();
 });
 
+viewListBtn.addEventListener("click", () => { viewMode = "list"; render(); });
+viewKanbanBtn.addEventListener("click", () => { viewMode = "kanban"; render(); });
+
 leadList.addEventListener("click", (event) => {
+  const checkbox = event.target.closest("input[data-bulk-id]");
+  if (checkbox) {
+    if (checkbox.checked) selectedIds.add(checkbox.dataset.bulkId);
+    else selectedIds.delete(checkbox.dataset.bulkId);
+    renderBulkToolbar();
+    return;
+  }
   const card = event.target.closest("[data-lead-id]");
   if (!card) return;
   activeLeadId = card.dataset.leadId;
   render();
+});
+
+kanbanBoard.addEventListener("click", (event) => {
+  const card = event.target.closest("[data-lead-id]");
+  if (!card) return;
+  activeLeadId = card.dataset.leadId;
+  render();
+});
+
+// Drag-and-drop between Kanban columns. On drop, PATCH the lead's status which
+// fires the customer notification automatically (server.js handles the
+// transition detection).
+kanbanBoard.addEventListener("dragstart", (event) => {
+  const card = event.target.closest(".kanban-card");
+  if (!card) return;
+  event.dataTransfer.setData("text/plain", card.dataset.leadId);
+  event.dataTransfer.effectAllowed = "move";
+  card.classList.add("is-dragging");
+});
+kanbanBoard.addEventListener("dragend", (event) => {
+  const card = event.target.closest(".kanban-card");
+  if (card) card.classList.remove("is-dragging");
+});
+kanbanBoard.addEventListener("dragover", (event) => {
+  const dropZone = event.target.closest("[data-drop-stage]");
+  if (!dropZone) return;
+  event.preventDefault();
+  dropZone.classList.add("is-drop-target");
+});
+kanbanBoard.addEventListener("dragleave", (event) => {
+  const dropZone = event.target.closest("[data-drop-stage]");
+  if (dropZone) dropZone.classList.remove("is-drop-target");
+});
+kanbanBoard.addEventListener("drop", async (event) => {
+  const dropZone = event.target.closest("[data-drop-stage]");
+  if (!dropZone) return;
+  event.preventDefault();
+  dropZone.classList.remove("is-drop-target");
+  const leadId = event.dataTransfer.getData("text/plain");
+  const newStage = dropZone.dataset.dropStage;
+  const lead = leads.find((l) => l.id === leadId);
+  if (!lead || !newStage) return;
+  const currentStage = lead.crm?.status || lead.status;
+  if (currentStage === newStage) return;
+  try {
+    const updated = await patchLead(leadId, { status: newStage });
+    leads = leads.map((l) => l.id === updated.id ? updated : l);
+    render();
+  } catch (error) {
+    saveMessage.textContent = error.message;
+  }
+});
+
+bulkStatus.addEventListener("change", () => {
+  if (!bulkStatus.value) return;
+  bulkUpdate({ status: bulkStatus.value }).then(() => { bulkStatus.value = ""; });
+});
+bulkPriority.addEventListener("change", () => {
+  if (!bulkPriority.value) return;
+  bulkUpdate({ priority: bulkPriority.value }).then(() => { bulkPriority.value = ""; });
+});
+bulkArchive.addEventListener("click", () => bulkUpdate({ archived: true }));
+bulkClear.addEventListener("click", () => { selectedIds.clear(); renderBulkToolbar(); render(); });
+
+archiveButton.addEventListener("click", async () => {
+  const lead = leads.find((item) => item.id === activeLeadId);
+  if (!lead) return;
+  archiveButton.disabled = true;
+  try {
+    const updated = await patchLead(activeLeadId, { archived: !lead.archived });
+    leads = leads.map((item) => item.id === updated.id ? updated : item);
+    saveMessage.textContent = updated.archived ? "Archived" : "Restored";
+    render();
+  } catch (error) {
+    saveMessage.textContent = error.message;
+  } finally {
+    archiveButton.disabled = false;
+  }
 });
 
 vcardLink.addEventListener("click", (event) => {

@@ -1072,3 +1072,185 @@
     transition: none;
   }
 }
+
+/* ============= Phase 1 polish: view toggle, kanban, aging, archive, bulk ============= */
+
+.crm-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.crm-view-toggle {
+  display: inline-flex;
+  border: 1px solid rgba(27, 77, 46, 0.18);
+  border-radius: 8px;
+  overflow: hidden;
+  background: #fff;
+}
+.crm-view-toggle button {
+  padding: 8px 16px;
+  border: none;
+  background: transparent;
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: rgba(15, 31, 20, 0.55);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.crm-view-toggle button:hover {
+  color: #1B4D2E;
+}
+.crm-view-toggle button.is-active {
+  background: #1B4D2E;
+  color: #fff;
+}
+
+/* Aging signals — thin bottom bar on cards. Fresh = green, stale = amber, ignored = red. */
+.crm-card { position: relative; overflow: hidden; }
+.age-bar {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 3px;
+  width: 100%;
+}
+.age-bar.age-fresh { background: linear-gradient(90deg, #4A8C5C, #2D6A42); }
+.age-bar.age-warm  { background: linear-gradient(90deg, #F59B4A, #E07B24); }
+.age-bar.age-stale { background: linear-gradient(90deg, #d04848, #a92e2e); }
+.crm-card.age-stale { border-color: rgba(208, 72, 72, 0.30); }
+.crm-card.age-warm  { border-color: rgba(224, 123, 36, 0.25); }
+.crm-card.is-archived { opacity: 0.62; }
+
+/* Bulk-select checkbox on cards */
+.card-check {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 2;
+}
+.card-check input { width: 18px; height: 18px; cursor: pointer; accent-color: #1B4D2E; }
+
+/* Source pill + archive pill */
+.archive-pill {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(15, 31, 20, 0.08);
+  color: rgba(15, 31, 20, 0.65);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.archive-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  cursor: pointer;
+}
+.archive-toggle input { accent-color: #1B4D2E; }
+
+/* Bulk action toolbar */
+.bulk-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 12px 16px;
+  margin-bottom: 12px;
+  background: linear-gradient(135deg, #1B4D2E 0%, #2D6A42 100%);
+  border-radius: 10px;
+  color: #fff;
+  box-shadow: 0 6px 20px rgba(15, 31, 20, 0.15);
+}
+.bulk-toolbar select,
+.bulk-toolbar button {
+  padding: 7px 12px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.30);
+  background: rgba(255, 255, 255, 0.10);
+  color: #fff;
+  font-family: inherit;
+  font-size: 14px;
+  cursor: pointer;
+}
+.bulk-toolbar select { background: rgba(255, 255, 255, 0.18); }
+.bulk-toolbar select option { color: #1B4D2E; background: #fff; }
+.bulk-toolbar button:hover {
+  background: rgba(255, 255, 255, 0.22);
+}
+.bulk-toolbar strong { font-size: 18px; }
+
+/* Kanban board */
+.kanban-board {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(220px, 1fr));
+  gap: 12px;
+  overflow-x: auto;
+  padding-bottom: 12px;
+}
+.kanban-column {
+  background: rgba(27, 77, 46, 0.04);
+  border: 1px solid rgba(27, 77, 46, 0.10);
+  border-radius: 10px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  min-height: 320px;
+}
+.kanban-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding-bottom: 10px;
+  margin-bottom: 10px;
+  border-bottom: 1px solid rgba(27, 77, 46, 0.10);
+}
+.kanban-head strong {
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 16px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #1B4D2E;
+}
+.kanban-head span {
+  font-size: 12px;
+  color: rgba(15, 31, 20, 0.55);
+}
+.kanban-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex: 1;
+  min-height: 60px;
+}
+.kanban-cards.is-drop-target {
+  outline: 2px dashed #E07B24;
+  outline-offset: 4px;
+  background: rgba(224, 123, 36, 0.06);
+  border-radius: 6px;
+}
+.kanban-card {
+  cursor: grab;
+  user-select: none;
+}
+.kanban-card.is-dragging {
+  opacity: 0.5;
+  transform: rotate(1.5deg);
+}
+
+@media (max-width: 1100px) {
+  .kanban-board { grid-template-columns: repeat(3, minmax(220px, 1fr)); }
+}
+@media (max-width: 720px) {
+  .kanban-board { grid-template-columns: 1fr; }
+}
