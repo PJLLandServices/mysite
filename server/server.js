@@ -702,8 +702,31 @@ function parseContactAddress(lead) {
   };
 }
 
+// Build the absolute base URL the request was made against. Used to construct
+// portal links, booking URLs, etc. that get sent to customers via SMS/email.
+//
+// Honors X-Forwarded-Proto so that when we're sitting behind Render's HTTPS
+// terminator (or a Cloudflare proxy in front of it), we generate https://
+// links directly — no http→https redirect chain that can inject a double
+// slash into the path on the way through.
 function baseUrlFromReq(req) {
-  return `http://${req.headers.host || `${HOST}:${PORT}`}`;
+  const proto = String(req.headers["x-forwarded-proto"] || "").split(",")[0].trim() || "http";
+  const host = req.headers.host || `${HOST}:${PORT}`;
+  return `${proto}://${host}`;
+}
+
+// Build a URL by joining a path onto a base, using the URL constructor so
+// edge cases (trailing slash on base, leading slash on path, query strings)
+// are handled correctly. Returns a string. Used for every customer-facing
+// link so we never accidentally produce ".com//book.html".
+function joinUrl(baseUrl, relativePath, searchParams = null) {
+  const url = new URL(relativePath, baseUrl);
+  if (searchParams && typeof searchParams === "object") {
+    for (const [key, value] of Object.entries(searchParams)) {
+      if (value != null) url.searchParams.set(key, String(value));
+    }
+  }
+  return url.toString();
 }
 
 function contactRecordForLead(lead, req) {
@@ -717,7 +740,7 @@ function contactRecordForLead(lead, req) {
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) errors.push("Email address is missing or invalid.");
 
   const portalPath = `/portal/${lead.portal?.token || portalTokenForId(lead.id)}`;
-  const portalUrl = `${baseUrlFromReq(req)}${portalPath}`;
+  const portalUrl = joinUrl(baseUrlFromReq(req), portalPath);
 
   return {
     ready: errors.length === 0,
@@ -1342,7 +1365,7 @@ async function handleApi(req, res, pathname) {
         ok: true,
         token: session.token,
         expiresAt: new Date(session.expiresAt).toISOString(),
-        bookingUrl: `${baseUrl}/book.html?session=${encodeURIComponent(session.token)}`
+        bookingUrl: joinUrl(baseUrl, "/book.html", { session: session.token })
       });
     } catch (error) {
       return sendJson(res, 400, { ok: false, errors: [error.message || "Couldn't create session."] });
@@ -1394,7 +1417,7 @@ async function handleApi(req, res, pathname) {
       // will work. PUBLIC_BASE_URL can be set to the public domain pre-
       // DNS-cutover and silently break links — req.host is always honest.
       const baseUrl = baseUrlFromReq(req);
-      const bookingUrl = `${baseUrl}/book.html?session=${encodeURIComponent(session.token)}`;
+      const bookingUrl = joinUrl(baseUrl, "/book.html", { session: session.token });
 
       const hints = session.payload.customerHints || {};
       const firstName = hints.firstName || "";
@@ -1857,30 +1880,47 @@ async function serveStatic(req, res, pathname) {
 
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host || `${HOST}:${PORT}`}`);
+  // Normalize the pathname before route matching. If the URL came in with
+  // consecutive slashes ("//book.html") — which can happen when a proxy
+  // redirect chain mangles a relative path, or when a manual paste
+  // duplicates a "/", or when a Cloudflare Worker rewrites — collapse them
+  // to a single slash so the request still resolves to the right handler.
+  // For requests that originally had multiple slashes, send a 301 to the
+  // clean URL so any cached copies point at the canonical path going forward.
+  let pathname = url.pathname;
+  if (/\/{2,}/.test(pathname)) {
+    pathname = pathname.replace(/\/{2,}/g, "/");
+    const cleanUrl = pathname + (url.search || "");
+    res.writeHead(301, { location: cleanUrl, "cache-control": "no-store" });
+    res.end();
+    return;
+  }
   try {
     // CORS: applied early so preflights and cross-origin POSTs to /api/quotes
     // (from diagnose.html on GitHub Pages today, same-origin after DNS cutover) work.
-    applyCorsHeaders(req, res, url.pathname);
-    if (req.method === "OPTIONS" && isPublicApiPath(url.pathname)) {
+    // Uses the normalized `pathname` (computed above) so that CORS gates also
+    // honor the slash-collapse done before routing.
+    applyCorsHeaders(req, res, pathname);
+    if (req.method === "OPTIONS" && isPublicApiPath(pathname)) {
       res.writeHead(204);
       res.end();
       return;
     }
 
-    const authHandled = await handleAuth(req, res, url.pathname);
+    const authHandled = await handleAuth(req, res, pathname);
     if (authHandled !== false) return;
 
-    if (needsAuth(req.method, url.pathname) && !(await isAuthenticated(req))) {
-      if (url.pathname.startsWith("/api/")) {
+    if (needsAuth(req.method, pathname) && !(await isAuthenticated(req))) {
+      if (pathname.startsWith("/api/")) {
         return sendJson(res, 401, { ok: false, errors: ["CRM login required."] });
       }
-      return redirect(res, `/login?next=${encodeURIComponent(url.pathname)}`);
+      return redirect(res, `/login?next=${encodeURIComponent(pathname)}`);
     }
 
-    if (url.pathname.startsWith("/api/")) {
-      await handleApi(req, res, url.pathname);
+    if (pathname.startsWith("/api/")) {
+      await handleApi(req, res, pathname);
     } else {
-      await serveStatic(req, res, url.pathname);
+      await serveStatic(req, res, pathname);
     }
   } catch (error) {
     sendJson(res, 500, { ok: false, errors: [error.message || "Server error."] });
