@@ -192,7 +192,7 @@
             <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l8.57-8.57a4 4 0 015.66 5.66l-8.58 8.57a2 2 0 01-2.83-2.83l8.49-8.48"/></svg>
           </button>
           <input type="file" data-pjl-photo-input accept="image/*" capture="environment" multiple style="display:none">
-          <textarea data-pjl-input rows="1" placeholder="Tell us what's going on with your sprinklers..."></textarea>
+          <textarea data-pjl-input class="pjl-chat-textarea" rows="1" placeholder="Tell us what's going on with your sprinklers..."></textarea>
           <button class="pjl-chat-send-btn" data-action="send" type="button" aria-label="Send message">
             <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M2 21l21-9L2 3v7l15 2-15 2z"/></svg>
           </button>
