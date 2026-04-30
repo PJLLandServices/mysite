@@ -76,8 +76,17 @@ const BOOKABLE_SERVICES = {
     category: "seasonal", family: "fall_closing"
   },
   fall_close_15z: {
-    label: "Fall winterization (7-15 zones)",
+    // Key kept stable so existing test bookings/links still resolve;
+    // label updated to reflect the narrower 7-12 range now that the new
+    // 13+ tier picks up the upper end.
+    label: "Fall winterization (7-12 zones)",
     minutes: 45, requiresAddress: true, bookable: true,
+    category: "seasonal", family: "fall_closing"
+  },
+  fall_close_large: {
+    label: "Fall winterization (13+ zones)",
+    minutes: 75, displayMinutes: "60-90 min",
+    requiresAddress: true, bookable: true,
     category: "seasonal", family: "fall_closing"
   },
   fall_close_commercial: {
