@@ -177,6 +177,44 @@
 }
 .book-other-link a:hover { color: var(--green); border-bottom-color: var(--green); }
 
+/* Zone-confirmation step */
+#bookZones {
+  font-size: 16px;
+  background: #fff;
+}
+.zones-accuracy-note {
+  margin: 16px 0 0;
+  padding: 14px 16px;
+  background: rgba(74, 140, 92, 0.08);
+  border-left: 3px solid var(--green-light);
+  border-radius: 6px;
+  font-size: 14px;
+  color: rgba(15, 31, 20, 0.75);
+  line-height: 1.55;
+}
+.zones-accuracy-note strong { color: var(--green); }
+
+/* When-step arrival disclosure */
+.when-disclosure {
+  margin: 0 0 18px;
+  padding: 16px 18px;
+  background: linear-gradient(135deg, rgba(224, 123, 36, 0.08) 0%, rgba(224, 123, 36, 0.02) 100%);
+  border: 1px solid rgba(224, 123, 36, 0.25);
+  border-left: 3px solid var(--amber);
+  border-radius: 8px;
+  font-size: 14px;
+  line-height: 1.6;
+  color: rgba(15, 31, 20, 0.75);
+}
+.when-disclosure strong { color: var(--green); display: inline; margin-right: 4px; }
+
+/* Hide the conditional zones step in the progress strip when not in use */
+.book-progress-track.no-zones .book-progress-step.is-conditional { display: none; }
+.book-progress-track.no-zones { grid-template-columns: repeat(5, 1fr); }
+.book-progress-track.no-zones::before { left: 8%; right: 8%; }
+.book-progress-track:not(.no-zones) { grid-template-columns: repeat(6, 1fr); }
+.book-progress-track:not(.no-zones)::before { left: 6.5%; right: 6.5%; }
+
 /* Address input */
 .book-input-wrap { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
 .book-input-wrap label {
@@ -438,10 +476,11 @@
   <div class="container">
     <ol class="book-progress-track" id="bookProgress">
       <li class="book-progress-step is-current" data-step="service"><span class="dot">1</span>Service</li>
-      <li class="book-progress-step" data-step="address"><span class="dot">2</span>Address</li>
-      <li class="book-progress-step" data-step="when"><span class="dot">3</span>Pick a time</li>
-      <li class="book-progress-step" data-step="contact"><span class="dot">4</span>Your details</li>
-      <li class="book-progress-step" data-step="confirm"><span class="dot">5</span>Confirm</li>
+      <li class="book-progress-step is-conditional" data-step="zones"><span class="dot">2</span>Zones</li>
+      <li class="book-progress-step" data-step="address"><span class="dot">3</span>Address</li>
+      <li class="book-progress-step" data-step="when"><span class="dot">4</span>Pick a time</li>
+      <li class="book-progress-step" data-step="contact"><span class="dot">5</span>Your details</li>
+      <li class="book-progress-step" data-step="confirm"><span class="dot">6</span>Confirm</li>
     </ol>
   </div>
 </div>
@@ -459,6 +498,26 @@
       </p>
     </article>
 
+    <!-- STEP 1.5: Zones (seasonal services only) -->
+    <article class="book-step" data-step="zones" hidden>
+      <h2>How many zones does your system have?</h2>
+      <p class="lead">A zone is one section of your sprinkler system that turns on at a time. Most homes have between 4 and 12 — older systems can have more. If you're not certain, that's okay.</p>
+      <div class="book-input-wrap">
+        <label for="bookZones">Number of zones</label>
+        <select id="bookZones" required>
+          <option value="" disabled selected>Choose number of zones…</option>
+          <option value="unsure">I'm not sure</option>
+        </select>
+      </div>
+      <p class="zones-accuracy-note">
+        <strong>Accuracy helps.</strong> Knowing your zone count lets us schedule the right amount of time for your property and keeps every customer's appointment running smoothly.
+      </p>
+      <div class="book-actions">
+        <button type="button" class="book-back-btn" data-back-to="service">← Change service</button>
+        <button type="button" class="btn btn-green" id="zonesNextBtn">Continue →</button>
+      </div>
+    </article>
+
     <!-- STEP 2: Address -->
     <article class="book-step" data-step="address" hidden>
       <h2>Where's the property?</h2>
@@ -468,7 +527,7 @@
         <input type="text" id="bookAddress" class="js-address-autocomplete" placeholder="Start typing your address…" autocomplete="off">
       </div>
       <div class="book-actions">
-        <button type="button" class="book-back-btn" data-back-to="service">← Change service</button>
+        <button type="button" class="book-back-btn" id="addressBackBtn" data-back-to="service">← Change service</button>
         <button type="button" class="btn btn-green" id="addressNextBtn">See available times →</button>
       </div>
     </article>
@@ -477,6 +536,10 @@
     <article class="book-step" data-step="when" hidden>
       <h2>Pick a day, then a time.</h2>
       <p class="lead" id="whenLead">Showing times available for your service at your address.</p>
+      <aside class="when-disclosure" role="note" aria-label="Arrival window note">
+        <strong>About arrival times.</strong>
+        We'll do our best to arrive within an accurate time frame. Please allow your technician a <strong>2-hour grace period</strong> for jobs that may run later than expected. Our technicians keep customers updated throughout the day — including when they're being dispatched to your appointment.
+      </aside>
       <div class="book-error" id="whenError" hidden></div>
 
       <div id="dayLoading" class="lead">Looking up real-time availability… <span class="shimmer"></span></div>

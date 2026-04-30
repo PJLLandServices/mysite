@@ -1189,6 +1189,18 @@ async function handleApi(req, res, pathname) {
       const result = validateLead(intakePayload);
       if (!result.ok) return sendJson(res, 422, { ok: false, errors: result.errors });
 
+      // Customer-confirmed zone count (1-24 or "unsure"), only collected for
+      // seasonal flows. Stored on the booking so Patrick can see it in the
+      // CRM and so future schedule logic can use it for capacity planning.
+      const rawZones = normalizeString(payload.zoneCount, 12);
+      let zoneCount = null;
+      if (rawZones === "unsure") {
+        zoneCount = "unsure";
+      } else if (/^\d+$/.test(rawZones)) {
+        const n = Number(rawZones);
+        if (n >= 1 && n <= 24) zoneCount = n;
+      }
+
       // Attach the booking to the lead.
       result.lead.booking = {
         start: startDate.toISOString(),
@@ -1196,6 +1208,7 @@ async function handleApi(req, res, pathname) {
         durationMinutes: service.minutes,
         serviceKey,
         serviceLabel: service.label,
+        zoneCount,
         coords: { lat: customerCoords.lat, lng: customerCoords.lng, formattedAddress: customerCoords.formattedAddress }
       };
       // Status starts at site_visit for consults, won for committed direct bookings.

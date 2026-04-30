@@ -21,12 +21,23 @@
     serviceMeta: null,
     address: "",
     formattedAddress: "",
+    zoneCount: null,    // number 1-24 OR "unsure" (kept for booking notes)
     selectedDate: null, // YYYY-MM-DD
     selectedSlot: null, // { start, end, timeLabel, ... }
     days: [],           // grouped slots from /api/booking/availability
     services: {},       // catalog from /api/booking/services
     familyFilter: null  // when set, only services with this `family` are shown
   };
+
+  // Families where confirming the customer's zone count adds value to the
+  // booking. Repair/Hydrawise/Site-visit don't gate on zone count, so we
+  // skip the zones step for those flows.
+  const ZONE_REQUIRING_FAMILIES = new Set(["spring_opening", "fall_closing"]);
+
+  function serviceNeedsZones() {
+    if (!state.serviceMeta) return false;
+    return ZONE_REQUIRING_FAMILIES.has(state.serviceMeta.family);
+  }
 
   // ===== DOM =====
   const steps = Array.from(document.querySelectorAll(".book-step"));
@@ -36,6 +47,10 @@
   const serviceLead = document.getElementById("serviceLead");
   const bookOtherWrap = document.getElementById("bookOtherWrap");
   const bookOtherLink = document.getElementById("bookOther");
+  const bookZones = document.getElementById("bookZones");
+  const zonesNextBtn = document.getElementById("zonesNextBtn");
+  const bookProgress = document.getElementById("bookProgress");
+  const addressBackBtn = document.getElementById("addressBackBtn");
   const addressInput = document.getElementById("bookAddress");
   const addressNextBtn = document.getElementById("addressNextBtn");
   const dayLoading = document.getElementById("dayLoading");
@@ -73,14 +88,38 @@
     state.step = name;
     steps.forEach((s) => { s.hidden = s.dataset.step !== name; });
 
-    // Update progress strip — current = name, completed = anything before it.
-    const order = ["service", "address", "when", "contact", "confirm"];
+    // The progress strip toggles between 5-dot (no zones) and 6-dot (with
+    // zones) based on whether the current service needs the zones step.
+    // The .no-zones class hides the conditional dot via CSS.
+    const showZones = serviceNeedsZones();
+    bookProgress.classList.toggle("no-zones", !showZones);
+
+    // Active-step list depends on whether zones is in the flow. Indices in
+    // this array drive the "completed/current/pending" classes.
+    const order = showZones
+      ? ["service", "zones", "address", "when", "contact", "confirm"]
+      : ["service", "address", "when", "contact", "confirm"];
     const idx = order.indexOf(name);
-    progressSteps.forEach((p, i) => {
+    progressSteps.forEach((p) => {
       p.classList.remove("is-current", "is-complete");
-      if (i < idx) p.classList.add("is-complete");
-      else if (i === idx) p.classList.add("is-current");
+      const stepIdx = order.indexOf(p.dataset.step);
+      if (stepIdx === -1) return; // step not in current flow (e.g. zones when hidden)
+      if (stepIdx < idx) p.classList.add("is-complete");
+      else if (stepIdx === idx) p.classList.add("is-current");
     });
+
+    // Re-target the address-step's back button: when the zones step is in
+    // play, "back" should return to zones; otherwise to service. Same button,
+    // smarter routing.
+    if (addressBackBtn) {
+      if (showZones) {
+        addressBackBtn.dataset.backTo = "zones";
+        addressBackBtn.textContent = "← Change zones";
+      } else {
+        addressBackBtn.dataset.backTo = "service";
+        addressBackBtn.textContent = "← Change service";
+      }
+    }
 
     // Scroll to the active step on mobile so the user always sees it.
     const active = steps.find((s) => s.dataset.step === name);
@@ -194,7 +233,34 @@
     state.serviceMeta = state.services[state.serviceKey];
     serviceGrid.querySelectorAll(".service-card").forEach((c) => c.classList.remove("is-active"));
     card.classList.add("is-active");
-    setTimeout(() => showStep("address"), 250);
+    // Seasonal services (spring/fall) route through the zone-confirm step
+    // first; everything else jumps straight to address.
+    const nextStep = serviceNeedsZones() ? "zones" : "address";
+    setTimeout(() => showStep(nextStep), 250);
+  });
+
+  // Populate the zone dropdown once at boot. 1..24 zones plus the existing
+  // "unsure" sentinel that was hard-coded into book.html.
+  (function buildZoneOptions() {
+    if (!bookZones) return;
+    // Insert numeric options BEFORE the "I'm not sure" entry so the
+    // dropdown reads naturally: choose..., 1..24, then "I'm not sure".
+    const unsureOption = bookZones.querySelector('option[value="unsure"]');
+    for (let n = 1; n <= 24; n++) {
+      const opt = document.createElement("option");
+      opt.value = String(n);
+      opt.textContent = n === 1 ? "1 zone" : `${n} zones`;
+      bookZones.insertBefore(opt, unsureOption);
+    }
+  })();
+
+  zonesNextBtn.addEventListener("click", () => {
+    if (!bookZones.value) {
+      bookZones.focus();
+      return;
+    }
+    state.zoneCount = bookZones.value;
+    showStep("address");
   });
 
   // ===== Address step =====
@@ -311,12 +377,23 @@
 
   function renderContactSummary() {
     if (!state.selectedSlot) return;
+    const zoneRow = state.zoneCount
+      ? `<dt>Zones</dt><dd>${escapeHtml(zoneCountLabel(state.zoneCount))}</dd>`
+      : "";
+    const durationLabel = state.serviceMeta.displayMinutes || `${state.serviceMeta.minutes} min`;
     contactSummary.innerHTML = `
       <dt>Service</dt><dd>${escapeHtml(state.serviceMeta.label)}</dd>
+      ${zoneRow}
       <dt>Day</dt><dd>${escapeHtml(state.selectedSlot.dayLabel)}</dd>
-      <dt>Time</dt><dd>${escapeHtml(state.selectedSlot.timeLabel)} (${state.serviceMeta.minutes} min)</dd>
+      <dt>Time</dt><dd>${escapeHtml(state.selectedSlot.timeLabel)} (${escapeHtml(durationLabel)})</dd>
       <dt>Address</dt><dd>${escapeHtml(state.formattedAddress)}</dd>
     `;
+  }
+
+  function zoneCountLabel(value) {
+    if (!value) return "";
+    if (value === "unsure") return "Customer unsure";
+    return value === "1" ? "1 zone" : `${value} zones`;
   }
 
   // ===== Confirm + reserve =====
@@ -337,6 +414,15 @@
     const originalText = confirmBtn.textContent;
     confirmBtn.textContent = "Reserving your slot…";
 
+    // Prepend the customer-confirmed zone count to whatever they typed in
+    // the notes box so Patrick sees it at a glance in the CRM. Stays empty
+    // when the flow didn't ask for zones (repair / hydrawise / site visit).
+    const userNotes = bookNotes.value.trim();
+    const zoneNote = state.zoneCount
+      ? `Zone count (customer-confirmed): ${zoneCountLabel(state.zoneCount)}.`
+      : "";
+    const combinedNotes = [zoneNote, userNotes].filter(Boolean).join("\n");
+
     try {
       const payload = {
         serviceKey: state.serviceKey,
@@ -348,8 +434,9 @@
           email: bookEmail.value.trim(),
           phone: bookPhone.value.trim(),
           address: state.formattedAddress || state.address,
-          notes: bookNotes.value.trim()
+          notes: combinedNotes
         },
+        zoneCount: state.zoneCount || null,
         pageUrl: window.location.href,
         userAgent: navigator.userAgent
       };
