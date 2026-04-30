@@ -50,6 +50,9 @@ const detailWorkOrderService = document.getElementById("detailWorkOrderService")
 const detailWorkOrderZones = document.getElementById("detailWorkOrderZones");
 const detailWorkOrderPrice = document.getElementById("detailWorkOrderPrice");
 const detailWorkOrderNote = document.getElementById("detailWorkOrderNote");
+const detailWorkOrderDiagnosis = document.getElementById("detailWorkOrderDiagnosis");
+const detailWorkOrderDiagnosisSummary = document.getElementById("detailWorkOrderDiagnosisSummary");
+const detailWorkOrderDiagnosisText = document.getElementById("detailWorkOrderDiagnosisText");
 const customerNotes = document.getElementById("customerNotes");
 const activityList = document.getElementById("activityList");
 const saveMessage = document.getElementById("saveMessage");
@@ -394,6 +397,19 @@ function renderWorkOrderDetail(lead) {
     detailWorkOrderNote.hidden = false;
   } else {
     detailWorkOrderNote.hidden = true;
+  }
+
+  // Diagnosis block — surfaces AI-chat handoff data for Patrick. Hidden when
+  // the booking came in cold (no pre-booking session attached).
+  const diagnosis = wo.diagnosis;
+  if (diagnosis && (diagnosis.summary || diagnosis.text)) {
+    detailWorkOrderDiagnosisSummary.textContent = diagnosis.summary || "";
+    detailWorkOrderDiagnosisSummary.hidden = !diagnosis.summary;
+    detailWorkOrderDiagnosisText.textContent = diagnosis.text || "";
+    detailWorkOrderDiagnosisText.hidden = !diagnosis.text;
+    detailWorkOrderDiagnosis.hidden = false;
+  } else {
+    detailWorkOrderDiagnosis.hidden = true;
   }
 }
 

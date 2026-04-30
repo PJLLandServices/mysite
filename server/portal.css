@@ -417,6 +417,60 @@ h1 {
   color: rgba(15, 31, 20, 0.75);
   line-height: 1.55;
 }
+.workorder-diagnosis {
+  margin-top: 16px;
+  padding: 14px 16px;
+  background: #fff;
+  border: 1px solid rgba(27, 77, 46, 0.18);
+  border-left: 3px solid var(--green-mid, #2D6A42);
+  border-radius: 8px;
+}
+.workorder-diagnosis header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+.diagnosis-eyebrow {
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 12px;
+  letter-spacing: 0.10em;
+  text-transform: uppercase;
+  color: #1B4D2E;
+  font-weight: 700;
+}
+.diagnosis-source {
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  color: rgba(15, 31, 20, 0.50);
+  font-style: italic;
+}
+.diagnosis-summary {
+  margin: 0 0 8px;
+  font-weight: 600;
+  font-size: 15px;
+  color: #1B4D2E;
+  line-height: 1.4;
+}
+.diagnosis-detail {
+  margin: 0;
+  font-size: 13px;
+  color: rgba(15, 31, 20, 0.75);
+  line-height: 1.55;
+  white-space: normal;
+}
+.diagnosis-footnote {
+  margin: 10px 0 0;
+  padding-top: 10px;
+  border-top: 1px dashed rgba(27, 77, 46, 0.14);
+  font-size: 12px;
+  color: rgba(15, 31, 20, 0.60);
+  line-height: 1.5;
+  font-style: italic;
+}
+
 .workorder-doc {
   margin-top: 16px;
   padding: 14px 16px;

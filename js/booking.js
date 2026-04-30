@@ -26,7 +26,9 @@
     selectedSlot: null, // { start, end, timeLabel, ... }
     days: [],           // grouped slots from /api/booking/availability
     services: {},       // catalog from /api/booking/services
-    familyFilter: null  // when set, only services with this `family` are shown
+    familyFilter: null, // when set, only services with this `family` are shown
+    sessionToken: null, // pre-booking session (AI handoff) — passed back on reserve
+    sessionPayload: null // diagnosis + customer hints loaded from the session
   };
 
   // Families where confirming the customer's zone count adds value to the
@@ -438,6 +440,7 @@
           notes: combinedNotes
         },
         zoneCount: state.zoneCount || null,
+        sessionToken: state.sessionToken || null,
         pageUrl: window.location.href,
         userAgent: navigator.userAgent
       };
@@ -483,22 +486,67 @@
     showStep("service");
   });
 
+  // Apply hints from a pre-booking session (AI chat handoff). Pre-fills
+  // contact fields, zone count, and selects the suggested service when
+  // possible. Anything missing falls back to manual entry.
+  function applySessionPrefill(session) {
+    if (!session || !session.payload) return null;
+    state.sessionToken = session.token;
+    state.sessionPayload = session.payload;
+    const hints = session.payload.customerHints || {};
+
+    if (hints.firstName && bookFirst) bookFirst.value = hints.firstName;
+    if (hints.lastName  && bookLast)  bookLast.value  = hints.lastName;
+    if (hints.email     && bookEmail) bookEmail.value = hints.email;
+    if (hints.phone     && bookPhone) bookPhone.value = hints.phone;
+    if (hints.notes     && bookNotes) bookNotes.value = hints.notes;
+    if (hints.address) {
+      state.address = hints.address;
+      state.formattedAddress = hints.address;
+      if (addressInput) addressInput.value = hints.address;
+    }
+
+    // Zone count — set on state and pre-select the dropdown so the
+    // customer can confirm or change rather than re-entering blind.
+    if (hints.zoneCount === "unsure") {
+      state.zoneCount = "unsure";
+      if (bookZones) bookZones.value = "unsure";
+    } else if (typeof hints.zoneCount === "number" && hints.zoneCount >= 1 && hints.zoneCount <= 24) {
+      state.zoneCount = String(hints.zoneCount);
+      if (bookZones) bookZones.value = String(hints.zoneCount);
+    }
+
+    return session.payload.suggestedService || null;
+  }
+
   // ===== Bootstrap: load service catalog =====
   async function init() {
     try {
+      const params = new URLSearchParams(window.location.search);
+      const sessionToken = params.get("session");
+
+      // If a session token is in the URL, pull it down BEFORE fetching the
+      // service catalog — this lets us prefill and pick the suggested
+      // service in one pass.
+      let suggestedService = null;
+      if (sessionToken) {
+        try {
+          const sessRes = await fetch(`/api/booking/session/${encodeURIComponent(sessionToken)}`, { cache: "no-store" });
+          const sessData = await sessRes.json();
+          if (sessRes.ok && sessData.ok) {
+            suggestedService = applySessionPrefill(sessData.session);
+          }
+        } catch (_) { /* expired or missing — fall through to manual flow */ }
+      }
+
       const response = await fetch("/api/booking/services", { cache: "no-store" });
       const data = await response.json();
       if (data.ok) {
         state.services = data.services || {};
 
-        // Honor ?service= deep link from CTAs elsewhere on the site.
-        // If the param matches a service key, pull its family out of the
-        // catalog and use that as the filter — so clicking "Book Spring
-        // Opening" elsewhere shows ALL spring opening variants (4z / 5-7z /
-        // 8+z / commercial), not just the 4z it linked to. The customer
-        // picks the right size before continuing.
-        const params = new URLSearchParams(window.location.search);
-        const preselect = params.get("service");
+        // Pick the deep-link service from the URL OR the session's
+        // suggestedService. URL wins if both present (manual override).
+        const preselect = params.get("service") || suggestedService;
         if (preselect && state.services[preselect]) {
           const family = state.services[preselect].family;
           if (family) {
@@ -511,7 +559,8 @@
               state.serviceKey = preselect;
               state.serviceMeta = state.services[preselect];
               renderServiceCards();
-              setTimeout(() => showStep("address"), 200);
+              const nextStep = serviceNeedsZones() ? "zones" : "address";
+              setTimeout(() => showStep(nextStep), 200);
               return;
             }
             state.familyFilter = family;

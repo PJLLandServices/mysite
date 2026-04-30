@@ -19,6 +19,10 @@ const workOrderDuration = document.getElementById("workOrderDuration");
 const workOrderPrice = document.getElementById("workOrderPrice");
 const workOrderNote = document.getElementById("workOrderNote");
 const workOrderDocStatus = document.getElementById("workOrderDocStatus");
+const workOrderDiagnosis = document.getElementById("workOrderDiagnosis");
+const workOrderDiagnosisSource = document.getElementById("workOrderDiagnosisSource");
+const workOrderDiagnosisSummary = document.getElementById("workOrderDiagnosisSummary");
+const workOrderDiagnosisDetail = document.getElementById("workOrderDiagnosisDetail");
 const acceptCard = document.getElementById("acceptCard");
 const acceptButton = document.getElementById("acceptButton");
 const acceptStatus = document.getElementById("acceptStatus");
@@ -28,7 +32,11 @@ const messageStatus = document.getElementById("messageStatus");
 const activityCard = document.getElementById("activityCard");
 const activityList = document.getElementById("activityList");
 
-const statusLabels = {
+// Status copy depends on whether the lead came in as a request (contact form)
+// or a confirmed service booking (book.html with a slot reserved). The
+// portal payload's `booking` field is non-null only when there's a real
+// scheduled service.
+const STATUS_LABELS_REQUEST = {
   new: "Request received",
   contacted: "Reviewed by PJL",
   site_visit: "Site visit pending",
@@ -36,6 +44,17 @@ const statusLabels = {
   won: "Booked — on the schedule",
   lost: "Closed"
 };
+const STATUS_LABELS_SERVICE = {
+  new: "Service booked",
+  contacted: "Confirmed by PJL",
+  site_visit: "Site visit scheduled",
+  quoted: "Quote ready to review",
+  won: "Service confirmed",
+  lost: "Cancelled"
+};
+function statusLabelFor(status, hasBooking) {
+  return (hasBooking ? STATUS_LABELS_SERVICE : STATUS_LABELS_REQUEST)[status] || "Status unknown";
+}
 
 // Maps a CRM status to the timeline step it corresponds to. The timeline has
 // 5 steps: received -> reviewed -> site_visit -> quoted -> booked. Each CRM
@@ -147,6 +166,26 @@ function renderWorkOrder(data) {
     workOrderNote.hidden = true;
   }
 
+  // Diagnosis block — present when this booking came from an AI-chat
+  // handoff or other pre-booking diagnostic flow. Hidden otherwise.
+  const diagnosis = wo.diagnosis;
+  if (diagnosis && (diagnosis.summary || diagnosis.text)) {
+    const sourceLabel = (diagnosis.source || "ai_chat")
+      .replace(/_/g, " ")
+      .replace(/\b\w/g, (c) => c.toUpperCase());
+    workOrderDiagnosisSource.textContent = `Captured by ${sourceLabel}`;
+    workOrderDiagnosisSummary.textContent = diagnosis.summary || "";
+    workOrderDiagnosisSummary.hidden = !diagnosis.summary;
+    // Long-form text — preserve line breaks so multi-paragraph diagnoses
+    // read naturally without us needing a markdown parser.
+    workOrderDiagnosisDetail.innerHTML = diagnosis.text
+      ? escapeHtml(diagnosis.text).replace(/\n/g, "<br>")
+      : "";
+    workOrderDiagnosis.hidden = false;
+  } else {
+    workOrderDiagnosis.hidden = true;
+  }
+
   // Document state — placeholder messaging until we attach a real doc.
   if (wo.documentReady && wo.documentUrl) {
     workOrderDocStatus.innerHTML = `<a href="${wo.documentUrl}" target="_blank" rel="noopener">Open work order document →</a>`;
@@ -162,11 +201,16 @@ function renderPortal(data) {
   const project = data.project || {};
   const services = Array.isArray(project.services) ? project.services : [];
 
+  const hasBooking = Boolean(data.booking);
   portalTitle.textContent = customer.firstName
-    ? `Hi ${customer.firstName}, your PJL request is open.`
-    : "Your PJL request is open.";
-  portalIntro.textContent = "Track your project below. Anything you need to share, drop us a message and we'll get back to you.";
-  projectStatus.textContent = statusLabels[project.status] || "Request received";
+    ? (hasBooking
+        ? `Hi ${customer.firstName}, your service is scheduled.`
+        : `Hi ${customer.firstName}, your PJL request is open.`)
+    : (hasBooking ? "Your service is scheduled." : "Your PJL request is open.");
+  portalIntro.textContent = hasBooking
+    ? "Your appointment details are below. Anything you need to share before we arrive, drop us a message."
+    : "Track your project below. Anything you need to share, drop us a message and we'll get back to you.";
+  projectStatus.textContent = statusLabelFor(project.status, hasBooking);
   followUpText.textContent = project.nextFollowUp
     ? `Next follow-up: ${formatDate(project.nextFollowUp)}`
     : "PJL will follow up as soon as your request is reviewed.";

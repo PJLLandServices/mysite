@@ -40,6 +40,7 @@ const { geocode, PJL_BASE } = require("./lib/geocode");
 const { BOOKABLE_SERVICES, DEFAULT_HOURS, DEFAULT_SETTINGS, listAvailableSlots, groupByDay } = require("./lib/availability");
 const scheduleStore = require("./lib/schedule-store");
 const { priceForBooking } = require("./lib/pricing");
+const bookingSessions = require("./lib/booking-sessions");
 
 // Short, customer-friendly work order ID. Eight chars from a UUIDv4 base32-ish
 // alphabet (no I/O/0/1 to keep them unambiguous when read aloud or hand-written).
@@ -722,6 +723,7 @@ function portalPayloadForLead(lead, req) {
       currency: lead.booking.workOrder.currency,
       documentReady: lead.booking.workOrder.documentReady,
       documentUrl: lead.booking.workOrder.documentUrl,
+      diagnosis: lead.booking.workOrder.diagnosis || null,
       createdAt: lead.booking.workOrder.createdAt
     } : null,
     portal: {
@@ -1114,6 +1116,65 @@ async function handleApi(req, res, pathname) {
     return sendJson(res, 200, { ok: true, services: BOOKABLE_SERVICES });
   }
 
+  // External handoff endpoint — AI chat agents (or any pre-booking tool)
+  // POST a diagnosis + customer hints here, get back a session token, and
+  // redirect the customer to /book.html?session=<token>. The booking page
+  // pre-fills service/contact/zoneCount from the session and silently
+  // attaches the diagnosis to the resulting work order.
+  //
+  // Body shape (all fields optional except `source`):
+  //   {
+  //     source: "ai_chat",                          // who created it
+  //     diagnosis: "Long-form diagnosis text...",   // attached to work order
+  //     diagnosisSummary: "Short summary",          // shown in summaries
+  //     suggestedService: "sprinkler_repair",       // BOOKABLE_SERVICES key
+  //     severity: "urgent" | "normal",              // for triage
+  //     customerHints: {
+  //       firstName, lastName, email, phone, address,
+  //       zoneCount: 1-24 | "unsure", notes
+  //     }
+  //   }
+  if (req.method === "POST" && pathname === "/api/booking/prepare-session") {
+    // Auth: either an admin session cookie (Patrick / staff hitting from
+    // a logged-in browser) OR the BOOKING_API_KEY shared secret in the
+    // X-PJL-Booking-Key header (AI chat agent or other automated source).
+    // Without a key set, the endpoint refuses external requests so it
+    // can't be spammed before the integration is configured.
+    const apiKey = process.env.BOOKING_API_KEY;
+    const headerKey = String(req.headers["x-pjl-booking-key"] || "");
+    const adminLoggedIn = await isAuthenticated(req);
+    const keyMatches = apiKey && headerKey
+      && headerKey.length === apiKey.length
+      && crypto.timingSafeEqual(Buffer.from(headerKey), Buffer.from(apiKey));
+    if (!adminLoggedIn && !keyMatches) {
+      return sendJson(res, 401, { ok: false, errors: ["Authorization required (admin login or X-PJL-Booking-Key header)."] });
+    }
+    try {
+      const payload = await parseRequestBody(req);
+      const session = await bookingSessions.createSession(payload);
+      const baseUrl = process.env.PUBLIC_BASE_URL || baseUrlFromReq(req);
+      return sendJson(res, 201, {
+        ok: true,
+        token: session.token,
+        expiresAt: new Date(session.expiresAt).toISOString(),
+        bookingUrl: `${baseUrl}/book.html?session=${encodeURIComponent(session.token)}`
+      });
+    } catch (error) {
+      return sendJson(res, 400, { ok: false, errors: [error.message || "Couldn't create session."] });
+    }
+  }
+
+  // Public read endpoint — book.html fetches the session by token to
+  // pre-fill the form. Returns the prefill payload only; the diagnosis
+  // text is forwarded so it can be shown to the customer once booked.
+  const sessionGetMatch = pathname.match(/^\/api\/booking\/session\/([^/]+)$/);
+  if (sessionGetMatch && req.method === "GET") {
+    const token = decodeURIComponent(sessionGetMatch[1]);
+    const session = await bookingSessions.getSession(token);
+    if (!session) return sendJson(res, 404, { ok: false, errors: ["Session not found or expired."] });
+    return sendJson(res, 200, { ok: true, session });
+  }
+
   // Public availability lookup. Query: ?service=<key>&address=<text>
   // Returns slots grouped by day so the UI can render "pick a day, then a time".
   if (req.method === "GET" && pathname === "/api/booking/availability") {
@@ -1167,6 +1228,11 @@ async function handleApi(req, res, pathname) {
     try {
       const payload = await parseRequestBody(req);
       const serviceKey = normalizeString(payload.serviceKey, 60);
+      // Optional pre-booking session — AI handoff carrying a diagnosis +
+      // customer hints. We resolve it here so the diagnosis can be attached
+      // to the work order below. Falsy if not supplied.
+      const sessionToken = normalizeString(payload.sessionToken, 80);
+      const prebooking = sessionToken ? await bookingSessions.getSession(sessionToken) : null;
       const slotStart = normalizeString(payload.slotStart, 40);
       const service = BOOKABLE_SERVICES[serviceKey];
       if (!service) return sendJson(res, 422, { ok: false, errors: ["Unknown service."] });
@@ -1260,6 +1326,18 @@ async function handleApi(req, res, pathname) {
       // wrapper around the booking — short ID, status, total, and a
       // placeholder for the document we'll attach later (PDF, signed copy).
       const now = new Date().toISOString();
+      // If this booking came from an AI-chat (or other pre-booking) session,
+      // attach the captured diagnosis text so it surfaces on the work order
+      // for both Patrick (CRM) and the customer (portal).
+      const diagnosisBlock = prebooking ? {
+        source: prebooking.payload.source || "ai_chat",
+        summary: prebooking.payload.diagnosisSummary || "",
+        text: prebooking.payload.diagnosis || "",
+        severity: prebooking.payload.severity || "",
+        suggestedService: prebooking.payload.suggestedService || "",
+        capturedAt: prebooking.createdAt
+      } : null;
+
       result.lead.booking = {
         start: startDate.toISOString(),
         end: endDate.toISOString(),
@@ -1278,21 +1356,33 @@ async function handleApi(req, res, pathname) {
           currency: pricing.currency,
           documentReady: false,
           documentUrl: null,
+          diagnosis: diagnosisBlock,
           createdAt: now
         }
       };
       // Status starts at site_visit for consults, won for committed direct bookings.
       result.lead.status = isSiteVisit ? "site_visit" : "won";
       result.lead.crm.status = result.lead.status;
-      result.lead.crm.activity.unshift({
-        at: new Date().toISOString(),
-        type: "update",
-        text: `Booked online: ${service.label} on ${matched.dayLabel} at ${matched.timeLabel}.`
-      });
+      // Replace the default "Quote request received." seed entry with booking-
+      // specific language. These came in as confirmed services, not requests,
+      // so the activity log should read that way from the start.
+      result.lead.crm.activity = [{
+        at: now,
+        type: "created",
+        text: `${isSiteVisit ? "Site visit booked" : "Service booked"}: ${service.label} on ${matched.dayLabel} at ${matched.timeLabel}.`
+      }];
 
       const all = await readLeads();
       all.unshift(result.lead);
       await writeLeads(all);
+
+      // If a pre-booking session backed this reservation, mark it consumed
+      // so the audit trail records which sessions converted into bookings.
+      if (prebooking && sessionToken) {
+        bookingSessions.markConsumed(sessionToken, result.lead.id).catch((err) => {
+          console.error("[booking-session] markConsumed failed:", err?.message || err);
+        });
+      }
 
       // Notify Patrick (admin) and the customer.
       const baseUrl = process.env.PUBLIC_BASE_URL || baseUrlFromReq(req);

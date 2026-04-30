@@ -58,9 +58,23 @@ function moneyText(amount) {
     .format(Number(amount || 0)).replace("CA", "").trim();
 }
 
-// Per-event subject + email body + SMS body. {firstName} / {portalUrl} / {total}
-// placeholders are filled in by the caller.
+// Per-event subject + email body + SMS body. {firstName}, {portalUrl},
+// {total}, {serviceLabel}, {dateStr}, {timeStr}, {workOrderId} are
+// substituted by the caller with whatever's available on the lead.
+//
+// Two distinct customer states drive the template choice:
+//
+//   "request"  — came in via the contact form / general intake. No slot,
+//                no work order, no commitment. Language stays in the
+//                "we've received your request, will follow up" register.
+//
+//   "service"  — came in via /book.html with a confirmed slot, work order,
+//                and price. Language shifts to "your service is booked /
+//                scheduled" — these are confirmed appointments, not
+//                requests. Subject lines lead with the booked service so
+//                they read clearly in inbox previews.
 const TEMPLATES = {
+  // --- Request track (general inquiries from contact.html etc.) ---
   received: {
     subject: "PJL Land Services has received your request",
     headline: "We've got your request.",
@@ -78,14 +92,6 @@ const TEMPLATES = {
       "to walk through next steps. Your project details are saved in your portal.",
     sms: "PJL has reviewed your request. Patrick will reach out next. Portal: {portalUrl}"
   },
-  site_visit: {
-    subject: "PJL is scheduling your site visit",
-    headline: "Site visit coming up.",
-    body:
-      "Hi {firstName}, PJL Land Services is preparing for a site visit on your property to scope " +
-      "the work properly. Patrick will confirm the exact day and arrival window with you directly.",
-    sms: "PJL is scheduling a site visit for your project. Patrick will confirm the day. Portal: {portalUrl}"
-  },
   quoted: {
     subject: "Your PJL quote is ready",
     headline: "Your quote is ready.",
@@ -94,13 +100,26 @@ const TEMPLATES = {
       "scope, the price, and accept the quote when you're ready. Estimated total: {total}.",
     sms: "Your PJL quote is ready ({total}). Review and accept in your portal: {portalUrl}"
   },
+
+  // --- Service track (confirmed bookings from /book.html) ---
   booked: {
-    subject: "Your PJL booking is confirmed",
-    headline: "You're on the schedule.",
+    subject: "Your PJL service is booked — {serviceLabel} on {dateStr}",
+    headline: "Your service is booked.",
     body:
-      "Hi {firstName}, your PJL Land Services project is booked. Patrick will follow up with the " +
-      "exact day-of arrival window. Thank you for choosing PJL — we'll take great care of your property.",
-    sms: "PJL has booked your project. Patrick will confirm day-of arrival window. Portal: {portalUrl}"
+      "Hi {firstName}, this confirms your PJL Land Services {serviceLabel} on {dateStr} at {timeStr}. " +
+      "Your work order ({workOrderId}) is ready in your portal. We'll send a reminder the day before " +
+      "and your technician will keep you updated as they head out to your property. " +
+      "If anything changes, call (905) 960-0181 — we're happy to reschedule.",
+    sms: "PJL service confirmed: {serviceLabel} on {dateStr} at {timeStr}. Work order {workOrderId}. Details: {portalUrl}"
+  },
+  site_visit: {
+    subject: "Your PJL site visit is scheduled — {dateStr}",
+    headline: "Your site visit is scheduled.",
+    body:
+      "Hi {firstName}, your PJL Land Services site visit is scheduled for {dateStr} at {timeStr}. " +
+      "Patrick will walk your property, scope the work, and follow up with a written quote. " +
+      "Your work order ({workOrderId}) is in your portal — no charge for the visit.",
+    sms: "PJL site visit scheduled: {dateStr} at {timeStr}. Free walkaround. Details: {portalUrl}"
   }
 };
 
@@ -111,13 +130,28 @@ function fill(template, vars) {
   );
 }
 
+// Format a booking start time into customer-facing date/time strings.
+// Eastern Time is enforced server-wide via process.env.TZ in server.js,
+// so toLocale* will produce the right zone naturally.
+function bookingDateTime(lead) {
+  const start = lead.booking?.start ? new Date(lead.booking.start) : null;
+  if (!start || Number.isNaN(start.getTime())) return { dateStr: "", timeStr: "" };
+  return {
+    dateStr: start.toLocaleDateString("en-CA", { weekday: "long", month: "long", day: "numeric" }),
+    timeStr: start.toLocaleTimeString("en-CA", { hour: "numeric", minute: "2-digit" })
+  };
+}
+
 function buildEmail(event, lead, baseUrl) {
   const tpl = TEMPLATES[event];
   if (!tpl) return null;
   const firstName = lead.contact?.firstName || (lead.contact?.name || "").split(" ")[0] || "there";
   const portalUrl = lead.portalUrl || `${baseUrl}/portal/${lead.portal?.token || ""}`;
   const total = moneyText(lead.totals?.expectedTotal);
-  const vars = { firstName, portalUrl, total };
+  const { dateStr, timeStr } = bookingDateTime(lead);
+  const serviceLabel = lead.booking?.serviceLabel || "your appointment";
+  const workOrderId = lead.booking?.workOrder?.id || "";
+  const vars = { firstName, portalUrl, total, dateStr, timeStr, serviceLabel, workOrderId };
 
   const subject = fill(tpl.subject, vars);
   const headline = fill(tpl.headline, vars);
@@ -162,7 +196,10 @@ function buildSms(event, lead, baseUrl) {
   if (!tpl) return "";
   const portalUrl = lead.portalUrl || `${baseUrl}/portal/${lead.portal?.token || ""}`;
   const total = moneyText(lead.totals?.expectedTotal);
-  return fill(tpl.sms, { portalUrl, total });
+  const { dateStr, timeStr } = bookingDateTime(lead);
+  const serviceLabel = lead.booking?.serviceLabel || "your appointment";
+  const workOrderId = lead.booking?.workOrder?.id || "";
+  return fill(tpl.sms, { portalUrl, total, dateStr, timeStr, serviceLabel, workOrderId });
 }
 
 async function sendCustomerEmail(event, lead, baseUrl) {

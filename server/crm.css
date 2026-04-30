@@ -1587,6 +1587,38 @@ body.crm-drawer-locked { overflow: hidden; }
   color: rgba(15, 31, 20, 0.75);
   line-height: 1.5;
 }
+.detail-workorder__diagnosis {
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  background: rgba(74, 140, 92, 0.08);
+  border-left: 3px solid #2D6A42;
+  border-radius: 4px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.detail-workorder__diagnosis strong {
+  display: block;
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #1B4D2E;
+  margin-bottom: 4px;
+}
+.detail-workorder__diagnosis p {
+  margin: 0 0 6px;
+  font-weight: 600;
+  color: #1B4D2E;
+}
+.detail-workorder__diagnosis pre {
+  margin: 0;
+  white-space: pre-wrap;
+  font-family: inherit;
+  font-size: 12px;
+  color: rgba(15, 31, 20, 0.75);
+  max-height: 220px;
+  overflow-y: auto;
+}
 .kanban-column {
   background: rgba(27, 77, 46, 0.04);
   border: 1px solid rgba(27, 77, 46, 0.10);
