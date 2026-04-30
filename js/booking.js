@@ -28,7 +28,8 @@
     services: {},       // catalog from /api/booking/services
     familyFilter: null, // when set, only services with this `family` are shown
     sessionToken: null, // pre-booking session (AI handoff) — passed back on reserve
-    sessionPayload: null // diagnosis + customer hints loaded from the session
+    sessionPayload: null, // diagnosis + customer hints loaded from the session
+    customerFirstName: "" // captured from session handoff, used to personalize copy
   };
 
   // Families where confirming the customer's zone count adds value to the
@@ -55,6 +56,7 @@
   const addressBackBtn = document.getElementById("addressBackBtn");
   const addressInput = document.getElementById("bookAddress");
   const addressNextBtn = document.getElementById("addressNextBtn");
+  const whenHeading = document.getElementById("whenHeading");
   const dayLoading = document.getElementById("dayLoading");
   const dayStrip = document.getElementById("dayStrip");
   const timeSection = document.getElementById("timeSection");
@@ -298,7 +300,19 @@
     dayStrip.innerHTML = "";
     timeGrid.innerHTML = "";
 
-    whenLead.textContent = `Showing real-time openings for ${state.serviceMeta.label} at ${state.address}.`;
+    // Personalize the heading + lead when we have the customer's name from
+    // the handoff session. Otherwise fall back to the generic copy that
+    // ships with the static HTML.
+    const friendlyAddress = state.formattedAddress || state.address;
+    if (state.customerFirstName) {
+      whenHeading.textContent = `Hey ${state.customerFirstName}!`;
+      whenLead.textContent =
+        `Please pick a date and time for your ${state.serviceMeta.label} appointment at ${friendlyAddress}.`;
+    } else {
+      whenHeading.textContent = "Pick a day, then a time.";
+      whenLead.textContent =
+        `Showing real-time openings for ${state.serviceMeta.label} at ${friendlyAddress}.`;
+    }
 
     try {
       const url = `/api/booking/availability?service=${encodeURIComponent(state.serviceKey)}&address=${encodeURIComponent(state.address)}&days=14`;
@@ -495,7 +509,10 @@
     state.sessionPayload = session.payload;
     const hints = session.payload.customerHints || {};
 
-    if (hints.firstName && bookFirst) bookFirst.value = hints.firstName;
+    if (hints.firstName) {
+      state.customerFirstName = hints.firstName;
+      if (bookFirst) bookFirst.value = hints.firstName;
+    }
     if (hints.lastName  && bookLast)  bookLast.value  = hints.lastName;
     if (hints.email     && bookEmail) bookEmail.value = hints.email;
     if (hints.phone     && bookPhone) bookPhone.value = hints.phone;
