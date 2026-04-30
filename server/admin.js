@@ -1,7 +1,10 @@
 const leadList = document.getElementById("leadList");
 const kanbanBoard = document.getElementById("kanbanBoard");
 const crmMain = document.getElementById("crmMain");
+const crmWorkspace = document.getElementById("crmWorkspace");
 const selectToggle = document.getElementById("selectToggle");
+const detailClose = document.getElementById("detailClose");
+const detailBackdrop = document.getElementById("detailBackdrop");
 const emptyState = document.getElementById("emptyState");
 const openCount = document.getElementById("openCount");
 const pipelineValue = document.getElementById("pipelineValue");
@@ -395,6 +398,22 @@ function applyView() {
   crmMain.classList.toggle("is-selecting", selectMode && viewMode === "list");
   selectToggle.classList.toggle("is-active", selectMode);
   selectToggle.setAttribute("aria-pressed", String(selectMode));
+  // In Kanban mode the workspace switches to a 2-column grid (sidebar + board)
+  // and the lead-detail panel becomes a slide-in drawer over the right edge.
+  // List mode keeps the original 3-column inline layout.
+  crmWorkspace.classList.toggle("is-kanban", viewMode === "kanban");
+  // The drawer should be open only when (a) we're in kanban view AND (b) a
+  // lead is actually selected. Switching to kanban with nothing selected
+  // closes the drawer; switching back to list dismisses the overlay state.
+  const drawerOpen = viewMode === "kanban" && Boolean(activeLeadId);
+  crmWorkspace.classList.toggle("drawer-open", drawerOpen);
+  detailBackdrop.hidden = !drawerOpen;
+  document.body.classList.toggle("crm-drawer-locked", drawerOpen);
+}
+
+function closeDetailDrawer() {
+  activeLeadId = "";
+  render();
 }
 
 function render() {
@@ -522,6 +541,14 @@ pipelineTabs.addEventListener("click", (event) => {
 
 viewListBtn.addEventListener("click", () => { viewMode = "list"; render(); });
 viewKanbanBtn.addEventListener("click", () => { viewMode = "kanban"; render(); });
+
+detailClose.addEventListener("click", closeDetailDrawer);
+detailBackdrop.addEventListener("click", closeDetailDrawer);
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && crmWorkspace.classList.contains("drawer-open")) {
+    closeDetailDrawer();
+  }
+});
 
 selectToggle.addEventListener("click", () => {
   selectMode = !selectMode;

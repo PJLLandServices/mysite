@@ -69,7 +69,9 @@
       </div>
     </section>
 
-    <section class="crm-workspace">
+    <div class="lead-detail-backdrop" id="detailBackdrop" hidden></div>
+
+    <section class="crm-workspace" id="crmWorkspace">
       <aside class="crm-sidebar" aria-label="CRM filters">
         <input type="search" id="leadSearch" placeholder="Search leads">
         <div class="filter-group">
@@ -149,6 +151,7 @@
       </section>
 
       <aside class="lead-detail" id="leadDetail" aria-label="Lead detail">
+        <button type="button" class="lead-detail-close" id="detailClose" aria-label="Close detail panel">×</button>
         <div class="lead-detail-empty" id="detailEmpty">
           <p class="eyebrow">Select a lead</p>
           <h2>Open a quote request to work it.</h2>

@@ -1257,6 +1257,86 @@
   overflow-x: auto;
   padding-bottom: 12px;
 }
+.kanban-card strong,
+.kanban-card span,
+.crm-card strong,
+.crm-card > span:not(.card-topline):not(.age-bar) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kanban-card {
+  /* Allow address text to wrap to two lines instead of clipping aggressively */
+  min-width: 0;
+}
+.kanban-card .card-topline {
+  flex-wrap: wrap;
+}
+
+/* === Kanban full-width mode: collapse the workspace to 2 columns and
+ * promote the lead-detail aside to a slide-in drawer over the right edge.
+ * === */
+.crm-workspace.is-kanban {
+  grid-template-columns: 230px minmax(360px, 1fr);
+}
+.crm-workspace.is-kanban .lead-detail {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(460px, 92vw);
+  max-height: 100vh;
+  background: #fff;
+  border-left: 1px solid rgba(27, 77, 46, 0.12);
+  box-shadow: -16px 0 40px rgba(15, 31, 20, 0.18);
+  z-index: 60;
+  padding: 24px 22px 28px;
+  transform: translateX(105%);
+  transition: transform 0.22s ease;
+  overflow-y: auto;
+}
+.crm-workspace.is-kanban.drawer-open .lead-detail {
+  transform: translateX(0);
+}
+
+.lead-detail-close {
+  display: none;
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  width: 32px;
+  height: 32px;
+  border: none;
+  background: rgba(15, 31, 20, 0.06);
+  color: rgba(15, 31, 20, 0.65);
+  border-radius: 50%;
+  font-size: 20px;
+  font-weight: 700;
+  cursor: pointer;
+  z-index: 2;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.lead-detail-close:hover {
+  background: rgba(208, 72, 72, 0.12);
+  color: #a92e2e;
+}
+.crm-workspace.is-kanban .lead-detail-close { display: inline-flex; align-items: center; justify-content: center; }
+
+.lead-detail-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 31, 20, 0.45);
+  z-index: 55;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.18s ease;
+}
+.lead-detail-backdrop:not([hidden]) {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+body.crm-drawer-locked { overflow: hidden; }
 .kanban-column {
   background: rgba(27, 77, 46, 0.04);
   border: 1px solid rgba(27, 77, 46, 0.10);
