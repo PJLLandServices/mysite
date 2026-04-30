@@ -1,3 +1,11 @@
+// PJL Land Services operates in Eastern Time (Newmarket, Ontario). Render's
+// container runs in UTC by default, which makes setHours(8) produce 8:00 UTC
+// (= 4:00 AM Eastern) instead of 8:00 AM Eastern. Pinning the process TZ here
+// keeps every Date arithmetic — slot generation, schedule blocks, booking
+// timestamps — in PJL's actual local time. Honors a TZ env var if set so
+// dev machines can still override.
+process.env.TZ = process.env.TZ || "America/Toronto";
+
 const http = require("node:http");
 const fs = require("node:fs/promises");
 const fsSync = require("node:fs");
