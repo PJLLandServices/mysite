@@ -1083,6 +1083,40 @@
   gap: 12px;
   margin-bottom: 14px;
 }
+.crm-toolbar-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.crm-select-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border: 1px solid rgba(27, 77, 46, 0.18);
+  border-radius: 8px;
+  background: #fff;
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: rgba(15, 31, 20, 0.65);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+.crm-select-toggle:hover {
+  border-color: rgba(27, 77, 46, 0.40);
+  color: #1B4D2E;
+}
+.crm-select-toggle.is-active {
+  background: #E07B24;
+  border-color: #E07B24;
+  color: #fff;
+}
+.select-toggle-icon { font-size: 14px; }
 
 .crm-view-toggle {
   display: inline-flex;
@@ -1128,14 +1162,39 @@
 .crm-card.age-warm  { border-color: rgba(224, 123, 36, 0.25); }
 .crm-card.is-archived { opacity: 0.62; }
 
-/* Bulk-select checkbox on cards */
+/* Bulk-select checkbox on cards.
+ * Hidden by default — we only render the markup when select mode is active
+ * (admin.js gates this) AND the .is-selecting class on .crm-main shifts
+ * card layout to make room for it. The card itself stays clickable; the
+ * checkbox label uses event.stopPropagation to avoid opening the lead. */
 .card-check {
   position: absolute;
-  top: 10px;
-  right: 10px;
+  top: 50%;
+  left: 14px;
+  transform: translateY(-50%);
   z-index: 2;
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
-.card-check input { width: 18px; height: 18px; cursor: pointer; accent-color: #1B4D2E; }
+.card-check input {
+  width: 20px;
+  height: 20px;
+  cursor: pointer;
+  accent-color: #E07B24;
+  margin: 0;
+}
+.crm-main.is-selecting .crm-card {
+  padding-left: 48px;
+}
+.crm-main.is-selecting .lead-list {
+  border-left: 3px solid rgba(224, 123, 36, 0.30);
+  padding-left: 4px;
+  border-radius: 4px;
+  transition: border-color 0.15s ease;
+}
 
 /* Source pill + archive pill */
 .archive-pill {

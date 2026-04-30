@@ -109,12 +109,18 @@
         </div>
       </aside>
 
-      <section class="crm-main" aria-label="Lead list">
+      <section class="crm-main" aria-label="Lead list" id="crmMain">
         <div class="crm-toolbar">
           <div class="pipeline-tabs" id="pipelineTabs"></div>
-          <div class="crm-view-toggle" role="group" aria-label="View mode">
-            <button type="button" class="is-active" data-view="list" id="viewList">List</button>
-            <button type="button" data-view="kanban" id="viewKanban">Kanban</button>
+          <div class="crm-toolbar-actions">
+            <button type="button" class="crm-select-toggle" id="selectToggle" aria-pressed="false">
+              <span class="select-toggle-icon" aria-hidden="true">☰</span>
+              <span class="select-toggle-label">Select</span>
+            </button>
+            <div class="crm-view-toggle" role="group" aria-label="View mode">
+              <button type="button" class="is-active" data-view="list" id="viewList">List</button>
+              <button type="button" data-view="kanban" id="viewKanban">Kanban</button>
+            </div>
           </div>
         </div>
         <div class="bulk-toolbar" id="bulkToolbar" hidden>

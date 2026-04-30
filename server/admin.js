@@ -1,5 +1,7 @@
 const leadList = document.getElementById("leadList");
 const kanbanBoard = document.getElementById("kanbanBoard");
+const crmMain = document.getElementById("crmMain");
+const selectToggle = document.getElementById("selectToggle");
 const emptyState = document.getElementById("emptyState");
 const openCount = document.getElementById("openCount");
 const pipelineValue = document.getElementById("pipelineValue");
@@ -57,6 +59,7 @@ const KANBAN_STAGES = STAGES.slice(1);
 let leads = [];
 let activeLeadId = "";
 let viewMode = "list"; // "list" | "kanban"
+let selectMode = false; // user has clicked the Select toggle
 let selectedIds = new Set();
 let sources = {};
 
@@ -247,7 +250,9 @@ function renderLeadCards() {
     card.dataset.leadId = lead.id;
     card.dataset.stage = status;
     card.draggable = false;
-    card.innerHTML = leadCardMarkup(lead, { withCheckbox: true });
+    // Checkbox is only rendered when the user has explicitly entered Select
+    // mode via the Select toggle. Otherwise the card stays clean.
+    card.innerHTML = leadCardMarkup(lead, { withCheckbox: selectMode });
     leadList.append(card);
   });
 }
@@ -369,7 +374,11 @@ function renderContactPreview(lead) {
 }
 
 function renderBulkToolbar() {
-  bulkToolbar.hidden = selectedIds.size === 0;
+  // Toolbar is only relevant in select mode AND in list view.
+  // Without items selected we still keep it visible so the user has a hint
+  // that select mode is active and a quick way to exit.
+  const shouldShow = selectMode && viewMode === "list";
+  bulkToolbar.hidden = !shouldShow;
   bulkCount.textContent = String(selectedIds.size);
 }
 
@@ -378,9 +387,14 @@ function applyView() {
   viewKanbanBtn.classList.toggle("is-active", viewMode === "kanban");
   leadList.hidden = viewMode !== "list";
   kanbanBoard.hidden = viewMode !== "kanban";
-  bulkToolbar.classList.toggle("is-list-only", true);
   // Bulk select only works in list view (kanban uses drag).
-  if (viewMode !== "list") selectedIds.clear();
+  if (viewMode !== "list") {
+    selectedIds.clear();
+    selectMode = false;
+  }
+  crmMain.classList.toggle("is-selecting", selectMode && viewMode === "list");
+  selectToggle.classList.toggle("is-active", selectMode);
+  selectToggle.setAttribute("aria-pressed", String(selectMode));
 }
 
 function render() {
@@ -509,6 +523,14 @@ pipelineTabs.addEventListener("click", (event) => {
 viewListBtn.addEventListener("click", () => { viewMode = "list"; render(); });
 viewKanbanBtn.addEventListener("click", () => { viewMode = "kanban"; render(); });
 
+selectToggle.addEventListener("click", () => {
+  selectMode = !selectMode;
+  if (!selectMode) selectedIds.clear();
+  // Forcing list view on, since kanban uses drag-drop and doesn't support selection.
+  if (selectMode) viewMode = "list";
+  render();
+});
+
 leadList.addEventListener("click", (event) => {
   const checkbox = event.target.closest("input[data-bulk-id]");
   if (checkbox) {
@@ -583,7 +605,11 @@ bulkPriority.addEventListener("change", () => {
   bulkUpdate({ priority: bulkPriority.value }).then(() => { bulkPriority.value = ""; });
 });
 bulkArchive.addEventListener("click", () => bulkUpdate({ archived: true }));
-bulkClear.addEventListener("click", () => { selectedIds.clear(); renderBulkToolbar(); render(); });
+bulkClear.addEventListener("click", () => {
+  selectedIds.clear();
+  selectMode = false;
+  render();
+});
 
 archiveButton.addEventListener("click", async () => {
   const lead = leads.find((item) => item.id === activeLeadId);
