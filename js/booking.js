@@ -519,6 +519,20 @@
     return session.payload.suggestedService || null;
   }
 
+  // Pick the most advanced step we can drop the customer onto, given what's
+  // already filled in by the session prefill. The principle: every step the
+  // customer would just be re-confirming filled-in data is skipped — they
+  // land directly on the first thing that genuinely needs their input.
+  //
+  // Order is service → (zones if seasonal) → address → when → contact.
+  // Returns one of those step names.
+  function bestLandingStep() {
+    if (!state.serviceKey || !state.serviceMeta) return "service";
+    if (serviceNeedsZones() && !state.zoneCount) return "zones";
+    if (!state.address) return "address";
+    return "when";
+  }
+
   // ===== Bootstrap: load service catalog =====
   async function init() {
     try {
@@ -547,24 +561,39 @@
         // Pick the deep-link service from the URL OR the session's
         // suggestedService. URL wins if both present (manual override).
         const preselect = params.get("service") || suggestedService;
+        // A "session handoff" is when the AI / admin has explicitly chosen
+        // the service for this customer. Trust their choice — lock the
+        // service in and skip the family picker entirely.
+        const fromSessionHandoff = Boolean(state.sessionToken && suggestedService && suggestedService === preselect);
+
         if (preselect && state.services[preselect]) {
           const family = state.services[preselect].family;
-          if (family) {
-            const familyMembers = Object.values(state.services)
-              .filter((m) => m.bookable && m.family === family);
-            // If only one variant exists in this family, jump straight past
-            // the picker. Otherwise filter the grid to the family and let
-            // the customer choose.
-            if (familyMembers.length === 1) {
-              state.serviceKey = preselect;
-              state.serviceMeta = state.services[preselect];
-              renderServiceCards();
-              const nextStep = serviceNeedsZones() ? "zones" : "address";
-              setTimeout(() => showStep(nextStep), 200);
-              return;
-            }
-            state.familyFilter = family;
+          const familyMembers = family
+            ? Object.values(state.services).filter((m) => m.bookable && m.family === family)
+            : [];
+
+          // Lock the service in when the AI/admin chose it OR when the
+          // family has only one variant (no real choice for the customer).
+          if (fromSessionHandoff || familyMembers.length === 1) {
+            state.serviceKey = preselect;
+            state.serviceMeta = state.services[preselect];
+            renderServiceCards();
+
+            // Skip past every prefilled step — land on the first one that
+            // still needs the customer's input. With a fully-populated
+            // handoff (service + zones + address), this drops them straight
+            // on the time picker and triggers the availability fetch.
+            const landing = bestLandingStep();
+            setTimeout(() => {
+              showStep(landing);
+              if (landing === "when") loadAvailability();
+            }, 200);
+            return;
           }
+
+          // Multi-variant family without a session-locked choice: show the
+          // family-filtered picker so the customer picks the right size.
+          state.familyFilter = family;
         }
         renderServiceCards();
       }
