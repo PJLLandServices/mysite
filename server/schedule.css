@@ -344,8 +344,54 @@
   .hours-row { grid-template-columns: 90px 1fr 1fr 1fr; }
   .hours-closed-toggle { grid-column: 2 / -1; }
 }
+
+/* Tablet and below — toolbar wraps, dialog full width, hours table scrolls */
+@media (max-width: 820px) {
+  .schedule-toolbar {
+    flex-wrap: wrap;
+  }
+  .schedule-toolbar .schedule-range {
+    order: -1;
+    flex: 1 1 100%;
+    text-align: left;
+    margin-bottom: 4px;
+  }
+  .schedule-toolbar button {
+    flex: 1 1 calc(50% - 6px);
+  }
+  .schedule-toolbar #addBlock {
+    flex: 1 1 100%;
+  }
+  .settings-engine { grid-template-columns: 1fr 1fr; }
+  .hours-row {
+    grid-template-columns: 1fr;
+    gap: 6px;
+  }
+  .hours-row strong {
+    font-size: 13px;
+  }
+  .hours-row label { flex-direction: row; align-items: center; gap: 8px; }
+  .hours-row label span { width: 80px; }
+  .hours-closed-toggle { grid-column: auto; }
+}
+
 @media (max-width: 720px) {
   .schedule-week { grid-template-columns: 1fr; }
   .schedule-stats { grid-template-columns: 1fr; }
   .settings-engine { grid-template-columns: 1fr; }
+  .schedule-blocks,
+  .schedule-settings { padding: 14px 16px; }
+  .schedule-block-list li {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .schedule-block-list li > div { flex: 1 1 100%; }
+  .schedule-day { min-height: 0; }
+  .schedule-dialog form { padding: 18px 20px; }
+  .dialog-grid { grid-template-columns: 1fr; }
+  .dialog-actions {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .dialog-actions button { flex: 1 1 100%; }
 }

@@ -5,6 +5,8 @@ const crmWorkspace = document.getElementById("crmWorkspace");
 const selectToggle = document.getElementById("selectToggle");
 const detailClose = document.getElementById("detailClose");
 const detailBackdrop = document.getElementById("detailBackdrop");
+const filtersToggle = document.getElementById("filtersToggle");
+const crmSidebar = document.getElementById("crmSidebar");
 const emptyState = document.getElementById("emptyState");
 const openCount = document.getElementById("openCount");
 const pipelineValue = document.getElementById("pipelineValue");
@@ -398,18 +400,24 @@ function applyView() {
   crmMain.classList.toggle("is-selecting", selectMode && viewMode === "list");
   selectToggle.classList.toggle("is-active", selectMode);
   selectToggle.setAttribute("aria-pressed", String(selectMode));
-  // In Kanban mode the workspace switches to a 2-column grid (sidebar + board)
-  // and the lead-detail panel becomes a slide-in drawer over the right edge.
-  // List mode keeps the original 3-column inline layout.
+  // In Kanban mode (any width) OR on tablet/mobile widths (any view), the
+  // lead-detail panel becomes a slide-in drawer instead of an inline column.
+  // Desktop list view keeps the original 3-column inline layout.
+  const isNarrow = window.matchMedia("(max-width: 1180px)").matches;
+  const useDrawer = viewMode === "kanban" || isNarrow;
   crmWorkspace.classList.toggle("is-kanban", viewMode === "kanban");
-  // The drawer should be open only when (a) we're in kanban view AND (b) a
-  // lead is actually selected. Switching to kanban with nothing selected
-  // closes the drawer; switching back to list dismisses the overlay state.
-  const drawerOpen = viewMode === "kanban" && Boolean(activeLeadId);
+  crmWorkspace.classList.toggle("use-drawer", useDrawer);
+  const drawerOpen = useDrawer && Boolean(activeLeadId);
   crmWorkspace.classList.toggle("drawer-open", drawerOpen);
   detailBackdrop.hidden = !drawerOpen;
   document.body.classList.toggle("crm-drawer-locked", drawerOpen);
 }
+
+// Re-apply view when the viewport crosses the drawer threshold so the layout
+// doesn't get stuck mid-state on rotate / resize.
+window.addEventListener("resize", () => {
+  applyView();
+});
 
 function closeDetailDrawer() {
   activeLeadId = "";
@@ -548,6 +556,14 @@ document.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && crmWorkspace.classList.contains("drawer-open")) {
     closeDetailDrawer();
   }
+});
+
+// Mobile filters panel: toggles a collapsible filters drawer below the
+// toolbar. Only rendered ≤1180px (CSS hides the toggle button above that).
+filtersToggle.addEventListener("click", () => {
+  const open = !crmSidebar.classList.contains("is-open");
+  crmSidebar.classList.toggle("is-open", open);
+  filtersToggle.setAttribute("aria-expanded", String(open));
 });
 
 selectToggle.addEventListener("click", () => {

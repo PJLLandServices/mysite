@@ -969,95 +969,272 @@
   line-height: 1.45;
 }
 
+/* ============================================================
+ * Responsive — three breakpoints, drawer pattern below tablet
+ * ============================================================
+ *   >1180px  desktop     3-col workspace, sticky sidebar + detail panel
+ *   ≤1180px  tablet      single-col workspace, sidebar collapsed behind
+ *                        a "Filters & search" toggle, lead detail
+ *                        becomes a 460px slide-in drawer over the right
+ *   ≤700px   mobile      drawer becomes full-width sheet, kanban
+ *                        columns shrink, all stats stack 1-up
+ *
+ * The `use-drawer` class is set by admin.js whenever the lead-detail
+ * should overlay (kanban view at any width, or any view at ≤1180px).
+ * `drawer-open` is added when a lead is actively selected.
+ */
+
+/* The mobile filters toggle and the mobile-only detail close button
+ * are hidden on desktop — they only appear when CSS below switches them on. */
+.crm-filters-toggle { display: none; }
+
+/* === Tablet and below === */
 @media (max-width: 1180px) {
-  .pjl-crm-hero,
-  .crm-workspace {
+  .pjl-crm-hero {
     grid-template-columns: 1fr;
   }
 
-  .crm-sidebar,
-  .lead-detail {
-    position: static;
-    max-height: none;
-  }
-}
-
-@media (max-width: 820px) {
-  .pjl-nav-strip {
+  /* Workspace becomes a single column. Sidebar collapses behind a toggle. */
+  .crm-workspace {
+    grid-template-columns: 1fr;
     gap: 12px;
-    padding: 0 14px;
+  }
+  .crm-workspace.is-kanban {
+    grid-template-columns: 1fr;
   }
 
-  .pjl-nav-strip > span:first-child {
-    display: none;
+  .crm-sidebar {
+    position: static;
+    max-height: 0;
+    overflow: hidden;
+    padding: 0 18px;
+    margin: 0;
+    transition: max-height 0.22s ease, padding 0.22s ease;
+    grid-row: 2;
+  }
+  .crm-sidebar.is-open {
+    max-height: 80vh;
+    padding: 18px;
+    overflow: auto;
   }
 
-  .pjl-nav-main {
-    height: auto;
-    min-height: 92px;
-    padding: 10px 16px;
+  /* Filter toggle button on the toolbar — full width, prominent. */
+  .crm-filters-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    width: 100%;
+    padding: 10px 14px;
+    background: #fff;
+    border: 1px solid rgba(27, 77, 46, 0.18);
+    border-radius: 8px;
+    font-family: "Barlow Condensed", sans-serif;
+    font-size: 14px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: #1B4D2E;
+    cursor: pointer;
+  }
+  .crm-filters-toggle .filters-toggle-icon {
+    transition: transform 0.18s ease;
+  }
+  .crm-filters-toggle[aria-expanded="true"] .filters-toggle-icon {
+    transform: rotate(180deg);
+  }
+  .crm-filters-toggle:hover {
+    border-color: rgba(27, 77, 46, 0.40);
   }
 
-  .pjl-nav-logo img {
-    height: 72px;
+  .crm-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+  .pipeline-tabs {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    flex-wrap: nowrap;
+    white-space: nowrap;
+    margin: 0 -4px;
+    padding: 0 4px;
+  }
+  .pipeline-tabs button {
+    flex-shrink: 0;
+  }
+  .crm-toolbar-actions {
+    justify-content: space-between;
+    width: 100%;
   }
 
-  .pjl-nav-links a:not(.pjl-nav-cta),
-  .pjl-nav-logout {
-    display: none;
+  /* Detail panel becomes a slide-in drawer at any view mode. */
+  .crm-workspace.use-drawer .lead-detail {
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: min(460px, 92vw);
+    max-height: 100vh;
+    background: #fff;
+    border-left: 1px solid rgba(27, 77, 46, 0.12);
+    box-shadow: -16px 0 40px rgba(15, 31, 20, 0.22);
+    z-index: 60;
+    padding: 24px 22px 28px;
+    transform: translateX(105%);
+    transition: transform 0.22s ease;
+    overflow-y: auto;
   }
+  .crm-workspace.use-drawer.drawer-open .lead-detail {
+    transform: translateX(0);
+  }
+  .crm-workspace.use-drawer .lead-detail-close { display: inline-flex; align-items: center; justify-content: center; }
 
+  /* Hero adjustments */
   .pjl-crm-shell {
     width: min(100% - 22px, 1360px);
     padding-top: 18px;
   }
-
   .pjl-crm-hero {
     min-height: 0;
     padding: 28px 22px;
     border-radius: 22px;
   }
-
   .pjl-crm-hero h1 {
-    font-size: clamp(36px, 12vw, 54px);
+    font-size: clamp(28px, 5.5vw, 44px);
     max-width: none;
   }
-
-  .pjl-hero-actions,
-  .pjl-btn {
-    width: 100%;
+  .pjl-hero-actions {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .pjl-hero-actions .pjl-btn {
+    flex: 1 1 calc(50% - 4px);
   }
 
-  .crm-stats {
-    grid-template-columns: 1fr 1fr;
+  /* Hide nav links + log-out on tablet — keep CRM/Schedule/CSV */
+  .pjl-nav-strip {
+    gap: 12px;
+    padding: 0 14px;
+  }
+  .pjl-nav-strip > span:first-child {
+    display: none;
+  }
+  .pjl-nav-main {
+    height: auto;
+    min-height: 92px;
+    padding: 10px 16px;
+  }
+  .pjl-nav-logo img { height: 72px; }
+  .pjl-nav-links { gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+  .pjl-nav-links a, .pjl-nav-logout { font-size: 13px; }
+
+  /* Stats: 2-up */
+  .crm-stats { grid-template-columns: 1fr 1fr; }
+
+  /* Detail editor: stack contact + editor grids */
+  .editor-grid { grid-template-columns: 1fr; }
+  .editor-grid--contact { grid-template-columns: 1fr 1fr; }
+  .quick-actions { grid-template-columns: 1fr 1fr; }
+
+  /* Bulk toolbar: stack vertically with full-width controls */
+  .bulk-toolbar {
+    flex-wrap: wrap;
+  }
+  .bulk-toolbar select,
+  .bulk-toolbar button {
+    flex: 1 1 calc(50% - 8px);
   }
 
-  .editor-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .quick-actions {
-    grid-template-columns: 1fr 1fr;
+  /* Kanban: shrink columns, keep horizontal scroll */
+  .kanban-board {
+    grid-template-columns: repeat(6, minmax(180px, 200px));
   }
 }
 
-@media (max-width: 520px) {
-  .pjl-strip-live {
-    display: none;
+/* === Mobile (≤700px) === */
+@media (max-width: 700px) {
+  .pjl-crm-shell { padding-top: 14px; }
+
+  /* Drawer goes full-width on small phones */
+  .crm-workspace.use-drawer .lead-detail {
+    width: 100vw;
+    max-width: 100vw;
+    border-left: none;
   }
 
-  .crm-stats {
-    grid-template-columns: 1fr;
-  }
+  /* Stats stack 1-up */
+  .crm-stats { grid-template-columns: 1fr; }
 
+  /* Hero actions full-width */
+  .pjl-hero-actions .pjl-btn { flex: 1 1 100%; }
+
+  /* Editor contact grid stacks too */
+  .editor-grid--contact { grid-template-columns: 1fr; }
+
+  /* Kanban columns compact */
+  .kanban-board {
+    grid-template-columns: repeat(6, minmax(160px, 180px));
+    gap: 8px;
+  }
+  .kanban-column { padding: 10px; }
+
+  /* Bulk toolbar fully stacked */
+  .bulk-toolbar select,
+  .bulk-toolbar button {
+    flex: 1 1 100%;
+  }
+  .bulk-toolbar { padding: 12px; gap: 8px; }
+
+  /* Detail head + contact preview stack */
   .detail-head {
     display: grid;
+    grid-template-columns: 1fr;
+    gap: 8px;
   }
-
   .contact-preview dl div {
     grid-template-columns: 1fr;
     gap: 2px;
   }
+
+  /* Smaller, denser cards on phones */
+  .crm-card {
+    padding: 14px 14px 18px;
+  }
+  .crm-card strong { font-size: 16px; }
+  .crm-main.is-selecting .crm-card { padding-left: 44px; }
+
+  /* Toolbar tweaks */
+  .crm-toolbar-actions {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .crm-select-toggle {
+    flex: 1 1 auto;
+  }
+
+  /* Nav strip cleanup */
+  .pjl-strip-live { display: none; }
+  .pjl-nav-strip a { font-size: 12px; }
+  .pjl-nav-logo img { height: 64px; }
+
+  /* Pipeline tabs become a horizontal scroller */
+  .pipeline-tabs button {
+    padding: 6px 12px;
+    font-size: 13px;
+  }
+}
+
+/* === Tiny phones (≤420px) === */
+@media (max-width: 420px) {
+  .pjl-crm-hero h1 { font-size: clamp(24px, 6vw, 32px); }
+  .pjl-crm-hero p { font-size: 14px; }
+  .crm-stats strong { font-size: 22px; }
+  .editor-actions {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .editor-actions > * { flex: 1 1 100%; }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1279,7 +1456,7 @@
 .crm-workspace.is-kanban {
   grid-template-columns: 230px minmax(360px, 1fr);
 }
-.crm-workspace.is-kanban .lead-detail {
+.crm-workspace.use-drawer .lead-detail {
   position: fixed;
   top: 0;
   right: 0;
@@ -1295,7 +1472,7 @@
   transition: transform 0.22s ease;
   overflow-y: auto;
 }
-.crm-workspace.is-kanban.drawer-open .lead-detail {
+.crm-workspace.use-drawer.drawer-open .lead-detail {
   transform: translateX(0);
 }
 
@@ -1320,7 +1497,7 @@
   background: rgba(208, 72, 72, 0.12);
   color: #a92e2e;
 }
-.crm-workspace.is-kanban .lead-detail-close { display: inline-flex; align-items: center; justify-content: center; }
+.crm-workspace.use-drawer .lead-detail-close { display: inline-flex; align-items: center; justify-content: center; }
 
 .lead-detail-backdrop {
   position: fixed;

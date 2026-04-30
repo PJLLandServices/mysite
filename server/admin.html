@@ -72,7 +72,7 @@
     <div class="lead-detail-backdrop" id="detailBackdrop" hidden></div>
 
     <section class="crm-workspace" id="crmWorkspace">
-      <aside class="crm-sidebar" aria-label="CRM filters">
+      <aside class="crm-sidebar" id="crmSidebar" aria-label="CRM filters">
         <input type="search" id="leadSearch" placeholder="Search leads">
         <div class="filter-group">
           <label for="statusFilter">Stage</label>
@@ -113,6 +113,10 @@
 
       <section class="crm-main" aria-label="Lead list" id="crmMain">
         <div class="crm-toolbar">
+          <button type="button" class="crm-filters-toggle" id="filtersToggle" aria-expanded="false" aria-controls="crmSidebar">
+            <span class="filters-toggle-icon" aria-hidden="true">▾</span>
+            <span>Filters &amp; search</span>
+          </button>
           <div class="pipeline-tabs" id="pipelineTabs"></div>
           <div class="crm-toolbar-actions">
             <button type="button" class="crm-select-toggle" id="selectToggle" aria-pressed="false">
