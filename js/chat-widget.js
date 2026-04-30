@@ -21,6 +21,7 @@
   // -------- Configuration --------
   const WORKER_URL = "https://jolly-meadow-6c29.patrick-812.workers.dev/";
   const LEAD_ENDPOINT = "https://pjl-land-services-onrender-com.onrender.com/api/quotes";
+  const TRANSCRIPT_ENDPOINT = "https://pjl-land-services-onrender-com.onrender.com/api/chat-transcripts";
   const FORM_TRIGGER = "[SHOW_BOOKING_FORM]";
   const STORAGE_KEY = "pjl_chat_state_v1";
   const PHOTO_DB_NAME = "pjl_chat_photos_v1";
@@ -39,8 +40,14 @@
     bookingShown: false,
     bookingComplete: false,
     panelOpen: false,
-    awaiting: false       // reset to false on rehydrate (in-flight requests don't survive nav)
+    awaiting: false,      // reset to false on rehydrate (in-flight requests don't survive nav)
+    chatSessionId: null   // generated lazily; identifies the chat for transcript upserts
   };
+
+  function genSessionId() {
+    if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
+    return "s_" + Date.now() + "_" + Math.random().toString(36).slice(2, 12);
+  }
 
   // Photos in memory: { id => { dataUrl, base64, mediaType, bytes } }
   // Hydrated from IndexedDB on widget init.
@@ -119,7 +126,8 @@
         pendingPhotoIds: state.pendingPhotoIds,
         bookingShown: state.bookingShown,
         bookingComplete: state.bookingComplete,
-        panelOpen: state.panelOpen
+        panelOpen: state.panelOpen,
+        chatSessionId: state.chatSessionId
       };
       localStorage.setItem(STORAGE_KEY, JSON.stringify(persisted));
     } catch (e) { console.warn("[pjl-chat] state save failed:", e); }
@@ -136,7 +144,8 @@
   async function clearAllState() {
     state = {
       messages: [], photoIds: [], pendingPhotoIds: [],
-      bookingShown: false, bookingComplete: false, panelOpen: false, awaiting: false
+      bookingShown: false, bookingComplete: false, panelOpen: false, awaiting: false,
+      chatSessionId: null
     };
     photoCache.clear();
     try { localStorage.removeItem(STORAGE_KEY); } catch (e) {}
@@ -586,6 +595,7 @@
     if (!text && !photoIds.length) return;
 
     state.awaiting = true;
+    if (!state.chatSessionId) state.chatSessionId = genSessionId();
     sendBtn.disabled = true;
     attachBtn.disabled = true;
 
@@ -615,6 +625,8 @@
       }
       // If chat is minimized when reply lands, mark unread on launcher
       if (!state.panelOpen) launcherEl.classList.add("has-unread");
+      // Snapshot transcript to the CRM after every successful AI reply.
+      pushTranscript();
     } catch (err) {
       hideTyping();
       const errMsg = err.message && err.message.length < 200
@@ -673,6 +685,49 @@
     composerInput.placeholder = "Filling out booking form...";
   }
 
+  // Send the current transcript to the CRM. Runs after every AI reply so
+  // Patrick has a near-live feed of conversations. Also runs on `close()`
+  // (with ended:true) and on page unload via sendBeacon. We intentionally
+  // tolerate failures silently — the customer's chat must not be blocked
+  // because background telemetry got rejected.
+  function pushTranscript({ ended = false, useBeacon = false } = {}) {
+    if (!state.chatSessionId) return;
+    const transcript = buildTranscript();
+    // Don't bother sending until there's at least one real exchange (the
+    // first two messages are always the AI's welcome — those alone are noise).
+    const realMessages = state.messages.filter((m) => {
+      if (m.role !== "user") return false;
+      if (typeof m.content === "string") return m.content.trim().length > 0;
+      return true; // multimodal user messages always count
+    });
+    if (realMessages.length === 0 && !ended) return;
+
+    const payload = {
+      sessionId: state.chatSessionId,
+      transcript,
+      messageCount: state.messages.length,
+      pageUrl: location.href,
+      userAgent: navigator.userAgent,
+      ended
+    };
+
+    try {
+      if (useBeacon && navigator.sendBeacon) {
+        const blob = new Blob([JSON.stringify(payload)], { type: "application/json" });
+        navigator.sendBeacon(TRANSCRIPT_ENDPOINT, blob);
+        return;
+      }
+      // Fire-and-forget. Use keepalive so if the user navigates mid-fetch
+      // the request still completes.
+      fetch(TRANSCRIPT_ENDPOINT, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+        keepalive: true
+      }).catch(() => {});
+    } catch (e) { /* swallow */ }
+  }
+
   function buildTranscript() {
     const lines = [];
     for (const m of state.messages) {
@@ -714,6 +769,7 @@
       userAgent: navigator.userAgent,
       mode: "ai_diagnose",
       transcript: buildTranscript(),
+      chatSessionId: state.chatSessionId || null,
       photos
     };
 
@@ -797,6 +853,9 @@
     },
     close() {
       // "End chat" — clear state so launcher disappears completely.
+      // Send a final transcript snapshot before clearing so the abandoned
+      // chat is captured in the CRM.
+      pushTranscript({ ended: true });
       panelEl.classList.remove("is-open");
       launcherEl.classList.remove("is-visible");
       document.body.classList.remove("pjl-chat-locked");
@@ -884,6 +943,14 @@
 
     // 5. Wire any data-pjl-chat triggers on this page (CTA buttons, links).
     bindCtaTriggers();
+
+    // 6. On tab close / nav away, beacon a final transcript snapshot so we
+    //    don't lose the conversation when a customer just walks away.
+    window.addEventListener("pagehide", () => {
+      if (state.bookingComplete) return; // already captured via /api/quotes
+      if (!state.messages.length || !state.chatSessionId) return;
+      pushTranscript({ useBeacon: true });
+    });
   }
 
   function bindCtaTriggers() {

@@ -68,6 +68,11 @@ const SERVER_DIR = __dirname;
 const DATA_DIR = path.join(SERVER_DIR, "data");
 const LEADS_FILE = path.join(DATA_DIR, "leads.json");
 const AUTH_FILE = path.join(DATA_DIR, "auth.json");
+// All AI chat transcripts (booked AND abandoned). Patrick uses this to see
+// why people are/aren't converting. Identified by client-generated sessionId
+// so the widget can upsert as the conversation progresses.
+const CHATS_FILE = path.join(DATA_DIR, "chat-transcripts.json");
+const MAX_CHAT_BODY = 80_000; // ~50K-ish transcript + a few KB of metadata
 // Per-lead photo attachments live under data/photos/<leadId>/N.jpg.
 // Photos arrive base64-encoded inside the booking POST and are written ONLY
 // after the lead is successfully created (validation passed, not a duplicate).
@@ -275,9 +280,14 @@ function needsAuth(method, pathname) {
   if (pathname === "/admin" || pathname === "/admin/") return true;
   if (pathname === "/admin/schedule" || pathname === "/admin/schedule/") return true;
   if (pathname === "/admin/handoff" || pathname === "/admin/handoff/") return true;
+  if (pathname === "/admin/chats" || pathname === "/admin/chats/") return true;
   if (pathname === "/api/quotes" && method === "GET") return true;
   if (pathname === "/api/quotes.csv" || pathname === "/api/contacts" || pathname === "/api/contacts.vcf") return true;
   if (/^\/api\/quotes\/[^/]+/.test(pathname)) return true;
+  // Chat transcripts: POST is public (customer's chat upserts its own transcript).
+  // GET endpoints (list + detail) are admin-only.
+  if (pathname === "/api/chat-transcripts" && method === "GET") return true;
+  if (/^\/api\/chat-transcripts\/[^/]+$/.test(pathname) && method === "GET") return true;
   // Schedule management is admin-only.
   if (pathname.startsWith("/api/schedule/")) return true;
   // Manual handoff (admin sends booking link to customer) is admin-only.
@@ -573,12 +583,84 @@ async function readPhotoFile(leadId, n) {
 // from the Render API). After the DNS cutover, both will be on the same
 // origin and CORS becomes a no-op. /api/quotes only accepts new leads (no
 // credentialed reads), so a permissive policy is safe.
-const PUBLIC_API_PATHS = new Set(["/api/quotes"]);
+const PUBLIC_API_PATHS = new Set(["/api/quotes", "/api/chat-transcripts"]);
 function isPublicApiPath(pathname) {
   if (PUBLIC_API_PATHS.has(pathname)) return true;
   // Photo fetches by portal token are also public (token is the auth).
   if (/^\/api\/portal\/[^/]+\/photo\/\d+$/.test(pathname)) return true;
   return false;
+}
+
+// ----- Chat transcript storage -------------------------------------------
+// Transcripts are upserted by client-generated sessionId. Each entry:
+//   { id, sessionId, firstSeenAt, lastUpdatedAt, transcript, messageCount,
+//     bookedLeadId, status: "active" | "booked" | "abandoned",
+//     pageUrl, userAgent }
+// We hold the file open just long enough to read + rewrite. For PJL's
+// expected volume (low hundreds/day) this is fine. Rotate after the file
+// grows past CHAT_FILE_SOFT_CAP entries.
+const CHAT_FILE_SOFT_CAP = 5000;
+
+async function readChats() {
+  await ensureStore();
+  try {
+    const raw = await fs.readFile(CHATS_FILE, "utf8");
+    return JSON.parse(raw || "[]");
+  } catch {
+    return [];
+  }
+}
+async function writeChats(chats) {
+  // If we've grown past the soft cap, prune the oldest abandoned entries
+  // (keep all booked) so the file doesn't balloon over the years.
+  if (chats.length > CHAT_FILE_SOFT_CAP) {
+    chats.sort((a, b) => Date.parse(b.lastUpdatedAt) - Date.parse(a.lastUpdatedAt));
+    const kept = [];
+    let abandonedKept = 0;
+    for (const c of chats) {
+      if (c.status === "booked") { kept.push(c); continue; }
+      if (abandonedKept < CHAT_FILE_SOFT_CAP - 500) { kept.push(c); abandonedKept++; }
+    }
+    chats = kept;
+  }
+  await fs.writeFile(CHATS_FILE, `${JSON.stringify(chats, null, 2)}\n`, "utf8");
+}
+
+function normalizeTranscriptBody(value) {
+  return normalizeString(value, 50000);
+}
+
+// Mark / link a chat to a lead once the customer books. Returns updated chat
+// or null if the sessionId isn't in the store.
+async function linkChatToLead(sessionId, leadId) {
+  if (!sessionId) return null;
+  const chats = await readChats();
+  const idx = chats.findIndex((c) => c.sessionId === sessionId);
+  if (idx === -1) return null;
+  chats[idx] = {
+    ...chats[idx],
+    bookedLeadId: leadId,
+    status: "booked",
+    lastUpdatedAt: new Date().toISOString()
+  };
+  await writeChats(chats);
+  return chats[idx];
+}
+
+// Sweep: any chat whose last update is older than ABANDON_THRESHOLD_MS and
+// is still "active" gets reclassified to "abandoned." Cheap to run on each
+// list query; keeps the data accurate without a cron.
+const ABANDON_THRESHOLD_MS = 1000 * 60 * 30; // 30 minutes
+function reclassifyAbandoned(chats) {
+  const now = Date.now();
+  let changed = false;
+  for (const c of chats) {
+    if (c.status === "active" && (now - Date.parse(c.lastUpdatedAt || c.firstSeenAt)) > ABANDON_THRESHOLD_MS) {
+      c.status = "abandoned";
+      changed = true;
+    }
+  }
+  return changed;
 }
 function applyCorsHeaders(req, res, pathname) {
   if (!isPublicApiPath(pathname)) return;
@@ -1047,6 +1129,14 @@ async function handleApi(req, res, pathname) {
         });
       });
 
+      // If the booking came from the chat widget, link the transcript so it
+      // shows up as "booked" rather than "abandoned" in the chats dashboard.
+      const chatSessionId = normalizeString(payload.chatSessionId, 80);
+      if (chatSessionId) {
+        try { await linkChatToLead(chatSessionId, result.lead.id); }
+        catch (err) { console.error("[chat] link failed:", err?.message || err); }
+      }
+
       // Return the portal URL too so the chat widget's thank-you screen can
       // surface it as the customer's "you're now a PJL customer" link.
       const portalToken = result.lead.portal?.token;
@@ -1194,6 +1284,104 @@ async function handleApi(req, res, pathname) {
     } catch (error) {
       return sendJson(res, 400, { ok: false, errors: [error.message || "Unable to bulk update."] });
     }
+  }
+
+  // ---- Chat transcripts (public POST upsert, admin GET) ----
+  if (req.method === "POST" && pathname === "/api/chat-transcripts") {
+    try {
+      const payload = await parseRequestBody(req, { maxBytes: MAX_CHAT_BODY });
+      const sessionId = normalizeString(payload.sessionId, 80);
+      const transcript = normalizeTranscriptBody(payload.transcript);
+      const messageCount = Math.min(Math.max(0, Number(payload.messageCount) || 0), 200);
+      const pageUrl = normalizeString(payload.pageUrl, 500);
+      const userAgent = normalizeString(payload.userAgent, 500);
+      const ended = Boolean(payload.ended);
+      if (!sessionId || !transcript) {
+        return sendJson(res, 422, { ok: false, errors: ["sessionId and transcript are required."] });
+      }
+
+      const now = new Date().toISOString();
+      const chats = await readChats();
+      const idx = chats.findIndex((c) => c.sessionId === sessionId);
+      if (idx === -1) {
+        chats.unshift({
+          id: crypto.randomUUID(),
+          sessionId,
+          firstSeenAt: now,
+          lastUpdatedAt: now,
+          transcript,
+          messageCount,
+          status: ended ? "abandoned" : "active",
+          bookedLeadId: null,
+          pageUrl,
+          userAgent
+        });
+      } else {
+        // Don't downgrade a booked chat back to active/abandoned.
+        const existing = chats[idx];
+        chats[idx] = {
+          ...existing,
+          transcript,
+          messageCount,
+          lastUpdatedAt: now,
+          status: existing.status === "booked"
+            ? "booked"
+            : (ended ? "abandoned" : "active"),
+          pageUrl: pageUrl || existing.pageUrl,
+          userAgent: userAgent || existing.userAgent
+        };
+      }
+      await writeChats(chats);
+      return sendJson(res, 200, { ok: true });
+    } catch (error) {
+      return sendJson(res, 400, { ok: false, errors: [error.message || "Unable to save chat transcript."] });
+    }
+  }
+
+  if (req.method === "GET" && pathname === "/api/chat-transcripts") {
+    const chats = await readChats();
+    if (reclassifyAbandoned(chats)) {
+      // Persist reclassification so subsequent reads stay consistent.
+      await writeChats(chats);
+    }
+    const url = new URL(req.url, baseUrlFromReq(req));
+    const filter = url.searchParams.get("status") || "all";
+    const filtered = chats.filter((c) => {
+      if (filter === "all") return true;
+      return c.status === filter;
+    });
+    // Build counts for the dashboard tabs
+    const counts = {
+      all: chats.length,
+      active: chats.filter((c) => c.status === "active").length,
+      booked: chats.filter((c) => c.status === "booked").length,
+      abandoned: chats.filter((c) => c.status === "abandoned").length
+    };
+    return sendJson(res, 200, {
+      ok: true,
+      counts,
+      chats: filtered
+        .sort((a, b) => Date.parse(b.lastUpdatedAt) - Date.parse(a.lastUpdatedAt))
+        .map((c) => ({
+          id: c.id,
+          sessionId: c.sessionId,
+          firstSeenAt: c.firstSeenAt,
+          lastUpdatedAt: c.lastUpdatedAt,
+          status: c.status,
+          messageCount: c.messageCount,
+          bookedLeadId: c.bookedLeadId,
+          preview: (c.transcript || "").slice(0, 240)
+        }))
+    });
+  }
+
+  const chatDetailMatch = pathname.match(/^\/api\/chat-transcripts\/([^/]+)$/);
+  if (chatDetailMatch && req.method === "GET") {
+    const id = decodeURIComponent(chatDetailMatch[1]);
+    const chats = await readChats();
+    const chat = chats.find((c) => c.id === id);
+    if (!chat) return sendJson(res, 404, { ok: false, errors: ["Chat not found."] });
+    return sendJson(res, 200, { ok: true, chat });
   }
 
   // Customer-side photo fetch, authenticated by portal token (NOT admin cookie).
@@ -1833,6 +2021,9 @@ function resolveStaticTarget(pathname) {
   }
   if (pathname === "/admin" || pathname === "/admin/") {
     return { dir: SERVER_DIR, relative: "/admin.html" };
+  }
+  if (pathname === "/admin/chats" || pathname === "/admin/chats/") {
+    return { dir: SERVER_DIR, relative: "/chats.html" };
   }
   if (pathname === "/admin/schedule" || pathname === "/admin/schedule/") {
     return { dir: SERVER_DIR, relative: "/schedule.html" };

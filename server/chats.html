@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PJL CRM — AI Chat Transcripts</title>
+  <link rel="icon" type="image/svg+xml" href="/crm/pjl-logo-mark.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/crm/crm.css">
+  <style>
+    .chats-shell { padding: 24px 28px 80px; max-width: 1280px; margin: 0 auto; }
+    .chats-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 18px; flex-wrap: wrap; gap: 12px; }
+    .chats-title { font-family: 'Barlow Condensed', sans-serif; font-size: 30px; font-weight: 700; letter-spacing: 0.5px; text-transform: uppercase; color: #1F4733; margin: 0; }
+    .chats-subtitle { font-size: 13px; color: rgba(15, 31, 20, 0.6); margin: 4px 0 0; }
+    .chats-tabs { display: flex; gap: 6px; flex-wrap: wrap; }
+    .chats-tab {
+      background: #fff; border: 1.5px solid rgba(15, 31, 20, 0.12);
+      padding: 8px 14px; border-radius: 999px; font-family: inherit;
+      font-size: 12px; font-weight: 600; letter-spacing: 0.4px;
+      cursor: pointer; transition: all .15s; color: #1F4733;
+    }
+    .chats-tab:hover { border-color: #1F4733; }
+    .chats-tab.is-active { background: #1F4733; color: #FAFAF5; border-color: #1F4733; }
+    .chats-tab .count {
+      display: inline-block; margin-left: 6px;
+      background: rgba(15, 31, 20, 0.08); color: #1F4733;
+      padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 700;
+    }
+    .chats-tab.is-active .count { background: rgba(255,255,255,0.15); color: #FAFAF5; }
+
+    .chats-summary {
+      background: #fff; border: 1px solid rgba(15, 31, 20, 0.08);
+      border-radius: 10px; padding: 16px 18px; margin-bottom: 16px;
+      display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px;
+    }
+    .chats-summary-item { font-size: 12px; color: rgba(15, 31, 20, 0.6); text-transform: uppercase; letter-spacing: 0.6px; font-weight: 500; }
+    .chats-summary-item strong {
+      display: block; font-family: 'Barlow Condensed', sans-serif;
+      font-size: 28px; font-weight: 700; color: #1F4733;
+      margin-top: 4px; line-height: 1;
+    }
+    .chats-summary-item.conversion strong { color: #E07B24; }
+
+    .chat-list { display: flex; flex-direction: column; gap: 10px; }
+    .chat-row {
+      background: #fff; border: 1px solid rgba(15, 31, 20, 0.1);
+      border-radius: 10px; overflow: hidden;
+      transition: border-color .15s, box-shadow .15s;
+    }
+    .chat-row:hover { border-color: rgba(15, 31, 20, 0.2); box-shadow: 0 2px 8px rgba(15, 31, 20, 0.05); }
+    .chat-row-summary {
+      padding: 14px 18px;
+      display: grid;
+      grid-template-columns: auto 1fr auto auto auto;
+      gap: 14px; align-items: center;
+      cursor: pointer;
+    }
+    .chat-status-pill {
+      font-size: 10px; font-weight: 700; letter-spacing: 1px;
+      text-transform: uppercase; padding: 4px 10px; border-radius: 999px;
+      flex-shrink: 0; white-space: nowrap;
+    }
+    .chat-status-pill.booked { background: #DDF0DC; color: #1F4733; }
+    .chat-status-pill.abandoned { background: #FBE5D6; color: #B85C3D; }
+    .chat-status-pill.active { background: #FFF3D6; color: #B8862E; }
+    .chat-preview {
+      font-size: 13px; color: #1F4733;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      min-width: 0;
+    }
+    .chat-meta { font-size: 11px; color: rgba(15, 31, 20, 0.55); white-space: nowrap; }
+    .chat-row-detail {
+      display: none; padding: 18px 22px; border-top: 1px solid rgba(15, 31, 20, 0.08);
+      background: #FAFAF5;
+    }
+    .chat-row.is-open .chat-row-detail { display: block; }
+    .chat-row.is-open .chat-row-toggle { transform: rotate(180deg); }
+    .chat-row-toggle { transition: transform .15s; color: rgba(15, 31, 20, 0.5); }
+
+    .chat-transcript {
+      background: #fff; border: 1px solid rgba(15, 31, 20, 0.08);
+      border-radius: 8px; padding: 16px;
+      font-family: 'DM Sans', system-ui, sans-serif;
+      font-size: 13px; line-height: 1.6;
+      white-space: pre-wrap;
+      max-height: 480px; overflow-y: auto;
+    }
+    .chat-detail-meta {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 10px; margin-bottom: 14px; font-size: 11px; color: rgba(15, 31, 20, 0.6);
+    }
+    .chat-detail-meta strong {
+      display: block; font-family: 'Barlow Condensed', sans-serif;
+      font-size: 14px; color: #1F4733; font-weight: 600; letter-spacing: 0.4px;
+      text-transform: uppercase; margin-bottom: 2px;
+    }
+    .chat-detail-meta a { color: #E07B24; text-decoration: underline; }
+
+    .chats-empty {
+      text-align: center; padding: 60px 20px;
+      background: #fff; border: 1px solid rgba(15, 31, 20, 0.08);
+      border-radius: 12px;
+    }
+    .chats-empty h3 { font-family: 'Barlow Condensed', sans-serif; font-size: 22px; color: #1F4733; margin: 0 0 6px; text-transform: uppercase; letter-spacing: 0.5px; }
+    .chats-empty p { color: rgba(15, 31, 20, 0.6); margin: 0; font-size: 14px; }
+
+    @media (max-width: 700px) {
+      .chats-shell { padding: 16px 14px 80px; }
+      .chats-summary { grid-template-columns: repeat(2, 1fr); }
+      .chat-row-summary { grid-template-columns: auto 1fr; gap: 8px; padding: 12px 14px; }
+      .chat-row-summary .chat-meta { display: none; }
+    }
+  </style>
+</head>
+<body class="crm-body">
+  <header class="crm-topbar">
+    <div class="crm-topbar-inner">
+      <a href="/admin" class="crm-brand">
+        <img src="/crm/pjl-logo.svg" alt="PJL Land Services" />
+      </a>
+      <nav class="crm-nav">
+        <a href="/admin">Leads</a>
+        <a href="/admin/schedule">Schedule</a>
+        <a href="/admin/chats" class="is-active">AI Chats</a>
+        <button id="logoutBtn" type="button">Sign out</button>
+      </nav>
+    </div>
+  </header>
+
+  <main class="chats-shell">
+    <div class="chats-header">
+      <div>
+        <h1 class="chats-title">AI Chat Transcripts</h1>
+        <p class="chats-subtitle">Every conversation Patrick (the AI) has had — booked AND abandoned. Use this to see why people aren't converting.</p>
+      </div>
+      <div class="chats-tabs" id="tabs">
+        <button class="chats-tab is-active" data-status="all">All <span class="count" data-count="all">0</span></button>
+        <button class="chats-tab" data-status="booked">Booked <span class="count" data-count="booked">0</span></button>
+        <button class="chats-tab" data-status="abandoned">Abandoned <span class="count" data-count="abandoned">0</span></button>
+        <button class="chats-tab" data-status="active">Active now <span class="count" data-count="active">0</span></button>
+      </div>
+    </div>
+
+    <div class="chats-summary" id="summary">
+      <div class="chats-summary-item">Total chats <strong data-summary="total">0</strong></div>
+      <div class="chats-summary-item">Booked <strong data-summary="booked">0</strong></div>
+      <div class="chats-summary-item">Abandoned <strong data-summary="abandoned">0</strong></div>
+      <div class="chats-summary-item conversion">Conversion <strong data-summary="conversion">—</strong></div>
+    </div>
+
+    <div class="chat-list" id="chatList"></div>
+    <div class="chats-empty" id="emptyState" hidden>
+      <h3>No chats yet</h3>
+      <p>Once customers start chatting with the AI, conversations will appear here.</p>
+    </div>
+  </main>
+
+  <script src="/crm/chats.js"></script>
+</body>
+</html>
