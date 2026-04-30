@@ -91,7 +91,19 @@
 .hydra-hero::before {
   content: '';
   position: absolute; inset: 0;
-  background-image: url('hydrawise-display-desktop.png');
+  /* Responsive background — image-set picks the closest variant by viewport × DPR.
+     Source is 6000×3375 PNG (4MB) — smaller variants drop to ~111KB / ~241KB. */
+  background-image: url('hydrawise-display-desktop@800w.png');
+  background-image: -webkit-image-set(
+    url('hydrawise-display-desktop@800w.png') 1x,
+    url('hydrawise-display-desktop@1280w.png') 1.6x,
+    url('hydrawise-display-desktop.png') 4.7x
+  );
+  background-image: image-set(
+    url('hydrawise-display-desktop@800w.png') 1x,
+    url('hydrawise-display-desktop@1280w.png') 1.6x,
+    url('hydrawise-display-desktop.png') 4.7x
+  );
   background-size: cover;
   background-position: center;
   opacity: 0.18;

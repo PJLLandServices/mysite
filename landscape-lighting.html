@@ -74,7 +74,18 @@
   content: '';
   position: absolute;
   inset: 0;
-  background-image: url('lighting-page-hero.png');
+  /* Responsive background — modern browsers grab the size that matches viewport × DPR */
+  background-image: url('lighting-page-hero@800w.png');
+  background-image: -webkit-image-set(
+    url('lighting-page-hero@800w.png') 1x,
+    url('lighting-page-hero@1280w.png') 1.6x,
+    url('lighting-page-hero.png') 2.5x
+  );
+  background-image: image-set(
+    url('lighting-page-hero@800w.png') 1x,
+    url('lighting-page-hero@1280w.png') 1.6x,
+    url('lighting-page-hero.png') 2.5x
+  );
   background-size: cover;
   background-position: center;
 }
@@ -442,7 +453,7 @@
   <div class="container">
     <div class="service-detail-grid">
       <div class="service-detail-img reveal">
-        <img src="lighting-page-hero.png" alt="Landscape Lighting Installation" loading="lazy">
+        <img src="lighting-page-hero.png" srcset="lighting-page-hero@800w.png 800w, lighting-page-hero@1280w.png 1280w, lighting-page-hero.png 2000w" sizes="(max-width: 768px) 100vw, 720px" alt="Landscape Lighting Installation" loading="lazy" decoding="async">
       </div>
       <div class="service-detail-content reveal reveal-delay-2">
         <span class="section-tag">Our Process</span>
