@@ -221,6 +221,22 @@
 }
 .pjl-chat-msg-row.pjl .pjl-chat-msg-bubble strong { color: var(--pjl-chat-green); }
 .pjl-chat-msg-row.user .pjl-chat-msg-bubble strong { color: var(--pjl-chat-amber-light); }
+.pjl-chat-link {
+  color: var(--pjl-chat-amber);
+  font-weight: 600;
+  text-decoration: underline;
+  text-decoration-color: rgba(224, 123, 36, .4);
+  text-underline-offset: 2px;
+  transition: color .12s, text-decoration-color .12s;
+}
+.pjl-chat-link:hover {
+  color: var(--pjl-chat-amber-light);
+  text-decoration-color: var(--pjl-chat-amber-light);
+}
+.pjl-chat-msg-row.user .pjl-chat-msg-bubble .pjl-chat-link {
+  color: var(--pjl-chat-amber-light);
+  text-decoration-color: rgba(245, 155, 74, .5);
+}
 
 .pjl-chat-photo-attachments {
   display: grid; gap: 6px;
@@ -508,6 +524,116 @@
 .pjl-chat-ty button:hover {
   background: var(--pjl-chat-green-mid);
   transform: translateY(-1px);
+}
+.pjl-chat-ty {
+  align-items: flex-start;
+  padding-top: 28px;
+  overflow-y: auto;
+}
+.pjl-chat-ty-card {
+  width: 100%;
+  max-width: 440px;
+}
+.pjl-chat-ty-portal {
+  background: var(--pjl-chat-green-pale);
+  border: 1px solid rgba(27, 77, 46, .18);
+  border-radius: 10px;
+  padding: 14px 16px;
+  margin-bottom: 22px;
+  text-align: left;
+}
+.pjl-chat-ty-portal strong {
+  display: block;
+  font-family: 'Barlow Condensed', 'Outfit', system-ui, sans-serif;
+  font-size: 14px;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  color: var(--pjl-chat-green);
+  margin-bottom: 4px;
+}
+.pjl-chat-ty-portal a[data-pjl-ty-portal-link] {
+  display: block;
+  word-break: break-all;
+  font-size: 12px;
+  color: var(--pjl-chat-green-mid);
+  text-decoration: underline;
+  text-decoration-color: rgba(27, 77, 46, .35);
+  margin-bottom: 6px;
+}
+.pjl-chat-ty-portal a[data-pjl-ty-portal-link]:hover { color: var(--pjl-chat-green); }
+.pjl-chat-ty-portal-note {
+  font-size: 11px !important;
+  color: var(--pjl-chat-ink-soft) !important;
+  line-height: 1.45 !important;
+  margin: 0 !important;
+}
+.pjl-chat-ty-upsell {
+  background: var(--pjl-chat-cream-deep);
+  border-radius: 12px;
+  padding: 18px 16px;
+  margin-bottom: 22px;
+  text-align: left;
+}
+.pjl-chat-ty-upsell h3 {
+  font-family: 'Barlow Condensed', 'Outfit', system-ui, sans-serif;
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--pjl-chat-green);
+  margin: 0 0 6px;
+}
+.pjl-chat-ty-upsell > p {
+  font-size: 12px !important;
+  color: var(--pjl-chat-ink-soft) !important;
+  margin: 0 0 12px !important;
+  line-height: 1.45 !important;
+}
+.pjl-chat-ty-upsell-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.pjl-chat-ty-upsell-card {
+  display: block;
+  background: var(--pjl-chat-white);
+  border: 1.5px solid var(--pjl-chat-line);
+  border-radius: 8px;
+  padding: 14px 12px;
+  text-decoration: none;
+  color: var(--pjl-chat-ink);
+  transition: border-color .15s, transform .12s, box-shadow .15s;
+  text-align: center;
+}
+.pjl-chat-ty-upsell-card:hover {
+  border-color: var(--pjl-chat-amber);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(224, 123, 36, .15);
+}
+.pjl-chat-ty-upsell-tag {
+  display: inline-block;
+  font-family: 'Barlow Condensed', 'Outfit', system-ui, sans-serif;
+  font-size: 11px;
+  letter-spacing: 1.5px;
+  font-weight: 700;
+  color: var(--pjl-chat-amber);
+  margin-bottom: 6px;
+}
+.pjl-chat-ty-upsell-card strong {
+  display: block;
+  font-family: 'Barlow Condensed', 'Outfit', system-ui, sans-serif;
+  font-size: 16px;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: var(--pjl-chat-green);
+  margin-bottom: 4px;
+  line-height: 1.05;
+}
+.pjl-chat-ty-upsell-price {
+  display: block;
+  font-size: 12px;
+  color: var(--pjl-chat-ink-soft);
+  font-weight: 500;
 }
 
 /* ---------- Error toast (inside the panel) ---------- */

@@ -205,8 +205,29 @@
       <div class="pjl-chat-ty" data-pjl-ty>
         <div class="pjl-chat-ty-card">
           <div class="pjl-chat-ty-icon">✓</div>
-          <h2>Thanks — we've got you.</h2>
-          <p>We'll reach out within 24 hours to schedule your visit. Check your email for a confirmation.</p>
+          <h2>You're now a PJL customer.</h2>
+          <p>We'll reach out within 24 hours to confirm your visit. Check your email for the booking confirmation.</p>
+          <div class="pjl-chat-ty-portal" data-pjl-ty-portal hidden>
+            <strong>Your customer portal:</strong>
+            <a href="" target="_blank" rel="noopener" data-pjl-ty-portal-link></a>
+            <p class="pjl-chat-ty-portal-note">Bookmark this — you can check status, message Patrick, accept future quotes, and pre-book seasonal service from here.</p>
+          </div>
+          <div class="pjl-chat-ty-upsell">
+            <h3>Set yourself up for the year</h3>
+            <p>Sprinkler systems need spring opening + fall winterization annually. Pre-book now and you're locked in — no chasing us in April or October.</p>
+            <div class="pjl-chat-ty-upsell-grid">
+              <a href="sprinkler-spring-opening.html" class="pjl-chat-ty-upsell-card">
+                <span class="pjl-chat-ty-upsell-tag">SPRING</span>
+                <strong>Spring Opening</strong>
+                <span class="pjl-chat-ty-upsell-price">From $90</span>
+              </a>
+              <a href="sprinkler-fall-winterization.html" class="pjl-chat-ty-upsell-card">
+                <span class="pjl-chat-ty-upsell-tag">FALL</span>
+                <strong>Fall Winterization</strong>
+                <span class="pjl-chat-ty-upsell-price">From $90</span>
+              </a>
+            </div>
+          </div>
           <button data-action="restart-ty" type="button">Start a New Diagnosis</button>
         </div>
       </div>
@@ -247,8 +268,30 @@
 
   // -------- Rendering --------
   function escapeHtml(s) { return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+  // Allow only safe link targets: relative paths to other pages (e.g. "sprinkler-repair.html"
+  // or "sprinkler-service-richmond-hill.html#section"), tel:, mailto:. Anything else falls
+  // through and renders as plain text — we never want the AI injecting external URLs.
+  function safeHref(rawUrl) {
+    const url = rawUrl.trim();
+    if (/^(tel:|mailto:)/i.test(url)) return url;
+    // Relative URLs only: must not start with /, //, or a scheme.
+    if (/^[a-z][\w+.-]*:/i.test(url)) return null;
+    if (url.startsWith("//") || url.startsWith("/")) return null;
+    // Reasonable filename pattern: letters, digits, dashes, dots, slashes, anchors, query.
+    if (!/^[\w./?=&%#-]+$/i.test(url)) return null;
+    return url;
+  }
   function formatBubbleText(text) {
-    return escapeHtml(text).replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
+    let out = escapeHtml(text);
+    // [text](url) → safe anchor (relative URLs only)
+    out = out.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_match, label, url) => {
+      const href = safeHref(url);
+      if (!href) return label; // unsafe URL → render as plain text
+      return `<a href="${href}" class="pjl-chat-link">${label}</a>`;
+    });
+    // **bold** → strong
+    out = out.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
+    return out;
   }
 
   function renderMessages() {
@@ -683,6 +726,17 @@
       if (r.ok) {
         state.bookingComplete = true;
         saveState();
+        // Surface the customer portal link in the thank-you screen so the
+        // customer has a permanent home for managing their PJL account.
+        if (body.portalUrl) {
+          const portalBlock = tyOverlay.querySelector("[data-pjl-ty-portal]");
+          const portalLink = tyOverlay.querySelector("[data-pjl-ty-portal-link]");
+          if (portalBlock && portalLink) {
+            portalLink.href = body.portalUrl;
+            portalLink.textContent = body.portalUrl;
+            portalBlock.hidden = false;
+          }
+        }
         tyOverlay.classList.add("is-visible");
       } else {
         const msg = (body.errors && body.errors[0]) || `Submit failed (${r.status})`;
