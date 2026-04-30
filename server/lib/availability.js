@@ -33,14 +33,75 @@ const { PJL_BASE } = require("./geocode");
 // Bookable services. `minutes` is the on-site time. `requiresAddress` means
 // the booking form must collect a street address (used for travel-time math).
 // `bookable: false` means visible in admin reports but customers can't pick it.
+// `family` groups variants the customer typically picks between (residential
+// 4z / 5-7z / 8+z / commercial all live under "spring_opening"). Used by
+// book.html to filter the grid when arriving via a deep link.
+//
+// `slotIncrementMinutes` (optional) overrides the global slot increment for
+// this service only. Commercial uses 300 min so customers see exactly TWO
+// slots per day — 8:00 AM (morning) and 1:00 PM (afternoon) — instead of a
+// full half-hour grid. This matches Patrick's "morning or afternoon
+// appointment" preference for commercial work.
+//
+// `displayMinutes` (optional) is the human-readable duration shown in the UI.
+// For long jobs we display a range ("90-120 min") even though the engine
+// blocks the longer end (`minutes`) for safety.
 const BOOKABLE_SERVICES = {
-  spring_open_4z:     { label: "Spring opening (≤4 zones)",        minutes: 45, requiresAddress: true, bookable: true,  category: "seasonal" },
-  spring_open_8z:     { label: "Spring opening (5-8 zones)",       minutes: 60, requiresAddress: true, bookable: true,  category: "seasonal" },
-  fall_close_6z:      { label: "Fall winterization (≤6 zones)",    minutes: 30, requiresAddress: true, bookable: true,  category: "seasonal" },
-  fall_close_15z:     { label: "Fall winterization (7-15 zones)",  minutes: 45, requiresAddress: true, bookable: true,  category: "seasonal" },
-  sprinkler_repair:   { label: "Sprinkler repair (default block)", minutes: 90, requiresAddress: true, bookable: true,  category: "repair"   },
-  hydrawise_retrofit: { label: "Hydrawise retrofit",               minutes: 90, requiresAddress: true, bookable: true,  category: "controller" },
-  site_visit:         { label: "Site visit (consult / scope)",     minutes: 30, requiresAddress: true, bookable: true,  category: "consult"  }
+  spring_open_4z: {
+    label: "Spring opening (≤4 zones)",
+    minutes: 45, requiresAddress: true, bookable: true,
+    category: "seasonal", family: "spring_opening"
+  },
+  spring_open_8z: {
+    label: "Spring opening (5-7 zones)",
+    minutes: 60, requiresAddress: true, bookable: true,
+    category: "seasonal", family: "spring_opening"
+  },
+  spring_open_15z: {
+    label: "Spring opening (8+ zones)",
+    minutes: 120, displayMinutes: "90-120 min",
+    requiresAddress: true, bookable: true,
+    category: "seasonal", family: "spring_opening"
+  },
+  spring_open_commercial: {
+    label: "Spring opening — commercial",
+    minutes: 120, displayMinutes: "Morning or afternoon",
+    slotIncrementMinutes: 300,
+    requiresAddress: true, bookable: true,
+    category: "seasonal", family: "spring_opening"
+  },
+  fall_close_6z: {
+    label: "Fall winterization (≤6 zones)",
+    minutes: 30, requiresAddress: true, bookable: true,
+    category: "seasonal", family: "fall_closing"
+  },
+  fall_close_15z: {
+    label: "Fall winterization (7-15 zones)",
+    minutes: 45, requiresAddress: true, bookable: true,
+    category: "seasonal", family: "fall_closing"
+  },
+  fall_close_commercial: {
+    label: "Fall winterization — commercial",
+    minutes: 120, displayMinutes: "Morning or afternoon",
+    slotIncrementMinutes: 300,
+    requiresAddress: true, bookable: true,
+    category: "seasonal", family: "fall_closing"
+  },
+  sprinkler_repair: {
+    label: "Sprinkler repair (default block)",
+    minutes: 90, requiresAddress: true, bookable: true,
+    category: "repair", family: "sprinkler_repair"
+  },
+  hydrawise_retrofit: {
+    label: "Hydrawise retrofit",
+    minutes: 90, requiresAddress: true, bookable: true,
+    category: "controller", family: "hydrawise_retrofit"
+  },
+  site_visit: {
+    label: "Site visit (consult / scope)",
+    minutes: 30, requiresAddress: true, bookable: true,
+    category: "consult", family: "site_visit"
+  }
 };
 
 // Working hours per day-of-week. 0 = Sunday, 6 = Saturday.
@@ -127,7 +188,9 @@ async function listAvailableSlots(opts = {}) {
   const leadTimeMs = cfg.leadTimeHours * 60 * 60 * 1000;
   const earliestStart = now.getTime() + leadTimeMs;
   const buffer = cfg.bufferMinutes;
-  const incrementMin = cfg.slotIncrementMinutes;
+  // Per-service override beats the global default. Commercial services use a
+  // 300-min increment so customers see two cleanly spaced AM/PM slots.
+  const incrementMin = service.slotIncrementMinutes || cfg.slotIncrementMinutes;
   const slotDuration = service.minutes;
 
   // Bookings normalized: only future, only with start/end/coords. Sorted by start.

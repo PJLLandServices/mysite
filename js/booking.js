@@ -24,13 +24,18 @@
     selectedDate: null, // YYYY-MM-DD
     selectedSlot: null, // { start, end, timeLabel, ... }
     days: [],           // grouped slots from /api/booking/availability
-    services: {}        // catalog from /api/booking/services
+    services: {},       // catalog from /api/booking/services
+    familyFilter: null  // when set, only services with this `family` are shown
   };
 
   // ===== DOM =====
   const steps = Array.from(document.querySelectorAll(".book-step"));
   const progressSteps = Array.from(document.querySelectorAll(".book-progress-step"));
   const serviceGrid = document.getElementById("serviceGrid");
+  const serviceHeading = document.getElementById("serviceHeading");
+  const serviceLead = document.getElementById("serviceLead");
+  const bookOtherWrap = document.getElementById("bookOtherWrap");
+  const bookOtherLink = document.getElementById("bookOther");
   const addressInput = document.getElementById("bookAddress");
   const addressNextBtn = document.getElementById("addressNextBtn");
   const dayLoading = document.getElementById("dayLoading");
@@ -87,19 +92,69 @@
   // via /api/booking/services. If the server adds a new bookable service
   // with no entry here, it falls back to a default icon.
   const SERVICE_META = {
-    spring_open_4z:     { icon: "🌿", blurb: "≤4 zones · seasonal startup, head check, schedule reset" },
-    spring_open_8z:     { icon: "🌿", blurb: "5-8 zones · seasonal startup with full system check" },
-    fall_close_6z:      { icon: "🍂", blurb: "≤6 zones · winterization with compressed-air blowout" },
-    fall_close_15z:     { icon: "🍂", blurb: "7-15 zones · full-system winterization" },
-    sprinkler_repair:   { icon: "🔧", blurb: "90-min default · diagnose + fix on the spot" },
-    hydrawise_retrofit: { icon: "📡", blurb: "Smart controller upgrade with app + WiFi setup" },
-    site_visit:         { icon: "📋", blurb: "Free walkaround · we scope and quote new installs" }
+    spring_open_4z:         { icon: "🌿", blurb: "≤4 zones · seasonal startup, head check, schedule reset" },
+    spring_open_8z:         { icon: "🌿", blurb: "5-7 zones · seasonal startup with full system check" },
+    spring_open_15z:        { icon: "🌿", blurb: "8+ zones · large-system startup with full inspection" },
+    spring_open_commercial: { icon: "🏢", blurb: "Commercial property · morning or afternoon appointment" },
+    fall_close_6z:          { icon: "🍂", blurb: "≤6 zones · winterization with compressed-air blowout" },
+    fall_close_15z:         { icon: "🍂", blurb: "7-15 zones · full-system winterization" },
+    fall_close_commercial:  { icon: "🏢", blurb: "Commercial winterization · morning or afternoon appointment" },
+    sprinkler_repair:       { icon: "🔧", blurb: "90-min default · diagnose + fix on the spot" },
+    hydrawise_retrofit:     { icon: "📡", blurb: "Smart controller upgrade with app + WiFi setup" },
+    site_visit:             { icon: "📋", blurb: "Free walkaround · we scope and quote new installs" }
   };
+
+  // Friendly heading + intro shown above the service grid when the user has
+  // arrived via a deep link (e.g. ?service=spring_open_4z). One entry per
+  // family so the page reads naturally — "Pick your spring opening" rather
+  // than the generic "What do you need done?".
+  const FAMILY_COPY = {
+    spring_opening: {
+      heading: "Pick your spring opening.",
+      lead: "Choose the size that matches your system. We'll show you available times next."
+    },
+    fall_closing: {
+      heading: "Pick your fall winterization.",
+      lead: "Choose the size that matches your system. We'll show you available times next."
+    },
+    sprinkler_repair: {
+      heading: "Book a sprinkler repair.",
+      lead: "Standard 90-minute block. If we need more time on the day, we'll let you know on arrival."
+    },
+    hydrawise_retrofit: {
+      heading: "Book your Hydrawise retrofit.",
+      lead: "Smart controller swap with app + WiFi setup. About 90 minutes on site."
+    },
+    site_visit: {
+      heading: "Book a site visit.",
+      lead: "Free 30-minute walkaround. Patrick scopes the work and follows up with a written quote."
+    }
+  };
+
+  // Compute the human-readable duration shown on each card.
+  // Long jobs use the displayMinutes range string set by the server.
+  function durationText(meta) {
+    return meta.displayMinutes || `${meta.minutes} min`;
+  }
 
   function renderServiceCards() {
     serviceGrid.innerHTML = "";
-    const entries = Object.entries(state.services).filter(([, m]) => m.bookable);
-    entries.forEach(([key, meta]) => {
+    const allEntries = Object.entries(state.services).filter(([, m]) => m.bookable);
+    const filtered = state.familyFilter
+      ? allEntries.filter(([, m]) => m.family === state.familyFilter)
+      : allEntries;
+
+    // Update heading + lead text. If the family has a custom copy block use
+    // it; otherwise fall back to the generic catalog view.
+    if (state.familyFilter && FAMILY_COPY[state.familyFilter]) {
+      serviceHeading.textContent = FAMILY_COPY[state.familyFilter].heading;
+      serviceLead.textContent = FAMILY_COPY[state.familyFilter].lead;
+    } else {
+      serviceHeading.textContent = "What do you need done?";
+      serviceLead.textContent = "Pick the closest match. If you're not sure, choose \"Site visit\" and Patrick will scope it for you.";
+    }
+
+    filtered.forEach(([key, meta]) => {
       const friendly = SERVICE_META[key] || { icon: "✓", blurb: `${meta.minutes} min` };
       const btn = document.createElement("button");
       btn.type = "button";
@@ -108,11 +163,29 @@
       btn.innerHTML = `
         <span class="icon" aria-hidden="true">${friendly.icon}</span>
         <span class="label">${escapeHtml(meta.label)}</span>
-        <span class="meta">${escapeHtml(friendly.blurb)} · ${meta.minutes} min</span>
+        <span class="meta">${escapeHtml(friendly.blurb)} · ${escapeHtml(durationText(meta))}</span>
       `;
       serviceGrid.append(btn);
     });
+
+    // Show the "Book something else" link only when a filter is active AND
+    // there's more than one family in the catalog. Lets the customer back out
+    // of a deep-link choice without going to a different page.
+    const otherFamilies = new Set(allEntries.map(([, m]) => m.family));
+    bookOtherWrap.hidden = !state.familyFilter || otherFamilies.size <= 1;
   }
+
+  // Clicking "Book something else" clears the family filter and re-renders
+  // the full catalog so the customer can pick any service.
+  bookOtherLink.addEventListener("click", (event) => {
+    event.preventDefault();
+    state.familyFilter = null;
+    // Strip the ?service= param from the URL so refreshing doesn't re-filter.
+    const next = new URL(window.location.href);
+    next.searchParams.delete("service");
+    window.history.replaceState({}, "", next.toString());
+    renderServiceCards();
+  });
 
   serviceGrid.addEventListener("click", (event) => {
     const card = event.target.closest("[data-service-key]");
@@ -329,14 +402,34 @@
       const data = await response.json();
       if (data.ok) {
         state.services = data.services || {};
-        renderServiceCards();
+
         // Honor ?service= deep link from CTAs elsewhere on the site.
+        // If the param matches a service key, pull its family out of the
+        // catalog and use that as the filter — so clicking "Book Spring
+        // Opening" elsewhere shows ALL spring opening variants (4z / 5-7z /
+        // 8+z / commercial), not just the 4z it linked to. The customer
+        // picks the right size before continuing.
         const params = new URLSearchParams(window.location.search);
         const preselect = params.get("service");
         if (preselect && state.services[preselect]) {
-          const card = serviceGrid.querySelector(`[data-service-key="${preselect}"]`);
-          if (card) card.click();
+          const family = state.services[preselect].family;
+          if (family) {
+            const familyMembers = Object.values(state.services)
+              .filter((m) => m.bookable && m.family === family);
+            // If only one variant exists in this family, jump straight past
+            // the picker. Otherwise filter the grid to the family and let
+            // the customer choose.
+            if (familyMembers.length === 1) {
+              state.serviceKey = preselect;
+              state.serviceMeta = state.services[preselect];
+              renderServiceCards();
+              setTimeout(() => showStep("address"), 200);
+              return;
+            }
+            state.familyFilter = family;
+          }
         }
+        renderServiceCards();
       }
     } catch (error) {
       serviceGrid.innerHTML = `<p class="lead" style="color:#a92e2e;">Couldn't load services. Please refresh, or call (905) 960-0181.</p>`;

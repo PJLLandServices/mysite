@@ -163,6 +163,19 @@
   text-transform: uppercase;
 }
 .service-card .meta { font-size: 13px; color: rgba(15,31,20,0.60); }
+.book-other-link {
+  margin: 18px 0 0;
+  text-align: center;
+}
+.book-other-link a {
+  display: inline-block;
+  font-size: 14px;
+  color: var(--green-mid);
+  text-decoration: none;
+  border-bottom: 1px dashed rgba(45, 106, 66, 0.45);
+  padding: 4px 2px;
+}
+.book-other-link a:hover { color: var(--green); border-bottom-color: var(--green); }
 
 /* Address input */
 .book-input-wrap { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
@@ -438,9 +451,12 @@
 
     <!-- STEP 1: Service -->
     <article class="book-step" data-step="service">
-      <h2>What do you need done?</h2>
-      <p class="lead">Pick the closest match. If you're not sure, choose "Site visit" and Patrick will scope it for you.</p>
+      <h2 id="serviceHeading">What do you need done?</h2>
+      <p class="lead" id="serviceLead">Pick the closest match. If you're not sure, choose "Site visit" and Patrick will scope it for you.</p>
       <div class="service-grid" id="serviceGrid"></div>
+      <p class="book-other-link" id="bookOtherWrap" hidden>
+        <a href="#" id="bookOther">I want to book something else →</a>
+      </p>
     </article>
 
     <!-- STEP 2: Address -->
