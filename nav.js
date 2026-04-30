@@ -40,17 +40,30 @@ if (hamburger && mobileNav) {
   };
   const closeMobileNav = () => {
     mobileNav.classList.remove('open');
+    hamburger.setAttribute('aria-expanded', 'false');
     resetHamburger();
   };
 
-  hamburger.addEventListener('click', () => {
-    mobileNav.classList.toggle('open');
-    if (mobileNav.classList.contains('open')) {
+  const toggleMobileNav = () => {
+    const isOpen = mobileNav.classList.toggle('open');
+    hamburger.setAttribute('aria-expanded', String(isOpen));
+    if (isOpen) {
       spans[0].style.transform = 'rotate(45deg) translate(5px, 5px)';
       spans[1].style.opacity = '0';
       spans[2].style.transform = 'rotate(-45deg) translate(5px, -5px)';
     } else {
       resetHamburger();
+    }
+  };
+
+  hamburger.addEventListener('click', toggleMobileNav);
+
+  // Keyboard support — hamburger is a div with role=button, so we wire
+  // Enter and Space to behave like a real button.
+  hamburger.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ' || e.key === 'Spacebar') {
+      e.preventDefault();
+      toggleMobileNav();
     }
   });
 
