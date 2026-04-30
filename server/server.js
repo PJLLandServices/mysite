@@ -597,6 +597,11 @@ function isPublicApiPath(pathname) {
   if (PUBLIC_API_PATHS.has(pathname)) return true;
   // Photo fetches by portal token are also public (token is the auth).
   if (/^\/api\/portal\/[^/]+\/photo\/\d+$/.test(pathname)) return true;
+  // Booking session lookup by token — needed so book.html can prefill the
+  // form when a customer arrives via /book.html?session=… from a handoff
+  // SMS/email. The session token is the auth, same model as portal photos.
+  // Without this, cross-origin GETs from public-domain book.html get blocked.
+  if (/^\/api\/booking\/session\/[^/]+$/.test(pathname)) return true;
   return false;
 }
 
