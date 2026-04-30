@@ -803,17 +803,20 @@
       // For now, we treat post-booking as "session closed" and clear it.
       await clearAllState();
     } else if (hadState && state.messages.length > 0) {
-      // Active conversation — make launcher visible on this new page.
+      // Active conversation — show ONLY the launcher pill on a fresh page
+      // load. We deliberately do NOT auto-open the panel even if it was open
+      // on the previous page; the customer reopens it by clicking the pill.
+      // (Auto-opening on every navigation would obscure the page they just
+      // navigated to.) The conversation, photos, and booking-form state are
+      // all still there — they just stay collapsed until requested.
+      state.panelOpen = false;
+      saveState();
       launcherEl.classList.add("is-visible");
+      // Pre-render the messages + photo rail so re-opening is instant.
       renderMessages();
       renderPhotoRail();
       if (state.bookingShown) {
-        // Re-render the booking form bubble so they can finish.
         showBookingFormBubble();
-        // If they had typed a partial entry, we don't recover it (FormData isn't persisted).
-      }
-      if (state.panelOpen) {
-        api.open();
       }
     }
 
