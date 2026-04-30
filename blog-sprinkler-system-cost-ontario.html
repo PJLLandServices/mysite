@@ -169,6 +169,7 @@
 @media(max-width:960px){.post-body-grid{grid-template-columns:1fr;}.post-toc{position:static;margin-bottom:24px;}.related-grid{grid-template-columns:1fr;}}
 @media(max-width:640px){.post-hero{padding:var(--hero-nav-clearance) 0 60px;}.post-author-card{flex-direction:column;text-align:center;}.price-table{font-size:13px;}.price-table th,.price-table td{padding:10px 12px;}}
 </style>
+  <link rel="stylesheet" href="css/chat-widget.css">
 </head>
 <body>
 <div class="reading-progress" id="readingProgress"></div>
@@ -458,5 +459,6 @@
 (function(){var bar=document.getElementById('readingProgress'),article=document.querySelector('.post-content');if(!bar||!article)return;function update(){var rect=article.getBoundingClientRect(),total=article.offsetHeight-window.innerHeight,passed=Math.max(0,-rect.top),pct=Math.min(100,(passed/Math.max(total,1))*100);bar.style.width=pct+'%';}window.addEventListener('scroll',update,{passive:true});window.addEventListener('resize',update);update();})();
 (function(){var cta=document.getElementById('postStickyCta'),footer=document.querySelector('.post-footer');if(!cta)return;function update(){var y=window.scrollY||0,footerTop=footer?footer.getBoundingClientRect().top+y-window.innerHeight:Infinity;if(y>700&&y<footerTop)cta.classList.add('is-visible');else cta.classList.remove('is-visible');}window.addEventListener('scroll',update,{passive:true});update();})();
 </script>
+  <script src="js/chat-widget.js" defer></script>
 </body>
 </html>

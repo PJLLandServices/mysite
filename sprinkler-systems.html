@@ -1398,6 +1398,7 @@ a.sprk-comp:focus-visible {
   }
 }
 </style>
+  <link rel="stylesheet" href="css/chat-widget.css">
 </head>
 <body>
 
@@ -1835,12 +1836,13 @@ a.sprk-comp:focus-visible {
           </div>
         </div>
 
-        <a href="book.html?service=sprinkler_repair" class="btn btn-green">Book a Service Call — $95</a>
+        <a href="diagnose.html" data-pjl-chat class="btn btn-green">💬 Chat with Patrick — Free AI Diagnosis</a>
+        <a href="book.html?service=sprinkler_repair" class="btn btn-ghost" style="margin-top:8px;">Or book a service call — $95</a>
       </div>
       <!-- AI-intake callout — lifted out of the card to fill the space below the image -->
       <div class="sprk-ai reveal reveal-delay-1">
         <span class="sprk-ai__badge"><span class="sprk-ai__dot" aria-hidden="true"></span>AI-Smart Intake</span>
-        <p><strong>AI intake = no-surprise labour.</strong> Describe your problem through our AI intake and the labour for the diagnosed repair is locked in regardless of how long it takes — anything else found on-site is billed at parts + $95/hr, quoted before extra work. Standard service call (mobilization + first hour of labour) is <strong>$95</strong>.</p>
+        <p><strong>AI intake = no-surprise labour.</strong> <a href="diagnose.html" data-pjl-chat>Describe your problem to Patrick</a> and the labour for the diagnosed repair is locked in regardless of how long it takes — anything else found on-site is billed at parts + $95/hr, quoted before extra work. Standard service call (mobilization + first hour of labour) is <strong>$95</strong>.</p>
       </div>
     </div>
   </div>
@@ -2448,5 +2450,6 @@ a.sprk-comp:focus-visible {
   if (sec) sec.textContent = ctaSecondary;
 })();
 </script>
+  <script src="js/chat-widget.js" defer></script>
 </body>
 </html>

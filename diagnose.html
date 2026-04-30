@@ -4,798 +4,107 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Sprinkler Diagnosis — PJL Land Services</title>
+<meta name="description" content="Talk to Patrick from PJL Land Services about your sprinkler issue. Free AI-powered diagnosis with locked-in repair pricing.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;500;600;700&family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/chat-widget.css">
 <style>
-  :root {
-    --green-deep: #1F4733;
-    --green-mid: #2D6549;
-    --green-soft: #8FA88E;
-    --green-faint: #E5EBE2;
-    --cream: #F7F4EC;
-    --cream-light: #FBF9F2;
-    --white: #FFFFFF;
-    --ink: #1A1A1A;
-    --ink-soft: #4A4A4A;
-    --muted: #7A7A7A;
-    --line: #E5E0D5;
-    --warning: #B8862E;
-    --shadow-soft: 0 1px 2px rgba(31,71,51,.04), 0 4px 14px rgba(31,71,51,.06);
-    --shadow-med: 0 2px 6px rgba(31,71,51,.06), 0 12px 32px rgba(31,71,51,.10);
-  }
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  html, body { background: var(--cream); color: var(--ink); font-family: 'Outfit', system-ui, -apple-system, sans-serif; -webkit-font-smoothing: antialiased; }
-  body { display: flex; flex-direction: column; min-height: 100vh; }
-
-  .topbar { background: var(--green-deep); height: 6px; flex-shrink: 0; }
-
-  .header {
-    padding: 18px 28px;
-    display: flex; align-items: center; justify-content: space-between;
-    border-bottom: 1px solid var(--line);
-    background: var(--white);
-    flex-shrink: 0;
-    z-index: 10;
-    box-shadow: 0 1px 3px rgba(0,0,0,.04);
+  html, body {
+    height: 100%;
+    background: #F7F4EC;
+    color: #1A1A1A;
+    font-family: 'Outfit', system-ui, -apple-system, sans-serif;
+    -webkit-font-smoothing: antialiased;
   }
-  .header-brand { display: flex; align-items: center; gap: 14px; }
-  .avatar { width: 44px; height: 44px; border-radius: 50%; background: var(--green-deep); color: var(--cream-light); display: flex; align-items: center; justify-content: center; font-family: 'Cormorant Garamond', serif; font-size: 20px; font-weight: 600; flex-shrink: 0; }
-  .brand-text .brand { font-family: 'Cormorant Garamond', serif; font-size: 20px; font-weight: 600; color: var(--green-deep); line-height: 1.1; }
-  .brand-text .brand-status { font-size: 11px; letter-spacing: 1.5px; color: var(--green-mid); text-transform: uppercase; margin-top: 2px; display: flex; align-items: center; gap: 6px; }
-  .status-dot { width: 8px; height: 8px; background: #4CAF50; border-radius: 50%; box-shadow: 0 0 0 0 rgba(76,175,80, .6); animation: pulse 2s infinite; }
-  @keyframes pulse {
-    0% { box-shadow: 0 0 0 0 rgba(76,175,80, .6); }
-    70% { box-shadow: 0 0 0 6px rgba(76,175,80, 0); }
-    100% { box-shadow: 0 0 0 0 rgba(76,175,80, 0); }
+  .landing {
+    min-height: 100%;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    padding: 40px 24px;
+    text-align: center;
   }
-  .header-right .back-link { font-size: 12px; color: var(--green-deep); text-decoration: none; letter-spacing: 1px; text-transform: uppercase; opacity: .8; transition: opacity .2s; }
-  .header-right .back-link:hover { opacity: 1; }
-
-  .chat-shell { flex: 1; display: flex; flex-direction: column; max-width: 720px; width: 100%; margin: 0 auto; }
-  .messages-area {
-    flex: 1; overflow-y: auto; padding: 28px 28px 16px;
-    display: flex; flex-direction: column; gap: 6px;
-    scroll-behavior: smooth;
+  .landing-card {
+    max-width: 480px;
   }
-
-  .msg-row { display: flex; margin-bottom: 4px; align-items: flex-end; gap: 8px; animation: msgIn .35s cubic-bezier(.2,0,.2,1); }
-  @keyframes msgIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
-  .msg-row.pjl { justify-content: flex-start; }
-  .msg-row.user { justify-content: flex-end; }
-
-  .msg-avatar {
-    width: 28px; height: 28px; border-radius: 50%; flex-shrink: 0;
-    background: var(--green-deep); color: var(--cream-light);
+  .landing-icon {
+    width: 72px; height: 72px;
+    border-radius: 50%;
+    background: #1F4733;
+    color: #FBF9F2;
     display: flex; align-items: center; justify-content: center;
-    font-family: 'Cormorant Garamond', serif; font-size: 13px; font-weight: 600;
+    margin: 0 auto 22px;
+    font-family: 'Cormorant Garamond', serif;
+    font-size: 32px; font-weight: 600;
   }
-  .msg-avatar.hidden { visibility: hidden; }
-
-  .msg-bubble {
-    max-width: 78%; padding: 13px 18px; border-radius: 20px;
-    font-size: 15px; line-height: 1.5; white-space: pre-wrap; word-wrap: break-word;
-    box-shadow: 0 1px 2px rgba(0,0,0,.04);
+  .landing h1 {
+    font-family: 'Cormorant Garamond', serif;
+    font-size: 36px;
+    color: #1F4733;
+    font-weight: 500;
+    line-height: 1.15;
+    margin-bottom: 14px;
   }
-  .msg-row.pjl .msg-bubble {
-    background: var(--white);
-    color: var(--ink);
-    border-bottom-left-radius: 6px;
-    border: 1px solid var(--line);
+  .landing p {
+    font-size: 16px;
+    color: #4A4A4A;
+    line-height: 1.55;
+    margin-bottom: 26px;
   }
-  .msg-row.user .msg-bubble {
-    background: var(--green-deep);
-    color: var(--cream-light);
-    border-bottom-right-radius: 6px;
-  }
-
-  .msg-bubble strong { font-weight: 600; }
-
-  .typing-row { display: flex; align-items: flex-end; gap: 8px; margin-bottom: 4px; animation: msgIn .25s ease; }
-  .typing-bubble {
-    background: var(--white);
-    border: 1px solid var(--line);
-    padding: 14px 18px;
-    border-radius: 20px; border-bottom-left-radius: 6px;
-    display: flex; gap: 4px;
-  }
-  .typing-dot {
-    width: 7px; height: 7px; border-radius: 50%;
-    background: var(--green-soft);
-    animation: typing 1.4s infinite ease-in-out both;
-  }
-  .typing-dot:nth-child(1) { animation-delay: -.32s; }
-  .typing-dot:nth-child(2) { animation-delay: -.16s; }
-  @keyframes typing {
-    0%, 80%, 100% { transform: scale(.7); opacity: .5; }
-    40% { transform: scale(1); opacity: 1; }
-  }
-
-  .form-bubble {
-    background: var(--white);
-    border: 1px solid var(--line);
-    border-radius: 20px;
-    border-bottom-left-radius: 6px;
-    padding: 24px;
-    max-width: 78%;
-    box-shadow: 0 1px 2px rgba(0,0,0,.04);
-  }
-  .form-bubble h3 { font-family: 'Cormorant Garamond', serif; font-size: 22px; color: var(--green-deep); margin-bottom: 8px; font-weight: 500; }
-  .form-bubble p { font-size: 13px; color: var(--muted); margin-bottom: 18px; line-height: 1.5; }
-  .form-bubble .form-grid { display: grid; gap: 12px; grid-template-columns: 1fr 1fr; margin-bottom: 16px; }
-  .form-bubble .form-grid .full { grid-column: 1 / -1; }
-  .form-bubble label { display: block; font-size: 12px; font-weight: 500; margin-bottom: 5px; color: var(--ink); }
-  .form-bubble label .req { color: var(--warning); }
-  .form-bubble input, .form-bubble textarea {
-    width: 100%; padding: 11px 14px; border: 1.5px solid var(--line); border-radius: 10px;
-    background: var(--cream-light); font-family: inherit; font-size: 14px; color: var(--ink);
-    transition: border-color .2s, background .2s;
-  }
-  .form-bubble input:focus, .form-bubble textarea:focus { outline: none; border-color: var(--green-mid); background: var(--white); }
-  .form-bubble button {
-    background: var(--green-deep); color: var(--cream-light); border: none; padding: 12px 24px;
-    border-radius: 999px; font-family: inherit; font-size: 12px; font-weight: 500;
-    letter-spacing: 1.5px; text-transform: uppercase; cursor: pointer; transition: background .2s;
-    width: 100%;
-  }
-  .form-bubble button:hover { background: var(--green-mid); }
-  .form-bubble button:disabled { opacity: .5; cursor: not-allowed; }
-  @media (max-width: 600px) { .form-bubble .form-grid { grid-template-columns: 1fr; } }
-
-  .composer {
-    border-top: 1px solid var(--line);
-    background: var(--white);
-    padding: 14px 20px;
-    flex-shrink: 0;
-    box-shadow: 0 -1px 3px rgba(0,0,0,.03);
-  }
-  .photo-rail {
-    max-width: 720px; margin: 0 auto 8px;
-    display: flex; gap: 8px; flex-wrap: wrap;
-  }
-  .photo-rail:empty { display: none; }
-  .photo-chip {
-    position: relative; width: 60px; height: 60px; border-radius: 10px;
-    overflow: hidden; border: 1.5px solid var(--line); background: var(--cream-light);
-  }
-  .photo-chip img { width: 100%; height: 100%; object-fit: cover; display: block; }
-  .photo-chip-x {
-    position: absolute; top: 2px; right: 2px; width: 20px; height: 20px;
-    border-radius: 50%; background: rgba(0,0,0,.65); color: white; border: none;
-    font-size: 13px; line-height: 1; cursor: pointer; display: flex;
-    align-items: center; justify-content: center; padding: 0;
-  }
-  .photo-chip-x:hover { background: rgba(0,0,0,.85); }
-  .attach-btn {
-    width: 44px; height: 44px; border-radius: 50%; background: transparent;
-    color: var(--green-deep); border: 1.5px solid var(--line); cursor: pointer;
-    flex-shrink: 0; display: flex; align-items: center; justify-content: center;
-    transition: background .2s, border-color .2s;
-  }
-  .attach-btn:hover:not(:disabled) { background: var(--green-faint); border-color: var(--green-mid); }
-  .attach-btn:disabled { opacity: .4; cursor: not-allowed; }
-  .msg-row.user .photo-attachments {
-    display: grid; gap: 6px; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
-    max-width: 78%; margin-bottom: 4px;
-  }
-  .msg-row.user .photo-attachments img {
-    width: 100%; max-width: 200px; border-radius: 14px; border: 1px solid var(--line);
-    display: block;
-  }
-  .composer-inner {
-    max-width: 720px; margin: 0 auto;
-    display: flex; gap: 10px; align-items: flex-end;
-  }
-  .composer textarea {
-    flex: 1; resize: none; max-height: 140px; padding: 12px 16px;
-    border: 1.5px solid var(--line); border-radius: 22px;
-    background: var(--cream-light); font-family: inherit; font-size: 15px; color: var(--ink);
-    line-height: 1.4; transition: border-color .2s, background .2s;
-    overflow-y: auto;
-  }
-  .composer textarea:focus { outline: none; border-color: var(--green-mid); background: var(--white); }
-  .composer textarea::placeholder { color: var(--muted); }
-  .composer textarea:disabled { opacity: .5; cursor: not-allowed; }
-  .send-btn {
-    width: 44px; height: 44px; border-radius: 50%; background: var(--green-deep);
-    color: var(--cream-light); border: none; cursor: pointer; flex-shrink: 0;
-    display: flex; align-items: center; justify-content: center;
+  .landing button {
+    background: #1B4D2E;
+    color: #FBF9F2;
+    border: none;
+    padding: 14px 28px;
+    border-radius: 999px;
+    font-family: inherit;
+    font-size: 13px; font-weight: 500;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    cursor: pointer;
     transition: background .2s, transform .15s;
-    font-size: 18px;
   }
-  .send-btn:hover:not(:disabled) { background: var(--green-mid); transform: scale(1.05); }
-  .send-btn:disabled { opacity: .4; cursor: not-allowed; transform: none; }
-
-  .composer-meta {
-    max-width: 720px; margin: 8px auto 0;
-    display: flex; justify-content: space-between; align-items: center;
-    font-size: 11px; color: var(--muted);
+  .landing button:hover { background: #2D6549; transform: translateY(-1px); }
+  .landing-back {
+    display: inline-block;
+    margin-top: 22px;
+    font-size: 12px;
+    color: #7A7A7A;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    text-decoration: none;
+    border-bottom: 1px solid rgba(122,122,122,.3);
   }
-  .composer-meta button {
-    background: none; border: none; font-family: inherit; color: var(--muted);
-    font-size: 11px; letter-spacing: 1px; text-transform: uppercase; cursor: pointer;
-    text-decoration: underline; text-decoration-color: rgba(122,122,122,.3);
-  }
-  .composer-meta button:hover { color: var(--green-deep); }
-
-  .ty-overlay {
-    display: none;
-    position: fixed; inset: 0; background: rgba(247, 244, 236, .96);
-    align-items: center; justify-content: center; z-index: 100;
-    animation: fadeIn .4s ease;
-  }
-  .ty-overlay.active { display: flex; }
-  .ty-card {
-    background: var(--white); padding: 48px 36px; border-radius: 20px;
-    text-align: center; max-width: 460px; box-shadow: var(--shadow-med);
-  }
-  .ty-icon { width: 64px; height: 64px; border-radius: 50%; background: var(--green-deep); color: var(--cream-light); display: flex; align-items: center; justify-content: center; margin: 0 auto 20px; font-size: 28px; font-weight: 600; }
-  .ty-card h1 { font-family: 'Cormorant Garamond', serif; font-size: 32px; color: var(--green-deep); margin-bottom: 12px; font-weight: 500; }
-  .ty-card p { font-size: 15px; color: var(--ink-soft); margin-bottom: 22px; line-height: 1.55; }
-  .ty-card button {
-    background: transparent; color: var(--green-deep); border: 1.5px solid var(--green-deep);
-    padding: 11px 24px; border-radius: 999px; font-family: inherit;
-    font-size: 12px; font-weight: 500; letter-spacing: 1.5px; text-transform: uppercase;
-    cursor: pointer; transition: all .2s;
-  }
-  .ty-card button:hover { background: var(--green-deep); color: var(--cream-light); }
-  @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
-
-  .error-toast {
-    position: fixed; bottom: 90px; left: 50%; transform: translateX(-50%);
-    background: #B85C3D; color: white; padding: 12px 20px; border-radius: 8px;
-    font-size: 14px; box-shadow: var(--shadow-med);
-    animation: msgIn .3s ease; z-index: 50; max-width: 90%;
-  }
-
-  @media (max-width: 600px) {
-    .header { padding: 14px 18px; }
-    .messages-area { padding: 20px 18px 12px; }
-    .msg-bubble { max-width: 84%; font-size: 14.5px; }
-    .form-bubble { max-width: 88%; padding: 20px; }
-    .composer { padding: 10px 14px; }
-  }
+  .landing-back:hover { color: #1F4733; border-color: #1F4733; }
 </style>
 </head>
 <body>
-  <div class="topbar"></div>
-
-  <header class="header">
-    <div class="header-brand">
-      <div class="avatar">P</div>
-      <div class="brand-text">
-        <div class="brand">PJL Land Services</div>
-        <div class="brand-status"><span class="status-dot"></span> Online — typically replies instantly</div>
-      </div>
+  <main class="landing">
+    <div class="landing-card">
+      <div class="landing-icon">P</div>
+      <h1>Talk to Patrick about your sprinkler issue.</h1>
+      <p>Describe what's happening in plain English. I'll come back with what's likely going on, what you can try yourself, and an honest read on whether you need a tech.</p>
+      <button type="button" data-pjl-chat>Start the Conversation</button>
+      <br>
+      <a href="index.html" class="landing-back">← Back to PJL Land Services</a>
     </div>
-    <div class="header-right">
-      <a href="index.html" class="back-link">← Back</a>
-    </div>
-  </header>
+  </main>
 
-  <div class="chat-shell">
-    <div class="messages-area" id="messages"></div>
-
-    <div class="composer">
-      <div class="photo-rail" id="photo-rail"></div>
-      <div class="composer-inner">
-        <button class="attach-btn" id="attach-btn" title="Attach a photo">
-          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l8.57-8.57a4 4 0 015.66 5.66l-8.58 8.57a2 2 0 01-2.83-2.83l8.49-8.48"/></svg>
-        </button>
-        <input type="file" id="photo-input" accept="image/*" capture="environment" multiple style="display:none">
-        <textarea id="composer-input" rows="1" placeholder="Tell us what's going on with your sprinklers..."></textarea>
-        <button class="send-btn" id="send-btn" title="Send">
-          <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M2 21l21-9L2 3v7l15 2-15 2z"/></svg>
-        </button>
-      </div>
-      <div class="composer-meta">
-        <span>Free • No obligation</span>
-        <button id="restart-btn">Start Over</button>
-      </div>
-    </div>
-  </div>
-
-  <div class="ty-overlay" id="ty-overlay">
-    <div class="ty-card">
-      <div class="ty-icon">✓</div>
-      <h1>Thanks — we've got you.</h1>
-      <p>We'll reach out within 24 hours to schedule your visit. Check your email for a confirmation.</p>
-      <button onclick="restart()">Start a New Diagnosis</button>
-    </div>
-  </div>
-
-<script>
-  /* =============================================================
-     PJL LAND SERVICES — SPRINKLER DIAGNOSTIC CHAT
-     Powered by Claude via Cloudflare Worker
-     ============================================================= */
-
-  // 🔧 YOUR CLOUDFLARE WORKER URL — change this if you ever rename your Worker
-  const WORKER_URL = "https://jolly-meadow-6c29.patrick-812.workers.dev/";
-
-  // Render-hosted CRM endpoint. Receives the booking + any attached photos and
-  // creates a lead in Patrick's CRM. Pre-DNS-cutover this is cross-origin and
-  // relies on CORS (the server allows it). Post-cutover, when the whole site
-  // moves to Render, this is same-origin — but the .onrender.com URL keeps
-  // working forever, so no change needed at cutover time.
-  const LEAD_ENDPOINT = "https://pjl-land-services-onrender-com.onrender.com/api/quotes";
-
-  // The hidden token Claude includes when it's time to show the booking form.
-  const FORM_TRIGGER = "[SHOW_BOOKING_FORM]";
-
-  // Photo upload limits — match the server's validation (server/server.js).
-  const MAX_PHOTOS = 5;
-  const MAX_PHOTO_DIMENSION = 1280; // longest edge in px after resize
-  const PHOTO_JPEG_QUALITY = 0.82;
-
-  // Conversation state
-  let conversation = {
-    messages: [],         // [{ role: "user"|"assistant", content: "..." | [...content blocks] }]
-    bookingShown: false,
-    awaiting: false,
-    pendingPhotos: [],    // photos staged by the user, sent with their next message
-    sentPhotos: []        // photos already shared with the AI this conversation; carried into booking
-  };
-
-  /* ---------- UI HELPERS ---------- */
-  const messagesEl = document.getElementById("messages");
-
-  function scrollToBottom() {
-    setTimeout(() => { messagesEl.scrollTop = messagesEl.scrollHeight; }, 20);
-  }
-
-  function appendUserMessage(text, photoDataUrls) {
-    const row = document.createElement("div");
-    row.className = "msg-row user";
-    if (photoDataUrls && photoDataUrls.length) {
-      const wrap = document.createElement("div");
-      wrap.style.display = "flex";
-      wrap.style.flexDirection = "column";
-      wrap.style.alignItems = "flex-end";
-      wrap.style.gap = "6px";
-      wrap.style.maxWidth = "78%";
-      const photoGrid = document.createElement("div");
-      photoGrid.className = "photo-attachments";
-      photoDataUrls.forEach((url) => {
-        const img = document.createElement("img");
-        img.src = url;
-        photoGrid.appendChild(img);
-      });
-      wrap.appendChild(photoGrid);
-      if (text) {
-        const bubble = document.createElement("div");
-        bubble.className = "msg-bubble";
-        bubble.textContent = text;
-        wrap.appendChild(bubble);
-      }
-      row.appendChild(wrap);
-    } else {
-      const bubble = document.createElement("div");
-      bubble.className = "msg-bubble";
-      bubble.textContent = text;
-      row.appendChild(bubble);
-    }
-    messagesEl.appendChild(row);
-    scrollToBottom();
-  }
-
-  function appendPJLMessage(text) {
-    const row = document.createElement("div");
-    row.className = "msg-row pjl";
-    const av = document.createElement("div");
-    av.className = "msg-avatar";
-    av.textContent = "P";
-    row.appendChild(av);
-    const bubble = document.createElement("div");
-    bubble.className = "msg-bubble";
-    // Render with bold formatting for **text** and basic link safety
-    bubble.innerHTML = formatMessage(text);
-    row.appendChild(bubble);
-    messagesEl.appendChild(row);
-    scrollToBottom();
-  }
-
-  function formatMessage(text) {
-    const escaped = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    return escaped.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-  }
-
-  function showTypingIndicator() {
-    const existing = document.getElementById("typing-indicator");
-    if (existing) return;
-    const row = document.createElement("div");
-    row.className = "typing-row";
-    row.id = "typing-indicator";
-    const av = document.createElement("div");
-    av.className = "msg-avatar";
-    av.textContent = "P";
-    row.appendChild(av);
-    const bubble = document.createElement("div");
-    bubble.className = "typing-bubble";
-    bubble.innerHTML = '<div class="typing-dot"></div><div class="typing-dot"></div><div class="typing-dot"></div>';
-    row.appendChild(bubble);
-    messagesEl.appendChild(row);
-    scrollToBottom();
-  }
-
-  function hideTypingIndicator() {
-    const el = document.getElementById("typing-indicator");
-    if (el) el.remove();
-  }
-
-  function showErrorToast(message) {
-    const existing = document.querySelector(".error-toast");
-    if (existing) existing.remove();
-    const toast = document.createElement("div");
-    toast.className = "error-toast";
-    toast.textContent = message;
-    document.body.appendChild(toast);
-    setTimeout(() => toast.remove(), 5000);
-  }
-
-  function appendFormBubble() {
-    if (conversation.bookingShown) return;
-    conversation.bookingShown = true;
-
-    const row = document.createElement("div");
-    row.className = "msg-row pjl";
-    const av = document.createElement("div");
-    av.className = "msg-avatar hidden";
-    row.appendChild(av);
-    const bubble = document.createElement("div");
-    bubble.className = "form-bubble";
-    bubble.innerHTML = `
-      <h3>Drop your details</h3>
-      <p>$95 service call covers mobilization plus the first hour on-site. Any parts or extra labour quoted before we do the work.</p>
-      <form id="lead-form">
-        <div class="form-grid">
-          <div><label>First name <span class="req">*</span></label><input type="text" name="first_name" required></div>
-          <div><label>Last name <span class="req">*</span></label><input type="text" name="last_name" required></div>
-          <div><label>Email <span class="req">*</span></label><input type="email" name="email" required></div>
-          <div><label>Phone <span class="req">*</span></label><input type="tel" name="phone" required></div>
-          <div class="full"><label>Service address</label><input type="text" name="address" placeholder="Street, City"></div>
-          <div class="full"><label>Anything else we should know?</label><textarea name="notes" rows="2" placeholder="Access notes, gate code, dog on property..."></textarea></div>
-        </div>
-        <button type="submit">Send My Details →</button>
-      </form>
-    `;
-    row.appendChild(bubble);
-    messagesEl.appendChild(row);
-    scrollToBottom();
-
-    document.getElementById("lead-form").addEventListener("submit", (e) => {
-      e.preventDefault();
-      const f = Object.fromEntries(new FormData(e.target).entries());
-      submitLead(f, e.target);
-    });
-
-    // Disable composer
-    document.getElementById("composer-input").disabled = true;
-    document.getElementById("send-btn").disabled = true;
-    document.getElementById("attach-btn").disabled = true;
-    document.getElementById("composer-input").placeholder = "Filling out booking form...";
-  }
-
-  // Convert the multimodal `conversation.messages` array into a plain-text
-  // transcript Patrick can read in the CRM. Strips the image bytes themselves
-  // (Patrick already gets the photos as separate attachments) and keeps just
-  // the back-and-forth dialogue.
-  function buildTranscript() {
-    const lines = [];
-    for (const msg of conversation.messages) {
-      const who = msg.role === "user" ? "Customer" : "Patrick (AI)";
-      let text;
-      if (typeof msg.content === "string") {
-        text = msg.content;
-      } else if (Array.isArray(msg.content)) {
-        const imageCount = msg.content.filter((b) => b.type === "image").length;
-        const textPart = msg.content.find((b) => b.type === "text");
-        const textBody = textPart ? textPart.text : "";
-        text = (imageCount ? `[attached ${imageCount} photo${imageCount > 1 ? "s" : ""}] ` : "") + textBody;
-      } else {
-        text = "";
-      }
-      // Strip the booking-form trigger token from the transcript.
-      text = text.replace(FORM_TRIGGER, "").trim();
-      if (!text) continue;
-      lines.push(`${who}: ${text}`);
-    }
-    return lines.join("\n\n");
-  }
-
-  function submitLead(formFields, form) {
-    const submitBtn = form.querySelector('button[type="submit"]');
-    submitBtn.disabled = true;
-    submitBtn.textContent = "Sending...";
-
-    const fullName = `${(formFields.first_name || "").trim()} ${(formFields.last_name || "").trim()}`.trim();
-    const transcript = buildTranscript();
-    const payload = {
-      source: "ai_diagnose",
-      contact: {
-        name: fullName,
-        phone: formFields.phone || "",
-        email: formFields.email || "",
-        address: formFields.address || "",
-        notes: formFields.notes || ""
-      },
-      pageUrl: location.href,
-      userAgent: navigator.userAgent,
-      mode: "ai_diagnose",
-      transcript,
-      photos: conversation.sentPhotos.map((p) => ({
-        data: p.base64,
-        mediaType: p.mediaType
-      }))
-    };
-
-    fetch(LEAD_ENDPOINT, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "Accept": "application/json" },
-      body: JSON.stringify(payload)
-    })
-    .then(async (r) => {
-      const body = await r.json().catch(() => ({}));
-      if (r.ok) {
-        document.getElementById("ty-overlay").classList.add("active");
-      } else {
-        const msg = (body.errors && body.errors[0]) || `Submit failed (${r.status})`;
-        throw new Error(msg);
-      }
-    })
-    .catch((err) => {
-      console.error("Lead submit error:", err);
-      showErrorToast(err.message || "Couldn't send your details — please try again or call us directly.");
-      submitBtn.disabled = false;
-      submitBtn.textContent = "Send My Details →";
-    });
-  }
-
-  /* ---------- PHOTO HANDLING ---------- */
-  // Resize an image File to a JPEG with longest edge <= MAX_PHOTO_DIMENSION,
-  // returning { dataUrl, base64, mediaType, bytes }. Phones produce 5-10MB
-  // originals; we don't want that hitting the AI vision API or your storage.
-  function resizeImageFile(file) {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onerror = () => reject(new Error("Couldn't read that file."));
-      reader.onload = () => {
-        const img = new Image();
-        img.onerror = () => reject(new Error("Couldn't decode that image."));
-        img.onload = () => {
-          const longest = Math.max(img.width, img.height);
-          const scale = longest > MAX_PHOTO_DIMENSION ? MAX_PHOTO_DIMENSION / longest : 1;
-          const w = Math.round(img.width * scale);
-          const h = Math.round(img.height * scale);
-          const canvas = document.createElement("canvas");
-          canvas.width = w; canvas.height = h;
-          const ctx = canvas.getContext("2d");
-          ctx.drawImage(img, 0, 0, w, h);
-          const dataUrl = canvas.toDataURL("image/jpeg", PHOTO_JPEG_QUALITY);
-          // dataUrl format: data:image/jpeg;base64,XXXXX
-          const base64 = dataUrl.split(",", 2)[1] || "";
-          // Approximate decoded byte length from base64 length.
-          const bytes = Math.floor(base64.length * 3 / 4);
-          resolve({ dataUrl, base64, mediaType: "image/jpeg", bytes });
-        };
-        img.src = reader.result;
+  <script src="js/chat-widget.js" defer></script>
+  <script>
+    // Auto-open the chat panel on this dedicated landing page.
+    document.addEventListener("DOMContentLoaded", () => {
+      const tryOpen = () => {
+        if (window.pjlChat) { window.pjlChat.open(); return true; }
+        return false;
       };
-      reader.readAsDataURL(file);
+      if (!tryOpen()) {
+        // Widget script loads with `defer`, so it may not be ready yet.
+        const t = setInterval(() => { if (tryOpen()) clearInterval(t); }, 50);
+        setTimeout(() => clearInterval(t), 5000);
+      }
     });
-  }
-
-  function renderPhotoRail() {
-    const rail = document.getElementById("photo-rail");
-    rail.innerHTML = "";
-    conversation.pendingPhotos.forEach((photo, idx) => {
-      const chip = document.createElement("div");
-      chip.className = "photo-chip";
-      const img = document.createElement("img");
-      img.src = photo.dataUrl;
-      chip.appendChild(img);
-      const x = document.createElement("button");
-      x.className = "photo-chip-x";
-      x.type = "button";
-      x.title = "Remove photo";
-      x.textContent = "×";
-      x.addEventListener("click", () => {
-        conversation.pendingPhotos.splice(idx, 1);
-        renderPhotoRail();
-      });
-      chip.appendChild(x);
-      rail.appendChild(chip);
-    });
-  }
-
-  async function handlePhotoSelect(fileList) {
-    const files = Array.from(fileList || []);
-    if (!files.length) return;
-    const slotsLeft = MAX_PHOTOS - conversation.pendingPhotos.length - conversation.sentPhotos.length;
-    if (slotsLeft <= 0) {
-      showErrorToast(`You can only attach ${MAX_PHOTOS} photos per booking.`);
-      return;
-    }
-    const toProcess = files.slice(0, slotsLeft);
-    if (files.length > slotsLeft) {
-      showErrorToast(`Only added the first ${slotsLeft} — limit is ${MAX_PHOTOS} photos.`);
-    }
-    for (const file of toProcess) {
-      if (!file.type.startsWith("image/")) {
-        showErrorToast(`Skipped "${file.name}" — only images are supported.`);
-        continue;
-      }
-      try {
-        const photo = await resizeImageFile(file);
-        conversation.pendingPhotos.push(photo);
-      } catch (err) {
-        console.error(err);
-        showErrorToast(`Couldn't process "${file.name}".`);
-      }
-    }
-    renderPhotoRail();
-  }
-
-  document.getElementById("attach-btn").addEventListener("click", () => {
-    document.getElementById("photo-input").click();
-  });
-  document.getElementById("photo-input").addEventListener("change", (e) => {
-    handlePhotoSelect(e.target.files);
-    e.target.value = "";
-  });
-
-  /* ---------- CALL THE AI ---------- */
-  async function callPJL(userMessage, photos) {
-    // Build the user message content. Plain string when no photos (cheaper +
-    // simpler), Anthropic multimodal content blocks when photos are present.
-    let content;
-    if (photos && photos.length) {
-      content = photos.map((p) => ({
-        type: "image",
-        source: { type: "base64", media_type: p.mediaType, data: p.base64 }
-      }));
-      // Always include text — even empty user prompt becomes "Here's a photo."
-      content.push({ type: "text", text: userMessage || "Here's a photo of the issue." });
-    } else {
-      content = userMessage;
-    }
-
-    conversation.messages.push({ role: "user", content });
-
-    try {
-      const response = await fetch(WORKER_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: conversation.messages })
-      });
-
-      if (!response.ok) {
-        const errData = await response.json().catch(() => ({}));
-        throw new Error(errData.error || `Service returned ${response.status}`);
-      }
-
-      const data = await response.json();
-      const reply = data.reply || "Sorry — I'm having trouble responding right now.";
-
-      conversation.messages.push({ role: "assistant", content: reply });
-
-      // Check for the booking form trigger
-      const cleanReply = reply.replace(FORM_TRIGGER, "").trim();
-      const shouldShowForm = reply.includes(FORM_TRIGGER);
-
-      return { reply: cleanReply, showForm: shouldShowForm };
-    } catch (err) {
-      console.error("AI call failed:", err);
-      // Remove the user message we tentatively added so they can retry
-      conversation.messages.pop();
-      throw err;
-    }
-  }
-
-  /* ---------- MAIN MESSAGE FLOW ---------- */
-  async function sendUserMessage(text) {
-    const trimmed = (text || "").trim();
-    const photos = conversation.pendingPhotos.slice();
-    // Allow sending photo-only messages (no text required if photos attached).
-    if (!trimmed && !photos.length) return;
-    if (conversation.awaiting) return;
-
-    conversation.awaiting = true;
-    appendUserMessage(trimmed, photos.map((p) => p.dataUrl));
-    document.getElementById("composer-input").value = "";
-    autoResizeTextarea();
-    document.getElementById("send-btn").disabled = true;
-    document.getElementById("attach-btn").disabled = true;
-    // Move attached photos out of the staging rail and into the "sent" pile,
-    // which is what the booking form will eventually carry to the CRM.
-    conversation.pendingPhotos = [];
-    conversation.sentPhotos.push(...photos);
-    renderPhotoRail();
-
-    // Small delay before typing indicator for natural pacing
-    setTimeout(showTypingIndicator, 200);
-
-    try {
-      const { reply, showForm } = await callPJL(trimmed, photos);
-      hideTypingIndicator();
-      if (reply) appendPJLMessage(reply);
-      if (showForm) {
-        // Small pause for natural feel, then show form
-        setTimeout(appendFormBubble, 400);
-      }
-    } catch (err) {
-      hideTypingIndicator();
-      const errMsg = err.message && err.message.length < 200
-        ? err.message
-        : "Couldn't reach our server. Please try again or give us a call.";
-      showErrorToast(errMsg);
-      // Append a fallback message in chat
-      appendPJLMessage("Sorry — I'm having a bit of trouble connecting. Try sending your message again, or give us a call directly and we'll help you out.");
-    } finally {
-      conversation.awaiting = false;
-      document.getElementById("send-btn").disabled = false;
-      document.getElementById("attach-btn").disabled = false;
-      if (!conversation.bookingShown) {
-        document.getElementById("composer-input").focus();
-      }
-    }
-  }
-
-  /* ---------- COMPOSER ---------- */
-  const composerInput = document.getElementById("composer-input");
-  const sendBtn = document.getElementById("send-btn");
-
-  function autoResizeTextarea() {
-    composerInput.style.height = 'auto';
-    composerInput.style.height = Math.min(composerInput.scrollHeight, 140) + 'px';
-  }
-
-  composerInput.addEventListener("input", autoResizeTextarea);
-  composerInput.addEventListener("keydown", (e) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      sendUserMessage(composerInput.value);
-    }
-  });
-
-  sendBtn.addEventListener("click", () => {
-    sendUserMessage(composerInput.value);
-  });
-
-  document.getElementById("restart-btn").addEventListener("click", () => {
-    if (conversation.messages.length > 0 && !confirm("Start a new conversation? This will clear what you've typed so far.")) return;
-    restart();
-  });
-
-  function restart() {
-    conversation = {
-      messages: [], bookingShown: false, awaiting: false,
-      pendingPhotos: [], sentPhotos: []
-    };
-    messagesEl.innerHTML = "";
-    composerInput.disabled = false;
-    sendBtn.disabled = false;
-    document.getElementById("attach-btn").disabled = false;
-    composerInput.placeholder = "Tell us what's going on with your sprinklers...";
-    composerInput.value = "";
-    renderPhotoRail();
-    document.getElementById("ty-overlay").classList.remove("active");
-    initWelcome();
-  }
-
-  /* ---------- WELCOME / INIT ---------- */
-  function initWelcome() {
-    setTimeout(() => {
-      appendPJLMessage("Hey, I'm Patrick from PJL Land Services 👋");
-    }, 200);
-    setTimeout(showTypingIndicator, 1000);
-    setTimeout(() => {
-      hideTypingIndicator();
-      appendPJLMessage("Tell me what's going on with your sprinkler system — describe it however feels natural, like you'd tell a neighbour. I'll come back with what's likely happening, what you can try yourself, and an honest read on whether you need a tech.");
-      composerInput.focus();
-    }, 2400);
-  }
-
-  initWelcome();
-</script>
+  </script>
 </body>
 </html>

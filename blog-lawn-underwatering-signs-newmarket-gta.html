@@ -152,6 +152,7 @@
 @media(max-width:960px){.post-body-grid{grid-template-columns:1fr;}.post-toc{position:static;margin-bottom:24px;}.related-grid{grid-template-columns:1fr;}}
 @media(max-width:640px){.post-hero{padding:var(--hero-nav-clearance) 0 60px;}.post-author-card{flex-direction:column;text-align:center;}}
 </style>
+  <link rel="stylesheet" href="css/chat-widget.css">
 </head>
 <body>
 <div class="reading-progress" id="readingProgress"></div>
@@ -333,5 +334,6 @@
 // Interactive checklist — adds tactile engagement
 (function(){var items=document.querySelectorAll('#checklist .check-item');items.forEach(function(el){el.addEventListener('click',function(){el.classList.toggle('is-checked');});});})();
 </script>
+  <script src="js/chat-widget.js" defer></script>
 </body>
 </html>
