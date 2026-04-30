@@ -55,6 +55,10 @@ const detailWorkOrderDiagnosisSummary = document.getElementById("detailWorkOrder
 const detailWorkOrderDiagnosisText = document.getElementById("detailWorkOrderDiagnosisText");
 const customerNotes = document.getElementById("customerNotes");
 const activityList = document.getElementById("activityList");
+const detailPhotosSection = document.getElementById("detailPhotosSection");
+const detailPhotoGrid = document.getElementById("detailPhotoGrid");
+const detailTranscriptSection = document.getElementById("detailTranscriptSection");
+const detailTranscript = document.getElementById("detailTranscript");
 const saveMessage = document.getElementById("saveMessage");
 const archiveButton = document.getElementById("archiveButton");
 
@@ -352,6 +356,8 @@ function renderDetail() {
   });
 
   customerNotes.textContent = lead.contact?.notes || "No customer notes.";
+  renderPhotosDetail(lead);
+  renderTranscriptDetail(lead);
   renderWorkOrderDetail(lead);
   renderContactPreview(lead);
   activityList.innerHTML = "";
@@ -360,6 +366,41 @@ function renderDetail() {
     item.innerHTML = `<strong>${escapeHtml(formatDateTime(activity.at))}</strong><span>${escapeHtml(activity.text)}</span>`;
     activityList.append(item);
   });
+}
+
+function renderPhotosDetail(lead) {
+  if (!detailPhotosSection || !detailPhotoGrid) return;
+  const photos = Array.isArray(lead.photos) ? lead.photos : [];
+  if (!photos.length) {
+    detailPhotosSection.hidden = true;
+    return;
+  }
+  detailPhotoGrid.innerHTML = "";
+  photos.forEach((photo, idx) => {
+    const link = document.createElement("a");
+    link.href = photo.url;
+    link.target = "_blank";
+    link.rel = "noopener";
+    link.className = "detail-photo-link";
+    const img = document.createElement("img");
+    img.src = photo.url;
+    img.alt = `Customer photo ${idx + 1}`;
+    img.loading = "lazy";
+    link.appendChild(img);
+    detailPhotoGrid.appendChild(link);
+  });
+  detailPhotosSection.hidden = false;
+}
+
+function renderTranscriptDetail(lead) {
+  if (!detailTranscriptSection || !detailTranscript) return;
+  const transcript = lead.context?.transcript || "";
+  if (!transcript) {
+    detailTranscriptSection.hidden = true;
+    return;
+  }
+  detailTranscript.textContent = transcript;
+  detailTranscriptSection.hidden = false;
 }
 
 function renderWorkOrderDetail(lead) {

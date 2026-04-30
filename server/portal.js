@@ -31,6 +31,8 @@ const messageBody = document.getElementById("messageBody");
 const messageStatus = document.getElementById("messageStatus");
 const activityCard = document.getElementById("activityCard");
 const activityList = document.getElementById("activityList");
+const photosCard = document.getElementById("photosCard");
+const photoGrid = document.getElementById("photoGrid");
 
 // Status copy depends on whether the lead came in as a request (contact form)
 // or a confirmed service booking (book.html with a slot reserved). The
@@ -117,6 +119,29 @@ function renderTimeline(status) {
     else item.classList.add("is-pending");
   });
   portalTimeline.hidden = false;
+}
+
+function renderPhotos(photos) {
+  if (!photosCard || !photoGrid) return;
+  if (!Array.isArray(photos) || !photos.length) {
+    photosCard.hidden = true;
+    return;
+  }
+  photoGrid.innerHTML = "";
+  photos.forEach((photo, idx) => {
+    const link = document.createElement("a");
+    link.href = photo.url;
+    link.target = "_blank";
+    link.rel = "noopener";
+    link.className = "portal-photo-link";
+    const img = document.createElement("img");
+    img.src = photo.url;
+    img.alt = `Photo ${idx + 1} you sent us`;
+    img.loading = "lazy";
+    link.appendChild(img);
+    photoGrid.appendChild(link);
+  });
+  photosCard.hidden = false;
 }
 
 function renderActivity(activity) {
@@ -246,6 +271,7 @@ function renderPortal(data) {
   }
 
   renderTimeline(project.status);
+  renderPhotos(project.photos);
   renderActivity(project.activity);
   renderWorkOrder(data);
 

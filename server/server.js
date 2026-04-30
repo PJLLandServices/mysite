@@ -68,6 +68,14 @@ const SERVER_DIR = __dirname;
 const DATA_DIR = path.join(SERVER_DIR, "data");
 const LEADS_FILE = path.join(DATA_DIR, "leads.json");
 const AUTH_FILE = path.join(DATA_DIR, "auth.json");
+// Per-lead photo attachments live under data/photos/<leadId>/N.jpg.
+// Photos arrive base64-encoded inside the booking POST and are written ONLY
+// after the lead is successfully created (validation passed, not a duplicate).
+// If the booking is abandoned, no photo is ever persisted.
+const PHOTOS_DIR = path.join(DATA_DIR, "photos");
+const MAX_PHOTOS_PER_LEAD = 5;
+const MAX_PHOTO_BYTES = 1_500_000; // 1.5 MB per photo after client-side resize
+const QUOTE_POST_MAX_BYTES = 12_000_000; // 12 MB cap for the /api/quotes POST (5 photos × ~1.5MB base64 inflated)
 const CONTACT_NOTE = "PJL_New2026";
 const CONTACT_COUNTRY = "Canada";
 const CONTACT_PROVINCE = "ON";
@@ -142,6 +150,7 @@ const CRM_PRIORITIES = new Set(["normal", "high", "urgent"]);
 // Add new sources here, then point the form's `source` field at the new key.
 const SOURCES = {
   sprinkler_repair:    { label: "Sprinkler Repair",    category: "repair"    },
+  ai_diagnose:         { label: "AI Diagnostic Chat",  category: "repair"    },
   sprinkler_quote:     { label: "New Sprinkler Quote", category: "install"   },
   landscape_lighting:  { label: "Landscape Lighting",  category: "lighting"  },
   drip_irrigation:     { label: "Drip Irrigation",     category: "install"   },
@@ -389,6 +398,7 @@ function hydrateLead(lead) {
     archived: Boolean(lead.archived),
     // Older leads written before source-tagging existed get the default source.
     source: resolveSource(lead.source),
+    photos: Array.isArray(lead.photos) ? lead.photos : [],
     portal: {
       ...defaultPortal(lead.id, now),
       ...portal,
@@ -441,7 +451,11 @@ function validateLead(payload) {
       context: {
         pageUrl: normalizeString(payload && payload.pageUrl, 500),
         userAgent: normalizeString(payload && payload.userAgent, 500),
-        mode: normalizeString(payload && payload.mode, 60)
+        mode: normalizeString(payload && payload.mode, 60),
+        // AI-diagnose source carries the chat transcript so Patrick can read
+        // what the AI told the customer. Capped at 50K chars (typical chat is
+        // ~5K). Empty for non-AI sources.
+        transcript: normalizeString(payload && payload.transcript, 50000)
       },
       crm: defaultCrm(now),
       portal: defaultPortal(id, now)
@@ -479,15 +493,101 @@ function isLikelyDuplicate(leads, lead) {
   });
 }
 
-async function parseRequestBody(req) {
+async function parseRequestBody(req, { maxBytes = 1_000_000 } = {}) {
   const chunks = [];
   let size = 0;
   for await (const chunk of req) {
     size += chunk.length;
-    if (size > 1_000_000) throw new Error("Request body is too large.");
+    if (size > maxBytes) throw new Error("Request body is too large.");
     chunks.push(chunk);
   }
   return JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
+}
+
+// ----- Photo handling ----------------------------------------------------
+// Accepts client payload of the form: photos: [{ data: "<base64>", mediaType: "image/jpeg" }]
+// Returns a normalized + validated array of { buffer, mediaType, ext }, or throws.
+function validatePhotos(rawPhotos) {
+  if (!rawPhotos) return [];
+  if (!Array.isArray(rawPhotos)) throw new Error("photos must be an array.");
+  if (rawPhotos.length > MAX_PHOTOS_PER_LEAD) throw new Error(`A booking can include at most ${MAX_PHOTOS_PER_LEAD} photos.`);
+  const out = [];
+  for (let i = 0; i < rawPhotos.length; i++) {
+    const p = rawPhotos[i];
+    if (!p || typeof p !== "object") throw new Error(`Photo ${i + 1} is not a valid object.`);
+    const mediaType = String(p.mediaType || "image/jpeg").toLowerCase();
+    if (!/^image\/(jpeg|png|webp)$/.test(mediaType)) throw new Error(`Photo ${i + 1} has an unsupported type.`);
+    const data = String(p.data || "").trim();
+    if (!data) throw new Error(`Photo ${i + 1} has no data.`);
+    let buffer;
+    try { buffer = Buffer.from(data, "base64"); } catch { throw new Error(`Photo ${i + 1} is not valid base64.`); }
+    if (!buffer.length) throw new Error(`Photo ${i + 1} decoded to zero bytes.`);
+    if (buffer.length > MAX_PHOTO_BYTES) throw new Error(`Photo ${i + 1} is too large (max ${Math.round(MAX_PHOTO_BYTES / 1000)} KB).`);
+    const ext = mediaType === "image/png" ? "png" : (mediaType === "image/webp" ? "webp" : "jpg");
+    out.push({ buffer, mediaType, ext });
+  }
+  return out;
+}
+
+// Save validated photos to disk and return the lightweight metadata to store
+// alongside the lead record. Photos themselves are NOT stored in leads.json —
+// only the file metadata. Files live at PHOTOS_DIR/<leadId>/N.<ext>.
+async function savePhotosForLead(leadId, photos, now) {
+  if (!photos.length) return [];
+  const dir = path.join(PHOTOS_DIR, leadId);
+  await fs.mkdir(dir, { recursive: true });
+  const meta = [];
+  for (let i = 0; i < photos.length; i++) {
+    const n = i + 1;
+    const filename = `${n}.${photos[i].ext}`;
+    await fs.writeFile(path.join(dir, filename), photos[i].buffer);
+    meta.push({
+      n,
+      mediaType: photos[i].mediaType,
+      bytes: photos[i].buffer.length,
+      addedAt: now
+    });
+  }
+  return meta;
+}
+
+async function readPhotoFile(leadId, n) {
+  const dir = path.join(PHOTOS_DIR, leadId);
+  // Try each known extension. Photos are stored as <n>.<ext>.
+  for (const ext of ["jpg", "png", "webp"]) {
+    const file = path.join(dir, `${n}.${ext}`);
+    try {
+      const data = await fs.readFile(file);
+      const mediaType = ext === "png" ? "image/png" : (ext === "webp" ? "image/webp" : "image/jpeg");
+      return { data, mediaType };
+    } catch {}
+  }
+  return null;
+}
+
+// CORS — diagnose.html is currently hosted on GitHub Pages (different origin
+// from the Render API). After the DNS cutover, both will be on the same
+// origin and CORS becomes a no-op. /api/quotes only accepts new leads (no
+// credentialed reads), so a permissive policy is safe.
+const PUBLIC_API_PATHS = new Set(["/api/quotes"]);
+function isPublicApiPath(pathname) {
+  if (PUBLIC_API_PATHS.has(pathname)) return true;
+  // Photo fetches by portal token are also public (token is the auth).
+  if (/^\/api\/portal\/[^/]+\/photo\/\d+$/.test(pathname)) return true;
+  return false;
+}
+function applyCorsHeaders(req, res, pathname) {
+  if (!isPublicApiPath(pathname)) return;
+  const origin = req.headers.origin;
+  if (origin) {
+    res.setHeader("access-control-allow-origin", origin);
+    res.setHeader("vary", "origin");
+  } else {
+    res.setHeader("access-control-allow-origin", "*");
+  }
+  res.setHeader("access-control-allow-methods", "GET, POST, OPTIONS");
+  res.setHeader("access-control-allow-headers", "content-type");
+  res.setHeader("access-control-max-age", "600");
 }
 
 function leadToCsvRow(lead) {
@@ -658,13 +758,22 @@ function decorateLeadForAdmin(lead, req) {
   const contactExport = contactRecordForLead(lead, req);
   const sourceKey = resolveSource(lead.source);
   const sourceMeta = SOURCES[sourceKey];
+  // Admin photo URLs use the lead.id (cookie-gated), not the portal token.
+  const photos = (lead.photos || []).map((p) => ({
+    n: p.n,
+    url: `/api/quotes/${encodeURIComponent(lead.id)}/photo/${p.n}`,
+    mediaType: p.mediaType,
+    bytes: p.bytes,
+    addedAt: p.addedAt
+  }));
   return {
     ...lead,
     source: sourceKey,
     sourceLabel: sourceMeta.label,
     sourceCategory: sourceMeta.category,
     portalUrl: contactExport.portalUrl,
-    contactExport
+    contactExport,
+    photos
   };
 }
 
@@ -704,7 +813,14 @@ function portalPayloadForLead(lead, req) {
       currency: lead.totals?.currency || "CAD",
       customerNotes: lead.contact?.notes || "",
       canAccept: status === "quoted",
-      activity: visibleActivity
+      activity: visibleActivity,
+      // Photo URLs are token-scoped (each customer can only see their own).
+      // Token is the portal token; never the leadId.
+      photos: (lead.photos || []).map((p) => ({
+        n: p.n,
+        url: `/api/portal/${lead.portal?.token || portalTokenForId(lead.id)}/photo/${p.n}`,
+        addedAt: p.addedAt
+      }))
     },
     booking: lead.booking ? {
       start: lead.booking.start,
@@ -848,7 +964,16 @@ async function activeBookings() {
 async function handleApi(req, res, pathname) {
   if (req.method === "POST" && pathname === "/api/quotes") {
     try {
-      const payload = await parseRequestBody(req);
+      // Allow a larger body here than the 1MB default so booking forms can
+      // include up to 5 attached photos (each capped client-side at ~1MB).
+      const payload = await parseRequestBody(req, { maxBytes: QUOTE_POST_MAX_BYTES });
+
+      // Validate photos BEFORE we do the lead-write so that a malformed photo
+      // batch never produces an orphan lead with "no photos available."
+      let validatedPhotos;
+      try { validatedPhotos = validatePhotos(payload.photos); }
+      catch (photoErr) { return sendJson(res, 422, { ok: false, errors: [photoErr.message] }); }
+
       const result = validateLead(payload);
       if (!result.ok) return sendJson(res, 422, { ok: false, errors: result.errors });
 
@@ -858,6 +983,19 @@ async function handleApi(req, res, pathname) {
           ok: false,
           errors: ["This looks like a duplicate quote request that was already received today."]
         });
+      }
+
+      // Persist photos AFTER duplicate check, BEFORE writeLeads, so the
+      // photo metadata can be embedded in the saved record. If photo write
+      // fails, we abort the whole booking — no half-saved state.
+      if (validatedPhotos.length) {
+        try {
+          const photoMeta = await savePhotosForLead(result.lead.id, validatedPhotos, result.lead.createdAt);
+          result.lead.photos = photoMeta;
+        } catch (photoErr) {
+          console.error("[photos] save failed:", photoErr?.message || photoErr);
+          return sendJson(res, 500, { ok: false, errors: ["Couldn't save your photos — please try again or call us directly."] });
+        }
       }
 
       leads.unshift(result.lead);
@@ -1025,6 +1163,49 @@ async function handleApi(req, res, pathname) {
     } catch (error) {
       return sendJson(res, 400, { ok: false, errors: [error.message || "Unable to bulk update."] });
     }
+  }
+
+  // Customer-side photo fetch, authenticated by portal token (NOT admin cookie).
+  // Match path: /api/portal/<token>/photo/<n>
+  const portalPhotoMatch = pathname.match(/^\/api\/portal\/([^/]+)\/photo\/(\d+)$/);
+  if (portalPhotoMatch && req.method === "GET") {
+    const token = decodeURIComponent(portalPhotoMatch[1]);
+    const n = Number(portalPhotoMatch[2]);
+    const leads = await readLeads();
+    const lead = leads.find((l) => (l.portal?.token || portalTokenForId(l.id)) === token);
+    if (!lead) return sendJson(res, 404, { ok: false, errors: ["Portal not found."] });
+    const photoMeta = (lead.photos || []).find((p) => p.n === n);
+    if (!photoMeta) return sendJson(res, 404, { ok: false, errors: ["Photo not found."] });
+    const file = await readPhotoFile(lead.id, n);
+    if (!file) return sendJson(res, 404, { ok: false, errors: ["Photo not found on disk."] });
+    res.writeHead(200, {
+      "content-type": file.mediaType,
+      "cache-control": "private, max-age=86400",
+      "content-length": file.data.length
+    });
+    res.end(file.data);
+    return;
+  }
+
+  // Admin-side photo fetch, gated by the existing /api/quotes/:id auth.
+  const adminPhotoMatch = pathname.match(/^\/api\/quotes\/([^/]+)\/photo\/(\d+)$/);
+  if (adminPhotoMatch && req.method === "GET") {
+    const leadId = decodeURIComponent(adminPhotoMatch[1]);
+    const n = Number(adminPhotoMatch[2]);
+    const leads = await readLeads();
+    const lead = leads.find((l) => l.id === leadId);
+    if (!lead) return sendJson(res, 404, { ok: false, errors: ["Lead not found."] });
+    const photoMeta = (lead.photos || []).find((p) => p.n === n);
+    if (!photoMeta) return sendJson(res, 404, { ok: false, errors: ["Photo not found."] });
+    const file = await readPhotoFile(lead.id, n);
+    if (!file) return sendJson(res, 404, { ok: false, errors: ["Photo not found on disk."] });
+    res.writeHead(200, {
+      "content-type": file.mediaType,
+      "cache-control": "private, max-age=86400",
+      "content-length": file.data.length
+    });
+    res.end(file.data);
+    return;
   }
 
   // Customer-side endpoints, authenticated by portal token (NOT admin cookie).
@@ -1521,6 +1702,15 @@ async function serveStatic(req, res, pathname) {
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host || `${HOST}:${PORT}`}`);
   try {
+    // CORS: applied early so preflights and cross-origin POSTs to /api/quotes
+    // (from diagnose.html on GitHub Pages today, same-origin after DNS cutover) work.
+    applyCorsHeaders(req, res, url.pathname);
+    if (req.method === "OPTIONS" && isPublicApiPath(url.pathname)) {
+      res.writeHead(204);
+      res.end();
+      return;
+    }
+
     const authHandled = await handleAuth(req, res, url.pathname);
     if (authHandled !== false) return;
 

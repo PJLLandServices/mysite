@@ -32,3 +32,6 @@ server/data/
 
 # Node packages (we have none right now, but in case we add any later)
 node_modules/
+
+# Wrangler local cache (contains OAuth tokens)
+worker/.wrangler/

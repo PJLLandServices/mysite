@@ -1675,3 +1675,40 @@ body.crm-drawer-locked { overflow: hidden; }
 @media (max-width: 720px) {
   .kanban-board { grid-template-columns: 1fr; }
 }
+
+.detail-photo-grid {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+}
+.detail-photo-link {
+  display: block;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid rgba(15, 31, 20, 0.1);
+  background: #f3efe4;
+  transition: transform .15s, box-shadow .15s;
+}
+.detail-photo-link:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(15, 31, 20, 0.12);
+}
+.detail-photo-link img {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  object-fit: cover;
+  display: block;
+}
+.detail-transcript-body {
+  background: #faf7ee;
+  border: 1px solid rgba(15, 31, 20, 0.08);
+  border-radius: 8px;
+  padding: 14px;
+  font-family: "DM Sans", system-ui, sans-serif;
+  font-size: 13px;
+  line-height: 1.55;
+  color: #2a2a2a;
+  white-space: pre-wrap;
+  max-height: 360px;
+  overflow-y: auto;
+}
