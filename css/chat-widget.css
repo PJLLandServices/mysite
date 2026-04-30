@@ -413,9 +413,11 @@
 .pjl-chat-attach-btn:disabled { opacity: .35; cursor: not-allowed; }
 .pjl-chat-textarea {
   flex: 1;
+  min-width: 0; /* allow flex shrink so the textarea respects composer width on small screens */
   resize: none;
   max-height: 130px;
-  padding: 12px 16px;
+  min-height: 44px;
+  padding: 12px 18px;
   border: 1.5px solid var(--pjl-chat-line);
   border-radius: 22px;
   background: var(--pjl-chat-cream);
@@ -425,9 +427,23 @@
   line-height: 1.4;
   overflow-y: auto;
   transition: border-color .15s, background .15s;
+  -webkit-appearance: none;
+  appearance: none;
+  -webkit-tap-highlight-color: transparent;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.pjl-chat-textarea:focus { outline: none; border-color: var(--pjl-chat-green-mid); background: var(--pjl-chat-white); }
-.pjl-chat-textarea::placeholder { color: var(--pjl-chat-muted); }
+.pjl-chat-textarea:focus {
+  outline: none;
+  border-color: var(--pjl-chat-green-mid);
+  background: var(--pjl-chat-white);
+  white-space: pre-wrap; /* allow real multiline once the user is typing */
+}
+.pjl-chat-textarea:not(:placeholder-shown) { white-space: pre-wrap; }
+.pjl-chat-textarea::placeholder {
+  color: var(--pjl-chat-muted);
+  opacity: 1; /* iOS otherwise dims this further */
+}
 .pjl-chat-textarea:disabled { opacity: .5; cursor: not-allowed; }
 .pjl-chat-send-btn {
   width: 44px; height: 44px;
@@ -685,6 +701,21 @@
   .pjl-chat-form-grid { grid-template-columns: 1fr; }
   .pjl-chat-header { padding: 16px 18px; }
   .pjl-chat-brand-text .pjl-chat-brand { font-size: 20px; }
+  .pjl-chat-composer { padding: 10px 12px 10px; }
+  .pjl-chat-composer-inner { gap: 8px; }
+  .pjl-chat-attach-btn,
+  .pjl-chat-send-btn { width: 42px; height: 42px; }
+  .pjl-chat-textarea {
+    font-size: 16px; /* iOS won't auto-zoom on focus when input >= 16px */
+    padding: 11px 16px;
+    min-height: 42px;
+  }
+  .pjl-chat-composer-meta {
+    margin-top: 6px;
+    font-size: 9px;
+    letter-spacing: 0.8px;
+  }
+  .pjl-chat-composer-meta button { font-size: 9px; }
 }
 
 /* ---------- Lock body scroll only on mobile when open ---------- */
