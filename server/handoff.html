@@ -63,21 +63,23 @@
             </label>
           </div>
           <label class="handoff-full">
-            <span>Property address</span>
-            <input type="text" name="address" autocomplete="street-address" placeholder="123 Main Street, Newmarket ON">
+            <span>Property address (start typing for suggestions)</span>
+            <input type="text" name="address" id="handoffAddress" class="js-address-autocomplete" autocomplete="off" placeholder="123 Main Street, Newmarket ON">
           </label>
         </fieldset>
 
         <fieldset class="handoff-section">
-          <legend>What they need</legend>
+          <legend>What we'll be doing</legend>
+          <p class="handoff-help">
+            Add every service / line item the customer should see on their work order. The first item determines the appointment slot length. Add more rows for additional repair items, parts, or labour line items — all show up on the work order with their quantities.
+          </p>
+          <div class="handoff-items" id="handoffItems"></div>
+          <button type="button" class="handoff-add-item" id="addItemBtn">+ Add another item</button>
+        </fieldset>
+
+        <fieldset class="handoff-section">
+          <legend>Other context</legend>
           <div class="handoff-row">
-            <label>
-              <span>Suggested service</span>
-              <select name="suggestedService" id="suggestedService">
-                <option value="">Let customer choose</option>
-                <!-- populated from /api/booking/services -->
-              </select>
-            </label>
             <label>
               <span>Zone count (if known)</span>
               <select name="zoneCount" id="zoneCountSelect">
@@ -86,14 +88,14 @@
                 <!-- 1-24 added by JS -->
               </select>
             </label>
+            <label>
+              <span>Severity</span>
+              <select name="severity">
+                <option value="normal">Normal</option>
+                <option value="urgent">Urgent</option>
+              </select>
+            </label>
           </div>
-          <label class="handoff-full">
-            <span>Severity</span>
-            <select name="severity">
-              <option value="normal">Normal</option>
-              <option value="urgent">Urgent</option>
-            </select>
-          </label>
         </fieldset>
 
         <fieldset class="handoff-section">
@@ -150,6 +152,11 @@
     </section>
   </main>
 
+  <!-- Google Places autocomplete on the address input. Reuses the public
+       site's client key — same one that drives the contact form and book.html.
+       coverage-checker.js binds to anything with class="js-address-autocomplete". -->
+  <script src="/coverage-checker.js"></script>
+  <script async defer src="https://maps.googleapis.com/maps/api/js?key=AIzaSyBrORBeXbpNTJvoi2PDhDDs6Iy-BGSU30M&libraries=places&callback=initCoverageCheck&loading=async"></script>
   <script src="/crm/handoff.js"></script>
 </body>
 </html>

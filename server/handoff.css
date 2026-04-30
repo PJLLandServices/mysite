@@ -82,6 +82,100 @@
 }
 .handoff-full { grid-column: 1 / -1; }
 
+/* Multi-item picker — first row drives the slot, additional rows are
+ * line items on the work order. Each row: [service select] [qty] [×]. */
+.handoff-items {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.handoff-item-row {
+  display: grid;
+  grid-template-columns: 1fr 80px 32px;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 10px;
+  background: rgba(27, 77, 46, 0.04);
+  border: 1px solid rgba(27, 77, 46, 0.10);
+  border-radius: 8px;
+  position: relative;
+}
+.handoff-item-row.is-primary {
+  background: linear-gradient(135deg, rgba(74, 140, 92, 0.10), rgba(74, 140, 92, 0.02));
+  border-color: rgba(74, 140, 92, 0.30);
+}
+.handoff-item-row.is-primary::before {
+  content: "Drives slot";
+  position: absolute;
+  top: -9px;
+  left: 12px;
+  background: #2D6A42;
+  color: #fff;
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+.handoff-item-row .item-key {
+  padding: 8px 10px;
+  font-size: 14px;
+  border-radius: 6px;
+  border: 1px solid rgba(15, 31, 20, 0.18);
+  background: #fff;
+}
+.handoff-item-row .item-qty {
+  padding: 8px;
+  font-size: 14px;
+  border-radius: 6px;
+  border: 1px solid rgba(15, 31, 20, 0.18);
+  background: #fff;
+  text-align: center;
+}
+.handoff-item-row .item-remove {
+  width: 32px;
+  height: 32px;
+  border: none;
+  background: rgba(208, 72, 72, 0.10);
+  color: #a92e2e;
+  border-radius: 50%;
+  font-size: 18px;
+  font-weight: 700;
+  cursor: pointer;
+  line-height: 1;
+}
+.handoff-item-row .item-remove:hover {
+  background: rgba(208, 72, 72, 0.18);
+}
+
+.handoff-add-item {
+  align-self: flex-start;
+  padding: 8px 14px;
+  background: transparent;
+  border: 1px dashed rgba(27, 77, 46, 0.35);
+  border-radius: 6px;
+  color: #1B4D2E;
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+.handoff-add-item:hover {
+  background: rgba(27, 77, 46, 0.06);
+  border-color: rgba(27, 77, 46, 0.55);
+  border-style: solid;
+}
+
+@media (max-width: 540px) {
+  .handoff-item-row { grid-template-columns: 1fr 70px 32px; }
+  .handoff-item-row.is-primary::before { left: 8px; font-size: 9px; }
+}
+
 .handoff-checkbox {
   flex-direction: row !important;
   align-items: center;

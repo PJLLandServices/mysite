@@ -100,7 +100,22 @@ async function createSession(payload, ttlSeconds = DEFAULT_TTL_SECONDS) {
                   : null),
             notes:     String(payload.customerHints.notes     || "").slice(0, 1500)
           }
-        : null
+        : null,
+      // Line items the AI / admin chose during the handoff. When the
+      // customer reserves a slot, these get pre-populated as features on
+      // the lead so the work order shows the full repair plan, not just
+      // the slot-determining service. Each entry is { key, qty } — the
+      // server resolves `key` against its FEATURES catalog at reserve time
+      // (so the price + label can't be tampered with from the AI side).
+      lineItems: Array.isArray(payload.lineItems)
+        ? payload.lineItems
+            .filter((item) => item && typeof item.key === "string")
+            .map((item) => ({
+              key: item.key.slice(0, 60),
+              qty: Math.max(1, Math.min(99, Math.floor(Number(item.qty) || 1)))
+            }))
+            .slice(0, 20)
+        : []
     }
   };
   const data = await readAll();

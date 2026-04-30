@@ -282,6 +282,7 @@ function needsAuth(method, pathname) {
   if (pathname.startsWith("/api/schedule/")) return true;
   // Manual handoff (admin sends booking link to customer) is admin-only.
   if (pathname === "/api/admin/send-booking-link") return true;
+  if (pathname === "/api/admin/features") return true;
   // Availability lookups + the public booking endpoint stay public.
   return false;
 }
@@ -1359,6 +1360,14 @@ async function handleApi(req, res, pathname) {
     return sendJson(res, 200, { ok: true, session });
   }
 
+  // Admin: full FEATURES catalog (granular line items — head replacement,
+  // valve, manifold rebuild, wire run, etc.). Used by /admin/handoff to
+  // render the multi-item picker. Public bookable services come from
+  // /api/booking/services (BOOKABLE_SERVICES) — different catalog, narrower.
+  if (req.method === "GET" && pathname === "/api/admin/features") {
+    return sendJson(res, 200, { ok: true, features: FEATURES });
+  }
+
   // Admin manual-handoff: Patrick fills out a form in /admin/handoff after
   // a phone call, server creates a booking session AND optionally pushes
   // the URL to the customer via SMS + email. Same machinery the AI agent
@@ -1378,7 +1387,13 @@ async function handleApi(req, res, pathname) {
       // Patrick's hands, not the AI.
       payload.source = "admin_manual";
       const session = await bookingSessions.createSession(payload);
-      const baseUrl = process.env.PUBLIC_BASE_URL || baseUrlFromReq(req);
+      // ALWAYS use the request's host for the bookingUrl. PUBLIC_BASE_URL
+      // is intentionally ignored here: if Patrick is on /admin/handoff via
+      // the .onrender.com URL, his admin login proves that domain is live
+      // and reachable, so any link we send the customer using that domain
+      // will work. PUBLIC_BASE_URL can be set to the public domain pre-
+      // DNS-cutover and silently break links — req.host is always honest.
+      const baseUrl = baseUrlFromReq(req);
       const bookingUrl = `${baseUrl}/book.html?session=${encodeURIComponent(session.token)}`;
 
       const hints = session.payload.customerHints || {};
@@ -1600,19 +1615,40 @@ async function handleApi(req, res, pathname) {
       //      both the customer portal and the CRM
       const pricing = priceForBooking(serviceKey, zoneCount);
 
-      // Replace the empty intake features array with the booked service so
-      // the customer portal renders it on first load.
-      result.lead.features = [{
+      // The booked service is always the first feature on the lead — its
+      // duration drives the slot. Additional line items from the handoff
+      // session (chosen by Patrick or the AI) get appended below it so the
+      // work order reflects the full repair plan.
+      const bookedFeature = {
         key: serviceKey,
         label: service.label,
         qty: 1,
         price: pricing.price,
         category: service.category,
         quoteType: pricing.custom ? "custom" : "flat"
-      }];
+      };
+      const sessionLineItems = (prebooking?.payload?.lineItems || [])
+        .map((item) => {
+          const def = FEATURES[item.key];
+          if (!def) return null; // unknown key — silently dropped
+          return {
+            key: item.key,
+            label: def.label,
+            qty: item.qty,
+            price: def.price,
+            category: def.category,
+            quoteType: def.quoteType
+          };
+        })
+        .filter(Boolean)
+        // Don't double-add the booked service if the handoff included it
+        // explicitly — the bookedFeature above already covers that slot.
+        .filter((item) => item.key !== serviceKey);
+
+      result.lead.features = [bookedFeature, ...sessionLineItems];
       result.lead.totals = {
-        expectedTotal: pricing.custom ? 0 : pricing.price,
-        submittedTotal: pricing.custom ? 0 : pricing.price,
+        expectedTotal: calcTotal(result.lead.features),
+        submittedTotal: calcTotal(result.lead.features),
         currency: "CAD"
       };
 
@@ -1643,7 +1679,11 @@ async function handleApi(req, res, pathname) {
         workOrder: {
           id: makeWorkOrderId(),
           status: "scheduled",
-          total: pricing.custom ? 0 : pricing.price,
+          // total reflects ALL features (booked service + any handoff
+          // line items), not just the slot service. priceLabel still
+          // describes the headline service so the portal card reads
+          // sensibly even on multi-item work orders.
+          total: result.lead.totals.expectedTotal,
           priceLabel: pricing.label,
           priceNote: pricing.note || null,
           custom: Boolean(pricing.custom),
