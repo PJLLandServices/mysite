@@ -347,7 +347,7 @@
     }
 
     try {
-      const url = `/api/booking/availability?service=${encodeURIComponent(state.serviceKey)}&address=${encodeURIComponent(state.address)}&days=14`;
+      const url = ((window.PJL_API_BASE || "") + `/api/booking/availability?service=${encodeURIComponent(state.serviceKey)}&address=${encodeURIComponent(state.address)}&days=14`);
       const response = await fetch(url, { cache: "no-store" });
       const data = await response.json();
       if (!response.ok || !data.ok) throw new Error((data.errors || ["Couldn't load availability."]).join(" "));
@@ -490,7 +490,7 @@
         pageUrl: window.location.href,
         userAgent: navigator.userAgent
       };
-      const response = await fetch("/api/booking/reserve", {
+      const response = await fetch((window.PJL_API_BASE || "") + "/api/booking/reserve", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(payload)
@@ -615,7 +615,7 @@
       let suggestedService = null;
       if (sessionToken) {
         try {
-          const sessRes = await fetch(`/api/booking/session/${encodeURIComponent(sessionToken)}`, { cache: "no-store" });
+          const sessRes = await fetch((window.PJL_API_BASE || "") + `/api/booking/session/${encodeURIComponent(sessionToken)}`, { cache: "no-store" });
           const sessData = await sessRes.json();
           if (sessRes.ok && sessData.ok) {
             suggestedService = applySessionPrefill(sessData.session);
@@ -623,7 +623,7 @@
         } catch (_) { /* expired or missing — fall through to manual flow */ }
       }
 
-      const response = await fetch("/api/booking/services", { cache: "no-store" });
+      const response = await fetch(((window.PJL_API_BASE || "") + "/api/booking/services"), { cache: "no-store" });
       const data = await response.json();
       if (data.ok) {
         state.services = data.services || {};

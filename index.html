@@ -1874,7 +1874,7 @@
     };
 
     try {
-      const res = await fetch('/api/quotes', {
+      const res = await fetch((window.PJL_API_BASE || '') + '/api/quotes', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
         body: JSON.stringify(payload)

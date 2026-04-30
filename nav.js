@@ -1,5 +1,28 @@
 // PJL Land Services — Shared JS
 
+// ── API base detection ──
+// Public-site forms (contact, homepage same-day, quote builder, booking page)
+// POST to /api/quotes and friends. When the page is served from a domain that
+// isn't running our Render Node.js backend (i.e. pre-DNS-cutover, when
+// pjllandservices.com still points at Wix/Cloudflare), a relative URL hits
+// the wrong host and 404s with "Something went wrong."
+//
+// This shim picks the right base at runtime:
+//   - On Render (*.onrender.com) or localhost: relative URL (same origin)
+//   - Anywhere else (public domain pre-cutover): absolute Render URL
+//
+// CORS is configured server-side to allow the public domain, so cross-origin
+// works. Once DNS cuts over and pjllandservices.com IS Render, the same
+// detection naturally falls back to relative — no code change needed.
+//
+// All public-facing fetches should prefix `window.PJL_API_BASE` to their path.
+window.PJL_API_BASE = (function () {
+  var h = (window.location && window.location.hostname) || "";
+  if (!h || h === "localhost" || h === "127.0.0.1") return "";
+  if (h.indexOf("onrender.com") !== -1) return "";
+  return "https://pjl-land-services-onrender-com.onrender.com";
+})();
+
 // ── Navigation scroll effect ──
 document.documentElement.classList.add('js-reveal');
 

@@ -380,7 +380,7 @@
       mode: "sprinkler-quote-builder"
     });
 
-    fetch('/api/quotes', {
+    fetch((window.PJL_API_BASE || '') + '/api/quotes', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
       body
