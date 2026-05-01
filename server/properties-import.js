@@ -47,23 +47,25 @@ const TARGET_FIELDS = [
   { key: "notes",               label: "Special notes",                required: false, group: "system" }
 ];
 
-// Auto-mapping: try to match each target field to a header in the
-// uploaded file using simple substring rules. Patrick's existing xlsx
-// uses headers like "Customer Name", "Contact Email Address", "Blow Out",
-// etc. — these patterns cover his and most variations.
+// Auto-mapping: match each target field to a header in the uploaded file.
+// Patrick's xlsx uses headers like "Customer Name", "Contact Email Address",
+// "Blow Out", "Valves #", "Valves Location" — note the gaps between words.
+// `\W*` (zero or more non-word chars) tolerates spaces, dots, slashes, and
+// punctuation between key words so "Valves #", "Valve#", "# of Valves",
+// "Valve-Count" all map cleanly.
 const AUTO_MAP_HINTS = {
-  customerName:       /(customer.?name|name)/i,
-  customerEmail:      /(email)/i,
-  customerPhone:      /(phone|tel)/i,
-  address_street:     /(street.?address|address)/i,
-  address_city:       /(town|city)/i,
-  address_postal:     /(postal|zip)/i,
-  controllerLocation: /(timer|controller)/i,
-  shutoffLocation:    /(water.?shut|shut.?off)/i,
-  blowoutLocation:    /(blow.?out|blowout)/i,
-  valveCount:         /(valve.?#|valves.?#|#.?valve|valve.?count)/i,
-  valveLocation:      /(valve.?loc)/i,
-  notes:              /(notes|special)/i
+  customerName:       /customer\W*name|^name$/i,
+  customerEmail:      /email/i,
+  customerPhone:      /phone|^tel/i,
+  address_street:     /street\W*address|^address$/i,
+  address_city:       /town|city/i,
+  address_postal:     /postal|zip/i,
+  controllerLocation: /timer|controller/i,
+  shutoffLocation:    /water\W*shut|shut\W*off/i,
+  blowoutLocation:    /blow\W*out|blowout/i,
+  valveCount:         /valves?\W*#|#\W*valves?|valves?\W*count/i,
+  valveLocation:      /valves?\W*loc/i,
+  notes:              /notes|special/i
 };
 
 let parsedRows = [];          // Array of objects keyed by header
@@ -187,11 +189,28 @@ function buildRecords() {
     // consistency with bookings.
     const address = [street, city, postal].filter(Boolean).join(", ").trim();
 
+    // Parse the valve count permissively: SheetJS may hand us a number
+    // (5), a numeric string ("5"), a float string ("5.0" — happens when
+    // the source column is float-typed, like Patrick's xlsx), or noise
+    // like "5 valves" / "approx 7". parseInt grabs the leading integer
+    // and ignores the rest. Anything that doesn't yield a positive
+    // integer becomes null.
     const valveCountRaw = get("valveCount");
-    const valveCount = /^\d+$/.test(valveCountRaw) ? Number(valveCountRaw) : null;
+    const valveCountParsed = parseInt(valveCountRaw, 10);
+    const valveCount = (Number.isFinite(valveCountParsed) && valveCountParsed > 0)
+      ? valveCountParsed
+      : null;
     const valveLoc = get("valveLocation");
+    // Build a valve-box record whenever we have EITHER a count OR a
+    // location. If we only have one, fill the other with a sensible default
+    // so Patrick can see what was captured and edit later in the property
+    // profile.
     const valveBoxes = (valveCount || valveLoc)
-      ? [{ location: valveLoc || "(unspecified)", valveCount: valveCount || 1, notes: "" }]
+      ? [{
+          location: valveLoc || "(location not recorded)",
+          valveCount: valveCount || 1,
+          notes: ""
+        }]
       : [];
 
     return {
