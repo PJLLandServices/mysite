@@ -1,0 +1,152 @@
+/* Customer-list import flow — companion to property.css. */
+
+.import-step {
+  background: #fff;
+  border: 1px solid rgba(27, 77, 46, 0.10);
+  border-radius: 14px;
+  padding: 22px 24px;
+  margin-bottom: 16px;
+  max-width: 1100px;
+  margin-left: auto;
+  margin-right: auto;
+}
+.import-step h2 {
+  margin: 0 0 8px;
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 22px;
+  color: var(--pjl-green);
+}
+.import-help {
+  margin: 0 0 18px;
+  font-size: 13px;
+  color: var(--pjl-text-muted);
+  line-height: 1.55;
+}
+
+.import-dropzone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 38px 24px;
+  border: 2px dashed rgba(27, 77, 46, 0.30);
+  border-radius: 12px;
+  background: rgba(27, 77, 46, 0.03);
+  cursor: pointer;
+  transition: all 0.18s ease;
+}
+.import-dropzone:hover,
+.import-dropzone.is-drag {
+  background: rgba(27, 77, 46, 0.08);
+  border-color: var(--pjl-green);
+}
+.dropzone-icon { font-size: 36px; margin-bottom: 4px; }
+.import-dropzone strong {
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 18px;
+  color: var(--pjl-green);
+  letter-spacing: 0.02em;
+}
+.dropzone-help { font-size: 13px; color: var(--pjl-text-muted); }
+
+.import-sheet-picker {
+  width: 100%;
+  max-width: 360px;
+  padding: 10px 12px;
+  font: inherit;
+  font-size: 15px;
+  border-radius: 8px;
+  border: 1px solid rgba(15, 31, 20, 0.18);
+  background: #fff;
+}
+
+.import-mapping {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 12px;
+}
+.mapping-row label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+}
+.mapping-row label span {
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--pjl-text-muted);
+}
+.mapping-row select {
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 14px;
+  border-radius: 6px;
+  border: 1px solid rgba(15, 31, 20, 0.18);
+  background: #fff;
+}
+
+.import-preview-wrap {
+  overflow-x: auto;
+  margin-bottom: 12px;
+  border: 1px solid rgba(27, 77, 46, 0.12);
+  border-radius: 8px;
+}
+.import-preview {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.import-preview th,
+.import-preview td {
+  padding: 8px 12px;
+  text-align: left;
+  border-bottom: 1px solid rgba(27, 77, 46, 0.08);
+  vertical-align: top;
+}
+.import-preview th {
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--pjl-text-muted);
+  background: rgba(27, 77, 46, 0.04);
+}
+.import-preview td {
+  color: var(--pjl-text);
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.import-summary {
+  margin: 0 0 14px;
+  font-size: 14px;
+  color: var(--pjl-text-mid);
+  font-weight: 600;
+}
+
+.import-actions {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+#importStatus { font-size: 14px; color: var(--pjl-text-mid); }
+
+.import-result h2 {
+  font-size: 26px;
+  color: var(--pjl-green);
+  margin-bottom: 6px;
+}
+.import-errors {
+  margin: 14px 0;
+  padding: 12px 16px 12px 30px;
+  background: rgba(208, 72, 72, 0.08);
+  border-left: 3px solid #a92e2e;
+  border-radius: 6px;
+  font-size: 13px;
+  color: rgba(15, 31, 20, 0.75);
+}

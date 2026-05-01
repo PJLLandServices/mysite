@@ -283,6 +283,7 @@ function needsAuth(method, pathname) {
   if (pathname === "/admin/handoff" || pathname === "/admin/handoff/") return true;
   if (pathname === "/admin/chats" || pathname === "/admin/chats/") return true;
   if (pathname === "/admin/properties" || pathname === "/admin/properties/") return true;
+  if (pathname === "/admin/properties/import" || pathname === "/admin/properties/import/") return true;
   if (/^\/admin\/property\/[^/]+/.test(pathname)) return true;
   if (pathname === "/api/quotes" && method === "GET") return true;
   if (pathname === "/api/quotes.csv" || pathname === "/api/contacts" || pathname === "/api/contacts.vcf") return true;
@@ -300,6 +301,8 @@ function needsAuth(method, pathname) {
   if (pathname.startsWith("/api/properties")) return true;
   // Per-lead property link/dismiss actions are admin-only.
   if (/^\/api\/leads\/[^/]+\/(link-property|dismiss-property-suggestion)$/.test(pathname)) return true;
+  // Bulk property import is admin-only.
+  if (pathname === "/api/admin/import-properties") return true;
   // Availability lookups + the public booking endpoint stay public.
   return false;
 }
@@ -1683,6 +1686,36 @@ async function handleApi(req, res, pathname) {
     return sendJson(res, 200, { ok: true, properties: all });
   }
 
+  // Bulk import — admin uploads a parsed records array (the import UI does
+  // the xlsx parsing in the browser via SheetJS, then sends JSON here).
+  // Body: { records: [{ customerName, customerEmail, customerPhone, address,
+  //                    system: { controllerLocation, ..., valveBoxes, zones } }, ...] }
+  // Each record is upserted by (email + address) match. Returns counts so
+  // the UI can render a per-row outcome summary.
+  if (req.method === "POST" && pathname === "/api/admin/import-properties") {
+    try {
+      // Larger body cap — 34 customers ~50KB, but a future import of
+      // hundreds could push 500KB. 5MB ceiling so a paste-bombed import
+      // can't OOM the server.
+      const payload = await parseRequestBody(req, { maxBytes: 5_000_000 });
+      const records = Array.isArray(payload.records) ? payload.records : [];
+      if (!records.length) return sendJson(res, 422, { ok: false, errors: ["No records to import."] });
+      if (records.length > 5000) return sendJson(res, 422, { ok: false, errors: ["Too many records (>5000) — split into smaller batches."] });
+      const summary = await properties.bulkUpsert(records);
+      return sendJson(res, 200, {
+        ok: true,
+        created: summary.created,
+        updated: summary.updated,
+        errors: summary.errors,
+        // Don't echo the full property records back — keeps the response
+        // tight and the UI doesn't need them (it'll refresh the list).
+        total: summary.created + summary.updated
+      });
+    } catch (error) {
+      return sendJson(res, 400, { ok: false, errors: [error.message || "Import failed."] });
+    }
+  }
+
   // Manual search — used by the CRM "link to existing property" picker.
   // Substring match against customer name / email / phone / address. The
   // result set is small (PJL-scale) so a linear scan + filter is fine.
@@ -2295,6 +2328,9 @@ function resolveStaticTarget(pathname) {
   // same HTML file; the JS reads the URL to decide which view to render.
   if (pathname === "/admin/properties" || pathname === "/admin/properties/") {
     return { dir: SERVER_DIR, relative: "/properties.html" };
+  }
+  if (pathname === "/admin/properties/import" || pathname === "/admin/properties/import/") {
+    return { dir: SERVER_DIR, relative: "/properties-import.html" };
   }
   if (/^\/admin\/property\/[^/]+/.test(pathname)) {
     return { dir: SERVER_DIR, relative: "/property.html" };

@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PJL — Import Customers</title>
+  <link rel="icon" type="image/svg+xml" href="/crm/pjl-logo-mark.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/crm/crm.css">
+  <link rel="stylesheet" href="/crm/property.css">
+  <link rel="stylesheet" href="/crm/properties-import.css">
+</head>
+<body class="pjl-crm-body">
+  <nav class="pjl-admin-nav" aria-label="PJL Import">
+    <div class="pjl-nav-strip">
+      <span>Newmarket &amp; GTA</span>
+      <span class="pjl-strip-live"><span aria-hidden="true"></span>Customer import</span>
+      <a href="tel:+19059600181">(905) 960-0181</a>
+    </div>
+    <div class="pjl-nav-main">
+      <a href="/" class="pjl-nav-logo"><img src="/crm/pjl-logo.svg" alt="PJL Land Services"></a>
+      <div class="pjl-nav-links">
+        <a href="/admin">CRM</a>
+        <a href="/admin/schedule">Schedule</a>
+        <a href="/admin/handoff">Handoff</a>
+        <a href="/admin/properties" class="is-active">Properties</a>
+        <button class="pjl-nav-logout" type="button" id="logoutButton">Log out</button>
+      </div>
+    </div>
+  </nav>
+
+  <main class="pjl-crm-shell">
+    <p class="property-back"><a href="/admin/properties">← All properties</a></p>
+
+    <header class="pjl-crm-hero">
+      <div>
+        <p class="pjl-page-eyebrow">Import customers</p>
+        <h1>Bring your existing customer list into the CRM.</h1>
+        <p>Drop a spreadsheet — we'll match column headers automatically and show you exactly what'll be created or updated before you commit. Re-running the import later only updates the fields that are still empty, so admin-curated edits never get clobbered.</p>
+      </div>
+    </header>
+
+    <section class="import-step" id="step1">
+      <h2>1. Upload your customer spreadsheet</h2>
+      <p class="import-help">Supports .xlsx, .xls, .csv. Multi-sheet workbooks: pick the sheet on the next step. Your file is parsed entirely in your browser — nothing leaves your computer until you click "Confirm import."</p>
+      <label class="import-dropzone" for="fileInput">
+        <input type="file" id="fileInput" accept=".xlsx,.xls,.csv" hidden>
+        <span class="dropzone-icon" aria-hidden="true">📄</span>
+        <strong>Click to choose a file</strong>
+        <span class="dropzone-help">or drag &amp; drop here</span>
+      </label>
+    </section>
+
+    <section class="import-step" id="step2" hidden>
+      <h2>2. Pick the sheet to import</h2>
+      <p class="import-help">Choose the sheet that has your customer rows. Other sheets (schedule, work orders, etc.) can be imported separately later.</p>
+      <select id="sheetPicker" class="import-sheet-picker"></select>
+    </section>
+
+    <section class="import-step" id="step3" hidden>
+      <h2>3. Confirm the column mapping</h2>
+      <p class="import-help">We auto-detect common header names. Override any that look wrong. Skip a column by setting it to "—".</p>
+      <div class="import-mapping" id="mappingGrid"></div>
+    </section>
+
+    <section class="import-step" id="step4" hidden>
+      <h2>4. Preview &amp; import</h2>
+      <p class="import-help">First 10 rows shown. Re-running this later only fills in fields that are still blank — your manual edits to existing properties are never overwritten.</p>
+      <div class="import-preview-wrap">
+        <table class="import-preview" id="previewTable"></table>
+      </div>
+      <p class="import-summary" id="importSummary"></p>
+      <div class="import-actions">
+        <button type="button" class="pjl-btn pjl-btn-primary" id="confirmImport">Confirm import →</button>
+        <button type="button" class="pjl-btn pjl-btn-outline" id="resetImport">Start over</button>
+        <span id="importStatus" role="status"></span>
+      </div>
+    </section>
+
+    <section class="import-step import-result" id="step5" hidden>
+      <h2 id="resultTitle">Import complete</h2>
+      <p id="resultMessage"></p>
+      <ul class="import-errors" id="errorList" hidden></ul>
+      <div class="import-actions">
+        <a class="pjl-btn pjl-btn-primary" href="/admin/properties">Back to properties →</a>
+        <button type="button" class="pjl-btn pjl-btn-outline" id="resetImport2">Import another file</button>
+      </div>
+    </section>
+  </main>
+
+  <!-- SheetJS via CDN. Pinned version for predictability. Parses the
+       customer spreadsheet entirely in the browser so the file's contents
+       never hit the server until the customer explicitly confirms. -->
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <script src="/crm/properties-import.js"></script>
+</body>
+</html>

@@ -304,6 +304,104 @@ async function findByCustomerEmail(email) {
   return properties.filter((p) => p.customerEmail === target);
 }
 
+// Bulk-upsert for imports (CSV / xlsx). Each `record` is a partial property
+// shape — the same fields the admin import UI extracts from a spreadsheet
+// row. Match priority:
+//   1. Same email + same normalized address  → update existing
+//   2. Same email + no other property        → update existing (single match)
+//   3. Same normalized address (no email)    → update existing
+//   4. Otherwise                              → create new
+//
+// Returns { created, updated, errors, properties[] } so the import UI can
+// show a per-row outcome summary.
+async function bulkUpsert(records) {
+  const properties = await readAll();
+  const summary = { created: 0, updated: 0, errors: [], properties: [] };
+  const now = new Date().toISOString();
+
+  for (let i = 0; i < records.length; i++) {
+    const r = records[i] || {};
+    try {
+      const email = normalizeEmail(r.customerEmail);
+      const addrNorm = normalizeAddress(r.address);
+
+      // Try to find a matching existing property to UPDATE.
+      let target = null;
+      if (email) {
+        target = properties.find((p) =>
+          p.customerEmail === email && p.addressNormalized && p.addressNormalized === addrNorm
+        );
+        if (!target) {
+          // Email-only match (single property under this customer) is safe.
+          const sameEmail = properties.filter((p) => p.customerEmail === email);
+          if (sameEmail.length === 1) target = sameEmail[0];
+        }
+      }
+      if (!target && addrNorm) {
+        target = properties.find((p) => p.addressNormalized === addrNorm && !p.customerEmail);
+      }
+
+      if (target) {
+        // Update — but never blank out fields that already have a value.
+        target.customerName = target.customerName || r.customerName || "";
+        target.customerEmail = target.customerEmail || email;
+        target.customerPhone = target.customerPhone || r.customerPhone || "";
+        if (!target.address && r.address) {
+          target.address = r.address;
+          target.addressNormalized = addrNorm;
+        }
+        const sysIn = r.system || {};
+        target.system = target.system || {};
+        if (!target.system.controllerLocation) target.system.controllerLocation = sysIn.controllerLocation || "";
+        if (!target.system.controllerBrand) target.system.controllerBrand = sysIn.controllerBrand || "";
+        if (!target.system.shutoffLocation) target.system.shutoffLocation = sysIn.shutoffLocation || "";
+        if (!target.system.blowoutLocation) target.system.blowoutLocation = sysIn.blowoutLocation || "";
+        if (!target.system.notes) target.system.notes = sysIn.notes || "";
+        // Append valve boxes if the existing property has none — never
+        // overwrite an admin-curated valve box list with import data.
+        if (Array.isArray(sysIn.valveBoxes) && sysIn.valveBoxes.length && !target.system.valveBoxes?.length) {
+          target.system.valveBoxes = sysIn.valveBoxes;
+        }
+        if (Array.isArray(sysIn.zones) && sysIn.zones.length && !target.system.zones?.length) {
+          target.system.zones = sysIn.zones;
+        }
+        target.updatedAt = now;
+        summary.updated += 1;
+        summary.properties.push(target);
+      } else {
+        // Create new.
+        const created = blankProperty();
+        created.customerName = r.customerName || "";
+        created.customerEmail = email;
+        created.customerPhone = r.customerPhone || "";
+        created.address = r.address || "";
+        created.addressNormalized = addrNorm;
+        const sysIn = r.system || {};
+        created.system = {
+          ...created.system,
+          controllerLocation: sysIn.controllerLocation || "",
+          controllerBrand: sysIn.controllerBrand || "",
+          shutoffLocation: sysIn.shutoffLocation || "",
+          blowoutLocation: sysIn.blowoutLocation || "",
+          notes: sysIn.notes || "",
+          valveBoxes: Array.isArray(sysIn.valveBoxes) ? sysIn.valveBoxes : [],
+          zones: Array.isArray(sysIn.zones) ? sysIn.zones : []
+        };
+        created.createdAt = now;
+        created.updatedAt = now;
+        properties.unshift(created);
+        summary.created += 1;
+        summary.properties.push(created);
+      }
+    } catch (err) {
+      summary.errors.push({ row: i, message: err.message || "unknown error" });
+    }
+  }
+
+  await writeAll(properties);
+  return summary;
+}
+
 module.exports = {
   attachLead,
   relinkLead,
@@ -312,5 +410,6 @@ module.exports = {
   findByCustomerEmail,
   list,
   get,
-  update
+  update,
+  bulkUpsert
 };
