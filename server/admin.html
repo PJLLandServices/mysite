@@ -306,6 +306,18 @@
             </div>
           </section>
 
+          <section class="detail-section detail-field-wo" id="detailFieldWoSection">
+            <h3>Field Work Orders</h3>
+            <p class="detail-field-wo__hint" id="detailFieldWoHint">The tech-side document. Each visit gets its own field work order with the property's zone list pre-populated.</p>
+            <ul class="detail-field-wo__list" id="detailFieldWoList"></ul>
+            <div class="detail-field-wo__actions">
+              <button type="button" class="pjl-btn pjl-btn-outline" data-create-wo="spring_opening" id="createWoSpring">+ Spring Opening</button>
+              <button type="button" class="pjl-btn pjl-btn-outline" data-create-wo="fall_closing" id="createWoFall">+ Fall Closing</button>
+              <button type="button" class="pjl-btn pjl-btn-outline" data-create-wo="service_visit" id="createWoVisit">+ Service Visit</button>
+            </div>
+            <p class="detail-field-wo__nolink" id="detailFieldWoNolink" hidden>Spring &amp; Fall WOs need a linked property to scaffold zones from. Link a property in the section above to enable.</p>
+          </section>
+
           <section class="detail-section">
             <h3>Requested work</h3>
             <ul class="detail-features" id="detailFeatures"></ul>

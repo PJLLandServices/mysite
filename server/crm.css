@@ -1855,3 +1855,117 @@ body.crm-drawer-locked { overflow: hidden; }
   max-height: 360px;
   overflow-y: auto;
 }
+
+/* === Field Work Orders (tech-side per-visit doc) === */
+.detail-field-wo {
+  background: rgba(15, 31, 20, 0.03);
+  border: 1px solid rgba(15, 31, 20, 0.10);
+  border-radius: 10px;
+  padding: 14px 16px;
+}
+.detail-field-wo h3 {
+  margin: 0 0 6px;
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 14px;
+  letter-spacing: 0.10em;
+  text-transform: uppercase;
+  color: rgba(15, 31, 20, 0.55);
+}
+.detail-field-wo__hint {
+  margin: 0 0 10px;
+  font-size: 12px;
+  color: rgba(15, 31, 20, 0.55);
+  line-height: 1.5;
+}
+.detail-field-wo__list {
+  list-style: none;
+  margin: 0 0 12px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.detail-field-wo__item a {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto;
+  gap: 10px;
+  align-items: center;
+  padding: 8px 12px;
+  background: #fff;
+  border: 1px solid rgba(15, 31, 20, 0.10);
+  border-radius: 8px;
+  text-decoration: none;
+  color: var(--pjl-text);
+  font-size: 13px;
+  transition: border-color 0.15s ease, transform 0.15s ease;
+}
+.detail-field-wo__item a:hover {
+  border-color: var(--pjl-green);
+  transform: translateY(-1px);
+}
+.detail-field-wo__item strong {
+  font-family: "DM Sans", sans-serif;
+  font-size: 13px;
+  letter-spacing: 0.04em;
+  color: var(--pjl-green);
+}
+.detail-field-wo__type {
+  color: var(--pjl-text-mid);
+  font-weight: 600;
+}
+.detail-field-wo__status {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--pjl-text-muted);
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(15, 31, 20, 0.06);
+}
+.detail-field-wo__when {
+  font-size: 11px;
+  color: var(--pjl-text-muted);
+}
+.detail-field-wo__empty,
+.detail-field-wo__loading {
+  padding: 8px 12px;
+  font-size: 12px;
+  color: var(--pjl-text-muted);
+  font-style: italic;
+}
+.detail-field-wo__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.detail-field-wo__actions .pjl-btn-outline {
+  background: #fff;
+  border: 1px solid rgba(27, 77, 46, 0.30);
+  color: var(--pjl-green);
+  box-shadow: none;
+  min-height: 36px;
+  padding: 6px 12px;
+  font-size: 12px;
+}
+.detail-field-wo__actions .pjl-btn-outline:hover {
+  background: rgba(27, 77, 46, 0.05);
+  border-color: var(--pjl-green);
+}
+.detail-field-wo__actions .pjl-btn-outline:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  background: #fff;
+  border-color: rgba(15, 31, 20, 0.15);
+  color: rgba(15, 31, 20, 0.40);
+}
+.detail-field-wo__nolink {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: rgba(177, 58, 58, 0.85);
+  font-style: italic;
+}
+
+@media (max-width: 700px) {
+  .detail-field-wo__item a { grid-template-columns: 1fr; gap: 4px; }
+  .detail-field-wo__when { display: none; }
+}

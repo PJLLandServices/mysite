@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PJL Field Work Order</title>
+  <link rel="icon" type="image/svg+xml" href="/crm/pjl-logo-mark.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/crm/crm.css">
+  <link rel="stylesheet" href="/crm/property.css">
+  <link rel="stylesheet" href="/crm/work-order.css">
+</head>
+<body class="pjl-crm-body">
+  <nav class="pjl-admin-nav" aria-label="PJL Field Work Order">
+    <div class="pjl-nav-strip">
+      <span>Newmarket &amp; GTA</span>
+      <span class="pjl-strip-live"><span aria-hidden="true"></span>Field work order</span>
+      <a href="tel:+19059600181">(905) 960-0181</a>
+    </div>
+    <div class="pjl-nav-main">
+      <a href="/" class="pjl-nav-logo"><img src="/crm/pjl-logo.svg" alt="PJL Land Services"></a>
+      <div class="pjl-nav-links">
+        <a href="/admin">CRM</a>
+        <a href="/admin/schedule">Schedule</a>
+        <a href="/admin/handoff">Handoff</a>
+        <a href="/admin/properties">Properties</a>
+        <button class="pjl-nav-logout" type="button" id="logoutButton">Log out</button>
+      </div>
+    </div>
+  </nav>
+
+  <main class="pjl-crm-shell wo-shell">
+    <p class="property-back"><a id="backLink" href="/admin">← Back</a></p>
+
+    <header class="wo-hero" id="woHero" hidden>
+      <div>
+        <p class="pjl-page-eyebrow"><span id="woTypeLabel">Service Visit</span></p>
+        <h1 id="woId">WO-—</h1>
+        <p class="wo-customer" id="woCustomer">—</p>
+        <p class="wo-meta" id="woMeta">—</p>
+      </div>
+      <div class="wo-status-card">
+        <label for="woStatus">Status</label>
+        <select id="woStatus">
+          <option value="scheduled">Scheduled</option>
+          <option value="on_site">On site</option>
+          <option value="awaiting_approval">Awaiting approval</option>
+          <option value="approved">Approved</option>
+          <option value="completed">Completed</option>
+          <option value="cancelled">Cancelled</option>
+        </select>
+      </div>
+    </header>
+
+    <p class="property-loading" id="woLoading">Loading work order…</p>
+    <p class="property-error" id="woError" hidden>This work order couldn't be loaded.</p>
+
+    <form class="wo-form" id="woForm" hidden>
+      <section class="property-section wo-diagnosis-section" id="woDiagnosisSection" hidden>
+        <h2>Diagnosis (from intake)</h2>
+        <p class="property-section-help">What the customer or AI chat said before the visit. Use it as a starting point — adjust on-site as needed.</p>
+        <pre id="woDiagnosis"></pre>
+      </section>
+
+      <section class="property-section">
+        <header class="property-section-head">
+          <h2>Zones</h2>
+          <button type="button" class="property-add" id="addZoneBtn">+ Add zone</button>
+        </header>
+        <p class="property-section-help">Walk row by row. Set each zone's status, jot a quick note if anything stands out. Repair-required zones flag for follow-up.</p>
+        <p class="wo-empty-zones" id="woEmptyZones" hidden>No zones on file. Add one or open the property profile to enter the zone list.</p>
+        <div class="wo-zones" id="woZones"></div>
+      </section>
+
+      <section class="property-section">
+        <h2>Tech notes</h2>
+        <p class="property-section-help">Anything else worth recording — overall system state, customer conversations, follow-up flags.</p>
+        <label class="property-full">
+          <textarea name="techNotes" id="woTechNotes" rows="4" placeholder="e.g. Manifold rebuild needed before next spring; customer wants a quote for Hydrawise upgrade…"></textarea>
+        </label>
+      </section>
+
+      <div class="property-actions wo-actions">
+        <button type="submit" class="pjl-btn pjl-btn-primary" id="saveBtn">Save work order</button>
+        <span id="saveStatus" role="status"></span>
+        <button type="button" class="pjl-btn pjl-btn-danger-outline" id="deleteBtn">Delete WO</button>
+      </div>
+    </form>
+  </main>
+
+  <div class="confirm-modal" id="confirmModal" hidden role="dialog" aria-modal="true" aria-labelledby="confirmTitle">
+    <div class="confirm-modal-card">
+      <h2 id="confirmTitle">Delete work order</h2>
+      <p id="confirmBody">Are you sure?</p>
+      <div class="confirm-typed" id="confirmTypedRow" hidden>
+        <label for="confirmInput">Type <strong id="confirmExpected">DELETE</strong> to confirm</label>
+        <input type="text" id="confirmInput" autocomplete="off" autocapitalize="characters" spellcheck="false">
+      </div>
+      <p class="confirm-error" id="confirmError" hidden></p>
+      <div class="confirm-actions">
+        <button type="button" class="pjl-btn pjl-btn-outline" id="confirmCancel">Cancel</button>
+        <button type="button" class="pjl-btn pjl-btn-danger" id="confirmAccept">Delete</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/crm/work-order.js"></script>
+</body>
+</html>

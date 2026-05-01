@@ -1,0 +1,219 @@
+/* Field Work Order editor — the per-visit document the tech fills in
+   on-site. Mirrors the property-editor visual language so Patrick
+   doesn't have to re-learn the page. */
+
+.wo-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.wo-hero {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 24px;
+  padding: 22px 24px;
+  background: linear-gradient(135deg, rgba(27, 77, 46, 0.06) 0%, rgba(27, 77, 46, 0.02) 100%);
+  border: 1px solid rgba(27, 77, 46, 0.15);
+  border-radius: 12px;
+  align-items: center;
+}
+.wo-hero h1 {
+  margin: 4px 0 6px;
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 32px;
+  letter-spacing: 0.04em;
+  color: var(--pjl-green);
+}
+.wo-customer {
+  margin: 0 0 4px;
+  font-size: 15px;
+  color: var(--pjl-text);
+}
+.wo-meta {
+  margin: 0;
+  font-size: 13px;
+  color: var(--pjl-text-muted);
+}
+.wo-status-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 14px;
+  background: #fff;
+  border: 1px solid rgba(15, 31, 20, 0.10);
+  border-radius: 10px;
+  min-width: 180px;
+}
+.wo-status-card label {
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--pjl-text-muted);
+}
+.wo-status-card select {
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 14px;
+  border-radius: 8px;
+  border: 1px solid rgba(15, 31, 20, 0.18);
+  background: #fff;
+}
+
+/* Diagnosis section — read-only block from the AI/admin handoff */
+.wo-diagnosis-section pre {
+  margin: 0;
+  padding: 12px 14px;
+  background: rgba(27, 77, 46, 0.04);
+  border: 1px solid rgba(27, 77, 46, 0.12);
+  border-radius: 8px;
+  font-family: "DM Sans", sans-serif;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--pjl-text);
+  white-space: pre-wrap;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+/* Zone grid — one card per zone */
+.wo-zones {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.wo-zone-row {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px;
+  background: #fff;
+  border: 1px solid rgba(15, 31, 20, 0.10);
+  border-left: 4px solid rgba(15, 31, 20, 0.10);
+  border-radius: 10px;
+  transition: border-left-color 0.15s ease, background 0.15s ease;
+}
+.wo-zone-row[data-status="working_well"]    { border-left-color: #4A8C5C; background: rgba(74, 140, 92, 0.04); }
+.wo-zone-row[data-status="adjusted"]        { border-left-color: #E07B24; background: rgba(224, 123, 36, 0.04); }
+.wo-zone-row[data-status="repair_required"] { border-left-color: #b13a3a; background: rgba(177, 58, 58, 0.05); }
+.wo-zone-row[data-status="other"]           { border-left-color: var(--pjl-text-muted); }
+
+.wo-zone-head {
+  display: grid;
+  grid-template-columns: auto 1fr 32px;
+  gap: 10px;
+  align-items: center;
+}
+.wo-zone-num {
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 18px;
+  letter-spacing: 0.04em;
+  color: var(--pjl-green);
+  padding: 4px 10px;
+  background: rgba(27, 77, 46, 0.08);
+  border-radius: 6px;
+  white-space: nowrap;
+}
+.wo-zone-location {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--pjl-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Sprinkler + coverage badges (read-only snapshot from property) */
+.wo-zone-system {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.wo-zone-sys-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.wo-zone-sys-label {
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--pjl-text-muted);
+  min-width: 70px;
+}
+.wo-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  background: rgba(27, 77, 46, 0.08);
+  color: var(--pjl-green);
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* Editable controls — status select + notes input */
+.wo-zone-controls {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  gap: 10px;
+  align-items: end;
+  margin-top: 4px;
+}
+.wo-zone-status-label,
+.wo-zone-notes-label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--pjl-text-mid);
+}
+.wo-zone-status-label span,
+.wo-zone-notes-label span {
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--pjl-text-muted);
+}
+.wo-zone-status,
+.wo-zone-notes {
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 14px;
+  border-radius: 8px;
+  border: 1px solid rgba(15, 31, 20, 0.18);
+  background: #fff;
+}
+
+.wo-empty-zones {
+  padding: 14px;
+  background: rgba(15, 31, 20, 0.03);
+  border: 1px dashed rgba(15, 31, 20, 0.18);
+  border-radius: 8px;
+  color: var(--pjl-text-muted);
+  font-style: italic;
+  font-size: 14px;
+}
+
+.wo-actions {
+  align-items: center;
+}
+.wo-actions #saveStatus {
+  flex: 1;
+  text-align: left;
+}
+.wo-actions #deleteBtn {
+  margin-left: auto;
+}
+
+@media (max-width: 700px) {
+  .wo-hero { grid-template-columns: 1fr; gap: 12px; }
+  .wo-status-card { width: 100%; }
+  .wo-zone-controls { grid-template-columns: 1fr; }
+  .wo-zone-head { grid-template-columns: auto 1fr 32px; }
+  .wo-zone-sys-label { min-width: 60px; }
+}

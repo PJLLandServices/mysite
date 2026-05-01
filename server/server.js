@@ -42,6 +42,7 @@ const scheduleStore = require("./lib/schedule-store");
 const { priceForBooking } = require("./lib/pricing");
 const bookingSessions = require("./lib/booking-sessions");
 const properties = require("./lib/properties");
+const workOrders = require("./lib/work-orders");
 
 // Short, customer-friendly work order ID. Eight chars from a UUIDv4 base32-ish
 // alphabet (no I/O/0/1 to keep them unambiguous when read aloud or hand-written).
@@ -285,6 +286,8 @@ function needsAuth(method, pathname) {
   if (pathname === "/admin/properties" || pathname === "/admin/properties/") return true;
   if (pathname === "/admin/properties/import" || pathname === "/admin/properties/import/") return true;
   if (/^\/admin\/property\/[^/]+/.test(pathname)) return true;
+  if (pathname === "/admin/work-orders" || pathname === "/admin/work-orders/") return true;
+  if (/^\/admin\/work-order\/[^/]+/.test(pathname)) return true;
   if (pathname === "/api/quotes" && method === "GET") return true;
   if (pathname === "/api/quotes.csv" || pathname === "/api/contacts" || pathname === "/api/contacts.vcf") return true;
   if (/^\/api\/quotes\/[^/]+/.test(pathname)) return true;
@@ -299,6 +302,10 @@ function needsAuth(method, pathname) {
   if (pathname === "/api/admin/features") return true;
   // Properties (customer system profiles) are admin-only.
   if (pathname.startsWith("/api/properties")) return true;
+  // Work orders (tech-side per-visit records) are admin-only for now.
+  // Phase 4 will add a customer-portal "approve quote" subset that's
+  // public via a token, but that doesn't exist yet.
+  if (pathname.startsWith("/api/work-orders")) return true;
   // Per-lead property link/dismiss actions are admin-only.
   if (/^\/api\/leads\/[^/]+\/(link-property|dismiss-property-suggestion)$/.test(pathname)) return true;
   // Bulk property import is admin-only.
@@ -1924,6 +1931,133 @@ async function handleApi(req, res, pathname) {
     }
   }
 
+  // ---------- Work orders -------------------------------------------
+  // Admin-only (auth gate above). Phase 4 will add a customer-portal
+  // subset for accept-quote, but for now everything is gated.
+
+  if (req.method === "GET" && pathname === "/api/work-orders") {
+    const url = new URL(req.url, baseUrlFromReq(req));
+    const propertyId = url.searchParams.get("propertyId");
+    const leadId = url.searchParams.get("leadId");
+    let all = await workOrders.list();
+    if (propertyId) all = all.filter((w) => w.propertyId === propertyId);
+    if (leadId) all = all.filter((w) => w.leadId === leadId);
+    // Most-recently-updated first so the index lands on active work.
+    all.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
+    return sendJson(res, 200, { ok: true, workOrders: all });
+  }
+
+  // Create. Body: { type, leadId?, propertyId? }
+  // At least one of leadId / propertyId is required so the new WO has
+  // something to attach to. The lib copies zone scaffolding from the
+  // property when type=spring_opening | fall_closing.
+  if (req.method === "POST" && pathname === "/api/work-orders") {
+    try {
+      const payload = await parseRequestBody(req);
+      const type = String(payload.type || "");
+      if (!workOrders.TEMPLATES[type]) {
+        return sendJson(res, 422, { ok: false, errors: [`Unknown work-order type: ${type}.`] });
+      }
+
+      let lead = null;
+      let property = null;
+      if (payload.leadId) {
+        const allLeads = await readLeads();
+        lead = allLeads.find((l) => l.id === payload.leadId) || null;
+        if (!lead) return sendJson(res, 404, { ok: false, errors: ["Lead not found."] });
+      }
+      if (payload.propertyId) {
+        property = await properties.get(payload.propertyId);
+        if (!property) return sendJson(res, 404, { ok: false, errors: ["Property not found."] });
+      } else if (lead && lead.propertyId) {
+        // Fall through to the lead's linked property when not explicitly
+        // passed — saves the CRM JS from a second fetch.
+        property = await properties.get(lead.propertyId);
+      }
+      if (!lead && !property) {
+        return sendJson(res, 422, { ok: false, errors: ["Pass leadId or propertyId."] });
+      }
+
+      // Reuse the booking's customer-facing WO ID when one already
+      // exists on the lead — keeps the customer + tech seeing the
+      // same WO-XXXXXXXX. Otherwise generate a fresh one.
+      const customId = lead?.booking?.workOrder?.id || null;
+      const wo = await workOrders.create({ type, lead, property, customId });
+
+      // Back-reference on the lead so the CRM detail can deep-link.
+      // (The property page resolves WOs via /api/work-orders + filter
+      // on propertyId — no back-ref needed there yet.)
+      if (lead) {
+        const allLeads = await readLeads();
+        const idx = allLeads.findIndex((l) => l.id === lead.id);
+        if (idx !== -1) {
+          allLeads[idx].workOrderId = wo.id;
+          allLeads[idx].crm = allLeads[idx].crm || {};
+          allLeads[idx].crm.activity = Array.isArray(allLeads[idx].crm.activity) ? allLeads[idx].crm.activity : [];
+          allLeads[idx].crm.activity.unshift({
+            at: new Date().toISOString(),
+            type: "update",
+            text: `Work order created (${workOrders.TEMPLATES[type].label}): ${wo.id}`
+          });
+          allLeads[idx].crm.lastUpdated = new Date().toISOString();
+          await writeLeads(allLeads);
+        }
+      }
+
+      return sendJson(res, 200, { ok: true, workOrder: wo });
+    } catch (error) {
+      return sendJson(res, 400, { ok: false, errors: [error.message || "Couldn't create work order."] });
+    }
+  }
+
+  const workOrderMatch = pathname.match(/^\/api\/work-orders\/([^/]+)$/);
+  if (workOrderMatch && req.method === "GET") {
+    const wo = await workOrders.get(decodeURIComponent(workOrderMatch[1]));
+    if (!wo) return sendJson(res, 404, { ok: false, errors: ["Work order not found."] });
+    // Decorate with the linked property so the editor can show it
+    // without a second fetch. Lead is small enough to inline too.
+    let property = null;
+    if (wo.propertyId) property = await properties.get(wo.propertyId);
+    let lead = null;
+    if (wo.leadId) {
+      const allLeads = await readLeads();
+      lead = allLeads.find((l) => l.id === wo.leadId) || null;
+    }
+    return sendJson(res, 200, { ok: true, workOrder: wo, property, lead });
+  }
+
+  if (workOrderMatch && req.method === "PATCH") {
+    try {
+      const id = decodeURIComponent(workOrderMatch[1]);
+      const payload = await parseRequestBody(req);
+      const updated = await workOrders.update(id, payload);
+      if (!updated) return sendJson(res, 404, { ok: false, errors: ["Work order not found."] });
+      return sendJson(res, 200, { ok: true, workOrder: updated });
+    } catch (error) {
+      return sendJson(res, 400, { ok: false, errors: [error.message || "Couldn't update work order."] });
+    }
+  }
+
+  if (workOrderMatch && req.method === "DELETE") {
+    try {
+      const id = decodeURIComponent(workOrderMatch[1]);
+      const removed = await workOrders.remove(id);
+      if (!removed) return sendJson(res, 404, { ok: false, errors: ["Work order not found."] });
+      // Clear the lead's pointer so the CRM doesn't show a dangling link.
+      if (removed.leadId) {
+        const allLeads = await readLeads();
+        const idx = allLeads.findIndex((l) => l.id === removed.leadId);
+        if (idx !== -1 && allLeads[idx].workOrderId === id) {
+          delete allLeads[idx].workOrderId;
+          await writeLeads(allLeads);
+        }
+      }
+      return sendJson(res, 200, { ok: true, deletedId: id });
+    } catch (error) {
+      return sendJson(res, 400, { ok: false, errors: [error.message || "Couldn't delete work order."] });
+    }
+  }
+
   // Admin manual-handoff: Patrick fills out a form in /admin/handoff after
   // a phone call, server creates a booking session AND optionally pushes
   // the URL to the customer via SMS + email. Same machinery the AI agent
@@ -2413,6 +2547,12 @@ function resolveStaticTarget(pathname) {
   }
   if (/^\/admin\/property\/[^/]+/.test(pathname)) {
     return { dir: SERVER_DIR, relative: "/property.html" };
+  }
+  if (pathname === "/admin/work-orders" || pathname === "/admin/work-orders/") {
+    return { dir: SERVER_DIR, relative: "/work-orders.html" };
+  }
+  if (/^\/admin\/work-order\/[^/]+/.test(pathname)) {
+    return { dir: SERVER_DIR, relative: "/work-order.html" };
   }
   if (pathname === "/book" || pathname === "/book/") {
     return { dir: SITE_DIR, relative: "/book.html" };

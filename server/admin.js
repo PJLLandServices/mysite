@@ -64,6 +64,12 @@ const detailWorkOrderNote = document.getElementById("detailWorkOrderNote");
 const detailWorkOrderDiagnosis = document.getElementById("detailWorkOrderDiagnosis");
 const detailWorkOrderDiagnosisSummary = document.getElementById("detailWorkOrderDiagnosisSummary");
 const detailWorkOrderDiagnosisText = document.getElementById("detailWorkOrderDiagnosisText");
+const detailFieldWoSection = document.getElementById("detailFieldWoSection");
+const detailFieldWoList = document.getElementById("detailFieldWoList");
+const detailFieldWoNolink = document.getElementById("detailFieldWoNolink");
+const createWoSpring = document.getElementById("createWoSpring");
+const createWoFall = document.getElementById("createWoFall");
+const createWoVisit = document.getElementById("createWoVisit");
 const customerNotes = document.getElementById("customerNotes");
 const activityList = document.getElementById("activityList");
 const detailPhotosSection = document.getElementById("detailPhotosSection");
@@ -371,6 +377,7 @@ function renderDetail() {
   renderPhotosDetail(lead);
   renderTranscriptDetail(lead);
   renderWorkOrderDetail(lead);
+  renderFieldWoDetail(lead);
   renderContactPreview(lead);
   activityList.innerHTML = "";
   (lead.crm?.activity || []).slice(0, 12).forEach((activity) => {
@@ -616,6 +623,96 @@ function renderWorkOrderDetail(lead) {
     detailWorkOrderDiagnosis.hidden = true;
   }
 }
+
+// Field Work Orders — the tech-side per-visit document. Lists the WOs
+// already created for this lead, plus buttons to mint new ones from
+// Spring / Fall / Service-Visit templates. Clicking a row opens the
+// editor page; clicking a template button creates the record and
+// jumps straight into the editor.
+let fieldWoLeadContext = null;  // captures the lead the section is bound to
+
+async function renderFieldWoDetail(lead) {
+  fieldWoLeadContext = lead || null;
+  if (!lead) {
+    detailFieldWoSection.hidden = true;
+    return;
+  }
+  detailFieldWoSection.hidden = false;
+
+  // Spring/fall need a property to scaffold zones from. Service visits
+  // don't, so they're always enabled.
+  const hasProperty = Boolean(lead.propertyId);
+  createWoSpring.disabled = !hasProperty;
+  createWoFall.disabled = !hasProperty;
+  detailFieldWoNolink.hidden = hasProperty;
+
+  detailFieldWoList.innerHTML = "<li class=\"detail-field-wo__loading\">Loading…</li>";
+  try {
+    const response = await fetch(`/api/work-orders?leadId=${encodeURIComponent(lead.id)}`, { cache: "no-store" });
+    const data = await response.json();
+    const wos = (data.ok ? data.workOrders : []) || [];
+    detailFieldWoList.innerHTML = "";
+    if (!wos.length) {
+      const li = document.createElement("li");
+      li.className = "detail-field-wo__empty";
+      li.textContent = "No field work orders yet.";
+      detailFieldWoList.appendChild(li);
+      return;
+    }
+    const TYPE_LABELS = {
+      spring_opening: "Spring Opening",
+      fall_closing: "Fall Closing",
+      service_visit: "Service Visit"
+    };
+    wos.forEach((wo) => {
+      const li = document.createElement("li");
+      li.className = "detail-field-wo__item";
+      const a = document.createElement("a");
+      a.href = `/admin/work-order/${encodeURIComponent(wo.id)}`;
+      a.innerHTML = `
+        <strong>${escapeHtml(wo.id)}</strong>
+        <span class="detail-field-wo__type">${escapeHtml(TYPE_LABELS[wo.type] || wo.type)}</span>
+        <span class="detail-field-wo__status">${escapeHtml((wo.status || "scheduled").replace(/_/g, " "))}</span>
+        <span class="detail-field-wo__when">${escapeHtml(formatDateTime(wo.updatedAt))}</span>
+      `;
+      li.appendChild(a);
+      detailFieldWoList.appendChild(li);
+    });
+  } catch {
+    detailFieldWoList.innerHTML = "<li class=\"detail-field-wo__empty\">Couldn't load.</li>";
+  }
+}
+
+async function createFieldWoFromButton(type) {
+  const lead = fieldWoLeadContext;
+  if (!lead) return;
+  if ((type === "spring_opening" || type === "fall_closing") && !lead.propertyId) {
+    alert("Spring & Fall WOs need a linked property to scaffold zones from. Link a property first.");
+    return;
+  }
+  const button = document.querySelector(`[data-create-wo="${type}"]`);
+  if (button) button.disabled = true;
+  try {
+    const response = await fetch("/api/work-orders", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ type, leadId: lead.id, propertyId: lead.propertyId || undefined })
+    });
+    const data = await response.json();
+    if (!response.ok || !data.ok) {
+      throw new Error((data.errors && data.errors[0]) || `Create failed (HTTP ${response.status}).`);
+    }
+    // Jump to the editor — that's where the tech does the work.
+    window.location.assign(`/admin/work-order/${encodeURIComponent(data.workOrder.id)}`);
+  } catch (err) {
+    alert(err.message);
+    if (button) button.disabled = false;
+  }
+}
+
+createWoSpring.addEventListener("click", () => createFieldWoFromButton("spring_opening"));
+createWoFall.addEventListener("click",   () => createFieldWoFromButton("fall_closing"));
+createWoVisit.addEventListener("click",  () => createFieldWoFromButton("service_visit"));
 
 function renderContactPreview(lead) {
   const contact = lead.contactExport || {};
