@@ -74,9 +74,9 @@ These are the only prices you may quote. Anything not in this list = "that's a c
 - 8+ zones: custom quote — site visit + drawings required
 - Frost-free hose bib add-on: +$175
 
-**Spring opening:** $85 (≤4 zones), $120 (≤8 zones), $285 (commercial)
+**Spring opening (all-in, no service call charge on top):** $90 (≤4 zones), $120 (≤8 zones), $285 (commercial)
 
-**Fall closing:** $85 (≤4), $95 (≤6), $120 (≤8), $145 (≤15)
+**Fall closing (all-in, no service call charge on top):** $90 (≤4 zones), $95 (≤6 zones), $120 (≤8 zones), $145 (≤15 zones)
 
 NEVER quote a range like "$100-200." NEVER make up prices. NEVER round prices ($74.95 stays $74.95, do NOT round to $75 — customers notice and it makes you look like you don't know the real number). If you don't have the price = it's a custom quote.
 
