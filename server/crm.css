@@ -250,49 +250,84 @@
 }
 
 .pjl-crm-shell {
-  width: min(1360px, calc(100% - 32px));
+  /* Was capped at 1360px which wasted half a 4K monitor. Use the full
+     viewport width minus a small gutter so the working surface is as
+     wide as the screen Patrick is actually on. */
+  width: calc(100% - 32px);
+  max-width: 1920px;
   margin: 0 auto;
-  padding: 28px 0 56px;
+  padding: 18px 0 48px;
 }
 
 .pjl-crm-hero {
+  /* Compact admin toolbar instead of the old marketing hero. The big
+     dark card + house photo + page-eyebrow copy were wasting vertical
+     real estate on what's an internal tool. Now: a single row of
+     page title (left) + utility buttons (right), with stats sitting
+     immediately below. */
   position: relative;
-  display: grid;
-  grid-template-columns: minmax(360px, 1fr) minmax(340px, 470px);
+  display: flex;
   align-items: center;
-  gap: clamp(24px, 4vw, 52px);
-  min-height: 430px;
-  margin-bottom: 18px;
-  padding: clamp(34px, 5vw, 64px);
-  color: #fff;
-  background:
-    radial-gradient(ellipse 50% 70% at 8% 15%, rgba(243,144,25,0.20), transparent 60%),
-    radial-gradient(ellipse 60% 60% at 95% 90%, rgba(74,140,92,0.22), transparent 55%),
-    linear-gradient(135deg, #112418 0%, #0F1F14 50%, #0a1810 100%);
-  border-radius: 28px;
-  overflow: hidden;
-  box-shadow: var(--pjl-shadow-lg);
-  isolation: isolate;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin-bottom: 14px;
+  padding: 14px 18px;
+  color: var(--pjl-text);
+  background: #fff;
+  border: 1px solid var(--pjl-border);
+  border-radius: 14px;
+  box-shadow: 0 2px 8px rgba(15, 31, 20, 0.04);
+}
+/* The old marketing-hero "card" image (.pjl-hero-card) on the right
+   side is hidden — Patrick called it pointless and he's right. */
+.pjl-crm-hero .pjl-hero-card {
+  display: none;
+}
+.pjl-crm-hero h1 {
+  margin: 0;
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 24px;
+  letter-spacing: 0.02em;
+  color: var(--pjl-green);
+  flex: 0 0 auto;
+}
+/* The page eyebrow (orange pill) and the long body paragraph from the
+   old marketing copy now collapse — kept hidden rather than removed
+   so we don't fight the build pipeline if it re-emits them. */
+.pjl-crm-hero .pjl-page-eyebrow,
+.pjl-crm-hero p:not(.pjl-page-eyebrow) {
+  display: none;
+}
+.pjl-crm-hero .pjl-hero-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-left: auto;
+}
+.pjl-crm-hero .pjl-btn {
+  min-height: 38px;
+  padding: 8px 14px;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+.pjl-crm-hero .pjl-btn-outline {
+  /* Override the dark-bg outline button — toolbar lives on a white card */
+  background: #fff;
+  border: 1px solid var(--pjl-border);
+  color: var(--pjl-green);
+  box-shadow: none;
+}
+.pjl-crm-hero .pjl-btn-outline:hover {
+  background: rgba(27, 77, 46, 0.04);
+  border-color: var(--pjl-green);
 }
 
-.pjl-crm-hero::before {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background-image: radial-gradient(rgba(255,255,255,0.045) 1px, transparent 1px);
-  background-size: 32px 32px;
-  pointer-events: none;
-  z-index: -1;
-}
-
+/* Decorative scanline + dot patterns from the old hero — kill them */
+.pjl-crm-hero::before,
 .pjl-crm-hero::after {
-  content: "";
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 1px;
-  background: linear-gradient(90deg, transparent 0%, rgba(243,144,25,0.55) 50%, transparent 100%);
+  display: none;
 }
 
 .pjl-page-eyebrow {
@@ -454,8 +489,8 @@
 .crm-stats {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 14px;
-  margin-bottom: 18px;
+  gap: 10px;
+  margin-bottom: 12px;
 }
 
 .crm-stats div,
@@ -463,27 +498,19 @@
 .crm-main,
 .lead-detail {
   border: 1px solid var(--pjl-border);
-  border-radius: 18px;
+  border-radius: 12px;
   background: #fff;
-  box-shadow: 0 4px 14px rgba(27,77,46,0.06);
+  box-shadow: 0 1px 4px rgba(15, 31, 20, 0.04);
 }
 
 .crm-stats div {
   position: relative;
   overflow: hidden;
-  padding: 18px;
+  padding: 12px 14px;
 }
-
-.crm-stats div::before {
-  content: "";
-  position: absolute;
-  top: -30px;
-  right: -30px;
-  width: 110px;
-  height: 110px;
-  border-radius: 50%;
-  background: rgba(74,140,92,0.08);
-}
+/* Decorative blob in the corner of each stat card — kill it on desktop
+   to keep things clean. */
+.crm-stats div::before { display: none; }
 
 .crm-stats span,
 .filter-group label,
@@ -501,18 +528,23 @@
 .crm-stats strong {
   display: block;
   position: relative;
-  margin-top: 8px;
+  margin-top: 4px;
   color: var(--pjl-green);
   font-family: "Barlow Condensed", sans-serif;
-  font-size: clamp(30px, 3vw, 42px);
+  font-size: clamp(22px, 2.2vw, 30px);
   font-weight: 800;
-  line-height: 1;
+  line-height: 1.05;
 }
 
 .crm-workspace {
+  /* On a wide screen the old 230 / fluid / 430 split crammed every
+     column. Wider sidebar feels too far from the action; wider detail
+     panel doesn't help on narrower middles. New split: slim 220 fixed
+     filter sidebar, big 1.2fr lead list, generous 1fr detail panel.
+     On a 1920px shell this gives ~1300px to list+detail combined. */
   display: grid;
-  grid-template-columns: 230px minmax(360px, 1fr) minmax(360px, 430px);
-  gap: 16px;
+  grid-template-columns: 220px minmax(420px, 1.2fr) minmax(440px, 1fr);
+  gap: 14px;
   align-items: start;
 }
 
@@ -564,43 +596,64 @@
 }
 
 .pipeline-tabs {
+  /* Equal-width buttons that fill the row — no horizontal scroll on
+     desktop. On mobile they wrap to multiple rows (handled below). */
   display: flex;
-  gap: 8px;
-  padding: 14px;
-  overflow-x: auto;
+  flex: 1 1 auto;
+  gap: 6px;
+  padding: 10px 12px;
   border-bottom: 1px solid var(--pjl-border);
+  min-width: 0;
+  overflow: hidden;
 }
 
 .pipeline-tabs button {
-  min-height: 42px;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 36px;
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  padding: 9px 13px;
-  border: 1.5px solid var(--pjl-border);
+  justify-content: center;
+  gap: 6px;
+  padding: 7px 10px;
+  border: 1px solid var(--pjl-border);
   border-radius: 8px;
   background: #fff;
   color: var(--pjl-text-mid);
   font: inherit;
-  font-size: 14px;
-  font-weight: 800;
+  font-size: 13px;
+  font-weight: 700;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   cursor: pointer;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+.pipeline-tabs button:hover {
+  border-color: var(--pjl-green);
+  color: var(--pjl-green);
 }
 
 .pipeline-tabs button.is-active {
   border-color: var(--pjl-green);
   background: var(--pjl-green);
   color: #fff;
-  box-shadow: 0 6px 16px rgba(27,77,46,0.18);
+  box-shadow: 0 2px 8px rgba(27,77,46,0.18);
 }
 
 .pipeline-tabs span {
-  min-width: 22px;
-  padding: 2px 6px;
+  min-width: 20px;
+  padding: 1px 6px;
   border-radius: 99px;
-  background: rgba(27,77,46,0.08);
+  background: rgba(27,77,46,0.10);
   text-align: center;
+  font-size: 11px;
+  font-weight: 700;
+}
+.pipeline-tabs button.is-active span {
+  background: rgba(255,255,255,0.20);
+  color: #fff;
 }
 
 .pipeline-tabs button.is-active span {
@@ -609,31 +662,34 @@
 
 .lead-list {
   display: grid;
-  gap: 12px;
-  padding: 14px;
+  gap: 8px;
+  padding: 10px 12px;
 }
 
 .crm-card {
   display: grid;
-  gap: 8px;
+  gap: 6px;
   width: 100%;
-  padding: 15px;
-  border: 2px solid var(--pjl-border);
-  border-radius: 16px;
+  padding: 12px 14px;
+  border: 1px solid var(--pjl-border);
+  border-radius: 10px;
   background: #fff;
   color: inherit;
   text-align: left;
   font: inherit;
   cursor: pointer;
-  box-shadow: 0 4px 14px rgba(27,77,46,0.06);
-  transition: transform 0.25s ease, border-color 0.2s ease, box-shadow 0.25s ease;
+  box-shadow: 0 1px 3px rgba(15, 31, 20, 0.04);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
 }
 
-.crm-card:hover,
+.crm-card:hover {
+  border-color: rgba(27, 77, 46, 0.40);
+  box-shadow: 0 4px 14px rgba(15, 31, 20, 0.06);
+}
 .crm-card.is-active {
-  transform: translateY(-3px);
   border-color: var(--pjl-amber);
-  box-shadow: 0 14px 32px rgba(224,123,36,0.18), 0 0 0 4px rgba(243,144,25,0.10);
+  background: rgba(243, 144, 25, 0.04);
+  box-shadow: 0 0 0 2px rgba(243, 144, 25, 0.30);
 }
 
 .crm-card strong {
@@ -724,26 +780,31 @@
 
 .lead-detail {
   position: sticky;
-  top: 176px;
-  max-height: calc(100vh - 196px);
+  /* Was 176px tied to the big marketing hero — now the nav is the
+     only thing pinned above so the panel can sit much higher. */
+  top: 130px;
+  max-height: calc(100vh - 150px);
   overflow: auto;
 }
 
 .lead-detail-empty {
-  min-height: 340px;
+  /* Clean text-only empty state. No giant house photo background. */
   display: grid;
-  align-content: end;
-  gap: 8px;
-  padding: 24px;
-  border-radius: 18px;
-  background:
-    linear-gradient(180deg, rgba(15,31,20,0.12), rgba(15,31,20,0.82)),
-    url("pjl-builder-preview.png") center / cover;
+  align-content: center;
+  justify-items: center;
+  text-align: center;
+  gap: 6px;
+  min-height: 240px;
+  padding: 32px 24px;
+  border-radius: 12px;
+  background: linear-gradient(180deg, #fafdf5 0%, #f2f7e9 100%);
+  border: 1px dashed rgba(27, 77, 46, 0.20);
+  color: var(--pjl-text-mid);
 }
 
 .lead-detail-empty .eyebrow {
   margin: 0;
-  color: rgba(255,255,255,0.72);
+  color: var(--pjl-text-muted);
   font-family: "Barlow Condensed", sans-serif;
   font-size: 12px;
   font-weight: 800;
@@ -752,9 +813,12 @@
 }
 
 .lead-detail-empty h2 {
-  color: #fff;
-  font-size: 32px;
-  text-shadow: 0 4px 18px rgba(0,0,0,0.42);
+  margin: 0;
+  color: var(--pjl-green);
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 22px;
+  letter-spacing: 0.02em;
+  text-shadow: none;
 }
 
 .lead-editor {
