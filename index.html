@@ -1406,7 +1406,7 @@
       Same-day repairs. Smart installs. Landscape lighting that lasts. Local to Newmarket and the GTA.
     </p>
     <div class="hero__ctas">
-      <a href="#book" class="hero__cta hero__cta--primary">
+      <a href="book.html?service=sprinkler_repair" class="hero__cta hero__cta--primary">
         Fix My System Today →
       </a>
       <a href="sprinkler-installation.html" class="hero__cta hero__cta--secondary">
@@ -2140,19 +2140,32 @@
       mode: 'homepage-quickbook'
     };
 
-    try {
+    // Render free tier sleeps when idle — first request after sleep returns
+    // 502/timeout. Retry once after a brief delay so cold-start doesn't lose
+    // the lead.
+    async function postOnce() {
       const res = await fetch((window.PJL_API_BASE || '') + '/api/quotes', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
         body: JSON.stringify(payload)
       });
       const body = await res.json().catch(() => ({}));
-      if (res.ok && body.ok) {
-        form.querySelectorAll('input, select, button').forEach(el => { if (el.type !== 'hidden') el.hidden = true; });
-        success.hidden = false;
-      } else {
-        throw new Error((body.errors || ['Submission failed']).join(' '));
+      if (!res.ok || !body.ok) throw new Error((body.errors || ['Submission failed']).join(' '));
+      return body;
+    }
+
+    try {
+      let body;
+      try {
+        body = await postOnce();
+      } catch (firstErr) {
+        console.warn('Quick-Book first attempt failed, retrying after warm-up:', firstErr);
+        submit.textContent = 'Sending… (one moment)';
+        await new Promise(r => setTimeout(r, 3500));
+        body = await postOnce();
       }
+      form.querySelectorAll('input, select, button').forEach(el => { if (el.type !== 'hidden') el.hidden = true; });
+      success.hidden = false;
     } catch (err) {
       error.hidden = false;
       submit.disabled = false;

@@ -23,6 +23,19 @@ window.PJL_API_BASE = (function () {
   return "https://pjl-land-services-onrender-com.onrender.com";
 })();
 
+// ── Backend warm-up ping ──
+// Render free tier sleeps when idle. First request after sleep returns
+// HTTP 502 (cold-start, ~5-15s spin-up). Fire a no-op ping when the page
+// loads so by the time a user fills out a form (~30s+) the server is awake.
+// Failure is silent and irrelevant — the actual form submissions retry on
+// their own.
+if (window.PJL_API_BASE) {
+  try {
+    fetch(window.PJL_API_BASE + "/api/health", { method: "GET", mode: "cors", cache: "no-store" })
+      .catch(function () { /* swallow — wake-up is best-effort */ });
+  } catch (e) { /* ignore */ }
+}
+
 // ── Navigation scroll effect ──
 document.documentElement.classList.add('js-reveal');
 
