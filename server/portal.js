@@ -25,6 +25,10 @@ const workOrderDiagnosisSummary = document.getElementById("workOrderDiagnosisSum
 const workOrderDiagnosisDetail = document.getElementById("workOrderDiagnosisDetail");
 const messageHeading = document.getElementById("messageHeading");
 const helpHeading = document.getElementById("helpHeading");
+const systemCard = document.getElementById("systemCard");
+const systemGrid = document.getElementById("systemGrid");
+const systemZones = document.getElementById("systemZones");
+const systemZoneList = document.getElementById("systemZoneList");
 
 // Customer first name captured from the portal payload — used to personalize
 // every customer-facing copy block on the page (greetings, confirmation
@@ -126,6 +130,69 @@ function renderTimeline(status) {
     else item.classList.add("is-pending");
   });
   portalTimeline.hidden = false;
+}
+
+// "Your System" card. Renders the customer's property profile (zones,
+// controller location, valve boxes, blowout point) — exactly the data
+// the technician will see on-site. Read-only here; if anything's wrong
+// the customer can use the message form to send a correction.
+function renderSystem(property) {
+  if (!systemCard) return;
+  if (!property || !property.system) {
+    systemCard.hidden = true;
+    return;
+  }
+  const sys = property.system;
+  const rows = [];
+  if (sys.controllerLocation || sys.controllerBrand) {
+    const value = [sys.controllerBrand, sys.controllerLocation].filter(Boolean).join(" — ");
+    rows.push(["Controller", value]);
+  }
+  if (sys.shutoffLocation) rows.push(["Main shut-off", sys.shutoffLocation]);
+  if (sys.blowoutLocation) rows.push(["Blow-out point", sys.blowoutLocation]);
+  if (Array.isArray(sys.valveBoxes) && sys.valveBoxes.length) {
+    const vbDescription = sys.valveBoxes
+      .map((b) => `${b.location || "?"} (${b.valveCount || 0} valve${b.valveCount === 1 ? "" : "s"})`)
+      .join("; ");
+    rows.push(["Valve boxes", vbDescription]);
+  }
+
+  if (!rows.length && !(sys.zones || []).length) {
+    // Property exists but no profile data filled in yet — keep card hidden
+    // so the portal doesn't show a half-empty section.
+    systemCard.hidden = true;
+    return;
+  }
+
+  systemGrid.innerHTML = "";
+  rows.forEach(([label, value]) => {
+    const dt = document.createElement("dt");
+    dt.textContent = label;
+    const dd = document.createElement("dd");
+    dd.textContent = value;
+    systemGrid.appendChild(dt);
+    systemGrid.appendChild(dd);
+  });
+
+  const zones = Array.isArray(sys.zones) ? sys.zones : [];
+  if (zones.length) {
+    systemZoneList.innerHTML = "";
+    zones
+      .slice()
+      .sort((a, b) => (a.number || 0) - (b.number || 0))
+      .forEach((z) => {
+        const li = document.createElement("li");
+        const num = z.number ? `Zone ${z.number}` : "Zone";
+        const label = z.label ? ` — ${z.label}` : "";
+        li.textContent = num + label;
+        systemZoneList.appendChild(li);
+      });
+    systemZones.hidden = false;
+  } else {
+    systemZones.hidden = true;
+  }
+
+  systemCard.hidden = false;
 }
 
 function renderPhotos(photos) {
@@ -299,6 +366,7 @@ function renderPortal(data) {
   renderTimeline(project.status);
   renderPhotos(project.photos);
   renderActivity(project.activity);
+  renderSystem(data.property);
   renderWorkOrder(data);
 
   portalContent.hidden = false;

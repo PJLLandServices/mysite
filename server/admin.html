@@ -23,6 +23,7 @@
         <a href="/admin" class="is-active">CRM</a>
         <a href="/admin/schedule">Schedule</a>
         <a href="/admin/handoff">Handoff</a>
+        <a href="/admin/properties">Properties</a>
         <a href="/admin/chats">AI Chats</a>
         <a href="/api/contacts.vcf">Contacts VCF</a>
         <a href="/api/quotes.csv" class="pjl-nav-cta">Export CSV <span aria-hidden="true">&rarr;</span></a>
@@ -252,6 +253,12 @@
           <section class="detail-section">
             <h3>Contact extractor</h3>
             <div class="contact-preview" id="contactPreview"></div>
+          </section>
+
+          <section class="detail-section detail-property" id="detailPropertySection" hidden>
+            <h3>Linked Property</h3>
+            <p class="detail-property-meta" id="detailPropertyMeta"></p>
+            <a class="pjl-btn pjl-btn-outline" id="detailPropertyOpen" href="#" target="_blank" rel="noopener">Open property profile →</a>
           </section>
 
           <section class="detail-section detail-workorder" id="detailWorkOrderSection" hidden>

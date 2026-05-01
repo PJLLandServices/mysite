@@ -42,6 +42,9 @@ const vcardLink = document.getElementById("vcardLink");
 const portalLink = document.getElementById("portalLink");
 const contactPreview = document.getElementById("contactPreview");
 const detailFeatures = document.getElementById("detailFeatures");
+const detailPropertySection = document.getElementById("detailPropertySection");
+const detailPropertyMeta = document.getElementById("detailPropertyMeta");
+const detailPropertyOpen = document.getElementById("detailPropertyOpen");
 const detailWorkOrderSection = document.getElementById("detailWorkOrderSection");
 const detailWorkOrderId = document.getElementById("detailWorkOrderId");
 const detailWorkOrderStatus = document.getElementById("detailWorkOrderStatus");
@@ -356,6 +359,7 @@ function renderDetail() {
   });
 
   customerNotes.textContent = lead.contact?.notes || "No customer notes.";
+  renderPropertyDetail(lead);
   renderPhotosDetail(lead);
   renderTranscriptDetail(lead);
   renderWorkOrderDetail(lead);
@@ -366,6 +370,47 @@ function renderDetail() {
     item.innerHTML = `<strong>${escapeHtml(formatDateTime(activity.at))}</strong><span>${escapeHtml(activity.text)}</span>`;
     activityList.append(item);
   });
+}
+
+// Linked property — fetched lazily because the lead-list endpoint doesn't
+// include property data, and we don't want to refetch all properties on
+// every render. Cache by leadId so re-opening the same lead is instant.
+const propertyCache = new Map();
+async function renderPropertyDetail(lead) {
+  if (!lead || !lead.propertyId) {
+    detailPropertySection.hidden = true;
+    return;
+  }
+  detailPropertySection.hidden = false;
+  // Optimistic placeholder while we fetch.
+  detailPropertyMeta.textContent = "Loading property…";
+  detailPropertyOpen.href = `/admin/property/${encodeURIComponent(lead.propertyId)}`;
+
+  let property = propertyCache.get(lead.propertyId);
+  if (!property) {
+    try {
+      const response = await fetch(`/api/properties/${encodeURIComponent(lead.propertyId)}`, { cache: "no-store" });
+      const data = await response.json();
+      if (response.ok && data.ok) {
+        property = data.property;
+        propertyCache.set(lead.propertyId, property);
+      }
+    } catch { /* ignore — placeholder text stays */ }
+  }
+  // Make sure the lead we're rendering is still the one the user is viewing
+  // (a slow network + a quick lead-switch could otherwise show stale data).
+  if (activeLeadId !== lead.id) return;
+  if (!property) {
+    detailPropertyMeta.textContent = "Property profile not available.";
+    return;
+  }
+  const zones = property.system?.zones?.length || 0;
+  const valveBoxes = property.system?.valveBoxes?.length || 0;
+  const bookings = (property.leadIds || []).length;
+  detailPropertyMeta.innerHTML = `
+    <strong>${escapeHtml(property.address || "(no address)")}</strong><br>
+    ${zones} zone${zones === 1 ? "" : "s"} · ${valveBoxes} valve box${valveBoxes === 1 ? "" : "es"} · ${bookings} booking${bookings === 1 ? "" : "s"}
+  `;
 }
 
 function renderPhotosDetail(lead) {

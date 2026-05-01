@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PJL Property Profile</title>
+  <link rel="icon" type="image/svg+xml" href="/crm/pjl-logo-mark.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/crm/crm.css">
+  <link rel="stylesheet" href="/crm/property.css">
+</head>
+<body class="pjl-crm-body">
+  <nav class="pjl-admin-nav" aria-label="PJL Property">
+    <div class="pjl-nav-strip">
+      <span>Newmarket &amp; GTA</span>
+      <span class="pjl-strip-live"><span aria-hidden="true"></span>Property profile</span>
+      <a href="tel:+19059600181">(905) 960-0181</a>
+    </div>
+    <div class="pjl-nav-main">
+      <a href="/" class="pjl-nav-logo"><img src="/crm/pjl-logo.svg" alt="PJL Land Services"></a>
+      <div class="pjl-nav-links">
+        <a href="/admin">CRM</a>
+        <a href="/admin/schedule">Schedule</a>
+        <a href="/admin/handoff">Handoff</a>
+        <a href="/admin/properties" class="is-active">Properties</a>
+        <button class="pjl-nav-logout" type="button" id="logoutButton">Log out</button>
+      </div>
+    </div>
+  </nav>
+
+  <main class="pjl-crm-shell property-shell">
+    <p class="property-back"><a href="/admin/properties">← All properties</a></p>
+
+    <header class="property-hero" id="propertyHero" hidden>
+      <div>
+        <p class="pjl-page-eyebrow">Property profile</p>
+        <h1 id="propertyAddress">—</h1>
+        <p class="property-customer" id="propertyCustomer">—</p>
+        <p class="property-meta" id="propertyMeta">—</p>
+      </div>
+      <div class="property-stat">
+        <span>Linked bookings</span>
+        <strong id="leadCount">0</strong>
+      </div>
+    </header>
+
+    <p class="property-loading" id="propertyLoading">Loading property…</p>
+    <p class="property-error" id="propertyError" hidden>This property couldn't be loaded.</p>
+
+    <form class="property-form" id="propertyForm" hidden>
+      <section class="property-section">
+        <h2>Customer</h2>
+        <div class="property-row">
+          <label>
+            <span>Customer name</span>
+            <input type="text" name="customerName" autocomplete="off">
+          </label>
+          <label>
+            <span>Customer phone</span>
+            <input type="tel" name="customerPhone" autocomplete="off">
+          </label>
+        </div>
+        <label class="property-full">
+          <span>Property address</span>
+          <input type="text" name="address" autocomplete="off">
+        </label>
+      </section>
+
+      <section class="property-section">
+        <h2>System overview</h2>
+        <div class="property-row">
+          <label>
+            <span>Controller location</span>
+            <input type="text" name="controllerLocation" placeholder="e.g. Garage, north wall">
+          </label>
+          <label>
+            <span>Controller brand &amp; model</span>
+            <input type="text" name="controllerBrand" placeholder="e.g. Hunter HPC-400">
+          </label>
+        </div>
+        <div class="property-row">
+          <label>
+            <span>Main shut-off location</span>
+            <input type="text" name="shutoffLocation" placeholder="e.g. Basement utility room">
+          </label>
+          <label>
+            <span>Blow-out location</span>
+            <input type="text" name="blowoutLocation" placeholder="e.g. Rear hose bib, beside deck">
+          </label>
+        </div>
+        <label class="property-full">
+          <span>System notes (free-form)</span>
+          <textarea name="notes" rows="3" placeholder="Anything the technician should know about the property — gate code, dog, access notes, recurring quirks…"></textarea>
+        </label>
+      </section>
+
+      <section class="property-section">
+        <header class="property-section-head">
+          <h2>Zones</h2>
+          <button type="button" class="property-add" id="addZoneBtn">+ Add zone</button>
+        </header>
+        <p class="property-section-help">List every zone in the system with a friendly label. The zone list pre-populates the spring/fall work orders.</p>
+        <div class="property-zones" id="zonesList"></div>
+      </section>
+
+      <section class="property-section">
+        <header class="property-section-head">
+          <h2>Valve boxes</h2>
+          <button type="button" class="property-add" id="addValveBoxBtn">+ Add valve box</button>
+        </header>
+        <p class="property-section-help">One row per valve box on the property. Note how many valves are inside each so the tech knows what to find.</p>
+        <div class="property-valveboxes" id="valveBoxesList"></div>
+      </section>
+
+      <div class="property-actions">
+        <button type="submit" class="pjl-btn pjl-btn-primary" id="saveBtn">Save profile</button>
+        <span id="saveStatus" role="status"></span>
+      </div>
+    </form>
+
+    <section class="property-section property-leads" id="leadsSection" hidden>
+      <h2>Booking history</h2>
+      <p class="property-section-help">Every lead and booking attached to this property. Click to open in the CRM.</p>
+      <ul class="property-lead-list" id="leadList"></ul>
+    </section>
+  </main>
+
+  <script src="/crm/property.js"></script>
+</body>
+</html>

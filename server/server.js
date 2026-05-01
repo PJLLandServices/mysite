@@ -41,6 +41,7 @@ const { BOOKABLE_SERVICES, DEFAULT_HOURS, DEFAULT_SETTINGS, listAvailableSlots, 
 const scheduleStore = require("./lib/schedule-store");
 const { priceForBooking } = require("./lib/pricing");
 const bookingSessions = require("./lib/booking-sessions");
+const properties = require("./lib/properties");
 
 // Short, customer-friendly work order ID. Eight chars from a UUIDv4 base32-ish
 // alphabet (no I/O/0/1 to keep them unambiguous when read aloud or hand-written).
@@ -281,6 +282,8 @@ function needsAuth(method, pathname) {
   if (pathname === "/admin/schedule" || pathname === "/admin/schedule/") return true;
   if (pathname === "/admin/handoff" || pathname === "/admin/handoff/") return true;
   if (pathname === "/admin/chats" || pathname === "/admin/chats/") return true;
+  if (pathname === "/admin/properties" || pathname === "/admin/properties/") return true;
+  if (/^\/admin\/property\/[^/]+/.test(pathname)) return true;
   if (pathname === "/api/quotes" && method === "GET") return true;
   if (pathname === "/api/quotes.csv" || pathname === "/api/contacts" || pathname === "/api/contacts.vcf") return true;
   if (/^\/api\/quotes\/[^/]+/.test(pathname)) return true;
@@ -293,6 +296,8 @@ function needsAuth(method, pathname) {
   // Manual handoff (admin sends booking link to customer) is admin-only.
   if (pathname === "/api/admin/send-booking-link") return true;
   if (pathname === "/api/admin/features") return true;
+  // Properties (customer system profiles) are admin-only.
+  if (pathname.startsWith("/api/properties")) return true;
   // Availability lookups + the public booking endpoint stay public.
   return false;
 }
@@ -900,8 +905,30 @@ function decorateLeadForAdmin(lead, req) {
   };
 }
 
-function portalPayloadForLead(lead, req) {
+async function portalPayloadForLead(lead, req) {
   const contact = contactRecordForLead(lead, req);
+  // Pull the linked property so the customer can see their system profile
+  // ("Your System" card). Falls back to null when the lead pre-dates the
+  // properties feature or the link is missing.
+  let property = null;
+  if (lead.propertyId) {
+    try { property = await properties.get(lead.propertyId); }
+    catch { /* fall through with null */ }
+  }
+  const propertyForCustomer = property ? {
+    id: property.id,
+    address: property.address,
+    system: {
+      controllerLocation: property.system?.controllerLocation || "",
+      controllerBrand: property.system?.controllerBrand || "",
+      shutoffLocation: property.system?.shutoffLocation || "",
+      blowoutLocation: property.system?.blowoutLocation || "",
+      zones: Array.isArray(property.system?.zones) ? property.system.zones : [],
+      valveBoxes: Array.isArray(property.system?.valveBoxes)
+        ? property.system.valveBoxes.map((b) => ({ location: b.location, valveCount: b.valveCount }))
+        : []
+    }
+  } : null;
   const status = lead.crm?.status || lead.status || "new";
   // Customer-visible activity: portal messages, status changes, and the
   // initial "Quote request received" entry. Filters out internal-only notes
@@ -968,7 +995,12 @@ function portalPayloadForLead(lead, req) {
     portal: {
       token: lead.portal?.token || portalTokenForId(lead.id),
       url: contact.portalUrl
-    }
+    },
+    // Customer's property profile (read-only on the portal). Surfaces the
+    // zone list, controller / shutoff / blowout locations, valve boxes —
+    // everything Patrick needs to remember about the system, the customer
+    // also gets to see and verify is right.
+    property: propertyForCustomer
   };
 }
 
@@ -1124,6 +1156,41 @@ async function handleApi(req, res, pathname) {
       leads.unshift(result.lead);
       await writeLeads(leads);
 
+      // Auto-link this lead to a customer property. If it's a returning
+      // customer at the same address, the existing property is updated.
+      // Otherwise a new property record is minted (which Patrick can flesh
+      // out later in the property profile editor). Geocode is best-effort —
+      // if it fails, the property still gets created without coords.
+      try {
+        let leadCoords = null;
+        const leadAddress = result.lead.contact?.address;
+        if (leadAddress) {
+          const geo = await geocode(leadAddress);
+          if (geo.ok && geo.coords) leadCoords = geo.coords;
+        }
+        const property = await properties.attachLead({
+          leadId: result.lead.id,
+          email: result.lead.contact?.email,
+          name: result.lead.contact?.name,
+          phone: result.lead.contact?.phone,
+          address: leadAddress,
+          coords: leadCoords
+        });
+        if (property) {
+          // Stamp the propertyId onto the lead for fast lookup later. Re-write
+          // leads.json with the updated record (small file, cheap).
+          result.lead.propertyId = property.id;
+          const liveLeads = await readLeads();
+          const i = liveLeads.findIndex((l) => l.id === result.lead.id);
+          if (i !== -1) {
+            liveLeads[i].propertyId = property.id;
+            await writeLeads(liveLeads);
+          }
+        }
+      } catch (err) {
+        console.error("[properties] auto-link failed:", err?.message || err);
+      }
+
       // Fire-and-forget notifications. The HTTP response goes back to the
       // customer immediately; email/SMS happen in the background. If they
       // fail, the lead is still safely stored — Patrick will see it in the
@@ -1228,7 +1295,7 @@ async function handleApi(req, res, pathname) {
     const leads = await readLeads();
     const lead = leads.find((item) => (item.portal?.token || portalTokenForId(item.id)) === token);
     if (!lead) return sendJson(res, 404, { ok: false, errors: ["Customer portal not found."] });
-    return sendJson(res, 200, { ok: true, portal: portalPayloadForLead(lead, req) });
+    return sendJson(res, 200, { ok: true, portal: await portalPayloadForLead(lead, req) });
   }
 
   const leadMatch = pathname.match(/^\/api\/quotes\/([^/]+)$/);
@@ -1597,6 +1664,53 @@ async function handleApi(req, res, pathname) {
     return sendJson(res, 200, { ok: true, features: FEATURES });
   }
 
+  // Properties: customer "system profile" records. Admin-only (gated by
+  // needsAuth above). One customer (by email) can have multiple properties.
+  // Each property carries the canonical zone list + controller / shutoff /
+  // valve box / blowout location data the technician needs on-site.
+  if (req.method === "GET" && pathname === "/api/properties") {
+    const all = await properties.list();
+    return sendJson(res, 200, { ok: true, properties: all });
+  }
+
+  const propertyMatch = pathname.match(/^\/api\/properties\/([^/]+)$/);
+  if (propertyMatch && req.method === "GET") {
+    const property = await properties.get(decodeURIComponent(propertyMatch[1]));
+    if (!property) return sendJson(res, 404, { ok: false, errors: ["Property not found."] });
+    // Decorate with linked leads so the admin page can show booking history.
+    const allLeads = await readLeads();
+    const linkedLeads = allLeads
+      .filter((l) => l.propertyId === property.id || (property.leadIds || []).includes(l.id))
+      .map((l) => decorateLeadForAdmin(l, req));
+    return sendJson(res, 200, { ok: true, property, leads: linkedLeads });
+  }
+
+  if (propertyMatch && req.method === "PATCH") {
+    try {
+      const id = decodeURIComponent(propertyMatch[1]);
+      const payload = await parseRequestBody(req);
+      // Guard against the admin accidentally clobbering structural fields
+      // (id, leadIds, customerEmail) — only allow profile / system edits.
+      const sanitized = {};
+      const allowedTop = ["customerName", "customerPhone", "address"];
+      for (const key of allowedTop) {
+        if (Object.prototype.hasOwnProperty.call(payload, key)) sanitized[key] = payload[key];
+      }
+      if (payload.system && typeof payload.system === "object") {
+        sanitized.system = {};
+        const allowedSys = ["controllerLocation", "controllerBrand", "shutoffLocation", "blowoutLocation", "valveBoxes", "zones", "notes"];
+        for (const key of allowedSys) {
+          if (Object.prototype.hasOwnProperty.call(payload.system, key)) sanitized.system[key] = payload.system[key];
+        }
+      }
+      const updated = await properties.update(id, sanitized);
+      if (!updated) return sendJson(res, 404, { ok: false, errors: ["Property not found."] });
+      return sendJson(res, 200, { ok: true, property: updated });
+    } catch (error) {
+      return sendJson(res, 400, { ok: false, errors: [error.message || "Couldn't update property."] });
+    }
+  }
+
   // Admin manual-handoff: Patrick fills out a form in /admin/handoff after
   // a phone call, server creates a booking session AND optionally pushes
   // the URL to the customer via SMS + email. Same machinery the AI agent
@@ -1939,6 +2053,31 @@ async function handleApi(req, res, pathname) {
       all.unshift(result.lead);
       await writeLeads(all);
 
+      // Auto-link to a customer property using the geocoded coords we already
+      // have from the slot validation above. Same logic as /api/quotes — just
+      // we don't need to re-geocode since `customerCoords` is in scope here.
+      try {
+        const property = await properties.attachLead({
+          leadId: result.lead.id,
+          email: result.lead.contact?.email,
+          name: result.lead.contact?.name,
+          phone: result.lead.contact?.phone,
+          address: result.lead.contact?.address,
+          coords: customerCoords && customerCoords.lat != null ? customerCoords : null
+        });
+        if (property) {
+          result.lead.propertyId = property.id;
+          const liveLeads = await readLeads();
+          const i = liveLeads.findIndex((l) => l.id === result.lead.id);
+          if (i !== -1) {
+            liveLeads[i].propertyId = property.id;
+            await writeLeads(liveLeads);
+          }
+        }
+      } catch (err) {
+        console.error("[properties] booking auto-link failed:", err?.message || err);
+      }
+
       // If a pre-booking session backed this reservation, mark it consumed
       // so the audit trail records which sessions converted into bookings.
       if (prebooking && sessionToken) {
@@ -2044,6 +2183,14 @@ function resolveStaticTarget(pathname) {
   }
   if (pathname === "/admin/handoff" || pathname === "/admin/handoff/") {
     return { dir: SERVER_DIR, relative: "/handoff.html" };
+  }
+  // Properties index + per-property detail page. Both served from the
+  // same HTML file; the JS reads the URL to decide which view to render.
+  if (pathname === "/admin/properties" || pathname === "/admin/properties/") {
+    return { dir: SERVER_DIR, relative: "/properties.html" };
+  }
+  if (/^\/admin\/property\/[^/]+/.test(pathname)) {
+    return { dir: SERVER_DIR, relative: "/property.html" };
   }
   if (pathname === "/book" || pathname === "/book/") {
     return { dir: SITE_DIR, relative: "/book.html" };

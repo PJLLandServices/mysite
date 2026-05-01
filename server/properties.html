@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PJL Properties</title>
+  <link rel="icon" type="image/svg+xml" href="/crm/pjl-logo-mark.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/crm/crm.css">
+  <link rel="stylesheet" href="/crm/property.css">
+</head>
+<body class="pjl-crm-body">
+  <nav class="pjl-admin-nav" aria-label="PJL Properties">
+    <div class="pjl-nav-strip">
+      <span>Newmarket &amp; GTA</span>
+      <span class="pjl-strip-live"><span aria-hidden="true"></span>Customer portfolios</span>
+      <a href="tel:+19059600181">(905) 960-0181</a>
+    </div>
+    <div class="pjl-nav-main">
+      <a href="/" class="pjl-nav-logo"><img src="/crm/pjl-logo.svg" alt="PJL Land Services"></a>
+      <div class="pjl-nav-links">
+        <a href="/admin">CRM</a>
+        <a href="/admin/schedule">Schedule</a>
+        <a href="/admin/handoff">Handoff</a>
+        <a href="/admin/properties" class="is-active">Properties</a>
+        <button class="pjl-nav-logout" type="button" id="logoutButton">Log out</button>
+      </div>
+    </div>
+  </nav>
+
+  <main class="pjl-crm-shell">
+    <header class="pjl-crm-hero">
+      <div>
+        <p class="pjl-page-eyebrow">Customer portfolios</p>
+        <h1>Every property PJL services, one click away.</h1>
+        <p>Each customer's property — their controller, valve boxes, zone list, blow-out points — lives on its own profile so the technician arrives knowing the system before stepping out of the truck.</p>
+      </div>
+      <div class="pjl-hero-card" aria-hidden="true">
+        <div class="pjl-hero-frame">
+          <img src="/crm/pjl-sprinkler-hero.jpg" alt="">
+          <span class="pjl-frame-tag">Live portfolios</span>
+          <span class="pjl-frame-ribbon"><span></span>System profiles</span>
+        </div>
+      </div>
+    </header>
+
+    <section class="properties-toolbar">
+      <input type="search" id="propertySearch" placeholder="Search by customer name, email, or address…">
+      <span class="properties-count" id="propertiesCount">—</span>
+    </section>
+
+    <section class="properties-grid" id="propertiesGrid"></section>
+
+    <p class="properties-empty" id="propertiesEmpty" hidden>
+      No properties yet. They'll appear here automatically as customers book.
+    </p>
+  </main>
+
+  <script src="/crm/properties.js"></script>
+</body>
+</html>
