@@ -310,6 +310,10 @@ h1 {
   color: var(--green);
   font-weight: 700;
 }
+.portal-system-zone-meta {
+  color: var(--text-muted);
+  font-size: 13px;
+}
 @media (max-width: 540px) {
   .portal-system-grid { grid-template-columns: 1fr; gap: 4px; }
   .portal-system-grid dt { padding-top: 6px; }

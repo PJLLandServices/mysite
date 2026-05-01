@@ -167,12 +167,70 @@
 }
 .property-zone-row {
   display: grid;
-  grid-template-columns: 70px 1fr 1.5fr 32px;
-  gap: 8px;
+  grid-template-columns: 70px 1fr 32px;
+  grid-template-areas:
+    "num  location remove"
+    ".    pills    pills";
+  column-gap: 8px;
+  row-gap: 8px;
   align-items: center;
-  padding: 10px;
+  padding: 12px;
   background: rgba(27, 77, 46, 0.03);
   border-radius: 8px;
+}
+.property-zone-row .zone-number    { grid-area: num; }
+.property-zone-row .zone-location  { grid-area: location; }
+.property-zone-row .property-row-remove { grid-area: remove; }
+.property-zone-row .zone-pills     { grid-area: pills; }
+
+.zone-pills {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.zone-pill-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.zone-pill-label {
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--pjl-text-muted);
+  min-width: 70px;
+}
+.zone-pill-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.zone-pill {
+  padding: 5px 12px;
+  background: #fff;
+  border: 1px solid rgba(15, 31, 20, 0.18);
+  border-radius: 999px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--pjl-text-mid);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  line-height: 1.2;
+}
+.zone-pill:hover {
+  border-color: var(--pjl-green);
+  color: var(--pjl-green);
+}
+.zone-pill[aria-pressed="true"] {
+  background: var(--pjl-green);
+  color: #fff;
+  border-color: var(--pjl-green);
+}
+.zone-pill[aria-pressed="true"]:hover {
+  background: #143b22;
 }
 .property-valvebox-row {
   display: grid;
@@ -524,7 +582,7 @@
 @media (max-width: 700px) {
   .property-row { grid-template-columns: 1fr; }
   .property-zone-row { grid-template-columns: 60px 1fr 32px; }
-  .property-zone-row .zone-notes { grid-column: 1 / -1; }
+  .zone-pill-label { min-width: auto; flex-basis: 100%; }
   .property-valvebox-row { grid-template-columns: 1fr 60px 32px; }
   .property-valvebox-row .vb-notes { grid-column: 1 / -1; }
   .property-lead-list a { grid-template-columns: 1fr; gap: 4px; }

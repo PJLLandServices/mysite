@@ -176,6 +176,13 @@ function renderSystem(property) {
 
   const zones = Array.isArray(sys.zones) ? sys.zones : [];
   if (zones.length) {
+    // Lookup tables for the structured pill values stored on each zone.
+    // Kept inline rather than imported from the admin module so the portal
+    // bundle stays self-contained.
+    const SPRINKLER_LABELS = { rotors: "Rotors", popups: "Pop-ups", drip: "Drip", flower_pots: "Flower Pots" };
+    const COVERAGE_LABELS  = { plants: "Plants", grass: "Grass", trees: "Trees" };
+    const labelFor = (lookup, value) => lookup[value] || value;
+
     systemZoneList.innerHTML = "";
     zones
       .slice()
@@ -183,8 +190,22 @@ function renderSystem(property) {
       .forEach((z) => {
         const li = document.createElement("li");
         const num = z.number ? `Zone ${z.number}` : "Zone";
-        const label = z.label ? ` — ${z.label}` : "";
-        li.textContent = num + label;
+        const location = z.location || z.label || "";
+        const head = location ? `${num} — ${location}` : num;
+
+        const sprinklerLabels = (z.sprinklerTypes || []).map((v) => labelFor(SPRINKLER_LABELS, v));
+        const coverageLabels  = (z.coverage       || []).map((v) => labelFor(COVERAGE_LABELS, v));
+        const meta = [];
+        if (sprinklerLabels.length) meta.push(sprinklerLabels.join(", "));
+        if (coverageLabels.length)  meta.push(coverageLabels.join(", "));
+
+        li.textContent = head;
+        if (meta.length) {
+          const small = document.createElement("span");
+          small.className = "portal-system-zone-meta";
+          small.textContent = ` · ${meta.join(" · ")}`;
+          li.appendChild(small);
+        }
         systemZoneList.appendChild(li);
       });
     systemZones.hidden = false;

@@ -57,16 +57,52 @@ function formatDate(value) {
 
 // ---- Zone rows ------------------------------------------------------
 
+// Vocabulary for the zone-row pill multi-selects. Single source of truth —
+// values are stored on the zone record, labels are user-facing copy.
+const SPRINKLER_TYPES = [
+  { value: "rotors", label: "Rotors" },
+  { value: "popups", label: "Pop-ups" },
+  { value: "drip", label: "Drip" },
+  { value: "flower_pots", label: "Flower Pots" }
+];
+const COVERAGE_TYPES = [
+  { value: "plants", label: "Plants" },
+  { value: "grass", label: "Grass" },
+  { value: "trees", label: "Trees" }
+];
+
+function pillGroupHtml(groupName, options, selected) {
+  const set = new Set((selected || []).map(String));
+  const pills = options.map((opt) => `
+    <button type="button" class="zone-pill" data-pill data-group="${groupName}" data-value="${escapeHtml(opt.value)}" aria-pressed="${set.has(opt.value) ? "true" : "false"}">${escapeHtml(opt.label)}</button>
+  `).join("");
+  return `<div class="zone-pill-group" data-group="${groupName}">${pills}</div>`;
+}
+
 // Build a single zone row. Using template literals + innerHTML rather
 // than a heavyweight component framework — simpler, faster, fits the
 // rest of the admin's vanilla-JS conventions.
+//
+// Schema: { number, location, sprinklerTypes:[], coverage:[], notes? }
+// Backwards compat: older records use `label` instead of `location` —
+// fall back to it on render so the import data isn't orphaned.
 function zoneRowHtml(zone) {
+  const location = zone.location || zone.label || "";
   return `
     <div class="property-zone-row" data-zone>
       <input type="number" class="zone-number" min="1" max="99" value="${escapeHtml(zone.number)}" placeholder="#">
-      <input type="text" class="zone-label" value="${escapeHtml(zone.label || "")}" placeholder="Front lawn — north strip">
-      <input type="text" class="zone-notes" value="${escapeHtml(zone.notes || "")}" placeholder="Notes (sprays mixed with rotors, etc.)">
+      <input type="text" class="zone-location" value="${escapeHtml(location)}" placeholder="Location (e.g. Front lawn — north strip)">
       <button type="button" class="property-row-remove" data-action="remove-zone" aria-label="Remove zone">×</button>
+      <div class="zone-pills">
+        <div class="zone-pill-row">
+          <span class="zone-pill-label">Sprinkler</span>
+          ${pillGroupHtml("sprinklerTypes", SPRINKLER_TYPES, zone.sprinklerTypes || [])}
+        </div>
+        <div class="zone-pill-row">
+          <span class="zone-pill-label">Coverage</span>
+          ${pillGroupHtml("coverage", COVERAGE_TYPES, zone.coverage || [])}
+        </div>
+      </div>
     </div>
   `;
 }
@@ -85,7 +121,7 @@ function valveBoxRowHtml(box) {
 function renderZones(zones) {
   zonesList.innerHTML = "";
   if (!zones.length) {
-    addZoneRow({ number: 1, label: "", notes: "" });
+    addZoneRow({ number: 1, location: "", sprinklerTypes: [], coverage: [] });
     return;
   }
   zones.forEach((z) => {
@@ -105,7 +141,7 @@ function renderValveBoxes(boxes) {
   });
 }
 
-function addZoneRow(zone = { number: nextZoneNumber(), label: "", notes: "" }) {
+function addZoneRow(zone = { number: nextZoneNumber(), location: "", sprinklerTypes: [], coverage: [] }) {
   const wrap = document.createElement("div");
   wrap.innerHTML = zoneRowHtml(zone);
   zonesList.appendChild(wrap.firstElementChild);
@@ -125,10 +161,16 @@ function nextZoneNumber() {
   return max + 1;
 }
 
-// Click delegation for the dynamic rows' remove buttons.
+// Click delegation for the dynamic rows' remove buttons + pill toggles.
 zonesList.addEventListener("click", (event) => {
   if (event.target.matches('[data-action="remove-zone"]')) {
     event.target.closest(".property-zone-row")?.remove();
+    return;
+  }
+  const pill = event.target.closest("[data-pill]");
+  if (pill && zonesList.contains(pill)) {
+    const isPressed = pill.getAttribute("aria-pressed") === "true";
+    pill.setAttribute("aria-pressed", isPressed ? "false" : "true");
   }
 });
 valveBoxesList.addEventListener("click", (event) => {
@@ -197,12 +239,18 @@ function populateForm(property) {
 
 function collectForm() {
   const zones = Array.from(zonesList.querySelectorAll(".property-zone-row"))
-    .map((row) => ({
-      number: Number(row.querySelector(".zone-number").value) || 0,
-      label: row.querySelector(".zone-label").value.trim(),
-      notes: row.querySelector(".zone-notes").value.trim()
-    }))
-    .filter((z) => z.number || z.label);
+    .map((row) => {
+      const collectGroup = (groupName) =>
+        Array.from(row.querySelectorAll(`[data-pill][data-group="${groupName}"][aria-pressed="true"]`))
+          .map((pill) => pill.dataset.value);
+      return {
+        number: Number(row.querySelector(".zone-number").value) || 0,
+        location: row.querySelector(".zone-location").value.trim(),
+        sprinklerTypes: collectGroup("sprinklerTypes"),
+        coverage: collectGroup("coverage")
+      };
+    })
+    .filter((z) => z.number || z.location || z.sprinklerTypes.length || z.coverage.length);
 
   const valveBoxes = Array.from(valveBoxesList.querySelectorAll(".property-valvebox-row"))
     .map((row) => ({
