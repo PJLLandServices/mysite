@@ -60,6 +60,27 @@
   border: 1px solid rgba(15, 31, 20, 0.18);
   background: #fff;
 }
+.wo-tech-mode-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 8px;
+  padding: 8px 12px;
+  background: var(--pjl-green);
+  color: #fff;
+  border-radius: 8px;
+  text-decoration: none;
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+.wo-tech-mode-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px rgba(27, 77, 46, 0.30);
+}
 
 /* Diagnosis section — read-only block from the AI/admin handoff */
 .wo-diagnosis-section pre {

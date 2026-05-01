@@ -287,6 +287,7 @@ function needsAuth(method, pathname) {
   if (pathname === "/admin/properties/import" || pathname === "/admin/properties/import/") return true;
   if (/^\/admin\/property\/[^/]+/.test(pathname)) return true;
   if (pathname === "/admin/work-orders" || pathname === "/admin/work-orders/") return true;
+  if (/^\/admin\/work-order\/[^/]+\/tech\/?$/.test(pathname)) return true;
   if (/^\/admin\/work-order\/[^/]+/.test(pathname)) return true;
   if (pathname === "/api/quotes" && method === "GET") return true;
   if (pathname === "/api/quotes.csv" || pathname === "/api/contacts" || pathname === "/api/contacts.vcf") return true;
@@ -2550,6 +2551,12 @@ function resolveStaticTarget(pathname) {
   }
   if (pathname === "/admin/work-orders" || pathname === "/admin/work-orders/") {
     return { dir: SERVER_DIR, relative: "/work-orders.html" };
+  }
+  // Tech-mode pop-out — mobile-first, tap-optimized layout. Same WO id,
+  // different page. Route check must come BEFORE the desktop editor's
+  // /admin/work-order/<id> match so the /tech suffix wins.
+  if (/^\/admin\/work-order\/[^/]+\/tech\/?$/.test(pathname)) {
+    return { dir: SERVER_DIR, relative: "/work-order-tech.html" };
   }
   if (/^\/admin\/work-order\/[^/]+/.test(pathname)) {
     return { dir: SERVER_DIR, relative: "/work-order.html" };

@@ -27,6 +27,7 @@ const saveBtn = document.getElementById("saveBtn");
 const saveStatus = document.getElementById("saveStatus");
 const deleteBtn = document.getElementById("deleteBtn");
 const backLink = document.getElementById("backLink");
+const techModeBtn = document.getElementById("techModeBtn");
 const logoutButton = document.getElementById("logoutButton");
 
 const confirmModal = document.getElementById("confirmModal");
@@ -199,6 +200,7 @@ function renderHero(wo, property, lead) {
   parts.push(`updated ${formatDateTime(wo.updatedAt)}`);
   woMeta.textContent = parts.join(" · ");
   woStatus.value = wo.status || "scheduled";
+  if (techModeBtn) techModeBtn.href = `/admin/work-order/${encodeURIComponent(wo.id)}/tech`;
 
   // Back link points wherever we came from. Prefer the lead detail
   // (deep-links via #lead-<id>) so save → back → keep working in CRM.

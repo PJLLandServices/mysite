@@ -1,0 +1,545 @@
+/* Tech-mode work order — mobile-first, full-screen, tap-optimized.
+   No sidebar, no nav, no padding extras. The whole viewport is the
+   working surface so the tech sees as many zones at once as possible. */
+
+* { box-sizing: border-box; }
+
+:root {
+  --tech-green:        #1B4D2E;
+  --tech-green-mid:    #2D6A42;
+  --tech-green-light:  #4A8C5C;
+  --tech-amber:        #E07B24;
+  --tech-red:          #b13a3a;
+  --tech-text:         #0F1F14;
+  --tech-text-mid:     #2a3b30;
+  --tech-text-muted:   #6a7d70;
+  --tech-bg:           #F5F2E9;
+  --tech-card:         #ffffff;
+  --tech-border:       rgba(15, 31, 20, 0.10);
+  --tech-shadow:       0 8px 28px rgba(15, 31, 20, 0.12);
+  --tech-tap-min:      48px;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+}
+.tech-body {
+  font-family: "DM Sans", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  font-size: 16px;
+  line-height: 1.5;
+  color: var(--tech-text);
+  background: var(--tech-bg);
+  min-height: 100vh;
+  /* Honor iOS safe area at the bottom (home indicator). */
+  padding-bottom: env(safe-area-inset-bottom);
+}
+.tech-body.tech-sheet-open {
+  /* Lock the background while the sheet is open so iOS doesn't
+     scroll-trap. Sheet has its own internal scroll. */
+  overflow: hidden;
+}
+
+/* Sticky header --------------------------------------------------- */
+
+.tech-header {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 12px;
+  align-items: center;
+  padding: env(safe-area-inset-top) 14px 12px;
+  padding-top: max(env(safe-area-inset-top), 12px);
+  background: var(--tech-green);
+  color: #fff;
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.12);
+}
+.tech-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: var(--tech-tap-min);
+  padding: 10px 8px;
+  color: #fff;
+  text-decoration: none;
+  font-size: 15px;
+  font-weight: 600;
+}
+.tech-back-label { display: none; }
+@media (min-width: 480px) {
+  .tech-back-label { display: inline; }
+}
+.tech-header-center {
+  text-align: center;
+  overflow: hidden;
+}
+.tech-header-eyebrow {
+  margin: 0;
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 11px;
+  letter-spacing: 0.10em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.75);
+}
+.tech-header-id {
+  margin: 0;
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 22px;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tech-saving {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.85);
+  padding: 6px 10px;
+  background: rgba(0, 0, 0, 0.18);
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+/* Main content ---------------------------------------------------- */
+
+.tech-main {
+  padding: 16px 14px 80px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  max-width: 720px;
+  margin: 0 auto;
+}
+
+.tech-summary {
+  background: var(--tech-card);
+  border: 1px solid var(--tech-border);
+  border-radius: 12px;
+  padding: 14px 16px;
+}
+.tech-customer {
+  margin: 0 0 4px;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--tech-green);
+}
+.tech-address {
+  margin: 0;
+  font-size: 14px;
+  color: var(--tech-text-mid);
+}
+
+.tech-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.tech-section-title {
+  margin: 0;
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 13px;
+  letter-spacing: 0.10em;
+  text-transform: uppercase;
+  color: var(--tech-text-muted);
+}
+
+/* Run-level status — 4 big buttons in a 2×2 grid (single row on tablets) */
+.tech-run-status {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+@media (min-width: 540px) {
+  .tech-run-status { grid-template-columns: repeat(4, 1fr); }
+}
+.tech-run-status button {
+  min-height: 56px;
+  padding: 10px 12px;
+  background: var(--tech-card);
+  color: var(--tech-text);
+  border: 1.5px solid var(--tech-border);
+  border-radius: 12px;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.tech-run-status button[aria-pressed="true"] {
+  background: var(--tech-green);
+  color: #fff;
+  border-color: var(--tech-green);
+  box-shadow: var(--tech-shadow);
+}
+.tech-run-status button:active { transform: scale(0.97); }
+
+/* Collapsible details (diagnosis, visit notes) -------------------- */
+
+.tech-collapse {
+  background: var(--tech-card);
+  border: 1px solid var(--tech-border);
+  border-radius: 12px;
+  padding: 0;
+}
+.tech-collapse summary {
+  list-style: none;
+  cursor: pointer;
+  padding: 14px 16px;
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 14px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--tech-green);
+  position: relative;
+}
+.tech-collapse summary::-webkit-details-marker { display: none; }
+.tech-collapse summary::after {
+  content: "+";
+  position: absolute;
+  right: 16px;
+  font-size: 18px;
+  color: var(--tech-text-muted);
+}
+.tech-collapse[open] summary::after { content: "−"; }
+.tech-collapse pre,
+.tech-collapse textarea {
+  margin: 0;
+  padding: 12px 16px 16px;
+  background: transparent;
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--tech-text);
+  white-space: pre-wrap;
+  width: 100%;
+  border: 0;
+  resize: vertical;
+}
+.tech-collapse textarea:focus { outline: 2px solid var(--tech-green); outline-offset: -2px; }
+
+/* Zone list — one tap-card per zone ------------------------------ */
+
+.tech-zones-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+}
+.tech-zones-progress {
+  font-family: "DM Sans", sans-serif;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--tech-green);
+  background: rgba(27, 77, 46, 0.08);
+  padding: 4px 10px;
+  border-radius: 999px;
+}
+
+.tech-zone-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.tech-zone-item-btn {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 56px 1fr 24px;
+  gap: 12px;
+  align-items: center;
+  padding: 14px 16px;
+  background: var(--tech-card);
+  border: 1px solid var(--tech-border);
+  border-left: 4px solid var(--tech-border);
+  border-radius: 12px;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  min-height: 64px;
+}
+.tech-zone-item[data-status="working_well"]    .tech-zone-item-btn { border-left-color: var(--tech-green-light); background: rgba(74, 140, 92, 0.04); }
+.tech-zone-item[data-status="adjusted"]        .tech-zone-item-btn { border-left-color: var(--tech-amber); background: rgba(224, 123, 36, 0.04); }
+.tech-zone-item[data-status="repair_required"] .tech-zone-item-btn { border-left-color: var(--tech-red); background: rgba(177, 58, 58, 0.05); }
+.tech-zone-item[data-status="other"]           .tech-zone-item-btn { border-left-color: var(--tech-text-muted); }
+.tech-zone-item-btn:active { transform: scale(0.98); }
+
+.tech-zone-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--tech-green);
+  background: rgba(27, 77, 46, 0.08);
+  border-radius: 10px;
+  padding: 8px 0;
+  width: 56px;
+}
+.tech-zone-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.tech-zone-location {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--tech-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tech-zone-status-tag {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--tech-text-muted);
+}
+.tech-zone-notes-preview {
+  font-size: 13px;
+  color: var(--tech-text-mid);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-style: italic;
+}
+.tech-zone-dot {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: rgba(15, 31, 20, 0.12);
+}
+.tech-zone-dot.is-good    { background: var(--tech-green-light); }
+.tech-zone-dot.is-warn    { background: var(--tech-amber); }
+.tech-zone-dot.is-bad     { background: var(--tech-red); }
+.tech-zone-dot.is-neutral { background: var(--tech-text-muted); }
+
+.tech-empty-zones {
+  margin: 0;
+  padding: 16px;
+  background: var(--tech-card);
+  border: 1px dashed var(--tech-border);
+  border-radius: 10px;
+  color: var(--tech-text-muted);
+  font-style: italic;
+  font-size: 14px;
+  text-align: center;
+}
+
+.tech-meta {
+  margin: 0;
+  text-align: center;
+  font-size: 12px;
+  color: var(--tech-text-muted);
+}
+
+.tech-loading,
+.tech-error {
+  padding: 28px 14px;
+  text-align: center;
+  color: var(--tech-text-mid);
+  font-size: 14px;
+}
+.tech-error { color: var(--tech-red); }
+
+/* Bottom sheet --------------------------------------------------- */
+
+.tech-sheet {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 31, 20, 0.55);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  z-index: 100;
+  /* Slide-up entrance */
+  animation: tech-sheet-fade 0.18s ease both;
+}
+.tech-sheet[hidden] { display: none; }
+@keyframes tech-sheet-fade {
+  from { background: rgba(15, 31, 20, 0); }
+  to   { background: rgba(15, 31, 20, 0.55); }
+}
+.tech-sheet-card {
+  background: var(--tech-card);
+  width: 100%;
+  max-width: 720px;
+  max-height: 92vh;
+  overflow-y: auto;
+  border-top-left-radius: 18px;
+  border-top-right-radius: 18px;
+  padding: 12px 16px calc(20px + env(safe-area-inset-bottom));
+  animation: tech-sheet-rise 0.22s ease both;
+}
+@keyframes tech-sheet-rise {
+  from { transform: translateY(100%); }
+  to   { transform: translateY(0); }
+}
+.tech-sheet-head {
+  display: grid;
+  grid-template-columns: 32px 1fr;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 6px;
+}
+.tech-sheet-head h2 {
+  margin: 0;
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 22px;
+  letter-spacing: 0.04em;
+  color: var(--tech-green);
+}
+.tech-sheet-close {
+  width: 36px;
+  height: 36px;
+  border: 0;
+  background: transparent;
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--tech-text-muted);
+  cursor: pointer;
+  border-radius: 50%;
+}
+.tech-sheet-close:hover { background: rgba(15, 31, 20, 0.05); color: var(--tech-text); }
+.tech-sheet-location {
+  margin: 0 0 12px;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--tech-text);
+}
+.tech-sheet-system {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0 0 16px;
+  padding: 10px 12px;
+  background: rgba(27, 77, 46, 0.04);
+  border-radius: 10px;
+}
+.tech-sheet-sys-row {
+  display: grid;
+  grid-template-columns: 80px 1fr;
+  gap: 8px;
+  align-items: center;
+  font-size: 13px;
+}
+.tech-sheet-sys-row > span {
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--tech-text-muted);
+}
+.tech-sheet-sys-row > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.tech-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  background: rgba(27, 77, 46, 0.10);
+  color: var(--tech-green);
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.tech-sheet-label {
+  margin: 14px 0 8px;
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 12px;
+  letter-spacing: 0.10em;
+  text-transform: uppercase;
+  color: var(--tech-text-muted);
+}
+
+/* Per-zone status — 2×2 grid of tap-pill buttons. Each gets a colored
+   dot to match the run-level palette. */
+.tech-zone-status-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin: 0 0 14px;
+}
+.tech-zone-status-grid button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 56px;
+  padding: 10px 14px;
+  background: var(--tech-card);
+  color: var(--tech-text);
+  border: 1.5px solid var(--tech-border);
+  border-radius: 12px;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.15s ease;
+}
+.tech-zone-status-grid button .dot {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: rgba(15, 31, 20, 0.18);
+  flex-shrink: 0;
+}
+.tech-zone-status-grid button[data-zone-status="working_well"]    .dot { background: var(--tech-green-light); }
+.tech-zone-status-grid button[data-zone-status="adjusted"]        .dot { background: var(--tech-amber); }
+.tech-zone-status-grid button[data-zone-status="repair_required"] .dot { background: var(--tech-red); }
+.tech-zone-status-grid button[data-zone-status="other"]           .dot { background: var(--tech-text-muted); }
+.tech-zone-status-grid button[aria-pressed="true"] {
+  border-color: var(--tech-green);
+  background: rgba(27, 77, 46, 0.06);
+  box-shadow: 0 0 0 2px var(--tech-green) inset;
+}
+.tech-zone-status-grid button:active { transform: scale(0.97); }
+
+.tech-sheet-notes-label {
+  display: block;
+  margin: 0 0 6px;
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 12px;
+  letter-spacing: 0.10em;
+  text-transform: uppercase;
+  color: var(--tech-text-muted);
+}
+#sheetNotes {
+  width: 100%;
+  padding: 12px;
+  font: inherit;
+  font-size: 16px;  /* iOS won't zoom on focus when ≥16px */
+  line-height: 1.5;
+  border: 1.5px solid var(--tech-border);
+  border-radius: 10px;
+  background: var(--tech-card);
+  color: var(--tech-text);
+  resize: vertical;
+  margin-bottom: 14px;
+}
+#sheetNotes:focus { outline: none; border-color: var(--tech-green); }
+
+.tech-sheet-done {
+  width: 100%;
+  min-height: 52px;
+  padding: 14px;
+  background: var(--tech-green);
+  color: #fff;
+  border: 0;
+  border-radius: 12px;
+  font: inherit;
+  font-size: 16px;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: var(--tech-shadow);
+}
+.tech-sheet-done:active { transform: scale(0.98); }

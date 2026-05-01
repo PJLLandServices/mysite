@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#1B4D2E">
+  <title>PJL Tech — Field WO</title>
+  <link rel="icon" type="image/svg+xml" href="/crm/pjl-logo-mark.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/crm/work-order-tech.css">
+</head>
+<body class="tech-body">
+  <!-- Sticky header — visible while scrolling the zone list. Shows the
+       WO basics + the run-level status at a glance. -->
+  <header class="tech-header" id="techHeader">
+    <a class="tech-back" id="techBack" href="/admin">
+      <span aria-hidden="true">←</span>
+      <span class="tech-back-label">Back</span>
+    </a>
+    <div class="tech-header-center">
+      <p class="tech-header-eyebrow" id="techType">—</p>
+      <h1 class="tech-header-id" id="techId">WO-—</h1>
+    </div>
+    <div class="tech-saving" id="techSaving" hidden>Saving…</div>
+  </header>
+
+  <main class="tech-main" id="techMain" hidden>
+    <section class="tech-summary">
+      <p class="tech-customer" id="techCustomer">—</p>
+      <p class="tech-address" id="techAddress">—</p>
+    </section>
+
+    <!-- Run-level status — taps update immediately. -->
+    <section class="tech-section">
+      <h2 class="tech-section-title">Visit status</h2>
+      <div class="tech-run-status" id="techRunStatus" role="radiogroup" aria-label="Visit status">
+        <button type="button" data-run-status="scheduled">Scheduled</button>
+        <button type="button" data-run-status="on_site">On site</button>
+        <button type="button" data-run-status="awaiting_approval">Awaiting</button>
+        <button type="button" data-run-status="completed">Completed</button>
+      </div>
+    </section>
+
+    <!-- Diagnosis from intake (read-only). Collapsed by default. -->
+    <details class="tech-collapse" id="techDiagnosis" hidden>
+      <summary>Diagnosis from intake</summary>
+      <pre id="techDiagnosisText"></pre>
+    </details>
+
+    <!-- The zone grid — the main on-site work surface. -->
+    <section class="tech-section">
+      <header class="tech-zones-header">
+        <h2 class="tech-section-title">Zones</h2>
+        <span class="tech-zones-progress" id="techZonesProgress">0 / 0</span>
+      </header>
+      <p class="tech-empty-zones" id="techEmptyZones" hidden>No zones on this work order yet.</p>
+      <ul class="tech-zone-list" id="techZoneList"></ul>
+    </section>
+
+    <!-- Tech-wide notes for the visit. Collapsed by default. -->
+    <details class="tech-collapse">
+      <summary>Visit notes</summary>
+      <textarea id="techNotes" rows="5" placeholder="Anything else worth recording…"></textarea>
+    </details>
+
+    <p class="tech-meta" id="techMeta">—</p>
+  </main>
+
+  <p class="tech-loading" id="techLoading">Loading work order…</p>
+  <p class="tech-error" id="techError" hidden>Couldn't load this work order.</p>
+
+  <!-- Per-zone editor — slides up from the bottom when a zone is tapped.
+       Lives in a separate sheet so the zone list stays scrollable. -->
+  <div class="tech-sheet" id="techSheet" hidden role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
+    <div class="tech-sheet-card">
+      <header class="tech-sheet-head">
+        <button type="button" class="tech-sheet-close" id="sheetClose" aria-label="Close">×</button>
+        <h2 id="sheetTitle">Zone —</h2>
+      </header>
+      <p class="tech-sheet-location" id="sheetLocation">—</p>
+      <div class="tech-sheet-system" id="sheetSystem"></div>
+
+      <p class="tech-sheet-label">Status</p>
+      <div class="tech-zone-status-grid" id="sheetStatus" role="radiogroup" aria-label="Zone status">
+        <button type="button" data-zone-status="working_well">
+          <span class="dot"></span>Working well
+        </button>
+        <button type="button" data-zone-status="adjusted">
+          <span class="dot"></span>Adjusted
+        </button>
+        <button type="button" data-zone-status="repair_required">
+          <span class="dot"></span>Repair required
+        </button>
+        <button type="button" data-zone-status="other">
+          <span class="dot"></span>Other
+        </button>
+      </div>
+
+      <label class="tech-sheet-notes-label" for="sheetNotes">Notes</label>
+      <textarea id="sheetNotes" rows="4" placeholder="What did you find / do?"></textarea>
+
+      <button type="button" class="tech-sheet-done" id="sheetDone">Done</button>
+    </div>
+  </div>
+
+  <script src="/crm/work-order-tech.js"></script>
+</body>
+</html>
