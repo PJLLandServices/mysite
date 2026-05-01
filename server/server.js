@@ -298,6 +298,8 @@ function needsAuth(method, pathname) {
   if (pathname === "/api/admin/features") return true;
   // Properties (customer system profiles) are admin-only.
   if (pathname.startsWith("/api/properties")) return true;
+  // Per-lead property link/dismiss actions are admin-only.
+  if (/^\/api\/leads\/[^/]+\/(link-property|dismiss-property-suggestion)$/.test(pathname)) return true;
   // Availability lookups + the public booking endpoint stay public.
   return false;
 }
@@ -1156,11 +1158,13 @@ async function handleApi(req, res, pathname) {
       leads.unshift(result.lead);
       await writeLeads(leads);
 
-      // Auto-link this lead to a customer property. If it's a returning
-      // customer at the same address, the existing property is updated.
-      // Otherwise a new property record is minted (which Patrick can flesh
-      // out later in the property profile editor). Geocode is best-effort —
-      // if it fails, the property still gets created without coords.
+      // Auto-link this lead to a customer property. attachLead returns one
+      // of three statuses:
+      //   "linked"    strong match, fully attached
+      //   "suggested" customer-email match but address differs — created a
+      //               new property AND surfaced existing properties as
+      //               candidates so Patrick can confirm/reject the merge
+      //   "new"       brand-new customer + property
       try {
         let leadCoords = null;
         const leadAddress = result.lead.contact?.address;
@@ -1168,7 +1172,7 @@ async function handleApi(req, res, pathname) {
           const geo = await geocode(leadAddress);
           if (geo.ok && geo.coords) leadCoords = geo.coords;
         }
-        const property = await properties.attachLead({
+        const linkResult = await properties.attachLead({
           leadId: result.lead.id,
           email: result.lead.contact?.email,
           name: result.lead.contact?.name,
@@ -1176,14 +1180,20 @@ async function handleApi(req, res, pathname) {
           address: leadAddress,
           coords: leadCoords
         });
-        if (property) {
-          // Stamp the propertyId onto the lead for fast lookup later. Re-write
-          // leads.json with the updated record (small file, cheap).
-          result.lead.propertyId = property.id;
+        if (linkResult.property) {
+          result.lead.propertyId = linkResult.property.id;
+          result.lead.propertyLinkStatus = linkResult.status;
+          if (linkResult.status === "suggested") {
+            result.lead.propertyLinkSuggestions = linkResult.suggestions;
+          }
           const liveLeads = await readLeads();
           const i = liveLeads.findIndex((l) => l.id === result.lead.id);
           if (i !== -1) {
-            liveLeads[i].propertyId = property.id;
+            liveLeads[i].propertyId = linkResult.property.id;
+            liveLeads[i].propertyLinkStatus = linkResult.status;
+            if (linkResult.status === "suggested") {
+              liveLeads[i].propertyLinkSuggestions = linkResult.suggestions;
+            }
             await writeLeads(liveLeads);
           }
         }
@@ -1673,6 +1683,97 @@ async function handleApi(req, res, pathname) {
     return sendJson(res, 200, { ok: true, properties: all });
   }
 
+  // Manual search — used by the CRM "link to existing property" picker.
+  // Substring match against customer name / email / phone / address. The
+  // result set is small (PJL-scale) so a linear scan + filter is fine.
+  if (req.method === "GET" && pathname === "/api/properties/search") {
+    const url = new URL(req.url, baseUrlFromReq(req));
+    const q = (url.searchParams.get("q") || "").trim().toLowerCase();
+    const all = await properties.list();
+    const results = q
+      ? all.filter((p) => {
+          const haystack = [p.customerName, p.customerEmail, p.customerPhone, p.address]
+            .filter(Boolean).join(" ").toLowerCase();
+          return haystack.includes(q);
+        }).slice(0, 25)
+      : all.slice(0, 25);
+    return sendJson(res, 200, {
+      ok: true,
+      results: results.map((p) => ({
+        id: p.id,
+        customerName: p.customerName,
+        customerEmail: p.customerEmail,
+        address: p.address,
+        bookingCount: (p.leadIds || []).length
+      }))
+    });
+  }
+
+  // Move a lead between properties — confirms a "suggested" link OR
+  // performs a manual link from the picker. The previous property keeps
+  // existing in case it has other leads attached; if it's now orphaned,
+  // Patrick can clean it up from the properties index.
+  // Body: { propertyId: "<target-property-id>" }
+  const linkPropertyMatch = pathname.match(/^\/api\/leads\/([^/]+)\/link-property$/);
+  if (linkPropertyMatch && req.method === "POST") {
+    try {
+      const leadId = decodeURIComponent(linkPropertyMatch[1]);
+      const payload = await parseRequestBody(req);
+      const targetPropertyId = normalizeString(payload.propertyId, 80);
+      if (!targetPropertyId) return sendJson(res, 422, { ok: false, errors: ["propertyId is required."] });
+      const target = await properties.get(targetPropertyId);
+      if (!target) return sendJson(res, 404, { ok: false, errors: ["Target property not found."] });
+
+      const allLeads = await readLeads();
+      const idx = allLeads.findIndex((l) => l.id === leadId);
+      if (idx === -1) return sendJson(res, 404, { ok: false, errors: ["Lead not found."] });
+      const lead = allLeads[idx];
+      const fromPropertyId = lead.propertyId || null;
+      await properties.relinkLead({ leadId, fromPropertyId, toPropertyId: targetPropertyId });
+
+      lead.propertyId = targetPropertyId;
+      lead.propertyLinkStatus = "linked";
+      // Suggestion list is no longer relevant once the link is confirmed.
+      delete lead.propertyLinkSuggestions;
+      // Activity entry so there's an audit trail for the merge.
+      lead.crm = lead.crm || {};
+      lead.crm.activity = Array.isArray(lead.crm.activity) ? lead.crm.activity : [];
+      lead.crm.activity.unshift({
+        at: new Date().toISOString(),
+        type: "update",
+        text: `Linked to property: ${target.address || targetPropertyId}`
+      });
+      lead.crm.lastUpdated = new Date().toISOString();
+      allLeads[idx] = lead;
+      await writeLeads(allLeads);
+
+      return sendJson(res, 200, { ok: true, lead: decorateLeadForAdmin(lead, req) });
+    } catch (error) {
+      return sendJson(res, 400, { ok: false, errors: [error.message || "Couldn't link property."] });
+    }
+  }
+
+  // Reject a suggested link — clears the suggestions but keeps the
+  // current property. Lets Patrick dismiss the "this might be a duplicate"
+  // banner without taking action.
+  const dismissSuggestionMatch = pathname.match(/^\/api\/leads\/([^/]+)\/dismiss-property-suggestion$/);
+  if (dismissSuggestionMatch && req.method === "POST") {
+    try {
+      const leadId = decodeURIComponent(dismissSuggestionMatch[1]);
+      const allLeads = await readLeads();
+      const idx = allLeads.findIndex((l) => l.id === leadId);
+      if (idx === -1) return sendJson(res, 404, { ok: false, errors: ["Lead not found."] });
+      const lead = allLeads[idx];
+      delete lead.propertyLinkSuggestions;
+      lead.propertyLinkStatus = "linked";
+      allLeads[idx] = lead;
+      await writeLeads(allLeads);
+      return sendJson(res, 200, { ok: true, lead: decorateLeadForAdmin(lead, req) });
+    } catch (error) {
+      return sendJson(res, 400, { ok: false, errors: [error.message || "Couldn't dismiss suggestion."] });
+    }
+  }
+
   const propertyMatch = pathname.match(/^\/api\/properties\/([^/]+)$/);
   if (propertyMatch && req.method === "GET") {
     const property = await properties.get(decodeURIComponent(propertyMatch[1]));
@@ -2053,11 +2154,9 @@ async function handleApi(req, res, pathname) {
       all.unshift(result.lead);
       await writeLeads(all);
 
-      // Auto-link to a customer property using the geocoded coords we already
-      // have from the slot validation above. Same logic as /api/quotes — just
-      // we don't need to re-geocode since `customerCoords` is in scope here.
+      // Auto-link to a customer property using the coords we already have.
       try {
-        const property = await properties.attachLead({
+        const linkResult = await properties.attachLead({
           leadId: result.lead.id,
           email: result.lead.contact?.email,
           name: result.lead.contact?.name,
@@ -2065,12 +2164,20 @@ async function handleApi(req, res, pathname) {
           address: result.lead.contact?.address,
           coords: customerCoords && customerCoords.lat != null ? customerCoords : null
         });
-        if (property) {
-          result.lead.propertyId = property.id;
+        if (linkResult.property) {
+          result.lead.propertyId = linkResult.property.id;
+          result.lead.propertyLinkStatus = linkResult.status;
+          if (linkResult.status === "suggested") {
+            result.lead.propertyLinkSuggestions = linkResult.suggestions;
+          }
           const liveLeads = await readLeads();
           const i = liveLeads.findIndex((l) => l.id === result.lead.id);
           if (i !== -1) {
-            liveLeads[i].propertyId = property.id;
+            liveLeads[i].propertyId = linkResult.property.id;
+            liveLeads[i].propertyLinkStatus = linkResult.status;
+            if (linkResult.status === "suggested") {
+              liveLeads[i].propertyLinkSuggestions = linkResult.suggestions;
+            }
             await writeLeads(liveLeads);
           }
         }

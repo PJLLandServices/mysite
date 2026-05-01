@@ -45,6 +45,14 @@ const detailFeatures = document.getElementById("detailFeatures");
 const detailPropertySection = document.getElementById("detailPropertySection");
 const detailPropertyMeta = document.getElementById("detailPropertyMeta");
 const detailPropertyOpen = document.getElementById("detailPropertyOpen");
+const detailPropertyLinkBtn = document.getElementById("detailPropertyLinkBtn");
+const detailPropertySuggest = document.getElementById("detailPropertySuggest");
+const detailPropertySuggestList = document.getElementById("detailPropertySuggestList");
+const detailPropertyDismissBtn = document.getElementById("detailPropertyDismissBtn");
+const propertyPickerDialog = document.getElementById("propertyPickerDialog");
+const propertyPickerSearch = document.getElementById("propertyPickerSearch");
+const propertyPickerResults = document.getElementById("propertyPickerResults");
+const propertyPickerCancel = document.getElementById("propertyPickerCancel");
 const detailWorkOrderSection = document.getElementById("detailWorkOrderSection");
 const detailWorkOrderId = document.getElementById("detailWorkOrderId");
 const detailWorkOrderStatus = document.getElementById("detailWorkOrderStatus");
@@ -382,7 +390,6 @@ async function renderPropertyDetail(lead) {
     return;
   }
   detailPropertySection.hidden = false;
-  // Optimistic placeholder while we fetch.
   detailPropertyMeta.textContent = "Loading property…";
   detailPropertyOpen.href = `/admin/property/${encodeURIComponent(lead.propertyId)}`;
 
@@ -395,10 +402,8 @@ async function renderPropertyDetail(lead) {
         property = data.property;
         propertyCache.set(lead.propertyId, property);
       }
-    } catch { /* ignore — placeholder text stays */ }
+    } catch { /* placeholder text stays */ }
   }
-  // Make sure the lead we're rendering is still the one the user is viewing
-  // (a slow network + a quick lead-switch could otherwise show stale data).
   if (activeLeadId !== lead.id) return;
   if (!property) {
     detailPropertyMeta.textContent = "Property profile not available.";
@@ -411,7 +416,120 @@ async function renderPropertyDetail(lead) {
     <strong>${escapeHtml(property.address || "(no address)")}</strong><br>
     ${zones} zone${zones === 1 ? "" : "s"} · ${valveBoxes} valve box${valveBoxes === 1 ? "" : "es"} · ${bookings} booking${bookings === 1 ? "" : "s"}
   `;
+
+  // Suggested-link banner — appears when the auto-link logic detected a
+  // possible duplicate (same customer email, different address). Patrick
+  // either links to one of the suggestions or dismisses the banner.
+  const suggestions = lead.propertyLinkSuggestions || [];
+  if (lead.propertyLinkStatus === "suggested" && suggestions.length) {
+    detailPropertySuggestList.innerHTML = "";
+    suggestions.forEach((s) => {
+      const li = document.createElement("li");
+      li.innerHTML = `
+        <div>
+          <strong>${escapeHtml(s.address || "(no address)")}</strong>
+          <span>${s.bookingCount} booking${s.bookingCount === 1 ? "" : "s"}</span>
+        </div>
+        <button type="button" class="pjl-btn pjl-btn-outline" data-suggest-link="${escapeHtml(s.id)}">Link this booking here →</button>
+      `;
+      detailPropertySuggestList.append(li);
+    });
+    detailPropertySuggest.hidden = false;
+  } else {
+    detailPropertySuggest.hidden = true;
+  }
 }
+
+// Confirm a suggested link OR a manual-search pick. Both routes hit the
+// same endpoint — the only difference is where the targetPropertyId came from.
+async function linkLeadToProperty(targetPropertyId) {
+  if (!activeLeadId || !targetPropertyId) return;
+  try {
+    const response = await fetch(`/api/leads/${encodeURIComponent(activeLeadId)}/link-property`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ propertyId: targetPropertyId })
+    });
+    const data = await response.json();
+    if (!response.ok || !data.ok) throw new Error((data.errors || ["Couldn't link."]).join(" "));
+    leads = leads.map((l) => l.id === data.lead.id ? data.lead : l);
+    propertyCache.delete(targetPropertyId); // refetch the now-updated property
+    render();
+  } catch (err) {
+    saveMessage.textContent = err.message;
+  }
+}
+
+// Suggested-link clicks (event delegation on the section).
+detailPropertySuggest?.addEventListener("click", (event) => {
+  const linkBtn = event.target.closest("[data-suggest-link]");
+  if (linkBtn) linkLeadToProperty(linkBtn.dataset.suggestLink);
+});
+
+// Dismiss the suggestion banner (this booking really IS a different property).
+detailPropertyDismissBtn?.addEventListener("click", async () => {
+  if (!activeLeadId) return;
+  try {
+    const response = await fetch(`/api/leads/${encodeURIComponent(activeLeadId)}/dismiss-property-suggestion`, { method: "POST" });
+    const data = await response.json();
+    if (!response.ok || !data.ok) throw new Error((data.errors || ["Couldn't dismiss."]).join(" "));
+    leads = leads.map((l) => l.id === data.lead.id ? data.lead : l);
+    render();
+  } catch (err) {
+    saveMessage.textContent = err.message;
+  }
+});
+
+// Manual-link picker — opens a search dialog. Patrick types, the dialog
+// shows results from /api/properties/search, click one to link.
+detailPropertyLinkBtn?.addEventListener("click", () => {
+  if (!propertyPickerDialog) return;
+  propertyPickerSearch.value = "";
+  propertyPickerResults.innerHTML = "";
+  if (typeof propertyPickerDialog.showModal === "function") propertyPickerDialog.showModal();
+  else propertyPickerDialog.setAttribute("open", "");
+  loadPropertyPickerResults("");
+  propertyPickerSearch.focus();
+});
+propertyPickerCancel?.addEventListener("click", () => propertyPickerDialog.close());
+
+let pickerSearchTimer = null;
+propertyPickerSearch?.addEventListener("input", () => {
+  clearTimeout(pickerSearchTimer);
+  pickerSearchTimer = setTimeout(() => loadPropertyPickerResults(propertyPickerSearch.value), 200);
+});
+
+async function loadPropertyPickerResults(query) {
+  try {
+    const url = `/api/properties/search?q=${encodeURIComponent(query || "")}`;
+    const response = await fetch(url, { cache: "no-store" });
+    const data = await response.json();
+    if (!data.ok) return;
+    propertyPickerResults.innerHTML = "";
+    if (!data.results.length) {
+      propertyPickerResults.innerHTML = `<li class="picker-empty">No matches yet.</li>`;
+      return;
+    }
+    data.results.forEach((p) => {
+      const li = document.createElement("li");
+      li.innerHTML = `
+        <button type="button" data-picker-link="${escapeHtml(p.id)}">
+          <strong>${escapeHtml(p.customerName || p.customerEmail || "(no name)")}</strong>
+          <span>${escapeHtml(p.address || "(no address)")}</span>
+          <span class="picker-meta">${escapeHtml(p.customerEmail || "")} · ${p.bookingCount} booking${p.bookingCount === 1 ? "" : "s"}</span>
+        </button>
+      `;
+      propertyPickerResults.append(li);
+    });
+  } catch { /* ignore */ }
+}
+
+propertyPickerResults?.addEventListener("click", (event) => {
+  const btn = event.target.closest("[data-picker-link]");
+  if (!btn) return;
+  propertyPickerDialog.close();
+  linkLeadToProperty(btn.dataset.pickerLink);
+});
 
 function renderPhotosDetail(lead) {
   if (!detailPhotosSection || !detailPhotoGrid) return;

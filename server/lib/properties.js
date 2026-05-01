@@ -163,13 +163,26 @@ async function findMatch({ email, address, coords }) {
   return null;
 }
 
-// Idempotent: given lead-ish input, return the property that owns this
-// lead (creating one if needed) and link the lead to it.
+// Match outcome — drives whether we auto-link, suggest a link to an
+// existing property under the same customer, or create a brand-new
+// customer + property record. The CRM uses the `status` to decide if
+// Patrick needs to confirm the link manually.
+//
+//   "linked"     — strong match (same email + same address). Auto-attached.
+//   "new"        — no email match anywhere. Brand-new customer + property.
+//   "suggested"  — email matches an existing customer but the address
+//                  doesn't (different property under same customer, OR
+//                  the address typed was different enough it didn't match).
+//                  We create the new property AND tag the lead with a
+//                  pointer to the candidate so Patrick can confirm/reject.
+//
+// `attachLead` always returns { property, status, suggestions[] }.
 async function attachLead({ leadId, email, name, phone, address, coords }) {
   const properties = await readAll();
   const targetEmail = normalizeEmail(email);
-  if (!targetEmail) return null; // no email = can't link to a customer
+  if (!targetEmail) return { property: null, status: "no-email", suggestions: [] };
 
+  // Strong match first — same customer + same property.
   let property = await findMatch({ email, address, coords });
 
   if (property) {
@@ -179,7 +192,6 @@ async function attachLead({ leadId, email, name, phone, address, coords }) {
       const updated = properties[idx];
       if (name && !updated.customerName) updated.customerName = name;
       if (phone && !updated.customerPhone) updated.customerPhone = phone;
-      // Backfill coords if we now have them and the property didn't.
       if (coords && coords.lat != null && (!updated.coords || updated.coords.lat == null)) {
         updated.coords = coords;
       }
@@ -188,21 +200,62 @@ async function attachLead({ leadId, email, name, phone, address, coords }) {
       properties[idx] = updated;
       property = updated;
     }
-  } else {
-    // No match → mint a new property.
-    property = blankProperty();
-    property.customerEmail = targetEmail;
-    property.customerName = name || "";
-    property.customerPhone = phone || "";
-    property.address = address || "";
-    property.addressNormalized = normalizeAddress(address);
-    property.coords = (coords && coords.lat != null) ? coords : null;
-    if (leadId) property.leadIds.push(leadId);
-    properties.unshift(property);
+    await writeAll(properties);
+    return { property, status: "linked", suggestions: [] };
   }
 
+  // No address match — but maybe the email matches an existing customer.
+  // If so, create the new property AND surface the existing ones as
+  // suggestions so Patrick can manually merge if it's actually the same site.
+  const sameCustomer = properties.filter((p) => p.customerEmail === targetEmail);
+
+  property = blankProperty();
+  property.customerEmail = targetEmail;
+  property.customerName = name || "";
+  property.customerPhone = phone || "";
+  property.address = address || "";
+  property.addressNormalized = normalizeAddress(address);
+  property.coords = (coords && coords.lat != null) ? coords : null;
+  if (leadId) property.leadIds.push(leadId);
+  properties.unshift(property);
   await writeAll(properties);
-  return property;
+
+  return {
+    property,
+    status: sameCustomer.length ? "suggested" : "new",
+    // Lightweight suggestion shape — just enough for the CRM to render
+    // "this might be: <address> · <booking count>" without a second fetch.
+    suggestions: sameCustomer.map((p) => ({
+      id: p.id,
+      address: p.address,
+      bookingCount: (p.leadIds || []).length
+    }))
+  };
+}
+
+// Move a lead from one property to another. Used by the CRM when Patrick
+// confirms a suggested link (e.g. "this booking is actually for the same
+// property as last spring's job"). The leadId is removed from the source's
+// leadIds and added to the target's. If the source is left orphaned (no
+// leads, no other linkage) we do NOT auto-delete it — Patrick can clean
+// up via the property index. Safer than auto-delete.
+async function relinkLead({ leadId, fromPropertyId, toPropertyId }) {
+  if (!leadId || !toPropertyId || fromPropertyId === toPropertyId) return null;
+  const properties = await readAll();
+  const target = properties.find((p) => p.id === toPropertyId);
+  if (!target) return null;
+
+  if (fromPropertyId) {
+    const source = properties.find((p) => p.id === fromPropertyId);
+    if (source) {
+      source.leadIds = (source.leadIds || []).filter((id) => id !== leadId);
+      source.updatedAt = new Date().toISOString();
+    }
+  }
+  if (!target.leadIds.includes(leadId)) target.leadIds.push(leadId);
+  target.updatedAt = new Date().toISOString();
+  await writeAll(properties);
+  return target;
 }
 
 // ---- CRUD for the admin UI ------------------------------------------
@@ -253,6 +306,7 @@ async function findByCustomerEmail(email) {
 
 module.exports = {
   attachLead,
+  relinkLead,
   findMatch,
   findByLeadId,
   findByCustomerEmail,

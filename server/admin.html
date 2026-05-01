@@ -258,8 +258,33 @@
           <section class="detail-section detail-property" id="detailPropertySection" hidden>
             <h3>Linked Property</h3>
             <p class="detail-property-meta" id="detailPropertyMeta"></p>
-            <a class="pjl-btn pjl-btn-outline" id="detailPropertyOpen" href="#" target="_blank" rel="noopener">Open property profile →</a>
+            <div class="detail-property-actions">
+              <a class="pjl-btn pjl-btn-outline" id="detailPropertyOpen" href="#" target="_blank" rel="noopener">Open property profile →</a>
+              <button type="button" class="pjl-btn pjl-btn-outline" id="detailPropertyLinkBtn">Link to a different property…</button>
+            </div>
+            <!-- Suggested-link banner: appears when attachLead matched the
+                 customer email but a different address (probably a duplicate
+                 property under the same customer). Patrick confirms or dismisses. -->
+            <div class="detail-property-suggest" id="detailPropertySuggest" hidden>
+              <p class="suggest-headline">⚠️ Possible duplicate — same customer, different address</p>
+              <p class="suggest-help">This customer already has property profile(s) on file. If this booking is for one of them, link it now so the booking history stays unified.</p>
+              <ul class="suggest-list" id="detailPropertySuggestList"></ul>
+              <button type="button" class="pjl-btn pjl-btn-outline" id="detailPropertyDismissBtn">Dismiss — these are different properties</button>
+            </div>
           </section>
+
+          <!-- Manual link picker dialog -->
+          <dialog id="propertyPickerDialog" class="property-picker-dialog">
+            <form method="dialog" id="propertyPickerForm">
+              <h3>Link to existing property</h3>
+              <p>Search by customer name, email, phone, or address.</p>
+              <input type="search" id="propertyPickerSearch" placeholder="Start typing…" autocomplete="off">
+              <ul class="property-picker-results" id="propertyPickerResults"></ul>
+              <div class="dialog-actions">
+                <button type="button" class="pjl-btn pjl-btn-outline" id="propertyPickerCancel">Cancel</button>
+              </div>
+            </form>
+          </dialog>
 
           <section class="detail-section detail-workorder" id="detailWorkOrderSection" hidden>
             <h3>Work Order</h3>
