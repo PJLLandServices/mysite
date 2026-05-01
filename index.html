@@ -2150,27 +2150,42 @@
         body: JSON.stringify(payload)
       });
       const body = await res.json().catch(() => ({}));
-      if (!res.ok || !body.ok) throw new Error((body.errors || ['Submission failed']).join(' '));
-      return body;
+      return { status: res.status, ok: res.ok && body.ok, body };
+    }
+
+    function showSuccess() {
+      form.querySelectorAll('input, select, button').forEach(el => { if (el.type !== 'hidden') el.hidden = true; });
+      success.hidden = false;
     }
 
     try {
-      let body;
-      try {
-        body = await postOnce();
-      } catch (firstErr) {
-        console.warn('Quick-Book first attempt failed, retrying after warm-up:', firstErr);
+      let result = await postOnce();
+      // Cold-start retry: 502 / 503 / network-fail → wait + retry once
+      if (!result.ok && (result.status === 0 || result.status === 502 || result.status === 503 || result.status === 504)) {
         submit.textContent = 'Sending… (one moment)';
         await new Promise(r => setTimeout(r, 3500));
-        body = await postOnce();
+        result = await postOnce();
       }
-      form.querySelectorAll('input, select, button').forEach(el => { if (el.type !== 'hidden') el.hidden = true; });
-      success.hidden = false;
+
+      if (result.ok) {
+        showSuccess();
+      } else if (result.status === 409) {
+        // Duplicate — the CRM already has this lead. Treat as success.
+        showSuccess();
+      } else {
+        // Real error — surface the server's message if we have one
+        const msg = (result.body && result.body.errors && result.body.errors.join(' ')) || 'Submission failed';
+        error.innerHTML = msg + ' Please call <a href="tel:+19059600181">(905) 960-0181</a> or email <a href="mailto:info@pjllandservices.com">info@pjllandservices.com</a>.';
+        error.hidden = false;
+        submit.disabled = false;
+        submit.textContent = originalText;
+        console.error('Quick-Book form error:', result.status, result.body);
+      }
     } catch (err) {
       error.hidden = false;
       submit.disabled = false;
       submit.textContent = originalText;
-      console.error('Quick-Book form error:', err);
+      console.error('Quick-Book form network error:', err);
     }
   });
 })();
