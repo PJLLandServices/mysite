@@ -371,6 +371,12 @@
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
   </url>
+  <url>
+    <loc>https://www.pjllandservices.com/sprinkler-service-innisfil.html</loc>
+    <lastmod>2026-04-30</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.85</priority>
+  </url>
 
   <!-- Human-readable sitemap (low priority — supplemental to this XML feed) -->
   <url>
