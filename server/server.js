@@ -307,8 +307,8 @@ function needsAuth(method, pathname) {
   // Phase 4 will add a customer-portal "approve quote" subset that's
   // public via a token, but that doesn't exist yet.
   if (pathname.startsWith("/api/work-orders")) return true;
-  // Per-lead property link/dismiss actions are admin-only.
-  if (/^\/api\/leads\/[^/]+\/(link-property|dismiss-property-suggestion)$/.test(pathname)) return true;
+  // Per-lead property link/dismiss/attach actions are admin-only.
+  if (/^\/api\/leads\/[^/]+\/(link-property|dismiss-property-suggestion|attach-property)$/.test(pathname)) return true;
   // Bulk property import is admin-only.
   if (pathname === "/api/admin/import-properties") return true;
   // Availability lookups + the public booking endpoint stay public.
@@ -1812,6 +1812,77 @@ async function handleApi(req, res, pathname) {
       return sendJson(res, 200, { ok: true, lead: decorateLeadForAdmin(lead, req) });
     } catch (error) {
       return sendJson(res, 400, { ok: false, errors: [error.message || "Couldn't dismiss suggestion."] });
+    }
+  }
+
+  // Re-run the property auto-link for an existing lead. Used when a lead
+  // came in BEFORE the auto-link feature shipped, OR when the original
+  // attempt failed (no email at intake, etc.) and the customer's data
+  // has since been filled in. Same machinery as the booking-time auto-
+  // link — finds an existing property by (email + address) match, falls
+  // back to creating a new property under the customer.
+  const attachPropertyMatch = pathname.match(/^\/api\/leads\/([^/]+)\/attach-property$/);
+  if (attachPropertyMatch && req.method === "POST") {
+    try {
+      const leadId = decodeURIComponent(attachPropertyMatch[1]);
+      const allLeads = await readLeads();
+      const idx = allLeads.findIndex((l) => l.id === leadId);
+      if (idx === -1) return sendJson(res, 404, { ok: false, errors: ["Lead not found."] });
+      const lead = allLeads[idx];
+
+      const address = lead.contact?.address;
+      let coords = null;
+      if (address) {
+        const geo = await geocode(address);
+        if (geo.ok && geo.coords) coords = geo.coords;
+      }
+
+      const linkResult = await properties.attachLead({
+        leadId: lead.id,
+        email: lead.contact?.email,
+        name: lead.contact?.name,
+        phone: lead.contact?.phone,
+        address,
+        coords
+      });
+
+      if (!linkResult.property) {
+        return sendJson(res, 422, {
+          ok: false,
+          errors: [linkResult.status === "no-email"
+            ? "This lead has no email — add an email to auto-link, or pick an existing property manually."
+            : "Couldn't create or match a property for this lead."]
+        });
+      }
+
+      lead.propertyId = linkResult.property.id;
+      lead.propertyLinkStatus = linkResult.status;
+      if (linkResult.status === "suggested") {
+        lead.propertyLinkSuggestions = linkResult.suggestions;
+      } else {
+        delete lead.propertyLinkSuggestions;
+      }
+      lead.crm = lead.crm || {};
+      lead.crm.activity = Array.isArray(lead.crm.activity) ? lead.crm.activity : [];
+      lead.crm.activity.unshift({
+        at: new Date().toISOString(),
+        type: "update",
+        text: linkResult.status === "linked"
+          ? `Linked to existing property: ${linkResult.property.address || linkResult.property.id}`
+          : `Created new property: ${linkResult.property.address || linkResult.property.id}`
+      });
+      lead.crm.lastUpdated = new Date().toISOString();
+      allLeads[idx] = lead;
+      await writeLeads(allLeads);
+
+      return sendJson(res, 200, {
+        ok: true,
+        lead: decorateLeadForAdmin(lead, req),
+        property: linkResult.property,
+        status: linkResult.status
+      });
+    } catch (error) {
+      return sendJson(res, 400, { ok: false, errors: [error.message || "Couldn't attach property."] });
     }
   }
 

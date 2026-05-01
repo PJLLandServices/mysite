@@ -1558,6 +1558,47 @@ body.crm-drawer-locked { overflow: hidden; }
   margin-bottom: 4px;
 }
 
+/* Empty state shown when a lead has no property linked yet — surfaces
+   the "Create property from this lead" / "Link existing" CTAs that
+   unlock the Spring/Fall WO templates. */
+.detail-property-empty[hidden],
+.detail-property-filled[hidden] { display: none; }
+.detail-property-empty-msg {
+  margin: 0 0 10px;
+  font-size: 13px;
+  color: rgba(15, 31, 20, 0.70);
+  line-height: 1.5;
+}
+.detail-property-empty-help {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: rgba(177, 58, 58, 0.85);
+  font-style: italic;
+}
+/* Make the primary CTA in this scope a tighter green button (the
+   page-wide .pjl-btn-primary is sized for hero CTAs). */
+.detail-property-empty .pjl-btn-primary {
+  background: var(--pjl-green);
+  color: #fff;
+  box-shadow: none;
+  min-height: 36px;
+  padding: 6px 14px;
+  font-size: 13px;
+}
+.detail-property-empty .pjl-btn-primary:hover {
+  background: #143b22;
+  transform: translateY(-1px);
+}
+.detail-property-empty .pjl-btn-outline {
+  background: #fff;
+  border: 1px solid rgba(27, 77, 46, 0.30);
+  color: var(--pjl-green);
+  box-shadow: none;
+  min-height: 36px;
+  padding: 6px 12px;
+  font-size: 13px;
+}
+
 /* Suggested-link banner */
 .detail-property-suggest {
   margin-top: 14px;

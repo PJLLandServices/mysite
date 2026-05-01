@@ -49,6 +49,11 @@ const detailPropertyLinkBtn = document.getElementById("detailPropertyLinkBtn");
 const detailPropertySuggest = document.getElementById("detailPropertySuggest");
 const detailPropertySuggestList = document.getElementById("detailPropertySuggestList");
 const detailPropertyDismissBtn = document.getElementById("detailPropertyDismissBtn");
+const detailPropertyEmpty = document.getElementById("detailPropertyEmpty");
+const detailPropertyFilled = document.getElementById("detailPropertyFilled");
+const detailPropertyAttachBtn = document.getElementById("detailPropertyAttachBtn");
+const detailPropertyLinkBtnEmpty = document.getElementById("detailPropertyLinkBtnEmpty");
+const detailPropertyEmptyHelp = document.getElementById("detailPropertyEmptyHelp");
 const propertyPickerDialog = document.getElementById("propertyPickerDialog");
 const propertyPickerSearch = document.getElementById("propertyPickerSearch");
 const propertyPickerResults = document.getElementById("propertyPickerResults");
@@ -392,11 +397,34 @@ function renderDetail() {
 // every render. Cache by leadId so re-opening the same lead is instant.
 const propertyCache = new Map();
 async function renderPropertyDetail(lead) {
-  if (!lead || !lead.propertyId) {
+  if (!lead) {
     detailPropertySection.hidden = true;
     return;
   }
   detailPropertySection.hidden = false;
+
+  // No property linked yet — show the empty state with create/link buttons.
+  // The Field Work Orders section uses propertyId to enable Spring/Fall
+  // templates, so this is the doorway to unlock those buttons.
+  if (!lead.propertyId) {
+    detailPropertyEmpty.hidden = false;
+    detailPropertyFilled.hidden = true;
+    detailPropertySuggest.hidden = true;
+    // If no email, the auto-create path won't work — surface that up front
+    // so Patrick doesn't click and bounce off a 422.
+    const hasEmail = Boolean(lead.contact?.email);
+    detailPropertyAttachBtn.disabled = !hasEmail;
+    if (!hasEmail) {
+      detailPropertyEmptyHelp.textContent = "Add an email to this lead to enable auto-create, or pick an existing property manually.";
+      detailPropertyEmptyHelp.hidden = false;
+    } else {
+      detailPropertyEmptyHelp.hidden = true;
+    }
+    return;
+  }
+
+  detailPropertyEmpty.hidden = true;
+  detailPropertyFilled.hidden = false;
   detailPropertyMeta.textContent = "Loading property…";
   detailPropertyOpen.href = `/admin/property/${encodeURIComponent(lead.propertyId)}`;
 
@@ -489,7 +517,7 @@ detailPropertyDismissBtn?.addEventListener("click", async () => {
 
 // Manual-link picker — opens a search dialog. Patrick types, the dialog
 // shows results from /api/properties/search, click one to link.
-detailPropertyLinkBtn?.addEventListener("click", () => {
+function openPropertyPicker() {
   if (!propertyPickerDialog) return;
   propertyPickerSearch.value = "";
   propertyPickerResults.innerHTML = "";
@@ -497,6 +525,33 @@ detailPropertyLinkBtn?.addEventListener("click", () => {
   else propertyPickerDialog.setAttribute("open", "");
   loadPropertyPickerResults("");
   propertyPickerSearch.focus();
+}
+detailPropertyLinkBtn?.addEventListener("click", openPropertyPicker);
+detailPropertyLinkBtnEmpty?.addEventListener("click", openPropertyPicker);
+
+// "Create property from this lead" — runs the same auto-link logic that
+// fires on lead intake (find existing match by email+address, fall back
+// to creating a new property under the customer). Used to backfill leads
+// that came in before the auto-link feature shipped.
+detailPropertyAttachBtn?.addEventListener("click", async () => {
+  if (!activeLeadId) return;
+  detailPropertyAttachBtn.disabled = true;
+  detailPropertyAttachBtn.textContent = "Creating…";
+  try {
+    const response = await fetch(`/api/leads/${encodeURIComponent(activeLeadId)}/attach-property`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" }
+    });
+    const data = await response.json();
+    if (!response.ok || !data.ok) throw new Error((data.errors || ["Couldn't attach."]).join(" "));
+    leads = leads.map((l) => l.id === data.lead.id ? data.lead : l);
+    if (data.property) propertyCache.set(data.property.id, data.property);
+    render();
+  } catch (err) {
+    saveMessage.textContent = err.message;
+    detailPropertyAttachBtn.disabled = false;
+    detailPropertyAttachBtn.textContent = "+ Create property from this lead";
+  }
 });
 propertyPickerCancel?.addEventListener("click", () => propertyPickerDialog.close());
 

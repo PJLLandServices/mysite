@@ -257,11 +257,29 @@
 
           <section class="detail-section detail-property" id="detailPropertySection" hidden>
             <h3>Linked Property</h3>
-            <p class="detail-property-meta" id="detailPropertyMeta"></p>
-            <div class="detail-property-actions">
-              <a class="pjl-btn pjl-btn-outline" id="detailPropertyOpen" href="#" target="_blank" rel="noopener">Open property profile →</a>
-              <button type="button" class="pjl-btn pjl-btn-outline" id="detailPropertyLinkBtn">Link to a different property…</button>
+
+            <!-- Empty state — shown when this lead has no property linked yet.
+                 Two paths out: auto-create from the lead's contact info, or
+                 pick an existing property manually. -->
+            <div class="detail-property-empty" id="detailPropertyEmpty" hidden>
+              <p class="detail-property-empty-msg">No property linked to this lead yet. The Spring &amp; Fall work-order templates need one to scaffold zones from.</p>
+              <div class="detail-property-actions">
+                <button type="button" class="pjl-btn pjl-btn-primary" id="detailPropertyAttachBtn">+ Create property from this lead</button>
+                <button type="button" class="pjl-btn pjl-btn-outline" id="detailPropertyLinkBtnEmpty">Link to existing property…</button>
+              </div>
+              <p class="detail-property-empty-help" id="detailPropertyEmptyHelp" hidden></p>
             </div>
+
+            <!-- Filled state — property already linked. Property meta + the
+                 picker shortcut for re-linking. -->
+            <div class="detail-property-filled" id="detailPropertyFilled" hidden>
+              <p class="detail-property-meta" id="detailPropertyMeta"></p>
+              <div class="detail-property-actions">
+                <a class="pjl-btn pjl-btn-outline" id="detailPropertyOpen" href="#" target="_blank" rel="noopener">Open property profile →</a>
+                <button type="button" class="pjl-btn pjl-btn-outline" id="detailPropertyLinkBtn">Link to a different property…</button>
+              </div>
+            </div>
+
             <!-- Suggested-link banner: appears when attachLead matched the
                  customer email but a different address (probably a duplicate
                  property under the same customer). Patrick confirms or dismisses. -->
