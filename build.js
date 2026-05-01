@@ -65,6 +65,11 @@ function applyTokens(template, values) {
 
 function processFile(filepath, partials, dryRun) {
   let src = fs.readFileSync(filepath, 'utf8');
+  // Preserve the file's existing line-ending convention so we don't fight
+  // git core.autocrlf on Windows (would otherwise show every file as
+  // "out of sync" on every check, with no real content change).
+  const useCRLF = src.indexOf('\r\n') !== -1;
+  const NL = useCRLF ? '\r\n' : '\n';
   let changed = false;
 
   for (const [name, content] of partials) {
@@ -97,7 +102,11 @@ function processFile(filepath, partials, dryRun) {
       } else {
         startTag = `${startBase} -->`;
       }
-      return `${startTag}\n${rendered}\n${endTag}`;
+      // Convert rendered partial line endings to match the host file
+      const renderedNormalised = useCRLF
+        ? rendered.replace(/\r?\n/g, '\r\n')
+        : rendered.replace(/\r\n/g, '\n');
+      return `${startTag}${NL}${renderedNormalised}${NL}${endTag}`;
     });
     changed = true;
   }
