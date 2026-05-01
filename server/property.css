@@ -679,3 +679,90 @@
   .property-valvebox-row .vb-notes { grid-column: 1 / -1; }
   .property-lead-list a { grid-template-columns: 1fr; gap: 4px; }
 }
+
+/* === Mobile-optimized form inputs + sticky save bar.
+   Inputs ≥16px so iOS doesn't zoom on focus. Save action sticks to the
+   bottom of the viewport so Patrick doesn't have to scroll a long form
+   to find it. Honors home-indicator inset on iPhone Pro Max. */
+@media (max-width: 760px) {
+  .property-form input,
+  .property-form textarea,
+  .property-form select,
+  .property-zone-row input,
+  .property-valvebox-row input,
+  #propertySearch {
+    font-size: 16px;
+    min-height: 44px;
+  }
+  .property-zone-row .zone-number,
+  .property-valvebox-row .vb-count {
+    font-size: 16px;
+  }
+
+  /* Sticky save bar — pulls out of the form's flow and pins to viewport
+     bottom. The form itself gets bottom-padding so the last fields aren't
+     hidden behind the bar. */
+  .property-shell { padding-bottom: 0; }
+  .property-form { padding-bottom: 100px; }
+  .property-actions {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 30;
+    padding: 12px 16px calc(12px + env(safe-area-inset-bottom));
+    background: rgba(247, 250, 242, 0.97);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border-top: 1px solid rgba(15, 31, 20, 0.10);
+    box-shadow: 0 -4px 16px rgba(15, 31, 20, 0.08);
+    flex-wrap: wrap;
+  }
+  .property-actions #saveBtn {
+    flex: 1 1 auto;
+    min-height: 48px;
+  }
+  .property-actions #deleteBtn {
+    margin-left: auto !important;
+    min-height: 44px;
+  }
+
+  /* Hero stacks vertically */
+  .property-hero {
+    flex-direction: column;
+    padding: 18px 16px;
+    gap: 12px;
+  }
+  .property-hero h1 { font-size: clamp(22px, 5.5vw, 30px); }
+  .property-stat {
+    align-self: stretch;
+    text-align: left;
+    padding: 10px 14px;
+    background: rgba(255, 255, 255, 0.5);
+    border-radius: 10px;
+  }
+}
+
+/* === iPhone Pro Max tier === */
+@media (max-width: 480px) {
+  .properties-toolbar { gap: 8px; }
+  .properties-toolbar input {
+    flex: 1 1 100%;
+    order: -1;
+  }
+  .properties-toolbar #selectToggle,
+  .properties-toolbar a.pjl-btn-primary {
+    flex: 1 1 auto;
+    min-height: 44px;
+  }
+
+  /* Property cards: tighter padding on the index */
+  .property-card { padding: 14px 16px; }
+
+  /* Confirm modal full-width on tiny phones */
+  .confirm-modal { padding: 10px; align-items: flex-end; }
+  .confirm-modal-card {
+    border-radius: 14px 14px 0 0;
+    padding: 22px 18px 18px;
+  }
+}
