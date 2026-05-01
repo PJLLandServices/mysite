@@ -23,7 +23,12 @@
     </div>
     <div class="pjl-nav-main">
       <a href="/" class="pjl-nav-logo"><img src="/crm/pjl-logo.svg" alt="PJL Land Services"></a>
-      <div class="pjl-nav-links">
+      <button class="pjl-nav-toggle" type="button" id="navToggle" aria-label="Menu" aria-expanded="false" aria-controls="navMenu">
+        <span class="pjl-nav-toggle-bar"></span>
+        <span class="pjl-nav-toggle-bar"></span>
+        <span class="pjl-nav-toggle-bar"></span>
+      </button>
+      <div class="pjl-nav-links" id="navMenu">
         <a href="/admin">CRM</a>
         <a href="/admin/schedule" class="is-active">Schedule</a>
         <a href="/admin/handoff">Handoff</a>

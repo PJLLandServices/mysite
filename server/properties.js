@@ -5,6 +5,24 @@
 // Patrick can multi-select and bulk-delete (or, with the typed-confirmation
 // "Delete ALL", nuke the whole portfolio after a bad import).
 
+// Mobile nav hamburger toggle (shared pattern across all admin pages).
+(function setupNavToggle() {
+  const toggle = document.getElementById("navToggle");
+  const nav = document.querySelector(".pjl-admin-nav");
+  if (!toggle || !nav) return;
+  toggle.addEventListener("click", () => {
+    const open = !nav.classList.contains("is-open");
+    nav.classList.toggle("is-open", open);
+    toggle.setAttribute("aria-expanded", String(open));
+  });
+  nav.querySelectorAll(".pjl-nav-links a").forEach((a) => {
+    a.addEventListener("click", () => {
+      nav.classList.remove("is-open");
+      toggle.setAttribute("aria-expanded", "false");
+    });
+  });
+})();
+
 const grid = document.getElementById("propertiesGrid");
 const empty = document.getElementById("propertiesEmpty");
 const search = document.getElementById("propertySearch");

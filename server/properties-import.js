@@ -1,3 +1,21 @@
+// Mobile nav hamburger toggle (shared pattern across all admin pages).
+(function setupNavToggle() {
+  const toggle = document.getElementById("navToggle");
+  const nav = document.querySelector(".pjl-admin-nav");
+  if (!toggle || !nav) return;
+  toggle.addEventListener("click", () => {
+    const open = !nav.classList.contains("is-open");
+    nav.classList.toggle("is-open", open);
+    toggle.setAttribute("aria-expanded", String(open));
+  });
+  nav.querySelectorAll(".pjl-nav-links a").forEach((a) => {
+    a.addEventListener("click", () => {
+      nav.classList.remove("is-open");
+      toggle.setAttribute("aria-expanded", "false");
+    });
+  });
+})();
+
 // Customer-list import flow.
 //
 // 1. User picks a file → SheetJS parses in-browser

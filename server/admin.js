@@ -1,3 +1,25 @@
+// Mobile nav hamburger toggle — slides the link panel down on tap.
+// CSS handles all visual states (the .is-open class drives both the
+// hamburger icon morph and the panel transform).
+(function setupNavToggle() {
+  const toggle = document.getElementById("navToggle");
+  const nav = document.querySelector(".pjl-admin-nav");
+  if (!toggle || !nav) return;
+  toggle.addEventListener("click", () => {
+    const open = !nav.classList.contains("is-open");
+    nav.classList.toggle("is-open", open);
+    toggle.setAttribute("aria-expanded", String(open));
+  });
+  // Close the menu when any link inside it is tapped — otherwise it stays
+  // open over the next page on browsers that bf-cache the previous DOM.
+  nav.querySelectorAll(".pjl-nav-links a").forEach((a) => {
+    a.addEventListener("click", () => {
+      nav.classList.remove("is-open");
+      toggle.setAttribute("aria-expanded", "false");
+    });
+  });
+})();
+
 const leadList = document.getElementById("leadList");
 const kanbanBoard = document.getElementById("kanbanBoard");
 const crmMain = document.getElementById("crmMain");

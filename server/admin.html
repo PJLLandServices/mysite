@@ -22,14 +22,19 @@
     </div>
     <div class="pjl-nav-main">
       <a href="/" class="pjl-nav-logo"><img src="/crm/pjl-logo.svg" alt="PJL Land Services"></a>
-      <div class="pjl-nav-links">
+      <button class="pjl-nav-toggle" type="button" id="navToggle" aria-label="Menu" aria-expanded="false" aria-controls="navMenu">
+        <span class="pjl-nav-toggle-bar"></span>
+        <span class="pjl-nav-toggle-bar"></span>
+        <span class="pjl-nav-toggle-bar"></span>
+      </button>
+      <div class="pjl-nav-links" id="navMenu">
         <a href="/admin" class="is-active">CRM</a>
         <a href="/admin/schedule">Schedule</a>
         <a href="/admin/handoff">Handoff</a>
         <a href="/admin/properties">Properties</a>
         <a href="/admin/chats">AI Chats</a>
-        <a href="/api/contacts.vcf">Contacts VCF</a>
-        <a href="/api/quotes.csv" class="pjl-nav-cta">Export CSV <span aria-hidden="true">&rarr;</span></a>
+        <a href="/api/contacts.vcf" class="pjl-nav-utility">Contacts VCF</a>
+        <a href="/api/quotes.csv" class="pjl-nav-cta pjl-nav-utility">Export CSV <span aria-hidden="true">&rarr;</span></a>
         <button class="pjl-nav-logout" type="button" id="logoutButton">Log out</button>
       </div>
     </div>

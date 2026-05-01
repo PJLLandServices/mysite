@@ -2,6 +2,24 @@
 // renders the form, lets Patrick edit zones / valve boxes / system info,
 // saves via PATCH /api/properties/:id.
 
+// Mobile nav hamburger toggle (shared pattern across all admin pages).
+(function setupNavToggle() {
+  const toggle = document.getElementById("navToggle");
+  const nav = document.querySelector(".pjl-admin-nav");
+  if (!toggle || !nav) return;
+  toggle.addEventListener("click", () => {
+    const open = !nav.classList.contains("is-open");
+    nav.classList.toggle("is-open", open);
+    toggle.setAttribute("aria-expanded", String(open));
+  });
+  nav.querySelectorAll(".pjl-nav-links a").forEach((a) => {
+    a.addEventListener("click", () => {
+      nav.classList.remove("is-open");
+      toggle.setAttribute("aria-expanded", "false");
+    });
+  });
+})();
+
 const propertyHero = document.getElementById("propertyHero");
 const propertyAddress = document.getElementById("propertyAddress");
 const propertyCustomer = document.getElementById("propertyCustomer");

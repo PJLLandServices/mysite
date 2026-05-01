@@ -1,3 +1,21 @@
+// Mobile nav hamburger toggle (shared pattern across all admin pages).
+(function setupNavToggle() {
+  const toggle = document.getElementById("navToggle");
+  const nav = document.querySelector(".pjl-admin-nav");
+  if (!toggle || !nav) return;
+  toggle.addEventListener("click", () => {
+    const open = !nav.classList.contains("is-open");
+    nav.classList.toggle("is-open", open);
+    toggle.setAttribute("aria-expanded", String(open));
+  });
+  nav.querySelectorAll(".pjl-nav-links a").forEach((a) => {
+    a.addEventListener("click", () => {
+      nav.classList.remove("is-open");
+      toggle.setAttribute("aria-expanded", "false");
+    });
+  });
+})();
+
 // Field Work Order editor. Loads the WO by ID from the URL, renders
 // the zone grid (one row per zone snapshotted from the property at
 // create time), and saves via PATCH /api/work-orders/:id.
