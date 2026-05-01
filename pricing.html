@@ -33,7 +33,13 @@
 <title>Pricing Guide — Sprinkler Repair, Service &amp; Install Rates | PJL Land Services Newmarket &amp; GTA</title>
 <link rel="stylesheet" href="style.css">
 
-<!-- Service schema with full OfferCatalog -->
+<!-- Service schema with full OfferCatalog.
+     ⚠ PRICING NOTE: prices in this JSON-LD block are crawler-only static
+     fallback. The runtime source of truth for all PJL prices is
+     /pricing.json (root). When pricing.json changes, this block must be
+     regenerated to match. A future build script (scripts/sync-pricing-schema.mjs)
+     will automate this; for now, edit by hand and keep in sync.
+-->
 <script type="application/ld+json">
 {
   "@context": "https://schema.org",
@@ -501,9 +507,9 @@
       <a href="tel:+19059600181" class="btn-ghost">📞 (905) 960-0181</a>
     </div>
     <div class="price-hero-meta">
-      <span>💲 <strong>$95</strong> service call (incl. 1st hour)</span>
-      <span>🔧 <strong>$68</strong> per head replacement</span>
-      <span>🌱 <strong>$90+</strong> spring opening</span>
+      <span>💲 <strong data-price="service_call">$95</strong> service call (incl. 1st hour)</span>
+      <span>🔧 <strong data-price="head_replacement">$68</strong> per head replacement</span>
+      <span>🌱 <strong data-price="spring_open_4z" data-price-suffix="+">$90+</strong> spring opening</span>
     </div>
   </div>
 </section>
@@ -512,16 +518,16 @@
 <section class="section">
   <div class="container" style="max-width:1080px;">
     <h2>Start here: how the service call works.</h2>
-    <p style="max-width:680px;">Every repair visit starts with a service call. It covers our travel to your property, our diagnostic time, and the first hour of labour on-site. Most repairs finish inside that hour — head replacements, simple valve diagnostics, controller programming. If the work runs longer, additional labour is billed at $95/hr and quoted to you on the spot before we continue.</p>
+    <p style="max-width:680px;">Every repair visit starts with a service call. It covers our travel to your property, our diagnostic time, and the first hour of labour on-site. Most repairs finish inside that hour — head replacements, simple valve diagnostics, controller programming. If the work runs longer, additional labour is billed at <span data-price="hourly_labour">$95</span>/hr and quoted to you on the spot before we continue.</p>
 
     <div class="service-call-box">
       <div>
-        <div class="service-call-box__price">$95</div>
+        <div class="service-call-box__price" data-price="service_call">$95</div>
         <div class="service-call-box__price-sub">Service Call · Incl. 1st Hour</div>
       </div>
       <div class="service-call-box__body">
         <h3>One number. Always charged on a repair visit. Plus parts.</h3>
-        <p>Mobilization + first hour of labour on-site. Beyond the first hour: $95/hr.</p>
+        <p>Mobilization + first hour of labour on-site. Beyond the first hour: <span data-price="hourly_labour">$95</span>/hr.</p>
         <p>Service call is <strong>NOT</strong> charged on Spring Openings or Fall Winterizations — those are bundled services with up to 1 hour of labour built in.</p>
       </div>
     </div>
@@ -530,7 +536,7 @@
       <div class="ai-callout__shield">🤖</div>
       <div>
         <h4>The AI Intake bonus — predictable repair pricing</h4>
-        <p>If you describe your issue through the <a href="diagnose.html" data-pjl-chat><strong>AI intake</strong></a>, the labour for the diagnosed repair is included no matter how long it takes. Stuck valve quoted at $379.90 stays $379.90 even if it runs 90 minutes. Anything else discovered on-site is billed at standard parts + $95/hr labour, quoted before any extra work begins.</p>
+        <p>If you describe your issue through the <a href="diagnose.html" data-pjl-chat><strong>AI intake</strong></a>, the labour for the diagnosed repair is included no matter how long it takes. Stuck valve quoted at <span data-pjl-quote-formula="manifold_3valve+2*valve_hunter_pgv+service_call">$379.90</span> stays the same even if it runs 90 minutes. Anything else discovered on-site is billed at standard parts + <span data-price="hourly_labour">$95</span>/hr labour, quoted before any extra work begins.</p>
         <p style="margin-top:10px;"><a href="diagnose.html" data-pjl-chat class="btn btn-green" style="display:inline-block;">💬 Chat with Patrick now</a></p>
       </div>
     </div>
@@ -541,7 +547,7 @@
 <section class="section cream">
   <div class="container" style="max-width:1080px;">
     <h2>Common repairs — locked pricing.</h2>
-    <p style="max-width:680px;">These are the repairs we run dozens of times every week across Newmarket and the GTA. All prices are <em>plus the $95 service call</em> unless otherwise noted.</p>
+    <p style="max-width:680px;">These are the repairs we run dozens of times every week across Newmarket and the GTA. All prices are <em>plus the <span data-price="service_call">$95</span> service call</em> unless otherwise noted.</p>
 
     <table class="price-table">
       <thead>
@@ -550,35 +556,35 @@
       <tbody>
         <tr>
           <td class="cell-item">Sprinkler Head Replacement<span class="cell-detail">Any size, any type — pop-up or rotor, grass or bed. Default: 4" Pro Spray for grass, 6" for mulch.</span></td>
-          <td class="cell-price">$68 flat</td>
+          <td class="cell-price"><span data-price="head_replacement">$68</span> flat</td>
         </tr>
         <tr>
-          <td class="cell-item">3-Valve Manifold Rebuild<span class="cell-detail">Covers 1, 2, or 3 valves in the box. Plus $74.95 per valve replaced.</span></td>
-          <td class="cell-price">$135</td>
+          <td class="cell-item">3-Valve Manifold Rebuild<span class="cell-detail">Covers 1, 2, or 3 valves in the box. Plus <span data-price="valve_hunter_pgv">$74.95</span> per valve replaced.</span></td>
+          <td class="cell-price" data-price="manifold_3valve">$135</td>
         </tr>
         <tr>
-          <td class="cell-item">6-Valve Manifold Rebuild<span class="cell-detail">Covers 4, 5, or 6 valves in the box. Plus $74.95 per valve replaced.</span></td>
-          <td class="cell-price">$285</td>
+          <td class="cell-item">6-Valve Manifold Rebuild<span class="cell-detail">Covers 4, 5, or 6 valves in the box. Plus <span data-price="valve_hunter_pgv">$74.95</span> per valve replaced.</span></td>
+          <td class="cell-price" data-price="manifold_6valve">$285</td>
         </tr>
         <tr>
           <td class="cell-item">Hunter PGV-100G Valve<span class="cell-detail">Per valve actually replaced inside a manifold rebuild.</span></td>
-          <td class="cell-price">$74.95</td>
+          <td class="cell-price" data-price="valve_hunter_pgv">$74.95</td>
         </tr>
         <tr>
           <td class="cell-item">Wire Diagnostics &amp; Simple Repair (in valve box)<span class="cell-detail">Diagnostic + small repair that fits inside the service-call hour.</span></td>
-          <td class="cell-price">$187</td>
+          <td class="cell-price" data-price="wire_diagnostic">$187</td>
         </tr>
         <tr>
           <td class="cell-item">Wire Run Replacement — up to 100 ft<span class="cell-detail">Underground replacement of a damaged or severed wire run.</span></td>
-          <td class="cell-price">$345</td>
+          <td class="cell-price" data-price="wire_run_100ft">$345</td>
         </tr>
         <tr>
-          <td class="cell-item">Wire Run Replacement — up to 175 ft<span class="cell-detail">Beyond 175 ft: $1.80/ft.</span></td>
-          <td class="cell-price">$435</td>
+          <td class="cell-item">Wire Run Replacement — up to 175 ft<span class="cell-detail">Beyond 175 ft: <span data-price="wire_run_per_ft">$1.80</span>/ft.</span></td>
+          <td class="cell-price" data-price="wire_run_175ft">$435</td>
         </tr>
         <tr>
           <td class="cell-item">Pipe Break Repair<span class="cell-detail">Up to 3 ft of 1" pipe, all clamps and fittings included. Beyond 3 ft: custom quote.</span></td>
-          <td class="cell-price">$120</td>
+          <td class="cell-price" data-price="pipe_break_3ft">$120</td>
         </tr>
         <tr>
           <td class="cell-item">Cap 1 Sprinkler Head<span class="cell-detail">Goodwill — takes 5 minutes on-site.</span></td>
@@ -586,7 +592,7 @@
         </tr>
         <tr>
           <td class="cell-item">Cap 2+ Sprinkler Heads<span class="cell-detail">Parts negligible; labour only.</span></td>
-          <td class="cell-price">$95/hr</td>
+          <td class="cell-price"><span data-price="hourly_labour">$95</span>/hr</td>
         </tr>
       </tbody>
     </table>
@@ -601,7 +607,7 @@
 <section class="section">
   <div class="container" style="max-width:1080px;">
     <h2>Smart controller installs — Hunter Hydrawise.</h2>
-    <p style="max-width:680px;">One controller, three tiers — by zone count. Pricing includes the Hunter HPC-400 base, the appropriate PCM expansion module(s) for your zone count, WiFi connection, full schedule programming, and a walk-through. Plus the $95 service call. Hydrawise is also standard on every new PJL install at no upcharge.</p>
+    <p style="max-width:680px;">One controller, three tiers — by zone count. Pricing includes the Hunter HPC-400 base, the appropriate PCM expansion module(s) for your zone count, WiFi connection, full schedule programming, and a walk-through. Plus the <span data-price="service_call">$95</span> service call. Hydrawise is also standard on every new PJL install at no upcharge.</p>
 
     <table class="price-table">
       <thead>
@@ -610,15 +616,15 @@
       <tbody>
         <tr>
           <td class="cell-item">1-4 zones — HPC-400 base<span class="cell-detail">Smaller residential systems — most townhouses, compact lots.</span></td>
-          <td class="cell-price">$595</td>
+          <td class="cell-price" data-price="controller_1_4">$595</td>
         </tr>
         <tr>
           <td class="cell-item">5-7 zones — HPC-400 + PCM-300<span class="cell-detail">Typical mid-size residential lot.</span></td>
-          <td class="cell-price">$750</td>
+          <td class="cell-price" data-price="controller_5_7">$750</td>
         </tr>
         <tr>
           <td class="cell-item">8-16 zones — HPC-400 + PCM-300 + PCM-900<span class="cell-detail">Larger residential and small commercial systems.</span></td>
-          <td class="cell-price">$1,195</td>
+          <td class="cell-price" data-price="controller_8_16">$1,195</td>
         </tr>
         <tr>
           <td class="cell-item">17+ zones — Custom<span class="cell-detail">PCM-1600 special order required.</span></td>
@@ -644,31 +650,31 @@
       <tbody>
         <tr>
           <td class="cell-item">Spring Opening — up to 4 zones (residential)<span class="cell-detail">Pressure-up, leak check, Hydrawise re-program, walk-through.</span></td>
-          <td class="cell-price">$90</td>
+          <td class="cell-price" data-price="spring_open_4z">$90</td>
         </tr>
         <tr>
           <td class="cell-item">Spring Opening — up to 8 zones (residential)</td>
-          <td class="cell-price">$120</td>
+          <td class="cell-price" data-price="spring_open_8z">$120</td>
         </tr>
         <tr>
           <td class="cell-item">Spring Opening — Commercial<span class="cell-detail">Multi-zone commercial systems, including basic backflow visual check.</span></td>
-          <td class="cell-price">$285</td>
+          <td class="cell-price" data-price="spring_open_commercial">$285</td>
         </tr>
         <tr>
           <td class="cell-item">Fall Winterization — up to 4 zones<span class="cell-detail">Calibrated low-pressure compressor blow-out, Hydrawise winter mode.</span></td>
-          <td class="cell-price">$90</td>
+          <td class="cell-price" data-price="fall_close_4z">$90</td>
         </tr>
         <tr>
           <td class="cell-item">Fall Winterization — up to 6 zones</td>
-          <td class="cell-price">$95</td>
+          <td class="cell-price" data-price="fall_close_6z">$95</td>
         </tr>
         <tr>
           <td class="cell-item">Fall Winterization — up to 8 zones</td>
-          <td class="cell-price">$120</td>
+          <td class="cell-price" data-price="fall_close_8z">$120</td>
         </tr>
         <tr>
           <td class="cell-item">Fall Winterization — up to 15 zones</td>
-          <td class="cell-price">$145</td>
+          <td class="cell-price" data-price="fall_close_15z">$145</td>
         </tr>
       </tbody>
     </table>
@@ -686,48 +692,48 @@
     <div class="sample-grid">
       <div class="sample-card">
         <div class="sample-card__scenario">1 broken pop-up (plow damage)</div>
-        <div class="sample-card__math">$95 + $68</div>
-        <div class="sample-card__total">$163</div>
+        <div class="sample-card__math"><span data-price="service_call">$95</span> + <span data-price="head_replacement">$68</span></div>
+        <div class="sample-card__total" data-pjl-quote-formula="service_call+head_replacement">$163</div>
       </div>
       <div class="sample-card">
         <div class="sample-card__scenario">3 broken heads (spring damage)</div>
-        <div class="sample-card__math">$95 + ($68 × 3)</div>
-        <div class="sample-card__total">$299</div>
+        <div class="sample-card__math"><span data-price="service_call">$95</span> + (<span data-price="head_replacement">$68</span> × 3)</div>
+        <div class="sample-card__total" data-pjl-quote-formula="service_call+3*head_replacement">$299</div>
       </div>
       <div class="sample-card">
         <div class="sample-card__scenario">Stuck rotor (replacement)</div>
-        <div class="sample-card__math">$95 + $68</div>
-        <div class="sample-card__total">$163</div>
+        <div class="sample-card__math"><span data-price="service_call">$95</span> + <span data-price="head_replacement">$68</span></div>
+        <div class="sample-card__total" data-pjl-quote-formula="service_call+head_replacement">$163</div>
       </div>
       <div class="sample-card">
         <div class="sample-card__scenario">2 valves in 3-zone box</div>
-        <div class="sample-card__math">$95 + $135 + ($74.95 × 2)</div>
-        <div class="sample-card__total">$379.90</div>
+        <div class="sample-card__math"><span data-price="service_call">$95</span> + <span data-price="manifold_3valve">$135</span> + (<span data-price="valve_hunter_pgv">$74.95</span> × 2)</div>
+        <div class="sample-card__total" data-pjl-quote-formula="service_call+manifold_3valve+2*valve_hunter_pgv">$379.90</div>
       </div>
       <div class="sample-card">
         <div class="sample-card__scenario">Full 6-valve manifold</div>
-        <div class="sample-card__math">$95 + $285 + ($74.95 × 6)</div>
-        <div class="sample-card__total">$829.70</div>
+        <div class="sample-card__math"><span data-price="service_call">$95</span> + <span data-price="manifold_6valve">$285</span> + (<span data-price="valve_hunter_pgv">$74.95</span> × 6)</div>
+        <div class="sample-card__total" data-pjl-quote-formula="service_call+manifold_6valve+6*valve_hunter_pgv">$829.70</div>
       </div>
       <div class="sample-card">
         <div class="sample-card__scenario">Dead controller, 6-zone system</div>
-        <div class="sample-card__math">$95 + $750</div>
-        <div class="sample-card__total">$845</div>
+        <div class="sample-card__math"><span data-price="service_call">$95</span> + <span data-price="controller_5_7">$750</span></div>
+        <div class="sample-card__total" data-pjl-quote-formula="service_call+controller_5_7">$845</div>
       </div>
       <div class="sample-card">
         <div class="sample-card__scenario">Dead zone — wiring repair in valve box</div>
-        <div class="sample-card__math">$95 + $187</div>
-        <div class="sample-card__total">$282</div>
+        <div class="sample-card__math"><span data-price="service_call">$95</span> + <span data-price="wire_diagnostic">$187</span></div>
+        <div class="sample-card__total" data-pjl-quote-formula="service_call+wire_diagnostic">$282</div>
       </div>
       <div class="sample-card">
         <div class="sample-card__scenario">Shovel through pipe (1 zone affected)</div>
-        <div class="sample-card__math">$95 + $120</div>
-        <div class="sample-card__total">$215</div>
+        <div class="sample-card__math"><span data-price="service_call">$95</span> + <span data-price="pipe_break_3ft">$120</span></div>
+        <div class="sample-card__total" data-pjl-quote-formula="service_call+pipe_break_3ft">$215</div>
       </div>
       <div class="sample-card">
         <div class="sample-card__scenario">8-zone fall winterization</div>
         <div class="sample-card__math">No service call</div>
-        <div class="sample-card__total">$120</div>
+        <div class="sample-card__total" data-price="fall_close_8z">$120</div>
       </div>
     </div>
   </div>
@@ -740,7 +746,7 @@
     <p>Some work is too variable to flat-rate fairly. For these, we'll either quote on-site after a quick visit or based on photos and a description through the contact form.</p>
 
     <ul>
-      <li><strong>New zone install</strong> — starting at $575. Variables: head count, trenching distance, soil conditions, existing system load.</li>
+      <li><strong>New zone install</strong> — starting at $575 (custom quote). Variables: head count, trenching distance, soil conditions, existing system load.</li>
       <li><strong>Mainline / frozen supply line repair</strong> — material varies (copper or poly), excavation depth and access vary, hard to flat-rate.</li>
       <li><strong>Smart upgrades / accessories</strong> — rain sensors, Hydrawise flow meters, soil sensors, decoder modules. Quoted based on which products and how they integrate with your controller.</li>
       <li><strong>Drip irrigation zones</strong> — typical bed-conversion or vegetable-garden drip retrofit is quoted on-site after a free design walk-through. <a href="drip-irrigation.html" style="color:var(--green); font-weight:700; text-decoration:underline;">Drip irrigation details →</a></li>
@@ -781,9 +787,9 @@
     <h2>Related services</h2>
     <div class="related-services">
       <a href="sprinkler-repair.html" class="related-service"><h4>Sprinkler Repair</h4><p>Same-day diagnosis, AI intake, 1-year guarantee on repairs.</p></a>
-      <a href="sprinkler-spring-opening.html" class="related-service"><h4>Spring Opening</h4><p>From $90 — pressure-up, leak check, Hydrawise re-program.</p></a>
-      <a href="sprinkler-fall-winterization.html" class="related-service"><h4>Fall Winterization</h4><p>From $90 — calibrated low-pressure compressor blow-out.</p></a>
-      <a href="sprinkler-hydrawise.html" class="related-service"><h4>Hydrawise Smart Controller</h4><p>$595 / $750 / $1,195 by zone count — install or retrofit.</p></a>
+      <a href="sprinkler-spring-opening.html" class="related-service"><h4>Spring Opening</h4><p>From <span data-price="spring_open_4z">$90</span> — pressure-up, leak check, Hydrawise re-program.</p></a>
+      <a href="sprinkler-fall-winterization.html" class="related-service"><h4>Fall Winterization</h4><p>From <span data-price="fall_close_4z">$90</span> — calibrated low-pressure compressor blow-out.</p></a>
+      <a href="sprinkler-hydrawise.html" class="related-service"><h4>Hydrawise Smart Controller</h4><p><span data-price="controller_1_4">$595</span> / <span data-price="controller_5_7">$750</span> / <span data-price="controller_8_16">$1,195</span> by zone count — install or retrofit.</p></a>
       <a href="warranty.html" class="related-service"><h4>Our Warranty</h4><p>3-year parts &amp; labour on installs · 1-year on repairs.</p></a>
       <a href="process.html" class="related-service"><h4>How It Works</h4><p>From first call to install-day walk-through, end to end.</p></a>
       <a href="contact.html" class="related-service"><h4>Contact us</h4><p>Phone, email, contact form — book your service call.</p></a>
@@ -797,6 +803,7 @@
 <!-- @@PJL:footer-END -->
 
 <script src="nav.js?v=2"></script>
+<script src="js/pricing-injector.js" defer></script>
   <script src="js/chat-widget.js" defer></script>
 </body>
 </html>

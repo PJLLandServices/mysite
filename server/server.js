@@ -100,53 +100,24 @@ const SESSION_MAX_AGE_SECONDS = 60 * 60 * 12;
 //
 // Price totals only sum "flat" and "per-unit" items. "custom" items are recorded
 // on the lead so PJL knows the customer is interested, but $0 is added to the total.
-const FEATURES = {
-  // --- Service call ---
-  service_call:        { label: "Service call (mobilization + 1 hr labour)",         price: 95,    category: "service",   quoteType: "flat" },
-  hourly_labour:       { label: "Additional labour (per hour beyond the first)",     price: 95,    category: "service",   quoteType: "per-unit" },
-
-  // --- Sprinkler head replacement ---
-  head_replacement:    { label: "Sprinkler head replacement (any size, any type)",   price: 68,    category: "repair",    quoteType: "per-unit" },
-  cap_one_head:        { label: "Cap 1 sprinkler head (goodwill, no charge)",        price: 0,     category: "repair",    quoteType: "flat" },
-  cap_multiple_heads:  { label: "Cap 2+ sprinkler heads (labour only)",              price: 0,     category: "repair",    quoteType: "custom" },
-
-  // --- Valves & manifolds ---
-  manifold_3valve:     { label: "3-valve manifold rebuild (covers 1-3 valves)",      price: 135,   category: "valve",     quoteType: "flat" },
-  manifold_6valve:     { label: "6-valve manifold rebuild (covers 4-6 valves)",      price: 285,   category: "valve",     quoteType: "flat" },
-  valve_hunter_pgv:    { label: "Hunter PGV-100G valve (per valve replaced)",        price: 74.95, category: "valve",     quoteType: "per-unit" },
-
-  // --- Controllers (Hunter HPC-400 family) ---
-  controller_1_4:      { label: "Smart controller — 1-4 zones (HPC-400)",            price: 595,   category: "controller", quoteType: "flat" },
-  controller_5_7:      { label: "Smart controller — 5-7 zones (HPC-400 + PCM-300)",  price: 750,   category: "controller", quoteType: "flat" },
-  controller_8_16:     { label: "Smart controller — 8-16 zones (HPC-400 + modules)", price: 1195,  category: "controller", quoteType: "flat" },
-  controller_17_plus:  { label: "Smart controller — 17+ zones (custom quote)",       price: 0,     category: "controller", quoteType: "custom" },
-
-  // --- Wire repair ---
-  wire_diagnostic:     { label: "Wire diagnostics & simple repair (in valve box)",   price: 187,   category: "wire",      quoteType: "flat" },
-  wire_run_100ft:      { label: "Wire run replacement — up to 100 ft",               price: 345,   category: "wire",      quoteType: "flat" },
-  wire_run_175ft:      { label: "Wire run replacement — up to 175 ft",               price: 435,   category: "wire",      quoteType: "flat" },
-  wire_run_long:       { label: "Wire run replacement — beyond 175 ft (custom)",     price: 0,     category: "wire",      quoteType: "custom" },
-
-  // --- Pipe / mainline ---
-  pipe_break_3ft:      { label: "Pipe break repair (up to 3 ft of 1\" pipe)",        price: 120,   category: "pipe",      quoteType: "flat" },
-  mainline_repair:     { label: "Mainline repair (custom quote)",                    price: 0,     category: "pipe",      quoteType: "custom" },
-
-  // --- Spring openings ---
-  spring_open_4z:      { label: "Spring opening — up to 4 zones residential",        price: 90,    category: "seasonal",  quoteType: "flat" },
-  spring_open_8z:      { label: "Spring opening — up to 8 zones residential",        price: 120,   category: "seasonal",  quoteType: "flat" },
-  spring_open_commercial: { label: "Spring opening — commercial",                    price: 285,   category: "seasonal",  quoteType: "flat" },
-
-  // --- Fall closings ---
-  fall_close_4z:       { label: "Fall closing — up to 4 zones",                      price: 90,    category: "seasonal",  quoteType: "flat" },
-  fall_close_6z:       { label: "Fall closing — up to 6 zones",                      price: 95,    category: "seasonal",  quoteType: "flat" },
-  fall_close_8z:       { label: "Fall closing — up to 8 zones",                      price: 120,   category: "seasonal",  quoteType: "flat" },
-  fall_close_15z:      { label: "Fall closing — up to 15 zones",                     price: 145,   category: "seasonal",  quoteType: "flat" },
-
-  // --- New install / smart upgrades (always custom quote) ---
-  new_zone_install:    { label: "New zone install (starts at $575 — custom quote)",  price: 0,     category: "install",   quoteType: "custom" },
-  smart_upgrade:       { label: "Smart upgrades / accessories (custom quote)",       price: 0,     category: "install",   quoteType: "custom" },
-  hose_bib_install:    { label: "Frost-free exterior hose bib install",              price: 175,   category: "install",   quoteType: "flat" }
-};
+// Single source of truth for ALL pricing. The repo-root /pricing.json is loaded
+// at boot — every other pricing-aware surface (FEATURES below, /api/pricing
+// public endpoint, lib/pricing.js, the AI system prompt via worker/rebuild.mjs,
+// pricing.html via the client-side injector) reads from this same file.
+//
+// Quote line items are SNAPSHOT at lead-creation time: validateLead spreads
+// the FEATURE object (price + label) into lead.features, so historical leads
+// keep the price they were quoted at even if pricing.json updates later.
+const PRICING = (function loadPricing() {
+  const pricingPath = path.resolve(__dirname, "..", "pricing.json");
+  try {
+    return JSON.parse(fsSync.readFileSync(pricingPath, "utf8"));
+  } catch (err) {
+    console.error("[FATAL] Could not load pricing.json from repo root:", err?.message || err);
+    process.exit(1);
+  }
+})();
+const FEATURES = PRICING.items;
 
 const CRM_STATUSES = new Set(["new", "contacted", "site_visit", "quoted", "won", "lost"]);
 const CRM_PRIORITIES = new Set(["normal", "high", "urgent"]);
@@ -610,7 +581,10 @@ const PUBLIC_API_PATHS = new Set([
   // it's same-origin and CORS becomes a no-op. Either way, safe.
   "/api/booking/services",
   "/api/booking/availability",
-  "/api/booking/reserve"
+  "/api/booking/reserve",
+  // Pricing dictionary — public so any page (including pricing.html on
+  // GitHub Pages) can fetch the live catalog and render from it.
+  "/api/pricing"
 ]);
 function isPublicApiPath(pathname) {
   if (PUBLIC_API_PATHS.has(pathname)) return true;
@@ -1477,6 +1451,18 @@ async function handleApi(req, res, pathname) {
     } catch (error) {
       return sendJson(res, 400, { ok: false, errors: [error.message || "Unable to bulk update."] });
     }
+  }
+
+  // ---- Pricing catalog (public read) ----
+  // Returns the full pricing.json so client-side renderers (pricing.html
+  // injector, future calculators) can render from one source of truth.
+  if (req.method === "GET" && pathname === "/api/pricing") {
+    res.writeHead(200, {
+      "content-type": "application/json; charset=utf-8",
+      "cache-control": "public, max-age=60" // tiny TTL so price edits propagate fast
+    });
+    res.end(JSON.stringify(PRICING));
+    return;
   }
 
   // ---- Chat transcripts (public POST upsert, admin GET) ----
