@@ -160,6 +160,7 @@
           </select>
           <button type="button" class="pjl-btn pjl-btn-outline" id="bulkArchive">Archive</button>
           <button type="button" class="pjl-btn pjl-btn-outline" id="bulkClear">Clear</button>
+          <button type="button" class="pjl-btn pjl-btn-danger" id="bulkDelete">Delete</button>
         </div>
         <div class="lead-list" id="leadList"></div>
         <div class="kanban-board" id="kanbanBoard" hidden></div>
@@ -366,6 +367,7 @@
             <button class="cta-button" type="submit">Save lead</button>
             <button type="button" class="pjl-btn pjl-btn-outline" id="archiveButton">Archive</button>
             <span id="saveMessage" role="status"></span>
+            <button type="button" class="pjl-btn pjl-btn-danger-outline" id="deleteLeadButton" style="margin-left:auto;">Delete lead</button>
           </div>
 
           <section class="detail-section">
@@ -392,6 +394,24 @@
       </div>
     </form>
   </dialog>
+
+  <!-- Lead-delete confirmation modal. Same typed-DELETE 2FA pattern as
+       the property bulk-delete on /admin/properties. -->
+  <div class="confirm-modal" id="leadConfirmModal" hidden role="dialog" aria-modal="true" aria-labelledby="leadConfirmTitle">
+    <div class="confirm-modal-card">
+      <h2 id="leadConfirmTitle">Delete lead</h2>
+      <p id="leadConfirmBody">Are you sure?</p>
+      <div class="confirm-typed">
+        <label for="leadConfirmInput">Type <strong>DELETE</strong> to confirm</label>
+        <input type="text" id="leadConfirmInput" autocomplete="off" autocapitalize="characters" spellcheck="false">
+      </div>
+      <p class="confirm-error" id="leadConfirmError" hidden></p>
+      <div class="confirm-actions">
+        <button type="button" class="pjl-btn pjl-btn-outline" id="leadConfirmCancel">Cancel</button>
+        <button type="button" class="pjl-btn pjl-btn-danger" id="leadConfirmAccept" disabled>Delete</button>
+      </div>
+    </div>
+  </div>
 
   <script src="/crm/admin.js"></script>
 </body>

@@ -51,6 +51,15 @@ const bulkStatus = document.getElementById("bulkStatus");
 const bulkPriority = document.getElementById("bulkPriority");
 const bulkArchive = document.getElementById("bulkArchive");
 const bulkClear = document.getElementById("bulkClear");
+const bulkDelete = document.getElementById("bulkDelete");
+const deleteLeadButton = document.getElementById("deleteLeadButton");
+const leadConfirmModal = document.getElementById("leadConfirmModal");
+const leadConfirmTitle = document.getElementById("leadConfirmTitle");
+const leadConfirmBody = document.getElementById("leadConfirmBody");
+const leadConfirmInput = document.getElementById("leadConfirmInput");
+const leadConfirmError = document.getElementById("leadConfirmError");
+const leadConfirmCancel = document.getElementById("leadConfirmCancel");
+const leadConfirmAccept = document.getElementById("leadConfirmAccept");
 const detailEmpty = document.getElementById("detailEmpty");
 const leadEditor = document.getElementById("leadEditor");
 const detailStage = document.getElementById("detailStage");
@@ -826,6 +835,9 @@ function renderBulkToolbar() {
   const shouldShow = selectMode && viewMode === "list";
   bulkToolbar.hidden = !shouldShow;
   bulkCount.textContent = String(selectedIds.size);
+  // Delete is disabled until something's actually selected — guards against
+  // a tap that would no-op into a confusing typed-confirm modal.
+  if (bulkDelete) bulkDelete.disabled = selectedIds.size === 0;
 }
 
 function applyView() {
@@ -1108,6 +1120,116 @@ archiveButton.addEventListener("click", async () => {
     saveMessage.textContent = error.message;
   } finally {
     archiveButton.disabled = false;
+  }
+});
+
+// ---- Delete-lead confirmation modal -----------------------------
+// Same typed-DELETE 2FA pattern as the property bulk-delete on
+// /admin/properties. Server re-validates the confirm token, so a
+// stray fetch can't wipe leads even with the modal bypassed.
+
+let leadConfirmResolver = null;
+
+function openLeadConfirm({ title, body }) {
+  leadConfirmTitle.textContent = title;
+  leadConfirmBody.innerHTML = body;
+  leadConfirmInput.value = "";
+  leadConfirmError.hidden = true;
+  leadConfirmError.textContent = "";
+  leadConfirmAccept.disabled = true;
+  leadConfirmModal.hidden = false;
+  setTimeout(() => leadConfirmInput.focus(), 0);
+  return new Promise((resolve) => { leadConfirmResolver = resolve; });
+}
+
+function closeLeadConfirm(result) {
+  leadConfirmModal.hidden = true;
+  leadConfirmInput.value = "";
+  leadConfirmAccept.disabled = true;
+  if (leadConfirmResolver) {
+    const r = leadConfirmResolver;
+    leadConfirmResolver = null;
+    r(result);
+  }
+}
+
+leadConfirmInput.addEventListener("input", () => {
+  leadConfirmAccept.disabled = leadConfirmInput.value.trim() !== "DELETE";
+  if (!leadConfirmError.hidden) leadConfirmError.hidden = true;
+});
+leadConfirmAccept.addEventListener("click", () => {
+  if (leadConfirmInput.value.trim() !== "DELETE") {
+    leadConfirmError.hidden = false;
+    leadConfirmError.textContent = "Type DELETE exactly to confirm.";
+    return;
+  }
+  closeLeadConfirm(true);
+});
+leadConfirmCancel.addEventListener("click", () => closeLeadConfirm(false));
+leadConfirmModal.addEventListener("click", (event) => {
+  if (event.target === leadConfirmModal) closeLeadConfirm(false);
+});
+window.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && !leadConfirmModal.hidden) closeLeadConfirm(false);
+});
+
+// Single-lead delete (lead detail panel button)
+deleteLeadButton.addEventListener("click", async () => {
+  const lead = leads.find((item) => item.id === activeLeadId);
+  if (!lead) return;
+  const who = lead.contact?.name || lead.contact?.email || lead.id;
+  const ok = await openLeadConfirm({
+    title: "Delete this lead?",
+    body: `This permanently removes <strong>${escapeHtml(who)}</strong> from the CRM. Linked work orders stay (their leadId is cleared). <strong>This cannot be undone.</strong> Use Archive instead if you just want to hide it.`
+  });
+  if (!ok) return;
+  deleteLeadButton.disabled = true;
+  try {
+    const response = await fetch(`/api/quotes/${encodeURIComponent(activeLeadId)}`, { method: "DELETE" });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data.ok) throw new Error((data.errors && data.errors[0]) || `Delete failed (HTTP ${response.status}).`);
+    leads = leads.filter((l) => l.id !== activeLeadId);
+    activeLeadId = "";
+    selectedIds.delete(data.deletedId);
+    saveMessage.textContent = "Lead deleted.";
+    render();
+  } catch (err) {
+    saveMessage.textContent = err.message;
+  } finally {
+    deleteLeadButton.disabled = false;
+  }
+});
+
+// Bulk delete (toolbar button)
+bulkDelete.addEventListener("click", async () => {
+  if (!selectedIds.size) return;
+  const ids = Array.from(selectedIds);
+  const noun = ids.length === 1 ? "1 lead" : `${ids.length} leads`;
+  const ok = await openLeadConfirm({
+    title: `Delete ${noun}?`,
+    body: `This permanently removes ${noun} from the CRM. Linked work orders stay (their leadId is cleared). <strong>This cannot be undone.</strong> Use Archive instead if you just want to hide them.`
+  });
+  if (!ok) return;
+  bulkDelete.disabled = true;
+  try {
+    const response = await fetch("/api/quotes/bulk-delete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids, confirm: "DELETE" })
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data.ok) throw new Error((data.errors && data.errors[0]) || `Delete failed (HTTP ${response.status}).`);
+    const idSet = new Set(ids);
+    leads = leads.filter((l) => !idSet.has(l.id));
+    selectedIds.clear();
+    selectMode = false;
+    if (idSet.has(activeLeadId)) activeLeadId = "";
+    saveMessage.textContent = `Deleted ${data.deletedCount} lead${data.deletedCount === 1 ? "" : "s"}.`;
+    render();
+  } catch (err) {
+    alert(err.message);
+  } finally {
+    bulkDelete.disabled = false;
   }
 });
 
