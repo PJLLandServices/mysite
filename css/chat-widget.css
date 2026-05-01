@@ -28,7 +28,11 @@
   --pjl-chat-shadow-panel: 0 4px 12px rgba(15, 31, 20, .12), 0 24px 60px rgba(15, 31, 20, .22);
 }
 
-/* ---------- Floating launcher pill ---------- */
+/* ---------- Floating launcher pill ----------
+   Stacks above the water-savings float widget when both are visible:
+   savings sits at bottom-right (bottom: 24px), chat sits above it.
+   When the savings widget is dismissed/hidden, the body class drops
+   off and chat falls back to the original 24px bottom anchor. */
 .pjl-chat-launcher {
   position: fixed;
   bottom: 24px;
@@ -49,7 +53,13 @@
   text-transform: uppercase;
   cursor: pointer;
   box-shadow: var(--pjl-chat-shadow-launcher);
-  transition: transform .15s, box-shadow .15s, background .2s;
+  transition: transform .15s, box-shadow .15s, background .2s, bottom .2s ease;
+}
+/* Body gets `.has-savings-float` whenever the savings widget is on
+   screen (toggled by the savings JS). Chat launcher rides above it
+   with a 12px gap. */
+body.has-savings-float .pjl-chat-launcher {
+  bottom: calc(24px + 116px + 12px);  /* base + savings card height + gap */
 }
 .pjl-chat-launcher.is-visible { display: inline-flex; }
 .pjl-chat-launcher:hover {
@@ -697,6 +707,11 @@
     right: 18px;
     padding: 12px 18px 12px 12px;
     font-size: 12px;
+  }
+  /* Mobile stack: savings card is shorter on phones, so the bump is
+     smaller than desktop. */
+  body.has-savings-float .pjl-chat-launcher {
+    bottom: calc(18px + 88px + 10px);
   }
   .pjl-chat-form-grid { grid-template-columns: 1fr; }
   .pjl-chat-header { padding: 16px 18px; }

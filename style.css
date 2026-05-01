@@ -2130,6 +2130,33 @@ section.hero[aria-label="PJL Land Services hero"] .hero__services-sep {
   transform: translateY(-1px);
   color: #fff;
 }
+/* Customer-portal login link in the utility strip — sits to the right
+   of the phone number. Subtle outline style so it doesn't compete with
+   the orange phone CTA. */
+.nav-utility-strip__login {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 8px;
+  padding: 5px 12px;
+  border-radius: 99px;
+  background: transparent;
+  border: 1px solid rgba(255,255,255,0.20);
+  color: rgba(255,255,255,0.90);
+  font-weight: 600;
+  font-size: 13px;
+  letter-spacing: 0.02em;
+  text-decoration: none;
+  transition: background 0.2s, border-color 0.2s, color 0.2s, transform 0.15s;
+}
+.nav-utility-strip__login:hover {
+  background: rgba(255,255,255,0.10);
+  border-color: rgba(255,255,255,0.35);
+  color: #fff;
+  transform: translateY(-1px);
+}
+.nav-utility-strip__login .nav-utility-strip__icon { opacity: 0.90; }
+
 @media (prefers-reduced-motion: reduce) {
   .nav-utility-strip__pulse { animation: none; }
 }
@@ -2367,10 +2394,18 @@ section.hero[aria-label="PJL Land Services hero"] .hero__services-sep {
     padding: 4px 11px;
     font-size: 12.5px;
   }
+  .nav-utility-strip__login {
+    margin-left: 6px;
+    padding: 4px 10px;
+    font-size: 12px;
+  }
 }
 @media (max-width: 480px) {
   .nav-utility-strip__same-day { display: none; }
   .nav-utility-strip__phone { margin-left: auto; }
+  /* Login link hides on tiny phones — it's still in the mobile drawer
+     menu so users can reach it without crowding the strip. */
+  .nav-utility-strip__login { display: none; }
   .nav.nav-v2 > .nav-inner { height: 92px; }
   .nav.nav-v2 .nav-logo img { height: 76px !important; }
 }
@@ -2446,6 +2481,21 @@ section.hero[aria-label="PJL Land Services hero"] .hero__services-sep {
 .nav.nav-v2 ~ .nav-mobile .nav-mobile__link.is-active {
   background: rgba(243,144,25,0.12);
   color: #fff;
+}
+/* Login link in the mobile drawer — visually separated from primary nav
+   with a top border, so it reads as a utility action like the call/quote
+   buttons below. */
+.nav.nav-v2 ~ .nav-mobile .nav-mobile__link--login {
+  margin-top: 8px;
+  border-top: 1px solid rgba(255,255,255,0.10);
+  padding-top: 14px;
+  color: rgba(255,255,255,0.75);
+  font-weight: 600;
+}
+.nav.nav-v2 ~ .nav-mobile .nav-mobile__link--login::before {
+  content: "→ ";
+  color: rgba(243,144,25,0.85);
+  margin-right: 6px;
 }
 
 .nav.nav-v2 ~ .nav-mobile .nav-mobile__group {
