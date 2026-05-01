@@ -53,7 +53,7 @@
   "email": "info@pjllandservices.com",
   "image": "https://www.pjllandservices.com/homepage-hero.jpg",
   "logo": "https://www.pjllandservices.com/logo.svg",
-  "priceRange": "$$",
+  "priceRange": "$",
   "currenciesAccepted": "CAD",
   "paymentAccepted": "Cash, Credit Card, E-Transfer, Cheque",
   "address": {
@@ -1447,7 +1447,7 @@
         </div>
       </div>
 
-      <!-- Mid-season ($95 service call, no stepper) -->
+      <!-- Mid-season (<span data-price="service_call">$95</span> service call, no stepper) -->
       <div class="hero-est hero-est--midseason">
         <div class="hero-est__head">
           <span class="hero-est__pulse" aria-hidden="true"></span>
@@ -1496,7 +1496,7 @@
       </div>
     </div>
 
-    <!-- Mid-season ($95 service call, no stepper) -->
+    <!-- Mid-season (<span data-price="service_call">$95</span> service call, no stepper) -->
     <div class="hero-est hero-est--midseason">
       <div class="hero-est__head">
         <span class="hero-est__pulse" aria-hidden="true"></span>
@@ -1994,7 +1994,7 @@
     <div class="text-center reveal mb-48"><h2>Common Questions</h2></div>
     <div class="faq-inner">
       <div class="faq-item reveal"><div class="faq-question"><h4>What areas do you serve?</h4><div class="faq-icon">+</div></div><div class="faq-answer"><p>Two tiers. <strong>Core 9 cities</strong> with dedicated service-area pages: Newmarket, Aurora, East Gwillimbury, King City, Richmond Hill, Whitchurch-Stouffville, Vaughan, Markham, Thornhill. <strong>Extended coverage</strong> across the broader GTA, Simcoe County, Durham Region and Peel: Bradford, Innisfil, Barrie, Keswick, Georgina, Toronto, Mississauga, Brampton, Caledon, Pickering, Whitby, Oshawa — anywhere within ~90 minutes of Newmarket. See our <a href="coverage-map.html">coverage map</a> or call (905) 960-0181.</p></div></div>
-      <div class="faq-item reveal reveal-delay-1"><div class="faq-question"><h4>How much does a lawn sprinkler system cost?</h4><div class="faq-icon">+</div></div><div class="faq-answer"><p>Pricing follows our 3-tier system. Tier 1 (1-4 zones): $585 base + $549 per zone, instant-quoted via our calculator. Tier 2 (5-7 zones): $749 base + $549 per zone, instant-quoted. Tier 3 (8+ zones): site visit and drawings required, custom-quoted. Use our <a href="estimate.html">online estimator</a> for a 2-minute quote, or book a free consultation for larger systems.</p></div></div>
+      <div class="faq-item reveal reveal-delay-1"><div class="faq-question"><h4>How much does a lawn sprinkler system cost?</h4><div class="faq-icon">+</div></div><div class="faq-answer"><p>Pricing follows our 3-tier system. Tier 1 (1-4 zones): <span data-price="new_install_t1_base">$585</span> base + <span data-price="new_install_per_zone">$549</span> per zone, instant-quoted via our calculator. Tier 2 (5-7 zones): <span data-price="new_install_t2_base">$749</span> base + <span data-price="new_install_per_zone">$549</span> per zone, instant-quoted. Tier 3 (8+ zones): site visit and drawings required, custom-quoted. Use our <a href="estimate.html">online estimator</a> for a 2-minute quote, or book a free consultation for larger systems.</p></div></div>
       <div class="faq-item reveal reveal-delay-2"><div class="faq-question"><h4>Is there a warranty on your installations?</h4><div class="faq-icon">+</div></div><div class="faq-answer"><p>Yes — every system we install comes with a full 3-year parts and labour warranty. We stand behind our work completely.</p></div></div>
       <div class="faq-item reveal reveal-delay-3"><div class="faq-question"><h4>Do I need to winterize my sprinkler system every year?</h4><div class="faq-icon">+</div></div><div class="faq-answer"><p>Yes — in Ontario's climate, a professional fall closing is essential to prevent freeze damage to your pipes and heads. We offer fall closing services throughout the GTA every season.</p></div></div>
     </div>
@@ -2280,6 +2280,7 @@
   render();
 })();
 </script>
+  <script src="js/pricing-injector.js" defer></script>
   <script src="js/chat-widget.js" defer></script>
 </body>
 </html>

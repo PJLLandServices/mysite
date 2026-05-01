@@ -40,6 +40,7 @@
     "new_install_t2_base":    { "label": "New install Tier 2 (5-7 zones) base fee",           "price": 749,   "category": "install",    "quoteType": "flat"     },
     "new_install_per_zone":   { "label": "New install per-zone (Tier 1 & 2)",                 "price": 549,   "category": "install",    "quoteType": "per-unit" },
     "new_zone_install":       { "label": "New zone install (starts at $575 — custom quote)",  "price": 0,     "category": "install",    "quoteType": "custom"   },
+    "new_zone_min":           { "label": "New zone install — minimum (\"starts at\")",         "price": 575,   "category": "install",    "quoteType": "custom"   },
     "smart_upgrade":          { "label": "Smart upgrades / accessories (custom quote)",       "price": 0,     "category": "install",    "quoteType": "custom"   },
     "hose_bib_install":       { "label": "Frost-free exterior hose bib install",              "price": 175,   "category": "install",    "quoteType": "flat"     }
   },

@@ -1420,9 +1420,9 @@ a.sprk-comp:focus-visible {
     <div class="page-hero-content">
       <div class="page-eyebrow">Spring + Fall · Service · Install · Repair</div>
       <h1 data-season-heading>Spring Opening Season Is On.</h1>
-      <p data-season-sub>Time to wake your system up right. Seasonal care starts at $90. Same-day repairs across Newmarket and the GTA.</p>
+      <p data-season-sub>Time to wake your system up right. Seasonal care starts at <span data-price="spring_open_4z">$90</span>. Same-day repairs across Newmarket and the GTA.</p>
       <div class="page-hero-actions">
-        <a href="#seasonal" class="btn btn-primary" data-season-primary>Book Spring Opening — From $90</a>
+        <a href="#seasonal" class="btn btn-primary" data-season-primary>Book Spring Opening — From <span data-price="spring_open_4z">$90</span></a>
         <a href="#seasonal" class="btn btn-outline" data-season-secondary>Book Fall Closing →</a>
       </div>
     </div>
@@ -1435,10 +1435,10 @@ a.sprk-comp:focus-visible {
     <div class="sprk-banner sprk-banner--green reveal">
       <span class="sprk-banner__icon">🌱</span>
       <span class="sprk-banner__label">Seasonal Care</span>
-      <span class="sprk-banner__meta">Starts at $90 · Same-day available</span>
+      <span class="sprk-banner__meta">Starts at <span data-price="spring_open_4z">$90</span> · Same-day available</span>
     </div>
     <div class="text-center reveal mb-48">
-      <h2>Starts at $90. Done right.</h2>
+      <h2>Starts at <span data-price="spring_open_4z">$90</span>. Done right.</h2>
       <p style="max-width:560px;margin:0 auto;">Two moments decide whether your system survives the year. Here's exactly how we handle both.</p>
     </div>
 
@@ -1757,12 +1757,12 @@ a.sprk-comp:focus-visible {
         </div>
 
         <a href="diagnose.html" data-pjl-chat class="btn btn-green">💬 Chat with Patrick — Free AI Diagnosis</a>
-        <a href="book.html?service=sprinkler_repair" class="btn btn-outline-green" style="margin-top:10px;">Or book a service call — $95</a>
+        <a href="book.html?service=sprinkler_repair" class="btn btn-outline-green" style="margin-top:10px;">Or book a service call — <span data-price="service_call">$95</span></a>
       </div>
       <!-- AI-intake callout — lifted out of the card to fill the space below the image -->
       <div class="sprk-ai reveal reveal-delay-1">
         <span class="sprk-ai__badge"><span class="sprk-ai__dot" aria-hidden="true"></span>AI-Smart Intake</span>
-        <p><strong>AI intake = no-surprise labour.</strong> <a href="diagnose.html" data-pjl-chat>Describe your problem to Patrick</a> and the labour for the diagnosed repair is locked in regardless of how long it takes — anything else found on-site is billed at parts + $95/hr, quoted before extra work. Standard service call (mobilization + first hour of labour) is <strong>$95</strong>.</p>
+        <p><strong>AI intake = no-surprise labour.</strong> <a href="diagnose.html" data-pjl-chat>Describe your problem to Patrick</a> and the labour for the diagnosed repair is locked in regardless of how long it takes — anything else found on-site is billed at parts + <span data-price="service_call">$95</span>/hr, quoted before extra work. Standard service call (mobilization + first hour of labour) is <strong><span data-price="service_call">$95</span></strong>.</p>
       </div>
     </div>
   </div>
@@ -2084,7 +2084,7 @@ a.sprk-comp:focus-visible {
 
       <div class="sprk-pricing reveal reveal-delay-3">
         <span class="sprk-pricing__tag">🔧 Service Call</span>
-        <div class="sprk-pricing__price">$95</div>
+        <div class="sprk-pricing__price"><span data-price="service_call">$95</span></div>
         <p class="sprk-pricing__sub">Mobilization + 1-hour on-site diagnosis.</p>
         <ul class="sprk-pricing__features">
           <li>On-site diagnosis, any brand</li>
@@ -2340,6 +2340,7 @@ a.sprk-comp:focus-visible {
   if (sec) sec.textContent = ctaSecondary;
 })();
 </script>
+  <script src="js/pricing-injector.js" defer></script>
   <script src="js/chat-widget.js" defer></script>
 </body>
 </html>

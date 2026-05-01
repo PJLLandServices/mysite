@@ -439,7 +439,7 @@
 <!-- AI-Smart-Intake hook strip -->
 <section class="intake-strip">
   <div class="container">
-    💡 <strong>AI intake = no-surprise labour</strong> — describe your problem to Patrick through our AI chat first and the labour for the diagnosed repair is locked in regardless of how long it takes. Anything else found on-site is billed at parts + $95/hr, quoted before extra work.
+    💡 <strong>AI intake = no-surprise labour</strong> — describe your problem to Patrick through our AI chat first and the labour for the diagnosed repair is locked in regardless of how long it takes. Anything else found on-site is billed at parts + <span data-price="service_call">$95</span>/hr, quoted before extra work.
     <a href="diagnose.html" data-pjl-chat>Chat with Patrick →</a>
   </div>
 </section>
@@ -508,42 +508,42 @@
       </div>
       <div class="repair-pricing__row">
         <div class="pr-label">Service call — mobilization + 1-hour on-site<small>AI intake locks in repair labour for the diagnosed issue</small></div>
-        <div class="pr-cost">$95<small>per call</small></div>
+        <div class="pr-cost"><span data-price="service_call">$95</span><small>per call</small></div>
       </div>
       <div class="repair-pricing__row">
         <div class="pr-label">Sprinkler head replacement<small>Any size, any type — pop-up or rotor, grass or bed</small></div>
-        <div class="pr-cost">$68<small>flat per head</small></div>
+        <div class="pr-cost"><span data-price="head_replacement">$68</span><small>flat per head</small></div>
       </div>
       <div class="repair-pricing__row">
-        <div class="pr-label">3-valve manifold rebuild<small>Covers 1, 2 or 3 valves · plus $74.95/valve replaced</small></div>
-        <div class="pr-cost">$135<small>+ valves</small></div>
+        <div class="pr-label">3-valve manifold rebuild<small>Covers 1, 2 or 3 valves · plus <span data-price="valve_hunter_pgv">$74.95</span>/valve replaced</small></div>
+        <div class="pr-cost"><span data-price="manifold_3valve">$135</span><small>+ valves</small></div>
       </div>
       <div class="repair-pricing__row">
-        <div class="pr-label">6-valve manifold rebuild<small>Covers 4, 5 or 6 valves · plus $74.95/valve replaced</small></div>
-        <div class="pr-cost">$285<small>+ valves</small></div>
+        <div class="pr-label">6-valve manifold rebuild<small>Covers 4, 5 or 6 valves · plus <span data-price="valve_hunter_pgv">$74.95</span>/valve replaced</small></div>
+        <div class="pr-cost"><span data-price="manifold_6valve">$285</span><small>+ valves</small></div>
       </div>
       <div class="repair-pricing__row">
         <div class="pr-label">Wire diagnostics &amp; in-box repair<small>Within the valve box, fits inside the service-call hour</small></div>
-        <div class="pr-cost">$187<small>per repair</small></div>
+        <div class="pr-cost"><span data-price="wire_diagnostic">$187</span><small>per repair</small></div>
       </div>
       <div class="repair-pricing__row">
-        <div class="pr-label">Wire run replacement<small>Up to 100 ft / up to 175 ft / $1.80/ft beyond</small></div>
-        <div class="pr-cost">$345 / $435<small>by length</small></div>
+        <div class="pr-label">Wire run replacement<small>Up to 100 ft / up to 175 ft / <span data-price="wire_run_per_ft">$1.80</span>/ft beyond</small></div>
+        <div class="pr-cost"><span data-price="wire_run_100ft">$345</span> / <span data-price="wire_run_175ft">$435</span><small>by length</small></div>
       </div>
       <div class="repair-pricing__row">
         <div class="pr-label">Pipe break repair<small>Up to 3 ft of 1-inch pipe, all clamps + fittings included</small></div>
-        <div class="pr-cost">$120<small>per repair</small></div>
+        <div class="pr-cost"><span data-price="pipe_break_3ft">$120</span><small>per repair</small></div>
       </div>
       <div class="repair-pricing__row">
         <div class="pr-label">Pressure-regulated head replacement<small>Full head replacement — small excavation almost always needed</small></div>
-        <div class="pr-cost">$68<small>flat per head</small></div>
+        <div class="pr-cost"><span data-price="head_replacement">$68</span><small>flat per head</small></div>
       </div>
       <div class="repair-pricing__row">
         <div class="pr-label">Cracked irrigation mainline repair<small>Severe — case-by-case, may require excavation</small></div>
         <div class="pr-cost">Custom<small>quoted on-site</small></div>
       </div>
       <div class="repair-pricing__footer">
-        All repair prices are <strong>plus the standard $95 service call</strong> unless otherwise noted. Sample math: 1 broken head = $95 + $68 = <strong>$163</strong>. 2 valves in a 3-valve manifold = $95 + $135 + ($74.95 × 2) = <strong>$379.90</strong>. Wire diagnostics + in-box repair = $95 + $187 = <strong>$282</strong>. See the full <a href="pricing.html">pricing guide</a> for the complete rate sheet. Always quoted in writing before any work begins.
+        All repair prices are <strong>plus the standard <span data-price="service_call">$95</span> service call</strong> unless otherwise noted. Sample math: 1 broken head = <span data-price="service_call">$95</span> + <span data-price="head_replacement">$68</span> = <strong>$163</strong>. 2 valves in a 3-valve manifold = <span data-price="service_call">$95</span> + <span data-price="manifold_3valve">$135</span> + (<span data-price="valve_hunter_pgv">$74.95</span> × 2) = <strong><span data-price="manifold_examples.2_valve">$379.90</span></strong>. Wire diagnostics + in-box repair = <span data-price="service_call">$95</span> + <span data-price="wire_diagnostic">$187</span> = <strong>$282</strong>. See the full <a href="pricing.html">pricing guide</a> for the complete rate sheet. Always quoted in writing before any work begins.
       </div>
     </div>
   </div>
@@ -659,6 +659,7 @@
 <!-- @@PJL:footer-END -->
 
 <script src="nav.js?v=2"></script>
+<script src="js/pricing-injector.js" defer></script>
   <script src="js/chat-widget.js" defer></script>
 </body>
 </html>

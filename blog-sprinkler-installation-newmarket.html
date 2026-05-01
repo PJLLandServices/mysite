@@ -269,10 +269,10 @@
         <h2 id="cost">Real install pricing in the GTA</h2>
         <p>Pricing follows our locked 3-tier system. Use the <a href="pricing.html">pricing guide</a> for the full picture, or the install calculator for instant quotes by zone count.</p>
         <ul>
-          <li><strong>Tier 1 — 1-4 zones (instant quote):</strong> $585 base + $549 per zone. Standard residential subdivision lots.</li>
-          <li><strong>Tier 2 — 5-7 zones (instant quote):</strong> $749 base + $549 per zone. The +$140 base covers the PCM-300 controller expansion module required at this size.</li>
+          <li><strong>Tier 1 — 1-4 zones (instant quote):</strong> <span data-price="new_install_t1_base">$585</span> base + <span data-price="new_install_per_zone">$549</span> per zone. Standard residential subdivision lots.</li>
+          <li><strong>Tier 2 — 5-7 zones (instant quote):</strong> <span data-price="new_install_t2_base">$749</span> base + <span data-price="new_install_per_zone">$549</span> per zone. The +$140 base covers the PCM-300 controller expansion module required at this size.</li>
           <li><strong>Tier 3 — 8+ zones (custom quote):</strong> Site visit and drawings required. Larger residential, estate scale, complex layouts, well-system tie-ins. Quoted in writing within 3-5 business days of the on-site visit.</li>
-          <li><strong>Optional frost-free exterior hose bib install:</strong> +$175.</li>
+          <li><strong>Optional frost-free exterior hose bib install:</strong> +<span data-price="hose_bib_install">$175</span>.</li>
         </ul>
         <p>All pricing includes Hydrawise smart controller, Hunter or Rain Bird heads, professional design, permits, locates, and 3-year full warranty. Calculator pricing assumes standard residential conditions and typical access — final quote may differ based on soil conditions (heavy clay, shale, mature root systems), property access (hardscape navigation, mature gardens), water-supply distance, and any property-specific complications. Confirmed during the free on-site assessment before any work is scheduled.</p>
 
@@ -338,6 +338,7 @@
 (function(){var bar=document.getElementById('readingProgress'),article=document.querySelector('.post-content');if(!bar||!article)return;function update(){var rect=article.getBoundingClientRect(),total=article.offsetHeight-window.innerHeight,passed=Math.max(0,-rect.top),pct=Math.min(100,(passed/Math.max(total,1))*100);bar.style.width=pct+'%';}window.addEventListener('scroll',update,{passive:true});window.addEventListener('resize',update);update();})();
 (function(){var cta=document.getElementById('postStickyCta'),footer=document.querySelector('.post-footer');if(!cta)return;function update(){var y=window.scrollY||0,footerTop=footer?footer.getBoundingClientRect().top+y-window.innerHeight:Infinity;if(y>700&&y<footerTop)cta.classList.add('is-visible');else cta.classList.remove('is-visible');}window.addEventListener('scroll',update,{passive:true});update();})();
 </script>
+  <script src="js/pricing-injector.js" defer></script>
   <script src="js/chat-widget.js" defer></script>
 </body>
 </html>

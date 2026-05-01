@@ -58,8 +58,8 @@
     "name": "Hydrawise Installation Options",
     "itemListElement": [
       { "@type": "Offer", "name": "Hydrawise Standard on New Install", "priceCurrency": "CAD", "description": "Hunter Hydrawise smart WiFi controller is the standard controller on every new PJL sprinkler installation — included in the install cost (no separate Hydrawise charge on new installs)." },
-      { "@type": "Offer", "name": "Hydrawise Retrofit — Existing System (1-4 zones)", "price": "595.00", "priceCurrency": "CAD", "description": "HPC-400 base controller, retrofit on 1-4 zone systems. Plus standard $95 service call. Includes WiFi connection, schedule programming, walk-through." },
-      { "@type": "Offer", "name": "Hydrawise Retrofit — Existing System (5-7 zones)", "price": "750.00", "priceCurrency": "CAD", "description": "HPC-400 + PCM-300 expansion module for 5-7 zone systems. Plus standard $95 service call. Includes WiFi connection, schedule programming, walk-through." },
+      { "@type": "Offer", "name": "Hydrawise Retrofit — Existing System (1-4 zones)", "price": "95.00", "priceCurrency": "CAD", "description": "HPC-400 base controller, retrofit on 1-4 zone systems. Plus standard $95 service call. Includes WiFi connection, schedule programming, walk-through." },
+      { "@type": "Offer", "name": "Hydrawise Retrofit — Existing System (5-7 zones)", "price": "95.00", "priceCurrency": "CAD", "description": "HPC-400 + PCM-300 expansion module for 5-7 zone systems. Plus standard $95 service call. Includes WiFi connection, schedule programming, walk-through." },
       { "@type": "Offer", "name": "Hydrawise Retrofit — Existing System (8-16 zones)", "price": "1195.00", "priceCurrency": "CAD", "description": "HPC-400 + PCM-300 + PCM-900 for 8-16 zone systems. Plus standard $95 service call. Includes WiFi connection, schedule programming, walk-through." },
       { "@type": "Offer", "name": "Hydrawise Retrofit — Existing System (17+ zones)", "priceCurrency": "CAD", "description": "PCM-1600 special order required. Custom quote on-site after a brief assessment. Additional setup may apply for large or complex properties." }
     ]
@@ -439,14 +439,14 @@
     <div class="breadcrumbs"><a href="index.html">Home</a><span>›</span><a href="sprinkler-systems.html">Sprinkler Services</a><span>›</span><span>Hydrawise Smart Controller</span></div>
     <span class="hydra-eyebrow">Hunter University Trained · Authorized Installer</span>
     <h1>Hunter Hydrawise — <em>smart sprinkler control, properly installed.</em></h1>
-    <p>Standard on every new PJL sprinkler installation (included in the install cost). Available as a retrofit on most existing systems — pricing scales by zone count from $595, plus standard service call. Real-time weather skipping, zone-by-zone runtime tracking, app control from anywhere, and 30-40% lower water bills than a generic timer.</p>
+    <p>Standard on every new PJL sprinkler installation (included in the install cost). Available as a retrofit on most existing systems — pricing scales by zone count from <span data-price="controller_1_4">$595</span>, plus standard service call. Real-time weather skipping, zone-by-zone runtime tracking, app control from anywhere, and 30-40% lower water bills than a generic timer.</p>
     <div class="hydra-hero-actions">
       <a href="book.html?service=hydrawise_retrofit" class="btn-amber">Book a retrofit quote <span aria-hidden="true">→</span></a>
       <a href="tel:+19059600181" class="btn-ghost">📞 (905) 960-0181</a>
     </div>
     <div class="hydra-hero-meta">
       <span>📡 <strong>Standard</strong> on new PJL installs</span>
-      <span>💲 <strong>From $595</strong> retrofit by zone count</span>
+      <span>💲 <strong>From <span data-price="controller_1_4">$595</span></strong> retrofit by zone count</span>
       <span>📉 <strong>30-40% water savings</strong> typical</span>
     </div>
   </div>
@@ -525,8 +525,8 @@
         <span class="path-card__pill">📡 Retrofit Existing System</span>
         <h3>Upgrade your existing controller.</h3>
         <p>Already have a working sprinkler system? Hydrawise drops in to replace most existing controllers regardless of original brand — Hunter, Rain Bird, Toro, Orbit, Irritrol, generic. ~2-hour install, full schedule re-program, walk-through.</p>
-        <div class="path-card__price">From $595</div>
-        <div class="path-card__price-sub">1-4 zones $595 · 5-7 zones $750 · 8-16 zones $1,195 · 17+ zones custom quote · plus standard $95 service call</div>
+        <div class="path-card__price">From <span data-price="controller_1_4">$595</span></div>
+        <div class="path-card__price-sub">1-4 zones <span data-price="controller_1_4">$595</span> · 5-7 zones <span data-price="controller_5_7">$750</span> · 8-16 zones <span data-price="controller_8_16">$1,195</span> · 17+ zones custom quote · plus standard <span data-price="service_call">$95</span> service call</div>
         <ul>
           <li>Hydrawise Pro WiFi controller (parts &amp; labour)</li>
           <li>Old controller removed &amp; recycled</li>
@@ -621,7 +621,7 @@
       </div>
     </div>
 
-    <p>If you're considering a retrofit on a system that has known coverage issues, dry spots, or visible misting at the heads, we'll often recommend addressing those during the same visit — pressure-regulated head replacement is $68 each ($95 service call applies once). Honesty is cheaper than coming back twice.</p>
+    <p>If you're considering a retrofit on a system that has known coverage issues, dry spots, or visible misting at the heads, we'll often recommend addressing those during the same visit — pressure-regulated head replacement is <span data-price="head_replacement">$68</span> each (<span data-price="service_call">$95</span> service call applies once). Honesty is cheaper than coming back twice.</p>
   </div>
 </section>
 
@@ -673,6 +673,7 @@
 <!-- @@PJL:footer-END -->
 
 <script src="nav.js?v=2"></script>
+<script src="js/pricing-injector.js" defer></script>
   <script src="js/chat-widget.js" defer></script>
 </body>
 </html>

@@ -229,7 +229,7 @@
       </ul></aside>
 
       <article class="post-content">
-        <p class="post-lede">Every April we get the same call: "It's nice out, can I turn the sprinklers on?" The answer isn't a calendar date — it's three conditions. If all three are green, go. If any one is still red, wait. Turning on too early is how a $90 spring opening turns into a $900 repair bill.</p>
+        <p class="post-lede">Every April we get the same call: "It's nice out, can I turn the sprinklers on?" The answer isn't a calendar date — it's three conditions. If all three are green, go. If any one is still red, wait. Turning on too early is how a <span data-price="spring_open_4z">$90</span> spring opening turns into a $900 repair bill.</p>
 
         <h2 id="three-conditions">The three readiness conditions.</h2>
         <p>None of these are optional. Each one protects a different part of the system and a different part of your lawn.</p>
@@ -299,7 +299,7 @@
         <div class="cost-box">
           <h4>Real numbers, real callouts</h4>
           <ol>
-            <li><strong>Frost-cracked valve manifold</strong> — $379.90 to $829.70. Residual water freezes overnight after a too-early pressurization, splits the manifold or a valve body. Master pricing on full manifold replacement: $95 service call + $135 (3-valve manifold) or $285 (6-valve manifold) + $74.95 per valve replaced. Caught the next morning when the homeowner sees water in the valve box. Common in early-April starts followed by a cold snap.</li>
+            <li><strong>Frost-cracked valve manifold</strong> — <span data-price="manifold_examples.2_valve">$379.90</span> to <span data-price="manifold_examples.6_valve">$829.70</span>. Residual water freezes overnight after a too-early pressurization, splits the manifold or a valve body. Master pricing on full manifold replacement: <span data-price="service_call">$95</span> service call + <span data-price="manifold_3valve">$135</span> (3-valve manifold) or <span data-price="manifold_6valve">$285</span> (6-valve manifold) + <span data-price="valve_hunter_pgv">$74.95</span> per valve replaced. Caught the next morning when the homeowner sees water in the valve box. Common in early-April starts followed by a cold snap.</li>
             <li><strong>Frost-heaved lateral break</strong> — $250-$600. Pressurizing on still-frozen ground pushes pipe upward, splits a splice. Often invisible until the system is run and a brown-then-green-then-brown pattern emerges in the lawn over a couple weeks.</li>
             <li><strong>Cold-soil fungal pressure</strong> — $0 in equipment, but a stressed lawn. Watering at 5°C soil temp soaks the surface without root uptake. Fungi like dollar spot, leaf spot, and pink snow mould thrive. The lawn comes out of spring weaker than it went in.</li>
           </ol>
@@ -331,7 +331,7 @@
           <li><a href="warranty.html">1-year guarantee</a> on any repair work done</li>
         </ul>
 
-        <p>Spring opening pricing starts from $90 for a typical residential 4-6 zone system. We're booking late April through end of May right now — bookings made in early April get the best slot selection.</p>
+        <p>Spring opening pricing starts from <span data-price="spring_open_4z">$90</span> for a typical residential 4-6 zone system. We're booking late April through end of May right now — bookings made in early April get the best slot selection.</p>
 
         <div class="callout">
           <div class="callout-inner">
@@ -372,11 +372,11 @@
     <div class="post-services-cta-copy">
       <span class="post-services-cta-eyebrow">Skip the gamble</span>
       <h3>Let us pressurize the system safely.</h3>
-      <p>Spring openings across the GTA from $90. Slow pressure-up, full leak diagnostic, zone-by-zone walkthrough, Hydrawise re-program. Same-day repair if anything broke over winter.</p>
+      <p>Spring openings across the GTA from <span data-price="spring_open_4z">$90</span>. Slow pressure-up, full leak diagnostic, zone-by-zone walkthrough, Hydrawise re-program. Same-day repair if anything broke over winter.</p>
       <a href="sprinkler-spring-opening.html" class="post-services-cta-btn">Book a spring opening <span aria-hidden="true">→</span></a>
     </div>
     <div class="post-services-cta-tiles">
-        <a href="sprinkler-spring-opening.html" class="post-svc-tile"><span class="post-svc-tile-icon">🌱</span><div><h4>Spring Opening</h4><p>Pressure-up, leak check, Hydrawise re-program. From $90.</p></div></a>
+        <a href="sprinkler-spring-opening.html" class="post-svc-tile"><span class="post-svc-tile-icon">🌱</span><div><h4>Spring Opening</h4><p>Pressure-up, leak check, Hydrawise re-program. From <span data-price="spring_open_4z">$90</span>.</p></div></a>
         <a href="sprinkler-repair.html" class="post-svc-tile"><span class="post-svc-tile-icon">🔧</span><div><h4>Sprinkler Repair</h4><p>Same-day diagnosis. AI intake = no-surprise labour.</p></div></a>
         <a href="sprinkler-hydrawise.html" class="post-svc-tile"><span class="post-svc-tile-icon">📡</span><div><h4>Hydrawise Smart Controller</h4><p>Per-zone scheduling, weather-skipping, app control.</p></div></a>
     </div>
@@ -394,6 +394,7 @@
 (function(){var bar=document.getElementById('readingProgress'),article=document.querySelector('.post-content');if(!bar||!article)return;function update(){var rect=article.getBoundingClientRect(),total=article.offsetHeight-window.innerHeight,passed=Math.max(0,-rect.top),pct=Math.min(100,(passed/Math.max(total,1))*100);bar.style.width=pct+'%';}window.addEventListener('scroll',update,{passive:true});window.addEventListener('resize',update);update();})();
 (function(){var cta=document.getElementById('postStickyCta'),footer=document.querySelector('.post-footer');if(!cta)return;function update(){var y=window.scrollY||0,footerTop=footer?footer.getBoundingClientRect().top+y-window.innerHeight:Infinity;if(y>700&&y<footerTop)cta.classList.add('is-visible');else cta.classList.remove('is-visible');}window.addEventListener('scroll',update,{passive:true});update();})();
 </script>
+  <script src="js/pricing-injector.js" defer></script>
   <script src="js/chat-widget.js" defer></script>
 </body>
 </html>

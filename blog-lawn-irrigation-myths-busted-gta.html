@@ -241,7 +241,7 @@
           <div class="reality-side">
             <span class="reality-label">✓ The Reality</span>
             <h3>Pays for itself, then keeps saving</h3>
-            <p>A Hunter Hydrawise on a typical Newmarket residential lot saves 25-40% of irrigation water by skipping watering when rain is forecast and using local weather data. On a $700-$1,200 summer water bill, that's $175-$480 saved per year. Retrofit pricing from $595 by zone count plus standard service call — pays for itself over multiple seasons, then keeps saving for the lifetime of the system.</p>
+            <p>A Hunter Hydrawise on a typical Newmarket residential lot saves 25-40% of irrigation water by skipping watering when rain is forecast and using local weather data. On a $700-$1,200 summer water bill, that's <span data-price="hose_bib_install">$175</span>-$480 saved per year. Retrofit pricing from <span data-price="controller_1_4">$595</span> by zone count plus standard service call — pays for itself over multiple seasons, then keeps saving for the lifetime of the system.</p>
           </div>
         </div>
         <div class="myth-cost"><strong>What this myth costs you:</strong> ~$300/year in water, plus app-based control and zone-by-zone usage data you can't get any other way.</div>
@@ -299,7 +299,7 @@
           <h3>This is the one that actually destroys sprinkler systems.</h3>
           <p>Shop and contractor air compressors deliver air at 90-150 PSI continuous. Residential sprinkler components — valves, lateral fittings, pop-up springs — are rated for 60-80 PSI. The mismatch isn't even close.</p>
           <p>What blows out: valve diaphragms (cracked or split entirely), poly fittings (popped at the elbows), check valves in pop-up bodies (seals destroyed), and sometimes the controller itself if you accidentally pressurize a wired-open zone. We see 3-5 of these in the spring every single year, and the cost to make them right ranges from <strong>$600 for the simple ones to $2,800+ for whole-system replacement</strong>.</p>
-          <p>Professional winterization in our service area is $90-$160, takes 30 minutes, and uses a tow-behind compressor with regulated low-volume / high-CFM output that's actually rated for irrigation systems. The math is, again, brutal.</p>
+          <p>Professional winterization in our service area is <span data-price="spring_open_4z">$90</span>-$160, takes 30 minutes, and uses a tow-behind compressor with regulated low-volume / high-CFM output that's actually rated for irrigation systems. The math is, again, brutal.</p>
         </div>
 
         <div class="callout"><div class="callout-inner"><h3>Book your fall winterization before the rush.</h3><p>October fills up fast — the first frost forecast triggers a full week of panic bookings every year. Reserve early and we'll lock your slot before the freeze line moves south of King.</p><a href="book.html?service=fall_close_6z" class="callout-cta">Book fall winterization <span aria-hidden="true">→</span></a></div></div>
@@ -308,7 +308,7 @@
         <h3>Is once a week enough watering for a GTA lawn?</h3>
         <p>In May and September: usually yes, with rainfall help. In July and August during a heat dome: bump to twice a week. Three times only during sustained 30°C+ stretches and only with cycle &amp; soak enabled.</p>
         <h3>Can old sprinkler systems be retrofitted with smart controllers?</h3>
-        <p>Almost always. The valve wiring is universal — we swap the controller box and program the existing zones in. Takes about 2 hours. Retrofit pricing scales by zone count: 1-4 zones $595, 5-7 zones $750, 8-16 zones $1,195, plus standard $95 service call.</p>
+        <p>Almost always. The valve wiring is universal — we swap the controller box and program the existing zones in. Takes about 2 hours. Retrofit pricing scales by zone count: 1-4 zones <span data-price="controller_1_4">$595</span>, 5-7 zones <span data-price="controller_5_7">$750</span>, 8-16 zones <span data-price="controller_8_16">$1,195</span>, plus standard <span data-price="service_call">$95</span> service call.</p>
         <h3>Why do you keep mentioning clay soil?</h3>
         <p>Because most of York Region — Newmarket, Aurora, King City, Richmond Hill — sits on heavy clay. It's the single biggest factor in why generic "rules of thumb" from internet articles don't quite work here. Clay needs slow water in long doses; sand or loam doesn't. Most online lawn advice assumes loam.</p>
 
@@ -365,6 +365,7 @@
 (function(){var bar=document.getElementById('readingProgress'),article=document.querySelector('.post-content');if(!bar||!article)return;function update(){var rect=article.getBoundingClientRect(),total=article.offsetHeight-window.innerHeight,passed=Math.max(0,-rect.top),pct=Math.min(100,(passed/Math.max(total,1))*100);bar.style.width=pct+'%';}window.addEventListener('scroll',update,{passive:true});window.addEventListener('resize',update);update();})();
 (function(){var cta=document.getElementById('postStickyCta'),footer=document.querySelector('.post-footer');if(!cta)return;function update(){var y=window.scrollY||0,footerTop=footer?footer.getBoundingClientRect().top+y-window.innerHeight:Infinity;if(y>700&&y<footerTop)cta.classList.add('is-visible');else cta.classList.remove('is-visible');}window.addEventListener('scroll',update,{passive:true});update();})();
 </script>
+  <script src="js/pricing-injector.js" defer></script>
   <script src="js/chat-widget.js" defer></script>
 </body>
 </html>

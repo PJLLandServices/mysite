@@ -257,7 +257,7 @@
         <h2 id="pressure">Upgrade #1: Pressure Regulation — End the Mist</h2>
         <p>Walk past a running sprinkler and look at the spray. If you can see fine mist drifting in the air, you're watching wasted water. Standard sprinkler heads are rated to operate at <strong>30 PSI</strong>. In most GTA neighborhoods, municipal water arrives at the head at <strong>60-80 PSI</strong> — more than double the rating. The result: instead of clean droplets reaching the lawn, you get aerosol mist that evaporates before it lands.</p>
         <p>The fix is pressure-regulated spray heads. They include a small regulator that drops the pressure to spec right at the nozzle. The visible result is night-and-day: zero misting, fat coverage droplets, water actually hitting the soil. The hidden result: 25-35% less water used per cycle, with no reduction in lawn coverage.</p>
-        <p>In practice, retrofitting a pressure-regulated head is a complete head replacement — there's almost always a small excavation around the head that makes a true "nozzle-only swap" impractical. Per-head retrofit pricing is master-flat: <strong>$68 per head</strong> plus the standard $95 service call. A typical 6-zone residential system has 18-24 heads; full-property pressure-regulation upgrades are quoted on-site with heavily discounted per-head pricing for whole-system replacement.</p>
+        <p>In practice, retrofitting a pressure-regulated head is a complete head replacement — there's almost always a small excavation around the head that makes a true "nozzle-only swap" impractical. Per-head retrofit pricing is master-flat: <strong><span data-price="head_replacement">$68</span> per head</strong> plus the standard <span data-price="service_call">$95</span> service call. A typical 6-zone residential system has 18-24 heads; full-property pressure-regulation upgrades are quoted on-site with heavily discounted per-head pricing for whole-system replacement.</p>
 
         <h2 id="smart">Upgrade #2: Smart Integration — Watering Only When the Lawn Needs It</h2>
         <p>A timer-based controller waters the same way every Tuesday, regardless of whether it rained on Monday or whether it's going to pour on Wednesday. A smart controller — Hunter Hydrawise is the standard we install on every PJL system — pulls real-time weather data from local stations and skips, shortens or extends cycles automatically.</p>
@@ -270,7 +270,7 @@
           <li><strong>Per-zone history</strong> — see exactly where the water's going and which zones are inefficient.</li>
           <li><strong>Optional soil moisture sensor</strong> — only waters when the soil itself is actually dry, regardless of schedule.</li>
         </ul>
-        <p>Stacked on top of pressure regulation, a smart controller cuts another 25-40% of total water use. It's the single highest-impact dollar you can spend on an existing sprinkler system. Retrofit is straightforward: we swap the existing controller for a Hydrawise unit, reuse all the existing valve wiring, and program your zones. Pricing scales by zone count: <strong>$595 (1-4 zones) / $750 (5-7) / $1,195 (8-16)</strong>, plus standard $95 service call. Includes the first-season tune-up.</p>
+        <p>Stacked on top of pressure regulation, a smart controller cuts another 25-40% of total water use. It's the single highest-impact dollar you can spend on an existing sprinkler system. Retrofit is straightforward: we swap the existing controller for a Hydrawise unit, reuse all the existing valve wiring, and program your zones. Pricing scales by zone count: <strong><span data-price="controller_1_4">$595</span> (1-4 zones) / <span data-price="controller_5_7">$750</span> (5-7) / <span data-price="controller_8_16">$1,195</span> (8-16)</strong>, plus standard <span data-price="service_call">$95</span> service call. Includes the first-season tune-up.</p>
 
         <div class="from-the-truck"><div class="from-the-truck-label">🚐 From the truck</div><p>"The first time we retrofit pressure regulation on a system we serviced for years, the homeowner called the next morning thinking something was broken. The lawn was wetter, the spray pattern was visibly different, and the system had finished cycling 8 minutes earlier than usual. Nothing was broken. They were just seeing what proper irrigation actually looks like for the first time."</p></div>
 
@@ -309,8 +309,8 @@
         <h2 id="cost">What a retrofit actually costs</h2>
         <p>Locked pricing, no "starting at" surprises, for a typical Newmarket residential property:</p>
         <ul>
-          <li><strong>Pressure-regulated head retrofit (per head):</strong> $68 each (full head replacement, master-flat). Whole-system upgrades quoted on-site with heavily discounted per-head pricing.</li>
-          <li><strong>Hydrawise smart controller retrofit:</strong> $595 (1-4 zones) / $750 (5-7 zones) / $1,195 (8-16 zones), plus standard $95 service call.</li>
+          <li><strong>Pressure-regulated head retrofit (per head):</strong> <span data-price="head_replacement">$68</span> each (full head replacement, master-flat). Whole-system upgrades quoted on-site with heavily discounted per-head pricing.</li>
+          <li><strong>Hydrawise smart controller retrofit:</strong> <span data-price="controller_1_4">$595</span> (1-4 zones) / <span data-price="controller_5_7">$750</span> (5-7 zones) / <span data-price="controller_8_16">$1,195</span> (8-16 zones), plus standard <span data-price="service_call">$95</span> service call.</li>
           <li><strong>Hunter Soil-Clik moisture sensor add-on (optional):</strong> custom quote.</li>
           <li><strong>3-year full warranty</strong> on parts and labour for new installs · 1-year on retrofits and repairs.</li>
           <li>See the <a href="pricing.html">full pricing guide</a> for sample quote math.</li>
@@ -381,6 +381,7 @@
 (function(){var bar=document.getElementById('readingProgress'),article=document.querySelector('.post-content');if(!bar||!article)return;function update(){var rect=article.getBoundingClientRect(),total=article.offsetHeight-window.innerHeight,passed=Math.max(0,-rect.top),pct=Math.min(100,(passed/Math.max(total,1))*100);bar.style.width=pct+'%';}window.addEventListener('scroll',update,{passive:true});window.addEventListener('resize',update);update();})();
 (function(){var cta=document.getElementById('postStickyCta'),footer=document.querySelector('.post-footer');if(!cta)return;function update(){var y=window.scrollY||0,footerTop=footer?footer.getBoundingClientRect().top+y-window.innerHeight:Infinity;if(y>700&&y<footerTop)cta.classList.add('is-visible');else cta.classList.remove('is-visible');}window.addEventListener('scroll',update,{passive:true});update();})();
 </script>
+  <script src="js/pricing-injector.js" defer></script>
   <script src="js/chat-widget.js" defer></script>
 </body>
 </html>

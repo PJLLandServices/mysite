@@ -352,7 +352,7 @@
           <div class="task">
             <div class="task__header"><h3 class="task__title">14. Schedule professional winterization</h3><span class="task__badge is-pro">PRO 🔧</span></div>
             <p>Book your <a href="sprinkler-fall-winterization.html">fall winterization</a> for late October before the first hard freeze. Calibrated low-pressure compressor, zone-by-zone blow-out, controller suspended, system documented for spring. This is the most important non-negotiable on the entire calendar.</p>
-            <div class="task__cost"><strong>Cost of skipping:</strong> Frozen valves, cracked fittings, ruptured backflow assembly. Typical damage repair: $400-$1,500+. Damage prevention via winterization: $90-$160.</div>
+            <div class="task__cost"><strong>Cost of skipping:</strong> Frozen valves, cracked fittings, ruptured backflow assembly. Typical damage repair: $400-$1,500+. Damage prevention via winterization: <span data-price="spring_open_4z">$90</span>-$160.</div>
           </div>
 
           <div class="task">
@@ -393,14 +393,14 @@
             </li>
             <li>
               <h4>Re-wiring zones at the controller</h4>
-              <p>Mis-wiring a zone won't kill you (24V), but it can fry a controller or short two zones together. Worth the $90 service call to do it right.</p>
+              <p>Mis-wiring a zone won't kill you (24V), but it can fry a controller or short two zones together. Worth the <span data-price="spring_open_4z">$90</span> service call to do it right.</p>
             </li>
           </ol>
         </div>
 
         <div class="from-the-truck">
           <span class="from-the-truck-label">🚐 From the truck</span>
-          <p>"The single most expensive lesson we see homeowners learn is the shop-compressor winterization. They saw a YouTube video. They borrowed a compressor. They cracked the manifold and didn't notice until May. The repair was $1,200. The professional winterization they skipped would have been $90."</p>
+          <p>"The single most expensive lesson we see homeowners learn is the shop-compressor winterization. They saw a YouTube video. They borrowed a compressor. They cracked the manifold and didn't notice until May. The repair was $1,200. The professional winterization they skipped would have been <span data-price="spring_open_4z">$90</span>."</p>
         </div>
 
         <h2 id="cost-of-skipping">The cost of skipping each season</h2>
@@ -408,7 +408,7 @@
         <ul>
           <li><strong>Skipping spring start-up:</strong> A leaking head running unnoticed for 3 weeks. Added $80 to the water bill and killed an 8-foot patch of grass. Avoidable with a 15-minute walk.</li>
           <li><strong>Skipping mid-season checks:</strong> Landscaper severed a lateral line on a quiet zone in June. Wasn't noticed until August when half the bed died. Repair: $340. Bed restoration: $600. Avoidable by running each zone after the landscaper visit.</li>
-          <li><strong>Skipping fall winterization:</strong> Frozen-and-cracked manifold, two valves replaced, backflow assembly destroyed (re-installed by a certified tester). Total bill: $1,420 in spring repairs. Avoidable with a $120 winterization visit.</li>
+          <li><strong>Skipping fall winterization:</strong> Frozen-and-cracked manifold, two valves replaced, backflow assembly destroyed (re-installed by a certified tester). Total bill: $1,420 in spring repairs. Avoidable with a <span data-price="fall_close_8z">$120</span> winterization visit.</li>
         </ul>
         <p>The math on professional maintenance is brutal. Two service visits per year (spring opening + fall winterization) typically run $180-$240 total. The repair bills they prevent average 5-10× that.</p>
 
@@ -456,8 +456,8 @@
       <a href="book.html?service=spring_open_4z" class="post-services-cta-btn">Book seasonal service <span aria-hidden="true">→</span></a>
     </div>
     <div class="post-services-cta-tiles">
-        <a href="sprinkler-spring-opening.html" class="post-svc-tile"><span class="post-svc-tile-icon">🌱</span><div><h4>Spring Opening</h4><p>Pressure-up, leak check, Hydrawise re-program. From $90.</p></div></a>
-        <a href="sprinkler-fall-winterization.html" class="post-svc-tile"><span class="post-svc-tile-icon">🍁</span><div><h4>Fall Winterization</h4><p>Calibrated low-pressure compressor blow-out. From $90.</p></div></a>
+        <a href="sprinkler-spring-opening.html" class="post-svc-tile"><span class="post-svc-tile-icon">🌱</span><div><h4>Spring Opening</h4><p>Pressure-up, leak check, Hydrawise re-program. From <span data-price="spring_open_4z">$90</span>.</p></div></a>
+        <a href="sprinkler-fall-winterization.html" class="post-svc-tile"><span class="post-svc-tile-icon">🍁</span><div><h4>Fall Winterization</h4><p>Calibrated low-pressure compressor blow-out. From <span data-price="spring_open_4z">$90</span>.</p></div></a>
         <a href="sprinkler-repair.html" class="post-svc-tile"><span class="post-svc-tile-icon">🔧</span><div><h4>Sprinkler Repair</h4><p>Same-day diagnosis. AI intake = no-surprise labour.</p></div></a>
     </div>
   </div>
@@ -474,6 +474,7 @@
 (function(){var bar=document.getElementById('readingProgress'),article=document.querySelector('.post-content');if(!bar||!article)return;function update(){var rect=article.getBoundingClientRect(),total=article.offsetHeight-window.innerHeight,passed=Math.max(0,-rect.top),pct=Math.min(100,(passed/Math.max(total,1))*100);bar.style.width=pct+'%';}window.addEventListener('scroll',update,{passive:true});window.addEventListener('resize',update);update();})();
 (function(){var cta=document.getElementById('postStickyCta'),footer=document.querySelector('.post-footer');if(!cta)return;function update(){var y=window.scrollY||0,footerTop=footer?footer.getBoundingClientRect().top+y-window.innerHeight:Infinity;if(y>700&&y<footerTop)cta.classList.add('is-visible');else cta.classList.remove('is-visible');}window.addEventListener('scroll',update,{passive:true});update();})();
 </script>
+  <script src="js/pricing-injector.js" defer></script>
   <script src="js/chat-widget.js" defer></script>
 </body>
 </html>
