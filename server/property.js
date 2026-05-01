@@ -20,6 +20,12 @@ const deleteBtn = document.getElementById("deleteBtn");
 const logoutButton = document.getElementById("logoutButton");
 const leadsSection = document.getElementById("leadsSection");
 const leadListEl = document.getElementById("leadList");
+const fieldWoSection = document.getElementById("fieldWoSection");
+const fieldWoList = document.getElementById("fieldWoList");
+const fieldWoNoZones = document.getElementById("fieldWoNoZones");
+const createWoSpring = document.getElementById("createWoSpring");
+const createWoFall = document.getElementById("createWoFall");
+const createWoVisit = document.getElementById("createWoVisit");
 
 const confirmModal = document.getElementById("confirmModal");
 const confirmTitle = document.getElementById("confirmTitle");
@@ -221,6 +227,78 @@ function renderLeadsList(leads) {
     });
 }
 
+// Render the property's Field Work Orders section. Shows existing WOs for
+// this property + the three create buttons. Closes the gap where existing
+// customers (no active booking) had no path to spin up a WO.
+const TYPE_LABELS = {
+  spring_opening: "Spring Opening",
+  fall_closing: "Fall Closing",
+  service_visit: "Service Visit"
+};
+async function renderFieldWoList(property) {
+  if (!property) return;
+  fieldWoSection.hidden = false;
+  // Hint about empty zones — for Spring/Fall the scaffold will be empty
+  // until zones are added to the profile.
+  const zoneCount = (property.system?.zones || []).length;
+  fieldWoNoZones.hidden = zoneCount > 0;
+
+  fieldWoList.innerHTML = "<li class=\"property-field-wo__loading\">Loading…</li>";
+  try {
+    const response = await fetch(`/api/work-orders?propertyId=${encodeURIComponent(property.id)}`, { cache: "no-store" });
+    const data = await response.json();
+    const wos = (data.ok ? data.workOrders : []) || [];
+    fieldWoList.innerHTML = "";
+    if (!wos.length) {
+      const li = document.createElement("li");
+      li.className = "property-field-wo__empty";
+      li.textContent = "No field work orders yet for this property.";
+      fieldWoList.appendChild(li);
+      return;
+    }
+    wos.forEach((wo) => {
+      const li = document.createElement("li");
+      li.className = "property-field-wo__item";
+      li.innerHTML = `
+        <a href="/admin/work-order/${encodeURIComponent(wo.id)}">
+          <strong>${escapeHtml(wo.id)}</strong>
+          <span class="property-field-wo__type">${escapeHtml(TYPE_LABELS[wo.type] || wo.type)}</span>
+          <span class="property-field-wo__status">${escapeHtml((wo.status || "scheduled").replace(/_/g, " "))}</span>
+          <span class="property-field-wo__when">${escapeHtml(formatDate(wo.updatedAt))}</span>
+        </a>
+      `;
+      fieldWoList.appendChild(li);
+    });
+  } catch {
+    fieldWoList.innerHTML = "<li class=\"property-field-wo__empty\">Couldn't load.</li>";
+  }
+}
+
+async function createFieldWoFromButton(type) {
+  if (!loadedProperty) return;
+  const button = document.querySelector(`[data-create-wo="${type}"]`);
+  if (button) button.disabled = true;
+  try {
+    const response = await fetch("/api/work-orders", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ type, propertyId: loadedProperty.id })
+    });
+    const data = await response.json();
+    if (!response.ok || !data.ok) {
+      throw new Error((data.errors && data.errors[0]) || `Create failed (HTTP ${response.status}).`);
+    }
+    window.location.assign(`/admin/work-order/${encodeURIComponent(data.workOrder.id)}`);
+  } catch (err) {
+    alert(err.message);
+    if (button) button.disabled = false;
+  }
+}
+
+createWoSpring?.addEventListener("click", () => createFieldWoFromButton("spring_opening"));
+createWoFall?.addEventListener("click",   () => createFieldWoFromButton("fall_closing"));
+createWoVisit?.addEventListener("click",  () => createFieldWoFromButton("service_visit"));
+
 // ---- Form populate + save ----------------------------------------
 
 function populateForm(property) {
@@ -413,6 +491,7 @@ async function init() {
     renderHero(data.property, data.leads || []);
     populateForm(data.property);
     renderLeadsList(data.leads || []);
+    renderFieldWoList(data.property);
   } catch (err) {
     propertyLoading.hidden = true;
     propertyError.hidden = false;

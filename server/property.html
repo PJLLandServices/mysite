@@ -121,6 +121,20 @@
       </div>
     </form>
 
+    <section class="property-section property-field-wo" id="fieldWoSection" hidden>
+      <header class="property-section-head">
+        <h2>Field Work Orders</h2>
+      </header>
+      <p class="property-section-help">Tech-side per-visit documents for this property. You can spin one up any time — booking required for the customer-facing portal envelope, but not for an internal field WO.</p>
+      <p class="property-field-wo__nozones" id="fieldWoNoZones" hidden>This property has no zones in its profile yet. Spring/Fall WOs will be created with an empty zone list — add zones below first if you want them scaffolded automatically.</p>
+      <ul class="property-field-wo__list" id="fieldWoList"></ul>
+      <div class="property-field-wo__actions">
+        <button type="button" class="pjl-btn pjl-btn-outline" data-create-wo="spring_opening" id="createWoSpring">+ Spring Opening</button>
+        <button type="button" class="pjl-btn pjl-btn-outline" data-create-wo="fall_closing" id="createWoFall">+ Fall Closing</button>
+        <button type="button" class="pjl-btn pjl-btn-outline" data-create-wo="service_visit" id="createWoVisit">+ Service Visit</button>
+      </div>
+    </section>
+
     <section class="property-section property-leads" id="leadsSection" hidden>
       <h2>Booking history</h2>
       <p class="property-section-help">Every lead and booking attached to this property. Click to open in the CRM.</p>
