@@ -75,7 +75,7 @@ function valveBoxRowHtml(box) {
   return `
     <div class="property-valvebox-row" data-valvebox>
       <input type="text" class="vb-location" value="${escapeHtml(box.location || "")}" placeholder="Location (e.g. front-right corner of garden)">
-      <input type="number" class="vb-count" min="1" max="20" value="${escapeHtml(box.valveCount || 1)}" placeholder="#">
+      <input type="number" class="vb-count" min="1" max="50" value="${escapeHtml(box.valveCount || 1)}" placeholder="#">
       <input type="text" class="vb-notes" value="${escapeHtml(box.notes || "")}" placeholder="Notes (zone numbers, hard to find, etc.)">
       <button type="button" class="property-row-remove" data-action="remove-valvebox" aria-label="Remove valve box">×</button>
     </div>

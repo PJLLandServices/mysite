@@ -96,7 +96,7 @@ async function createSession(payload, ttlSeconds = DEFAULT_TTL_SECONDS) {
             zoneCount: payload.customerHints.zoneCount === "unsure"
               ? "unsure"
               : (Number.isFinite(Number(payload.customerHints.zoneCount))
-                  ? Math.min(24, Math.max(1, Math.floor(Number(payload.customerHints.zoneCount))))
+                  ? Math.min(50, Math.max(1, Math.floor(Number(payload.customerHints.zoneCount))))
                   : null),
             notes:     String(payload.customerHints.notes     || "").slice(0, 1500)
           }

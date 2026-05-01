@@ -52,8 +52,8 @@ function escapeHtml(value) {
     .replace(/'/g, "&#039;");
 }
 
-// 1..24 zones in the dropdown.
-for (let n = 1; n <= 24; n++) {
+// 1..50 zones in the dropdown.
+for (let n = 1; n <= 50; n++) {
   const opt = document.createElement("option");
   opt.value = String(n);
   opt.textContent = n === 1 ? "1 zone" : `${n} zones`;

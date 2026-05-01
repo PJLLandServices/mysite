@@ -21,7 +21,7 @@
     serviceMeta: null,
     address: "",
     formattedAddress: "",
-    zoneCount: null,    // number 1-24 OR "unsure" (kept for booking notes)
+    zoneCount: null,    // number 1-50 OR "unsure" (kept for booking notes)
     selectedDate: null, // YYYY-MM-DD
     selectedSlot: null, // { start, end, timeLabel, ... }
     days: [],           // grouped slots from /api/booking/availability
@@ -276,14 +276,14 @@
     setTimeout(() => showStep(nextStep), 250);
   });
 
-  // Populate the zone dropdown once at boot. 1..24 zones plus the existing
+  // Populate the zone dropdown once at boot. 1..50 zones plus the existing
   // "unsure" sentinel that was hard-coded into book.html.
   (function buildZoneOptions() {
     if (!bookZones) return;
     // Insert numeric options BEFORE the "I'm not sure" entry so the
-    // dropdown reads naturally: choose..., 1..24, then "I'm not sure".
+    // dropdown reads naturally: choose..., 1..50, then "I'm not sure".
     const unsureOption = bookZones.querySelector('option[value="unsure"]');
-    for (let n = 1; n <= 24; n++) {
+    for (let n = 1; n <= 50; n++) {
       const opt = document.createElement("option");
       opt.value = String(n);
       opt.textContent = n === 1 ? "1 zone" : `${n} zones`;
@@ -581,7 +581,7 @@
     if (hints.zoneCount === "unsure") {
       state.zoneCount = "unsure";
       if (bookZones) bookZones.value = "unsure";
-    } else if (typeof hints.zoneCount === "number" && hints.zoneCount >= 1 && hints.zoneCount <= 24) {
+    } else if (typeof hints.zoneCount === "number" && hints.zoneCount >= 1 && hints.zoneCount <= 50) {
       state.zoneCount = String(hints.zoneCount);
       if (bookZones) bookZones.value = String(hints.zoneCount);
     }
