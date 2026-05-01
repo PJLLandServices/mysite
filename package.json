@@ -6,7 +6,9 @@
   "main": "server/server.js",
   "scripts": {
     "start": "node server/server.js",
-    "setup-password": "node server/setup-password.js"
+    "setup-password": "node server/setup-password.js",
+    "build": "node build.js",
+    "build:check": "node build.js --check"
   },
   "engines": {
     "node": ">=18"
