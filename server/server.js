@@ -280,6 +280,7 @@ function clearSessionCookie(req, res) {
 // What IS gated: the /admin dashboard page and any API that exposes lead data.
 function needsAuth(method, pathname) {
   if (pathname === "/admin" || pathname === "/admin/") return true;
+  if (pathname === "/admin/today" || pathname === "/admin/today/") return true;
   if (pathname === "/admin/schedule" || pathname === "/admin/schedule/") return true;
   if (pathname === "/admin/handoff" || pathname === "/admin/handoff/") return true;
   if (pathname === "/admin/chats" || pathname === "/admin/chats/") return true;
@@ -307,8 +308,8 @@ function needsAuth(method, pathname) {
   // Phase 4 will add a customer-portal "approve quote" subset that's
   // public via a token, but that doesn't exist yet.
   if (pathname.startsWith("/api/work-orders")) return true;
-  // Per-lead property link/dismiss/attach actions are admin-only.
-  if (/^\/api\/leads\/[^/]+\/(link-property|dismiss-property-suggestion|attach-property)$/.test(pathname)) return true;
+  // Per-lead property link/dismiss/attach + tech actions are admin-only.
+  if (/^\/api\/leads\/[^/]+\/(link-property|dismiss-property-suggestion|attach-property|notify-on-route|open-wo)$/.test(pathname)) return true;
   // Bulk property import is admin-only.
   if (pathname === "/api/admin/import-properties") return true;
   // Availability lookups + the public booking endpoint stay public.
@@ -2531,6 +2532,193 @@ async function handleApi(req, res, pathname) {
     }
   }
 
+  // Today's Schedule — the tech's morning hub. Returns every booking
+  // scheduled for the requested date in PJL's local timezone (or "today"
+  // if no date passed). Each row is decorated with everything the field
+  // tech needs in one place: customer name, full address (with town),
+  // service label, start/end, customer notes, internal notes, the linked
+  // property's coords + phone for navigation, and the existing WO id +
+  // status if one's been opened. Sorted ascending by start time so the
+  // tech can read top-to-bottom.
+  //
+  // Cancelled / archived leads are filtered out — we don't surface them
+  // to the field tech. Site visits show alongside paid services since
+  // they're real on-site appointments too.
+  if (req.method === "GET" && pathname === "/api/schedule/today") {
+    const url = new URL(req.url, baseUrlFromReq(req));
+    const dateParam = url.searchParams.get("date");
+
+    // Local-day window in America/Toronto. If `date` is passed, use it;
+    // otherwise infer today from server time (server.js sets process.env.TZ
+    // = 'America/Toronto' on boot so this is honest).
+    const today = dateParam ? new Date(`${dateParam}T00:00:00`) : new Date();
+    if (Number.isNaN(today.getTime())) {
+      return sendJson(res, 422, { ok: false, errors: ["Bad date param."] });
+    }
+    const dayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 0, 0, 0).getTime();
+    const dayEnd = dayStart + 24 * 60 * 60 * 1000;
+
+    const allLeads = await readLeads();
+    const allWos = await workOrders.list();
+    const woByLeadId = new Map(allWos.map((w) => [w.leadId, w]));
+
+    const bookings = allLeads
+      .filter((lead) => {
+        if (lead.archived) return false;
+        const start = lead.booking?.start ? new Date(lead.booking.start).getTime() : null;
+        if (!start) return false;
+        return start >= dayStart && start < dayEnd;
+      })
+      .sort((a, b) => new Date(a.booking.start) - new Date(b.booking.start))
+      .map((lead) => {
+        const start = new Date(lead.booking.start);
+        const end = lead.booking.end ? new Date(lead.booking.end) : null;
+        const wo = woByLeadId.get(lead.id) || null;
+        // Reuse the lead's contact extractor when present — it has the
+        // street/town/postal split that the tech needs for clean display.
+        const contact = lead.contactExport || lead.contact || {};
+        const address = lead.contact?.address || lead.contactExport?.address?.full || "";
+        const town = lead.contact?.town || lead.contactExport?.address?.town || "";
+        return {
+          leadId: lead.id,
+          customerName: contact.name || lead.contact?.name || "",
+          customerPhone: contact.telephone || lead.contact?.phone || "",
+          customerEmail: contact.email || lead.contact?.email || "",
+          address,
+          town,
+          coords: lead.booking.coords || null,
+          serviceKey: lead.booking.serviceKey,
+          serviceLabel: lead.booking.serviceLabel || "Appointment",
+          start: start.toISOString(),
+          end: end ? end.toISOString() : null,
+          startLabel: start.toLocaleTimeString("en-CA", { hour: "numeric", minute: "2-digit" }),
+          endLabel: end ? end.toLocaleTimeString("en-CA", { hour: "numeric", minute: "2-digit" }) : "",
+          customerNotes: lead.contact?.notes || "",
+          internalNotes: lead.crm?.internalNotes || "",
+          stage: lead.crm?.status || lead.status || "new",
+          propertyId: lead.propertyId || null,
+          // WO surfaced here so the tech can see "already opened, status=on_site"
+          // before they tap. Falsy if no WO has been created yet.
+          workOrder: wo ? {
+            id: wo.id,
+            type: wo.type,
+            status: wo.status,
+            zoneCount: (wo.zones || []).length
+          } : null,
+          onRouteNotifiedAt: lead.onRouteNotifiedAt || null
+        };
+      });
+
+    return sendJson(res, 200, {
+      ok: true,
+      date: new Date(dayStart).toISOString().slice(0, 10),
+      bookings,
+      count: bookings.length
+    });
+  }
+
+  // Tech taps "Notify on route" on the today's-schedule view.
+  // Sends SMS + email to the customer with the on_route template,
+  // logs an activity entry, and stamps lead.onRouteNotifiedAt so the
+  // UI can show "✓ notified at 9:14 AM" instead of re-firing on
+  // accidental double-tap. Body: (none required).
+  const notifyOnRouteMatch = pathname.match(/^\/api\/leads\/([^/]+)\/notify-on-route$/);
+  if (notifyOnRouteMatch && req.method === "POST") {
+    try {
+      const leadId = decodeURIComponent(notifyOnRouteMatch[1]);
+      const allLeads = await readLeads();
+      const idx = allLeads.findIndex((l) => l.id === leadId);
+      if (idx === -1) return sendJson(res, 404, { ok: false, errors: ["Lead not found."] });
+      const lead = allLeads[idx];
+
+      // Decorate with portalUrl + booking shape so the template fills out
+      // {firstName}, {serviceLabel}, {portalUrl} correctly.
+      const decorated = decorateLeadForAdmin(lead, req);
+      const baseUrl = baseUrlFromReq(req);
+
+      // Fire-and-forget — don't block the tech on Twilio/Gmail latency.
+      // Errors land in the server log; the UI gets an immediate ok.
+      notifyCustomer("on_route", decorated, { baseUrl }).catch((err) => {
+        console.error("[notify-on-route]", err);
+      });
+
+      lead.onRouteNotifiedAt = new Date().toISOString();
+      lead.crm = lead.crm || {};
+      lead.crm.activity = Array.isArray(lead.crm.activity) ? lead.crm.activity : [];
+      lead.crm.activity.unshift({
+        at: lead.onRouteNotifiedAt,
+        type: "update",
+        text: "Notified customer: on the way."
+      });
+      lead.crm.lastUpdated = lead.onRouteNotifiedAt;
+      allLeads[idx] = lead;
+      await writeLeads(allLeads);
+
+      return sendJson(res, 200, {
+        ok: true,
+        notifiedAt: lead.onRouteNotifiedAt
+      });
+    } catch (error) {
+      return sendJson(res, 400, { ok: false, errors: [error.message || "Couldn't notify customer."] });
+    }
+  }
+
+  // Tech taps a row on today's-schedule. Returns the lead's existing
+  // field WO if one exists, otherwise creates one on-the-fly using the
+  // booking's service to pick the right template + the linked property
+  // (if any) to scaffold zones from. The client navigates to the WO
+  // tech-mode page after this resolves.
+  const openWoMatch = pathname.match(/^\/api\/leads\/([^/]+)\/open-wo$/);
+  if (openWoMatch && req.method === "POST") {
+    try {
+      const leadId = decodeURIComponent(openWoMatch[1]);
+      const allLeads = await readLeads();
+      const lead = allLeads.find((l) => l.id === leadId);
+      if (!lead) return sendJson(res, 404, { ok: false, errors: ["Lead not found."] });
+
+      // Existing WO for this lead? Return it.
+      const existing = await workOrders.listByLead(leadId);
+      if (existing.length) {
+        // Most-recent first — listByLead doesn't sort, so pick the
+        // newest by updatedAt.
+        existing.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
+        return sendJson(res, 200, { ok: true, workOrder: existing[0], created: false });
+      }
+
+      // Create a new WO. Pick the template from the booked service and
+      // pull in the linked property if one's on the lead.
+      const type = workOrders.templateForServiceKey(lead.booking?.serviceKey);
+      let property = null;
+      if (lead.propertyId) {
+        property = await properties.get(lead.propertyId);
+      }
+
+      // Reuse the booking envelope's WO id so customer + tech see the
+      // same WO-XXXXXXXX (matches the existing CRM-side create flow).
+      const customId = lead.booking?.workOrder?.id || null;
+      const wo = await workOrders.create({ type, lead, property, customId });
+
+      // Tag the lead with the WO id + log activity.
+      const idx = allLeads.findIndex((l) => l.id === leadId);
+      if (idx !== -1) {
+        allLeads[idx].workOrderId = wo.id;
+        allLeads[idx].crm = allLeads[idx].crm || {};
+        allLeads[idx].crm.activity = Array.isArray(allLeads[idx].crm.activity) ? allLeads[idx].crm.activity : [];
+        allLeads[idx].crm.activity.unshift({
+          at: new Date().toISOString(),
+          type: "update",
+          text: `Field WO opened from today's schedule (${workOrders.TEMPLATES[type].label}): ${wo.id}`
+        });
+        allLeads[idx].crm.lastUpdated = new Date().toISOString();
+        await writeLeads(allLeads);
+      }
+
+      return sendJson(res, 200, { ok: true, workOrder: wo, created: true });
+    } catch (error) {
+      return sendJson(res, 400, { ok: false, errors: [error.message || "Couldn't open work order."] });
+    }
+  }
+
   // Admin: list all schedule blocks.
   if (req.method === "GET" && pathname === "/api/schedule/blocks") {
     const blocks = await scheduleStore.listBlocks();
@@ -2608,6 +2796,11 @@ function resolveStaticTarget(pathname) {
   }
   if (pathname === "/admin/handoff" || pathname === "/admin/handoff/") {
     return { dir: SERVER_DIR, relative: "/handoff.html" };
+  }
+  // Today's Schedule — the tech's daily morning hub. Lists today's
+  // confirmed bookings with navigate/notify/open-WO actions per row.
+  if (pathname === "/admin/today" || pathname === "/admin/today/") {
+    return { dir: SERVER_DIR, relative: "/today.html" };
   }
   // Properties index + per-property detail page. Both served from the
   // same HTML file; the JS reads the URL to decide which view to render.

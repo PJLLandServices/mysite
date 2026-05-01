@@ -120,6 +120,18 @@ const TEMPLATES = {
       "Patrick will walk your property, scope the work, and follow up with a written quote. " +
       "Your work order ({workOrderId}) is in your portal — no charge for the visit.",
     sms: "{namePrefix}your PJL site visit is scheduled: {dateStr} at {timeStr}. Free walkaround. Details: {portalUrl}"
+  },
+  // Fired manually from the tech's daily-schedule view when they tap
+  // "Notify on route" before driving over. Short, direct — the tech is
+  // about to be at the door, the customer just needs to know.
+  on_route: {
+    subject: "PJL is on the way — {serviceLabel}",
+    headline: "We're on the way.",
+    body:
+      "Hi {firstName}, this is PJL Land Services. Patrick is on his way to your property for your " +
+      "{serviceLabel}. We'll see you soon — if you need to flag anything (gate codes, dogs, parking), " +
+      "just call or text (905) 960-0181.",
+    sms: "{namePrefix}PJL is on the way for your {serviceLabel}. See you soon. Questions? (905) 960-0181"
   }
 };
 

@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#0F1F14">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>PJL — Today's Schedule</title>
+  <link rel="icon" type="image/svg+xml" href="/crm/pjl-logo-mark.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/crm/crm.css">
+  <link rel="stylesheet" href="/crm/today.css">
+</head>
+<body class="pjl-crm-body">
+  <nav class="pjl-admin-nav" aria-label="PJL Today's Schedule">
+    <div class="pjl-nav-strip">
+      <span>Newmarket &amp; GTA</span>
+      <span class="pjl-strip-live"><span aria-hidden="true"></span>Daily schedule</span>
+      <a href="tel:+19059600181">(905) 960-0181</a>
+    </div>
+    <div class="pjl-nav-main">
+      <a href="/" class="pjl-nav-logo"><img src="/crm/pjl-logo.svg" alt="PJL Land Services"></a>
+      <button class="pjl-nav-toggle" type="button" id="navToggle" aria-label="Menu" aria-expanded="false" aria-controls="navMenu">
+        <span class="pjl-nav-toggle-bar"></span>
+        <span class="pjl-nav-toggle-bar"></span>
+        <span class="pjl-nav-toggle-bar"></span>
+      </button>
+      <div class="pjl-nav-links" id="navMenu">
+        <a href="/admin/today" class="is-active">Today</a>
+        <a href="/admin">CRM</a>
+        <a href="/admin/schedule">Schedule</a>
+        <a href="/admin/handoff">Handoff</a>
+        <a href="/admin/properties">Properties</a>
+        <button class="pjl-nav-logout" type="button" id="logoutButton">Log out</button>
+      </div>
+    </div>
+  </nav>
+
+  <main class="today-shell">
+    <header class="today-hero">
+      <div>
+        <p class="today-eyebrow">Today's Schedule</p>
+        <h1 id="todayHeadline">Loading…</h1>
+        <p class="today-subline" id="todaySubline">—</p>
+      </div>
+      <div class="today-date-picker">
+        <label for="datePicker">Date</label>
+        <input type="date" id="datePicker">
+      </div>
+    </header>
+
+    <p class="today-loading" id="todayLoading">Loading today's bookings…</p>
+    <p class="today-error" id="todayError" hidden>Couldn't load today's schedule. Refresh the page.</p>
+
+    <section class="today-empty" id="todayEmpty" hidden>
+      <p class="today-empty-eyebrow">All clear</p>
+      <h2>No bookings on this day.</h2>
+      <p>When customers book through the site or you handoff a lead, they'll show up here automatically.</p>
+      <a class="pjl-btn pjl-btn-primary" href="/admin/handoff">Send a booking link →</a>
+    </section>
+
+    <ul class="today-list" id="todayList"></ul>
+  </main>
+
+  <script src="/crm/today.js"></script>
+</body>
+</html>

@@ -47,6 +47,20 @@ const TEMPLATES = {
   service_visit:  { label: "Service Visit",  scaffoldFromProperty: false }
 };
 
+// Map a booking's serviceKey (from availability.js BOOKABLE_SERVICES) to
+// the right WO template. Used by the today's-schedule page to spin up
+// a WO on-tap with the correct scaffolding. Defaults to service_visit
+// for anything unrecognized — safer than throwing on a tech tap.
+function templateForServiceKey(serviceKey) {
+  const key = String(serviceKey || "");
+  if (key.startsWith("spring_open_")) return "spring_opening";
+  if (key.startsWith("fall_close_"))  return "fall_closing";
+  // sprinkler_repair, hydrawise_retrofit, site_visit and any future
+  // one-off services all open as service_visit — the WO is the same
+  // shape regardless of the booked label.
+  return "service_visit";
+}
+
 const ZONE_STATUSES = ["", "working_well", "adjusted", "repair_required", "other"];
 
 // ---- File I/O ---------------------------------------------------------
@@ -245,6 +259,7 @@ async function remove(id) {
 module.exports = {
   TEMPLATES,
   ZONE_STATUSES,
+  templateForServiceKey,
   list,
   get,
   listByProperty,

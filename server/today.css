@@ -1,0 +1,377 @@
+/* Today's Schedule — the tech's morning hub.
+   Mobile-first: card-per-booking, big tap-friendly action buttons,
+   sticky date header, color signals on customer-already-notified
+   and WO-already-opened states. Loaded on top of crm.css. */
+
+.today-shell {
+  width: min(960px, 100%);
+  margin: 0 auto;
+  padding: 18px 16px 80px;
+  padding-bottom: calc(80px + env(safe-area-inset-bottom));
+}
+
+.today-hero {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 18px;
+  align-items: end;
+  padding: 18px 18px 14px;
+  margin-bottom: 18px;
+  background: linear-gradient(135deg, rgba(27, 77, 46, 0.10) 0%, rgba(27, 77, 46, 0.02) 100%);
+  border: 1px solid rgba(27, 77, 46, 0.18);
+  border-radius: 14px;
+}
+.today-eyebrow {
+  margin: 0 0 4px;
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 12px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  font-weight: 700;
+  color: var(--pjl-amber);
+}
+.today-hero h1 {
+  margin: 0 0 4px;
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: clamp(26px, 5.5vw, 38px);
+  letter-spacing: 0.02em;
+  color: var(--pjl-green);
+}
+.today-subline {
+  margin: 0;
+  font-size: 13px;
+  color: var(--pjl-text-muted);
+}
+.today-date-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--pjl-text-muted);
+}
+.today-date-picker label {
+  font-family: "Barlow Condensed", sans-serif;
+  letter-spacing: 0.10em;
+  text-transform: uppercase;
+}
+.today-date-picker input {
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 14px;
+  border-radius: 8px;
+  border: 1px solid rgba(15, 31, 20, 0.18);
+  background: #fff;
+  min-width: 160px;
+}
+
+.today-loading,
+.today-error {
+  padding: 26px 14px;
+  text-align: center;
+  color: var(--pjl-text-mid);
+  font-size: 14px;
+}
+.today-error { color: #b13a3a; }
+
+.today-empty {
+  padding: 36px 22px;
+  text-align: center;
+  background: #fff;
+  border: 1px dashed rgba(15, 31, 20, 0.20);
+  border-radius: 14px;
+}
+.today-empty-eyebrow {
+  margin: 0 0 6px;
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 12px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--pjl-text-muted);
+}
+.today-empty h2 {
+  margin: 0 0 10px;
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 22px;
+  color: var(--pjl-green);
+}
+.today-empty p {
+  margin: 0 0 16px;
+  font-size: 14px;
+  color: var(--pjl-text-mid);
+  line-height: 1.5;
+}
+
+/* Booking list — one card per booking, sorted by start time */
+.today-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.today-card {
+  display: grid;
+  grid-template-columns: 96px 1fr;
+  gap: 14px;
+  padding: 14px;
+  background: #fff;
+  border: 1px solid rgba(15, 31, 20, 0.10);
+  border-left: 4px solid var(--pjl-green);
+  border-radius: 12px;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.today-card:hover {
+  border-color: rgba(27, 77, 46, 0.30);
+  box-shadow: 0 6px 18px rgba(15, 31, 20, 0.06);
+}
+
+.today-card-time {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 10px;
+  background: rgba(27, 77, 46, 0.06);
+  border-radius: 10px;
+  text-align: center;
+}
+.today-card-time strong {
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 22px;
+  letter-spacing: 0.02em;
+  color: var(--pjl-green);
+  line-height: 1.1;
+}
+.today-card-time span {
+  font-size: 11px;
+  color: var(--pjl-text-muted);
+  margin-top: 2px;
+}
+
+.today-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.today-card-headline {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.today-card-headline h2 {
+  margin: 0;
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 19px;
+  letter-spacing: 0.02em;
+  color: var(--pjl-text);
+}
+.today-card-wo-badge {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-end;
+  font-family: "DM Sans", sans-serif;
+  font-size: 11px;
+  text-align: right;
+}
+.today-card-wo-badge strong {
+  letter-spacing: 0.04em;
+  color: var(--pjl-green);
+  font-size: 12px;
+}
+.today-card-wo-status {
+  margin-top: 2px;
+  padding: 2px 8px;
+  background: rgba(15, 31, 20, 0.06);
+  border-radius: 999px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--pjl-text-muted);
+  font-size: 10px;
+  font-weight: 700;
+}
+.today-card-address {
+  margin: 0;
+  font-size: 14px;
+  color: var(--pjl-text);
+  font-weight: 500;
+  line-height: 1.4;
+}
+.today-card-phone {
+  display: inline-block;
+  margin: 0;
+  padding: 4px 10px;
+  background: rgba(15, 31, 20, 0.05);
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--pjl-green);
+  text-decoration: none;
+  width: max-content;
+}
+.today-card-phone:hover {
+  background: rgba(27, 77, 46, 0.10);
+}
+.today-card-service {
+  margin: 4px 0 0;
+  font-size: 13px;
+  color: var(--pjl-text-mid);
+  font-weight: 600;
+}
+.today-card-service-template {
+  font-weight: 400;
+  color: var(--pjl-text-muted);
+}
+
+/* Notes — customer-supplied (italic green hint) and internal (amber) */
+.today-card-notes {
+  margin: 4px 0 0;
+  padding: 8px 10px;
+  font-size: 13px;
+  line-height: 1.5;
+  border-radius: 8px;
+}
+.today-card-notes--customer {
+  background: rgba(27, 77, 46, 0.05);
+  color: var(--pjl-text);
+  border-left: 3px solid var(--pjl-green);
+}
+.today-card-notes--internal {
+  background: rgba(224, 123, 36, 0.06);
+  color: var(--pjl-text);
+  border-left: 3px solid var(--pjl-amber);
+}
+.today-card-notes-label {
+  display: block;
+  margin-bottom: 2px;
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 10px;
+  letter-spacing: 0.10em;
+  text-transform: uppercase;
+  font-weight: 700;
+  color: var(--pjl-text-muted);
+}
+
+/* Action row — Navigate / Notify / Open WO */
+.today-card-actions {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+  margin-top: 8px;
+}
+.today-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 48px;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 10px;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 700;
+  cursor: pointer;
+  text-decoration: none;
+  text-align: center;
+  transition: transform 0.12s ease, background 0.15s ease, opacity 0.2s ease;
+  line-height: 1.15;
+}
+.today-action:active { transform: scale(0.97); }
+.today-action:disabled { opacity: 0.6; cursor: wait; }
+.today-action-icon {
+  font-size: 14px;
+  display: inline-flex;
+  align-items: center;
+}
+.today-action-label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Navigate — primary green deep-link to Maps */
+.today-action--navigate {
+  background: var(--pjl-green);
+  color: #fff;
+}
+.today-action--navigate:hover { background: #143b22; }
+
+/* Notify — amber by default, green check after fired */
+.today-action--notify {
+  background: rgba(224, 123, 36, 0.12);
+  color: #a25419;
+  border: 1.5px solid rgba(224, 123, 36, 0.45);
+}
+.today-action--notify:hover {
+  background: rgba(224, 123, 36, 0.22);
+}
+.today-action--notify[data-notified] {
+  background: rgba(74, 140, 92, 0.14);
+  color: #2D6A42;
+  border-color: rgba(74, 140, 92, 0.40);
+}
+
+/* Open WO — outlined green */
+.today-action--open {
+  background: #fff;
+  color: var(--pjl-green);
+  border: 1.5px solid var(--pjl-green);
+}
+.today-action--open:hover {
+  background: rgba(27, 77, 46, 0.06);
+}
+
+/* Mobile/iPhone tier ============================================ */
+
+@media (max-width: 760px) {
+  .today-hero {
+    grid-template-columns: 1fr;
+    gap: 10px;
+    padding: 14px 14px 12px;
+  }
+  .today-date-picker {
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+  }
+  .today-date-picker label { display: none; }
+  .today-date-picker input {
+    flex: 1;
+    font-size: 16px;
+    min-height: 44px;
+  }
+
+  /* Card layout: time stacked above body so the body has full width.
+     This is the bigger/cleaner shape on a phone. */
+  .today-card {
+    grid-template-columns: 1fr;
+    gap: 10px;
+    padding: 14px 14px 12px;
+  }
+  .today-card-time {
+    flex-direction: row;
+    justify-content: flex-start;
+    gap: 8px;
+    padding: 8px 12px;
+  }
+  .today-card-time strong { font-size: 18px; }
+  .today-card-time span { margin-top: 0; font-size: 12px; }
+
+  .today-card-headline h2 { font-size: 18px; }
+
+  /* Action row: 3-up tightens; on tiny phones, stack to 2 rows. */
+  .today-card-actions {
+    grid-template-columns: 1fr 1fr;
+  }
+  .today-action--navigate { grid-column: 1 / -1; }
+}
+
+@media (max-width: 420px) {
+  .today-card-actions { grid-template-columns: 1fr; }
+  .today-action--navigate { grid-column: auto; }
+  .today-action { font-size: 13px; min-height: 44px; }
+}
