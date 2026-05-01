@@ -273,19 +273,6 @@
             </div>
           </section>
 
-          <!-- Manual link picker dialog -->
-          <dialog id="propertyPickerDialog" class="property-picker-dialog">
-            <form method="dialog" id="propertyPickerForm">
-              <h3>Link to existing property</h3>
-              <p>Search by customer name, email, phone, or address.</p>
-              <input type="search" id="propertyPickerSearch" placeholder="Start typing…" autocomplete="off">
-              <ul class="property-picker-results" id="propertyPickerResults"></ul>
-              <div class="dialog-actions">
-                <button type="button" class="pjl-btn pjl-btn-outline" id="propertyPickerCancel">Cancel</button>
-              </div>
-            </form>
-          </dialog>
-
           <section class="detail-section detail-workorder" id="detailWorkOrderSection" hidden>
             <h3>Work Order</h3>
             <div class="detail-workorder__head">
@@ -306,7 +293,7 @@
             </div>
           </section>
 
-          <section class="detail-section detail-field-wo" id="detailFieldWoSection">
+          <section class="detail-section detail-field-wo" id="detailFieldWoSection" hidden>
             <h3>Field Work Orders</h3>
             <p class="detail-field-wo__hint" id="detailFieldWoHint">The tech-side document. Each visit gets its own field work order with the property's zone list pre-populated.</p>
             <ul class="detail-field-wo__list" id="detailFieldWoList"></ul>
@@ -362,6 +349,22 @@
       </aside>
     </section>
   </main>
+
+  <!-- Manual link picker dialog. Lives at body root (NOT inside the
+       lead-editor <form>) because nested <form> elements are forbidden
+       in HTML5 — Chromium silently auto-closes the outer form on the
+       inner </form>, which orphans every section after the dialog. -->
+  <dialog id="propertyPickerDialog" class="property-picker-dialog">
+    <form method="dialog" id="propertyPickerForm">
+      <h3>Link to existing property</h3>
+      <p>Search by customer name, email, phone, or address.</p>
+      <input type="search" id="propertyPickerSearch" placeholder="Start typing…" autocomplete="off">
+      <ul class="property-picker-results" id="propertyPickerResults"></ul>
+      <div class="dialog-actions">
+        <button type="button" class="pjl-btn pjl-btn-outline" id="propertyPickerCancel">Cancel</button>
+      </div>
+    </form>
+  </dialog>
 
   <script src="/crm/admin.js"></script>
 </body>

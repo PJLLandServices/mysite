@@ -886,6 +886,14 @@
   gap: 9px;
 }
 
+/* `.detail-section { display: grid }` has the same specificity as the
+   browser-default `[hidden] { display: none }`, and being an author rule
+   it wins on source order. Add an explicit override so per-section
+   `hidden` toggles in JS actually hide the section. */
+.detail-section[hidden] {
+  display: none;
+}
+
 .detail-section h3 {
   margin: 0;
 }
