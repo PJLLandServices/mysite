@@ -15,29 +15,34 @@
   <link rel="stylesheet" href="/crm/property.css">
 </head>
 <body class="pjl-crm-body">
-  <nav class="pjl-admin-nav" aria-label="PJL Properties">
-    <div class="pjl-nav-strip">
-      <span>Newmarket &amp; GTA</span>
-      <span class="pjl-strip-live"><span aria-hidden="true"></span>Customer portfolios</span>
-      <a href="tel:+19059600181">(905) 960-0181</a>
+  <aside class="pjl-admin-nav" id="navMenu" aria-label="PJL CRM Navigation">
+    <header class="pjl-side-brand">
+      <a href="/" class="pjl-side-logo"><img src="/crm/pjl-logo.svg" alt="PJL Land Services"></a>
+    </header>
+    <div class="pjl-nav-links">
+      <a href="/admin/today">Today</a>
+      <a href="/admin">CRM</a>
+      <a href="/admin/schedule">Schedule</a>
+      <a href="/admin/handoff">Handoff</a>
+      <a href="/admin/properties" class="is-active">Properties</a>
+      <a href="/admin/chats">AI Chats</a>
     </div>
-    <div class="pjl-nav-main">
-      <a href="/" class="pjl-nav-logo"><img src="/crm/pjl-logo.svg" alt="PJL Land Services"></a>
+    <footer class="pjl-side-footer">
+      <a class="pjl-side-phone" href="tel:+19059600181">(905) 960-0181</a>
+      <button class="pjl-nav-logout" type="button" id="logoutButton">Log out</button>
+    </footer>
+  </aside>
+
+  <div class="pjl-app">
+    <header class="pjl-app-topbar">
       <button class="pjl-nav-toggle" type="button" id="navToggle" aria-label="Menu" aria-expanded="false" aria-controls="navMenu">
         <span class="pjl-nav-toggle-bar"></span>
         <span class="pjl-nav-toggle-bar"></span>
         <span class="pjl-nav-toggle-bar"></span>
       </button>
-      <div class="pjl-nav-links" id="navMenu">
-        <a href="/admin/today">Today</a>
-        <a href="/admin">CRM</a>
-        <a href="/admin/schedule">Schedule</a>
-        <a href="/admin/handoff">Handoff</a>
-        <a href="/admin/properties" class="is-active">Properties</a>
-        <button class="pjl-nav-logout" type="button" id="logoutButton">Log out</button>
-      </div>
-    </div>
-  </nav>
+      <span class="pjl-app-title">Properties</span>
+      <a class="pjl-app-phone" href="tel:+19059600181">(905) 960-0181</a>
+    </header>
 
   <main class="pjl-crm-shell">
     <header class="pjl-crm-hero">
@@ -78,7 +83,8 @@
     <p class="properties-empty" id="propertiesEmpty" hidden>
       No properties yet. They'll appear here automatically as customers book.
     </p>
-  </main>
+    </main>
+  </div><!-- /.pjl-app -->
 
   <div class="confirm-modal" id="confirmModal" hidden role="dialog" aria-modal="true" aria-labelledby="confirmTitle">
     <div class="confirm-modal-card">

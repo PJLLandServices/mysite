@@ -55,174 +55,150 @@
   text-decoration: none;
 }
 
+/* === Left sidebar shell ============================================
+   Modern CRM pattern: fixed dark sidebar on the left, main content
+   takes the remaining width. On mobile the sidebar slides off-screen
+   and a slim topbar provides the hamburger to bring it back.
+
+   Sidebar = .pjl-admin-nav (kept the class so existing JS that
+   toggles `.is-open` continues to work without per-page edits). */
+
+:root {
+  --side-nav-width: 240px;
+}
+
 .pjl-admin-nav {
-  position: sticky;
-  top: 0;
-  z-index: 50;
-  background: transparent;
-  /* Honor iOS safe-area top inset (Dynamic Island / notch) — without this
-     the dark nav strip can underflow the status bar on iPhone Pro Max. */
-  padding-top: env(safe-area-inset-top);
-  background: rgba(10, 24, 16, 0.95);
-}
-
-.pjl-nav-strip {
-  height: 38px;
-  display: flex;
-  align-items: center;
-  gap: 18px;
-  padding: 0 clamp(18px, 3vw, 40px);
-  padding-left: max(clamp(18px, 3vw, 40px), env(safe-area-inset-left));
-  padding-right: max(clamp(18px, 3vw, 40px), env(safe-area-inset-right));
-  color: rgba(255,255,255,0.78);
-  background: rgba(10, 24, 16, 0.95);
-  border-bottom: 1px solid rgba(243,144,25,0.16);
-  font-size: 12.5px;
-}
-
-.pjl-nav-strip a {
-  margin-left: auto;
-  display: inline-flex;
-  align-items: center;
-  min-height: 28px;
-  padding: 4px 12px;
-  border: 1px solid rgba(255,255,255,0.14);
-  border-radius: 999px;
-  color: #fff;
-  font-weight: 800;
-}
-
-.pjl-strip-live {
-  display: inline-flex;
-  align-items: center;
-  gap: 9px;
-  color: #fff;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.pjl-strip-live span {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--pjl-amber);
-  box-shadow: 0 0 0 0 rgba(243,144,25,0.65);
-  animation: pjlPulseDot 2.2s infinite;
-}
-
-@keyframes pjlPulseDot {
-  0% { box-shadow: 0 0 0 0 rgba(243,144,25,0.65); }
-  70% { box-shadow: 0 0 0 8px rgba(243,144,25,0); }
-  100% { box-shadow: 0 0 0 0 rgba(243,144,25,0); }
-}
-
-.pjl-nav-main {
-  height: 112px;
-  display: flex;
-  align-items: center;
-  gap: 24px;
-  padding: 0 clamp(18px, 3vw, 40px);
-  padding-left: max(clamp(18px, 3vw, 40px), env(safe-area-inset-left));
-  padding-right: max(clamp(18px, 3vw, 40px), env(safe-area-inset-right));
-  background: rgba(15,31,20,0.97);
-  box-shadow: 0 2px 24px rgba(0,0,0,0.22);
-  position: relative;
-}
-
-.pjl-nav-main::after {
-  content: "";
-  position: absolute;
+  position: fixed;
   left: 0;
-  right: 0;
+  top: 0;
   bottom: 0;
-  height: 1px;
-  background: linear-gradient(90deg, transparent 0%, rgba(243,144,25,0.5) 50%, transparent 100%);
+  width: var(--side-nav-width);
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  background: linear-gradient(180deg, #0F1F14 0%, #112418 100%);
+  color: rgba(255, 255, 255, 0.85);
+  border-right: 1px solid rgba(243, 144, 25, 0.18);
+  box-shadow: 2px 0 16px rgba(0, 0, 0, 0.18);
+  /* Honor iOS safe areas */
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
+  padding-left: env(safe-area-inset-left);
 }
 
-.pjl-nav-logo {
+.pjl-side-brand {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  padding: 18px 18px 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+.pjl-side-logo {
   display: inline-flex;
   align-items: center;
-  flex-shrink: 0;
 }
-
-.pjl-nav-logo img {
+.pjl-side-logo img {
+  height: 64px;
   width: auto;
-  height: 98px;
-  filter: drop-shadow(0 6px 18px rgba(0,0,0,0.26));
+  filter: drop-shadow(0 4px 12px rgba(0, 0, 0, 0.30));
 }
 
 .pjl-nav-links {
-  margin-left: auto;
   display: flex;
-  align-items: center;
-  gap: 8px;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 10px 14px;
+  flex: 1 1 auto;
+  overflow-y: auto;
+  margin: 0;
 }
-
 .pjl-nav-links a,
 .pjl-nav-logout {
-  min-height: 44px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border: 0;
+  border-left: 3px solid transparent;
+  border-radius: 0 8px 8px 0;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.75);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+  min-height: 42px;
+}
+.pjl-nav-links a:hover,
+.pjl-nav-logout:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: #fff;
+}
+.pjl-nav-links a.is-active {
+  background: rgba(243, 144, 25, 0.14);
+  color: #fff;
+  border-left-color: var(--pjl-amber);
+  font-weight: 700;
+}
+.pjl-nav-links a.is-active::after { display: none; }
+.pjl-nav-links .pjl-nav-cta {
+  margin: 6px 0 0;
+  background: linear-gradient(135deg, #F59B4A 0%, #C96A2A 100%);
+  color: #fff;
+  border-left: 0;
+  border-radius: 8px;
+  font-weight: 700;
+  box-shadow: 0 4px 12px rgba(224, 123, 36, 0.30);
+}
+.pjl-nav-links .pjl-nav-cta:hover {
+  background: linear-gradient(135deg, #F8AC65 0%, #D8762E 100%);
+  color: #fff;
+}
+
+.pjl-side-footer {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  font-size: 13px;
+}
+.pjl-side-phone {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  padding: 9px 14px;
-  border: 0;
+  gap: 8px;
+  padding: 8px 12px;
   border-radius: 8px;
-  background: transparent;
-  color: rgba(255,255,255,0.78);
-  font: inherit;
-  font-size: 14.5px;
-  font-weight: 700;
-  letter-spacing: 0.03em;
-  position: relative;
-  cursor: pointer;
+  color: rgba(255, 255, 255, 0.85);
+  font-weight: 600;
+  text-decoration: none;
 }
-
-.pjl-nav-links a:hover,
-.pjl-nav-links a.is-active,
-.pjl-nav-logout:hover {
+.pjl-side-phone:hover {
+  background: rgba(255, 255, 255, 0.06);
   color: #fff;
-  background: rgba(255,255,255,0.06);
 }
-
-.pjl-nav-links a.is-active::after {
-  content: "";
-  position: absolute;
-  left: 14px;
-  right: 14px;
-  bottom: 3px;
-  height: 2px;
-  border-radius: 99px;
-  background: var(--pjl-amber);
-}
-
-.pjl-nav-links .pjl-nav-cta {
-  margin-left: 8px;
-  padding: 10px 20px;
-  color: #fff;
-  background: linear-gradient(135deg, #F59B4A 0%, #C96A2A 100%);
-  box-shadow: 0 6px 18px rgba(224,123,36,0.35), inset 0 1px 0 rgba(255,255,255,0.18);
-}
-
-.pjl-nav-links .pjl-nav-cta::after {
-  display: none;
-}
-
 .pjl-nav-logout {
-  border: 1px solid rgba(255,255,255,0.14);
+  border-left: 0 !important;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  font-weight: 700;
+  justify-content: center;
 }
 
-/* Hamburger button — hidden on desktop, visible on mobile.
-   The three-bar icon rotates into an X when the menu is open. */
+/* Hamburger button — lives in the topbar; hidden on desktop. */
 .pjl-nav-toggle {
   display: none;
   width: 44px;
   height: 44px;
-  margin-left: auto;
+  margin: 0;
   padding: 0;
   background: transparent;
-  border: 1px solid rgba(255,255,255,0.20);
-  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.20);
+  border-radius: 8px;
   cursor: pointer;
   flex-direction: column;
   align-items: center;
@@ -239,13 +215,40 @@
   border-radius: 2px;
   transition: transform 0.2s ease, opacity 0.2s ease;
 }
-.pjl-admin-nav.is-open .pjl-nav-toggle-bar:nth-child(1) {
+
+/* Slim mobile topbar — only visible on phone/tablet, contains the
+   hamburger + page title. Hidden entirely on desktop (sidebar serves). */
+.pjl-app-topbar {
+  display: none;
+}
+
+/* App container — wraps the topbar + main content. Offset by the
+   sidebar width on desktop so the layout doesn't underflow. */
+.pjl-app {
+  margin-left: var(--side-nav-width);
+  min-height: 100vh;
+}
+
+/* Pulse animation kept for any element that still uses .pjl-strip-live */
+@keyframes pjlPulseDot {
+  0% { box-shadow: 0 0 0 0 rgba(243,144,25,0.65); }
+  70% { box-shadow: 0 0 0 8px rgba(243,144,25,0); }
+  100% { box-shadow: 0 0 0 0 rgba(243,144,25,0); }
+}
+
+/* Hamburger morph: the three bars cross into an X when the sidebar
+   is open on mobile. Bars themselves are styled higher up; this just
+   handles the open-state transforms. */
+.pjl-admin-nav.is-open ~ .pjl-app .pjl-nav-toggle-bar:nth-child(1),
+body.is-nav-open .pjl-nav-toggle-bar:nth-child(1) {
   transform: translateY(7px) rotate(45deg);
 }
-.pjl-admin-nav.is-open .pjl-nav-toggle-bar:nth-child(2) {
+.pjl-admin-nav.is-open ~ .pjl-app .pjl-nav-toggle-bar:nth-child(2),
+body.is-nav-open .pjl-nav-toggle-bar:nth-child(2) {
   opacity: 0;
 }
-.pjl-admin-nav.is-open .pjl-nav-toggle-bar:nth-child(3) {
+.pjl-admin-nav.is-open ~ .pjl-app .pjl-nav-toggle-bar:nth-child(3),
+body.is-nav-open .pjl-nav-toggle-bar:nth-child(3) {
   transform: translateY(-7px) rotate(-45deg);
 }
 
@@ -1229,81 +1232,76 @@
     flex: 1 1 calc(50% - 4px);
   }
 
-  /* Mobile: hamburger menu pattern. Top row stays minimal (logo + ☰).
-     Tap the hamburger to slide the full menu down. Utility links that
-     duplicate the hero CTAs (Contacts VCF, Export CSV) hide entirely. */
-  .pjl-nav-strip {
-    gap: 12px;
-    padding: 0 14px;
+  /* Mobile: sidebar slides in from the left.
+     - Sidebar is translated off-screen by default
+     - .is-open on .pjl-admin-nav (set by the hamburger toggle JS)
+       brings it back into view with a backdrop scrim
+     - Topbar reappears so the hamburger is reachable
+     - Utility links that duplicate hero actions stay hidden */
+  .pjl-admin-nav {
+    transform: translateX(-100%);
+    transition: transform 0.22s ease;
+    width: min(280px, 86vw);
   }
-  .pjl-nav-strip > span:first-child {
-    display: none;
+  .pjl-admin-nav.is-open {
+    transform: translateX(0);
   }
-  .pjl-nav-main {
-    height: 72px;
-    min-height: 72px;
-    padding: 0 14px;
-  }
-  .pjl-nav-logo img { height: 52px; }
-  .pjl-nav-utility {
-    display: none !important;
-  }
-
-  /* Hamburger visible */
-  .pjl-nav-toggle {
-    display: flex;
-  }
-
-  /* The link list becomes a slide-down panel. Hidden by default,
-     revealed when the parent .pjl-admin-nav has .is-open class
-     (toggled by the hamburger button). */
-  .pjl-nav-links {
-    position: absolute;
-    top: 100%;
-    left: 0;
+  /* Backdrop scrim — appears behind the sidebar when open so the
+     mobile user sees the rest of the app dim and can tap-out to close. */
+  .pjl-admin-nav.is-open::after {
+    content: "";
+    position: fixed;
+    left: var(--side-nav-width);
+    top: 0;
     right: 0;
-    margin: 0;
-    padding: 12px 16px calc(16px + env(safe-area-inset-bottom));
-    flex-direction: column;
-    align-items: stretch;
-    gap: 4px;
-    background: rgba(15,31,20,0.98);
-    border-top: 1px solid rgba(243,144,25,0.30);
-    box-shadow: 0 12px 32px rgba(0,0,0,0.40);
-    transform: translateY(-8px);
-    opacity: 0;
-    pointer-events: none;
-    transition: transform 0.2s ease, opacity 0.2s ease;
-    z-index: 49;
-  }
-  .pjl-admin-nav.is-open .pjl-nav-links {
-    transform: translateY(0);
-    opacity: 1;
+    bottom: 0;
+    background: rgba(15, 31, 20, 0.50);
+    z-index: -1;
     pointer-events: auto;
   }
-  .pjl-nav-links a,
-  .pjl-nav-links .pjl-nav-logout {
-    width: 100%;
-    justify-content: flex-start;
-    padding: 12px 16px;
-    min-height: 48px;
-    font-size: 15px;
-    border-radius: 10px;
-  }
-  .pjl-nav-links a.is-active {
-    background: rgba(243,144,25,0.14);
-    color: #fff;
-  }
-  .pjl-nav-links a.is-active::after { display: none; }
-  .pjl-nav-links .pjl-nav-cta {
+  .pjl-app {
     margin-left: 0;
   }
-  .pjl-nav-links .pjl-nav-logout {
-    margin-top: 8px;
-    border-top: 1px solid rgba(255,255,255,0.10);
-    border-radius: 10px;
-    background: rgba(255,255,255,0.06);
-    color: rgba(255,255,255,0.85);
+  /* Slim topbar for mobile — hamburger + page title. Fixed dark bar
+     pinned at the top so the hamburger is always reachable. */
+  .pjl-app-topbar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 14px;
+    padding-top: max(8px, env(safe-area-inset-top));
+    background: linear-gradient(180deg, #0F1F14 0%, #112418 100%);
+    border-bottom: 1px solid rgba(243, 144, 25, 0.18);
+    color: #fff;
+    position: sticky;
+    top: 0;
+    z-index: 40;
+    min-height: 56px;
+  }
+  .pjl-app-topbar .pjl-app-title {
+    font-family: "Barlow Condensed", sans-serif;
+    font-size: 16px;
+    letter-spacing: 0.10em;
+    text-transform: uppercase;
+    color: rgba(255, 255, 255, 0.92);
+    flex: 1 1 auto;
+  }
+  .pjl-app-topbar .pjl-app-phone {
+    color: rgba(255, 255, 255, 0.85);
+    text-decoration: none;
+    font-size: 13px;
+    font-weight: 700;
+    padding: 6px 10px;
+    border-radius: 999px;
+    border: 1px solid rgba(255, 255, 255, 0.20);
+  }
+  .pjl-app-topbar .pjl-nav-toggle {
+    display: flex;
+  }
+  /* Utility links (Contacts VCF / Export CSV) hide on mobile —
+     they duplicate hero CTAs. */
+  .pjl-nav-utility {
+    display: none !important;
   }
 
   /* Stats: 2-up */
@@ -1390,13 +1388,14 @@
     flex: 1 1 auto;
   }
 
-  /* Nav strip cleanup */
-  .pjl-strip-live { display: none; }
-  .pjl-nav-strip a { font-size: 12px; }
-  .pjl-nav-logo img { height: 64px; }
-
-  /* Pipeline tabs become a horizontal scroller */
+  /* Pipeline tabs become a horizontal scroller on phones (the equal-
+     width desktop layout would crush them too small here). */
+  .pipeline-tabs {
+    overflow-x: auto;
+    flex-wrap: nowrap;
+  }
   .pipeline-tabs button {
+    flex: 0 0 auto;
     padding: 6px 12px;
     font-size: 13px;
   }
@@ -1518,14 +1517,13 @@
   .pjl-crm-hero { padding: 18px 16px; }
   .pjl-crm-hero h1 { font-size: clamp(22px, 5.5vw, 28px); line-height: 1.15; }
 
-  /* Nav on tiny phones — slightly tighter than the 1180px breakpoint.
-     Same hamburger pattern, just smaller logo + leaner strip. */
-  .pjl-nav-main { height: 64px; min-height: 64px; padding: 0 12px; }
-  .pjl-nav-logo img { height: 44px; }
-  .pjl-nav-strip { height: 30px; gap: 10px; font-size: 11.5px; padding: 0 10px; }
-  .pjl-nav-strip > span:first-child { display: none; }
-  .pjl-nav-strip .pjl-strip-live { font-size: 10.5px; letter-spacing: 0.04em; }
-  .pjl-nav-strip a { font-size: 12px; padding: 3px 10px; min-height: 24px; }
+  /* Tiny-phone tweaks for the slide-in sidebar — slightly leaner
+     topbar so the hamburger doesn't feel oversized on a narrow
+     viewport. */
+  .pjl-app-topbar { min-height: 50px; padding: 6px 12px; }
+  .pjl-app-topbar .pjl-app-title { font-size: 14px; letter-spacing: 0.08em; }
+  .pjl-app-topbar .pjl-app-phone { display: none; }
+  .pjl-side-logo img { height: 56px; }
 
   /* Lead-list cards: slightly tighter padding */
   .crm-card { padding: 12px 12px 16px; }
