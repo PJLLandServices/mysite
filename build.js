@@ -44,7 +44,9 @@ const SKIP_FILES = new Set([
 
 function loadPartial(filename) {
   const full = path.join(PARTIALS_DIR, filename);
-  return fs.readFileSync(full, 'utf8').replace(/\n+$/, '');
+  // Strip ALL trailing newline characters (CR, LF, or CRLF combinations)
+  // so we don't leave dangling \r when the partial was checked out CRLF.
+  return fs.readFileSync(full, 'utf8').replace(/[\r\n]+$/, '');
 }
 
 function escapeRegex(s) {
