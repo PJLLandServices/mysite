@@ -1845,6 +1845,85 @@ async function handleApi(req, res, pathname) {
     }
   }
 
+  // Single-property delete. Linked leads keep existing — we just clear
+  // their propertyId so they re-attach on next match attempt instead of
+  // pointing at a dangling id.
+  if (propertyMatch && req.method === "DELETE") {
+    try {
+      const id = decodeURIComponent(propertyMatch[1]);
+      const removed = await properties.remove(id);
+      if (!removed) return sendJson(res, 404, { ok: false, errors: ["Property not found."] });
+      const affectedLeadIds = removed.leadIds || [];
+      if (affectedLeadIds.length) {
+        const allLeads = await readLeads();
+        let mutated = false;
+        for (const lead of allLeads) {
+          if (lead.propertyId === id) {
+            lead.propertyId = null;
+            lead.propertyLinkStatus = "no-email";
+            delete lead.propertyLinkSuggestions;
+            mutated = true;
+          }
+        }
+        if (mutated) await writeLeads(allLeads);
+      }
+      return sendJson(res, 200, { ok: true, deletedId: id, affectedLeadCount: affectedLeadIds.length });
+    } catch (error) {
+      return sendJson(res, 400, { ok: false, errors: [error.message || "Couldn't delete property."] });
+    }
+  }
+
+  // Bulk delete. POST (not DELETE) so we can carry a JSON body with the
+  // id list + the typed confirmation. Body shape:
+  //   { ids: ["uuid", "uuid"], confirm: "DELETE" }              — multi-select
+  //   { all: true,             confirm: "DELETE ALL" }          — nuke everything
+  //
+  // The `confirm` token is the second factor. The UI requires Patrick to
+  // type it before the request leaves the browser; we re-check it on the
+  // server so a stray fetch from a tab he forgot about can't wipe the
+  // portfolio.
+  if (req.method === "POST" && pathname === "/api/properties/bulk-delete") {
+    try {
+      const payload = await parseRequestBody(req);
+      const wantAll = payload.all === true;
+      const ids = Array.isArray(payload.ids) ? payload.ids.filter((x) => typeof x === "string" && x) : [];
+      const confirm = String(payload.confirm || "");
+      const expected = wantAll ? "DELETE ALL" : "DELETE";
+      if (confirm !== expected) {
+        return sendJson(res, 422, { ok: false, errors: [`Type ${expected} to confirm.`] });
+      }
+      if (!wantAll && !ids.length) {
+        return sendJson(res, 422, { ok: false, errors: ["No properties selected."] });
+      }
+
+      const result = await properties.removeMany(wantAll ? "*" : ids);
+      // Clear propertyId on every lead that pointed at one of the deleted
+      // properties. Single leads.json write regardless of how many properties.
+      if (result.deletedIds.length) {
+        const deletedSet = new Set(result.deletedIds);
+        const allLeads = await readLeads();
+        let mutated = false;
+        for (const lead of allLeads) {
+          if (lead.propertyId && deletedSet.has(lead.propertyId)) {
+            lead.propertyId = null;
+            lead.propertyLinkStatus = "no-email";
+            delete lead.propertyLinkSuggestions;
+            mutated = true;
+          }
+        }
+        if (mutated) await writeLeads(allLeads);
+      }
+
+      return sendJson(res, 200, {
+        ok: true,
+        deletedCount: result.deletedIds.length,
+        affectedLeadCount: result.affectedLeadIds.length
+      });
+    } catch (error) {
+      return sendJson(res, 400, { ok: false, errors: [error.message || "Couldn't delete properties."] });
+    }
+  }
+
   // Admin manual-handoff: Patrick fills out a form in /admin/handoff after
   // a phone call, server creates a booking session AND optionally pushes
   // the URL to the customer via SMS + email. Same machinery the AI agent

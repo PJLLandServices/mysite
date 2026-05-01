@@ -334,6 +334,193 @@
   color: var(--pjl-text-muted);
 }
 
+/* Light-context outline + danger buttons (the .pjl-btn variants in crm.css
+   are tuned for the dark hero/sidebar — these override for the light page
+   body the properties index lives on). */
+.properties-toolbar .pjl-btn-outline,
+.properties-bulkbar .pjl-btn-outline {
+  background: #fff;
+  border: 1px solid rgba(27, 77, 46, 0.30);
+  color: var(--pjl-green);
+  box-shadow: none;
+  min-height: 40px;
+  padding: 8px 16px;
+  font-size: 14px;
+}
+.properties-toolbar .pjl-btn-outline:hover,
+.properties-bulkbar .pjl-btn-outline:hover {
+  background: rgba(27, 77, 46, 0.05);
+  border-color: var(--pjl-green);
+}
+.properties-toolbar .pjl-btn-outline[aria-pressed="true"] {
+  background: var(--pjl-green);
+  color: #fff;
+  border-color: var(--pjl-green);
+}
+
+.pjl-btn-danger {
+  background: #b13a3a;
+  color: #fff;
+  box-shadow: 0 6px 18px rgba(177, 58, 58, 0.28);
+  min-height: 40px;
+  padding: 8px 16px;
+  font-size: 14px;
+}
+.pjl-btn-danger:hover {
+  background: #962f2f;
+  box-shadow: 0 10px 24px rgba(177, 58, 58, 0.40);
+}
+.pjl-btn-danger-outline {
+  background: #fff;
+  color: #b13a3a;
+  border: 1px solid rgba(177, 58, 58, 0.45);
+  box-shadow: none;
+  min-height: 40px;
+  padding: 8px 16px;
+  font-size: 14px;
+}
+.pjl-btn-danger-outline:hover {
+  background: rgba(177, 58, 58, 0.08);
+  border-color: #b13a3a;
+}
+
+/* Bulk action bar — only visible while Select mode is on. */
+.properties-bulkbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  margin: 0 0 14px;
+  background: rgba(27, 77, 46, 0.05);
+  border: 1px solid rgba(27, 77, 46, 0.18);
+  border-radius: 10px;
+  font-size: 14px;
+  color: var(--pjl-text-mid);
+}
+.properties-bulk-all {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-size: 14px;
+  color: var(--pjl-green);
+  font-weight: 600;
+}
+.properties-bulkbar #bulkCount {
+  color: var(--pjl-green);
+}
+.properties-bulkbar .pjl-btn-danger:disabled,
+.properties-bulkbar .pjl-btn-danger-outline:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+/* Card layout adjusts when Select mode is on — checkbox sits at the
+   top-right and the card becomes a <div> instead of an <a>. */
+.properties-grid.is-selecting .property-card {
+  position: relative;
+  cursor: pointer;
+  user-select: none;
+}
+.properties-grid.is-selecting .property-card.is-selected {
+  border-color: var(--pjl-green);
+  background: rgba(27, 77, 46, 0.04);
+  box-shadow: 0 0 0 2px var(--pjl-green) inset;
+}
+.property-card-check {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: 22px;
+  height: 22px;
+  cursor: pointer;
+  accent-color: var(--pjl-green);
+}
+
+/* Confirm modal — used for both single delete and the typed-confirmation
+   "delete N customers" flow. */
+.confirm-modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 31, 20, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 16px;
+}
+.confirm-modal[hidden] { display: none; }
+.confirm-modal-card {
+  background: #fff;
+  border-radius: 14px;
+  max-width: 440px;
+  width: 100%;
+  padding: 26px 28px 22px;
+  box-shadow: 0 24px 64px rgba(15, 31, 20, 0.30);
+}
+.confirm-modal-card h2 {
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 24px;
+  letter-spacing: 0.02em;
+  color: var(--pjl-green);
+  margin: 0 0 10px;
+}
+.confirm-modal-card p {
+  font-size: 15px;
+  color: var(--pjl-text);
+  line-height: 1.5;
+  margin: 0 0 14px;
+}
+.confirm-typed {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 6px 0 12px;
+}
+.confirm-typed label {
+  font-size: 13px;
+  color: var(--pjl-text-mid);
+}
+.confirm-typed strong {
+  font-family: "DM Sans", sans-serif;
+  letter-spacing: 0.04em;
+  color: #b13a3a;
+}
+.confirm-typed input {
+  padding: 10px 12px;
+  font: inherit;
+  font-size: 16px;
+  letter-spacing: 0.06em;
+  border-radius: 8px;
+  border: 1px solid rgba(15, 31, 20, 0.20);
+  background: #fff;
+}
+.confirm-typed input:focus {
+  outline: 2px solid var(--pjl-green);
+  outline-offset: 0;
+  border-color: var(--pjl-green);
+}
+.confirm-error {
+  color: #b13a3a !important;
+  font-size: 13px;
+  margin: 0 0 10px !important;
+}
+.confirm-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+@media (max-width: 700px) {
+  .properties-toolbar { flex-wrap: wrap; }
+  .properties-bulkbar { flex-direction: column; align-items: stretch; }
+  .properties-bulkbar > * { width: 100%; }
+  .confirm-actions { flex-direction: column-reverse; }
+  .confirm-actions > * { width: 100%; }
+}
+
 @media (max-width: 700px) {
   .property-row { grid-template-columns: 1fr; }
   .property-zone-row { grid-template-columns: 60px 1fr 32px; }

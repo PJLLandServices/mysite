@@ -298,6 +298,53 @@ async function findByLeadId(leadId) {
   return properties.find((p) => p.leadIds.includes(leadId)) || null;
 }
 
+// Hard-delete a single property by id. Returns the deleted record (or null
+// if not found) so the caller can report it back to the UI / audit log.
+// Linked leads are NOT deleted — the caller is responsible for clearing
+// `lead.propertyId` on any leads that pointed at this property (server
+// route does that so it can write leads.json in the same operation).
+async function remove(id) {
+  const properties = await readAll();
+  const idx = properties.findIndex((p) => p.id === id);
+  if (idx === -1) return null;
+  const [removed] = properties.splice(idx, 1);
+  await writeAll(properties);
+  return removed;
+}
+
+// Bulk-delete by id list. Returns { deletedIds[], affectedLeadIds[] } so
+// the caller can clear those leads' propertyId in one leads.json write.
+// `ids` of `"*"` (string) deletes EVERYTHING — used by the nuclear "delete
+// all customers" path. Pass an array for normal multi-select delete.
+async function removeMany(ids) {
+  const properties = await readAll();
+  let toRemove;
+  if (ids === "*") {
+    toRemove = properties.slice();
+  } else {
+    const set = new Set((Array.isArray(ids) ? ids : []).filter(Boolean));
+    toRemove = properties.filter((p) => set.has(p.id));
+  }
+  if (!toRemove.length) return { deletedIds: [], affectedLeadIds: [] };
+
+  const removeIds = new Set(toRemove.map((p) => p.id));
+  const remaining = properties.filter((p) => !removeIds.has(p.id));
+  await writeAll(remaining);
+
+  // Flatten every lead-id back-reference so the server route can null out
+  // those leads' propertyId in a single leads.json write.
+  const affectedLeadIds = [];
+  for (const p of toRemove) {
+    for (const id of (p.leadIds || [])) {
+      if (id) affectedLeadIds.push(id);
+    }
+  }
+  return {
+    deletedIds: toRemove.map((p) => p.id),
+    affectedLeadIds
+  };
+}
+
 async function findByCustomerEmail(email) {
   const properties = await readAll();
   const target = normalizeEmail(email);
@@ -411,5 +458,7 @@ module.exports = {
   list,
   get,
   update,
+  remove,
+  removeMany,
   bulkUpsert
 };

@@ -49,8 +49,20 @@
     <section class="properties-toolbar">
       <input type="search" id="propertySearch" placeholder="Search by customer name, email, or address…">
       <span class="properties-count" id="propertiesCount">—</span>
+      <button type="button" class="pjl-btn pjl-btn-outline" id="selectToggle" aria-pressed="false">Select</button>
       <a class="pjl-btn pjl-btn-primary" href="/admin/properties/import">Import customers →</a>
     </section>
+
+    <div class="properties-bulkbar" id="propertiesBulkbar" hidden>
+      <label class="properties-bulk-all">
+        <input type="checkbox" id="bulkSelectAll">
+        Select all
+      </label>
+      <span><strong id="bulkCount">0</strong> selected</span>
+      <button type="button" class="pjl-btn pjl-btn-outline" id="bulkClear">Clear</button>
+      <button type="button" class="pjl-btn pjl-btn-danger" id="bulkDelete" disabled>Delete selected</button>
+      <button type="button" class="pjl-btn pjl-btn-danger-outline" id="bulkDeleteAll">Delete ALL customers</button>
+    </div>
 
     <section class="properties-grid" id="propertiesGrid"></section>
 
@@ -58,6 +70,22 @@
       No properties yet. They'll appear here automatically as customers book.
     </p>
   </main>
+
+  <div class="confirm-modal" id="confirmModal" hidden role="dialog" aria-modal="true" aria-labelledby="confirmTitle">
+    <div class="confirm-modal-card">
+      <h2 id="confirmTitle">Confirm delete</h2>
+      <p id="confirmBody">Are you sure?</p>
+      <div class="confirm-typed" id="confirmTypedRow" hidden>
+        <label for="confirmInput">Type <strong id="confirmExpected">DELETE</strong> to confirm</label>
+        <input type="text" id="confirmInput" autocomplete="off" autocapitalize="characters" spellcheck="false">
+      </div>
+      <p class="confirm-error" id="confirmError" hidden></p>
+      <div class="confirm-actions">
+        <button type="button" class="pjl-btn pjl-btn-outline" id="confirmCancel">Cancel</button>
+        <button type="button" class="pjl-btn pjl-btn-danger" id="confirmAccept" disabled>Delete</button>
+      </div>
+    </div>
+  </div>
 
   <script src="/crm/properties.js"></script>
 </body>

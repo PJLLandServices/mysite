@@ -16,9 +16,23 @@ const addZoneBtn = document.getElementById("addZoneBtn");
 const addValveBoxBtn = document.getElementById("addValveBoxBtn");
 const saveBtn = document.getElementById("saveBtn");
 const saveStatus = document.getElementById("saveStatus");
+const deleteBtn = document.getElementById("deleteBtn");
 const logoutButton = document.getElementById("logoutButton");
 const leadsSection = document.getElementById("leadsSection");
 const leadListEl = document.getElementById("leadList");
+
+const confirmModal = document.getElementById("confirmModal");
+const confirmTitle = document.getElementById("confirmTitle");
+const confirmBody = document.getElementById("confirmBody");
+const confirmTypedRow = document.getElementById("confirmTypedRow");
+const confirmExpected = document.getElementById("confirmExpected");
+const confirmInput = document.getElementById("confirmInput");
+const confirmError = document.getElementById("confirmError");
+const confirmCancel = document.getElementById("confirmCancel");
+const confirmAccept = document.getElementById("confirmAccept");
+
+let loadedProperty = null;
+let loadedLeadCount = 0;
 
 // Pull the property ID from the URL: /admin/property/<id>
 function getPropertyId() {
@@ -244,6 +258,92 @@ logoutButton.addEventListener("click", async () => {
   window.location.assign("/login");
 });
 
+// ---- Delete this customer (with typed-confirmation 2FA) -------------
+
+let confirmResolver = null;
+
+function openConfirm({ title, body, expected }) {
+  confirmTitle.textContent = title;
+  confirmBody.innerHTML = body;
+  confirmError.hidden = true;
+  confirmError.textContent = "";
+  if (expected) {
+    confirmTypedRow.hidden = false;
+    confirmExpected.textContent = expected;
+    confirmInput.value = "";
+    confirmInput.dataset.expected = expected;
+    confirmAccept.disabled = true;
+  } else {
+    confirmTypedRow.hidden = true;
+    confirmInput.dataset.expected = "";
+    confirmAccept.disabled = false;
+  }
+  confirmModal.hidden = false;
+  setTimeout(() => {
+    if (expected) confirmInput.focus();
+    else confirmAccept.focus();
+  }, 0);
+  return new Promise((resolve) => { confirmResolver = resolve; });
+}
+
+function closeConfirm(result) {
+  confirmModal.hidden = true;
+  confirmInput.value = "";
+  confirmAccept.disabled = false;
+  if (confirmResolver) {
+    const r = confirmResolver;
+    confirmResolver = null;
+    r(result);
+  }
+}
+
+confirmCancel.addEventListener("click", () => closeConfirm(false));
+confirmAccept.addEventListener("click", () => {
+  const expected = confirmInput.dataset.expected;
+  if (expected && confirmInput.value.trim() !== expected) {
+    confirmError.hidden = false;
+    confirmError.textContent = `Type ${expected} exactly to confirm.`;
+    return;
+  }
+  closeConfirm(true);
+});
+confirmInput.addEventListener("input", () => {
+  const expected = confirmInput.dataset.expected;
+  confirmAccept.disabled = !expected || confirmInput.value.trim() !== expected;
+  if (!confirmError.hidden) confirmError.hidden = true;
+});
+confirmModal.addEventListener("click", (event) => {
+  if (event.target === confirmModal) closeConfirm(false);
+});
+window.addEventListener("keydown", (event) => {
+  if (!confirmModal.hidden && event.key === "Escape") closeConfirm(false);
+});
+
+deleteBtn.addEventListener("click", async () => {
+  const id = getPropertyId();
+  if (!id || !loadedProperty) return;
+  const who = loadedProperty.customerName || loadedProperty.address || "this customer";
+  const linkedNote = loadedLeadCount
+    ? ` <strong>${loadedLeadCount}</strong> linked booking${loadedLeadCount === 1 ? "" : "s"} will lose ${loadedLeadCount === 1 ? "its" : "their"} property reference but stay in the CRM.`
+    : "";
+  const ok = await openConfirm({
+    title: "Delete this customer?",
+    body: `This permanently removes <strong>${escapeHtml(who)}</strong> and the system profile (zones, valve boxes, notes).${linkedNote} <strong>This cannot be undone.</strong>`,
+    expected: "DELETE"
+  });
+  if (!ok) return;
+  try {
+    const response = await fetch(`/api/properties/${encodeURIComponent(id)}`, { method: "DELETE" });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data.ok) {
+      throw new Error((data.errors && data.errors[0]) || `Delete failed (HTTP ${response.status}).`);
+    }
+    window.location.assign("/admin/properties");
+  } catch (err) {
+    alert(err.message);
+  }
+});
+
 // ---- Bootstrap ----------------------------------------------------
 
 async function init() {
@@ -258,6 +358,8 @@ async function init() {
     const response = await fetch(`/api/properties/${encodeURIComponent(id)}`, { cache: "no-store" });
     const data = await response.json();
     if (!response.ok || !data.ok) throw new Error("Not found");
+    loadedProperty = data.property;
+    loadedLeadCount = (data.leads || []).length;
     propertyLoading.hidden = true;
     propertyForm.hidden = false;
     renderHero(data.property, data.leads || []);
