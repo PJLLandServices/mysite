@@ -130,6 +130,23 @@
       <ul class="tech-service-checklist-list" id="techServiceChecklistList"></ul>
     </section>
 
+    <!-- Visit-level photos — pre-work / in-progress / post-work / general
+         documentation that isn't tied to a specific zone or issue. Spec
+         §4.3.2 on-site execution. Photos can be promoted to the property
+         folder on completion (Tier 4). -->
+    <section class="tech-section tech-wo-photos-section" id="techWoPhotosSection">
+      <header class="tech-zones-header">
+        <h2 class="tech-section-title">Visit photos</h2>
+        <span class="tech-zones-progress" id="techWoPhotoCount">0</span>
+      </header>
+      <div class="tech-photo-strip" id="techWoPhotoStrip"></div>
+      <label class="tech-photo-add">
+        <input type="file" accept="image/*" capture="environment" id="techWoPhotoInput" multiple>
+        <span aria-hidden="true">📷</span>
+        <span>Add visit photo</span>
+      </label>
+    </section>
+
     <!-- Tech-wide notes for the visit. Collapsed by default. -->
     <details class="tech-collapse">
       <summary>Visit notes</summary>
@@ -181,6 +198,12 @@
 
   <p class="tech-loading" id="techLoading">Loading work order…</p>
   <p class="tech-error" id="techError" hidden>Couldn't load this work order.</p>
+
+  <!-- Photo lightbox — tap a thumbnail to view full-size, tap anywhere
+       to dismiss. Lives at the body root so it overlays the bottom sheet. -->
+  <div class="tech-photo-lightbox" id="techPhotoLightbox" hidden>
+    <img id="techPhotoLightboxImg" alt="">
+  </div>
 
   <!-- Per-zone editor — slides up from the bottom when a zone is tapped.
        Lives in a separate sheet so the zone list stays scrollable. -->

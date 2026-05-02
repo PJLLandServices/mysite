@@ -121,6 +121,82 @@ const SERVICE_CHECKLISTS_DESKTOP = {
 
 let signaturePadInstance = null;
 
+// ---- Photo helpers (mirror work-order-tech.js) -----------------------
+
+async function resizeImageForUpload(file, maxDim = 1280, quality = 0.82) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("Couldn't read that file."));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error("Couldn't decode that image."));
+      img.onload = () => {
+        const longest = Math.max(img.width, img.height);
+        const scale = longest > maxDim ? maxDim / longest : 1;
+        const w = Math.round(img.width * scale);
+        const h = Math.round(img.height * scale);
+        const canvas = document.createElement("canvas");
+        canvas.width = w;
+        canvas.height = h;
+        canvas.getContext("2d").drawImage(img, 0, 0, w, h);
+        const dataUrl = canvas.toDataURL("image/jpeg", quality);
+        resolve({ base64: dataUrl.split(",", 2)[1] || "", mediaType: "image/jpeg" });
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+async function uploadWoPhotos(files, meta = {}) {
+  const arr = Array.from(files || []);
+  if (!arr.length) return null;
+  const photos = [];
+  for (const f of arr) {
+    if (!f.type || !f.type.startsWith("image/")) continue;
+    const resized = await resizeImageForUpload(f);
+    photos.push({ data: resized.base64, mediaType: resized.mediaType, ...meta });
+  }
+  if (!photos.length) return null;
+  const id = getWorkOrderId();
+  const response = await fetch(`/api/work-orders/${encodeURIComponent(id)}/photos`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ photos })
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || !data.ok) {
+    throw new Error((data.errors && data.errors[0]) || "Couldn't upload photo.");
+  }
+  return data.workOrder;
+}
+
+async function deleteWoPhoto(n) {
+  const id = getWorkOrderId();
+  const response = await fetch(`/api/work-orders/${encodeURIComponent(id)}/photos/${n}`, {
+    method: "DELETE"
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || !data.ok) {
+    throw new Error((data.errors && data.errors[0]) || "Couldn't delete photo.");
+  }
+  return data.workOrder;
+}
+
+function woPhotoUrl(n) {
+  const id = getWorkOrderId();
+  return `/api/work-orders/${encodeURIComponent(id)}/photo/${n}`;
+}
+
+function photoThumbHtml(photo) {
+  return `
+    <div class="wo-photo-thumb" data-photo-n="${escapeHtml(String(photo.n))}">
+      <img src="${escapeHtml(woPhotoUrl(photo.n))}" alt="${escapeHtml(photo.label || ("Photo " + photo.n))}" loading="lazy">
+      <button type="button" class="wo-photo-thumb-remove" data-action="delete-photo" aria-label="Remove photo">×</button>
+    </div>
+  `;
+}
+
 const TYPE_LABELS = {
   spring_opening: "Spring Opening",
   fall_closing: "Fall Closing",
@@ -239,12 +315,23 @@ function issueRowHtml(issue) {
   const optionsHtml = ZONE_ISSUE_TYPE_OPTIONS
     .map((t) => `<option value="${t.value}" ${t.value === issue.type ? "selected" : ""}>${escapeHtml(t.label)}</option>`)
     .join("");
+  const safeId = issue.id || makeIssueId();
+  const issuePhotos = (loadedWorkOrder?.photos || []).filter((p) => p.issueId === safeId);
+  const thumbsHtml = issuePhotos.map(photoThumbHtml).join("");
   return `
-    <div class="wo-zone-issue" data-issue-id="${escapeHtml(issue.id || makeIssueId())}">
+    <div class="wo-zone-issue" data-issue-id="${escapeHtml(safeId)}">
       <select class="wo-zone-issue-type" aria-label="Issue type">${optionsHtml}</select>
       <input type="number" class="wo-zone-issue-qty" min="1" value="${escapeHtml(String(issue.qty || 1))}" aria-label="Quantity">
       <input type="text" class="wo-zone-issue-notes" value="${escapeHtml(issue.notes || "")}" placeholder="Details (optional)" aria-label="Issue notes">
       <button type="button" class="wo-zone-issue-remove" data-action="remove-issue" aria-label="Remove issue">×</button>
+      <div class="wo-issue-photos" data-issue-photos="${escapeHtml(safeId)}">
+        ${thumbsHtml}
+        <label class="wo-issue-photo-add">
+          <input type="file" accept="image/*" data-action="upload-issue-photo" data-issue-id="${escapeHtml(safeId)}" multiple hidden>
+          <span aria-hidden="true">📷</span>
+          <span>Add photo</span>
+        </label>
+      </div>
     </div>
   `;
 }
@@ -284,10 +371,29 @@ function addZoneRow(zone) {
 }
 
 // Click + change delegation for the dynamic zone rows.
-woZones.addEventListener("click", (event) => {
+woZones.addEventListener("click", async (event) => {
   if (event.target.matches('[data-action="remove-zone"]')) {
     event.target.closest(".wo-zone-row")?.remove();
     if (!woZones.querySelectorAll(".wo-zone-row").length) woEmptyZones.hidden = false;
+    return;
+  }
+  if (event.target.matches('[data-action="delete-photo"]')) {
+    const thumb = event.target.closest(".wo-photo-thumb");
+    if (!thumb) return;
+    if (!confirm("Remove this photo?")) return;
+    const n = Number(thumb.dataset.photoN);
+    try {
+      const wo = await deleteWoPhoto(n);
+      loadedWorkOrder = wo;
+      // Refresh all photo surfaces — both WO-level strip and any
+      // matching issue photo strip.
+      renderWoPhotos(wo);
+      const issuePhotos = thumb.closest("[data-issue-photos]");
+      if (issuePhotos) {
+        const issueId = issuePhotos.dataset.issuePhotos;
+        renderIssuePhotosInline(issuePhotos, issueId);
+      }
+    } catch (err) { alert(err.message); }
     return;
   }
   if (event.target.matches('[data-action="add-issue"]')) {
@@ -316,12 +422,52 @@ woZones.addEventListener("click", (event) => {
     }
   }
 });
-woZones.addEventListener("change", (event) => {
+woZones.addEventListener("change", async (event) => {
   if (event.target.matches(".wo-zone-status")) {
     const row = event.target.closest(".wo-zone-row");
     if (row) row.dataset.status = event.target.value;
+    return;
+  }
+  if (event.target.matches('[data-action="upload-issue-photo"]')) {
+    const input = event.target;
+    const issueId = input.dataset.issueId;
+    const row = input.closest(".wo-zone-row");
+    const zoneNumber = Number(row?.dataset.number) || null;
+    if (!input.files || !input.files.length) return;
+    const label = input.closest(".wo-issue-photo-add");
+    if (label) label.classList.add("is-uploading");
+    try {
+      const wo = await uploadWoPhotos(input.files, { category: "issue", issueId, zoneNumber });
+      if (wo) {
+        loadedWorkOrder = wo;
+        renderWoPhotos(wo);
+        const host = row.querySelector(`[data-issue-photos="${CSS.escape(issueId)}"]`);
+        if (host) renderIssuePhotosInline(host, issueId);
+      }
+    } catch (err) { alert(err.message); }
+    finally {
+      if (label) label.classList.remove("is-uploading");
+      input.value = "";
+    }
   }
 });
+
+// Re-render an issue's photo strip after upload/delete. Reads from the
+// live loadedWorkOrder.photos so it stays in sync without re-rendering
+// the full zone row (preserves focus on adjacent inputs).
+function renderIssuePhotosInline(host, issueId) {
+  if (!host) return;
+  const photos = (loadedWorkOrder?.photos || []).filter((p) => p.issueId === issueId);
+  const thumbsHtml = photos.map(photoThumbHtml).join("");
+  host.innerHTML = `
+    ${thumbsHtml}
+    <label class="wo-issue-photo-add">
+      <input type="file" accept="image/*" data-action="upload-issue-photo" data-issue-id="${escapeHtml(issueId)}" multiple hidden>
+      <span aria-hidden="true">📷</span>
+      <span>Add photo</span>
+    </label>
+  `;
+}
 addZoneBtn.addEventListener("click", () => addZoneRow());
 
 // ---- Header + form populate --------------------------------------
@@ -390,8 +536,19 @@ function populateForm(wo) {
   renderDiagnosis(wo);
   renderIntakeGuarantee(wo);
   renderServiceChecklist(wo);
+  renderWoPhotos(wo);
   renderSignoff(wo);
   applyLockState(wo.locked === true, wo.signature);
+}
+
+// WO-level photo gallery — anything not tied to a specific issue.
+function renderWoPhotos(wo) {
+  const strip = document.getElementById("woPhotoStrip");
+  const count = document.getElementById("woPhotoCount");
+  if (!strip) return;
+  const woLevel = (wo.photos || []).filter((p) => !p.issueId);
+  if (count) count.textContent = String(woLevel.length);
+  strip.innerHTML = woLevel.map(photoThumbHtml).join("");
 }
 
 // Service-specific checklist (spring_opening / fall_closing only).
@@ -586,6 +743,46 @@ document.getElementById("woSignoffSubmit")?.addEventListener("click", async () =
     submit.textContent = "Sign & lock work order";
     alert(err.message || "Couldn't save signature.");
   }
+});
+
+// WO-level photo upload + lightbox (for both WO-level and per-issue
+// thumbnails). Wired here at module level so they bind once at load.
+document.getElementById("woPhotoInput")?.addEventListener("change", async (event) => {
+  const input = event.target;
+  if (!input.files || !input.files.length) return;
+  const label = input.closest(".wo-photo-add");
+  if (label) label.classList.add("is-uploading");
+  try {
+    const wo = await uploadWoPhotos(input.files, { category: "general" });
+    if (wo) {
+      loadedWorkOrder = wo;
+      renderWoPhotos(wo);
+    }
+  } catch (err) {
+    alert(err.message || "Couldn't upload photo.");
+  } finally {
+    if (label) label.classList.remove("is-uploading");
+    input.value = "";
+  }
+});
+
+// Lightbox — shared overlay; clicks anywhere dismiss.
+document.addEventListener("click", (event) => {
+  const thumb = event.target.closest(".wo-photo-thumb img");
+  if (thumb) {
+    const box = document.getElementById("woPhotoLightbox");
+    const img = document.getElementById("woPhotoLightboxImg");
+    if (box && img) {
+      img.src = thumb.src;
+      box.hidden = false;
+      document.body.classList.add("wo-lightbox-open");
+    }
+  }
+});
+document.getElementById("woPhotoLightbox")?.addEventListener("click", () => {
+  const box = document.getElementById("woPhotoLightbox");
+  if (box) box.hidden = true;
+  document.body.classList.remove("wo-lightbox-open");
 });
 
 // Apply locked / unlocked state to the desktop form. The save and

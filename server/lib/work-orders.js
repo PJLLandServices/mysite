@@ -76,6 +76,12 @@ const ZONE_CHECK_KEYS = ["operated", "pressureGood", "coverageGood", "noLeaks", 
 // hatch for anything that doesn't fit (custom on-site quote).
 const ZONE_ISSUE_TYPES = ["broken_head", "leak", "valve", "wire", "pipe", "other"];
 
+// Photo categories per spec §4.3.2. Photos can be attached at the WO
+// level (pre/in/post-work documentation) or to a specific issue inside
+// a zone (the broken head, the leaking valve box, etc.). The category
+// drives where the photo renders in the tech UI.
+const WO_PHOTO_CATEGORIES = ["pre_work", "in_progress", "post_work", "issue", "general"];
+
 // Service-specific checklists per spec §4.3.2. Spring openings get a
 // 4-step "service-specific steps" block; fall closings get a 6-step
 // winterization block. Service visits (one-off repairs) have no
@@ -172,6 +178,12 @@ function blankWorkOrder() {
     // so the rendering code doesn't depend on order; ordering comes from
     // the SERVICE_CHECKLISTS constant.
     serviceChecklist: {},
+    // Photos — meta only. Files live on disk under
+    // server/data/wo-photos/<woId>/<n>.<ext>. Each entry: { n,
+    // mediaType, bytes, addedAt, category, zoneNumber, issueId, label }.
+    // Issue photos reference back via issueId so the editor can group
+    // them per issue at render time.
+    photos: [],
     // Customer sign-off — the legally binding moment per spec §4.3.2.
     // imageData is the dataURL of the signature canvas; ip + userAgent
     // are captured server-side at sign time (never trust the client).
@@ -203,6 +215,7 @@ function hydrate(w) {
     zones: Array.isArray(w?.zones) ? w.zones.map(hydrateZone) : [],
     additionalRepairs: Array.isArray(w?.additionalRepairs) ? w.additionalRepairs : [],
     lineItems: Array.isArray(w?.lineItems) ? w.lineItems : [],
+    photos: Array.isArray(w?.photos) ? w.photos : [],
     intakeGuarantee: { ...base.intakeGuarantee, ...(w?.intakeGuarantee || {}) },
     serviceChecklist: { ...(w?.serviceChecklist || {}) },
     signature: { ...base.signature, ...(w?.signature || {}) },
@@ -395,6 +408,7 @@ module.exports = {
   ZONE_CHECK_KEYS,
   ZONE_ISSUE_TYPES,
   SERVICE_CHECKLISTS,
+  WO_PHOTO_CATEGORIES,
   templateForServiceKey,
   list,
   get,

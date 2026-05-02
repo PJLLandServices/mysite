@@ -899,6 +899,174 @@ html, body {
   border-color: var(--tech-green);
 }
 
+/* Visit photos --------------------------------------------------------
+   WO-level photo strip — pre-work / in-progress / post-work / general
+   docs. The thumbnails live in a horizontal-scroll strip on narrow
+   screens, wrap on wider ones. Camera shortcut goes through a hidden
+   <input type="file" capture="environment"> so mobile fires the rear
+   camera directly. */
+.tech-photo-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 8px;
+}
+.tech-photo-strip:empty { display: none; }
+.tech-photo-thumb {
+  position: relative;
+  width: 92px;
+  height: 92px;
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--tech-bg);
+  border: 1px solid var(--tech-border);
+  flex-shrink: 0;
+  cursor: pointer;
+}
+.tech-photo-thumb img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.tech-photo-thumb-remove {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  font: inherit;
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 22px;
+  color: #fff;
+  background: rgba(15, 31, 20, 0.65);
+  border: 0;
+  border-radius: 50%;
+  cursor: pointer;
+}
+.tech-photo-thumb-remove:active { background: rgba(177, 58, 58, 0.85); }
+
+.tech-photo-add {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 48px;
+  padding: 10px 16px;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--tech-green);
+  background: rgba(74, 140, 92, 0.06);
+  border: 1.5px dashed rgba(27, 77, 46, 0.35);
+  border-radius: 12px;
+  cursor: pointer;
+  width: 100%;
+  text-align: center;
+  user-select: none;
+}
+.tech-photo-add input[type="file"] {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  border: 0;
+}
+.tech-photo-add:active { background: rgba(74, 140, 92, 0.14); border-color: var(--tech-green); }
+.tech-photo-add.is-uploading {
+  opacity: 0.6;
+  pointer-events: none;
+}
+.tech-photo-add.is-uploading::after {
+  content: "Uploading…";
+  margin-left: 6px;
+  font-size: 13px;
+  color: var(--tech-text-muted);
+}
+
+/* Per-issue photo strip — same thumbnail style as WO-level but the
+   add button is smaller (sits inline with the existing notes row). */
+.tech-issue-photos {
+  grid-row: 3;
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  margin-top: 4px;
+}
+.tech-issue-photos:empty { display: none; }
+.tech-issue-photos .tech-photo-thumb {
+  width: 64px;
+  height: 64px;
+}
+.tech-issue-photo-add {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 64px;
+  min-width: 64px;
+  padding: 8px 12px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--tech-green);
+  background: rgba(74, 140, 92, 0.06);
+  border: 1.5px dashed rgba(27, 77, 46, 0.30);
+  border-radius: 8px;
+  cursor: pointer;
+  user-select: none;
+}
+.tech-issue-photo-add input[type="file"] {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  border: 0;
+}
+.tech-issue-photo-add.is-uploading {
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+/* Lightbox — full-screen overlay, tap to dismiss. Locks body scroll
+   while open via body.tech-lightbox-open. */
+.tech-photo-lightbox {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 31, 20, 0.92);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 200;
+  padding: 20px;
+  cursor: zoom-out;
+}
+.tech-photo-lightbox img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: 8px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+}
+body.tech-lightbox-open { overflow: hidden; }
+
+/* Issue card needs an extra row to host the photo strip — Tier 2 sized
+   the grid for 2 rows; bump it to 3 here without breaking the existing
+   columns. */
+.tech-zone-issue {
+  grid-template-rows: auto auto auto;
+}
+
 /* Locked banner --------------------------------------------------------
    Sits at the very top of the WO when wo.locked === true. Red accent
    so it can't be missed; not amber (which is reserved for the AI

@@ -158,6 +158,22 @@
         <div class="wo-zones" id="woZones"></div>
       </section>
 
+      <!-- Visit photos — WO-level photo gallery. Issue-attached photos
+           render inside each issue row in the zones section. -->
+      <section class="property-section wo-photos-section">
+        <header class="wo-photos-header">
+          <h2>Visit photos</h2>
+          <span class="wo-photo-count" id="woPhotoCount">0</span>
+        </header>
+        <p class="property-section-help">Pre-work / in-progress / post-work documentation. Issue-specific photos live with each issue inside the zone rows above.</p>
+        <div class="wo-photo-strip" id="woPhotoStrip"></div>
+        <label class="wo-photo-add">
+          <input type="file" accept="image/*" id="woPhotoInput" multiple>
+          <span aria-hidden="true">📷</span>
+          <span>Add visit photo</span>
+        </label>
+      </section>
+
       <!-- Service-specific checklist — Spring Opening / Fall Closing.
            Hidden for service_visit. Same step keys + labels as
            tech-mode so checkboxes stay in sync across both surfaces. -->
@@ -223,6 +239,11 @@
     </form>
     </main>
   </div><!-- /.pjl-app -->
+
+  <!-- Photo lightbox — tap to view full size, click anywhere to dismiss. -->
+  <div class="wo-photo-lightbox" id="woPhotoLightbox" hidden>
+    <img id="woPhotoLightboxImg" alt="">
+  </div>
 
   <div class="confirm-modal" id="confirmModal" hidden role="dialog" aria-modal="true" aria-labelledby="confirmTitle">
     <div class="confirm-modal-card">

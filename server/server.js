@@ -81,7 +81,9 @@ const MAX_CHAT_BODY = 80_000; // ~50K-ish transcript + a few KB of metadata
 // after the lead is successfully created (validation passed, not a duplicate).
 // If the booking is abandoned, no photo is ever persisted.
 const PHOTOS_DIR = path.join(DATA_DIR, "photos");
+const WO_PHOTOS_DIR = path.join(DATA_DIR, "wo-photos");
 const MAX_PHOTOS_PER_LEAD = 5;
+const MAX_PHOTOS_PER_WO = 20;
 const MAX_PHOTO_BYTES = 1_500_000; // 1.5 MB per photo after client-side resize
 const QUOTE_POST_MAX_BYTES = 12_000_000; // 12 MB cap for the /api/quotes POST (5 photos × ~1.5MB base64 inflated)
 const CONTACT_NOTE = "PJL_New2026";
@@ -512,11 +514,15 @@ async function parseRequestBody(req, { maxBytes = 1_000_000 } = {}) {
 
 // ----- Photo handling ----------------------------------------------------
 // Accepts client payload of the form: photos: [{ data: "<base64>", mediaType: "image/jpeg" }]
-// Returns a normalized + validated array of { buffer, mediaType, ext }, or throws.
-function validatePhotos(rawPhotos) {
+// Returns a normalized + validated array of { buffer, mediaType, ext, meta }, or throws.
+// `meta` carries any caller-supplied tags (category, zoneNumber, issueId,
+// label) untouched so the WO photo flow can persist them alongside the
+// file metadata. The lead photo flow ignores meta — it didn't exist before.
+function validatePhotos(rawPhotos, maxCount) {
+  const cap = Number.isFinite(maxCount) ? maxCount : MAX_PHOTOS_PER_LEAD;
   if (!rawPhotos) return [];
   if (!Array.isArray(rawPhotos)) throw new Error("photos must be an array.");
-  if (rawPhotos.length > MAX_PHOTOS_PER_LEAD) throw new Error(`A booking can include at most ${MAX_PHOTOS_PER_LEAD} photos.`);
+  if (rawPhotos.length > cap) throw new Error(`Can include at most ${cap} photos in one upload.`);
   const out = [];
   for (let i = 0; i < rawPhotos.length; i++) {
     const p = rawPhotos[i];
@@ -530,7 +536,17 @@ function validatePhotos(rawPhotos) {
     if (!buffer.length) throw new Error(`Photo ${i + 1} decoded to zero bytes.`);
     if (buffer.length > MAX_PHOTO_BYTES) throw new Error(`Photo ${i + 1} is too large (max ${Math.round(MAX_PHOTO_BYTES / 1000)} KB).`);
     const ext = mediaType === "image/png" ? "png" : (mediaType === "image/webp" ? "webp" : "jpg");
-    out.push({ buffer, mediaType, ext });
+    out.push({
+      buffer,
+      mediaType,
+      ext,
+      meta: {
+        category: String(p.category || "general"),
+        zoneNumber: Number.isFinite(Number(p.zoneNumber)) ? Number(p.zoneNumber) : null,
+        issueId: typeof p.issueId === "string" ? p.issueId : null,
+        label: typeof p.label === "string" ? p.label.slice(0, 200) : ""
+      }
+    });
   }
   return out;
 }
@@ -569,6 +585,52 @@ async function readPhotoFile(leadId, n) {
     } catch {}
   }
   return null;
+}
+
+// WO photo storage — same shape as lead photos but starting from a
+// caller-supplied baseN so multiple uploads append cleanly without
+// renumbering existing files. Files live at WO_PHOTOS_DIR/<woId>/<n>.<ext>.
+// Returns the new metadata entries to persist on wo.photos.
+async function savePhotosForWorkOrder(woId, photos, now, baseN) {
+  if (!photos.length) return [];
+  const dir = path.join(WO_PHOTOS_DIR, woId);
+  await fs.mkdir(dir, { recursive: true });
+  const meta = [];
+  for (let i = 0; i < photos.length; i++) {
+    const n = baseN + i + 1;
+    const filename = `${n}.${photos[i].ext}`;
+    await fs.writeFile(path.join(dir, filename), photos[i].buffer);
+    meta.push({
+      n,
+      mediaType: photos[i].mediaType,
+      bytes: photos[i].buffer.length,
+      addedAt: now,
+      ...photos[i].meta
+    });
+  }
+  return meta;
+}
+
+async function readWorkOrderPhotoFile(woId, n) {
+  const dir = path.join(WO_PHOTOS_DIR, woId);
+  for (const ext of ["jpg", "png", "webp"]) {
+    const file = path.join(dir, `${n}.${ext}`);
+    try {
+      const data = await fs.readFile(file);
+      const mediaType = ext === "png" ? "image/png" : (ext === "webp" ? "image/webp" : "image/jpeg");
+      return { data, mediaType, ext };
+    } catch {}
+  }
+  return null;
+}
+
+async function deleteWorkOrderPhotoFile(woId, n) {
+  const dir = path.join(WO_PHOTOS_DIR, woId);
+  for (const ext of ["jpg", "png", "webp"]) {
+    const file = path.join(dir, `${n}.${ext}`);
+    try { await fs.unlink(file); return true; } catch {}
+  }
+  return false;
 }
 
 // CORS — diagnose.html is currently hosted on GitHub Pages (different origin
@@ -2426,6 +2488,86 @@ async function handleApi(req, res, pathname) {
     } catch (error) {
       return sendJson(res, 400, { ok: false, errors: [error.message || "Couldn't delete work order."] });
     }
+  }
+
+  // -------------------- WO photo endpoints --------------------
+  // POST /api/work-orders/:id/photos — upload one or more photos.
+  // Body: { photos: [{ data: "<base64>", mediaType, category, zoneNumber, issueId, label }] }
+  // Categories: pre_work / in_progress / post_work / issue / general.
+  // Photos are stored on disk under WO_PHOTOS_DIR/<woId>/<n>.<ext>; metadata
+  // is appended to wo.photos. The hard cap of 20 photos per WO is enforced
+  // across all uploads (not per-request) so a tech can't bypass it by
+  // splitting into batches.
+  const woPhotosUploadMatch = pathname.match(/^\/api\/work-orders\/([^/]+)\/photos$/);
+  if (woPhotosUploadMatch && req.method === "POST") {
+    try {
+      const id = decodeURIComponent(woPhotosUploadMatch[1]);
+      const wo = await workOrders.get(id);
+      if (!wo) return sendJson(res, 404, { ok: false, errors: ["Work order not found."] });
+
+      // 12 MB cap matches the /api/quotes upload limit — covers up to ~5
+      // photos × ~1.5 MB after client-side resize, with headroom.
+      const payload = await parseRequestBody(req, { maxBytes: QUOTE_POST_MAX_BYTES });
+      const existing = Array.isArray(wo.photos) ? wo.photos : [];
+      const remaining = MAX_PHOTOS_PER_WO - existing.length;
+      if (remaining <= 0) {
+        return sendJson(res, 422, { ok: false, errors: [`Work order already has the maximum ${MAX_PHOTOS_PER_WO} photos. Delete one before uploading more.`] });
+      }
+      let validated;
+      try { validated = validatePhotos(payload.photos, remaining); }
+      catch (err) { return sendJson(res, 422, { ok: false, errors: [err.message] }); }
+
+      const baseN = existing.reduce((max, p) => Math.max(max, Number(p.n) || 0), 0);
+      const now = new Date().toISOString();
+      const newMeta = await savePhotosForWorkOrder(id, validated, now, baseN);
+      const updated = await workOrders.update(id, { photos: [...existing, ...newMeta] });
+      return sendJson(res, 201, { ok: true, workOrder: updated, added: newMeta });
+    } catch (error) {
+      return sendJson(res, 400, { ok: false, errors: [error.message || "Couldn't upload photos."] });
+    }
+  }
+
+  // DELETE /api/work-orders/:id/photos/:n — remove a single photo by n.
+  const woPhotoDeleteMatch = pathname.match(/^\/api\/work-orders\/([^/]+)\/photos\/(\d+)$/);
+  if (woPhotoDeleteMatch && req.method === "DELETE") {
+    try {
+      const id = decodeURIComponent(woPhotoDeleteMatch[1]);
+      const n = Number(woPhotoDeleteMatch[2]);
+      const wo = await workOrders.get(id);
+      if (!wo) return sendJson(res, 404, { ok: false, errors: ["Work order not found."] });
+      const existing = Array.isArray(wo.photos) ? wo.photos : [];
+      const photoMeta = existing.find((p) => Number(p.n) === n);
+      if (!photoMeta) return sendJson(res, 404, { ok: false, errors: ["Photo not found."] });
+      await deleteWorkOrderPhotoFile(id, n);
+      const nextPhotos = existing.filter((p) => Number(p.n) !== n);
+      const updated = await workOrders.update(id, { photos: nextPhotos });
+      return sendJson(res, 200, { ok: true, workOrder: updated, deletedN: n });
+    } catch (error) {
+      return sendJson(res, 400, { ok: false, errors: [error.message || "Couldn't delete photo."] });
+    }
+  }
+
+  // GET /api/work-orders/:id/photo/:n — serve a single photo file.
+  // Cookie-gated by the standard admin auth (handled upstream via
+  // requireAuth's "/api/work-orders" prefix match). Same caching policy
+  // as lead photos: private, 1 day max-age — photos rarely change.
+  const woPhotoServeMatch = pathname.match(/^\/api\/work-orders\/([^/]+)\/photo\/(\d+)$/);
+  if (woPhotoServeMatch && req.method === "GET") {
+    const id = decodeURIComponent(woPhotoServeMatch[1]);
+    const n = Number(woPhotoServeMatch[2]);
+    const wo = await workOrders.get(id);
+    if (!wo) return sendJson(res, 404, { ok: false, errors: ["Work order not found."] });
+    const photoMeta = (wo.photos || []).find((p) => Number(p.n) === n);
+    if (!photoMeta) return sendJson(res, 404, { ok: false, errors: ["Photo not found."] });
+    const file = await readWorkOrderPhotoFile(id, n);
+    if (!file) return sendJson(res, 404, { ok: false, errors: ["Photo not found on disk."] });
+    res.writeHead(200, {
+      "content-type": file.mediaType,
+      "cache-control": "private, max-age=86400",
+      "content-length": file.data.length
+    });
+    res.end(file.data);
+    return;
   }
 
   // Admin manual-handoff: Patrick fills out a form in /admin/handoff after

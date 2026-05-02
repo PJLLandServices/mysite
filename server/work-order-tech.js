@@ -108,6 +108,7 @@ let state = {
   zones: [],
   serviceChecklist: {},
   signature: { signed: false, customerName: "", imageData: "", acknowledgement: false, signedAt: null },
+  photos: [],
   locked: false,
   // Tracks which zone the bottom sheet is currently editing.
   activeZoneIndex: -1,
@@ -120,6 +121,77 @@ let state = {
   // Signature pad helper (set after init).
   signaturePad: null
 };
+
+// Resize a File from an <input type="file"> down to a max dimension and
+// JPEG-encode at 0.82 quality before upload. Mirrors the chat-widget
+// resize pattern — keeps payloads under the server's 1.5 MB per-photo
+// cap even from modern phones (12 MP camera = ~5 MB raw).
+async function resizeImageForUpload(file, maxDim = 1280, quality = 0.82) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("Couldn't read that file."));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error("Couldn't decode that image."));
+      img.onload = () => {
+        const longest = Math.max(img.width, img.height);
+        const scale = longest > maxDim ? maxDim / longest : 1;
+        const w = Math.round(img.width * scale);
+        const h = Math.round(img.height * scale);
+        const canvas = document.createElement("canvas");
+        canvas.width = w;
+        canvas.height = h;
+        canvas.getContext("2d").drawImage(img, 0, 0, w, h);
+        const dataUrl = canvas.toDataURL("image/jpeg", quality);
+        const base64 = dataUrl.split(",", 2)[1] || "";
+        resolve({ base64, mediaType: "image/jpeg" });
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+// Upload one or more photos to /api/work-orders/:id/photos. `meta` is
+// any additional fields (category, zoneNumber, issueId, label) that get
+// attached to each uploaded photo. Returns the updated WO from the
+// server response, or throws on failure.
+async function uploadWoPhotos(files, meta = {}) {
+  const arr = Array.from(files || []);
+  if (!arr.length) return null;
+  const photos = [];
+  for (const f of arr) {
+    if (!f.type || !f.type.startsWith("image/")) continue;
+    const resized = await resizeImageForUpload(f);
+    photos.push({ data: resized.base64, mediaType: resized.mediaType, ...meta });
+  }
+  if (!photos.length) return null;
+  const response = await fetch(`/api/work-orders/${encodeURIComponent(state.id)}/photos`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ photos })
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || !data.ok) {
+    throw new Error((data.errors && data.errors[0]) || "Couldn't upload photo.");
+  }
+  return data.workOrder;
+}
+
+async function deleteWoPhoto(n) {
+  const response = await fetch(`/api/work-orders/${encodeURIComponent(state.id)}/photos/${n}`, {
+    method: "DELETE"
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok || !data.ok) {
+    throw new Error((data.errors && data.errors[0]) || "Couldn't delete photo.");
+  }
+  return data.workOrder;
+}
+
+function woPhotoUrl(n) {
+  return `/api/work-orders/${encodeURIComponent(state.id)}/photo/${n}`;
+}
 
 function countChecks(checks) {
   if (!checks || typeof checks !== "object") return 0;
@@ -381,9 +453,64 @@ function renderSheetIssues(zone) {
       <input type="number" class="tech-zone-issue-qty" min="1" inputmode="numeric" value="${escapeHtml(String(issue.qty || 1))}" aria-label="Quantity">
       <input type="text" class="tech-zone-issue-notes" value="${escapeHtml(issue.notes || "")}" placeholder="Details (optional)" aria-label="Issue notes">
       <button type="button" class="tech-zone-issue-remove" aria-label="Remove issue">×</button>
+      <div class="tech-issue-photos" data-issue-photos="${escapeHtml(issue.id)}"></div>
     `;
     sheetIssues.appendChild(div);
+    // Render the photo strip + add button. Done in JS because it loops
+    // over wo.photos and we want the live state, not a re-renderable
+    // string template.
+    renderIssuePhotos(div.querySelector("[data-issue-photos]"), issue.id, zone);
   });
+}
+
+// Render the per-issue photo strip inside a single issue card. Filters
+// state.photos by issueId, renders thumbnails + an upload button. The
+// upload button uses capture="environment" so mobile cameras open
+// directly to the rear camera.
+function renderIssuePhotos(host, issueId, zone) {
+  if (!host) return;
+  host.innerHTML = "";
+  const issuePhotos = (state.photos || []).filter((p) => p.issueId === issueId);
+  issuePhotos.forEach((photo) => host.appendChild(renderPhotoThumb(photo)));
+
+  if (state.locked) return; // post-sign: no upload UI
+
+  const label = document.createElement("label");
+  label.className = "tech-issue-photo-add";
+  label.innerHTML = `
+    <input type="file" accept="image/*" capture="environment" multiple hidden>
+    <span aria-hidden="true">📷</span>
+    <span>Photo</span>
+  `;
+  label.querySelector("input").addEventListener("change", async (event) => {
+    if (state.locked) return;
+    const input = event.target;
+    const files = input.files;
+    if (!files || !files.length) return;
+    label.classList.add("is-uploading");
+    try {
+      const wo = await uploadWoPhotos(files, {
+        category: "issue",
+        issueId,
+        zoneNumber: zone?.number || null
+      });
+      if (wo) {
+        state.photos = wo.photos || [];
+        // Re-render only this issue's photos to preserve focus on
+        // adjacent inputs (e.g. tech mid-typing in another row).
+        renderIssuePhotos(host, issueId, zone);
+        // Also refresh the WO-level strip in case user uploaded more
+        // photos before navigating away.
+        renderWoPhotos();
+      }
+    } catch (err) {
+      alert(err.message || "Couldn't upload photo.");
+    } finally {
+      label.classList.remove("is-uploading");
+      input.value = "";
+    }
+  });
+  host.appendChild(label);
 }
 
 function closeZoneSheet() {
@@ -615,6 +742,98 @@ document.getElementById("techServiceChecklistList")?.addEventListener("click", (
   state.serviceChecklist[key] = !state.serviceChecklist[key];
   btn.setAttribute("aria-pressed", state.serviceChecklist[key] ? "true" : "false");
   patchWorkOrder({ serviceChecklist: state.serviceChecklist });
+});
+
+// ---- Visit photos -----------------------------------------------
+
+// Render the WO-level photo strip (anything not tied to a specific
+// issue). Issue photos render inline in the per-zone sheet via
+// renderSheetIssues. The "Add visit photo" button stays mounted but
+// is disabled when locked.
+function renderWoPhotos() {
+  const strip = document.getElementById("techWoPhotoStrip");
+  const count = document.getElementById("techWoPhotoCount");
+  if (!strip) return;
+  const woLevel = (state.photos || []).filter((p) => !p.issueId);
+  if (count) count.textContent = String(woLevel.length);
+  strip.innerHTML = "";
+  woLevel.forEach((photo) => {
+    strip.appendChild(renderPhotoThumb(photo));
+  });
+}
+
+function renderPhotoThumb(photo) {
+  const wrap = document.createElement("div");
+  wrap.className = "tech-photo-thumb";
+  wrap.dataset.photoN = String(photo.n);
+  const img = document.createElement("img");
+  img.src = woPhotoUrl(photo.n);
+  img.loading = "lazy";
+  img.alt = photo.label || `Photo ${photo.n}`;
+  img.addEventListener("click", () => openLightbox(woPhotoUrl(photo.n)));
+  wrap.appendChild(img);
+  if (!state.locked) {
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "tech-photo-thumb-remove";
+    remove.setAttribute("aria-label", "Remove photo");
+    remove.textContent = "×";
+    remove.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      if (!confirm("Remove this photo?")) return;
+      try {
+        const wo = await deleteWoPhoto(photo.n);
+        state.photos = wo.photos || [];
+        renderWoPhotos();
+        // Re-render the issue sheet if open — this photo might've been
+        // attached to the issue currently being edited.
+        if (state.activeZoneIndex >= 0) {
+          renderSheetIssues(state.zones[state.activeZoneIndex]);
+        }
+      } catch (err) { alert(err.message); }
+    });
+    wrap.appendChild(remove);
+  }
+  return wrap;
+}
+
+// Visit-photo upload — fires when the file picker emits a change. Mobile
+// browsers honor `capture="environment"` to open the camera directly.
+document.getElementById("techWoPhotoInput")?.addEventListener("change", async (event) => {
+  if (state.locked) return;
+  const input = event.target;
+  const files = input.files;
+  if (!files || !files.length) return;
+  const addBtn = document.querySelector(".tech-photo-add");
+  if (addBtn) addBtn.classList.add("is-uploading");
+  try {
+    const wo = await uploadWoPhotos(files, { category: "general" });
+    if (wo) {
+      state.photos = wo.photos || [];
+      renderWoPhotos();
+    }
+  } catch (err) {
+    alert(err.message || "Couldn't upload photo.");
+  } finally {
+    if (addBtn) addBtn.classList.remove("is-uploading");
+    input.value = "";  // reset so picking the same file re-fires change
+  }
+});
+
+// Lightbox — taps anywhere dismiss it. Single shared element so we
+// don't have to render one per thumbnail.
+function openLightbox(url) {
+  const box = document.getElementById("techPhotoLightbox");
+  const img = document.getElementById("techPhotoLightboxImg");
+  if (!box || !img) return;
+  img.src = url;
+  box.hidden = false;
+  document.body.classList.add("tech-lightbox-open");
+}
+document.getElementById("techPhotoLightbox")?.addEventListener("click", () => {
+  const box = document.getElementById("techPhotoLightbox");
+  if (box) box.hidden = true;
+  document.body.classList.remove("tech-lightbox-open");
 });
 
 // ---- Customer sign-off + signature pad --------------------------
@@ -950,6 +1169,7 @@ async function init() {
     state.zones = Array.isArray(wo.zones) ? wo.zones.map((z) => ({ ...z })) : [];
     state.serviceChecklist = (wo.serviceChecklist && typeof wo.serviceChecklist === "object") ? { ...wo.serviceChecklist } : {};
     state.signature = wo.signature || state.signature;
+    state.photos = Array.isArray(wo.photos) ? wo.photos : [];
     state.locked = wo.locked === true;
 
     techId.textContent = wo.id;
@@ -968,6 +1188,7 @@ async function init() {
     // customer sign-off section. Lock state cascades after both are
     // rendered so disabled inputs apply uniformly.
     renderServiceChecklist();
+    renderWoPhotos();
     renderSignoff();
     applyLockState(state.locked);
 

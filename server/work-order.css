@@ -58,6 +58,167 @@
   gap: 18px;
 }
 
+/* Visit photos -------------------------------------------------------
+   WO-level gallery + per-issue strips. Same data model as tech-mode
+   but rendered with desktop-friendly sizing (larger thumbs, hover
+   states, file-picker buttons instead of camera shortcuts). */
+.wo-photos-section .wo-photos-header {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 4px;
+}
+.wo-photo-count {
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 13px;
+  letter-spacing: 0.06em;
+  color: var(--pjl-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.wo-photo-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 8px 0;
+}
+.wo-photo-strip:empty { display: none; }
+.wo-photo-thumb {
+  position: relative;
+  width: 120px;
+  height: 120px;
+  border-radius: 8px;
+  overflow: hidden;
+  background: rgba(15, 31, 20, 0.06);
+  border: 1px solid rgba(15, 31, 20, 0.10);
+  cursor: zoom-in;
+  transition: transform 120ms ease, box-shadow 120ms ease;
+}
+.wo-photo-thumb:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 18px rgba(15, 31, 20, 0.12);
+}
+.wo-photo-thumb img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.wo-photo-thumb-remove {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  font: inherit;
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 24px;
+  color: #fff;
+  background: rgba(15, 31, 20, 0.65);
+  border: 0;
+  border-radius: 50%;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+.wo-photo-thumb-remove:hover { background: #b13a3a; }
+.wo-photo-add {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--pjl-green);
+  background: rgba(74, 140, 92, 0.06);
+  border: 1.5px dashed rgba(27, 77, 46, 0.35);
+  border-radius: 10px;
+  cursor: pointer;
+  user-select: none;
+}
+.wo-photo-add input[type="file"] {
+  position: absolute; width: 1px; height: 1px;
+  padding: 0; margin: -1px; overflow: hidden;
+  clip: rect(0, 0, 0, 0); border: 0;
+}
+.wo-photo-add:hover {
+  background: rgba(74, 140, 92, 0.14);
+  border-color: var(--pjl-green);
+}
+.wo-photo-add.is-uploading {
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+/* Per-issue photo strip — sits below each issue row inside the zone. */
+.wo-issue-photos {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  margin: 6px 0 0;
+  grid-column: 1 / -1;
+  grid-row: 3;
+}
+.wo-issue-photos .wo-photo-thumb {
+  width: 72px;
+  height: 72px;
+}
+.wo-issue-photo-add {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 72px;
+  min-width: 72px;
+  padding: 6px 10px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--pjl-green);
+  background: rgba(74, 140, 92, 0.06);
+  border: 1.5px dashed rgba(27, 77, 46, 0.30);
+  border-radius: 8px;
+  cursor: pointer;
+}
+.wo-issue-photo-add:hover {
+  background: rgba(74, 140, 92, 0.14);
+  border-color: var(--pjl-green);
+}
+.wo-issue-photo-add.is-uploading { opacity: 0.6; pointer-events: none; }
+.wo-issue-photo-add input[type="file"] {
+  position: absolute; width: 1px; height: 1px;
+  padding: 0; margin: -1px; overflow: hidden;
+  clip: rect(0, 0, 0, 0); border: 0;
+}
+
+/* Issue row needs a 3rd grid row when photos are present. */
+.wo-zone-issue {
+  grid-template-rows: auto auto auto;
+}
+
+/* Lightbox — full-screen overlay, click anywhere to dismiss. */
+.wo-photo-lightbox {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 31, 20, 0.92);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+  padding: 24px;
+  cursor: zoom-out;
+}
+.wo-photo-lightbox img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: 8px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.45);
+}
+body.wo-lightbox-open { overflow: hidden; }
+
 /* Locked banner — visible at top of WO when wo.locked === true. */
 .wo-locked-banner {
   display: flex;
