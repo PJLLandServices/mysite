@@ -69,6 +69,15 @@
       </div>
     </header>
 
+    <!-- Locked banner — visible when wo.locked === true. Customer
+         signed; the WO is the contract. Patrick's still the admin so
+         he can technically still edit but the visual cue is loud. -->
+    <div class="wo-locked-banner" id="woLockedBanner" hidden role="status">
+      <span class="wo-locked-icon" aria-hidden="true">🔒</span>
+      <strong>Signed and locked</strong>
+      <span id="woLockedMeta"></span>
+    </div>
+
     <p class="property-loading" id="woLoading">Loading work order…</p>
     <p class="property-error" id="woError" hidden>This work order couldn't be loaded.</p>
 
@@ -149,12 +158,61 @@
         <div class="wo-zones" id="woZones"></div>
       </section>
 
+      <!-- Service-specific checklist — Spring Opening / Fall Closing.
+           Hidden for service_visit. Same step keys + labels as
+           tech-mode so checkboxes stay in sync across both surfaces. -->
+      <section class="property-section wo-service-checklist-section" id="woServiceChecklistSection" hidden>
+        <h2 id="woServiceChecklistTitle">Service checklist</h2>
+        <p class="property-section-help">Tap each step as it's completed on-site. Same checklist that renders in tech mode.</p>
+        <div class="wo-service-checklist-list" id="woServiceChecklistList"></div>
+      </section>
+
       <section class="property-section">
         <h2>Tech notes</h2>
         <p class="property-section-help">Anything else worth recording — overall system state, customer conversations, follow-up flags.</p>
         <label class="property-full">
           <textarea name="techNotes" id="woTechNotes" rows="4" placeholder="e.g. Manifold rebuild needed before next spring; customer wants a quote for Hydrawise upgrade…"></textarea>
         </label>
+      </section>
+
+      <!-- Customer sign-off — the binding moment. Pre-sign: name input,
+           signature canvas, acknowledgement checkbox, sign-and-lock
+           button. Post-sign: read-only display of captured signature +
+           name + date. Server fills in IP / userAgent on sign and
+           flips wo.locked to true. Spec §4.3.2. -->
+      <section class="property-section wo-signoff-section">
+        <h2>Customer sign-off</h2>
+        <p class="property-section-help">The legally binding moment. Once signed, the work order is locked. Scope changes after sign require a fresh signature.</p>
+
+        <div class="wo-signoff-form" id="woSignoffForm">
+          <label class="wo-signoff-name-label">
+            <span>Customer name (printed)</span>
+            <input type="text" id="woSignoffName" placeholder="e.g. Patrick Lalande" autocomplete="off">
+          </label>
+
+          <p class="wo-signoff-canvas-label">Customer signature</p>
+          <div class="wo-signoff-canvas-wrap">
+            <canvas id="woSignoffCanvas" class="wo-signoff-canvas" width="800" height="200"></canvas>
+            <button type="button" class="wo-signoff-clear" id="woSignoffClear">Clear</button>
+          </div>
+
+          <label class="wo-signoff-ack">
+            <input type="checkbox" id="woSignoffAck">
+            <span>I authorize the work described above</span>
+          </label>
+
+          <button type="button" class="pjl-btn pjl-btn-primary wo-signoff-submit" id="woSignoffSubmit" disabled>Sign &amp; lock work order</button>
+        </div>
+
+        <div class="wo-signoff-signed" id="woSignoffSigned" hidden>
+          <div class="wo-signoff-image-wrap">
+            <img id="woSignoffImage" alt="Customer signature">
+          </div>
+          <p class="wo-signoff-signed-meta">
+            Signed by <strong id="woSignoffSignedName"></strong>
+            <span id="woSignoffSignedAt"></span>
+          </p>
+        </div>
       </section>
 
       <div class="property-actions wo-actions">

@@ -27,6 +27,15 @@
   </header>
 
   <main class="tech-main" id="techMain" hidden>
+    <!-- Locked banner — visible when the WO has been signed off. The
+         tech can still scroll/read everything but interactive controls
+         are disabled (see body[data-locked="true"] CSS rules). Spec §4.3.3
+         rule 11: signed WO is the contract; locked once signed. -->
+    <div class="tech-locked-banner" id="techLockedBanner" hidden role="status">
+      <span class="tech-locked-icon" aria-hidden="true">🔒</span>
+      <span class="tech-locked-text"><strong>Signed and locked</strong> <span id="techLockedMeta"></span></span>
+    </div>
+
     <section class="tech-summary">
       <p class="tech-customer" id="techCustomer">—</p>
       <p class="tech-address" id="techAddress">—</p>
@@ -113,11 +122,59 @@
       <ul class="tech-zone-list" id="techZoneList"></ul>
     </section>
 
+    <!-- Service-specific checklist — Spring Opening / Fall Closing get a
+         tap-through of service steps per spec §4.3.2. Hidden for
+         service_visit (no service-specific steps in that template). -->
+    <section class="tech-section tech-service-checklist" id="techServiceChecklistSection" hidden>
+      <h2 class="tech-section-title" id="techServiceChecklistTitle">Service checklist</h2>
+      <ul class="tech-service-checklist-list" id="techServiceChecklistList"></ul>
+    </section>
+
     <!-- Tech-wide notes for the visit. Collapsed by default. -->
     <details class="tech-collapse">
       <summary>Visit notes</summary>
       <textarea id="techNotes" rows="5" placeholder="Anything else worth recording…"></textarea>
     </details>
+
+    <!-- Customer sign-off — the legally binding moment per spec §4.3.2.
+         Pre-sign: typed customer name + signature canvas + acknowledgement
+         checkbox + submit button. Post-sign: read-only display of the
+         captured image, name, date/time. Server fills in IP + userAgent
+         on sign and flips wo.locked to true. -->
+    <section class="tech-section tech-signoff" id="techSignoffSection">
+      <h2 class="tech-section-title">Customer sign-off</h2>
+
+      <div class="tech-signoff-form" id="techSignoffForm">
+        <label class="tech-signoff-name-label">
+          <span>Customer name (printed)</span>
+          <input type="text" id="techSignoffName" placeholder="e.g. Patrick Lalande" autocomplete="off" autocapitalize="words">
+        </label>
+
+        <p class="tech-signoff-canvas-label">Customer signature</p>
+        <div class="tech-signoff-canvas-wrap">
+          <canvas id="techSignoffCanvas" class="tech-signoff-canvas" width="600" height="200"></canvas>
+          <button type="button" class="tech-signoff-clear" id="techSignoffClear">Clear</button>
+        </div>
+
+        <label class="tech-signoff-ack">
+          <input type="checkbox" id="techSignoffAck">
+          <span>I authorize the work described above</span>
+        </label>
+
+        <button type="button" class="tech-signoff-submit" id="techSignoffSubmit" disabled>Sign &amp; lock work order</button>
+        <p class="tech-signoff-note">Once signed, the work order is locked. Scope changes after sign-off require a fresh signature.</p>
+      </div>
+
+      <div class="tech-signoff-signed" id="techSignoffSigned" hidden>
+        <div class="tech-signoff-image-wrap">
+          <img id="techSignoffImage" alt="Customer signature">
+        </div>
+        <p class="tech-signoff-signed-meta">
+          Signed by <strong id="techSignoffSignedName"></strong>
+          <span id="techSignoffSignedAt"></span>
+        </p>
+      </div>
+    </section>
 
     <p class="tech-meta" id="techMeta">—</p>
   </main>

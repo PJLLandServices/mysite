@@ -58,6 +58,204 @@
   gap: 18px;
 }
 
+/* Locked banner — visible at top of WO when wo.locked === true. */
+.wo-locked-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  background: rgba(177, 58, 58, 0.08);
+  border: 1px solid rgba(177, 58, 58, 0.30);
+  border-radius: 10px;
+  font-size: 14px;
+  color: var(--pjl-text);
+}
+.wo-locked-icon { font-size: 18px; }
+.wo-locked-banner strong { color: #b13a3a; }
+
+/* Service-specific checklist (Spring / Fall) — single-column tap-pills,
+   matches the tech-mode visual language so the checklist behaves
+   identically on both surfaces. */
+.wo-service-checklist-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.wo-service-step {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 48px;
+  padding: 10px 14px;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  text-align: left;
+  color: var(--pjl-text);
+  background: #fff;
+  border: 1.5px solid rgba(15, 31, 20, 0.12);
+  border-radius: 10px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.wo-service-step .check-tick {
+  width: 20px;
+  height: 20px;
+  border-radius: 5px;
+  border: 1.5px solid rgba(15, 31, 20, 0.30);
+  background: #fff;
+  flex-shrink: 0;
+  position: relative;
+}
+.wo-service-step[aria-pressed="true"] {
+  border-color: var(--pjl-green);
+  background: rgba(74, 140, 92, 0.08);
+  color: var(--pjl-green);
+}
+.wo-service-step[aria-pressed="true"] .check-tick {
+  background: var(--pjl-green);
+  border-color: var(--pjl-green);
+}
+.wo-service-step[aria-pressed="true"] .check-tick::after {
+  content: "";
+  position: absolute;
+  left: 6px;
+  top: 2px;
+  width: 5px;
+  height: 11px;
+  border: solid #fff;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
+/* Customer sign-off section ----------------------------------------- */
+.wo-signoff-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 720px;
+}
+.wo-signoff-name-label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--pjl-text-mid);
+}
+.wo-signoff-name-label > span {
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--pjl-text-muted);
+}
+.wo-signoff-name-label input {
+  padding: 10px 12px;
+  font: inherit;
+  font-size: 14px;
+  border: 1px solid rgba(15, 31, 20, 0.18);
+  border-radius: 8px;
+  background: #fff;
+}
+.wo-signoff-canvas-label {
+  margin: 0;
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--pjl-text-muted);
+}
+.wo-signoff-canvas-wrap {
+  position: relative;
+  background: repeating-linear-gradient(45deg, #fafaf6, #fafaf6 6px, #f3f0e7 6px, #f3f0e7 7px);
+  border: 1.5px dashed rgba(15, 31, 20, 0.22);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.wo-signoff-canvas {
+  display: block;
+  width: 100%;
+  height: 200px;
+  touch-action: none;
+  cursor: crosshair;
+  background: transparent;
+}
+.wo-signoff-clear {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  padding: 4px 12px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--pjl-text-muted);
+  background: rgba(255, 255, 255, 0.85);
+  border: 1px solid rgba(15, 31, 20, 0.18);
+  border-radius: 999px;
+  cursor: pointer;
+}
+.wo-signoff-ack {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  font-size: 14px;
+  color: var(--pjl-text);
+  line-height: 1.4;
+  cursor: pointer;
+  user-select: none;
+}
+.wo-signoff-ack input[type="checkbox"] {
+  width: 20px;
+  height: 20px;
+  margin-top: 1px;
+  accent-color: var(--pjl-green);
+  flex-shrink: 0;
+  cursor: pointer;
+}
+.wo-signoff-submit {
+  align-self: flex-start;
+}
+.wo-signoff-submit:disabled {
+  opacity: 0.50;
+  cursor: not-allowed;
+}
+.wo-signoff-signed {
+  max-width: 720px;
+  padding: 14px;
+  background: rgba(74, 140, 92, 0.06);
+  border: 1px solid rgba(74, 140, 92, 0.30);
+  border-radius: 10px;
+}
+.wo-signoff-image-wrap {
+  background: #fff;
+  border: 1px solid rgba(15, 31, 20, 0.12);
+  border-radius: 8px;
+  padding: 8px;
+  margin-bottom: 10px;
+}
+.wo-signoff-image-wrap img {
+  display: block;
+  width: 100%;
+  max-height: 200px;
+  object-fit: contain;
+}
+.wo-signoff-signed-meta {
+  margin: 0;
+  font-size: 13px;
+  color: var(--pjl-text-mid);
+}
+.wo-signoff-signed-meta strong { color: var(--pjl-green); }
+
+/* When the WO is locked, fade interactive surfaces. Save / delete stay
+   active because Patrick is admin and may need to override. */
+body[data-locked="true"] .wo-zone-row,
+body[data-locked="true"] .wo-service-step,
+body[data-locked="true"] .wo-signoff-form {
+  opacity: 0.55;
+  pointer-events: none;
+}
+
 /* Cheat Sheet --------------------------------------------------------
    Sits between the WO hero and the form. Three action chips at the top
    (call / text / maps), then a 2-column responsive grid of cards for

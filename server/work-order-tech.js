@@ -62,6 +62,28 @@ const ZONE_ISSUE_TYPE_OPTIONS = [
 
 const ZONE_CHECK_KEYS = ["operated", "pressureGood", "coverageGood", "noLeaks", "allHeadsFunctional"];
 
+// Service-specific checklist definitions per spec §4.3.2. Mirrors
+// SERVICE_CHECKLISTS in server/lib/work-orders.js — keep these in sync
+// if step keys change. Service visits have no checklist (one-off
+// repairs use the zone walk-through + tech notes only).
+const SERVICE_CHECKLISTS_TECH = {
+  spring_opening: [
+    { key: "water_on",                  label: "Water turned on at main shut-off" },
+    { key: "backflow_check",            label: "Backflow visual check" },
+    { key: "controller_programmed",     label: "Controller programmed for season" },
+    { key: "walkthrough_with_customer", label: "Walk-through with customer (if home)" }
+  ],
+  fall_closing: [
+    { key: "controller_off",            label: "Controller set to off / winter mode" },
+    { key: "water_off",                 label: "Water shut off at main" },
+    { key: "compressor_connected",      label: "Compressor connected at blow-out" },
+    { key: "zones_blown_clear",         label: "All zones blown clear" },
+    { key: "compressor_disconnected",   label: "Compressor disconnected" },
+    { key: "system_winterized",         label: "System winterized" }
+  ],
+  service_visit: []
+};
+
 const ZONE_STATUS_LABELS = {
   working_well:    "Working well",
   adjusted:        "Adjusted",
@@ -80,9 +102,13 @@ const TYPE_LABELS = {
 // consistent without a full reload.
 let state = {
   id: "",
+  type: "service_visit",
   status: "scheduled",
   techNotes: "",
   zones: [],
+  serviceChecklist: {},
+  signature: { signed: false, customerName: "", imageData: "", acknowledgement: false, signedAt: null },
+  locked: false,
   // Tracks which zone the bottom sheet is currently editing.
   activeZoneIndex: -1,
   // Pending PATCH timer for debounced notes-while-typing.
@@ -90,7 +116,9 @@ let state = {
   zoneNotesTimer: null,
   // Debounce timer for issue-row qty/notes typing inside the sheet.
   // Type selects fire immediately on change (no debounce needed).
-  issueInputTimer: null
+  issueInputTimer: null,
+  // Signature pad helper (set after init).
+  signaturePad: null
 };
 
 function countChecks(checks) {
@@ -547,6 +575,238 @@ function flushVisitNotes() {
   patchWorkOrder({ techNotes: next });
 }
 
+// ---- Service-specific checklist ---------------------------------
+
+// Render the service-specific checklist (spring opening / fall closing).
+// Hidden for service_visit (no service-specific steps in that template).
+// Each step is a tap-pill that toggles the boolean in state.serviceChecklist
+// and PATCHes immediately. Mirrors the zone-check tap-box pattern.
+function renderServiceChecklist() {
+  const section = document.getElementById("techServiceChecklistSection");
+  const list = document.getElementById("techServiceChecklistList");
+  const title = document.getElementById("techServiceChecklistTitle");
+  if (!section || !list) return;
+  const steps = SERVICE_CHECKLISTS_TECH[state.type] || [];
+  if (!steps.length) {
+    section.hidden = true;
+    return;
+  }
+  section.hidden = false;
+  if (title) title.textContent = TYPE_LABELS[state.type] ? `${TYPE_LABELS[state.type]} checklist` : "Service checklist";
+  list.innerHTML = "";
+  steps.forEach((step) => {
+    const li = document.createElement("li");
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "tech-service-step";
+    btn.dataset.serviceStep = step.key;
+    btn.setAttribute("aria-pressed", state.serviceChecklist[step.key] ? "true" : "false");
+    btn.innerHTML = `<span class="check-tick" aria-hidden="true"></span><span>${escapeHtml(step.label)}</span>`;
+    li.appendChild(btn);
+    list.appendChild(li);
+  });
+}
+
+document.getElementById("techServiceChecklistList")?.addEventListener("click", (event) => {
+  if (state.locked) return;
+  const btn = event.target.closest("[data-service-step]");
+  if (!btn) return;
+  const key = btn.dataset.serviceStep;
+  state.serviceChecklist[key] = !state.serviceChecklist[key];
+  btn.setAttribute("aria-pressed", state.serviceChecklist[key] ? "true" : "false");
+  patchWorkOrder({ serviceChecklist: state.serviceChecklist });
+});
+
+// ---- Customer sign-off + signature pad --------------------------
+
+// Switch the sign-off section between pre-sign (form + canvas) and
+// post-sign (read-only image + name + date) based on state.signature.signed.
+function renderSignoff() {
+  const form = document.getElementById("techSignoffForm");
+  const signed = document.getElementById("techSignoffSigned");
+  if (!form || !signed) return;
+  if (state.signature && state.signature.signed) {
+    form.hidden = true;
+    signed.hidden = false;
+    const img = document.getElementById("techSignoffImage");
+    const nameEl = document.getElementById("techSignoffSignedName");
+    const atEl = document.getElementById("techSignoffSignedAt");
+    if (img && state.signature.imageData) img.src = state.signature.imageData;
+    if (nameEl) nameEl.textContent = state.signature.customerName || "—";
+    if (atEl && state.signature.signedAt) {
+      atEl.textContent = ` · ${formatDateTime(state.signature.signedAt)}`;
+    }
+  } else {
+    form.hidden = false;
+    signed.hidden = true;
+    // Lazy-init the signature pad on first render.
+    if (!state.signaturePad) {
+      const canvas = document.getElementById("techSignoffCanvas");
+      if (canvas) state.signaturePad = createSignaturePad(canvas, updateSignoffSubmitState);
+    }
+    updateSignoffSubmitState();
+  }
+}
+
+// Create a signature canvas with pointer-event drawing (works for touch,
+// mouse, and stylus). Returns a small API: isDirty, clear, toDataURL.
+// onChange fires whenever the dirty state flips so the submit button
+// can enable/disable in sync with the form.
+function createSignaturePad(canvas, onChange) {
+  const ctx = canvas.getContext("2d");
+  let drawing = false;
+  let dirty = false;
+
+  function fitCanvas() {
+    const rect = canvas.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
+    const dpr = window.devicePixelRatio || 1;
+    // Preserve any existing strokes by snapshotting before resize.
+    const snapshot = canvas.width ? canvas.toDataURL() : null;
+    canvas.width = Math.round(rect.width * dpr);
+    canvas.height = Math.round(rect.height * dpr);
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.strokeStyle = "#0F1F14";
+    ctx.lineWidth = 2.2 * dpr;
+    if (snapshot && dirty) {
+      const img = new Image();
+      img.onload = () => ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      img.src = snapshot;
+    }
+  }
+  fitCanvas();
+  window.addEventListener("resize", fitCanvas);
+
+  function pos(e) {
+    const rect = canvas.getBoundingClientRect();
+    return {
+      x: (e.clientX - rect.left) * (canvas.width / rect.width),
+      y: (e.clientY - rect.top) * (canvas.height / rect.height)
+    };
+  }
+
+  canvas.addEventListener("pointerdown", (e) => {
+    if (state.locked) return;
+    drawing = true;
+    canvas.setPointerCapture(e.pointerId);
+    const p = pos(e);
+    ctx.beginPath();
+    ctx.moveTo(p.x, p.y);
+    e.preventDefault();
+  });
+  canvas.addEventListener("pointermove", (e) => {
+    if (!drawing) return;
+    const p = pos(e);
+    ctx.lineTo(p.x, p.y);
+    ctx.stroke();
+    if (!dirty) { dirty = true; if (onChange) onChange(); }
+    e.preventDefault();
+  });
+  const endStroke = (e) => {
+    if (!drawing) return;
+    drawing = false;
+    try { canvas.releasePointerCapture(e.pointerId); } catch (_) {}
+  };
+  canvas.addEventListener("pointerup", endStroke);
+  canvas.addEventListener("pointercancel", endStroke);
+  canvas.addEventListener("pointerleave", endStroke);
+
+  return {
+    isDirty: () => dirty,
+    clear: () => {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      dirty = false;
+      if (onChange) onChange();
+    },
+    toDataURL: () => canvas.toDataURL("image/png")
+  };
+}
+
+// Submit button enables only when name + signature + acknowledgement
+// are all set. Re-runs on every input change so the tech sees the
+// gating in real time.
+function updateSignoffSubmitState() {
+  const submit = document.getElementById("techSignoffSubmit");
+  if (!submit) return;
+  const name = (document.getElementById("techSignoffName")?.value || "").trim();
+  const ack = !!document.getElementById("techSignoffAck")?.checked;
+  const drawn = !!(state.signaturePad && state.signaturePad.isDirty());
+  submit.disabled = !(name && ack && drawn);
+}
+
+document.getElementById("techSignoffName")?.addEventListener("input", updateSignoffSubmitState);
+document.getElementById("techSignoffAck")?.addEventListener("change", updateSignoffSubmitState);
+document.getElementById("techSignoffClear")?.addEventListener("click", () => {
+  if (state.locked) return;
+  state.signaturePad?.clear();
+});
+
+document.getElementById("techSignoffSubmit")?.addEventListener("click", async () => {
+  if (state.locked) return;
+  const submit = document.getElementById("techSignoffSubmit");
+  const nameEl = document.getElementById("techSignoffName");
+  const ackEl  = document.getElementById("techSignoffAck");
+  const customerName = (nameEl?.value || "").trim();
+  if (!customerName || !ackEl?.checked || !state.signaturePad?.isDirty()) return;
+  submit.disabled = true;
+  submit.textContent = "Signing…";
+  try {
+    const imageData = state.signaturePad.toDataURL();
+    const response = await fetch(`/api/work-orders/${encodeURIComponent(state.id)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        signature: { customerName, imageData, acknowledgement: true }
+      })
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data.ok) {
+      throw new Error((data.errors && data.errors[0]) || "Couldn't save signature.");
+    }
+    state.signature = data.workOrder.signature || state.signature;
+    state.locked = data.workOrder.locked === true;
+    renderSignoff();
+    applyLockState(state.locked);
+  } catch (err) {
+    submit.disabled = false;
+    submit.textContent = "Sign & lock work order";
+    alert(err.message || "Couldn't save signature.");
+  }
+});
+
+// Apply the locked / unlocked state across the whole page. When locked,
+// the body gets data-locked="true" so CSS can grey out interactive
+// surfaces; we also explicitly disable form inputs and buttons (defence
+// in depth — pointer-events alone won't stop keyboard activations).
+function applyLockState(locked) {
+  document.body.dataset.locked = locked ? "true" : "false";
+  const banner = document.getElementById("techLockedBanner");
+  const meta = document.getElementById("techLockedMeta");
+  if (banner) banner.hidden = !locked;
+  if (locked && meta) {
+    const parts = [];
+    if (state.signature?.customerName) parts.push(`by ${state.signature.customerName}`);
+    if (state.signature?.signedAt) parts.push(formatDateTime(state.signature.signedAt));
+    meta.textContent = parts.length ? `· ${parts.join(" · ")}` : "";
+  }
+  // Disable run-status taps, zone taps, notes, and checklist taps.
+  // Sign-off form stays mounted (renderSignoff swaps to read-only view)
+  // but its inputs get disabled too in case the swap raced.
+  const disable = (selector) => document.querySelectorAll(selector).forEach((el) => {
+    if (locked) el.setAttribute("disabled", "");
+    else el.removeAttribute("disabled");
+  });
+  disable("#techRunStatus button");
+  disable("#techNotes");
+  disable("#techServiceChecklistList button");
+  disable("#techZoneList button");
+  disable("#techSignoffName");
+  disable("#techSignoffAck");
+  disable("#techSignoffSubmit");
+  disable("#techSignoffClear");
+}
+
 // ---- Cheat Sheet --------------------------------------------------
 
 // One-tap action chips + collapsible context blocks at the top of the
@@ -684,9 +944,13 @@ async function init() {
     if (!response.ok || !data.ok) throw new Error("Not found");
 
     const wo = data.workOrder;
+    state.type = wo.type || "service_visit";
     state.status = wo.status || "scheduled";
     state.techNotes = wo.techNotes || "";
     state.zones = Array.isArray(wo.zones) ? wo.zones.map((z) => ({ ...z })) : [];
+    state.serviceChecklist = (wo.serviceChecklist && typeof wo.serviceChecklist === "object") ? { ...wo.serviceChecklist } : {};
+    state.signature = wo.signature || state.signature;
+    state.locked = wo.locked === true;
 
     techId.textContent = wo.id;
     techType.textContent = TYPE_LABELS[wo.type] || wo.type;
@@ -699,6 +963,13 @@ async function init() {
     // Cheat Sheet — first thing the tech reviews on arrival. Pulls from
     // the property record + the most-recent completed WO at the property.
     renderCheatSheet(wo, data.property, data.lastService);
+
+    // Service-specific checklist (spring opening / fall closing) and
+    // customer sign-off section. Lock state cascades after both are
+    // rendered so disabled inputs apply uniformly.
+    renderServiceChecklist();
+    renderSignoff();
+    applyLockState(state.locked);
 
     if (wo.diagnosis) {
       techDiagnosisText.textContent = typeof wo.diagnosis === "string"

@@ -98,6 +98,29 @@ function makeIssueId() {
   return "iss_" + Math.random().toString(36).slice(2, 10) + "_" + Date.now();
 }
 
+// Mirror of SERVICE_CHECKLISTS in server/lib/work-orders.js. Keep in
+// sync if step keys change. Spring/fall get a tap-through; service
+// visits have no service-specific steps.
+const SERVICE_CHECKLISTS_DESKTOP = {
+  spring_opening: [
+    { key: "water_on",                  label: "Water turned on at main shut-off" },
+    { key: "backflow_check",            label: "Backflow visual check" },
+    { key: "controller_programmed",     label: "Controller programmed for season" },
+    { key: "walkthrough_with_customer", label: "Walk-through with customer (if home)" }
+  ],
+  fall_closing: [
+    { key: "controller_off",            label: "Controller set to off / winter mode" },
+    { key: "water_off",                 label: "Water shut off at main" },
+    { key: "compressor_connected",      label: "Compressor connected at blow-out" },
+    { key: "zones_blown_clear",         label: "All zones blown clear" },
+    { key: "compressor_disconnected",   label: "Compressor disconnected" },
+    { key: "system_winterized",         label: "System winterized" }
+  ],
+  service_visit: []
+};
+
+let signaturePadInstance = null;
+
 const TYPE_LABELS = {
   spring_opening: "Spring Opening",
   fall_closing: "Fall Closing",
@@ -366,6 +389,219 @@ function populateForm(wo) {
   renderZones(wo.zones || []);
   renderDiagnosis(wo);
   renderIntakeGuarantee(wo);
+  renderServiceChecklist(wo);
+  renderSignoff(wo);
+  applyLockState(wo.locked === true, wo.signature);
+}
+
+// Service-specific checklist (spring_opening / fall_closing only).
+// Hidden for service_visit. Each step is a tap-pill that auto-saves
+// — the desktop form's Save button will also persist any pending
+// changes, but immediate-save matches what the tech sees in tech-mode.
+function renderServiceChecklist(wo) {
+  const section = document.getElementById("woServiceChecklistSection");
+  const list = document.getElementById("woServiceChecklistList");
+  const title = document.getElementById("woServiceChecklistTitle");
+  if (!section || !list) return;
+  const steps = SERVICE_CHECKLISTS_DESKTOP[wo.type] || [];
+  if (!steps.length) {
+    section.hidden = true;
+    return;
+  }
+  section.hidden = false;
+  if (title) title.textContent = `${TYPE_LABELS[wo.type] || "Service"} checklist`;
+  const checklist = (wo.serviceChecklist && typeof wo.serviceChecklist === "object") ? wo.serviceChecklist : {};
+  list.innerHTML = steps.map((step) => `
+    <button type="button" class="wo-service-step" data-service-step="${escapeHtml(step.key)}" aria-pressed="${checklist[step.key] ? "true" : "false"}">
+      <span class="check-tick" aria-hidden="true"></span>
+      <span>${escapeHtml(step.label)}</span>
+    </button>
+  `).join("");
+}
+
+document.getElementById("woServiceChecklistList")?.addEventListener("click", async (event) => {
+  const btn = event.target.closest("[data-service-step]");
+  if (!btn || btn.disabled) return;
+  if (loadedWorkOrder?.locked) return;
+  const key = btn.dataset.serviceStep;
+  const checklist = (loadedWorkOrder.serviceChecklist && typeof loadedWorkOrder.serviceChecklist === "object")
+    ? { ...loadedWorkOrder.serviceChecklist }
+    : {};
+  checklist[key] = !checklist[key];
+  btn.setAttribute("aria-pressed", checklist[key] ? "true" : "false");
+  loadedWorkOrder.serviceChecklist = checklist;
+  try {
+    const response = await fetch(`/api/work-orders/${encodeURIComponent(getWorkOrderId())}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ serviceChecklist: checklist })
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data.ok) throw new Error("Save failed.");
+    loadedWorkOrder = data.workOrder;
+  } catch (_err) {
+    // Roll back on failure so the UI matches the server state.
+    checklist[key] = !checklist[key];
+    btn.setAttribute("aria-pressed", checklist[key] ? "true" : "false");
+    loadedWorkOrder.serviceChecklist = checklist;
+  }
+});
+
+// Signature pad + sign-off flow ----------------------------------------
+
+function renderSignoff(wo) {
+  const form = document.getElementById("woSignoffForm");
+  const signed = document.getElementById("woSignoffSigned");
+  if (!form || !signed) return;
+  const sig = wo && wo.signature;
+  if (sig && sig.signed) {
+    form.hidden = true;
+    signed.hidden = false;
+    const img = document.getElementById("woSignoffImage");
+    const nameEl = document.getElementById("woSignoffSignedName");
+    const atEl = document.getElementById("woSignoffSignedAt");
+    if (img && sig.imageData) img.src = sig.imageData;
+    if (nameEl) nameEl.textContent = sig.customerName || "—";
+    if (atEl && sig.signedAt) atEl.textContent = ` · ${formatDateTime(sig.signedAt)}`;
+  } else {
+    form.hidden = false;
+    signed.hidden = true;
+    if (!signaturePadInstance) {
+      const canvas = document.getElementById("woSignoffCanvas");
+      if (canvas) signaturePadInstance = createWoSignaturePad(canvas, updateWoSignoffSubmitState);
+    }
+    updateWoSignoffSubmitState();
+  }
+}
+
+function createWoSignaturePad(canvas, onChange) {
+  const ctx = canvas.getContext("2d");
+  let drawing = false;
+  let dirty = false;
+
+  function fitCanvas() {
+    const rect = canvas.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
+    const dpr = window.devicePixelRatio || 1;
+    const snapshot = canvas.width && dirty ? canvas.toDataURL() : null;
+    canvas.width = Math.round(rect.width * dpr);
+    canvas.height = Math.round(rect.height * dpr);
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.strokeStyle = "#0F1F14";
+    ctx.lineWidth = 2.2 * dpr;
+    if (snapshot) {
+      const img = new Image();
+      img.onload = () => ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      img.src = snapshot;
+    }
+  }
+  fitCanvas();
+  window.addEventListener("resize", fitCanvas);
+
+  function pos(e) {
+    const rect = canvas.getBoundingClientRect();
+    return {
+      x: (e.clientX - rect.left) * (canvas.width / rect.width),
+      y: (e.clientY - rect.top) * (canvas.height / rect.height)
+    };
+  }
+
+  canvas.addEventListener("pointerdown", (e) => {
+    if (loadedWorkOrder?.locked) return;
+    drawing = true;
+    canvas.setPointerCapture(e.pointerId);
+    const p = pos(e);
+    ctx.beginPath();
+    ctx.moveTo(p.x, p.y);
+    e.preventDefault();
+  });
+  canvas.addEventListener("pointermove", (e) => {
+    if (!drawing) return;
+    const p = pos(e);
+    ctx.lineTo(p.x, p.y);
+    ctx.stroke();
+    if (!dirty) { dirty = true; if (onChange) onChange(); }
+    e.preventDefault();
+  });
+  const endStroke = (e) => {
+    if (!drawing) return;
+    drawing = false;
+    try { canvas.releasePointerCapture(e.pointerId); } catch (_) {}
+  };
+  canvas.addEventListener("pointerup", endStroke);
+  canvas.addEventListener("pointercancel", endStroke);
+  canvas.addEventListener("pointerleave", endStroke);
+
+  return {
+    isDirty: () => dirty,
+    clear: () => {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      dirty = false;
+      if (onChange) onChange();
+    },
+    toDataURL: () => canvas.toDataURL("image/png")
+  };
+}
+
+function updateWoSignoffSubmitState() {
+  const submit = document.getElementById("woSignoffSubmit");
+  if (!submit) return;
+  if (loadedWorkOrder?.locked) { submit.disabled = true; return; }
+  const name = (document.getElementById("woSignoffName")?.value || "").trim();
+  const ack = !!document.getElementById("woSignoffAck")?.checked;
+  const drawn = !!(signaturePadInstance && signaturePadInstance.isDirty());
+  submit.disabled = !(name && ack && drawn);
+}
+
+document.getElementById("woSignoffName")?.addEventListener("input", updateWoSignoffSubmitState);
+document.getElementById("woSignoffAck")?.addEventListener("change", updateWoSignoffSubmitState);
+document.getElementById("woSignoffClear")?.addEventListener("click", () => {
+  if (loadedWorkOrder?.locked) return;
+  signaturePadInstance?.clear();
+});
+
+document.getElementById("woSignoffSubmit")?.addEventListener("click", async () => {
+  if (loadedWorkOrder?.locked) return;
+  const submit = document.getElementById("woSignoffSubmit");
+  const customerName = (document.getElementById("woSignoffName")?.value || "").trim();
+  const ack = !!document.getElementById("woSignoffAck")?.checked;
+  if (!customerName || !ack || !signaturePadInstance?.isDirty()) return;
+  submit.disabled = true;
+  submit.textContent = "Signing…";
+  try {
+    const imageData = signaturePadInstance.toDataURL();
+    const response = await fetch(`/api/work-orders/${encodeURIComponent(getWorkOrderId())}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ signature: { customerName, imageData, acknowledgement: true } })
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data.ok) throw new Error((data.errors && data.errors[0]) || "Couldn't save signature.");
+    loadedWorkOrder = data.workOrder;
+    renderSignoff(data.workOrder);
+    applyLockState(data.workOrder.locked === true, data.workOrder.signature);
+  } catch (err) {
+    submit.disabled = false;
+    submit.textContent = "Sign & lock work order";
+    alert(err.message || "Couldn't save signature.");
+  }
+});
+
+// Apply locked / unlocked state to the desktop form. The save and
+// delete buttons stay enabled — Patrick is admin-side and can always
+// override; the visual cue is the banner + greyed-out form sections.
+function applyLockState(locked, signature) {
+  document.body.dataset.locked = locked ? "true" : "false";
+  const banner = document.getElementById("woLockedBanner");
+  const meta = document.getElementById("woLockedMeta");
+  if (banner) banner.hidden = !locked;
+  if (locked && meta && signature) {
+    const parts = [];
+    if (signature.customerName) parts.push(`by ${signature.customerName}`);
+    if (signature.signedAt) parts.push(formatDateTime(signature.signedAt));
+    meta.textContent = parts.length ? `· ${parts.join(" · ")}` : "";
+  }
 }
 
 function collectForm() {
@@ -404,10 +640,19 @@ function collectForm() {
         issues
       };
     });
+  // Service checklist round-trips with the form save too — though
+  // taps already persist immediately. This keeps the form Save action
+  // the source of truth on submit (in case of rapid taps + save).
+  const serviceChecklist = {};
+  document.querySelectorAll("#woServiceChecklistList [data-service-step]").forEach((btn) => {
+    serviceChecklist[btn.dataset.serviceStep] = btn.getAttribute("aria-pressed") === "true";
+  });
+
   return {
     status: woStatus.value,
     techNotes: woTechNotes.value.trim(),
-    zones
+    zones,
+    serviceChecklist
   };
 }
 

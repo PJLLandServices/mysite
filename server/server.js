@@ -2361,6 +2361,45 @@ async function handleApi(req, res, pathname) {
     try {
       const id = decodeURIComponent(workOrderMatch[1]);
       const payload = await parseRequestBody(req);
+
+      // Customer sign-off — when the patch carries a signature with an
+      // image, customer name, and acknowledgement, this is the legally
+      // binding moment per spec §4.3.2. Server fills in the audit
+      // metadata (signedAt / ip / userAgent) so the client can't fake
+      // them, then locks the WO. Existing-signed WOs ignore further
+      // signature patches (re-signing requires explicit unlock by Patrick,
+      // which is its own future flow).
+      if (payload && payload.signature && typeof payload.signature === "object") {
+        const sig = payload.signature;
+        const isFreshSign = sig.acknowledgement === true
+          && typeof sig.imageData === "string" && sig.imageData.length > 50
+          && typeof sig.customerName === "string" && sig.customerName.trim().length > 0;
+        if (isFreshSign) {
+          const existing = await workOrders.get(id);
+          if (existing && existing.signature && existing.signature.signed) {
+            // Already signed — drop the signature patch silently rather
+            // than overwriting the audit trail.
+            delete payload.signature;
+          } else {
+            // Cap the signature image at 500KB of base64 to prevent
+            // oversized PNGs from blowing up the JSON store.
+            if (sig.imageData.length > 500_000) {
+              return sendJson(res, 422, { ok: false, errors: ["Signature image is too large. Try clearing and signing again."] });
+            }
+            const ip = (req.headers["x-forwarded-for"] || "").split(",")[0].trim() || req.socket?.remoteAddress || "";
+            const userAgent = req.headers["user-agent"] || "";
+            payload.signature = {
+              ...sig,
+              signed: true,
+              signedAt: new Date().toISOString(),
+              ip,
+              userAgent
+            };
+            payload.locked = true;
+          }
+        }
+      }
+
       const updated = await workOrders.update(id, payload);
       if (!updated) return sendJson(res, 404, { ok: false, errors: ["Work order not found."] });
       return sendJson(res, 200, { ok: true, workOrder: updated });

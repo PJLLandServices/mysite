@@ -76,6 +76,30 @@ const ZONE_CHECK_KEYS = ["operated", "pressureGood", "coverageGood", "noLeaks", 
 // hatch for anything that doesn't fit (custom on-site quote).
 const ZONE_ISSUE_TYPES = ["broken_head", "leak", "valve", "wire", "pipe", "other"];
 
+// Service-specific checklists per spec §4.3.2. Spring openings get a
+// 4-step "service-specific steps" block; fall closings get a 6-step
+// winterization block. Service visits (one-off repairs) have no
+// service-specific steps — the zone walk-through and tech notes carry
+// everything they need. Each step has a stable key (so booleans
+// persist across schema iterations) plus a customer-facing label.
+const SERVICE_CHECKLISTS = {
+  spring_opening: [
+    { key: "water_on",                  label: "Water turned on at main shut-off" },
+    { key: "backflow_check",            label: "Backflow visual check" },
+    { key: "controller_programmed",     label: "Controller programmed for season" },
+    { key: "walkthrough_with_customer", label: "Walk-through with customer (if home)" }
+  ],
+  fall_closing: [
+    { key: "controller_off",            label: "Controller set to off / winter mode" },
+    { key: "water_off",                 label: "Water shut off at main" },
+    { key: "compressor_connected",      label: "Compressor connected at blow-out" },
+    { key: "zones_blown_clear",         label: "All zones blown clear" },
+    { key: "compressor_disconnected",   label: "Compressor disconnected" },
+    { key: "system_winterized",         label: "System winterized" }
+  ],
+  service_visit: []
+};
+
 // ---- File I/O ---------------------------------------------------------
 
 async function ensureFile() {
@@ -143,6 +167,27 @@ function blankWorkOrder() {
       scope: "",
       sourceQuoteId: null
     },
+    // Service-specific checklist — keyed by step key from
+    // SERVICE_CHECKLISTS[wo.type]. Stored as a flat {stepKey: bool} map
+    // so the rendering code doesn't depend on order; ordering comes from
+    // the SERVICE_CHECKLISTS constant.
+    serviceChecklist: {},
+    // Customer sign-off — the legally binding moment per spec §4.3.2.
+    // imageData is the dataURL of the signature canvas; ip + userAgent
+    // are captured server-side at sign time (never trust the client).
+    // Once `signed` flips to true the WO `locked` field also flips to
+    // true and the tech UI disables further edits. Spec rule 11
+    // (§4.3.3): "Signed WO is the contract. Locked once signed."
+    signature: {
+      signed: false,
+      customerName: "",
+      imageData: "",
+      acknowledgement: false,
+      signedAt: null,
+      ip: null,
+      userAgent: null
+    },
+    locked: false,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString()
   };
@@ -158,7 +203,10 @@ function hydrate(w) {
     zones: Array.isArray(w?.zones) ? w.zones.map(hydrateZone) : [],
     additionalRepairs: Array.isArray(w?.additionalRepairs) ? w.additionalRepairs : [],
     lineItems: Array.isArray(w?.lineItems) ? w.lineItems : [],
-    intakeGuarantee: { ...base.intakeGuarantee, ...(w?.intakeGuarantee || {}) }
+    intakeGuarantee: { ...base.intakeGuarantee, ...(w?.intakeGuarantee || {}) },
+    serviceChecklist: { ...(w?.serviceChecklist || {}) },
+    signature: { ...base.signature, ...(w?.signature || {}) },
+    locked: w?.locked === true
   };
 }
 
@@ -307,13 +355,24 @@ async function update(id, patch) {
   // pointers — those are set at create time and shouldn't be edited from
   // the form.
   const next = { ...current };
-  const allowedTop = ["type", "status", "scheduledFor", "diagnosis", "techNotes", "customerName", "customerPhone", "customerEmail", "address"];
+  const allowedTop = ["type", "status", "scheduledFor", "diagnosis", "techNotes", "customerName", "customerPhone", "customerEmail", "address", "locked"];
   for (const key of allowedTop) {
     if (Object.prototype.hasOwnProperty.call(patch, key)) next[key] = patch[key];
   }
-  if (Array.isArray(patch.zones)) next.zones = patch.zones;
+  if (Array.isArray(patch.zones)) next.zones = patch.zones.map(hydrateZone);
   if (Array.isArray(patch.additionalRepairs)) next.additionalRepairs = patch.additionalRepairs;
   if (Array.isArray(patch.lineItems)) next.lineItems = patch.lineItems;
+  // Service checklist — replace wholesale when sent (the editor PATCHes
+  // the whole map). Signature is shallow-merged so partial updates (e.g.
+  // typing the name before drawing the signature) don't clobber other
+  // fields. Server-side fields (ip, userAgent, signedAt) are filled by
+  // the server route, never by the client patch.
+  if (patch.serviceChecklist && typeof patch.serviceChecklist === "object") {
+    next.serviceChecklist = { ...patch.serviceChecklist };
+  }
+  if (patch.signature && typeof patch.signature === "object") {
+    next.signature = { ...current.signature, ...patch.signature };
+  }
   next.updatedAt = new Date().toISOString();
 
   records[idx] = next;
@@ -335,6 +394,7 @@ module.exports = {
   ZONE_STATUSES,
   ZONE_CHECK_KEYS,
   ZONE_ISSUE_TYPES,
+  SERVICE_CHECKLISTS,
   templateForServiceKey,
   list,
   get,

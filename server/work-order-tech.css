@@ -899,6 +899,251 @@ html, body {
   border-color: var(--tech-green);
 }
 
+/* Locked banner --------------------------------------------------------
+   Sits at the very top of the WO when wo.locked === true. Red accent
+   so it can't be missed; not amber (which is reserved for the AI
+   Intake Guarantee — different concern). */
+.tech-locked-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 4px;
+  padding: 12px 16px;
+  background: rgba(177, 58, 58, 0.10);
+  border: 1px solid rgba(177, 58, 58, 0.30);
+  border-radius: 10px;
+  font-size: 13px;
+  color: var(--tech-text);
+  line-height: 1.4;
+}
+.tech-locked-icon { font-size: 18px; }
+.tech-locked-text strong { color: var(--tech-red); }
+
+/* Service-specific checklist (Spring Opening / Fall Closing). One
+   tap-pill per step, full-width single-column for thumbable scanning. */
+.tech-service-checklist-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.tech-service-step {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 52px;
+  padding: 10px 14px;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  text-align: left;
+  color: var(--tech-text);
+  background: var(--tech-card);
+  border: 1.5px solid var(--tech-border);
+  border-radius: 12px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.tech-service-step .check-tick {
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  border: 1.5px solid rgba(15, 31, 20, 0.30);
+  background: #fff;
+  flex-shrink: 0;
+  position: relative;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+.tech-service-step[aria-pressed="true"] {
+  border-color: var(--tech-green);
+  background: rgba(74, 140, 92, 0.10);
+  color: var(--tech-green);
+}
+.tech-service-step[aria-pressed="true"] .check-tick {
+  background: var(--tech-green);
+  border-color: var(--tech-green);
+}
+.tech-service-step[aria-pressed="true"] .check-tick::after {
+  content: "";
+  position: absolute;
+  left: 7px;
+  top: 2px;
+  width: 6px;
+  height: 13px;
+  border: solid #fff;
+  border-width: 0 2.5px 2.5px 0;
+  transform: rotate(45deg);
+}
+.tech-service-step:active { transform: scale(0.98); }
+
+/* Customer sign-off section ------------------------------------------ */
+.tech-signoff {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.tech-signoff-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+  background: var(--tech-card);
+  border: 1px solid var(--tech-border);
+  border-radius: 12px;
+}
+.tech-signoff-name-label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.tech-signoff-name-label > span {
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 11px;
+  letter-spacing: 0.10em;
+  text-transform: uppercase;
+  color: var(--tech-text-muted);
+}
+.tech-signoff-name-label input {
+  padding: 12px 14px;
+  font: inherit;
+  font-size: 16px;
+  border: 1px solid var(--tech-border);
+  border-radius: 10px;
+  background: #fff;
+  min-height: 48px;
+}
+.tech-signoff-canvas-label {
+  margin: 0;
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 11px;
+  letter-spacing: 0.10em;
+  text-transform: uppercase;
+  color: var(--tech-text-muted);
+}
+.tech-signoff-canvas-wrap {
+  position: relative;
+  background: repeating-linear-gradient(
+    45deg,
+    #fafaf6,
+    #fafaf6 6px,
+    #f3f0e7 6px,
+    #f3f0e7 7px
+  );
+  border: 1.5px dashed rgba(15, 31, 20, 0.22);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.tech-signoff-canvas {
+  display: block;
+  width: 100%;
+  height: 200px;
+  touch-action: none;
+  cursor: crosshair;
+  background: transparent;
+}
+.tech-signoff-clear {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  padding: 4px 12px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--tech-text-muted);
+  background: rgba(255, 255, 255, 0.85);
+  border: 1px solid var(--tech-border);
+  border-radius: 999px;
+  cursor: pointer;
+}
+.tech-signoff-clear:active { background: #fff; }
+.tech-signoff-ack {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  font-size: 14px;
+  color: var(--tech-text);
+  line-height: 1.4;
+  cursor: pointer;
+  user-select: none;
+}
+.tech-signoff-ack input[type="checkbox"] {
+  width: 22px;
+  height: 22px;
+  margin: 1px 0 0;
+  accent-color: var(--tech-green);
+  flex-shrink: 0;
+  cursor: pointer;
+}
+.tech-signoff-submit {
+  margin: 4px 0 0;
+  min-height: 52px;
+  padding: 12px 18px;
+  font: inherit;
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: #fff;
+  background: var(--tech-green);
+  border: 0;
+  border-radius: 12px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+.tech-signoff-submit:disabled {
+  background: rgba(15, 31, 20, 0.18);
+  color: rgba(255, 255, 255, 0.85);
+  cursor: not-allowed;
+}
+.tech-signoff-submit:not(:disabled):active { background: var(--tech-green-mid); }
+.tech-signoff-note {
+  margin: 0;
+  font-size: 12px;
+  color: var(--tech-text-muted);
+  line-height: 1.45;
+}
+
+/* Post-sign read-only display */
+.tech-signoff-signed {
+  padding: 14px;
+  background: rgba(74, 140, 92, 0.06);
+  border: 1px solid rgba(74, 140, 92, 0.30);
+  border-radius: 12px;
+}
+.tech-signoff-image-wrap {
+  background: #fff;
+  border: 1px solid var(--tech-border);
+  border-radius: 8px;
+  padding: 8px;
+  margin-bottom: 10px;
+}
+.tech-signoff-image-wrap img {
+  display: block;
+  width: 100%;
+  max-height: 200px;
+  object-fit: contain;
+}
+.tech-signoff-signed-meta {
+  margin: 0;
+  font-size: 13px;
+  color: var(--tech-text-mid);
+}
+.tech-signoff-signed-meta strong { color: var(--tech-green); }
+
+/* Locked-state cascading rules — when body[data-locked="true"], all
+   interactive surfaces fade and become non-interactive. The signature
+   form is already swapped to the read-only display by JS, but defence-
+   in-depth styling here ensures any leftover controls visually match. */
+body[data-locked="true"] .tech-zone-item-btn,
+body[data-locked="true"] .tech-service-step,
+body[data-locked="true"] .tech-run-status button,
+body[data-locked="true"] .tech-signoff-form {
+  opacity: 0.55;
+  pointer-events: none;
+}
+
 .tech-sheet-notes-label {
   display: block;
   margin: 0 0 6px;
