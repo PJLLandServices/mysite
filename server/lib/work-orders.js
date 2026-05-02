@@ -120,6 +120,16 @@ function blankWorkOrder() {
     lineItems: [],                   // Phase 4 — invoice line items
     diagnosis: "",                   // copied from booking handoff if present
     techNotes: "",                   // tech's overall visit notes
+    // AI Intake Guarantee — copied from the source Quote when this WO is
+    // created from a lead with an accepted ai_repair_quote. When `applies`
+    // is true, the tech UI shows a banner: "Labour locked for [scope] — do
+    // not bill additional labour." Spec rule 6 (§4.3.3): tech honours the
+    // quoted scope regardless of time on-site.
+    intakeGuarantee: {
+      applies: false,
+      scope: "",
+      sourceQuoteId: null
+    },
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString()
   };
@@ -134,7 +144,8 @@ function hydrate(w) {
     ...w,
     zones: Array.isArray(w?.zones) ? w.zones : [],
     additionalRepairs: Array.isArray(w?.additionalRepairs) ? w.additionalRepairs : [],
-    lineItems: Array.isArray(w?.lineItems) ? w.lineItems : []
+    lineItems: Array.isArray(w?.lineItems) ? w.lineItems : [],
+    intakeGuarantee: { ...base.intakeGuarantee, ...(w?.intakeGuarantee || {}) }
   };
 }
 
@@ -182,7 +193,11 @@ async function listByLead(leadId) {
 // Create a new WO. `type` selects the template; `lead` and `property`
 // are the source records. The lead may be null (ad-hoc / no booking
 // trigger), but at least one of (leadId, propertyId) must be set.
-async function create({ type, lead, property, customId }) {
+//
+// `quote` is optional. When passed (the caller has fetched the lead's
+// linked Quote), an AI Intake Guarantee from the quote propagates onto
+// the WO so the tech sees the locked-labour banner in field mode.
+async function create({ type, lead, property, customId, quote = null }) {
   if (!TEMPLATES[type]) throw new Error(`Unknown work-order type: ${type}`);
   if (!lead && !property) throw new Error("Need at least one of lead or property to create a work order.");
 
@@ -214,6 +229,17 @@ async function create({ type, lead, property, customId }) {
         ? lead.booking.workOrder.diagnosis
         : (lead.booking.workOrder.diagnosis.summary || "");
     }
+  }
+
+  // AI Intake Guarantee — snapshotted from the source Quote at WO creation
+  // time. Mutating the Quote later doesn't change the locked scope on a
+  // dispatched WO; the tech honours what was on the WO when they got it.
+  if (quote && quote.intakeGuarantee && quote.intakeGuarantee.applies === true) {
+    wo.intakeGuarantee = {
+      applies: true,
+      scope: String(quote.intakeGuarantee.scope || "").slice(0, 200),
+      sourceQuoteId: quote.id || null
+    };
   }
 
   records.unshift(wo);

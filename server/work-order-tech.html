@@ -32,6 +32,17 @@
       <p class="tech-address" id="techAddress">—</p>
     </section>
 
+    <!-- AI Intake Guarantee banner — shown when the WO was created from an
+         AI repair quote with intake_guarantee=true. Tells the tech labour is
+         locked for a specific scope so they bill correctly on-site. Hidden
+         until populated. -->
+    <section class="tech-intake-guarantee" id="techIntakeGuarantee" hidden role="alert">
+      <p class="tech-intake-eyebrow">AI INTAKE GUARANTEE</p>
+      <p class="tech-intake-scope" id="techIntakeScope">—</p>
+      <p class="tech-intake-rule">Labour for the diagnosed scope is <strong>locked</strong>. Don't bill additional labour for this work, no matter how long it takes. Anything beyond scope: parts + $95/hr, requires customer sign-off on a separate scope.</p>
+      <p class="tech-intake-source" id="techIntakeSource"></p>
+    </section>
+
     <!-- Run-level status — taps update immediately. -->
     <section class="tech-section">
       <h2 class="tech-section-title">Visit status</h2>

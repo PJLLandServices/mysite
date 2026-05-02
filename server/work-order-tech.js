@@ -380,6 +380,21 @@ async function init() {
       techDiagnosis.hidden = false;
     }
 
+    // AI Intake Guarantee banner — populated from the WO's snapshotted
+    // copy of the source Quote's intake guarantee. Visible only when the
+    // AI quoted a specific repair scope and the customer accepted; serves
+    // as the tech's reminder that labour is locked.
+    const igBanner = document.getElementById("techIntakeGuarantee");
+    const igScope = document.getElementById("techIntakeScope");
+    const igSource = document.getElementById("techIntakeSource");
+    if (igBanner && wo.intakeGuarantee && wo.intakeGuarantee.applies === true) {
+      if (igScope) igScope.textContent = wo.intakeGuarantee.scope || "Locked scope";
+      if (igSource && wo.intakeGuarantee.sourceQuoteId) {
+        igSource.textContent = `Source: ${wo.intakeGuarantee.sourceQuoteId}`;
+      }
+      igBanner.hidden = false;
+    }
+
     // Back link prefers the lead detail (deep-link) over the desktop
     // editor — the tech is unlikely to want the desktop layout.
     if (data.lead && data.lead.id) {

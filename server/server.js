@@ -2205,7 +2205,22 @@ async function handleApi(req, res, pathname) {
       // exists on the lead — keeps the customer + tech seeing the
       // same WO-XXXXXXXX. Otherwise generate a fresh one.
       const customId = lead?.booking?.workOrder?.id || null;
-      const wo = await workOrders.create({ type, lead, property, customId });
+
+      // Fetch the source Quote (if any) so the WO inherits the AI Intake
+      // Guarantee — the tech UI uses this to show the locked-labour banner.
+      let sourceQuote = null;
+      if (lead?.quoteId) {
+        try { sourceQuote = await quotes.get(lead.quoteId); }
+        catch (err) { console.warn("[quotes] fetch on WO create failed:", err?.message); }
+      }
+      const wo = await workOrders.create({ type, lead, property, customId, quote: sourceQuote });
+
+      // Back-link the WO id onto the Quote's workOrderIds so the audit
+      // trail reflects which WOs fulfilled this quote.
+      if (sourceQuote) {
+        try { await quotes.attachWorkOrder(sourceQuote.id, wo.id); }
+        catch (err) { console.warn("[quotes] attachWorkOrder failed:", err?.message); }
+      }
 
       // Back-reference on the lead so the CRM detail can deep-link.
       // (The property page resolves WOs via /api/work-orders + filter
@@ -2846,7 +2861,18 @@ async function handleApi(req, res, pathname) {
       // Reuse the booking envelope's WO id so customer + tech see the
       // same WO-XXXXXXXX (matches the existing CRM-side create flow).
       const customId = lead.booking?.workOrder?.id || null;
-      const wo = await workOrders.create({ type, lead, property, customId });
+
+      // Fetch the source Quote (if any) so AI Intake Guarantee propagates.
+      let sourceQuote = null;
+      if (lead.quoteId) {
+        try { sourceQuote = await quotes.get(lead.quoteId); }
+        catch (err) { console.warn("[quotes] fetch on WO create failed:", err?.message); }
+      }
+      const wo = await workOrders.create({ type, lead, property, customId, quote: sourceQuote });
+      if (sourceQuote) {
+        try { await quotes.attachWorkOrder(sourceQuote.id, wo.id); }
+        catch (err) { console.warn("[quotes] attachWorkOrder failed:", err?.message); }
+      }
 
       // Tag the lead with the WO id + log activity.
       const idx = allLeads.findIndex((l) => l.id === leadId);
