@@ -1,0 +1,122 @@
+{
+  "_doc": "PJL parts catalog + service_materials mapping (spec §1.2 / §9.1). Starter catalog pinned to the SKUs referenced by pricing.json; Patrick can expand as inventory tracking matures. Each `parts` entry: { sku, name, category, size, unit }. `service_materials` keys MUST match pricing.json item keys; each entry lists default_parts the tech should pack before the visit.",
+  "parts": {
+    "head_pgp_pop_4": { "sku": "head_pgp_pop_4", "name": "Hunter PGP rotor pop-up (4\")", "category": "head", "size": "4\"", "unit": "each" },
+    "head_pgp_pop_6": { "sku": "head_pgp_pop_6", "name": "Hunter PGP rotor pop-up (6\")", "category": "head", "size": "6\"", "unit": "each" },
+    "head_proSpray_4": { "sku": "head_proSpray_4", "name": "Hunter Pro-Spray (4\")", "category": "head", "size": "4\"", "unit": "each" },
+    "head_proSpray_6": { "sku": "head_proSpray_6", "name": "Hunter Pro-Spray (6\")", "category": "head", "size": "6\"", "unit": "each" },
+    "head_proSpray_12": { "sku": "head_proSpray_12", "name": "Hunter Pro-Spray (12\" mulch)", "category": "head", "size": "12\"", "unit": "each" },
+    "nozzle_mp_rotator": { "sku": "nozzle_mp_rotator", "name": "Hunter MP Rotator nozzle", "category": "nozzle", "unit": "each" },
+    "nozzle_pgp_set": { "sku": "nozzle_pgp_set", "name": "PGP rotor nozzle set", "category": "nozzle", "unit": "set" },
+    "valve_hunter_pgv": { "sku": "valve_hunter_pgv", "name": "Hunter PGV valve (1\")", "category": "valve", "size": "1\"", "unit": "each" },
+    "manifold_3valve_kit": { "sku": "manifold_3valve_kit", "name": "3-valve manifold rebuild kit", "category": "manifold", "unit": "kit", "note": "Includes 3× PGV valves + fittings + waterproof connectors" },
+    "manifold_6valve_kit": { "sku": "manifold_6valve_kit", "name": "6-valve manifold rebuild kit", "category": "manifold", "unit": "kit", "note": "Includes 6× PGV valves + fittings + waterproof connectors" },
+    "wire_18awg_100ft": { "sku": "wire_18awg_100ft", "name": "18-AWG 7-strand irrigation wire (100ft)", "category": "wire", "unit": "100ft roll" },
+    "dryconn_blue": { "sku": "dryconn_blue", "name": "DryConn waterproof connector (blue)", "category": "wire", "unit": "each" },
+    "pipe_poly_3_4_300ft": { "sku": "pipe_poly_3_4_300ft", "name": "3/4\" HDPE poly pipe (300ft roll)", "category": "pipe", "size": "3/4\"", "unit": "300ft roll" },
+    "pipe_poly_1_300ft": { "sku": "pipe_poly_1_300ft", "name": "1\" HDPE poly pipe (300ft roll)", "category": "pipe", "size": "1\"", "unit": "300ft roll" },
+    "fitting_sj_swing": { "sku": "fitting_sj_swing", "name": "Swing-joint fitting (1/2\" × 12\")", "category": "fitting", "unit": "each" },
+    "fitting_sj712": { "sku": "fitting_sj712", "name": "Swing joint SJ-712 (12\" mulch)", "category": "fitting", "unit": "each" },
+    "fitting_clamp": { "sku": "fitting_clamp", "name": "Stainless poly pipe clamp", "category": "fitting", "unit": "each" },
+    "fitting_coupler": { "sku": "fitting_coupler", "name": "Poly insert coupler (1\")", "category": "fitting", "unit": "each" },
+    "controller_hpc400": { "sku": "controller_hpc400", "name": "Hunter HPC-400 Hydrawise controller", "category": "controller", "unit": "each" },
+    "controller_module_4": { "sku": "controller_module_4", "name": "HPC 4-zone expansion module", "category": "controller", "unit": "each" },
+    "frost_free_bib": { "sku": "frost_free_bib", "name": "Frost-free hose bib (12\")", "category": "plumbing", "unit": "each" },
+    "teflon_tape": { "sku": "teflon_tape", "name": "Teflon tape (yellow, gas-rated)", "category": "consumable", "unit": "roll" }
+  },
+  "service_materials": {
+    "_doc": "Maps pricing.json item keys → default packing list. Empty arrays mean 'tech adds materials on-site' (valid). Quantities are PER unit of the line item — head_replacement: qty 2 → 2 heads on the truck.",
+
+    "head_replacement": {
+      "default_parts": [
+        { "sku": "head_pgp_pop_4", "quantity": 1, "note": "Default — tech swaps to Pro-Spray or 6\"/12\" if zone calls for it" },
+        { "sku": "fitting_sj_swing", "quantity": 1 }
+      ]
+    },
+    "head_replacement_mulch": {
+      "default_parts": [
+        { "sku": "head_proSpray_12", "quantity": 1 },
+        { "sku": "fitting_sj712", "quantity": 1 }
+      ]
+    },
+    "valve_hunter_pgv": {
+      "default_parts": [
+        { "sku": "valve_hunter_pgv", "quantity": 1 },
+        { "sku": "dryconn_blue", "quantity": 2 },
+        { "sku": "teflon_tape", "quantity": 0.05 }
+      ]
+    },
+    "manifold_3valve": {
+      "default_parts": [
+        { "sku": "manifold_3valve_kit", "quantity": 1 }
+      ]
+    },
+    "manifold_6valve": {
+      "default_parts": [
+        { "sku": "manifold_6valve_kit", "quantity": 1 }
+      ]
+    },
+    "wire_diagnostic": {
+      "default_parts": [
+        { "sku": "dryconn_blue", "quantity": 4, "note": "Spare connectors for any splice the tech opens up" }
+      ]
+    },
+    "wire_run_100ft": {
+      "default_parts": [
+        { "sku": "wire_18awg_100ft", "quantity": 1 },
+        { "sku": "dryconn_blue", "quantity": 6 }
+      ]
+    },
+    "wire_run_175ft": {
+      "default_parts": [
+        { "sku": "wire_18awg_100ft", "quantity": 2 },
+        { "sku": "dryconn_blue", "quantity": 8 }
+      ]
+    },
+    "pipe_break_3ft": {
+      "default_parts": [
+        { "sku": "pipe_poly_1_300ft", "quantity": 0.01, "note": "3ft of a 300ft roll" },
+        { "sku": "fitting_coupler", "quantity": 2 },
+        { "sku": "fitting_clamp", "quantity": 4 }
+      ]
+    },
+    "service_call": {
+      "default_parts": []
+    },
+    "controller_1_4": {
+      "default_parts": [
+        { "sku": "controller_hpc400", "quantity": 1 }
+      ]
+    },
+    "controller_5_7": {
+      "default_parts": [
+        { "sku": "controller_hpc400", "quantity": 1 },
+        { "sku": "controller_module_4", "quantity": 1 }
+      ]
+    },
+    "controller_8_16": {
+      "default_parts": [
+        { "sku": "controller_hpc400", "quantity": 1 },
+        { "sku": "controller_module_4", "quantity": 3 }
+      ]
+    },
+    "hose_bib_install": {
+      "default_parts": [
+        { "sku": "frost_free_bib", "quantity": 1 },
+        { "sku": "teflon_tape", "quantity": 0.1 }
+      ]
+    },
+
+    "spring_open_4z":         { "default_parts": [] },
+    "spring_open_8z":         { "default_parts": [] },
+    "spring_open_15z":        { "default_parts": [] },
+    "spring_open_commercial": { "default_parts": [] },
+    "fall_close_4z":          { "default_parts": [] },
+    "fall_close_6z":          { "default_parts": [] },
+    "fall_close_8z":          { "default_parts": [] },
+    "fall_close_15z":         { "default_parts": [] },
+
+    "new_install_zone_grass": { "default_parts": [] },
+    "new_install_zone_drip":  { "default_parts": [] }
+  }
+}

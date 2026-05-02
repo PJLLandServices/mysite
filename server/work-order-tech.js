@@ -129,7 +129,19 @@ let state = {
   // Debounce timer for builder line edits.
   onSiteBuilderTimer: null,
   // Signature pad helper (set after init).
-  signaturePad: null
+  signaturePad: null,
+  // Customer info — pulled from WO snapshot at load, used by Cheat Sheet
+  // and Remote Approval helper. Property record overrides if present.
+  customerName: "",
+  customerEmail: "",
+  customerPhone: "",
+  // On-site execution timestamps — auto-stamped on status flip to
+  // on_site / completed (spec §4.3.2 On-Site Execution).
+  arrivedAt: null,
+  departedAt: null,
+  // Cached parts.json catalog (loaded once on init for the materials checklist).
+  partsCatalog: null,
+  serviceMaterials: null
 };
 
 // Cached geolocation result so we only prompt once per page load. null
@@ -402,20 +414,101 @@ function renderRunStatus() {
   });
 }
 
+// Spec §4.3.3 rule #3 — status transitions forward-only. Skips allowed,
+// reverses not. Cancelled / no_show terminal (rule #7). The order array
+// is the canonical sequence; same enum is enforced server-side too.
+const STATUS_ORDER = ["scheduled", "dispatched", "en_route", "on_site", "in_progress", "awaiting_approval", "completed"];
+const STATUS_TERMINAL = new Set(["completed", "cancelled", "no_show"]);
+
+function statusRank(s) {
+  const i = STATUS_ORDER.indexOf(s);
+  return i === -1 ? -1 : i;
+}
+
 document.addEventListener("click", (event) => {
   const btn = event.target.closest("[data-run-status]");
   if (!btn) return;
   const next = btn.dataset.runStatus;
   if (next === state.status) return;
-  // Confirm the destructive-feeling "Completed" tap so a misclick on the
-  // finish bar doesn't fire the cascade. Other transitions are silent.
+
+  // Forward-only guard
+  const fromRank = statusRank(state.status);
+  const toRank = statusRank(next);
+  if (fromRank !== -1 && toRank !== -1 && toRank < fromRank) {
+    alert(`Status only moves forward. You can't roll back from "${state.status}" to "${next}".`);
+    return;
+  }
+  if (STATUS_TERMINAL.has(state.status)) {
+    alert(`This visit is in a terminal state (${state.status}) and can't change.`);
+    return;
+  }
+
+  // Walk-out checklist before "Completed" — spec §4.3.3 rule #14.
+  // Blocks completion if signature missing, zones not all touched, or
+  // open carry-forward items still need a tech action. Replaces the
+  // earlier confirm() dialog.
   if (next === "completed") {
-    if (!confirm("Mark this visit completed? This will create a service record on the property and a draft invoice if there are any line items. You can still edit the WO afterwards.")) return;
+    const failures = walkoutCheckFailures();
+    if (failures.length) {
+      alert("Can't complete yet:\n\n• " + failures.join("\n• ") + "\n\nResolve these and try again.");
+      return;
+    }
+    if (!confirm("All checks pass. Mark this visit completed? Creates a service record on the property and a draft invoice from the authorized line items.")) return;
+  }
+
+  // Arrival / departure auto-stamps (spec §4.3.2 On-Site Execution).
+  const patch = { status: next };
+  if (next === "on_site" && !state.arrivedAt) {
+    patch.arrivedAt = new Date().toISOString();
+    state.arrivedAt = patch.arrivedAt;
+  }
+  if (next === "completed" && !state.departedAt) {
+    patch.departedAt = new Date().toISOString();
+    state.departedAt = patch.departedAt;
   }
   state.status = next;
   renderRunStatus();
-  patchWorkOrder({ status: next });
+  renderExecutionTimestamps();
+  patchWorkOrder(patch);
 });
+
+// Walk-out checklist — returns an array of human-readable failure reasons.
+// Empty = green light to complete. Spec §4.3.3 rule #14.
+function walkoutCheckFailures() {
+  const fails = [];
+  // Signature captured?
+  if (!state.signature?.signed) {
+    fails.push("Customer hasn't signed off yet (use the Customer sign-off section).");
+  }
+  // All zones touched? "Touched" = has a status set, or has at least one
+  // standard check ticked. Empty zone status with all checks blank = not
+  // touched.
+  const untouched = (state.zones || []).filter((z) => {
+    if (z.status && z.status !== "") return false;
+    const checks = z.checks || {};
+    return !Object.values(checks).some(Boolean);
+  });
+  if (untouched.length) {
+    fails.push(`${untouched.length} zone${untouched.length === 1 ? "" : "s"} haven't been checked yet (zones ${untouched.map((z) => z.number).join(", ")}).`);
+  }
+  // Open carry-forward items pending a tech decision — only checked on
+  // spring openings since that's where the banner shows.
+  if (state.type === "spring_opening") {
+    const openCfCards = document.querySelectorAll('#techCarryForwardList [data-deferred-id]');
+    if (openCfCards.length) {
+      fails.push(`${openCfCards.length} carry-forward recommendation${openCfCards.length === 1 ? "" : "s"} still need an action (Repair / Decline / Already fixed / Can't locate).`);
+    }
+  }
+  return fails;
+}
+
+// Render arrival/departure timestamps in the On-Site Execution section.
+function renderExecutionTimestamps() {
+  const arrived = document.getElementById("techArrivedAt");
+  const departed = document.getElementById("techDepartedAt");
+  if (arrived) arrived.textContent = state.arrivedAt ? formatDateTime(state.arrivedAt) : "—";
+  if (departed) departed.textContent = state.departedAt ? formatDateTime(state.departedAt) : "—";
+}
 
 // ---- Zone list (cards) ------------------------------------------
 
@@ -1253,6 +1346,11 @@ function totalsForLines(lines) {
 //   - has builder lines → builder edit state
 //   - default (issues exist but builder empty) → builder with "Generate from issues" CTA
 function renderOnSiteQuote() {
+  // Re-render the dependent blocks (Materials + Payment) whenever the
+  // quote builder re-renders. They derive entirely from the current
+  // builderLineItems so they have to stay in sync.
+  renderMaterials();
+  renderPaymentBlock();
   const section = document.getElementById("techOnSiteQuote");
   if (!section) return;
   if (!hasAnyIssues()) {
@@ -2050,8 +2148,18 @@ function renderCheatSheet(wo, property, lastService) {
   const sheet = document.getElementById("techCheatSheet");
   if (!sheet) return;
 
+  // Per spec §4.3.3 rule #2: "Property info is pulled FRESH at WO open."
+  // The WO carries snapshots (wo.customerPhone, wo.address) for cases
+  // where the property link is missing OR those fields drift, but the
+  // property record is the source of truth when available. Falling back
+  // to the WO snapshot keeps the sheet useful for ad-hoc WOs that don't
+  // yet have a property attached.
+  const phone = (property && property.customerPhone) || wo.customerPhone || "";
+  const address = (property && property.address) || wo.address || "";
+  const customerName = (property && property.customerName) || wo.customerName || "";
+  const customerEmail = (property && property.customerEmail) || wo.customerEmail || "";
+
   // ---- Action chips: call / text / maps -----------------------------
-  const phone = wo.customerPhone || "";
   const phoneNormalized = phone.replace(/[^\d+]/g, "");
   const callLink = document.getElementById("techCallLink");
   const textLink = document.getElementById("techTextLink");
@@ -2060,12 +2168,21 @@ function renderCheatSheet(wo, property, lastService) {
     if (textLink) { textLink.href = "sms:" + phoneNormalized; textLink.hidden = false; }
   }
   const mapsLink = document.getElementById("techMapsLink");
-  if (mapsLink && wo.address) {
+  if (mapsLink && address) {
     // Universal Google Maps URL — opens in the system's default maps app
     // on iOS and Android, browser on desktop.
-    mapsLink.href = "https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent(wo.address);
+    mapsLink.href = "https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent(address);
     mapsLink.hidden = false;
   }
+  // Customer name + email surface back into the WO summary block too —
+  // before the Cheat Sheet existed, that line read "Customer details not
+  // yet captured" whenever the WO snapshot was empty even though the
+  // property record had the data.
+  if (customerName || customerEmail) {
+    const summary = [customerName, customerEmail].filter(Boolean).join(" · ");
+    if (techCustomer && summary) techCustomer.textContent = summary;
+  }
+  if (techAddress && address) techAddress.textContent = address;
 
   // ---- System overview ----------------------------------------------
   const sysBlock = document.getElementById("techSystemBlock");
@@ -2188,6 +2305,11 @@ async function init() {
     state.onSiteQuote = (wo.onSiteQuote && typeof wo.onSiteQuote === "object")
       ? { ...wo.onSiteQuote, builderLineItems: Array.isArray(wo.onSiteQuote.builderLineItems) ? wo.onSiteQuote.builderLineItems.slice() : [] }
       : state.onSiteQuote;
+    state.customerName  = wo.customerName  || "";
+    state.customerEmail = wo.customerEmail || "";
+    state.customerPhone = wo.customerPhone || "";
+    state.arrivedAt = wo.arrivedAt || null;
+    state.departedAt = wo.departedAt || null;
 
     techId.textContent = wo.id;
     techType.textContent = TYPE_LABELS[wo.type] || wo.type;
@@ -2219,6 +2341,14 @@ async function init() {
     // knowing what to fix from prior visits. Awaits a fetch but doesn't
     // block the rest of the render — the section reveals when ready.
     renderCarryForward(data.property).catch((err) => console.warn("[carry-forward]", err?.message));
+
+    // On-Site Execution timestamps + Materials checklist + Payment block
+    // (spec §4.3.2). Materials needs parts.json — fetched once and cached
+    // on state. All three are deterministic from current WO data so they
+    // re-render anytime onSiteQuote changes (see renderOnSiteQuote).
+    renderExecutionTimestamps();
+    loadPartsCatalog().then(() => renderMaterials()).catch(() => renderMaterials());
+    renderPaymentBlock();
 
     // Service-specific checklist (spring opening / fall closing) and
     // customer sign-off section. Lock state cascades after both are
@@ -2271,5 +2401,141 @@ async function init() {
     techError.hidden = false;
   }
 }
+
+// ---- Materials checklist (spec §4.3.2) ---------------------------------
+// Auto-derives from the current authorized line items in the on-site
+// quote builder. Looks up each line's pricing.json key against
+// parts.json's service_materials map → expands into per-SKU rows the
+// tech can tap "packed" on. Refreshed every time renderOnSiteQuote runs.
+
+async function loadPartsCatalog() {
+  if (state.partsCatalog) return;
+  try {
+    const r = await fetch("/api/parts", { cache: "force-cache" });
+    const data = await r.json().catch(() => ({}));
+    if (data.ok && data.parts && data.service_materials) {
+      state.partsCatalog = data.parts;
+      state.serviceMaterials = data.service_materials;
+    }
+  } catch (err) {
+    console.warn("[materials] parts.json load failed:", err?.message);
+  }
+}
+
+function renderMaterials() {
+  const section = document.getElementById("techMaterialsSection");
+  const list = document.getElementById("techMaterialsList");
+  const empty = document.getElementById("techMaterialsEmpty");
+  if (!section || !list) return;
+  if (!state.partsCatalog || !state.serviceMaterials) {
+    section.hidden = true;
+    return;
+  }
+  const builderLines = (state.onSiteQuote && state.onSiteQuote.builderLineItems) || [];
+  if (!builderLines.length) {
+    section.hidden = true;
+    return;
+  }
+
+  // Aggregate parts across all line items: { sku → { qty, name, packed } }
+  const aggregate = new Map();
+  for (const line of builderLines) {
+    const mapping = line.key && state.serviceMaterials[line.key];
+    const lineQty = Number(line.qty) || 1;
+    const defaultParts = (mapping && Array.isArray(mapping.default_parts)) ? mapping.default_parts : [];
+    for (const part of defaultParts) {
+      const sku = part.sku;
+      if (!sku || !state.partsCatalog[sku]) continue;
+      const totalQty = (Number(part.quantity) || 0) * lineQty;
+      const existing = aggregate.get(sku);
+      if (existing) {
+        existing.qty += totalQty;
+      } else {
+        aggregate.set(sku, {
+          sku,
+          qty: totalQty,
+          name: state.partsCatalog[sku].name,
+          unit: state.partsCatalog[sku].unit || "each",
+          packed: !!(state.materialsPacked && state.materialsPacked[sku])
+        });
+      }
+    }
+  }
+
+  if (!aggregate.size) {
+    section.hidden = false;
+    list.innerHTML = "";
+    if (empty) empty.hidden = false;
+    return;
+  }
+  if (empty) empty.hidden = true;
+
+  section.hidden = false;
+  list.innerHTML = "";
+  for (const row of aggregate.values()) {
+    const li = document.createElement("li");
+    li.className = "tech-materials-row" + (row.packed ? " is-packed" : "");
+    const qtyDisplay = row.qty < 1 ? row.qty.toFixed(2) : (Number.isInteger(row.qty) ? String(row.qty) : row.qty.toFixed(1));
+    li.innerHTML = `
+      <input type="checkbox" data-sku="${escapeHtml(row.sku)}" ${row.packed ? "checked" : ""} aria-label="Mark ${escapeHtml(row.name)} packed">
+      <span class="tech-materials-name">${escapeHtml(row.name)}</span>
+      <span class="tech-materials-qty">${escapeHtml(qtyDisplay)} ${escapeHtml(row.unit)}</span>
+    `;
+    list.appendChild(li);
+  }
+}
+
+// Track packed state locally only for now. A future commit can persist
+// it on the WO record so it survives reloads (the schema slot already
+// exists implicitly — wo.materialsPacked: { sku → bool }).
+document.getElementById("techMaterialsList")?.addEventListener("change", (event) => {
+  const cb = event.target;
+  if (cb.tagName !== "INPUT" || cb.type !== "checkbox") return;
+  const sku = cb.dataset.sku;
+  if (!sku) return;
+  state.materialsPacked = state.materialsPacked || {};
+  state.materialsPacked[sku] = cb.checked;
+  cb.closest("li")?.classList.toggle("is-packed", cb.checked);
+  patchWorkOrder({ materialsPacked: state.materialsPacked });
+});
+
+// ---- Payment & billing block (spec §4.3.2) ----------------------------
+function renderPaymentBlock() {
+  const subtotalEl = document.getElementById("techPaySubtotal");
+  const hstEl = document.getElementById("techPayHst");
+  const totalEl = document.getElementById("techPayTotal");
+  const invoiceLine = document.getElementById("techPayInvoiceLine");
+  if (!subtotalEl) return;
+  const lines = (state.onSiteQuote && state.onSiteQuote.builderLineItems) || [];
+  const totals = totalsForLines(lines);
+  subtotalEl.textContent = formatMoney(totals.subtotal);
+  hstEl.textContent = formatMoney(totals.hst);
+  totalEl.textContent = formatMoney(totals.total);
+  if (invoiceLine && state.onSiteQuote?.quoteId) {
+    invoiceLine.textContent = `Quote on file: ${state.onSiteQuote.quoteId}. Invoice drafts at completion.`;
+  }
+}
+
+// ---- Follow-up visit (spec §4.3.2 Follow-Up WO Trigger) ---------------
+document.getElementById("techFollowupBtn")?.addEventListener("click", async () => {
+  if (!confirm("Schedule a follow-up service visit linked to this WO? Patrick will be notified to slot it. The customer's on file gets the trigger but isn't auto-booked.")) return;
+  const btn = document.getElementById("techFollowupBtn");
+  const status = document.getElementById("techFollowupStatus");
+  btn.disabled = true;
+  if (status) { status.hidden = false; status.textContent = "Creating follow-up…"; }
+  try {
+    const r = await fetch(`/api/work-orders/${encodeURIComponent(state.id)}/followup`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}"
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok || !data.ok) throw new Error((data.errors && data.errors[0]) || "Couldn't create follow-up.");
+    if (status) status.textContent = `Follow-up created: ${data.followupWoId}. Patrick has been notified to schedule it.`;
+  } catch (err) {
+    if (status) status.textContent = err.message || "Failed.";
+    btn.disabled = false;
+  }
+});
 
 init();

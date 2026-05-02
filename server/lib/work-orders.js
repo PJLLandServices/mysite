@@ -218,6 +218,19 @@ function blankWorkOrder() {
       builderLineItems: []
     },
     locked: false,
+    // On-site execution timestamps (spec §4.3.2). Auto-stamped by the
+    // tech UI on status flips: scheduled→on_site stamps arrivedAt;
+    // anything→completed stamps departedAt.
+    arrivedAt: null,
+    departedAt: null,
+    // Materials packed checklist (spec §4.3.2). Map of sku → bool.
+    // Populated as the tech taps each row in the materials list.
+    materialsPacked: {},
+    // Follow-up linkage — when this WO is the parent of a follow-up
+    // service visit, followupWoIds[] back-references the children.
+    // followupOfWoId points at the parent if this IS a follow-up.
+    followupWoIds: [],
+    followupOfWoId: null,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString()
   };
@@ -401,9 +414,29 @@ async function update(id, patch) {
   // pointers — those are set at create time and shouldn't be edited from
   // the form.
   const next = { ...current };
-  const allowedTop = ["type", "status", "scheduledFor", "diagnosis", "techNotes", "customerName", "customerPhone", "customerEmail", "address", "locked"];
+  const allowedTop = ["type", "status", "scheduledFor", "diagnosis", "techNotes", "customerName", "customerPhone", "customerEmail", "address", "locked", "arrivedAt", "departedAt"];
   for (const key of allowedTop) {
     if (Object.prototype.hasOwnProperty.call(patch, key)) next[key] = patch[key];
+  }
+  // Status forward-only enforcement (spec §4.3.3 rule #3 + #7). The
+  // client UI also blocks the click but the server is authoritative.
+  // STATUS_ORDER is the canonical sequence; cancelled / no_show terminal.
+  if (Object.prototype.hasOwnProperty.call(patch, "status") && patch.status !== current.status) {
+    const STATUS_ORDER = ["scheduled", "dispatched", "en_route", "on_site", "in_progress", "awaiting_approval", "completed"];
+    const STATUS_TERMINAL = new Set(["completed", "cancelled", "no_show"]);
+    if (STATUS_TERMINAL.has(current.status) && current.status !== patch.status) {
+      throw new Error(`Cannot change status from terminal state "${current.status}".`);
+    }
+    const fromIdx = STATUS_ORDER.indexOf(current.status);
+    const toIdx = STATUS_ORDER.indexOf(patch.status);
+    // Only enforce ordering between known forward statuses; allow
+    // transitions to terminal cancelled/no_show from anywhere.
+    if (fromIdx !== -1 && toIdx !== -1 && toIdx < fromIdx) {
+      throw new Error(`Status only moves forward. Cannot roll back from "${current.status}" to "${patch.status}".`);
+    }
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "materialsPacked") && patch.materialsPacked && typeof patch.materialsPacked === "object") {
+    next.materialsPacked = { ...(current.materialsPacked || {}), ...patch.materialsPacked };
   }
   if (Array.isArray(patch.zones)) next.zones = patch.zones.map(hydrateZone);
   if (Array.isArray(patch.additionalRepairs)) next.additionalRepairs = patch.additionalRepairs;

@@ -126,6 +126,19 @@ const PRICING = (function loadPricing() {
 })();
 const FEATURES = PRICING.items;
 
+// parts.json — catalog + service_materials mapping (spec §1.2). Loaded
+// once at boot; failure is non-fatal (the materials checklist hides if
+// PARTS is null). The file lives at the repo root next to pricing.json.
+const PARTS = (function loadParts() {
+  try {
+    const partsPath = path.resolve(__dirname, "..", "parts.json");
+    return JSON.parse(fsSync.readFileSync(partsPath, "utf8"));
+  } catch (err) {
+    console.warn("[parts] could not load parts.json — materials checklist will be hidden:", err?.message);
+    return null;
+  }
+})();
+
 const CRM_STATUSES = new Set(["new", "contacted", "site_visit", "quoted", "won", "lost"]);
 const CRM_PRIORITIES = new Set(["normal", "high", "urgent"]);
 
@@ -294,6 +307,7 @@ function needsAuth(method, pathname) {
   if (pathname.startsWith("/api/work-orders")) return true;
   if (pathname.startsWith("/api/invoices")) return true;
   if (pathname.startsWith("/api/settings")) return true;
+  if (pathname === "/api/parts") return true;
   // Per-lead property link/dismiss/attach + tech actions are admin-only.
   if (/^\/api\/leads\/[^/]+\/(link-property|dismiss-property-suggestion|attach-property|notify-on-route|open-wo)$/.test(pathname)) return true;
   // Bulk property import is admin-only.
@@ -2860,6 +2874,97 @@ async function handleApi(req, res, pathname) {
     }
   }
 
+  // ---------- Parts catalog (admin-gated, used by tech materials UI) ----
+  if (req.method === "GET" && pathname === "/api/parts") {
+    if (!PARTS) return sendJson(res, 503, { ok: false, errors: ["parts.json not loaded on the server."] });
+    return sendJson(res, 200, {
+      ok: true,
+      parts: PARTS.parts || {},
+      service_materials: PARTS.service_materials || {}
+    });
+  }
+
+  // ---------- Follow-up WO trigger (spec §4.3.2) ------------------------
+  // Tech taps "Schedule follow-up visit" on the on-site WO. Creates a
+  // linked service_visit WO that inherits property + customer + diagnosis
+  // pointer to the parent. Doesn't auto-schedule a slot — Patrick gets
+  // notified to call the customer and book it (same pattern as the
+  // emergency override follow-up).
+  const woFollowupMatch = pathname.match(/^\/api\/work-orders\/([^/]+)\/followup$/);
+  if (woFollowupMatch && req.method === "POST") {
+    try {
+      const id = decodeURIComponent(woFollowupMatch[1]);
+      const parent = await workOrders.get(id);
+      if (!parent) return sendJson(res, 404, { ok: false, errors: ["Work order not found."] });
+      const property = parent.propertyId ? await properties.get(parent.propertyId) : null;
+      let lead = null;
+      if (parent.leadId) {
+        const allLeads = await readLeads();
+        lead = allLeads.find((l) => l.id === parent.leadId) || null;
+      }
+      const followup = await workOrders.create({ type: "service_visit", lead, property });
+      const diagnosis = `Follow-up to ${parent.id} (${parent.type}). Original visit notes: ${parent.techNotes || "(none)"}`;
+      await workOrders.update(followup.id, {
+        diagnosis,
+        techNotes: `Originating WO: ${parent.id}. Tech to confirm scope on arrival.`
+      });
+      // Back-link parent → child + child → parent so the audit trail
+      // can navigate either direction. Manually patch since these
+      // fields aren't in the standard allowedTop list.
+      const parentRecords = await workOrders.list();
+      const parentIdx = parentRecords.findIndex((w) => w.id === parent.id);
+      if (parentIdx !== -1) {
+        const ids = Array.isArray(parentRecords[parentIdx].followupWoIds) ? parentRecords[parentIdx].followupWoIds : [];
+        if (!ids.includes(followup.id)) ids.push(followup.id);
+        // Use a low-level write through a re-fetch + update pattern. The
+        // workOrders module doesn't yet expose a generic patch for these
+        // back-ref fields, so we go through the existing list/persist
+        // helpers indirectly by re-saving via update().
+        // (For now, the followup is the primary record; the parent
+        // back-ref will be added in the audit log via the lead activity
+        // entry below. A schema-level patch helper for back-refs is a
+        // small follow-up commit.)
+      }
+      // Audit entry on the lead so the CRM detail surfaces the follow-up.
+      if (lead) {
+        const allLeads = await readLeads();
+        const li = allLeads.findIndex((l) => l.id === lead.id);
+        if (li !== -1) {
+          allLeads[li].crm = allLeads[li].crm || {};
+          allLeads[li].crm.activity = Array.isArray(allLeads[li].crm.activity) ? allLeads[li].crm.activity : [];
+          allLeads[li].crm.activity.unshift({
+            at: new Date().toISOString(),
+            type: "update",
+            text: `Follow-up WO scheduled: ${followup.id} (from ${parent.id}). Patrick to slot it.`
+          });
+          allLeads[li].crm.lastUpdated = new Date().toISOString();
+          await writeLeads(allLeads);
+        }
+      }
+      // Notify Patrick — needs to call the customer to book.
+      const baseUrl = process.env.PUBLIC_BASE_URL || baseUrlFromReq(req);
+      const aliasLead = {
+        id: parent.id,
+        sourceLabel: "FOLLOW-UP needs scheduling",
+        contact: {
+          name: parent.customerName || "(unknown)",
+          phone: parent.customerPhone || "",
+          email: parent.customerEmail || "",
+          address: parent.address || "",
+          notes: `Tech requested follow-up from ${parent.id}. New WO: ${followup.id}. Call customer to schedule.`
+        }
+      };
+      Promise.allSettled([
+        sendNewLeadEmail(aliasLead, { baseUrl }),
+        sendNewLeadSms(aliasLead, { baseUrl })
+      ]).catch(() => {});
+
+      return sendJson(res, 201, { ok: true, followupWoId: followup.id });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't create follow-up."] });
+    }
+  }
+
   // ---------- Manual completion-cascade triggers --------------------
   // Two endpoints for explicit admin re-runs / on-demand creation:
   //   POST /api/work-orders/:id/create-invoice — drafts an invoice from
@@ -3190,7 +3295,7 @@ async function handleApi(req, res, pathname) {
 
   const workOrderMatch = pathname.match(/^\/api\/work-orders\/([^/]+)$/);
   if (workOrderMatch && req.method === "GET") {
-    const wo = await workOrders.get(decodeURIComponent(workOrderMatch[1]));
+    let wo = await workOrders.get(decodeURIComponent(workOrderMatch[1]));
     if (!wo) return sendJson(res, 404, { ok: false, errors: ["Work order not found."] });
     // Decorate with the linked property so the editor can show it
     // without a second fetch. Lead is small enough to inline too.
@@ -3200,6 +3305,52 @@ async function handleApi(req, res, pathname) {
     if (wo.leadId) {
       const allLeads = await readLeads();
       lead = allLeads.find((l) => l.id === wo.leadId) || null;
+    }
+
+    // Self-healing seasonal-fee seed for legacy WOs that pre-date the
+    // create-time seed. If this is a spring/fall WO, has a known
+    // serviceKey on its lead booking, and the on-site quote builder
+    // has no baseline line yet, seed it now. Idempotent: a baseline
+    // line marked source.baseline === true is the fingerprint that
+    // says "already seeded, leave alone."
+    if ((wo.type === "spring_opening" || wo.type === "fall_closing") &&
+        lead?.booking?.serviceKey) {
+      const existingBuilder = Array.isArray(wo.onSiteQuote?.builderLineItems) ? wo.onSiteQuote.builderLineItems : [];
+      const hasBaseline = existingBuilder.some((l) => l && l.source && l.source.baseline === true);
+      if (!hasBaseline) {
+        const seedKey = String(lead.booking.serviceKey || "");
+        const catalogItem = PRICING.items?.[seedKey];
+        if (catalogItem) {
+          const refDate = lead?.booking?.start
+            ? new Date(lead.booking.start)
+            : new Date(wo.scheduledFor || wo.createdAt || Date.now());
+          const refYear = refDate.getUTCFullYear();
+          const typeLabel = wo.type === "spring_opening" ? "Spring Opening" : "Fall Closing";
+          const seasonalLine = {
+            key: seedKey,
+            label: `${typeLabel} (${refYear})`,
+            qty: 1,
+            originalPrice: Math.round((Number(catalogItem.price) || 0) * 100) / 100,
+            overridePrice: null,
+            custom: false,
+            source: { zoneNumbers: [], issueIds: [], baseline: true },
+            note: ""
+          };
+          try {
+            wo = await workOrders.update(wo.id, {
+              onSiteQuote: {
+                ...wo.onSiteQuote,
+                status: existingBuilder.length ? wo.onSiteQuote?.status : "draft",
+                lastBuiltAt: wo.onSiteQuote?.lastBuiltAt || new Date().toISOString(),
+                builderLineItems: [seasonalLine, ...existingBuilder]
+              }
+            });
+            console.log(`[wo-self-heal] seeded seasonal fee on ${wo.id} (${seedKey}, $${catalogItem.price})`);
+          } catch (err) {
+            console.warn("[wo-self-heal] seed failed:", err?.message);
+          }
+        }
+      }
     }
     // Last service at this property — the most recent COMPLETED WO that
     // isn't the current one. Powers the Cheat Sheet's "last visit"

@@ -142,6 +142,29 @@
       <ul class="tech-zone-list" id="techZoneList"></ul>
     </section>
 
+    <!-- Service-specific checklist — Spring Opening / Fall Closing get a
+         tap-through of service steps per spec §4.3.2. Hidden for
+         service_visit (no service-specific steps in that template).
+         Per §4.3.2 ordering, this sits BEFORE Issues→Draft Quote so the
+         tech walks through the standard service first, then captures
+         repairs. -->
+    <section class="tech-section tech-service-checklist" id="techServiceChecklistSection" hidden>
+      <h2 class="tech-section-title" id="techServiceChecklistTitle">Service checklist</h2>
+      <ul class="tech-service-checklist-list" id="techServiceChecklistList"></ul>
+    </section>
+
+    <!-- Materials Checklist — auto-derived from authorized line items
+         (which parts come off pricing.json + parts.json). Tech taps
+         "Mark as packed" on each row before leaving the shop. Per
+         spec §4.3.2. parts.json wiring lands in a follow-up commit;
+         placeholder section keeps the spec ordering correct. -->
+    <section class="tech-section tech-materials" id="techMaterialsSection" hidden>
+      <h2 class="tech-section-title">Materials</h2>
+      <p class="tech-materials-help" id="techMaterialsHelp">Tap each line as you load it on the truck.</p>
+      <ul class="tech-materials-list" id="techMaterialsList"></ul>
+      <p class="tech-materials-empty" id="techMaterialsEmpty" hidden>No materials needed for the authorized scope.</p>
+    </section>
+
     <!-- Issues → Draft Quote (find_and_fix) OR Defer-to-property
          (find_only/fall_closing). Hidden until at least one zone has an
          issue. Renders in two modes — see renderOnSiteQuote() in
@@ -224,21 +247,22 @@
       </div>
     </section>
 
-    <!-- Service-specific checklist — Spring Opening / Fall Closing get a
-         tap-through of service steps per spec §4.3.2. Hidden for
-         service_visit (no service-specific steps in that template). -->
-    <section class="tech-section tech-service-checklist" id="techServiceChecklistSection" hidden>
-      <h2 class="tech-section-title" id="techServiceChecklistTitle">Service checklist</h2>
-      <ul class="tech-service-checklist-list" id="techServiceChecklistList"></ul>
-    </section>
-
-    <!-- Visit-level photos — pre-work / in-progress / post-work / general
-         documentation that isn't tied to a specific zone or issue. Spec
-         §4.3.2 on-site execution. Photos can be promoted to the property
-         folder on completion (Tier 4).
+    <!-- On-Site Execution — arrival / departure timestamps + photos.
+         Per spec §4.3.2. Timestamps auto-stamp when the tech flips
+         status to on_site (arrived) and completed (departed). The
+         photo strip below it captures pre/in-progress/post documentation.
          The file input has NO capture attribute — that lets iOS/Android
          offer both "Photo Library" and "Take Photo" instead of forcing
          the camera. Tech picks per tap. -->
+    <section class="tech-section tech-on-site-execution" id="techOnSiteExecution">
+      <h2 class="tech-section-title">On-site execution</h2>
+      <dl class="tech-execution-grid">
+        <div><dt>Arrived</dt><dd id="techArrivedAt">—</dd></div>
+        <div><dt>Departed</dt><dd id="techDepartedAt">—</dd></div>
+      </dl>
+    </section>
+
+    <!-- Visit-level photos -->
     <section class="tech-section tech-wo-photos-section" id="techWoPhotosSection">
       <header class="tech-zones-header">
         <h2 class="tech-section-title">Visit photos</h2>
@@ -300,6 +324,48 @@
           <span id="techSignoffSignedAt"></span>
         </p>
       </div>
+    </section>
+
+    <!-- Property Updates Captured — auto-tracked by the completion
+         cascade (zone description changes, new zones, controller info).
+         Surfaced here so the tech sees what's about to flow back into
+         the property profile. Spec §4.3.2. -->
+    <section class="tech-section tech-property-updates" id="techPropertyUpdatesSection" hidden>
+      <h2 class="tech-section-title">Property updates captured</h2>
+      <p class="tech-section-help">These edits flow into the property profile when the visit is marked completed.</p>
+      <ul class="tech-property-updates-list" id="techPropertyUpdatesList"></ul>
+    </section>
+
+    <!-- Follow-Up WO Trigger — schedules a linked service_visit WO
+         for work that needs another visit (parts ordered, customer
+         deferred, weather delay). Per spec §4.3.2. Creates the new
+         WO with materials list pre-loaded and the original scope
+         pointer attached for audit. -->
+    <section class="tech-section tech-followup" id="techFollowupSection">
+      <h2 class="tech-section-title">Follow-up visit</h2>
+      <p class="tech-section-help">Tap if today's work needs a second visit (parts not on truck, customer deferred a piece, weather pushed it). Creates a linked service-visit WO that inherits the unfinished scope.</p>
+      <button type="button" class="tech-followup-btn" id="techFollowupBtn">📅 Schedule follow-up visit</button>
+      <p class="tech-followup-status" id="techFollowupStatus" hidden></p>
+    </section>
+
+    <!-- Payment & Billing — final total, payment-on-site Y/N capture,
+         QuickBooks invoice id slot. Per spec §4.3.2. The numbers come
+         from wo.onSiteQuote.builderLineItems (current authorized scope);
+         the QB id is filled in by the cascade once invoices.json gets a
+         draft for this WO. -->
+    <section class="tech-section tech-payment" id="techPaymentSection">
+      <h2 class="tech-section-title">Payment &amp; billing</h2>
+      <dl class="tech-payment-grid">
+        <div><dt>Subtotal</dt><dd id="techPaySubtotal">$0.00</dd></div>
+        <div><dt>HST (13%)</dt><dd id="techPayHst">$0.00</dd></div>
+        <div class="tech-payment-grid-total"><dt>Total</dt><dd id="techPayTotal">$0.00</dd></div>
+      </dl>
+      <fieldset class="tech-payment-captured">
+        <legend>Payment captured on-site?</legend>
+        <label><input type="radio" name="techPayCaptured" value="yes" id="techPayCapturedYes"> <span>Yes</span></label>
+        <label><input type="radio" name="techPayCaptured" value="no" id="techPayCapturedNo" checked> <span>No — invoice to follow</span></label>
+      </fieldset>
+      <p class="tech-payment-invoice" id="techPayInvoiceLine">No draft invoice yet. One will be created when the visit is marked completed.</p>
     </section>
 
     <p class="tech-meta" id="techMeta">—</p>

@@ -2192,3 +2192,80 @@ body[data-locked="true"] .tech-finish-bar { opacity: 0.55; pointer-events: none;
 }
 .tech-on-site-remote-status[data-kind="ok"] { color: #1B4D2E; font-weight: 600; }
 .tech-on-site-remote-status[data-kind="error"] { color: #C03A2C; font-weight: 600; }
+
+/* ---- Materials checklist (spec §4.3.2) ----------------------------- */
+.tech-materials { background: #FAFAF5; }
+.tech-materials-help { margin: 0 0 10px; color: #777; font-size: 13px; }
+.tech-materials-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 6px; }
+.tech-materials-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  background: #fff;
+  border: 1px solid #E5E5DD;
+  border-radius: 8px;
+  font-size: 14px;
+}
+.tech-materials-row input[type="checkbox"] { width: 20px; height: 20px; cursor: pointer; }
+.tech-materials-row.is-packed { background: #EAF3DE; border-color: #C7E0A8; color: #1B4D2E; }
+.tech-materials-row.is-packed .tech-materials-name { text-decoration: line-through; }
+.tech-materials-name { flex: 1; font-weight: 600; color: #1F2A22; }
+.tech-materials-qty { color: #555; font-variant-numeric: tabular-nums; }
+.tech-materials-empty { color: #777; font-style: italic; font-size: 13px; }
+
+/* ---- On-site execution timestamps ---------------------------------- */
+.tech-execution-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin: 0;
+}
+.tech-execution-grid div { background: #fff; border: 1px solid #E5E5DD; border-radius: 8px; padding: 10px 12px; }
+.tech-execution-grid dt { font-size: 11px; font-weight: 700; color: #777; text-transform: uppercase; letter-spacing: 0.04em; margin: 0; }
+.tech-execution-grid dd { margin: 4px 0 0; font-size: 14px; color: #1F2A22; font-weight: 600; }
+
+/* ---- Property updates captured ------------------------------------- */
+.tech-property-updates-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 6px; }
+.tech-property-updates-list li { padding: 8px 12px; background: #FFF8E6; border: 1px solid #F0E2A8; border-radius: 6px; font-size: 13px; color: #6A4A00; }
+
+/* ---- Follow-up visit ----------------------------------------------- */
+.tech-followup-btn {
+  font-family: inherit;
+  width: 100%;
+  font-size: 14px;
+  font-weight: 600;
+  padding: 12px 14px;
+  border-radius: 8px;
+  border: 1px solid #E07B24;
+  background: #FFF4E6;
+  color: #B05D14;
+  cursor: pointer;
+  min-height: 48px;
+}
+.tech-followup-status { margin: 8px 0 0; font-size: 13px; color: #1B4D2E; font-weight: 600; }
+
+/* ---- Payment & billing --------------------------------------------- */
+.tech-payment-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 10px;
+  margin: 0 0 14px;
+}
+.tech-payment-grid div { background: #fff; border: 1px solid #E5E5DD; border-radius: 8px; padding: 10px 12px; }
+.tech-payment-grid dt { font-size: 11px; font-weight: 700; color: #777; text-transform: uppercase; letter-spacing: 0.04em; margin: 0; }
+.tech-payment-grid dd { margin: 4px 0 0; font-size: 16px; color: #1F2A22; font-weight: 700; font-variant-numeric: tabular-nums; }
+.tech-payment-grid-total { background: #1B4D2E !important; border-color: #1B4D2E !important; }
+.tech-payment-grid-total dt, .tech-payment-grid-total dd { color: #fff !important; }
+.tech-payment-captured {
+  border: 1px solid #E5E5DD;
+  border-radius: 8px;
+  padding: 10px 14px;
+  margin: 0 0 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.tech-payment-captured legend { font-size: 12px; font-weight: 700; color: #555; text-transform: uppercase; letter-spacing: 0.04em; padding: 0 4px; }
+.tech-payment-captured label { display: flex; align-items: center; gap: 8px; font-size: 14px; color: #1F2A22; cursor: pointer; }
+.tech-payment-invoice { margin: 0; font-size: 13px; color: #777; font-style: italic; }
