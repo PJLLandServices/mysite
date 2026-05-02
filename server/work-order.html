@@ -73,6 +73,17 @@
     <p class="property-error" id="woError" hidden>This work order couldn't be loaded.</p>
 
     <form class="wo-form" id="woForm" hidden>
+      <!-- AI Intake Guarantee banner — snapshotted from the source Quote
+           when the WO was created. Tells the desktop viewer (Patrick) that
+           labour is locked for a specific scope so on-site billing matches
+           the quoted scope. Same banner the tech sees in /tech mode. -->
+      <section class="wo-intake-guarantee" id="woIntakeGuarantee" hidden role="alert">
+        <p class="wo-intake-eyebrow">AI Intake Guarantee</p>
+        <p class="wo-intake-scope" id="woIntakeScope">—</p>
+        <p class="wo-intake-rule">Labour for the diagnosed scope is <strong>locked</strong>. Don't bill additional labour for this work, no matter how long it takes. Anything beyond scope: parts + $95/hr, requires customer sign-off on a separate scope.</p>
+        <p class="wo-intake-source" id="woIntakeSource"></p>
+      </section>
+
       <section class="property-section wo-diagnosis-section" id="woDiagnosisSection" hidden>
         <h2>Diagnosis (from intake)</h2>
         <p class="property-section-help">What the customer or AI chat said before the visit. Use it as a starting point — adjust on-site as needed.</p>

@@ -337,6 +337,31 @@
             <p class="detail-field-wo__nolink" id="detailFieldWoNolink" hidden>Spring &amp; Fall WOs need a linked property to scaffold zones from. Link a property in the section above to enable.</p>
           </section>
 
+          <!-- AI Repair Quote card. Visible only when the lead carries a
+               linked Quote (lead.quote populated by the server). Shows the
+               versioned Quote artifact behind the chat: id, status, scope,
+               line items, totals, and the AI Intake Guarantee flag. -->
+          <section class="detail-section detail-quote" id="detailQuoteSection" hidden>
+            <h3>AI Repair Quote</h3>
+            <header class="detail-quote__head">
+              <div class="detail-quote__head-left">
+                <strong id="detailQuoteId">Q-—</strong>
+                <span class="detail-quote__status" id="detailQuoteStatus" data-status="sent">—</span>
+              </div>
+              <div class="detail-quote__head-right">
+                <p class="detail-quote__total" id="detailQuoteTotal">—</p>
+                <p class="detail-quote__subtotal" id="detailQuoteSubtotal">—</p>
+              </div>
+            </header>
+            <p class="detail-quote__scope" id="detailQuoteScope">—</p>
+            <div class="detail-quote__intake" id="detailQuoteIntake" hidden>
+              <strong>AI Intake Guarantee</strong>
+              <span>Labour locked for this scope. Beyond scope = parts + $95/hr, customer sign-off required.</span>
+            </div>
+            <ul class="detail-quote__items" id="detailQuoteItems"></ul>
+            <p class="detail-quote__dates" id="detailQuoteDates"></p>
+          </section>
+
           <section class="detail-section">
             <h3>Requested work</h3>
             <ul class="detail-features" id="detailFeatures"></ul>

@@ -895,6 +895,22 @@ function decorateLeadForAdmin(lead, req) {
   };
 }
 
+// Hydrate a decorated lead with its source Quote (if any) so the CRM
+// lead-detail pane can render the Quote card without a second fetch. The
+// list endpoint pre-builds a map for efficiency; single-lead responses
+// (PATCH status, archive, link-property, etc.) just call this helper. A
+// missing quote is silently swallowed — the lead loads fine without it.
+async function hydrateLeadQuote(decorated) {
+  if (!decorated || !decorated.quoteId) return decorated;
+  try {
+    const q = await quotes.get(decorated.quoteId);
+    if (q) decorated.quote = q;
+  } catch (err) {
+    console.warn("[quotes] hydrate failed for", decorated.id, err?.message);
+  }
+  return decorated;
+}
+
 async function portalPayloadForLead(lead, req) {
   const contact = contactRecordForLead(lead, req);
   // Pull the linked property so the customer can see their system profile
@@ -1273,10 +1289,33 @@ async function handleApi(req, res, pathname) {
 
           // Write quoteId back onto the lead so the CRM, portal, and WO
           // creation can all find the source quote without a separate query.
+          // Also append activity-log entries for the Quote create + accept
+          // events so the CRM lead-detail timeline tells the full story
+          // without needing to dig into the Quote record's own history.
           const liveLeads2 = await readLeads();
           const i2 = liveLeads2.findIndex((l) => l.id === result.lead.id);
           if (i2 !== -1) {
-            liveLeads2[i2].quoteId = quote.id;
+            const lead2 = liveLeads2[i2];
+            lead2.quoteId = quote.id;
+            lead2.crm = lead2.crm || {};
+            lead2.crm.activity = Array.isArray(lead2.crm.activity) ? lead2.crm.activity : [];
+            const now = new Date().toISOString();
+            const dollarTotal = `$${quote.total.toFixed(2)}`;
+            const igTag = quote.intakeGuarantee?.applies ? " · labour locked" : "";
+            // Two entries: created by AI, then accepted by customer.
+            // Unshift in chronological order so the most recent (accepted)
+            // ends up at the top of the timeline.
+            lead2.crm.activity.unshift({
+              at: now,
+              type: "update",
+              text: `AI repair quote ${quote.id} created — ${quote.scope || "no scope"} · ${dollarTotal}${igTag}`
+            });
+            lead2.crm.activity.unshift({
+              at: now,
+              type: "update",
+              text: `Quote ${quote.id} accepted (booking form submitted)`
+            });
+            lead2.crm.lastUpdated = now;
             await writeLeads(liveLeads2);
           }
 
@@ -1306,9 +1345,24 @@ async function handleApi(req, res, pathname) {
     const include = url.searchParams.get("include") || "";
     const showArchived = include === "archived" || include === "all";
     const filtered = showArchived ? leads : leads.filter((lead) => !lead.archived);
+
+    // Build a leadId -> Quote map in one quotes.list() pass so the CRM list
+    // can render the Quote card without N+1 fetches. Most leads have no
+    // quote (legacy + non-AI), so the map is sparse.
+    const allQuotes = await quotes.list().catch(() => []);
+    const quotesByLeadId = new Map();
+    for (const q of allQuotes) {
+      if (q.leadId) quotesByLeadId.set(q.leadId, q);
+    }
+
     return sendJson(res, 200, {
       ok: true,
-      leads: filtered.map((lead) => decorateLeadForAdmin(lead, req)),
+      leads: filtered.map((lead) => {
+        const decorated = decorateLeadForAdmin(lead, req);
+        const q = quotesByLeadId.get(lead.id);
+        if (q) decorated.quote = q;
+        return decorated;
+      }),
       sources: SOURCES,
       counts: {
         active: leads.filter((l) => !l.archived).length,
@@ -1393,7 +1447,8 @@ async function handleApi(req, res, pathname) {
         }
       }
 
-      return sendJson(res, 200, { ok: true, lead: decorateLeadForAdmin(leads[index], req) });
+      const decorated = await hydrateLeadQuote(decorateLeadForAdmin(leads[index], req));
+      return sendJson(res, 200, { ok: true, lead: decorated });
     } catch (error) {
       return sendJson(res, 400, { ok: false, errors: [error.message || "Unable to update lead."] });
     }
@@ -1939,7 +1994,8 @@ async function handleApi(req, res, pathname) {
       allLeads[idx] = lead;
       await writeLeads(allLeads);
 
-      return sendJson(res, 200, { ok: true, lead: decorateLeadForAdmin(lead, req) });
+      const decorated = await hydrateLeadQuote(decorateLeadForAdmin(lead, req));
+      return sendJson(res, 200, { ok: true, lead: decorated });
     } catch (error) {
       return sendJson(res, 400, { ok: false, errors: [error.message || "Couldn't link property."] });
     }
@@ -1960,7 +2016,8 @@ async function handleApi(req, res, pathname) {
       lead.propertyLinkStatus = "linked";
       allLeads[idx] = lead;
       await writeLeads(allLeads);
-      return sendJson(res, 200, { ok: true, lead: decorateLeadForAdmin(lead, req) });
+      const decorated = await hydrateLeadQuote(decorateLeadForAdmin(lead, req));
+      return sendJson(res, 200, { ok: true, lead: decorated });
     } catch (error) {
       return sendJson(res, 400, { ok: false, errors: [error.message || "Couldn't dismiss suggestion."] });
     }
@@ -2026,9 +2083,10 @@ async function handleApi(req, res, pathname) {
       allLeads[idx] = lead;
       await writeLeads(allLeads);
 
+      const decorated = await hydrateLeadQuote(decorateLeadForAdmin(lead, req));
       return sendJson(res, 200, {
         ok: true,
-        lead: decorateLeadForAdmin(lead, req),
+        lead: decorated,
         property: linkResult.property,
         status: linkResult.status
       });
@@ -2043,9 +2101,20 @@ async function handleApi(req, res, pathname) {
     if (!property) return sendJson(res, 404, { ok: false, errors: ["Property not found."] });
     // Decorate with linked leads so the admin page can show booking history.
     const allLeads = await readLeads();
-    const linkedLeads = allLeads
-      .filter((l) => l.propertyId === property.id || (property.leadIds || []).includes(l.id))
-      .map((l) => decorateLeadForAdmin(l, req));
+    const matchedLeads = allLeads
+      .filter((l) => l.propertyId === property.id || (property.leadIds || []).includes(l.id));
+    // Build the quote map once so the per-lead Quote card can render here too.
+    const allQuotes = await quotes.list().catch(() => []);
+    const quotesByLeadId = new Map();
+    for (const q of allQuotes) {
+      if (q.leadId) quotesByLeadId.set(q.leadId, q);
+    }
+    const linkedLeads = matchedLeads.map((l) => {
+      const decorated = decorateLeadForAdmin(l, req);
+      const q = quotesByLeadId.get(l.id);
+      if (q) decorated.quote = q;
+      return decorated;
+    });
     return sendJson(res, 200, { ok: true, property, leads: linkedLeads });
   }
 

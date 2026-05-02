@@ -243,10 +243,32 @@ function renderDiagnosis(wo) {
   woDiagnosis.textContent = typeof wo.diagnosis === "string" ? wo.diagnosis : JSON.stringify(wo.diagnosis, null, 2);
 }
 
+// AI Intake Guarantee banner — same data as the tech-mode page reads,
+// rendered here on the desktop editor so Patrick sees the locked scope
+// when reviewing/editing a WO that came from an AI repair quote.
+function renderIntakeGuarantee(wo) {
+  const banner = document.getElementById("woIntakeGuarantee");
+  const scope = document.getElementById("woIntakeScope");
+  const source = document.getElementById("woIntakeSource");
+  if (!banner) return;
+  if (!wo || !wo.intakeGuarantee || wo.intakeGuarantee.applies !== true) {
+    banner.hidden = true;
+    return;
+  }
+  if (scope) scope.textContent = wo.intakeGuarantee.scope || "Locked scope";
+  if (source) {
+    source.textContent = wo.intakeGuarantee.sourceQuoteId
+      ? `Source: ${wo.intakeGuarantee.sourceQuoteId}`
+      : "";
+  }
+  banner.hidden = false;
+}
+
 function populateForm(wo) {
   woTechNotes.value = wo.techNotes || "";
   renderZones(wo.zones || []);
   renderDiagnosis(wo);
+  renderIntakeGuarantee(wo);
 }
 
 function collectForm() {

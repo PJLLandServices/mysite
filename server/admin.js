@@ -73,6 +73,15 @@ const vcardLink = document.getElementById("vcardLink");
 const portalLink = document.getElementById("portalLink");
 const contactPreview = document.getElementById("contactPreview");
 const detailFeatures = document.getElementById("detailFeatures");
+const detailQuoteSection = document.getElementById("detailQuoteSection");
+const detailQuoteId = document.getElementById("detailQuoteId");
+const detailQuoteStatus = document.getElementById("detailQuoteStatus");
+const detailQuoteTotal = document.getElementById("detailQuoteTotal");
+const detailQuoteSubtotal = document.getElementById("detailQuoteSubtotal");
+const detailQuoteScope = document.getElementById("detailQuoteScope");
+const detailQuoteIntake = document.getElementById("detailQuoteIntake");
+const detailQuoteItems = document.getElementById("detailQuoteItems");
+const detailQuoteDates = document.getElementById("detailQuoteDates");
 const detailPropertySection = document.getElementById("detailPropertySection");
 const detailPropertyMeta = document.getElementById("detailPropertyMeta");
 const detailPropertyOpen = document.getElementById("detailPropertyOpen");
@@ -412,6 +421,7 @@ function renderDetail() {
   renderPropertyDetail(lead);
   renderPhotosDetail(lead);
   renderTranscriptDetail(lead);
+  renderQuoteDetail(lead);
   renderWorkOrderDetail(lead);
   renderFieldWoDetail(lead);
   renderContactPreview(lead);
@@ -657,6 +667,63 @@ function renderTranscriptDetail(lead) {
   }
   detailTranscript.textContent = transcript;
   detailTranscriptSection.hidden = false;
+}
+
+// AI Repair Quote card — surfaces the discrete Quote artifact behind an
+// AI-chat lead. Hidden when no quote is linked (legacy bookings, contact
+// form, self-fix captures all land here without a quote). The data comes
+// from server.js hydrateLeadQuote, which attaches lead.quote to every
+// CRM response when lead.quoteId is set.
+function renderQuoteDetail(lead) {
+  if (!detailQuoteSection) return;
+  const q = lead?.quote;
+  if (!q) {
+    detailQuoteSection.hidden = true;
+    return;
+  }
+  detailQuoteSection.hidden = false;
+
+  detailQuoteId.textContent = q.id || "Q-—";
+  detailQuoteStatus.textContent = (q.status || "draft").replace(/_/g, " ");
+  detailQuoteStatus.dataset.status = q.status || "draft";
+
+  detailQuoteTotal.textContent = moneyText(q.total);
+  detailQuoteSubtotal.textContent = `${moneyText(q.subtotal)} + ${moneyText(q.hst)} HST`;
+
+  detailQuoteScope.textContent = q.scope || "(no scope recorded)";
+
+  if (q.intakeGuarantee && q.intakeGuarantee.applies) {
+    detailQuoteIntake.hidden = false;
+  } else {
+    detailQuoteIntake.hidden = true;
+  }
+
+  detailQuoteItems.innerHTML = "";
+  (q.lineItems || []).forEach((item) => {
+    const li = document.createElement("li");
+    const qtyTag = item.qty > 1 ? ` <span class="detail-quote__qty">× ${escapeHtml(String(item.qty))}</span>` : "";
+    li.innerHTML = `<span>${escapeHtml(item.label || item.key)}${qtyTag}</span><strong>${moneyText(item.lineTotal)}</strong>`;
+    detailQuoteItems.append(li);
+  });
+
+  // Date footer — shows whichever lifecycle marks are present. The Quote
+  // record's own audit history has the full timeline; this is the summary.
+  const parts = [];
+  const dateFormat = (iso) => {
+    try { return new Date(iso).toLocaleDateString("en-CA", { month: "short", day: "numeric", year: "numeric" }); }
+    catch { return ""; }
+  };
+  if (q.sentAt)     parts.push(`Sent ${dateFormat(q.sentAt)}`);
+  if (q.acceptedAt) parts.push(`Accepted ${dateFormat(q.acceptedAt)}`);
+  if (q.declinedAt) parts.push(`Declined ${dateFormat(q.declinedAt)}`);
+  if (q.expiredAt)  parts.push(`Expired ${dateFormat(q.expiredAt)}`);
+  if (q.validUntil && !q.acceptedAt && !q.declinedAt && !q.expiredAt) {
+    parts.push(`Valid until ${dateFormat(q.validUntil)}`);
+  }
+  if (Array.isArray(q.workOrderIds) && q.workOrderIds.length) {
+    parts.push(`WOs: ${q.workOrderIds.join(", ")}`);
+  }
+  detailQuoteDates.textContent = parts.join(" · ");
 }
 
 function renderWorkOrderDetail(lead) {

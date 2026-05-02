@@ -2,6 +2,56 @@
    on-site. Mirrors the property-editor visual language so Patrick
    doesn't have to re-learn the page. */
 
+/* AI Intake Guarantee banner — desktop WO editor mirror of the tech-mode
+   banner. Sits at the top of the form so it's the first thing visible
+   when reviewing an AI-quoted WO. Hidden until populated. Amber accent
+   ties it visually to the AI Intake Guarantee theme used in the tech
+   page and the lead-detail Quote card. */
+.wo-intake-guarantee {
+  margin: 0 0 18px;
+  padding: 14px 16px 12px;
+  background: #FFF4E6;
+  border: 1px solid rgba(224, 123, 36, 0.32);
+  border-left: 5px solid #E07B24;
+  border-radius: 10px;
+  box-shadow: 0 4px 14px rgba(224, 123, 36, 0.10);
+}
+.wo-intake-eyebrow {
+  margin: 0 0 4px;
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 1.6px;
+  text-transform: uppercase;
+  color: #E07B24;
+}
+.wo-intake-scope {
+  margin: 0 0 8px;
+  font-size: 17px;
+  font-weight: 700;
+  color: #0F1F14;
+  line-height: 1.3;
+}
+.wo-intake-rule {
+  margin: 0 0 6px;
+  font-size: 13.5px;
+  color: #2a3b30;
+  line-height: 1.45;
+}
+.wo-intake-rule strong {
+  color: #0F1F14;
+  font-weight: 700;
+}
+.wo-intake-source {
+  margin: 6px 0 0;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.5px;
+  color: #6a7d70;
+  font-variant-numeric: tabular-nums;
+}
+.wo-intake-source:empty { display: none; }
+
 .wo-shell {
   display: flex;
   flex-direction: column;
