@@ -199,6 +199,22 @@ function blankWorkOrder() {
       ip: null,
       userAgent: null
     },
+    // On-site Quote (Issues → Draft Quote rollup, spec §4.3.2). Tech
+    // builds it from zone.issues during the visit; customer signs to
+    // accept selected lines; declined lines flow into the property's
+    // deferredIssues. The Quote itself is a separate Q-YYYY-NNNN record
+    // in quotes.json — this field is just the WO's pointer + builder
+    // working state.
+    //   status: none → draft → sent → accepted | partially_accepted | declined
+    //   builderLineItems: tech's pre-customer-signature working draft;
+    //     replaced wholesale on PATCH; cleared after accept (the final
+    //     line items live on the Quote record).
+    onSiteQuote: {
+      quoteId: null,
+      status: "none",
+      lastBuiltAt: null,
+      builderLineItems: []
+    },
     locked: false,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString()
@@ -219,8 +235,23 @@ function hydrate(w) {
     intakeGuarantee: { ...base.intakeGuarantee, ...(w?.intakeGuarantee || {}) },
     serviceChecklist: { ...(w?.serviceChecklist || {}) },
     signature: { ...base.signature, ...(w?.signature || {}) },
+    onSiteQuote: {
+      ...base.onSiteQuote,
+      ...(w?.onSiteQuote || {}),
+      builderLineItems: Array.isArray(w?.onSiteQuote?.builderLineItems)
+        ? w.onSiteQuote.builderLineItems
+        : []
+    },
     locked: w?.locked === true
   };
+}
+
+// Hard-rule guard: spec §10 rule 8 — fall closings never auto-quote
+// on-site. Find_only mode. Tech can defer issues for spring follow-up
+// but never builds an on-site Quote inside a fall closing visit.
+// Both client and server consult this helper.
+function canBuildOnSiteQuote(wo) {
+  return !!wo && wo.type !== "fall_closing";
 }
 
 // Backfill the per-zone checks{} and issues[] fields onto records that
@@ -375,6 +406,15 @@ async function update(id, patch) {
   if (Array.isArray(patch.zones)) next.zones = patch.zones.map(hydrateZone);
   if (Array.isArray(patch.additionalRepairs)) next.additionalRepairs = patch.additionalRepairs;
   if (Array.isArray(patch.lineItems)) next.lineItems = patch.lineItems;
+  // On-site quote field — shallow-merged so partial updates don't clobber
+  // siblings. The endpoints handle field-by-field validation; this layer
+  // just persists what's allowed through.
+  if (patch.onSiteQuote && typeof patch.onSiteQuote === "object") {
+    next.onSiteQuote = { ...current.onSiteQuote, ...patch.onSiteQuote };
+    if (Array.isArray(patch.onSiteQuote.builderLineItems)) {
+      next.onSiteQuote.builderLineItems = patch.onSiteQuote.builderLineItems;
+    }
+  }
   // Service checklist — replace wholesale when sent (the editor PATCHes
   // the whole map). Signature is shallow-merged so partial updates (e.g.
   // typing the name before drawing the signature) don't clobber other
@@ -410,6 +450,7 @@ module.exports = {
   SERVICE_CHECKLISTS,
   WO_PHOTO_CATEGORIES,
   templateForServiceKey,
+  canBuildOnSiteQuote,
   list,
   get,
   listByProperty,

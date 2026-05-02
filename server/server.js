@@ -44,6 +44,7 @@ const bookingSessions = require("./lib/booking-sessions");
 const properties = require("./lib/properties");
 const workOrders = require("./lib/work-orders");
 const quotes = require("./lib/quotes");
+const issueRollup = require("./lib/issue-rollup");
 
 // Short, customer-friendly work order ID. Eight chars from a UUIDv4 base32-ish
 // alphabet (no I/O/0/1 to keep them unambiguous when read aloud or hand-written).
@@ -2655,6 +2656,428 @@ async function handleApi(req, res, pathname) {
     res.writeHead(200, headers);
     res.end(file.data);
     return;
+  }
+
+  // ======== On-site Quote (Issues → Draft Quote rollup) ========
+  // Spec §4.3.2 + Hard rules §10 r8 (fall closings never auto-quote) and
+  // r4 (scope changes require fresh signature). Five routes:
+  //   POST  /on-site-quote/build       — run the rollup, store builder draft
+  //   PATCH /on-site-quote/builder     — tech edits builder lines
+  //   POST  /on-site-quote/accept      — customer signs; create Quote, sink declines
+  //   POST  /on-site-quote/decline-all — every line goes to deferred, no Quote
+  //   POST  /issues/defer              — find_only path: bundle issues into deferred
+
+  const woOnSiteBuildMatch = pathname.match(/^\/api\/work-orders\/([^/]+)\/on-site-quote\/build$/);
+  if (woOnSiteBuildMatch && req.method === "POST") {
+    try {
+      const id = decodeURIComponent(woOnSiteBuildMatch[1]);
+      const wo = await workOrders.get(id);
+      if (!wo) return sendJson(res, 404, { ok: false, errors: ["Work order not found."] });
+      if (wo.locked || wo.signature?.signed) {
+        return sendJson(res, 409, { ok: false, errors: ["Work order is signed and locked. Unlock first to build a new quote."] });
+      }
+      if (!workOrders.canBuildOnSiteQuote(wo)) {
+        return sendJson(res, 422, { ok: false, errors: [
+          "Fall closings cannot generate on-site quotes (PJL operations rule 8). Use 'Save to deferred recommendations' instead."
+        ] });
+      }
+      const result = issueRollup.rollupIssuesToLineItems(wo, PRICING);
+      const updated = await workOrders.update(id, {
+        onSiteQuote: {
+          ...wo.onSiteQuote,
+          status: result.lineItems.length ? "draft" : "none",
+          lastBuiltAt: new Date().toISOString(),
+          builderLineItems: result.lineItems
+        }
+      });
+      return sendJson(res, 200, {
+        ok: true,
+        workOrder: updated,
+        lineItems: result.lineItems,
+        subtotal: result.subtotal,
+        hst: result.hst,
+        total: result.total
+      });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't build on-site quote."] });
+    }
+  }
+
+  const woOnSiteBuilderMatch = pathname.match(/^\/api\/work-orders\/([^/]+)\/on-site-quote\/builder$/);
+  if (woOnSiteBuilderMatch && req.method === "PATCH") {
+    try {
+      const id = decodeURIComponent(woOnSiteBuilderMatch[1]);
+      const payload = await parseRequestBody(req);
+      const wo = await workOrders.get(id);
+      if (!wo) return sendJson(res, 404, { ok: false, errors: ["Work order not found."] });
+      if (wo.locked || wo.signature?.signed) {
+        return sendJson(res, 409, { ok: false, errors: ["Work order is locked."] });
+      }
+      const inLines = Array.isArray(payload?.lineItems) ? payload.lineItems : null;
+      if (!inLines) return sendJson(res, 422, { ok: false, errors: ["Body must include lineItems[]."] });
+
+      // Validate each line — known pricing key OR custom: true. Custom
+      // lines can carry an arbitrary price (tech is on-site quoting
+      // unusual work). Known-key lines must have a key that resolves in
+      // pricing.json; the original price is re-snapshotted from the
+      // catalog (so an editor that mangled originalPrice in transit gets
+      // corrected). overridePrice is preserved.
+      const cleaned = [];
+      const errors = [];
+      inLines.forEach((raw, i) => {
+        if (!raw || typeof raw !== "object") {
+          errors.push(`Line ${i + 1} is not an object.`);
+          return;
+        }
+        const custom = !!raw.custom;
+        const key = typeof raw.key === "string" ? raw.key : null;
+        if (!custom && (!key || !FEATURES[key])) {
+          errors.push(`Line ${i + 1} has unknown pricing key: ${raw.key}`);
+          return;
+        }
+        const qty = Math.max(1, Math.floor(Number(raw.qty) || 1));
+        const cat = key ? FEATURES[key] : null;
+        const originalPrice = custom
+          ? Number(raw.originalPrice) || 0
+          : Number(cat.price) || 0;
+        const overridePrice = raw.overridePrice == null
+          ? null
+          : (Number.isFinite(Number(raw.overridePrice)) ? Number(raw.overridePrice) : null);
+        cleaned.push({
+          key: custom ? null : key,
+          label: typeof raw.label === "string" ? raw.label.slice(0, 200) : (cat ? cat.label : "Custom line"),
+          qty,
+          originalPrice: Math.round(originalPrice * 100) / 100,
+          overridePrice,
+          custom,
+          source: raw.source && typeof raw.source === "object" ? {
+            zoneNumbers: Array.isArray(raw.source.zoneNumbers) ? raw.source.zoneNumbers.slice() : [],
+            issueIds: Array.isArray(raw.source.issueIds) ? raw.source.issueIds.slice() : []
+          } : { zoneNumbers: [], issueIds: [] },
+          note: typeof raw.note === "string" ? raw.note.slice(0, 500) : ""
+        });
+      });
+      if (errors.length) return sendJson(res, 422, { ok: false, errors });
+
+      const updated = await workOrders.update(id, {
+        onSiteQuote: {
+          ...wo.onSiteQuote,
+          builderLineItems: cleaned,
+          status: cleaned.length ? "draft" : "none"
+        }
+      });
+      const totals = issueRollup.recomputeTotals(cleaned);
+      return sendJson(res, 200, { ok: true, workOrder: updated, ...totals });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't update builder."] });
+    }
+  }
+
+  const woOnSiteAcceptMatch = pathname.match(/^\/api\/work-orders\/([^/]+)\/on-site-quote\/accept$/);
+  if (woOnSiteAcceptMatch && req.method === "POST") {
+    try {
+      const id = decodeURIComponent(woOnSiteAcceptMatch[1]);
+      const payload = await parseRequestBody(req);
+      const wo = await workOrders.get(id);
+      if (!wo) return sendJson(res, 404, { ok: false, errors: ["Work order not found."] });
+      if (wo.locked || wo.signature?.signed) {
+        return sendJson(res, 409, { ok: false, errors: ["Work order is locked."] });
+      }
+      if (!workOrders.canBuildOnSiteQuote(wo)) {
+        return sendJson(res, 422, { ok: false, errors: ["Fall closings cannot accept on-site quotes (rule 8)."] });
+      }
+
+      const customerName = typeof payload?.customerName === "string" ? payload.customerName.trim() : "";
+      const imageData = typeof payload?.imageData === "string" ? payload.imageData : "";
+      const ack = payload?.acknowledgement === true;
+      const decisions = Array.isArray(payload?.decisions) ? payload.decisions : [];
+      if (!customerName || !imageData || imageData.length < 50 || !ack) {
+        return sendJson(res, 422, { ok: false, errors: ["Customer name, signature, and acknowledgement are required."] });
+      }
+      if (imageData.length > 500_000) {
+        return sendJson(res, 422, { ok: false, errors: ["Signature image is too large. Try clearing and signing again."] });
+      }
+
+      const builderLines = Array.isArray(wo.onSiteQuote?.builderLineItems) ? wo.onSiteQuote.builderLineItems : [];
+      if (!builderLines.length) {
+        return sendJson(res, 422, { ok: false, errors: ["No quote lines to accept. Build the quote first."] });
+      }
+
+      // Snapshot accepted vs declined per the customer's per-line decisions.
+      // Default any line missing from `decisions` to accepted (the UI
+      // sends a full array, but we don't want a missing entry to silently
+      // drop a line into deferred).
+      const decisionByIdx = new Map();
+      for (const d of decisions) {
+        if (!d || typeof d !== "object") continue;
+        const idx = Number(d.lineItemIdx);
+        if (Number.isInteger(idx)) decisionByIdx.set(idx, d.accepted !== false);
+      }
+      const acceptedLines = [];
+      const declinedLines = [];
+      const finalDecisions = [];
+      builderLines.forEach((line, idx) => {
+        const accepted = decisionByIdx.has(idx) ? decisionByIdx.get(idx) : true;
+        finalDecisions.push({ lineItemIdx: idx, accepted, deferredId: null });
+        const snapshotPrice = line.overridePrice != null
+          ? Number(line.overridePrice)
+          : Number(line.originalPrice);
+        const lineTotal = Math.round(snapshotPrice * (Number(line.qty) || 1) * 100) / 100;
+        const snapshot = {
+          ...line,
+          price: snapshotPrice,        // canonical price for downstream display
+          lineTotal
+        };
+        if (accepted) acceptedLines.push(snapshot);
+        else declinedLines.push(snapshot);
+      });
+
+      const ip = (req.headers["x-forwarded-for"] || "").split(",")[0].trim() || req.socket?.remoteAddress || "";
+      const userAgent = req.headers["user-agent"] || "";
+
+      // Sink declined lines into the property's deferredIssues. One
+      // entry per source issue (so individual issues can be re-quoted
+      // separately later). Lines with multiple issueIds (e.g. a manifold
+      // line aggregating leak+valve issues) emit one deferred entry per
+      // issue id, with the suggested-price snapshot proportional.
+      let propertyId = wo.propertyId || null;
+      const deferredIds = [];
+      if (declinedLines.length && propertyId) {
+        for (const line of declinedLines) {
+          const issueIds = Array.isArray(line.source?.issueIds) && line.source.issueIds.length
+            ? line.source.issueIds
+            : [null]; // unsourced custom line still creates one deferred entry
+          const fromZone = Array.isArray(line.source?.zoneNumbers) && line.source.zoneNumbers.length
+            ? line.source.zoneNumbers[0]
+            : null;
+          // Find the original issue type from the WO if we have an issueId.
+          for (const issueId of issueIds) {
+            let originalType = "other";
+            let originalNotes = line.note || "";
+            if (issueId) {
+              for (const z of wo.zones || []) {
+                const found = (z.issues || []).find((i) => i.id === issueId);
+                if (found) {
+                  originalType = found.type;
+                  if (found.notes) originalNotes = found.notes;
+                  break;
+                }
+              }
+            }
+            // Photos attached to this issue ride into the deferred entry
+            // by reference (the WO is still the photo source-of-truth).
+            const photoIds = (wo.photos || [])
+              .filter((p) => issueId && p.issueId === issueId)
+              .map((p) => Number(p.n))
+              .filter(Number.isFinite);
+            try {
+              const entry = await properties.addDeferredIssue(propertyId, {
+                fromWoId: wo.id,
+                fromZone,
+                type: originalType,
+                qty: Number(line.qty) || 1,
+                notes: originalNotes,
+                declinedAt: new Date().toISOString(),
+                reason: "customer_declined",
+                photoIds,
+                suggestedPriceSnapshot: {
+                  key: line.key,
+                  label: line.label,
+                  unitPrice: line.price,
+                  qty: line.qty,
+                  lineTotal: line.lineTotal
+                }
+              });
+              if (entry && entry.id) deferredIds.push(entry.id);
+            } catch (err) {
+              console.warn("[on-site-quote] deferred sink failed:", err?.message || err);
+            }
+          }
+        }
+      }
+
+      // Stamp deferred ids back onto the matching decisions for audit.
+      let deferredCursor = 0;
+      for (const decision of finalDecisions) {
+        if (!decision.accepted && deferredIds[deferredCursor]) {
+          decision.deferredId = deferredIds[deferredCursor];
+          deferredCursor += 1;
+        }
+      }
+
+      // Compute totals from accepted lines only — these are what the
+      // customer is actually agreeing to pay.
+      const acceptedTotals = issueRollup.totalsFor(acceptedLines);
+
+      // Create the Quote. Empty acceptedLines → no Q-record (everything
+      // declined, all lines went to deferred). Status = declined on the
+      // WO; no Quote pollutes the Q-YYYY-NNNN counter.
+      let quoteRecord = null;
+      if (acceptedLines.length) {
+        const created = await quotes.create({
+          type: "on_site_quote",
+          status: "sent",
+          customerEmail: wo.customerEmail || "",
+          propertyId,
+          leadId: wo.leadId || null,
+          source: {
+            chatSessionId: null,
+            pageUrl: null,
+            userAgent
+          },
+          scope: `On-site quote from ${wo.id}`,
+          lineItems: acceptedLines,
+          subtotal: acceptedTotals.subtotal,
+          hst: acceptedTotals.hst,
+          total: acceptedTotals.total,
+          intakeGuarantee: { applies: false, scope: "" },
+          createdBy: "tech"
+        });
+        const partial = declinedLines.length > 0;
+        quoteRecord = await quotes.acceptWithSignature(created.id, {
+          customerName,
+          imageData,
+          decisions: finalDecisions,
+          ip,
+          userAgent,
+          partial,
+          note: partial
+            ? `Customer accepted ${acceptedLines.length}/${builderLines.length} lines. ${declinedLines.length} deferred.`
+            : `Customer accepted all ${acceptedLines.length} lines on-site.`
+        });
+        await quotes.attachWorkOrder(created.id, wo.id);
+      }
+
+      const newWoStatus = !acceptedLines.length
+        ? "declined"
+        : declinedLines.length ? "partially_accepted" : "accepted";
+
+      const updated = await workOrders.update(id, {
+        onSiteQuote: {
+          ...wo.onSiteQuote,
+          quoteId: quoteRecord ? quoteRecord.id : null,
+          status: newWoStatus,
+          // Builder lines stay around for read-only review post-accept;
+          // the canonical record is on the Quote (or the deferred items).
+          builderLineItems: builderLines
+        }
+      });
+
+      return sendJson(res, 200, {
+        ok: true,
+        workOrder: updated,
+        quote: quoteRecord,
+        accepted: acceptedLines.length,
+        declined: declinedLines.length,
+        deferredIds
+      });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't accept on-site quote."] });
+    }
+  }
+
+  const woOnSiteDeclineAllMatch = pathname.match(/^\/api\/work-orders\/([^/]+)\/on-site-quote\/decline-all$/);
+  if (woOnSiteDeclineAllMatch && req.method === "POST") {
+    try {
+      const id = decodeURIComponent(woOnSiteDeclineAllMatch[1]);
+      const wo = await workOrders.get(id);
+      if (!wo) return sendJson(res, 404, { ok: false, errors: ["Work order not found."] });
+      if (wo.locked || wo.signature?.signed) {
+        return sendJson(res, 409, { ok: false, errors: ["Work order is locked."] });
+      }
+      const builderLines = Array.isArray(wo.onSiteQuote?.builderLineItems) ? wo.onSiteQuote.builderLineItems : [];
+      const propertyId = wo.propertyId || null;
+      const deferredIds = [];
+      if (propertyId) {
+        for (const line of builderLines) {
+          const issueIds = Array.isArray(line.source?.issueIds) && line.source.issueIds.length
+            ? line.source.issueIds
+            : [null];
+          const fromZone = Array.isArray(line.source?.zoneNumbers) && line.source.zoneNumbers.length
+            ? line.source.zoneNumbers[0]
+            : null;
+          for (const issueId of issueIds) {
+            let originalType = "other";
+            let originalNotes = line.note || "";
+            if (issueId) {
+              for (const z of wo.zones || []) {
+                const found = (z.issues || []).find((i) => i.id === issueId);
+                if (found) { originalType = found.type; originalNotes = found.notes || originalNotes; break; }
+              }
+            }
+            const photoIds = (wo.photos || [])
+              .filter((p) => issueId && p.issueId === issueId)
+              .map((p) => Number(p.n))
+              .filter(Number.isFinite);
+            const snapshotPrice = line.overridePrice != null ? Number(line.overridePrice) : Number(line.originalPrice);
+            try {
+              const entry = await properties.addDeferredIssue(propertyId, {
+                fromWoId: wo.id,
+                fromZone,
+                type: originalType,
+                qty: Number(line.qty) || 1,
+                notes: originalNotes,
+                reason: "customer_declined_all",
+                photoIds,
+                suggestedPriceSnapshot: {
+                  key: line.key,
+                  label: line.label,
+                  unitPrice: snapshotPrice,
+                  qty: line.qty
+                }
+              });
+              if (entry?.id) deferredIds.push(entry.id);
+            } catch (_e) {}
+          }
+        }
+      }
+      const updated = await workOrders.update(id, {
+        onSiteQuote: { ...wo.onSiteQuote, status: "declined", quoteId: null }
+      });
+      return sendJson(res, 200, { ok: true, workOrder: updated, deferredIds });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't decline."] });
+    }
+  }
+
+  // Find_only path (fall closings): bundle every issue across every
+  // zone into the property's deferredIssues without quoting. Spec rule 8.
+  const woIssuesDeferMatch = pathname.match(/^\/api\/work-orders\/([^/]+)\/issues\/defer$/);
+  if (woIssuesDeferMatch && req.method === "POST") {
+    try {
+      const id = decodeURIComponent(woIssuesDeferMatch[1]);
+      const wo = await workOrders.get(id);
+      if (!wo) return sendJson(res, 404, { ok: false, errors: ["Work order not found."] });
+      const propertyId = wo.propertyId || null;
+      if (!propertyId) {
+        return sendJson(res, 422, { ok: false, errors: ["Cannot defer issues — work order has no linked property."] });
+      }
+      const deferredIds = [];
+      for (const z of wo.zones || []) {
+        for (const issue of z.issues || []) {
+          const photoIds = (wo.photos || [])
+            .filter((p) => p.issueId === issue.id)
+            .map((p) => Number(p.n))
+            .filter(Number.isFinite);
+          try {
+            const entry = await properties.addDeferredIssue(propertyId, {
+              fromWoId: wo.id,
+              fromZone: Number(z.number) || null,
+              type: issue.type,
+              qty: Number(issue.qty) || 1,
+              notes: issue.notes || "",
+              reason: "fall_visit_no_repairs_policy",
+              photoIds,
+              suggestedPriceSnapshot: null
+            });
+            if (entry?.id) deferredIds.push(entry.id);
+          } catch (_e) {}
+        }
+      }
+      return sendJson(res, 200, { ok: true, deferredCount: deferredIds.length, deferredIds });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't defer issues."] });
+    }
   }
 
   // Admin manual-handoff: Patrick fills out a form in /admin/handoff after

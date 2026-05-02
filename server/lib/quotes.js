@@ -31,8 +31,12 @@ const path = require("node:path");
 
 const FILE = path.join(__dirname, "..", "data", "quotes.json");
 
-const STATUSES = ["draft", "sent", "accepted", "declined", "expired", "superseded", "cancelled"];
-const TYPES = ["ai_repair_quote", "formal_quote"];
+const STATUSES = ["draft", "sent", "accepted", "partially_accepted", "declined", "expired", "superseded", "cancelled"];
+// on_site_quote: tech walks zones on-site, finds issues, builds a quote
+// from pricing.json, customer accepts/declines per line. Has its own
+// signature canvas (separate from wo.signature) per spec rule 4.
+// formal_quote: install/retrofit PDF flow, deferred to a future slice.
+const TYPES = ["ai_repair_quote", "formal_quote", "on_site_quote"];
 const DEFAULT_VALIDITY_DAYS = 30;
 const HST_RATE = 0.13;
 
@@ -145,6 +149,28 @@ function blankQuote() {
     declinedReason: null,
     expiredAt: null,
 
+    // Customer signature for THIS quote. ai_repair_quote acceptance is
+    // implicit (customer submits booking form), so this stays empty for
+    // that flavour. on_site_quote requires the customer to sign on the
+    // tech's device — we capture that signature here, distinct from
+    // wo.signature (the WO completion sign-off). Spec rule 4: scope
+    // changes after the original sign-off need a fresh signature; this
+    // is that fresh signature.
+    signature: {
+      signed: false,
+      customerName: "",
+      imageData: "",
+      signedAt: null,
+      ip: null,
+      userAgent: null
+    },
+
+    // Per-line accept/decline record at customer-accept time. Each entry
+    // points at a lineItems index by snapshot order. Declined items get
+    // their own deferredId once the property's deferredIssues entry is
+    // created. Empty until accept().
+    decisions: [],
+
     // Audit trail — every status change appends an entry.
     history: [
       { ts: created, action: "created", by: "system", note: "" }
@@ -159,7 +185,9 @@ function hydrate(q) {
     ...q,
     source: { ...base.source, ...(q.source || {}) },
     intakeGuarantee: { ...base.intakeGuarantee, ...(q.intakeGuarantee || {}) },
+    signature: { ...base.signature, ...(q?.signature || {}) },
     lineItems: Array.isArray(q?.lineItems) ? q.lineItems : [],
+    decisions: Array.isArray(q?.decisions) ? q.decisions : [],
     workOrderIds: Array.isArray(q?.workOrderIds) ? q.workOrderIds : [],
     history: Array.isArray(q?.history) ? q.history : []
   };
@@ -342,6 +370,49 @@ async function accept(id, { leadId = null, bookingId = null, by = "customer", no
   return q;
 }
 
+// Accept an on_site_quote with a captured customer signature. Differs
+// from accept() in that it ALSO writes the signature block + decisions
+// snapshot, and supports a "partially_accepted" status when some lines
+// were declined. Server fills ip + userAgent (never trusts the client).
+async function acceptWithSignature(id, {
+  customerName,
+  imageData,
+  decisions,
+  ip,
+  userAgent,
+  by = "customer",
+  note = "",
+  partial = false
+} = {}) {
+  const records = await readAll();
+  const idx = records.findIndex((q) => q.id === id);
+  if (idx === -1) return null;
+  const q = records[idx];
+  if (q.signature && q.signature.signed) return q; // idempotent — already signed
+
+  const ts = nowIso();
+  q.status = partial ? "partially_accepted" : "accepted";
+  q.acceptedAt = ts;
+  q.signature = {
+    signed: true,
+    customerName: String(customerName || "").slice(0, 120),
+    imageData: String(imageData || ""),
+    signedAt: ts,
+    ip: String(ip || ""),
+    userAgent: String(userAgent || "")
+  };
+  if (Array.isArray(decisions)) q.decisions = decisions;
+  q.history.push({
+    ts,
+    action: partial ? "partially_accepted" : "accepted",
+    by,
+    note: note || (partial ? "Customer accepted some line items, declined others." : "")
+  });
+  records[idx] = q;
+  await writeAll(records);
+  return q;
+}
+
 async function decline(id, { reason = "", by = "customer" } = {}) {
   const records = await readAll();
   const idx = records.findIndex((q) => q.id === id);
@@ -404,6 +475,7 @@ module.exports = {
   listByCustomer,
   create,
   accept,
+  acceptWithSignature,
   decline,
   expire,
   attachWorkOrder

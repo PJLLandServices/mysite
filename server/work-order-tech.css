@@ -1345,6 +1345,391 @@ body.tech-lightbox-open { overflow: hidden; }
 }
 .tech-signoff-signed-meta strong { color: var(--tech-green); }
 
+/* On-site Quote (Issues → Draft Quote rollup) ----------------------
+   Builder edit state, customer review state, and post-submit summary all
+   share a single section. Color signals: green = active scope being
+   built/accepted; amber = warning (intake guarantee active); muted =
+   submitted/locked. */
+.tech-on-site-quote {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.tech-on-site-intake-note {
+  margin: 0;
+  padding: 10px 12px;
+  background: rgba(224, 123, 36, 0.10);
+  border-left: 3px solid var(--tech-amber);
+  border-radius: 4px;
+  font-size: 12.5px;
+  color: var(--tech-text-mid);
+  line-height: 1.45;
+}
+
+.tech-on-site-builder {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.tech-on-site-build-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 48px;
+  padding: 10px 16px;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--tech-green);
+  background: rgba(74, 140, 92, 0.06);
+  border: 1.5px dashed rgba(27, 77, 46, 0.35);
+  border-radius: 12px;
+  cursor: pointer;
+}
+.tech-on-site-build-btn:active { background: rgba(74, 140, 92, 0.14); border-color: var(--tech-green); }
+.tech-on-site-build-btn:disabled { opacity: 0.5; pointer-events: none; }
+
+.tech-on-site-lines {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.tech-on-site-line {
+  background: var(--tech-card);
+  border: 1px solid var(--tech-border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.tech-on-site-line-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+.tech-on-site-line-label {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--tech-text);
+  line-height: 1.35;
+  flex: 1;
+}
+.tech-on-site-line-remove {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  font: inherit;
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--tech-text-muted);
+  background: transparent;
+  border: 1px solid var(--tech-border);
+  border-radius: 8px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.tech-on-site-line-remove:active {
+  background: rgba(177, 58, 58, 0.08);
+  color: var(--tech-red);
+  border-color: var(--tech-red);
+}
+.tech-on-site-line-controls {
+  display: grid;
+  grid-template-columns: 70px 1fr auto;
+  gap: 8px;
+  align-items: end;
+}
+.tech-on-site-line-controls label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 10px;
+  letter-spacing: 0.10em;
+  text-transform: uppercase;
+  color: var(--tech-text-muted);
+}
+.tech-on-site-line-controls input {
+  padding: 6px 8px;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  text-align: center;
+  border: 1px solid var(--tech-border);
+  border-radius: 6px;
+  background: #fff;
+}
+.tech-on-site-line-controls .tech-on-site-line-price {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.tech-on-site-line-total {
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--tech-green);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  align-self: end;
+  padding-bottom: 6px;
+}
+.tech-on-site-line-note {
+  margin: 0;
+  font-size: 12px;
+  color: var(--tech-text-muted);
+  line-height: 1.4;
+  font-style: italic;
+}
+.tech-on-site-overridden {
+  font-style: normal;
+  font-weight: 700;
+  color: var(--tech-amber);
+  text-transform: lowercase;
+  letter-spacing: 0.04em;
+}
+.tech-on-site-add-btn {
+  align-self: stretch;
+  min-height: 40px;
+  padding: 8px 14px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--tech-green);
+  background: transparent;
+  border: 1.5px dashed rgba(27, 77, 46, 0.30);
+  border-radius: 8px;
+  cursor: pointer;
+}
+.tech-on-site-totals {
+  margin: 0;
+  padding: 12px 14px;
+  background: rgba(74, 140, 92, 0.06);
+  border-radius: 10px;
+  font-size: 13px;
+  color: var(--tech-text-mid);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: baseline;
+  font-variant-numeric: tabular-nums;
+}
+.tech-on-site-totals strong {
+  color: var(--tech-text);
+  font-weight: 700;
+}
+.tech-on-site-total-final {
+  margin-left: auto;
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--tech-green);
+}
+.tech-on-site-show-btn {
+  width: 100%;
+  min-height: 52px;
+  padding: 12px 18px;
+  font: inherit;
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: #fff;
+  background: var(--tech-green);
+  border: 0;
+  border-radius: 12px;
+  cursor: pointer;
+}
+.tech-on-site-show-btn:active { background: var(--tech-green-mid); }
+
+/* Customer review state */
+.tech-on-site-review {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+  background: var(--tech-card);
+  border: 1px solid var(--tech-border);
+  border-radius: 12px;
+}
+.tech-on-site-review-intro {
+  margin: 0;
+  font-size: 13px;
+  color: var(--tech-text-mid);
+  line-height: 1.45;
+}
+.tech-on-site-review-lines {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.tech-on-site-review-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  background: var(--tech-bg);
+  border: 1.5px solid var(--tech-border);
+  border-radius: 8px;
+  transition: opacity 0.15s ease;
+}
+.tech-on-site-review-line[data-accepted="0"] {
+  opacity: 0.55;
+}
+.tech-on-site-review-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  cursor: pointer;
+  user-select: none;
+}
+.tech-on-site-review-checkbox input[type="checkbox"] {
+  width: 22px;
+  height: 22px;
+  accent-color: var(--tech-green);
+  flex-shrink: 0;
+}
+.tech-on-site-review-line-label {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--tech-text);
+  line-height: 1.35;
+}
+.tech-on-site-review-line-meta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--tech-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.tech-on-site-review-line-meta strong {
+  color: var(--tech-green);
+  font-size: 14px;
+}
+.tech-on-site-review-totals {
+  margin: 0;
+  padding: 12px 14px;
+  background: rgba(74, 140, 92, 0.10);
+  border: 1px solid rgba(74, 140, 92, 0.30);
+  border-radius: 10px;
+  font-size: 14px;
+  color: var(--tech-text);
+}
+.tech-on-site-review-totals strong {
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 22px;
+  color: var(--tech-green);
+  font-variant-numeric: tabular-nums;
+}
+.tech-on-site-review-actions {
+  display: flex;
+  gap: 10px;
+}
+.tech-on-site-back-btn {
+  padding: 10px 14px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--tech-text-mid);
+  background: var(--tech-card);
+  border: 1.5px solid var(--tech-border);
+  border-radius: 10px;
+  cursor: pointer;
+}
+.tech-on-site-submit-btn {
+  flex: 1;
+  min-height: 48px;
+  padding: 12px 16px;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: #fff;
+  background: var(--tech-green);
+  border: 0;
+  border-radius: 12px;
+  cursor: pointer;
+}
+.tech-on-site-submit-btn:disabled {
+  background: rgba(15, 31, 20, 0.18);
+  cursor: not-allowed;
+}
+
+/* Submitted (read-only) state */
+.tech-on-site-submitted {
+  padding: 14px;
+  background: rgba(74, 140, 92, 0.06);
+  border: 1px solid rgba(74, 140, 92, 0.30);
+  border-radius: 12px;
+}
+.tech-on-site-submitted-summary {
+  margin: 0 0 8px;
+  font-size: 14px;
+  color: var(--tech-text);
+  line-height: 1.45;
+}
+.tech-on-site-submitted-meta {
+  margin: 8px 0 0;
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 11px;
+  letter-spacing: 0.10em;
+  text-transform: uppercase;
+  color: var(--tech-text-muted);
+}
+
+/* Find_only (fall closing) state */
+.tech-on-site-defer {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.tech-on-site-defer-help {
+  margin: 0;
+  font-size: 13px;
+  color: var(--tech-text-mid);
+  line-height: 1.5;
+}
+.tech-on-site-defer-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 48px;
+  padding: 10px 16px;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  color: #fff;
+  background: var(--tech-amber);
+  border: 0;
+  border-radius: 12px;
+  cursor: pointer;
+}
+.tech-on-site-defer-btn:active { background: #C96A2A; }
+.tech-on-site-defer-btn:disabled { opacity: 0.5; pointer-events: none; }
+.tech-on-site-defer-success {
+  margin: 0;
+  padding: 8px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--tech-green);
+  background: rgba(74, 140, 92, 0.10);
+  border-radius: 8px;
+}
+
 /* Locked-state cascading rules — when body[data-locked="true"], all
    interactive surfaces fade and become non-interactive. The signature
    form is already swapped to the read-only display by JS, but defence-
@@ -1352,7 +1737,10 @@ body.tech-lightbox-open { overflow: hidden; }
 body[data-locked="true"] .tech-zone-item-btn,
 body[data-locked="true"] .tech-service-step,
 body[data-locked="true"] .tech-run-status button,
-body[data-locked="true"] .tech-signoff-form {
+body[data-locked="true"] .tech-signoff-form,
+body[data-locked="true"] .tech-on-site-builder,
+body[data-locked="true"] .tech-on-site-review,
+body[data-locked="true"] .tech-on-site-defer {
   opacity: 0.55;
   pointer-events: none;
 }

@@ -123,6 +123,80 @@
       <ul class="tech-zone-list" id="techZoneList"></ul>
     </section>
 
+    <!-- Issues → Draft Quote (find_and_fix) OR Defer-to-property
+         (find_only/fall_closing). Hidden until at least one zone has an
+         issue. Renders in two modes — see renderOnSiteQuote() in
+         work-order-tech.js. The customer-facing review state reuses the
+         same DOM with different content (state flip). Per spec §4.3.2. -->
+    <section class="tech-section tech-on-site-quote" id="techOnSiteQuote" hidden>
+      <header class="tech-zones-header">
+        <h2 class="tech-section-title" id="techOnSiteQuoteTitle">Build draft quote</h2>
+        <span class="tech-zones-progress" id="techOnSiteQuoteCount"></span>
+      </header>
+
+      <!-- Intake-guarantee callout: appears when the WO has an active
+           AI repair quote. Reminds the tech that any new on-site scope is
+           SEPARATE from the AI-quoted work and needs its own sign-off. -->
+      <p class="tech-on-site-intake-note" id="techOnSiteIntakeNote" hidden>
+        Original AI scope is locked. Items below are NEW scope discovered on-site and require their own customer sign-off. The original quote is untouched.
+      </p>
+
+      <!-- Builder state — find_and_fix mode -->
+      <div class="tech-on-site-builder" id="techOnSiteBuilder" hidden>
+        <button type="button" class="tech-on-site-build-btn" id="techOnSiteBuildBtn">
+          <span aria-hidden="true">📝</span>
+          <span>Generate from issues</span>
+        </button>
+        <ul class="tech-on-site-lines" id="techOnSiteLines"></ul>
+        <button type="button" class="tech-on-site-add-btn" id="techOnSiteAddBtn" hidden>+ Add custom line</button>
+        <p class="tech-on-site-totals" id="techOnSiteTotals" hidden></p>
+        <button type="button" class="tech-on-site-show-btn" id="techOnSiteShowBtn" hidden>
+          Show to customer →
+        </button>
+      </div>
+
+      <!-- Customer review state — accept/decline + signature -->
+      <div class="tech-on-site-review" id="techOnSiteReview" hidden>
+        <p class="tech-on-site-review-intro">Review with the customer. They can accept all, accept some, or decline. Declined items go on file as deferred recommendations for later.</p>
+        <ul class="tech-on-site-review-lines" id="techOnSiteReviewLines"></ul>
+        <p class="tech-on-site-review-totals" id="techOnSiteReviewTotals"></p>
+        <label class="tech-signoff-name-label">
+          <span>Customer name (printed)</span>
+          <input type="text" id="techOnSiteSigName" placeholder="e.g. Patrick Lalande" autocomplete="off" autocapitalize="words">
+        </label>
+        <p class="tech-signoff-canvas-label">Customer signature</p>
+        <div class="tech-signoff-canvas-wrap">
+          <canvas id="techOnSiteSigCanvas" class="tech-signoff-canvas" width="600" height="200"></canvas>
+          <button type="button" class="tech-signoff-clear" id="techOnSiteSigClear">Clear</button>
+        </div>
+        <label class="tech-signoff-ack">
+          <input type="checkbox" id="techOnSiteSigAck">
+          <span>I authorize the work checked above</span>
+        </label>
+        <div class="tech-on-site-review-actions">
+          <button type="button" class="tech-on-site-back-btn" id="techOnSiteBackBtn">← Back to edit</button>
+          <button type="button" class="tech-on-site-submit-btn" id="techOnSiteSubmitBtn" disabled>Sign &amp; accept</button>
+        </div>
+      </div>
+
+      <!-- Submitted state — read-only summary post-customer-accept -->
+      <div class="tech-on-site-submitted" id="techOnSiteSubmitted" hidden>
+        <p class="tech-on-site-submitted-summary" id="techOnSiteSubmittedSummary">—</p>
+        <div class="tech-on-site-submitted-image" id="techOnSiteSubmittedImage"></div>
+        <p class="tech-on-site-submitted-meta" id="techOnSiteSubmittedMeta"></p>
+      </div>
+
+      <!-- Find_only state (fall closings) — no quote builder, just defer -->
+      <div class="tech-on-site-defer" id="techOnSiteDefer" hidden>
+        <p class="tech-on-site-defer-help">Fall closings don't quote on-site (PJL operations rule 8). Issues found this visit will be saved as deferred recommendations on the property — Patrick can call the customer in spring to schedule the fix.</p>
+        <button type="button" class="tech-on-site-defer-btn" id="techOnSiteDeferBtn">
+          <span aria-hidden="true">📋</span>
+          <span>Save issues to deferred recommendations</span>
+        </button>
+        <p class="tech-on-site-defer-success" id="techOnSiteDeferSuccess" hidden></p>
+      </div>
+    </section>
+
     <!-- Service-specific checklist — Spring Opening / Fall Closing get a
          tap-through of service steps per spec §4.3.2. Hidden for
          service_visit (no service-specific steps in that template). -->

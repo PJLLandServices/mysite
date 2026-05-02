@@ -404,6 +404,95 @@
   font-size: 14px;
   color: var(--pjl-green);
 }
+
+/* Deferred recommendations panel — read-only listing of items the
+   customer declined or fall-closing finds queued for spring follow-up. */
+.property-deferred__count {
+  margin-left: auto;
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: #8B4413;
+  background: rgba(224, 123, 36, 0.18);
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-variant-numeric: tabular-nums;
+}
+.property-deferred__list {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+.property-deferred__item {
+  padding: 12px 14px;
+  background: #fff;
+  border: 1px solid rgba(224, 123, 36, 0.22);
+  border-left: 3px solid var(--pjl-amber);
+  border-radius: 8px;
+}
+.property-deferred__head {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 4px;
+}
+.property-deferred__head strong {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--pjl-text);
+}
+.property-deferred__qty {
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--pjl-text-muted);
+  margin-left: auto;
+}
+.property-deferred__meta {
+  margin: 0 0 6px;
+  font-size: 12px;
+  color: var(--pjl-text-muted);
+  line-height: 1.5;
+}
+.property-deferred__source {
+  color: var(--pjl-green);
+  text-decoration: none;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.property-deferred__source:hover { text-decoration: underline; }
+.property-deferred__notes {
+  margin: 0 0 6px;
+  font-size: 13px;
+  color: var(--pjl-text-mid);
+  line-height: 1.45;
+}
+.property-deferred__price {
+  margin: 0 0 6px;
+  font-size: 12px;
+  color: var(--pjl-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.property-deferred__photos {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+.property-deferred__photos a {
+  font-size: 12px;
+  color: var(--pjl-text-mid);
+  background: rgba(15, 31, 20, 0.06);
+  padding: 3px 8px;
+  border-radius: 999px;
+  text-decoration: none;
+}
+.property-deferred__photos a:hover { background: rgba(15, 31, 20, 0.12); }
+
 .properties-empty {
   text-align: center;
   padding: 40px 20px;

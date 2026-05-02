@@ -222,6 +222,59 @@ function renderHero(property, leads) {
   leadCount.textContent = leads.length;
 }
 
+const DEFERRED_TYPE_LABELS = {
+  broken_head: "Broken head",
+  leak: "Leak",
+  valve: "Valve",
+  wire: "Wire",
+  pipe: "Pipe",
+  other: "Other"
+};
+
+function renderDeferredRecommendations(property) {
+  const section = document.getElementById("deferredSection");
+  const list = document.getElementById("deferredList");
+  const countEl = document.getElementById("deferredCount");
+  if (!section || !list) return;
+  const items = (property.deferredIssues || []).filter((d) => d && d.status !== "resolved" && d.status !== "dismissed");
+  if (!items.length) {
+    section.hidden = true;
+    return;
+  }
+  section.hidden = false;
+  if (countEl) countEl.textContent = String(items.length);
+  list.innerHTML = "";
+  for (const item of items) {
+    const li = document.createElement("li");
+    li.className = "property-deferred__item";
+    const typeLabel = DEFERRED_TYPE_LABELS[item.type] || item.type || "Issue";
+    const declinedDate = item.declinedAt
+      ? new Date(item.declinedAt).toLocaleDateString("en-CA", { month: "short", day: "numeric", year: "numeric" })
+      : "—";
+    const woLink = item.fromWoId
+      ? `<a href="/admin/work-order/${encodeURIComponent(item.fromWoId)}" class="property-deferred__source">${item.fromWoId}</a>`
+      : "";
+    const zoneTag = Number.isFinite(Number(item.fromZone)) ? `· Zone ${item.fromZone}` : "";
+    const priceLine = item.suggestedPriceSnapshot && Number.isFinite(Number(item.suggestedPriceSnapshot.unitPrice))
+      ? `<p class="property-deferred__price">Snapshot: ${item.suggestedPriceSnapshot.qty || 1}× ${escapeHtml(item.suggestedPriceSnapshot.label || typeLabel)} @ $${Number(item.suggestedPriceSnapshot.unitPrice).toFixed(2)}</p>`
+      : "";
+    const photoChips = Array.isArray(item.photoIds) && item.photoIds.length && item.fromWoId
+      ? `<div class="property-deferred__photos">${item.photoIds.map((n) => `<a href="/api/work-orders/${encodeURIComponent(item.fromWoId)}/photo/${encodeURIComponent(n)}" target="_blank" rel="noopener">📷 ${escapeHtml(String(n))}</a>`).join("")}</div>`
+      : "";
+    li.innerHTML = `
+      <div class="property-deferred__head">
+        <strong>${escapeHtml(typeLabel)}</strong>
+        <span class="property-deferred__qty">qty ${escapeHtml(String(item.qty || 1))}</span>
+      </div>
+      <p class="property-deferred__meta">Declined ${escapeHtml(declinedDate)} ${zoneTag} ${woLink ? "· from " + woLink : ""}</p>
+      ${item.notes ? `<p class="property-deferred__notes">${escapeHtml(item.notes)}</p>` : ""}
+      ${priceLine}
+      ${photoChips}
+    `;
+    list.appendChild(li);
+  }
+}
+
 function renderLeadsList(leads) {
   if (!leads.length) {
     leadsSection.hidden = true;
@@ -514,6 +567,7 @@ async function init() {
     populateForm(data.property);
     renderLeadsList(data.leads || []);
     renderFieldWoList(data.property);
+    renderDeferredRecommendations(data.property);
   } catch (err) {
     propertyLoading.hidden = true;
     propertyError.hidden = false;

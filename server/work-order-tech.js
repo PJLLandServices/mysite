@@ -110,6 +110,14 @@ let state = {
   signature: { signed: false, customerName: "", imageData: "", acknowledgement: false, signedAt: null },
   photos: [],
   locked: false,
+  intakeGuarantee: { applies: false, scope: "", sourceQuoteId: null },
+  // On-site Quote state. `builderLineItems` mirrors wo.onSiteQuote.builderLineItems.
+  // `decisions` tracks per-line accept/decline during customer review (default all true).
+  // `uiMode` flips between builder / review / submitted in the SAME section.
+  onSiteQuote: { quoteId: null, status: "none", builderLineItems: [] },
+  onSiteDecisions: [],
+  onSiteUiMode: "builder",
+  onSiteSigPad: null,
   // Tracks which zone the bottom sheet is currently editing.
   activeZoneIndex: -1,
   // Pending PATCH timer for debounced notes-while-typing.
@@ -118,6 +126,8 @@ let state = {
   // Debounce timer for issue-row qty/notes typing inside the sheet.
   // Type selects fire immediately on change (no debounce needed).
   issueInputTimer: null,
+  // Debounce timer for builder line edits.
+  onSiteBuilderTimer: null,
   // Signature pad helper (set after init).
   signaturePad: null
 };
@@ -1186,6 +1196,470 @@ function applyLockState(locked) {
   disable("#techSignoffClear");
 }
 
+// ---- Issues → Draft Quote (on-site rollup) ----------------------
+
+const ON_SITE_FIND_ONLY = "fall_closing";
+
+function hasAnyIssues() {
+  return (state.zones || []).some((z) => Array.isArray(z.issues) && z.issues.length > 0);
+}
+
+function formatMoney(n) {
+  const v = Number(n);
+  if (!Number.isFinite(v)) return "$0.00";
+  return v < 0
+    ? "-$" + Math.abs(v).toFixed(2)
+    : "$" + v.toFixed(2);
+}
+
+function effectiveLinePrice(line) {
+  if (line && line.overridePrice != null && Number.isFinite(Number(line.overridePrice))) {
+    return Number(line.overridePrice);
+  }
+  return Number(line && line.originalPrice) || 0;
+}
+
+function lineRowTotal(line) {
+  return Math.round(effectiveLinePrice(line) * (Number(line.qty) || 0) * 100) / 100;
+}
+
+function totalsForLines(lines) {
+  let subtotal = 0;
+  for (const line of lines || []) subtotal += lineRowTotal(line);
+  subtotal = Math.round(subtotal * 100) / 100;
+  const hst = Math.round(subtotal * 0.13 * 100) / 100;
+  const total = Math.round((subtotal + hst) * 100) / 100;
+  return { subtotal, hst, total };
+}
+
+// Top-level entry. Decides which mode to display:
+//   - none/zero issues across all zones → hide the whole section
+//   - fall_closing → defer-only state
+//   - already submitted (status=accepted/partially_accepted/declined and quote linked) → submitted summary
+//   - has builder lines → builder edit state
+//   - default (issues exist but builder empty) → builder with "Generate from issues" CTA
+function renderOnSiteQuote() {
+  const section = document.getElementById("techOnSiteQuote");
+  if (!section) return;
+  if (!hasAnyIssues()) {
+    section.hidden = true;
+    return;
+  }
+  section.hidden = false;
+
+  const findOnly = state.type === ON_SITE_FIND_ONLY;
+  const intakeNote = document.getElementById("techOnSiteIntakeNote");
+  const titleEl = document.getElementById("techOnSiteQuoteTitle");
+  const builder = document.getElementById("techOnSiteBuilder");
+  const review = document.getElementById("techOnSiteReview");
+  const submitted = document.getElementById("techOnSiteSubmitted");
+  const defer = document.getElementById("techOnSiteDefer");
+
+  // Reset all sub-states
+  if (builder) builder.hidden = true;
+  if (review) review.hidden = true;
+  if (submitted) submitted.hidden = true;
+  if (defer) defer.hidden = true;
+  if (intakeNote) intakeNote.hidden = true;
+
+  if (findOnly) {
+    if (titleEl) titleEl.textContent = "Issues found this visit";
+    if (defer) defer.hidden = false;
+    return;
+  }
+
+  if (titleEl) titleEl.textContent = "Build draft quote";
+  // Intake-guarantee callout: only shown when AI quote is locked.
+  if (state.intakeGuarantee?.applies && intakeNote) intakeNote.hidden = false;
+
+  // Submitted state (already accepted) takes precedence — show read-only summary.
+  if (state.onSiteQuote?.status === "accepted" || state.onSiteQuote?.status === "partially_accepted" || (state.onSiteQuote?.status === "declined" && state.onSiteQuote?.quoteId === null)) {
+    if (state.onSiteQuote.status === "declined") {
+      // declined-all: no Quote, just show the deferred summary
+      if (submitted) submitted.hidden = false;
+      renderOnSiteSubmitted();
+      return;
+    }
+    if (state.onSiteQuote.quoteId) {
+      if (submitted) submitted.hidden = false;
+      renderOnSiteSubmitted();
+      return;
+    }
+  }
+
+  // Otherwise show the right sub-state for the current uiMode.
+  if (state.onSiteUiMode === "review") {
+    if (review) review.hidden = false;
+    renderOnSiteReview();
+  } else {
+    if (builder) builder.hidden = false;
+    renderOnSiteBuilder();
+  }
+}
+
+function renderOnSiteBuilder() {
+  const lines = (state.onSiteQuote && state.onSiteQuote.builderLineItems) || [];
+  const buildBtn = document.getElementById("techOnSiteBuildBtn");
+  const addBtn = document.getElementById("techOnSiteAddBtn");
+  const showBtn = document.getElementById("techOnSiteShowBtn");
+  const totalsEl = document.getElementById("techOnSiteTotals");
+  const linesEl = document.getElementById("techOnSiteLines");
+  const countEl = document.getElementById("techOnSiteQuoteCount");
+
+  // Build button label flips between "Generate from issues" (first run) and
+  // "Re-generate from issues" (re-run after edits).
+  if (buildBtn) {
+    buildBtn.firstChild?.nextSibling && (buildBtn.querySelector("span:last-child").textContent = lines.length ? "Re-generate from issues" : "Generate from issues");
+  }
+  if (addBtn) addBtn.hidden = !lines.length;
+  if (showBtn) showBtn.hidden = !lines.length;
+
+  if (!linesEl) return;
+  linesEl.innerHTML = "";
+  lines.forEach((line, idx) => {
+    const li = document.createElement("li");
+    li.className = "tech-on-site-line";
+    li.dataset.idx = String(idx);
+    const overridden = line.overridePrice != null && Number(line.overridePrice) !== Number(line.originalPrice);
+    const priceVal = line.overridePrice != null ? Number(line.overridePrice) : Number(line.originalPrice);
+    li.innerHTML = `
+      <div class="tech-on-site-line-head">
+        <span class="tech-on-site-line-label">${escapeHtml(line.label || "(unlabeled)")}</span>
+        <button type="button" class="tech-on-site-line-remove" data-action="remove-line" aria-label="Remove line">×</button>
+      </div>
+      <div class="tech-on-site-line-controls">
+        <label>
+          <span>Qty</span>
+          <input type="number" min="1" inputmode="numeric" class="tech-on-site-line-qty" value="${escapeHtml(String(line.qty || 1))}">
+        </label>
+        <label>
+          <span>Unit price${overridden ? ' <em class="tech-on-site-overridden">override</em>' : ""}</span>
+          <input type="number" min="0" step="0.01" inputmode="decimal" class="tech-on-site-line-price" value="${escapeHtml(priceVal.toFixed(2))}">
+        </label>
+        <span class="tech-on-site-line-total">${formatMoney(lineRowTotal(line))}</span>
+      </div>
+      ${line.note ? `<p class="tech-on-site-line-note">${escapeHtml(line.note)}</p>` : ""}
+    `;
+    linesEl.appendChild(li);
+  });
+
+  if (totalsEl) {
+    if (lines.length) {
+      const t = totalsForLines(lines);
+      totalsEl.hidden = false;
+      totalsEl.innerHTML = `Subtotal <strong>${formatMoney(t.subtotal)}</strong> · HST <strong>${formatMoney(t.hst)}</strong> · <span class="tech-on-site-total-final">${formatMoney(t.total)}</span>`;
+    } else {
+      totalsEl.hidden = true;
+    }
+  }
+  if (countEl) countEl.textContent = lines.length ? `${lines.length} line${lines.length === 1 ? "" : "s"}` : "";
+}
+
+function renderOnSiteReview() {
+  const lines = (state.onSiteQuote && state.onSiteQuote.builderLineItems) || [];
+  const linesEl = document.getElementById("techOnSiteReviewLines");
+  const totalsEl = document.getElementById("techOnSiteReviewTotals");
+  if (!linesEl) return;
+
+  // Initialize decisions to "all accepted" if not already shaped.
+  if (!Array.isArray(state.onSiteDecisions) || state.onSiteDecisions.length !== lines.length) {
+    state.onSiteDecisions = lines.map((_l, i) => ({ lineItemIdx: i, accepted: true }));
+  }
+
+  linesEl.innerHTML = "";
+  lines.forEach((line, idx) => {
+    const decision = state.onSiteDecisions[idx];
+    const accepted = decision ? decision.accepted : true;
+    const li = document.createElement("li");
+    li.className = "tech-on-site-review-line";
+    li.dataset.idx = String(idx);
+    li.dataset.accepted = accepted ? "1" : "0";
+    li.innerHTML = `
+      <label class="tech-on-site-review-checkbox">
+        <input type="checkbox" data-decision-idx="${idx}" ${accepted ? "checked" : ""}>
+        <span class="tech-on-site-review-line-label">${escapeHtml(line.label || "(unlabeled)")}</span>
+      </label>
+      <div class="tech-on-site-review-line-meta">
+        <span>Qty ${escapeHtml(String(line.qty || 1))}</span>
+        <strong>${formatMoney(lineRowTotal(line))}</strong>
+      </div>
+    `;
+    linesEl.appendChild(li);
+  });
+
+  // Totals show ACCEPTED-only — what the customer is actually paying.
+  const acceptedLines = lines.filter((_l, i) => state.onSiteDecisions[i]?.accepted);
+  const t = totalsForLines(acceptedLines);
+  if (totalsEl) {
+    totalsEl.innerHTML = `Customer pays <strong>${formatMoney(t.total)}</strong> (${formatMoney(t.subtotal)} + ${formatMoney(t.hst)} HST)`;
+  }
+  updateOnSiteSubmitState();
+}
+
+function renderOnSiteSubmitted() {
+  const summaryEl = document.getElementById("techOnSiteSubmittedSummary");
+  const imageEl = document.getElementById("techOnSiteSubmittedImage");
+  const metaEl = document.getElementById("techOnSiteSubmittedMeta");
+  if (!summaryEl) return;
+  const status = state.onSiteQuote?.status;
+  if (status === "declined") {
+    summaryEl.textContent = "Customer declined all items. Saved as deferred recommendations on the property.";
+    if (imageEl) imageEl.innerHTML = "";
+    if (metaEl) metaEl.textContent = "";
+    return;
+  }
+  const lines = state.onSiteQuote?.builderLineItems || [];
+  const acceptedCount = (state.onSiteQuote?.builderLineItems || []).filter((_l, i) => {
+    // Best-effort — read from the full Quote if we have it later, but
+    // for the on-the-fly summary the WO knows status and decisions stay
+    // out of the WO record. Show a generic line.
+    return true;
+  }).length;
+  summaryEl.textContent = status === "partially_accepted"
+    ? `Customer accepted some items. Declined items saved as deferred recommendations.`
+    : `Customer accepted all ${lines.length} line${lines.length === 1 ? "" : "s"}. Quote ${state.onSiteQuote?.quoteId || ""} on file.`;
+  if (metaEl) metaEl.textContent = state.onSiteQuote?.quoteId ? `Quote ${state.onSiteQuote.quoteId}` : "";
+}
+
+function updateOnSiteSubmitState() {
+  const submit = document.getElementById("techOnSiteSubmitBtn");
+  if (!submit) return;
+  if (state.locked) { submit.disabled = true; return; }
+  const name = (document.getElementById("techOnSiteSigName")?.value || "").trim();
+  const ack = !!document.getElementById("techOnSiteSigAck")?.checked;
+  const drawn = !!(state.onSiteSigPad && state.onSiteSigPad.isDirty());
+  // Need at least one accepted line
+  const anyAccepted = (state.onSiteDecisions || []).some((d) => d && d.accepted);
+  submit.disabled = !(name && ack && drawn && anyAccepted);
+}
+
+// Patch builder lines back to the server. Debounced to avoid PATCHing
+// on every keystroke while the tech is editing qty / price.
+function persistBuilderLines() {
+  if (state.onSiteBuilderTimer) {
+    clearTimeout(state.onSiteBuilderTimer);
+    state.onSiteBuilderTimer = null;
+  }
+  const lines = (state.onSiteQuote && state.onSiteQuote.builderLineItems) || [];
+  fetch(`/api/work-orders/${encodeURIComponent(state.id)}/on-site-quote/builder`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ lineItems: lines })
+  }).then(async (r) => {
+    const data = await r.json().catch(() => ({}));
+    if (r.ok && data.ok && data.workOrder) {
+      // Server sometimes corrects line shapes (re-snapshots originalPrice).
+      // Pull the canonical version back so subsequent edits are based on truth.
+      state.onSiteQuote = data.workOrder.onSiteQuote || state.onSiteQuote;
+      // Don't re-render on success — the user is mid-edit; their inputs
+      // already reflect the truth.
+    }
+  }).catch(() => {});
+}
+
+function scheduleBuilderPersist() {
+  if (state.onSiteBuilderTimer) clearTimeout(state.onSiteBuilderTimer);
+  state.onSiteBuilderTimer = setTimeout(persistBuilderLines, 800);
+}
+
+// ---- On-site quote event handlers --------------------------------
+
+document.getElementById("techOnSiteBuildBtn")?.addEventListener("click", async () => {
+  if (state.locked) return;
+  const btn = document.getElementById("techOnSiteBuildBtn");
+  if (btn) btn.disabled = true;
+  try {
+    const r = await fetch(`/api/work-orders/${encodeURIComponent(state.id)}/on-site-quote/build`, {
+      method: "POST"
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok || !data.ok) {
+      throw new Error((data.errors && data.errors[0]) || "Couldn't build quote.");
+    }
+    if (data.workOrder) {
+      state.onSiteQuote = data.workOrder.onSiteQuote || state.onSiteQuote;
+    }
+    state.onSiteUiMode = "builder";
+    renderOnSiteQuote();
+  } catch (err) {
+    alert(err.message || "Couldn't build quote.");
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+});
+
+document.getElementById("techOnSiteLines")?.addEventListener("click", (event) => {
+  if (state.locked) return;
+  if (event.target.matches('[data-action="remove-line"]')) {
+    const li = event.target.closest(".tech-on-site-line");
+    if (!li) return;
+    const idx = Number(li.dataset.idx);
+    const lines = state.onSiteQuote.builderLineItems || [];
+    if (!Number.isInteger(idx) || idx < 0 || idx >= lines.length) return;
+    lines.splice(idx, 1);
+    state.onSiteQuote.builderLineItems = lines;
+    renderOnSiteBuilder();
+    persistBuilderLines();
+  }
+});
+
+document.getElementById("techOnSiteLines")?.addEventListener("input", (event) => {
+  if (state.locked) return;
+  const li = event.target.closest(".tech-on-site-line");
+  if (!li) return;
+  const idx = Number(li.dataset.idx);
+  const line = state.onSiteQuote.builderLineItems?.[idx];
+  if (!line) return;
+  if (event.target.classList.contains("tech-on-site-line-qty")) {
+    const next = Math.max(1, Math.floor(Number(event.target.value) || 1));
+    line.qty = next;
+  } else if (event.target.classList.contains("tech-on-site-line-price")) {
+    const v = Number(event.target.value);
+    if (Number.isFinite(v) && v >= 0) {
+      // Override only when the value differs from originalPrice (so a
+      // tech who types the same number doesn't tag the line as overridden).
+      line.overridePrice = Math.abs(v - Number(line.originalPrice)) < 0.005 ? null : v;
+    }
+  } else {
+    return;
+  }
+  // Update only the row total + grand totals; full re-render would
+  // wipe the input the tech is currently editing.
+  const totalEl = li.querySelector(".tech-on-site-line-total");
+  if (totalEl) totalEl.textContent = formatMoney(lineRowTotal(line));
+  const totalsEl = document.getElementById("techOnSiteTotals");
+  if (totalsEl) {
+    const t = totalsForLines(state.onSiteQuote.builderLineItems);
+    totalsEl.innerHTML = `Subtotal <strong>${formatMoney(t.subtotal)}</strong> · HST <strong>${formatMoney(t.hst)}</strong> · <span class="tech-on-site-total-final">${formatMoney(t.total)}</span>`;
+  }
+  scheduleBuilderPersist();
+});
+
+document.getElementById("techOnSiteAddBtn")?.addEventListener("click", () => {
+  if (state.locked) return;
+  state.onSiteQuote.builderLineItems = state.onSiteQuote.builderLineItems || [];
+  state.onSiteQuote.builderLineItems.push({
+    key: null,
+    label: "Custom line — describe the work",
+    qty: 1,
+    originalPrice: 0,
+    overridePrice: null,
+    custom: true,
+    source: { zoneNumbers: [], issueIds: [] },
+    note: ""
+  });
+  renderOnSiteBuilder();
+  persistBuilderLines();
+});
+
+document.getElementById("techOnSiteShowBtn")?.addEventListener("click", () => {
+  state.onSiteUiMode = "review";
+  state.onSiteDecisions = (state.onSiteQuote.builderLineItems || []).map((_l, i) => ({ lineItemIdx: i, accepted: true }));
+  // Lazy-init the second signature pad on first review render.
+  setTimeout(() => {
+    if (!state.onSiteSigPad) {
+      const canvas = document.getElementById("techOnSiteSigCanvas");
+      if (canvas) state.onSiteSigPad = createSignaturePad(canvas, updateOnSiteSubmitState);
+    }
+  }, 0);
+  renderOnSiteQuote();
+});
+
+document.getElementById("techOnSiteBackBtn")?.addEventListener("click", () => {
+  state.onSiteUiMode = "builder";
+  renderOnSiteQuote();
+});
+
+// Live decision-checkbox toggling in review state.
+document.getElementById("techOnSiteReviewLines")?.addEventListener("change", (event) => {
+  if (!event.target.matches("[data-decision-idx]")) return;
+  const idx = Number(event.target.dataset.decisionIdx);
+  if (!Array.isArray(state.onSiteDecisions) || idx < 0 || idx >= state.onSiteDecisions.length) return;
+  state.onSiteDecisions[idx].accepted = !!event.target.checked;
+  const li = event.target.closest(".tech-on-site-review-line");
+  if (li) li.dataset.accepted = event.target.checked ? "1" : "0";
+  // Recompute totals (accepted-only)
+  const lines = state.onSiteQuote.builderLineItems || [];
+  const acceptedLines = lines.filter((_l, i) => state.onSiteDecisions[i]?.accepted);
+  const t = totalsForLines(acceptedLines);
+  const totalsEl = document.getElementById("techOnSiteReviewTotals");
+  if (totalsEl) {
+    totalsEl.innerHTML = `Customer pays <strong>${formatMoney(t.total)}</strong> (${formatMoney(t.subtotal)} + ${formatMoney(t.hst)} HST)`;
+  }
+  updateOnSiteSubmitState();
+});
+
+document.getElementById("techOnSiteSigName")?.addEventListener("input", updateOnSiteSubmitState);
+document.getElementById("techOnSiteSigAck")?.addEventListener("change", updateOnSiteSubmitState);
+document.getElementById("techOnSiteSigClear")?.addEventListener("click", () => {
+  if (state.locked) return;
+  state.onSiteSigPad?.clear();
+});
+
+document.getElementById("techOnSiteSubmitBtn")?.addEventListener("click", async () => {
+  if (state.locked) return;
+  const submit = document.getElementById("techOnSiteSubmitBtn");
+  const customerName = (document.getElementById("techOnSiteSigName")?.value || "").trim();
+  const ack = !!document.getElementById("techOnSiteSigAck")?.checked;
+  if (!customerName || !ack || !state.onSiteSigPad?.isDirty()) return;
+  // If every line is declined, route to decline-all instead.
+  const anyAccepted = (state.onSiteDecisions || []).some((d) => d && d.accepted);
+  submit.disabled = true;
+  submit.textContent = "Saving…";
+  try {
+    if (!anyAccepted) {
+      const r = await fetch(`/api/work-orders/${encodeURIComponent(state.id)}/on-site-quote/decline-all`, {
+        method: "POST"
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok || !data.ok) throw new Error((data.errors && data.errors[0]) || "Couldn't save.");
+      if (data.workOrder) state.onSiteQuote = data.workOrder.onSiteQuote || state.onSiteQuote;
+    } else {
+      const imageData = state.onSiteSigPad.toDataURL();
+      const r = await fetch(`/api/work-orders/${encodeURIComponent(state.id)}/on-site-quote/accept`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          customerName,
+          imageData,
+          acknowledgement: true,
+          decisions: state.onSiteDecisions
+        })
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok || !data.ok) throw new Error((data.errors && data.errors[0]) || "Couldn't accept.");
+      if (data.workOrder) state.onSiteQuote = data.workOrder.onSiteQuote || state.onSiteQuote;
+    }
+    state.onSiteUiMode = "submitted";
+    renderOnSiteQuote();
+  } catch (err) {
+    submit.disabled = false;
+    submit.textContent = "Sign & accept";
+    alert(err.message || "Couldn't save.");
+  }
+});
+
+// Find_only path — fall closing tech taps "Save to deferred recommendations"
+document.getElementById("techOnSiteDeferBtn")?.addEventListener("click", async () => {
+  if (state.locked) return;
+  const btn = document.getElementById("techOnSiteDeferBtn");
+  const success = document.getElementById("techOnSiteDeferSuccess");
+  if (btn) btn.disabled = true;
+  try {
+    const r = await fetch(`/api/work-orders/${encodeURIComponent(state.id)}/issues/defer`, { method: "POST" });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok || !data.ok) throw new Error((data.errors && data.errors[0]) || "Couldn't defer.");
+    if (success) {
+      success.hidden = false;
+      success.textContent = `Saved ${data.deferredCount} item${data.deferredCount === 1 ? "" : "s"} to deferred recommendations.`;
+    }
+  } catch (err) {
+    alert(err.message || "Couldn't defer.");
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+});
+
 // ---- Cheat Sheet --------------------------------------------------
 
 // One-tap action chips + collapsible context blocks at the top of the
@@ -1331,6 +1805,12 @@ async function init() {
     state.signature = wo.signature || state.signature;
     state.photos = Array.isArray(wo.photos) ? wo.photos : [];
     state.locked = wo.locked === true;
+    state.intakeGuarantee = (wo.intakeGuarantee && typeof wo.intakeGuarantee === "object")
+      ? wo.intakeGuarantee
+      : state.intakeGuarantee;
+    state.onSiteQuote = (wo.onSiteQuote && typeof wo.onSiteQuote === "object")
+      ? { ...wo.onSiteQuote, builderLineItems: Array.isArray(wo.onSiteQuote.builderLineItems) ? wo.onSiteQuote.builderLineItems.slice() : [] }
+      : state.onSiteQuote;
 
     techId.textContent = wo.id;
     techType.textContent = TYPE_LABELS[wo.type] || wo.type;
@@ -1362,6 +1842,7 @@ async function init() {
     // rendered so disabled inputs apply uniformly.
     renderServiceChecklist();
     renderWoPhotos();
+    renderOnSiteQuote();
     renderSignoff();
     applyLockState(state.locked);
 

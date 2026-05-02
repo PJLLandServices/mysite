@@ -143,6 +143,17 @@ function blankProperty() {
     photos: [],                   // [{ id, slot, url, uploadedAt }]   — Phase 5
     leadIds: [],                  // back-refs to leads attached to this property
     workOrderIds: [],             // back-refs to work orders (Phase 2)
+    // Deferred recommendations — items the customer declined during an
+    // on-site Issues→Draft Quote review, OR fall-closing finds that the
+    // tech logged for spring follow-up. Spec §5 (the carry-forward
+    // engine). This slice ships the storage + property-page display;
+    // the full carry-forward banner / portal pre-auth / 3-year flag
+    // lives in a future slice. Each entry:
+    //   { id, fromWoId, fromZone, type, qty, notes, declinedAt,
+    //     reason, photoIds, suggestedPriceSnapshot, status }
+    // status: open | resolved | dismissed | re_deferred (full lifecycle
+    // unused yet — populated as we build §5 features).
+    deferredIssues: [],
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString()
   };
@@ -173,7 +184,8 @@ function hydrate(p) {
     system: { ...base.system, ...(p.system || {}) },
     photos: Array.isArray(p?.photos) ? p.photos : [],
     leadIds: Array.isArray(p?.leadIds) ? p.leadIds : [],
-    workOrderIds: Array.isArray(p?.workOrderIds) ? p.workOrderIds : []
+    workOrderIds: Array.isArray(p?.workOrderIds) ? p.workOrderIds : [],
+    deferredIssues: Array.isArray(p?.deferredIssues) ? p.deferredIssues : []
   };
 }
 
@@ -502,6 +514,50 @@ async function bulkUpsert(records) {
   return summary;
 }
 
+// Append a deferred issue to a property. Source-of-truth write (the
+// on-site Quote accept flow uses this to sink declined items; future
+// fall-closing find_only flow uses this too). Returns the saved entry
+// (with id stamped) or null if the property was missing. Idempotency
+// is handled at the caller — we don't dedupe here because the same
+// physical issue can be deferred in different visits.
+async function addDeferredIssue(propertyId, payload) {
+  if (!propertyId) return null;
+  const properties = await readAll();
+  const idx = properties.findIndex((p) => p.id === propertyId);
+  if (idx === -1) return null;
+  const target = properties[idx];
+  const now = new Date().toISOString();
+  const id = "def_" + Math.random().toString(36).slice(2, 10) + "_" + Date.now();
+  const entry = {
+    id,
+    fromWoId: payload?.fromWoId || null,
+    fromZone: Number.isFinite(Number(payload?.fromZone)) ? Number(payload.fromZone) : null,
+    type: typeof payload?.type === "string" ? payload.type : "other",
+    qty: Number.isFinite(Number(payload?.qty)) && Number(payload.qty) > 0 ? Number(payload.qty) : 1,
+    notes: typeof payload?.notes === "string" ? payload.notes.slice(0, 1000) : "",
+    declinedAt: payload?.declinedAt || now,
+    reason: typeof payload?.reason === "string" ? payload.reason : "customer_declined",
+    photoIds: Array.isArray(payload?.photoIds) ? payload.photoIds.slice(0, 20) : [],
+    suggestedPriceSnapshot: payload?.suggestedPriceSnapshot || null,
+    status: "open"
+  };
+  if (!Array.isArray(target.deferredIssues)) target.deferredIssues = [];
+  target.deferredIssues.unshift(entry);
+  target.updatedAt = now;
+  properties[idx] = target;
+  await writeAll(properties);
+  return entry;
+}
+
+// Fetch a property's open deferred issues. Returns [] if missing.
+async function listDeferred(propertyId) {
+  if (!propertyId) return [];
+  const properties = await readAll();
+  const target = properties.find((p) => p.id === propertyId);
+  if (!target) return [];
+  return Array.isArray(target.deferredIssues) ? target.deferredIssues : [];
+}
+
 module.exports = {
   attachLead,
   relinkLead,
@@ -513,5 +569,7 @@ module.exports = {
   update,
   remove,
   removeMany,
-  bulkUpsert
+  bulkUpsert,
+  addDeferredIssue,
+  listDeferred
 };

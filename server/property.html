@@ -149,6 +149,19 @@
       </div>
     </section>
 
+    <!-- Deferred recommendations — items the customer declined during an
+         on-site Issues→Quote review, or fall-closing finds awaiting
+         spring follow-up. Read-only listing for now; the full §5
+         carry-forward banner / pre-auth flow is a future slice. -->
+    <section class="property-section property-deferred" id="deferredSection" hidden>
+      <header class="property-section-head">
+        <h2>Deferred recommendations</h2>
+        <span class="property-deferred__count" id="deferredCount">0</span>
+      </header>
+      <p class="property-section-help">Issues the customer declined to fix on a previous visit, or fall-closing finds queued for spring follow-up. Use these to call the customer when conditions are right — Patrick will use this list directly until the full deferred-issues flow ships.</p>
+      <ul class="property-deferred__list" id="deferredList"></ul>
+    </section>
+
     <section class="property-section property-leads" id="leadsSection" hidden>
       <h2>Booking history</h2>
       <p class="property-section-help">Every lead and booking attached to this property. Click to open in the CRM.</p>
