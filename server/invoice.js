@@ -36,8 +36,18 @@ function render(inv) {
   card.hidden = false;
   document.getElementById("invoiceTitle").textContent = `Invoice ${inv.id}`;
   document.getElementById("invoiceId").textContent = inv.id;
-  document.getElementById("invoiceMeta").textContent = `Created ${fmtDate(inv.createdAt)}${inv.sentAt ? ` · Sent ${fmtDate(inv.sentAt)}` : ""}${inv.paidAt ? ` · Paid ${fmtDate(inv.paidAt)}` : ""}`;
+  document.getElementById("invoiceMeta").innerHTML = `Issued ${escapeHtml(fmtDate(inv.createdAt))}${inv.sentAt ? `<br>Sent ${escapeHtml(fmtDate(inv.sentAt))}` : ""}${inv.paidAt ? `<br>Paid ${escapeHtml(fmtDate(inv.paidAt))}` : ""}`;
   document.getElementById("invoiceStatus").value = inv.status;
+  // PDF action buttons — open in new tab vs. force download (same URL,
+  // download attr triggers the browser save dialog).
+  const pdfPath = `/api/admin/quote-folder/${encodeURIComponent(inv.quoteId || inv.id)}/pdf`;
+  const pdfLinkEl = document.getElementById("invoicePdfLink");
+  const pdfDownloadEl = document.getElementById("invoicePdfDownload");
+  if (pdfLinkEl) pdfLinkEl.href = pdfPath;
+  if (pdfDownloadEl) {
+    pdfDownloadEl.href = pdfPath;
+    pdfDownloadEl.setAttribute("download", `${inv.id}.pdf`);
+  }
 
   const statusMeta = document.getElementById("invoiceStatusMeta");
   statusMeta.textContent = inv.quickbooksInvoiceId ? `QB: ${inv.quickbooksInvoiceId}` : "Not synced to QuickBooks";
@@ -50,12 +60,12 @@ function render(inv) {
   const linesEl = document.getElementById("invoiceLines");
   linesEl.innerHTML = (inv.lineItems || []).map((l) => `
     <tr>
-      <td>${escapeHtml(l.label || l.key || "Line")}${l.note ? `<br><span class="invoice-line-note">${escapeHtml(l.note)}</span>` : ""}</td>
-      <td>${escapeHtml(String(l.qty || 1))}</td>
-      <td>${fmt(l.unitPrice)}</td>
-      <td>${fmt(l.lineTotal)}</td>
+      <td>${escapeHtml(l.label || l.key || "Line")}${l.note ? `<br><span class="invoice-doc-line-note">${escapeHtml(l.note)}</span>` : ""}</td>
+      <td class="num">${escapeHtml(String(l.qty || 1))}</td>
+      <td class="num">${fmt(l.unitPrice)}</td>
+      <td class="num">${fmt(l.lineTotal)}</td>
     </tr>
-  `).join("") || `<tr><td colspan="4" class="invoice-line-empty">No line items.</td></tr>`;
+  `).join("") || `<tr><td colspan="4" class="invoice-doc-line-empty">No line items yet — generate from the work order to populate.</td></tr>`;
 
   document.getElementById("invoiceSubtotal").textContent = fmt(inv.subtotal);
   document.getElementById("invoiceHst").textContent = fmt(inv.hst);
@@ -64,10 +74,10 @@ function render(inv) {
 
   const woLink = document.getElementById("invoiceWoLink");
   if (inv.woId) { woLink.href = `/admin/work-order/${encodeURIComponent(inv.woId)}`; woLink.textContent = inv.woId; }
-  else { woLink.removeAttribute("href"); woLink.textContent = "no WO"; }
+  else { woLink.removeAttribute("href"); woLink.textContent = "—"; }
   const propLink = document.getElementById("invoicePropertyLink");
-  if (inv.propertyId) { propLink.href = `/admin/property/${encodeURIComponent(inv.propertyId)}`; propLink.textContent = "Property"; }
-  else { propLink.removeAttribute("href"); propLink.textContent = "no property"; }
+  if (inv.propertyId) { propLink.href = `/admin/property/${encodeURIComponent(inv.propertyId)}`; propLink.textContent = "Open property"; }
+  else { propLink.removeAttribute("href"); propLink.textContent = "—"; }
 }
 
 document.getElementById("invoiceStatus")?.addEventListener("change", async (event) => {

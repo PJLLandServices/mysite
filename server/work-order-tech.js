@@ -2310,8 +2310,20 @@ async function init() {
     state.customerName  = wo.customerName  || "";
     state.customerEmail = wo.customerEmail || "";
     state.customerPhone = wo.customerPhone || "";
+    // Back-fill timestamps from status when missing (covers WOs where
+    // the status was advanced server-side or by another session — the
+    // tech opens the WO and expects to see when arrival happened, not
+    // a "—" placeholder). On-site rank: scheduled < dispatched <
+    // en_route < on_site < in_progress < awaiting_approval < completed.
     state.arrivedAt = wo.arrivedAt || null;
     state.departedAt = wo.departedAt || null;
+    const STATUS_ON_OR_AFTER_ARRIVAL = ["on_site", "in_progress", "awaiting_approval", "completed"];
+    if (!state.arrivedAt && STATUS_ON_OR_AFTER_ARRIVAL.includes(state.status)) {
+      state.arrivedAt = wo.updatedAt || wo.createdAt || null;
+    }
+    if (!state.departedAt && state.status === "completed") {
+      state.departedAt = wo.updatedAt || null;
+    }
     state.followupOfWoId = wo.followupOfWoId || null;
     state.followupWoIds = Array.isArray(wo.followupWoIds) ? wo.followupWoIds : [];
 

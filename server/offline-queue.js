@@ -130,8 +130,11 @@
     if (replayInFlight) return;
     if (!navigator.onLine) return;
     replayInFlight = true;
+    let drainedAny = false;
+    let startedWithItems = false;
     try {
       const all = await listAll();
+      startedWithItems = all.length > 0;
       // FIFO — oldest queuedAt first.
       all.sort((a, b) => new Date(a.queuedAt) - new Date(b.queuedAt));
       for (const entry of all) {
@@ -142,16 +145,13 @@
             body: entry.body
           });
           if (res.ok || res.status < 500) {
-            // 2xx OR client error (4xx — server rejected, retry won't
-            // help) → drop from queue.
             await dequeue(entry.id);
+            drainedAny = true;
           } else {
-            // 5xx — server error, keep queued for next online attempt.
             console.warn("[offline-queue] server 5xx during replay, keeping queued:", entry.url, res.status);
             break;
           }
         } catch (err) {
-          // Network died mid-replay — abort, keep remaining queued.
           console.warn("[offline-queue] network error during replay, will retry:", err?.message);
           break;
         }
@@ -160,6 +160,21 @@
     } finally {
       replayInFlight = false;
       await refreshCount();
+    }
+    // Auto-refresh the page after a successful drain so the UI picks
+    // up fresh server state (the replayed PATCHes mutated the WO
+    // server-side; cached state in `state` is stale until we re-fetch).
+    // Skip if the user is mid-edit (active textarea / input has focus
+    // with unsubmitted text) so we don't lose typing in flight.
+    if (drainedAny && startedWithItems && cachedCount === 0) {
+      const active = document.activeElement;
+      const userTyping = active && (active.tagName === "TEXTAREA" || active.tagName === "INPUT") && active.value !== active.defaultValue;
+      if (!userTyping) {
+        // Small delay so the offline banner gets a chance to show "Syncing 0 pending changes…" before reload.
+        setTimeout(() => location.reload(), 350);
+      } else {
+        console.log("[offline-queue] drained but user is typing — skipping auto-reload");
+      }
     }
   }
 

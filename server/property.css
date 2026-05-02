@@ -343,27 +343,40 @@
   text-transform: uppercase;
   color: var(--pjl-text-muted);
 }
+/* Vertical list layout — Patrick wants one property per row, not the
+   3-up grid. Wide rows scan faster when you're looking for a specific
+   customer in a list of dozens. */
 .properties-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-  gap: 14px;
-}
-.property-card {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 18px 20px;
+  gap: 8px;
+}
+.property-card {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 6px 24px;
+  padding: 14px 20px;
   background: #fff;
   border: 1px solid rgba(27, 77, 46, 0.10);
-  border-radius: 12px;
+  border-radius: 10px;
   text-decoration: none;
   color: var(--pjl-text);
-  transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
 .property-card:hover {
-  transform: translateY(-2px);
   border-color: rgba(27, 77, 46, 0.35);
-  box-shadow: 0 8px 22px rgba(15, 31, 20, 0.06);
+  box-shadow: 0 4px 12px rgba(15, 31, 20, 0.05);
+}
+/* Customer name + address stack on the left; stats row sits on the right.
+   Email + stats wrap onto a second row on narrow viewports. */
+.property-card-head { grid-column: 1; }
+.property-card-address { grid-column: 1; }
+.property-card-email { grid-column: 1; }
+.property-card-stats { grid-column: 2; grid-row: 1 / span 3; align-items: center; margin-top: 0; }
+@media (max-width: 600px) {
+  .property-card { grid-template-columns: 1fr; }
+  .property-card-stats { grid-column: 1; grid-row: auto; margin-top: 6px; }
 }
 .property-card strong {
   font-family: "Barlow Condensed", sans-serif;

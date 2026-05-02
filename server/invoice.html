@@ -47,59 +47,94 @@
     <main class="invoice-shell">
       <p class="invoice-back"><a href="/admin/invoices">← All invoices</a></p>
       <p class="invoice-loading" id="invoiceLoading">Loading…</p>
-      <article class="invoice-card" id="invoiceCard" hidden>
-        <header class="invoice-head">
-          <div>
-            <span class="invoice-eyebrow">PJL Land Services</span>
-            <h2 id="invoiceId">I-2026-0000</h2>
-            <p class="invoice-meta" id="invoiceMeta"></p>
+
+      <div class="invoice-layout" id="invoiceCard" hidden>
+        <!-- LEFT: the invoice document (looks like a real invoice). -->
+        <article class="invoice-doc">
+          <header class="invoice-doc-band">
+            <div>
+              <span class="invoice-doc-band-eyebrow">PJL Land Services</span>
+              <h2 class="invoice-doc-band-id" id="invoiceId">I-2026-0000</h2>
+            </div>
+            <div class="invoice-doc-band-meta" id="invoiceMeta"></div>
+          </header>
+
+          <div class="invoice-doc-body">
+            <section class="invoice-doc-cols">
+              <div>
+                <span class="invoice-doc-label">Bill to</span>
+                <p class="invoice-doc-customer" id="invoiceCustomerName">—</p>
+                <p class="invoice-doc-sub" id="invoiceCustomerAddress"></p>
+                <p class="invoice-doc-sub" id="invoiceCustomerContact"></p>
+              </div>
+              <div>
+                <span class="invoice-doc-label">From</span>
+                <p class="invoice-doc-customer">PJL Land Services</p>
+                <p class="invoice-doc-sub">Newmarket, Ontario</p>
+                <p class="invoice-doc-sub">(905) 960-0181 · pjllandservices.com</p>
+              </div>
+            </section>
+
+            <section class="invoice-doc-lines">
+              <table>
+                <thead>
+                  <tr><th>Description</th><th class="num">Qty</th><th class="num">Unit</th><th class="num">Total</th></tr>
+                </thead>
+                <tbody id="invoiceLines"></tbody>
+              </table>
+            </section>
+
+            <section class="invoice-doc-totals">
+              <div><span>Subtotal</span><strong id="invoiceSubtotal">$0.00</strong></div>
+              <div><span>HST (13%)</span><strong id="invoiceHst">$0.00</strong></div>
+              <div class="invoice-doc-totals-row"><span>Total CAD</span><strong id="invoiceTotal">$0.00</strong></div>
+            </section>
+
+            <section class="invoice-doc-terms">
+              <p>Payment due on completion unless otherwise arranged. Warranty: 1 year on repairs, 3 years on full installs. Scope changes discovered on-site require fresh customer sign-off before additional work begins.</p>
+            </section>
           </div>
-          <div class="invoice-status-block">
-            <select id="invoiceStatus" class="invoice-status-select">
+        </article>
+
+        <!-- RIGHT: admin actions (sticky on desktop). -->
+        <aside class="invoice-actions">
+          <section class="invoice-action-card">
+            <span class="invoice-action-label">Status</span>
+            <select id="invoiceStatus" class="invoice-action-select">
               <option value="draft">Draft</option>
               <option value="sent">Sent</option>
               <option value="paid">Paid</option>
               <option value="void">Void</option>
             </select>
-            <p class="invoice-status-meta" id="invoiceStatusMeta"></p>
-          </div>
-        </header>
-        <section class="invoice-customer">
-          <h3>Bill to</h3>
-          <p id="invoiceCustomerName"></p>
-          <p id="invoiceCustomerAddress" class="invoice-customer-sub"></p>
-          <p id="invoiceCustomerContact" class="invoice-customer-sub"></p>
-        </section>
-        <section class="invoice-lines">
-          <h3>Line items</h3>
-          <table class="invoice-line-table">
-            <thead>
-              <tr><th>Description</th><th>Qty</th><th>Unit</th><th>Total</th></tr>
-            </thead>
-            <tbody id="invoiceLines"></tbody>
-          </table>
-        </section>
-        <section class="invoice-totals">
-          <div><span>Subtotal</span><strong id="invoiceSubtotal">$0.00</strong></div>
-          <div><span>HST (13%)</span><strong id="invoiceHst">$0.00</strong></div>
-          <div class="invoice-totals-row"><span>Total CAD</span><strong id="invoiceTotal">$0.00</strong></div>
-        </section>
-        <section class="invoice-notes">
-          <label for="invoiceNotes">Internal notes</label>
-          <textarea id="invoiceNotes" rows="3" placeholder="Optional notes (visible to admin only)"></textarea>
-          <button type="button" id="invoiceSaveNotes" class="invoice-btn">Save notes</button>
-        </section>
+            <p class="invoice-action-meta" id="invoiceStatusMeta"></p>
+          </section>
 
-        <section class="invoice-qb">
-          <h3>QuickBooks</h3>
-          <p class="invoice-qb-meta" id="invoiceQbMeta">Loading status…</p>
-          <button type="button" id="invoiceQbPushBtn" class="invoice-btn" hidden>Push to QuickBooks</button>
-          <p class="invoice-qb-status" id="invoiceQbStatus"></p>
-        </section>
-        <section class="invoice-links">
-          <p>Linked: <a id="invoiceWoLink" href="#">—</a> · <a id="invoicePropertyLink" href="#">—</a></p>
-        </section>
-      </article>
+          <section class="invoice-action-card">
+            <span class="invoice-action-label">Customer-facing</span>
+            <a class="invoice-action-btn" id="invoicePdfLink" href="#" target="_blank" rel="noopener">📄 Open PDF</a>
+            <a class="invoice-action-btn" id="invoicePdfDownload" href="#" download>⬇️ Download PDF</a>
+          </section>
+
+          <section class="invoice-action-card">
+            <span class="invoice-action-label">QuickBooks</span>
+            <p class="invoice-action-meta" id="invoiceQbMeta">Loading…</p>
+            <button type="button" id="invoiceQbPushBtn" class="invoice-action-btn invoice-action-btn--primary" hidden>Push to QuickBooks</button>
+            <p class="invoice-action-status" id="invoiceQbStatus"></p>
+          </section>
+
+          <section class="invoice-action-card">
+            <span class="invoice-action-label">Internal notes</span>
+            <textarea id="invoiceNotes" rows="4" placeholder="Visible to admin only"></textarea>
+            <button type="button" id="invoiceSaveNotes" class="invoice-action-btn">Save notes</button>
+          </section>
+
+          <section class="invoice-action-card">
+            <span class="invoice-action-label">Linked records</span>
+            <p class="invoice-action-link"><span>Work order</span> <a id="invoiceWoLink" href="#">—</a></p>
+            <p class="invoice-action-link"><span>Property</span> <a id="invoicePropertyLink" href="#">—</a></p>
+          </section>
+        </aside>
+      </div>
     </main>
   </div>
 

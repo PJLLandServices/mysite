@@ -77,3 +77,6 @@
 .settings-qb-setup summary { cursor: pointer; font-weight: 600; padding: 6px 0; }
 .settings-qb-setup ol { margin: 8px 0 0 24px; padding: 0; line-height: 1.6; }
 .settings-qb-setup code { background: #FAFAF5; padding: 2px 6px; border-radius: 4px; font-size: 12px; word-break: break-all; }
+
+.settings-export-links { display: flex; gap: 10px; flex-wrap: wrap; }
+.settings-export-links .settings-save { display: inline-block; text-decoration: none; }

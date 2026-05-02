@@ -256,11 +256,13 @@ body.is-nav-open .pjl-nav-toggle-bar:nth-child(3) {
 }
 
 .pjl-crm-shell {
-  /* Was capped at 1360px which wasted half a 4K monitor. Use the full
-     viewport width minus a small gutter so the working surface is as
-     wide as the screen Patrick is actually on. */
+  /* Patrick's monitors: ultrawide 3440x1440 (primary), 2560x1440
+     (secondary), MacBook Air 2560x1664. Old cap of 1920px wasted ~30%
+     of the ultrawide. Bumping to 2800px covers the ultrawide minus
+     sidebar (~240px) + gutter (~32px), and the 2560 displays still
+     get full width. Smaller monitors fall back to the % rule. */
   width: calc(100% - 32px);
-  max-width: 1920px;
+  max-width: 2800px;
   margin: 0 auto;
   padding: 18px 0 48px;
 }
@@ -363,27 +365,11 @@ body.is-nav-open .pjl-nav-toggle-bar:nth-child(3) {
   animation: pjlPulseDot 2.2s infinite;
 }
 
-.pjl-crm-hero h1 {
-  max-width: 13ch;
-  color: #fff;
-  font-size: clamp(42px, 6vw, 76px);
-  text-shadow: 0 4px 20px rgba(0,0,0,0.40);
-}
-
-.pjl-crm-hero p:not(.pjl-page-eyebrow) {
-  max-width: 58ch;
-  margin: 16px 0 0;
-  color: rgba(255,255,255,0.78);
-  font-size: 16px;
-  line-height: 1.65;
-}
-
-.pjl-hero-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
-  margin-top: 28px;
-}
+/* INTENTIONALLY REMOVED — the giant marketing-hero h1 (76px font with
+   text-shadow + dark background image) was duplicating earlier in this
+   file and the cascade picked the giant version every time. Patrick
+   wants the compact toolbar version (lines 268-307). Don't restore
+   these rules — if you do, the hero balloons back to half the screen. */
 
 .pjl-btn {
   min-height: 48px;
