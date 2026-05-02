@@ -1329,8 +1329,11 @@ async function handleApi(req, res, pathname) {
 
       // Return the portal URL too so the chat widget's thank-you screen can
       // surface it as the customer's "you're now a PJL customer" link.
+      // Use joinUrl rather than a template literal — PUBLIC_BASE_URL on
+      // Render can carry a trailing slash, which would otherwise produce
+      // a double-slash like "...com//portal/<token>".
       const portalToken = result.lead.portal?.token;
-      const portalUrl = portalToken ? `${baseUrl}/portal/${portalToken}` : null;
+      const portalUrl = portalToken ? joinUrl(baseUrl, `/portal/${portalToken}`) : null;
       return sendJson(res, 201, { ok: true, leadId: result.lead.id, portalUrl });
     } catch (error) {
       return sendJson(res, 400, { ok: false, errors: [error.message || "Unable to receive quote request."] });

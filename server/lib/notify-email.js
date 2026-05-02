@@ -59,8 +59,11 @@ function buildLeadEmail(lead, baseUrl) {
   const sourceLabel = lead.sourceLabel || lead.source || "General Lead";
   const town = (lead.contact?.address || "").split(",")[1]?.trim() || lead.contact?.address || "";
   const subject = `New PJL Lead — ${sourceLabel} — ${lead.contact?.name || "Unknown"}`;
-  const adminUrl = `${baseUrl}/admin`;
-  const portalUrl = lead.portalUrl || `${baseUrl}/portal/${lead.portal?.token || ""}`;
+  // Trailing slash on baseUrl (PUBLIC_BASE_URL env var) would otherwise
+  // produce "...com//admin" / "...com//portal/<token>".
+  const cleanBase = String(baseUrl || "").replace(/\/+$/, "");
+  const adminUrl = `${cleanBase}/admin`;
+  const portalUrl = lead.portalUrl || `${cleanBase}/portal/${lead.portal?.token || ""}`;
 
   const featuresHtml = (lead.features || []).map((f) => {
     const qty = f.qty > 1 ? ` × ${f.qty}` : "";

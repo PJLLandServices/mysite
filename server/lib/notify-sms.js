@@ -29,7 +29,7 @@ function buildSmsBody(lead, baseUrl) {
   // into ["123 Main St", "Newmarket ON L3Y 1A1"] and grabs the second piece.
   const addressParts = String(lead.contact?.address || "").split(",").map((s) => s.trim()).filter(Boolean);
   const town = addressParts[1] ? addressParts[1].replace(/\s+ON\b.*/i, "").trim() : "";
-  const link = baseUrl ? `\n${baseUrl}/admin` : "";
+  const link = baseUrl ? `\n${String(baseUrl).replace(/\/+$/, "")}/admin` : "";
   const where = town ? ` in ${town}` : "";
   // Twilio SMS segments are 160 GSM-7 chars or 70 UCS-2 chars. Keep it short to
   // stay in a single segment (avoids surprise per-message charges).

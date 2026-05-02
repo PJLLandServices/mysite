@@ -162,7 +162,10 @@ function buildEmail(event, lead, baseUrl) {
   // {namePrefix} resolves to "Hi Patrick, " when we know their name and to ""
   // when we don't — keeps SMS / short copy from reading "Hi , your service…".
   const namePrefix = rawName ? `Hi ${rawName}, ` : "";
-  const portalUrl = lead.portalUrl || `${baseUrl}/portal/${lead.portal?.token || ""}`;
+  // Strip any trailing slash on baseUrl — PUBLIC_BASE_URL on Render can
+  // carry one, and we don't want "...com//portal/<token>".
+  const cleanBase = String(baseUrl || "").replace(/\/+$/, "");
+  const portalUrl = lead.portalUrl || `${cleanBase}/portal/${lead.portal?.token || ""}`;
   const total = moneyText(lead.totals?.expectedTotal);
   const { dateStr, timeStr } = bookingDateTime(lead);
   const serviceLabel = lead.booking?.serviceLabel || "your appointment";
@@ -212,7 +215,8 @@ function buildSms(event, lead, baseUrl) {
   if (!tpl) return "";
   const rawName = lead.contact?.firstName || (lead.contact?.name || "").split(" ")[0] || "";
   const namePrefix = rawName ? `Hi ${rawName}, ` : "";
-  const portalUrl = lead.portalUrl || `${baseUrl}/portal/${lead.portal?.token || ""}`;
+  const cleanBase = String(baseUrl || "").replace(/\/+$/, "");
+  const portalUrl = lead.portalUrl || `${cleanBase}/portal/${lead.portal?.token || ""}`;
   const total = moneyText(lead.totals?.expectedTotal);
   const { dateStr, timeStr } = bookingDateTime(lead);
   const serviceLabel = lead.booking?.serviceLabel || "your appointment";
