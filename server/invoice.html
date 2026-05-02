@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Invoice — PJL</title>
+  <link rel="icon" type="image/svg+xml" href="/crm/pjl-logo-mark.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/crm/crm.css">
+  <link rel="stylesheet" href="/crm/invoice.css">
+</head>
+<body class="invoice-body">
+  <header class="crm-topbar invoice-topbar">
+    <a href="/admin" class="crm-topbar-logo"><img src="/crm/pjl-logo.svg" alt="PJL"></a>
+    <h1 id="invoiceTitle">Invoice —</h1>
+    <a href="/admin/invoices" class="crm-topbar-back">← All invoices</a>
+  </header>
+  <main class="invoice-shell">
+    <p class="invoice-loading" id="invoiceLoading">Loading…</p>
+    <article class="invoice-card" id="invoiceCard" hidden>
+      <header class="invoice-head">
+        <div>
+          <span class="invoice-eyebrow">PJL Land Services</span>
+          <h2 id="invoiceId">I-2026-0000</h2>
+          <p class="invoice-meta" id="invoiceMeta"></p>
+        </div>
+        <div class="invoice-status-block">
+          <select id="invoiceStatus" class="invoice-status-select">
+            <option value="draft">Draft</option>
+            <option value="sent">Sent</option>
+            <option value="paid">Paid</option>
+            <option value="void">Void</option>
+          </select>
+          <p class="invoice-status-meta" id="invoiceStatusMeta"></p>
+        </div>
+      </header>
+      <section class="invoice-customer">
+        <h3>Bill to</h3>
+        <p id="invoiceCustomerName"></p>
+        <p id="invoiceCustomerAddress" class="invoice-customer-sub"></p>
+        <p id="invoiceCustomerContact" class="invoice-customer-sub"></p>
+      </section>
+      <section class="invoice-lines">
+        <h3>Line items</h3>
+        <table class="invoice-line-table">
+          <thead>
+            <tr><th>Description</th><th>Qty</th><th>Unit</th><th>Total</th></tr>
+          </thead>
+          <tbody id="invoiceLines"></tbody>
+        </table>
+      </section>
+      <section class="invoice-totals">
+        <div><span>Subtotal</span><strong id="invoiceSubtotal">$0.00</strong></div>
+        <div><span>HST (13%)</span><strong id="invoiceHst">$0.00</strong></div>
+        <div class="invoice-totals-row"><span>Total CAD</span><strong id="invoiceTotal">$0.00</strong></div>
+      </section>
+      <section class="invoice-notes">
+        <label for="invoiceNotes">Internal notes</label>
+        <textarea id="invoiceNotes" rows="3" placeholder="Optional notes (visible to admin only)"></textarea>
+        <button type="button" id="invoiceSaveNotes" class="invoice-btn">Save notes</button>
+      </section>
+      <section class="invoice-links">
+        <p>Linked: <a id="invoiceWoLink" href="#">—</a> · <a id="invoicePropertyLink" href="#">—</a></p>
+      </section>
+    </article>
+  </main>
+  <script src="/crm/invoice.js"></script>
+</body>
+</html>

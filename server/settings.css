@@ -1,0 +1,63 @@
+/* [hidden] polyfill — see work-order.css for rationale. */
+[hidden] { display: none !important; }
+
+.settings-body { background: #FAFAF5; min-height: 100vh; }
+.settings-shell { max-width: 760px; margin: 0 auto; padding: 24px 20px 60px; display: flex; flex-direction: column; gap: 20px; }
+.settings-loading { text-align: center; color: #777; font-style: italic; padding: 40px; }
+
+.settings-card {
+  background: #fff;
+  border: 1px solid #E5E5DD;
+  border-radius: 12px;
+  padding: 22px 24px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+}
+.settings-card h2 { margin: 0 0 6px; color: #1B4D2E; font-family: "Barlow Condensed", sans-serif; font-size: 22px; }
+.settings-help { margin: 0 0 18px; color: #777; font-size: 13px; line-height: 1.5; }
+
+.settings-grid { display: flex; flex-direction: column; gap: 10px; margin-bottom: 16px; }
+.settings-row {
+  display: grid;
+  grid-template-columns: 1fr 180px;
+  gap: 14px;
+  align-items: center;
+  padding: 12px 14px;
+  background: #FAFAF5;
+  border: 1px solid #E5E5DD;
+  border-radius: 8px;
+}
+.settings-row strong { color: #1F2A22; font-size: 14px; }
+.settings-row-help { margin: 4px 0 0; font-size: 12px; color: #777; line-height: 1.4; }
+.settings-select {
+  font-family: inherit;
+  font-size: 14px;
+  padding: 8px 10px;
+  border: 1px solid #d8d8c9;
+  border-radius: 8px;
+  background: #fff;
+  color: #1F2A22;
+}
+
+.settings-save {
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  padding: 9px 18px;
+  border-radius: 8px;
+  border: 1px solid #1B4D2E;
+  background: #1B4D2E;
+  color: #fff;
+  cursor: pointer;
+}
+.settings-save:disabled { opacity: 0.4; cursor: not-allowed; }
+.settings-status { margin: 8px 0 0; color: #555; font-size: 13px; }
+
+.settings-audit { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 4px; max-height: 320px; overflow-y: auto; }
+.settings-audit li { font-size: 12px; color: #555; padding: 6px 10px; background: #FAFAF5; border-radius: 6px; }
+.settings-audit-ts { color: #999; font-variant-numeric: tabular-nums; }
+.settings-audit-empty { font-style: italic; color: #999; }
+
+@media (max-width: 600px) {
+  .settings-row { grid-template-columns: 1fr; }
+  .settings-select { width: 100%; }
+}

@@ -44,6 +44,9 @@ const bookingSessions = require("./lib/booking-sessions");
 const properties = require("./lib/properties");
 const workOrders = require("./lib/work-orders");
 const quotes = require("./lib/quotes");
+const invoices = require("./lib/invoices");
+const completionCascade = require("./lib/completion-cascade");
+const settings = require("./lib/settings");
 const issueRollup = require("./lib/issue-rollup");
 
 // Short, customer-friendly work order ID. Eight chars from a UUIDv4 base32-ish
@@ -266,6 +269,11 @@ function needsAuth(method, pathname) {
   if (pathname === "/admin/work-orders" || pathname === "/admin/work-orders/") return true;
   if (/^\/admin\/work-order\/[^/]+\/tech\/?$/.test(pathname)) return true;
   if (/^\/admin\/work-order\/[^/]+/.test(pathname)) return true;
+  if (pathname === "/admin/invoices" || pathname === "/admin/invoices/") return true;
+  if (pathname === "/admin/quote-folder" || pathname === "/admin/quote-folder/") return true;
+  if (pathname === "/api/admin/quote-folder") return true;
+  if (/^\/admin\/invoice\/[^/]+\/?$/.test(pathname)) return true;
+  if (pathname === "/admin/settings" || pathname === "/admin/settings/") return true;
   if (pathname === "/api/quotes" && method === "GET") return true;
   if (pathname === "/api/quotes.csv" || pathname === "/api/contacts" || pathname === "/api/contacts.vcf") return true;
   if (/^\/api\/quotes\/[^/]+/.test(pathname)) return true;
@@ -284,6 +292,8 @@ function needsAuth(method, pathname) {
   // Phase 4 will add a customer-portal "approve quote" subset that's
   // public via a token, but that doesn't exist yet.
   if (pathname.startsWith("/api/work-orders")) return true;
+  if (pathname.startsWith("/api/invoices")) return true;
+  if (pathname.startsWith("/api/settings")) return true;
   // Per-lead property link/dismiss/attach + tech actions are admin-only.
   if (/^\/api\/leads\/[^/]+\/(link-property|dismiss-property-suggestion|attach-property|notify-on-route|open-wo)$/.test(pathname)) return true;
   // Bulk property import is admin-only.
@@ -1337,6 +1347,9 @@ async function handleApi(req, res, pathname) {
           if (linkResult.status === "suggested") {
             result.lead.propertyLinkSuggestions = linkResult.suggestions;
           }
+          if (linkResult.status === "conflict-ownership") {
+            result.lead.propertyLinkConflicts = linkResult.conflicts;
+          }
           const liveLeads = await readLeads();
           const i = liveLeads.findIndex((l) => l.id === result.lead.id);
           if (i !== -1) {
@@ -1344,6 +1357,9 @@ async function handleApi(req, res, pathname) {
             liveLeads[i].propertyLinkStatus = linkResult.status;
             if (linkResult.status === "suggested") {
               liveLeads[i].propertyLinkSuggestions = linkResult.suggestions;
+            }
+            if (linkResult.status === "conflict-ownership") {
+              liveLeads[i].propertyLinkConflicts = linkResult.conflicts;
             }
             await writeLeads(liveLeads);
           }
@@ -2407,6 +2423,11 @@ async function handleApi(req, res, pathname) {
       } else {
         delete lead.propertyLinkSuggestions;
       }
+      if (linkResult.status === "conflict-ownership") {
+        lead.propertyLinkConflicts = linkResult.conflicts;
+      } else {
+        delete lead.propertyLinkConflicts;
+      }
       lead.crm = lead.crm || {};
       lead.crm.activity = Array.isArray(lead.crm.activity) ? lead.crm.activity : [];
       lead.crm.activity.unshift({
@@ -2563,6 +2584,147 @@ async function handleApi(req, res, pathname) {
   // ---------- Work orders -------------------------------------------
   // Admin-only (auth gate above). Phase 4 will add a customer-portal
   // subset for accept-quote, but for now everything is gated.
+
+  // ---------- Admin Quote folder browser (Q-YYYY-NNNN records) -----
+  // Distinct from the legacy /api/quotes (which lists leads-as-quotes).
+  // Reads from quotes.json — the canonical Quote folder per spec §4.1.
+
+  if (req.method === "GET" && pathname === "/api/admin/quote-folder") {
+    const url = new URL(req.url, baseUrlFromReq(req));
+    const status = url.searchParams.get("status");
+    const type = url.searchParams.get("type");
+    let all = await quotes.list();
+    if (status) all = all.filter((q) => q.status === status);
+    if (type) all = all.filter((q) => q.type === type);
+    all.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+    return sendJson(res, 200, { ok: true, quotes: all });
+  }
+
+  // ---------- Settings (admin notification defaults + audit) --------
+
+  if (req.method === "GET" && pathname === "/api/settings") {
+    const s = await settings.get();
+    return sendJson(res, 200, { ok: true, settings: s, modes: settings.NOTIFY_MODES });
+  }
+  if (req.method === "PATCH" && pathname === "/api/settings/admin-defaults") {
+    try {
+      const payload = await parseRequestBody(req);
+      const updated = await settings.updateAdminDefaults(payload, { who: "admin" });
+      return sendJson(res, 200, { ok: true, settings: updated });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't update settings."] });
+    }
+  }
+
+  // Customer-side notification preferences (portal-toggleable). Stored
+  // on the lead so they can be set per-customer without a separate
+  // record. Token-resolved (NOT admin cookie).
+  const portalPrefsMatch = pathname.match(/^\/api\/portal\/([^/]+)\/preferences$/);
+  if (portalPrefsMatch && req.method === "PATCH") {
+    try {
+      const token = decodeURIComponent(portalPrefsMatch[1]);
+      const payload = await parseRequestBody(req);
+      const leads = await readLeads();
+      const idx = leads.findIndex((l) => (l.portal?.token || portalTokenForId(l.id)) === token);
+      if (idx === -1) return sendJson(res, 404, { ok: false, errors: ["Portal not found."] });
+      const lead = leads[idx];
+      lead.customerPreferences = lead.customerPreferences || {};
+      // Customer-side prefs: text reminders (yes/no), email-only mode,
+      // marketing texts (yes/no). Spec §6.3.
+      if (typeof payload.textReminders === "boolean") lead.customerPreferences.textReminders = payload.textReminders;
+      if (typeof payload.emailOnly === "boolean") lead.customerPreferences.emailOnly = payload.emailOnly;
+      if (typeof payload.marketingTexts === "boolean") lead.customerPreferences.marketingTexts = payload.marketingTexts;
+      // Phone/email/best-time (the only fields the customer can edit per
+      // spec §6.2). Email change triggers a Patrick notification (rule:
+      // email is the matching key).
+      const baseUrl = process.env.PUBLIC_BASE_URL || baseUrlFromReq(req);
+      let emailChanged = false;
+      if (typeof payload.phone === "string" && payload.phone !== lead.contact?.phone) {
+        lead.contact = lead.contact || {};
+        lead.contact.phone = payload.phone.slice(0, 50);
+      }
+      if (typeof payload.email === "string" && payload.email !== lead.contact?.email) {
+        lead.contact = lead.contact || {};
+        const oldEmail = lead.contact.email || "(none)";
+        lead.contact.email = payload.email.slice(0, 200);
+        emailChanged = true;
+        const aliasLead = {
+          id: lead.id,
+          sourceLabel: "Customer changed email in portal",
+          contact: { ...lead.contact, notes: `Was: ${oldEmail} → ${lead.contact.email}` }
+        };
+        Promise.allSettled([
+          sendNewLeadEmail(aliasLead, { baseUrl }),
+          sendNewLeadSms(aliasLead, { baseUrl })
+        ]).catch(() => {});
+      }
+      if (typeof payload.bestTimeToReach === "string") {
+        lead.customerPreferences.bestTimeToReach = payload.bestTimeToReach.slice(0, 200);
+      }
+      lead.crm = lead.crm || {};
+      lead.crm.activity = Array.isArray(lead.crm.activity) ? lead.crm.activity : [];
+      lead.crm.activity.unshift({
+        at: new Date().toISOString(),
+        type: "update",
+        text: emailChanged ? "Customer updated portal preferences (email changed — notified)" : "Customer updated portal preferences"
+      });
+      lead.crm.lastUpdated = new Date().toISOString();
+      leads[idx] = lead;
+      await writeLeads(leads);
+      return sendJson(res, 200, { ok: true });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't save preferences."] });
+    }
+  }
+  if (portalPrefsMatch && req.method === "GET") {
+    try {
+      const token = decodeURIComponent(portalPrefsMatch[1]);
+      const leads = await readLeads();
+      const lead = leads.find((l) => (l.portal?.token || portalTokenForId(l.id)) === token);
+      if (!lead) return sendJson(res, 404, { ok: false, errors: ["Portal not found."] });
+      return sendJson(res, 200, {
+        ok: true,
+        preferences: lead.customerPreferences || {},
+        contact: {
+          phone: lead.contact?.phone || "",
+          email: lead.contact?.email || ""
+        }
+      });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't load preferences."] });
+    }
+  }
+
+  // ---------- Invoices ----------------------------------------------
+  // Drafted by the completion cascade. Admin can list, view, edit
+  // status/notes/lineItems, and (later) push to QuickBooks.
+
+  if (req.method === "GET" && pathname === "/api/invoices") {
+    const url = new URL(req.url, baseUrlFromReq(req));
+    const status = url.searchParams.get("status");
+    let all = await invoices.list();
+    if (status) all = all.filter((i) => i.status === status);
+    all.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+    return sendJson(res, 200, { ok: true, invoices: all });
+  }
+
+  const invoiceMatch = pathname.match(/^\/api\/invoices\/([^/]+)$/);
+  if (invoiceMatch && req.method === "GET") {
+    const inv = await invoices.get(decodeURIComponent(invoiceMatch[1]));
+    if (!inv) return sendJson(res, 404, { ok: false, errors: ["Invoice not found."] });
+    return sendJson(res, 200, { ok: true, invoice: inv });
+  }
+  if (invoiceMatch && req.method === "PATCH") {
+    try {
+      const id = decodeURIComponent(invoiceMatch[1]);
+      const payload = await parseRequestBody(req);
+      const updated = await invoices.update(id, payload);
+      if (!updated) return sendJson(res, 404, { ok: false, errors: ["Invoice not found."] });
+      return sendJson(res, 200, { ok: true, invoice: updated });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't update invoice."] });
+    }
+  }
 
   if (req.method === "GET" && pathname === "/api/work-orders") {
     const url = new URL(req.url, baseUrlFromReq(req));
@@ -2734,8 +2896,82 @@ async function handleApi(req, res, pathname) {
         }
       }
 
+      // Snapshot the prior status so we can detect a transition to
+      // "completed" and fire the cascade exactly once.
+      const priorStatus = (await workOrders.get(id))?.status || null;
+
       const updated = await workOrders.update(id, payload);
       if (!updated) return sendJson(res, 404, { ok: false, errors: ["Work order not found."] });
+
+      // Completion cascade — spec §4.3.4. Fires when the WO transitions
+      // INTO completed (any prior status). Idempotent at the cascade
+      // layer (it short-circuits if a service record already references
+      // this WO), so accidental re-triggers are safe. Best-effort
+      // notifications via the existing email/SMS helpers.
+      if (updated.status === "completed" && priorStatus !== "completed" && updated.propertyId) {
+        const baseUrl = process.env.PUBLIC_BASE_URL || baseUrlFromReq(req);
+        completionCascade.run(updated, {
+          notifyAdmin: async ({ wo, serviceRecord, invoice }) => {
+            const aliasLead = {
+              id: wo.id,
+              sourceLabel: `WO COMPLETED — ${wo.type}`,
+              contact: {
+                name: wo.customerName || "(unknown)",
+                phone: wo.customerPhone || "",
+                email: wo.customerEmail || "",
+                address: wo.address || "",
+                notes: `${serviceRecord.summary}${invoice ? ` · Invoice ${invoice.id} ($${invoice.total.toFixed(2)})` : " · No charge"}`
+              }
+            };
+            await Promise.allSettled([
+              sendNewLeadEmail(aliasLead, { baseUrl }),
+              sendNewLeadSms(aliasLead, { baseUrl })
+            ]);
+          },
+          notifyCustomer: async ({ wo, serviceRecord, invoice }) => {
+            // Reuse the existing customer-notification module but with a
+            // local custom payload — wo isn't a lead, so the existing
+            // applyCrmUpdate path doesn't fit. Send a branded summary
+            // email via the same nodemailer pattern used elsewhere.
+            if (!wo.customerEmail || !process.env.GMAIL_USER || !process.env.GMAIL_APP_PASSWORD) return;
+            let nodemailer;
+            try { nodemailer = require("nodemailer"); } catch { return; }
+            const transporter = nodemailer.createTransport({
+              service: "gmail",
+              auth: { user: process.env.GMAIL_USER, pass: process.env.GMAIL_APP_PASSWORD }
+            });
+            const firstName = (wo.customerName || "").split(" ")[0] || "there";
+            const totalLine = invoice && invoice.total > 0
+              ? `<p style="margin: 0 0 14px;">Total for today's visit: <strong>$${invoice.total.toFixed(2)} CAD</strong> (incl. HST). An invoice will follow.</p>`
+              : "";
+            const warranty = serviceRecord.warrantyExpiresAt
+              ? `<p style="margin: 0 0 14px;">Today's work is covered under PJL's <strong>${serviceRecord.warrantyMonths}-month warranty</strong>, valid through ${new Date(serviceRecord.warrantyExpiresAt).toLocaleDateString("en-CA", { month: "long", day: "numeric", year: "numeric" })}.</p>`
+              : "";
+            const html = `
+<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 560px; color: #1a1a1a; line-height: 1.55;">
+  <div style="padding: 24px 28px; background: #1B4D2E; border-radius: 8px 8px 0 0;">
+    <div style="color: #EAF3DE; font-size: 12px; letter-spacing: 0.12em; text-transform: uppercase; font-weight: 600;">PJL Land Services</div>
+    <h1 style="margin: 6px 0 0; color: #fff; font-size: 22px;">Today's visit is complete.</h1>
+  </div>
+  <div style="padding: 24px 28px; background: #FAFAF5; border: 1px solid #e5e5dd; border-top: none; border-radius: 0 0 8px 8px;">
+    <p style="margin: 0 0 14px;">Hi ${firstName.replace(/</g, "&lt;")},</p>
+    <p style="margin: 0 0 14px;">${serviceRecord.summary.replace(/</g, "&lt;")}</p>
+    ${totalLine}
+    ${warranty}
+    <p style="margin: 18px 0 0; font-size: 13px; color: #777;">Questions? Call <a href="tel:+19059600181" style="color: #1B4D2E;">(905) 960-0181</a> or reply to this email.</p>
+  </div>
+  <p style="margin: 16px 0 0; font-size: 11px; color: #999; text-align: center;">PJL Land Services · Newmarket, Ontario · pjllandservices.com</p>
+</div>`.trim();
+            await transporter.sendMail({
+              from: `"PJL Land Services" <${process.env.GMAIL_USER}>`,
+              to: wo.customerEmail,
+              replyTo: process.env.GMAIL_USER,
+              subject: "Your PJL visit is complete",
+              html
+            });
+          }
+        }).catch((err) => console.warn("[cascade] run failed:", err?.message));
+      }
 
       // Sign-time sweep: if THIS PATCH just signed the WO, find every
       // deferred item that was queued via the carry-forward "Repair now"
@@ -3994,6 +4230,9 @@ Customer signature captured at ${new Date().toISOString()}.`;
           if (linkResult.status === "suggested") {
             result.lead.propertyLinkSuggestions = linkResult.suggestions;
           }
+          if (linkResult.status === "conflict-ownership") {
+            result.lead.propertyLinkConflicts = linkResult.conflicts;
+          }
           const liveLeads = await readLeads();
           const i = liveLeads.findIndex((l) => l.id === result.lead.id);
           if (i !== -1) {
@@ -4001,6 +4240,9 @@ Customer signature captured at ${new Date().toISOString()}.`;
             liveLeads[i].propertyLinkStatus = linkResult.status;
             if (linkResult.status === "suggested") {
               liveLeads[i].propertyLinkSuggestions = linkResult.suggestions;
+            }
+            if (linkResult.status === "conflict-ownership") {
+              liveLeads[i].propertyLinkConflicts = linkResult.conflicts;
             }
             await writeLeads(liveLeads);
           }
@@ -4332,6 +4574,18 @@ function resolveStaticTarget(pathname) {
   if (pathname === "/admin/work-orders" || pathname === "/admin/work-orders/") {
     return { dir: SERVER_DIR, relative: "/work-orders.html" };
   }
+  if (pathname === "/admin/invoices" || pathname === "/admin/invoices/") {
+    return { dir: SERVER_DIR, relative: "/invoices.html" };
+  }
+  if (pathname === "/admin/quote-folder" || pathname === "/admin/quote-folder/") {
+    return { dir: SERVER_DIR, relative: "/quote-folder.html" };
+  }
+  if (/^\/admin\/invoice\/[^/]+\/?$/.test(pathname)) {
+    return { dir: SERVER_DIR, relative: "/invoice.html" };
+  }
+  if (pathname === "/admin/settings" || pathname === "/admin/settings/") {
+    return { dir: SERVER_DIR, relative: "/settings.html" };
+  }
   // Tech-mode pop-out — mobile-first, tap-optimized layout. Same WO id,
   // different page. Route check must come BEFORE the desktop editor's
   // /admin/work-order/<id> match so the /tech suffix wins.
@@ -4436,4 +4690,18 @@ server.listen(PORT, HOST, () => {
   console.log(`PJL site + lead receiver running at http://${HOST}:${PORT}`);
   console.log(`  Public homepage:   http://${HOST}:${PORT}/`);
   console.log(`  CRM dashboard:     http://${HOST}:${PORT}/admin   (login: http://${HOST}:${PORT}/login)`);
+
+  // Quote auto-expire sweep — spec §4.1 default 30-day validity. Runs at
+  // startup AND every 6 hours so stale "sent" quotes flip to "expired"
+  // without manual intervention. Best-effort; logs only.
+  const sweepQuotes = async () => {
+    try {
+      const result = await quotes.expireStaleQuotes();
+      if (result.expired) console.log(`[quotes] auto-expired ${result.expired} stale quote(s)`);
+    } catch (err) {
+      console.warn("[quotes] auto-expire sweep failed:", err?.message);
+    }
+  };
+  sweepQuotes();
+  setInterval(sweepQuotes, 6 * 60 * 60 * 1000);
 });

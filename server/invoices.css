@@ -1,0 +1,105 @@
+/* [hidden] polyfill — see work-order.css for rationale. */
+[hidden] { display: none !important; }
+
+.invoices-body { background: #FAFAF5; min-height: 100vh; }
+
+.invoices-shell {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 24px 20px 60px;
+}
+
+.invoices-filters {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 18px;
+}
+.invoices-filters button {
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 7px 14px;
+  border-radius: 999px;
+  border: 1px solid #d8d8c9;
+  background: #fff;
+  color: #555;
+  cursor: pointer;
+}
+.invoices-filters button.is-active { background: #1B4D2E; color: #fff; border-color: #1B4D2E; }
+
+.invoices-empty {
+  text-align: center;
+  color: #777;
+  font-style: italic;
+  padding: 40px 20px;
+  background: #fff;
+  border: 1px dashed #d8d8c9;
+  border-radius: 10px;
+}
+
+.invoices-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: #fff;
+  border-radius: 10px;
+  overflow: hidden;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+}
+.invoices-table th {
+  text-align: left;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #777;
+  padding: 12px 14px;
+  background: #FAFAF5;
+  border-bottom: 1px solid #E5E5DD;
+}
+.invoices-table td {
+  padding: 14px;
+  border-bottom: 1px solid #F1F1E8;
+  font-size: 14px;
+}
+.invoices-table tr:hover td { background: #FCFCF7; }
+.invoices-table a { color: #1B4D2E; text-decoration: none; font-weight: 600; }
+.invoices-table a:hover { text-decoration: underline; }
+.invoices-amount { font-variant-numeric: tabular-nums; font-weight: 600; }
+.invoices-row-sub { color: #999; font-size: 12px; }
+
+.invoices-status {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 10px;
+  border-radius: 999px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.invoices-status--draft { background: #FFF8E6; color: #7A5C00; }
+.invoices-status--sent { background: #E0EBFF; color: #2A4A8C; }
+.invoices-status--paid { background: #E8F4ED; color: #1B4D2E; }
+.invoices-status--void { background: #EFEFE5; color: #777; text-decoration: line-through; }
+
+@media (max-width: 700px) {
+  .invoices-table thead { display: none; }
+  .invoices-table tr { display: block; padding: 12px 0; border-bottom: 1px solid #E5E5DD; }
+  .invoices-table td { display: flex; justify-content: space-between; padding: 4px 14px; border: 0; }
+  .invoices-table td::before {
+    content: attr(data-label);
+    font-weight: 600;
+    color: #777;
+    text-transform: uppercase;
+    font-size: 11px;
+    letter-spacing: 0.04em;
+  }
+}
+
+.quote-folder-intro { margin: 0 0 14px; color: #555; font-size: 14px; }
+.invoices-status--accepted { background: #E8F4ED; color: #1B4D2E; }
+.invoices-status--partially_accepted { background: #FFF4E0; color: #7A5C00; }
+.invoices-status--declined { background: #FFE6E0; color: #8A2418; }
+.invoices-status--expired { background: #EFEFE5; color: #777; }
+.invoices-status--superseded { background: #EFEFE5; color: #999; text-decoration: line-through; }
+.invoices-status--cancelled { background: #EFEFE5; color: #999; }

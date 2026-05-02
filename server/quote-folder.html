@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Quote folder — PJL</title>
+  <link rel="icon" type="image/svg+xml" href="/crm/pjl-logo-mark.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/crm/crm.css">
+  <link rel="stylesheet" href="/crm/invoices.css">
+</head>
+<body class="invoices-body">
+  <header class="crm-topbar">
+    <a href="/admin" class="crm-topbar-logo"><img src="/crm/pjl-logo.svg" alt="PJL"></a>
+    <h1>Quote folder</h1>
+    <a href="/admin" class="crm-topbar-back">← CRM</a>
+  </header>
+  <main class="invoices-shell">
+    <p class="quote-folder-intro">Every Q-YYYY-NNNN record from the AI chat, on-site quotes, and (eventually) formal install quotes.</p>
+    <section class="invoices-filters">
+      <button type="button" data-status-filter="" class="is-active">All</button>
+      <button type="button" data-status-filter="draft">Drafts</button>
+      <button type="button" data-status-filter="sent">Sent</button>
+      <button type="button" data-status-filter="accepted">Accepted</button>
+      <button type="button" data-status-filter="partially_accepted">Partial</button>
+      <button type="button" data-status-filter="declined">Declined</button>
+      <button type="button" data-status-filter="expired">Expired</button>
+    </section>
+    <p class="invoices-empty" id="quotesEmpty" hidden>No quotes match.</p>
+    <table class="invoices-table" id="quotesTable" hidden>
+      <thead>
+        <tr>
+          <th>Quote #</th>
+          <th>Type</th>
+          <th>Customer</th>
+          <th>Total</th>
+          <th>Status</th>
+          <th>Created</th>
+        </tr>
+      </thead>
+      <tbody id="quotesBody"></tbody>
+    </table>
+  </main>
+  <script src="/crm/quote-folder.js"></script>
+</body>
+</html>

@@ -1,0 +1,128 @@
+/* [hidden] polyfill — see work-order.css for rationale. */
+[hidden] { display: none !important; }
+
+.invoice-body { background: #FAFAF5; min-height: 100vh; }
+.invoice-shell { max-width: 800px; margin: 0 auto; padding: 24px 20px 60px; }
+.invoice-loading { text-align: center; color: #777; font-style: italic; padding: 40px; }
+
+.invoice-card {
+  background: #fff;
+  border: 1px solid #E5E5DD;
+  border-radius: 12px;
+  padding: 28px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+}
+
+.invoice-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 20px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid #E5E5DD;
+  margin-bottom: 18px;
+}
+.invoice-eyebrow { display: block; font-size: 11px; font-weight: 700; color: #777; text-transform: uppercase; letter-spacing: 0.06em; }
+.invoice-head h2 { margin: 4px 0 0; color: #1B4D2E; font-size: 26px; font-family: "Barlow Condensed", sans-serif; letter-spacing: 0.02em; }
+.invoice-meta { margin: 6px 0 0; color: #777; font-size: 12px; }
+
+.invoice-status-block { text-align: right; }
+.invoice-status-select {
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  padding: 7px 12px;
+  border: 1px solid #d8d8c9;
+  border-radius: 8px;
+  background: #fff;
+  color: #1F2A22;
+}
+.invoice-status-meta { margin: 6px 0 0; font-size: 11px; color: #999; }
+
+.invoice-card h3 { margin: 0 0 8px; font-size: 13px; text-transform: uppercase; letter-spacing: 0.05em; color: #777; font-weight: 700; }
+.invoice-customer { margin-bottom: 24px; }
+.invoice-customer p { margin: 0; color: #1F2A22; font-weight: 600; }
+.invoice-customer-sub { color: #777; font-weight: 400; font-size: 13px; margin-top: 2px; }
+
+.invoice-line-table { width: 100%; border-collapse: collapse; margin-bottom: 24px; }
+.invoice-line-table th {
+  text-align: left;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #777;
+  padding: 8px 6px;
+  border-bottom: 1px solid #E5E5DD;
+}
+.invoice-line-table th:nth-child(2),
+.invoice-line-table th:nth-child(3),
+.invoice-line-table th:nth-child(4) { text-align: right; }
+.invoice-line-table td { padding: 10px 6px; border-bottom: 1px solid #F1F1E8; font-size: 14px; vertical-align: top; }
+.invoice-line-table td:nth-child(2),
+.invoice-line-table td:nth-child(3),
+.invoice-line-table td:nth-child(4) { text-align: right; font-variant-numeric: tabular-nums; }
+.invoice-line-note { color: #999; font-size: 12px; }
+.invoice-line-empty { color: #999; font-style: italic; text-align: center !important; padding: 20px !important; }
+
+.invoice-totals {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+  padding: 14px 0;
+  border-top: 1px solid #E5E5DD;
+  margin-bottom: 20px;
+}
+.invoice-totals div {
+  display: flex;
+  gap: 24px;
+  font-size: 14px;
+  color: #555;
+  font-variant-numeric: tabular-nums;
+}
+.invoice-totals strong { color: #1F2A22; font-weight: 600; min-width: 90px; text-align: right; }
+.invoice-totals-row {
+  border-top: 1px solid #E5E5DD;
+  padding-top: 6px;
+  margin-top: 4px;
+  font-size: 16px !important;
+  font-weight: 700;
+}
+.invoice-totals-row span { color: #1B4D2E; }
+.invoice-totals-row strong { color: #1B4D2E !important; font-size: 17px; }
+
+.invoice-notes { margin-bottom: 16px; }
+.invoice-notes label { display: block; margin-bottom: 6px; font-size: 13px; font-weight: 600; color: #555; }
+.invoice-notes textarea {
+  width: 100%;
+  font-family: inherit;
+  font-size: 14px;
+  padding: 10px 12px;
+  border: 1px solid #d8d8c9;
+  border-radius: 8px;
+  resize: vertical;
+}
+.invoice-btn {
+  margin-top: 8px;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 8px 14px;
+  border-radius: 8px;
+  border: 1px solid #1B4D2E;
+  background: #1B4D2E;
+  color: #fff;
+  cursor: pointer;
+}
+
+.invoice-links { font-size: 13px; color: #555; }
+.invoice-links a { color: #1B4D2E; text-decoration: none; font-weight: 600; }
+.invoice-links a:hover { text-decoration: underline; }
+
+@media (max-width: 600px) {
+  .invoice-shell { padding: 16px 12px; }
+  .invoice-card { padding: 18px 14px; }
+  .invoice-head { flex-direction: column; }
+  .invoice-status-block { text-align: left; }
+}

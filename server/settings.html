@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Settings — PJL</title>
+  <link rel="icon" type="image/svg+xml" href="/crm/pjl-logo-mark.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/crm/crm.css">
+  <link rel="stylesheet" href="/crm/settings.css">
+</head>
+<body class="settings-body">
+  <header class="crm-topbar">
+    <a href="/admin" class="crm-topbar-logo"><img src="/crm/pjl-logo.svg" alt="PJL"></a>
+    <h1>Settings</h1>
+    <a href="/admin" class="crm-topbar-back">← CRM</a>
+  </header>
+  <main class="settings-shell">
+    <p class="settings-loading" id="settingsLoading">Loading…</p>
+
+    <section class="settings-card" id="adminDefaultsCard" hidden>
+      <h2>Notification defaults</h2>
+      <p class="settings-help">How PJL gets notified when things happen. Per-customer overrides live on the customer's lead detail and override these defaults.</p>
+      <div class="settings-grid" id="adminDefaultsGrid"></div>
+      <button type="button" class="settings-save" id="adminDefaultsSave" disabled>Save</button>
+      <p class="settings-status" id="adminDefaultsStatus"></p>
+    </section>
+
+    <section class="settings-card" id="auditCard" hidden>
+      <h2>Recent settings changes</h2>
+      <p class="settings-help">Last 50 changes, newest first.</p>
+      <ul class="settings-audit" id="auditList"></ul>
+    </section>
+  </main>
+  <script src="/crm/settings.js"></script>
+</body>
+</html>

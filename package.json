@@ -7,8 +7,9 @@
   "scripts": {
     "start": "node server/server.js",
     "setup-password": "node server/setup-password.js",
-    "build": "node build.js",
-    "build:check": "node build.js --check"
+    "build": "node build.js && node worker/rebuild.mjs",
+    "build:check": "node build.js --check",
+    "build:worker": "node worker/rebuild.mjs"
   },
   "engines": {
     "node": ">=18"

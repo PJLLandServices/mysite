@@ -463,6 +463,31 @@ async function attachWorkOrder(id, workOrderId) {
   return q;
 }
 
+// Sweep all quotes that are past their validUntil date and still in
+// "sent"/"draft" status. Marks them expired with an audit entry. Called
+// at server startup AND on a daily interval (server.js sets the timer).
+// Returns { expired, considered } so the caller can log it.
+async function expireStaleQuotes({ now = new Date() } = {}) {
+  const records = await readAll();
+  let expired = 0;
+  let considered = 0;
+  const nowMs = now.getTime();
+  for (const q of records) {
+    if (q.status !== "sent" && q.status !== "draft") continue;
+    considered++;
+    if (!q.validUntil) continue;
+    const validMs = new Date(q.validUntil).getTime();
+    if (Number.isFinite(validMs) && validMs < nowMs) {
+      q.status = "expired";
+      q.expiredAt = now.toISOString();
+      q.history.push({ ts: now.toISOString(), action: "expired", by: "system", note: "Auto-expired (past validUntil)" });
+      expired++;
+    }
+  }
+  if (expired) await writeAll(records);
+  return { expired, considered };
+}
+
 module.exports = {
   STATUSES,
   TYPES,
@@ -478,5 +503,6 @@ module.exports = {
   acceptWithSignature,
   decline,
   expire,
+  expireStaleQuotes,
   attachWorkOrder
 };

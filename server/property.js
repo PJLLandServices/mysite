@@ -397,6 +397,57 @@ document.getElementById("deferredList")?.addEventListener("click", async (event)
   }
 });
 
+// Service history — completed visits at this property (spec §4.3.4
+// completion cascade output). Each entry shows the WO, summary, total,
+// warranty expiry, and a deep-link to the draft invoice if one exists.
+const SR_TYPE_LABELS = {
+  spring_opening: "Spring Opening",
+  fall_closing: "Fall Closing",
+  service_visit: "Service Visit"
+};
+function renderServiceRecords(property) {
+  const section = document.getElementById("serviceRecordsSection");
+  const list = document.getElementById("serviceRecordsList");
+  const countEl = document.getElementById("serviceRecordsCount");
+  if (!section || !list) return;
+  const items = Array.isArray(property.serviceRecords) ? property.serviceRecords : [];
+  if (!items.length) { section.hidden = true; return; }
+  section.hidden = false;
+  if (countEl) countEl.textContent = String(items.length);
+  list.innerHTML = "";
+  for (const r of items) {
+    const li = document.createElement("li");
+    li.className = "property-service-record";
+    const completedDate = r.completedAt
+      ? new Date(r.completedAt).toLocaleDateString("en-CA", { month: "short", day: "numeric", year: "numeric" })
+      : "—";
+    const warrantyDate = r.warrantyExpiresAt
+      ? new Date(r.warrantyExpiresAt).toLocaleDateString("en-CA", { month: "short", year: "numeric" })
+      : null;
+    const totalLine = r.total > 0 ? `$${Number(r.total).toFixed(2)} incl. HST` : "No charge";
+    const invoiceLink = r.invoiceId
+      ? `<a class="property-service-record__invoice" href="/admin/invoice/${encodeURIComponent(r.invoiceId)}">Invoice ${escapeHtml(r.invoiceId)}</a>`
+      : "";
+    const woLink = r.woId
+      ? `<a class="property-service-record__wo" href="/admin/work-order/${encodeURIComponent(r.woId)}">${escapeHtml(r.woId)}</a>`
+      : "";
+    li.innerHTML = `
+      <div class="property-service-record__head">
+        <strong>${escapeHtml(SR_TYPE_LABELS[r.woType] || r.woType || "Visit")}</strong>
+        <span class="property-service-record__date">${escapeHtml(completedDate)}</span>
+      </div>
+      <p class="property-service-record__summary">${escapeHtml(r.summary || "")}</p>
+      <div class="property-service-record__meta">
+        <span>${escapeHtml(totalLine)}</span>
+        ${warrantyDate ? `<span>· Warranty thru ${escapeHtml(warrantyDate)}</span>` : ""}
+        ${woLink ? `<span>· ${woLink}</span>` : ""}
+        ${invoiceLink ? `<span>· ${invoiceLink}</span>` : ""}
+      </div>
+    `;
+    list.appendChild(li);
+  }
+}
+
 function renderLeadsList(leads) {
   if (!leads.length) {
     leadsSection.hidden = true;
@@ -690,6 +741,7 @@ async function init() {
     renderLeadsList(data.leads || []);
     renderFieldWoList(data.property);
     renderDeferredRecommendations(data.property);
+    renderServiceRecords(data.property);
   } catch (err) {
     propertyLoading.hidden = true;
     propertyError.hidden = false;

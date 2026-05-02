@@ -170,6 +170,18 @@ function blankProperty() {
     // Status enum: open | pre_authorized | in_progress | resolved |
     //              dismissed | re_deferred
     deferredIssues: [],
+    // Service records — append-only history of completed visits at this
+    // property (spec §4.3.4 completion cascade). Each entry:
+    //   { id, woId, woType, completedAt, techNotes,
+    //     summary,                       // 1-line description
+    //     lineItems: [...],              // snapshotted from the on-site quote
+    //     subtotal, hst, total,
+    //     warrantyMonths,                // 12 for repairs, 36 for installs
+    //     warrantyExpiresAt,
+    //     invoiceId,                     // pointer into invoices.json
+    //     promotedPhotoIds: []           // photos copied to property.photos
+    //   }
+    serviceRecords: [],
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString()
   };
@@ -227,8 +239,90 @@ function hydrate(p) {
     photos: Array.isArray(p?.photos) ? p.photos : [],
     leadIds: Array.isArray(p?.leadIds) ? p.leadIds : [],
     workOrderIds: Array.isArray(p?.workOrderIds) ? p.workOrderIds : [],
-    deferredIssues: Array.isArray(p?.deferredIssues) ? p.deferredIssues.map(hydrateDeferred) : []
+    deferredIssues: Array.isArray(p?.deferredIssues) ? p.deferredIssues.map(hydrateDeferred) : [],
+    serviceRecords: Array.isArray(p?.serviceRecords) ? p.serviceRecords : []
   };
+}
+
+// Append a service record to a property. Called by the completion
+// cascade (spec §4.3.4) when a WO transitions to status=completed.
+// Returns the saved entry or null if the property is missing.
+async function addServiceRecord(propertyId, payload) {
+  if (!propertyId) return null;
+  const properties = await readAll();
+  const idx = properties.findIndex((p) => p.id === propertyId);
+  if (idx === -1) return null;
+  const target = properties[idx];
+  const now = new Date().toISOString();
+  const id = "sr_" + Math.random().toString(36).slice(2, 10) + "_" + Date.now();
+  const entry = {
+    id,
+    woId: payload?.woId || null,
+    woType: payload?.woType || "service_visit",
+    completedAt: payload?.completedAt || now,
+    techNotes: payload?.techNotes || "",
+    summary: payload?.summary || "",
+    lineItems: Array.isArray(payload?.lineItems) ? payload.lineItems : [],
+    subtotal: Number.isFinite(Number(payload?.subtotal)) ? Number(payload.subtotal) : 0,
+    hst: Number.isFinite(Number(payload?.hst)) ? Number(payload.hst) : 0,
+    total: Number.isFinite(Number(payload?.total)) ? Number(payload.total) : 0,
+    warrantyMonths: Number.isFinite(Number(payload?.warrantyMonths)) ? Number(payload.warrantyMonths) : 12,
+    warrantyExpiresAt: payload?.warrantyExpiresAt || null,
+    invoiceId: payload?.invoiceId || null,
+    promotedPhotoIds: Array.isArray(payload?.promotedPhotoIds) ? payload.promotedPhotoIds : []
+  };
+  if (!Array.isArray(target.serviceRecords)) target.serviceRecords = [];
+  target.serviceRecords.unshift(entry);
+  target.updatedAt = now;
+  properties[idx] = target;
+  await writeAll(properties);
+  return entry;
+}
+
+async function findServiceRecordByWo(propertyId, woId) {
+  if (!propertyId || !woId) return null;
+  const properties = await readAll();
+  const target = properties.find((p) => p.id === propertyId);
+  if (!target) return null;
+  return (target.serviceRecords || []).find((r) => r.woId === woId) || null;
+}
+
+// Patch the property's system block with updates the tech captured on
+// the WO (e.g. zone description changes, controller location changes).
+// Used by the completion cascade. Per-field merge — never overwrites a
+// value with empty.
+async function applySystemUpdates(propertyId, systemPatch) {
+  if (!propertyId || !systemPatch || typeof systemPatch !== "object") return null;
+  const properties = await readAll();
+  const idx = properties.findIndex((p) => p.id === propertyId);
+  if (idx === -1) return null;
+  const target = properties[idx];
+  target.system = target.system || {};
+  for (const key of ["controllerLocation", "controllerBrand", "shutoffLocation", "blowoutLocation", "notes"]) {
+    const v = systemPatch[key];
+    if (typeof v === "string" && v.trim()) target.system[key] = v.trim();
+  }
+  if (Array.isArray(systemPatch.zones)) {
+    // Per-zone update: match by `number`, then merge fields. Never delete
+    // existing zones from the property — those are admin-managed.
+    const existingByNum = new Map((target.system.zones || []).map((z) => [Number(z.number), z]));
+    for (const z of systemPatch.zones) {
+      const num = Number(z.number);
+      if (!Number.isFinite(num) || num <= 0) continue;
+      const current = existingByNum.get(num) || { number: num };
+      if (typeof z.label === "string" && z.label.trim() && !current.label) current.label = z.label.trim();
+      if (typeof z.location === "string" && z.location.trim() && !current.location) current.location = z.location.trim();
+      if (Array.isArray(z.sprinklerTypes) && z.sprinklerTypes.length && !current.sprinklerTypes?.length) current.sprinklerTypes = z.sprinklerTypes.slice();
+      if (Array.isArray(z.coverage) && z.coverage.length && !current.coverage?.length) current.coverage = z.coverage.slice();
+      if (typeof z.notes === "string" && z.notes.trim()) current.notes = z.notes.trim();
+      existingByNum.set(num, current);
+    }
+    target.system.zones = Array.from(existingByNum.values()).sort((a, b) => (a.number || 0) - (b.number || 0));
+  }
+  target.updatedAt = new Date().toISOString();
+  properties[idx] = target;
+  await writeAll(properties);
+  return target;
 }
 
 // ---- Auto-match / upsert --------------------------------------------
@@ -268,30 +362,53 @@ async function findMatch({ email, address, coords }) {
   return null;
 }
 
+// Find existing properties at this address that belong to a DIFFERENT
+// customer (different email). Used by the conflict-ownership check —
+// could be the new owner of an old customer's house. Spec §3.1.
+function findOwnershipConflicts(properties, address, coords, excludeEmail) {
+  const targetAddrNorm = normalizeAddress(address);
+  if (!targetAddrNorm && !(coords && coords.lat != null)) return [];
+  const conflicts = [];
+  for (const p of properties) {
+    if (p.customerEmail === excludeEmail) continue;
+    if (!p.customerEmail) continue; // unattributed properties don't conflict
+    let isMatch = false;
+    if (p.addressNormalized && p.addressNormalized === targetAddrNorm) isMatch = true;
+    if (!isMatch && coords && coords.lat != null && p.coords && p.coords.lat != null) {
+      if (haversineMeters(coords, p.coords) <= MATCH_RADIUS_METERS) isMatch = true;
+    }
+    if (isMatch) conflicts.push(p);
+  }
+  return conflicts;
+}
+
 // Match outcome — drives whether we auto-link, suggest a link to an
 // existing property under the same customer, or create a brand-new
 // customer + property record. The CRM uses the `status` to decide if
 // Patrick needs to confirm the link manually.
 //
-//   "linked"     — strong match (same email + same address). Auto-attached.
-//   "new"        — no email match anywhere. Brand-new customer + property.
-//   "suggested"  — email matches an existing customer but the address
-//                  doesn't (different property under same customer, OR
-//                  the address typed was different enough it didn't match).
-//                  We create the new property AND tag the lead with a
-//                  pointer to the candidate so Patrick can confirm/reject.
+//   "linked"              — strong match (same email + same address). Auto-attached.
+//   "new"                 — no email match, no address conflict. Fresh customer + property.
+//   "suggested"           — email matches an existing customer but the address
+//                           doesn't (different property under same customer).
+//   "conflict-ownership"  — known property at this address but a DIFFERENT
+//                           customer email. Could be the new owner of an old
+//                           customer's house (spec §3.1 "do NOT auto-merge").
+//                           Property is created for the new customer; the
+//                           existing-owner property is surfaced for Patrick
+//                           to review.
+//   "no-email"            — no email at all; can't match.
 //
-// `attachLead` always returns { property, status, suggestions[] }.
+// `attachLead` always returns { property, status, suggestions[], conflicts[] }.
 async function attachLead({ leadId, email, name, phone, address, coords }) {
   const properties = await readAll();
   const targetEmail = normalizeEmail(email);
-  if (!targetEmail) return { property: null, status: "no-email", suggestions: [] };
+  if (!targetEmail) return { property: null, status: "no-email", suggestions: [], conflicts: [] };
 
   // Strong match first — same customer + same property.
   let property = await findMatch({ email, address, coords });
 
   if (property) {
-    // Refresh contact info (the latest lead might have a corrected name/phone).
     const idx = properties.findIndex((p) => p.id === property.id);
     if (idx !== -1) {
       const updated = properties[idx];
@@ -306,13 +423,16 @@ async function attachLead({ leadId, email, name, phone, address, coords }) {
       property = updated;
     }
     await writeAll(properties);
-    return { property, status: "linked", suggestions: [] };
+    return { property, status: "linked", suggestions: [], conflicts: [] };
   }
 
-  // No address match — but maybe the email matches an existing customer.
-  // If so, create the new property AND surface the existing ones as
-  // suggestions so Patrick can manually merge if it's actually the same site.
+  // Same customer (email matches), different address — suggest manual merge.
   const sameCustomer = properties.filter((p) => p.customerEmail === targetEmail);
+  // Different customer at the same address — flag as ownership conflict
+  // (spec §3.1: don't auto-merge, surface for Patrick to confirm). This
+  // protects against an old customer's contact data getting attached to
+  // the new owner's house.
+  const ownershipConflicts = findOwnershipConflicts(properties, address, coords, targetEmail);
 
   property = blankProperty();
   property.code = nextPropertyCode(properties, String(new Date().getUTCFullYear()));
@@ -326,14 +446,23 @@ async function attachLead({ leadId, email, name, phone, address, coords }) {
   properties.unshift(property);
   await writeAll(properties);
 
+  let status = "new";
+  if (ownershipConflicts.length) status = "conflict-ownership";
+  else if (sameCustomer.length) status = "suggested";
+
   return {
     property,
-    status: sameCustomer.length ? "suggested" : "new",
-    // Lightweight suggestion shape — just enough for the CRM to render
-    // "this might be: <address> · <booking count>" without a second fetch.
+    status,
     suggestions: sameCustomer.map((p) => ({
       id: p.id,
       address: p.address,
+      bookingCount: (p.leadIds || []).length
+    })),
+    conflicts: ownershipConflicts.map((p) => ({
+      id: p.id,
+      address: p.address,
+      previousCustomerName: p.customerName || "",
+      previousCustomerEmail: p.customerEmail || "",
       bookingCount: (p.leadIds || []).length
     }))
   };
@@ -690,5 +819,8 @@ module.exports = {
   addDeferredIssue,
   getDeferredIssue,
   updateDeferredIssue,
-  listDeferred
+  listDeferred,
+  addServiceRecord,
+  findServiceRecordByWo,
+  applySystemUpdates
 };

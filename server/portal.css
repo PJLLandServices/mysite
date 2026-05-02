@@ -894,3 +894,30 @@ body.portal-modal-open { overflow: hidden; }
   min-height: 44px;
 }
 .portal-preauth-error { margin: 0; color: #C03A2C; font-size: 13px; }
+
+/* Customer notification preferences (spec §6.3) */
+.portal-prefs-form { display: flex; flex-direction: column; gap: 12px; }
+.portal-prefs-field { display: flex; flex-direction: column; gap: 4px; }
+.portal-prefs-field span { font-size: 12px; font-weight: 600; color: #555; text-transform: uppercase; letter-spacing: 0.04em; }
+.portal-prefs-field input {
+  font-family: inherit;
+  font-size: 15px;
+  padding: 9px 12px;
+  border: 1px solid #d8d8c9;
+  border-radius: 8px;
+  background: #fff;
+}
+.portal-prefs-toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  background: #FAFAF5;
+  border: 1px solid #E5E5DD;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 14px;
+  color: #1F2A22;
+}
+.portal-prefs-toggle input { width: 18px; height: 18px; cursor: pointer; }
+.portal-prefs-status { margin: 6px 0 0; font-size: 13px; color: #555; }

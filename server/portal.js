@@ -708,4 +708,56 @@ function createPortalSignaturePad(canvas, onChange) {
   };
 }
 
+// ---- Customer notification preferences (spec §6.3) -------------------
+
+async function loadPrefs() {
+  const token = tokenFromLocation();
+  if (!token) return;
+  try {
+    const r = await fetch(`/api/portal/${encodeURIComponent(token)}/preferences`, { cache: "no-store" });
+    const data = await r.json().catch(() => ({}));
+    if (!data.ok) return;
+    const prefs = data.preferences || {};
+    const contact = data.contact || {};
+    document.getElementById("prefsPhone").value = contact.phone || "";
+    document.getElementById("prefsEmail").value = contact.email || "";
+    document.getElementById("prefsBestTime").value = prefs.bestTimeToReach || "";
+    document.getElementById("prefsTextReminders").checked = prefs.textReminders !== false;
+    document.getElementById("prefsEmailOnly").checked = prefs.emailOnly === true;
+    document.getElementById("prefsMarketing").checked = prefs.marketingTexts === true;
+  } catch {}
+}
+
+document.getElementById("prefsForm")?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const token = tokenFromLocation();
+  if (!token) return;
+  const status = document.getElementById("prefsStatus");
+  const submit = event.target.querySelector("button[type='submit']");
+  status.textContent = "Saving…";
+  submit.disabled = true;
+  try {
+    const r = await fetch(`/api/portal/${encodeURIComponent(token)}/preferences`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        phone: document.getElementById("prefsPhone").value.trim(),
+        email: document.getElementById("prefsEmail").value.trim(),
+        bestTimeToReach: document.getElementById("prefsBestTime").value.trim(),
+        textReminders: document.getElementById("prefsTextReminders").checked,
+        emailOnly: document.getElementById("prefsEmailOnly").checked,
+        marketingTexts: document.getElementById("prefsMarketing").checked
+      })
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok || !data.ok) throw new Error((data.errors && data.errors[0]) || "Couldn't save.");
+    status.textContent = customerFirstName ? `Saved, ${customerFirstName}.` : "Saved.";
+  } catch (err) {
+    status.textContent = err.message || "Failed.";
+  } finally {
+    submit.disabled = false;
+  }
+});
+
 loadPortal();
+loadPrefs();

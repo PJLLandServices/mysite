@@ -988,3 +988,19 @@
   flex-direction: column;
   gap: 8px;
 }
+
+/* Service history (spec §4.3.4 cascade output) */
+.property-service-records__list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 10px; }
+.property-service-record {
+  background: #fff;
+  border: 1px solid #E5E5DD;
+  border-radius: 8px;
+  padding: 12px 14px;
+}
+.property-service-record__head { display: flex; justify-content: space-between; gap: 10px; margin-bottom: 4px; }
+.property-service-record__head strong { color: #1B4D2E; font-size: 14px; }
+.property-service-record__date { color: #777; font-size: 12px; }
+.property-service-record__summary { margin: 0 0 6px; color: #444; font-size: 13px; line-height: 1.45; }
+.property-service-record__meta { color: #777; font-size: 12px; display: flex; flex-wrap: wrap; gap: 4px 8px; }
+.property-service-record__meta a { color: #1B4D2E; text-decoration: none; font-weight: 600; }
+.property-service-record__meta a:hover { text-decoration: underline; }

@@ -162,6 +162,39 @@
         </div>
       </article>
 
+      <article class="portal-card portal-prefs" id="prefsCard">
+        <h2>Notification preferences</h2>
+        <p>How would you like PJL to reach you?</p>
+        <form id="prefsForm" class="portal-prefs-form">
+          <label class="portal-prefs-field">
+            <span>Phone</span>
+            <input type="tel" id="prefsPhone" autocomplete="tel" placeholder="(905) 555-1234">
+          </label>
+          <label class="portal-prefs-field">
+            <span>Email</span>
+            <input type="email" id="prefsEmail" autocomplete="email" placeholder="you@example.com">
+          </label>
+          <label class="portal-prefs-field">
+            <span>Best time to reach you</span>
+            <input type="text" id="prefsBestTime" placeholder="e.g. Weekdays after 5pm">
+          </label>
+          <label class="portal-prefs-toggle">
+            <input type="checkbox" id="prefsTextReminders" checked>
+            <span>Text appointment reminders</span>
+          </label>
+          <label class="portal-prefs-toggle">
+            <input type="checkbox" id="prefsEmailOnly">
+            <span>Email-only mode (no SMS)</span>
+          </label>
+          <label class="portal-prefs-toggle">
+            <input type="checkbox" id="prefsMarketing">
+            <span>Allow seasonal promotions / marketing texts</span>
+          </label>
+          <button type="submit" class="portal-btn portal-btn-primary">Save preferences</button>
+          <p class="portal-prefs-status" id="prefsStatus" role="status"></p>
+        </form>
+      </article>
+
       <article class="portal-card portal-help">
         <h2 id="helpHeading">Need to update something?</h2>
         <p>Call or email PJL Land Services and mention this portal. We will keep your request moving.</p>
