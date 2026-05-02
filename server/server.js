@@ -127,16 +127,17 @@ const CRM_PRIORITIES = new Set(["normal", "high", "urgent"]);
 // SMS/email notification) and a category that groups similar inquiry types.
 // Add new sources here, then point the form's `source` field at the new key.
 const SOURCES = {
-  sprinkler_repair:    { label: "Sprinkler Repair",    category: "repair"    },
-  ai_diagnose:         { label: "AI Diagnostic Chat",  category: "repair"    },
-  sprinkler_quote:     { label: "New Sprinkler Quote", category: "install"   },
-  landscape_lighting:  { label: "Landscape Lighting",  category: "lighting"  },
-  drip_irrigation:     { label: "Drip Irrigation",     category: "install"   },
-  spring_opening:      { label: "Spring Opening",      category: "seasonal"  },
-  fall_closing:        { label: "Fall Closing",        category: "seasonal"  },
-  coverage_inquiry:    { label: "Service Area Check",  category: "inquiry"   },
-  general_contact:     { label: "General Contact",     category: "inquiry"   },
-  general_lead:        { label: "General Lead",        category: "inquiry"   }
+  sprinkler_repair:     { label: "Sprinkler Repair",      category: "repair"    },
+  ai_diagnose:          { label: "AI Diagnostic Chat",    category: "repair"    },
+  ai_self_fix_capture:  { label: "Self-Fix Capture",      category: "nurture"   },
+  sprinkler_quote:      { label: "New Sprinkler Quote",   category: "install"   },
+  landscape_lighting:   { label: "Landscape Lighting",    category: "lighting"  },
+  drip_irrigation:      { label: "Drip Irrigation",       category: "install"   },
+  spring_opening:       { label: "Spring Opening",        category: "seasonal"  },
+  fall_closing:         { label: "Fall Closing",          category: "seasonal"  },
+  coverage_inquiry:     { label: "Service Area Check",    category: "inquiry"   },
+  general_contact:      { label: "General Contact",       category: "inquiry"   },
+  general_lead:         { label: "General Lead",          category: "inquiry"   }
 };
 const DEFAULT_SOURCE = "general_lead";
 

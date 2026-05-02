@@ -23,6 +23,7 @@
   const LEAD_ENDPOINT = "https://pjl-land-services-onrender-com.onrender.com/api/quotes";
   const TRANSCRIPT_ENDPOINT = "https://pjl-land-services-onrender-com.onrender.com/api/chat-transcripts";
   const FORM_TRIGGER = "[SHOW_BOOKING_FORM]";
+  const CAPTURE_TRIGGER = "[SHOW_CONTACT_CAPTURE]";
   const STORAGE_KEY = "pjl_chat_state_v1";
   const PHOTO_DB_NAME = "pjl_chat_photos_v1";
   const PHOTO_STORE = "photos";
@@ -39,6 +40,8 @@
     pendingPhotoIds: [],  // photos staged in the rail, sent on next user message
     bookingShown: false,
     bookingComplete: false,
+    captureShown: false,    // [SHOW_CONTACT_CAPTURE] form rendered (self-fix success path)
+    captureComplete: false, // contact-capture form submitted
     panelOpen: false,
     awaiting: false,      // reset to false on rehydrate (in-flight requests don't survive nav)
     chatSessionId: null   // generated lazily; identifies the chat for transcript upserts
@@ -126,6 +129,8 @@
         pendingPhotoIds: state.pendingPhotoIds,
         bookingShown: state.bookingShown,
         bookingComplete: state.bookingComplete,
+        captureShown: state.captureShown,
+        captureComplete: state.captureComplete,
         panelOpen: state.panelOpen,
         chatSessionId: state.chatSessionId
       };
@@ -144,7 +149,9 @@
   async function clearAllState() {
     state = {
       messages: [], photoIds: [], pendingPhotoIds: [],
-      bookingShown: false, bookingComplete: false, panelOpen: false, awaiting: false,
+      bookingShown: false, bookingComplete: false,
+      captureShown: false, captureComplete: false,
+      panelOpen: false, awaiting: false,
       chatSessionId: null
     };
     photoCache.clear();
@@ -214,21 +221,12 @@
       <div class="pjl-chat-ty" data-pjl-ty>
         <div class="pjl-chat-ty-card">
           <div class="pjl-chat-ty-icon">✓</div>
-          <h2>You're now a PJL customer.</h2>
-          <p>We'll reach out within 24 hours to confirm your visit. Check your email for the booking confirmation.</p>
+          <h2 data-pjl-ty-heading>You're now a PJL customer.</h2>
+          <p data-pjl-ty-body>We'll reach out within 24 hours to confirm your visit. Check your email for the booking confirmation.</p>
           <div class="pjl-chat-ty-portal" data-pjl-ty-portal hidden>
             <strong>Your customer portal:</strong>
             <a href="" target="_blank" rel="noopener" data-pjl-ty-portal-link></a>
-            <p class="pjl-chat-ty-portal-note">Bookmark this — you can check status, message Patrick, accept future quotes, and pre-book seasonal service from here.</p>
-          </div>
-          <div class="pjl-chat-ty-upsell">
-            <h3>Lock in your fall winterization</h3>
-            <p>Every sprinkler system in Ontario needs to be blown out before the first hard freeze — skip it and the valves crack over winter. Get on our fall list now and we'll handle it in October.</p>
-            <a href="sprinkler-fall-winterization.html" class="pjl-chat-ty-upsell-primary">
-              <span class="pjl-chat-ty-upsell-primary-tag">FALL WINTERIZATION</span>
-              <strong>Pre-book my fall closing</strong>
-              <span class="pjl-chat-ty-upsell-primary-price">From $90 — locked-in scheduling, no chasing us in September</span>
-            </a>
+            <p class="pjl-chat-ty-portal-note">Bookmark this — you can check status, message Patrick, and accept future quotes from here.</p>
           </div>
           <button data-action="restart-ty" type="button">Start a New Diagnosis</button>
         </div>
@@ -357,6 +355,7 @@
       bubble.className = "pjl-chat-msg-bubble";
       const text = (typeof msg.content === "string" ? msg.content : "")
         .replace(FORM_TRIGGER, "")
+        .replace(CAPTURE_TRIGGER, "")
         .trim();
       bubble.innerHTML = formatBubbleText(text);
       row.appendChild(bubble);
@@ -575,9 +574,13 @@
       const reply = data.reply || "Sorry — I'm having trouble responding right now.";
       state.messages.push({ role: "assistant", content: reply });
       saveState();
-      const cleanReply = reply.replace(FORM_TRIGGER, "").trim();
+      const cleanReply = reply
+        .replace(FORM_TRIGGER, "")
+        .replace(CAPTURE_TRIGGER, "")
+        .trim();
       const showForm = reply.includes(FORM_TRIGGER);
-      return { reply: cleanReply, showForm };
+      const showCapture = reply.includes(CAPTURE_TRIGGER);
+      return { reply: cleanReply, showForm, showCapture };
     } catch (err) {
       // Roll back the user message so they can retry without losing the photos
       // (photos stay in pendingPhotoIds via state below).
@@ -589,7 +592,7 @@
 
   // -------- Send flow --------
   async function sendCurrentMessage() {
-    if (state.awaiting || state.bookingComplete) return;
+    if (state.awaiting || state.bookingComplete || state.captureComplete) return;
     const text = (composerInput.value || "").trim();
     const photoIds = state.pendingPhotoIds.slice();
     if (!text && !photoIds.length) return;
@@ -615,13 +618,19 @@
     setTimeout(showTyping, 200);
 
     try {
-      const { reply, showForm } = await callPJL(text, photoIds);
+      const { reply, showForm, showCapture } = await callPJL(text, photoIds);
       hideTyping();
       if (reply) appendPJLMessageDOM(reply);
+      // Booking trumps capture — if both fire (shouldn't happen, but defensively),
+      // booking wins because it's a higher-intent action.
       if (showForm) {
         state.bookingShown = true;
         saveState();
         setTimeout(showBookingFormBubble, 400);
+      } else if (showCapture && !state.captureShown && !state.bookingShown) {
+        state.captureShown = true;
+        saveState();
+        setTimeout(showContactCaptureBubble, 400);
       }
       // If chat is minimized when reply lands, mark unread on launcher
       if (!state.panelOpen) launcherEl.classList.add("has-unread");
@@ -740,7 +749,7 @@
         const tp = m.content.find((b) => b.type === "text");
         text = (imageCount ? `[attached ${imageCount} photo${imageCount > 1 ? "s" : ""}] ` : "") + (tp ? tp.text : "");
       } else { text = ""; }
-      text = text.replace(FORM_TRIGGER, "").trim();
+      text = text.replace(FORM_TRIGGER, "").replace(CAPTURE_TRIGGER, "").trim();
       if (text) lines.push(`${who}: ${text}`);
     }
     return lines.join("\n\n");
@@ -782,18 +791,7 @@
       if (r.ok) {
         state.bookingComplete = true;
         saveState();
-        // Surface the customer portal link in the thank-you screen so the
-        // customer has a permanent home for managing their PJL account.
-        if (body.portalUrl) {
-          const portalBlock = tyOverlay.querySelector("[data-pjl-ty-portal]");
-          const portalLink = tyOverlay.querySelector("[data-pjl-ty-portal-link]");
-          if (portalBlock && portalLink) {
-            portalLink.href = body.portalUrl;
-            portalLink.textContent = body.portalUrl;
-            portalBlock.hidden = false;
-          }
-        }
-        tyOverlay.classList.add("is-visible");
+        showThankYou({ kind: "booking", portalUrl: body.portalUrl });
       } else {
         const msg = (body.errors && body.errors[0]) || `Submit failed (${r.status})`;
         throw new Error(msg);
@@ -804,6 +802,124 @@
       submitBtn.disabled = false;
       submitBtn.textContent = "Send My Details →";
     });
+  }
+
+  // -------- Contact-capture form (self-fix success path) --------
+  // Lighter-weight than the booking form: name + phone + email + address only.
+  // No service selection, no photos. Posts to the same /api/quotes endpoint
+  // with a different `source` so the lead lands in the CRM tagged for
+  // future fall outreach instead of an active repair booking.
+  function showContactCaptureBubble() {
+    if (messagesEl.querySelector("[data-pjl-capture]")) return;
+    const row = document.createElement("div");
+    row.className = "pjl-chat-msg-row pjl";
+    row.setAttribute("data-pjl-capture", "true");
+    const av = document.createElement("div");
+    av.className = "pjl-chat-msg-avatar hidden";
+    row.appendChild(av);
+    const bubble = document.createElement("div");
+    bubble.className = "pjl-chat-form-bubble";
+    bubble.innerHTML = `
+      <h3>Stay in touch</h3>
+      <p>Drop your info below and we'll reach out in the fall when we start booking Fall Closing Services. No commitment — just so you know who to call.</p>
+      <form data-pjl-capture-form>
+        <div class="pjl-chat-form-grid">
+          <div><label>First name <span class="req">*</span></label><input type="text" name="first_name" required></div>
+          <div><label>Last name <span class="req">*</span></label><input type="text" name="last_name" required></div>
+          <div><label>Email <span class="req">*</span></label><input type="email" name="email" required></div>
+          <div><label>Phone <span class="req">*</span></label><input type="tel" name="phone" required></div>
+          <div class="full"><label>Service address</label><input type="text" name="address" placeholder="Street, City"></div>
+        </div>
+        <button type="submit">Add Me to the List →</button>
+      </form>
+    `;
+    row.appendChild(bubble);
+    messagesEl.appendChild(row);
+    scrollToBottom();
+
+    bubble.querySelector("form").addEventListener("submit", (e) => {
+      e.preventDefault();
+      const f = Object.fromEntries(new FormData(e.target).entries());
+      submitContactCapture(f, e.target);
+    });
+
+    composerInput.disabled = true;
+    sendBtn.disabled = true;
+    attachBtn.disabled = true;
+    composerInput.placeholder = "Filling out contact form...";
+  }
+
+  function submitContactCapture(formFields, formEl) {
+    const submitBtn = formEl.querySelector('button[type="submit"]');
+    submitBtn.disabled = true;
+    submitBtn.textContent = "Sending...";
+
+    const fullName = `${(formFields.first_name || "").trim()} ${(formFields.last_name || "").trim()}`.trim();
+
+    const payload = {
+      source: "ai_self_fix_capture",
+      contact: {
+        name: fullName,
+        phone: formFields.phone || "",
+        email: formFields.email || "",
+        address: formFields.address || "",
+        notes: ""
+      },
+      // Empty features = not a quote; the lead is a future-prospect contact.
+      features: [],
+      pageUrl: location.href,
+      userAgent: navigator.userAgent,
+      mode: "ai_self_fix_capture",
+      transcript: buildTranscript(),
+      chatSessionId: state.chatSessionId || null,
+      photos: []
+    };
+
+    fetch(LEAD_ENDPOINT, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Accept": "application/json" },
+      body: JSON.stringify(payload)
+    }).then(async (r) => {
+      const body = await r.json().catch(() => ({}));
+      if (r.ok) {
+        state.captureComplete = true;
+        saveState();
+        showThankYou({ kind: "capture", portalUrl: body.portalUrl });
+      } else {
+        const msg = (body.errors && body.errors[0]) || `Submit failed (${r.status})`;
+        throw new Error(msg);
+      }
+    }).catch((err) => {
+      console.error("Capture submit error:", err);
+      showToast(err.message || "Couldn't send your details — please try again or call us directly.");
+      submitBtn.disabled = false;
+      submitBtn.textContent = "Add Me to the List →";
+    });
+  }
+
+  // Show the thank-you overlay with copy + portal block tailored to the
+  // flow that just completed. `kind` is "booking" (active repair booked)
+  // or "capture" (self-fix success, future-prospect opt-in).
+  function showThankYou({ kind, portalUrl }) {
+    const headingEl = tyOverlay.querySelector("[data-pjl-ty-heading]");
+    const bodyEl = tyOverlay.querySelector("[data-pjl-ty-body]");
+    if (kind === "capture") {
+      if (headingEl) headingEl.textContent = "Got you on the list.";
+      if (bodyEl) bodyEl.textContent = "We'll reach out in the fall when we start booking winterizations. No need to do anything until then — your sprinkler system is back up and running, and that's the win.";
+    } else {
+      if (headingEl) headingEl.textContent = "You're now a PJL customer.";
+      if (bodyEl) bodyEl.textContent = "We'll reach out within 24 hours to confirm your visit. Check your email for the booking confirmation.";
+    }
+    if (portalUrl) {
+      const portalBlock = tyOverlay.querySelector("[data-pjl-ty-portal]");
+      const portalLink = tyOverlay.querySelector("[data-pjl-ty-portal-link]");
+      if (portalBlock && portalLink) {
+        portalLink.href = portalUrl;
+        portalLink.textContent = portalUrl;
+        portalBlock.hidden = false;
+      }
+    }
+    tyOverlay.classList.add("is-visible");
   }
 
   // -------- Welcome / first-time messages --------
@@ -916,28 +1032,30 @@
     allPhotos.forEach((p) => photoCache.set(p.id, p));
 
     // 4. Decide visibility
-    if (hadState && state.bookingComplete) {
-      // They booked, then navigated. Don't show launcher — booking is done.
-      // Surface the panel only if they explicitly had it open.
-      // Default: clean state. Most pages should hide both.
-      // But keep launcher off; they may revisit later in a fresh session.
-      // For now, we treat post-booking as "session closed" and clear it.
+    if (hadState && (state.bookingComplete || state.captureComplete)) {
+      // They converted (booked OR captured), then navigated. Treat as a
+      // completed session and clear state — launcher disappears, fresh
+      // start on next visit. Same logic for both terminal flows.
       await clearAllState();
     } else if (hadState && state.messages.length > 0) {
       // Active conversation — show ONLY the launcher pill on a fresh page
       // load. We deliberately do NOT auto-open the panel even if it was open
       // on the previous page; the customer reopens it by clicking the pill.
       // (Auto-opening on every navigation would obscure the page they just
-      // navigated to.) The conversation, photos, and booking-form state are
-      // all still there — they just stay collapsed until requested.
+      // navigated to.) The conversation, photos, and form state are all
+      // still there — they just stay collapsed until requested.
       state.panelOpen = false;
       saveState();
       launcherEl.classList.add("is-visible");
       // Pre-render the messages + photo rail so re-opening is instant.
       renderMessages();
       renderPhotoRail();
+      // Re-render whichever form was active. Booking takes precedence if
+      // somehow both were shown (defensive — the send flow gates this).
       if (state.bookingShown) {
         showBookingFormBubble();
+      } else if (state.captureShown) {
+        showContactCaptureBubble();
       }
     }
 
@@ -947,7 +1065,9 @@
     // 6. On tab close / nav away, beacon a final transcript snapshot so we
     //    don't lose the conversation when a customer just walks away.
     window.addEventListener("pagehide", () => {
-      if (state.bookingComplete) return; // already captured via /api/quotes
+      // Already captured via /api/quotes — skip the beacon to avoid duplicate
+      // transcript writes. Same for both terminal flows.
+      if (state.bookingComplete || state.captureComplete) return;
       if (!state.messages.length || !state.chatSessionId) return;
       pushTranscript({ useBeacon: true });
     });
