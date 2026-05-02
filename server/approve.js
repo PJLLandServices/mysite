@@ -70,6 +70,13 @@ function render(q) {
     `;
     linesEl.appendChild(row);
   }
+  // PDF download link — same quote rendered as a one-page document the
+  // customer can save / print. Token in the URL gates access.
+  const pdfLink = document.getElementById("approvePdfLink");
+  if (pdfLink && quoteId && token) {
+    pdfLink.href = `/api/approve/${encodeURIComponent(quoteId)}/${encodeURIComponent(token)}/pdf`;
+  }
+
   document.getElementById("approveSubtotal").textContent = fmt(q.subtotal);
   document.getElementById("approveHst").textContent = fmt(q.hst);
   document.getElementById("approveTotal").textContent = fmt(q.total);

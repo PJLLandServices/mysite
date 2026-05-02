@@ -48,6 +48,7 @@ const invoices = require("./lib/invoices");
 const completionCascade = require("./lib/completion-cascade");
 const settings = require("./lib/settings");
 const issueRollup = require("./lib/issue-rollup");
+const { generateQuotePdf } = require("./lib/quote-pdf");
 
 // Short, customer-friendly work order ID. Eight chars from a UUIDv4 base32-ish
 // alphabet (no I/O/0/1 to keep them unambiguous when read aloud or hand-written).
@@ -2598,6 +2599,62 @@ async function handleApi(req, res, pathname) {
   // ---------- Work orders -------------------------------------------
   // Admin-only (auth gate above). Phase 4 will add a customer-portal
   // subset for accept-quote, but for now everything is gated.
+
+  // ---------- Quote PDF (admin-gated + public-via-token) ---------------
+  // Admin: GET /api/admin/quote-folder/:id/pdf — download a PDF for any
+  // Quote in the folder. Pulls customer/property metadata for the
+  // bill-to block. Streams via pdfkit so memory usage stays small even
+  // for many-line quotes.
+  const adminQuotePdfMatch = pathname.match(/^\/api\/admin\/quote-folder\/([^/]+)\/pdf$/);
+  if (adminQuotePdfMatch && req.method === "GET") {
+    try {
+      const id = decodeURIComponent(adminQuotePdfMatch[1]);
+      const q = await quotes.get(id);
+      if (!q) return sendJson(res, 404, { ok: false, errors: ["Quote not found."] });
+      let property = null;
+      if (q.propertyId) { try { property = await properties.get(q.propertyId); } catch (_) {} }
+      let customer = property ? { customerName: property.customerName, customerPhone: property.customerPhone, address: property.address } : null;
+      // Fallback to lead contact if no property
+      if (!customer && q.leadId) {
+        const allLeads = await readLeads();
+        const lead = allLeads.find((l) => l.id === q.leadId);
+        if (lead?.contact) customer = { customerName: lead.contact.name, customerPhone: lead.contact.phone, address: lead.contact.address };
+      }
+      res.writeHead(200, {
+        "content-type": "application/pdf",
+        "content-disposition": `inline; filename="${q.id}.pdf"`,
+        "cache-control": "no-store"
+      });
+      generateQuotePdf(q, { customer: customer || {}, property: property || {} }).pipe(res);
+      return;
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't generate PDF."] });
+    }
+  }
+
+  // Public: GET /api/approve/:id/:token/pdf — same PDF, customer-side.
+  // Token-gated; returns 404 if token mismatch (no leak of quote IDs).
+  const approvePdfMatch = pathname.match(/^\/api\/approve\/([^/]+)\/([^/]+)\/pdf$/);
+  if (approvePdfMatch && req.method === "GET") {
+    try {
+      const quoteId = decodeURIComponent(approvePdfMatch[1]);
+      const token = decodeURIComponent(approvePdfMatch[2]);
+      const q = await quotes.getByApprovalToken(quoteId, token);
+      if (!q) return sendJson(res, 404, { ok: false, errors: ["Approval link not found or expired."] });
+      let property = null;
+      if (q.propertyId) { try { property = await properties.get(q.propertyId); } catch (_) {} }
+      let customer = property ? { customerName: property.customerName, customerPhone: property.customerPhone, address: property.address } : {};
+      res.writeHead(200, {
+        "content-type": "application/pdf",
+        "content-disposition": `inline; filename="${q.id}.pdf"`,
+        "cache-control": "no-store"
+      });
+      generateQuotePdf(q, { customer, property: property || {} }).pipe(res);
+      return;
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't generate PDF."] });
+    }
+  }
 
   // ---------- Admin Quote folder browser (Q-YYYY-NNNN records) -----
   // Distinct from the legacy /api/quotes (which lists leads-as-quotes).

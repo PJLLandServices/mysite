@@ -44,7 +44,10 @@ async function load() {
       : "—";
     return `
       <tr>
-        <td><strong>${escapeHtml(q.id)}</strong>${q.version > 1 ? ` <span class="invoices-row-sub">v${q.version}</span>` : ""}</td>
+        <td>
+          <strong>${escapeHtml(q.id)}</strong>${q.version > 1 ? ` <span class="invoices-row-sub">v${q.version}</span>` : ""}
+          <br><a class="invoices-row-sub" href="/api/admin/quote-folder/${encodeURIComponent(q.id)}/pdf" target="_blank" rel="noopener">📄 PDF</a>
+        </td>
         <td>${escapeHtml(TYPE_LABELS[q.type] || q.type)}</td>
         <td>${escapeHtml(customer)}<br><span class="invoices-row-sub">${leadLink}</span></td>
         <td class="invoices-amount">${fmt(q.total)}</td>
