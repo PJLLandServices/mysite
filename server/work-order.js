@@ -449,11 +449,133 @@ async function init() {
     woLoading.hidden = true;
     woForm.hidden = false;
     renderHero(data.workOrder, data.property, data.lead);
+    renderCheatSheet(data.workOrder, data.property, data.lastService);
     populateForm(data.workOrder);
   } catch {
     woLoading.hidden = true;
     woError.hidden = false;
   }
+}
+
+// Cheat Sheet — desktop mirror of the tech-mode Cheat Sheet. Pulls the
+// same data (workOrder + property + lastService) from /api/work-orders/:id
+// and renders it as cards above the form. Per spec §4.3.2: rendered first
+// when the WO opens, so the reviewer (Patrick on desktop, the tech on
+// mobile) gets context before drilling into the form.
+function renderCheatSheet(wo, property, lastService) {
+  const sheet = document.getElementById("woCheatSheet");
+  if (!sheet) return;
+
+  // Action chips
+  const phone = wo.customerPhone || "";
+  const phoneNormalized = phone.replace(/[^\d+]/g, "");
+  const callLink = document.getElementById("woCallLink");
+  const textLink = document.getElementById("woTextLink");
+  if (phoneNormalized) {
+    if (callLink) {
+      callLink.href = "tel:" + phoneNormalized;
+      const detail = document.getElementById("woCallDetail");
+      if (detail) detail.textContent = phone;
+      callLink.hidden = false;
+    }
+    if (textLink) {
+      textLink.href = "sms:" + phoneNormalized;
+      const detail = document.getElementById("woTextDetail");
+      if (detail) detail.textContent = phone;
+      textLink.hidden = false;
+    }
+  }
+  const mapsLink = document.getElementById("woMapsLink");
+  if (mapsLink && wo.address) {
+    mapsLink.href = "https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent(wo.address);
+    const detail = document.getElementById("woMapsDetail");
+    if (detail) detail.textContent = wo.address;
+    mapsLink.hidden = false;
+  }
+
+  // System overview
+  const sysBlock = document.getElementById("woSystemBlock");
+  const sys = property && property.system ? property.system : null;
+  let sysHasContent = false;
+  if (sys) {
+    const zoneCount = Array.isArray(sys.zones) ? sys.zones.length : 0;
+    const controllerParts = [];
+    if (sys.controllerBrand) controllerParts.push(sys.controllerBrand);
+    if (sys.controllerLocation) controllerParts.push(sys.controllerLocation);
+    setText("woSysZones", zoneCount ? `${zoneCount}` : "—");
+    setText("woSysController", controllerParts.join(" · ") || "—");
+    setText("woSysShutoff", sys.shutoffLocation || "—");
+    setText("woSysBlowout", sys.blowoutLocation || "—");
+
+    const valveBoxes = Array.isArray(sys.valveBoxes) ? sys.valveBoxes : [];
+    const vbEl = document.getElementById("woSysValveBoxes");
+    if (vbEl) {
+      if (valveBoxes.length) {
+        const totalValves = valveBoxes.reduce((sum, vb) => sum + (Number(vb.valveCount) || 0), 0);
+        const locations = valveBoxes
+          .map((vb) => vb.location)
+          .filter((loc) => loc && loc.trim())
+          .join("; ");
+        const valveText = totalValves ? ` (${totalValves} valve${totalValves === 1 ? "" : "s"} total)` : "";
+        const locationText = locations ? ` · ${locations}` : "";
+        vbEl.textContent = `${valveBoxes.length} valve box${valveBoxes.length === 1 ? "" : "es"}${valveText}${locationText}`;
+        vbEl.hidden = false;
+      } else {
+        vbEl.hidden = true;
+      }
+    }
+
+    sysHasContent = zoneCount > 0 || controllerParts.length > 0 || sys.shutoffLocation || sys.blowoutLocation || valveBoxes.length > 0;
+  }
+  if (sysBlock) sysBlock.hidden = !sysHasContent;
+
+  // Property notes
+  const accessBlock = document.getElementById("woAccessBlock");
+  const accessText = sys && sys.notes ? String(sys.notes).trim() : "";
+  if (accessBlock) {
+    if (accessText) {
+      const notesEl = document.getElementById("woAccessNotes");
+      if (notesEl) notesEl.textContent = accessText;
+      accessBlock.hidden = false;
+    } else {
+      accessBlock.hidden = true;
+    }
+  }
+
+  // Last service summary
+  const lastBlock = document.getElementById("woLastServiceBlock");
+  if (lastBlock) {
+    if (lastService && lastService.completedAt) {
+      const typeLabel = TYPE_LABELS[lastService.type] || lastService.type || "Visit";
+      const dateLabel = formatDateOnly(lastService.completedAt);
+      const noteSnippet = lastService.techNotes ? ` — ${lastService.techNotes}` : "";
+      const lastEl = document.getElementById("woLastServiceText");
+      if (lastEl) lastEl.textContent = `${typeLabel} · ${dateLabel}${noteSnippet}`;
+      lastBlock.hidden = false;
+    } else {
+      lastBlock.hidden = true;
+    }
+  }
+
+  const anyVisible = (callLink && !callLink.hidden) ||
+                     (textLink && !textLink.hidden) ||
+                     (mapsLink && !mapsLink.hidden) ||
+                     (sysBlock && !sysBlock.hidden) ||
+                     (accessBlock && !accessBlock.hidden) ||
+                     (lastBlock && !lastBlock.hidden);
+  sheet.hidden = !anyVisible;
+}
+
+function setText(id, value) {
+  const el = document.getElementById(id);
+  if (el) el.textContent = value;
+}
+
+function formatDateOnly(value) {
+  if (!value) return "—";
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleDateString("en-CA", { month: "short", day: "numeric", year: "numeric" });
 }
 
 init();

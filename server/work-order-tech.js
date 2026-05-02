@@ -345,6 +345,127 @@ function flushVisitNotes() {
   patchWorkOrder({ techNotes: next });
 }
 
+// ---- Cheat Sheet --------------------------------------------------
+
+// One-tap action chips + collapsible context blocks at the top of the
+// WO. Pulls from the WO itself (customer phone for tel:/sms:, address
+// for maps), the linked property (system overview + free-form notes),
+// and the most-recent completed WO at the property (lastService
+// summary). Each subsection hides when its underlying data is missing
+// so first-time properties / WOs without a property link don't show
+// hollow blocks.
+function renderCheatSheet(wo, property, lastService) {
+  const sheet = document.getElementById("techCheatSheet");
+  if (!sheet) return;
+
+  // ---- Action chips: call / text / maps -----------------------------
+  const phone = wo.customerPhone || "";
+  const phoneNormalized = phone.replace(/[^\d+]/g, "");
+  const callLink = document.getElementById("techCallLink");
+  const textLink = document.getElementById("techTextLink");
+  if (phoneNormalized) {
+    if (callLink) { callLink.href = "tel:" + phoneNormalized; callLink.hidden = false; }
+    if (textLink) { textLink.href = "sms:" + phoneNormalized; textLink.hidden = false; }
+  }
+  const mapsLink = document.getElementById("techMapsLink");
+  if (mapsLink && wo.address) {
+    // Universal Google Maps URL — opens in the system's default maps app
+    // on iOS and Android, browser on desktop.
+    mapsLink.href = "https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent(wo.address);
+    mapsLink.hidden = false;
+  }
+
+  // ---- System overview ----------------------------------------------
+  const sysBlock = document.getElementById("techSystemBlock");
+  const sys = property && property.system ? property.system : null;
+  let sysHasContent = false;
+  if (sys) {
+    const zoneCount = Array.isArray(sys.zones) ? sys.zones.length : 0;
+    const controllerParts = [];
+    if (sys.controllerBrand) controllerParts.push(sys.controllerBrand);
+    if (sys.controllerLocation) controllerParts.push(sys.controllerLocation);
+    const controllerLabel = controllerParts.join(" · ");
+    setCheat("techSysZones", zoneCount ? `${zoneCount}` : "—");
+    setCheat("techSysController", controllerLabel || "—");
+    setCheat("techSysShutoff", sys.shutoffLocation || "—");
+    setCheat("techSysBlowout", sys.blowoutLocation || "—");
+
+    // Valve boxes — surface a one-line count + locations so the tech
+    // knows how many to lift before they start digging.
+    const valveBoxes = Array.isArray(sys.valveBoxes) ? sys.valveBoxes : [];
+    const vbEl = document.getElementById("techSysValveBoxes");
+    if (vbEl) {
+      if (valveBoxes.length) {
+        const totalValves = valveBoxes.reduce((sum, vb) => sum + (Number(vb.valveCount) || 0), 0);
+        const locations = valveBoxes
+          .map((vb) => vb.location)
+          .filter((loc) => loc && loc.trim())
+          .join("; ");
+        const valveText = totalValves ? ` (${totalValves} valve${totalValves === 1 ? "" : "s"} total)` : "";
+        const locationText = locations ? ` · ${locations}` : "";
+        vbEl.textContent = `${valveBoxes.length} valve box${valveBoxes.length === 1 ? "" : "es"}${valveText}${locationText}`;
+        vbEl.hidden = false;
+      } else {
+        vbEl.hidden = true;
+      }
+    }
+
+    sysHasContent = zoneCount > 0 || controllerLabel || sys.shutoffLocation || sys.blowoutLocation || valveBoxes.length > 0;
+  }
+  if (sysBlock) sysBlock.hidden = !sysHasContent;
+
+  // ---- Property notes (access / gate / dog / parking) ---------------
+  const accessBlock = document.getElementById("techAccessBlock");
+  const accessText = sys && sys.notes ? String(sys.notes).trim() : "";
+  if (accessBlock) {
+    if (accessText) {
+      const notesEl = document.getElementById("techAccessNotes");
+      if (notesEl) notesEl.textContent = accessText;
+      accessBlock.hidden = false;
+    } else {
+      accessBlock.hidden = true;
+    }
+  }
+
+  // ---- Last service summary (existing properties only) --------------
+  const lastBlock = document.getElementById("techLastServiceBlock");
+  if (lastBlock) {
+    if (lastService && lastService.completedAt) {
+      const typeLabel = TYPE_LABELS[lastService.type] || lastService.type || "Visit";
+      const dateLabel = formatDateOnly(lastService.completedAt);
+      const noteSnippet = lastService.techNotes ? ` — ${lastService.techNotes}` : "";
+      const text = `${typeLabel} · ${dateLabel}${noteSnippet}`;
+      const lastEl = document.getElementById("techLastServiceText");
+      if (lastEl) lastEl.textContent = text;
+      lastBlock.hidden = false;
+    } else {
+      lastBlock.hidden = true;
+    }
+  }
+
+  // The whole sheet hides only if NOTHING is populated — a WO with even
+  // just an address still gets the maps chip, which is useful on its own.
+  const anyVisible = (callLink && !callLink.hidden) ||
+                     (textLink && !textLink.hidden) ||
+                     (mapsLink && !mapsLink.hidden) ||
+                     (sysBlock && !sysBlock.hidden) ||
+                     (accessBlock && !accessBlock.hidden) ||
+                     (lastBlock && !lastBlock.hidden);
+  sheet.hidden = !anyVisible;
+}
+
+function setCheat(id, value) {
+  const el = document.getElementById(id);
+  if (el) el.textContent = value;
+}
+
+function formatDateOnly(value) {
+  if (!value) return "—";
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleDateString("en-CA", { month: "short", day: "numeric", year: "numeric" });
+}
+
 // ---- Bootstrap ---------------------------------------------------
 
 async function init() {
@@ -372,6 +493,10 @@ async function init() {
     techAddress.textContent = wo.address || "—";
     techMeta.textContent = `Updated ${formatDateTime(wo.updatedAt)}`;
     techNotes.value = state.techNotes;
+
+    // Cheat Sheet — first thing the tech reviews on arrival. Pulls from
+    // the property record + the most-recent completed WO at the property.
+    renderCheatSheet(wo, data.property, data.lastService);
 
     if (wo.diagnosis) {
       techDiagnosisText.textContent = typeof wo.diagnosis === "string"

@@ -58,6 +58,135 @@
   gap: 18px;
 }
 
+/* Cheat Sheet --------------------------------------------------------
+   Sits between the WO hero and the form. Three action chips at the top
+   (call / text / maps), then a 2-column responsive grid of cards for
+   system overview, property notes, last service. Each card hides if the
+   underlying data is missing — no hollow placeholders. Per spec §4.3.2:
+   "rendered first when tech opens WO." */
+.wo-cheatsheet {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.wo-cheatsheet-actions {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+}
+.wo-cheatsheet-action {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  grid-template-rows: auto auto;
+  gap: 2px 14px;
+  align-items: center;
+  padding: 14px 16px;
+  background: #fff;
+  border: 1px solid rgba(15, 31, 20, 0.10);
+  border-radius: 10px;
+  text-decoration: none;
+  color: var(--pjl-text);
+  transition: border-color 120ms ease, transform 120ms ease, box-shadow 120ms ease;
+}
+.wo-cheatsheet-action:hover {
+  border-color: var(--pjl-green);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 14px rgba(27, 77, 46, 0.10);
+}
+.wo-cheatsheet-action[hidden] { display: none; }
+.wo-cheatsheet-action-icon {
+  grid-row: 1 / span 2;
+  font-size: 22px;
+  line-height: 1;
+}
+.wo-cheatsheet-action-label {
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--pjl-green);
+}
+.wo-cheatsheet-action-detail {
+  font-size: 13px;
+  color: var(--pjl-text-mid);
+  font-variant-numeric: tabular-nums;
+}
+.wo-cheatsheet-action-detail:empty { display: none; }
+
+.wo-cheatsheet-grid-cols {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 12px;
+  align-items: start;
+}
+.wo-cheatsheet-card {
+  background: #fff;
+  border: 1px solid rgba(15, 31, 20, 0.10);
+  border-radius: 10px;
+  padding: 14px 16px;
+}
+.wo-cheatsheet-card[hidden] { display: none; }
+.wo-cheatsheet-heading {
+  margin: 0 0 10px;
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.10em;
+  text-transform: uppercase;
+  color: rgba(15, 31, 20, 0.55);
+}
+.wo-cheatsheet-grid {
+  margin: 0;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px 16px;
+}
+.wo-cheatsheet-grid > div { margin: 0; }
+.wo-cheatsheet-grid dt {
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(15, 31, 20, 0.55);
+  margin: 0 0 1px;
+}
+.wo-cheatsheet-grid dd {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: #1B4D2E;
+  line-height: 1.35;
+  word-break: break-word;
+}
+.wo-cheatsheet-valveboxes {
+  margin: 12px 0 0;
+  padding: 8px 10px;
+  background: rgba(74, 140, 92, 0.08);
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--pjl-text-mid);
+  line-height: 1.4;
+}
+.wo-cheatsheet-notes {
+  margin: 0;
+  font-size: 14px;
+  color: var(--pjl-text);
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+.wo-cheatsheet-lastservice {
+  margin: 0;
+  font-size: 14px;
+  color: var(--pjl-text);
+  line-height: 1.45;
+}
+@media (max-width: 480px) {
+  .wo-cheatsheet-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 .wo-hero {
   display: grid;
   grid-template-columns: 1fr auto;

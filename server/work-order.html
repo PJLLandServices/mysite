@@ -72,6 +72,55 @@
     <p class="property-loading" id="woLoading">Loading work order…</p>
     <p class="property-error" id="woError" hidden>This work order couldn't be loaded.</p>
 
+    <!-- Cheat Sheet — first-on-arrival context for the visit. Populated
+         from the linked property + the most-recent completed WO at this
+         property. Hidden as a whole when there's nothing to populate
+         (first-time WOs without a property link). Per spec §4.3.2 the
+         Cheat Sheet is rendered "first when tech opens WO," so it sits
+         here above the form. -->
+    <section class="wo-cheatsheet" id="woCheatSheet" hidden>
+      <div class="wo-cheatsheet-actions">
+        <a class="wo-cheatsheet-action" id="woCallLink" href="#" hidden>
+          <span class="wo-cheatsheet-action-icon" aria-hidden="true">📞</span>
+          <span class="wo-cheatsheet-action-label">Call customer</span>
+          <span class="wo-cheatsheet-action-detail" id="woCallDetail"></span>
+        </a>
+        <a class="wo-cheatsheet-action" id="woTextLink" href="#" hidden>
+          <span class="wo-cheatsheet-action-icon" aria-hidden="true">💬</span>
+          <span class="wo-cheatsheet-action-label">Text customer</span>
+          <span class="wo-cheatsheet-action-detail" id="woTextDetail"></span>
+        </a>
+        <a class="wo-cheatsheet-action" id="woMapsLink" href="#" target="_blank" rel="noopener" hidden>
+          <span class="wo-cheatsheet-action-icon" aria-hidden="true">🗺️</span>
+          <span class="wo-cheatsheet-action-label">Open in maps</span>
+          <span class="wo-cheatsheet-action-detail" id="woMapsDetail"></span>
+        </a>
+      </div>
+
+      <div class="wo-cheatsheet-grid-cols">
+        <section class="wo-cheatsheet-card" id="woSystemBlock" hidden>
+          <h3 class="wo-cheatsheet-heading">System overview</h3>
+          <dl class="wo-cheatsheet-grid">
+            <div><dt>Zones</dt><dd id="woSysZones">—</dd></div>
+            <div><dt>Controller</dt><dd id="woSysController">—</dd></div>
+            <div><dt>Main shut-off</dt><dd id="woSysShutoff">—</dd></div>
+            <div><dt>Blow-out</dt><dd id="woSysBlowout">—</dd></div>
+          </dl>
+          <p class="wo-cheatsheet-valveboxes" id="woSysValveBoxes" hidden></p>
+        </section>
+
+        <section class="wo-cheatsheet-card" id="woAccessBlock" hidden>
+          <h3 class="wo-cheatsheet-heading">Property notes</h3>
+          <p class="wo-cheatsheet-notes" id="woAccessNotes"></p>
+        </section>
+
+        <section class="wo-cheatsheet-card" id="woLastServiceBlock" hidden>
+          <h3 class="wo-cheatsheet-heading">Last service at this property</h3>
+          <p class="wo-cheatsheet-lastservice" id="woLastServiceText"></p>
+        </section>
+      </div>
+    </section>
+
     <form class="wo-form" id="woForm" hidden>
       <!-- AI Intake Guarantee banner — snapshotted from the source Quote
            when the WO was created. Tells the desktop viewer (Patrick) that

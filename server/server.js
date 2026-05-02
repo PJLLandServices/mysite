@@ -2333,7 +2333,28 @@ async function handleApi(req, res, pathname) {
       const allLeads = await readLeads();
       lead = allLeads.find((l) => l.id === wo.leadId) || null;
     }
-    return sendJson(res, 200, { ok: true, workOrder: wo, property, lead });
+    // Last service at this property — the most recent COMPLETED WO that
+    // isn't the current one. Powers the Cheat Sheet's "last visit"
+    // line so the tech opens the WO with prior context: "spring opening
+    // 2025-04-12 — closed clean, two heads replaced." Per spec §4.3.2
+    // (existing properties only — first-time visits don't surface this).
+    let lastService = null;
+    if (wo.propertyId) {
+      const propertyWos = await workOrders.listByProperty(wo.propertyId);
+      const completed = propertyWos
+        .filter((w) => w.id !== wo.id && w.status === "completed")
+        .sort((a, b) => new Date(b.updatedAt || 0) - new Date(a.updatedAt || 0));
+      if (completed.length) {
+        const c = completed[0];
+        lastService = {
+          id: c.id,
+          type: c.type,
+          completedAt: c.updatedAt,
+          techNotes: c.techNotes ? String(c.techNotes).slice(0, 200) : ""
+        };
+      }
+    }
+    return sendJson(res, 200, { ok: true, workOrder: wo, property, lead, lastService });
   }
 
   if (workOrderMatch && req.method === "PATCH") {

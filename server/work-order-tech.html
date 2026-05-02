@@ -32,6 +32,49 @@
       <p class="tech-address" id="techAddress">—</p>
     </section>
 
+    <!-- Cheat Sheet — the first surface a tech reviews on arrival. One-tap
+         actions, system overview, access notes, last-service summary. Per
+         spec §4.3.2: "rendered first when tech opens WO." Each subsection
+         hides if the underlying data is missing so the page stays compact
+         on first-time properties or older WOs without a property link. -->
+    <section class="tech-cheatsheet" id="techCheatSheet" hidden>
+      <div class="tech-cheatsheet-actions">
+        <a class="tech-cheatsheet-action tech-cheatsheet-action--call" id="techCallLink" href="#" hidden aria-label="Call customer">
+          <span class="tech-cheatsheet-action-icon" aria-hidden="true">📞</span>
+          <span class="tech-cheatsheet-action-label">Call</span>
+        </a>
+        <a class="tech-cheatsheet-action tech-cheatsheet-action--text" id="techTextLink" href="#" hidden aria-label="Text customer">
+          <span class="tech-cheatsheet-action-icon" aria-hidden="true">💬</span>
+          <span class="tech-cheatsheet-action-label">Text</span>
+        </a>
+        <a class="tech-cheatsheet-action tech-cheatsheet-action--maps" id="techMapsLink" href="#" target="_blank" rel="noopener" hidden aria-label="Open in maps">
+          <span class="tech-cheatsheet-action-icon" aria-hidden="true">🗺️</span>
+          <span class="tech-cheatsheet-action-label">Directions</span>
+        </a>
+      </div>
+
+      <details class="tech-cheatsheet-block" id="techSystemBlock" open hidden>
+        <summary>System overview</summary>
+        <dl class="tech-cheatsheet-grid">
+          <div><dt>Zones</dt><dd id="techSysZones">—</dd></div>
+          <div><dt>Controller</dt><dd id="techSysController">—</dd></div>
+          <div><dt>Main shut-off</dt><dd id="techSysShutoff">—</dd></div>
+          <div><dt>Blow-out</dt><dd id="techSysBlowout">—</dd></div>
+        </dl>
+        <p class="tech-cheatsheet-valveboxes" id="techSysValveBoxes" hidden></p>
+      </details>
+
+      <details class="tech-cheatsheet-block" id="techAccessBlock" hidden>
+        <summary>Property notes</summary>
+        <p class="tech-cheatsheet-notes" id="techAccessNotes"></p>
+      </details>
+
+      <details class="tech-cheatsheet-block" id="techLastServiceBlock" hidden>
+        <summary>Last service at this property</summary>
+        <p class="tech-cheatsheet-lastservice" id="techLastServiceText"></p>
+      </details>
+    </section>
+
     <!-- AI Intake Guarantee banner — shown when the WO was created from an
          AI repair quote with intake_guarantee=true. Tells the tech labour is
          locked for a specific scope so they bill correctly on-site. Hidden
