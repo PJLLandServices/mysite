@@ -3120,15 +3120,23 @@ async function handleApi(req, res, pathname) {
           const seedKey = String(lead.booking.serviceKey || "");
           const catalogItem = PRICING.items?.[seedKey];
           if (catalogItem) {
+            // Year = the year the service is actually performed. Prefer
+            // the booking's scheduled start (what the customer paid for)
+            // and fall back to WO creation year.
+            const refDate = lead?.booking?.start
+              ? new Date(lead.booking.start)
+              : new Date(wo.scheduledFor || wo.createdAt || Date.now());
+            const refYear = refDate.getUTCFullYear();
+            const typeLabel = type === "spring_opening" ? "Spring Opening" : "Fall Closing";
             const seasonalLine = {
               key: seedKey,
-              label: catalogItem.label || seedKey,
+              label: `${typeLabel} (${refYear})`,
               qty: 1,
               originalPrice: Math.round((Number(catalogItem.price) || 0) * 100) / 100,
               overridePrice: null,
               custom: false,
               source: { zoneNumbers: [], issueIds: [], baseline: true },
-              note: "Seasonal service fee — covers the trip + standard service. Repairs found on-site bill in addition."
+              note: ""
             };
             const seededWo = await workOrders.update(wo.id, {
               onSiteQuote: {
