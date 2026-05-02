@@ -118,6 +118,12 @@
     state.step = name;
     steps.forEach((s) => { s.hidden = s.dataset.step !== name; });
 
+    // Hide the whole progress strip on the confirm/success state — the
+    // "You're booked!" card already says everything the strip would
+    // (and Patrick rightly pointed out the duplicate steps drove him
+    // nuts). Restored when the user starts a new booking.
+    if (bookProgress) bookProgress.hidden = (name === "confirm");
+
     // The progress strip toggles between 5-dot (no zones) and 6-dot (with
     // zones) based on whether the current service needs the zones step.
     // The .no-zones class hides the conditional dot via CSS.
