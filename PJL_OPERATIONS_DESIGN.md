@@ -348,9 +348,10 @@ WORK ORDER FOLDER
   Service-Specific Steps
     Spring Opening:
       ☐ Water turned on at main shut-off
-      ☐ Backflow visual check
       ☐ Controller programmed for season
       ☐ Walk-through with customer (if home)
+    (NOTE: Backflow check is intentionally NOT here — PJL is not a
+    certified Ontario backflow tester. See memory/backflow_not_certified.md.)
     Fall Closing:
       ☐ Controller set to off / winter mode
       ☐ Water shut off at main

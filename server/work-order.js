@@ -101,10 +101,12 @@ function makeIssueId() {
 // Mirror of SERVICE_CHECKLISTS in server/lib/work-orders.js. Keep in
 // sync if step keys change. Spring/fall get a tap-through; service
 // visits have no service-specific steps.
+//
+// Backflow intentionally NOT in this list — PJL is not a certified
+// Ontario backflow tester (memory/backflow_not_certified.md).
 const SERVICE_CHECKLISTS_DESKTOP = {
   spring_opening: [
     { key: "water_on",                  label: "Water turned on at main shut-off" },
-    { key: "backflow_check",            label: "Backflow visual check" },
     { key: "controller_programmed",     label: "Controller programmed for season" },
     { key: "walkthrough_with_customer", label: "Walk-through with customer (if home)" }
   ],
@@ -427,7 +429,7 @@ function zoneRowHtml(zone) {
         </label>
         <label class="wo-zone-notes-label">
           <span>Notes</span>
-          <input type="text" class="wo-zone-notes" value="${escapeHtml(zone.notes || "")}" placeholder="What did you find / do?">
+          <input type="text" class="wo-zone-notes" value="${escapeHtml(zone.notes || "")}" placeholder="What did you find / do?" data-voice-input>
         </label>
       </div>
       <details class="wo-zone-checks-block">

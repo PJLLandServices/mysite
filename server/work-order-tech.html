@@ -283,7 +283,7 @@
     <!-- Tech-wide notes for the visit. Collapsed by default. -->
     <details class="tech-collapse">
       <summary>Visit notes</summary>
-      <textarea id="techNotes" rows="5" placeholder="Anything else worth recording…"></textarea>
+      <textarea id="techNotes" rows="5" placeholder="Anything else worth recording…" data-voice-input></textarea>
     </details>
 
     <!-- Customer sign-off — the legally binding moment per spec §4.3.2.
@@ -440,7 +440,7 @@
       <button type="button" class="tech-zone-issue-add" id="sheetIssueAdd">+ Add issue</button>
 
       <label class="tech-sheet-notes-label" for="sheetNotes">Notes</label>
-      <textarea id="sheetNotes" rows="4" placeholder="What did you find / do?"></textarea>
+      <textarea id="sheetNotes" rows="4" placeholder="What did you find / do?" data-voice-input></textarea>
 
       <button type="button" class="tech-sheet-done" id="sheetDone">Done</button>
     </div>
@@ -477,6 +477,7 @@
     </div>
   </div>
 
+  <script src="/crm/voice-input.js"></script>
   <script src="/crm/work-order-tech.js"></script>
 </body>
 </html>

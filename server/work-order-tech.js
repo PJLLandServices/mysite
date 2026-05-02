@@ -66,10 +66,12 @@ const ZONE_CHECK_KEYS = ["operated", "pressureGood", "coverageGood", "noLeaks", 
 // SERVICE_CHECKLISTS in server/lib/work-orders.js — keep these in sync
 // if step keys change. Service visits have no checklist (one-off
 // repairs use the zone walk-through + tech notes only).
+//
+// Backflow intentionally NOT in this list — PJL is not a certified
+// Ontario backflow tester (memory/backflow_not_certified.md).
 const SERVICE_CHECKLISTS_TECH = {
   spring_opening: [
     { key: "water_on",                  label: "Water turned on at main shut-off" },
-    { key: "backflow_check",            label: "Backflow visual check" },
     { key: "controller_programmed",     label: "Controller programmed for season" },
     { key: "walkthrough_with_customer", label: "Walk-through with customer (if home)" }
   ],
@@ -668,7 +670,7 @@ function renderSheetIssues(zone) {
     div.innerHTML = `
       <select class="tech-zone-issue-type" aria-label="Issue type">${optionsHtml}</select>
       <input type="number" class="tech-zone-issue-qty" min="1" inputmode="numeric" value="${escapeHtml(String(issue.qty || 1))}" aria-label="Quantity">
-      <input type="text" class="tech-zone-issue-notes" value="${escapeHtml(issue.notes || "")}" placeholder="Details (optional)" aria-label="Issue notes">
+      <input type="text" class="tech-zone-issue-notes" value="${escapeHtml(issue.notes || "")}" placeholder="Details (optional)" aria-label="Issue notes" data-voice-input>
       <button type="button" class="tech-zone-issue-remove" aria-label="Remove issue">×</button>
       <div class="tech-issue-photos" data-issue-photos="${escapeHtml(issue.id)}"></div>
       <div class="tech-zone-issue-fall-actions">

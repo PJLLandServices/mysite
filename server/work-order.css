@@ -1083,3 +1083,38 @@ body[data-locked="true"] .wo-signoff-form {
 .wo-cascade-status[data-kind="ok"] { color: #1B4D2E; font-weight: 600; }
 .wo-cascade-status[data-kind="error"] { color: #C03A2C; font-weight: 600; }
 .wo-cascade-status[data-kind="info"] { color: #555; }
+
+/* Voice-to-text mic button (spec §4.3.3 rule #10). Same component as
+   the tech-mode page; styles duplicated here so the desktop CSS file
+   stays self-contained. */
+.voice-input-wrap { position: relative; display: block; }
+.voice-input-wrap > textarea,
+.voice-input-wrap > input { width: 100%; padding-right: 44px !important; }
+.voice-input-mic {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(15, 31, 20, 0.06);
+  color: #1B4D2E;
+  font-size: 16px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.voice-input-mic:hover { background: rgba(27, 77, 46, 0.12); }
+.voice-input-mic.is-listening {
+  background: #C03A2C;
+  color: #fff;
+  font-size: 14px;
+  animation: voice-pulse 1.2s ease-in-out infinite;
+}
+@keyframes voice-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(192, 58, 44, 0.6); }
+  50%      { box-shadow: 0 0 0 8px rgba(192, 58, 44, 0); }
+}

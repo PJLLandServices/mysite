@@ -2269,3 +2269,46 @@ body[data-locked="true"] .tech-finish-bar { opacity: 0.55; pointer-events: none;
 .tech-payment-captured legend { font-size: 12px; font-weight: 700; color: #555; text-transform: uppercase; letter-spacing: 0.04em; padding: 0 4px; }
 .tech-payment-captured label { display: flex; align-items: center; gap: 8px; font-size: 14px; color: #1F2A22; cursor: pointer; }
 .tech-payment-invoice { margin: 0; font-size: 13px; color: #777; font-style: italic; }
+
+/* Voice-to-text mic button (spec §4.3.3 rule #10) — sits top-right
+   inside the field's wrapper. The wrapper makes the field
+   position:relative so the button can absolute-position over its
+   corner without disturbing existing field padding. */
+.voice-input-wrap {
+  position: relative;
+  display: block;
+}
+.voice-input-wrap > textarea,
+.voice-input-wrap > input {
+  width: 100%;
+  padding-right: 44px !important;
+}
+.voice-input-mic {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(15, 31, 20, 0.06);
+  color: #1B4D2E;
+  font-size: 16px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s ease;
+}
+.voice-input-mic:hover { background: rgba(27, 77, 46, 0.12); }
+.voice-input-mic.is-listening {
+  background: #C03A2C;
+  color: #fff;
+  font-size: 14px;
+  animation: voice-pulse 1.2s ease-in-out infinite;
+}
+@keyframes voice-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(192, 58, 44, 0.6); }
+  50%      { box-shadow: 0 0 0 8px rgba(192, 58, 44, 0); }
+}
