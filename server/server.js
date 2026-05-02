@@ -50,6 +50,7 @@ const settings = require("./lib/settings");
 const issueRollup = require("./lib/issue-rollup");
 const { generateQuotePdf } = require("./lib/quote-pdf");
 const quickbooks = require("./lib/quickbooks");
+const bookings = require("./lib/bookings");
 
 // Short, customer-friendly work order ID. Eight chars from a UUIDv4 base32-ish
 // alphabet (no I/O/0/1 to keep them unambiguous when read aloud or hand-written).
@@ -311,6 +312,7 @@ function needsAuth(method, pathname) {
   if (pathname.startsWith("/api/settings")) return true;
   if (pathname === "/api/parts") return true;
   if (pathname.startsWith("/api/admin/quickbooks")) return true;
+  if (pathname.startsWith("/api/bookings")) return true;
   // Per-lead property link/dismiss/attach + tech actions are admin-only.
   if (/^\/api\/leads\/[^/]+\/(link-property|dismiss-property-suggestion|attach-property|notify-on-route|open-wo)$/.test(pathname)) return true;
   // Bulk property import is admin-only.
@@ -2933,6 +2935,42 @@ async function handleApi(req, res, pathname) {
     }
   }
 
+  // ---------- Bookings folder (spec §4.2 first-class records) ---------
+  // Read-only admin endpoints for now. Mutations still flow through the
+  // booking-reserve / WO endpoints which call bookings.upsertFromLead
+  // and bookings.attachWorkOrder under the hood. Patch endpoint is
+  // available for prep-notes / status changes that don't go through
+  // the lead.booking sync path.
+  if (req.method === "GET" && pathname === "/api/bookings") {
+    const url = new URL(req.url, baseUrlFromReq(req));
+    const propertyId = url.searchParams.get("propertyId");
+    const leadId = url.searchParams.get("leadId");
+    const status = url.searchParams.get("status");
+    let all = await bookings.list();
+    if (propertyId) all = all.filter((b) => b.propertyId === propertyId);
+    if (leadId) all = all.filter((b) => b.leadId === leadId);
+    if (status) all = all.filter((b) => b.status === status);
+    all.sort((a, b) => new Date(b.scheduledFor || 0) - new Date(a.scheduledFor || 0));
+    return sendJson(res, 200, { ok: true, bookings: all });
+  }
+  const bookingMatch = pathname.match(/^\/api\/bookings\/([^/]+)$/);
+  if (bookingMatch && req.method === "GET") {
+    const b = await bookings.get(decodeURIComponent(bookingMatch[1]));
+    if (!b) return sendJson(res, 404, { ok: false, errors: ["Booking not found."] });
+    return sendJson(res, 200, { ok: true, booking: b });
+  }
+  if (bookingMatch && req.method === "PATCH") {
+    try {
+      const id = decodeURIComponent(bookingMatch[1]);
+      const payload = await parseRequestBody(req);
+      const updated = await bookings.update(id, payload);
+      if (!updated) return sendJson(res, 404, { ok: false, errors: ["Booking not found."] });
+      return sendJson(res, 200, { ok: true, booking: updated });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't update booking."] });
+    }
+  }
+
   // ---------- QuickBooks integration (spec §4.3.4 invoice handoff) -----
   // OAuth + invoice push. Setup docs in server/lib/quickbooks.js.
   // Status check — feeds the Settings page badge.
@@ -3416,6 +3454,16 @@ async function handleApi(req, res, pathname) {
       if (sourceQuote) {
         try { await quotes.attachWorkOrder(sourceQuote.id, wo.id); }
         catch (err) { console.warn("[quotes] attachWorkOrder failed:", err?.message); }
+      }
+      // Back-link the WO onto its parent Booking record (spec §4.2 —
+      // bookings carry workOrderIds[] for multi-day repairs). Looks up
+      // the booking via the lead's id since lead.booking is the legacy
+      // embedded shape; the canonical Booking record matches by leadId.
+      if (lead) {
+        try {
+          const leadBookings = await bookings.listByLead(lead.id);
+          for (const bk of leadBookings) await bookings.attachWorkOrder(bk.id, wo.id);
+        } catch (err) { console.warn("[bookings] attachWorkOrder failed:", err?.message); }
       }
 
       // Back-reference on the lead so the CRM detail can deep-link.
@@ -4929,6 +4977,19 @@ Customer signature captured at ${new Date().toISOString()}.`;
         }
       } catch (err) {
         console.error("[properties] booking auto-link failed:", err?.message || err);
+      }
+
+      // Mirror into the canonical Booking folder (spec §4.2). Embedded
+      // lead.booking stays as a read cache so existing CRM/portal code
+      // works unchanged; the canonical record carries prep notes,
+      // multi-WO links, sourceQuoteId, and audit history. Best-effort
+      // — failure here doesn't roll back the lead.
+      try {
+        const liveLeads = await readLeads();
+        const fresh = liveLeads.find((l) => l.id === result.lead.id);
+        if (fresh) await bookings.upsertFromLead(fresh);
+      } catch (err) {
+        console.warn("[bookings] upsertFromLead failed:", err?.message);
       }
 
       // If a pre-booking session backed this reservation, mark it consumed
