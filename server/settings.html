@@ -55,6 +55,26 @@
         <p class="settings-status" id="adminDefaultsStatus"></p>
       </section>
 
+      <section class="settings-card" id="quickbooksCard">
+        <h2>QuickBooks Online</h2>
+        <p class="settings-help">Push draft invoices into your QuickBooks account so you don't have to re-key the numbers.</p>
+        <p class="settings-qb-status" id="qbStatus">Checking connection…</p>
+        <div class="settings-qb-actions">
+          <a href="/api/admin/quickbooks/connect" class="settings-save" id="qbConnectBtn">Connect to QuickBooks</a>
+          <button type="button" class="settings-save settings-qb-disconnect" id="qbDisconnectBtn" hidden>Disconnect</button>
+        </div>
+        <details class="settings-qb-setup">
+          <summary>Setup instructions (first time)</summary>
+          <ol>
+            <li>Create a QuickBooks Developer app at <a href="https://developer.intuit.com" target="_blank" rel="noopener">developer.intuit.com</a> (Accounting scope).</li>
+            <li>Set the app's redirect URI to: <code id="qbRedirectUri">…</code></li>
+            <li>On Render, set env vars: <code>QB_CLIENT_ID</code>, <code>QB_CLIENT_SECRET</code>, optionally <code>QB_ENVIRONMENT=sandbox</code> (default) or <code>production</code>.</li>
+            <li>Click <strong>Connect to QuickBooks</strong> above and authorize.</li>
+            <li>Then any invoice in <a href="/admin/invoices">Invoices</a> shows a <em>Push to QuickBooks</em> button.</li>
+          </ol>
+        </details>
+      </section>
+
       <section class="settings-card" id="auditCard" hidden>
         <h2>Recent settings changes</h2>
         <p class="settings-help">Last 50 changes, newest first.</p>

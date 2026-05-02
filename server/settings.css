@@ -61,3 +61,19 @@
   .settings-row { grid-template-columns: 1fr; }
   .settings-select { width: 100%; }
 }
+
+/* QuickBooks connect block (spec §4.3.4 invoice handoff) */
+.settings-qb-status { margin: 0 0 12px; padding: 10px 14px; border-radius: 8px; font-size: 13px; }
+.settings-qb-status[data-kind="ok"] { background: #EAF3DE; color: #1B4D2E; border: 1px solid #C7E0A8; font-weight: 600; }
+.settings-qb-status[data-kind="warn"] { background: #FFF8E6; color: #6A4A00; border: 1px solid #E6D17B; }
+.settings-qb-status[data-kind="info"] { background: #E0EBFF; color: #2A4A8C; border: 1px solid #B0CCFF; }
+.settings-qb-status[data-kind="error"] { background: #FFE6E0; color: #8A2418; border: 1px solid #E6BCB7; }
+
+.settings-qb-actions { display: flex; gap: 10px; margin-bottom: 12px; }
+.settings-qb-actions .settings-save { display: inline-block; text-decoration: none; }
+.settings-qb-disconnect { background: #fff !important; color: #C03A2C !important; border: 1px solid #C03A2C !important; }
+
+.settings-qb-setup { font-size: 13px; color: #555; }
+.settings-qb-setup summary { cursor: pointer; font-weight: 600; padding: 6px 0; }
+.settings-qb-setup ol { margin: 8px 0 0 24px; padding: 0; line-height: 1.6; }
+.settings-qb-setup code { background: #FAFAF5; padding: 2px 6px; border-radius: 4px; font-size: 12px; word-break: break-all; }

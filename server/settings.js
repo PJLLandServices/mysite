@@ -112,4 +112,63 @@ document.getElementById("adminDefaultsSave")?.addEventListener("click", async ()
   }
 });
 
+// ---- QuickBooks connect block ------------------------------------------
+async function loadQbStatus() {
+  // Populate the redirect URI hint with the current origin so Patrick can
+  // copy/paste it into the QB Developer app dashboard.
+  const redirectEl = document.getElementById("qbRedirectUri");
+  if (redirectEl) redirectEl.textContent = `${location.origin}/api/admin/quickbooks/callback`;
+
+  try {
+    const r = await fetch("/api/admin/quickbooks/status", { cache: "no-store" });
+    const data = await r.json().catch(() => ({}));
+    if (!data.ok) throw new Error("Couldn't reach the QuickBooks status endpoint.");
+    const status = document.getElementById("qbStatus");
+    const connect = document.getElementById("qbConnectBtn");
+    const disconnect = document.getElementById("qbDisconnectBtn");
+    if (!data.configured) {
+      status.textContent = "⚠ Not configured. Set QB_CLIENT_ID + QB_CLIENT_SECRET on Render, then refresh this page.";
+      status.dataset.kind = "warn";
+      connect.style.display = "none";
+      return;
+    }
+    if (data.connected) {
+      status.textContent = `✓ Connected (${data.environment} environment).`;
+      status.dataset.kind = "ok";
+      connect.style.display = "none";
+      disconnect.hidden = false;
+    } else {
+      status.textContent = `Configured (${data.environment} environment) — not yet authorized. Click below to grant access.`;
+      status.dataset.kind = "info";
+      connect.style.display = "";
+      disconnect.hidden = true;
+    }
+  } catch (err) {
+    const status = document.getElementById("qbStatus");
+    status.textContent = "Couldn't load QuickBooks status: " + err.message;
+    status.dataset.kind = "error";
+  }
+}
+
+document.getElementById("qbDisconnectBtn")?.addEventListener("click", async () => {
+  if (!confirm("Disconnect from QuickBooks? You'll need to re-authorize before pushing invoices again.")) return;
+  await fetch("/api/admin/quickbooks/disconnect", { method: "POST" });
+  loadQbStatus();
+});
+
+// Surface query-string hints from the OAuth callback redirect so Patrick
+// gets immediate feedback after authorizing (Intuit bounces back to
+// /admin/settings?qb=connected | denied | error).
+(function showQbCallbackToast() {
+  const qb = new URLSearchParams(location.search).get("qb");
+  if (!qb) return;
+  const status = document.getElementById("qbStatus");
+  if (qb === "connected") setTimeout(() => alert("QuickBooks connected. You can now push invoices."), 200);
+  if (qb === "denied")    setTimeout(() => alert("QuickBooks authorization was denied."), 200);
+  if (qb === "error")     setTimeout(() => alert("QuickBooks connection failed. Check the server logs."), 200);
+  // Clean the URL so refreshes don't repeat the alert.
+  history.replaceState(null, "", "/admin/settings");
+})();
+
 load();
+loadQbStatus();

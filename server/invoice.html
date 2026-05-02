@@ -89,6 +89,13 @@
           <textarea id="invoiceNotes" rows="3" placeholder="Optional notes (visible to admin only)"></textarea>
           <button type="button" id="invoiceSaveNotes" class="invoice-btn">Save notes</button>
         </section>
+
+        <section class="invoice-qb">
+          <h3>QuickBooks</h3>
+          <p class="invoice-qb-meta" id="invoiceQbMeta">Loading status…</p>
+          <button type="button" id="invoiceQbPushBtn" class="invoice-btn" hidden>Push to QuickBooks</button>
+          <p class="invoice-qb-status" id="invoiceQbStatus"></p>
+        </section>
         <section class="invoice-links">
           <p>Linked: <a id="invoiceWoLink" href="#">—</a> · <a id="invoicePropertyLink" href="#">—</a></p>
         </section>

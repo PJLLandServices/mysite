@@ -49,6 +49,7 @@ const completionCascade = require("./lib/completion-cascade");
 const settings = require("./lib/settings");
 const issueRollup = require("./lib/issue-rollup");
 const { generateQuotePdf } = require("./lib/quote-pdf");
+const quickbooks = require("./lib/quickbooks");
 
 // Short, customer-friendly work order ID. Eight chars from a UUIDv4 base32-ish
 // alphabet (no I/O/0/1 to keep them unambiguous when read aloud or hand-written).
@@ -309,6 +310,7 @@ function needsAuth(method, pathname) {
   if (pathname.startsWith("/api/invoices")) return true;
   if (pathname.startsWith("/api/settings")) return true;
   if (pathname === "/api/parts") return true;
+  if (pathname.startsWith("/api/admin/quickbooks")) return true;
   // Per-lead property link/dismiss/attach + tech actions are admin-only.
   if (/^\/api\/leads\/[^/]+\/(link-property|dismiss-property-suggestion|attach-property|notify-on-route|open-wo)$/.test(pathname)) return true;
   // Bulk property import is admin-only.
@@ -2928,6 +2930,88 @@ async function handleApi(req, res, pathname) {
       return sendJson(res, 200, { ok: true, quote: { id: updated.id, status: updated.status, signedAt: updated.signature.signedAt } });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't process signature."] });
+    }
+  }
+
+  // ---------- QuickBooks integration (spec §4.3.4 invoice handoff) -----
+  // OAuth + invoice push. Setup docs in server/lib/quickbooks.js.
+  // Status check — feeds the Settings page badge.
+  if (req.method === "GET" && pathname === "/api/admin/quickbooks/status") {
+    const cfg = quickbooks.envCfg();
+    return sendJson(res, 200, {
+      ok: true,
+      configured: quickbooks.isConfigured(),
+      connected: await quickbooks.isConnected(),
+      environment: cfg.environment
+    });
+  }
+
+  // OAuth start — redirects the admin to Intuit's consent screen.
+  if (req.method === "GET" && pathname === "/api/admin/quickbooks/connect") {
+    if (!quickbooks.isConfigured()) {
+      return sendJson(res, 503, { ok: false, errors: ["QuickBooks credentials missing — set QB_CLIENT_ID + QB_CLIENT_SECRET in Render env vars first."] });
+    }
+    const state = crypto.randomBytes(16).toString("hex");
+    const baseUrl = baseUrlFromReq(req);
+    const redirectUri = `${baseUrl.replace(/\/+$/, "")}/api/admin/quickbooks/callback`;
+    const authUrl = quickbooks.buildAuthUrl(state, redirectUri);
+    res.writeHead(302, { location: authUrl });
+    res.end();
+    return;
+  }
+
+  // OAuth callback — Intuit redirects here with ?code= and ?realmId=.
+  // Exchange the code for tokens and persist. Then bounce back to settings.
+  if (req.method === "GET" && pathname === "/api/admin/quickbooks/callback") {
+    try {
+      const url = new URL(req.url, baseUrlFromReq(req));
+      const code = url.searchParams.get("code");
+      const realmId = url.searchParams.get("realmId");
+      const err = url.searchParams.get("error");
+      if (err) {
+        res.writeHead(302, { location: "/admin/settings?qb=denied" });
+        res.end();
+        return;
+      }
+      if (!code || !realmId) {
+        return sendJson(res, 400, { ok: false, errors: ["QB callback missing code or realmId."] });
+      }
+      const baseUrl = baseUrlFromReq(req);
+      const redirectUri = `${baseUrl.replace(/\/+$/, "")}/api/admin/quickbooks/callback`;
+      await quickbooks.exchangeCodeForTokens(code, realmId, redirectUri);
+      res.writeHead(302, { location: "/admin/settings?qb=connected" });
+      res.end();
+      return;
+    } catch (e) {
+      console.warn("[qb] callback failed:", e?.message);
+      res.writeHead(302, { location: "/admin/settings?qb=error" });
+      res.end();
+      return;
+    }
+  }
+
+  // Disconnect — clears stored tokens. Patrick can re-connect via /connect.
+  if (req.method === "POST" && pathname === "/api/admin/quickbooks/disconnect") {
+    await quickbooks.clearTokens();
+    return sendJson(res, 200, { ok: true });
+  }
+
+  // Push a specific invoice → QB. Returns the QB invoice id which gets
+  // stored back on the local record so re-pushes update rather than dup.
+  const qbPushMatch = pathname.match(/^\/api\/admin\/quickbooks\/invoice\/([^/]+)\/push$/);
+  if (qbPushMatch && req.method === "POST") {
+    try {
+      const invId = decodeURIComponent(qbPushMatch[1]);
+      const inv = await invoices.get(invId);
+      if (!inv) return sendJson(res, 404, { ok: false, errors: ["Invoice not found."] });
+      const result = await quickbooks.pushInvoice(inv);
+      const updated = await invoices.update(invId, {
+        quickbooksInvoiceId: result.id,
+        notes: inv.notes ? `${inv.notes}\n\nPushed to QB ${new Date().toISOString()}: invoice ${result.id} (${result.action})` : `Pushed to QB ${new Date().toISOString()}: invoice ${result.id} (${result.action})`
+      });
+      return sendJson(res, 200, { ok: true, invoice: updated, qbAction: result.action });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't push to QuickBooks."] });
     }
   }
 

@@ -108,4 +108,66 @@ document.getElementById("invoiceSaveNotes")?.addEventListener("click", async () 
   }
 });
 
+// ---- QuickBooks push -------------------------------------------------
+async function refreshQbBlock() {
+  const meta = document.getElementById("invoiceQbMeta");
+  const btn = document.getElementById("invoiceQbPushBtn");
+  if (!meta || !btn || !currentInvoice) return;
+  try {
+    const r = await fetch("/api/admin/quickbooks/status", { cache: "no-store" });
+    const data = await r.json().catch(() => ({}));
+    if (!data.ok || !data.configured) {
+      meta.innerHTML = `Not configured. <a href="/admin/settings">Set it up in Settings</a>.`;
+      btn.hidden = true;
+      return;
+    }
+    if (!data.connected) {
+      meta.innerHTML = `Configured but not connected. <a href="/admin/settings">Connect in Settings</a>.`;
+      btn.hidden = true;
+      return;
+    }
+    if (currentInvoice.quickbooksInvoiceId) {
+      meta.textContent = `Synced to QuickBooks: invoice ${currentInvoice.quickbooksInvoiceId}.`;
+      btn.textContent = "Re-push to QuickBooks";
+    } else {
+      meta.textContent = "Not yet pushed to QuickBooks.";
+      btn.textContent = "Push to QuickBooks";
+    }
+    btn.hidden = false;
+  } catch (err) {
+    meta.textContent = "Couldn't check QuickBooks status: " + err.message;
+    btn.hidden = true;
+  }
+}
+
+document.getElementById("invoiceQbPushBtn")?.addEventListener("click", async () => {
+  const btn = document.getElementById("invoiceQbPushBtn");
+  const status = document.getElementById("invoiceQbStatus");
+  btn.disabled = true;
+  status.textContent = "Pushing to QuickBooks…";
+  status.dataset.kind = "info";
+  try {
+    const r = await fetch(`/api/admin/quickbooks/invoice/${encodeURIComponent(idFromPath)}/push`, { method: "POST" });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok || !data.ok) throw new Error((data.errors && data.errors[0]) || "Push failed.");
+    currentInvoice = data.invoice;
+    status.textContent = `✓ ${data.qbAction === "updated" ? "Updated" : "Pushed"} successfully — QB invoice ${data.invoice.quickbooksInvoiceId}.`;
+    status.dataset.kind = "ok";
+    refreshQbBlock();
+  } catch (err) {
+    status.textContent = err.message || "Push failed.";
+    status.dataset.kind = "error";
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+// Wire QB block refresh into the existing invoice render path so it
+// updates whenever the invoice is loaded.
+const origRender = render;
+render = function (inv) {
+  origRender(inv);
+  refreshQbBlock();
+};
+
 load();

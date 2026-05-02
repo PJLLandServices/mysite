@@ -130,3 +130,13 @@
 .invoice-back { margin: 0 0 14px; font-size: 13px; }
 .invoice-back a { color: #1B4D2E; text-decoration: none; font-weight: 600; }
 .invoice-back a:hover { text-decoration: underline; }
+
+.invoice-qb { margin-bottom: 16px; padding: 14px 16px; background: #FAFAF5; border: 1px solid #E5E5DD; border-radius: 8px; }
+.invoice-qb h3 { margin: 0 0 6px; font-size: 13px; text-transform: uppercase; letter-spacing: 0.05em; color: #777; font-weight: 700; }
+.invoice-qb-meta { margin: 0 0 8px; font-size: 13px; color: #555; }
+.invoice-qb-meta a { color: #1B4D2E; font-weight: 600; text-decoration: none; }
+.invoice-qb-meta a:hover { text-decoration: underline; }
+.invoice-qb-status { margin: 8px 0 0; font-size: 13px; }
+.invoice-qb-status[data-kind="ok"] { color: #1B4D2E; font-weight: 600; }
+.invoice-qb-status[data-kind="error"] { color: #C03A2C; font-weight: 600; }
+.invoice-qb-status[data-kind="info"] { color: #555; }
