@@ -2312,6 +2312,8 @@ async function init() {
     state.customerPhone = wo.customerPhone || "";
     state.arrivedAt = wo.arrivedAt || null;
     state.departedAt = wo.departedAt || null;
+    state.followupOfWoId = wo.followupOfWoId || null;
+    state.followupWoIds = Array.isArray(wo.followupWoIds) ? wo.followupWoIds : [];
 
     techId.textContent = wo.id;
     techType.textContent = TYPE_LABELS[wo.type] || wo.type;
@@ -2429,6 +2431,14 @@ function renderMaterials() {
   const list = document.getElementById("techMaterialsList");
   const empty = document.getElementById("techMaterialsEmpty");
   if (!section || !list) return;
+  // Materials list shows ONLY on follow-up WOs (per Patrick: regular
+  // visits don't need it because the tech is already on-site; the list
+  // is for prepping the next truckload). A WO is a follow-up when it
+  // carries a followupOfWoId pointer to its parent.
+  if (!state.followupOfWoId) {
+    section.hidden = true;
+    return;
+  }
   if (!state.partsCatalog || !state.serviceMaterials) {
     section.hidden = true;
     return;
@@ -2539,5 +2549,66 @@ document.getElementById("techFollowupBtn")?.addEventListener("click", async () =
     btn.disabled = false;
   }
 });
+
+// ---- Offline banner + queued-mutation status (spec §4.3.3 rule #12) -----
+// Wires the offline-queue helper to the banner up top. Updates on every
+// online/offline transition and every queue change. Hidden when the
+// browser is online AND nothing is queued.
+function renderOfflineBanner() {
+  const banner = document.getElementById("techOfflineBanner");
+  const text = document.getElementById("techOfflineText");
+  if (!banner || !text) return;
+  const online = navigator.onLine;
+  const queued = (window.PJLOffline && window.PJLOffline.pendingCount && window.PJLOffline.pendingCount()) || 0;
+  if (online && queued === 0) {
+    banner.hidden = true;
+    return;
+  }
+  banner.hidden = false;
+  if (!online && queued > 0) {
+    text.textContent = `Offline — ${queued} change${queued === 1 ? "" : "s"} saved locally, will sync when you reconnect.`;
+  } else if (!online) {
+    text.textContent = "Offline — changes will be saved locally and synced when you reconnect.";
+  } else {
+    text.textContent = `Syncing ${queued} pending change${queued === 1 ? "" : "s"}…`;
+  }
+}
+window.addEventListener("online", renderOfflineBanner);
+window.addEventListener("offline", renderOfflineBanner);
+if (window.PJLOffline) {
+  window.PJLOffline.on("change", renderOfflineBanner);
+  renderOfflineBanner();
+}
+
+// Patch the global fetch wrapper used by patchWorkOrder so writes get
+// queued offline. Only intercept the WO PATCH path — other endpoints
+// stay online-only for v1 (carry-forward, on-site-quote/build, etc.
+// are non-trivial to replay correctly, so leave them as-is).
+(function wrapPatchWorkOrder() {
+  if (typeof patchWorkOrder !== "function") return;
+  const original = patchWorkOrder;
+  // eslint-disable-next-line no-undef
+  window.patchWorkOrder = async function (...args) {
+    if (!window.PJLOffline) return original.apply(this, args);
+    // Re-implement the inner fetch using PJLOffline.queuedFetch so the
+    // call falls into IndexedDB on offline. Original signature:
+    //   patchWorkOrder(patchObj) → debounced PATCH
+    // The original uses fetch() internally; we monkey-patch fetch
+    // briefly during the call so the mutation goes through queuedFetch.
+    const realFetch = window.fetch;
+    window.fetch = function (url, init = {}) {
+      const method = (init.method || "GET").toUpperCase();
+      if (typeof url === "string" && method === "PATCH" && /^\/api\/work-orders\/[^/]+$/.test(new URL(url, location.origin).pathname)) {
+        return window.PJLOffline.queuedFetch(url, init);
+      }
+      return realFetch.call(this, url, init);
+    };
+    try {
+      return await original.apply(this, args);
+    } finally {
+      window.fetch = realFetch;
+    }
+  };
+})();
 
 init();

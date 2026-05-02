@@ -2312,3 +2312,23 @@ body[data-locked="true"] .tech-finish-bar { opacity: 0.55; pointer-events: none;
   0%, 100% { box-shadow: 0 0 0 0 rgba(192, 58, 44, 0.6); }
   50%      { box-shadow: 0 0 0 8px rgba(192, 58, 44, 0); }
 }
+
+/* Offline banner (spec §4.3.3 rule #12) — sits below the locked banner
+   when navigator.onLine is false OR there are queued mutations. Amber
+   so it's visible without screaming "error" — offline is a normal
+   field state, not a failure. */
+.tech-offline-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 16px 8px;
+  padding: 10px 14px;
+  background: #FFF8E6;
+  border: 1px solid #E6D17B;
+  border-radius: 8px;
+  color: #6A4A00;
+  font-size: 13px;
+  font-weight: 600;
+}
+.tech-offline-icon { font-size: 16px; }
+.tech-offline-text { flex: 1; line-height: 1.4; }

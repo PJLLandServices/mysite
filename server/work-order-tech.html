@@ -36,6 +36,16 @@
       <span class="tech-locked-text"><strong>Signed and locked</strong> <span id="techLockedMeta"></span></span>
     </div>
 
+    <!-- Offline / queued-mutation banner — appears when navigator.onLine
+         is false OR when there are queued mutations waiting to sync.
+         Shows the queued count so the tech sees their work isn't lost.
+         Spec §4.3.3 rule #12: "Captured locally, synced when service
+         returns." -->
+    <div class="tech-offline-banner" id="techOfflineBanner" hidden role="status">
+      <span class="tech-offline-icon" aria-hidden="true">📡</span>
+      <span class="tech-offline-text" id="techOfflineText">Offline — changes saved locally and will sync when you reconnect.</span>
+    </div>
+
     <section class="tech-summary">
       <p class="tech-property-code" id="techPropertyCode" hidden></p>
       <p class="tech-customer" id="techCustomer">—</p>
@@ -153,14 +163,16 @@
       <ul class="tech-service-checklist-list" id="techServiceChecklistList"></ul>
     </section>
 
-    <!-- Materials Checklist — auto-derived from authorized line items
-         (which parts come off pricing.json + parts.json). Tech taps
-         "Mark as packed" on each row before leaving the shop. Per
-         spec §4.3.2. parts.json wiring lands in a follow-up commit;
-         placeholder section keeps the spec ordering correct. -->
+    <!-- Materials Checklist — visible ONLY on follow-up WOs. The
+         original visit doesn't need a packing list (the tech is
+         already on-site); the follow-up does (the tech is prepping
+         the next truckload from the parent's unfinished scope).
+         Auto-derived from this WO's authorized line items + parts.json
+         service_materials map. Tech taps "Mark as packed" before
+         leaving the shop. -->
     <section class="tech-section tech-materials" id="techMaterialsSection" hidden>
-      <h2 class="tech-section-title">Materials</h2>
-      <p class="tech-materials-help" id="techMaterialsHelp">Tap each line as you load it on the truck.</p>
+      <h2 class="tech-section-title">Materials for follow-up visit</h2>
+      <p class="tech-materials-help" id="techMaterialsHelp">Inherited from the parent visit's unfinished scope. Tap each line as you load it on the truck. Curate by editing the line items below — anything you remove drops off this list.</p>
       <ul class="tech-materials-list" id="techMaterialsList"></ul>
       <p class="tech-materials-empty" id="techMaterialsEmpty" hidden>No materials needed for the authorized scope.</p>
     </section>
@@ -478,6 +490,18 @@
   </div>
 
   <script src="/crm/voice-input.js"></script>
+  <script src="/crm/offline-queue.js"></script>
   <script src="/crm/work-order-tech.js"></script>
+  <script>
+    // Register the tech-mode ServiceWorker for offline cache. Scope is
+    // explicit — only matches /admin/work-order/*/tech/ URLs so the
+    // worker doesn't accidentally intercept admin/CRM pages. Registers
+    // unconditionally; the worker self-disables on browsers without SW
+    // support (older Safari etc.).
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register("/crm/tech-sw.js", { scope: "/admin/work-order/" })
+        .catch((err) => console.warn("[tech-sw] register failed:", err?.message));
+    }
+  </script>
 </body>
 </html>

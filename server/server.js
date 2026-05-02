@@ -2904,26 +2904,36 @@ async function handleApi(req, res, pathname) {
       }
       const followup = await workOrders.create({ type: "service_visit", lead, property });
       const diagnosis = `Follow-up to ${parent.id} (${parent.type}). Original visit notes: ${parent.techNotes || "(none)"}`;
+
+      // Inherit the parent's authorized line items into the follow-up's
+      // on-site quote builder. This is what feeds the Materials checklist
+      // on the follow-up WO — the tech curates from there. Filter out
+      // baseline (seasonal) lines because the seasonal fee was already
+      // charged on the parent visit; the follow-up is repair-only scope.
+      const parentLines = Array.isArray(parent.onSiteQuote?.builderLineItems)
+        ? parent.onSiteQuote.builderLineItems.filter((l) => !(l && l.source && l.source.baseline === true))
+        : [];
+
       await workOrders.update(followup.id, {
         diagnosis,
-        techNotes: `Originating WO: ${parent.id}. Tech to confirm scope on arrival.`
+        techNotes: `Originating WO: ${parent.id}. Tech to confirm scope on arrival.`,
+        followupOfWoId: parent.id,
+        onSiteQuote: parentLines.length ? {
+          ...followup.onSiteQuote,
+          status: "draft",
+          lastBuiltAt: new Date().toISOString(),
+          builderLineItems: parentLines.map((l) => ({ ...l, note: l.note ? `[from ${parent.id}] ${l.note}` : `[inherited from ${parent.id}]` }))
+        } : followup.onSiteQuote
       });
-      // Back-link parent → child + child → parent so the audit trail
-      // can navigate either direction. Manually patch since these
-      // fields aren't in the standard allowedTop list.
-      const parentRecords = await workOrders.list();
-      const parentIdx = parentRecords.findIndex((w) => w.id === parent.id);
-      if (parentIdx !== -1) {
-        const ids = Array.isArray(parentRecords[parentIdx].followupWoIds) ? parentRecords[parentIdx].followupWoIds : [];
-        if (!ids.includes(followup.id)) ids.push(followup.id);
-        // Use a low-level write through a re-fetch + update pattern. The
-        // workOrders module doesn't yet expose a generic patch for these
-        // back-ref fields, so we go through the existing list/persist
-        // helpers indirectly by re-saving via update().
-        // (For now, the followup is the primary record; the parent
-        // back-ref will be added in the audit log via the lead activity
-        // entry below. A schema-level patch helper for back-refs is a
-        // small follow-up commit.)
+
+      // Back-link parent.followupWoIds[] → child id so the desktop view
+      // can navigate either direction. Patch the parent through the
+      // standard update path (followupWoIds added to allowedTop below).
+      const parentFollowups = Array.isArray(parent.followupWoIds) ? parent.followupWoIds.slice() : [];
+      if (!parentFollowups.includes(followup.id)) {
+        parentFollowups.push(followup.id);
+        try { await workOrders.update(parent.id, { followupWoIds: parentFollowups }); }
+        catch (err) { console.warn("[followup] parent back-link failed:", err?.message); }
       }
       // Audit entry on the lead so the CRM detail surfaces the follow-up.
       if (lead) {
@@ -5158,10 +5168,19 @@ async function serveStatic(req, res, pathname) {
     const stat = await fs.stat(filePath);
     if (!stat.isFile()) throw new Error("Not a file");
     const ext = path.extname(filePath).toLowerCase();
-    res.writeHead(200, {
+    const headers = {
       "content-type": MIME_TYPES[ext] || "application/octet-stream",
       "cache-control": ext === ".html" ? "no-store" : "public, max-age=300"
-    });
+    };
+    // ServiceWorker scope override: tech-sw.js is served from /crm/ but
+    // needs to control /admin/work-order/*/tech URLs. The Service-Worker-
+    // Allowed header lets it claim a wider scope than its serving path.
+    // Spec §4.3.3 rule #12 (offline mode mandatory).
+    if (pathname === "/crm/tech-sw.js") {
+      headers["service-worker-allowed"] = "/admin/work-order/";
+      headers["cache-control"] = "no-store";
+    }
+    res.writeHead(200, headers);
     res.end(await fs.readFile(filePath));
   } catch {
     res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });

@@ -414,7 +414,7 @@ async function update(id, patch) {
   // pointers — those are set at create time and shouldn't be edited from
   // the form.
   const next = { ...current };
-  const allowedTop = ["type", "status", "scheduledFor", "diagnosis", "techNotes", "customerName", "customerPhone", "customerEmail", "address", "locked", "arrivedAt", "departedAt"];
+  const allowedTop = ["type", "status", "scheduledFor", "diagnosis", "techNotes", "customerName", "customerPhone", "customerEmail", "address", "locked", "arrivedAt", "departedAt", "followupOfWoId"];
   for (const key of allowedTop) {
     if (Object.prototype.hasOwnProperty.call(patch, key)) next[key] = patch[key];
   }
@@ -437,6 +437,12 @@ async function update(id, patch) {
   }
   if (Object.prototype.hasOwnProperty.call(patch, "materialsPacked") && patch.materialsPacked && typeof patch.materialsPacked === "object") {
     next.materialsPacked = { ...(current.materialsPacked || {}), ...patch.materialsPacked };
+  }
+  // Follow-up back-references — replace wholesale when sent. Both
+  // followupWoIds (parent → children) and followupOfWoId (child → parent,
+  // already in allowedTop above) propagate through this layer.
+  if (Array.isArray(patch.followupWoIds)) {
+    next.followupWoIds = patch.followupWoIds.slice();
   }
   if (Array.isArray(patch.zones)) next.zones = patch.zones.map(hydrateZone);
   if (Array.isArray(patch.additionalRepairs)) next.additionalRepairs = patch.additionalRepairs;
