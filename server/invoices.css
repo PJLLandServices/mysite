@@ -103,3 +103,15 @@
 .invoices-status--expired { background: #EFEFE5; color: #777; }
 .invoices-status--superseded { background: #EFEFE5; color: #999; text-decoration: line-through; }
 .invoices-status--cancelled { background: #EFEFE5; color: #999; }
+
+.invoices-explainer {
+  margin: 0 0 18px;
+  padding: 12px 14px;
+  background: #FFF8E6;
+  border: 1px solid #F0E2A8;
+  border-radius: 8px;
+  color: #6A4A00;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.invoices-explainer code { background: #fff; padding: 1px 5px; border-radius: 3px; font-size: 12px; color: #1B4D2E; }

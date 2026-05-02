@@ -25,7 +25,10 @@
       <button type="button" data-status-filter="paid">Paid</button>
       <button type="button" data-status-filter="void">Void</button>
     </section>
-    <p class="invoices-empty" id="invoicesEmpty" hidden>No invoices yet. They'll appear here when a tech marks a work order completed.</p>
+    <section class="invoices-explainer">
+      <p><strong>How invoices land here:</strong> when a tech marks a work order as <em>completed</em> (status pill on the WO page → "Completed"), the completion cascade auto-creates a draft invoice from the on-site quote line items. Drafts are editable; once you flip a draft to <em>sent</em> it locks the customer-facing fields.</p>
+    </section>
+    <p class="invoices-empty" id="invoicesEmpty" hidden>No invoices yet — complete a work order to generate your first one.</p>
     <table class="invoices-table" id="invoicesTable" hidden>
       <thead>
         <tr>

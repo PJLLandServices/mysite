@@ -18,7 +18,9 @@
     <a href="/admin" class="crm-topbar-back">← CRM</a>
   </header>
   <main class="invoices-shell">
-    <p class="quote-folder-intro">Every Q-YYYY-NNNN record from the AI chat, on-site quotes, and (eventually) formal install quotes.</p>
+    <section class="invoices-explainer">
+      <p><strong>How quotes land here:</strong> the AI chat creates an <em>ai_repair_quote</em> when it emits a <code>[QUOTE_JSON]</code> block in conversation; the tech UI creates an <em>on_site_quote</em> when a customer signs the on-site quote builder. Lead detail in the CRM still shows the same quote inline — this page is the cross-customer index.</p>
+    </section>
     <section class="invoices-filters">
       <button type="button" data-status-filter="" class="is-active">All</button>
       <button type="button" data-status-filter="draft">Drafts</button>
