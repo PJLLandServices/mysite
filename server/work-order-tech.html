@@ -112,14 +112,17 @@
       <p class="tech-intake-source" id="techIntakeSource"></p>
     </section>
 
-    <!-- Run-level status — taps update immediately. -->
+    <!-- Run-level status (top half) — visit-start states only. The
+         finish-the-visit states (Awaiting approval / Completed) live in
+         a sticky bar at the bottom of the page so the tech doesn't have
+         to scroll up to wrap up. Both controls share #techRunStatus so
+         the existing renderRunStatus() pressed-state logic works on
+         either set without changes. -->
     <section class="tech-section">
       <h2 class="tech-section-title">Visit status</h2>
       <div class="tech-run-status" id="techRunStatus" role="radiogroup" aria-label="Visit status">
         <button type="button" data-run-status="scheduled">Scheduled</button>
         <button type="button" data-run-status="on_site">On site</button>
-        <button type="button" data-run-status="awaiting_approval">Awaiting</button>
-        <button type="button" data-run-status="completed">Completed</button>
       </div>
     </section>
 
@@ -192,6 +195,14 @@
         <div class="tech-on-site-review-actions">
           <button type="button" class="tech-on-site-back-btn" id="techOnSiteBackBtn">← Back to edit</button>
           <button type="button" class="tech-on-site-submit-btn" id="techOnSiteSubmitBtn" disabled>Sign &amp; accept</button>
+        </div>
+        <!-- Remote approval — customer not on-site to sign in person.
+             Sends email + SMS with a link to /approve/<id>. The button
+             below is offered as an alternative path; the on-site sign
+             flow above is still the primary path. -->
+        <div class="tech-on-site-remote">
+          <button type="button" class="tech-on-site-remote-btn" id="techOnSiteSendApprovalBtn">📨 Send for customer approval (email + SMS)</button>
+          <p class="tech-on-site-remote-status" id="techOnSiteRemoteStatus" hidden></p>
         </div>
       </div>
 
@@ -292,6 +303,25 @@
     </section>
 
     <p class="tech-meta" id="techMeta">—</p>
+
+    <!-- Sticky finish-the-visit bar — sits at the bottom so the tech's
+         thumb is already there after they scroll through the WO. The
+         "Awaiting approval" state is for when scope-add work needs
+         customer sign-off (on-screen OR via remote approval link). The
+         "Completed" state fires the completion cascade (service record
+         + draft invoice + notifications) per spec §4.3.4. -->
+    <section class="tech-finish-bar" id="techFinishBar">
+      <div class="tech-finish-bar-inner">
+        <button type="button" class="tech-finish-btn tech-finish-btn--awaiting" data-run-status="awaiting_approval" id="techFinishAwaiting">
+          <span class="tech-finish-btn-label">Awaiting approval</span>
+          <span class="tech-finish-btn-sub">scope-add needs customer sign-off</span>
+        </button>
+        <button type="button" class="tech-finish-btn tech-finish-btn--complete" data-run-status="completed" id="techFinishComplete">
+          <span class="tech-finish-btn-label">Mark visit completed</span>
+          <span class="tech-finish-btn-sub">creates service record + draft invoice</span>
+        </button>
+      </div>
+    </section>
   </main>
 
   <p class="tech-loading" id="techLoading">Loading work order…</p>

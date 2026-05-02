@@ -2600,6 +2600,327 @@ async function handleApi(req, res, pathname) {
     return sendJson(res, 200, { ok: true, quotes: all });
   }
 
+  // ---------- Remote approval flow (spec §4.1 + §4.3) -----------------
+  // The tech taps "Send for customer approval" on the on-site quote
+  // builder when the customer wasn't on-site to sign. This endpoint:
+  //   1. Wraps the current builderLineItems into a Q-YYYY-NNNN Quote
+  //   2. Stamps a random 32-hex approval token on the Quote
+  //   3. Sends an SMS + email to the customer (their channels of choice)
+  //      with a link to /approve/<quoteId>?t=<token>
+  //   4. Flips the WO's onSiteQuote.status to "sent_for_remote_approval"
+  // Customer-facing endpoints below handle the view + sign flow.
+  const woSendForApprovalMatch = pathname.match(/^\/api\/work-orders\/([^/]+)\/on-site-quote\/send-for-approval$/);
+  if (woSendForApprovalMatch && req.method === "POST") {
+    try {
+      const id = decodeURIComponent(woSendForApprovalMatch[1]);
+      const payload = await parseRequestBody(req);
+      const wo = await workOrders.get(id);
+      if (!wo) return sendJson(res, 404, { ok: false, errors: ["Work order not found."] });
+      if (wo.locked || wo.signature?.signed) {
+        return sendJson(res, 409, { ok: false, errors: ["Work order is locked."] });
+      }
+      const builderLines = Array.isArray(wo.onSiteQuote?.builderLineItems) ? wo.onSiteQuote.builderLineItems : [];
+      if (!builderLines.length) {
+        return sendJson(res, 422, { ok: false, errors: ["Build the on-site quote first — there are no line items to send."] });
+      }
+      const sendSms = payload?.sendSms !== false;
+      const sendEmail = payload?.sendEmail !== false;
+      const toEmail = (payload?.email || wo.customerEmail || "").trim();
+      const toPhone = (payload?.phone || wo.customerPhone || "").trim();
+      if (!sendSms && !sendEmail) {
+        return sendJson(res, 422, { ok: false, errors: ["Pick at least one delivery channel (email or SMS)."] });
+      }
+      if (sendEmail && !toEmail) return sendJson(res, 422, { ok: false, errors: ["Customer email is required for email delivery."] });
+      if (sendSms && !toPhone) return sendJson(res, 422, { ok: false, errors: ["Customer phone is required for SMS delivery."] });
+
+      // Recompute totals from current builder lines.
+      const totals = issueRollup.totalsFor(builderLines);
+      const acceptedSnapshot = builderLines.map((line) => ({
+        ...line,
+        price: line.overridePrice != null ? Number(line.overridePrice) : Number(line.originalPrice),
+        lineTotal: Math.round((line.overridePrice != null ? Number(line.overridePrice) : Number(line.originalPrice)) * (Number(line.qty) || 1) * 100) / 100
+      }));
+
+      // Reuse an existing in-flight Quote on this WO if present (avoid
+      // generating a new Q-YYYY-NNNN every time the tech retries the
+      // send). Otherwise create one.
+      let quoteRecord = null;
+      if (wo.onSiteQuote?.quoteId) {
+        quoteRecord = await quotes.get(wo.onSiteQuote.quoteId);
+      }
+      if (!quoteRecord) {
+        quoteRecord = await quotes.create({
+          type: "on_site_quote",
+          status: "sent",
+          customerEmail: wo.customerEmail || "",
+          propertyId: wo.propertyId,
+          leadId: wo.leadId || null,
+          source: { chatSessionId: null, pageUrl: null, userAgent: req.headers["user-agent"] || "" },
+          scope: `On-site quote from ${wo.id} — sent for remote approval`,
+          lineItems: acceptedSnapshot,
+          subtotal: totals.subtotal,
+          hst: totals.hst,
+          total: totals.total,
+          createdBy: "tech"
+        });
+        await quotes.attachWorkOrder(quoteRecord.id, wo.id);
+      }
+
+      // Generate the approval token + URL.
+      const token = crypto.randomBytes(16).toString("hex");
+      const baseUrl = baseUrlFromReq(req);
+      const channels = [];
+      if (sendEmail) channels.push("email");
+      if (sendSms) channels.push("sms");
+      await quotes.markSentForApproval(quoteRecord.id, { token, channels, toEmail, toPhone });
+      const approvalUrl = `${baseUrl.replace(/\/+$/, "")}/approve/${encodeURIComponent(quoteRecord.id)}?t=${token}`;
+
+      const results = { smsSent: false, smsError: null, emailSent: false, emailError: null, approvalUrl };
+      const firstName = (wo.customerName || "").split(" ")[0] || "there";
+      const summary = `${builderLines.length} line${builderLines.length === 1 ? "" : "s"} — $${totals.total.toFixed(2)} CAD incl. HST`;
+
+      // SMS — keep within 160 chars where possible.
+      if (sendSms && process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_FROM_NUMBER) {
+        const smsBody = `Hi ${firstName}, PJL: your tech recommends ${summary}. Review + approve here: ${approvalUrl}`;
+        try {
+          const sid = process.env.TWILIO_ACCOUNT_SID;
+          const tok = process.env.TWILIO_AUTH_TOKEN;
+          const url = `https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(sid)}/Messages.json`;
+          const auth = Buffer.from(`${sid}:${tok}`).toString("base64");
+          const body = new URLSearchParams({ To: toPhone, From: process.env.TWILIO_FROM_NUMBER, Body: smsBody });
+          const r = await fetch(url, {
+            method: "POST",
+            headers: { Authorization: `Basic ${auth}`, "Content-Type": "application/x-www-form-urlencoded" },
+            body: body.toString()
+          });
+          const data = await r.json().catch(() => ({}));
+          if (!r.ok) results.smsError = data?.message || `HTTP ${r.status}`;
+          else results.smsSent = true;
+        } catch (err) { results.smsError = err.message; }
+      } else if (sendSms) {
+        results.smsError = "Twilio not configured";
+      }
+
+      // Email — branded, scope-summarized, button to approval URL.
+      if (sendEmail && process.env.GMAIL_USER && process.env.GMAIL_APP_PASSWORD) {
+        try {
+          let nodemailer;
+          try { nodemailer = require("nodemailer"); } catch { nodemailer = null; }
+          if (nodemailer) {
+            const transporter = nodemailer.createTransport({
+              service: "gmail",
+              auth: { user: process.env.GMAIL_USER, pass: process.env.GMAIL_APP_PASSWORD }
+            });
+            const lineRows = acceptedSnapshot.map((l) =>
+              `<tr><td style="padding:6px 0;">${(l.label || l.key || "").replace(/</g, "&lt;")} × ${l.qty}</td><td style="text-align:right;padding:6px 0;font-variant-numeric:tabular-nums;">$${Number(l.lineTotal).toFixed(2)}</td></tr>`
+            ).join("");
+            const html = `
+<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:560px;color:#1a1a1a;line-height:1.55;">
+  <div style="padding:24px 28px;background:#1B4D2E;border-radius:8px 8px 0 0;">
+    <div style="color:#EAF3DE;font-size:12px;letter-spacing:0.12em;text-transform:uppercase;font-weight:600;">PJL Land Services</div>
+    <h1 style="margin:6px 0 0;color:#fff;font-size:22px;">Repair quote — your approval needed.</h1>
+  </div>
+  <div style="padding:24px 28px;background:#FAFAF5;border:1px solid #e5e5dd;border-top:none;border-radius:0 0 8px 8px;">
+    <p style="margin:0 0 14px;">Hi ${firstName.replace(/</g, "&lt;")},</p>
+    <p style="margin:0 0 14px;">Our tech ran into something on-site at ${(wo.address || "your property").replace(/</g, "&lt;")} and recommends the following repair scope:</p>
+    <table style="width:100%;border-collapse:collapse;margin:14px 0;font-size:14px;">${lineRows}</table>
+    <p style="margin:12px 0 18px;padding-top:10px;border-top:1px solid #e5e5dd;text-align:right;font-size:15px;"><strong>Total: $${totals.total.toFixed(2)} CAD</strong> (incl. HST)</p>
+    <p style="margin:0 0 18px;text-align:center;">
+      <a href="${approvalUrl}" style="display:inline-block;padding:14px 28px;background:#E07B24;color:#fff;text-decoration:none;border-radius:6px;font-weight:600;font-size:15px;">Review &amp; approve</a>
+    </p>
+    <p style="margin:18px 0 0;font-size:13px;color:#777;">If the button doesn't work, paste this link:<br><span style="color:#1B4D2E;word-break:break-all;">${approvalUrl}</span></p>
+    <p style="margin:24px 0 0;font-size:13px;color:#777;">Questions? Call <a href="tel:+19059600181" style="color:#1B4D2E;">(905) 960-0181</a>.</p>
+  </div>
+  <p style="margin:16px 0 0;font-size:11px;color:#999;text-align:center;">PJL Land Services · Newmarket, Ontario · pjllandservices.com</p>
+</div>`.trim();
+            await transporter.sendMail({
+              from: `"PJL Land Services" <${process.env.GMAIL_USER}>`,
+              to: toEmail,
+              replyTo: process.env.GMAIL_USER,
+              subject: "PJL: please approve today's repair quote",
+              html
+            });
+            results.emailSent = true;
+          } else {
+            results.emailError = "nodemailer not installed";
+          }
+        } catch (err) { results.emailError = err.message; }
+      } else if (sendEmail) {
+        results.emailError = "Gmail not configured";
+      }
+
+      // Stamp the WO so the tech UI shows "Awaiting customer approval."
+      await workOrders.update(id, {
+        onSiteQuote: {
+          ...wo.onSiteQuote,
+          status: "sent_for_remote_approval",
+          quoteId: quoteRecord.id
+        }
+      });
+
+      return sendJson(res, 200, { ok: true, quote: quoteRecord, ...results });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't send for approval."] });
+    }
+  }
+
+  // Public — customer hits this when they tap the email/SMS link. Returns
+  // a slim payload (no IP/audit data) so it's safe to render in the
+  // /approve/<id> page client-side.
+  const approvalGetMatch = pathname.match(/^\/api\/approve\/([^/]+)\/([^/]+)$/);
+  if (approvalGetMatch && req.method === "GET") {
+    try {
+      const quoteId = decodeURIComponent(approvalGetMatch[1]);
+      const token = decodeURIComponent(approvalGetMatch[2]);
+      const q = await quotes.getByApprovalToken(quoteId, token);
+      if (!q) return sendJson(res, 404, { ok: false, errors: ["Approval link not found or expired."] });
+      const safe = {
+        id: q.id,
+        status: q.status,
+        scope: q.scope,
+        lineItems: q.lineItems,
+        subtotal: q.subtotal,
+        hst: q.hst,
+        total: q.total,
+        validUntil: q.validUntil,
+        sentAt: q.approval?.sentAt || q.sentAt,
+        signedAt: q.signature?.signed ? q.signature.signedAt : null,
+        signedBy: q.signature?.signed ? q.signature.customerName : null
+      };
+      return sendJson(res, 200, { ok: true, quote: safe });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't load quote."] });
+    }
+  }
+
+  // Public — customer signs and approves. Server stamps IP + UA, calls
+  // quotes.acceptWithSignature, then notifies Patrick + flips the WO.
+  const approvalSignMatch = pathname.match(/^\/api\/approve\/([^/]+)\/([^/]+)\/sign$/);
+  if (approvalSignMatch && req.method === "POST") {
+    try {
+      const quoteId = decodeURIComponent(approvalSignMatch[1]);
+      const token = decodeURIComponent(approvalSignMatch[2]);
+      const payload = await parseRequestBody(req);
+      const q = await quotes.getByApprovalToken(quoteId, token);
+      if (!q) return sendJson(res, 404, { ok: false, errors: ["Approval link not found or expired."] });
+      if (q.signature?.signed) {
+        return sendJson(res, 200, { ok: true, alreadySigned: true });
+      }
+      const customerName = String(payload?.customerName || "").trim();
+      const imageData = String(payload?.imageData || "");
+      if (!customerName || !imageData || imageData.length < 50) {
+        return sendJson(res, 422, { ok: false, errors: ["Name and signature are required."] });
+      }
+      if (imageData.length > 500_000) {
+        return sendJson(res, 422, { ok: false, errors: ["Signature image is too large."] });
+      }
+      const ip = (req.headers["x-forwarded-for"] || "").split(",")[0].trim() || req.socket?.remoteAddress || "";
+      const userAgent = req.headers["user-agent"] || "";
+      const decisions = (q.lineItems || []).map((_l, idx) => ({ lineItemIdx: idx, accepted: true, deferredId: null }));
+      const updated = await quotes.acceptWithSignature(q.id, {
+        customerName, imageData, decisions, ip, userAgent, partial: false,
+        note: "Accepted via remote-approval link"
+      });
+
+      // Find the WO this quote was attached to and flip its onSiteQuote
+      // status so the tech UI shows "Customer approved at HH:MM."
+      const woIds = Array.isArray(updated?.workOrderIds) ? updated.workOrderIds : [];
+      for (const woId of woIds) {
+        try {
+          const wo = await workOrders.get(woId);
+          if (wo && wo.onSiteQuote?.quoteId === updated.id) {
+            await workOrders.update(woId, {
+              onSiteQuote: { ...wo.onSiteQuote, status: "accepted" }
+            });
+          }
+        } catch (err) { console.warn("[approval-sign] WO update failed:", err?.message); }
+      }
+
+      // Notify Patrick — customer just committed money.
+      const baseUrl = process.env.PUBLIC_BASE_URL || baseUrlFromReq(req);
+      const aliasLead = {
+        id: updated.id,
+        sourceLabel: `REMOTE APPROVAL — ${updated.id}`,
+        contact: {
+          name: customerName,
+          phone: updated.approval?.sentToPhone || "",
+          email: updated.approval?.sentToEmail || updated.customerEmail || "",
+          address: "",
+          notes: `Customer approved $${Number(updated.total).toFixed(2)} CAD via remote link.`
+        }
+      };
+      Promise.allSettled([
+        sendNewLeadEmail(aliasLead, { baseUrl }),
+        sendNewLeadSms(aliasLead, { baseUrl })
+      ]).catch(() => {});
+
+      return sendJson(res, 200, { ok: true, quote: { id: updated.id, status: updated.status, signedAt: updated.signature.signedAt } });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't process signature."] });
+    }
+  }
+
+  // ---------- Manual completion-cascade triggers --------------------
+  // Two endpoints for explicit admin re-runs / on-demand creation:
+  //   POST /api/work-orders/:id/create-invoice — drafts an invoice from
+  //     whatever's currently in the WO's onSiteQuote.builderLineItems
+  //     (or lineItems) without changing the WO status. Idempotent at the
+  //     cascade layer (already-completed WOs short-circuit with their
+  //     existing invoice). Lets Patrick recover a stuck "I marked it
+  //     complete but no invoice appeared" case (usually because the WO
+  //     had no line items at the moment the status flipped).
+  //   POST /api/work-orders/:id/run-cascade — re-runs the full cascade
+  //     (service record + invoice + property updates + notifications)
+  //     on demand. Same idempotency guards.
+  const woCreateInvoiceMatch = pathname.match(/^\/api\/work-orders\/([^/]+)\/create-invoice$/);
+  if (woCreateInvoiceMatch && req.method === "POST") {
+    try {
+      const id = decodeURIComponent(woCreateInvoiceMatch[1]);
+      const wo = await workOrders.get(id);
+      if (!wo) return sendJson(res, 404, { ok: false, errors: ["Work order not found."] });
+      if (!wo.propertyId) return sendJson(res, 422, { ok: false, errors: ["WO has no linked property — link a property first."] });
+      // Check for an existing invoice on this WO before drafting a new one.
+      const existing = (await invoices.listByWorkOrder(id))[0];
+      if (existing) {
+        return sendJson(res, 200, { ok: true, invoice: existing, alreadyExisted: true });
+      }
+      const woLineItems = completionCascade.lineItemsFromWo(wo);
+      if (!woLineItems.length) {
+        return sendJson(res, 422, { ok: false, errors: [
+          "This work order has no billable line items. Build the on-site quote first (Issues → Draft Quote) so there's something to invoice."
+        ] });
+      }
+      const inv = await invoices.createDraft({
+        woId: wo.id,
+        quoteId: wo.onSiteQuote?.quoteId || null,
+        propertyId: wo.propertyId,
+        customerName: wo.customerName || "",
+        customerEmail: wo.customerEmail || "",
+        customerPhone: wo.customerPhone || "",
+        address: wo.address || "",
+        lineItems: woLineItems,
+        notes: wo.techNotes ? wo.techNotes.slice(0, 500) : ""
+      });
+      return sendJson(res, 201, { ok: true, invoice: inv, alreadyExisted: false });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't create invoice."] });
+    }
+  }
+
+  const woRunCascadeMatch = pathname.match(/^\/api\/work-orders\/([^/]+)\/run-cascade$/);
+  if (woRunCascadeMatch && req.method === "POST") {
+    try {
+      const id = decodeURIComponent(woRunCascadeMatch[1]);
+      const wo = await workOrders.get(id);
+      if (!wo) return sendJson(res, 404, { ok: false, errors: ["Work order not found."] });
+      if (!wo.propertyId) return sendJson(res, 422, { ok: false, errors: ["WO has no linked property."] });
+      const result = await completionCascade.run(wo);
+      return sendJson(res, 200, { ok: true, ...result });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't run cascade."] });
+    }
+  }
+
   // ---------- Settings (admin notification defaults + audit) --------
 
   if (req.method === "GET" && pathname === "/api/settings") {
@@ -4603,6 +4924,9 @@ function resolveStaticTarget(pathname) {
   }
   if (pathname.startsWith("/portal/")) {
     return { dir: SERVER_DIR, relative: "/portal.html" };
+  }
+  if (pathname.startsWith("/approve/")) {
+    return { dir: SERVER_DIR, relative: "/approve.html" };
   }
   if (pathname.startsWith("/crm/")) {
     return { dir: SERVER_DIR, relative: pathname.slice("/crm".length) };

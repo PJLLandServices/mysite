@@ -89,9 +89,11 @@ const WO_PHOTO_CATEGORIES = ["pre_work", "in_progress", "post_work", "issue", "g
 // everything they need. Each step has a stable key (so booleans
 // persist across schema iterations) plus a customer-facing label.
 const SERVICE_CHECKLISTS = {
+  // Backflow intentionally NOT in this list. PJL is not a certified
+  // Ontario backflow tester — see memory/backflow_not_certified.md. If
+  // a customer asks about backflow, refer out.
   spring_opening: [
     { key: "water_on",                  label: "Water turned on at main shut-off" },
-    { key: "backflow_check",            label: "Backflow visual check" },
     { key: "controller_programmed",     label: "Controller programmed for season" },
     { key: "walkthrough_with_customer", label: "Walk-through with customer (if home)" }
   ],

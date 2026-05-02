@@ -171,6 +171,20 @@ function blankQuote() {
     // created. Empty until accept().
     decisions: [],
 
+    // Remote approval — when a tech sends an on-site quote to the
+    // customer for off-site sign-off (customer wasn't on-site, OR they
+    // wanted to think it over). Token authenticates the customer-facing
+    // /approve/<id> page; sentVia records which channels fired so the
+    // tech UI can show "Sent by SMS at 2:14pm." Cleared when the quote
+    // status leaves "sent" (accepted/declined/expired/superseded).
+    approval: {
+      token: null,
+      sentAt: null,
+      sentVia: [],            // ["sms", "email"] subset
+      sentToEmail: "",
+      sentToPhone: ""
+    },
+
     // Audit trail — every status change appends an entry.
     history: [
       { ts: created, action: "created", by: "system", note: "" }
@@ -186,6 +200,7 @@ function hydrate(q) {
     source: { ...base.source, ...(q.source || {}) },
     intakeGuarantee: { ...base.intakeGuarantee, ...(q.intakeGuarantee || {}) },
     signature: { ...base.signature, ...(q?.signature || {}) },
+    approval: { ...base.approval, ...(q?.approval || {}), sentVia: Array.isArray(q?.approval?.sentVia) ? q.approval.sentVia : [] },
     lineItems: Array.isArray(q?.lineItems) ? q.lineItems : [],
     decisions: Array.isArray(q?.decisions) ? q.decisions : [],
     workOrderIds: Array.isArray(q?.workOrderIds) ? q.workOrderIds : [],
@@ -463,6 +478,52 @@ async function attachWorkOrder(id, workOrderId) {
   return q;
 }
 
+// Stamp an approval token + send-channel record on a quote so it can be
+// fetched by the customer-facing /approve/<id> page. Token is a 32-char
+// random hex string — sufficient entropy that brute-forcing the URL is
+// not a practical attack. Channels: ["email"], ["sms"], ["email","sms"],
+// or [] (manual share — Patrick copies the URL himself).
+async function markSentForApproval(id, { token, channels = [], toEmail = "", toPhone = "" } = {}) {
+  if (!id || !token) throw new Error("markSentForApproval needs id + token");
+  const records = await readAll();
+  const idx = records.findIndex((q) => q.id === id);
+  if (idx === -1) return null;
+  const q = records[idx];
+  const ts = nowIso();
+  q.approval = {
+    token,
+    sentAt: ts,
+    sentVia: Array.isArray(channels) ? channels.slice() : [],
+    sentToEmail: String(toEmail || "").toLowerCase().trim(),
+    sentToPhone: String(toPhone || "").trim()
+  };
+  if (q.status === "draft") q.status = "sent";
+  if (!q.sentAt) q.sentAt = ts;
+  q.history.push({
+    ts, action: "sent_for_approval", by: "tech",
+    note: `via ${q.approval.sentVia.join("+") || "manual"}`
+  });
+  records[idx] = q;
+  await writeAll(records);
+  return q;
+}
+
+// Look up a quote by its approval token. Returns the matching quote OR
+// null. Used by the public /api/approve/:id/:token endpoints.
+async function getByApprovalToken(id, token) {
+  if (!id || !token) return null;
+  const q = await get(id);
+  if (!q || !q.approval || !q.approval.token) return null;
+  // Constant-time-ish comparison — since strings are short and JS doesn't
+  // have a built-in timingSafeEqual for strings, this is the closest we
+  // get without dragging in node:crypto for a public file. Adequate for
+  // the threat model (token is 32 hex chars, brute force is not viable).
+  if (q.approval.token.length !== token.length) return null;
+  let mismatch = 0;
+  for (let i = 0; i < token.length; i++) mismatch |= q.approval.token.charCodeAt(i) ^ token.charCodeAt(i);
+  return mismatch === 0 ? q : null;
+}
+
 // Sweep all quotes that are past their validUntil date and still in
 // "sent"/"draft" status. Marks them expired with an audit entry. Called
 // at server startup AND on a daily interval (server.js sets the timer).
@@ -504,5 +565,7 @@ module.exports = {
   decline,
   expire,
   expireStaleQuotes,
-  attachWorkOrder
+  attachWorkOrder,
+  markSentForApproval,
+  getByApprovalToken
 };

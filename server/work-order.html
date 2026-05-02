@@ -238,6 +238,23 @@
         </div>
       </section>
 
+      <!-- Cascade-recovery actions — explicit alternatives to the
+           tech-mode "Mark visit completed" tap. Useful when (a) the WO
+           was completed but no invoice appeared (cascade ran with
+           empty line items at the time), or (b) Patrick wants to draft
+           an invoice from the desktop without changing WO status. -->
+      <section class="wo-cascade-actions" id="woCascadeActions">
+        <header>
+          <h3>Invoice + completion</h3>
+          <p>The completion cascade fires automatically when a tech marks the visit completed. Use these if you need to draft on demand or the cascade missed a line.</p>
+        </header>
+        <div class="wo-cascade-buttons">
+          <button type="button" class="pjl-btn" id="woCreateInvoiceBtn">Create draft invoice now</button>
+          <button type="button" class="pjl-btn pjl-btn-secondary" id="woRunCascadeBtn">Re-run completion cascade</button>
+        </div>
+        <p class="wo-cascade-status" id="woCascadeStatus"></p>
+      </section>
+
       <div class="property-actions wo-actions">
         <button type="submit" class="pjl-btn pjl-btn-primary" id="saveBtn">Save work order</button>
         <span id="saveStatus" role="status"></span>

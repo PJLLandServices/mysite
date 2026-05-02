@@ -1046,3 +1046,40 @@ body[data-locked="true"] .wo-signoff-form {
   }
   .wo-zone-location { font-size: 14px; }
 }
+
+/* Cascade-recovery actions — explicit on-demand triggers for the
+   completion cascade (invoice draft + full re-run). Sits between the
+   sign-off section and the save/delete row. */
+.wo-cascade-actions {
+  margin: 24px 0;
+  padding: 18px 20px;
+  background: #FAFAF5;
+  border: 1px solid #E5E5DD;
+  border-radius: 12px;
+}
+.wo-cascade-actions h3 {
+  margin: 0 0 4px;
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 18px;
+  color: #1B4D2E;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.wo-cascade-actions p {
+  margin: 0 0 12px;
+  font-size: 13px;
+  color: #555;
+  line-height: 1.5;
+}
+.wo-cascade-buttons {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.wo-cascade-status {
+  margin: 10px 0 0 !important;
+  font-size: 13px;
+}
+.wo-cascade-status[data-kind="ok"] { color: #1B4D2E; font-weight: 600; }
+.wo-cascade-status[data-kind="error"] { color: #C03A2C; font-weight: 600; }
+.wo-cascade-status[data-kind="info"] { color: #555; }

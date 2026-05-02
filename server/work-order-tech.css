@@ -2098,3 +2098,97 @@ body[data-locked="true"] .tech-on-site-defer {
 }
 .tech-emergency-submit:disabled { opacity: 0.4; cursor: not-allowed; }
 .tech-emergency-error { margin: 0; color: #C03A2C; font-size: 13px; }
+
+/* ---- Sticky finish-the-visit bar -----------------------------------
+   Bottom-of-screen surface for the two "wrap up" status transitions
+   (Awaiting approval / Completed). Tech's thumb is already at the
+   bottom after they fill in zones, so the wrap-up actions live there
+   rather than at the top. iPhone safe-area honoured for home-bar
+   clearance. The bar disables its actions when the WO is locked. */
+.tech-finish-bar {
+  position: sticky;
+  bottom: 0;
+  margin: 28px -16px 0;
+  padding: 14px 16px calc(14px + env(safe-area-inset-bottom, 0));
+  background: rgba(255, 255, 255, 0.96);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border-top: 1px solid #E5E5DD;
+  box-shadow: 0 -8px 24px rgba(15, 31, 20, 0.08);
+  z-index: 50;
+}
+.tech-finish-bar-inner {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  max-width: 720px;
+  margin: 0 auto;
+}
+.tech-finish-btn {
+  font-family: inherit;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 12px 10px;
+  border-radius: 12px;
+  border: 1px solid #E5E5DD;
+  background: #fff;
+  color: #1F2A22;
+  cursor: pointer;
+  text-align: center;
+  min-height: 56px;
+  transition: transform 0.08s ease;
+}
+.tech-finish-btn:active { transform: scale(0.98); }
+.tech-finish-btn-label { font-size: 14px; font-weight: 700; letter-spacing: 0.01em; }
+.tech-finish-btn-sub { font-size: 11px; color: #777; line-height: 1.3; }
+.tech-finish-btn--awaiting {
+  background: #FFF8E6;
+  border-color: #E6D17B;
+  color: #6A4A00;
+}
+.tech-finish-btn--awaiting .tech-finish-btn-sub { color: #8A6B00; }
+.tech-finish-btn--complete {
+  background: #1B4D2E;
+  border-color: #1B4D2E;
+  color: #fff;
+}
+.tech-finish-btn--complete .tech-finish-btn-sub { color: #C9DDD0; }
+.tech-finish-btn[aria-pressed="true"] {
+  outline: 3px solid #E07B24;
+  outline-offset: -3px;
+}
+body[data-locked="true"] .tech-finish-bar { opacity: 0.55; pointer-events: none; }
+
+/* Remote approval — alternative to in-person signature.
+   Sits below the on-site sign block in the review sub-state. */
+.tech-on-site-remote {
+  margin-top: 14px;
+  padding: 12px;
+  background: #FFF8E6;
+  border: 1px solid #E6D17B;
+  border-radius: 8px;
+}
+.tech-on-site-remote-btn {
+  font-family: inherit;
+  width: 100%;
+  font-size: 14px;
+  font-weight: 600;
+  padding: 11px 14px;
+  border-radius: 8px;
+  border: 1px solid #E07B24;
+  background: #fff;
+  color: #B05D14;
+  cursor: pointer;
+  min-height: 48px;
+}
+.tech-on-site-remote-btn:active { transform: scale(0.99); }
+.tech-on-site-remote-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.tech-on-site-remote-status {
+  margin: 8px 0 0;
+  font-size: 13px;
+  color: #555;
+}
+.tech-on-site-remote-status[data-kind="ok"] { color: #1B4D2E; font-weight: 600; }
+.tech-on-site-remote-status[data-kind="error"] { color: #C03A2C; font-weight: 600; }

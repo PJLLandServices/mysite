@@ -1114,6 +1114,65 @@ window.addEventListener("keydown", (event) => {
   if (!confirmModal.hidden && event.key === "Escape") closeConfirm(false);
 });
 
+// Cascade-recovery actions: explicit "Create draft invoice" + "Re-run
+// completion cascade" so Patrick can recover from cases where the auto-
+// fire on status→completed didn't produce what he expected (usually
+// because the WO had no line items at the time of the status flip).
+const woCreateInvoiceBtn = document.getElementById("woCreateInvoiceBtn");
+const woRunCascadeBtn = document.getElementById("woRunCascadeBtn");
+const woCascadeStatus = document.getElementById("woCascadeStatus");
+
+function setCascadeStatus(text, kind = "info") {
+  if (!woCascadeStatus) return;
+  woCascadeStatus.textContent = text;
+  woCascadeStatus.dataset.kind = kind;
+}
+
+woCreateInvoiceBtn?.addEventListener("click", async () => {
+  const id = getWorkOrderId();
+  if (!id) return;
+  woCreateInvoiceBtn.disabled = true;
+  setCascadeStatus("Creating invoice…", "info");
+  try {
+    const r = await fetch(`/api/work-orders/${encodeURIComponent(id)}/create-invoice`, { method: "POST" });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok || !data.ok) throw new Error((data.errors && data.errors[0]) || "Couldn't create invoice.");
+    if (data.alreadyExisted) {
+      setCascadeStatus(`Invoice ${data.invoice.id} already exists for this WO.`, "info");
+    } else {
+      setCascadeStatus(`Draft invoice ${data.invoice.id} created — $${Number(data.invoice.total).toFixed(2)}.`, "ok");
+    }
+    // Open it in a new tab so Patrick keeps the WO context.
+    setTimeout(() => window.open(`/admin/invoice/${encodeURIComponent(data.invoice.id)}`, "_blank"), 350);
+  } catch (err) {
+    setCascadeStatus(err.message || "Failed.", "error");
+  } finally {
+    woCreateInvoiceBtn.disabled = false;
+  }
+});
+
+woRunCascadeBtn?.addEventListener("click", async () => {
+  const id = getWorkOrderId();
+  if (!id) return;
+  if (!confirm("Re-run the full completion cascade? This is idempotent — if a service record already exists for this WO, it'll just return the existing record.")) return;
+  woRunCascadeBtn.disabled = true;
+  setCascadeStatus("Re-running cascade…", "info");
+  try {
+    const r = await fetch(`/api/work-orders/${encodeURIComponent(id)}/run-cascade`, { method: "POST" });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok || !data.ok) throw new Error((data.errors && data.errors[0]) || "Couldn't run cascade.");
+    if (data.alreadyRan) {
+      setCascadeStatus(`Cascade already ran for this WO. Service record: ${data.serviceRecord?.id}${data.invoice ? ` · Invoice ${data.invoice.id}` : ""}.`, "info");
+    } else {
+      setCascadeStatus(`Cascade fired. Service record: ${data.serviceRecord?.id}${data.invoice ? ` · Invoice ${data.invoice.id}` : " · No invoice (no line items)"}.`, "ok");
+    }
+  } catch (err) {
+    setCascadeStatus(err.message || "Failed.", "error");
+  } finally {
+    woRunCascadeBtn.disabled = false;
+  }
+});
+
 deleteBtn.addEventListener("click", async () => {
   const id = getWorkOrderId();
   if (!id || !loadedWorkOrder) return;

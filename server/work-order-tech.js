@@ -391,18 +391,27 @@ async function patchWorkOrder(payload) {
 }
 
 // ---- Run-level status (radio buttons) ---------------------------
+// Two surfaces share this state: the top "Visit status" block (Scheduled
+// / On site) and the bottom "Finish the visit" sticky bar (Awaiting
+// approval / Completed). Pressed-state + click handlers iterate ALL
+// elements with [data-run-status] so the two surfaces stay in sync.
 
 function renderRunStatus() {
-  techRunStatus.querySelectorAll("[data-run-status]").forEach((btn) => {
+  document.querySelectorAll("[data-run-status]").forEach((btn) => {
     btn.setAttribute("aria-pressed", btn.dataset.runStatus === state.status ? "true" : "false");
   });
 }
 
-techRunStatus.addEventListener("click", (event) => {
+document.addEventListener("click", (event) => {
   const btn = event.target.closest("[data-run-status]");
   if (!btn) return;
   const next = btn.dataset.runStatus;
   if (next === state.status) return;
+  // Confirm the destructive-feeling "Completed" tap so a misclick on the
+  // finish bar doesn't fire the cascade. Other transitions are silent.
+  if (next === "completed") {
+    if (!confirm("Mark this visit completed? This will create a service record on the property and a draft invoice if there are any line items. You can still edit the WO afterwards.")) return;
+  }
   state.status = next;
   renderRunStatus();
   patchWorkOrder({ status: next });
@@ -1641,6 +1650,60 @@ document.getElementById("techOnSiteSubmitBtn")?.addEventListener("click", async 
     submit.disabled = false;
     submit.textContent = "Sign & accept";
     alert(err.message || "Couldn't save.");
+  }
+});
+
+// Remote approval — customer wasn't on-site to sign. Tech taps this to
+// fire the email + SMS link to the customer-facing /approve/<id> page.
+// Reuses the WO's customer email + phone from the WO record. Idempotent
+// at the server: subsequent taps re-send to the same Q-YYYY-NNNN.
+document.getElementById("techOnSiteSendApprovalBtn")?.addEventListener("click", async () => {
+  if (state.locked) return;
+  const btn = document.getElementById("techOnSiteSendApprovalBtn");
+  const status = document.getElementById("techOnSiteRemoteStatus");
+  if (!confirm(`Send the on-site quote to ${state.customerName || "the customer"} via email${state.customerPhone ? " + SMS" : ""} for remote approval?`)) return;
+  btn.disabled = true;
+  status.hidden = false;
+  status.textContent = "Sending…";
+  status.dataset.kind = "info";
+  try {
+    const r = await fetch(`/api/work-orders/${encodeURIComponent(state.id)}/on-site-quote/send-for-approval`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        sendEmail: !!state.customerEmail,
+        sendSms: !!state.customerPhone,
+        email: state.customerEmail,
+        phone: state.customerPhone
+      })
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok || !data.ok) throw new Error((data.errors && data.errors[0]) || "Couldn't send.");
+    const channels = [];
+    if (data.emailSent) channels.push("email");
+    if (data.smsSent) channels.push("SMS");
+    const errs = [];
+    if (data.emailError) errs.push(`email: ${data.emailError}`);
+    if (data.smsError) errs.push(`SMS: ${data.smsError}`);
+    if (channels.length) {
+      status.textContent = `Sent via ${channels.join(" + ")}. Quote ${data.quote.id}. Awaiting customer signature.`;
+      status.dataset.kind = "ok";
+    } else {
+      status.textContent = `Quote created (${data.quote.id}) but no delivery channel succeeded. Errors: ${errs.join("; ")}.`;
+      status.dataset.kind = "error";
+    }
+    // Refresh the WO status so the on-site quote section reflects the
+    // sent_for_remote_approval state.
+    const refreshed = await fetch(`/api/work-orders/${encodeURIComponent(state.id)}`).then((r) => r.json()).catch(() => null);
+    if (refreshed?.workOrder?.onSiteQuote) {
+      state.onSiteQuote = refreshed.workOrder.onSiteQuote;
+      renderOnSiteQuote();
+    }
+  } catch (err) {
+    status.textContent = err.message || "Failed.";
+    status.dataset.kind = "error";
+  } finally {
+    btn.disabled = false;
   }
 });
 

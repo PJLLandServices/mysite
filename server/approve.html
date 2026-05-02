@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#1B4D2E">
+  <title>Approve repair quote — PJL Land Services</title>
+  <link rel="icon" type="image/svg+xml" href="/crm/pjl-logo-mark.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/crm/approve.css">
+</head>
+<body class="approve-body">
+  <header class="approve-nav">
+    <a href="/" class="approve-logo"><img src="/crm/pjl-logo.svg" alt="PJL Land Services"></a>
+    <a class="approve-call" href="tel:+19059600181">(905) 960-0181</a>
+  </header>
+
+  <main class="approve-shell">
+    <p class="approve-loading" id="approveLoading">Loading your quote…</p>
+    <div class="approve-error" id="approveError" hidden>
+      <h1>Approval link not found</h1>
+      <p>This link couldn't be loaded — it may have expired, been revoked, or contains a typo. Call PJL at <a href="tel:+19059600181">(905) 960-0181</a> if you need a new one.</p>
+    </div>
+
+    <article class="approve-card" id="approveCard" hidden>
+      <p class="approve-eyebrow">Repair quote — your approval needed</p>
+      <h1>Your tech recommends the following work.</h1>
+      <p class="approve-intro" id="approveIntro">Review the scope and price below. When you're ready, sign at the bottom and PJL will get the green light to proceed.</p>
+
+      <section class="approve-lines" id="approveLines"></section>
+      <section class="approve-totals">
+        <div><span>Subtotal</span><strong id="approveSubtotal">$0.00</strong></div>
+        <div><span>HST (13%)</span><strong id="approveHst">$0.00</strong></div>
+        <div class="approve-totals-row"><span>Total CAD</span><strong id="approveTotal">$0.00</strong></div>
+      </section>
+
+      <section class="approve-sign" id="approveSignBlock">
+        <h2>Approve this work</h2>
+        <p>Print your name and sign below. Your signature is the authorization to proceed and is the binding moment for this scope.</p>
+        <label class="approve-label" for="approveName">Your name (printed)</label>
+        <input type="text" id="approveName" class="approve-input" autocomplete="name" placeholder="Full name">
+        <label class="approve-label">Signature</label>
+        <canvas id="approveCanvas" class="approve-canvas" aria-label="Signature pad"></canvas>
+        <div class="approve-actions">
+          <button type="button" class="approve-clear" id="approveClear">Clear</button>
+          <button type="button" class="approve-submit" id="approveSubmit" disabled>Approve &amp; sign</button>
+        </div>
+        <p class="approve-error-msg" id="approveErrorMsg" hidden role="alert"></p>
+      </section>
+
+      <section class="approve-success" id="approveSuccess" hidden>
+        <h2>✓ Approved.</h2>
+        <p>Thank you, <span id="approveSuccessName">—</span>. PJL has been notified and will follow up shortly. You'll get an invoice once the work is complete.</p>
+        <p class="approve-success-meta" id="approveSuccessMeta"></p>
+      </section>
+    </article>
+  </main>
+
+  <script src="/crm/approve.js"></script>
+</body>
+</html>
