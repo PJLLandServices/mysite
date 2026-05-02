@@ -43,6 +43,7 @@ const { priceForBooking } = require("./lib/pricing");
 const bookingSessions = require("./lib/booking-sessions");
 const properties = require("./lib/properties");
 const workOrders = require("./lib/work-orders");
+const quotes = require("./lib/quotes");
 
 // Short, customer-friendly work order ID. Eight chars from a UUIDv4 base32-ish
 // alphabet (no I/O/0/1 to keep them unambiguous when read aloud or hand-written).
@@ -1118,6 +1119,27 @@ async function handleApi(req, res, pathname) {
       try { validatedPhotos = validatePhotos(payload.photos); }
       catch (photoErr) { return sendJson(res, 422, { ok: false, errors: [photoErr.message] }); }
 
+      // Structured AI quote payload: when the AI chat emits [QUOTE_JSON], the
+      // chat widget passes it through here. We validate the line-item keys
+      // against pricing.json (the catalog is the source of truth — never the
+      // AI's stated total) and mirror the result into payload.features so the
+      // existing lead-validation path still computes totals correctly.
+      // Validation failures are LOGGED but DON'T block the booking — graceful
+      // degradation per the spec. Patrick can build the Quote manually from
+      // the chat transcript if needed.
+      let validatedQuote = null;
+      if (payload.quotePayload && typeof payload.quotePayload === "object") {
+        const result = quotes.validateQuotePayload(payload.quotePayload, FEATURES);
+        if (!result.ok) {
+          console.warn("[quotes] payload validation failed:", result.errors);
+        } else {
+          validatedQuote = result;
+          if (!Array.isArray(payload.features) || !payload.features.length) {
+            payload.features = result.lineItems.map((li) => ({ key: li.key, qty: li.qty }));
+          }
+        }
+      }
+
       const result = validateLead(payload);
       if (!result.ok) return sendJson(res, 422, { ok: false, errors: result.errors });
 
@@ -1213,6 +1235,57 @@ async function handleApi(req, res, pathname) {
       if (chatSessionId) {
         try { await linkChatToLead(chatSessionId, result.lead.id); }
         catch (err) { console.error("[chat] link failed:", err?.message || err); }
+      }
+
+      // Quote folder linkage: when the chat widget passed a structured
+      // [QUOTE_JSON] payload that validated, create the Quote record and
+      // link it to the lead. Spec §4.1 — every ai_repair_quote needs a
+      // discrete versioned artifact; the lead points at it via lead.quoteId.
+      // The status flow: created with "sent" (AI showed the quote in chat),
+      // then accept() fires immediately (customer is submitting the booking
+      // form, that IS the acceptance moment). Audit history captures both.
+      if (validatedQuote) {
+        try {
+          const igRaw = payload.quotePayload.intake_guarantee === true;
+          const scopeText = String(payload.quotePayload.scope || "").slice(0, 200);
+          const quote = await quotes.create({
+            type: "ai_repair_quote",
+            status: "sent",
+            customerEmail: result.lead.contact?.email || "",
+            propertyId: result.lead.propertyId || null,
+            leadId: result.lead.id,
+            source: {
+              chatSessionId: chatSessionId || null,
+              pageUrl: result.lead.context?.pageUrl || null,
+              userAgent: result.lead.context?.userAgent || null
+            },
+            scope: scopeText,
+            lineItems: validatedQuote.lineItems,
+            subtotal: validatedQuote.subtotal,
+            hst: validatedQuote.hst,
+            total: validatedQuote.total,
+            intakeGuarantee: igRaw
+              ? { applies: true, scope: scopeText }
+              : { applies: false, scope: "" },
+            createdBy: "ai_chat"
+          });
+          await quotes.accept(quote.id, { leadId: result.lead.id, by: "customer" });
+
+          // Write quoteId back onto the lead so the CRM, portal, and WO
+          // creation can all find the source quote without a separate query.
+          const liveLeads2 = await readLeads();
+          const i2 = liveLeads2.findIndex((l) => l.id === result.lead.id);
+          if (i2 !== -1) {
+            liveLeads2[i2].quoteId = quote.id;
+            await writeLeads(liveLeads2);
+          }
+
+          if (validatedQuote.priceMismatch) {
+            console.warn("[quotes] AI/catalog total mismatch on", quote.id, validatedQuote.priceMismatch);
+          }
+        } catch (err) {
+          console.error("[quotes] create failed:", err?.message || err);
+        }
       }
 
       // Return the portal URL too so the chat widget's thank-you screen can

@@ -24,6 +24,10 @@
   const TRANSCRIPT_ENDPOINT = "https://pjl-land-services-onrender-com.onrender.com/api/chat-transcripts";
   const FORM_TRIGGER = "[SHOW_BOOKING_FORM]";
   const CAPTURE_TRIGGER = "[SHOW_CONTACT_CAPTURE]";
+  // [QUOTE_JSON:{...}] travels alongside [SHOW_BOOKING_FORM] for repair quotes.
+  // The regex captures the JSON body so the frontend can parse + stash it; the
+  // full match is stripped from the visible message before rendering.
+  const QUOTE_JSON_RE = /\[QUOTE_JSON:\s*(\{[^\n]*?\})\s*\]/;
   const STORAGE_KEY = "pjl_chat_state_v1";
   const PHOTO_DB_NAME = "pjl_chat_photos_v1";
   const PHOTO_STORE = "photos";
@@ -42,6 +46,7 @@
     bookingComplete: false,
     captureShown: false,    // [SHOW_CONTACT_CAPTURE] form rendered (self-fix success path)
     captureComplete: false, // contact-capture form submitted
+    pendingQuote: null,     // most recent [QUOTE_JSON] payload from the AI; sent with booking form on submit
     panelOpen: false,
     awaiting: false,      // reset to false on rehydrate (in-flight requests don't survive nav)
     chatSessionId: null   // generated lazily; identifies the chat for transcript upserts
@@ -131,6 +136,7 @@
         bookingComplete: state.bookingComplete,
         captureShown: state.captureShown,
         captureComplete: state.captureComplete,
+        pendingQuote: state.pendingQuote,
         panelOpen: state.panelOpen,
         chatSessionId: state.chatSessionId
       };
@@ -151,6 +157,7 @@
       messages: [], photoIds: [], pendingPhotoIds: [],
       bookingShown: false, bookingComplete: false,
       captureShown: false, captureComplete: false,
+      pendingQuote: null,
       panelOpen: false, awaiting: false,
       chatSessionId: null
     };
@@ -353,14 +360,39 @@
       row.appendChild(av);
       const bubble = document.createElement("div");
       bubble.className = "pjl-chat-msg-bubble";
-      const text = (typeof msg.content === "string" ? msg.content : "")
-        .replace(FORM_TRIGGER, "")
-        .replace(CAPTURE_TRIGGER, "")
-        .trim();
+      const text = stripTokens(typeof msg.content === "string" ? msg.content : "");
       bubble.innerHTML = formatBubbleText(text);
       row.appendChild(bubble);
     }
     messagesEl.appendChild(row);
+  }
+
+  // Strip every system token (FORM_TRIGGER, CAPTURE_TRIGGER, QUOTE_JSON) from
+  // a raw AI reply so the customer-facing render never leaks the wire format.
+  // Used by message rendering and transcript building.
+  function stripTokens(raw) {
+    return String(raw || "")
+      .replace(QUOTE_JSON_RE, "")
+      .replace(FORM_TRIGGER, "")
+      .replace(CAPTURE_TRIGGER, "")
+      .trim();
+  }
+
+  // Pull the [QUOTE_JSON: {...}] payload out of an AI reply, if present.
+  // Returns the parsed object on success, or null on absence / parse failure.
+  // Parse failures are intentionally swallowed — a malformed token degrades
+  // gracefully to "no structured quote, lead lands without a Quote record"
+  // rather than blocking the booking flow.
+  function extractQuotePayload(raw) {
+    const match = QUOTE_JSON_RE.exec(String(raw || ""));
+    if (!match) return null;
+    try {
+      const obj = JSON.parse(match[1]);
+      if (obj && Array.isArray(obj.items) && obj.items.length) return obj;
+    } catch (e) {
+      console.warn("[pjl-chat] QUOTE_JSON parse failed:", e?.message);
+    }
+    return null;
   }
 
   function appendUserMessageDOM(text, photoUrls) {
@@ -573,11 +605,15 @@
       const data = await response.json();
       const reply = data.reply || "Sorry — I'm having trouble responding right now.";
       state.messages.push({ role: "assistant", content: reply });
+
+      // Pull the structured quote payload (if any) and stash for the booking
+      // form submission. The token is stripped from cleanReply before render
+      // so the customer never sees the wire format.
+      const quotePayload = extractQuotePayload(reply);
+      if (quotePayload) state.pendingQuote = quotePayload;
+
       saveState();
-      const cleanReply = reply
-        .replace(FORM_TRIGGER, "")
-        .replace(CAPTURE_TRIGGER, "")
-        .trim();
+      const cleanReply = stripTokens(reply);
       const showForm = reply.includes(FORM_TRIGGER);
       const showCapture = reply.includes(CAPTURE_TRIGGER);
       return { reply: cleanReply, showForm, showCapture };
@@ -749,7 +785,7 @@
         const tp = m.content.find((b) => b.type === "text");
         text = (imageCount ? `[attached ${imageCount} photo${imageCount > 1 ? "s" : ""}] ` : "") + (tp ? tp.text : "");
       } else { text = ""; }
-      text = text.replace(FORM_TRIGGER, "").replace(CAPTURE_TRIGGER, "").trim();
+      text = stripTokens(text);
       if (text) lines.push(`${who}: ${text}`);
     }
     return lines.join("\n\n");
@@ -779,6 +815,10 @@
       mode: "ai_diagnose",
       transcript: buildTranscript(),
       chatSessionId: state.chatSessionId || null,
+      // Structured AI quote payload (if the AI emitted [QUOTE_JSON]). The
+      // server validates each line-item key against pricing.json, recomputes
+      // the total, and creates a Quote record linked to this lead.
+      quotePayload: state.pendingQuote || null,
       photos
     };
 
