@@ -476,6 +476,17 @@ function renderHero(wo, property, lead) {
   woHero.hidden = false;
   woId.textContent = wo.id;
   woTypeLabel.textContent = TYPE_LABELS[wo.type] || wo.type;
+  // Property code (P-YYYY-NNNN) — small identification badge below the
+  // WO id. Hidden when no linked property.
+  const codeEl = document.getElementById("woPropertyCode");
+  if (codeEl) {
+    if (property && property.code) {
+      codeEl.textContent = property.code;
+      codeEl.hidden = false;
+    } else {
+      codeEl.hidden = true;
+    }
+  }
   const customer = [wo.customerName, wo.customerEmail].filter(Boolean).join(" · ");
   woCustomer.textContent = customer || "Customer details not yet captured";
   const parts = [];

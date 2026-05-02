@@ -50,7 +50,40 @@ async function readAll() {
   try {
     const raw = await fs.readFile(FILE, "utf8");
     const parsed = JSON.parse(raw || "[]");
-    return Array.isArray(parsed) ? parsed.map(hydrate) : [];
+    if (!Array.isArray(parsed)) return [];
+    const hydrated = parsed.map(hydrate);
+
+    // One-time backfill: assign P-YYYY-NNNN codes to any legacy records
+    // missing one. Sorted by createdAt so older properties get the lower
+    // numbers. Idempotent — once every record has a code, this branch
+    // does nothing on subsequent reads.
+    const missing = hydrated.filter((p) => !p.code);
+    if (missing.length) {
+      const maxByYear = {};
+      for (const p of hydrated) {
+        if (p.code) {
+          const m = p.code.match(/^P-(\d{4})-(\d+)$/);
+          if (m) {
+            const yr = m[1];
+            const n = parseInt(m[2], 10);
+            if (n > (maxByYear[yr] || 0)) maxByYear[yr] = n;
+          }
+        }
+      }
+      const chronological = [...missing].sort(
+        (a, b) => new Date(a.createdAt || 0) - new Date(b.createdAt || 0)
+      );
+      for (const p of chronological) {
+        const created = new Date(p.createdAt || Date.now());
+        const year = String(created.getUTCFullYear());
+        const next = (maxByYear[year] || 0) + 1;
+        p.code = `P-${year}-${String(next).padStart(4, "0")}`;
+        maxByYear[year] = next;
+      }
+      await writeAll(hydrated);
+    }
+
+    return hydrated;
   } catch {
     return [];
   }
@@ -89,6 +122,9 @@ function haversineMeters(a, b) {
 function blankProperty() {
   return {
     id: crypto.randomUUID(),
+    code: "",                     // Human-readable P-YYYY-NNNN, set by the
+                                  // caller via nextPropertyCode(...) — leaving
+                                  // it on the blank so hydrate spread keeps it.
     customerEmail: "",
     customerName: "",
     customerPhone: "",
@@ -110,6 +146,21 @@ function blankProperty() {
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString()
   };
+}
+
+// Compute the next P-YYYY-NNNN code given the live property list. Per-year
+// counter — the spec mirrors the Q-YYYY-NNNN (Quotes) and WO-XXXXXXXX
+// (Work Orders) ID schemes for visual consistency across folders.
+function nextPropertyCode(properties, year) {
+  const prefix = `P-${year}-`;
+  let max = 0;
+  for (const p of properties) {
+    if (typeof p?.code === "string" && p.code.startsWith(prefix)) {
+      const n = parseInt(p.code.slice(prefix.length), 10);
+      if (Number.isFinite(n) && n > max) max = n;
+    }
+  }
+  return `${prefix}${String(max + 1).padStart(4, "0")}`;
 }
 
 // Backfill any missing keys on properties read from disk so older records
@@ -210,6 +261,7 @@ async function attachLead({ leadId, email, name, phone, address, coords }) {
   const sameCustomer = properties.filter((p) => p.customerEmail === targetEmail);
 
   property = blankProperty();
+  property.code = nextPropertyCode(properties, String(new Date().getUTCFullYear()));
   property.customerEmail = targetEmail;
   property.customerName = name || "";
   property.customerPhone = phone || "";
@@ -418,6 +470,7 @@ async function bulkUpsert(records) {
       } else {
         // Create new.
         const created = blankProperty();
+        created.code = nextPropertyCode(properties, String(new Date().getUTCFullYear()));
         created.customerName = r.customerName || "";
         created.customerEmail = email;
         created.customerPhone = r.customerPhone || "";

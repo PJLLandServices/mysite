@@ -1180,6 +1180,19 @@ async function init() {
     techMeta.textContent = `Updated ${formatDateTime(wo.updatedAt)}`;
     techNotes.value = state.techNotes;
 
+    // Property code (P-YYYY-NNNN) — identification badge in the
+    // summary section. Hidden when the WO has no linked property
+    // (rare — first-time visits before a property gets created).
+    const techCodeEl = document.getElementById("techPropertyCode");
+    if (techCodeEl) {
+      if (data.property && data.property.code) {
+        techCodeEl.textContent = data.property.code;
+        techCodeEl.hidden = false;
+      } else {
+        techCodeEl.hidden = true;
+      }
+    }
+
     // Cheat Sheet — first thing the tech reviews on arrival. Pulls from
     // the property record + the most-recent completed WO at the property.
     renderCheatSheet(wo, data.property, data.lastService);

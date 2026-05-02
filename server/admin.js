@@ -488,8 +488,13 @@ async function renderPropertyDetail(lead) {
   const zones = property.system?.zones?.length || 0;
   const valveBoxes = property.system?.valveBoxes?.length || 0;
   const bookings = (property.leadIds || []).length;
+  // Property code (P-YYYY-NNNN) renders as a small badge above the
+  // address — visible on every lead detail when a property is linked.
+  const codeBadge = property.code
+    ? `<span class="detail-property-code">${escapeHtml(property.code)}</span>`
+    : "";
   detailPropertyMeta.innerHTML = `
-    <strong>${escapeHtml(property.address || "(no address)")}</strong><br>
+    ${codeBadge}<strong>${escapeHtml(property.address || "(no address)")}</strong><br>
     ${zones} zone${zones === 1 ? "" : "s"} · ${valveBoxes} valve box${valveBoxes === 1 ? "" : "es"} · ${bookings} booking${bookings === 1 ? "" : "s"}
   `;
 

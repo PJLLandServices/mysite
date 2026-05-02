@@ -214,7 +214,11 @@ function renderHero(property, leads) {
   const customer = [property.customerName, property.customerEmail].filter(Boolean).join(" · ");
   propertyCustomer.textContent = customer || "Customer details not yet captured";
   const phone = property.customerPhone || "no phone on file";
-  propertyMeta.textContent = `${phone} · created ${formatDate(property.createdAt)}`;
+  // Property code (P-YYYY-NNNN) leads the meta line so it's the first
+  // thing the eye lands on — same convention as Q-/WO- in the rest of
+  // the CRM.
+  const codePart = property.code ? `${property.code} · ` : "";
+  propertyMeta.textContent = `${codePart}${phone} · created ${formatDate(property.createdAt)}`;
   leadCount.textContent = leads.length;
 }
 

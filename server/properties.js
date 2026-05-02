@@ -98,8 +98,14 @@ function render() {
     const zoneCount = (p.system?.zones || []).length;
     const valveBoxCount = (p.system?.valveBoxes || []).length;
     const bookingCount = (p.leadIds || []).length;
+    const codeBadge = p.code
+      ? `<span class="property-card-code">${escapeHtml(p.code)}</span>`
+      : "";
     const inner = `
-      <strong>${escapeHtml(p.customerName) || "Unnamed customer"}</strong>
+      <div class="property-card-head">
+        <strong>${escapeHtml(p.customerName) || "Unnamed customer"}</strong>
+        ${codeBadge}
+      </div>
       <span class="property-card-address">${escapeHtml(p.address) || "(no address on file)"}</span>
       <span class="property-card-email">${escapeHtml(p.customerEmail) || "—"}</span>
       <div class="property-card-stats">

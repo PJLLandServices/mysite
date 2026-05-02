@@ -170,6 +170,19 @@ html, body {
   border-radius: 12px;
   padding: 14px 16px;
 }
+.tech-property-code {
+  display: inline-block;
+  margin: 0 0 6px;
+  padding: 2px 8px;
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--tech-green);
+  background: rgba(74, 140, 92, 0.14);
+  border-radius: 999px;
+  font-variant-numeric: tabular-nums;
+}
 .tech-customer {
   margin: 0 0 4px;
   font-size: 16px;

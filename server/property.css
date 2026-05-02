@@ -365,6 +365,24 @@
   letter-spacing: 0.02em;
   color: var(--pjl-green);
 }
+.property-card-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.property-card-code {
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--pjl-green);
+  background: rgba(74, 140, 92, 0.14);
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
 .property-card-address {
   font-size: 14px;
   color: var(--pjl-text-mid);
