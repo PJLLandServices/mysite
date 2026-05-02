@@ -11,40 +11,70 @@
   <link rel="stylesheet" href="/crm/crm.css">
   <link rel="stylesheet" href="/crm/invoices.css">
 </head>
-<body class="invoices-body">
-  <header class="crm-topbar">
-    <a href="/admin" class="crm-topbar-logo"><img src="/crm/pjl-logo.svg" alt="PJL"></a>
-    <h1>Quote folder</h1>
-    <a href="/admin" class="crm-topbar-back">← CRM</a>
-  </header>
-  <main class="invoices-shell">
-    <section class="invoices-explainer">
-      <p><strong>How quotes land here:</strong> the AI chat creates an <em>ai_repair_quote</em> when it emits a <code>[QUOTE_JSON]</code> block in conversation; the tech UI creates an <em>on_site_quote</em> when a customer signs the on-site quote builder. Lead detail in the CRM still shows the same quote inline — this page is the cross-customer index.</p>
-    </section>
-    <section class="invoices-filters">
-      <button type="button" data-status-filter="" class="is-active">All</button>
-      <button type="button" data-status-filter="draft">Drafts</button>
-      <button type="button" data-status-filter="sent">Sent</button>
-      <button type="button" data-status-filter="accepted">Accepted</button>
-      <button type="button" data-status-filter="partially_accepted">Partial</button>
-      <button type="button" data-status-filter="declined">Declined</button>
-      <button type="button" data-status-filter="expired">Expired</button>
-    </section>
-    <p class="invoices-empty" id="quotesEmpty" hidden>No quotes match.</p>
-    <table class="invoices-table" id="quotesTable" hidden>
-      <thead>
-        <tr>
-          <th>Quote #</th>
-          <th>Type</th>
-          <th>Customer</th>
-          <th>Total</th>
-          <th>Status</th>
-          <th>Created</th>
-        </tr>
-      </thead>
-      <tbody id="quotesBody"></tbody>
-    </table>
-  </main>
+<body class="pjl-crm-body invoices-body">
+  <aside class="pjl-admin-nav" id="navMenu" aria-label="PJL CRM Navigation">
+    <header class="pjl-side-brand">
+      <a href="/" class="pjl-side-logo"><img src="/crm/pjl-logo.svg" alt="PJL Land Services"></a>
+    </header>
+    <div class="pjl-nav-links">
+      <a href="/admin/today">Today</a>
+      <a href="/admin">CRM</a>
+      <a href="/admin/schedule">Schedule</a>
+      <a href="/admin/handoff">Handoff</a>
+      <a href="/admin/properties">Properties</a>
+      <a href="/admin/quote-folder" class="is-active">Quotes</a>
+      <a href="/admin/invoices">Invoices</a>
+      <a href="/admin/chats">AI Chats</a>
+      <a href="/admin/settings">Settings</a>
+    </div>
+    <footer class="pjl-side-footer">
+      <a class="pjl-side-phone" href="tel:+19059600181">(905) 960-0181</a>
+      <button class="pjl-nav-logout" type="button" id="logoutButton">Log out</button>
+    </footer>
+  </aside>
+
+  <div class="pjl-app">
+    <header class="pjl-app-topbar">
+      <button class="pjl-nav-toggle" type="button" id="navToggle" aria-label="Menu" aria-expanded="false" aria-controls="navMenu">
+        <span class="pjl-nav-toggle-bar"></span>
+        <span class="pjl-nav-toggle-bar"></span>
+        <span class="pjl-nav-toggle-bar"></span>
+      </button>
+      <span class="pjl-app-title">Quote folder</span>
+      <a class="pjl-app-phone" href="tel:+19059600181">(905) 960-0181</a>
+    </header>
+
+    <main class="invoices-shell">
+      <section class="invoices-explainer">
+        <p><strong>How quotes land here:</strong> the AI chat creates an <em>ai_repair_quote</em> when it emits a <code>[QUOTE_JSON]</code> block in conversation; the tech UI creates an <em>on_site_quote</em> when a customer signs the on-site quote builder. Lead detail in the CRM still shows the same quote inline — this page is the cross-customer index.</p>
+      </section>
+      <section class="invoices-filters">
+        <button type="button" data-status-filter="" class="is-active">All</button>
+        <button type="button" data-status-filter="draft">Drafts</button>
+        <button type="button" data-status-filter="sent">Sent</button>
+        <button type="button" data-status-filter="accepted">Accepted</button>
+        <button type="button" data-status-filter="partially_accepted">Partial</button>
+        <button type="button" data-status-filter="declined">Declined</button>
+        <button type="button" data-status-filter="expired">Expired</button>
+      </section>
+      <p class="invoices-empty" id="quotesEmpty" hidden>No quotes match.</p>
+      <table class="invoices-table" id="quotesTable" hidden>
+        <thead>
+          <tr>
+            <th>Quote #</th>
+            <th>Type</th>
+            <th>Customer</th>
+            <th>Total</th>
+            <th>Status</th>
+            <th>Created</th>
+          </tr>
+        </thead>
+        <tbody id="quotesBody"></tbody>
+      </table>
+    </main>
+  </div>
+
+  <script src="/crm/crm-nav.js"></script>
   <script src="/crm/quote-folder.js"></script>
 </body>
 </html>

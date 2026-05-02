@@ -11,29 +11,59 @@
   <link rel="stylesheet" href="/crm/crm.css">
   <link rel="stylesheet" href="/crm/settings.css">
 </head>
-<body class="settings-body">
-  <header class="crm-topbar">
-    <a href="/admin" class="crm-topbar-logo"><img src="/crm/pjl-logo.svg" alt="PJL"></a>
-    <h1>Settings</h1>
-    <a href="/admin" class="crm-topbar-back">← CRM</a>
-  </header>
-  <main class="settings-shell">
-    <p class="settings-loading" id="settingsLoading">Loading…</p>
+<body class="pjl-crm-body settings-body">
+  <aside class="pjl-admin-nav" id="navMenu" aria-label="PJL CRM Navigation">
+    <header class="pjl-side-brand">
+      <a href="/" class="pjl-side-logo"><img src="/crm/pjl-logo.svg" alt="PJL Land Services"></a>
+    </header>
+    <div class="pjl-nav-links">
+      <a href="/admin/today">Today</a>
+      <a href="/admin">CRM</a>
+      <a href="/admin/schedule">Schedule</a>
+      <a href="/admin/handoff">Handoff</a>
+      <a href="/admin/properties">Properties</a>
+      <a href="/admin/quote-folder">Quotes</a>
+      <a href="/admin/invoices">Invoices</a>
+      <a href="/admin/chats">AI Chats</a>
+      <a href="/admin/settings" class="is-active">Settings</a>
+    </div>
+    <footer class="pjl-side-footer">
+      <a class="pjl-side-phone" href="tel:+19059600181">(905) 960-0181</a>
+      <button class="pjl-nav-logout" type="button" id="logoutButton">Log out</button>
+    </footer>
+  </aside>
 
-    <section class="settings-card" id="adminDefaultsCard" hidden>
-      <h2>Notification defaults</h2>
-      <p class="settings-help">How PJL gets notified when things happen. Per-customer overrides live on the customer's lead detail and override these defaults.</p>
-      <div class="settings-grid" id="adminDefaultsGrid"></div>
-      <button type="button" class="settings-save" id="adminDefaultsSave" disabled>Save</button>
-      <p class="settings-status" id="adminDefaultsStatus"></p>
-    </section>
+  <div class="pjl-app">
+    <header class="pjl-app-topbar">
+      <button class="pjl-nav-toggle" type="button" id="navToggle" aria-label="Menu" aria-expanded="false" aria-controls="navMenu">
+        <span class="pjl-nav-toggle-bar"></span>
+        <span class="pjl-nav-toggle-bar"></span>
+        <span class="pjl-nav-toggle-bar"></span>
+      </button>
+      <span class="pjl-app-title">Settings</span>
+      <a class="pjl-app-phone" href="tel:+19059600181">(905) 960-0181</a>
+    </header>
 
-    <section class="settings-card" id="auditCard" hidden>
-      <h2>Recent settings changes</h2>
-      <p class="settings-help">Last 50 changes, newest first.</p>
-      <ul class="settings-audit" id="auditList"></ul>
-    </section>
-  </main>
+    <main class="settings-shell">
+      <p class="settings-loading" id="settingsLoading">Loading…</p>
+
+      <section class="settings-card" id="adminDefaultsCard" hidden>
+        <h2>Notification defaults</h2>
+        <p class="settings-help">How PJL gets notified when things happen. Per-customer overrides live on the customer's lead detail and override these defaults.</p>
+        <div class="settings-grid" id="adminDefaultsGrid"></div>
+        <button type="button" class="settings-save" id="adminDefaultsSave" disabled>Save</button>
+        <p class="settings-status" id="adminDefaultsStatus"></p>
+      </section>
+
+      <section class="settings-card" id="auditCard" hidden>
+        <h2>Recent settings changes</h2>
+        <p class="settings-help">Last 50 changes, newest first.</p>
+        <ul class="settings-audit" id="auditList"></ul>
+      </section>
+    </main>
+  </div>
+
+  <script src="/crm/crm-nav.js"></script>
   <script src="/crm/settings.js"></script>
 </body>
 </html>

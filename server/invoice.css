@@ -126,3 +126,7 @@
   .invoice-head { flex-direction: column; }
   .invoice-status-block { text-align: left; }
 }
+
+.invoice-back { margin: 0 0 14px; font-size: 13px; }
+.invoice-back a { color: #1B4D2E; text-decoration: none; font-weight: 600; }
+.invoice-back a:hover { text-decoration: underline; }
