@@ -602,6 +602,15 @@ document.getElementById("preauthClear")?.addEventListener("click", () => {
   updatePreauthSubmitState();
 });
 document.getElementById("preauthName")?.addEventListener("input", updatePreauthSubmitState);
+// Backdrop click + Esc — escape hatches so the modal can never trap the user.
+document.getElementById("preauthModal")?.addEventListener("click", (event) => {
+  if (event.target === event.currentTarget) closePreauthModal();
+});
+window.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape") return;
+  const modal = document.getElementById("preauthModal");
+  if (modal && !modal.hidden) closePreauthModal();
+});
 
 document.getElementById("preauthSubmit")?.addEventListener("click", async () => {
   if (!preauthContext) return;

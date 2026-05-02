@@ -552,7 +552,9 @@ function renderSheetIssues(zone) {
     sheetIssues.appendChild(empty);
     return;
   }
-  const isFallMode = state.type === ON_SITE_FIND_ONLY;
+  // Fall-mode actions only render on an UNlocked fall_closing WO. After
+  // sign-off the WO is the contract — defer/emergency must not fire.
+  const isFallMode = state.type === ON_SITE_FIND_ONLY && !state.locked && !state.signature?.signed;
   issues.forEach((issue) => {
     const div = document.createElement("div");
     div.className = "tech-zone-issue" + (isFallMode ? " is-fall-mode" : "");
@@ -1685,6 +1687,10 @@ sheetIssues.addEventListener("click", async (event) => {
   if (!issueId || !zoneNumber) return;
 
   if (deferBtn) {
+    if (state.signature?.signed) {
+      alert("Work order is signed and locked.");
+      return;
+    }
     deferBtn.disabled = true;
     try {
       const r = await fetch(
@@ -1716,6 +1722,26 @@ let emergencyContext = null;
 let emergencyPad = null;
 
 function openEmergencyModal(ctx) {
+  // Hard guards — refuse to open if the WO is locked, not a fall closing,
+  // or the issue context is missing. Any of these indicate a stale click
+  // from before sign-off or an out-of-band button. Fail loud (no silent
+  // open with empty fields, which is what stranded the user the first time).
+  if (state.locked || state.signature?.signed) {
+    alert("Work order is signed and locked — emergency override unavailable. Refresh to clear.");
+    return;
+  }
+  if (state.type !== ON_SITE_FIND_ONLY) {
+    alert("Emergency override only applies to fall closings.");
+    return;
+  }
+  const idx = state.activeZoneIndex;
+  const zone = idx >= 0 ? state.zones[idx] : null;
+  const issue = zone ? (zone.issues || []).find((i) => i.id === ctx.issueId) : null;
+  if (!issue || !zone) {
+    console.warn("[emergency] no live issue found for", ctx);
+    return;
+  }
+
   emergencyContext = ctx;
   const modal = document.getElementById("techEmergencyModal");
   const issueLabel = document.getElementById("techEmergencyIssueLabel");
@@ -1724,16 +1750,11 @@ function openEmergencyModal(ctx) {
   const submit = document.getElementById("techEmergencySubmit");
   const errEl = document.getElementById("techEmergencyError");
   if (!modal) return;
-  // Pull fresh issue data for the label so the customer sees what they're signing for.
-  const idx = state.activeZoneIndex;
-  const zone = idx >= 0 ? state.zones[idx] : null;
-  const issue = zone ? (zone.issues || []).find((i) => i.id === ctx.issueId) : null;
+
   if (issueLabel) {
-    const typeLabel = issue
-      ? (ZONE_ISSUE_TYPE_OPTIONS.find((t) => t.value === issue.type)?.label || issue.type)
-      : "(issue)";
-    const note = issue?.notes ? ` — ${issue.notes}` : "";
-    issueLabel.textContent = `Zone ${ctx.zoneNumber}: ${typeLabel} (qty ${issue?.qty || 1})${note}`;
+    const typeLabel = ZONE_ISSUE_TYPE_OPTIONS.find((t) => t.value === issue.type)?.label || issue.type;
+    const note = issue.notes ? ` — ${issue.notes}` : "";
+    issueLabel.textContent = `Zone ${ctx.zoneNumber}: ${typeLabel} (qty ${issue.qty || 1})${note}`;
   }
   if (reasonSel) reasonSel.value = "";
   if (nameInput) nameInput.value = state.customerName || "";
@@ -1772,6 +1793,16 @@ document.getElementById("techEmergencyClose")?.addEventListener("click", closeEm
 document.getElementById("techEmergencyClear")?.addEventListener("click", () => {
   if (emergencyPad && emergencyPad.clear) emergencyPad.clear();
   updateEmergencySubmitState();
+});
+// Backdrop click — closes when the user taps the dimmed area outside the card.
+document.getElementById("techEmergencyModal")?.addEventListener("click", (event) => {
+  if (event.target === event.currentTarget) closeEmergencyModal();
+});
+// Esc key — universal escape hatch, only active while the modal is open.
+window.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape") return;
+  const modal = document.getElementById("techEmergencyModal");
+  if (modal && !modal.hidden) closeEmergencyModal();
 });
 document.getElementById("techEmergencyReason")?.addEventListener("change", updateEmergencySubmitState);
 document.getElementById("techEmergencyName")?.addEventListener("input", updateEmergencySubmitState);
