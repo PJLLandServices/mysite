@@ -152,6 +152,19 @@
         </button>
       </div>
 
+      <p class="tech-sheet-label">Standard checks</p>
+      <div class="tech-zone-checks-grid" id="sheetChecks" role="group" aria-label="Standard zone checks">
+        <button type="button" data-zone-check="operated"><span class="check-tick" aria-hidden="true"></span><span>Operated</span></button>
+        <button type="button" data-zone-check="pressureGood"><span class="check-tick" aria-hidden="true"></span><span>Pressure good</span></button>
+        <button type="button" data-zone-check="coverageGood"><span class="check-tick" aria-hidden="true"></span><span>Coverage good</span></button>
+        <button type="button" data-zone-check="noLeaks"><span class="check-tick" aria-hidden="true"></span><span>No leaks</span></button>
+        <button type="button" data-zone-check="allHeadsFunctional"><span class="check-tick" aria-hidden="true"></span><span>All heads functional</span></button>
+      </div>
+
+      <p class="tech-sheet-label">Issues found</p>
+      <div class="tech-zone-issues" id="sheetIssues"></div>
+      <button type="button" class="tech-zone-issue-add" id="sheetIssueAdd">+ Add issue</button>
+
       <label class="tech-sheet-notes-label" for="sheetNotes">Notes</label>
       <textarea id="sheetNotes" rows="4" placeholder="What did you find / do?"></textarea>
 

@@ -73,6 +73,31 @@ const ZONE_STATUS_OPTIONS = [
   { value: "other",            label: "Other" }
 ];
 
+// Standard zone-check tap-boxes (per spec §4.3.2 walk-through). Order
+// here drives the rendered order in the row UI.
+const ZONE_CHECK_DEFS = [
+  { key: "operated",            label: "Operated" },
+  { key: "pressureGood",        label: "Pressure good" },
+  { key: "coverageGood",        label: "Coverage good" },
+  { key: "noLeaks",             label: "No leaks" },
+  { key: "allHeadsFunctional",  label: "All heads functional" }
+];
+
+// Issue type catalog — keys map (loosely) to pricing.json categories
+// for the Tier-3 quote rollup. Mirrors the tech-mode dropdown.
+const ZONE_ISSUE_TYPE_OPTIONS = [
+  { value: "broken_head", label: "Broken head" },
+  { value: "leak",        label: "Leak" },
+  { value: "valve",       label: "Valve" },
+  { value: "wire",        label: "Wire" },
+  { value: "pipe",        label: "Pipe" },
+  { value: "other",       label: "Other" }
+];
+
+function makeIssueId() {
+  return "iss_" + Math.random().toString(36).slice(2, 10) + "_" + Date.now();
+}
+
 const TYPE_LABELS = {
   spring_opening: "Spring Opening",
   fall_closing: "Fall Closing",
@@ -130,9 +155,32 @@ function zoneRowHtml(zone) {
   const status = zone.status || "";
   // Stash the read-only snapshot on data-attrs so collectForm can round-trip
   // the values without re-parsing the rendered badges. Editable fields
-  // (status, notes) are read from the form inputs at save time.
+  // (status, notes, checks, issues) are read from the form inputs at save time.
   const sprinklerAttr = (zone.sprinklerTypes || []).join(",");
   const coverageAttr  = (zone.coverage       || []).join(",");
+
+  // Standard checks — 5 inline checkboxes. Pre-checked from zone.checks.
+  const checks = (zone && zone.checks) || {};
+  const checksHtml = ZONE_CHECK_DEFS
+    .map((def) => `
+      <label class="wo-zone-check">
+        <input type="checkbox" data-zone-check="${escapeHtml(def.key)}" ${checks[def.key] ? "checked" : ""}>
+        <span>${escapeHtml(def.label)}</span>
+      </label>
+    `)
+    .join("");
+
+  // Issues found — collapsible. Issue count surfaces in the summary so
+  // Patrick can scan a long zone list and spot zones with active issues
+  // without expanding each block.
+  const issues = Array.isArray(zone.issues) ? zone.issues : [];
+  const issuesHtml = issues.length
+    ? issues.map(issueRowHtml).join("")
+    : `<p class="wo-zone-issues-empty">No issues recorded for this zone.</p>`;
+  const issueCountTag = issues.length
+    ? `<span class="wo-zone-issue-count">${issues.length}</span>`
+    : "";
+
   return `
     <div class="wo-zone-row" data-zone data-status="${escapeHtml(status)}" data-number="${escapeHtml(zone.number || "")}" data-location="${escapeHtml(zone.location || "")}" data-sprinkler="${escapeHtml(sprinklerAttr)}" data-coverage="${escapeHtml(coverageAttr)}">
       <div class="wo-zone-head">
@@ -151,6 +199,29 @@ function zoneRowHtml(zone) {
           <input type="text" class="wo-zone-notes" value="${escapeHtml(zone.notes || "")}" placeholder="What did you find / do?">
         </label>
       </div>
+      <details class="wo-zone-checks-block">
+        <summary>Standard checks</summary>
+        <div class="wo-zone-checks-grid">${checksHtml}</div>
+      </details>
+      <details class="wo-zone-issues-block">
+        <summary>Issues found ${issueCountTag}</summary>
+        <div class="wo-zone-issues" data-zone-issues>${issuesHtml}</div>
+        <button type="button" class="wo-zone-issue-add" data-action="add-issue">+ Add issue</button>
+      </details>
+    </div>
+  `;
+}
+
+function issueRowHtml(issue) {
+  const optionsHtml = ZONE_ISSUE_TYPE_OPTIONS
+    .map((t) => `<option value="${t.value}" ${t.value === issue.type ? "selected" : ""}>${escapeHtml(t.label)}</option>`)
+    .join("");
+  return `
+    <div class="wo-zone-issue" data-issue-id="${escapeHtml(issue.id || makeIssueId())}">
+      <select class="wo-zone-issue-type" aria-label="Issue type">${optionsHtml}</select>
+      <input type="number" class="wo-zone-issue-qty" min="1" value="${escapeHtml(String(issue.qty || 1))}" aria-label="Quantity">
+      <input type="text" class="wo-zone-issue-notes" value="${escapeHtml(issue.notes || "")}" placeholder="Details (optional)" aria-label="Issue notes">
+      <button type="button" class="wo-zone-issue-remove" data-action="remove-issue" aria-label="Remove issue">×</button>
     </div>
   `;
 }
@@ -194,6 +265,32 @@ woZones.addEventListener("click", (event) => {
   if (event.target.matches('[data-action="remove-zone"]')) {
     event.target.closest(".wo-zone-row")?.remove();
     if (!woZones.querySelectorAll(".wo-zone-row").length) woEmptyZones.hidden = false;
+    return;
+  }
+  if (event.target.matches('[data-action="add-issue"]')) {
+    const row = event.target.closest(".wo-zone-row");
+    if (!row) return;
+    const container = row.querySelector("[data-zone-issues]");
+    if (!container) return;
+    // First-add: replace the empty-state message before appending.
+    const empty = container.querySelector(".wo-zone-issues-empty");
+    if (empty) empty.remove();
+    const wrap = document.createElement("div");
+    wrap.innerHTML = issueRowHtml({ id: makeIssueId(), type: "broken_head", qty: 1, notes: "" });
+    container.appendChild(wrap.firstElementChild);
+    return;
+  }
+  if (event.target.matches('[data-action="remove-issue"]')) {
+    const issueRow = event.target.closest(".wo-zone-issue");
+    const container = issueRow?.parentElement;
+    issueRow?.remove();
+    if (container && !container.querySelector(".wo-zone-issue")) {
+      // Restore the empty-state when the last issue is removed.
+      const empty = document.createElement("p");
+      empty.className = "wo-zone-issues-empty";
+      empty.textContent = "No issues recorded for this zone.";
+      container.appendChild(empty);
+    }
   }
 });
 woZones.addEventListener("change", (event) => {
@@ -276,16 +373,35 @@ function collectForm() {
     .map((row) => {
       // The property snapshot (number, location, sprinkler/coverage) is
       // stored on data-attrs at render time — round-trip those without
-      // re-parsing the rendered badges. Status + notes come from the
-      // form inputs (the only editable fields on a row).
+      // re-parsing the rendered badges. Status + notes + checks + issues
+      // come from the live form inputs.
       const splitCsv = (v) => String(v || "").split(",").map((s) => s.trim()).filter(Boolean);
+
+      // Standard checks — read each tap-box's checked state into a
+      // checks{} map keyed by the data-zone-check attribute.
+      const checks = {};
+      row.querySelectorAll("[data-zone-check]").forEach((cb) => {
+        checks[cb.dataset.zoneCheck] = !!cb.checked;
+      });
+
+      // Issues found — read each issue row's type/qty/notes. The id is
+      // preserved so the server can dedupe / track audit history.
+      const issues = Array.from(row.querySelectorAll(".wo-zone-issue")).map((card) => ({
+        id:    card.dataset.issueId || makeIssueId(),
+        type:  card.querySelector(".wo-zone-issue-type")?.value || "other",
+        qty:   Math.max(1, Math.floor(Number(card.querySelector(".wo-zone-issue-qty")?.value) || 1)),
+        notes: (card.querySelector(".wo-zone-issue-notes")?.value || "").trim()
+      }));
+
       return {
         number: Number(row.dataset.number) || 0,
         location: row.dataset.location || "",
         sprinklerTypes: splitCsv(row.dataset.sprinkler),
         coverage:       splitCsv(row.dataset.coverage),
         status: row.querySelector(".wo-zone-status")?.value || "",
-        notes:  row.querySelector(".wo-zone-notes")?.value.trim() || ""
+        notes:  row.querySelector(".wo-zone-notes")?.value.trim() || "",
+        checks,
+        issues
       };
     });
   return {

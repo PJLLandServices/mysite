@@ -389,6 +389,157 @@
   background: #fff;
 }
 
+/* Standard checks (5 inline checkboxes) — collapsible per zone so the
+   row stays compact when checks haven't been done yet. The summary bar
+   doubles as the toggle. Per spec §4.3.2 walk-through. */
+.wo-zone-checks-block,
+.wo-zone-issues-block {
+  margin-top: 4px;
+  border: 1px solid rgba(15, 31, 20, 0.10);
+  border-radius: 8px;
+  background: rgba(15, 31, 20, 0.02);
+}
+.wo-zone-checks-block summary,
+.wo-zone-issues-block summary {
+  cursor: pointer;
+  list-style: none;
+  padding: 8px 12px;
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--pjl-text-mid);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.wo-zone-checks-block summary::-webkit-details-marker,
+.wo-zone-issues-block summary::-webkit-details-marker { display: none; }
+.wo-zone-checks-block summary::after,
+.wo-zone-issues-block summary::after {
+  content: "▾";
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--pjl-text-muted);
+  transition: transform 160ms ease;
+}
+.wo-zone-checks-block[open] summary::after,
+.wo-zone-issues-block[open] summary::after { transform: rotate(180deg); }
+
+.wo-zone-checks-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 6px 14px;
+  padding: 4px 12px 12px;
+}
+.wo-zone-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--pjl-text);
+  cursor: pointer;
+  user-select: none;
+}
+.wo-zone-check input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: var(--pjl-green);
+  cursor: pointer;
+}
+
+/* Issues found list — each row is a 4-column grid: type / qty / notes /
+   remove. Notes column flexes to fill the available width. */
+.wo-zone-issue-count {
+  font-size: 11px;
+  font-weight: 700;
+  color: #8B4413;
+  background: rgba(224, 123, 36, 0.18);
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
+  margin-left: 4px;
+}
+.wo-zone-issues {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 4px 12px 8px;
+}
+.wo-zone-issues-empty {
+  margin: 0;
+  font-size: 13px;
+  color: var(--pjl-text-muted);
+  font-style: italic;
+  padding: 8px 12px;
+  background: rgba(15, 31, 20, 0.03);
+  border-radius: 6px;
+  text-align: center;
+}
+.wo-zone-issue {
+  display: grid;
+  grid-template-columns: 160px 70px 1fr 36px;
+  gap: 8px;
+  align-items: center;
+}
+.wo-zone-issue-type,
+.wo-zone-issue-qty,
+.wo-zone-issue-notes {
+  padding: 6px 10px;
+  font: inherit;
+  font-size: 13px;
+  border: 1px solid rgba(15, 31, 20, 0.18);
+  border-radius: 6px;
+  background: #fff;
+}
+.wo-zone-issue-qty { text-align: center; font-weight: 600; }
+.wo-zone-issue-remove {
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  font-size: 18px;
+  line-height: 1;
+  color: var(--pjl-text-muted);
+  background: transparent;
+  border: 1px solid rgba(15, 31, 20, 0.18);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.wo-zone-issue-remove:hover {
+  color: #b13a3a;
+  border-color: #b13a3a;
+  background: rgba(177, 58, 58, 0.06);
+}
+.wo-zone-issue-add {
+  margin: 0 12px 12px;
+  padding: 6px 12px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--pjl-green);
+  background: rgba(74, 140, 92, 0.06);
+  border: 1.5px dashed rgba(27, 77, 46, 0.30);
+  border-radius: 8px;
+  cursor: pointer;
+  align-self: flex-start;
+}
+.wo-zone-issue-add:hover {
+  background: rgba(74, 140, 92, 0.14);
+  border-color: var(--pjl-green);
+}
+@media (max-width: 700px) {
+  .wo-zone-issue {
+    grid-template-columns: 1fr 70px 36px;
+    grid-template-rows: auto auto;
+  }
+  .wo-zone-issue-notes {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+}
+
 .wo-empty-zones {
   padding: 14px;
   background: rgba(15, 31, 20, 0.03);

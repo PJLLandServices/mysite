@@ -63,6 +63,19 @@ function templateForServiceKey(serviceKey) {
 
 const ZONE_STATUSES = ["", "working_well", "adjusted", "repair_required", "other"];
 
+// Standard zone checks per spec §4.3.2 walk-through. Five tap-boxes the
+// tech ticks off per zone — granular evidence behind the ZONE_STATUSES
+// summary. Stored as booleans on `zone.checks` so we can both render the
+// individual ticks AND aggregate "X/5 passed" badges in the zone list.
+const ZONE_CHECK_KEYS = ["operated", "pressureGood", "coverageGood", "noLeaks", "allHeadsFunctional"];
+
+// Issue types per spec §4.3.2 — the tech tags each issue with a category
+// so it can roll up into a draft quote (Tier 3). The keys roughly map to
+// pricing.json item categories: head_replacement, manifold rebuilds,
+// wire diagnostic / wire run, pipe break repair. "other" is the escape
+// hatch for anything that doesn't fit (custom on-site quote).
+const ZONE_ISSUE_TYPES = ["broken_head", "leak", "valve", "wire", "pipe", "other"];
+
 // ---- File I/O ---------------------------------------------------------
 
 async function ensureFile() {
@@ -142,10 +155,41 @@ function hydrate(w) {
   return {
     ...base,
     ...w,
-    zones: Array.isArray(w?.zones) ? w.zones : [],
+    zones: Array.isArray(w?.zones) ? w.zones.map(hydrateZone) : [],
     additionalRepairs: Array.isArray(w?.additionalRepairs) ? w.additionalRepairs : [],
     lineItems: Array.isArray(w?.lineItems) ? w.lineItems : [],
     intakeGuarantee: { ...base.intakeGuarantee, ...(w?.intakeGuarantee || {}) }
+  };
+}
+
+// Backfill the per-zone checks{} and issues[] fields onto records that
+// pre-date the Tier 2 schema. Defensive merge — never overwrites an
+// existing `checks` object or `issues` array.
+function hydrateZone(z) {
+  const baseChecks = {};
+  for (const key of ZONE_CHECK_KEYS) baseChecks[key] = false;
+  return {
+    number: z?.number || 0,
+    location: z?.location || z?.label || "",
+    sprinklerTypes: Array.isArray(z?.sprinklerTypes) ? z.sprinklerTypes : [],
+    coverage: Array.isArray(z?.coverage) ? z.coverage : [],
+    status: z?.status || "",
+    notes: z?.notes || "",
+    checks: { ...baseChecks, ...(z?.checks || {}) },
+    issues: Array.isArray(z?.issues) ? z.issues.map(hydrateIssue) : []
+  };
+}
+
+// Issue records get an id stamped if missing — the editor needs a stable
+// key to track add/remove without reorder bugs. Type is clamped to the
+// known set; unknowns become "other" so the UI can still render them.
+function hydrateIssue(issue) {
+  const safeType = ZONE_ISSUE_TYPES.includes(issue?.type) ? issue.type : "other";
+  return {
+    id: issue?.id || ("iss_" + Math.random().toString(36).slice(2, 10) + "_" + Date.now()),
+    type: safeType,
+    qty: Number.isFinite(Number(issue?.qty)) && Number(issue?.qty) > 0 ? Number(issue.qty) : 1,
+    notes: issue?.notes || ""
   };
 }
 
@@ -156,6 +200,8 @@ function hydrate(w) {
 // keeps showing what was true at the time of the visit.
 function scaffoldZonesFromProperty(property) {
   const zones = Array.isArray(property?.system?.zones) ? property.system.zones : [];
+  const blankChecks = {};
+  for (const key of ZONE_CHECK_KEYS) blankChecks[key] = false;
   return zones
     .slice()
     .sort((a, b) => (a.number || 0) - (b.number || 0))
@@ -165,7 +211,9 @@ function scaffoldZonesFromProperty(property) {
       sprinklerTypes: Array.isArray(z.sprinklerTypes) ? z.sprinklerTypes.slice() : [],
       coverage: Array.isArray(z.coverage) ? z.coverage.slice() : [],
       status: "",
-      notes: ""
+      notes: "",
+      checks: { ...blankChecks },
+      issues: []
     }));
 }
 
@@ -285,6 +333,8 @@ async function remove(id) {
 module.exports = {
   TEMPLATES,
   ZONE_STATUSES,
+  ZONE_CHECK_KEYS,
+  ZONE_ISSUE_TYPES,
   templateForServiceKey,
   list,
   get,

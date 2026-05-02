@@ -484,12 +484,42 @@ html, body {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.tech-zone-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.tech-zone-tags:empty { display: none; }
 .tech-zone-status-tag {
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--tech-text-muted);
+}
+.tech-zone-checks-tag {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--tech-text-muted);
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: rgba(15, 31, 20, 0.06);
+  font-variant-numeric: tabular-nums;
+}
+.tech-zone-checks-tag[data-full="1"] {
+  background: rgba(74, 140, 92, 0.18);
+  color: var(--tech-green);
+}
+.tech-zone-issues-tag {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: #8B4413;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: rgba(224, 123, 36, 0.18);
 }
 .tech-zone-notes-preview {
   font-size: 13px;
@@ -693,6 +723,181 @@ html, body {
   box-shadow: 0 0 0 2px var(--tech-green) inset;
 }
 .tech-zone-status-grid button:active { transform: scale(0.97); }
+
+/* Standard checks (5 tap-pills) — per spec §4.3.2 walk-through. The tech
+   ticks each check as they verify the zone. Visually distinct from the
+   4-button status grid (smaller pills, 2-up grid) so the layouts don't
+   feel redundant. Pressed state uses the green check tick + filled
+   background to reinforce "this passed." */
+.tech-zone-checks-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin: 0 0 14px;
+}
+.tech-zone-checks-grid button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 48px;
+  padding: 8px 12px;
+  background: var(--tech-card);
+  color: var(--tech-text);
+  border: 1.5px solid var(--tech-border);
+  border-radius: 10px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.15s ease;
+}
+.tech-zone-checks-grid button .check-tick {
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  border: 1.5px solid rgba(15, 31, 20, 0.30);
+  flex-shrink: 0;
+  position: relative;
+  background: #fff;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+.tech-zone-checks-grid button[aria-pressed="true"] {
+  border-color: var(--tech-green);
+  background: rgba(74, 140, 92, 0.10);
+  color: var(--tech-green);
+}
+.tech-zone-checks-grid button[aria-pressed="true"] .check-tick {
+  background: var(--tech-green);
+  border-color: var(--tech-green);
+}
+/* Drawn check mark — pure CSS so we don't need an SVG asset. The tick
+   is two rotated white blocks forming the L-shape of a checkmark. */
+.tech-zone-checks-grid button[aria-pressed="true"] .check-tick::after {
+  content: "";
+  position: absolute;
+  left: 5px;
+  top: 1px;
+  width: 5px;
+  height: 11px;
+  border: solid #fff;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+.tech-zone-checks-grid button:active { transform: scale(0.97); }
+@media (max-width: 360px) {
+  .tech-zone-checks-grid { grid-template-columns: 1fr; }
+}
+
+/* Issues found list — per zone, each row is a stacked card with type
+   select, qty (small), notes (long), and a remove × button. Stacked
+   layout works on narrow phones; on tablet width we go 2-row to make
+   typing more comfortable. */
+.tech-zone-issues {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0 0 8px;
+}
+.tech-zone-issues-empty {
+  margin: 0 0 8px;
+  font-size: 13px;
+  color: var(--tech-text-muted);
+  font-style: italic;
+  padding: 10px 12px;
+  background: var(--tech-bg);
+  border-radius: 8px;
+  text-align: center;
+}
+.tech-zone-issue {
+  display: grid;
+  grid-template-columns: 1fr 60px auto;
+  grid-template-rows: auto auto;
+  gap: 6px 8px;
+  padding: 10px;
+  background: var(--tech-card);
+  border: 1px solid var(--tech-border);
+  border-radius: 10px;
+}
+.tech-zone-issue-type {
+  grid-row: 1;
+  grid-column: 1;
+  min-height: 40px;
+  padding: 6px 10px;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--tech-text);
+  border: 1px solid var(--tech-border);
+  border-radius: 8px;
+  background: #fff;
+}
+.tech-zone-issue-qty {
+  grid-row: 1;
+  grid-column: 2;
+  min-height: 40px;
+  padding: 6px 8px;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  text-align: center;
+  border: 1px solid var(--tech-border);
+  border-radius: 8px;
+  background: #fff;
+}
+.tech-zone-issue-remove {
+  grid-row: 1;
+  grid-column: 3;
+  min-width: 40px;
+  min-height: 40px;
+  padding: 0;
+  font-size: 22px;
+  line-height: 1;
+  color: var(--tech-text-muted);
+  background: transparent;
+  border: 1px solid var(--tech-border);
+  border-radius: 8px;
+  cursor: pointer;
+}
+.tech-zone-issue-remove:active {
+  background: rgba(177, 58, 58, 0.10);
+  color: var(--tech-red);
+  border-color: var(--tech-red);
+}
+.tech-zone-issue-notes {
+  grid-row: 2;
+  grid-column: 1 / -1;
+  min-height: 40px;
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 14px;
+  border: 1px solid var(--tech-border);
+  border-radius: 8px;
+  background: #fff;
+}
+.tech-zone-issue-add {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin: 0 0 14px;
+  min-height: 44px;
+  padding: 8px 14px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--tech-green);
+  background: rgba(74, 140, 92, 0.06);
+  border: 1.5px dashed rgba(27, 77, 46, 0.35);
+  border-radius: 10px;
+  cursor: pointer;
+  width: 100%;
+}
+.tech-zone-issue-add:active {
+  background: rgba(74, 140, 92, 0.14);
+  border-color: var(--tech-green);
+}
 
 .tech-sheet-notes-label {
   display: block;

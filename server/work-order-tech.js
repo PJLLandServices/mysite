@@ -36,12 +36,31 @@ const sheetTitle = document.getElementById("sheetTitle");
 const sheetLocation = document.getElementById("sheetLocation");
 const sheetSystem = document.getElementById("sheetSystem");
 const sheetStatus = document.getElementById("sheetStatus");
+const sheetChecks = document.getElementById("sheetChecks");
+const sheetIssues = document.getElementById("sheetIssues");
+const sheetIssueAdd = document.getElementById("sheetIssueAdd");
 const sheetNotes = document.getElementById("sheetNotes");
 const sheetClose = document.getElementById("sheetClose");
 const sheetDone = document.getElementById("sheetDone");
 
 const SPRINKLER_LABELS = { rotors: "Rotors", popups: "Pop-ups", drip: "Drip", flower_pots: "Flower Pots" };
 const COVERAGE_LABELS  = { plants: "Plants", grass: "Grass", trees: "Trees" };
+
+// Issue type catalog — labels for the per-zone issue dropdown. Keys map
+// (loosely) to pricing.json categories so a future Tier-3 rollup can
+// auto-price: head_replacement, manifold rebuilds, wire repairs, pipe
+// break repair. "Other" is the escape hatch for anything that doesn't
+// fit (custom on-site quote at the desktop side).
+const ZONE_ISSUE_TYPE_OPTIONS = [
+  { value: "broken_head", label: "Broken head" },
+  { value: "leak",        label: "Leak" },
+  { value: "valve",       label: "Valve" },
+  { value: "wire",        label: "Wire" },
+  { value: "pipe",        label: "Pipe" },
+  { value: "other",       label: "Other" }
+];
+
+const ZONE_CHECK_KEYS = ["operated", "pressureGood", "coverageGood", "noLeaks", "allHeadsFunctional"];
 
 const ZONE_STATUS_LABELS = {
   working_well:    "Working well",
@@ -68,8 +87,21 @@ let state = {
   activeZoneIndex: -1,
   // Pending PATCH timer for debounced notes-while-typing.
   notesTimer: null,
-  zoneNotesTimer: null
+  zoneNotesTimer: null,
+  // Debounce timer for issue-row qty/notes typing inside the sheet.
+  // Type selects fire immediately on change (no debounce needed).
+  issueInputTimer: null
 };
+
+function countChecks(checks) {
+  if (!checks || typeof checks !== "object") return 0;
+  return ZONE_CHECK_KEYS.reduce((n, k) => n + (checks[k] ? 1 : 0), 0);
+}
+
+function issueTypeLabel(value) {
+  const found = ZONE_ISSUE_TYPE_OPTIONS.find((t) => t.value === value);
+  return found ? found.label : "Issue";
+}
 
 // ---- Helpers -------------------------------------------------------
 
@@ -205,12 +237,28 @@ function renderZones() {
       li.dataset.index = String(i);
       li.dataset.status = z.status || "";
       const reviewedTag = z.status ? `<span class="tech-zone-status-tag">${escapeHtml(ZONE_STATUS_LABELS[z.status] || z.status)}</span>` : "";
+      // Walk-through evidence tags — show on the zone-list card so the
+      // tech can scan progress without opening each sheet. The checks
+      // tag only renders once at least one check is ticked (no "0/5
+      // checks" noise on first load).
+      const checksDone = countChecks(z.checks);
+      const checksTag = checksDone > 0
+        ? `<span class="tech-zone-checks-tag" data-full="${checksDone === 5 ? "1" : "0"}">${checksDone}/5 checks</span>`
+        : "";
+      const issueCount = Array.isArray(z.issues) ? z.issues.length : 0;
+      const issuesTag = issueCount > 0
+        ? `<span class="tech-zone-issues-tag">${issueCount} issue${issueCount === 1 ? "" : "s"}</span>`
+        : "";
       li.innerHTML = `
         <button type="button" class="tech-zone-item-btn" data-open-zone="${i}">
           <span class="tech-zone-num">${escapeHtml(z.number || "?")}</span>
           <span class="tech-zone-body">
             <span class="tech-zone-location">${escapeHtml(z.location || "(unnamed)")}</span>
-            ${reviewedTag}
+            <span class="tech-zone-tags">
+              ${reviewedTag}
+              ${checksTag}
+              ${issuesTag}
+            </span>
             ${z.notes ? `<span class="tech-zone-notes-preview">${escapeHtml(z.notes)}</span>` : ""}
           </span>
           <span class="tech-zone-dot ${statusDotClass(z.status)}" aria-hidden="true"></span>
@@ -258,10 +306,56 @@ function openZoneSheet(index) {
     btn.setAttribute("aria-pressed", btn.dataset.zoneStatus === zone.status ? "true" : "false");
   });
 
+  // Standard checks (5 tap-boxes) and issues-found list.
+  renderSheetChecks(zone);
+  renderSheetIssues(zone);
+
   sheetNotes.value = zone.notes || "";
 
   techSheet.hidden = false;
   document.body.classList.add("tech-sheet-open");
+}
+
+// Apply zone.checks state to the 5 check buttons in the sheet. Each
+// button uses aria-pressed for both accessibility and CSS targeting.
+function renderSheetChecks(zone) {
+  const checks = (zone && zone.checks) || {};
+  sheetChecks.querySelectorAll("[data-zone-check]").forEach((btn) => {
+    btn.setAttribute("aria-pressed", checks[btn.dataset.zoneCheck] ? "true" : "false");
+  });
+}
+
+// Render the issues-found list inside the sheet. Each row is a card
+// with a type select, a qty input, a notes input, and a remove button.
+// The id on the data-attr is the stable key — when the tech edits a
+// field we look up the issue by id (not by index) so reordering or
+// concurrent removals don't bite.
+function renderSheetIssues(zone) {
+  if (!sheetIssues) return;
+  sheetIssues.innerHTML = "";
+  const issues = (zone && Array.isArray(zone.issues)) ? zone.issues : [];
+  if (!issues.length) {
+    const empty = document.createElement("p");
+    empty.className = "tech-zone-issues-empty";
+    empty.textContent = "No issues found yet.";
+    sheetIssues.appendChild(empty);
+    return;
+  }
+  issues.forEach((issue) => {
+    const div = document.createElement("div");
+    div.className = "tech-zone-issue";
+    div.dataset.issueId = issue.id;
+    const optionsHtml = ZONE_ISSUE_TYPE_OPTIONS.map((t) =>
+      `<option value="${t.value}" ${t.value === issue.type ? "selected" : ""}>${escapeHtml(t.label)}</option>`
+    ).join("");
+    div.innerHTML = `
+      <select class="tech-zone-issue-type" aria-label="Issue type">${optionsHtml}</select>
+      <input type="number" class="tech-zone-issue-qty" min="1" inputmode="numeric" value="${escapeHtml(String(issue.qty || 1))}" aria-label="Quantity">
+      <input type="text" class="tech-zone-issue-notes" value="${escapeHtml(issue.notes || "")}" placeholder="Details (optional)" aria-label="Issue notes">
+      <button type="button" class="tech-zone-issue-remove" aria-label="Remove issue">×</button>
+    `;
+    sheetIssues.appendChild(div);
+  });
 }
 
 function closeZoneSheet() {
@@ -309,6 +403,114 @@ sheetNotes.addEventListener("input", () => {
   state.zoneNotesTimer = setTimeout(flushZoneNotes, 1200);
 });
 sheetNotes.addEventListener("blur", flushZoneNotes);
+
+// Standard-check tap-boxes — toggle the boolean, persist, refresh both
+// the sheet's pressed state and the zone-list "X/5 checks" badge.
+sheetChecks.addEventListener("click", (event) => {
+  const btn = event.target.closest("[data-zone-check]");
+  if (!btn) return;
+  const idx = state.activeZoneIndex;
+  if (idx < 0) return;
+  const zone = state.zones[idx];
+  if (!zone) return;
+  const key = btn.dataset.zoneCheck;
+  zone.checks = zone.checks || {};
+  zone.checks[key] = !zone.checks[key];
+  btn.setAttribute("aria-pressed", zone.checks[key] ? "true" : "false");
+  renderZones();
+  patchWorkOrder({ zones: state.zones });
+});
+
+// Add an empty issue row — defaults to "broken_head" / qty 1 / no notes
+// so the tech can tap once and only need to edit if the default is
+// wrong. The fresh row is appended; renderSheetIssues redraws the list
+// (preserves stable ids on existing rows so the user's focus doesn't
+// move while they're typing in another row).
+sheetIssueAdd.addEventListener("click", () => {
+  const idx = state.activeZoneIndex;
+  if (idx < 0) return;
+  const zone = state.zones[idx];
+  if (!zone) return;
+  zone.issues = Array.isArray(zone.issues) ? zone.issues : [];
+  zone.issues.push({
+    id: "iss_" + Math.random().toString(36).slice(2, 10) + "_" + Date.now(),
+    type: "broken_head",
+    qty: 1,
+    notes: ""
+  });
+  renderSheetIssues(zone);
+  renderZones();
+  patchWorkOrder({ zones: state.zones });
+});
+
+// Issue-row delegation: remove button click + change/input on the
+// type/qty/notes fields. Type select is instant; qty + notes debounce
+// 800ms (or flush on blur) so we don't PATCH on every keystroke.
+sheetIssues.addEventListener("click", (event) => {
+  if (!event.target.classList.contains("tech-zone-issue-remove")) return;
+  const card = event.target.closest("[data-issue-id]");
+  if (!card) return;
+  const idx = state.activeZoneIndex;
+  if (idx < 0) return;
+  const zone = state.zones[idx];
+  if (!zone) return;
+  const issueId = card.dataset.issueId;
+  zone.issues = (zone.issues || []).filter((i) => i.id !== issueId);
+  renderSheetIssues(zone);
+  renderZones();
+  patchWorkOrder({ zones: state.zones });
+});
+
+sheetIssues.addEventListener("change", (event) => {
+  if (event.target.classList.contains("tech-zone-issue-type")) {
+    flushIssueRow(event.target.closest("[data-issue-id]"));
+  }
+});
+
+sheetIssues.addEventListener("input", (event) => {
+  if (event.target.classList.contains("tech-zone-issue-qty") ||
+      event.target.classList.contains("tech-zone-issue-notes")) {
+    if (state.issueInputTimer) clearTimeout(state.issueInputTimer);
+    const card = event.target.closest("[data-issue-id]");
+    state.issueInputTimer = setTimeout(() => flushIssueRow(card), 800);
+  }
+});
+
+// Capture-phase blur listener so we catch blur on the inputs (blur
+// doesn't bubble in the standard sense — using capture is the
+// idiomatic fix).
+sheetIssues.addEventListener("blur", (event) => {
+  if (event.target.classList.contains("tech-zone-issue-qty") ||
+      event.target.classList.contains("tech-zone-issue-notes")) {
+    if (state.issueInputTimer) { clearTimeout(state.issueInputTimer); state.issueInputTimer = null; }
+    flushIssueRow(event.target.closest("[data-issue-id]"));
+  }
+}, true);
+
+function flushIssueRow(card) {
+  if (!card) return;
+  const idx = state.activeZoneIndex;
+  if (idx < 0) return;
+  const zone = state.zones[idx];
+  if (!zone) return;
+  const issueId = card.dataset.issueId;
+  const issue = (zone.issues || []).find((i) => i.id === issueId);
+  if (!issue) return;
+  const typeEl  = card.querySelector(".tech-zone-issue-type");
+  const qtyEl   = card.querySelector(".tech-zone-issue-qty");
+  const notesEl = card.querySelector(".tech-zone-issue-notes");
+  const nextType  = typeEl ? typeEl.value : issue.type;
+  const nextQty   = Math.max(1, Math.floor(Number(qtyEl?.value) || 1));
+  const nextNotes = (notesEl?.value || "").trim();
+  if (issue.type === nextType && issue.qty === nextQty && issue.notes === nextNotes) return;
+  issue.type  = nextType;
+  issue.qty   = nextQty;
+  issue.notes = nextNotes;
+  // Notes-driven changes don't need a zone-list re-render (issue count
+  // didn't change), but a type/qty change is cheap to redraw too.
+  renderZones();
+  patchWorkOrder({ zones: state.zones });
+}
 
 function flushZoneNotes() {
   if (state.zoneNotesTimer) {
