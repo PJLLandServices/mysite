@@ -3033,8 +3033,12 @@ section.hero[aria-label="PJL Land Services hero"] .hero__services-sep {
 .cov-checker__result-actions .secondary { background: rgba(15,31,20,0.06); color: var(--green); border: 1px solid rgba(15,31,20,0.10); }
 .cov-checker__result-actions .secondary:hover { background: rgba(15,31,20,0.10); }
 
-/* Google Places autocomplete dropdown skin */
-.pac-container { border-radius: 12px; margin-top: 6px; box-shadow: 0 12px 32px rgba(15,31,20,0.18); border: 1px solid var(--border); font-family: inherit; }
+/* Google Places autocomplete dropdown skin.
+   z-index must beat the chat-widget panel (99999 in css/chat-widget.css) so
+   the dropdown isn't hidden behind the panel when Places is wired into the
+   in-chat booking / contact-capture forms. The pac-container is appended
+   to <body> by the Maps JS, so a global rule is the only way to lift it. */
+.pac-container { z-index: 100001 !important; border-radius: 12px; margin-top: 6px; box-shadow: 0 12px 32px rgba(15,31,20,0.18); border: 1px solid var(--border); font-family: inherit; }
 .pac-item { padding: 10px 14px; font-size: 14px; cursor: pointer; border-top: 1px solid var(--border); }
 .pac-item:first-child { border-top: none; }
 .pac-item:hover, .pac-item-selected { background: var(--green-pale); }
