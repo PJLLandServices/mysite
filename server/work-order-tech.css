@@ -1084,7 +1084,11 @@ html, body {
 }
 
 /* Lightbox — full-screen overlay, tap to dismiss. Locks body scroll
-   while open via body.tech-lightbox-open. */
+   while open via body.tech-lightbox-open.
+   The [hidden] override is critical — without it `display: flex` here
+   wins over the user-agent `[hidden] { display: none }` rule and the
+   overlay covers the whole page on every load. */
+.tech-photo-lightbox[hidden] { display: none; }
 .tech-photo-lightbox {
   position: fixed;
   inset: 0;
@@ -1350,6 +1354,14 @@ body.tech-lightbox-open { overflow: hidden; }
    share a single section. Color signals: green = active scope being
    built/accepted; amber = warning (intake guarantee active); muted =
    submitted/locked. */
+/* Same [hidden] override pattern as the lightbox — class-set
+   `display: flex` overrides the user-agent default for [hidden]. */
+.tech-on-site-quote[hidden],
+.tech-on-site-builder[hidden],
+.tech-on-site-review[hidden],
+.tech-on-site-submitted[hidden],
+.tech-on-site-defer[hidden],
+.tech-on-site-intake-note[hidden] { display: none; }
 .tech-on-site-quote {
   display: flex;
   flex-direction: column;

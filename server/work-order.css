@@ -233,7 +233,12 @@
   grid-template-rows: auto auto auto;
 }
 
-/* Lightbox — full-screen overlay, click anywhere to dismiss. */
+/* Lightbox — full-screen overlay, click anywhere to dismiss.
+   The [hidden] override is critical: without it, `display: flex` here
+   would render the overlay on top of the page on every load, blocking
+   all interaction. Class-selector specificity beats user-agent
+   `[hidden] { display: none }` so we have to restate it explicitly. */
+.wo-photo-lightbox[hidden] { display: none; }
 .wo-photo-lightbox {
   position: fixed;
   inset: 0;
