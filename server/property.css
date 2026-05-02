@@ -1,5 +1,11 @@
 /* Property profile + index pages — companion to crm.css. */
 
+/* `[hidden]` polyfill — see work-order.css for rationale. Author CSS
+   that sets `display: flex/grid/block` would otherwise win against the
+   user-agent `[hidden] { display: none }` rule and silently render
+   `hidden`-attributed sections (deferred section, etc.). */
+[hidden] { display: none !important; }
+
 .property-shell { padding-bottom: 60px; }
 
 .property-back {

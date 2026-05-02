@@ -1,3 +1,6 @@
+/* [hidden] polyfill — see work-order.css for rationale. */
+[hidden] { display: none !important; }
+
 /* Today's Schedule — the tech's morning hub.
    Mobile-first: card-per-booking, big tap-friendly action buttons,
    sticky date header, color signals on customer-already-notified

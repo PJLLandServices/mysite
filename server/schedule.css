@@ -1,3 +1,6 @@
+/* [hidden] polyfill — see work-order.css for rationale. */
+[hidden] { display: none !important; }
+
 /* Schedule admin page — sits beside crm.css. The page reuses .pjl-crm-shell,
  * .pjl-crm-hero, .pjl-btn from crm.css. Anything below is specific to the
  * weekly grid + blocks UI.

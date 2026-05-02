@@ -2,6 +2,11 @@
    No sidebar, no nav, no padding extras. The whole viewport is the
    working surface so the tech sees as many zones at once as possible. */
 
+/* `[hidden]` polyfill — see work-order.css for the rationale. Critical
+   for the locked banner, the carry-forward section, and the emergency
+   modal, all of which set `display: flex` on a class. */
+[hidden] { display: none !important; }
+
 * { box-sizing: border-box; }
 
 :root {

@@ -1,3 +1,6 @@
+/* [hidden] polyfill — see work-order.css for rationale. */
+[hidden] { display: none !important; }
+
 /* Manual handoff page — pairs with crm.css for nav + shell + button styles. */
 
 .handoff-grid {

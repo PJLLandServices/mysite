@@ -2,6 +2,15 @@
    on-site. Mirrors the property-editor visual language so Patrick
    doesn't have to re-learn the page. */
 
+/* `[hidden]` polyfill — same-specificity tie between the user-agent
+   `[hidden] { display: none }` rule and any class that sets
+   `display: flex/grid/block` means author CSS wins by source-order
+   and the HTML `hidden` attribute is silently ignored. `bc226fb`
+   patched this per-class for lightboxes; doing it once globally here
+   prevents the bug from reappearing every time a new section/modal
+   gets `display: flex`. The locked banner was the most recent victim. */
+[hidden] { display: none !important; }
+
 /* AI Intake Guarantee banner — desktop WO editor mirror of the tech-mode
    banner. Sits at the top of the form so it's the first thing visible
    when reviewing an AI-quoted WO. Hidden until populated. Amber accent

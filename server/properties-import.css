@@ -1,3 +1,6 @@
+/* [hidden] polyfill — see work-order.css for rationale. */
+[hidden] { display: none !important; }
+
 /* Customer-list import flow — companion to property.css. */
 
 .import-step {

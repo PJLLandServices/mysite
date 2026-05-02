@@ -1,3 +1,6 @@
+/* [hidden] polyfill — see work-order.css for rationale. */
+[hidden] { display: none !important; }
+
 /* PJL Quote CRM - page-specific skin inspired by the Claude-built PJL site. */
 :root {
   --pjl-green: #1B4D2E;

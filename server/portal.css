@@ -1,3 +1,7 @@
+/* `[hidden]` polyfill — see work-order.css for rationale. Required for
+   the pre-auth modal (display: flex) and the recommendations card. */
+[hidden] { display: none !important; }
+
 :root {
   --green: #1B4D2E;
   --green-mid: #2D6A42;
