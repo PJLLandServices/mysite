@@ -161,7 +161,11 @@ html, body {
 /* Main content ---------------------------------------------------- */
 
 .tech-main {
-  padding: 16px 14px 80px;
+  /* Bottom padding clears the sticky finish bar (~64px + safe-area
+     ~34px on iPhone 17 Pro Max + a comfortable 24px gutter). Without
+     this, the customer sign-off + payment & billing sections get
+     hidden under the finish bar when scrolled to the bottom. */
+  padding: 16px 14px calc(140px + env(safe-area-inset-bottom, 0));
   display: flex;
   flex-direction: column;
   gap: 16px;
@@ -830,7 +834,7 @@ html, body {
 .tech-zone-issue {
   display: grid;
   grid-template-columns: 1fr 60px auto;
-  grid-template-rows: auto auto;
+  grid-template-rows: auto auto auto;
   gap: 6px 8px;
   padding: 10px;
   background: var(--tech-card);
@@ -850,6 +854,18 @@ html, body {
   border-radius: 8px;
   background: #fff;
 }
+.tech-zone-issue-subtype {
+  grid-row: 2;
+  grid-column: 1 / span 2;
+  min-height: 40px;
+  padding: 6px 10px;
+  font: inherit;
+  font-size: 14px;
+  color: var(--tech-text);
+  border: 1px solid var(--tech-border);
+  border-radius: 8px;
+  background: #FAFAF5;
+}
 .tech-zone-issue-qty {
   grid-row: 1;
   grid-column: 2;
@@ -863,6 +879,9 @@ html, body {
   border-radius: 8px;
   background: #fff;
 }
+/* Dim qty for types where it's not the primary signal (head & valve
+   are the "real" qty users — others stay at 1 by convention). */
+.tech-zone-issue-qty.is-dim { opacity: 0.45; }
 .tech-zone-issue-remove {
   grid-row: 1;
   grid-column: 3;
@@ -883,7 +902,7 @@ html, body {
   border-color: var(--tech-red);
 }
 .tech-zone-issue-notes {
-  grid-row: 2;
+  grid-row: 3;
   grid-column: 1 / -1;
   min-height: 40px;
   padding: 8px 10px;

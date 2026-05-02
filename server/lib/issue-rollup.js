@@ -123,6 +123,58 @@ function manifoldLineFor(pricing, zoneNumber, valveQty, sourceIssueIds, notes) {
   ];
 }
 
+// Subtype label dictionary — mirrors ZONE_ISSUE_SUBTYPE_OPTIONS in
+// work-order-tech.js. Server-side use only (this module has no UI),
+// but the rollup needs the labels so the line item carries the
+// specific item the tech chose ("Hunter PGP (4\")") rather than the
+// generic catalog label ("Sprinkler head replacement").
+const SUBTYPE_LABELS = {
+  broken_head: {
+    pgp_4:       "Hunter PGP (4\")",
+    pgp_6:       "Hunter PGP (6\")",
+    pgp_12:      "Hunter PGP (12\")",
+    prospray_4:  "Hunter Pro-Spray (4\")",
+    prospray_6:  "Hunter Pro-Spray (6\")",
+    prospray_12: "Hunter Pro-Spray (12\" mulch)",
+    i20:         "Hunter I-20 rotor",
+    mp_rotator:  "MP Rotator",
+    drip:        "Drip emitter",
+    other:       "Other head"
+  },
+  valve: {
+    pgv_full:  "Hunter PGV valve replacement + manifold rebuild",
+    solenoid:  "Solenoid only",
+    diaphragm: "Diaphragm rebuild",
+    other:     "Other valve fix"
+  },
+  wire: {
+    cut:      "Control wire cut",
+    removed:  "Control wire removed",
+    no_comms: "Control wire not communicating with controller",
+    splice:   "Splice failure / waterlogged connector",
+    other:    "Other wire issue"
+  },
+  pipe: {
+    poly_1:   "1\" HDPE poly pipe break",
+    poly_3_4: "3/4\" HDPE poly pipe break",
+    funny:    "1/2\" funny pipe break",
+    other:    "Other pipe break"
+  },
+  controller: {
+    hpc_4:       "4-zone Hydrawise controller replaced",
+    hpc_8:       "8-zone Hydrawise controller replaced",
+    hpc_16:      "16-zone Hydrawise controller replaced",
+    module:      "Zone-expansion module added",
+    rain_sensor: "Rain sensor added",
+    other:       "Other controller fix"
+  }
+};
+function subtypeLabel(type, subtype) {
+  if (!type || !subtype) return null;
+  const dict = SUBTYPE_LABELS[type] || {};
+  return dict[subtype] || null;
+}
+
 // Walk one zone's issues and produce 0+ line items.
 function rollupZone(pricing, zone) {
   const lines = [];
@@ -130,26 +182,39 @@ function rollupZone(pricing, zone) {
   if (!issues.length) return lines;
 
   const zoneNumber = Number(zone.number) || 0;
-  const byType = { broken_head: [], leak: [], valve: [], wire: [], pipe: [], other: [] };
+  const byType = { broken_head: [], leak: [], valve: [], wire: [], pipe: [], controller: [], other: [] };
   for (const issue of issues) {
     const type = issue && byType[issue.type] ? issue.type : "other";
     if (!byType[type]) continue;
     byType[type].push(issue);
   }
 
-  // broken_head — single line, qty = sum across issues in this zone.
+  // broken_head — one line per (sub)type so the customer sees "Hunter
+  // PGP (4\")" not just "Sprinkler head replacement". Pricing math
+  // unchanged — head_replacement is flat per head regardless of model.
   if (byType.broken_head.length) {
-    const qty = byType.broken_head.reduce((sum, i) => sum + (Number(i.qty) || 1), 0);
-    const ids = byType.broken_head.map((i) => i.id).filter(Boolean);
-    const notes = byType.broken_head.map((i) => i.notes).filter(Boolean).join("; ");
-    lines.push(buildLine({
-      key: "head_replacement",
-      label: labelOf(pricing, "head_replacement"),
-      qty,
-      price: priceOf(pricing, "head_replacement"),
-      source: { zoneNumbers: [zoneNumber], issueIds: ids },
-      note: notes
-    }));
+    // Group by subtype within broken_head so e.g. 2× PGP-4 + 1× I-20
+    // shows two distinct lines.
+    const bySubtype = new Map();
+    for (const i of byType.broken_head) {
+      const sub = i.subtype || "_default";
+      if (!bySubtype.has(sub)) bySubtype.set(sub, []);
+      bySubtype.get(sub).push(i);
+    }
+    for (const [sub, group] of bySubtype.entries()) {
+      const qty = group.reduce((s, i) => s + (Number(i.qty) || 1), 0);
+      const ids = group.map((i) => i.id).filter(Boolean);
+      const notes = group.map((i) => i.notes).filter(Boolean).join("; ");
+      const subLabel = sub === "_default" ? null : subtypeLabel("broken_head", sub);
+      lines.push(buildLine({
+        key: "head_replacement",
+        label: subLabel || labelOf(pricing, "head_replacement"),
+        qty,
+        price: priceOf(pricing, "head_replacement"),
+        source: { zoneNumbers: [zoneNumber], issueIds: ids },
+        note: notes
+      }));
+    }
   }
 
   // leak + valve — collapse into manifold rebuild per the whole_manifold_rule.
@@ -200,6 +265,45 @@ function rollupZone(pricing, zone) {
       source: { zoneNumbers: [zoneNumber], issueIds: ids },
       note: notes
     }));
+  }
+
+  // controller — map subtype to the specific pricing tier.
+  // hpc_4 → controller_1_4, hpc_8 → controller_5_7 (closest match in
+  // pricing.json — 5-7 zones is the $750 tier; for 8-zone the customer
+  // ends up in the same bracket since 8 still falls in 5-7 OR moves to
+  // 8-16 depending on Patrick's tier definition. Going with controller_8_16
+  // for hpc_8 to be safe — that's $1,195, but Patrick can override.
+  for (const issue of byType.controller) {
+    const sub = issue.subtype;
+    let key = null;
+    if (sub === "hpc_4")        key = "controller_1_4";
+    else if (sub === "hpc_8")   key = "controller_8_16";   // 8-zone falls in the 8-16 bracket
+    else if (sub === "hpc_16")  key = "controller_8_16";
+    else if (sub === "module")  key = null;                // no catalog entry yet — custom
+    else                        key = null;
+    const subLbl = subtypeLabel("controller", sub) || "Controller fix";
+    if (key && pricing.items?.[key]) {
+      lines.push(buildLine({
+        key,
+        label: subLbl,
+        qty: Number(issue.qty) || 1,
+        price: priceOf(pricing, key),
+        source: { zoneNumbers: [zoneNumber], issueIds: issue.id ? [issue.id] : [] },
+        note: issue.notes || ""
+      }));
+    } else {
+      // No matching catalog entry — emit as custom line at $0 so tech
+      // sets the price on-site.
+      lines.push(buildLine({
+        key: null,
+        label: subLbl,
+        qty: Number(issue.qty) || 1,
+        price: 0,
+        custom: true,
+        source: { zoneNumbers: [zoneNumber], issueIds: issue.id ? [issue.id] : [] },
+        note: issue.notes || "Controller — tech to confirm pricing on-site"
+      }));
+    }
   }
 
   // other — one custom $0 line per issue. Tech sets the price on-site.

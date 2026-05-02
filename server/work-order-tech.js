@@ -52,13 +52,84 @@ const COVERAGE_LABELS  = { plants: "Plants", grass: "Grass", trees: "Trees" };
 // break repair. "Other" is the escape hatch for anything that doesn't
 // fit (custom on-site quote at the desktop side).
 const ZONE_ISSUE_TYPE_OPTIONS = [
-  { value: "broken_head", label: "Broken head" },
+  { value: "broken_head", label: "Sprinkler head" },
   { value: "leak",        label: "Leak" },
   { value: "valve",       label: "Valve" },
   { value: "wire",        label: "Wire" },
   { value: "pipe",        label: "Pipe" },
+  { value: "controller",  label: "Controller" },
   { value: "other",       label: "Other" }
 ];
+
+// Cascading sub-type options. When the tech picks a primary type the
+// second dropdown filters to these. Empty array = no subtype prompt
+// (free-text only via the notes field). The subtype `value` flows into
+// the line item label as additional specificity; the rollup engine
+// keys off `type` for pricing math, so adding subtypes is purely a
+// labelling refinement.
+const ZONE_ISSUE_SUBTYPE_OPTIONS = {
+  broken_head: [
+    { value: "",             label: "— Select head model —" },
+    { value: "pgp_4",        label: "Hunter PGP (4\")" },
+    { value: "pgp_6",        label: "Hunter PGP (6\")" },
+    { value: "pgp_12",       label: "Hunter PGP (12\")" },
+    { value: "prospray_4",   label: "Hunter Pro-Spray (4\")" },
+    { value: "prospray_6",   label: "Hunter Pro-Spray (6\")" },
+    { value: "prospray_12",  label: "Hunter Pro-Spray (12\" mulch)" },
+    { value: "i20",          label: "Hunter I-20 rotor" },
+    { value: "mp_rotator",   label: "MP Rotator" },
+    { value: "drip",         label: "Drip emitter" },
+    { value: "other",        label: "Other head — see notes" }
+  ],
+  valve: [
+    { value: "",             label: "— Select valve fix —" },
+    { value: "pgv_full",     label: "Hunter PGV valve replacement + manifold rebuild" },
+    { value: "solenoid",     label: "Solenoid only" },
+    { value: "diaphragm",    label: "Diaphragm rebuild" },
+    { value: "other",        label: "Other valve fix — see notes" }
+  ],
+  wire: [
+    { value: "",             label: "— Select wire issue —" },
+    { value: "cut",          label: "Control wire cut" },
+    { value: "removed",      label: "Control wire removed" },
+    { value: "no_comms",     label: "Control wire not communicating with controller" },
+    { value: "splice",       label: "Splice failure / waterlogged connector" },
+    { value: "other",        label: "Other wire issue — see notes" }
+  ],
+  pipe: [
+    { value: "",             label: "— Select pipe size —" },
+    { value: "poly_1",       label: "1\" HDPE poly pipe break" },
+    { value: "poly_3_4",     label: "3/4\" HDPE poly pipe break" },
+    { value: "funny",        label: "1/2\" funny pipe break" },
+    { value: "other",        label: "Other pipe break — see notes" }
+  ],
+  controller: [
+    { value: "",             label: "— Select controller fix —" },
+    { value: "hpc_4",        label: "4-zone Hydrawise controller replaced" },
+    { value: "hpc_8",        label: "8-zone Hydrawise controller replaced" },
+    { value: "hpc_16",       label: "16-zone Hydrawise controller replaced" },
+    { value: "module",       label: "Zone-expansion module added" },
+    { value: "rain_sensor",  label: "Rain sensor added" },
+    { value: "other",        label: "Other controller fix — see notes" }
+  ],
+  // leak + other have no subtype prompt — leak rolls into the manifold
+  // rule so the per-line specificity isn't actionable; other is
+  // free-text by definition.
+  leak:  [],
+  other: []
+};
+
+// Resolve a human-readable label for an issue's type+subtype combo.
+// Used by the rollup builder + the carry-forward banner so the label
+// the customer sees matches the cascading dropdown the tech picked.
+function issueDisplayLabel(issue) {
+  if (!issue) return "Issue";
+  const typeLabel = ZONE_ISSUE_TYPE_OPTIONS.find((t) => t.value === issue.type)?.label || issue.type;
+  const subOpts = ZONE_ISSUE_SUBTYPE_OPTIONS[issue.type] || [];
+  const subLabel = subOpts.find((s) => s.value === issue.subtype)?.label;
+  if (subLabel && issue.subtype) return subLabel;
+  return typeLabel;
+}
 
 const ZONE_CHECK_KEYS = ["operated", "pressureGood", "coverageGood", "noLeaks", "allHeadsFunctional"];
 
@@ -664,13 +735,23 @@ function renderSheetIssues(zone) {
     div.className = "tech-zone-issue" + (isFallMode ? " is-fall-mode" : "");
     div.dataset.issueId = issue.id;
     div.dataset.zoneNumber = String(zone.number || 0);
-    const optionsHtml = ZONE_ISSUE_TYPE_OPTIONS.map((t) =>
+    const typeOptionsHtml = ZONE_ISSUE_TYPE_OPTIONS.map((t) =>
       `<option value="${t.value}" ${t.value === issue.type ? "selected" : ""}>${escapeHtml(t.label)}</option>`
     ).join("");
+    const subtypeOpts = ZONE_ISSUE_SUBTYPE_OPTIONS[issue.type] || [];
+    const subtypeOptionsHtml = subtypeOpts.map((s) =>
+      `<option value="${escapeHtml(s.value)}" ${s.value === (issue.subtype || "") ? "selected" : ""}>${escapeHtml(s.label)}</option>`
+    ).join("");
+    const subtypeHidden = subtypeOpts.length === 0 ? "hidden" : "";
+    // Quantity input only relevant for valves (manifold rule needs the
+    // count) and head replacements (multi-head zones). Other types stay
+    // qty=1 and the field is dimmed but not removed.
+    const qtyRelevant = issue.type === "valve" || issue.type === "broken_head" || issue.type === "controller";
     div.innerHTML = `
-      <select class="tech-zone-issue-type" aria-label="Issue type">${optionsHtml}</select>
-      <input type="number" class="tech-zone-issue-qty" min="1" inputmode="numeric" value="${escapeHtml(String(issue.qty || 1))}" aria-label="Quantity">
-      <input type="text" class="tech-zone-issue-notes" value="${escapeHtml(issue.notes || "")}" placeholder="Details (optional)" aria-label="Issue notes" data-voice-input>
+      <select class="tech-zone-issue-type" aria-label="Issue type">${typeOptionsHtml}</select>
+      <select class="tech-zone-issue-subtype" aria-label="Specific item" ${subtypeHidden}>${subtypeOptionsHtml}</select>
+      <input type="number" class="tech-zone-issue-qty${qtyRelevant ? "" : " is-dim"}" min="1" inputmode="numeric" value="${escapeHtml(String(issue.qty || 1))}" aria-label="Quantity">
+      <input type="text" class="tech-zone-issue-notes" value="${escapeHtml(issue.notes || "")}" placeholder="Notes (optional)" aria-label="Issue notes" data-voice-input>
       <button type="button" class="tech-zone-issue-remove" aria-label="Remove issue">×</button>
       <div class="tech-issue-photos" data-issue-photos="${escapeHtml(issue.id)}"></div>
       <div class="tech-zone-issue-fall-actions">
@@ -812,6 +893,7 @@ sheetIssueAdd.addEventListener("click", () => {
   zone.issues.push({
     id: "iss_" + Math.random().toString(36).slice(2, 10) + "_" + Date.now(),
     type: "broken_head",
+    subtype: "",
     qty: 1,
     notes: ""
   });
@@ -839,7 +921,28 @@ sheetIssues.addEventListener("click", (event) => {
 });
 
 sheetIssues.addEventListener("change", (event) => {
+  // Type change → reset subtype to first option, then re-render this
+  // single row so the subtype dropdown reflects the new type's options.
   if (event.target.classList.contains("tech-zone-issue-type")) {
+    const card = event.target.closest("[data-issue-id]");
+    const idx = state.activeZoneIndex;
+    if (idx >= 0 && card) {
+      const zone = state.zones[idx];
+      const issue = (zone?.issues || []).find((i) => i.id === card.dataset.issueId);
+      if (issue) {
+        issue.type = event.target.value;
+        issue.subtype = ""; // reset — new type has different subtype options
+      }
+      // Re-render the whole sheet's issue list so the subtype dropdown
+      // gets the right <option> set. Cheaper-rerender of just the row
+      // would mean string-templating in the same place; sheet-level
+      // rerender is simpler and the lists are short.
+      renderSheetIssues(zone);
+    }
+    flushIssueRow(card);
+  }
+  // Subtype change → just persist.
+  if (event.target.classList.contains("tech-zone-issue-subtype")) {
     flushIssueRow(event.target.closest("[data-issue-id]"));
   }
 });
@@ -873,14 +976,17 @@ function flushIssueRow(card) {
   const issueId = card.dataset.issueId;
   const issue = (zone.issues || []).find((i) => i.id === issueId);
   if (!issue) return;
-  const typeEl  = card.querySelector(".tech-zone-issue-type");
-  const qtyEl   = card.querySelector(".tech-zone-issue-qty");
-  const notesEl = card.querySelector(".tech-zone-issue-notes");
-  const nextType  = typeEl ? typeEl.value : issue.type;
-  const nextQty   = Math.max(1, Math.floor(Number(qtyEl?.value) || 1));
-  const nextNotes = (notesEl?.value || "").trim();
-  if (issue.type === nextType && issue.qty === nextQty && issue.notes === nextNotes) return;
-  issue.type  = nextType;
+  const typeEl    = card.querySelector(".tech-zone-issue-type");
+  const subtypeEl = card.querySelector(".tech-zone-issue-subtype");
+  const qtyEl     = card.querySelector(".tech-zone-issue-qty");
+  const notesEl   = card.querySelector(".tech-zone-issue-notes");
+  const nextType    = typeEl ? typeEl.value : issue.type;
+  const nextSubtype = subtypeEl ? subtypeEl.value : (issue.subtype || "");
+  const nextQty     = Math.max(1, Math.floor(Number(qtyEl?.value) || 1));
+  const nextNotes   = (notesEl?.value || "").trim();
+  if (issue.type === nextType && (issue.subtype || "") === nextSubtype && issue.qty === nextQty && issue.notes === nextNotes) return;
+  issue.type    = nextType;
+  issue.subtype = nextSubtype;
   issue.qty   = nextQty;
   issue.notes = nextNotes;
   // Notes-driven changes don't need a zone-list re-render (issue count

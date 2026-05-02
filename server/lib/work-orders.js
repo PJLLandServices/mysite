@@ -74,7 +74,7 @@ const ZONE_CHECK_KEYS = ["operated", "pressureGood", "coverageGood", "noLeaks", 
 // pricing.json item categories: head_replacement, manifold rebuilds,
 // wire diagnostic / wire run, pipe break repair. "other" is the escape
 // hatch for anything that doesn't fit (custom on-site quote).
-const ZONE_ISSUE_TYPES = ["broken_head", "leak", "valve", "wire", "pipe", "other"];
+const ZONE_ISSUE_TYPES = ["broken_head", "leak", "valve", "wire", "pipe", "controller", "other"];
 
 // Photo categories per spec §4.3.2. Photos can be attached at the WO
 // level (pre/in/post-work documentation) or to a specific issue inside
@@ -295,6 +295,11 @@ function hydrateIssue(issue) {
   return {
     id: issue?.id || ("iss_" + Math.random().toString(36).slice(2, 10) + "_" + Date.now()),
     type: safeType,
+    // subtype: cascading specific item (e.g. "pgp_4", "hpc_8"). Free-form
+    // string — the rendering layer maps it to a human label, the rollup
+    // layer uses it for controller pricing tier selection. Empty string
+    // for legacy issues / types without subtype options.
+    subtype: typeof issue?.subtype === "string" ? issue.subtype : "",
     qty: Number.isFinite(Number(issue?.qty)) && Number(issue?.qty) > 0 ? Number(issue.qty) : 1,
     notes: issue?.notes || ""
   };
