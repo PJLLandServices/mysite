@@ -416,7 +416,7 @@
             <dl>
               <dt>Estimated total system flow</dt><dd><span id="wc-detail-gpm">0</span> GPM</dd>
               <dt>Estimated water per cycle</dt><dd><span id="wc-detail-cycle">0</span> m³</dd>
-              <dt>Cycles per season — manual</dt><dd>84 (every other day, May 1 – Oct 15)</dd>
+              <dt>Cycles per season — manual</dt><dd>60 (3 days/week per typical GTA bylaw, May 1 – Oct 15)</dd>
               <dt>Cycles per season — smart</dt><dd>~<span id="wc-detail-smart-cycles">0</span> after weather skipping</dd>
               <dt>Water saved annually</dt><dd><span id="wc-detail-saved">0</span> m³ ≈ <span id="wc-detail-tubs">0</span> bathtubs</dd>
               <dt>Combined water + wastewater rate</dt><dd>$<span id="wc-detail-rate">0</span>/m³ <span style="color:var(--text-muted);font-weight:400;">(<span id="wc-detail-effective"></span>)</span></dd>
@@ -451,8 +451,8 @@
 (function () {
   'use strict';
 
-  const SEASON_DAYS = 168;
-  const MANUAL_CYCLES = SEASON_DAYS / 2;        // 84
+  const SEASON_DAYS = 168;                       // May 1 – Oct 15
+  const MANUAL_CYCLES = 60;                      // 3 days/week per typical GTA watering bylaw
   const LITRES_PER_GALLON = 3.785;
   const PLANT_LOSS_PROBABILITY = 0.15;   // 15% chance of meaningful drought damage in a manual-timer year
   const BATHTUB_M3 = 0.15;
