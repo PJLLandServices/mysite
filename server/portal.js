@@ -389,6 +389,9 @@ function renderPortal(data) {
   renderActivity(project.activity);
   renderSystem(data.property);
   renderWorkOrder(data);
+  // Open recommendations card — fetches deferred items the customer can
+  // pre-authorize. Async; reveals the card when ready, hidden until then.
+  loadRecommendations().catch((err) => console.warn("[recommendations]", err?.message));
 
   portalContent.hidden = false;
 }
@@ -463,5 +466,237 @@ messageForm.addEventListener("submit", async (event) => {
     submit.disabled = false;
   }
 });
+
+// ---- Open recommendations (deferred items, spec §5/§6) ----------------
+
+const RECOMMENDATION_TYPE_LABELS = {
+  broken_head: "Broken sprinkler head",
+  leak: "Leak",
+  valve: "Valve",
+  wire: "Wire issue",
+  pipe: "Pipe break",
+  other: "Other"
+};
+
+const recommendationsCard = document.getElementById("recommendationsCard");
+const recommendationsList = document.getElementById("recommendationsList");
+
+async function loadRecommendations() {
+  const token = tokenFromLocation();
+  if (!token || !recommendationsCard || !recommendationsList) return;
+  let items = [];
+  try {
+    const r = await fetch(`/api/portal/${encodeURIComponent(token)}/deferred`, { cache: "no-store" });
+    const data = await r.json().catch(() => ({}));
+    if (data.ok && Array.isArray(data.deferred)) items = data.deferred;
+  } catch {
+    return;
+  }
+  if (!items.length) {
+    recommendationsCard.hidden = true;
+    return;
+  }
+  recommendationsCard.hidden = false;
+  recommendationsList.innerHTML = "";
+  for (const item of items) recommendationsList.appendChild(buildRecommendationCard(item));
+}
+
+function buildRecommendationCard(item) {
+  const card = document.createElement("article");
+  card.className = "portal-recommendation";
+  card.dataset.deferredId = item.id;
+  const typeLabel = RECOMMENDATION_TYPE_LABELS[item.type] || item.type || "Recommendation";
+  const zoneTag = Number.isFinite(Number(item.fromZone)) ? `Zone ${item.fromZone}` : "Your system";
+  const snap = item.suggestedPriceSnapshot;
+  const totalText = (snap && Number.isFinite(Number(snap.total)))
+    ? `$${Number(snap.total).toFixed(2)} incl. HST`
+    : "Quote on next visit";
+  const lineItems = (snap && Array.isArray(snap.lineItems))
+    ? snap.lineItems.map((l) => `<li>${escapeHtmlPortal(l.label || l.key || "Repair line")} <span class="portal-rec-line-qty">× ${escapeHtmlPortal(String(l.qty || 1))}</span></li>`).join("")
+    : "";
+  const photoStrip = (Array.isArray(item.photoIds) && item.photoIds.length && item.fromWoId)
+    ? `<div class="portal-rec-photos">${item.photoIds.slice(0, 4).map((n) =>
+        `<a class="portal-rec-photo" href="/api/portal/${encodeURIComponent(tokenFromLocation())}/wo-photo/${encodeURIComponent(item.fromWoId)}/${n}" target="_blank" rel="noopener" style="background-image:url('/api/portal/${encodeURIComponent(tokenFromLocation())}/wo-photo/${encodeURIComponent(item.fromWoId)}/${n}')" aria-label="Photo from prior visit"></a>`
+      ).join("")}</div>`
+    : "";
+  card.innerHTML = `
+    <header class="portal-rec-head">
+      <div>
+        <span class="portal-rec-zone">${escapeHtmlPortal(zoneTag)}</span>
+        <strong class="portal-rec-type">${escapeHtmlPortal(typeLabel)}</strong>
+      </div>
+      <span class="portal-rec-total">${escapeHtmlPortal(totalText)}</span>
+    </header>
+    ${item.notes ? `<p class="portal-rec-notes">${escapeHtmlPortal(item.notes)}</p>` : ""}
+    ${photoStrip}
+    ${lineItems ? `<ul class="portal-rec-lines">${lineItems}</ul>` : ""}
+    <button type="button" class="portal-btn portal-btn-primary portal-rec-action" data-preauth-id="${escapeHtmlPortal(item.id)}" data-preauth-summary="${escapeHtmlPortal(`${typeLabel} — ${zoneTag} — ${totalText}`)}">Pre-authorize this repair</button>
+  `;
+  return card;
+}
+
+function escapeHtmlPortal(s) {
+  return String(s == null ? "" : s)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+// Delegated click — opens the pre-auth modal for the chosen item.
+recommendationsList?.addEventListener("click", (event) => {
+  const btn = event.target.closest("[data-preauth-id]");
+  if (!btn) return;
+  openPreauthModal({
+    deferredId: btn.dataset.preauthId,
+    summary: btn.dataset.preauthSummary || ""
+  });
+});
+
+// ---- Pre-auth signature modal (mirrors the tech-side createSignaturePad
+//      pattern, slimmed for portal use). Captures the customer's signature
+//      and POSTs to /api/portal/<token>/deferred/<id>/pre-authorize. -------
+
+let preauthContext = null;
+let preauthPad = null;
+
+function openPreauthModal(ctx) {
+  preauthContext = ctx;
+  const modal = document.getElementById("preauthModal");
+  const summary = document.getElementById("preauthSummary");
+  const nameInput = document.getElementById("preauthName");
+  const errEl = document.getElementById("preauthError");
+  const submit = document.getElementById("preauthSubmit");
+  if (!modal) return;
+  if (summary) summary.textContent = ctx.summary || "";
+  if (nameInput) nameInput.value = customerFirstName || "";
+  if (errEl) errEl.hidden = true;
+  if (submit) { submit.disabled = true; submit.textContent = "Pre-authorize"; }
+  modal.hidden = false;
+  document.body.classList.add("portal-modal-open");
+  const canvas = document.getElementById("preauthCanvas");
+  if (canvas) preauthPad = createPortalSignaturePad(canvas, updatePreauthSubmitState);
+  updatePreauthSubmitState();
+}
+
+function closePreauthModal() {
+  const modal = document.getElementById("preauthModal");
+  if (!modal) return;
+  modal.hidden = true;
+  document.body.classList.remove("portal-modal-open");
+  preauthContext = null;
+  preauthPad = null;
+}
+
+function updatePreauthSubmitState() {
+  const submit = document.getElementById("preauthSubmit");
+  const name = document.getElementById("preauthName")?.value.trim();
+  const drawn = !!(preauthPad && preauthPad.isDirty && preauthPad.isDirty());
+  if (submit) submit.disabled = !(name && drawn);
+}
+
+document.getElementById("preauthClose")?.addEventListener("click", closePreauthModal);
+document.getElementById("preauthClear")?.addEventListener("click", () => {
+  if (preauthPad && preauthPad.clear) preauthPad.clear();
+  updatePreauthSubmitState();
+});
+document.getElementById("preauthName")?.addEventListener("input", updatePreauthSubmitState);
+
+document.getElementById("preauthSubmit")?.addEventListener("click", async () => {
+  if (!preauthContext) return;
+  const submit = document.getElementById("preauthSubmit");
+  const errEl = document.getElementById("preauthError");
+  if (errEl) errEl.hidden = true;
+  if (submit) { submit.disabled = true; submit.textContent = "Sending…"; }
+  try {
+    const token = tokenFromLocation();
+    const customerName = document.getElementById("preauthName")?.value.trim();
+    const imageData = preauthPad?.toDataURL ? preauthPad.toDataURL() : "";
+    if (!customerName || !imageData) throw new Error("Name and signature required.");
+    const r = await fetch(
+      `/api/portal/${encodeURIComponent(token)}/deferred/${encodeURIComponent(preauthContext.deferredId)}/pre-authorize`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ customerName, imageData })
+      }
+    );
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok || !data.ok) throw new Error((data.errors && data.errors[0]) || "Couldn't pre-authorize.");
+    closePreauthModal();
+    // Re-fetch — the pre-authorized item drops off the customer-facing list.
+    await loadRecommendations();
+  } catch (err) {
+    if (errEl) { errEl.textContent = err.message || "Failed."; errEl.hidden = false; }
+    if (submit) { submit.disabled = false; submit.textContent = "Pre-authorize"; }
+  }
+});
+
+// Self-contained signature pad — kept separate from the tech-side helper
+// because this file doesn't import that one and we don't want a shared
+// global. Same drawing API: { isDirty, clear, toDataURL }.
+function createPortalSignaturePad(canvas, onChange) {
+  const ctx = canvas.getContext("2d");
+  let drawing = false;
+  let dirty = false;
+  function fitCanvas() {
+    const rect = canvas.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
+    const dpr = window.devicePixelRatio || 1;
+    const snapshot = canvas.width ? canvas.toDataURL() : null;
+    canvas.width = Math.round(rect.width * dpr);
+    canvas.height = Math.round(rect.height * dpr);
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.strokeStyle = "#0F1F14";
+    ctx.lineWidth = 2.2 * dpr;
+    if (snapshot && dirty) {
+      const img = new Image();
+      img.onload = () => ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      img.src = snapshot;
+    }
+  }
+  fitCanvas();
+  function pos(e) {
+    const rect = canvas.getBoundingClientRect();
+    return {
+      x: (e.clientX - rect.left) * (canvas.width / rect.width),
+      y: (e.clientY - rect.top) * (canvas.height / rect.height)
+    };
+  }
+  canvas.addEventListener("pointerdown", (e) => {
+    drawing = true;
+    canvas.setPointerCapture(e.pointerId);
+    const p = pos(e);
+    ctx.beginPath();
+    ctx.moveTo(p.x, p.y);
+    e.preventDefault();
+  });
+  canvas.addEventListener("pointermove", (e) => {
+    if (!drawing) return;
+    const p = pos(e);
+    ctx.lineTo(p.x, p.y);
+    ctx.stroke();
+    if (!dirty) { dirty = true; if (onChange) onChange(); }
+    e.preventDefault();
+  });
+  const endStroke = (e) => {
+    if (!drawing) return;
+    drawing = false;
+    try { canvas.releasePointerCapture(e.pointerId); } catch (_) {}
+  };
+  canvas.addEventListener("pointerup", endStroke);
+  canvas.addEventListener("pointercancel", endStroke);
+  return {
+    isDirty() { return dirty; },
+    clear() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      dirty = false;
+      if (onChange) onChange();
+    },
+    toDataURL() { return canvas.toDataURL("image/png"); }
+  };
+}
 
 loadPortal();

@@ -873,3 +873,112 @@
     padding: 22px 18px 18px;
   }
 }
+
+/* ---- Deferred recommendations — pills, actions, history (spec §5) ---- */
+
+.property-deferred__item[data-flagged="true"] {
+  border: 1px solid #C03A2C;
+  background: #FFF1EE;
+}
+.property-deferred__item[data-status="pre_authorized"] {
+  border-left: 4px solid #2F8254;
+  padding-left: 12px;
+}
+.property-deferred__item[data-status="in_progress"] {
+  border-left: 4px solid #E07B24;
+  padding-left: 12px;
+}
+.property-deferred__item[data-status="resolved"],
+.property-deferred__item[data-status="dismissed"] {
+  opacity: 0.65;
+}
+.property-deferred__item[data-severity="emergency"] {
+  border-color: #C03A2C;
+  box-shadow: 0 0 0 1px #C03A2C inset;
+}
+
+.property-deferred__threeyear {
+  background: #FFE6E0;
+  color: #8A2418;
+  border: 1px solid #E6BCB7;
+  border-radius: 8px;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.property-deferred__pill {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 9px;
+  border-radius: 999px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  background: #EFEFE5;
+  color: #555;
+  margin-left: 6px;
+}
+.property-deferred__pill--preauth { background: #1B4D2E; color: #EAF3DE; text-transform: none; }
+.property-deferred__pill--progress { background: #E07B24; color: #fff; text-transform: none; }
+.property-deferred__pill--resolved { background: #2F8254; color: #fff; }
+.property-deferred__pill--dismissed { background: #777; color: #fff; }
+.property-deferred__pill--emergency { background: #C03A2C; color: #fff; text-transform: none; }
+.property-deferred__pill--repeat { background: #FFE6A6; color: #6A4A00; }
+.property-deferred__pill--repeat-flag { background: #C03A2C; color: #fff; }
+.property-deferred__pill--age { background: #EFEFE5; color: #555; text-transform: none; }
+
+.property-deferred__price {
+  margin: 4px 0 0;
+  font-size: 13px;
+  color: #444;
+}
+.property-deferred__preauth,
+.property-deferred__resolution {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: #555;
+  font-style: italic;
+}
+
+.property-deferred__actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+.property-deferred__btn {
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 7px 12px;
+  border-radius: 6px;
+  border: 1px solid #d8d8c9;
+  background: #FAFAF5;
+  color: #1F2A22;
+  cursor: pointer;
+}
+.property-deferred__btn:hover { background: #f0f0e6; }
+.property-deferred__btn--danger { color: #C03A2C; border-color: #E6BCB7; background: #fff; }
+.property-deferred__btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.property-deferred__history {
+  margin-top: 10px;
+  border-top: 1px dashed #d8d8c9;
+  padding-top: 10px;
+}
+.property-deferred__history > summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: #555;
+  font-size: 13px;
+  padding: 4px 0;
+}
+.property-deferred__history-list {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}

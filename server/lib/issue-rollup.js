@@ -269,9 +269,46 @@ function recomputeTotals(lines) {
   return totalsFor(lines || []);
 }
 
+// Single-issue rollup — used by the deferred-issues flow (spec §5) to
+// snapshot a price for ONE issue at defer time. Implemented as a thin
+// wrapper around `rollupIssuesToLineItems` so we never duplicate the
+// whole_manifold_rule, buildLine, or service_call logic. The synthetic
+// WO has no intakeGuarantee (deferred items are NOT covered under an
+// AI repair quote — that's a different code path).
+//
+// `includeServiceCall` defaults to false: deferred items are priced
+// per-line so the customer/tech can compare them at face value; the
+// service_call gets added once on the spring WO when the items are
+// pulled into the on-site Quote builder via "Repair now" (the existing
+// rollup adds it at that point).
+//
+// Returns { lineItems, subtotal, hst, total, pricedAt }.
+function rollupSingleIssueToLineItems(issue, zoneNumber, pricing, opts = {}) {
+  const includeServiceCall = opts.includeServiceCall === true;
+  const syntheticWo = {
+    intakeGuarantee: { applies: false },
+    zones: [{
+      number: Number(zoneNumber) || 0,
+      issues: issue ? [issue] : []
+    }]
+  };
+  const result = rollupIssuesToLineItems(syntheticWo, pricing);
+  let lines = result.lineItems;
+  if (!includeServiceCall) {
+    lines = lines.filter((l) => l.key !== "service_call");
+  }
+  const totals = totalsFor(lines);
+  return {
+    lineItems: lines,
+    ...totals,
+    pricedAt: new Date().toISOString()
+  };
+}
+
 module.exports = {
   HST_RATE,
   rollupIssuesToLineItems,
+  rollupSingleIssueToLineItems,
   recomputeTotals,
   effectivePrice,
   totalsFor

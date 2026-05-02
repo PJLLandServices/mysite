@@ -231,49 +231,171 @@ const DEFERRED_TYPE_LABELS = {
   other: "Other"
 };
 
+// Render priceSnapshot to a single line summary. Snapshots from the
+// post-§5 schema have a lineItems[] + total; legacy entries (pre-§5
+// admin-quote sinks) carry a flat { unitPrice, qty, label }. Both render.
+function renderSnapshotSummary(snap) {
+  if (!snap) return "";
+  if (Array.isArray(snap.lineItems) && snap.lineItems.length) {
+    const summary = snap.lineItems
+      .map((l) => `${l.qty || 1}× ${l.label || l.key || "line"}`)
+      .join(", ");
+    const total = Number.isFinite(Number(snap.total))
+      ? `$${Number(snap.total).toFixed(2)} incl. HST`
+      : "";
+    return `<p class="property-deferred__price"><strong>${escapeHtml(total)}</strong>${total ? " · " : ""}${escapeHtml(summary)}</p>`;
+  }
+  if (Number.isFinite(Number(snap.unitPrice))) {
+    return `<p class="property-deferred__price">Snapshot: ${snap.qty || 1}× ${escapeHtml(snap.label || "line")} @ $${Number(snap.unitPrice).toFixed(2)}</p>`;
+  }
+  return "";
+}
+
+function renderDeferredItem(property, item) {
+  const li = document.createElement("li");
+  li.className = "property-deferred__item";
+  li.dataset.deferredId = item.id;
+  li.dataset.status = item.status || "open";
+  const reDef = Number(item.reDeferralCount) || 0;
+  if (reDef >= 3) li.dataset.flagged = "true";
+  if (item.severity === "emergency") li.dataset.severity = "emergency";
+
+  const typeLabel = DEFERRED_TYPE_LABELS[item.type] || item.type || "Issue";
+  const declinedDate = item.declinedAt
+    ? new Date(item.declinedAt).toLocaleDateString("en-CA", { month: "short", day: "numeric", year: "numeric" })
+    : "—";
+  const ageDays = item.declinedAt
+    ? Math.max(0, Math.round((Date.now() - new Date(item.declinedAt).getTime()) / 86400000))
+    : null;
+  const woLink = item.fromWoId
+    ? `<a href="/admin/work-order/${encodeURIComponent(item.fromWoId)}" class="property-deferred__source">${item.fromWoId}</a>`
+    : "";
+  const zoneTag = Number.isFinite(Number(item.fromZone)) ? `· Zone ${item.fromZone}` : "";
+
+  const pills = [];
+  if (item.status === "pre_authorized") pills.push(`<span class="property-deferred__pill property-deferred__pill--preauth">✓ Customer pre-authorized</span>`);
+  if (item.status === "in_progress") pills.push(`<span class="property-deferred__pill property-deferred__pill--progress">In progress (this visit)</span>`);
+  if (item.status === "resolved") pills.push(`<span class="property-deferred__pill property-deferred__pill--resolved">Resolved</span>`);
+  if (item.status === "dismissed") pills.push(`<span class="property-deferred__pill property-deferred__pill--dismissed">Dismissed</span>`);
+  if (item.severity === "emergency") pills.push(`<span class="property-deferred__pill property-deferred__pill--emergency">🚨 Emergency</span>`);
+  if (reDef >= 1) pills.push(`<span class="property-deferred__pill property-deferred__pill--repeat${reDef >= 3 ? " property-deferred__pill--repeat-flag" : ""}">${reDef}× declined</span>`);
+  if (ageDays != null) pills.push(`<span class="property-deferred__pill property-deferred__pill--age">${ageDays}d old</span>`);
+
+  const priceLine = renderSnapshotSummary(item.suggestedPriceSnapshot);
+  const photoChips = Array.isArray(item.photoIds) && item.photoIds.length && item.fromWoId
+    ? `<div class="property-deferred__photos">${item.photoIds.map((n) => `<a href="/api/work-orders/${encodeURIComponent(item.fromWoId)}/photo/${encodeURIComponent(n)}" target="_blank" rel="noopener">📷 ${escapeHtml(String(n))}</a>`).join("")}</div>`
+    : "";
+  const preAuthMeta = item.preAuthorization
+    ? `<p class="property-deferred__preauth">Pre-authorized by ${escapeHtml(item.preAuthorization.customerName || "customer")} on ${escapeHtml(new Date(item.preAuthorization.signedAt).toLocaleString())}</p>`
+    : "";
+  const resolutionMeta = item.resolution && item.resolution.resolvedAt
+    ? `<p class="property-deferred__resolution">${escapeHtml(item.resolution.resolvedBy || "admin")} · ${escapeHtml(new Date(item.resolution.resolvedAt).toLocaleDateString())}${item.resolution.resolvedInWoId ? " · " : ""}${item.resolution.resolvedInWoId ? `<a href="/admin/work-order/${encodeURIComponent(item.resolution.resolvedInWoId)}">${escapeHtml(item.resolution.resolvedInWoId)}</a>` : ""}${item.resolution.note ? " — " + escapeHtml(item.resolution.note) : ""}</p>`
+    : "";
+
+  // Admin action set depends on status:
+  //   open           → Mark resolved | Dismiss
+  //   pre_authorized → Dismiss
+  //   in_progress    → (no admin actions; tech's WO sign promotes to resolved)
+  //   resolved/dismissed → no actions
+  let actionsHtml = "";
+  if (item.status === "open") {
+    actionsHtml = `
+      <div class="property-deferred__actions">
+        <button type="button" class="property-deferred__btn" data-defer-action="resolved">Mark resolved</button>
+        <button type="button" class="property-deferred__btn property-deferred__btn--danger" data-defer-action="dismissed">Dismiss</button>
+      </div>`;
+  } else if (item.status === "pre_authorized") {
+    actionsHtml = `
+      <div class="property-deferred__actions">
+        <button type="button" class="property-deferred__btn property-deferred__btn--danger" data-defer-action="dismissed">Dismiss</button>
+      </div>`;
+  }
+
+  // Three-year forced-decision banner — visual prominence over an
+  // ignored item per spec rule #15. The buttons just route to the
+  // existing actions; the banner forces eyes-on attention.
+  const threeYearBanner = (reDef >= 3 && (item.status === "open" || item.status === "pre_authorized"))
+    ? `<div class="property-deferred__threeyear">⚠ This item has been declined ${reDef} years in a row. Resolve, escalate to the customer, or dismiss it.</div>`
+    : "";
+
+  li.innerHTML = `
+    ${threeYearBanner}
+    <div class="property-deferred__head">
+      <strong>${escapeHtml(typeLabel)}</strong>
+      <span class="property-deferred__qty">qty ${escapeHtml(String(item.qty || 1))}</span>
+      ${pills.join("")}
+    </div>
+    <p class="property-deferred__meta">${item.status === "open" ? "Declined" : "First seen"} ${escapeHtml(declinedDate)} ${zoneTag} ${woLink ? "· from " + woLink : ""}</p>
+    ${item.notes ? `<p class="property-deferred__notes">${escapeHtml(item.notes)}</p>` : ""}
+    ${priceLine}
+    ${photoChips}
+    ${preAuthMeta}
+    ${resolutionMeta}
+    ${actionsHtml}
+  `;
+  return li;
+}
+
 function renderDeferredRecommendations(property) {
   const section = document.getElementById("deferredSection");
   const list = document.getElementById("deferredList");
   const countEl = document.getElementById("deferredCount");
   if (!section || !list) return;
-  const items = (property.deferredIssues || []).filter((d) => d && d.status !== "resolved" && d.status !== "dismissed");
-  if (!items.length) {
+  const all = Array.isArray(property.deferredIssues) ? property.deferredIssues : [];
+  const open = all.filter((d) => d && (d.status === "open" || d.status === "pre_authorized" || d.status === "in_progress"));
+  const history = all.filter((d) => d && (d.status === "resolved" || d.status === "dismissed"));
+  if (!open.length && !history.length) {
     section.hidden = true;
     return;
   }
   section.hidden = false;
-  if (countEl) countEl.textContent = String(items.length);
+  if (countEl) countEl.textContent = String(open.length);
   list.innerHTML = "";
-  for (const item of items) {
-    const li = document.createElement("li");
-    li.className = "property-deferred__item";
-    const typeLabel = DEFERRED_TYPE_LABELS[item.type] || item.type || "Issue";
-    const declinedDate = item.declinedAt
-      ? new Date(item.declinedAt).toLocaleDateString("en-CA", { month: "short", day: "numeric", year: "numeric" })
-      : "—";
-    const woLink = item.fromWoId
-      ? `<a href="/admin/work-order/${encodeURIComponent(item.fromWoId)}" class="property-deferred__source">${item.fromWoId}</a>`
-      : "";
-    const zoneTag = Number.isFinite(Number(item.fromZone)) ? `· Zone ${item.fromZone}` : "";
-    const priceLine = item.suggestedPriceSnapshot && Number.isFinite(Number(item.suggestedPriceSnapshot.unitPrice))
-      ? `<p class="property-deferred__price">Snapshot: ${item.suggestedPriceSnapshot.qty || 1}× ${escapeHtml(item.suggestedPriceSnapshot.label || typeLabel)} @ $${Number(item.suggestedPriceSnapshot.unitPrice).toFixed(2)}</p>`
-      : "";
-    const photoChips = Array.isArray(item.photoIds) && item.photoIds.length && item.fromWoId
-      ? `<div class="property-deferred__photos">${item.photoIds.map((n) => `<a href="/api/work-orders/${encodeURIComponent(item.fromWoId)}/photo/${encodeURIComponent(n)}" target="_blank" rel="noopener">📷 ${escapeHtml(String(n))}</a>`).join("")}</div>`
-      : "";
-    li.innerHTML = `
-      <div class="property-deferred__head">
-        <strong>${escapeHtml(typeLabel)}</strong>
-        <span class="property-deferred__qty">qty ${escapeHtml(String(item.qty || 1))}</span>
-      </div>
-      <p class="property-deferred__meta">Declined ${escapeHtml(declinedDate)} ${zoneTag} ${woLink ? "· from " + woLink : ""}</p>
-      ${item.notes ? `<p class="property-deferred__notes">${escapeHtml(item.notes)}</p>` : ""}
-      ${priceLine}
-      ${photoChips}
-    `;
-    list.appendChild(li);
+  list.dataset.propertyId = property.id;
+  for (const item of open) list.appendChild(renderDeferredItem(property, item));
+  if (history.length) {
+    const summary = document.createElement("details");
+    summary.className = "property-deferred__history";
+    summary.innerHTML = `<summary>History (${history.length})</summary><ul class="property-deferred__history-list"></ul>`;
+    const inner = summary.querySelector("ul");
+    for (const item of history) inner.appendChild(renderDeferredItem(property, item));
+    list.appendChild(summary);
   }
 }
+
+// Admin lifecycle action: PATCH /api/properties/:id/deferred/:deferredId
+// {status: "resolved"|"dismissed"}. Wired via delegation on the list.
+document.getElementById("deferredList")?.addEventListener("click", async (event) => {
+  const btn = event.target.closest("[data-defer-action]");
+  if (!btn) return;
+  const li = btn.closest("[data-deferred-id]");
+  const list = document.getElementById("deferredList");
+  const propertyId = list?.dataset.propertyId;
+  if (!li || !propertyId) return;
+  const deferredId = li.dataset.deferredId;
+  const action = btn.dataset.deferAction;
+  if (!confirm(`Mark this item as "${action}"?`)) return;
+  let note = "";
+  if (action === "dismissed") {
+    note = prompt("Optional note (why dismissed?)", "") || "";
+  }
+  btn.disabled = true;
+  try {
+    const r = await fetch(`/api/properties/${encodeURIComponent(propertyId)}/deferred/${encodeURIComponent(deferredId)}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ status: action, note })
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok || !data.ok) throw new Error((data.errors && data.errors[0]) || "Couldn't update.");
+    // Pull a fresh property and re-render — keeps grouping/counts correct.
+    const fresh = await fetch(`/api/properties/${encodeURIComponent(propertyId)}`).then((r) => r.json()).catch(() => null);
+    if (fresh?.property) renderDeferredRecommendations(fresh.property);
+  } catch (err) {
+    alert(err.message || "Couldn't update.");
+    btn.disabled = false;
+  }
+});
 
 function renderLeadsList(leads) {
   if (!leads.length) {

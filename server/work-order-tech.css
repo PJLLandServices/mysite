@@ -1796,3 +1796,300 @@ body[data-locked="true"] .tech-on-site-defer {
   box-shadow: var(--tech-shadow);
 }
 .tech-sheet-done:active { transform: scale(0.98); }
+
+/* ---- Carry-forward banner (spec §5) ----------------------------------
+   Spring opening WOs surface every open + pre-authorized deferred item
+   from the property's history at the top of the WO so the tech walks in
+   knowing what to fix. Per-card actions wire to the carry-forward PATCH. */
+
+.tech-carry-forward {
+  margin: 18px 16px 0;
+  padding: 16px;
+  background: #FFF8E6;
+  border: 1px solid #E6D17B;
+  border-radius: 12px;
+}
+.tech-carry-forward-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 0 0 4px;
+}
+.tech-carry-forward-count {
+  font-weight: 700;
+  color: #7A5C00;
+  background: #FBEBA2;
+  border-radius: 999px;
+  padding: 2px 12px;
+  font-size: 14px;
+}
+.tech-carry-forward-help {
+  margin: 0 0 14px;
+  font-size: 13px;
+  color: #7A5C00;
+}
+.tech-carry-forward-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.tech-cf-card {
+  background: #fff;
+  border: 1px solid #E6D17B;
+  border-radius: 10px;
+  padding: 12px 14px;
+  display: grid;
+  gap: 10px;
+}
+.tech-cf-card[data-status="pre_authorized"] {
+  border-color: #2F8254;
+  background: #F4FBF6;
+}
+.tech-cf-card[data-flagged="true"] {
+  border-color: #C03A2C;
+  background: #FFF1EE;
+}
+.tech-cf-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.tech-cf-zone {
+  background: #1B4D2E;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 3px 10px;
+  border-radius: 999px;
+  letter-spacing: 0.04em;
+}
+.tech-cf-type {
+  font-weight: 700;
+  color: #1F2A22;
+  font-size: 15px;
+}
+.tech-cf-pill {
+  margin-left: auto;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 10px;
+  border-radius: 999px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.tech-cf-pill--preauth {
+  background: #1B4D2E;
+  color: #EAF3DE;
+}
+.tech-cf-pill--repeat {
+  background: #C03A2C;
+  color: #fff;
+}
+.tech-cf-pill--age {
+  background: #EFEFE5;
+  color: #555;
+  text-transform: none;
+}
+.tech-cf-notes {
+  margin: 0;
+  color: #444;
+  font-size: 14px;
+  line-height: 1.45;
+}
+.tech-cf-photos {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.tech-cf-photo {
+  width: 64px;
+  height: 64px;
+  border-radius: 8px;
+  background: #EFEFE5 center/cover no-repeat;
+  border: 1px solid #d8d8c9;
+}
+.tech-cf-price {
+  font-size: 13px;
+  color: #444;
+  background: #FAFAF5;
+  border: 1px solid #E5E5DD;
+  border-radius: 8px;
+  padding: 8px 10px;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 4px 12px;
+}
+.tech-cf-price-line {
+  display: contents;
+}
+.tech-cf-price-label { color: #555; }
+.tech-cf-price-amount { color: #1F2A22; font-weight: 600; font-variant-numeric: tabular-nums; }
+.tech-cf-price-total { font-weight: 700; color: #1B4D2E; padding-top: 4px; border-top: 1px solid #E5E5DD; margin-top: 4px; }
+.tech-cf-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.tech-cf-action {
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid #d8d8c9;
+  background: #FAFAF5;
+  color: #1F2A22;
+  cursor: pointer;
+  min-height: 44px;
+}
+.tech-cf-action--primary {
+  background: #1B4D2E;
+  color: #fff;
+  border-color: #1B4D2E;
+}
+.tech-cf-action--danger {
+  background: #fff;
+  color: #C03A2C;
+  border-color: #E6BCB7;
+}
+.tech-cf-action:disabled { opacity: 0.4; cursor: not-allowed; }
+.tech-cf-action:active { transform: scale(0.98); }
+.tech-cf-empty {
+  margin: 0;
+  font-size: 13px;
+  color: #7A5C00;
+  font-style: italic;
+}
+
+/* ---- Per-issue defer + emergency buttons (fall closing only) ----------
+   Inline at the bottom of each issue row in the zone sheet. Hidden via
+   .tech-zone-issue:not(.is-fall-mode) so the rest of the time they don't
+   compete with the type/qty/notes inputs for visual space. */
+
+.tech-zone-issue-fall-actions {
+  display: none;
+  grid-column: 1 / -1;
+  gap: 8px;
+  margin-top: 6px;
+}
+.tech-zone-issue.is-fall-mode .tech-zone-issue-fall-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+}
+.tech-zone-issue-defer-btn,
+.tech-zone-issue-emergency-btn {
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 8px 10px;
+  border-radius: 7px;
+  border: 1px solid #d8d8c9;
+  background: #FAFAF5;
+  color: #1F2A22;
+  cursor: pointer;
+  min-height: 38px;
+}
+.tech-zone-issue-defer-btn { color: #7A5C00; border-color: #E6D17B; background: #FFF8E6; }
+.tech-zone-issue-emergency-btn { color: #C03A2C; border-color: #E6BCB7; background: #FFF1EE; }
+.tech-zone-issue-defer-btn:active,
+.tech-zone-issue-emergency-btn:active { transform: scale(0.98); }
+
+/* ---- Emergency override modal ---------------------------------------- */
+
+.tech-emergency-modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 31, 20, 0.55);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  z-index: 200;
+  padding: 16px;
+}
+@media (min-width: 600px) {
+  .tech-emergency-modal { align-items: center; }
+}
+.tech-emergency-card {
+  background: #fff;
+  width: 100%;
+  max-width: 440px;
+  border-radius: 14px 14px 4px 4px;
+  padding: 18px 18px 14px;
+  box-shadow: 0 -8px 30px rgba(15, 31, 20, 0.25);
+  display: grid;
+  gap: 10px;
+}
+@media (min-width: 600px) {
+  .tech-emergency-card { border-radius: 14px; }
+}
+.tech-emergency-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.tech-emergency-header h2 { margin: 0; font-size: 18px; color: #C03A2C; }
+.tech-emergency-close {
+  background: none;
+  border: 0;
+  font-size: 26px;
+  line-height: 1;
+  color: #555;
+  cursor: pointer;
+}
+.tech-emergency-help { margin: 0; font-size: 13px; color: #555; line-height: 1.5; }
+.tech-emergency-issue {
+  margin: 0;
+  font-weight: 700;
+  color: #1F2A22;
+  background: #FFF1EE;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid #E6BCB7;
+}
+.tech-emergency-label { font-weight: 600; font-size: 13px; color: #444; }
+.tech-emergency-select,
+.tech-emergency-input {
+  font-family: inherit;
+  font-size: 16px;
+  padding: 10px 12px;
+  border: 1px solid #d8d8c9;
+  border-radius: 8px;
+  background: #fff;
+}
+.tech-emergency-canvas {
+  width: 100%;
+  height: 140px;
+  border: 1px dashed #C03A2C;
+  border-radius: 8px;
+  background: #fff;
+  touch-action: none;
+}
+.tech-emergency-actions {
+  display: grid;
+  grid-template-columns: 1fr 2fr;
+  gap: 8px;
+}
+.tech-emergency-clear,
+.tech-emergency-submit {
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  padding: 10px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  min-height: 44px;
+}
+.tech-emergency-clear {
+  background: #fff;
+  color: #555;
+  border: 1px solid #d8d8c9;
+}
+.tech-emergency-submit {
+  background: #C03A2C;
+  color: #fff;
+  border: 1px solid #C03A2C;
+}
+.tech-emergency-submit:disabled { opacity: 0.4; cursor: not-allowed; }
+.tech-emergency-error { margin: 0; color: #C03A2C; font-size: 13px; }

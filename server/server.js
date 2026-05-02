@@ -1864,6 +1864,149 @@ async function handleApi(req, res, pathname) {
     return;
   }
 
+  // Portal-scoped deferred recommendations list. Token-resolved (NOT admin
+  // cookie). Returns the LINKED PROPERTY's open deferred items so the
+  // customer can see what their tech recommended last visit and pre-authorize
+  // the work for spring. Pre-authorized items are NOT returned here (the
+  // card hides once signed; admin/tech see them via the WO carry-forward
+  // banner). Spec §6 (customer portal — view open recommendations).
+  const portalDeferredListMatch = pathname.match(/^\/api\/portal\/([^/]+)\/deferred$/);
+  if (portalDeferredListMatch && req.method === "GET") {
+    try {
+      const token = decodeURIComponent(portalDeferredListMatch[1]);
+      const leads = await readLeads();
+      const lead = leads.find((l) => (l.portal?.token || portalTokenForId(l.id)) === token);
+      if (!lead) return sendJson(res, 404, { ok: false, errors: ["Portal not found."] });
+      if (!lead.propertyId) return sendJson(res, 200, { ok: true, deferred: [] });
+      const list = await properties.listDeferred(lead.propertyId, { status: "open" });
+      // Strip server-only fields. Customer sees: id, type, qty, fromZone,
+      // notes, suggestedPriceSnapshot, photoIds, declinedAt. Photo URLs are
+      // resolved client-side via /api/portal/<token>/wo-photo/... (added
+      // below) so the portal token controls access.
+      const safe = list.map((d) => ({
+        id: d.id,
+        type: d.type,
+        qty: d.qty,
+        fromZone: d.fromZone,
+        fromWoId: d.fromWoId,
+        notes: d.notes,
+        photoIds: d.photoIds,
+        suggestedPriceSnapshot: d.suggestedPriceSnapshot,
+        declinedAt: d.declinedAt,
+        reDeferralCount: d.reDeferralCount
+      }));
+      return sendJson(res, 200, { ok: true, deferred: safe });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't list deferred items."] });
+    }
+  }
+
+  // Portal-side photo fetch for WO photos (deferred items reference back).
+  // The lead must own the property the WO belongs to. Same caching policy
+  // as the existing portal /photo/<n> route.
+  const portalWoPhotoMatch = pathname.match(/^\/api\/portal\/([^/]+)\/wo-photo\/([^/]+)\/(\d+)$/);
+  if (portalWoPhotoMatch && req.method === "GET") {
+    try {
+      const token = decodeURIComponent(portalWoPhotoMatch[1]);
+      const woId = decodeURIComponent(portalWoPhotoMatch[2]);
+      const n = Number(portalWoPhotoMatch[3]);
+      const leads = await readLeads();
+      const lead = leads.find((l) => (l.portal?.token || portalTokenForId(l.id)) === token);
+      if (!lead) return sendJson(res, 404, { ok: false, errors: ["Portal not found."] });
+      const wo = await workOrders.get(woId);
+      if (!wo) return sendJson(res, 404, { ok: false, errors: ["Work order not found."] });
+      // Authorization: the WO must belong to the lead's linked property.
+      if (!lead.propertyId || wo.propertyId !== lead.propertyId) {
+        return sendJson(res, 403, { ok: false, errors: ["Forbidden."] });
+      }
+      const photoMeta = (wo.photos || []).find((p) => Number(p.n) === n);
+      if (!photoMeta) return sendJson(res, 404, { ok: false, errors: ["Photo not found."] });
+      const file = await readWorkOrderPhotoFile(woId, n);
+      if (!file) return sendJson(res, 404, { ok: false, errors: ["Photo not found on disk."] });
+      res.writeHead(200, {
+        "content-type": file.mediaType,
+        "cache-control": "private, max-age=86400",
+        "content-length": file.data.length
+      });
+      res.end(file.data);
+      return;
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't serve photo."] });
+    }
+  }
+
+  // Portal pre-authorize a deferred recommendation. Body:
+  //   { customerName, imageData }
+  // Stamps a non-binding signature on the deferred entry so the spring tech
+  // can render "✓ Already authorized" on the carry-forward banner. The
+  // binding contract is still the spring WO sign-off (spec rule #11) — this
+  // is a promise to do the work, not the work itself.
+  const portalPreAuthMatch = pathname.match(/^\/api\/portal\/([^/]+)\/deferred\/([^/]+)\/pre-authorize$/);
+  if (portalPreAuthMatch && req.method === "POST") {
+    try {
+      const token = decodeURIComponent(portalPreAuthMatch[1]);
+      const deferredId = decodeURIComponent(portalPreAuthMatch[2]);
+      const payload = await parseRequestBody(req);
+      const customerName = typeof payload?.customerName === "string" ? payload.customerName.trim() : "";
+      const imageData = typeof payload?.imageData === "string" ? payload.imageData : "";
+      if (!customerName || !imageData || imageData.length < 50) {
+        return sendJson(res, 422, { ok: false, errors: ["Customer name and signature are required."] });
+      }
+      if (imageData.length > 500_000) {
+        return sendJson(res, 422, { ok: false, errors: ["Signature image is too large."] });
+      }
+
+      const leads = await readLeads();
+      const lead = leads.find((l) => (l.portal?.token || portalTokenForId(l.id)) === token);
+      if (!lead) return sendJson(res, 404, { ok: false, errors: ["Portal not found."] });
+      if (!lead.propertyId) return sendJson(res, 422, { ok: false, errors: ["Portal has no linked property."] });
+
+      const handle = await properties.getDeferredIssue(lead.propertyId, deferredId);
+      if (!handle) return sendJson(res, 404, { ok: false, errors: ["Deferred item not found."] });
+      if (handle.entry.status !== "open") {
+        return sendJson(res, 409, { ok: false, errors: [`This recommendation is already ${handle.entry.status} — nothing to pre-authorize.`] });
+      }
+
+      const ip = (req.headers["x-forwarded-for"] || "").split(",")[0].trim() || req.socket?.remoteAddress || "";
+      const userAgent = req.headers["user-agent"] || "";
+      const updated = await properties.updateDeferredIssue(lead.propertyId, deferredId, {
+        status: "pre_authorized",
+        preAuthorization: {
+          signedAt: new Date().toISOString(),
+          customerName,
+          imageData,
+          ip,
+          userAgent
+        }
+      });
+
+      // Notify Patrick — pre-auth is meaningful business news (the customer
+      // committed to spending money in spring). Reuse the existing lead-shaped
+      // alias pattern so we don't have to build a separate notify pipeline.
+      const baseUrl = process.env.PUBLIC_BASE_URL || baseUrlFromReq(req);
+      const total = updated?.suggestedPriceSnapshot?.total || 0;
+      const aliasLead = {
+        id: lead.id,
+        sourceLabel: "PORTAL pre-authorization",
+        contact: {
+          name: customerName,
+          phone: lead.contact?.phone || "",
+          email: lead.contact?.email || "",
+          address: lead.contact?.address || "",
+          notes: `Pre-authorized: ${updated?.suggestedPriceSnapshot?.lineItems?.[0]?.label || updated?.type || "(item)"} ($${total.toFixed(2)} incl. HST). Defers to spring WO.`
+        }
+      };
+      Promise.allSettled([
+        sendNewLeadEmail(aliasLead, { baseUrl }),
+        sendNewLeadSms(aliasLead, { baseUrl })
+      ]).catch(() => {});
+
+      return sendJson(res, 200, { ok: true, deferred: updated });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't pre-authorize."] });
+    }
+  }
+
   // Customer-side endpoints, authenticated by portal token (NOT admin cookie).
   // Match path: /api/portal/<token>/<action>
   const portalActionMatch = pathname.match(/^\/api\/portal\/([^/]+)\/(accept|message)$/);
@@ -2083,6 +2226,71 @@ async function handleApi(req, res, pathname) {
         bookingCount: (p.leadIds || []).length
       }))
     });
+  }
+
+  // List a property's deferred recommendations. Optional ?status=open or
+  // ?status=open,pre_authorized filter — used by the property page (all),
+  // the spring WO carry-forward banner (open + pre_authorized), and any
+  // future dashboard summary. Admin-only via the auth gate above.
+  const propertyDeferredListMatch = pathname.match(/^\/api\/properties\/([^/]+)\/deferred$/);
+  if (propertyDeferredListMatch && req.method === "GET") {
+    try {
+      const propertyId = decodeURIComponent(propertyDeferredListMatch[1]);
+      const url = new URL(req.url, baseUrlFromReq(req));
+      const statusParam = url.searchParams.get("status");
+      const statusFilter = statusParam
+        ? statusParam.split(",").map((s) => s.trim()).filter(Boolean)
+        : null;
+      const list = await properties.listDeferred(propertyId, { status: statusFilter });
+      return sendJson(res, 200, { ok: true, deferred: list });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't list deferred items."] });
+    }
+  }
+
+  // Admin lifecycle endpoint — Patrick marks a deferred item resolved or
+  // dismissed manually (e.g. customer fixed it themselves, no longer
+  // applicable). Body: { status, note }. Allowed transitions:
+  //   open           → dismissed | resolved
+  //   pre_authorized → dismissed
+  // Other transitions flow through the carry-forward endpoint (in the WO
+  // context) so the audit trail captures which WO resolved them.
+  const propertyDeferredMutateMatch = pathname.match(/^\/api\/properties\/([^/]+)\/deferred\/([^/]+)$/);
+  if (propertyDeferredMutateMatch && req.method === "PATCH") {
+    try {
+      const propertyId = decodeURIComponent(propertyDeferredMutateMatch[1]);
+      const deferredId = decodeURIComponent(propertyDeferredMutateMatch[2]);
+      const payload = await parseRequestBody(req);
+      const targetStatus = String(payload?.status || "");
+      const note = typeof payload?.note === "string" ? payload.note.slice(0, 500) : "";
+
+      const handle = await properties.getDeferredIssue(propertyId, deferredId);
+      if (!handle) return sendJson(res, 404, { ok: false, errors: ["Deferred item not found."] });
+
+      const allowed = {
+        open: new Set(["dismissed", "resolved"]),
+        pre_authorized: new Set(["dismissed"])
+      };
+      const currentStatus = handle.entry.status || "open";
+      if (!allowed[currentStatus] || !allowed[currentStatus].has(targetStatus)) {
+        return sendJson(res, 422, { ok: false, errors: [
+          `Cannot transition deferred item from "${currentStatus}" to "${targetStatus}" via this endpoint. Use the WO carry-forward endpoint for in-flight resolutions.`
+        ] });
+      }
+
+      const updated = await properties.updateDeferredIssue(propertyId, deferredId, {
+        status: targetStatus,
+        resolution: {
+          resolvedAt: new Date().toISOString(),
+          resolvedBy: "admin",
+          resolvedInWoId: null,
+          note: note || (targetStatus === "dismissed" ? "Dismissed by admin." : "Marked resolved by admin.")
+        }
+      });
+      return sendJson(res, 200, { ok: true, deferred: updated });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't update deferred item."] });
+    }
   }
 
   // Move a lead between properties — confirms a "suggested" link OR
@@ -2528,6 +2736,33 @@ async function handleApi(req, res, pathname) {
 
       const updated = await workOrders.update(id, payload);
       if (!updated) return sendJson(res, 404, { ok: false, errors: ["Work order not found."] });
+
+      // Sign-time sweep: if THIS PATCH just signed the WO, find every
+      // deferred item that was queued via the carry-forward "Repair now"
+      // action against this WO (status=in_progress + resolution.resolvedInWoId
+      // = wo.id) and flip them to "resolved". This is the moment they
+      // become contractually fixed per spec rule #11. Resolutions inherit
+      // the WO's signature timestamp so the audit trail lines up.
+      if (updated.signature?.signed && updated.locked && updated.propertyId) {
+        try {
+          const allDeferred = await properties.listDeferred(updated.propertyId, { status: "in_progress" });
+          for (const entry of allDeferred) {
+            if (entry?.resolution?.resolvedInWoId === updated.id) {
+              await properties.updateDeferredIssue(updated.propertyId, entry.id, {
+                status: "resolved",
+                resolution: {
+                  ...entry.resolution,
+                  resolvedAt: updated.signature.signedAt || new Date().toISOString(),
+                  resolvedBy: "tech-signed"
+                }
+              });
+            }
+          }
+        } catch (err) {
+          console.warn("[wo-sign] deferred sweep failed:", err?.message);
+        }
+      }
+
       return sendJson(res, 200, { ok: true, workOrder: updated });
     } catch (error) {
       return sendJson(res, 400, { ok: false, errors: [error.message || "Couldn't update work order."] });
@@ -2537,6 +2772,25 @@ async function handleApi(req, res, pathname) {
   if (workOrderMatch && req.method === "DELETE") {
     try {
       const id = decodeURIComponent(workOrderMatch[1]);
+
+      // Delete guard — refuse to hard-delete a WO that has active deferred
+      // children referencing it (open / pre_authorized / in_progress).
+      // Otherwise the spring banner would render with broken photo refs
+      // (wo-photos/<woId>/<n>.<ext> would 404). Resolved/dismissed entries
+      // are fine to orphan — the resolution timestamp is the audit trail.
+      const woBeingDeleted = await workOrders.get(id);
+      if (woBeingDeleted?.propertyId) {
+        const allDeferred = await properties.listDeferred(woBeingDeleted.propertyId);
+        const blocking = allDeferred.filter((d) =>
+          d.fromWoId === id && ["open", "pre_authorized", "in_progress"].includes(d.status)
+        );
+        if (blocking.length) {
+          return sendJson(res, 409, { ok: false, errors: [
+            `Cannot delete this work order — it has ${blocking.length} active deferred recommendation${blocking.length === 1 ? "" : "s"} referencing it. Resolve or dismiss those first from the property page.`
+          ] });
+        }
+      }
+
       const removed = await workOrders.remove(id);
       if (!removed) return sendJson(res, 404, { ok: false, errors: ["Work order not found."] });
       // Clear the lead's pointer so the CRM doesn't show a dangling link.
@@ -3040,8 +3294,212 @@ async function handleApi(req, res, pathname) {
     }
   }
 
+  // ======== Deferred issues — fall path + emergency override ========
+  // Spec §5 (carry-forward engine) + Hard Rule §10 #7 (fall closings never
+  // auto-quote — defer-only) and #13 (emergency overrides notify Patrick
+  // immediately).
+
+  // Helper — build the deferred entry shape for a single WO issue. Used by
+  // both the per-issue defer endpoint and the bulk defer-all endpoint so
+  // the snapshot pricing logic stays consistent. Returns null if the issue
+  // can't be located on the WO (caller treats as a no-op).
+  function deferredPayloadFromIssue(wo, zoneNumber, issue, reason) {
+    const photoIds = (wo.photos || [])
+      .filter((p) => p.issueId === issue.id)
+      .map((p) => Number(p.n))
+      .filter(Number.isFinite);
+    let priceSnapshot = null;
+    try {
+      priceSnapshot = issueRollup.rollupSingleIssueToLineItems(issue, Number(zoneNumber) || 0, PRICING);
+    } catch (err) {
+      console.warn("[defer] price snapshot failed:", err?.message);
+    }
+    return {
+      fromWoId: wo.id,
+      fromZone: Number(zoneNumber) || null,
+      type: issue.type,
+      qty: Number(issue.qty) || 1,
+      notes: issue.notes || "",
+      reason: reason || "customer_declined",
+      photoIds,
+      suggestedPriceSnapshot: priceSnapshot
+    };
+  }
+
+  // Per-issue defer (granular tap-to-defer in the tech UI). Body: { reason }.
+  // Removes the issue from the WO zone (so the rollup builder doesn't
+  // re-pick it) and creates one deferredIssue on the linked property.
+  // Permitted on any WO type — spring carry-forward "Customer declined" path
+  // also routes here (with reason=customer_declined_spring).
+  const woPerIssueDeferMatch = pathname.match(/^\/api\/work-orders\/([^/]+)\/zones\/(\d+)\/issues\/([^/]+)\/defer$/);
+  if (woPerIssueDeferMatch && req.method === "POST") {
+    try {
+      const id = decodeURIComponent(woPerIssueDeferMatch[1]);
+      const zoneNumber = Number(woPerIssueDeferMatch[2]);
+      const issueId = decodeURIComponent(woPerIssueDeferMatch[3]);
+      const payload = await parseRequestBody(req).catch(() => ({}));
+      const wo = await workOrders.get(id);
+      if (!wo) return sendJson(res, 404, { ok: false, errors: ["Work order not found."] });
+      if (wo.locked || wo.signature?.signed) {
+        return sendJson(res, 409, { ok: false, errors: ["Work order is locked."] });
+      }
+      const propertyId = wo.propertyId || null;
+      if (!propertyId) {
+        return sendJson(res, 422, { ok: false, errors: ["Cannot defer — work order has no linked property."] });
+      }
+
+      // Find the issue on the WO and clone the zones array minus this one.
+      const zones = (wo.zones || []).map((z) => ({ ...z, issues: [...(z.issues || [])] }));
+      const zoneIdx = zones.findIndex((z) => Number(z.number) === zoneNumber);
+      if (zoneIdx === -1) return sendJson(res, 404, { ok: false, errors: ["Zone not found on this work order."] });
+      const issueIdx = zones[zoneIdx].issues.findIndex((i) => i.id === issueId);
+      if (issueIdx === -1) return sendJson(res, 404, { ok: false, errors: ["Issue not found on this zone."] });
+      const [issue] = zones[zoneIdx].issues.splice(issueIdx, 1);
+
+      // Default reason: fall_visit_no_repairs_policy on fall closings,
+      // customer_declined_spring on spring carry-forward declines, or
+      // whatever the client passes.
+      let reason = typeof payload?.reason === "string" ? payload.reason : null;
+      if (!reason) {
+        reason = wo.type === "fall_closing" ? "fall_visit_no_repairs_policy" : "customer_declined";
+      }
+
+      const entry = await properties.addDeferredIssue(propertyId, deferredPayloadFromIssue(wo, zoneNumber, issue, reason));
+      if (!entry) return sendJson(res, 500, { ok: false, errors: ["Couldn't write deferred entry."] });
+
+      const updatedWo = await workOrders.update(id, { zones });
+      return sendJson(res, 201, { ok: true, deferred: entry, workOrder: updatedWo });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't defer issue."] });
+    }
+  }
+
+  // Emergency override — fall closing only. Promotes a single issue to an
+  // emergency severity, fires immediate Patrick notifications (Hard Rule #13),
+  // creates a follow-up service_visit WO with the issue's diagnosis pre-filled.
+  // Customer signature is REQUIRED — they're authorizing the fall_closing's
+  // find-only rule to be broken for this specific item.
+  const woEmergencyMatch = pathname.match(/^\/api\/work-orders\/([^/]+)\/zones\/(\d+)\/issues\/([^/]+)\/emergency$/);
+  if (woEmergencyMatch && req.method === "POST") {
+    try {
+      const id = decodeURIComponent(woEmergencyMatch[1]);
+      const zoneNumber = Number(woEmergencyMatch[2]);
+      const issueId = decodeURIComponent(woEmergencyMatch[3]);
+      const payload = await parseRequestBody(req);
+      const wo = await workOrders.get(id);
+      if (!wo) return sendJson(res, 404, { ok: false, errors: ["Work order not found."] });
+      if (wo.locked || wo.signature?.signed) {
+        return sendJson(res, 409, { ok: false, errors: ["Work order is locked."] });
+      }
+      if (wo.type !== "fall_closing") {
+        return sendJson(res, 422, { ok: false, errors: ["Emergency override only applies to fall closings."] });
+      }
+
+      const reasonEnum = new Set(["safety_hazard", "active_leak", "property_damage_risk", "other"]);
+      const severityReason = String(payload?.severity_reason || "").trim();
+      const sig = payload?.customerSignature || {};
+      if (!reasonEnum.has(severityReason)) {
+        return sendJson(res, 422, { ok: false, errors: ["severity_reason must be one of: safety_hazard, active_leak, property_damage_risk, other."] });
+      }
+      if (!sig.name || typeof sig.name !== "string" || !sig.imageData || typeof sig.imageData !== "string" || sig.imageData.length < 50) {
+        return sendJson(res, 422, { ok: false, errors: ["Customer signature (name + drawn image) is required for an emergency override."] });
+      }
+      if (sig.imageData.length > 500_000) {
+        return sendJson(res, 422, { ok: false, errors: ["Signature image is too large."] });
+      }
+
+      // Find the issue.
+      const zones = (wo.zones || []).map((z) => ({ ...z, issues: [...(z.issues || [])] }));
+      const zoneIdx = zones.findIndex((z) => Number(z.number) === zoneNumber);
+      if (zoneIdx === -1) return sendJson(res, 404, { ok: false, errors: ["Zone not found."] });
+      const issueIdx = zones[zoneIdx].issues.findIndex((i) => i.id === issueId);
+      if (issueIdx === -1) return sendJson(res, 404, { ok: false, errors: ["Issue not found."] });
+      const [issue] = zones[zoneIdx].issues.splice(issueIdx, 1);
+
+      const propertyId = wo.propertyId || null;
+      if (!propertyId) return sendJson(res, 422, { ok: false, errors: ["Work order has no linked property."] });
+
+      // Pull the property + lead so the follow-up WO inherits everything.
+      const property = await properties.get(propertyId);
+      const allLeads = wo.leadId ? await readLeads() : [];
+      const lead = wo.leadId ? allLeads.find((l) => l.id === wo.leadId) : null;
+
+      // 1) Create the deferred record (severity=emergency).
+      const ip = (req.headers["x-forwarded-for"] || "").split(",")[0].trim() || req.socket?.remoteAddress || "";
+      const userAgent = req.headers["user-agent"] || "";
+      const deferredPayload = {
+        ...deferredPayloadFromIssue(wo, zoneNumber, issue, "emergency_override"),
+        severity: "emergency"
+      };
+      const deferredEntry = await properties.addDeferredIssue(propertyId, deferredPayload);
+
+      // 2) Stamp the customer's authorizing signature onto the deferred record's
+      //    preAuthorization slot — same shape the portal pre-auth flow uses,
+      //    so the spring/follow-up WO can render "✓ Already authorized."
+      await properties.updateDeferredIssue(propertyId, deferredEntry.id, {
+        preAuthorization: {
+          signedAt: new Date().toISOString(),
+          customerName: sig.name.trim(),
+          imageData: sig.imageData,
+          ip,
+          userAgent
+        },
+        status: "pre_authorized"
+      });
+
+      // 3) Spin up the follow-up service_visit WO with diagnosis pre-filled.
+      const diagnosis = `EMERGENCY override from fall WO ${wo.id} (Zone ${zoneNumber}, ${issue.type}).
+Reason: ${severityReason}.
+Tech notes: ${issue.notes || "(none)"}
+Customer signature captured at ${new Date().toISOString()}.`;
+      let followupWoId = null;
+      try {
+        const followup = await workOrders.create({ type: "service_visit", lead, property });
+        await workOrders.update(followup.id, { diagnosis, techNotes: `Originating fall WO: ${wo.id}` });
+        followupWoId = followup.id;
+      } catch (err) {
+        console.warn("[emergency] follow-up WO create failed:", err?.message);
+      }
+
+      // 4) Update the fall WO — issue removed, note logged.
+      const techNotes = (wo.techNotes ? wo.techNotes + "\n\n" : "") +
+        `[EMERGENCY ${new Date().toISOString()}] Zone ${zoneNumber} ${issue.type}: ${severityReason}. Follow-up WO ${followupWoId || "(create failed — Patrick to handle manually)"}.`;
+      const updatedWo = await workOrders.update(id, { zones, techNotes });
+
+      // 5) Notify Patrick immediately (rule #13).
+      const baseUrl = process.env.PUBLIC_BASE_URL || baseUrlFromReq(req);
+      const aliasLead = {
+        id: wo.id,
+        sourceLabel: "EMERGENCY (fall override)",
+        contact: {
+          name: wo.customerName || "(unknown)",
+          phone: wo.customerPhone || "",
+          email: wo.customerEmail || "",
+          address: wo.address || "",
+          notes: `Zone ${zoneNumber} ${issue.type}: ${severityReason}. Follow-up WO: ${followupWoId || "FAILED — handle manually"}.`
+        }
+      };
+      Promise.allSettled([
+        sendNewLeadEmail(aliasLead, { baseUrl }),
+        sendNewLeadSms(aliasLead, { baseUrl })
+      ]).catch(() => {});
+
+      return sendJson(res, 201, {
+        ok: true,
+        deferred: deferredEntry,
+        followupWoId,
+        workOrder: updatedWo
+      });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't process emergency override."] });
+    }
+  }
+
   // Find_only path (fall closings): bundle every issue across every
   // zone into the property's deferredIssues without quoting. Spec rule 8.
+  // Each issue gets its own snapshot price via rollupSingleIssueToLineItems
+  // so the customer/portal sees real numbers, not nulls. Per-issue defer
+  // is also available above for granular UI flow.
   const woIssuesDeferMatch = pathname.match(/^\/api\/work-orders\/([^/]+)\/issues\/defer$/);
   if (woIssuesDeferMatch && req.method === "POST") {
     try {
@@ -3053,30 +3511,128 @@ async function handleApi(req, res, pathname) {
         return sendJson(res, 422, { ok: false, errors: ["Cannot defer issues — work order has no linked property."] });
       }
       const deferredIds = [];
+      const remainingZones = (wo.zones || []).map((z) => ({ ...z, issues: [] }));
       for (const z of wo.zones || []) {
         for (const issue of z.issues || []) {
-          const photoIds = (wo.photos || [])
-            .filter((p) => p.issueId === issue.id)
-            .map((p) => Number(p.n))
-            .filter(Number.isFinite);
           try {
-            const entry = await properties.addDeferredIssue(propertyId, {
-              fromWoId: wo.id,
-              fromZone: Number(z.number) || null,
-              type: issue.type,
-              qty: Number(issue.qty) || 1,
-              notes: issue.notes || "",
-              reason: "fall_visit_no_repairs_policy",
-              photoIds,
-              suggestedPriceSnapshot: null
-            });
+            const entry = await properties.addDeferredIssue(propertyId, deferredPayloadFromIssue(wo, z.number, issue, "fall_visit_no_repairs_policy"));
             if (entry?.id) deferredIds.push(entry.id);
           } catch (_e) {}
         }
       }
+      // Clear the issues off the WO so the tech UI reflects everything's deferred.
+      await workOrders.update(id, { zones: remainingZones });
       return sendJson(res, 200, { ok: true, deferredCount: deferredIds.length, deferredIds });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't defer issues."] });
+    }
+  }
+
+  // Spring carry-forward action — the tech, on a spring_opening WO, taps
+  // one of four buttons on a deferred item from a prior visit. Body:
+  //   { action: "repair_now" | "decline" | "already_fixed" | "cannot_locate", note }
+  // - repair_now    → snapshot's line items append to wo.onSiteQuote.builderLineItems;
+  //                   deferred status flips to "in_progress"; final flip to
+  //                   "resolved" happens at WO sign (spec rule #11).
+  // - decline       → reDeferralCount++, declinedAt updated, status stays "open".
+  // - already_fixed → status: resolved (no charge captured).
+  // - cannot_locate → status: dismissed.
+  const woCarryForwardMatch = pathname.match(/^\/api\/work-orders\/([^/]+)\/carry-forward\/([^/]+)$/);
+  if (woCarryForwardMatch && req.method === "PATCH") {
+    try {
+      const woId = decodeURIComponent(woCarryForwardMatch[1]);
+      const deferredId = decodeURIComponent(woCarryForwardMatch[2]);
+      const payload = await parseRequestBody(req);
+      const action = String(payload?.action || "");
+      const note = typeof payload?.note === "string" ? payload.note.slice(0, 500) : "";
+
+      const wo = await workOrders.get(woId);
+      if (!wo) return sendJson(res, 404, { ok: false, errors: ["Work order not found."] });
+      if (wo.locked || wo.signature?.signed) {
+        return sendJson(res, 409, { ok: false, errors: ["Work order is locked."] });
+      }
+      const propertyId = wo.propertyId;
+      if (!propertyId) return sendJson(res, 422, { ok: false, errors: ["Work order has no linked property."] });
+
+      const handle = await properties.getDeferredIssue(propertyId, deferredId);
+      if (!handle) return sendJson(res, 404, { ok: false, errors: ["Deferred item not found on this property."] });
+      const entry = handle.entry;
+
+      const validActions = new Set(["repair_now", "decline", "already_fixed", "cannot_locate"]);
+      if (!validActions.has(action)) {
+        return sendJson(res, 422, { ok: false, errors: [`action must be one of: ${[...validActions].join(", ")}.`] });
+      }
+
+      if (action === "repair_now") {
+        // Append the snapshotted line items into the on-site Quote builder.
+        // Re-tag source.zoneNumbers to the deferred entry's fromZone (already
+        // correct from the snapshot, but defensive). Mark each line so the
+        // tech UI can highlight "from carry-forward."
+        const snap = entry.suggestedPriceSnapshot;
+        if (!snap || !Array.isArray(snap.lineItems) || !snap.lineItems.length) {
+          return sendJson(res, 422, { ok: false, errors: ["This deferred item has no priced snapshot to repair from. Use the in-zone issue flow instead."] });
+        }
+        const carriedLines = snap.lineItems.map((line) => ({
+          ...line,
+          note: line.note ? `[carry-forward] ${line.note}` : `[carry-forward from ${entry.fromWoId || "prior visit"}]`
+        }));
+        const existingLines = Array.isArray(wo.onSiteQuote?.builderLineItems) ? wo.onSiteQuote.builderLineItems : [];
+        const updatedWo = await workOrders.update(woId, {
+          onSiteQuote: {
+            ...wo.onSiteQuote,
+            status: "draft",
+            lastBuiltAt: new Date().toISOString(),
+            builderLineItems: [...existingLines, ...carriedLines]
+          }
+        });
+        const updatedEntry = await properties.updateDeferredIssue(propertyId, deferredId, {
+          status: "in_progress",
+          resolution: {
+            ...(entry.resolution || {}),
+            resolvedInWoId: woId,
+            note: note || "Tech queued for repair on this visit."
+          }
+        });
+        const totals = issueRollup.recomputeTotals(updatedWo.onSiteQuote.builderLineItems);
+        return sendJson(res, 200, { ok: true, deferred: updatedEntry, workOrder: updatedWo, ...totals });
+      }
+
+      if (action === "decline") {
+        const updatedEntry = await properties.updateDeferredIssue(propertyId, deferredId, {
+          status: "open",
+          declinedAt: new Date().toISOString(),
+          reDeferralCount: (Number(entry.reDeferralCount) || 0) + 1,
+          resolution: null
+        });
+        return sendJson(res, 200, { ok: true, deferred: updatedEntry });
+      }
+
+      if (action === "already_fixed") {
+        const updatedEntry = await properties.updateDeferredIssue(propertyId, deferredId, {
+          status: "resolved",
+          resolution: {
+            resolvedAt: new Date().toISOString(),
+            resolvedBy: "tech",
+            resolvedInWoId: woId,
+            note: note || "Already fixed at arrival."
+          }
+        });
+        return sendJson(res, 200, { ok: true, deferred: updatedEntry });
+      }
+
+      // cannot_locate
+      const updatedEntry = await properties.updateDeferredIssue(propertyId, deferredId, {
+        status: "dismissed",
+        resolution: {
+          resolvedAt: new Date().toISOString(),
+          resolvedBy: "tech",
+          resolvedInWoId: woId,
+          note: note || "Tech could not locate the deferred item."
+        }
+      });
+      return sendJson(res, 200, { ok: true, deferred: updatedEntry });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't update carry-forward item."] });
     }
   }
 

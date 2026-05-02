@@ -552,10 +552,12 @@ function renderSheetIssues(zone) {
     sheetIssues.appendChild(empty);
     return;
   }
+  const isFallMode = state.type === ON_SITE_FIND_ONLY;
   issues.forEach((issue) => {
     const div = document.createElement("div");
-    div.className = "tech-zone-issue";
+    div.className = "tech-zone-issue" + (isFallMode ? " is-fall-mode" : "");
     div.dataset.issueId = issue.id;
+    div.dataset.zoneNumber = String(zone.number || 0);
     const optionsHtml = ZONE_ISSUE_TYPE_OPTIONS.map((t) =>
       `<option value="${t.value}" ${t.value === issue.type ? "selected" : ""}>${escapeHtml(t.label)}</option>`
     ).join("");
@@ -565,11 +567,12 @@ function renderSheetIssues(zone) {
       <input type="text" class="tech-zone-issue-notes" value="${escapeHtml(issue.notes || "")}" placeholder="Details (optional)" aria-label="Issue notes">
       <button type="button" class="tech-zone-issue-remove" aria-label="Remove issue">×</button>
       <div class="tech-issue-photos" data-issue-photos="${escapeHtml(issue.id)}"></div>
+      <div class="tech-zone-issue-fall-actions">
+        <button type="button" class="tech-zone-issue-defer-btn" data-defer-issue>📋 Save to deferred</button>
+        <button type="button" class="tech-zone-issue-emergency-btn" data-emergency-issue>🚨 Emergency override</button>
+      </div>
     `;
     sheetIssues.appendChild(div);
-    // Render the photo strip + add button. Done in JS because it loops
-    // over wo.photos and we want the live state, not a re-renderable
-    // string template.
     renderIssuePhotos(div.querySelector("[data-issue-photos]"), issue.id, zone);
   });
 }
@@ -1653,10 +1656,290 @@ document.getElementById("techOnSiteDeferBtn")?.addEventListener("click", async (
       success.hidden = false;
       success.textContent = `Saved ${data.deferredCount} item${data.deferredCount === 1 ? "" : "s"} to deferred recommendations.`;
     }
+    // Issues were stripped server-side — pull a fresh WO so the zone list
+    // re-renders empty and the section auto-hides.
+    const refreshed = await fetch(`/api/work-orders/${encodeURIComponent(state.id)}`).then((r) => r.json()).catch(() => null);
+    if (refreshed?.workOrder?.zones) {
+      state.zones = refreshed.workOrder.zones;
+      renderZones();
+      renderOnSiteQuote();
+    }
   } catch (err) {
     alert(err.message || "Couldn't defer.");
   } finally {
     if (btn) btn.disabled = false;
+  }
+});
+
+// ---- Per-issue defer (fall mode) ---------------------------------------
+// Click delegation in the zone sheet — one tap per issue row.
+sheetIssues.addEventListener("click", async (event) => {
+  const deferBtn = event.target.closest("[data-defer-issue]");
+  const emergencyBtn = event.target.closest("[data-emergency-issue]");
+  if (!deferBtn && !emergencyBtn) return;
+  if (state.locked) return;
+  const card = event.target.closest("[data-issue-id]");
+  if (!card) return;
+  const issueId = card.dataset.issueId;
+  const zoneNumber = Number(card.dataset.zoneNumber);
+  if (!issueId || !zoneNumber) return;
+
+  if (deferBtn) {
+    deferBtn.disabled = true;
+    try {
+      const r = await fetch(
+        `/api/work-orders/${encodeURIComponent(state.id)}/zones/${zoneNumber}/issues/${encodeURIComponent(issueId)}/defer`,
+        { method: "POST", headers: { "content-type": "application/json" }, body: "{}" }
+      );
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok || !data.ok) throw new Error((data.errors && data.errors[0]) || "Couldn't defer.");
+      // Sync local state from the server response so the zone list re-renders.
+      if (data.workOrder?.zones) state.zones = data.workOrder.zones;
+      const idx = state.activeZoneIndex;
+      if (idx >= 0) renderSheetIssues(state.zones[idx]);
+      renderZones();
+      renderOnSiteQuote();
+    } catch (err) {
+      alert(err.message || "Couldn't defer.");
+      deferBtn.disabled = false;
+    }
+    return;
+  }
+
+  // Emergency — open the modal pre-loaded with this issue's metadata.
+  openEmergencyModal({ issueId, zoneNumber, card });
+});
+
+// ---- Emergency override modal -----------------------------------------
+
+let emergencyContext = null;
+let emergencyPad = null;
+
+function openEmergencyModal(ctx) {
+  emergencyContext = ctx;
+  const modal = document.getElementById("techEmergencyModal");
+  const issueLabel = document.getElementById("techEmergencyIssueLabel");
+  const reasonSel = document.getElementById("techEmergencyReason");
+  const nameInput = document.getElementById("techEmergencyName");
+  const submit = document.getElementById("techEmergencySubmit");
+  const errEl = document.getElementById("techEmergencyError");
+  if (!modal) return;
+  // Pull fresh issue data for the label so the customer sees what they're signing for.
+  const idx = state.activeZoneIndex;
+  const zone = idx >= 0 ? state.zones[idx] : null;
+  const issue = zone ? (zone.issues || []).find((i) => i.id === ctx.issueId) : null;
+  if (issueLabel) {
+    const typeLabel = issue
+      ? (ZONE_ISSUE_TYPE_OPTIONS.find((t) => t.value === issue.type)?.label || issue.type)
+      : "(issue)";
+    const note = issue?.notes ? ` — ${issue.notes}` : "";
+    issueLabel.textContent = `Zone ${ctx.zoneNumber}: ${typeLabel} (qty ${issue?.qty || 1})${note}`;
+  }
+  if (reasonSel) reasonSel.value = "";
+  if (nameInput) nameInput.value = state.customerName || "";
+  if (errEl) errEl.hidden = true;
+  if (submit) submit.disabled = true;
+  modal.hidden = false;
+  document.body.classList.add("tech-emergency-open");
+
+  // Lazy-init the canvas pad. Reuse the existing createSignaturePad helper.
+  const canvas = document.getElementById("techEmergencyCanvas");
+  if (canvas) {
+    // Always recreate so resize math runs against the current modal layout.
+    emergencyPad = createSignaturePad(canvas, updateEmergencySubmitState);
+  }
+  updateEmergencySubmitState();
+}
+
+function closeEmergencyModal() {
+  const modal = document.getElementById("techEmergencyModal");
+  if (!modal) return;
+  modal.hidden = true;
+  document.body.classList.remove("tech-emergency-open");
+  emergencyContext = null;
+  emergencyPad = null;
+}
+
+function updateEmergencySubmitState() {
+  const submit = document.getElementById("techEmergencySubmit");
+  const reason = document.getElementById("techEmergencyReason")?.value;
+  const name = document.getElementById("techEmergencyName")?.value.trim();
+  const drawn = !!(emergencyPad && emergencyPad.isDirty && emergencyPad.isDirty());
+  if (submit) submit.disabled = !(reason && name && drawn);
+}
+
+document.getElementById("techEmergencyClose")?.addEventListener("click", closeEmergencyModal);
+document.getElementById("techEmergencyClear")?.addEventListener("click", () => {
+  if (emergencyPad && emergencyPad.clear) emergencyPad.clear();
+  updateEmergencySubmitState();
+});
+document.getElementById("techEmergencyReason")?.addEventListener("change", updateEmergencySubmitState);
+document.getElementById("techEmergencyName")?.addEventListener("input", updateEmergencySubmitState);
+
+document.getElementById("techEmergencySubmit")?.addEventListener("click", async () => {
+  if (!emergencyContext) return;
+  const submit = document.getElementById("techEmergencySubmit");
+  const errEl = document.getElementById("techEmergencyError");
+  if (errEl) errEl.hidden = true;
+  if (submit) { submit.disabled = true; submit.textContent = "Sending…"; }
+  try {
+    const reason = document.getElementById("techEmergencyReason")?.value;
+    const customerName = document.getElementById("techEmergencyName")?.value.trim();
+    const imageData = emergencyPad?.toDataURL ? emergencyPad.toDataURL() : "";
+    if (!reason || !customerName || !imageData) throw new Error("Fill reason, name, and signature.");
+    const { issueId, zoneNumber } = emergencyContext;
+    const r = await fetch(
+      `/api/work-orders/${encodeURIComponent(state.id)}/zones/${zoneNumber}/issues/${encodeURIComponent(issueId)}/emergency`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          severity_reason: reason,
+          customerSignature: { name: customerName, imageData }
+        })
+      }
+    );
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok || !data.ok) throw new Error((data.errors && data.errors[0]) || "Couldn't process emergency.");
+    if (data.workOrder?.zones) state.zones = data.workOrder.zones;
+    if (data.workOrder?.techNotes != null) {
+      state.techNotes = data.workOrder.techNotes;
+      const ta = document.getElementById("techNotes");
+      if (ta) ta.value = state.techNotes;
+    }
+    closeEmergencyModal();
+    const idx = state.activeZoneIndex;
+    if (idx >= 0) renderSheetIssues(state.zones[idx]);
+    renderZones();
+    renderOnSiteQuote();
+    const followup = data.followupWoId ? `\nFollow-up WO ${data.followupWoId}` : "";
+    alert(`Emergency logged. Patrick has been paged.${followup}`);
+  } catch (err) {
+    if (errEl) { errEl.textContent = err.message || "Failed."; errEl.hidden = false; }
+    if (submit) { submit.disabled = false; submit.textContent = "Page Patrick & create follow-up"; }
+  }
+});
+
+// ---- Carry-forward banner (spring openings) ---------------------------
+// Loaded fresh every time the WO renders so portal pre-auths landing
+// between WO open and tech arrival show up correctly. Snapshot pattern
+// (embedding into wo.carryForward at create time) was rejected in the
+// plan for that reason.
+
+async function renderCarryForward(property) {
+  const section = document.getElementById("techCarryForward");
+  const list = document.getElementById("techCarryForwardList");
+  const countEl = document.getElementById("techCarryForwardCount");
+  if (!section || !list) return;
+  if (state.type !== "spring_opening" || !property?.id) {
+    section.hidden = true;
+    return;
+  }
+  list.innerHTML = "";
+  list.dataset.propertyId = property.id;
+
+  let items = [];
+  try {
+    const r = await fetch(`/api/properties/${encodeURIComponent(property.id)}/deferred?status=open,pre_authorized`);
+    const data = await r.json().catch(() => ({}));
+    if (data.ok && Array.isArray(data.deferred)) items = data.deferred;
+  } catch {
+    section.hidden = true;
+    return;
+  }
+  if (!items.length) {
+    section.hidden = true;
+    return;
+  }
+  if (countEl) countEl.textContent = String(items.length);
+  section.hidden = false;
+  for (const item of items) list.appendChild(buildCarryForwardCard(item));
+}
+
+function buildCarryForwardCard(item) {
+  const card = document.createElement("article");
+  card.className = "tech-cf-card";
+  card.dataset.deferredId = item.id;
+  card.dataset.status = item.status;
+  card.dataset.flagged = item.reDeferralCount >= 3 ? "true" : "false";
+  const typeLabel = ZONE_ISSUE_TYPE_OPTIONS.find((t) => t.value === item.type)?.label || item.type;
+  const ageDays = item.declinedAt
+    ? Math.max(0, Math.round((Date.now() - new Date(item.declinedAt).getTime()) / 86400000))
+    : null;
+  const pillPreauth = item.status === "pre_authorized"
+    ? `<span class="tech-cf-pill tech-cf-pill--preauth">✓ Pre-authorized</span>` : "";
+  const pillRepeat = item.reDeferralCount >= 3
+    ? `<span class="tech-cf-pill tech-cf-pill--repeat">${item.reDeferralCount}× declined</span>` : "";
+  const pillAge = ageDays != null
+    ? `<span class="tech-cf-pill tech-cf-pill--age">${ageDays} day${ageDays === 1 ? "" : "s"} old</span>` : "";
+  const snap = item.suggestedPriceSnapshot;
+  let priceBlock = "";
+  if (snap && Array.isArray(snap.lineItems) && snap.lineItems.length) {
+    const lineRows = snap.lineItems.map((l) => {
+      const price = l.overridePrice != null ? l.overridePrice : l.originalPrice;
+      const lineTotal = (Number(price) || 0) * (Number(l.qty) || 1);
+      return `<div class="tech-cf-price-line"><div class="tech-cf-price-label">${escapeHtml(l.label || l.key || "Line")} × ${escapeHtml(String(l.qty))}</div><div class="tech-cf-price-amount">${formatMoney(lineTotal)}</div></div>`;
+    }).join("");
+    priceBlock = `
+      <div class="tech-cf-price">
+        ${lineRows}
+        <div class="tech-cf-price-line tech-cf-price-total"><div class="tech-cf-price-label">Total incl. HST</div><div class="tech-cf-price-amount">${formatMoney(snap.total)}</div></div>
+      </div>`;
+  }
+  const photoStrip = (Array.isArray(item.photoIds) && item.photoIds.length && item.fromWoId)
+    ? `<div class="tech-cf-photos">${item.photoIds.slice(0, 6).map((n) =>
+        `<a class="tech-cf-photo" href="/api/work-orders/${encodeURIComponent(item.fromWoId)}/photo/${n}" target="_blank" rel="noopener" style="background-image:url('/api/work-orders/${encodeURIComponent(item.fromWoId)}/photo/${n}')" aria-label="Photo from prior visit"></a>`
+      ).join("")}</div>` : "";
+  const repairDisabled = !snap || !Array.isArray(snap.lineItems) || !snap.lineItems.length;
+  card.innerHTML = `
+    <div class="tech-cf-card-header">
+      <span class="tech-cf-zone">Zone ${item.fromZone || "—"}</span>
+      <span class="tech-cf-type">${escapeHtml(typeLabel)} × ${escapeHtml(String(item.qty || 1))}</span>
+      ${pillPreauth}${pillRepeat}${pillAge}
+    </div>
+    ${item.notes ? `<p class="tech-cf-notes">${escapeHtml(item.notes)}</p>` : ""}
+    ${photoStrip}
+    ${priceBlock}
+    <div class="tech-cf-actions">
+      <button type="button" class="tech-cf-action tech-cf-action--primary" data-cf-action="repair_now" ${repairDisabled ? "disabled" : ""} title="${repairDisabled ? "No priced snapshot — fix via the in-zone issue flow" : ""}">Repair now</button>
+      <button type="button" class="tech-cf-action" data-cf-action="already_fixed">Already fixed</button>
+      <button type="button" class="tech-cf-action tech-cf-action--danger" data-cf-action="decline">Customer declined</button>
+      <button type="button" class="tech-cf-action" data-cf-action="cannot_locate">Can't locate</button>
+    </div>
+  `;
+  return card;
+}
+
+document.getElementById("techCarryForwardList")?.addEventListener("click", async (event) => {
+  const btn = event.target.closest("[data-cf-action]");
+  if (!btn) return;
+  if (state.locked) return;
+  const card = btn.closest("[data-deferred-id]");
+  const list = document.getElementById("techCarryForwardList");
+  if (!card || !list) return;
+  const propertyId = list.dataset.propertyId;
+  const deferredId = card.dataset.deferredId;
+  const action = btn.dataset.cfAction;
+  if (!propertyId || !deferredId || !action) return;
+  card.querySelectorAll("[data-cf-action]").forEach((b) => { b.disabled = true; });
+  try {
+    const r = await fetch(`/api/work-orders/${encodeURIComponent(state.id)}/carry-forward/${encodeURIComponent(deferredId)}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ action })
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok || !data.ok) throw new Error((data.errors && data.errors[0]) || "Couldn't update.");
+    if (action === "repair_now" && data.workOrder?.onSiteQuote) {
+      state.onSiteQuote = data.workOrder.onSiteQuote;
+      renderOnSiteQuote();
+    }
+    // Re-fetch — items can disappear (resolved/dismissed/repair_now flips to in_progress).
+    const property = await fetch(`/api/properties/${encodeURIComponent(propertyId)}`).then((r) => r.json()).catch(() => null);
+    if (property?.property) await renderCarryForward(property.property);
+  } catch (err) {
+    alert(err.message || "Couldn't update.");
+    card.querySelectorAll("[data-cf-action]").forEach((b) => { b.disabled = false; });
   }
 });
 
@@ -1836,6 +2119,12 @@ async function init() {
     // Cheat Sheet — first thing the tech reviews on arrival. Pulls from
     // the property record + the most-recent completed WO at the property.
     renderCheatSheet(wo, data.property, data.lastService);
+
+    // Carry-forward banner — spec §5. Spring openings auto-load the
+    // property's open + pre-authorized deferred items so the tech walks in
+    // knowing what to fix from prior visits. Awaits a fetch but doesn't
+    // block the rest of the render — the section reveals when ready.
+    renderCarryForward(data.property).catch((err) => console.warn("[carry-forward]", err?.message));
 
     // Service-specific checklist (spring opening / fall closing) and
     // customer sign-off section. Lock state cascades after both are

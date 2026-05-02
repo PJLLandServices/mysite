@@ -125,6 +125,33 @@
         <ol class="portal-activity-list" id="activityList"></ol>
       </article>
 
+      <article class="portal-card portal-recommendations" id="recommendationsCard" hidden>
+        <h2>Open recommendations</h2>
+        <p class="portal-recommendations-intro">Items your technician flagged at a previous visit but didn't fix on the spot. You can pre-authorize the work below — we'll have the parts on the truck for your next visit and skip the on-site sales conversation. Pre-authorizing is a non-binding promise; the actual work-order signature still happens with the technician on-site.</p>
+        <div class="portal-recommendations-list" id="recommendationsList"></div>
+      </article>
+
+      <!-- Pre-authorization signature modal — opened from a recommendation card. -->
+      <div class="portal-preauth-modal" id="preauthModal" hidden role="dialog" aria-modal="true" aria-labelledby="preauthTitle">
+        <div class="portal-preauth-card">
+          <header class="portal-preauth-header">
+            <h2 id="preauthTitle">Pre-authorize this repair</h2>
+            <button type="button" class="portal-preauth-close" id="preauthClose" aria-label="Cancel">×</button>
+          </header>
+          <p class="portal-preauth-summary" id="preauthSummary"></p>
+          <p class="portal-preauth-help">Sign below to confirm. We'll bring the parts to your next visit. The binding contract is the work-order signature your tech captures on-site — this is just a heads-up that you're going ahead with the work.</p>
+          <label class="portal-preauth-label" for="preauthName">Your name</label>
+          <input type="text" id="preauthName" class="portal-preauth-input" placeholder="Full name" autocomplete="name">
+          <label class="portal-preauth-label">Signature</label>
+          <canvas id="preauthCanvas" class="portal-preauth-canvas" aria-label="Signature pad"></canvas>
+          <div class="portal-preauth-actions">
+            <button type="button" class="portal-preauth-clear" id="preauthClear">Clear</button>
+            <button type="button" class="portal-preauth-submit portal-btn portal-btn-primary" id="preauthSubmit" disabled>Pre-authorize</button>
+          </div>
+          <p class="portal-preauth-error" id="preauthError" hidden role="alert"></p>
+        </div>
+      </div>
+
       <article class="portal-card portal-system" id="systemCard" hidden>
         <h2>Your System</h2>
         <p class="portal-system-intro">PJL keeps a profile of your sprinkler system on file so the technician arrives knowing what to expect. If anything below is wrong, drop us a message — we'll update it.</p>

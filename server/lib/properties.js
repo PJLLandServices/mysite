@@ -143,16 +143,32 @@ function blankProperty() {
     photos: [],                   // [{ id, slot, url, uploadedAt }]   — Phase 5
     leadIds: [],                  // back-refs to leads attached to this property
     workOrderIds: [],             // back-refs to work orders (Phase 2)
-    // Deferred recommendations — items the customer declined during an
-    // on-site Issues→Draft Quote review, OR fall-closing finds that the
-    // tech logged for spring follow-up. Spec §5 (the carry-forward
-    // engine). This slice ships the storage + property-page display;
-    // the full carry-forward banner / portal pre-auth / 3-year flag
-    // lives in a future slice. Each entry:
-    //   { id, fromWoId, fromZone, type, qty, notes, declinedAt,
-    //     reason, photoIds, suggestedPriceSnapshot, status }
-    // status: open | resolved | dismissed | re_deferred (full lifecycle
-    // unused yet — populated as we build §5 features).
+    // Deferred recommendations — the "fall finds, spring fixes" engine
+    // (spec §5). Sources:
+    //   - Customer declined an item during on-site Issues→Draft Quote review
+    //   - Fall-closing tech tagged a found issue for spring follow-up
+    //     (find_only mode — fall closings can never auto-quote per rule #7)
+    //   - Spring carry-forward "Customer declined" → re-defers, increments
+    //     reDeferralCount
+    // Each entry:
+    //   {
+    //     id, fromWoId, fromZone, type, qty, notes, declinedAt, reason,
+    //     photoIds, suggestedPriceSnapshot, status,
+    //     severity:           "normal" | "emergency",
+    //     reDeferralCount:    integer (0+; ≥3 trips the forced-decision flag)
+    //     lastTouchedAt:      <iso> — bumped on any state change
+    //     preAuthorization:   null | { signedAt, customerName, imageData,
+    //                                  ip, userAgent }
+    //                         Stamped when the customer pre-authorizes from
+    //                         the portal. NOT a binding contract — the
+    //                         spring WO sign-off is (rule #11). It's a
+    //                         non-binding promise that lets the tech skip
+    //                         the on-site sales conversation.
+    //     resolution:         null | { resolvedAt, resolvedBy,
+    //                                  resolvedInWoId, note }
+    //   }
+    // Status enum: open | pre_authorized | in_progress | resolved |
+    //              dismissed | re_deferred
     deferredIssues: [],
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString()
@@ -174,6 +190,32 @@ function nextPropertyCode(properties, year) {
   return `${prefix}${String(max + 1).padStart(4, "0")}`;
 }
 
+// Backfill the deferredIssue shape onto entries written before the §5
+// schema landed. Pure key-defaulting — never overwrites a value that's
+// already set. Used by `hydrate` and by the lifecycle endpoints that
+// touch a single entry.
+function hydrateDeferred(entry) {
+  if (!entry || typeof entry !== "object") return entry;
+  return {
+    id: entry.id,
+    fromWoId: entry.fromWoId || null,
+    fromZone: Number.isFinite(Number(entry.fromZone)) ? Number(entry.fromZone) : null,
+    type: entry.type || "other",
+    qty: Number.isFinite(Number(entry.qty)) && Number(entry.qty) > 0 ? Number(entry.qty) : 1,
+    notes: entry.notes || "",
+    declinedAt: entry.declinedAt || null,
+    reason: entry.reason || "customer_declined",
+    photoIds: Array.isArray(entry.photoIds) ? entry.photoIds : [],
+    suggestedPriceSnapshot: entry.suggestedPriceSnapshot || null,
+    status: entry.status || "open",
+    severity: entry.severity === "emergency" ? "emergency" : "normal",
+    reDeferralCount: Number.isFinite(Number(entry.reDeferralCount)) ? Number(entry.reDeferralCount) : 0,
+    lastTouchedAt: entry.lastTouchedAt || entry.declinedAt || null,
+    preAuthorization: entry.preAuthorization && typeof entry.preAuthorization === "object" ? entry.preAuthorization : null,
+    resolution: entry.resolution && typeof entry.resolution === "object" ? entry.resolution : null
+  };
+}
+
 // Backfill any missing keys on properties read from disk so older records
 // keep working as the schema grows. Pure shape-merge, no value mutation.
 function hydrate(p) {
@@ -185,7 +227,7 @@ function hydrate(p) {
     photos: Array.isArray(p?.photos) ? p.photos : [],
     leadIds: Array.isArray(p?.leadIds) ? p.leadIds : [],
     workOrderIds: Array.isArray(p?.workOrderIds) ? p.workOrderIds : [],
-    deferredIssues: Array.isArray(p?.deferredIssues) ? p.deferredIssues : []
+    deferredIssues: Array.isArray(p?.deferredIssues) ? p.deferredIssues.map(hydrateDeferred) : []
   };
 }
 
@@ -514,12 +556,16 @@ async function bulkUpsert(records) {
   return summary;
 }
 
-// Append a deferred issue to a property. Source-of-truth write (the
-// on-site Quote accept flow uses this to sink declined items; future
-// fall-closing find_only flow uses this too). Returns the saved entry
-// (with id stamped) or null if the property was missing. Idempotency
-// is handled at the caller — we don't dedupe here because the same
-// physical issue can be deferred in different visits.
+// Append a deferred issue to a property. Source-of-truth write — used by:
+//   - On-site Quote accept flow (declined items sink here)
+//   - Fall-closing tech "Add to deferred recommendations" button
+//   - Spring carry-forward "Customer declined" path (re-defers via
+//     updateDeferredIssue + reDeferralCount, NOT a new entry — this
+//     function is only for first-time defers)
+//   - Emergency override (severity="emergency", routes a follow-up WO)
+// Returns the saved entry (id stamped) or null if the property was missing.
+// We don't dedupe here — the same physical issue can be deferred across
+// different visits and they need separate audit trails.
 async function addDeferredIssue(propertyId, payload) {
   if (!propertyId) return null;
   const properties = await readAll();
@@ -528,19 +574,22 @@ async function addDeferredIssue(propertyId, payload) {
   const target = properties[idx];
   const now = new Date().toISOString();
   const id = "def_" + Math.random().toString(36).slice(2, 10) + "_" + Date.now();
-  const entry = {
+  const entry = hydrateDeferred({
     id,
     fromWoId: payload?.fromWoId || null,
-    fromZone: Number.isFinite(Number(payload?.fromZone)) ? Number(payload.fromZone) : null,
+    fromZone: payload?.fromZone,
     type: typeof payload?.type === "string" ? payload.type : "other",
-    qty: Number.isFinite(Number(payload?.qty)) && Number(payload.qty) > 0 ? Number(payload.qty) : 1,
+    qty: payload?.qty,
     notes: typeof payload?.notes === "string" ? payload.notes.slice(0, 1000) : "",
     declinedAt: payload?.declinedAt || now,
     reason: typeof payload?.reason === "string" ? payload.reason : "customer_declined",
     photoIds: Array.isArray(payload?.photoIds) ? payload.photoIds.slice(0, 20) : [],
     suggestedPriceSnapshot: payload?.suggestedPriceSnapshot || null,
-    status: "open"
-  };
+    status: "open",
+    severity: payload?.severity === "emergency" ? "emergency" : "normal",
+    reDeferralCount: 0,
+    lastTouchedAt: now
+  });
   if (!Array.isArray(target.deferredIssues)) target.deferredIssues = [];
   target.deferredIssues.unshift(entry);
   target.updatedAt = now;
@@ -549,13 +598,81 @@ async function addDeferredIssue(propertyId, payload) {
   return entry;
 }
 
-// Fetch a property's open deferred issues. Returns [] if missing.
-async function listDeferred(propertyId) {
+// Look up a single deferred entry. Returns { property, entry, index } or
+// null if either the property or the entry is missing. Helper for the
+// lifecycle endpoints that need to mutate one entry without rewriting
+// the whole array.
+async function getDeferredIssue(propertyId, deferredId) {
+  if (!propertyId || !deferredId) return null;
+  const properties = await readAll();
+  const property = properties.find((p) => p.id === propertyId);
+  if (!property) return null;
+  const list = Array.isArray(property.deferredIssues) ? property.deferredIssues : [];
+  const index = list.findIndex((d) => d.id === deferredId);
+  if (index === -1) return null;
+  return { property, entry: list[index], index };
+}
+
+// Mutate a single deferred entry. `patch` is shallow-merged onto the
+// existing entry; `lastTouchedAt` is always bumped. The status enum is
+// validated — unknown values are rejected. Returns the saved entry or
+// null if the property/entry isn't found. Re-deferral count increments
+// must be passed explicitly in the patch (this layer doesn't infer it).
+async function updateDeferredIssue(propertyId, deferredId, patch) {
+  if (!propertyId || !deferredId) return null;
+  const properties = await readAll();
+  const idx = properties.findIndex((p) => p.id === propertyId);
+  if (idx === -1) return null;
+  const property = properties[idx];
+  const list = Array.isArray(property.deferredIssues) ? property.deferredIssues : [];
+  const entryIdx = list.findIndex((d) => d.id === deferredId);
+  if (entryIdx === -1) return null;
+
+  const now = new Date().toISOString();
+  const allowedStatuses = new Set(["open", "pre_authorized", "in_progress", "resolved", "dismissed", "re_deferred"]);
+  const next = { ...list[entryIdx] };
+
+  if (patch && typeof patch === "object") {
+    if (typeof patch.status === "string" && allowedStatuses.has(patch.status)) {
+      next.status = patch.status;
+    }
+    if (Number.isFinite(Number(patch.reDeferralCount))) {
+      next.reDeferralCount = Number(patch.reDeferralCount);
+    }
+    if (typeof patch.declinedAt === "string") next.declinedAt = patch.declinedAt;
+    if (typeof patch.notes === "string") next.notes = patch.notes.slice(0, 1000);
+    if (patch.severity === "emergency" || patch.severity === "normal") next.severity = patch.severity;
+    if (Array.isArray(patch.photoIds)) next.photoIds = patch.photoIds.slice(0, 20);
+    if (patch.suggestedPriceSnapshot !== undefined) next.suggestedPriceSnapshot = patch.suggestedPriceSnapshot;
+    if (patch.preAuthorization === null || (patch.preAuthorization && typeof patch.preAuthorization === "object")) {
+      next.preAuthorization = patch.preAuthorization;
+    }
+    if (patch.resolution === null || (patch.resolution && typeof patch.resolution === "object")) {
+      next.resolution = patch.resolution;
+    }
+  }
+  next.lastTouchedAt = now;
+
+  list[entryIdx] = hydrateDeferred(next);
+  property.deferredIssues = list;
+  property.updatedAt = now;
+  properties[idx] = property;
+  await writeAll(properties);
+  return list[entryIdx];
+}
+
+// Fetch a property's deferred issues, optionally filtered by status. Pass
+// a string ("open"), an array (["open","pre_authorized"]), or null for
+// everything. Returns [] if the property is missing.
+async function listDeferred(propertyId, { status } = {}) {
   if (!propertyId) return [];
   const properties = await readAll();
   const target = properties.find((p) => p.id === propertyId);
   if (!target) return [];
-  return Array.isArray(target.deferredIssues) ? target.deferredIssues : [];
+  const all = Array.isArray(target.deferredIssues) ? target.deferredIssues : [];
+  if (!status) return all;
+  const wanted = new Set(Array.isArray(status) ? status : [status]);
+  return all.filter((d) => wanted.has(d.status));
 }
 
 module.exports = {
@@ -571,5 +688,7 @@ module.exports = {
   removeMany,
   bulkUpsert,
   addDeferredIssue,
+  getDeferredIssue,
+  updateDeferredIssue,
   listDeferred
 };

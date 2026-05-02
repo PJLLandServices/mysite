@@ -85,6 +85,22 @@
       </details>
     </section>
 
+    <!-- Carry-forward banner — spec §5. On a spring_opening WO this loads
+         all the property's open + pre_authorized deferred recommendations
+         from prior visits. Each card surfaces what was found, what it
+         would cost, and whether the customer pre-authorized it from the
+         portal. Per-card tech actions (Repair now / Customer declined /
+         Already fixed / Cannot locate) drive the deferred lifecycle.
+         Hidden on non-spring WOs and when the property has no open items. -->
+    <section class="tech-carry-forward" id="techCarryForward" hidden>
+      <header class="tech-carry-forward-header">
+        <h2 class="tech-section-title">Carry-forward from prior visits</h2>
+        <span class="tech-carry-forward-count" id="techCarryForwardCount">0</span>
+      </header>
+      <p class="tech-carry-forward-help">Items the customer deferred or pre-authorized at a prior visit. Resolve each before signing off.</p>
+      <div class="tech-carry-forward-list" id="techCarryForwardList"></div>
+    </section>
+
     <!-- AI Intake Guarantee banner — shown when the WO was created from an
          AI repair quote with intake_guarantee=true. Tells the tech labour is
          locked for a specific scope so they bill correctly on-site. Hidden
@@ -331,6 +347,37 @@
       <textarea id="sheetNotes" rows="4" placeholder="What did you find / do?"></textarea>
 
       <button type="button" class="tech-sheet-done" id="sheetDone">Done</button>
+    </div>
+  </div>
+
+  <!-- Emergency override modal — fall closing only. Requires customer
+       signature + reason. Promotes a single issue to a follow-up service
+       visit and pages Patrick immediately (spec rule #13). -->
+  <div class="tech-emergency-modal" id="techEmergencyModal" hidden role="dialog" aria-modal="true" aria-labelledby="techEmergencyTitle">
+    <div class="tech-emergency-card">
+      <header class="tech-emergency-header">
+        <h2 id="techEmergencyTitle">Emergency override</h2>
+        <button type="button" class="tech-emergency-close" id="techEmergencyClose" aria-label="Cancel">×</button>
+      </header>
+      <p class="tech-emergency-help">Fall closings normally defer everything to spring. Use this only when waiting would cause damage. Patrick gets paged immediately and a follow-up service visit is created.</p>
+      <p class="tech-emergency-issue" id="techEmergencyIssueLabel"></p>
+      <label class="tech-emergency-label" for="techEmergencyReason">Reason</label>
+      <select id="techEmergencyReason" class="tech-emergency-select">
+        <option value="">— Select —</option>
+        <option value="safety_hazard">Safety hazard</option>
+        <option value="active_leak">Active leak</option>
+        <option value="property_damage_risk">Property damage risk</option>
+        <option value="other">Other</option>
+      </select>
+      <label class="tech-emergency-label" for="techEmergencyName">Customer name</label>
+      <input type="text" id="techEmergencyName" class="tech-emergency-input" placeholder="Customer's printed name" autocomplete="off">
+      <label class="tech-emergency-label">Customer signature</label>
+      <canvas id="techEmergencyCanvas" class="tech-emergency-canvas" aria-label="Customer signature pad"></canvas>
+      <div class="tech-emergency-actions">
+        <button type="button" class="tech-emergency-clear" id="techEmergencyClear">Clear</button>
+        <button type="button" class="tech-emergency-submit" id="techEmergencySubmit" disabled>Page Patrick &amp; create follow-up</button>
+      </div>
+      <p class="tech-emergency-error" id="techEmergencyError" hidden role="alert"></p>
     </div>
   </div>
 
