@@ -25,10 +25,15 @@
   const FORM_TRIGGER = "[SHOW_BOOKING_FORM]";
   const CAPTURE_TRIGGER = "[SHOW_CONTACT_CAPTURE]";
   // [QUOTE_JSON:{...}] travels alongside [SHOW_BOOKING_FORM] for repair quotes.
-  // The regex captures the JSON body so the frontend can parse + stash it; the
-  // full match is stripped from the visible message before rendering.
-  const QUOTE_JSON_RE = /\[QUOTE_JSON:\s*(\{[^\n]*?\})\s*\]/;
+  // Extracted via a brace-counting parser (see findQuoteToken) so multi-line
+  // JSON — which Claude often emits when the items array is long — strips
+  // cleanly. A naive regex like /\{[^\n]*?\}/ matched only the first half
+  // of a wrapped token, leaking the second half (",scope":"...","intake_
+  // guarantee":true}]) into the customer-facing chat bubble.
   const STORAGE_KEY = "pjl_chat_state_v1";
+  // Google Maps key (HTTP-referrer restricted on Google Cloud — same key the
+  // public site already exposes for coverage-checker autocomplete).
+  const GOOGLE_MAPS_KEY = "AIzaSyBrORBeXbpNTJvoi2PDhDDs6Iy-BGSU30M";
   const PHOTO_DB_NAME = "pjl_chat_photos_v1";
   const PHOTO_STORE = "photos";
   const MAX_PHOTOS = 5;
@@ -371,28 +376,144 @@
   // a raw AI reply so the customer-facing render never leaks the wire format.
   // Used by message rendering and transcript building.
   function stripTokens(raw) {
-    return String(raw || "")
-      .replace(QUOTE_JSON_RE, "")
+    let text = String(raw || "");
+    // Strip QUOTE_JSON via the brace-aware finder — handles multi-line JSON
+    // emission (Claude wraps long items arrays across lines, and a naive
+    // regex would only catch the first half).
+    const found = findQuoteToken(text);
+    if (found) text = text.slice(0, found.start) + text.slice(found.end);
+    return text
       .replace(FORM_TRIGGER, "")
       .replace(CAPTURE_TRIGGER, "")
       .trim();
   }
 
-  // Pull the [QUOTE_JSON: {...}] payload out of an AI reply, if present.
-  // Returns the parsed object on success, or null on absence / parse failure.
-  // Parse failures are intentionally swallowed — a malformed token degrades
-  // gracefully to "no structured quote, lead lands without a Quote record"
-  // rather than blocking the booking flow.
-  function extractQuotePayload(raw) {
-    const match = QUOTE_JSON_RE.exec(String(raw || ""));
-    if (!match) return null;
+  // Locate the [QUOTE_JSON:{...}] token in a raw AI reply by walking the
+  // JSON body with a brace counter. Tolerates whitespace and newlines
+  // anywhere inside the JSON, ignores braces that appear inside string
+  // literals, and bails on a malformed payload without blocking the chat.
+  // Returns { payload, start, end } where [start, end) covers the entire
+  // [QUOTE_JSON:...] token (so callers can splice it out cleanly), or null.
+  function findQuoteToken(raw) {
+    const text = String(raw || "");
+    const tag = "[QUOTE_JSON:";
+    const startIdx = text.indexOf(tag);
+    if (startIdx === -1) return null;
+
+    let i = startIdx + tag.length;
+    while (i < text.length && /\s/.test(text[i])) i++;
+    if (text[i] !== "{") return null;
+
+    let depth = 0;
+    let inString = false;
+    let escape = false;
+    let braceEnd = -1;
+    for (let j = i; j < text.length; j++) {
+      const c = text[j];
+      if (escape) { escape = false; continue; }
+      if (c === "\\" && inString) { escape = true; continue; }
+      if (c === '"') { inString = !inString; continue; }
+      if (inString) continue;
+      if (c === "{") depth++;
+      else if (c === "}") {
+        depth--;
+        if (depth === 0) { braceEnd = j; break; }
+      }
+    }
+    if (braceEnd === -1) return null;
+
+    let k = braceEnd + 1;
+    while (k < text.length && /\s/.test(text[k])) k++;
+    if (text[k] !== "]") return null;
+
+    const jsonStr = text.slice(i, braceEnd + 1);
     try {
-      const obj = JSON.parse(match[1]);
-      if (obj && Array.isArray(obj.items) && obj.items.length) return obj;
+      const obj = JSON.parse(jsonStr);
+      if (obj && Array.isArray(obj.items) && obj.items.length) {
+        return { payload: obj, start: startIdx, end: k + 1 };
+      }
     } catch (e) {
       console.warn("[pjl-chat] QUOTE_JSON parse failed:", e?.message);
     }
     return null;
+  }
+
+  // Convenience for the send-flow: returns just the parsed payload.
+  function extractQuotePayload(raw) {
+    const found = findQuoteToken(raw);
+    return found ? found.payload : null;
+  }
+
+  // -------- Address autocomplete (Google Places) --------
+  // Mirrors the form-fill autocomplete in coverage-checker.js so chat-form
+  // addresses arrive cleanly formatted (matching the rest of the public site).
+  // Maps loads once per page on first form render — most public pages already
+  // load Places via coverage-checker, so this typically just reuses the
+  // existing global. Pages without a Maps script tag get one injected with
+  // a unique callback name to avoid colliding with initCoverageCheck.
+  let mapsPlacesPromise = null;
+
+  function ensureGoogleMapsPlaces() {
+    if (mapsPlacesPromise) return mapsPlacesPromise;
+    if (window.google && window.google.maps && window.google.maps.places) {
+      mapsPlacesPromise = Promise.resolve();
+      return mapsPlacesPromise;
+    }
+    mapsPlacesPromise = new Promise((resolve, reject) => {
+      // If a Maps script tag already exists (e.g. coverage-checker pages),
+      // poll until Places is available rather than loading a second copy.
+      const existing = document.querySelector('script[src*="maps.googleapis.com/maps/api/js"]');
+      if (existing) {
+        const start = Date.now();
+        const tick = () => {
+          if (window.google && window.google.maps && window.google.maps.places) return resolve();
+          if (Date.now() - start > 8000) return reject(new Error("Maps load timeout"));
+          setTimeout(tick, 120);
+        };
+        tick();
+        return;
+      }
+      const cbName = "__pjlChatMapsReady_" + Date.now() + "_" + Math.random().toString(36).slice(2, 8);
+      window[cbName] = () => { try { delete window[cbName]; } catch (e) {} resolve(); };
+      const script = document.createElement("script");
+      script.src = `https://maps.googleapis.com/maps/api/js?key=${GOOGLE_MAPS_KEY}&libraries=places&callback=${cbName}&loading=async`;
+      script.async = true;
+      script.defer = true;
+      script.onerror = () => reject(new Error("Maps load failed"));
+      document.head.appendChild(script);
+    });
+    return mapsPlacesPromise;
+  }
+
+  // Bind Google Places Autocomplete to a chat-form address input. Same
+  // bias and restrictions coverage-checker uses (Canada-only, Southern
+  // Ontario bounds with strictBounds=false so out-of-region addresses
+  // still resolve), and the same place_changed handler that writes back
+  // the formatted_address. Failure modes (key issue, offline, blocked)
+  // degrade silently — the input keeps working as a plain text field.
+  function bindAddressAutocomplete(inputEl) {
+    if (!inputEl) return;
+    ensureGoogleMapsPlaces().then(() => {
+      const places = window.google && window.google.maps && window.google.maps.places;
+      if (!places || !places.Autocomplete) return;
+      const sw = new google.maps.LatLng(43.0, -80.7);
+      const ne = new google.maps.LatLng(44.7, -78.5);
+      const ac = new places.Autocomplete(inputEl, {
+        componentRestrictions: { country: "ca" },
+        fields: ["formatted_address"],
+        types: ["address"],
+        bounds: new google.maps.LatLngBounds(sw, ne),
+        strictBounds: false
+      });
+      ac.addListener("place_changed", () => {
+        const p = ac.getPlace();
+        if (p && p.formatted_address) inputEl.value = p.formatted_address;
+      });
+      // Override the browser's autofill so it doesn't hide the dropdown.
+      inputEl.setAttribute("autocomplete", "new-password");
+    }).catch((err) => {
+      console.warn("[pjl-chat] address autocomplete unavailable:", err?.message || err);
+    });
   }
 
   function appendUserMessageDOM(text, photoUrls) {
@@ -724,6 +845,10 @@
       submitLead(f, e.target);
     });
 
+    // Wire Google Places Autocomplete on the address input — same UX as
+    // the rest of the public site (coverage-checker pages, contact form).
+    bindAddressAutocomplete(bubble.querySelector('input[name="address"]'));
+
     composerInput.disabled = true;
     sendBtn.disabled = true;
     attachBtn.disabled = true;
@@ -882,6 +1007,9 @@
       const f = Object.fromEntries(new FormData(e.target).entries());
       submitContactCapture(f, e.target);
     });
+
+    // Same Places Autocomplete wiring as the booking form.
+    bindAddressAutocomplete(bubble.querySelector('input[name="address"]'));
 
     composerInput.disabled = true;
     sendBtn.disabled = true;
