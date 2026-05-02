@@ -3102,7 +3102,50 @@ async function handleApi(req, res, pathname) {
         try { sourceQuote = await quotes.get(lead.quoteId); }
         catch (err) { console.warn("[quotes] fetch on WO create failed:", err?.message); }
       }
-      const wo = await workOrders.create({ type, lead, property, customId, quote: sourceQuote });
+      let wo = await workOrders.create({ type, lead, property, customId, quote: sourceQuote });
+
+      // Seasonal-fee seeding — spring_opening / fall_closing WOs come
+      // pre-loaded with the booked service fee as a billable line item.
+      // Without this, the on-site quote starts empty and the completion
+      // cascade has nothing to invoice. Seasonal pricing comes from
+      // pricing.json (same key the booking used). For service_visit we
+      // don't seed — those are AI-quote-driven or repair-only and the
+      // rollup adds a service_call when repairs are found.
+      //
+      // The seeded line carries `source.baseline: true` so the on-site
+      // quote build endpoint preserves it across rollup re-runs.
+      // Without that flag, "Generate from issues" would wipe it.
+      if ((type === "spring_opening" || type === "fall_closing") && lead?.booking?.serviceKey) {
+        try {
+          const seedKey = String(lead.booking.serviceKey || "");
+          const catalogItem = PRICING.items?.[seedKey];
+          if (catalogItem) {
+            const seasonalLine = {
+              key: seedKey,
+              label: catalogItem.label || seedKey,
+              qty: 1,
+              originalPrice: Math.round((Number(catalogItem.price) || 0) * 100) / 100,
+              overridePrice: null,
+              custom: false,
+              source: { zoneNumbers: [], issueIds: [], baseline: true },
+              note: "Seasonal service fee — covers the trip + standard service. Repairs found on-site bill in addition."
+            };
+            const seededWo = await workOrders.update(wo.id, {
+              onSiteQuote: {
+                ...wo.onSiteQuote,
+                status: "draft",
+                lastBuiltAt: new Date().toISOString(),
+                builderLineItems: [seasonalLine]
+              }
+            });
+            if (seededWo) wo = seededWo;
+          } else {
+            console.warn(`[wo-seed] no pricing.json entry for serviceKey ${seedKey}; WO created without seasonal fee line`);
+          }
+        } catch (err) {
+          console.warn("[wo-seed] seasonal-fee seed failed:", err?.message);
+        }
+      }
 
       // Back-link the WO id onto the Quote's workOrderIds so the audit
       // trail reflects which WOs fulfilled this quote.
@@ -3492,22 +3535,28 @@ async function handleApi(req, res, pathname) {
           "Fall closings cannot generate on-site quotes (PJL operations rule 8). Use 'Save to deferred recommendations' instead."
         ] });
       }
+      // Preserve any baseline lines that were seeded at WO create
+      // (seasonal fees, manually-added charges from the desktop edit).
+      // Without this, "Generate from issues" wipes the spring opening
+      // fee every time the tech runs the rollup.
+      const existingBaseline = (wo.onSiteQuote?.builderLineItems || [])
+        .filter((l) => l && l.source && l.source.baseline === true);
       const result = issueRollup.rollupIssuesToLineItems(wo, PRICING);
+      const merged = [...existingBaseline, ...result.lineItems];
+      const totals = issueRollup.recomputeTotals(merged);
       const updated = await workOrders.update(id, {
         onSiteQuote: {
           ...wo.onSiteQuote,
-          status: result.lineItems.length ? "draft" : "none",
+          status: merged.length ? "draft" : "none",
           lastBuiltAt: new Date().toISOString(),
-          builderLineItems: result.lineItems
+          builderLineItems: merged
         }
       });
       return sendJson(res, 200, {
         ok: true,
         workOrder: updated,
-        lineItems: result.lineItems,
-        subtotal: result.subtotal,
-        hst: result.hst,
-        total: result.total
+        lineItems: merged,
+        ...totals
       });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't build on-site quote."] });

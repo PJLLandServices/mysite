@@ -219,12 +219,18 @@ function rollupZone(pricing, zone) {
 }
 
 // Top-level rollup: walks every zone, prepends a single service_call,
-// returns lineItems + totals. Service call line is special:
-//   - On a normal find_and_fix WO: full $95 charged (one trip out).
-//   - On a WO with intakeGuarantee.applies (came from an AI repair
-//     quote): service_call added at $0 with note "on AI intake guarantee"
-//     so the customer can see it's covered. Hard rule from pricing.json
-//     ai_intake_labour_locked.
+// returns lineItems + totals. Service call line behaviour:
+//   - WO with intakeGuarantee.applies (from an AI repair quote) →
+//     service_call prepended at $0 with note "on AI intake guarantee"
+//     so the customer sees it's covered. (pricing.json hard rule
+//     ai_intake_labour_locked.)
+//   - spring_opening / fall_closing WO → NO service_call prepended.
+//     The seasonal fee on the WO baseline (seeded at WO create time)
+//     already covers the trip. Adding a $95 service_call on top would
+//     double-bill the customer for the visit. (pricing.json hard rule
+//     spring_fall_no_service_call.)
+//   - Otherwise (service_visit without intake guarantee) → full
+//     $95 service_call (the customer pays for the trip out).
 function rollupIssuesToLineItems(wo, pricing) {
   const zoneLines = [];
   const zones = Array.isArray(wo && wo.zones) ? wo.zones : [];
@@ -233,10 +239,9 @@ function rollupIssuesToLineItems(wo, pricing) {
   }
 
   const lines = [];
-  // Only prepend service_call if there's anything to bill at all. An
-  // empty rollup → no quote to build.
   if (zoneLines.length) {
     const intakeActive = !!(wo && wo.intakeGuarantee && wo.intakeGuarantee.applies);
+    const isSeasonal = !!(wo && (wo.type === "spring_opening" || wo.type === "fall_closing"));
     const allZoneNums = Array.from(new Set(zoneLines.flatMap((l) => l.source.zoneNumbers)));
     if (intakeActive) {
       lines.push(buildLine({
@@ -247,7 +252,8 @@ function rollupIssuesToLineItems(wo, pricing) {
         source: { zoneNumbers: allZoneNums, issueIds: [] },
         note: "On AI intake guarantee — covered by original quote"
       }));
-    } else {
+    } else if (!isSeasonal) {
+      // Service visit (or other repair-only WO) — full service call.
       lines.push(buildLine({
         key: "service_call",
         label: labelOf(pricing, "service_call"),
@@ -256,6 +262,8 @@ function rollupIssuesToLineItems(wo, pricing) {
         source: { zoneNumbers: allZoneNums, issueIds: [] }
       }));
     }
+    // Seasonal WOs intentionally fall through with no service_call —
+    // the seasonal fee seeded at WO create covers the trip.
   }
   lines.push(...zoneLines);
 
