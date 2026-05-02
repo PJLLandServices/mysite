@@ -150,6 +150,41 @@
   opacity: 0.6;
   pointer-events: none;
 }
+.wo-photo-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+.wo-photo-save-all {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--pjl-green);
+  background: #fff;
+  border: 1px solid rgba(27, 77, 46, 0.25);
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+.wo-photo-save-all:hover {
+  background: rgba(74, 140, 92, 0.06);
+  border-color: var(--pjl-green);
+}
+.wo-photo-save-all.is-saving {
+  opacity: 0.7;
+  pointer-events: none;
+}
+.wo-photo-save-all.is-saving::after {
+  content: "Saving…";
+  margin-left: 6px;
+  color: var(--pjl-text-muted);
+  font-size: 13px;
+}
 
 /* Per-issue photo strip — sits below each issue row inside the zone. */
 .wo-issue-photos {

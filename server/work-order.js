@@ -123,7 +123,77 @@ let signaturePadInstance = null;
 
 // ---- Photo helpers (mirror work-order-tech.js) -----------------------
 
-async function resizeImageForUpload(file, maxDim = 1280, quality = 0.82) {
+let _cachedGeo = undefined;
+async function getCurrentGeo() {
+  if (_cachedGeo !== undefined) return _cachedGeo;
+  if (typeof navigator === "undefined" || !("geolocation" in navigator)) {
+    _cachedGeo = null;
+    return null;
+  }
+  return new Promise((resolve) => {
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        _cachedGeo = {
+          lat: pos.coords.latitude,
+          lng: pos.coords.longitude,
+          accuracy: pos.coords.accuracy
+        };
+        resolve(_cachedGeo);
+      },
+      () => { _cachedGeo = null; resolve(null); },
+      { enableHighAccuracy: true, timeout: 8000, maximumAge: 60_000 }
+    );
+  });
+}
+
+function applyPjlWatermark(canvas, ctx, lines) {
+  const visible = lines.filter(Boolean);
+  if (!visible.length) return;
+  const w = canvas.width;
+  const h = canvas.height;
+  const fontSize = Math.max(14, Math.round(h * 0.024));
+  const padding = Math.round(fontSize * 0.6);
+  const lineH = Math.round(fontSize * 1.3);
+  const stripH = lineH * visible.length + padding * 2;
+  ctx.font = `600 ${fontSize}px sans-serif`;
+  ctx.textBaseline = "top";
+  let maxText = 0;
+  visible.forEach((l) => { maxText = Math.max(maxText, ctx.measureText(l).width); });
+  const stripW = Math.min(Math.round(maxText + padding * 2), Math.round(w * 0.7));
+  const stripX = w - stripW;
+  const stripY = h - stripH;
+  ctx.fillStyle = "rgba(15, 31, 20, 0.78)";
+  ctx.fillRect(stripX, stripY, stripW, stripH);
+  ctx.fillStyle = "rgba(255, 255, 255, 0.95)";
+  visible.forEach((line, i) => {
+    ctx.fillText(line, stripX + padding, stripY + padding + i * lineH);
+  });
+}
+
+function formatStamp(d) {
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mi = String(d.getMinutes()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd} ${hh}:${mi}`;
+}
+
+function formatGeoStamp(geo) {
+  if (!geo) return "";
+  const ns = geo.lat >= 0 ? "N" : "S";
+  const ew = geo.lng >= 0 ? "E" : "W";
+  return `${Math.abs(geo.lat).toFixed(4)}°${ns}, ${Math.abs(geo.lng).toFixed(4)}°${ew}`;
+}
+
+async function processPhotoForUpload(file, opts = {}) {
+  const geo = opts.geo;
+  const takenAt = opts.takenAt || new Date();
+  const watermarkLines = [
+    `PJL · ${formatStamp(takenAt)}`,
+    formatGeoStamp(geo),
+    [opts.woId, opts.seqLabel].filter(Boolean).join(" · ")
+  ];
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onerror = () => reject(new Error("Couldn't read that file."));
@@ -132,14 +202,16 @@ async function resizeImageForUpload(file, maxDim = 1280, quality = 0.82) {
       img.onerror = () => reject(new Error("Couldn't decode that image."));
       img.onload = () => {
         const longest = Math.max(img.width, img.height);
-        const scale = longest > maxDim ? maxDim / longest : 1;
+        const scale = longest > 1280 ? 1280 / longest : 1;
         const w = Math.round(img.width * scale);
         const h = Math.round(img.height * scale);
         const canvas = document.createElement("canvas");
         canvas.width = w;
         canvas.height = h;
-        canvas.getContext("2d").drawImage(img, 0, 0, w, h);
-        const dataUrl = canvas.toDataURL("image/jpeg", quality);
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(img, 0, 0, w, h);
+        applyPjlWatermark(canvas, ctx, watermarkLines);
+        const dataUrl = canvas.toDataURL("image/jpeg", 0.82);
         resolve({ base64: dataUrl.split(",", 2)[1] || "", mediaType: "image/jpeg" });
       };
       img.src = reader.result;
@@ -151,14 +223,31 @@ async function resizeImageForUpload(file, maxDim = 1280, quality = 0.82) {
 async function uploadWoPhotos(files, meta = {}) {
   const arr = Array.from(files || []);
   if (!arr.length) return null;
+  const geo = await getCurrentGeo();
+  const id = getWorkOrderId();
   const photos = [];
+  const existingCount = (loadedWorkOrder?.photos || []).length;
+  let seq = 0;
   for (const f of arr) {
     if (!f.type || !f.type.startsWith("image/")) continue;
-    const resized = await resizeImageForUpload(f);
-    photos.push({ data: resized.base64, mediaType: resized.mediaType, ...meta });
+    seq += 1;
+    const takenAt = new Date();
+    const seqLabel = `#${existingCount + seq}`;
+    const processed = await processPhotoForUpload(f, {
+      geo,
+      takenAt,
+      woId: id,
+      seqLabel
+    });
+    photos.push({
+      data: processed.base64,
+      mediaType: processed.mediaType,
+      geo: geo || null,
+      takenAt: takenAt.toISOString(),
+      ...meta
+    });
   }
   if (!photos.length) return null;
-  const id = getWorkOrderId();
   const response = await fetch(`/api/work-orders/${encodeURIComponent(id)}/photos`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -170,6 +259,49 @@ async function uploadWoPhotos(files, meta = {}) {
   }
   return data.workOrder;
 }
+
+// Bulk-save every photo on the WO to the local device. Web Share API
+// where supported (single share-sheet popup with all files), download
+// fallback elsewhere. Mirrors tech-mode's saveAllPhotosToDevice.
+async function saveAllWoPhotosToDevice() {
+  const photos = loadedWorkOrder?.photos || [];
+  if (!photos.length) return;
+  const btn = document.getElementById("woPhotoSaveAll");
+  if (btn) { btn.disabled = true; btn.classList.add("is-saving"); }
+  try {
+    const id = getWorkOrderId();
+    const files = await Promise.all(photos.map(async (p) => {
+      const resp = await fetch(`/api/work-orders/${encodeURIComponent(id)}/photo/${p.n}`, { cache: "force-cache" });
+      const blob = await resp.blob();
+      const filename = p.filename || `pjl-photo-${p.n}.jpg`;
+      return new File([blob], filename, { type: blob.type || "image/jpeg" });
+    }));
+    if (navigator.canShare && navigator.canShare({ files })) {
+      try {
+        await navigator.share({ files, title: `PJL ${id} photos` });
+        return;
+      } catch (err) {
+        if (err && err.name === "AbortError") return;
+      }
+    }
+    for (const file of files) {
+      const url = URL.createObjectURL(file);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = file.name;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 500);
+    }
+  } catch (err) {
+    alert(err.message || "Couldn't save photos.");
+  } finally {
+    if (btn) { btn.disabled = false; btn.classList.remove("is-saving"); }
+  }
+}
+
+document.getElementById("woPhotoSaveAll")?.addEventListener("click", saveAllWoPhotosToDevice);
 
 async function deleteWoPhoto(n) {
   const id = getWorkOrderId();
@@ -556,10 +688,13 @@ function populateForm(wo) {
 function renderWoPhotos(wo) {
   const strip = document.getElementById("woPhotoStrip");
   const count = document.getElementById("woPhotoCount");
+  const saveAll = document.getElementById("woPhotoSaveAll");
   if (!strip) return;
   const woLevel = (wo.photos || []).filter((p) => !p.issueId);
   if (count) count.textContent = String(woLevel.length);
   strip.innerHTML = woLevel.map(photoThumbHtml).join("");
+  // Save-all visible whenever the WO has any photos (zone-attached or not).
+  if (saveAll) saveAll.hidden = !((wo.photos || []).length);
 }
 
 // Service-specific checklist (spring_opening / fall_closing only).

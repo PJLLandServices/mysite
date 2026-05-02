@@ -134,7 +134,10 @@
     <!-- Visit-level photos — pre-work / in-progress / post-work / general
          documentation that isn't tied to a specific zone or issue. Spec
          §4.3.2 on-site execution. Photos can be promoted to the property
-         folder on completion (Tier 4). -->
+         folder on completion (Tier 4).
+         The file input has NO capture attribute — that lets iOS/Android
+         offer both "Photo Library" and "Take Photo" instead of forcing
+         the camera. Tech picks per tap. -->
     <section class="tech-section tech-wo-photos-section" id="techWoPhotosSection">
       <header class="tech-zones-header">
         <h2 class="tech-section-title">Visit photos</h2>
@@ -142,10 +145,14 @@
       </header>
       <div class="tech-photo-strip" id="techWoPhotoStrip"></div>
       <label class="tech-photo-add">
-        <input type="file" accept="image/*" capture="environment" id="techWoPhotoInput" multiple>
+        <input type="file" accept="image/*" id="techWoPhotoInput" multiple>
         <span aria-hidden="true">📷</span>
         <span>Add visit photo</span>
       </label>
+      <button type="button" class="tech-photo-save-all" id="techPhotoSaveAll" hidden>
+        <span aria-hidden="true">💾</span>
+        <span>Save all photos to phone</span>
+      </button>
     </section>
 
     <!-- Tech-wide notes for the visit. Collapsed by default. -->

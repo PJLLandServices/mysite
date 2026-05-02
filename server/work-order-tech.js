@@ -122,11 +122,89 @@ let state = {
   signaturePad: null
 };
 
-// Resize a File from an <input type="file"> down to a max dimension and
-// JPEG-encode at 0.82 quality before upload. Mirrors the chat-widget
-// resize pattern — keeps payloads under the server's 1.5 MB per-photo
-// cap even from modern phones (12 MP camera = ~5 MB raw).
-async function resizeImageForUpload(file, maxDim = 1280, quality = 0.82) {
+// Cached geolocation result so we only prompt once per page load. null
+// after a denial, object after a grant. Watermark + upload calls await
+// this — it returns null fast on subsequent invocations (no re-prompt).
+let _cachedGeo = undefined; // undefined = not yet asked
+
+async function getCurrentGeo() {
+  if (_cachedGeo !== undefined) return _cachedGeo;
+  if (typeof navigator === "undefined" || !("geolocation" in navigator)) {
+    _cachedGeo = null;
+    return null;
+  }
+  return new Promise((resolve) => {
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        _cachedGeo = {
+          lat: pos.coords.latitude,
+          lng: pos.coords.longitude,
+          accuracy: pos.coords.accuracy
+        };
+        resolve(_cachedGeo);
+      },
+      () => { _cachedGeo = null; resolve(null); },
+      { enableHighAccuracy: true, timeout: 8000, maximumAge: 60_000 }
+    );
+  });
+}
+
+// Burn a watermark strip onto a canvas. Bottom-right corner, semi-
+// transparent dark background, 2-3 lines of text. Once burned the
+// metadata can't be casually edited out — protects PJL on warranty
+// claims + customer disputes.
+function applyPjlWatermark(canvas, ctx, lines) {
+  const visible = lines.filter(Boolean);
+  if (!visible.length) return;
+  const w = canvas.width;
+  const h = canvas.height;
+  const fontSize = Math.max(14, Math.round(h * 0.024));
+  const padding = Math.round(fontSize * 0.6);
+  const lineH = Math.round(fontSize * 1.3);
+  const stripH = lineH * visible.length + padding * 2;
+  // Width sized to the longest line; capped at 60% of image width.
+  ctx.font = `600 ${fontSize}px sans-serif`;
+  ctx.textBaseline = "top";
+  let maxText = 0;
+  visible.forEach((l) => { maxText = Math.max(maxText, ctx.measureText(l).width); });
+  const stripW = Math.min(Math.round(maxText + padding * 2), Math.round(w * 0.7));
+  const stripX = w - stripW;
+  const stripY = h - stripH;
+  ctx.fillStyle = "rgba(15, 31, 20, 0.78)";
+  ctx.fillRect(stripX, stripY, stripW, stripH);
+  ctx.fillStyle = "rgba(255, 255, 255, 0.95)";
+  visible.forEach((line, i) => {
+    ctx.fillText(line, stripX + padding, stripY + padding + i * lineH);
+  });
+}
+
+// Format a Date for the watermark stamp — local-time short form.
+function formatStamp(d) {
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mi = String(d.getMinutes()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd} ${hh}:${mi}`;
+}
+
+function formatGeoStamp(geo) {
+  if (!geo) return "";
+  const ns = geo.lat >= 0 ? "N" : "S";
+  const ew = geo.lng >= 0 ? "E" : "W";
+  return `${Math.abs(geo.lat).toFixed(4)}°${ns}, ${Math.abs(geo.lng).toFixed(4)}°${ew}`;
+}
+
+// Resize + watermark a captured image. Returns a base64-encoded JPEG
+// plus the geo + takenAt metadata that the server should also persist.
+async function processPhotoForUpload(file, opts = {}) {
+  const geo = opts.geo;
+  const takenAt = opts.takenAt || new Date();
+  const watermarkLines = [
+    `PJL · ${formatStamp(takenAt)}`,
+    formatGeoStamp(geo),
+    [opts.woId, opts.seqLabel].filter(Boolean).join(" · ")
+  ];
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onerror = () => reject(new Error("Couldn't read that file."));
@@ -135,14 +213,16 @@ async function resizeImageForUpload(file, maxDim = 1280, quality = 0.82) {
       img.onerror = () => reject(new Error("Couldn't decode that image."));
       img.onload = () => {
         const longest = Math.max(img.width, img.height);
-        const scale = longest > maxDim ? maxDim / longest : 1;
+        const scale = longest > 1280 ? 1280 / longest : 1;
         const w = Math.round(img.width * scale);
         const h = Math.round(img.height * scale);
         const canvas = document.createElement("canvas");
         canvas.width = w;
         canvas.height = h;
-        canvas.getContext("2d").drawImage(img, 0, 0, w, h);
-        const dataUrl = canvas.toDataURL("image/jpeg", quality);
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(img, 0, 0, w, h);
+        applyPjlWatermark(canvas, ctx, watermarkLines);
+        const dataUrl = canvas.toDataURL("image/jpeg", 0.82);
         const base64 = dataUrl.split(",", 2)[1] || "";
         resolve({ base64, mediaType: "image/jpeg" });
       };
@@ -154,16 +234,37 @@ async function resizeImageForUpload(file, maxDim = 1280, quality = 0.82) {
 
 // Upload one or more photos to /api/work-orders/:id/photos. `meta` is
 // any additional fields (category, zoneNumber, issueId, label) that get
-// attached to each uploaded photo. Returns the updated WO from the
-// server response, or throws on failure.
+// attached to each uploaded photo. Each file is resized + watermarked
+// before send, with geo + takenAt captured at processing time.
 async function uploadWoPhotos(files, meta = {}) {
   const arr = Array.from(files || []);
   if (!arr.length) return null;
+  // Geolocation prompt fires here — once per page load. Returns null on
+  // denial / timeout, in which case the watermark + uploaded meta omit it.
+  const geo = await getCurrentGeo();
   const photos = [];
+  // Best-effort sequence label for the watermark — counts NEW photos
+  // about to land. Server filename uses real n; this is just visual.
+  const existingCount = (state.photos || []).length;
+  let seq = 0;
   for (const f of arr) {
     if (!f.type || !f.type.startsWith("image/")) continue;
-    const resized = await resizeImageForUpload(f);
-    photos.push({ data: resized.base64, mediaType: resized.mediaType, ...meta });
+    seq += 1;
+    const takenAt = new Date();
+    const seqLabel = `#${existingCount + seq}`;
+    const processed = await processPhotoForUpload(f, {
+      geo,
+      takenAt,
+      woId: state.id,
+      seqLabel
+    });
+    photos.push({
+      data: processed.base64,
+      mediaType: processed.mediaType,
+      geo: geo || null,
+      takenAt: takenAt.toISOString(),
+      ...meta
+    });
   }
   if (!photos.length) return null;
   const response = await fetch(`/api/work-orders/${encodeURIComponent(state.id)}/photos`, {
@@ -477,8 +578,10 @@ function renderIssuePhotos(host, issueId, zone) {
 
   const label = document.createElement("label");
   label.className = "tech-issue-photo-add";
+  // No capture attribute — same flow as the visit-photos input: lets
+  // iOS/Android offer Photo Library + Take Photo + Choose File.
   label.innerHTML = `
-    <input type="file" accept="image/*" capture="environment" multiple hidden>
+    <input type="file" accept="image/*" multiple hidden>
     <span aria-hidden="true">📷</span>
     <span>Photo</span>
   `;
@@ -753,6 +856,7 @@ document.getElementById("techServiceChecklistList")?.addEventListener("click", (
 function renderWoPhotos() {
   const strip = document.getElementById("techWoPhotoStrip");
   const count = document.getElementById("techWoPhotoCount");
+  const saveAll = document.getElementById("techPhotoSaveAll");
   if (!strip) return;
   const woLevel = (state.photos || []).filter((p) => !p.issueId);
   if (count) count.textContent = String(woLevel.length);
@@ -760,7 +864,63 @@ function renderWoPhotos() {
   woLevel.forEach((photo) => {
     strip.appendChild(renderPhotoThumb(photo));
   });
+  // The "Save all to phone" button is visible only when the WO has
+  // any photos at all (zone-attached or not). Hidden on empty WOs.
+  if (saveAll) {
+    saveAll.hidden = !(state.photos && state.photos.length);
+  }
 }
+
+// Bulk-save every photo on the WO to the technician's device. Uses the
+// Web Share API where supported (iOS Safari + modern Android Chrome) so
+// the share sheet pops once with all photos batched — single tap to
+// "Save Images" lands them all in Photos. Falls back to per-file
+// download attribute on browsers without canShare for files. The
+// watermarked files come straight from the server (already burned).
+async function saveAllPhotosToDevice() {
+  const photos = state.photos || [];
+  if (!photos.length) return;
+  const btn = document.getElementById("techPhotoSaveAll");
+  if (btn) { btn.disabled = true; btn.classList.add("is-saving"); }
+  try {
+    const files = await Promise.all(photos.map(async (p) => {
+      const resp = await fetch(`/api/work-orders/${encodeURIComponent(state.id)}/photo/${p.n}`, {
+        cache: "force-cache"
+      });
+      const blob = await resp.blob();
+      const filename = p.filename || `pjl-photo-${p.n}.jpg`;
+      return new File([blob], filename, { type: blob.type || "image/jpeg" });
+    }));
+    if (navigator.canShare && navigator.canShare({ files })) {
+      try {
+        await navigator.share({ files, title: `PJL ${state.id} photos` });
+        return;
+      } catch (err) {
+        // AbortError = user dismissed the share sheet, no error to show.
+        if (err && err.name === "AbortError") return;
+        // Fall through to download fallback for any other share failure.
+      }
+    }
+    // Download fallback: trigger one save per file (silent on Android,
+    // opens new tab on iOS — the share-sheet path is preferred).
+    for (const file of files) {
+      const url = URL.createObjectURL(file);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = file.name;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 500);
+    }
+  } catch (err) {
+    alert(err.message || "Couldn't save photos.");
+  } finally {
+    if (btn) { btn.disabled = false; btn.classList.remove("is-saving"); }
+  }
+}
+
+document.getElementById("techPhotoSaveAll")?.addEventListener("click", saveAllPhotosToDevice);
 
 function renderPhotoThumb(photo) {
   const wrap = document.createElement("div");

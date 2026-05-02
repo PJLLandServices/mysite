@@ -1002,6 +1002,38 @@ html, body {
   color: var(--tech-text-muted);
 }
 
+/* Save-all-to-phone — bulk download / share sheet trigger. Sits below
+   the visit-photo upload row. Hidden when the WO has no photos. */
+.tech-photo-save-all {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 8px;
+  width: 100%;
+  min-height: 44px;
+  padding: 8px 16px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--tech-green);
+  background: var(--tech-card);
+  border: 1px solid rgba(27, 77, 46, 0.20);
+  border-radius: 10px;
+  cursor: pointer;
+}
+.tech-photo-save-all:active { background: rgba(74, 140, 92, 0.06); }
+.tech-photo-save-all.is-saving {
+  opacity: 0.7;
+  pointer-events: none;
+}
+.tech-photo-save-all.is-saving::after {
+  content: "Saving…";
+  margin-left: 6px;
+  font-size: 12px;
+  color: var(--tech-text-muted);
+}
+
 /* Per-issue photo strip — same thumbnail style as WO-level but the
    add button is smaller (sits inline with the existing notes row). */
 .tech-issue-photos {

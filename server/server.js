@@ -83,7 +83,7 @@ const MAX_CHAT_BODY = 80_000; // ~50K-ish transcript + a few KB of metadata
 const PHOTOS_DIR = path.join(DATA_DIR, "photos");
 const WO_PHOTOS_DIR = path.join(DATA_DIR, "wo-photos");
 const MAX_PHOTOS_PER_LEAD = 5;
-const MAX_PHOTOS_PER_WO = 20;
+const MAX_PHOTOS_PER_WO = 150;
 const MAX_PHOTO_BYTES = 1_500_000; // 1.5 MB per photo after client-side resize
 const QUOTE_POST_MAX_BYTES = 12_000_000; // 12 MB cap for the /api/quotes POST (5 photos × ~1.5MB base64 inflated)
 const CONTACT_NOTE = "PJL_New2026";
@@ -536,6 +536,29 @@ function validatePhotos(rawPhotos, maxCount) {
     if (!buffer.length) throw new Error(`Photo ${i + 1} decoded to zero bytes.`);
     if (buffer.length > MAX_PHOTO_BYTES) throw new Error(`Photo ${i + 1} is too large (max ${Math.round(MAX_PHOTO_BYTES / 1000)} KB).`);
     const ext = mediaType === "image/png" ? "png" : (mediaType === "image/webp" ? "webp" : "jpg");
+
+    // Geo (lat/lng/accuracy) — only accept finite coordinates inside a
+    // sane Earth-bounded range. Anything malformed becomes null.
+    let geo = null;
+    if (p.geo && typeof p.geo === "object") {
+      const lat = Number(p.geo.lat);
+      const lng = Number(p.geo.lng);
+      if (Number.isFinite(lat) && Number.isFinite(lng) && Math.abs(lat) <= 90 && Math.abs(lng) <= 180) {
+        geo = {
+          lat,
+          lng,
+          accuracy: Number.isFinite(Number(p.geo.accuracy)) ? Number(p.geo.accuracy) : null
+        };
+      }
+    }
+    // Client-clock takenAt — capture moment, distinct from server-side
+    // addedAt (when upload landed). ISO string only.
+    let takenAt = null;
+    if (typeof p.takenAt === "string") {
+      const d = new Date(p.takenAt);
+      if (!Number.isNaN(d.getTime())) takenAt = d.toISOString();
+    }
+
     out.push({
       buffer,
       mediaType,
@@ -544,11 +567,39 @@ function validatePhotos(rawPhotos, maxCount) {
         category: String(p.category || "general"),
         zoneNumber: Number.isFinite(Number(p.zoneNumber)) ? Number(p.zoneNumber) : null,
         issueId: typeof p.issueId === "string" ? p.issueId : null,
-        label: typeof p.label === "string" ? p.label.slice(0, 200) : ""
+        label: typeof p.label === "string" ? p.label.slice(0, 200) : "",
+        geo,
+        takenAt
       }
     });
   }
   return out;
+}
+
+// Build a human-readable filename slug for a saved photo. Pattern:
+//   YYYYMMDD-<P-CODE>-<WO-CODE>-<scope>-<n>.<ext>
+// where scope is z<N> for zone photos, issue-<6char> for issue photos
+// without a zone, or the category (general/pre_work/...) for everything
+// else. Property code falls back to a placeholder when the WO has no
+// linked property. Year/month/day come from takenAt if the client sent
+// it, otherwise the server upload time.
+function generatePhotoFilename({ takenAt, propertyCode, woId, photoMeta, n, ext }) {
+  const d = takenAt ? new Date(takenAt) : new Date();
+  const yyyy = d.getUTCFullYear();
+  const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const dd = String(d.getUTCDate()).padStart(2, "0");
+  const datePart = `${yyyy}${mm}${dd}`;
+  const propPart = propertyCode || "P-UNKNOWN";
+  const woPart = woId || "WO-UNKNOWN";
+  let scopePart;
+  if (photoMeta.zoneNumber != null) {
+    scopePart = `z${photoMeta.zoneNumber}`;
+  } else if (photoMeta.issueId) {
+    scopePart = `issue-${String(photoMeta.issueId).slice(-6)}`;
+  } else {
+    scopePart = String(photoMeta.category || "general").replace(/_/g, "-");
+  }
+  return `${datePart}-${propPart}-${woPart}-${scopePart}-${n}.${ext || "jpg"}`;
 }
 
 // Save validated photos to disk and return the lightweight metadata to store
@@ -591,20 +642,32 @@ async function readPhotoFile(leadId, n) {
 // caller-supplied baseN so multiple uploads append cleanly without
 // renumbering existing files. Files live at WO_PHOTOS_DIR/<woId>/<n>.<ext>.
 // Returns the new metadata entries to persist on wo.photos.
-async function savePhotosForWorkOrder(woId, photos, now, baseN) {
+async function savePhotosForWorkOrder(woId, photos, now, baseN, context = {}) {
   if (!photos.length) return [];
   const dir = path.join(WO_PHOTOS_DIR, woId);
   await fs.mkdir(dir, { recursive: true });
   const meta = [];
   for (let i = 0; i < photos.length; i++) {
     const n = baseN + i + 1;
-    const filename = `${n}.${photos[i].ext}`;
-    await fs.writeFile(path.join(dir, filename), photos[i].buffer);
+    // Files on disk stay as <n>.<ext> for simple lookup. The descriptive
+    // filename rides on the meta record + serves as the
+    // Content-Disposition value when browsers download the image.
+    const onDiskFilename = `${n}.${photos[i].ext}`;
+    await fs.writeFile(path.join(dir, onDiskFilename), photos[i].buffer);
+    const filename = generatePhotoFilename({
+      takenAt: photos[i].meta.takenAt,
+      propertyCode: context.propertyCode,
+      woId: context.woCode || woId,
+      photoMeta: photos[i].meta,
+      n,
+      ext: photos[i].ext
+    });
     meta.push({
       n,
       mediaType: photos[i].mediaType,
       bytes: photos[i].buffer.length,
       addedAt: now,
+      filename,
       ...photos[i].meta
     });
   }
@@ -2517,9 +2580,23 @@ async function handleApi(req, res, pathname) {
       try { validated = validatePhotos(payload.photos, remaining); }
       catch (err) { return sendJson(res, 422, { ok: false, errors: [err.message] }); }
 
+      // Resolve the property code for the descriptive filename slug. When
+      // the WO has a linked property, we use its P-YYYY-NNNN; otherwise
+      // the slug falls back to "P-UNKNOWN" (filename still works).
+      let propertyCode = null;
+      if (wo.propertyId) {
+        try {
+          const linkedProp = await properties.get(wo.propertyId);
+          if (linkedProp && linkedProp.code) propertyCode = linkedProp.code;
+        } catch (_err) {}
+      }
+
       const baseN = existing.reduce((max, p) => Math.max(max, Number(p.n) || 0), 0);
       const now = new Date().toISOString();
-      const newMeta = await savePhotosForWorkOrder(id, validated, now, baseN);
+      const newMeta = await savePhotosForWorkOrder(id, validated, now, baseN, {
+        propertyCode,
+        woCode: wo.id
+      });
       const updated = await workOrders.update(id, { photos: [...existing, ...newMeta] });
       return sendJson(res, 201, { ok: true, workOrder: updated, added: newMeta });
     } catch (error) {
@@ -2561,11 +2638,21 @@ async function handleApi(req, res, pathname) {
     if (!photoMeta) return sendJson(res, 404, { ok: false, errors: ["Photo not found."] });
     const file = await readWorkOrderPhotoFile(id, n);
     if (!file) return sendJson(res, 404, { ok: false, errors: ["Photo not found on disk."] });
-    res.writeHead(200, {
+    // Content-Disposition uses the descriptive filename slug so saving
+    // the image (right-click → Save, or device-save flows) lands the
+    // file as 20260601-P-2026-0042-WO-A1B2C3D4-z3-2.jpg rather than 2.jpg.
+    // `inline` keeps it viewable in the browser; the filename is the hint.
+    const headers = {
       "content-type": file.mediaType,
       "cache-control": "private, max-age=86400",
       "content-length": file.data.length
-    });
+    };
+    if (photoMeta.filename) {
+      // Sanitize for header-safe ASCII. Anything weird falls back to <n>.<ext>.
+      const safe = String(photoMeta.filename).replace(/[^A-Za-z0-9._\-]/g, "");
+      if (safe) headers["content-disposition"] = `inline; filename="${safe}"`;
+    }
+    res.writeHead(200, headers);
     res.end(file.data);
     return;
   }

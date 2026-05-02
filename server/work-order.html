@@ -166,13 +166,19 @@
           <h2>Visit photos</h2>
           <span class="wo-photo-count" id="woPhotoCount">0</span>
         </header>
-        <p class="property-section-help">Pre-work / in-progress / post-work documentation. Issue-specific photos live with each issue inside the zone rows above.</p>
+        <p class="property-section-help">Pre-work / in-progress / post-work documentation. Issue-specific photos live with each issue inside the zone rows above. Each photo is watermarked with PJL · timestamp · GPS at capture time.</p>
         <div class="wo-photo-strip" id="woPhotoStrip"></div>
-        <label class="wo-photo-add">
-          <input type="file" accept="image/*" id="woPhotoInput" multiple>
-          <span aria-hidden="true">📷</span>
-          <span>Add visit photo</span>
-        </label>
+        <div class="wo-photo-actions">
+          <label class="wo-photo-add">
+            <input type="file" accept="image/*" id="woPhotoInput" multiple>
+            <span aria-hidden="true">📷</span>
+            <span>Add visit photo</span>
+          </label>
+          <button type="button" class="wo-photo-save-all" id="woPhotoSaveAll" hidden>
+            <span aria-hidden="true">💾</span>
+            <span>Save all photos to phone</span>
+          </button>
+        </div>
       </section>
 
       <!-- Service-specific checklist — Spring Opening / Fall Closing.
