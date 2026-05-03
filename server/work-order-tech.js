@@ -1533,6 +1533,7 @@ function renderOnSiteBuilder() {
   }
   if (addBtn) addBtn.hidden = !lines.length;
   if (showBtn) showBtn.hidden = !lines.length;
+  updateOnSiteShowBtnState();
 
   if (!linesEl) return;
   linesEl.innerHTML = "";
@@ -1544,7 +1545,7 @@ function renderOnSiteBuilder() {
     const priceVal = line.overridePrice != null ? Number(line.overridePrice) : Number(line.originalPrice);
     li.innerHTML = `
       <div class="tech-on-site-line-head">
-        <span class="tech-on-site-line-label">${escapeHtml(line.label || "(unlabeled)")}</span>
+        <input type="text" class="tech-on-site-line-label" value="${escapeHtml(line.label || "")}" placeholder="Describe the work…" maxlength="200" aria-label="Line description">
         <button type="button" class="tech-on-site-line-remove" data-action="remove-line" aria-label="Remove line">×</button>
       </div>
       <div class="tech-on-site-line-controls">
@@ -1573,6 +1574,25 @@ function renderOnSiteBuilder() {
     }
   }
   if (countEl) countEl.textContent = lines.length ? `${lines.length} line${lines.length === 1 ? "" : "s"}` : "";
+}
+
+// Gate "Show to customer" until every line has a description. Called from
+// the renderer AND from the live label-input handler so the button flips
+// the moment the tech types.
+function updateOnSiteShowBtnState() {
+  const showBtn = document.getElementById("techOnSiteShowBtn");
+  if (!showBtn) return;
+  const lines = (state.onSiteQuote && state.onSiteQuote.builderLineItems) || [];
+  const unlabeled = lines.filter((l) => !String(l && l.label || "").trim()).length;
+  if (unlabeled > 0) {
+    showBtn.disabled = true;
+    showBtn.textContent = unlabeled === 1
+      ? "Add a description to 1 line first"
+      : `Add descriptions to ${unlabeled} lines first`;
+  } else {
+    showBtn.disabled = false;
+    showBtn.textContent = "Show to customer →";
+  }
 }
 
 function renderOnSiteReview() {
@@ -1740,6 +1760,14 @@ document.getElementById("techOnSiteLines")?.addEventListener("input", (event) =>
       // tech who types the same number doesn't tag the line as overridden).
       line.overridePrice = Math.abs(v - Number(line.originalPrice)) < 0.005 ? null : v;
     }
+  } else if (event.target.classList.contains("tech-on-site-line-label")) {
+    line.label = String(event.target.value || "").slice(0, 200);
+    // Re-evaluate the "Show to customer" gate live as the tech types.
+    updateOnSiteShowBtnState();
+    // Persist on debounce; no in-place re-render needed (the value the
+    // tech is typing is already what's on screen).
+    scheduleBuilderPersist();
+    return;
   } else {
     return;
   }
@@ -1760,7 +1788,7 @@ document.getElementById("techOnSiteAddBtn")?.addEventListener("click", () => {
   state.onSiteQuote.builderLineItems = state.onSiteQuote.builderLineItems || [];
   state.onSiteQuote.builderLineItems.push({
     key: null,
-    label: "Custom line — describe the work",
+    label: "",
     qty: 1,
     originalPrice: 0,
     overridePrice: null,
@@ -1773,6 +1801,10 @@ document.getElementById("techOnSiteAddBtn")?.addEventListener("click", () => {
 });
 
 document.getElementById("techOnSiteShowBtn")?.addEventListener("click", () => {
+  // Defense in depth: never show the customer a quote with unlabeled lines,
+  // even if the disabled state was bypassed somehow.
+  const lines = (state.onSiteQuote && state.onSiteQuote.builderLineItems) || [];
+  if (!lines.length || lines.some((l) => !String(l && l.label || "").trim())) return;
   state.onSiteUiMode = "review";
   state.onSiteDecisions = (state.onSiteQuote.builderLineItems || []).map((_l, i) => ({ lineItemIdx: i, accepted: true }));
   // Lazy-init the second signature pad on first review render.

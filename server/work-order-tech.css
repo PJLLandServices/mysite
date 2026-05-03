@@ -1451,11 +1451,36 @@ body.tech-lightbox-open { overflow: hidden; }
   gap: 10px;
 }
 .tech-on-site-line-label {
+  font: inherit;
   font-size: 14px;
   font-weight: 600;
   color: var(--tech-text);
   line-height: 1.35;
   flex: 1;
+  min-width: 0;
+  padding: 6px 8px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  width: 100%;
+}
+.tech-on-site-line-label::placeholder {
+  color: var(--tech-text-muted);
+  font-weight: 500;
+  font-style: italic;
+}
+.tech-on-site-line-label:hover {
+  border-color: var(--tech-border);
+  background: #fff;
+}
+.tech-on-site-line-label:focus {
+  outline: none;
+  border-color: var(--tech-amber);
+  background: #fff;
+}
+.tech-on-site-line-label:placeholder-shown {
+  border-color: var(--tech-border);
+  background: #fff;
 }
 .tech-on-site-line-remove {
   width: 32px;
@@ -1583,6 +1608,13 @@ body.tech-lightbox-open { overflow: hidden; }
   cursor: pointer;
 }
 .tech-on-site-show-btn:active { background: var(--tech-green-mid); }
+.tech-on-site-show-btn:disabled {
+  background: var(--tech-border);
+  color: var(--tech-text-muted);
+  cursor: not-allowed;
+  letter-spacing: 0;
+  font-weight: 600;
+}
 
 /* Customer review state */
 .tech-on-site-review {
