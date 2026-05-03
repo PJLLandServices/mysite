@@ -134,6 +134,37 @@
   outline-offset: 2px;
 }
 .schedule-booking .event-time { color: #1B4D2E; }
+/* Visible chip in the corner so the click-to-reschedule affordance
+   isn't hidden behind a hover state (touch users never see hover). */
+.schedule-booking .event-reschedule-hint {
+  display: inline-block;
+  margin-top: 4px;
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #1B4D2E;
+  background: rgba(255, 255, 255, 0.7);
+  padding: 2px 6px;
+  border-radius: 4px;
+  align-self: flex-start;
+  opacity: 0.85;
+}
+.schedule-booking:hover .event-reschedule-hint { opacity: 1; }
+
+/* Top-of-grid tip — explains click-to-reschedule before the user has
+   any bookings to interact with. Subtle styling so it doesn't compete
+   with the grid itself. */
+.schedule-tip {
+  margin: 0 0 14px;
+  padding: 10px 14px;
+  background: rgba(74, 140, 92, 0.08);
+  border-left: 3px solid #1B4D2E;
+  border-radius: 6px;
+  font-size: 13px;
+  color: #1F2A22;
+}
+.schedule-tip strong { color: #1B4D2E; }
 .schedule-block {
   background: linear-gradient(135deg, rgba(208, 72, 72, 0.10) 0%, rgba(208, 72, 72, 0.03) 100%);
   border: 1px solid rgba(208, 72, 72, 0.30);
@@ -582,39 +613,80 @@
 .booking-slot-results {
   display: flex;
   flex-direction: column;
+  gap: 6px;
+}
+/* Date row — single button per available day. Tap to expand the time
+   buckets for that day inline below. Other rows collapse on click. */
+.booking-slot-date {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   gap: 12px;
-}
-.booking-slot-day {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-.booking-slot-day h4 {
-  margin: 0;
-  font-size: 13px;
-  font-weight: 700;
-  color: #0F1F14;
-}
-.booking-slot-buttons {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-.booking-slot-btn {
-  font: inherit;
-  font-size: 13px;
-  padding: 8px 12px;
+  width: 100%;
   background: #fff;
   border: 1px solid rgba(27, 77, 46, 0.30);
+  border-radius: 10px;
+  padding: 12px 14px;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  min-height: 44px;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+.booking-slot-date:hover { background: rgba(27, 77, 46, 0.04); }
+.booking-slot-date.is-open {
+  background: rgba(74, 140, 92, 0.10);
+  border-color: #1B4D2E;
+}
+.booking-slot-date-label {
+  font-size: 14px;
+  font-weight: 600;
+  color: #1B4D2E;
+}
+.booking-slot-date-count {
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #7A7A72;
+}
+.booking-slot-times {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 10px 12px 4px;
+  margin-top: -2px;
+  margin-bottom: 4px;
+}
+.booking-slot-times[hidden] { display: none; }
+.booking-slot-btn {
+  flex: 1 1 auto;
+  min-width: 90px;
+  min-height: 44px;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  padding: 10px 12px;
+  background: #fff;
+  border: 1.5px solid #1B4D2E;
   border-radius: 8px;
   cursor: pointer;
   color: #1B4D2E;
 }
-.booking-slot-btn:hover { background: rgba(27, 77, 46, 0.06); }
+.booking-slot-btn:hover { background: rgba(27, 77, 46, 0.08); }
 .booking-slot-btn.is-selected {
   background: #1B4D2E;
   color: #fff;
   border-color: #1B4D2E;
+}
+.booking-slot-bucket {
+  display: block;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  opacity: 0.75;
+  margin-top: 2px;
+  font-weight: 600;
 }
 .booking-slot-empty {
   padding: 10px;

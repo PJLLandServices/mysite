@@ -155,14 +155,22 @@
       .replace(/'/g, "&#039;");
   }
 
-  async function resolveBookingId({ bookingId: bid, leadId }) {
+  async function resolveBookingId({ bookingId: bid, leadId, scheduledFor }) {
     if (bid) return bid;
     if (!leadId) return null;
     try {
       const r = await fetch(`/api/bookings?leadId=${encodeURIComponent(leadId)}`);
       const data = await r.json();
       if (data.ok && Array.isArray(data.bookings) && data.bookings.length) {
-        // Prefer non-cancelled records, then the most recently scheduled.
+        // If the caller knows the exact start time (e.g. clicked a
+        // specific card on the schedule grid), match on that — a lead
+        // with multiple bookings (original + follow-up) needs this to
+        // pick the right one.
+        if (scheduledFor) {
+          const exact = data.bookings.find((b) => b.scheduledFor === scheduledFor);
+          if (exact) return exact.id;
+        }
+        // Fallback: prefer non-terminal records, most recently scheduled.
         const sorted = data.bookings
           .filter((b) => b.status !== "cancelled" && b.status !== "completed" && b.status !== "no_show")
           .sort((a, b) => new Date(b.scheduledFor || 0) - new Date(a.scheduledFor || 0));

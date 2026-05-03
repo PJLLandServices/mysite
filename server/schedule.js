@@ -170,22 +170,29 @@ function render() {
 
     // Bookings on this day. Click to reschedule via the shared admin
     // modal — each card is a button so screen readers + keyboard users
-    // can also activate it.
+    // can also activate it. The "Reschedule" chip in the corner makes
+    // the affordance visible (without it, the card just looks decorative).
     const dayBookings = bookings.filter((b) => sameDay(new Date(b.start), day));
     dayBookings.forEach((b) => {
       const card = document.createElement("button");
       card.type = "button";
       card.className = "schedule-event schedule-booking";
-      card.title = "Click to reschedule";
+      card.title = "Click to reschedule this appointment";
       card.innerHTML = `
         <span class="event-time">${escapeHtml(fmtTime(b.start))} – ${escapeHtml(fmtTime(b.end))}</span>
         <strong>${escapeHtml(b.label)}</strong>
         <span>${escapeHtml(b.customer)}</span>
+        <span class="event-reschedule-hint">📅 Reschedule</span>
       `;
       card.addEventListener("click", () => {
         if (typeof window.openCrmReschedule !== "function") return;
+        // Pass leadId AND the booking's exact start time so the modal
+        // can disambiguate when a lead has multiple bookings (original
+        // + follow-up). resolveBookingId picks the booking whose
+        // scheduledFor matches the start we clicked.
         window.openCrmReschedule({
           leadId: b.id,
+          scheduledFor: b.start,
           onDone: () => loadAll().then(render).catch(() => {})
         });
       });
@@ -584,10 +591,38 @@ async function loadAvailability() {
   }
 }
 
+// Bucket a day's slots into Morning / Midday / Afternoon / Evening.
+// Returns the FIRST available slot per bucket so the time picker is
+// max 4 buttons per day. Same logic as the reschedule + follow-up
+// pickers — keep them in sync.
+function condenseSlotsForDay(slots) {
+  const buckets = [
+    { key: "morning",   label: "Morning",   from: 8,  to: 11 },
+    { key: "midday",    label: "Midday",    from: 11, to: 14 },
+    { key: "afternoon", label: "Afternoon", from: 14, to: 17 },
+    { key: "evening",   label: "Evening",   from: 17, to: 22 }
+  ];
+  return buckets
+    .map((b) => ({
+      ...b,
+      slot: (slots || []).find((s) => {
+        const h = new Date(s.start).getHours();
+        return h >= b.from && h < b.to;
+      })
+    }))
+    .filter((b) => b.slot);
+}
+
+// Date-first picker. Vertical list of date rows; tapping one expands
+// its 4 time buckets inline below. Only one date open at a time.
+// No drawers, no slides — single-panel inline expand.
 function renderSlotResults(days) {
   bookingSlotResults.innerHTML = "";
-  const totalSlots = days.reduce((n, d) => n + (d.slots?.length || 0), 0);
-  if (!totalSlots) {
+  let totalDays = 0;
+  days.forEach((day) => {
+    if ((day.slots || []).length) totalDays++;
+  });
+  if (!totalDays) {
     bookingSlotHelp.hidden = true;
     const empty = document.createElement("p");
     empty.className = "booking-slot-empty";
@@ -597,31 +632,50 @@ function renderSlotResults(days) {
   }
   bookingSlotHelp.hidden = true;
   days.forEach((day) => {
-    if (!day.slots?.length) return;
-    const dayWrap = document.createElement("div");
-    dayWrap.className = "booking-slot-day";
-    const h = document.createElement("h4");
-    h.textContent = day.label || day.date;
-    dayWrap.appendChild(h);
-    const btnRow = document.createElement("div");
-    btnRow.className = "booking-slot-buttons";
-    day.slots.forEach((slot) => {
+    const condensed = condenseSlotsForDay(day.slots);
+    if (!condensed.length) return;
+    const dateBtn = document.createElement("button");
+    dateBtn.type = "button";
+    dateBtn.className = "booking-slot-date";
+    dateBtn.innerHTML = `
+      <span class="booking-slot-date-label"></span>
+      <span class="booking-slot-date-count"></span>
+    `;
+    dateBtn.querySelector(".booking-slot-date-label").textContent = day.label || day.date || "";
+    dateBtn.querySelector(".booking-slot-date-count").textContent = `${condensed.length} time${condensed.length === 1 ? "" : "s"}`;
+    const times = document.createElement("div");
+    times.className = "booking-slot-times";
+    times.hidden = true;
+    condensed.forEach((b) => {
       const btn = document.createElement("button");
       btn.type = "button";
       btn.className = "booking-slot-btn";
-      btn.dataset.slotStart = slot.start;
-      btn.textContent = slot.timeLabel || new Date(slot.start).toLocaleTimeString("en-CA", { hour: "numeric", minute: "2-digit" });
+      btn.dataset.slotStart = b.slot.start;
+      const time = new Date(b.slot.start).toLocaleTimeString("en-CA", { hour: "numeric", minute: "2-digit" });
+      btn.innerHTML = `${time}<span class="booking-slot-bucket">${b.label}</span>`;
       btn.addEventListener("click", () => {
         bookingSlotResults.querySelectorAll(".booking-slot-btn.is-selected")
-          .forEach((b) => b.classList.remove("is-selected"));
+          .forEach((x) => x.classList.remove("is-selected"));
         btn.classList.add("is-selected");
-        bookingSlotStart.value = slot.start;
+        bookingSlotStart.value = b.slot.start;
         bookingSubmit.disabled = false;
       });
-      btnRow.appendChild(btn);
+      times.appendChild(btn);
     });
-    dayWrap.appendChild(btnRow);
-    bookingSlotResults.appendChild(dayWrap);
+    dateBtn.addEventListener("click", () => {
+      bookingSlotResults.querySelectorAll(".booking-slot-date.is-open").forEach((d) => d.classList.remove("is-open"));
+      bookingSlotResults.querySelectorAll(".booking-slot-times").forEach((t) => { t.hidden = true; });
+      const wasOpen = dateBtn.dataset.open === "1";
+      if (!wasOpen) {
+        dateBtn.classList.add("is-open");
+        times.hidden = false;
+        dateBtn.dataset.open = "1";
+      } else {
+        dateBtn.dataset.open = "0";
+      }
+    });
+    bookingSlotResults.appendChild(dateBtn);
+    bookingSlotResults.appendChild(times);
   });
 }
 
