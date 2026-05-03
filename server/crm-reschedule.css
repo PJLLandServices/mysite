@@ -1,0 +1,194 @@
+/* Shared admin reschedule modal styles. Loaded on every admin page that
+   includes crm-reschedule.js. Single-panel centered modal — no slide,
+   no drawer, no bottom sheet. Body scrolls vertically inside the card. */
+
+.crm-resched-modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 31, 20, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  z-index: 5000;
+}
+.crm-resched-modal[hidden] { display: none !important; }
+.crm-resched-card {
+  background: #fff;
+  width: 100%;
+  max-width: 540px;
+  max-height: calc(100vh - 40px);
+  border-radius: 14px;
+  padding: 22px 22px 18px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.18);
+  font-family: "DM Sans", system-ui, sans-serif;
+}
+.crm-resched-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-shrink: 0;
+  border-bottom: 1px solid #E2E0D4;
+  padding-bottom: 12px;
+  margin-bottom: 14px;
+}
+.crm-resched-header h2 {
+  margin: 0;
+  font-size: 19px;
+  color: #1B4D2E;
+}
+.crm-resched-close {
+  background: transparent;
+  border: none;
+  font-size: 28px;
+  line-height: 1;
+  color: #7A7A72;
+  cursor: pointer;
+  width: 44px;
+  height: 44px;
+  border-radius: 8px;
+}
+.crm-resched-close:hover { background: #EAF3DE; color: #1B4D2E; }
+.crm-resched-body {
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  flex-grow: 1;
+}
+.crm-resched-current {
+  margin: 0 0 12px;
+  font-size: 14px;
+  color: #4A4A4A;
+}
+.crm-resched-current strong { color: #1B4D2E; }
+.crm-resched-help {
+  margin: 0 0 12px;
+  font-size: 13px;
+  color: #7A7A72;
+  font-style: italic;
+}
+.crm-resched-slots {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-bottom: 14px;
+}
+.crm-resched-day {
+  border: 1px solid #E2E0D4;
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: #FAFAF5;
+}
+.crm-resched-day h4 {
+  margin: 0 0 8px;
+  font-size: 14px;
+  color: #1B4D2E;
+  font-weight: 700;
+}
+.crm-resched-day-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.crm-resched-slot-btn {
+  flex: 1 1 auto;
+  min-width: 90px;
+  min-height: 44px;
+  padding: 10px 12px;
+  border: 1.5px solid #1B4D2E;
+  background: #fff;
+  color: #1B4D2E;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+.crm-resched-slot-btn:hover:not(:disabled) { background: #EAF3DE; }
+.crm-resched-slot-btn.is-selected {
+  background: #1B4D2E;
+  color: #fff;
+}
+.crm-resched-bucket {
+  display: block;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  opacity: 0.75;
+  margin-top: 2px;
+  font-weight: 600;
+}
+.crm-resched-reason-label {
+  font-size: 13px;
+  color: #4A4A4A;
+  margin-bottom: 4px;
+}
+.crm-resched-reason {
+  width: 100%;
+  border: 1px solid #E2E0D4;
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-family: inherit;
+  font-size: 14px;
+  resize: vertical;
+  min-height: 44px;
+  margin-bottom: 14px;
+}
+.crm-resched-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+.crm-resched-cancel {
+  padding: 12px 18px;
+  background: transparent;
+  border: 1.5px solid #E2E0D4;
+  color: #4A4A4A;
+  border-radius: 8px;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 14px;
+  min-height: 44px;
+}
+.crm-resched-submit {
+  padding: 12px 22px;
+  border-radius: 8px;
+  border: none;
+  background: linear-gradient(135deg, #F59B4A 0%, #E07B24 100%);
+  color: #fff;
+  font-family: inherit;
+  font-weight: 700;
+  font-size: 15px;
+  cursor: pointer;
+  min-height: 44px;
+  box-shadow: 0 6px 14px rgba(224, 123, 36, 0.25);
+}
+.crm-resched-submit:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+.crm-resched-error {
+  margin: 10px 0 0;
+  font-size: 13px;
+  color: #b53b1c;
+}
+.crm-resched-status {
+  margin: 8px 0 0;
+  font-size: 13px;
+  color: #1B4D2E;
+  min-height: 18px;
+}
+@media (max-width: 480px) {
+  .crm-resched-modal { padding: 12px; }
+  .crm-resched-card { padding: 16px 14px 14px; max-height: calc(100vh - 24px); }
+  .crm-resched-header h2 { font-size: 17px; }
+  .crm-resched-actions { justify-content: stretch; }
+  .crm-resched-actions button { flex: 1 1 auto; }
+}

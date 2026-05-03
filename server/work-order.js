@@ -46,6 +46,10 @@ const saveStatus = document.getElementById("saveStatus");
 const deleteBtn = document.getElementById("deleteBtn");
 const backLink = document.getElementById("backLink");
 const techModeBtn = document.getElementById("techModeBtn");
+const woRescheduleBtn = document.getElementById("woRescheduleBtn");
+const woFollowupBtn = document.getElementById("woFollowupBtn");
+const woBookingActivity = document.getElementById("woBookingActivity");
+const woBookingActivityList = document.getElementById("woBookingActivityList");
 const logoutButton = document.getElementById("logoutButton");
 
 const confirmModal = document.getElementById("confirmModal");
@@ -737,6 +741,102 @@ function renderHero(wo, property, lead) {
   } else {
     backLink.href = "/admin";
     backLink.textContent = "← CRM";
+  }
+}
+
+// Surface booking-level history (reschedules, status moves) on the WO
+// page. Pulls /api/bookings?leadId=<wo.leadId>, takes the first matching
+// record, and renders the last few history entries above the form.
+// Hidden when there's no canonical booking yet (legacy leads).
+async function renderBookingActivity(wo, lead) {
+  if (!woBookingActivity || !woBookingActivityList) return;
+  if (!wo || !wo.leadId) return;
+
+  // Show / hide the Reschedule button depending on WO state. We hide it
+  // when the tech is already on-site (arrivedAt set) or when the WO is
+  // beyond scheduled-status (server will reject anyway, but the UI cue
+  // matches). Cancelled/completed: also hidden.
+  let canReschedule = !wo.arrivedAt && !["completed", "cancelled"].includes(wo.status);
+  let bookingForButton = null;
+
+  try {
+    const r = await fetch(`/api/bookings?leadId=${encodeURIComponent(wo.leadId)}`);
+    const data = await r.json();
+    const recs = (data && data.ok && Array.isArray(data.bookings)) ? data.bookings : [];
+    const live = recs.find((b) => b.status !== "cancelled" && b.status !== "completed" && b.status !== "no_show") || recs[0];
+    if (!live) {
+      woBookingActivity.hidden = true;
+    } else {
+      bookingForButton = live;
+      const history = Array.isArray(live.history) ? live.history.slice().reverse() : [];
+      const reschedules = history.filter((h) => h.action === "rescheduled" || h.action.startsWith("status:"));
+      if (!reschedules.length) {
+        woBookingActivity.hidden = true;
+      } else {
+        woBookingActivity.hidden = false;
+        woBookingActivityList.innerHTML = "";
+        reschedules.slice(0, 6).forEach((h) => {
+          const li = document.createElement("li");
+          const when = new Date(h.ts).toLocaleString("en-CA", {
+            month: "short", day: "numeric", hour: "numeric", minute: "2-digit"
+          });
+          const action = h.action === "rescheduled" ? "Rescheduled" : h.action.replace(/^status:/, "Status → ");
+          li.innerHTML = `<strong>${escapeHtml(when)}</strong> · ${escapeHtml(action)}${h.note ? ` <span class="wo-booking-activity-note">${escapeHtml(h.note)}</span>` : ""}`;
+          woBookingActivityList.appendChild(li);
+        });
+      }
+    }
+  } catch {
+    woBookingActivity.hidden = true;
+  }
+
+  if (woRescheduleBtn) {
+    if (canReschedule && bookingForButton) {
+      woRescheduleBtn.hidden = false;
+      woRescheduleBtn.onclick = () => {
+        if (typeof window.openCrmReschedule !== "function") return;
+        window.openCrmReschedule({
+          bookingId: bookingForButton.id,
+          onDone: () => {
+            // Reload the WO so scheduledFor + activity refresh.
+            window.location.reload();
+          }
+        });
+      };
+    } else {
+      woRescheduleBtn.hidden = true;
+    }
+  }
+
+  // Follow-up scheduling — visible on completed visits OR active visits
+  // where the tech has identified parts that need to come back. Hidden
+  // on cancelled WOs. The modal handles the rest (date+time, parts,
+  // notes, two submit buttons).
+  if (woFollowupBtn) {
+    const showFollowup = wo.status !== "cancelled";
+    if (showFollowup) {
+      woFollowupBtn.hidden = false;
+      woFollowupBtn.onclick = () => {
+        if (typeof window.openCrmFollowup !== "function") return;
+        const inheritedSkus = (wo.onSiteQuote?.builderLineItems || [])
+          .map((li) => li?.source?.partSku || li?.source?.sku || li?.sku || "")
+          .filter(Boolean);
+        window.openCrmFollowup({
+          workOrderId: wo.id,
+          parentAddress: wo.address || "",
+          parentSkus: inheritedSkus,
+          onDone: (data) => {
+            // Open the new follow-up WO in a new tab so Patrick can
+            // review it while staying on the current visit's page.
+            if (data?.followupWoId) {
+              window.open(`/admin/work-order/${encodeURIComponent(data.followupWoId)}`, "_blank", "noopener");
+            }
+          }
+        });
+      };
+    } else {
+      woFollowupBtn.hidden = true;
+    }
   }
 }
 
@@ -1596,6 +1696,7 @@ async function init() {
     woForm.hidden = false;
     renderHero(data.workOrder, data.property, data.lead);
     renderCheatSheet(data.workOrder, data.property, data.lastService);
+    renderBookingActivity(data.workOrder, data.lead);
     populateForm(data.workOrder);
   } catch {
     woLoading.hidden = true;

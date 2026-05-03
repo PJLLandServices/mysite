@@ -682,6 +682,90 @@ body[data-locked="true"] .wo-signoff-form {
   box-shadow: 0 6px 16px rgba(27, 77, 46, 0.30);
 }
 
+/* Reschedule button — sits between status select + tech-mode link in
+   the status card. Outlined to read as secondary against the filled
+   tech-mode button. */
+.wo-reschedule-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 4px;
+  padding: 8px 12px;
+  background: #fff;
+  color: var(--pjl-green);
+  border: 1.5px solid var(--pjl-green);
+  border-radius: 8px;
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  cursor: pointer;
+  min-height: 36px;
+  transition: background 0.15s ease;
+}
+.wo-reschedule-btn:hover { background: rgba(27, 77, 46, 0.08); }
+
+/* Follow-up button — sits below Reschedule, shares the outlined style. */
+.wo-followup-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 4px;
+  padding: 8px 12px;
+  background: #fff;
+  color: var(--pjl-green);
+  border: 1.5px solid var(--pjl-green);
+  border-radius: 8px;
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  cursor: pointer;
+  min-height: 36px;
+  transition: background 0.15s ease;
+}
+.wo-followup-btn:hover { background: rgba(27, 77, 46, 0.08); }
+
+/* Booking activity — audit trail for reschedules + status moves. Sits
+   above the form so the change log is visible at a glance. */
+.wo-booking-activity {
+  margin: 0 0 18px;
+  padding: 14px 16px;
+  background: rgba(27, 77, 46, 0.04);
+  border: 1px solid rgba(27, 77, 46, 0.12);
+  border-radius: 10px;
+}
+.wo-booking-activity h3 {
+  margin: 0 0 8px;
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 14px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--pjl-green);
+}
+.wo-booking-activity-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.wo-booking-activity-list li {
+  font-size: 13px;
+  color: var(--pjl-text);
+  line-height: 1.5;
+}
+.wo-booking-activity-list strong { color: var(--pjl-green); margin-right: 6px; }
+.wo-booking-activity-note {
+  display: block;
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--pjl-text-muted);
+}
+
 /* Diagnosis section — read-only block from the AI/admin handoff */
 .wo-diagnosis-section pre {
   margin: 0;

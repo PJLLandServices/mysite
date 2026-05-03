@@ -1264,7 +1264,7 @@ function applyCrmUpdate(lead, payload) {
 // expects. Filters out cancelled (lost) and archived leads.
 async function activeBookings() {
   const leads = await readLeads();
-  return leads
+  const fromLeads = leads
     .filter((lead) => !lead.archived && (lead.crm?.status || lead.status) !== "lost" && lead.booking)
     .map((lead) => ({
       start: lead.booking.start,
@@ -1275,6 +1275,210 @@ async function activeBookings() {
       serviceLabel: lead.booking.serviceLabel
     }))
     .filter((b) => b.start && b.end);
+
+  // Union bookings.json records that aren't already represented by
+  // lead.booking. Most leads have ONE embedded lead.booking, but a single
+  // customer can have a follow-up appointment that lives only in
+  // bookings.json — those need to count against the calendar too. Match
+  // is by exact start time + leadId; anything in bookings.json with a
+  // different start than its lead's lead.booking adds to the schedule.
+  try {
+    const bookingRecs = await bookings.list();
+    for (const b of bookingRecs) {
+      if (!b.scheduledFor) continue;
+      if (b.status === "cancelled" || b.status === "completed" || b.status === "no_show") continue;
+      const dup = fromLeads.find((f) => f.leadId === b.leadId && f.start === b.scheduledFor);
+      if (dup) continue;
+      const startD = new Date(b.scheduledFor);
+      const endD = new Date(startD.getTime() + (Number(b.durationMinutes) || 60) * 60 * 1000);
+      fromLeads.push({
+        start: startD.toISOString(),
+        end: endD.toISOString(),
+        coords: PJL_BASE,
+        leadId: b.leadId,
+        serviceKey: b.serviceKey,
+        serviceLabel: b.serviceLabel
+      });
+    }
+  } catch (err) {
+    console.warn("[activeBookings] bookings.json union skipped:", err?.message);
+  }
+  return fromLeads;
+}
+
+// Returns available slots for an existing booking's reschedule modal.
+// Same contract as /api/booking/availability but service + address come
+// from the booking record (not query params), and the booking's own
+// current slot is removed from the conflict math.
+async function rescheduleAvailability(bookingId) {
+  const bookingRec = await bookings.get(bookingId);
+  if (!bookingRec) return { ok: false, status: 404, errors: ["Booking not found."] };
+  const serviceKey = bookingRec.serviceKey;
+  if (!serviceKey || !BOOKABLE_SERVICES[serviceKey]) {
+    return { ok: false, status: 422, errors: ["Booking has no recognizable service tier."] };
+  }
+  const allLeads = bookingRec.leadId ? await readLeads() : [];
+  const lead = bookingRec.leadId ? allLeads.find((l) => l.id === bookingRec.leadId) : null;
+  const address = bookingRec.address || lead?.contact?.address || "";
+  if (!address) return { ok: false, status: 422, errors: ["Address missing on the booking."] };
+  const geo = await geocode(address);
+  const allActive = await activeBookings();
+  const otherBookings = allActive.filter((b) => b.leadId !== bookingRec.leadId);
+  const scheduleData = await scheduleStore.read();
+  const mergedHours = { ...DEFAULT_HOURS, ...(scheduleData.hours || {}) };
+  const mergedSettings = { ...DEFAULT_SETTINGS, ...(scheduleData.settings || {}) };
+  const slots = await listAvailableSlots({
+    serviceKey,
+    customerCoords: geo.coords,
+    bookings: otherBookings,
+    blocks: scheduleData.blocks,
+    daysAhead: 30,
+    hours: mergedHours,
+    settings: mergedSettings
+  });
+  return {
+    ok: true,
+    data: {
+      service: { key: serviceKey, ...BOOKABLE_SERVICES[serviceKey] },
+      currentScheduledFor: bookingRec.scheduledFor,
+      address: geo.coords?.formattedAddress || address,
+      days: groupByDay(slots),
+      totalSlots: slots.length
+    }
+  };
+}
+
+// Shared reschedule logic — used by both the admin endpoint
+// (PATCH /api/bookings/:id/reschedule) and the customer portal endpoint
+// (PATCH /api/portal/:token/reschedule). Validates the new slot, mutates
+// bookings.json + lead.booking + the linked work-order's scheduledFor,
+// pushes a history entry, and fires customer notifications.
+//
+// Returns { ok, status?, errors?, booking?, slot? }. Caller is
+// responsible for the auth / 24-hour gating decisions; this helper just
+// executes the move once it's been authorized.
+//
+// `actor` is "admin" or "customer". When "customer", Patrick gets paged
+// in addition to the customer's own confirmation.
+async function rescheduleBooking({ bookingId, slotStart, actor = "admin", actorName = "", reason = "", req } = {}) {
+  if (!slotStart || Number.isNaN(Date.parse(slotStart))) {
+    return { ok: false, status: 422, errors: ["Pick a valid time slot."] };
+  }
+  const bookingRec = await bookings.get(bookingId);
+  if (!bookingRec) return { ok: false, status: 404, errors: ["Booking not found."] };
+  if (bookingRec.status === "cancelled" || bookingRec.status === "completed" || bookingRec.status === "no_show") {
+    return { ok: false, status: 409, errors: ["This appointment can't be rescheduled — its status is " + bookingRec.status + "."] };
+  }
+
+  // Look up the linked WO (if any) — we need to update wo.scheduledFor
+  // and we also block the move if the tech has already arrived. Multi-WO
+  // bookings rarely happen but if any WO has arrivedAt set, block.
+  const linkedWoIds = Array.isArray(bookingRec.workOrderIds) ? bookingRec.workOrderIds : [];
+  const linkedWos = (await Promise.all(linkedWoIds.map((wid) => workOrders.get(wid)))).filter(Boolean);
+  if (linkedWos.some((w) => w.arrivedAt)) {
+    return { ok: false, status: 409, errors: ["Technician has already arrived for this appointment — use the follow-up flow instead."] };
+  }
+
+  // Look up the lead so we can update lead.booking + lead.crm.activity.
+  const allLeads = await readLeads();
+  const leadIdx = bookingRec.leadId ? allLeads.findIndex((l) => l.id === bookingRec.leadId) : -1;
+  const lead = leadIdx >= 0 ? allLeads[leadIdx] : null;
+
+  // Validate the new slot. Service + duration come from the booking
+  // record; address geocoding is required because the engine factors
+  // travel time. We exclude THIS booking's own occupancy from the
+  // conflict check (otherwise the customer collides with themselves).
+  const serviceKey = bookingRec.serviceKey;
+  const service = BOOKABLE_SERVICES[serviceKey];
+  if (!service) return { ok: false, status: 422, errors: ["Booking has no recognizable service tier — call PJL to reschedule."] };
+  const startDate = new Date(slotStart);
+  const endDate = new Date(startDate.getTime() + service.minutes * 60 * 1000);
+
+  const address = bookingRec.address || lead?.contact?.address || "";
+  if (!address) return { ok: false, status: 422, errors: ["Address missing on the booking — can't compute drive times."] };
+  const geo = await geocode(address);
+  const allActive = await activeBookings();
+  const otherBookings = allActive.filter((b) => b.leadId !== bookingRec.leadId);
+  const scheduleData = await scheduleStore.read();
+  const mergedHours = { ...DEFAULT_HOURS, ...(scheduleData.hours || {}) };
+  const mergedSettings = { ...DEFAULT_SETTINGS, ...(scheduleData.settings || {}) };
+  const candidateSlots = await listAvailableSlots({
+    serviceKey,
+    customerCoords: geo.coords,
+    bookings: otherBookings,
+    blocks: scheduleData.blocks,
+    daysAhead: 60,
+    hours: mergedHours,
+    settings: mergedSettings
+  });
+  const matched = candidateSlots.find((s) => s.start === startDate.toISOString());
+  if (!matched) {
+    return { ok: false, status: 409, errors: ["That slot isn't available — please pick another time."] };
+  }
+
+  // 1) Push the canonical bookings.json record.
+  const updatedBooking = await bookings.reschedule(bookingId, {
+    scheduledFor: startDate.toISOString(),
+    by: actor,
+    actorName,
+    reason
+  });
+
+  // 2) Mirror to lead.booking (read cache).
+  if (lead && lead.booking) {
+    lead.booking.start = startDate.toISOString();
+    lead.booking.end = endDate.toISOString();
+    lead.crm = lead.crm || {};
+    lead.crm.activity = Array.isArray(lead.crm.activity) ? lead.crm.activity : [];
+    const prev = bookingRec.scheduledFor ? new Date(bookingRec.scheduledFor) : null;
+    const formatStr = (d) => d ? d.toLocaleString("en-CA", { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "(unscheduled)";
+    lead.crm.activity.unshift({
+      at: new Date().toISOString(),
+      type: "update",
+      text: `${actor === "customer" ? "Customer" : "Patrick"} rescheduled appointment: ${formatStr(prev)} → ${formatStr(startDate)}${reason ? ` (${reason})` : ""}`
+    });
+    lead.crm.lastUpdated = new Date().toISOString();
+    allLeads[leadIdx] = lead;
+    await writeLeads(allLeads);
+  }
+
+  // 3) Update wo.scheduledFor on every linked WO.
+  for (const wo of linkedWos) {
+    try { await workOrders.update(wo.id, { scheduledFor: startDate.toISOString() }); }
+    catch (err) { console.warn(`[reschedule] WO ${wo.id} update failed:`, err?.message); }
+  }
+
+  // 4) Customer-facing notification — sent on every reschedule, both
+  //    admin- and customer-initiated. Uses the rescheduled template.
+  const baseUrl = process.env.PUBLIC_BASE_URL || baseUrlFromReq(req);
+  if (lead) {
+    const aliasLead = {
+      ...lead,
+      portalUrl: lead.portal?.token ? joinUrl(baseUrl, `/portal/${lead.portal.token}`) : null
+    };
+    notifyCustomer("rescheduled", aliasLead, { baseUrl }).catch(() => {});
+  }
+
+  // 5) Page Patrick when the customer drove the change.
+  if (actor === "customer" && lead) {
+    const aliasLead = {
+      id: lead.id,
+      sourceLabel: "Customer rescheduled their appointment",
+      contact: {
+        name: lead.contact?.name || "(unknown)",
+        phone: lead.contact?.phone || "",
+        email: lead.contact?.email || "",
+        address: lead.contact?.address || "",
+        notes: `Was: ${bookingRec.scheduledFor || "(unscheduled)"}. Now: ${startDate.toISOString()}.${reason ? " Reason: " + reason : ""}`
+      }
+    };
+    Promise.allSettled([
+      sendNewLeadEmail(aliasLead, { baseUrl }),
+      sendNewLeadSms(aliasLead, { baseUrl })
+    ]).catch(() => {});
+  }
+
+  return { ok: true, booking: updatedBooking, slot: matched };
 }
 
 async function handleApi(req, res, pathname) {
@@ -2971,6 +3175,45 @@ async function handleApi(req, res, pathname) {
     }
   }
 
+  // ---------- Reschedule slot lookup (admin) ---------------------------
+  // Returns available slots for this booking's service tier + address,
+  // EXCLUDING this booking's own current slot from the conflict math (so
+  // the customer doesn't appear to collide with themselves).
+  const adminRescheduleAvailMatch = pathname.match(/^\/api\/bookings\/([^/]+)\/availability$/);
+  if (adminRescheduleAvailMatch && req.method === "GET") {
+    try {
+      const id = decodeURIComponent(adminRescheduleAvailMatch[1]);
+      const result = await rescheduleAvailability(id);
+      if (!result.ok) return sendJson(res, result.status || 400, { ok: false, errors: result.errors });
+      return sendJson(res, 200, { ok: true, ...result.data });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't load slots."] });
+    }
+  }
+
+  // ---------- Reschedule (admin) ---------------------------------------
+  // Admin-side reschedule from the desktop WO, tech WO, or schedule grid.
+  // No 24-hour gate — Patrick can move any future-dated booking. Tech-on-
+  // site (arrivedAt set) is blocked for both admin and customer; that
+  // case should use the follow-up flow instead.
+  const adminRescheduleMatch = pathname.match(/^\/api\/bookings\/([^/]+)\/reschedule$/);
+  if (adminRescheduleMatch && req.method === "PATCH") {
+    try {
+      const result = await rescheduleBooking({
+        bookingId: decodeURIComponent(adminRescheduleMatch[1]),
+        slotStart: (await parseRequestBody(req)).slotStart,
+        actor: "admin",
+        actorName: "Patrick",
+        reason: "",
+        req
+      });
+      if (!result.ok) return sendJson(res, result.status || 400, { ok: false, errors: result.errors });
+      return sendJson(res, 200, { ok: true, booking: result.booking, slot: result.slot });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't reschedule."] });
+    }
+  }
+
   // ---------- QuickBooks integration (spec §4.3.4 invoice handoff) -----
   // OAuth + invoice push. Setup docs in server/lib/quickbooks.js.
   // Status check — feeds the Settings page badge.
@@ -3066,15 +3309,66 @@ async function handleApi(req, res, pathname) {
   // ---------- Follow-up WO trigger (spec §4.3.2) ------------------------
   // Tech taps "Schedule follow-up visit" on the on-site WO. Creates a
   // linked service_visit WO that inherits property + customer + diagnosis
-  // pointer to the parent. Doesn't auto-schedule a slot — Patrick gets
-  // notified to call the customer and book it (same pattern as the
-  // emergency override follow-up).
+  // pointer to the parent.
+  //
+  // Body (all optional):
+  //   slotStart    — ISO timestamp. If present, the follow-up is also
+  //                  scheduled (booking record + wo.scheduledFor). If
+  //                  absent, behavior is the legacy "Patrick to slot it"
+  //                  flow — WO created, Patrick paged.
+  //   serviceKey   — availability.js key, defaults to "sprinkler_repair".
+  //   materials    — array of part SKUs the tech wants pre-loaded for
+  //                  the next visit. Stored on wo.materialsPacked.
+  //   notes        — addendum to the diagnosis ("here's what's missing").
   const woFollowupMatch = pathname.match(/^\/api\/work-orders\/([^/]+)\/followup$/);
   if (woFollowupMatch && req.method === "POST") {
     try {
       const id = decodeURIComponent(woFollowupMatch[1]);
       const parent = await workOrders.get(id);
       if (!parent) return sendJson(res, 404, { ok: false, errors: ["Work order not found."] });
+      const payload = await parseRequestBody(req).catch(() => ({}));
+      const slotStart = typeof payload.slotStart === "string" ? payload.slotStart : "";
+      const serviceKey = typeof payload.serviceKey === "string" && payload.serviceKey
+        ? payload.serviceKey
+        : "sprinkler_repair";
+      const materials = Array.isArray(payload.materials) ? payload.materials.filter((s) => typeof s === "string") : [];
+      const notes = typeof payload.notes === "string" ? payload.notes.slice(0, 1000) : "";
+
+      // Validate the slot up-front (before creating anything) so we never
+      // leave half a record behind on a bad slot.
+      let validatedSlot = null;
+      let bookingRec = null;
+      if (slotStart) {
+        const service = BOOKABLE_SERVICES[serviceKey];
+        if (!service || !service.bookable) {
+          return sendJson(res, 422, { ok: false, errors: ["Unknown service for follow-up scheduling."] });
+        }
+        const startDate = new Date(slotStart);
+        if (Number.isNaN(startDate.getTime())) {
+          return sendJson(res, 422, { ok: false, errors: ["Invalid follow-up slot."] });
+        }
+        const address = parent.address || "";
+        if (!address) return sendJson(res, 422, { ok: false, errors: ["Parent WO has no address — can't compute drive times."] });
+        const geo = await geocode(address);
+        const allActive = await activeBookings();
+        const scheduleData = await scheduleStore.read();
+        const mergedHours = { ...DEFAULT_HOURS, ...(scheduleData.hours || {}) };
+        const mergedSettings = { ...DEFAULT_SETTINGS, ...(scheduleData.settings || {}) };
+        const candidates = await listAvailableSlots({
+          serviceKey,
+          customerCoords: geo.coords,
+          bookings: allActive,
+          blocks: scheduleData.blocks,
+          daysAhead: 30,
+          hours: mergedHours,
+          settings: mergedSettings
+        });
+        validatedSlot = candidates.find((s) => s.start === startDate.toISOString());
+        if (!validatedSlot) {
+          return sendJson(res, 409, { ok: false, errors: ["That slot was just taken — please pick another time."] });
+        }
+      }
+
       const property = parent.propertyId ? await properties.get(parent.propertyId) : null;
       let lead = null;
       if (parent.leadId) {
@@ -3082,32 +3376,96 @@ async function handleApi(req, res, pathname) {
         lead = allLeads.find((l) => l.id === parent.leadId) || null;
       }
       const followup = await workOrders.create({ type: "service_visit", lead, property });
-      const diagnosis = `Follow-up to ${parent.id} (${parent.type}). Original visit notes: ${parent.techNotes || "(none)"}`;
+      const baseDiagnosis = `Follow-up to ${parent.id} (${parent.type}). Original visit notes: ${parent.techNotes || "(none)"}`;
+      const diagnosis = notes ? `${baseDiagnosis}\n\nFollow-up scope: ${notes}` : baseDiagnosis;
 
       // Inherit the parent's authorized line items into the follow-up's
-      // on-site quote builder. This is what feeds the Materials checklist
-      // on the follow-up WO — the tech curates from there. Filter out
-      // baseline (seasonal) lines because the seasonal fee was already
-      // charged on the parent visit; the follow-up is repair-only scope.
+      // on-site quote builder. Filter out baseline (seasonal) lines —
+      // seasonal fee was already charged on the parent; the follow-up
+      // is repair-only.
       const parentLines = Array.isArray(parent.onSiteQuote?.builderLineItems)
         ? parent.onSiteQuote.builderLineItems.filter((l) => !(l && l.source && l.source.baseline === true))
         : [];
 
-      await workOrders.update(followup.id, {
+      // Build wo.materialsPacked from the tech-curated SKU list. Each
+      // selected SKU lands as `true` so the materials checklist on the
+      // follow-up renders pre-checked.
+      const materialsPacked = {};
+      materials.forEach((sku) => { materialsPacked[sku] = true; });
+
+      const followupUpdates = {
         diagnosis,
         techNotes: `Originating WO: ${parent.id}. Tech to confirm scope on arrival.`,
         followupOfWoId: parent.id,
+        materialsPacked,
         onSiteQuote: parentLines.length ? {
           ...followup.onSiteQuote,
           status: "draft",
           lastBuiltAt: new Date().toISOString(),
           builderLineItems: parentLines.map((l) => ({ ...l, note: l.note ? `[from ${parent.id}] ${l.note}` : `[inherited from ${parent.id}]` }))
         } : followup.onSiteQuote
-      });
+      };
+      if (validatedSlot) {
+        followupUpdates.scheduledFor = validatedSlot.start;
+      }
+      await workOrders.update(followup.id, followupUpdates);
 
-      // Back-link parent.followupWoIds[] → child id so the desktop view
-      // can navigate either direction. Patch the parent through the
-      // standard update path (followupWoIds added to allowedTop below).
+      // Create a canonical booking record when a slot was picked. The
+      // record uses leadId = parent.leadId (so it shows up under that
+      // customer in the CRM) but its workOrderIds points at the new
+      // follow-up WO. activeBookings() unions bookings.json on top of
+      // lead.booking so this slot gets respected by the calendar.
+      if (validatedSlot) {
+        const service = BOOKABLE_SERVICES[serviceKey];
+        const startDate = new Date(validatedSlot.start);
+        const endDate = new Date(startDate.getTime() + service.minutes * 60 * 1000);
+        const now = new Date().toISOString();
+        const allRec = await bookings.list();
+        const nextId = await (async () => {
+          const prefix = `BK-${new Date().getUTCFullYear()}-`;
+          let max = 0;
+          for (const b of allRec) {
+            if (typeof b.id === "string" && b.id.startsWith(prefix)) {
+              const n = parseInt(b.id.slice(prefix.length), 10);
+              if (Number.isFinite(n) && n > max) max = n;
+            }
+          }
+          return `${prefix}${String(max + 1).padStart(4, "0")}`;
+        })();
+        const newBooking = {
+          id: nextId,
+          customerEmail: (lead?.contact?.email || parent.customerEmail || "").toLowerCase(),
+          customerName: lead?.contact?.name || parent.customerName || "",
+          customerPhone: lead?.contact?.phone || parent.customerPhone || "",
+          propertyId: parent.propertyId || null,
+          leadId: parent.leadId || null,
+          scheduledFor: startDate.toISOString(),
+          durationMinutes: service.minutes,
+          serviceKey,
+          serviceLabel: service.label,
+          zoneCount: null,
+          address: parent.address || "",
+          status: "confirmed",
+          prepNotes: notes ? `Follow-up scope: ${notes}` : "",
+          sourceQuoteId: null,
+          workOrderIds: [followup.id],
+          createdAt: now,
+          updatedAt: now,
+          history: [{ ts: now, action: "created_followup", by: "admin", note: `Follow-up to ${parent.id}` }]
+        };
+        const allWithNew = [newBooking, ...allRec];
+        try {
+          const fs = require("node:fs/promises");
+          const path = require("node:path");
+          const FILE = path.join(__dirname, "data", "bookings.json");
+          await fs.writeFile(FILE, JSON.stringify(allWithNew, null, 2) + "\n", "utf8");
+          bookingRec = newBooking;
+        } catch (err) {
+          console.warn("[followup] booking record write failed:", err?.message);
+        }
+      }
+
+      // Back-link parent.followupWoIds[].
       const parentFollowups = Array.isArray(parent.followupWoIds) ? parent.followupWoIds.slice() : [];
       if (!parentFollowups.includes(followup.id)) {
         parentFollowups.push(followup.id);
@@ -3121,26 +3479,32 @@ async function handleApi(req, res, pathname) {
         if (li !== -1) {
           allLeads[li].crm = allLeads[li].crm || {};
           allLeads[li].crm.activity = Array.isArray(allLeads[li].crm.activity) ? allLeads[li].crm.activity : [];
+          const when = validatedSlot
+            ? new Date(validatedSlot.start).toLocaleString("en-CA", { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })
+            : "(not yet slotted)";
           allLeads[li].crm.activity.unshift({
             at: new Date().toISOString(),
             type: "update",
-            text: `Follow-up WO scheduled: ${followup.id} (from ${parent.id}). Patrick to slot it.`
+            text: `Follow-up WO ${followup.id} created (from ${parent.id}). Scheduled: ${when}.${materials.length ? ` Materials: ${materials.length} SKU${materials.length === 1 ? "" : "s"}.` : ""}`
           });
           allLeads[li].crm.lastUpdated = new Date().toISOString();
           await writeLeads(allLeads);
         }
       }
-      // Notify Patrick — needs to call the customer to book.
+      // Notify Patrick. Two flavors based on whether we slotted it.
       const baseUrl = process.env.PUBLIC_BASE_URL || baseUrlFromReq(req);
+      const noticeNotes = validatedSlot
+        ? `Follow-up booked: ${followup.id} on ${new Date(validatedSlot.start).toLocaleString("en-CA")}.${materials.length ? ` Pre-loaded ${materials.length} part(s).` : ""}${notes ? " Scope: " + notes : ""}`
+        : `Tech requested follow-up from ${parent.id}. New WO: ${followup.id}. Call customer to schedule.`;
       const aliasLead = {
         id: parent.id,
-        sourceLabel: "FOLLOW-UP needs scheduling",
+        sourceLabel: validatedSlot ? "Follow-up scheduled" : "FOLLOW-UP needs scheduling",
         contact: {
           name: parent.customerName || "(unknown)",
           phone: parent.customerPhone || "",
           email: parent.customerEmail || "",
           address: parent.address || "",
-          notes: `Tech requested follow-up from ${parent.id}. New WO: ${followup.id}. Call customer to schedule.`
+          notes: noticeNotes
         }
       };
       Promise.allSettled([
@@ -3148,7 +3512,12 @@ async function handleApi(req, res, pathname) {
         sendNewLeadSms(aliasLead, { baseUrl })
       ]).catch(() => {});
 
-      return sendJson(res, 201, { ok: true, followupWoId: followup.id });
+      return sendJson(res, 201, {
+        ok: true,
+        followupWoId: followup.id,
+        scheduledFor: validatedSlot ? validatedSlot.start : null,
+        bookingId: bookingRec ? bookingRec.id : null
+      });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't create follow-up."] });
     }
@@ -3307,6 +3676,80 @@ async function handleApi(req, res, pathname) {
       });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't load preferences."] });
+    }
+  }
+
+  // ---------- Customer-side reschedule slot lookup (portal) ------------
+  // Token-authed variant of /api/bookings/:id/availability. Returns slots
+  // for the lead's existing booking, with their own current slot excluded
+  // from the conflict math. Also returns a tooLate flag so the modal can
+  // render the 24-hour fallback copy without an extra round trip.
+  const portalRescheduleSlotsMatch = pathname.match(/^\/api\/portal\/([^/]+)\/reschedule-availability$/);
+  if (portalRescheduleSlotsMatch && req.method === "GET") {
+    try {
+      const token = decodeURIComponent(portalRescheduleSlotsMatch[1]);
+      const allLeads = await readLeads();
+      const lead = allLeads.find((l) => (l.portal?.token || portalTokenForId(l.id)) === token);
+      if (!lead) return sendJson(res, 404, { ok: false, errors: ["Portal not found."] });
+      if (!lead.booking) return sendJson(res, 422, { ok: false, errors: ["No appointment on file."] });
+      const currentStart = lead.booking.start ? new Date(lead.booking.start) : null;
+      const tooLate = currentStart ? (currentStart.getTime() - Date.now()) < 24 * 60 * 60 * 1000 : false;
+      let bookingRec = (await bookings.listByLead(lead.id))[0];
+      if (!bookingRec) bookingRec = await bookings.upsertFromLead(lead);
+      const result = bookingRec ? await rescheduleAvailability(bookingRec.id) : { ok: false, errors: ["No booking."] };
+      if (!result.ok) return sendJson(res, result.status || 400, { ok: false, errors: result.errors });
+      return sendJson(res, 200, { ok: true, tooLate, ...result.data });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't load slots."] });
+    }
+  }
+
+  // ---------- Customer-side reschedule (portal) ------------------------
+  // Customer-driven appointment move from /portal/<token>. Server enforces
+  // the 24-hour gate — within 24h of the current slot, the move is
+  // refused and the client falls back to "call us" copy. Outside that
+  // window: same flow as admin reschedule, plus Patrick gets paged so
+  // he sees the change immediately.
+  const portalRescheduleMatch = pathname.match(/^\/api\/portal\/([^/]+)\/reschedule$/);
+  if (portalRescheduleMatch && req.method === "PATCH") {
+    try {
+      const token = decodeURIComponent(portalRescheduleMatch[1]);
+      const leads = await readLeads();
+      const lead = leads.find((l) => (l.portal?.token || portalTokenForId(l.id)) === token);
+      if (!lead) return sendJson(res, 404, { ok: false, errors: ["Portal not found."] });
+      if (!lead.booking) return sendJson(res, 422, { ok: false, errors: ["No appointment on file to reschedule."] });
+      const payload = await parseRequestBody(req);
+
+      // 24-hour gate. Compare the CURRENT scheduled start to "now". If the
+      // appointment is less than 24 hours away, the customer must call us.
+      const currentStart = lead.booking.start ? new Date(lead.booking.start) : null;
+      const msUntilCurrent = currentStart ? currentStart.getTime() - Date.now() : Number.POSITIVE_INFINITY;
+      if (currentStart && msUntilCurrent < 24 * 60 * 60 * 1000) {
+        return sendJson(res, 403, {
+          ok: false,
+          tooLate: true,
+          errors: ["This appointment is within 24 hours — please call (905) 960-0181 and Patrick will move it for you."]
+        });
+      }
+
+      // Find the canonical Booking record for this lead (or upsert one if
+      // the legacy lead.booking shape is the only thing present).
+      let bookingRecord = (await bookings.listByLead(lead.id))[0];
+      if (!bookingRecord) bookingRecord = await bookings.upsertFromLead(lead);
+      if (!bookingRecord) return sendJson(res, 422, { ok: false, errors: ["No bookable record on this appointment."] });
+
+      const result = await rescheduleBooking({
+        bookingId: bookingRecord.id,
+        slotStart: payload.slotStart,
+        actor: "customer",
+        actorName: lead.contact?.name || "customer",
+        reason: typeof payload.reason === "string" ? payload.reason.slice(0, 200) : "",
+        req
+      });
+      if (!result.ok) return sendJson(res, result.status || 400, { ok: false, errors: result.errors });
+      return sendJson(res, 200, { ok: true, booking: result.booking, slot: result.slot });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't reschedule."] });
     }
   }
 

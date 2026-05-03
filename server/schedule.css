@@ -116,6 +116,22 @@
 .schedule-booking {
   background: linear-gradient(135deg, rgba(74, 140, 92, 0.15) 0%, rgba(74, 140, 92, 0.05) 100%);
   border: 1px solid rgba(74, 140, 92, 0.30);
+  /* Booking cards are <button>s now (click-to-reschedule). Reset the
+     UA defaults that would otherwise leak through (text-align, font,
+     cursor) without losing the card's visual identity. */
+  font: inherit;
+  text-align: left;
+  color: inherit;
+  cursor: pointer;
+  width: 100%;
+}
+.schedule-booking:hover {
+  background: linear-gradient(135deg, rgba(74, 140, 92, 0.22) 0%, rgba(74, 140, 92, 0.08) 100%);
+  border-color: rgba(74, 140, 92, 0.50);
+}
+.schedule-booking:focus-visible {
+  outline: 2px solid #1B4D2E;
+  outline-offset: 2px;
 }
 .schedule-booking .event-time { color: #1B4D2E; }
 .schedule-block {

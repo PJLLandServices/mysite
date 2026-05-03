@@ -2561,6 +2561,28 @@ function renderCheatSheet(wo, property, lastService) {
     mapsLink.href = "https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent(address);
     mapsLink.hidden = false;
   }
+  // Reschedule chip — visible when the WO has a leadId, hasn't been
+  // started, and isn't terminal. Cheap to show even before the booking
+  // record has been confirmed; resolution happens inside the modal via
+  // /api/bookings?leadId=<id>.
+  const reschedBtn = document.getElementById("techRescheduleBtn");
+  if (reschedBtn) {
+    const canReschedule = !wo.arrivedAt
+      && !["completed", "cancelled"].includes(wo.status)
+      && !!wo.leadId;
+    if (canReschedule) {
+      reschedBtn.hidden = false;
+      reschedBtn.onclick = () => {
+        if (typeof window.openCrmReschedule !== "function") return;
+        window.openCrmReschedule({
+          leadId: wo.leadId,
+          onDone: () => window.location.reload()
+        });
+      };
+    } else {
+      reschedBtn.hidden = true;
+    }
+  }
   // Customer name + email surface back into the WO summary block too —
   // before the Cheat Sheet existed, that line read "Customer details not
   // yet captured" whenever the WO snapshot was empty even though the
@@ -2932,25 +2954,38 @@ function renderPaymentBlock() {
 }
 
 // ---- Follow-up visit (spec §4.3.2 Follow-Up WO Trigger) ---------------
+// Opens the shared crm-followup modal. The modal lets the tech pick a
+// return slot (condensed Morning / Midday / Afternoon / Evening), check
+// off parts to load on the truck, and add scope notes — then either
+// "Schedule + create WO" or "Create WO — schedule later."
 document.getElementById("techFollowupBtn")?.addEventListener("click", async () => {
-  if (!confirm("Schedule a follow-up service visit linked to this WO? Patrick will be notified to slot it. The customer's on file gets the trigger but isn't auto-booked.")) return;
   const btn = document.getElementById("techFollowupBtn");
   const status = document.getElementById("techFollowupStatus");
-  btn.disabled = true;
-  if (status) { status.hidden = false; status.textContent = "Creating follow-up…"; }
-  try {
-    const r = await fetch(`/api/work-orders/${encodeURIComponent(state.id)}/followup`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: "{}"
-    });
-    const data = await r.json().catch(() => ({}));
-    if (!r.ok || !data.ok) throw new Error((data.errors && data.errors[0]) || "Couldn't create follow-up.");
-    if (status) status.textContent = `Follow-up created: ${data.followupWoId}. Patrick has been notified to schedule it.`;
-  } catch (err) {
-    if (status) status.textContent = err.message || "Failed.";
-    btn.disabled = false;
+  if (typeof window.openCrmFollowup !== "function") {
+    if (status) { status.hidden = false; status.textContent = "Follow-up modal couldn't load."; }
+    return;
   }
+  // Inherit the parent's authorized line items as pre-checked SKUs in
+  // the parts list. Each line item carries source.partSku when it was
+  // built from the parts catalog (or source.sku for legacy entries).
+  const inheritedSkus = (state.onSiteQuote?.builderLineItems || [])
+    .map((li) => li?.source?.partSku || li?.source?.sku || li?.sku || "")
+    .filter(Boolean);
+  if (status) status.hidden = true;
+  window.openCrmFollowup({
+    workOrderId: state.id,
+    parentAddress: state.address || "",
+    parentSkus: inheritedSkus,
+    onDone: (data) => {
+      if (status) {
+        status.hidden = false;
+        status.textContent = data.scheduledFor
+          ? `Follow-up ${data.followupWoId} scheduled for ${new Date(data.scheduledFor).toLocaleString("en-CA")}.`
+          : `Follow-up ${data.followupWoId} created. Patrick will call to schedule.`;
+      }
+      btn.disabled = true;
+    }
+  });
 });
 
 // ---- Offline banner + queued-mutation status (spec §4.3.3 rule #12) -----

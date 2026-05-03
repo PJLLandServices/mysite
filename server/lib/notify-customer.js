@@ -121,6 +121,20 @@ const TEMPLATES = {
       "Your work order ({workOrderId}) is in your portal — no charge for the visit.",
     sms: "{namePrefix}your PJL site visit is scheduled: {dateStr} at {timeStr}. Free walkaround. Details: {portalUrl}"
   },
+  // Sent when a booking is rescheduled — fires regardless of who
+  // initiated (customer self-serve via portal, or Patrick from the CRM).
+  // Customer always gets the confirmation so they have a written record
+  // of the new time. Patrick gets paged separately when the customer is
+  // the one who moved it (handled in server.js).
+  rescheduled: {
+    subject: "Your PJL appointment moved to {dateStr}",
+    headline: "Your appointment has been rescheduled.",
+    body:
+      "Hi {firstName}, your PJL Land Services {serviceLabel} has been moved to {dateStr} at {timeStr}. " +
+      "Your work order ({workOrderId}) is up to date in your portal. " +
+      "If this new time doesn't work, call (905) 960-0181 — we'll find another slot.",
+    sms: "{namePrefix}your PJL appointment moved to {dateStr} at {timeStr}. WO {workOrderId}. Details: {portalUrl}. Different time? (905) 960-0181"
+  },
   // Fired manually from the tech's daily-schedule view when they tap
   // "Notify on route" before driving over. Short, direct — the tech is
   // about to be at the door, the customer just needs to know.

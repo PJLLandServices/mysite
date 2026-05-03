@@ -228,6 +228,39 @@ async function update(id, patch) {
   return next;
 }
 
+// Move a booking's scheduledFor to a new ISO timestamp + push a history
+// entry naming who did it and the previous time. Idempotent: a no-op
+// reschedule (same start) returns the existing record unchanged. The
+// caller is responsible for verifying slot availability before invoking
+// this — the helper assumes the slot has already been validated.
+async function reschedule(id, { scheduledFor, by = "admin", actorName = "", reason = "" } = {}) {
+  if (!scheduledFor) throw new Error("scheduledFor is required.");
+  if (Number.isNaN(Date.parse(scheduledFor))) throw new Error("Invalid scheduledFor.");
+  const records = await readAll();
+  const idx = records.findIndex((b) => b.id === id);
+  if (idx === -1) return null;
+  const current = records[idx];
+  if (current.scheduledFor === scheduledFor) return current;
+
+  const previous = current.scheduledFor;
+  const next = { ...current };
+  next.scheduledFor = scheduledFor;
+  next.updatedAt = new Date().toISOString();
+  next.history = [...(current.history || []), {
+    ts: next.updatedAt,
+    action: "rescheduled",
+    by,
+    note: [
+      actorName ? `${actorName} (${by})` : by,
+      `${previous || "(unscheduled)"} → ${scheduledFor}`,
+      reason ? `reason: ${reason}` : ""
+    ].filter(Boolean).join(" · ")
+  }];
+  records[idx] = next;
+  await writeAll(records);
+  return next;
+}
+
 // Attach a WO id to a booking's workOrderIds[]. Used when techs spin
 // up additional WOs from a single booking (multi-day repairs).
 async function attachWorkOrder(bookingId, woId) {
@@ -252,5 +285,6 @@ module.exports = {
   listByProperty,
   upsertFromLead,
   update,
+  reschedule,
   attachWorkOrder
 };

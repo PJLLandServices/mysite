@@ -57,6 +57,9 @@
           <div><dt>Estimated time</dt><dd id="workOrderDuration">—</dd></div>
           <div><dt>Price</dt><dd id="workOrderPrice">—</dd></div>
         </dl>
+        <div class="workorder-actions" id="workOrderActions">
+          <button type="button" class="portal-btn portal-btn-secondary" id="rescheduleBtn">Change appointment</button>
+        </div>
         <p class="workorder-note" id="workOrderNote" hidden></p>
         <section class="workorder-diagnosis" id="workOrderDiagnosis" hidden>
           <header>
@@ -131,6 +134,40 @@
         <div class="portal-recommendations-list" id="recommendationsList"></div>
       </article>
 
+      <!-- Reschedule modal — single-panel, scrolls vertically. No slides, no drawers. -->
+      <div class="portal-resched-modal" id="reschedModal" hidden role="dialog" aria-modal="true" aria-labelledby="reschedTitle">
+        <div class="portal-resched-card">
+          <header class="portal-resched-header">
+            <h2 id="reschedTitle">Change appointment</h2>
+            <button type="button" class="portal-resched-close" id="reschedClose" aria-label="Cancel">×</button>
+          </header>
+
+          <!-- Inside-24h fallback. Server-enforced; this is the customer-friendly copy. -->
+          <div class="portal-resched-toolate" id="reschedTooLate" hidden>
+            <p><strong>Your appointment is within 24 hours.</strong></p>
+            <p>To keep our schedule accurate this close to a visit, we don't allow self-serve changes inside the 24-hour window. Please call us and Patrick will move your appointment for you.</p>
+            <a class="portal-btn portal-btn-primary" href="tel:+19059600181">Call (905) 960-0181</a>
+          </div>
+
+          <!-- Normal reschedule view. -->
+          <div class="portal-resched-body" id="reschedBody" hidden>
+            <p class="portal-resched-current">
+              Currently scheduled: <strong id="reschedCurrent">—</strong>
+            </p>
+            <p class="portal-resched-help" id="reschedHelp">Loading available times…</p>
+            <div class="portal-resched-slots" id="reschedSlots"></div>
+            <label class="portal-resched-reason-label">Anything we should know? (optional)</label>
+            <textarea class="portal-resched-reason" id="reschedReason" rows="2" maxlength="200" placeholder="e.g. running late from work that day"></textarea>
+            <div class="portal-resched-actions">
+              <button type="button" class="portal-resched-cancel" id="reschedCancel">Keep current time</button>
+              <button type="button" class="portal-btn portal-btn-primary" id="reschedSubmit" disabled>Confirm new time</button>
+            </div>
+            <p class="portal-resched-error" id="reschedError" hidden role="alert"></p>
+            <p class="portal-resched-status" id="reschedStatus" role="status"></p>
+          </div>
+        </div>
+      </div>
+
       <!-- Pre-authorization signature modal — opened from a recommendation card. -->
       <div class="portal-preauth-modal" id="preauthModal" hidden role="dialog" aria-modal="true" aria-labelledby="preauthTitle">
         <div class="portal-preauth-card">
@@ -187,8 +224,8 @@
             <span>Email-only mode (no SMS)</span>
           </label>
           <label class="portal-prefs-toggle">
-            <input type="checkbox" id="prefsMarketing">
-            <span>Allow seasonal promotions / marketing texts</span>
+            <input type="checkbox" id="prefsMarketing" checked>
+            <span>Seasonal promotions &amp; updates (text + email)</span>
           </label>
           <button type="submit" class="portal-btn portal-btn-primary">Save preferences</button>
           <p class="portal-prefs-status" id="prefsStatus" role="status"></p>

@@ -14,6 +14,8 @@
   <link rel="stylesheet" href="/crm/crm.css">
   <link rel="stylesheet" href="/crm/property.css">
   <link rel="stylesheet" href="/crm/work-order.css">
+  <link rel="stylesheet" href="/crm/crm-reschedule.css">
+  <link rel="stylesheet" href="/crm/crm-followup.css">
 </head>
 <body class="pjl-crm-body">
   <aside class="pjl-admin-nav" id="navMenu" aria-label="PJL CRM Navigation">
@@ -69,9 +71,19 @@
           <option value="completed">Completed</option>
           <option value="cancelled">Cancelled</option>
         </select>
+        <button type="button" class="wo-reschedule-btn" id="woRescheduleBtn" hidden>📅 Reschedule</button>
+        <button type="button" class="wo-followup-btn" id="woFollowupBtn" hidden>↪ Follow-up visit</button>
         <a class="wo-tech-mode-btn" id="techModeBtn" target="_blank" rel="noopener">Tech mode →</a>
       </div>
     </header>
+
+    <!-- Booking activity — populated from bookings.history. Shows the
+         audit trail for reschedules and other booking-level updates so
+         Patrick can see the change log without leaving this page. -->
+    <section class="wo-booking-activity" id="woBookingActivity" hidden>
+      <h3>Recent appointment activity</h3>
+      <ul class="wo-booking-activity-list" id="woBookingActivityList"></ul>
+    </section>
 
     <!-- Locked banner — visible when wo.locked === true. Customer
          signed; the WO is the contract. Patrick's still the admin so
@@ -313,6 +325,8 @@
   </div>
 
   <script src="/crm/voice-input.js"></script>
+  <script src="/crm/crm-reschedule.js"></script>
+  <script src="/crm/crm-followup.js"></script>
   <script src="/crm/work-order.js"></script>
 </body>
 </html>

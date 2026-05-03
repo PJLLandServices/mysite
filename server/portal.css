@@ -921,3 +921,214 @@ body.portal-modal-open { overflow: hidden; }
 }
 .portal-prefs-toggle input { width: 18px; height: 18px; cursor: pointer; }
 .portal-prefs-status { margin: 6px 0 0; font-size: 13px; color: #555; }
+
+/* ============= Workorder action row + secondary button ============= */
+.workorder-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 14px 0 4px;
+}
+.portal-btn-secondary {
+  background: #fff;
+  color: var(--green);
+  border: 1.5px solid var(--green);
+  padding: 11px 20px;
+  min-height: 44px;
+}
+.portal-btn-secondary:hover:not(:disabled) {
+  background: var(--green-pale);
+}
+
+/* ============= Reschedule modal =============
+   Single-panel, centered on every viewport. No bottom-sheet, no slide-up,
+   no swipe-between-views. Body scrolls vertically inside the card. */
+.portal-resched-modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 31, 20, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  z-index: 1000;
+}
+.portal-resched-card {
+  background: #fff;
+  width: 100%;
+  max-width: 520px;
+  max-height: calc(100vh - 40px);
+  border-radius: 14px;
+  padding: 20px 20px 16px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.18);
+}
+.portal-resched-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 12px;
+  margin-bottom: 14px;
+}
+.portal-resched-header h2 {
+  margin: 0;
+  font-size: 19px;
+  color: var(--green);
+}
+.portal-resched-close {
+  background: transparent;
+  border: none;
+  font-size: 28px;
+  line-height: 1;
+  color: var(--text-muted);
+  cursor: pointer;
+  width: 44px;
+  height: 44px;
+  border-radius: 8px;
+}
+.portal-resched-close:hover { background: var(--green-pale); color: var(--green); }
+.portal-resched-toolate {
+  padding: 14px 4px 10px;
+}
+.portal-resched-toolate p {
+  margin: 0 0 12px;
+  font-size: 15px;
+  line-height: 1.5;
+}
+.portal-resched-toolate a.portal-btn {
+  display: inline-block;
+  text-decoration: none;
+  margin-top: 4px;
+}
+.portal-resched-body {
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  flex-grow: 1;
+}
+.portal-resched-current {
+  margin: 0 0 12px;
+  font-size: 14px;
+  color: var(--text-mid);
+}
+.portal-resched-current strong { color: var(--green); }
+.portal-resched-help {
+  margin: 0 0 12px;
+  font-size: 13px;
+  color: var(--text-muted);
+  font-style: italic;
+}
+.portal-resched-slots {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-bottom: 14px;
+}
+.portal-resched-day {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: var(--cream);
+}
+.portal-resched-day h4 {
+  margin: 0 0 8px;
+  font-size: 14px;
+  color: var(--green);
+  font-weight: 700;
+}
+.portal-resched-day-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.portal-resched-slot-btn {
+  flex: 1 1 auto;
+  min-width: 80px;
+  min-height: 44px;
+  padding: 10px 12px;
+  border: 1.5px solid var(--green);
+  background: #fff;
+  color: var(--green);
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+.portal-resched-slot-btn:hover:not(:disabled) { background: var(--green-pale); }
+.portal-resched-slot-btn.is-selected {
+  background: var(--green);
+  color: #fff;
+}
+.portal-resched-slot-bucket {
+  display: block;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  opacity: 0.75;
+  margin-top: 2px;
+  font-weight: 600;
+}
+.portal-resched-empty {
+  text-align: center;
+  padding: 24px 12px;
+  color: var(--text-muted);
+  font-size: 14px;
+}
+.portal-resched-reason-label {
+  font-size: 13px;
+  color: var(--text-mid);
+  margin-bottom: 4px;
+}
+.portal-resched-reason {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-family: inherit;
+  font-size: 14px;
+  resize: vertical;
+  min-height: 44px;
+  margin-bottom: 14px;
+}
+.portal-resched-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+.portal-resched-cancel {
+  padding: 12px 18px;
+  background: transparent;
+  border: 1.5px solid var(--border);
+  color: var(--text-mid);
+  border-radius: 8px;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 14px;
+  min-height: 44px;
+}
+.portal-resched-error {
+  margin: 10px 0 0;
+  font-size: 13px;
+  color: #b53b1c;
+}
+.portal-resched-status {
+  margin: 8px 0 0;
+  font-size: 13px;
+  color: var(--green);
+  min-height: 18px;
+}
+@media (max-width: 480px) {
+  .portal-resched-modal { padding: 12px; }
+  .portal-resched-card { padding: 16px 14px 14px; max-height: calc(100vh - 24px); }
+  .portal-resched-header h2 { font-size: 17px; }
+  .portal-resched-actions { justify-content: stretch; }
+  .portal-resched-actions button { flex: 1 1 auto; }
+}

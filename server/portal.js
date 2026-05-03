@@ -722,9 +722,12 @@ async function loadPrefs() {
     document.getElementById("prefsPhone").value = contact.phone || "";
     document.getElementById("prefsEmail").value = contact.email || "";
     document.getElementById("prefsBestTime").value = prefs.bestTimeToReach || "";
+    // All channels default ON. The customer can opt out per-toggle, but
+    // a fresh portal load shows every notification stream as enabled —
+    // we err on the side of more communication, not less.
     document.getElementById("prefsTextReminders").checked = prefs.textReminders !== false;
     document.getElementById("prefsEmailOnly").checked = prefs.emailOnly === true;
-    document.getElementById("prefsMarketing").checked = prefs.marketingTexts === true;
+    document.getElementById("prefsMarketing").checked = prefs.marketingTexts !== false;
   } catch {}
 }
 
@@ -761,3 +764,186 @@ document.getElementById("prefsForm")?.addEventListener("submit", async (event) =
 
 loadPortal();
 loadPrefs();
+
+// ---- Reschedule (customer self-serve) -------------------------------
+// Customer taps "Change appointment" on the work-order card. Modal asks
+// the server for available slots (excluding the customer's own current
+// occupancy) and shows up to 4 condensed buckets per day. Server enforces
+// the 24-hour gate; the modal renders the "call us" copy when blocked.
+
+const reschedBtn      = document.getElementById("rescheduleBtn");
+const reschedModal    = document.getElementById("reschedModal");
+const reschedClose    = document.getElementById("reschedClose");
+const reschedCancel   = document.getElementById("reschedCancel");
+const reschedTooLate  = document.getElementById("reschedTooLate");
+const reschedBody     = document.getElementById("reschedBody");
+const reschedCurrent  = document.getElementById("reschedCurrent");
+const reschedHelp     = document.getElementById("reschedHelp");
+const reschedSlots    = document.getElementById("reschedSlots");
+const reschedReason   = document.getElementById("reschedReason");
+const reschedSubmit   = document.getElementById("reschedSubmit");
+const reschedError    = document.getElementById("reschedError");
+const reschedStatus   = document.getElementById("reschedStatus");
+
+let reschedSelectedSlot = "";
+
+// Bucket the day's slots into Morning / Midday / Afternoon / Evening,
+// returning the FIRST available slot in each bucket. So instead of a
+// 14-button strip, the customer sees max 4 buttons per day with a clear
+// time-of-day label. Buckets keep the picker scannable.
+function condenseSlotsForDay(slots) {
+  const buckets = [
+    { key: "morning",   label: "Morning",   from: 8,  to: 11 },
+    { key: "midday",    label: "Midday",    from: 11, to: 14 },
+    { key: "afternoon", label: "Afternoon", from: 14, to: 17 },
+    { key: "evening",   label: "Evening",   from: 17, to: 22 }
+  ];
+  return buckets
+    .map((b) => ({
+      ...b,
+      slot: slots.find((s) => {
+        const h = new Date(s.start).getHours();
+        return h >= b.from && h < b.to;
+      })
+    }))
+    .filter((b) => b.slot);
+}
+
+function openReschedModal() {
+  if (!reschedModal) return;
+  reschedModal.hidden = false;
+  document.body.style.overflow = "hidden";
+}
+function closeReschedModal() {
+  if (!reschedModal) return;
+  reschedModal.hidden = true;
+  document.body.style.overflow = "";
+  reschedSelectedSlot = "";
+  if (reschedSubmit) reschedSubmit.disabled = true;
+  if (reschedError) reschedError.hidden = true;
+  if (reschedStatus) reschedStatus.textContent = "";
+  if (reschedSlots) reschedSlots.innerHTML = "";
+}
+
+reschedBtn?.addEventListener("click", async () => {
+  const token = tokenFromLocation();
+  if (!token) return;
+  openReschedModal();
+  reschedTooLate.hidden = true;
+  reschedBody.hidden = true;
+  reschedHelp.hidden = false;
+  reschedHelp.textContent = "Loading available times…";
+  reschedSlots.innerHTML = "";
+  reschedSelectedSlot = "";
+  reschedSubmit.disabled = true;
+  try {
+    const r = await fetch(`/api/portal/${encodeURIComponent(token)}/reschedule-availability`, { cache: "no-store" });
+    const data = await r.json();
+    if (!data.ok) throw new Error((data.errors || ["Couldn't load times."]).join(" "));
+    if (data.tooLate) {
+      reschedTooLate.hidden = false;
+      reschedBody.hidden = true;
+      return;
+    }
+    reschedBody.hidden = false;
+    if (data.currentScheduledFor) {
+      const d = new Date(data.currentScheduledFor);
+      reschedCurrent.textContent = d.toLocaleString("en-CA", {
+        weekday: "long", month: "long", day: "numeric", hour: "numeric", minute: "2-digit"
+      });
+    }
+    renderReschedSlots(data.days || []);
+  } catch (err) {
+    reschedHelp.hidden = false;
+    reschedHelp.textContent = err.message || "Couldn't load available times.";
+  }
+});
+
+function renderReschedSlots(days) {
+  reschedSlots.innerHTML = "";
+  let totalShown = 0;
+  days.forEach((day) => {
+    const condensed = condenseSlotsForDay(day.slots || []);
+    if (!condensed.length) return;
+    const wrap = document.createElement("div");
+    wrap.className = "portal-resched-day";
+    const h = document.createElement("h4");
+    h.textContent = day.label || day.date;
+    wrap.appendChild(h);
+    const row = document.createElement("div");
+    row.className = "portal-resched-day-buttons";
+    condensed.forEach((b) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "portal-resched-slot-btn";
+      btn.dataset.slotStart = b.slot.start;
+      const time = new Date(b.slot.start).toLocaleTimeString("en-CA", {
+        hour: "numeric", minute: "2-digit"
+      });
+      btn.innerHTML = `${time}<span class="portal-resched-slot-bucket">${b.label}</span>`;
+      btn.addEventListener("click", () => {
+        reschedSlots.querySelectorAll(".portal-resched-slot-btn.is-selected")
+          .forEach((b) => b.classList.remove("is-selected"));
+        btn.classList.add("is-selected");
+        reschedSelectedSlot = b.slot.start;
+        reschedSubmit.disabled = false;
+        reschedError.hidden = true;
+      });
+      row.appendChild(btn);
+      totalShown++;
+    });
+    wrap.appendChild(row);
+    reschedSlots.appendChild(wrap);
+  });
+  if (!totalShown) {
+    reschedHelp.hidden = false;
+    reschedHelp.textContent = "No available times in the next 30 days. Please call (905) 960-0181.";
+  } else {
+    reschedHelp.hidden = true;
+  }
+}
+
+reschedClose?.addEventListener("click", closeReschedModal);
+reschedCancel?.addEventListener("click", closeReschedModal);
+reschedModal?.addEventListener("click", (e) => {
+  if (e.target === reschedModal) closeReschedModal();
+});
+
+reschedSubmit?.addEventListener("click", async () => {
+  const token = tokenFromLocation();
+  if (!token || !reschedSelectedSlot) return;
+  reschedSubmit.disabled = true;
+  reschedError.hidden = true;
+  reschedStatus.textContent = "Confirming new time…";
+  try {
+    const r = await fetch(`/api/portal/${encodeURIComponent(token)}/reschedule`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        slotStart: reschedSelectedSlot,
+        reason: (reschedReason?.value || "").trim()
+      })
+    });
+    const data = await r.json();
+    if (!r.ok || !data.ok) {
+      if (data.tooLate) {
+        // Rare race: passed the gate on availability but missed it on submit.
+        reschedTooLate.hidden = false;
+        reschedBody.hidden = true;
+        reschedStatus.textContent = "";
+        return;
+      }
+      throw new Error((data.errors || ["Couldn't reschedule."]).join(" "));
+    }
+    reschedStatus.textContent = "Done — refreshing your appointment…";
+    setTimeout(() => {
+      closeReschedModal();
+      window.location.reload();
+    }, 800);
+  } catch (err) {
+    reschedSubmit.disabled = false;
+    reschedError.hidden = false;
+    reschedError.textContent = err.message || "Couldn't reschedule.";
+    reschedStatus.textContent = "";
+  }
+});

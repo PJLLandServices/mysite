@@ -217,7 +217,9 @@ html, body {
 }
 .tech-cheatsheet-actions {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  /* 3 chips fit on one row; 4 chips wrap into 2x2. minmax keeps each
+     chip wide enough to be tappable. */
+  grid-template-columns: repeat(auto-fit, minmax(85px, 1fr));
   gap: 8px;
 }
 .tech-cheatsheet-action {
@@ -233,6 +235,10 @@ html, body {
   border-radius: 12px;
   text-decoration: none;
   color: var(--tech-text);
+  /* button reset (the reschedule chip is a <button>, not an <a>) */
+  font-family: inherit;
+  font-size: 100%;
+  cursor: pointer;
   transition: background-color 120ms ease, border-color 120ms ease;
 }
 .tech-cheatsheet-action:active {

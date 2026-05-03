@@ -10,6 +10,8 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/crm/work-order-tech.css">
+  <link rel="stylesheet" href="/crm/crm-reschedule.css">
+  <link rel="stylesheet" href="/crm/crm-followup.css">
 </head>
 <body class="tech-body">
   <!-- Sticky header — visible while scrolling the zone list. Shows the
@@ -71,6 +73,10 @@
           <span class="tech-cheatsheet-action-icon" aria-hidden="true">🗺️</span>
           <span class="tech-cheatsheet-action-label">Directions</span>
         </a>
+        <button type="button" class="tech-cheatsheet-action tech-cheatsheet-action--reschedule" id="techRescheduleBtn" hidden aria-label="Reschedule appointment">
+          <span class="tech-cheatsheet-action-icon" aria-hidden="true">📅</span>
+          <span class="tech-cheatsheet-action-label">Reschedule</span>
+        </button>
       </div>
 
       <details class="tech-cheatsheet-block" id="techSystemBlock" open hidden>
@@ -492,6 +498,8 @@
 
   <script src="/crm/voice-input.js"></script>
   <script src="/crm/offline-queue.js"></script>
+  <script src="/crm/crm-reschedule.js"></script>
+  <script src="/crm/crm-followup.js"></script>
   <script src="/crm/work-order-tech.js"></script>
   <script>
     // Register the tech-mode ServiceWorker for offline cache. Scope is

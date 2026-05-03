@@ -168,16 +168,27 @@ function render() {
     const endMs = setHHmm(day, window.close).getTime();
     totalBookableMs += endMs - startMs;
 
-    // Bookings on this day
+    // Bookings on this day. Click to reschedule via the shared admin
+    // modal — each card is a button so screen readers + keyboard users
+    // can also activate it.
     const dayBookings = bookings.filter((b) => sameDay(new Date(b.start), day));
     dayBookings.forEach((b) => {
-      const card = document.createElement("div");
+      const card = document.createElement("button");
+      card.type = "button";
       card.className = "schedule-event schedule-booking";
+      card.title = "Click to reschedule";
       card.innerHTML = `
         <span class="event-time">${escapeHtml(fmtTime(b.start))} – ${escapeHtml(fmtTime(b.end))}</span>
         <strong>${escapeHtml(b.label)}</strong>
         <span>${escapeHtml(b.customer)}</span>
       `;
+      card.addEventListener("click", () => {
+        if (typeof window.openCrmReschedule !== "function") return;
+        window.openCrmReschedule({
+          leadId: b.id,
+          onDone: () => loadAll().then(render).catch(() => {})
+        });
+      });
       dayCol.append(card);
       totalBookedMs += new Date(b.end) - new Date(b.start);
     });
