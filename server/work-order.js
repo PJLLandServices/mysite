@@ -1331,13 +1331,14 @@ function buildZonePickerSources() {
 
   zones.forEach((z) => {
     const number = Number(z.number) || 0;
-    const rawLabel = String(z.label || "").trim();
+    // Property zones store the human description in `location`. The older
+    // schema used `label`; the property page falls back to it for legacy
+    // records, and we mirror that here so imported data isn't orphaned.
+    const rawLabel = String(z.location || z.label || "").trim();
     const notes = String(z.notes || "").trim();
-    // Fall back to "Zone N" when the property record hasn't named this
-    // zone yet. Without this, picking an unlabeled zone auto-fills the
-    // description with an empty string — looks like the auto-fill is
-    // broken even though the zone was picked correctly. The tech can
-    // overtype "Zone 5" with a real description if they want.
+    // Final fallback: when neither field is filled in, auto-populate the
+    // description with "Zone N" so the field never looks empty after a
+    // pick. Tech can overtype if they want a richer description.
     const fillLabel = rawLabel || `Zone ${number || "?"}`;
     zonePickerSources.push({
       group: "Zones",
