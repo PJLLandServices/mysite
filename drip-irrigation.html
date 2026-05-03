@@ -217,6 +217,16 @@
   background: linear-gradient(135deg, var(--amber-light) 0%, var(--amber) 100%);
   -webkit-background-clip: text; background-clip: text;
   -webkit-text-fill-color: transparent;
+  /* Italic glyphs overhang the right edge of their geometric box, and
+     -webkit-background-clip: text only paints the gradient inside that
+     box -- so italic letters at line-wrap boundaries (e.g. the "R" in
+     "WATER") render their overhang as transparent and look "cut off".
+     box-decoration-break: clone makes the inline padding apply at every
+     line wrap, not just at the start/end of the entire run, so each
+     wrapped fragment gets the trailing breathing room. */
+  padding-inline-end: 0.12em;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
 }
 .drip-hero p {
   color: rgba(255,255,255,.88);
