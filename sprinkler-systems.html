@@ -486,6 +486,24 @@
 .sprk-seasonal__body { padding: 28px; display: flex; flex-direction: column; flex: 1; }
 .sprk-seasonal__body h3 { font-size: 22px; margin-bottom: 12px; }
 .sprk-seasonal__body p { color: var(--text-mid); font-size: 15px; line-height: 1.65; margin-bottom: 22px; }
+/* Card CTA row — primary "Book" + secondary "Learn More" side by side on
+   wider cards, full-width stacked on narrow phones for cleaner alignment.
+   Touch targets are already 44px+ from base .btn padding. */
+.sprk-seasonal__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 4px;
+}
+.sprk-seasonal__actions .btn { flex: 0 1 auto; }
+@media (max-width: 480px) {
+  .sprk-seasonal__actions { flex-direction: column; align-items: stretch; gap: 8px; }
+  .sprk-seasonal__actions .btn {
+    width: 100%;
+    justify-content: center;
+    text-align: center;
+  }
+}
 
 /* Process list */
 .sprk-process {
@@ -1520,7 +1538,10 @@ a.sprk-comp:focus-visible {
             </div>
           </div>
 
-          <a href="book.html?service=spring_open_4z" class="btn btn-primary">Book Spring Opening →</a>
+          <div class="sprk-seasonal__actions">
+            <a href="book.html?service=spring_open_4z" class="btn btn-primary">Book Spring Opening →</a>
+            <a href="sprinkler-spring-opening.html" class="btn btn-outline-green">Learn More →</a>
+          </div>
         </div>
       </article>
 
@@ -1570,7 +1591,10 @@ a.sprk-comp:focus-visible {
             </div>
           </div>
 
-          <a href="book.html?service=fall_close_6z" class="btn btn-primary">Book Fall Closing →</a>
+          <div class="sprk-seasonal__actions">
+            <a href="book.html?service=fall_close_6z" class="btn btn-primary">Book Fall Closing →</a>
+            <a href="sprinkler-fall-winterization.html" class="btn btn-outline-green">Learn More →</a>
+          </div>
         </div>
       </article>
     </div>
