@@ -3045,30 +3045,29 @@ section.hero[aria-label="PJL Land Services hero"] .hero__services-sep {
 .pac-item-query { font-weight: 600; color: var(--green); }
 
 /* ============================================================
-   Hero italic-gradient text — site-wide clipping fix
+   Hero gradient text — kill italic site-wide
    ============================================================
    Every hero across the site uses the same brand pattern:
-       <h1>White headline — <em>italic amber gradient.</em></h1>
+       <h1>White headline — <em>amber-gradient highlight.</em></h1>
    with `-webkit-background-clip: text` to paint the gradient
-   inside the italic letters. The catch: background-clip:text only
-   paints inside the geometric letter box, but italic glyphs lean
-   right past that box. At a line-wrap boundary (or the right edge
-   of the card), the italic overhang falls into "no gradient
-   territory" and renders transparent — letters look cut off
-   (e.g. the "R" in "WATER" on drip, the "D" in "DIAGNOSED" on
-   repair).
-
-   Fix: add a hair of trailing inline padding so the painted
-   gradient region extends past every wrapped fragment, plus
-   `box-decoration-break: clone` so the padding applies at every
-   line-wrap (not just the very end of the inline run).
+   inside the letters. Italic was originally part of that pattern
+   but caused a recurring visual bug: background-clip:text only
+   paints inside each glyph's geometric box, while italic glyphs
+   lean right PAST that box. At any line-wrap or card-edge the
+   italic overhang fell into "no gradient territory" and rendered
+   transparent — letters looked cut off (the "R" in "WATER" on
+   drip, the "D" in "DIAGNOSED" on repair). The padding +
+   box-decoration-break workaround was fragile and kept showing
+   up. Drop the italic; keep the amber gradient. The gradient
+   alone is the brand pop.
 
    `[class*="-hero"]` matches every hero variant site-wide:
    .drip-hero, .repair-hero, .spring-hero, .fall-hero, .post-hero,
-   .blog-hero, .install-hero, .systems-hero, etc. Adding any new
-   .X-hero class on a future page picks this fix up automatically. */
+   .blog-hero, .install-hero, .systems-hero, .about-hero-content,
+   etc. The `!important` is needed because each page sets
+   `.X-hero h1 em { font-style: italic }` inline (specificity
+   beats this attribute selector). Adding any new .X-hero class
+   on a future page inherits the kill automatically. */
 [class*="-hero"] h1 em {
-  padding-inline-end: 0.12em;
-  -webkit-box-decoration-break: clone;
-  box-decoration-break: clone;
+  font-style: normal !important;
 }
