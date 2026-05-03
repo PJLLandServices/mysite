@@ -1515,7 +1515,7 @@ a.sprk-comp:focus-visible {
 <!-- Page Hero — seasonality-driven -->
 <section class="page-hero sprk-hero">
   <video class="page-hero__bg" autoplay loop muted playsinline preload="auto" aria-hidden="true">
-    <source src="pgp-estate-running.mp4" type="video/mp4">
+    <source data-season-spring-src="pgp-estate-running.mp4" data-season-fall-src="fall-closing.mp4" src="pgp-estate-running.mp4" type="video/mp4">
   </video>
   <div class="container">
     <div class="page-hero-content">
@@ -2421,32 +2421,71 @@ a.sprk-comp:focus-visible {
 })();
 
 (function(){
-  var month = new Date().getMonth(); // 0=Jan, 11=Dec
-  var springPrimary = month >= 2 && month <= 6; // Mar-Jul: Spring leads; Aug-Feb: Fall leads
+  // Four-phase seasonal hero logic:
+  //   spring     = Mar 1 – Aug 24  (Spring Opening Season Is On)
+  //   pre-fall   = Aug 25 – Sept 4 (Fall Closing Fast Approaching —
+  //                soft urgency, video still summer because it IS
+  //                still summer outside)
+  //   fall       = Sept 5 – Jan 14 (Fall Closing Season Is Here)
+  //   pre-spring = Jan 15 – Feb 28/29 (Spring Opening Fast Approaching —
+  //                forward-looking, swap back to summer-spray video to
+  //                back the "spring is coming" copy)
+  var now = new Date();
+  var month = now.getMonth(); // 0=Jan, 11=Dec
+  var day = now.getDate();    // 1-31
+
+  var phase;
+  if (month === 7 && day >= 25) {
+    phase = 'pre-fall';        // Aug 25 – Aug 31
+  } else if (month === 8 && day <= 4) {
+    phase = 'pre-fall';        // Sept 1 – Sept 4
+  } else if (month === 0 && day >= 15) {
+    phase = 'pre-spring';      // Jan 15 – Jan 31
+  } else if (month === 1) {
+    phase = 'pre-spring';      // Feb 1 – Feb 28/29
+  } else if (month >= 8 || month === 0) {
+    phase = 'fall';            // Sept 5 – Jan 14
+  } else {
+    phase = 'spring';          // Mar 1 – Aug 24
+  }
+  // Fall pricing applies to fall + pre-fall; spring pricing applies to
+  // spring + pre-spring (pre-spring is selling spring opening).
+  var fallMessaging = (phase === 'fall' || phase === 'pre-fall');
 
   // Pull the canonical 1-4 zone seasonal price from pricing.json once it's
   // loaded by pricing-injector.js. Fall back to "$90" if the injector hasn't
   // hydrated yet (e.g. the price source is offline) — same value as today.
   function priceLabel() {
-    var key = springPrimary ? 'spring_open_4z' : 'fall_close_4z';
+    var key = fallMessaging ? 'fall_close_4z' : 'spring_open_4z';
     var p = window.__pjlPricing && window.__pjlPricing.items && window.__pjlPricing.items[key];
     return p && typeof p.price === 'number' ? '$' + p.price : '$90';
   }
 
   function render() {
     var price = priceLabel();
-    var heading = springPrimary
-      ? "Spring Opening Season Is On."
-      : "Fall Closing Season Is On.";
-    var sub = springPrimary
-      ? "Time to wake your system up right. Seasonal care starts at " + price + ". Same-day repairs across Newmarket and the GTA."
-      : "Winter's closing in. Proper winterization starts at " + price + ". Same-day repairs across Newmarket and the GTA.";
-    var ctaPrimary = springPrimary
-      ? "Book Spring Opening — From " + price
-      : "Book Fall Closing — From " + price;
-    var ctaSecondary = springPrimary
-      ? "Book Fall Closing →"
-      : "Book Spring Opening →";
+
+    var heading, sub, ctaPrimary, ctaSecondary;
+    if (phase === 'spring') {
+      heading = "Spring Opening Season Is On.";
+      sub = "Time to wake your system up right. Seasonal care starts at " + price + ". Same-day repairs across Newmarket and the GTA.";
+      ctaPrimary = "Book Spring Opening — From " + price;
+      ctaSecondary = "Book Fall Closing →";
+    } else if (phase === 'pre-spring') {
+      heading = "Spring Opening Fast Approaching.";
+      sub = "Spring slots fill quickly — get your start-up booked before the March rush. Seasonal care starts at " + price + ". Same-day repairs across Newmarket and the GTA.";
+      ctaPrimary = "Book Spring Opening — From " + price;
+      ctaSecondary = "Book Fall Closing →";
+    } else if (phase === 'pre-fall') {
+      heading = "Fall Closing Fast Approaching.";
+      sub = "Book now before time slots block up. Winterization starts at " + price + ". Same-day repairs across Newmarket and the GTA.";
+      ctaPrimary = "Book Fall Closing — From " + price;
+      ctaSecondary = "Book Spring Opening →";
+    } else { // fall
+      heading = "Fall Closing Season Is Here.";
+      sub = "Winter's closing in. Proper winterization starts at " + price + ". Same-day repairs across Newmarket and the GTA.";
+      ctaPrimary = "Book Fall Closing — From " + price;
+      ctaSecondary = "Book Spring Opening →";
+    }
 
     var h = document.querySelector('[data-season-heading]');
     if (h) h.textContent = heading;
@@ -2456,6 +2495,23 @@ a.sprk-comp:focus-visible {
     if (p) p.textContent = ctaPrimary;
     var sec = document.querySelector('[data-season-secondary]');
     if (sec) sec.textContent = ctaSecondary;
+
+    // Hero background video — swap source based on phase. Spring,
+    // pre-fall and pre-spring all share the summer-look video (pre-fall
+    // keeps summer because it IS still summer in late Aug / early Sept;
+    // pre-spring uses it to back the forward-looking "spring is coming"
+    // copy). Only fall uses the blow-out clip.
+    var videoEl = document.querySelector('.page-hero__bg');
+    var sourceEl = videoEl && videoEl.querySelector('source');
+    if (sourceEl) {
+      var attr = (phase === 'fall') ? 'data-season-fall-src' : 'data-season-spring-src';
+      var nextSrc = sourceEl.getAttribute(attr);
+      if (nextSrc && sourceEl.getAttribute('src') !== nextSrc) {
+        sourceEl.setAttribute('src', nextSrc);
+        videoEl.load();
+        videoEl.play().catch(function(){ /* autoplay blocked or pre-paint, ignore */ });
+      }
+    }
   }
 
   // Render once with the fallback, then re-render when pricing.json hydrates.
