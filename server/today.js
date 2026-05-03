@@ -305,6 +305,26 @@ datePicker.addEventListener("change", () => {
   if (datePicker.value) load(datePicker.value);
 });
 
+// Step the picker by ±1 day. Parses the current value as a *local*
+// date (split-on-dash) so DST transitions don't shove the day forward
+// or back when the browser interprets a YYYY-MM-DD as UTC midnight.
+function shiftDate(deltaDays) {
+  const raw = datePicker.value || todayDateString();
+  const [y, m, d] = raw.split("-").map(Number);
+  const next = new Date(y, m - 1, d + deltaDays);
+  const ny = next.getFullYear();
+  const nm = String(next.getMonth() + 1).padStart(2, "0");
+  const nd = String(next.getDate()).padStart(2, "0");
+  datePicker.value = `${ny}-${nm}-${nd}`;
+  load(datePicker.value);
+}
+document.getElementById("datePrev")?.addEventListener("click", () => shiftDate(-1));
+document.getElementById("dateNext")?.addEventListener("click", () => shiftDate(1));
+document.getElementById("dateToday")?.addEventListener("click", () => {
+  datePicker.value = todayDateString();
+  load(datePicker.value);
+});
+
 // ---- Logout -----------------------------------------------------
 
 logoutButton?.addEventListener("click", async () => {

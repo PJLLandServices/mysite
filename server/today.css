@@ -66,6 +66,51 @@
   background: #fff;
   min-width: 160px;
 }
+.today-date-nav {
+  display: inline-flex;
+  align-items: stretch;
+  gap: 0;
+  border: 1px solid rgba(15, 31, 20, 0.18);
+  border-radius: 8px;
+  overflow: hidden;
+  background: #fff;
+}
+.today-date-step,
+.today-date-today {
+  background: transparent;
+  border: none;
+  padding: 8px 12px;
+  min-height: 36px;
+  min-width: 36px;
+  font: inherit;
+  font-size: 14px;
+  color: var(--pjl-green);
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+.today-date-step {
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1;
+}
+.today-date-today {
+  font-family: "Barlow Condensed", sans-serif;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  border-left: 1px solid rgba(15, 31, 20, 0.12);
+  border-right: 1px solid rgba(15, 31, 20, 0.12);
+  padding: 8px 14px;
+}
+.today-date-step:hover,
+.today-date-today:hover {
+  background: rgba(27, 77, 46, 0.08);
+}
+.today-date-step:focus-visible,
+.today-date-today:focus-visible {
+  outline: 2px solid var(--pjl-green);
+  outline-offset: -2px;
+}
 
 .today-loading,
 .today-error {

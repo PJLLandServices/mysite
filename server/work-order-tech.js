@@ -2717,6 +2717,11 @@ async function init() {
     state.customerName  = wo.customerName  || "";
     state.customerEmail = wo.customerEmail || "";
     state.customerPhone = wo.customerPhone || "";
+    // Address comes from the WO (snapshot at create time) or the
+    // linked property if the WO snapshot is empty. Both feed the
+    // follow-up modal's availability lookup.
+    state.address = wo.address || "";
+    state.materialsPacked = wo.materialsPacked && typeof wo.materialsPacked === "object" ? { ...wo.materialsPacked } : {};
     // Back-fill timestamps from status when missing (covers WOs where
     // the status was advanced server-side or by another session — the
     // tech opens the WO and expects to see when arrival happened, not
@@ -2776,7 +2781,13 @@ async function init() {
     // on state. All three are deterministic from current WO data so they
     // re-render anytime onSiteQuote changes (see renderOnSiteQuote).
     renderExecutionTimestamps();
-    loadPartsCatalog().then(() => renderMaterials()).catch(() => renderMaterials());
+    loadPartsCatalog().then(() => {
+      renderMaterials();
+      renderBringback();
+    }).catch(() => {
+      renderMaterials();
+      renderBringback();
+    });
     renderPaymentBlock();
 
     // Service-specific checklist (spring opening / fall closing) and
@@ -2844,11 +2855,79 @@ async function loadPartsCatalog() {
     const data = await r.json().catch(() => ({}));
     if (data.ok && data.parts && data.service_materials) {
       state.partsCatalog = data.parts;
+      state.partsCategories = Array.isArray(data.categories) ? data.categories : [];
       state.serviceMaterials = data.service_materials;
     }
   } catch (err) {
     console.warn("[materials] parts.json load failed:", err?.message);
   }
+}
+
+// Inline "Parts to bring back" section. Renders the shared CrmParts
+// tree, persists ticks to wo.materialsPacked through the standard PATCH
+// path (debounced so rapid ticks don't spam the server). Tracks the
+// "saved/saving/idle" state in the status line at the top.
+let bringbackSaveTimer = null;
+function renderBringback() {
+  const tree = document.getElementById("techBringbackTree");
+  const section = document.getElementById("techBringbackSection");
+  if (!tree || !section || !window.CrmParts) return;
+  if (!state.partsCatalog || !Object.keys(state.partsCatalog).length) {
+    tree.innerHTML = `<p class="tech-bringback-loading">Parts catalog unavailable.</p>`;
+    return;
+  }
+  const checked = new Set(
+    Object.entries(state.materialsPacked || {})
+      .filter(([, v]) => v === true)
+      .map(([sku]) => sku)
+  );
+  window.CrmParts.render(tree, {
+    categories: state.partsCategories || [],
+    parts: state.partsCatalog
+  }, {
+    preChecked: checked,
+    idPrefix: "bringback_",
+    onChange: (skus) => {
+      // Update status line.
+      const countEl = section.querySelector("[data-count]");
+      const savedEl = section.querySelector("[data-saved]");
+      if (countEl) countEl.textContent = String(skus.length);
+      if (savedEl) { savedEl.textContent = "saving…"; savedEl.classList.remove("is-saved"); savedEl.classList.add("is-saving"); }
+      // Build full materialsPacked map: every SKU in the catalog gets a
+      // bool. Server merges shallow but we send a complete map so a tick
+      // and an untick both land deterministically.
+      const next = {};
+      Object.keys(state.partsCatalog).forEach((sku) => { next[sku] = false; });
+      skus.forEach((sku) => { next[sku] = true; });
+      state.materialsPacked = next;
+      clearTimeout(bringbackSaveTimer);
+      bringbackSaveTimer = setTimeout(async () => {
+        try {
+          const r = await fetch(`/api/work-orders/${encodeURIComponent(state.id)}`, {
+            method: "PATCH",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ materialsPacked: next })
+          });
+          if (!r.ok) throw new Error("save failed");
+          if (savedEl) {
+            savedEl.textContent = "saved";
+            savedEl.classList.remove("is-saving");
+            savedEl.classList.add("is-saved");
+          }
+        } catch (err) {
+          if (savedEl) {
+            savedEl.textContent = "save failed — will retry";
+            savedEl.classList.remove("is-saving", "is-saved");
+          }
+        }
+      }, 500);
+    }
+  });
+  // Initial status line (no save).
+  const countEl = section.querySelector("[data-count]");
+  const savedEl = section.querySelector("[data-saved]");
+  if (countEl) countEl.textContent = String(checked.size);
+  if (savedEl) { savedEl.textContent = checked.size ? "loaded" : "idle"; savedEl.classList.remove("is-saving", "is-saved"); }
 }
 
 function renderMaterials() {
@@ -2965,12 +3044,15 @@ document.getElementById("techFollowupBtn")?.addEventListener("click", async () =
     if (status) { status.hidden = false; status.textContent = "Follow-up modal couldn't load."; }
     return;
   }
-  // Inherit the parent's authorized line items as pre-checked SKUs in
-  // the parts list. Each line item carries source.partSku when it was
-  // built from the parts catalog (or source.sku for legacy entries).
-  const inheritedSkus = (state.onSiteQuote?.builderLineItems || [])
+  // Inherit the standalone "Parts to bring back" ticks first (the tech
+  // built that list during the visit), then fall back to legacy line-
+  // item SKUs from the parent's onSiteQuote builder for older WOs.
+  const tickedFromBringback = Object.entries(state.materialsPacked || {})
+    .filter(([, v]) => v === true).map(([sku]) => sku);
+  const fromLineItems = (state.onSiteQuote?.builderLineItems || [])
     .map((li) => li?.source?.partSku || li?.source?.sku || li?.sku || "")
     .filter(Boolean);
+  const inheritedSkus = tickedFromBringback.length ? tickedFromBringback : fromLineItems;
   if (status) status.hidden = true;
   window.openCrmFollowup({
     workOrderId: state.id,

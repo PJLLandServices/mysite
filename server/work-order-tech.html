@@ -11,6 +11,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/crm/work-order-tech.css">
   <link rel="stylesheet" href="/crm/crm-reschedule.css">
+  <link rel="stylesheet" href="/crm/crm-parts.css">
   <link rel="stylesheet" href="/crm/crm-followup.css">
 </head>
 <body class="tech-body">
@@ -354,6 +355,20 @@
       <ul class="tech-property-updates-list" id="techPropertyUpdatesList"></ul>
     </section>
 
+    <!-- Parts to bring back — inline catalog the tech ticks during the
+         visit. Persists to wo.materialsPacked as ticks happen. Pre-feeds
+         the follow-up modal so the tech doesn't tick the same items
+         twice. Always visible (not gated behind the modal) so the tech
+         can capture mid-visit "we need to come back with X." -->
+    <section class="tech-section tech-bringback" id="techBringbackSection">
+      <h2 class="tech-section-title">Parts to bring back</h2>
+      <p class="tech-section-help">Tick anything you need on the truck for a return visit. Saves automatically. When you tap "Schedule follow-up" below, these are pre-loaded.</p>
+      <p class="tech-bringback-status" id="techBringbackStatus"><span data-count>0</span> ticked · <span data-saved>idle</span></p>
+      <div class="tech-bringback-tree" id="techBringbackTree">
+        <p class="tech-bringback-loading">Loading parts catalog…</p>
+      </div>
+    </section>
+
     <!-- Follow-Up WO Trigger — schedules a linked service_visit WO
          for work that needs another visit (parts ordered, customer
          deferred, weather delay). Per spec §4.3.2. Creates the new
@@ -361,7 +376,7 @@
          pointer attached for audit. -->
     <section class="tech-section tech-followup" id="techFollowupSection">
       <h2 class="tech-section-title">Follow-up visit</h2>
-      <p class="tech-section-help">Tap if today's work needs a second visit (parts not on truck, customer deferred a piece, weather pushed it). Creates a linked service-visit WO that inherits the unfinished scope.</p>
+      <p class="tech-section-help">Tap when today's work needs a second visit. Pulls in the parts you ticked above, lets you pick a date/time, and creates a linked WO with the unfinished scope.</p>
       <button type="button" class="tech-followup-btn" id="techFollowupBtn">📅 Schedule follow-up visit</button>
       <p class="tech-followup-status" id="techFollowupStatus" hidden></p>
     </section>
@@ -499,6 +514,7 @@
   <script src="/crm/voice-input.js"></script>
   <script src="/crm/offline-queue.js"></script>
   <script src="/crm/crm-reschedule.js"></script>
+  <script src="/crm/crm-parts.js"></script>
   <script src="/crm/crm-followup.js"></script>
   <script src="/crm/work-order-tech.js"></script>
   <script>

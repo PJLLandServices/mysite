@@ -1,0 +1,146 @@
+/* Shared parts catalog UI. Three-level tree:
+     <details class="crm-parts-cat">     ← Category (Pipe, Fittings, ...)
+       <details class="crm-parts-sub">   ← Subcategory (Pipe Roll, Poly Insert Tee, ...)
+         <label class="crm-parts-row">    ← Item (size badge + description + part #)
+   Both <details> elements collapse independently. Anything pre-checked
+   on the way in opens its parent + grandparent so the user sees ticked
+   items without manual expansion. */
+
+.crm-parts-cat {
+  border: 1px solid #E2E0D4;
+  border-radius: 10px;
+  background: #FAFAF5;
+  margin-bottom: 6px;
+}
+.crm-parts-cat-summary {
+  list-style: none;
+  cursor: pointer;
+  padding: 12px 14px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 44px;
+}
+.crm-parts-cat-summary::-webkit-details-marker { display: none; }
+.crm-parts-cat-summary::after {
+  content: "▾";
+  font-size: 12px;
+  color: #7A7A72;
+  transition: transform 160ms ease;
+}
+.crm-parts-cat[open] > .crm-parts-cat-summary::after { transform: rotate(180deg); }
+.crm-parts-cat-label {
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.10em;
+  text-transform: uppercase;
+  color: #1B4D2E;
+}
+.crm-parts-cat-meta {
+  font-size: 12px;
+  color: #7A7A72;
+  margin-left: auto;
+  margin-right: 6px;
+}
+.crm-parts-cat-meta strong { color: #1B4D2E; }
+
+.crm-parts-subwrap {
+  padding: 4px 8px 8px;
+  border-top: 1px solid #E2E0D4;
+  background: #FCFBF4;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.crm-parts-sub {
+  border: 1px solid #E8E5D7;
+  border-radius: 8px;
+  background: #fff;
+}
+.crm-parts-sub-summary {
+  list-style: none;
+  cursor: pointer;
+  padding: 9px 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 40px;
+  font-size: 13px;
+}
+.crm-parts-sub-summary::-webkit-details-marker { display: none; }
+.crm-parts-sub-summary::after {
+  content: "▾";
+  font-size: 11px;
+  color: #7A7A72;
+  transition: transform 160ms ease;
+}
+.crm-parts-sub[open] > .crm-parts-sub-summary::after { transform: rotate(180deg); }
+.crm-parts-sub-label {
+  font-weight: 600;
+  color: #1F2A22;
+}
+.crm-parts-sub-meta {
+  font-size: 12px;
+  color: #7A7A72;
+  margin-left: auto;
+  margin-right: 6px;
+}
+.crm-parts-sub-meta strong { color: #1B4D2E; }
+
+.crm-parts-list {
+  border-top: 1px solid #F0EEE3;
+  padding: 4px 0;
+  display: flex;
+  flex-direction: column;
+}
+.crm-parts-row {
+  display: grid;
+  grid-template-columns: 22px 56px 1fr auto;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 14px;
+  cursor: pointer;
+  min-height: 44px;
+  font-size: 14px;
+}
+.crm-parts-row:hover { background: #FAFAF5; }
+.crm-parts-row input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  cursor: pointer;
+  margin: 0;
+}
+.crm-parts-size {
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  font-weight: 600;
+  color: #1B4D2E;
+  text-align: center;
+  background: #EAF3DE;
+  border-radius: 6px;
+  padding: 3px 6px;
+}
+.crm-parts-desc {
+  color: #1F2A22;
+  line-height: 1.35;
+}
+.crm-parts-pn {
+  font-family: ui-monospace, "SFMono-Regular", monospace;
+  font-size: 11px;
+  color: #7A7A72;
+  white-space: nowrap;
+}
+@media (max-width: 540px) {
+  .crm-parts-row {
+    grid-template-columns: 20px 50px 1fr;
+    gap: 8px;
+    padding: 9px 10px;
+  }
+  .crm-parts-pn { display: none; }
+  .crm-parts-cat-summary,
+  .crm-parts-sub-summary { padding-left: 10px; padding-right: 10px; }
+}

@@ -859,19 +859,26 @@ reschedBtn?.addEventListener("click", async () => {
   }
 });
 
+// Date-first picker. The customer scans dates as a vertical list, taps
+// one to reveal the (max 4) time buckets for that day inline. Only one
+// date is open at a time. No drawers, no slide-up.
 function renderReschedSlots(days) {
   reschedSlots.innerHTML = "";
-  let totalShown = 0;
+  let totalDays = 0;
   days.forEach((day) => {
     const condensed = condenseSlotsForDay(day.slots || []);
     if (!condensed.length) return;
-    const wrap = document.createElement("div");
-    wrap.className = "portal-resched-day";
-    const h = document.createElement("h4");
-    h.textContent = day.label || day.date;
-    wrap.appendChild(h);
-    const row = document.createElement("div");
-    row.className = "portal-resched-day-buttons";
+    totalDays++;
+    const dateBtn = document.createElement("button");
+    dateBtn.type = "button";
+    dateBtn.className = "portal-resched-date";
+    dateBtn.innerHTML = `
+      <span class="portal-resched-date-label">${day.label || day.date}</span>
+      <span class="portal-resched-date-count">${condensed.length} time${condensed.length === 1 ? "" : "s"}</span>
+    `;
+    const times = document.createElement("div");
+    times.className = "portal-resched-times";
+    times.hidden = true;
     condensed.forEach((b) => {
       const btn = document.createElement("button");
       btn.type = "button";
@@ -889,13 +896,24 @@ function renderReschedSlots(days) {
         reschedSubmit.disabled = false;
         reschedError.hidden = true;
       });
-      row.appendChild(btn);
-      totalShown++;
+      times.appendChild(btn);
     });
-    wrap.appendChild(row);
-    reschedSlots.appendChild(wrap);
+    dateBtn.addEventListener("click", () => {
+      reschedSlots.querySelectorAll(".portal-resched-date.is-open").forEach((d) => d.classList.remove("is-open"));
+      reschedSlots.querySelectorAll(".portal-resched-times").forEach((t) => { t.hidden = true; });
+      const wasOpen = dateBtn.dataset.open === "1";
+      if (!wasOpen) {
+        dateBtn.classList.add("is-open");
+        times.hidden = false;
+        dateBtn.dataset.open = "1";
+      } else {
+        dateBtn.dataset.open = "0";
+      }
+    });
+    reschedSlots.appendChild(dateBtn);
+    reschedSlots.appendChild(times);
   });
-  if (!totalShown) {
+  if (!totalDays) {
     reschedHelp.hidden = false;
     reschedHelp.textContent = "No available times in the next 30 days. Please call (905) 960-0181.";
   } else {

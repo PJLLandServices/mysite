@@ -108,19 +108,27 @@
       .replace(/'/g, "&#039;");
   }
 
+  // Date-first picker. Tap a date row → expands time buckets inline
+  // below. Other dates collapse. No drawer, no slide.
   function renderSlots(days) {
     const slotsEl = modal.querySelector("[data-slots]");
     const helpEl = modal.querySelector("[data-slots-help]");
     slotsEl.innerHTML = "";
-    let total = 0;
+    let totalDays = 0;
     days.forEach((day) => {
       const condensed = condenseSlotsForDay(day.slots || []);
       if (!condensed.length) return;
-      const wrap = document.createElement("div");
-      wrap.className = "crm-followup-day";
-      wrap.innerHTML = `<h4>${escapeHtml(day.label || day.date || "")}</h4>`;
-      const row = document.createElement("div");
-      row.className = "crm-followup-day-buttons";
+      totalDays++;
+      const dateBtn = document.createElement("button");
+      dateBtn.type = "button";
+      dateBtn.className = "crm-followup-date";
+      dateBtn.innerHTML = `
+        <span class="crm-followup-date-label">${escapeHtml(day.label || day.date || "")}</span>
+        <span class="crm-followup-date-count">${condensed.length} time${condensed.length === 1 ? "" : "s"}</span>
+      `;
+      const times = document.createElement("div");
+      times.className = "crm-followup-times";
+      times.hidden = true;
       condensed.forEach((b) => {
         const btn = document.createElement("button");
         btn.type = "button";
@@ -133,13 +141,24 @@
           selectedSlot = b.slot.start;
           modal.querySelector(".crm-followup-submit").disabled = false;
         });
-        row.appendChild(btn);
-        total++;
+        times.appendChild(btn);
       });
-      wrap.appendChild(row);
-      slotsEl.appendChild(wrap);
+      dateBtn.addEventListener("click", () => {
+        slotsEl.querySelectorAll(".crm-followup-date.is-open").forEach((d) => d.classList.remove("is-open"));
+        slotsEl.querySelectorAll(".crm-followup-times").forEach((t) => { t.hidden = true; });
+        const wasOpen = dateBtn.dataset.open === "1";
+        if (!wasOpen) {
+          dateBtn.classList.add("is-open");
+          times.hidden = false;
+          dateBtn.dataset.open = "1";
+        } else {
+          dateBtn.dataset.open = "0";
+        }
+      });
+      slotsEl.appendChild(dateBtn);
+      slotsEl.appendChild(times);
     });
-    if (!total) {
+    if (!totalDays) {
       helpEl.hidden = false;
       helpEl.textContent = "No available slots in the next 30 days. Use 'Create WO — schedule later' and Patrick will call to slot it.";
     } else {
@@ -147,61 +166,20 @@
     }
   }
 
-  function renderParts(parts) {
+  // Render the parts catalog into the modal via the shared CrmParts
+  // module. Three-level tree: Category > Subcategory > Items. Inherited
+  // SKUs from the parent WO arrive as `parentLineSkus` (a Set) and get
+  // pre-checked; the renderer auto-opens the right categories.
+  function renderParts(catalog) {
     const partsEl = modal.querySelector("[data-parts]");
-    partsEl.innerHTML = "";
-    const byCategory = {};
-    Object.values(parts || {}).forEach((p) => {
-      if (!p || !p.sku) return;
-      const cat = p.category || "other";
-      byCategory[cat] = byCategory[cat] || [];
-      byCategory[cat].push(p);
-    });
-    const order = ["head", "nozzle", "valve", "manifold", "wire", "pipe", "fitting", "controller", "plumbing", "consumable", "other"];
-    const cats = Object.keys(byCategory).sort((a, b) => order.indexOf(a) - order.indexOf(b));
-    if (!cats.length) {
+    if (!window.CrmParts || !catalog || !catalog.parts) {
       partsEl.textContent = "Parts catalog unavailable.";
       return;
     }
-    cats.forEach((cat) => {
-      const det = document.createElement("details");
-      det.className = "crm-followup-parts-cat";
-      // Open the categories where parent-WO inherited SKUs live so the
-      // checked items are visible without the user having to expand.
-      const inheritedInThisCat = byCategory[cat].some((p) => parentLineSkus.has(p.sku));
-      if (inheritedInThisCat) det.open = true;
-      const summary = document.createElement("summary");
-      const inheritedCount = byCategory[cat].filter((p) => parentLineSkus.has(p.sku)).length;
-      summary.innerHTML = `${escapeHtml(catLabel(cat))} <span class="crm-followup-parts-count">${byCategory[cat].length}${inheritedCount ? ` · ${inheritedCount} pre-checked` : ""}</span>`;
-      det.appendChild(summary);
-      const list = document.createElement("div");
-      list.className = "crm-followup-parts-list";
-      byCategory[cat].forEach((p) => {
-        const id = "fpart_" + p.sku.replace(/[^a-zA-Z0-9]/g, "_");
-        const label = document.createElement("label");
-        label.className = "crm-followup-part-row";
-        label.htmlFor = id;
-        const checked = parentLineSkus.has(p.sku) ? "checked" : "";
-        label.innerHTML = `
-          <input type="checkbox" id="${id}" data-sku="${escapeHtml(p.sku)}" ${checked}>
-          <span class="crm-followup-part-name">${escapeHtml(p.name || p.sku)}</span>
-          <span class="crm-followup-part-meta">${escapeHtml([p.size, p.unit].filter(Boolean).join(" · "))}</span>
-        `;
-        list.appendChild(label);
-      });
-      det.appendChild(list);
-      partsEl.appendChild(det);
+    window.CrmParts.render(partsEl, catalog, {
+      preChecked: parentLineSkus,
+      idPrefix: "fpart_"
     });
-  }
-
-  function catLabel(cat) {
-    const map = {
-      head: "Heads / nozzles", valve: "Valves", manifold: "Manifolds",
-      wire: "Wire / connectors", pipe: "Pipe", fitting: "Fittings",
-      controller: "Controllers / sensors", plumbing: "Plumbing",
-      consumable: "Consumables", nozzle: "Nozzles", other: "Other"
-    };
-    return map[cat] || (cat.charAt(0).toUpperCase() + cat.slice(1));
   }
 
   async function open(opts = {}) {
@@ -233,7 +211,7 @@
     const partsUrl = "/api/parts";
     const [availResp, partsResp] = await Promise.all([
       fetch(availUrl).then((r) => r.json()).catch((err) => ({ ok: false, errors: [err.message] })),
-      partsCatalog ? Promise.resolve({ ok: true, parts: partsCatalog }) : fetch(partsUrl).then((r) => r.json()).catch((err) => ({ ok: false, errors: [err.message] }))
+      partsCatalog ? Promise.resolve({ ok: true, categories: partsCatalog.categories, parts: partsCatalog.parts }) : fetch(partsUrl).then((r) => r.json()).catch((err) => ({ ok: false, errors: [err.message] }))
     ]);
 
     if (availResp.ok) {
@@ -244,7 +222,9 @@
     }
 
     if (partsResp.ok && partsResp.parts) {
-      partsCatalog = partsResp.parts;
+      // Cache the FULL catalog envelope (categories + parts) so reopens
+      // skip the network round-trip.
+      partsCatalog = { categories: partsResp.categories || [], parts: partsResp.parts };
       renderParts(partsCatalog);
     } else {
       modal.querySelector("[data-parts]").textContent = "Parts catalog unavailable. You can still schedule — Patrick will sort packing.";

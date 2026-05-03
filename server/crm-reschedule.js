@@ -61,10 +61,9 @@
     return modal;
   }
 
-  // Bucket the day's slots into Morning / Midday / Afternoon / Evening,
-  // returning the FIRST slot per bucket. So Patrick sees max 4 buttons
-  // per day instead of every 30-minute increment. Same logic as the
-  // portal-side picker — keep them in sync if you tweak this.
+  // Bucket a day's slots into Morning / Midday / Afternoon / Evening.
+  // Returns the FIRST slot in each bucket so the time picker shows max
+  // 4 buttons. Empty buckets are skipped.
   function condenseSlotsForDay(slots) {
     const buckets = [
       { key: "morning",   label: "Morning",   from: 8,  to: 11 },
@@ -83,19 +82,29 @@
       .filter((b) => b.slot);
   }
 
+  // Render a date-first picker. The user picks a date from the list
+  // (cleaner + more scannable than 25 days of buttons stacked), then
+  // picks a time bucket below the chosen date. Only one date stays
+  // expanded at a time. Inline expand — no slide / drawer / sheet.
   function renderSlots(days) {
     const slotsEl = modal.querySelector("[data-slots]");
     const helpEl = modal.querySelector("[data-help]");
     slotsEl.innerHTML = "";
-    let total = 0;
+    let totalDays = 0;
     days.forEach((day) => {
       const condensed = condenseSlotsForDay(day.slots || []);
       if (!condensed.length) return;
-      const wrap = document.createElement("div");
-      wrap.className = "crm-resched-day";
-      wrap.innerHTML = `<h4>${escapeHtml(day.label || day.date || "")}</h4>`;
-      const row = document.createElement("div");
-      row.className = "crm-resched-day-buttons";
+      totalDays++;
+      const dateBtn = document.createElement("button");
+      dateBtn.type = "button";
+      dateBtn.className = "crm-resched-date";
+      dateBtn.innerHTML = `
+        <span class="crm-resched-date-label">${escapeHtml(day.label || day.date || "")}</span>
+        <span class="crm-resched-date-count">${condensed.length} time${condensed.length === 1 ? "" : "s"}</span>
+      `;
+      const timesRow = document.createElement("div");
+      timesRow.className = "crm-resched-times";
+      timesRow.hidden = true;
       condensed.forEach((b) => {
         const btn = document.createElement("button");
         btn.type = "button";
@@ -109,16 +118,27 @@
           btn.classList.add("is-selected");
           selectedSlot = b.slot.start;
           modal.querySelector(".crm-resched-submit").disabled = false;
-          const err = modal.querySelector(".crm-resched-error");
-          err.hidden = true;
+          modal.querySelector(".crm-resched-error").hidden = true;
         });
-        row.appendChild(btn);
-        total++;
+        timesRow.appendChild(btn);
       });
-      wrap.appendChild(row);
-      slotsEl.appendChild(wrap);
+      dateBtn.addEventListener("click", () => {
+        // Toggle: collapse all other dates, expand this one.
+        slotsEl.querySelectorAll(".crm-resched-date.is-open").forEach((d) => d.classList.remove("is-open"));
+        slotsEl.querySelectorAll(".crm-resched-times").forEach((t) => { t.hidden = true; });
+        const wasOpen = dateBtn.dataset.open === "1";
+        if (!wasOpen) {
+          dateBtn.classList.add("is-open");
+          timesRow.hidden = false;
+          dateBtn.dataset.open = "1";
+        } else {
+          dateBtn.dataset.open = "0";
+        }
+      });
+      slotsEl.appendChild(dateBtn);
+      slotsEl.appendChild(timesRow);
     });
-    if (!total) {
+    if (!totalDays) {
       helpEl.hidden = false;
       helpEl.textContent = "No available slots in the next 30 days. Block the calendar for a custom time, or adjust working hours in /admin/schedule.";
     } else {

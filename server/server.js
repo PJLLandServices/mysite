@@ -3301,6 +3301,7 @@ async function handleApi(req, res, pathname) {
     if (!PARTS) return sendJson(res, 503, { ok: false, errors: ["parts.json not loaded on the server."] });
     return sendJson(res, 200, {
       ok: true,
+      categories: PARTS.categories || [],
       parts: PARTS.parts || {},
       service_materials: PARTS.service_materials || {}
     });
@@ -5815,7 +5816,7 @@ async function serveStatic(req, res, pathname) {
     const ext = path.extname(filePath).toLowerCase();
     const headers = {
       "content-type": MIME_TYPES[ext] || "application/octet-stream",
-      "cache-control": ext === ".html" ? "no-store" : "public, max-age=300"
+      "cache-control": ext === ".html" ? "no-store" : "public, max-age=30"
     };
     // ServiceWorker scope override: tech-sw.js is served from /crm/ but
     // needs to control /admin/work-order/*/tech URLs. The Service-Worker-

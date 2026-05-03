@@ -261,6 +261,42 @@ html, body {
    (e.g. no phone), the remaining two stretch to fill the row. */
 .tech-cheatsheet-action[hidden] { display: none; }
 
+/* Parts to bring back — inline catalog above the follow-up button.
+   Uses the shared crm-parts.css tree styles for the actual rows. */
+.tech-bringback {
+  /* tech-section already supplies padding + bg */
+}
+.tech-bringback-status {
+  margin: 0 0 10px;
+  font-size: 12px;
+  color: var(--tech-text-muted);
+  font-family: "Barlow Condensed", sans-serif;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.tech-bringback-status [data-count] { color: var(--tech-green); font-weight: 700; }
+.tech-bringback-status [data-saved] {
+  color: var(--tech-text-muted);
+  font-style: italic;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.tech-bringback-status [data-saved].is-saving { color: var(--tech-amber); }
+.tech-bringback-status [data-saved].is-saved { color: var(--tech-green); }
+.tech-bringback-tree {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.tech-bringback-loading {
+  margin: 0;
+  font-size: 13px;
+  color: var(--tech-text-muted);
+  font-style: italic;
+  text-align: center;
+  padding: 12px 0;
+}
+
 .tech-cheatsheet-block {
   background: var(--tech-card);
   border: 1px solid var(--tech-border);

@@ -1026,26 +1026,51 @@ body.portal-modal-open { overflow: hidden; }
 .portal-resched-slots {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 6px;
   margin-bottom: 14px;
 }
-.portal-resched-day {
+.portal-resched-date {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  background: #fff;
   border: 1px solid var(--border);
   border-radius: 10px;
-  padding: 10px 12px;
-  background: var(--cream);
+  padding: 12px 14px;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  min-height: 44px;
+  transition: background 0.12s ease, border-color 0.12s ease;
 }
-.portal-resched-day h4 {
-  margin: 0 0 8px;
+.portal-resched-date:hover { background: var(--cream); }
+.portal-resched-date.is-open {
+  background: var(--green-pale);
+  border-color: var(--green);
+}
+.portal-resched-date-label {
   font-size: 14px;
+  font-weight: 600;
   color: var(--green);
-  font-weight: 700;
 }
-.portal-resched-day-buttons {
+.portal-resched-date-count {
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.portal-resched-times {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+  padding: 10px 12px 4px;
+  margin-top: -2px;
+  margin-bottom: 4px;
 }
+.portal-resched-times[hidden] { display: none; }
 .portal-resched-slot-btn {
   flex: 1 1 auto;
   min-width: 80px;
