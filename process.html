@@ -64,20 +64,106 @@
 
 <style>
 .proc-hero {
-  padding: 156px 0 88px;
+  padding: 156px 0 80px;
   position: relative;
   overflow: hidden;
-  background: var(--dark);
-}
-.proc-hero::before {
-  content: '';
-  position: absolute; inset: 0;
+  min-height: 640px;
   background:
     radial-gradient(ellipse 65% 55% at 18% 18%, rgba(74,140,92,0.50), transparent 60%),
     radial-gradient(ellipse 55% 50% at 85% 80%, rgba(45,106,66,0.30), transparent 60%),
     linear-gradient(135deg, rgba(15,31,20,0.92) 0%, rgba(27,77,46,0.84) 70%, rgba(45,106,66,0.78) 100%);
+  isolation: isolate;
 }
-.proc-hero-inner { position: relative; z-index: 2; max-width: 820px; }
+/* Wide screens: 2-zone hero. Left side is the green gradient with text
+   content; right ~67% is the branded valve-box video as ambient
+   backdrop -- the valve box itself sits partially behind the centered
+   card (its visible edge + grass on the right gives the ambience
+   Patrick wanted on this page). The sticker text doesn't need to be
+   readable here; this hero is about the FEEL of a finished install. */
+.proc-hero__bg {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 67%;
+  height: 100%;
+  object-fit: cover;
+  /* Source is 1080x1920 portrait. Valve-box + grass action zone
+     sits at y=50-90% of source. center 65% lifts it into the
+     visible band so the right edge of the lid + surrounding grass
+     read clearly past the card. */
+  object-position: center 65%;
+  z-index: 0;
+  opacity: 1;
+  filter: saturate(1.12) contrast(1.06);
+  pointer-events: none;
+  -webkit-mask-image: linear-gradient(90deg,
+    transparent 0%,
+    rgba(0, 0, 0, 0.18) 4%,
+    rgba(0, 0, 0, 0.55) 12%,
+    rgba(0, 0, 0, 0.85) 20%,
+    black 28%,
+    black 100%);
+  mask-image: linear-gradient(90deg,
+    transparent 0%,
+    rgba(0, 0, 0, 0.18) 4%,
+    rgba(0, 0, 0, 0.55) 12%,
+    rgba(0, 0, 0, 0.85) 20%,
+    black 28%,
+    black 100%);
+}
+/* Content card -- translucent dark panel with backdrop-blur. */
+.proc-hero-inner {
+  position: relative;
+  z-index: 2;
+  max-width: 820px;
+  background: rgba(15, 31, 20, 0.48);
+  -webkit-backdrop-filter: blur(10px) saturate(1.15);
+  backdrop-filter: blur(10px) saturate(1.15);
+  padding: clamp(24px, 3.6vw, 40px) clamp(22px, 3.6vw, 40px);
+  border-radius: clamp(12px, 1.6vw, 20px);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.20);
+}
+/* Drop-shadows on hero text for legibility over the card. */
+.proc-hero h1,
+.proc-hero p,
+.proc-hero-meta,
+.proc-eyebrow,
+.proc-hero .breadcrumbs {
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.40);
+}
+.proc-hero h1 em {
+  text-shadow: none;
+}
+/* Tablet portrait + small laptops. */
+@media (max-width: 1024px) and (min-width: 769px) {
+  .proc-hero__bg { width: 58%; }
+}
+/* Mobile: full-bleed video + green-tinted ::after overlay. */
+@media (max-width: 768px) {
+  .proc-hero {
+    min-height: 580px;
+  }
+  .proc-hero__bg {
+    width: 100%;
+    -webkit-mask-image: none;
+    mask-image: none;
+    object-position: center 50%;
+    z-index: -2;
+  }
+  .proc-hero::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    background:
+      radial-gradient(ellipse 60% 55% at 20% 20%, rgba(74,140,92,0.30), transparent 65%),
+      linear-gradient(135deg, rgba(15,31,20,0.62) 0%, rgba(27,77,46,0.50) 50%, rgba(45,106,66,0.40) 100%);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .proc-hero__bg { display: none; }
+}
 .breadcrumbs { font-size: 13px; color: rgba(255,255,255,.65); margin-bottom: 18px; display: flex; gap: 8px; flex-wrap: wrap; }
 .breadcrumbs a { color: rgba(255,255,255,.85); }
 .breadcrumbs a:hover { color: var(--amber-light); }
@@ -396,6 +482,9 @@
 
 <!-- Hero -->
 <section class="proc-hero">
+  <video class="proc-hero__bg" autoplay loop muted playsinline preload="auto" aria-hidden="true">
+    <source src="pjl-branded-valve-box.mp4" type="video/mp4">
+  </video>
   <div class="container proc-hero-inner">
     <div class="breadcrumbs"><a href="index.html">Home</a><span>›</span><a href="about.html">About</a><span>›</span><span>How It Works</span></div>
     <span class="proc-eyebrow">Plan First · Written Design · No Surprises</span>
