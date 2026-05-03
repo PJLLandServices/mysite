@@ -3154,6 +3154,22 @@ async function handleApi(req, res, pathname) {
     if (propertyId) all = all.filter((b) => b.propertyId === propertyId);
     if (leadId) all = all.filter((b) => b.leadId === leadId);
     if (status) all = all.filter((b) => b.status === status);
+    // Legacy data heal: if asking for a specific lead's bookings and we
+    // have no canonical record yet, materialize one from lead.booking
+    // so the reschedule / follow-up modals can find it. Idempotent —
+    // upsertFromLead returns the existing record on subsequent calls.
+    if (leadId && !all.length) {
+      try {
+        const allLeads = await readLeads();
+        const lead = allLeads.find((l) => l.id === leadId);
+        if (lead && lead.booking) {
+          const upserted = await bookings.upsertFromLead(lead);
+          if (upserted) all = [upserted];
+        }
+      } catch (err) {
+        console.warn("[bookings list] upsert-from-lead failed:", err?.message);
+      }
+    }
     all.sort((a, b) => new Date(b.scheduledFor || 0) - new Date(a.scheduledFor || 0));
     return sendJson(res, 200, { ok: true, bookings: all });
   }
