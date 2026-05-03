@@ -451,17 +451,23 @@
 (function () {
   'use strict';
 
-  const SEASON_DAYS = 168;                       // May 1 – Oct 15
-  const MANUAL_CYCLES = 60;                      // 3 days/week per typical GTA watering bylaw
-  const LITRES_PER_GALLON = 3.785;
-  const PLANT_LOSS_PROBABILITY = 0.15;   // 15% chance of meaningful drought damage in a manual-timer year
-  const BATHTUB_M3 = 0.15;
+  // Domain assumptions — fallback values mirror pricing.json's water_calculator
+  // section. The `pjl:pricing-loaded` subscriber further down re-binds these
+  // from the canonical source on hydration so the calculator stays in sync.
+  // 2026-04-30 deflate: MANUAL_CYCLES dropped 84 → 60 to reflect typical GTA
+  // watering bylaw (3 days/week max). Don't bump this back up without
+  // matching PJL_Irrigation_Cost_Model.xlsx and pricing.json.
+  let SEASON_DAYS = 168;                       // May 1 – Oct 15
+  let MANUAL_CYCLES = 60;                      // 3 days/week per typical GTA watering bylaw
+  let LITRES_PER_GALLON = 3.785;
+  let PLANT_LOSS_PROBABILITY = 0.15;           // 15% chance of meaningful drought damage in a manual-timer year
+  const BATHTUB_M3 = 0.15;                     // human-readable comparison only — not a pricing input
 
-  const ZONE_GPM_BY_SIZE = { small: 4.2, standard: 7.0, large: 9.8, estate: 12.6 };
-  const RUN_MIN_BY_SIZE  = { small: 25,  standard: 30,  large: 35,  estate: 40 };
+  let ZONE_GPM_BY_SIZE = { small: 4.2, standard: 7.0, large: 9.8, estate: 12.6 };
+  let RUN_MIN_BY_SIZE  = { small: 25,  standard: 30,  large: 35,  estate: 40 };
 
   // Replaceable landscape value at risk in a drought stretch — sod + mature trees + perennial beds
-  const LANDSCAPE_VALUE_BY_SIZE = {
+  let LANDSCAPE_VALUE_BY_SIZE = {
     small:    2500,   // ~500 sq ft sod + 2 trees + small beds
     standard: 6000,   // ~1500 sq ft sod + 4-6 trees + perennial beds
     large:   12000,   // ~3000 sq ft sod + 6-10 mature trees + extensive beds
@@ -480,17 +486,41 @@
   ];
 
   document.addEventListener('pjl:pricing-loaded', function(e){
-    var items = e && e.detail && e.detail.items;
-    if (!items) return;
-    CONTROLLER_PRICING.forEach(function(tier){
-      var src = items[tier.key];
-      if (!src) return;
-      // controller_17_plus has price 0 (custom) — keep our null sentinel for that tier.
-      if (src.quoteType === 'custom') { tier.price = null; return; }
-      tier.price = src.price;
-    });
+    var p = e && e.detail;
+    if (!p) return;
+    // 1. Hydrawise retrofit tiers from pricing.items
+    var items = p.items;
+    if (items) {
+      CONTROLLER_PRICING.forEach(function(tier){
+        var src = items[tier.key];
+        if (!src) return;
+        // controller_17_plus has price 0 (custom) — keep our null sentinel for that tier.
+        if (src.quoteType === 'custom') { tier.price = null; return; }
+        tier.price = src.price;
+      });
+    }
+    // 2. Domain assumptions from pricing.water_calculator (post-2026-04-30 deflate canonical)
+    var w = p.water_calculator;
+    if (w) {
+      if (typeof w.season_days === 'number')              SEASON_DAYS = w.season_days;
+      if (typeof w.manual_cycles_per_season === 'number') MANUAL_CYCLES = w.manual_cycles_per_season;
+      if (typeof w.litres_per_gallon === 'number')        LITRES_PER_GALLON = w.litres_per_gallon;
+      if (typeof w.plant_loss_probability === 'number')   PLANT_LOSS_PROBABILITY = w.plant_loss_probability;
+      if (w.zone_gpm_by_size)        ZONE_GPM_BY_SIZE = Object.assign({}, ZONE_GPM_BY_SIZE, w.zone_gpm_by_size);
+      if (w.zone_runtime_min_by_size) RUN_MIN_BY_SIZE = Object.assign({}, RUN_MIN_BY_SIZE,  w.zone_runtime_min_by_size);
+      if (w.landscape_value_by_size) {
+        // Strip the _doc helper key if present — it's documentation, not data.
+        var lv = {};
+        Object.keys(w.landscape_value_by_size).forEach(function(k){
+          if (k !== '_doc' && typeof w.landscape_value_by_size[k] === 'number') {
+            lv[k] = w.landscape_value_by_size[k];
+          }
+        });
+        LANDSCAPE_VALUE_BY_SIZE = Object.assign({}, LANDSCAPE_VALUE_BY_SIZE, lv);
+      }
+    }
     // If the calculator is already showing a result, force a re-render so the
-    // numbers refresh with the new tier prices.
+    // numbers refresh with the new tier prices and assumptions.
     if (typeof recompute === 'function') { try { recompute(); } catch (_) {} }
   });
 

@@ -85,5 +85,32 @@
     "4_valve": 679.80,
     "5_valve": 754.75,
     "6_valve": 829.70
+  },
+  "water_calculator": {
+    "_doc": "Domain assumptions for water-cost-calculator.html. Mirrors PJL_Irrigation_Cost_Model.xlsx (Inputs sheet). DEFLATED 2026-04-30: manual_cycles_per_season was 84 (every-other-day, full season) — too aggressive vs how homeowners actually water under typical GTA bylaws. Reset to 60 (3 days/week × ~20 weeks). Bylaw-defensible in a sceptical homeowner conversation. The headline_scenario annual_savings_cad is the customer-facing 'Save up to $X/year' figure on the homepage callout, the floating savings widget, and the sprinkler-hydrawise.html callout — keep all three in sync if you change inputs here. Do NOT 'fix' the savings figure back to a higher number without re-running the calculator math; the lower number is the deliberate post-deflate canonical.",
+    "season_days": 168,
+    "manual_cycles_per_season": 60,
+    "manual_cycles_rationale": "3 days/week per typical GTA watering bylaw × ~20 weeks of in-season demand. Older spec used 84 (every-other-day, full season) which wasn't bylaw-defensible.",
+    "litres_per_gallon": 3.785,
+    "bathtub_m3": 0.15,
+    "plant_loss_probability": 0.15,
+    "plant_loss_probability_rationale": "15% chance of meaningful drought damage in a manual-timer year (no smart skipping). Drives the Landscape Protection Value panel.",
+    "zone_gpm_by_size":      { "small": 4.2, "standard": 7.0, "large": 9.8, "estate": 12.6 },
+    "zone_runtime_min_by_size": { "small": 25,  "standard": 30,  "large": 35,  "estate": 40 },
+    "landscape_value_by_size": {
+      "_doc": "Replaceable landscape value at risk in a drought stretch — sod + mature trees + perennial beds. Drives 'Landscape Protection Value' panel when annual water savings are too low to motivate on their own.",
+      "small":    2500,
+      "standard": 6000,
+      "large":   12000,
+      "estate":  22000
+    },
+    "headline_scenario": {
+      "_doc": "Scenario powering the customer-facing 'Save up to $X/year' headline on index.html (callout + floating widget) and sprinkler-hydrawise.html. Annual savings = manual_cost − smart_cost for THIS scenario specifically. If manual_cycles_per_season, smart_skip_rate, GPM/runtime tiers, or municipal water rates change, recompute and update annual_savings_cad below AND the three customer-facing surfaces (index.html lines ~1656 + ~2038, sprinkler-hydrawise.html callout).",
+      "municipality": "newmarket",
+      "zones": 6,
+      "lot_size": "standard",
+      "smart_skip_rate": 0.40,
+      "annual_savings_cad": 580
+    }
   }
 }
