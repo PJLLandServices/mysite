@@ -68,6 +68,11 @@
   position: relative;
   max-width: 720px;
   margin: 0 auto;
+  /* Kill the <ol>'s default list-style — without these the browser
+     prints "1.", "2.", etc. to the LEFT of each step, duplicating the
+     number that's already inside the dot. */
+  list-style: none;
+  padding-left: 0;
 }
 .book-progress-track::before {
   content: "";
@@ -99,8 +104,19 @@
   position: relative; z-index: 1;
   transition: all 0.2s ease;
 }
-.book-progress-step.is-complete .dot { background: var(--green); border-color: var(--green); color: #fff; }
-.book-progress-step.is-complete .dot::after { content: "✓"; }
+.book-progress-step.is-complete .dot {
+  background: var(--green);
+  border-color: var(--green);
+  color: #fff;
+  /* Hide the digit text inside a completed dot so the ✓ ::after stands
+     alone — without this it reads "1✓", "2✓" etc. */
+  font-size: 0;
+}
+.book-progress-step.is-complete .dot::after {
+  content: "✓";
+  font-size: 13px;
+  font-weight: 700;
+}
 .book-progress-step.is-current .dot {
   background: var(--amber); border-color: var(--amber); color: #fff;
   box-shadow: 0 0 0 5px rgba(224,123,36,0.15);
