@@ -46,56 +46,111 @@ const { PJL_BASE } = require("./geocode");
 // `displayMinutes` (optional) is the human-readable duration shown in the UI.
 // For long jobs we display a range ("90-120 min") even though the engine
 // blocks the longer end (`minutes`) for safety.
+// 2026-05-02 RESTRUCTURE: one bookable service per price tier in pricing.json.
+// Booking key === pricing.json key === customer-facing label. No disambiguation
+// downstream — server/lib/pricing.js is now a dumb key lookup. Eliminates the
+// label-vs-description-vs-price drift that plagued the old 3-bucket setup.
+//
+// Spring & fall: 5 residential tiers + 3 commercial tiers = 8 services per season.
+// All seasonal services use the slot increments below; only commercial gets
+// the morning/afternoon (slotIncrementMinutes: 300) treatment.
 const BOOKABLE_SERVICES = {
+  // --- Spring opening (residential) ---
   spring_open_4z: {
     label: "Spring opening (1-4 zones residential)",
     minutes: 45, requiresAddress: true, bookable: true,
     category: "seasonal", family: "spring_opening"
   },
+  spring_open_6z: {
+    label: "Spring opening (5-6 zones residential)",
+    minutes: 50, requiresAddress: true, bookable: true,
+    category: "seasonal", family: "spring_opening"
+  },
   spring_open_8z: {
-    // Key kept stable; covers the 5-8 residential tier band. server/lib/pricing.js
-    // disambiguates 5-6z ($105) vs 7-8z ($120) by the customer-confirmed zone count.
-    label: "Spring opening (5-8 zones residential)",
+    label: "Spring opening (7-8 zones residential)",
     minutes: 60, requiresAddress: true, bookable: true,
     category: "seasonal", family: "spring_opening"
   },
   spring_open_15z: {
-    // Covers 9+ residential. 9-15z = $165; 16+ falls back to custom quote.
-    label: "Spring opening (9+ zones residential)",
-    minutes: 120, displayMinutes: "90-120 min",
+    label: "Spring opening (9-15 zones residential)",
+    minutes: 105, displayMinutes: "90-120 min",
     requiresAddress: true, bookable: true,
     category: "seasonal", family: "spring_opening"
   },
+  spring_open_16plus: {
+    label: "Spring opening (16+ zones residential — custom quote)",
+    minutes: 150, displayMinutes: "Quoted on-site",
+    requiresAddress: true, bookable: true,
+    category: "seasonal", family: "spring_opening"
+  },
+  // --- Spring opening (commercial) ---
   spring_open_commercial: {
-    // Tiered in pricing.js: 1-4z $145, 5-8z $255, 9+z custom.
-    label: "Spring opening — commercial",
+    label: "Spring opening — commercial (1-4 zones)",
+    minutes: 60, displayMinutes: "Morning or afternoon",
+    slotIncrementMinutes: 300,
+    requiresAddress: true, bookable: true,
+    category: "seasonal", family: "spring_opening"
+  },
+  spring_open_commercial_8z: {
+    label: "Spring opening — commercial (5-8 zones)",
+    minutes: 90, displayMinutes: "Morning or afternoon",
+    slotIncrementMinutes: 300,
+    requiresAddress: true, bookable: true,
+    category: "seasonal", family: "spring_opening"
+  },
+  spring_open_commercial_9plus: {
+    label: "Spring opening — commercial (9+ zones — custom quote)",
     minutes: 120, displayMinutes: "Morning or afternoon",
     slotIncrementMinutes: 300,
     requiresAddress: true, bookable: true,
     category: "seasonal", family: "spring_opening"
   },
-  fall_close_6z: {
-    // Covers ≤6 residential. server/lib/pricing.js disambiguates 1-4z ($90) vs 5-6z ($105).
-    label: "Fall winterization (1-6 zones residential)",
+
+  // --- Fall winterization (residential) ---
+  fall_close_4z: {
+    label: "Fall winterization (1-4 zones residential)",
     minutes: 30, requiresAddress: true, bookable: true,
     category: "seasonal", family: "fall_closing"
   },
-  fall_close_15z: {
-    // Covers 7-15 residential. server/lib/pricing.js disambiguates 7-8z ($120) vs 9-15z ($165).
-    label: "Fall winterization (7-15 zones residential)",
+  fall_close_6z: {
+    label: "Fall winterization (5-6 zones residential)",
+    minutes: 35, requiresAddress: true, bookable: true,
+    category: "seasonal", family: "fall_closing"
+  },
+  fall_close_8z: {
+    label: "Fall winterization (7-8 zones residential)",
     minutes: 45, requiresAddress: true, bookable: true,
     category: "seasonal", family: "fall_closing"
   },
-  fall_close_large: {
-    // Covers 13+ residential as a longer-block booking option (extra time for big systems).
-    label: "Fall winterization (13+ zones residential)",
+  fall_close_15z: {
+    label: "Fall winterization (9-15 zones residential)",
     minutes: 75, displayMinutes: "60-90 min",
     requiresAddress: true, bookable: true,
     category: "seasonal", family: "fall_closing"
   },
+  fall_close_16plus: {
+    label: "Fall winterization (16+ zones residential — custom quote)",
+    minutes: 120, displayMinutes: "Quoted on-site",
+    requiresAddress: true, bookable: true,
+    category: "seasonal", family: "fall_closing"
+  },
+  // --- Fall winterization (commercial) ---
   fall_close_commercial: {
-    // Tiered in pricing.js: 1-4z $145, 5-8z $255, 9+z custom.
-    label: "Fall winterization — commercial",
+    label: "Fall winterization — commercial (1-4 zones)",
+    minutes: 60, displayMinutes: "Morning or afternoon",
+    slotIncrementMinutes: 300,
+    requiresAddress: true, bookable: true,
+    category: "seasonal", family: "fall_closing"
+  },
+  fall_close_commercial_8z: {
+    label: "Fall winterization — commercial (5-8 zones)",
+    minutes: 90, displayMinutes: "Morning or afternoon",
+    slotIncrementMinutes: 300,
+    requiresAddress: true, bookable: true,
+    category: "seasonal", family: "fall_closing"
+  },
+  fall_close_commercial_9plus: {
+    label: "Fall winterization — commercial (9+ zones — custom quote)",
     minutes: 120, displayMinutes: "Morning or afternoon",
     slotIncrementMinutes: 300,
     requiresAddress: true, bookable: true,

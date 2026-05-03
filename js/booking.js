@@ -166,18 +166,36 @@
   // Friendly meta — emoji + short blurb — keyed off what server.js exposes
   // via /api/booking/services. If the server adds a new bookable service
   // with no entry here, it falls back to a default icon.
+  // 2026-05-02 RESTRUCTURE: one entry per pricing.json tier, no overlaps. Blurb
+  // wording matches the price tier exactly so labels + descriptions can never
+  // disagree again.
   const SERVICE_META = {
-    spring_open_4z:         { icon: "🌿", blurb: "≤4 zones · seasonal startup, head check, schedule reset" },
-    spring_open_8z:         { icon: "🌿", blurb: "5-7 zones · seasonal startup with full system check" },
-    spring_open_15z:        { icon: "🌿", blurb: "8+ zones · large-system startup with full inspection" },
-    spring_open_commercial: { icon: "🏢", blurb: "Commercial property · morning or afternoon appointment" },
-    fall_close_6z:          { icon: "🍂", blurb: "≤6 zones · winterization with compressed-air blowout" },
-    fall_close_15z:         { icon: "🍂", blurb: "7-12 zones · full-system winterization" },
-    fall_close_large:       { icon: "🍂", blurb: "13+ zones · large-system winterization with full inspection" },
-    fall_close_commercial:  { icon: "🏢", blurb: "Commercial winterization · morning or afternoon appointment" },
-    sprinkler_repair:       { icon: "🔧", blurb: "90-min default · diagnose + fix on the spot" },
-    hydrawise_retrofit:     { icon: "📡", blurb: "Smart controller upgrade with app + WiFi setup" },
-    site_visit:             { icon: "📋", blurb: "Free walkaround · we scope and quote new installs" }
+    // Spring opening — residential (5 tiers)
+    spring_open_4z:                  { icon: "🌿", blurb: "1-4 zones · $90 · seasonal startup, head check, schedule reset · 45 min" },
+    spring_open_6z:                  { icon: "🌿", blurb: "5-6 zones · $105 · seasonal startup with full system check · 50 min" },
+    spring_open_8z:                  { icon: "🌿", blurb: "7-8 zones · $120 · seasonal startup with full system check · 60 min" },
+    spring_open_15z:                 { icon: "🌿", blurb: "9-15 zones · $165 · large-system startup with full inspection · 90-120 min" },
+    spring_open_16plus:              { icon: "🌿", blurb: "16+ zones · custom quote · large-system startup, quoted on-site" },
+    // Spring opening — commercial (3 tiers)
+    spring_open_commercial:          { icon: "🏢", blurb: "1-4 zones commercial · $145 · morning or afternoon appointment" },
+    spring_open_commercial_8z:       { icon: "🏢", blurb: "5-8 zones commercial · $255 · morning or afternoon appointment" },
+    spring_open_commercial_9plus:    { icon: "🏢", blurb: "9+ zones commercial · custom quote · morning or afternoon appointment" },
+
+    // Fall winterization — residential (5 tiers)
+    fall_close_4z:                   { icon: "🍂", blurb: "1-4 zones · $90 · winterization with compressed-air blowout · 30 min" },
+    fall_close_6z:                   { icon: "🍂", blurb: "5-6 zones · $105 · winterization with full-system check · 35 min" },
+    fall_close_8z:                   { icon: "🍂", blurb: "7-8 zones · $120 · full-system winterization · 45 min" },
+    fall_close_15z:                  { icon: "🍂", blurb: "9-15 zones · $165 · large-system winterization with full inspection · 60-90 min" },
+    fall_close_16plus:               { icon: "🍂", blurb: "16+ zones · custom quote · large-system winterization, quoted on-site" },
+    // Fall winterization — commercial (3 tiers)
+    fall_close_commercial:           { icon: "🏢", blurb: "1-4 zones commercial · $145 · morning or afternoon appointment" },
+    fall_close_commercial_8z:        { icon: "🏢", blurb: "5-8 zones commercial · $255 · morning or afternoon appointment" },
+    fall_close_commercial_9plus:     { icon: "🏢", blurb: "9+ zones commercial · custom quote · morning or afternoon appointment" },
+
+    // Repair / retrofit / consult
+    sprinkler_repair:                { icon: "🔧", blurb: "90-min default · diagnose + fix on the spot" },
+    hydrawise_retrofit:              { icon: "📡", blurb: "Smart controller upgrade with app + WiFi setup" },
+    site_visit:                      { icon: "📋", blurb: "Free walkaround · we scope and quote new installs" }
   };
 
   // Friendly heading + intro shown above the service grid when the user has
