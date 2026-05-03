@@ -1056,14 +1056,19 @@ function buildZonePickerSources() {
 
   zones.forEach((z) => {
     const number = Number(z.number) || 0;
-    const label  = String(z.label || "").trim();
-    const notes  = String(z.notes || "").trim();
+    const rawLabel = String(z.label || "").trim();
+    const notes = String(z.notes || "").trim();
+    // Fall back to "Zone N" when the property record hasn't named this
+    // zone yet. Without this, picking an unlabeled zone auto-fills the
+    // description with an empty string — looks like the auto-fill is
+    // broken even though the zone was picked correctly.
+    const fillLabel = rawLabel || `Zone ${number || "?"}`;
     zonePickerSources.push({
       group: "Zones",
       kind: "zone",
       number,
-      label,
-      display: label ? `Zone ${number || "?"} — ${label}` : `Zone ${number || "?"}`,
+      label: fillLabel,
+      display: rawLabel ? `Zone ${number || "?"} — ${rawLabel}` : `Zone ${number || "?"}`,
       sub: notes,
       notes
     });
