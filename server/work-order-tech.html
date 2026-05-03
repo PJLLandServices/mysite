@@ -413,17 +413,14 @@
 
   <!-- Per-zone editor — slides up from the bottom when a zone is tapped.
        Lives in a separate sheet so the zone list stays scrollable. -->
-  <div class="tech-sheet" id="techSheet" hidden role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
+  <div class="tech-sheet" id="techSheet" hidden role="dialog" aria-modal="true" aria-labelledby="sheetZoneBadgeBtn">
     <div class="tech-sheet-card">
       <header class="tech-sheet-head">
         <button type="button" class="tech-sheet-close" id="sheetClose" aria-label="Close">×</button>
-        <h2 id="sheetTitle">Zone —</h2>
+        <button type="button" class="tech-sheet-zone-badge" id="sheetZoneBadgeBtn" data-action="open-zone-picker" aria-haspopup="listbox" aria-expanded="false" aria-label="Pick zone source">Zone —</button>
       </header>
-      <button type="button" class="tech-sheet-location" id="sheetLocationBtn" aria-label="Change zone source">
-        <span class="tech-sheet-location-text" id="sheetLocationText">—</span>
-        <span class="tech-sheet-location-chev" aria-hidden="true">▾</span>
-        <span class="tech-sheet-location-hint">Tap to source from property</span>
-      </button>
+      <input type="text" class="tech-sheet-location-input" id="sheetLocationInput" placeholder="Description (auto-fills from property pick)" maxlength="200" autocomplete="off">
+      <div class="tech-sheet-system" id="sheetSystem"></div>
       <div class="tech-sheet-system" id="sheetSystem"></div>
 
       <p class="tech-sheet-label">Status</p>
@@ -459,28 +456,6 @@
       <textarea id="sheetNotes" rows="4" placeholder="What did you find / do?" data-voice-input></textarea>
 
       <button type="button" class="tech-sheet-done" id="sheetDone">Done</button>
-    </div>
-  </div>
-
-  <!-- Source picker — opens above the zone sheet when the tech taps the
-       location subtitle. Lets them swap the auto-scaffolded "General service
-       area" placeholder for a real entry from the customer's property record:
-       a zone, a valve box, the controller, or an open deferred issue. -->
-  <div class="tech-source-picker" id="techSourcePicker" hidden role="dialog" aria-modal="true" aria-labelledby="techSourcePickerTitle">
-    <div class="tech-source-picker-card">
-      <header class="tech-source-picker-head">
-        <button type="button" class="tech-source-picker-close" id="techSourcePickerClose" aria-label="Close">×</button>
-        <h2 id="techSourcePickerTitle">Source from property</h2>
-      </header>
-      <p class="tech-source-picker-empty" id="techSourcePickerEmpty" hidden>This work order isn't linked to a property record. Type a custom label below.</p>
-      <div class="tech-source-picker-body" id="techSourcePickerBody"></div>
-      <div class="tech-source-picker-custom">
-        <label for="techSourcePickerCustomInput">Custom label</label>
-        <div class="tech-source-picker-custom-row">
-          <input type="text" id="techSourcePickerCustomInput" placeholder="e.g. Front yard rotors" maxlength="120">
-          <button type="button" class="tech-source-picker-custom-btn" id="techSourcePickerCustomBtn">Use</button>
-        </div>
-      </div>
     </div>
   </div>
 

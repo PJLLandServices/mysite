@@ -416,6 +416,12 @@
   padding: 22px 24px 18px;
   max-height: 92vh;
   overflow-y: auto;
+  /* Native <select> elements size to their longest option's intrinsic
+     width — long labels like "Spring opening (1-4 zones residential)"
+     would otherwise blow out the form's padding-box and trigger a
+     horizontal scrollbar. width: 100% on the field + this overflow-x
+     guard makes the bar physically impossible. */
+  overflow-x: hidden;
 }
 .booking-dialog-head {
   display: flex;
@@ -473,11 +479,18 @@
 .booking-section textarea {
   font: inherit;
   font-size: 16px;
+  /* min-height to satisfy the 44px touch target spec on phones/tablets */
+  min-height: 44px;
   padding: 10px 12px;
   border: 1px solid rgba(15, 31, 20, 0.15);
   border-radius: 8px;
   background: #fff;
+  /* Pin to container width so a wide <select> can't trigger horizontal scroll */
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
 }
+.booking-section textarea { min-height: 60px; }
 .booking-section input:focus,
 .booking-section select:focus,
 .booking-section textarea:focus {

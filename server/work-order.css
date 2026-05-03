@@ -726,20 +726,51 @@ body[data-locked="true"] .wo-signoff-form {
   gap: 10px;
   align-items: center;
 }
+/* Zone-N badge is a <button> that opens the source picker. Same visual
+   weight as the previous static badge; tap target meets the 44x44 spec
+   on mobile. The chevron-style "▾" hint appears via ::after so the
+   markup stays clean. */
 .wo-zone-num {
+  font: inherit;
   font-family: "Barlow Condensed", sans-serif;
   font-size: 18px;
+  font-weight: 700;
   letter-spacing: 0.04em;
   color: var(--pjl-green);
-  padding: 4px 10px;
+  padding: 8px 14px;
+  min-height: 44px;
   background: rgba(27, 77, 46, 0.08);
-  border-radius: 6px;
+  border: 1px solid rgba(27, 77, 46, 0.20);
+  border-radius: 8px;
   white-space: nowrap;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
-/* Location is an <input list="woZoneSourceOptions"> — a free-text field
-   with autocomplete suggestions sourced from the linked property record
-   (zones, valve boxes, controller, open issues). Reads as a heading by
-   default, gets a clear editable affordance on hover/focus. */
+.wo-zone-num::after {
+  content: "▾";
+  font-size: 12px;
+  opacity: 0.7;
+}
+.wo-zone-num:hover {
+  background: rgba(27, 77, 46, 0.14);
+  border-color: var(--pjl-green);
+}
+.wo-zone-num:focus-visible {
+  outline: none;
+  border-color: var(--pjl-green);
+  box-shadow: 0 0 0 3px rgba(27, 77, 46, 0.20);
+}
+.wo-zone-num[aria-expanded="true"] {
+  background: var(--pjl-green);
+  color: #fff;
+  border-color: var(--pjl-green);
+}
+body[data-locked="true"] .wo-zone-num { cursor: not-allowed; opacity: 0.7; }
+
+/* Location input — free-text description that auto-fills from a picker
+   pick or accepts whatever the tech types. */
 .wo-zone-location {
   font: inherit;
   font-size: 15px;
@@ -747,29 +778,104 @@ body[data-locked="true"] .wo-signoff-form {
   color: var(--pjl-text);
   width: 100%;
   min-width: 0;
-  padding: 6px 10px;
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: 6px;
+  min-height: 44px;
+  padding: 10px 12px;
+  background: #fff;
+  border: 1px solid rgba(15, 31, 20, 0.15);
+  border-radius: 8px;
+  box-sizing: border-box;
 }
 .wo-zone-location::placeholder {
   font-weight: 500;
   font-style: italic;
   color: var(--pjl-text-muted);
 }
-.wo-zone-location:hover {
-  background: #fff;
-  border-color: rgba(15, 31, 20, 0.10);
-}
 .wo-zone-location:focus {
   outline: none;
-  background: #fff;
   border-color: var(--pjl-green);
   box-shadow: 0 0 0 3px rgba(27, 77, 46, 0.12);
 }
 body[data-locked="true"] .wo-zone-location {
   pointer-events: none;
   opacity: 0.7;
+}
+
+/* Anchored dropdown menu — single instance reused per row, positioned
+   below the clicked badge. Stays attached on resize/scroll. */
+.wo-zone-picker-menu {
+  position: absolute;
+  z-index: 80;
+  background: #fff;
+  border: 1px solid rgba(15, 31, 20, 0.15);
+  border-radius: 10px;
+  box-shadow: 0 12px 32px rgba(15, 31, 20, 0.18);
+  padding: 8px;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+.wo-zone-picker-menu[hidden] { display: none; }
+.wo-zone-picker-empty {
+  margin: 0;
+  padding: 12px;
+  font-size: 13px;
+  font-style: italic;
+  color: var(--pjl-text-muted, #6a7d70);
+}
+.wo-zone-picker-group { margin: 0 0 6px; }
+.wo-zone-picker-group:last-child { margin-bottom: 0; }
+.wo-zone-picker-group h4 {
+  margin: 6px 8px 4px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--pjl-text-muted, #6a7d70);
+}
+.wo-zone-picker-group ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.wo-zone-picker-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 12px;
+  font: inherit;
+  text-align: left;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.wo-zone-picker-item:hover,
+.wo-zone-picker-item:focus-visible {
+  background: rgba(27, 77, 46, 0.06);
+  border-color: rgba(27, 77, 46, 0.20);
+  outline: none;
+}
+.wo-zone-picker-item-label {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--pjl-text);
+}
+.wo-zone-picker-item-sub {
+  font-size: 12px;
+  color: var(--pjl-text-muted, #6a7d70);
+  font-style: italic;
+}
+
+/* Mobile: the menu stays anchored but caps at viewport-width minus margin
+   so it doesn't run off the right edge. Touch targets are already 44px. */
+@media (max-width: 600px) {
+  .wo-zone-picker-menu {
+    max-width: calc(100vw - 16px);
+  }
 }
 
 /* Sprinkler + coverage badges (read-only snapshot from property) */

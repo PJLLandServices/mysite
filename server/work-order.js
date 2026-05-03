@@ -435,6 +435,23 @@ function statusOptionsHtml(selected) {
   ).join("");
 }
 
+// Renders the badge text shown on the zone-row trigger button. Property
+// zones get "Zone N"; other source kinds get a 2-3 letter abbreviation
+// since they don't have a meaningful zone number ("VB" for valve box,
+// "CTL" for controller, "ISS" for an open issue). Custom typed labels
+// fall back to the existing zone number ("Zone N") since the user
+// explicitly chose a number when adding the row.
+function zoneBadgeLabel(zone) {
+  switch (zone?.kind) {
+    case "valveBox":   return "VB";
+    case "controller": return "CTL";
+    case "issue":      return "ISS";
+    case "zone":
+    case "custom":
+    default:           return `Zone ${zone?.number || "?"}`;
+  }
+}
+
 function zoneRowHtml(zone) {
   const sprinklerBadges = badgeListHtml(zone.sprinklerTypes || [], SPRINKLER_LABELS);
   const coverageBadges  = badgeListHtml(zone.coverage       || [], COVERAGE_LABELS);
@@ -474,10 +491,10 @@ function zoneRowHtml(zone) {
     : "";
 
   return `
-    <div class="wo-zone-row" data-zone data-status="${escapeHtml(status)}" data-number="${escapeHtml(zone.number || "")}" data-location="${escapeHtml(zone.location || "")}" data-sprinkler="${escapeHtml(sprinklerAttr)}" data-coverage="${escapeHtml(coverageAttr)}">
+    <div class="wo-zone-row" data-zone data-status="${escapeHtml(status)}" data-number="${escapeHtml(zone.number || "")}" data-location="${escapeHtml(zone.location || "")}" data-kind="${escapeHtml(zone.kind || "zone")}" data-sprinkler="${escapeHtml(sprinklerAttr)}" data-coverage="${escapeHtml(coverageAttr)}">
       <div class="wo-zone-head">
-        <span class="wo-zone-num">Zone ${escapeHtml(zone.number || "?")}</span>
-        <input type="text" class="wo-zone-location" list="woZoneSourceOptions" value="${escapeHtml(zone.location || "")}" placeholder="Pick from property zones or type custom" maxlength="200" autocomplete="off">
+        <button type="button" class="wo-zone-num" data-action="open-zone-picker" aria-haspopup="listbox" aria-expanded="false" aria-label="Pick zone source">${escapeHtml(zoneBadgeLabel(zone))}</button>
+        <input type="text" class="wo-zone-location" value="${escapeHtml(zone.location || "")}" placeholder="Description (auto-fills from property pick or type custom)" maxlength="200" autocomplete="off">
         <button type="button" class="property-row-remove" data-action="remove-zone" aria-label="Remove zone">×</button>
       </div>
       ${sysLine}
@@ -1055,10 +1072,12 @@ function collectForm() {
 
       // Location now lives in a real <input> element — read it live so a
       // tech who typed but didn't blur the field still gets their text on
-      // save. Falls back to the dataset for safety.
+      // save. Falls back to the dataset for safety. `kind` rides on the
+      // row's data-kind attribute (set when picker fires).
       const liveLocation = row.querySelector(".wo-zone-location")?.value.trim();
       return {
         number: Number(row.dataset.number) || 0,
+        kind: row.dataset.kind || "zone",
         location: liveLocation || row.dataset.location || "",
         sprinklerTypes: splitCsv(row.dataset.sprinkler),
         coverage:       splitCsv(row.dataset.coverage),
@@ -1279,31 +1298,27 @@ deleteBtn.addEventListener("click", async () => {
   }
 });
 
-// ---- Zone source datalist (desktop) -----------------------------
-// The .wo-zone-location field is an <input list="woZoneSourceOptions">.
-// On WO load we build the datalist from the linked property record so
-// the tech sees their actual zones / valve boxes / controller / open
-// issues as autocomplete suggestions while typing — and can also type
-// fully custom text for unknown properties (datalist doesn't constrain
-// the input).
-//
-// When the value the tech entered matches a known source, we auto-fill
-// the WO zone's number + notes (notes only when empty, so we never
-// clobber on-site work) and PATCH the WO immediately so a reload
-// preserves the change without waiting for the form's Save button.
+// ---- Zone source-picker (desktop) -------------------------------
+// Click a row's "Zone N" / "VB" / "CTL" / "ISS" badge → an anchored
+// dropdown menu opens listing the customer's pre-configured zones (with
+// number + label), valve boxes, controller, and open deferred issues.
+// Picking applies:
+//   - kind     ("zone" / "valveBox" / "controller" / "issue") → drives
+//              the badge text via zoneBadgeLabel()
+//   - number   (only for property zones; the WO row adopts the customer's
+//              real zone number)
+//   - location (zone label → description input next to the badge)
+//   - notes    (only when the WO zone notes textarea is empty — never
+//              clobbers on-site work)
+// Closes on outside-click, Escape, or after a selection. The description
+// input remains free-text so a tech can type custom for unknown properties.
 
-let zoneSourceMap = new Map();
+let zonePickerMenu = null;       // The single dropdown <ul> reused per row
+let zonePickerActiveRow = null;  // .wo-zone-row currently driving the menu
+let zonePickerSources = [];      // Cached list, rebuilt when loadedProperty changes
 
-function rebuildZoneSourceDatalist() {
-  let dl = document.getElementById("woZoneSourceOptions");
-  if (!dl) {
-    dl = document.createElement("datalist");
-    dl.id = "woZoneSourceOptions";
-    document.body.appendChild(dl);
-  }
-  dl.innerHTML = "";
-  zoneSourceMap = new Map();
-
+function buildZonePickerSources() {
+  zonePickerSources = [];
   const property = loadedProperty;
   if (!property) return;
   const sys = property.system || {};
@@ -1314,74 +1329,163 @@ function rebuildZoneSourceDatalist() {
   const issues = (Array.isArray(property.deferredIssues) ? property.deferredIssues : [])
     .filter((d) => d && (d.status === "open" || d.status === "pre_authorized"));
 
-  const addOption = (value, meta) => {
-    if (!value || zoneSourceMap.has(value)) return;
-    const o = document.createElement("option");
-    o.value = value;
-    dl.appendChild(o);
-    zoneSourceMap.set(value, meta);
-  };
-
   zones.forEach((z) => {
-    const label = String(z.label || "").trim();
-    const number = Number(z.number) || null;
-    const value = label
-      ? `Zone ${number || "?"} — ${label}`
-      : `Zone ${number || "?"}`;
-    addOption(value, { number, notes: String(z.notes || "").trim() });
+    const number = Number(z.number) || 0;
+    const label  = String(z.label || "").trim();
+    const notes  = String(z.notes || "").trim();
+    zonePickerSources.push({
+      group: "Zones",
+      kind: "zone",
+      number,
+      label: label,                              // description-only — what fills the input
+      display: label ? `Zone ${number || "?"} — ${label}` : `Zone ${number || "?"}`,
+      sub: notes,
+      notes
+    });
   });
   valveBoxes.forEach((vb) => {
     const loc = String(vb.location || "").trim() || "Valve box";
     const cnt = Number(vb.valveCount) > 0 ? `${vb.valveCount} valve${vb.valveCount === 1 ? "" : "s"}` : "";
-    addOption(`Valve box — ${loc}${cnt ? ` (${cnt})` : ""}`, {
-      number: null,
+    const desc = `${loc}${cnt ? ` (${cnt})` : ""}`;
+    zonePickerSources.push({
+      group: "Valve boxes",
+      kind: "valveBox",
+      number: 0,
+      label: desc,
+      display: `VB — ${desc}`,
+      sub: String(vb.notes || "").trim(),
       notes: String(vb.notes || "").trim()
     });
   });
   if (ctrlBrand || ctrlLoc) {
     const parts = [ctrlBrand || "Controller", ctrlLoc].filter(Boolean);
-    addOption(`Controller — ${parts.join(" · ")}`, { number: null, notes: "" });
+    zonePickerSources.push({
+      group: "Controller",
+      kind: "controller",
+      number: 0,
+      label: parts.join(" · "),
+      display: `CTL — ${parts.join(" · ")}`,
+      sub: "",
+      notes: ""
+    });
   }
   issues.forEach((iss, i) => {
     const note = String(iss.notes || iss.type || "").trim() || "Open issue";
     const trimmed = note.length > 80 ? note.slice(0, 78) + "…" : note;
-    addOption(`Issue #${i + 1}: ${trimmed}`, {
-      number: null,
+    zonePickerSources.push({
+      group: "Open issues",
+      kind: "issue",
+      number: 0,
+      label: trimmed,
+      display: `ISS #${i + 1} — ${trimmed}`,
+      sub: iss.fromWoId ? `From ${iss.fromWoId}` : "",
       notes: String(iss.notes || "").trim()
     });
   });
 }
 
-// Sync data-attr + auto-populate on every change. We use 'change' so the
-// auto-fill only fires when the tech actually finishes editing (blur or
-// pick from the datalist). 'input' would fire on every keystroke and
-// thrash the network with PATCHes.
-woZones?.addEventListener("change", async (event) => {
-  if (!event.target.classList.contains("wo-zone-location")) return;
+function ensureZonePickerMenu() {
+  if (zonePickerMenu) return zonePickerMenu;
+  zonePickerMenu = document.createElement("div");
+  zonePickerMenu.className = "wo-zone-picker-menu";
+  zonePickerMenu.setAttribute("role", "listbox");
+  zonePickerMenu.hidden = true;
+  document.body.appendChild(zonePickerMenu);
+
+  zonePickerMenu.addEventListener("click", (event) => {
+    const item = event.target.closest("[data-source-idx]");
+    if (!item) return;
+    const idx = Number(item.dataset.sourceIdx);
+    if (!Number.isInteger(idx)) return;
+    applyZoneSourceFromIdx(idx);
+  });
+  return zonePickerMenu;
+}
+
+function positionZonePickerMenu(triggerBtn) {
+  const rect = triggerBtn.getBoundingClientRect();
+  // Anchor below the trigger with a small gap. Account for scroll position
+  // since position: absolute uses page coords, not viewport coords.
+  zonePickerMenu.style.top  = `${rect.bottom + window.scrollY + 4}px`;
+  zonePickerMenu.style.left = `${rect.left + window.scrollX}px`;
+  // Cap width to viewport on small screens; cap min-width so it's
+  // readable on desktop where the trigger is narrow.
+  zonePickerMenu.style.minWidth = `${Math.max(rect.width, 260)}px`;
+  zonePickerMenu.style.maxWidth = `${Math.min(window.innerWidth - 16, 480)}px`;
+}
+
+function openZonePicker(triggerBtn, row) {
   if (loadedWorkOrder?.locked) return;
-  const row = event.target.closest(".wo-zone-row");
-  if (!row) return;
-
-  const value = String(event.target.value || "").trim().slice(0, 200);
-  row.dataset.location = value;
-
-  // If the typed/picked value matches a known property source, auto-fill
-  // the zone number + (only when empty) the notes textarea.
-  const match = zoneSourceMap.get(value);
-  if (match) {
-    if (Number.isFinite(match.number) && match.number > 0) {
-      row.dataset.number = String(match.number);
-      const numEl = row.querySelector(".wo-zone-num");
-      if (numEl) numEl.textContent = `Zone ${match.number}`;
-    }
-    if (match.notes) {
-      const notesEl = row.querySelector(".wo-zone-notes");
-      if (notesEl && !notesEl.value.trim()) notesEl.value = match.notes;
-    }
+  ensureZonePickerMenu();
+  zonePickerActiveRow = row;
+  // Build menu HTML grouped by source category. If the property has no
+  // sources at all, we still show a single "Type custom in the description
+  // field" hint so the tech doesn't tap a button that does nothing.
+  const groups = new Map();
+  zonePickerSources.forEach((src, idx) => {
+    if (!groups.has(src.group)) groups.set(src.group, []);
+    groups.get(src.group).push({ src, idx });
+  });
+  let html = "";
+  if (!groups.size) {
+    html = `<p class="wo-zone-picker-empty">No property zones / valves / controller on file. Type a custom description in the field.</p>`;
+  } else {
+    groups.forEach((items, label) => {
+      html += `<section class="wo-zone-picker-group">
+        <h4>${escapeHtml(label)}</h4>
+        <ul>`;
+      items.forEach(({ src, idx }) => {
+        html += `<li>
+          <button type="button" class="wo-zone-picker-item" data-source-idx="${idx}" role="option">
+            <span class="wo-zone-picker-item-label">${escapeHtml(src.display)}</span>
+            ${src.sub ? `<span class="wo-zone-picker-item-sub">${escapeHtml(src.sub)}</span>` : ""}
+          </button>
+        </li>`;
+      });
+      html += `</ul></section>`;
+    });
   }
+  zonePickerMenu.innerHTML = html;
+  zonePickerMenu.hidden = false;
+  triggerBtn.setAttribute("aria-expanded", "true");
+  positionZonePickerMenu(triggerBtn);
+}
 
-  // Persist immediately. Same pattern as the tech-mode page — a reload
-  // shouldn't lose the swap.
+function closeZonePicker() {
+  if (!zonePickerMenu || zonePickerMenu.hidden) return;
+  zonePickerMenu.hidden = true;
+  document.querySelectorAll('.wo-zone-num[aria-expanded="true"]').forEach((b) => {
+    b.setAttribute("aria-expanded", "false");
+  });
+  zonePickerActiveRow = null;
+}
+
+async function applyZoneSourceFromIdx(idx) {
+  const src = zonePickerSources[idx];
+  const row = zonePickerActiveRow;
+  if (!src || !row) return closeZonePicker();
+
+  // Update DOM data-attrs (collectForm reads these).
+  row.dataset.kind = src.kind;
+  if (src.kind === "zone" && Number.isFinite(src.number) && src.number > 0) {
+    row.dataset.number = String(src.number);
+  } else if (src.kind !== "zone") {
+    row.dataset.number = "0";
+  }
+  row.dataset.location = src.label;
+
+  // Update visible badge + description input.
+  const numEl   = row.querySelector(".wo-zone-num");
+  const locEl   = row.querySelector(".wo-zone-location");
+  const notesEl = row.querySelector(".wo-zone-notes");
+  if (numEl) numEl.textContent = zoneBadgeLabel({ kind: src.kind, number: src.number });
+  if (locEl) locEl.value = src.label;
+  // Auto-populate notes when WO notes are still empty.
+  if (src.notes && notesEl && !notesEl.value.trim()) notesEl.value = src.notes;
+
+  closeZonePicker();
+
+  // Persist immediately so a reload keeps the swap.
   try {
     const id = getWorkOrderId();
     if (!id) return;
@@ -1393,9 +1497,76 @@ woZones?.addEventListener("change", async (event) => {
     const data = await response.json().catch(() => ({}));
     if (response.ok && data.ok && data.workOrder) loadedWorkOrder = data.workOrder;
   } catch {
-    // Silent — user can still hit Save explicitly to retry.
+    // Silent — Save button still works as a fallback.
+  }
+}
+
+// Persist .wo-zone-location text edits on change (blur). Mirrors what the
+// datalist version did, minus the auto-fill on match (the picker handles
+// that flow). Custom typed values flag the row as kind=custom so the
+// badge stays showing whatever zone number the row had.
+woZones?.addEventListener("change", async (event) => {
+  if (!event.target.classList.contains("wo-zone-location")) return;
+  if (loadedWorkOrder?.locked) return;
+  const row = event.target.closest(".wo-zone-row");
+  if (!row) return;
+  const value = String(event.target.value || "").trim().slice(0, 200);
+  // Only flip to custom if the user actually typed something — and only
+  // when the row isn't already a zone-kind row that the picker populated.
+  // (Picker writes location + sets kind first; a follow-on change here
+  // is the user editing the description manually — keep kind as-is.)
+  row.dataset.location = value;
+
+  try {
+    const id = getWorkOrderId();
+    if (!id) return;
+    const response = await fetch(`/api/work-orders/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ zones: collectForm().zones })
+    });
+    const data = await response.json().catch(() => ({}));
+    if (response.ok && data.ok && data.workOrder) loadedWorkOrder = data.workOrder;
+  } catch {
+    // Silent — Save button still works as a fallback.
   }
 });
+
+// Click delegate on the zone list — opens the picker for the clicked row.
+woZones?.addEventListener("click", (event) => {
+  const trigger = event.target.closest('[data-action="open-zone-picker"]');
+  if (!trigger) return;
+  const row = trigger.closest(".wo-zone-row");
+  if (!row) return;
+  // Toggle: if already open for this row, close.
+  if (zonePickerActiveRow === row && zonePickerMenu && !zonePickerMenu.hidden) {
+    closeZonePicker();
+    return;
+  }
+  openZonePicker(trigger, row);
+});
+
+// Outside click + escape close the menu. Re-position on resize/scroll
+// so the menu stays anchored to its trigger when the layout shifts.
+document.addEventListener("click", (event) => {
+  if (!zonePickerMenu || zonePickerMenu.hidden) return;
+  if (event.target.closest(".wo-zone-picker-menu")) return;
+  if (event.target.closest('[data-action="open-zone-picker"]')) return;
+  closeZonePicker();
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && zonePickerMenu && !zonePickerMenu.hidden) closeZonePicker();
+});
+window.addEventListener("resize", () => {
+  if (!zonePickerMenu || zonePickerMenu.hidden || !zonePickerActiveRow) return;
+  const trigger = zonePickerActiveRow.querySelector('[data-action="open-zone-picker"]');
+  if (trigger) positionZonePickerMenu(trigger);
+});
+window.addEventListener("scroll", () => {
+  if (!zonePickerMenu || zonePickerMenu.hidden || !zonePickerActiveRow) return;
+  const trigger = zonePickerActiveRow.querySelector('[data-action="open-zone-picker"]');
+  if (trigger) positionZonePickerMenu(trigger);
+}, true);
 
 // ---- Bootstrap ---------------------------------------------------
 
@@ -1413,7 +1584,7 @@ async function init() {
     if (!response.ok || !data.ok) throw new Error("Not found");
     loadedWorkOrder = data.workOrder;
     loadedProperty  = data.property || null;
-    rebuildZoneSourceDatalist();
+    buildZonePickerSources();
     woLoading.hidden = true;
     woForm.hidden = false;
     renderHero(data.workOrder, data.property, data.lead);

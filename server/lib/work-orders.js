@@ -272,11 +272,22 @@ function canBuildOnSiteQuote(wo) {
 // Backfill the per-zone checks{} and issues[] fields onto records that
 // pre-date the Tier 2 schema. Defensive merge — never overwrites an
 // existing `checks` object or `issues` array.
+// Allowed values for the `kind` discriminator. Drives the badge label in
+// the UI ("Zone N" vs "VB" / "CTL" / "ISS") and lets the picker remember
+// what kind of source the row was populated from across reloads.
+const ZONE_KINDS = ["zone", "valveBox", "controller", "issue", "custom"];
+
 function hydrateZone(z) {
   const baseChecks = {};
   for (const key of ZONE_CHECK_KEYS) baseChecks[key] = false;
+  const rawKind = typeof z?.kind === "string" ? z.kind : "zone";
   return {
     number: z?.number || 0,
+    // Discriminator for the picker — keeps the UI honest about whether
+    // the row is sourced from a property zone, a valve box, the controller,
+    // an open issue, or a free-text custom label. Defaults to "zone" so
+    // legacy records (no kind field) render unchanged.
+    kind: ZONE_KINDS.includes(rawKind) ? rawKind : "zone",
     location: z?.location || z?.label || "",
     sprinklerTypes: Array.isArray(z?.sprinklerTypes) ? z.sprinklerTypes : [],
     coverage: Array.isArray(z?.coverage) ? z.coverage : [],

@@ -144,7 +144,7 @@
        endpoint the public page uses, so the WO + customer notifications all
        fire identically. -->
   <dialog id="bookingDialog" class="schedule-dialog schedule-booking-dialog">
-    <form method="dialog" id="bookingForm">
+    <form method="dialog" id="bookingForm" novalidate>
       <header class="booking-dialog-head">
         <h3>Book a customer</h3>
         <button type="button" class="schedule-dialog-close" id="bookingClose" aria-label="Close">×</button>
@@ -170,8 +170,8 @@
         </div>
         <div class="dialog-grid">
           <label>
-            <span>Phone</span>
-            <input type="tel" id="bookingPhone" autocomplete="tel">
+            <span>Phone *</span>
+            <input type="tel" id="bookingPhone" autocomplete="tel" required>
           </label>
           <label>
             <span>Email *</span>

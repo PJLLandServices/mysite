@@ -619,23 +619,53 @@ bookingForm?.addEventListener("submit", async (event) => {
   event.preventDefault();
   bookingError.hidden = true;
   bookingError.textContent = "";
+
+  const firstName = bookingFirstName.value.trim();
+  const lastName  = bookingLastName.value.trim();
+  const phone     = bookingPhone.value.trim();
+  const email     = bookingEmail.value.trim();
+  const address   = bookingAddress.value.trim();
   const serviceKey = bookingService.value;
-  const slotStart = bookingSlotStart.value;
-  if (!serviceKey || !slotStart) {
+  const slotStart  = bookingSlotStart.value;
+
+  // Pre-validate before hitting the server. Pairs each missing piece with a
+  // human label and (for required form fields) the input element so we can
+  // scroll + focus the first offender. Server's validateLead reads contact.name
+  // (combined), not firstName/lastName — the missing field most often surfaces
+  // there, so we map it back to "First name" for the user-visible message.
+  const missing = [];
+  if (!firstName)  missing.push({ label: "First name", el: bookingFirstName });
+  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) missing.push({ label: "A valid email", el: bookingEmail });
+  if (!phone)      missing.push({ label: "Phone",      el: bookingPhone });
+  if (!address)    missing.push({ label: "Address",    el: bookingAddress });
+  if (!serviceKey) missing.push({ label: "Service",    el: bookingService });
+  if (!slotStart)  missing.push({ label: "Time slot",  el: null });
+
+  if (missing.length) {
     bookingError.hidden = false;
-    bookingError.textContent = "Pick a service and a time slot.";
+    bookingError.textContent = `Missing: ${missing.map((m) => m.label).join(", ")}.`;
+    const firstWithEl = missing.find((m) => m.el);
+    if (firstWithEl) {
+      firstWithEl.el.scrollIntoView({ behavior: "smooth", block: "center" });
+      firstWithEl.el.focus({ preventScroll: true });
+    }
     return;
   }
+
+  // Server-side validateLead reads `contact.name` (combined). Public book.html
+  // sends both the split fields AND `name` — we mirror that exactly so the
+  // server's name check passes without a server change.
   const payload = {
     serviceKey,
     slotStart,
     contact: {
-      firstName: bookingFirstName.value.trim(),
-      lastName:  bookingLastName.value.trim(),
-      phone:     bookingPhone.value.trim(),
-      email:     bookingEmail.value.trim(),
-      address:   bookingAddress.value.trim(),
-      notes:     bookingNotes.value.trim()
+      firstName,
+      lastName,
+      name: `${firstName} ${lastName}`.trim(),
+      phone,
+      email,
+      address,
+      notes: bookingNotes.value.trim()
     },
     zoneCount: bookingZoneCount.value.trim() || null,
     pageUrl: location.href,

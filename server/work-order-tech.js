@@ -32,9 +32,8 @@ const techError = document.getElementById("techError");
 const techSaving = document.getElementById("techSaving");
 
 const techSheet = document.getElementById("techSheet");
-const sheetTitle = document.getElementById("sheetTitle");
-const sheetLocationBtn = document.getElementById("sheetLocationBtn");
-const sheetLocationText = document.getElementById("sheetLocationText");
+const sheetZoneBadgeBtn = document.getElementById("sheetZoneBadgeBtn");
+const sheetLocationInput = document.getElementById("sheetLocationInput");
 const sheetSystem = document.getElementById("sheetSystem");
 const sheetStatus = document.getElementById("sheetStatus");
 const sheetChecks = document.getElementById("sheetChecks");
@@ -643,7 +642,7 @@ function renderZones() {
         : "";
       li.innerHTML = `
         <button type="button" class="tech-zone-item-btn" data-open-zone="${i}">
-          <span class="tech-zone-num">${escapeHtml(z.number || "?")}</span>
+          <span class="tech-zone-num">${escapeHtml(zoneBadgeLabel(z).replace(/^Zone /, ""))}</span>
           <span class="tech-zone-body">
             <span class="tech-zone-location">${escapeHtml(z.location || "(unnamed)")}</span>
             <span class="tech-zone-tags">
@@ -675,8 +674,8 @@ function openZoneSheet(index) {
   if (!zone) return;
   state.activeZoneIndex = index;
 
-  sheetTitle.textContent = `Zone ${zone.number || "?"}`;
-  if (sheetLocationText) sheetLocationText.textContent = zone.location || "(unnamed)";
+  if (sheetZoneBadgeBtn) sheetZoneBadgeBtn.textContent = zoneBadgeLabel(zone);
+  if (sheetLocationInput) sheetLocationInput.value = zone.location || "";
 
   // Sprinkler + coverage badges (read-only — system facts come from
   // the property profile, not the WO). Hidden when neither is set.
@@ -1018,188 +1017,242 @@ function flushZoneNotes() {
 }
 
 // ---- Zone source-picker -----------------------------------------
-// Lets the tech replace the auto-scaffolded "General service area"
-// placeholder with one of the customer's real system entries (zone,
-// valve box, controller, open deferred issue) — or a custom label.
+// Tap the "Zone N" badge in the open zone sheet → an anchored dropdown
+// menu lists the customer's pre-configured zones (with number + label),
+// valve boxes, controller, and open deferred issues. Picking applies:
+//   - kind     → drives the badge text via zoneBadgeLabel()
+//   - number   (only for property zones)
+//   - location (zone label → description input next to the badge)
+//   - notes    (only when the WO zone notes textarea is empty — never
+//              clobbers on-site work)
+// The description input remains free-text so a tech at an unknown
+// property can type whatever describes the zone.
 
-const techSourcePicker      = document.getElementById("techSourcePicker");
-const techSourcePickerBody  = document.getElementById("techSourcePickerBody");
-const techSourcePickerEmpty = document.getElementById("techSourcePickerEmpty");
-const techSourcePickerCustomInput = document.getElementById("techSourcePickerCustomInput");
-
-function openSourcePicker() {
-  if (state.locked) return;
-  if (state.activeZoneIndex < 0) return;
-  if (!techSourcePicker) return;
-  renderSourcePickerBody();
-  if (techSourcePickerCustomInput) techSourcePickerCustomInput.value = "";
-  techSourcePicker.hidden = false;
-  document.body.classList.add("tech-source-picker-open");
+function zoneBadgeLabel(zone) {
+  switch (zone?.kind) {
+    case "valveBox":   return "VB";
+    case "controller": return "CTL";
+    case "issue":      return "ISS";
+    case "zone":
+    case "custom":
+    default:           return `Zone ${zone?.number || "?"}`;
+  }
 }
 
-function closeSourcePicker() {
-  if (!techSourcePicker) return;
-  techSourcePicker.hidden = true;
-  document.body.classList.remove("tech-source-picker-open");
-}
+let zonePickerMenu = null;
+let zonePickerSources = [];
 
-function renderSourcePickerBody() {
-  if (!techSourcePickerBody) return;
+function buildZonePickerSources() {
+  zonePickerSources = [];
   const property = state.linkedProperty;
-  const sys = (property && property.system) || {};
+  if (!property) return;
+  const sys = property.system || {};
   const zones      = Array.isArray(sys.zones) ? sys.zones : [];
   const valveBoxes = Array.isArray(sys.valveBoxes) ? sys.valveBoxes : [];
   const ctrlBrand  = String(sys.controllerBrand || "").trim();
   const ctrlLoc    = String(sys.controllerLocation || "").trim();
-  const issues = (Array.isArray(property?.deferredIssues) ? property.deferredIssues : [])
+  const issues = (Array.isArray(property.deferredIssues) ? property.deferredIssues : [])
     .filter((d) => d && (d.status === "open" || d.status === "pre_authorized"));
 
-  const hasAny = zones.length || valveBoxes.length || ctrlBrand || ctrlLoc || issues.length;
-  if (techSourcePickerEmpty) techSourcePickerEmpty.hidden = !!hasAny && !!property;
-  techSourcePickerBody.innerHTML = "";
-
-  if (!property) return; // empty hint already shown; only the custom row remains
-
-  if (zones.length) {
-    techSourcePickerBody.appendChild(renderSourcePickerSection(
-      "Zones",
-      zones.map((z) => ({
-        type: "zone",
-        number: Number(z.number) || null,
-        label: String(z.label || "").trim() || `Zone ${z.number || "?"}`,
-        notes: String(z.notes || "").trim() || "",
-        sub: String(z.notes || "").trim() || ""
-      }))
-    ));
-  }
-  if (valveBoxes.length) {
-    techSourcePickerBody.appendChild(renderSourcePickerSection(
-      "Valve boxes",
-      valveBoxes.map((vb) => {
-        const loc = String(vb.location || "").trim() || "Valve box";
-        const cnt = Number(vb.valveCount) > 0 ? `${vb.valveCount} valve${vb.valveCount === 1 ? "" : "s"}` : "";
-        return {
-          type: "valveBox",
-          label: `Valve box — ${loc}${cnt ? ` (${cnt})` : ""}`,
-          notes: String(vb.notes || "").trim() || "",
-          sub: String(vb.notes || "").trim() || ""
-        };
-      })
-    ));
-  }
+  zones.forEach((z) => {
+    const number = Number(z.number) || 0;
+    const label  = String(z.label || "").trim();
+    const notes  = String(z.notes || "").trim();
+    zonePickerSources.push({
+      group: "Zones",
+      kind: "zone",
+      number,
+      label,
+      display: label ? `Zone ${number || "?"} — ${label}` : `Zone ${number || "?"}`,
+      sub: notes,
+      notes
+    });
+  });
+  valveBoxes.forEach((vb) => {
+    const loc = String(vb.location || "").trim() || "Valve box";
+    const cnt = Number(vb.valveCount) > 0 ? `${vb.valveCount} valve${vb.valveCount === 1 ? "" : "s"}` : "";
+    const desc = `${loc}${cnt ? ` (${cnt})` : ""}`;
+    zonePickerSources.push({
+      group: "Valve boxes",
+      kind: "valveBox",
+      number: 0,
+      label: desc,
+      display: `VB — ${desc}`,
+      sub: String(vb.notes || "").trim(),
+      notes: String(vb.notes || "").trim()
+    });
+  });
   if (ctrlBrand || ctrlLoc) {
     const parts = [ctrlBrand || "Controller", ctrlLoc].filter(Boolean);
-    techSourcePickerBody.appendChild(renderSourcePickerSection(
-      "Controller",
-      [{
-        type: "controller",
-        label: `Controller — ${parts.join(" · ")}`,
-        notes: "",
-        sub: ""
-      }]
-    ));
+    zonePickerSources.push({
+      group: "Controller",
+      kind: "controller",
+      number: 0,
+      label: parts.join(" · "),
+      display: `CTL — ${parts.join(" · ")}`,
+      sub: "",
+      notes: ""
+    });
   }
-  if (issues.length) {
-    techSourcePickerBody.appendChild(renderSourcePickerSection(
-      "Open issues",
-      issues.map((iss, i) => {
-        const note = String(iss.notes || iss.type || "").trim() || "Open issue";
-        const trimmed = note.length > 80 ? note.slice(0, 78) + "…" : note;
-        return {
-          type: "issue",
-          label: `Issue #${i + 1}: ${trimmed}`,
-          notes: String(iss.notes || "").trim() || "",
-          sub: iss.fromWoId ? `From ${iss.fromWoId}` : ""
-        };
-      })
-    ));
-  }
-}
-
-function renderSourcePickerSection(title, items) {
-  const section = document.createElement("section");
-  section.className = "tech-source-picker-section";
-  const h = document.createElement("h3");
-  h.textContent = title;
-  section.appendChild(h);
-  const ul = document.createElement("ul");
-  items.forEach((item) => {
-    const li = document.createElement("li");
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "tech-source-picker-item";
-    btn.dataset.sourceType = item.type;
-    if (item.number != null) btn.dataset.sourceNumber = String(item.number);
-    btn.dataset.sourceLabel = item.label;
-    if (item.notes) btn.dataset.sourceNotes = item.notes;
-    btn.innerHTML = `<span class="tech-source-picker-item-label">${escapeHtml(item.label)}</span>${item.sub ? `<span class="tech-source-picker-item-sub">${escapeHtml(item.sub)}</span>` : ""}`;
-    li.appendChild(btn);
-    ul.appendChild(li);
+  issues.forEach((iss, i) => {
+    const note = String(iss.notes || iss.type || "").trim() || "Open issue";
+    const trimmed = note.length > 80 ? note.slice(0, 78) + "…" : note;
+    zonePickerSources.push({
+      group: "Open issues",
+      kind: "issue",
+      number: 0,
+      label: trimmed,
+      display: `ISS #${i + 1} — ${trimmed}`,
+      sub: iss.fromWoId ? `From ${iss.fromWoId}` : "",
+      notes: String(iss.notes || "").trim()
+    });
   });
-  section.appendChild(ul);
-  return section;
 }
 
-function applyZoneSource({ label, number, notes }) {
-  const idx = state.activeZoneIndex;
-  if (idx < 0) return;
-  const zone = state.zones[idx];
-  if (!zone) return;
-  const cleanLabel = String(label || "").trim().slice(0, 200);
-  if (!cleanLabel) return;
-  zone.location = cleanLabel;
-  // Picking a property zone with a number adopts that zone's number too —
-  // the WO entry now mirrors the customer's actual zone, not a placeholder.
-  if (Number.isFinite(Number(number)) && Number(number) > 0) {
-    zone.number = Number(number);
+function ensureZonePickerMenu() {
+  if (zonePickerMenu) return zonePickerMenu;
+  zonePickerMenu = document.createElement("div");
+  zonePickerMenu.className = "tech-zone-picker-menu";
+  zonePickerMenu.setAttribute("role", "listbox");
+  zonePickerMenu.hidden = true;
+  document.body.appendChild(zonePickerMenu);
+
+  zonePickerMenu.addEventListener("click", (event) => {
+    const item = event.target.closest("[data-source-idx]");
+    if (!item) return;
+    const idx = Number(item.dataset.sourceIdx);
+    if (!Number.isInteger(idx)) return;
+    applyZoneSourceFromIdx(idx);
+  });
+  return zonePickerMenu;
+}
+
+function positionZonePickerMenu(triggerBtn) {
+  const rect = triggerBtn.getBoundingClientRect();
+  // Anchor below the trigger; clamp so the menu can't run off the right
+  // edge on a narrow phone (the bottom-sheet card is full viewport width).
+  const desiredLeft = rect.left + window.scrollX;
+  const maxRight = window.scrollX + window.innerWidth - 8;
+  const menuWidth = Math.min(window.innerWidth - 16, 360);
+  zonePickerMenu.style.top  = `${rect.bottom + window.scrollY + 6}px`;
+  zonePickerMenu.style.left = `${Math.min(desiredLeft, maxRight - menuWidth)}px`;
+  zonePickerMenu.style.minWidth = `${Math.max(rect.width, 220)}px`;
+  zonePickerMenu.style.maxWidth = `${menuWidth}px`;
+}
+
+function openZonePicker() {
+  if (state.locked) return;
+  if (state.activeZoneIndex < 0) return;
+  if (!sheetZoneBadgeBtn) return;
+  ensureZonePickerMenu();
+
+  const groups = new Map();
+  zonePickerSources.forEach((src, idx) => {
+    if (!groups.has(src.group)) groups.set(src.group, []);
+    groups.get(src.group).push({ src, idx });
+  });
+  let html = "";
+  if (!groups.size) {
+    html = `<p class="tech-zone-picker-empty">No property zones / valves / controller on file. Type a custom description in the field below.</p>`;
+  } else {
+    groups.forEach((items, label) => {
+      html += `<section class="tech-zone-picker-group"><h4>${escapeHtml(label)}</h4><ul>`;
+      items.forEach(({ src, idx }) => {
+        html += `<li>
+          <button type="button" class="tech-zone-picker-item" data-source-idx="${idx}" role="option">
+            <span class="tech-zone-picker-item-label">${escapeHtml(src.display)}</span>
+            ${src.sub ? `<span class="tech-zone-picker-item-sub">${escapeHtml(src.sub)}</span>` : ""}
+          </button>
+        </li>`;
+      });
+      html += `</ul></section>`;
+    });
   }
-  // Auto-populate notes from the property when the WO zone has no notes yet.
-  // We never overwrite tech-entered notes — that's their on-site work record.
-  const cleanNotes = String(notes || "").trim();
-  if (cleanNotes && !String(zone.notes || "").trim()) {
-    zone.notes = cleanNotes;
-    // Reflect in the open sheet's textarea so the tech sees the prefill.
-    if (sheetNotes) sheetNotes.value = cleanNotes;
+  zonePickerMenu.innerHTML = html;
+  zonePickerMenu.hidden = false;
+  sheetZoneBadgeBtn.setAttribute("aria-expanded", "true");
+  positionZonePickerMenu(sheetZoneBadgeBtn);
+}
+
+function closeZonePicker() {
+  if (!zonePickerMenu || zonePickerMenu.hidden) return;
+  zonePickerMenu.hidden = true;
+  if (sheetZoneBadgeBtn) sheetZoneBadgeBtn.setAttribute("aria-expanded", "false");
+}
+
+function applyZoneSourceFromIdx(idx) {
+  const src = zonePickerSources[idx];
+  const zoneIdx = state.activeZoneIndex;
+  const zone = state.zones[zoneIdx];
+  if (!src || !zone) return closeZonePicker();
+
+  zone.kind = src.kind;
+  if (src.kind === "zone" && Number.isFinite(src.number) && src.number > 0) {
+    zone.number = src.number;
+  } else if (src.kind !== "zone") {
+    zone.number = 0;
   }
-  // Reflect in the sheet header + zone list, then persist.
-  sheetTitle.textContent = `Zone ${zone.number || "?"}`;
-  if (sheetLocationText) sheetLocationText.textContent = zone.location;
+  zone.location = src.label;
+
+  // Auto-populate notes when WO notes are empty.
+  if (src.notes && !String(zone.notes || "").trim()) {
+    zone.notes = src.notes;
+    if (sheetNotes) sheetNotes.value = src.notes;
+  }
+
+  // Reflect in the sheet header + location input + zone list.
+  if (sheetZoneBadgeBtn) sheetZoneBadgeBtn.textContent = zoneBadgeLabel(zone);
+  if (sheetLocationInput) sheetLocationInput.value = zone.location;
   renderZones();
   patchWorkOrder({ zones: state.zones });
-  closeSourcePicker();
+  closeZonePicker();
 }
 
-if (sheetLocationBtn) {
-  sheetLocationBtn.addEventListener("click", openSourcePicker);
-}
-document.getElementById("techSourcePickerClose")?.addEventListener("click", closeSourcePicker);
-techSourcePicker?.addEventListener("click", (event) => {
-  // Backdrop click closes (any click on the picker container itself, not
-  // its inner card).
-  if (event.target === techSourcePicker) closeSourcePicker();
+// Description input — keep state.zones[idx].location in sync, persist on
+// blur or 1.2s debounce. Picker writes directly to the input value, so
+// this handler only fires for tech-typed edits.
+sheetLocationInput?.addEventListener("input", () => {
+  if (state.locked) return;
+  const idx = state.activeZoneIndex;
+  const zone = state.zones[idx];
+  if (!zone) return;
+  zone.location = String(sheetLocationInput.value || "").trim().slice(0, 200);
+  if (state.zoneLocationTimer) clearTimeout(state.zoneLocationTimer);
+  state.zoneLocationTimer = setTimeout(() => {
+    state.zoneLocationTimer = null;
+    renderZones();
+    patchWorkOrder({ zones: state.zones });
+  }, 1200);
+});
+sheetLocationInput?.addEventListener("blur", () => {
+  if (state.zoneLocationTimer) {
+    clearTimeout(state.zoneLocationTimer);
+    state.zoneLocationTimer = null;
+    renderZones();
+    patchWorkOrder({ zones: state.zones });
+  }
+});
+
+// Open / close wiring + outside-click + escape.
+sheetZoneBadgeBtn?.addEventListener("click", () => {
+  if (zonePickerMenu && !zonePickerMenu.hidden) {
+    closeZonePicker();
+  } else {
+    openZonePicker();
+  }
+});
+document.addEventListener("click", (event) => {
+  if (!zonePickerMenu || zonePickerMenu.hidden) return;
+  if (event.target.closest(".tech-zone-picker-menu")) return;
+  if (event.target === sheetZoneBadgeBtn || sheetZoneBadgeBtn?.contains(event.target)) return;
+  closeZonePicker();
 });
 document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape" && techSourcePicker && !techSourcePicker.hidden) closeSourcePicker();
+  if (event.key === "Escape" && zonePickerMenu && !zonePickerMenu.hidden) closeZonePicker();
 });
-techSourcePickerBody?.addEventListener("click", (event) => {
-  const btn = event.target.closest(".tech-source-picker-item");
-  if (!btn) return;
-  applyZoneSource({
-    label: btn.dataset.sourceLabel || "",
-    number: btn.dataset.sourceNumber ? Number(btn.dataset.sourceNumber) : null,
-    notes: btn.dataset.sourceNotes || ""
-  });
-});
-document.getElementById("techSourcePickerCustomBtn")?.addEventListener("click", () => {
-  const v = (techSourcePickerCustomInput?.value || "").trim();
-  if (!v) return;
-  applyZoneSource({ label: v, number: null });
-});
-techSourcePickerCustomInput?.addEventListener("keydown", (event) => {
-  if (event.key === "Enter") {
-    event.preventDefault();
-    document.getElementById("techSourcePickerCustomBtn")?.click();
-  }
+window.addEventListener("resize", () => {
+  if (!zonePickerMenu || zonePickerMenu.hidden || !sheetZoneBadgeBtn) return;
+  positionZonePickerMenu(sheetZoneBadgeBtn);
 });
 
 // ---- Visit notes (textarea) -------------------------------------
@@ -2678,8 +2731,10 @@ async function init() {
     }
 
     // Stash the property record so the zone source-picker can offer the
-    // customer's real zones / valves / controller / issues as label sources.
+    // customer's real zones / valves / controller / issues as label sources,
+    // then build the picker source list for instant access on tap.
     state.linkedProperty = data.property || null;
+    buildZonePickerSources();
 
     // Cheat Sheet — first thing the tech reviews on arrival. Pulls from
     // the property record + the most-recent completed WO at the property.
