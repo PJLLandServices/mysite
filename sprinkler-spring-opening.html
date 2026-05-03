@@ -89,7 +89,65 @@
   position: relative;
   overflow: hidden;
 }
-.spring-hero-inner { position: relative; z-index: 2; max-width: 820px; }
+.spring-hero-inner {
+  position: relative;
+  z-index: 2;
+  max-width: 1200px;
+  display: grid;
+  grid-template-columns: minmax(0, 1.45fr) minmax(0, 1fr);
+  gap: clamp(40px, 6vw, 80px);
+  align-items: center;
+}
+.spring-hero__content { min-width: 0; }
+.spring-hero__media {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-width: 0;
+}
+.spring-hero__frame {
+  position: relative;
+  width: 100%;
+  max-width: 320px;
+  aspect-ratio: 9 / 16;
+  border-radius: 22px;
+  overflow: hidden;
+  background: #0f1f14;
+  box-shadow:
+    0 30px 60px -12px rgba(0, 0, 0, 0.50),
+    0 16px 32px -8px rgba(0, 0, 0, 0.30),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+  isolation: isolate;
+}
+.spring-hero__frame::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, rgba(15,31,20,0) 70%, rgba(15,31,20,0.40) 100%);
+  pointer-events: none;
+  z-index: 1;
+}
+.spring-hero__video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+@media (max-width: 880px) {
+  .spring-hero-inner {
+    grid-template-columns: 1fr;
+    gap: clamp(32px, 6vw, 48px);
+  }
+  .spring-hero__frame { max-width: 260px; margin: 0 auto; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .spring-hero__video { display: none; }
+  .spring-hero__frame {
+    background-image: url('estate-sprinkler-hero.jpg');
+    background-size: cover;
+    background-position: center;
+  }
+}
 .breadcrumbs { font-size: 13px; color: rgba(255,255,255,.65); margin-bottom: 18px; display: flex; gap: 8px; flex-wrap: wrap; }
 .breadcrumbs a { color: rgba(255,255,255,.85); }
 .breadcrumbs a:hover { color: var(--amber-light); }
@@ -495,18 +553,27 @@
 <!-- Hero -->
 <section class="spring-hero">
   <div class="container spring-hero-inner">
-    <div class="breadcrumbs"><a href="index.html">Home</a><span>›</span><a href="sprinkler-systems.html">Sprinkler Services</a><span>›</span><span>Spring Opening</span></div>
-    <span class="spring-eyebrow">Spring Service · Book by Mid-April</span>
-    <h1>Spring sprinkler opening — <em>from <span data-price="spring_open_4z">$90</span>.</em></h1>
-    <p>Professional spring activation for residential lawn sprinkler systems across Newmarket, Aurora, Markham, Richmond Hill, Vaughan, King City and the broader GTA. Slow pressure-up, full leak inspection, zone-by-zone test, Hydrawise programming for the season — all done in 35-50 minutes for a typical 4-zone home.</p>
-    <div class="spring-hero-actions">
-      <a href="book.html?service=spring_open_4z" class="btn-amber">Book your spring opening <span aria-hidden="true">→</span></a>
-      <a href="tel:+19059600181" class="btn-ghost">📞 (905) 960-0181</a>
+    <div class="spring-hero__content">
+      <div class="breadcrumbs"><a href="index.html">Home</a><span>›</span><a href="sprinkler-systems.html">Sprinkler Services</a><span>›</span><span>Spring Opening</span></div>
+      <span class="spring-eyebrow">Spring Service · Book by Mid-April</span>
+      <h1>Spring sprinkler opening — <em>from <span data-price="spring_open_4z">$90</span>.</em></h1>
+      <p>Professional spring activation for residential lawn sprinkler systems across Newmarket, Aurora, Markham, Richmond Hill, Vaughan, King City and the broader GTA. Slow pressure-up, full leak inspection, zone-by-zone test, Hydrawise programming for the season — all done in 35-50 minutes for a typical 4-zone home.</p>
+      <div class="spring-hero-actions">
+        <a href="book.html?service=spring_open_4z" class="btn-amber">Book your spring opening <span aria-hidden="true">→</span></a>
+        <a href="tel:+19059600181" class="btn-ghost">📞 (905) 960-0181</a>
+      </div>
+      <div class="spring-hero-meta">
+        <span>💲 <strong><span data-zone-prefix>From </span>$<span data-zone-display>90</span></strong> <span data-zone-tier-meta>(up to 4 zones residential)</span></span>
+        <span>⏱️ <strong>35-50 min</strong> typical</span>
+        <span>🛡️ <strong>1-year guarantee</strong> on any repair work</span>
+      </div>
     </div>
-    <div class="spring-hero-meta">
-      <span>💲 <strong><span data-zone-prefix>From </span>$<span data-zone-display>90</span></strong> <span data-zone-tier-meta>(up to 4 zones residential)</span></span>
-      <span>⏱️ <strong>35-50 min</strong> typical</span>
-      <span>🛡️ <strong>1-year guarantee</strong> on any repair work</span>
+    <div class="spring-hero__media">
+      <div class="spring-hero__frame">
+        <video class="spring-hero__video" autoplay loop muted playsinline preload="auto" aria-hidden="true">
+          <source src="pop-ups-starting.mp4" type="video/mp4">
+        </video>
+      </div>
     </div>
   </div>
 </section>
