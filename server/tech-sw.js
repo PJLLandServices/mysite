@@ -19,7 +19,7 @@
 //   - Conflict resolution (last-write-wins; the queue replay endpoint
 //     trusts the latest mutation, no IF-MATCH revision check)
 
-const CACHE_VERSION = "pjl-tech-v3";
+const CACHE_VERSION = "pjl-tech-v4";
 const STATIC_ASSETS = [
   "/crm/work-order-tech.html",
   "/crm/work-order-tech.js",
