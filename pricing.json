@@ -1,48 +1,57 @@
 {
-  "_doc": "Single source of truth for all PJL pricing. EVERY pricing-aware file in this codebase reads from here. Do not hardcode prices anywhere else. Quote line items snapshot prices at creation time (lead.features captures price as-of-creation).",
+  "_doc": "Single source of truth for all PJL pricing. EVERY pricing-aware file in this codebase reads from here. Do not hardcode prices anywhere else. Quote line items snapshot prices at creation time (lead.features captures price as-of-creation). Seasonal tier structure (residential 1-4/5-6/7-8/9-15/16+ and commercial 1-4/5-8/9+) was reconciled 2026-05-02 to match the live interactive calculators on sprinkler-spring-opening.html and sprinkler-fall-winterization.html — those calculators are the canonical customer-facing tier truth. Spring and fall use the same tier prices.",
   "currency": "CAD",
   "items": {
-    "service_call":           { "label": "Service call (mobilization + 1 hr labour)",         "price": 95,    "category": "service",    "quoteType": "flat"     },
-    "hourly_labour":          { "label": "Additional labour (per hour beyond the first)",     "price": 95,    "category": "service",    "quoteType": "per-unit" },
+    "service_call":               { "label": "Service call (mobilization + 1 hr labour)",         "price": 95,    "category": "service",    "quoteType": "flat"     },
+    "hourly_labour":              { "label": "Additional labour (per hour beyond the first)",     "price": 95,    "category": "service",    "quoteType": "per-unit" },
 
-    "head_replacement":       { "label": "Sprinkler head replacement (any size, any type)",   "price": 68,    "category": "repair",     "quoteType": "per-unit" },
-    "cap_one_head":           { "label": "Cap 1 sprinkler head (goodwill, no charge)",        "price": 0,     "category": "repair",     "quoteType": "flat"     },
-    "cap_multiple_heads":     { "label": "Cap 2+ sprinkler heads (labour only)",              "price": 0,     "category": "repair",     "quoteType": "custom"   },
+    "head_replacement":           { "label": "Sprinkler head replacement (any size, any type)",   "price": 68,    "category": "repair",     "quoteType": "per-unit" },
+    "cap_one_head":               { "label": "Cap 1 sprinkler head (goodwill, no charge)",        "price": 0,     "category": "repair",     "quoteType": "flat"     },
+    "cap_multiple_heads":         { "label": "Cap 2+ sprinkler heads (labour only)",              "price": 0,     "category": "repair",     "quoteType": "custom"   },
 
-    "manifold_3valve":        { "label": "3-valve manifold rebuild (covers 1-3 valves)",      "price": 135,   "category": "valve",      "quoteType": "flat"     },
-    "manifold_6valve":        { "label": "6-valve manifold rebuild (covers 4-6 valves)",      "price": 285,   "category": "valve",      "quoteType": "flat"     },
-    "valve_hunter_pgv":       { "label": "Hunter PGV-100G valve (per valve replaced)",        "price": 74.95, "category": "valve",      "quoteType": "per-unit" },
+    "manifold_3valve":            { "label": "3-valve manifold rebuild (covers 1-3 valves)",      "price": 135,   "category": "valve",      "quoteType": "flat"     },
+    "manifold_6valve":            { "label": "6-valve manifold rebuild (covers 4-6 valves)",      "price": 285,   "category": "valve",      "quoteType": "flat"     },
+    "valve_hunter_pgv":           { "label": "Hunter PGV-100G valve (per valve replaced)",        "price": 74.95, "category": "valve",      "quoteType": "per-unit" },
 
-    "controller_1_4":         { "label": "Smart controller — 1-4 zones (HPC-400)",            "price": 595,   "category": "controller", "quoteType": "flat"     },
-    "controller_5_7":         { "label": "Smart controller — 5-7 zones (HPC-400 + PCM-300)",  "price": 750,   "category": "controller", "quoteType": "flat"     },
-    "controller_8_16":        { "label": "Smart controller — 8-16 zones (HPC-400 + modules)", "price": 1195,  "category": "controller", "quoteType": "flat"     },
-    "controller_17_plus":     { "label": "Smart controller — 17+ zones (custom quote)",       "price": 0,     "category": "controller", "quoteType": "custom"   },
+    "controller_1_4":             { "label": "Smart controller — 1-4 zones (HPC-400)",            "price": 595,   "category": "controller", "quoteType": "flat"     },
+    "controller_5_7":             { "label": "Smart controller — 5-7 zones (HPC-400 + PCM-300)",  "price": 750,   "category": "controller", "quoteType": "flat"     },
+    "controller_8_16":            { "label": "Smart controller — 8-16 zones (HPC-400 + modules)", "price": 1195,  "category": "controller", "quoteType": "flat"     },
+    "controller_17_plus":         { "label": "Smart controller — 17+ zones (custom quote)",       "price": 0,     "category": "controller", "quoteType": "custom"   },
 
-    "wire_diagnostic":        { "label": "Wire diagnostics & simple repair (in valve box)",   "price": 187,   "category": "wire",       "quoteType": "flat"     },
-    "wire_run_100ft":         { "label": "Wire run replacement — up to 100 ft",               "price": 345,   "category": "wire",       "quoteType": "flat"     },
-    "wire_run_175ft":         { "label": "Wire run replacement — up to 175 ft",               "price": 435,   "category": "wire",       "quoteType": "flat"     },
-    "wire_run_per_ft":        { "label": "Wire run — per ft beyond 175 ft",                   "price": 1.80,  "category": "wire",       "quoteType": "per-unit" },
-    "wire_run_long":          { "label": "Wire run replacement — beyond 175 ft (custom)",     "price": 0,     "category": "wire",       "quoteType": "custom"   },
+    "wire_diagnostic":            { "label": "Wire diagnostics & simple repair (in valve box)",   "price": 187,   "category": "wire",       "quoteType": "flat"     },
+    "wire_run_100ft":             { "label": "Wire run replacement — up to 100 ft",               "price": 345,   "category": "wire",       "quoteType": "flat"     },
+    "wire_run_175ft":             { "label": "Wire run replacement — up to 175 ft",               "price": 435,   "category": "wire",       "quoteType": "flat"     },
+    "wire_run_per_ft":            { "label": "Wire run — per ft beyond 175 ft",                   "price": 1.80,  "category": "wire",       "quoteType": "per-unit" },
+    "wire_run_long":              { "label": "Wire run replacement — beyond 175 ft (custom)",     "price": 0,     "category": "wire",       "quoteType": "custom"   },
 
-    "pipe_break_3ft":         { "label": "Pipe break repair (up to 3 ft of 1\" pipe)",        "price": 120,   "category": "pipe",       "quoteType": "flat"     },
-    "mainline_repair":        { "label": "Mainline repair (custom quote)",                    "price": 0,     "category": "pipe",       "quoteType": "custom"   },
+    "pipe_break_3ft":             { "label": "Pipe break repair (up to 3 ft of 1\" pipe)",        "price": 120,   "category": "pipe",       "quoteType": "flat"     },
+    "mainline_repair":            { "label": "Mainline repair (custom quote)",                    "price": 0,     "category": "pipe",       "quoteType": "custom"   },
 
-    "spring_open_4z":         { "label": "Spring opening — up to 4 zones residential",        "price": 90,    "category": "seasonal",   "quoteType": "flat"     },
-    "spring_open_8z":         { "label": "Spring opening — up to 8 zones residential",        "price": 120,   "category": "seasonal",   "quoteType": "flat"     },
-    "spring_open_commercial": { "label": "Spring opening — commercial",                       "price": 285,   "category": "seasonal",   "quoteType": "flat"     },
+    "spring_open_4z":             { "label": "Spring opening — 1-4 zones residential",            "price": 90,    "category": "seasonal",   "quoteType": "flat"     },
+    "spring_open_6z":             { "label": "Spring opening — 5-6 zones residential",            "price": 105,   "category": "seasonal",   "quoteType": "flat"     },
+    "spring_open_8z":             { "label": "Spring opening — 7-8 zones residential",            "price": 120,   "category": "seasonal",   "quoteType": "flat"     },
+    "spring_open_15z":            { "label": "Spring opening — 9-15 zones residential",           "price": 165,   "category": "seasonal",   "quoteType": "flat"     },
+    "spring_open_16plus":         { "label": "Spring opening — 16+ zones residential (custom)",   "price": 0,     "category": "seasonal",   "quoteType": "custom"   },
+    "spring_open_commercial":     { "label": "Spring opening — 1-4 zones commercial",             "price": 145,   "category": "seasonal",   "quoteType": "flat"     },
+    "spring_open_commercial_8z":  { "label": "Spring opening — 5-8 zones commercial",             "price": 255,   "category": "seasonal",   "quoteType": "flat"     },
+    "spring_open_commercial_9plus":{ "label": "Spring opening — 9+ zones commercial (custom)",     "price": 0,     "category": "seasonal",   "quoteType": "custom"   },
 
-    "fall_close_4z":          { "label": "Fall closing — up to 4 zones",                      "price": 90,    "category": "seasonal",   "quoteType": "flat"     },
-    "fall_close_6z":          { "label": "Fall closing — up to 6 zones",                      "price": 95,    "category": "seasonal",   "quoteType": "flat"     },
-    "fall_close_8z":          { "label": "Fall closing — up to 8 zones",                      "price": 120,   "category": "seasonal",   "quoteType": "flat"     },
-    "fall_close_15z":         { "label": "Fall closing — up to 15 zones",                     "price": 145,   "category": "seasonal",   "quoteType": "flat"     },
+    "fall_close_4z":              { "label": "Fall closing — 1-4 zones residential",              "price": 90,    "category": "seasonal",   "quoteType": "flat"     },
+    "fall_close_6z":              { "label": "Fall closing — 5-6 zones residential",              "price": 105,   "category": "seasonal",   "quoteType": "flat"     },
+    "fall_close_8z":              { "label": "Fall closing — 7-8 zones residential",              "price": 120,   "category": "seasonal",   "quoteType": "flat"     },
+    "fall_close_15z":             { "label": "Fall closing — 9-15 zones residential",             "price": 165,   "category": "seasonal",   "quoteType": "flat"     },
+    "fall_close_16plus":          { "label": "Fall closing — 16+ zones residential (custom)",     "price": 0,     "category": "seasonal",   "quoteType": "custom"   },
+    "fall_close_commercial":      { "label": "Fall closing — 1-4 zones commercial",               "price": 145,   "category": "seasonal",   "quoteType": "flat"     },
+    "fall_close_commercial_8z":   { "label": "Fall closing — 5-8 zones commercial",               "price": 255,   "category": "seasonal",   "quoteType": "flat"     },
+    "fall_close_commercial_9plus":{ "label": "Fall closing — 9+ zones commercial (custom)",        "price": 0,     "category": "seasonal",   "quoteType": "custom"   },
 
-    "new_install_t1_base":    { "label": "New install Tier 1 (1-4 zones) base fee",           "price": 585,   "category": "install",    "quoteType": "flat"     },
-    "new_install_t2_base":    { "label": "New install Tier 2 (5-7 zones) base fee",           "price": 749,   "category": "install",    "quoteType": "flat"     },
-    "new_install_per_zone":   { "label": "New install per-zone (Tier 1 & 2)",                 "price": 549,   "category": "install",    "quoteType": "per-unit" },
-    "new_zone_install":       { "label": "New zone install (starts at $575 — custom quote)",  "price": 0,     "category": "install",    "quoteType": "custom"   },
-    "new_zone_min":           { "label": "New zone install — minimum (\"starts at\")",         "price": 575,   "category": "install",    "quoteType": "custom"   },
-    "smart_upgrade":          { "label": "Smart upgrades / accessories (custom quote)",       "price": 0,     "category": "install",    "quoteType": "custom"   },
-    "hose_bib_install":       { "label": "Frost-free exterior hose bib install",              "price": 175,   "category": "install",    "quoteType": "flat"     }
+    "new_install_t1_base":        { "label": "New install Tier 1 (1-4 zones) base fee",           "price": 585,   "category": "install",    "quoteType": "flat"     },
+    "new_install_t2_base":        { "label": "New install Tier 2 (5-7 zones) base fee",           "price": 749,   "category": "install",    "quoteType": "flat"     },
+    "new_install_per_zone":       { "label": "New install per-zone (Tier 1 & 2)",                 "price": 549,   "category": "install",    "quoteType": "per-unit" },
+    "new_zone_install":           { "label": "New zone install (starts at $575 — custom quote)",  "price": 0,     "category": "install",    "quoteType": "custom"   },
+    "new_zone_min":               { "label": "New zone install — minimum (\"starts at\")",         "price": 575,   "category": "install",    "quoteType": "custom"   },
+    "smart_upgrade":              { "label": "Smart upgrades / accessories (custom quote)",       "price": 0,     "category": "install",    "quoteType": "custom"   },
+    "hose_bib_install":           { "label": "Frost-free exterior hose bib install",              "price": 175,   "category": "install",    "quoteType": "flat"     }
   },
   "rules": {
     "spring_fall_no_service_call": "Spring opening / fall closing pricing is all-in. Service call ($95) is NOT charged on top.",
@@ -50,7 +59,23 @@
     "whole_manifold_rule": "When ANY valve in a box fails, PJL replaces the ENTIRE manifold AND ALL valves in that box together. Never single-valve repair. Quote formula = manifold tier ($135 for 1-3 valves OR $285 for 4-6 valves) + ($74.95 × valve count) + $95 service call.",
     "backflow_not_offered": "PJL does NOT service backflow assemblies. Refer customer to a certified backflow tester.",
     "head_default_assumption": "Default head: 4\" Pro Spray for grass, 6\" for beds. Single $68 flat covers any size/type.",
-    "controller_brand": "Only one controller installed: Hunter HPC-400 (Hydrawise WiFi). Tiered by zone count via PCM modules."
+    "controller_brand": "Only one controller installed: Hunter HPC-400 (Hydrawise WiFi). Tiered by zone count via PCM modules.",
+    "seasonal_tier_source_of_truth": "Seasonal tier structure (residential 1-4/5-6/7-8/9-15/16+ and commercial 1-4/5-8/9+) is canonical. Spring and fall use the SAME tier prices. The interactive zone calculators on sprinkler-spring-opening.html and sprinkler-fall-winterization.html are the tier reference; pricing.json mirrors them."
+  },
+  "seasonal_tiers": {
+    "_doc": "Reference table for the seasonal tier structure. Spring and fall use the same prices. 16+ residential and 9+ commercial are custom quotes (price 0). UI surfaces should display this structure or a simplified subset.",
+    "residential": [
+      { "zones": "1-4",   "price": 90,  "key_spring": "spring_open_4z",     "key_fall": "fall_close_4z" },
+      { "zones": "5-6",   "price": 105, "key_spring": "spring_open_6z",     "key_fall": "fall_close_6z" },
+      { "zones": "7-8",   "price": 120, "key_spring": "spring_open_8z",     "key_fall": "fall_close_8z" },
+      { "zones": "9-15",  "price": 165, "key_spring": "spring_open_15z",    "key_fall": "fall_close_15z" },
+      { "zones": "16+",   "price": 0,   "key_spring": "spring_open_16plus", "key_fall": "fall_close_16plus", "custom": true }
+    ],
+    "commercial": [
+      { "zones": "1-4",   "price": 145, "key_spring": "spring_open_commercial",       "key_fall": "fall_close_commercial" },
+      { "zones": "5-8",   "price": 255, "key_spring": "spring_open_commercial_8z",    "key_fall": "fall_close_commercial_8z" },
+      { "zones": "9+",    "price": 0,   "key_spring": "spring_open_commercial_9plus", "key_fall": "fall_close_commercial_9plus", "custom": true }
+    ]
   },
   "manifold_examples": {
     "_doc": "Pre-computed totals for the Whole Manifold Rule, derived from primitives above. AI uses these directly.",

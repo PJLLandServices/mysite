@@ -73,13 +73,22 @@
       { "@type": "Offer", "name": "Wire Run Replacement — up to 100 ft", "price": "345.00", "priceCurrency": "CAD", "description": "Underground wire run replacement up to 100 feet." },
       { "@type": "Offer", "name": "Wire Run Replacement — up to 175 ft", "price": "435.00", "priceCurrency": "CAD", "description": "Underground wire run replacement up to 175 feet. Beyond 175 ft, $1.80/ft." },
       { "@type": "Offer", "name": "Pipe Break Repair (up to 3 ft of 1-inch pipe)", "price": "120.00", "priceCurrency": "CAD", "description": "Pipe break repair up to 3 feet, 1-inch pipe, all clamps and fittings included. Plus standard service call." },
-      { "@type": "Offer", "name": "Spring Opening — up to 4 zones residential", "price": "90.00", "priceCurrency": "CAD", "description": "Spring sprinkler opening for up to 4 zones — pressure-up, leak check, Hydrawise re-program, walkthrough. No service call fee on top." },
-      { "@type": "Offer", "name": "Spring Opening — up to 8 zones residential", "price": "120.00", "priceCurrency": "CAD" },
-      { "@type": "Offer", "name": "Spring Opening — Commercial", "price": "285.00", "priceCurrency": "CAD" },
-      { "@type": "Offer", "name": "Fall Winterization — up to 4 zones", "price": "90.00", "priceCurrency": "CAD", "description": "Fall winterization with calibrated low-pressure compressor. No service call fee on top." },
-      { "@type": "Offer", "name": "Fall Winterization — up to 6 zones", "price": "95.00", "priceCurrency": "CAD" },
-      { "@type": "Offer", "name": "Fall Winterization — up to 8 zones", "price": "120.00", "priceCurrency": "CAD" },
-      { "@type": "Offer", "name": "Fall Winterization — up to 15 zones", "price": "145.00", "priceCurrency": "CAD" },
+      { "@type": "Offer", "name": "Spring Opening — 1-4 zones residential", "price": "90.00", "priceCurrency": "CAD", "description": "Spring sprinkler opening for 1-4 zones residential — pressure-up, leak check, Hydrawise re-program, walkthrough. No service call fee on top." },
+      { "@type": "Offer", "name": "Spring Opening — 5-6 zones residential", "price": "105.00", "priceCurrency": "CAD" },
+      { "@type": "Offer", "name": "Spring Opening — 7-8 zones residential", "price": "120.00", "priceCurrency": "CAD" },
+      { "@type": "Offer", "name": "Spring Opening — 9-15 zones residential", "price": "165.00", "priceCurrency": "CAD", "description": "Larger residential systems. Extended-time fees may apply for 10+ zone systems." },
+      { "@type": "Offer", "name": "Spring Opening — 16+ zones residential", "priceCurrency": "CAD", "description": "Beyond the standard residential tier — custom quote by zone count." },
+      { "@type": "Offer", "name": "Spring Opening — 1-4 zones commercial", "price": "145.00", "priceCurrency": "CAD" },
+      { "@type": "Offer", "name": "Spring Opening — 5-8 zones commercial", "price": "255.00", "priceCurrency": "CAD" },
+      { "@type": "Offer", "name": "Spring Opening — 9+ zones commercial", "priceCurrency": "CAD", "description": "Larger commercial properties — site visit + custom quote." },
+      { "@type": "Offer", "name": "Fall Winterization — 1-4 zones residential", "price": "90.00", "priceCurrency": "CAD", "description": "Fall winterization with calibrated low-pressure compressor. No service call fee on top." },
+      { "@type": "Offer", "name": "Fall Winterization — 5-6 zones residential", "price": "105.00", "priceCurrency": "CAD" },
+      { "@type": "Offer", "name": "Fall Winterization — 7-8 zones residential", "price": "120.00", "priceCurrency": "CAD" },
+      { "@type": "Offer", "name": "Fall Winterization — 9-15 zones residential", "price": "165.00", "priceCurrency": "CAD", "description": "Larger residential systems. Extended-time fees may apply for 10+ zone systems." },
+      { "@type": "Offer", "name": "Fall Winterization — 16+ zones residential", "priceCurrency": "CAD", "description": "Beyond the standard residential tier — custom quote by zone count." },
+      { "@type": "Offer", "name": "Fall Winterization — 1-4 zones commercial", "price": "145.00", "priceCurrency": "CAD" },
+      { "@type": "Offer", "name": "Fall Winterization — 5-8 zones commercial", "price": "255.00", "priceCurrency": "CAD" },
+      { "@type": "Offer", "name": "Fall Winterization — 9+ zones commercial", "priceCurrency": "CAD", "description": "Larger commercial properties — site visit + custom quote." },
       { "@type": "Offer", "name": "Cap 1 Sprinkler Head", "price": "0.00", "priceCurrency": "CAD", "description": "Capping a single head is included as a goodwill item — no charge during a service visit." },
       { "@type": "Offer", "name": "New Zone Install", "priceCurrency": "CAD", "description": "Starting at $575. Custom quote — too variable (head count, trenching, soil, system load) to flat-rate." },
       { "@type": "Offer", "name": "Mainline Repair", "priceCurrency": "CAD", "description": "Custom quote — material varies (copper or poly), excavation depth and access vary too much for flat rate." },
@@ -641,7 +650,7 @@
 <section class="section cream">
   <div class="container" style="max-width:1080px;">
     <h2>Seasonal services — bundled pricing.</h2>
-    <p style="max-width:680px;">Spring openings and fall winterizations are bundled — the price you see is the all-in price, no service call charged on top. Each visit includes up to 1 hour of labour. If extra repair work is found and you want it handled on the same visit, that's quoted on the spot before we proceed.</p>
+    <p style="max-width:680px;">Spring openings and fall winterizations are bundled — the price you see is the all-in price, no service call charged on top. Spring and fall use the same tier structure. If extra repair work is found and you want it handled on the same visit, that's quoted on the spot before we proceed. Try the live <a href="sprinkler-spring-opening.html#instant-price">spring</a> / <a href="sprinkler-fall-winterization.html#instant-price">fall</a> calculators to dial in your zone count.</p>
 
     <table class="price-table">
       <thead>
@@ -649,32 +658,68 @@
       </thead>
       <tbody>
         <tr>
-          <td class="cell-item">Spring Opening — up to 4 zones (residential)<span class="cell-detail">Pressure-up, leak check, Hydrawise re-program, walk-through.</span></td>
+          <td class="cell-item">Spring Opening — 1-4 zones (residential)<span class="cell-detail">Pressure-up, leak check, Hydrawise re-program, walk-through. Same scope applies to every residential tier.</span></td>
           <td class="cell-price" data-price="spring_open_4z">$90</td>
         </tr>
         <tr>
-          <td class="cell-item">Spring Opening — up to 8 zones (residential)</td>
+          <td class="cell-item">Spring Opening — 5-6 zones (residential)</td>
+          <td class="cell-price" data-price="spring_open_6z">$105</td>
+        </tr>
+        <tr>
+          <td class="cell-item">Spring Opening — 7-8 zones (residential)</td>
           <td class="cell-price" data-price="spring_open_8z">$120</td>
         </tr>
         <tr>
-          <td class="cell-item">Spring Opening — Commercial<span class="cell-detail">Multi-zone commercial systems, including basic backflow visual check.</span></td>
-          <td class="cell-price" data-price="spring_open_commercial">$285</td>
+          <td class="cell-item">Spring Opening — 9-15 zones (residential)<span class="cell-detail">Extended-time fees may apply for 10+ zone systems.</span></td>
+          <td class="cell-price" data-price="spring_open_15z">$165</td>
         </tr>
         <tr>
-          <td class="cell-item">Fall Winterization — up to 4 zones<span class="cell-detail">Calibrated low-pressure compressor blow-out, Hydrawise winter mode.</span></td>
+          <td class="cell-item">Spring Opening — 16+ zones (residential)<span class="cell-detail">Beyond the standard tier — quoted by zone count.</span></td>
+          <td class="cell-price is-custom">Custom quote</td>
+        </tr>
+        <tr>
+          <td class="cell-item">Spring Opening — 1-4 zones (commercial)<span class="cell-detail">Multi-zone commercial systems, including basic backflow visual check.</span></td>
+          <td class="cell-price" data-price="spring_open_commercial">$145</td>
+        </tr>
+        <tr>
+          <td class="cell-item">Spring Opening — 5-8 zones (commercial)</td>
+          <td class="cell-price" data-price="spring_open_commercial_8z">$255</td>
+        </tr>
+        <tr>
+          <td class="cell-item">Spring Opening — 9+ zones (commercial)<span class="cell-detail">Larger commercial properties — site visit + custom quote.</span></td>
+          <td class="cell-price is-custom">Custom quote</td>
+        </tr>
+        <tr>
+          <td class="cell-item">Fall Winterization — 1-4 zones (residential)<span class="cell-detail">Calibrated low-pressure compressor blow-out, Hydrawise winter mode. Same scope applies to every residential tier.</span></td>
           <td class="cell-price" data-price="fall_close_4z">$90</td>
         </tr>
         <tr>
-          <td class="cell-item">Fall Winterization — up to 6 zones</td>
-          <td class="cell-price" data-price="fall_close_6z">$95</td>
+          <td class="cell-item">Fall Winterization — 5-6 zones (residential)</td>
+          <td class="cell-price" data-price="fall_close_6z">$105</td>
         </tr>
         <tr>
-          <td class="cell-item">Fall Winterization — up to 8 zones</td>
+          <td class="cell-item">Fall Winterization — 7-8 zones (residential)</td>
           <td class="cell-price" data-price="fall_close_8z">$120</td>
         </tr>
         <tr>
-          <td class="cell-item">Fall Winterization — up to 15 zones</td>
-          <td class="cell-price" data-price="fall_close_15z">$145</td>
+          <td class="cell-item">Fall Winterization — 9-15 zones (residential)<span class="cell-detail">Extended-time fees may apply for 10+ zone systems.</span></td>
+          <td class="cell-price" data-price="fall_close_15z">$165</td>
+        </tr>
+        <tr>
+          <td class="cell-item">Fall Winterization — 16+ zones (residential)<span class="cell-detail">Beyond the standard tier — quoted by zone count.</span></td>
+          <td class="cell-price is-custom">Custom quote</td>
+        </tr>
+        <tr>
+          <td class="cell-item">Fall Winterization — 1-4 zones (commercial)</td>
+          <td class="cell-price" data-price="fall_close_commercial">$145</td>
+        </tr>
+        <tr>
+          <td class="cell-item">Fall Winterization — 5-8 zones (commercial)</td>
+          <td class="cell-price" data-price="fall_close_commercial_8z">$255</td>
+        </tr>
+        <tr>
+          <td class="cell-item">Fall Winterization — 9+ zones (commercial)<span class="cell-detail">Larger commercial properties — site visit + custom quote.</span></td>
+          <td class="cell-price is-custom">Custom quote</td>
         </tr>
       </tbody>
     </table>

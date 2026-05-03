@@ -82,11 +82,14 @@ const PATTERNS = [
   { re: /\$285(\s+manifold|\s*-\s*6-valve)/gi,
     repl: (m, suffix) => tok("manifold_6valve", "285") + suffix },
 
-  // ---- Spring opening commercial ($285) — near "commercial"
-  { re: /(commercial[^$]{0,30}?)\$285\b/gi,
-    repl: (m, prefix) => prefix + tok("spring_open_commercial", "285") },
-  { re: /\$285(\s+commercial)/gi,
-    repl: (m, suffix) => tok("spring_open_commercial", "285") + suffix },
+  // ---- Spring/fall commercial 1-4z ($145) — near "commercial"
+  // (Kept old "$285 commercial" patterns commented; spring_open_commercial reframed to $145
+  // in 2026-05-02 reconciliation to match interactive calculator. $285 now belongs to
+  // manifold_6valve only.)
+  { re: /(commercial[^$]{0,30}?)\$145\b/gi,
+    repl: (m, prefix) => prefix + tok("spring_open_commercial", "145") },
+  { re: /\$145(\s+commercial)/gi,
+    repl: (m, suffix) => tok("spring_open_commercial", "145") + suffix },
 
   // ---- Controllers: $595 (1-4 zones), $750 (5-7), $1,195 (8-16)
   { re: /\$595(\s+(?:for\s+)?(?:a\s+)?(?:1-4|four)\s+zone|\s+1-4\s+zones|\s+\(1-4)/gi,
@@ -109,19 +112,21 @@ const PATTERNS = [
   { re: /(spring\s+open(?:ing)?[^$]{0,80}?(?:up\s+to\s+8|≤8|≤\s*8|5-8)\s+zone[^$]{0,30}?)\$120\b/gi,
     repl: (m, prefix) => prefix + tok("spring_open_8z", "120") },
 
-  // ---- Fall closing tiers
+  // ---- Fall closing tiers (reconciled 2026-05-02 to match interactive calculator)
+  //   Residential: 1-4z $90, 5-6z $105, 7-8z $120, 9-15z $165
+  //   (Spring uses the same prices via spring_open_4z/6z/8z/15z keys.)
   { re: /(fall\s+(?:closing|winterization)[^$]{0,60}?(?:up\s+to\s+4|≤4|≤\s*4|1-4)\s+zone[^$]{0,30}?)\$90\b/gi,
     repl: (m, prefix) => prefix + tok("fall_close_4z", "90") },
   { re: /\$90(\s+fall\s+(?:closing|winterization))/gi,
     repl: (m, s) => tok("fall_close_4z", "90") + s },
-  { re: /(fall\s+(?:closing|winterization)[^$]{0,60}?(?:up\s+to\s+6|≤6|≤\s*6|5-6)\s+zone[^$]{0,30}?)\$95\b/gi,
-    repl: (m, prefix) => prefix + tok("fall_close_6z", "95") },
+  { re: /(fall\s+(?:closing|winterization)[^$]{0,60}?(?:up\s+to\s+6|≤6|≤\s*6|5-6)\s+zone[^$]{0,30}?)\$105\b/gi,
+    repl: (m, prefix) => prefix + tok("fall_close_6z", "105") },
   { re: /(fall\s+(?:closing|winterization)[^$]{0,60}?(?:up\s+to\s+8|≤8|≤\s*8|7-8)\s+zone[^$]{0,30}?)\$120\b/gi,
     repl: (m, prefix) => prefix + tok("fall_close_8z", "120") },
-  { re: /(fall\s+(?:closing|winterization)[^$]{0,60}?(?:up\s+to\s+15|≤15|≤\s*15|9-15)\s+zone[^$]{0,30}?)\$145\b/gi,
-    repl: (m, prefix) => prefix + tok("fall_close_15z", "145") },
-  { re: /\$145(\s+fall|\s+for\s+15\s+zone)/gi,
-    repl: (m, s) => tok("fall_close_15z", "145") + s },
+  { re: /(fall\s+(?:closing|winterization)[^$]{0,60}?(?:up\s+to\s+15|≤15|≤\s*15|9-15)\s+zone[^$]{0,30}?)\$165\b/gi,
+    repl: (m, prefix) => prefix + tok("fall_close_15z", "165") },
+  { re: /\$165(\s+fall|\s+for\s+15\s+zone)/gi,
+    repl: (m, s) => tok("fall_close_15z", "165") + s },
 
   // ---- Wire repairs
   { re: /(wire\s+diagnostic[^$]{0,40}?)\$187\b/gi,
@@ -177,8 +182,12 @@ const PATTERNS = [
   { re: /\$585\b/g,       repl: () => tok("new_install_t1_base", "585") },
   { re: /\$749\b/g,       repl: () => tok("new_install_t2_base", "749") },
   { re: /\$135\b/g,       repl: () => tok("manifold_3valve", "135") },
-  { re: /\$145\b/g,       repl: () => tok("fall_close_15z", "145") },
+  // $145 → spring_open_commercial / fall_close_commercial (1-4z commercial tier).
+  // Both share $145 price; default to spring_open_commercial as the more-common surface.
+  { re: /\$145\b/g,       repl: () => tok("spring_open_commercial", "145") },
+  { re: /\$165\b/g,       repl: () => tok("spring_open_15z", "165") },
   { re: /\$175\b/g,       repl: () => tok("hose_bib_install", "175") },
+  { re: /\$255\b/g,       repl: () => tok("spring_open_commercial_8z", "255") },
   { re: /\$68\b/g,        repl: () => tok("head_replacement", "68") },
 
   // $95 is shared between service_call and hourly_labour — both are 95 anyway,
@@ -188,13 +197,17 @@ const PATTERNS = [
 
   // ---- AMBIGUOUS — context-specific only above; bare matches left alone:
   // $90  → spring_open_4z OR fall_close_4z (both 90)
+  // $105 → spring_open_6z OR fall_close_6z (both 105, post-2026-05-02 reconciliation)
   // $120 → pipe_break_3ft OR spring_open_8z OR fall_close_8z (all 120)
-  // $285 → manifold_6valve OR spring_open_commercial (both 285)
+  // $165 → spring_open_15z OR fall_close_15z (both 165, post-2026-05-02 reconciliation)
+  // $285 → manifold_6valve only (spring_open_commercial reframed to $145)
   //
   // We catch context-specific cases above. Anything bare is reported by the
   // post-run audit. For $90 we add a default-match (spring_open_4z) since
-  // most prose mentions of $90 mean "from $90 spring opening" anyway.
+  // most prose mentions of $90 mean "from $90 spring opening" anyway. Same
+  // logic for $105 → spring_open_6z.
   { re: /\$90\b/g,        repl: () => tok("spring_open_4z", "90") },
+  { re: /\$105\b/g,       repl: () => tok("spring_open_6z", "105") },
 
   // ---- $575 is "new zone install — starts at $575" (custom quote floor)
   { re: /\$575\b/g,       repl: () => tok("new_zone_min", "575") }
@@ -217,13 +230,26 @@ const SCHEMA_OFFER_MAP = [
   { match: /wire\s+run.*100/i,                             key: "wire_run_100ft",          decimals: 2 },
   { match: /wire\s+run.*175/i,                             key: "wire_run_175ft",          decimals: 2 },
   { match: /pipe\s+break/i,                                key: "pipe_break_3ft",          decimals: 2 },
-  { match: /spring\s+open(?:ing)?\s*[^"]*4\s*zone/i,       key: "spring_open_4z",          decimals: 2 },
-  { match: /spring\s+open(?:ing)?\s*[^"]*8\s*zone/i,       key: "spring_open_8z",          decimals: 2 },
-  { match: /spring\s+open(?:ing)?\s*[^"]*commercial/i,     key: "spring_open_commercial",  decimals: 2 },
-  { match: /fall\s+(?:closing|winterization)[^"]*4\s*zone/i,  key: "fall_close_4z",        decimals: 2 },
-  { match: /fall\s+(?:closing|winterization)[^"]*6\s*zone/i,  key: "fall_close_6z",        decimals: 2 },
-  { match: /fall\s+(?:closing|winterization)[^"]*8\s*zone/i,  key: "fall_close_8z",        decimals: 2 },
-  { match: /fall\s+(?:closing|winterization)[^"]*15\s*zone/i, key: "fall_close_15z",       decimals: 2 },
+  // Seasonal tier mapping for JSON-LD Offer name → pricing.json key. Order matters —
+  // more-specific patterns (with explicit "commercial" keyword) come first.
+  { match: /spring\s+open(?:ing)?[^"]*5-?8[^"]*commercial/i,     key: "spring_open_commercial_8z",     decimals: 2 },
+  { match: /spring\s+open(?:ing)?[^"]*commercial/i,              key: "spring_open_commercial",        decimals: 2 },
+  { match: /spring\s+open(?:ing)?[^"]*1-?4[^"]*resid/i,          key: "spring_open_4z",                decimals: 2 },
+  { match: /spring\s+open(?:ing)?[^"]*5-?6[^"]*resid/i,          key: "spring_open_6z",                decimals: 2 },
+  { match: /spring\s+open(?:ing)?[^"]*7-?8[^"]*resid/i,          key: "spring_open_8z",                decimals: 2 },
+  { match: /spring\s+open(?:ing)?[^"]*9-?15[^"]*resid/i,         key: "spring_open_15z",               decimals: 2 },
+  { match: /spring\s+open(?:ing)?[^"]*4\s*zone/i,                key: "spring_open_4z",                decimals: 2 },
+  { match: /spring\s+open(?:ing)?[^"]*8\s*zone/i,                key: "spring_open_8z",                decimals: 2 },
+  { match: /fall\s+(?:closing|winterization)[^"]*5-?8[^"]*commercial/i, key: "fall_close_commercial_8z", decimals: 2 },
+  { match: /fall\s+(?:closing|winterization)[^"]*commercial/i,   key: "fall_close_commercial",         decimals: 2 },
+  { match: /fall\s+(?:closing|winterization)[^"]*1-?4[^"]*resid/i,    key: "fall_close_4z",            decimals: 2 },
+  { match: /fall\s+(?:closing|winterization)[^"]*5-?6[^"]*resid/i,    key: "fall_close_6z",            decimals: 2 },
+  { match: /fall\s+(?:closing|winterization)[^"]*7-?8[^"]*resid/i,    key: "fall_close_8z",            decimals: 2 },
+  { match: /fall\s+(?:closing|winterization)[^"]*9-?15[^"]*resid/i,   key: "fall_close_15z",           decimals: 2 },
+  { match: /fall\s+(?:closing|winterization)[^"]*4\s*zone/i,     key: "fall_close_4z",                 decimals: 2 },
+  { match: /fall\s+(?:closing|winterization)[^"]*6\s*zone/i,     key: "fall_close_6z",                 decimals: 2 },
+  { match: /fall\s+(?:closing|winterization)[^"]*8\s*zone/i,     key: "fall_close_8z",                 decimals: 2 },
+  { match: /fall\s+(?:closing|winterization)[^"]*15\s*zone/i,    key: "fall_close_15z",                decimals: 2 },
   { match: /hose\s+bib/i,                                  key: "hose_bib_install",        decimals: 2 }
 ];
 

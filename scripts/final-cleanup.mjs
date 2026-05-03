@@ -33,11 +33,11 @@ const FIXES = [
     re: /\$120 winterization visit/,
     repl: '<span data-price="fall_close_8z">$120</span> winterization visit' },
 
-  // commercial-irrigation.html: "From $285" — this is on a commercial-services
-  // page so the $285 is the spring_open_commercial price.
+  // commercial-irrigation.html: "From $145" — 1-4 zone commercial spring opening
+  // (and same for fall closing). Reframed 2026-05-02 from old $285 single-tier.
   { files: ["commercial-irrigation.html"],
-    re: /<span class="cm-svc__price">From \$285<\/span>/,
-    repl: '<span class="cm-svc__price">From <span data-price="spring_open_commercial">$285</span></span>' }
+    re: /<span class="cm-svc__price">From \$145<\/span>/,
+    repl: '<span class="cm-svc__price">From <span data-price="spring_open_commercial">$145</span></span>' }
 ];
 
 // Run each fix against each listed file
