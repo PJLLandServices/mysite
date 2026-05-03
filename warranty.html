@@ -328,6 +328,53 @@
 .compare-card.is-us li::before { content: '✓'; position: absolute; left: 0; top: 0; color: var(--amber-light); font-weight: 800; }
 @media (max-width: 720px) { .compare-grid { grid-template-columns: 1fr; } }
 
+/* "How to file a claim" 2-col header: heading + intro on the left,
+   branded valve-box video on the right. The step grid runs full-
+   width below this header, unchanged. Mobile collapses to a single
+   column (heading -> video -> grid). */
+.claim-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr);
+  gap: clamp(28px, 5vw, 56px);
+  align-items: center;
+  margin-top: 16px;
+}
+.claim-header__text h2 { margin-bottom: 14px; }
+.claim-header__text p { max-width: 50ch; margin: 0; }
+.claim-header__media {
+  margin: 0;
+  max-width: 360px;
+  width: 100%;
+  justify-self: end;
+}
+.claim-header__media video {
+  width: 100%;
+  height: auto;
+  border-radius: 16px;
+  box-shadow: 0 18px 44px rgba(15, 31, 20, 0.22);
+  display: block;
+}
+.claim-header__media figcaption {
+  text-align: center;
+  font-size: 13px;
+  color: #666;
+  margin-top: 12px;
+  font-style: italic;
+  line-height: 1.45;
+}
+@media (max-width: 768px) {
+  .claim-header {
+    grid-template-columns: 1fr;
+    gap: 24px;
+    text-align: center;
+  }
+  .claim-header__text p { margin: 0 auto; }
+  .claim-header__media {
+    justify-self: center;
+    max-width: 320px;
+  }
+}
+
 /* Process steps */
 .process-grid {
   display: grid;
@@ -610,16 +657,19 @@
 <!-- Section 3: Claim process -->
 <section class="section">
   <div class="container" style="max-width:1080px;">
-    <h2>How to file a claim.</h2>
-    <p>Four steps. Most warranty visits are scheduled within 3-5 business days of the call.</p>
-
-    <figure style="margin: 24px auto 32px; max-width: 520px;">
-      <video autoplay loop muted playsinline preload="metadata" aria-label="PJL Land Services branded valve box lid with phone number and QR code, installed flush in the lawn" style="width: 100%; height: auto; border-radius: 12px; box-shadow: 0 6px 20px rgba(0,0,0,0.18); display: block;">
-        <source src="pjl-branded-valve-box.mp4" type="video/mp4">
-        <img src="pjl-branded-valve-box.jpg" alt="PJL Land Services branded valve box lid with phone number and QR code — installed flush in the lawn" loading="lazy" decoding="async" style="width: 100%; height: auto; display: block;">
-      </video>
-      <figcaption style="text-align: center; font-size: 13px; color: #666; margin-top: 10px; font-style: italic;">Every PJL install ends with this — service sticker on the valve box. Scan the QR code or call the number; we already have your file.</figcaption>
-    </figure>
+    <div class="claim-header">
+      <div class="claim-header__text">
+        <h2>How to file a claim.</h2>
+        <p>Four steps. Most warranty visits are scheduled within 3-5 business days of the call.</p>
+      </div>
+      <figure class="claim-header__media">
+        <video autoplay loop muted playsinline preload="metadata" aria-label="PJL Land Services branded valve box lid with phone number and QR code, installed flush in the lawn">
+          <source src="pjl-branded-valve-box.mp4" type="video/mp4">
+          <img src="pjl-branded-valve-box.jpg" alt="PJL Land Services branded valve box lid with phone number and QR code — installed flush in the lawn" loading="lazy" decoding="async" style="width: 100%; height: auto; display: block;">
+        </video>
+        <figcaption>Every PJL install ends with this — service sticker on the valve box. Scan the QR code or call the number; we already have your file.</figcaption>
+      </figure>
+    </div>
 
     <div class="process-grid">
       <div class="process-step">
