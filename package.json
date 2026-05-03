@@ -7,11 +7,14 @@
   "scripts": {
     "start": "node server/server.js",
     "setup-password": "node server/setup-password.js",
-    "build": "node build.js && node scripts/sync-meta-prices.mjs && node worker/rebuild.mjs",
-    "build:check": "node build.js --check && node scripts/sync-meta-prices.mjs --check",
+    "build": "node build.js && node scripts/sync-prices-html.mjs && node scripts/sync-meta-prices.mjs && node worker/rebuild.mjs",
+    "build:check": "node build.js --check && node scripts/sync-meta-prices.mjs --check && node scripts/lint-no-hardcoded-prices.mjs && node scripts/test-pricing.mjs",
     "build:worker": "node worker/rebuild.mjs",
     "sync:meta-prices": "node scripts/sync-meta-prices.mjs",
-    "sync:meta-prices:check": "node scripts/sync-meta-prices.mjs --check"
+    "sync:meta-prices:check": "node scripts/sync-meta-prices.mjs --check",
+    "sync:body-prices": "node scripts/sync-prices-html.mjs",
+    "lint:prices": "node scripts/lint-no-hardcoded-prices.mjs",
+    "test:pricing": "node scripts/test-pricing.mjs"
   },
   "engines": {
     "node": ">=18"
