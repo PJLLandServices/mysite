@@ -70,17 +70,97 @@
   background: linear-gradient(135deg, var(--dark) 0%, var(--green) 100%);
   position: relative;
   overflow: hidden;
+  isolation: isolate;
 }
+/* Static estate image — kept as a fallback for prefers-reduced-motion users
+   and as the deepest layer behind the video. */
 .page-hero::before {
   content: '';
   position: absolute;
   inset: 0;
+  z-index: -3;
   background-image: url('estate-sprinkler-hero.jpg');
   background-size: cover;
   background-position: center;
   opacity: 0.2;
 }
-.page-hero-content { position: relative; z-index: 2; max-width: 680px; }
+/* Wide screens: 2-zone hero — gradient left, video right (67%) with mask
+   fade so the gradient "opens up" into the video. Same pattern as the
+   spring/fall heroes. */
+.page-hero__bg {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 67%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center 40%;
+  z-index: -2;
+  opacity: 1;
+  filter: saturate(1.18) contrast(1.10);
+  pointer-events: none;
+  -webkit-mask-image: linear-gradient(90deg,
+    transparent 0%,
+    rgba(0, 0, 0, 0.18) 4%,
+    rgba(0, 0, 0, 0.55) 12%,
+    rgba(0, 0, 0, 0.85) 20%,
+    black 28%,
+    black 100%);
+  mask-image: linear-gradient(90deg,
+    transparent 0%,
+    rgba(0, 0, 0, 0.18) 4%,
+    rgba(0, 0, 0, 0.55) 12%,
+    rgba(0, 0, 0, 0.85) 20%,
+    black 28%,
+    black 100%);
+}
+/* Content card — translucent dark panel with backdrop-blur. */
+.page-hero-content {
+  position: relative;
+  z-index: 2;
+  max-width: 680px;
+  background: rgba(15, 31, 20, 0.48);
+  -webkit-backdrop-filter: blur(10px) saturate(1.15);
+  backdrop-filter: blur(10px) saturate(1.15);
+  padding: clamp(24px, 3.6vw, 40px) clamp(22px, 3.6vw, 40px);
+  border-radius: clamp(12px, 1.6vw, 20px);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.20);
+}
+.page-hero-content h1,
+.page-hero-content p,
+.page-hero .page-eyebrow {
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.40);
+}
+.page-hero-content h1 em {
+  text-shadow: none;
+}
+/* Tablet portrait + small laptops: video column shrinks slightly. */
+@media (max-width: 1024px) and (min-width: 769px) {
+  .page-hero__bg { width: 58%; }
+}
+/* Mobile: full-bleed video background with green-tinted overlay. */
+@media (max-width: 768px) {
+  .page-hero { min-height: 580px; }
+  .page-hero__bg {
+    width: 100%;
+    -webkit-mask-image: none;
+    mask-image: none;
+    object-position: center 50%;
+  }
+  .page-hero::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    background:
+      radial-gradient(ellipse 60% 55% at 20% 20%, rgba(74,140,92,0.30), transparent 65%),
+      linear-gradient(135deg, rgba(15,31,20,0.62) 0%, rgba(27,77,46,0.50) 50%, rgba(45,106,66,0.40) 100%);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .page-hero__bg { display: none; }
+}
 .page-hero h1 {
   color: #fff;
   margin-bottom: 16px;
@@ -1434,6 +1514,9 @@ a.sprk-comp:focus-visible {
 
 <!-- Page Hero — seasonality-driven -->
 <section class="page-hero sprk-hero">
+  <video class="page-hero__bg" autoplay loop muted playsinline preload="auto" aria-hidden="true">
+    <source src="pgp-estate-running.mp4" type="video/mp4">
+  </video>
   <div class="container">
     <div class="page-hero-content">
       <div class="page-eyebrow">Spring + Fall · Service · Install · Repair</div>
