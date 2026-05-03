@@ -217,16 +217,7 @@
   background: linear-gradient(135deg, var(--amber-light) 0%, var(--amber) 100%);
   -webkit-background-clip: text; background-clip: text;
   -webkit-text-fill-color: transparent;
-  /* Italic glyphs overhang the right edge of their geometric box, and
-     -webkit-background-clip: text only paints the gradient inside that
-     box -- so italic letters at line-wrap boundaries (e.g. the "R" in
-     "WATER") render their overhang as transparent and look "cut off".
-     box-decoration-break: clone makes the inline padding apply at every
-     line wrap, not just at the start/end of the entire run, so each
-     wrapped fragment gets the trailing breathing room. */
-  padding-inline-end: 0.12em;
-  -webkit-box-decoration-break: clone;
-  box-decoration-break: clone;
+  /* Italic clipping fix lives in style.css now ([class*="-hero"] h1 em). */
 }
 .drip-hero p {
   color: rgba(255,255,255,.88);
@@ -573,14 +564,6 @@
   <div class="container" style="max-width:1080px;">
     <h2>What drip irrigation actually does.</h2>
     <p style="max-width:680px;">A spray head throws water through the air to cover an open area. A drip line releases water slowly at the soil surface — or under the mulch — exactly where the plant roots feed. For anything that isn't lawn, it's the right answer.</p>
-
-    <figure style="margin: 24px auto 32px; max-width: 600px;">
-      <video autoplay loop muted playsinline preload="metadata" style="width: 100%; height: auto; border-radius: 12px; box-shadow: 0 6px 20px rgba(0,0,0,0.18); display: block;">
-        <source src="drip-emitter-loop.mp4" type="video/mp4">
-        Your browser doesn't support inline video. <a href="drip-emitter-loop.mp4">Download the clip</a> to view.
-      </video>
-      <figcaption style="text-align: center; font-size: 13px; color: #666; margin-top: 10px; font-style: italic;">A single emitter weeping a steady drop. Multiply that across a whole bed and you've got water exactly where the roots are — no overspray, no waste.</figcaption>
-    </figure>
 
     <div class="drip-features">
       <div class="drip-feature">

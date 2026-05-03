@@ -3043,3 +3043,32 @@ section.hero[aria-label="PJL Land Services hero"] .hero__services-sep {
 .pac-item:first-child { border-top: none; }
 .pac-item:hover, .pac-item-selected { background: var(--green-pale); }
 .pac-item-query { font-weight: 600; color: var(--green); }
+
+/* ============================================================
+   Hero italic-gradient text — site-wide clipping fix
+   ============================================================
+   Every hero across the site uses the same brand pattern:
+       <h1>White headline — <em>italic amber gradient.</em></h1>
+   with `-webkit-background-clip: text` to paint the gradient
+   inside the italic letters. The catch: background-clip:text only
+   paints inside the geometric letter box, but italic glyphs lean
+   right past that box. At a line-wrap boundary (or the right edge
+   of the card), the italic overhang falls into "no gradient
+   territory" and renders transparent — letters look cut off
+   (e.g. the "R" in "WATER" on drip, the "D" in "DIAGNOSED" on
+   repair).
+
+   Fix: add a hair of trailing inline padding so the painted
+   gradient region extends past every wrapped fragment, plus
+   `box-decoration-break: clone` so the padding applies at every
+   line-wrap (not just the very end of the inline run).
+
+   `[class*="-hero"]` matches every hero variant site-wide:
+   .drip-hero, .repair-hero, .spring-hero, .fall-hero, .post-hero,
+   .blog-hero, .install-hero, .systems-hero, etc. Adding any new
+   .X-hero class on a future page picks this fix up automatically. */
+[class*="-hero"] h1 em {
+  padding-inline-end: 0.12em;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
