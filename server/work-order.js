@@ -763,7 +763,13 @@ async function renderBookingActivity(wo, lead) {
     const r = await fetch(`/api/bookings?leadId=${encodeURIComponent(wo.leadId)}`);
     const data = await r.json();
     const recs = (data && data.ok && Array.isArray(data.bookings)) ? data.bookings : [];
-    const live = recs.find((b) => b.status !== "cancelled" && b.status !== "completed" && b.status !== "no_show") || recs[0];
+    // A lead can have multiple bookings (original + follow-ups). Show
+    // the one tied to THIS WO if it exists; otherwise fall back to the
+    // first non-terminal record on the lead.
+    const tiedToThisWo = recs.find((b) => Array.isArray(b.workOrderIds) && b.workOrderIds.includes(wo.id));
+    const live = tiedToThisWo
+      || recs.find((b) => b.status !== "cancelled" && b.status !== "completed" && b.status !== "no_show")
+      || recs[0];
     if (!live) {
       woBookingActivity.hidden = true;
     } else {
