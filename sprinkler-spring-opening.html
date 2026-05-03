@@ -85,80 +85,43 @@
   padding: 156px 0 80px;
   position: relative;
   overflow: hidden;
-  min-height: 720px;
-  background: radial-gradient(ellipse 60% 55% at 20% 20%, rgba(74,140,92,0.30), transparent 60%),
-              radial-gradient(ellipse 55% 50% at 85% 80%, rgba(157,215,174,0.18), transparent 60%),
-              linear-gradient(135deg, var(--dark) 0%, var(--green) 70%, var(--green-mid) 100%);
+  background: var(--dark);
   isolation: isolate;
 }
-/* Wide screens: video shown at natural 9:16 aspect on the right side.
-   height:100% drives the size; width auto-calculates via aspect-ratio so the
-   full portrait frame is visible — no aggressive cover-crop. */
+/* Full-bleed background video — covers the entire hero at every breakpoint.
+   object-position: center 70% anchors the visible crop to the lower portion
+   of the portrait source (where the sprinkler heads + spray are), so the
+   meaningful action stays in frame from 360px phones up through 1920+ desktops. */
 .spring-hero__bg {
   position: absolute;
-  top: 0;
-  right: 0;
+  inset: 0;
+  width: 100%;
   height: 100%;
-  width: auto;
-  aspect-ratio: 9 / 16;
   object-fit: cover;
-  object-position: center;
-  z-index: 0;
+  object-position: center 70%;
+  z-index: -2;
+  opacity: 0.55;
+  transform: scale(1.02);
+  filter: saturate(1.08) contrast(1.04);
   pointer-events: none;
-  /* Soft fade on the left edge so the panel integrates into the green gradient
-     instead of presenting a hard rectangular boundary. */
-  -webkit-mask-image: linear-gradient(90deg, transparent 0%, rgba(0,0,0,0.35) 6%, black 20%, black 100%);
-  mask-image: linear-gradient(90deg, transparent 0%, rgba(0,0,0,0.35) 6%, black 20%, black 100%);
 }
-.spring-hero::before {
+/* Dark green gradient overlay on top of the video — preserves the original
+   spring-hero color palette while ensuring the headline, paragraph, CTAs
+   and meta strip stay readable regardless of what's playing underneath. */
+.spring-hero::after {
   content: '';
   position: absolute;
   inset: 0;
-  z-index: 1;
-  background: linear-gradient(95deg,
-    rgba(15,31,20,0.45) 0%,
-    rgba(15,31,20,0.25) 30%,
-    rgba(15,31,20,0.10) 50%,
-    transparent 65%
-  );
-  pointer-events: none;
+  z-index: -1;
+  background:
+    radial-gradient(ellipse 70% 60% at 25% 25%, rgba(74,140,92,0.35), transparent 65%),
+    radial-gradient(ellipse 55% 50% at 85% 80%, rgba(157,215,174,0.18), transparent 60%),
+    linear-gradient(135deg, rgba(15,31,20,0.78) 0%, rgba(27,77,46,0.60) 50%, rgba(45,106,66,0.52) 100%);
 }
 .spring-hero-inner {
   position: relative;
   z-index: 2;
   max-width: 820px;
-}
-/* Mobile: video stacks at top in normal flow, full-width, natural 9:16 aspect.
-   Capped at 60vh so it doesn't push the headline entirely below the fold. */
-@media (max-width: 880px) {
-  .spring-hero {
-    padding: var(--hero-nav-clearance, 100px) 0 56px;
-    min-height: auto;
-  }
-  .spring-hero__bg {
-    position: relative;
-    top: auto;
-    right: auto;
-    display: block;
-    width: 100%;
-    height: auto;
-    aspect-ratio: 9 / 16;
-    max-height: 60vh;
-    object-fit: cover;
-    object-position: center 60%;
-    margin-bottom: 32px;
-    -webkit-mask-image: none;
-    mask-image: none;
-  }
-  .spring-hero::before {
-    background: linear-gradient(180deg,
-      transparent 0%,
-      transparent 35%,
-      rgba(15,31,20,0.20) 55%,
-      rgba(15,31,20,0.40) 80%,
-      rgba(15,31,20,0.55) 100%
-    );
-  }
 }
 @media (prefers-reduced-motion: reduce) {
   .spring-hero__bg { display: none; }
