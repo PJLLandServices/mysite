@@ -83,28 +83,112 @@
 
 <style>
 .drip-hero {
-  padding: 156px 0 88px;
+  padding: 156px 0 80px;
   position: relative;
   overflow: hidden;
-  background: var(--dark);
-}
-.drip-hero::before {
-  content: '';
-  position: absolute; inset: 0;
-  background-image: url('rainbird-xfd-dripline.jpg');
-  background-size: cover;
-  background-position: center;
-  opacity: 0.22;
-}
-.drip-hero::after {
-  content: '';
-  position: absolute; inset: 0;
+  min-height: 640px;
   background:
-    radial-gradient(ellipse 60% 55% at 18% 22%, rgba(74,140,92,0.45), transparent 60%),
-    radial-gradient(ellipse 55% 50% at 85% 80%, rgba(45,106,66,0.30), transparent 60%),
-    linear-gradient(135deg, rgba(15,31,20,0.90) 0%, rgba(27,77,46,0.82) 70%, rgba(45,106,66,0.78) 100%);
+    radial-gradient(ellipse 60% 55% at 20% 20%, rgba(74,140,92,0.30), transparent 60%),
+    radial-gradient(ellipse 55% 50% at 85% 80%, rgba(157,215,174,0.18), transparent 60%),
+    linear-gradient(135deg, var(--dark) 0%, var(--green) 70%, var(--green-mid) 100%);
+  isolation: isolate;
 }
-.drip-hero-inner { position: relative; z-index: 2; max-width: 820px; }
+/* Wide screens: 2-zone hero. Left side is the green gradient with text content;
+   right ~67% is the dripline video at full opacity. Mask-image creates a soft
+   fade on the video's left edge so the gradient "opens up" into the video
+   without a hard rectangular boundary. */
+.drip-hero__bg {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 67%;
+  height: 100%;
+  object-fit: cover;
+  /* Source is 1080x1920 portrait. Action zone (drip pipe + heuchera +
+     mulch) sits at y=55-85% of source. Shifting from 50% -> 70% drops
+     the visible band down to feature the pipe instead of the empty
+     fence area at the top of the source. */
+  object-position: center 70%;
+  z-index: 0;
+  opacity: 1;
+  filter: saturate(1.18) contrast(1.10);
+  pointer-events: none;
+  -webkit-mask-image: linear-gradient(90deg,
+    transparent 0%,
+    rgba(0, 0, 0, 0.18) 4%,
+    rgba(0, 0, 0, 0.55) 12%,
+    rgba(0, 0, 0, 0.85) 20%,
+    black 28%,
+    black 100%);
+  mask-image: linear-gradient(90deg,
+    transparent 0%,
+    rgba(0, 0, 0, 0.18) 4%,
+    rgba(0, 0, 0, 0.55) 12%,
+    rgba(0, 0, 0, 0.85) 20%,
+    black 28%,
+    black 100%);
+}
+/* Content card — translucent dark panel with backdrop-blur. Sits over the
+   gradient/video transition so the centered text is always legible regardless
+   of what frame is playing underneath. */
+.drip-hero-inner {
+  position: relative;
+  z-index: 2;
+  max-width: 820px;
+  background: rgba(15, 31, 20, 0.48);
+  -webkit-backdrop-filter: blur(10px) saturate(1.15);
+  backdrop-filter: blur(10px) saturate(1.15);
+  padding: clamp(24px, 3.6vw, 40px) clamp(22px, 3.6vw, 40px);
+  border-radius: clamp(12px, 1.6vw, 20px);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.20);
+}
+/* Drop-shadows on hero text — extra layer of legibility over the card,
+   except on the amber-gradient em (text-shadow muddies the
+   -webkit-text-fill-color: transparent that produces the gradient). */
+.drip-hero h1,
+.drip-hero p,
+.drip-hero-meta,
+.drip-eyebrow,
+.drip-hero .breadcrumbs {
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.40);
+}
+.drip-hero h1 em {
+  text-shadow: none;
+}
+/* Tablet portrait + small laptops: video column shrinks slightly so the
+   centered text has more breathing room before crossing into video. */
+@media (max-width: 1024px) and (min-width: 769px) {
+  .drip-hero__bg { width: 58%; }
+}
+/* Mobile: full-bleed video background with a green-tinted overlay for
+   text legibility. The 2-column split with a left-edge mask doesn't
+   make sense at phone widths because the hero is roughly square and
+   there's no horizontal real estate to split. */
+@media (max-width: 768px) {
+  .drip-hero {
+    min-height: 580px;
+  }
+  .drip-hero__bg {
+    width: 100%;
+    -webkit-mask-image: none;
+    mask-image: none;
+    object-position: center 50%;
+    z-index: -2;
+  }
+  .drip-hero::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    background:
+      radial-gradient(ellipse 60% 55% at 20% 20%, rgba(74,140,92,0.30), transparent 65%),
+      linear-gradient(135deg, rgba(15,31,20,0.62) 0%, rgba(27,77,46,0.50) 50%, rgba(45,106,66,0.40) 100%);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .drip-hero__bg { display: none; }
+}
 .breadcrumbs { font-size: 13px; color: rgba(255,255,255,.65); margin-bottom: 18px; display: flex; gap: 8px; flex-wrap: wrap; }
 .breadcrumbs a { color: rgba(255,255,255,.85); }
 .breadcrumbs a:hover { color: var(--amber-light); }
@@ -454,6 +538,9 @@
 
 <!-- Hero -->
 <section class="drip-hero">
+  <video class="drip-hero__bg" autoplay loop muted playsinline preload="auto" aria-hidden="true">
+    <source src="drip-line-detail.mp4" type="video/mp4">
+  </video>
   <div class="container drip-hero-inner">
     <div class="breadcrumbs"><a href="index.html">Home</a><span>›</span><a href="sprinkler-systems.html">Sprinkler Services</a><span>›</span><span>Drip Irrigation</span></div>
     <span class="drip-eyebrow">RainBird XFD · Hunter HDL · Pressure-Compensating</span>
