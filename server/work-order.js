@@ -392,15 +392,11 @@ const TYPE_LABELS = {
 
 let loadedWorkOrder = null;
 // Property record for the WO's linked customer. Stashed on init so the
-// zone source-picker can offer the customer's actual zones / valve boxes /
-// controller / open issues as label sources, and auto-populate notes from
-// the property when the WO zone notes are empty.
+// zone-location datalist can offer the customer's actual zones /
+// valve boxes / controller / open issues as autocomplete suggestions,
+// and so we can auto-populate notes from the property when the WO zone
+// notes are empty.
 let loadedProperty = null;
-// Index of the .wo-zone-row currently driving the source-picker. -1 when
-// the picker is closed. Resolved by row order, since the desktop page
-// keeps zone state on data-attrs of the rendered DOM (no separate state
-// object), and rows can be reordered after edits.
-let pickerActiveRowIdx = -1;
 
 // ---- Helpers -------------------------------------------------------
 
@@ -480,8 +476,8 @@ function zoneRowHtml(zone) {
   return `
     <div class="wo-zone-row" data-zone data-status="${escapeHtml(status)}" data-number="${escapeHtml(zone.number || "")}" data-location="${escapeHtml(zone.location || "")}" data-sprinkler="${escapeHtml(sprinklerAttr)}" data-coverage="${escapeHtml(coverageAttr)}">
       <div class="wo-zone-head">
-        <button type="button" class="wo-zone-num wo-zone-source-btn" data-action="open-source" aria-label="Source zone from property">Zone ${escapeHtml(zone.number || "?")}</button>
-        <button type="button" class="wo-zone-location wo-zone-source-btn" data-action="open-source" aria-label="Source zone label from property">${escapeHtml(zone.location || "(unnamed — tap to source)")}<span class="wo-zone-source-chev" aria-hidden="true">▾</span></button>
+        <span class="wo-zone-num">Zone ${escapeHtml(zone.number || "?")}</span>
+        <input type="text" class="wo-zone-location" list="woZoneSourceOptions" value="${escapeHtml(zone.location || "")}" placeholder="Pick from property zones or type custom" maxlength="200" autocomplete="off">
         <button type="button" class="property-row-remove" data-action="remove-zone" aria-label="Remove zone">×</button>
       </div>
       ${sysLine}
@@ -1057,9 +1053,13 @@ function collectForm() {
         notes:   (card.querySelector(".wo-zone-issue-notes")?.value || "").trim()
       }));
 
+      // Location now lives in a real <input> element — read it live so a
+      // tech who typed but didn't blur the field still gets their text on
+      // save. Falls back to the dataset for safety.
+      const liveLocation = row.querySelector(".wo-zone-location")?.value.trim();
       return {
         number: Number(row.dataset.number) || 0,
-        location: row.dataset.location || "",
+        location: liveLocation || row.dataset.location || "",
         sprinklerTypes: splitCsv(row.dataset.sprinkler),
         coverage:       splitCsv(row.dataset.coverage),
         status: row.querySelector(".wo-zone-status")?.value || "",
@@ -1279,164 +1279,109 @@ deleteBtn.addEventListener("click", async () => {
   }
 });
 
-// ---- Zone source-picker (desktop) -------------------------------
-// Mirrors the tech-mode picker. Click a zone's "Zone N" badge or its
-// location label → a modal opens listing the customer's zones, valve
-// boxes, controller, and open issues. Picking a property zone applies:
-//   - location  (label)
-//   - number    (so the WO mirrors the customer's real zone numbering)
-//   - notes     (only if WO zone notes are empty — never overwrites
-//                tech-entered notes)
-// And immediately PATCHes the WO so the change survives a page reload
-// without waiting for the form's Save button.
+// ---- Zone source datalist (desktop) -----------------------------
+// The .wo-zone-location field is an <input list="woZoneSourceOptions">.
+// On WO load we build the datalist from the linked property record so
+// the tech sees their actual zones / valve boxes / controller / open
+// issues as autocomplete suggestions while typing — and can also type
+// fully custom text for unknown properties (datalist doesn't constrain
+// the input).
+//
+// When the value the tech entered matches a known source, we auto-fill
+// the WO zone's number + notes (notes only when empty, so we never
+// clobber on-site work) and PATCH the WO immediately so a reload
+// preserves the change without waiting for the form's Save button.
 
-const woSourcePicker      = document.getElementById("woSourcePicker");
-const woSourcePickerBody  = document.getElementById("woSourcePickerBody");
-const woSourcePickerEmpty = document.getElementById("woSourcePickerEmpty");
-const woSourcePickerCustomInput = document.getElementById("woSourcePickerCustomInput");
+let zoneSourceMap = new Map();
 
-function openWoSourcePicker(rowIdx) {
-  if (!woSourcePicker) return;
-  if (loadedWorkOrder?.locked) return;
-  pickerActiveRowIdx = rowIdx;
-  renderWoSourcePickerBody();
-  if (woSourcePickerCustomInput) woSourcePickerCustomInput.value = "";
-  woSourcePicker.hidden = false;
-  document.body.classList.add("wo-source-picker-open");
-}
+function rebuildZoneSourceDatalist() {
+  let dl = document.getElementById("woZoneSourceOptions");
+  if (!dl) {
+    dl = document.createElement("datalist");
+    dl.id = "woZoneSourceOptions";
+    document.body.appendChild(dl);
+  }
+  dl.innerHTML = "";
+  zoneSourceMap = new Map();
 
-function closeWoSourcePicker() {
-  if (!woSourcePicker) return;
-  woSourcePicker.hidden = true;
-  document.body.classList.remove("wo-source-picker-open");
-  pickerActiveRowIdx = -1;
-}
-
-function renderWoSourcePickerBody() {
-  if (!woSourcePickerBody) return;
   const property = loadedProperty;
-  const sys = (property && property.system) || {};
+  if (!property) return;
+  const sys = property.system || {};
   const zones      = Array.isArray(sys.zones) ? sys.zones : [];
   const valveBoxes = Array.isArray(sys.valveBoxes) ? sys.valveBoxes : [];
   const ctrlBrand  = String(sys.controllerBrand || "").trim();
   const ctrlLoc    = String(sys.controllerLocation || "").trim();
-  const issues = (Array.isArray(property?.deferredIssues) ? property.deferredIssues : [])
+  const issues = (Array.isArray(property.deferredIssues) ? property.deferredIssues : [])
     .filter((d) => d && (d.status === "open" || d.status === "pre_authorized"));
 
-  const hasAny = zones.length || valveBoxes.length || ctrlBrand || ctrlLoc || issues.length;
-  if (woSourcePickerEmpty) woSourcePickerEmpty.hidden = !!hasAny && !!property;
-  woSourcePickerBody.innerHTML = "";
+  const addOption = (value, meta) => {
+    if (!value || zoneSourceMap.has(value)) return;
+    const o = document.createElement("option");
+    o.value = value;
+    dl.appendChild(o);
+    zoneSourceMap.set(value, meta);
+  };
 
-  if (!property) return;
-
-  if (zones.length) {
-    woSourcePickerBody.appendChild(renderWoSourcePickerSection(
-      "Zones",
-      zones.map((z) => ({
-        type: "zone",
-        number: Number(z.number) || null,
-        label: String(z.label || "").trim() || `Zone ${z.number || "?"}`,
-        notes: String(z.notes || "").trim() || "",
-        sub: String(z.notes || "").trim() || ""
-      }))
-    ));
-  }
-  if (valveBoxes.length) {
-    woSourcePickerBody.appendChild(renderWoSourcePickerSection(
-      "Valve boxes",
-      valveBoxes.map((vb) => {
-        const loc = String(vb.location || "").trim() || "Valve box";
-        const cnt = Number(vb.valveCount) > 0 ? `${vb.valveCount} valve${vb.valveCount === 1 ? "" : "s"}` : "";
-        return {
-          type: "valveBox",
-          label: `Valve box — ${loc}${cnt ? ` (${cnt})` : ""}`,
-          notes: String(vb.notes || "").trim() || "",
-          sub: String(vb.notes || "").trim() || ""
-        };
-      })
-    ));
-  }
+  zones.forEach((z) => {
+    const label = String(z.label || "").trim();
+    const number = Number(z.number) || null;
+    const value = label
+      ? `Zone ${number || "?"} — ${label}`
+      : `Zone ${number || "?"}`;
+    addOption(value, { number, notes: String(z.notes || "").trim() });
+  });
+  valveBoxes.forEach((vb) => {
+    const loc = String(vb.location || "").trim() || "Valve box";
+    const cnt = Number(vb.valveCount) > 0 ? `${vb.valveCount} valve${vb.valveCount === 1 ? "" : "s"}` : "";
+    addOption(`Valve box — ${loc}${cnt ? ` (${cnt})` : ""}`, {
+      number: null,
+      notes: String(vb.notes || "").trim()
+    });
+  });
   if (ctrlBrand || ctrlLoc) {
     const parts = [ctrlBrand || "Controller", ctrlLoc].filter(Boolean);
-    woSourcePickerBody.appendChild(renderWoSourcePickerSection(
-      "Controller",
-      [{
-        type: "controller",
-        label: `Controller — ${parts.join(" · ")}`,
-        notes: "",
-        sub: ""
-      }]
-    ));
+    addOption(`Controller — ${parts.join(" · ")}`, { number: null, notes: "" });
   }
-  if (issues.length) {
-    woSourcePickerBody.appendChild(renderWoSourcePickerSection(
-      "Open issues",
-      issues.map((iss, i) => {
-        const note = String(iss.notes || iss.type || "").trim() || "Open issue";
-        const trimmed = note.length > 80 ? note.slice(0, 78) + "…" : note;
-        return {
-          type: "issue",
-          label: `Issue #${i + 1}: ${trimmed}`,
-          notes: String(iss.notes || "").trim() || "",
-          sub: iss.fromWoId ? `From ${iss.fromWoId}` : ""
-        };
-      })
-    ));
-  }
-}
-
-function renderWoSourcePickerSection(title, items) {
-  const section = document.createElement("section");
-  section.className = "wo-source-picker-section";
-  const h = document.createElement("h3");
-  h.textContent = title;
-  section.appendChild(h);
-  const ul = document.createElement("ul");
-  items.forEach((item) => {
-    const li = document.createElement("li");
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "wo-source-picker-item";
-    btn.dataset.sourceType = item.type;
-    if (item.number != null) btn.dataset.sourceNumber = String(item.number);
-    btn.dataset.sourceLabel = item.label;
-    if (item.notes) btn.dataset.sourceNotes = item.notes;
-    btn.innerHTML = `<span class="wo-source-picker-item-label">${escapeHtml(item.label)}</span>${item.sub ? `<span class="wo-source-picker-item-sub">${escapeHtml(item.sub)}</span>` : ""}`;
-    li.appendChild(btn);
-    ul.appendChild(li);
+  issues.forEach((iss, i) => {
+    const note = String(iss.notes || iss.type || "").trim() || "Open issue";
+    const trimmed = note.length > 80 ? note.slice(0, 78) + "…" : note;
+    addOption(`Issue #${i + 1}: ${trimmed}`, {
+      number: null,
+      notes: String(iss.notes || "").trim()
+    });
   });
-  section.appendChild(ul);
-  return section;
 }
 
-async function applyWoZoneSource({ label, number, notes }) {
-  if (pickerActiveRowIdx < 0) return;
-  const rows = Array.from(woZones.querySelectorAll(".wo-zone-row"));
-  const row = rows[pickerActiveRowIdx];
+// Sync data-attr + auto-populate on every change. We use 'change' so the
+// auto-fill only fires when the tech actually finishes editing (blur or
+// pick from the datalist). 'input' would fire on every keystroke and
+// thrash the network with PATCHes.
+woZones?.addEventListener("change", async (event) => {
+  if (!event.target.classList.contains("wo-zone-location")) return;
+  if (loadedWorkOrder?.locked) return;
+  const row = event.target.closest(".wo-zone-row");
   if (!row) return;
-  const cleanLabel = String(label || "").trim().slice(0, 200);
-  if (!cleanLabel) return;
 
-  // Update DOM data-attrs (collectForm() reads these).
-  row.dataset.location = cleanLabel;
-  if (Number.isFinite(Number(number)) && Number(number) > 0) {
-    row.dataset.number = String(Number(number));
-  }
-  // Update visible labels.
-  const numEl = row.querySelector(".wo-zone-num");
-  const locEl = row.querySelector(".wo-zone-location");
-  if (numEl) numEl.textContent = `Zone ${row.dataset.number || "?"}`;
-  if (locEl) locEl.innerHTML = `${escapeHtml(cleanLabel)}<span class="wo-zone-source-chev" aria-hidden="true">▾</span>`;
-  // Auto-populate notes when WO notes are empty — never clobber tech work.
-  const cleanNotes = String(notes || "").trim();
-  const notesEl = row.querySelector(".wo-zone-notes");
-  if (cleanNotes && notesEl && !notesEl.value.trim()) {
-    notesEl.value = cleanNotes;
-  }
-  closeWoSourcePicker();
+  const value = String(event.target.value || "").trim().slice(0, 200);
+  row.dataset.location = value;
 
-  // Persist immediately so a reload preserves the change without waiting
-  // for the form's Save button. Mirrors the tech-mode pattern.
+  // If the typed/picked value matches a known property source, auto-fill
+  // the zone number + (only when empty) the notes textarea.
+  const match = zoneSourceMap.get(value);
+  if (match) {
+    if (Number.isFinite(match.number) && match.number > 0) {
+      row.dataset.number = String(match.number);
+      const numEl = row.querySelector(".wo-zone-num");
+      if (numEl) numEl.textContent = `Zone ${match.number}`;
+    }
+    if (match.notes) {
+      const notesEl = row.querySelector(".wo-zone-notes");
+      if (notesEl && !notesEl.value.trim()) notesEl.value = match.notes;
+    }
+  }
+
+  // Persist immediately. Same pattern as the tech-mode page — a reload
+  // shouldn't lose the swap.
   try {
     const id = getWorkOrderId();
     if (!id) return;
@@ -1449,46 +1394,6 @@ async function applyWoZoneSource({ label, number, notes }) {
     if (response.ok && data.ok && data.workOrder) loadedWorkOrder = data.workOrder;
   } catch {
     // Silent — user can still hit Save explicitly to retry.
-  }
-}
-
-// Open picker on click of the zone's "Zone N" badge or location label.
-woZones?.addEventListener("click", (event) => {
-  const trigger = event.target.closest('[data-action="open-source"]');
-  if (!trigger) return;
-  const row = trigger.closest(".wo-zone-row");
-  if (!row) return;
-  const rows = Array.from(woZones.querySelectorAll(".wo-zone-row"));
-  const idx = rows.indexOf(row);
-  if (idx < 0) return;
-  openWoSourcePicker(idx);
-});
-
-document.getElementById("woSourcePickerClose")?.addEventListener("click", closeWoSourcePicker);
-woSourcePicker?.addEventListener("click", (event) => {
-  if (event.target === woSourcePicker) closeWoSourcePicker();
-});
-document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape" && woSourcePicker && !woSourcePicker.hidden) closeWoSourcePicker();
-});
-woSourcePickerBody?.addEventListener("click", (event) => {
-  const btn = event.target.closest(".wo-source-picker-item");
-  if (!btn) return;
-  applyWoZoneSource({
-    label: btn.dataset.sourceLabel || "",
-    number: btn.dataset.sourceNumber ? Number(btn.dataset.sourceNumber) : null,
-    notes: btn.dataset.sourceNotes || ""
-  });
-});
-document.getElementById("woSourcePickerCustomBtn")?.addEventListener("click", () => {
-  const v = (woSourcePickerCustomInput?.value || "").trim();
-  if (!v) return;
-  applyWoZoneSource({ label: v, number: null, notes: "" });
-});
-woSourcePickerCustomInput?.addEventListener("keydown", (event) => {
-  if (event.key === "Enter") {
-    event.preventDefault();
-    document.getElementById("woSourcePickerCustomBtn")?.click();
   }
 });
 
@@ -1508,6 +1413,7 @@ async function init() {
     if (!response.ok || !data.ok) throw new Error("Not found");
     loadedWorkOrder = data.workOrder;
     loadedProperty  = data.property || null;
+    rebuildZoneSourceDatalist();
     woLoading.hidden = true;
     woForm.hidden = false;
     renderHero(data.workOrder, data.property, data.lead);
