@@ -85,10 +85,24 @@
   position: relative;
   overflow: hidden;
   background: var(--dark);
+  isolation: isolate;
+}
+.install-hero__bg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  z-index: -2;
+  opacity: 0.55;
+  transform: scale(1.02);
+  filter: saturate(1.08) contrast(1.04);
+  pointer-events: none;
 }
 .install-hero::before {
   content: '';
   position: absolute; inset: 0;
+  z-index: -3;
   background-image: url('estate-sprinkler-hero.jpg');
   background-size: cover;
   background-position: center;
@@ -97,12 +111,16 @@
 .install-hero::after {
   content: '';
   position: absolute; inset: 0;
+  z-index: -1;
   background:
-    radial-gradient(ellipse 60% 55% at 20% 20%, rgba(74,140,92,0.40), transparent 60%),
-    radial-gradient(ellipse 55% 50% at 85% 80%, rgba(224,123,36,0.18), transparent 60%),
-    linear-gradient(135deg, rgba(15,31,20,0.85) 0%, rgba(27,77,46,0.78) 70%, rgba(45,106,66,0.78) 100%);
+    radial-gradient(ellipse 70% 60% at 25% 25%, rgba(74,140,92,0.35), transparent 65%),
+    radial-gradient(ellipse 55% 50% at 85% 80%, rgba(224,123,36,0.22), transparent 60%),
+    linear-gradient(135deg, rgba(15,31,20,0.78) 0%, rgba(27,77,46,0.60) 50%, rgba(45,106,66,0.52) 100%);
 }
 .install-hero-inner { position: relative; z-index: 2; max-width: 820px; }
+@media (prefers-reduced-motion: reduce) {
+  .install-hero__bg { display: none; }
+}
 .breadcrumbs { font-size: 13px; color: rgba(255,255,255,.65); margin-bottom: 18px; display: flex; gap: 8px; flex-wrap: wrap; }
 .breadcrumbs a { color: rgba(255,255,255,.85); }
 .breadcrumbs a:hover { color: var(--amber-light); }
@@ -490,6 +508,9 @@
 
 <!-- Hero -->
 <section class="install-hero">
+  <video class="install-hero__bg" autoplay loop muted playsinline preload="auto" poster="estate-sprinkler-hero.jpg" aria-hidden="true">
+    <source src="landscape-walkthrough.mp4" type="video/mp4">
+  </video>
   <div class="container install-hero-inner">
     <div class="breadcrumbs"><a href="index.html">Home</a><span>›</span><a href="sprinkler-systems.html">Sprinkler Services</a><span>›</span><span>Installation</span></div>
     <span class="install-eyebrow">Planned First · Installed Once</span>
@@ -525,159 +546,6 @@
     </div>
   </div>
 </section>
-
-<!-- Cinematic install showcase — between property types and planning -->
-<section class="install-showcase" aria-labelledby="install-showcase-heading">
-  <div class="container" style="max-width: 1080px;">
-    <div class="install-showcase__intro">
-      <span class="install-showcase__tag">See it in motion</span>
-      <h2 id="install-showcase-heading">A finished PJL install, walking the property.</h2>
-      <p>Premium estate, multi-zone Hunter system, every head dialed in. This is what we mean when we say <em>planned first, installed once.</em></p>
-    </div>
-
-    <figure class="install-showcase__figure">
-      <div class="install-showcase__frame">
-        <video
-          class="install-showcase__player"
-          controls
-          preload="none"
-          poster="estate-sprinkler-hero.jpg"
-          playsinline
-          aria-describedby="install-showcase-caption">
-          <source src="landscape-walkthrough.mp4" type="video/mp4">
-          <p>Your browser doesn't support HTML5 video.
-             <a href="landscape-walkthrough.mp4">Download the clip</a> to view.</p>
-        </video>
-        <button class="install-showcase__play"
-                type="button"
-                aria-label="Play installation walk-through video">
-          <span class="install-showcase__play-disc" aria-hidden="true">
-            <svg viewBox="0 0 24 24" width="36" height="36">
-              <path d="M8 5v14l11-7z" fill="currentColor"/>
-            </svg>
-          </span>
-        </button>
-      </div>
-      <figcaption id="install-showcase-caption" class="install-showcase__caption">
-        Estate property · Hunter PGP rotors · 33-second walk-through
-      </figcaption>
-    </figure>
-  </div>
-</section>
-
-<style>
-.install-showcase {
-  padding: clamp(56px, 8vw, 96px) 0;
-  background: linear-gradient(180deg, #faf8f1 0%, #ffffff 100%);
-}
-.install-showcase__intro {
-  text-align: center;
-  max-width: 680px;
-  margin: 0 auto 40px;
-}
-.install-showcase__tag {
-  display: inline-block;
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: var(--green);
-  margin-bottom: 14px;
-}
-.install-showcase__intro h2 {
-  font-size: clamp(28px, 3.8vw, 42px);
-  line-height: 1.15;
-  letter-spacing: -0.01em;
-  margin-bottom: 14px;
-  color: var(--green);
-}
-.install-showcase__intro p {
-  font-size: clamp(15px, 1.6vw, 18px);
-  line-height: 1.65;
-  color: var(--text-muted, #5a6a5d);
-}
-.install-showcase__intro em { font-style: italic; color: var(--green); }
-.install-showcase__figure { margin: 0; }
-.install-showcase__frame {
-  position: relative;
-  aspect-ratio: 16 / 9;
-  border-radius: 16px;
-  overflow: hidden;
-  box-shadow: 0 24px 60px rgba(15, 31, 20, 0.20);
-  background: #0f1f14;
-}
-.install-showcase__player {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  display: block;
-}
-.install-showcase__play {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: linear-gradient(135deg, rgba(15,31,20,0.20) 0%, rgba(15,31,20,0.10) 100%);
-  border: none;
-  cursor: pointer;
-  transition: background 0.25s ease;
-}
-.install-showcase__play:hover {
-  background: linear-gradient(135deg, rgba(15,31,20,0.30) 0%, rgba(15,31,20,0.15) 100%);
-}
-.install-showcase__play[hidden] { display: none; }
-.install-showcase__play-disc {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 92px;
-  height: 92px;
-  border-radius: 50%;
-  background: rgba(255, 255, 255, 0.96);
-  color: var(--green);
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.30);
-  transition: transform 0.25s ease;
-}
-.install-showcase__play:hover .install-showcase__play-disc {
-  transform: scale(1.06);
-}
-.install-showcase__play-disc svg { margin-left: 4px; }
-.install-showcase__caption {
-  text-align: center;
-  font-size: 13px;
-  font-style: italic;
-  color: var(--text-muted, #5a6a5d);
-  margin-top: 16px;
-  letter-spacing: 0.02em;
-}
-@media (max-width: 640px) {
-  .install-showcase__play-disc { width: 72px; height: 72px; }
-  .install-showcase__play-disc svg { width: 28px; height: 28px; }
-}
-</style>
-
-<script>
-(function() {
-  const figure = document.querySelector('.install-showcase__figure');
-  if (!figure) return;
-  const player = figure.querySelector('.install-showcase__player');
-  const playBtn = figure.querySelector('.install-showcase__play');
-  if (!player || !playBtn) return;
-
-  playBtn.addEventListener('click', function() {
-    playBtn.hidden = true;
-    player.play().catch(function() { playBtn.hidden = false; });
-  });
-  player.addEventListener('pause', function() {
-    if (player.ended || player.currentTime === 0) playBtn.hidden = false;
-  });
-  player.addEventListener('ended', function() {
-    player.currentTime = 0;
-    playBtn.hidden = false;
-  });
-})();
-</script>
 
 <!-- Section 2: Planning Before Installation -->
 <section class="section">
