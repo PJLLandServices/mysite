@@ -67,7 +67,8 @@
       <button type="button" class="pjl-btn pjl-btn-outline" id="prevWeek">&larr; Prev week</button>
       <span class="schedule-range" id="weekRange"></span>
       <button type="button" class="pjl-btn pjl-btn-outline" id="nextWeek">Next week &rarr;</button>
-      <button type="button" class="pjl-btn pjl-btn-primary" id="addBlock">Block off time</button>
+      <button type="button" class="pjl-btn pjl-btn-primary" id="addBooking">+ Book a customer</button>
+      <button type="button" class="pjl-btn pjl-btn-outline" id="addBlock">Block off time</button>
     </section>
 
     <section class="schedule-stats">
@@ -133,6 +134,85 @@
       <div class="dialog-actions">
         <button type="button" class="pjl-btn pjl-btn-outline" id="blockCancel">Cancel</button>
         <button type="submit" class="pjl-btn pjl-btn-primary">Save block</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Admin booking dialog — internal "book a customer" flow.
+       Mirrors the public booking page but for phone-call / walk-in customers
+       and existing-property re-bookings. POSTs to the same /api/booking/reserve
+       endpoint the public page uses, so the WO + customer notifications all
+       fire identically. -->
+  <dialog id="bookingDialog" class="schedule-dialog schedule-booking-dialog">
+    <form method="dialog" id="bookingForm">
+      <header class="booking-dialog-head">
+        <h3>Book a customer</h3>
+        <button type="button" class="schedule-dialog-close" id="bookingClose" aria-label="Close">×</button>
+      </header>
+
+      <fieldset class="booking-section">
+        <legend>Customer</legend>
+        <label class="booking-property-search-label">
+          <span>Existing property (search by name or address)</span>
+          <input type="search" id="bookingPropertySearch" placeholder="Type to search existing customers…" autocomplete="off">
+        </label>
+        <ul class="booking-property-results" id="bookingPropertyResults" hidden></ul>
+        <p class="booking-or"><span>— or new customer —</span></p>
+        <div class="dialog-grid">
+          <label>
+            <span>First name *</span>
+            <input type="text" id="bookingFirstName" autocomplete="given-name" required>
+          </label>
+          <label>
+            <span>Last name</span>
+            <input type="text" id="bookingLastName" autocomplete="family-name">
+          </label>
+        </div>
+        <div class="dialog-grid">
+          <label>
+            <span>Phone</span>
+            <input type="tel" id="bookingPhone" autocomplete="tel">
+          </label>
+          <label>
+            <span>Email *</span>
+            <input type="email" id="bookingEmail" autocomplete="email" required>
+          </label>
+        </div>
+        <label>
+          <span>Address *</span>
+          <input type="text" id="bookingAddress" autocomplete="street-address" required>
+        </label>
+        <label>
+          <span>Notes (visible on WO)</span>
+          <textarea id="bookingNotes" rows="2" placeholder="Anything the tech should know"></textarea>
+        </label>
+      </fieldset>
+
+      <fieldset class="booking-section">
+        <legend>Service</legend>
+        <label>
+          <span>Service type *</span>
+          <select id="bookingService" required>
+            <option value="">Pick a service…</option>
+          </select>
+        </label>
+        <label>
+          <span>Zone count (optional, helps with scheduling)</span>
+          <input type="number" id="bookingZoneCount" min="1" max="50" placeholder="e.g. 6">
+        </label>
+      </fieldset>
+
+      <fieldset class="booking-section">
+        <legend>Time slot</legend>
+        <p class="booking-slot-help" id="bookingSlotHelp">Fill in service + email + address to load available slots.</p>
+        <div class="booking-slot-results" id="bookingSlotResults"></div>
+        <input type="hidden" id="bookingSlotStart">
+      </fieldset>
+
+      <p class="dialog-error" id="bookingError" hidden></p>
+      <div class="dialog-actions">
+        <button type="button" class="pjl-btn pjl-btn-outline" id="bookingCancel">Cancel</button>
+        <button type="submit" class="pjl-btn pjl-btn-primary" id="bookingSubmit" disabled>Book customer</button>
       </div>
     </form>
   </dialog>

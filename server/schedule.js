@@ -369,4 +369,315 @@ logoutButton.addEventListener("click", async () => {
   window.location.assign("/login");
 });
 
+// ---------------------------------------------------------------
+// Admin booking dialog — internal "book a customer" flow.
+// Lets Patrick add a booking from the schedule for phone/walk-in
+// customers or re-book an existing property. Uses the same
+// /api/booking/reserve endpoint the public booking page uses.
+// ---------------------------------------------------------------
+
+const addBookingBtn       = document.getElementById("addBooking");
+const bookingDialog       = document.getElementById("bookingDialog");
+const bookingForm         = document.getElementById("bookingForm");
+const bookingClose        = document.getElementById("bookingClose");
+const bookingCancel       = document.getElementById("bookingCancel");
+const bookingSubmit       = document.getElementById("bookingSubmit");
+const bookingError        = document.getElementById("bookingError");
+const bookingPropertySearch  = document.getElementById("bookingPropertySearch");
+const bookingPropertyResults = document.getElementById("bookingPropertyResults");
+const bookingFirstName    = document.getElementById("bookingFirstName");
+const bookingLastName     = document.getElementById("bookingLastName");
+const bookingPhone        = document.getElementById("bookingPhone");
+const bookingEmail        = document.getElementById("bookingEmail");
+const bookingAddress      = document.getElementById("bookingAddress");
+const bookingNotes        = document.getElementById("bookingNotes");
+const bookingService      = document.getElementById("bookingService");
+const bookingZoneCount    = document.getElementById("bookingZoneCount");
+const bookingSlotHelp     = document.getElementById("bookingSlotHelp");
+const bookingSlotResults  = document.getElementById("bookingSlotResults");
+const bookingSlotStart    = document.getElementById("bookingSlotStart");
+
+let bookingProperties = [];
+let bookingServicesCatalog = {};
+let bookingAvailLastKey = "";
+let bookingAvailTimer = null;
+
+function resetBookingForm() {
+  bookingForm?.reset();
+  if (bookingPropertyResults) {
+    bookingPropertyResults.hidden = true;
+    bookingPropertyResults.innerHTML = "";
+  }
+  bookingSlotResults.innerHTML = "";
+  bookingSlotHelp.hidden = false;
+  bookingSlotHelp.textContent = "Fill in service + email + address to load available slots.";
+  bookingSlotStart.value = "";
+  bookingError.hidden = true;
+  bookingError.textContent = "";
+  bookingSubmit.disabled = true;
+  bookingAvailLastKey = "";
+}
+
+async function ensureBookingPropertiesLoaded() {
+  if (bookingProperties.length) return;
+  try {
+    const r = await fetch("/api/properties");
+    const data = await r.json();
+    if (data.ok && Array.isArray(data.properties)) {
+      bookingProperties = data.properties;
+    }
+  } catch {
+    bookingProperties = [];
+  }
+}
+
+async function ensureBookingServicesLoaded() {
+  if (bookingService.options.length > 1) return; // already populated
+  try {
+    const r = await fetch("/api/booking/services");
+    const data = await r.json();
+    bookingServicesCatalog = (data.ok && data.services) || {};
+    // Group + label for the dropdown. Sorts seasonal first, then commercial,
+    // then site_visit. Each option carries the service key.
+    const entries = Object.entries(bookingServicesCatalog).filter(([, s]) => s.bookable);
+    const groups = {
+      "Spring opening (residential)":  entries.filter(([k, s]) => s.family === "spring_opening" && !k.includes("commercial")),
+      "Spring opening (commercial)":   entries.filter(([k, s]) => s.family === "spring_opening" && k.includes("commercial")),
+      "Fall winterization (residential)": entries.filter(([k, s]) => s.family === "fall_closing" && !k.includes("commercial")),
+      "Fall winterization (commercial)":  entries.filter(([k, s]) => s.family === "fall_closing" && k.includes("commercial")),
+      "Other": entries.filter(([, s]) => !["spring_opening", "fall_closing"].includes(s.family))
+    };
+    for (const [groupLabel, items] of Object.entries(groups)) {
+      if (!items.length) continue;
+      const og = document.createElement("optgroup");
+      og.label = groupLabel;
+      items.forEach(([key, svc]) => {
+        const o = document.createElement("option");
+        o.value = key;
+        o.textContent = svc.label || key;
+        og.appendChild(o);
+      });
+      bookingService.appendChild(og);
+    }
+  } catch {
+    // leave empty — submit will catch missing service
+  }
+}
+
+addBookingBtn?.addEventListener("click", async () => {
+  if (!bookingDialog) return;
+  resetBookingForm();
+  await Promise.all([ensureBookingPropertiesLoaded(), ensureBookingServicesLoaded()]);
+  if (typeof bookingDialog.showModal === "function") bookingDialog.showModal();
+  else bookingDialog.setAttribute("open", "");
+});
+
+function closeBookingDialog() {
+  if (typeof bookingDialog.close === "function") bookingDialog.close();
+  else bookingDialog.removeAttribute("open");
+}
+bookingClose?.addEventListener("click", closeBookingDialog);
+bookingCancel?.addEventListener("click", closeBookingDialog);
+
+// ---- Existing-property typeahead -------------------------------
+bookingPropertySearch?.addEventListener("input", () => {
+  const q = bookingPropertySearch.value.trim().toLowerCase();
+  if (!q) {
+    bookingPropertyResults.hidden = true;
+    bookingPropertyResults.innerHTML = "";
+    return;
+  }
+  const matches = bookingProperties.filter((p) => {
+    const hay = [p.customerName, p.customerEmail, p.address, p.code].filter(Boolean).join(" ").toLowerCase();
+    return hay.includes(q);
+  }).slice(0, 8);
+  bookingPropertyResults.innerHTML = "";
+  if (!matches.length) {
+    const li = document.createElement("li");
+    li.className = "empty";
+    li.textContent = "No match — fill in the new-customer fields below.";
+    bookingPropertyResults.appendChild(li);
+  } else {
+    matches.forEach((p) => {
+      const li = document.createElement("li");
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.innerHTML = `
+        <strong>${escapeHtml(p.customerName || "(no name)")}</strong>
+        <small>${escapeHtml(p.address || "")}${p.customerEmail ? " · " + escapeHtml(p.customerEmail) : ""}</small>
+      `;
+      btn.addEventListener("click", () => fillFromProperty(p));
+      li.appendChild(btn);
+      bookingPropertyResults.appendChild(li);
+    });
+  }
+  bookingPropertyResults.hidden = false;
+});
+
+function fillFromProperty(p) {
+  const parts = String(p.customerName || "").trim().split(/\s+/);
+  bookingFirstName.value = parts[0] || "";
+  bookingLastName.value  = parts.slice(1).join(" ") || "";
+  bookingPhone.value     = p.customerPhone || "";
+  bookingEmail.value     = p.customerEmail || "";
+  bookingAddress.value   = p.address || "";
+  // Prefill zone count from the property's known zone list.
+  const zoneCount = Array.isArray(p.system?.zones) ? p.system.zones.length : 0;
+  if (zoneCount) bookingZoneCount.value = String(zoneCount);
+  bookingPropertyResults.hidden = true;
+  bookingPropertyResults.innerHTML = "";
+  bookingPropertySearch.value = `${p.customerName || ""} · ${p.address || ""}`.trim();
+  scheduleAvailLookup();
+}
+
+// ---- Availability fetch / slot list ----------------------------
+function scheduleAvailLookup() {
+  clearTimeout(bookingAvailTimer);
+  bookingAvailTimer = setTimeout(loadAvailability, 250);
+}
+
+[bookingService, bookingAddress, bookingEmail].forEach((el) => {
+  el?.addEventListener("change", scheduleAvailLookup);
+  el?.addEventListener("blur", scheduleAvailLookup);
+});
+
+async function loadAvailability() {
+  const serviceKey = bookingService.value;
+  const address = bookingAddress.value.trim();
+  if (!serviceKey || !address) {
+    bookingSlotHelp.hidden = false;
+    bookingSlotHelp.textContent = "Fill in service + address to load available slots.";
+    bookingSlotResults.innerHTML = "";
+    bookingSlotStart.value = "";
+    bookingSubmit.disabled = true;
+    return;
+  }
+  // Don't refetch if nothing meaningful changed.
+  const key = `${serviceKey}|${address}`;
+  if (key === bookingAvailLastKey && bookingSlotResults.children.length) return;
+  bookingAvailLastKey = key;
+  bookingSlotHelp.hidden = false;
+  bookingSlotHelp.textContent = "Loading slots…";
+  bookingSlotResults.innerHTML = "";
+  bookingSlotStart.value = "";
+  bookingSubmit.disabled = true;
+  try {
+    const url = `/api/booking/availability?service=${encodeURIComponent(serviceKey)}&address=${encodeURIComponent(address)}`;
+    const r = await fetch(url);
+    const data = await r.json();
+    if (!data.ok) throw new Error((data.errors || ["Couldn't load slots."]).join(" "));
+    renderSlotResults(data.days || []);
+  } catch (err) {
+    bookingSlotHelp.hidden = false;
+    bookingSlotHelp.textContent = err.message || "Couldn't load slots.";
+  }
+}
+
+function renderSlotResults(days) {
+  bookingSlotResults.innerHTML = "";
+  const totalSlots = days.reduce((n, d) => n + (d.slots?.length || 0), 0);
+  if (!totalSlots) {
+    bookingSlotHelp.hidden = true;
+    const empty = document.createElement("p");
+    empty.className = "booking-slot-empty";
+    empty.textContent = "No available slots in the next 14 days. Try a different service or check the working-hours rules below.";
+    bookingSlotResults.appendChild(empty);
+    return;
+  }
+  bookingSlotHelp.hidden = true;
+  days.forEach((day) => {
+    if (!day.slots?.length) return;
+    const dayWrap = document.createElement("div");
+    dayWrap.className = "booking-slot-day";
+    const h = document.createElement("h4");
+    h.textContent = day.label || day.date;
+    dayWrap.appendChild(h);
+    const btnRow = document.createElement("div");
+    btnRow.className = "booking-slot-buttons";
+    day.slots.forEach((slot) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "booking-slot-btn";
+      btn.dataset.slotStart = slot.start;
+      btn.textContent = slot.timeLabel || new Date(slot.start).toLocaleTimeString("en-CA", { hour: "numeric", minute: "2-digit" });
+      btn.addEventListener("click", () => {
+        bookingSlotResults.querySelectorAll(".booking-slot-btn.is-selected")
+          .forEach((b) => b.classList.remove("is-selected"));
+        btn.classList.add("is-selected");
+        bookingSlotStart.value = slot.start;
+        bookingSubmit.disabled = false;
+      });
+      btnRow.appendChild(btn);
+    });
+    dayWrap.appendChild(btnRow);
+    bookingSlotResults.appendChild(dayWrap);
+  });
+}
+
+// ---- Submit ----------------------------------------------------
+bookingForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  bookingError.hidden = true;
+  bookingError.textContent = "";
+  const serviceKey = bookingService.value;
+  const slotStart = bookingSlotStart.value;
+  if (!serviceKey || !slotStart) {
+    bookingError.hidden = false;
+    bookingError.textContent = "Pick a service and a time slot.";
+    return;
+  }
+  const payload = {
+    serviceKey,
+    slotStart,
+    contact: {
+      firstName: bookingFirstName.value.trim(),
+      lastName:  bookingLastName.value.trim(),
+      phone:     bookingPhone.value.trim(),
+      email:     bookingEmail.value.trim(),
+      address:   bookingAddress.value.trim(),
+      notes:     bookingNotes.value.trim()
+    },
+    zoneCount: bookingZoneCount.value.trim() || null,
+    pageUrl: location.href,
+    userAgent: navigator.userAgent
+  };
+  bookingSubmit.disabled = true;
+  bookingSubmit.textContent = "Booking…";
+  try {
+    const r = await fetch("/api/booking/reserve", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    const data = await r.json();
+    if (!r.ok || !data.ok) {
+      throw new Error((data.errors || ["Booking failed."]).join(" "));
+    }
+    closeBookingDialog();
+    await loadAll();
+    // Friendly toast — leverage the existing settingsStatus span for now.
+    if (settingsStatus) {
+      settingsStatus.textContent = `Booked. WO ${data.workOrderId || ""}`.trim();
+      setTimeout(() => { settingsStatus.textContent = ""; }, 5000);
+    }
+  } catch (err) {
+    bookingError.hidden = false;
+    bookingError.textContent = err.message || "Booking failed.";
+    bookingSubmit.disabled = false;
+  } finally {
+    bookingSubmit.textContent = "Book customer";
+  }
+});
+
+// HTML escape — needed by the property typeahead. Ported from the public
+// site helper; kept local to avoid coupling with admin.js.
+function escapeHtml(s) {
+  return String(s == null ? "" : s)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 loadAll();
