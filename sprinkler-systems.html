@@ -2317,27 +2317,43 @@ a.sprk-comp:focus-visible {
   var month = new Date().getMonth(); // 0=Jan, 11=Dec
   var springPrimary = month >= 2 && month <= 6; // Mar-Jul: Spring leads; Aug-Feb: Fall leads
 
-  var heading = springPrimary
-    ? "Spring Opening Season Is On."
-    : "Fall Closing Season Is On.";
-  var sub = springPrimary
-    ? "Time to wake your system up right. Seasonal care starts at $90. Same-day repairs across Newmarket and the GTA."
-    : "Winter's closing in. Proper winterization starts at $90. Same-day repairs across Newmarket and the GTA.";
-  var ctaPrimary = springPrimary
-    ? "Book Spring Opening — From $90"
-    : "Book Fall Closing — From $90";
-  var ctaSecondary = springPrimary
-    ? "Book Fall Closing →"
-    : "Book Spring Opening →";
+  // Pull the canonical 1-4 zone seasonal price from pricing.json once it's
+  // loaded by pricing-injector.js. Fall back to "$90" if the injector hasn't
+  // hydrated yet (e.g. the price source is offline) — same value as today.
+  function priceLabel() {
+    var key = springPrimary ? 'spring_open_4z' : 'fall_close_4z';
+    var p = window.__pjlPricing && window.__pjlPricing.items && window.__pjlPricing.items[key];
+    return p && typeof p.price === 'number' ? '$' + p.price : '$90';
+  }
 
-  var h = document.querySelector('[data-season-heading]');
-  if (h) h.textContent = heading;
-  var s = document.querySelector('[data-season-sub]');
-  if (s) s.textContent = sub;
-  var p = document.querySelector('[data-season-primary]');
-  if (p) p.textContent = ctaPrimary;
-  var sec = document.querySelector('[data-season-secondary]');
-  if (sec) sec.textContent = ctaSecondary;
+  function render() {
+    var price = priceLabel();
+    var heading = springPrimary
+      ? "Spring Opening Season Is On."
+      : "Fall Closing Season Is On.";
+    var sub = springPrimary
+      ? "Time to wake your system up right. Seasonal care starts at " + price + ". Same-day repairs across Newmarket and the GTA."
+      : "Winter's closing in. Proper winterization starts at " + price + ". Same-day repairs across Newmarket and the GTA.";
+    var ctaPrimary = springPrimary
+      ? "Book Spring Opening — From " + price
+      : "Book Fall Closing — From " + price;
+    var ctaSecondary = springPrimary
+      ? "Book Fall Closing →"
+      : "Book Spring Opening →";
+
+    var h = document.querySelector('[data-season-heading]');
+    if (h) h.textContent = heading;
+    var s = document.querySelector('[data-season-sub]');
+    if (s) s.textContent = sub;
+    var p = document.querySelector('[data-season-primary]');
+    if (p) p.textContent = ctaPrimary;
+    var sec = document.querySelector('[data-season-secondary]');
+    if (sec) sec.textContent = ctaSecondary;
+  }
+
+  // Render once with the fallback, then re-render when pricing.json hydrates.
+  render();
+  document.addEventListener('pjl:pricing-loaded', render);
 })();
 </script>
   <script src="js/pricing-injector.js" defer></script>

@@ -696,16 +696,31 @@ const state = {
 };
 
 // ── Pricing ────────────────────────────────────────────
-// Sprinkler install pricing — 3-tier system (locked 2026-04-28, source: install_pricing_tiers_v2.xlsx)
-const TIER1_BASE = 585;   // 1-4 zones base fee
-const TIER2_BASE = 749;   // 5-7 zones base fee (+$140 covers PCM-300 expansion module)
-const PPZ        = 549;   // per-zone price (Tiers 1 & 2)
-const TIER3_MIN  = 8;     // 8+ zones triggers custom quote
-const BASE_FEE   = TIER1_BASE; // legacy alias kept for any external references
-const PPF = 245;      // price per fixture
+// Sprinkler install pricing — pulled from pricing.json once pricing-injector.js
+// fires `pjl:pricing-loaded`. Fallback constants below match pricing.json's
+// current values (used until the injector hydrates, or if /api/pricing is
+// unreachable). Lighting price-per-fixture (PPF) is the only value not in
+// pricing.json — lighting pricing is owner-deferred per cost_guide_owner_owned.md.
+let TIER1_BASE = 585;   // 1-4 zones base fee
+let TIER2_BASE = 749;   // 5-7 zones base fee (+$140 covers PCM-300 expansion module)
+let PPZ        = 549;   // per-zone price (Tiers 1 & 2)
+const TIER3_MIN  = 8;   // 8+ zones triggers custom quote
+let BASE_FEE   = TIER1_BASE; // legacy alias kept for any external references
+const PPF = 245;        // price per fixture (lighting — deferred, not in pricing.json)
 const BUNDLE_DISC = 0.15;
 
-const WATER_COST = { unfinished: 0, finished: 225, hosebibnew: 175 };
+let WATER_COST = { unfinished: 0, finished: 225, hosebibnew: 175 };
+
+// Re-bind from pricing.json when it hydrates so the calculator stays in sync.
+document.addEventListener('pjl:pricing-loaded', function(e){
+  var items = e && e.detail && e.detail.items;
+  if (!items) return;
+  if (items.new_install_t1_base)  TIER1_BASE = items.new_install_t1_base.price;
+  if (items.new_install_t2_base)  TIER2_BASE = items.new_install_t2_base.price;
+  if (items.new_install_per_zone) PPZ        = items.new_install_per_zone.price;
+  BASE_FEE = TIER1_BASE;
+  if (items.hose_bib_install)     WATER_COST.hosebibnew = items.hose_bib_install.price;
+});
 const WATER_LABEL = {
   unfinished: 'Unfinished basement — interior connection (standard)',
   finished:   'Finished basement — interior connection (+$225 complexity)',
@@ -1014,16 +1029,31 @@ const state = {
 };
 
 // ── Pricing ────────────────────────────────────────────
-// Sprinkler install pricing — 3-tier system (locked 2026-04-28, source: install_pricing_tiers_v2.xlsx)
-const TIER1_BASE = 585;   // 1-4 zones base fee
-const TIER2_BASE = 749;   // 5-7 zones base fee (+$140 covers PCM-300 expansion module)
-const PPZ        = 549;   // per-zone price (Tiers 1 & 2)
-const TIER3_MIN  = 8;     // 8+ zones triggers custom quote
-const BASE_FEE   = TIER1_BASE; // legacy alias kept for any external references
-const PPF = 245;      // price per fixture
+// Sprinkler install pricing — pulled from pricing.json once pricing-injector.js
+// fires `pjl:pricing-loaded`. Fallback constants below match pricing.json's
+// current values (used until the injector hydrates, or if /api/pricing is
+// unreachable). Lighting price-per-fixture (PPF) is the only value not in
+// pricing.json — lighting pricing is owner-deferred per cost_guide_owner_owned.md.
+let TIER1_BASE = 585;   // 1-4 zones base fee
+let TIER2_BASE = 749;   // 5-7 zones base fee (+$140 covers PCM-300 expansion module)
+let PPZ        = 549;   // per-zone price (Tiers 1 & 2)
+const TIER3_MIN  = 8;   // 8+ zones triggers custom quote
+let BASE_FEE   = TIER1_BASE; // legacy alias kept for any external references
+const PPF = 245;        // price per fixture (lighting — deferred, not in pricing.json)
 const BUNDLE_DISC = 0.15;
 
-const WATER_COST = { unfinished: 0, finished: 225, hosebibnew: 175 };
+let WATER_COST = { unfinished: 0, finished: 225, hosebibnew: 175 };
+
+// Re-bind from pricing.json when it hydrates so the calculator stays in sync.
+document.addEventListener('pjl:pricing-loaded', function(e){
+  var items = e && e.detail && e.detail.items;
+  if (!items) return;
+  if (items.new_install_t1_base)  TIER1_BASE = items.new_install_t1_base.price;
+  if (items.new_install_t2_base)  TIER2_BASE = items.new_install_t2_base.price;
+  if (items.new_install_per_zone) PPZ        = items.new_install_per_zone.price;
+  BASE_FEE = TIER1_BASE;
+  if (items.hose_bib_install)     WATER_COST.hosebibnew = items.hose_bib_install.price;
+});
 const WATER_LABEL = {
   unfinished: 'Unfinished basement — interior connection (standard)',
   finished:   'Finished basement — interior connection (+$225 complexity)',

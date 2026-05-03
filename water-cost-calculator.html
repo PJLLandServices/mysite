@@ -468,12 +468,31 @@
     estate:  22000    // 5000+ sq ft sod + 10+ specimen trees + landscape design
   };
 
+  // Hydrawise retrofit pricing tiers — fallback values match pricing.json. The
+  // bottom-of-script `pjl:pricing-loaded` subscriber re-binds these from the
+  // canonical source (controller_1_4 / controller_5_7 / controller_8_16) once
+  // the injector hydrates so this calculator stays in sync with pricing.json.
   const CONTROLLER_PRICING = [
-    { minZones: 1,  maxZones: 4,  price: 595,  hardware: 'HPC-400 base' },
-    { minZones: 5,  maxZones: 7,  price: 750,  hardware: 'HPC-400 + PCM-300' },
-    { minZones: 8,  maxZones: 16, price: 1195, hardware: 'HPC-400 + PCM-300 + PCM-900' },
-    { minZones: 17, maxZones: 99, price: null, hardware: 'PCM-1600 — custom quote required' }
+    { minZones: 1,  maxZones: 4,  price: 595,  hardware: 'HPC-400 base',                     key: 'controller_1_4' },
+    { minZones: 5,  maxZones: 7,  price: 750,  hardware: 'HPC-400 + PCM-300',                key: 'controller_5_7' },
+    { minZones: 8,  maxZones: 16, price: 1195, hardware: 'HPC-400 + PCM-300 + PCM-900',      key: 'controller_8_16' },
+    { minZones: 17, maxZones: 99, price: null, hardware: 'PCM-1600 — custom quote required', key: 'controller_17_plus' }
   ];
+
+  document.addEventListener('pjl:pricing-loaded', function(e){
+    var items = e && e.detail && e.detail.items;
+    if (!items) return;
+    CONTROLLER_PRICING.forEach(function(tier){
+      var src = items[tier.key];
+      if (!src) return;
+      // controller_17_plus has price 0 (custom) — keep our null sentinel for that tier.
+      if (src.quoteType === 'custom') { tier.price = null; return; }
+      tier.price = src.price;
+    });
+    // If the calculator is already showing a result, force a re-render so the
+    // numbers refresh with the new tier prices.
+    if (typeof recompute === 'function') { try { recompute(); } catch (_) {} }
+  });
 
   const MUNICIPAL_RATES = {
     newmarket:           { name: 'Newmarket',                 region: 'York Region',     combinedRate: 5.04, verified: true,  effective: '2026' },
