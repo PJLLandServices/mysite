@@ -297,7 +297,7 @@
   .savings-float__close { top: -6px; right: -6px; width: 22px; height: 22px; }
 }
 
-/* Very narrow phones (≤ 360px) — pill shrinks but keeps "save / $800 / on water" stack */
+/* Very narrow phones (≤ 360px) — pill shrinks but keeps "save / $580 / on water" stack */
 @media (max-width: 360px) {
   .savings-float__link { padding: 8px 12px 8px 10px; gap: 8px; }
   .savings-float__icon { font-size: 18px; }
@@ -1652,6 +1652,7 @@
           <span style="width:8px;height:8px;border-radius:50%;background:var(--amber-light);"></span>
           New · Water Cost Calculator
         </span>
+        <!-- @price-source: pricing.json#water_calculator.headline_scenario.annual_savings_cad — DO NOT edit $580 inline; update pricing.json + water-cost-calculator.html MANUAL_CYCLES + Inputs!B9 in the spreadsheet together. Audit sweeps must defer to pricing.json. -->
         <h2 style="font-family:'Barlow Condensed',sans-serif;color:#fff;text-shadow:none;font-size:clamp(30px,4.4vw,52px);text-transform:uppercase;letter-spacing:-0.02em;margin-bottom:10px;line-height:1;">
           Save up to <span style="color:var(--amber-light);">$580/year</span><br>on your water bill.
         </h2>
@@ -2035,6 +2036,7 @@
     <span class="savings-float__icon" aria-hidden="true">💧</span>
     <span class="savings-float__body">
       <span class="savings-float__eyebrow">Save up to</span>
+      <!-- @price-source: pricing.json#water_calculator.headline_scenario.annual_savings_cad — do not edit inline -->
       <span class="savings-float__amount">$580<small>/year</small></span>
       <span class="savings-float__sub">on your water bill with a Hydrawise upgrade</span>
       <span class="savings-float__cta">See your savings <span aria-hidden="true">→</span></span>

@@ -87,7 +87,8 @@
     "6_valve": 829.70
   },
   "water_calculator": {
-    "_doc": "Domain assumptions for water-cost-calculator.html. Mirrors PJL_Irrigation_Cost_Model.xlsx (Inputs sheet). DEFLATED 2026-04-30: manual_cycles_per_season was 84 (every-other-day, full season) — too aggressive vs how homeowners actually water under typical GTA bylaws. Reset to 60 (3 days/week × ~20 weeks). Bylaw-defensible in a sceptical homeowner conversation. The headline_scenario annual_savings_cad is the customer-facing 'Save up to $X/year' figure on the homepage callout, the floating savings widget, and the sprinkler-hydrawise.html callout — keep all three in sync if you change inputs here. Do NOT 'fix' the savings figure back to a higher number without re-running the calculator math; the lower number is the deliberate post-deflate canonical.",
+    "_doc": "Domain assumptions for water-cost-calculator.html. Mirrors PJL_Irrigation_Cost_Model.xlsx (Inputs sheet). DEFLATED 2026-04-30: manual_cycles_per_season was 84 (every-other-day, full season) — too aggressive vs how homeowners actually water under typical GTA bylaws. Reset to 60 (3 days/week × ~20 weeks). Bylaw-defensible in a sceptical homeowner conversation. The headline_scenario annual_savings_cad is the customer-facing 'Save up to $X/year' figure on the homepage callout, the floating savings widget, and the sprinkler-hydrawise.html callout — keep all three in sync if you change inputs here. Do NOT 'fix' the savings figure back to a higher number without re-running the calculator math; the lower number is the deliberate post-deflate canonical. If an audit/sweep proposes a different number, defer to this entry.",
+    "_history": "Previously $800 (84 manual cycles, every-other-day baseline). Reduced to $580 on 2026-04-30 after deflating the manual baseline to 60 cycles (3 days/week per typical GTA watering bylaw). Audit AI reverted to $800 once before this entry was added; do not let it happen again.",
     "season_days": 168,
     "manual_cycles_per_season": 60,
     "manual_cycles_rationale": "3 days/week per typical GTA watering bylaw × ~20 weeks of in-season demand. Older spec used 84 (every-other-day, full season) which wasn't bylaw-defensible.",
@@ -110,7 +111,19 @@
       "zones": 6,
       "lot_size": "standard",
       "smart_skip_rate": 0.40,
+      "manual_cost_per_year": 1442,
+      "smart_cost_per_year": 865,
       "annual_savings_cad": 580
-    }
+    },
+    "source_files": [
+      "water-cost-calculator.html (MANUAL_CYCLES const + pjl:pricing-loaded subscriber drive the live calc)",
+      "PJL_Irrigation_Cost_Model.xlsx (Inputs!B9 = 60)",
+      "PJL_WaterCalculator_SmokeTest.md (Scenario A expects $1,442 / $865 / $577)"
+    ],
+    "callout_locations": [
+      "index.html — homepage hero callout under Quote Estimator teaser",
+      "index.html — floating savings widget (.savings-float__amount)",
+      "sprinkler-hydrawise.html — callout under '30-40% savings' pull-quote"
+    ]
   }
 }
