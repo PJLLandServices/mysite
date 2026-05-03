@@ -320,12 +320,12 @@
         <h3>Sample repair math (real numbers from real calls)</h3>
 
         <ul>
-          <li><strong>One broken pop-up head:</strong> <span data-price="service_call">$95</span> + <span data-price="head_replacement">$68</span> = <strong>$163</strong></li>
-          <li><strong>Three broken heads on one visit:</strong> <span data-price="service_call">$95</span> + (<span data-price="head_replacement">$68</span> × 3) = <strong>$299</strong></li>
+          <li><strong>One broken pop-up head:</strong> <span data-price="service_call">$95</span> + <span data-price="head_replacement">$68</span> = <strong><span data-pjl-quote-formula="service_call+head_replacement">$163</span></strong></li>
+          <li><strong>Three broken heads on one visit:</strong> <span data-price="service_call">$95</span> + (<span data-price="head_replacement">$68</span> × 3) = <strong><span data-pjl-quote-formula="service_call+3*head_replacement">$299</span></strong></li>
           <li><strong>Two valves in a 3-zone manifold box:</strong> <span data-price="service_call">$95</span> + <span data-price="manifold_3valve">$135</span> + (<span data-price="valve_hunter_pgv">$74.95</span> × 2) = <strong><span data-price="manifold_examples.2_valve">$379.90</span></strong></li>
           <li><strong>Full 6-valve manifold rebuild:</strong> <span data-price="service_call">$95</span> + <span data-price="manifold_6valve">$285</span> + (<span data-price="valve_hunter_pgv">$74.95</span> × 6) = <strong><span data-price="manifold_examples.6_valve">$829.70</span></strong></li>
-          <li><strong>Dead controller, 6 zones:</strong> <span data-price="service_call">$95</span> + <span data-price="controller_5_7">$750</span> = <strong>$845</strong></li>
-          <li><strong>Wiring repair in valve box:</strong> <span data-price="service_call">$95</span> + <span data-price="wire_diagnostic">$187</span> = <strong>$282</strong></li>
+          <li><strong>Dead controller, 6 zones:</strong> <span data-price="service_call">$95</span> + <span data-price="controller_5_7">$750</span> = <strong><span data-pjl-quote-formula="service_call+controller_5_7">$845</span></strong></li>
+          <li><strong>Wiring repair in valve box:</strong> <span data-price="service_call">$95</span> + <span data-price="wire_diagnostic">$187</span> = <strong><span data-pjl-quote-formula="service_call+wire_diagnostic">$282</span></strong></li>
         </ul>
 
         <p>For a more comprehensive list of every repair price (including controller installs by zone count, drip retrofits, and smart-upgrade pricing), see the full <a href="pricing.html">pricing guide</a>.</p>
@@ -359,8 +359,8 @@
 
         <ul>
           <li>A single bad valve in year two on a competitor's expired warranty: <strong>$304.85</strong> (<span data-price="service_call">$95</span> + <span data-price="manifold_3valve">$135</span> + <span data-price="valve_hunter_pgv">$74.95</span>)</li>
-          <li>A failed controller in year three: <strong>$845</strong> (<span data-price="service_call">$95</span> + <span data-price="controller_5_7">$750</span> for a 6-zone replacement)</li>
-          <li>Wire-trace diagnostic plus repair in year two: <strong>$282</strong></li>
+          <li>A failed controller in year three: <strong><span data-pjl-quote-formula="service_call+controller_5_7">$845</span></strong> (<span data-price="service_call">$95</span> + <span data-price="controller_5_7">$750</span> for a 6-zone replacement)</li>
+          <li>Wire-trace diagnostic plus repair in year two: <strong><span data-pjl-quote-formula="service_call+wire_diagnostic">$282</span></strong></li>
         </ul>
 
         <p>In our experience, three years of coverage typically removes $400–$1,000 of early-season repair risk per system. Built into the install price, not a paid add-on.</p>

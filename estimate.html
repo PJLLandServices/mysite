@@ -459,31 +459,31 @@
       <p class="subtitle">All systems already include a smart Hydrawise WiFi controller and high-efficiency components as standard. These are optional extras on top.</p>
       <div class="extras">
 
-        <div class="extra-item" onclick="toggleExtra('pots', this, 185)" id="ex-pots-wrap">
+        <div class="extra-item" onclick="toggleExtra('pots', this, EXTRA_POTS)" id="ex-pots-wrap">
           <div class="extra-check" id="ex-pots"></div>
           <div class="extra-info">
             <h4>🪴 Flower pot & planter drip zones</h4>
             <p>Front entrance planters and pots watered automatically — no more daily hand-watering. Custom drip lines to each container.</p>
           </div>
-          <div class="extra-cost">+$185</div>
+          <div class="extra-cost">+<span data-price="extra_pots_drip">$185</span></div>
         </div>
 
-        <div class="extra-item" onclick="toggleExtra('remotebib', this, 395)" id="ex-remotebib-wrap">
+        <div class="extra-item" onclick="toggleExtra('remotebib', this, EXTRA_REMOTE_HOSE_BIB)" id="ex-remotebib-wrap">
           <div class="extra-check" id="ex-remotebib"></div>
           <div class="extra-info">
             <h4>🚰 Remote hose bib installation</h4>
             <p>A convenient exterior hose bib added at the rear or front of your property — no more dragging hoses across the yard.</p>
           </div>
-          <div class="extra-cost">+$395</div>
+          <div class="extra-cost">+<span data-price="extra_remote_hose_bib">$395</span></div>
         </div>
 
-        <div class="extra-item" onclick="toggleExtra('drip', this, 210)" id="ex-drip-wrap">
+        <div class="extra-item" onclick="toggleExtra('drip', this, EXTRA_BED_DRIP)" id="ex-drip-wrap">
           <div class="extra-check" id="ex-drip"></div>
           <div class="extra-info">
             <h4>🌱 Garden bed drip zone</h4>
             <p>Targeted low-volume drip irrigation for flower beds and shrub borders — uses less water, healthier plants.</p>
           </div>
-          <div class="extra-cost">+$210</div>
+          <div class="extra-cost">+<span data-price="extra_bed_drip_zone">$210</span></div>
         </div>
 
       </div>
@@ -556,10 +556,10 @@
       <h2>Any lighting upgrades?</h2>
       <p class="subtitle">Optional additions to elevate your system.</p>
       <div class="extras">
-        <div class="extra-item" onclick="toggleExtra('ltimer', this, 195)">
+        <div class="extra-item" onclick="toggleExtra('ltimer', this, EXTRA_LIGHTING_TIMER)">
           <div class="extra-check" id="ex-ltimer"></div>
           <div class="extra-info"><h4>📱 Smart timer & app control</h4><p>Schedule and control your lights remotely from your phone</p></div>
-          <div class="extra-cost">+$195</div>
+          <div class="extra-cost">+<span data-price="extra_lighting_timer">$195</span></div>
         </div>
         <div class="extra-item" onclick="toggleExtra('lcolour', this, 280)">
           <div class="extra-check" id="ex-lcolour"></div>
@@ -696,30 +696,43 @@ const state = {
 };
 
 // ── Pricing ────────────────────────────────────────────
-// Sprinkler install pricing — pulled from pricing.json once pricing-injector.js
-// fires `pjl:pricing-loaded`. Fallback constants below match pricing.json's
-// current values (used until the injector hydrates, or if /api/pricing is
-// unreachable). Lighting price-per-fixture (PPF) is the only value not in
-// pricing.json — lighting pricing is owner-deferred per cost_guide_owner_owned.md.
-let TIER1_BASE = 585;   // 1-4 zones base fee
-let TIER2_BASE = 749;   // 5-7 zones base fee (+$140 covers PCM-300 expansion module)
-let PPZ        = 549;   // per-zone price (Tiers 1 & 2)
+// Every value below mirrors pricing.json. The `pjl:pricing-loaded` subscriber
+// re-binds them from /api/pricing on hydration so this calculator stays in
+// sync with the canonical source. Lighting price-per-fixture (PPF) is the
+// only deliberately-deferred item per cost_guide_owner_owned.md.
+let TIER1_BASE = 585;   // pricing.json: new_install_t1_base
+let TIER2_BASE = 749;   // pricing.json: new_install_t2_base
+let PPZ        = 549;   // pricing.json: new_install_per_zone
 const TIER3_MIN  = 8;   // 8+ zones triggers custom quote
 let BASE_FEE   = TIER1_BASE; // legacy alias kept for any external references
 const PPF = 245;        // price per fixture (lighting — deferred, not in pricing.json)
 const BUNDLE_DISC = 0.15;
 
-let WATER_COST = { unfinished: 0, finished: 225, hosebibnew: 175 };
+// Calculator add-ons. Now mirror pricing.json's `extra_*` keys.
+let EXTRA_POTS              = 185;  // pricing.json: extra_pots_drip
+let EXTRA_REMOTE_HOSE_BIB   = 395;  // pricing.json: extra_remote_hose_bib
+let EXTRA_BED_DRIP          = 210;  // pricing.json: extra_bed_drip_zone
+let EXTRA_LIGHTING_TIMER    = 195;  // pricing.json: extra_lighting_timer
+let WATER_COST = {
+  unfinished: 0,
+  finished: 225,   // pricing.json: extra_water_finished_basement
+  hosebibnew: 175  // pricing.json: hose_bib_install
+};
 
 // Re-bind from pricing.json when it hydrates so the calculator stays in sync.
 document.addEventListener('pjl:pricing-loaded', function(e){
   var items = e && e.detail && e.detail.items;
   if (!items) return;
-  if (items.new_install_t1_base)  TIER1_BASE = items.new_install_t1_base.price;
-  if (items.new_install_t2_base)  TIER2_BASE = items.new_install_t2_base.price;
-  if (items.new_install_per_zone) PPZ        = items.new_install_per_zone.price;
+  if (items.new_install_t1_base)             TIER1_BASE = items.new_install_t1_base.price;
+  if (items.new_install_t2_base)             TIER2_BASE = items.new_install_t2_base.price;
+  if (items.new_install_per_zone)            PPZ = items.new_install_per_zone.price;
   BASE_FEE = TIER1_BASE;
-  if (items.hose_bib_install)     WATER_COST.hosebibnew = items.hose_bib_install.price;
+  if (items.hose_bib_install)                WATER_COST.hosebibnew = items.hose_bib_install.price;
+  if (items.extra_water_finished_basement)   WATER_COST.finished = items.extra_water_finished_basement.price;
+  if (items.extra_pots_drip)                 EXTRA_POTS = items.extra_pots_drip.price;
+  if (items.extra_remote_hose_bib)           EXTRA_REMOTE_HOSE_BIB = items.extra_remote_hose_bib.price;
+  if (items.extra_bed_drip_zone)             EXTRA_BED_DRIP = items.extra_bed_drip_zone.price;
+  if (items.extra_lighting_timer)            EXTRA_LIGHTING_TIMER = items.extra_lighting_timer.price;
 });
 const WATER_LABEL = {
   unfinished: 'Unfinished basement — interior connection (standard)',
@@ -1029,30 +1042,43 @@ const state = {
 };
 
 // ── Pricing ────────────────────────────────────────────
-// Sprinkler install pricing — pulled from pricing.json once pricing-injector.js
-// fires `pjl:pricing-loaded`. Fallback constants below match pricing.json's
-// current values (used until the injector hydrates, or if /api/pricing is
-// unreachable). Lighting price-per-fixture (PPF) is the only value not in
-// pricing.json — lighting pricing is owner-deferred per cost_guide_owner_owned.md.
-let TIER1_BASE = 585;   // 1-4 zones base fee
-let TIER2_BASE = 749;   // 5-7 zones base fee (+$140 covers PCM-300 expansion module)
-let PPZ        = 549;   // per-zone price (Tiers 1 & 2)
+// Every value below mirrors pricing.json. The `pjl:pricing-loaded` subscriber
+// re-binds them from /api/pricing on hydration so this calculator stays in
+// sync with the canonical source. Lighting price-per-fixture (PPF) is the
+// only deliberately-deferred item per cost_guide_owner_owned.md.
+let TIER1_BASE = 585;   // pricing.json: new_install_t1_base
+let TIER2_BASE = 749;   // pricing.json: new_install_t2_base
+let PPZ        = 549;   // pricing.json: new_install_per_zone
 const TIER3_MIN  = 8;   // 8+ zones triggers custom quote
 let BASE_FEE   = TIER1_BASE; // legacy alias kept for any external references
 const PPF = 245;        // price per fixture (lighting — deferred, not in pricing.json)
 const BUNDLE_DISC = 0.15;
 
-let WATER_COST = { unfinished: 0, finished: 225, hosebibnew: 175 };
+// Calculator add-ons. Now mirror pricing.json's `extra_*` keys.
+let EXTRA_POTS              = 185;  // pricing.json: extra_pots_drip
+let EXTRA_REMOTE_HOSE_BIB   = 395;  // pricing.json: extra_remote_hose_bib
+let EXTRA_BED_DRIP          = 210;  // pricing.json: extra_bed_drip_zone
+let EXTRA_LIGHTING_TIMER    = 195;  // pricing.json: extra_lighting_timer
+let WATER_COST = {
+  unfinished: 0,
+  finished: 225,   // pricing.json: extra_water_finished_basement
+  hosebibnew: 175  // pricing.json: hose_bib_install
+};
 
 // Re-bind from pricing.json when it hydrates so the calculator stays in sync.
 document.addEventListener('pjl:pricing-loaded', function(e){
   var items = e && e.detail && e.detail.items;
   if (!items) return;
-  if (items.new_install_t1_base)  TIER1_BASE = items.new_install_t1_base.price;
-  if (items.new_install_t2_base)  TIER2_BASE = items.new_install_t2_base.price;
-  if (items.new_install_per_zone) PPZ        = items.new_install_per_zone.price;
+  if (items.new_install_t1_base)             TIER1_BASE = items.new_install_t1_base.price;
+  if (items.new_install_t2_base)             TIER2_BASE = items.new_install_t2_base.price;
+  if (items.new_install_per_zone)            PPZ = items.new_install_per_zone.price;
   BASE_FEE = TIER1_BASE;
-  if (items.hose_bib_install)     WATER_COST.hosebibnew = items.hose_bib_install.price;
+  if (items.hose_bib_install)                WATER_COST.hosebibnew = items.hose_bib_install.price;
+  if (items.extra_water_finished_basement)   WATER_COST.finished = items.extra_water_finished_basement.price;
+  if (items.extra_pots_drip)                 EXTRA_POTS = items.extra_pots_drip.price;
+  if (items.extra_remote_hose_bib)           EXTRA_REMOTE_HOSE_BIB = items.extra_remote_hose_bib.price;
+  if (items.extra_bed_drip_zone)             EXTRA_BED_DRIP = items.extra_bed_drip_zone.price;
+  if (items.extra_lighting_timer)            EXTRA_LIGHTING_TIMER = items.extra_lighting_timer.price;
 });
 const WATER_LABEL = {
   unfinished: 'Unfinished basement — interior connection (standard)',

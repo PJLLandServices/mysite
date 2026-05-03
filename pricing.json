@@ -51,7 +51,13 @@
     "new_zone_install":           { "label": "New zone install (starts at $575 — custom quote)",  "price": 0,     "category": "install",    "quoteType": "custom"   },
     "new_zone_min":               { "label": "New zone install — minimum (\"starts at\")",         "price": 575,   "category": "install",    "quoteType": "custom"   },
     "smart_upgrade":              { "label": "Smart upgrades / accessories (custom quote)",       "price": 0,     "category": "install",    "quoteType": "custom"   },
-    "hose_bib_install":           { "label": "Frost-free exterior hose bib install",              "price": 175,   "category": "install",    "quoteType": "flat"     }
+    "hose_bib_install":           { "label": "Frost-free exterior hose bib install",              "price": 175,   "category": "install",    "quoteType": "flat"     },
+
+    "extra_pots_drip":            { "label": "Add-on: flower pot & planter drip zone",            "price": 185,   "category": "install_addon", "quoteType": "flat"  },
+    "extra_remote_hose_bib":      { "label": "Add-on: remote hose bib install (with trenching)",  "price": 395,   "category": "install_addon", "quoteType": "flat"  },
+    "extra_bed_drip_zone":        { "label": "Add-on: garden bed drip zone",                      "price": 210,   "category": "install_addon", "quoteType": "flat"  },
+    "extra_water_finished_basement": { "label": "Add-on: finished basement water-source complexity", "price": 225, "category": "install_addon", "quoteType": "flat" },
+    "extra_lighting_timer":       { "label": "Add-on: lighting controller / timer",               "price": 195,   "category": "install_addon", "quoteType": "flat"  }
   },
   "rules": {
     "spring_fall_no_service_call": "Spring opening / fall closing pricing is all-in. Service call ($95) is NOT charged on top.",
