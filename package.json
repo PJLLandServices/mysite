@@ -7,9 +7,11 @@
   "scripts": {
     "start": "node server/server.js",
     "setup-password": "node server/setup-password.js",
-    "build": "node build.js && node worker/rebuild.mjs",
-    "build:check": "node build.js --check",
-    "build:worker": "node worker/rebuild.mjs"
+    "build": "node build.js && node scripts/sync-meta-prices.mjs && node worker/rebuild.mjs",
+    "build:check": "node build.js --check && node scripts/sync-meta-prices.mjs --check",
+    "build:worker": "node worker/rebuild.mjs",
+    "sync:meta-prices": "node scripts/sync-meta-prices.mjs",
+    "sync:meta-prices:check": "node scripts/sync-meta-prices.mjs --check"
   },
   "engines": {
     "node": ">=18"
