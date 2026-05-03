@@ -27,6 +27,7 @@
     days: [],           // grouped slots from /api/booking/availability
     services: {},       // catalog from /api/booking/services
     familyFilter: null, // when set, only services with this `family` are shown
+    propertyType: "residential", // toggle on the seasonal-service grid: "residential" or "commercial"
     sessionToken: null, // pre-booking session (AI handoff) — passed back on reserve
     sessionPayload: null, // diagnosis + customer hints loaded from the session
     customerFirstName: "" // captured from session handoff, used to personalize copy
@@ -166,37 +167,45 @@
   // Friendly meta — emoji + short blurb — keyed off what server.js exposes
   // via /api/booking/services. If the server adds a new bookable service
   // with no entry here, it falls back to a default icon.
-  // 2026-05-02 RESTRUCTURE: one entry per pricing.json tier, no overlaps. Blurb
-  // wording matches the price tier exactly so labels + descriptions can never
-  // disagree again.
+  // 2026-05-02 RESTRUCTURE: one entry per pricing.json tier, no overlaps.
+  // Blurb is the price + scope; durationText() appends the time at render time
+  // so we never double-up the time string.
   const SERVICE_META = {
     // Spring opening — residential (5 tiers)
-    spring_open_4z:                  { icon: "🌿", blurb: "1-4 zones · $90 · seasonal startup, head check, schedule reset · 45 min" },
-    spring_open_6z:                  { icon: "🌿", blurb: "5-6 zones · $105 · seasonal startup with full system check · 50 min" },
-    spring_open_8z:                  { icon: "🌿", blurb: "7-8 zones · $120 · seasonal startup with full system check · 60 min" },
-    spring_open_15z:                 { icon: "🌿", blurb: "9-15 zones · $165 · large-system startup with full inspection · 90-120 min" },
-    spring_open_16plus:              { icon: "🌿", blurb: "16+ zones · custom quote · large-system startup, quoted on-site" },
+    spring_open_4z:                  { icon: "🌿", blurb: "$90 · seasonal startup, head check, schedule reset" },
+    spring_open_6z:                  { icon: "🌿", blurb: "$105 · seasonal startup with full system check" },
+    spring_open_8z:                  { icon: "🌿", blurb: "$120 · seasonal startup with full system check" },
+    spring_open_15z:                 { icon: "🌿", blurb: "$165 · large-system startup with full inspection" },
+    spring_open_16plus:              { icon: "🌿", blurb: "Custom quote · large-system startup, quoted on-site" },
     // Spring opening — commercial (3 tiers)
-    spring_open_commercial:          { icon: "🏢", blurb: "1-4 zones commercial · $145 · morning or afternoon appointment" },
-    spring_open_commercial_8z:       { icon: "🏢", blurb: "5-8 zones commercial · $255 · morning or afternoon appointment" },
-    spring_open_commercial_9plus:    { icon: "🏢", blurb: "9+ zones commercial · custom quote · morning or afternoon appointment" },
+    spring_open_commercial:          { icon: "🏢", blurb: "$145 · commercial spring opening" },
+    spring_open_commercial_8z:       { icon: "🏢", blurb: "$255 · commercial spring opening" },
+    spring_open_commercial_9plus:    { icon: "🏢", blurb: "Custom quote · commercial, quoted on-site" },
 
     // Fall winterization — residential (5 tiers)
-    fall_close_4z:                   { icon: "🍂", blurb: "1-4 zones · $90 · winterization with compressed-air blowout · 30 min" },
-    fall_close_6z:                   { icon: "🍂", blurb: "5-6 zones · $105 · winterization with full-system check · 35 min" },
-    fall_close_8z:                   { icon: "🍂", blurb: "7-8 zones · $120 · full-system winterization · 45 min" },
-    fall_close_15z:                  { icon: "🍂", blurb: "9-15 zones · $165 · large-system winterization with full inspection · 60-90 min" },
-    fall_close_16plus:               { icon: "🍂", blurb: "16+ zones · custom quote · large-system winterization, quoted on-site" },
+    fall_close_4z:                   { icon: "🍂", blurb: "$90 · winterization with compressed-air blowout" },
+    fall_close_6z:                   { icon: "🍂", blurb: "$105 · winterization with full-system check" },
+    fall_close_8z:                   { icon: "🍂", blurb: "$120 · full-system winterization" },
+    fall_close_15z:                  { icon: "🍂", blurb: "$165 · large-system winterization with full inspection" },
+    fall_close_16plus:               { icon: "🍂", blurb: "Custom quote · large-system winterization, quoted on-site" },
     // Fall winterization — commercial (3 tiers)
-    fall_close_commercial:           { icon: "🏢", blurb: "1-4 zones commercial · $145 · morning or afternoon appointment" },
-    fall_close_commercial_8z:        { icon: "🏢", blurb: "5-8 zones commercial · $255 · morning or afternoon appointment" },
-    fall_close_commercial_9plus:     { icon: "🏢", blurb: "9+ zones commercial · custom quote · morning or afternoon appointment" },
+    fall_close_commercial:           { icon: "🏢", blurb: "$145 · commercial winterization" },
+    fall_close_commercial_8z:        { icon: "🏢", blurb: "$255 · commercial winterization" },
+    fall_close_commercial_9plus:     { icon: "🏢", blurb: "Custom quote · commercial, quoted on-site" },
 
     // Repair / retrofit / consult
-    sprinkler_repair:                { icon: "🔧", blurb: "90-min default · diagnose + fix on the spot" },
+    sprinkler_repair:                { icon: "🔧", blurb: "Diagnose + fix on the spot" },
     hydrawise_retrofit:              { icon: "📡", blurb: "Smart controller upgrade with app + WiFi setup" },
     site_visit:                      { icon: "📋", blurb: "Free walkaround · we scope and quote new installs" }
   };
+
+  // Property-type heuristic — the booking key naming convention is
+  // "*_commercial[_8z|_9plus]". Lets us split the seasonal service grid
+  // into Residential / Commercial tabs so the customer doesn't see 8 cards
+  // at once.
+  function propertyTypeForKey(key) {
+    return /_commercial(_|$)/.test(key) ? "commercial" : "residential";
+  }
 
   // Friendly heading + intro shown above the service grid when the user has
   // arrived via a deep link (e.g. ?service=spring_open_4z). One entry per
@@ -234,9 +243,22 @@
   function renderServiceCards() {
     serviceGrid.innerHTML = "";
     const allEntries = Object.entries(state.services).filter(([, m]) => m.bookable);
-    const filtered = state.familyFilter
+    const familyEntries = state.familyFilter
       ? allEntries.filter(([, m]) => m.family === state.familyFilter)
       : allEntries;
+
+    // Property-type toggle: only show when the family has BOTH residential AND
+    // commercial services (spring_opening / fall_closing). For repair /
+    // retrofit / site_visit families, hide the toggle entirely and show
+    // every service.
+    const familyHasCommercial = familyEntries.some(([k]) => propertyTypeForKey(k) === "commercial");
+    const familyHasResidential = familyEntries.some(([k]) => propertyTypeForKey(k) === "residential");
+    const showPropertyToggle = familyHasCommercial && familyHasResidential;
+
+    // Apply property-type filter (only when toggle is visible)
+    const filtered = showPropertyToggle
+      ? familyEntries.filter(([k]) => propertyTypeForKey(k) === state.propertyType)
+      : familyEntries;
 
     // Update heading + lead text. If the family has a custom copy block use
     // it; otherwise fall back to the generic catalog view. When we know the
@@ -254,16 +276,48 @@
       serviceLead.textContent = "Pick the closest match. If you're not sure, choose \"Site visit\" and Patrick will scope it for you.";
     }
 
+    // Render the property-type toggle (or remove it if not applicable)
+    let toggle = document.getElementById("svcPropertyToggle");
+    if (showPropertyToggle) {
+      if (!toggle) {
+        toggle = document.createElement("div");
+        toggle.id = "svcPropertyToggle";
+        toggle.className = "svc-property-toggle";
+        toggle.setAttribute("role", "tablist");
+        toggle.setAttribute("aria-label", "Property type");
+        toggle.innerHTML = `
+          <button type="button" class="svc-property-toggle__tab" data-prop="residential" role="tab">🏡 Residential</button>
+          <button type="button" class="svc-property-toggle__tab" data-prop="commercial" role="tab">🏢 Commercial</button>
+        `;
+        serviceGrid.parentNode.insertBefore(toggle, serviceGrid);
+        toggle.addEventListener("click", (e) => {
+          const tab = e.target.closest("[data-prop]");
+          if (!tab) return;
+          state.propertyType = tab.dataset.prop;
+          renderServiceCards();
+        });
+      }
+      // Update active state
+      toggle.querySelectorAll(".svc-property-toggle__tab").forEach((t) => {
+        const active = t.dataset.prop === state.propertyType;
+        t.classList.toggle("is-active", active);
+        t.setAttribute("aria-selected", active ? "true" : "false");
+      });
+    } else if (toggle) {
+      toggle.remove();
+    }
+
     filtered.forEach(([key, meta]) => {
-      const friendly = SERVICE_META[key] || { icon: "✓", blurb: `${meta.minutes} min` };
+      const friendly = SERVICE_META[key] || { icon: "✓", blurb: "" };
       const btn = document.createElement("button");
       btn.type = "button";
       btn.className = "service-card";
       btn.dataset.serviceKey = key;
+      const blurb = friendly.blurb || `${meta.minutes} min`;
       btn.innerHTML = `
         <span class="icon" aria-hidden="true">${friendly.icon}</span>
         <span class="label">${escapeHtml(meta.label)}</span>
-        <span class="meta">${escapeHtml(friendly.blurb)} · ${escapeHtml(durationText(meta))}</span>
+        <span class="meta">${escapeHtml(blurb)} · ${escapeHtml(durationText(meta))}</span>
       `;
       serviceGrid.append(btn);
     });

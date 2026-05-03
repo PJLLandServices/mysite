@@ -151,6 +151,44 @@
   max-width: 56ch;
 }
 
+/* Property-type toggle (Residential / Commercial) — shown above the service
+   grid for spring/fall families that have both. Mirrors the .sprk-zone__toggle
+   pattern from sprinkler-spring-opening.html so the customer recognizes it. */
+.svc-property-toggle {
+  display: inline-flex;
+  background: rgba(27,77,46,0.06);
+  border: 1px solid rgba(27,77,46,0.10);
+  border-radius: 99px;
+  padding: 4px;
+  margin: 0 0 18px;
+  gap: 4px;
+}
+.svc-property-toggle__tab {
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  color: rgba(15,31,20,0.55);
+  padding: 9px 18px;
+  border-radius: 99px;
+  transition: all 0.18s ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.svc-property-toggle__tab:hover { color: var(--green); }
+.svc-property-toggle__tab.is-active {
+  background: var(--green);
+  color: #fff;
+  box-shadow: 0 4px 12px rgba(27,77,46,0.20);
+}
+@media (max-width: 480px) {
+  .svc-property-toggle { width: 100%; justify-content: stretch; }
+  .svc-property-toggle__tab { flex: 1 1 0; justify-content: center; }
+}
+
 /* Service cards */
 .service-grid {
   display: grid;
@@ -654,6 +692,6 @@
 <script src="coverage-checker.js"></script>
 <script async defer src="https://maps.googleapis.com/maps/api/js?key=AIzaSyBrORBeXbpNTJvoi2PDhDDs6Iy-BGSU30M&libraries=places&callback=initCoverageCheck&loading=async"></script>
 <script src="nav.js?v=2"></script>
-<script src="js/booking.js?v=2"></script>
+<script src="js/booking.js?v=3"></script>
 </body>
 </html>
