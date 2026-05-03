@@ -288,6 +288,30 @@
     </div>
   </div>
 
+  <!-- Zone source-picker — opens when the reviewer clicks a zone's location.
+       Mirrors the tech-mode picker. Lets the desk-side user swap the
+       auto-scaffolded "General service area" / "Zone N" label for one of
+       the customer's real system entries (zone, valve box, controller,
+       open deferred issue) — and auto-populates notes from the property
+       when the WO zone notes are still empty. -->
+  <div class="wo-source-picker" id="woSourcePicker" hidden role="dialog" aria-modal="true" aria-labelledby="woSourcePickerTitle">
+    <div class="wo-source-picker-card">
+      <header class="wo-source-picker-head">
+        <h2 id="woSourcePickerTitle">Source from property</h2>
+        <button type="button" class="wo-source-picker-close" id="woSourcePickerClose" aria-label="Close">×</button>
+      </header>
+      <p class="wo-source-picker-empty" id="woSourcePickerEmpty" hidden>This work order isn't linked to a property record. Type a custom label below.</p>
+      <div class="wo-source-picker-body" id="woSourcePickerBody"></div>
+      <div class="wo-source-picker-custom">
+        <label for="woSourcePickerCustomInput">Custom label</label>
+        <div class="wo-source-picker-custom-row">
+          <input type="text" id="woSourcePickerCustomInput" placeholder="e.g. Front yard rotors" maxlength="120">
+          <button type="button" class="wo-source-picker-custom-btn" id="woSourcePickerCustomBtn">Use</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <script src="/crm/voice-input.js"></script>
   <script src="/crm/work-order.js"></script>
 </body>

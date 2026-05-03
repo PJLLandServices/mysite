@@ -1067,6 +1067,7 @@ function renderSourcePickerBody() {
         type: "zone",
         number: Number(z.number) || null,
         label: String(z.label || "").trim() || `Zone ${z.number || "?"}`,
+        notes: String(z.notes || "").trim() || "",
         sub: String(z.notes || "").trim() || ""
       }))
     ));
@@ -1080,6 +1081,7 @@ function renderSourcePickerBody() {
         return {
           type: "valveBox",
           label: `Valve box — ${loc}${cnt ? ` (${cnt})` : ""}`,
+          notes: String(vb.notes || "").trim() || "",
           sub: String(vb.notes || "").trim() || ""
         };
       })
@@ -1092,6 +1094,7 @@ function renderSourcePickerBody() {
       [{
         type: "controller",
         label: `Controller — ${parts.join(" · ")}`,
+        notes: "",
         sub: ""
       }]
     ));
@@ -1105,6 +1108,7 @@ function renderSourcePickerBody() {
         return {
           type: "issue",
           label: `Issue #${i + 1}: ${trimmed}`,
+          notes: String(iss.notes || "").trim() || "",
           sub: iss.fromWoId ? `From ${iss.fromWoId}` : ""
         };
       })
@@ -1127,6 +1131,7 @@ function renderSourcePickerSection(title, items) {
     btn.dataset.sourceType = item.type;
     if (item.number != null) btn.dataset.sourceNumber = String(item.number);
     btn.dataset.sourceLabel = item.label;
+    if (item.notes) btn.dataset.sourceNotes = item.notes;
     btn.innerHTML = `<span class="tech-source-picker-item-label">${escapeHtml(item.label)}</span>${item.sub ? `<span class="tech-source-picker-item-sub">${escapeHtml(item.sub)}</span>` : ""}`;
     li.appendChild(btn);
     ul.appendChild(li);
@@ -1135,7 +1140,7 @@ function renderSourcePickerSection(title, items) {
   return section;
 }
 
-function applyZoneSource({ label, number }) {
+function applyZoneSource({ label, number, notes }) {
   const idx = state.activeZoneIndex;
   if (idx < 0) return;
   const zone = state.zones[idx];
@@ -1147,6 +1152,14 @@ function applyZoneSource({ label, number }) {
   // the WO entry now mirrors the customer's actual zone, not a placeholder.
   if (Number.isFinite(Number(number)) && Number(number) > 0) {
     zone.number = Number(number);
+  }
+  // Auto-populate notes from the property when the WO zone has no notes yet.
+  // We never overwrite tech-entered notes — that's their on-site work record.
+  const cleanNotes = String(notes || "").trim();
+  if (cleanNotes && !String(zone.notes || "").trim()) {
+    zone.notes = cleanNotes;
+    // Reflect in the open sheet's textarea so the tech sees the prefill.
+    if (sheetNotes) sheetNotes.value = cleanNotes;
   }
   // Reflect in the sheet header + zone list, then persist.
   sheetTitle.textContent = `Zone ${zone.number || "?"}`;
@@ -1173,7 +1186,8 @@ techSourcePickerBody?.addEventListener("click", (event) => {
   if (!btn) return;
   applyZoneSource({
     label: btn.dataset.sourceLabel || "",
-    number: btn.dataset.sourceNumber ? Number(btn.dataset.sourceNumber) : null
+    number: btn.dataset.sourceNumber ? Number(btn.dataset.sourceNumber) : null,
+    notes: btn.dataset.sourceNotes || ""
   });
 });
 document.getElementById("techSourcePickerCustomBtn")?.addEventListener("click", () => {
