@@ -84,15 +84,68 @@ const ZONE_CHECK_DEFS = [
 ];
 
 // Issue type catalog — keys map (loosely) to pricing.json categories
-// for the Tier-3 quote rollup. Mirrors the tech-mode dropdown.
+// for the Tier-3 quote rollup. Mirrors ZONE_ISSUE_TYPE_OPTIONS in
+// server/work-order-tech.js — KEEP IN SYNC.
 const ZONE_ISSUE_TYPE_OPTIONS = [
-  { value: "broken_head", label: "Broken head" },
+  { value: "broken_head", label: "Sprinkler head" },
   { value: "leak",        label: "Leak" },
   { value: "valve",       label: "Valve" },
   { value: "wire",        label: "Wire" },
   { value: "pipe",        label: "Pipe" },
+  { value: "controller",  label: "Controller" },
   { value: "other",       label: "Other" }
 ];
+
+// Cascading sub-type options. Mirrors ZONE_ISSUE_SUBTYPE_OPTIONS in
+// server/work-order-tech.js — KEEP IN SYNC.
+const ZONE_ISSUE_SUBTYPE_OPTIONS = {
+  broken_head: [
+    { value: "",             label: "— Select head model —" },
+    { value: "pgp_4",        label: "Hunter PGP (4\")" },
+    { value: "pgp_6",        label: "Hunter PGP (6\")" },
+    { value: "pgp_12",       label: "Hunter PGP (12\")" },
+    { value: "prospray_4",   label: "Hunter Pro-Spray (4\")" },
+    { value: "prospray_6",   label: "Hunter Pro-Spray (6\")" },
+    { value: "prospray_12",  label: "Hunter Pro-Spray (12\" mulch)" },
+    { value: "i20",          label: "Hunter I-20 rotor" },
+    { value: "mp_rotator",   label: "MP Rotator" },
+    { value: "drip",         label: "Drip emitter" },
+    { value: "other",        label: "Other head — see notes" }
+  ],
+  valve: [
+    { value: "",             label: "— Select valve fix —" },
+    { value: "pgv_full",     label: "Hunter PGV valve replacement + manifold rebuild" },
+    { value: "solenoid",     label: "Solenoid only" },
+    { value: "diaphragm",    label: "Diaphragm rebuild" },
+    { value: "other",        label: "Other valve fix — see notes" }
+  ],
+  wire: [
+    { value: "",             label: "— Select wire issue —" },
+    { value: "cut",          label: "Control wire cut" },
+    { value: "removed",      label: "Control wire removed" },
+    { value: "no_comms",     label: "Control wire not communicating with controller" },
+    { value: "splice",       label: "Splice failure / waterlogged connector" },
+    { value: "other",        label: "Other wire issue — see notes" }
+  ],
+  pipe: [
+    { value: "",             label: "— Select pipe size —" },
+    { value: "poly_1",       label: "1\" HDPE poly pipe break" },
+    { value: "poly_3_4",     label: "3/4\" HDPE poly pipe break" },
+    { value: "funny",        label: "1/2\" funny pipe break" },
+    { value: "other",        label: "Other pipe break — see notes" }
+  ],
+  controller: [
+    { value: "",             label: "— Select controller fix —" },
+    { value: "hpc_4",        label: "4-zone Hydrawise controller replaced" },
+    { value: "hpc_8",        label: "8-zone Hydrawise controller replaced" },
+    { value: "hpc_16",       label: "16-zone Hydrawise controller replaced" },
+    { value: "module",       label: "Zone-expansion module added" },
+    { value: "rain_sensor",  label: "Rain sensor added" },
+    { value: "other",        label: "Other controller fix — see notes" }
+  ],
+  leak:  [],
+  other: []
+};
 
 function makeIssueId() {
   return "iss_" + Math.random().toString(36).slice(2, 10) + "_" + Date.now();
@@ -449,14 +502,20 @@ function issueRowHtml(issue) {
   const optionsHtml = ZONE_ISSUE_TYPE_OPTIONS
     .map((t) => `<option value="${t.value}" ${t.value === issue.type ? "selected" : ""}>${escapeHtml(t.label)}</option>`)
     .join("");
+  const subOpts = ZONE_ISSUE_SUBTYPE_OPTIONS[issue.type] || [];
+  const subtypeOptionsHtml = subOpts
+    .map((s) => `<option value="${escapeHtml(s.value)}" ${s.value === (issue.subtype || "") ? "selected" : ""}>${escapeHtml(s.label)}</option>`)
+    .join("");
+  const subtypeHidden = subOpts.length === 0 ? "hidden" : "";
   const safeId = issue.id || makeIssueId();
   const issuePhotos = (loadedWorkOrder?.photos || []).filter((p) => p.issueId === safeId);
   const thumbsHtml = issuePhotos.map(photoThumbHtml).join("");
   return `
     <div class="wo-zone-issue" data-issue-id="${escapeHtml(safeId)}">
       <select class="wo-zone-issue-type" aria-label="Issue type">${optionsHtml}</select>
+      <select class="wo-zone-issue-subtype" aria-label="Specific item" ${subtypeHidden}>${subtypeOptionsHtml}</select>
       <input type="number" class="wo-zone-issue-qty" min="1" value="${escapeHtml(String(issue.qty || 1))}" aria-label="Quantity">
-      <input type="text" class="wo-zone-issue-notes" value="${escapeHtml(issue.notes || "")}" placeholder="Details (optional)" aria-label="Issue notes">
+      <input type="text" class="wo-zone-issue-notes" value="${escapeHtml(issue.notes || "")}" placeholder="Notes (optional)" aria-label="Issue notes">
       <button type="button" class="wo-zone-issue-remove" data-action="remove-issue" aria-label="Remove issue">×</button>
       <div class="wo-issue-photos" data-issue-photos="${escapeHtml(safeId)}">
         ${thumbsHtml}
@@ -560,6 +619,19 @@ woZones.addEventListener("change", async (event) => {
   if (event.target.matches(".wo-zone-status")) {
     const row = event.target.closest(".wo-zone-row");
     if (row) row.dataset.status = event.target.value;
+    return;
+  }
+  // Cascading subtype: when the type select changes, swap the subtype
+  // <select>'s options to match the new type's preset list. Resets the
+  // subtype value so leftover options from the old type don't persist.
+  if (event.target.matches(".wo-zone-issue-type")) {
+    const card = event.target.closest(".wo-zone-issue");
+    const subSel = card?.querySelector(".wo-zone-issue-subtype");
+    if (subSel) {
+      const opts = ZONE_ISSUE_SUBTYPE_OPTIONS[event.target.value] || [];
+      subSel.innerHTML = opts.map((s) => `<option value="${s.value}">${s.label.replace(/</g, "&lt;")}</option>`).join("");
+      subSel.hidden = opts.length === 0;
+    }
     return;
   }
   if (event.target.matches('[data-action="upload-issue-photo"]')) {
@@ -968,10 +1040,11 @@ function collectForm() {
       // Issues found — read each issue row's type/qty/notes. The id is
       // preserved so the server can dedupe / track audit history.
       const issues = Array.from(row.querySelectorAll(".wo-zone-issue")).map((card) => ({
-        id:    card.dataset.issueId || makeIssueId(),
-        type:  card.querySelector(".wo-zone-issue-type")?.value || "other",
-        qty:   Math.max(1, Math.floor(Number(card.querySelector(".wo-zone-issue-qty")?.value) || 1)),
-        notes: (card.querySelector(".wo-zone-issue-notes")?.value || "").trim()
+        id:      card.dataset.issueId || makeIssueId(),
+        type:    card.querySelector(".wo-zone-issue-type")?.value || "other",
+        subtype: card.querySelector(".wo-zone-issue-subtype")?.value || "",
+        qty:     Math.max(1, Math.floor(Number(card.querySelector(".wo-zone-issue-qty")?.value) || 1)),
+        notes:   (card.querySelector(".wo-zone-issue-notes")?.value || "").trim()
       }));
 
       return {

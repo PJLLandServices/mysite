@@ -377,6 +377,31 @@ async function create({ type, lead, property, customId, quote = null }) {
     }
   }
 
+  // Always scaffold AT LEAST one zone — without it, the tech can't log
+  // any issues (issues are nested under zones). Three cases this catches:
+  //   1. service_visit — never scaffolds from property; gets a "General"
+  //      zone so the repair-only tech has a place to log work.
+  //   2. spring_opening / fall_closing on a NEW customer where the
+  //      property zone list is still empty — same problem; tech needs
+  //      a place to record what they saw on first arrival.
+  //   3. ad-hoc WOs spun up from /admin/handoff with no property link.
+  // Tech can rename / add more zones once on-site. The placeholder uses
+  // number 1 so the WO numbering stays sane.
+  if (!wo.zones.length) {
+    const blankChecks = {};
+    for (const k of ZONE_CHECK_KEYS) blankChecks[k] = false;
+    wo.zones = [{
+      number: 1,
+      location: type === "service_visit" ? "General service area" : "Zone 1",
+      sprinklerTypes: [],
+      coverage: [],
+      status: "",
+      notes: "",
+      checks: { ...blankChecks },
+      issues: []
+    }];
+  }
+
   if (lead) {
     wo.leadId = lead.id;
     wo.customerName  = wo.customerName  || lead.name  || "";
