@@ -713,8 +713,12 @@ html, body {
    instance reused across opens. Width clamped on phones so it doesn't
    run off-screen. */
 .tech-zone-picker-menu {
-  position: absolute;
-  z-index: 80;
+  /* Fixed (not absolute) so position math against the badge's
+     getBoundingClientRect — already viewport-relative — doesn't need scroll
+     adjustment. Sits above .tech-sheet (z-index: 100) so the menu can't be
+     hidden behind the open zone sheet. */
+  position: fixed;
+  z-index: 110;
   background: #fff;
   border: 1px solid var(--tech-border);
   border-radius: 12px;

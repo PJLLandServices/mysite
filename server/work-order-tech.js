@@ -1129,13 +1129,12 @@ function ensureZonePickerMenu() {
 
 function positionZonePickerMenu(triggerBtn) {
   const rect = triggerBtn.getBoundingClientRect();
-  // Anchor below the trigger; clamp so the menu can't run off the right
-  // edge on a narrow phone (the bottom-sheet card is full viewport width).
-  const desiredLeft = rect.left + window.scrollX;
-  const maxRight = window.scrollX + window.innerWidth - 8;
+  // Menu is position: fixed → coords are viewport-relative, no scroll math.
+  // Clamp so the menu can't run off the right edge on a narrow phone.
   const menuWidth = Math.min(window.innerWidth - 16, 360);
-  zonePickerMenu.style.top  = `${rect.bottom + window.scrollY + 6}px`;
-  zonePickerMenu.style.left = `${Math.min(desiredLeft, maxRight - menuWidth)}px`;
+  const maxLeft = window.innerWidth - 8 - menuWidth;
+  zonePickerMenu.style.top  = `${rect.bottom + 6}px`;
+  zonePickerMenu.style.left = `${Math.max(8, Math.min(rect.left, maxLeft))}px`;
   zonePickerMenu.style.minWidth = `${Math.max(rect.width, 220)}px`;
   zonePickerMenu.style.maxWidth = `${menuWidth}px`;
 }
