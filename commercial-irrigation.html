@@ -84,8 +84,98 @@
 </script>
 
 <style>
-.cm-hero { padding: 156px 0 80px; background: radial-gradient(ellipse 60% 55% at 20% 20%, rgba(74,140,92,0.30), transparent 60%), radial-gradient(ellipse 55% 50% at 85% 80%, rgba(224,123,36,0.18), transparent 60%), linear-gradient(135deg, var(--dark) 0%, var(--green) 70%, var(--green-mid) 100%); position: relative; overflow: hidden; }
-.cm-hero-inner { position: relative; z-index: 2; max-width: 820px; }
+.cm-hero {
+  padding: 156px 0 80px;
+  position: relative;
+  overflow: hidden;
+  min-height: 640px;
+  background:
+    radial-gradient(ellipse 60% 55% at 20% 20%, rgba(74,140,92,0.30), transparent 60%),
+    radial-gradient(ellipse 55% 50% at 85% 80%, rgba(224,123,36,0.18), transparent 60%),
+    linear-gradient(135deg, var(--dark) 0%, var(--green) 70%, var(--green-mid) 100%);
+  isolation: isolate;
+}
+/* 2-zone hero: gradient + content card on left, hydrangea/drip-bed
+   pan video on the right (real camera motion -- video-worthy). */
+.cm-hero__bg {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 67%;
+  height: 100%;
+  object-fit: cover;
+  /* Source 1080x1920 portrait. Drip line runs along the bottom of
+     the frame (y=80-95% of source). center 75% lifts that band into
+     view past the card without losing the upper hydrangea blooms. */
+  object-position: center 75%;
+  z-index: 0;
+  opacity: 1;
+  filter: saturate(1.12) contrast(1.06);
+  pointer-events: none;
+  -webkit-mask-image: linear-gradient(90deg,
+    transparent 0%,
+    rgba(0, 0, 0, 0.18) 4%,
+    rgba(0, 0, 0, 0.55) 12%,
+    rgba(0, 0, 0, 0.85) 20%,
+    black 28%,
+    black 100%);
+  mask-image: linear-gradient(90deg,
+    transparent 0%,
+    rgba(0, 0, 0, 0.18) 4%,
+    rgba(0, 0, 0, 0.55) 12%,
+    rgba(0, 0, 0, 0.85) 20%,
+    black 28%,
+    black 100%);
+}
+.cm-hero-inner {
+  position: relative;
+  z-index: 2;
+  max-width: 820px;
+  background: rgba(15, 31, 20, 0.48);
+  -webkit-backdrop-filter: blur(10px) saturate(1.15);
+  backdrop-filter: blur(10px) saturate(1.15);
+  padding: clamp(24px, 3.6vw, 40px) clamp(22px, 3.6vw, 40px);
+  border-radius: clamp(12px, 1.6vw, 20px);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.20);
+}
+.cm-hero h1,
+.cm-hero p,
+.cm-hero-meta,
+.cm-eyebrow,
+.cm-hero .breadcrumbs {
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.40);
+}
+.cm-hero h1 em {
+  text-shadow: none;
+}
+@media (max-width: 1024px) and (min-width: 769px) {
+  .cm-hero__bg { width: 58%; }
+}
+@media (max-width: 768px) {
+  .cm-hero {
+    min-height: 580px;
+  }
+  .cm-hero__bg {
+    width: 100%;
+    -webkit-mask-image: none;
+    mask-image: none;
+    object-position: center 75%;
+    z-index: -2;
+  }
+  .cm-hero::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    background:
+      radial-gradient(ellipse 60% 55% at 20% 20%, rgba(74,140,92,0.30), transparent 65%),
+      linear-gradient(135deg, rgba(15,31,20,0.62) 0%, rgba(27,77,46,0.50) 50%, rgba(45,106,66,0.40) 100%);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cm-hero__bg { display: none; }
+}
 .breadcrumbs { font-size: 13px; color: rgba(255,255,255,0.65); margin-bottom: 18px; display: flex; gap: 8px; flex-wrap: wrap; }
 .breadcrumbs a { color: rgba(255,255,255,0.85); }
 .breadcrumbs a:hover { color: var(--amber-light); }
@@ -182,6 +272,9 @@
 
 <!-- Hero -->
 <section class="cm-hero">
+  <video class="cm-hero__bg" autoplay loop muted playsinline preload="auto" aria-hidden="true">
+    <source src="commercial-bed-drip.mp4" type="video/mp4">
+  </video>
   <div class="container cm-hero-inner">
     <div class="breadcrumbs"><a href="index.html">Home</a><span>›</span><a href="sprinkler-systems.html">Sprinklers</a><span>›</span><span>Commercial Irrigation</span></div>
     <span class="cm-eyebrow">Commercial · Newmarket &amp; GTA · Scheduled Maintenance</span>
