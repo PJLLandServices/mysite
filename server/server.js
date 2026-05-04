@@ -51,6 +51,8 @@ const issueRollup = require("./lib/issue-rollup");
 const { generateQuotePdf } = require("./lib/quote-pdf");
 const quickbooks = require("./lib/quickbooks");
 const bookings = require("./lib/bookings");
+const suppliers = require("./lib/suppliers");
+const materialLists = require("./lib/material-lists");
 
 // Short, customer-friendly work order ID. Eight chars from a UUIDv4 base32-ish
 // alphabet (no I/O/0/1 to keep them unambiguous when read aloud or hand-written).
@@ -290,6 +292,10 @@ function needsAuth(method, pathname) {
   if (pathname === "/api/admin/quote-folder") return true;
   if (/^\/admin\/invoice\/[^/]+\/?$/.test(pathname)) return true;
   if (pathname === "/admin/settings" || pathname === "/admin/settings/") return true;
+  // Materials management (Phase 1 of the BoM/PO system).
+  if (pathname === "/admin/suppliers" || pathname === "/admin/suppliers/") return true;
+  if (pathname === "/admin/material-lists" || pathname === "/admin/material-lists/") return true;
+  if (/^\/admin\/material-list\/[^/]+\/?$/.test(pathname)) return true;
   if (pathname === "/api/quotes" && method === "GET") return true;
   if (pathname === "/api/quotes.csv" || pathname === "/api/contacts" || pathname === "/api/contacts.vcf") return true;
   if (/^\/api\/quotes\/[^/]+/.test(pathname)) return true;
@@ -313,6 +319,8 @@ function needsAuth(method, pathname) {
   if (pathname === "/api/parts") return true;
   if (pathname.startsWith("/api/admin/quickbooks")) return true;
   if (pathname.startsWith("/api/bookings")) return true;
+  if (pathname.startsWith("/api/suppliers")) return true;
+  if (pathname.startsWith("/api/material-lists")) return true;
   // Per-lead property link/dismiss/attach + tech actions are admin-only.
   if (/^\/api\/leads\/[^/]+\/(link-property|dismiss-property-suggestion|attach-property|notify-on-route|open-wo)$/.test(pathname)) return true;
   // Bulk property import is admin-only.
@@ -3842,6 +3850,121 @@ async function handleApi(req, res, pathname) {
     }
   }
 
+  // ---------- Suppliers ---------------------------------------------
+  // Phase 1 of the materials management system. Vendors PJL buys from;
+  // referenced from each part in parts.json via supplierIds[]. Used in
+  // Phase 3 to group "need" lines into per-supplier purchase orders.
+
+  if (req.method === "GET" && pathname === "/api/suppliers") {
+    const url = new URL(req.url, baseUrlFromReq(req));
+    const includeArchived = url.searchParams.get("includeArchived") === "1";
+    const all = await suppliers.list({ includeArchived });
+    return sendJson(res, 200, { ok: true, suppliers: all });
+  }
+
+  if (req.method === "POST" && pathname === "/api/suppliers") {
+    try {
+      const payload = await parseRequestBody(req);
+      const created = await suppliers.create(payload);
+      return sendJson(res, 201, { ok: true, supplier: created });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't create supplier."] });
+    }
+  }
+
+  const supplierMatch = pathname.match(/^\/api\/suppliers\/([^/]+)$/);
+  if (supplierMatch && req.method === "GET") {
+    const supplier = await suppliers.get(decodeURIComponent(supplierMatch[1]));
+    if (!supplier) return sendJson(res, 404, { ok: false, errors: ["Supplier not found."] });
+    return sendJson(res, 200, { ok: true, supplier });
+  }
+  if (supplierMatch && req.method === "PATCH") {
+    try {
+      const id = decodeURIComponent(supplierMatch[1]);
+      const payload = await parseRequestBody(req);
+      const updated = await suppliers.update(id, payload);
+      if (!updated) return sendJson(res, 404, { ok: false, errors: ["Supplier not found."] });
+      return sendJson(res, 200, { ok: true, supplier: updated });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't update supplier."] });
+    }
+  }
+
+  // Archive toggle — POST /api/suppliers/:id/archive { archived: bool }.
+  // Soft-delete via archived flag rather than hard DELETE; Phase 3 POs
+  // reference supplierId and we don't want a removed supplier to leave
+  // dangling references on PO records.
+  const supplierArchiveMatch = pathname.match(/^\/api\/suppliers\/([^/]+)\/archive$/);
+  if (supplierArchiveMatch && req.method === "POST") {
+    try {
+      const id = decodeURIComponent(supplierArchiveMatch[1]);
+      const payload = await parseRequestBody(req);
+      const updated = await suppliers.setArchived(id, !!payload.archived);
+      if (!updated) return sendJson(res, 404, { ok: false, errors: ["Supplier not found."] });
+      return sendJson(res, 200, { ok: true, supplier: updated });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't update supplier."] });
+    }
+  }
+
+  // ---------- Material Lists ----------------------------------------
+  // The bill-of-materials document. Standalone in Phase 1; Phase 2 wires
+  // parent attachment to projects/work-orders/quotes; Phase 3 generates
+  // POs from "need" lines grouped by supplier.
+
+  if (req.method === "GET" && pathname === "/api/material-lists") {
+    const url = new URL(req.url, baseUrlFromReq(req));
+    const status = url.searchParams.get("status");
+    const parentType = url.searchParams.get("parentType");
+    const parentId = url.searchParams.get("parentId");
+    const includeArchived = url.searchParams.get("includeArchived") === "1";
+    const withTotals = url.searchParams.get("withTotals") === "1";
+    const all = await materialLists.list({ status, parentType, parentId, includeArchived });
+    // Newest-first index — same convention as invoices/quotes.
+    all.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
+    if (!withTotals) return sendJson(res, 200, { ok: true, lists: all });
+    const partsMap = (PARTS && PARTS.parts) || {};
+    const enriched = all.map((rec) => ({ ...rec, totals: materialLists.computeTotals(rec, partsMap) }));
+    return sendJson(res, 200, { ok: true, lists: enriched });
+  }
+
+  if (req.method === "POST" && pathname === "/api/material-lists") {
+    try {
+      const payload = await parseRequestBody(req);
+      const created = await materialLists.create(payload);
+      return sendJson(res, 201, { ok: true, list: created });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't create material list."] });
+    }
+  }
+
+  const listMatch = pathname.match(/^\/api\/material-lists\/([^/]+)$/);
+  if (listMatch && req.method === "GET") {
+    const id = decodeURIComponent(listMatch[1]);
+    const rec = await materialLists.get(id);
+    if (!rec) return sendJson(res, 404, { ok: false, errors: ["Material list not found."] });
+    const partsMap = (PARTS && PARTS.parts) || {};
+    return sendJson(res, 200, { ok: true, list: rec, totals: materialLists.computeTotals(rec, partsMap) });
+  }
+  if (listMatch && req.method === "PATCH") {
+    try {
+      const id = decodeURIComponent(listMatch[1]);
+      const payload = await parseRequestBody(req);
+      const updated = await materialLists.update(id, payload);
+      if (!updated) return sendJson(res, 404, { ok: false, errors: ["Material list not found."] });
+      const partsMap = (PARTS && PARTS.parts) || {};
+      return sendJson(res, 200, { ok: true, list: updated, totals: materialLists.computeTotals(updated, partsMap) });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't update material list."] });
+    }
+  }
+  if (listMatch && req.method === "DELETE") {
+    const id = decodeURIComponent(listMatch[1]);
+    const removed = await materialLists.remove(id);
+    if (!removed) return sendJson(res, 404, { ok: false, errors: ["Material list not found."] });
+    return sendJson(res, 200, { ok: true, removed });
+  }
+
   if (req.method === "GET" && pathname === "/api/work-orders") {
     const url = new URL(req.url, baseUrlFromReq(req));
     const propertyId = url.searchParams.get("propertyId");
@@ -5827,6 +5950,19 @@ function resolveStaticTarget(pathname) {
   }
   if (pathname === "/admin/settings" || pathname === "/admin/settings/") {
     return { dir: SERVER_DIR, relative: "/settings.html" };
+  }
+  // Materials management (Phase 1 of the BoM/PO system). Suppliers index,
+  // Material Lists index, and per-list builder. The builder regex must come
+  // BEFORE the index match isn't strictly necessary (different paths) but
+  // keeps the file predictable.
+  if (pathname === "/admin/suppliers" || pathname === "/admin/suppliers/") {
+    return { dir: SERVER_DIR, relative: "/suppliers.html" };
+  }
+  if (pathname === "/admin/material-lists" || pathname === "/admin/material-lists/") {
+    return { dir: SERVER_DIR, relative: "/material-lists.html" };
+  }
+  if (/^\/admin\/material-list\/[^/]+\/?$/.test(pathname)) {
+    return { dir: SERVER_DIR, relative: "/material-list.html" };
   }
   // Tech-mode pop-out — mobile-first, tap-optimized layout. Same WO id,
   // different page. Route check must come BEFORE the desktop editor's

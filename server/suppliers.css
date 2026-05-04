@@ -1,0 +1,279 @@
+/* Suppliers admin — Phase 1 of materials management.
+   Card-based list (no responsive-table reflow), inline form for new/edit.
+   Mobile-first: works at every width without a horizontal scroll.
+   Touch targets are >= 44px on the action row. */
+
+.suppliers-body { background: #FAFAF5; }
+
+.suppliers-shell {
+  max-width: 880px;
+  margin: 0 auto;
+  padding: 18px 16px 96px;
+}
+
+@media (min-width: 720px) {
+  .suppliers-shell { padding: 28px 24px 96px; }
+}
+
+/* Sub-nav between Material Lists and Suppliers (Materials tab in the
+   sidebar lands on the Lists index by default; Suppliers is reachable
+   from this strip). */
+.suppliers-subnav {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 14px;
+  border-bottom: 1px solid #E2E0D4;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.suppliers-subnav a {
+  padding: 12px 16px;
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.10em;
+  text-transform: uppercase;
+  color: #7A7A72;
+  text-decoration: none;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  white-space: nowrap;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+}
+.suppliers-subnav a:hover { color: #1B4D2E; }
+.suppliers-subnav a.is-active {
+  color: #1B4D2E;
+  border-bottom-color: #1B4D2E;
+}
+
+.suppliers-explainer {
+  background: #FCFBF4;
+  border: 1px solid #E2E0D4;
+  border-radius: 12px;
+  padding: 14px 16px;
+  margin-bottom: 16px;
+  font-size: 14px;
+  color: #4A4A44;
+  line-height: 1.5;
+}
+.suppliers-explainer strong { color: #1B4D2E; }
+
+.suppliers-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.suppliers-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  color: #4A4A44;
+  cursor: pointer;
+  min-height: 44px;
+}
+.suppliers-toggle input {
+  width: 18px; height: 18px;
+}
+
+/* New / edit form */
+.supplier-form {
+  background: #fff;
+  border: 1px solid #E2E0D4;
+  border-radius: 12px;
+  padding: 16px;
+  margin-bottom: 18px;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.03);
+}
+.supplier-form h2 {
+  margin: 0 0 14px;
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: #1B4D2E;
+}
+.supplier-form-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+}
+@media (min-width: 640px) {
+  .supplier-form-grid { grid-template-columns: 1fr 1fr; }
+  .supplier-field--wide { grid-column: 1 / -1; }
+}
+.supplier-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.supplier-field span {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #4A4A44;
+}
+.supplier-field span small {
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+  color: #7A7A72;
+  margin-left: 6px;
+}
+.supplier-field abbr {
+  color: #B23A2E;
+  text-decoration: none;
+}
+.supplier-field input,
+.supplier-field textarea {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid #D8D5C5;
+  border-radius: 8px;
+  font: inherit;
+  background: #FCFBF4;
+  min-height: 44px;
+}
+.supplier-field input:focus,
+.supplier-field textarea:focus {
+  border-color: #1B4D2E;
+  outline: 2px solid rgba(27,77,46,0.15);
+  outline-offset: 0;
+}
+.supplier-field textarea {
+  resize: vertical;
+  min-height: 80px;
+}
+.supplier-form-error {
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  background: #FBEAE7;
+  color: #8A2A1F;
+  border-radius: 8px;
+  font-size: 14px;
+}
+.supplier-form-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 16px;
+  flex-wrap: wrap;
+}
+
+/* Supplier card list */
+.suppliers-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.supplier-card {
+  background: #fff;
+  border: 1px solid #E2E0D4;
+  border-radius: 12px;
+  padding: 14px 16px;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px 16px;
+  align-items: start;
+}
+.supplier-card.is-archived { opacity: 0.55; }
+.supplier-card-name {
+  margin: 0;
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: #1F2A22;
+}
+.supplier-card-id {
+  display: inline-block;
+  font-family: ui-monospace, "SFMono-Regular", monospace;
+  font-size: 11px;
+  color: #7A7A72;
+  margin-left: 8px;
+  vertical-align: middle;
+}
+.supplier-card-archived-badge {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #E8E5D7;
+  color: #4A4A44;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.supplier-card-meta {
+  grid-column: 1 / 2;
+  font-size: 14px;
+  color: #4A4A44;
+  line-height: 1.5;
+}
+.supplier-card-meta a {
+  color: #1B4D2E;
+  text-decoration: none;
+}
+.supplier-card-meta a:hover { text-decoration: underline; }
+.supplier-card-notes {
+  grid-column: 1 / -1;
+  margin: 6px 0 0;
+  padding: 8px 12px;
+  background: #FCFBF4;
+  border-left: 3px solid #C7C0A8;
+  border-radius: 4px;
+  font-size: 13px;
+  color: #4A4A44;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.supplier-card-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: flex-end;
+}
+.supplier-card-actions button {
+  min-height: 44px;
+  min-width: 88px;
+  padding: 8px 14px;
+  border-radius: 8px;
+  border: 1px solid #C7C0A8;
+  background: #fff;
+  cursor: pointer;
+  font-size: 13px;
+  color: #1F2A22;
+}
+.supplier-card-actions button:hover { background: #F5F2E5; }
+.supplier-card-actions .is-danger { color: #8A2A1F; border-color: #E8C9C2; }
+.supplier-card-actions .is-danger:hover { background: #FBEAE7; }
+
+@media (max-width: 480px) {
+  .supplier-card {
+    grid-template-columns: 1fr;
+  }
+  .supplier-card-actions {
+    flex-direction: row;
+    align-items: stretch;
+  }
+  .supplier-card-actions button {
+    flex: 1;
+  }
+}
+
+.suppliers-empty {
+  padding: 32px 16px;
+  text-align: center;
+  color: #7A7A72;
+  background: #fff;
+  border: 1px dashed #C7C0A8;
+  border-radius: 12px;
+}

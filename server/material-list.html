@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#0F1F14">
+  <title>Material list — PJL</title>
+  <link rel="icon" type="image/svg+xml" href="/crm/pjl-logo-mark.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/crm/crm.css">
+  <link rel="stylesheet" href="/crm/crm-parts.css">
+  <link rel="stylesheet" href="/crm/material-lists.css">
+  <link rel="stylesheet" href="/crm/material-list.css">
+</head>
+<body class="pjl-crm-body suppliers-body">
+  <aside class="pjl-admin-nav" id="navMenu" aria-label="PJL CRM Navigation">
+    <header class="pjl-side-brand">
+      <a href="/" class="pjl-side-logo"><img src="/crm/pjl-logo.svg" alt="PJL Land Services"></a>
+    </header>
+    <div class="pjl-nav-links">
+      <a href="/admin/today">Today</a>
+      <a href="/admin">CRM</a>
+      <a href="/admin/schedule">Schedule</a>
+      <a href="/admin/handoff">Handoff</a>
+      <a href="/admin/properties">Properties</a>
+      <a href="/admin/quote-folder">Quotes</a>
+      <a href="/admin/invoices">Invoices</a>
+      <a href="/admin/material-lists" class="is-active">Materials</a>
+      <a href="/admin/chats">AI Chats</a>
+      <a href="/admin/settings">Settings</a>
+    </div>
+    <footer class="pjl-side-footer">
+      <a class="pjl-side-phone" href="tel:+19059600181">(905) 960-0181</a>
+      <button class="pjl-nav-logout" type="button" id="logoutButton">Log out</button>
+    </footer>
+  </aside>
+
+  <div class="pjl-app">
+    <header class="pjl-app-topbar">
+      <button class="pjl-nav-toggle" type="button" id="navToggle" aria-label="Menu" aria-expanded="false" aria-controls="navMenu">
+        <span class="pjl-nav-toggle-bar"></span>
+        <span class="pjl-nav-toggle-bar"></span>
+        <span class="pjl-nav-toggle-bar"></span>
+      </button>
+      <span class="pjl-app-title">Material list</span>
+      <a class="pjl-app-phone" href="tel:+19059600181">(905) 960-0181</a>
+    </header>
+
+    <main class="mlb-shell">
+      <a class="mlb-back" href="/admin/material-lists">&larr; All material lists</a>
+
+      <p class="mlb-loading" id="mlbLoading">Loading…</p>
+      <p class="mlb-error" id="mlbError" role="alert" hidden></p>
+
+      <section class="mlb-page" id="mlbPage" hidden>
+        <!-- Header card: editable name + customer + status pill + meta + archive/restore -->
+        <section class="mlb-header">
+          <div class="mlb-header-id">
+            <span id="mlbId"></span>
+            <span class="ml-status" id="mlbStatus"></span>
+          </div>
+          <label class="mlb-name-field">
+            <span>List name</span>
+            <input type="text" id="mlbName" maxlength="200" placeholder="Untitled material list">
+          </label>
+          <div class="mlb-customer-grid">
+            <label>
+              <span>Customer name</span>
+              <input type="text" id="mlbCustomerName" maxlength="200" placeholder="—">
+            </label>
+            <label>
+              <span>Customer email</span>
+              <input type="email" id="mlbCustomerEmail" maxlength="254" placeholder="—">
+            </label>
+            <label class="mlb-customer-wide">
+              <span>Address</span>
+              <input type="text" id="mlbAddress" maxlength="400" placeholder="—">
+            </label>
+            <label class="mlb-customer-wide">
+              <span>Notes</span>
+              <textarea id="mlbNotes" rows="2" maxlength="4000" placeholder="Internal notes (not on POs)."></textarea>
+            </label>
+          </div>
+          <p class="mlb-parent-note" id="mlbParentNote" hidden></p>
+        </section>
+
+        <!-- Line items the user has added -->
+        <section class="mlb-lines-section" aria-label="Line items">
+          <div class="mlb-section-head">
+            <h2>Line items</h2>
+            <span class="mlb-line-count" id="mlbLineCount">0 lines</span>
+          </div>
+          <p class="mlb-empty" id="mlbLinesEmpty">No items yet — search below or browse the catalog.</p>
+          <ul class="mlb-lines" id="mlbLines"></ul>
+        </section>
+
+        <!-- Add items: search + browse catalog -->
+        <section class="mlb-add-section" aria-label="Add items">
+          <div class="mlb-section-head">
+            <h2>Add items</h2>
+          </div>
+          <input type="search" class="mlb-search" id="mlbSearch" placeholder="Search SKU, part #, or description" autocomplete="off">
+          <p class="mlb-search-hint" id="mlbSearchHint" hidden></p>
+          <div class="mlb-search-results" id="mlbSearchResults"></div>
+          <details class="mlb-browse" id="mlbBrowse">
+            <summary>Browse the catalog by category</summary>
+            <div id="mlbCatalogTree"></div>
+          </details>
+        </section>
+
+        <!-- Footer actions -->
+        <section class="mlb-footer-actions">
+          <button type="button" class="pjl-btn pjl-btn-outline" id="mlbArchiveButton">Archive list</button>
+          <button type="button" class="pjl-btn pjl-btn-outline is-danger" id="mlbDeleteButton">Delete list</button>
+        </section>
+      </section>
+    </main>
+  </div>
+
+  <!-- Sticky save bar — present once #mlbPage is shown -->
+  <div class="mlb-savebar" id="mlbSavebar" hidden>
+    <div class="mlb-savebar-inner">
+      <div class="mlb-savebar-totals">
+        <span class="mlb-savebar-need" id="mlbSaveNeed"></span>
+        <span class="mlb-savebar-have" id="mlbSaveHave"></span>
+      </div>
+      <div class="mlb-savebar-status">
+        <span class="mlb-savebar-total" id="mlbSaveTotal">$0.00</span>
+        <span class="mlb-savebar-savestate" id="mlbSaveState">Saved</span>
+      </div>
+    </div>
+  </div>
+
+  <script src="/crm/crm-nav.js"></script>
+  <script src="/crm/material-list.js"></script>
+</body>
+</html>

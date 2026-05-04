@@ -1,0 +1,165 @@
+/* Material Lists index — Phase 1.
+   Card-based list. Reuses .suppliers-shell, .suppliers-subnav,
+   .suppliers-explainer, .suppliers-toolbar, .supplier-form (for the
+   New-list mini-form) from suppliers.css. This file adds the search
+   input, status filter pills, and the list-card layout. */
+
+.ml-search {
+  flex: 1 1 220px;
+  min-width: 200px;
+  padding: 10px 14px;
+  border: 1px solid #D8D5C5;
+  border-radius: 8px;
+  font: inherit;
+  background: #FCFBF4;
+  min-height: 44px;
+}
+.ml-search:focus {
+  border-color: #1B4D2E;
+  outline: 2px solid rgba(27,77,46,0.15);
+  outline-offset: 0;
+}
+
+/* Status filter pills (mirrors invoices.css filter row pattern) */
+.ml-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 14px;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.ml-filters button {
+  padding: 8px 14px;
+  border: 1px solid #C7C0A8;
+  border-radius: 999px;
+  background: #fff;
+  cursor: pointer;
+  font-size: 13px;
+  color: #4A4A44;
+  white-space: nowrap;
+  min-height: 36px;
+}
+.ml-filters button.is-active {
+  background: #1B4D2E;
+  color: #fff;
+  border-color: #1B4D2E;
+}
+.ml-filters button:hover:not(.is-active) {
+  background: #F5F2E5;
+}
+
+/* Card grid */
+.ml-cards {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.ml-card {
+  background: #fff;
+  border: 1px solid #E2E0D4;
+  border-radius: 12px;
+  padding: 0;
+  overflow: hidden;
+  transition: box-shadow 120ms ease, border-color 120ms ease;
+}
+.ml-card:hover { box-shadow: 0 2px 6px rgba(0,0,0,0.06); border-color: #C7C0A8; }
+.ml-card.is-archived { opacity: 0.6; }
+
+.ml-card-link {
+  display: block;
+  padding: 14px 16px;
+  color: inherit;
+  text-decoration: none;
+}
+
+.ml-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px 12px;
+  margin-bottom: 8px;
+}
+.ml-card-name {
+  margin: 0;
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: #1F2A22;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.ml-card-id {
+  font-family: ui-monospace, "SFMono-Regular", monospace;
+  font-size: 11px;
+  color: #7A7A72;
+}
+.ml-status {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.ml-status--draft       { background: #F0EEE3; color: #4A4A44; }
+.ml-status--in_progress { background: #FFF1D6; color: #7A5500; }
+.ml-status--complete    { background: #DDEDD0; color: #1B4D2E; }
+.ml-status--archived    { background: #E8E5D7; color: #4A4A44; }
+
+.ml-card-meta {
+  font-size: 13px;
+  color: #4A4A44;
+  line-height: 1.5;
+}
+.ml-card-meta strong { color: #1F2A22; }
+
+.ml-card-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid #F0EEE3;
+  font-size: 13px;
+  color: #4A4A44;
+}
+.ml-stat {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+}
+.ml-stat-num {
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 18px;
+  font-weight: 700;
+  color: #1F2A22;
+}
+.ml-stat-num--need    { color: #7A5500; }
+.ml-stat-num--have    { color: #1B4D2E; }
+.ml-stat-num--ordered { color: #1F4D7A; }
+.ml-stat-label {
+  text-transform: uppercase;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  color: #7A7A72;
+}
+.ml-card-total {
+  margin-left: auto;
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 20px;
+  font-weight: 700;
+  color: #1B4D2E;
+}
+
+@media (max-width: 480px) {
+  .ml-card-head { gap: 6px; }
+  .ml-card-name { font-size: 16px; }
+  .ml-card-stats { gap: 6px 12px; }
+  .ml-card-total { font-size: 18px; flex-basis: 100%; text-align: right; }
+}
