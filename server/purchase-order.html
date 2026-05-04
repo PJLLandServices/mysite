@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#0F1F14">
+  <title>Purchase order — PJL</title>
+  <link rel="icon" type="image/svg+xml" href="/crm/pjl-logo-mark.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/crm/crm.css">
+  <link rel="stylesheet" href="/crm/material-lists.css">
+  <link rel="stylesheet" href="/crm/projects.css">
+  <link rel="stylesheet" href="/crm/purchase-orders.css">
+  <link rel="stylesheet" href="/crm/purchase-order.css">
+</head>
+<body class="pjl-crm-body suppliers-body">
+  <aside class="pjl-admin-nav" id="navMenu" aria-label="PJL CRM Navigation">
+    <header class="pjl-side-brand">
+      <a href="/" class="pjl-side-logo"><img src="/crm/pjl-logo.svg" alt="PJL Land Services"></a>
+    </header>
+    <div class="pjl-nav-links">
+      <a href="/admin/today">Today</a>
+      <a href="/admin">CRM</a>
+      <a href="/admin/schedule">Schedule</a>
+      <a href="/admin/handoff">Handoff</a>
+      <a href="/admin/properties">Properties</a>
+      <a href="/admin/projects">Projects</a>
+      <a href="/admin/quote-folder">Quotes</a>
+      <a href="/admin/invoices">Invoices</a>
+      <a href="/admin/material-lists" class="is-active">Materials</a>
+      <a href="/admin/chats">AI Chats</a>
+      <a href="/admin/settings">Settings</a>
+    </div>
+    <footer class="pjl-side-footer">
+      <a class="pjl-side-phone" href="tel:+19059600181">(905) 960-0181</a>
+      <button class="pjl-nav-logout" type="button" id="logoutButton">Log out</button>
+    </footer>
+  </aside>
+
+  <div class="pjl-app">
+    <header class="pjl-app-topbar">
+      <button class="pjl-nav-toggle" type="button" id="navToggle" aria-label="Menu" aria-expanded="false" aria-controls="navMenu">
+        <span class="pjl-nav-toggle-bar"></span>
+        <span class="pjl-nav-toggle-bar"></span>
+        <span class="pjl-nav-toggle-bar"></span>
+      </button>
+      <span class="pjl-app-title">Purchase order</span>
+      <a class="pjl-app-phone" href="tel:+19059600181">(905) 960-0181</a>
+    </header>
+
+    <main class="proj-shell">
+      <a class="proj-back" href="/admin/purchase-orders">&larr; All purchase orders</a>
+      <p class="mlb-loading" id="poLoading">Loading…</p>
+      <p class="mlb-error" id="poError" role="alert" hidden></p>
+
+      <section id="poPage" hidden>
+        <section class="proj-header">
+          <div class="proj-header-id">
+            <span class="proj-header-id-text" id="poId"></span>
+            <span class="po-status" id="poStatus"></span>
+            <span class="proj-header-source" id="poSourceList"></span>
+            <a class="proj-header-source" id="poPdfLink" target="_blank" rel="noopener" hidden>📄 Download PDF</a>
+          </div>
+
+          <h2 style="margin:0 0 8px;font-family:'Barlow Condensed',sans-serif;color:#1B4D2E;font-size:18px;letter-spacing:0.06em;text-transform:uppercase">Vendor</h2>
+          <div class="proj-fields">
+            <label>
+              <span>Supplier name</span>
+              <input type="text" id="poSupplierName" maxlength="200">
+            </label>
+            <label>
+              <span>Contact name</span>
+              <input type="text" id="poSupplierContactName" maxlength="120">
+            </label>
+            <label>
+              <span>Email <small style="color:#7A7A72">(used for send)</small></span>
+              <input type="email" id="poSupplierEmail" maxlength="254">
+            </label>
+            <label>
+              <span>Phone</span>
+              <input type="tel" id="poSupplierPhone" maxlength="40">
+            </label>
+            <label class="proj-fields-wide">
+              <span>Address</span>
+              <input type="text" id="poSupplierAddress" maxlength="400">
+            </label>
+            <label class="proj-fields-wide">
+              <span>Notes (printed on PDF)</span>
+              <textarea id="poNotes" rows="2" maxlength="4000" placeholder="Special instructions for this PO."></textarea>
+            </label>
+            <label class="proj-fields-wide">
+              <span>Internal notes (not on PDF)</span>
+              <textarea id="poInternalNotes" rows="2" maxlength="4000"></textarea>
+            </label>
+          </div>
+        </section>
+
+        <section class="proj-section">
+          <div class="proj-section-head">
+            <h2>Line items</h2>
+            <span class="mlb-line-count" id="poLineCount">0 lines</span>
+          </div>
+          <p class="proj-empty" id="poLinesEmpty" hidden>No line items.</p>
+          <ul class="po-lines" id="poLines"></ul>
+          <div class="po-totals" id="poTotalsRow">
+            <span class="po-totals-label">Subtotal</span>
+            <span class="po-totals-value" id="poSubtotal">$0.00</span>
+          </div>
+        </section>
+
+        <section class="proj-section" id="poHistorySection">
+          <div class="proj-section-head">
+            <h2>Audit trail</h2>
+          </div>
+          <ul class="po-history" id="poHistory"></ul>
+        </section>
+
+        <section class="proj-footer-actions">
+          <button type="button" class="pjl-btn pjl-btn-primary" id="poSendButton" hidden>Send to supplier</button>
+          <button type="button" class="pjl-btn pjl-btn-primary" id="poReceiveButton" hidden>Mark received</button>
+          <button type="button" class="pjl-btn pjl-btn-outline is-danger" id="poCancelButton" hidden>Cancel PO</button>
+          <button type="button" class="pjl-btn pjl-btn-outline is-danger" id="poDeleteButton" hidden>Delete draft</button>
+        </section>
+      </section>
+    </main>
+  </div>
+
+  <!-- Sticky savebar for draft autosave -->
+  <div class="proj-savebar" id="poSavebar" hidden>
+    <div class="proj-savebar-inner">
+      <span style="font-size:12px;color:#7A7A72" id="poSaveContext">Editable while in draft</span>
+      <span class="proj-savebar-state" id="poSaveState">Saved</span>
+    </div>
+  </div>
+
+  <!-- Send modal: confirm recipient + optional custom message -->
+  <div class="proj-modal-backdrop" id="poSendModal" hidden role="dialog" aria-modal="true">
+    <div class="proj-modal">
+      <h3>Send purchase order</h3>
+      <p style="margin:0 0 12px;color:#4A4A44;font-size:13px">PJL will email a branded PDF to the supplier and lock this PO. Source material-list lines flip from <em>need</em> to <em>ordered</em>.</p>
+      <label style="display:block;margin-bottom:10px">
+        <span style="font-size:11px;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;color:#7A7A72;display:block;margin-bottom:4px">Recipient email</span>
+        <input type="email" id="poSendTo" style="width:100%;padding:10px 12px;border:1px solid #D8D5C5;border-radius:8px;background:#FCFBF4;font:inherit;min-height:44px">
+      </label>
+      <label style="display:block;margin-bottom:10px">
+        <span style="font-size:11px;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;color:#7A7A72;display:block;margin-bottom:4px">Subject</span>
+        <input type="text" id="poSendSubject" maxlength="200" style="width:100%;padding:10px 12px;border:1px solid #D8D5C5;border-radius:8px;background:#FCFBF4;font:inherit;min-height:44px">
+      </label>
+      <label style="display:block;margin-bottom:10px">
+        <span style="font-size:11px;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;color:#7A7A72;display:block;margin-bottom:4px">Custom note (optional)</span>
+        <textarea id="poSendBody" rows="3" style="width:100%;padding:10px 12px;border:1px solid #D8D5C5;border-radius:8px;background:#FCFBF4;font:inherit" placeholder="Anything beyond the standard 'please confirm receipt' wording."></textarea>
+      </label>
+      <p class="supplier-form-error" id="poSendError" role="alert" hidden></p>
+      <div class="proj-modal-actions">
+        <button type="button" class="pjl-btn pjl-btn-outline" id="poSendCancel">Cancel</button>
+        <button type="button" class="pjl-btn pjl-btn-primary" id="poSendConfirm">Send PDF</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/crm/crm-nav.js"></script>
+  <script src="/crm/purchase-order.js"></script>
+</body>
+</html>

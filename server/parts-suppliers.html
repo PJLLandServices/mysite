@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#0F1F14">
+  <title>Catalog assignments — PJL</title>
+  <link rel="icon" type="image/svg+xml" href="/crm/pjl-logo-mark.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/crm/crm.css">
+  <link rel="stylesheet" href="/crm/suppliers.css">
+  <link rel="stylesheet" href="/crm/material-lists.css">
+  <link rel="stylesheet" href="/crm/parts-suppliers.css">
+</head>
+<body class="pjl-crm-body suppliers-body">
+  <aside class="pjl-admin-nav" id="navMenu" aria-label="PJL CRM Navigation">
+    <header class="pjl-side-brand">
+      <a href="/" class="pjl-side-logo"><img src="/crm/pjl-logo.svg" alt="PJL Land Services"></a>
+    </header>
+    <div class="pjl-nav-links">
+      <a href="/admin/today">Today</a>
+      <a href="/admin">CRM</a>
+      <a href="/admin/schedule">Schedule</a>
+      <a href="/admin/handoff">Handoff</a>
+      <a href="/admin/properties">Properties</a>
+      <a href="/admin/projects">Projects</a>
+      <a href="/admin/quote-folder">Quotes</a>
+      <a href="/admin/invoices">Invoices</a>
+      <a href="/admin/material-lists" class="is-active">Materials</a>
+      <a href="/admin/chats">AI Chats</a>
+      <a href="/admin/settings">Settings</a>
+    </div>
+    <footer class="pjl-side-footer">
+      <a class="pjl-side-phone" href="tel:+19059600181">(905) 960-0181</a>
+      <button class="pjl-nav-logout" type="button" id="logoutButton">Log out</button>
+    </footer>
+  </aside>
+
+  <div class="pjl-app">
+    <header class="pjl-app-topbar">
+      <button class="pjl-nav-toggle" type="button" id="navToggle" aria-label="Menu" aria-expanded="false" aria-controls="navMenu">
+        <span class="pjl-nav-toggle-bar"></span>
+        <span class="pjl-nav-toggle-bar"></span>
+        <span class="pjl-nav-toggle-bar"></span>
+      </button>
+      <span class="pjl-app-title">Catalog assignments</span>
+      <a class="pjl-app-phone" href="tel:+19059600181">(905) 960-0181</a>
+    </header>
+
+    <main class="suppliers-shell ps-shell">
+      <nav class="suppliers-subnav" aria-label="Materials sub-sections">
+        <a href="/admin/material-lists">Material lists</a>
+        <a href="/admin/purchase-orders">Purchase orders</a>
+        <a href="/admin/suppliers">Suppliers</a>
+        <a href="/admin/parts-suppliers" class="is-active" aria-current="page">Catalog assignments</a>
+      </nav>
+
+      <section class="suppliers-explainer">
+        <p><strong>Catalog assignments</strong> map each SKU in your parts catalog to a supplier. When you generate a Purchase Order from a material list, PJL groups the outstanding <em>need</em> lines by their assigned supplier and emits one PO per vendor. Unassigned SKUs block PO generation, so it's worth populating this table once and updating as suppliers change.</p>
+      </section>
+
+      <section class="suppliers-toolbar ps-toolbar">
+        <input type="search" id="psSearch" class="ml-search" placeholder="Search SKU, part #, description">
+        <select id="psCategoryFilter" class="ps-cat-filter">
+          <option value="">All categories</option>
+        </select>
+        <select id="psAssignmentFilter" class="ps-cat-filter">
+          <option value="">All parts</option>
+          <option value="missing">Unassigned only</option>
+          <option value="assigned">Assigned only</option>
+        </select>
+        <span class="ps-count" id="psCount"></span>
+      </section>
+
+      <p class="mlb-loading" id="psLoading">Loading catalog…</p>
+      <p class="mlb-error" id="psError" role="alert" hidden></p>
+
+      <div class="ps-table-wrap" id="psTableWrap" hidden>
+        <table class="ps-table" id="psTable">
+          <thead>
+            <tr>
+              <th>SKU</th>
+              <th>Description</th>
+              <th>Category</th>
+              <th>Price</th>
+              <th>Primary supplier</th>
+            </tr>
+          </thead>
+          <tbody id="psBody"></tbody>
+        </table>
+      </div>
+    </main>
+  </div>
+
+  <div class="mlb-savebar" id="psSavebar" hidden>
+    <div class="mlb-savebar-inner">
+      <div class="mlb-savebar-totals">
+        <span class="mlb-savebar-need" id="psStatAssigned">0 assigned</span>
+        <span class="mlb-savebar-have" id="psStatMissing">0 unassigned</span>
+      </div>
+      <div class="mlb-savebar-status">
+        <span class="mlb-savebar-savestate" id="psSaveState">Saved</span>
+      </div>
+    </div>
+  </div>
+
+  <script src="/crm/crm-nav.js"></script>
+  <script src="/crm/parts-suppliers.js"></script>
+</body>
+</html>

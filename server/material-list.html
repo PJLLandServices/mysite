@@ -139,6 +139,7 @@
 
         <!-- Footer actions -->
         <section class="mlb-footer-actions">
+          <button type="button" class="pjl-btn pjl-btn-primary" id="mlbGeneratePosButton">Generate purchase orders</button>
           <button type="button" class="pjl-btn pjl-btn-outline" id="mlbArchiveButton">Archive list</button>
           <button type="button" class="pjl-btn pjl-btn-outline is-danger" id="mlbDeleteButton">Delete list</button>
         </section>
@@ -156,6 +157,20 @@
       <div class="mlb-savebar-status">
         <span class="mlb-savebar-total" id="mlbSaveTotal">$0.00</span>
         <span class="mlb-savebar-savestate" id="mlbSaveState">Saved</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Generate POs preview modal — plan-then-confirm flow -->
+  <div class="proj-modal-backdrop" id="mlbPosModal" hidden role="dialog" aria-modal="true">
+    <div class="proj-modal" style="max-width:600px">
+      <h3>Generate purchase orders</h3>
+      <p style="margin:0 0 12px;color:#4A4A44;font-size:13px">PJL groups the outstanding <em>need</em> lines by their assigned supplier and creates one draft PO per supplier. Drafts are editable and won't be emailed until you click Send on each.</p>
+      <div id="mlbPosPlan"></div>
+      <p class="supplier-form-error" id="mlbPosError" role="alert" hidden></p>
+      <div class="proj-modal-actions">
+        <button type="button" class="pjl-btn pjl-btn-outline" id="mlbPosCancel">Close</button>
+        <button type="button" class="pjl-btn pjl-btn-primary" id="mlbPosConfirm" hidden>Create drafts</button>
       </div>
     </div>
   </div>

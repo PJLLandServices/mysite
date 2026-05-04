@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#0F1F14">
+  <title>Purchase orders — PJL</title>
+  <link rel="icon" type="image/svg+xml" href="/crm/pjl-logo-mark.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/crm/crm.css">
+  <link rel="stylesheet" href="/crm/suppliers.css">
+  <link rel="stylesheet" href="/crm/material-lists.css">
+  <link rel="stylesheet" href="/crm/purchase-orders.css">
+</head>
+<body class="pjl-crm-body suppliers-body">
+  <aside class="pjl-admin-nav" id="navMenu" aria-label="PJL CRM Navigation">
+    <header class="pjl-side-brand">
+      <a href="/" class="pjl-side-logo"><img src="/crm/pjl-logo.svg" alt="PJL Land Services"></a>
+    </header>
+    <div class="pjl-nav-links">
+      <a href="/admin/today">Today</a>
+      <a href="/admin">CRM</a>
+      <a href="/admin/schedule">Schedule</a>
+      <a href="/admin/handoff">Handoff</a>
+      <a href="/admin/properties">Properties</a>
+      <a href="/admin/projects">Projects</a>
+      <a href="/admin/quote-folder">Quotes</a>
+      <a href="/admin/invoices">Invoices</a>
+      <a href="/admin/material-lists" class="is-active">Materials</a>
+      <a href="/admin/chats">AI Chats</a>
+      <a href="/admin/settings">Settings</a>
+    </div>
+    <footer class="pjl-side-footer">
+      <a class="pjl-side-phone" href="tel:+19059600181">(905) 960-0181</a>
+      <button class="pjl-nav-logout" type="button" id="logoutButton">Log out</button>
+    </footer>
+  </aside>
+
+  <div class="pjl-app">
+    <header class="pjl-app-topbar">
+      <button class="pjl-nav-toggle" type="button" id="navToggle" aria-label="Menu" aria-expanded="false" aria-controls="navMenu">
+        <span class="pjl-nav-toggle-bar"></span>
+        <span class="pjl-nav-toggle-bar"></span>
+        <span class="pjl-nav-toggle-bar"></span>
+      </button>
+      <span class="pjl-app-title">Purchase orders</span>
+      <a class="pjl-app-phone" href="tel:+19059600181">(905) 960-0181</a>
+    </header>
+
+    <main class="suppliers-shell">
+      <nav class="suppliers-subnav" aria-label="Materials sub-sections">
+        <a href="/admin/material-lists">Material lists</a>
+        <a href="/admin/purchase-orders" class="is-active" aria-current="page">Purchase orders</a>
+        <a href="/admin/suppliers">Suppliers</a>
+        <a href="/admin/parts-suppliers">Catalog assignments</a>
+      </nav>
+
+      <section class="suppliers-explainer">
+        <p><strong>Purchase orders</strong> are generated from a material list's <em>need</em> lines, grouped by the primary supplier on each part. Drafts are editable; sending emails the PO PDF to the supplier and locks the source lines as <em>ordered</em>; receiving flips the lines to <em>have</em>. Cancelling a sent PO returns its lines to <em>need</em> so they can be re-ordered.</p>
+      </section>
+
+      <section class="suppliers-toolbar">
+        <input type="search" id="poSearch" class="ml-search" placeholder="Search by id, supplier, list">
+      </section>
+
+      <section class="ml-filters" aria-label="Status filter">
+        <button type="button" data-status-filter="" class="is-active">All</button>
+        <button type="button" data-status-filter="draft">Draft</button>
+        <button type="button" data-status-filter="sent">Sent</button>
+        <button type="button" data-status-filter="received">Received</button>
+        <button type="button" data-status-filter="cancelled">Cancelled</button>
+      </section>
+
+      <p class="suppliers-empty" id="poEmpty" hidden>No purchase orders yet. Generate one from a material list.</p>
+      <ul class="ml-cards" id="poContainer" aria-label="Purchase orders"></ul>
+    </main>
+  </div>
+
+  <script src="/crm/crm-nav.js"></script>
+  <script src="/crm/purchase-orders.js"></script>
+</body>
+</html>

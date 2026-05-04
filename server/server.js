@@ -54,6 +54,8 @@ const bookings = require("./lib/bookings");
 const suppliers = require("./lib/suppliers");
 const materialLists = require("./lib/material-lists");
 const projects = require("./lib/projects");
+const partSuppliers = require("./lib/part-suppliers");
+const purchaseOrders = require("./lib/purchase-orders");
 
 // Short, customer-friendly work order ID. Eight chars from a UUIDv4 base32-ish
 // alphabet (no I/O/0/1 to keep them unambiguous when read aloud or hand-written).
@@ -138,7 +140,26 @@ const FEATURES = PRICING.items;
 const PARTS = (function loadParts() {
   try {
     const partsPath = path.resolve(__dirname, "..", "parts.json");
-    return JSON.parse(fsSync.readFileSync(partsPath, "utf8"));
+    const cat = JSON.parse(fsSync.readFileSync(partsPath, "utf8"));
+    // Merge per-SKU supplier overrides at boot. The override file is the
+    // source of truth for supplier assignments (see lib/part-suppliers.js
+    // for why we don't edit parts.json from the admin UI). Sync read keeps
+    // the existing const-init flow simple; refreshPartSupplierMerge() picks
+    // up subsequent admin edits without restart.
+    try {
+      const overridePath = path.join(__dirname, "data", "part-suppliers.json");
+      if (fsSync.existsSync(overridePath)) {
+        const overrides = JSON.parse(fsSync.readFileSync(overridePath, "utf8") || "{}");
+        partSuppliers.mergeIntoCatalog(cat.parts || {}, overrides);
+      } else {
+        // No overrides yet — still ensure every part has a supplierIds[]
+        // so consumers can rely on the field's existence.
+        partSuppliers.mergeIntoCatalog(cat.parts || {}, {});
+      }
+    } catch (err) {
+      console.warn("[parts] could not merge supplier overrides:", err?.message);
+    }
+    return cat;
   } catch (err) {
     console.warn("[parts] could not load parts.json — materials checklist will be hidden:", err?.message);
     return null;
@@ -300,6 +321,10 @@ function needsAuth(method, pathname) {
   // Projects (Phase 2 — multi-WO container that material lists attach to).
   if (pathname === "/admin/projects" || pathname === "/admin/projects/") return true;
   if (/^\/admin\/project\/[^/]+\/?$/.test(pathname)) return true;
+  // Catalog ↔ supplier assignments + Purchase Orders (Phase 3).
+  if (pathname === "/admin/parts-suppliers" || pathname === "/admin/parts-suppliers/") return true;
+  if (pathname === "/admin/purchase-orders" || pathname === "/admin/purchase-orders/") return true;
+  if (/^\/admin\/purchase-order\/[^/]+\/?$/.test(pathname)) return true;
   if (pathname === "/api/quotes" && method === "GET") return true;
   if (pathname === "/api/quotes.csv" || pathname === "/api/contacts" || pathname === "/api/contacts.vcf") return true;
   if (/^\/api\/quotes\/[^/]+/.test(pathname)) return true;
@@ -326,6 +351,8 @@ function needsAuth(method, pathname) {
   if (pathname.startsWith("/api/suppliers")) return true;
   if (pathname.startsWith("/api/material-lists")) return true;
   if (pathname.startsWith("/api/projects")) return true;
+  if (pathname.startsWith("/api/part-suppliers")) return true;
+  if (pathname.startsWith("/api/purchase-orders")) return true;
   // Per-lead property link/dismiss/attach + tech actions are admin-only.
   if (/^\/api\/leads\/[^/]+\/(link-property|dismiss-property-suggestion|attach-property|notify-on-route|open-wo)$/.test(pathname)) return true;
   // Bulk property import is admin-only.
@@ -3912,6 +3939,50 @@ async function handleApi(req, res, pathname) {
     }
   }
 
+  // ---------- Part-supplier assignments (Phase 3) -------------------
+  // Per-SKU supplierIds override map. Source of truth for which supplier
+  // each part comes from (parts.json's supplierIds field is ignored — see
+  // lib/part-suppliers.js for the why).
+
+  if (req.method === "GET" && pathname === "/api/part-suppliers") {
+    const map = await partSuppliers.getAll();
+    return sendJson(res, 200, { ok: true, partSuppliers: map });
+  }
+
+  // PATCH /api/part-suppliers — bulk update many SKUs in one round-trip.
+  // Body: { updates: { "<sku>": ["SUP-001","SUP-002"], ... } }. Pass an
+  // empty array to clear a SKU's assignment.
+  if (req.method === "PATCH" && pathname === "/api/part-suppliers") {
+    try {
+      const payload = await parseRequestBody(req);
+      const map = await partSuppliers.bulkSet(payload.updates || {});
+      // Refresh the in-memory PARTS catalog so the next /api/parts call
+      // returns the updated supplierIds without a server restart.
+      if (PARTS && PARTS.parts) partSuppliers.mergeIntoCatalog(PARTS.parts, map);
+      return sendJson(res, 200, { ok: true, partSuppliers: map });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't update part-supplier map."] });
+    }
+  }
+
+  // PATCH /api/part-suppliers/:sku — single-SKU update.
+  // Body: { supplierIds: ["SUP-001", ...] }
+  const partSupplierMatch = pathname.match(/^\/api\/part-suppliers\/([^/]+)$/);
+  if (partSupplierMatch && req.method === "PATCH") {
+    try {
+      const sku = decodeURIComponent(partSupplierMatch[1]);
+      const payload = await parseRequestBody(req);
+      const ids = await partSuppliers.setForSku(sku, payload.supplierIds || []);
+      // Refresh the cached catalog for this SKU specifically.
+      if (PARTS && PARTS.parts && PARTS.parts[sku]) {
+        PARTS.parts[sku].supplierIds = ids.slice();
+      }
+      return sendJson(res, 200, { ok: true, sku, supplierIds: ids });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't update SKU supplier."] });
+    }
+  }
+
   // ---------- Material Lists ----------------------------------------
   // The bill-of-materials document. Standalone in Phase 1; Phase 2 wires
   // parent attachment to projects/work-orders/quotes; Phase 3 generates
@@ -3968,6 +4039,81 @@ async function handleApi(req, res, pathname) {
     const removed = await materialLists.remove(id);
     if (!removed) return sendJson(res, 404, { ok: false, errors: ["Material list not found."] });
     return sendJson(res, 200, { ok: true, removed });
+  }
+
+  // POST /api/material-lists/:id/plan-purchase-orders — DRY RUN. Returns
+  // what POs would be created without creating them. Used by the builder
+  // to render a confirmation modal before the user clicks "Generate".
+  const listPlanPosMatch = pathname.match(/^\/api\/material-lists\/([^/]+)\/plan-purchase-orders$/);
+  if (listPlanPosMatch && req.method === "POST") {
+    try {
+      const id = decodeURIComponent(listPlanPosMatch[1]);
+      const list = await materialLists.get(id);
+      if (!list) return sendJson(res, 404, { ok: false, errors: ["Material list not found."] });
+      const partsMap = (PARTS && PARTS.parts) || {};
+      const plan = purchaseOrders.planDraftsFromMaterialList(list, partsMap);
+      // Hydrate supplier name into each draft preview so the modal can
+      // render "PO for Vermeer Supply" without a follow-up fetch.
+      const allSuppliers = await suppliers.list({ includeArchived: true });
+      const supplierById = new Map(allSuppliers.map((s) => [s.id, s]));
+      const previews = plan.drafts.map((d) => ({
+        ...d,
+        supplierName: supplierById.get(d.supplierId)?.name || "(unknown supplier)",
+        supplierEmail: supplierById.get(d.supplierId)?.email || ""
+      }));
+      return sendJson(res, 200, {
+        ok: true,
+        canGenerate: plan.ok,
+        previews,
+        missingSupplier: plan.missingSupplier,
+        missingSupplierLines: plan.missingSupplierLines
+      });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't plan purchase orders."] });
+    }
+  }
+
+  // POST /api/material-lists/:id/generate-purchase-orders — actually
+  // creates the drafts. Returns the list of created PO ids. Idempotency:
+  // does NOT check for duplicates — calling twice creates two sets of
+  // drafts. (The UI guards via the plan endpoint + a confirm step.)
+  const listGenPosMatch = pathname.match(/^\/api\/material-lists\/([^/]+)\/generate-purchase-orders$/);
+  if (listGenPosMatch && req.method === "POST") {
+    try {
+      const id = decodeURIComponent(listGenPosMatch[1]);
+      const list = await materialLists.get(id);
+      if (!list) return sendJson(res, 404, { ok: false, errors: ["Material list not found."] });
+      const partsMap = (PARTS && PARTS.parts) || {};
+      const plan = purchaseOrders.planDraftsFromMaterialList(list, partsMap);
+      if (!plan.ok) {
+        return sendJson(res, 422, {
+          ok: false,
+          errors: ["Cannot generate POs — some need-line SKUs have no supplier assigned."],
+          missingSupplier: plan.missingSupplier
+        });
+      }
+      const allSuppliers = await suppliers.list({ includeArchived: true });
+      const supplierById = new Map(allSuppliers.map((s) => [s.id, s]));
+      const created = [];
+      for (const draft of plan.drafts) {
+        const sup = supplierById.get(draft.supplierId);
+        const po = await purchaseOrders.create({
+          supplierId: draft.supplierId,
+          supplierName: sup?.name || "",
+          supplierEmail: sup?.email || "",
+          supplierContactName: sup?.contactName || "",
+          supplierPhone: sup?.phone || "",
+          supplierAddress: sup?.address || "",
+          sourceMaterialListIds: [list.id],
+          lineItems: draft.lineItems,
+          notes: list.name ? `Generated from ${list.name} (${list.id}).` : `Generated from ${list.id}.`
+        });
+        created.push(po);
+      }
+      return sendJson(res, 201, { ok: true, purchaseOrders: created });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't generate purchase orders."] });
+    }
   }
 
   // ---------- Projects (Phase 2) -------------------------------------
@@ -4134,6 +4280,228 @@ async function handleApi(req, res, pathname) {
       return sendJson(res, 201, { ok: true, project: proj, reparentedListIds: reparented });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't convert quote."] });
+    }
+  }
+
+  // ---------- Purchase Orders (Phase 3) ------------------------------
+  // PO-YYYY-NNNN. Generated from material-list "need" lines via
+  // /api/material-lists/:id/generate-purchase-orders, then sent to the
+  // supplier (PDF + email), received, or cancelled. Source line state on
+  // the originating material list flips in lockstep with the PO state.
+
+  if (req.method === "GET" && pathname === "/api/purchase-orders") {
+    const url = new URL(req.url, baseUrlFromReq(req));
+    const status = url.searchParams.get("status");
+    const supplierId = url.searchParams.get("supplierId");
+    const materialListId = url.searchParams.get("materialListId");
+    let all = await purchaseOrders.list({ status, supplierId, materialListId });
+    all.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
+    return sendJson(res, 200, { ok: true, purchaseOrders: all });
+  }
+
+  if (req.method === "POST" && pathname === "/api/purchase-orders") {
+    try {
+      const payload = await parseRequestBody(req);
+      // Manual create — admin builds a PO from scratch (no source list).
+      // Snapshot supplier fields if a supplierId is provided + missing.
+      if (payload.supplierId && !payload.supplierName) {
+        const sup = await suppliers.get(payload.supplierId);
+        if (sup) {
+          payload.supplierName = sup.name;
+          payload.supplierEmail = payload.supplierEmail || sup.email;
+          payload.supplierContactName = payload.supplierContactName || sup.contactName;
+          payload.supplierPhone = payload.supplierPhone || sup.phone;
+          payload.supplierAddress = payload.supplierAddress || sup.address;
+        }
+      }
+      const created = await purchaseOrders.create(payload);
+      return sendJson(res, 201, { ok: true, purchaseOrder: created });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't create purchase order."] });
+    }
+  }
+
+  const poMatch = pathname.match(/^\/api\/purchase-orders\/([^/]+)$/);
+  if (poMatch && req.method === "GET") {
+    const po = await purchaseOrders.get(decodeURIComponent(poMatch[1]));
+    if (!po) return sendJson(res, 404, { ok: false, errors: ["Purchase order not found."] });
+    return sendJson(res, 200, { ok: true, purchaseOrder: po });
+  }
+  if (poMatch && req.method === "PATCH") {
+    try {
+      const id = decodeURIComponent(poMatch[1]);
+      const payload = await parseRequestBody(req);
+      const updated = await purchaseOrders.update(id, payload);
+      if (!updated) return sendJson(res, 404, { ok: false, errors: ["Purchase order not found."] });
+      return sendJson(res, 200, { ok: true, purchaseOrder: updated });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't update purchase order."] });
+    }
+  }
+  if (poMatch && req.method === "DELETE") {
+    const id = decodeURIComponent(poMatch[1]);
+    const po = await purchaseOrders.get(id);
+    if (!po) return sendJson(res, 404, { ok: false, errors: ["Purchase order not found."] });
+    if (po.status !== "draft") {
+      return sendJson(res, 409, { ok: false, errors: [`Can only delete draft POs. This one is "${po.status}". Use cancel instead.`] });
+    }
+    const removed = await purchaseOrders.remove(id);
+    return sendJson(res, 200, { ok: true, removed });
+  }
+
+  // POST /api/purchase-orders/:id/send — render PDF, email supplier via
+  // existing nodemailer/Gmail, flip status to sent, flip source material-
+  // list lines to "ordered" with poId backref. The PDF library + email
+  // sender are loaded here lazily so a server without nodemailer creds
+  // doesn't fail on boot.
+  const poSendMatch = pathname.match(/^\/api\/purchase-orders\/([^/]+)\/send$/);
+  if (poSendMatch && req.method === "POST") {
+    try {
+      const id = decodeURIComponent(poSendMatch[1]);
+      const po = await purchaseOrders.get(id);
+      if (!po) return sendJson(res, 404, { ok: false, errors: ["Purchase order not found."] });
+      if (po.status !== "draft") {
+        return sendJson(res, 409, { ok: false, errors: [`PO is "${po.status}", can only send a draft.`] });
+      }
+      const payload = await parseRequestBody(req).catch(() => ({}));
+      const toEmail = String(payload.toEmail || po.supplierEmail || "").trim().toLowerCase();
+      if (!toEmail) {
+        return sendJson(res, 422, { ok: false, errors: ["Supplier email is empty. Add it to the supplier record or this PO."] });
+      }
+      const subject = String(payload.subject || `Purchase Order ${po.id} from PJL Land Services`).slice(0, 200);
+
+      // Render PDF + send email. notify-supplier handles nodemailer.
+      const { generatePoPdf } = require("./lib/po-pdf");
+      const { sendPurchaseOrderEmail } = require("./lib/notify-supplier");
+      const pdfBuffer = await generatePoPdf(po);
+      await sendPurchaseOrderEmail({
+        po,
+        toEmail,
+        toName: payload.toName || po.supplierContactName || po.supplierName,
+        subject,
+        bodyText: payload.bodyText || "",
+        pdfBuffer
+      });
+
+      // Flip the PO state.
+      const sentPo = await purchaseOrders.markSent(id, { toEmail, toName: payload.toName, subject });
+
+      // Flip every source material-list line to "ordered" with this PO id.
+      // Group line ids by source list so we patch each list once.
+      const linesByList = new Map();
+      for (const line of sentPo.lineItems) {
+        if (!line.sourceListId || !line.sourceLineId) continue;
+        if (!linesByList.has(line.sourceListId)) linesByList.set(line.sourceListId, []);
+        linesByList.get(line.sourceListId).push(line.sourceLineId);
+      }
+      for (const [listId, lineIds] of linesByList.entries()) {
+        const list = await materialLists.get(listId);
+        if (!list) continue;
+        const updatedLines = list.lineItems.map((l) => {
+          if (lineIds.includes(l.id) && l.status === "need") {
+            return { ...l, status: "ordered", poId: sentPo.id };
+          }
+          return l;
+        });
+        await materialLists.update(listId, { lineItems: updatedLines });
+      }
+
+      return sendJson(res, 200, { ok: true, purchaseOrder: sentPo });
+    } catch (err) {
+      console.warn("[po] send failed:", err);
+      return sendJson(res, 500, { ok: false, errors: [err.message || "Couldn't send purchase order."] });
+    }
+  }
+
+  // POST /api/purchase-orders/:id/receive — flip to received, flip source
+  // material-list lines from "ordered" back to "have".
+  const poReceiveMatch = pathname.match(/^\/api\/purchase-orders\/([^/]+)\/receive$/);
+  if (poReceiveMatch && req.method === "POST") {
+    try {
+      const id = decodeURIComponent(poReceiveMatch[1]);
+      const payload = await parseRequestBody(req).catch(() => ({}));
+      const po = await purchaseOrders.get(id);
+      if (!po) return sendJson(res, 404, { ok: false, errors: ["Purchase order not found."] });
+      const receivedPo = await purchaseOrders.markReceived(id, { note: payload.note || "" });
+
+      // Flip source lines from "ordered" -> "have".
+      const linesByList = new Map();
+      for (const line of receivedPo.lineItems) {
+        if (!line.sourceListId || !line.sourceLineId) continue;
+        if (!linesByList.has(line.sourceListId)) linesByList.set(line.sourceListId, []);
+        linesByList.get(line.sourceListId).push(line.sourceLineId);
+      }
+      for (const [listId, lineIds] of linesByList.entries()) {
+        const list = await materialLists.get(listId);
+        if (!list) continue;
+        const updatedLines = list.lineItems.map((l) => {
+          if (lineIds.includes(l.id) && l.status === "ordered" && l.poId === receivedPo.id) {
+            return { ...l, status: "have", poId: null };
+          }
+          return l;
+        });
+        await materialLists.update(listId, { lineItems: updatedLines });
+      }
+      return sendJson(res, 200, { ok: true, purchaseOrder: receivedPo });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't mark received."] });
+    }
+  }
+
+  // POST /api/purchase-orders/:id/cancel — flip to cancelled, return
+  // source lines (currently "ordered" with this PO's id) back to "need".
+  const poCancelMatch = pathname.match(/^\/api\/purchase-orders\/([^/]+)\/cancel$/);
+  if (poCancelMatch && req.method === "POST") {
+    try {
+      const id = decodeURIComponent(poCancelMatch[1]);
+      const payload = await parseRequestBody(req).catch(() => ({}));
+      const po = await purchaseOrders.get(id);
+      if (!po) return sendJson(res, 404, { ok: false, errors: ["Purchase order not found."] });
+      const cancelledPo = await purchaseOrders.markCancelled(id, { reason: payload.reason || "" });
+
+      // Flip source lines from "ordered" -> "need" (clearing poId).
+      const linesByList = new Map();
+      for (const line of cancelledPo.lineItems) {
+        if (!line.sourceListId || !line.sourceLineId) continue;
+        if (!linesByList.has(line.sourceListId)) linesByList.set(line.sourceListId, []);
+        linesByList.get(line.sourceListId).push(line.sourceLineId);
+      }
+      for (const [listId, lineIds] of linesByList.entries()) {
+        const list = await materialLists.get(listId);
+        if (!list) continue;
+        const updatedLines = list.lineItems.map((l) => {
+          if (lineIds.includes(l.id) && l.status === "ordered" && l.poId === cancelledPo.id) {
+            return { ...l, status: "need", poId: null };
+          }
+          return l;
+        });
+        await materialLists.update(listId, { lineItems: updatedLines });
+      }
+      return sendJson(res, 200, { ok: true, purchaseOrder: cancelledPo });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't cancel."] });
+    }
+  }
+
+  // GET /api/purchase-orders/:id/pdf — download a PDF of any PO. Useful
+  // for the admin to grab a copy locally or to re-send the same PDF.
+  const poPdfMatch = pathname.match(/^\/api\/purchase-orders\/([^/]+)\/pdf$/);
+  if (poPdfMatch && req.method === "GET") {
+    try {
+      const id = decodeURIComponent(poPdfMatch[1]);
+      const po = await purchaseOrders.get(id);
+      if (!po) return sendJson(res, 404, { ok: false, errors: ["Purchase order not found."] });
+      const { generatePoPdf } = require("./lib/po-pdf");
+      const pdf = await generatePoPdf(po);
+      res.writeHead(200, {
+        "content-type": "application/pdf",
+        "content-disposition": `inline; filename="${po.id}.pdf"`,
+        "cache-control": "no-store"
+      });
+      res.end(pdf);
+      return;
+    } catch (err) {
+      return sendJson(res, 500, { ok: false, errors: [err.message || "Couldn't render PDF."] });
     }
   }
 
@@ -6135,6 +6503,16 @@ function resolveStaticTarget(pathname) {
   }
   if (/^\/admin\/material-list\/[^/]+\/?$/.test(pathname)) {
     return { dir: SERVER_DIR, relative: "/material-list.html" };
+  }
+  // Phase 3 — catalog ↔ supplier assignments + Purchase Orders.
+  if (pathname === "/admin/parts-suppliers" || pathname === "/admin/parts-suppliers/") {
+    return { dir: SERVER_DIR, relative: "/parts-suppliers.html" };
+  }
+  if (pathname === "/admin/purchase-orders" || pathname === "/admin/purchase-orders/") {
+    return { dir: SERVER_DIR, relative: "/purchase-orders.html" };
+  }
+  if (/^\/admin\/purchase-order\/[^/]+\/?$/.test(pathname)) {
+    return { dir: SERVER_DIR, relative: "/purchase-order.html" };
   }
   // Projects (Phase 2 — multi-WO container).
   if (pathname === "/admin/projects" || pathname === "/admin/projects/") {

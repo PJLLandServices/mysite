@@ -36,6 +36,12 @@
     catalogTree: document.getElementById("mlbCatalogTree"),
     archiveButton: document.getElementById("mlbArchiveButton"),
     deleteButton: document.getElementById("mlbDeleteButton"),
+    generatePosButton: document.getElementById("mlbGeneratePosButton"),
+    posModal: document.getElementById("mlbPosModal"),
+    posPlan: document.getElementById("mlbPosPlan"),
+    posError: document.getElementById("mlbPosError"),
+    posConfirm: document.getElementById("mlbPosConfirm"),
+    posCancel: document.getElementById("mlbPosCancel"),
     savebar: document.getElementById("mlbSavebar"),
     saveNeed: document.getElementById("mlbSaveNeed"),
     saveHave: document.getElementById("mlbSaveHave"),
@@ -726,6 +732,86 @@
     });
   }
 
+  // ---- Generate POs (plan + confirm) --------------------------------
+  async function openPosModal() {
+    els.posError.hidden = true;
+    els.posConfirm.hidden = true;
+    els.posModal.hidden = false;
+    els.posPlan.innerHTML = `<p class="proj-empty">Planning…</p>`;
+    try {
+      const r = await fetch(`/api/material-lists/${encodeURIComponent(state.listId)}/plan-purchase-orders`, { method: "POST" });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok || !data.ok && !data.previews) {
+        els.posError.textContent = (data.errors && data.errors[0]) || `Couldn't plan (${r.status})`;
+        els.posError.hidden = false;
+        els.posPlan.innerHTML = "";
+        return;
+      }
+      renderPosPlan(data);
+    } catch (err) {
+      els.posError.textContent = err.message || "Couldn't plan.";
+      els.posError.hidden = false;
+      els.posPlan.innerHTML = "";
+    }
+  }
+  function renderPosPlan(plan) {
+    const previews = plan.previews || [];
+    const missing = plan.missingSupplier || [];
+    let html = "";
+    if (previews.length) {
+      html += `<div style="margin:0 0 12px"><strong>${previews.length} purchase order${previews.length === 1 ? "" : "s"} will be created:</strong></div>`;
+      html += `<ul style="list-style:none;margin:0 0 12px;padding:0;display:flex;flex-direction:column;gap:8px">`;
+      for (const p of previews) {
+        const lineCount = p.lineItems.length;
+        html += `
+          <li style="padding:10px 12px;border:1px solid #E8E5D7;border-radius:8px;background:#FCFBF4">
+            <div style="font-weight:600;color:#1F2A22">${escapeHtml(p.supplierName)}</div>
+            <div style="font-size:12px;color:#7A7A72;margin-top:2px">
+              ${escapeHtml(p.supplierEmail || "(no email — add to supplier record before sending)")}
+              · ${lineCount} line${lineCount === 1 ? "" : "s"}
+              · ${fmtCents(p.subtotalCents)}
+            </div>
+          </li>
+        `;
+      }
+      html += `</ul>`;
+    }
+    if (missing.length) {
+      html += `
+        <div style="padding:10px 12px;background:#FFF1D6;border:1px solid #E0CB8E;border-radius:8px;color:#7A5500;margin-top:8px">
+          <strong>${missing.length} SKU${missing.length === 1 ? "" : "s"} blocked — no supplier assigned:</strong>
+          <div style="font-family:ui-monospace,monospace;font-size:12px;margin-top:4px">${missing.map(escapeHtml).join(", ")}</div>
+          <div style="margin-top:8px;font-size:12px"><a href="/admin/parts-suppliers" style="color:#7A5500;font-weight:700">→ Open Catalog assignments</a> to fix, then re-open this dialog.</div>
+        </div>
+      `;
+    }
+    if (!previews.length && !missing.length) {
+      html = `<p class="proj-empty">No <em>need</em> lines on this list. Mark some lines as need, then come back.</p>`;
+    }
+    els.posPlan.innerHTML = html;
+    els.posConfirm.hidden = !plan.canGenerate;
+  }
+  async function confirmGeneratePos() {
+    els.posError.hidden = true;
+    els.posConfirm.disabled = true;
+    try {
+      const r = await fetch(`/api/material-lists/${encodeURIComponent(state.listId)}/generate-purchase-orders`, { method: "POST" });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok || !data.ok) {
+        els.posError.textContent = (data.errors && data.errors[0]) || `Generate failed (${r.status})`;
+        els.posError.hidden = false;
+        return;
+      }
+      // Created — go to PO index where the new drafts will appear at the top.
+      location.href = "/admin/purchase-orders";
+    } catch (err) {
+      els.posError.textContent = err.message || "Generate failed.";
+      els.posError.hidden = false;
+    } finally {
+      els.posConfirm.disabled = false;
+    }
+  }
+
   // ---- Event wiring --------------------------------------------------
   function wireEvents() {
     bindFieldInput(els.name, "name");
@@ -824,6 +910,16 @@
     });
 
     // Footer actions
+    // Generate POs — plan-then-confirm. The plan endpoint is a dry-run
+    // that returns previews + missing supplier list; confirm fires the
+    // generate endpoint that actually creates the draft POs.
+    els.generatePosButton.addEventListener("click", openPosModal);
+    els.posCancel.addEventListener("click", () => { els.posModal.hidden = true; });
+    els.posModal.addEventListener("click", (event) => {
+      if (event.target === els.posModal) els.posModal.hidden = true;
+    });
+    els.posConfirm.addEventListener("click", confirmGeneratePos);
+
     els.archiveButton.addEventListener("click", async () => {
       const archiving = state.list.status !== "archived";
       const verb = archiving ? "Archive" : "Restore";

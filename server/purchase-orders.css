@@ -1,0 +1,18 @@
+/* Purchase Orders — Phase 3.
+   Reuses the .ml-card / .ml-status patterns from material-lists.css for
+   visual consistency. Adds PO-specific status colours that mirror the
+   lifecycle (draft -> sent -> received) plus a cancelled state. */
+
+.po-status {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.po-status--draft     { background: #F0EEE3; color: #4A4A44; }
+.po-status--sent      { background: #DCE5F0; color: #1F4D7A; }
+.po-status--received  { background: #DDEDD0; color: #1B4D2E; }
+.po-status--cancelled { background: #FBEAE7; color: #8A2A1F; }
