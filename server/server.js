@@ -4413,8 +4413,19 @@ async function handleApi(req, res, pathname) {
     }
   }
 
-  // POST /api/purchase-orders/:id/receive — flip to received, flip source
-  // material-list lines from "ordered" back to "have".
+  // POST /api/purchase-orders/:id/receive — record a receipt event.
+  // Body shape:
+  //   { lineUpdates: { "<lineId>": <newReceivedQty>, ... }, note: "..." }
+  //
+  // Pass an empty body (no lineUpdates) to mark every line fully received
+  // at once — the legacy "Mark received" behavior. Pass per-line qtys
+  // (absolute, not deltas) for a partial-receive event. Lines absent from
+  // the lineUpdates map keep their current receivedQty.
+  //
+  // Source material-list lines that just crossed into fully-received on
+  // THIS event flip from "ordered" to "have" (with poId cleared). Lines
+  // that are still partial keep their "ordered" state with poId backref
+  // so a subsequent receive event can complete them.
   const poReceiveMatch = pathname.match(/^\/api\/purchase-orders\/([^/]+)\/receive$/);
   if (poReceiveMatch && req.method === "POST") {
     try {
@@ -4422,34 +4433,47 @@ async function handleApi(req, res, pathname) {
       const payload = await parseRequestBody(req).catch(() => ({}));
       const po = await purchaseOrders.get(id);
       if (!po) return sendJson(res, 404, { ok: false, errors: ["Purchase order not found."] });
-      const receivedPo = await purchaseOrders.markReceived(id, { note: payload.note || "" });
+      const result = await purchaseOrders.markReceived(id, {
+        lineUpdates: payload && payload.lineUpdates,
+        note: payload && payload.note || ""
+      });
+      const receivedPo = result.po;
 
-      // Flip source lines from "ordered" -> "have".
-      const linesByList = new Map();
+      // Flip ONLY the lines that became fully received on this event.
+      // Build lineId -> source pointers from the receivedPo.
+      const sourcePointersById = new Map();
       for (const line of receivedPo.lineItems) {
         if (!line.sourceListId || !line.sourceLineId) continue;
-        if (!linesByList.has(line.sourceListId)) linesByList.set(line.sourceListId, []);
-        linesByList.get(line.sourceListId).push(line.sourceLineId);
+        sourcePointersById.set(line.id, { listId: line.sourceListId, lineId: line.sourceLineId });
       }
-      for (const [listId, lineIds] of linesByList.entries()) {
+      const flipsByList = new Map();
+      for (const lineId of result.fullyReceivedLineIds) {
+        const ptr = sourcePointersById.get(lineId);
+        if (!ptr) continue;
+        if (!flipsByList.has(ptr.listId)) flipsByList.set(ptr.listId, []);
+        flipsByList.get(ptr.listId).push(ptr.lineId);
+      }
+      for (const [listId, sourceLineIds] of flipsByList.entries()) {
         const list = await materialLists.get(listId);
         if (!list) continue;
         const updatedLines = list.lineItems.map((l) => {
-          if (lineIds.includes(l.id) && l.status === "ordered" && l.poId === receivedPo.id) {
+          if (sourceLineIds.includes(l.id) && l.status === "ordered" && l.poId === receivedPo.id) {
             return { ...l, status: "have", poId: null };
           }
           return l;
         });
         await materialLists.update(listId, { lineItems: updatedLines });
       }
-      return sendJson(res, 200, { ok: true, purchaseOrder: receivedPo });
+      return sendJson(res, 200, { ok: true, purchaseOrder: receivedPo, fullyReceivedLineIds: result.fullyReceivedLineIds });
     } catch (err) {
-      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't mark received."] });
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't record receipt."] });
     }
   }
 
-  // POST /api/purchase-orders/:id/cancel — flip to cancelled, return
-  // source lines (currently "ordered" with this PO's id) back to "need".
+  // POST /api/purchase-orders/:id/cancel — flip to cancelled. Lines that
+  // are NOT fully received flip back to "need" on their source list
+  // (poId cleared). Already-received lines stay "have" — can't undo a
+  // delivery.
   const poCancelMatch = pathname.match(/^\/api\/purchase-orders\/([^/]+)\/cancel$/);
   if (poCancelMatch && req.method === "POST") {
     try {
@@ -4457,20 +4481,27 @@ async function handleApi(req, res, pathname) {
       const payload = await parseRequestBody(req).catch(() => ({}));
       const po = await purchaseOrders.get(id);
       if (!po) return sendJson(res, 404, { ok: false, errors: ["Purchase order not found."] });
-      const cancelledPo = await purchaseOrders.markCancelled(id, { reason: payload.reason || "" });
+      const result = await purchaseOrders.markCancelled(id, { reason: payload.reason || "" });
+      const cancelledPo = result.po;
 
-      // Flip source lines from "ordered" -> "need" (clearing poId).
-      const linesByList = new Map();
+      // Build per-line source pointers, then flip ONLY the outstanding ones.
+      const sourcePointersById = new Map();
       for (const line of cancelledPo.lineItems) {
         if (!line.sourceListId || !line.sourceLineId) continue;
-        if (!linesByList.has(line.sourceListId)) linesByList.set(line.sourceListId, []);
-        linesByList.get(line.sourceListId).push(line.sourceLineId);
+        sourcePointersById.set(line.id, { listId: line.sourceListId, lineId: line.sourceLineId });
       }
-      for (const [listId, lineIds] of linesByList.entries()) {
+      const flipsByList = new Map();
+      for (const lineId of result.outstandingLineIds) {
+        const ptr = sourcePointersById.get(lineId);
+        if (!ptr) continue;
+        if (!flipsByList.has(ptr.listId)) flipsByList.set(ptr.listId, []);
+        flipsByList.get(ptr.listId).push(ptr.lineId);
+      }
+      for (const [listId, sourceLineIds] of flipsByList.entries()) {
         const list = await materialLists.get(listId);
         if (!list) continue;
         const updatedLines = list.lineItems.map((l) => {
-          if (lineIds.includes(l.id) && l.status === "ordered" && l.poId === cancelledPo.id) {
+          if (sourceLineIds.includes(l.id) && l.status === "ordered" && l.poId === cancelledPo.id) {
             return { ...l, status: "need", poId: null };
           }
           return l;
@@ -4480,6 +4511,58 @@ async function handleApi(req, res, pathname) {
       return sendJson(res, 200, { ok: true, purchaseOrder: cancelledPo });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't cancel."] });
+    }
+  }
+
+  // POST /api/purchase-orders/:id/resend — re-email the PDF to the
+  // supplier. Status stays whatever it was (sent / partially_received).
+  // Useful when the supplier didn't reply or asks for a copy.
+  const poResendMatch = pathname.match(/^\/api\/purchase-orders\/([^/]+)\/resend$/);
+  if (poResendMatch && req.method === "POST") {
+    try {
+      const id = decodeURIComponent(poResendMatch[1]);
+      const po = await purchaseOrders.get(id);
+      if (!po) return sendJson(res, 404, { ok: false, errors: ["Purchase order not found."] });
+      if (po.status !== "sent" && po.status !== "partially_received") {
+        return sendJson(res, 409, { ok: false, errors: [`Can't re-send a "${po.status}" PO.`] });
+      }
+      const payload = await parseRequestBody(req).catch(() => ({}));
+      const toEmail = String(payload.toEmail || po.emailedToEmail || po.supplierEmail || "").trim().toLowerCase();
+      if (!toEmail) {
+        return sendJson(res, 422, { ok: false, errors: ["Recipient email is empty."] });
+      }
+      const subject = String(payload.subject || po.emailSubject || `Purchase Order ${po.id} from PJL Land Services`).slice(0, 200);
+      const { generatePoPdf } = require("./lib/po-pdf");
+      const { sendPurchaseOrderEmail } = require("./lib/notify-supplier");
+      const pdfBuffer = await generatePoPdf(po);
+      await sendPurchaseOrderEmail({
+        po,
+        toEmail,
+        toName: payload.toName || po.supplierContactName || po.supplierName,
+        subject,
+        bodyText: payload.bodyText || "",
+        pdfBuffer
+      });
+      const updated = await purchaseOrders.markResent(id, { toEmail, toName: payload.toName, subject });
+      return sendJson(res, 200, { ok: true, purchaseOrder: updated });
+    } catch (err) {
+      console.warn("[po] resend failed:", err);
+      return sendJson(res, 500, { ok: false, errors: [err.message || "Couldn't re-send purchase order."] });
+    }
+  }
+
+  // POST /api/purchase-orders/:id/reorder — clone this PO into a new
+  // draft (same supplier, same line items at fresh prices). Returns the
+  // new draft so the UI can redirect into it.
+  const poReorderMatch = pathname.match(/^\/api\/purchase-orders\/([^/]+)\/reorder$/);
+  if (poReorderMatch && req.method === "POST") {
+    try {
+      const id = decodeURIComponent(poReorderMatch[1]);
+      const partsMap = (PARTS && PARTS.parts) || {};
+      const newPo = await purchaseOrders.reorderFrom(id, partsMap);
+      return sendJson(res, 201, { ok: true, purchaseOrder: newPo });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't re-order."] });
     }
   }
 

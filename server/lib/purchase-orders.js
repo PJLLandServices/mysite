@@ -10,19 +10,27 @@
 // ID format: PO-YYYY-NNNN. Per-year counter, mirrors the rest.
 //
 // Status enum:
-//   draft      — created from a material list, not yet sent
-//   sent       — emailed to supplier; source material-list lines flipped
-//                to "ordered" with poId backref. Locked from edits.
-//   received   — supplier delivered; source material-list lines flipped
-//                from "ordered" to "have"
-//   cancelled  — terminal; source material-list lines flipped back to
-//                "need" (poId cleared) so they can be re-ordered
+//   draft               — created from a material list, not yet sent
+//   sent                — emailed to supplier; source material-list lines
+//                         flipped to "ordered" with poId backref. Locked
+//                         from edits.
+//   partially_received  — some lines fully received, others outstanding
+//                         (Phase 4 partial-receive support)
+//   received            — every line fully received; source material-list
+//                         lines flipped from "ordered" to "have"
+//   cancelled           — terminal; outstanding source lines flipped back
+//                         to "need" (poId cleared) so they can be re-ordered
 //
 // State-flip mechanics (the dance with material-lists.js):
-//   draft -> sent       — caller flips each sourceLine to status="ordered" + poId=this.id
-//   sent  -> received   — caller flips each sourceLine to status="have"
-//   any   -> cancelled  — caller flips ordered lines back to status="need" + poId=null
-// (received -> anything else is blocked: once received, the PO is closed.)
+//   draft -> sent             — flip each sourceLine to status="ordered" + poId=this.id
+//   sent  -> partially_recv   — flip fully-received sourceLines to "have"; partial stay "ordered"
+//   any   -> received         — flip remaining "ordered" sourceLines to "have"
+//   any   -> cancelled        — flip outstanding "ordered" sourceLines back to "need" + poId=null
+//                               (already-received lines stay "have" — can't undo a delivery)
+//
+// Each PO line carries `receivedQty` (default 0). A line is "fully
+// received" when receivedQty >= qty. `deriveStatus()` walks the lines
+// and flips the PO status atomically with each receipt event.
 //
 // Storage: server/data/purchase-orders.json. Same flat-file pattern;
 // rotate to SQLite at ~10k.
@@ -34,7 +42,7 @@ const crypto = require("node:crypto");
 
 const FILE = path.join(__dirname, "..", "data", "purchase-orders.json");
 
-const STATUSES = ["draft", "sent", "received", "cancelled"];
+const STATUSES = ["draft", "sent", "partially_received", "received", "cancelled"];
 
 // ---- File I/O ---------------------------------------------------------
 
@@ -74,6 +82,11 @@ function hydrateLine(line) {
   const qty = Number(line?.qty);
   const safeQty = Number.isFinite(qty) && qty > 0 ? Math.floor(qty) : 1;
   const unitCents = Number.isFinite(Number(line?.unitPriceCents)) ? Math.max(0, Math.floor(Number(line.unitPriceCents))) : 0;
+  // receivedQty defaults to 0 and is bounded [0, qty]. Storing it on the
+  // line lets a single PO go through partial receipts: receive 8 today,
+  // receive the remaining 4 next week. Status derivation reads it.
+  const rawReceived = Number(line?.receivedQty);
+  const receivedQty = Number.isFinite(rawReceived) && rawReceived > 0 ? Math.min(safeQty, Math.floor(rawReceived)) : 0;
   return {
     id: typeof line?.id === "string" && line.id ? line.id : makePoLineId(),
     sku,
@@ -82,8 +95,29 @@ function hydrateLine(line) {
     sourceLineId: typeof line?.sourceLineId === "string" ? line.sourceLineId : null,
     unitPriceCents: unitCents,
     lineTotalCents: unitCents * safeQty,
-    notes: typeof line?.notes === "string" ? line.notes.slice(0, 500) : ""
+    notes: typeof line?.notes === "string" ? line.notes.slice(0, 500) : "",
+    receivedQty,
+    receivedAt: typeof line?.receivedAt === "string" ? line.receivedAt : null
   };
+}
+
+// Walk PO lines and decide whether the PO is sent / partially_received /
+// received. Used after every receipt event to keep the PO status in sync
+// with the line states. Returns the new status; doesn't mutate.
+function deriveReceiveStatus(lineItems) {
+  const lines = Array.isArray(lineItems) ? lineItems : [];
+  if (!lines.length) return "draft";
+  let anyReceived = false;
+  let allFullyReceived = true;
+  for (const l of lines) {
+    const recv = Number(l.receivedQty) || 0;
+    const ord = Number(l.qty) || 0;
+    if (recv > 0) anyReceived = true;
+    if (recv < ord) allFullyReceived = false;
+  }
+  if (allFullyReceived) return "received";
+  if (anyReceived) return "partially_received";
+  return "sent";
 }
 
 function blankPo() {
@@ -281,32 +315,110 @@ async function markSent(id, { toEmail, toName, subject } = {}) {
   return rec;
 }
 
-async function markReceived(id, { note = "" } = {}) {
+// Record a receipt event. `lineUpdates` is a `{ [lineId]: newReceivedQty }`
+// map of ABSOLUTE quantities (not deltas). Pass an empty object (or omit
+// it) to mark every line fully received at once. Each line's receivedQty
+// is clamped to [0, line.qty]. PO status is auto-derived from the line
+// states after the update.
+//
+// Returns:
+//   {
+//     po: <updated record>,
+//     fullyReceivedLineIds: [...] // lines that crossed into receivedQty >= qty
+//                                 // on THIS event (caller flips source lines)
+//   }
+//
+// The caller (server.js /receive endpoint) flips source material-list
+// lines to "have" only for the IDs in fullyReceivedLineIds — partial
+// lines stay "ordered" with poId backref so a subsequent receive event
+// can complete them.
+async function markReceived(id, { lineUpdates = null, note = "" } = {}) {
   const records = await readAll();
   const idx = records.findIndex((r) => r.id === id);
   if (idx === -1) return null;
   const rec = records[idx];
-  if (rec.status !== "sent") {
-    throw new Error(`Can only receive a sent PO. This one is "${rec.status}".`);
+  if (rec.status !== "sent" && rec.status !== "partially_received") {
+    throw new Error(`Can only receive a sent or partially-received PO. This one is "${rec.status}".`);
   }
-  rec.status = "received";
-  rec.receivedAt = nowIso();
-  rec.updatedAt = rec.receivedAt;
-  appendHistory(rec, { action: "received", note });
+  const ts = nowIso();
+  const fullyReceivedLineIds = [];
+
+  // Resolve the requested per-line qtys. If the caller didn't pass any,
+  // treat as "mark every line fully received."
+  const updatesMap = (lineUpdates && typeof lineUpdates === "object" && !Array.isArray(lineUpdates))
+    ? lineUpdates
+    : null;
+
+  for (const line of rec.lineItems) {
+    const wasFullyReceived = (Number(line.receivedQty) || 0) >= (Number(line.qty) || 0);
+    let newReceived;
+    if (updatesMap) {
+      // Only touch lines explicitly in the updates map. Absent lines keep
+      // their current receivedQty.
+      if (!Object.prototype.hasOwnProperty.call(updatesMap, line.id)) continue;
+      const requested = Number(updatesMap[line.id]);
+      newReceived = Number.isFinite(requested) && requested >= 0
+        ? Math.min(Math.floor(requested), line.qty)
+        : line.receivedQty;
+    } else {
+      newReceived = line.qty;
+    }
+    if (newReceived === line.receivedQty) continue;
+    line.receivedQty = newReceived;
+    line.receivedAt = ts;
+    if (!wasFullyReceived && newReceived >= line.qty) {
+      fullyReceivedLineIds.push(line.id);
+    }
+  }
+
+  // Derive new PO status from line states.
+  const newStatus = deriveReceiveStatus(rec.lineItems);
+  const statusChanged = newStatus !== rec.status;
+  rec.status = newStatus;
+  if (newStatus === "received" && !rec.receivedAt) rec.receivedAt = ts;
+  rec.updatedAt = ts;
+
+  // Concise history entry — "received 8 of 12 lines" or "partial: 3 lines"
+  const totalLines = rec.lineItems.length;
+  const fullyDoneCount = rec.lineItems.filter((l) => (l.receivedQty || 0) >= l.qty).length;
+  appendHistory(rec, {
+    action: statusChanged ? `status:${newStatus}` : "receipt_recorded",
+    note: note ? `${fullyDoneCount}/${totalLines} lines fully received — ${note}` : `${fullyDoneCount}/${totalLines} lines fully received`
+  });
+
   records[idx] = rec;
   await writeAll(records);
-  return rec;
+  return { po: rec, fullyReceivedLineIds };
 }
 
+// Cancel a PO. Allowed from draft / sent / partially_received. Already-
+// received lines stay "have" on their source lists (can't undo a delivery
+// — the supplier already shipped). Outstanding (not fully received) lines
+// flip back to "need" — those line ids are returned so server.js can do
+// the source-list flip.
+//
+// Returns:
+//   {
+//     po: <cancelled record>,
+//     outstandingLineIds: [...]   // lines that were NOT fully received,
+//                                  // caller flips their source lines back
+//                                  // to "need" and clears poId
+//   }
 async function markCancelled(id, { reason = "" } = {}) {
   const records = await readAll();
   const idx = records.findIndex((r) => r.id === id);
   if (idx === -1) return null;
   const rec = records[idx];
   if (rec.status === "received") {
-    throw new Error("Can't cancel a received PO. Mark a return separately.");
+    throw new Error("Can't cancel a fully-received PO. Mark a return separately.");
   }
-  if (rec.status === "cancelled") return rec; // idempotent
+  if (rec.status === "cancelled") return { po: rec, outstandingLineIds: [] }; // idempotent
+  const outstandingLineIds = [];
+  for (const line of rec.lineItems) {
+    if ((Number(line.receivedQty) || 0) < (Number(line.qty) || 0)) {
+      outstandingLineIds.push(line.id);
+    }
+  }
   rec.status = "cancelled";
   rec.cancelledAt = nowIso();
   rec.cancelReason = String(reason || "").slice(0, 500);
@@ -314,7 +426,7 @@ async function markCancelled(id, { reason = "" } = {}) {
   appendHistory(rec, { action: "cancelled", note: rec.cancelReason });
   records[idx] = rec;
   await writeAll(records);
-  return rec;
+  return { po: rec, outstandingLineIds };
 }
 
 async function remove(id) {
@@ -384,6 +496,83 @@ function planDraftsFromMaterialList(list, parts) {
   };
 }
 
+// Clone a PO into a new draft (Phase 4 "re-order" feature). Same supplier,
+// same line items at the same quantities, prices snapshotted at clone
+// time from parts.json (passed in by caller — same shape as
+// planDraftsFromMaterialList). Drops sourceMaterialListIds — re-orders
+// aren't tied to a list. Returns the freshly-created PO.
+//
+// `note` is optional; defaults to a back-reference like "Re-order from
+// PO-2026-0001" so the audit trail makes the lineage obvious.
+async function reorderFrom(sourcePoId, parts) {
+  const source = await get(sourcePoId);
+  if (!source) throw new Error(`Source PO ${sourcePoId} not found`);
+  // Snapshot line items, refreshing prices from the catalog at re-order
+  // time. If a SKU has been removed from the catalog (rare), keep the
+  // original price so the new draft stays usable.
+  const lineItems = source.lineItems.map((line) => {
+    const part = parts && parts[line.sku];
+    const unitCents = part && Number.isFinite(Number(part.priceCents))
+      ? Math.max(0, Math.floor(Number(part.priceCents)))
+      : line.unitPriceCents;
+    return {
+      sku: line.sku,
+      qty: line.qty,
+      // No source list back-ref on a re-order — it's a fresh procurement
+      // event independent of any material list.
+      sourceListId: null,
+      sourceLineId: null,
+      unitPriceCents: unitCents,
+      lineTotalCents: unitCents * line.qty,
+      notes: line.notes || ""
+    };
+  });
+  const newPo = await create({
+    supplierId: source.supplierId,
+    supplierName: source.supplierName,
+    supplierEmail: source.supplierEmail,
+    supplierContactName: source.supplierContactName,
+    supplierPhone: source.supplierPhone,
+    supplierAddress: source.supplierAddress,
+    sourceMaterialListIds: [],
+    lineItems,
+    notes: source.notes ? `Re-order of ${source.id}. ${source.notes}` : `Re-order of ${source.id}.`,
+    internalNotes: source.internalNotes || ""
+  });
+  // Add a history entry on the NEW PO that points back at the source.
+  const all = await readAll();
+  const idx = all.findIndex((r) => r.id === newPo.id);
+  if (idx !== -1) {
+    appendHistory(all[idx], { action: "reorder_of", note: source.id });
+    await writeAll(all);
+    return all[idx];
+  }
+  return newPo;
+}
+
+// Mark a re-send event on a sent / partially-received PO. Doesn't change
+// status — just records that the PDF was re-emailed and snapshots the
+// recipient if it changed. Caller is responsible for actually sending
+// the email + rendering the PDF.
+async function markResent(id, { toEmail, toName, subject } = {}) {
+  const records = await readAll();
+  const idx = records.findIndex((r) => r.id === id);
+  if (idx === -1) return null;
+  const rec = records[idx];
+  if (rec.status !== "sent" && rec.status !== "partially_received") {
+    throw new Error(`Can only re-send a sent or partially-received PO. This one is "${rec.status}".`);
+  }
+  const ts = nowIso();
+  if (toEmail) rec.emailedToEmail = String(toEmail).trim().toLowerCase();
+  if (toName) rec.emailedToName = String(toName);
+  if (subject) rec.emailSubject = String(subject).slice(0, 200);
+  rec.updatedAt = ts;
+  appendHistory(rec, { action: "resent", note: rec.emailedToEmail });
+  records[idx] = rec;
+  await writeAll(records);
+  return rec;
+}
+
 module.exports = {
   STATUSES,
   list,
@@ -393,6 +582,9 @@ module.exports = {
   markSent,
   markReceived,
   markCancelled,
+  markResent,
+  reorderFrom,
   remove,
-  planDraftsFromMaterialList
+  planDraftsFromMaterialList,
+  deriveReceiveStatus
 };

@@ -29,7 +29,9 @@
     history: document.getElementById("poHistory"),
 
     sendBtn: document.getElementById("poSendButton"),
+    resendBtn: document.getElementById("poResendButton"),
     receiveBtn: document.getElementById("poReceiveButton"),
+    reorderBtn: document.getElementById("poReorderButton"),
     cancelBtn: document.getElementById("poCancelButton"),
     deleteBtn: document.getElementById("poDeleteButton"),
 
@@ -43,10 +45,28 @@
     sendBody: document.getElementById("poSendBody"),
     sendError: document.getElementById("poSendError"),
     sendConfirm: document.getElementById("poSendConfirm"),
-    sendCancel: document.getElementById("poSendCancel")
+    sendCancel: document.getElementById("poSendCancel"),
+
+    receiveModal: document.getElementById("poReceiveModal"),
+    receiveLines: document.getElementById("poReceiveLines"),
+    receiveNote: document.getElementById("poReceiveNote"),
+    receiveError: document.getElementById("poReceiveError"),
+    receiveCancel: document.getElementById("poReceiveCancel"),
+    receiveAll: document.getElementById("poReceiveAll"),
+    receiveConfirm: document.getElementById("poReceiveConfirm")
   };
 
-  const STATUS_LABELS = { draft: "Draft", sent: "Sent", received: "Received", cancelled: "Cancelled" };
+  const STATUS_LABELS = {
+    draft: "Draft",
+    sent: "Sent",
+    partially_received: "Partial",
+    received: "Received",
+    cancelled: "Cancelled"
+  };
+
+  // Send-modal can also drive the re-send flow. Track which one is open
+  // so the confirm handler routes to /send vs /resend.
+  let sendModalMode = "send"; // "send" | "resend"
 
   const state = {
     poId: null,
@@ -163,10 +183,21 @@
       els.lines.innerHTML = lines.map((line) => {
         const part = state.catalog.parts[line.sku];
         const desc = part ? (part.description || part.sku) : `(SKU ${line.sku})`;
+        const recv = Number(line.receivedQty) || 0;
+        const fullyReceived = recv >= line.qty;
+        let recvIndicator = "";
+        if (recv > 0 && !fullyReceived) {
+          recvIndicator = `<span class="po-line-recv is-partial">received ${recv} of ${line.qty}</span>`;
+        } else if (fullyReceived) {
+          recvIndicator = `<span class="po-line-recv">received ${recv}</span>`;
+        }
         return `
-          <li class="po-line ${locked ? "is-locked" : ""}" data-line-id="${escapeHtml(line.id)}">
+          <li class="po-line ${locked ? "is-locked" : ""} ${fullyReceived ? "is-fully-received" : ""}" data-line-id="${escapeHtml(line.id)}">
             <span class="po-line-sku">${escapeHtml(line.sku)}</span>
-            <span class="po-line-desc">${escapeHtml(desc)}</span>
+            <span class="po-line-desc">
+              ${escapeHtml(desc)}
+              ${recvIndicator}
+            </span>
             <span class="po-line-qty">${line.qty}</span>
             <span class="po-line-unit">${fmtCents(line.unitPriceCents)}</span>
             <span class="po-line-total">${fmtCents(line.lineTotalCents)}</span>
@@ -193,8 +224,10 @@
     const status = state.po.status;
     els.sendBtn.hidden = status !== "draft";
     els.deleteBtn.hidden = status !== "draft";
-    els.receiveBtn.hidden = status !== "sent";
-    els.cancelBtn.hidden = !(status === "draft" || status === "sent");
+    els.resendBtn.hidden = status !== "sent" && status !== "partially_received";
+    els.receiveBtn.hidden = status !== "sent" && status !== "partially_received";
+    els.reorderBtn.hidden = status === "draft"; // anything but draft can be cloned
+    els.cancelBtn.hidden = !(status === "draft" || status === "sent" || status === "partially_received");
   }
 
   // ---- Save state ----------------------------------------------------
@@ -276,12 +309,17 @@
     });
   }
 
-  // ---- Send modal ----------------------------------------------------
-  function openSendModal() {
+  // ---- Send modal (used for both initial send + re-send) ------------
+  function openSendModal({ mode } = {}) {
+    sendModalMode = mode === "resend" ? "resend" : "send";
     els.sendError.hidden = true;
-    els.sendTo.value = state.po.supplierEmail || "";
-    els.sendSubject.value = `Purchase Order ${state.po.id} from PJL Land Services`;
+    els.sendTo.value = state.po.emailedToEmail || state.po.supplierEmail || "";
+    els.sendSubject.value = state.po.emailSubject || `Purchase Order ${state.po.id} from PJL Land Services`;
     els.sendBody.value = "";
+    els.sendModal.querySelector("h3").textContent = sendModalMode === "resend"
+      ? "Re-send PDF to supplier"
+      : "Send purchase order";
+    els.sendConfirm.textContent = sendModalMode === "resend" ? "Re-send PDF" : "Send PDF";
     els.sendModal.hidden = false;
     setTimeout(() => els.sendTo.focus(), 100);
   }
@@ -298,7 +336,8 @@
     }
     els.sendConfirm.disabled = true;
     try {
-      const r = await fetch(`/api/purchase-orders/${encodeURIComponent(state.poId)}/send`, {
+      const endpoint = sendModalMode === "resend" ? "resend" : "send";
+      const r = await fetch(`/api/purchase-orders/${encodeURIComponent(state.poId)}/${endpoint}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -309,7 +348,7 @@
       });
       const data = await r.json().catch(() => ({}));
       if (!r.ok || !data.ok) {
-        els.sendError.textContent = (data.errors && data.errors[0]) || `Send failed (${r.status})`;
+        els.sendError.textContent = (data.errors && data.errors[0]) || `${sendModalMode === "resend" ? "Re-send" : "Send"} failed (${r.status})`;
         els.sendError.hidden = false;
         return;
       }
@@ -324,18 +363,107 @@
     }
   }
 
-  // ---- Receive / Cancel / Delete ------------------------------------
-  async function markReceived() {
-    if (!confirm("Mark this PO as received? Source material-list lines will flip from ordered to have.")) return;
-    const r = await fetch(`/api/purchase-orders/${encodeURIComponent(state.poId)}/receive`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({})
+  // ---- Receive modal (per-line partial-receive support) ------------
+  // Each row's input is the "received THIS delivery" delta — defaults
+  // to the still-outstanding qty so a "click confirm" round-trip works
+  // for the common full-delivery case. We add the delta to the line's
+  // existing receivedQty before sending the absolute total to the server.
+  function openReceiveModal() {
+    els.receiveError.hidden = true;
+    els.receiveNote.value = "";
+    const lines = state.po.lineItems || [];
+    els.receiveLines.innerHTML = lines.map((line) => {
+      const part = state.catalog.parts[line.sku];
+      const desc = part ? (part.description || part.sku) : `(SKU ${line.sku})`;
+      const recv = Number(line.receivedQty) || 0;
+      const remaining = Math.max(0, line.qty - recv);
+      const fullyReceived = remaining === 0;
+      return `
+        <div class="po-receive-row ${fullyReceived ? "is-fully-received" : ""}" data-line-id="${escapeHtml(line.id)}">
+          <div class="po-receive-info">
+            <div class="po-receive-desc">${escapeHtml(desc)}</div>
+            <div class="po-receive-meta">
+              <span style="font-family:ui-monospace,monospace">${escapeHtml(line.sku)}</span> ·
+              ordered <strong>${line.qty}</strong> ·
+              already received <strong>${recv}</strong>${fullyReceived ? " (complete)" : ""}
+            </div>
+          </div>
+          <div class="po-receive-input-wrap">
+            <input type="number" class="po-receive-input" min="0" max="${remaining}"
+              value="${remaining}" data-remaining="${remaining}"
+              ${fullyReceived ? "disabled" : ""} aria-label="Received this delivery">
+            <span class="po-receive-of">of ${remaining}</span>
+          </div>
+        </div>
+      `;
+    }).join("");
+    els.receiveModal.hidden = false;
+  }
+  function closeReceiveModal() {
+    els.receiveModal.hidden = true;
+  }
+  function setReceiveAllRemaining() {
+    els.receiveLines.querySelectorAll("input.po-receive-input").forEach((input) => {
+      if (input.disabled) return;
+      input.value = input.dataset.remaining;
     });
+  }
+  async function confirmReceive() {
+    // Build the absolute lineUpdates map — server expects new totals,
+    // not deltas, so we add the delta-input value to the line's prior
+    // receivedQty.
+    const lineUpdates = {};
+    let anyChange = false;
+    els.receiveLines.querySelectorAll("[data-line-id]").forEach((row) => {
+      const lineId = row.dataset.lineId;
+      const input = row.querySelector("input.po-receive-input");
+      if (!input || input.disabled) return;
+      const delta = Math.max(0, Math.floor(Number(input.value) || 0));
+      if (delta <= 0) return;
+      const line = state.po.lineItems.find((l) => l.id === lineId);
+      if (!line) return;
+      const newTotal = Math.min((Number(line.receivedQty) || 0) + delta, line.qty);
+      if (newTotal !== line.receivedQty) {
+        lineUpdates[lineId] = newTotal;
+        anyChange = true;
+      }
+    });
+    if (!anyChange) {
+      els.receiveError.textContent = "No deliveries entered. Set at least one line's quantity above 0.";
+      els.receiveError.hidden = false;
+      return;
+    }
+    els.receiveConfirm.disabled = true;
+    try {
+      const r = await fetch(`/api/purchase-orders/${encodeURIComponent(state.poId)}/receive`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ lineUpdates, note: els.receiveNote.value || "" })
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok || !data.ok) {
+        els.receiveError.textContent = (data.errors && data.errors[0]) || `Receive failed (${r.status})`;
+        els.receiveError.hidden = false;
+        return;
+      }
+      state.po = data.purchaseOrder;
+      closeReceiveModal();
+      renderAll();
+    } catch (err) {
+      els.receiveError.textContent = err.message || "Receive failed.";
+      els.receiveError.hidden = false;
+    } finally {
+      els.receiveConfirm.disabled = false;
+    }
+  }
+
+  // ---- Reorder ------------------------------------------------------
+  async function reorderPo() {
+    if (!confirm("Clone this PO into a new draft? Same supplier, same line items at fresh prices from the catalog.")) return;
+    const r = await fetch(`/api/purchase-orders/${encodeURIComponent(state.poId)}/reorder`, { method: "POST" });
     const data = await r.json().catch(() => ({}));
-    if (!r.ok || !data.ok) { alert((data.errors && data.errors[0]) || "Couldn't mark received."); return; }
-    state.po = data.purchaseOrder;
-    renderAll();
+    if (!r.ok || !data.ok) { alert((data.errors && data.errors[0]) || "Couldn't re-order."); return; }
+    location.href = `/admin/purchase-order/${encodeURIComponent(data.purchaseOrder.id)}`;
   }
 
   async function cancelPo() {
@@ -370,14 +498,23 @@
     bindFieldInput(els.notes, "notes");
     bindFieldInput(els.internalNotes, "internalNotes");
 
-    els.sendBtn.addEventListener("click", openSendModal);
+    els.sendBtn.addEventListener("click", () => openSendModal({ mode: "send" }));
+    els.resendBtn.addEventListener("click", () => openSendModal({ mode: "resend" }));
     els.sendCancel.addEventListener("click", closeSendModal);
     els.sendModal.addEventListener("click", (event) => {
       if (event.target === els.sendModal) closeSendModal();
     });
     els.sendConfirm.addEventListener("click", confirmSend);
 
-    els.receiveBtn.addEventListener("click", markReceived);
+    els.receiveBtn.addEventListener("click", openReceiveModal);
+    els.receiveCancel.addEventListener("click", closeReceiveModal);
+    els.receiveModal.addEventListener("click", (event) => {
+      if (event.target === els.receiveModal) closeReceiveModal();
+    });
+    els.receiveAll.addEventListener("click", setReceiveAllRemaining);
+    els.receiveConfirm.addEventListener("click", confirmReceive);
+
+    els.reorderBtn.addEventListener("click", reorderPo);
     els.cancelBtn.addEventListener("click", cancelPo);
     els.deleteBtn.addEventListener("click", deleteDraft);
 

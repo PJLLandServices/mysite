@@ -7,15 +7,20 @@ const els = {
   container: document.getElementById("poContainer"),
   empty: document.getElementById("poEmpty"),
   search: document.getElementById("poSearch"),
-  filterButtons: document.querySelectorAll("[data-status-filter]")
+  filterButtons: document.querySelectorAll("[data-status-filter]"),
+  showClosed: document.getElementById("poShowClosed")
 };
 
 const STATUS_LABELS = {
   draft: "Draft",
   sent: "Sent",
+  partially_received: "Partial",
   received: "Received",
   cancelled: "Cancelled"
 };
+// Closed = terminal states. Hidden from the index by default; users
+// toggle "Show closed POs" to see the archive.
+const CLOSED_STATUSES = new Set(["received", "cancelled"]);
 
 let currentStatus = "";
 let cachedPos = [];
@@ -39,19 +44,29 @@ async function load() {
   render();
 }
 
-function applySearch(items) {
+function applyFilters(items) {
+  let result = items;
+  // Hide terminal POs unless either the explicit status filter is one
+  // of them OR the "Show closed" toggle is on. Keeps the default index
+  // focused on active work.
+  const showClosed = els.showClosed.checked;
+  if (!showClosed && !CLOSED_STATUSES.has(currentStatus)) {
+    result = result.filter((po) => !CLOSED_STATUSES.has(po.status));
+  }
   const q = els.search.value.trim().toLowerCase();
-  if (!q) return items;
-  return items.filter((po) => {
-    const haystack = [
-      po.id, po.supplierName, po.supplierEmail, ...(po.sourceMaterialListIds || [])
-    ].map((v) => String(v || "").toLowerCase()).join(" ");
-    return haystack.includes(q);
-  });
+  if (q) {
+    result = result.filter((po) => {
+      const haystack = [
+        po.id, po.supplierName, po.supplierEmail, ...(po.sourceMaterialListIds || [])
+      ].map((v) => String(v || "").toLowerCase()).join(" ");
+      return haystack.includes(q);
+    });
+  }
+  return result;
 }
 
 function render() {
-  const items = applySearch(cachedPos);
+  const items = applyFilters(cachedPos);
   if (!items.length) {
     els.container.innerHTML = "";
     els.empty.hidden = false;
@@ -93,6 +108,7 @@ function render() {
 }
 
 els.search.addEventListener("input", () => render());
+els.showClosed.addEventListener("change", () => render());
 els.filterButtons.forEach((btn) => {
   btn.addEventListener("click", () => {
     currentStatus = btn.dataset.statusFilter || "";

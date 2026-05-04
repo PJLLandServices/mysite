@@ -63,12 +63,16 @@
 
       <section class="suppliers-toolbar">
         <input type="search" id="poSearch" class="ml-search" placeholder="Search by id, supplier, list">
+        <label class="suppliers-toggle">
+          <input type="checkbox" id="poShowClosed"> Show closed POs (received + cancelled)
+        </label>
       </section>
 
       <section class="ml-filters" aria-label="Status filter">
         <button type="button" data-status-filter="" class="is-active">All</button>
         <button type="button" data-status-filter="draft">Draft</button>
         <button type="button" data-status-filter="sent">Sent</button>
+        <button type="button" data-status-filter="partially_received">Partial</button>
         <button type="button" data-status-filter="received">Received</button>
         <button type="button" data-status-filter="cancelled">Cancelled</button>
       </section>

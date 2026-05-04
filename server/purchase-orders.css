@@ -12,7 +12,8 @@
   letter-spacing: 0.06em;
   text-transform: uppercase;
 }
-.po-status--draft     { background: #F0EEE3; color: #4A4A44; }
-.po-status--sent      { background: #DCE5F0; color: #1F4D7A; }
-.po-status--received  { background: #DDEDD0; color: #1B4D2E; }
-.po-status--cancelled { background: #FBEAE7; color: #8A2A1F; }
+.po-status--draft              { background: #F0EEE3; color: #4A4A44; }
+.po-status--sent               { background: #DCE5F0; color: #1F4D7A; }
+.po-status--partially_received { background: #FFF1D6; color: #7A5500; }
+.po-status--received           { background: #DDEDD0; color: #1B4D2E; }
+.po-status--cancelled          { background: #FBEAE7; color: #8A2A1F; }
