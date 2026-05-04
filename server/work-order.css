@@ -1299,6 +1299,16 @@ body[data-locked="true"] .wo-zone-location {
   gap: 10px;
   flex-wrap: wrap;
 }
+.wo-cascade-buttons .pjl-btn-outline {
+  background: #fff;
+  border: 1px solid rgba(27, 77, 46, 0.30);
+  color: #1B4D2E;
+  box-shadow: none;
+}
+.wo-cascade-buttons .pjl-btn-outline:hover {
+  background: rgba(27, 77, 46, 0.05);
+  border-color: #1B4D2E;
+}
 .wo-cascade-status {
   margin: 10px 0 0 !important;
   font-size: 13px;
