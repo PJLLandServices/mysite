@@ -168,34 +168,24 @@ function render() {
     const endMs = setHHmm(day, window.close).getTime();
     totalBookableMs += endMs - startMs;
 
-    // Bookings on this day. Click to reschedule via the shared admin
-    // modal — each card is a button so screen readers + keyboard users
-    // can also activate it. The "Reschedule" chip in the corner makes
-    // the affordance visible (without it, the card just looks decorative).
+    // Bookings on this day. Each card carries the leadId + start time
+    // as data-* attributes; the click is handled via event delegation
+    // on scheduleWeek (set up once, below loadAll). Cards are <button>s
+    // so screen readers + keyboard users can also activate them.
     const dayBookings = bookings.filter((b) => sameDay(new Date(b.start), day));
     dayBookings.forEach((b) => {
       const card = document.createElement("button");
       card.type = "button";
       card.className = "schedule-event schedule-booking";
       card.title = "Click to reschedule this appointment";
+      card.dataset.leadId = b.id;
+      card.dataset.start = b.start;
       card.innerHTML = `
         <span class="event-time">${escapeHtml(fmtTime(b.start))} – ${escapeHtml(fmtTime(b.end))}</span>
         <strong>${escapeHtml(b.label)}</strong>
         <span>${escapeHtml(b.customer)}</span>
         <span class="event-reschedule-hint">📅 Reschedule</span>
       `;
-      card.addEventListener("click", () => {
-        if (typeof window.openCrmReschedule !== "function") return;
-        // Pass leadId AND the booking's exact start time so the modal
-        // can disambiguate when a lead has multiple bookings (original
-        // + follow-up). resolveBookingId picks the booking whose
-        // scheduledFor matches the start we clicked.
-        window.openCrmReschedule({
-          leadId: b.id,
-          scheduledFor: b.start,
-          onDone: () => loadAll().then(render).catch(() => {})
-        });
-      });
       dayCol.append(card);
       totalBookedMs += new Date(b.end) - new Date(b.start);
     });
@@ -295,6 +285,26 @@ function rangesOverlap(aStart, aEnd, bStart, bEnd) {
 
 prevWeekBtn.addEventListener("click", () => { weekStart = addDays(weekStart, -7); render(); });
 nextWeekBtn.addEventListener("click", () => { weekStart = addDays(weekStart, 7); render(); });
+
+// Delegated click for booking cards on the schedule grid. Cards are
+// re-rendered every week-change, so attaching per-card listeners is
+// fragile — one missed re-attachment leaves dead cards. Delegating
+// to scheduleWeek (which exists for the page lifetime) means the
+// reschedule click ALWAYS fires regardless of when the cards were
+// rendered or how many times the grid has been redrawn.
+scheduleWeek.addEventListener("click", (event) => {
+  const card = event.target.closest(".schedule-booking");
+  if (!card) return;
+  if (typeof window.openCrmReschedule !== "function") return;
+  const leadId = card.dataset.leadId;
+  const start = card.dataset.start;
+  if (!leadId) return;
+  window.openCrmReschedule({
+    leadId,
+    scheduledFor: start || undefined,
+    onDone: () => loadAll().then(render).catch(() => {})
+  });
+});
 
 addBlockBtn.addEventListener("click", () => {
   blockLabel.value = "";

@@ -12,6 +12,25 @@
   gap: 12px;
   flex-wrap: wrap;
   margin: 16px 0 14px;
+  /* Card treatment matches .schedule-stats > div so the top strip
+     reads as part of the same surface, not a floating row. */
+  background: #fff;
+  padding: 14px 16px;
+  border-radius: 10px;
+  border: 1px solid rgba(27, 77, 46, 0.10);
+}
+/* Scoped override — outline buttons inside the toolbar were white-text
+   /transparent (designed for a dark page background). Now that the
+   toolbar sits on a white card, swap to green-on-white so the buttons
+   are visible. Mirrors the .pjl-crm-hero override in crm.css. */
+.schedule-toolbar .pjl-btn-outline {
+  background: #fff;
+  color: #1B4D2E;
+  border: 1px solid rgba(27, 77, 46, 0.30);
+}
+.schedule-toolbar .pjl-btn-outline:hover {
+  background: rgba(27, 77, 46, 0.06);
+  border-color: #1B4D2E;
 }
 .schedule-range {
   font-family: "Barlow Condensed", sans-serif;
