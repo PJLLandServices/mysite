@@ -155,5 +155,32 @@
     });
   }
 
-  window.CrmParts = { render, getCheckedSkus, setCheckedSkus };
+  // Shared catalog loader. First caller fires the fetch; subsequent
+  // callers (within the same page session) await the same promise.
+  // Avoids the modal AND the tech-mode bringback each hitting /api/parts
+  // independently. Browser cache (max-age=300) + SW cache handle longer
+  // horizons; this handles the same-session case.
+  let catalogPromise = null;
+  function loadCatalog() {
+    if (catalogPromise) return catalogPromise;
+    catalogPromise = fetch("/api/parts")
+      .then((r) => r.json())
+      .then((data) => {
+        if (!data || !data.ok) throw new Error("catalog load failed");
+        return {
+          categories: data.categories || [],
+          parts: data.parts || {},
+          service_materials: data.service_materials || {}
+        };
+      })
+      .catch((err) => {
+        // Reset on failure so the next caller can retry instead of
+        // forever resolving to nothing.
+        catalogPromise = null;
+        throw err;
+      });
+    return catalogPromise;
+  }
+
+  window.CrmParts = { render, getCheckedSkus, setCheckedSkus, loadCatalog };
 })();

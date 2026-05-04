@@ -2850,13 +2850,19 @@ async function init() {
 
 async function loadPartsCatalog() {
   if (state.partsCatalog) return;
+  // Routes through the shared CrmParts.loadCatalog so the follow-up
+  // modal + this page share the same in-page promise. First caller
+  // fires the network round-trip; subsequent callers reuse the
+  // resolved catalog. Browser cache (max-age=300) + SW cache cover
+  // longer horizons.
   try {
-    const r = await fetch("/api/parts", { cache: "force-cache" });
-    const data = await r.json().catch(() => ({}));
-    if (data.ok && data.parts && data.service_materials) {
+    const data = window.CrmParts && window.CrmParts.loadCatalog
+      ? await window.CrmParts.loadCatalog()
+      : null;
+    if (data && data.parts) {
       state.partsCatalog = data.parts;
       state.partsCategories = Array.isArray(data.categories) ? data.categories : [];
-      state.serviceMaterials = data.service_materials;
+      state.serviceMaterials = data.service_materials || {};
     }
   } catch (err) {
     console.warn("[materials] parts.json load failed:", err?.message);

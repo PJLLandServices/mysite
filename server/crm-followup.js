@@ -207,11 +207,15 @@
     // Two parallel fetches: availability for sprinkler_repair (the
     // default service for follow-ups) and the parts catalog. Either
     // failure is non-fatal — we degrade gracefully.
+    // Catalog goes through CrmParts.loadCatalog so the tech-mode
+    // bringback section + this modal share one fetch per session.
     const availUrl = `/api/booking/availability?service=sprinkler_repair&address=${encodeURIComponent(parentAddress)}&days=30`;
-    const partsUrl = "/api/parts";
+    const partsLoad = (window.CrmParts && window.CrmParts.loadCatalog)
+      ? window.CrmParts.loadCatalog().catch((err) => ({ _err: err.message || "load failed" }))
+      : Promise.resolve({ _err: "CrmParts not loaded" });
     const [availResp, partsResp] = await Promise.all([
       fetch(availUrl).then((r) => r.json()).catch((err) => ({ ok: false, errors: [err.message] })),
-      partsCatalog ? Promise.resolve({ ok: true, categories: partsCatalog.categories, parts: partsCatalog.parts }) : fetch(partsUrl).then((r) => r.json()).catch((err) => ({ ok: false, errors: [err.message] }))
+      partsLoad
     ]);
 
     if (availResp.ok) {
@@ -221,10 +225,8 @@
       slotsHelp.textContent = (availResp.errors || ["Couldn't load times."]).join(" ");
     }
 
-    if (partsResp.ok && partsResp.parts) {
-      // Cache the FULL catalog envelope (categories + parts) so reopens
-      // skip the network round-trip.
-      partsCatalog = { categories: partsResp.categories || [], parts: partsResp.parts };
+    if (partsResp && !partsResp._err && partsResp.parts) {
+      partsCatalog = partsResp;
       renderParts(partsCatalog);
     } else {
       modal.querySelector("[data-parts]").textContent = "Parts catalog unavailable. You can still schedule — Patrick will sort packing.";

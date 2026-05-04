@@ -19,7 +19,7 @@
 //   - Conflict resolution (last-write-wins; the queue replay endpoint
 //     trusts the latest mutation, no IF-MATCH revision check)
 
-const CACHE_VERSION = "pjl-tech-v9";
+const CACHE_VERSION = "pjl-tech-v10";
 const STATIC_ASSETS = [
   "/crm/work-order-tech.html",
   "/crm/work-order-tech.js",
@@ -83,6 +83,15 @@ self.addEventListener("fetch", (event) => {
   if (url.pathname.match(/^\/api\/work-orders\/[^/]+$/) ||
       url.pathname.match(/^\/api\/properties\/[^/]+$/) ||
       url.pathname.match(/^\/api\/properties\/[^/]+\/deferred/)) {
+    event.respondWith(networkFirstAndCache(req));
+    return;
+  }
+
+  // Parts catalog — network-first (so price/SKU updates propagate as
+  // soon as the next page load happens online) but cached so the modal
+  // + bringback section open instantly on subsequent loads + work
+  // offline. Catalog is small (~35 KB) so this is essentially free.
+  if (url.pathname === "/api/parts") {
     event.respondWith(networkFirstAndCache(req));
     return;
   }

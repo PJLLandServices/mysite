@@ -3315,12 +3315,21 @@ async function handleApi(req, res, pathname) {
   // ---------- Parts catalog (admin-gated, used by tech materials UI) ----
   if (req.method === "GET" && pathname === "/api/parts") {
     if (!PARTS) return sendJson(res, 503, { ok: false, errors: ["parts.json not loaded on the server."] });
-    return sendJson(res, 200, {
+    // Catalog rarely changes intra-session — let the browser cache it
+    // for 5 min and the SW serve it offline. Bypass sendJson because
+    // sendJson hard-codes cache-control: no-store.
+    const body = JSON.stringify({
       ok: true,
       categories: PARTS.categories || [],
       parts: PARTS.parts || {},
       service_materials: PARTS.service_materials || {}
     });
+    res.writeHead(200, {
+      "content-type": "application/json; charset=utf-8",
+      "cache-control": "public, max-age=300"
+    });
+    res.end(body);
+    return;
   }
 
   // ---------- Follow-up WO trigger (spec §4.3.2) ------------------------
