@@ -149,7 +149,99 @@
 .submit-cta-actions .ghost:hover{background:rgba(255,255,255,.14);}
 
 @media(max-width:760px){.review-stats-grid{grid-template-columns:repeat(2,1fr);}.aggregate{padding:30px 24px;}}
-@media(max-width:640px){.reviews-hero{padding:var(--hero-nav-clearance) 0 56px;}}</style>
+@media(max-width:640px){.reviews-hero{padding:var(--hero-nav-clearance) 0 56px;}}
+
+/* "Moments from the field" — editorial video tiles. Each tile is a
+   self-contained portrait card: full-bleed dog video as the
+   background, dark gradient overlay for legibility, translucent
+   caption card pinned to the bottom corner. Reads like a magazine
+   spread, not a "centered figure with caption underneath". */
+.field-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: clamp(16px, 2.5vw, 24px);
+  max-width: 920px;
+  margin: 0 auto;
+}
+.field-tile {
+  position: relative;
+  aspect-ratio: 4 / 5;
+  border-radius: 16px;
+  overflow: hidden;
+  box-shadow: 0 16px 40px rgba(15, 31, 20, 0.18);
+  isolation: isolate;
+  background: #0f1f14;
+}
+.field-tile__video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center 60%;
+  z-index: 0;
+  pointer-events: none;
+}
+/* Bottom-up gradient for caption-card legibility, plus a subtle top
+   vignette so the tile reads framed at every aspect. */
+.field-tile::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  background:
+    linear-gradient(to top,
+      rgba(0, 0, 0, 0.62) 0%,
+      rgba(0, 0, 0, 0.32) 28%,
+      rgba(0, 0, 0, 0.05) 55%,
+      transparent 70%),
+    linear-gradient(to bottom,
+      rgba(0, 0, 0, 0.18) 0%,
+      transparent 30%);
+  pointer-events: none;
+}
+.field-tile__caption {
+  position: absolute;
+  left: clamp(14px, 2.2vw, 22px);
+  right: clamp(14px, 2.2vw, 22px);
+  bottom: clamp(14px, 2.2vw, 22px);
+  z-index: 2;
+  background: rgba(15, 31, 20, 0.55);
+  -webkit-backdrop-filter: blur(10px) saturate(1.15);
+  backdrop-filter: blur(10px) saturate(1.15);
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: 12px;
+  padding: clamp(14px, 1.8vw, 18px) clamp(16px, 2vw, 20px);
+  color: #fff;
+}
+.field-tile__caption-eyebrow {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--amber-light);
+  margin-bottom: 6px;
+}
+.field-tile__caption p {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.95);
+}
+@media (max-width: 640px) {
+  .field-grid {
+    grid-template-columns: 1fr;
+    gap: 16px;
+  }
+  .field-tile {
+    aspect-ratio: 3 / 4;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .field-tile__video { display: none; }
+  .field-tile { background: linear-gradient(135deg, var(--green) 0%, var(--green-mid) 100%); }
+}</style>
 <script type="application/ld+json">
 {
   "@context": "https://schema.org",
@@ -331,18 +423,24 @@
       <p style="max-width:640px; margin:12px auto 0;">Sometimes the best feedback isn't in a Google review. Pop-up heads are designed to take a beating, and our four-legged QA team makes sure of it.</p>
     </div>
 
-    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 24px; max-width: 920px; margin: 0 auto;">
-      <figure style="margin: 0;">
-        <video autoplay loop muted playsinline preload="auto" aria-label="Customer's dog meets a freshly-installed PJL Land Services sprinkler system" style="width: 100%; height: auto; border-radius: 12px; box-shadow: 0 6px 20px rgba(0,0,0,0.18); display: block;">
+    <div class="field-grid">
+      <figure class="field-tile">
+        <video class="field-tile__video" autoplay loop muted playsinline preload="auto" aria-label="Customer's dog runs through a freshly-installed PJL Land Services sprinkler system, PJL truck visible in the driveway">
           <source src="dog-vs-sprinkler-1.mp4" type="video/mp4">
         </video>
-        <figcaption style="text-align: center; font-size: 13px; color: #666; margin-top: 10px; font-style: italic;">Customer's dog meets the system on a fresh install.</figcaption>
+        <figcaption class="field-tile__caption">
+          <span class="field-tile__caption-eyebrow">Newmarket · Fresh Install</span>
+          <p>Customer's dog meets the system the day we finished. The lawn was the easy part.</p>
+        </figcaption>
       </figure>
-      <figure style="margin: 0;">
-        <video autoplay loop muted playsinline preload="auto" aria-label="Hunter heads enduring a four-legged enthusiast on a customer's lawn" style="width: 100%; height: auto; border-radius: 12px; box-shadow: 0 6px 20px rgba(0,0,0,0.18); display: block;">
+      <figure class="field-tile">
+        <video class="field-tile__video" autoplay loop muted playsinline preload="auto" aria-label="A pop-up Hunter sprinkler head running while a customer's dog plays around it on a lush lawn">
           <source src="dog-vs-sprinkler-2.mp4" type="video/mp4">
         </video>
-        <figcaption style="text-align: center; font-size: 13px; color: #666; margin-top: 10px; font-style: italic;">Hunter heads are built for the abuse, and they take it.</figcaption>
+        <figcaption class="field-tile__caption">
+          <span class="field-tile__caption-eyebrow">Hunter Pop-Ups · Built For The Abuse</span>
+          <p>Pop-up heads are designed to take a beating. Our four-legged QA team makes sure of it.</p>
+        </figcaption>
       </figure>
     </div>
   </div>
