@@ -16,7 +16,20 @@ const els = {
   newCancel: document.getElementById("newListCancel"),
   search: document.getElementById("listSearch"),
   includeArchived: document.getElementById("includeArchived"),
-  filterButtons: document.querySelectorAll("[data-status-filter]")
+  filterButtons: document.querySelectorAll("[data-status-filter]"),
+  parentFilterButtons: document.querySelectorAll("[data-parent-filter]")
+};
+
+// Display labels for the parent type chip on each card.
+const PARENT_TYPE_LABELS = {
+  project: "Project",
+  work_order: "Work order",
+  quote: "Quote"
+};
+const PARENT_TYPE_HREF_PATH = {
+  project: "/admin/project/",
+  work_order: "/admin/work-order/",
+  quote: "/admin/quote-folder"
 };
 
 const STATUS_LABELS = {
@@ -27,6 +40,7 @@ const STATUS_LABELS = {
 };
 
 let currentStatus = "";
+let currentParentFilter = "";   // "" | "project" | "work_order" | "quote" | "standalone"
 let cachedLists = [];
 
 function escapeHtml(s) {
@@ -57,19 +71,39 @@ async function loadLists() {
   renderLists();
 }
 
-function applySearch(items) {
+function applyFilters(items) {
+  let result = items;
+  // Parent filter — server only narrows by (parentType, parentId) tuple,
+  // so we filter by parentType-only on the client. "standalone" matches
+  // records with no parent.
+  if (currentParentFilter === "standalone") {
+    result = result.filter((rec) => !rec.parentType);
+  } else if (currentParentFilter) {
+    result = result.filter((rec) => rec.parentType === currentParentFilter);
+  }
+  // Free-text search across visible identifiers.
   const q = els.search.value.trim().toLowerCase();
-  if (!q) return items;
-  return items.filter((rec) => {
-    const haystack = [
-      rec.id, rec.name, rec.customerName, rec.customerEmail, rec.address
-    ].map((v) => String(v || "").toLowerCase()).join(" ");
-    return haystack.includes(q);
-  });
+  if (q) {
+    result = result.filter((rec) => {
+      const haystack = [
+        rec.id, rec.name, rec.customerName, rec.customerEmail, rec.address, rec.parentId
+      ].map((v) => String(v || "").toLowerCase()).join(" ");
+      return haystack.includes(q);
+    });
+  }
+  return result;
+}
+
+function renderParentChip(rec) {
+  if (!rec.parentType || !rec.parentId) {
+    return `<span class="proj-chip"><em style="color:#7A7A72">Standalone</em></span>`;
+  }
+  const label = PARENT_TYPE_LABELS[rec.parentType] || rec.parentType;
+  return `<span class="proj-chip"><strong>${escapeHtml(label)}</strong> &middot; ${escapeHtml(rec.parentId)}</span>`;
 }
 
 function renderLists() {
-  const items = applySearch(cachedLists);
+  const items = applyFilters(cachedLists);
   if (!items.length) {
     els.container.innerHTML = "";
     els.empty.hidden = false;
@@ -92,6 +126,7 @@ function renderLists() {
             <strong>${escapeHtml(customerLine)}</strong>${addressLine}
             <br>Updated ${escapeHtml(fmtDate(rec.updatedAt))}
           </div>
+          <div class="proj-card-chips">${renderParentChip(rec)}</div>
           <div class="ml-card-stats">
             <span class="ml-stat"><span class="ml-stat-num">${totals.lineCount || 0}</span><span class="ml-stat-label">lines</span></span>
             <span class="ml-stat"><span class="ml-stat-num ml-stat-num--need">${totals.needCount || 0}</span><span class="ml-stat-label">need</span></span>
@@ -165,6 +200,14 @@ els.filterButtons.forEach((btn) => {
     currentStatus = btn.dataset.statusFilter || "";
     els.filterButtons.forEach((b) => b.classList.toggle("is-active", b === btn));
     loadLists();
+  });
+});
+els.parentFilterButtons.forEach((btn) => {
+  btn.addEventListener("click", () => {
+    currentParentFilter = btn.dataset.parentFilter || "";
+    els.parentFilterButtons.forEach((b) => b.classList.toggle("is-active", b === btn));
+    // Parent filter is client-side only — no server round-trip needed.
+    renderLists();
   });
 });
 

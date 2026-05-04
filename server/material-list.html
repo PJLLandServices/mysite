@@ -25,6 +25,7 @@
       <a href="/admin/schedule">Schedule</a>
       <a href="/admin/handoff">Handoff</a>
       <a href="/admin/properties">Properties</a>
+      <a href="/admin/projects">Projects</a>
       <a href="/admin/quote-folder">Quotes</a>
       <a href="/admin/invoices">Invoices</a>
       <a href="/admin/material-lists" class="is-active">Materials</a>
@@ -83,7 +84,27 @@
               <textarea id="mlbNotes" rows="2" maxlength="4000" placeholder="Internal notes (not on POs)."></textarea>
             </label>
           </div>
-          <p class="mlb-parent-note" id="mlbParentNote" hidden></p>
+          <!-- Parent attachment banner. Shows current parent (if any)
+               with a deep-link, or "Standalone" + a Change button that
+               opens the picker below. -->
+          <div class="mlb-parent-bar">
+            <div class="mlb-parent-current">
+              <span class="mlb-parent-label">Attached to</span>
+              <strong id="mlbParentName">Standalone</strong>
+              <a id="mlbParentLink" hidden>Open →</a>
+            </div>
+            <button type="button" class="mlb-parent-change" id="mlbAttachToggle">Change</button>
+          </div>
+          <div class="mlb-parent-picker" id="mlbParentPicker" hidden>
+            <div class="mlb-parent-picker-tabs" role="tablist">
+              <button type="button" data-parent-type="project">Project</button>
+              <button type="button" data-parent-type="work_order">Work order</button>
+              <button type="button" data-parent-type="quote">Quote</button>
+              <button type="button" data-parent-type="">Standalone (detach)</button>
+            </div>
+            <input type="search" class="mlb-search" id="mlbParentSearch" placeholder="Search by id or name" autocomplete="off" hidden>
+            <div class="mlb-parent-results" id="mlbParentResults"></div>
+          </div>
         </section>
 
         <!-- Line items the user has added -->
@@ -94,6 +115,12 @@
           </div>
           <p class="mlb-empty" id="mlbLinesEmpty">No items yet — search below or browse the catalog.</p>
           <ul class="mlb-lines" id="mlbLines"></ul>
+          <details class="mlb-copy-from" id="mlbCopySection">
+            <summary>Copy items from another list</summary>
+            <p class="mlb-copy-hint">Cloned lines arrive marked <strong>need</strong> at the same quantities. Existing lines stay untouched — duplicates merge by SKU and increment quantity.</p>
+            <input type="search" class="mlb-search" id="mlbCopySearch" placeholder="Search past lists by name, customer, or id" autocomplete="off">
+            <div class="mlb-copy-results" id="mlbCopyResults"></div>
+          </details>
         </section>
 
         <!-- Add items: search + browse catalog -->

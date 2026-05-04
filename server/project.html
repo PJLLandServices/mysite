@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#0F1F14">
+  <title>Project — PJL</title>
+  <link rel="icon" type="image/svg+xml" href="/crm/pjl-logo-mark.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/crm/crm.css">
+  <link rel="stylesheet" href="/crm/material-lists.css">
+  <link rel="stylesheet" href="/crm/projects.css">
+</head>
+<body class="pjl-crm-body suppliers-body">
+  <aside class="pjl-admin-nav" id="navMenu" aria-label="PJL CRM Navigation">
+    <header class="pjl-side-brand">
+      <a href="/" class="pjl-side-logo"><img src="/crm/pjl-logo.svg" alt="PJL Land Services"></a>
+    </header>
+    <div class="pjl-nav-links">
+      <a href="/admin/today">Today</a>
+      <a href="/admin">CRM</a>
+      <a href="/admin/schedule">Schedule</a>
+      <a href="/admin/handoff">Handoff</a>
+      <a href="/admin/properties">Properties</a>
+      <a href="/admin/projects" class="is-active">Projects</a>
+      <a href="/admin/quote-folder">Quotes</a>
+      <a href="/admin/invoices">Invoices</a>
+      <a href="/admin/material-lists">Materials</a>
+      <a href="/admin/chats">AI Chats</a>
+      <a href="/admin/settings">Settings</a>
+    </div>
+    <footer class="pjl-side-footer">
+      <a class="pjl-side-phone" href="tel:+19059600181">(905) 960-0181</a>
+      <button class="pjl-nav-logout" type="button" id="logoutButton">Log out</button>
+    </footer>
+  </aside>
+
+  <div class="pjl-app">
+    <header class="pjl-app-topbar">
+      <button class="pjl-nav-toggle" type="button" id="navToggle" aria-label="Menu" aria-expanded="false" aria-controls="navMenu">
+        <span class="pjl-nav-toggle-bar"></span>
+        <span class="pjl-nav-toggle-bar"></span>
+        <span class="pjl-nav-toggle-bar"></span>
+      </button>
+      <span class="pjl-app-title">Project</span>
+      <a class="pjl-app-phone" href="tel:+19059600181">(905) 960-0181</a>
+    </header>
+
+    <main class="proj-shell">
+      <a class="proj-back" href="/admin/projects">&larr; All projects</a>
+      <p class="proj-loading" id="projLoading">Loading…</p>
+      <p class="proj-error" id="projError" role="alert" hidden></p>
+
+      <section id="projPage" hidden>
+        <section class="proj-header">
+          <div class="proj-header-id">
+            <span class="proj-header-id-text" id="projId"></span>
+            <span class="proj-status" id="projStatus"></span>
+            <span class="proj-header-source" id="projSource" hidden></span>
+          </div>
+          <label class="proj-name-field">
+            <span>Project name</span>
+            <input type="text" id="projName" maxlength="200" placeholder="Untitled project">
+          </label>
+          <div class="proj-fields">
+            <label>
+              <span>Customer name</span>
+              <input type="text" id="projCustomerName" maxlength="200">
+            </label>
+            <label>
+              <span>Customer email</span>
+              <input type="email" id="projCustomerEmail" maxlength="254">
+            </label>
+            <label>
+              <span>Customer phone</span>
+              <input type="tel" id="projCustomerPhone" maxlength="40">
+            </label>
+            <label>
+              <span>Property</span>
+              <input type="text" id="projPropertyId" maxlength="80" placeholder="(property id)">
+            </label>
+            <label class="proj-fields-wide">
+              <span>Address</span>
+              <input type="text" id="projAddress" maxlength="400">
+            </label>
+            <label class="proj-fields-wide">
+              <span>Scope / description</span>
+              <textarea id="projDescription" rows="2" maxlength="2000" placeholder="One-paragraph project scope."></textarea>
+            </label>
+            <label class="proj-fields-wide">
+              <span>Notes</span>
+              <textarea id="projNotes" rows="2" maxlength="4000" placeholder="Internal notes."></textarea>
+            </label>
+          </div>
+        </section>
+
+        <section class="proj-section">
+          <div class="proj-section-head">
+            <h2>Work orders</h2>
+            <button type="button" class="pjl-btn pjl-btn-primary" id="attachWoButton">+ Attach work order</button>
+          </div>
+          <p class="proj-empty" id="projWosEmpty" hidden>No work orders attached yet. Use <strong>+ Attach work order</strong> to link an existing WO from this customer.</p>
+          <ul class="proj-row-list" id="projWosList"></ul>
+        </section>
+
+        <section class="proj-section">
+          <div class="proj-section-head">
+            <h2>Material lists</h2>
+            <button type="button" class="pjl-btn pjl-btn-primary" id="newMaterialListButton">+ New material list</button>
+          </div>
+          <p class="proj-empty" id="projMlsEmpty" hidden>No material lists yet. Create one to track parts for this project.</p>
+          <ul class="proj-row-list" id="projMlsList"></ul>
+        </section>
+
+        <section class="proj-footer-actions">
+          <button type="button" class="pjl-btn pjl-btn-outline" id="archiveButton">Archive project</button>
+          <button type="button" class="pjl-btn pjl-btn-outline is-danger" id="deleteButton">Delete project</button>
+        </section>
+      </section>
+    </main>
+  </div>
+
+  <!-- Sticky savebar — visible once the page loads. Status selector lives
+       here so changing project lifecycle is one tap regardless of scroll
+       position. -->
+  <div class="proj-savebar" id="projSavebar" hidden>
+    <div class="proj-savebar-inner">
+      <div class="proj-savebar-status-pill">
+        <label for="projStatusSelect" style="font-size:11px;letter-spacing:0.06em;text-transform:uppercase;color:#7A7A72">Status</label>
+        <select id="projStatusSelect">
+          <option value="planning">Planning</option>
+          <option value="active">Active</option>
+          <option value="complete">Complete</option>
+          <option value="archived">Archived</option>
+        </select>
+      </div>
+      <span class="proj-savebar-state" id="projSaveState">Saved</span>
+    </div>
+  </div>
+
+  <!-- Attach WO modal -->
+  <div class="proj-modal-backdrop" id="attachWoModal" hidden role="dialog" aria-modal="true">
+    <div class="proj-modal">
+      <h3>Attach existing work order</h3>
+      <input type="search" class="proj-modal-search" id="attachWoSearch" placeholder="Search WOs by id, customer, or address" autocomplete="off">
+      <p class="proj-empty" id="attachWoHint" style="margin-bottom:8px">Most-recently-updated first. Already-attached WOs are dimmed.</p>
+      <div class="proj-modal-results" id="attachWoResults"></div>
+      <div class="proj-modal-actions">
+        <button type="button" class="pjl-btn pjl-btn-outline" id="attachWoCancel">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/crm/crm-nav.js"></script>
+  <script src="/crm/project.js"></script>
+</body>
+</html>

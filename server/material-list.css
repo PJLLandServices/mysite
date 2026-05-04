@@ -133,6 +133,223 @@
   color: #4A4A44;
 }
 
+/* Parent attachment bar (and the picker that toggles below it). */
+.mlb-parent-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  background: #FCFBF4;
+  border: 1px solid #E2E0D4;
+  border-radius: 8px;
+}
+.mlb-parent-current {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  font-size: 13px;
+  color: #4A4A44;
+  flex: 1 1 200px;
+  min-width: 0;
+}
+.mlb-parent-label {
+  text-transform: uppercase;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: #7A7A72;
+}
+.mlb-parent-current strong {
+  color: #1F2A22;
+  font-weight: 600;
+}
+.mlb-parent-current a {
+  color: #1B4D2E;
+  text-decoration: none;
+  font-size: 13px;
+}
+.mlb-parent-current a:hover { text-decoration: underline; }
+.mlb-parent-change {
+  min-height: 36px;
+  padding: 6px 12px;
+  border: 1px solid #C7C0A8;
+  border-radius: 6px;
+  background: #fff;
+  cursor: pointer;
+  font-size: 12px;
+  color: #1B4D2E;
+}
+.mlb-parent-change:hover { background: #F5F2E5; }
+
+.mlb-parent-picker {
+  margin-top: 8px;
+  padding: 12px;
+  background: #FAFAF5;
+  border: 1px solid #E2E0D4;
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.mlb-parent-picker-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.mlb-parent-picker-tabs button {
+  padding: 8px 12px;
+  border: 1px solid #C7C0A8;
+  border-radius: 999px;
+  background: #fff;
+  cursor: pointer;
+  font-size: 12px;
+  color: #4A4A44;
+  min-height: 36px;
+}
+.mlb-parent-picker-tabs button.is-active {
+  background: #1B4D2E;
+  color: #fff;
+  border-color: #1B4D2E;
+}
+.mlb-parent-results {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 280px;
+  overflow-y: auto;
+}
+.mlb-parent-result {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+  align-items: center;
+  padding: 9px 12px;
+  border: 1px solid #E8E5D7;
+  border-radius: 6px;
+  background: #fff;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+}
+.mlb-parent-result:hover { background: #F5F2E5; }
+.mlb-parent-result.is-current { background: #DDEDD0; border-color: #B5D29A; }
+.mlb-parent-result-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.mlb-parent-result-name {
+  font-weight: 600;
+  color: #1F2A22;
+  font-size: 14px;
+}
+.mlb-parent-result-meta {
+  font-size: 12px;
+  color: #7A7A72;
+  font-family: ui-monospace, "SFMono-Regular", monospace;
+}
+.mlb-parent-results-empty {
+  padding: 12px;
+  background: #fff;
+  border: 1px dashed #C7C0A8;
+  border-radius: 6px;
+  text-align: center;
+  color: #7A7A72;
+  font-size: 13px;
+}
+
+/* Copy-from-past expandable */
+.mlb-copy-from {
+  margin-top: 14px;
+  border-top: 1px solid #F0EEE3;
+  padding-top: 10px;
+}
+.mlb-copy-from > summary {
+  cursor: pointer;
+  padding: 12px 4px;
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.10em;
+  text-transform: uppercase;
+  color: #1B4D2E;
+  list-style: none;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+}
+.mlb-copy-from > summary::-webkit-details-marker { display: none; }
+.mlb-copy-from > summary::before {
+  content: "+";
+  font-size: 18px;
+  margin-right: 8px;
+  color: #1B4D2E;
+}
+.mlb-copy-from[open] > summary::before { content: "−"; }
+.mlb-copy-hint {
+  margin: 0 0 10px;
+  font-size: 13px;
+  color: #4A4A44;
+  background: #FCFBF4;
+  border-left: 3px solid #C7C0A8;
+  padding: 8px 12px;
+  border-radius: 4px;
+}
+.mlb-copy-results {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+.mlb-copy-result {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px 12px;
+  align-items: center;
+  padding: 10px 12px;
+  border: 1px solid #E8E5D7;
+  border-radius: 6px;
+  background: #FCFBF4;
+}
+.mlb-copy-result-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.mlb-copy-result-name {
+  font-weight: 600;
+  color: #1F2A22;
+  font-size: 14px;
+}
+.mlb-copy-result-meta {
+  font-size: 12px;
+  color: #7A7A72;
+}
+.mlb-copy-result-add {
+  min-height: 36px;
+  min-width: 60px;
+  padding: 0 12px;
+  border: 1px solid #1B4D2E;
+  border-radius: 6px;
+  background: #1B4D2E;
+  color: #fff;
+  font-weight: 700;
+  font-size: 12px;
+  cursor: pointer;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.mlb-copy-result-add:hover { background: #15402b; }
+.mlb-copy-result-add.is-disabled { background: #fff; color: #7A7A72; border-color: #C7C0A8; cursor: not-allowed; }
+
 /* ---- Line items section ---- */
 .mlb-section-head {
   display: flex;

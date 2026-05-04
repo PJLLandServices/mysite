@@ -18,6 +18,15 @@
     address: document.getElementById("mlbAddress"),
     notes: document.getElementById("mlbNotes"),
     parentNote: document.getElementById("mlbParentNote"),
+    parentName: document.getElementById("mlbParentName"),
+    parentLink: document.getElementById("mlbParentLink"),
+    attachToggle: document.getElementById("mlbAttachToggle"),
+    parentPicker: document.getElementById("mlbParentPicker"),
+    parentSearch: document.getElementById("mlbParentSearch"),
+    parentResults: document.getElementById("mlbParentResults"),
+    copySection: document.getElementById("mlbCopySection"),
+    copySearch: document.getElementById("mlbCopySearch"),
+    copyResults: document.getElementById("mlbCopyResults"),
     lines: document.getElementById("mlbLines"),
     linesEmpty: document.getElementById("mlbLinesEmpty"),
     lineCount: document.getElementById("mlbLineCount"),
@@ -49,7 +58,37 @@
     saveTimer: null,
     saving: false,
     lastSavedAt: null,
-    pendingError: null
+    pendingError: null,
+
+    // Parent-picker state. Cache fetched index per type so re-opening the
+    // picker doesn't re-fetch unnecessarily. `pickerType` is the currently
+    // selected tab (project / work_order / quote / "" for detach).
+    pickerType: null,
+    parentCache: { project: null, work_order: null, quote: null },
+
+    // Copy-from-past state. Cache the lists index after first open.
+    copyCache: null
+  };
+
+  const PARENT_TYPE_LABELS = {
+    project: "Project",
+    work_order: "Work order",
+    quote: "Quote"
+  };
+  const PARENT_TYPE_ENDPOINTS = {
+    project: "/api/projects?includeArchived=1",
+    work_order: "/api/work-orders",
+    quote: "/api/admin/quote-folder"
+  };
+  const PARENT_TYPE_COLLECTION_KEY = {
+    project: "projects",
+    work_order: "workOrders",
+    quote: "quotes"
+  };
+  const PARENT_TYPE_HREF_PATH = {
+    project: "/admin/project/",
+    work_order: "/admin/work-order/",
+    quote: "/admin/quote-folder"
   };
 
   // ---- Utility -------------------------------------------------------
@@ -152,13 +191,31 @@
     if (document.activeElement !== els.address) els.address.value = state.list.address || "";
     if (document.activeElement !== els.notes) els.notes.value = state.list.notes || "";
 
-    // Parent note. Phase 1 lists are standalone; Phase 2 will populate
-    // this with a link to the parent project / WO / quote.
+    // Legacy parentNote — Phase 2 promotes this to a full bar with a
+    // change button. Keep the element hidden but updated for any older
+    // page state that still references it.
+    if (els.parentNote) els.parentNote.hidden = true;
+
+    // Parent attachment bar — populated whether or not a parent is set.
     if (state.list.parentType && state.list.parentId) {
-      els.parentNote.hidden = false;
-      els.parentNote.textContent = `Attached to ${state.list.parentType.replace("_", " ")} ${state.list.parentId}`;
+      const label = PARENT_TYPE_LABELS[state.list.parentType] || state.list.parentType;
+      els.parentName.textContent = `${label} · ${state.list.parentId}`;
+      const hrefPath = PARENT_TYPE_HREF_PATH[state.list.parentType];
+      if (hrefPath) {
+        // Quote folder is the index for quote (no per-quote detail page),
+        // so the link goes there rather than to a per-id URL that doesn't
+        // exist. Project / WO link to their own detail pages.
+        const target = state.list.parentType === "quote"
+          ? hrefPath
+          : hrefPath + encodeURIComponent(state.list.parentId);
+        els.parentLink.href = target;
+        els.parentLink.hidden = false;
+      } else {
+        els.parentLink.hidden = true;
+      }
     } else {
-      els.parentNote.hidden = true;
+      els.parentName.textContent = "Standalone";
+      els.parentLink.hidden = true;
     }
 
     els.archiveButton.textContent = state.list.status === "archived" ? "Restore from archive" : "Archive list";
@@ -480,6 +537,182 @@
     scheduleSave();
   }
 
+  // ---- Parent picker -------------------------------------------------
+  function openPickerToggle() {
+    const willOpen = els.parentPicker.hidden;
+    els.parentPicker.hidden = !willOpen;
+    if (willOpen) {
+      // Default to the type the list is currently attached to (so the
+      // user lands looking at the relevant index). Standalone -> project.
+      pickPickerTab(state.list.parentType || "project");
+    }
+  }
+
+  function pickPickerTab(parentType) {
+    state.pickerType = parentType || "";
+    // Update tab visual state
+    els.parentPicker.querySelectorAll("[data-parent-type]").forEach((btn) => {
+      btn.classList.toggle("is-active", btn.dataset.parentType === state.pickerType);
+    });
+    if (!state.pickerType) {
+      // Detach (standalone). Show a confirm row instead of a picker.
+      els.parentSearch.hidden = true;
+      els.parentResults.innerHTML = (state.list.parentType && state.list.parentId)
+        ? `<div class="mlb-parent-results-empty">
+             <p style="margin:0 0 10px">Detach this list from its current parent (<strong>${escapeHtml(state.list.parentType.replace("_"," "))} ${escapeHtml(state.list.parentId)}</strong>)?</p>
+             <button type="button" class="mlb-result-add" id="mlbDetachConfirm">Detach</button>
+           </div>`
+        : `<div class="mlb-parent-results-empty">This list is already standalone.</div>`;
+      return;
+    }
+    els.parentSearch.hidden = false;
+    els.parentSearch.value = "";
+    els.parentResults.innerHTML = `<div class="mlb-parent-results-empty">Loading…</div>`;
+    loadParentIndex(state.pickerType).then(() => renderParentResults()).catch((err) => {
+      els.parentResults.innerHTML = `<div class="mlb-parent-results-empty">Couldn't load: ${escapeHtml(err.message || "unknown error")}</div>`;
+    });
+  }
+
+  async function loadParentIndex(type) {
+    if (state.parentCache[type]) return state.parentCache[type];
+    const r = await fetch(PARENT_TYPE_ENDPOINTS[type], { cache: "no-store" });
+    const data = await r.json();
+    if (!data || !data.ok) throw new Error("Couldn't load index");
+    const key = PARENT_TYPE_COLLECTION_KEY[type];
+    state.parentCache[type] = Array.isArray(data[key]) ? data[key] : [];
+    return state.parentCache[type];
+  }
+
+  function renderParentResults() {
+    const type = state.pickerType;
+    if (!type) return;
+    const all = state.parentCache[type] || [];
+    const q = els.parentSearch.value.trim().toLowerCase();
+    const filtered = q
+      ? all.filter((rec) => {
+          const haystack = [rec.id, rec.name, rec.customerName, rec.customerEmail, rec.address].map((v) => String(v || "").toLowerCase()).join(" ");
+          return haystack.includes(q);
+        })
+      : all.slice(0, 30);
+    if (!filtered.length) {
+      els.parentResults.innerHTML = `<div class="mlb-parent-results-empty">No matches.</div>`;
+      return;
+    }
+    const isCurrent = (rec) => state.list.parentType === type && state.list.parentId === rec.id;
+    els.parentResults.innerHTML = filtered.slice(0, 30).map((rec) => {
+      const name = rec.name || rec.customerName || rec.id;
+      const meta = [rec.id, rec.customerName, rec.customerEmail].filter(Boolean).join(" · ");
+      return `
+        <button type="button" class="mlb-parent-result ${isCurrent(rec) ? "is-current" : ""}" data-parent-id="${escapeHtml(rec.id)}">
+          <div class="mlb-parent-result-info">
+            <div class="mlb-parent-result-name">${escapeHtml(name)}</div>
+            <div class="mlb-parent-result-meta">${escapeHtml(meta)}</div>
+          </div>
+          <span style="font-size:12px;color:#7A7A72">${isCurrent(rec) ? "current" : "+ pick"}</span>
+        </button>
+      `;
+    }).join("");
+  }
+
+  function attachToParent(parentType, parentId) {
+    state.list.parentType = parentType || null;
+    state.list.parentId = parentId || null;
+    renderHeader();
+    // Force-save immediately so the parent change is durable before any
+    // line-item edits queue up behind it.
+    scheduleSave(true);
+    els.parentPicker.hidden = true;
+  }
+
+  // ---- Copy from past list ------------------------------------------
+  async function loadCopyCache() {
+    if (state.copyCache) return state.copyCache;
+    const r = await fetch("/api/material-lists?withTotals=1&includeArchived=1", { cache: "no-store" });
+    const data = await r.json();
+    if (!data || !data.ok) throw new Error("Couldn't load lists");
+    // Exclude this list itself — copying yourself is a no-op anyway, but
+    // the UI shouldn't offer it.
+    state.copyCache = (data.lists || []).filter((rec) => rec.id !== state.listId);
+    return state.copyCache;
+  }
+
+  function renderCopyResults() {
+    const all = state.copyCache || [];
+    const q = els.copySearch.value.trim().toLowerCase();
+    const filtered = q
+      ? all.filter((rec) => [rec.id, rec.name, rec.customerName].map((v) => String(v || "").toLowerCase()).join(" ").includes(q))
+      : all.slice(0, 20);
+    if (!filtered.length) {
+      els.copyResults.innerHTML = `<div class="mlb-parent-results-empty">No matches.</div>`;
+      return;
+    }
+    els.copyResults.innerHTML = filtered.slice(0, 20).map((rec) => {
+      const totals = rec.totals || {};
+      const lineCount = totals.lineCount || (rec.lineItems || []).length || 0;
+      const disabled = lineCount === 0;
+      return `
+        <div class="mlb-copy-result" data-list-id="${escapeHtml(rec.id)}">
+          <div class="mlb-copy-result-info">
+            <div class="mlb-copy-result-name">${escapeHtml(rec.name || "(untitled)")}</div>
+            <div class="mlb-copy-result-meta">
+              <span style="font-family:ui-monospace,monospace">${escapeHtml(rec.id)}</span>
+              ${rec.customerName ? ` · ${escapeHtml(rec.customerName)}` : ""}
+              · ${lineCount} line${lineCount === 1 ? "" : "s"}
+            </div>
+          </div>
+          <button type="button" class="mlb-copy-result-add ${disabled ? "is-disabled" : ""}" data-action="copy" ${disabled ? "disabled" : ""}>${disabled ? "empty" : "copy"}</button>
+        </div>
+      `;
+    }).join("");
+  }
+
+  async function copyFromList(sourceId) {
+    // Fetch the full source list (the index might omit lineItems detail
+    // depending on what was cached). One round-trip = safe + simple.
+    const r = await fetch(`/api/material-lists/${encodeURIComponent(sourceId)}`, { cache: "no-store" });
+    const data = await r.json();
+    if (!data || !data.ok || !data.list) {
+      alert("Couldn't load source list.");
+      return;
+    }
+    const sourceLines = Array.isArray(data.list.lineItems) ? data.list.lineItems : [];
+    if (!sourceLines.length) return;
+
+    // Merge into current line items by SKU. Existing SKU -> bump qty.
+    // New SKU -> append at status: need (regardless of source status —
+    // copy is a planning aid, not a state import).
+    const bySku = new Map();
+    for (const l of state.list.lineItems || []) {
+      bySku.set(l.sku, l);
+    }
+    let added = 0, merged = 0;
+    for (const src of sourceLines) {
+      if (!src.sku) continue;
+      const existing = bySku.get(src.sku);
+      if (existing && existing.status !== "ordered") {
+        existing.qty = Math.min((Number(existing.qty) || 0) + (Number(src.qty) || 0), 9999);
+        merged++;
+      } else {
+        const newLine = {
+          id: "tmp_" + Math.random().toString(36).slice(2, 10),
+          sku: src.sku,
+          qty: Math.min(Number(src.qty) || 1, 9999),
+          status: "need",
+          poId: null,
+          notes: src.notes || ""
+        };
+        state.list.lineItems = state.list.lineItems || [];
+        state.list.lineItems.push(newLine);
+        bySku.set(src.sku, newLine);
+        added++;
+      }
+    }
+    renderAll();
+    scheduleSave();
+    // Brief inline confirmation in the copy hint area.
+    els.copyResults.innerHTML = `<div class="mlb-parent-results-empty" style="background:#DDEDD0;border-color:#B5D29A;color:#1B4D2E"><strong>Copied:</strong> ${added} added, ${merged} merged.</div>`;
+  }
+
   // ---- Top-level field updates (debounced auto-save) ----------------
   function bindFieldInput(input, fieldName) {
     input.addEventListener("input", () => {
@@ -549,6 +782,45 @@
       // 120ms debounce — keeps long-press / fast typing snappy without
       // re-rendering on every keystroke.
       searchTimer = setTimeout(() => renderSearchResults(), 120);
+    });
+
+    // Parent picker
+    els.attachToggle.addEventListener("click", openPickerToggle);
+    els.parentPicker.addEventListener("click", (event) => {
+      const tabBtn = event.target.closest("[data-parent-type]");
+      if (tabBtn) { pickPickerTab(tabBtn.dataset.parentType); return; }
+      const result = event.target.closest("[data-parent-id]");
+      if (result) { attachToParent(state.pickerType, result.dataset.parentId); return; }
+      const detachBtn = event.target.closest("#mlbDetachConfirm");
+      if (detachBtn) { attachToParent(null, null); return; }
+    });
+    let parentSearchTimer = null;
+    els.parentSearch.addEventListener("input", () => {
+      if (parentSearchTimer) clearTimeout(parentSearchTimer);
+      parentSearchTimer = setTimeout(() => renderParentResults(), 120);
+    });
+
+    // Copy from past list — load on first open of <details>.
+    els.copySection.addEventListener("toggle", async () => {
+      if (!els.copySection.open) return;
+      els.copyResults.innerHTML = `<div class="mlb-parent-results-empty">Loading…</div>`;
+      try {
+        await loadCopyCache();
+        renderCopyResults();
+      } catch (err) {
+        els.copyResults.innerHTML = `<div class="mlb-parent-results-empty">Couldn't load: ${escapeHtml(err.message || "unknown error")}</div>`;
+      }
+    });
+    let copySearchTimer = null;
+    els.copySearch.addEventListener("input", () => {
+      if (copySearchTimer) clearTimeout(copySearchTimer);
+      copySearchTimer = setTimeout(() => renderCopyResults(), 120);
+    });
+    els.copyResults.addEventListener("click", (event) => {
+      const btn = event.target.closest("[data-action='copy']");
+      if (!btn || btn.disabled) return;
+      const row = event.target.closest("[data-list-id]");
+      if (row) copyFromList(row.dataset.listId);
     });
 
     // Footer actions

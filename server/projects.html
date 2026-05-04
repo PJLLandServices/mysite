@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <meta name="theme-color" content="#0F1F14">
-  <title>Material lists — PJL</title>
+  <title>Projects — PJL</title>
   <link rel="icon" type="image/svg+xml" href="/crm/pjl-logo-mark.svg">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -12,6 +12,7 @@
   <link rel="stylesheet" href="/crm/crm.css">
   <link rel="stylesheet" href="/crm/suppliers.css">
   <link rel="stylesheet" href="/crm/material-lists.css">
+  <link rel="stylesheet" href="/crm/projects.css">
 </head>
 <body class="pjl-crm-body suppliers-body">
   <aside class="pjl-admin-nav" id="navMenu" aria-label="PJL CRM Navigation">
@@ -24,10 +25,10 @@
       <a href="/admin/schedule">Schedule</a>
       <a href="/admin/handoff">Handoff</a>
       <a href="/admin/properties">Properties</a>
-      <a href="/admin/projects">Projects</a>
+      <a href="/admin/projects" class="is-active">Projects</a>
       <a href="/admin/quote-folder">Quotes</a>
       <a href="/admin/invoices">Invoices</a>
-      <a href="/admin/material-lists" class="is-active">Materials</a>
+      <a href="/admin/material-lists">Materials</a>
       <a href="/admin/chats">AI Chats</a>
       <a href="/admin/settings">Settings</a>
     </div>
@@ -44,23 +45,18 @@
         <span class="pjl-nav-toggle-bar"></span>
         <span class="pjl-nav-toggle-bar"></span>
       </button>
-      <span class="pjl-app-title">Material lists</span>
+      <span class="pjl-app-title">Projects</span>
       <a class="pjl-app-phone" href="tel:+19059600181">(905) 960-0181</a>
     </header>
 
     <main class="suppliers-shell">
-      <nav class="suppliers-subnav" aria-label="Materials sub-sections">
-        <a href="/admin/material-lists" class="is-active" aria-current="page">Material lists</a>
-        <a href="/admin/suppliers">Suppliers</a>
-      </nav>
-
       <section class="suppliers-explainer">
-        <p><strong>Material lists</strong> are the bill of materials for any job — a quote, a service call, or a project. Each line references a SKU from the parts catalog. Mark lines as <em>need</em> or <em>have</em>; in Phase 3 the <em>need</em> lines turn into purchase orders grouped by supplier.</p>
+        <p><strong>Projects</strong> group multi-visit jobs (renovations, full installs) under one name. Each project links to a customer + property and rolls up multiple work orders + material lists. Standalone repairs and one-off service calls don't need a project — book them as service visits and they live on the property record directly.</p>
       </section>
 
       <section class="suppliers-toolbar">
-        <button type="button" class="pjl-btn pjl-btn-primary" id="newListButton">+ New material list</button>
-        <input type="search" id="listSearch" class="ml-search" placeholder="Search by name or customer">
+        <button type="button" class="pjl-btn pjl-btn-primary" id="newProjectButton">+ New project</button>
+        <input type="search" id="projectSearch" class="ml-search" placeholder="Search by name, customer, address">
         <label class="suppliers-toggle">
           <input type="checkbox" id="includeArchived"> Show archived
         </label>
@@ -68,48 +64,49 @@
 
       <section class="ml-filters" aria-label="Status filter">
         <button type="button" data-status-filter="" class="is-active">All</button>
-        <button type="button" data-status-filter="draft">Draft</button>
-        <button type="button" data-status-filter="in_progress">In progress</button>
+        <button type="button" data-status-filter="planning">Planning</button>
+        <button type="button" data-status-filter="active">Active</button>
         <button type="button" data-status-filter="complete">Complete</button>
         <button type="button" data-status-filter="archived">Archived</button>
       </section>
-      <section class="ml-filters" aria-label="Parent filter">
-        <button type="button" data-parent-filter="" class="is-active">Any parent</button>
-        <button type="button" data-parent-filter="project">Project</button>
-        <button type="button" data-parent-filter="work_order">Work order</button>
-        <button type="button" data-parent-filter="quote">Quote</button>
-        <button type="button" data-parent-filter="standalone">Standalone</button>
-      </section>
 
-      <form class="supplier-form" id="newListForm" hidden aria-label="New material list">
-        <h2>New material list</h2>
+      <form class="supplier-form" id="newProjectForm" hidden aria-label="New project">
+        <h2>New project</h2>
         <div class="supplier-form-grid">
           <label class="supplier-field supplier-field--wide">
-            <span>List name <abbr title="required">*</abbr></span>
-            <input type="text" id="newListName" required maxlength="200" placeholder="e.g. Smith install — front yard" autocomplete="off">
+            <span>Project name <abbr title="required">*</abbr></span>
+            <input type="text" id="newProjectName" required maxlength="200" placeholder="e.g. Carter renovation - front yard" autocomplete="off">
           </label>
           <label class="supplier-field">
             <span>Customer name</span>
-            <input type="text" id="newListCustomerName" maxlength="200" autocomplete="off">
+            <input type="text" id="newProjectCustomerName" maxlength="200" autocomplete="off">
           </label>
           <label class="supplier-field">
+            <span>Customer email</span>
+            <input type="email" id="newProjectCustomerEmail" maxlength="254" autocomplete="off">
+          </label>
+          <label class="supplier-field supplier-field--wide">
             <span>Address</span>
-            <input type="text" id="newListAddress" maxlength="400" autocomplete="off">
+            <input type="text" id="newProjectAddress" maxlength="400" autocomplete="off">
+          </label>
+          <label class="supplier-field supplier-field--wide">
+            <span>Description</span>
+            <textarea id="newProjectDescription" rows="2" maxlength="2000" placeholder="One-line scope (optional)"></textarea>
           </label>
         </div>
-        <p class="supplier-form-error" id="newListError" role="alert" hidden></p>
+        <p class="supplier-form-error" id="newProjectError" role="alert" hidden></p>
         <div class="supplier-form-actions">
-          <button type="submit" class="pjl-btn pjl-btn-primary" id="newListSave">Create list</button>
-          <button type="button" class="pjl-btn pjl-btn-outline" id="newListCancel">Cancel</button>
+          <button type="submit" class="pjl-btn pjl-btn-primary" id="newProjectSave">Create project</button>
+          <button type="button" class="pjl-btn pjl-btn-outline" id="newProjectCancel">Cancel</button>
         </div>
       </form>
 
-      <p class="suppliers-empty" id="listsEmpty" hidden>No material lists yet. Create your first one above.</p>
-      <ul class="ml-cards" id="listsContainer" aria-label="Material lists"></ul>
+      <p class="suppliers-empty" id="projectsEmpty" hidden>No projects yet. Create one above to start grouping multi-visit work.</p>
+      <ul class="ml-cards" id="projectsContainer" aria-label="Projects"></ul>
     </main>
   </div>
 
   <script src="/crm/crm-nav.js"></script>
-  <script src="/crm/material-lists.js"></script>
+  <script src="/crm/projects.js"></script>
 </body>
 </html>

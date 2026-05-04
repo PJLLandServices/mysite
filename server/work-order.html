@@ -17,6 +17,8 @@
   <link rel="stylesheet" href="/crm/crm-reschedule.css">
   <link rel="stylesheet" href="/crm/crm-parts.css">
   <link rel="stylesheet" href="/crm/crm-followup.css">
+  <link rel="stylesheet" href="/crm/material-lists.css">
+  <link rel="stylesheet" href="/crm/projects.css">
 </head>
 <body class="pjl-crm-body">
   <aside class="pjl-admin-nav" id="navMenu" aria-label="PJL CRM Navigation">
@@ -29,6 +31,7 @@
       <a href="/admin/schedule">Schedule</a>
       <a href="/admin/handoff">Handoff</a>
       <a href="/admin/properties">Properties</a>
+      <a href="/admin/projects">Projects</a>
       <a href="/admin/quote-folder">Quotes</a>
       <a href="/admin/invoices">Invoices</a>
       <a href="/admin/material-lists">Materials</a>
@@ -164,6 +167,20 @@
         <h2>Diagnosis (from intake)</h2>
         <p class="property-section-help">What the customer or AI chat said before the visit. Use it as a starting point — adjust on-site as needed.</p>
         <pre id="woDiagnosis"></pre>
+      </section>
+
+      <!-- Materials section (Phase 2 embed). Lists material lists attached
+           to this WO with parentType="work_order". The "+ New" button
+           spawns a fresh list pre-attached and redirects into the builder. -->
+      <section class="property-section" id="woMaterialsSection">
+        <header class="property-section-head" style="display:flex;align-items:baseline;justify-content:space-between;gap:12px">
+          <h2>Materials</h2>
+          <button type="button" class="property-add" id="woMaterialsAdd">+ New material list</button>
+        </header>
+        <p class="property-section-help">Bill of materials for this visit. Mark lines as <em>need</em> or <em>have</em>; in Phase 3 outstanding <em>need</em> lines become purchase orders grouped by supplier.</p>
+        <p class="proj-empty" id="woMaterialsEmpty" hidden>No material lists for this WO yet.</p>
+        <p class="wo-cascade-status" id="woMaterialsError" role="alert" hidden></p>
+        <ul class="proj-row-list" id="woMaterialsList"></ul>
       </section>
 
       <section class="property-section">
@@ -331,5 +348,6 @@
   <script src="/crm/crm-parts.js"></script>
   <script src="/crm/crm-followup.js"></script>
   <script src="/crm/work-order.js"></script>
+  <script src="/crm/wo-materials.js"></script>
 </body>
 </html>

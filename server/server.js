@@ -53,6 +53,7 @@ const quickbooks = require("./lib/quickbooks");
 const bookings = require("./lib/bookings");
 const suppliers = require("./lib/suppliers");
 const materialLists = require("./lib/material-lists");
+const projects = require("./lib/projects");
 
 // Short, customer-friendly work order ID. Eight chars from a UUIDv4 base32-ish
 // alphabet (no I/O/0/1 to keep them unambiguous when read aloud or hand-written).
@@ -296,6 +297,9 @@ function needsAuth(method, pathname) {
   if (pathname === "/admin/suppliers" || pathname === "/admin/suppliers/") return true;
   if (pathname === "/admin/material-lists" || pathname === "/admin/material-lists/") return true;
   if (/^\/admin\/material-list\/[^/]+\/?$/.test(pathname)) return true;
+  // Projects (Phase 2 — multi-WO container that material lists attach to).
+  if (pathname === "/admin/projects" || pathname === "/admin/projects/") return true;
+  if (/^\/admin\/project\/[^/]+\/?$/.test(pathname)) return true;
   if (pathname === "/api/quotes" && method === "GET") return true;
   if (pathname === "/api/quotes.csv" || pathname === "/api/contacts" || pathname === "/api/contacts.vcf") return true;
   if (/^\/api\/quotes\/[^/]+/.test(pathname)) return true;
@@ -321,6 +325,7 @@ function needsAuth(method, pathname) {
   if (pathname.startsWith("/api/bookings")) return true;
   if (pathname.startsWith("/api/suppliers")) return true;
   if (pathname.startsWith("/api/material-lists")) return true;
+  if (pathname.startsWith("/api/projects")) return true;
   // Per-lead property link/dismiss/attach + tech actions are admin-only.
   if (/^\/api\/leads\/[^/]+\/(link-property|dismiss-property-suggestion|attach-property|notify-on-route|open-wo)$/.test(pathname)) return true;
   // Bulk property import is admin-only.
@@ -3965,6 +3970,173 @@ async function handleApi(req, res, pathname) {
     return sendJson(res, 200, { ok: true, removed });
   }
 
+  // ---------- Projects (Phase 2) -------------------------------------
+  // The multi-WO container (PROJ-YYYY-NNNN). Customer + property linked,
+  // workOrderIds[] for the WOs that roll up under it. Material lists
+  // attach to a project via the materialLists record's parentType +
+  // parentId fields (no back-reference stored on the project — single
+  // source of truth lives on the materialLists side).
+
+  if (req.method === "GET" && pathname === "/api/projects") {
+    const url = new URL(req.url, baseUrlFromReq(req));
+    const status = url.searchParams.get("status");
+    const propertyId = url.searchParams.get("propertyId");
+    const includeArchived = url.searchParams.get("includeArchived") === "1";
+    const all = await projects.list({ status, propertyId, includeArchived });
+    all.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
+    return sendJson(res, 200, { ok: true, projects: all });
+  }
+
+  if (req.method === "POST" && pathname === "/api/projects") {
+    try {
+      const payload = await parseRequestBody(req);
+      const created = await projects.create(payload);
+      return sendJson(res, 201, { ok: true, project: created });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't create project."] });
+    }
+  }
+
+  const projectMatch = pathname.match(/^\/api\/projects\/([^/]+)$/);
+  if (projectMatch && req.method === "GET") {
+    const id = decodeURIComponent(projectMatch[1]);
+    const proj = await projects.get(id);
+    if (!proj) return sendJson(res, 404, { ok: false, errors: ["Project not found."] });
+    // Surface attached material lists in-line so the project page only
+    // needs one round-trip to render. Lists carry their own totals when
+    // the partsMap is provided.
+    const attachedLists = await materialLists.list({ parentType: "project", parentId: id, includeArchived: true });
+    const partsMap = (PARTS && PARTS.parts) || {};
+    const enrichedLists = attachedLists.map((rec) => ({ ...rec, totals: materialLists.computeTotals(rec, partsMap) }));
+    return sendJson(res, 200, { ok: true, project: proj, materialLists: enrichedLists });
+  }
+  if (projectMatch && req.method === "PATCH") {
+    try {
+      const id = decodeURIComponent(projectMatch[1]);
+      const payload = await parseRequestBody(req);
+      const updated = await projects.update(id, payload);
+      if (!updated) return sendJson(res, 404, { ok: false, errors: ["Project not found."] });
+      return sendJson(res, 200, { ok: true, project: updated });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't update project."] });
+    }
+  }
+  if (projectMatch && req.method === "DELETE") {
+    const id = decodeURIComponent(projectMatch[1]);
+    const removed = await projects.remove(id);
+    if (!removed) return sendJson(res, 404, { ok: false, errors: ["Project not found."] });
+    // Detach any material lists that pointed at this project so they
+    // don't render with a dangling parent badge.
+    const attached = await materialLists.list({ parentType: "project", parentId: id, includeArchived: true });
+    for (const rec of attached) {
+      await materialLists.update(rec.id, { parentType: null, parentId: null });
+    }
+    return sendJson(res, 200, { ok: true, removed });
+  }
+
+  // POST /api/projects/:id/attach-work-order { workOrderId }
+  const projectAttachWoMatch = pathname.match(/^\/api\/projects\/([^/]+)\/attach-work-order$/);
+  if (projectAttachWoMatch && req.method === "POST") {
+    try {
+      const id = decodeURIComponent(projectAttachWoMatch[1]);
+      const payload = await parseRequestBody(req);
+      const woId = String(payload.workOrderId || "").trim();
+      if (!woId) return sendJson(res, 422, { ok: false, errors: ["workOrderId required."] });
+      // Verify the WO actually exists before attaching — prevents typos
+      // from creating ghost references.
+      const wo = await workOrders.get(woId);
+      if (!wo) return sendJson(res, 404, { ok: false, errors: [`Work order ${woId} not found.`] });
+      const updated = await projects.attachWorkOrder(id, woId);
+      if (!updated) return sendJson(res, 404, { ok: false, errors: ["Project not found."] });
+      return sendJson(res, 200, { ok: true, project: updated });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't attach work order."] });
+    }
+  }
+  // POST /api/projects/:id/detach-work-order { workOrderId }
+  const projectDetachWoMatch = pathname.match(/^\/api\/projects\/([^/]+)\/detach-work-order$/);
+  if (projectDetachWoMatch && req.method === "POST") {
+    try {
+      const id = decodeURIComponent(projectDetachWoMatch[1]);
+      const payload = await parseRequestBody(req);
+      const woId = String(payload.workOrderId || "").trim();
+      const updated = await projects.detachWorkOrder(id, woId);
+      if (!updated) return sendJson(res, 404, { ok: false, errors: ["Project not found."] });
+      return sendJson(res, 200, { ok: true, project: updated });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't detach work order."] });
+    }
+  }
+
+  // POST /api/quotes/:id/convert-to-project — spin a Project out of a
+  // Quote: snapshots customer + property, sets sourceQuoteId, and
+  // re-parents any material lists that were attached to the quote so
+  // they carry over to the project's working list. Returns the new
+  // project. Idempotent guard: if a project already exists with this
+  // sourceQuoteId, return it without creating a duplicate.
+  const quoteConvertMatch = pathname.match(/^\/api\/quotes\/([^/]+)\/convert-to-project$/);
+  if (quoteConvertMatch && req.method === "POST") {
+    try {
+      const quoteId = decodeURIComponent(quoteConvertMatch[1]);
+      const quote = await quotes.get(quoteId);
+      if (!quote) return sendJson(res, 404, { ok: false, errors: [`Quote ${quoteId} not found.`] });
+
+      // Idempotency — don't create a second project for the same quote.
+      const existing = await projects.list({ includeArchived: true });
+      const dupe = existing.find((p) => p.sourceQuoteId === quoteId);
+      if (dupe) {
+        return sendJson(res, 200, { ok: true, project: dupe, alreadyExisted: true });
+      }
+
+      // Pull customer + address from the quote's lead (if linked) so the
+      // project carries the customer details forward.
+      let leadCustomer = null;
+      if (quote.leadId) {
+        const allLeads = await readLeads();
+        leadCustomer = allLeads.find((l) => l.id === quote.leadId) || null;
+      }
+
+      const customerName = leadCustomer?.name || "";
+      const customerEmail = quote.customerEmail || leadCustomer?.email || "";
+      const customerPhone = leadCustomer?.phone || "";
+      const address = leadCustomer?.location || leadCustomer?.address || "";
+      const propertyId = quote.propertyId || leadCustomer?.propertyId || null;
+
+      // Auto-generate a project name from the customer + quote id. Patrick
+      // can rename it from the project page.
+      const namePieces = [];
+      if (customerName) namePieces.push(customerName);
+      namePieces.push(`(from ${quoteId})`);
+      const name = namePieces.join(" ").slice(0, 200);
+
+      const proj = await projects.create({
+        name,
+        customerName,
+        customerEmail,
+        customerPhone,
+        address,
+        propertyId,
+        sourceQuoteId: quoteId,
+        description: quote.scope || ""
+      });
+
+      // Re-parent any material lists that were attached to this quote.
+      // The user's spec frames this as "convert quote's list into the
+      // project's working list" — re-parent (not copy) keeps the audit
+      // trail single-source.
+      const attached = await materialLists.list({ parentType: "quote", parentId: quoteId, includeArchived: true });
+      const reparented = [];
+      for (const rec of attached) {
+        const updated = await materialLists.update(rec.id, { parentType: "project", parentId: proj.id });
+        if (updated) reparented.push(updated.id);
+      }
+
+      return sendJson(res, 201, { ok: true, project: proj, reparentedListIds: reparented });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't convert quote."] });
+    }
+  }
+
   if (req.method === "GET" && pathname === "/api/work-orders") {
     const url = new URL(req.url, baseUrlFromReq(req));
     const propertyId = url.searchParams.get("propertyId");
@@ -5963,6 +6135,13 @@ function resolveStaticTarget(pathname) {
   }
   if (/^\/admin\/material-list\/[^/]+\/?$/.test(pathname)) {
     return { dir: SERVER_DIR, relative: "/material-list.html" };
+  }
+  // Projects (Phase 2 — multi-WO container).
+  if (pathname === "/admin/projects" || pathname === "/admin/projects/") {
+    return { dir: SERVER_DIR, relative: "/projects.html" };
+  }
+  if (/^\/admin\/project\/[^/]+\/?$/.test(pathname)) {
+    return { dir: SERVER_DIR, relative: "/project.html" };
   }
   // Tech-mode pop-out — mobile-first, tap-optimized layout. Same WO id,
   // different page. Route check must come BEFORE the desktop editor's
