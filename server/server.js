@@ -3343,8 +3343,13 @@ async function handleApi(req, res, pathname) {
   //                  absent, behavior is the legacy "Patrick to slot it"
   //                  flow — WO created, Patrick paged.
   //   serviceKey   — availability.js key, defaults to "sprinkler_repair".
-  //   materials    — array of part SKUs the tech wants pre-loaded for
-  //                  the next visit. Stored on wo.materialsPacked.
+  //   materials    — qty map { sku: qty (number) } the tech wants
+  //                  pre-loaded for the next visit. Stored on
+  //                  wo.materialsPacked. Legacy: also accepts an array
+  //                  of SKU strings (each treated as qty=1) for older
+  //                  clients still posting that shape.
+  //   customParts  — array of free-form parts not in the catalog:
+  //                  [{ name, size, qty }]. Stored on wo.customParts.
   //   notes        — addendum to the diagnosis ("here's what's missing").
   const woFollowupMatch = pathname.match(/^\/api\/work-orders\/([^/]+)\/followup$/);
   if (woFollowupMatch && req.method === "POST") {
@@ -3357,7 +3362,33 @@ async function handleApi(req, res, pathname) {
       const serviceKey = typeof payload.serviceKey === "string" && payload.serviceKey
         ? payload.serviceKey
         : "sprinkler_repair";
-      const materials = Array.isArray(payload.materials) ? payload.materials.filter((s) => typeof s === "string") : [];
+      // Normalize materials into a qty map. Legacy payloads send an
+      // array of SKUs (qty=1 each); current payloads send a { sku: qty }
+      // object. The downstream code only ever needs the map.
+      const materialsQty = (() => {
+        const out = {};
+        const raw = payload.materials;
+        if (Array.isArray(raw)) {
+          raw.forEach((s) => { if (typeof s === "string" && s) out[s] = 1; });
+        } else if (raw && typeof raw === "object") {
+          for (const [sku, val] of Object.entries(raw)) {
+            if (!sku || typeof sku !== "string") continue;
+            const n = Math.max(0, Math.floor(Number(val) || 0));
+            if (n > 0) out[sku] = n;
+          }
+        }
+        return out;
+      })();
+      const customPartsList = Array.isArray(payload.customParts)
+        ? payload.customParts
+            .filter((p) => p && typeof p === "object")
+            .map((p) => ({
+              name: typeof p.name === "string" ? p.name.slice(0, 120) : "",
+              size: typeof p.size === "string" ? p.size.slice(0, 16) : "",
+              qty: Math.max(0, Math.floor(Number(p.qty) || 0))
+            }))
+            .filter((p) => p.qty > 0 && (p.name || p.size))
+        : [];
       const notes = typeof payload.notes === "string" ? payload.notes.slice(0, 1000) : "";
 
       // Validate the slot up-front (before creating anything) so we never
@@ -3413,17 +3444,18 @@ async function handleApi(req, res, pathname) {
         ? parent.onSiteQuote.builderLineItems.filter((l) => !(l && l.source && l.source.baseline === true))
         : [];
 
-      // Build wo.materialsPacked from the tech-curated SKU list. Each
-      // selected SKU lands as `true` so the materials checklist on the
-      // follow-up renders pre-checked.
-      const materialsPacked = {};
-      materials.forEach((sku) => { materialsPacked[sku] = true; });
+      // wo.materialsPacked is the qty map { sku: qty } shape since the
+      // May 2026 stepper rework. The tech adjusts qtys with +/- on the
+      // follow-up modal and on the bringback section; we just persist
+      // whatever they sent (already normalized above).
+      const materialsPacked = materialsQty;
 
       const followupUpdates = {
         diagnosis,
         techNotes: `Originating WO: ${parent.id}. Tech to confirm scope on arrival.`,
         followupOfWoId: parent.id,
         materialsPacked,
+        customParts: customPartsList,
         onSiteQuote: parentLines.length ? {
           ...followup.onSiteQuote,
           status: "draft",

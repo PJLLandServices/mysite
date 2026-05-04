@@ -355,17 +355,36 @@
       <ul class="tech-property-updates-list" id="techPropertyUpdatesList"></ul>
     </section>
 
-    <!-- Parts to bring back — inline catalog the tech ticks during the
-         visit. Persists to wo.materialsPacked as ticks happen. Pre-feeds
-         the follow-up modal so the tech doesn't tick the same items
-         twice. Always visible (not gated behind the modal) so the tech
-         can capture mid-visit "we need to come back with X." -->
+    <!-- Parts to bring back — inline catalog the tech adjusts during the
+         visit. Each item starts at qty 0 and uses a − / + stepper.
+         Persists to wo.materialsPacked ({ sku: qty }) as taps happen.
+         Pre-feeds the follow-up modal so the tech doesn't dial in the
+         same items twice. Always visible (not gated behind the modal)
+         so the tech can capture mid-visit "we need to come back with X."
+         The "Custom parts" block below the tree captures anything not
+         in the parts.json catalog (one-off items, special-order, etc.). -->
     <section class="tech-section tech-bringback" id="techBringbackSection">
       <h2 class="tech-section-title">Parts to bring back</h2>
-      <p class="tech-section-help">Tick anything you need on the truck for a return visit. Saves automatically. When you tap "Schedule follow-up" below, these are pre-loaded.</p>
-      <p class="tech-bringback-status" id="techBringbackStatus"><span data-count>0</span> ticked · <span data-saved>idle</span></p>
+      <p class="tech-section-help">Tap − / + to set how many of each part you need on the truck for a return visit. Saves automatically. When you tap "Schedule follow-up" below, these — plus any custom parts — are pre-loaded.</p>
+      <p class="tech-bringback-status" id="techBringbackStatus"><span data-count>0</span> picked · <span data-saved>idle</span></p>
       <div class="tech-bringback-tree" id="techBringbackTree">
         <p class="tech-bringback-loading">Loading parts catalog…</p>
+      </div>
+
+      <!-- Custom parts (not in catalog). Same row visual language as
+           the catalog tree (qty stepper on the left), but with editable
+           size + description inputs. Stored on wo.customParts. -->
+      <div class="crm-parts-custom" id="techCustomParts">
+        <header class="crm-parts-custom-head">
+          <h3 class="crm-parts-custom-title">Custom parts (not in catalog)</h3>
+          <span class="crm-parts-custom-meta"><span data-custom-count>0</span> picked</span>
+        </header>
+        <p class="crm-parts-custom-help">Anything not in the parts list above — one-offs, special orders, supplier picks. Saves automatically.</p>
+        <div class="crm-parts-custom-list" id="techCustomPartsList"></div>
+        <button type="button" class="crm-parts-custom-add" id="techCustomPartsAdd">
+          <span aria-hidden="true">+</span>
+          <span>Add custom part</span>
+        </button>
       </div>
     </section>
 

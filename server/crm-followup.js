@@ -18,7 +18,11 @@
   let modal = null;
   let workOrderId = "";
   let parentAddress = "";
-  let parentLineSkus = new Set();
+  // parentLineSkus is a qty map — { sku: qty } — since the May 2026
+  // bringback rework. Old callers passing arrays/Sets still work
+  // (CrmParts.normalizeQtyMap coerces them).
+  let parentLineSkus = {};
+  let parentCustomParts = [];
   let onDoneCb = null;
   let selectedSlot = "";
   let partsCatalog = null;
@@ -49,8 +53,12 @@
 
           <section class="crm-followup-section">
             <h3>2. Parts to bring</h3>
-            <p class="crm-followup-section-help">Tick each SKU you'll need on the truck. Inherited items from this visit are pre-checked.</p>
+            <p class="crm-followup-section-help">Set how many of each part you'll need on the truck (− / +). Inherited items from this visit are pre-filled.</p>
             <div class="crm-followup-parts" data-parts>Loading parts catalog…</div>
+            <div class="crm-followup-custom-parts" data-custom-parts hidden>
+              <p class="crm-followup-section-help"><strong>Custom parts (not in catalog):</strong> inherited from this visit. Edit qty to 0 to drop from the follow-up.</p>
+              <div data-custom-list></div>
+            </div>
           </section>
 
           <section class="crm-followup-section">
@@ -168,8 +176,10 @@
 
   // Render the parts catalog into the modal via the shared CrmParts
   // module. Three-level tree: Category > Subcategory > Items. Inherited
-  // SKUs from the parent WO arrive as `parentLineSkus` (a Set) and get
-  // pre-checked; the renderer auto-opens the right categories.
+  // qtys from the parent WO arrive as `parentLineSkus` ({ sku: qty }, or
+  // a Set/Array which the renderer coerces to qty=1 each) and get
+  // pre-filled; the renderer auto-opens the right categories. Custom
+  // parts (not in the catalog) render in their own block below.
   function renderParts(catalog) {
     const partsEl = modal.querySelector("[data-parts]");
     if (!window.CrmParts || !catalog || !catalog.parts) {
@@ -177,16 +187,104 @@
       return;
     }
     window.CrmParts.render(partsEl, catalog, {
-      preChecked: parentLineSkus,
+      preQty: parentLineSkus,
       idPrefix: "fpart_"
+    });
+    renderCustomPartsInherited();
+  }
+
+  // Render the custom-parts block (free-form items inherited from the
+  // parent WO). Each row is read-only-ish: qty is editable so the tech
+  // can drop an item by setting qty=0; size and name are read-only
+  // (the tech captured them on the parent visit; editing here would
+  // diverge from the source of truth).
+  function renderCustomPartsInherited() {
+    const wrap = modal.querySelector("[data-custom-parts]");
+    const list = modal.querySelector("[data-custom-list]");
+    if (!wrap || !list) return;
+    if (!parentCustomParts.length) {
+      wrap.hidden = true;
+      list.innerHTML = "";
+      return;
+    }
+    wrap.hidden = false;
+    list.innerHTML = "";
+    parentCustomParts.forEach((part, i) => {
+      const row = document.createElement("div");
+      row.className = "crm-parts-row crm-parts-row--custom" + (Number(part.qty) > 0 ? " is-picked" : "");
+      row.dataset.customIdx = String(i);
+      row.innerHTML = `
+        <span class="crm-parts-stepper" data-stepper>
+          <button type="button" class="crm-parts-stepper-btn" data-fcustom-step="-1" aria-label="Decrease quantity">−</button>
+          <input type="number" class="crm-parts-qty" data-fcustom-qty value="${Number(part.qty) || 0}" min="0" step="1" inputmode="numeric" aria-label="Quantity">
+          <button type="button" class="crm-parts-stepper-btn" data-fcustom-step="1" aria-label="Increase quantity">+</button>
+        </span>
+        <span class="crm-parts-size">${escapeAttr(part.size || "")}</span>
+        <span class="crm-parts-desc">${escapeAttr(part.name || "")}</span>
+        <span class="crm-parts-pn"></span>
+      `;
+      list.appendChild(row);
+    });
+  }
+
+  function escapeAttr(value) {
+    return String(value ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/"/g, "&quot;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
+  }
+
+  // Wire +/- + direct typing for the custom-parts inherited block. Lazy
+  // attached to the modal once.
+  function wireCustomPartsControls() {
+    if (!modal || modal._customWired) return;
+    modal._customWired = true;
+    modal.addEventListener("click", (e) => {
+      const btn = e.target.closest && e.target.closest("[data-fcustom-step]");
+      if (!btn) return;
+      const row = btn.closest("[data-custom-idx]");
+      if (!row) return;
+      const idx = Number(row.dataset.customIdx);
+      const part = parentCustomParts[idx];
+      if (!part) return;
+      const step = Number(btn.dataset.fcustomStep) || 0;
+      part.qty = Math.max(0, (Number(part.qty) || 0) + step);
+      const input = row.querySelector("[data-fcustom-qty]");
+      if (input) input.value = String(part.qty);
+      row.classList.toggle("is-picked", part.qty > 0);
+    });
+    modal.addEventListener("input", (e) => {
+      const target = e.target;
+      if (!target || !target.matches || !target.matches("[data-fcustom-qty]")) return;
+      const row = target.closest("[data-custom-idx]");
+      if (!row) return;
+      const idx = Number(row.dataset.customIdx);
+      const part = parentCustomParts[idx];
+      if (!part) return;
+      part.qty = Math.max(0, Math.floor(Number(target.value) || 0));
+      row.classList.toggle("is-picked", part.qty > 0);
     });
   }
 
   async function open(opts = {}) {
     ensureModal();
+    wireCustomPartsControls();
     workOrderId = opts.workOrderId || "";
     parentAddress = opts.parentAddress || "";
-    parentLineSkus = new Set(Array.isArray(opts.parentSkus) ? opts.parentSkus : []);
+    // parentSkus accepted as: array (legacy → qty=1 each), Set (legacy),
+    // or { sku: qty } object (preferred). CrmParts.normalizeQtyMap
+    // collapses all three into the qty-map shape.
+    parentLineSkus = (window.CrmParts && window.CrmParts.normalizeQtyMap)
+      ? window.CrmParts.normalizeQtyMap(opts.parentSkus)
+      : (opts.parentSkus || {});
+    parentCustomParts = Array.isArray(opts.parentCustomParts)
+      ? opts.parentCustomParts.map((p) => ({
+          name: typeof p?.name === "string" ? p.name : "",
+          size: typeof p?.size === "string" ? p.size : "",
+          qty: Math.max(0, Math.floor(Number(p?.qty) || 0))
+        }))
+      : [];
     onDoneCb = typeof opts.onDone === "function" ? opts.onDone : null;
     selectedSlot = "";
     if (!workOrderId) return;
@@ -254,11 +352,18 @@
     errorEl.hidden = true;
     statusEl.textContent = withSlot ? "Scheduling follow-up…" : "Creating follow-up…";
     const notes = (modal.querySelector("[data-notes]").value || "").trim();
-    const materials = Array.from(
-      modal.querySelectorAll("[data-parts] input[type=checkbox]:checked")
-    ).map((cb) => cb.dataset.sku).filter(Boolean);
+    // Catalog qty map — { sku: qty } — read directly from the rendered
+    // tree's number inputs. CrmParts.getQuantities filters out 0s.
+    const partsEl = modal.querySelector("[data-parts]");
+    const materials = (window.CrmParts && window.CrmParts.getQuantities)
+      ? window.CrmParts.getQuantities(partsEl)
+      : {};
+    // Custom parts (not in catalog) — only include rows with qty>0.
+    const customParts = parentCustomParts
+      .filter((p) => Number(p.qty) > 0 && (p.name || p.size))
+      .map((p) => ({ name: p.name, size: p.size, qty: Math.floor(Number(p.qty) || 0) }));
 
-    const body = { notes, materials };
+    const body = { notes, materials, customParts };
     if (withSlot) body.slotStart = selectedSlot;
     try {
       const r = await fetch(`/api/work-orders/${encodeURIComponent(workOrderId)}/followup`, {

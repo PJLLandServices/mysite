@@ -1,8 +1,8 @@
 /* Shared parts catalog UI. Three-level tree:
      <details class="crm-parts-cat">     ← Category (Pipe, Fittings, ...)
        <details class="crm-parts-sub">   ← Subcategory (Pipe Roll, Poly Insert Tee, ...)
-         <label class="crm-parts-row">    ← Item (size badge + description + part #)
-   Both <details> elements collapse independently. Anything pre-checked
+         <div class="crm-parts-row">      ← Item ([− qty +] + size badge + description + part #)
+   Both <details> elements collapse independently. Anything pre-picked
    on the way in opens its parent + grandparent so the user sees ticked
    items without manual expansion. */
 
@@ -96,23 +96,80 @@
   display: flex;
   flex-direction: column;
 }
+
+/* Row layout — the qty stepper sits on the LEFT (Patrick's request, May
+   2026). Catalog rows: [stepper] [size] [description] [part#]. Custom
+   rows reuse the same grid with editable inputs and a remove button. */
 .crm-parts-row {
   display: grid;
-  grid-template-columns: 22px 56px 1fr auto;
+  grid-template-columns: 108px 56px 1fr auto;
   align-items: center;
   gap: 10px;
   padding: 9px 14px;
-  cursor: pointer;
-  min-height: 44px;
+  min-height: 48px;
   font-size: 14px;
 }
 .crm-parts-row:hover { background: #FAFAF5; }
-.crm-parts-row input[type="checkbox"] {
-  width: 18px;
-  height: 18px;
+.crm-parts-row.is-picked { background: #F4F8EB; }
+.crm-parts-row.is-picked:hover { background: #ECF3DD; }
+
+.crm-parts-stepper {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid #D5D2C2;
+  border-radius: 8px;
+  background: #fff;
+  overflow: hidden;
+  height: 34px;
+}
+.crm-parts-row.is-picked .crm-parts-stepper {
+  border-color: #1B4D2E;
+}
+.crm-parts-stepper-btn {
+  width: 32px;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #1B4D2E;
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1;
   cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+.crm-parts-stepper-btn:hover { background: rgba(27, 77, 46, 0.08); }
+.crm-parts-stepper-btn:active { background: rgba(27, 77, 46, 0.16); }
+.crm-parts-stepper-btn:disabled {
+  color: #B5B3A7;
+  cursor: not-allowed;
+  background: transparent;
+}
+.crm-parts-qty {
+  width: 40px;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  border-left: 1px solid #E5E2D3;
+  border-right: 1px solid #E5E2D3;
+  background: transparent;
+  text-align: center;
+  font: inherit;
+  font-weight: 600;
+  color: #1F2A22;
+  -moz-appearance: textfield;
+}
+.crm-parts-qty::-webkit-outer-spin-button,
+.crm-parts-qty::-webkit-inner-spin-button {
+  -webkit-appearance: none;
   margin: 0;
 }
+.crm-parts-qty:focus {
+  outline: 2px solid #1B4D2E;
+  outline-offset: -2px;
+}
+
 .crm-parts-size {
   font-family: "Barlow Condensed", sans-serif;
   font-size: 12px;
@@ -124,9 +181,11 @@
   border-radius: 6px;
   padding: 3px 6px;
 }
+.crm-parts-size--blank { background: transparent; }
 .crm-parts-desc {
   color: #1F2A22;
   line-height: 1.35;
+  cursor: pointer;
 }
 .crm-parts-pn {
   font-family: ui-monospace, "SFMono-Regular", monospace;
@@ -134,13 +193,132 @@
   color: #7A7A72;
   white-space: nowrap;
 }
+
+/* Custom parts block — sits below the catalog tree on the tech work
+   order. Same row visual language as catalog rows so the eye reads
+   them as part of the same list, but with editable size + description
+   inputs and a remove button. */
+.crm-parts-custom {
+  border: 1px solid #E2E0D4;
+  border-radius: 10px;
+  background: #FAFAF5;
+  margin-top: 10px;
+  padding: 12px 14px;
+}
+.crm-parts-custom-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+.crm-parts-custom-title {
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.10em;
+  text-transform: uppercase;
+  color: #1B4D2E;
+  margin: 0;
+}
+.crm-parts-custom-meta {
+  font-size: 12px;
+  color: #7A7A72;
+}
+.crm-parts-custom-help {
+  margin: 0 0 8px;
+  font-size: 12px;
+  color: #6F6F66;
+  line-height: 1.4;
+}
+.crm-parts-custom-list {
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+  border: 1px solid #E8E5D7;
+  border-radius: 8px;
+  overflow: hidden;
+}
+.crm-parts-custom-list:empty { display: none; }
+.crm-parts-row--custom {
+  border-top: 1px solid #F0EEE3;
+}
+.crm-parts-row--custom:first-child { border-top: 0; }
+.crm-parts-row--custom .crm-parts-size,
+.crm-parts-row--custom .crm-parts-desc {
+  padding: 0;
+}
+.crm-parts-custom-size-input,
+.crm-parts-custom-desc-input {
+  width: 100%;
+  height: 34px;
+  padding: 6px 8px;
+  border: 1px solid #D5D2C2;
+  border-radius: 6px;
+  background: #fff;
+  font: inherit;
+  font-size: 13px;
+  color: #1F2A22;
+}
+.crm-parts-custom-size-input {
+  text-align: center;
+  font-family: "Barlow Condensed", sans-serif;
+  font-weight: 600;
+  color: #1B4D2E;
+  background: #EAF3DE;
+  border-color: transparent;
+}
+.crm-parts-custom-size-input::placeholder { color: rgba(27, 77, 46, 0.45); }
+.crm-parts-custom-desc-input::placeholder { color: #A8A89E; }
+.crm-parts-custom-size-input:focus,
+.crm-parts-custom-desc-input:focus {
+  outline: 2px solid #1B4D2E;
+  outline-offset: -2px;
+}
+.crm-parts-custom-remove {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #B13A3A;
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  border-radius: 6px;
+}
+.crm-parts-custom-remove:hover { background: rgba(177, 58, 58, 0.10); }
+.crm-parts-custom-add {
+  margin-top: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 36px;
+  padding: 0 14px;
+  border: 1px dashed rgba(27, 77, 46, 0.40);
+  border-radius: 8px;
+  background: transparent;
+  color: #1B4D2E;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.crm-parts-custom-add:hover {
+  background: rgba(27, 77, 46, 0.06);
+  border-style: solid;
+}
+
 @media (max-width: 540px) {
   .crm-parts-row {
-    grid-template-columns: 20px 50px 1fr;
+    grid-template-columns: 100px 46px 1fr;
     gap: 8px;
     padding: 9px 10px;
   }
   .crm-parts-pn { display: none; }
   .crm-parts-cat-summary,
   .crm-parts-sub-summary { padding-left: 10px; padding-right: 10px; }
+  .crm-parts-stepper { height: 36px; }
+  .crm-parts-stepper-btn { width: 30px; }
+  .crm-parts-qty { width: 36px; }
 }

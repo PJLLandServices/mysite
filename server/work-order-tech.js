@@ -2721,7 +2721,32 @@ async function init() {
     // linked property if the WO snapshot is empty. Both feed the
     // follow-up modal's availability lookup.
     state.address = wo.address || "";
-    state.materialsPacked = wo.materialsPacked && typeof wo.materialsPacked === "object" ? { ...wo.materialsPacked } : {};
+    // materialsPacked migrated from { sku: bool } to { sku: qty (number) }
+    // in May 2026 (Patrick: tech needs +/- counts, not just ticks).
+    // Coerce legacy `true` values to qty=1, drop `false`/null. New WOs
+    // arrive as numbers already.
+    state.materialsPacked = (() => {
+      const out = {};
+      const raw = wo.materialsPacked;
+      if (!raw || typeof raw !== "object") return out;
+      for (const [sku, val] of Object.entries(raw)) {
+        if (val === true) { out[sku] = 1; continue; }
+        if (val === false || val == null) continue;
+        const n = Math.max(0, Math.floor(Number(val) || 0));
+        if (n > 0) out[sku] = n;
+      }
+      return out;
+    })();
+    // Custom parts not in the parts.json catalog. Each item:
+    //   { id, name, size, qty } — id is a client-side uuid for dedup.
+    state.customParts = Array.isArray(wo.customParts)
+      ? wo.customParts.filter((p) => p && typeof p === "object").map((p) => ({
+          id: p.id || `cp_${Math.random().toString(36).slice(2, 10)}`,
+          name: typeof p.name === "string" ? p.name : "",
+          size: typeof p.size === "string" ? p.size : "",
+          qty: Math.max(0, Math.floor(Number(p.qty) || 0))
+        }))
+      : [];
     // Back-fill timestamps from status when missing (covers WOs where
     // the status was advanced server-side or by another session — the
     // tech opens the WO and expects to see when arrival happened, not
@@ -2870,71 +2895,215 @@ async function loadPartsCatalog() {
 }
 
 // Inline "Parts to bring back" section. Renders the shared CrmParts
-// tree, persists ticks to wo.materialsPacked through the standard PATCH
-// path (debounced so rapid ticks don't spam the server). Tracks the
-// "saved/saving/idle" state in the status line at the top.
+// tree with quantity steppers (qty starts at 0; tap +/- to adjust).
+// Persists qty map to wo.materialsPacked through the standard PATCH
+// path (debounced so rapid taps don't spam the server). Also renders
+// the "Custom parts (not in catalog)" block below the tree, which
+// persists to wo.customParts. Tracks the "saved/saving/idle" state in
+// the status line at the top.
 let bringbackSaveTimer = null;
+function setBringbackSavingState(state) {
+  const section = document.getElementById("techBringbackSection");
+  if (!section) return;
+  const savedEl = section.querySelector("[data-saved]");
+  if (!savedEl) return;
+  savedEl.classList.remove("is-saved", "is-saving");
+  if (state === "saving") {
+    savedEl.textContent = "saving…";
+    savedEl.classList.add("is-saving");
+  } else if (state === "saved") {
+    savedEl.textContent = "saved";
+    savedEl.classList.add("is-saved");
+  } else if (state === "error") {
+    savedEl.textContent = "save failed — will retry";
+  } else if (state === "loaded") {
+    savedEl.textContent = "loaded";
+  } else {
+    savedEl.textContent = "idle";
+  }
+}
+function updateBringbackCounts() {
+  const section = document.getElementById("techBringbackSection");
+  if (!section) return;
+  const catalogPicked = Object.values(state.materialsPacked || {}).filter((v) => Number(v) > 0).length;
+  const customPicked = (state.customParts || []).filter((p) => Number(p.qty) > 0).length;
+  const countEl = section.querySelector("[data-count]");
+  const customCountEl = section.querySelector("[data-custom-count]");
+  if (countEl) countEl.textContent = String(catalogPicked + customPicked);
+  if (customCountEl) customCountEl.textContent = String(customPicked);
+}
+function scheduleBringbackSave(payload) {
+  setBringbackSavingState("saving");
+  clearTimeout(bringbackSaveTimer);
+  bringbackSaveTimer = setTimeout(async () => {
+    try {
+      const r = await fetch(`/api/work-orders/${encodeURIComponent(state.id)}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      if (!r.ok) throw new Error("save failed");
+      setBringbackSavingState("saved");
+    } catch (err) {
+      setBringbackSavingState("error");
+    }
+  }, 500);
+}
 function renderBringback() {
   const tree = document.getElementById("techBringbackTree");
   const section = document.getElementById("techBringbackSection");
   if (!tree || !section || !window.CrmParts) return;
   if (!state.partsCatalog || !Object.keys(state.partsCatalog).length) {
     tree.innerHTML = `<p class="tech-bringback-loading">Parts catalog unavailable.</p>`;
+    renderCustomParts();
+    updateBringbackCounts();
     return;
   }
-  const checked = new Set(
-    Object.entries(state.materialsPacked || {})
-      .filter(([, v]) => v === true)
-      .map(([sku]) => sku)
-  );
   window.CrmParts.render(tree, {
     categories: state.partsCategories || [],
     parts: state.partsCatalog
   }, {
-    preChecked: checked,
+    preQty: state.materialsPacked || {},
     idPrefix: "bringback_",
-    onChange: (skus) => {
-      // Update status line.
-      const countEl = section.querySelector("[data-count]");
-      const savedEl = section.querySelector("[data-saved]");
-      if (countEl) countEl.textContent = String(skus.length);
-      if (savedEl) { savedEl.textContent = "saving…"; savedEl.classList.remove("is-saved"); savedEl.classList.add("is-saving"); }
-      // Build full materialsPacked map: every SKU in the catalog gets a
-      // bool. Server merges shallow but we send a complete map so a tick
-      // and an untick both land deterministically.
-      const next = {};
-      Object.keys(state.partsCatalog).forEach((sku) => { next[sku] = false; });
-      skus.forEach((sku) => { next[sku] = true; });
-      state.materialsPacked = next;
-      clearTimeout(bringbackSaveTimer);
-      bringbackSaveTimer = setTimeout(async () => {
-        try {
-          const r = await fetch(`/api/work-orders/${encodeURIComponent(state.id)}`, {
-            method: "PATCH",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({ materialsPacked: next })
-          });
-          if (!r.ok) throw new Error("save failed");
-          if (savedEl) {
-            savedEl.textContent = "saved";
-            savedEl.classList.remove("is-saving");
-            savedEl.classList.add("is-saved");
-          }
-        } catch (err) {
-          if (savedEl) {
-            savedEl.textContent = "save failed — will retry";
-            savedEl.classList.remove("is-saving", "is-saved");
-          }
-        }
-      }, 500);
+    onChange: (qtyMap) => {
+      state.materialsPacked = qtyMap;
+      updateBringbackCounts();
+      scheduleBringbackSave({ materialsPacked: qtyMap });
     }
   });
-  // Initial status line (no save).
-  const countEl = section.querySelector("[data-count]");
-  const savedEl = section.querySelector("[data-saved]");
-  if (countEl) countEl.textContent = String(checked.size);
-  if (savedEl) { savedEl.textContent = checked.size ? "loaded" : "idle"; savedEl.classList.remove("is-saving", "is-saved"); }
+  renderCustomParts();
+  updateBringbackCounts();
+  const totalPicked = Object.values(state.materialsPacked || {}).filter((v) => Number(v) > 0).length
+    + (state.customParts || []).filter((p) => Number(p.qty) > 0).length;
+  setBringbackSavingState(totalPicked ? "loaded" : "idle");
 }
+
+// "Custom parts (not in catalog)" — renders the list of free-form
+// rows under the catalog tree. Each row mirrors the catalog row layout
+// (qty stepper on the left, then size + description, then a remove
+// button on the right). Persists to wo.customParts via the same
+// debounced PATCH path the catalog tree uses.
+function renderCustomParts() {
+  const list = document.getElementById("techCustomPartsList");
+  if (!list) return;
+  list.innerHTML = "";
+  (state.customParts || []).forEach((part) => {
+    const row = document.createElement("div");
+    row.className = "crm-parts-row crm-parts-row--custom" + (Number(part.qty) > 0 ? " is-picked" : "");
+    row.dataset.customId = part.id;
+    row.innerHTML = `
+      <span class="crm-parts-stepper" data-stepper>
+        <button type="button" class="crm-parts-stepper-btn" data-custom-step="-1" aria-label="Decrease quantity">−</button>
+        <input type="number" class="crm-parts-qty" data-custom-qty value="${Number(part.qty) || 0}" min="0" step="1" inputmode="numeric" aria-label="Quantity">
+        <button type="button" class="crm-parts-stepper-btn" data-custom-step="1" aria-label="Increase quantity">+</button>
+      </span>
+      <input type="text" class="crm-parts-custom-size-input" data-custom-size value="${escapeHtmlAttr(part.size)}" placeholder="size" maxlength="16" aria-label="Size">
+      <input type="text" class="crm-parts-custom-desc-input" data-custom-name value="${escapeHtmlAttr(part.name)}" placeholder="Description / supplier note" maxlength="120" aria-label="Description">
+      <button type="button" class="crm-parts-custom-remove" data-custom-remove aria-label="Remove custom part">×</button>
+    `;
+    list.appendChild(row);
+  });
+}
+
+// Lightweight HTML-attribute escaper — used for default values inside
+// the inputs we inject in renderCustomParts. Slightly different from
+// the JSX-style escapeHtml above (we only need to defend against
+// breaking out of an attribute).
+function escapeHtmlAttr(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/"/g, "&quot;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+// Custom-parts event delegation — handles the +/- stepper, the remove
+// button, and the size/name text inputs. All paths funnel into
+// scheduleBringbackSave with the full state.customParts payload.
+(function wireCustomPartsEvents() {
+  document.addEventListener("click", (e) => {
+    const target = e.target;
+    if (!target || !(target instanceof Element)) return;
+
+    // + Add button
+    if (target.closest("#techCustomPartsAdd")) {
+      const next = (state.customParts || []).slice();
+      next.push({
+        id: `cp_${Math.random().toString(36).slice(2, 10)}`,
+        name: "",
+        size: "",
+        qty: 1
+      });
+      state.customParts = next;
+      renderCustomParts();
+      updateBringbackCounts();
+      scheduleBringbackSave({ customParts: state.customParts });
+      // Focus the newly-added description input so the tech can type
+      // immediately without a second tap.
+      const list = document.getElementById("techCustomPartsList");
+      const lastRow = list && list.lastElementChild;
+      const lastInput = lastRow && lastRow.querySelector("[data-custom-name]");
+      if (lastInput) lastInput.focus();
+      return;
+    }
+
+    // − / + on a custom row
+    const stepBtn = target.closest("[data-custom-step]");
+    if (stepBtn) {
+      const row = stepBtn.closest("[data-custom-id]");
+      const id = row && row.dataset.customId;
+      if (!id) return;
+      const part = (state.customParts || []).find((p) => p.id === id);
+      if (!part) return;
+      const step = Number(stepBtn.dataset.customStep) || 0;
+      part.qty = Math.max(0, (Number(part.qty) || 0) + step);
+      const input = row.querySelector("[data-custom-qty]");
+      if (input) input.value = String(part.qty);
+      row.classList.toggle("is-picked", part.qty > 0);
+      updateBringbackCounts();
+      scheduleBringbackSave({ customParts: state.customParts });
+      return;
+    }
+
+    // Remove
+    const removeBtn = target.closest("[data-custom-remove]");
+    if (removeBtn) {
+      const row = removeBtn.closest("[data-custom-id]");
+      const id = row && row.dataset.customId;
+      if (!id) return;
+      state.customParts = (state.customParts || []).filter((p) => p.id !== id);
+      renderCustomParts();
+      updateBringbackCounts();
+      scheduleBringbackSave({ customParts: state.customParts });
+      return;
+    }
+  });
+
+  // input events — qty number, size, and name. We update state, then
+  // debounce-save on every keystroke (the existing 500ms timer
+  // collapses bursts).
+  document.addEventListener("input", (e) => {
+    const target = e.target;
+    if (!target || !(target instanceof Element)) return;
+    const row = target.closest && target.closest("[data-custom-id]");
+    if (!row) return;
+    const id = row.dataset.customId;
+    const part = (state.customParts || []).find((p) => p.id === id);
+    if (!part) return;
+    if (target.matches("[data-custom-qty]")) {
+      part.qty = Math.max(0, Math.floor(Number(target.value) || 0));
+      row.classList.toggle("is-picked", part.qty > 0);
+      updateBringbackCounts();
+    } else if (target.matches("[data-custom-size]")) {
+      part.size = String(target.value || "").slice(0, 16);
+    } else if (target.matches("[data-custom-name]")) {
+      part.name = String(target.value || "").slice(0, 120);
+    } else {
+      return;
+    }
+    scheduleBringbackSave({ customParts: state.customParts });
+  });
+})();
 
 function renderMaterials() {
   const section = document.getElementById("techMaterialsSection");
@@ -2973,12 +3142,15 @@ function renderMaterials() {
       if (existing) {
         existing.qty += totalQty;
       } else {
+        // wo.materialsPacked is { sku: qty } (number). qty>0 means
+        // packed. Falls back to false if absent or coerced to 0.
+        const packedQty = Math.max(0, Math.floor(Number(state.materialsPacked && state.materialsPacked[sku]) || 0));
         aggregate.set(sku, {
           sku,
           qty: totalQty,
-          name: state.partsCatalog[sku].name,
+          name: state.partsCatalog[sku].description || state.partsCatalog[sku].name || sku,
           unit: state.partsCatalog[sku].unit || "each",
-          packed: !!(state.materialsPacked && state.materialsPacked[sku])
+          packed: packedQty > 0
         });
       }
     }
@@ -2999,7 +3171,7 @@ function renderMaterials() {
     li.className = "tech-materials-row" + (row.packed ? " is-packed" : "");
     const qtyDisplay = row.qty < 1 ? row.qty.toFixed(2) : (Number.isInteger(row.qty) ? String(row.qty) : row.qty.toFixed(1));
     li.innerHTML = `
-      <input type="checkbox" data-sku="${escapeHtml(row.sku)}" ${row.packed ? "checked" : ""} aria-label="Mark ${escapeHtml(row.name)} packed">
+      <input type="checkbox" data-sku="${escapeHtml(row.sku)}" data-expected-qty="${escapeHtml(String(Math.max(1, Math.ceil(row.qty))))}" ${row.packed ? "checked" : ""} aria-label="Mark ${escapeHtml(row.name)} packed">
       <span class="tech-materials-name">${escapeHtml(row.name)}</span>
       <span class="tech-materials-qty">${escapeHtml(qtyDisplay)} ${escapeHtml(row.unit)}</span>
     `;
@@ -3007,16 +3179,20 @@ function renderMaterials() {
   }
 }
 
-// Track packed state locally only for now. A future commit can persist
-// it on the WO record so it survives reloads (the schema slot already
-// exists implicitly — wo.materialsPacked: { sku → bool }).
+// Materials checklist (follow-up WOs only) — tech ticks each line as
+// they load it on the truck. `is-packed` is a UI-only flag; the actual
+// quantity-on-truck state lives in wo.materialsPacked (maintained by
+// the bringback section above). Toggling here flips the row's qty
+// between 0 (unpacked) and the line's expected qty (packed). Persists
+// through the same debounced PATCH path bringback uses.
 document.getElementById("techMaterialsList")?.addEventListener("change", (event) => {
   const cb = event.target;
   if (cb.tagName !== "INPUT" || cb.type !== "checkbox") return;
   const sku = cb.dataset.sku;
   if (!sku) return;
+  const expectedQty = Math.max(1, Math.floor(Number(cb.dataset.expectedQty) || 1));
   state.materialsPacked = state.materialsPacked || {};
-  state.materialsPacked[sku] = cb.checked;
+  state.materialsPacked[sku] = cb.checked ? expectedQty : 0;
   cb.closest("li")?.classList.toggle("is-packed", cb.checked);
   patchWorkOrder({ materialsPacked: state.materialsPacked });
 });
@@ -3050,20 +3226,31 @@ document.getElementById("techFollowupBtn")?.addEventListener("click", async () =
     if (status) { status.hidden = false; status.textContent = "Follow-up modal couldn't load."; }
     return;
   }
-  // Inherit the standalone "Parts to bring back" ticks first (the tech
-  // built that list during the visit), then fall back to legacy line-
+  // Inherit the standalone "Parts to bring back" qty map first (the
+  // tech built it during the visit), then fall back to legacy line-
   // item SKUs from the parent's onSiteQuote builder for older WOs.
-  const tickedFromBringback = Object.entries(state.materialsPacked || {})
-    .filter(([, v]) => v === true).map(([sku]) => sku);
-  const fromLineItems = (state.onSiteQuote?.builderLineItems || [])
-    .map((li) => li?.source?.partSku || li?.source?.sku || li?.sku || "")
-    .filter(Boolean);
-  const inheritedSkus = tickedFromBringback.length ? tickedFromBringback : fromLineItems;
+  // Custom parts (not in the catalog) ride alongside as a separate
+  // array so the modal/server can pre-load both into the follow-up.
+  const bringbackQty = {};
+  Object.entries(state.materialsPacked || {}).forEach(([sku, qty]) => {
+    const n = Math.max(0, Math.floor(Number(qty) || 0));
+    if (n > 0) bringbackQty[sku] = n;
+  });
+  const inheritedQty = Object.keys(bringbackQty).length
+    ? bringbackQty
+    : (state.onSiteQuote?.builderLineItems || [])
+        .map((li) => li?.source?.partSku || li?.source?.sku || li?.sku || "")
+        .filter(Boolean)
+        .reduce((acc, sku) => { acc[sku] = (acc[sku] || 0) + 1; return acc; }, {});
+  const inheritedCustom = (state.customParts || [])
+    .filter((p) => Number(p.qty) > 0 && (p.name || p.size))
+    .map((p) => ({ name: p.name || "", size: p.size || "", qty: Math.floor(Number(p.qty) || 0) }));
   if (status) status.hidden = true;
   window.openCrmFollowup({
     workOrderId: state.id,
     parentAddress: state.address || "",
-    parentSkus: inheritedSkus,
+    parentSkus: inheritedQty,
+    parentCustomParts: inheritedCustom,
     onDone: (data) => {
       if (status) {
         status.hidden = false;

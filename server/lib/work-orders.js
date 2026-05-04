@@ -476,8 +476,32 @@ async function update(id, patch) {
       throw new Error(`Status only moves forward. Cannot roll back from "${current.status}" to "${patch.status}".`);
     }
   }
+  // materialsPacked is wholesale-replaced (since May 2026 stepper rework
+  // the client sends the full intended { sku: qty } state, including
+  // implicitly-zero SKUs by omission). Shallow-merging would prevent
+  // the tech from removing a SKU by stepping it back to 0.
   if (Object.prototype.hasOwnProperty.call(patch, "materialsPacked") && patch.materialsPacked && typeof patch.materialsPacked === "object") {
-    next.materialsPacked = { ...(current.materialsPacked || {}), ...patch.materialsPacked };
+    const cleaned = {};
+    for (const [sku, val] of Object.entries(patch.materialsPacked)) {
+      if (!sku || typeof sku !== "string") continue;
+      // Coerce legacy bool true → 1; drop false/null/0.
+      if (val === true) { cleaned[sku] = 1; continue; }
+      const n = Math.max(0, Math.floor(Number(val) || 0));
+      if (n > 0) cleaned[sku] = n;
+    }
+    next.materialsPacked = cleaned;
+  }
+  // customParts (free-form parts not in parts.json) — wholesale replace.
+  // Each entry: { name, size, qty }. Client sends the full array.
+  if (Array.isArray(patch.customParts)) {
+    next.customParts = patch.customParts
+      .filter((p) => p && typeof p === "object")
+      .map((p) => ({
+        id: typeof p.id === "string" ? p.id : `cp_${Math.random().toString(36).slice(2, 10)}`,
+        name: typeof p.name === "string" ? p.name.slice(0, 120) : "",
+        size: typeof p.size === "string" ? p.size.slice(0, 16) : "",
+        qty: Math.max(0, Math.floor(Number(p.qty) || 0))
+      }));
   }
   // Follow-up back-references — replace wholesale when sent. Both
   // followupWoIds (parent → children) and followupOfWoId (child → parent,
