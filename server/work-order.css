@@ -8,14 +8,14 @@
    and the HTML `hidden` attribute is silently ignored. `bc226fb`
    patched this per-class for lightboxes; doing it once globally here
    prevents the bug from reappearing every time a new section/modal
-   gets `display: flex`. The locked banner was the most recent victim. */
+   gets `display: flex`. The pending-bonus banner was the most recent victim. */
 [hidden] { display: none !important; }
 
-/* AI Intake Guarantee banner — desktop WO editor mirror of the tech-mode
-   banner. Sits at the top of the form so it's the first thing visible
-   when reviewing an AI-quoted WO. Hidden until populated. Amber accent
-   ties it visually to the AI Intake Guarantee theme used in the tech
-   page and the lead-detail Quote card. */
+/* AI-Correct-Diagnosis Bonus banner — desktop WO editor mirror of the
+   tech-mode banner. Sits at the top of the form so it's the first thing
+   visible when reviewing an AI-quoted WO. Hidden until populated. Amber
+   accent ties it visually to the bonus theme used in the tech page and
+   the lead-detail Quote card. */
 .wo-intake-guarantee {
   margin: 0 0 18px;
   padding: 14px 16px 12px;

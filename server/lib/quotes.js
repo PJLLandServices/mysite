@@ -4,9 +4,13 @@
 // PJL has offered to a customer at a specific price. Two flavours:
 //
 //   ai_repair_quote — generated in chat from pricing.json, locked-rate
-//                     repair work, transcript persisted as the source of
-//                     truth. Carries the AI Intake Guarantee flag so techs
-//                     honour locked labour on the resulting WO.
+//                     parts pricing on repair work, transcript persisted as
+//                     the source of truth. Carries the AI-Correct-Diagnosis
+//                     Bonus eligibility flag — when the tech confirms the
+//                     on-site diagnosis matches the AI-quoted scope, the
+//                     customer is credited 1 hr of repair labour free on
+//                     the resulting WO. Until tech confirmation, the bonus
+//                     is pending and labour bills normally.
 //
 //   formal_quote    — installs/retrofits with PDF + signature pad. Not
 //                     implemented in slice 9.7 — placeholder type only.
@@ -131,14 +135,19 @@ function blankQuote() {
     total: 0,
     currency: "CAD",
 
-    // AI Intake Guarantee — when set, the resulting WO shows a banner
-    // telling the tech "labour locked for [scope] — do not bill additional
-    // labour." Anything beyond scope = standard parts + $95/hr, on-site
-    // re-quote required.
+    // AI Intake Diagnosis Bonus — when set, the resulting WO shows a banner
+    // telling the tech "AI-correct-diagnosis bonus applies for [scope] — credit
+    // ONE HOUR of repair labour to the customer if the on-site diagnosis matches."
+    // Diagnostic + repair labour is otherwise billed normally at $95/hr.
+    // Anything beyond the diagnosed scope = standard parts + $95/hr, on-site
+    // re-quote required. NOTE: the legacy field name `intakeGuarantee` is kept
+    // for backwards compatibility with existing quotes/work orders; semantics
+    // now follow the AI-correct-diagnosis bonus policy (see pricing.json
+    // ai_intake_correct_diagnosis_bonus).
     intakeGuarantee: {
       applies: false,
       scope: "",
-      rule: "Labour locked for diagnosed scope regardless of time on-site. Anything beyond scope = standard parts + $95/hr, requires on-site re-quote."
+      rule: "AI-correct-diagnosis bonus: if the on-site diagnosis matches the AI-quoted scope, credit the customer ONE HOUR of repair labour free on the diagnosed work. Diagnostic and repair labour otherwise billed at $95/hr. Anything beyond the diagnosed scope = standard parts + $95/hr, requires on-site re-quote."
     },
 
     // The offer

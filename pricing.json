@@ -2,8 +2,8 @@
   "_doc": "Single source of truth for all PJL pricing. EVERY pricing-aware file in this codebase reads from here. Do not hardcode prices anywhere else. Quote line items snapshot prices at creation time (lead.features captures price as-of-creation). Seasonal tier structure (residential 1-4/5-6/7-8/9-15/16+ and commercial 1-4/5-8/9+) was reconciled 2026-05-02 to match the live interactive calculators on sprinkler-spring-opening.html and sprinkler-fall-winterization.html — those calculators are the canonical customer-facing tier truth. Spring and fall use the same tier prices.",
   "currency": "CAD",
   "items": {
-    "service_call":               { "label": "Service call (mobilization + 1 hr labour)",         "price": 95,    "category": "service",    "quoteType": "flat"     },
-    "hourly_labour":              { "label": "Additional labour (per hour beyond the first)",     "price": 95,    "category": "service",    "quoteType": "per-unit" },
+    "service_call":               { "label": "Service call (mobilization + quick assessment)",    "price": 95,    "category": "service",    "quoteType": "flat"     },
+    "hourly_labour":              { "label": "Labour — diagnostics & repair (per hour, billed)",  "price": 95,    "category": "service",    "quoteType": "per-unit" },
 
     "head_replacement":           { "label": "Sprinkler head replacement (any size, any type)",   "price": 68,    "category": "repair",     "quoteType": "per-unit" },
     "cap_one_head":               { "label": "Cap 1 sprinkler head (goodwill, no charge)",        "price": 0,     "category": "repair",     "quoteType": "flat"     },
@@ -61,7 +61,8 @@
   },
   "rules": {
     "spring_fall_no_service_call": "Spring opening / fall closing pricing is all-in. Service call ($95) is NOT charged on top.",
-    "ai_intake_labour_locked": "When a customer describes their issue through the AI chat, labour for the diagnosed repair is included no matter how long it takes. Anything else found on-site billed parts + $95/hr.",
+    "service_call_scope": "$95 service call covers mobilization + quick on-site assessment ONLY. It does NOT include any labour. All diagnostic and repair labour is billed separately at $95/hr. Repair quotes are issued with an assumed amount of time for the diagnosed work; if actual time runs over the estimate, additional labour is billed at $95/hr and quoted to the customer before continuing.",
+    "ai_intake_correct_diagnosis_bonus": "PJL's ONLY discount: if the AI repair tool correctly diagnoses the repair (i.e., the on-site fix matches what the AI predicted), the customer receives ONE HOUR of repair labour FREE on the diagnosed work. If the AI's diagnosis is wrong, no free hour applies. Anything else found on-site beyond the diagnosed repair is billed at parts + $95/hr, quoted before any extra work.",
     "whole_manifold_rule": "When ANY valve in a box fails, PJL replaces the ENTIRE manifold AND ALL valves in that box together. Never single-valve repair. Quote formula = manifold tier ($135 for 1-3 valves OR $285 for 4-6 valves) + ($74.95 × valve count) + $95 service call.",
     "backflow_not_offered": "PJL does NOT service backflow assemblies. Refer customer to a certified backflow tester.",
     "head_default_assumption": "Default head: 4\" Pro Spray for grass, 6\" for beds. Single $68 flat covers any size/type.",
@@ -84,7 +85,7 @@
     ]
   },
   "manifold_examples": {
-    "_doc": "Pre-computed totals for the Whole Manifold Rule, derived from primitives above. AI uses these directly.",
+    "_doc": "Pre-computed PARTS + TRIP totals for the Whole Manifold Rule (service_call + manifold tier + valve_hunter_pgv × N), derived from primitives above. UPDATED 2026-05-04: under the new service-call policy, these totals are NOT all-in. Repair labour is billed separately at $95/hr (typically 1–2 hours for a manifold rebuild). The AI-correct-diagnosis bonus credits the customer ONE HOUR of repair labour free if the on-site diagnosis matches the AI-quoted scope. AI must always quote (a) parts+trip total from this list, (b) the $95/hr labour rate + estimated 1–2 hours, (c) the bonus framing.",
     "1_valve": 304.95,
     "2_valve": 379.90,
     "3_valve": 454.85,

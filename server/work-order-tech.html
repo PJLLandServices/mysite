@@ -118,14 +118,17 @@
       <div class="tech-carry-forward-list" id="techCarryForwardList"></div>
     </section>
 
-    <!-- AI Intake Guarantee banner — shown when the WO was created from an
-         AI repair quote with intake_guarantee=true. Tells the tech labour is
-         locked for a specific scope so they bill correctly on-site. Hidden
-         until populated. -->
+    <!-- AI-Correct-Diagnosis Bonus banner — shown when the WO was created
+         from an AI repair quote with intake_guarantee=true. The bonus is
+         CONDITIONAL: it only applies if the on-site diagnosis matches the
+         scope quoted by the AI. Until the tech confirms a match, the
+         customer's first hour of repair labour is held in a "pending free"
+         state — labour bills normally on the WO, and the credit is applied
+         only on confirmation. Hidden until populated. -->
     <section class="tech-intake-guarantee" id="techIntakeGuarantee" hidden role="alert">
-      <p class="tech-intake-eyebrow">AI INTAKE GUARANTEE</p>
+      <p class="tech-intake-eyebrow">AI-CORRECT-DIAGNOSIS BONUS — PENDING CONFIRMATION</p>
       <p class="tech-intake-scope" id="techIntakeScope">—</p>
-      <p class="tech-intake-rule">Labour for the diagnosed scope is <strong>locked</strong>. Don't bill additional labour for this work, no matter how long it takes. Anything beyond scope: parts + $95/hr, requires customer sign-off on a separate scope.</p>
+      <p class="tech-intake-rule">Bonus eligible for the diagnosed scope above. <strong>The customer's first hour of repair labour is temporarily disabled (pending) until you confirm the on-site diagnosis matches.</strong> Confirm match → credit ONE HOUR of repair labour free on the diagnosed work. Diagnosis was wrong / different problem → bill labour normally at $95/hr, no free hour. Anything beyond the diagnosed scope: parts + $95/hr, requires customer sign-off on a separate scope.</p>
       <p class="tech-intake-source" id="techIntakeSource"></p>
     </section>
 
