@@ -165,11 +165,15 @@ function blankWorkOrder() {
     lineItems: [],                   // Phase 4 — invoice line items
     diagnosis: "",                   // copied from booking handoff if present
     techNotes: "",                   // tech's overall visit notes
-    // AI Intake Guarantee — copied from the source Quote when this WO is
-    // created from a lead with an accepted ai_repair_quote. When `applies`
-    // is true, the tech UI shows a banner: "Labour locked for [scope] — do
-    // not bill additional labour." Spec rule 6 (§4.3.3): tech honours the
-    // quoted scope regardless of time on-site.
+    // AI-Correct-Diagnosis Bonus eligibility — copied from the source Quote
+    // when this WO is created from a lead with an accepted ai_repair_quote.
+    // When `applies` is true, the tech UI shows a banner: "AI-Correct-
+    // Diagnosis Bonus PENDING for [scope]. Customer's first hour of repair
+    // labour is temporarily disabled until you confirm the on-site diagnosis
+    // matches." Confirmed match → credit 1 hr of repair labour free on the
+    // diagnosed scope. Diagnosis wrong → bill labour normally at $95/hr.
+    // Spec rule 6 (§4.3.3): tech reviews the AI scope, confirms or denies
+    // match on-site, then applies the bonus credit accordingly.
     intakeGuarantee: {
       applies: false,
       scope: "",
@@ -366,8 +370,10 @@ async function listByLead(leadId) {
 // trigger), but at least one of (leadId, propertyId) must be set.
 //
 // `quote` is optional. When passed (the caller has fetched the lead's
-// linked Quote), an AI Intake Guarantee from the quote propagates onto
-// the WO so the tech sees the locked-labour banner in field mode.
+// linked Quote), the AI-Correct-Diagnosis Bonus eligibility flag from the
+// quote propagates onto the WO so the tech sees the bonus-pending banner
+// in field mode (1 hr of repair labour pending — temporarily disabled
+// until the tech confirms the on-site diagnosis matches the AI scope).
 async function create({ type, lead, property, customId, quote = null }) {
   if (!TEMPLATES[type]) throw new Error(`Unknown work-order type: ${type}`);
   if (!lead && !property) throw new Error("Need at least one of lead or property to create a work order.");
@@ -427,9 +433,11 @@ async function create({ type, lead, property, customId, quote = null }) {
     }
   }
 
-  // AI Intake Guarantee — snapshotted from the source Quote at WO creation
-  // time. Mutating the Quote later doesn't change the locked scope on a
-  // dispatched WO; the tech honours what was on the WO when they got it.
+  // AI-Correct-Diagnosis Bonus eligibility — snapshotted from the source
+  // Quote at WO creation time. Mutating the Quote later doesn't change the
+  // diagnosed scope on a dispatched WO; the tech checks against what was
+  // on the WO when they got it. Bonus credits 1 hr of repair labour free
+  // ONLY if tech confirms on-site diagnosis matches.
   if (quote && quote.intakeGuarantee && quote.intakeGuarantee.applies === true) {
     wo.intakeGuarantee = {
       applies: true,

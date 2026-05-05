@@ -110,7 +110,7 @@ For each task you'll see:
 - **Tracker ID:** 7
 
 ### 2.4 Build the Sprinkler Repair service page
-- **What:** New page `sprinkler-systems-repair.html`. Common issues, diagnostic checklist, same-day guarantee, $95 mobilization fee, AI-Smart-Intake first-hour-free hook. FAQPage schema.
+- **What:** New page `sprinkler-systems-repair.html`. Common issues, diagnostic checklist, same-day guarantee, $95 mobilization + assessment fee (labour billed separately at $95/hr), AI-Smart-Intake correct-diagnosis bonus hook (1 hour of repair labour free on the diagnosed work). FAQPage schema.
 - **Why:** "Sprinkler repair near me" is the highest-converting query in irrigation. Year-round.
 - **Files:** new file + `sitemap.xml` + cross-link
 - **Time:** 3 hr · **Difficulty:** Medium · **Who:** M + D

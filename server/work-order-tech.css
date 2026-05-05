@@ -30,11 +30,12 @@ html, body {
   padding: 0;
 }
 
-/* AI Intake Guarantee banner — sits between the summary and run-status,
-   so it's the second thing the tech sees on opening a WO. Brand amber
-   with a thicker left border to reinforce "warning, read this before
-   billing labour." Always visible without tapping; collapse not allowed
-   (the locked-scope info is a billing hard rule, not optional context). */
+/* AI-Correct-Diagnosis Bonus banner — sits between the summary and
+   run-status, so it's the second thing the tech sees on opening a WO.
+   Brand amber with a thicker left border to reinforce "read this before
+   billing labour: 1 hr free is pending until you confirm diagnosis match."
+   Always visible without tapping; collapse not allowed (the bonus rule is
+   a billing hard rule, not optional context). */
 .tech-intake-guarantee {
   margin: 12px 14px 0;
   padding: 14px 16px 12px;

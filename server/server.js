@@ -1706,7 +1706,7 @@ async function handleApi(req, res, pathname) {
             lead2.crm.activity = Array.isArray(lead2.crm.activity) ? lead2.crm.activity : [];
             const now = new Date().toISOString();
             const dollarTotal = `$${quote.total.toFixed(2)}`;
-            const igTag = quote.intakeGuarantee?.applies ? " · labour locked" : "";
+            const igTag = quote.intakeGuarantee?.applies ? " · AI bonus pending" : "";
             // Two entries: created by AI, then accepted by customer.
             // Unshift in chronological order so the most recent (accepted)
             // ends up at the top of the timeline.
@@ -4636,8 +4636,9 @@ async function handleApi(req, res, pathname) {
       // same WO-XXXXXXXX. Otherwise generate a fresh one.
       const customId = lead?.booking?.workOrder?.id || null;
 
-      // Fetch the source Quote (if any) so the WO inherits the AI Intake
-      // Guarantee — the tech UI uses this to show the locked-labour banner.
+      // Fetch the source Quote (if any) so the WO inherits the AI-Correct-
+      // Diagnosis Bonus eligibility — the tech UI uses this to show the
+      // pending-confirmation banner (1 hr labour free if tech confirms match).
       let sourceQuote = null;
       if (lead?.quoteId) {
         try { sourceQuote = await quotes.get(lead.quoteId); }
@@ -6432,7 +6433,8 @@ Customer signature captured at ${new Date().toISOString()}.`;
       // same WO-XXXXXXXX (matches the existing CRM-side create flow).
       const customId = lead.booking?.workOrder?.id || null;
 
-      // Fetch the source Quote (if any) so AI Intake Guarantee propagates.
+      // Fetch the source Quote (if any) so the AI-Correct-Diagnosis Bonus
+      // eligibility flag propagates onto the resulting WO.
       let sourceQuote = null;
       if (lead.quoteId) {
         try { sourceQuote = await quotes.get(lead.quoteId); }

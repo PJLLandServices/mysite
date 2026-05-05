@@ -55,7 +55,7 @@ function priceForBooking(serviceKey /*, zoneCountInput — no longer used */) {
       return {
         ...r,
         label: r.label + " service call",
-        note: "Includes mobilization + 1 hour of on-site diagnostic & labour. Parts + extra labour quoted on the spot before any work."
+        note: "Covers mobilization + a quick on-site assessment. Diagnostic & repair labour billed separately at $95/hr. Repair quotes assume a reasonable amount of time for the diagnosed work; if it runs over, additional labour quoted on the spot before continuing. AI-intake bonus: a correct AI diagnosis earns the customer 1 hour of repair labour free."
       };
     }
 

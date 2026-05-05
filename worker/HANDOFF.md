@@ -77,7 +77,8 @@ HANDOFF.md           ← This document
 
 These prices are baked into the system prompt. If Patrick (the owner) updates pricing, edit `system_prompt.md` and re-paste the prompt block into `worker.js`'s `SYSTEM_PROMPT` constant, then redeploy the Worker.
 
-**Service call:** $95 (mobilization + 1hr labour, includes diagnosed repair labour)
+**Service call:** $95 (mobilization + on-site assessment ONLY — labour billed separately at $95/hr)
+**AI-intake bonus:** Correct AI diagnosis = 1 hour of repair labour FREE on the diagnosed work. PJL's only discount.
 
 **Repairs:**
 - Sprinkler head replacement (any size, any type): $68 flat per head

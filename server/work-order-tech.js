@@ -1736,7 +1736,9 @@ function renderOnSiteQuote() {
   }
 
   if (titleEl) titleEl.textContent = "Build draft quote";
-  // Intake-guarantee callout: only shown when AI quote is locked.
+  // AI-Correct-Diagnosis Bonus callout: only shown when an AI repair quote
+  // produced this WO and its bonus eligibility flag is set (pending until
+  // tech confirms on-site diagnosis matches the quoted scope).
   if (state.intakeGuarantee?.applies && intakeNote) intakeNote.hidden = false;
 
   // Submitted state (already accepted) takes precedence — show read-only summary.
@@ -2831,10 +2833,13 @@ async function init() {
       techDiagnosis.hidden = false;
     }
 
-    // AI Intake Guarantee banner — populated from the WO's snapshotted
-    // copy of the source Quote's intake guarantee. Visible only when the
-    // AI quoted a specific repair scope and the customer accepted; serves
-    // as the tech's reminder that labour is locked.
+    // AI-Correct-Diagnosis Bonus banner — populated from the WO's snapshotted
+    // copy of the source Quote's bonus eligibility flag. Visible only when the
+    // AI quoted a specific repair scope and the customer accepted; serves as
+    // the tech's reminder that the customer's first hour of repair labour is
+    // PENDING (temporarily disabled) until the tech confirms the on-site
+    // diagnosis matches the AI's quoted scope. Match → credit 1 hr free.
+    // Mismatch → bill labour normally at $95/hr, no free hour.
     const igBanner = document.getElementById("techIntakeGuarantee");
     const igScope = document.getElementById("techIntakeScope");
     const igSource = document.getElementById("techIntakeSource");

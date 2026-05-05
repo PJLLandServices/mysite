@@ -236,10 +236,10 @@ QUOTE FOLDER
     - Subtotal, HST 13%, Total
     - Deposit required? (formal only)
 
-  AI Intake Guarantee Flag
-    - applies: yes/no
-    - quoted_scope (specific repair description)
-    - rule: labour locked for diagnosed scope regardless of time on-site
+  AI Intake Diagnosis Bonus Flag
+    - applies: yes/no (true when AI tool produced the quote)
+    - quoted_scope (specific repair description / diagnosis)
+    - rule: if on-site diagnosis matches the AI's prediction, customer receives ONE HOUR of repair labour FREE on the diagnosed scope (PJL's only discount). Diagnostic + repair labour otherwise billed normally at $95/hr.
     - anything beyond scope → standard parts + $95/hr, requires on-site re-quote
 
   The Offer
@@ -268,7 +268,7 @@ QUOTE FOLDER
 - Quotes are versioned, not edited. Once sent, cannot be changed — revisions create -v2.
 - Acceptance triggers: status flips, booking auto-created, Patrick notified, customer confirmed, competing drafts closed.
 - Default 30-day expiry. 7-day-out reminder. Auto-expire on day 30.
-- AI Intake Guarantee preserved on resulting WO so techs honor locked labour.
+- AI-Correct-Diagnosis Bonus eligibility preserved on resulting WO. Bonus is conditional and PENDING until the tech confirms on-site diagnosis matches the AI-quoted scope; on confirmed match, tech credits 1 hr of repair labour free; otherwise labour bills normally at $95/hr.
 
 ### 4.2 Booking Folder
 
@@ -425,7 +425,7 @@ WORK ORDER FOLDER
 3. **Status transitions are forward-only.** Skips allowed, reverses not.
 4. **Scope changes require fresh signature.** Original signature is for original scope only.
 5. **Signed WO is the contract.** Once signed, locked. Post-sign edits create audit log entries.
-6. **AI Intake Guarantee is enforced.** If WO carries the flag, tech sees a banner: "Labour locked for [scope]. Do not bill additional labour."
+6. **AI-Correct-Diagnosis Bonus is enforced.** If WO carries the flag, tech sees a banner: "AI-correct-diagnosis bonus eligible for [scope]. If on-site diagnosis matches, credit the customer ONE HOUR of repair labour free on the diagnosed work." Diagnostic + repair labour billed normally at $95/hr.
 7. **Cancellations and no-shows are terminal states** with logged reasons.
 8. **Fall closings cannot auto-quote.** Hard rule. Issues → deferred items only.
 9. **Emergency overrides on fall closings notify Patrick immediately.**
@@ -596,7 +596,7 @@ The AI ("Patrick") is a customer-facing salesperson + diagnostic tool. The full 
 2. **Service-call repairs:** AI quotes from price list → customer says yes → booking + ai_repair_quote created.
 3. **Seasonal services:** AI gives ballpark, drives to booking.
 4. **Installs / retrofits:** AI does NOT quote. Captures lead, hands to Patrick.
-5. **AI Intake Guarantee:** When AI quotes a repair from price list, labour is locked for that scope on the resulting WO.
+5. **AI-Correct-Diagnosis Bonus:** When AI quotes a repair from the price list, the resulting WO carries a bonus flag. If the on-site diagnosis matches the AI's quoted scope, the tech credits the customer ONE HOUR of repair labour free on the diagnosed work. PJL's only discount.
 6. **Quote audit trail:** Every AI repair quote saves the entire chat transcript as the source.
 7. **Notify Patrick immediately** when AI quotes anything.
 8. **Off-list questions** = lead capture, never guess.

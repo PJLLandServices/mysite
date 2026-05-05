@@ -1029,7 +1029,7 @@ body.is-nav-open .pjl-nav-toggle-bar:nth-child(3) {
 
 /* AI Repair Quote card — sits in the lead-detail pane between Field WOs
    and "Requested work". Amber-tinged background ties it visually to the
-   AI Intake Guarantee theme; status pill shifts color by lifecycle stage. */
+   AI-Correct-Diagnosis Bonus theme; status pill shifts color by lifecycle stage. */
 .detail-quote {
   background: linear-gradient(135deg, rgba(224, 123, 36, 0.06) 0%, rgba(224, 123, 36, 0.02) 100%);
   border: 1px solid rgba(224, 123, 36, 0.22);

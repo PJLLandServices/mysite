@@ -61,7 +61,7 @@
     "@type": "OfferCatalog",
     "name": "Service Pricing",
     "itemListElement": [
-      { "@type": "Offer", "name": "Service Call (mobilization + 1 hr labour)", "price": "95.00", "priceCurrency": "CAD", "description": "Standard service call charge — covers travel, setup, and the first hour of labour on-site. Beyond the first hour, $95/hr." },
+      { "@type": "Offer", "name": "Service Call (mobilization + on-site assessment)", "price": "95.00", "priceCurrency": "CAD", "description": "Standard service call charge — covers travel and a quick on-site assessment of the issue. Diagnostic and repair labour is billed separately at $95/hr. Repair quotes include an estimated time; over-estimate labour is quoted on the spot before continuing." },
       { "@type": "Offer", "name": "Sprinkler Head Replacement (any type)", "price": "68.00", "priceCurrency": "CAD", "description": "Flat rate for any sprinkler head replacement — pop-up, rotor, any size, grass or garden bed. Plus standard service call." },
       { "@type": "Offer", "name": "3-Valve Manifold Rebuild", "price": "135.00", "priceCurrency": "CAD", "description": "Full manifold rebuild covering 1, 2, or 3 valves. Plus $74.95 per valve replaced and standard service call. PJL replaces the full manifold rather than single valves to protect long-term reliability." },
       { "@type": "Offer", "name": "6-Valve Manifold Rebuild", "price": "285.00", "priceCurrency": "CAD", "description": "Full manifold rebuild covering 4, 5, or 6 valves. Plus $74.95 per valve and standard service call." },
@@ -102,13 +102,13 @@
   "@context": "https://schema.org",
   "@type": "FAQPage",
   "mainEntity": [
-    { "@type": "Question", "name": "How does the $95 service call work?", "acceptedAnswer": { "@type": "Answer", "text": "The $95 service call covers our mobilization to your property and the first hour of labour on-site. Most repairs (single broken head, simple valve box diagnostic, controller programming issues) finish inside that first hour, so the service call is the entire bill plus parts. If the work runs longer, additional labour is billed at $95/hr and quoted to you on the spot before continuing. The service call fee is NOT charged on Spring Openings or Fall Winterizations — those are bundled services with the full opening or winterization visit included (typical 30-90 min depending on tier)." } },
+    { "@type": "Question", "name": "How does the $95 service call work?", "acceptedAnswer": { "@type": "Answer", "text": "The $95 service call covers our mobilization to your property and a quick on-site assessment of the issue — it does not include any labour. Diagnostic and repair labour is billed separately at $95/hr. When we quote a repair, we estimate a reasonable amount of time for the work; if the actual repair runs longer than that estimate, additional labour is billed at $95/hr and quoted to you on the spot before continuing. The service call fee is NOT charged on Spring Openings or Fall Winterizations — those are bundled services with the full opening or winterization visit included (typical 30-90 min depending on tier)." } },
     { "@type": "Question", "name": "What does sprinkler head replacement cost?", "acceptedAnswer": { "@type": "Answer", "text": "Flat $68 per head, any size, any type — pop-up or rotor, grass area or garden bed. Plus the $95 service call. So one broken head = $163 total. Three broken heads from spring damage = $95 + ($68 × 3) = $299 total. We don't upcharge for larger heads or specialty nozzles." } },
     { "@type": "Question", "name": "Why does PJL replace the full manifold instead of a single valve?", "acceptedAnswer": { "@type": "Answer", "text": "Reliability. Valves in a shared manifold are the same age, exposed to the same pressure cycles, and tend to fail in sequence over the next two seasons. Replacing one valve while leaving two 12-year-old neighbours in the same box guarantees a callback. We replace the whole manifold every time. The 3-valve tier covers 1-3 valves at $135. The 6-valve tier covers 4-6 valves at $285. Plus $74.95 per valve actually replaced and the $95 service call." } },
     { "@type": "Question", "name": "What does a Hydrawise controller install cost?", "acceptedAnswer": { "@type": "Answer", "text": "Pricing is by zone count: 1-4 zones $595, 5-7 zones $750, 8-16 zones $1,195. Beyond 16 zones is a custom quote (PCM-1600 special order required). Pricing includes the Hunter HPC-400 base, the appropriate PCM expansion module(s), WiFi connection, full schedule programming, and a walk-through. Plus the $95 service call. Hydrawise is also standard on every new PJL sprinkler install — no upcharge there." } },
     { "@type": "Question", "name": "Do you publish pricing for new installs and lighting?", "acceptedAnswer": { "@type": "Answer", "text": "New sprinkler installations and landscape lighting projects are quoted on-site after a free design walk-through. Both are too variable (zone count, head selection, fixture types and counts, transformer sizing, trench distances, soil conditions) to flat-rate fairly. We provide a fixed written quote 3-5 business days after the visit — not a 'starting at' number that grows on install day. See How It Works for the full project flow." } },
     { "@type": "Question", "name": "Do you service backflow assemblies?", "acceptedAnswer": { "@type": "Answer", "text": "No — Ontario regulates backflow testing and certification, and the work requires a certified backflow tester. PJL does not hold that certification. If your backflow assembly needs testing, certification, or service work, we'll refer you to a certified tester in your area." } },
-    { "@type": "Question", "name": "What's the AI Intake bonus?", "acceptedAnswer": { "@type": "Answer", "text": "If you describe your repair issue through the AI intake on our website, the labour for the diagnosed repair is included no matter how long it takes. So if you describe a stuck valve and that's what we find, you pay parts + service call — even if the actual repair runs 90 minutes. Anything else discovered on-site (a separate problem we find while there) is billed at standard parts + $95/hr labour, quoted to you before any extra work begins." } }
+    { "@type": "Question", "name": "What's the AI Intake bonus?", "acceptedAnswer": { "@type": "Answer", "text": "It's the only discount PJL offers. If you describe your repair issue through the AI intake on our website and the on-site diagnosis matches what the AI predicted, you receive one hour of repair labour FREE on the diagnosed work — a $95 saving. If the AI's diagnosis is wrong, no free hour applies. Anything else discovered on-site (a separate problem we find while there) is billed at standard parts + $95/hr labour, quoted to you before any extra work begins." } }
   ]
 }
 </script>
@@ -600,16 +600,16 @@
 <section class="section">
   <div class="container" style="max-width:1080px;">
     <h2>Start here: how the service call works.</h2>
-    <p style="max-width:680px;">Every repair visit starts with a service call. It covers our travel to your property, our diagnostic time, and the first hour of labour on-site. Most repairs finish inside that hour — head replacements, simple valve diagnostics, controller programming. If the work runs longer, additional labour is billed at <span data-price="hourly_labour">$95</span>/hr and quoted to you on the spot before we continue.</p>
+    <p style="max-width:680px;">Every repair visit starts with a service call. It covers our travel to your property and a quick on-site assessment of the issue. Diagnostic and repair labour is billed separately at <span data-price="hourly_labour">$95</span>/hr. When we quote a repair, we estimate a reasonable amount of time for the work — if the actual repair runs longer than that estimate, additional labour is billed at <span data-price="hourly_labour">$95</span>/hr and quoted to you on the spot before we continue.</p>
 
     <div class="service-call-box">
       <div>
         <div class="service-call-box__price" data-price="service_call">$95</div>
-        <div class="service-call-box__price-sub">Service Call · Incl. 1st Hour</div>
+        <div class="service-call-box__price-sub">Service Call · Mobilization + Assessment</div>
       </div>
       <div class="service-call-box__body">
-        <h3>One number. Always charged on a repair visit. Plus parts.</h3>
-        <p>Mobilization + first hour of labour on-site. Beyond the first hour: <span data-price="hourly_labour">$95</span>/hr.</p>
+        <h3>One number. Always charged on a repair visit. Labour and parts billed separately.</h3>
+        <p>Mobilization + a quick on-site assessment. Diagnostic and repair labour billed at <span data-price="hourly_labour">$95</span>/hr. Quoted in writing on-site before any work begins.</p>
         <p>Service call is <strong>NOT</strong> charged on Spring Openings or Fall Winterizations — those are bundled services with the full opening or winterization visit included (typical 30-90 min depending on tier).</p>
       </div>
     </div>
@@ -617,8 +617,8 @@
     <div class="ai-callout">
       <div class="ai-callout__shield">🤖</div>
       <div>
-        <h4>The AI Intake bonus — predictable repair pricing</h4>
-        <p>If you describe your issue through the <a href="diagnose.html" data-pjl-chat><strong>AI intake</strong></a>, the labour for the diagnosed repair is included no matter how long it takes. Stuck valve quoted at <span data-pjl-quote-formula="manifold_3valve+2*valve_hunter_pgv+service_call">$379.90</span> stays the same even if it runs 90 minutes. Anything else discovered on-site is billed at standard parts + <span data-price="hourly_labour">$95</span>/hr labour, quoted before any extra work begins.</p>
+        <h4>The AI Intake bonus — get an hour of labour free</h4>
+        <p>The <strong>only discount PJL offers</strong>: if you describe your issue through the <a href="diagnose.html" data-pjl-chat><strong>AI intake</strong></a> and the on-site diagnosis matches what the AI predicted, you get <strong>one hour of repair labour free</strong> on the diagnosed work — that's a <span data-price="hourly_labour">$95</span> saving. If the AI's diagnosis is wrong, no free hour applies. Anything else discovered on-site (a separate problem we find while there) is billed at parts + <span data-price="hourly_labour">$95</span>/hr labour, quoted before any extra work begins.</p>
         <p style="margin-top:10px;"><a href="diagnose.html" data-pjl-chat class="btn btn-green" style="display:inline-block;">💬 Chat with Patrick now</a></p>
       </div>
     </div>

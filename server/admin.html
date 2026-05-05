@@ -343,7 +343,8 @@
           <!-- AI Repair Quote card. Visible only when the lead carries a
                linked Quote (lead.quote populated by the server). Shows the
                versioned Quote artifact behind the chat: id, status, scope,
-               line items, totals, and the AI Intake Guarantee flag. -->
+               line items, totals, and the AI-Correct-Diagnosis Bonus
+               eligibility flag (pending until tech confirms diagnosis on-site). -->
           <section class="detail-section detail-quote" id="detailQuoteSection" hidden>
             <h3>AI Repair Quote</h3>
             <header class="detail-quote__head">
@@ -358,8 +359,8 @@
             </header>
             <p class="detail-quote__scope" id="detailQuoteScope">—</p>
             <div class="detail-quote__intake" id="detailQuoteIntake" hidden>
-              <strong>AI Intake Guarantee</strong>
-              <span>Labour locked for this scope. Beyond scope = parts + $95/hr, customer sign-off required.</span>
+              <strong>AI-Correct-Diagnosis Bonus — Pending Confirmation</strong>
+              <span>Bonus eligible for the diagnosed scope. Customer's first hour of repair labour is pending: tech confirms on-site diagnosis matches → credit 1 hr free; diagnosis wrong → bill labour normally at $95/hr. Beyond scope = parts + $95/hr, customer sign-off required.</span>
             </div>
             <ul class="detail-quote__items" id="detailQuoteItems"></ul>
             <p class="detail-quote__dates" id="detailQuoteDates"></p>

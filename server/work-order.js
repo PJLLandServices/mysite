@@ -855,9 +855,10 @@ function renderDiagnosis(wo) {
   woDiagnosis.textContent = typeof wo.diagnosis === "string" ? wo.diagnosis : JSON.stringify(wo.diagnosis, null, 2);
 }
 
-// AI Intake Guarantee banner — same data as the tech-mode page reads,
-// rendered here on the desktop editor so Patrick sees the locked scope
-// when reviewing/editing a WO that came from an AI repair quote.
+// AI-Correct-Diagnosis Bonus banner — same data as the tech-mode page
+// reads, rendered here on the desktop editor so Patrick sees the diagnosed
+// scope (and pending-bonus state) when reviewing/editing a WO that came
+// from an AI repair quote.
 function renderIntakeGuarantee(wo) {
   const banner = document.getElementById("woIntakeGuarantee");
   const scope = document.getElementById("woIntakeScope");

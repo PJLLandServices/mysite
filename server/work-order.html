@@ -152,14 +152,15 @@
     </section>
 
     <form class="wo-form" id="woForm" hidden>
-      <!-- AI Intake Guarantee banner — snapshotted from the source Quote
-           when the WO was created. Tells the desktop viewer (Patrick) that
-           labour is locked for a specific scope so on-site billing matches
-           the quoted scope. Same banner the tech sees in /tech mode. -->
+      <!-- AI-Correct-Diagnosis Bonus banner — snapshotted from the source
+           Quote when the WO was created. Bonus is CONDITIONAL: applies only
+           if the on-site diagnosis matches the AI-quoted scope. Until the
+           tech confirms a match, the customer's first hour of repair labour
+           is held in a "pending free" state. Same banner shown in /tech mode. -->
       <section class="wo-intake-guarantee" id="woIntakeGuarantee" hidden role="alert">
-        <p class="wo-intake-eyebrow">AI Intake Guarantee</p>
+        <p class="wo-intake-eyebrow">AI-Correct-Diagnosis Bonus — Pending Confirmation</p>
         <p class="wo-intake-scope" id="woIntakeScope">—</p>
-        <p class="wo-intake-rule">Labour for the diagnosed scope is <strong>locked</strong>. Don't bill additional labour for this work, no matter how long it takes. Anything beyond scope: parts + $95/hr, requires customer sign-off on a separate scope.</p>
+        <p class="wo-intake-rule">Bonus eligible for the diagnosed scope above. <strong>The customer's first hour of repair labour is temporarily disabled (pending) until the technician confirms the on-site diagnosis matches.</strong> Match confirmed → credit ONE HOUR of repair labour free on the diagnosed work. Diagnosis wrong / different problem → bill labour normally at $95/hr, no free hour. Anything beyond the diagnosed scope: parts + $95/hr, requires customer sign-off on a separate scope.</p>
         <p class="wo-intake-source" id="woIntakeSource"></p>
       </section>
 

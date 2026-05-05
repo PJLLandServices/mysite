@@ -14,10 +14,15 @@
 //     + spring openings that found discoverable repairs). Spring repairs
 //     ARE billed separately from the spring-opening fee, so service_call
 //     does prepend in this flow.
-//   - ai_intake_labour_locked: when wo.intakeGuarantee.applies is true,
-//     the original AI quote's service_call is locked-in. New on-site
-//     scope adds a $0 service_call line tagged "on intake guarantee" so
-//     the customer sees what's covered without double-billing.
+//   - ai_intake_correct_diagnosis_bonus: when wo.intakeGuarantee.applies is
+//     true, the original AI quote's $95 service_call (mobilization + on-site
+//     assessment) was already paid as part of the original visit. New on-site
+//     finds during that same visit add a $0 service_call line tagged "trip
+//     already paid on AI-quoted visit" so the customer doesn't pay a second
+//     mobilization fee. NOTE: the labour line for new finds bills normally
+//     at $95/hr — the bonus's 1-hour free credit applies ONLY to the
+//     diagnosed scope, NOT to anything found beyond it. (See pricing.json
+//     ai_intake_correct_diagnosis_bonus rule.)
 //
 // Output shape — each line item:
 //   {
@@ -325,16 +330,18 @@ function rollupZone(pricing, zone) {
 // Top-level rollup: walks every zone, prepends a single service_call,
 // returns lineItems + totals. Service call line behaviour:
 //   - WO with intakeGuarantee.applies (from an AI repair quote) →
-//     service_call prepended at $0 with note "on AI intake guarantee"
-//     so the customer sees it's covered. (pricing.json hard rule
-//     ai_intake_labour_locked.)
+//     service_call prepended at $0 with note "trip already paid on
+//     AI-quoted visit" so the customer doesn't pay a second mobilization
+//     fee for finds discovered during the same visit. (pricing.json hard
+//     rule ai_intake_correct_diagnosis_bonus — bonus 1-hr free credit
+//     applies only to the diagnosed scope, not to extra finds.)
 //   - spring_opening / fall_closing WO → NO service_call prepended.
 //     The seasonal fee on the WO baseline (seeded at WO create time)
 //     already covers the trip. Adding a $95 service_call on top would
 //     double-bill the customer for the visit. (pricing.json hard rule
 //     spring_fall_no_service_call.)
-//   - Otherwise (service_visit without intake guarantee) → full
-//     $95 service_call (the customer pays for the trip out).
+//   - Otherwise (service_visit without AI-quoted bonus eligibility) →
+//     full $95 service_call (the customer pays for the trip out).
 function rollupIssuesToLineItems(wo, pricing) {
   const zoneLines = [];
   const zones = Array.isArray(wo && wo.zones) ? wo.zones : [];
@@ -354,7 +361,7 @@ function rollupIssuesToLineItems(wo, pricing) {
         qty: 1,
         price: 0,
         source: { zoneNumbers: allZoneNums, issueIds: [] },
-        note: "On AI intake guarantee — covered by original quote"
+        note: "Trip already paid on the AI-quoted visit — no second mobilization fee for finds during the same visit"
       }));
     } else if (!isSeasonal) {
       // Service visit (or other repair-only WO) — full service call.

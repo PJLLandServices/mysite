@@ -822,7 +822,7 @@
     bubble.className = "pjl-chat-form-bubble";
     bubble.innerHTML = `
       <h3>Drop your details</h3>
-      <p>$95 service call covers mobilization plus the first hour on-site. Any parts or extra labour quoted before we do the work.</p>
+      <p>$95 service call covers mobilization plus a quick on-site assessment. Diagnostic and repair labour billed separately at $95/hr — quoted in writing before any work begins. <strong>Bonus:</strong> if the AI's diagnosis here matches what we find on-site, you get one hour of repair labour free.</p>
       <form data-pjl-lead-form>
         <div class="pjl-chat-form-grid">
           <div><label>First name <span class="req">*</span></label><input type="text" name="first_name" required></div>
