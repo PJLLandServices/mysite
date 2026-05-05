@@ -57,9 +57,11 @@
 }
 /* Body gets `.has-savings-float` whenever the savings widget is on
    screen (toggled by the savings JS). Chat launcher rides above it
-   with a 12px gap. */
+   with a generous gap so the two pieces read as a deliberate stack
+   rather than a stuck-together blob. The card-height value also
+   accounts for the close button that hangs ~8px above the card top. */
 body.has-savings-float .pjl-chat-launcher {
-  bottom: calc(24px + 116px + 12px);  /* base + savings card height + gap */
+  bottom: calc(24px + 132px + 24px);  /* base + savings card height (incl. close-btn overflow) + gap */
 }
 .pjl-chat-launcher.is-visible { display: inline-flex; }
 .pjl-chat-launcher:hover {
@@ -708,10 +710,10 @@ body.has-savings-float .pjl-chat-launcher {
     padding: 12px 18px 12px 12px;
     font-size: 12px;
   }
-  /* Mobile stack: savings card is shorter on phones, so the bump is
-     smaller than desktop. */
+  /* Mobile stack: savings card is shorter on phones, but we still
+     want a clear gap so the launcher doesn't look glued to it. */
   body.has-savings-float .pjl-chat-launcher {
-    bottom: calc(18px + 88px + 10px);
+    bottom: calc(18px + 96px + 18px);
   }
   .pjl-chat-form-grid { grid-template-columns: 1fr; }
   .pjl-chat-header { padding: 16px 18px; }

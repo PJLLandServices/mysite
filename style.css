@@ -3071,3 +3071,191 @@ section.hero[aria-label="PJL Land Services hero"] .hero__services-sep {
 [class*="-hero"] h1 em {
   font-style: normal !important;
 }
+
+/* ============================================================
+   Field-note figure — side-by-side photo + caption card
+   ============================================================
+   Replaces the old `<figure max-width:720px><img width:100%>`
+   pattern that blew up vertically when given a portrait photo.
+   Two columns on desktop: photo on the left (native aspect
+   ratio, no crop), eyebrow + caption on the right. Stacks on
+   mobile with the photo width-constrained so it never towers.
+
+   Used on: sprinkler-repair, sprinkler-fall-winterization,
+   blog-signs-sprinkler-needs-repair, drip-irrigation. */
+.field-note-fig {
+  display: grid;
+  grid-template-columns: 380px 1fr;
+  gap: 28px;
+  align-items: center;
+  max-width: 880px;
+  margin: 32px auto;
+  padding: 24px;
+  background: var(--cream);
+  border-left: 4px solid var(--green);
+  border-radius: 12px;
+  box-shadow: 0 2px 12px rgba(15, 31, 20, 0.05);
+}
+.field-note-fig__photo {
+  margin: 0;
+  min-width: 0;
+}
+.field-note-fig__photo img {
+  display: block;
+  width: 100%;
+  height: auto; /* native aspect ratio — no crop */
+  border-radius: 8px;
+  box-shadow: 0 6px 20px rgba(15, 31, 20, 0.18);
+}
+.field-note-fig__copy {
+  min-width: 0;
+}
+.field-note-fig__eyebrow {
+  display: inline-block;
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--green);
+  margin-bottom: 12px;
+}
+.field-note-fig__caption {
+  font-size: 16px;
+  line-height: 1.6;
+  color: var(--text-mid);
+  margin: 0;
+  font-style: italic;
+}
+@media (max-width: 720px) {
+  .field-note-fig {
+    grid-template-columns: 1fr;
+    gap: 18px;
+    padding: 20px;
+    margin: 24px auto;
+  }
+  .field-note-fig__photo {
+    max-width: 280px;
+    margin: 0 auto;
+  }
+  .field-note-fig__caption {
+    font-size: 15px;
+  }
+}
+
+/* ── Variant: Polaroid (option B) — small centered photo with white
+   "instant photo" frame, caption + eyebrow below. Casual snapshot feel. */
+.field-note-fig--polaroid {
+  display: block;
+  max-width: 480px;
+  margin: 36px auto;
+  padding: 0;
+  background: transparent;
+  border-left: none;
+  box-shadow: none;
+  text-align: center;
+}
+.field-note-fig--polaroid .field-note-fig__photo {
+  max-width: 340px;
+  margin: 0 auto 22px;
+  padding: 12px 12px 14px;
+  background: #fff;
+  border-radius: 4px;
+  box-shadow: 0 14px 32px rgba(15, 31, 20, 0.20), 0 2px 6px rgba(15, 31, 20, 0.10);
+  min-width: 0;
+}
+.field-note-fig--polaroid .field-note-fig__photo img {
+  border-radius: 0;
+  box-shadow: none;
+}
+.field-note-fig--polaroid .field-note-fig__copy {
+  max-width: 520px;
+  margin: 0 auto;
+}
+.field-note-fig--polaroid .field-note-fig__eyebrow {
+  display: block;
+  margin-bottom: 8px;
+  color: var(--text-muted);
+}
+.field-note-fig--polaroid .field-note-fig__caption {
+  font-size: 15px;
+  text-align: center;
+}
+@media (max-width: 720px) {
+  .field-note-fig--polaroid .field-note-fig__photo {
+    max-width: 280px;
+  }
+}
+
+/* ── Variant: Pullquote-led (option C) — caption is the feature, set
+   in Barlow Condensed at headline scale. Photo demoted to a small
+   right-floated thumbnail. Editorial / magazine voice. */
+.field-note-fig--pullquote {
+  display: block;
+  max-width: 760px;
+  margin: 36px auto;
+  padding: 32px 32px 28px;
+  background: var(--cream);
+  border-left: 4px solid var(--green);
+  border-radius: 0;
+  box-shadow: none;
+  position: relative;
+  overflow: hidden;
+}
+.field-note-fig--pullquote .field-note-fig__photo {
+  float: right;
+  max-width: 200px;
+  margin: 4px 0 12px 28px;
+  shape-outside: margin-box;
+  min-width: 0;
+}
+.field-note-fig--pullquote .field-note-fig__photo img {
+  border-radius: 6px;
+  box-shadow: 0 8px 20px rgba(15, 31, 20, 0.18);
+}
+.field-note-fig--pullquote .field-note-fig__copy {
+  min-width: 0;
+}
+.field-note-fig--pullquote .field-note-fig__eyebrow {
+  display: block;
+  margin-bottom: 14px;
+}
+.field-note-fig--pullquote .field-note-fig__caption {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: clamp(20px, 2.4vw, 26px);
+  line-height: 1.35;
+  font-style: italic;
+  color: var(--text);
+  font-weight: 400;
+  margin: 0;
+  letter-spacing: -0.005em;
+}
+@media (max-width: 720px) {
+  .field-note-fig--pullquote {
+    padding: 24px;
+  }
+  .field-note-fig--pullquote .field-note-fig__photo {
+    float: none;
+    max-width: 240px;
+    margin: 0 auto 18px;
+    display: block;
+  }
+  .field-note-fig--pullquote .field-note-fig__caption {
+    font-size: 19px;
+    text-align: left;
+  }
+}
+
+/* ── Prototype-only label: small divider so we can see which variant
+   is which when stacked side-by-side on sprinkler-repair.html.
+   Remove after picking a final layout. */
+.prototype-label {
+  text-align: center;
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--amber);
+  margin: 32px 0 -8px;
+}
