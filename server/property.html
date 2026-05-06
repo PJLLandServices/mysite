@@ -26,6 +26,7 @@
       <a href="/admin/handoff">Handoff</a>
       <a href="/admin/properties" class="is-active">Properties</a>
       <a href="/admin/projects">Projects</a>
+      <a href="/admin/work-orders">Work orders</a>
       <a href="/admin/quote-folder">Quotes</a>
       <a href="/admin/invoices">Invoices</a>
       <a href="/admin/material-lists">Materials</a>
@@ -83,7 +84,7 @@
         </div>
         <label class="property-full">
           <span>Property address</span>
-          <input type="text" name="address" autocomplete="off">
+          <input class="js-address-autocomplete" type="text" name="address" autocomplete="off">
         </label>
       </section>
 
@@ -201,5 +202,7 @@
   </div>
 
   <script src="/crm/property.js"></script>
+  <script src="/coverage-checker.js"></script>
+    <script async defer src="https://maps.googleapis.com/maps/api/js?key=AIzaSyBrORBeXbpNTJvoi2PDhDDs6Iy-BGSU30M&libraries=places&callback=initCoverageCheck&loading=async"></script>
 </body>
 </html>

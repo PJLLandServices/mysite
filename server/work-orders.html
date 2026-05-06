@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <meta name="theme-color" content="#0F1F14">
-  <title>Purchase orders — PJL</title>
+  <title>Work orders — PJL</title>
   <link rel="icon" type="image/svg+xml" href="/crm/pjl-logo-mark.svg">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -12,7 +12,7 @@
   <link rel="stylesheet" href="/crm/crm.css">
   <link rel="stylesheet" href="/crm/suppliers.css">
   <link rel="stylesheet" href="/crm/material-lists.css">
-  <link rel="stylesheet" href="/crm/purchase-orders.css">
+  <link rel="stylesheet" href="/crm/work-orders-index.css">
 </head>
 <body class="pjl-crm-body suppliers-body">
   <aside class="pjl-admin-nav" id="navMenu" aria-label="PJL CRM Navigation">
@@ -26,10 +26,10 @@
       <a href="/admin/handoff">Handoff</a>
       <a href="/admin/properties">Properties</a>
       <a href="/admin/projects">Projects</a>
-      <a href="/admin/work-orders">Work orders</a>
+      <a href="/admin/work-orders" class="is-active">Work orders</a>
       <a href="/admin/quote-folder">Quotes</a>
       <a href="/admin/invoices">Invoices</a>
-      <a href="/admin/material-lists" class="is-active">Materials</a>
+      <a href="/admin/material-lists">Materials</a>
       <a href="/admin/chats">AI Chats</a>
       <a href="/admin/settings">Settings</a>
     </div>
@@ -46,44 +46,37 @@
         <span class="pjl-nav-toggle-bar"></span>
         <span class="pjl-nav-toggle-bar"></span>
       </button>
-      <span class="pjl-app-title">Purchase orders</span>
+      <span class="pjl-app-title">Work orders</span>
       <a class="pjl-app-phone" href="tel:+19059600181">(905) 960-0181</a>
     </header>
 
     <main class="suppliers-shell">
-      <nav class="suppliers-subnav" aria-label="Materials sub-sections">
-        <a href="/admin/material-lists">Material lists</a>
-        <a href="/admin/purchase-orders" class="is-active" aria-current="page">Purchase orders</a>
-        <a href="/admin/suppliers">Suppliers</a>
-        <a href="/admin/parts-suppliers">Catalog assignments</a>
-      </nav>
-
       <section class="suppliers-explainer">
-        <p><strong>Purchase orders</strong> are generated from a material list's <em>need</em> lines, grouped by the primary supplier on each part. Drafts are editable; sending emails the PO PDF to the supplier and locks the source lines as <em>ordered</em>; receiving flips the lines to <em>have</em>. Cancelling a sent PO returns its lines to <em>need</em> so they can be re-ordered.</p>
+        <p><strong>Work orders</strong> are the per-visit field documents — every booked appointment generates one. Filter by status to focus on what's outstanding (scheduled, on-site, awaiting approval) or audit completed visits. Tap a row to open the desktop editor; tech mode is one click away from there.</p>
       </section>
 
       <section class="suppliers-toolbar">
-        <input type="search" id="poSearch" class="ml-search" placeholder="Search by id, supplier, list">
+        <input type="search" id="woSearch" class="ml-search" placeholder="Search by id, customer, address">
         <label class="suppliers-toggle">
-          <input type="checkbox" id="poShowClosed"> Show closed POs (received + cancelled)
+          <input type="checkbox" id="woShowClosed"> Show completed + cancelled
         </label>
       </section>
 
       <section class="ml-filters" aria-label="Status filter">
-        <button type="button" data-status-filter="" class="is-active">All</button>
-        <button type="button" data-status-filter="draft">Draft</button>
-        <button type="button" data-status-filter="sent">Sent</button>
-        <button type="button" data-status-filter="partially_received">Partial</button>
-        <button type="button" data-status-filter="received">Received</button>
+        <button type="button" data-status-filter="" class="is-active">All active</button>
+        <button type="button" data-status-filter="scheduled">Scheduled</button>
+        <button type="button" data-status-filter="on_site">On site</button>
+        <button type="button" data-status-filter="awaiting_approval">Awaiting approval</button>
+        <button type="button" data-status-filter="completed">Completed</button>
         <button type="button" data-status-filter="cancelled">Cancelled</button>
       </section>
 
-      <p class="suppliers-empty" id="poEmpty" hidden>No purchase orders yet. Generate one from a material list.</p>
-      <ul class="ml-cards" id="poContainer" aria-label="Purchase orders"></ul>
+      <p class="suppliers-empty" id="woEmpty" hidden>No work orders match the current filter.</p>
+      <ul class="ml-cards" id="woContainer" aria-label="Work orders"></ul>
     </main>
   </div>
 
   <script src="/crm/crm-nav.js"></script>
-  <script src="/crm/purchase-orders.js"></script>
+  <script src="/crm/work-orders-index.js"></script>
 </body>
 </html>

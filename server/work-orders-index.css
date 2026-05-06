@@ -1,0 +1,59 @@
+/* Work orders index — list view of every WO, filter by status.
+   Reuses .ml-card / .suppliers-shell / .ml-filters pattern from other
+   admin index pages for visual consistency. Adds a status pill colour
+   set keyed to wo.status (scheduled / on_site / awaiting_approval /
+   completed / cancelled and a few in-between states). */
+
+.wo-status {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.wo-status--scheduled         { background: #DCE5F0; color: #1F4D7A; }
+.wo-status--dispatched        { background: #DCE5F0; color: #1F4D7A; }
+.wo-status--en_route          { background: #DCE5F0; color: #1F4D7A; }
+.wo-status--on_site           { background: #FFF1D6; color: #7A5500; }
+.wo-status--in_progress       { background: #FFF1D6; color: #7A5500; }
+.wo-status--awaiting_approval { background: #FBEAE7; color: #8A2A1F; }
+.wo-status--approved          { background: #DDEDD0; color: #1B4D2E; }
+.wo-status--completed         { background: #DDEDD0; color: #1B4D2E; }
+.wo-status--cancelled         { background: #E8E5D7; color: #4A4A44; }
+.wo-status--no_show           { background: #E8E5D7; color: #4A4A44; }
+
+.wo-card-meta-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  font-size: 13px;
+  color: #4A4A44;
+  margin-top: 4px;
+}
+.wo-card-meta-row strong { color: #1F2A22; }
+.wo-card-meta-row .wo-card-id {
+  font-family: ui-monospace, "SFMono-Regular", monospace;
+  color: #7A7A72;
+  font-size: 12px;
+}
+
+.wo-card-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+.wo-card-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #FAFAF5;
+  border: 1px solid #E2E0D4;
+  font-size: 11px;
+  color: #4A4A44;
+}
+.wo-card-tag.is-locked { background: #F0EEE3; color: #4A4A44; }
+.wo-card-tag.is-followup { background: #FFF1D6; color: #7A5500; border-color: #E0CB8E; }
