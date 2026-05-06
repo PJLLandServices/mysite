@@ -667,6 +667,36 @@ techZoneList.addEventListener("click", (event) => {
   openZoneSheet(idx);
 });
 
+// "+ Add zone" — appends a new blank zone to state, persists, then opens
+// the edit sheet so the tech can rename it without a second tap. Auto-
+// numbered at max-existing + 1 so spring/fall sweeps stay sequential.
+const techAddZoneBtn = document.getElementById("techAddZoneBtn");
+techAddZoneBtn?.addEventListener("click", () => {
+  if (state.locked) return;
+  const usedNumbers = (state.zones || [])
+    .map((z) => Number(z.number) || 0)
+    .filter((n) => n > 0);
+  const nextNum = usedNumbers.length ? Math.max(...usedNumbers) + 1 : 1;
+  const blankChecks = {};
+  for (const k of ZONE_CHECK_KEYS) blankChecks[k] = false;
+  state.zones.push({
+    number: nextNum,
+    kind: "zone",
+    location: `Zone ${nextNum}`,
+    sprinklerTypes: [],
+    coverage: [],
+    status: "",
+    notes: "",
+    checks: { ...blankChecks },
+    issues: []
+  });
+  renderZones();
+  patchWorkOrder({ zones: state.zones });
+  // Open the just-added zone for immediate edit. Sort-by-number doesn't
+  // mutate state.zones so the new entry sits at length - 1.
+  openZoneSheet(state.zones.length - 1);
+});
+
 // ---- Zone-edit bottom sheet -------------------------------------
 
 function openZoneSheet(index) {
@@ -1652,6 +1682,7 @@ function applyLockState(locked) {
   disable("#techNotes");
   disable("#techServiceChecklistList button");
   disable("#techZoneList button");
+  disable("#techAddZoneBtn");
   disable("#techSignoffName");
   disable("#techSignoffAck");
   disable("#techSignoffSubmit");
