@@ -35,7 +35,7 @@ const crypto = require("node:crypto");
 
 const { sendNewLeadEmail } = require("./lib/notify-email");
 const { sendNewLeadSms } = require("./lib/notify-sms");
-const { notifyCustomer, eventForTransition } = require("./lib/notify-customer");
+const { notifyCustomer, eventForTransition, sendInvoiceToCustomer } = require("./lib/notify-customer");
 const { geocode, PJL_BASE } = require("./lib/geocode");
 const { BOOKABLE_SERVICES, DEFAULT_HOURS, DEFAULT_SETTINGS, listAvailableSlots, groupByDay } = require("./lib/availability");
 const scheduleStore = require("./lib/schedule-store");
@@ -2902,6 +2902,129 @@ async function handleApi(req, res, pathname) {
       return;
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't generate PDF."] });
+    }
+  }
+
+  // ---------- Invoice send / resend (PR 2) ----------------------------
+  // POST /api/invoices/:id/send    — first send: optional QB push → email
+  //                                   with PDF → status draft → sent.
+  // POST /api/invoices/:id/resend  — re-email the same invoice without
+  //                                   any status change. Audit-stamps the
+  //                                   resend so we don't lose the trail.
+  //
+  // Both routes:
+  //   - Are admin-gated by isAdminPath() above (/api/invoices is admin).
+  //   - Render the PDF on demand from the current invoice record.
+  //   - Treat a QB push failure as a warning, not a hard failure: the
+  //     email still goes out, the admin sees a non-blocking warning in
+  //     the response so they can retry the QB push from the QB card.
+  //     This matches the brief's "error tolerance" rule — non-essential
+  //     side effects must never break the primary action.
+  //
+  // Idempotency:
+  //   /send is rejected with 409 if status is anything but draft. The
+  //   admin can /resend after a successful first send (any status except
+  //   void).
+  const invoiceSendMatch = pathname.match(/^\/api\/invoices\/([^/]+)\/(send|resend)$/);
+  if (invoiceSendMatch && req.method === "POST") {
+    const invId = decodeURIComponent(invoiceSendMatch[1]);
+    const action = invoiceSendMatch[2]; // "send" or "resend"
+    try {
+      const inv = await invoices.get(invId);
+      if (!inv) return sendJson(res, 404, { ok: false, errors: ["Invoice not found."] });
+
+      // Status gating
+      if (action === "send" && inv.status !== "draft") {
+        return sendJson(res, 409, { ok: false, errors: [`Invoice is "${inv.status}" — only draft invoices can be sent. Use Resend to re-email.`] });
+      }
+      if (action === "resend" && inv.status === "void") {
+        return sendJson(res, 409, { ok: false, errors: ["Cannot resend a voided invoice."] });
+      }
+      if (!inv.customerEmail) {
+        return sendJson(res, 400, { ok: false, errors: ["Invoice has no customer email — add one to the invoice before sending."] });
+      }
+
+      // Optional QB push — best effort. We use isConfigured() + isConnected()
+      // to decide whether to try at all; if either is false the push is
+      // skipped silently. On a real failure (network, 401 after refresh,
+      // etc.) we log + warn but keep going so the email still ships.
+      let qbWarning = null;
+      let qbAction = null;
+      let qbInvoiceId = inv.quickbooksInvoiceId || null;
+      if (action === "send") {
+        try {
+          if (quickbooks.isConfigured() && (await quickbooks.isConnected())) {
+            const result = await quickbooks.pushInvoice(inv);
+            qbInvoiceId = result.id;
+            qbAction = result.action;
+          }
+        } catch (qbErr) {
+          console.warn(`[invoice-send] QB push failed for ${invId}: ${qbErr.message}`);
+          qbWarning = `QuickBooks push failed: ${qbErr.message}. The email still went out — retry the push from the invoice editor.`;
+        }
+      }
+
+      // Render PDF using the latest record (post-QB-push so any new
+      // quickbooksInvoiceId is on it if pushInvoice mutated something).
+      const renderInv = qbInvoiceId && qbInvoiceId !== inv.quickbooksInvoiceId
+        ? { ...inv, quickbooksInvoiceId: qbInvoiceId }
+        : inv;
+      const pdfBuffer = await generateInvoicePdf(renderInv);
+
+      // Send the email. If this throws, the call returns 500 and the
+      // admin sees the underlying error. Status is NOT flipped on failure.
+      await sendInvoiceToCustomer(renderInv, pdfBuffer, {
+        resend: action === "resend"
+        // viewLink is intentionally omitted in PR 2 — PR 3 adds the
+        // /pay/invoice/:id?t=<token> embedded payment URL and passes it
+        // here. Until then the email surfaces e-Transfer + phone only.
+      });
+
+      // Build the patch for invoices.update(). For /send, flip to sent;
+      // for /resend, leave status alone but append a history entry.
+      const now = new Date().toISOString();
+      const patch = {};
+      if (qbInvoiceId && qbInvoiceId !== inv.quickbooksInvoiceId) {
+        patch.quickbooksInvoiceId = qbInvoiceId;
+      }
+      let updated;
+      if (action === "send") {
+        // invoices.update() handles the status:sent transition + sentAt
+        // stamp + status:* history entry automatically.
+        patch.status = "sent";
+        patch.note = qbInvoiceId
+          ? `Pushed to QuickBooks as ${qbInvoiceId} (${qbAction}); emailed to ${inv.customerEmail}.`
+          : `Emailed to ${inv.customerEmail}${qbWarning ? " (QB push skipped)" : ""}.`;
+        updated = await invoices.update(invId, patch);
+      } else {
+        // /resend — no status change, but the audit trail still records
+        // the re-send. invoices.update() only logs history on status
+        // changes, so we use appendHistory() directly for the resend
+        // event. quickbooksInvoiceId can still be updated via the patch
+        // object if the QB push happened during the resend (it doesn't
+        // for /resend — push is /send-only — but kept for symmetry).
+        if (Object.keys(patch).length > 0) {
+          await invoices.update(invId, patch);
+        }
+        updated = await invoices.appendHistory(invId, {
+          action: "resent",
+          by: "admin",
+          note: `Re-emailed to ${inv.customerEmail}.`
+        });
+      }
+
+      return sendJson(res, 200, {
+        ok: true,
+        invoice: updated,
+        sentAt: updated?.sentAt || now,
+        action,
+        qbAction,
+        qbInvoiceId,
+        warning: qbWarning
+      });
+    } catch (err) {
+      console.error(`[invoice-${action}] failed for ${invId}:`, err.message);
+      return sendJson(res, 500, { ok: false, errors: [err.message || `Couldn't ${action} invoice.`] });
     }
   }
 

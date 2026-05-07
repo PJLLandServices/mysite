@@ -220,6 +220,28 @@ async function update(id, patch) {
   return next;
 }
 
+// Append a single history entry without touching status / line items.
+// Used by the /resend route in server.js so re-emails get a clean audit
+// trail without going through update() (which only logs on status
+// transitions). Returns the updated invoice record, or null if not found.
+async function appendHistory(id, entry) {
+  const records = await readAll();
+  const idx = records.findIndex((r) => r.id === id);
+  if (idx === -1) return null;
+  const now = new Date().toISOString();
+  const next = { ...records[idx] };
+  next.history = [...(next.history || []), {
+    ts: entry?.ts || now,
+    action: entry?.action || "note",
+    by: entry?.by || "admin",
+    note: entry?.note || ""
+  }];
+  next.updatedAt = now;
+  records[idx] = next;
+  await writeAll(records);
+  return next;
+}
+
 module.exports = {
   STATUSES,
   HST_RATE,
@@ -228,5 +250,6 @@ module.exports = {
   listByWorkOrder,
   listByProperty,
   createDraft,
-  update
+  update,
+  appendHistory
 };

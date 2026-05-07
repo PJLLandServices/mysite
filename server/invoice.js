@@ -80,6 +80,43 @@ function render(inv) {
   const propLink = document.getElementById("invoicePropertyLink");
   if (inv.propertyId) { propLink.href = `/admin/property/${encodeURIComponent(inv.propertyId)}`; propLink.textContent = "Open property"; }
   else { propLink.removeAttribute("href"); propLink.textContent = "—"; }
+
+  // Email-to-customer card. Button label + style flip based on status:
+  //   draft           → amber primary "Send to customer"
+  //   sent/paid/void  → outlined green "Resend" + "Sent <date> to <email>"
+  //                     line. Void cannot be resent (server enforces; UI
+  //                     greys the button to make it visible).
+  const sendBtn = document.getElementById("invoiceSendBtn");
+  const sentMeta = document.getElementById("invoiceSentMeta");
+  const sendStatus = document.getElementById("invoiceSendStatus");
+  if (sendBtn && sentMeta && sendStatus) {
+    sendStatus.textContent = "";
+    sendStatus.dataset.kind = "";
+    if (inv.status === "draft") {
+      sendBtn.textContent = "Send to customer";
+      sendBtn.classList.remove("invoice-action-btn--outline");
+      sendBtn.classList.add("invoice-action-btn--amber");
+      sendBtn.disabled = false;
+      sentMeta.textContent = inv.customerEmail
+        ? `Will email to: ${inv.customerEmail}`
+        : "⚠ No customer email on file — add one before sending.";
+    } else if (inv.status === "void") {
+      sendBtn.textContent = "Resend";
+      sendBtn.classList.remove("invoice-action-btn--amber");
+      sendBtn.classList.add("invoice-action-btn--outline");
+      sendBtn.disabled = true;
+      sentMeta.textContent = "Voided — cannot resend.";
+    } else {
+      // sent or paid
+      sendBtn.textContent = "Resend";
+      sendBtn.classList.remove("invoice-action-btn--amber");
+      sendBtn.classList.add("invoice-action-btn--outline");
+      sendBtn.disabled = !inv.customerEmail;
+      const sentBit = inv.sentAt ? `Sent ${fmtDate(inv.sentAt)}` : "Sent (no timestamp)";
+      const toBit = inv.customerEmail ? ` to ${inv.customerEmail}` : "";
+      sentMeta.textContent = sentBit + toBit;
+    }
+  }
 }
 
 document.getElementById("invoiceStatus")?.addEventListener("change", async (event) => {
@@ -171,6 +208,61 @@ document.getElementById("invoiceQbPushBtn")?.addEventListener("click", async () 
     status.dataset.kind = "error";
   } finally {
     btn.disabled = false;
+  }
+});
+
+// ---- Send / Resend invoice email -------------------------------------
+// Single click handler covers both first-send (status:draft → POST /send)
+// and re-email (any other status → POST /resend). Server-side route is
+// the source of truth for which transitions are allowed; the UI just
+// asks confirmation, fires the POST, and re-renders on the response.
+document.getElementById("invoiceSendBtn")?.addEventListener("click", async () => {
+  if (!currentInvoice) return;
+  const isResend = currentInvoice.status !== "draft";
+  const action = isResend ? "resend" : "send";
+  const recipient = currentInvoice.customerEmail;
+  if (!recipient) {
+    alert("This invoice has no customer email. Add one in the bill-to section first.");
+    return;
+  }
+  // Confirm with the recipient + total in the prompt so the admin can
+  // catch a wrong email or wrong invoice before anything goes out.
+  const confirmMsg = isResend
+    ? `Resend invoice ${currentInvoice.id} (${fmt(currentInvoice.total)}) to ${recipient}?`
+    : `Send invoice ${currentInvoice.id} (${fmt(currentInvoice.total)}) to ${recipient}?\n\n` +
+      `Status will flip from Draft to Sent and the customer will receive the branded PDF by email.`;
+  if (!confirm(confirmMsg)) return;
+
+  const btn = document.getElementById("invoiceSendBtn");
+  const status = document.getElementById("invoiceSendStatus");
+  const wasLabel = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = isResend ? "Resending…" : "Sending…";
+  status.textContent = "";
+  status.dataset.kind = "info";
+  try {
+    const r = await fetch(`/api/invoices/${encodeURIComponent(idFromPath)}/${action}`, { method: "POST" });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok || !data.ok) throw new Error((data.errors && data.errors[0]) || "Send failed.");
+    currentInvoice = data.invoice;
+    // Surface a non-blocking warning if the QB push failed but the
+    // email still went out — the brief's "log + warn + continue" rule.
+    if (data.warning) {
+      status.textContent = `✓ Sent. ${data.warning}`;
+      status.dataset.kind = "info";
+    } else if (data.qbInvoiceId) {
+      status.textContent = `✓ Sent. QuickBooks invoice ${data.qbInvoiceId} (${data.qbAction}).`;
+      status.dataset.kind = "ok";
+    } else {
+      status.textContent = isResend ? "✓ Re-sent to customer." : "✓ Sent to customer.";
+      status.dataset.kind = "ok";
+    }
+    render(data.invoice);
+  } catch (err) {
+    status.textContent = err.message || "Failed.";
+    status.dataset.kind = "error";
+    btn.disabled = false;
+    btn.textContent = wasLabel;
   }
 });
 

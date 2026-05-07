@@ -263,10 +263,21 @@ async function pushInvoice(localInvoice) {
     }
   }));
 
+  // AllowOnlineCreditCardPayment + BillEmail let QB generate a customer
+  // payment URL for the invoice (the "View and pay" link the customer
+  // uses). The PJL portal-hosted /pay page (PR 3) takes over from this
+  // QB-hosted fallback; until then, customers can still pay via QB if
+  // their email arrives. BillEmail is required by Intuit when
+  // AllowOnlineCreditCardPayment is true.
   const invoicePayload = {
     Line: lines,
     CustomerRef: { value: customer.Id },
     DocNumber: localInvoice.id,
+    AllowOnlineCreditCardPayment: true,
+    AllowOnlineACHPayment: true,
+    BillEmail: localInvoice.customerEmail
+      ? { Address: localInvoice.customerEmail }
+      : (customer.PrimaryEmailAddr || undefined),
     PrivateNote: `PJL local invoice ${localInvoice.id}${localInvoice.woId ? ` from WO ${localInvoice.woId}` : ""}`
   };
 

@@ -323,4 +323,156 @@ function notifyCustomer(event, lead, { baseUrl } = {}) {
   ]);
 }
 
-module.exports = { notifyCustomer, eventForTransition };
+// ---- Invoice send (PR 2) -------------------------------------------------
+// Customer-facing invoice email with the branded PDF attached. Modeled on
+// notify-supplier.js's sendPurchaseOrderEmail. Throws if Gmail isn't
+// configured or if the recipient email is missing — the caller (server.js
+// /send route) surfaces those as user-facing errors so the admin can fix
+// them. This function does NOT mutate the invoice record; the route
+// handler is responsible for status / sentAt / audit on success.
+//
+// Inputs:
+//   invoice    — the local PJL invoice record (server/lib/invoices.js shape)
+//   pdfBuffer  — Buffer of the rendered PDF (from server/lib/invoice-pdf.js)
+//   options    — { resend, viewLink, eTransferEmail }
+//                  resend         — when true, subject prefix becomes "Invoice
+//                                   reminder:" instead of "Your invoice"
+//                  viewLink       — optional URL for the "View and pay" CTA.
+//                                   Hidden in the email if absent (PR 2
+//                                   default — PR 3 supplies the embedded
+//                                   /pay/invoice/:id?t=... URL).
+//                  eTransferEmail — recipient e-Transfer address (defaults
+//                                   to GMAIL_USER if unset).
+//
+// Returns { ok: true, messageId } on success, throws on failure.
+
+const fsSync = require("node:fs");
+const path = require("node:path");
+
+const TEMPLATE_PATH = path.resolve(__dirname, "templates", "invoice-email.html");
+let _templateCache = null;
+function loadTemplate() {
+  if (_templateCache) return _templateCache;
+  const raw = fsSync.readFileSync(TEMPLATE_PATH, "utf8");
+  // Split HTML body from text fallback at the <!-- TEXT --> marker.
+  const idx = raw.indexOf("<!-- TEXT -->");
+  let html, text;
+  if (idx === -1) {
+    html = raw;
+    text = "";
+  } else {
+    html = raw.slice(0, idx).trim();
+    text = raw.slice(idx + "<!-- TEXT -->".length).trim();
+  }
+  // Strip the leading documentation HTML comment from the rendered body
+  // so we don't ship 400-odd bytes of internal docs into every email.
+  // Drops only the FIRST <!-- ... --> if it appears at byte 0; downstream
+  // comments (used for control flow inside the markup) survive.
+  if (html.startsWith("<!--")) {
+    const end = html.indexOf("-->");
+    if (end !== -1) html = html.slice(end + 3).trim();
+  }
+  _templateCache = { html, text };
+  return _templateCache;
+}
+
+// Mustache-lite — replace every {{key}} (or {{a.b}}) with vars[key]. Missing
+// keys render as empty strings rather than throwing, which matches the
+// "best effort" behaviour of the rest of the notify-customer module.
+function renderTemplate(tpl, vars) {
+  return tpl.replace(/\{\{\s*([\w.]+)\s*\}\}/g, (_match, dotted) => {
+    const parts = dotted.split(".");
+    let cur = vars;
+    for (const p of parts) {
+      if (cur == null) return "";
+      cur = cur[p];
+    }
+    return cur == null ? "" : String(cur);
+  });
+}
+
+function moneyTextCurrency(amount) {
+  return new Intl.NumberFormat("en-CA", { style: "currency", currency: "CAD" })
+    .format(Number(amount || 0));
+}
+
+async function sendInvoiceToCustomer(invoice, pdfBuffer, opts = {}) {
+  const transporter = getTransporter();
+  if (!transporter) {
+    throw new Error("Email is not configured on this server (set GMAIL_USER + GMAIL_APP_PASSWORD).");
+  }
+  const to = (invoice?.customerEmail || "").trim();
+  if (!to) throw new Error("Invoice has no customer email — add one to the invoice before sending.");
+  if (!Buffer.isBuffer(pdfBuffer) || pdfBuffer.length === 0) {
+    throw new Error("Invoice PDF buffer is empty.");
+  }
+
+  const { html: htmlTpl, text: textTpl } = loadTemplate();
+  const firstName = (invoice.customerName || "").trim().split(/\s+/)[0] || "there";
+  const totalFormatted = moneyTextCurrency(invoice.total);
+  const eTransferEmail = (opts.eTransferEmail || process.env.GMAIL_USER || "info@pjllandservices.com").trim();
+  const viewLink = (opts.viewLink || "").trim();
+  const viewLinkVisible = viewLink ? "block" : "none";
+  // For the plain-text body, render either the link line or a blank.
+  const viewLinkText = viewLink
+    ? `View and pay online: ${viewLink}\n\n`
+    : "";
+
+  // Plain-text payment instructions — duplicated into the HTML "Ways to
+  // pay" block so the same copy appears in both formats.
+  const paymentInstructionsText =
+    `E-Transfer: ${eTransferEmail}\n` +
+    `Or pay by credit card via the secure payment link above (when available), ` +
+    `or just call (905) 960-0181 and we'll take care of it on the phone.`;
+  const paymentInstructionsHtml =
+    `<strong>E-Transfer:</strong> <a href="mailto:${escapeHtml(eTransferEmail)}" style="color:#1B4D2E;text-decoration:none;">${escapeHtml(eTransferEmail)}</a><br>` +
+    `Credit card payments are accepted via the secure link above (when available). ` +
+    `Prefer to pay by phone? Call <a href="tel:+19059600181" style="color:#1B4D2E;text-decoration:none;">(905) 960-0181</a>.`;
+
+  const vars = {
+    customer: { firstName: escapeHtml(firstName) },
+    invoice: {
+      number: escapeHtml(invoice.id || ""),
+      totalFormatted: escapeHtml(totalFormatted)
+    },
+    paymentInstructions: paymentInstructionsHtml,
+    viewLink: escapeHtml(viewLink),
+    viewLinkVisible
+  };
+  // Plain-text variant uses non-escaped content (no HTML rendering).
+  const textVars = {
+    customer: { firstName },
+    invoice: { number: invoice.id || "", totalFormatted },
+    paymentInstructions: paymentInstructionsText,
+    viewLinkText
+  };
+
+  const html = renderTemplate(htmlTpl, vars);
+  const text = renderTemplate(textTpl, textVars);
+
+  const subjectPrefix = opts.resend ? "Invoice reminder" : "Your invoice";
+  const subject = `${subjectPrefix} ${invoice.id || ""} — ${totalFormatted} — PJL Land Services`;
+
+  try {
+    const info = await transporter.sendMail({
+      from: `"PJL Land Services" <${process.env.GMAIL_USER}>`,
+      to,
+      replyTo: process.env.GMAIL_USER,
+      subject,
+      html,
+      text,
+      attachments: [{
+        filename: `${invoice.id || "invoice"}.pdf`,
+        content: pdfBuffer,
+        contentType: "application/pdf"
+      }]
+    });
+    console.log(`[invoice-email] sent invoice=${invoice.id} to=${to} id=${info.messageId}${opts.resend ? " (resend)" : ""}`);
+    return { ok: true, messageId: info.messageId };
+  } catch (error) {
+    console.error(`[invoice-email] failed for invoice=${invoice.id}:`, error.message);
+    throw new Error(`Email send failed: ${error.message}`);
+  }
+}
+
+module.exports = { notifyCustomer, eventForTransition, sendInvoiceToCustomer };

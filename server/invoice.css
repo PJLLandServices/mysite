@@ -242,6 +242,28 @@
   border-color: #1B4D2E;
 }
 .invoice-action-btn--primary:hover { background: #143b22; color: #fff; }
+
+/* Amber primary — used for the customer-facing "Send" CTA where the
+   action is the primary thing the admin does on the page (i.e. the
+   amber button rule from the brand spec: amber draws the eye to the
+   single most important action on a card). */
+.invoice-action-btn--amber {
+  background: #E07B24;
+  color: #fff;
+  border-color: #E07B24;
+}
+.invoice-action-btn--amber:hover { background: #C4691B; color: #fff; border-color: #C4691B; }
+
+/* Outlined-green variant — used for the "Resend" affordance after the
+   first send. Less attention-grabbing than the amber primary but still
+   discoverable. */
+.invoice-action-btn--outline {
+  background: #fff;
+  color: #1B4D2E;
+  border-color: #1B4D2E;
+}
+.invoice-action-btn--outline:hover { background: #F4F8EE; color: #143b22; }
+
 .invoice-action-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .invoice-action-card textarea {

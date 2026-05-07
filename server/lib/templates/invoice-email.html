@@ -1,0 +1,135 @@
+<!--
+  PJL invoice email template. Used by notify-customer.js's
+  sendInvoiceToCustomer().
+
+  Substitution model: mustache-lite — {{customer.firstName}},
+  {{invoice.number}}, {{invoice.totalFormatted}}, {{paymentInstructions}},
+  {{viewLink}}, {{viewLinkVisible}} (CSS display value, "block" or
+  "none" — hides the View and pay row when no link is available).
+
+  The HTML body and plain-text fallback are in the same file separated
+  by an HTML "TEXT" comment marker (see below). The renderer splits on
+  the FIRST occurrence of that marker, so don't reference the literal
+  marker string anywhere above the actual separator or the split will
+  cut in the wrong spot.
+
+  Inline styles only — every email client strips <style> blocks.
+  Table-based layout because Outlook still doesn't honour CSS Grid /
+  Flexbox in 2026.
+-->
+<table cellpadding="0" cellspacing="0" border="0" width="100%"
+       style="background:#FAFAF5;padding:32px 16px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
+  <tr>
+    <td align="center">
+      <table cellpadding="0" cellspacing="0" border="0" width="600"
+             style="max-width:600px;background:#FFFFFF;border-radius:8px;
+                    box-shadow:0 1px 4px rgba(0,0,0,0.06);overflow:hidden;">
+
+        <!-- Green header band -->
+        <tr>
+          <td style="background:#1B4D2E;padding:28px 32px;color:#FFFFFF;">
+            <div style="font-size:11px;letter-spacing:0.16em;
+                        text-transform:uppercase;color:#C9DDD0;
+                        font-weight:700;margin-bottom:6px;">
+              PJL Land Services
+            </div>
+            <h1 style="margin:0;font-size:24px;font-weight:700;line-height:1.2;color:#FFFFFF;">
+              Your invoice {{invoice.number}}
+            </h1>
+            <div style="margin-top:6px;font-size:14px;color:#EAF3DE;">
+              {{invoice.totalFormatted}} · due on completion
+            </div>
+          </td>
+        </tr>
+
+        <!-- Body -->
+        <tr>
+          <td style="padding:28px 32px;color:#1A1A1A;font-size:15px;line-height:1.55;">
+            <p style="margin:0 0 16px;">Hi {{customer.firstName}},</p>
+            <p style="margin:0 0 16px;">
+              Thanks for trusting PJL Land Services. Your invoice
+              <strong>{{invoice.number}}</strong> for
+              <strong>{{invoice.totalFormatted}}</strong> is attached as a
+              PDF. The same details are summarised below for quick
+              reference.
+            </p>
+
+            <!-- View and pay CTA — hidden when viewLink is empty (PR 2 default).
+                 PR 3 swaps in the embedded /pay/invoice/:id?t=... URL. -->
+            <table cellpadding="0" cellspacing="0" border="0"
+                   style="margin:8px 0 24px;display:{{viewLinkVisible}};">
+              <tr>
+                <td style="background:#E07B24;border-radius:999px;">
+                  <a href="{{viewLink}}"
+                     style="display:inline-block;padding:11px 22px;
+                            color:#FFFFFF;text-decoration:none;
+                            font-weight:700;font-size:14px;
+                            letter-spacing:0.02em;">
+                    View and pay →
+                  </a>
+                </td>
+              </tr>
+            </table>
+
+            <!-- Payment instructions block -->
+            <div style="background:#FAFAF5;border:1px solid #E2E0D4;
+                        border-radius:8px;padding:16px 18px;margin:0 0 20px;">
+              <div style="font-weight:700;color:#1B4D2E;font-size:13px;
+                          letter-spacing:0.04em;text-transform:uppercase;
+                          margin-bottom:8px;">
+                Ways to pay
+              </div>
+              <div style="font-size:14px;color:#1A1A1A;line-height:1.6;">
+                {{paymentInstructions}}
+              </div>
+            </div>
+
+            <p style="margin:0 0 12px;font-size:14px;color:#7A7A72;">
+              Questions about this invoice? Just reply to this email or
+              call <a href="tel:+19059600181"
+                     style="color:#1B4D2E;text-decoration:none;">(905) 960-0181</a>
+              and we'll sort it out.
+            </p>
+
+            <p style="margin:24px 0 0;font-size:14px;color:#1A1A1A;">
+              Thanks again,<br>
+              <strong>Patrick at PJL Land Services</strong>
+            </p>
+          </td>
+        </tr>
+
+        <!-- Footer -->
+        <tr>
+          <td style="background:#FAFAF5;padding:14px 32px;
+                     border-top:1px solid #E2E0D4;font-size:11px;
+                     color:#7A7A72;text-align:center;letter-spacing:0.02em;">
+            PJL Land Services · Newmarket, ON · GST/HST 757080940 RT0001 ·
+            <a href="https://pjllandservices.com"
+               style="color:#1B4D2E;text-decoration:none;">pjllandservices.com</a>
+          </td>
+        </tr>
+
+      </table>
+    </td>
+  </tr>
+</table>
+
+<!-- TEXT -->
+Hi {{customer.firstName}},
+
+Thanks for trusting PJL Land Services. Your invoice {{invoice.number}}
+for {{invoice.totalFormatted}} is attached as a PDF.
+
+WAYS TO PAY
+{{paymentInstructions}}
+
+{{viewLinkText}}
+Questions about this invoice? Reply to this email or call
+(905) 960-0181 and we'll sort it out.
+
+Thanks again,
+Patrick at PJL Land Services
+
+—
+PJL Land Services · Newmarket, ON
+GST/HST 757080940 RT0001 · pjllandservices.com
