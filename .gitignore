@@ -35,3 +35,6 @@ node_modules/
 
 # Wrangler local cache (contains OAuth tokens)
 worker/.wrangler/
+
+# Design / smoke-test PDF outputs — regenerated on demand
+_design/_smoke/

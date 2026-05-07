@@ -38,14 +38,16 @@ function render(inv) {
   document.getElementById("invoiceId").textContent = inv.id;
   document.getElementById("invoiceMeta").innerHTML = `Issued ${escapeHtml(fmtDate(inv.createdAt))}${inv.sentAt ? `<br>Sent ${escapeHtml(fmtDate(inv.sentAt))}` : ""}${inv.paidAt ? `<br>Paid ${escapeHtml(fmtDate(inv.paidAt))}` : ""}`;
   document.getElementById("invoiceStatus").value = inv.status;
-  // PDF action buttons — open in new tab vs. force download (same URL,
-  // download attr triggers the browser save dialog).
-  const pdfPath = `/api/admin/quote-folder/${encodeURIComponent(inv.quoteId || inv.id)}/pdf`;
+  // PDF action buttons — open in new tab vs. force download. Both hit
+  // the same /api/invoices/:id/pdf route in server.js; ?download=1
+  // flips Content-Disposition between inline and attachment so Chrome /
+  // Safari / Firefox honour the user's intent uniformly.
+  const pdfBase = `/api/invoices/${encodeURIComponent(inv.id)}/pdf`;
   const pdfLinkEl = document.getElementById("invoicePdfLink");
   const pdfDownloadEl = document.getElementById("invoicePdfDownload");
-  if (pdfLinkEl) pdfLinkEl.href = pdfPath;
+  if (pdfLinkEl) pdfLinkEl.href = pdfBase;
   if (pdfDownloadEl) {
-    pdfDownloadEl.href = pdfPath;
+    pdfDownloadEl.href = `${pdfBase}?download=1`;
     pdfDownloadEl.setAttribute("download", `${inv.id}.pdf`);
   }
 

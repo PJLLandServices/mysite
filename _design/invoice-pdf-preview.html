@@ -1,0 +1,789 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>PJL Invoice PDF Preview · v4</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet" />
+<style>
+  /* ============================================================
+     PJL LAND SERVICES — INVOICE PDF PREVIEW · v4
+     Tightened layout, properly Letter-fitted, fewer hard bands.
+     ============================================================ */
+  :root {
+    --green:        #1B4D2E;
+    --green-mid:    #2D6A42;
+    --green-pale:   #EAF3DE;
+    --green-tint:   #F4F8EE;
+    --dark:         #0F1F14;
+    --amber:        #E07B24;
+    --amber-pale:   #FDF0E4;
+    --cream:        #FAFAF5;
+    --white:        #FFFFFF;
+    --text:         #1A1A1A;
+    --text-muted:   #7A7A72;
+    --border:       #E2E0D4;
+    --hairline:     #EFEDE3;
+    --danger:       #B23A3A;
+    --success:      #2F7A4A;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: #DAD7CB;
+    font-family: 'DM Sans', system-ui, sans-serif;
+    color: var(--text);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  /* ============================================================
+     CHROME (screen only)
+     ============================================================ */
+  .preview-shell { max-width: 1100px; margin: 0 auto; padding: 64px 24px 96px; }
+
+  .preview-eyebrow {
+    display: inline-flex; align-items: center; gap: 12px;
+    font-family: 'Barlow Condensed', sans-serif; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.18em; font-size: 13px;
+    color: var(--green); margin: 0 0 14px;
+  }
+  .preview-eyebrow::before { content: ''; width: 32px; height: 2px; background: var(--amber); }
+  .preview-title {
+    font-family: 'Barlow Condensed', sans-serif; font-weight: 700;
+    color: var(--dark); font-size: 44px; letter-spacing: -0.005em;
+    line-height: 1.05; margin: 0 0 12px;
+  }
+  .preview-sub {
+    color: var(--text-muted); font-size: 16px; margin: 0 0 24px;
+    max-width: 720px; line-height: 1.55;
+  }
+  .preview-sub kbd {
+    background: var(--white); border: 1px solid var(--border);
+    border-radius: 4px; padding: 2px 6px;
+    font-family: 'DM Sans', sans-serif; font-size: 12px;
+    color: var(--text); font-weight: 700;
+  }
+  .preview-callout {
+    background: var(--white); border: 1px solid var(--border);
+    border-left: 4px solid var(--amber); border-radius: 8px;
+    padding: 12px 16px; margin: 12px 0 0;
+    font-size: 13px; color: var(--text); max-width: 720px; line-height: 1.5;
+  }
+  .preview-callout strong { color: var(--green); }
+  .preview-callout code {
+    background: var(--cream); padding: 1px 6px; border-radius: 3px;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 11.5px; color: var(--text);
+  }
+
+  .doc-label {
+    font-family: 'Barlow Condensed', sans-serif; font-weight: 700;
+    color: var(--green); font-size: 14px; letter-spacing: 0.16em;
+    text-transform: uppercase; margin: 56px 0 16px;
+    display: flex; align-items: baseline; gap: 14px;
+  }
+  .doc-label::after { content: ''; flex: 1; height: 1px; background: var(--border); }
+  .doc-label small {
+    color: var(--text-muted); font-weight: 500; letter-spacing: 0.06em;
+    font-size: 12px; text-transform: none;
+  }
+
+  /* ============================================================
+     INVOICE PAGE — Letter (8.5 × 11", true ratio)
+     ============================================================ */
+  .page {
+    width: 100%;
+    max-width: 816px;          /* 8.5" at 96dpi */
+    height: 1056px;            /* 11"  at 96dpi — fixed, not aspect-ratio */
+    margin: 0 auto;
+    background: var(--white);
+    box-shadow: 0 4px 16px rgba(15, 31, 20, 0.06),
+                0 24px 64px rgba(15, 31, 20, 0.16);
+    overflow: hidden;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    color: var(--text);
+  }
+  /* Scale the Letter page down on smaller viewports so it stays in proportion */
+  @media (max-width: 880px) {
+    .page {
+      height: auto;
+      min-height: 0;
+      aspect-ratio: 8.5 / 11;
+    }
+  }
+
+  /* ─────── HEADER ─────── */
+  .doc-head {
+    padding: 28px 48px 20px;
+    display: grid;
+    grid-template-columns: 1fr 200px;
+    gap: 28px;
+    align-items: center;
+    flex-shrink: 0;
+  }
+  .doc-head__title {
+    font-family: 'Barlow Condensed', sans-serif; font-weight: 700;
+    font-size: 34px; letter-spacing: 0.06em; color: var(--green);
+    margin: 0 0 12px; line-height: 1; text-transform: uppercase;
+  }
+  .doc-head__company { font-weight: 700; font-size: 13px; color: var(--text); margin-bottom: 2px; }
+  .doc-head__line   { font-size: 11px; color: var(--text-muted); line-height: 1.55; }
+  .doc-head__line span.dot { color: var(--border); padding: 0 6px; }
+  .doc-head__hst    { font-size: 10.5px; color: var(--text-muted); margin-top: 4px; letter-spacing: 0.02em; }
+  .doc-head__logo   {
+    align-self: center; width: 200px; height: auto;
+    /* Live repo logo is white-on-transparent (sidebar use). brightness(0)
+       renders dark for paper. PRODUCTION TODO: add server/assets/logo-dark.svg
+       and reference directly. Documented in build brief. */
+    filter: brightness(0);
+  }
+
+  /* ─────── CUSTOMER BAND ─────── */
+  .customer-band {
+    background: var(--green-tint);
+    padding: 16px 48px;
+    flex-shrink: 0;
+    border-top: 1px solid var(--hairline);
+    border-bottom: 1px solid var(--hairline);
+  }
+  /* Optional company-name row appears ONLY for B2B (when bill_to.company is set). */
+  .customer-band__header {
+    font-family: 'Barlow Condensed', sans-serif; font-weight: 700;
+    color: var(--green); font-size: 16px; letter-spacing: 0.01em;
+    margin: 0 0 10px;
+  }
+  .customer-band__addresses {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 56px;
+  }
+  /* For single-address invoices, the second column is dropped server-side.
+     We force a single-column layout via .customer-band--single. */
+  .customer-band--single .customer-band__addresses {
+    grid-template-columns: 1fr;
+  }
+  .addr__label {
+    font-family: 'DM Sans', sans-serif; font-weight: 700;
+    font-size: 9.5px; letter-spacing: 0.18em; text-transform: uppercase;
+    color: var(--text-muted); margin: 0 0 4px;
+  }
+  .addr__line { font-size: 12px; line-height: 1.45; color: var(--text); }
+  .addr__line--name { font-weight: 700; }
+  .addr__contact { font-size: 11.5px; color: var(--text-muted); margin-top: 4px; }
+
+  /* ─────── INVOICE DETAILS ─────── */
+  .details {
+    padding: 14px 48px;
+    display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 24px;
+    border-bottom: 1px solid var(--hairline);
+    flex-shrink: 0;
+  }
+  .detail__label {
+    font-family: 'DM Sans', sans-serif; font-weight: 700;
+    font-size: 9.5px; letter-spacing: 0.18em; text-transform: uppercase;
+    color: var(--text-muted); margin: 0 0 4px;
+  }
+  .detail__value {
+    font-size: 13px; color: var(--text); font-weight: 500;
+    font-feature-settings: "tnum" 1;
+  }
+  .detail__value--strong { font-weight: 700; }
+
+  /* ─────── LINE ITEMS ─────── */
+  .lines {
+    padding: 18px 48px 0;
+    flex-shrink: 0;
+  }
+  .lines__head {
+    display: grid; grid-template-columns: 1fr 50px 90px 90px; gap: 14px;
+    padding: 0 0 8px;
+    border-bottom: 1.5px solid var(--text);
+    font-family: 'DM Sans', sans-serif; font-weight: 700;
+    font-size: 9.5px; letter-spacing: 0.16em; text-transform: uppercase;
+    color: var(--text-muted);
+  }
+  .lines__head > *:nth-child(2),
+  .lines__head > *:nth-child(3),
+  .lines__head > *:nth-child(4) { text-align: right; }
+
+  .lines__row {
+    display: grid; grid-template-columns: 1fr 50px 90px 90px; gap: 14px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--hairline);
+    font-size: 12px; color: var(--text); align-items: baseline;
+    font-feature-settings: "tnum" 1;
+  }
+  .lines__row > *:nth-child(2),
+  .lines__row > *:nth-child(3),
+  .lines__row > *:nth-child(4) { text-align: right; }
+  .lines__name { color: var(--text); }
+  .lines__desc {
+    display: block; color: var(--text-muted); font-size: 10.5px;
+    line-height: 1.45; margin-top: 2px;
+  }
+
+  /* ─────── BOTTOM SPLIT ─────── */
+  .bottom {
+    padding: 18px 48px 0;
+    display: grid; grid-template-columns: 1fr 250px; gap: 32px;
+    align-items: flex-start;
+    flex: 1;                 /* fills remaining space */
+    min-height: 0;
+  }
+
+  .pay__title, .note__title {
+    font-family: 'Barlow Condensed', sans-serif; font-weight: 700;
+    color: var(--green); font-size: 15px; margin: 0 0 8px;
+    letter-spacing: 0.01em;
+  }
+  .pay__methods-text {
+    font-size: 11.5px; color: var(--text);
+    margin: 0 0 6px;
+    line-height: 1.5;
+  }
+  .pay__line { font-size: 11.5px; color: var(--text); margin: 0; }
+  .pay__line strong { font-weight: 700; }
+
+  .note { margin-top: 14px; }
+  .note__body {
+    font-size: 11px; color: var(--text-muted); line-height: 1.55;
+    margin: 0 0 12px; max-width: 380px;
+  }
+
+  .cta {
+    display: inline-flex; align-items: center; gap: 8px;
+    background: var(--amber); color: var(--white);
+    padding: 9px 18px; border-radius: 999px;
+    font-family: 'DM Sans', sans-serif; font-weight: 700;
+    font-size: 12px; letter-spacing: 0.02em;
+    text-decoration: none; line-height: 1;
+  }
+  .cta::after { content: '→'; font-size: 13px; }
+
+  /* Right side — totals + status */
+  .totals__line {
+    display: flex; justify-content: space-between; align-items: baseline;
+    padding: 6px 0; font-size: 12px; color: var(--text);
+    border-bottom: 1px solid var(--hairline);
+    font-feature-settings: "tnum" 1;
+  }
+  .totals__line .label { color: var(--text-muted); }
+  .totals__line--total {
+    border-bottom: none; border-top: 1.5px solid var(--text);
+    margin-top: 4px; padding-top: 12px;
+    font-family: 'Barlow Condensed', sans-serif; font-weight: 700;
+    font-size: 22px; color: var(--green); letter-spacing: 0.005em;
+  }
+  .totals__line--total .label { color: var(--green); }
+
+  .status {
+    display: flex; justify-content: space-between; align-items: baseline;
+    margin-top: 14px; padding-top: 12px;
+    border-top: 1px solid var(--hairline);
+  }
+  .status__label {
+    font-family: 'Barlow Condensed', sans-serif; font-weight: 700;
+    font-size: 16px; letter-spacing: 0.02em; text-transform: uppercase;
+  }
+  .status__date {
+    font-size: 11px; color: var(--text-muted);
+    font-feature-settings: "tnum" 1;
+  }
+  .status--sent .status__label    { color: var(--green); }
+  .status--overdue .status__label { color: var(--danger); }
+  .status--paid .status__label    { color: var(--success); }
+
+  /* ─────── FOOTER ─────── */
+  .doc-foot {
+    padding: 10px 48px 16px;
+    border-top: 1px solid var(--hairline);
+    font-size: 9.5px; color: var(--text-muted); text-align: center;
+    flex-shrink: 0; font-feature-settings: "tnum" 1; letter-spacing: 0.02em;
+  }
+  .doc-foot span { color: var(--border); padding: 0 8px; }
+
+  /* ============================================================
+     DATA-BINDING REFERENCE TABLE (screen only)
+     ============================================================ */
+  .bindings {
+    margin-top: 80px; background: var(--white);
+    border: 1px solid var(--border); border-radius: 18px;
+    box-shadow: 0 4px 16px rgba(15, 31, 20, 0.06);
+    padding: 32px 36px 24px;
+  }
+  .bindings h2 {
+    font-family: 'Barlow Condensed', sans-serif; font-weight: 700;
+    color: var(--green); font-size: 26px; margin: 0 0 6px; letter-spacing: 0.005em;
+  }
+  .bindings p {
+    color: var(--text-muted); font-size: 14px; margin: 0 0 24px; line-height: 1.55;
+  }
+  .bindings__group { margin-bottom: 24px; }
+  .bindings__group h3 {
+    font-family: 'Barlow Condensed', sans-serif; font-weight: 700;
+    color: var(--green); font-size: 13px; text-transform: uppercase;
+    letter-spacing: 0.16em; margin: 0 0 10px; padding-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+  }
+  .bindings__table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .bindings__table th {
+    text-align: left; color: var(--text-muted); font-weight: 700;
+    font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase;
+    padding: 0 10px 8px; border-bottom: 1px solid var(--hairline);
+  }
+  .bindings__table td {
+    padding: 10px; border-bottom: 1px solid var(--hairline);
+    vertical-align: top; line-height: 1.5;
+  }
+  .bindings__table tr:last-child td { border-bottom: none; }
+  .bindings__table code {
+    background: var(--cream); padding: 1px 6px; border-radius: 3px;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 11.5px; color: var(--green); white-space: nowrap;
+  }
+  .bindings__table .source { width: 38%; color: var(--text); }
+  .bindings__table .field  { width: 32%; }
+  .bindings__table .notes  { color: var(--text-muted); font-size: 12px; }
+  .pill {
+    display: inline-block; padding: 2px 8px; border-radius: 999px;
+    font-size: 10px; font-weight: 700; letter-spacing: 0.08em;
+    text-transform: uppercase; line-height: 1.6;
+  }
+  .pill--static  { background: var(--green-pale);  color: var(--green); }
+  .pill--dynamic { background: var(--amber-pale);  color: var(--amber); }
+  .pill--computed{ background: #EFE5F8;            color: #6B3FA0; }
+  .pill--config  { background: var(--cream);       color: var(--text-muted); border: 1px solid var(--border); }
+
+  /* ============================================================
+     RESPONSIVE
+     ============================================================ */
+  @media (max-width: 880px) {
+    .preview-shell { padding: 32px 14px 64px; }
+    .preview-title { font-size: 32px; }
+    .doc-head, .customer-band, .details, .lines, .bottom, .doc-foot {
+      padding-left: 24px; padding-right: 24px;
+    }
+    .doc-head { grid-template-columns: 1fr 80px; }
+    .doc-head__logo { width: 80px; }
+    .doc-head__title { font-size: 28px; }
+    .customer-band__addresses { grid-template-columns: 1fr; gap: 16px; }
+    .details { grid-template-columns: 1fr 1fr; gap: 14px; }
+    .lines__head, .lines__row {
+      grid-template-columns: 1fr 36px 64px 72px;
+      gap: 8px; font-size: 10.5px;
+    }
+    .bottom { grid-template-columns: 1fr; gap: 22px; }
+    .doc-foot { padding-left: 20px; padding-right: 20px; }
+    .bindings { padding: 20px; }
+    .bindings__table th:nth-child(3),
+    .bindings__table td:nth-child(3) { display: none; }
+  }
+
+  /* ============================================================
+     PRINT
+     ============================================================ */
+  @media print {
+    /* Reset shell + body */
+    html, body {
+      background: var(--white) !important;
+      margin: 0 !important;
+      padding: 0 !important;
+      width: 100%;
+    }
+    .preview-shell {
+      max-width: none !important;
+      margin: 0 !important;
+      padding: 0 !important;
+    }
+
+    /* Hide every non-page block */
+    .preview-shell > header,
+    .preview-eyebrow,
+    .preview-title,
+    .preview-sub,
+    .preview-callout,
+    .doc-label,
+    .bindings {
+      display: none !important;
+    }
+
+    /* Each invoice page fills exactly one Letter sheet */
+    .page {
+      box-shadow: none !important;
+      max-width: none !important;
+      width: 100% !important;
+      height: 100vh !important;
+      min-height: 100vh !important;
+      margin: 0 !important;
+      page-break-after: always !important;
+      page-break-inside: avoid !important;
+      overflow: hidden !important;
+    }
+    .page:last-of-type { page-break-after: auto !important; }
+
+    /* Force color rendering on Chrome/Safari */
+    * {
+      -webkit-print-color-adjust: exact !important;
+      print-color-adjust: exact !important;
+      color-adjust: exact !important;
+    }
+
+    @page { size: letter; margin: 0; }
+  }
+</style>
+</head>
+<body>
+
+<div class="preview-shell">
+
+  <header>
+    <div class="preview-eyebrow">PR 1 · Invoice PDF · v4 (tightened)</div>
+    <h1 class="preview-title">Letter-true. Cleaner rhythm. No dead space.</h1>
+    <p class="preview-sub">
+      Same components — tighter. Page is now hard-locked to 8.5 × 11" so
+      what you see on screen is exactly what prints. The empty Service
+      Location column is removed for residential invoices. Header reflows
+      contact info onto two lines instead of one wrapping line.
+      <kbd>⌘&nbsp;P</kbd> / <kbd>Ctrl&nbsp;P</kbd> to test.
+    </p>
+    <div class="preview-callout">
+      <strong>Production note:</strong> the live <code>logo.svg</code> is white-on-transparent
+      (designed for the green sidebar). Rendered through a CSS <code>brightness(0)</code>
+      filter for paper preview. The build brief flags adding
+      <code>server/assets/logo-dark.svg</code> as a PR 1 prerequisite.
+    </div>
+  </header>
+
+  <!-- ============================================================
+       INVOICE A — Commercial / B2B (Wamco scenario, Overdue)
+       Two addresses + company header
+       ============================================================ -->
+  <div class="doc-label">
+    Example A · Commercial invoice
+    <small>Bill-to + Ship-to · Overdue status</small>
+  </div>
+
+  <div class="page">
+    <header class="doc-head">
+      <div>
+        <h1 class="doc-head__title">Invoice</h1>
+        <div class="doc-head__company">PJL Land Services</div>
+        <div class="doc-head__line">1118 Cenotaph Blvd., Newmarket, ON&nbsp; L3X 0A5</div>
+        <div class="doc-head__line">info@pjllandservices.com <span class="dot">·</span> (905)&nbsp;960-0181 <span class="dot">·</span> pjllandservices.com</div>
+        <div class="doc-head__hst">GST/HST Reg. No. 757080940 RT0001</div>
+      </div>
+      <img class="doc-head__logo"
+           src="https://pjl-land-services-onrender-com.onrender.com/logo.svg"
+           alt="PJL Land Services" />
+    </header>
+
+    <section class="customer-band">
+      <h2 class="customer-band__header">Emco Corporation o/a Wamco Municipal Products</h2>
+      <div class="customer-band__addresses">
+        <div>
+          <div class="addr__label">Bill to</div>
+          <div class="addr__line addr__line--name">Jeff Rodger</div>
+          <div class="addr__line">Wamco Municipal Products</div>
+          <div class="addr__line">2124 Oxford St. East</div>
+          <div class="addr__line">London, Ontario&nbsp; N5V 0B7</div>
+        </div>
+        <div>
+          <div class="addr__label">Ship to</div>
+          <div class="addr__line addr__line--name">Jeff Rodger</div>
+          <div class="addr__line">Wamco Municipal Products</div>
+          <div class="addr__line">551 Tiffin St.</div>
+          <div class="addr__line">Barrie, Ontario&nbsp; L4N 9W6</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="details">
+      <div>
+        <div class="detail__label">Invoice no.</div>
+        <div class="detail__value detail__value--strong">I-2026-0042</div>
+      </div>
+      <div>
+        <div class="detail__label">Terms</div>
+        <div class="detail__value">Due on receipt</div>
+      </div>
+      <div>
+        <div class="detail__label">Invoice date</div>
+        <div class="detail__value">2026-02-25</div>
+      </div>
+      <div>
+        <div class="detail__label">Due date</div>
+        <div class="detail__value">2026-02-25</div>
+      </div>
+    </section>
+
+    <section class="lines">
+      <div class="lines__head">
+        <div>Product or service</div><div>Qty</div><div>Rate</div><div>Amount</div>
+      </div>
+      <div class="lines__row">
+        <div class="lines__name">Wamco Subcontract Compensation — Meter Change-Outs
+          <span class="lines__desc">Per March 26 2026 Compensation Report</span>
+        </div>
+        <div>1</div><div>$540.00</div><div>$540.00</div>
+      </div>
+    </section>
+
+    <section class="bottom">
+      <div>
+        <h3 class="pay__title">Ways to pay</h3>
+        <p class="pay__methods-text">All major credit cards accepted via the secure payment link below.</p>
+        <p class="pay__line"><strong>E-Transfer:</strong> info@pjllandservices.com</p>
+
+        <div class="note">
+          <h3 class="note__title">Note to customer</h3>
+          <p class="note__body">
+            Thank you for choosing PJL Land Services. Services were completed
+            in accordance with the approved scope. Please feel free to contact
+            us if you require clarification regarding this invoice.
+          </p>
+          <a class="cta" href="#">View and pay</a>
+        </div>
+      </div>
+
+      <div>
+        <div class="totals__line"><span class="label">Subtotal</span><span>$540.00</span></div>
+        <div class="totals__line"><span class="label">HST (ON) @ 13%</span><span>$70.20</span></div>
+        <div class="totals__line totals__line--total"><span class="label">Total</span><span>$610.20</span></div>
+        <div class="status status--overdue">
+          <span class="status__label">Overdue</span>
+          <span class="status__date">2026-02-25</span>
+        </div>
+      </div>
+    </section>
+
+    <footer class="doc-foot">
+      PJL Land Services <span>·</span> GST/HST 757080940 RT0001
+      <span>·</span> info@pjllandservices.com <span>·</span> (905) 960-0181
+    </footer>
+  </div>
+
+  <!-- ============================================================
+       INVOICE B — Residential (single address, no Service Location column)
+       ============================================================ -->
+  <div class="doc-label">
+    Example B · Residential service invoice
+    <small>Single address (Service Location column removed) · Sent status</small>
+  </div>
+
+  <div class="page">
+    <header class="doc-head">
+      <div>
+        <h1 class="doc-head__title">Invoice</h1>
+        <div class="doc-head__company">PJL Land Services</div>
+        <div class="doc-head__line">1118 Cenotaph Blvd., Newmarket, ON&nbsp; L3X 0A5</div>
+        <div class="doc-head__line">info@pjllandservices.com <span class="dot">·</span> (905)&nbsp;960-0181 <span class="dot">·</span> pjllandservices.com</div>
+        <div class="doc-head__hst">GST/HST Reg. No. 757080940 RT0001</div>
+      </div>
+      <img class="doc-head__logo"
+           src="https://pjl-land-services-onrender-com.onrender.com/logo.svg"
+           alt="PJL Land Services" />
+    </header>
+
+    <!-- No company header for residential. Single-column address layout. -->
+    <section class="customer-band customer-band--single">
+      <div class="customer-band__addresses">
+        <div>
+          <div class="addr__label">Bill to</div>
+          <div class="addr__line addr__line--name">Patrick Lalande</div>
+          <div class="addr__line">1118 Cenotaph Blvd</div>
+          <div class="addr__line">Newmarket, ON&nbsp; L3X 0A5</div>
+          <div class="addr__contact">(905)&nbsp;960-0181 · patrickjlalande@gmail.com</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="details">
+      <div>
+        <div class="detail__label">Invoice no.</div>
+        <div class="detail__value detail__value--strong">I-2026-0001</div>
+      </div>
+      <div>
+        <div class="detail__label">Terms</div>
+        <div class="detail__value">Due on completion</div>
+      </div>
+      <div>
+        <div class="detail__label">Invoice date</div>
+        <div class="detail__value">2026-05-06</div>
+      </div>
+      <div>
+        <div class="detail__label">Due date</div>
+        <div class="detail__value">2026-05-06</div>
+      </div>
+    </section>
+
+    <section class="lines">
+      <div class="lines__head">
+        <div>Product or service</div><div>Qty</div><div>Rate</div><div>Amount</div>
+      </div>
+      <div class="lines__row">
+        <div class="lines__name">Spring Opening (2026)</div>
+        <div>1</div><div>$90.00</div><div>$90.00</div>
+      </div>
+      <div class="lines__row">
+        <div class="lines__name">Spring Opening (2026)</div>
+        <div>1</div><div>$90.00</div><div>$90.00</div>
+      </div>
+      <div class="lines__row">
+        <div class="lines__name">3-valve manifold rebuild
+          <span class="lines__desc">Covers 1–3 valves</span>
+        </div>
+        <div>1</div><div>$135.00</div><div>$135.00</div>
+      </div>
+      <div class="lines__row">
+        <div class="lines__name">Hunter PGV-100G valve
+          <span class="lines__desc">Per valve replaced</span>
+        </div>
+        <div>3</div><div>$74.95</div><div>$224.85</div>
+      </div>
+    </section>
+
+    <section class="bottom">
+      <div>
+        <h3 class="pay__title">Ways to pay</h3>
+        <p class="pay__methods-text">All major credit cards accepted via the secure payment link below.</p>
+        <p class="pay__line"><strong>E-Transfer:</strong> info@pjllandservices.com</p>
+
+        <div class="note">
+          <h3 class="note__title">Note to customer</h3>
+          <p class="note__body">
+            Thank you for choosing PJL Land Services. Payment due on
+            completion unless otherwise arranged. Warranty: 1 year on repairs,
+            3 years on full installs.
+          </p>
+          <a class="cta" href="#">View and pay</a>
+        </div>
+      </div>
+
+      <div>
+        <div class="totals__line"><span class="label">Subtotal</span><span>$539.85</span></div>
+        <div class="totals__line"><span class="label">HST (ON) @ 13%</span><span>$70.18</span></div>
+        <div class="totals__line totals__line--total"><span class="label">Total</span><span>$610.03</span></div>
+        <div class="status status--sent">
+          <span class="status__label">Sent</span>
+          <span class="status__date">2026-05-06</span>
+        </div>
+      </div>
+    </section>
+
+    <footer class="doc-foot">
+      PJL Land Services <span>·</span> GST/HST 757080940 RT0001
+      <span>·</span> info@pjllandservices.com <span>·</span> (905) 960-0181
+    </footer>
+  </div>
+
+  <!-- ============================================================
+       DATA-BINDING REFERENCE
+       ============================================================ -->
+  <section class="bindings">
+    <h2>Field-by-field data bindings</h2>
+    <p>
+      Every visible field on the invoice maps to one of four sources:
+      <span class="pill pill--static">STATIC</span> values that never change;
+      <span class="pill pill--config">CONFIG</span> admin-editable settings;
+      <span class="pill pill--dynamic">DYNAMIC</span> fields populated from the
+      invoice or customer record at render time;
+      <span class="pill pill--computed">COMPUTED</span> values calculated from
+      line items.
+      Nothing is hardcoded inside the PDF generator —
+      <code>invoice-pdf.js</code> reads everything from
+      <code>data/invoices.json</code>, <code>data/settings.json</code>, and a
+      small block of company constants.
+    </p>
+
+    <div class="bindings__group">
+      <h3>Header</h3>
+      <table class="bindings__table">
+        <thead><tr><th>Visible field</th><th>Source</th><th>Backing field</th><th>Notes</th></tr></thead>
+        <tbody>
+          <tr><td>"Invoice" title</td><td><span class="pill pill--static">STATIC</span></td><td><code>"Invoice"</code> string</td><td class="notes">Switches to "Quote" / "Receipt" on those document variants.</td></tr>
+          <tr><td>Company name + address</td><td><span class="pill pill--static">STATIC</span></td><td><code>COMPANY</code> constants in invoice-pdf.js</td><td class="notes">Single source for header + footer; reused across quote-pdf and po-pdf.</td></tr>
+          <tr><td>Email · phone · website</td><td><span class="pill pill--static">STATIC</span></td><td><code>COMPANY.{email, phone, website}</code></td><td class="notes"></td></tr>
+          <tr><td>GST/HST registration</td><td><span class="pill pill--static">STATIC</span></td><td><code>COMPANY.hstNumber</code></td><td class="notes">CRA-required on every invoice over $30.</td></tr>
+          <tr><td>PJL logo</td><td><span class="pill pill--static">STATIC</span></td><td><code>server/assets/logo-dark.svg</code></td><td class="notes">Dark variant to be added to repo (build brief flags).</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="bindings__group">
+      <h3>Customer band (Bill to / Ship to)</h3>
+      <table class="bindings__table">
+        <thead><tr><th>Visible field</th><th>Source</th><th>Backing field</th><th>Notes</th></tr></thead>
+        <tbody>
+          <tr><td>Company-name header (B2B only)</td><td><span class="pill pill--dynamic">DYNAMIC</span></td><td><code>invoice.bill_to.company</code></td><td class="notes">Hidden when blank. Residential invoices skip this row entirely.</td></tr>
+          <tr><td>Bill-to name + address</td><td><span class="pill pill--dynamic">DYNAMIC</span></td><td><code>invoice.bill_to.{name, addr1, addr2, city, province, postalCode}</code></td><td class="notes">Composed via <code>formatAddress()</code> helper.</td></tr>
+          <tr><td>Bill-to contact line</td><td><span class="pill pill--dynamic">DYNAMIC</span></td><td><code>invoice.bill_to.{phone, email}</code></td><td class="notes">Hidden if both blank.</td></tr>
+          <tr><td>Ship-to column</td><td><span class="pill pill--dynamic">DYNAMIC</span></td><td><code>invoice.ship_to</code></td><td class="notes">If <code>ship_to</code> is null OR matches bill_to, the column is omitted entirely (single-column layout).</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="bindings__group">
+      <h3>Invoice details strip</h3>
+      <table class="bindings__table">
+        <thead><tr><th>Visible field</th><th>Source</th><th>Backing field</th><th>Notes</th></tr></thead>
+        <tbody>
+          <tr><td>Invoice no.</td><td><span class="pill pill--dynamic">DYNAMIC</span></td><td><code>invoice.id</code></td><td class="notes">e.g. <code>I-2026-0001</code>.</td></tr>
+          <tr><td>Terms</td><td><span class="pill pill--dynamic">DYNAMIC</span></td><td><code>invoice.terms</code></td><td class="notes">Defaults from <code>settings.invoice.defaultTerms</code> at creation.</td></tr>
+          <tr><td>Invoice date</td><td><span class="pill pill--dynamic">DYNAMIC</span></td><td><code>invoice.issuedAt</code></td><td class="notes">Formatted YYYY-MM-DD in America/Toronto.</td></tr>
+          <tr><td>Due date</td><td><span class="pill pill--dynamic">DYNAMIC</span></td><td><code>invoice.dueAt</code></td><td class="notes">Equals issuedAt for "Due on receipt"; computed from terms otherwise.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="bindings__group">
+      <h3>Line items</h3>
+      <table class="bindings__table">
+        <thead><tr><th>Visible field</th><th>Source</th><th>Backing field</th><th>Notes</th></tr></thead>
+        <tbody>
+          <tr><td>Product or service name</td><td><span class="pill pill--dynamic">DYNAMIC</span></td><td><code>invoice.lineItems[i].name</code></td><td class="notes">Snapshot at invoice creation; never reads parts.json live.</td></tr>
+          <tr><td>Description (under name)</td><td><span class="pill pill--dynamic">DYNAMIC</span></td><td><code>invoice.lineItems[i].description</code></td><td class="notes">Optional; hidden if blank.</td></tr>
+          <tr><td>Qty / Rate</td><td><span class="pill pill--dynamic">DYNAMIC</span></td><td><code>invoice.lineItems[i].{quantity, rate}</code></td><td class="notes">Rate snapshotted from pricing.json at creation.</td></tr>
+          <tr><td>Amount</td><td><span class="pill pill--computed">COMPUTED</span></td><td><code>quantity × rate</code></td><td class="notes">Stored as <code>amount</code> at save for stability.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="bindings__group">
+      <h3>Ways to pay + Note to customer</h3>
+      <table class="bindings__table">
+        <thead><tr><th>Visible field</th><th>Source</th><th>Backing field</th><th>Notes</th></tr></thead>
+        <tbody>
+          <tr><td>Payment-method statement</td><td><span class="pill pill--static">STATIC</span></td><td>String literal in invoice-pdf.js</td><td class="notes">"All major credit cards accepted via the secure payment link below." Future-flexibility: could move to <code>settings.invoice.paymentStatement</code> if you want to edit the wording without redeploying.</td></tr>
+          <tr><td>E-Transfer recipient</td><td><span class="pill pill--config">CONFIG</span></td><td><code>settings.invoice.eTransferEmail</code></td><td class="notes">Default: <code>info@pjllandservices.com</code>.</td></tr>
+          <tr><td>Note to customer</td><td><span class="pill pill--dynamic">DYNAMIC</span></td><td><code>invoice.noteToCustomer</code></td><td class="notes">Per-invoice override; defaults from <code>settings.invoice.defaultNote</code>.</td></tr>
+          <tr><td>"View and pay" CTA</td><td><span class="pill pill--computed">COMPUTED</span></td><td><code>${PUBLIC_BASE_URL}/portal/${invoice.portalToken}</code></td><td class="notes">Token generated at invoice creation; portal page shows the same invoice + payment instructions.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="bindings__group">
+      <h3>Totals + status</h3>
+      <table class="bindings__table">
+        <thead><tr><th>Visible field</th><th>Source</th><th>Backing field</th><th>Notes</th></tr></thead>
+        <tbody>
+          <tr><td>Subtotal</td><td><span class="pill pill--computed">COMPUTED</span></td><td><code>Σ lineItems[i].amount</code></td><td class="notes">Stored as <code>invoice.subtotal</code>.</td></tr>
+          <tr><td>HST line</td><td><span class="pill pill--computed">COMPUTED</span></td><td><code>invoice.taxRate × invoice.subtotal</code></td><td class="notes">taxRate stored per-invoice (default 0.13). Future-proofs for out-of-province customers.</td></tr>
+          <tr><td>Total</td><td><span class="pill pill--computed">COMPUTED</span></td><td><code>subtotal + taxAmount</code></td><td class="notes">Stored as <code>invoice.total</code>.</td></tr>
+          <tr><td>Status label (Sent / Overdue / Paid)</td><td><span class="pill pill--dynamic">DYNAMIC</span></td><td><code>invoice.status</code> + due-date check</td><td class="notes">"Overdue" derived: <code>status === 'sent' &amp;&amp; today &gt; dueAt</code>.</td></tr>
+          <tr><td>Status date</td><td><span class="pill pill--dynamic">DYNAMIC</span></td><td><code>invoice.{sentAt | paidAt | dueAt}</code></td><td class="notes">Selected by status.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+  </section>
+
+</div>
+
+</body>
+</html>

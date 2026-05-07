@@ -49,6 +49,7 @@ const completionCascade = require("./lib/completion-cascade");
 const settings = require("./lib/settings");
 const issueRollup = require("./lib/issue-rollup");
 const { generateQuotePdf } = require("./lib/quote-pdf");
+const { generateInvoicePdf } = require("./lib/invoice-pdf");
 const quickbooks = require("./lib/quickbooks");
 const bookings = require("./lib/bookings");
 const suppliers = require("./lib/suppliers");
@@ -2901,6 +2902,36 @@ async function handleApi(req, res, pathname) {
       return;
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't generate PDF."] });
+    }
+  }
+
+  // ---------- Invoice PDF (admin-gated) -------------------------------
+  // GET /api/invoices/:id/pdf — render a branded invoice PDF for any
+  // invoice in invoices.json. ?download=1 sends Content-Disposition:
+  // attachment so the browser fires its save-as dialog; otherwise we
+  // serve inline so "Open PDF" can preview in a new tab.
+  //
+  // Auth: gated by isAdminPath() above (/api/invoices is admin-only).
+  // Layout: server/lib/invoice-pdf.js, modeled on _design/invoice-pdf-preview.html.
+  const adminInvoicePdfMatch = pathname.match(/^\/api\/invoices\/([^/]+)\/pdf$/);
+  if (adminInvoicePdfMatch && req.method === "GET") {
+    try {
+      const id = decodeURIComponent(adminInvoicePdfMatch[1]);
+      const inv = await invoices.get(id);
+      if (!inv) return sendJson(res, 404, { ok: false, errors: ["Invoice not found."] });
+      const url = new URL(req.url, baseUrlFromReq(req));
+      const isDownload = url.searchParams.get("download") === "1";
+      const buffer = await generateInvoicePdf(inv);
+      res.writeHead(200, {
+        "content-type": "application/pdf",
+        "content-disposition": `${isDownload ? "attachment" : "inline"}; filename="${inv.id}.pdf"`,
+        "content-length": buffer.length,
+        "cache-control": "no-store"
+      });
+      res.end(buffer);
+      return;
+    } catch (err) {
+      return sendJson(res, 500, { ok: false, errors: [err.message || "Couldn't generate invoice PDF."] });
     }
   }
 
