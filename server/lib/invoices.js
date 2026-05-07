@@ -66,6 +66,9 @@ function hydrate(inv) {
     currency: inv?.currency || "CAD",
     notes: inv?.notes || "",
     quickbooksInvoiceId: inv?.quickbooksInvoiceId || null,
+    paymentToken: inv?.paymentToken || null,
+    quickbooksChargeId: inv?.quickbooksChargeId || null,
+    quickbooksPaymentId: inv?.quickbooksPaymentId || null,
     sentAt: inv?.sentAt || null,
     paidAt: inv?.paidAt || null,
     voidedAt: inv?.voidedAt || null,
@@ -195,7 +198,7 @@ async function update(id, patch) {
   if (idx === -1) return null;
   const current = records[idx];
   const next = { ...current };
-  const allowed = ["status", "notes", "quickbooksInvoiceId", "customerName", "customerEmail", "customerPhone", "address"];
+  const allowed = ["status", "notes", "quickbooksInvoiceId", "quickbooksChargeId", "quickbooksPaymentId", "paymentToken", "customerName", "customerEmail", "customerPhone", "address"];
   for (const key of allowed) {
     if (patch && Object.prototype.hasOwnProperty.call(patch, key)) next[key] = patch[key];
   }
@@ -218,6 +221,46 @@ async function update(id, patch) {
   records[idx] = next;
   await writeAll(records);
   return next;
+}
+
+// Generate (and persist) a paymentToken for the public /pay/invoice/:id?t=
+// route if the invoice doesn't already have one. Idempotent — second
+// call on the same invoice returns the same token. Returns the updated
+// record. The token is a 32-char hex string (16 random bytes), enough
+// entropy to be unguessable without rate-limiting.
+const cryptoMod = require("node:crypto");
+async function ensurePaymentToken(id) {
+  const records = await readAll();
+  const idx = records.findIndex((r) => r.id === id);
+  if (idx === -1) return null;
+  if (records[idx].paymentToken) return records[idx];
+  const token = cryptoMod.randomBytes(16).toString("hex");
+  records[idx] = {
+    ...records[idx],
+    paymentToken: token,
+    updatedAt: new Date().toISOString()
+  };
+  await writeAll(records);
+  return records[idx];
+}
+
+// Look up an invoice by its public paymentToken — used by the public
+// /pay/invoice/:id?t=<token> page to verify access. Returns null if the
+// token doesn't match any invoice (so the page 404s rather than leaking
+// the existence of the ID).
+async function getByPaymentToken(id, token) {
+  if (!token || typeof token !== "string") return null;
+  const records = await readAll();
+  const inv = records.find((r) => r.id === id);
+  if (!inv) return null;
+  if (!inv.paymentToken) return null;
+  // Constant-time-ish compare via Buffer equals — overkill for this use
+  // case but cheap and the right reflex for token comparison.
+  const a = Buffer.from(inv.paymentToken);
+  const b = Buffer.from(token);
+  if (a.length !== b.length) return null;
+  if (!cryptoMod.timingSafeEqual(a, b)) return null;
+  return inv;
 }
 
 // Append a single history entry without touching status / line items.
@@ -251,5 +294,7 @@ module.exports = {
   listByProperty,
   createDraft,
   update,
-  appendHistory
+  appendHistory,
+  ensurePaymentToken,
+  getByPaymentToken
 };

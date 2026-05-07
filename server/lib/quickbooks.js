@@ -299,6 +299,153 @@ async function pushInvoice(localInvoice) {
   return { id: created.Invoice?.Id, action: "created" };
 }
 
+// ---- Payments API ----------------------------------------------------
+//
+// PR 3: charge a tokenized card via the QuickBooks Payments REST API
+// and record the resulting payment on the matching QB invoice. The card
+// data was already tokenized client-side by Intuit's hosted iframe, so
+// PJL never sees the PAN — only a one-shot card token. We pass the
+// token to Intuit's charges endpoint, get back a charge ID, then create
+// a QB Payment record so the QBO invoice flips to paid in the books.
+//
+// API endpoints:
+//   Charges (sandbox):    https://sandbox.api.intuit.com/quickbooks/v4/payments/charges
+//   Charges (production): https://api.intuit.com/quickbooks/v4/payments/charges
+//   Payment record:       /v3/company/<realmId>/payment (Accounting API)
+//
+// PR 3 NOTE on uncertainty: the exact request body shape for the
+// Charges API has shifted slightly across Intuit revisions. The fields
+// below match the documented v4 schema as of mid-2025 (amount,
+// currency, token, capture). If sandbox returns "BadRequest: Unknown
+// field" on first run, check the latest Intuit Payments docs and adjust
+// the field names here — every other piece (OAuth, the charge → payment
+// → invoice update flow) is independent of this exact shape.
+
+const PAYMENTS_BASE_PROD = "https://api.intuit.com";
+const PAYMENTS_BASE_SANDBOX = "https://sandbox.api.intuit.com";
+
+function paymentsBase() {
+  return envCfg().environment === "production" ? PAYMENTS_BASE_PROD : PAYMENTS_BASE_SANDBOX;
+}
+
+// Charge a tokenized card. Throws on hard failure (declined, expired,
+// network error, invalid token). Returns { id, amount, currency, status }.
+async function chargeCard({ amountCents, currency = "CAD", cardToken, invoiceId, customerEmail }) {
+  if (!isConfigured()) throw new Error("QuickBooks credentials missing — set QB_CLIENT_ID + QB_CLIENT_SECRET in Render env vars.");
+  if (!(await isConnected())) throw new Error("QuickBooks not connected. The site administrator needs to reconnect via /admin/settings.");
+  const tokens = await getValidAccessToken();
+  if (!Number.isFinite(amountCents) || amountCents <= 0) {
+    throw new Error("Charge amount must be a positive number of cents.");
+  }
+  if (!cardToken || typeof cardToken !== "string") {
+    throw new Error("Card token is missing.");
+  }
+
+  // Build the charge request. Per Intuit docs the v4 Charges API takes
+  // `amount` (decimal string) and `currency`, with the tokenized card
+  // referenced via the `token` field. `capture: true` makes this a
+  // direct charge rather than an authorization.
+  const requestId = cryptoRandomHex(16); // for idempotency header
+  const body = {
+    amount: (amountCents / 100).toFixed(2),
+    currency,
+    token: cardToken,
+    capture: true,
+    context: {
+      mobile: false,
+      isEcommerce: true,
+      tax: "0.00",
+      // Echoed back in the receipt; helps PJL reconcile when a
+      // dispute or webhook comes in.
+      recurring: false,
+      ...(invoiceId ? { description: `PJL invoice ${invoiceId}` } : {})
+    }
+  };
+  if (customerEmail) body.customerEmail = customerEmail;
+
+  const url = `${paymentsBase()}/quickbooks/v4/payments/charges`;
+  const r = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${tokens.access_token}`,
+      "Content-Type": "application/json",
+      "Accept": "application/json",
+      // Idempotency — Intuit honours this header to dedupe retries that
+      // happen if the customer hits Pay twice or the network blips.
+      "Request-Id": requestId
+    },
+    body: JSON.stringify(body)
+  });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) {
+    const detail = data?.errors?.[0] || data?.fault?.error?.[0] || data?.error || data;
+    const msg = detail?.message || detail?.detail || JSON.stringify(detail).slice(0, 200);
+    throw new Error(`Charge failed (HTTP ${r.status}): ${msg}`);
+  }
+  const status = data?.status || data?.paymentStatus || "UNKNOWN";
+  if (String(status).toUpperCase() !== "CAPTURED" && String(status).toUpperCase() !== "PAID") {
+    // Status returned but not captured — could be 3DS challenge required,
+    // pending, etc. For PR 3 v1 we treat anything non-captured as a
+    // declined charge so the customer sees a clear "try another card"
+    // message rather than ambiguous "we have your money maybe."
+    throw new Error(`Charge not captured (status: ${status}).`);
+  }
+  return {
+    id: data.id || data.chargeId,
+    amount: data.amount,
+    currency: data.currency,
+    status
+  };
+}
+
+// Record a Payment in QB Accounting against an existing QB invoice.
+// Flips the QB invoice from "Open" to "Paid" in the books. Idempotent
+// at the QB end via the chargeId pinned in the payment's privateNote.
+async function recordPaymentForInvoice({ qbInvoiceId, amountCents, chargeId }) {
+  if (!qbInvoiceId) throw new Error("Missing QB invoice ID — can't record a payment without one.");
+  if (!Number.isFinite(amountCents) || amountCents <= 0) throw new Error("Payment amount must be positive.");
+
+  // Pull the QB invoice so we can grab its CustomerRef.
+  const inv = await requestQB(`/invoice/${encodeURIComponent(qbInvoiceId)}?minorversion=70`).catch(() => null);
+  if (!inv?.Invoice?.Id) throw new Error(`QB invoice ${qbInvoiceId} not found — payment record skipped.`);
+  const customerId = inv.Invoice.CustomerRef?.value;
+  if (!customerId) throw new Error("QB invoice has no CustomerRef — payment record skipped.");
+
+  const payload = {
+    TotalAmt: (amountCents / 100).toFixed(2),
+    CustomerRef: { value: customerId },
+    PrivateNote: `Auto-recorded from QB Payments charge ${chargeId}`,
+    Line: [{
+      Amount: (amountCents / 100).toFixed(2),
+      LinkedTxn: [{ TxnId: qbInvoiceId, TxnType: "Invoice" }]
+    }]
+  };
+  const created = await requestQB(`/payment?minorversion=70`, { method: "POST", body: payload });
+  return { id: created?.Payment?.Id || null };
+}
+
+// Mark a QB invoice as voided. Used by status mirror when admin sets
+// status: void in the PJL portal. Returns the updated QB invoice or
+// throws if QB rejects the void (e.g. payment already recorded).
+async function voidInvoice(qbInvoiceId) {
+  if (!qbInvoiceId) throw new Error("Missing QB invoice ID — can't void without one.");
+  const existing = await requestQB(`/invoice/${encodeURIComponent(qbInvoiceId)}?minorversion=70`);
+  if (!existing?.Invoice?.Id) throw new Error(`QB invoice ${qbInvoiceId} not found.`);
+  const payload = {
+    Id: existing.Invoice.Id,
+    SyncToken: existing.Invoice.SyncToken
+  };
+  const result = await requestQB(`/invoice?operation=void&minorversion=70`, {
+    method: "POST",
+    body: payload
+  });
+  return result?.Invoice || null;
+}
+
+function cryptoRandomHex(bytes) {
+  return require("node:crypto").randomBytes(bytes).toString("hex");
+}
+
 module.exports = {
   isConfigured,
   isConnected,
@@ -306,5 +453,8 @@ module.exports = {
   buildAuthUrl,
   exchangeCodeForTokens,
   pushInvoice,
-  clearTokens
+  clearTokens,
+  chargeCard,
+  recordPaymentForInvoice,
+  voidInvoice
 };

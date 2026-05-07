@@ -1,0 +1,321 @@
+/* PR 3 — public payment page (/pay/invoice/:id?t=<token>).
+   Customer-facing, no admin chrome. Brand palette pulled from the
+   PJL invoice PDF preview. Mobile-first; max width caps at desktop. */
+
+:root {
+  --green: #1B4D2E;
+  --green-mid: #2D6A42;
+  --green-tint: #F4F8EE;
+  --green-pale: #EAF3DE;
+  --amber: #E07B24;
+  --amber-hover: #C4691B;
+  --amber-pale: #FDF0E4;
+  --cream: #FAFAF5;
+  --white: #FFFFFF;
+  --text: #1A1A1A;
+  --text-muted: #7A7A72;
+  --border: #E2E0D4;
+  --hairline: #EFEDE3;
+  --danger: #B23A3A;
+  --success: #2F7A4A;
+  --r: 10px;
+  --r-lg: 18px;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--cream);
+  color: var(--text);
+  font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-feature-settings: "tnum";
+  line-height: 1.5;
+}
+
+a { color: var(--green); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* ---- Header ------------------------------------------------------- */
+.pay-header {
+  background: var(--white);
+  border-bottom: 1px solid var(--border);
+  padding: 18px 24px;
+  display: flex;
+  justify-content: center;
+}
+.pay-brand {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  text-decoration: none;
+  color: var(--green);
+}
+.pay-brand-mark {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-weight: 700;
+  font-size: 32px;
+  letter-spacing: 0.04em;
+  line-height: 1;
+}
+.pay-brand-word {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-weight: 600;
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  color: var(--green-mid);
+}
+
+/* ---- Main shell --------------------------------------------------- */
+.pay-shell {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 32px 16px 64px;
+}
+
+.pay-loading {
+  text-align: center;
+  color: var(--text-muted);
+  font-style: italic;
+  padding: 80px 16px;
+}
+
+.pay-error {
+  background: var(--white);
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--danger);
+  border-radius: var(--r);
+  padding: 24px 28px;
+  margin-top: 24px;
+}
+.pay-error h1 {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-weight: 700;
+  font-size: 26px;
+  margin: 0 0 12px;
+  color: var(--danger);
+}
+.pay-error p { margin: 0; }
+
+/* ---- Card --------------------------------------------------------- */
+.pay-card {
+  background: var(--white);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  overflow: hidden;
+  box-shadow: 0 4px 16px rgba(15,31,20,0.06);
+}
+
+.pay-card-head {
+  padding: 28px 32px 18px;
+  background: var(--white);
+  border-bottom: 1px solid var(--hairline);
+}
+.pay-eyebrow {
+  display: block;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+.pay-card-id {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-weight: 700;
+  font-size: 32px;
+  letter-spacing: 0.02em;
+  color: var(--green);
+  margin: 0;
+  line-height: 1.05;
+}
+.pay-card-issued {
+  margin: 6px 0 0;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+/* ---- Section heading ---------------------------------------------- */
+.pay-section-title {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-weight: 700;
+  font-size: 20px;
+  letter-spacing: 0.02em;
+  color: var(--green);
+  margin: 0 0 14px;
+}
+
+/* ---- Summary table ------------------------------------------------ */
+.pay-summary {
+  padding: 24px 32px;
+  border-bottom: 1px solid var(--hairline);
+}
+.pay-summary-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+.pay-summary-table th {
+  text-align: left;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  padding: 0 0 10px;
+  border-bottom: 1.5px solid var(--text);
+}
+.pay-summary-table th.num,
+.pay-summary-table td.num { text-align: right; }
+.pay-summary-table tbody td {
+  padding: 12px 0;
+  border-bottom: 1px solid var(--hairline);
+  vertical-align: top;
+}
+.pay-summary-line-note {
+  display: block;
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.pay-summary-table tfoot td {
+  padding: 8px 0;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+.pay-summary-table tfoot tr.pay-summary-total td {
+  border-top: 1.5px solid var(--text);
+  padding-top: 14px;
+  margin-top: 6px;
+  font-family: 'Barlow Condensed', sans-serif;
+  font-weight: 700;
+  font-size: 22px;
+  color: var(--green);
+  letter-spacing: 0.005em;
+}
+
+/* ---- Paid banner -------------------------------------------------- */
+.pay-paid-banner {
+  margin: 0;
+  padding: 24px 32px;
+  background: var(--green-tint);
+  border-bottom: 1px solid var(--hairline);
+}
+.pay-paid-banner h2 {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-weight: 700;
+  font-size: 24px;
+  margin: 0 0 6px;
+  color: var(--success);
+}
+.pay-paid-banner p {
+  margin: 0;
+  font-size: 14px;
+  color: var(--text);
+}
+
+/* ---- Card-entry form section -------------------------------------- */
+.pay-form-section {
+  padding: 24px 32px 28px;
+  border-bottom: 1px solid var(--hairline);
+}
+.pay-form-help {
+  margin: 0 0 18px;
+  font-size: 13px;
+  color: var(--text-muted);
+  line-height: 1.55;
+}
+
+.pay-card-form-wrap {
+  background: var(--cream);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  padding: 18px;
+  margin-bottom: 20px;
+  min-height: 220px;
+}
+.pay-card-form-mount {
+  /* Intuit's iframe sets its own dimensions inside this container. */
+  min-height: 200px;
+}
+
+/* Fallback message shown if the SDK never loads (ad blocker, network, etc.) */
+.pay-card-form-mount:empty::before {
+  content: "Loading secure card form…";
+  display: block;
+  text-align: center;
+  color: var(--text-muted);
+  font-style: italic;
+  padding: 60px 16px;
+}
+
+.pay-charge-btn {
+  width: 100%;
+  background: var(--amber);
+  color: var(--white);
+  border: none;
+  border-radius: 999px;
+  padding: 14px 24px;
+  font-family: inherit;
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+.pay-charge-btn:hover:not(:disabled) { background: var(--amber-hover); }
+.pay-charge-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+.pay-charge-status {
+  margin: 12px 0 0;
+  font-size: 13px;
+  text-align: center;
+  min-height: 1.4em;
+}
+.pay-charge-status[data-kind="info"]  { color: var(--text-muted); }
+.pay-charge-status[data-kind="ok"]    { color: var(--success); font-weight: 700; }
+.pay-charge-status[data-kind="error"] { color: var(--danger); font-weight: 700; }
+
+.pay-trust {
+  margin: 16px 0 0;
+  font-size: 12px;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+/* ---- Alternate pay methods ---------------------------------------- */
+.pay-alt {
+  padding: 24px 32px 28px;
+}
+.pay-alt p {
+  margin: 0 0 8px;
+  font-size: 14px;
+}
+.pay-alt p:last-child { margin-bottom: 0; }
+
+/* ---- Footer ------------------------------------------------------- */
+.pay-footer {
+  text-align: center;
+  font-size: 11px;
+  color: var(--text-muted);
+  padding: 24px 16px;
+  border-top: 1px solid var(--border);
+  background: var(--white);
+}
+.pay-footer a { color: var(--green); }
+
+/* ---- Responsive --------------------------------------------------- */
+@media (max-width: 600px) {
+  .pay-card-head,
+  .pay-summary,
+  .pay-paid-banner,
+  .pay-form-section,
+  .pay-alt {
+    padding-left: 20px;
+    padding-right: 20px;
+  }
+  .pay-card-id { font-size: 28px; }
+  .pay-summary-table tfoot tr.pay-summary-total td { font-size: 19px; }
+}

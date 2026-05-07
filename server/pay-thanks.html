@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Payment received — PJL Land Services</title>
+  <meta name="robots" content="noindex,nofollow">
+  <link rel="icon" type="image/svg+xml" href="/crm/pjl-logo-mark.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/crm/pay.css">
+  <style>
+    .thanks-hero {
+      background: var(--green-tint);
+      padding: 36px 32px 28px;
+      text-align: center;
+      border-bottom: 1px solid var(--hairline);
+    }
+    .thanks-hero-mark {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 64px;
+      height: 64px;
+      border-radius: 50%;
+      background: var(--success);
+      color: var(--white);
+      font-size: 32px;
+      margin-bottom: 16px;
+    }
+    .thanks-hero h1 {
+      font-family: 'Barlow Condensed', sans-serif;
+      font-weight: 700;
+      font-size: 30px;
+      letter-spacing: 0.02em;
+      color: var(--green);
+      margin: 0 0 8px;
+    }
+    .thanks-hero p {
+      margin: 0;
+      color: var(--text);
+      font-size: 15px;
+    }
+    .thanks-receipt {
+      padding: 24px 32px;
+    }
+    .thanks-receipt-row {
+      display: flex;
+      justify-content: space-between;
+      padding: 8px 0;
+      border-bottom: 1px solid var(--hairline);
+      font-size: 14px;
+    }
+    .thanks-receipt-row:last-child { border-bottom: none; }
+    .thanks-receipt-row .label { color: var(--text-muted); }
+    .thanks-receipt-row .value { font-weight: 700; font-variant-numeric: tabular-nums; }
+    .thanks-cta {
+      padding: 0 32px 32px;
+      text-align: center;
+    }
+    .thanks-cta a {
+      display: inline-block;
+      background: var(--green);
+      color: var(--white);
+      padding: 11px 22px;
+      border-radius: 999px;
+      font-weight: 700;
+      font-size: 14px;
+      text-decoration: none;
+      letter-spacing: 0.02em;
+    }
+    .thanks-cta a:hover { background: #143b22; }
+  </style>
+</head>
+<body class="pay-body">
+  <header class="pay-header">
+    <a class="pay-brand" href="https://pjllandservices.com">
+      <span class="pay-brand-mark">PJL</span>
+      <span class="pay-brand-word">LAND SERVICES</span>
+    </a>
+  </header>
+
+  <main class="pay-shell">
+    <p class="pay-loading" id="thanksLoading">Loading receipt…</p>
+
+    <article class="pay-card" id="thanksCard" hidden>
+      <section class="thanks-hero">
+        <div class="thanks-hero-mark" aria-hidden="true">✓</div>
+        <h1>Payment received</h1>
+        <p id="thanksLine">Thank you for your business — your payment has cleared.</p>
+      </section>
+
+      <section class="thanks-receipt">
+        <h2 class="pay-section-title">Receipt</h2>
+        <div class="thanks-receipt-row">
+          <span class="label">Invoice</span>
+          <span class="value" id="thanksInvoiceId">—</span>
+        </div>
+        <div class="thanks-receipt-row">
+          <span class="label">Paid on</span>
+          <span class="value" id="thanksPaidAt">—</span>
+        </div>
+        <div class="thanks-receipt-row">
+          <span class="label">Amount</span>
+          <span class="value" id="thanksAmount">$0.00</span>
+        </div>
+        <div class="thanks-receipt-row" id="thanksConfirmRow" hidden>
+          <span class="label">Confirmation</span>
+          <span class="value" id="thanksConfirm">—</span>
+        </div>
+      </section>
+
+      <section class="thanks-cta">
+        <a href="https://pjllandservices.com">Back to pjllandservices.com</a>
+      </section>
+    </article>
+  </main>
+
+  <footer class="pay-footer">
+    PJL Land Services · GST/HST 757080940 RT0001 ·
+    <a href="https://pjllandservices.com">pjllandservices.com</a> ·
+    <a href="tel:+19059600181">(905) 960-0181</a>
+  </footer>
+
+  <script>
+    (async () => {
+      const m = location.pathname.match(/^\/pay\/invoice\/([^/]+)\/thanks\/?$/);
+      const invoiceId = m ? decodeURIComponent(m[1]) : null;
+      const token = new URLSearchParams(location.search).get("t");
+      const $loading = document.getElementById("thanksLoading");
+      const $card = document.getElementById("thanksCard");
+
+      if (!invoiceId || !token) {
+        $loading.textContent = "Invalid receipt link.";
+        return;
+      }
+
+      try {
+        const r = await fetch(`/api/pay/invoice/${encodeURIComponent(invoiceId)}?t=${encodeURIComponent(token)}`,
+          { cache: "no-store" });
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok || !data.ok || !data.invoice) {
+          $loading.textContent = "Couldn't load this receipt.";
+          return;
+        }
+        const inv = data.invoice;
+        $loading.hidden = true;
+        $card.hidden = false;
+
+        document.getElementById("thanksInvoiceId").textContent = inv.id;
+        document.getElementById("thanksPaidAt").textContent = inv.paidAt
+          ? new Date(inv.paidAt).toLocaleString("en-CA", { dateStyle: "long", timeStyle: "short" })
+          : "—";
+        document.getElementById("thanksAmount").textContent =
+          new Intl.NumberFormat("en-CA", { style: "currency", currency: "CAD" }).format(inv.total || 0);
+
+        if (inv.quickbooksChargeId) {
+          document.getElementById("thanksConfirmRow").hidden = false;
+          document.getElementById("thanksConfirm").textContent = inv.quickbooksChargeId;
+        }
+
+        if (inv.status !== "paid") {
+          document.getElementById("thanksLine").textContent =
+            "We're processing your payment — you'll receive a receipt by email once it clears.";
+        }
+      } catch (err) {
+        $loading.textContent = "Couldn't load this receipt.";
+      }
+    })();
+  </script>
+</body>
+</html>

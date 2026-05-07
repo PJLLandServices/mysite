@@ -2964,20 +2964,37 @@ async function handleApi(req, res, pathname) {
         }
       }
 
+      // PR 3 — ensure a paymentToken exists so the email's "View and pay"
+      // CTA can deep-link the customer into the embedded payment page.
+      // ensurePaymentToken is idempotent (resends won't rotate the token,
+      // which is correct: a customer who already received the link should
+      // still be able to use it after a resend).
+      const tokenized = await invoices.ensurePaymentToken(invId);
+      const paymentToken = tokenized?.paymentToken || null;
+
       // Render PDF using the latest record (post-QB-push so any new
       // quickbooksInvoiceId is on it if pushInvoice mutated something).
-      const renderInv = qbInvoiceId && qbInvoiceId !== inv.quickbooksInvoiceId
-        ? { ...inv, quickbooksInvoiceId: qbInvoiceId }
-        : inv;
+      const renderInv = {
+        ...inv,
+        quickbooksInvoiceId: qbInvoiceId || inv.quickbooksInvoiceId,
+        paymentToken: paymentToken || inv.paymentToken
+      };
       const pdfBuffer = await generateInvoicePdf(renderInv);
+
+      // Build the public payment URL the customer clicks from the email.
+      // PUBLIC_BASE_URL is the live URL Render ships with (or the custom
+      // domain post-DNS cutover). Falls back to the request's own origin
+      // for local dev.
+      const publicBase = (process.env.PUBLIC_BASE_URL || baseUrlFromReq(req) || "").replace(/\/+$/, "");
+      const viewLink = paymentToken && publicBase
+        ? `${publicBase}/pay/invoice/${encodeURIComponent(invId)}?t=${encodeURIComponent(paymentToken)}`
+        : "";
 
       // Send the email. If this throws, the call returns 500 and the
       // admin sees the underlying error. Status is NOT flipped on failure.
       await sendInvoiceToCustomer(renderInv, pdfBuffer, {
-        resend: action === "resend"
-        // viewLink is intentionally omitted in PR 2 — PR 3 adds the
-        // /pay/invoice/:id?t=<token> embedded payment URL and passes it
-        // here. Until then the email surfaces e-Transfer + phone only.
+        resend: action === "resend",
+        viewLink
       });
 
       // Build the patch for invoices.update(). For /send, flip to sent;
@@ -3025,6 +3042,199 @@ async function handleApi(req, res, pathname) {
     } catch (err) {
       console.error(`[invoice-${action}] failed for ${invId}:`, err.message);
       return sendJson(res, 500, { ok: false, errors: [err.message || `Couldn't ${action} invoice.`] });
+    }
+  }
+
+  // ---------- Public invoice payment API (PR 3) ------------------------
+  // Token-gated public endpoints powering /pay/invoice/:id?t=<token>.
+  // Auth model: every endpoint here verifies the paymentToken via
+  // invoices.getByPaymentToken(); if the token doesn't match the
+  // invoice ID, we 404 (so the existence of the ID isn't leaked). No
+  // admin session required.
+  //
+  // Endpoints:
+  //   GET  /api/pay/invoice/:id?t=<token>             — sanitized invoice JSON
+  //   GET  /api/pay/invoice/:id/sdk-config?t=<token>  — Intuit SDK init config
+  //   POST /api/pay/invoice/:id/charge                — process card charge
+  //   POST /api/webhooks/quickbooks-payments          — async settle/refund/etc
+  //
+  // PCI scope: card data NEVER reaches this server. The /charge endpoint
+  // accepts a tokenized card reference (from the Intuit-hosted iframe),
+  // calls the Intuit Payments API server-to-server, and records the
+  // result. We stay in PCI SAQ-A scope because we never see PAN.
+
+  // GET /api/pay/invoice/:id — public invoice read (sanitized).
+  const publicInvoiceMatch = pathname.match(/^\/api\/pay\/invoice\/([^/]+)$/);
+  if (publicInvoiceMatch && req.method === "GET") {
+    try {
+      const id = decodeURIComponent(publicInvoiceMatch[1]);
+      const url = new URL(req.url, baseUrlFromReq(req));
+      const t = url.searchParams.get("t") || "";
+      const inv = await invoices.getByPaymentToken(id, t);
+      if (!inv) return sendJson(res, 404, { ok: false, errors: ["Invoice not found or link expired."] });
+      // Hand back only the fields the customer needs to see — strip
+      // internal admin notes, history, and the raw paymentToken from
+      // the response.
+      const safe = {
+        id: inv.id,
+        status: inv.status,
+        createdAt: inv.createdAt,
+        sentAt: inv.sentAt,
+        paidAt: inv.paidAt,
+        voidedAt: inv.voidedAt,
+        customerName: inv.customerName,
+        customerEmail: inv.customerEmail,
+        address: inv.address,
+        lineItems: inv.lineItems,
+        subtotal: inv.subtotal,
+        hst: inv.hst,
+        total: inv.total,
+        currency: inv.currency,
+        quickbooksChargeId: inv.quickbooksChargeId,
+        eTransferEmail: process.env.GMAIL_USER || "info@pjllandservices.com"
+      };
+      return sendJson(res, 200, { ok: true, invoice: safe });
+    } catch (err) {
+      return sendJson(res, 500, { ok: false, errors: [err.message || "Couldn't load invoice."] });
+    }
+  }
+
+  // GET /api/pay/invoice/:id/sdk-config — return the Intuit Payments JS
+  // SDK init config. Only the publishable client ID + environment are
+  // shipped to the browser. Server-side OAuth tokens stay on the server.
+  const publicSdkConfigMatch = pathname.match(/^\/api\/pay\/invoice\/([^/]+)\/sdk-config$/);
+  if (publicSdkConfigMatch && req.method === "GET") {
+    try {
+      const id = decodeURIComponent(publicSdkConfigMatch[1]);
+      const url = new URL(req.url, baseUrlFromReq(req));
+      const t = url.searchParams.get("t") || "";
+      const inv = await invoices.getByPaymentToken(id, t);
+      if (!inv) return sendJson(res, 404, { ok: false, errors: ["Invoice not found or link expired."] });
+      const cfg = quickbooks.envCfg();
+      if (!cfg.clientId) {
+        return sendJson(res, 503, { ok: false, errors: ["Payment processor not configured. Contact PJL at (905) 960-0181 to pay another way."] });
+      }
+      return sendJson(res, 200, {
+        ok: true,
+        clientId: cfg.clientId,
+        environment: cfg.environment
+      });
+    } catch (err) {
+      return sendJson(res, 500, { ok: false, errors: [err.message || "Couldn't initialize payment form."] });
+    }
+  }
+
+  // POST /api/pay/invoice/:id/charge — execute the card charge.
+  //
+  // Body: { t: <paymentToken>, cardToken: <intuit-card-token> }
+  // Card data has already been tokenized by the Intuit iframe; cardToken
+  // is the one-shot tokenized reference. We hand it to QB Payments which
+  // executes the charge, then record the charge ID + payment back on the
+  // invoice and on the QB invoice.
+  const publicChargeMatch = pathname.match(/^\/api\/pay\/invoice\/([^/]+)\/charge$/);
+  if (publicChargeMatch && req.method === "POST") {
+    try {
+      const id = decodeURIComponent(publicChargeMatch[1]);
+      const body = await parseRequestBody(req);
+      const inv = await invoices.getByPaymentToken(id, body?.t || "");
+      if (!inv) return sendJson(res, 404, { ok: false, errors: ["Invoice not found or link expired."] });
+      if (inv.status === "paid") {
+        return sendJson(res, 409, { ok: false, errors: ["This invoice has already been paid."] });
+      }
+      if (inv.status === "void") {
+        return sendJson(res, 409, { ok: false, errors: ["This invoice has been voided."] });
+      }
+      if (inv.status !== "sent") {
+        return sendJson(res, 409, { ok: false, errors: [`This invoice is "${inv.status}" and isn't ready for payment.`] });
+      }
+      const cardToken = body?.cardToken;
+      if (!cardToken || typeof cardToken !== "string") {
+        return sendJson(res, 400, { ok: false, errors: ["Missing card token from the secure form."] });
+      }
+
+      // Charge via QB Payments. quickbooks.chargeCard handles OAuth +
+      // the charges API; throws on hard failures (declined, expired,
+      // network, etc) which we surface as 400 to the client.
+      let chargeResult;
+      try {
+        chargeResult = await quickbooks.chargeCard({
+          amountCents: Math.round(Number(inv.total) * 100),
+          currency: inv.currency || "CAD",
+          cardToken,
+          invoiceId: inv.id,
+          customerEmail: inv.customerEmail
+        });
+      } catch (chargeErr) {
+        console.warn(`[charge] failed for ${inv.id}: ${chargeErr.message}`);
+        return sendJson(res, 400, { ok: false, errors: [chargeErr.message || "Card was declined."] });
+      }
+
+      // Record the QB Payment record so the QB invoice shows paid. Best
+      // effort — if this fails, the charge still went through; we log
+      // the warning and keep going so the customer sees a paid invoice.
+      let qbPaymentId = null;
+      let qbWarning = null;
+      try {
+        if (inv.quickbooksInvoiceId) {
+          const payment = await quickbooks.recordPaymentForInvoice({
+            qbInvoiceId: inv.quickbooksInvoiceId,
+            amountCents: Math.round(Number(inv.total) * 100),
+            chargeId: chargeResult.id
+          });
+          qbPaymentId = payment?.id || null;
+        }
+      } catch (paymentErr) {
+        console.warn(`[charge] QB payment record failed for ${inv.id}: ${paymentErr.message}`);
+        qbWarning = paymentErr.message;
+      }
+
+      // Flip status sent → paid + audit. invoices.update() handles the
+      // paidAt stamp + status:paid history entry automatically.
+      const updated = await invoices.update(id, {
+        status: "paid",
+        quickbooksChargeId: chargeResult.id,
+        quickbooksPaymentId: qbPaymentId,
+        notes: inv.notes
+          ? `${inv.notes}\n\nCharged ${chargeResult.id} on ${new Date().toISOString()}.`
+          : `Charged ${chargeResult.id} on ${new Date().toISOString()}.`
+      });
+
+      return sendJson(res, 200, {
+        ok: true,
+        invoice: {
+          id: updated.id,
+          status: updated.status,
+          paidAt: updated.paidAt,
+          total: updated.total,
+          quickbooksChargeId: updated.quickbooksChargeId
+        },
+        chargeId: chargeResult.id,
+        warning: qbWarning
+      });
+    } catch (err) {
+      console.error(`[charge] unexpected:`, err);
+      return sendJson(res, 500, { ok: false, errors: [err.message || "Payment couldn't be completed."] });
+    }
+  }
+
+  // POST /api/webhooks/quickbooks-payments — receives async events
+  // (settlement, refund, dispute) from Intuit. For PR 3 we acknowledge
+  // and log them; future PR can act on specific event types (e.g.
+  // refund flips status back to sent + records a refund history entry).
+  if (req.method === "POST" && pathname === "/api/webhooks/quickbooks-payments") {
+    try {
+      const body = await parseRequestBody(req).catch(() => null);
+      // TODO: verify Intuit's webhook signature header before trusting
+      // the payload. Header is x-intuit-signature, computed as HMAC-SHA1
+      // of the raw body using the webhook signing secret (set in the
+      // QB Developer app dashboard, env QB_WEBHOOK_SECRET when added).
+      // For PR 3 we log the event; signature verification is the first
+      // hardening pass.
+      console.log("[qb-webhook] received:", JSON.stringify(body)?.slice(0, 500));
+      return sendJson(res, 200, { ok: true });
+    } catch (err) {
+      console.warn("[qb-webhook] error:", err.message);
+      return sendJson(res, 200, { ok: true }); // always 200 so Intuit doesn't retry-storm
     }
   }
 
@@ -4028,9 +4238,28 @@ async function handleApi(req, res, pathname) {
     try {
       const id = decodeURIComponent(invoiceMatch[1]);
       const payload = await parseRequestBody(req);
+      const before = await invoices.get(id);
       const updated = await invoices.update(id, payload);
       if (!updated) return sendJson(res, 404, { ok: false, errors: ["Invoice not found."] });
-      return sendJson(res, 200, { ok: true, invoice: updated });
+
+      // PR 3 — status mirror to QuickBooks. When admin sets status to
+      // void in PJL, push the same change to QB. Best-effort: a QB
+      // failure does NOT block the local status flip — we surface a
+      // warning so the admin can retry, same pattern as PR 2's send.
+      let qbWarning = null;
+      const becameVoid = before && before.status !== "void" && updated.status === "void";
+      if (becameVoid && updated.quickbooksInvoiceId) {
+        try {
+          if (quickbooks.isConfigured() && (await quickbooks.isConnected())) {
+            await quickbooks.voidInvoice(updated.quickbooksInvoiceId);
+          }
+        } catch (qbErr) {
+          console.warn(`[invoice-patch] QB void failed for ${id}: ${qbErr.message}`);
+          qbWarning = `Local status flipped to void, but QuickBooks rejected the void: ${qbErr.message}. Mark void manually in QB.`;
+        }
+      }
+
+      return sendJson(res, 200, { ok: true, invoice: updated, warning: qbWarning });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't update invoice."] });
     }
@@ -6689,6 +6918,16 @@ function resolveStaticTarget(pathname) {
   }
   if (pathname === "/admin" || pathname === "/admin/") {
     return { dir: SERVER_DIR, relative: "/admin.html" };
+  }
+  // Public customer payment pages (PR 3). Token-gated by the JS layer
+  // and the JSON API at /api/pay/invoice/:id. The HTML itself is fine
+  // to serve to anyone; without the token query param the JS shows the
+  // "this link isn't valid" branch.
+  if (/^\/pay\/invoice\/[^/]+\/thanks\/?$/.test(pathname)) {
+    return { dir: SERVER_DIR, relative: "/pay-thanks.html" };
+  }
+  if (/^\/pay\/invoice\/[^/]+\/?$/.test(pathname)) {
+    return { dir: SERVER_DIR, relative: "/pay.html" };
   }
   if (pathname === "/admin/chats" || pathname === "/admin/chats/") {
     return { dir: SERVER_DIR, relative: "/chats.html" };

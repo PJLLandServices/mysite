@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pay your invoice — PJL Land Services</title>
+  <meta name="robots" content="noindex,nofollow">
+  <link rel="icon" type="image/svg+xml" href="/crm/pjl-logo-mark.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/crm/pay.css">
+</head>
+<body class="pay-body">
+  <header class="pay-header">
+    <a class="pay-brand" href="https://pjllandservices.com">
+      <span class="pay-brand-mark">PJL</span>
+      <span class="pay-brand-word">LAND SERVICES</span>
+    </a>
+  </header>
+
+  <main class="pay-shell">
+    <p class="pay-loading" id="payLoading">Loading invoice…</p>
+
+    <div class="pay-error" id="payError" hidden>
+      <h1>This payment link isn't valid</h1>
+      <p>It may have expired, been used already, or been replaced by a newer one.
+         Please check your most recent email from PJL Land Services, or call
+         <a href="tel:+19059600181">(905) 960-0181</a> and we'll send you a fresh link.</p>
+    </div>
+
+    <article class="pay-card" id="payCard" hidden>
+      <header class="pay-card-head">
+        <span class="pay-eyebrow">Invoice</span>
+        <h1 class="pay-card-id" id="payInvoiceId">I-2026-0000</h1>
+        <p class="pay-card-issued" id="payInvoiceIssued"></p>
+      </header>
+
+      <section class="pay-summary">
+        <h2 class="pay-section-title">Summary</h2>
+        <table class="pay-summary-table">
+          <thead>
+            <tr><th>Description</th><th class="num">Qty</th><th class="num">Total</th></tr>
+          </thead>
+          <tbody id="paySummaryLines"></tbody>
+          <tfoot>
+            <tr><td colspan="2">Subtotal</td><td class="num" id="paySubtotal">$0.00</td></tr>
+            <tr><td colspan="2">HST (13%)</td><td class="num" id="payHst">$0.00</td></tr>
+            <tr class="pay-summary-total"><td colspan="2">Total</td><td class="num" id="payTotal">$0.00</td></tr>
+          </tfoot>
+        </table>
+      </section>
+
+      <section class="pay-paid-banner" id="payPaidBanner" hidden>
+        <h2>Paid in full ✓</h2>
+        <p id="payPaidMessage">Thanks — payment received and your books are up to date. A receipt was sent to your email.</p>
+      </section>
+
+      <section class="pay-form-section" id="payFormSection">
+        <h2 class="pay-section-title">Pay by credit card</h2>
+        <p class="pay-form-help">
+          Card details are entered on Intuit's secure servers via the
+          form below — your card number never touches our site. Apple Pay,
+          Visa, Mastercard, Amex, and Discover are all accepted.
+        </p>
+
+        <!--
+          PR 3 NOTE — Intuit Payments JS SDK iframe.
+
+          The container below is where Intuit's hosted card-entry iframe
+          is injected by /crm/pay.js once the SDK loads. The iframe is
+          served from js.intuit.com and the form data is POSTed directly
+          to Intuit's tokenization endpoint, never to our server. That's
+          what keeps PJL in PCI SAQ-A scope.
+
+          If you need to debug the SDK, the container's #pay-card-form
+          div is the mount point. Don't add a <form> wrapper around it —
+          the SDK manages its own form internally.
+        -->
+        <div class="pay-card-form-wrap">
+          <div id="pay-card-form" class="pay-card-form-mount"></div>
+        </div>
+
+        <button type="button" id="payChargeBtn" class="pay-charge-btn" disabled>
+          Pay <span id="payChargeBtnAmount">$0.00</span> →
+        </button>
+
+        <p class="pay-charge-status" id="payChargeStatus"></p>
+
+        <p class="pay-trust">
+          <span aria-hidden="true">🔒</span>
+          Secured by Intuit QuickBooks Payments. PJL never sees your card number.
+        </p>
+      </section>
+
+      <section class="pay-alt">
+        <h2 class="pay-section-title">Other ways to pay</h2>
+        <p>
+          <strong>E-Transfer:</strong>
+          <a id="payETransferEmail" href="mailto:info@pjllandservices.com">info@pjllandservices.com</a>
+        </p>
+        <p>
+          Prefer to pay by phone? Call
+          <a href="tel:+19059600181">(905) 960-0181</a>
+          and we'll take care of it on the line.
+        </p>
+      </section>
+    </article>
+  </main>
+
+  <footer class="pay-footer">
+    PJL Land Services · GST/HST 757080940 RT0001 ·
+    <a href="https://pjllandservices.com">pjllandservices.com</a> ·
+    <a href="tel:+19059600181">(905) 960-0181</a>
+  </footer>
+
+  <!--
+    PR 3 NOTE — Intuit Payments hosted SDK loader.
+
+    URL is the documented Intuit Payments tokenization JS — used to
+    create the hosted card-entry iframe. If Intuit moves this URL at
+    some point, swap the src here AND verify the global the SDK
+    exposes (window.Intuit / window.intuit) hasn't been renamed in
+    pay.js's init code.
+
+    Sandbox vs. production: the SDK auto-detects environment from the
+    auth token we hand it (server-side env QB_ENVIRONMENT chooses
+    which token endpoint to hit, and the resulting bearer carries
+    the env hint). No URL change between sandbox and production for
+    the SDK loader itself.
+  -->
+  <script src="https://js.intuit.com/v2/IntuitPaymentsJS.js" defer></script>
+  <script src="/crm/pay.js" defer></script>
+</body>
+</html>
