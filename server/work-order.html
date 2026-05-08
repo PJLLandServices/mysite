@@ -195,6 +195,52 @@
         <div class="wo-zones" id="woZones"></div>
       </section>
 
+      <!-- Issues → Draft Quote — desktop parity for the on-site quote
+           builder (Brief B). Read-only when signed, editable when not.
+           Reuses the same /on-site-quote/* endpoints tech mode hits.
+           Customer-facing review state (per-line accept + canvas signature)
+           lives ONLY in tech mode — the customer is in front of the tech,
+           not in front of Patrick. Desktop's role: review + edit lines
+           before the visit, and (post-completion) view the locked scope.
+           Find_only WOs (fall closings) cannot build a quote per Hard
+           Rule §10 r7 — section renders a defer-only banner. -->
+      <section class="property-section wo-on-site-quote-section" id="woOnSiteQuoteSection" hidden>
+        <header class="property-section-head" style="display:flex;align-items:baseline;justify-content:space-between;gap:12px">
+          <h2 id="woOnSiteQuoteTitle">Issues → Draft Quote</h2>
+          <button type="button" class="property-add" id="woOnSiteBuildBtn">Generate from issues</button>
+        </header>
+        <p class="property-section-help" id="woOnSiteQuoteHelp">Aggregate this visit's issues into priced line items. Tech can also do this from /tech with the customer on-screen.</p>
+
+        <!-- Locked banner — only visible when status === accepted /
+             partially_accepted / declined and the signed Quote is on
+             file. Shows the bound scope summary. -->
+        <p class="wo-on-site-status" id="woOnSiteStatus" hidden></p>
+
+        <!-- Find_only state — fall closings can't quote on-site. The
+             defer flow is tech-mode only; desktop just surfaces the
+             rule and points to /tech. -->
+        <div class="wo-on-site-defer" id="woOnSiteDefer" hidden>
+          <p>Fall closings don't quote on-site (PJL operations rule 8). Issues found this visit get saved to deferred recommendations on the property. Use tech mode to capture them.</p>
+        </div>
+
+        <!-- Builder list — editable when unsigned, read-only when signed.
+             Same shape as tech mode's tech-on-site-lines. -->
+        <ul class="wo-on-site-lines" id="woOnSiteLines"></ul>
+        <p class="wo-on-site-empty" id="woOnSiteEmpty" hidden>No line items yet. Add issues to zones above and tap <strong>Generate from issues</strong>, or use <strong>+ Add custom line</strong> to enter a one-off charge.</p>
+        <button type="button" class="wo-on-site-add-btn" id="woOnSiteAddBtn" hidden>+ Add custom line</button>
+
+        <!-- Running totals — visible whenever there's at least one line. -->
+        <p class="wo-on-site-totals" id="woOnSiteTotals" hidden></p>
+
+        <!-- Send-for-approval — same endpoint tech mode uses. Available
+             only when there's something to send and the WO is not yet
+             signed. Reads customer email/phone from the WO. -->
+        <div class="wo-on-site-remote" id="woOnSiteRemoteSection" hidden>
+          <button type="button" class="pjl-btn pjl-btn-outline" id="woOnSiteSendApprovalBtn">📨 Send for customer approval (email + SMS)</button>
+          <p class="wo-on-site-remote-status" id="woOnSiteRemoteStatus" hidden></p>
+        </div>
+      </section>
+
       <!-- Visit photos — WO-level photo gallery. Issue-attached photos
            render inside each issue row in the zones section. -->
       <section class="property-section wo-photos-section">

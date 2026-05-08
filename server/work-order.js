@@ -886,9 +886,363 @@ function populateForm(wo) {
   renderWoPhotos(wo);
   renderSignoff(wo);
   renderPaidOnSite(wo);
+  renderOnSiteQuote(wo);
   renderHistory(wo);
   applyLockState(wo.locked === true, wo.signature);
 }
+
+// ---- On-site Quote (Brief B — desktop parity) ------------------------
+// Mirror of tech mode's quote builder, adapted for desktop layout. Same
+// endpoints: /on-site-quote/build, /on-site-quote/builder,
+// /on-site-quote/send-for-approval. NO customer-review or signature
+// canvas — those are tech-mode only (customer is in front of the tech).
+//
+// State machine on desktop:
+//   - fall_closing → defer-only banner, builder hidden
+//   - signed (locked) → read-only summary + locked Quote ID + totals
+//   - unsigned + no lines → "Generate from issues" CTA prominent
+//   - unsigned + has lines → editable list + +Add + totals + Send
+
+function woFormatMoney(n) {
+  const v = Number(n);
+  if (!Number.isFinite(v)) return "$0.00";
+  return v < 0 ? "-$" + Math.abs(v).toFixed(2) : "$" + v.toFixed(2);
+}
+
+function woEffectiveLinePrice(line) {
+  if (line && line.overridePrice != null && Number.isFinite(Number(line.overridePrice))) {
+    return Number(line.overridePrice);
+  }
+  return Number(line && line.originalPrice) || 0;
+}
+
+function woLineRowTotal(line) {
+  return Math.round(woEffectiveLinePrice(line) * (Number(line.qty) || 0) * 100) / 100;
+}
+
+function woTotalsForLines(lines) {
+  let subtotal = 0;
+  for (const line of lines || []) subtotal += woLineRowTotal(line);
+  subtotal = Math.round(subtotal * 100) / 100;
+  const hst = Math.round(subtotal * 0.13 * 100) / 100;
+  const total = Math.round((subtotal + hst) * 100) / 100;
+  return { subtotal, hst, total };
+}
+
+function renderOnSiteQuote(wo) {
+  const section = document.getElementById("woOnSiteQuoteSection");
+  if (!section) return;
+  section.hidden = false;
+
+  const isFallClosing = wo.type === "fall_closing";
+  const isSigned = wo.locked === true || wo.signature?.signed === true;
+  const lines = (wo.onSiteQuote && wo.onSiteQuote.builderLineItems) || [];
+  const status = wo.onSiteQuote?.status;
+  const quoteId = wo.onSiteQuote?.quoteId;
+
+  const buildBtn = document.getElementById("woOnSiteBuildBtn");
+  const addBtn = document.getElementById("woOnSiteAddBtn");
+  const linesEl = document.getElementById("woOnSiteLines");
+  const emptyEl = document.getElementById("woOnSiteEmpty");
+  const totalsEl = document.getElementById("woOnSiteTotals");
+  const deferEl = document.getElementById("woOnSiteDefer");
+  const statusEl = document.getElementById("woOnSiteStatus");
+  const remoteEl = document.getElementById("woOnSiteRemoteSection");
+  const titleEl = document.getElementById("woOnSiteQuoteTitle");
+  const helpEl = document.getElementById("woOnSiteQuoteHelp");
+
+  // Reset visibility
+  if (buildBtn) buildBtn.hidden = true;
+  if (addBtn) addBtn.hidden = true;
+  if (deferEl) deferEl.hidden = true;
+  if (statusEl) { statusEl.hidden = true; statusEl.textContent = ""; }
+  if (remoteEl) remoteEl.hidden = true;
+
+  // Find_only — defer-only banner, no builder.
+  if (isFallClosing) {
+    if (titleEl) titleEl.textContent = "Issues → Deferred (find-only)";
+    if (helpEl) helpEl.textContent = "Fall closings don't quote on-site (PJL operations rule 8). Use tech mode to defer issues to spring follow-up.";
+    if (deferEl) deferEl.hidden = false;
+    if (linesEl) linesEl.innerHTML = "";
+    if (emptyEl) emptyEl.hidden = true;
+    if (totalsEl) totalsEl.hidden = true;
+    return;
+  }
+
+  if (titleEl) titleEl.textContent = "Issues → Draft Quote";
+  if (helpEl) helpEl.textContent = isSigned
+    ? "Scope was locked at signature. Adjustments now happen on the invoice — see the Cascade actions below."
+    : "Aggregate this visit's issues into priced line items. Tech can also do this from /tech with the customer on-screen.";
+
+  // Signed → read-only summary.
+  if (isSigned) {
+    if (statusEl) {
+      const lockedSummary = (() => {
+        if (status === "accepted" && quoteId) return `Customer accepted all lines. Quote ${quoteId} on file.`;
+        if (status === "partially_accepted" && quoteId) return `Customer accepted some lines. Quote ${quoteId} on file. Declined items routed to deferred recommendations.`;
+        if (status === "declined") return `Customer declined all lines. All items routed to deferred recommendations.`;
+        if (status === "sent_for_remote_approval" && quoteId) return `Awaiting remote approval. Quote ${quoteId} sent to customer.`;
+        return `Scope locked at signature.`;
+      })();
+      statusEl.textContent = lockedSummary;
+      statusEl.hidden = false;
+    }
+    renderOnSiteLines(lines, { readonly: true });
+    renderOnSiteTotals(lines);
+    return;
+  }
+
+  // Unsigned editable state.
+  if (buildBtn) buildBtn.hidden = false;
+  if (lines.length) {
+    if (addBtn) addBtn.hidden = false;
+    if (remoteEl) remoteEl.hidden = false;
+  }
+  renderOnSiteLines(lines, { readonly: false });
+  renderOnSiteTotals(lines);
+}
+
+function renderOnSiteLines(lines, { readonly }) {
+  const linesEl = document.getElementById("woOnSiteLines");
+  const emptyEl = document.getElementById("woOnSiteEmpty");
+  if (!linesEl) return;
+  linesEl.innerHTML = "";
+  if (!lines.length) {
+    if (emptyEl) emptyEl.hidden = false;
+    return;
+  }
+  if (emptyEl) emptyEl.hidden = true;
+
+  lines.forEach((line, idx) => {
+    const li = document.createElement("li");
+    li.className = "wo-on-site-line";
+    li.dataset.idx = String(idx);
+    const overridden = line.overridePrice != null && Number(line.overridePrice) !== Number(line.originalPrice);
+    const priceVal = line.overridePrice != null ? Number(line.overridePrice) : Number(line.originalPrice);
+    if (readonly) {
+      li.innerHTML = `
+        <div class="wo-on-site-line-head">
+          <span class="wo-on-site-line-label-readonly">${escapeHtml(line.label || "(unlabeled)")}</span>
+          <span class="wo-on-site-line-lock" aria-hidden="true">🔒</span>
+        </div>
+        <div class="wo-on-site-line-controls">
+          <span class="wo-on-site-line-meta">Qty ${escapeHtml(String(line.qty || 1))}</span>
+          <span class="wo-on-site-line-meta">${woFormatMoney(priceVal)}${overridden ? ' <em class="wo-on-site-overridden">override</em>' : ""}</span>
+          <span class="wo-on-site-line-total">${woFormatMoney(woLineRowTotal(line))}</span>
+        </div>
+        ${line.note ? `<p class="wo-on-site-line-note">${escapeHtml(line.note)}</p>` : ""}
+      `;
+    } else {
+      li.innerHTML = `
+        <div class="wo-on-site-line-head">
+          <input type="text" class="wo-on-site-line-label" value="${escapeHtml(line.label || "")}" placeholder="Describe the work…" maxlength="200" aria-label="Line description">
+          <button type="button" class="wo-on-site-line-remove" data-action="remove-line" aria-label="Remove line">×</button>
+        </div>
+        <div class="wo-on-site-line-controls">
+          <label>
+            <span>Qty</span>
+            <input type="number" min="1" inputmode="numeric" class="wo-on-site-line-qty" value="${escapeHtml(String(line.qty || 1))}">
+          </label>
+          <label>
+            <span>Unit price${overridden ? ' <em class="wo-on-site-overridden">override</em>' : ""}</span>
+            <input type="number" min="0" step="0.01" inputmode="decimal" class="wo-on-site-line-price" value="${escapeHtml(priceVal.toFixed(2))}">
+          </label>
+          <span class="wo-on-site-line-total">${woFormatMoney(woLineRowTotal(line))}</span>
+        </div>
+        ${line.note ? `<p class="wo-on-site-line-note">${escapeHtml(line.note)}</p>` : ""}
+      `;
+    }
+    linesEl.appendChild(li);
+  });
+}
+
+function renderOnSiteTotals(lines) {
+  const totalsEl = document.getElementById("woOnSiteTotals");
+  if (!totalsEl) return;
+  if (!lines.length) {
+    totalsEl.hidden = true;
+    return;
+  }
+  const t = woTotalsForLines(lines);
+  totalsEl.hidden = false;
+  totalsEl.innerHTML = `Subtotal <strong>${woFormatMoney(t.subtotal)}</strong> · HST <strong>${woFormatMoney(t.hst)}</strong> · <span class="wo-on-site-total-final">${woFormatMoney(t.total)}</span>`;
+}
+
+// "Generate from issues" — POSTs to the same /build endpoint tech mode
+// uses. On success, refreshes the WO and re-renders.
+document.getElementById("woOnSiteBuildBtn")?.addEventListener("click", async () => {
+  const id = getWorkOrderId();
+  if (!id) return;
+  const btn = document.getElementById("woOnSiteBuildBtn");
+  if (btn) btn.disabled = true;
+  try {
+    const r = await fetch(`/api/work-orders/${encodeURIComponent(id)}/on-site-quote/build`, { method: "POST" });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok || !data.ok) throw new Error((data.errors && data.errors[0]) || "Couldn't build quote.");
+    if (data.workOrder) {
+      loadedWorkOrder = data.workOrder;
+      renderOnSiteQuote(data.workOrder);
+    }
+  } catch (err) {
+    alert(err.message || "Couldn't build quote.");
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+});
+
+// "+ Add custom line" — append a blank custom line to the builder.
+document.getElementById("woOnSiteAddBtn")?.addEventListener("click", () => {
+  if (!loadedWorkOrder) return;
+  const lines = ((loadedWorkOrder.onSiteQuote && loadedWorkOrder.onSiteQuote.builderLineItems) || []).slice();
+  lines.push({
+    key: null,
+    label: "",
+    qty: 1,
+    originalPrice: 0,
+    overridePrice: null,
+    custom: true,
+    source: { zoneNumbers: [], issueIds: [] },
+    note: ""
+  });
+  loadedWorkOrder.onSiteQuote = { ...(loadedWorkOrder.onSiteQuote || {}), builderLineItems: lines };
+  renderOnSiteLines(lines, { readonly: false });
+  renderOnSiteTotals(lines);
+  persistOnSiteBuilder();
+});
+
+// Per-row remove button + per-row input edits. Event delegation so new
+// rows don't need re-binding. Persists to /on-site-quote/builder on
+// debounce.
+let onSiteBuilderTimer = null;
+function persistOnSiteBuilder() {
+  if (onSiteBuilderTimer) clearTimeout(onSiteBuilderTimer);
+  onSiteBuilderTimer = setTimeout(async () => {
+    const id = getWorkOrderId();
+    if (!id || !loadedWorkOrder) return;
+    const lines = (loadedWorkOrder.onSiteQuote && loadedWorkOrder.onSiteQuote.builderLineItems) || [];
+    try {
+      const r = await fetch(`/api/work-orders/${encodeURIComponent(id)}/on-site-quote/builder`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ lineItems: lines })
+      });
+      const data = await r.json().catch(() => ({}));
+      if (r.ok && data.ok && data.workOrder) {
+        // Server may correct line shapes (re-snapshot originalPrice).
+        // Pull canonical state back without nuking inputs the user is
+        // currently editing — only the totals strip + non-active rows
+        // re-render. The full re-render fires on next populateForm.
+        loadedWorkOrder = data.workOrder;
+        renderOnSiteTotals(data.workOrder.onSiteQuote.builderLineItems || []);
+      }
+    } catch (_e) {}
+  }, 600);
+}
+
+document.getElementById("woOnSiteLines")?.addEventListener("click", (event) => {
+  if (!loadedWorkOrder || loadedWorkOrder.locked) return;
+  if (event.target.matches('[data-action="remove-line"]')) {
+    const li = event.target.closest(".wo-on-site-line");
+    if (!li) return;
+    const idx = Number(li.dataset.idx);
+    const lines = ((loadedWorkOrder.onSiteQuote && loadedWorkOrder.onSiteQuote.builderLineItems) || []).slice();
+    if (!Number.isInteger(idx) || idx < 0 || idx >= lines.length) return;
+    lines.splice(idx, 1);
+    loadedWorkOrder.onSiteQuote = { ...(loadedWorkOrder.onSiteQuote || {}), builderLineItems: lines };
+    renderOnSiteLines(lines, { readonly: false });
+    renderOnSiteTotals(lines);
+    persistOnSiteBuilder();
+  }
+});
+
+document.getElementById("woOnSiteLines")?.addEventListener("input", (event) => {
+  if (!loadedWorkOrder || loadedWorkOrder.locked) return;
+  const li = event.target.closest(".wo-on-site-line");
+  if (!li) return;
+  const idx = Number(li.dataset.idx);
+  const lines = (loadedWorkOrder.onSiteQuote && loadedWorkOrder.onSiteQuote.builderLineItems) || [];
+  const line = lines[idx];
+  if (!line) return;
+  if (event.target.classList.contains("wo-on-site-line-qty")) {
+    line.qty = Math.max(1, Math.floor(Number(event.target.value) || 1));
+  } else if (event.target.classList.contains("wo-on-site-line-price")) {
+    const v = Number(event.target.value);
+    if (Number.isFinite(v) && v >= 0) {
+      line.overridePrice = Math.abs(v - Number(line.originalPrice)) < 0.005 ? null : v;
+    }
+  } else if (event.target.classList.contains("wo-on-site-line-label")) {
+    line.label = String(event.target.value || "").slice(0, 200);
+  } else {
+    return;
+  }
+  // Update only the row total + grand totals; full re-render would
+  // wipe the input the user is editing.
+  const rowTotal = li.querySelector(".wo-on-site-line-total");
+  if (rowTotal) rowTotal.textContent = woFormatMoney(woLineRowTotal(line));
+  renderOnSiteTotals(lines);
+  persistOnSiteBuilder();
+});
+
+// "Send for customer approval" — same endpoint tech mode uses. Reuses
+// the WO's customer email + phone snapshot. Confirm-then-fire pattern;
+// status surfaces in the wo-on-site-remote-status element.
+document.getElementById("woOnSiteSendApprovalBtn")?.addEventListener("click", async () => {
+  if (!loadedWorkOrder) return;
+  const id = getWorkOrderId();
+  if (!id) return;
+  const btn = document.getElementById("woOnSiteSendApprovalBtn");
+  const statusEl = document.getElementById("woOnSiteRemoteStatus");
+  const customerEmail = loadedWorkOrder.customerEmail || "";
+  const customerPhone = loadedWorkOrder.customerPhone || "";
+  if (!customerEmail && !customerPhone) {
+    alert("Customer has no email or phone on file. Add one before sending an approval link.");
+    return;
+  }
+  const customerName = loadedWorkOrder.customerName || "the customer";
+  if (!confirm(`Send the on-site quote to ${customerName} via ${[customerEmail && "email", customerPhone && "SMS"].filter(Boolean).join(" + ")} for remote approval?`)) return;
+
+  if (btn) btn.disabled = true;
+  if (statusEl) { statusEl.hidden = false; statusEl.textContent = "Sending…"; statusEl.dataset.kind = "info"; }
+  try {
+    const r = await fetch(`/api/work-orders/${encodeURIComponent(id)}/on-site-quote/send-for-approval`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sendEmail: !!customerEmail,
+        sendSms: !!customerPhone,
+        email: customerEmail,
+        phone: customerPhone
+      })
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok || !data.ok) throw new Error((data.errors && data.errors[0]) || "Couldn't send.");
+    const channels = [];
+    if (data.emailSent) channels.push("email");
+    if (data.smsSent) channels.push("SMS");
+    const errs = [];
+    if (data.emailError) errs.push(`email: ${data.emailError}`);
+    if (data.smsError) errs.push(`SMS: ${data.smsError}`);
+    if (statusEl) {
+      if (channels.length) {
+        statusEl.textContent = `Sent via ${channels.join(" + ")}. Quote ${data.quote.id}. Awaiting customer signature.`;
+        statusEl.dataset.kind = "ok";
+      } else {
+        statusEl.textContent = `Quote created (${data.quote.id}) but no delivery channel succeeded. Errors: ${errs.join("; ")}.`;
+        statusEl.dataset.kind = "error";
+      }
+    }
+    // Refresh the WO so the section reflects the sent_for_remote_approval state.
+    const refreshed = await fetch(`/api/work-orders/${encodeURIComponent(id)}`).then((r) => r.json()).catch(() => null);
+    if (refreshed?.workOrder) {
+      loadedWorkOrder = refreshed.workOrder;
+      renderOnSiteQuote(refreshed.workOrder);
+    }
+  } catch (err) {
+    if (statusEl) { statusEl.textContent = err.message || "Failed."; statusEl.dataset.kind = "error"; }
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+});
 
 // Payment captured on-site? Mirror of the tech-mode radio. Coerces
 // wo.paidOnSite (true | false | null) onto the matching radio. Spec
