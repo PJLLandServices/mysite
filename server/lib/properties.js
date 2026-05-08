@@ -160,10 +160,19 @@ function blankProperty() {
     //     preAuthorization:   null | { signedAt, customerName, imageData,
     //                                  ip, userAgent }
     //                         Stamped when the customer pre-authorizes from
-    //                         the portal. NOT a binding contract — the
-    //                         spring WO sign-off is (rule #11). It's a
-    //                         non-binding promise that lets the tech skip
-    //                         the on-site sales conversation.
+    //                         the portal. BINDING per spec §5.3 r5 — the
+    //                         e-signature record (name + drawn image + IP
+    //                         + UA + timestamp + exact scope shown on the
+    //                         portal at sign time) is contractual. The
+    //                         spring WO sign-off STILL captures a fresh
+    //                         signature on the actual work performed
+    //                         (spec §10 r12), but the pre-auth is the
+    //                         binding commitment to the scope + price
+    //                         that was shown at portal-sign time.
+    //                         If on-site reality differs from the
+    //                         pre-authed scope, the pre-auth is
+    //                         invalidated for that specific item and the
+    //                         tech captures a fresh on-site signature.
     //     resolution:         null | { resolvedAt, resolvedBy,
     //                                  resolvedInWoId, note }
     //   }

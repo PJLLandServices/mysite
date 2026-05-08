@@ -86,8 +86,8 @@ form except where noted.
 
 | File | Entity | ID format | Purpose |
 |---|---|---|---|
-| `properties.js` | Property | `P-YYYY-NNNN` | Customer site profile (zones, valves, controller, blow-out, deferred issues, service records). One per physical address. |
-| `work-orders.js` | Work Order | `WO-XXXXXXXX` (random alphabet) | One per visit. Zones, issues, photos, signature, on-site quote, materials packed. |
+| `properties.js` | Property | `P-YYYY-NNNN` | Customer site profile (zones, valves, controller, blow-out, deferred issues, service records). One per physical address. Zones land with `pendingReview: true` when the WO completion cascade discovers them on-site (Brief D). |
+| `work-orders.js` | Work Order | `WO-XXXXXXXX` (random alphabet) | One per visit. Zones, issues, photos, signature, on-site quote, materials packed, `paidOnSite`, `propertyEditsAppliedAt`, `intakeGuarantee.matched`, `history[]`. Lock-protected fields enforced via `SCOPE_PROTECTED_FIELDS` constant (Brief A). |
 | `quotes.js` | Quote | `Q-YYYY-NNNN` | Versioned, signed estimate. Two flavours: `ai_repair_quote` (AI chat) and `on_site_quote` (tech-built). |
 | `invoices.js` | Invoice | `I-YYYY-NNNN` | Auto-drafted by completion cascade, lifecycle draft → sent → paid → void. |
 | `bookings.js` | Booking | `BK-YYYY-NNNN` | First-class appointment record. Mirrors `lead.booking` but is canonical. |
@@ -97,7 +97,7 @@ form except where noted.
 | `suppliers.js` | Supplier | `SUP-NNN` (no year prefix) | Vendor records (name, contact, email, phone, address). |
 | `part-suppliers.js` | — | n/a | Override map at `data/part-suppliers.json` mapping SKU → supplierIds[]. parts.json's `supplierIds` field is a placeholder; this file is the source of truth. |
 | `settings.js` | — | n/a | Admin notification preferences + 50-entry audit trail. |
-| `completion-cascade.js` | — | n/a | Fires on WO status → completed. Idempotent. Creates service record on property, draft invoice, customer + admin emails, warranty stamp. |
+| `completion-cascade.js` | — | n/a | Fires on WO status → completed. Idempotent. Creates service record on property, draft invoice (with `paidOnSiteAtCompletion` flag), customer + admin emails, warranty stamp. Applies property edits via `computePropertyEdits()` (Brief D — zone/controller diffs, new zones flagged for Patrick review) gated by `wo.propertyEditsAppliedAt`. Logs `cascade_fire` + `property_edits_applied` history entries. |
 | `issue-rollup.js` | — | n/a | Maps zone issues into priced line items for the on-site quote. Manifold rule, controller subtype tier selection, etc. |
 | `pricing.js` | — | n/a | `priceForBooking(serviceKey, zoneCount)` reads `pricing.json`. |
 | `availability.js` | — | n/a | Slot generator + `BOOKABLE_SERVICES` catalog. |
@@ -167,8 +167,8 @@ Pages with their primary route + purpose:
 | `projects.html` | `/admin/projects` | Projects index. |
 | `project.html` | `/admin/project/<id>` | Project detail. Editable header, attached WOs, attached material lists, status select. |
 | `work-orders.html` | `/admin/work-orders` | All-WOs index. Status filter (default: active only), search, "Show completed + cancelled" toggle. |
-| `work-order.html` | `/admin/work-order/<id>` | Desktop WO editor. Cheat sheet, zones, issues, photos, sign-off, cascade controls. |
-| `work-order-tech.html` | `/admin/work-order/<id>/tech` | Mobile-first tech mode. ServiceWorker-backed offline. Zone bottom-sheet edit, voice-input, materials checklist on follow-ups. |
+| `work-order.html` | `/admin/work-order/<id>` | Desktop WO editor. Cheat sheet, AI bonus banner + decision buttons, zones, issues, photos, line-items + running totals + send-for-approval (Brief B), customer sign-off (gated on bonus decision), post-signature banner + Mark Complete CTA (Brief E), paid-on-site radio (Brief C), cascade-recovery actions, history viewer (Brief A). |
+| `work-order-tech.html` | `/admin/work-order/<id>/tech` | Mobile-first tech mode. ServiceWorker-backed offline. Cheat sheet, carry-forward banner, AI bonus card with Match / Didn't Match buttons (Brief F), zone bottom-sheet edit, voice-input, on-site quote builder, customer review + signature canvas, materials checklist on follow-ups, payment-on-site radio, property-updates preview (Brief D), post-signature narrative banner (Brief E), history viewer (Brief A). |
 | `quote-folder.html` | `/admin/quote-folder` | Quote index. Auto-expire sweep, PDF download, "Convert to project" per row. |
 | `invoices.html` | `/admin/invoices` | Invoice index. |
 | `invoice.html` | `/admin/invoice/<id>` | Invoice editor. Two-column layout (invoice document left, sticky admin actions right). |
@@ -231,14 +231,33 @@ Bookings + scheduling
   GET    /api/schedule/...                       ← slots, blocks, hour overrides
 
 Work Orders
-  GET    /api/work-orders                        ← list (filter ?propertyId, ?leadId)
-  GET    /api/work-orders/:id
-  POST   /api/work-orders                        ← create from lead/property/booking
-  PATCH  /api/work-orders/:id                    ← zones, issues, signature, status
-  POST   /api/work-orders/:id/photos             ← upload
-  POST   /api/work-orders/:id/create-invoice
-  POST   /api/work-orders/:id/run-cascade
-  POST   /api/work-orders/:id/follow-up          ← spawn follow-up WO
+  GET    /api/work-orders                                           ← list (filter ?propertyId, ?leadId)
+  GET    /api/work-orders/:id                                       ← decorated with property + lead + lastService + propertyEdits preview
+  POST   /api/work-orders                                           ← create from lead/property/booking; seeds seasonal-fee baseline line
+  PATCH  /api/work-orders/:id                                       ← zones, issues, signature, status, photos, paidOnSite, etc.
+                                                                       Returns 409 wo_locked when payload touches SCOPE_PROTECTED_FIELDS
+                                                                       on a signed WO (lineItems, signature, customer/property/booking
+                                                                       links, intakeGuarantee, type, etc.). Status forward-progression,
+                                                                       photos, materials, paidOnSite, notes still accepted.
+  DELETE /api/work-orders/:id                                       ← refuses if active deferred items still reference this WO
+  POST   /api/work-orders/:id/photos                                ← upload (categories: pre_work / in_progress / post_work / issue / general)
+  DELETE /api/work-orders/:id/photos/:n
+  GET    /api/work-orders/:id/photo/:n                              ← serve a single photo file
+  POST   /api/work-orders/:id/create-invoice                        ← manual invoice draft (idempotent — short-circuits on existing)
+  POST   /api/work-orders/:id/run-cascade                           ← re-run cascade explicitly (idempotent)
+  POST   /api/work-orders/:id/follow-up                             ← spawn follow-up WO with parent's parts pre-loaded
+  POST   /api/work-orders/:id/intake-guarantee/decide               ← AI Correct Diagnosis Bonus decision (Brief F).
+                                                                       Body: { matched: bool, mismatchReason?: string }.
+                                                                       On match: appends -1hr labour credit to builder.
+  POST   /api/work-orders/:id/on-site-quote/build                   ← run issue-rollup, store builder draft (preserves baseline + bonus credit)
+  PATCH  /api/work-orders/:id/on-site-quote/builder                 ← tech edits builder lines; refuses to drop credit line while bonus matched
+  POST   /api/work-orders/:id/on-site-quote/accept                  ← customer signature → on_site_quote Quote record + sink declines to deferred
+  POST   /api/work-orders/:id/on-site-quote/decline-all             ← every line → deferred recommendations, no Quote
+  POST   /api/work-orders/:id/on-site-quote/send-for-approval       ← email + SMS link to /approve/<quoteId>?t=<token>
+  POST   /api/work-orders/:id/zones/:n/issues/:id/defer             ← per-issue defer (granular fall path / spring carry-forward decline)
+  POST   /api/work-orders/:id/zones/:n/issues/:id/emergency         ← fall-only emergency override; pages Patrick + spawns service_visit follow-up
+  POST   /api/work-orders/:id/issues/defer                          ← bulk defer all issues (fall closing find-only path)
+  PATCH  /api/work-orders/:id/carry-forward/:deferredId             ← spring action: repair_now | decline | already_fixed | cannot_locate
 
 Quotes
   GET    /api/admin/quote-folder                 ← Q-YYYY-NNNN browser
@@ -247,7 +266,7 @@ Quotes
   POST   /api/approve/:id/:token/sign            ← public signature
 
 Invoices
-  GET    /api/invoices                           ← filter ?status
+  GET    /api/invoices                           ← filter ?status, ?woId
   GET    /api/invoices/:id
   PATCH  /api/invoices/:id                       ← lineItems, status
   POST   /api/admin/quickbooks/push/:id          ← (inert until creds)

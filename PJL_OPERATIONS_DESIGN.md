@@ -301,6 +301,8 @@ The same WO template behaves differently depending on:
 
 **Critical behaviour difference:** In `find_only` (fall closing) mode, the "Authorize now" button is **disabled** — only "Add to deferred recommendations" is available. Hard rule.
 
+**Implementation note (current state):** the four service modes map to three WO `type` values in code: `spring_opening` (find_and_fix), `fall_closing` (find_only), `service_visit` (find_and_fix or fix_only). The `build` mode (new install / retrofit) is spec'd but its template is not yet implemented — install/retrofit WOs currently fall through to `service_visit`. Brief H (deferred) will add the build template once the design-phase data home, multi-day install handling, and in-job scope-addition rules are settled.
+
 #### 4.3.2 Work Order Structure
 
 ```
@@ -391,18 +393,47 @@ WORK ORDER FOLDER
     - Additional work proposed (priced from pricing.json)
     - SEPARATE customer signature for additional scope
 
-  Property Updates Captured (auto-tracked)
-    - Which zones had description/type/coverage changes
-    - Photos updated
-    - New zones discovered (flagged for Patrick review)
-    - Controller info updates
+  Property Updates Captured (Brief D — auto-applied on completion)
+    - Computed at GET time as a derived `propertyEdits` view: server
+      diffs the WO's zone snapshot against the LIVE property record so
+      concurrent admin edits to the property are visible. Returns
+      { zoneEdits: [...], newZones: [...], hasChanges: bool }.
+    - Each zoneEdit: { number, label, fields: [{field, before, after}] }
+      — per-field deltas for location / notes / sprinklerTypes / coverage.
+    - newZones: zones present on the WO but missing from the property.
+      Get `pendingReview: true` so Patrick eyeballs before they merge
+      fully (spec rule below). Auto-skips the placeholder
+      "General service area" zone scaffolded by service_visit WOs.
+    - Cascade applies the same diff via `properties.applySystemUpdates()`
+      on completion; `wo.propertyEditsAppliedAt` timestamp gates against
+      double-apply on re-fire. REPLACE semantics on populated WO fields
+      (was additive-only — corrected so a tech fixing a wrong zone
+      descriptor isn't silently dropped). Empty WO fields still don't
+      blank existing property values.
 
-  Customer Sign-Off (legally binding moment)
-    - Customer name (printed)
-    - Signature drawn on tablet/phone
-    - Date + time, IP, device info
-    - "I authorize the work described above"
-    - Optional satisfaction check
+  Customer Sign-Off (legally binding moment — single signature at completion)
+    Signature is captured at the END of the visit, attesting to:
+      - The final scope as performed (locked at this moment)
+      - Authorization to bill the captured total
+    Captured: customer name (printed) + drawn signature + ISO timestamp
+    + IP + userAgent. The server stamps IP/UA — never trusts the client.
+    Mid-visit verbal acceptances are captured as audit-log events
+    (history[]) and give the tech legal cover to start work; they are
+    NOT signatures.
+    Scope additions discovered AFTER signature require a fresh signature
+    on the new scope (see §10 r12). For original-scope completions, one
+    signature covers the whole visit.
+
+    Pre-signature gates (Briefs E & F): the submit button is disabled
+    until (a) name + ack + drawn canvas, (b) the AI Correct Diagnosis
+    Bonus decision is captured (when applies=true), and (c) the WO has
+    captured the photo threshold for its service mode (find_and_fix /
+    fix_only require ≥1 completion photo; find_only is optional).
+
+    After signature: scope is locked (see §4.3.3 r5 + §10 r11). Status
+    progression, photo capture, materials updates, paidOnSite, internal
+    notes continue. The "Mark visit completed" tap fires the cascade
+    and creates the draft invoice (Brief E).
 
   Follow-Up WO Trigger
     - Tech taps "Schedule follow-up" instead of "Authorize now"
@@ -410,12 +441,34 @@ WORK ORDER FOLDER
     - Customer signs for follow-up scope
     - Original WO closes for today's work; follow-up scheduled
 
-  Payment & Billing
-    - Final total (subtotal + HST)
-    - Payment captured on-site? (yes/no)
-    - QuickBooks invoice ID (auto-populated)
+  Payment & Billing (Brief C)
+    - Final total (subtotal + HST) — derived from
+      onSiteQuote.builderLineItems
+    - paidOnSite: true | false | null — persisted on the WO; cascade
+      reads it to set `invoice.paidOnSiteAtCompletion` and reshape the
+      customer email ("Payment received in the field — thank you" vs
+      "Invoice attached"). Patrick still reviews each draft invoice
+      before sending or marking paid in QB.
+    - QuickBooks invoice ID (auto-populated post-cascade)
 
-  Audit / History (all status changes logged)
+  Audit / History (Brief A — append-only, never edited)
+    Each WO carries `history[]` mirroring quotes.history / invoices.history.
+    Entry shape:
+      { ts, action, by, note, before?, after? }
+        - ts: ISO timestamp
+        - action: short slug (status_change, signature_capture,
+                 photo_upload, photo_delete, quote_built, customer_accepted,
+                 customer_declined_all, remote_approval_sent, issue_deferred,
+                 issues_bulk_deferred, emergency_override, carry_forward_*,
+                 cascade_fire, invoice_drafted, ai_bonus_decided,
+                 followup_created, property_edits_applied, patch, etc.)
+        - by: "admin" | "tech" | "system" | "customer"
+        - note: human-readable summary
+        - before/after: optional state snapshots (set on status changes,
+                       AI bonus decision, etc.)
+    Every dispatcher mutation appends an entry. Read-only viewer renders
+    on both desktop and tech surfaces. History entries are append-only;
+    never edited or deleted in normal operation.
 ```
 
 #### 4.3.3 Behavioural rules for work orders
@@ -424,7 +477,7 @@ WORK ORDER FOLDER
 2. **Property info is pulled FRESH at WO open.** WO doesn't store its own copy — it links. Photos taken on the WO are stored on the WO and optionally promoted to property folder.
 3. **Status transitions are forward-only.** Skips allowed, reverses not.
 4. **Scope changes require fresh signature.** Original signature is for original scope only.
-5. **Signed WO is the contract.** Once signed, locked. Post-sign edits create audit log entries.
+5. **Signed WO is the contract.** Once `wo.locked === true` (set at signature capture), the following scope-protected fields are locked and any PATCH that touches them returns 409: `lineItems`, `additionalRepairs`, `onSiteQuote`, `signature`, `customerName`, `customerEmail`, `customerPhone`, `address`, `propertyId`, `leadId`, `intakeGuarantee`, `aiBonusMatched`, `type` (canonical list lives in `SCOPE_PROTECTED_FIELDS` in `server/lib/work-orders.js`). Status progression, photos, materials updates, paidOnSite, internal notes, and follow-up linkage continue to flow and append to `history[]` — the WO remains a live operational document after sign-off; only the *scope* is frozen.
 6. **AI-Correct-Diagnosis Bonus is enforced.** If WO carries the flag, tech sees a banner: "AI-correct-diagnosis bonus eligible for [scope]. If on-site diagnosis matches, credit the customer ONE HOUR of repair labour free on the diagnosed work." Diagnostic + repair labour billed normally at $95/hr.
 7. **Cancellations and no-shows are terminal states** with logged reasons.
 8. **Fall closings cannot auto-quote.** Hard rule. Issues → deferred items only.
@@ -505,7 +558,7 @@ DEFERRED ISSUE
 2. Spring opening WOs auto-load carry-forward issues at generation.
 3. Deferred issues survive across years. Declined → re-defers.
 4. **Three-year flag:** after 3 re-deferrals, system flags: "This issue has been declined 3 years in a row. Resolve, escalate, or dismiss." Forces a decision.
-5. Customer portal shows open recommendations with photos and estimated costs. Pre-authorization is binding.
+5. Customer portal shows open recommendations with photos and estimated costs. **Pre-authorization is BINDING.** Captured with full e-signature record (printed customer name, drawn signature image, IP, userAgent, ISO timestamp, exact scope as-shown on the portal). Pre-authed scope and snapshotted price are locked from the moment of portal-signing. If the tech arrives and reality differs from the pre-authed scope, the pre-authorization is invalidated for that specific item and a fresh on-site signature is required for the actual work.
 6. Pre-authorized items load into next spring's WO as "✓ Already authorized."
 
 ---
@@ -672,8 +725,8 @@ These are the rules that protect the design from drift. Number them so they can 
 8. **AI never invents prices.** `pricing.json` or it's a lead.
 9. **Quotes are versioned, not edited.** Once sent, revisions create new versions.
 10. **Customer/property separation is permanent.** Don't conflate them, ever.
-11. **Signed work order is the contract.** Locked once signed. Post-sign edits create audit entries.
-12. **Scope changes require fresh signature.** Original signature is for original scope only.
+11. **Signed work order is the contract.** Locked once signed (`wo.locked === true`). Scope-protected fields refuse PATCH with 409 — see §4.3.3 r5 for the canonical list (`SCOPE_PROTECTED_FIELDS` in `server/lib/work-orders.js`). Status, photos, materials, paidOnSite, and notes still accept edits and append to `history[]`.
+12. **Scope changes require fresh signature.** Pre-signature scope changes (during the visit) are part of the same WO and the single completion signature covers them. Post-signature scope changes (e.g., customer asks for additional work after signing) require either (a) a fresh signature on a new scope-change record, or (b) a follow-up WO with its own signature flow. The on-site-quote endpoints all 409 once `wo.locked === true`.
 13. **Emergency fall overrides notify Patrick immediately.** Real-time, not nightly review.
 14. **Customer portal can only edit non-structural fields.** Phone, email, best time, prefs. Nothing else.
 15. **Three-year deferred flag forces a decision.** No infinite carry-forward.
