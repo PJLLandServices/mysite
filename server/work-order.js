@@ -858,26 +858,94 @@ function renderDiagnosis(wo) {
   woDiagnosis.textContent = typeof wo.diagnosis === "string" ? wo.diagnosis : JSON.stringify(wo.diagnosis, null, 2);
 }
 
-// AI-Correct-Diagnosis Bonus banner — same data as the tech-mode page
-// reads, rendered here on the desktop editor so Patrick sees the diagnosed
-// scope (and pending-bonus state) when reviewing/editing a WO that came
-// from an AI repair quote.
+// AI-Correct-Diagnosis Bonus banner — desktop mirror of tech-mode's
+// banner. Brief F: Match / Didn't Match buttons before signature; on
+// match, the server adds a -1hr labour credit to the on-site quote
+// builder. Locked at signature (intakeGuarantee is in SCOPE_PROTECTED_FIELDS).
 function renderIntakeGuarantee(wo) {
   const banner = document.getElementById("woIntakeGuarantee");
+  const eyebrow = document.getElementById("woIntakeEyebrow");
   const scope = document.getElementById("woIntakeScope");
   const source = document.getElementById("woIntakeSource");
+  const actions = document.getElementById("woIntakeActions");
+  const decided = document.getElementById("woIntakeDecided");
   if (!banner) return;
   if (!wo || !wo.intakeGuarantee || wo.intakeGuarantee.applies !== true) {
     banner.hidden = true;
     return;
   }
-  if (scope) scope.textContent = wo.intakeGuarantee.scope || "Locked scope";
-  if (source) {
-    source.textContent = wo.intakeGuarantee.sourceQuoteId
-      ? `Source: ${wo.intakeGuarantee.sourceQuoteId}`
-      : "";
-  }
   banner.hidden = false;
+  const ig = wo.intakeGuarantee;
+  if (scope) scope.textContent = ig.scope || "Locked scope";
+  if (source) {
+    source.textContent = ig.sourceQuoteId ? `Source: ${ig.sourceQuoteId}` : "";
+  }
+  const isLocked = wo.locked === true || wo.signature?.signed === true;
+  if (ig.matched === true) {
+    banner.dataset.decision = "matched";
+    if (eyebrow) eyebrow.textContent = "AI-Correct-Diagnosis Bonus — 1 Hour Labour Credited";
+    if (actions) actions.hidden = true;
+    if (decided) {
+      decided.hidden = false;
+      decided.textContent = "Diagnosis matched. Credit line added to the on-site quote.";
+    }
+  } else if (ig.matched === false) {
+    banner.dataset.decision = "mismatch";
+    if (eyebrow) eyebrow.textContent = "AI-Correct-Diagnosis Bonus — Diagnosis Didn't Match";
+    if (actions) actions.hidden = true;
+    if (decided) {
+      decided.hidden = false;
+      decided.textContent = ig.mismatchReason
+        ? `No credit applied: ${ig.mismatchReason}`
+        : "No credit applied. Labour bills at the listed rate.";
+    }
+  } else {
+    banner.dataset.decision = "pending";
+    if (eyebrow) eyebrow.textContent = "AI-Correct-Diagnosis Bonus — Decision Required";
+    if (actions) actions.hidden = isLocked;
+    if (decided) decided.hidden = true;
+  }
+}
+
+document.getElementById("woIntakeMatchBtn")?.addEventListener("click", async () => {
+  if (!loadedWorkOrder || loadedWorkOrder.locked) return;
+  if (!confirm("Confirm: the on-site diagnosis matches the AI-quoted scope. This credits 1 hour of repair labour to the customer.")) return;
+  await postIntakeDecisionDesktop({ matched: true });
+});
+document.getElementById("woIntakeMismatchBtn")?.addEventListener("click", async () => {
+  if (!loadedWorkOrder || loadedWorkOrder.locked) return;
+  const reason = prompt("Optional: brief note on why the diagnosis didn't match. Leave blank if none.", "");
+  if (reason === null) return;
+  await postIntakeDecisionDesktop({ matched: false, mismatchReason: reason || "" });
+});
+
+async function postIntakeDecisionDesktop(body) {
+  const id = getWorkOrderId();
+  if (!id) return;
+  const matchBtn = document.getElementById("woIntakeMatchBtn");
+  const mismBtn = document.getElementById("woIntakeMismatchBtn");
+  if (matchBtn) matchBtn.disabled = true;
+  if (mismBtn) mismBtn.disabled = true;
+  try {
+    const r = await fetch(`/api/work-orders/${encodeURIComponent(id)}/intake-guarantee/decide`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok || !data.ok) throw new Error((data.errors && data.errors[0]) || "Couldn't record decision.");
+    if (data.workOrder) {
+      loadedWorkOrder = data.workOrder;
+      renderIntakeGuarantee(data.workOrder);
+      renderOnSiteQuote(data.workOrder);
+      renderSignoff(data.workOrder);
+    }
+  } catch (err) {
+    alert(err.message || "Couldn't record decision.");
+  } finally {
+    if (matchBtn) matchBtn.disabled = false;
+    if (mismBtn) mismBtn.disabled = false;
+  }
 }
 
 function populateForm(wo) {
@@ -1639,7 +1707,16 @@ function updateWoSignoffSubmitState() {
   const name = (document.getElementById("woSignoffName")?.value || "").trim();
   const ack = !!document.getElementById("woSignoffAck")?.checked;
   const drawn = !!(signaturePadInstance && signaturePadInstance.isDirty());
-  submit.disabled = !(name && ack && drawn);
+  // Brief F — AI bonus decision must be captured before signature when
+  // the WO is bonus-eligible. Same gate logic as tech mode.
+  const ig = loadedWorkOrder?.intakeGuarantee || {};
+  const bonusGateOk = !ig.applies || ig.matched === true || ig.matched === false;
+  submit.disabled = !(name && ack && drawn && bonusGateOk);
+  if (!bonusGateOk) {
+    submit.title = "Resolve the AI Correct Diagnosis Bonus decision before signing.";
+  } else {
+    submit.removeAttribute("title");
+  }
 }
 
 document.getElementById("woSignoffName")?.addEventListener("input", updateWoSignoffSubmitState);

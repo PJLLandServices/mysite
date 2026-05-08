@@ -5631,6 +5631,102 @@ async function handleApi(req, res, pathname) {
     return;
   }
 
+  // ======== AI Correct Diagnosis Bonus (Brief F / spec §4.3.3 r6) ========
+  // Tech taps "Diagnosis matched" or "Didn't match" on the cheat-sheet
+  // bonus card BEFORE customer signature. On match: credit a -1 hour
+  // labour line (qty: 1, originalPrice: -hourly_labour) into the on-site
+  // quote builder. On mismatch: clear any prior credit line. Locked
+  // after signature (intakeGuarantee is in SCOPE_PROTECTED_FIELDS).
+  const woAiBonusDecideMatch = pathname.match(/^\/api\/work-orders\/([^/]+)\/intake-guarantee\/decide$/);
+  if (woAiBonusDecideMatch && req.method === "POST") {
+    try {
+      const id = decodeURIComponent(woAiBonusDecideMatch[1]);
+      const payload = await parseRequestBody(req);
+      const wo = await workOrders.get(id);
+      if (!wo) return sendJson(res, 404, { ok: false, errors: ["Work order not found."] });
+      if (wo.locked || wo.signature?.signed) {
+        return sendJson(res, 409, {
+          ok: false,
+          errors: ["Work order is signed and locked. Bonus decision is final."],
+          error: "wo_locked",
+          field: "intakeGuarantee"
+        });
+      }
+      if (!wo.intakeGuarantee || wo.intakeGuarantee.applies !== true) {
+        return sendJson(res, 422, { ok: false, errors: ["This work order isn't AI-Correct-Diagnosis Bonus eligible (no source AI quote)."] });
+      }
+      const matched = payload?.matched === true ? true
+        : payload?.matched === false ? false
+        : null;
+      if (matched === null) {
+        return sendJson(res, 422, { ok: false, errors: ["Body must include matched: true | false."] });
+      }
+      const mismatchReason = typeof payload?.mismatchReason === "string"
+        ? payload.mismatchReason.slice(0, 300)
+        : "";
+
+      // Build the credit line (or removal). hourly_labour price comes
+      // from pricing.json — never hardcoded. qty=1 with negative price
+      // (vs. negative qty) so the existing line-item math handles it
+      // without special cases (subtotal = sum of lineTotals, HST applies
+      // to net per CRA — tax follows the consideration).
+      const hourly = PRICING.items?.hourly_labour;
+      if (matched && (!hourly || !Number.isFinite(Number(hourly.price)))) {
+        return sendJson(res, 500, { ok: false, errors: ["pricing.json missing hourly_labour entry — can't apply bonus credit."] });
+      }
+      const existingLines = Array.isArray(wo.onSiteQuote?.builderLineItems) ? wo.onSiteQuote.builderLineItems : [];
+      // Strip any prior credit line — we'll re-add if matched.
+      const linesWithoutCredit = existingLines.filter((l) => !(l && l.source && l.source.aiBonusCredit === true));
+      let nextLines = linesWithoutCredit;
+      if (matched) {
+        // Credit line is `custom: true` so the builder PATCH preserves
+        // its negative price as-is. We snapshot the labour rate at
+        // decision time per hard rule §10 r2 — a future pricing.json
+        // change won't retroactively alter an applied credit.
+        // `source.aiBonusCredit: true` is the canonical identifier
+        // (used by the build endpoint's preserve list, the builder
+        // PATCH guard, and re-render code).
+        const creditLine = {
+          key: null,
+          label: "AI Correct Diagnosis Bonus — 1 hour labour credit",
+          qty: 1,
+          originalPrice: -Math.abs(Number(hourly.price)),
+          overridePrice: null,
+          custom: true,
+          source: { zoneNumbers: [], issueIds: [], aiBonusCredit: true },
+          note: "Customer's diagnosis matched the AI-quoted scope (PJL's only discount — pricing.json ai_intake_correct_diagnosis_bonus rule)."
+        };
+        nextLines = [...linesWithoutCredit, creditLine];
+      }
+
+      const updated = await workOrders.update(id, {
+        intakeGuarantee: {
+          ...wo.intakeGuarantee,
+          matched,
+          mismatchReason: matched ? "" : mismatchReason
+        },
+        onSiteQuote: {
+          ...wo.onSiteQuote,
+          builderLineItems: nextLines,
+          status: nextLines.length ? "draft" : "none"
+        }
+      });
+      try {
+        await workOrders.appendHistory(id, {
+          action: "ai_bonus_decided",
+          by: "tech",
+          note: matched
+            ? `Diagnosis matched — credited 1 hr labour ($${Math.abs(Number(hourly.price)).toFixed(2)})`
+            : `Diagnosis did not match${mismatchReason ? ` — ${mismatchReason}` : ""}. No credit applied.`
+        });
+      } catch (err) { console.warn("[wo-history] ai_bonus entry failed:", err?.message); }
+      const totals = issueRollup.recomputeTotals(nextLines);
+      return sendJson(res, 200, { ok: true, workOrder: updated, ...totals });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't record AI bonus decision."] });
+    }
+  }
+
   // ======== On-site Quote (Issues → Draft Quote rollup) ========
   // Spec §4.3.2 + Hard rules §10 r8 (fall closings never auto-quote) and
   // r4 (scope changes require fresh signature). Five routes:
@@ -5655,11 +5751,11 @@ async function handleApi(req, res, pathname) {
         ] });
       }
       // Preserve any baseline lines that were seeded at WO create
-      // (seasonal fees, manually-added charges from the desktop edit).
-      // Without this, "Generate from issues" wipes the spring opening
-      // fee every time the tech runs the rollup.
+      // (seasonal fees, manually-added charges from the desktop edit)
+      // AND any AI-bonus credit lines from the bonus decision (Brief F).
+      // Without this, "Generate from issues" wipes them every rollup.
       const existingBaseline = (wo.onSiteQuote?.builderLineItems || [])
-        .filter((l) => l && l.source && l.source.baseline === true);
+        .filter((l) => l && l.source && (l.source.baseline === true || l.source.aiBonusCredit === true));
       const result = issueRollup.rollupIssuesToLineItems(wo, PRICING);
       const merged = [...existingBaseline, ...result.lineItems];
       const totals = issueRollup.recomputeTotals(merged);
@@ -5702,6 +5798,21 @@ async function handleApi(req, res, pathname) {
       const inLines = Array.isArray(payload?.lineItems) ? payload.lineItems : null;
       if (!inLines) return sendJson(res, 422, { ok: false, errors: ["Body must include lineItems[]."] });
 
+      // AI bonus credit guard (Brief F) — when intakeGuarantee.matched
+      // is true, the credit line MUST stay on the builder. Refuse a
+      // PATCH that drops it. Tech wanting to revoke the credit goes
+      // through /intake-guarantee/decide with matched=false.
+      if (wo.intakeGuarantee?.matched === true) {
+        const incomingHasCredit = inLines.some((l) => l && l.source && l.source.aiBonusCredit === true);
+        if (!incomingHasCredit) {
+          return sendJson(res, 409, {
+            ok: false,
+            errors: ["AI Correct Diagnosis Bonus credit line cannot be removed while the bonus decision is 'matched'. Flip the decision to 'didn't match' first."],
+            error: "ai_bonus_credit_protected"
+          });
+        }
+      }
+
       // Validate each line — known pricing key OR custom: true. Custom
       // lines can carry an arbitrary price (tech is on-site quoting
       // unusual work). Known-key lines must have a key that resolves in
@@ -5729,6 +5840,18 @@ async function handleApi(req, res, pathname) {
         const overridePrice = raw.overridePrice == null
           ? null
           : (Number.isFinite(Number(raw.overridePrice)) ? Number(raw.overridePrice) : null);
+        // Preserve source flags (baseline, aiBonusCredit) — the build
+        // endpoint and the AI bonus decision endpoint rely on these to
+        // identify lines they own. Without preserving them, every
+        // builder PATCH would strip the flags and break the bonus
+        // credit guard / build's preserve list.
+        const inSource = raw.source && typeof raw.source === "object" ? raw.source : {};
+        const cleanedSource = {
+          zoneNumbers: Array.isArray(inSource.zoneNumbers) ? inSource.zoneNumbers.slice() : [],
+          issueIds: Array.isArray(inSource.issueIds) ? inSource.issueIds.slice() : []
+        };
+        if (inSource.baseline === true) cleanedSource.baseline = true;
+        if (inSource.aiBonusCredit === true) cleanedSource.aiBonusCredit = true;
         cleaned.push({
           key: custom ? null : key,
           label: typeof raw.label === "string" ? raw.label.slice(0, 200) : (cat ? cat.label : "Custom line"),
@@ -5736,10 +5859,7 @@ async function handleApi(req, res, pathname) {
           originalPrice: Math.round(originalPrice * 100) / 100,
           overridePrice,
           custom,
-          source: raw.source && typeof raw.source === "object" ? {
-            zoneNumbers: Array.isArray(raw.source.zoneNumbers) ? raw.source.zoneNumbers.slice() : [],
-            issueIds: Array.isArray(raw.source.issueIds) ? raw.source.issueIds.slice() : []
-          } : { zoneNumbers: [], issueIds: [] },
+          source: cleanedSource,
           note: typeof raw.note === "string" ? raw.note.slice(0, 500) : ""
         });
       });

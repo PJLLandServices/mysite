@@ -154,15 +154,21 @@
 
     <form class="wo-form" id="woForm" hidden>
       <!-- AI-Correct-Diagnosis Bonus banner — snapshotted from the source
-           Quote when the WO was created. Bonus is CONDITIONAL: applies only
-           if the on-site diagnosis matches the AI-quoted scope. Until the
-           tech confirms a match, the customer's first hour of repair labour
-           is held in a "pending free" state. Same banner shown in /tech mode. -->
-      <section class="wo-intake-guarantee" id="woIntakeGuarantee" hidden role="alert">
-        <p class="wo-intake-eyebrow">AI-Correct-Diagnosis Bonus — Pending Confirmation</p>
+           Quote at WO creation. Brief F: tech (or Patrick from desktop)
+           taps "Diagnosis matched" or "Didn't match" before signature.
+           On match, a -1hr labour credit auto-applies to the on-site
+           quote builder. Locked at signature (intakeGuarantee is in
+           SCOPE_PROTECTED_FIELDS). -->
+      <section class="wo-intake-guarantee" id="woIntakeGuarantee" hidden role="alert" data-decision="pending">
+        <p class="wo-intake-eyebrow" id="woIntakeEyebrow">AI-Correct-Diagnosis Bonus — Decision Required</p>
         <p class="wo-intake-scope" id="woIntakeScope">—</p>
-        <p class="wo-intake-rule">Bonus eligible for the diagnosed scope above. <strong>The customer's first hour of repair labour is temporarily disabled (pending) until the technician confirms the on-site diagnosis matches.</strong> Match confirmed → credit ONE HOUR of repair labour free on the diagnosed work. Diagnosis wrong / different problem → bill labour normally at $95/hr, no free hour. Anything beyond the diagnosed scope: parts + $95/hr, requires customer sign-off on a separate scope.</p>
+        <p class="wo-intake-rule" id="woIntakeRule">Bonus eligible for the diagnosed scope above. Confirm whether the on-site diagnosis matches before signature. Match → credit ONE HOUR of repair labour free on the on-site quote. Didn't match → no credit, labour bills at the listed rate. Anything beyond the diagnosed scope is billed normally on a separate signed line.</p>
+        <div class="wo-intake-actions" id="woIntakeActions">
+          <button type="button" class="wo-intake-btn wo-intake-btn--match" id="woIntakeMatchBtn">Diagnosis matched</button>
+          <button type="button" class="wo-intake-btn wo-intake-btn--mismatch" id="woIntakeMismatchBtn">Didn't match</button>
+        </div>
         <p class="wo-intake-source" id="woIntakeSource"></p>
+        <p class="wo-intake-decided" id="woIntakeDecided" hidden></p>
       </section>
 
       <section class="property-section wo-diagnosis-section" id="woDiagnosisSection" hidden>

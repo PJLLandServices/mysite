@@ -1662,7 +1662,18 @@ function updateSignoffSubmitState() {
   const name = (document.getElementById("techSignoffName")?.value || "").trim();
   const ack = !!document.getElementById("techSignoffAck")?.checked;
   const drawn = !!(state.signaturePad && state.signaturePad.isDirty());
-  submit.disabled = !(name && ack && drawn);
+  // Brief F — AI bonus decision must be captured before signature when
+  // the WO is bonus-eligible. Gates the submit button so the tech can't
+  // sign a WO with a pending bonus decision (the decision becomes
+  // irrevocable at signature per SCOPE_PROTECTED_FIELDS).
+  const ig = state.intakeGuarantee || {};
+  const bonusGateOk = !ig.applies || ig.matched === true || ig.matched === false;
+  submit.disabled = !(name && ack && drawn && bonusGateOk);
+  if (!bonusGateOk) {
+    submit.title = "Resolve the AI Correct Diagnosis Bonus decision before signing.";
+  } else {
+    submit.removeAttribute("title");
+  }
 }
 
 document.getElementById("techSignoffName")?.addEventListener("input", updateSignoffSubmitState);
@@ -2926,16 +2937,8 @@ async function init() {
     // PENDING (temporarily disabled) until the tech confirms the on-site
     // diagnosis matches the AI's quoted scope. Match → credit 1 hr free.
     // Mismatch → bill labour normally at $95/hr, no free hour.
-    const igBanner = document.getElementById("techIntakeGuarantee");
-    const igScope = document.getElementById("techIntakeScope");
-    const igSource = document.getElementById("techIntakeSource");
-    if (igBanner && wo.intakeGuarantee && wo.intakeGuarantee.applies === true) {
-      if (igScope) igScope.textContent = wo.intakeGuarantee.scope || "Locked scope";
-      if (igSource && wo.intakeGuarantee.sourceQuoteId) {
-        igSource.textContent = `Source: ${wo.intakeGuarantee.sourceQuoteId}`;
-      }
-      igBanner.hidden = false;
-    }
+    state.intakeGuarantee = wo.intakeGuarantee || state.intakeGuarantee;
+    renderIntakeGuarantee();
 
     // Back link prefers the lead detail (deep-link) over the desktop
     // editor — the tech is unlikely to want the desktop layout.
@@ -3377,6 +3380,102 @@ document.getElementById("techMaterialsList")?.addEventListener("change", (event)
   cb.closest("li")?.classList.toggle("is-packed", cb.checked);
   patchWorkOrder({ materialsPacked: state.materialsPacked });
 });
+
+// ---- AI Correct Diagnosis Bonus banner (Brief F / spec §4.3.3 r6) -----
+// Three states keyed off intakeGuarantee.matched:
+//   pending   — DECISION REQUIRED. Match + Mismatch buttons visible.
+//                Signature canvas is gated until the tech decides.
+//   matched   — Bonus credit applied to the on-site quote builder.
+//                "1 HOUR LABOUR CREDITED" eyebrow, no buttons.
+//   mismatch  — No credit applied. "DIAGNOSIS DIDN'T MATCH" eyebrow.
+// Locked at signature (intakeGuarantee is in SCOPE_PROTECTED_FIELDS).
+function renderIntakeGuarantee() {
+  const banner = document.getElementById("techIntakeGuarantee");
+  const eyebrow = document.getElementById("techIntakeEyebrow");
+  const scope = document.getElementById("techIntakeScope");
+  const source = document.getElementById("techIntakeSource");
+  const actions = document.getElementById("techIntakeActions");
+  const decided = document.getElementById("techIntakeDecided");
+  if (!banner) return;
+  const ig = state.intakeGuarantee || {};
+  if (!ig.applies) {
+    banner.hidden = true;
+    return;
+  }
+  banner.hidden = false;
+  if (scope) scope.textContent = ig.scope || "Locked scope";
+  if (source) {
+    source.textContent = ig.sourceQuoteId ? `Source: ${ig.sourceQuoteId}` : "";
+  }
+  const isLocked = state.locked === true || state.signature?.signed === true;
+  // Hide buttons whenever the WO is locked (decision is final post-sign)
+  // OR a decision has already been made.
+  if (ig.matched === true) {
+    banner.dataset.decision = "matched";
+    if (eyebrow) eyebrow.textContent = "AI-CORRECT-DIAGNOSIS BONUS — 1 HOUR LABOUR CREDITED";
+    if (actions) actions.hidden = true;
+    if (decided) {
+      decided.hidden = false;
+      decided.textContent = "Diagnosis matched. Credit line added to the on-site quote.";
+    }
+  } else if (ig.matched === false) {
+    banner.dataset.decision = "mismatch";
+    if (eyebrow) eyebrow.textContent = "AI-CORRECT-DIAGNOSIS BONUS — DIAGNOSIS DIDN'T MATCH";
+    if (actions) actions.hidden = true;
+    if (decided) {
+      decided.hidden = false;
+      decided.textContent = ig.mismatchReason
+        ? `No credit applied: ${ig.mismatchReason}`
+        : "No credit applied. Labour bills at the listed rate.";
+    }
+  } else {
+    banner.dataset.decision = "pending";
+    if (eyebrow) eyebrow.textContent = "AI-CORRECT-DIAGNOSIS BONUS — DECISION REQUIRED";
+    if (actions) actions.hidden = isLocked;
+    if (decided) decided.hidden = true;
+  }
+}
+
+document.getElementById("techIntakeMatchBtn")?.addEventListener("click", async () => {
+  if (state.locked) return;
+  if (!confirm("Confirm: the on-site diagnosis matches the AI-quoted scope. This credits 1 hour of repair labour to the customer.")) return;
+  await postIntakeDecision({ matched: true });
+});
+document.getElementById("techIntakeMismatchBtn")?.addEventListener("click", async () => {
+  if (state.locked) return;
+  const reason = prompt("Optional: brief note on why the diagnosis didn't match (e.g. 'AI quoted leak; actual issue was valve'). Leave blank if none.", "");
+  if (reason === null) return; // user cancelled
+  await postIntakeDecision({ matched: false, mismatchReason: reason || "" });
+});
+
+async function postIntakeDecision(body) {
+  const matchBtn = document.getElementById("techIntakeMatchBtn");
+  const mismBtn = document.getElementById("techIntakeMismatchBtn");
+  if (matchBtn) matchBtn.disabled = true;
+  if (mismBtn) mismBtn.disabled = true;
+  try {
+    const r = await fetch(`/api/work-orders/${encodeURIComponent(state.id)}/intake-guarantee/decide`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok || !data.ok) throw new Error((data.errors && data.errors[0]) || "Couldn't record decision.");
+    if (data.workOrder) {
+      state.intakeGuarantee = data.workOrder.intakeGuarantee || state.intakeGuarantee;
+      state.onSiteQuote = data.workOrder.onSiteQuote || state.onSiteQuote;
+    }
+    renderIntakeGuarantee();
+    renderOnSiteQuote();
+    // Signature canvas was gated on this decision — refresh its state.
+    if (typeof updateSignoffSubmitState === "function") updateSignoffSubmitState();
+  } catch (err) {
+    alert(err.message || "Couldn't record decision.");
+  } finally {
+    if (matchBtn) matchBtn.disabled = false;
+    if (mismBtn) mismBtn.disabled = false;
+  }
+}
 
 // ---- Property updates preview (Brief D / spec §10 r3 + §4.3.2) ---------
 // Renders the previously-empty techPropertyUpdatesSection. Lists what

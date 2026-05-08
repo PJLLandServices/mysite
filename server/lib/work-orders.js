@@ -189,7 +189,18 @@ function blankWorkOrder() {
     intakeGuarantee: {
       applies: false,
       scope: "",
-      sourceQuoteId: null
+      sourceQuoteId: null,
+      // Tech's on-site decision (Brief F / spec §4.3.3 r6 + pricing.json
+      // ai_intake_correct_diagnosis_bonus). Captured via the cheat-sheet
+      // card BEFORE customer signature.
+      //   null  — undecided (default; signature canvas is gated on this)
+      //   true  — diagnosis matched → 1 hour repair labour credited as
+      //           a -1 × hourly_labour line on the on-site quote builder
+      //   false — diagnosis didn't match → no credit, labour bills normally
+      // Locked once the WO is signed (intakeGuarantee is in
+      // SCOPE_PROTECTED_FIELDS — Brief A).
+      matched: null,
+      mismatchReason: ""
     },
     // Service-specific checklist — keyed by step key from
     // SERVICE_CHECKLISTS[wo.type]. Stored as a flat {stepKey: bool} map

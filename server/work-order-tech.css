@@ -82,6 +82,72 @@ html, body {
 .tech-intake-source:empty {
   display: none;
 }
+/* Decision buttons (Brief F) — Match / Mismatch. Match is brand green
+   to make the affirmative tap distinct; Mismatch is muted so the tech
+   doesn't accidentally tap "Didn't match" when they meant "matched". */
+.tech-intake-actions {
+  display: flex;
+  gap: 8px;
+  margin: 10px 0 4px;
+  flex-wrap: wrap;
+}
+.tech-intake-btn {
+  flex: 1;
+  min-width: 140px;
+  padding: 10px 14px;
+  font-size: 14px;
+  font-weight: 600;
+  border-radius: 8px;
+  cursor: pointer;
+  border: 1px solid transparent;
+  font-family: inherit;
+}
+.tech-intake-btn--match {
+  background: #1B4D2E;
+  color: #fff;
+  border-color: #1B4D2E;
+}
+.tech-intake-btn--match:hover { background: #15402a; }
+.tech-intake-btn--mismatch {
+  background: #fff;
+  color: var(--tech-text-mid);
+  border-color: rgba(224, 123, 36, 0.32);
+}
+.tech-intake-btn--mismatch:hover {
+  background: rgba(224, 123, 36, 0.06);
+  border-color: var(--tech-amber);
+}
+.tech-intake-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.tech-intake-decided {
+  margin: 8px 0 0;
+  padding: 8px 12px;
+  background: #fff;
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--tech-text-mid);
+  line-height: 1.4;
+}
+.tech-intake-guarantee[data-decision="matched"] {
+  background: rgba(27, 77, 46, 0.08);
+  border-color: rgba(27, 77, 46, 0.30);
+  border-left-color: #1B4D2E;
+  box-shadow: 0 4px 14px rgba(27, 77, 46, 0.10);
+}
+.tech-intake-guarantee[data-decision="matched"] .tech-intake-eyebrow {
+  color: #1B4D2E;
+}
+.tech-intake-guarantee[data-decision="mismatch"] {
+  background: #FAFAF5;
+  border-color: rgba(0, 0, 0, 0.10);
+  border-left-color: #888;
+  box-shadow: none;
+}
+.tech-intake-guarantee[data-decision="mismatch"] .tech-intake-eyebrow {
+  color: #888;
+}
 .tech-body {
   font-family: "DM Sans", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
   font-size: 16px;
