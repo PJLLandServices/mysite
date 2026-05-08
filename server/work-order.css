@@ -1548,6 +1548,58 @@ body[data-locked="true"] .wo-zone-location {
   line-height: 1.45;
 }
 
+/* Post-signature narrative banner (Brief E) — desktop mirror of the
+   tech-mode banner. Three states keyed off data-state. The completion
+   button only appears when state="ready". */
+.wo-postsig-banner {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin: 24px 0;
+  padding: 16px 18px;
+  border-radius: 12px;
+  border: 1px solid transparent;
+}
+.wo-postsig-banner[data-state="pending_photos"] {
+  background: #FFF8E6;
+  border-color: #E6D17B;
+  color: #6A4A00;
+}
+.wo-postsig-banner[data-state="ready"] {
+  background: rgba(27, 77, 46, 0.08);
+  border-color: rgba(27, 77, 46, 0.30);
+  color: #1B4D2E;
+}
+.wo-postsig-banner[data-state="completed"] {
+  background: #1B4D2E;
+  border-color: #1B4D2E;
+  color: #fff;
+}
+.wo-postsig-icon {
+  font-size: 24px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+.wo-postsig-body { flex: 1; }
+.wo-postsig-headline {
+  margin: 0 0 4px;
+  font-family: "Barlow Condensed", sans-serif;
+  font-weight: 600;
+  font-size: 18px;
+  line-height: 1.2;
+}
+.wo-postsig-detail {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.4;
+  opacity: 0.95;
+}
+.wo-postsig-complete-btn {
+  flex-shrink: 0;
+  padding: 10px 18px;
+  font-size: 14px;
+}
+
 /* History viewer — append-only audit trail. Collapsed by default
    (history can grow long over a WO's lifetime); summary header shows
    entry count so Patrick can scan without expanding. */

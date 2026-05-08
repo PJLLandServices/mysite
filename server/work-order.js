@@ -608,6 +608,8 @@ woZones.addEventListener("click", async (event) => {
       // Refresh all photo surfaces — both WO-level strip and any
       // matching issue photo strip.
       renderWoPhotos(wo);
+      // Photo gate may have flipped — refresh post-sig banner.
+      renderPostSigBanner(wo);
       const issuePhotos = thumb.closest("[data-issue-photos]");
       if (issuePhotos) {
         const issueId = issuePhotos.dataset.issuePhotos;
@@ -674,6 +676,7 @@ woZones.addEventListener("change", async (event) => {
       if (wo) {
         loadedWorkOrder = wo;
         renderWoPhotos(wo);
+        renderPostSigBanner(wo);
         const host = row.querySelector(`[data-issue-photos="${CSS.escape(issueId)}"]`);
         if (host) renderIssuePhotosInline(host, issueId);
       }
@@ -887,9 +890,121 @@ function populateForm(wo) {
   renderSignoff(wo);
   renderPaidOnSite(wo);
   renderOnSiteQuote(wo);
+  renderPostSigBanner(wo);
   renderHistory(wo);
   applyLockState(wo.locked === true, wo.signature);
 }
+
+// Mirror of lib's PHOTO_REQUIREMENT_BY_TYPE — keep in sync.
+const WO_PHOTO_REQUIREMENT_BY_TYPE = {
+  spring_opening: 1,
+  service_visit:  1,
+  fall_closing:   0
+};
+
+// Post-signature narrative banner (Brief E) — desktop mirror of tech
+// mode's banner. Surfaces the photo gate + Mark Complete CTA so Patrick
+// isn't stranded between "signature captured" and "visit completed."
+// Three states: pending_photos / ready / completed. Hidden when not
+// applicable (pre-signature, cancelled, etc).
+function renderPostSigBanner(wo) {
+  const banner = document.getElementById("woPostSigBanner");
+  const icon = document.getElementById("woPostSigIcon");
+  const headline = document.getElementById("woPostSigHeadline");
+  const detail = document.getElementById("woPostSigDetail");
+  const completeBtn = document.getElementById("woPostSigCompleteBtn");
+  if (!banner || !headline || !detail) return;
+  const signed = wo.locked === true || wo.signature?.signed === true;
+  const completed = wo.status === "completed";
+
+  if (completedInvoiceForBanner) {
+    banner.hidden = false;
+    banner.dataset.state = "completed";
+    if (icon) icon.textContent = "✓";
+    headline.textContent = "Visit completed.";
+    detail.textContent = `Cascade fired. Draft invoice ${completedInvoiceForBanner} on file.`;
+    if (completeBtn) completeBtn.hidden = true;
+    return;
+  }
+  if (completed) {
+    banner.hidden = false;
+    banner.dataset.state = "completed";
+    if (icon) icon.textContent = "✓";
+    headline.textContent = "Visit completed.";
+    detail.textContent = "Service record + draft invoice created.";
+    if (completeBtn) completeBtn.hidden = true;
+    return;
+  }
+  if (!signed) {
+    banner.hidden = true;
+    if (completeBtn) completeBtn.hidden = true;
+    return;
+  }
+
+  const minPhotos = WO_PHOTO_REQUIREMENT_BY_TYPE[wo.type] ?? 1;
+  const photoCount = Array.isArray(wo.photos) ? wo.photos.length : 0;
+  const gateMet = minPhotos === 0 || photoCount >= minPhotos;
+
+  banner.hidden = false;
+  if (gateMet) {
+    banner.dataset.state = "ready";
+    if (icon) icon.textContent = "→";
+    headline.textContent = "Scope confirmed. Ready to mark complete.";
+    detail.textContent = "Mark Complete fires the completion cascade and drafts the invoice.";
+    if (completeBtn) completeBtn.hidden = false;
+  } else {
+    banner.dataset.state = "pending_photos";
+    if (icon) icon.textContent = "📷";
+    headline.textContent = "Scope confirmed.";
+    detail.textContent = `Capture ${minPhotos === 1 ? "at least one completion photo" : `${minPhotos}+ completion photos`} before marking complete.`;
+    if (completeBtn) completeBtn.hidden = true;
+  }
+}
+
+// Tracks the freshly-created invoice ID after Mark Complete fires the
+// cascade — we look it up via /api/invoices?woId=<id> after a short delay.
+let completedInvoiceForBanner = null;
+
+document.getElementById("woPostSigCompleteBtn")?.addEventListener("click", async () => {
+  if (!loadedWorkOrder) return;
+  const id = getWorkOrderId();
+  if (!id) return;
+  if (loadedWorkOrder.status === "completed") return;
+  if (!confirm("Mark this visit completed? Fires the cascade — service record + draft invoice + customer email.")) return;
+  const btn = document.getElementById("woPostSigCompleteBtn");
+  if (btn) { btn.disabled = true; btn.textContent = "Marking complete…"; }
+  try {
+    const r = await fetch(`/api/work-orders/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status: "completed" })
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok || !data.ok) throw new Error((data.errors || ["Couldn't mark complete."]).join(" "));
+    if (data.workOrder) {
+      loadedWorkOrder = data.workOrder;
+      // Status dropdown + cascade visuals refresh from the new state.
+      if (woStatus) woStatus.value = data.workOrder.status;
+      renderPostSigBanner(data.workOrder);
+    }
+    // Look up the freshly-drafted invoice so the banner can surface its
+    // ID. The cascade fires async on the server; give it a moment.
+    setTimeout(async () => {
+      try {
+        const ir = await fetch(`/api/invoices?woId=${encodeURIComponent(id)}`);
+        const idata = await ir.json().catch(() => ({}));
+        const inv = idata && idata.ok && Array.isArray(idata.invoices) ? idata.invoices[0] : null;
+        if (inv && inv.id) {
+          completedInvoiceForBanner = inv.id;
+          if (loadedWorkOrder) renderPostSigBanner(loadedWorkOrder);
+        }
+      } catch (_e) {}
+    }, 1500);
+  } catch (err) {
+    alert(err.message || "Couldn't mark complete.");
+    if (btn) { btn.disabled = false; btn.textContent = "Mark visit completed"; }
+  }
+});
 
 // ---- On-site Quote (Brief B — desktop parity) ------------------------
 // Mirror of tech mode's quote builder, adapted for desktop layout. Same
@@ -1573,6 +1688,8 @@ document.getElementById("woPhotoInput")?.addEventListener("change", async (event
     if (wo) {
       loadedWorkOrder = wo;
       renderWoPhotos(wo);
+      // Photo gate may have flipped — refresh post-sig banner.
+      renderPostSigBanner(wo);
     }
   } catch (err) {
     alert(err.message || "Couldn't upload photo.");

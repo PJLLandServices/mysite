@@ -2553,6 +2553,53 @@ body[data-locked="true"] .tech-finish-bar { opacity: 0.55; pointer-events: none;
 .tech-offline-icon { font-size: 16px; }
 .tech-offline-text { flex: 1; line-height: 1.4; }
 
+/* Post-signature narrative banner (Brief E) — guides the tech through
+   the gap between "customer signed" and "visit completed." Three visual
+   states keyed off data-state. */
+.tech-postsig-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin: 16px;
+  padding: 14px 16px;
+  border-radius: 12px;
+  border: 1px solid transparent;
+}
+.tech-postsig-banner[data-state="pending_photos"] {
+  background: #FFF8E6;
+  border-color: #E6D17B;
+  color: #6A4A00;
+}
+.tech-postsig-banner[data-state="ready"] {
+  background: rgba(27, 77, 46, 0.08);
+  border-color: rgba(27, 77, 46, 0.30);
+  color: #1B4D2E;
+}
+.tech-postsig-banner[data-state="completed"] {
+  background: #1B4D2E;
+  border-color: #1B4D2E;
+  color: #fff;
+}
+.tech-postsig-icon {
+  font-size: 22px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+.tech-postsig-body { flex: 1; }
+.tech-postsig-headline {
+  margin: 0 0 4px;
+  font-family: "Barlow Condensed", sans-serif;
+  font-weight: 600;
+  font-size: 17px;
+  line-height: 1.2;
+}
+.tech-postsig-detail {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.4;
+  opacity: 0.95;
+}
+
 /* History viewer (spec §10 r4) — append-only audit trail. Collapsed by
    default since history grows long; the count badge gives the tech a
    scannable signal. Tap to expand. Read-only. */

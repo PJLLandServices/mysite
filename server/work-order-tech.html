@@ -439,6 +439,26 @@
       </details>
     </section>
 
+    <!-- Post-signature narrative banner (Brief E) — guides the tech
+         through the gap between "customer signed" and "visit completed."
+         Without this, post-signature UX strands the tech (line items
+         locked, but no obvious next step). Three states:
+           pending_photos  → "Scope confirmed. Capture completion photos
+                              before marking complete." (find_and_fix /
+                              fix_only with photoCount < 1)
+           ready_to_complete → "Ready to mark complete." (signed + photo
+                                threshold met; find_only with no photos)
+           completed       → "Completed at HH:MM. Invoice {id} drafted."
+                              (post-cascade; surfaces the invoice link)
+         Hidden when WO is unsigned or in a state that doesn't apply. -->
+    <section class="tech-postsig-banner" id="techPostSigBanner" hidden role="status">
+      <span class="tech-postsig-icon" id="techPostSigIcon" aria-hidden="true">📝</span>
+      <div class="tech-postsig-body">
+        <p class="tech-postsig-headline" id="techPostSigHeadline">Scope confirmed.</p>
+        <p class="tech-postsig-detail" id="techPostSigDetail">Capture completion photos before marking complete.</p>
+      </div>
+    </section>
+
     <p class="tech-meta" id="techMeta">—</p>
 
     <!-- Sticky finish-the-visit bar — sits at the bottom so the tech's

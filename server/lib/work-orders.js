@@ -82,6 +82,18 @@ const ZONE_ISSUE_TYPES = ["broken_head", "leak", "valve", "wire", "pipe", "contr
 // drives where the photo renders in the tech UI.
 const WO_PHOTO_CATEGORIES = ["pre_work", "in_progress", "post_work", "issue", "general"];
 
+// Completion-photo gate per service mode (Brief E / spec §4.3.2 §4.3.3 r14).
+// Walk-out checklist refuses to mark a WO `completed` until at least one
+// photo has been captured for these types — winterized fall-closings
+// often have no visible "completed" state to photograph (snow on the
+// blow-out point, controller already off), so the gate stays optional
+// there. Threshold is the minimum photo count.
+const PHOTO_REQUIREMENT_BY_TYPE = {
+  spring_opening: 1,    // find_and_fix — proof of zone health post-opening
+  service_visit:  1,    // find_and_fix / fix_only — proof of repair
+  fall_closing:   0     // find_only — optional
+};
+
 // Service-specific checklists per spec §4.3.2. Spring openings get a
 // 4-step "service-specific steps" block; fall closings get a 6-step
 // winterization block. Service visits (one-off repairs) have no
@@ -685,6 +697,7 @@ module.exports = {
   ZONE_ISSUE_TYPES,
   SERVICE_CHECKLISTS,
   WO_PHOTO_CATEGORIES,
+  PHOTO_REQUIREMENT_BY_TYPE,
   SCOPE_PROTECTED_FIELDS,
   templateForServiceKey,
   canBuildOnSiteQuote,

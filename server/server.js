@@ -4256,8 +4256,10 @@ async function handleApi(req, res, pathname) {
   if (req.method === "GET" && pathname === "/api/invoices") {
     const url = new URL(req.url, baseUrlFromReq(req));
     const status = url.searchParams.get("status");
+    const woId = url.searchParams.get("woId");
     let all = await invoices.list();
     if (status) all = all.filter((i) => i.status === status);
+    if (woId) all = all.filter((i) => i.woId === woId);
     all.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
     return sendJson(res, 200, { ok: true, invoices: all });
   }

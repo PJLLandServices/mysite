@@ -551,8 +551,37 @@ document.addEventListener("click", (event) => {
   state.status = next;
   renderRunStatus();
   renderExecutionTimestamps();
+  renderPostSigBanner();
   patchWorkOrder(patch);
+
+  // Post-completion: cascade fires fire-and-forget on the server. After
+  // a short delay, look up the draft invoice we just created and surface
+  // its ID in the banner so the tech sees the immediate result. Skip on
+  // any other status flip.
+  if (next === "completed" && state.id) {
+    setTimeout(async () => {
+      try {
+        const r = await fetch(`/api/invoices?woId=${encodeURIComponent(state.id)}`);
+        const data = await r.json().catch(() => ({}));
+        const inv = data && data.ok && Array.isArray(data.invoices) ? data.invoices[0] : null;
+        if (inv && inv.id) {
+          state.completedInvoiceId = inv.id;
+          renderPostSigBanner();
+        }
+      } catch (_e) {}
+    }, 1500);
+  }
 });
+
+// Mirror of lib's PHOTO_REQUIREMENT_BY_TYPE (Brief E / spec §4.3.2).
+// Keep in sync with server/lib/work-orders.js — if the threshold per
+// type changes, update both. Fall closings stay optional because
+// winterized systems often have nothing visible to photograph.
+const TECH_PHOTO_REQUIREMENT_BY_TYPE = {
+  spring_opening: 1,
+  service_visit:  1,
+  fall_closing:   0
+};
 
 // Walk-out checklist — returns an array of human-readable failure reasons.
 // Empty = green light to complete. Spec §4.3.3 rule #14.
@@ -579,6 +608,15 @@ function walkoutCheckFailures() {
     const openCfCards = document.querySelectorAll('#techCarryForwardList [data-deferred-id]');
     if (openCfCards.length) {
       fails.push(`${openCfCards.length} carry-forward recommendation${openCfCards.length === 1 ? "" : "s"} still need an action (Repair / Decline / Already fixed / Can't locate).`);
+    }
+  }
+  // Completion photo gate (Brief E). find_only (fall_closing) = 0 (optional);
+  // find_and_fix / fix_only = 1+ photo required as proof of work.
+  const minPhotos = TECH_PHOTO_REQUIREMENT_BY_TYPE[state.type] ?? 1;
+  if (minPhotos > 0) {
+    const photoCount = Array.isArray(state.photos) ? state.photos.length : 0;
+    if (photoCount < minPhotos) {
+      fails.push(`Capture ${minPhotos === 1 ? "at least one completion photo" : `at least ${minPhotos} completion photos`} before marking complete.`);
     }
   }
   return fails;
@@ -844,6 +882,8 @@ function renderIssuePhotos(host, issueId, zone) {
         // Also refresh the WO-level strip in case user uploaded more
         // photos before navigating away.
         renderWoPhotos();
+        // Photo gate may have just flipped — refresh the post-sig banner.
+        renderPostSigBanner();
       }
     } catch (err) {
       alert(err.message || "Couldn't upload photo.");
@@ -1456,6 +1496,9 @@ function renderPhotoThumb(photo) {
         if (state.activeZoneIndex >= 0) {
           renderSheetIssues(state.zones[state.activeZoneIndex]);
         }
+        // Deleting a completion photo could push the WO back below the
+        // gate threshold — refresh the banner.
+        renderPostSigBanner();
       } catch (err) { alert(err.message); }
     });
     wrap.appendChild(remove);
@@ -1477,6 +1520,8 @@ document.getElementById("techWoPhotoInput")?.addEventListener("change", async (e
     if (wo) {
       state.photos = wo.photos || [];
       renderWoPhotos();
+      // Photo gate may have just flipped — refresh the post-sig banner.
+      renderPostSigBanner();
     }
   } catch (err) {
     alert(err.message || "Couldn't upload photo.");
@@ -1652,6 +1697,7 @@ document.getElementById("techSignoffSubmit")?.addEventListener("click", async ()
     state.signature = data.workOrder.signature || state.signature;
     state.locked = data.workOrder.locked === true;
     renderSignoff();
+    renderPostSigBanner();
     applyLockState(state.locked);
   } catch (err) {
     submit.disabled = false;
@@ -2904,6 +2950,13 @@ async function init() {
     renderRunStatus();
     renderZones();
 
+    // Post-signature banner (Brief E) — narrates the gap between
+    // "customer signed" and "visit completed" so the tech isn't stranded
+    // with locked line items and no obvious next step. Re-renders on
+    // signature capture / photo upload / status change.
+    state.completedInvoiceId = null;
+    renderPostSigBanner();
+
     // History viewer — append-only audit trail. Hydrated from the WO
     // record on load; doesn't update mid-session (refresh to see
     // freshly-appended entries). Spec §10 r4.
@@ -3318,6 +3371,58 @@ document.getElementById("techMaterialsList")?.addEventListener("change", (event)
   cb.closest("li")?.classList.toggle("is-packed", cb.checked);
   patchWorkOrder({ materialsPacked: state.materialsPacked });
 });
+
+// ---- Post-signature narrative banner (Brief E / spec §4.3.2) ----------
+// Three states:
+//   pending_photos    — signed, photo gate not met, status not completed
+//   ready_to_complete — signed, photo gate met, status not completed
+//   completed         — status === completed (cascade fired or about to)
+// Hidden otherwise. Updates whenever signature / photos / status change.
+function renderPostSigBanner() {
+  const banner = document.getElementById("techPostSigBanner");
+  const icon = document.getElementById("techPostSigIcon");
+  const headline = document.getElementById("techPostSigHeadline");
+  const detail = document.getElementById("techPostSigDetail");
+  if (!banner || !headline || !detail) return;
+  const signed = !!state.signature?.signed;
+  const completed = state.status === "completed";
+
+  if (completed) {
+    banner.hidden = false;
+    banner.dataset.state = "completed";
+    if (icon) icon.textContent = "✓";
+    headline.textContent = "Visit completed.";
+    detail.textContent = state.completedInvoiceId
+      ? `Cascade fired. Draft invoice ${state.completedInvoiceId} on file.`
+      : "Service record + draft invoice created.";
+    return;
+  }
+
+  if (!signed) {
+    // Pre-signature — banner stays hidden. Sticky finish bar has its
+    // own labels for the early-stage flow.
+    banner.hidden = true;
+    return;
+  }
+
+  // Signed but not completed: photo gate decides which copy.
+  const minPhotos = TECH_PHOTO_REQUIREMENT_BY_TYPE[state.type] ?? 1;
+  const photoCount = Array.isArray(state.photos) ? state.photos.length : 0;
+  const gateMet = minPhotos === 0 || photoCount >= minPhotos;
+
+  banner.hidden = false;
+  if (gateMet) {
+    banner.dataset.state = "ready";
+    if (icon) icon.textContent = "→";
+    headline.textContent = "Scope confirmed. Ready to mark complete.";
+    detail.textContent = "Tap “Mark visit completed” at the bottom — that fires the completion cascade and drafts the invoice.";
+  } else {
+    banner.dataset.state = "pending_photos";
+    if (icon) icon.textContent = "📷";
+    headline.textContent = "Scope confirmed.";
+    detail.textContent = `Capture ${minPhotos === 1 ? "at least one completion photo" : `${minPhotos}+ completion photos`} before marking complete.`;
+  }
+}
 
 // ---- Payment & billing block (spec §4.3.2) ----------------------------
 function renderPaymentBlock() {

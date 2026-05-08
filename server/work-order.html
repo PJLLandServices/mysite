@@ -338,6 +338,20 @@
         </details>
       </section>
 
+      <!-- Post-signature narrative banner (Brief E) — mirrors tech mode.
+           Guides Patrick through the gap between "customer signed" and
+           "visit completed" so the desktop editor doesn't strand him
+           with locked line items and no obvious next step. Same three
+           states as tech mode: pending_photos / ready / completed. -->
+      <section class="wo-postsig-banner" id="woPostSigBanner" hidden role="status">
+        <span class="wo-postsig-icon" id="woPostSigIcon" aria-hidden="true">📝</span>
+        <div class="wo-postsig-body">
+          <p class="wo-postsig-headline" id="woPostSigHeadline">Scope confirmed.</p>
+          <p class="wo-postsig-detail" id="woPostSigDetail">Capture completion photos before marking complete.</p>
+        </div>
+        <button type="button" class="pjl-btn pjl-btn-primary wo-postsig-complete-btn" id="woPostSigCompleteBtn" hidden>Mark visit completed</button>
+      </section>
+
       <!-- Payment captured on-site? Mirrors the tech-mode radio. The
            cascade reads this at fire time to set the draft invoice's
            paidOnSiteAtCompletion flag and reshape the customer email
