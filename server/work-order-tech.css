@@ -2553,6 +2553,89 @@ body[data-locked="true"] .tech-finish-bar { opacity: 0.55; pointer-events: none;
 .tech-offline-icon { font-size: 16px; }
 .tech-offline-text { flex: 1; line-height: 1.4; }
 
+/* Property-updates preview (Brief D / spec §10 r3 + §4.3.2). Lists
+   what will flow back to the property record when the tech marks the
+   visit completed. Per-zone field diffs (before → after) plus any
+   newly-discovered zones flagged for Patrick's review. */
+.tech-property-updates {
+  margin: 16px;
+  padding: 14px 16px;
+  background: #FAFAF5;
+  border: 1px solid #E5E5DD;
+  border-radius: 12px;
+}
+.tech-property-updates .tech-section-title {
+  margin: 0 0 4px;
+}
+.tech-property-updates-list {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+}
+.tech-property-updates-row {
+  padding: 10px 12px;
+  margin: 8px 0;
+  background: #fff;
+  border: 1px solid #EEE;
+  border-radius: 8px;
+  font-size: 13px;
+}
+.tech-property-updates-row--new {
+  border-color: #E6D17B;
+  background: #FFF8E6;
+}
+.tech-property-updates-zone {
+  font-weight: 600;
+  color: #1B4D2E;
+  margin-bottom: 6px;
+}
+.tech-property-updates-new-pill {
+  display: inline-block;
+  padding: 1px 6px;
+  margin-right: 6px;
+  background: #E07B24;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  border-radius: 4px;
+  vertical-align: 1px;
+}
+.tech-property-updates-field {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: baseline;
+  padding: 3px 0;
+}
+.tech-property-updates-field-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #888;
+  min-width: 95px;
+}
+.tech-property-updates-diff {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: 13px;
+}
+.tech-property-updates-before {
+  color: #888;
+  text-decoration: line-through;
+}
+.tech-property-updates-after {
+  color: #1B4D2E;
+  font-weight: 600;
+}
+.tech-property-updates-flag {
+  font-size: 12px;
+  color: #6A4A00;
+  font-style: italic;
+}
+
 /* Post-signature narrative banner (Brief E) — guides the tech through
    the gap between "customer signed" and "visit completed." Three visual
    states keyed off data-state. */

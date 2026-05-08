@@ -2950,6 +2950,12 @@ async function init() {
     renderRunStatus();
     renderZones();
 
+    // Property updates preview (Brief D / spec §10 r3 + §4.3.2) — the
+    // server's GET decorator computes what would flow back to the
+    // property record when the cascade fires. Hidden when the WO has
+    // no diffs (or has already been applied via propertyEditsAppliedAt).
+    renderPropertyUpdates(data.propertyEdits);
+
     // Post-signature banner (Brief E) — narrates the gap between
     // "customer signed" and "visit completed" so the tech isn't stranded
     // with locked line items and no obvious next step. Re-renders on
@@ -3371,6 +3377,67 @@ document.getElementById("techMaterialsList")?.addEventListener("change", (event)
   cb.closest("li")?.classList.toggle("is-packed", cb.checked);
   patchWorkOrder({ materialsPacked: state.materialsPacked });
 });
+
+// ---- Property updates preview (Brief D / spec §10 r3 + §4.3.2) ---------
+// Renders the previously-empty techPropertyUpdatesSection. Lists what
+// will flow back to the property record on completion: per-zone field
+// diffs and any newly-discovered zones. Read-only preview; the cascade
+// applies it when the tech marks complete.
+const PROPERTY_FIELD_LABELS = {
+  location: "Description",
+  notes: "Notes",
+  sprinklerTypes: "Sprinkler types",
+  coverage: "Coverage"
+};
+function renderPropertyUpdates(propertyEdits) {
+  const section = document.getElementById("techPropertyUpdatesSection");
+  const list = document.getElementById("techPropertyUpdatesList");
+  if (!section || !list) return;
+  const edits = propertyEdits && typeof propertyEdits === "object" ? propertyEdits : null;
+  if (!edits || !edits.hasChanges) {
+    section.hidden = true;
+    list.innerHTML = "";
+    return;
+  }
+  section.hidden = false;
+  list.innerHTML = "";
+  const fmtVal = (v) => {
+    if (Array.isArray(v)) return v.length ? v.join(", ") : "—";
+    if (typeof v === "string") return v.trim() || "—";
+    return String(v ?? "—");
+  };
+  for (const ze of edits.zoneEdits || []) {
+    const li = document.createElement("li");
+    li.className = "tech-property-updates-row";
+    const fieldsHtml = (ze.fields || []).map((f) =>
+      `<div class="tech-property-updates-field">
+         <span class="tech-property-updates-field-label">${escapeHtml(PROPERTY_FIELD_LABELS[f.field] || f.field)}</span>
+         <span class="tech-property-updates-diff"><span class="tech-property-updates-before">${escapeHtml(fmtVal(f.before))}</span><span aria-hidden="true">→</span><span class="tech-property-updates-after">${escapeHtml(fmtVal(f.after))}</span></span>
+       </div>`
+    ).join("");
+    li.innerHTML = `
+      <div class="tech-property-updates-zone">Zone ${escapeHtml(String(ze.number))} — ${escapeHtml(ze.label || "")}</div>
+      ${fieldsHtml}
+    `;
+    list.appendChild(li);
+  }
+  for (const nz of edits.newZones || []) {
+    const li = document.createElement("li");
+    li.className = "tech-property-updates-row tech-property-updates-row--new";
+    const desc = [];
+    if (nz.location) desc.push(escapeHtml(nz.location));
+    if (Array.isArray(nz.sprinklerTypes) && nz.sprinklerTypes.length) desc.push(`sprinkler: ${escapeHtml(nz.sprinklerTypes.join(", "))}`);
+    if (Array.isArray(nz.coverage) && nz.coverage.length) desc.push(`coverage: ${escapeHtml(nz.coverage.join(", "))}`);
+    li.innerHTML = `
+      <div class="tech-property-updates-zone">
+        <span class="tech-property-updates-new-pill">NEW</span>
+        Zone ${escapeHtml(String(nz.number))}${desc.length ? ` — ${desc.join(" · ")}` : ""}
+      </div>
+      <div class="tech-property-updates-flag">Flagged for Patrick to review on the property page.</div>
+    `;
+    list.appendChild(li);
+  }
+}
 
 // ---- Post-signature narrative banner (Brief E / spec §4.3.2) ----------
 // Three states:

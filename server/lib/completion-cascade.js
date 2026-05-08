@@ -83,6 +83,86 @@ function systemUpdatesFromWo(wo) {
   return zones.length ? { zones } : {};
 }
 
+// ---- Property-edits diff (Brief D / spec §10 r3) ----------------------
+// Pure function: given the WO's current zone snapshot and the linked
+// property's current state, compute what would flow back on completion.
+// Used by:
+//   - GET /api/work-orders/:id — decorator surfaces this on the WO
+//     payload so the tech UI can render a "Will save to property record
+//     on completion" preview before signing.
+//   - cascade.run() — applies the same diff at completion time, sets
+//     propertyEditsAppliedAt for idempotency.
+//
+// Diff shape: { zoneEdits: [...], newZones: [...], hasChanges: bool }.
+// Each zoneEdit: { number, fields: [{ field, before, after }] }.
+// newZones: zones present on the WO but missing from the property —
+// these get pendingReview: true so Patrick confirms before they merge
+// fully (spec §4.3.2: "new zones discovered (flagged for Patrick review)").
+function computePropertyEdits(wo, property) {
+  const result = { zoneEdits: [], newZones: [], hasChanges: false };
+  if (!wo || !property) return result;
+  const woZones = Array.isArray(wo.zones) ? wo.zones : [];
+  const propZones = Array.isArray(property?.system?.zones) ? property.system.zones : [];
+  const propByNum = new Map(propZones.map((z) => [Number(z.number), z]));
+
+  for (const wz of woZones) {
+    const num = Number(wz.number);
+    if (!Number.isFinite(num) || num <= 0) continue;
+    const pz = propByNum.get(num);
+    if (!pz) {
+      // Zone exists on WO but not on property — "new zone discovered."
+      // The new-zone shape mirrors what a property zone looks like so
+      // applySystemUpdates can ingest it directly.
+      const newZone = {
+        number: num,
+        label: wz.location || "",
+        location: wz.location || "",
+        sprinklerTypes: Array.isArray(wz.sprinklerTypes) ? wz.sprinklerTypes.slice() : [],
+        coverage: Array.isArray(wz.coverage) ? wz.coverage.slice() : [],
+        notes: wz.notes || ""
+      };
+      // Skip the auto-scaffolded "General service area" placeholder that
+      // service_visit WOs always carry — that's not a real zone discovery.
+      const isPlaceholder = num === 1 && (newZone.location === "General service area" || newZone.location === "Zone 1") && !newZone.notes && !newZone.sprinklerTypes.length && !newZone.coverage.length;
+      if (!isPlaceholder) {
+        result.newZones.push(newZone);
+        result.hasChanges = true;
+      }
+      continue;
+    }
+    // Existing zone — compute per-field diffs. Only fields the tech can
+    // edit (location/sprinkler/coverage/notes). Empty WO values do NOT
+    // count as "edits" — the tech walked the zone and didn't touch the
+    // descriptor; that's not a delete intent.
+    const fields = [];
+    const woLoc = (wz.location || "").trim();
+    const pzLoc = (pz.location || pz.label || "").trim();
+    if (woLoc && woLoc !== pzLoc) {
+      fields.push({ field: "location", before: pzLoc, after: woLoc });
+    }
+    const woNotes = (wz.notes || "").trim();
+    const pzNotes = (pz.notes || "").trim();
+    if (woNotes && woNotes !== pzNotes) {
+      fields.push({ field: "notes", before: pzNotes, after: woNotes });
+    }
+    const woSprinkler = Array.isArray(wz.sprinklerTypes) ? wz.sprinklerTypes.slice().sort() : [];
+    const pzSprinkler = Array.isArray(pz.sprinklerTypes) ? pz.sprinklerTypes.slice().sort() : [];
+    if (woSprinkler.length && woSprinkler.join(",") !== pzSprinkler.join(",")) {
+      fields.push({ field: "sprinklerTypes", before: pzSprinkler, after: woSprinkler });
+    }
+    const woCoverage = Array.isArray(wz.coverage) ? wz.coverage.slice().sort() : [];
+    const pzCoverage = Array.isArray(pz.coverage) ? pz.coverage.slice().sort() : [];
+    if (woCoverage.length && woCoverage.join(",") !== pzCoverage.join(",")) {
+      fields.push({ field: "coverage", before: pzCoverage, after: woCoverage });
+    }
+    if (fields.length) {
+      result.zoneEdits.push({ number: num, label: pz.location || pz.label || `Zone ${num}`, fields });
+      result.hasChanges = true;
+    }
+  }
+  return result;
+}
+
 async function run(wo, deps = {}) {
   if (!wo || !wo.id) return { ok: false, errors: ["No WO."] };
   if (!wo.propertyId) return { ok: false, errors: ["WO has no linked property."] };
@@ -99,11 +179,40 @@ async function run(wo, deps = {}) {
   const warrantyMonths = WARRANTY_MONTHS[wo.type] || 12;
   const warrantyExpiresAt = addMonths(completedAt, warrantyMonths);
 
-  // 1) Property system updates (zone descriptions etc.)
-  const sysPatch = systemUpdatesFromWo(wo);
-  if (Object.keys(sysPatch).length) {
-    try { await properties.applySystemUpdates(wo.propertyId, sysPatch); }
-    catch (err) { console.warn("[cascade] system update failed:", err?.message); }
+  // 1) Property system updates (Brief D / spec §10 r3). Compute the diff
+  // against the LIVE property record (not stored on the WO) so concurrent
+  // admin edits to the property are visible. Idempotency: skip the apply
+  // if propertyEditsAppliedAt is already set (cascade re-fire safe). New
+  // zones land with pendingReview: true via applySystemUpdates.
+  let propertyEditsApplied = null;
+  if (!wo.propertyEditsAppliedAt) {
+    try {
+      const liveProperty = await properties.get(wo.propertyId);
+      if (liveProperty) {
+        const edits = computePropertyEdits(wo, liveProperty);
+        if (edits.hasChanges) {
+          const sysPatch = {
+            zones: [
+              ...edits.zoneEdits.map((ze) => {
+                // Reconstruct each zone's full state from the WO so
+                // applySystemUpdates can ingest it directly.
+                const woZone = (wo.zones || []).find((z) => Number(z.number) === Number(ze.number)) || {};
+                return {
+                  number: ze.number,
+                  location: woZone.location || "",
+                  sprinklerTypes: Array.isArray(woZone.sprinklerTypes) ? woZone.sprinklerTypes : [],
+                  coverage: Array.isArray(woZone.coverage) ? woZone.coverage : [],
+                  notes: woZone.notes || ""
+                };
+              }),
+              ...edits.newZones
+            ]
+          };
+          await properties.applySystemUpdates(wo.propertyId, sysPatch);
+          propertyEditsApplied = edits;
+        }
+      }
+    } catch (err) { console.warn("[cascade] property-edits apply failed:", err?.message); }
   }
 
   // 2) Create draft invoice (only when there's something to bill).
@@ -170,7 +279,28 @@ async function run(wo, deps = {}) {
     });
   } catch (err) { console.warn("[cascade] history append failed:", err?.message); }
 
-  return { ok: true, serviceRecord, invoice, alreadyRan: false };
+  // Property-edits idempotency stamp + history breadcrumb (Brief D).
+  // Stamp goes on AFTER the apply succeeds — partial failure leaves the
+  // stamp unset, so a cascade re-fire retries.
+  if (propertyEditsApplied) {
+    try {
+      const stamped = await workOrders.update(wo.id, {
+        propertyEditsAppliedAt: new Date().toISOString()
+      });
+      const editCount = propertyEditsApplied.zoneEdits.length + propertyEditsApplied.newZones.length;
+      const summary = [
+        propertyEditsApplied.zoneEdits.length ? `${propertyEditsApplied.zoneEdits.length} zone edit${propertyEditsApplied.zoneEdits.length === 1 ? "" : "s"}` : null,
+        propertyEditsApplied.newZones.length ? `${propertyEditsApplied.newZones.length} new zone${propertyEditsApplied.newZones.length === 1 ? "" : "s"} flagged for review` : null
+      ].filter(Boolean).join(", ");
+      await workOrders.appendHistory(wo.id, {
+        action: "property_edits_applied",
+        by: "system",
+        note: summary || `${editCount} edit${editCount === 1 ? "" : "s"} applied`
+      });
+    } catch (err) { console.warn("[cascade] property-edits stamp failed:", err?.message); }
+  }
+
+  return { ok: true, serviceRecord, invoice, alreadyRan: false, propertyEditsApplied };
 }
 
-module.exports = { run, summarizeWo, lineItemsFromWo, WARRANTY_MONTHS };
+module.exports = { run, summarizeWo, lineItemsFromWo, computePropertyEdits, WARRANTY_MONTHS };

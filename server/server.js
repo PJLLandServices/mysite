@@ -5255,7 +5255,18 @@ async function handleApi(req, res, pathname) {
         };
       }
     }
-    return sendJson(res, 200, { ok: true, workOrder: wo, property, lead, lastService });
+    // Property-edits preview (Brief D / spec §10 r3) — derived view of
+    // what would flow back if the cascade fired right now. Computed
+    // against the LIVE property record so concurrent admin edits show
+    // up. Kept off the WO entity itself (derived, not stored) so we
+    // never have to reconcile drift with the cascade's apply step.
+    let propertyEdits = { zoneEdits: [], newZones: [], hasChanges: false };
+    if (property && !wo.propertyEditsAppliedAt) {
+      try {
+        propertyEdits = completionCascade.computePropertyEdits(wo, property);
+      } catch (err) { console.warn("[wo-get] computePropertyEdits failed:", err?.message); }
+    }
+    return sendJson(res, 200, { ok: true, workOrder: wo, property, lead, lastService, propertyEdits });
   }
 
   if (workOrderMatch && req.method === "PATCH") {

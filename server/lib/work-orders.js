@@ -251,6 +251,13 @@ function blankWorkOrder() {
     // draft invoice before sending, even when paid on-site — auto-paid
     // invoices in QB before reconciliation are a Bad Idea.
     paidOnSite: null,
+    // Property updates flow-back idempotency marker (Brief D / spec §10 r3).
+    // Set to ISO timestamp when the cascade has applied this WO's
+    // property edits (zone description changes, controller info, new
+    // zones flagged for review, etc.) back to the linked property record.
+    // Cascade re-fire checks this and skips re-application — ensures we
+    // don't double-apply or stomp on subsequent property edits.
+    propertyEditsAppliedAt: null,
     // Follow-up linkage — when this WO is the parent of a follow-up
     // service visit, followupWoIds[] back-references the children.
     // followupOfWoId points at the parent if this IS a follow-up.
@@ -570,7 +577,7 @@ async function update(id, patch) {
   // pointers — those are set at create time and shouldn't be edited from
   // the form.
   const next = { ...current };
-  const allowedTop = ["type", "status", "scheduledFor", "diagnosis", "techNotes", "customerName", "customerPhone", "customerEmail", "address", "locked", "arrivedAt", "departedAt", "followupOfWoId", "paidOnSite"];
+  const allowedTop = ["type", "status", "scheduledFor", "diagnosis", "techNotes", "customerName", "customerPhone", "customerEmail", "address", "locked", "arrivedAt", "departedAt", "followupOfWoId", "paidOnSite", "propertyEditsAppliedAt"];
   for (const key of allowedTop) {
     if (Object.prototype.hasOwnProperty.call(patch, key)) next[key] = patch[key];
   }

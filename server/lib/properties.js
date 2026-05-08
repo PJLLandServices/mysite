@@ -287,10 +287,24 @@ async function findServiceRecordByWo(propertyId, woId) {
   return (target.serviceRecords || []).find((r) => r.woId === woId) || null;
 }
 
-// Patch the property's system block with updates the tech captured on
-// the WO (e.g. zone description changes, controller location changes).
-// Used by the completion cascade. Per-field merge — never overwrites a
-// value with empty.
+// Apply edits the tech captured on a WO back to the property's system
+// block. Spec §10 r3 + Brief D: tracked edits flow back on completion.
+// Replace semantics on populated WO fields (NOT additive-only — the tech
+// fixing a wrong zone description should overwrite, not silently leave
+// the wrong value in place). Empty WO values still don't blank existing
+// property values (the tech walking past a zone without touching its
+// descriptor isn't a delete intent).
+//
+// `systemPatch` shape now supports:
+//   { controllerLocation, controllerBrand, shutoffLocation, blowoutLocation,
+//     notes,
+//     zones: [{ number, label, location, sprinklerTypes, coverage, notes,
+//               pendingReview? }] }
+//
+// New zones (number not yet on property) land with `pendingReview: true`
+// — Patrick confirms before they merge fully (spec §4.3.2: "new zones
+// discovered (flagged for Patrick review)"). Existing zones get the
+// `pendingReview` flag cleared on next admin edit via /api/properties/:id.
 async function applySystemUpdates(propertyId, systemPatch) {
   if (!propertyId || !systemPatch || typeof systemPatch !== "object") return null;
   const properties = await readAll();
@@ -303,18 +317,33 @@ async function applySystemUpdates(propertyId, systemPatch) {
     if (typeof v === "string" && v.trim()) target.system[key] = v.trim();
   }
   if (Array.isArray(systemPatch.zones)) {
-    // Per-zone update: match by `number`, then merge fields. Never delete
-    // existing zones from the property — those are admin-managed.
+    // Per-zone update: match by `number`, replace fields when the WO
+    // carries a populated value, leave existing values alone when the
+    // WO field is empty. Never deletes existing zones.
     const existingByNum = new Map((target.system.zones || []).map((z) => [Number(z.number), z]));
     for (const z of systemPatch.zones) {
       const num = Number(z.number);
       if (!Number.isFinite(num) || num <= 0) continue;
+      const isNewZone = !existingByNum.has(num);
       const current = existingByNum.get(num) || { number: num };
-      if (typeof z.label === "string" && z.label.trim() && !current.label) current.label = z.label.trim();
-      if (typeof z.location === "string" && z.location.trim() && !current.location) current.location = z.location.trim();
-      if (Array.isArray(z.sprinklerTypes) && z.sprinklerTypes.length && !current.sprinklerTypes?.length) current.sprinklerTypes = z.sprinklerTypes.slice();
-      if (Array.isArray(z.coverage) && z.coverage.length && !current.coverage?.length) current.coverage = z.coverage.slice();
+      // Location: WO's value wins when populated. Set both `label` and
+      // `location` for back-compat with older property records that used
+      // either field name.
+      if (typeof z.location === "string" && z.location.trim()) {
+        current.location = z.location.trim();
+        current.label = z.location.trim();
+      } else if (typeof z.label === "string" && z.label.trim()) {
+        current.label = z.label.trim();
+        if (!current.location) current.location = z.label.trim();
+      }
+      if (Array.isArray(z.sprinklerTypes) && z.sprinklerTypes.length) current.sprinklerTypes = z.sprinklerTypes.slice();
+      if (Array.isArray(z.coverage) && z.coverage.length) current.coverage = z.coverage.slice();
       if (typeof z.notes === "string" && z.notes.trim()) current.notes = z.notes.trim();
+      // Newly-discovered zones land flagged for Patrick's review — even
+      // if the WO's data looks plausible, Patrick eyeballs it before the
+      // zone is treated as canonical. Existing zones keep whatever flag
+      // they had (cleared by an admin edit through /api/properties/:id).
+      if (isNewZone) current.pendingReview = true;
       existingByNum.set(num, current);
     }
     target.system.zones = Array.from(existingByNum.values()).sort((a, b) => (a.number || 0) - (b.number || 0));
