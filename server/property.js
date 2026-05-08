@@ -92,7 +92,8 @@ const SPRINKLER_TYPES = [
 const COVERAGE_TYPES = [
   { value: "plants", label: "Plants" },
   { value: "grass", label: "Grass" },
-  { value: "trees", label: "Trees" }
+  { value: "trees", label: "Trees" },
+  { value: "shrubs", label: "Shrubs" }
 ];
 
 function pillGroupHtml(groupName, options, selected) {

@@ -505,8 +505,17 @@
         <button type="button" class="tech-sheet-zone-badge" id="sheetZoneBadgeBtn" data-action="open-zone-picker" aria-haspopup="listbox" aria-expanded="false" aria-label="Pick zone source">Zone —</button>
       </header>
       <input type="text" class="tech-sheet-location-input" id="sheetLocationInput" placeholder="Description (auto-fills from property pick)" maxlength="200" autocomplete="off">
-      <div class="tech-sheet-system" id="sheetSystem"></div>
-      <div class="tech-sheet-system" id="sheetSystem"></div>
+
+      <!-- Sprinkler + Coverage multi-selects (Brief Hot, spec §2.2 +
+           §4.3.2). Editable pill toggles — same data + same wording as
+           the admin property editor (server/property.js). Tap toggles
+           the pill on/off; state persists via PATCH /api/work-orders/:id
+           with optimistic UI (chip flips first, rolls back on error). -->
+      <p class="tech-sheet-label">Sprinkler type</p>
+      <div class="tech-sheet-pills" id="sheetSprinklerPills" role="group" aria-label="Sprinkler type"></div>
+
+      <p class="tech-sheet-label">Coverage</p>
+      <div class="tech-sheet-pills" id="sheetCoveragePills" role="group" aria-label="Coverage type"></div>
 
       <p class="tech-sheet-label">Status</p>
       <div class="tech-zone-status-grid" id="sheetStatus" role="radiogroup" aria-label="Zone status">

@@ -180,7 +180,7 @@ function renderSystem(property) {
     // Kept inline rather than imported from the admin module so the portal
     // bundle stays self-contained.
     const SPRINKLER_LABELS = { rotors: "Rotors", popups: "Pop-ups", drip: "Drip", flower_pots: "Flower Pots" };
-    const COVERAGE_LABELS  = { plants: "Plants", grass: "Grass", trees: "Trees" };
+    const COVERAGE_LABELS  = { plants: "Plants", grass: "Grass", trees: "Trees", shrubs: "Shrubs" };
     const labelFor = (lookup, value) => lookup[value] || value;
 
     systemZoneList.innerHTML = "";

@@ -34,7 +34,8 @@ const techSaving = document.getElementById("techSaving");
 const techSheet = document.getElementById("techSheet");
 const sheetZoneBadgeBtn = document.getElementById("sheetZoneBadgeBtn");
 const sheetLocationInput = document.getElementById("sheetLocationInput");
-const sheetSystem = document.getElementById("sheetSystem");
+const sheetSprinklerPills = document.getElementById("sheetSprinklerPills");
+const sheetCoveragePills = document.getElementById("sheetCoveragePills");
 const sheetStatus = document.getElementById("sheetStatus");
 const sheetChecks = document.getElementById("sheetChecks");
 const sheetIssues = document.getElementById("sheetIssues");
@@ -44,7 +45,24 @@ const sheetClose = document.getElementById("sheetClose");
 const sheetDone = document.getElementById("sheetDone");
 
 const SPRINKLER_LABELS = { rotors: "Rotors", popups: "Pop-ups", drip: "Drip", flower_pots: "Flower Pots" };
-const COVERAGE_LABELS  = { plants: "Plants", grass: "Grass", trees: "Trees" };
+const COVERAGE_LABELS  = { plants: "Plants", grass: "Grass", trees: "Trees", shrubs: "Shrubs" };
+
+// Pill-toggle catalog mirrors property.js's SPRINKLER_TYPES + COVERAGE_TYPES
+// so the editable bottom-sheet uses the same option list as the admin
+// property editor. Spec §2.2 wording: rotors / pop-ups / drip / flower
+// pots and grass / plants / trees / shrubs.
+const TECH_SPRINKLER_PILLS = [
+  { value: "rotors", label: "Rotors" },
+  { value: "popups", label: "Pop-ups" },
+  { value: "drip", label: "Drip" },
+  { value: "flower_pots", label: "Flower Pots" }
+];
+const TECH_COVERAGE_PILLS = [
+  { value: "grass", label: "Grass" },
+  { value: "plants", label: "Plants" },
+  { value: "trees", label: "Trees" },
+  { value: "shrubs", label: "Shrubs" }
+];
 
 // Issue type catalog — labels for the per-zone issue dropdown. Keys map
 // (loosely) to pricing.json categories so a future Tier-3 rollup can
@@ -712,9 +730,21 @@ techZoneList.addEventListener("click", (event) => {
 // "+ Add zone" — appends a new blank zone to state, persists, then opens
 // the edit sheet so the tech can rename it without a second tap. Auto-
 // numbered at max-existing + 1 so spring/fall sweeps stay sequential.
+// Brief Hot — debounce against rapid double-tap on iPhone (Patrick saw
+// the button felt unresponsive; idempotency guard ensures one tap = one
+// zone even if the touch event fires twice). Disable for ~600 ms across
+// the PATCH round-trip, then re-enable.
 const techAddZoneBtn = document.getElementById("techAddZoneBtn");
 techAddZoneBtn?.addEventListener("click", () => {
   if (state.locked) return;
+  if (techAddZoneBtn.dataset.busy === "1") return;
+  techAddZoneBtn.dataset.busy = "1";
+  techAddZoneBtn.setAttribute("disabled", "");
+  setTimeout(() => {
+    techAddZoneBtn.removeAttribute("disabled");
+    delete techAddZoneBtn.dataset.busy;
+  }, 600);
+
   const usedNumbers = (state.zones || [])
     .map((z) => Number(z.number) || 0)
     .filter((n) => n > 0);
@@ -749,20 +779,12 @@ function openZoneSheet(index) {
   if (sheetZoneBadgeBtn) sheetZoneBadgeBtn.textContent = zoneBadgeLabel(zone);
   if (sheetLocationInput) sheetLocationInput.value = zone.location || "";
 
-  // Sprinkler + coverage badges (read-only — system facts come from
-  // the property profile, not the WO). Hidden when neither is set.
-  const sprinkler = badgeListHtml(zone.sprinklerTypes || [], SPRINKLER_LABELS);
-  const coverage  = badgeListHtml(zone.coverage       || [], COVERAGE_LABELS);
-  if (sprinkler || coverage) {
-    sheetSystem.innerHTML = `
-      ${sprinkler ? `<div class="tech-sheet-sys-row"><span>Sprinkler</span><div>${sprinkler}</div></div>` : ""}
-      ${coverage  ? `<div class="tech-sheet-sys-row"><span>Coverage</span><div>${coverage}</div></div>`  : ""}
-    `;
-    sheetSystem.hidden = false;
-  } else {
-    sheetSystem.hidden = true;
-    sheetSystem.innerHTML = "";
-  }
+  // Sprinkler + Coverage editable pill toggles (Brief Hot, spec §2.2).
+  // The summary badges that used to live here (read-only display) moved
+  // into the zone-list card preview only; the sheet itself is now where
+  // the tech edits these fields.
+  renderSheetPills(sheetSprinklerPills, "sprinklerTypes", TECH_SPRINKLER_PILLS, zone.sprinklerTypes || []);
+  renderSheetPills(sheetCoveragePills,  "coverage",       TECH_COVERAGE_PILLS,  zone.coverage       || []);
 
   // Status pills — one is pressed if the zone has been reviewed.
   sheetStatus.querySelectorAll("[data-zone-status]").forEach((btn) => {
@@ -787,6 +809,52 @@ function renderSheetChecks(zone) {
     btn.setAttribute("aria-pressed", checks[btn.dataset.zoneCheck] ? "true" : "false");
   });
 }
+
+// Render an editable pill group (sprinkler type / coverage type) into a
+// container. Mirrors property.js's pillGroupHtml shape so the data flow
+// is identical — same data-pill / data-group / data-value attributes and
+// the same aria-pressed state — but rendered into a container the bottom
+// sheet picks up. Brief Hot, spec §2.2.
+function renderSheetPills(container, groupName, options, selectedValues) {
+  if (!container) return;
+  const set = new Set((selectedValues || []).map(String));
+  container.innerHTML = options.map((opt) =>
+    `<button type="button" class="tech-sheet-pill" data-pill data-group="${groupName}" data-value="${escapeHtml(opt.value)}" aria-pressed="${set.has(opt.value) ? "true" : "false"}">${escapeHtml(opt.label)}</button>`
+  ).join("");
+}
+
+// Pill-tap delegation — toggles aria-pressed, mutates state.zones[active]
+// for the matching group, and fires patchWorkOrder({ zones }) optimistically.
+// Optimistic UI: we flip the chip immediately and let the PATCH catch up.
+// On failure, the next zone-sheet open will re-render from server state
+// and the chip will return to its persisted value (offline-queue covers
+// the offline case).
+function attachSheetPillHandler(container) {
+  if (!container) return;
+  container.addEventListener("click", (event) => {
+    const pill = event.target.closest("[data-pill]");
+    if (!pill || state.locked) return;
+    const idx = state.activeZoneIndex;
+    const zone = idx >= 0 ? state.zones[idx] : null;
+    if (!zone) return;
+    const group = pill.dataset.group;
+    const value = pill.dataset.value;
+    if (!group || !value) return;
+    const fieldArr = Array.isArray(zone[group]) ? zone[group].slice() : [];
+    const i = fieldArr.indexOf(value);
+    if (i === -1) fieldArr.push(value);
+    else fieldArr.splice(i, 1);
+    zone[group] = fieldArr;
+    pill.setAttribute("aria-pressed", i === -1 ? "true" : "false");
+    // Re-render the zone list so the card preview badges reflect the
+    // updated arrays (the card uses badgeListHtml, which reads from
+    // state.zones directly).
+    renderZones();
+    patchWorkOrder({ zones: state.zones });
+  });
+}
+attachSheetPillHandler(sheetSprinklerPills);
+attachSheetPillHandler(sheetCoveragePills);
 
 // Render the issues-found list inside the sheet. Each row is a card
 // with a type select, a qty input, a notes input, and a remove button.

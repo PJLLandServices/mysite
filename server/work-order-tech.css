@@ -157,7 +157,17 @@ html, body {
   min-height: 100vh;
   /* Honor iOS safe area at the bottom (home indicator). */
   padding-bottom: env(safe-area-inset-bottom);
+  /* Hot-fix: kill horizontal scroll on iPhone. iOS Safari was letting
+     long unbroken strings (WO IDs, customer emails, file paths in
+     history notes) push past the viewport, which made tapping
+     `+ Add zone` and other controls miss because the rendered position
+     drifted with the scroll. overflow-x is the safety net; word-break +
+     overflow-wrap break the long strings at the source. */
+  overflow-x: hidden;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
+html { overflow-x: hidden; }
 .tech-body.tech-sheet-open {
   /* Lock the background while the sheet is open so iOS doesn't
      scroll-trap. Sheet has its own internal scroll. */
@@ -890,34 +900,6 @@ html, body {
   color: var(--tech-text-muted);
   font-style: italic;
 }
-.tech-sheet-system {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  margin: 0 0 16px;
-  padding: 10px 12px;
-  background: rgba(27, 77, 46, 0.04);
-  border-radius: 10px;
-}
-.tech-sheet-sys-row {
-  display: grid;
-  grid-template-columns: 80px 1fr;
-  gap: 8px;
-  align-items: center;
-  font-size: 13px;
-}
-.tech-sheet-sys-row > span {
-  font-family: "Barlow Condensed", sans-serif;
-  font-size: 11px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--tech-text-muted);
-}
-.tech-sheet-sys-row > div {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-}
 .tech-badge {
   display: inline-flex;
   align-items: center;
@@ -937,6 +919,38 @@ html, body {
   text-transform: uppercase;
   color: var(--tech-text-muted);
 }
+
+/* Multi-select pill toggles (Brief Hot, spec §2.2). Sprinkler type +
+   Coverage type editors inside the zone bottom-sheet. Uses the same
+   data-pill / aria-pressed pattern as property.js's pillGroupHtml so
+   the visual and behaviour are consistent across admin + tech surfaces. */
+.tech-sheet-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 8px;
+}
+.tech-sheet-pill {
+  flex: 0 1 auto;
+  min-height: 40px;
+  padding: 9px 14px;
+  background: var(--tech-card);
+  color: var(--tech-text);
+  border: 1.5px solid var(--tech-border);
+  border-radius: 999px;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.tech-sheet-pill[aria-pressed="true"] {
+  border-color: var(--tech-green);
+  background: rgba(27, 77, 46, 0.10);
+  color: var(--tech-green);
+  box-shadow: 0 0 0 1px var(--tech-green) inset;
+}
+.tech-sheet-pill:active { transform: scale(0.96); }
 
 /* Per-zone status — 2×2 grid of tap-pill buttons. Each gets a colored
    dot to match the run-level palette. */

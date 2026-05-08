@@ -67,7 +67,7 @@ const confirmAccept = document.getElementById("confirmAccept");
 // at create time; editing the system spec belongs on the property
 // profile, not here).
 const SPRINKLER_LABELS = { rotors: "Rotors", popups: "Pop-ups", drip: "Drip", flower_pots: "Flower Pots" };
-const COVERAGE_LABELS  = { plants: "Plants", grass: "Grass", trees: "Trees" };
+const COVERAGE_LABELS  = { plants: "Plants", grass: "Grass", trees: "Trees", shrubs: "Shrubs" };
 
 const ZONE_STATUS_OPTIONS = [
   { value: "",                 label: "— not yet checked —" },
