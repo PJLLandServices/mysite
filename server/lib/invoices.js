@@ -72,6 +72,13 @@ function hydrate(inv) {
     sentAt: inv?.sentAt || null,
     paidAt: inv?.paidAt || null,
     voidedAt: inv?.voidedAt || null,
+    // Whether the originating WO had paidOnSite=true at cascade time.
+    // Persisted so the customer email + the invoice page can reshape
+    // copy ("Thanks, payment received in the field") vs the default
+    // "Invoice attached, due in N days." Patrick still reviews before
+    // sending or marking paid — this flag is informational, not a
+    // status accelerant. Brief C / spec §4.3.2.
+    paidOnSiteAtCompletion: inv?.paidOnSiteAtCompletion === true,
     createdAt: inv?.createdAt || new Date().toISOString(),
     updatedAt: inv?.updatedAt || new Date().toISOString(),
     history: Array.isArray(inv?.history) ? inv.history : []
@@ -145,7 +152,8 @@ async function createDraft({
   customerPhone = "",
   address = "",
   lineItems = [],
-  notes = ""
+  notes = "",
+  paidOnSiteAtCompletion = false
 }) {
   const records = await readAll();
   const now = new Date().toISOString();
@@ -183,9 +191,17 @@ async function createDraft({
     hst: totals.hst,
     total: totals.total,
     notes,
+    paidOnSiteAtCompletion: paidOnSiteAtCompletion === true,
     createdAt: now,
     updatedAt: now,
-    history: [{ ts: now, action: "draft_created", by: "system", note: woId ? `From WO ${woId}` : "" }]
+    history: [{
+      ts: now,
+      action: "draft_created",
+      by: "system",
+      note: paidOnSiteAtCompletion === true
+        ? (woId ? `From WO ${woId} — paid on-site at completion` : "Paid on-site at completion")
+        : (woId ? `From WO ${woId}` : "")
+    }]
   });
   records.unshift(inv);
   await writeAll(records);

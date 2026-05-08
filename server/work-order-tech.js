@@ -208,6 +208,10 @@ let state = {
   customerName: "",
   customerEmail: "",
   customerPhone: "",
+  // Payment captured on-site? null = unset, true = paid, false = invoice
+  // to follow. Read by the cascade to flag the draft invoice and shape
+  // the customer email copy (spec §4.3.2 Payment & Billing).
+  paidOnSite: null,
   // On-site execution timestamps — auto-stamped on status flip to
   // on_site / completed (spec §4.3.2 On-Site Execution).
   arrivedAt: null,
@@ -2796,6 +2800,11 @@ async function init() {
     }
     state.followupOfWoId = wo.followupOfWoId || null;
     state.followupWoIds = Array.isArray(wo.followupWoIds) ? wo.followupWoIds : [];
+    // Coerce paidOnSite to one of true / false / null. Defends against
+    // legacy records or accidental string values.
+    state.paidOnSite = wo.paidOnSite === true ? true
+      : wo.paidOnSite === false ? false
+      : null;
 
     techId.textContent = wo.id;
     techType.textContent = TYPE_LABELS[wo.type] || wo.type;
@@ -3325,7 +3334,27 @@ function renderPaymentBlock() {
   if (invoiceLine && state.onSiteQuote?.quoteId) {
     invoiceLine.textContent = `Quote on file: ${state.onSiteQuote.quoteId}. Invoice drafts at completion.`;
   }
+  // Reflect persisted paidOnSite. null = neither radio checked (forces
+  // tech to actively pick); true/false drives the appropriate one.
+  const yesRadio = document.getElementById("techPayCapturedYes");
+  const noRadio = document.getElementById("techPayCapturedNo");
+  if (yesRadio) yesRadio.checked = state.paidOnSite === true;
+  if (noRadio)  noRadio.checked  = state.paidOnSite === false;
 }
+
+// Wire the radio change → PATCH. Spec §4.3.2 Payment & Billing requires
+// this to persist; the cascade reads it to flag the draft invoice.
+// Allowed on a signed WO (paidOnSite is NOT scope-protected — scope is
+// frozen at signature, payment metadata isn't).
+document.getElementById("techPaymentSection")?.addEventListener("change", (event) => {
+  if (event.target.name !== "techPayCaptured") return;
+  const value = event.target.value === "yes" ? true
+    : event.target.value === "no" ? false
+    : null;
+  if (state.paidOnSite === value) return;
+  state.paidOnSite = value;
+  patchWorkOrder({ paidOnSite: value });
+});
 
 // ---- Follow-up visit (spec §4.3.2 Follow-Up WO Trigger) ---------------
 // Opens the shared crm-followup modal. The modal lets the tech pick a

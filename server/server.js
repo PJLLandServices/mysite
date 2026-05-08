@@ -5385,8 +5385,16 @@ async function handleApi(req, res, pathname) {
               auth: { user: process.env.GMAIL_USER, pass: process.env.GMAIL_APP_PASSWORD }
             });
             const firstName = (wo.customerName || "").split(" ")[0] || "there";
+            // Reshape the totals line on payment-received-in-field. The
+            // wo.paidOnSite flag is the source of truth at cascade time
+            // (the cascade fires immediately on status → completed; the
+            // flag was set BEFORE that by the tech in the Payment & Billing
+            // block). Spec §4.3.2.
+            const paidInField = wo.paidOnSite === true;
             const totalLine = invoice && invoice.total > 0
-              ? `<p style="margin: 0 0 14px;">Total for today's visit: <strong>$${invoice.total.toFixed(2)} CAD</strong> (incl. HST). An invoice will follow.</p>`
+              ? (paidInField
+                  ? `<p style="margin: 0 0 14px;">Today's total: <strong>$${invoice.total.toFixed(2)} CAD</strong> (incl. HST). <strong>Payment received in the field — thank you.</strong> A receipt invoice will follow for your records.</p>`
+                  : `<p style="margin: 0 0 14px;">Total for today's visit: <strong>$${invoice.total.toFixed(2)} CAD</strong> (incl. HST). An invoice will follow.</p>`)
               : "";
             const warranty = serviceRecord.warrantyExpiresAt
               ? `<p style="margin: 0 0 14px;">Today's work is covered under PJL's <strong>${serviceRecord.warrantyMonths}-month warranty</strong>, valid through ${new Date(serviceRecord.warrantyExpiresAt).toLocaleDateString("en-CA", { month: "long", day: "numeric", year: "numeric" })}.</p>`

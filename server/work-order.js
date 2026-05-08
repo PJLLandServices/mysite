@@ -885,9 +885,44 @@ function populateForm(wo) {
   renderServiceChecklist(wo);
   renderWoPhotos(wo);
   renderSignoff(wo);
+  renderPaidOnSite(wo);
   renderHistory(wo);
   applyLockState(wo.locked === true, wo.signature);
 }
+
+// Payment captured on-site? Mirror of the tech-mode radio. Coerces
+// wo.paidOnSite (true | false | null) onto the matching radio. Spec
+// §4.3.2 Payment & Billing.
+function renderPaidOnSite(wo) {
+  const yes = document.getElementById("woPaidOnSiteYes");
+  const no = document.getElementById("woPaidOnSiteNo");
+  const v = wo?.paidOnSite;
+  if (yes) yes.checked = v === true;
+  if (no)  no.checked  = v === false;
+}
+
+document.getElementById("woPaidOnSiteSection")?.addEventListener("change", async (event) => {
+  if (event.target.name !== "woPaidOnSite") return;
+  const value = event.target.value === "yes" ? true
+    : event.target.value === "no" ? false
+    : null;
+  const id = getWorkOrderId();
+  if (!id) return;
+  try {
+    const r = await fetch(`/api/work-orders/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ paidOnSite: value })
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok || !data.ok) throw new Error((data.errors || ["Couldn't save."]).join(" "));
+    if (data.workOrder) loadedWorkOrder = data.workOrder;
+  } catch (err) {
+    alert(err.message || "Couldn't save payment status.");
+    // Revert the radio to the persisted state on failure.
+    if (loadedWorkOrder) renderPaidOnSite(loadedWorkOrder);
+  }
+});
 
 // History viewer — append-only audit trail per spec §10 r4. Renders
 // newest-first as a flat list. Each entry: timestamp · actor · action

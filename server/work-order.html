@@ -292,6 +292,23 @@
         </details>
       </section>
 
+      <!-- Payment captured on-site? Mirrors the tech-mode radio. The
+           cascade reads this at fire time to set the draft invoice's
+           paidOnSiteAtCompletion flag and reshape the customer email
+           copy. Patrick can flip this from his desk before the visit
+           gets marked completed (and even after — paidOnSite is NOT
+           scope-protected, see Brief A). Spec §4.3.2 Payment & Billing.
+           Brief B will fold this into the bigger desktop payment block
+           when it lands. -->
+      <section class="wo-paid-on-site" id="woPaidOnSiteSection">
+        <fieldset>
+          <legend>Payment captured on-site?</legend>
+          <label><input type="radio" name="woPaidOnSite" value="yes" id="woPaidOnSiteYes"> <span>Yes — paid in the field</span></label>
+          <label><input type="radio" name="woPaidOnSite" value="no" id="woPaidOnSiteNo"> <span>No — invoice to follow</span></label>
+        </fieldset>
+        <p class="wo-paid-on-site-help">Reshapes the customer email at completion. Invoice still drafts in <em>draft</em> status — Patrick reviews before sending or marking paid.</p>
+      </section>
+
       <!-- Cascade-recovery actions — explicit alternatives to the
            tech-mode "Mark visit completed" tap. Useful when (a) the WO
            was completed but no invoice appeared (cascade ran with

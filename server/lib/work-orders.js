@@ -230,6 +230,15 @@ function blankWorkOrder() {
     // Materials packed checklist (spec §4.3.2). Map of sku → bool.
     // Populated as the tech taps each row in the materials list.
     materialsPacked: {},
+    // Payment captured on-site? (spec §4.3.2 Payment & Billing).
+    //   null  — tech hasn't decided yet (default for unsigned visits)
+    //   true  — paid in the field (cascade flags invoice with paidOnSiteAtCompletion)
+    //   false — explicitly "No, invoice to follow"
+    // Read by completion-cascade.js to set invoice.paidOnSiteAtCompletion
+    // and to reshape the customer email copy. Patrick still reviews each
+    // draft invoice before sending, even when paid on-site — auto-paid
+    // invoices in QB before reconciliation are a Bad Idea.
+    paidOnSite: null,
     // Follow-up linkage — when this WO is the parent of a follow-up
     // service visit, followupWoIds[] back-references the children.
     // followupOfWoId points at the parent if this IS a follow-up.
@@ -549,7 +558,7 @@ async function update(id, patch) {
   // pointers — those are set at create time and shouldn't be edited from
   // the form.
   const next = { ...current };
-  const allowedTop = ["type", "status", "scheduledFor", "diagnosis", "techNotes", "customerName", "customerPhone", "customerEmail", "address", "locked", "arrivedAt", "departedAt", "followupOfWoId"];
+  const allowedTop = ["type", "status", "scheduledFor", "diagnosis", "techNotes", "customerName", "customerPhone", "customerEmail", "address", "locked", "arrivedAt", "departedAt", "followupOfWoId", "paidOnSite"];
   for (const key of allowedTop) {
     if (Object.prototype.hasOwnProperty.call(patch, key)) next[key] = patch[key];
   }

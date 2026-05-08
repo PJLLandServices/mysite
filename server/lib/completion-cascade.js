@@ -106,7 +106,11 @@ async function run(wo, deps = {}) {
     catch (err) { console.warn("[cascade] system update failed:", err?.message); }
   }
 
-  // 2) Create draft invoice (only when there's something to bill)
+  // 2) Create draft invoice (only when there's something to bill).
+  // paidOnSiteAtCompletion is forwarded so the invoice carries the
+  // field-payment flag — the customer email + Patrick's invoice editor
+  // both reshape on it, but the invoice STAYS in draft status (Patrick
+  // reviews before sending or marking paid in QB). Spec §4.3.2.
   let invoice = null;
   if (lineItems.length) {
     try {
@@ -119,7 +123,8 @@ async function run(wo, deps = {}) {
         customerPhone: wo.customerPhone || "",
         address: wo.address || "",
         lineItems,
-        notes: wo.techNotes ? wo.techNotes.slice(0, 500) : ""
+        notes: wo.techNotes ? wo.techNotes.slice(0, 500) : "",
+        paidOnSiteAtCompletion: wo.paidOnSite === true
       });
     } catch (err) { console.warn("[cascade] invoice draft failed:", err?.message); }
   }

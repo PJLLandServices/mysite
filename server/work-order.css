@@ -1317,6 +1317,49 @@ body[data-locked="true"] .wo-zone-location {
 .wo-cascade-status[data-kind="error"] { color: #C03A2C; font-weight: 600; }
 .wo-cascade-status[data-kind="info"] { color: #555; }
 
+/* Paid on-site? — mirror of the tech-mode radio. Lives next to the
+   cascade-recovery section since both are about completion. Brief B
+   will fold this into a bigger payment block when it lands. */
+.wo-paid-on-site {
+  margin: 16px 0;
+  padding: 14px 18px;
+  background: #fff;
+  border: 1px solid #E5E5DD;
+  border-radius: 12px;
+}
+.wo-paid-on-site fieldset {
+  border: none;
+  padding: 0;
+  margin: 0;
+}
+.wo-paid-on-site legend {
+  padding: 0;
+  margin: 0 0 8px;
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 14px;
+  font-weight: 600;
+  color: #1B4D2E;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.wo-paid-on-site label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: 18px;
+  font-size: 14px;
+  cursor: pointer;
+}
+.wo-paid-on-site input[type="radio"] {
+  cursor: pointer;
+}
+.wo-paid-on-site-help {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: #777;
+  line-height: 1.45;
+}
+
 /* History viewer — append-only audit trail. Collapsed by default
    (history can grow long over a WO's lifetime); summary header shows
    entry count so Patrick can scan without expanding. */
