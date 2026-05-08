@@ -2552,3 +2552,99 @@ body[data-locked="true"] .tech-finish-bar { opacity: 0.55; pointer-events: none;
 }
 .tech-offline-icon { font-size: 16px; }
 .tech-offline-text { flex: 1; line-height: 1.4; }
+
+/* History viewer (spec §10 r4) — append-only audit trail. Collapsed by
+   default since history grows long; the count badge gives the tech a
+   scannable signal. Tap to expand. Read-only. */
+.tech-history-section { margin: 16px; }
+.tech-history-details {
+  background: #FAFAF5;
+  border: 1px solid #E5E5DD;
+  border-radius: 12px;
+  padding: 0;
+}
+.tech-history-details > summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 16px;
+  cursor: pointer;
+  list-style: none;
+  font-family: "Barlow Condensed", sans-serif;
+  font-weight: 600;
+  font-size: 18px;
+  color: #1B4D2E;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.tech-history-details > summary::-webkit-details-marker { display: none; }
+.tech-history-summary-label { flex: 1; }
+.tech-history-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  padding: 2px 8px;
+  background: #1B4D2E;
+  color: #fff;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.tech-history-details[open] > summary { border-bottom: 1px solid #E5E5DD; }
+.tech-history-list {
+  list-style: none;
+  margin: 0;
+  padding: 4px 0;
+}
+.tech-history-row {
+  padding: 10px 16px;
+  border-top: 1px solid #EEE;
+  font-size: 13px;
+}
+.tech-history-row:first-child { border-top: none; }
+.tech-history-row-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: baseline;
+}
+.tech-history-action {
+  font-weight: 600;
+  color: #1B4D2E;
+}
+.tech-history-actor {
+  font-size: 11px;
+  color: #888;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.tech-history-ts {
+  margin-left: auto;
+  color: #888;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.tech-history-note {
+  margin: 4px 0 0;
+  color: #555;
+  line-height: 1.4;
+}
+.tech-history-diff {
+  display: inline-block;
+  margin-top: 4px;
+  padding: 2px 8px;
+  background: #F0EBE0;
+  border-radius: 6px;
+  font-size: 12px;
+  color: #555;
+}
+.tech-history-empty {
+  margin: 12px 16px 18px;
+  font-size: 13px;
+  color: #888;
+  font-style: italic;
+}

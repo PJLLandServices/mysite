@@ -274,6 +274,24 @@
         </div>
       </section>
 
+      <!-- History — append-only audit trail per spec §10 r4. Captures
+           every WO mutation: status changes, signature capture, photo
+           uploads, line-item events, deferred actions, cascade fires,
+           and lock enforcement. Newest-first. Read-only. Spec §4.3.3 r5
+           says signed-WO post-sign edits create audit log entries —
+           this is where they show up. -->
+      <section class="property-section wo-history-section" id="woHistorySection">
+        <details class="wo-history-details">
+          <summary>
+            <h2>History</h2>
+            <span class="wo-history-count" id="woHistoryCount">0</span>
+          </summary>
+          <p class="property-section-help">Every change to this work order — status changes, signatures, photos, line-item events, cascade fires. Newest first. Append-only.</p>
+          <ul class="wo-history-list" id="woHistoryList"></ul>
+          <p class="wo-history-empty" id="woHistoryEmpty" hidden>No history entries yet.</p>
+        </details>
+      </section>
+
       <!-- Cascade-recovery actions — explicit alternatives to the
            tech-mode "Mark visit completed" tap. Useful when (a) the WO
            was completed but no invoice appeared (cascade ran with

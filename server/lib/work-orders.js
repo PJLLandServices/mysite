@@ -235,6 +235,20 @@ function blankWorkOrder() {
     // followupOfWoId points at the parent if this IS a follow-up.
     followupWoIds: [],
     followupOfWoId: null,
+    // Append-only audit trail per spec §10 r4 ("All status changes
+    // logged forever") and §4.3.3 r5 (signed-WO contract). Mirrors
+    // invoices.history[] / quotes.history[] in shape so the rendering
+    // and helper code stays interchangeable across entities. Each entry:
+    //   { ts, action, by, note, before?, after? }
+    // - ts:     ISO timestamp
+    // - action: short slug, e.g. "status_change", "signature_capture",
+    //           "photo_upload", "cascade_fire", "line_item_add"
+    // - by:     "admin" | "tech" | "system" | "customer"
+    // - note:   free-text summary
+    // - before/after: optional state snapshots — set on status changes,
+    //           empty for events where they don't make sense.
+    // Append-only; never edited or removed in normal operation.
+    history: [],
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString()
   };
@@ -261,7 +275,8 @@ function hydrate(w) {
         ? w.onSiteQuote.builderLineItems
         : []
     },
-    locked: w?.locked === true
+    locked: w?.locked === true,
+    history: Array.isArray(w?.history) ? w.history : []
   };
 }
 
@@ -271,6 +286,77 @@ function hydrate(w) {
 // Both client and server consult this helper.
 function canBuildOnSiteQuote(wo) {
   return !!wo && wo.type !== "fall_closing";
+}
+
+// Scope-protected fields — once `wo.locked === true` (the customer
+// signed off), these are frozen. Spec §10 r11 + §4.3.3 r5: the signed
+// WO is the contract. Anything that changes the customer's contractual
+// understanding (line items, prices, customer/property identity, the
+// signature record itself) gets refused at the dispatcher with a 409.
+//
+// Non-protected fields (status forward-progression, photos, materials
+// packed, paidOnSite, departure timestamp, internal tech notes, audit
+// history) keep flowing — the WO remains a live operational document
+// after sign-off; only the *scope* is frozen.
+//
+// Path entries support nested form using dot notation. The dispatcher's
+// scope check matches by exact path OR by prefix (so "onSiteQuote" also
+// guards "onSiteQuote.builderLineItems[3].qty").
+const SCOPE_PROTECTED_FIELDS = [
+  "lineItems",
+  "additionalRepairs",
+  "onSiteQuote",
+  "signature",
+  "customerName",
+  "customerEmail",
+  "customerPhone",
+  "address",
+  "propertyId",
+  "leadId",
+  "intakeGuarantee",
+  "aiBonusMatched",
+  "type"
+];
+
+// Returns the protected field path that a payload would touch on a
+// locked WO, or null if no protected fields are touched. Caller decides
+// whether to 409 (most routes) or silently drop (legacy signature
+// re-write). The `signature` exception: a fresh-signature payload on an
+// unsigned WO is still allowed — only blocks once `locked` is true.
+function findProtectedFieldTouched(payload) {
+  if (!payload || typeof payload !== "object") return null;
+  for (const key of Object.keys(payload)) {
+    if (SCOPE_PROTECTED_FIELDS.includes(key)) return key;
+  }
+  return null;
+}
+
+// Append a history entry to a WO without going through `update()` (which
+// only logs status transitions). Mirrors invoices.appendHistory(). Used
+// by every WO-mutating dispatcher endpoint to log a one-line audit
+// breadcrumb. Returns the updated WO record, or null if not found.
+async function appendHistory(id, entry) {
+  const records = await readAll();
+  const idx = records.findIndex((w) => w.id === id);
+  if (idx === -1) return null;
+  const now = new Date().toISOString();
+  const next = { ...records[idx] };
+  if (!Array.isArray(next.history)) next.history = [];
+  const stored = {
+    ts: entry?.ts || now,
+    action: entry?.action || "note",
+    by: entry?.by || "admin",
+    note: entry?.note || ""
+  };
+  // Optional before/after snapshots — only stored when the caller
+  // provides them (status transitions, signature capture, etc).
+  if (entry?.before !== undefined) stored.before = entry.before;
+  if (entry?.after !== undefined) stored.after = entry.after;
+  next.history.push(stored);
+  next.updatedAt = now;
+  records[idx] = next;
+  await writeAll(records);
+  return next;
 }
 
 // Backfill the per-zone checks{} and issues[] fields onto records that
@@ -542,6 +628,33 @@ async function update(id, patch) {
   }
   next.updatedAt = new Date().toISOString();
 
+  // Status transition gets a free history entry — caller (dispatcher)
+  // handles other mutation types via appendHistory() directly. Mirrors
+  // invoices.js inline-history-on-status-change behaviour.
+  if (Object.prototype.hasOwnProperty.call(patch, "status") && patch.status !== current.status) {
+    if (!Array.isArray(next.history)) next.history = [];
+    next.history.push({
+      ts: next.updatedAt,
+      action: "status_change",
+      by: patch.__by || "admin",
+      note: patch.__statusNote || "",
+      before: current.status,
+      after: patch.status
+    });
+  }
+  // Signature capture (lock flip) — a separate, distinct event from
+  // status_change so the audit trail is unambiguous about WHEN the WO
+  // became contractually locked.
+  if (patch.signature && patch.signature.signed === true && !current.signature?.signed) {
+    if (!Array.isArray(next.history)) next.history = [];
+    next.history.push({
+      ts: next.updatedAt,
+      action: "signature_capture",
+      by: patch.__by || "tech",
+      note: patch.signature.customerName ? `Signed by ${patch.signature.customerName}` : ""
+    });
+  }
+
   records[idx] = next;
   await writeAll(records);
   return next;
@@ -563,8 +676,11 @@ module.exports = {
   ZONE_ISSUE_TYPES,
   SERVICE_CHECKLISTS,
   WO_PHOTO_CATEGORIES,
+  SCOPE_PROTECTED_FIELDS,
   templateForServiceKey,
   canBuildOnSiteQuote,
+  findProtectedFieldTouched,
+  appendHistory,
   list,
   get,
   listByProperty,

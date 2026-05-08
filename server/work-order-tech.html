@@ -424,6 +424,21 @@
       <p class="tech-payment-invoice" id="techPayInvoiceLine">No draft invoice yet. One will be created when the visit is marked completed.</p>
     </section>
 
+    <!-- History — append-only audit trail per spec §10 r4. Collapsed
+         by default; tap to expand. Shows every status change, signature,
+         photo upload, line-item event, deferred action, cascade fire,
+         and emergency override that's ever happened on this WO. -->
+    <section class="tech-section tech-history-section" id="techHistorySection">
+      <details class="tech-history-details">
+        <summary>
+          <span class="tech-history-summary-label">History</span>
+          <span class="tech-history-count" id="techHistoryCount">0</span>
+        </summary>
+        <ul class="tech-history-list" id="techHistoryList"></ul>
+        <p class="tech-history-empty" id="techHistoryEmpty" hidden>No entries yet.</p>
+      </details>
+    </section>
+
     <p class="tech-meta" id="techMeta">—</p>
 
     <!-- Sticky finish-the-visit bar — sits at the bottom so the tech's

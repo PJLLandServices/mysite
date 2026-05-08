@@ -885,7 +885,84 @@ function populateForm(wo) {
   renderServiceChecklist(wo);
   renderWoPhotos(wo);
   renderSignoff(wo);
+  renderHistory(wo);
   applyLockState(wo.locked === true, wo.signature);
+}
+
+// History viewer — append-only audit trail per spec §10 r4. Renders
+// newest-first as a flat list. Each entry: timestamp · actor · action
+// slug · summary note. Status changes show before→after on a second line.
+const HISTORY_ACTOR_LABELS = {
+  admin: "Admin",
+  tech: "Tech",
+  system: "System",
+  customer: "Customer"
+};
+const HISTORY_ACTION_LABELS = {
+  created: "Created",
+  status_change: "Status changed",
+  signature_capture: "Customer signed",
+  patch: "Edited",
+  photo_upload: "Photo uploaded",
+  photo_delete: "Photo removed",
+  quote_built: "Quote generated",
+  customer_accepted: "Customer accepted scope",
+  customer_declined_all: "Customer declined all",
+  remote_approval_sent: "Sent for remote approval",
+  issue_deferred: "Issue deferred",
+  issues_bulk_deferred: "Issues bulk-deferred",
+  emergency_override: "Emergency override",
+  carry_forward_repair_now: "Carry-forward → repair now",
+  carry_forward_declined: "Carry-forward → declined",
+  carry_forward_already_fixed: "Carry-forward → already fixed",
+  carry_forward_cannot_locate: "Carry-forward → can't locate",
+  cascade_fire: "Completion cascade",
+  invoice_drafted: "Invoice drafted (manual)",
+  followup_created: "Follow-up scheduled",
+  created_as_followup: "Created as follow-up",
+  created_as_emergency_followup: "Created as emergency follow-up"
+};
+
+function renderHistory(wo) {
+  const section = document.getElementById("woHistorySection");
+  const list = document.getElementById("woHistoryList");
+  const count = document.getElementById("woHistoryCount");
+  const empty = document.getElementById("woHistoryEmpty");
+  if (!section || !list) return;
+  const history = Array.isArray(wo?.history) ? wo.history.slice() : [];
+  if (count) count.textContent = String(history.length);
+  if (!history.length) {
+    list.innerHTML = "";
+    if (empty) empty.hidden = false;
+    return;
+  }
+  if (empty) empty.hidden = true;
+  // Newest first — sort by ts descending. Stable for entries with the
+  // same ts (cascade may write multiple entries within the same ms tick).
+  history.sort((a, b) => (new Date(b.ts || 0)) - (new Date(a.ts || 0)));
+  list.innerHTML = history.map(historyEntryHtml).join("");
+}
+
+function historyEntryHtml(entry) {
+  const ts = entry.ts ? formatDateTime(entry.ts) : "—";
+  const actorRaw = entry.by || "system";
+  const actor = HISTORY_ACTOR_LABELS[actorRaw] || actorRaw;
+  const actionLabel = HISTORY_ACTION_LABELS[entry.action] || (entry.action || "Updated").replace(/_/g, " ");
+  const note = entry.note ? escapeHtml(entry.note) : "";
+  const beforeAfter = (entry.before !== undefined || entry.after !== undefined)
+    ? `<span class="wo-history-diff">${escapeHtml(String(entry.before ?? "—"))} <span aria-hidden="true">→</span> ${escapeHtml(String(entry.after ?? "—"))}</span>`
+    : "";
+  return `
+    <li class="wo-history-row" data-action="${escapeHtml(entry.action || "")}">
+      <div class="wo-history-row-head">
+        <span class="wo-history-action">${escapeHtml(actionLabel)}</span>
+        <span class="wo-history-ts">${escapeHtml(ts)}</span>
+        <span class="wo-history-actor">${escapeHtml(actor)}</span>
+      </div>
+      ${note ? `<p class="wo-history-note">${note}</p>` : ""}
+      ${beforeAfter}
+    </li>
+  `;
 }
 
 // WO-level photo gallery — anything not tied to a specific issue.

@@ -2895,12 +2895,89 @@ async function init() {
     renderRunStatus();
     renderZones();
 
+    // History viewer — append-only audit trail. Hydrated from the WO
+    // record on load; doesn't update mid-session (refresh to see
+    // freshly-appended entries). Spec §10 r4.
+    state.history = Array.isArray(wo.history) ? wo.history.slice() : [];
+    renderTechHistory();
+
     techLoading.hidden = true;
     techMain.hidden = false;
   } catch {
     techLoading.hidden = true;
     techError.hidden = false;
   }
+}
+
+// ---- History viewer (spec §10 r4) -----------------------------------
+// Tech-mode mirror of the desktop History panel. Same data, terser layout
+// (no diff column — fits the narrow viewport). Read-only. Newest-first.
+const TECH_HISTORY_ACTOR_LABELS = {
+  admin: "Admin",
+  tech: "Tech",
+  system: "System",
+  customer: "Customer"
+};
+const TECH_HISTORY_ACTION_LABELS = {
+  created: "Created",
+  status_change: "Status",
+  signature_capture: "Signature",
+  patch: "Edited",
+  photo_upload: "Photo +",
+  photo_delete: "Photo −",
+  quote_built: "Quote built",
+  customer_accepted: "Accepted",
+  customer_declined_all: "Declined all",
+  remote_approval_sent: "Approval sent",
+  issue_deferred: "Issue deferred",
+  issues_bulk_deferred: "Bulk deferred",
+  emergency_override: "Emergency",
+  carry_forward_repair_now: "CF → repair",
+  carry_forward_declined: "CF → declined",
+  carry_forward_already_fixed: "CF → fixed",
+  carry_forward_cannot_locate: "CF → no locate",
+  cascade_fire: "Cascade",
+  invoice_drafted: "Invoice draft",
+  followup_created: "Follow-up",
+  created_as_followup: "From parent",
+  created_as_emergency_followup: "Emergency follow-up"
+};
+
+function renderTechHistory() {
+  const list = document.getElementById("techHistoryList");
+  const count = document.getElementById("techHistoryCount");
+  const empty = document.getElementById("techHistoryEmpty");
+  if (!list) return;
+  const history = Array.isArray(state.history) ? state.history.slice() : [];
+  if (count) count.textContent = String(history.length);
+  if (!history.length) {
+    list.innerHTML = "";
+    if (empty) empty.hidden = false;
+    return;
+  }
+  if (empty) empty.hidden = true;
+  history.sort((a, b) => (new Date(b.ts || 0)) - (new Date(a.ts || 0)));
+  list.innerHTML = history.map((entry) => {
+    const ts = entry.ts ? formatDateTime(entry.ts) : "—";
+    const actorRaw = entry.by || "system";
+    const actor = TECH_HISTORY_ACTOR_LABELS[actorRaw] || actorRaw;
+    const actionLabel = TECH_HISTORY_ACTION_LABELS[entry.action] || (entry.action || "Updated").replace(/_/g, " ");
+    const note = entry.note ? escapeHtml(entry.note) : "";
+    const diff = (entry.before !== undefined || entry.after !== undefined)
+      ? `<span class="tech-history-diff">${escapeHtml(String(entry.before ?? "—"))} → ${escapeHtml(String(entry.after ?? "—"))}</span>`
+      : "";
+    return `
+      <li class="tech-history-row">
+        <div class="tech-history-row-head">
+          <span class="tech-history-action">${escapeHtml(actionLabel)}</span>
+          <span class="tech-history-actor">${escapeHtml(actor)}</span>
+          <span class="tech-history-ts">${escapeHtml(ts)}</span>
+        </div>
+        ${note ? `<p class="tech-history-note">${note}</p>` : ""}
+        ${diff}
+      </li>
+    `;
+  }).join("");
 }
 
 // ---- Materials checklist (spec §4.3.2) ---------------------------------

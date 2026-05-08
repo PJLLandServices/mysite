@@ -1317,6 +1317,108 @@ body[data-locked="true"] .wo-zone-location {
 .wo-cascade-status[data-kind="error"] { color: #C03A2C; font-weight: 600; }
 .wo-cascade-status[data-kind="info"] { color: #555; }
 
+/* History viewer — append-only audit trail. Collapsed by default
+   (history can grow long over a WO's lifetime); summary header shows
+   entry count so Patrick can scan without expanding. */
+.wo-history-section { margin: 24px 0; }
+.wo-history-section .wo-history-details {
+  background: #FAFAF5;
+  border: 1px solid #E5E5DD;
+  border-radius: 12px;
+  padding: 0;
+}
+.wo-history-section summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 18px;
+  cursor: pointer;
+  list-style: none;
+}
+.wo-history-section summary::-webkit-details-marker { display: none; }
+.wo-history-section summary h2 {
+  margin: 0;
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 18px;
+  color: #1B4D2E;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  flex: 1;
+}
+.wo-history-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  padding: 2px 8px;
+  background: #1B4D2E;
+  color: #fff;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.wo-history-section[open] summary { border-bottom: 1px solid #E5E5DD; }
+.wo-history-section .property-section-help {
+  margin: 12px 18px 8px;
+  font-size: 12px;
+  color: #777;
+}
+.wo-history-list {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 8px;
+}
+.wo-history-row {
+  padding: 10px 18px;
+  border-top: 1px solid #EEE;
+  font-size: 13px;
+}
+.wo-history-row:first-child { border-top: none; }
+.wo-history-row-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: baseline;
+}
+.wo-history-action {
+  font-weight: 600;
+  color: #1B4D2E;
+}
+.wo-history-ts {
+  color: #888;
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+}
+.wo-history-actor {
+  color: #888;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-left: auto;
+}
+.wo-history-note {
+  margin: 4px 0 0;
+  color: #555;
+  line-height: 1.5;
+}
+.wo-history-diff {
+  display: inline-block;
+  margin-top: 4px;
+  padding: 2px 8px;
+  background: #F0EBE0;
+  border-radius: 6px;
+  font-size: 12px;
+  color: #555;
+  font-family: "DM Sans", monospace;
+}
+.wo-history-empty {
+  margin: 12px 18px 18px;
+  font-size: 13px;
+  color: #888;
+  font-style: italic;
+}
+
 /* Voice-to-text mic button (spec §4.3.3 rule #10). Same component as
    the tech-mode page; styles duplicated here so the desktop CSS file
    stays self-contained. */

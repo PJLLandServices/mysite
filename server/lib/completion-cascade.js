@@ -17,6 +17,7 @@
 
 const properties = require("./properties");
 const invoices = require("./invoices");
+const workOrders = require("./work-orders");
 
 // Warranty defaults by service type. Spec §4.3.4 says 1yr repairs / 3yr
 // installs. Map service_visit + spring/fall openings to "repair" tier;
@@ -149,6 +150,20 @@ async function run(wo, deps = {}) {
     try { await deps.notifyCustomer({ wo, serviceRecord, invoice }); }
     catch (err) { console.warn("[cascade] customer notify failed:", err?.message); }
   }
+
+  // Audit-trail breadcrumb on the WO. Only logged on real execution
+  // (the alreadyRan: true short-circuit above returns before reaching
+  // here), so re-firing the cascade on an already-completed WO won't
+  // spam the history. Brief A spec.
+  try {
+    await workOrders.appendHistory(wo.id, {
+      action: "cascade_fire",
+      by: "system",
+      note: invoice
+        ? `Service record + draft invoice ${invoice.id} ($${Number(invoice.total).toFixed(2)})`
+        : "Service record (no charge)"
+    });
+  } catch (err) { console.warn("[cascade] history append failed:", err?.message); }
 
   return { ok: true, serviceRecord, invoice, alreadyRan: false };
 }

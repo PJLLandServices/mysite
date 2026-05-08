@@ -3440,6 +3440,16 @@ async function handleApi(req, res, pathname) {
           quoteId: quoteRecord.id
         }
       });
+      try {
+        const channels = [];
+        if (results.emailSent) channels.push("email");
+        if (results.smsSent) channels.push("SMS");
+        await workOrders.appendHistory(id, {
+          action: "remote_approval_sent",
+          by: "tech",
+          note: `Quote ${quoteRecord.id}${channels.length ? ` via ${channels.join("+")}` : " (no channel succeeded)"}`
+        });
+      } catch (err) { console.warn("[wo-history] remote_approval entry failed:", err?.message); }
 
       return sendJson(res, 200, { ok: true, quote: quoteRecord, ...results });
     } catch (err) {
@@ -3974,6 +3984,23 @@ async function handleApi(req, res, pathname) {
         sendNewLeadSms(aliasLead, { baseUrl })
       ]).catch(() => {});
 
+      // Audit trail on BOTH the parent (followup_created) and the child
+      // WO (created_as_followup). The lib's POST /api/work-orders path
+      // would have logged a generic created entry on the child; replace
+      // it with one that explicitly carries the parent pointer.
+      try {
+        await workOrders.appendHistory(parent.id, {
+          action: "followup_created",
+          by: "tech",
+          note: `Follow-up WO ${followup.id}${validatedSlot ? ` scheduled for ${validatedSlot.start}` : " (unscheduled — needs manual booking)"}`
+        });
+        await workOrders.appendHistory(followup.id, {
+          action: "created_as_followup",
+          by: "tech",
+          note: `Spawned from ${parent.id}`
+        });
+      } catch (err) { console.warn("[wo-history] follow-up entry failed:", err?.message); }
+
       return sendJson(res, 201, {
         ok: true,
         followupWoId: followup.id,
@@ -4026,6 +4053,13 @@ async function handleApi(req, res, pathname) {
         lineItems: woLineItems,
         notes: wo.techNotes ? wo.techNotes.slice(0, 500) : ""
       });
+      try {
+        await workOrders.appendHistory(id, {
+          action: "invoice_drafted",
+          by: "admin",
+          note: `Manual: ${inv.id} ($${Number(inv.total).toFixed(2)})`
+        });
+      } catch (err) { console.warn("[wo-history] manual invoice entry failed:", err?.message); }
       return sendJson(res, 201, { ok: true, invoice: inv, alreadyExisted: false });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't create invoice."] });
@@ -5117,6 +5151,22 @@ async function handleApi(req, res, pathname) {
         }
       }
 
+      // Audit trail — first entry on the new WO. Captures source
+      // (lead/property/booking/quote) so the history viewer shows the
+      // origin without a second fetch.
+      try {
+        const sourceParts = [];
+        if (lead) sourceParts.push(`lead ${lead.id}`);
+        if (property) sourceParts.push(`property ${property.id}`);
+        if (sourceQuote) sourceParts.push(`quote ${sourceQuote.id}`);
+        if (lead?.booking?.start) sourceParts.push(`booking @ ${lead.booking.start}`);
+        await workOrders.appendHistory(wo.id, {
+          action: "created",
+          by: "admin",
+          note: `${workOrders.TEMPLATES[type].label}${sourceParts.length ? ` from ${sourceParts.join(", ")}` : ""}`
+        });
+      } catch (err) { console.warn("[wo-history] create entry failed:", err?.message); }
+
       return sendJson(res, 200, { ok: true, workOrder: wo });
     } catch (error) {
       return sendJson(res, 400, { ok: false, errors: [error.message || "Couldn't create work order."] });
@@ -5211,50 +5261,91 @@ async function handleApi(req, res, pathname) {
       const id = decodeURIComponent(workOrderMatch[1]);
       const payload = await parseRequestBody(req);
 
+      // Pre-load the existing record once so the rest of the route can
+      // make scope-lock decisions without round-tripping `workOrders.get`
+      // multiple times. Also gives us the prior status for the cascade
+      // trigger below and a clean diff source for the history entries.
+      const existing = await workOrders.get(id);
+      if (!existing) return sendJson(res, 404, { ok: false, errors: ["Work order not found."] });
+
+      // Spec §10 r11 + §4.3.3 r5 — once the WO is locked (signed), any
+      // payload that touches a scope-protected field is refused with a
+      // 409. Non-scope fields (status forward-progression, photos via
+      // dedicated route, materials, paidOnSite, departure stamp,
+      // techNotes, serviceChecklist) keep flowing — the WO continues
+      // operationally; only the scope is frozen.
+      if (existing.locked === true || existing.signature?.signed === true) {
+        const touched = workOrders.findProtectedFieldTouched(payload);
+        if (touched) {
+          return sendJson(res, 409, {
+            ok: false,
+            errors: [`Work order is signed and locked. Scope-protected field "${touched}" cannot be modified.`],
+            error: "wo_locked",
+            field: touched,
+            signedAt: existing.signature?.signedAt || null
+          });
+        }
+      }
+
       // Customer sign-off — when the patch carries a signature with an
       // image, customer name, and acknowledgement, this is the legally
       // binding moment per spec §4.3.2. Server fills in the audit
       // metadata (signedAt / ip / userAgent) so the client can't fake
-      // them, then locks the WO. Existing-signed WOs ignore further
-      // signature patches (re-signing requires explicit unlock by Patrick,
-      // which is its own future flow).
+      // them, then locks the WO. Already-signed WOs are caught by the
+      // scope-protected check above (signature is in SCOPE_PROTECTED_FIELDS),
+      // so reaching this branch guarantees the WO isn't yet signed.
       if (payload && payload.signature && typeof payload.signature === "object") {
         const sig = payload.signature;
         const isFreshSign = sig.acknowledgement === true
           && typeof sig.imageData === "string" && sig.imageData.length > 50
           && typeof sig.customerName === "string" && sig.customerName.trim().length > 0;
         if (isFreshSign) {
-          const existing = await workOrders.get(id);
-          if (existing && existing.signature && existing.signature.signed) {
-            // Already signed — drop the signature patch silently rather
-            // than overwriting the audit trail.
-            delete payload.signature;
-          } else {
-            // Cap the signature image at 500KB of base64 to prevent
-            // oversized PNGs from blowing up the JSON store.
-            if (sig.imageData.length > 500_000) {
-              return sendJson(res, 422, { ok: false, errors: ["Signature image is too large. Try clearing and signing again."] });
-            }
-            const ip = (req.headers["x-forwarded-for"] || "").split(",")[0].trim() || req.socket?.remoteAddress || "";
-            const userAgent = req.headers["user-agent"] || "";
-            payload.signature = {
-              ...sig,
-              signed: true,
-              signedAt: new Date().toISOString(),
-              ip,
-              userAgent
-            };
-            payload.locked = true;
+          // Cap the signature image at 500KB of base64 to prevent
+          // oversized PNGs from blowing up the JSON store.
+          if (sig.imageData.length > 500_000) {
+            return sendJson(res, 422, { ok: false, errors: ["Signature image is too large. Try clearing and signing again."] });
           }
+          const ip = (req.headers["x-forwarded-for"] || "").split(",")[0].trim() || req.socket?.remoteAddress || "";
+          const userAgent = req.headers["user-agent"] || "";
+          payload.signature = {
+            ...sig,
+            signed: true,
+            signedAt: new Date().toISOString(),
+            ip,
+            userAgent
+          };
+          payload.locked = true;
         }
       }
 
       // Snapshot the prior status so we can detect a transition to
       // "completed" and fire the cascade exactly once.
-      const priorStatus = (await workOrders.get(id))?.status || null;
+      const priorStatus = existing.status || null;
 
       const updated = await workOrders.update(id, payload);
       if (!updated) return sendJson(res, 404, { ok: false, errors: ["Work order not found."] });
+
+      // Audit trail — append a generic mutation entry for non-status,
+      // non-signature fields. Status_change and signature_capture are
+      // logged inline by the lib's update() so we don't double-log here.
+      // We DO want one breadcrumb entry summarising what else moved
+      // (zone edits, notes, materials packed, etc.) so the history
+      // viewer surfaces every operational tap.
+      const interestingFields = Object.keys(payload || {}).filter((k) =>
+        !["status", "signature", "__by", "__statusNote"].includes(k)
+      );
+      if (interestingFields.length) {
+        const summary = interestingFields.length <= 3
+          ? interestingFields.join(", ")
+          : `${interestingFields.slice(0, 3).join(", ")} (+${interestingFields.length - 3} more)`;
+        try {
+          await workOrders.appendHistory(id, {
+            action: "patch",
+            by: "admin",
+            note: `Updated: ${summary}`
+          });
+        } catch (err) { console.warn("[wo-history] patch entry failed:", err?.message); }
+      }
 
       // Completion cascade — spec §4.3.4. Fires when the WO transitions
       // INTO completed (any prior status). Idempotent at the cascade
@@ -5442,6 +5533,17 @@ async function handleApi(req, res, pathname) {
         woCode: wo.id
       });
       const updated = await workOrders.update(id, { photos: [...existing, ...newMeta] });
+      // Audit trail per Brief A — one entry per upload batch (not per file)
+      // so a 5-photo upload doesn't spam the history viewer. Photos are
+      // not scope-protected so this entry stands even on locked WOs.
+      try {
+        const cats = Array.from(new Set(newMeta.map((m) => m.category || "general")));
+        await workOrders.appendHistory(id, {
+          action: "photo_upload",
+          by: "tech",
+          note: `+${newMeta.length} photo${newMeta.length === 1 ? "" : "s"} (${cats.join(", ")})`
+        });
+      } catch (err) { console.warn("[wo-history] photo upload entry failed:", err?.message); }
       return sendJson(res, 201, { ok: true, workOrder: updated, added: newMeta });
     } catch (error) {
       return sendJson(res, 400, { ok: false, errors: [error.message || "Couldn't upload photos."] });
@@ -5462,6 +5564,13 @@ async function handleApi(req, res, pathname) {
       await deleteWorkOrderPhotoFile(id, n);
       const nextPhotos = existing.filter((p) => Number(p.n) !== n);
       const updated = await workOrders.update(id, { photos: nextPhotos });
+      try {
+        await workOrders.appendHistory(id, {
+          action: "photo_delete",
+          by: "admin",
+          note: `Removed photo #${n} (${photoMeta.category || "general"})`
+        });
+      } catch (err) { console.warn("[wo-history] photo delete entry failed:", err?.message); }
       return sendJson(res, 200, { ok: true, workOrder: updated, deletedN: n });
     } catch (error) {
       return sendJson(res, 400, { ok: false, errors: [error.message || "Couldn't delete photo."] });
@@ -5541,6 +5650,13 @@ async function handleApi(req, res, pathname) {
           builderLineItems: merged
         }
       });
+      try {
+        await workOrders.appendHistory(id, {
+          action: "quote_built",
+          by: "tech",
+          note: `Generated ${result.lineItems.length} line${result.lineItems.length === 1 ? "" : "s"} from issues — total $${Number(totals.total).toFixed(2)}`
+        });
+      } catch (err) { console.warn("[wo-history] quote_built entry failed:", err?.message); }
       return sendJson(res, 200, {
         ok: true,
         workOrder: updated,
@@ -5811,6 +5927,17 @@ async function handleApi(req, res, pathname) {
           builderLineItems: builderLines
         }
       });
+      try {
+        const noteParts = [];
+        if (acceptedLines.length) noteParts.push(`accepted ${acceptedLines.length}`);
+        if (declinedLines.length) noteParts.push(`declined ${declinedLines.length}`);
+        if (quoteRecord) noteParts.push(`Quote ${quoteRecord.id}`);
+        await workOrders.appendHistory(id, {
+          action: "customer_accepted",
+          by: "customer",
+          note: `${customerName} signed — ${noteParts.join(", ")}`
+        });
+      } catch (err) { console.warn("[wo-history] customer_accepted entry failed:", err?.message); }
 
       return sendJson(res, 200, {
         ok: true,
@@ -5883,6 +6010,13 @@ async function handleApi(req, res, pathname) {
       const updated = await workOrders.update(id, {
         onSiteQuote: { ...wo.onSiteQuote, status: "declined", quoteId: null }
       });
+      try {
+        await workOrders.appendHistory(id, {
+          action: "customer_declined_all",
+          by: "customer",
+          note: `${deferredIds.length} item${deferredIds.length === 1 ? "" : "s"} routed to deferred recommendations`
+        });
+      } catch (err) { console.warn("[wo-history] decline-all entry failed:", err?.message); }
       return sendJson(res, 200, { ok: true, workOrder: updated, deferredIds });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't decline."] });
@@ -5963,6 +6097,13 @@ async function handleApi(req, res, pathname) {
       if (!entry) return sendJson(res, 500, { ok: false, errors: ["Couldn't write deferred entry."] });
 
       const updatedWo = await workOrders.update(id, { zones });
+      try {
+        await workOrders.appendHistory(id, {
+          action: "issue_deferred",
+          by: "tech",
+          note: `Zone ${zoneNumber} ${issue.type} (qty ${issue.qty || 1}) → deferred ${entry.id} [${reason}]`
+        });
+      } catch (err) { console.warn("[wo-history] issue_deferred entry failed:", err?.message); }
       return sendJson(res, 201, { ok: true, deferred: entry, workOrder: updatedWo });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't defer issue."] });
@@ -6078,6 +6219,20 @@ Customer signature captured at ${new Date().toISOString()}.`;
         sendNewLeadEmail(aliasLead, { baseUrl }),
         sendNewLeadSms(aliasLead, { baseUrl })
       ]).catch(() => {});
+      try {
+        await workOrders.appendHistory(id, {
+          action: "emergency_override",
+          by: "tech",
+          note: `Zone ${zoneNumber} ${issue.type} → ${severityReason}. Patrick paged. Follow-up WO ${followupWoId || "FAILED"}.`
+        });
+        if (followupWoId) {
+          await workOrders.appendHistory(followupWoId, {
+            action: "created_as_emergency_followup",
+            by: "tech",
+            note: `Spawned from fall WO ${id} emergency override (${severityReason})`
+          });
+        }
+      } catch (err) { console.warn("[wo-history] emergency entry failed:", err?.message); }
 
       return sendJson(res, 201, {
         ok: true,
@@ -6117,6 +6272,13 @@ Customer signature captured at ${new Date().toISOString()}.`;
       }
       // Clear the issues off the WO so the tech UI reflects everything's deferred.
       await workOrders.update(id, { zones: remainingZones });
+      try {
+        await workOrders.appendHistory(id, {
+          action: "issues_bulk_deferred",
+          by: "tech",
+          note: `${deferredIds.length} issue${deferredIds.length === 1 ? "" : "s"} routed to deferred recommendations (fall closing find-only)`
+        });
+      } catch (err) { console.warn("[wo-history] bulk-defer entry failed:", err?.message); }
       return sendJson(res, 200, { ok: true, deferredCount: deferredIds.length, deferredIds });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't defer issues."] });
@@ -6189,6 +6351,13 @@ Customer signature captured at ${new Date().toISOString()}.`;
           }
         });
         const totals = issueRollup.recomputeTotals(updatedWo.onSiteQuote.builderLineItems);
+        try {
+          await workOrders.appendHistory(woId, {
+            action: "carry_forward_repair_now",
+            by: "tech",
+            note: `${entry.type || "issue"} from prior visit → ${carriedLines.length} line${carriedLines.length === 1 ? "" : "s"} added (${deferredId})`
+          });
+        } catch (err) { console.warn("[wo-history] cf repair entry failed:", err?.message); }
         return sendJson(res, 200, { ok: true, deferred: updatedEntry, workOrder: updatedWo, ...totals });
       }
 
@@ -6199,6 +6368,13 @@ Customer signature captured at ${new Date().toISOString()}.`;
           reDeferralCount: (Number(entry.reDeferralCount) || 0) + 1,
           resolution: null
         });
+        try {
+          await workOrders.appendHistory(woId, {
+            action: "carry_forward_declined",
+            by: "tech",
+            note: `${entry.type || "issue"} re-deferred (${updatedEntry.reDeferralCount}× declined): ${deferredId}`
+          });
+        } catch (err) { console.warn("[wo-history] cf decline entry failed:", err?.message); }
         return sendJson(res, 200, { ok: true, deferred: updatedEntry });
       }
 
@@ -6212,6 +6388,13 @@ Customer signature captured at ${new Date().toISOString()}.`;
             note: note || "Already fixed at arrival."
           }
         });
+        try {
+          await workOrders.appendHistory(woId, {
+            action: "carry_forward_already_fixed",
+            by: "tech",
+            note: `${entry.type || "issue"} resolved at arrival: ${deferredId}`
+          });
+        } catch (err) { console.warn("[wo-history] cf already_fixed entry failed:", err?.message); }
         return sendJson(res, 200, { ok: true, deferred: updatedEntry });
       }
 
@@ -6225,6 +6408,13 @@ Customer signature captured at ${new Date().toISOString()}.`;
           note: note || "Tech could not locate the deferred item."
         }
       });
+      try {
+        await workOrders.appendHistory(woId, {
+          action: "carry_forward_cannot_locate",
+          by: "tech",
+          note: `${entry.type || "issue"} couldn't be located: ${deferredId}`
+        });
+      } catch (err) { console.warn("[wo-history] cf cannot_locate entry failed:", err?.message); }
       return sendJson(res, 200, { ok: true, deferred: updatedEntry });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't update carry-forward item."] });
