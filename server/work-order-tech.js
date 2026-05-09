@@ -975,6 +975,46 @@ function closeZoneSheet() {
 
 sheetClose.addEventListener("click", closeZoneSheet);
 sheetDone.addEventListener("click", closeZoneSheet);
+
+// Delete zone — destructive action, confirm-prompted with copy that
+// reflects what's about to be lost. Removes the zone from state.zones,
+// PATCHes the WO, and closes the sheet. Refuses on locked WOs (defense
+// in depth — applyLockState also disables the button visually).
+document.getElementById("sheetDeleteZone")?.addEventListener("click", () => {
+  if (state.locked) return;
+  const idx = state.activeZoneIndex;
+  const zone = idx >= 0 ? state.zones[idx] : null;
+  if (!zone) return;
+  // Build a context-aware confirm message. If the zone has any captured
+  // evidence (issues, photos, notes, status, ticked checks, sprinkler/
+  // coverage selections), the tech might be about to nuke real on-site
+  // documentation — say so explicitly.
+  const photoCount = (state.photos || []).filter((p) => Number(p.zoneNumber) === Number(zone.number)).length;
+  const issueCount = Array.isArray(zone.issues) ? zone.issues.length : 0;
+  const checkCount = zone.checks ? Object.values(zone.checks).filter(Boolean).length : 0;
+  const hasNotes = !!(zone.notes && zone.notes.trim());
+  const hasStatus = !!zone.status;
+  const hasMultiSelects = (Array.isArray(zone.sprinklerTypes) && zone.sprinklerTypes.length) ||
+                          (Array.isArray(zone.coverage) && zone.coverage.length);
+  const captured = [];
+  if (issueCount) captured.push(`${issueCount} issue${issueCount === 1 ? "" : "s"}`);
+  if (photoCount) captured.push(`${photoCount} photo${photoCount === 1 ? "" : "s"}`);
+  if (checkCount) captured.push(`${checkCount} check${checkCount === 1 ? "" : "s"}`);
+  if (hasNotes)   captured.push("notes");
+  if (hasStatus)  captured.push("status");
+  if (hasMultiSelects) captured.push("sprinkler/coverage selections");
+  const zoneLabel = zone.location ? `${zone.location} (Zone ${zone.number})` : `Zone ${zone.number}`;
+  const message = captured.length
+    ? `Delete ${zoneLabel}?\n\nThis will discard ${captured.join(", ")}. This can't be undone.`
+    : `Delete ${zoneLabel}?\n\nThis can't be undone.`;
+  if (!confirm(message)) return;
+
+  // Splice the zone out, close the sheet, re-render, persist.
+  state.zones.splice(idx, 1);
+  closeZoneSheet();
+  renderZones();
+  patchWorkOrder({ zones: state.zones });
+});
 techSheet.addEventListener("click", (event) => {
   if (event.target === techSheet) closeZoneSheet();
 });
@@ -1812,6 +1852,7 @@ function applyLockState(locked) {
   disable("#techServiceChecklistList button");
   disable("#techZoneList button");
   disable("#techAddZoneBtn");
+  disable("#sheetDeleteZone");
   disable("#techSignoffName");
   disable("#techSignoffAck");
   disable("#techSignoffSubmit");

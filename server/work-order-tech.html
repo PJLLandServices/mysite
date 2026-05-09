@@ -550,6 +550,15 @@
       <textarea id="sheetNotes" rows="4" placeholder="What did you find / do?" data-voice-input></textarea>
 
       <button type="button" class="tech-sheet-done" id="sheetDone">Done</button>
+
+      <!-- Delete zone — destructive secondary action. Always visible
+           on an unlocked WO; auto-confirms via prompt. Strong-warning
+           copy when the zone has issues/photos/notes attached so the
+           tech can't nuke captured evidence on accident. Hidden when
+           the WO is signed/locked (zone deletion isn't scope-protected
+           per Brief A but post-sign deletion of a documented zone is
+           rare enough to gate on lock). -->
+      <button type="button" class="tech-sheet-delete" id="sheetDeleteZone">Delete zone</button>
     </div>
   </div>
 

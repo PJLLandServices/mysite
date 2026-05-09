@@ -31,7 +31,10 @@
 // Briefs A through G (history viewer, post-sig banner, AI bonus card,
 // property-edits preview, on-site quote builder evolution), and the
 // hot-fix multi-selects + horizontal-scroll changes.
-const CACHE_VERSION = "pjl-tech-v11";
+// Bumped 2026-05-09 (v11 → v12): adds the "Delete zone" button in the
+// zone bottom-sheet (with confirm prompt) — touches HTML, JS, and CSS,
+// so phones still on v11 won't see the button until they update.
+const CACHE_VERSION = "pjl-tech-v12";
 const STATIC_ASSETS = [
   "/crm/work-order-tech.html",
   "/crm/work-order-tech.js",

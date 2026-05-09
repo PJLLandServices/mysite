@@ -2101,6 +2101,32 @@ body[data-locked="true"] .tech-on-site-defer {
 }
 .tech-sheet-done:active { transform: scale(0.98); }
 
+/* Delete zone — destructive secondary action under the Done button.
+   Outline style (not filled red) so it doesn't compete visually with
+   Done — Patrick wanted the option present without making it the
+   first-glance affordance. Confirm-prompted in JS. */
+.tech-sheet-delete {
+  width: 100%;
+  min-height: 44px;
+  margin-top: 10px;
+  padding: 10px 14px;
+  background: transparent;
+  color: var(--tech-red, #C03A2C);
+  border: 1.5px solid rgba(192, 58, 44, 0.40);
+  border-radius: 10px;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.tech-sheet-delete:hover {
+  background: rgba(192, 58, 44, 0.06);
+  border-color: var(--tech-red, #C03A2C);
+}
+.tech-sheet-delete:active { transform: scale(0.98); }
+.tech-sheet-delete:disabled { opacity: 0.45; cursor: not-allowed; }
+
 /* ---- Carry-forward banner (spec §5) ----------------------------------
    Spring opening WOs surface every open + pre-authorized deferred item
    from the property's history at the top of the WO so the tech walks in
