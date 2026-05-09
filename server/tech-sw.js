@@ -19,7 +19,19 @@
 //   - Conflict resolution (last-write-wins; the queue replay endpoint
 //     trusts the latest mutation, no IF-MATCH revision check)
 
-const CACHE_VERSION = "pjl-tech-v10";
+// CACHE_VERSION must be bumped any time STATIC_ASSETS content changes.
+// The activate handler below deletes any cache that doesn't match this
+// exact string, so a bump invalidates every iPhone's stale copy. Skipped
+// bumps mean tech phones keep serving pre-deployment HTML/JS/CSS even
+// after the new code lands on Render — the symptom Patrick saw was
+// "the zone bottom-sheet is gone again" because his phone had cached
+// markup from before the +Add zone / multi-selects work landed.
+//
+// Bumped 2026-05-09 (v10 → v11): catches up on bf1a147 (+Add zone),
+// Briefs A through G (history viewer, post-sig banner, AI bonus card,
+// property-edits preview, on-site quote builder evolution), and the
+// hot-fix multi-selects + horizontal-scroll changes.
+const CACHE_VERSION = "pjl-tech-v11";
 const STATIC_ASSETS = [
   "/crm/work-order-tech.html",
   "/crm/work-order-tech.js",
