@@ -60,12 +60,92 @@ function apiBase() {
 }
 
 // ---- Token persistence ------------------------------------------------
+//
+// Tokens are encrypted at rest (AES-256-GCM) per Intuit's "App
+// encrypts access tokens before storing them" production-keys
+// requirement. The encryption key is either:
+//
+//   1. process.env.TOKEN_ENCRYPTION_KEY  — 32-byte hex string (preferred)
+//   2. Derived from QB_CLIENT_SECRET via SHA-256                (fallback)
+//
+// The fallback means existing deployments don't need a new env var to
+// pick up encryption — but it ties the at-rest key to the OAuth secret,
+// which isn't ideal long-term. Set TOKEN_ENCRYPTION_KEY explicitly in
+// production for proper key separation.
+//
+// Stored format: { iv, ciphertext, tag }, all base64. Plaintext-format
+// tokens (from before this change) are auto-migrated on first read —
+// we detect by the absence of `iv` / `ciphertext`, decrypt as plaintext
+// JSON, then rewrite encrypted.
+
+const cryptoLib = require("node:crypto");
+
+function getEncryptionKey() {
+  const explicit = process.env.TOKEN_ENCRYPTION_KEY;
+  if (explicit) {
+    // Accept hex (64 chars) or base64 (44 chars with padding).
+    const hexClean = explicit.trim().toLowerCase();
+    if (/^[0-9a-f]{64}$/.test(hexClean)) return Buffer.from(hexClean, "hex");
+    try {
+      const buf = Buffer.from(explicit, "base64");
+      if (buf.length === 32) return buf;
+    } catch {}
+    // Fall through to derived key if the env var is malformed.
+  }
+  const cfg = envCfg();
+  if (!cfg.clientSecret) {
+    throw new Error("Cannot derive token encryption key — set TOKEN_ENCRYPTION_KEY or QB_CLIENT_SECRET in env vars.");
+  }
+  return cryptoLib.createHash("sha256").update("pjl.qb.tokens.v1:" + cfg.clientSecret).digest();
+}
+
+function encryptTokens(tokens) {
+  const key = getEncryptionKey();
+  const iv = cryptoLib.randomBytes(12); // 96-bit IV is the GCM standard
+  const cipher = cryptoLib.createCipheriv("aes-256-gcm", key, iv);
+  const plaintext = Buffer.from(JSON.stringify(tokens), "utf8");
+  const enc = Buffer.concat([cipher.update(plaintext), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return {
+    v: 1,
+    iv: iv.toString("base64"),
+    ciphertext: enc.toString("base64"),
+    tag: tag.toString("base64")
+  };
+}
+
+function decryptTokens(envelope) {
+  const key = getEncryptionKey();
+  const iv = Buffer.from(envelope.iv, "base64");
+  const enc = Buffer.from(envelope.ciphertext, "base64");
+  const tag = Buffer.from(envelope.tag, "base64");
+  const decipher = cryptoLib.createDecipheriv("aes-256-gcm", key, iv);
+  decipher.setAuthTag(tag);
+  const dec = Buffer.concat([decipher.update(enc), decipher.final()]);
+  return JSON.parse(dec.toString("utf8"));
+}
 
 async function readTokens() {
   if (!fsSync.existsSync(TOKEN_FILE)) return null;
   try {
     const raw = await fs.readFile(TOKEN_FILE, "utf8");
-    return JSON.parse(raw);
+    const parsed = JSON.parse(raw);
+    if (parsed?.iv && parsed?.ciphertext && parsed?.tag) {
+      // Encrypted envelope — decrypt and return.
+      return decryptTokens(parsed);
+    }
+    // Legacy plaintext format — migrate transparently. Auto-rewrite as
+    // encrypted so the next read takes the encrypted path.
+    if (parsed?.access_token) {
+      try {
+        await fs.writeFile(TOKEN_FILE, JSON.stringify(encryptTokens(parsed), null, 2) + "\n", "utf8");
+        console.log("[qb] token store migrated to encrypted format.");
+      } catch (e) {
+        console.warn("[qb] token migration write failed:", e.message);
+      }
+      return parsed;
+    }
+    return null;
   } catch {
     return null;
   }
@@ -73,7 +153,8 @@ async function readTokens() {
 
 async function writeTokens(tokens) {
   await fs.mkdir(path.dirname(TOKEN_FILE), { recursive: true });
-  await fs.writeFile(TOKEN_FILE, JSON.stringify(tokens, null, 2) + "\n", "utf8");
+  const envelope = encryptTokens(tokens);
+  await fs.writeFile(TOKEN_FILE, JSON.stringify(envelope, null, 2) + "\n", "utf8");
 }
 
 async function isConnected() {
