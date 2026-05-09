@@ -35,7 +35,7 @@ const crypto = require("node:crypto");
 
 const { sendNewLeadEmail } = require("./lib/notify-email");
 const { sendNewLeadSms } = require("./lib/notify-sms");
-const { notifyCustomer, eventForTransition, sendInvoiceToCustomer } = require("./lib/notify-customer");
+const { notifyCustomer, eventForTransition, sendInvoiceToCustomer, sendPaymentReceipt } = require("./lib/notify-customer");
 const { geocode, PJL_BASE } = require("./lib/geocode");
 const { BOOKABLE_SERVICES, DEFAULT_HOURS, DEFAULT_SETTINGS, listAvailableSlots, groupByDay } = require("./lib/availability");
 const scheduleStore = require("./lib/schedule-store");
@@ -3208,6 +3208,21 @@ async function handleApi(req, res, pathname) {
           : `Charged ${chargeResult.id} on ${new Date().toISOString()}.`
       });
 
+      // Fire the payment-receipt email. Best effort — a receipt-send
+      // failure does NOT roll back the charge or block the customer's
+      // redirect to the thanks page. The PDF attachment uses the same
+      // generator as the original invoice email so the customer's
+      // email trail has both the original invoice and the paid receipt
+      // referencing the same document.
+      let receiptWarning = null;
+      try {
+        const receiptPdf = await generateInvoicePdf(updated);
+        await sendPaymentReceipt(updated, receiptPdf);
+      } catch (receiptErr) {
+        console.warn(`[charge] receipt email failed for ${id}: ${receiptErr.message}`);
+        receiptWarning = `Payment recorded but receipt email failed to send: ${receiptErr.message}`;
+      }
+
       return sendJson(res, 200, {
         ok: true,
         invoice: {
@@ -3218,7 +3233,7 @@ async function handleApi(req, res, pathname) {
           quickbooksChargeId: updated.quickbooksChargeId
         },
         chargeId: chargeResult.id,
-        warning: qbWarning
+        warning: qbWarning || receiptWarning
       });
     } catch (err) {
       console.error(`[charge] unexpected:`, err);

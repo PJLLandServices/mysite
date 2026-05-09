@@ -475,4 +475,117 @@ async function sendInvoiceToCustomer(invoice, pdfBuffer, opts = {}) {
   }
 }
 
-module.exports = { notifyCustomer, eventForTransition, sendInvoiceToCustomer };
+// ---- Payment receipt email (PR 3) ---------------------------------------
+// Customer-facing payment receipt sent after a successful charge. Uses
+// the same template-loading pattern as sendInvoiceToCustomer; same
+// transport (Gmail SMTP); same fire-and-throw failure mode (caller
+// surfaces the error if Gmail is down).
+//
+// Triggered from server.js's /api/pay/invoice/:id/charge handler after
+// invoices.update({ status: 'paid' }) succeeds. Failure to send the
+// receipt does NOT roll back the charge — receipt failure is logged
+// and surfaced as a non-blocking warning in the response.
+//
+// PDF attachment: included. Same shape as sendInvoiceToCustomer's
+// attachment so the customer has the original invoice in their email
+// trail alongside the receipt confirmation.
+
+const RECEIPT_TEMPLATE_PATH = path.resolve(__dirname, "templates", "payment-receipt-email.html");
+let _receiptTemplateCache = null;
+function loadReceiptTemplate() {
+  if (_receiptTemplateCache) return _receiptTemplateCache;
+  const raw = fsSync.readFileSync(RECEIPT_TEMPLATE_PATH, "utf8");
+  const idx = raw.indexOf("<!-- TEXT -->");
+  let html, text;
+  if (idx === -1) {
+    html = raw;
+    text = "";
+  } else {
+    html = raw.slice(0, idx).trim();
+    text = raw.slice(idx + "<!-- TEXT -->".length).trim();
+  }
+  if (html.startsWith("<!--")) {
+    const end = html.indexOf("-->");
+    if (end !== -1) html = html.slice(end + 3).trim();
+  }
+  _receiptTemplateCache = { html, text };
+  return _receiptTemplateCache;
+}
+
+async function sendPaymentReceipt(invoice, pdfBuffer, opts = {}) {
+  const transporter = getTransporter();
+  if (!transporter) {
+    throw new Error("Email is not configured on this server (set GMAIL_USER + GMAIL_APP_PASSWORD).");
+  }
+  const to = (invoice?.customerEmail || "").trim();
+  if (!to) throw new Error("Invoice has no customer email — can't send receipt.");
+
+  const { html: htmlTpl, text: textTpl } = loadReceiptTemplate();
+  const firstName = (invoice.customerName || "").trim().split(/\s+/)[0] || "there";
+  const totalFormatted = moneyTextCurrency(invoice.total);
+  const paidDate = invoice.paidAt
+    ? new Date(invoice.paidAt).toLocaleDateString("en-CA", {
+        timeZone: "America/Toronto",
+        year: "numeric", month: "long", day: "numeric"
+      })
+    : new Date().toLocaleDateString("en-CA", {
+        timeZone: "America/Toronto",
+        year: "numeric", month: "long", day: "numeric"
+      });
+  const chargeId = invoice.quickbooksChargeId || invoice.stripeChargeId || "";
+  const confirmationVisible = chargeId ? "table-row" : "none";
+  const confirmationLineText = chargeId ? `Confirmation:  ${chargeId}\n` : "";
+
+  const vars = {
+    customer: { firstName: escapeHtml(firstName) },
+    invoice: {
+      number: escapeHtml(invoice.id || ""),
+      totalFormatted: escapeHtml(totalFormatted),
+      paidDate: escapeHtml(paidDate),
+      chargeId: escapeHtml(chargeId)
+    },
+    confirmationVisible
+  };
+  const textVars = {
+    customer: { firstName },
+    invoice: {
+      number: invoice.id || "",
+      totalFormatted,
+      paidDate,
+      chargeId
+    },
+    confirmationLineText
+  };
+
+  const html = renderTemplate(htmlTpl, vars);
+  const text = renderTemplate(textTpl, textVars);
+  const subject = `Receipt — invoice ${invoice.id || ""} — ${totalFormatted} — PJL Land Services`;
+
+  const attachments = [];
+  if (Buffer.isBuffer(pdfBuffer) && pdfBuffer.length > 0) {
+    attachments.push({
+      filename: `${invoice.id || "invoice"}.pdf`,
+      content: pdfBuffer,
+      contentType: "application/pdf"
+    });
+  }
+
+  try {
+    const info = await transporter.sendMail({
+      from: `"PJL Land Services" <${process.env.GMAIL_USER}>`,
+      to,
+      replyTo: process.env.GMAIL_USER,
+      subject,
+      html,
+      text,
+      attachments
+    });
+    console.log(`[payment-receipt] sent invoice=${invoice.id} to=${to} id=${info.messageId}`);
+    return { ok: true, messageId: info.messageId };
+  } catch (error) {
+    console.error(`[payment-receipt] failed for invoice=${invoice.id}:`, error.message);
+    throw new Error(`Receipt email send failed: ${error.message}`);
+  }
+}
+
+module.exports = { notifyCustomer, eventForTransition, sendInvoiceToCustomer, sendPaymentReceipt };
