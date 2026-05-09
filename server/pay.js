@@ -44,6 +44,8 @@ const $postal = document.getElementById("payCardPostal");
 
 let currentInvoice = null;
 let tokenizeUrl = null; // Filled from /sdk-config response
+let recaptchaSiteKey = null; // Filled from /sdk-config response (may stay null in dev)
+let recaptchaReady = false; // True once grecaptcha global is loaded
 
 function escapeHtml(s) {
   return String(s == null ? "" : s)
@@ -111,6 +113,8 @@ async function load() {
         const d2 = await r2.json().catch(() => ({}));
         if (r2.ok && d2.ok && d2.tokenizeUrl) {
           tokenizeUrl = d2.tokenizeUrl;
+          recaptchaSiteKey = d2.recaptchaSiteKey || null;
+          if (recaptchaSiteKey) loadRecaptchaScript(recaptchaSiteKey);
         } else {
           setStatus(d2?.errors?.[0] || "Card payment is not available right now. Use e-Transfer or call us.", "error");
           $chargeBtn.disabled = true;
@@ -208,6 +212,53 @@ function luhnValid(num) {
   return sum % 10 === 0;
 }
 
+// ---- ReCAPTCHA v3 ----------------------------------------------------
+// Loads Google's reCAPTCHA script with the site key from /sdk-config.
+// The script exposes window.grecaptcha; we wait for `ready()` then
+// flag recaptchaReady so the Pay click can request a token.
+function loadRecaptchaScript(siteKey) {
+  if (document.querySelector('script[data-recaptcha]')) return;
+  const s = document.createElement("script");
+  s.src = `https://www.google.com/recaptcha/api.js?render=${encodeURIComponent(siteKey)}`;
+  s.async = true;
+  s.defer = true;
+  s.dataset.recaptcha = "1";
+  s.onload = () => {
+    if (window.grecaptcha?.ready) {
+      window.grecaptcha.ready(() => { recaptchaReady = true; });
+    } else {
+      // Older API — flag ready immediately if `ready` isn't present.
+      recaptchaReady = true;
+    }
+  };
+  s.onerror = () => {
+    console.warn("[pay] reCAPTCHA script failed to load — proceeding without (server may reject if it expects a token)");
+  };
+  document.head.appendChild(s);
+}
+
+// Request a v3 reCAPTCHA token. Returns null if reCAPTCHA wasn't
+// configured (server didn't ship a site key). Throws on failure.
+async function getRecaptchaToken() {
+  if (!recaptchaSiteKey) return null;
+  // Wait up to 5s for grecaptcha.ready() to fire if it hasn't yet.
+  const startedAt = Date.now();
+  while (!recaptchaReady && Date.now() - startedAt < 5000) {
+    await new Promise(r => setTimeout(r, 100));
+  }
+  if (!window.grecaptcha?.execute) {
+    throw new Error("reCAPTCHA didn't load. Please refresh the page and try again.");
+  }
+  return new Promise((resolve, reject) => {
+    window.grecaptcha.ready(() => {
+      window.grecaptcha
+        .execute(recaptchaSiteKey, { action: "pay" })
+        .then(resolve)
+        .catch((err) => reject(err instanceof Error ? err : new Error("reCAPTCHA execute failed.")));
+    });
+  });
+}
+
 // ---- Tokenize → charge -----------------------------------------------
 $chargeBtn?.addEventListener("click", async () => {
   if (!currentInvoice || !tokenizeUrl) {
@@ -270,13 +321,25 @@ $chargeBtn?.addEventListener("click", async () => {
     return;
   }
 
+  // Get a reCAPTCHA token (if reCAPTCHA is configured). The token is
+  // single-use, expires in 2 minutes; the server forwards it to Google
+  // for verification before processing the charge.
+  let recaptchaToken = null;
+  try {
+    recaptchaToken = await getRecaptchaToken();
+  } catch (err) {
+    setStatus(err.message || "Couldn't verify you're human.", "error");
+    $chargeBtn.disabled = false;
+    return;
+  }
+
   // Now hand the (opaque) token off to our server to actually charge.
   setStatus("Processing your payment…", "info");
   try {
     const r = await fetch(`/api/pay/invoice/${encodeURIComponent(currentInvoice.id)}/charge`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ t: token, cardToken })
+      body: JSON.stringify({ t: token, cardToken, recaptchaToken })
     });
     const data = await r.json().catch(() => ({}));
     if (!r.ok || !data.ok) throw new Error(data?.errors?.[0] || "Payment couldn't be completed.");

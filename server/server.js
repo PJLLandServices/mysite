@@ -3126,7 +3126,13 @@ async function handleApi(req, res, pathname) {
       return sendJson(res, 200, {
         ok: true,
         environment: cfg.environment,
-        tokenizeUrl
+        tokenizeUrl,
+        // ReCAPTCHA v3 site key — safe to ship publicly. Server-side
+        // verification uses RECAPTCHA_SECRET_KEY which never leaves
+        // Render. If neither env var is set the field is empty and
+        // pay.js falls back to no-recaptcha mode (the server will then
+        // skip verification — useful for local dev).
+        recaptchaSiteKey: process.env.RECAPTCHA_SITE_KEY || ""
       });
     } catch (err) {
       return sendJson(res, 500, { ok: false, errors: [err.message || "Couldn't initialize payment form."] });
@@ -3159,6 +3165,48 @@ async function handleApi(req, res, pathname) {
       const cardToken = body?.cardToken;
       if (!cardToken || typeof cardToken !== "string") {
         return sendJson(res, 400, { ok: false, errors: ["Missing card token from the secure form."] });
+      }
+
+      // ReCAPTCHA v3 verification. If RECAPTCHA_SECRET_KEY is set on
+      // Render, the client sends a recaptchaToken in the body and we
+      // verify it with Google. We reject scores below 0.5 (Google's
+      // recommended threshold) — those requests look like bots.
+      // If RECAPTCHA_SECRET_KEY is unset, verification is skipped
+      // entirely (useful for local dev) and the integration runs the
+      // way it did before reCAPTCHA was added.
+      const recaptchaSecret = process.env.RECAPTCHA_SECRET_KEY || "";
+      if (recaptchaSecret) {
+        const rc = body?.recaptchaToken;
+        if (!rc || typeof rc !== "string") {
+          return sendJson(res, 400, { ok: false, errors: ["Missing reCAPTCHA verification token."] });
+        }
+        try {
+          const verifyParams = new URLSearchParams({ secret: recaptchaSecret, response: rc });
+          const remoteIp = (req.headers["x-forwarded-for"] || "").split(",")[0]?.trim() || req.socket?.remoteAddress;
+          if (remoteIp) verifyParams.set("remoteip", remoteIp);
+          const verifyR = await fetch("https://www.google.com/recaptcha/api/siteverify", {
+            method: "POST",
+            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+            body: verifyParams.toString()
+          });
+          const verifyData = await verifyR.json().catch(() => ({}));
+          if (!verifyData.success) {
+            console.warn(`[charge] reCAPTCHA failed for ${id}: ${(verifyData["error-codes"] || []).join(", ")}`);
+            return sendJson(res, 400, { ok: false, errors: ["Could not verify you're human. Please refresh and try again."] });
+          }
+          // Score threshold — 0.5 is Google's recommended cutoff. Tunable
+          // via env var if abuse becomes a concern.
+          const minScore = Number.parseFloat(process.env.RECAPTCHA_MIN_SCORE || "0.5");
+          if (typeof verifyData.score === "number" && verifyData.score < minScore) {
+            console.warn(`[charge] reCAPTCHA score too low for ${id}: ${verifyData.score} < ${minScore}`);
+            return sendJson(res, 400, { ok: false, errors: ["This request was flagged as suspicious. If you're a real customer, please call (905) 960-0181 to pay over the phone."] });
+          }
+        } catch (rcErr) {
+          // reCAPTCHA service unavailable — log + reject. Don't let a
+          // fraud check go unverified silently.
+          console.warn(`[charge] reCAPTCHA verify call failed for ${id}: ${rcErr.message}`);
+          return sendJson(res, 503, { ok: false, errors: ["Fraud-prevention service is briefly unavailable. Please try again in a moment."] });
+        }
       }
 
       // Charge via QB Payments. quickbooks.chargeCard handles OAuth +

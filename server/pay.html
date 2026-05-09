@@ -146,6 +146,13 @@
     SDK; tokenization is a direct HTTPS POST from this page to
     api.intuit.com (or sandbox.api.intuit.com), handled in pay.js.
     The merchant server is never in the card-data path.
+
+    Google reCAPTCHA v3 — invisible fraud check. The site key is
+    fetched dynamically by pay.js from /sdk-config and the script tag
+    is injected then to avoid hardcoding the key in HTML. If
+    RECAPTCHA_SITE_KEY isn't set on the server, pay.js skips reCAPTCHA
+    entirely and the charge endpoint also skips verification (matching
+    behaviors).
   -->
   <script src="/crm/pay.js" defer></script>
 </body>
