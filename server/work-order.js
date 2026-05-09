@@ -1248,7 +1248,27 @@ function renderOnSiteTotals(lines) {
   }
   const t = woTotalsForLines(lines);
   totalsEl.hidden = false;
-  totalsEl.innerHTML = `Subtotal <strong>${woFormatMoney(t.subtotal)}</strong> · HST <strong>${woFormatMoney(t.hst)}</strong> · <span class="wo-on-site-total-final">${woFormatMoney(t.total)}</span>`;
+  // Structured markup — every visible text element gets its own class
+  // with an explicit color in CSS. Without this, the bare text nodes
+  // ("Subtotal", "HST", "·") inherited from the wrapper color and an
+  // ancestor form/section style silently overrode them — labels rendered
+  // dark-on-dark and were nearly invisible.
+  totalsEl.innerHTML = `
+    <span class="wo-on-site-totals-row">
+      <span class="wo-on-site-totals-label">Subtotal</span>
+      <span class="wo-on-site-totals-value">${woFormatMoney(t.subtotal)}</span>
+    </span>
+    <span class="wo-on-site-totals-divider" aria-hidden="true">·</span>
+    <span class="wo-on-site-totals-row">
+      <span class="wo-on-site-totals-label">HST</span>
+      <span class="wo-on-site-totals-value">${woFormatMoney(t.hst)}</span>
+    </span>
+    <span class="wo-on-site-totals-divider" aria-hidden="true">·</span>
+    <span class="wo-on-site-totals-row wo-on-site-totals-row--final">
+      <span class="wo-on-site-totals-label">Total</span>
+      <span class="wo-on-site-totals-value wo-on-site-total-final">${woFormatMoney(t.total)}</span>
+    </span>
+  `;
 }
 
 // "Generate from issues" — POSTs to the same /build endpoint tech mode

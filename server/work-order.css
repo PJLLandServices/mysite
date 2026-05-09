@@ -1531,21 +1531,52 @@ body[data-locked="true"] .wo-zone-location {
   background: rgba(27, 77, 46, 0.05);
   border-style: solid;
 }
+/* Totals strip — dark green pill with three rows (Subtotal · HST · Total).
+   Every visible text element has its OWN class + explicit color so the
+   ancestor form/section cascade can never silently darken the labels.
+   Belt-and-suspenders: a wildcard `* { color: inherit }` underneath
+   pins the children to the wrapper's color even if a stylesheet loads
+   after this one and tries to re-color text inside .property-section. */
 .wo-on-site-totals {
   margin: 12px 0 0;
-  padding: 12px 14px;
+  padding: 12px 16px;
   background: #1B4D2E;
-  color: #EAF3DE;
+  color: #ffffff;
   border-radius: 8px;
   font-size: 14px;
   font-variant-numeric: tabular-nums;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px 10px;
 }
-.wo-on-site-totals strong { color: #fff; font-weight: 600; }
-.wo-on-site-total-final {
-  font-size: 16px;
+.wo-on-site-totals * { color: inherit; }
+.wo-on-site-totals-row {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+}
+.wo-on-site-totals-label {
+  color: rgba(255, 255, 255, 0.78);
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.wo-on-site-totals-value {
+  color: #ffffff;
   font-weight: 700;
-  color: #fff;
-  margin-left: 4px;
+}
+.wo-on-site-totals-divider {
+  color: rgba(255, 255, 255, 0.35);
+  font-weight: 400;
+}
+.wo-on-site-totals-row--final .wo-on-site-totals-label {
+  color: rgba(255, 255, 255, 0.92);
+}
+.wo-on-site-total-final {
+  font-size: 17px;
+  font-weight: 800;
 }
 .wo-on-site-remote {
   margin: 14px 0 0;
