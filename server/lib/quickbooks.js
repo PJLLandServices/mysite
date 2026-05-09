@@ -92,10 +92,21 @@ async function clearTokens() {
 function buildAuthUrl(state, baseRedirectUri) {
   const cfg = envCfg();
   const redirect = baseRedirectUri || cfg.redirectUri;
+  // Both scopes — OAuth 2.0 separates multiple scopes with a space.
+  // Accounting is needed to push invoices + record QB Payment records.
+  // Payment is needed for the customer-facing card-charge flow on
+  // /pay/invoice/:id (PR 3). Without the payment scope, the bearer
+  // token returns HTTP 403 AuthorizationFailed when we try to call the
+  // /quickbooks/v4/payments/charges endpoint.
+  //
+  // Tokens are scope-locked at issuance — adding scope here means
+  // existing tokens (accounting-only) need to be discarded via
+  // /admin/settings → Disconnect → Connect, which re-runs the OAuth
+  // flow with the broader scope.
   const params = new URLSearchParams({
     client_id: cfg.clientId,
     response_type: "code",
-    scope: "com.intuit.quickbooks.accounting",
+    scope: "com.intuit.quickbooks.accounting com.intuit.quickbooks.payment",
     redirect_uri: redirect,
     state
   });
