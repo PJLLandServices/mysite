@@ -1,21 +1,27 @@
 // Public payment page client.
 //
-// Flow:
+// Flow (corrected in PR 3.1 — Intuit doesn't ship a JS SDK):
 //   1. Load invoice summary from /api/pay/invoice/:id?t=<token>.
 //   2. Render the summary card.
 //   3. If status is paid → show the paid banner, hide the form.
-//   4. Otherwise initialize Intuit's hosted card-entry iframe via the
-//      QuickBooks Payments JS SDK.
-//   5. On Pay click: ask the SDK to tokenize the card. The SDK collects
-//      card data INSIDE its iframe (Intuit-hosted), tokenizes it, and
-//      returns a one-shot card token. Card data never touches PJL JS.
-//   6. POST the card token to /api/pay/invoice/:id/charge.
-//   7. On success → redirect to /pay/invoice/:id/thanks?t=<token>.
+//   4. Customer enters card details into a normal HTML form on this page.
+//   5. On Pay click, this JS POSTs the card payload DIRECTLY to Intuit's
+//      tokenization endpoint (api.intuit.com or sandbox.api.intuit.com),
+//      cross-origin, with NO Authorization header. The endpoint accepts
+//      unauthenticated POSTs by design (same model as Stripe.js).
+//   6. Intuit returns a one-shot card token in field `value`.
+//   7. We POST { t, cardToken } to /api/pay/invoice/:id/charge.
+//   8. Server uses its OAuth bearer to actually charge via /v4/payments/charges.
+//   9. Redirect to /pay/invoice/:id/thanks?t=<token>.
 //
-// PCI scope note: This client never sees raw PAN. The Intuit iframe is
-// loaded from js.intuit.com and submits to api.intuit.com directly. We
-// only handle the resulting tokens. Stay in PCI SAQ-A — DO NOT change
-// this to read card-number inputs from your own DOM.
+// PCI scope: SAQ-A-EP. Card PAN/CVC never reach pjllandservices.com's
+// server. They go directly from the user's browser to api.intuit.com.
+// PJL's server only ever sees the opaque token. DO NOT change this to
+// POST card data through pjllandservices.com — that pushes the
+// integration into SAQ-D scope (a much heavier compliance burden).
+//
+// Verified against Intuit's official Node.js sample app:
+// https://github.com/IntuitDeveloper/SampleApp-Payments-Nodejs
 
 const matchPath = location.pathname.match(/^\/pay\/invoice\/([^/]+)\/?$/);
 const invoiceId = matchPath ? decodeURIComponent(matchPath[1]) : null;
@@ -30,8 +36,14 @@ const $chargeBtn = document.getElementById("payChargeBtn");
 const $chargeBtnAmount = document.getElementById("payChargeBtnAmount");
 const $chargeStatus = document.getElementById("payChargeStatus");
 
+const $name = document.getElementById("payCardName");
+const $number = document.getElementById("payCardNumber");
+const $exp = document.getElementById("payCardExp");
+const $cvc = document.getElementById("payCardCvc");
+const $postal = document.getElementById("payCardPostal");
+
 let currentInvoice = null;
-let sdkInstance = null;
+let tokenizeUrl = null; // Filled from /sdk-config response
 
 function escapeHtml(s) {
   return String(s == null ? "" : s)
@@ -59,6 +71,29 @@ function setStatus(msg, kind) {
   $chargeStatus.dataset.kind = kind || "";
 }
 
+// ---- Light input formatting -------------------------------------------
+// Card number: insert spaces every 4 digits as the user types.
+$number?.addEventListener("input", () => {
+  const digits = $number.value.replace(/\D/g, "").slice(0, 19);
+  const grouped = digits.replace(/(.{4})/g, "$1 ").trim();
+  if (grouped !== $number.value) $number.value = grouped;
+  $number.classList.remove("pay-field--invalid");
+});
+// Expiry: auto-insert / after MM. Accept "MM/YY" or "MMYY".
+$exp?.addEventListener("input", () => {
+  const digits = $exp.value.replace(/\D/g, "").slice(0, 4);
+  const formatted = digits.length >= 3 ? digits.slice(0, 2) + "/" + digits.slice(2) : digits;
+  if (formatted !== $exp.value) $exp.value = formatted;
+  $exp.classList.remove("pay-field--invalid");
+});
+$cvc?.addEventListener("input", () => {
+  $cvc.value = $cvc.value.replace(/\D/g, "").slice(0, 4);
+  $cvc.classList.remove("pay-field--invalid");
+});
+$name?.addEventListener("input", () => $name.classList.remove("pay-field--invalid"));
+$postal?.addEventListener("input", () => $postal.classList.remove("pay-field--invalid"));
+
+// ---- Load invoice ----------------------------------------------------
 async function load() {
   if (!invoiceId || !token) return showError();
   try {
@@ -68,6 +103,23 @@ async function load() {
     if (!r.ok || !data.ok || !data.invoice) return showError();
     currentInvoice = data.invoice;
     render(currentInvoice);
+    // Fetch the tokenization URL only if the form section is visible
+    // (i.e. the invoice is unpaid and chargeable).
+    if (!$formSection.hidden) {
+      try {
+        const r2 = await fetch(`/api/pay/invoice/${encodeURIComponent(invoiceId)}/sdk-config?t=${encodeURIComponent(token)}`);
+        const d2 = await r2.json().catch(() => ({}));
+        if (r2.ok && d2.ok && d2.tokenizeUrl) {
+          tokenizeUrl = d2.tokenizeUrl;
+        } else {
+          setStatus(d2?.errors?.[0] || "Card payment is not available right now. Use e-Transfer or call us.", "error");
+          $chargeBtn.disabled = true;
+        }
+      } catch (err) {
+        setStatus("Couldn't reach the payment processor. Use e-Transfer or call us.", "error");
+        $chargeBtn.disabled = true;
+      }
+    }
   } catch (err) {
     console.error("[pay] load failed:", err);
     showError();
@@ -124,123 +176,101 @@ function render(inv) {
     return;
   }
 
-  // Status is sent (or draft, edge case) — initialize the card form.
-  initIntuitSdk(inv);
+  // Status is sent (or draft, edge case) — form section already visible.
 }
 
-// ----------------------------------------------------------------------
-// Intuit Payments SDK init.
-//
-// PR 3 NOTE — this is the area with the most Intuit-specific
-// uncertainty. Real production exact-method names / option keys may
-// differ from what's coded here; we'll discover during sandbox
-// testing. The high-level shape (load SDK script → call init → mount
-// iframe → handle tokenization callback) is stable across SDK
-// versions.
-//
-// What we expect from the SDK (as documented at developer.intuit.com):
-//   - window.Intuit (or window.intuit) is exposed once IntuitPaymentsJS.js
-//     loads.
-//   - There's an init/factory function that takes:
-//       env: 'sandbox' | 'production'
-//       authToken: a short-lived bearer minted server-side (we hit
-//                  /api/pay/invoice/:id/sdk-token to get one)
-//       container: DOM node or selector for the iframe mount
-//   - On successful tokenization the SDK fires a callback with a
-//     one-shot token string (Intuit names it "card token" or
-//     "tokenized_card" depending on docs version).
-//
-// If the SDK exposes a different surface than this, the swap is a
-// localized 5-10 LOC edit inside this function. Everything downstream
-// (POST to /charge, server-side charge call) is decoupled from the
-// SDK and won't need changes.
-async function initIntuitSdk(inv) {
-  // Pull the SDK config (publishable client ID + environment) from our
-  // server. The publishable client ID is safe to ship to the browser —
-  // it's the same model as Stripe's pk_live_* keys: it identifies the
-  // app to Intuit but doesn't grant data access. The server-side OAuth
-  // tokens never leave the server.
-  let sdkConfig;
-  try {
-    const r = await fetch(`/api/pay/invoice/${encodeURIComponent(inv.id)}/sdk-config?t=${encodeURIComponent(token)}`);
-    const data = await r.json().catch(() => ({}));
-    if (!r.ok || !data.ok) throw new Error(data?.errors?.[0] || "Couldn't initialize the secure form.");
-    sdkConfig = data;
-  } catch (err) {
-    setStatus(`Couldn't initialize the secure card form: ${err.message}`, "error");
-    return;
+// ---- Validation -------------------------------------------------------
+function validate() {
+  let ok = true;
+  function flag(el) { el.classList.add("pay-field--invalid"); ok = false; el.focus(); }
+  if (!$name.value.trim()) { flag($name); return false; }
+  const digits = $number.value.replace(/\D/g, "");
+  if (digits.length < 13 || digits.length > 19) { flag($number); return false; }
+  // Luhn check — fast sanity to fail invalid card numbers before
+  // we waste a tokenization call.
+  if (!luhnValid(digits)) { flag($number); return false; }
+  const expMatch = $exp.value.match(/^(\d{2})\s*\/?\s*(\d{2})$/);
+  if (!expMatch) { flag($exp); return false; }
+  const expMonth = parseInt(expMatch[1], 10);
+  if (expMonth < 1 || expMonth > 12) { flag($exp); return false; }
+  if (!/^\d{3,4}$/.test($cvc.value)) { flag($cvc); return false; }
+  if (!$postal.value.trim()) { flag($postal); return false; }
+  return ok;
+}
+function luhnValid(num) {
+  let sum = 0, alt = false;
+  for (let i = num.length - 1; i >= 0; i--) {
+    let n = parseInt(num.charAt(i), 10);
+    if (alt) { n *= 2; if (n > 9) n -= 9; }
+    sum += n;
+    alt = !alt;
   }
-
-  // Wait up to 5 seconds for the SDK script to finish loading.
-  const sdk = await waitForSdk(5000);
-  if (!sdk) {
-    setStatus("The secure card form couldn't load. Please try again or pay by e-Transfer / phone.", "error");
-    return;
-  }
-
-  try {
-    // The factory call shape is the area most likely to differ from
-    // what real Intuit docs document for the current SDK version. The
-    // shape below is a reasonable guess — adjust here on first sandbox
-    // failure.
-    const factory = sdk.payments?.create || sdk.create || sdk.PaymentsForm || sdk.payments;
-    if (!factory) {
-      throw new Error("Intuit SDK loaded but exposed an unexpected API surface.");
-    }
-    sdkInstance = await factory({
-      env: sdkConfig.environment || "sandbox",
-      clientId: sdkConfig.clientId,
-      mountSelector: "#pay-card-form",
-      style: { brandColor: "#1B4D2E" }
-    });
-
-    // Enable the Pay button only after the iframe is ready.
-    $chargeBtn.disabled = false;
-  } catch (err) {
-    console.error("[pay] SDK init failed:", err);
-    setStatus(`Couldn't initialize the secure card form: ${err.message}`, "error");
-  }
+  return sum % 10 === 0;
 }
 
-function waitForSdk(timeoutMs) {
-  return new Promise((resolve) => {
-    const start = Date.now();
-    const tick = () => {
-      const sdk = window.Intuit || window.intuit || null;
-      if (sdk) return resolve(sdk);
-      if (Date.now() - start > timeoutMs) return resolve(null);
-      setTimeout(tick, 100);
-    };
-    tick();
-  });
-}
-
-// ---- Pay button → tokenize → charge ----------------------------------
+// ---- Tokenize → charge -----------------------------------------------
 $chargeBtn?.addEventListener("click", async () => {
-  if (!sdkInstance || !currentInvoice) return;
+  if (!currentInvoice || !tokenizeUrl) {
+    setStatus("Payment processor not ready. Use e-Transfer or call (905) 960-0181.", "error");
+    return;
+  }
+  if (!validate()) {
+    setStatus("Please check the highlighted field(s) and try again.", "error");
+    return;
+  }
+
   $chargeBtn.disabled = true;
-  setStatus("Securely processing your payment…", "info");
+  setStatus("Securing your card details with QuickBooks…", "info");
+
+  // Parse expiry MM/YY → 4-digit year.
+  const expMatch = $exp.value.match(/^(\d{2})\s*\/?\s*(\d{2})$/);
+  const expMonth = expMatch[1];
+  const expYear = "20" + expMatch[2];
+
+  const cardPayload = {
+    card: {
+      number: $number.value.replace(/\D/g, ""),
+      expMonth,
+      expYear,
+      cvc: $cvc.value,
+      name: $name.value.trim(),
+      address: {
+        postalCode: $postal.value.trim(),
+        // Intuit accepts these fields but doesn't strictly require them
+        // for AVS in Canadian card-not-present transactions. Leaving
+        // them blank-but-present matches the official Node sample.
+        streetAddress: "",
+        city: "",
+        region: "",
+        country: "CA"
+      }
+    }
+  };
 
   let cardToken;
   try {
-    // Ask the SDK to tokenize whatever's in the iframe. Method name
-    // varies by SDK version — try a couple of common names.
-    const tokenize = sdkInstance.tokenize?.bind(sdkInstance)
-      || sdkInstance.submit?.bind(sdkInstance)
-      || sdkInstance.getToken?.bind(sdkInstance);
-    if (!tokenize) throw new Error("Card form doesn't expose a tokenize method.");
-    const result = await tokenize();
-    cardToken = result?.token || result?.cardToken || result?.value || result;
-    if (!cardToken || typeof cardToken !== "string") {
-      throw new Error("Card couldn't be tokenized. Double-check your card details.");
+    // Direct cross-origin POST to Intuit. NO Authorization header.
+    const r = await fetch(tokenizeUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(cardPayload)
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      const msg = data?.errors?.[0]?.message || data?.message
+        || `Tokenization failed (HTTP ${r.status}).`;
+      throw new Error(msg);
     }
+    cardToken = data.value;
+    if (!cardToken) throw new Error("Card couldn't be tokenized — please double-check the number and try again.");
   } catch (err) {
     setStatus(err.message || "Couldn't process the card.", "error");
     $chargeBtn.disabled = false;
     return;
   }
 
-  // POST to our charge endpoint.
+  // Now hand the (opaque) token off to our server to actually charge.
+  setStatus("Processing your payment…", "info");
   try {
     const r = await fetch(`/api/pay/invoice/${encodeURIComponent(currentInvoice.id)}/charge`, {
       method: "POST",

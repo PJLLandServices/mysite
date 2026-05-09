@@ -3099,9 +3099,15 @@ async function handleApi(req, res, pathname) {
     }
   }
 
-  // GET /api/pay/invoice/:id/sdk-config — return the Intuit Payments JS
-  // SDK init config. Only the publishable client ID + environment are
-  // shipped to the browser. Server-side OAuth tokens stay on the server.
+  // GET /api/pay/invoice/:id/sdk-config — returns the URL the browser
+  // should POST card data to for tokenization. Intuit doesn't ship a
+  // browser SDK; the page POSTs directly to api.intuit.com (or sandbox)
+  // with no auth header, gets back an opaque card token, and then sends
+  // only the token to our /charge endpoint. We expose the URL via this
+  // config call so the browser doesn't have to know about QB_ENVIRONMENT.
+  //
+  // Routing: sandbox.api.intuit.com for QB_ENVIRONMENT=sandbox,
+  // api.intuit.com for production.
   const publicSdkConfigMatch = pathname.match(/^\/api\/pay\/invoice\/([^/]+)\/sdk-config$/);
   if (publicSdkConfigMatch && req.method === "GET") {
     try {
@@ -3114,10 +3120,13 @@ async function handleApi(req, res, pathname) {
       if (!cfg.clientId) {
         return sendJson(res, 503, { ok: false, errors: ["Payment processor not configured. Contact PJL at (905) 960-0181 to pay another way."] });
       }
+      const tokenizeUrl = cfg.environment === "production"
+        ? "https://api.intuit.com/quickbooks/v4/payments/tokens"
+        : "https://sandbox.api.intuit.com/quickbooks/v4/payments/tokens";
       return sendJson(res, 200, {
         ok: true,
-        clientId: cfg.clientId,
-        environment: cfg.environment
+        environment: cfg.environment,
+        tokenizeUrl
       });
     } catch (err) {
       return sendJson(res, 500, { ok: false, errors: [err.message || "Couldn't initialize payment form."] });

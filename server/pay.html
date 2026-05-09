@@ -59,29 +59,56 @@
       <section class="pay-form-section" id="payFormSection">
         <h2 class="pay-section-title">Pay by credit card</h2>
         <p class="pay-form-help">
-          Card details are entered on Intuit's secure servers via the
-          form below — your card number never touches our site. Apple Pay,
-          Visa, Mastercard, Amex, and Discover are all accepted.
+          Card details go directly from your browser to Intuit QuickBooks
+          Payments — our server never sees your card number. Visa,
+          Mastercard, Amex, and Discover are all accepted.
         </p>
 
         <!--
-          PR 3 NOTE — Intuit Payments JS SDK iframe.
+          PR 3.1 — Card-entry form. Card data is POSTed directly from
+          this browser to https://api.intuit.com/quickbooks/v4/payments/tokens
+          (or sandbox equivalent), with no Authorization header. The
+          response token is the only thing that goes to PJL's server.
+          That's the SAQ-A-EP pattern and the architecture Intuit's own
+          sample app uses (IntuitDeveloper/SampleApp-Payments-Nodejs).
 
-          The container below is where Intuit's hosted card-entry iframe
-          is injected by /crm/pay.js once the SDK loads. The iframe is
-          served from js.intuit.com and the form data is POSTed directly
-          to Intuit's tokenization endpoint, never to our server. That's
-          what keeps PJL in PCI SAQ-A scope.
-
-          If you need to debug the SDK, the container's #pay-card-form
-          div is the mount point. Don't add a <form> wrapper around it —
-          the SDK manages its own form internally.
+          Do NOT change this to POST card data through PJL's server —
+          that would push us from SAQ-A-EP into SAQ-D scope.
         -->
-        <div class="pay-card-form-wrap">
-          <div id="pay-card-form" class="pay-card-form-mount"></div>
-        </div>
+        <form id="payCardForm" class="pay-card-form-wrap" autocomplete="on" novalidate>
+          <label class="pay-field pay-field--full">
+            <span class="pay-field-label">Cardholder name</span>
+            <input type="text" id="payCardName" autocomplete="cc-name"
+                   placeholder="Name as shown on card" required maxlength="80">
+          </label>
+          <label class="pay-field pay-field--full">
+            <span class="pay-field-label">Card number</span>
+            <input type="text" id="payCardNumber" autocomplete="cc-number"
+                   inputmode="numeric" placeholder="1234 5678 9012 3456"
+                   required maxlength="23">
+          </label>
+          <div class="pay-field-row">
+            <label class="pay-field">
+              <span class="pay-field-label">Expiry (MM/YY)</span>
+              <input type="text" id="payCardExp" autocomplete="cc-exp"
+                     inputmode="numeric" placeholder="MM/YY"
+                     required maxlength="5">
+            </label>
+            <label class="pay-field">
+              <span class="pay-field-label">CVC</span>
+              <input type="text" id="payCardCvc" autocomplete="cc-csc"
+                     inputmode="numeric" placeholder="123"
+                     required maxlength="4">
+            </label>
+            <label class="pay-field">
+              <span class="pay-field-label">Postal code</span>
+              <input type="text" id="payCardPostal" autocomplete="postal-code"
+                     placeholder="L3X 0A5" required maxlength="10">
+            </label>
+          </div>
+        </form>
 
-        <button type="button" id="payChargeBtn" class="pay-charge-btn" disabled>
+        <button type="button" id="payChargeBtn" class="pay-charge-btn">
           Pay <span id="payChargeBtnAmount">$0.00</span> →
         </button>
 
@@ -115,21 +142,11 @@
   </footer>
 
   <!--
-    PR 3 NOTE — Intuit Payments hosted SDK loader.
-
-    URL is the documented Intuit Payments tokenization JS — used to
-    create the hosted card-entry iframe. If Intuit moves this URL at
-    some point, swap the src here AND verify the global the SDK
-    exposes (window.Intuit / window.intuit) hasn't been renamed in
-    pay.js's init code.
-
-    Sandbox vs. production: the SDK auto-detects environment from the
-    auth token we hand it (server-side env QB_ENVIRONMENT chooses
-    which token endpoint to hit, and the resulting bearer carries
-    the env hint). No URL change between sandbox and production for
-    the SDK loader itself.
+    PR 3.1 — No Intuit SDK script. Intuit doesn't publish a browser
+    SDK; tokenization is a direct HTTPS POST from this page to
+    api.intuit.com (or sandbox.api.intuit.com), handled in pay.js.
+    The merchant server is never in the card-data path.
   -->
-  <script src="https://js.intuit.com/v2/IntuitPaymentsJS.js" defer></script>
   <script src="/crm/pay.js" defer></script>
 </body>
 </html>
