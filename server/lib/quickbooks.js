@@ -111,7 +111,7 @@ async function exchangeCodeForTokens(code, realmId, baseRedirectUri) {
     code,
     redirect_uri: redirect
   });
-  const r = await fetch(`${OAUTH_BASE}/oauth2/v1/tokens/bearer_token`, {
+  const r = await fetch(`${OAUTH_BASE}/oauth2/v1/tokens/bearer`, {
     method: "POST",
     headers: {
       Authorization: `Basic ${auth}`,
@@ -141,7 +141,7 @@ async function refreshAccessToken(currentTokens) {
     grant_type: "refresh_token",
     refresh_token: currentTokens.refresh_token
   });
-  const r = await fetch(`${OAUTH_BASE}/oauth2/v1/tokens/bearer_token`, {
+  const r = await fetch(`${OAUTH_BASE}/oauth2/v1/tokens/bearer`, {
     method: "POST",
     headers: {
       Authorization: `Basic ${auth}`,
