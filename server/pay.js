@@ -227,6 +227,16 @@ $chargeBtn?.addEventListener("click", async () => {
   const expMonth = expMatch[1];
   const expYear = "20" + expMatch[2];
 
+  // Address: only ship fields that have a value. Intuit's tokenization
+  // endpoint runs validation on every present field — sending
+  // streetAddress: "" returns "address.streetAddress is invalid", same
+  // for city / region. Omitting empty fields entirely is what Intuit
+  // expects when the merchant only collects postal code (the typical
+  // Canadian AVS pattern: PAN + postal is enough for card-not-present).
+  const address = {
+    postalCode: $postal.value.trim(),
+    country: "CA"
+  };
   const cardPayload = {
     card: {
       number: $number.value.replace(/\D/g, ""),
@@ -234,16 +244,7 @@ $chargeBtn?.addEventListener("click", async () => {
       expYear,
       cvc: $cvc.value,
       name: $name.value.trim(),
-      address: {
-        postalCode: $postal.value.trim(),
-        // Intuit accepts these fields but doesn't strictly require them
-        // for AVS in Canadian card-not-present transactions. Leaving
-        // them blank-but-present matches the official Node sample.
-        streetAddress: "",
-        city: "",
-        region: "",
-        country: "CA"
-      }
+      address
     }
   };
 
