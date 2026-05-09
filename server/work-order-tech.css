@@ -157,17 +157,16 @@ html, body {
   min-height: 100vh;
   /* Honor iOS safe area at the bottom (home indicator). */
   padding-bottom: env(safe-area-inset-bottom);
-  /* Hot-fix: kill horizontal scroll on iPhone. iOS Safari was letting
-     long unbroken strings (WO IDs, customer emails, file paths in
-     history notes) push past the viewport, which made tapping
-     `+ Add zone` and other controls miss because the rendered position
-     drifted with the scroll. overflow-x is the safety net; word-break +
-     overflow-wrap break the long strings at the source. */
-  overflow-x: hidden;
+  /* Hot-fix: break long unbroken strings (WO IDs, customer emails,
+     history-note paths) at the SOURCE so they don't push past the
+     viewport. NOTE: do NOT add `overflow-x: hidden` here OR on <html>
+     — on iOS Safari it changes the scroll context for descendants and
+     causes `position: fixed` elements (the zone bottom-sheet) to render
+     at the wrong position or vanish entirely. word-break alone catches
+     the actual long-string overflow without breaking sheet rendering. */
   overflow-wrap: anywhere;
   word-break: break-word;
 }
-html { overflow-x: hidden; }
 .tech-body.tech-sheet-open {
   /* Lock the background while the sheet is open so iOS doesn't
      scroll-trap. Sheet has its own internal scroll. */
