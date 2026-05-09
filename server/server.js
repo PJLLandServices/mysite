@@ -39,7 +39,7 @@ const { notifyCustomer, eventForTransition, sendInvoiceToCustomer } = require(".
 const { geocode, PJL_BASE } = require("./lib/geocode");
 const { BOOKABLE_SERVICES, DEFAULT_HOURS, DEFAULT_SETTINGS, listAvailableSlots, groupByDay } = require("./lib/availability");
 const scheduleStore = require("./lib/schedule-store");
-const { priceForBooking } = require("./lib/pricing");
+const { priceForBooking, deriveSeasonalKey } = require("./lib/pricing");
 const bookingSessions = require("./lib/booking-sessions");
 const properties = require("./lib/properties");
 const workOrders = require("./lib/work-orders");
@@ -5085,10 +5085,27 @@ async function handleApi(req, res, pathname) {
       // The seeded line carries `source.baseline: true` so the on-site
       // quote build endpoint preserves it across rollup re-runs.
       // Without that flag, "Generate from issues" would wipe it.
-      if ((type === "spring_opening" || type === "fall_closing") && lead?.booking?.serviceKey) {
+      //
+      // Key derivation order:
+      //   1. lead.booking.serviceKey when present (most accurate — the
+      //      customer paid for that exact tier)
+      //   2. deriveSeasonalKey(type, propertyZoneCount) when the booking
+      //      didn't carry a serviceKey (WOs created from /admin/handoff,
+      //      from the property page, or legacy leads where serviceKey
+      //      wasn't captured). Reads pricing.json's seasonal_tiers.
+      // Either way the WO ships with a baseline line; tech can adjust
+      // the qty/price if the on-site reality differs from the tier.
+      if (type === "spring_opening" || type === "fall_closing") {
         try {
-          const seedKey = String(lead.booking.serviceKey || "");
-          const catalogItem = PRICING.items?.[seedKey];
+          let seedKey = lead?.booking?.serviceKey ? String(lead.booking.serviceKey) : "";
+          if (!seedKey || !PRICING.items?.[seedKey]) {
+            // Derive from WO type + property zone count.
+            const zoneCount = Array.isArray(property?.system?.zones)
+              ? property.system.zones.length
+              : 0;
+            seedKey = deriveSeasonalKey(type, zoneCount, false) || "";
+          }
+          const catalogItem = seedKey ? PRICING.items?.[seedKey] : null;
           if (catalogItem) {
             // Year = the year the service is actually performed. Prefer
             // the booking's scheduled start (what the customer paid for)
@@ -5198,19 +5215,30 @@ async function handleApi(req, res, pathname) {
       lead = allLeads.find((l) => l.id === wo.leadId) || null;
     }
 
-    // Self-healing seasonal-fee seed for legacy WOs that pre-date the
-    // create-time seed. If this is a spring/fall WO, has a known
-    // serviceKey on its lead booking, and the on-site quote builder
-    // has no baseline line yet, seed it now. Idempotent: a baseline
-    // line marked source.baseline === true is the fingerprint that
-    // says "already seeded, leave alone."
-    if ((wo.type === "spring_opening" || wo.type === "fall_closing") &&
-        lead?.booking?.serviceKey) {
+    // Self-healing seasonal-fee seed for WOs missing the baseline line
+    // (legacy records that pre-date the create-time seed, or WOs created
+    // through paths where the seed didn't fire — e.g., from /admin/handoff
+    // before the derivation fallback existed). Idempotent: a baseline
+    // line with source.baseline === true is the fingerprint that says
+    // "already seeded, leave alone."
+    //
+    // Same key derivation order as the create path: lead.booking.serviceKey
+    // first, then deriveSeasonalKey(type, propertyZoneCount). Without the
+    // fallback, WOs created without a booking serviceKey could never
+    // self-heal — the bug Patrick hit when a fresh spring opening WO
+    // showed up with no service-fee line.
+    if (wo.type === "spring_opening" || wo.type === "fall_closing") {
       const existingBuilder = Array.isArray(wo.onSiteQuote?.builderLineItems) ? wo.onSiteQuote.builderLineItems : [];
       const hasBaseline = existingBuilder.some((l) => l && l.source && l.source.baseline === true);
       if (!hasBaseline) {
-        const seedKey = String(lead.booking.serviceKey || "");
-        const catalogItem = PRICING.items?.[seedKey];
+        let seedKey = lead?.booking?.serviceKey ? String(lead.booking.serviceKey) : "";
+        if (!seedKey || !PRICING.items?.[seedKey]) {
+          const zoneCount = Array.isArray(property?.system?.zones)
+            ? property.system.zones.length
+            : 0;
+          seedKey = deriveSeasonalKey(wo.type, zoneCount, false) || "";
+        }
+        const catalogItem = seedKey ? PRICING.items?.[seedKey] : null;
         if (catalogItem) {
           const refDate = lead?.booking?.start
             ? new Date(lead.booking.start)
