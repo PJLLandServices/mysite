@@ -301,15 +301,18 @@ function drawHeader(doc, inv) {
   doc.fontSize(8).fillColor(TEXT_MUTED);
   doc.text("GST/HST Reg. No. 757080940 RT0001", leftX, y, { characterSpacing: 0.3 });
 
-  // Right side — actual PJL logo PNG (rasterized from logo-dark.svg).
-  // Falls back to a text wordmark in dark green Barlow Condensed if the
-  // PNG file is missing (e.g. during dev without the asset committed).
+  // Right side — actual PJL logo PNG (rasterized from logo-dark.svg
+  // with .trim() so the PNG bounds equal the visible logo content;
+  // no transparent border padding). Width 160pt at 1.74:1 aspect
+  // renders the logo at ~160×92pt — matches the size that visually
+  // balances the title block on the left without dominating the page.
+  // Right edge pinned to PAGE_W - MARGIN_X (= body-content right
+  // margin) so it lines up with the customer band, totals column,
+  // and footer rule.
   const logo = logoBuffer();
+  const LOGO_W = 160;
   if (logo) {
-    // Image fits inside 180×60 pt box on the right side of the header
-    // band. pdfkit's `fit` preserves the source aspect ratio while
-    // capping the dimensions, so the logo stays sharp at any zoom.
-    doc.image(logo, rightCol + 20, top, { fit: [180, 60], align: "right" });
+    doc.image(logo, PAGE_W - MARGIN_X - LOGO_W, top - 12, { width: LOGO_W });
   } else {
     doc.font(fontHeading(doc)).fontSize(22).fillColor(GREEN);
     doc.text("PJL", rightCol, top + 6, {
@@ -321,8 +324,11 @@ function drawHeader(doc, inv) {
     });
   }
 
-  // Reset the cursor below the header content for the next section.
-  doc.y = Math.max(doc.y, top + 78);
+  // Reset the cursor below the header content. Left text bottom is
+  // ~y=124 (HST line). Logo bottom is ~y=120 (top - 12 + ~92 height).
+  // Set to 124 so whichever side is taller, the next section starts
+  // immediately after — drawCustomerBand adds its own 4pt top gap.
+  doc.y = Math.max(doc.y, 124);
   doc.x = MARGIN_X;
 }
 
@@ -332,7 +338,10 @@ function drawHeader(doc, inv) {
 function drawCustomerBand(doc, inv) {
   const padX = MARGIN_X;
   const padY = 14;
-  const startY = doc.y + 10;
+  // Tight gap above the band (4pt). drawHeader already sets doc.y to
+  // sit just below the header text, so this is just visual breathing
+  // room — not a layout buffer.
+  const startY = doc.y + 4;
   const billLines = inv.billTo.addrLines || [];
   const shipLines = inv.shipTo?.addrLines || [];
   const hasShip = !!inv.shipTo;
