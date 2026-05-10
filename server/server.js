@@ -8128,6 +8128,17 @@ const server = http.createServer(async (req, res) => {
     const authHandled = await handleAuth(req, res, pathname);
     if (authHandled !== false) return;
 
+    // Magic-link customer verify — the URL the customer clicks in their
+    // email is /portal/login/verify (no /api/ prefix per the spec). The
+    // handler logic lives in handlePortalLoginApi alongside the rest of
+    // the identity API; we dispatch to it here BEFORE the auth gate so a
+    // logged-out customer can complete the verify-and-redirect dance
+    // without being bounced to /login first.
+    if (req.method === "GET" && pathname === "/portal/login/verify") {
+      const verifyHandled = await handlePortalLoginApi(req, res, "/api/portal/login/verify");
+      if (verifyHandled !== false) return;
+    }
+
     const requiredLevel = needsAuth(req.method, pathname);
     if (requiredLevel) {
       const session = requiredLevel === "admin"
