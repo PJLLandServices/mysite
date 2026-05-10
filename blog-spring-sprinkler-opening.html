@@ -216,7 +216,7 @@
 
         <p>End to end, a typical residential 6-zone system takes us 35-50 minutes on site. Larger or older systems run longer; commercial properties can be 90 minutes or more.</p>
 
-        <div class="from-the-truck"><div class="from-the-truck-label">🚐 From the truck</div><p>"The fastest service call I ever did was 22 minutes — perfect winterization the previous fall, brand-new system, nothing wrong. The longest was 4 hours — homeowner had 'opened it himself' two weeks earlier and we were still finding cracked fittings under three different valve boxes. Pay the $90."</p></div>
+        <div class="from-the-truck"><div class="from-the-truck-label">🚐 From the truck</div><p>"The fastest service call I ever did was 22 minutes — perfect winterization the previous fall, brand-new system, nothing wrong. The longest was 4 hours — homeowner had 'opened it himself' two weeks earlier and we were still finding cracked fittings under three different valve boxes. Pay the <span data-price="spring_open_4z">$90</span>."</p></div>
 
         <h2 id="timing">When to book — the booking window matters more than you think</h2>
         <p>Three windows for the GTA:</p>
@@ -303,6 +303,7 @@
 (function(){var bar=document.getElementById('readingProgress'),article=document.querySelector('.post-content');if(!bar||!article)return;function update(){var rect=article.getBoundingClientRect(),total=article.offsetHeight-window.innerHeight,passed=Math.max(0,-rect.top),pct=Math.min(100,(passed/Math.max(total,1))*100);bar.style.width=pct+'%';}window.addEventListener('scroll',update,{passive:true});window.addEventListener('resize',update);update();})();
 (function(){var cta=document.getElementById('postStickyCta'),footer=document.querySelector('.post-footer');if(!cta)return;function update(){var y=window.scrollY||0,footerTop=footer?footer.getBoundingClientRect().top+y-window.innerHeight:Infinity;if(y>700&&y<footerTop)cta.classList.add('is-visible');else cta.classList.remove('is-visible');}window.addEventListener('scroll',update,{passive:true});update();})();
 </script>
+  <script src="js/pricing-injector.js" defer></script>
   <script src="js/chat-widget.js" defer></script>
 </body>
 </html>

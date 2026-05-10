@@ -63,6 +63,7 @@ const ALLOWLIST = [
   { file: 'blog-spring-sprinkler-opening.html', match: '$45', reason: '"$45-$220 typical repair range" — informational range, not a flat price.' },
   { file: 'blog-spring-sprinkler-opening.html', match: 'Pay the $90', reason: 'Rhetorical "From the truck" quote, intentionally rounded.' },
   { file: 'blog-spring-sprinkler-opening.html', match: '$4,000', reason: 'Hypothetical "system value" reference in og:description, not a service price.' },
+  { file: 'sprinkler-repair.html', match: '$215 with the service call', reason: 'Aurora field-story narrative total ("Sixty-five minutes door to door. Total: $215 with the service call") — describes one specific past job, not a price-list line item.' },
 
   // ---- Real-but-not-yet-canonical PJL services ----
   // These ARE PJL service prices but don't have a pricing.json key (yet).
