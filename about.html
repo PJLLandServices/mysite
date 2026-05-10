@@ -3,9 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta name="description" content="Meet Patrick Lalande — owner and lead technician of PJL Land Services, Newmarket's trusted lawn sprinkler and landscape lighting expert. Hunter Hydrawise certified, fully licensed and insured, 10+ years serving the GTA.">
-<meta name="keywords" content="Patrick Lalande PJL, sprinkler installer Newmarket, irrigation contractor Aurora, Hydrawise certified Toronto, landscape lighting expert GTA, about PJL Land Services">
-<meta name="author" content="Patrick Lalande — PJL Land Services">
+<meta name="description" content="PJL Land Services provides sprinkler design, installation, and service across York Region and the broader GTA. Hunter Hydrawise smart-controller standard. Fixed-price written quotes. Three-year warranty on parts and labour.">
 <meta name="robots" content="index, follow, max-image-preview:large">
 <meta name="geo.region" content="CA-ON">
 <meta name="geo.placename" content="Newmarket, Ontario">
@@ -14,377 +12,542 @@
 <link rel="icon" type="image/svg+xml" href="logo-mark.svg">
 <link rel="apple-touch-icon" href="logo-mark.svg">
 
-<meta property="og:type" content="profile">
+<meta property="og:type" content="website">
 <meta property="og:site_name" content="PJL Land Services">
-<meta property="og:title" content="Meet Patrick Lalande — Owner of PJL Land Services | Newmarket & GTA">
-<meta property="og:description" content="10+ years installing and servicing residential irrigation across Newmarket, Aurora, King City and the GTA. Hunter Hydrawise certified, licensed and insured.">
+<meta property="og:title" content="About PJL Land Services — Lawn Irrigation in Newmarket &amp; GTA">
+<meta property="og:description" content="Sprinkler design, installation, and service across York Region and the broader GTA. Hunter Hydrawise standard. Fixed-price quotes. Three-year warranty on parts and labour.">
 <meta property="og:url" content="https://www.pjllandservices.com/about.html">
-<meta property="og:image" content="https://www.pjllandservices.com/patrick-lalande.jpg">
-<meta property="og:image:alt" content="Patrick Lalande, owner of PJL Land Services in Newmarket, Ontario">
+<meta property="og:image" content="https://www.pjllandservices.com/homepage-hero.jpg">
+<meta property="og:image:alt" content="A residential lawn irrigation system installed by PJL Land Services running across a property in York Region, Ontario.">
 <meta property="og:locale" content="en_CA">
-<meta property="profile:first_name" content="Patrick">
-<meta property="profile:last_name" content="Lalande">
 
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="Meet Patrick Lalande — Owner of PJL Land Services">
-<meta name="twitter:description" content="10+ years installing irrigation across Newmarket, Aurora & the GTA. Hunter Hydrawise certified.">
-<meta name="twitter:image" content="https://www.pjllandservices.com/patrick-lalande.jpg">
+<meta name="twitter:title" content="About PJL Land Services — Lawn Irrigation in Newmarket &amp; GTA">
+<meta name="twitter:description" content="Sprinkler design, installation, and service across York Region and the GTA. Hunter Hydrawise standard. Fixed-price quotes. Three-year warranty.">
+<meta name="twitter:image" content="https://www.pjllandservices.com/homepage-hero.jpg">
 
-<title>About | Meet Patrick Lalande — PJL Land Services Newmarket &amp; GTA</title>
+<title>About PJL Land Services — Lawn Irrigation in Newmarket &amp; GTA</title>
 <link rel="stylesheet" href="style.css?v=cov3">
 
-<!-- Person + AboutPage schema — strong E-E-A-T signal for Google -->
+<!-- AboutPage schema — describes the page's subject (the business) -->
 <script type="application/ld+json">
 {
   "@context": "https://schema.org",
   "@type": "AboutPage",
   "name": "About PJL Land Services",
   "url": "https://www.pjllandservices.com/about.html",
-  "mainEntity": {
-    "@type": "Person",
-    "@id": "https://www.pjllandservices.com/about.html#patrick",
-    "name": "Patrick Lalande",
-    "jobTitle": "Owner & Lead Technician",
-    "image": "https://www.pjllandservices.com/patrick-lalande.jpg",
-    "worksFor": { "@id": "https://www.pjllandservices.com/#business" },
-    "hasCredential": [
-      { "@type": "EducationalOccupationalCredential", "credentialCategory": "Certification", "name": "Hunter Hydrawise Certified Installer" }
-    ],
-    "knowsAbout": [
-      "Lawn sprinkler installation",
-      "Smart irrigation systems",
-      "Hunter Hydrawise programming",
-      "Landscape lighting design",
-      "Sprinkler repair",
-      "Spring openings",
-      "Fall winterization",
-      "Drip irrigation"
-    ],
-    "address": { "@type": "PostalAddress", "addressLocality": "Newmarket", "addressRegion": "ON", "addressCountry": "CA" }
-  },
+  "mainEntity": { "@id": "https://www.pjllandservices.com/#business" },
   "publisher": { "@id": "https://www.pjllandservices.com/#business" }
 }
 </script>
 
 <style>
+/* ── About page — business-focused rebuild ──
+   Tokens are mapped to the global stylesheet (--green, --amber, --cream,
+   --dark, --hero-nav-clearance). No new colour values. */
+
+/* Cancel the global heavy h-tag text-shadow + uppercase for this page's
+   sentence-case headings. Stat numbers (Barlow Condensed) keep uppercase. */
+.about-hero h1,
+.foundations h2, .pillar h3,
+.about-pjl h2,
+.how-pjl h2, .how-pjl-title,
+.beliefs h2, .belief h3,
+.where h2,
+.about-cta h2 {
+  text-transform: none;
+  text-shadow: none;
+  letter-spacing: -0.015em;
+}
+
+/* ── Hero ── */
 .about-hero {
   padding: 156px 0 80px;
-  background:
-    radial-gradient(ellipse 60% 55% at 20% 20%, rgba(74,140,92,0.30), transparent 60%),
-    radial-gradient(ellipse 55% 50% at 85% 80%, rgba(224,123,36,0.18), transparent 60%),
-    linear-gradient(135deg, var(--dark) 0%, var(--green) 70%, var(--green-mid) 100%);
-  position: relative;
-  overflow: hidden;
+  background: var(--cream);
 }
 .about-hero-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
   gap: clamp(28px, 5vw, 64px);
   align-items: center;
-  position: relative;
-  z-index: 2;
 }
-.about-hero-content .page-eyebrow {
-  display: inline-flex; align-items: center; gap: 8px;
-  background: rgba(255,255,255,0.08);
-  border: 1px solid rgba(255,255,255,0.14);
-  color: #fff;
-  font-size: 12px; font-weight: 700;
-  letter-spacing: .14em; text-transform: uppercase;
-  padding: 7px 16px; border-radius: 99px;
-  margin-bottom: 20px;
+.about-hero-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 14px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  color: var(--green);
+  margin-bottom: 16px;
 }
-.about-hero-content .page-eyebrow::before {
-  content: ''; width: 6px; height: 6px; border-radius: 50%;
-  background: var(--amber-light);
-  box-shadow: 0 0 0 3px rgba(245,155,74,0.35);
+.about-hero-eyebrow::before {
+  content: '';
+  width: 32px; height: 2px;
+  background: var(--amber);
+  border-radius: 99px;
+  flex-shrink: 0;
 }
-.about-hero-content h1 {
-  color: #fff;
-  font-size: clamp(40px, 6vw, 72px);
-  line-height: 1.04;
-  letter-spacing: -0.025em;
+.about-hero h1 {
+  color: var(--text);
+  font-size: clamp(36px, 5.4vw, 54px);
+  font-weight: 700;
+  line-height: 1.05;
   margin-bottom: 22px;
 }
-.about-hero-content h1 em {
+.about-hero h1 em {
   font-style: italic;
-  background: linear-gradient(135deg, var(--amber-light) 0%, var(--amber) 100%);
-  -webkit-background-clip: text; background-clip: text;
-  -webkit-text-fill-color: transparent;
+  color: var(--amber);
+  font-weight: 800;
 }
-.about-hero-content p {
-  color: rgba(255,255,255,0.85);
-  font-size: clamp(17px, 1.9vw, 20px);
+.about-hero .lede {
+  color: var(--text-mid);
+  font-size: clamp(17px, 1.7vw, 19px);
   line-height: 1.65;
   margin-bottom: 28px;
+  max-width: 56ch;
 }
 .about-hero-actions {
-  display: flex; flex-wrap: wrap; gap: 12px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
 }
-.about-hero-actions .btn-amber {
-  display: inline-flex; align-items: center; gap: 10px;
+.about-hero-actions .btn,
+.about-cta-actions .btn {
+  min-height: var(--touch-target);
+  padding: 14px 28px;
+  border-radius: 10px;
+  font-family: 'DM Sans', sans-serif;
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  transition: background 0.15s ease, color 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
+  cursor: pointer;
+  border: 2px solid transparent;
+}
+.about-hero-actions .btn-primary {
   background: var(--amber);
   color: #fff;
-  padding: 14px 26px;
-  border-radius: 99px;
-  font-weight: 700;
-  transition: background .2s ease, transform .2s ease;
-  box-shadow: 0 8px 20px rgba(224,123,36,0.35);
+  border-color: var(--amber);
 }
-.about-hero-actions .btn-amber:hover { background: var(--amber-light); transform: translateY(-2px); }
-.about-hero-actions .btn-ghost {
-  display: inline-flex; align-items: center; gap: 10px;
-  background: rgba(255,255,255,0.06);
-  border: 1px solid rgba(255,255,255,0.16);
+.about-hero-actions .btn-primary:hover {
+  background: var(--amber-light);
+  border-color: var(--amber-light);
+  transform: translateY(-1px);
+  box-shadow: 0 8px 20px rgba(224,123,36,0.30);
+}
+.about-hero-actions .btn-secondary {
+  background: transparent;
+  color: var(--green);
+  border-color: var(--green);
+}
+.about-hero-actions .btn-secondary:hover {
+  background: var(--green);
   color: #fff;
-  padding: 14px 22px;
-  border-radius: 99px;
-  font-weight: 600;
-  transition: background .2s ease, border-color .2s ease;
 }
-.about-hero-actions .btn-ghost:hover { background: rgba(255,255,255,0.10); border-color: rgba(255,255,255,0.30); }
 
-/* Portrait card */
-.portrait-card {
+/* Hero photo + placeholder */
+.about-hero-photo,
+.about-pjl-photo,
+.where-map {
   position: relative;
   border-radius: var(--r-xl);
   overflow: hidden;
-  box-shadow: 0 30px 80px rgba(0,0,0,0.40), 0 0 0 1px rgba(255,255,255,0.08);
-  aspect-ratio: 4 / 5;
-  background: linear-gradient(135deg, var(--green) 0%, var(--green-mid) 100%);
+  background: var(--cream);
 }
-.portrait-card img {
-  width: 100%; height: 100%;
+.about-hero-photo {
+  aspect-ratio: 4 / 5;
+  box-shadow: 0 24px 60px rgba(15,31,20,0.18);
+}
+.about-pjl-photo {
+  aspect-ratio: 3 / 4;
+  box-shadow: 0 24px 60px rgba(15,31,20,0.14);
+}
+.where-map {
+  aspect-ratio: 1 / 1;
+  box-shadow: 0 16px 40px rgba(15,31,20,0.12);
+}
+.about-hero-photo img,
+.about-pjl-photo img,
+.where-map img {
+  width: 100%;
+  height: 100%;
   object-fit: cover;
   display: block;
 }
-.portrait-fallback {
-  position: absolute; inset: 0;
-  display: flex; flex-direction: column; align-items: center; justify-content: center;
-  background: linear-gradient(135deg, var(--green) 0%, var(--green-light) 100%);
-  color: #fff;
-  font-family: 'Barlow Condensed', sans-serif;
-  z-index: 1;
-}
-.portrait-fallback .pf-initials {
-  font-size: 96px;
-  font-weight: 800;
-  line-height: 1;
-  margin-bottom: 8px;
-}
-.portrait-fallback .pf-name {
-  font-size: 22px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  font-weight: 600;
-}
-.portrait-card img { position: relative; z-index: 2; }
-.portrait-badge {
+.photo-placeholder {
   position: absolute;
-  bottom: 16px; left: 16px;
-  z-index: 3;
-  display: inline-flex; align-items: center; gap: 8px;
-  background: rgba(15,31,20,0.85);
-  -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
-  color: #fff;
-  font-size: 13px; font-weight: 600;
-  padding: 8px 14px;
-  border-radius: 99px;
-  border: 1px solid rgba(255,255,255,0.10);
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 24px;
+  border: 2px dashed rgba(27,77,46,0.28);
+  border-radius: inherit;
+  background: linear-gradient(135deg, var(--cream) 0%, var(--green-pale) 100%);
 }
-.portrait-badge .pulse {
-  width: 8px; height: 8px; border-radius: 50%;
-  background: var(--amber-light);
-  box-shadow: 0 0 0 3px rgba(245,155,74,0.30);
-  animation: pulse 2s infinite;
+.photo-placeholder .ph-icon {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 64px;
+  font-weight: 800;
+  color: var(--green-light);
+  line-height: 1;
+  margin-bottom: 10px;
+  letter-spacing: 0.04em;
 }
-@keyframes pulse { 0%,100%{ box-shadow: 0 0 0 0 rgba(245,155,74,0.5);} 50%{ box-shadow: 0 0 0 7px rgba(245,155,74,0);} }
+.photo-placeholder .ph-label {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 13px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
 
-/* Stats strip */
+/* ── Stats strip ── */
 .about-stats {
-  background: var(--cream);
+  background: var(--green);
   padding: 48px 0;
-  border-bottom: 1px solid var(--border);
+  color: #fff;
 }
 .about-stats-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: clamp(16px, 3vw, 32px);
+  gap: clamp(20px, 3vw, 32px);
   text-align: center;
 }
 .about-stat-num {
   font-family: 'Barlow Condensed', sans-serif;
-  font-size: clamp(36px, 5vw, 56px);
+  font-size: clamp(32px, 4.4vw, 44px);
   font-weight: 800;
   line-height: 1;
-  background: linear-gradient(135deg, var(--green) 0%, var(--green-light) 70%, var(--amber) 110%);
-  -webkit-background-clip: text; background-clip: text;
-  -webkit-text-fill-color: transparent;
-  margin-bottom: 6px;
+  color: var(--amber-light);
+  margin-bottom: 8px;
+  text-shadow: none;
 }
 .about-stat-label {
-  font-size: 13px;
-  color: var(--text-muted);
-  font-weight: 600;
-  letter-spacing: 0.04em;
+  font-size: 13.5px;
+  color: rgba(255,255,255,0.78);
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  line-height: 1.45;
 }
 
-/* Story section */
-.about-story {
+/* ── Foundations / Pillars ── */
+.foundations {
   padding: clamp(64px, 9vw, 96px) 0;
+  background: #fff;
 }
-.about-story-grid {
+.foundations-head {
+  margin-bottom: clamp(32px, 5vw, 48px);
+  max-width: 820px;
+}
+.section-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 13.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  color: var(--amber);
+  margin-bottom: 14px;
+}
+.section-eyebrow::before {
+  content: '';
+  width: 28px; height: 2px;
+  background: var(--amber);
+  border-radius: 99px;
+  flex-shrink: 0;
+}
+.foundations h2,
+.about-pjl h2,
+.how-pjl h2,
+.beliefs h2,
+.where h2 {
+  color: var(--green);
+  font-size: clamp(28px, 4vw, 40px);
+  font-weight: 700;
+  line-height: 1.1;
+  margin-bottom: 16px;
+}
+.foundations-lede {
+  font-size: 17px;
+  line-height: 1.7;
+  color: var(--text-mid);
+  max-width: 65ch;
+}
+.pillars {
   display: grid;
-  grid-template-columns: minmax(0, 220px) minmax(0, 1fr);
-  gap: clamp(24px, 4vw, 56px);
-  align-items: start;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: clamp(20px, 3vw, 28px);
 }
-.about-story-toc {
-  position: sticky; top: 120px;
-  background: var(--cream);
-  border: 1px solid var(--border);
-  border-radius: var(--r-lg);
-  padding: 22px;
+.pillar {
+  background: #fff;
+  border-left: 4px solid var(--amber);
+  border-radius: 8px;
+  padding: 32px;
+  box-shadow: 0 4px 16px rgba(15,31,20,0.06);
 }
-.about-story-toc h4 {
-  font-size: 12px; font-weight: 800; letter-spacing: .14em;
-  text-transform: uppercase; color: var(--green);
+.pillar-tag {
+  display: inline-block;
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  color: var(--amber);
+  margin-bottom: 10px;
+}
+.pillar h3 {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--green);
+  line-height: 1.2;
   margin-bottom: 12px;
 }
-.about-story-toc ul { list-style: none; padding: 0; margin: 0; }
-.about-story-toc li { margin-bottom: 8px; }
-.about-story-toc a {
-  color: var(--text-mid); font-size: 14px;
-  border-left: 2px solid transparent;
-  padding-left: 10px; display: block; line-height: 1.45;
-  transition: color .2s ease, border-color .2s ease;
+.pillar p {
+  font-size: 15px;
+  line-height: 1.65;
+  color: var(--text-mid);
+  margin: 0;
 }
-.about-story-toc a:hover { color: var(--green); border-left-color: var(--amber); }
 
-.about-story-body { max-width: 720px; }
-.about-story-body p { font-size: 17px; line-height: 1.75; color: var(--text-mid); margin-bottom: 22px; }
-.about-story-body h2 {
-  font-size: clamp(28px, 3.6vw, 40px);
+/* ── About PJL ── */
+.about-pjl {
+  background: var(--cream);
+  padding: clamp(64px, 9vw, 96px) 0;
+}
+.about-pjl-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+  gap: clamp(28px, 5vw, 64px);
+  align-items: start;
+}
+.about-pjl-body p {
+  font-size: 17px;
+  line-height: 1.7;
+  color: var(--text-mid);
+  margin-bottom: 18px;
+}
+.about-pjl-body p:last-child { margin-bottom: 0; }
+.about-pjl-body strong {
   color: var(--green);
-  margin: 48px 0 18px;
-  scroll-margin-top: 120px;
+  font-weight: 700;
 }
-.about-story-body h2:first-child { margin-top: 0; }
-.about-story-body strong { color: var(--text); }
-.about-story-body a { color: var(--green); text-decoration: underline; text-decoration-color: var(--amber-light); text-underline-offset: 3px; font-weight: 600; }
-.about-story-body a:hover { color: var(--amber); }
+.about-pjl-photo-wrap {
+  position: sticky;
+  top: 24px;
+}
 
-/* Credentials cards */
-.creds-grid {
+/* ── How PJL Works ── */
+.how-pjl {
+  background: #fff;
+  padding: clamp(64px, 9vw, 96px) 0;
+}
+.how-pjl .container { max-width: 880px; }
+.how-pjl-head { margin-bottom: 32px; }
+.how-pjl-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  counter-reset: how-pjl;
+}
+.how-pjl-list li {
+  display: grid;
+  grid-template-columns: 40px 1fr;
+  gap: 20px;
+  padding: 24px 0;
+  border-bottom: 1px solid var(--border);
+}
+.how-pjl-list li:last-child { border-bottom: none; }
+.how-pjl-num {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 28px;
+  font-weight: 800;
+  color: var(--amber);
+  line-height: 1;
+}
+.how-pjl-title {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--green);
+  margin-bottom: 6px;
+  line-height: 1.2;
+}
+.how-pjl-body {
+  font-size: 15px;
+  line-height: 1.6;
+  color: var(--text-mid);
+  margin: 0;
+}
+
+/* ── Beliefs ── */
+.beliefs {
+  background: var(--green);
+  padding: clamp(64px, 9vw, 96px) 0;
+  color: #fff;
+}
+.beliefs h2 { color: #fff; }
+.beliefs-head { margin-bottom: clamp(32px, 5vw, 48px); }
+.beliefs .section-eyebrow {
+  color: var(--amber-light);
+  text-shadow: none;
+}
+.beliefs .section-eyebrow::before { background: var(--amber-light); }
+.beliefs-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 14px;
-  margin: 24px 0 32px;
+  gap: clamp(16px, 2.5vw, 24px);
 }
-.cred-card {
-  background: #fff;
-  border: 1px solid var(--border);
-  border-radius: var(--r-lg);
-  padding: 18px 20px;
-  display: flex; align-items: flex-start; gap: 14px;
-  transition: transform .2s ease, box-shadow .2s ease, border-color .2s ease;
+.belief {
+  background: rgba(255,255,255,0.06);
+  border-left: 3px solid var(--amber);
+  border-radius: 4px;
+  padding: 24px 28px;
 }
-.cred-card:hover { transform: translateY(-3px); border-color: rgba(74,140,92,0.30); box-shadow: 0 10px 24px rgba(15,31,20,0.06); }
-.cred-icon {
-  flex-shrink: 0;
-  width: 42px; height: 42px;
-  border-radius: 12px;
-  background: linear-gradient(135deg, var(--green) 0%, var(--green-light) 100%);
-  color: #fff;
-  display: inline-flex; align-items: center; justify-content: center;
+.belief h3 {
+  font-family: 'Barlow Condensed', sans-serif;
   font-size: 20px;
+  font-weight: 700;
+  color: #fff;
+  margin-bottom: 8px;
+  line-height: 1.2;
 }
-.cred-body h4 {
-  margin: 0 0 4px !important;
-  font-size: 15px !important;
-  color: var(--green) !important;
-  text-transform: none !important;
-  letter-spacing: -0.005em !important;
-}
-.cred-body p {
-  margin: 0 !important;
-  font-size: 13px !important;
-  line-height: 1.5 !important;
-  color: var(--text-muted) !important;
+.belief p {
+  font-size: 15px;
+  line-height: 1.6;
+  color: rgba(255,255,255,0.85);
+  margin: 0;
 }
 
-/* Values list */
-.values-list {
+/* ── Where We Work ── */
+.where {
+  background: #fff;
+  padding: clamp(64px, 9vw, 96px) 0;
+}
+.where-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 18px;
-  margin: 24px 0 32px;
-  padding: 0 !important;
-  list-style: none !important;
+  grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr);
+  gap: clamp(28px, 4vw, 48px);
+  align-items: start;
 }
-.values-list li {
-  background: linear-gradient(135deg, var(--green-pale) 0%, #f4f9ec 100%);
-  border-left: 4px solid var(--green-light);
-  border-radius: 0 var(--r-lg) var(--r-lg) 0;
-  padding: 20px 22px;
-  font-size: 15px !important;
-  line-height: 1.55 !important;
-  color: var(--text) !important;
+.where-lede {
+  font-size: 17px;
+  line-height: 1.7;
+  color: var(--text-mid);
+  margin-bottom: 24px;
+  max-width: 60ch;
 }
-.values-list li strong { color: var(--green); display: block; margin-bottom: 6px; font-size: 16px; }
+.where-lede strong {
+  color: var(--green);
+  font-weight: 700;
+}
+.where-cities {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: 24px;
+  row-gap: 0;
+  list-style: none;
+  margin: 0 0 24px;
+  padding: 0;
+}
+.where-cities li {
+  font-size: 15px;
+  color: var(--text);
+  padding: 8px 0;
+  border-bottom: 1px dotted var(--border);
+}
+.where-closing {
+  font-size: 15px;
+  color: var(--text-mid);
+  line-height: 1.6;
+}
+.where-closing a {
+  color: var(--green);
+  text-decoration: underline;
+  text-decoration-color: var(--amber);
+  text-underline-offset: 3px;
+  font-weight: 600;
+}
+.where-closing a:hover { color: var(--amber); }
 
-/* Final CTA section */
+/* ── Final CTA ── */
 .about-cta {
-  padding: clamp(56px, 8vw, 96px) 0;
-  background:
-    radial-gradient(ellipse 50% 50% at 100% 0%, rgba(224,123,36,0.18), transparent 60%),
-    radial-gradient(ellipse 50% 50% at 0% 100%, rgba(74,140,92,0.18), transparent 60%),
-    var(--dark);
+  background: var(--amber);
+  padding: 64px 0;
   color: #fff;
   text-align: center;
 }
 .about-cta h2 {
-  color: #fff !important;
-  font-size: clamp(32px, 4.5vw, 48px);
+  color: #fff;
+  font-size: clamp(28px, 4vw, 40px);
+  font-weight: 700;
   margin-bottom: 16px;
 }
 .about-cta p {
-  color: rgba(255,255,255,0.82);
-  font-size: 18px;
-  max-width: 560px;
-  margin: 0 auto 32px;
+  color: rgba(255,255,255,0.95);
+  font-size: 17px;
+  max-width: 600px;
+  margin: 0 auto 28px;
   line-height: 1.6;
 }
-.about-cta-actions { display: inline-flex; flex-wrap: wrap; gap: 12px; justify-content: center; }
+.about-cta-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  justify-content: center;
+}
 .about-cta-actions .btn-primary {
-  background: var(--amber);
-  color: #fff;
-  padding: 16px 32px;
-  border-radius: 99px;
-  font-weight: 700;
-  transition: background .2s ease, transform .2s ease;
-  box-shadow: 0 12px 28px rgba(224,123,36,0.40);
+  background: #fff;
+  color: var(--amber);
+  border-color: #fff;
 }
-.about-cta-actions .btn-primary:hover { background: var(--amber-light); transform: translateY(-2px); }
+.about-cta-actions .btn-primary:hover {
+  background: var(--green);
+  color: #fff;
+  border-color: var(--green);
+  transform: translateY(-1px);
+  box-shadow: 0 8px 20px rgba(15,31,20,0.20);
+}
 .about-cta-actions .btn-secondary {
-  background: rgba(255,255,255,0.08);
-  border: 1px solid rgba(255,255,255,0.18);
+  background: transparent;
   color: #fff;
-  padding: 16px 28px;
-  border-radius: 99px;
-  font-weight: 600;
+  border-color: #fff;
 }
-.about-cta-actions .btn-secondary:hover { background: rgba(255,255,255,0.14); }
+.about-cta-actions .btn-secondary:hover {
+  background: #fff;
+  color: var(--amber);
+}
 
+/* ── Responsive — match the site's canonical breakpoints (760, 960) ── */
 @media (max-width: 960px) {
   .about-hero-grid { grid-template-columns: 1fr; }
-  .about-stats-grid { grid-template-columns: repeat(2, 1fr); }
-  .about-story-grid { grid-template-columns: 1fr; }
-  .about-story-toc { position: static; margin-bottom: 24px; }
-  .creds-grid, .values-list { grid-template-columns: 1fr; }
+  .about-pjl-grid { grid-template-columns: 1fr; }
+  .about-pjl-photo-wrap { position: static; }
+}
+@media (max-width: 760px) {
+  .pillars { grid-template-columns: 1fr; }
+  .beliefs-grid { grid-template-columns: 1fr; }
+  .where-grid { grid-template-columns: 1fr; }
+}
+@media (max-width: 720px) {
+  .about-stats-grid { grid-template-columns: repeat(2, 1fr); gap: 24px; }
 }
 @media (max-width: 640px) {
   .about-hero { padding: var(--hero-nav-clearance) 0 60px; }
+  .where-cities { grid-template-columns: 1fr; }
+  .pillar { padding: 24px; }
+  .belief { padding: 22px 24px; }
 }
 </style>
   <link rel="stylesheet" href="css/chat-widget.css">
@@ -407,22 +570,21 @@
 <section class="about-hero">
   <div class="container about-hero-grid">
     <div class="about-hero-content">
-      <span class="page-eyebrow">Meet the team · 10+ years in the GTA</span>
-      <h1>Hi, I'm <em>Patrick.</em> I run PJL Land Services.</h1>
-      <p>Lawn sprinklers, smart Hydrawise systems, and landscape lighting across Newmarket, Aurora, King City and the broader GTA. Same crew that quotes the job is the one that installs it. Same number you call for the spring opening is the one that picks up if something goes wrong in July.</p>
+      <span class="about-hero-eyebrow">About PJL Land Services</span>
+      <h1>Lawn irrigation that <em>holds up</em> — season after season.</h1>
+      <p class="lede">PJL Land Services provides sprinkler design, installation, and service across York Region and the broader GTA. Hunter Hydrawise smart-controller standard. Fixed-price written quotes. Three-year warranty on parts and labour.</p>
       <div class="about-hero-actions">
-        <a href="contact.html" class="btn-amber">Book a free walk-through <span aria-hidden="true">→</span></a>
-        <a href="tel:+19059600181" class="btn-ghost">📞 (905) 960-0181</a>
+        <a href="diagnose.html" class="btn btn-primary">Diagnose your system <span aria-hidden="true">→</span></a>
+        <a href="tel:+19059600181" class="btn btn-secondary" aria-label="Call PJL at 9 0 5, 9 6 0, 0 1 8 1">
+          <svg aria-hidden="true" focusable="false" width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M3.654 1.328a.678.678 0 0 0-1.015-.063L1.605 2.3c-.483.484-.661 1.169-.45 1.77a17.6 17.6 0 0 0 4.168 6.608 17.6 17.6 0 0 0 6.608 4.168c.601.211 1.286.033 1.77-.45l1.034-1.034a.678.678 0 0 0-.063-1.015l-2.307-1.794a.68.68 0 0 0-.58-.122l-2.19.547a1.75 1.75 0 0 1-1.657-.459L5.482 8.062a1.75 1.75 0 0 1-.46-1.657l.548-2.19a.68.68 0 0 0-.122-.58L3.654 1.328Z"/></svg>
+          (905) 960-0181
+        </a>
       </div>
     </div>
-    <div>
-      <div class="portrait-card">
-        <div class="portrait-fallback" aria-hidden="true">
-          <div class="pf-initials">PL</div>
-          <div class="pf-name">Patrick Lalande</div>
-        </div>
-        <img src="patrick-lalande.jpg" alt="Patrick Lalande, owner and lead technician at PJL Land Services in Newmarket, Ontario" onerror="this.style.display='none';" srcset="patrick-lalande@800w.jpg 800w, patrick-lalande.jpg 1024w" sizes="100vw">
-        <span class="portrait-badge"><span class="pulse" aria-hidden="true"></span>Owner &amp; Lead Technician</span>
+    <div class="about-hero-photo">
+      <div class="photo-placeholder" aria-hidden="true">
+        <span class="ph-icon">PJL</span>
+        <span class="ph-label">Hero photo · 4:5</span>
       </div>
     </div>
   </div>
@@ -433,98 +595,180 @@
   <div class="container">
     <div class="about-stats-grid">
       <div>
-        <div class="about-stat-num">10<span style="font-size:0.6em;">+</span></div>
-        <div class="about-stat-label">Years Experience</div>
+        <div class="about-stat-num">10+</div>
+        <div class="about-stat-label">Years of high-quality irrigation work</div>
       </div>
       <div>
-        <div class="about-stat-num">100's</div>
-        <div class="about-stat-label">of Systems Serviced Each Season</div>
+        <div class="about-stat-num">3 yr</div>
+        <div class="about-stat-label">Warranty on parts &amp; labour</div>
       </div>
       <div>
-        <div class="about-stat-num">Dozens</div>
-        <div class="about-stat-label">of Smart System Upgrades Each Month</div>
+        <div class="about-stat-num">Same-day</div>
+        <div class="about-stat-label">Repair availability, April – October</div>
       </div>
       <div>
-        <div class="about-stat-num">100%</div>
-        <div class="about-stat-label">Satisfaction Focused</div>
+        <div class="about-stat-num">Fixed</div>
+        <div class="about-stat-label">Written quotes, on the spot</div>
       </div>
     </div>
-    <p class="stats-disclaimer reveal" style="margin-top:24px;">
-      <span class="stats-disclaimer__icon" aria-hidden="true">✓</span>
-      Accurate numbers — not the inflated kind. Just the truth, like the rest of our work.
-    </p>
   </div>
 </section>
 
-<!-- Story -->
-<section class="about-story">
+<!-- Foundations / Pillars -->
+<section class="foundations">
   <div class="container">
-    <div class="about-story-grid">
+    <div class="foundations-head">
+      <span class="section-eyebrow">The depth behind every system</span>
+      <h2>Built on a foundation that runs deeper than irrigation.</h2>
+      <p class="foundations-lede">A sprinkler system is one piece of a larger picture — landscape grading, soil drainage, hydraulics, water source, plant material, and the trade sequencing that happens before and after the install. PJL's work is grounded in three connected trades, which is why the systems hold up over time.</p>
+    </div>
+    <div class="pillars">
+      <article class="pillar">
+        <span class="pillar-tag">Foundation 01</span>
+        <h3>Plumbing-Grade Hydraulics</h3>
+        <p>Every PJL design begins with hydraulics — pressure, flow rate, backflow protection, and water source matched to the property. That foundation comes from years of plumbing trade experience across residential, commercial, and industrial work, which is why systems run efficiently from day one.</p>
+      </article>
+      <article class="pillar">
+        <span class="pillar-tag">Foundation 02</span>
+        <h3>Industrial-Scale Experience</h3>
+        <p>PJL's standards were developed across residential, commercial, and industrial irrigation projects throughout Ontario. That breadth means uncommon problems get diagnosed correctly, and every job — large or small — receives the same engineering rigour.</p>
+      </article>
+      <article class="pillar">
+        <span class="pillar-tag">Foundation 03</span>
+        <h3>Multi-Trade Coordination</h3>
+        <p>Sprinkler work happens alongside grading, drainage, planting, and every other trade on a property. PJL's project-management background in civil construction means jobs are planned and sequenced from the start — fewer surprises and a cleaner finished landscape.</p>
+      </article>
+    </div>
+  </div>
+</section>
 
-      <aside class="about-story-toc" aria-label="On this page">
-        <h4>On this page</h4>
-        <ul>
-          <li><a href="#story">The PJL story</a></li>
-          <li><a href="#how-we-work">How we work</a></li>
-          <li><a href="#credentials">Credentials &amp; certifications</a></li>
-          <li><a href="#values">What we believe</a></li>
-          <li><a href="#service-area">Where we work</a></li>
-        </ul>
-      </aside>
-
-      <div class="about-story-body">
-
-        <h2 id="story">The PJL story</h2>
-        <p>I started PJL Land Services in <strong>Newmarket in 2015</strong>. The plan was simple: install and service sprinkler systems the way I'd want one done at my own house — proper hydrozoning, smart controllers as standard not as an upsell, fixed pricing, and a 3-year warranty that actually means something.</p>
-        <p>Ten years and a few thousand service calls later, the plan hasn't changed. PJL has grown from one truck to a founder-led operation servicing the core York Region and the broader GTA, added landscape lighting alongside irrigation, and gotten certified on every Hunter and Hydrawise platform that exists. What hasn't changed: when a customer calls PJL at 7 a.m. for a panicked "my system is flooding the basement," they reach a real point of contact who's accountable for the fix — not a dispatcher routing the call to a stranger.</p>
-
-        <h2 id="how-we-work">How we actually work</h2>
-        <p>A few things that aren't standard in this industry that we treat as standard:</p>
-        <ul style="font-size:17px; line-height:1.75; color:var(--text-mid); padding-left:26px;">
-          <li><strong>Fixed-price quotes, written, on the spot.</strong> No "starting at" pricing, no surprise upcharges on install day.</li>
-          <li><strong>Free design consult.</strong> 45 minutes, no commitment, no high-pressure sales. If your system doesn't need work, we'll say so.</li>
-          <li><strong>Hunter Hydrawise smart controller standard on every install.</strong> Not an add-on. The water-savings pay for the controller in 1-2 seasons.</li>
-          <li><strong>3-year full warranty</strong> on parts and labour. Industry standard is 1 year on parts only.</li>
-          <li><strong>Same-day repair</strong> across our service area between April and October. If we can't reach you the same day, we tell you that on the phone.</li>
-        </ul>
-
-        <h2 id="credentials">Credentials &amp; certifications</h2>
-        <div class="creds-grid">
-          <div class="cred-card">
-            <div class="cred-icon" aria-hidden="true">📡</div>
-            <div class="cred-body">
-              <h4>Hunter Hydrawise Certified Installer</h4>
-              <p>Trained directly by Hunter Industries on smart-controller programming, hydraulic design and water-efficient zone configuration.</p>
-            </div>
-          </div>
-          <div class="cred-card">
-            <div class="cred-icon" aria-hidden="true">📋</div>
-            <div class="cred-body">
-              <h4>Fully Licensed &amp; Insured</h4>
-              <p>$2M general liability coverage, WSIB clearance certificate available on request, all permits handled in-house.</p>
-            </div>
-          </div>
-          <div class="cred-card">
-            <div class="cred-icon" aria-hidden="true">🤝</div>
-            <div class="cred-body">
-              <h4>Hunter &amp; Rain Bird Authorized Dealer</h4>
-              <p>Direct dealer relationships mean genuine OEM parts, full manufacturer warranty support, and access to the latest product lines.</p>
-            </div>
+<!-- About PJL -->
+<section class="about-pjl">
+  <div class="container">
+    <div class="about-pjl-grid">
+      <div class="about-pjl-body">
+        <span class="section-eyebrow">About PJL</span>
+        <h2>What PJL stands for.</h2>
+        <p>PJL Land Services has been providing lawn irrigation across York Region and the GTA for more than a decade — designing, installing, and maintaining systems built on careful engineering and long-term thinking. <strong>Every system is designed for the property it lives on.</strong> Grade pitch, shade coverage, soil composition, and water source all factor into the design before a single head is placed.</p>
+        <p>Hunter Hydrawise smart controllers come standard. Hunter and Rain Bird parts are used on every install. Quotes are written, fixed, and delivered before any work begins — and the price on the quote is the price on the invoice.</p>
+        <p>The team is built selectively. A trusted irrigation specialist works alongside the operation for larger jobs, and additional crew is added when scope requires it. <strong>Every customer relationship is treated as long-term, not transactional</strong> — and every job, regardless of size, is held to the same standard end to end.</p>
+      </div>
+      <div class="about-pjl-photo-wrap">
+        <div class="about-pjl-photo">
+          <div class="photo-placeholder" aria-hidden="true">
+            <span class="ph-icon">PJL</span>
+            <span class="ph-label">Work photo · 3:4</span>
           </div>
         </div>
+      </div>
+    </div>
+  </div>
+</section>
 
-        <h2 id="values">What we believe</h2>
-        <ul class="values-list">
-          <li><strong>Honest diagnostics.</strong> If your system doesn't need replacement, we won't pretend it does. The repair vs replace conversation is always math, not pressure.</li>
-          <li><strong>Quality parts, every time.</strong> Hunter or Rain Bird only. Box-store generics fail in 2-3 years and erase the cost savings ten times over.</li>
-          <li><strong>Local accountability.</strong> We live in the GTA. We're not a franchise route. If we screw up, you'll see us at Sobeys.</li>
-          <li><strong>Pricing transparency.</strong> Every blog post on this site lists real prices. We're confident enough in our value that we put them in writing.</li>
+<!-- How PJL Works -->
+<section class="how-pjl">
+  <div class="container">
+    <div class="how-pjl-head">
+      <span class="section-eyebrow">How PJL works</span>
+      <h2>The standards behind every job.</h2>
+    </div>
+    <ol class="how-pjl-list">
+      <li>
+        <span class="how-pjl-num" aria-hidden="true">1</span>
+        <div>
+          <h3 class="how-pjl-title">Fixed-price written quotes</h3>
+          <p class="how-pjl-body">Every quote is written, fixed, and delivered before any work begins. The number on the quote is the number on the invoice.</p>
+        </div>
+      </li>
+      <li>
+        <span class="how-pjl-num" aria-hidden="true">2</span>
+        <div>
+          <h3 class="how-pjl-title">Free design consultation</h3>
+          <p class="how-pjl-body">45 minutes on-site, walking through what's there or what's needed. If a system doesn't need work, we'll tell you.</p>
+        </div>
+      </li>
+      <li>
+        <span class="how-pjl-num" aria-hidden="true">3</span>
+        <div>
+          <h3 class="how-pjl-title">Hunter Hydrawise smart controllers, standard</h3>
+          <p class="how-pjl-body">Smart controllers come included on every new install. Adapts to live weather data and conserves water automatically. The water savings typically cover the controller cost within one or two seasons.</p>
+        </div>
+      </li>
+      <li>
+        <span class="how-pjl-num" aria-hidden="true">4</span>
+        <div>
+          <h3 class="how-pjl-title">Three-year warranty on parts and labour</h3>
+          <p class="how-pjl-body">Three years of full coverage on every component and every hour of work, because the system should hold up that long.</p>
+        </div>
+      </li>
+      <li>
+        <span class="how-pjl-num" aria-hidden="true">5</span>
+        <div>
+          <h3 class="how-pjl-title">Same-day repair, April through October</h3>
+          <p class="how-pjl-body">In season, repairs are typically dispatched same-day. If we can't reach a property the same day, we'll tell you on the call so the day isn't spent waiting.</p>
+        </div>
+      </li>
+    </ol>
+  </div>
+</section>
+
+<!-- What We Believe -->
+<section class="beliefs">
+  <div class="container">
+    <div class="beliefs-head">
+      <span class="section-eyebrow">What we believe</span>
+      <h2>The principles behind every job.</h2>
+    </div>
+    <div class="beliefs-grid">
+      <article class="belief">
+        <h3>Honest diagnostics</h3>
+        <p>If a system doesn't need replacement, we won't pretend it does. Repair vs. replace is always math, never pressure.</p>
+      </article>
+      <article class="belief">
+        <h3>Quality parts, every time</h3>
+        <p>Hunter and Rain Bird only — manufacturer-supported components that hold up across seasons of freeze-thaw cycles.</p>
+      </article>
+      <article class="belief">
+        <h3>Local accountability</h3>
+        <p>PJL is rooted in Newmarket and operates across York Region. The same operation that quotes the work stands behind it long after the install.</p>
+      </article>
+      <article class="belief">
+        <h3>Pricing transparency</h3>
+        <p>Real prices in writing — on the website, in the quote, on the invoice. From first call to final receipt.</p>
+      </article>
+    </div>
+  </div>
+</section>
+
+<!-- Where We Work -->
+<section class="where">
+  <div class="container">
+    <div class="where-grid">
+      <div>
+        <span class="section-eyebrow">Service Area</span>
+        <h2>Where PJL works.</h2>
+        <p class="where-lede">Based in <strong>Newmarket</strong> and primarily serving <strong>York Region</strong> — with select work across the broader GTA, Simcoe County, and Peel.</p>
+        <ul class="where-cities">
+          <li>Newmarket</li>
+          <li>Aurora</li>
+          <li>King City</li>
+          <li>Richmond Hill</li>
+          <li>Vaughan</li>
+          <li>Markham</li>
+          <li>Stouffville</li>
+          <li>East Gwillimbury</li>
+          <li>Thornhill</li>
+          <li>Bradford</li>
+          <li>Innisfil</li>
+          <li>Keswick</li>
         </ul>
-
-        <h2 id="service-area">Where we work</h2>
-        <p>We're based in <strong>Newmarket</strong> and primarily serve <strong>York Region</strong> — Aurora, King City, Richmond Hill, Vaughan, East Gwillimbury, Stouffville. We also cover Bradford, Innisfil, Keswick, Georgina and select projects across the broader Greater Toronto Area depending on scope and travel.</p>
-        <p>Not sure if we cover your area? <a href="contact.html">Send a quick message</a> or call <a href="tel:+19059600181">(905) 960-0181</a> — we'll tell you straight.</p>
-
+        <p class="where-closing">For service outside this list, send a quick message or call <a href="tel:+19059600181">(905) 960-0181</a>.</p>
+      </div>
+      <div class="where-map">
+        <div class="photo-placeholder" aria-hidden="true">
+          <span class="ph-icon">YR</span>
+          <span class="ph-label">Service-area map · 1:1</span>
+        </div>
       </div>
     </div>
   </div>
@@ -533,11 +777,14 @@
 <!-- Final CTA -->
 <section class="about-cta">
   <div class="container">
-    <h2>Ready to talk to us?</h2>
-    <p>Free on-site consult. Fixed-price written quote. No pressure, no upsell, no franchise routing. Just the person whose name is on the truck.</p>
+    <h2>Ready to get a real answer?</h2>
+    <p>Free on-site consultation. Fixed-price written quote. Quality parts, installed properly, and three years of full coverage behind every job.</p>
     <div class="about-cta-actions">
-      <a href="contact.html" class="btn-primary">Book a free walk-through →</a>
-      <a href="tel:+19059600181" class="btn-secondary">📞 (905) 960-0181</a>
+      <a href="diagnose.html" class="btn btn-primary">Diagnose your system <span aria-hidden="true">→</span></a>
+      <a href="tel:+19059600181" class="btn btn-secondary" aria-label="Call PJL at 9 0 5, 9 6 0, 0 1 8 1">
+        <svg aria-hidden="true" focusable="false" width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M3.654 1.328a.678.678 0 0 0-1.015-.063L1.605 2.3c-.483.484-.661 1.169-.45 1.77a17.6 17.6 0 0 0 4.168 6.608 17.6 17.6 0 0 0 6.608 4.168c.601.211 1.286.033 1.77-.45l1.034-1.034a.678.678 0 0 0-.063-1.015l-2.307-1.794a.68.68 0 0 0-.58-.122l-2.19.547a1.75 1.75 0 0 1-1.657-.459L5.482 8.062a1.75 1.75 0 0 1-.46-1.657l.548-2.19a.68.68 0 0 0-.122-.58L3.654 1.328Z"/></svg>
+          (905) 960-0181
+      </a>
     </div>
   </div>
 </section>
