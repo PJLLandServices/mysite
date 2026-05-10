@@ -1927,7 +1927,26 @@ async function resolveLoginIdentifier(identifierRaw) {
   // Address-based matches require an email on file (so we have somewhere
   // to send the link). Email/phone matches by definition already have
   // contact info, but apply the same gate uniformly.
-  return [...matches.values()].filter((lead) => Boolean(lead.contact?.email));
+  const emailable = [...matches.values()].filter((lead) => Boolean(lead.contact?.email));
+
+  // Dedup by recipient inbox. The brief originally said "one email per
+  // match, no dedup," but in PJL's real data a single customer typically
+  // has 3–6 lead records (one per booking). Sending six identical login
+  // emails to one inbox isn't "no dedup" — it's spam. Keep at most one
+  // lead per normalized email, picking the most-recently-created so the
+  // magic link lands on the customer's freshest portal. Different
+  // emails at the same address (rare: previous owner + new owner) still
+  // each get their own email — that case isn't dedup'd.
+  const byEmail = new Map();
+  for (const lead of emailable) {
+    const key = String(lead.contact.email).trim().toLowerCase();
+    const existing = byEmail.get(key);
+    if (!existing) { byEmail.set(key, lead); continue; }
+    const a = Date.parse(lead.createdAt) || 0;
+    const b = Date.parse(existing.createdAt) || 0;
+    if (a > b) byEmail.set(key, lead);
+  }
+  return [...byEmail.values()];
 }
 
 async function handlePortalLoginApi(req, res, pathname) {
