@@ -59,6 +59,18 @@ function barlowBuffer() {
   return _barlowBuf;
 }
 
+// Logo PNG (rasterized once via sharp from server/assets/logo-dark.svg).
+// pdfkit's doc.image() takes PNG/JPEG buffers — SVG isn't supported
+// without an extra lib, so we ship the rasterized PNG instead.
+const LOGO_PNG_PATH = path.resolve(__dirname, "..", "assets", "logo-dark.png");
+let _logoBuf = null;
+function logoBuffer() {
+  if (_logoBuf !== null) return _logoBuf;
+  try { _logoBuf = fsSync.readFileSync(LOGO_PNG_PATH); }
+  catch { _logoBuf = false; }
+  return _logoBuf;
+}
+
 // Register the font on a doc. Falls back to Helvetica-Bold if the TTF
 // is missing so the generator still renders something rather than
 // throwing — an unbranded PDF beats a 500.
@@ -289,17 +301,25 @@ function drawHeader(doc, inv) {
   doc.fontSize(8).fillColor(TEXT_MUTED);
   doc.text("GST/HST Reg. No. 757080940 RT0001", leftX, y, { characterSpacing: 0.3 });
 
-  // Right side — text wordmark in dark green Barlow Condensed (a
-  // text-only stand-in for the logo image; matches the style used by
-  // quote-pdf.js / po-pdf.js).
-  doc.font(fontHeading(doc)).fontSize(22).fillColor(GREEN);
-  doc.text("PJL", rightCol, top + 6, {
-    width: 200, align: "right", characterSpacing: 1
-  });
-  doc.fontSize(11).fillColor(GREEN);
-  doc.text("LAND SERVICES", rightCol, top + 32, {
-    width: 200, align: "right", characterSpacing: 3
-  });
+  // Right side — actual PJL logo PNG (rasterized from logo-dark.svg).
+  // Falls back to a text wordmark in dark green Barlow Condensed if the
+  // PNG file is missing (e.g. during dev without the asset committed).
+  const logo = logoBuffer();
+  if (logo) {
+    // Image fits inside 180×60 pt box on the right side of the header
+    // band. pdfkit's `fit` preserves the source aspect ratio while
+    // capping the dimensions, so the logo stays sharp at any zoom.
+    doc.image(logo, rightCol + 20, top, { fit: [180, 60], align: "right" });
+  } else {
+    doc.font(fontHeading(doc)).fontSize(22).fillColor(GREEN);
+    doc.text("PJL", rightCol, top + 6, {
+      width: 200, align: "right", characterSpacing: 1
+    });
+    doc.fontSize(11).fillColor(GREEN);
+    doc.text("LAND SERVICES", rightCol, top + 32, {
+      width: 200, align: "right", characterSpacing: 3
+    });
+  }
 
   // Reset the cursor below the header content for the next section.
   doc.y = Math.max(doc.y, top + 78);
