@@ -28,6 +28,7 @@
 
 <title>About PJL Land Services — Lawn Irrigation in Newmarket &amp; GTA</title>
 <link rel="stylesheet" href="style.css?v=cov3">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
 
 <!-- AboutPage schema — describes the page's subject (the business) -->
 <script type="application/ld+json">
@@ -53,7 +54,12 @@
 .about-pjl h2,
 .how-pjl h2, .how-pjl-title,
 .beliefs h2, .belief h3,
-.where h2,
+.where-pjl-works h2,
+.where-pjl-works h3,
+.where-pjl-works .where-headline,
+.where-pjl-works .tier-headline,
+.where-pjl-works .zone-name,
+.where-pjl-works .popup-title,
 .about-cta h2 {
   text-transform: none;
   text-shadow: none;
@@ -271,8 +277,7 @@
 .foundations h2,
 .about-pjl h2,
 .how-pjl h2,
-.beliefs h2,
-.where h2 {
+.beliefs h2 {
   color: var(--green);
   font-size: clamp(28px, 4vw, 40px);
   font-weight: 700;
@@ -430,56 +435,494 @@
   margin: 0;
 }
 
-/* ── Where We Work ── */
-.where {
+/* ── Where PJL works (interactive Leaflet map + 4-zone Extended block) ── */
+.where-pjl-works {
+  /* Two preview-only tokens scoped to this section since they don't exist
+     in the global stylesheet. Close cousins: --border / --text-muted. */
+  --grey-line: #DDD8C8;
+  --grey-text: #4A5A4E;
   background: #fff;
-  padding: clamp(64px, 9vw, 96px) 0;
+  padding: var(--section-space) 0;
 }
-.where-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr);
-  gap: clamp(28px, 4vw, 48px);
-  align-items: start;
+
+.where-pjl-works .section-head {
+  max-width: 760px;
+  margin: 0 0 48px 0;
 }
-.where-lede {
-  font-size: 17px;
-  line-height: 1.7;
-  color: var(--text-mid);
-  margin-bottom: 24px;
-  max-width: 60ch;
-}
-.where-lede strong {
-  color: var(--green);
+.where-pjl-works .eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 13px;
   font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--amber);
+  margin-bottom: 14px;
 }
-.where-cities {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  column-gap: 24px;
-  row-gap: 0;
-  list-style: none;
-  margin: 0 0 24px;
-  padding: 0;
+.where-pjl-works .eyebrow::before {
+  content: '';
+  width: 22px;
+  height: 2px;
+  background: var(--amber);
 }
-.where-cities li {
-  font-size: 15px;
-  color: var(--text);
-  padding: 8px 0;
-  border-bottom: 1px dotted var(--border);
+.where-pjl-works .where-headline {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: clamp(36px, 4.4vw, 48px);
+  font-weight: 700;
+  line-height: 1.05;
+  color: var(--green);
+  margin: 0 0 18px 0;
+  letter-spacing: -0.5px;
 }
-.where-closing {
-  font-size: 15px;
-  color: var(--text-mid);
+.where-pjl-works .where-lead {
+  font-size: 16px;
+  color: #2A3A2E;
+  margin: 0;
   line-height: 1.6;
 }
-.where-closing a {
+.where-pjl-works .where-lead strong { color: var(--green); font-weight: 600; }
+
+/* ROW 2 — Core 9 list + Map */
+.where-pjl-works .core-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
+  gap: 56px;
+  align-items: start;
+  margin-bottom: 64px;
+}
+.where-pjl-works .tier-label {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--amber);
+  margin-bottom: 6px;
+}
+.where-pjl-works .tier-headline {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 26px;
+  font-weight: 700;
   color: var(--green);
-  text-decoration: underline;
-  text-decoration-color: var(--amber);
-  text-underline-offset: 3px;
+  margin: 0 0 4px 0;
+  letter-spacing: -0.3px;
+}
+.where-pjl-works .tier-sub {
+  font-size: 13px;
+  color: var(--grey-text);
+  margin: 0 0 22px 0;
+  line-height: 1.5;
+}
+.where-pjl-works .towns-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  column-gap: 36px;
+  row-gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.where-pjl-works .towns-grid li {
+  position: relative;
+  padding: 12px 8px 12px 0;
+  border-bottom: 1px dotted #C8C2B0;
+  font-size: 15px;
+  color: var(--text);
+  cursor: pointer;
+  transition: color 0.15s ease, padding-left 0.15s ease;
+  user-select: none;
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+}
+.where-pjl-works .towns-grid li::before {
+  content: '';
+  position: absolute;
+  left: -10px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 0;
+  height: 65%;
+  background: var(--amber);
+  border-radius: 0 2px 2px 0;
+  transition: width 0.18s ease;
+}
+.where-pjl-works .towns-grid li:hover {
+  color: var(--green);
+  padding-left: 6px;
+}
+.where-pjl-works .towns-grid li.is-active {
+  color: var(--green);
+  font-weight: 600;
+  padding-left: 6px;
+}
+.where-pjl-works .towns-grid li.is-active::before { width: 3px; }
+.where-pjl-works .towns-grid li.is-hq { color: var(--green); font-weight: 600; }
+.where-pjl-works .town-name { font-weight: inherit; }
+.where-pjl-works .town-time {
+  font-size: 11.5px;
+  color: var(--grey-text);
+  font-weight: 400;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.where-pjl-works .is-hq .town-time {
+  color: var(--amber);
   font-weight: 600;
 }
-.where-closing a:hover { color: var(--amber); }
+
+/* MAP SHELL — square 1:1 */
+.where-pjl-works .map-col { position: relative; }
+.where-pjl-works .map-shell {
+  position: relative;
+  aspect-ratio: 1 / 1;
+  width: 100%;
+  border-radius: 14px;
+  overflow: hidden;
+  background: var(--green-pale);
+  border: 1px solid var(--grey-line);
+  box-shadow:
+    0 1px 2px rgba(15,31,20,0.04),
+    0 14px 36px rgba(15,31,20,0.10);
+}
+.where-pjl-works #pjl-map {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+.where-pjl-works .leaflet-tile-pane { filter: saturate(0.85) contrast(0.97); }
+.where-pjl-works .leaflet-control-zoom {
+  border: 1px solid var(--grey-line) !important;
+  box-shadow: 0 2px 6px rgba(15,31,20,0.08) !important;
+}
+.where-pjl-works .leaflet-control-zoom a {
+  background: #fff !important;
+  color: var(--green) !important;
+  font-weight: 700 !important;
+}
+.where-pjl-works .leaflet-control-zoom a:hover { background: var(--green-pale) !important; }
+
+.where-pjl-works .map-mini-legend {
+  position: absolute;
+  bottom: 12px;
+  left: 12px;
+  z-index: 500;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 10px 12px;
+  background: rgba(255,255,255,0.94);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+  border: 1px solid var(--grey-line);
+  border-radius: 8px;
+  font-size: 11px;
+  color: var(--grey-text);
+  line-height: 1.3;
+  box-shadow: 0 2px 8px rgba(15,31,20,0.08);
+  pointer-events: none;
+}
+.where-pjl-works .legend-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+.where-pjl-works .legend-dot {
+  display: inline-block;
+  border-radius: 50%;
+  border: 2px solid #fff;
+  box-shadow: 0 0 0 1px rgba(15,31,20,0.18);
+  flex-shrink: 0;
+}
+.where-pjl-works .legend-dot.hq { background: var(--amber); width: 12px; height: 12px; }
+.where-pjl-works .legend-dot.core { background: var(--green); width: 10px; height: 10px; }
+.where-pjl-works .legend-dot.ext { background: var(--green-light); width: 7px; height: 7px; }
+.where-pjl-works .legend-ring {
+  display: inline-block;
+  width: 14px;
+  height: 10px;
+  border: 1.5px dashed var(--green-mid);
+  background: rgba(74,140,92,0.10);
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+/* PINS */
+.where-pjl-works .pjl-pin {
+  border-radius: 50%;
+  border: 2.5px solid #fff;
+  box-shadow: 0 2px 5px rgba(15,31,20,0.40);
+  transition: transform 0.18s ease, background 0.18s ease;
+}
+.where-pjl-works .pjl-pin.hq {
+  width: 22px !important;
+  height: 22px !important;
+  background: var(--amber);
+  margin-left: -11px !important;
+  margin-top: -11px !important;
+  border-width: 3px;
+  position: relative;
+  z-index: 100;
+}
+.where-pjl-works .pjl-pin.hq::after {
+  content: '';
+  position: absolute;
+  inset: -8px;
+  border-radius: 50%;
+  border: 2px solid var(--amber);
+  opacity: 0.6;
+  animation: pjlHqPulse 2.4s ease-out infinite;
+}
+@keyframes pjlHqPulse {
+  0%   { transform: scale(0.6); opacity: 0.65; }
+  70%  { transform: scale(1.7); opacity: 0; }
+  100% { transform: scale(1.7); opacity: 0; }
+}
+.where-pjl-works .pjl-pin.core {
+  width: 14px !important;
+  height: 14px !important;
+  background: var(--green);
+  margin-left: -7px !important;
+  margin-top: -7px !important;
+  z-index: 50;
+}
+.where-pjl-works .pjl-pin.ext {
+  width: 9px !important;
+  height: 9px !important;
+  background: var(--green-light);
+  margin-left: -4.5px !important;
+  margin-top: -4.5px !important;
+  border-width: 2px;
+  z-index: 10;
+}
+.where-pjl-works .pjl-pin.is-active,
+.where-pjl-works .pjl-pin:hover {
+  background: var(--amber);
+  transform: scale(1.4);
+  cursor: pointer;
+  z-index: 200 !important;
+}
+
+/* Popups */
+.where-pjl-works .leaflet-popup-content-wrapper {
+  border-radius: 8px !important;
+  border: 1px solid var(--green-mid);
+  box-shadow: 0 8px 24px rgba(15,31,20,0.18) !important;
+  padding: 0 !important;
+}
+.where-pjl-works .leaflet-popup-content {
+  margin: 0 !important;
+  padding: 12px 14px !important;
+  font-family: 'DM Sans', sans-serif !important;
+  color: var(--text) !important;
+  line-height: 1.45 !important;
+  min-width: 180px;
+}
+.where-pjl-works .leaflet-popup-tip { background: #fff !important; }
+.where-pjl-works .popup-title {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 19px;
+  font-weight: 700;
+  color: var(--green);
+  margin: 0 0 2px 0;
+  letter-spacing: -0.2px;
+}
+.where-pjl-works .popup-tier {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--amber);
+  margin: 0 0 4px 0;
+}
+.where-pjl-works .popup-meta {
+  font-size: 11.5px;
+  color: var(--grey-text);
+  margin: 0 0 7px 0;
+}
+.where-pjl-works .popup-link {
+  display: inline-block;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--amber);
+  text-decoration: none;
+  border-bottom: 1px solid currentColor;
+  padding-bottom: 1px;
+}
+.where-pjl-works .popup-link:hover { color: var(--green-mid); }
+.where-pjl-works .popup-soon {
+  font-size: 12px;
+  color: var(--grey-text);
+  margin: 0;
+}
+.where-pjl-works .popup-soon a {
+  color: var(--amber);
+  text-decoration: none;
+  font-weight: 600;
+}
+
+/* ROW 3 — Extended coverage */
+.where-pjl-works .extended-block {
+  border-top: 1px solid var(--grey-line);
+  padding-top: 40px;
+  margin-bottom: 36px;
+}
+.where-pjl-works .extended-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 20px;
+  flex-wrap: wrap;
+  margin-bottom: 26px;
+}
+.where-pjl-works .extended-head h3 {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 28px;
+  font-weight: 700;
+  color: var(--green);
+  margin: 0;
+  letter-spacing: -0.3px;
+}
+.where-pjl-works .extended-note {
+  font-size: 13.5px;
+  color: var(--grey-text);
+  margin: 0;
+  max-width: 460px;
+}
+.where-pjl-works .extended-note strong { color: var(--green); font-weight: 600; }
+.where-pjl-works .extended-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 24px;
+}
+.where-pjl-works .ext-zone {
+  background: var(--cream);
+  border: 1px solid var(--grey-line);
+  border-radius: 10px;
+  padding: 18px 20px 20px;
+  transition: border-color 0.18s ease, transform 0.18s ease;
+}
+.where-pjl-works .ext-zone:hover { border-color: var(--green-light); }
+.where-pjl-works .zone-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 4px;
+}
+.where-pjl-works .zone-badge {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: var(--green);
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 14px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+.where-pjl-works .ext-zone[data-zone="south"] .zone-badge,
+.where-pjl-works .ext-zone[data-zone="east"]  .zone-badge,
+.where-pjl-works .ext-zone[data-zone="west"]  .zone-badge { background: var(--green-mid); }
+.where-pjl-works .zone-name {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--green);
+  line-height: 1.1;
+  letter-spacing: -0.2px;
+}
+.where-pjl-works .zone-time {
+  font-size: 11.5px;
+  color: var(--grey-text);
+  margin: 0 0 14px 36px;
+  letter-spacing: 0.04em;
+}
+.where-pjl-works .ext-towns {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.where-pjl-works .ext-towns li {
+  font-size: 12.5px;
+  color: var(--green);
+  background: #fff;
+  border: 1px solid var(--green-pale);
+  padding: 4px 9px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+  user-select: none;
+}
+.where-pjl-works .ext-towns li:hover {
+  background: var(--amber);
+  border-color: var(--amber);
+  color: #fff;
+}
+.where-pjl-works .ext-towns li.is-active {
+  background: var(--green);
+  border-color: var(--green);
+  color: #fff;
+}
+.where-pjl-works .ext-towns li.has-page::after {
+  content: ' ›';
+  font-weight: 700;
+  opacity: 0.6;
+}
+
+/* ROW 4 — outside-list footer */
+.where-pjl-works .outside-line {
+  margin: 0;
+  font-size: 14px;
+  color: var(--grey-text);
+  line-height: 1.6;
+}
+.where-pjl-works .outside-line a {
+  color: var(--green);
+  font-weight: 600;
+  text-decoration: none;
+  border-bottom: 1.5px solid var(--green);
+  padding-bottom: 1px;
+  white-space: nowrap;
+}
+.where-pjl-works .outside-line a:hover { color: var(--amber); border-color: var(--amber); }
+
+/* RESPONSIVE — section-specific */
+@media (max-width: 980px) {
+  .where-pjl-works .extended-grid { grid-template-columns: 1fr 1fr; }
+}
+@media (max-width: 880px) {
+  .where-pjl-works .core-grid {
+    grid-template-columns: 1fr;
+    gap: 36px;
+  }
+  .where-pjl-works .map-col {
+    max-width: 480px;
+    margin: 0 auto;
+    width: 100%;
+  }
+}
+@media (max-width: 600px) {
+  .where-pjl-works .extended-grid { grid-template-columns: 1fr; gap: 16px; }
+  .where-pjl-works .extended-head { flex-direction: column; }
+}
+@media (max-width: 480px) {
+  .where-pjl-works .towns-grid { column-gap: 20px; }
+  .where-pjl-works .towns-grid li { font-size: 14.5px; padding: 10px 6px 10px 0; }
+  .where-pjl-works .town-time { font-size: 11px; }
+  .where-pjl-works .map-mini-legend { font-size: 10.5px; padding: 8px 10px; gap: 4px; }
+  .where-pjl-works .ext-zone { padding: 16px 16px 18px; }
+}
 
 /* ── Final CTA ── */
 .about-cta {
@@ -538,14 +981,12 @@
 @media (max-width: 760px) {
   .pillars { grid-template-columns: 1fr; }
   .beliefs-grid { grid-template-columns: 1fr; }
-  .where-grid { grid-template-columns: 1fr; }
 }
 @media (max-width: 720px) {
   .about-stats-grid { grid-template-columns: repeat(2, 1fr); gap: 24px; }
 }
 @media (max-width: 640px) {
   .about-hero { padding: var(--hero-nav-clearance) 0 60px; }
-  .where-cities { grid-template-columns: 1fr; }
   .pillar { padding: 24px; }
   .belief { padding: 22px 24px; }
 }
@@ -741,37 +1182,164 @@
   </div>
 </section>
 
-<!-- Where We Work -->
-<section class="where">
+<!-- Where PJL works (interactive Leaflet map + Core 9 + Extended coverage) -->
+<section class="where-pjl-works" aria-labelledby="where-heading">
   <div class="container">
-    <div class="where-grid">
-      <div>
-        <span class="section-eyebrow">Service Area</span>
-        <h2>Where PJL works.</h2>
-        <p class="where-lede">Based in <strong>Newmarket</strong> and primarily serving <strong>York Region</strong> — with select work across the broader GTA, Simcoe County, and Peel.</p>
-        <ul class="where-cities">
-          <li>Newmarket</li>
-          <li>Aurora</li>
-          <li>King City</li>
-          <li>Richmond Hill</li>
-          <li>Vaughan</li>
-          <li>Markham</li>
-          <li>Stouffville</li>
-          <li>East Gwillimbury</li>
-          <li>Thornhill</li>
-          <li>Bradford</li>
-          <li>Innisfil</li>
-          <li>Keswick</li>
+
+    <!-- ROW 1: heading + lead -->
+    <div class="section-head">
+      <span class="eyebrow">Service Area</span>
+      <h2 id="where-heading" class="where-headline">Where PJL works.</h2>
+      <p class="where-lead">
+        Based in <strong>Newmarket</strong>. Nine core York Region cities — each with their own dedicated service-area page — plus extended coverage across the broader GTA, Simcoe County, Durham, and Peel for any job within roughly <strong>90 minutes of home base</strong>.
+      </p>
+    </div>
+
+    <!-- ROW 2: Core 9 list + Map -->
+    <div class="core-grid">
+
+      <div class="core-col">
+        <div class="tier-label">The Core 9 — dedicated pages</div>
+        <h3 class="tier-headline">York Region</h3>
+        <p class="tier-sub">Same-day repair available across the Core 9 in season. Click any town on the list or the map for its dedicated service page.</p>
+
+        <ul class="towns-grid" id="core-list" role="list">
+          <li data-town="newmarket" class="is-hq">
+            <span class="town-name">Newmarket</span>
+            <span class="town-time">Home base</span>
+          </li>
+          <li data-town="east-gwillimbury">
+            <span class="town-name">East Gwillimbury</span>
+            <span class="town-time">5–10 min</span>
+          </li>
+          <li data-town="aurora">
+            <span class="town-name">Aurora</span>
+            <span class="town-time">8–12 min</span>
+          </li>
+          <li data-town="king-city">
+            <span class="town-name">King City</span>
+            <span class="town-time">12–18 min</span>
+          </li>
+          <li data-town="stouffville">
+            <span class="town-name">Stouffville</span>
+            <span class="town-time">20–25 min</span>
+          </li>
+          <li data-town="richmond-hill">
+            <span class="town-name">Richmond Hill</span>
+            <span class="town-time">20–25 min</span>
+          </li>
+          <li data-town="vaughan">
+            <span class="town-name">Vaughan</span>
+            <span class="town-time">30–35 min</span>
+          </li>
+          <li data-town="markham">
+            <span class="town-name">Markham</span>
+            <span class="town-time">30–35 min</span>
+          </li>
+          <li data-town="thornhill">
+            <span class="town-name">Thornhill</span>
+            <span class="town-time">35–40 min</span>
+          </li>
         </ul>
-        <p class="where-closing">For service outside this list, send a quick message or call <a href="tel:+19059600181">(905) 960-0181</a>.</p>
       </div>
-      <div class="where-map">
-        <div class="photo-placeholder" aria-hidden="true">
-          <span class="ph-icon">YR</span>
-          <span class="ph-label">Service-area map · 1:1</span>
+
+      <div class="map-col">
+        <div class="map-shell">
+          <div id="pjl-map" role="img" aria-label="Map of PJL Land Services service area centered on Newmarket — Core 9 York Region cities plus 25 extended-coverage towns across Simcoe County, Durham, Peel, and the broader GTA, all within ~90 minutes of Newmarket."></div>
+          <div class="map-mini-legend" aria-hidden="true">
+            <span class="legend-row"><span class="legend-dot hq"></span>Home base</span>
+            <span class="legend-row"><span class="legend-dot core"></span>Core 9</span>
+            <span class="legend-row"><span class="legend-dot ext"></span>Extended</span>
+            <span class="legend-row"><span class="legend-ring"></span>~90 min reach</span>
+          </div>
         </div>
       </div>
+
     </div>
+
+    <!-- ROW 3: Extended coverage -->
+    <div class="extended-block">
+
+      <div class="extended-head">
+        <h3>Extended coverage</h3>
+        <p class="extended-note">Beyond the Core 9, jobs welcome anywhere within <strong>~90 minutes</strong> of Newmarket. Same pricing, same direct point of contact.</p>
+      </div>
+
+      <div class="extended-grid">
+
+        <div class="ext-zone" data-zone="north">
+          <div class="zone-head">
+            <span class="zone-badge">N</span>
+            <span class="zone-name">Simcoe / Lake Simcoe</span>
+          </div>
+          <p class="zone-time">25–60 min</p>
+          <ul class="ext-towns" role="list">
+            <li data-town="bradford">Bradford</li>
+            <li data-town="innisfil" class="has-page">Innisfil</li>
+            <li data-town="barrie">Barrie</li>
+            <li data-town="keswick">Keswick</li>
+            <li data-town="georgina">Georgina</li>
+            <li data-town="holland-marsh">Holland Marsh</li>
+          </ul>
+        </div>
+
+        <div class="ext-zone" data-zone="south">
+          <div class="zone-head">
+            <span class="zone-badge">S</span>
+            <span class="zone-name">Toronto + GTA core</span>
+          </div>
+          <p class="zone-time">50–70 min</p>
+          <ul class="ext-towns" role="list">
+            <li data-town="toronto">Toronto</li>
+            <li data-town="etobicoke">Etobicoke</li>
+            <li data-town="mississauga">Mississauga</li>
+            <li data-town="oakville">Oakville (N)</li>
+          </ul>
+        </div>
+
+        <div class="ext-zone" data-zone="east">
+          <div class="zone-head">
+            <span class="zone-badge">E</span>
+            <span class="zone-name">Durham Region</span>
+          </div>
+          <p class="zone-time">40–70 min</p>
+          <ul class="ext-towns" role="list">
+            <li data-town="pickering">Pickering</li>
+            <li data-town="whitby">Whitby</li>
+            <li data-town="ajax">Ajax</li>
+            <li data-town="oshawa">Oshawa</li>
+            <li data-town="bowmanville">Bowmanville</li>
+            <li data-town="port-perry">Port Perry</li>
+            <li data-town="uxbridge">Uxbridge</li>
+          </ul>
+        </div>
+
+        <div class="ext-zone" data-zone="west">
+          <div class="zone-head">
+            <span class="zone-badge">W</span>
+            <span class="zone-name">Peel + Caledon Hills</span>
+          </div>
+          <p class="zone-time">45–80 min</p>
+          <ul class="ext-towns" role="list">
+            <li data-town="bolton" class="has-page">Bolton</li>
+            <li data-town="orangeville" class="has-page">Orangeville</li>
+            <li data-town="erin" class="has-page">Erin</li>
+            <li data-town="acton" class="has-page">Acton</li>
+            <li data-town="brampton">Brampton</li>
+            <li data-town="caledon">Caledon</li>
+            <li data-town="halton-hills">Halton Hills</li>
+            <li data-town="mono">Mono</li>
+          </ul>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- ROW 4: outside-list footer -->
+    <p class="outside-line">
+      For service outside this list, send a quick message or call <a href="tel:+19059600181">(905) 960-0181</a>.
+    </p>
+
   </div>
 </section>
 
@@ -796,6 +1364,180 @@
 
 <script src="nav.js?v=2"></script>
 <script src="js/pricing-injector.js" defer></script>
-  <script src="js/chat-widget.js" defer></script>
+<script src="js/chat-widget.js" defer></script>
+
+<!-- Leaflet (interactive map for the Where PJL Works section) -->
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script>
+/* PJL service-area map — 34 pins (1 HQ + 9 Core + 24 Extended), two-way
+   sync between every list item and its pin, fitBounds auto-frames cluster. */
+(function () {
+  if (typeof L === 'undefined' || !document.getElementById('pjl-map')) return;
+
+  // tier: 'hq' | 'core' | 'ext'
+  // page: dedicated /sprinkler-service-{slug}.html if exists, else null
+  const TOWNS = {
+    /* HQ */
+    newmarket:        { name: 'Newmarket',          tier: 'hq',   coords: [44.0552, -79.4642], driveTime: 'Home base',                     page: '/sprinkler-service-newmarket.html' },
+
+    /* CORE 9 */
+    'east-gwillimbury': { name: 'East Gwillimbury', tier: 'core', coords: [44.1067, -79.4318], driveTime: '5–10 min from Newmarket',       page: '/sprinkler-service-east-gwillimbury.html' },
+    aurora:           { name: 'Aurora',             tier: 'core', coords: [43.9988, -79.4504], driveTime: '8–12 min from Newmarket',       page: '/sprinkler-service-aurora.html' },
+    'king-city':      { name: 'King City',          tier: 'core', coords: [43.9263, -79.5286], driveTime: '12–18 min from Newmarket',      page: '/sprinkler-service-king-city.html' },
+    stouffville:      { name: 'Stouffville',        tier: 'core', coords: [43.9711, -79.2555], driveTime: '20–25 min from Newmarket',      page: '/sprinkler-service-stouffville.html' },
+    'richmond-hill':  { name: 'Richmond Hill',      tier: 'core', coords: [43.8828, -79.4403], driveTime: '20–25 min from Newmarket',      page: '/sprinkler-service-richmond-hill.html' },
+    vaughan:          { name: 'Vaughan',            tier: 'core', coords: [43.8372, -79.5083], driveTime: '30–35 min from Newmarket',      page: '/sprinkler-service-vaughan.html' },
+    markham:          { name: 'Markham',            tier: 'core', coords: [43.8561, -79.3370], driveTime: '30–35 min from Newmarket',      page: '/sprinkler-service-markham.html' },
+    thornhill:        { name: 'Thornhill',          tier: 'core', coords: [43.8163, -79.4257], driveTime: '35–40 min from Newmarket',      page: '/sprinkler-service-thornhill.html' },
+
+    /* EXTENDED — NORTH (Simcoe / Lake Simcoe) */
+    bradford:         { name: 'Bradford',           tier: 'ext',  zone: 'N', coords: [44.1145, -79.5640], driveTime: '~25 min from Newmarket', page: null },
+    innisfil:         { name: 'Innisfil',           tier: 'ext',  zone: 'N', coords: [44.3000, -79.5800], driveTime: '~30 min from Newmarket', page: '/sprinkler-service-innisfil.html' },
+    barrie:           { name: 'Barrie',             tier: 'ext',  zone: 'N', coords: [44.3894, -79.6903], driveTime: '~45 min from Newmarket', page: null },
+    keswick:          { name: 'Keswick',            tier: 'ext',  zone: 'N', coords: [44.2333, -79.4667], driveTime: '~25 min from Newmarket', page: null },
+    georgina:         { name: 'Georgina',           tier: 'ext',  zone: 'N', coords: [44.3088, -79.3631], driveTime: '~35 min from Newmarket', page: null },
+    'holland-marsh':  { name: 'Holland Marsh',      tier: 'ext',  zone: 'N', coords: [44.0772, -79.5814], driveTime: '~20 min from Newmarket', page: null },
+
+    /* EXTENDED — SOUTH (Toronto + GTA core) */
+    toronto:          { name: 'Toronto',            tier: 'ext',  zone: 'S', coords: [43.6532, -79.3832], driveTime: '~55 min from Newmarket', page: null },
+    etobicoke:        { name: 'Etobicoke',          tier: 'ext',  zone: 'S', coords: [43.6205, -79.5132], driveTime: '~55 min from Newmarket', page: null },
+    mississauga:      { name: 'Mississauga',        tier: 'ext',  zone: 'S', coords: [43.5890, -79.6441], driveTime: '~60 min from Newmarket', page: null },
+    oakville:         { name: 'Oakville (North)',   tier: 'ext',  zone: 'S', coords: [43.5175, -79.7340], driveTime: '~65 min from Newmarket', page: null },
+
+    /* EXTENDED — EAST (Durham Region) */
+    pickering:        { name: 'Pickering',          tier: 'ext',  zone: 'E', coords: [43.8384, -79.0868], driveTime: '~45 min from Newmarket', page: null },
+    whitby:           { name: 'Whitby',             tier: 'ext',  zone: 'E', coords: [43.8975, -78.9428], driveTime: '~50 min from Newmarket', page: null },
+    ajax:             { name: 'Ajax',               tier: 'ext',  zone: 'E', coords: [43.8509, -79.0205], driveTime: '~50 min from Newmarket', page: null },
+    oshawa:           { name: 'Oshawa',             tier: 'ext',  zone: 'E', coords: [43.8975, -78.8657], driveTime: '~55 min from Newmarket', page: null },
+    bowmanville:      { name: 'Bowmanville',        tier: 'ext',  zone: 'E', coords: [43.9117, -78.6817], driveTime: '~65 min from Newmarket', page: null },
+    'port-perry':     { name: 'Port Perry',         tier: 'ext',  zone: 'E', coords: [44.1057, -78.9492], driveTime: '~45 min from Newmarket', page: null },
+    uxbridge:         { name: 'Uxbridge',           tier: 'ext',  zone: 'E', coords: [44.1066, -79.1207], driveTime: '~35 min from Newmarket', page: null },
+
+    /* EXTENDED — WEST (Peel + Caledon Hills) */
+    bolton:           { name: 'Bolton',             tier: 'ext',  zone: 'W', coords: [43.8767, -79.7378], driveTime: '~45 min from Newmarket', page: '/sprinkler-service-bolton.html' },
+    orangeville:      { name: 'Orangeville',        tier: 'ext',  zone: 'W', coords: [43.9216, -80.0939], driveTime: '~60 min from Newmarket', page: '/sprinkler-service-orangeville.html' },
+    erin:             { name: 'Erin',               tier: 'ext',  zone: 'W', coords: [43.7666, -80.0701], driveTime: '~65 min from Newmarket', page: '/sprinkler-service-erin.html' },
+    acton:            { name: 'Acton',              tier: 'ext',  zone: 'W', coords: [43.6362, -80.0339], driveTime: '~70 min from Newmarket', page: '/sprinkler-service-acton.html' },
+    brampton:         { name: 'Brampton',           tier: 'ext',  zone: 'W', coords: [43.7315, -79.7624], driveTime: '~50 min from Newmarket', page: null },
+    caledon:          { name: 'Caledon',            tier: 'ext',  zone: 'W', coords: [43.8688, -79.8662], driveTime: '~55 min from Newmarket', page: null },
+    'halton-hills':   { name: 'Halton Hills',       tier: 'ext',  zone: 'W', coords: [43.6314, -79.9495], driveTime: '~70 min from Newmarket', page: null },
+    mono:             { name: 'Mono',               tier: 'ext',  zone: 'W', coords: [44.0750, -80.1195], driveTime: '~55 min from Newmarket', page: null }
+  };
+
+  const TIER_LABEL = { hq: 'Home Base', core: 'Core 9', ext: 'Extended Coverage' };
+
+  const map = L.map('pjl-map', {
+    zoomControl: true,
+    scrollWheelZoom: false,
+    doubleClickZoom: true,
+    dragging: true,
+    attributionControl: true,
+    zoomSnap: 0.25
+  });
+
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/attributions">CARTO</a>',
+    subdomains: 'abcd',
+    maxZoom: 19
+  }).addTo(map);
+
+  // Coverage radius (~80 km — encompasses all extended towns)
+  L.circle([44.0552, -79.4642], {
+    radius: 80000,
+    color: '#2D6A42',
+    weight: 1.5,
+    dashArray: '6, 8',
+    opacity: 0.55,
+    fillColor: '#4A8C5C',
+    fillOpacity: 0.06,
+    interactive: false
+  }).addTo(map);
+
+  // Re-enable scroll-zoom only when the map has focus
+  map.on('focus click', () => map.scrollWheelZoom.enable());
+  map.on('blur',         () => map.scrollWheelZoom.disable());
+
+  // Build markers
+  const markers = {};
+  const allCoords = [];
+
+  Object.keys(TOWNS).forEach(key => {
+    const town = TOWNS[key];
+    allCoords.push(town.coords);
+
+    const icon = L.divIcon({
+      className: '',
+      html: '<div class="pjl-pin ' + town.tier + '" data-town="' + key + '"></div>',
+      iconSize: [0, 0]
+    });
+
+    const marker = L.marker(town.coords, { icon, riseOnHover: true }).addTo(map);
+
+    const tierLabel = TIER_LABEL[town.tier];
+    const linkBlock = town.page
+      ? '<a class="popup-link" href="' + town.page + '">View ' + town.name + ' sprinkler service →</a>'
+      : '<p class="popup-soon">Same pricing, same direct contact. <a href="tel:+19059600181">Call (905) 960-0181</a></p>';
+
+    marker.bindPopup(
+      '<div class="popup-tier">' + tierLabel + '</div>' +
+      '<div class="popup-title">' + town.name + '</div>' +
+      '<div class="popup-meta">' + town.driveTime + '</div>' +
+      linkBlock,
+      { closeButton: true, autoPan: true, offset: [0, -8] }
+    );
+
+    marker.on('click',     () => activate(key));
+    marker.on('mouseover', () => syncListHighlight(key, true));
+    marker.on('mouseout',  () => syncListHighlight(key, false));
+    markers[key] = marker;
+  });
+
+  map.fitBounds(L.latLngBounds(allCoords), { padding: [24, 24], maxZoom: 10 });
+
+  // Wire all list items (core + extended)
+  document.querySelectorAll('.where-pjl-works [data-town]').forEach(li => {
+    const key = li.dataset.town;
+    if (!TOWNS[key]) return;
+
+    li.addEventListener('mouseenter', () => highlightPin(key, true));
+    li.addEventListener('mouseleave', () => highlightPin(key, false));
+    li.addEventListener('click', () => {
+      activate(key);
+      const t = TOWNS[key];
+      const targetZoom = t.tier === 'ext' ? 11 : 12;
+      map.flyTo(t.coords, targetZoom, { duration: 0.7 });
+      markers[key].openPopup();
+    });
+    li.addEventListener('keydown', e => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); li.click(); }
+    });
+    li.setAttribute('tabindex', '0');
+    li.setAttribute('role', 'button');
+    li.setAttribute('aria-label', 'Show ' + TOWNS[key].name + ' on map');
+  });
+
+  function activate(key) {
+    document.querySelectorAll('.where-pjl-works [data-town]').forEach(li => {
+      li.classList.toggle('is-active', li.dataset.town === key);
+    });
+    Object.keys(markers).forEach(k => {
+      const el = markers[k].getElement() && markers[k].getElement().querySelector('.pjl-pin');
+      if (el) el.classList.toggle('is-active', k === key && TOWNS[k].tier !== 'hq');
+    });
+  }
+
+  function highlightPin(key, on) {
+    if (TOWNS[key].tier === 'hq') return;
+    const el = markers[key].getElement() && markers[key].getElement().querySelector('.pjl-pin');
+    if (el) el.classList.toggle('is-active', on);
+  }
+
+  function syncListHighlight(key, on) {
+    document.querySelectorAll('.where-pjl-works [data-town="' + key + '"]').forEach(li => {
+      li.classList.toggle('is-active', on);
+    });
+  }
+})();
+</script>
 </body>
 </html>
