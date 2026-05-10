@@ -481,6 +481,67 @@
 }
 .where-closing a:hover { color: var(--amber); }
 
+/* Service-area map (inline SVG) */
+.where-map .service-map {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+.where-map .map-bg { fill: var(--cream); }
+.where-map .map-grid line {
+  stroke: var(--border);
+  stroke-width: 0.15;
+  stroke-dasharray: 0.6 0.6;
+}
+.where-map .map-compass {
+  fill: var(--text-muted);
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 2.4px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+}
+.where-map .map-title {
+  fill: var(--green);
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 4px;
+  font-weight: 700;
+  letter-spacing: 0.4em;
+  text-transform: uppercase;
+}
+.where-map .map-territory {
+  fill: var(--green-pale);
+  stroke: var(--green-light);
+  stroke-width: 0.35;
+  stroke-dasharray: 1.4 1;
+  opacity: 0.85;
+}
+.where-map .map-cities circle { fill: var(--green); }
+.where-map .map-newmarket-glow {
+  fill: var(--amber);
+  opacity: 0.18;
+}
+.where-map .map-newmarket-pin {
+  fill: var(--amber);
+  filter: drop-shadow(0 0.4px 1.4px rgba(15,31,20,0.22));
+}
+.where-map .map-newmarket-dot { fill: #fff; }
+.where-map .map-newmarket-label {
+  fill: var(--green);
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 3.4px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+.where-map .map-newmarket-sublabel {
+  fill: var(--text-muted);
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 2px;
+  font-weight: 600;
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+}
+
 /* ── Final CTA ── */
 .about-cta {
   background: var(--amber);
@@ -766,10 +827,63 @@
         <p class="where-closing">For service outside this list, send a quick message or call <a href="tel:+19059600181">(905) 960-0181</a>.</p>
       </div>
       <div class="where-map">
-        <div class="photo-placeholder" aria-hidden="true">
-          <span class="ph-icon">YR</span>
-          <span class="ph-label">Service-area map · 1:1</span>
-        </div>
+        <svg viewBox="0 0 100 100" class="service-map" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="service-map-title service-map-desc">
+          <title id="service-map-title">PJL Land Services service area</title>
+          <desc id="service-map-desc">A stylised map of PJL's coverage centred on Newmarket, with a shaded service territory across York Region and the broader GTA — covering Aurora, King City, Richmond Hill, Vaughan, Markham, Stouffville, East Gwillimbury, Thornhill, Bradford, Innisfil, and Keswick.</desc>
+
+          <!-- Background fill -->
+          <rect class="map-bg" width="100" height="100"/>
+
+          <!-- Faint compass cross -->
+          <g class="map-grid">
+            <line x1="50" y1="6" x2="50" y2="94"/>
+            <line x1="6" y1="50" x2="94" y2="50"/>
+          </g>
+
+          <!-- "N" compass marker (top) -->
+          <text class="map-compass" x="50" y="4.6" text-anchor="middle">N</text>
+
+          <!-- Section title -->
+          <text class="map-title" x="50" y="10.5" text-anchor="middle">SERVICE AREA</text>
+
+          <!-- Shaded service territory (rough convex hull of coverage cities) -->
+          <polygon class="map-territory" points="35,15 50,22 85,63.3 70,81.7 56.7,90 41.7,85 38.3,70 31.7,40"/>
+
+          <!-- City dots (positioned by approximate real lat/long, projected) -->
+          <g class="map-cities">
+            <!-- Innisfil (just outside the territory polygon — extended-service flag) -->
+            <circle cx="35.0" cy="8.3" r="1.0"/>
+            <!-- Keswick -->
+            <circle cx="50.0" cy="22.0" r="1.0"/>
+            <!-- Bradford -->
+            <circle cx="31.7" cy="40.0" r="1.0"/>
+            <!-- East Gwillimbury -->
+            <circle cx="51.7" cy="41.7" r="1.0"/>
+            <!-- Aurora -->
+            <circle cx="51.7" cy="58.3" r="1.0"/>
+            <!-- Stouffville -->
+            <circle cx="85.0" cy="63.3" r="1.0"/>
+            <!-- King City -->
+            <circle cx="38.3" cy="70.0" r="1.0"/>
+            <!-- Richmond Hill -->
+            <circle cx="53.3" cy="80.0" r="1.0"/>
+            <!-- Markham -->
+            <circle cx="70.0" cy="81.7" r="1.0"/>
+            <!-- Vaughan -->
+            <circle cx="41.7" cy="85.0" r="1.0"/>
+            <!-- Thornhill -->
+            <circle cx="56.7" cy="90.0" r="1.0"/>
+          </g>
+
+          <!-- Newmarket (centred, prominent) -->
+          <g class="map-newmarket">
+            <circle class="map-newmarket-glow" cx="50" cy="50" r="6"/>
+            <circle class="map-newmarket-pin" cx="50" cy="50" r="3.2"/>
+            <circle class="map-newmarket-dot" cx="50" cy="50" r="0.9"/>
+            <text class="map-newmarket-label" x="50" y="44.5" text-anchor="middle">NEWMARKET</text>
+            <text class="map-newmarket-sublabel" x="50" y="59" text-anchor="middle">PJL HQ</text>
+          </g>
+        </svg>
       </div>
     </div>
   </div>
