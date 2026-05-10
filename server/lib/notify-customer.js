@@ -429,6 +429,13 @@ async function sendInvoiceToCustomer(invoice, pdfBuffer, opts = {}) {
     `Credit card payments are accepted via the secure link above (when available). ` +
     `Prefer to pay by phone? Call <a href="tel:+19059600181" style="color:#1B4D2E;text-decoration:none;">(905) 960-0181</a>.`;
 
+  // Public base URL — used to resolve email-embedded image src (logo).
+  // PUBLIC_BASE_URL is set on Render (currently the onrender URL,
+  // updated to pjllandservices.com after DNS cutover). Email clients
+  // need an absolute URL on `<img src>` since they have no way to
+  // resolve relative paths.
+  const publicBaseUrl = (process.env.PUBLIC_BASE_URL || opts.publicBaseUrl || "https://pjllandservices.com").replace(/\/+$/, "");
+
   const vars = {
     customer: { firstName: escapeHtml(firstName) },
     invoice: {
@@ -437,14 +444,16 @@ async function sendInvoiceToCustomer(invoice, pdfBuffer, opts = {}) {
     },
     paymentInstructions: paymentInstructionsHtml,
     viewLink: escapeHtml(viewLink),
-    viewLinkVisible
+    viewLinkVisible,
+    publicBaseUrl: escapeHtml(publicBaseUrl)
   };
   // Plain-text variant uses non-escaped content (no HTML rendering).
   const textVars = {
     customer: { firstName },
     invoice: { number: invoice.id || "", totalFormatted },
     paymentInstructions: paymentInstructionsText,
-    viewLinkText
+    viewLinkText,
+    publicBaseUrl
   };
 
   const html = renderTemplate(htmlTpl, vars);
@@ -536,6 +545,11 @@ async function sendPaymentReceipt(invoice, pdfBuffer, opts = {}) {
   const confirmationVisible = chargeId ? "table-row" : "none";
   const confirmationLineText = chargeId ? `Confirmation:  ${chargeId}\n` : "";
 
+  // Same publicBaseUrl pattern as sendInvoiceToCustomer — used for the
+  // email-embedded logo src. Defaults to the production custom domain
+  // so even if PUBLIC_BASE_URL is unset somehow, the email still loads.
+  const publicBaseUrl = (process.env.PUBLIC_BASE_URL || opts.publicBaseUrl || "https://pjllandservices.com").replace(/\/+$/, "");
+
   const vars = {
     customer: { firstName: escapeHtml(firstName) },
     invoice: {
@@ -544,7 +558,8 @@ async function sendPaymentReceipt(invoice, pdfBuffer, opts = {}) {
       paidDate: escapeHtml(paidDate),
       chargeId: escapeHtml(chargeId)
     },
-    confirmationVisible
+    confirmationVisible,
+    publicBaseUrl: escapeHtml(publicBaseUrl)
   };
   const textVars = {
     customer: { firstName },
@@ -554,7 +569,8 @@ async function sendPaymentReceipt(invoice, pdfBuffer, opts = {}) {
       paidDate,
       chargeId
     },
-    confirmationLineText
+    confirmationLineText,
+    publicBaseUrl
   };
 
   const html = renderTemplate(htmlTpl, vars);
