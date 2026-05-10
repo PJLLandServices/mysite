@@ -1,21 +1,19 @@
 // Settings — admin notification defaults + per-customer overrides +
-// customer portal preferences. Spec §1.3 (the three-layer notification
-// model). Stored in server/data/settings.json — single object, no record
-// list. Customer overrides + portal prefs live on the lead/property
-// records themselves; this module owns the GLOBAL defaults.
+// customer portal preferences + QuickBooks integration config. Stored in
+// server/data/settings.json — single object, no record list. Customer
+// overrides + portal prefs live on the lead/property records themselves;
+// this module owns the GLOBAL defaults.
 //
 // The schema:
 //   {
-//     adminDefaults: {
-//       newLead:        "email_sms" | "email" | "sms" | "silent",
-//       quoteAccepted:  "email_sms" | ...,
-//       woCompleted:    "email_sms" | ...,
-//       portalMessage:  "email_sms" | ...,
-//       emergencyOverride: "email_sms" | ... (always "email_sms" recommended)
+//     adminDefaults: { newLead, quoteAccepted, woCompleted, ... },
+//     quickbooks: {
+//       hstTaxCodeId, hstTaxCodeName,
+//       defaultIncomeAccountId, defaultIncomeAccountName,
+//       estimateAutoPushOnAccept, invoiceAutoPushOnCascade,
+//       lastSyncErrors: [{ ts, entityType, entityId, error }]   // cap 20
 //     },
-//     audit: [
-//       { ts, who, action, before, after }   // last 50 changes
-//     ]
+//     audit: [{ ts, who, action, before, after }]               // cap 50
 //   }
 //
 // Per-customer overrides live on `lead.notificationPreferences` (per-event
@@ -29,6 +27,17 @@ const path = require("node:path");
 const FILE = path.join(__dirname, "..", "data", "settings.json");
 
 const NOTIFY_MODES = ["email_sms", "email", "sms", "silent"];
+const SYNC_ERRORS_CAP = 20;
+
+const DEFAULT_QUICKBOOKS = {
+  hstTaxCodeId: null,
+  hstTaxCodeName: null,
+  defaultIncomeAccountId: null,
+  defaultIncomeAccountName: null,
+  estimateAutoPushOnAccept: false,
+  invoiceAutoPushOnCascade: false,
+  lastSyncErrors: []
+};
 
 const DEFAULT_SETTINGS = {
   adminDefaults: {
@@ -39,6 +48,7 @@ const DEFAULT_SETTINGS = {
     emergencyOverride: "email_sms",
     portalPreAuth: "email"
   },
+  quickbooks: { ...DEFAULT_QUICKBOOKS, lastSyncErrors: [] },
   audit: []
 };
 
@@ -66,8 +76,18 @@ async function writeAll(settings) {
 }
 
 function hydrate(s) {
+  const qb = s?.quickbooks || {};
   return {
     adminDefaults: { ...DEFAULT_SETTINGS.adminDefaults, ...(s?.adminDefaults || {}) },
+    quickbooks: {
+      hstTaxCodeId: qb.hstTaxCodeId || null,
+      hstTaxCodeName: qb.hstTaxCodeName || null,
+      defaultIncomeAccountId: qb.defaultIncomeAccountId || null,
+      defaultIncomeAccountName: qb.defaultIncomeAccountName || null,
+      estimateAutoPushOnAccept: qb.estimateAutoPushOnAccept === true,
+      invoiceAutoPushOnCascade: qb.invoiceAutoPushOnCascade === true,
+      lastSyncErrors: Array.isArray(qb.lastSyncErrors) ? qb.lastSyncErrors.slice(0, SYNC_ERRORS_CAP) : []
+    },
     audit: Array.isArray(s?.audit) ? s.audit : []
   };
 }
@@ -114,11 +134,78 @@ function shouldSendEmail(mode) { return mode === "email_sms" || mode === "email"
 // Should we send SMS for this event?
 function shouldSendSms(mode) { return mode === "email_sms" || mode === "sms"; }
 
+// Update the `quickbooks` settings namespace. Audit-stamps. Validates the
+// shape of incoming patch keys but doesn't sanity-check IDs against QB
+// itself — that's the caller's job (caller looked them up via the QB
+// query helpers). `who` and `note` go into the audit trail.
+const QB_PATCH_KEYS = [
+  "hstTaxCodeId", "hstTaxCodeName",
+  "defaultIncomeAccountId", "defaultIncomeAccountName",
+  "estimateAutoPushOnAccept", "invoiceAutoPushOnCascade"
+];
+async function updateQuickbooks(patch, { who = "admin", note = "" } = {}) {
+  const settings = await readAll();
+  const before = { ...settings.quickbooks };
+  for (const key of QB_PATCH_KEYS) {
+    if (patch && Object.prototype.hasOwnProperty.call(patch, key)) {
+      if (key === "estimateAutoPushOnAccept" || key === "invoiceAutoPushOnCascade") {
+        settings.quickbooks[key] = patch[key] === true;
+      } else if (patch[key] === null || typeof patch[key] === "string") {
+        settings.quickbooks[key] = patch[key] || null;
+      }
+    }
+  }
+  settings.audit.unshift({
+    ts: new Date().toISOString(),
+    who,
+    action: "quickbooks",
+    before,
+    after: { ...settings.quickbooks },
+    note
+  });
+  if (settings.audit.length > 50) settings.audit.length = 50;
+  await writeAll(settings);
+  return settings;
+}
+
+// Append a sync error to the rolling `lastSyncErrors` buffer (newest first,
+// cap 20). Does NOT touch the audit trail — audit is for human-driven
+// settings changes; sync errors are operational telemetry. Returns the
+// updated settings record.
+async function recordSyncError({ entityType, entityId, error }) {
+  const settings = await readAll();
+  const entry = {
+    ts: new Date().toISOString(),
+    entityType: String(entityType || "unknown"),
+    entityId: String(entityId || ""),
+    error: String(error || "").slice(0, 500)
+  };
+  settings.quickbooks.lastSyncErrors.unshift(entry);
+  if (settings.quickbooks.lastSyncErrors.length > SYNC_ERRORS_CAP) {
+    settings.quickbooks.lastSyncErrors.length = SYNC_ERRORS_CAP;
+  }
+  await writeAll(settings);
+  return settings;
+}
+
+// Clear the lastSyncErrors buffer. Used when the admin wants to dismiss
+// the warnings panel after acknowledging them.
+async function clearSyncErrors() {
+  const settings = await readAll();
+  settings.quickbooks.lastSyncErrors = [];
+  await writeAll(settings);
+  return settings;
+}
+
 module.exports = {
   NOTIFY_MODES,
   DEFAULT_SETTINGS,
+  SYNC_ERRORS_CAP,
   get,
   updateAdminDefaults,
+  updateQuickbooks,
+  recordSyncError,
+  clearSyncErrors,
   resolveMode,
   shouldSendEmail,
   shouldSendSms

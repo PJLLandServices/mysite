@@ -77,6 +77,33 @@
 .settings-qb-setup summary { cursor: pointer; font-weight: 600; padding: 6px 0; }
 .settings-qb-setup ol { margin: 8px 0 0 24px; padding: 0; line-height: 1.6; }
 .settings-qb-setup code { background: #FAFAF5; padding: 2px 6px; border-radius: 4px; font-size: 12px; word-break: break-all; }
+.settings-qb-setup p { margin: 12px 0 0; }
+
+.settings-qb-config { margin-top: 18px; padding-top: 18px; border-top: 1px solid #E5E5DD; display: flex; flex-direction: column; gap: 14px; }
+.settings-qb-subhead { margin: 12px 0 0; color: #1B4D2E; font-family: "Barlow Condensed", sans-serif; font-size: 16px; letter-spacing: 0.4px; text-transform: uppercase; }
+.settings-qb-config .settings-row + .settings-qb-subhead { margin-top: 18px; }
+
+.settings-row-stack { grid-template-columns: 1fr; align-items: stretch; }
+.settings-row-stack .settings-select { width: 100%; }
+
+.settings-toggle { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; font-size: 14px; color: #1F2A22; }
+.settings-toggle input[type="checkbox"] { width: 18px; height: 18px; accent-color: #1B4D2E; cursor: pointer; }
+
+.settings-qb-summary {
+  margin: 8px 0 0;
+  padding: 12px 14px;
+  background: #FAFAF5;
+  border: 1px solid #E5E5DD;
+  border-radius: 8px;
+  font-family: ui-monospace, "SF Mono", Consolas, monospace;
+  font-size: 12px;
+  color: #1F2A22;
+  white-space: pre-wrap;
+  line-height: 1.5;
+}
+
+.settings-qb-errors { max-height: 240px; }
+.settings-qb-errors li { word-break: break-word; }
 
 .settings-export-links { display: flex; gap: 10px; flex-wrap: wrap; }
 .settings-export-links .settings-save { display: inline-block; text-decoration: none; }

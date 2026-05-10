@@ -36,6 +36,13 @@ const fsSync = require("node:fs");
 const path = require("node:path");
 
 const TOKEN_FILE = path.join(__dirname, "..", "data", "quickbooks.json");
+const ITEMS_FILE = path.join(__dirname, "..", "data", "quickbooks-items.json");
+const PRICING_FILE = path.join(__dirname, "..", "..", "pricing.json");
+const PARTS_FILE = path.join(__dirname, "..", "..", "parts.json");
+
+// settings + recordSyncError live in lib/settings — the rolling errors
+// buffer is part of the same settings audit surface the admin UI reads.
+const settingsLib = require("./settings.js");
 
 const QB_BASE_PROD = "https://quickbooks.api.intuit.com";
 const QB_BASE_SANDBOX = "https://sandbox-quickbooks.api.intuit.com";
@@ -385,51 +392,107 @@ async function findOrCreateCustomer({ name, email, phone, address }) {
 // Push a local invoice (from server/data/invoices.json) into QuickBooks.
 // Returns the QB invoice id which the caller stores back on the local
 // record so re-pushes update rather than duplicate.
+//
+// Tax handling: every line is sent pre-tax with its own ItemRef. The
+// invoice carries a `TxnTaxDetail.TxnTaxCodeRef` pointing at the HST tax
+// code configured in /admin/settings → QuickBooks. QB calculates HST
+// server-side using that code's rate; PJL's local hst/total become
+// for-display-only post-push.
+//
+// Hard-fail conditions (won't even attempt the QB call):
+//   - QB not configured / not connected
+//   - settings.quickbooks.hstTaxCodeId unset (would silently push $0 tax
+//     into the books — worse than failing loudly)
+//
+// Soft-fall conditions (pushes anyway, records a warning):
+//   - A line item key is not in quickbooks-items.json — falls back to the
+//     single shared "PJL Services" item so the push doesn't 400. The
+//     `qb_items_unmapped` warning surfaces in /admin/settings so Patrick
+//     can run the items sync.
 async function pushInvoice(localInvoice) {
   if (!isConfigured()) throw new Error("QuickBooks credentials missing — set QB_CLIENT_ID + QB_CLIENT_SECRET in Render env vars.");
   if (!(await isConnected())) throw new Error("Not connected to QuickBooks. Visit /admin/settings to connect first.");
 
-  const customer = await findOrCreateCustomer({
-    name: localInvoice.customerName,
-    email: localInvoice.customerEmail,
-    phone: localInvoice.customerPhone,
-    address: localInvoice.address
-  });
-  if (!customer || !customer.Id) throw new Error("Couldn't resolve a QB customer for this invoice.");
+  const settings = await settingsLib.get();
+  const hstTaxCodeId = settings?.quickbooks?.hstTaxCodeId || null;
+  if (!hstTaxCodeId) {
+    throw new Error("HST tax code not configured. Open /admin/settings → QuickBooks and pick the HST tax code before pushing invoices (otherwise QB stores $0 tax against an HST-bearing invoice).");
+  }
 
-  // Look up (or create) a Service item to attach line items to. Hardcoding
-  // ItemRef "1" worked in some QBOs but real production QBOs frequently
-  // don't have an item with Id "1" — or they have one that's of the
-  // wrong type, which trips the QB business-validation 400.
-  const itemRefId = await getInvoiceItemRef();
+  let customer;
+  try {
+    customer = await findOrCreateCustomer({
+      name: localInvoice.customerName,
+      email: localInvoice.customerEmail,
+      phone: localInvoice.customerPhone,
+      address: localInvoice.address
+    });
+  } catch (err) {
+    await recordSyncError({ entityType: "invoice", entityId: localInvoice.id, error: `Customer resolution failed: ${err.message}` });
+    throw err;
+  }
+  if (!customer || !customer.Id) {
+    await recordSyncError({ entityType: "invoice", entityId: localInvoice.id, error: "Couldn't resolve a QB customer for this invoice." });
+    throw new Error("Couldn't resolve a QB customer for this invoice.");
+  }
 
-  const lines = (localInvoice.lineItems || []).map((line) => ({
-    Description: line.label || line.key || "Service",
-    Amount: Number(line.lineTotal) || (Number(line.unitPrice) || 0) * (Number(line.qty) || 1),
-    DetailType: "SalesItemLineDetail",
-    SalesItemLineDetail: {
-      Qty: Number(line.qty) || 1,
-      UnitPrice: Number(line.unitPrice) || 0,
-      ItemRef: { value: itemRefId }
+  // Resolve each line item to its QB Item (mapped via quickbooks-items.json
+  // when present, else the single shared "PJL Services" fallback that the
+  // pre-Phase-2 push used). Track unmapped keys so we can surface a
+  // warning post-push.
+  const itemsMap = await getItemsMap();
+  const unmappedKeys = [];
+  const lines = [];
+  for (const line of localInvoice.lineItems || []) {
+    const key = line.key || null;
+    let qbItemId = null;
+    if (key && itemsMap?.services?.[key]?.qbItemId) {
+      qbItemId = itemsMap.services[key].qbItemId;
+    } else if (key && itemsMap?.parts?.[key]?.qbItemId) {
+      qbItemId = itemsMap.parts[key].qbItemId;
     }
-  }));
+    if (!qbItemId) {
+      // Fall back to the single shared "PJL Services" item so the push
+      // doesn't fail. We already noted the gap below — Patrick can run a
+      // sync to fix it.
+      qbItemId = await getInvoiceItemRef();
+      if (key) unmappedKeys.push(key);
+    }
+    lines.push({
+      Description: line.label || line.key || "Service",
+      Amount: Number(line.lineTotal) || (Number(line.unitPrice) || 0) * (Number(line.qty) || 1),
+      DetailType: "SalesItemLineDetail",
+      SalesItemLineDetail: {
+        Qty: Number(line.qty) || 1,
+        UnitPrice: Number(line.unitPrice) || 0,
+        ItemRef: { value: qbItemId },
+        // TaxCodeRef on the line tells QB this line is taxable under the
+        // invoice-level TxnTaxCodeRef. Without this every line shows up
+        // as NON in QB even when the invoice header has a tax code.
+        TaxCodeRef: { value: hstTaxCodeId }
+      }
+    });
+  }
 
   // Note on dropped fields:
-  //   DocNumber                  — only honoured when the QBO has "Custom
-  //                                transaction numbers" turned on under
-  //                                Account & Settings → Sales. Default is
-  //                                OFF, and sending DocNumber against a
-  //                                default-config QBO can trigger a 400.
-  //                                Our local invoice id lives in
-  //                                PrivateNote so the mapping is still
-  //                                recoverable when reconciling books.
-  //   AllowOnlineACHPayment      — US-only feature. Sending true to a
-  //                                Canadian QBO is rejected by validation.
-  //                                We only set CC payments which work in
-  //                                both regions.
+  //   DocNumber              — only honoured when the QBO has "Custom
+  //                            transaction numbers" turned on under
+  //                            Account & Settings → Sales. Default is
+  //                            OFF, and sending DocNumber against a
+  //                            default-config QBO can trigger a 400.
+  //                            Our local invoice id lives in
+  //                            PrivateNote so the mapping is still
+  //                            recoverable when reconciling books.
+  //   AllowOnlineACHPayment  — US-only feature. Sending true to a
+  //                            Canadian QBO is rejected by validation.
+  //                            We only set CC payments which work in
+  //                            both regions.
   const invoicePayload = {
     Line: lines,
     CustomerRef: { value: customer.Id },
+    TxnTaxDetail: {
+      TxnTaxCodeRef: { value: hstTaxCodeId }
+    },
     AllowOnlineCreditCardPayment: true,
     BillEmail: localInvoice.customerEmail
       ? { Address: localInvoice.customerEmail }
@@ -437,22 +500,44 @@ async function pushInvoice(localInvoice) {
     PrivateNote: `PJL local invoice ${localInvoice.id}${localInvoice.woId ? ` from WO ${localInvoice.woId}` : ""}`
   };
 
-  // If we've already pushed this invoice once, update instead of creating.
-  if (localInvoice.quickbooksInvoiceId) {
-    const existing = await requestQB(`/invoice/${encodeURIComponent(localInvoice.quickbooksInvoiceId)}?minorversion=70`).catch(() => null);
-    if (existing?.Invoice) {
-      const updatePayload = {
-        ...invoicePayload,
-        Id: existing.Invoice.Id,
-        SyncToken: existing.Invoice.SyncToken,
-        sparse: false
-      };
-      const updated = await requestQB("/invoice?operation=update&minorversion=70", { method: "POST", body: updatePayload });
-      return { id: updated.Invoice?.Id || existing.Invoice.Id, action: "updated" };
+  let result;
+  try {
+    // If we've already pushed this invoice once, update instead of creating.
+    if (localInvoice.quickbooksInvoiceId) {
+      const existing = await requestQB(`/invoice/${encodeURIComponent(localInvoice.quickbooksInvoiceId)}?minorversion=70`).catch(() => null);
+      if (existing?.Invoice) {
+        const updatePayload = {
+          ...invoicePayload,
+          Id: existing.Invoice.Id,
+          SyncToken: existing.Invoice.SyncToken,
+          sparse: false
+        };
+        const updated = await requestQB("/invoice?operation=update&minorversion=70", { method: "POST", body: updatePayload });
+        result = { id: updated.Invoice?.Id || existing.Invoice.Id, action: "updated" };
+      }
     }
+    if (!result) {
+      const created = await requestQB("/invoice?minorversion=70", { method: "POST", body: invoicePayload });
+      result = { id: created.Invoice?.Id, action: "created" };
+    }
+  } catch (err) {
+    await recordSyncError({ entityType: "invoice", entityId: localInvoice.id, error: err.message });
+    throw err;
   }
-  const created = await requestQB("/invoice?minorversion=70", { method: "POST", body: invoicePayload });
-  return { id: created.Invoice?.Id, action: "created" };
+
+  // Surface unmapped-line warnings post-push. The push succeeded so no
+  // throw — the warning shows up in the Settings panel for Patrick to
+  // resolve at his leisure (run the items sync).
+  if (unmappedKeys.length > 0) {
+    const unique = [...new Set(unmappedKeys)];
+    await recordSyncError({
+      entityType: "qb_items_unmapped",
+      entityId: localInvoice.id,
+      error: `Invoice pushed but ${unique.length} line key${unique.length === 1 ? "" : "s"} fell back to the shared item: ${unique.join(", ")}. Run /admin/settings → Sync items to QuickBooks.`
+    });
+  }
+
+  return result;
 }
 
 // ---- Payments API ----------------------------------------------------
@@ -602,6 +687,346 @@ function cryptoRandomHex(bytes) {
   return require("node:crypto").randomBytes(bytes).toString("hex");
 }
 
+// ---- Items map persistence (Phase 1) ---------------------------------
+//
+// `data/quickbooks-items.json` maps PJL pricing.json keys + parts.json
+// SKUs to QuickBooks Item IDs. Atomic writes (temp-file + rename) match
+// the pattern in lib/properties.js so a crash mid-sync can't leave a
+// half-written map.
+//
+// File shape:
+//   {
+//     "_doc": "...",
+//     "services": { "<pricingKey>": { qbItemId, lastSyncedAt, lastPriceSynced } },
+//     "parts":    { "<sku>":        { qbItemId, lastSyncedAt, lastPriceSynced } }
+//   }
+//
+// Keep this file separate from pricing.json / parts.json: those are the
+// git-tracked source-of-truth catalogs; this is runtime QB state on
+// Render's persistent disk (gitignored via server/data/).
+
+const DEFAULT_ITEMS_DOC = "Map PJL pricing.json keys and parts.json SKUs to QuickBooks Item IDs. Source-of-truth side-file — do NOT add qbItemId fields directly to pricing.json or parts.json.";
+
+async function getItemsMap() {
+  if (!fsSync.existsSync(ITEMS_FILE)) {
+    const empty = { _doc: DEFAULT_ITEMS_DOC, services: {}, parts: {} };
+    await fs.mkdir(path.dirname(ITEMS_FILE), { recursive: true });
+    await fs.writeFile(ITEMS_FILE, JSON.stringify(empty, null, 2) + "\n", "utf8");
+    return empty;
+  }
+  try {
+    const raw = await fs.readFile(ITEMS_FILE, "utf8");
+    const parsed = JSON.parse(raw);
+    return {
+      _doc: parsed._doc || DEFAULT_ITEMS_DOC,
+      services: parsed.services && typeof parsed.services === "object" ? parsed.services : {},
+      parts: parsed.parts && typeof parsed.parts === "object" ? parsed.parts : {}
+    };
+  } catch {
+    return { _doc: DEFAULT_ITEMS_DOC, services: {}, parts: {} };
+  }
+}
+
+async function writeItemsMap(map) {
+  await fs.mkdir(path.dirname(ITEMS_FILE), { recursive: true });
+  const tmp = ITEMS_FILE + ".tmp";
+  const body = JSON.stringify(map, null, 2) + "\n";
+  await fs.writeFile(tmp, body, "utf8");
+  await fs.rename(tmp, ITEMS_FILE);
+}
+
+// Idempotent upsert. `kind` is "services" or "parts". Records the price
+// at sync time so future syncs can detect drift and re-push with the new
+// price.
+async function setItemMap(kind, key, qbItemId, price) {
+  if (kind !== "services" && kind !== "parts") {
+    throw new Error(`setItemMap: kind must be "services" or "parts", got "${kind}"`);
+  }
+  const map = await getItemsMap();
+  map[kind][key] = {
+    qbItemId: String(qbItemId),
+    lastSyncedAt: new Date().toISOString(),
+    lastPriceSynced: Number.isFinite(Number(price)) ? Number(price) : null
+  };
+  await writeItemsMap(map);
+  return map[kind][key];
+}
+
+// Mark a mapping as stale (its source-of-truth key is gone from pricing/
+// parts). We keep the mapping so historical invoices can still find the
+// QB item; lint surfaces stale rows as a warning, not an error.
+async function markItemMapStale(kind, key) {
+  const map = await getItemsMap();
+  if (map[kind]?.[key] && !map[kind][key].staleSince) {
+    map[kind][key].staleSince = new Date().toISOString();
+    await writeItemsMap(map);
+  }
+}
+
+// ---- QB query helpers (Phase 1) --------------------------------------
+
+async function listTaxCodes() {
+  if (!isConfigured()) throw new Error("QuickBooks credentials missing.");
+  if (!(await isConnected())) throw new Error("Not connected to QuickBooks.");
+  const q = "select * from TaxCode where Active=true";
+  const r = await requestQB(`/query?query=${encodeURIComponent(q)}&minorversion=70`);
+  const codes = r?.QueryResponse?.TaxCode || [];
+  // Each TaxCode has SalesTaxRateList.TaxRateDetail[].TaxRateRef which
+  // points at a TaxRate row. The percentage we surface is the sum of the
+  // associated rates (HST is single-rate so this is just the headline %).
+  // For the dropdown we only need id + name + a rate hint, not the full
+  // rate-list resolution — keeping it simple here.
+  return codes.map((c) => ({
+    id: String(c.Id),
+    name: c.Name || "(unnamed)",
+    description: c.Description || "",
+    taxable: c.Taxable !== false,
+    active: c.Active !== false
+  }));
+}
+
+async function listIncomeAccounts() {
+  if (!isConfigured()) throw new Error("QuickBooks credentials missing.");
+  if (!(await isConnected())) throw new Error("Not connected to QuickBooks.");
+  const q = "select * from Account where AccountType='Income' and Active=true";
+  const r = await requestQB(`/query?query=${encodeURIComponent(q)}&minorversion=70`);
+  const accounts = r?.QueryResponse?.Account || [];
+  return accounts.map((a) => ({
+    id: String(a.Id),
+    name: a.Name || "(unnamed)",
+    fullyQualifiedName: a.FullyQualifiedName || a.Name,
+    accountSubType: a.AccountSubType || ""
+  }));
+}
+
+// ---- Items sync (Phase 2) --------------------------------------------
+//
+// One QB Item per pricing.json key + parts.json SKU. Idempotent:
+//   - No mapping → POST a new Item, store mapping
+//   - Mapping exists, price unchanged → skip
+//   - Mapping exists, price changed → sparse PATCH UnitPrice
+//
+// Throttled to 5 req/sec defensively (well under QB's 500/min limit).
+// Each item's mapping writes atomically before moving on so a crash
+// mid-sync doesn't leave the map and QB out of step.
+
+function loadCatalog() {
+  // Re-read on demand; pricing.json is small and doesn't change often.
+  // Doing it lazily means a deploy that updates the catalog gets picked
+  // up next sync without bouncing the server.
+  const pricing = JSON.parse(fsSync.readFileSync(PRICING_FILE, "utf8"));
+  const parts = JSON.parse(fsSync.readFileSync(PARTS_FILE, "utf8"));
+  return {
+    services: pricing?.items || {},
+    parts: parts?.parts || {}
+  };
+}
+
+function buildServiceItemPayload(key, source, incomeAccountId) {
+  // QB Item Name must be unique + ≤100 chars. label is usually short
+  // enough; truncate defensively.
+  const label = source.label || key;
+  const name = label.length > 100 ? label.slice(0, 97) + "..." : label;
+  return {
+    Name: name,
+    Description: label,
+    Type: "Service",
+    Taxable: true,
+    UnitPrice: Number(source.price) || 0,
+    IncomeAccountRef: { value: incomeAccountId },
+    Sku: key  // optional, but helps reconciliation
+  };
+}
+
+function buildPartItemPayload(sku, source, incomeAccountId) {
+  // Parts use partNumber + description so the QB Item is searchable in
+  // QB by either. NonInventory matches PJL's "we don't track stock; we
+  // re-order each job" workflow.
+  const desc = source.description || sku;
+  const namePrefix = source.partNumber || sku;
+  const candidate = `${namePrefix} ${desc}`;
+  const name = candidate.length > 100 ? candidate.slice(0, 97) + "..." : candidate;
+  const priceCents = Number(source.priceCents) || 0;
+  return {
+    Name: name,
+    Description: desc,
+    Type: "NonInventory",
+    Taxable: true,
+    UnitPrice: priceCents / 100,
+    IncomeAccountRef: { value: incomeAccountId },
+    Sku: sku
+  };
+}
+
+function currentPriceFor(kind, source) {
+  if (kind === "services") return Number(source.price) || 0;
+  if (kind === "parts") return Number(source.priceCents) ? Number(source.priceCents) / 100 : 0;
+  return 0;
+}
+
+// Push (create or update) a single item. Returns
+//   { qbItemId, action: 'created'|'updated'|'skipped', error? }
+async function pushItem(kind, key) {
+  if (!isConfigured()) throw new Error("QuickBooks credentials missing.");
+  if (!(await isConnected())) throw new Error("Not connected to QuickBooks.");
+  const settings = await settingsLib.get();
+  const incomeAccountId = settings?.quickbooks?.defaultIncomeAccountId || null;
+  if (!incomeAccountId) {
+    throw new Error("Default income account not configured. Open /admin/settings → QuickBooks and pick the income account before syncing items.");
+  }
+
+  const catalog = loadCatalog();
+  const source = catalog[kind]?.[key];
+  if (!source) {
+    throw new Error(`No ${kind === "services" ? "pricing.json" : "parts.json"} entry for "${key}".`);
+  }
+
+  // pricing.json items with quoteType:"custom" don't have a stable price
+  // — skip them silently. They'd just produce noisy QB Items with $0
+  // that drift on every sync.
+  if (kind === "services" && source.quoteType === "custom") {
+    return { qbItemId: null, action: "skipped", reason: "quoteType=custom (no fixed price)" };
+  }
+
+  const map = await getItemsMap();
+  const mapped = map[kind][key];
+  const currentPrice = currentPriceFor(kind, source);
+
+  // Existing mapping: check for price drift.
+  if (mapped?.qbItemId) {
+    const drift = mapped.lastPriceSynced == null || Math.abs(Number(mapped.lastPriceSynced) - currentPrice) > 0.005;
+    if (!drift) return { qbItemId: mapped.qbItemId, action: "skipped" };
+
+    // Drift — fetch current SyncToken and PATCH UnitPrice.
+    try {
+      const existing = await requestQB(`/item/${encodeURIComponent(mapped.qbItemId)}?minorversion=70`);
+      if (!existing?.Item?.Id) {
+        // Mapping refers to a missing QB item (deleted or wrong realm).
+        // Drop the mapping and fall through to create.
+        delete map[kind][key];
+        await writeItemsMap(map);
+      } else {
+        const patchPayload = {
+          Id: existing.Item.Id,
+          SyncToken: existing.Item.SyncToken,
+          UnitPrice: currentPrice,
+          sparse: true
+        };
+        await requestQB("/item?minorversion=70", { method: "POST", body: patchPayload });
+        await setItemMap(kind, key, existing.Item.Id, currentPrice);
+        return { qbItemId: existing.Item.Id, action: "updated" };
+      }
+    } catch (err) {
+      await recordSyncError({ entityType: `qb_item_${kind}`, entityId: key, error: err.message });
+      throw err;
+    }
+  }
+
+  // No mapping — POST a new Item.
+  const payload = kind === "services"
+    ? buildServiceItemPayload(key, source, incomeAccountId)
+    : buildPartItemPayload(key, source, incomeAccountId);
+
+  let created;
+  try {
+    created = await requestQB("/item?minorversion=70", { method: "POST", body: payload });
+  } catch (err) {
+    // Handle DuplicateNameExistsError — retry with " (PJL)" suffix once.
+    if (/duplicate.?name|already in use|6240/i.test(err.message)) {
+      payload.Name = `${payload.Name.slice(0, 92)} (PJL)`;
+      try {
+        created = await requestQB("/item?minorversion=70", { method: "POST", body: payload });
+      } catch (err2) {
+        await recordSyncError({ entityType: `qb_item_${kind}`, entityId: key, error: `Duplicate-name retry failed: ${err2.message}` });
+        throw err2;
+      }
+    } else {
+      await recordSyncError({ entityType: `qb_item_${kind}`, entityId: key, error: err.message });
+      throw err;
+    }
+  }
+
+  const qbId = created?.Item?.Id;
+  if (!qbId) {
+    const msg = `QB returned no Item Id when creating "${key}".`;
+    await recordSyncError({ entityType: `qb_item_${kind}`, entityId: key, error: msg });
+    throw new Error(msg);
+  }
+  await setItemMap(kind, key, qbId, currentPrice);
+  return { qbItemId: qbId, action: "created" };
+}
+
+// Iterate the entire catalog and push each item. Throttled to ~5 req/sec
+// (200ms inter-call) so a 180-item sync takes ~36s — well under any
+// reasonable HTTP timeout. Returns a summary plus the per-error array
+// for the UI's "X failed — see details" surface.
+async function syncAllItems() {
+  if (!isConfigured()) throw new Error("QuickBooks credentials missing.");
+  if (!(await isConnected())) throw new Error("Not connected to QuickBooks.");
+  const settings = await settingsLib.get();
+  if (!settings?.quickbooks?.defaultIncomeAccountId) {
+    throw new Error("Default income account not configured. Open /admin/settings → QuickBooks and pick one before syncing items.");
+  }
+
+  const catalog = loadCatalog();
+  const summary = {
+    servicesCreated: 0, servicesUpdated: 0, servicesSkipped: 0,
+    partsCreated: 0, partsUpdated: 0, partsSkipped: 0,
+    errors: []
+  };
+
+  // Mark stale mappings before sync so the lint surface stays correct
+  // even for catalog deletions.
+  const map = await getItemsMap();
+  for (const k of Object.keys(map.services)) {
+    if (!catalog.services[k] && !map.services[k].staleSince) await markItemMapStale("services", k);
+  }
+  for (const k of Object.keys(map.parts)) {
+    if (!catalog.parts[k] && !map.parts[k].staleSince) await markItemMapStale("parts", k);
+  }
+
+  const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
+
+  for (const key of Object.keys(catalog.services)) {
+    try {
+      const r = await pushItem("services", key);
+      if (r.action === "created") summary.servicesCreated++;
+      else if (r.action === "updated") summary.servicesUpdated++;
+      else summary.servicesSkipped++;
+    } catch (err) {
+      summary.errors.push({ kind: "services", key, error: err.message });
+    }
+    await sleep(200);
+  }
+  for (const key of Object.keys(catalog.parts)) {
+    try {
+      const r = await pushItem("parts", key);
+      if (r.action === "created") summary.partsCreated++;
+      else if (r.action === "updated") summary.partsUpdated++;
+      else summary.partsSkipped++;
+    } catch (err) {
+      summary.errors.push({ kind: "parts", key, error: err.message });
+    }
+    await sleep(200);
+  }
+
+  return summary;
+}
+
+// Thin wrapper so quickbooks.js callers don't have to require settings
+// directly. Keeps the dependency graph one-way (quickbooks → settings,
+// never the reverse).
+async function recordSyncError({ entityType, entityId, error }) {
+  try {
+    await settingsLib.recordSyncError({ entityType, entityId, error });
+  } catch (e) {
+    // recordSyncError is best-effort telemetry — never let it mask the
+    // real error by throwing. Worst case the error doesn't appear in the
+    // settings panel; the caller still threw the underlying problem.
+    console.warn("[qb] recordSyncError failed:", e.message);
+  }
+}
+
 module.exports = {
   isConfigured,
   isConnected,
@@ -612,5 +1037,14 @@ module.exports = {
   clearTokens,
   chargeCard,
   recordPaymentForInvoice,
-  voidInvoice
+  voidInvoice,
+  // Phase 1 additions
+  listTaxCodes,
+  listIncomeAccounts,
+  getItemsMap,
+  setItemMap,
+  recordSyncError,
+  // Phase 2 additions
+  pushItem,
+  syncAllItems
 };

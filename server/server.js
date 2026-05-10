@@ -3798,6 +3798,85 @@ async function handleApi(req, res, pathname) {
     }
   }
 
+  // ---------- QuickBooks settings + items sync (Phase 1 + 2) -----------
+  // Admin-only; isAdminPath() above gates the entire /api/admin/quickbooks
+  // tree so we don't repeat the auth check here.
+  //
+  // GET /tax-codes            → dropdown source for HST picker
+  // GET /income-accounts      → dropdown source for default income account
+  // PATCH /settings           → persist tax/income/auto-push toggles
+  // POST /clear-sync-errors   → dismiss the rolling errors panel
+  // GET /items                → current quickbooks-items.json (debug + UI)
+  // POST /items/sync          → full catalog sync (services + parts)
+  // POST /items/sync/:kind/:key → retry a single item from the errors panel
+
+  if (req.method === "GET" && pathname === "/api/admin/quickbooks/tax-codes") {
+    try {
+      const codes = await quickbooks.listTaxCodes();
+      return sendJson(res, 200, { ok: true, taxCodes: codes });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't list tax codes."] });
+    }
+  }
+
+  if (req.method === "GET" && pathname === "/api/admin/quickbooks/income-accounts") {
+    try {
+      const accounts = await quickbooks.listIncomeAccounts();
+      return sendJson(res, 200, { ok: true, accounts });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't list income accounts."] });
+    }
+  }
+
+  if (req.method === "PATCH" && pathname === "/api/admin/quickbooks/settings") {
+    try {
+      const body = await parseRequestBody(req).catch(() => ({}));
+      const updated = await settings.updateQuickbooks(body || {}, { who: "admin" });
+      return sendJson(res, 200, { ok: true, quickbooks: updated.quickbooks });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't save QuickBooks settings."] });
+    }
+  }
+
+  if (req.method === "POST" && pathname === "/api/admin/quickbooks/clear-sync-errors") {
+    try {
+      const updated = await settings.clearSyncErrors();
+      return sendJson(res, 200, { ok: true, quickbooks: updated.quickbooks });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't clear sync errors."] });
+    }
+  }
+
+  if (req.method === "GET" && pathname === "/api/admin/quickbooks/items") {
+    try {
+      const map = await quickbooks.getItemsMap();
+      return sendJson(res, 200, { ok: true, items: map });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't read items map."] });
+    }
+  }
+
+  if (req.method === "POST" && pathname === "/api/admin/quickbooks/items/sync") {
+    try {
+      const summary = await quickbooks.syncAllItems();
+      return sendJson(res, 200, { ok: true, summary });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't run items sync."] });
+    }
+  }
+
+  const qbItemSyncMatch = pathname.match(/^\/api\/admin\/quickbooks\/items\/sync\/(services|parts)\/(.+)$/);
+  if (qbItemSyncMatch && req.method === "POST") {
+    try {
+      const kind = qbItemSyncMatch[1];
+      const key = decodeURIComponent(qbItemSyncMatch[2]);
+      const result = await quickbooks.pushItem(kind, key);
+      return sendJson(res, 200, { ok: true, result });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't sync item."] });
+    }
+  }
+
   // ---------- Parts catalog (admin-gated, used by tech materials UI) ----
   if (req.method === "GET" && pathname === "/api/parts") {
     if (!PARTS) return sendJson(res, 503, { ok: false, errors: ["parts.json not loaded on the server."] });

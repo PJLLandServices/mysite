@@ -110,7 +110,7 @@ form except where noted.
 | `notify-sms.js` | — | n/a | Admin SMS on new lead (Twilio). |
 | `notify-customer.js` | — | n/a | Customer-facing transition emails / SMSes (booking confirmed, on the way, etc). |
 | `notify-supplier.js` | — | n/a | Supplier email with PO PDF attachment. |
-| `quickbooks.js` | — | n/a | OAuth + invoice push. **Inert** until `QB_CLIENT_ID` / `QB_CLIENT_SECRET` env vars are set. |
+| `quickbooks.js` | — | n/a | OAuth + invoice push + items sync + Payments charges. Token blob encrypted at rest (AES-256-GCM, key from `TOKEN_ENCRYPTION_KEY` or derived from `QB_CLIENT_SECRET`). Exports: `pushInvoice`, `pushItem`, `syncAllItems`, `listTaxCodes`, `listIncomeAccounts`, `getItemsMap`, `setItemMap`, `chargeCard`, `recordPaymentForInvoice`, `voidInvoice`, OAuth helpers. **Inert** until `QB_CLIENT_ID` / `QB_CLIENT_SECRET` env vars are set + admin connects via OAuth. |
 | `booking-sessions.js` | — | n/a | AI handoff session storage (used by the chat widget). |
 
 ## Server-side data files (`server/data/`)
@@ -137,7 +137,8 @@ booking-sessions.json      ← AI chat handoff state
 geocode-cache.json         ← Google Geocoding response cache
 distance-cache.json        ← Distance Matrix response cache
 chat-transcripts.json      ← AI chat transcripts (every booking + every abandoned chat)
-quickbooks.json            ← QB OAuth tokens (gitignored, Render-only)
+quickbooks.json            ← QB OAuth tokens (gitignored, Render-only, AES-256-GCM at rest)
+quickbooks-items.json      ← PJL key/SKU → QB Item ID map (gitignored, Render-only)
 photos/<leadId>/<n>.jpg    ← lead intake photos
 wo-photos/<woId>/<n>.<ext> ← work-order photos (pre/in/post-work + per-issue)
 ```
@@ -394,7 +395,17 @@ multiple visits + multiple material lists + a single source quote.
 | **Twilio** | Admin SMS on new lead | New lead intake | `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM_NUMBER`, `NOTIFY_TO_PHONE` |
 | **Google Maps JS API** | Places Autocomplete on every editable address input + Distance Matrix on the public coverage checker | Form interaction | API key hardcoded in HTML script tags (browser key) |
 | **Google Geocoding** | Property coordinates + drive-time analysis (admin only) | Property creation, today schedule | `GOOGLE_MAPS_SERVER_KEY` |
-| **QuickBooks Online** | Push invoices to QB. **Inert** until creds set. | Manual trigger from `/admin/settings` | `QB_CLIENT_ID`, `QB_CLIENT_SECRET`, optional `QB_ENVIRONMENT` |
+| **QuickBooks Online** | Push invoices, items, customers, and (Phase 4) estimates to QB. **Inert** until creds set + OAuth connect done. | Manual triggers from `/admin/settings` (auto-push on invoice send / quote accept gated by per-event toggles in settings.quickbooks) | `QB_CLIENT_ID`, `QB_CLIENT_SECRET`, optional `QB_ENVIRONMENT` (sandbox/production), optional `TOKEN_ENCRYPTION_KEY` |
+
+### QuickBooks integration details (Customer + Item handling)
+
+**Customer:** the invoice push resolves the QB Customer via `findOrCreateCustomer()` — exact-email match → DisplayName match → create new with `DisplayName/GivenName/FamilyName/PrimaryEmailAddr/PrimaryPhone/BillAddr.Line1`. The QB Customer ID is **not yet persisted back to the lead/property record** — every push re-runs the lookup. Phase 3 of the QB integration adds `lead.quickbooksCustomerId` + `quickbooksCustomerSyncToken` so renames don't lose the link.
+
+**Items:** every line in a pushed invoice carries an `ItemRef` resolved from `quickbooks-items.json` (PJL key/SKU → QB Item ID). When a key is unmapped, the push falls back to a single shared "PJL Services" item and records a `qb_items_unmapped` warning in the settings panel — Patrick can then run a sync to fix the gap. `npm run lint:qb-mappings` (wired into `build:check`) flags pricing.json/parts.json keys with no QB mapping.
+
+**Tax:** the invoice payload sets `TxnTaxDetail.TxnTaxCodeRef.value` to `settings.quickbooks.hstTaxCodeId` and each line's `TaxCodeRef` to the same. QB calculates HST server-side using that code's rate; PJL's local `hst/total` are display-only post-push. The push **hard-fails** if `hstTaxCodeId` is unset (silently pushing $0-tax invoices into a Canadian QBO is worse than failing loudly). Patrick configures the tax code + default income account once, in the QuickBooks panel of `/admin/settings`.
+
+**Hard rule:** PJL is the source of truth for service + part pricing. QB items are derived state. Editing a price in QB does not flow back to PJL. The `lastPriceSynced` field in `quickbooks-items.json` lets the syncer detect drift in PJL → QB direction only.
 
 ## Configuration (Render env vars)
 

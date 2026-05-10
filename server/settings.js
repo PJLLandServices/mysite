@@ -112,7 +112,11 @@ document.getElementById("adminDefaultsSave")?.addEventListener("click", async ()
   }
 });
 
-// ---- QuickBooks connect block ------------------------------------------
+// ---- QuickBooks connect + config block ---------------------------------
+let qbSettings = null;       // settings.quickbooks namespace cache
+let qbConnected = false;     // gates dropdown loads + items-sync button
+let qbDirty = false;         // tracks unsaved mapping changes
+
 async function loadQbStatus() {
   // Populate the redirect URI hint with the current origin so Patrick can
   // copy/paste it into the QB Developer app dashboard.
@@ -126,10 +130,13 @@ async function loadQbStatus() {
     const status = document.getElementById("qbStatus");
     const connect = document.getElementById("qbConnectBtn");
     const disconnect = document.getElementById("qbDisconnectBtn");
+    const configBlock = document.getElementById("qbConfigBlock");
     if (!data.configured) {
       status.textContent = "⚠ Not configured. Set QB_CLIENT_ID + QB_CLIENT_SECRET on Render, then refresh this page.";
       status.dataset.kind = "warn";
       connect.style.display = "none";
+      if (configBlock) configBlock.hidden = true;
+      qbConnected = false;
       return;
     }
     if (data.connected) {
@@ -137,11 +144,17 @@ async function loadQbStatus() {
       status.dataset.kind = "ok";
       connect.style.display = "none";
       disconnect.hidden = false;
+      if (configBlock) configBlock.hidden = false;
+      qbConnected = true;
+      // Now load settings + populate dropdowns + render errors panel.
+      await loadQbConfig();
     } else {
       status.textContent = `Configured (${data.environment} environment) — not yet authorized. Click below to grant access.`;
       status.dataset.kind = "info";
       connect.style.display = "";
       disconnect.hidden = true;
+      if (configBlock) configBlock.hidden = true;
+      qbConnected = false;
     }
   } catch (err) {
     const status = document.getElementById("qbStatus");
@@ -154,6 +167,191 @@ document.getElementById("qbDisconnectBtn")?.addEventListener("click", async () =
   if (!confirm("Disconnect from QuickBooks? You'll need to re-authorize before pushing invoices again.")) return;
   await fetch("/api/admin/quickbooks/disconnect", { method: "POST" });
   loadQbStatus();
+});
+
+// Pull the live settings + the QB tax-code and income-account lists, then
+// populate the dropdowns + restore the saved selections + render the
+// auto-push toggles + the recent-errors list.
+async function loadQbConfig() {
+  // Settings first — we need the saved IDs before we can highlight them
+  // in the dropdowns.
+  try {
+    const r = await fetch("/api/settings", { cache: "no-store" });
+    const data = await r.json();
+    qbSettings = data?.settings?.quickbooks || null;
+  } catch (e) {
+    qbSettings = null;
+  }
+
+  // Restore toggles immediately (they don't need a network round-trip).
+  const estToggle = document.getElementById("qbEstAutoToggle");
+  const invToggle = document.getElementById("qbInvAutoToggle");
+  if (estToggle) estToggle.checked = !!qbSettings?.estimateAutoPushOnAccept;
+  if (invToggle) invToggle.checked = !!qbSettings?.invoiceAutoPushOnCascade;
+
+  // Tax codes + income accounts in parallel — both are QB Query calls and
+  // independent.
+  const [taxCodesRes, accountsRes] = await Promise.all([
+    fetch("/api/admin/quickbooks/tax-codes", { cache: "no-store" }).then((r) => r.json()).catch(() => ({})),
+    fetch("/api/admin/quickbooks/income-accounts", { cache: "no-store" }).then((r) => r.json()).catch(() => ({}))
+  ]);
+
+  populateDropdown(
+    document.getElementById("qbTaxCodeSelect"),
+    taxCodesRes?.taxCodes || [],
+    qbSettings?.hstTaxCodeId || "",
+    (c) => `${c.name}${c.description ? ` — ${c.description}` : ""}`
+  );
+  populateDropdown(
+    document.getElementById("qbIncomeAccountSelect"),
+    accountsRes?.accounts || [],
+    qbSettings?.defaultIncomeAccountId || "",
+    (a) => a.fullyQualifiedName || a.name
+  );
+
+  // Items sync button enabled only when income account is set.
+  const syncBtn = document.getElementById("qbSyncItemsBtn");
+  if (syncBtn) syncBtn.disabled = !qbSettings?.defaultIncomeAccountId;
+
+  // Render errors list.
+  renderQbErrors();
+
+  // Save button starts disabled; flips on when user changes a dropdown
+  // or toggle.
+  qbDirty = false;
+  const saveBtn = document.getElementById("qbSaveBtn");
+  if (saveBtn) saveBtn.disabled = true;
+}
+
+function populateDropdown(select, items, currentValue, labelFn) {
+  if (!select) return;
+  if (!items.length) {
+    select.innerHTML = `<option value="">— None available in QB —</option>`;
+    return;
+  }
+  const opts = [`<option value="">— Pick one —</option>`];
+  for (const it of items) {
+    const sel = String(it.id) === String(currentValue) ? " selected" : "";
+    opts.push(`<option value="${escapeHtml(it.id)}"${sel}>${escapeHtml(labelFn(it))}</option>`);
+  }
+  select.innerHTML = opts.join("");
+}
+
+function renderQbErrors() {
+  const list = document.getElementById("qbErrorList");
+  if (!list) return;
+  const errors = qbSettings?.lastSyncErrors || [];
+  if (!errors.length) {
+    list.innerHTML = `<li class="settings-audit-empty">No recent sync errors.</li>`;
+    return;
+  }
+  list.innerHTML = errors.map((e) => {
+    const ts = new Date(e.ts).toLocaleString("en-CA", { dateStyle: "short", timeStyle: "short" });
+    return `<li>
+      <span class="settings-audit-ts">${escapeHtml(ts)}</span> ·
+      <strong>${escapeHtml(e.entityType)}</strong> ${escapeHtml(e.entityId || "")} —
+      ${escapeHtml(e.error)}
+    </li>`;
+  }).join("");
+}
+
+// Wire the dropdown + toggle change handlers.
+["qbTaxCodeSelect", "qbIncomeAccountSelect", "qbEstAutoToggle", "qbInvAutoToggle"].forEach((id) => {
+  document.getElementById(id)?.addEventListener("change", () => {
+    qbDirty = true;
+    const saveBtn = document.getElementById("qbSaveBtn");
+    if (saveBtn) saveBtn.disabled = false;
+    const status = document.getElementById("qbSaveStatus");
+    if (status) status.textContent = "";
+  });
+});
+
+document.getElementById("qbSaveBtn")?.addEventListener("click", async () => {
+  const btn = document.getElementById("qbSaveBtn");
+  const status = document.getElementById("qbSaveStatus");
+  btn.disabled = true;
+  status.textContent = "Saving…";
+
+  // Pull display names from the selected option text so the audit log
+  // and any future "what tax code is this?" UI doesn't have to re-query
+  // QB just to render a friendly name.
+  const taxSel = document.getElementById("qbTaxCodeSelect");
+  const acctSel = document.getElementById("qbIncomeAccountSelect");
+  const taxOpt = taxSel.options[taxSel.selectedIndex];
+  const acctOpt = acctSel.options[acctSel.selectedIndex];
+
+  const patch = {
+    hstTaxCodeId: taxSel.value || null,
+    hstTaxCodeName: taxSel.value ? taxOpt.textContent.trim() : null,
+    defaultIncomeAccountId: acctSel.value || null,
+    defaultIncomeAccountName: acctSel.value ? acctOpt.textContent.trim() : null,
+    estimateAutoPushOnAccept: document.getElementById("qbEstAutoToggle").checked,
+    invoiceAutoPushOnCascade: document.getElementById("qbInvAutoToggle").checked
+  };
+
+  try {
+    const r = await fetch("/api/admin/quickbooks/settings", {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(patch)
+    });
+    const data = await r.json();
+    if (!r.ok || !data.ok) throw new Error((data.errors && data.errors[0]) || "Save failed.");
+    qbSettings = data.quickbooks;
+    qbDirty = false;
+    status.textContent = "Saved.";
+    // Re-evaluate items-sync button (income account may have changed).
+    const syncBtn = document.getElementById("qbSyncItemsBtn");
+    if (syncBtn) syncBtn.disabled = !qbSettings?.defaultIncomeAccountId;
+  } catch (err) {
+    status.textContent = err.message || "Save failed.";
+    btn.disabled = false;
+  }
+});
+
+document.getElementById("qbSyncItemsBtn")?.addEventListener("click", async () => {
+  const btn = document.getElementById("qbSyncItemsBtn");
+  const status = document.getElementById("qbItemsStatus");
+  const summaryEl = document.getElementById("qbItemsSummary");
+  btn.disabled = true;
+  status.textContent = "Syncing… (~30s for ~180 items)";
+  summaryEl.hidden = true;
+  try {
+    const r = await fetch("/api/admin/quickbooks/items/sync", { method: "POST" });
+    const data = await r.json();
+    if (!r.ok || !data.ok) throw new Error((data.errors && data.errors[0]) || "Sync failed.");
+    const s = data.summary;
+    const lines = [
+      `Services: ${s.servicesCreated} created · ${s.servicesUpdated} updated · ${s.servicesSkipped} skipped`,
+      `Parts:    ${s.partsCreated} created · ${s.partsUpdated} updated · ${s.partsSkipped} skipped`
+    ];
+    if (s.errors?.length) {
+      lines.push("");
+      lines.push(`Errors (${s.errors.length}):`);
+      for (const e of s.errors.slice(0, 10)) lines.push(`  · ${e.kind}/${e.key}: ${e.error}`);
+      if (s.errors.length > 10) lines.push(`  · …and ${s.errors.length - 10} more (see Recent sync errors below).`);
+    }
+    summaryEl.textContent = lines.join("\n");
+    summaryEl.hidden = false;
+    status.textContent = `Sync complete — ${new Date().toLocaleTimeString("en-CA", { hour: "2-digit", minute: "2-digit" })}.`;
+    // Refresh errors list — sync errors got appended.
+    await loadQbConfig();
+  } catch (err) {
+    status.textContent = err.message || "Sync failed.";
+    btn.disabled = false;
+  }
+});
+
+document.getElementById("qbClearErrorsBtn")?.addEventListener("click", async () => {
+  if (!confirm("Clear the recent-errors list? Errors are dropped, not the underlying records.")) return;
+  try {
+    const r = await fetch("/api/admin/quickbooks/clear-sync-errors", { method: "POST" });
+    const data = await r.json();
+    if (data.ok) {
+      qbSettings = data.quickbooks;
+      renderQbErrors();
+    }
+  } catch (e) { /* swallow — UI still re-renders */ }
 });
 
 // Surface query-string hints from the OAuth callback redirect so Patrick
