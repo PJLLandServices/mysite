@@ -225,6 +225,20 @@ function redirect(res, location) {
   res.end();
 }
 
+// Legacy Wix URLs → current pages. Mirrors `_redirects` at the repo root, which
+// Render honors for purely static deploys; this in-process fallback covers the
+// case where this Node service handles the request before the static layer can.
+const LEGACY_REDIRECTS = {
+  "/about-us": "/about.html",
+  "/contact": "/contact.html",
+  "/book-online": "/book.html",
+  "/lawn-sprinklers": "/sprinkler-systems.html",
+  "/landscapelighting": "/landscape-lighting.html",
+  "/services": "/sprinkler-systems.html",
+  "/privacypolicy": "/privacy-policy.html",
+  "/terms-of-service": "/terms-of-service.html"
+};
+
 function normalizeString(value, maxLength = 400) {
   return String(value || "").trim().replace(/\s+/g, " ").slice(0, maxLength);
 }
@@ -7586,6 +7600,15 @@ const server = http.createServer(async (req, res) => {
     pathname = pathname.replace(/\/{2,}/g, "/");
     const cleanUrl = pathname + (url.search || "");
     res.writeHead(301, { location: cleanUrl, "cache-control": "no-store" });
+    res.end();
+    return;
+  }
+  // Legacy Wix URL → current page. 301 so search engines and bookmarks
+  // update. Runs before auth/static dispatch so e.g. /contact never falls
+  // through to a 404 if the static layer hasn't already redirected.
+  const legacyTarget = LEGACY_REDIRECTS[pathname.replace(/\/$/, "")] || LEGACY_REDIRECTS[pathname];
+  if (legacyTarget) {
+    res.writeHead(301, { location: legacyTarget + (url.search || ""), "cache-control": "no-store" });
     res.end();
     return;
   }
