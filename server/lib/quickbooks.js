@@ -166,6 +166,9 @@ async function clearTokens() {
   if (fsSync.existsSync(TOKEN_FILE)) {
     await fs.unlink(TOKEN_FILE);
   }
+  // Reset the item-ref cache too — a new connection might be a different
+  // QB realm with different items.
+  _itemRefCache = { realmId: null, itemId: null };
 }
 
 // ---- OAuth ------------------------------------------------------------
@@ -286,9 +289,65 @@ async function requestQB(pathname, { method = "GET", body = null } = {}) {
   const data = await r.json().catch(() => ({}));
   if (!r.ok) {
     const err = data?.Fault?.Error?.[0] || data?.error || data;
-    throw new Error(`QB API ${method} ${pathname} failed: HTTP ${r.status} — ${err?.Message || err?.message || JSON.stringify(err).slice(0, 200)}`);
+    // Log the full Intuit response body — the surface error message
+    // ("A business validation error occurred") is generic; the real
+    // detail lives in Fault.Error[i].Detail and Fault.Error[i].code.
+    // Server logs get the full picture; the thrown error stays short.
+    console.warn(`[qb-api] ${method} ${pathname} → HTTP ${r.status}`, JSON.stringify(data?.Fault?.Error || data || {}, null, 2));
+    const detail = err?.Detail || err?.detail || err?.Message || err?.message || JSON.stringify(err).slice(0, 200);
+    throw new Error(`QB API ${method} ${pathname} failed: HTTP ${r.status} — ${detail}`);
   }
   return data;
+}
+
+// Find or create a Service item to use as ItemRef on invoice line items.
+// Production QBOs vary: some have an item with Id "1" (a default set up
+// at company creation), some don't, and some have it set to a non-Service
+// type which makes invoice creation fail. This helper:
+//
+//   1. Queries QBO for the first active Service-type item
+//   2. If none exists, creates a "PJL Services" item and returns its id
+//   3. Caches the result for the life of the process so we don't re-query
+//      on every invoice push
+//
+// The cache lives in module scope and gets invalidated on disconnect
+// (clearTokens() also clears it) since a new connection might be a
+// different QB realm.
+let _itemRefCache = { realmId: null, itemId: null };
+async function getInvoiceItemRef() {
+  const tokens = await readTokens();
+  if (_itemRefCache.realmId === tokens?.realmId && _itemRefCache.itemId) {
+    return _itemRefCache.itemId;
+  }
+  // Look for an active Service item we can reuse.
+  const q = "select * from Item where Type='Service' and Active=true MAXRESULTS 1";
+  const result = await requestQB(`/query?query=${encodeURIComponent(q)}&minorversion=70`).catch(() => null);
+  let itemId = result?.QueryResponse?.Item?.[0]?.Id || null;
+  if (!itemId) {
+    // No existing Service item — create a generic one for PJL's use.
+    // QBO Plus requires Service items to have a non-empty IncomeAccountRef;
+    // "Sales" is a default account name in fresh QBOs. Fall back to looking
+    // up any income account if "Sales" doesn't exist.
+    let incomeAccountId = null;
+    const acctQ1 = "select * from Account where AccountType='Income' and Active=true MAXRESULTS 1";
+    const acctResult = await requestQB(`/query?query=${encodeURIComponent(acctQ1)}&minorversion=70`).catch(() => null);
+    incomeAccountId = acctResult?.QueryResponse?.Account?.[0]?.Id || null;
+    if (!incomeAccountId) {
+      throw new Error("Couldn't find an Income account to use for the Services item. Add one in QuickBooks Online and retry.");
+    }
+    const newItem = await requestQB("/item?minorversion=70", {
+      method: "POST",
+      body: {
+        Name: "PJL Services",
+        Type: "Service",
+        IncomeAccountRef: { value: incomeAccountId }
+      }
+    });
+    itemId = newItem?.Item?.Id;
+    if (!itemId) throw new Error("QB rejected the Service item creation.");
+  }
+  _itemRefCache = { realmId: tokens?.realmId, itemId };
+  return itemId;
 }
 
 // ---- Customer find-or-create + invoice push --------------------------
@@ -338,6 +397,12 @@ async function pushInvoice(localInvoice) {
   });
   if (!customer || !customer.Id) throw new Error("Couldn't resolve a QB customer for this invoice.");
 
+  // Look up (or create) a Service item to attach line items to. Hardcoding
+  // ItemRef "1" worked in some QBOs but real production QBOs frequently
+  // don't have an item with Id "1" — or they have one that's of the
+  // wrong type, which trips the QB business-validation 400.
+  const itemRefId = await getInvoiceItemRef();
+
   const lines = (localInvoice.lineItems || []).map((line) => ({
     Description: line.label || line.key || "Service",
     Amount: Number(line.lineTotal) || (Number(line.unitPrice) || 0) * (Number(line.qty) || 1),
@@ -345,25 +410,27 @@ async function pushInvoice(localInvoice) {
     SalesItemLineDetail: {
       Qty: Number(line.qty) || 1,
       UnitPrice: Number(line.unitPrice) || 0,
-      // Use QB's default service item — Patrick can map specific items
-      // to PJL SKUs in a future pass. For v1, lump everything onto the
-      // QB "Services" account via the implicit default.
-      ItemRef: { value: "1" }
+      ItemRef: { value: itemRefId }
     }
   }));
 
-  // AllowOnlineCreditCardPayment + BillEmail let QB generate a customer
-  // payment URL for the invoice (the "View and pay" link the customer
-  // uses). The PJL portal-hosted /pay page (PR 3) takes over from this
-  // QB-hosted fallback; until then, customers can still pay via QB if
-  // their email arrives. BillEmail is required by Intuit when
-  // AllowOnlineCreditCardPayment is true.
+  // Note on dropped fields:
+  //   DocNumber                  — only honoured when the QBO has "Custom
+  //                                transaction numbers" turned on under
+  //                                Account & Settings → Sales. Default is
+  //                                OFF, and sending DocNumber against a
+  //                                default-config QBO can trigger a 400.
+  //                                Our local invoice id lives in
+  //                                PrivateNote so the mapping is still
+  //                                recoverable when reconciling books.
+  //   AllowOnlineACHPayment      — US-only feature. Sending true to a
+  //                                Canadian QBO is rejected by validation.
+  //                                We only set CC payments which work in
+  //                                both regions.
   const invoicePayload = {
     Line: lines,
     CustomerRef: { value: customer.Id },
-    DocNumber: localInvoice.id,
     AllowOnlineCreditCardPayment: true,
-    AllowOnlineACHPayment: true,
     BillEmail: localInvoice.customerEmail
       ? { Address: localInvoice.customerEmail }
       : (customer.PrimaryEmailAddr || undefined),
