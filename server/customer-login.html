@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#0F1F14">
+  <title>Sign in to your PJL portal</title>
+  <link rel="icon" type="image/svg+xml" href="/crm/pjl-logo-mark.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/crm/portal.css">
+  <link rel="stylesheet" href="/crm/login.css">
+</head>
+<body>
+  <main class="login-shell">
+    <section class="login-panel">
+      <a href="/" class="login-logo"><img src="/crm/pjl-logo.svg" alt="PJL Land Services"></a>
+      <p class="login-eyebrow">Customer Portal Sign-in</p>
+      <h1>Find your PJL portal.</h1>
+      <p class="login-copy">Enter the email, phone number, or property address you used when you booked. We'll email you a one-time login link that's valid for 30 minutes.</p>
+
+      <form id="portalLoginForm" class="login-form">
+        <label>
+          <span>Email, phone, or property address</span>
+          <input type="text" name="identifier" required autofocus autocomplete="off">
+        </label>
+        <p id="portalLoginError" class="login-error" hidden></p>
+        <button type="submit">Email me a login link <span aria-hidden="true">&rarr;</span></button>
+      </form>
+
+      <div id="portalLoginConfirm" class="login-copy" hidden style="margin-top: 28px; padding:18px 20px; border-radius:14px; background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.18); color:#fff;">
+        <p style="margin:0 0 12px;"><strong>If we found you, a login link is on its way to your email.</strong></p>
+        <p style="margin:0 0 8px;">Please check your inbox (and spam folder). The link is valid for 30 minutes.</p>
+        <p style="margin:0;">If you don't receive an email within a few minutes, please call us at <a href="tel:+19059600181" style="color:#F59B4A;">(905) 960-0181</a>.</p>
+      </div>
+    </section>
+  </main>
+
+  <script src="/crm/customer-login.js"></script>
+</body>
+</html>

@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#0F1F14">
+  <title>PJL CRM — Users</title>
+  <link rel="icon" type="image/svg+xml" href="/crm/pjl-logo-mark.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/crm/crm.css">
+</head>
+<body class="pjl-crm-body">
+  <aside class="pjl-admin-nav" id="navMenu" aria-label="PJL CRM Navigation">
+    <header class="pjl-side-brand">
+      <a href="/" class="pjl-side-logo"><img src="/crm/pjl-logo.svg" alt="PJL Land Services"></a>
+    </header>
+    <div class="pjl-nav-links">
+      <a href="/admin/today">Today</a>
+      <a href="/admin">CRM</a>
+      <a href="/admin/schedule">Schedule</a>
+      <a href="/admin/handoff">Handoff</a>
+      <a href="/admin/properties">Properties</a>
+      <a href="/admin/projects">Projects</a>
+      <a href="/admin/work-orders">Work orders</a>
+      <a href="/admin/quote-folder">Quotes</a>
+      <a href="/admin/invoices">Invoices</a>
+      <a href="/admin/material-lists">Materials</a>
+      <a href="/admin/chats">AI Chats</a>
+      <a href="/admin/users" class="is-active">Users</a>
+      <a href="/admin/settings">Settings</a>
+    </div>
+    <footer class="pjl-side-footer">
+      <a class="pjl-side-phone" href="tel:+19059600181">(905) 960-0181</a>
+      <button class="pjl-nav-logout" type="button" id="logoutButton">Log out</button>
+    </footer>
+  </aside>
+
+  <div class="pjl-app">
+    <header class="pjl-app-topbar">
+      <button class="pjl-nav-toggle" type="button" id="navToggle" aria-label="Menu" aria-expanded="false" aria-controls="navMenu">
+        <span class="pjl-nav-toggle-bar"></span>
+        <span class="pjl-nav-toggle-bar"></span>
+        <span class="pjl-nav-toggle-bar"></span>
+      </button>
+      <span class="pjl-app-title">Users</span>
+      <a class="pjl-app-phone" href="tel:+19059600181">(905) 960-0181</a>
+    </header>
+
+    <main class="pjl-crm-shell">
+      <header class="pjl-crm-hero">
+        <div>
+          <p class="pjl-page-eyebrow">Per-user accounts</p>
+          <h1>Admin and tech logins.</h1>
+          <p>Add an account so a technician can sign in with their own email and password — no shared credentials. Disable, reset, or delete any account from the table below.</p>
+          <div class="pjl-hero-actions">
+            <button class="pjl-btn pjl-btn-primary" type="button" id="addUserButton">+ Add user</button>
+          </div>
+        </div>
+      </header>
+
+      <section style="margin-top: 24px;">
+        <div id="usersStatus" role="status" style="margin: 8px 0; min-height: 20px;"></div>
+        <table id="usersTable" style="width:100%; border-collapse:collapse; background:#fff; border:1px solid var(--pjl-border, #E2E0D4); border-radius:12px; overflow:hidden;">
+          <thead>
+            <tr style="background:#F5F4EE; text-align:left;">
+              <th style="padding:12px;">ID</th>
+              <th style="padding:12px;">Name</th>
+              <th style="padding:12px;">Email</th>
+              <th style="padding:12px;">Role</th>
+              <th style="padding:12px;">Last login</th>
+              <th style="padding:12px;">Status</th>
+              <th style="padding:12px; text-align:right;">Actions</th>
+            </tr>
+          </thead>
+          <tbody id="usersBody">
+            <tr><td colspan="7" style="padding:24px; text-align:center;">Loading…</td></tr>
+          </tbody>
+        </table>
+      </section>
+    </main>
+  </div>
+
+  <!-- Add-user modal -->
+  <div id="userModal" hidden style="position:fixed; inset:0; background:rgba(15,31,20,0.55); display:grid; place-items:center; z-index:50;">
+    <div style="background:#fff; padding:28px; border-radius:16px; max-width:480px; width:90%; box-shadow:0 24px 80px rgba(0,0,0,0.36);">
+      <h2 id="userModalTitle" style="margin:0 0 16px; font-family:'Barlow Condensed', sans-serif; text-transform:uppercase;">Add user</h2>
+      <form id="userForm" style="display:grid; gap:14px;">
+        <input type="hidden" name="userId" value="">
+        <label style="display:grid; gap:6px;"><span>Email</span><input type="email" name="email" required autocomplete="off"></label>
+        <label style="display:grid; gap:6px;"><span>Full name</span><input type="text" name="name" required></label>
+        <label style="display:grid; gap:6px;">
+          <span>Role</span>
+          <select name="role" required>
+            <option value="admin">Admin</option>
+            <option value="tech">Tech</option>
+          </select>
+        </label>
+        <label id="passwordField" style="display:grid; gap:6px;"><span>Initial password (min 10)</span><input type="text" name="password" minlength="10" autocomplete="new-password"></label>
+        <p id="userFormError" hidden style="margin:0; padding:10px 12px; background:#FFE7E2; border:1px solid #F5BFB6; border-radius:8px; color:#8A1F0F;"></p>
+        <div style="display:flex; gap:10px; justify-content:flex-end;">
+          <button type="button" id="userCancelButton" class="pjl-btn pjl-btn-outline">Cancel</button>
+          <button type="submit" class="pjl-btn pjl-btn-primary">Save</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script src="/crm/crm-nav.js"></script>
+  <script src="/crm/users.js"></script>
+</body>
+</html>

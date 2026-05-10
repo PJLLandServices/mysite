@@ -57,6 +57,10 @@ const materialLists = require("./lib/material-lists");
 const projects = require("./lib/projects");
 const partSuppliers = require("./lib/part-suppliers");
 const purchaseOrders = require("./lib/purchase-orders");
+const users = require("./lib/users");
+const magicTokens = require("./lib/magic-tokens");
+const rateLimit = require("./lib/rate-limit");
+const { sendCustomerLoginLink, sendAdminPasswordResetLink } = require("./lib/notify-customer");
 
 // Short, customer-friendly work order ID. Eight chars from a UUIDv4 base32-ish
 // alphabet (no I/O/0/1 to keep them unambiguous when read aloud or hand-written).
@@ -103,7 +107,21 @@ const CONTACT_NOTE = "PJL_New2026";
 const CONTACT_COUNTRY = "Canada";
 const CONTACT_PROVINCE = "ON";
 const AUTH_COOKIE = "pjl_crm_session";
-const SESSION_MAX_AGE_SECONDS = 60 * 60 * 12;
+// 30-day rolling session for both admin/tech and customer-portal logins.
+// Tech-mode offline support assumes the cookie outlives a typical
+// reconnect window (rule: "tech offline for >30 days must re-login on
+// reconnect"). Magic-link tokens are SEPARATE and short-lived (30 min,
+// see lib/magic-tokens.js).
+const SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 30;
+// Login attempts per IP per 15 minutes. Same window as the magic-link
+// per-IP cap; matches the "10 IP/15min" rule in the brief.
+const LOGIN_RATE_LIMIT = 10;
+const LOGIN_RATE_WINDOW_MS = 15 * 60 * 1000;
+const PORTAL_LINK_LIMIT_IDENT = 3;
+const PORTAL_LINK_LIMIT_IP = 10;
+const PORTAL_LINK_WINDOW_MS = 60 * 60 * 1000; // 1 hour
+const PASSWORD_RESET_LIMIT = 3;
+const PASSWORD_RESET_WINDOW_MS = 60 * 60 * 1000;
 
 // PJL service catalog — drives the lead-intake forms and CRM line-item display.
 // Pricing source: master_pricing.md (locked 2026-04-28). Update there first, then mirror here.
@@ -258,48 +276,116 @@ function parseCookies(req) {
   );
 }
 
+// auth.json is now the SESSION-SECRET store ONLY. The legacy single-
+// password fields (salt, passwordHash) were stripped during the
+// users.json migration; if an old install still has them we ignore them
+// here. Per-user credentials live in users.json — see lib/users.js.
 async function readAuthConfig() {
   await ensureStore();
-  const raw = await fs.readFile(AUTH_FILE, "utf8");
-  return JSON.parse(raw);
+  let parsed = {};
+  try {
+    const raw = await fs.readFile(AUTH_FILE, "utf8");
+    parsed = JSON.parse(raw || "{}");
+  } catch { parsed = {}; }
+  if (!parsed.sessionSecret) {
+    // First-run safety net — generate a session secret if the file is
+    // missing one. Without this, a fresh install can't sign cookies
+    // until create-user runs. Persist so subsequent boots stay stable.
+    parsed.sessionSecret = crypto.randomBytes(32).toString("base64");
+    try { await fs.writeFile(AUTH_FILE, JSON.stringify({ sessionSecret: parsed.sessionSecret }, null, 2) + "\n", "utf8"); }
+    catch { /* read-only filesystem in tests, etc. — fall through */ }
+  }
+  return parsed;
 }
 
 function secureCookieFlag(req) {
   return req.headers["x-forwarded-proto"] === "https" ? "; Secure" : "";
 }
 
-function signSession(expiresAt, secret) {
-  return crypto.createHmac("sha256", secret).update(String(expiresAt)).digest("base64url");
+// Cookie payload — JSON-encoded {uid, role, exp} signed with HMAC-SHA256
+// over the URL-safe base64 of the JSON. Tampering with any field changes
+// the digest, so verifySession() rejects mismatches in constant time.
+function encodePayload(payload) {
+  return Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
+}
+function decodePayload(b64) {
+  try { return JSON.parse(Buffer.from(String(b64 || ""), "base64url").toString("utf8")); }
+  catch { return null; }
+}
+function signPayload(encodedPayload, secret) {
+  return crypto.createHmac("sha256", secret).update(encodedPayload).digest("base64url");
 }
 
-async function isAuthenticated(req) {
+// Read + verify the session cookie. Returns { uid, role, exp } on success
+// or null on any failure (missing / malformed / bad signature / expired).
+async function readSession(req) {
   try {
     const config = await readAuthConfig();
-    const token = parseCookies(req)[AUTH_COOKIE];
-    if (!token) return false;
-    const [expiresAt, signature] = token.split(".");
-    if (!expiresAt || !signature || Number(expiresAt) < Date.now()) return false;
-    const expected = signSession(expiresAt, config.sessionSecret);
-    const actualBuffer = Buffer.from(signature);
-    const expectedBuffer = Buffer.from(expected);
-    return actualBuffer.length === expectedBuffer.length && crypto.timingSafeEqual(actualBuffer, expectedBuffer);
+    const raw = parseCookies(req)[AUTH_COOKIE];
+    if (!raw) return null;
+    const [encoded, signature] = raw.split(".");
+    if (!encoded || !signature) return null;
+    const expected = signPayload(encoded, config.sessionSecret);
+    const aBuf = Buffer.from(signature);
+    const eBuf = Buffer.from(expected);
+    if (aBuf.length !== eBuf.length || !crypto.timingSafeEqual(aBuf, eBuf)) return null;
+    const payload = decodePayload(encoded);
+    if (!payload || typeof payload !== "object") return null;
+    if (!payload.uid || !payload.role || !payload.exp) return null;
+    if (Number(payload.exp) < Date.now()) return null;
+    return payload;
   } catch {
-    return false;
+    return null;
   }
 }
 
-async function verifyPassword(password) {
-  const config = await readAuthConfig();
-  const incoming = crypto.scryptSync(String(password || ""), config.salt, 64);
-  const stored = Buffer.from(config.passwordHash, "base64");
-  return incoming.length === stored.length && crypto.timingSafeEqual(incoming, stored);
+// Identity gates. Return the resolved session payload on success or null
+// on failure. Callers translate null → 401/403/redirect at the boundary.
+async function requireUser(req) {
+  const session = await readSession(req);
+  if (!session) return null;
+  if (session.role !== "admin" && session.role !== "tech") return null;
+  // Disabled accounts can present a valid cookie until it expires; we
+  // re-check the user store on every gate so revocation takes effect on
+  // the next request rather than waiting 30 days.
+  if (session.uid && (session.role === "admin" || session.role === "tech")) {
+    const user = await users.get(session.uid);
+    if (!user || user.disabled) return null;
+  }
+  return session;
 }
 
-async function setSessionCookie(req, res) {
+async function requireAdmin(req) {
+  const session = await readSession(req);
+  if (!session || session.role !== "admin") return null;
+  const user = await users.get(session.uid);
+  if (!user || user.disabled) return null;
+  return session;
+}
+
+async function requireCustomer(req) {
+  const session = await readSession(req);
+  if (!session) return null;
+  if (session.role !== "customer") return null;
+  if (typeof session.uid !== "string" || !session.uid.startsWith("customer:")) return null;
+  return session;
+}
+
+// Keep the historical name around — used inside this file by the few
+// places that just want to know "is anyone logged in" (e.g. the booking
+// API key fallback). The new code paths use the explicit gates above.
+async function isAuthenticated(req) {
+  return Boolean(await requireUser(req));
+}
+
+async function setSessionCookie(req, res, { uid, role, ttlMs } = {}) {
+  if (!uid || !role) throw new Error("setSessionCookie requires uid + role");
   const config = await readAuthConfig();
-  const expiresAt = Date.now() + SESSION_MAX_AGE_SECONDS * 1000;
-  const signature = signSession(expiresAt, config.sessionSecret);
-  const cookie = `${AUTH_COOKIE}=${encodeURIComponent(`${expiresAt}.${signature}`)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${SESSION_MAX_AGE_SECONDS}${secureCookieFlag(req)}`;
+  const exp = Date.now() + (Number(ttlMs) || SESSION_MAX_AGE_SECONDS * 1000);
+  const encoded = encodePayload({ uid, role, exp });
+  const signature = signPayload(encoded, config.sessionSecret);
+  const maxAge = Math.floor((exp - Date.now()) / 1000);
+  const cookie = `${AUTH_COOKIE}=${encodeURIComponent(`${encoded}.${signature}`)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${secureCookieFlag(req)}`;
   res.setHeader("set-cookie", cookie);
 }
 
@@ -307,88 +393,134 @@ function clearSessionCookie(req, res) {
   res.setHeader("set-cookie", `${AUTH_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${secureCookieFlag(req)}`);
 }
 
-// Which URLs require the admin password.
-// The PUBLIC site (everything under SITE_DIR) is never gated — those are the customer-facing pages.
-// The login page, customer portal, and /crm/ static assets (CSS, JS, logos) are also public —
-// they contain no lead data and the login page itself needs them to render.
-// What IS gated: the /admin dashboard page and any API that exposes lead data.
+// Best-effort caller IP — used for magic-token audit + rate-limit keys.
+// Honors X-Forwarded-For when present (Render terminates TLS upstream)
+// and falls back to the socket address. Trims to the first token so a
+// chain of proxies doesn't get logged verbatim.
+function callerIp(req) {
+  const fwd = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim();
+  return fwd || req.socket?.remoteAddress || "";
+}
+
+// Which URLs require which level of authentication. Returns:
+//   "admin"   — admin-only (e.g. /admin/users)
+//   "user"    — admin OR tech (most CRM pages and APIs)
+//   null      — public
+//
+// The PUBLIC site (everything under SITE_DIR) is never gated — those are
+// the customer-facing pages. The login page, customer portal, and /crm/
+// static assets (CSS, JS, logos) are also public; the login page needs
+// them to render. /admin/users is admin-only because it controls who can
+// log in — techs cannot manage other accounts.
 function needsAuth(method, pathname) {
-  if (pathname === "/admin" || pathname === "/admin/") return true;
-  if (pathname === "/admin/today" || pathname === "/admin/today/") return true;
-  if (pathname === "/admin/schedule" || pathname === "/admin/schedule/") return true;
-  if (pathname === "/admin/handoff" || pathname === "/admin/handoff/") return true;
-  if (pathname === "/admin/chats" || pathname === "/admin/chats/") return true;
-  if (pathname === "/admin/properties" || pathname === "/admin/properties/") return true;
-  if (pathname === "/admin/properties/import" || pathname === "/admin/properties/import/") return true;
-  if (/^\/admin\/property\/[^/]+/.test(pathname)) return true;
-  if (pathname === "/admin/work-orders" || pathname === "/admin/work-orders/") return true;
-  if (/^\/admin\/work-order\/[^/]+\/tech\/?$/.test(pathname)) return true;
-  if (/^\/admin\/work-order\/[^/]+/.test(pathname)) return true;
-  if (pathname === "/admin/invoices" || pathname === "/admin/invoices/") return true;
-  if (pathname === "/admin/quote-folder" || pathname === "/admin/quote-folder/") return true;
-  if (pathname === "/api/admin/quote-folder") return true;
-  if (/^\/admin\/invoice\/[^/]+\/?$/.test(pathname)) return true;
-  if (pathname === "/admin/settings" || pathname === "/admin/settings/") return true;
+  // Admin-only surfaces
+  if (pathname === "/admin/users" || pathname === "/admin/users/") return "admin";
+  if (pathname === "/api/users" || pathname.startsWith("/api/users/")) return "admin";
+  // CRM pages — admin OR tech.
+  if (pathname === "/admin" || pathname === "/admin/") return "user";
+  if (pathname === "/admin/today" || pathname === "/admin/today/") return "user";
+  if (pathname === "/admin/schedule" || pathname === "/admin/schedule/") return "user";
+  if (pathname === "/admin/handoff" || pathname === "/admin/handoff/") return "user";
+  if (pathname === "/admin/chats" || pathname === "/admin/chats/") return "user";
+  if (pathname === "/admin/properties" || pathname === "/admin/properties/") return "user";
+  if (pathname === "/admin/properties/import" || pathname === "/admin/properties/import/") return "user";
+  if (/^\/admin\/property\/[^/]+/.test(pathname)) return "user";
+  if (pathname === "/admin/work-orders" || pathname === "/admin/work-orders/") return "user";
+  if (/^\/admin\/work-order\/[^/]+\/tech\/?$/.test(pathname)) return "user";
+  if (/^\/admin\/work-order\/[^/]+/.test(pathname)) return "user";
+  if (pathname === "/admin/invoices" || pathname === "/admin/invoices/") return "user";
+  if (pathname === "/admin/quote-folder" || pathname === "/admin/quote-folder/") return "user";
+  if (pathname === "/api/admin/quote-folder") return "user";
+  if (/^\/admin\/invoice\/[^/]+\/?$/.test(pathname)) return "user";
+  if (pathname === "/admin/settings" || pathname === "/admin/settings/") return "user";
   // Materials management (Phase 1 of the BoM/PO system).
-  if (pathname === "/admin/suppliers" || pathname === "/admin/suppliers/") return true;
-  if (pathname === "/admin/material-lists" || pathname === "/admin/material-lists/") return true;
-  if (/^\/admin\/material-list\/[^/]+\/?$/.test(pathname)) return true;
+  if (pathname === "/admin/suppliers" || pathname === "/admin/suppliers/") return "user";
+  if (pathname === "/admin/material-lists" || pathname === "/admin/material-lists/") return "user";
+  if (/^\/admin\/material-list\/[^/]+\/?$/.test(pathname)) return "user";
   // Projects (Phase 2 — multi-WO container that material lists attach to).
-  if (pathname === "/admin/projects" || pathname === "/admin/projects/") return true;
-  if (/^\/admin\/project\/[^/]+\/?$/.test(pathname)) return true;
+  if (pathname === "/admin/projects" || pathname === "/admin/projects/") return "user";
+  if (/^\/admin\/project\/[^/]+\/?$/.test(pathname)) return "user";
   // Catalog ↔ supplier assignments + Purchase Orders (Phase 3).
-  if (pathname === "/admin/parts-suppliers" || pathname === "/admin/parts-suppliers/") return true;
-  if (pathname === "/admin/purchase-orders" || pathname === "/admin/purchase-orders/") return true;
-  if (/^\/admin\/purchase-order\/[^/]+\/?$/.test(pathname)) return true;
-  if (pathname === "/api/quotes" && method === "GET") return true;
-  if (pathname === "/api/quotes.csv" || pathname === "/api/contacts" || pathname === "/api/contacts.vcf") return true;
-  if (/^\/api\/quotes\/[^/]+/.test(pathname)) return true;
+  if (pathname === "/admin/parts-suppliers" || pathname === "/admin/parts-suppliers/") return "user";
+  if (pathname === "/admin/purchase-orders" || pathname === "/admin/purchase-orders/") return "user";
+  if (/^\/admin\/purchase-order\/[^/]+\/?$/.test(pathname)) return "user";
+  if (pathname === "/api/quotes" && method === "GET") return "user";
+  if (pathname === "/api/quotes.csv" || pathname === "/api/contacts" || pathname === "/api/contacts.vcf") return "user";
+  if (/^\/api\/quotes\/[^/]+/.test(pathname)) return "user";
   // Chat transcripts: POST is public (customer's chat upserts its own transcript).
   // GET endpoints (list + detail) are admin-only.
-  if (pathname === "/api/chat-transcripts" && method === "GET") return true;
-  if (/^\/api\/chat-transcripts\/[^/]+$/.test(pathname) && method === "GET") return true;
+  if (pathname === "/api/chat-transcripts" && method === "GET") return "user";
+  if (/^\/api\/chat-transcripts\/[^/]+$/.test(pathname) && method === "GET") return "user";
   // Schedule management is admin-only.
-  if (pathname.startsWith("/api/schedule/")) return true;
+  if (pathname.startsWith("/api/schedule/")) return "user";
   // Manual handoff (admin sends booking link to customer) is admin-only.
-  if (pathname === "/api/admin/send-booking-link") return true;
-  if (pathname === "/api/admin/features") return true;
+  if (pathname === "/api/admin/send-booking-link") return "user";
+  if (pathname === "/api/admin/features") return "user";
   // Properties (customer system profiles) are admin-only.
-  if (pathname.startsWith("/api/properties")) return true;
+  if (pathname.startsWith("/api/properties")) return "user";
   // Work orders (tech-side per-visit records) are admin-only for now.
   // Phase 4 will add a customer-portal "approve quote" subset that's
   // public via a token, but that doesn't exist yet.
-  if (pathname.startsWith("/api/work-orders")) return true;
-  if (pathname.startsWith("/api/invoices")) return true;
-  if (pathname.startsWith("/api/settings")) return true;
-  if (pathname === "/api/parts") return true;
-  if (pathname.startsWith("/api/admin/quickbooks")) return true;
-  if (pathname.startsWith("/api/bookings")) return true;
-  if (pathname.startsWith("/api/suppliers")) return true;
-  if (pathname.startsWith("/api/material-lists")) return true;
-  if (pathname.startsWith("/api/projects")) return true;
-  if (pathname.startsWith("/api/part-suppliers")) return true;
-  if (pathname.startsWith("/api/purchase-orders")) return true;
+  if (pathname.startsWith("/api/work-orders")) return "user";
+  if (pathname.startsWith("/api/invoices")) return "user";
+  if (pathname.startsWith("/api/settings")) return "user";
+  if (pathname === "/api/parts") return "user";
+  if (pathname.startsWith("/api/admin/quickbooks")) return "user";
+  if (pathname.startsWith("/api/bookings")) return "user";
+  if (pathname.startsWith("/api/suppliers")) return "user";
+  if (pathname.startsWith("/api/material-lists")) return "user";
+  if (pathname.startsWith("/api/projects")) return "user";
+  if (pathname.startsWith("/api/part-suppliers")) return "user";
+  if (pathname.startsWith("/api/purchase-orders")) return "user";
   // Per-lead property link/dismiss/attach + tech actions are admin-only.
-  if (/^\/api\/leads\/[^/]+\/(link-property|dismiss-property-suggestion|attach-property|notify-on-route|open-wo)$/.test(pathname)) return true;
+  if (/^\/api\/leads\/[^/]+\/(link-property|dismiss-property-suggestion|attach-property|notify-on-route|open-wo)$/.test(pathname)) return "user";
   // Bulk property import is admin-only.
-  if (pathname === "/api/admin/import-properties") return true;
+  if (pathname === "/api/admin/import-properties") return "user";
   // Availability lookups + the public booking endpoint stay public.
-  return false;
+  return null;
 }
 
 async function handleAuth(req, res, pathname) {
   if (req.method === "GET" && pathname === "/api/session") {
-    return sendJson(res, 200, { ok: true, authenticated: await isAuthenticated(req) });
+    const session = await readSession(req);
+    if (!session) {
+      return sendJson(res, 200, { ok: true, authenticated: false });
+    }
+    let me = null;
+    if (session.role === "admin" || session.role === "tech") {
+      const u = await users.get(session.uid);
+      if (!u || u.disabled) {
+        return sendJson(res, 200, { ok: true, authenticated: false });
+      }
+      me = { id: u.id, email: u.email, name: u.name, role: u.role };
+    } else if (session.role === "customer") {
+      me = { id: session.uid, role: "customer" };
+    }
+    return sendJson(res, 200, { ok: true, authenticated: true, role: session.role, user: me });
   }
 
   if (req.method === "POST" && pathname === "/api/login") {
     try {
-      const payload = await parseRequestBody(req);
-      if (!(await verifyPassword(payload.password))) {
-        return sendJson(res, 401, { ok: false, errors: ["Incorrect password."] });
+      const ip = callerIp(req);
+      const ipKey = `login:ip:${ip}`;
+      if (!rateLimit.check(ipKey, LOGIN_RATE_LIMIT, LOGIN_RATE_WINDOW_MS)) {
+        return sendJson(res, 429, { ok: false, errors: ["Too many sign-in attempts. Try again in a few minutes."] });
       }
-      await setSessionCookie(req, res);
-      return sendJson(res, 200, { ok: true });
+      rateLimit.record(ipKey);
+      const payload = await parseRequestBody(req);
+      const email = String(payload?.email || "").trim().toLowerCase();
+      const password = String(payload?.password || "");
+      const user = await users.verifyPassword(email, password);
+      if (!user || user.disabled) {
+        // Identical message + status for "wrong email," "wrong password,"
+        // and "disabled account." Don't leak which branch failed.
+        return sendJson(res, 401, { ok: false, errors: ["Invalid credentials."] });
+      }
+      await setSessionCookie(req, res, { uid: user.id, role: user.role });
+      users.recordLogin(user.id).catch((err) => {
+        console.warn("[auth] recordLogin failed:", err?.message);
+      });
+      return sendJson(res, 200, { ok: true, role: user.role });
     } catch {
       return sendJson(res, 400, { ok: false, errors: ["Unable to log in."] });
     }
@@ -801,12 +933,12 @@ const PUBLIC_API_PATHS = new Set([
 function isPublicApiPath(pathname) {
   if (PUBLIC_API_PATHS.has(pathname)) return true;
   // Photo fetches by portal token are also public (token is the auth).
-  if (/^\/api\/portal\/[^/]+\/photo\/\d+$/.test(pathname)) return true;
+  if (/^\/api\/portal\/[^/]+\/photo\/\d+$/.test(pathname)) return "user";
   // Booking session lookup by token — needed so book.html can prefill the
   // form when a customer arrives via /book.html?session=… from a handoff
   // SMS/email. The session token is the auth, same model as portal photos.
   // Without this, cross-origin GETs from public-domain book.html get blocked.
-  if (/^\/api\/booking\/session\/[^/]+$/.test(pathname)) return true;
+  if (/^\/api\/booking\/session\/[^/]+$/.test(pathname)) return "user";
   return false;
 }
 
@@ -1536,7 +1668,362 @@ async function rescheduleBooking({ bookingId, slotStart, actor = "admin", actorN
   return { ok: true, booking: updatedBooking, slot: matched };
 }
 
+// ===================== Identity & access endpoints =====================
+//
+// Three flows live here:
+//   1. /api/users         — admin-only user management (CRUD + password reset)
+//   2. /api/reset-password — admin/tech password reset by magic-token
+//   3. /api/portal/...    — customer magic-link login (request + verify)
+//
+// All three share the lib/magic-tokens.js + lib/rate-limit.js plumbing.
+// The route gate (needsAuth above) already gated /api/users behind admin.
+async function handleIdentityApi(req, res, pathname) {
+  // ---- Admin user management -------------------------------------------
+  if (req.method === "GET" && pathname === "/api/users") {
+    const list = await users.list({ includeDisabled: true });
+    return sendJson(res, 200, { ok: true, users: list });
+  }
+
+  if (req.method === "POST" && pathname === "/api/users") {
+    try {
+      const payload = await parseRequestBody(req);
+      const created = await users.create({
+        email: payload?.email,
+        name: payload?.name,
+        role: payload?.role,
+        password: payload?.password
+      });
+      return sendJson(res, 201, { ok: true, user: created });
+    } catch (err) {
+      return sendJson(res, 422, { ok: false, errors: [err.message || "Couldn't create user."] });
+    }
+  }
+
+  const userIdMatch = pathname.match(/^\/api\/users\/([^/]+)$/);
+  if (userIdMatch && req.method === "PATCH") {
+    try {
+      const id = decodeURIComponent(userIdMatch[1]);
+      const session = await readSession(req);
+      const target = await users.get(id);
+      if (!target) return sendJson(res, 404, { ok: false, errors: ["User not found."] });
+      const payload = await parseRequestBody(req);
+
+      // Self-disable / self-demote protection.
+      if (session?.uid === id) {
+        if (payload && Object.prototype.hasOwnProperty.call(payload, "disabled") && payload.disabled === true) {
+          return sendJson(res, 409, { ok: false, errors: ["You can't disable your own account."] });
+        }
+        if (payload && Object.prototype.hasOwnProperty.call(payload, "role") && payload.role !== target.role) {
+          return sendJson(res, 409, { ok: false, errors: ["You can't change your own role."] });
+        }
+      }
+
+      // Last-admin protection: the FINAL active admin can't be demoted or
+      // disabled. Counts active admins and refuses if removing this one
+      // would drop the count to zero.
+      const willDemote = Object.prototype.hasOwnProperty.call(payload || {}, "role")
+        && payload.role !== "admin"
+        && target.role === "admin";
+      const willDisable = Object.prototype.hasOwnProperty.call(payload || {}, "disabled")
+        && payload.disabled === true
+        && !target.disabled;
+      if ((willDemote || willDisable) && target.role === "admin" && !target.disabled) {
+        const activeAdmins = await users.activeAdminCount();
+        if (activeAdmins <= 1) {
+          return sendJson(res, 409, { ok: false, errors: ["At least one admin must remain active."] });
+        }
+      }
+
+      const updated = await users.update(id, payload);
+      return sendJson(res, 200, { ok: true, user: updated });
+    } catch (err) {
+      return sendJson(res, 422, { ok: false, errors: [err.message || "Couldn't update user."] });
+    }
+  }
+
+  if (userIdMatch && req.method === "DELETE") {
+    try {
+      const id = decodeURIComponent(userIdMatch[1]);
+      const session = await readSession(req);
+      const target = await users.get(id);
+      if (!target) return sendJson(res, 404, { ok: false, errors: ["User not found."] });
+      if (session?.uid === id) {
+        return sendJson(res, 409, { ok: false, errors: ["You can't delete your own account."] });
+      }
+      if (target.role === "admin" && !target.disabled) {
+        const activeAdmins = await users.activeAdminCount();
+        if (activeAdmins <= 1) {
+          return sendJson(res, 409, { ok: false, errors: ["At least one admin must remain active."] });
+        }
+      }
+      await users.remove(id);
+      return sendJson(res, 200, { ok: true });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't delete user."] });
+    }
+  }
+
+  // Admin issues a password-reset link to a user (themselves or another).
+  // Per-user rate limited so a malicious admin can't email-bomb a tech.
+  const userResetMatch = pathname.match(/^\/api\/users\/([^/]+)\/reset-password$/);
+  if (userResetMatch && req.method === "POST") {
+    try {
+      const id = decodeURIComponent(userResetMatch[1]);
+      const target = await users.get(id);
+      if (!target) return sendJson(res, 404, { ok: false, errors: ["User not found."] });
+      const rateKey = `pwreset:user:${id}`;
+      if (!rateLimit.check(rateKey, PASSWORD_RESET_LIMIT, PASSWORD_RESET_WINDOW_MS)) {
+        return sendJson(res, 429, { ok: false, errors: ["Too many reset requests for this user. Try again later."] });
+      }
+      rateLimit.record(rateKey);
+      const token = await magicTokens.issue("admin_password_reset", id, { requestIp: callerIp(req) });
+      const baseUrl = process.env.PUBLIC_BASE_URL || baseUrlFromReq(req);
+      const link = joinUrl(baseUrl, "/reset-password", { t: token.id });
+      // Send the email. Best-effort — if Gmail isn't configured, surface
+      // the link so the admin can hand it off out-of-band. (No magic
+      // tokens are EVER logged or returned in production-config errors.)
+      let emailSent = false;
+      try {
+        const result = await sendAdminPasswordResetLink(target, link);
+        emailSent = Boolean(result && result.ok);
+      } catch (err) {
+        console.warn("[auth] reset-password email failed:", err?.message);
+      }
+      return sendJson(res, 200, { ok: true, emailSent });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't issue reset link."] });
+    }
+  }
+
+  return false;
+}
+
+// Public reset-password endpoints (no auth — token IS the auth).
+async function handleResetPasswordApi(req, res, pathname) {
+  if (req.method === "GET" && pathname === "/api/reset-password/verify") {
+    try {
+      const url = new URL(req.url, baseUrlFromReq(req));
+      const t = url.searchParams.get("t") || "";
+      const result = await magicTokens.verify(t, "admin_password_reset");
+      if (!result.ok) {
+        return sendJson(res, 200, { ok: true, valid: false, reason: result.reason });
+      }
+      const user = await users.get(result.record.subjectId);
+      if (!user || user.disabled) {
+        return sendJson(res, 200, { ok: true, valid: false, reason: "user-unavailable" });
+      }
+      return sendJson(res, 200, { ok: true, valid: true, email: user.email, name: user.name });
+    } catch {
+      return sendJson(res, 200, { ok: true, valid: false, reason: "error" });
+    }
+  }
+
+  if (req.method === "POST" && pathname === "/api/reset-password") {
+    try {
+      const payload = await parseRequestBody(req);
+      const token = String(payload?.token || "");
+      const newPassword = String(payload?.newPassword || "");
+      if (!token || !newPassword) {
+        return sendJson(res, 422, { ok: false, errors: ["Token and new password are required."] });
+      }
+      const result = await magicTokens.verify(token, "admin_password_reset");
+      if (!result.ok) {
+        return sendJson(res, 410, { ok: false, errors: ["This reset link is no longer valid. Ask for a new one."] });
+      }
+      // Mark the token used BEFORE updating the password so a concurrent
+      // re-click can't trigger a second update with the same link.
+      const claimed = await magicTokens.markUsed(token);
+      if (!claimed) {
+        return sendJson(res, 410, { ok: false, errors: ["This reset link is no longer valid."] });
+      }
+      try {
+        await users.setPassword(result.record.subjectId, newPassword);
+      } catch (err) {
+        return sendJson(res, 422, { ok: false, errors: [err.message || "Couldn't set new password."] });
+      }
+      // Don't auto-sign-in — the spec is explicit: "redirect to /login".
+      return sendJson(res, 200, { ok: true });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't reset password."] });
+    }
+  }
+
+  return false;
+}
+
+// ---------- Customer magic-link login ----------
+//
+// Identifier matching: we check leads.json for email and phone, then
+// properties.json for address. Address matches resolve to a lead via the
+// property's leadIds[]. Address matches require an email-on-file lead to
+// avoid emailing nobody. No identifier is ever leaked back through the
+// response — the response is a fixed-shape "if we found you" message.
+
+function digitsOnly(s) { return String(s || "").replace(/\D+/g, ""); }
+function normAddrKey(s) { return String(s || "").trim().toLowerCase().replace(/\s+/g, " "); }
+
+// Resolve a customer-supplied identifier to one or more lead records to
+// email. Returns an array (possibly empty) of unique leads. Lookup
+// priority: email → phone → address. All three are searched
+// independently — a single identifier won't match two ways since the
+// shape is mutually exclusive in practice (no address looks like an
+// email looks like a phone), but if it did we'd still return at most
+// one match per lead.
+async function resolveLoginIdentifier(identifierRaw) {
+  const identifier = String(identifierRaw || "").trim();
+  if (!identifier) return [];
+  const lower = identifier.toLowerCase();
+  const phoneDigits = digitsOnly(identifier);
+  const looksLikeEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(identifier);
+  const looksLikePhone = phoneDigits.length >= 7 && phoneDigits.length <= 15 && !looksLikeEmail;
+  const looksLikeAddress = !looksLikeEmail && !looksLikePhone;
+
+  const leads = await readLeads();
+  const matches = new Map();
+
+  if (looksLikeEmail) {
+    for (const lead of leads) {
+      const e = String(lead.contact?.email || "").trim().toLowerCase();
+      if (e && e === lower) matches.set(lead.id, lead);
+    }
+  } else if (looksLikePhone) {
+    for (const lead of leads) {
+      const p = digitsOnly(lead.contact?.phone);
+      if (p && p === phoneDigits) matches.set(lead.id, lead);
+    }
+  }
+
+  if (looksLikeAddress) {
+    const targetAddr = normAddrKey(identifier);
+    // Resolve via properties.json first (canonical address store);
+    // fall back to a substring scan over lead.contact.address for
+    // legacy leads that never linked to a property.
+    try {
+      const allProps = await properties.list();
+      for (const p of allProps) {
+        const candidate = normAddrKey(p.address);
+        if (!candidate) continue;
+        const isExact = candidate === targetAddr;
+        const isSubstring = candidate.includes(targetAddr) || targetAddr.includes(candidate);
+        if (!isExact && !isSubstring) continue;
+        for (const leadId of (p.leadIds || [])) {
+          const lead = leads.find((l) => l.id === leadId);
+          if (lead) matches.set(lead.id, lead);
+        }
+      }
+    } catch (err) {
+      console.warn("[portal-login] properties lookup failed:", err?.message);
+    }
+    // Fallback substring match against lead.contact.address.
+    for (const lead of leads) {
+      const a = normAddrKey(lead.contact?.address);
+      if (!a) continue;
+      if (a === targetAddr || a.includes(targetAddr) || targetAddr.includes(a)) {
+        matches.set(lead.id, lead);
+      }
+    }
+  }
+
+  // Address-based matches require an email on file (so we have somewhere
+  // to send the link). Email/phone matches by definition already have
+  // contact info, but apply the same gate uniformly.
+  return [...matches.values()].filter((lead) => Boolean(lead.contact?.email));
+}
+
+async function handlePortalLoginApi(req, res, pathname) {
+  if (req.method === "POST" && pathname === "/api/portal/request-link") {
+    // Generic 200 response — always returned, regardless of match
+    // outcome, identifier shape, or rate-limit state. Callers must NEVER
+    // be able to distinguish "matched and emailed" from "no match" or
+    // "rate-limited."
+    const genericOk = () => sendJson(res, 200, { ok: true });
+
+    let identifier = "";
+    try {
+      const payload = await parseRequestBody(req);
+      identifier = String(payload?.identifier || "").trim();
+    } catch {
+      // Body parse error — still return generic 200 to avoid timing leaks.
+      return genericOk();
+    }
+    if (!identifier) return genericOk();
+
+    const ip = callerIp(req);
+    const ipKey = `portal-link:ip:${ip}`;
+    const idKey = `portal-link:ident:${identifier.toLowerCase()}`;
+
+    // Rate-limit BEFORE the lookup to avoid timing-based identifier
+    // enumeration. Over the limit silently no-ops.
+    if (!rateLimit.check(ipKey, PORTAL_LINK_LIMIT_IP, PORTAL_LINK_WINDOW_MS)) return genericOk();
+    if (!rateLimit.check(idKey, PORTAL_LINK_LIMIT_IDENT, PORTAL_LINK_WINDOW_MS)) return genericOk();
+    rateLimit.record(ipKey);
+    rateLimit.record(idKey);
+
+    try {
+      const matches = await resolveLoginIdentifier(identifier);
+      const baseUrl = process.env.PUBLIC_BASE_URL || baseUrlFromReq(req);
+      // One token + one email per matched lead. Multiple matches
+      // (customer with two properties / two leads) get one each — no
+      // dedup, per the brief.
+      for (const lead of matches) {
+        try {
+          const token = await magicTokens.issue("customer_login", lead.id, { requestIp: ip });
+          const link = joinUrl(baseUrl, "/portal/login/verify", { t: token.id });
+          // Fire-and-forget. Failure is logged but never surfaced.
+          sendCustomerLoginLink(lead, link).catch((err) => {
+            console.warn("[portal-login] send failed:", err?.message);
+          });
+        } catch (err) {
+          console.warn("[portal-login] issue failed:", err?.message);
+        }
+      }
+    } catch (err) {
+      console.warn("[portal-login] resolve failed:", err?.message);
+    }
+    return genericOk();
+  }
+
+  if (req.method === "GET" && pathname === "/api/portal/login/verify") {
+    const url = new URL(req.url, baseUrlFromReq(req));
+    const t = url.searchParams.get("t") || "";
+    const result = await magicTokens.verify(t, "customer_login");
+    if (!result.ok) {
+      return redirect(res, "/portal/login?error=expired");
+    }
+    const claimed = await magicTokens.markUsed(t);
+    if (!claimed) {
+      return redirect(res, "/portal/login?error=expired");
+    }
+    const leadId = result.record.subjectId;
+    const leads = await readLeads();
+    const idx = leads.findIndex((l) => l.id === leadId);
+    if (idx === -1) {
+      return redirect(res, "/portal/login?error=expired");
+    }
+    // Stamp lastLoginAt on the lead. Keeps the portal-login audit trail
+    // colocated with the lead record (no separate customers store).
+    leads[idx] = { ...leads[idx], lastLoginAt: new Date().toISOString() };
+    try { await writeLeads(leads); } catch (err) { console.warn("[portal-login] writeLeads failed:", err?.message); }
+
+    const portalToken = leads[idx].portal?.token || portalTokenForId(leadId);
+    await setSessionCookie(req, res, { uid: `customer:${leadId}`, role: "customer" });
+    return redirect(res, `/portal/${portalToken}`);
+  }
+
+  return false;
+}
+
 async function handleApi(req, res, pathname) {
+  // Identity + access flows — admin user management, password reset,
+  // customer magic-link. Each helper returns false when it didn't handle
+  // the request so the rest of the API dispatcher can pick it up.
+  const identityHandled = await handleIdentityApi(req, res, pathname);
+  if (identityHandled !== false) return;
+  const resetHandled = await handleResetPasswordApi(req, res, pathname);
+  if (resetHandled !== false) return;
+  const portalLoginHandled = await handlePortalLoginApi(req, res, pathname);
+  if (portalLoginHandled !== false) return;
+
   if (req.method === "POST" && pathname === "/api/quotes") {
     try {
       // Allow a larger body here than the 1MB default so booking forms can
@@ -7538,6 +8025,20 @@ function resolveStaticTarget(pathname) {
   if (pathname === "/login" || pathname === "/login/") {
     return { dir: SERVER_DIR, relative: "/login.html" };
   }
+  // Per-user admin/tech account management — admin-only via needsAuth.
+  if (pathname === "/admin/users" || pathname === "/admin/users/") {
+    return { dir: SERVER_DIR, relative: "/users.html" };
+  }
+  // Customer portal magic-link login. Public page; the form POSTs to
+  // /api/portal/request-link which always returns the generic 200.
+  if (pathname === "/portal/login" || pathname === "/portal/login/") {
+    return { dir: SERVER_DIR, relative: "/customer-login.html" };
+  }
+  // Admin/tech password reset (via emailed magic link). Public page; the
+  // token in ?t=<id> is the credential, validated by /api/reset-password.
+  if (pathname === "/reset-password" || pathname === "/reset-password/") {
+    return { dir: SERVER_DIR, relative: "/reset-password.html" };
+  }
   if (pathname.startsWith("/portal/")) {
     return { dir: SERVER_DIR, relative: "/portal.html" };
   }
@@ -7627,11 +8128,33 @@ const server = http.createServer(async (req, res) => {
     const authHandled = await handleAuth(req, res, pathname);
     if (authHandled !== false) return;
 
-    if (needsAuth(req.method, pathname) && !(await isAuthenticated(req))) {
-      if (pathname.startsWith("/api/")) {
-        return sendJson(res, 401, { ok: false, errors: ["CRM login required."] });
+    const requiredLevel = needsAuth(req.method, pathname);
+    if (requiredLevel) {
+      const session = requiredLevel === "admin"
+        ? await requireAdmin(req)
+        : await requireUser(req);
+      if (!session) {
+        // 401 vs 403:
+        //   - "user" gate failed → not signed in (or session expired) → 401 / redirect to /login
+        //   - "admin" gate failed but user IS signed in → 403 (tech hitting an admin page)
+        if (requiredLevel === "admin") {
+          // Distinguish "no session at all" from "wrong role" so the
+          // techs see a helpful 403 instead of being bounced to /login.
+          const anyUser = await requireUser(req);
+          if (anyUser) {
+            if (pathname.startsWith("/api/")) {
+              return sendJson(res, 403, { ok: false, errors: ["Admin access is required for this action."] });
+            }
+            res.writeHead(403, { "content-type": "text/html; charset=utf-8" });
+            res.end("<h1>403 Forbidden</h1><p>Admin access is required for this page. <a href=\"/admin\">Back to CRM</a>.</p>");
+            return;
+          }
+        }
+        if (pathname.startsWith("/api/")) {
+          return sendJson(res, 401, { ok: false, errors: ["CRM login required."] });
+        }
+        return redirect(res, `/login?next=${encodeURIComponent(pathname)}`);
       }
-      return redirect(res, `/login?next=${encodeURIComponent(pathname)}`);
     }
 
     if (pathname.startsWith("/api/")) {

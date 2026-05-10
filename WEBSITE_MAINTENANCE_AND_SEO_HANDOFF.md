@@ -589,28 +589,36 @@ server/
 ├── admin.js               ← CRM dashboard JS — fetches leads, renders cards,
 │                            handles filters, saves edits via PATCH /api/quotes/:id.
 ├── crm.css                ← CRM-only styling.
-├── login.html / .js / .css ← The /login page Patrick uses to access /admin.
+├── login.html / .js / .css ← The /login page (admin/tech email + password).
+├── users.html / .js       ← Admin-only /admin/users page (account CRUD).
+├── customer-login.html / .js
+│                          ← Customer self-serve /portal/login magic-link request.
+├── reset-password.html / .js
+│                          ← Admin/tech password-reset landing page (magic-token-gated).
 ├── portal.html / .js      ← Customer-facing /portal/<token> page.
 ├── portal.css
-├── setup-password.js      ← One-shot script to set or rotate the admin password.
-│                            See §15.6.
 ├── lib/
 │   ├── notify-email.js    ← Sends "new lead" email via Gmail SMTP. Degrades
 │   │                        gracefully if env vars not set (logs only).
-│   └── notify-sms.js      ← Sends "new lead" SMS via Twilio HTTP API. Same
-│                            graceful degradation.
+│   ├── notify-sms.js      ← Sends "new lead" SMS via Twilio HTTP API. Same
+│   │                        graceful degradation.
+│   ├── notify-customer.js ← Customer lifecycle emails + sendCustomerLoginLink + sendAdminPasswordResetLink.
+│   ├── users.js           ← USR-NNN account store (scrypt+salt per user).
+│   ├── magic-tokens.js    ← Short-lived single-use tokens for login + reset.
+│   └── rate-limit.js      ← In-memory sliding-window rate limiter.
 ├── data/                  ← RUNTIME DATA. NEVER commit this folder.
-│   ├── leads.json         ← All customer leads. Hand-edit at your own risk —
-│   │                        the CRM is the supported way to modify.
-│   └── auth.json          ← Hashed admin password + session secret. Created
-│                            by setup-password.js. If lost, re-run that script
-│                            to set a new one.
+│   ├── leads.json         ← All customer leads. Customers ARE leads in this system.
+│   ├── users.json         ← Admin/tech accounts (USR-NNN). Use /admin/users to edit.
+│   ├── magic-tokens.json  ← Short-lived login/reset tokens (auto-swept).
+│   └── auth.json          ← Session-secret store ONLY post-migration. Never reintroduce
+│                            the single-password pattern.
 └── pjl-logo.svg / pjl-logo-mark.svg / pjl-builder-preview.png
                             ← CRM/login/portal page assets.
 ```
 
 Plus, at the **repo root**:
-- `package.json` — declares `nodemailer` as a dependency, exposes `npm start` and `npm run setup-password`.
+- `scripts/create-user.js` — one-shot script to add an admin/tech account. Replaces the legacy `setup-password.js`.
+- `package.json` — declares `nodemailer` as a dependency, exposes `npm start` and `npm run create-user` (with a `setup-password` alias for back-compat).
 - `.env` — credentials (Gmail, Twilio). **Never committed.** See `.env.example` for the full template.
 - `.env.example` — checked-in template documenting what each env var is for.
 - `.gitignore` — excludes `server/data/`, `.env`, and `node_modules/`.
@@ -623,11 +631,16 @@ Plus, at the **repo root**:
 | `/sprinkler-systems.html`, `/contact.html`, etc. | The corresponding HTML file from the repo root | Public |
 | `/style.css`, `/logo.svg`, `/images/...` | Public site assets from the repo root | Public |
 | `/api/quotes` (POST) | Lead intake (creates a lead, fires notifications) | Public |
-| `/login` | CRM login page | Public |
-| `/admin` | CRM dashboard | **Admin password required** |
+| `/login` | CRM login page (email + password) | Public |
+| `/admin` | CRM dashboard | **CRM session (admin or tech) required** |
+| `/admin/users` | Per-user account management | **CRM session, role=admin only** |
+| `/portal/login` | Customer self-serve magic-link request page | Public |
+| `/api/portal/request-link` (POST) | Customer asks for an emailed login link | Public, rate-limited (3/hour per identifier, 10/hour per IP) |
+| `/api/portal/login/verify?t=<mt_id>` | Magic-link click target — sets customer cookie + redirects to `/portal/<token>` | Public (token IS the auth) |
+| `/reset-password?t=<mt_id>` | Admin/tech password-reset landing page | Public (token IS the auth) |
 | `/portal/<token>` | Customer's private portal page | Public, but the URL contains a 24-character per-customer token derived from the lead ID — unguessable in practice |
 | `/crm/*` | CRM-only assets (admin.js, crm.css, login.css, etc.) | Public (no sensitive data — the lead data behind them IS gated) |
-| `/api/quotes` (GET), `/api/contacts*`, `/api/quotes/:id` | Lead-data APIs | **Admin password required** |
+| `/api/quotes` (GET), `/api/contacts*`, `/api/quotes/:id` | Lead-data APIs | **CRM session required** |
 
 The auth gate is in `needsAuth()` in `server.js`. The full source-of-truth for routing is `resolveStaticTarget()` in the same file.
 
@@ -640,10 +653,10 @@ The auth gate is in `needsAuth()` in `server.js`. The full source-of-truth for r
 ```cmd
 cd C:\path\to\pjl-land-services-v39
 npm install
-npm run setup-password
+npm run create-user
 ```
 
-`npm install` fetches the one dependency (nodemailer). `setup-password` prompts for an admin password and writes `server/data/auth.json`.
+`npm install` fetches the one dependency (nodemailer). `create-user` prompts for email + name + role + password and writes the new account into `server/data/users.json`. The first run also seeds `server/data/auth.json` with a session secret. (`npm run setup-password` is kept as a back-compat alias for the same script.)
 
 **Start the server:**
 ```cmd
@@ -652,11 +665,15 @@ npm start
 
 Server runs at `http://127.0.0.1:4173`. Public site at `/`, CRM at `/admin`. Stop with **Ctrl+C** in the terminal window.
 
-**To rotate the admin password later:**
+**To add another admin or technician later:**
 ```cmd
-npm run setup-password
+npm run create-user
 ```
-(Just runs again — overwrites `server/data/auth.json` with the new password.)
+Or, if you're already signed in as an admin, use the `+ Add user` button on `/admin/users` instead.
+
+**To reset a forgotten password:**
+- An admin signs in to `/admin/users` and clicks "Reset password" on the row. The user receives an emailed magic link valid for 30 minutes.
+- If no admin can sign in, re-run `npm run create-user` from the server console with a different email — that creates a fresh admin account, and you can then disable / delete the old account from `/admin/users`.
 
 ### 15.6 Adding a new form to the public site
 
@@ -766,8 +783,11 @@ The CSV is more useful than the raw JSON for archiving — opens in Excel, struc
 
 ### 15.12 Troubleshooting
 
-**The site loads but `/admin` redirects to `/login` and the password doesn't work.**
-→ The `auth.json` file is missing or stale. Re-run `npm run setup-password` to create a fresh one. (This won't touch existing leads.)
+**The site loads but `/admin` redirects to `/login` and the email/password doesn't work.**
+→ Two possibilities. (1) The account in `users.json` doesn't exist or is disabled — run `npm run create-user` from the server console to add a fresh admin. (2) The `auth.json` session secret is missing — start the server once; it will auto-seed a fresh secret. Existing valid sessions will be invalidated by a new secret, which is why we don't auto-rotate it on every boot.
+
+**A user keeps getting `Invalid credentials` even after a password reset.**
+→ Confirm the account isn't disabled (open `/admin/users` as another admin). The login error is intentionally generic for security — wrong email, wrong password, and disabled account all return the same 401.
 
 **Submitting a form on the live site does nothing / errors out.**
 → Check the browser's developer console (F12 → Console tab). Common cause: server isn't running, or `/api/quotes` is returning a 4xx/5xx. Check Render logs (`Render dashboard → Logs`).
@@ -793,8 +813,10 @@ The CSV is more useful than the raw JSON for archiving — opens in Excel, struc
 2. **Never disable HTTPS** in production. Render does this for free; don't override it.
 3. **Never log raw passwords** anywhere. The login flow uses scrypt + salt; if you change auth code, preserve that.
 4. **Never expose `/api/quotes/:id` GET, `/api/contacts*`, `/api/quotes.csv`, or `/admin` without authentication.** Those endpoints contain customer PII (names, phones, addresses). The auth gate in `needsAuth()` is the only thing protecting them — don't punch holes in it.
-5. **Never edit `auth.json` by hand.** Use `setup-password.js`.
-6. **Never set the admin password to anything you use elsewhere.** It's stored hashed but treat it like any production password.
+5. **Never edit `users.json` or `auth.json` by hand.** Use `npm run create-user` to add an account, `/admin/users` to manage existing ones, and the `/reset-password` flow to rotate a credential.
+6. **Never reintroduce the single-password pattern in `auth.json`.** Post-migration, that file holds the session secret and nothing else. Restoring `passwordHash` / `salt` fields would silently break per-user identity and let a tech log in as Patrick.
+7. **Never log magic-token IDs or session-cookie values.** Both are credentials. Log "sent magic-link to user X" — never the link itself. The verification endpoints are deliberately silent on the token contents in error responses.
+8. **Never set a CRM account password to anything you use elsewhere.** Hashed at rest, but treat it like any production credential.
 
 ---
 

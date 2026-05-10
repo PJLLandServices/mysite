@@ -17,9 +17,12 @@ loginForm.addEventListener("submit", async (event) => {
     const response = await fetch("/api/login", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ password: formData.get("password") })
+      body: JSON.stringify({
+        email: formData.get("email"),
+        password: formData.get("password")
+      })
     });
-    const data = await response.json();
+    const data = await response.json().catch(() => ({}));
     if (!response.ok || !data.ok) throw new Error((data.errors || ["Unable to log in."]).join(" "));
     window.location.assign(nextUrl());
   } catch (error) {

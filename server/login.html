@@ -19,12 +19,16 @@
       <a href="/" class="login-logo"><img src="/crm/pjl-logo.svg" alt="PJL Land Services"></a>
       <p class="login-eyebrow">Private CRM Access</p>
       <h1>Sign in to the PJL lead center.</h1>
-      <p class="login-copy">Customer portals remain public by private link. Lead exports, contact vCards, and CRM details require this password.</p>
+      <p class="login-copy">Per-user accounts for PJL admins and technicians. Customers — go to <a href="/portal/login" style="color:#F59B4A;">your portal sign-in</a>.</p>
 
       <form id="loginForm" class="login-form">
         <label>
+          <span>Email</span>
+          <input type="email" name="email" autocomplete="username" required autofocus>
+        </label>
+        <label>
           <span>Password</span>
-          <input type="password" name="password" autocomplete="current-password" required autofocus>
+          <input type="password" name="password" autocomplete="current-password" required>
         </label>
         <p id="loginError" class="login-error" hidden></p>
         <button type="submit">Unlock CRM <span aria-hidden="true">&rarr;</span></button>

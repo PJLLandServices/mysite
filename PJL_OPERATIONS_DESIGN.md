@@ -563,6 +563,52 @@ DEFERRED ISSUE
 
 ---
 
+## 5.5 Identity & Access
+
+PJL has two distinct identity tracks:
+
+**Admin / tech accounts** — internal users who sign in to the CRM with
+their own email and password. Stored in `server/data/users.json` as
+`USR-NNN` records with per-user scrypt salt + hash. Roles are `admin`
+(can manage other accounts at `/admin/users`) and `tech` (everything else
+in the CRM). Sessions last 30 days rolling. Add an account via
+`npm run create-user` (one-shot CLI) or the `+ Add user` button on
+`/admin/users`.
+
+**Customers** — `customer` is *not* a discrete entity; the customer
+record IS the lead record in `leads.json`. The permanent
+`/portal/<token>` URL stays valid (token derived from the lead ID); the
+new magic-link flow at `/portal/login` lets the customer request a
+fresh emailed link if they lost the original. Magic-link verify sets a
+`uid: "customer:<leadId>"` session cookie (30 day rolling) and redirects
+to the same permanent portal URL.
+
+**Cookie shape.** All sessions carry `{uid, role, exp}` JSON HMAC-signed
+with the secret in `auth.json`. Tampering → 401. Roles: `admin`, `tech`,
+`customer`.
+
+**Magic tokens.** `server/data/magic-tokens.json` holds short-lived
+single-use credentials for two purposes: `customer_login` and
+`admin_password_reset`. 30-minute TTL. Marked used on first verify.
+Sweep deletes used or expired entries older than 24h.
+
+**Rate limits.** `POST /api/portal/request-link` is gated at 3/hour
+per identifier and 10/hour per IP, BEFORE the leads/properties lookup
+runs (no timing enumeration). The endpoint *always* returns the same
+generic 200 body whether or not we found you. `POST /api/login` is
+gated at 10/IP per 15 minutes. `POST /api/users/:id/reset-password` is
+gated at 3/hour per user.
+
+**Hard rules.**
+- Authentication: per-user accounts in `users.json`. The `auth.json`
+  file is session-secret storage only after migration. **Never
+  reintroduce the single-password pattern.**
+- The permanent `/portal/<token>` URL keeps working *without* a session
+  cookie. Magic-link tokens are SEPARATE from the permanent token —
+  different files, different lifetimes, do not conflate.
+- The `/approve/<id>?t=<token>` quote-approval URL is unchanged by this
+  refactor.
+
 ## 6. Customer Portal
 
 ### 6.1 What customers can do

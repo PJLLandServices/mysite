@@ -119,8 +119,10 @@ All gitignored. Live on Render's persistent disk. Hand-editing breaks
 audit trails; modify only via the API.
 
 ```
-auth.json                  ← scrypt password hash + session secret (set via npm run setup-password)
-leads.json                 ← inbound leads (the CRM core)
+auth.json                  ← session secret only (post-migration). NEVER reintroduce the single-password pattern.
+users.json                  ← USR-NNN admin/tech accounts (per-user scrypt hash + salt). Created via npm run create-user.
+magic-tokens.json           ← short-lived, single-use mt_<32hex> tokens (customer_login, admin_password_reset).
+leads.json                 ← inbound leads (the CRM core; lead.id is the customer identity for portal sessions)
 properties.json            ← customer site profiles
 work-orders.json           ← per-visit field documents
 quotes.json                ← Q-YYYY-NNNN records
@@ -147,11 +149,12 @@ wo-photos/<woId>/<n>.<ext> ← work-order photos (pre/in/post-work + per-issue)
 
 Each admin page is one HTML + one JS + (sometimes) one CSS file. The
 sidebar is duplicated in every page's HTML and synchronized by hand
-when entries change. Standard sidebar order (12 items):
+when entries change. Standard sidebar order (13 items):
 
 ```
 Today  ·  CRM  ·  Schedule  ·  Handoff  ·  Properties  ·  Projects  ·
-Work orders  ·  Quotes  ·  Invoices  ·  Materials  ·  AI Chats  ·  Settings
+Work orders  ·  Quotes  ·  Invoices  ·  Materials  ·  AI Chats  ·
+Users  ·  Settings
 ```
 
 Pages with their primary route + purpose:
@@ -181,9 +184,30 @@ Pages with their primary route + purpose:
 | `purchase-order.html` | `/admin/purchase-order/<id>` | PO detail. Send modal (email + PDF), partial-receive modal, reorder, cancel. |
 | `chats.html` | `/admin/chats` | AI chat transcripts (booked + abandoned). |
 | `settings.html` | `/admin/settings` | Notification defaults, audit trail, QB connect, exports. |
-| `login.html` | `/login` | Single password, scrypt-hashed in `auth.json`. |
-| `portal.html` | `/portal/<token>` | Customer-facing read-only portal: project request, deferred recommendations, signed quotes, scheduled appointments, notification prefs. |
+| `login.html` | `/login` | Per-user CRM login (email + password). Credentials live in `users.json`; `auth.json` is the session-secret store only. |
+| `users.html` | `/admin/users` | Admin-only per-user account management (CRUD, disable, reset password). Tech role gets 403. |
+| `customer-login.html` | `/portal/login` | Customer self-serve magic-link request page (email/phone/address → emailed login link). |
+| `reset-password.html` | `/reset-password?t=<mt_id>` | Admin/tech password reset landing page (magic-token-gated). |
+| `portal.html` | `/portal/<token>` | Customer-facing read-only portal: project request, deferred recommendations, signed quotes, scheduled appointments, notification prefs. The permanent `<token>` URL stays valid; magic-link sessions redirect here after setting a `customer:<leadId>` cookie. |
 | `approve.html` | `/approve/<id>?t=<token>` | Customer-facing on-site quote approval (signature canvas + PDF download). |
+
+### Identity & access — authentication model
+
+- **Per-user accounts in `users.json`.** `auth.json` is session-secret
+  storage only after migration. **Never reintroduce the single-password
+  pattern.**
+- Cookie payload is `{uid, role, exp}` HMAC-signed with the
+  `sessionSecret`. Tampering → 401. `role` ∈ `admin | tech | customer`;
+  customer `uid` is `customer:<leadId>`.
+- **Sessions:** admin/tech 30 days rolling; customer 30 days rolling.
+  Magic-link tokens are 30 minutes single-use, distinct file
+  (`magic-tokens.json`).
+- **Tech-mode offline:** cookies persist offline; the offline-queue
+  replays writes on reconnect with the cookie. A tech disabled mid-
+  offline keeps working until reconnect (then queued writes 401). A
+  >30-day offline gap requires re-login on reconnect.
+- **Hard accuracy rule:** PJL is *not* a backflow tester. The auth
+  refactor does not relax that — it only swaps the credential model.
 
 ## Shared admin components (`server/`)
 
@@ -457,7 +481,7 @@ These have memory entries; surface them in any AI / specialist context.
 git clone https://github.com/PJLLandServices/mysite
 cd mysite
 npm install
-npm run setup-password          # creates server/data/auth.json
+npm run create-user              # creates the first admin in users.json + seeds session secret
 npm start                        # http://127.0.0.1:4173
 ```
 
@@ -478,6 +502,8 @@ non-zero if anything's out of sync — useful as a pre-push gate.
 | `ML-` | Material List | `ML-2026-0042` |
 | `PO-` | Purchase Order | `PO-2026-0042` |
 | `SUP-` | Supplier | `SUP-001` (no year) |
+| `USR-` | User account | `USR-001` (no year) |
+| `mt_<32hex>` | Magic token (login or password reset) | `mt_a1b2c3d4...` |
 | `li_xxxxxxxx` | Material list line | `li_VbjXaKHH` (random) |
 | `poli_xxxxxxxx` | Purchase order line | `poli_QU1cN3Jz` (random) |
 | `iss_xxxxxxxx_<ts>` | Zone issue inside a WO | `iss_a1b2c3_1730000000` |

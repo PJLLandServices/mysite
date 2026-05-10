@@ -6,7 +6,8 @@
   "main": "server/server.js",
   "scripts": {
     "start": "node server/server.js",
-    "setup-password": "node server/setup-password.js",
+    "create-user": "node scripts/create-user.js",
+    "setup-password": "node scripts/create-user.js",
     "build": "node build.js && node scripts/sync-prices-html.mjs && node scripts/sync-meta-prices.mjs && node worker/rebuild.mjs",
     "build:check": "node build.js --check && node scripts/sync-meta-prices.mjs --check && node scripts/lint-no-hardcoded-prices.mjs && node scripts/lint-qb-mappings.mjs && node scripts/test-pricing.mjs",
     "build:worker": "node worker/rebuild.mjs",

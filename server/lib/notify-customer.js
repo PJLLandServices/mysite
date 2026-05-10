@@ -619,4 +619,158 @@ async function sendPaymentReceipt(invoice, pdfBuffer, opts = {}) {
   }
 }
 
-module.exports = { notifyCustomer, eventForTransition, sendInvoiceToCustomer, sendPaymentReceipt };
+// ---- Magic-link login + admin password reset emails --------------------
+//
+// Both reuse the Gmail transport configured at the top of this file. Same
+// branded shell as the lifecycle templates so the sender is recognizable.
+// We do NOT log the magic-link URL — only that an email was attempted —
+// since logs can leak credentials. The token is short-lived and single-
+// use, but defense-in-depth still applies.
+
+function brandedEmail({ headline, bodyHtml, bodyText, ctaLabel, ctaUrl, footerNote, baseUrl }) {
+  const publicBaseUrl = (process.env.PUBLIC_BASE_URL || baseUrl || "https://pjllandservices.com").replace(/\/+$/, "");
+  const html = `
+<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 560px; color: #1a1a1a; line-height: 1.55;">
+  <div style="background: #1B4D2E; border-radius: 8px 8px 0 0; padding: 24px 28px;">
+    <table cellpadding="0" cellspacing="0" border="0" width="100%">
+      <tr>
+        <td valign="middle" style="padding-right: 16px;">
+          <h1 style="margin: 0; color: #fff; font-size: 22px; font-weight: 700; line-height: 1.2;">${escapeHtml(headline)}</h1>
+        </td>
+        <td valign="middle" align="right" width="180" style="width: 180px;">
+          <img src="${escapeHtml(publicBaseUrl)}/crm/pjl-logo.svg" alt="PJL Land Services" width="180" style="display:block;border:0;outline:none;text-decoration:none;width:180px;max-width:180px;height:auto;">
+        </td>
+      </tr>
+    </table>
+  </div>
+  <div style="padding: 24px 28px; background: #FAFAF5; border: 1px solid #e5e5dd; border-top: none; border-radius: 0 0 8px 8px;">
+    <div style="margin: 0 0 18px;">${bodyHtml}</div>
+    <p style="margin: 0 0 18px;">
+      <a href="${escapeHtml(ctaUrl)}" style="display: inline-block; padding: 11px 20px; background: #E07B24; color: #fff; text-decoration: none; border-radius: 6px; font-weight: 600;">${escapeHtml(ctaLabel)}</a>
+    </p>
+    <p style="margin: 12px 0 0; font-size: 12px; color: #777; word-break: break-all;">If the button doesn't work, paste this link into your browser:<br>${escapeHtml(ctaUrl)}</p>
+    ${footerNote ? `<p style="margin: 18px 0 0; font-size: 13px; color: #777;">${footerNote}</p>` : ""}
+  </div>
+  <p style="margin: 16px 0 0; font-size: 11px; color: #999; text-align: center;">
+    PJL Land Services · Newmarket, Ontario · pjllandservices.com
+  </p>
+</div>`.trim();
+
+  const text = [
+    headline,
+    "",
+    bodyText,
+    "",
+    `${ctaLabel}: ${ctaUrl}`,
+    "",
+    footerNote ? footerNote.replace(/<[^>]+>/g, "") : "",
+    "PJL Land Services — Newmarket, Ontario"
+  ].filter(Boolean).join("\n");
+
+  return { html, text };
+}
+
+// Customer-portal magic-link email. Triggered from
+// POST /api/portal/request-link when a matched lead has an email on file.
+// `lead` is the canonical lead record; `magicLink` is the absolute URL
+// embedding the magic-token id (already built by the caller).
+async function sendCustomerLoginLink(lead, magicLink) {
+  const transporter = getTransporter();
+  if (!transporter) {
+    console.warn(`[customer-login] Skipped (no Gmail config) — leadId=${lead?.id}`);
+    return { ok: false, skipped: true };
+  }
+  const to = String(lead?.contact?.email || "").trim();
+  if (!to) return { ok: false, skipped: true, reason: "no email on lead" };
+
+  const rawName = lead?.contact?.firstName || (lead?.contact?.name || "").split(" ")[0] || "";
+  const firstName = rawName || "there";
+  const greeting = `Hi ${escapeHtml(firstName)},`;
+
+  const { html, text } = brandedEmail({
+    headline: "Sign in to your PJL portal",
+    bodyHtml: `
+      <p style="margin: 0 0 12px;">${greeting}</p>
+      <p style="margin: 0 0 12px;">You asked for a login link to your PJL Land Services portal. Click the button below to sign in. The link is valid for <strong>30 minutes</strong> and can be used once.</p>
+    `,
+    bodyText: [
+      `Hi ${firstName},`,
+      "",
+      "You asked for a login link to your PJL Land Services portal. The link below is valid for 30 minutes and can be used once."
+    ].join("\n"),
+    ctaLabel: "Sign in to your portal",
+    ctaUrl: magicLink,
+    footerNote: `Didn't request this? You can ignore this email — your portal stays private. If the link doesn't work, call us at <a href="tel:+19059600181" style="color:#1B4D2E;">(905) 960-0181</a>.`
+  });
+
+  try {
+    const info = await transporter.sendMail({
+      from: `"PJL Land Services" <${process.env.GMAIL_USER}>`,
+      to,
+      replyTo: process.env.GMAIL_USER,
+      subject: "Your PJL Land Services portal login link",
+      html,
+      text
+    });
+    console.log(`[customer-login] sent leadId=${lead.id} to=${to} id=${info.messageId}`);
+    return { ok: true, messageId: info.messageId };
+  } catch (error) {
+    console.error(`[customer-login] failed leadId=${lead?.id}:`, error.message);
+    return { ok: false, error: error.message };
+  }
+}
+
+// Admin/tech password-reset email. Triggered from
+// POST /api/users/:id/reset-password. `user` is the public-shape user
+// record from lib/users.js; `magicLink` already embeds the token.
+async function sendAdminPasswordResetLink(user, magicLink) {
+  const transporter = getTransporter();
+  if (!transporter) {
+    console.warn(`[admin-reset] Skipped (no Gmail config) — userId=${user?.id}`);
+    return { ok: false, skipped: true };
+  }
+  const to = String(user?.email || "").trim();
+  if (!to) return { ok: false, skipped: true, reason: "no email on user" };
+
+  const greeting = `Hi ${escapeHtml((user.name || "").split(" ")[0] || "there")},`;
+  const { html, text } = brandedEmail({
+    headline: "Reset your PJL CRM password",
+    bodyHtml: `
+      <p style="margin: 0 0 12px;">${greeting}</p>
+      <p style="margin: 0 0 12px;">An administrator started a password reset for your PJL CRM account. Click the button below to choose a new password. The link is valid for <strong>30 minutes</strong> and can be used once.</p>
+    `,
+    bodyText: [
+      `Hi ${(user.name || "").split(" ")[0] || "there"},`,
+      "",
+      "An administrator started a password reset for your PJL CRM account. The link below is valid for 30 minutes and can be used once."
+    ].join("\n"),
+    ctaLabel: "Choose a new password",
+    ctaUrl: magicLink,
+    footerNote: `Didn't expect this? Ignore this email — your existing password still works. If you have questions, contact PJL at <a href="tel:+19059600181" style="color:#1B4D2E;">(905) 960-0181</a>.`
+  });
+
+  try {
+    const info = await transporter.sendMail({
+      from: `"PJL Land Services" <${process.env.GMAIL_USER}>`,
+      to,
+      replyTo: process.env.GMAIL_USER,
+      subject: "Reset your PJL CRM password",
+      html,
+      text
+    });
+    console.log(`[admin-reset] sent userId=${user.id} to=${to} id=${info.messageId}`);
+    return { ok: true, messageId: info.messageId };
+  } catch (error) {
+    console.error(`[admin-reset] failed userId=${user?.id}:`, error.message);
+    return { ok: false, error: error.message };
+  }
+}
+
+module.exports = {
+  notifyCustomer,
+  eventForTransition,
+  sendInvoiceToCustomer,
+  sendPaymentReceipt,
+  sendCustomerLoginLink,
+  sendAdminPasswordResetLink
+};
