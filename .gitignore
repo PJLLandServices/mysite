@@ -11,6 +11,12 @@ desktop.ini
 
 # Working / archive folder (originals before being copied to project root)
 Website Build/
+Website Photo/
+New Whiteboard/
+
+# Local backups / exports — never commit
+SYSTEM_OVERVIEW.zip
+images/builder.zip
 
 # Audit artifacts
 responsive-audit/
