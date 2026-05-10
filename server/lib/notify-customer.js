@@ -189,12 +189,27 @@ function buildEmail(event, lead, baseUrl) {
   const subject = fill(tpl.subject, vars);
   const headline = fill(tpl.headline, vars);
   const body = fill(tpl.body, vars);
+  // Same publicBaseUrl pattern as the invoice + receipt templates so
+  // the embedded logo's absolute src resolves correctly when this
+  // email lands in any inbox.
+  const publicBaseUrl = (process.env.PUBLIC_BASE_URL || baseUrl || "https://pjllandservices.com").replace(/\/+$/, "");
 
   const html = `
 <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 560px; color: #1a1a1a; line-height: 1.55;">
-  <div style="padding: 24px 28px; background: #1B4D2E; border-radius: 8px 8px 0 0;">
-    <div style="color: #EAF3DE; font-size: 12px; letter-spacing: 0.12em; text-transform: uppercase; font-weight: 600;">PJL Land Services</div>
-    <h1 style="margin: 6px 0 0; color: #fff; font-size: 22px;">${escapeHtml(headline)}</h1>
+  <div style="background: #1B4D2E; border-radius: 8px 8px 0 0; padding: 24px 28px;">
+    <table cellpadding="0" cellspacing="0" border="0" width="100%">
+      <tr>
+        <td valign="middle" style="padding-right: 16px;">
+          <h1 style="margin: 0; color: #fff; font-size: 22px; font-weight: 700; line-height: 1.2;">${escapeHtml(headline)}</h1>
+        </td>
+        <td valign="middle" align="right" width="180" style="width: 180px;">
+          <img src="${escapeHtml(publicBaseUrl)}/crm/pjl-logo.svg"
+               alt="PJL Land Services"
+               width="180"
+               style="display:block;border:0;outline:none;text-decoration:none;width:180px;max-width:180px;height:auto;">
+        </td>
+      </tr>
+    </table>
   </div>
   <div style="padding: 24px 28px; background: #FAFAF5; border: 1px solid #e5e5dd; border-top: none; border-radius: 0 0 8px 8px;">
     <p style="margin: 0 0 18px;">${escapeHtml(body)}</p>

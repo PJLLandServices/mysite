@@ -16,12 +16,35 @@
 //     image embedded post-sign)
 
 const PDFDocument = require("pdfkit");
+const fsSync = require("node:fs");
+const path = require("node:path");
 
 const PJL_GREEN = "#1B4D2E";
 const PJL_AMBER = "#E07B24";
 const PJL_TEXT = "#1F2A22";
 const PJL_MUTED = "#6A6A60";
 const HST_RATE = 0.13;
+
+// Brand assets — Barlow Condensed font + dark logo PNG, both shared
+// with invoice-pdf.js. Loaded lazily once per process to avoid
+// re-reading the files on every PDF render.
+const BARLOW_BOLD_PATH = path.resolve(__dirname, "..", "assets", "fonts", "BarlowCondensed-Bold.ttf");
+const LOGO_PNG_PATH = path.resolve(__dirname, "..", "assets", "logo-dark.png");
+let _barlowBuf = null;
+let _logoBuf = null;
+function barlowBuffer() {
+  if (_barlowBuf !== null) return _barlowBuf;
+  try { _barlowBuf = fsSync.readFileSync(BARLOW_BOLD_PATH); }
+  catch { _barlowBuf = false; }
+  return _barlowBuf;
+}
+function logoBuffer() {
+  if (_logoBuf !== null) return _logoBuf;
+  try { _logoBuf = fsSync.readFileSync(LOGO_PNG_PATH); }
+  catch { _logoBuf = false; }
+  return _logoBuf;
+}
+function fontHeading(doc) { return barlowBuffer() ? "Barlow-Bold" : "Helvetica-Bold"; }
 
 function fmt(n) {
   const v = Number(n) || 0;
@@ -48,21 +71,64 @@ function generateQuotePdf(quote, opts = {}) {
     }
   });
 
-  // ---- Header band ---------------------------------------------------
-  doc.rect(0, 0, doc.page.width, 80).fill(PJL_GREEN);
-  doc.fillColor("#EAF3DE")
-    .fontSize(10)
-    .text("PJL LAND SERVICES", 60, 24, { characterSpacing: 1.5 });
-  doc.fillColor("#fff")
-    .fontSize(22)
-    .font("Helvetica-Bold")
-    .text(`Quote ${quote.id}`, 60, 38);
-  doc.font("Helvetica").fontSize(10).fillColor("#C9DDD0")
-    .text(`Issued ${fmtDate(quote.createdAt)}${quote.validUntil ? ` · Valid through ${fmtDate(quote.validUntil)}` : ""}`,
-      60, 62);
+  // Register Barlow Condensed if the TTF is committed. Falls back to
+  // Helvetica-Bold transparently if it's missing.
+  const barlow = barlowBuffer();
+  if (barlow) doc.registerFont("Barlow-Bold", barlow);
 
-  doc.moveDown(2);
-  doc.y = 110;
+  // ---- Header (matches invoice-pdf.js) -------------------------------
+  // Green "QUOTE" title on white at the left, real PJL logo right-aligned
+  // to the body content margin (consistent with the customer band, line
+  // items, totals, and footer rule on the rest of the page). No more
+  // full-bleed green band — this is the same look the invoice PDF ships.
+  const PAGE_W = doc.page.width;
+  const MARGIN_X = 60; // quote-pdf has historically used 60 (vs invoice's 40)
+  const top = 40;
+  const leftX = MARGIN_X;
+  const LOGO_W = 160;
+
+  doc.font(fontHeading(doc)).fontSize(30).fillColor(PJL_GREEN);
+  doc.text("QUOTE", leftX, top, {
+    characterSpacing: 1.5,
+    width: PAGE_W - MARGIN_X * 2 - LOGO_W - 16,
+    lineGap: 0
+  });
+
+  // Company info block — three lines.
+  doc.font("Helvetica-Bold").fontSize(10).fillColor(PJL_TEXT);
+  let y = top + 38;
+  doc.text("PJL Land Services", leftX, y);
+  y = doc.y + 1;
+  doc.font("Helvetica").fontSize(9).fillColor(PJL_MUTED);
+  doc.text("1118 Cenotaph Blvd., Newmarket, ON  L3X 0A5", leftX, y);
+  y = doc.y;
+  doc.text("info@pjllandservices.com  ·  (905) 960-0181  ·  pjllandservices.com", leftX, y);
+  y = doc.y + 2;
+  doc.fontSize(8).fillColor(PJL_MUTED);
+  doc.text(`Quote ${quote.id} · Issued ${fmtDate(quote.createdAt)}${quote.validUntil ? ` · Valid through ${fmtDate(quote.validUntil)}` : ""}`,
+    leftX, y, { characterSpacing: 0.3 });
+
+  // Right side — actual PJL logo PNG (rasterized from logo-dark.svg
+  // with whitespace trimmed). Same size + position as invoice-pdf.js.
+  const logo = logoBuffer();
+  if (logo) {
+    doc.image(logo, PAGE_W - MARGIN_X - LOGO_W, top - 12, { width: LOGO_W });
+  } else {
+    doc.font(fontHeading(doc)).fontSize(22).fillColor(PJL_GREEN);
+    doc.text("PJL", PAGE_W - MARGIN_X - 200, top + 6, {
+      width: 200, align: "right", characterSpacing: 1
+    });
+    doc.fontSize(11).fillColor(PJL_GREEN);
+    doc.text("LAND SERVICES", PAGE_W - MARGIN_X - 200, top + 32, {
+      width: 200, align: "right", characterSpacing: 3
+    });
+  }
+
+  // Reset cursor below the header content (left text bottom is ~y=124,
+  // logo bottom is ~y=120). Tight 6pt gap before bill-to block.
+  doc.y = Math.max(doc.y, 124);
+  doc.x = leftX;
+  doc.moveDown(0.4);
 
   // ---- Bill-to block -------------------------------------------------
   doc.fillColor(PJL_MUTED).fontSize(9)
@@ -198,11 +264,19 @@ function generateQuotePdf(quote, opts = {}) {
   }
 
   // ---- Footer --------------------------------------------------------
+  // Drop bottom margin to 0 around the footer write — pdfkit's
+  // LineWrapper auto-pagebreaks when text() is called within the
+  // bottom margin, even with lineBreak:false. Same fix as in
+  // invoice-pdf.js. Without this we get a spurious page 2 with just
+  // the footer at the top.
+  const restoreBottom = doc.page.margins.bottom;
+  doc.page.margins.bottom = 0;
   const footerY = doc.page.height - 50;
   doc.moveTo(60, footerY).lineTo(doc.page.width - 60, footerY).strokeColor(PJL_MUTED).lineWidth(0.5).stroke();
   doc.font("Helvetica").fontSize(9).fillColor(PJL_MUTED);
   doc.text("PJL Land Services · Newmarket, Ontario · (905) 960-0181 · pjllandservices.com",
-    60, footerY + 8, { width: doc.page.width - 120, align: "center" });
+    60, footerY + 8, { width: doc.page.width - 120, align: "center", lineBreak: false });
+  doc.page.margins.bottom = restoreBottom;
 
   doc.end();
   return doc;
