@@ -16,7 +16,8 @@
     "sync:body-prices": "node scripts/sync-prices-html.mjs",
     "lint:prices": "node scripts/lint-no-hardcoded-prices.mjs",
     "lint:qb-mappings": "node scripts/lint-qb-mappings.mjs",
-    "test:pricing": "node scripts/test-pricing.mjs"
+    "test:pricing": "node scripts/test-pricing.mjs",
+    "migrate:customers": "node scripts/migrate-customers.js"
   },
   "engines": {
     "node": ">=18"
