@@ -1799,6 +1799,15 @@ function woPreSignReadinessFailures() {
   if (wo.paidOnSite !== true && wo.paidOnSite !== false) {
     fails.push("Pick a payment method (Yes / No — invoice to follow).");
   }
+  // Cascade-merge follow-up — brief-literal §4.6 materials gate.
+  // Server-side enforces too; this mirrors so the desktop user sees
+  // the specific block reason instead of getting a confusing 422.
+  // Note: desktop has no "Confirm materials" button yet — Patrick can
+  // tap it on tech mode for that WO, or PATCH materialsConfirmedAt
+  // directly via /admin/work-order/<id> dev tooling.
+  if (!wo.materialsConfirmedAt) {
+    fails.push("Confirm the materials list (tap “Confirm materials list is accurate” in tech mode for this WO).");
+  }
   return fails;
 }
 

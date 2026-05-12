@@ -427,6 +427,15 @@
           <span>Add custom part</span>
         </button>
       </div>
+      <!-- Cascade-merge follow-up — brief-literal §4.6 materials gate.
+           Tapping stamps wo.materialsConfirmedAt = now, which satisfies
+           the pre-sign materials gate. Auto-clears on any qty change
+           below (server-side + locally) so the tech is forced to
+           re-confirm after every materials edit. Hidden on locked WOs. -->
+      <div class="tech-materials-confirm" id="techMaterialsConfirmWrap" style="margin-top: 12px; padding-top: 12px; border-top: 1px solid #e5e5dd;">
+        <button type="button" class="pjl-btn pjl-btn-outline" id="techMaterialsConfirmBtn" style="width: 100%;">Confirm materials list is accurate</button>
+        <p class="tech-materials-confirm-status" id="techMaterialsConfirmStatus" style="margin: 6px 0 0; font-size: 12px; color: #6b4e00;">Required before signing.</p>
+      </div>
     </section>
 
     <!-- Follow-Up WO Trigger — schedules a linked service_visit WO

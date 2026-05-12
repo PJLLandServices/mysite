@@ -257,6 +257,17 @@ function blankWorkOrder() {
     // Materials packed checklist (spec §4.3.2). Map of sku → bool.
     // Populated as the tech taps each row in the materials list.
     materialsPacked: {},
+    // Cascade-merge follow-up — brief-literal §4.6 materials gate.
+    // ISO timestamp set when tech taps "Confirm materials list" in
+    // tech mode. null = unconfirmed. Cleared when materialsPacked /
+    // customParts is mutated (any qty change forces re-confirmation).
+    // hydrate() auto-fills this for fall_closing WOs and any WO with
+    // empty materialsPacked + customParts so the gate doesn't block
+    // when the tech genuinely has nothing to confirm.
+    // COMPLEMENTARY to 43c766f's `techMaterialsSection` packing-rows
+    // gate — that one fires on follow-up packing, this one fires on
+    // explicit confirmation of the current visit's materials.
+    materialsConfirmedAt: null,
     // Payment captured on-site? (spec §4.3.2 Payment & Billing).
     //   null  — tech hasn't decided yet (default for unsigned visits)
     //   true  — paid in the field (cascade flags invoice with paidOnSiteAtCompletion)
@@ -301,7 +312,7 @@ function blankWorkOrder() {
 // grow without an explicit migration step.
 function hydrate(w) {
   const base = blankWorkOrder();
-  return {
+  const hydrated = {
     ...base,
     ...w,
     zones: Array.isArray(w?.zones) ? w.zones.map(hydrateZone) : [],
@@ -321,6 +332,19 @@ function hydrate(w) {
     locked: w?.locked === true,
     history: Array.isArray(w?.history) ? w.history : []
   };
+  // Cascade-merge follow-up — auto-confirm the materials gate for the
+  // cases where there's nothing to confirm: fall_closing (find-only,
+  // no parts installed) AND any WO with empty materialsPacked + empty
+  // customParts. Read-only — doesn't persist; the clear-on-mutate
+  // rule in update() handles the case where parts are later added.
+  if (!hydrated.materialsConfirmedAt) {
+    const noPacked = !hydrated.materialsPacked || Object.keys(hydrated.materialsPacked).length === 0;
+    const noCustom = !Array.isArray(hydrated.customParts) || hydrated.customParts.length === 0;
+    if (hydrated.type === "fall_closing" || (noPacked && noCustom)) {
+      hydrated.materialsConfirmedAt = hydrated.createdAt || new Date().toISOString();
+    }
+  }
+  return hydrated;
 }
 
 // Hard-rule guard: spec §10 rule 8 — fall closings never auto-quote
@@ -642,6 +666,18 @@ async function update(id, patch) {
         size: typeof p.size === "string" ? p.size.slice(0, 16) : "",
         qty: Math.max(0, Math.floor(Number(p.qty) || 0))
       }));
+  }
+  // Cascade-merge follow-up — materialsConfirmedAt accepts an explicit
+  // timestamp (when the tech taps "Confirm materials list"), null/false
+  // to re-arm the gate, OR auto-clears when materialsPacked / customParts
+  // is mutated in this same PATCH without an accompanying confirmation.
+  if (Object.prototype.hasOwnProperty.call(patch, "materialsConfirmedAt")) {
+    next.materialsConfirmedAt = patch.materialsConfirmedAt || null;
+  } else if (
+    Object.prototype.hasOwnProperty.call(patch, "materialsPacked")
+    || Array.isArray(patch.customParts)
+  ) {
+    next.materialsConfirmedAt = null;
   }
   // Follow-up back-references — replace wholesale when sent. Both
   // followupWoIds (parent → children) and followupOfWoId (child → parent,

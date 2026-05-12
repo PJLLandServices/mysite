@@ -50,10 +50,14 @@
 // readiness checklist render; recovery buttons; refresh-after-PATCH
 // for issue creation), work-order-tech.css (layout safety net + pre-
 // sign checklist styling + recovery button styling).
+// Bumped 2026-05-12 (v14 → v15): brief-literal §4.6 materials-confirmation
+// gate — adds the Confirm materials list button + materialsConfirmedAt
+// field + clear-on-mutate. Touches work-order-tech.html + .js, so the
+// SW cache needs to invalidate.
 // Lesson: bump this in the same commit as any change to the files in
 // STATIC_ASSETS, otherwise the field tech sees old behaviour even
 // after Render redeploys.
-const CACHE_VERSION = "pjl-tech-v14";
+const CACHE_VERSION = "pjl-tech-v15";
 const STATIC_ASSETS = [
   "/crm/work-order-tech.html",
   "/crm/work-order-tech.js",

@@ -6502,6 +6502,16 @@ async function handleApi(req, res, pathname) {
             fails.push("AI bonus decision not recorded");
           }
         }
+        // Cascade-merge follow-up — brief-literal §4.6 materials gate.
+        // hydrate() auto-fills this for fall_closing + empty-materials
+        // WOs, so the check only fires when the tech genuinely has
+        // parts to confirm and hasn't tapped "Confirm materials list."
+        // Complementary to the techMaterialsSection packing-rows gate
+        // above (43c766f) — that one fires on follow-up packing, this
+        // fires on explicit confirmation of the current visit's parts.
+        if (!merged.materialsConfirmedAt) {
+          fails.push("materials list not confirmed");
+        }
         return fails;
       }
 

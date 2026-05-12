@@ -2098,6 +2098,15 @@ function preSignReadinessFailures() {
       }
     }
   }
+  // Cascade-merge follow-up — brief-literal §4.6 materials gate.
+  // Layered on top of the techMaterialsSection packing-rows gate
+  // above. This fires when the tech has parts on the truck (Parts to
+  // bring back) and hasn't tapped "Confirm materials list" since the
+  // last qty change. Auto-passes for fall_closing + empty-materials
+  // WOs via hydrate()'s server-side auto-confirm.
+  if (!state.materialsConfirmedAt) {
+    fails.push("Tap “Confirm materials list is accurate” in the Parts to bring back section.");
+  }
   return fails;
 }
 
@@ -3440,6 +3449,10 @@ async function init() {
     state.paidOnSite = wo.paidOnSite === true ? true
       : wo.paidOnSite === false ? false
       : null;
+    // Cascade-merge follow-up — brief-literal §4.6 materials gate
+    // state. Server-side hydrate auto-fills for fall_closing + empty-
+    // materials WOs so the gate doesn't block there.
+    state.materialsConfirmedAt = wo.materialsConfirmedAt || null;
 
     techId.textContent = wo.id;
     techType.textContent = TYPE_LABELS[wo.type] || wo.type;
@@ -3699,6 +3712,47 @@ function updateBringbackCounts() {
   if (countEl) countEl.textContent = String(catalogPicked + customPicked);
   if (customCountEl) customCountEl.textContent = String(customPicked);
 }
+// Cascade-merge follow-up — brief-literal §4.6 materials gate UI.
+// Paints the "Confirm materials list" button or the ✓ Confirmed-at
+// status. Hidden on locked WOs (gate is moot post-signature).
+function renderMaterialsConfirm() {
+  const wrap = document.getElementById("techMaterialsConfirmWrap");
+  const btn = document.getElementById("techMaterialsConfirmBtn");
+  const status = document.getElementById("techMaterialsConfirmStatus");
+  if (!wrap || !btn || !status) return;
+  if (state.locked) { wrap.hidden = true; return; }
+  wrap.hidden = false;
+  if (state.materialsConfirmedAt) {
+    btn.disabled = false;
+    btn.textContent = "Re-confirm materials list";
+    status.textContent = `✓ Confirmed ${formatDateTime(state.materialsConfirmedAt)}`;
+    status.style.color = "#0c8a3e";
+  } else {
+    btn.disabled = false;
+    btn.textContent = "Confirm materials list is accurate";
+    status.textContent = "Required before signing.";
+    status.style.color = "#6b4e00";
+  }
+}
+
+document.getElementById("techMaterialsConfirmBtn")?.addEventListener("click", async () => {
+  const btn = document.getElementById("techMaterialsConfirmBtn");
+  if (!btn || !state.id) return;
+  btn.disabled = true;
+  btn.textContent = "Saving…";
+  try {
+    const now = new Date().toISOString();
+    await patchWorkOrder({ materialsConfirmedAt: now });
+    state.materialsConfirmedAt = now;
+    renderMaterialsConfirm();
+    if (typeof updateSignoffSubmitState === "function") updateSignoffSubmitState();
+  } catch (err) {
+    btn.disabled = false;
+    btn.textContent = "Confirm materials list is accurate";
+    alert(err.message || "Couldn't confirm — try again.");
+  }
+});
+
 function scheduleBringbackSave(payload) {
   setBringbackSavingState("saving");
   // Always track the latest payload so beforeunload can flush even if
@@ -3706,6 +3760,14 @@ function scheduleBringbackSave(payload) {
   // page reload" bug — HANDOFF.md "Materials checklist persistence").
   bringbackPendingPayload = payload;
   clearTimeout(bringbackSaveTimer);
+  // Cascade-merge follow-up — materials mutation invalidates the
+  // confirmation stamp. Server clears it server-side; reflect locally
+  // so the gate fails in real time and the Confirm button re-arms.
+  if (state.materialsConfirmedAt) {
+    state.materialsConfirmedAt = null;
+    if (typeof renderMaterialsConfirm === "function") renderMaterialsConfirm();
+    if (typeof updateSignoffSubmitState === "function") updateSignoffSubmitState();
+  }
   bringbackSaveTimer = setTimeout(() => { flushBringbackSave(); }, 500);
 }
 
@@ -3755,6 +3817,9 @@ document.addEventListener("visibilitychange", () => {
 function renderBringback() {
   const tree = document.getElementById("techBringbackTree");
   const section = document.getElementById("techBringbackSection");
+  // Cascade-merge follow-up — always paint the Confirm materials row,
+  // even when the parts catalog hasn't loaded (gate state is independent).
+  renderMaterialsConfirm();
   if (!tree || !section || !window.CrmParts) return;
   if (!state.partsCatalog || !Object.keys(state.partsCatalog).length) {
     tree.innerHTML = `<p class="tech-bringback-loading">Parts catalog unavailable.</p>`;
