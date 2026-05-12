@@ -34,7 +34,19 @@
 // Bumped 2026-05-09 (v11 → v12): adds the "Delete zone" button in the
 // zone bottom-sheet (with confirm prompt) — touches HTML, JS, and CSS,
 // so phones still on v11 won't see the button until they update.
-const CACHE_VERSION = "pjl-tech-v12";
+// Bumped 2026-05-12 (v12 → v13): two stacked deploys (7e53f22 +
+// 863c6ac) shipped tech-mode JS/HTML/CSS changes without bumping this,
+// so iPhones stayed on the v12 cache and ran old JS against new HTML.
+// v13 catches up on:
+//   • 7e53f22 — materials checklist persistence (beforeunload flush),
+//     If-Match optimistic concurrency on patchWorkOrder + conflict
+//     banner, uploadWoPhotos routed through PJLOffline.queuedFetch.
+//   • 863c6ac — merged "Sign, lock & generate invoice" button +
+//     pre-sign readiness gate + post-sig banner with invoice link.
+// Lesson: bump this in the same commit as any change to the files in
+// STATIC_ASSETS, otherwise the field tech sees old behaviour even
+// after Render redeploys.
+const CACHE_VERSION = "pjl-tech-v13";
 const STATIC_ASSETS = [
   "/crm/work-order-tech.html",
   "/crm/work-order-tech.js",

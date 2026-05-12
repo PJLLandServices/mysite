@@ -1936,6 +1936,11 @@ document.getElementById("techSignoffSubmit")?.addEventListener("click", async ()
     state.locked = data.workOrder.locked === true;
     state.status = data.workOrder.status || state.status;
     state.departedAt = data.workOrder.departedAt || state.departedAt;
+    // Track the new updatedAt so any subsequent patchWorkOrder call
+    // (paidOnSite toggle, materials sync, late tech note) sends the
+    // fresh If-Match header. Without this, the very next post-sign
+    // PATCH would 409 and pop the conflict banner.
+    if (data.workOrder.updatedAt) state.updatedAt = data.workOrder.updatedAt;
     // Surface the freshly-drafted invoice id immediately — no polling
     // race. data.cascade is present when the cascade fired this PATCH.
     if (data.cascade && data.cascade.invoiceId) {

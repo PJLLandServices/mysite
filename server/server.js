@@ -6384,7 +6384,20 @@ async function handleApi(req, res, pathname) {
       if (ifMatch && existing.updatedAt && ifMatch !== existing.updatedAt) {
         const photosOnlyPayload = payload && Object.keys(payload).length === 1 && "photos" in payload;
         const signatureOnlyPayload = payload && Object.keys(payload).every((k) => k === "signature" || k === "locked");
-        if (!photosOnlyPayload && !signatureOnlyPayload) {
+        // Merged "Sign, lock & generate invoice" tap (Phase 2 cascade
+        // merge — 863c6ac) sends signature + status: "completed" +
+        // arrivedAt/departedAt back-fill in one PATCH. None of these
+        // fields can sensibly conflict with a concurrent edit (the
+        // signature locks scope; the status transition is forward-only
+        // and idempotent at the cascade layer; the timestamps are
+        // back-fill only if absent). Bypass the version check for this
+        // exact shape so a stale state.updatedAt doesn't strand a
+        // customer mid-signature.
+        const SIGN_AND_COMPLETE_KEYS = new Set(["signature", "locked", "status", "arrivedAt", "departedAt"]);
+        const signAndCompletePayload = payload
+          && payload.signature && payload.status === "completed"
+          && Object.keys(payload).every((k) => SIGN_AND_COMPLETE_KEYS.has(k));
+        if (!photosOnlyPayload && !signatureOnlyPayload && !signAndCompletePayload) {
           return sendJson(res, 409, {
             ok: false,
             error: "version_conflict",
