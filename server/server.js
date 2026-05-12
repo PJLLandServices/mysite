@@ -427,6 +427,8 @@ function needsAuth(method, pathname) {
   if (pathname === "/admin/chats" || pathname === "/admin/chats/") return "user";
   if (pathname === "/admin/customers" || pathname === "/admin/customers/") return "user";
   if (/^\/admin\/customer\/[^/]+/.test(pathname)) return "user";
+  if (pathname === "/admin/bookings" || pathname === "/admin/bookings/") return "user";
+  if (/^\/admin\/booking\/[^/]+/.test(pathname)) return "user";
   if (pathname === "/admin/properties" || pathname === "/admin/properties/") return "user";
   if (pathname === "/admin/properties/import" || pathname === "/admin/properties/import/") return "user";
   if (/^\/admin\/property\/[^/]+/.test(pathname)) return "user";
@@ -4365,12 +4367,39 @@ async function handleApi(req, res, pathname) {
   </div>
   <p style="margin:16px 0 0;font-size:11px;color:#999;text-align:center;">PJL Land Services · Newmarket, Ontario · pjllandservices.com</p>
 </div>`.trim();
+            // Generate the quote PDF and attach. Buffered so the
+            // sendMail call doesn't race with stream completion.
+            let pdfAttachment = null;
+            try {
+              const pdfDoc = generateQuotePdf(quoteRecord, {
+                customer: {
+                  name: wo.customerName || "",
+                  email: wo.customerEmail || "",
+                  phone: wo.customerPhone || ""
+                },
+                property: { address: wo.address || "" }
+              });
+              const chunks = [];
+              await new Promise((resolve, reject) => {
+                pdfDoc.on("data", (c) => chunks.push(c));
+                pdfDoc.on("end", resolve);
+                pdfDoc.on("error", reject);
+              });
+              pdfAttachment = {
+                filename: `PJL-Quote-${quoteRecord.id}.pdf`,
+                content: Buffer.concat(chunks),
+                contentType: "application/pdf"
+              };
+            } catch (err) {
+              console.warn("[approval-email] PDF attach failed:", err?.message);
+            }
             await transporter.sendMail({
               from: `"PJL Land Services" <${process.env.GMAIL_USER}>`,
               to: toEmail,
               replyTo: process.env.GMAIL_USER,
               subject: "PJL: please approve today's repair quote",
-              html
+              html,
+              ...(pdfAttachment ? { attachments: [pdfAttachment] } : {})
             });
             results.emailSent = true;
           } else {
@@ -6336,6 +6365,35 @@ async function handleApi(req, res, pathname) {
       // trigger below and a clean diff source for the history entries.
       const existing = await workOrders.get(id);
       if (!existing) return sendJson(res, 404, { ok: false, errors: ["Work order not found."] });
+
+      // Optimistic concurrency — If-Match check. When the client sends
+      // an If-Match header carrying the wo.updatedAt it loaded, refuse
+      // the patch if the WO has moved on (another tech or admin
+      // saved). Returns 409 with the latest record so the client can
+      // surface a "reload to see new changes" banner instead of
+      // silently overwriting. HANDOFF.md "Offline mode conflict
+      // resolution" — replaces last-write-wins.
+      //
+      // Two safe-fields exceptions: payloads that only touch photos
+      // (additive, never destructive) or a fresh signature (one-shot,
+      // protected by the wo.locked check below) bypass the check so
+      // photo uploads queued from offline don't lose to a parallel
+      // unrelated edit, and so a signature-only payload doesn't get
+      // blocked by a stale version.
+      const ifMatch = String(req.headers["if-match"] || "").replace(/^"|"$/g, "");
+      if (ifMatch && existing.updatedAt && ifMatch !== existing.updatedAt) {
+        const photosOnlyPayload = payload && Object.keys(payload).length === 1 && "photos" in payload;
+        const signatureOnlyPayload = payload && Object.keys(payload).every((k) => k === "signature" || k === "locked");
+        if (!photosOnlyPayload && !signatureOnlyPayload) {
+          return sendJson(res, 409, {
+            ok: false,
+            error: "version_conflict",
+            errors: ["This work order was updated by someone else while you were editing. Reload to see the latest changes before saving again."],
+            currentVersion: existing.updatedAt,
+            workOrder: existing
+          });
+        }
+      }
 
       // Spec §10 r11 + §4.3.3 r5 — once the WO is locked (signed), any
       // payload that touches a scope-protected field is refused with a
@@ -8336,6 +8394,13 @@ function resolveStaticTarget(pathname) {
   }
   if (/^\/admin\/customer\/[^/]+\/?$/.test(pathname)) {
     return { dir: SERVER_DIR, relative: "/customer.html" };
+  }
+  // Booking folder index + detail (HANDOFF.md follow-up).
+  if (pathname === "/admin/bookings" || pathname === "/admin/bookings/") {
+    return { dir: SERVER_DIR, relative: "/bookings.html" };
+  }
+  if (/^\/admin\/booking\/[^/]+\/?$/.test(pathname)) {
+    return { dir: SERVER_DIR, relative: "/booking.html" };
   }
   // Properties index + per-property detail page. Both served from the
   // same HTML file; the JS reads the URL to decide which view to render.

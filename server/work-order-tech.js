@@ -389,16 +389,24 @@ async function uploadWoPhotos(files, meta = {}) {
     });
   }
   if (!photos.length) return null;
-  const response = await fetch(`/api/work-orders/${encodeURIComponent(state.id)}/photos`, {
+  // Photo bodies are base64-encoded JSON (not multipart), so they fit
+  // through the existing offline queue. When the tech is in the field
+  // with no signal, the upload gets staged in IndexedDB and replays
+  // on reconnect — no lost photos.
+  const fetchFn = (window.PJLOffline && window.PJLOffline.queuedFetch) || fetch;
+  const response = await fetchFn(`/api/work-orders/${encodeURIComponent(state.id)}/photos`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ photos })
   });
   const data = await response.json().catch(() => ({}));
-  if (!response.ok || !data.ok) {
+  if (!response.ok && !data.queued) {
     throw new Error((data.errors && data.errors[0]) || "Couldn't upload photo.");
   }
-  return data.workOrder;
+  // Queued path returns 202 with { ok: true, queued: true } — no
+  // workOrder echo. Caller renders optimistically from local state;
+  // the replay will produce the canonical record on next refresh.
+  return data.workOrder || null;
 }
 
 async function deleteWoPhoto(n) {
@@ -477,12 +485,23 @@ async function patchWorkOrder(payload) {
   if (!id) return;
   showSaving();
   try {
+    // Optimistic concurrency — send the last-known updatedAt as
+    // If-Match so the server can detect "this WO moved on while you
+    // were editing." 409 → showConflictBanner() prompts the tech to
+    // reload before they accidentally overwrite a co-tech's save.
+    const headers = { "Content-Type": "application/json" };
+    if (state.updatedAt) headers["If-Match"] = state.updatedAt;
     const response = await fetch(`/api/work-orders/${encodeURIComponent(id)}`, {
       method: "PATCH",
-      headers: { "Content-Type": "application/json" },
+      headers,
       body: JSON.stringify(payload)
     });
     const data = await response.json().catch(() => ({}));
+    if (response.status === 409 && data.error === "version_conflict") {
+      showConflictBanner(data.currentVersion);
+      hideSaving();
+      return;
+    }
     if (!response.ok || !data.ok) {
       throw new Error((data.errors && data.errors[0]) || `Save failed (HTTP ${response.status}).`);
     }
@@ -494,12 +513,33 @@ async function patchWorkOrder(payload) {
       if ("status" in payload)    state.status = data.workOrder.status;
       if ("techNotes" in payload) state.techNotes = data.workOrder.techNotes;
       if ("zones" in payload)     state.zones = data.workOrder.zones;
+      // Always track the latest updatedAt as the local version so the
+      // next PATCH's If-Match header reflects "I just saw this version".
+      if (data.workOrder.updatedAt) state.updatedAt = data.workOrder.updatedAt;
       techMeta.textContent = `Updated ${formatDateTime(data.workOrder.updatedAt)}`;
     }
     hideSaving();
   } catch (err) {
     hideSaving(err);
   }
+}
+
+// Show a "this WO was updated elsewhere" banner with a reload button.
+// Renders into a fixed bar at the top of the page; reuses the offline
+// banner styling for visual consistency.
+let conflictBannerShown = false;
+function showConflictBanner(/* currentVersion */) {
+  if (conflictBannerShown) return;
+  conflictBannerShown = true;
+  const bar = document.createElement("div");
+  bar.id = "techConflictBanner";
+  bar.style.cssText = "position:fixed;top:0;left:0;right:0;z-index:1500;padding:14px 18px;background:#fef6e6;border-bottom:2px solid #d6a800;color:#6b4e00;font-size:14px;display:flex;align-items:center;justify-content:space-between;gap:12px;box-shadow:0 2px 8px rgba(0,0,0,0.08);";
+  bar.innerHTML = `
+    <div><strong>⚠️ Another save happened on this work order while you were editing.</strong> Reload to see the latest before continuing — otherwise your next save could overwrite their changes.</div>
+    <button type="button" id="techConflictReload" style="padding:8px 16px;background:#1B4D2E;color:#fff;border:none;border-radius:6px;cursor:pointer;font:inherit;font-weight:600;">Reload now</button>
+  `;
+  document.body.appendChild(bar);
+  document.getElementById("techConflictReload").addEventListener("click", () => location.reload());
 }
 
 // ---- Run-level status (radio buttons) ---------------------------
@@ -2905,6 +2945,9 @@ async function init() {
     const wo = data.workOrder;
     state.type = wo.type || "service_visit";
     state.status = wo.status || "scheduled";
+    // Track the WO's version (updatedAt) so subsequent PATCHes can
+    // send it as If-Match. Server returns 409 on stale version.
+    state.updatedAt = wo.updatedAt || null;
     state.techNotes = wo.techNotes || "";
     state.zones = Array.isArray(wo.zones) ? wo.zones.map((z) => ({ ...z })) : [];
     state.serviceChecklist = (wo.serviceChecklist && typeof wo.serviceChecklist === "object") ? { ...wo.serviceChecklist } : {};
@@ -3195,6 +3238,10 @@ async function loadPartsCatalog() {
 // persists to wo.customParts. Tracks the "saved/saving/idle" state in
 // the status line at the top.
 let bringbackSaveTimer = null;
+// Pending materialsPacked/customParts payload — kept around so a
+// page reload mid-debounce can still flush via beforeunload, and so
+// offline-mode replays through PJLOffline.queuedFetch when available.
+let bringbackPendingPayload = null;
 function setBringbackSavingState(state) {
   const section = document.getElementById("techBringbackSection");
   if (!section) return;
@@ -3227,21 +3274,57 @@ function updateBringbackCounts() {
 }
 function scheduleBringbackSave(payload) {
   setBringbackSavingState("saving");
+  // Always track the latest payload so beforeunload can flush even if
+  // the debounce timer hasn't fired yet (fixes the "rapid taps lost on
+  // page reload" bug — HANDOFF.md "Materials checklist persistence").
+  bringbackPendingPayload = payload;
   clearTimeout(bringbackSaveTimer);
-  bringbackSaveTimer = setTimeout(async () => {
-    try {
-      const r = await fetch(`/api/work-orders/${encodeURIComponent(state.id)}`, {
-        method: "PATCH",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(payload)
-      });
-      if (!r.ok) throw new Error("save failed");
-      setBringbackSavingState("saved");
-    } catch (err) {
-      setBringbackSavingState("error");
-    }
-  }, 500);
+  bringbackSaveTimer = setTimeout(() => { flushBringbackSave(); }, 500);
 }
+
+async function flushBringbackSave({ keepalive = false } = {}) {
+  if (!bringbackPendingPayload) return;
+  const payload = bringbackPendingPayload;
+  bringbackPendingPayload = null;
+  clearTimeout(bringbackSaveTimer);
+  bringbackSaveTimer = null;
+  // Use the offline-aware queuedFetch when available so taps the tech
+  // makes in a no-signal field still hit the server when they come
+  // back online. The fetch wrapper for PATCH work-orders already
+  // exists (see wrapPatchWorkOrder below), but scheduleBringbackSave
+  // bypassed it — go through PJLOffline directly here.
+  const url = `/api/work-orders/${encodeURIComponent(state.id)}`;
+  const init = {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload),
+    // `keepalive: true` lets fetch complete even if the page is
+    // unloading. Critical for the beforeunload flush path.
+    keepalive
+  };
+  try {
+    const fetchFn = (window.PJLOffline && window.PJLOffline.queuedFetch) || fetch;
+    const r = await fetchFn(url, init);
+    if (!r.ok && !r.queued) throw new Error("save failed");
+    setBringbackSavingState("saved");
+  } catch (err) {
+    setBringbackSavingState("error");
+  }
+}
+
+// Flush any pending bringback save on page unload. Without this, a
+// tech who taps a quantity then immediately closes the tab loses the
+// last 500ms of changes.
+window.addEventListener("beforeunload", () => {
+  if (bringbackPendingPayload) flushBringbackSave({ keepalive: true });
+});
+// Same flush on visibilitychange → hidden, since mobile browsers
+// don't always fire beforeunload reliably when the app is backgrounded.
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden" && bringbackPendingPayload) {
+    flushBringbackSave({ keepalive: true });
+  }
+});
 function renderBringback() {
   const tree = document.getElementById("techBringbackTree");
   const section = document.getElementById("techBringbackSection");
