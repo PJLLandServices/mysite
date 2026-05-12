@@ -43,10 +43,17 @@
 //     banner, uploadWoPhotos routed through PJLOffline.queuedFetch.
 //   • 863c6ac — merged "Sign, lock & generate invoice" button +
 //     pre-sign readiness gate + post-sig banner with invoice link.
+// Bumped 2026-05-12 (v13 → v14): Brief: WO Field-Readiness — touches
+// work-order-tech.html (file input accept widened; pre-sign checklist
+// UI moved above canvas; tech recovery surfaces; finish bar hidden),
+// work-order-tech.js (HEIC/PDF upload path + PDF tile rendering;
+// readiness checklist render; recovery buttons; refresh-after-PATCH
+// for issue creation), work-order-tech.css (layout safety net + pre-
+// sign checklist styling + recovery button styling).
 // Lesson: bump this in the same commit as any change to the files in
 // STATIC_ASSETS, otherwise the field tech sees old behaviour even
 // after Render redeploys.
-const CACHE_VERSION = "pjl-tech-v13";
+const CACHE_VERSION = "pjl-tech-v14";
 const STATIC_ASSETS = [
   "/crm/work-order-tech.html",
   "/crm/work-order-tech.js",

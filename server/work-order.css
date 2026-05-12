@@ -11,6 +11,21 @@
    gets `display: flex`. The pending-bonus banner was the most recent victim. */
 [hidden] { display: none !important; }
 
+/* Layout safety net (Brief: WO Field-Readiness §3) — guarantees no
+   element overflows the viewport on phone, iPad, or MacBook. The desktop
+   editor renders inside .property-section blocks; these rules scope to
+   those containers so the rest of admin.css isn't touched. */
+.property-section img,
+.property-section video,
+.property-section iframe,
+.wo-signoff-section canvas { max-width: 100%; height: auto; display: block; }
+.property-section pre,
+.property-section code { max-width: 100%; overflow-wrap: anywhere; word-break: break-word; white-space: pre-wrap; }
+.wo-history-list { overflow-wrap: anywhere; word-break: break-word; }
+@media (max-width: 480px) {
+  .wo-status-card { min-width: 0; }
+}
+
 /* AI-Correct-Diagnosis Bonus banner — desktop WO editor mirror of the
    tech-mode banner. Sits at the top of the form so it's the first thing
    visible when reviewing an AI-quoted WO. Hidden until populated. Amber

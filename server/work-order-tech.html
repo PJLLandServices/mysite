@@ -299,9 +299,16 @@
       </header>
       <div class="tech-photo-strip" id="techWoPhotoStrip"></div>
       <label class="tech-photo-add">
-        <input type="file" accept="image/*" id="techWoPhotoInput" multiple>
+        <!-- accept: explicit MIME list (no "image/*") so iOS Safari
+             surfaces "Choose File" alongside Camera/Library, which is
+             how the tech picks an existing PDF receipt off the device.
+             .heic/.heif extensions are listed too because some Android
+             pickers key off extension, not MIME. Brief: WO Field-
+             Readiness §5 — allowed: JPEG/PNG/HEIC/WebP/GIF/PDF. -->
+        <input type="file" id="techWoPhotoInput" multiple
+               accept="image/jpeg,image/png,image/webp,image/heic,image/heif,image/gif,application/pdf,.heic,.heif">
         <span aria-hidden="true">📷</span>
-        <span>Add visit photo</span>
+        <span>Add visit photo or PDF</span>
       </label>
       <button type="button" class="tech-photo-save-all" id="techPhotoSaveAll" hidden>
         <span aria-hidden="true">💾</span>
@@ -324,6 +331,18 @@
       <h2 class="tech-section-title">Customer sign-off</h2>
 
       <div class="tech-signoff-form" id="techSignoffForm">
+        <!-- Pre-sign checklist (Brief: WO Field-Readiness §6.3) — every
+             gate that has to pass before the merged "Sign, Lock &
+             Generate Invoice" button activates. Always visible. Each
+             row has a status icon (✓ done / ⨯ pending), the gate name,
+             and tap-jumps to the relevant capture surface so the tech
+             can resolve gaps without scrolling around. Replaces the
+             former "failures only" inline list. -->
+        <section class="tech-pre-sign-checklist" aria-labelledby="techPreSignTitle">
+          <p class="tech-pre-sign-eyebrow" id="techPreSignTitle">Before signing</p>
+          <ul class="tech-pre-sign-list" id="techPreSignList"></ul>
+        </section>
+
         <label class="tech-signoff-name-label">
           <span>Customer name (printed)</span>
           <input type="text" id="techSignoffName" placeholder="e.g. Patrick Lalande" autocomplete="off" autocapitalize="words">
@@ -341,8 +360,19 @@
         </label>
 
         <button type="button" class="tech-signoff-submit" id="techSignoffSubmit" disabled>Sign, lock &amp; generate invoice</button>
-        <ul class="tech-signoff-readiness" id="techSignoffReadiness" hidden></ul>
         <p class="tech-signoff-note">Once signed, the work order locks, completes the visit, and drafts a customer invoice. Scope additions after sign-off need a fresh signature.</p>
+
+        <!-- Cascade recovery surfaces (Brief: WO Field-Readiness §6.5).
+             Conditionally rendered: visible only when the WO is locked
+             AND the cascade didn't produce a downstream artifact (no
+             invoice / no cascade_fire history entry). Hidden on a clean
+             WO so the surface stays uncluttered. -->
+        <div class="tech-cascade-recovery" id="techCascadeRecovery" hidden>
+          <p class="tech-cascade-recovery-help" id="techCascadeRecoveryHelp">This visit signed and locked but the invoice didn't draft. Use the buttons below to recover.</p>
+          <button type="button" class="tech-cascade-recovery-btn" id="techGenerateInvoiceBtn" hidden>Generate invoice now</button>
+          <button type="button" class="tech-cascade-recovery-btn tech-cascade-recovery-btn--outline" id="techRunCascadeBtn" hidden>Re-run cascade</button>
+          <p class="tech-cascade-recovery-status" id="techCascadeRecoveryStatus" hidden></p>
+        </div>
       </div>
 
       <div class="tech-signoff-signed" id="techSignoffSigned" hidden>
@@ -468,24 +498,16 @@
 
     <p class="tech-meta" id="techMeta">—</p>
 
-    <!-- Sticky finish-the-visit bar — sits at the bottom so the tech's
-         thumb is already there after they scroll through the WO. The
-         "Awaiting approval" state is for when scope-add work needs
-         customer sign-off (on-screen OR via remote approval link). The
-         "Completed" state fires the completion cascade (service record
-         + draft invoice + notifications) per spec §4.3.4. -->
-    <section class="tech-finish-bar" id="techFinishBar">
-      <div class="tech-finish-bar-inner">
-        <button type="button" class="tech-finish-btn tech-finish-btn--awaiting" data-run-status="awaiting_approval" id="techFinishAwaiting">
-          <span class="tech-finish-btn-label">Awaiting approval</span>
-          <span class="tech-finish-btn-sub">scope-add needs customer sign-off</span>
-        </button>
-        <button type="button" class="tech-finish-btn tech-finish-btn--complete" data-run-status="completed" id="techFinishComplete">
-          <span class="tech-finish-btn-label">Mark visit completed</span>
-          <span class="tech-finish-btn-sub">creates service record + draft invoice</span>
-        </button>
-      </div>
-    </section>
+    <!-- Sticky finish-the-visit bar — REMOVED in the WO Field-Readiness
+         brief (§6.3). The "Mark visit completed" CTA is now folded into
+         the unified "Sign, Lock & Generate Invoice" button in the
+         signoff section; signing fires the cascade in one atomic step.
+         The "Awaiting approval" status flip happens implicitly when the
+         remote-approval flow sends a quote (sets status server-side).
+         Kept here as an HTML comment + hidden DOM so any rollback can
+         restore the surface without re-writing markup; CSS hides it
+         unconditionally. -->
+    <section class="tech-finish-bar" id="techFinishBar" hidden></section>
   </main>
 
   <p class="tech-loading" id="techLoading">Loading work order…</p>

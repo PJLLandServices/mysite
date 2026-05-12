@@ -73,6 +73,7 @@
         <button type="button" data-status-filter="completed">Completed</button>
         <button type="button" data-status-filter="cancelled">Cancelled</button>
         <button type="button" data-status-filter="stuck" class="wo-filter-stuck" title="Signed work orders that never fired the completion cascade — recover them here.">Stuck completions</button>
+        <button type="button" data-status-filter="needs_invoice" class="wo-filter-needs-invoice" title="Signed work orders that don't have an invoice on file (cascade may have run partially or failed). Use the per-row Run cascade button to draft missing invoices.">Needs invoice</button>
       </section>
 
       <p class="suppliers-empty" id="woEmpty" hidden>No work orders match the current filter.</p>

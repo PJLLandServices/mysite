@@ -9,6 +9,31 @@
 
 * { box-sizing: border-box; }
 
+/* Layout safety net — no element overflows the viewport on iPhone, iPad,
+   or MacBook. Brief: WO Field-Readiness §3 — the tech page must never
+   produce horizontal scroll at 375px / 768px / 1280px. These rules are
+   intentionally targeted: applied broadly to images/video/canvas/iframe
+   (the usual suspects), to pre/code (long unbroken text), and to tables
+   inside the tech surface. The body already has `overflow-wrap: anywhere`
+   for word-level fixes; this section catches the embedded-content cases.
+   Do NOT add `overflow-x: hidden` to <html> or <body> — see line 162. */
+.tech-body img,
+.tech-body video,
+.tech-body iframe { max-width: 100%; height: auto; display: block; }
+.tech-body canvas { max-width: 100%; }
+.tech-body pre,
+.tech-body code { max-width: 100%; overflow-wrap: anywhere; word-break: break-word; white-space: pre-wrap; }
+.tech-body table { width: 100%; table-layout: fixed; }
+/* Narrow-viewport guard: at <380px (older iPhone SE territory + tight
+   landscape orientations), trim section gutters and let flex/grid items
+   collapse below their min-width so nothing pushes past the viewport. */
+@media (max-width: 380px) {
+  .tech-main { padding-left: 10px; padding-right: 10px; }
+  .tech-on-site-line-controls { grid-template-columns: 60px 1fr auto; gap: 6px; }
+  .tech-payment-grid { gap: 8px; }
+  .tech-finish-bar-inner { grid-template-columns: 1fr; }
+}
+
 :root {
   --tech-green:        #1B4D2E;
   --tech-green-mid:    #2D6A42;
@@ -1233,6 +1258,37 @@ html, body {
 }
 .tech-photo-thumb-remove:active { background: rgba(177, 58, 58, 0.85); }
 
+/* PDF tiles (Brief: WO Field-Readiness §5.3). Same 92×92 footprint as
+   the image thumb so the strip stays uniform, but with a filename
+   wrapped inside instead of <img>. Tap opens the PDF in a new tab. */
+.tech-photo-thumb.is-pdf { background: #FFF8E6; border-color: #E6D17B; }
+.tech-photo-pdf-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  padding: 8px 6px;
+  gap: 4px;
+  text-decoration: none;
+  color: #5A4400;
+  font-size: 11px;
+  line-height: 1.2;
+  text-align: center;
+  overflow: hidden;
+}
+.tech-photo-pdf-icon { font-size: 28px; line-height: 1; }
+.tech-photo-pdf-name {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+  font-weight: 600;
+  max-width: 100%;
+}
+
 .tech-photo-add {
   display: inline-flex;
   align-items: center;
@@ -1594,21 +1650,128 @@ body.tech-lightbox-open { overflow: hidden; }
   line-height: 1.45;
 }
 
-/* Pre-sign readiness list — surfaces what's blocking the merged
-   Sign, Lock & Generate Invoice tap. Amber-toned so it reads as
-   "fix-me" without alarming the customer. */
-.tech-signoff-readiness {
-  margin: 8px 0 0;
-  padding: 10px 12px 10px 26px;
-  background: rgba(224, 168, 90, 0.10);
-  border: 1px solid rgba(224, 168, 90, 0.40);
-  border-radius: 10px;
-  list-style: disc;
-  font-size: 12px;
-  color: #6E4A1A;
-  line-height: 1.5;
+/* Pre-sign checklist (Brief: WO Field-Readiness §6.3) — sits above the
+   signature canvas. ALWAYS visible. Every gate shows with a ✓ (done)
+   or ⨯ (pending). Tapping a row scrolls to that gate's capture surface.
+   Color: subtle PJL green tint with amber-cross for unmet gates so the
+   tech (and customer watching them sign) reads it as "the steps left
+   to wrap up" rather than alarming. */
+.tech-pre-sign-checklist {
+  margin: 0 0 4px;
+  padding: 12px 14px;
+  background: var(--tech-card);
+  border: 1px solid var(--tech-border);
+  border-left: 4px solid var(--tech-green);
+  border-radius: 12px;
 }
-.tech-signoff-readiness li { margin: 2px 0; }
+.tech-pre-sign-eyebrow {
+  margin: 0 0 8px;
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--tech-green);
+}
+.tech-pre-sign-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.tech-pre-sign-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 32px;
+  padding: 4px 8px;
+  margin: 0 -8px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+.tech-pre-sign-row:active { background: var(--tech-bg); }
+.tech-pre-sign-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1;
+}
+.tech-pre-sign-row[data-ok="1"] .tech-pre-sign-icon {
+  background: var(--tech-green);
+  color: #fff;
+}
+.tech-pre-sign-row[data-ok="0"] .tech-pre-sign-icon {
+  background: rgba(224, 123, 36, 0.18);
+  color: var(--tech-amber);
+  border: 1px solid rgba(224, 123, 36, 0.45);
+}
+.tech-pre-sign-label {
+  font-size: 13.5px;
+  line-height: 1.4;
+  color: var(--tech-text);
+}
+.tech-pre-sign-row[data-ok="0"] .tech-pre-sign-label {
+  color: var(--tech-text-mid);
+}
+
+/* Cascade recovery surfaces (Brief: WO Field-Readiness §6.5) — only
+   visible when WO is locked AND a downstream artifact is missing
+   (invoice draft / cascade never fired). Stays out of the way on a
+   clean WO; appears below the signed-signature card with clear
+   action buttons. */
+.tech-cascade-recovery {
+  margin: 12px 0 0;
+  padding: 12px 14px;
+  background: #FFF4E6;
+  border: 1px solid rgba(224, 123, 36, 0.40);
+  border-left: 4px solid var(--tech-amber);
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.tech-cascade-recovery-help {
+  margin: 0;
+  font-size: 13px;
+  color: var(--tech-text-mid);
+  line-height: 1.45;
+}
+.tech-cascade-recovery-btn {
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  min-height: 44px;
+  padding: 10px 14px;
+  background: var(--tech-green);
+  color: #fff;
+  border: 0;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.tech-cascade-recovery-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.tech-cascade-recovery-btn:active:not(:disabled) { background: var(--tech-green-mid); }
+.tech-cascade-recovery-btn--outline {
+  background: #fff;
+  color: var(--tech-green);
+  border: 1.5px solid var(--tech-green);
+}
+.tech-cascade-recovery-btn--outline:active:not(:disabled) { background: rgba(74, 140, 92, 0.08); }
+.tech-cascade-recovery-status {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--tech-text-mid);
+  line-height: 1.4;
+  font-style: italic;
+}
 
 .tech-postsig-link {
   color: inherit;

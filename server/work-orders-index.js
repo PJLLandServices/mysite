@@ -35,6 +35,11 @@ const CLOSED_STATUSES = new Set(["completed", "cancelled", "no_show"]);
 
 let currentStatus = "";
 let cachedWos = [];
+// Set of WO ids that have an invoice referencing them. Hydrated once at
+// load via GET /api/invoices and used by the "needs_invoice" filter
+// (Brief: WO Field-Readiness §6.6). Empty Set until the invoices fetch
+// completes — filter then re-renders.
+let invoicedWoIds = new Set();
 
 function escapeHtml(s) {
   return String(s == null ? "" : s)
@@ -51,12 +56,23 @@ function fmtDateTime(iso) {
 }
 
 async function load() {
-  const r = await fetch("/api/work-orders", { cache: "no-store" });
-  const data = await r.json().catch(() => ({}));
-  cachedWos = (data.ok && Array.isArray(data.workOrders)) ? data.workOrders : [];
-  // Most-recently-updated first — matches how the existing /api/work-orders
-  // endpoint sorts, but be explicit so future API changes don't drift.
-  cachedWos.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
+  // Two parallel fetches: WOs (primary) + invoices (used to compute the
+  // needs_invoice client-side join). Invoices fetch is best-effort —
+  // if it fails the filter just shows zero results until reload.
+  const [woResp, invResp] = await Promise.allSettled([
+    fetch("/api/work-orders", { cache: "no-store" }),
+    fetch("/api/invoices", { cache: "no-store" })
+  ]);
+  if (woResp.status === "fulfilled") {
+    const data = await woResp.value.json().catch(() => ({}));
+    cachedWos = (data.ok && Array.isArray(data.workOrders)) ? data.workOrders : [];
+    cachedWos.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
+  }
+  if (invResp.status === "fulfilled") {
+    const data = await invResp.value.json().catch(() => ({}));
+    const invoices = (data.ok && Array.isArray(data.invoices)) ? data.invoices : [];
+    invoicedWoIds = new Set(invoices.map((inv) => inv.woId).filter(Boolean));
+  }
   render();
 }
 
@@ -70,6 +86,13 @@ function applyFilters(items) {
     // Tap a row to open the desktop editor, then Re-run completion
     // cascade — OR use the inline button on each card here.
     result = result.filter((w) => w.locked === true && w.status !== "completed");
+  } else if (currentStatus === "needs_invoice") {
+    // "Needs invoice" — WOs signed (locked=true) that have NO invoice
+    // on file referencing them. Catches both the cascade-never-fired
+    // case (overlaps with "stuck") AND the cascade-fired-but-draft-
+    // failed case (status="completed" but no invoice). Brief: WO
+    // Field-Readiness §6.6.
+    result = result.filter((w) => w.locked === true && !invoicedWoIds.has(w.id));
   } else if (currentStatus) {
     result = result.filter((w) => w.status === currentStatus);
   } else {
@@ -94,12 +117,19 @@ function applyFilters(items) {
 function render() {
   const items = applyFilters(cachedWos);
   const showStuck = currentStatus === "stuck";
+  const showNeedsInvoice = currentStatus === "needs_invoice";
+  // Both recovery filters surface the per-row Run cascade button. The
+  // user copy + empty message vary so the operator knows which subset
+  // they're looking at.
+  const showRunButton = showStuck || showNeedsInvoice;
   if (!items.length) {
     els.container.innerHTML = "";
     els.empty.hidden = false;
     els.empty.textContent = showStuck
       ? "No stuck completions. Every signed work order has fired its cascade."
-      : "No work orders match the current filter.";
+      : showNeedsInvoice
+        ? "No signed work orders are missing an invoice. Cascade is healthy."
+        : "No work orders match the current filter.";
     return;
   }
   els.empty.hidden = true;
@@ -116,11 +146,12 @@ function render() {
     if (wo.intakeGuarantee && wo.intakeGuarantee.applies) tags.push(`<span class="wo-card-tag">AI guarantee</span>`);
     const photoCount = (wo.photos || []).length;
     if (photoCount) tags.push(`<span class="wo-card-tag">${photoCount} photo${photoCount === 1 ? "" : "s"}</span>`);
-    // Stuck-recovery action — visible only on the "Stuck completions"
-    // filter. PATCHes status=completed which fires the cascade server-
-    // side (idempotent, safe to re-run). Disabled when the WO has no
-    // linked property since the cascade short-circuits on that.
-    const stuckAction = showStuck
+    // Recovery action — visible on the "Stuck completions" + "Needs
+    // invoice" filters. Both surface the same per-row Run cascade
+    // button (idempotent — safe to re-run on already-cascaded WOs).
+    // Disabled when the WO has no linked property since the cascade
+    // short-circuits on that. Brief: WO Field-Readiness §6.6.
+    const recoveryAction = showRunButton
       ? `<div class="wo-card-stuck-action">
            ${wo.propertyId
              ? `<button type="button" class="pjl-btn pjl-btn-primary wo-card-run-cascade" data-wo-id="${escapeHtml(wo.id)}">Run cascade now</button>`
@@ -128,7 +159,7 @@ function render() {
          </div>`
       : "";
     return `
-      <li class="ml-card${showStuck ? " is-stuck" : ""}">
+      <li class="ml-card${showRunButton ? " is-stuck" : ""}">
         <a class="ml-card-link" href="/admin/work-order/${encodeURIComponent(wo.id)}">
           <div class="ml-card-head">
             <h3 class="ml-card-name">${escapeHtml(customer)}</h3>
@@ -146,18 +177,20 @@ function render() {
             <span class="wo-card-id">${(wo.zones || []).length} zone${(wo.zones || []).length === 1 ? "" : "s"}</span>
           </div>
         </a>
-        ${stuckAction}
+        ${recoveryAction}
       </li>
     `;
   }).join("");
 }
 
-// Per-card "Run cascade now" — PATCHes status=completed, which on the
-// server side fires the completion cascade for the first time on this
-// WO and returns the freshly-drafted invoice id. Idempotent (re-running
-// against an already-cascaded WO just short-circuits at the service-
-// record check). Confirms before firing because this changes the WO
-// status to completed.
+// Per-card "Run cascade now" — calls POST /run-cascade (Brief: WO
+// Field-Readiness §6.6). Idempotent at the cascade layer: re-runs
+// against an already-cascaded WO short-circuit with alreadyRan=true
+// at the service-record check. Works for both filters:
+//   - "Stuck" (locked && status !== "completed"): cascade fires and
+//     creates the missing artifacts; status stays where it was.
+//   - "Needs invoice" (locked && no invoice on file): cascade re-runs
+//     and the createDraft step generates the missing invoice.
 els.container.addEventListener("click", async (event) => {
   const btn = event.target.closest(".wo-card-run-cascade");
   if (!btn) return;
@@ -165,20 +198,16 @@ els.container.addEventListener("click", async (event) => {
   event.stopPropagation();
   const id = btn.dataset.woId;
   if (!id) return;
-  if (!confirm(`Run completion cascade on ${id}? This marks the visit completed and drafts the invoice. Safe to re-run if it's already cascaded.`)) return;
+  if (!confirm(`Run completion cascade on ${id}? Drafts a service record + invoice from the signed scope. Idempotent — safe to re-run.`)) return;
   const original = btn.textContent;
   btn.disabled = true;
   btn.textContent = "Running…";
   try {
-    const r = await fetch(`/api/work-orders/${encodeURIComponent(id)}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ status: "completed" })
-    });
+    const r = await fetch(`/api/work-orders/${encodeURIComponent(id)}/run-cascade`, { method: "POST" });
     const data = await r.json().catch(() => ({}));
     if (!r.ok || !data.ok) throw new Error((data.errors || ["Couldn't run cascade."]).join(" "));
-    const invoiceId = data.cascade && data.cascade.invoiceId;
-    const alreadyRan = data.cascade && data.cascade.alreadyRan;
+    const invoiceId = data.invoice && data.invoice.id;
+    const alreadyRan = !!data.alreadyRan;
     let msg;
     if (alreadyRan) {
       msg = `Cascade already fired on this WO. Service record + invoice on file.`;
@@ -188,7 +217,7 @@ els.container.addEventListener("click", async (event) => {
       msg = `Cascade fired. Service record on file (no billable line items).`;
     }
     alert(msg);
-    await load(); // refresh the list — this WO should drop out of "stuck"
+    await load(); // refresh the list — this WO should drop out of the recovery filter
   } catch (err) {
     btn.disabled = false;
     btn.textContent = original;
@@ -205,5 +234,27 @@ els.filterButtons.forEach((btn) => {
     render();
   });
 });
+
+// URL query bootstrap (Brief: WO Field-Readiness §6.6) — links like
+// /admin/work-orders?needs_invoice=1 auto-activate the matching pill
+// so Patrick can deep-link from elsewhere (recovery dashboards,
+// memory notes) and land on the filtered view. Falls back to "All
+// active" when no param matches.
+(function applyQueryParamFilter() {
+  try {
+    const params = new URLSearchParams(window.location.search || "");
+    let preselect = "";
+    if (params.get("needs_invoice") === "1") preselect = "needs_invoice";
+    else if (params.get("stuck") === "1") preselect = "stuck";
+    else if (params.get("status")) preselect = params.get("status");
+    if (preselect) {
+      const target = Array.from(els.filterButtons).find((b) => b.dataset.statusFilter === preselect);
+      if (target) {
+        currentStatus = preselect;
+        els.filterButtons.forEach((b) => b.classList.toggle("is-active", b === target));
+      }
+    }
+  } catch (_e) { /* malformed querystring — ignore, use defaults */ }
+})();
 
 load();

@@ -354,10 +354,37 @@ async function processPhotoForUpload(file, opts = {}) {
   });
 }
 
-// Upload one or more photos to /api/work-orders/:id/photos. `meta` is
+// Upload one or more files to /api/work-orders/:id/photos. `meta` is
 // any additional fields (category, zoneNumber, issueId, label) that get
-// attached to each uploaded photo. Each file is resized + watermarked
-// before send, with geo + takenAt captured at processing time.
+// attached to each uploaded record. Brief: WO Field-Readiness §5 widens
+// the accepted set:
+//   - JPEG/PNG/WebP/GIF → resized + watermarked client-side (existing
+//     path), upload as JPEG ~1280px longest edge.
+//   - HEIC/HEIF → resized + watermarked via canvas (iOS Safari decodes
+//     HEIC natively; other browsers can't, so we fall back to sending
+//     raw bytes and let the server store as HEIC).
+//   - PDF → no canvas processing possible. Sent as raw base64.
+// Per-file 25 MB cap enforced client-side too so the 30 MB→server
+// rejection isn't the only line of defence (saves the round-trip).
+const WO_MAX_UPLOAD_BYTES = 25_000_000;
+const WO_PROCESSABLE_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
+const WO_ALLOWED_UPLOAD_TYPES = new Set([
+  "image/jpeg", "image/png", "image/webp", "image/heic", "image/heif", "image/gif", "application/pdf"
+]);
+
+function readFileAsBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("Couldn't read that file."));
+    reader.onload = () => {
+      const result = String(reader.result || "");
+      const idx = result.indexOf(",");
+      resolve(idx >= 0 ? result.slice(idx + 1) : result);
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
 async function uploadWoPhotos(files, meta = {}) {
   const arr = Array.from(files || []);
   if (!arr.length) return null;
@@ -365,27 +392,67 @@ async function uploadWoPhotos(files, meta = {}) {
   // denial / timeout, in which case the watermark + uploaded meta omit it.
   const geo = await getCurrentGeo();
   const photos = [];
-  // Best-effort sequence label for the watermark — counts NEW photos
+  // Best-effort sequence label for the watermark — counts NEW media
   // about to land. Server filename uses real n; this is just visual.
   const existingCount = (state.photos || []).length;
   let seq = 0;
   for (const f of arr) {
-    if (!f.type || !f.type.startsWith("image/")) continue;
+    const fileType = (f.type || "").toLowerCase();
+    // Reject unsupported types up-front with a clear message so the
+    // tech sees what went wrong (vs. silent skip the old code did).
+    if (!fileType || !WO_ALLOWED_UPLOAD_TYPES.has(fileType)) {
+      // Some Android pickers send empty type for .heic — accept by ext.
+      const lowerName = (f.name || "").toLowerCase();
+      const heicByExt = lowerName.endsWith(".heic") || lowerName.endsWith(".heif");
+      const pdfByExt = lowerName.endsWith(".pdf");
+      if (!heicByExt && !pdfByExt) {
+        throw new Error(`Unsupported file type${fileType ? ` "${fileType}"` : ""}. Allowed: JPEG, PNG, HEIC, WebP, GIF, PDF.`);
+      }
+    }
+    // Pre-flight 25 MB cap — fail fast, no wasted upload.
+    if (f.size > WO_MAX_UPLOAD_BYTES) {
+      const fileMb = (f.size / 1_000_000).toFixed(1);
+      throw new Error(`File too large — 25 MB max (this one is ${fileMb} MB).`);
+    }
     seq += 1;
     const takenAt = new Date();
     const seqLabel = `#${existingCount + seq}`;
-    const processed = await processPhotoForUpload(f, {
-      geo,
-      takenAt,
-      woId: state.id,
-      seqLabel
-    });
+    let resolvedType = fileType;
+    if (!resolvedType) {
+      const lowerName = (f.name || "").toLowerCase();
+      if (lowerName.endsWith(".heic")) resolvedType = "image/heic";
+      else if (lowerName.endsWith(".heif")) resolvedType = "image/heif";
+      else if (lowerName.endsWith(".pdf")) resolvedType = "application/pdf";
+    }
+    let payload;
+    if (resolvedType === "application/pdf") {
+      // PDFs skip canvas — send raw base64. The server stores as-is and
+      // the UI renders a tap-through tile (no inline preview).
+      const base64 = await readFileAsBase64(f);
+      payload = { data: base64, mediaType: "application/pdf", label: f.name || "" };
+    } else if (WO_PROCESSABLE_IMAGE_TYPES.has(resolvedType)) {
+      // Canvas-decodable images: resize, watermark, re-encode as JPEG.
+      // Existing path — unchanged.
+      const processed = await processPhotoForUpload(f, { geo, takenAt, woId: state.id, seqLabel });
+      payload = { data: processed.base64, mediaType: processed.mediaType };
+    } else {
+      // HEIC/HEIF — try canvas (Safari decodes natively), fall back to
+      // raw upload on decode failure (other browsers).
+      try {
+        const processed = await processPhotoForUpload(f, { geo, takenAt, woId: state.id, seqLabel });
+        payload = { data: processed.base64, mediaType: processed.mediaType };
+      } catch (_canvasErr) {
+        const base64 = await readFileAsBase64(f);
+        payload = { data: base64, mediaType: resolvedType };
+      }
+    }
     photos.push({
-      data: processed.base64,
-      mediaType: processed.mediaType,
+      ...payload,
       geo: geo || null,
       takenAt: takenAt.toISOString(),
-      ...meta
+      ...meta,
+      // Caller-supplied meta.label overrides our fallback (PDF filename).
+      label: meta.label || payload.label || ""
     });
   }
   if (!photos.length) return null;
@@ -512,7 +579,26 @@ async function patchWorkOrder(payload) {
       // happened mid-flight.
       if ("status" in payload)    state.status = data.workOrder.status;
       if ("techNotes" in payload) state.techNotes = data.workOrder.techNotes;
-      if ("zones" in payload)     state.zones = data.workOrder.zones;
+      if ("zones" in payload) {
+        state.zones = data.workOrder.zones;
+        // Re-render any UI that derives from zones so server-normalized
+        // state (issue ids confirmed, arrays sorted, anything the server
+        // rewrote) is visible without a page reload. Brief: WO Field-
+        // Readiness §4 — "create an issue, new issue appears in the
+        // zone's issue list immediately, no page reload."
+        if (typeof renderZones === "function") renderZones();
+        if (state.activeZoneIndex >= 0 && typeof renderSheetIssues === "function") {
+          const liveZone = state.zones[state.activeZoneIndex];
+          if (liveZone) renderSheetIssues(liveZone);
+        }
+        if (typeof renderOnSiteQuote === "function") renderOnSiteQuote();
+        // Walk-out / pre-sign readiness depends on zone status + issue
+        // counts — refresh the gating list too.
+        if (typeof updateSignoffSubmitState === "function") updateSignoffSubmitState();
+      }
+      if ("photos" in payload) {
+        state.photos = data.workOrder.photos || [];
+      }
       // Always track the latest updatedAt as the local version so the
       // next PATCH's If-Match header reflects "I just saw this version".
       if (data.workOrder.updatedAt) state.updatedAt = data.workOrder.updatedAt;
@@ -964,11 +1050,15 @@ function renderIssuePhotos(host, issueId, zone) {
   const label = document.createElement("label");
   label.className = "tech-issue-photo-add";
   // No capture attribute — same flow as the visit-photos input: lets
-  // iOS/Android offer Photo Library + Take Photo + Choose File.
+  // iOS/Android offer Photo Library + Take Photo + Choose File. accept
+  // matches the visit-photos input so per-issue uploads accept the
+  // same set (JPEG/PNG/HEIC/WebP/GIF/PDF) — receipts, fence-line shots,
+  // wiring diagrams. Brief: WO Field-Readiness §5.
   label.innerHTML = `
-    <input type="file" accept="image/*" multiple hidden>
+    <input type="file" multiple hidden
+           accept="image/jpeg,image/png,image/webp,image/heic,image/heif,image/gif,application/pdf,.heic,.heif">
     <span aria-hidden="true">📷</span>
-    <span>Photo</span>
+    <span>Photo / PDF</span>
   `;
   label.querySelector("input").addEventListener("change", async (event) => {
     if (state.locked) return;
@@ -1620,12 +1710,32 @@ function renderPhotoThumb(photo) {
   const wrap = document.createElement("div");
   wrap.className = "tech-photo-thumb";
   wrap.dataset.photoN = String(photo.n);
-  const img = document.createElement("img");
-  img.src = woPhotoUrl(photo.n);
-  img.loading = "lazy";
-  img.alt = photo.label || `Photo ${photo.n}`;
-  img.addEventListener("click", () => openLightbox(woPhotoUrl(photo.n)));
-  wrap.appendChild(img);
+  // Brief: WO Field-Readiness §5.3 — PDFs render as a filename tile
+  // (icon + name + tap-through), not <img>. The server marks each
+  // entry with `kind: 'image' | 'pdf'`; legacy uploads default to
+  // image (all pre-brief WO uploads were images).
+  const isPdf = photo.kind === "pdf" || photo.mediaType === "application/pdf";
+  if (isPdf) {
+    wrap.classList.add("is-pdf");
+    const link = document.createElement("a");
+    link.className = "tech-photo-pdf-tile";
+    link.href = woPhotoUrl(photo.n);
+    link.target = "_blank";
+    link.rel = "noopener";
+    const filename = photo.label || photo.filename || `PDF ${photo.n}`;
+    link.innerHTML = `
+      <span class="tech-photo-pdf-icon" aria-hidden="true">📄</span>
+      <span class="tech-photo-pdf-name">${escapeHtml(filename)}</span>
+    `;
+    wrap.appendChild(link);
+  } else {
+    const img = document.createElement("img");
+    img.src = woPhotoUrl(photo.n);
+    img.loading = "lazy";
+    img.alt = photo.label || `Photo ${photo.n}`;
+    img.addEventListener("click", () => openLightbox(woPhotoUrl(photo.n)));
+    wrap.appendChild(img);
+  }
   if (!state.locked) {
     const remove = document.createElement("button");
     remove.type = "button";
@@ -1803,10 +1913,11 @@ function createSignaturePad(canvas, onChange) {
 
 // Submit button enables only when name + signature + acknowledgement
 // AND every walkout gate (zones touched, photos captured, carry-forward
-// resolved) is met. The merged "Sign, Lock & Generate Invoice" tap
-// completes the visit, so the WO must be ready-to-complete at the
-// moment the customer signs. Re-runs on every input change so the tech
-// sees the gating in real time.
+// resolved, paidOnSite selected, materials confirmed when relevant) is
+// met. The merged "Sign, Lock & Generate Invoice" tap completes the
+// visit, so the WO must be ready-to-complete at the moment the customer
+// signs. Re-runs on every input change so the tech sees the gating in
+// real time.
 function updateSignoffSubmitState() {
   const submit = document.getElementById("techSignoffSubmit");
   if (!submit) return;
@@ -1823,22 +1934,11 @@ function updateSignoffSubmitState() {
   const readinessOk = readinessFails.length === 0;
   submit.disabled = !(name && ack && drawn && bonusGateOk && readinessOk);
 
-  // Surface the readiness gaps inline so the tech (and the customer
-  // watching them sign) can see what's left. Hidden when everything
-  // passes or the customer just hasn't filled in name/canvas yet —
-  // those gaps are visually obvious on the form.
-  const readinessList = document.getElementById("techSignoffReadiness");
-  if (readinessList) {
-    if (!readinessOk && (name || drawn)) {
-      readinessList.hidden = false;
-      readinessList.innerHTML = readinessFails
-        .map((f) => `<li>${f.replace(/</g, "&lt;")}</li>`)
-        .join("");
-    } else {
-      readinessList.hidden = true;
-      readinessList.innerHTML = "";
-    }
-  }
+  // Render the always-visible pre-sign checklist (Brief: WO Field-
+  // Readiness §6.3). Every gate shows with ✓ or ⨯ + label, regardless
+  // of whether it passes. Tapping a gate scrolls to its capture
+  // surface. Replaces the former "show only on partial fill" pattern.
+  renderPreSignChecklist({ name, ack, drawn, bonusGateOk });
 
   if (!bonusGateOk) {
     submit.title = "Resolve the AI Correct Diagnosis Bonus decision before signing.";
@@ -1849,11 +1949,113 @@ function updateSignoffSubmitState() {
   }
 }
 
+// Build the pre-sign checklist contents — every gate as a row with a
+// ✓ or ⨯ icon, the gate label, and a `data-jump` target that scrolls
+// the relevant surface into view when tapped. Re-runs on every state
+// change via updateSignoffSubmitState. Brief: WO Field-Readiness §6.3.
+function renderPreSignChecklist({ name, ack, drawn, bonusGateOk }) {
+  const list = document.getElementById("techPreSignList");
+  if (!list) return;
+  const ig = state.intakeGuarantee || {};
+  const minPhotos = TECH_PHOTO_REQUIREMENT_BY_TYPE[state.type] ?? 1;
+  const photoCount = Array.isArray(state.photos) ? state.photos.length : 0;
+  const photoOk = minPhotos === 0 || photoCount >= minPhotos;
+  const untouchedZones = (state.zones || []).filter((z) => {
+    if (z.status && z.status !== "") return false;
+    const checks = z.checks || {};
+    return !Object.values(checks).some(Boolean);
+  });
+  const zonesOk = untouchedZones.length === 0;
+  let cfOk = true;
+  if (state.type === "spring_opening") {
+    cfOk = !document.querySelectorAll('#techCarryForwardList [data-deferred-id]').length;
+  }
+  // Payment + materials gates promoted from post-sign per the brief.
+  const paymentOk = state.paidOnSite === true || state.paidOnSite === false;
+  // Materials gate only applies when the materials section is currently
+  // visible (i.e. this is a follow-up visit with a packing list). When
+  // hidden, treat the gate as satisfied so non-followup WOs aren't
+  // blocked. "Confirmed" = every row has packed > 0 OR the tech has
+  // explicitly cleared the section (no rows expected). Brief: §6.2.
+  const materialsSection = document.getElementById("techMaterialsSection");
+  const materialsVisible = materialsSection && !materialsSection.hidden;
+  let materialsOk = true;
+  if (materialsVisible) {
+    const rows = document.querySelectorAll("#techMaterialsList .tech-materials-row");
+    if (rows.length) {
+      const unpacked = Array.from(rows).filter((r) => !r.classList.contains("is-packed"));
+      materialsOk = unpacked.length === 0;
+    }
+  }
+
+  // Gate list — preserves the brief's example order. Each entry:
+  //   key: stable id, label: human text, ok: bool, jumpTo: css selector.
+  const gates = [
+    { key: "name",  label: "Customer name entered",  ok: !!name,  jumpTo: "#techSignoffName" },
+    { key: "ack",   label: "Acknowledgment ticked",  ok: ack,     jumpTo: "#techSignoffAck" },
+    { key: "drawn", label: "Signature drawn",        ok: drawn,   jumpTo: "#techSignoffCanvas" },
+    { key: "payment", label: "Payment method selected", ok: paymentOk, jumpTo: "#techPaymentSection" }
+  ];
+  if (ig.applies) {
+    gates.push({ key: "bonus", label: "AI bonus decision recorded", ok: bonusGateOk, jumpTo: "#techIntakeGuarantee" });
+  }
+  if (minPhotos > 0) {
+    gates.push({
+      key: "photos",
+      label: minPhotos === 1
+        ? "Completion photo captured"
+        : `${minPhotos} completion photos captured`,
+      ok: photoOk,
+      jumpTo: "#techWoPhotosSection"
+    });
+  }
+  gates.push({
+    key: "zones",
+    label: zonesOk ? "All zones reviewed" : `${untouchedZones.length} zone${untouchedZones.length === 1 ? "" : "s"} not yet reviewed`,
+    ok: zonesOk,
+    jumpTo: "#techZoneList"
+  });
+  if (state.type === "spring_opening") {
+    gates.push({
+      key: "carryforward",
+      label: cfOk ? "Carry-forward items resolved" : "Carry-forward items need an action",
+      ok: cfOk,
+      jumpTo: "#techCarryForward"
+    });
+  }
+  if (materialsVisible) {
+    gates.push({ key: "materials", label: "Materials check confirmed", ok: materialsOk, jumpTo: "#techMaterialsSection" });
+  }
+  list.innerHTML = gates.map((g) =>
+    `<li class="tech-pre-sign-row" data-ok="${g.ok ? "1" : "0"}" data-jump="${escapeHtml(g.jumpTo)}">
+       <span class="tech-pre-sign-icon" aria-hidden="true">${g.ok ? "✓" : "✕"}</span>
+       <span class="tech-pre-sign-label">${escapeHtml(g.label)}</span>
+     </li>`
+  ).join("");
+}
+
+// Tap-to-jump on a pre-sign checklist row — scrolls the relevant
+// capture surface into view so the tech can resolve a gap without
+// scrolling around manually. Delegated once at module load.
+document.getElementById("techPreSignList")?.addEventListener("click", (event) => {
+  const row = event.target.closest("[data-jump]");
+  if (!row) return;
+  const target = document.querySelector(row.dataset.jump);
+  if (!target) return;
+  target.scrollIntoView({ behavior: "smooth", block: "center" });
+  // Optional: focus the input if the target is one. iOS keyboard pops
+  // up which is what the tech wants when, e.g., jumping to the name.
+  if (target.matches("input, textarea, select")) {
+    setTimeout(() => target.focus(), 250);
+  }
+});
+
 // Same checks as walkoutCheckFailures(), minus the "signature missing"
 // gate — used pre-sign to prove the WO is ready to be marked complete
 // at the moment the customer signs (since signing now also completes
 // the visit per the merged button). Mirrored gates: zone walk, photo
-// gate, carry-forward resolution.
+// gate, carry-forward resolution, plus the newly-promoted paidOnSite
+// + materials check gates per Brief: WO Field-Readiness §6.2.
 function preSignReadinessFailures() {
   const fails = [];
   const untouched = (state.zones || []).filter((z) => {
@@ -1875,6 +2077,25 @@ function preSignReadinessFailures() {
     const photoCount = Array.isArray(state.photos) ? state.photos.length : 0;
     if (photoCount < minPhotos) {
       fails.push(`Capture ${minPhotos === 1 ? "at least one completion photo" : `at least ${minPhotos} completion photos`} before signing.`);
+    }
+  }
+  // Payment-method gate — promoted from post-sign to pre-sign so the
+  // cascade fires with the right paidOnSiteAtCompletion flag on the
+  // draft invoice. null = neither radio chosen.
+  if (state.paidOnSite !== true && state.paidOnSite !== false) {
+    fails.push("Pick a payment method (Yes / No — invoice to follow).");
+  }
+  // Materials check — only blocks when the section is visible (follow-
+  // up visit with a packing list) AND there's an unpacked row. Non-
+  // follow-up WOs skip this gate entirely.
+  const materialsSection = document.getElementById("techMaterialsSection");
+  if (materialsSection && !materialsSection.hidden) {
+    const rows = document.querySelectorAll("#techMaterialsList .tech-materials-row");
+    if (rows.length) {
+      const unpacked = Array.from(rows).filter((r) => !r.classList.contains("is-packed"));
+      if (unpacked.length) {
+        fails.push(`Mark ${unpacked.length} remaining material${unpacked.length === 1 ? "" : "s"} as packed (or remove the line items they came from).`);
+      }
     }
   }
   return fails;
@@ -1946,6 +2167,13 @@ document.getElementById("techSignoffSubmit")?.addEventListener("click", async ()
     if (data.cascade && data.cascade.invoiceId) {
       state.completedInvoiceId = data.cascade.invoiceId;
     }
+    // Cascade error path (Brief: WO Field-Readiness §6.4) — signature
+    // and lock persisted, but the downstream artifacts didn't land.
+    // Surface a non-blocking alert so the tech knows to tap the
+    // recovery button. The recovery surface auto-renders below.
+    if (data.cascade && data.cascade.error && !data.cascade.invoiceId) {
+      alert(`Visit signed and locked. Invoice generation hit a snag — tap "Re-run cascade" below to retry, or create one manually.\n\n(${data.cascade.error})`);
+    }
     // Pick up the fresh history (cascade_fire + invoice_drafted just
     // got appended server-side) and the freshest zone/property snapshot.
     if (Array.isArray(data.workOrder.history)) state.history = data.workOrder.history;
@@ -1955,10 +2183,111 @@ document.getElementById("techSignoffSubmit")?.addEventListener("click", async ()
     renderPostSigBanner();
     renderTechHistory();
     applyLockState(state.locked);
+    renderCascadeRecovery();
   } catch (err) {
     submit.disabled = false;
     submit.textContent = "Sign, lock & generate invoice";
     alert(err.message || "Couldn't save signature.");
+  }
+});
+
+// Decide whether to show the cascade-recovery surface inside the
+// signoff card. Brief: WO Field-Readiness §6.5 — visible only when
+// the WO is locked AND a downstream artifact didn't land. Two
+// independent buttons:
+//   - "Generate invoice now" when locked && no invoice on this WO
+//   - "Re-run cascade" when locked && no cascade_fire history entry
+// On a clean WO neither button renders, and the parent container
+// stays hidden so the layout doesn't shift.
+function renderCascadeRecovery() {
+  const wrap = document.getElementById("techCascadeRecovery");
+  if (!wrap) return;
+  const locked = state.locked === true || state.signature?.signed === true;
+  if (!locked) { wrap.hidden = true; return; }
+  const history = Array.isArray(state.history) ? state.history : [];
+  const cascadeFired = history.some((h) => h && h.action === "cascade_fire");
+  const hasInvoice = !!state.completedInvoiceId;
+  const genBtn = document.getElementById("techGenerateInvoiceBtn");
+  const runBtn = document.getElementById("techRunCascadeBtn");
+  const help = document.getElementById("techCascadeRecoveryHelp");
+  const showGen = locked && !hasInvoice;
+  const showRun = locked && !cascadeFired;
+  if (genBtn) genBtn.hidden = !showGen;
+  if (runBtn) runBtn.hidden = !showRun;
+  if (help) {
+    help.textContent = !cascadeFired
+      ? "Signed and locked, but the completion cascade didn't fire. Re-run to draft the invoice + service record."
+      : !hasInvoice
+        ? "Cascade fired, but no draft invoice landed. Try Generate invoice now."
+        : "Recovery actions for this signed WO.";
+  }
+  wrap.hidden = !(showGen || showRun);
+}
+
+document.getElementById("techGenerateInvoiceBtn")?.addEventListener("click", async () => {
+  const btn = document.getElementById("techGenerateInvoiceBtn");
+  const status = document.getElementById("techCascadeRecoveryStatus");
+  if (!btn || !state.id) return;
+  if (!confirm("Draft an invoice from this WO's line items?")) return;
+  btn.disabled = true;
+  const orig = btn.textContent;
+  btn.textContent = "Drafting…";
+  if (status) { status.hidden = true; status.textContent = ""; }
+  try {
+    const r = await fetch(`/api/work-orders/${encodeURIComponent(state.id)}/create-invoice`, { method: "POST" });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok || !data.ok) throw new Error((data.errors && data.errors[0]) || "Couldn't draft invoice.");
+    if (data.invoice && data.invoice.id) {
+      state.completedInvoiceId = data.invoice.id;
+      if (status) {
+        status.hidden = false;
+        status.innerHTML = `Draft invoice <a href="/admin/invoice/${encodeURIComponent(data.invoice.id)}" class="tech-postsig-link">${escapeHtml(data.invoice.id)}</a> on file.`;
+      }
+    }
+    renderCascadeRecovery();
+    renderPostSigBanner();
+  } catch (err) {
+    if (status) { status.hidden = false; status.textContent = err.message || "Couldn't draft invoice."; }
+  } finally {
+    btn.disabled = false;
+    btn.textContent = orig;
+  }
+});
+
+document.getElementById("techRunCascadeBtn")?.addEventListener("click", async () => {
+  const btn = document.getElementById("techRunCascadeBtn");
+  const status = document.getElementById("techCascadeRecoveryStatus");
+  if (!btn || !state.id) return;
+  if (!confirm("Re-run the completion cascade? Idempotent — safe to retry.")) return;
+  btn.disabled = true;
+  const orig = btn.textContent;
+  btn.textContent = "Running…";
+  if (status) { status.hidden = true; status.textContent = ""; }
+  try {
+    const r = await fetch(`/api/work-orders/${encodeURIComponent(state.id)}/run-cascade`, { method: "POST" });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok || !data.ok) throw new Error((data.errors && data.errors[0]) || "Couldn't run cascade.");
+    if (data.invoice && data.invoice.id) state.completedInvoiceId = data.invoice.id;
+    // Refresh full WO state so the new history entries surface.
+    try {
+      const r2 = await fetch(`/api/work-orders/${encodeURIComponent(state.id)}`);
+      const d2 = await r2.json().catch(() => ({}));
+      if (d2.ok && d2.workOrder && Array.isArray(d2.workOrder.history)) state.history = d2.workOrder.history;
+    } catch (_e) {}
+    if (status) {
+      status.hidden = false;
+      status.textContent = data.alreadyRan
+        ? "Cascade had already fired — nothing to do."
+        : (data.invoice?.id ? `Cascade fired. Invoice ${data.invoice.id} drafted.` : "Cascade fired. No billable line items.");
+    }
+    renderCascadeRecovery();
+    renderTechHistory();
+    renderPostSigBanner();
+  } catch (err) {
+    if (status) { status.hidden = false; status.textContent = err.message || "Couldn't run cascade."; }
+  } finally {
+    btn.disabled = false;
+    btn.textContent = orig;
   }
 });
 
@@ -3257,6 +3586,7 @@ const TECH_HISTORY_ACTION_LABELS = {
   carry_forward_already_fixed: "CF → fixed",
   carry_forward_cannot_locate: "CF → no locate",
   cascade_fire: "Cascade",
+  cascade_failed: "Cascade failed",
   invoice_drafted: "Invoice draft",
   followup_created: "Follow-up",
   created_as_followup: "From parent",
@@ -3668,6 +3998,9 @@ document.getElementById("techMaterialsList")?.addEventListener("change", (event)
   state.materialsPacked[sku] = cb.checked ? expectedQty : 0;
   cb.closest("li")?.classList.toggle("is-packed", cb.checked);
   patchWorkOrder({ materialsPacked: state.materialsPacked });
+  // Materials gate (Brief: WO Field-Readiness §6.2) is promoted to
+  // pre-sign — refresh the checklist when a row flips packed/unpacked.
+  updateSignoffSubmitState();
 });
 
 // ---- AI Correct Diagnosis Bonus banner (Brief F / spec §4.3.3 r6) -----
@@ -3837,6 +4170,10 @@ function renderPostSigBanner() {
   // Keep the pre-sign readiness list in sync as zones / photos / CF
   // resolutions mutate. Cheap; runs whenever this banner re-renders.
   updateSignoffSubmitState();
+  // The recovery surface gates on the same state (locked + history +
+  // invoice). Re-render here so a freshly-fired cascade hides the
+  // recovery buttons within the same tick.
+  if (typeof renderCascadeRecovery === "function") renderCascadeRecovery();
 
   const banner = document.getElementById("techPostSigBanner");
   const icon = document.getElementById("techPostSigIcon");
@@ -3911,6 +4248,10 @@ document.getElementById("techPaymentSection")?.addEventListener("change", (event
   if (state.paidOnSite === value) return;
   state.paidOnSite = value;
   patchWorkOrder({ paidOnSite: value });
+  // Pre-sign checklist surfaces this gate (Brief: WO Field-Readiness
+  // §6.2). Re-render immediately so the ✓ flips without waiting for
+  // the PATCH round-trip.
+  updateSignoffSubmitState();
 });
 
 // ---- Follow-up visit (spec §4.3.2 Follow-Up WO Trigger) ---------------

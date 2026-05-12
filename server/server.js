@@ -102,8 +102,67 @@ const PHOTOS_DIR = path.join(DATA_DIR, "photos");
 const WO_PHOTOS_DIR = path.join(DATA_DIR, "wo-photos");
 const MAX_PHOTOS_PER_LEAD = 5;
 const MAX_PHOTOS_PER_WO = 150;
-const MAX_PHOTO_BYTES = 1_500_000; // 1.5 MB per photo after client-side resize
+const MAX_PHOTO_BYTES = 1_500_000; // 1.5 MB per photo after client-side resize (lead intake)
 const QUOTE_POST_MAX_BYTES = 12_000_000; // 12 MB cap for the /api/quotes POST (5 photos × ~1.5MB base64 inflated)
+
+// Tech-mode WO uploads (Brief: WO Field-Readiness §5) widen on three
+// axes vs. lead photos: bigger per-file cap (a HEIC straight from an
+// iPhone 17 Pro Max or a customer receipt PDF can run 10-25 MB), a
+// wider MIME whitelist, and a roomier envelope so a single big upload
+// fits in one request. Lead photos KEEP the tighter 1.5 MB / image-only
+// constraints — chat intake is high-volume and bandwidth-sensitive.
+const MAX_WO_MEDIA_BYTES = 25_000_000;        // 25 MB per file
+const WO_UPLOAD_POST_MAX_BYTES = 40_000_000;  // ~33 MB base64 + JSON wrapper headroom
+const WO_MEDIA_MIME_WHITELIST = new Set([
+  "image/jpeg",
+  "image/png",
+  "image/webp",
+  "image/heic",
+  "image/heif",
+  "image/gif",
+  "application/pdf"
+]);
+const WO_MEDIA_EXT_BY_MIME = {
+  "image/jpeg": "jpg",
+  "image/png": "png",
+  "image/webp": "webp",
+  "image/heic": "heic",
+  "image/heif": "heif",
+  "image/gif": "gif",
+  "application/pdf": "pdf"
+};
+// Magic-bytes signatures — first ~12 bytes of the decoded buffer.
+// Defensive check: even if the client sends mediaType: "image/jpeg",
+// reject when the actual bytes don't match. Prevents a .jpg-extension
+// payload with PHP content (or similar) from sneaking through. The
+// HEIC/HEIF check is at offset 4 (ftyp box header).
+function verifyWoMediaMagic(buffer, mediaType) {
+  if (!buffer || buffer.length < 12) return false;
+  const b0 = buffer[0], b1 = buffer[1], b2 = buffer[2], b3 = buffer[3];
+  if (mediaType === "image/jpeg") {
+    return b0 === 0xFF && b1 === 0xD8 && b2 === 0xFF;
+  }
+  if (mediaType === "image/png") {
+    return b0 === 0x89 && b1 === 0x50 && b2 === 0x4E && b3 === 0x47;
+  }
+  if (mediaType === "image/gif") {
+    return b0 === 0x47 && b1 === 0x49 && b2 === 0x46;
+  }
+  if (mediaType === "image/webp") {
+    // RIFF....WEBP
+    if (b0 !== 0x52 || b1 !== 0x49 || b2 !== 0x46 || b3 !== 0x46) return false;
+    return buffer[8] === 0x57 && buffer[9] === 0x45 && buffer[10] === 0x42 && buffer[11] === 0x50;
+  }
+  if (mediaType === "image/heic" || mediaType === "image/heif") {
+    // ftyp box: bytes 4..7 = "ftyp"; brand follows at 8..11.
+    if (buffer[4] !== 0x66 || buffer[5] !== 0x74 || buffer[6] !== 0x79 || buffer[7] !== 0x70) return false;
+    return true;
+  }
+  if (mediaType === "application/pdf") {
+    return b0 === 0x25 && b1 === 0x50 && b2 === 0x44 && b3 === 0x46;
+  }
+  return false;
+}
 const CONTACT_NOTE = "PJL_New2026";
 const CONTACT_COUNTRY = "Canada";
 const CONTACT_PROVINCE = "ON";
@@ -807,24 +866,45 @@ async function parseRequestBody(req, { maxBytes = 1_000_000 } = {}) {
 // `meta` carries any caller-supplied tags (category, zoneNumber, issueId,
 // label) untouched so the WO photo flow can persist them alongside the
 // file metadata. The lead photo flow ignores meta — it didn't exist before.
-function validatePhotos(rawPhotos, maxCount) {
+//
+// `opts.mode` flips between "lead" (default — image-only, 1.5 MB cap) and
+// "wo" (Brief: WO Field-Readiness §5 — adds HEIC/HEIF/GIF/PDF, raises the
+// per-file cap to 25 MB, and runs a magic-bytes check). Both modes share
+// the same shape; the differences are in the whitelist + size cap.
+function validatePhotos(rawPhotos, maxCount, opts = {}) {
   const cap = Number.isFinite(maxCount) ? maxCount : MAX_PHOTOS_PER_LEAD;
   if (!rawPhotos) return [];
   if (!Array.isArray(rawPhotos)) throw new Error("photos must be an array.");
   if (rawPhotos.length > cap) throw new Error(`Can include at most ${cap} photos in one upload.`);
+  const mode = opts.mode === "wo" ? "wo" : "lead";
   const out = [];
   for (let i = 0; i < rawPhotos.length; i++) {
     const p = rawPhotos[i];
     if (!p || typeof p !== "object") throw new Error(`Photo ${i + 1} is not a valid object.`);
     const mediaType = String(p.mediaType || "image/jpeg").toLowerCase();
-    if (!/^image\/(jpeg|png|webp)$/.test(mediaType)) throw new Error(`Photo ${i + 1} has an unsupported type.`);
+    if (mode === "wo") {
+      if (!WO_MEDIA_MIME_WHITELIST.has(mediaType)) {
+        throw new Error(`Unsupported file type "${mediaType}". Allowed: JPEG, PNG, HEIC, WebP, GIF, PDF.`);
+      }
+    } else {
+      if (!/^image\/(jpeg|png|webp)$/.test(mediaType)) throw new Error(`Photo ${i + 1} has an unsupported type.`);
+    }
     const data = String(p.data || "").trim();
     if (!data) throw new Error(`Photo ${i + 1} has no data.`);
     let buffer;
     try { buffer = Buffer.from(data, "base64"); } catch { throw new Error(`Photo ${i + 1} is not valid base64.`); }
     if (!buffer.length) throw new Error(`Photo ${i + 1} decoded to zero bytes.`);
-    if (buffer.length > MAX_PHOTO_BYTES) throw new Error(`Photo ${i + 1} is too large (max ${Math.round(MAX_PHOTO_BYTES / 1000)} KB).`);
-    const ext = mediaType === "image/png" ? "png" : (mediaType === "image/webp" ? "webp" : "jpg");
+    const sizeCap = mode === "wo" ? MAX_WO_MEDIA_BYTES : MAX_PHOTO_BYTES;
+    if (buffer.length > sizeCap) {
+      const limitMb = (sizeCap / 1_000_000).toFixed(0);
+      throw new Error(`File too large — ${limitMb} MB max (this one is ${(buffer.length / 1_000_000).toFixed(1)} MB).`);
+    }
+    if (mode === "wo" && !verifyWoMediaMagic(buffer, mediaType)) {
+      throw new Error(`File ${i + 1} doesn't look like a real ${mediaType}. Re-export and try again.`);
+    }
+    const ext = mode === "wo"
+      ? (WO_MEDIA_EXT_BY_MIME[mediaType] || "jpg")
+      : (mediaType === "image/png" ? "png" : (mediaType === "image/webp" ? "webp" : "jpg"));
 
     // Geo (lat/lng/accuracy) — only accept finite coordinates inside a
     // sane Earth-bounded range. Anything malformed becomes null.
@@ -954,6 +1034,11 @@ async function savePhotosForWorkOrder(woId, photos, now, baseN, context = {}) {
     meta.push({
       n,
       mediaType: photos[i].mediaType,
+      // `kind` lets the client render appropriately: image → <img>,
+      // pdf → filename tile with tap-through (Brief: WO Field-Readiness
+      // §5.3). Older WO photos without a `kind` field default to image
+      // in the client renderer (all pre-brief uploads were images).
+      kind: photos[i].mediaType === "application/pdf" ? "pdf" : "image",
       bytes: photos[i].buffer.length,
       addedAt: now,
       filename,
@@ -963,14 +1048,25 @@ async function savePhotosForWorkOrder(woId, photos, now, baseN, context = {}) {
   return meta;
 }
 
+// Extension → MIME table for WO media (image set + PDF). Kept in sync
+// with WO_MEDIA_EXT_BY_MIME inverted, with `jpg` mapping to JPEG.
+const WO_MEDIA_MIME_BY_EXT = {
+  jpg: "image/jpeg",
+  png: "image/png",
+  webp: "image/webp",
+  heic: "image/heic",
+  heif: "image/heif",
+  gif: "image/gif",
+  pdf: "application/pdf"
+};
+
 async function readWorkOrderPhotoFile(woId, n) {
   const dir = path.join(WO_PHOTOS_DIR, woId);
-  for (const ext of ["jpg", "png", "webp"]) {
+  for (const ext of Object.keys(WO_MEDIA_MIME_BY_EXT)) {
     const file = path.join(dir, `${n}.${ext}`);
     try {
       const data = await fs.readFile(file);
-      const mediaType = ext === "png" ? "image/png" : (ext === "webp" ? "image/webp" : "image/jpeg");
-      return { data, mediaType, ext };
+      return { data, mediaType: WO_MEDIA_MIME_BY_EXT[ext], ext };
     } catch {}
   }
   return null;
@@ -978,7 +1074,7 @@ async function readWorkOrderPhotoFile(woId, n) {
 
 async function deleteWorkOrderPhotoFile(woId, n) {
   const dir = path.join(WO_PHOTOS_DIR, woId);
-  for (const ext of ["jpg", "png", "webp"]) {
+  for (const ext of Object.keys(WO_MEDIA_MIME_BY_EXT)) {
     const file = path.join(dir, `${n}.${ext}`);
     try { await fs.unlink(file); return true; } catch {}
   }
@@ -6366,6 +6462,49 @@ async function handleApi(req, res, pathname) {
       const existing = await workOrders.get(id);
       if (!existing) return sendJson(res, 404, { ok: false, errors: ["Work order not found."] });
 
+      // Server-side pre-sign gate validation (Brief: WO Field-Readiness
+      // §6.4). Mirrors the client's preSignReadinessFailures so a stale
+      // tab or replayed offline mutation can't sign+complete a WO with
+      // unmet gates. Pulls the same `wo` snapshot the rest of the
+      // handler uses — `payload` overrides for fields the client just
+      // touched (paidOnSite especially, since the radio flip + the
+      // sign-and-complete PATCH can land in the same tick).
+      function computeServerSidePreSignFailures(wo, patch) {
+        const merged = { ...wo, ...patch };
+        const fails = [];
+        // Zone walk-through — every zone has either a status or a check.
+        const zones = Array.isArray(merged.zones) ? merged.zones : [];
+        const untouched = zones.filter((z) => {
+          if (z.status && z.status !== "") return false;
+          const checks = z.checks || {};
+          return !Object.values(checks).some(Boolean);
+        });
+        if (untouched.length) {
+          fails.push(`${untouched.length} zone${untouched.length === 1 ? "" : "s"} not reviewed`);
+        }
+        // Completion-photo gate by type (mirrors the lib's
+        // PHOTO_REQUIREMENT_BY_TYPE; duplicated here so the gate keeps
+        // working if the lib re-exports change shape).
+        const minPhotos = { spring_opening: 1, service_visit: 1, fall_closing: 0 }[merged.type] ?? 1;
+        if (minPhotos > 0) {
+          const photoCount = Array.isArray(merged.photos) ? merged.photos.length : 0;
+          if (photoCount < minPhotos) {
+            fails.push(`${minPhotos} completion photo${minPhotos === 1 ? "" : "s"} required`);
+          }
+        }
+        // Payment method — promoted to pre-sign per the brief.
+        if (merged.paidOnSite !== true && merged.paidOnSite !== false) {
+          fails.push("payment method not selected");
+        }
+        // AI bonus decision gate (only when applies).
+        if (merged.intakeGuarantee && merged.intakeGuarantee.applies) {
+          if (merged.intakeGuarantee.matched !== true && merged.intakeGuarantee.matched !== false) {
+            fails.push("AI bonus decision not recorded");
+          }
+        }
+        return fails;
+      }
+
       // Optimistic concurrency — If-Match check. When the client sends
       // an If-Match header carrying the wo.updatedAt it loaded, refuse
       // the patch if the WO has moved on (another tech or admin
@@ -6445,6 +6584,26 @@ async function handleApi(req, res, pathname) {
           if (sig.imageData.length > 500_000) {
             return sendJson(res, 422, { ok: false, errors: ["Signature image is too large. Try clearing and signing again."] });
           }
+          // Defense-in-depth gate validation (Brief: WO Field-Readiness
+          // §6.4). Client-side preSignReadinessFailures already blocks
+          // most paths, but a stale tab / replayed offline queue / API
+          // client could route around it. Re-run the gates server-side
+          // so the WO can never lock + transition to completed with an
+          // unmet pre-sign requirement. Only enforced when the payload
+          // is the merged sign-and-complete shape (signature + status:
+          // "completed") — the legacy signature-only path (without a
+          // status flip) stays permissive for unusual recovery flows.
+          if (payload.status === "completed") {
+            const gateFails = computeServerSidePreSignFailures(existing, payload);
+            if (gateFails.length) {
+              return sendJson(res, 422, {
+                ok: false,
+                error: "presign_gate_unmet",
+                errors: [`Pre-sign gates unmet: ${gateFails.join("; ")}`],
+                gateFailures: gateFails
+              });
+            }
+          }
           const ip = (req.headers["x-forwarded-for"] || "").split(",")[0].trim() || req.socket?.remoteAddress || "";
           const userAgent = req.headers["user-agent"] || "";
           payload.signature = {
@@ -6499,6 +6658,7 @@ async function handleApi(req, res, pathname) {
       // best-effort and fire-and-forget via setImmediate so a slow Gmail
       // round-trip doesn't block the response.
       let cascadeResult = null;
+      let cascadeError = null;
       if (updated.status === "completed" && priorStatus !== "completed" && updated.propertyId) {
         const baseUrl = process.env.PUBLIC_BASE_URL || baseUrlFromReq(req);
         try {
@@ -6506,7 +6666,22 @@ async function handleApi(req, res, pathname) {
             notifyAdmin: async (ctx) => { setImmediate(() => runAdminNotify(ctx, baseUrl).catch((e) => console.warn("[cascade] admin notify failed:", e?.message))); },
             notifyCustomer: async (ctx) => { setImmediate(() => runCustomerNotify(ctx).catch((e) => console.warn("[cascade] customer notify failed:", e?.message))); }
           });
-        } catch (err) { console.warn("[cascade] run failed:", err?.message); }
+        } catch (err) {
+          cascadeError = err?.message || "cascade threw";
+          console.warn("[cascade] run failed:", cascadeError);
+          // Audit-log the partial failure so the WO history viewer
+          // surfaces it. Brief: WO Field-Readiness §6.4 — a hard-throw
+          // mid-cascade leaves the WO locked + status=completed but
+          // without an invoice; the recovery surface picks this up
+          // because there's no cascade_fire entry.
+          try {
+            await workOrders.appendHistory(id, {
+              action: "cascade_failed",
+              by: "system",
+              note: cascadeError.slice(0, 200)
+            });
+          } catch (_logErr) {}
+        }
       }
 
       // Helpers extracted so the cascade can return fast while notifies
@@ -6604,8 +6779,10 @@ async function handleApi(req, res, pathname) {
       // Re-fetch the WO if the cascade stamped propertyEditsAppliedAt
       // (or any other side-effect wrote back). The client wants the
       // freshest version including the new history entries (cascade_fire,
-      // invoice_drafted) so the History section re-renders correctly.
-      const finalWo = cascadeResult ? await workOrders.get(id) : updated;
+      // invoice_drafted, cascade_failed) so the History section re-
+      // renders correctly. Also re-fetch on cascade error so the client
+      // sees the `cascade_failed` audit entry.
+      const finalWo = (cascadeResult || cascadeError) ? await workOrders.get(id) : updated;
       const responseBody = { ok: true, workOrder: finalWo };
       if (cascadeResult) {
         responseBody.cascade = {
@@ -6616,6 +6793,12 @@ async function handleApi(req, res, pathname) {
           invoiceDraftError: cascadeResult.invoiceDraftError || null,
           propertyEditsApplied: !!cascadeResult.propertyEditsApplied
         };
+      } else if (cascadeError) {
+        // Cascade threw — signed/locked/completed all persisted, but
+        // the downstream artifacts didn't land. Surface this so the
+        // client can show the recovery banner with "tap to retry."
+        // Brief: WO Field-Readiness §6.4.
+        responseBody.cascade = { ran: false, error: cascadeError, invoiceId: null };
       }
       return sendJson(res, 200, responseBody);
     } catch (error) {
@@ -6663,13 +6846,19 @@ async function handleApi(req, res, pathname) {
   }
 
   // -------------------- WO photo endpoints --------------------
-  // POST /api/work-orders/:id/photos — upload one or more photos.
+  // POST /api/work-orders/:id/photos — upload one or more media files.
   // Body: { photos: [{ data: "<base64>", mediaType, category, zoneNumber, issueId, label }] }
+  // Allowed types (Brief: WO Field-Readiness §5):
+  //   image/jpeg, image/png, image/webp, image/heic, image/heif, image/gif,
+  //   application/pdf. 25 MB per file; magic-bytes verified server-side.
   // Categories: pre_work / in_progress / post_work / issue / general.
   // Photos are stored on disk under WO_PHOTOS_DIR/<woId>/<n>.<ext>; metadata
-  // is appended to wo.photos. The hard cap of 20 photos per WO is enforced
+  // is appended to wo.photos. The hard cap of MAX_PHOTOS_PER_WO is enforced
   // across all uploads (not per-request) so a tech can't bypass it by
-  // splitting into batches.
+  // splitting into batches. The endpoint stays /photos for backwards-
+  // compatibility — internally it now stores "media" (image OR PDF), with
+  // the file kind on each meta entry (`kind: 'image' | 'pdf'`) so the UI
+  // can render PDFs as filename tiles instead of broken <img> tags.
   const woPhotosUploadMatch = pathname.match(/^\/api\/work-orders\/([^/]+)\/photos$/);
   if (woPhotosUploadMatch && req.method === "POST") {
     try {
@@ -6677,16 +6866,18 @@ async function handleApi(req, res, pathname) {
       const wo = await workOrders.get(id);
       if (!wo) return sendJson(res, 404, { ok: false, errors: ["Work order not found."] });
 
-      // 12 MB cap matches the /api/quotes upload limit — covers up to ~5
-      // photos × ~1.5 MB after client-side resize, with headroom.
-      const payload = await parseRequestBody(req, { maxBytes: QUOTE_POST_MAX_BYTES });
+      // 40 MB envelope cap — covers one 25 MB raw file after base64
+      // inflation (~33 MB) plus the JSON wrapper. Per-file size enforced
+      // in validatePhotos. Bigger than /api/quotes intake on purpose:
+      // field uploads can be straight-from-camera HEIC or customer PDFs.
+      const payload = await parseRequestBody(req, { maxBytes: WO_UPLOAD_POST_MAX_BYTES });
       const existing = Array.isArray(wo.photos) ? wo.photos : [];
       const remaining = MAX_PHOTOS_PER_WO - existing.length;
       if (remaining <= 0) {
         return sendJson(res, 422, { ok: false, errors: [`Work order already has the maximum ${MAX_PHOTOS_PER_WO} photos. Delete one before uploading more.`] });
       }
       let validated;
-      try { validated = validatePhotos(payload.photos, remaining); }
+      try { validated = validatePhotos(payload.photos, remaining, { mode: "wo" }); }
       catch (err) { return sendJson(res, 422, { ok: false, errors: [err.message] }); }
 
       // Resolve the property code for the descriptive filename slug. When

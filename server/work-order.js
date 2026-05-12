@@ -1471,6 +1471,10 @@ document.getElementById("woPaidOnSiteSection")?.addEventListener("change", async
     const data = await r.json().catch(() => ({}));
     if (!r.ok || !data.ok) throw new Error((data.errors || ["Couldn't save."]).join(" "));
     if (data.workOrder) loadedWorkOrder = data.workOrder;
+    // Brief: WO Field-Readiness §6.2 — paidOnSite is now a pre-sign
+    // gate. Re-render the readiness state so the sign button enables
+    // as soon as the radio is picked.
+    if (typeof updateWoSignoffSubmitState === "function") updateWoSignoffSubmitState();
   } catch (err) {
     alert(err.message || "Couldn't save payment status.");
     // Revert the radio to the persisted state on failure.
@@ -1506,6 +1510,7 @@ const HISTORY_ACTION_LABELS = {
   carry_forward_already_fixed: "Carry-forward → already fixed",
   carry_forward_cannot_locate: "Carry-forward → can't locate",
   cascade_fire: "Completion cascade",
+  cascade_failed: "Cascade failed",
   invoice_drafted: "Invoice drafted",
   followup_created: "Follow-up scheduled",
   created_as_followup: "Created as follow-up",
@@ -1757,9 +1762,12 @@ function updateWoSignoffSubmitState() {
 }
 
 // Pre-sign walkout mirror — same gates as tech mode (zones touched,
-// photo threshold, carry-forward resolved) minus the signature check.
+// photo threshold, carry-forward resolved, paidOnSite selected,
+// materials confirmed when relevant) minus the signature check.
 // Used to gate the merged "Sign, Lock & Generate Invoice" button so
 // signing only fires the cascade on a fully-complete visit.
+// Brief: WO Field-Readiness §6.2 promotes paidOnSite + materials to
+// pre-sign gates so the cascade fires with correct invoice flags.
 function woPreSignReadinessFailures() {
   const wo = loadedWorkOrder;
   if (!wo) return [];
@@ -1785,6 +1793,11 @@ function woPreSignReadinessFailures() {
     if (photoCount < minPhotos) {
       fails.push(`Capture ${minPhotos === 1 ? "at least one completion photo" : `at least ${minPhotos} completion photos`} before signing.`);
     }
+  }
+  // Payment-method gate — promoted to pre-sign so the cascade fires
+  // with the right paidOnSiteAtCompletion flag on the draft invoice.
+  if (wo.paidOnSite !== true && wo.paidOnSite !== false) {
+    fails.push("Pick a payment method (Yes / No — invoice to follow).");
   }
   return fails;
 }
@@ -1833,6 +1846,14 @@ document.getElementById("woSignoffSubmit")?.addEventListener("click", async () =
     loadedWorkOrder = data.workOrder;
     if (data.cascade && data.cascade.invoiceId) {
       completedInvoiceForBanner = data.cascade.invoiceId;
+    }
+    // Cascade error path (Brief: WO Field-Readiness §6.4) — signature
+    // + lock persisted server-side but the cascade hit a hard error
+    // mid-flight. Surface a non-blocking alert; the recovery buttons
+    // (Create draft invoice now / Re-run completion cascade) below
+    // the post-sig banner will be the next thing Patrick sees.
+    if (data.cascade && data.cascade.error && !data.cascade.invoiceId) {
+      alert(`Visit signed and locked. Invoice generation hit a snag — use the Create draft invoice or Re-run cascade buttons below to retry.\n\n(${data.cascade.error})`);
     }
     renderSignoff(data.workOrder);
     renderPostSigBanner(data.workOrder);
