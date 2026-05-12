@@ -425,6 +425,8 @@ function needsAuth(method, pathname) {
   if (pathname === "/admin/schedule" || pathname === "/admin/schedule/") return "user";
   if (pathname === "/admin/handoff" || pathname === "/admin/handoff/") return "user";
   if (pathname === "/admin/chats" || pathname === "/admin/chats/") return "user";
+  if (pathname === "/admin/customers" || pathname === "/admin/customers/") return "user";
+  if (/^\/admin\/customer\/[^/]+/.test(pathname)) return "user";
   if (pathname === "/admin/properties" || pathname === "/admin/properties/") return "user";
   if (pathname === "/admin/properties/import" || pathname === "/admin/properties/import/") return "user";
   if (/^\/admin\/property\/[^/]+/.test(pathname)) return "user";
@@ -459,6 +461,9 @@ function needsAuth(method, pathname) {
   // Manual handoff (admin sends booking link to customer) is admin-only.
   if (pathname === "/api/admin/send-booking-link") return "user";
   if (pathname === "/api/admin/features") return "user";
+  // Customers (the people PJL serves) — admin-only.
+  if (pathname.startsWith("/api/customers")) return "user";
+  if (pathname.startsWith("/api/customer/") || pathname === "/api/customer") return "user";
   // Properties (customer system profiles) are admin-only.
   if (pathname.startsWith("/api/properties")) return "user";
   // Work orders (tech-side per-visit records) are admin-only for now.
@@ -3099,6 +3104,119 @@ async function handleApi(req, res, pathname) {
         bookingCount: (p.leadIds || []).length
       }))
     });
+  }
+
+  // ---- Customers (Brief 3) ---------------------------------------
+  //
+  // GET    /api/customers              — list with propertyCount + lastActivityAt
+  // POST   /api/customer               — create
+  // GET    /api/customer/:id           — single, decorated with linked entities
+  // PATCH  /api/customer/:id           — update editable fields
+  // POST   /api/customer/:id/communication — append a manual comm record
+
+  if (req.method === "GET" && pathname === "/api/customers") {
+    const [allCustomers, allProperties, allWOs, allInvoicesList] = await Promise.all([
+      customers.list(),
+      properties.list(),
+      workOrders.list(),
+      invoices.list()
+    ]);
+    const propertyCount = new Map();
+    const lastActivity = new Map();
+    const bump = (cid, ts) => {
+      if (!cid || !ts) return;
+      const prev = lastActivity.get(cid);
+      if (!prev || ts > prev) lastActivity.set(cid, ts);
+    };
+    for (const p of allProperties) {
+      if (!p.customerId) continue;
+      propertyCount.set(p.customerId, (propertyCount.get(p.customerId) || 0) + 1);
+      bump(p.customerId, p.updatedAt || p.createdAt);
+    }
+    for (const w of allWOs) bump(w.customerId, w.updatedAt || w.createdAt);
+    for (const i of allInvoicesList) bump(i.customerId, i.updatedAt || i.createdAt);
+    const decorated = allCustomers.map((c) => ({
+      ...c,
+      propertyCount: propertyCount.get(c.id) || 0,
+      lastActivityAt: lastActivity.get(c.id) || c.updatedAt || c.createdAt
+    }));
+    decorated.sort((a, b) => String(b.lastActivityAt || "").localeCompare(String(a.lastActivityAt || "")));
+    return sendJson(res, 200, { ok: true, customers: decorated });
+  }
+
+  if (req.method === "POST" && pathname === "/api/customer") {
+    try {
+      const payload = await parseRequestBody(req);
+      if (!payload || !String(payload.name || "").trim()) {
+        return sendJson(res, 422, { ok: false, errors: ["Customer name is required."] });
+      }
+      const created = await customers.create(payload, { by: "admin", note: "Created from admin UI" });
+      return sendJson(res, 200, { ok: true, customer: created });
+    } catch (err) {
+      if (err && err.code === "DUPLICATE_EMAIL") {
+        return sendJson(res, 409, { ok: false, errors: [err.message], existingId: err.existingId });
+      }
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't create customer."] });
+    }
+  }
+
+  const customerSingleMatch = pathname.match(/^\/api\/customer\/([^/]+)$/);
+  if (customerSingleMatch) {
+    const id = decodeURIComponent(customerSingleMatch[1]);
+    if (req.method === "GET") {
+      const customer = await customers.get(id, { withProperties: true });
+      if (!customer) return sendJson(res, 404, { ok: false, error: "Customer not found." });
+      const [allBookings, allWOs, allQuotes, allInvoicesList] = await Promise.all([
+        bookings.list(),
+        workOrders.list(),
+        quotes.list(),
+        invoices.list()
+      ]);
+      return sendJson(res, 200, {
+        ok: true,
+        customer: {
+          ...customer,
+          bookings: allBookings.filter((b) => b.customerId === id),
+          workOrders: allWOs.filter((w) => w.customerId === id),
+          quotes: allQuotes.filter((q) => q.customerId === id),
+          invoices: allInvoicesList.filter((i) => i.customerId === id)
+        }
+      });
+    }
+    if (req.method === "PATCH") {
+      try {
+        const payload = await parseRequestBody(req);
+        const updated = await customers.update(id, payload, { by: "admin", note: "Edit from /admin/customer" });
+        if (!updated) return sendJson(res, 404, { ok: false, error: "Customer not found." });
+        return sendJson(res, 200, { ok: true, customer: updated });
+      } catch (err) {
+        if (err && err.code === "DUPLICATE_EMAIL") {
+          return sendJson(res, 409, { ok: false, errors: [err.message], existingId: err.existingId });
+        }
+        return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't update customer."] });
+      }
+    }
+  }
+
+  const customerCommMatch = pathname.match(/^\/api\/customer\/([^/]+)\/communication$/);
+  if (customerCommMatch && req.method === "POST") {
+    const id = decodeURIComponent(customerCommMatch[1]);
+    try {
+      const payload = await parseRequestBody(req);
+      const summary = String(payload?.summary || "").trim();
+      if (!summary) {
+        return sendJson(res, 422, { ok: false, errors: ["Communication summary is required."] });
+      }
+      const updated = await customers.addCommunication(id, {
+        source: payload?.source,
+        summary,
+        notes: payload?.notes
+      });
+      if (!updated) return sendJson(res, 404, { ok: false, error: "Customer not found." });
+      return sendJson(res, 200, { ok: true, customer: updated });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't add record."] });
+    }
   }
 
   // List a property's deferred recommendations. Optional ?status=open or
@@ -8045,6 +8163,13 @@ function resolveStaticTarget(pathname) {
   // confirmed bookings with navigate/notify/open-WO actions per row.
   if (pathname === "/admin/today" || pathname === "/admin/today/") {
     return { dir: SERVER_DIR, relative: "/today.html" };
+  }
+  // Customer index + per-customer profile page (Brief 3).
+  if (pathname === "/admin/customers" || pathname === "/admin/customers/") {
+    return { dir: SERVER_DIR, relative: "/customers.html" };
+  }
+  if (/^\/admin\/customer\/[^/]+\/?$/.test(pathname)) {
+    return { dir: SERVER_DIR, relative: "/customer.html" };
   }
   // Properties index + per-property detail page. Both served from the
   // same HTML file; the JS reads the URL to decide which view to render.

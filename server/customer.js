@@ -1,0 +1,393 @@
+// /admin/customer/:id — full customer profile with editable summary and
+// tabbed views of linked properties, bookings, WOs, quotes, invoices,
+// communication records, and history.
+//
+// Data source: GET /api/customer/:id returns the customer record
+// decorated with arrays of linked entities. PATCH /api/customer/:id
+// updates editable fields. POST /api/customer/:id/communication
+// appends a manual communication record.
+
+(function setupNavToggle() {
+  const toggle = document.getElementById("navToggle");
+  const nav = document.querySelector(".pjl-admin-nav");
+  if (!toggle || !nav) return;
+  toggle.addEventListener("click", () => {
+    const open = !nav.classList.contains("is-open");
+    nav.classList.toggle("is-open", open);
+    toggle.setAttribute("aria-expanded", String(open));
+  });
+  nav.querySelectorAll(".pjl-nav-links a").forEach((a) => {
+    a.addEventListener("click", () => {
+      nav.classList.remove("is-open");
+      toggle.setAttribute("aria-expanded", "false");
+    });
+  });
+})();
+
+const idMatch = location.pathname.match(/^\/admin\/customer\/([^/]+)/);
+const customerId = idMatch ? decodeURIComponent(idMatch[1]) : null;
+
+const titleEl = document.getElementById("customerTitle");
+const profileEl = document.getElementById("customerProfile");
+const loadErrorEl = document.getElementById("loadError");
+const summaryNameEl = document.getElementById("summaryName");
+const summaryIdEl = document.getElementById("summaryId");
+const summaryStatusEl = document.getElementById("summaryStatus");
+const summarySourceEl = document.getElementById("summarySource");
+const summarySinceEl = document.getElementById("summarySince");
+const summaryQbEl = document.getElementById("summaryQb");
+const saveBtn = document.getElementById("saveBtn");
+const revertBtn = document.getElementById("revertBtn");
+const saveErrorEl = document.getElementById("saveError");
+const logoutButton = document.getElementById("logoutButton");
+
+const editableFields = Array.from(document.querySelectorAll("[data-field]"));
+const tabHeaders = Array.from(document.querySelectorAll(".customer-tab-header"));
+const tabPanels = Array.from(document.querySelectorAll(".customer-tab-panel"));
+
+let original = null;
+let pendingPatch = {};
+
+function esc(value) {
+  return String(value == null ? "" : value)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;").replace(/'/g, "&#039;");
+}
+
+function formatDate(iso) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleDateString("en-CA", { year: "numeric", month: "short", day: "numeric" });
+}
+
+function formatDateTime(iso) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleString("en-CA", { year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
+function applyToForm(customer) {
+  original = customer;
+  pendingPatch = {};
+
+  titleEl.textContent = customer.name || customer.id;
+  summaryNameEl.textContent = customer.name || "(unnamed)";
+  summaryIdEl.textContent = customer.id;
+  summaryStatusEl.textContent = customer.status || "lead";
+  summaryStatusEl.className = `customer-status is-${customer.status || "lead"}`;
+  summarySourceEl.textContent = customer.source || "—";
+  summarySinceEl.textContent = formatDate(customer.customerSince);
+  summaryQbEl.textContent = customer.quickbooksId || "(not linked)";
+
+  for (const el of editableFields) {
+    const field = el.dataset.field;
+    const value = customer[field];
+    if (el.tagName === "SELECT") {
+      el.value = value || "lead";
+    } else if (el.tagName === "TEXTAREA") {
+      el.value = value || "";
+    } else {
+      el.value = value || "";
+    }
+  }
+
+  saveBtn.disabled = true;
+  revertBtn.disabled = true;
+  saveErrorEl.hidden = true;
+}
+
+function applyLinked(customer) {
+  renderProperties(customer.properties || []);
+  renderBookings(customer.bookings || []);
+  renderWorkOrders(customer.workOrders || []);
+  renderQuotes(customer.quotes || []);
+  renderInvoices(customer.invoices || []);
+  renderCommunications(customer.communicationRecords || []);
+  renderHistory(customer.history || []);
+
+  document.getElementById("countProperties").textContent = (customer.properties || []).length;
+  document.getElementById("countBookings").textContent = (customer.bookings || []).length;
+  document.getElementById("countWorkOrders").textContent = (customer.workOrders || []).length;
+  document.getElementById("countQuotes").textContent = (customer.quotes || []).length;
+  document.getElementById("countInvoices").textContent = (customer.invoices || []).length;
+  document.getElementById("countCommunications").textContent = (customer.communicationRecords || []).length;
+  document.getElementById("countHistory").textContent = (customer.history || []).length;
+}
+
+function renderProperties(properties) {
+  const el = document.getElementById("panelProperties");
+  if (!properties.length) {
+    el.innerHTML = `<p class="customer-tab-empty">No properties linked.</p>`;
+    return;
+  }
+  el.innerHTML = `
+    <table>
+      <thead><tr><th>Code</th><th>Address</th><th style="text-align:right">Bookings</th></tr></thead>
+      <tbody>
+        ${properties.map((p) => `
+          <tr>
+            <td><a href="/admin/property/${esc(p.id)}"><strong>${esc(p.code || p.id)}</strong></a></td>
+            <td>${esc(p.address)}</td>
+            <td style="text-align:right">${(p.leadIds || []).length}</td>
+          </tr>
+        `).join("")}
+      </tbody>
+    </table>
+  `;
+}
+
+function renderBookings(bookings) {
+  const el = document.getElementById("panelBookings");
+  if (!bookings.length) {
+    el.innerHTML = `<p class="customer-tab-empty">No bookings.</p>`;
+    return;
+  }
+  el.innerHTML = `
+    <table>
+      <thead><tr><th>ID</th><th>Service</th><th>Scheduled</th><th>Status</th></tr></thead>
+      <tbody>
+        ${bookings.map((b) => `
+          <tr>
+            <td><strong>${esc(b.id)}</strong></td>
+            <td>${esc(b.serviceLabel || b.serviceKey)}</td>
+            <td>${formatDateTime(b.scheduledFor)}</td>
+            <td>${esc(b.status)}</td>
+          </tr>
+        `).join("")}
+      </tbody>
+    </table>
+  `;
+}
+
+function renderWorkOrders(workOrders) {
+  const el = document.getElementById("panelWorkOrders");
+  if (!workOrders.length) {
+    el.innerHTML = `<p class="customer-tab-empty">No work orders.</p>`;
+    return;
+  }
+  el.innerHTML = `
+    <table>
+      <thead><tr><th>ID</th><th>Type</th><th>Status</th><th>Address</th><th>Scheduled</th></tr></thead>
+      <tbody>
+        ${workOrders.map((w) => `
+          <tr>
+            <td><a href="/admin/work-order/${esc(w.id)}"><strong>${esc(w.id)}</strong></a></td>
+            <td>${esc(w.type)}</td>
+            <td>${esc(w.status)}${w.locked ? " (locked)" : ""}</td>
+            <td>${esc(w.address)}</td>
+            <td>${formatDateTime(w.scheduledFor)}</td>
+          </tr>
+        `).join("")}
+      </tbody>
+    </table>
+  `;
+}
+
+function renderQuotes(quotes) {
+  const el = document.getElementById("panelQuotes");
+  if (!quotes.length) {
+    el.innerHTML = `<p class="customer-tab-empty">No quotes.</p>`;
+    return;
+  }
+  el.innerHTML = `
+    <table>
+      <thead><tr><th>ID</th><th>Status</th><th>Total</th><th>Created</th></tr></thead>
+      <tbody>
+        ${quotes.map((q) => `
+          <tr>
+            <td><strong>${esc(q.id)}</strong></td>
+            <td>${esc(q.status)}</td>
+            <td>${esc(Number(q.total || 0).toLocaleString("en-CA", { style: "currency", currency: "CAD" }))}</td>
+            <td>${formatDate(q.createdAt)}</td>
+          </tr>
+        `).join("")}
+      </tbody>
+    </table>
+  `;
+}
+
+function renderInvoices(invoices) {
+  const el = document.getElementById("panelInvoices");
+  if (!invoices.length) {
+    el.innerHTML = `<p class="customer-tab-empty">No invoices.</p>`;
+    return;
+  }
+  el.innerHTML = `
+    <table>
+      <thead><tr><th>ID</th><th>Status</th><th>Total</th><th>Created</th></tr></thead>
+      <tbody>
+        ${invoices.map((i) => `
+          <tr>
+            <td><a href="/admin/invoice/${esc(i.id)}"><strong>${esc(i.id)}</strong></a></td>
+            <td>${esc(i.status)}</td>
+            <td>${esc(Number(i.total || 0).toLocaleString("en-CA", { style: "currency", currency: "CAD" }))}</td>
+            <td>${formatDate(i.createdAt)}</td>
+          </tr>
+        `).join("")}
+      </tbody>
+    </table>
+  `;
+}
+
+function renderCommunications(records) {
+  const el = document.getElementById("panelCommunications");
+  if (!records.length) {
+    el.innerHTML = `<p class="customer-tab-empty">No communication records yet.</p>`;
+    return;
+  }
+  // Newest first
+  const ordered = [...records].sort((a, b) => (b.ts || "").localeCompare(a.ts || ""));
+  el.innerHTML = ordered.map((r) => `
+    <div class="customer-comm-row">
+      <div class="customer-comm-ts">${formatDateTime(r.ts)}</div>
+      <div class="customer-comm-body">
+        <span class="customer-comm-source">${esc(r.source || "—")}</span>
+        <div><strong>${esc(r.summary || "")}</strong></div>
+        ${r.notes ? `<div style="margin-top: 4px; white-space: pre-wrap;">${esc(r.notes)}</div>` : ""}
+      </div>
+    </div>
+  `).join("");
+}
+
+function renderHistory(history) {
+  const el = document.getElementById("panelHistory");
+  if (!history.length) {
+    el.innerHTML = `<p class="customer-tab-empty">No history yet.</p>`;
+    return;
+  }
+  const ordered = [...history].sort((a, b) => (b.ts || "").localeCompare(a.ts || ""));
+  el.innerHTML = ordered.map((h) => `
+    <div class="customer-history-row">
+      <span class="ts">${formatDateTime(h.ts)}</span>
+      <span class="action">${esc(h.action)}</span>
+      <span class="by">by ${esc(h.by || "system")}</span>
+      ${h.note ? `<span>· ${esc(h.note)}</span>` : ""}
+    </div>
+  `).join("");
+}
+
+// ---- Tabs ---------------------------------------------------------
+
+tabHeaders.forEach((header) => {
+  header.addEventListener("click", () => {
+    const target = header.dataset.tab;
+    tabHeaders.forEach((h) => h.classList.toggle("is-active", h === header));
+    tabPanels.forEach((p) => { p.hidden = p.dataset.tab !== target; });
+  });
+});
+
+// ---- Editable fields ----------------------------------------------
+
+editableFields.forEach((el) => {
+  el.addEventListener("input", () => {
+    if (!original) return;
+    const field = el.dataset.field;
+    const newValue = el.value;
+    const oldValue = original[field] == null ? "" : original[field];
+    if (newValue === oldValue) {
+      delete pendingPatch[field];
+    } else {
+      pendingPatch[field] = newValue;
+    }
+    const hasChanges = Object.keys(pendingPatch).length > 0;
+    saveBtn.disabled = !hasChanges;
+    revertBtn.disabled = !hasChanges;
+  });
+});
+
+revertBtn.addEventListener("click", () => {
+  if (original) applyToForm(original);
+});
+
+saveBtn.addEventListener("click", async () => {
+  saveErrorEl.hidden = true;
+  saveBtn.disabled = true;
+  try {
+    const res = await fetch(`/api/customer/${encodeURIComponent(customerId)}`, {
+      method: "PATCH",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(pendingPatch)
+    });
+    const body = await res.json();
+    if (!res.ok || !body.ok) {
+      saveErrorEl.textContent = body?.errors?.[0] || body?.error || "Couldn't save.";
+      saveErrorEl.hidden = false;
+      saveBtn.disabled = false;
+      return;
+    }
+    await load();
+  } catch (err) {
+    saveErrorEl.textContent = err?.message || "Network error.";
+    saveErrorEl.hidden = false;
+    saveBtn.disabled = false;
+  }
+});
+
+// ---- Communications add ------------------------------------------
+
+document.getElementById("commAdd").addEventListener("click", async () => {
+  const source = document.getElementById("commSource").value;
+  const summary = document.getElementById("commSummary").value.trim();
+  const notes = document.getElementById("commNotes").value.trim();
+  if (!summary) {
+    alert("Add a short summary of the communication.");
+    return;
+  }
+  try {
+    const res = await fetch(`/api/customer/${encodeURIComponent(customerId)}/communication`, {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ source, summary, notes })
+    });
+    const body = await res.json();
+    if (!res.ok || !body.ok) {
+      alert(body?.error || "Couldn't save the record.");
+      return;
+    }
+    document.getElementById("commSummary").value = "";
+    document.getElementById("commNotes").value = "";
+    await load();
+  } catch (err) {
+    alert(err?.message || "Network error.");
+  }
+});
+
+if (logoutButton) {
+  logoutButton.addEventListener("click", async () => {
+    try { await fetch("/api/logout", { method: "POST" }); } catch {}
+    location.href = "/login";
+  });
+}
+
+// ---- Initial load -------------------------------------------------
+
+async function load() {
+  if (!customerId) {
+    loadErrorEl.textContent = "Couldn't read customer id from URL.";
+    loadErrorEl.hidden = false;
+    return;
+  }
+  try {
+    const res = await fetch(`/api/customer/${encodeURIComponent(customerId)}`, { credentials: "same-origin" });
+    if (res.status === 404) {
+      loadErrorEl.textContent = `Customer ${customerId} not found.`;
+      loadErrorEl.hidden = false;
+      return;
+    }
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const body = await res.json();
+    if (!body.ok || !body.customer) throw new Error(body?.error || "Bad response.");
+    profileEl.hidden = false;
+    applyToForm(body.customer);
+    applyLinked(body.customer);
+  } catch (err) {
+    loadErrorEl.textContent = err?.message || "Failed to load customer.";
+    loadErrorEl.hidden = false;
+  }
+}
+
+load();

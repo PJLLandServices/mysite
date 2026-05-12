@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#0F1F14">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>PJL Customer</title>
+  <link rel="icon" type="image/svg+xml" href="/crm/pjl-logo-mark.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/crm/crm.css">
+  <link rel="stylesheet" href="/crm/property.css">
+  <link rel="stylesheet" href="/crm/customers.css">
+</head>
+<body class="pjl-crm-body">
+  <aside class="pjl-admin-nav" id="navMenu" aria-label="PJL CRM Navigation">
+    <header class="pjl-side-brand">
+      <a href="/" class="pjl-side-logo"><img src="/crm/pjl-logo.svg" alt="PJL Land Services"></a>
+    </header>
+    <div class="pjl-nav-links">
+      <a href="/admin/today">Today</a>
+      <a href="/admin">CRM</a>
+      <a href="/admin/schedule">Schedule</a>
+      <a href="/admin/handoff">Handoff</a>
+      <a href="/admin/customers" class="is-active">Customers</a>
+      <a href="/admin/properties">Properties</a>
+      <a href="/admin/projects">Projects</a>
+      <a href="/admin/work-orders">Work orders</a>
+      <a href="/admin/quote-folder">Quotes</a>
+      <a href="/admin/invoices">Invoices</a>
+      <a href="/admin/material-lists">Materials</a>
+      <a href="/admin/chats">AI Chats</a>
+      <a href="/admin/users">Users</a>
+      <a href="/admin/settings">Settings</a>
+    </div>
+    <footer class="pjl-side-footer">
+      <a class="pjl-side-phone" href="tel:+19059600181">(905) 960-0181</a>
+      <button class="pjl-nav-logout" type="button" id="logoutButton">Log out</button>
+    </footer>
+  </aside>
+
+  <div class="pjl-app">
+    <header class="pjl-app-topbar">
+      <button class="pjl-nav-toggle" type="button" id="navToggle" aria-label="Menu" aria-expanded="false" aria-controls="navMenu">
+        <span class="pjl-nav-toggle-bar"></span>
+        <span class="pjl-nav-toggle-bar"></span>
+        <span class="pjl-nav-toggle-bar"></span>
+      </button>
+      <span class="pjl-app-title" id="customerTitle">Customer</span>
+      <a class="pjl-app-phone" href="tel:+19059600181">(905) 960-0181</a>
+    </header>
+
+    <main class="pjl-crm-shell">
+      <p style="margin: 16px 0 0;"><a href="/admin/customers" style="text-decoration: none; color: var(--crm-muted, #666); font-size: 13px;">← All customers</a></p>
+
+      <section class="customer-profile" id="customerProfile" hidden>
+        <aside class="customer-summary">
+          <h2 id="summaryName">—</h2>
+          <span class="customer-card-id" id="summaryId">—</span>
+          <span class="customer-status" id="summaryStatus">lead</span>
+
+          <div class="customer-summary-field">
+            <label>Name</label>
+            <input type="text" data-field="name" maxlength="200">
+          </div>
+          <div class="customer-summary-field">
+            <label>Spouse / Significant other</label>
+            <input type="text" data-field="spouseName" maxlength="200">
+          </div>
+          <div class="customer-summary-field">
+            <label>Email</label>
+            <input type="email" data-field="email" maxlength="254">
+          </div>
+          <div class="customer-summary-field">
+            <label>Spouse email</label>
+            <input type="email" data-field="spouseEmail" maxlength="254">
+          </div>
+          <div class="customer-summary-field">
+            <label>Phone</label>
+            <input type="tel" data-field="phone" maxlength="40">
+          </div>
+          <div class="customer-summary-field">
+            <label>Spouse phone</label>
+            <input type="tel" data-field="spousePhone" maxlength="40">
+          </div>
+          <div class="customer-summary-field">
+            <label>Billing address (if different)</label>
+            <textarea data-field="billingAddress" rows="2" maxlength="400"></textarea>
+          </div>
+          <div class="customer-summary-field">
+            <label>Status</label>
+            <select data-field="status">
+              <option value="lead">Lead</option>
+              <option value="active">Active</option>
+              <option value="inactive">Inactive</option>
+              <option value="lost">Lost</option>
+            </select>
+          </div>
+          <div class="customer-summary-field">
+            <label>Source</label>
+            <span class="value" id="summarySource">—</span>
+          </div>
+          <div class="customer-summary-field">
+            <label>Customer since</label>
+            <span class="value" id="summarySince">—</span>
+          </div>
+          <div class="customer-summary-field">
+            <label>QuickBooks customer ID</label>
+            <span class="value" id="summaryQb">—</span>
+          </div>
+          <div class="customer-summary-field">
+            <label>Internal notes</label>
+            <textarea data-field="internalNotes" rows="4" maxlength="4000"></textarea>
+          </div>
+
+          <div class="customer-summary-actions">
+            <button type="button" class="pjl-btn pjl-btn-primary" id="saveBtn" disabled>Save changes</button>
+            <button type="button" class="pjl-btn pjl-btn-outline" id="revertBtn" disabled>Revert</button>
+          </div>
+          <p class="customer-modal-error" id="saveError" hidden></p>
+        </aside>
+
+        <section class="customer-tabs">
+          <nav class="customer-tab-headers" role="tablist">
+            <button type="button" class="customer-tab-header is-active" data-tab="properties" role="tab">Properties <span class="count" id="countProperties">0</span></button>
+            <button type="button" class="customer-tab-header" data-tab="bookings" role="tab">Bookings <span class="count" id="countBookings">0</span></button>
+            <button type="button" class="customer-tab-header" data-tab="workOrders" role="tab">Work orders <span class="count" id="countWorkOrders">0</span></button>
+            <button type="button" class="customer-tab-header" data-tab="quotes" role="tab">Quotes <span class="count" id="countQuotes">0</span></button>
+            <button type="button" class="customer-tab-header" data-tab="invoices" role="tab">Invoices <span class="count" id="countInvoices">0</span></button>
+            <button type="button" class="customer-tab-header" data-tab="communications" role="tab">Communications <span class="count" id="countCommunications">0</span></button>
+            <button type="button" class="customer-tab-header" data-tab="history" role="tab">History <span class="count" id="countHistory">0</span></button>
+          </nav>
+
+          <div class="customer-tab-panel" data-tab="properties">
+            <div id="panelProperties"></div>
+          </div>
+          <div class="customer-tab-panel" data-tab="bookings" hidden>
+            <div id="panelBookings"></div>
+          </div>
+          <div class="customer-tab-panel" data-tab="workOrders" hidden>
+            <div id="panelWorkOrders"></div>
+          </div>
+          <div class="customer-tab-panel" data-tab="quotes" hidden>
+            <div id="panelQuotes"></div>
+          </div>
+          <div class="customer-tab-panel" data-tab="invoices" hidden>
+            <div id="panelInvoices"></div>
+          </div>
+          <div class="customer-tab-panel" data-tab="communications" hidden>
+            <div class="customer-comm-add">
+              <strong style="font-size: 13px;">Log a communication</strong>
+              <select id="commSource">
+                <option value="phone">Phone</option>
+                <option value="email">Email</option>
+                <option value="text">Text</option>
+                <option value="in-person">In person</option>
+                <option value="chat">Chat</option>
+                <option value="other">Other</option>
+              </select>
+              <input type="text" id="commSummary" placeholder="What was discussed (one line)" maxlength="400">
+              <textarea id="commNotes" placeholder="Optional notes" rows="2" maxlength="4000"></textarea>
+              <button type="button" class="pjl-btn pjl-btn-primary" id="commAdd" style="align-self: flex-start;">Add record</button>
+            </div>
+            <div id="panelCommunications"></div>
+          </div>
+          <div class="customer-tab-panel" data-tab="history" hidden>
+            <div id="panelHistory"></div>
+          </div>
+        </section>
+      </section>
+
+      <p id="loadError" hidden style="margin: 32px; text-align: center; color: #9b2b2b;"></p>
+    </main>
+  </div>
+
+  <script src="/crm/customer.js"></script>
+</body>
+</html>

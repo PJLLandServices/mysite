@@ -212,8 +212,18 @@ addValveBoxBtn.addEventListener("click", () => addValveBoxRow());
 function renderHero(property, leads) {
   propertyHero.hidden = false;
   propertyAddress.textContent = property.address || "(address not set)";
-  const customer = [property.customerName, property.customerEmail].filter(Boolean).join(" · ");
-  propertyCustomer.textContent = customer || "Customer details not yet captured";
+  // If the property is linked to a customer record (Brief 2 migration
+  // populates customerId on every property), link the customer name to
+  // the customer profile. Fall back to plain-text snapshot for legacy
+  // records that haven't been backfilled yet.
+  if (property.customerId && property.customerName) {
+    const link = `<a href="/admin/customer/${encodeURIComponent(property.customerId)}">${escapeHtml(property.customerName)}</a>`;
+    const email = property.customerEmail ? ` · ${escapeHtml(property.customerEmail)}` : "";
+    propertyCustomer.innerHTML = link + email;
+  } else {
+    const customer = [property.customerName, property.customerEmail].filter(Boolean).join(" · ");
+    propertyCustomer.textContent = customer || "Customer details not yet captured";
+  }
   const phone = property.customerPhone || "no phone on file";
   // Property code (P-YYYY-NNNN) leads the meta line so it's the first
   // thing the eye lands on — same convention as Q-/WO- in the rest of

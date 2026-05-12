@@ -32,6 +32,10 @@ memory/
 # Backend runtime data — never commit. Contains the hashed admin password
 # (auth.json) and all real customer leads (leads.json).
 server/data/
+# Migration safety backups (created by scripts/migrate-customers.js --apply).
+# These snapshot server/data/ before a customer migration runs; they live
+# only on disk and never get committed.
+server/data-backup-*/
 
 # Backend secrets — never commit. Holds Gmail and Twilio credentials.
 .env
