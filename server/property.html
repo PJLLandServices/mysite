@@ -13,6 +13,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/crm/crm.css">
   <link rel="stylesheet" href="/crm/property.css">
+  <link rel="stylesheet" href="/crm/customers.css">
 </head>
 <body class="pjl-crm-body">
   <aside class="pjl-admin-nav" id="navMenu" aria-label="PJL CRM Navigation">
@@ -61,6 +62,9 @@
         <h1 id="propertyAddress">—</h1>
         <p class="property-customer" id="propertyCustomer">—</p>
         <p class="property-meta" id="propertyMeta">—</p>
+        <p style="margin-top: 10px;">
+          <button type="button" class="pjl-btn pjl-btn-outline" id="changeOwnerBtn" style="padding: 6px 12px; font-size: 12px;">Change owner</button>
+        </p>
       </div>
       <div class="property-stat">
         <span>Linked bookings</span>
@@ -199,6 +203,56 @@
       <div class="confirm-actions">
         <button type="button" class="pjl-btn pjl-btn-outline" id="confirmCancel">Cancel</button>
         <button type="button" class="pjl-btn pjl-btn-danger" id="confirmAccept">Delete</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Change owner modal — opens from the property hero "Change owner"
+       button. Customer search hits /api/customers and filters
+       client-side; "+ Create new customer" fallback opens an inline
+       set of fields that creates a customer then transfers in one go. -->
+  <div class="customer-modal" id="transferOwnerModal" hidden role="dialog" aria-modal="true" aria-labelledby="transferOwnerTitle">
+    <div class="customer-modal-card" style="max-width: 560px;">
+      <h2 id="transferOwnerTitle">Change owner</h2>
+      <p style="margin: -8px 0 14px; font-size: 13px; color: var(--crm-muted, #666);">
+        Currently owned by <strong id="transferCurrentOwner">—</strong>.
+        Past work orders, quotes, and invoices stay with the previous
+        owner (they're signed records). All future bookings on this
+        property will be under the new owner.
+      </p>
+
+      <label style="font-size: 13px; font-weight: 600; color: var(--crm-muted, #555);">Find existing customer
+        <input type="search" id="transferSearch" placeholder="Search by name, email, or phone…" style="display: block; margin-top: 4px; width: 100%; padding: 8px 12px; border: 1px solid var(--crm-border, #d4d2cb); border-radius: 6px; font: inherit;">
+      </label>
+
+      <div id="transferResults" style="max-height: 240px; overflow-y: auto; margin: 8px 0 12px; border: 1px solid var(--crm-border, #d4d2cb); border-radius: 6px; display: none;"></div>
+
+      <p style="font-size: 12px; color: var(--crm-muted, #888); text-align: center; margin: 10px 0;">— or —</p>
+
+      <button type="button" class="pjl-btn pjl-btn-outline" id="transferShowNewBtn" style="width: 100%;">+ Create a new customer</button>
+
+      <div id="transferNewFields" hidden style="margin-top: 12px; padding: 12px; background: #fafaf7; border: 1px solid var(--crm-border, #d4d2cb); border-radius: 6px;">
+        <label style="display: block; margin-bottom: 8px; font-size: 12px; font-weight: 600;">Name
+          <input type="text" id="transferNewName" maxlength="200" style="display: block; margin-top: 4px; width: 100%; padding: 6px 10px; border: 1px solid var(--crm-border, #d4d2cb); border-radius: 4px; font: inherit;">
+        </label>
+        <label style="display: block; margin-bottom: 8px; font-size: 12px; font-weight: 600;">Email
+          <input type="email" id="transferNewEmail" maxlength="254" style="display: block; margin-top: 4px; width: 100%; padding: 6px 10px; border: 1px solid var(--crm-border, #d4d2cb); border-radius: 4px; font: inherit;">
+        </label>
+        <label style="display: block; font-size: 12px; font-weight: 600;">Phone
+          <input type="tel" id="transferNewPhone" maxlength="40" style="display: block; margin-top: 4px; width: 100%; padding: 6px 10px; border: 1px solid var(--crm-border, #d4d2cb); border-radius: 4px; font: inherit;">
+        </label>
+      </div>
+
+      <div id="transferSelected" hidden style="margin-top: 12px; padding: 10px 14px; background: #e6f5ec; border: 1px solid #0c8a3e; border-radius: 6px; display: flex; align-items: center; justify-content: space-between;">
+        <span id="transferSelectedLabel">—</span>
+        <button type="button" id="transferSelectedClear" style="background: none; border: none; cursor: pointer; font-size: 18px; color: var(--crm-muted, #666);" aria-label="Clear selection">×</button>
+      </div>
+
+      <p class="customer-modal-error" id="transferError" hidden></p>
+
+      <div class="customer-modal-actions">
+        <button type="button" class="pjl-btn pjl-btn-outline" id="transferCancel">Cancel</button>
+        <button type="button" class="pjl-btn pjl-btn-primary" id="transferConfirm" disabled>Transfer property</button>
       </div>
     </div>
   </div>

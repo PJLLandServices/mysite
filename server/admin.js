@@ -1313,3 +1313,101 @@ vcardLink.addEventListener("click", (event) => {
 });
 
 loadLeads();
+
+// ---- Property-ownership conflict banner ---------------------------
+//
+// Surfaces leads whose intake matched an existing property under a
+// different customer email (spec §3.1 "do NOT auto-merge"). Two
+// actions per row:
+//   - "Resolve on property →" navigates to /admin/property/<id> where
+//     Patrick uses the Change owner modal to transfer ownership.
+//   - "Dismiss" clears the propertyLinkConflicts flag on the lead
+//     for cases where the matched property is a different property
+//     at the same address (duplex, multi-unit).
+
+(function setupConflictBanner() {
+  const banner = document.getElementById("conflictBanner");
+  const list = document.getElementById("conflictList");
+  const count = document.getElementById("conflictCount");
+  if (!banner || !list || !count) return;
+
+  function esc(value) {
+    return String(value == null ? "" : value)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;").replace(/'/g, "&#039;");
+  }
+
+  async function load() {
+    try {
+      const res = await fetch("/api/admin/property-link-conflicts", { credentials: "same-origin" });
+      if (!res.ok) return;
+      const body = await res.json();
+      const conflicts = Array.isArray(body.conflicts) ? body.conflicts : [];
+      if (!conflicts.length) {
+        banner.hidden = true;
+        return;
+      }
+      // Flatten: one row per (lead × conflicting property) pair so
+      // multi-conflict leads render all options.
+      const rows = [];
+      for (const c of conflicts) {
+        for (const conflictProp of c.conflicts) {
+          rows.push({
+            leadId: c.leadId,
+            leadName: c.leadName,
+            leadEmail: c.leadEmail,
+            leadAddress: c.leadAddress,
+            propertyId: conflictProp.id,
+            propertyAddress: conflictProp.address,
+            previousCustomerName: conflictProp.previousCustomerName,
+            previousCustomerEmail: conflictProp.previousCustomerEmail
+          });
+        }
+      }
+      count.textContent = String(rows.length);
+      list.innerHTML = rows.map((r) => `
+        <div style="background: #fff; border: 1px solid #d6a800; border-radius: 6px; padding: 10px 14px; display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between;">
+          <div style="flex: 1 1 320px; font-size: 13px;">
+            <strong>${esc(r.leadName) || "(unnamed lead)"}</strong>
+            <span style="color: #666;"> &lt;${esc(r.leadEmail)}&gt;</span>
+            <div style="color: #666; margin-top: 2px;">
+              landed at <strong>${esc(r.leadAddress)}</strong>
+            </div>
+            <div style="color: #666; margin-top: 2px;">
+              ↔ property <strong>${esc(r.propertyAddress)}</strong>
+              previously owned by <strong>${esc(r.previousCustomerName) || "(unnamed)"}</strong>
+              &lt;${esc(r.previousCustomerEmail)}&gt;
+            </div>
+          </div>
+          <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+            <a class="pjl-btn pjl-btn-primary" style="padding: 5px 10px; font-size: 12px;" href="/admin/property/${encodeURIComponent(r.propertyId)}">Resolve on property →</a>
+            <button type="button" class="pjl-btn pjl-btn-outline" style="padding: 5px 10px; font-size: 12px;" data-dismiss-lead="${esc(r.leadId)}">Dismiss</button>
+          </div>
+        </div>
+      `).join("");
+
+      list.querySelectorAll("[data-dismiss-lead]").forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const leadId = btn.getAttribute("data-dismiss-lead");
+          btn.disabled = true;
+          try {
+            await fetch(`/api/admin/property-link-conflicts/${encodeURIComponent(leadId)}/dismiss`, {
+              method: "POST",
+              credentials: "same-origin"
+            });
+            await load();
+          } catch (err) {
+            btn.disabled = false;
+            console.warn("Dismiss failed:", err);
+          }
+        });
+      });
+
+      banner.hidden = false;
+    } catch (err) {
+      console.warn("Failed to load property-link conflicts:", err);
+    }
+  }
+
+  load();
+})();

@@ -135,6 +135,13 @@ function blankProperty() {
     customerEmail: "",
     customerName: "",
     customerPhone: "",
+    // Ownership transfer audit log. Each entry:
+    //   { ts, fromCustomerId, toCustomerId, by, note }
+    // Empty by default; appended by properties.transferOwner. Lets us
+    // explain "this property was owned by X from 2024-03-15 until
+    // 2026-05-12 when it transferred to Y." Past WOs/invoices keep
+    // their own snapshots — this log is the property's view.
+    ownerHistory: [],
     address: "",                 // free-text formatted address shown in UI
     addressNormalized: "",        // lower-cased, whitespace-collapsed for matching
     coords: null,                 // { lat, lng, formattedAddress } from geocoder
@@ -851,6 +858,55 @@ async function listDeferred(propertyId, { status } = {}) {
   return all.filter((d) => wanted.has(d.status));
 }
 
+// Transfer a property's ownership to a different customer record.
+// Used when a property changes hands (sale, inheritance, etc.) or to
+// resolve a `conflict-ownership` flag from lead intake.
+//
+// Behaviour:
+//   - Updates property.customerId to the new customer.
+//   - Refreshes the snapshot fields (customerName/Email/Phone) from
+//     the new customer's current record so the property displays
+//     correctly going forward.
+//   - Appends an entry to property.ownerHistory with from/to ids,
+//     timestamp, actor, and an optional note.
+//   - Does NOT touch existing WOs / invoices / quotes / projects —
+//     those are signed legal records and keep their original
+//     customerId snapshots. The Brief 2 SCOPE_PROTECTED_FIELDS rule
+//     would refuse the change on a locked WO anyway.
+//
+// Returns the updated property, or null if propertyId not found.
+// Throws if newCustomerId is missing or doesn't resolve to a
+// customer record.
+async function transferOwner(propertyId, { newCustomerId, by = "admin", note = "" } = {}) {
+  if (!newCustomerId) throw new Error("newCustomerId is required.");
+  const records = await readAll();
+  const idx = records.findIndex((p) => p.id === propertyId);
+  if (idx === -1) return null;
+
+  const customersLib = require("./customers");
+  const newCustomer = await customersLib.get(newCustomerId, { withProperties: false });
+  if (!newCustomer) throw new Error(`Customer ${newCustomerId} not found.`);
+
+  const property = records[idx];
+  const fromCustomerId = property.customerId || null;
+  if (fromCustomerId === newCustomerId) return property; // no-op
+
+  const ts = new Date().toISOString();
+  property.customerId = newCustomerId;
+  property.customerName = newCustomer.name || "";
+  property.customerEmail = normalizeEmail(newCustomer.email || "");
+  property.customerPhone = newCustomer.phone || "";
+  property.ownerHistory = [
+    ...(Array.isArray(property.ownerHistory) ? property.ownerHistory : []),
+    { ts, fromCustomerId, toCustomerId: newCustomerId, by, note }
+  ];
+  property.updatedAt = ts;
+
+  records[idx] = property;
+  await writeAll(records);
+  return property;
+}
+
 // Create a property explicitly for a known customer. Used by the
 // /admin/customer/:id "+ Add property" flow in Brief 3 — the customer
 // record already exists, the operator is filling in a property they
@@ -887,6 +943,7 @@ module.exports = {
   list,
   get,
   create,
+  transferOwner,
   update,
   remove,
   removeMany,

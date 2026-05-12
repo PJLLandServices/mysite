@@ -484,6 +484,9 @@ function needsAuth(method, pathname) {
   if (/^\/api\/leads\/[^/]+\/(link-property|dismiss-property-suggestion|attach-property|notify-on-route|open-wo)$/.test(pathname)) return "user";
   // Bulk property import is admin-only.
   if (pathname === "/api/admin/import-properties") return "user";
+  // Property-ownership conflict review queue (Brief 3 follow-up).
+  if (pathname === "/api/admin/property-link-conflicts") return "user";
+  if (pathname.startsWith("/api/admin/property-link-conflicts/")) return "user";
   // Availability lookups + the public booking endpoint stay public.
   return null;
 }
@@ -3048,6 +3051,69 @@ async function handleApi(req, res, pathname) {
   if (req.method === "GET" && pathname === "/api/properties") {
     const all = await properties.list();
     return sendJson(res, 200, { ok: true, properties: all });
+  }
+
+  // GET /api/admin/property-link-conflicts — list leads whose intake
+  // matched an existing property under a different customer email.
+  // The detection happens at intake (server.js around line 2210),
+  // this endpoint just surfaces the queue for the CRM dashboard.
+  if (req.method === "GET" && pathname === "/api/admin/property-link-conflicts") {
+    const allLeads = await readLeads();
+    const conflicts = [];
+    for (const lead of allLeads) {
+      if (!Array.isArray(lead.propertyLinkConflicts) || !lead.propertyLinkConflicts.length) continue;
+      conflicts.push({
+        leadId: lead.id,
+        createdAt: lead.createdAt,
+        leadName: lead.contact?.name || "",
+        leadEmail: lead.contact?.email || "",
+        leadPhone: lead.contact?.phone || "",
+        leadAddress: lead.contact?.address || "",
+        conflicts: lead.propertyLinkConflicts
+      });
+    }
+    return sendJson(res, 200, { ok: true, conflicts });
+  }
+
+  // POST /api/admin/property-link-conflicts/:leadId/dismiss — mark
+  // the conflict resolved-without-transfer. Patrick clicks this when
+  // the matched property is a *different* property at the same
+  // address (duplex, multi-unit, etc.), so the new lead's property
+  // should stand on its own.
+  const conflictDismissMatch = pathname.match(/^\/api\/admin\/property-link-conflicts\/([^/]+)\/dismiss$/);
+  if (conflictDismissMatch && req.method === "POST") {
+    const leadId = decodeURIComponent(conflictDismissMatch[1]);
+    const liveLeads = await readLeads();
+    const idx = liveLeads.findIndex((l) => l.id === leadId);
+    if (idx === -1) return sendJson(res, 404, { ok: false, errors: ["Lead not found."] });
+    delete liveLeads[idx].propertyLinkConflicts;
+    await writeLeads(liveLeads);
+    return sendJson(res, 200, { ok: true });
+  }
+
+  // POST /api/properties/:id/transfer-owner — change ownership of a
+  // property to a different customer. Snapshot fields refresh from
+  // the new customer's record; past WOs / invoices / quotes keep
+  // their own snapshots (legal records).
+  const propertyTransferMatch = pathname.match(/^\/api\/properties\/([^/]+)\/transfer-owner$/);
+  if (propertyTransferMatch && req.method === "POST") {
+    const propertyId = decodeURIComponent(propertyTransferMatch[1]);
+    try {
+      const payload = await parseRequestBody(req);
+      const newCustomerId = String(payload?.newCustomerId || "").trim();
+      if (!newCustomerId) {
+        return sendJson(res, 422, { ok: false, errors: ["newCustomerId is required."] });
+      }
+      const updated = await properties.transferOwner(propertyId, {
+        newCustomerId,
+        by: "admin",
+        note: String(payload?.note || "").slice(0, 400)
+      });
+      if (!updated) return sendJson(res, 404, { ok: false, errors: ["Property not found."] });
+      return sendJson(res, 200, { ok: true, property: updated });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't transfer ownership."] });
+    }
   }
 
   // POST /api/properties — create a property for an existing customer

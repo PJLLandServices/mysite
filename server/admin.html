@@ -91,6 +91,20 @@
       </div>
     </section>
 
+    <!-- Property-ownership conflict banner — surfaces leads whose
+         intake address matched an existing property under a DIFFERENT
+         customer email. Patrick decides per spec §3.1: either the new
+         lead is the new owner (resolve by opening the property and
+         using Change owner), or it's a different property at the
+         same address (dismiss to clear the flag). -->
+    <section id="conflictBanner" class="crm-conflict-banner" hidden style="margin: 16px 0; padding: 14px 18px; background: #fef6e6; border: 1px solid #d6a800; border-radius: 8px;">
+      <strong style="display: block; margin-bottom: 8px; color: #6b4e00;">⚠️ Property ownership conflicts pending review (<span id="conflictCount">0</span>)</strong>
+      <p style="margin: 0 0 10px; font-size: 13px; color: #6b4e00;">
+        New leads arrived at addresses already on file under a different customer email. Could be the new owner of an old customer's house — review each case before linking.
+      </p>
+      <div id="conflictList" style="display: flex; flex-direction: column; gap: 8px;"></div>
+    </section>
+
     <div class="lead-detail-backdrop" id="detailBackdrop" hidden></div>
 
     <section class="crm-workspace" id="crmWorkspace">

@@ -760,3 +760,203 @@ async function init() {
 }
 
 init();
+
+// ---- Change-owner modal -------------------------------------------
+//
+// Lets Patrick re-link a property to a different customer when the
+// real-world owner changes (sale, inheritance, conflict-ownership
+// resolution from lead intake). Customer search hits /api/customers
+// once on first open and filters client-side. "+ Create new customer"
+// fallback POSTs /api/customer then chains into the transfer call.
+
+(function setupChangeOwnerModal() {
+  const btn = document.getElementById("changeOwnerBtn");
+  const modal = document.getElementById("transferOwnerModal");
+  if (!btn || !modal) return;
+
+  const currentOwnerEl = document.getElementById("transferCurrentOwner");
+  const searchEl = document.getElementById("transferSearch");
+  const resultsEl = document.getElementById("transferResults");
+  const showNewBtn = document.getElementById("transferShowNewBtn");
+  const newFields = document.getElementById("transferNewFields");
+  const newName = document.getElementById("transferNewName");
+  const newEmail = document.getElementById("transferNewEmail");
+  const newPhone = document.getElementById("transferNewPhone");
+  const selectedEl = document.getElementById("transferSelected");
+  const selectedLabel = document.getElementById("transferSelectedLabel");
+  const selectedClear = document.getElementById("transferSelectedClear");
+  const errorEl = document.getElementById("transferError");
+  const cancelBtn = document.getElementById("transferCancel");
+  const confirmBtn = document.getElementById("transferConfirm");
+
+  let allCustomers = [];
+  let selected = null;       // { id, name, email, mode: "existing" }
+  let creatingNew = false;
+
+  function setSelected(value) {
+    selected = value;
+    if (value) {
+      selectedLabel.textContent = `${value.name || "(unnamed)"} ${value.email ? "· " + value.email : ""}`;
+      selectedEl.hidden = false;
+    } else {
+      selectedEl.hidden = true;
+    }
+    updateConfirm();
+  }
+
+  function updateConfirm() {
+    let ok = false;
+    if (selected) ok = true;
+    if (creatingNew && newName.value.trim()) ok = true;
+    confirmBtn.disabled = !ok;
+    confirmBtn.textContent = "Transfer property" + (selected ? ` to ${selected.name}` : "");
+  }
+
+  function renderResults(query) {
+    const q = (query || "").trim().toLowerCase();
+    const qDigits = q.replace(/\D/g, "");
+    const matches = allCustomers.filter((c) => {
+      if (selected && c.id === selected.id) return false;
+      if (!q) return false;
+      const hay = [c.name, c.spouseName, c.email, c.spouseEmail].filter(Boolean).join(" ").toLowerCase();
+      if (hay.includes(q)) return true;
+      const phoneDigits = String(c.phone || "").replace(/\D/g, "");
+      if (qDigits && phoneDigits.includes(qDigits)) return true;
+      return false;
+    }).slice(0, 10);
+
+    if (!q) {
+      resultsEl.innerHTML = "";
+      resultsEl.style.display = "none";
+      return;
+    }
+    if (!matches.length) {
+      resultsEl.innerHTML = `<div style="padding: 12px; text-align: center; color: var(--crm-muted, #888); font-size: 13px;">No customers match. Use "Create a new customer" below.</div>`;
+      resultsEl.style.display = "block";
+      return;
+    }
+    resultsEl.innerHTML = matches.map((c) => `
+      <div class="transfer-result" data-id="${c.id}" style="padding: 8px 12px; border-bottom: 1px solid #f0eee8; cursor: pointer;">
+        <strong>${escapeHtml(c.name) || "(unnamed)"}</strong>
+        <span style="color: var(--crm-muted, #666); font-size: 12px; margin-left: 8px;">${escapeHtml(c.email) || c.phone || c.id}</span>
+      </div>
+    `).join("");
+    resultsEl.style.display = "block";
+
+    resultsEl.querySelectorAll(".transfer-result").forEach((row) => {
+      row.addEventListener("click", () => {
+        const id = row.dataset.id;
+        const c = allCustomers.find((x) => x.id === id);
+        if (!c) return;
+        setSelected({ id: c.id, name: c.name, email: c.email, mode: "existing" });
+        searchEl.value = "";
+        resultsEl.innerHTML = "";
+        resultsEl.style.display = "none";
+        newFields.hidden = true;
+        creatingNew = false;
+      });
+    });
+  }
+
+  async function openModal() {
+    if (!loadedProperty) return;
+    errorEl.hidden = true;
+    searchEl.value = "";
+    newName.value = "";
+    newEmail.value = "";
+    newPhone.value = "";
+    newFields.hidden = true;
+    creatingNew = false;
+    setSelected(null);
+    resultsEl.innerHTML = "";
+    resultsEl.style.display = "none";
+    currentOwnerEl.textContent = loadedProperty.customerName || "(unknown)";
+    modal.hidden = false;
+    setTimeout(() => searchEl.focus(), 0);
+    // Lazy-load customers on first open.
+    if (!allCustomers.length) {
+      try {
+        const res = await fetch("/api/customers", { credentials: "same-origin" });
+        const body = await res.json();
+        allCustomers = Array.isArray(body.customers) ? body.customers : [];
+      } catch (err) {
+        console.warn("Failed to load customers for transfer modal:", err);
+      }
+    }
+  }
+
+  function closeModal() { modal.hidden = true; }
+
+  btn.addEventListener("click", openModal);
+  cancelBtn.addEventListener("click", closeModal);
+  modal.addEventListener("click", (e) => { if (e.target === modal) closeModal(); });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !modal.hidden) closeModal(); });
+  searchEl.addEventListener("input", () => renderResults(searchEl.value));
+  selectedClear.addEventListener("click", () => setSelected(null));
+  showNewBtn.addEventListener("click", () => {
+    newFields.hidden = !newFields.hidden;
+    creatingNew = !newFields.hidden;
+    if (creatingNew) {
+      setSelected(null);
+      setTimeout(() => newName.focus(), 0);
+    }
+    updateConfirm();
+  });
+  [newName, newEmail, newPhone].forEach((el) => el.addEventListener("input", updateConfirm));
+
+  confirmBtn.addEventListener("click", async () => {
+    if (!loadedProperty) return;
+    errorEl.hidden = true;
+    confirmBtn.disabled = true;
+    try {
+      let targetCustomerId = selected ? selected.id : null;
+      if (creatingNew && !targetCustomerId) {
+        const name = newName.value.trim();
+        if (!name) throw new Error("Name is required for a new customer.");
+        const createRes = await fetch("/api/customer", {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name,
+            email: newEmail.value.trim(),
+            phone: newPhone.value.trim(),
+            source: "property_transfer"
+          })
+        });
+        const createBody = await createRes.json();
+        if (!createRes.ok || !createBody.ok) {
+          if (createBody?.existingId) {
+            // Email collision: use the existing customer instead of failing.
+            targetCustomerId = createBody.existingId;
+          } else {
+            throw new Error(createBody?.errors?.[0] || "Couldn't create new customer.");
+          }
+        } else {
+          targetCustomerId = createBody.customer.id;
+        }
+      }
+      if (!targetCustomerId) throw new Error("Pick a customer or fill in the new-customer fields.");
+
+      const transferRes = await fetch(`/api/properties/${encodeURIComponent(loadedProperty.id)}/transfer-owner`, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ newCustomerId: targetCustomerId, note: "Transferred via /admin/property page" })
+      });
+      const transferBody = await transferRes.json();
+      if (!transferRes.ok || !transferBody.ok) {
+        throw new Error(transferBody?.errors?.[0] || "Transfer failed.");
+      }
+
+      closeModal();
+      // Refresh the page so all sections (hero, form, lead list, etc.)
+      // reflect the new owner. Simpler than re-rendering in place.
+      location.reload();
+    } catch (err) {
+      errorEl.textContent = err.message || "Couldn't transfer ownership.";
+      errorEl.hidden = false;
+      updateConfirm();
+    }
+  });
+})();
