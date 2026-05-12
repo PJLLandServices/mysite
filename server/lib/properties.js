@@ -851,6 +851,33 @@ async function listDeferred(propertyId, { status } = {}) {
   return all.filter((d) => wanted.has(d.status));
 }
 
+// Create a property explicitly for a known customer. Used by the
+// /admin/customer/:id "+ Add property" flow in Brief 3 — the customer
+// record already exists, the operator is filling in a property they
+// own. Differs from attachLead() in that there's no lead context yet
+// (a property can be created bare and later get bookings/WOs).
+//
+// Required: customerId, address. Snapshot fields (customerName /
+// customerEmail / customerPhone) are pulled from the customer record
+// if not supplied — that's the canonical source.
+async function create({ customerId, address, customerName, customerEmail, customerPhone, coords }) {
+  if (!customerId) throw new Error("customerId is required.");
+  if (!address || !String(address).trim()) throw new Error("Address is required.");
+  const records = await readAll();
+  const property = blankProperty();
+  property.code = nextPropertyCode(records, String(new Date().getUTCFullYear()));
+  property.customerId = customerId;
+  property.address = String(address).trim();
+  property.addressNormalized = normalizeAddress(address);
+  property.customerName = customerName || "";
+  property.customerEmail = normalizeEmail(customerEmail || "");
+  property.customerPhone = customerPhone || "";
+  property.coords = (coords && coords.lat != null) ? coords : null;
+  records.unshift(property);
+  await writeAll(records);
+  return property;
+}
+
 module.exports = {
   attachLead,
   relinkLead,
@@ -859,6 +886,7 @@ module.exports = {
   findByCustomerEmail,
   list,
   get,
+  create,
   update,
   remove,
   removeMany,

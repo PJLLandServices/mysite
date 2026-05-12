@@ -3050,6 +3050,42 @@ async function handleApi(req, res, pathname) {
     return sendJson(res, 200, { ok: true, properties: all });
   }
 
+  // POST /api/properties — create a property for an existing customer
+  // (Brief 3 "+ Add property" flow on the customer profile).
+  if (req.method === "POST" && pathname === "/api/properties") {
+    try {
+      const payload = await parseRequestBody(req);
+      const customerId = String(payload?.customerId || "").trim();
+      const address = String(payload?.address || "").trim();
+      if (!customerId) return sendJson(res, 422, { ok: false, errors: ["customerId is required."] });
+      if (!address) return sendJson(res, 422, { ok: false, errors: ["Address is required."] });
+      const customer = await customers.get(customerId, { withProperties: false });
+      if (!customer) return sendJson(res, 404, { ok: false, errors: ["Customer not found."] });
+      // Pre-geocode for the system-profile coords; fall back to PJL base
+      // if the geocoder skips (no key) or fails (unknown address). The
+      // property is still created either way — coords just default to
+      // null and can be filled later by editing the property.
+      let coords = null;
+      try {
+        const geo = await geocode(address);
+        if (geo.ok && geo.coords && !geo.skipped) coords = geo.coords;
+      } catch (err) {
+        console.warn("[properties] geocode for create failed:", err.message);
+      }
+      const property = await properties.create({
+        customerId,
+        address,
+        customerName: customer.name || "",
+        customerEmail: customer.email || "",
+        customerPhone: customer.phone || "",
+        coords
+      });
+      return sendJson(res, 200, { ok: true, property });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't create property."] });
+    }
+  }
+
   // Bulk import — admin uploads a parsed records array (the import UI does
   // the xlsx parsing in the browser via SheetJS, then sends JSON here).
   // Body: { records: [{ customerName, customerEmail, customerPhone, address,

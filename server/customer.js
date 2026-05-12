@@ -363,6 +363,68 @@ if (logoutButton) {
   });
 }
 
+// ---- Add property modal ------------------------------------------
+
+const addPropertyBtn = document.getElementById("addPropertyBtn");
+const newPropertyModal = document.getElementById("newPropertyModal");
+const newPropertyForm = document.getElementById("newPropertyForm");
+const newPropertyCancel = document.getElementById("newPropertyCancel");
+const newPropertyError = document.getElementById("newPropertyError");
+
+function openPropertyModal() {
+  newPropertyForm.reset();
+  newPropertyError.hidden = true;
+  newPropertyModal.hidden = false;
+  setTimeout(() => newPropertyForm.querySelector("input[name=address]")?.focus(), 0);
+}
+
+function closePropertyModal() { newPropertyModal.hidden = true; }
+
+if (addPropertyBtn) {
+  addPropertyBtn.addEventListener("click", openPropertyModal);
+}
+newPropertyCancel.addEventListener("click", closePropertyModal);
+newPropertyModal.addEventListener("click", (e) => {
+  if (e.target === newPropertyModal) closePropertyModal();
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !newPropertyModal.hidden) closePropertyModal();
+});
+
+newPropertyForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  newPropertyError.hidden = true;
+  const formData = new FormData(newPropertyForm);
+  const address = (formData.get("address") || "").toString().trim();
+  if (!address) {
+    newPropertyError.textContent = "Address is required.";
+    newPropertyError.hidden = false;
+    return;
+  }
+  try {
+    const res = await fetch("/api/properties", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ customerId, address })
+    });
+    const body = await res.json();
+    if (!res.ok || !body.ok) {
+      newPropertyError.textContent = body?.errors?.[0] || body?.error || "Couldn't create property.";
+      newPropertyError.hidden = false;
+      return;
+    }
+    closePropertyModal();
+    await load();
+    // Land the user on the Properties tab to show the freshly added record.
+    tabHeaders.forEach((h) => h.classList.toggle("is-active", h.dataset.tab === "properties"));
+    tabPanels.forEach((p) => { p.hidden = p.dataset.tab !== "properties"; });
+  } catch (err) {
+    newPropertyError.textContent = err?.message || "Network error.";
+    newPropertyError.hidden = false;
+  }
+});
+
 // ---- Initial load -------------------------------------------------
 
 async function load() {

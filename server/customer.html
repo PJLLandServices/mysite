@@ -135,6 +135,9 @@
           </nav>
 
           <div class="customer-tab-panel" data-tab="properties">
+            <div style="display: flex; justify-content: flex-end; margin-bottom: 12px;">
+              <button type="button" class="pjl-btn pjl-btn-primary" id="addPropertyBtn">+ Add property</button>
+            </div>
             <div id="panelProperties"></div>
           </div>
           <div class="customer-tab-panel" data-tab="bookings" hidden>
@@ -176,6 +179,34 @@
     </main>
   </div>
 
+  <!-- Add property modal — opens from the Properties tab. The address
+       input is auto-wired by /coverage-checker.js (loaded below) which
+       attaches Google Places Autocomplete to any input with class
+       "js-address-autocomplete". -->
+  <div class="customer-modal" id="newPropertyModal" hidden role="dialog" aria-modal="true" aria-labelledby="newPropertyTitle">
+    <div class="customer-modal-card">
+      <h2 id="newPropertyTitle">Add property</h2>
+      <form id="newPropertyForm">
+        <label>Address
+          <input type="text" name="address" class="js-address-autocomplete" placeholder="Start typing the property address…" autocomplete="off" required>
+        </label>
+        <p style="font-size: 12px; color: var(--crm-muted, #666); margin: -6px 0 12px;">
+          Pick from the dropdown for clean formatting. System details (controller, valves, zones) can be added later on the property page.
+        </p>
+        <p class="customer-modal-error" id="newPropertyError" hidden></p>
+        <div class="customer-modal-actions">
+          <button type="button" class="pjl-btn pjl-btn-outline" id="newPropertyCancel">Cancel</button>
+          <button type="submit" class="pjl-btn pjl-btn-primary">Create property</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
   <script src="/crm/customer.js"></script>
+  <!-- Address autocomplete — same library + key as the public booking page.
+       The Google script fires initCoverageCheck() on load, which scans
+       for js-address-autocomplete inputs and attaches Places. -->
+  <script src="/coverage-checker.js"></script>
+  <script async defer src="https://maps.googleapis.com/maps/api/js?key=AIzaSyBrORBeXbpNTJvoi2PDhDDs6Iy-BGSU30M&libraries=places&callback=initCoverageCheck&loading=async"></script>
 </body>
 </html>
