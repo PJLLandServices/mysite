@@ -144,7 +144,8 @@
     "OVV41120":     { "sku": "OVV41120",     "partNumber": "OVV41120",     "category": "accessories", "subcategory": "Supplies", "size": "0.5\"",  "description": "IPS PVC ball valve 0.5\"",                   "priceCents": 178,   "unit": "each", "supplierIds": [] },
     "BPLF7RU2275":  { "sku": "BPLF7RU2275",  "partNumber": "BPLF7RU2275",  "category": "accessories", "subcategory": "Supplies", "size": "0.75\"", "description": "Watt dual check 0.75\" FxF lead-free 72204",  "priceCents": 5082,  "unit": "each", "supplierIds": [] },
     "FLAG-FLBLUE":  { "sku": "FLAG-FLBLUE",  "partNumber": "FLAG-FLBLUE",  "category": "accessories", "subcategory": "Supplies", "size": "18\"",   "description": "Marking flags 4×5 globe blue 18\" wire stf",  "priceCents": 2340,  "unit": "bag", "supplierIds": [] },
-    "61146":        { "sku": "61146",        "partNumber": "61146",        "category": "accessories", "subcategory": "Supplies", "size": "",       "description": "DryConn black/white outdoor irri (can of 150)","priceCents": 10833, "unit": "can", "supplierIds": [] }
+    "61146":        { "sku": "61146",        "partNumber": "61146",        "category": "accessories", "subcategory": "Supplies", "size": "",       "description": "DryConn black/white outdoor irri (can of 150)","priceCents": 10833, "unit": "can", "supplierIds": [] },
+    "SC6712":       { "sku": "SC6712",       "partNumber": "SC6712",       "category": "accessories", "subcategory": "Supplies", "size": "1\"",    "description": "IDL CLAMP SS 11-16IN - 1IN",                  "priceCents": 122,   "unit": "each", "supplierIds": [] }
   },
   "service_materials": {
     "_doc": "Mapping of service tier → default parts to load. Left empty after the May 2026 catalog rebuild — Patrick to backfill with new SKUs as needed. The follow-up modal does NOT consume this map; the tech curates per-visit.",
