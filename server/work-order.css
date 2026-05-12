@@ -495,6 +495,33 @@ body.wo-lightbox-open { overflow: hidden; }
   opacity: 0.50;
   cursor: not-allowed;
 }
+
+/* Pre-sign readiness list — same treatment as tech mode. */
+.wo-signoff-readiness {
+  margin: 8px 0 0;
+  padding: 10px 14px 10px 28px;
+  background: rgba(224, 168, 90, 0.10);
+  border: 1px solid rgba(224, 168, 90, 0.40);
+  border-radius: 8px;
+  list-style: disc;
+  font-size: 13px;
+  color: #6E4A1A;
+  line-height: 1.5;
+  max-width: 720px;
+}
+.wo-signoff-readiness li { margin: 2px 0; }
+.wo-signoff-note {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: #6A6A60;
+  line-height: 1.45;
+  max-width: 720px;
+}
+.wo-postsig-link {
+  color: inherit;
+  font-weight: 700;
+  text-decoration: underline;
+}
 .wo-signoff-signed {
   max-width: 720px;
   padding: 14px;
@@ -1670,6 +1697,11 @@ body[data-locked="true"] .wo-zone-location {
   background: #1B4D2E;
   border-color: #1B4D2E;
   color: #fff;
+}
+.wo-postsig-banner[data-state="needs_retry"] {
+  background: rgba(224, 168, 90, 0.12);
+  border-color: rgba(224, 168, 90, 0.55);
+  color: #6E4A1A;
 }
 .wo-postsig-icon {
   font-size: 24px;

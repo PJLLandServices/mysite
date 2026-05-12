@@ -976,6 +976,10 @@ const WO_PHOTO_REQUIREMENT_BY_TYPE = {
 // Three states: pending_photos / ready / completed. Hidden when not
 // applicable (pre-signature, cancelled, etc).
 function renderPostSigBanner(wo) {
+  // Keep the pre-sign readiness list in sync as zones / photos / CF
+  // resolutions mutate. Cheap; runs whenever this banner re-renders.
+  updateWoSignoffSubmitState();
+
   const banner = document.getElementById("woPostSigBanner");
   const icon = document.getElementById("woPostSigIcon");
   const headline = document.getElementById("woPostSigHeadline");
@@ -989,8 +993,9 @@ function renderPostSigBanner(wo) {
     banner.hidden = false;
     banner.dataset.state = "completed";
     if (icon) icon.textContent = "✓";
-    headline.textContent = "Visit completed.";
-    detail.textContent = `Cascade fired. Draft invoice ${completedInvoiceForBanner} on file.`;
+    headline.textContent = "Visit signed, locked, and completed.";
+    const safeId = String(completedInvoiceForBanner).replace(/</g, "&lt;");
+    detail.innerHTML = `Draft invoice <a href="/admin/invoice/${encodeURIComponent(completedInvoiceForBanner)}" class="wo-postsig-link">${safeId}</a> on file. Customer summary email sent.`;
     if (completeBtn) completeBtn.hidden = true;
     return;
   }
@@ -998,8 +1003,8 @@ function renderPostSigBanner(wo) {
     banner.hidden = false;
     banner.dataset.state = "completed";
     if (icon) icon.textContent = "✓";
-    headline.textContent = "Visit completed.";
-    detail.textContent = "Service record + draft invoice created.";
+    headline.textContent = "Visit signed, locked, and completed.";
+    detail.textContent = "Service record on file. No invoice for this visit (no billable line items).";
     if (completeBtn) completeBtn.hidden = true;
     return;
   }
@@ -1009,24 +1014,16 @@ function renderPostSigBanner(wo) {
     return;
   }
 
-  const minPhotos = WO_PHOTO_REQUIREMENT_BY_TYPE[wo.type] ?? 1;
-  const photoCount = Array.isArray(wo.photos) ? wo.photos.length : 0;
-  const gateMet = minPhotos === 0 || photoCount >= minPhotos;
-
+  // Edge case: signed but status didn't flip (cascade gate tripped on
+  // missing propertyId, or this is a legacy WO from before the merge).
+  // Surface the recovery path — the "Mark visit completed" fallback +
+  // the existing manual Run Cascade button below.
   banner.hidden = false;
-  if (gateMet) {
-    banner.dataset.state = "ready";
-    if (icon) icon.textContent = "→";
-    headline.textContent = "Scope confirmed. Ready to mark complete.";
-    detail.textContent = "Mark Complete fires the completion cascade and drafts the invoice.";
-    if (completeBtn) completeBtn.hidden = false;
-  } else {
-    banner.dataset.state = "pending_photos";
-    if (icon) icon.textContent = "📷";
-    headline.textContent = "Scope confirmed.";
-    detail.textContent = `Capture ${minPhotos === 1 ? "at least one completion photo" : `${minPhotos}+ completion photos`} before marking complete.`;
-    if (completeBtn) completeBtn.hidden = true;
-  }
+  banner.dataset.state = "needs_retry";
+  if (icon) icon.textContent = "↻";
+  headline.textContent = "Signed and locked — completion didn't fire.";
+  detail.textContent = "Tap Mark Complete to retry the cascade, or use Re-run completion cascade below.";
+  if (completeBtn) completeBtn.hidden = false;
 }
 
 // Tracks the freshly-created invoice ID after Mark Complete fires the
@@ -1509,7 +1506,7 @@ const HISTORY_ACTION_LABELS = {
   carry_forward_already_fixed: "Carry-forward → already fixed",
   carry_forward_cannot_locate: "Carry-forward → can't locate",
   cascade_fire: "Completion cascade",
-  invoice_drafted: "Invoice drafted (manual)",
+  invoice_drafted: "Invoice drafted",
   followup_created: "Follow-up scheduled",
   created_as_followup: "Created as follow-up",
   created_as_emergency_followup: "Created as emergency follow-up"
@@ -1731,12 +1728,65 @@ function updateWoSignoffSubmitState() {
   // the WO is bonus-eligible. Same gate logic as tech mode.
   const ig = loadedWorkOrder?.intakeGuarantee || {};
   const bonusGateOk = !ig.applies || ig.matched === true || ig.matched === false;
-  submit.disabled = !(name && ack && drawn && bonusGateOk);
+  const readinessFails = woPreSignReadinessFailures();
+  const readinessOk = readinessFails.length === 0;
+  submit.disabled = !(name && ack && drawn && bonusGateOk && readinessOk);
+
+  // Inline readiness list mirrors the tech-mode treatment so Patrick
+  // sees from the desktop editor exactly what's blocking sign-off.
+  const readinessList = document.getElementById("woSignoffReadiness");
+  if (readinessList) {
+    if (!readinessOk && (name || drawn)) {
+      readinessList.hidden = false;
+      readinessList.innerHTML = readinessFails
+        .map((f) => `<li>${f.replace(/</g, "&lt;")}</li>`)
+        .join("");
+    } else {
+      readinessList.hidden = true;
+      readinessList.innerHTML = "";
+    }
+  }
+
   if (!bonusGateOk) {
     submit.title = "Resolve the AI Correct Diagnosis Bonus decision before signing.";
+  } else if (!readinessOk) {
+    submit.title = readinessFails.join(" • ");
   } else {
     submit.removeAttribute("title");
   }
+}
+
+// Pre-sign walkout mirror — same gates as tech mode (zones touched,
+// photo threshold, carry-forward resolved) minus the signature check.
+// Used to gate the merged "Sign, Lock & Generate Invoice" button so
+// signing only fires the cascade on a fully-complete visit.
+function woPreSignReadinessFailures() {
+  const wo = loadedWorkOrder;
+  if (!wo) return [];
+  const fails = [];
+  const zones = Array.isArray(wo.zones) ? wo.zones : [];
+  const untouched = zones.filter((z) => {
+    if (z.status && z.status !== "") return false;
+    const checks = z.checks || {};
+    return !Object.values(checks).some(Boolean);
+  });
+  if (untouched.length) {
+    fails.push(`${untouched.length} zone${untouched.length === 1 ? "" : "s"} haven't been checked yet (zones ${untouched.map((z) => z.number).join(", ")}).`);
+  }
+  if (wo.type === "spring_opening") {
+    const openCfCards = document.querySelectorAll('#woCarryForwardList [data-deferred-id]');
+    if (openCfCards.length) {
+      fails.push(`${openCfCards.length} carry-forward recommendation${openCfCards.length === 1 ? "" : "s"} still need an action.`);
+    }
+  }
+  const minPhotos = WO_PHOTO_REQUIREMENT_BY_TYPE[wo.type] ?? 1;
+  if (minPhotos > 0) {
+    const photoCount = Array.isArray(wo.photos) ? wo.photos.length : 0;
+    if (photoCount < minPhotos) {
+      fails.push(`Capture ${minPhotos === 1 ? "at least one completion photo" : `at least ${minPhotos} completion photos`} before signing.`);
+    }
+  }
+  return fails;
 }
 
 document.getElementById("woSignoffName")?.addEventListener("input", updateWoSignoffSubmitState);
@@ -1752,23 +1802,48 @@ document.getElementById("woSignoffSubmit")?.addEventListener("click", async () =
   const customerName = (document.getElementById("woSignoffName")?.value || "").trim();
   const ack = !!document.getElementById("woSignoffAck")?.checked;
   if (!customerName || !ack || !signaturePadInstance?.isDirty()) return;
+
+  const readinessFails = woPreSignReadinessFailures();
+  if (readinessFails.length) {
+    alert("Can't sign yet:\n\n• " + readinessFails.join("\n• ") + "\n\nResolve these first.");
+    return;
+  }
+
   submit.disabled = true;
-  submit.textContent = "Signing…";
+  submit.textContent = "Signing & invoicing…";
   try {
     const imageData = signaturePadInstance.toDataURL();
+    // Combined PATCH: signature + status → completed in one round-trip.
+    // Server awaits the cascade and returns the invoice id directly.
+    // arrivedAt + departedAt back-fill mirrors the tech-mode behaviour.
+    const nowIso = new Date().toISOString();
+    const payload = {
+      signature: { customerName, imageData, acknowledgement: true },
+      status: "completed"
+    };
+    if (!loadedWorkOrder.arrivedAt) payload.arrivedAt = nowIso;
+    if (!loadedWorkOrder.departedAt) payload.departedAt = nowIso;
     const response = await fetch(`/api/work-orders/${encodeURIComponent(getWorkOrderId())}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ signature: { customerName, imageData, acknowledgement: true } })
+      body: JSON.stringify(payload)
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok || !data.ok) throw new Error((data.errors && data.errors[0]) || "Couldn't save signature.");
     loadedWorkOrder = data.workOrder;
+    if (data.cascade && data.cascade.invoiceId) {
+      completedInvoiceForBanner = data.cascade.invoiceId;
+    }
     renderSignoff(data.workOrder);
+    renderPostSigBanner(data.workOrder);
+    renderHistory(data.workOrder);
     applyLockState(data.workOrder.locked === true, data.workOrder.signature);
+    // Status dropdown reflects the new completed state.
+    const woStatus = document.getElementById("woStatus");
+    if (woStatus && data.workOrder.status) woStatus.value = data.workOrder.status;
   } catch (err) {
     submit.disabled = false;
-    submit.textContent = "Sign & lock work order";
+    submit.textContent = "Sign, lock & generate invoice";
     alert(err.message || "Couldn't save signature.");
   }
 });

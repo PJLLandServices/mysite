@@ -315,7 +315,9 @@
             <span>I authorize the work described above</span>
           </label>
 
-          <button type="button" class="pjl-btn pjl-btn-primary wo-signoff-submit" id="woSignoffSubmit" disabled>Sign &amp; lock work order</button>
+          <button type="button" class="pjl-btn pjl-btn-primary wo-signoff-submit" id="woSignoffSubmit" disabled>Sign, lock &amp; generate invoice</button>
+          <ul class="wo-signoff-readiness" id="woSignoffReadiness" hidden></ul>
+          <p class="wo-signoff-note">Signing locks the WO, completes the visit, and drafts the customer invoice in one tap. Scope additions after sign require a fresh signature.</p>
         </div>
 
         <div class="wo-signoff-signed" id="woSignoffSigned" hidden>
