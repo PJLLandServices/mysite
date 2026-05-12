@@ -323,6 +323,7 @@ async function listByCustomer(email) {
 async function create({
   type = "ai_repair_quote",
   status = "sent",
+  customerId = null,
   customerEmail = "",
   propertyId = null,
   leadId = null,
@@ -339,6 +340,18 @@ async function create({
   if (!TYPES.includes(type)) throw new Error(`Unknown quote type: ${type}`);
   if (!STATUSES.includes(status)) throw new Error(`Unknown quote status: ${status}`);
 
+  // Brief 4 — resolve customerId from email if the caller didn't pass
+  // it. Soft-failure: a quote without customerId is still valid (the
+  // migration backfill will fix it), but we try to set it now so new
+  // records are correctly linked from creation.
+  if (!customerId && customerEmail) {
+    try {
+      const customersLib = require("./customers");
+      const match = await customersLib.findByEmail(customerEmail);
+      if (match) customerId = match.id;
+    } catch (err) { /* tolerate */ }
+  }
+
   const records = await readAll();
   const year = new Date().getUTCFullYear();
   const id = await nextQuoteId(year);
@@ -348,6 +361,7 @@ async function create({
   q.type = type;
   q.status = status;
   q.createdBy = createdBy;
+  q.customerId = customerId || null;
   q.customerEmail = String(customerEmail || "").toLowerCase().trim();
   q.propertyId = propertyId;
   q.leadId = leadId;

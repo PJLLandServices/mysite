@@ -404,21 +404,115 @@ async function addCommunication(id, record) {
   return records[idx];
 }
 
-// ---- Merge (stub) ----------------------------------------------------
+// ---- Merge -----------------------------------------------------------
 //
-// When two customer records turn out to be the same person (e.g. one
-// created via email-intake, the other from an xlsx import where the
-// email differed), Patrick will need to merge them. The full merge —
-// re-pointing every entity's customerId, concatenating communication
-// records, preserving the merged record's history — is deferred per
-// audit §5.3. This stub establishes the interface so callers can be
-// wired ahead of the implementation.
+// Brief 4 — when two customer records turn out to be the same person
+// (typical case: an xlsx-imported placeholder customer overlaps with a
+// real lead-derived customer), merge the secondary INTO the primary.
 //
-// First real merge case will drive the implementation. Until then,
-// callers receive an explicit unimplemented error rather than silent
-// no-op behaviour.
-async function mergeCustomers(/* primaryId, secondaryId */) {
-  throw new Error("mergeCustomers is not yet implemented. Stub only — see audit §5.3.");
+// Side effects:
+//   1. Every entity (leads, properties, bookings, WOs, quotes,
+//      invoices, projects) with customerId === secondaryId gets
+//      re-pointed to primaryId.
+//   2. Communication records get concatenated and deduped.
+//   3. Primary's blank fields get filled from secondary (name,
+//      spouse info, billing address, source, qbId). Primary's
+//      non-empty fields are authoritative.
+//   4. Primary's notificationPrefs stay untouched (person's
+//      choice — not merged from a placeholder).
+//   5. A merge entry is appended to primary's history.
+//   6. Secondary is removed from customers.json.
+//
+// Direct JSON-file ops deliberately bypass each entity lib's update()
+// — those are designed for granular patches, not bulk customerId
+// rewrites. The operation is one-shot and well-scoped.
+async function mergeCustomers(primaryId, secondaryId, { by = "admin", note = "" } = {}) {
+  if (!primaryId || !secondaryId) throw new Error("Both customer IDs are required.");
+  if (primaryId === secondaryId) throw new Error("Cannot merge a customer into itself.");
+
+  const records = await readAll();
+  const primaryIdx = records.findIndex((c) => c.id === primaryId);
+  const secondaryIdx = records.findIndex((c) => c.id === secondaryId);
+  if (primaryIdx === -1) throw new Error(`Primary customer ${primaryId} not found.`);
+  if (secondaryIdx === -1) throw new Error(`Secondary customer ${secondaryId} not found.`);
+
+  const primary = { ...records[primaryIdx] };
+  const secondary = records[secondaryIdx];
+
+  // Re-point every entity carrying customerId.
+  const dataDir = path.join(__dirname, "..", "data");
+  const filesToUpdate = [
+    "leads.json", "properties.json", "bookings.json",
+    "work-orders.json", "quotes.json", "invoices.json", "projects.json"
+  ];
+  let entitiesUpdated = 0;
+  for (const file of filesToUpdate) {
+    const fullPath = path.join(dataDir, file);
+    if (!fsSync.existsSync(fullPath)) continue;
+    try {
+      const raw = await fs.readFile(fullPath, "utf8");
+      const arr = JSON.parse(raw || "[]");
+      if (!Array.isArray(arr)) continue;
+      let changed = 0;
+      for (const r of arr) {
+        if (r && r.customerId === secondaryId) {
+          r.customerId = primaryId;
+          changed++;
+        }
+      }
+      if (changed) {
+        await fs.writeFile(fullPath, JSON.stringify(arr, null, 2) + "\n", "utf8");
+        entitiesUpdated += changed;
+      }
+    } catch (err) {
+      console.warn(`[mergeCustomers] couldn't update ${file}:`, err.message);
+    }
+  }
+
+  // Fill primary's blank fields from secondary.
+  for (const field of [
+    "name", "spouseName", "phone", "spousePhone",
+    "email", "spouseEmail", "billingAddress",
+    "source", "quickbooksId", "internalNotes"
+  ]) {
+    if (!primary[field] && secondary[field]) primary[field] = secondary[field];
+  }
+
+  // Concat + dedupe communication records (key by ts + source + summary).
+  const seen = new Set();
+  const allComms = [
+    ...(Array.isArray(primary.communicationRecords) ? primary.communicationRecords : []),
+    ...(Array.isArray(secondary.communicationRecords) ? secondary.communicationRecords : [])
+  ];
+  primary.communicationRecords = allComms.filter((c) => {
+    const key = `${c.ts}|${c.source}|${c.summary}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).sort((a, b) => String(a.ts || "").localeCompare(String(b.ts || "")));
+
+  // History entry on primary.
+  const ts = nowIso();
+  primary.history = [
+    ...(Array.isArray(primary.history) ? primary.history : []),
+    {
+      ts,
+      action: "merged_in",
+      by,
+      note: note || `Merged ${secondaryId} (${secondary.name || "unnamed"}) into this record. ${entitiesUpdated} entity ${entitiesUpdated === 1 ? "reference" : "references"} re-pointed.`
+    }
+  ];
+  primary.updatedAt = ts;
+
+  records[primaryIdx] = primary;
+  records.splice(secondaryIdx, 1);
+  await writeAll(records);
+
+  return {
+    customer: primary,
+    entitiesUpdated,
+    removedCustomer: { id: secondary.id, name: secondary.name }
+  };
 }
 
 module.exports = {

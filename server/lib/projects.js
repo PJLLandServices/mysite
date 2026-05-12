@@ -157,6 +157,7 @@ async function get(id) {
 
 async function create({
   name = "",
+  customerId = null,
   customerName = "",
   customerEmail = "",
   customerPhone = "",
@@ -168,12 +169,25 @@ async function create({
   workOrderIds = [],
   createdBy = "admin"
 } = {}) {
+  // Brief 4 — auto-resolve customerId from email/phone when the caller
+  // didn't pass it. Keeps new records correctly linked from creation.
+  if (!customerId && (customerEmail || customerPhone)) {
+    try {
+      const customersLib = require("./customers");
+      const match = customerEmail
+        ? await customersLib.findByEmail(customerEmail)
+        : await customersLib.findByPhone(customerPhone);
+      if (match) customerId = match.id;
+    } catch (err) { /* tolerate */ }
+  }
+
   const records = await readAll();
   const year = new Date().getUTCFullYear();
   const id = await nextProjectId(year);
   const rec = blankProject();
   rec.id = id;
   rec.name = String(name || "").trim().slice(0, 200);
+  rec.customerId = customerId || null;
   rec.customerName = String(customerName || "").trim().slice(0, 200);
   rec.customerEmail = String(customerEmail || "").trim().toLowerCase().slice(0, 254);
   rec.customerPhone = String(customerPhone || "").trim().slice(0, 40);

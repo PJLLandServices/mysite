@@ -148,6 +148,7 @@ async function createDraft({
   woId = null,
   quoteId = null,
   propertyId = null,
+  customerId = null,
   customerName = "",
   customerEmail = "",
   customerPhone = "",
@@ -156,6 +157,19 @@ async function createDraft({
   notes = "",
   paidOnSiteAtCompletion = false
 }) {
+  // Brief 4 — auto-resolve customerId from email/phone if missing.
+  // The completion cascade passes wo.customerId directly post-Brief 2,
+  // but invoices created via other paths benefit from the fallback.
+  if (!customerId && (customerEmail || customerPhone)) {
+    try {
+      const customersLib = require("./customers");
+      const match = customerEmail
+        ? await customersLib.findByEmail(customerEmail)
+        : await customersLib.findByPhone(customerPhone);
+      if (match) customerId = match.id;
+    } catch (err) { /* tolerate */ }
+  }
+
   const records = await readAll();
   const now = new Date().toISOString();
   const year = new Date().getUTCFullYear();
@@ -182,6 +196,7 @@ async function createDraft({
     woId,
     quoteId,
     propertyId,
+    customerId,
     customerName,
     customerEmail,
     customerPhone,

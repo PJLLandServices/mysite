@@ -227,6 +227,7 @@ async function run(wo, deps = {}) {
         woId: wo.id,
         quoteId: wo.onSiteQuote?.quoteId || null,
         propertyId: wo.propertyId,
+        customerId: wo.customerId || null,
         customerName: wo.customerName || "",
         customerEmail: wo.customerEmail || "",
         customerPhone: wo.customerPhone || "",

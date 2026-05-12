@@ -2051,12 +2051,21 @@ async function handlePortalLoginApi(req, res, pathname) {
     try {
       const matches = await resolveLoginIdentifier(identifier);
       const baseUrl = process.env.PUBLIC_BASE_URL || baseUrlFromReq(req);
-      // One token + one email per matched lead. Multiple matches
-      // (customer with two properties / two leads) get one each — no
-      // dedup, per the brief.
+      // Brief 4 — dedup matched leads by customerId so a customer
+      // with two leads gets ONE magic link tied to their customer
+      // record, not two pointing at separate leads. The subject of
+      // the token is customer.id when available (fallback to lead.id
+      // for legacy leads without customerId).
+      const seenCustomers = new Set();
       for (const lead of matches) {
+        const customerId = lead.customerId || null;
+        const subjectId = customerId || lead.id;
+        if (customerId) {
+          if (seenCustomers.has(customerId)) continue;
+          seenCustomers.add(customerId);
+        }
         try {
-          const token = await magicTokens.issue("customer_login", lead.id, { requestIp: ip });
+          const token = await magicTokens.issue("customer_login", subjectId, { requestIp: ip });
           const link = joinUrl(baseUrl, "/portal/login/verify", { t: token.id });
           // Fire-and-forget. Failure is logged but never surfaced.
           sendCustomerLoginLink(lead, link).catch((err) => {
@@ -2083,19 +2092,52 @@ async function handlePortalLoginApi(req, res, pathname) {
     if (!claimed) {
       return redirect(res, "/portal/login?error=expired");
     }
-    const leadId = result.record.subjectId;
+    // Brief 4 — subjectId can be either:
+    //   - "CUST-NNNN"  → new tokens (post-Brief 4 issue path)
+    //   - UUID         → legacy tokens still in customer inboxes
+    // Resolve to a customer record either way. For the portal redirect
+    // we then look up the customer's most recent lead and use its
+    // existing portal.token — keeps /portal/<token> URLs working
+    // without redesigning the portal page right now.
+    const subjectId = result.record.subjectId;
     const leads = await readLeads();
-    const idx = leads.findIndex((l) => l.id === leadId);
-    if (idx === -1) {
+    let customer = null;
+    let lead = null;
+    if (subjectId.startsWith("CUST-")) {
+      customer = await customers.get(subjectId, { withProperties: false });
+      if (customer) {
+        const customerLeads = leads
+          .filter((l) => l.customerId === subjectId)
+          .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+        lead = customerLeads[0] || null;
+      }
+    } else {
+      // Legacy token — subjectId is a lead id.
+      lead = leads.find((l) => l.id === subjectId) || null;
+      if (lead?.customerId) {
+        customer = await customers.get(lead.customerId, { withProperties: false });
+      }
+    }
+    if (!customer && !lead) {
       return redirect(res, "/portal/login?error=expired");
     }
-    // Stamp lastLoginAt on the lead. Keeps the portal-login audit trail
-    // colocated with the lead record (no separate customers store).
-    leads[idx] = { ...leads[idx], lastLoginAt: new Date().toISOString() };
-    try { await writeLeads(leads); } catch (err) { console.warn("[portal-login] writeLeads failed:", err?.message); }
+    // Stamp lastLoginAt on the lead the customer lands on, for the
+    // existing portal-login audit trail.
+    if (lead) {
+      const idx = leads.findIndex((l) => l.id === lead.id);
+      if (idx !== -1) {
+        leads[idx] = { ...leads[idx], lastLoginAt: new Date().toISOString() };
+        try { await writeLeads(leads); } catch (err) { console.warn("[portal-login] writeLeads failed:", err?.message); }
+      }
+    }
 
-    const portalToken = leads[idx].portal?.token || portalTokenForId(leadId);
-    await setSessionCookie(req, res, { uid: `customer:${leadId}`, role: "customer" });
+    const portalToken = lead?.portal?.token || portalTokenForId(lead?.id || subjectId);
+    const sessionUid = customer ? `customer:${customer.id}` : `customer:${subjectId}`;
+    await setSessionCookie(req, res, {
+      uid: sessionUid,
+      customerId: customer?.id || null,
+      role: "customer"
+    });
     return redirect(res, `/portal/${portalToken}`);
   }
 
@@ -3297,6 +3339,28 @@ async function handleApi(req, res, pathname) {
         }
         return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't update customer."] });
       }
+    }
+  }
+
+  // POST /api/customer/:id/merge — merge another customer INTO this
+  // one. Destructive: the secondary customer is removed, all their
+  // entity references re-pointed to this customer. Brief 4.
+  const customerMergeMatch = pathname.match(/^\/api\/customer\/([^/]+)\/merge$/);
+  if (customerMergeMatch && req.method === "POST") {
+    const primaryId = decodeURIComponent(customerMergeMatch[1]);
+    try {
+      const payload = await parseRequestBody(req);
+      const secondaryId = String(payload?.secondaryId || "").trim();
+      if (!secondaryId) {
+        return sendJson(res, 422, { ok: false, errors: ["secondaryId is required."] });
+      }
+      const result = await customers.mergeCustomers(primaryId, secondaryId, {
+        by: "admin",
+        note: String(payload?.note || "").slice(0, 400)
+      });
+      return sendJson(res, 200, { ok: true, ...result });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't merge."] });
     }
   }
 

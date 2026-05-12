@@ -425,6 +425,146 @@ newPropertyForm.addEventListener("submit", async (e) => {
   }
 });
 
+// ---- Merge modal --------------------------------------------------
+
+const mergeBtn = document.getElementById("mergeBtn");
+const mergeModal = document.getElementById("mergeModal");
+const mergePrimaryName = document.getElementById("mergePrimaryName");
+const mergeSearch = document.getElementById("mergeSearch");
+const mergeResults = document.getElementById("mergeResults");
+const mergeSelected = document.getElementById("mergeSelected");
+const mergeSelectedLabel = document.getElementById("mergeSelectedLabel");
+const mergeSelectedTarget = document.getElementById("mergeSelectedTarget");
+const mergeSelectedClear = document.getElementById("mergeSelectedClear");
+const mergeError = document.getElementById("mergeError");
+const mergeCancel = document.getElementById("mergeCancel");
+const mergeConfirm = document.getElementById("mergeConfirm");
+
+let mergeAllCustomers = null;
+let mergeChosen = null;
+
+function escMerge(value) {
+  return String(value == null ? "" : value)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;").replace(/'/g, "&#039;");
+}
+
+function mergeSetChosen(c) {
+  mergeChosen = c;
+  if (c) {
+    mergeSelectedLabel.textContent = `${c.name || "(unnamed)"} (${c.id})`;
+    mergeSelected.hidden = false;
+  } else {
+    mergeSelected.hidden = true;
+  }
+  mergeConfirm.disabled = !c;
+}
+
+function mergeRenderResults(query) {
+  const q = (query || "").trim().toLowerCase();
+  const qDigits = q.replace(/\D/g, "");
+  if (!q || !mergeAllCustomers) {
+    mergeResults.innerHTML = "";
+    mergeResults.style.display = "none";
+    return;
+  }
+  const matches = mergeAllCustomers.filter((c) => {
+    if (c.id === customerId) return false; // can't merge into self
+    if (mergeChosen && c.id === mergeChosen.id) return false;
+    const hay = [c.name, c.spouseName, c.email, c.spouseEmail].filter(Boolean).join(" ").toLowerCase();
+    if (hay.includes(q)) return true;
+    const pd = String(c.phone || "").replace(/\D/g, "");
+    if (qDigits && pd.includes(qDigits)) return true;
+    return false;
+  }).slice(0, 8);
+
+  if (!matches.length) {
+    mergeResults.innerHTML = `<div style="padding: 10px; color: #888; font-size: 12px;">No customers match.</div>`;
+    mergeResults.style.display = "block";
+    return;
+  }
+  mergeResults.innerHTML = matches.map((c) => `
+    <div class="merge-result" data-id="${escMerge(c.id)}" style="padding: 8px 12px; border-bottom: 1px solid #f0eee8; cursor: pointer;">
+      <strong>${escMerge(c.name) || "(unnamed)"}</strong>
+      <span style="color: #666; font-size: 12px; margin-left: 8px;">${escMerge(c.email) || c.phone || c.id}</span>
+      <div style="color: #888; font-size: 11px;">${escMerge(c.id)} · ${c.propertyCount || 0} ${(c.propertyCount === 1 ? "property" : "properties")}</div>
+    </div>
+  `).join("");
+  mergeResults.style.display = "block";
+
+  mergeResults.querySelectorAll(".merge-result").forEach((row) => {
+    row.addEventListener("click", () => {
+      const id = row.dataset.id;
+      const c = mergeAllCustomers.find((x) => x.id === id);
+      if (!c) return;
+      mergeSetChosen(c);
+      mergeSearch.value = "";
+      mergeResults.innerHTML = "";
+      mergeResults.style.display = "none";
+    });
+  });
+}
+
+async function openMergeModal() {
+  if (!original) return;
+  mergeError.hidden = true;
+  mergeSearch.value = "";
+  mergeSetChosen(null);
+  mergePrimaryName.textContent = original.name || original.id;
+  mergeSelectedTarget.textContent = original.name || original.id;
+  mergeResults.innerHTML = "";
+  mergeResults.style.display = "none";
+  mergeModal.hidden = false;
+  setTimeout(() => mergeSearch.focus(), 0);
+  if (!mergeAllCustomers) {
+    try {
+      const res = await fetch("/api/customers", { credentials: "same-origin" });
+      const body = await res.json();
+      mergeAllCustomers = Array.isArray(body.customers) ? body.customers : [];
+    } catch (err) {
+      mergeAllCustomers = [];
+    }
+  }
+}
+
+function closeMergeModal() { mergeModal.hidden = true; }
+
+if (mergeBtn) mergeBtn.addEventListener("click", openMergeModal);
+mergeCancel.addEventListener("click", closeMergeModal);
+mergeModal.addEventListener("click", (e) => { if (e.target === mergeModal) closeMergeModal(); });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !mergeModal.hidden) closeMergeModal(); });
+mergeSearch.addEventListener("input", () => mergeRenderResults(mergeSearch.value));
+mergeSelectedClear.addEventListener("click", () => mergeSetChosen(null));
+
+mergeConfirm.addEventListener("click", async () => {
+  if (!mergeChosen) return;
+  mergeError.hidden = true;
+  mergeConfirm.disabled = true;
+  try {
+    const res = await fetch(`/api/customer/${encodeURIComponent(customerId)}/merge`, {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ secondaryId: mergeChosen.id, note: "Merged via /admin/customer page" })
+    });
+    const body = await res.json();
+    if (!res.ok || !body.ok) {
+      mergeError.textContent = body?.errors?.[0] || "Merge failed.";
+      mergeError.hidden = false;
+      mergeConfirm.disabled = false;
+      return;
+    }
+    closeMergeModal();
+    // Refresh the page so the customer's now-larger set of properties /
+    // bookings / etc. shows up.
+    location.reload();
+  } catch (err) {
+    mergeError.textContent = err.message || "Network error.";
+    mergeError.hidden = false;
+    mergeConfirm.disabled = false;
+  }
+});
+
 // ---- Initial load -------------------------------------------------
 
 async function load() {

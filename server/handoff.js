@@ -300,3 +300,127 @@ handoffDoneBtn.addEventListener("click", () => {
   form.hidden = false;
   document.querySelector('[name="firstName"]').focus();
 });
+
+// ---- Existing-customer search (Brief 4) ---------------------------
+//
+// As the user types in the search box, fetch /api/customers once,
+// filter client-side, render up to 8 matches. Clicking a match fills
+// firstName / lastName / phone / email / address from the customer
+// record (address pulled from their primary property if available).
+// Doesn't touch service-line / diagnosis / context fields — those are
+// always per-call.
+
+(function setupCustomerSearch() {
+  const searchEl = document.getElementById("handoffCustomerSearch");
+  const resultsEl = document.getElementById("handoffCustomerResults");
+  const selectedEl = document.getElementById("handoffCustomerSelected");
+  const selectedName = document.getElementById("handoffCustomerSelectedName");
+  const selectedClear = document.getElementById("handoffCustomerSelectedClear");
+  if (!searchEl || !resultsEl) return;
+
+  let allCustomers = null;
+  let loading = null;
+
+  function esc(value) {
+    return String(value == null ? "" : value)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;").replace(/'/g, "&#039;");
+  }
+
+  async function ensureLoaded() {
+    if (allCustomers) return allCustomers;
+    if (!loading) {
+      loading = fetch("/api/customers", { credentials: "same-origin" })
+        .then((r) => r.json())
+        .then((body) => { allCustomers = Array.isArray(body.customers) ? body.customers : []; return allCustomers; })
+        .catch(() => { allCustomers = []; return allCustomers; });
+    }
+    return loading;
+  }
+
+  function render(query) {
+    const q = (query || "").trim().toLowerCase();
+    const qDigits = q.replace(/\D/g, "");
+    if (!q || !allCustomers) {
+      resultsEl.innerHTML = "";
+      resultsEl.style.display = "none";
+      return;
+    }
+    const matches = allCustomers.filter((c) => {
+      const hay = [c.name, c.spouseName, c.email, c.spouseEmail].filter(Boolean).join(" ").toLowerCase();
+      if (hay.includes(q)) return true;
+      const pd = String(c.phone || "").replace(/\D/g, "");
+      if (qDigits && pd.includes(qDigits)) return true;
+      return false;
+    }).slice(0, 8);
+
+    if (!matches.length) {
+      resultsEl.innerHTML = `<div style="padding: 10px 14px; color: #888; font-size: 12px;">No customers match. Fill the form below to create a new one.</div>`;
+      resultsEl.style.display = "block";
+      return;
+    }
+
+    resultsEl.innerHTML = matches.map((c) => `
+      <div class="handoff-customer-result" data-id="${esc(c.id)}" style="padding: 8px 12px; border-bottom: 1px solid #f0eee8; cursor: pointer; font-size: 13px;">
+        <strong>${esc(c.name) || "(unnamed)"}</strong>
+        <span style="color: #666; margin-left: 6px; font-size: 12px;">${esc(c.email) || c.phone || ""}</span>
+        <div style="color: #888; font-size: 11px; margin-top: 1px;">${esc(c.id)} · ${c.propertyCount || 0} ${(c.propertyCount === 1 ? "property" : "properties")}</div>
+      </div>
+    `).join("");
+    resultsEl.style.display = "block";
+
+    resultsEl.querySelectorAll(".handoff-customer-result").forEach((row) => {
+      row.addEventListener("click", () => {
+        const id = row.dataset.id;
+        const customer = allCustomers.find((c) => c.id === id);
+        if (!customer) return;
+        applyCustomer(customer);
+      });
+    });
+  }
+
+  async function applyCustomer(customer) {
+    // Split name into first/last for the form's fields.
+    const parts = String(customer.name || "").trim().split(/\s+/);
+    const first = parts.shift() || "";
+    const last = parts.join(" ");
+    form.elements.firstName.value = first;
+    form.elements.lastName.value = last;
+    form.elements.phone.value = customer.phone || "";
+    form.elements.email.value = customer.email || "";
+
+    // Fill address from the customer's first property if available.
+    try {
+      const res = await fetch(`/api/customer/${encodeURIComponent(customer.id)}`, { credentials: "same-origin" });
+      const body = await res.json();
+      const firstProp = body?.customer?.properties?.[0];
+      if (firstProp?.address) form.elements.address.value = firstProp.address;
+    } catch { /* address fill is best-effort */ }
+
+    selectedName.textContent = customer.name + (customer.email ? ` <${customer.email}>` : "");
+    selectedEl.hidden = false;
+    searchEl.value = "";
+    resultsEl.innerHTML = "";
+    resultsEl.style.display = "none";
+  }
+
+  searchEl.addEventListener("focus", () => { ensureLoaded(); });
+  searchEl.addEventListener("input", async () => {
+    await ensureLoaded();
+    render(searchEl.value);
+  });
+  document.addEventListener("click", (e) => {
+    if (!resultsEl.contains(e.target) && e.target !== searchEl) {
+      resultsEl.style.display = "none";
+    }
+  });
+
+  selectedClear.addEventListener("click", () => {
+    selectedEl.hidden = true;
+    form.elements.firstName.value = "";
+    form.elements.lastName.value = "";
+    form.elements.phone.value = "";
+    form.elements.email.value = "";
+    form.elements.address.value = "";
+  });
+})();

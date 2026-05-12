@@ -121,6 +121,10 @@
             <button type="button" class="pjl-btn pjl-btn-outline" id="revertBtn" disabled>Revert</button>
           </div>
           <p class="customer-modal-error" id="saveError" hidden></p>
+          <div style="margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--crm-border, #d4d2cb);">
+            <button type="button" class="pjl-btn pjl-btn-outline" id="mergeBtn" style="width: 100%; padding: 6px 12px; font-size: 12px;">⇨ Merge another customer into this one</button>
+            <p style="margin: 6px 0 0; font-size: 11px; color: var(--crm-muted, #888);">Use when an xlsx-imported placeholder turns out to be the same person as a real lead.</p>
+          </div>
         </aside>
 
         <section class="customer-tabs">
@@ -177,6 +181,38 @@
 
       <p id="loadError" hidden style="margin: 32px; text-align: center; color: #9b2b2b;"></p>
     </main>
+  </div>
+
+  <!-- Merge customer modal — opens from "⇨ Merge another customer into
+       this one" in the summary actions. Customer search hits the same
+       /api/customers list; selected customer is the SECONDARY (the
+       record being absorbed). Destructive — secondary is removed. -->
+  <div class="customer-modal" id="mergeModal" hidden role="dialog" aria-modal="true" aria-labelledby="mergeTitle">
+    <div class="customer-modal-card" style="max-width: 540px;">
+      <h2 id="mergeTitle">Merge a customer into this record</h2>
+      <p style="margin: -8px 0 14px; font-size: 13px; color: var(--crm-muted, #666);">
+        Pick the customer to merge <strong>into</strong> <strong id="mergePrimaryName">this customer</strong>.
+        Their leads, properties, bookings, work orders, quotes, and invoices will re-point to this record.
+        Their communication records will be merged in. <strong style="color: #9b2b2b;">The other record will be removed.</strong>
+        This action can't be undone — make sure they're actually the same person.
+      </p>
+      <label style="font-size: 13px; font-weight: 600; color: var(--crm-muted, #555);">Find the duplicate customer
+        <input type="search" id="mergeSearch" placeholder="Search by name, email, or phone…" style="display: block; margin-top: 4px; width: 100%; padding: 8px 12px; border: 1px solid var(--crm-border, #d4d2cb); border-radius: 6px; font: inherit;">
+      </label>
+      <div id="mergeResults" style="max-height: 220px; overflow-y: auto; margin: 8px 0 0; border: 1px solid var(--crm-border, #d4d2cb); border-radius: 6px; display: none;"></div>
+      <div id="mergeSelected" hidden style="margin-top: 12px; padding: 10px 14px; background: #fef6e6; border: 1px solid #d6a800; border-radius: 6px;">
+        <strong id="mergeSelectedLabel">—</strong>
+        <button type="button" id="mergeSelectedClear" style="float: right; background: none; border: none; cursor: pointer; font-size: 18px; color: var(--crm-muted, #666);" aria-label="Clear selection">×</button>
+        <div style="margin-top: 4px; font-size: 12px; color: var(--crm-muted, #666);">
+          will be merged into <strong id="mergeSelectedTarget">this customer</strong> and then removed.
+        </div>
+      </div>
+      <p class="customer-modal-error" id="mergeError" hidden></p>
+      <div class="customer-modal-actions">
+        <button type="button" class="pjl-btn pjl-btn-outline" id="mergeCancel">Cancel</button>
+        <button type="button" class="pjl-btn pjl-btn-danger" id="mergeConfirm" disabled>Merge customer</button>
+      </div>
+    </div>
   </div>
 
   <!-- Add property modal — opens from the Properties tab. The address
