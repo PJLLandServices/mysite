@@ -97,7 +97,7 @@ form except where noted.
 | `suppliers.js` | Supplier | `SUP-NNN` (no year prefix) | Vendor records (name, contact, email, phone, address). |
 | `part-suppliers.js` | — | n/a | Override map at `data/part-suppliers.json` mapping SKU → supplierIds[]. parts.json's `supplierIds` field is a placeholder; this file is the source of truth. |
 | `settings.js` | — | n/a | Admin notification preferences + 50-entry audit trail. |
-| `completion-cascade.js` | — | n/a | Fires on WO status → completed. Idempotent. Creates service record on property, draft invoice (with `paidOnSiteAtCompletion` flag), customer + admin emails, warranty stamp. Applies property edits via `computePropertyEdits()` (Brief D — zone/controller diffs, new zones flagged for Patrick review) gated by `wo.propertyEditsAppliedAt`. Logs `cascade_fire` + `property_edits_applied` history entries. |
+| `completion-cascade.js` | — | n/a | Fires on WO status → completed. Idempotent. Creates service record on property, draft invoice (with `paidOnSiteAtCompletion` flag), customer + admin emails, warranty stamp. Applies property edits via `computePropertyEdits()` (Brief D — zone/controller diffs, new zones flagged for Patrick review) gated by `wo.propertyEditsAppliedAt`. Logs `cascade_fire`, `invoice_drafted` (when a draft was created), and `property_edits_applied` history entries. When the cascade throws mid-flight, the PATCH handler appends `cascade_failed` to the WO history and surfaces `cascade.error` in the response — the WO stays signed + locked + completed (recoverable via /run-cascade or /create-invoice). |
 | `issue-rollup.js` | — | n/a | Maps zone issues into priced line items for the on-site quote. Manifold rule, controller subtype tier selection, etc. |
 | `pricing.js` | — | n/a | `priceForBooking(serviceKey, zoneCount)` reads `pricing.json`. |
 | `availability.js` | — | n/a | Slot generator + `BOOKABLE_SERVICES` catalog. |
@@ -256,7 +256,13 @@ Bookings + scheduling
   GET    /api/schedule/...                       ← slots, blocks, hour overrides
 
 Work Orders
-  GET    /api/work-orders                                           ← list (filter ?propertyId, ?leadId)
+  GET    /api/work-orders                                           ← list (filter ?propertyId, ?leadId).
+                                                                       UI index at /admin/work-orders also supports two recovery
+                                                                       filters: ?stuck=1 (locked && status !== "completed") and
+                                                                       ?needs_invoice=1 (locked && no invoice referencing this WO).
+                                                                       Filters resolved client-side via a join with /api/invoices.
+                                                                       Each filtered row exposes a per-row "Run cascade now" button
+                                                                       that calls POST /run-cascade (idempotent).
   GET    /api/work-orders/:id                                       ← decorated with property + lead + lastService + propertyEdits preview
   POST   /api/work-orders                                           ← create from lead/property/booking; seeds seasonal-fee baseline line
   PATCH  /api/work-orders/:id                                       ← zones, issues, signature, status, photos, paidOnSite, etc.
@@ -264,10 +270,25 @@ Work Orders
                                                                        on a signed WO (lineItems, signature, customer/property/booking
                                                                        links, intakeGuarantee, type, etc.). Status forward-progression,
                                                                        photos, materials, paidOnSite, notes still accepted.
+                                                                       Merged "Sign, Lock & Generate Invoice" tap (WO Field-Readiness
+                                                                       brief): payload of { signature, status:"completed", arrivedAt?,
+                                                                       departedAt? } in one PATCH — server validates pre-sign gates,
+                                                                       persists signature, sets locked=true, transitions status, awaits
+                                                                       completion-cascade, returns { workOrder, cascade: { invoiceId,
+                                                                       ran, error? } }. Server-side gate failure → 422 with error:
+                                                                       'presign_gate_unmet' + gateFailures[]. Cascade hard-fail leaves
+                                                                       WO signed+locked+completed; appends `cascade_failed` history
+                                                                       entry and surfaces cascade.error so the client can render the
+                                                                       recovery surface.
   DELETE /api/work-orders/:id                                       ← refuses if active deferred items still reference this WO
-  POST   /api/work-orders/:id/photos                                ← upload (categories: pre_work / in_progress / post_work / issue / general)
+  POST   /api/work-orders/:id/photos                                ← upload (categories: pre_work / in_progress / post_work / issue / general).
+                                                                       Accepted MIME (WO Field-Readiness brief, May 2026):
+                                                                       image/jpeg, image/png, image/webp, image/heic, image/heif,
+                                                                       image/gif, application/pdf. 25 MB per file; magic-bytes
+                                                                       verified server-side. Each meta entry carries `kind:
+                                                                       'image' | 'pdf'` so the UI renders PDFs as filename tiles.
   DELETE /api/work-orders/:id/photos/:n
-  GET    /api/work-orders/:id/photo/:n                              ← serve a single photo file
+  GET    /api/work-orders/:id/photo/:n                              ← serve a single photo file (any accepted MIME above)
   POST   /api/work-orders/:id/create-invoice                        ← manual invoice draft (idempotent — short-circuits on existing)
   POST   /api/work-orders/:id/run-cascade                           ← re-run cascade explicitly (idempotent)
   POST   /api/work-orders/:id/follow-up                             ← spawn follow-up WO with parent's parts pre-loaded

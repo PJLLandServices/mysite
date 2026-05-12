@@ -411,7 +411,8 @@ WORK ORDER FOLDER
       descriptor isn't silently dropped). Empty WO fields still don't
       blank existing property values.
 
-  Customer Sign-Off (legally binding moment — single signature at completion)
+  Customer Sign-Off (legally binding moment — single signature, signs
+                     AND completes AND drafts the invoice in one tap)
     Signature is captured at the END of the visit, attesting to:
       - The final scope as performed (locked at this moment)
       - Authorization to bill the captured total
@@ -424,16 +425,73 @@ WORK ORDER FOLDER
     on the new scope (see §10 r12). For original-scope completions, one
     signature covers the whole visit.
 
-    Pre-signature gates (Briefs E & F): the submit button is disabled
-    until (a) name + ack + drawn canvas, (b) the AI Correct Diagnosis
-    Bonus decision is captured (when applies=true), and (c) the WO has
-    captured the photo threshold for its service mode (find_and_fix /
-    fix_only require ≥1 completion photo; find_only is optional).
+    Pre-signature gates — the "Sign, Lock & Generate Invoice" button is
+    disabled until ALL of the following are captured (WO Field-Readiness
+    brief, May 2026, promotes paidOnSite + materials check from post-
+    signature to pre-signature). Each gate is surfaced in a visible
+    checklist ABOVE the signature canvas with ✓ / ⨯ status icons; tapping
+    a row scroll-jumps to the relevant capture surface:
+      - Customer name entered (printed)
+      - Acknowledgement checkbox ticked
+      - Drawn canvas (signature pad is dirty)
+      - Payment method selected (paidOnSite is true | false — neither
+        radio chosen blocks signing)
+      - AI Correct Diagnosis Bonus decision recorded (only when
+        intakeGuarantee.applies=true)
+      - Completion photo threshold (find_and_fix / fix_only require ≥1;
+        find_only is optional — fall closings often have nothing visible
+        to photograph)
+      - All zones reviewed (status or at least one standard check ticked)
+      - Carry-forward items resolved (spring openings only)
+      - Materials check confirmed — two complementary gates layer here:
+          (a) Follow-up packing-list rows — every visible row marked
+              packed on follow-up WOs (techMaterialsSection).
+          (b) Materials list confirmed — `wo.materialsConfirmedAt`
+              must be set via the "Confirm materials list is accurate"
+              button. Auto-passes for fall_closing WOs and any WO with
+              empty `materialsPacked` + empty `customParts` (nothing
+              to confirm). Auto-clears on the next materialsPacked /
+              customParts mutation, so any qty step mid-visit forces
+              re-confirmation before signing.
+
+    Defense in depth: the server re-validates these gates at the PATCH
+    boundary (`computeServerSidePreSignFailures` in server.js). A stale
+    tab or replayed offline-queue mutation cannot route around the
+    client gate — 422 + error: 'presign_gate_unmet' + gateFailures[].
+
+    On tap: the merged PATCH carries
+      { signature, status: "completed", arrivedAt?, departedAt? }
+    in one round-trip. The server persists signature, sets locked=true,
+    transitions status to completed, awaits the completion cascade
+    (service record + draft invoice + warranty + property-edits apply +
+    customer/admin emails), and returns the freshly-drafted invoice ID
+    in `response.cascade.invoiceId`. No client-side polling race; the
+    post-signature panel renders the invoice number immediately.
+
+    Cascade hard-fail recovery: if the cascade throws mid-flight, the
+    WO remains signed + locked + status=completed and a `cascade_failed`
+    history entry is appended. The tech-mode and desktop signoff cards
+    surface conditional recovery buttons:
+      - "Generate invoice now" — calls POST /create-invoice when locked
+        AND no invoice exists yet
+      - "Re-run cascade" — calls POST /run-cascade when locked AND no
+        `cascade_fire` history entry exists
+    Both endpoints are idempotent; retry is safe and produces no
+    duplicate invoices (cascade short-circuits at the service-record
+    check).
+
+    Historical sweep: the /admin/work-orders index supports
+    ?needs_invoice=1 — surfaces every locked WO without an invoice on
+    file (catches both cascade-never-fired AND cascade-fired-but-draft-
+    failed). Each filtered row exposes a "Run cascade now" button for
+    one-click recovery from the index without opening each WO.
 
     After signature: scope is locked (see §4.3.3 r5 + §10 r11). Status
-    progression, photo capture, materials updates, paidOnSite, internal
-    notes continue. The "Mark visit completed" tap fires the cascade
-    and creates the draft invoice (Brief E).
+    progression, photo capture (including HEIC / PDF up to 25 MB per
+    file — WO Field-Readiness brief widened the MIME whitelist), tech
+    notes, and follow-up linkage continue to flow and append to
+    `history[]`. The WO remains a live operational document after
+    sign-off; only the *scope* is frozen.
 
   Follow-Up WO Trigger
     - Tech taps "Schedule follow-up" instead of "Authorize now"
@@ -460,7 +518,7 @@ WORK ORDER FOLDER
                  photo_upload, photo_delete, quote_built, customer_accepted,
                  customer_declined_all, remote_approval_sent, issue_deferred,
                  issues_bulk_deferred, emergency_override, carry_forward_*,
-                 cascade_fire, invoice_drafted, ai_bonus_decided,
+                 cascade_fire, cascade_failed, invoice_drafted, ai_bonus_decided,
                  followup_created, property_edits_applied, patch, etc.)
         - by: "admin" | "tech" | "system" | "customer"
         - note: human-readable summary
