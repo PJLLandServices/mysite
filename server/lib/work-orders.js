@@ -167,6 +167,10 @@ function blankWorkOrder() {
     status: "scheduled",             // scheduled | on_site | awaiting_approval | approved | completed | cancelled
     propertyId: null,
     leadId: null,
+    // Canonical customer reference (Brief 2). Joins SCOPE_PROTECTED_FIELDS
+    // so it locks at signature alongside the customer snapshot fields —
+    // a signed WO's customer identity must not silently change.
+    customerId: null,
     customerName: "",
     customerEmail: "",
     customerPhone: "",
@@ -346,6 +350,7 @@ const SCOPE_PROTECTED_FIELDS = [
   "additionalRepairs",
   "onSiteQuote",
   "signature",
+  "customerId",
   "customerName",
   "customerEmail",
   "customerPhone",
@@ -511,6 +516,7 @@ async function create({ type, lead, property, customId, quote = null }) {
   if (property) {
     wo.propertyId = property.id;
     wo.address = property.address || "";
+    wo.customerId    = wo.customerId    || property.customerId    || null;
     wo.customerName  = wo.customerName  || property.customerName  || "";
     wo.customerEmail = wo.customerEmail || property.customerEmail || "";
     wo.customerPhone = wo.customerPhone || property.customerPhone || "";
@@ -546,6 +552,7 @@ async function create({ type, lead, property, customId, quote = null }) {
 
   if (lead) {
     wo.leadId = lead.id;
+    wo.customerId    = wo.customerId    || lead.customerId || null;
     wo.customerName  = wo.customerName  || lead.name  || "";
     wo.customerEmail = wo.customerEmail || lead.email || "";
     wo.customerPhone = wo.customerPhone || lead.phone || "";

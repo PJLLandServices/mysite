@@ -54,6 +54,7 @@ function hydrate(inv) {
     woId: inv?.woId || null,
     quoteId: inv?.quoteId || null,
     propertyId: inv?.propertyId || null,
+    customerId: inv?.customerId || null,
     customerName: inv?.customerName || "",
     customerEmail: inv?.customerEmail || "",
     customerPhone: inv?.customerPhone || "",

@@ -1,39 +1,52 @@
-// Customer migration — Brief 1 (dry-run + report).
+// Customer migration — Brief 1 (dry-run) + Brief 2 (--apply commit).
 //
-// Walks the existing leads.json + properties.json + work-orders.json
-// and synthesizes the customer list that customers.json *would* hold
-// if Brief 2 were applied today. Produces a review report Patrick reads
-// before committing. NEVER writes to production data in dry-run mode.
+// Walks every customer-bearing entity (leads, properties, bookings,
+// work-orders, quotes, invoices, projects), synthesizes the customer
+// list, derives status, and backfills `customerId` on every entity.
 //
-// Usage:
-//   node scripts/migrate-customers.js              (dry-run, default)
-//   node scripts/migrate-customers.js --apply      (Brief 2 — actual commit; refuses for now)
-//   node scripts/migrate-customers.js --json       (also emit machine-readable report)
+// Two modes:
 //
-// Inputs (all optional — missing/empty files yield empty customer set):
+//   DRY-RUN (default)
+//     node scripts/migrate-customers.js
+//     - No writes to production data.
+//     - Generates a JSON report at server/data/migration-reports/.
+//     - Patrick reviews the report before committing.
+//
+//   --apply (Brief 2 commit semantics)
+//     node scripts/migrate-customers.js --apply
+//     - Refuses if customers.json already has records (idempotency).
+//     - Snapshots server/data/ to a timestamped backup folder.
+//     - Writes customers.json + the leadId→customerId redirect map.
+//     - Adds customerId to every record in leads / properties /
+//       bookings / work-orders / quotes / invoices / projects.
+//     - All-or-rollback: a write failure leaves the backup intact;
+//       restore by replacing server/data/ with the backup folder.
+//
+// Inputs (all optional — missing/empty files are tolerated):
 //   server/data/leads.json
 //   server/data/properties.json
+//   server/data/bookings.json
 //   server/data/work-orders.json
 //   server/data/quotes.json
 //   server/data/invoices.json
-//   server/data/bookings.json
+//   server/data/projects.json
 //
-// Outputs (dry-run):
-//   stdout                        — summary report
+// Outputs (always):
 //   server/data/migration-reports/customers-<timestamp>.json
-//                                 — full detail (gitignored under server/data/)
 //
-// Status assignment rule (audit §7 + Patrick's §12 Q5 answer):
-//   - Has any completed WO          → active
-//   - Else has any "lost" lead, no won/open lead → lost
-//   - Else has any open lead         → lead
-//   - Else                           → inactive
+// Additional outputs (--apply only):
+//   server/data/customers.json
+//   server/data/migration-leadId-map.json
+//   server/data-backup-<timestamp>/...   (full snapshot)
+//
+// Status assignment rule (audit §7 + Patrick's §12 Q5):
+//   - Has any completed WO                            → active
+//   - Else has only "lost" / "cancelled" leads        → lost
+//   - Else has any open lead                          → lead
+//   - Else                                            → inactive
 //
 // Match order (audit §5.4, spec §3.1):
 //   email (case-insensitive) → phone (digits-only) → create new
-//
-// Brief 1 acceptance: this script runs cleanly to completion in
-// dry-run mode and produces a report. No customers.json is written.
 
 const fs = require("node:fs/promises");
 const fsSync = require("node:fs");
@@ -105,6 +118,30 @@ function newCustomerSeed(seq) {
     _sourcePropertyIds: [],
     _earliestTs: null
   };
+}
+
+// Resolve `customerId` for an arbitrary entity record. Walk the
+// reference chain in priority order:
+//   1. If the entity already has customerId, keep it.
+//   2. Via leadId → leadToCustomer map.
+//   3. Via propertyId → propertyToCustomer map.
+//   4. Via direct customerEmail / customerPhone match against the
+//      synthesized customer set.
+// Returns null if no match (entity has no customer linkage at all —
+// shouldn't happen in normal data, but the script tolerates it).
+function resolveEntityCustomerId(entity, ctx) {
+  if (entity?.customerId) return entity.customerId;
+  if (entity?.leadId && ctx.leadToCustomer[entity.leadId]) {
+    return ctx.leadToCustomer[entity.leadId];
+  }
+  if (entity?.propertyId && ctx.propertyToCustomer[entity.propertyId]) {
+    return ctx.propertyToCustomer[entity.propertyId];
+  }
+  const matched = matchCustomer(ctx.customers, {
+    email: entity?.customerEmail,
+    phone: entity?.customerPhone
+  });
+  return matched ? matched.customer.id : null;
 }
 
 // Find an in-progress customer that matches by email first, phone
@@ -257,26 +294,40 @@ async function run() {
   ];
   console.log(banner.join("\n"));
 
-  if (APPLY_MODE) {
-    console.error(" ❌ Apply mode is out of scope for Brief 1.");
-    console.error("    Brief 2 will wire commit semantics. Refusing to write.");
-    process.exit(2);
-  }
-
   // Load inputs.
   const leadsRes = await readJsonArray("leads.json");
   const propsRes = await readJsonArray("properties.json");
+  const bookingsRes = await readJsonArray("bookings.json");
   const wosRes = await readJsonArray("work-orders.json");
   const quotesRes = await readJsonArray("quotes.json");
   const invoicesRes = await readJsonArray("invoices.json");
+  const projectsRes = await readJsonArray("projects.json");
 
   const inputs = [
     ["leads.json", leadsRes],
     ["properties.json", propsRes],
+    ["bookings.json", bookingsRes],
     ["work-orders.json", wosRes],
     ["quotes.json", quotesRes],
-    ["invoices.json", invoicesRes]
+    ["invoices.json", invoicesRes],
+    ["projects.json", projectsRes]
   ];
+
+  // --apply guardrails: refuse if customers.json already has records.
+  // The migration is one-shot by design; re-running on top of a
+  // populated customers.json would create duplicates. To re-run,
+  // delete customers.json + migration-leadId-map.json first (or
+  // restore from a backup folder).
+  if (APPLY_MODE) {
+    const existingCustomers = await readJsonArray("customers.json");
+    if (!existingCustomers.missing && existingCustomers.records.length > 0) {
+      console.error(" ❌ customers.json already has " + existingCustomers.records.length + " records.");
+      console.error("    Refusing to apply on top of an existing customer set.");
+      console.error("    To re-run: delete server/data/customers.json and");
+      console.error("    server/data/migration-leadId-map.json, then re-run.");
+      process.exit(2);
+    }
+  }
 
   console.log(" Inputs:");
   for (const [name, res] of inputs) {
@@ -293,7 +344,11 @@ async function run() {
 
   const leads = leadsRes.records;
   const properties = propsRes.records;
+  const bookings = bookingsRes.records;
   const workOrders = wosRes.records;
+  const quoteRecords = quotesRes.records;
+  const invoiceRecords = invoicesRes.records;
+  const projectRecords = projectsRes.records;
 
   // Pass 1: walk leads, build the customer set.
   const customers = [];
@@ -382,6 +437,78 @@ async function run() {
     }
   }
 
+  // ---- Pass 4-8: backfill customerId on every entity --------------
+  // For each entity type, compute the customerId that should be
+  // written. The entity records remain untouched in memory unless
+  // --apply runs (which then writes the modified arrays to disk).
+
+  const ctx = { customers, leadToCustomer, propertyToCustomer };
+
+  const entityResolutions = {
+    leads: 0,
+    properties: 0,
+    bookings: 0,
+    workOrders: 0,
+    quotes: 0,
+    invoices: 0,
+    projects: 0,
+    unresolved: { leads: 0, properties: 0, bookings: 0, workOrders: 0, quotes: 0, invoices: 0, projects: 0 }
+  };
+
+  for (const lead of leads) {
+    const cid = leadToCustomer[lead.id] || resolveEntityCustomerId(lead, ctx);
+    if (cid) { lead.customerId = cid; entityResolutions.leads++; }
+    else entityResolutions.unresolved.leads++;
+  }
+
+  for (const property of properties) {
+    const cid = propertyToCustomer[property.id] || resolveEntityCustomerId(property, ctx);
+    if (cid) { property.customerId = cid; entityResolutions.properties++; }
+    else entityResolutions.unresolved.properties++;
+  }
+
+  for (const booking of bookings) {
+    const cid = resolveEntityCustomerId(booking, ctx);
+    if (cid) { booking.customerId = cid; entityResolutions.bookings++; }
+    else entityResolutions.unresolved.bookings++;
+  }
+
+  for (const wo of workOrders) {
+    const cid = resolveEntityCustomerId(wo, ctx);
+    if (cid) { wo.customerId = cid; entityResolutions.workOrders++; }
+    else entityResolutions.unresolved.workOrders++;
+  }
+
+  for (const quote of quoteRecords) {
+    const cid = resolveEntityCustomerId(quote, ctx);
+    if (cid) { quote.customerId = cid; entityResolutions.quotes++; }
+    else entityResolutions.unresolved.quotes++;
+  }
+
+  // Invoices: try via woId first, since the WO already has customerId.
+  const woById = new Map(workOrders.map((w) => [w.id, w]));
+  for (const invoice of invoiceRecords) {
+    let cid = invoice.customerId || null;
+    if (!cid && invoice.woId && woById.get(invoice.woId)?.customerId) {
+      cid = woById.get(invoice.woId).customerId;
+    }
+    if (!cid) cid = resolveEntityCustomerId(invoice, ctx);
+    if (cid) { invoice.customerId = cid; entityResolutions.invoices++; }
+    else entityResolutions.unresolved.invoices++;
+  }
+
+  // Projects: try via sourceQuoteId first.
+  const quoteById = new Map(quoteRecords.map((q) => [q.id, q]));
+  for (const project of projectRecords) {
+    let cid = project.customerId || null;
+    if (!cid && project.sourceQuoteId && quoteById.get(project.sourceQuoteId)?.customerId) {
+      cid = quoteById.get(project.sourceQuoteId).customerId;
+    }
+    if (!cid) cid = resolveEntityCustomerId(project, ctx);
+    if (cid) { project.customerId = cid; entityResolutions.projects++; }
+    else entityResolutions.unresolved.projects++;
+  }
+
   // ---- Report ------------------------------------------------------
 
   const byStatus = { lead: 0, active: 0, inactive: 0, lost: 0 };
@@ -401,6 +528,23 @@ async function run() {
   console.log(" Coverage:");
   console.log(`   Customers without email ....... ${noEmail}`);
   console.log(`   Customers without phone ....... ${noPhone}`);
+  console.log("");
+  console.log(" Entity customerId backfill:");
+  const entityLabels = [
+    ["leads", leads.length],
+    ["properties", properties.length],
+    ["bookings", bookings.length],
+    ["workOrders", workOrders.length],
+    ["quotes", quoteRecords.length],
+    ["invoices", invoiceRecords.length],
+    ["projects", projectRecords.length]
+  ];
+  for (const [key, total] of entityLabels) {
+    const resolved = entityResolutions[key];
+    const unresolved = entityResolutions.unresolved[key];
+    const pad = key.padEnd(12);
+    console.log(`   ${pad} ${resolved}/${total} resolved` + (unresolved ? ` (${unresolved} unresolved)` : ""));
+  }
   console.log("");
 
   if (orphanedProperties.length) {
@@ -449,14 +593,16 @@ async function run() {
   });
 
   const report = {
-    mode: "dry-run",
+    mode: APPLY_MODE ? "apply" : "dry-run",
     generatedAt: nowIso(),
     inputs: {
       leads: leads.length,
       properties: properties.length,
+      bookings: bookings.length,
       workOrders: workOrders.length,
-      quotes: quotesRes.records.length,
-      invoices: invoicesRes.records.length
+      quotes: quoteRecords.length,
+      invoices: invoiceRecords.length,
+      projects: projectRecords.length
     },
     summary: {
       totalCustomers: customers.length,
@@ -464,7 +610,8 @@ async function run() {
       withoutEmail: noEmail,
       withoutPhone: noPhone,
       orphanedProperties: orphanedProperties.length,
-      conflicts: conflicts.length
+      conflicts: conflicts.length,
+      entityResolutions
     },
     customers: cleanedCustomers,
     conflicts,
@@ -476,8 +623,63 @@ async function run() {
   await fs.writeFile(reportFile, JSON.stringify(report, null, 2) + "\n", "utf8");
   console.log(` Full report written: ${path.relative(REPO_ROOT, reportFile)}`);
   console.log("");
-  console.log(" Next step: Patrick reviews the report. When approved,");
-  console.log(" Brief 2 lands and re-runs this script with --apply.");
+
+  // ---- Apply mode: backup + write all updated files ---------------
+
+  if (!APPLY_MODE) {
+    console.log(" Next step: Patrick reviews the report. When approved,");
+    console.log(" re-run with --apply to commit.");
+    console.log("");
+    return;
+  }
+
+  console.log(" --apply mode — committing migration to disk.");
+  console.log("");
+
+  // 1. Backup.
+  const backupDir = path.join(REPO_ROOT, "server", `data-backup-${stamp}`);
+  console.log(`   Backing up server/data/ → ${path.relative(REPO_ROOT, backupDir)} ...`);
+  await fs.cp(DATA_DIR, backupDir, { recursive: true });
+  console.log(`   ✓ Backup complete.`);
+
+  // 2. Prepare the customers payload (strip the migration scratch fields).
+  const finalCustomers = cleanedCustomers.map((c) => {
+    const { _migration, ...rest } = c;
+    return rest;
+  });
+
+  // 3. Write every touched file. The order is intentional: customers
+  //    first (the foundation), then entities. If any write fails the
+  //    backup remains intact for rollback.
+  async function writeArray(name, records) {
+    const full = path.join(DATA_DIR, name);
+    await fs.writeFile(full, JSON.stringify(records, null, 2) + "\n", "utf8");
+    console.log(`   ✓ ${name.padEnd(22)} ${records.length} records`);
+  }
+
+  await writeArray("customers.json", finalCustomers);
+  await writeArray("leads.json", leads);
+  await writeArray("properties.json", properties);
+  await writeArray("bookings.json", bookings);
+  await writeArray("work-orders.json", workOrders);
+  await writeArray("quotes.json", quoteRecords);
+  await writeArray("invoices.json", invoiceRecords);
+  await writeArray("projects.json", projectRecords);
+
+  // 4. Write the leadId → customerId redirect map (server.js reads
+  //    this on boot to redirect legacy /portal/<leadId> URLs).
+  await fs.writeFile(
+    path.join(DATA_DIR, "migration-leadId-map.json"),
+    JSON.stringify(leadToCustomer, null, 2) + "\n",
+    "utf8"
+  );
+  console.log(`   ✓ migration-leadId-map.json (${Object.keys(leadToCustomer).length} entries)`);
+
+  console.log("");
+  console.log(" ✓ Migration applied. Restart the server to pick up the");
+  console.log("   leadId redirect map.");
+  console.log("");
+  console.log(` Rollback: rm -r server/data && mv ${path.relative(REPO_ROOT, backupDir)} server/data`);
   console.log("");
 }
 

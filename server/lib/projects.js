@@ -71,8 +71,10 @@ function blankProject() {
     status: "planning",
 
     // Customer + address — denormalized for fast index display. Linked
-    // property (when set) is the source of truth; these fields snapshot
-    // at create time and can be edited without touching the property.
+    // property (when set) is the source of truth; customerId references
+    // customers.json (Brief 2); the snapshot fields are the as-quoted
+    // record preserved for legal continuity.
+    customerId: null,
     customerName: "",
     customerEmail: "",
     customerPhone: "",

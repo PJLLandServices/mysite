@@ -125,6 +125,13 @@ function blankProperty() {
     code: "",                     // Human-readable P-YYYY-NNNN, set by the
                                   // caller via nextPropertyCode(...) — leaving
                                   // it on the blank so hydrate spread keeps it.
+    // Customer linkage — `customerId` is the canonical reference to
+    // customers.json (CUST-NNNN). The customerName/Email/Phone fields
+    // below remain as the "as-known" snapshot used by legacy match
+    // code (auto-link, conflict detection, xlsx upsert). Brief 2
+    // populates customerId via migration; new properties going forward
+    // resolve a customer first and set customerId at creation.
+    customerId: null,
     customerEmail: "",
     customerName: "",
     customerPhone: "",
@@ -438,7 +445,7 @@ function findOwnershipConflicts(properties, address, coords, excludeEmail) {
 //   "no-email"            — no email at all; can't match.
 //
 // `attachLead` always returns { property, status, suggestions[], conflicts[] }.
-async function attachLead({ leadId, email, name, phone, address, coords }) {
+async function attachLead({ leadId, email, name, phone, address, coords, customerId = null }) {
   const properties = await readAll();
   const targetEmail = normalizeEmail(email);
   if (!targetEmail) return { property: null, status: "no-email", suggestions: [], conflicts: [] };
@@ -452,6 +459,7 @@ async function attachLead({ leadId, email, name, phone, address, coords }) {
       const updated = properties[idx];
       if (name && !updated.customerName) updated.customerName = name;
       if (phone && !updated.customerPhone) updated.customerPhone = phone;
+      if (customerId && !updated.customerId) updated.customerId = customerId;
       if (coords && coords.lat != null && (!updated.coords || updated.coords.lat == null)) {
         updated.coords = coords;
       }
@@ -474,6 +482,7 @@ async function attachLead({ leadId, email, name, phone, address, coords }) {
 
   property = blankProperty();
   property.code = nextPropertyCode(properties, String(new Date().getUTCFullYear()));
+  property.customerId = customerId || null;
   property.customerEmail = targetEmail;
   property.customerName = name || "";
   property.customerPhone = phone || "";

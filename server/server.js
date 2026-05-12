@@ -42,6 +42,7 @@ const scheduleStore = require("./lib/schedule-store");
 const { priceForBooking, deriveSeasonalKey } = require("./lib/pricing");
 const bookingSessions = require("./lib/booking-sessions");
 const properties = require("./lib/properties");
+const customers = require("./lib/customers");
 const workOrders = require("./lib/work-orders");
 const quotes = require("./lib/quotes");
 const invoices = require("./lib/invoices");
@@ -625,6 +626,9 @@ function hydrateLead(lead) {
     archived: Boolean(lead.archived),
     // Older leads written before source-tagging existed get the default source.
     source: resolveSource(lead.source),
+    // customerId (Brief 2): null on legacy leads until the migration
+    // backfills them; set on new leads at intake.
+    customerId: lead.customerId || null,
     photos: Array.isArray(lead.photos) ? lead.photos : [],
     portal: {
       ...defaultPortal(lead.id, now),
@@ -668,6 +672,10 @@ function validateLead(payload) {
       createdAt: now,
       status: "new",
       source: resolveSource(payload && payload.source),
+      // Resolved by resolveCustomerForLead() after validation, before
+      // writeLeads(). Stays null on the validate() output; set on the
+      // returned lead just before persistence.
+      customerId: null,
       contact: { name, phone, email, address, notes },
       features,
       totals: {
@@ -688,6 +696,58 @@ function validateLead(payload) {
       portal: defaultPortal(id, now)
     }
   };
+}
+
+// Resolve or create the canonical customer record for a freshly
+// validated lead. Match order (spec §3.1, audit §5.4): email first,
+// phone second, create new otherwise. New customers default to
+// status="lead" — the first completed WO promotes them to "active".
+//
+// Failures are logged but never block intake — a lead without
+// customerId is recoverable via `npm run migrate:customers --apply`.
+async function resolveCustomerForLead(lead) {
+  const contact = lead.contact || {};
+  const email = contact.email || "";
+  const phone = contact.phone || "";
+  let match = null;
+  if (email) match = await customers.findByEmail(email);
+  if (!match && phone) match = await customers.findByPhone(phone);
+  let customerId = match?.id || null;
+  if (!customerId) {
+    try {
+      const created = await customers.create({
+        name: contact.name || "",
+        email,
+        phone,
+        source: lead.source || "lead",
+        customerSince: lead.createdAt,
+        status: "lead"
+      }, { by: "intake", note: `Auto-created from lead ${lead.id}` });
+      customerId = created.id;
+    } catch (err) {
+      if (err.code === "DUPLICATE_EMAIL") {
+        // Race condition or normalization edge case — fall back to the
+        // existing record rather than re-throwing.
+        customerId = err.existingId;
+      } else {
+        throw err;
+      }
+    }
+  }
+  if (customerId) {
+    try {
+      await customers.addCommunication(customerId, {
+        ts: lead.createdAt,
+        source: lead.source || "lead",
+        summary: `New ${lead.source || "lead"} intake`,
+        notes: contact.notes || "",
+        logId: lead.id
+      });
+    } catch (err) {
+      console.warn("[customers] addCommunication failed:", err?.message || err);
+    }
+  }
+  return customerId;
 }
 
 async function ensureStore() {
@@ -2081,6 +2141,16 @@ async function handleApi(req, res, pathname) {
       const result = validateLead(payload);
       if (!result.ok) return sendJson(res, 422, { ok: false, errors: result.errors });
 
+      // Brief 2 — resolve the canonical customer record before
+      // persisting the lead. Soft-failure: if resolution throws,
+      // the lead is still saved with customerId=null and Patrick
+      // can backfill via the migration script.
+      try {
+        result.lead.customerId = await resolveCustomerForLead(result.lead);
+      } catch (err) {
+        console.error("[customers] resolveCustomerForLead failed:", err?.message || err);
+      }
+
       const leads = await readLeads();
       if (isLikelyDuplicate(leads, result.lead)) {
         return sendJson(res, 409, {
@@ -2121,6 +2191,7 @@ async function handleApi(req, res, pathname) {
         }
         const linkResult = await properties.attachLead({
           leadId: result.lead.id,
+          customerId: result.lead.customerId || null,
           email: result.lead.contact?.email,
           name: result.lead.contact?.name,
           phone: result.lead.contact?.phone,

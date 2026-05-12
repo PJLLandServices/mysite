@@ -75,6 +75,11 @@ function blank() {
   const created = new Date().toISOString();
   return {
     id: "",
+    // Canonical customer reference (Brief 2). Snapshots below stay
+    // for back-compat with legacy code that reads booking fields
+    // directly; new bookings resolve a customer at creation and set
+    // customerId.
+    customerId: null,
     customerEmail: "",
     customerName: "",
     customerPhone: "",
@@ -155,6 +160,7 @@ async function upsertFromLead(lead) {
   const booking = lead.booking;
 
   if (existing) {
+    existing.customerId = lead.customerId || existing.customerId;
     existing.customerEmail = (lead.contact?.email || existing.customerEmail || "").toLowerCase();
     existing.customerName = lead.contact?.name || existing.customerName;
     existing.customerPhone = lead.contact?.phone || existing.customerPhone;
@@ -177,6 +183,7 @@ async function upsertFromLead(lead) {
 
   const next = blank();
   next.id = await nextBookingId(new Date().getUTCFullYear());
+  next.customerId = lead.customerId || null;
   next.customerEmail = (lead.contact?.email || "").toLowerCase();
   next.customerName = lead.contact?.name || "";
   next.customerPhone = lead.contact?.phone || "";

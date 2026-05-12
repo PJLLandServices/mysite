@@ -114,6 +114,7 @@ function blankQuote() {
     createdBy: "system",
 
     // Linkage — populated as the Quote moves through the chain.
+    customerId: null,
     customerEmail: "",
     propertyId: null,
     leadId: null,
