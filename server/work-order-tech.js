@@ -1762,8 +1762,11 @@ function createSignaturePad(canvas, onChange) {
 }
 
 // Submit button enables only when name + signature + acknowledgement
-// are all set. Re-runs on every input change so the tech sees the
-// gating in real time.
+// AND every walkout gate (zones touched, photos captured, carry-forward
+// resolved) is met. The merged "Sign, Lock & Generate Invoice" tap
+// completes the visit, so the WO must be ready-to-complete at the
+// moment the customer signs. Re-runs on every input change so the tech
+// sees the gating in real time.
 function updateSignoffSubmitState() {
   const submit = document.getElementById("techSignoffSubmit");
   if (!submit) return;
@@ -1776,12 +1779,65 @@ function updateSignoffSubmitState() {
   // irrevocable at signature per SCOPE_PROTECTED_FIELDS).
   const ig = state.intakeGuarantee || {};
   const bonusGateOk = !ig.applies || ig.matched === true || ig.matched === false;
-  submit.disabled = !(name && ack && drawn && bonusGateOk);
+  const readinessFails = preSignReadinessFailures();
+  const readinessOk = readinessFails.length === 0;
+  submit.disabled = !(name && ack && drawn && bonusGateOk && readinessOk);
+
+  // Surface the readiness gaps inline so the tech (and the customer
+  // watching them sign) can see what's left. Hidden when everything
+  // passes or the customer just hasn't filled in name/canvas yet —
+  // those gaps are visually obvious on the form.
+  const readinessList = document.getElementById("techSignoffReadiness");
+  if (readinessList) {
+    if (!readinessOk && (name || drawn)) {
+      readinessList.hidden = false;
+      readinessList.innerHTML = readinessFails
+        .map((f) => `<li>${f.replace(/</g, "&lt;")}</li>`)
+        .join("");
+    } else {
+      readinessList.hidden = true;
+      readinessList.innerHTML = "";
+    }
+  }
+
   if (!bonusGateOk) {
     submit.title = "Resolve the AI Correct Diagnosis Bonus decision before signing.";
+  } else if (!readinessOk) {
+    submit.title = readinessFails.join(" • ");
   } else {
     submit.removeAttribute("title");
   }
+}
+
+// Same checks as walkoutCheckFailures(), minus the "signature missing"
+// gate — used pre-sign to prove the WO is ready to be marked complete
+// at the moment the customer signs (since signing now also completes
+// the visit per the merged button). Mirrored gates: zone walk, photo
+// gate, carry-forward resolution.
+function preSignReadinessFailures() {
+  const fails = [];
+  const untouched = (state.zones || []).filter((z) => {
+    if (z.status && z.status !== "") return false;
+    const checks = z.checks || {};
+    return !Object.values(checks).some(Boolean);
+  });
+  if (untouched.length) {
+    fails.push(`${untouched.length} zone${untouched.length === 1 ? "" : "s"} haven't been checked yet (zones ${untouched.map((z) => z.number).join(", ")}).`);
+  }
+  if (state.type === "spring_opening") {
+    const openCfCards = document.querySelectorAll('#techCarryForwardList [data-deferred-id]');
+    if (openCfCards.length) {
+      fails.push(`${openCfCards.length} carry-forward recommendation${openCfCards.length === 1 ? "" : "s"} still need an action (Repair / Decline / Already fixed / Can't locate).`);
+    }
+  }
+  const minPhotos = TECH_PHOTO_REQUIREMENT_BY_TYPE[state.type] ?? 1;
+  if (minPhotos > 0) {
+    const photoCount = Array.isArray(state.photos) ? state.photos.length : 0;
+    if (photoCount < minPhotos) {
+      fails.push(`Capture ${minPhotos === 1 ? "at least one completion photo" : `at least ${minPhotos} completion photos`} before signing.`);
+    }
+  }
+  return fails;
 }
 
 document.getElementById("techSignoffName")?.addEventListener("input", updateSignoffSubmitState);
@@ -1798,16 +1854,39 @@ document.getElementById("techSignoffSubmit")?.addEventListener("click", async ()
   const ackEl  = document.getElementById("techSignoffAck");
   const customerName = (nameEl?.value || "").trim();
   if (!customerName || !ackEl?.checked || !state.signaturePad?.isDirty()) return;
+
+  // Last-line defence — gates should already have disabled the button,
+  // but verify before the irreversible PATCH.
+  const readinessFails = preSignReadinessFailures();
+  if (readinessFails.length) {
+    alert("Can't sign yet:\n\n• " + readinessFails.join("\n• ") + "\n\nResolve these first.");
+    return;
+  }
+
   submit.disabled = true;
-  submit.textContent = "Signing…";
+  submit.textContent = "Signing & invoicing…";
   try {
     const imageData = state.signaturePad.toDataURL();
+    // Combined PATCH: signature + status → completed in one round-trip.
+    // The server applies the signature (sets wo.locked = true), flips
+    // status to "completed", AWAITS the cascade, and returns the new
+    // invoice id in response.cascade.invoiceId. Spec §4.3.2 / §4.3.4.
+    //
+    // arrivedAt + departedAt back-fill: the legacy two-tap flow auto-
+    // stamped these on each status change via the [data-run-status]
+    // click handler. With the merge, we set them here if absent so
+    // the On-Site Execution timestamps stay correct.
+    const nowIso = new Date().toISOString();
+    const payload = {
+      signature: { customerName, imageData, acknowledgement: true },
+      status: "completed"
+    };
+    if (!state.arrivedAt) payload.arrivedAt = nowIso;
+    if (!state.departedAt) payload.departedAt = nowIso;
     const response = await fetch(`/api/work-orders/${encodeURIComponent(state.id)}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        signature: { customerName, imageData, acknowledgement: true }
-      })
+      body: JSON.stringify(payload)
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok || !data.ok) {
@@ -1815,12 +1894,25 @@ document.getElementById("techSignoffSubmit")?.addEventListener("click", async ()
     }
     state.signature = data.workOrder.signature || state.signature;
     state.locked = data.workOrder.locked === true;
+    state.status = data.workOrder.status || state.status;
+    state.departedAt = data.workOrder.departedAt || state.departedAt;
+    // Surface the freshly-drafted invoice id immediately — no polling
+    // race. data.cascade is present when the cascade fired this PATCH.
+    if (data.cascade && data.cascade.invoiceId) {
+      state.completedInvoiceId = data.cascade.invoiceId;
+    }
+    // Pick up the fresh history (cascade_fire + invoice_drafted just
+    // got appended server-side) and the freshest zone/property snapshot.
+    if (Array.isArray(data.workOrder.history)) state.history = data.workOrder.history;
     renderSignoff();
+    renderExecutionTimestamps();
+    renderRunStatus();
     renderPostSigBanner();
+    renderTechHistory();
     applyLockState(state.locked);
   } catch (err) {
     submit.disabled = false;
-    submit.textContent = "Sign & lock work order";
+    submit.textContent = "Sign, lock & generate invoice";
     alert(err.message || "Couldn't save signature.");
   }
 });
@@ -3654,6 +3746,10 @@ function renderPropertyUpdates(propertyEdits) {
 //   completed         — status === completed (cascade fired or about to)
 // Hidden otherwise. Updates whenever signature / photos / status change.
 function renderPostSigBanner() {
+  // Keep the pre-sign readiness list in sync as zones / photos / CF
+  // resolutions mutate. Cheap; runs whenever this banner re-renders.
+  updateSignoffSubmitState();
+
   const banner = document.getElementById("techPostSigBanner");
   const icon = document.getElementById("techPostSigIcon");
   const headline = document.getElementById("techPostSigHeadline");
@@ -3666,37 +3762,30 @@ function renderPostSigBanner() {
     banner.hidden = false;
     banner.dataset.state = "completed";
     if (icon) icon.textContent = "✓";
-    headline.textContent = "Visit completed.";
-    detail.textContent = state.completedInvoiceId
-      ? `Cascade fired. Draft invoice ${state.completedInvoiceId} on file.`
-      : "Service record + draft invoice created.";
+    headline.textContent = "Visit signed, locked, and completed.";
+    detail.innerHTML = state.completedInvoiceId
+      ? `Draft invoice <a href="/admin/invoice/${encodeURIComponent(state.completedInvoiceId)}" class="tech-postsig-link">${state.completedInvoiceId.replace(/</g, "&lt;")}</a> on file. Customer summary email sent.`
+      : "Service record on file. No charge for this visit.";
     return;
   }
 
   if (!signed) {
-    // Pre-signature — banner stays hidden. Sticky finish bar has its
-    // own labels for the early-stage flow.
+    // Pre-signature — banner stays hidden. The sign-section readiness
+    // list (below the Sign, Lock & Generate Invoice button) is the
+    // pre-sig narrative now.
     banner.hidden = true;
     return;
   }
 
-  // Signed but not completed: photo gate decides which copy.
-  const minPhotos = TECH_PHOTO_REQUIREMENT_BY_TYPE[state.type] ?? 1;
-  const photoCount = Array.isArray(state.photos) ? state.photos.length : 0;
-  const gateMet = minPhotos === 0 || photoCount >= minPhotos;
-
+  // Edge case: signed but status didn't flip to completed. Happens when
+  // the cascade gate trips (e.g. WO has no linked propertyId) so the
+  // server applied the signature + lock but didn't run the cascade.
+  // Surface a recovery hint pointing at the fallback button.
   banner.hidden = false;
-  if (gateMet) {
-    banner.dataset.state = "ready";
-    if (icon) icon.textContent = "→";
-    headline.textContent = "Scope confirmed. Ready to mark complete.";
-    detail.textContent = "Tap “Mark visit completed” at the bottom — that fires the completion cascade and drafts the invoice.";
-  } else {
-    banner.dataset.state = "pending_photos";
-    if (icon) icon.textContent = "📷";
-    headline.textContent = "Scope confirmed.";
-    detail.textContent = `Capture ${minPhotos === 1 ? "at least one completion photo" : `${minPhotos}+ completion photos`} before marking complete.`;
-  }
+  banner.dataset.state = "needs_retry";
+  if (icon) icon.textContent = "↻";
+  headline.textContent = "Signed and locked — completion didn't fire.";
+  detail.textContent = "Likely no linked property on the WO. Open it in the desktop editor to link a property and re-run the cascade.";
 }
 
 // ---- Payment & billing block (spec §4.3.2) ----------------------------

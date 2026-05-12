@@ -221,6 +221,7 @@ async function run(wo, deps = {}) {
   // both reshape on it, but the invoice STAYS in draft status (Patrick
   // reviews before sending or marking paid in QB). Spec §4.3.2.
   let invoice = null;
+  let invoiceDraftError = null;
   if (lineItems.length) {
     try {
       invoice = await invoices.createDraft({
@@ -236,7 +237,10 @@ async function run(wo, deps = {}) {
         notes: wo.techNotes ? wo.techNotes.slice(0, 500) : "",
         paidOnSiteAtCompletion: wo.paidOnSite === true
       });
-    } catch (err) { console.warn("[cascade] invoice draft failed:", err?.message); }
+    } catch (err) {
+      invoiceDraftError = err?.message || "createDraft threw";
+      console.warn("[cascade] invoice draft failed:", invoiceDraftError);
+    }
   }
 
   // 3) Append service record on the property
@@ -276,9 +280,22 @@ async function run(wo, deps = {}) {
       by: "system",
       note: invoice
         ? `Service record + draft invoice ${invoice.id} ($${Number(invoice.total).toFixed(2)})`
-        : "Service record (no charge)"
+        : (lineItems.length ? `Service record (invoice draft failed: ${invoiceDraftError || "unknown"})` : "Service record (no charge)")
     });
   } catch (err) { console.warn("[cascade] history append failed:", err?.message); }
+
+  // Parity with the manual /create-invoice endpoint: when the cascade
+  // produces a draft, stamp `invoice_drafted` too so the WO history
+  // viewer surfaces a dedicated entry per spec acceptance criteria.
+  if (invoice) {
+    try {
+      await workOrders.appendHistory(wo.id, {
+        action: "invoice_drafted",
+        by: "system",
+        note: `Cascade: ${invoice.id} ($${Number(invoice.total).toFixed(2)})`
+      });
+    } catch (err) { console.warn("[cascade] invoice_drafted history failed:", err?.message); }
+  }
 
   // Property-edits idempotency stamp + history breadcrumb (Brief D).
   // Stamp goes on AFTER the apply succeeds — partial failure leaves the
@@ -301,7 +318,7 @@ async function run(wo, deps = {}) {
     } catch (err) { console.warn("[cascade] property-edits stamp failed:", err?.message); }
   }
 
-  return { ok: true, serviceRecord, invoice, alreadyRan: false, propertyEditsApplied };
+  return { ok: true, serviceRecord, invoice, alreadyRan: false, propertyEditsApplied, invoiceDraftError };
 }
 
 module.exports = { run, summarizeWo, lineItemsFromWo, computePropertyEdits, WARRANTY_MONTHS };

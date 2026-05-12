@@ -57,3 +57,24 @@
 }
 .wo-card-tag.is-locked { background: #F0EEE3; color: #4A4A44; }
 .wo-card-tag.is-followup { background: #FFF1D6; color: #7A5500; border-color: #E0CB8E; }
+
+/* "Stuck completions" filter — locked WOs that never fired the cascade.
+   Outline the pill in amber so Patrick can find it amongst the normal
+   status filters. The per-card recovery action sits below the regular
+   card content with the action button right-aligned. */
+.wo-filter-stuck {
+  border: 1px solid #E0A85A !important;
+  color: #7A5500 !important;
+}
+.wo-filter-stuck.is-active {
+  background: #E0A85A !important;
+  color: #fff !important;
+}
+.ml-card.is-stuck { border-left: 3px solid #E0A85A; }
+.wo-card-stuck-action {
+  padding: 10px 14px 14px;
+  display: flex;
+  justify-content: flex-end;
+  border-top: 1px dashed #E2E0D4;
+  margin-top: 6px;
+}

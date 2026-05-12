@@ -1594,6 +1594,28 @@ body.tech-lightbox-open { overflow: hidden; }
   line-height: 1.45;
 }
 
+/* Pre-sign readiness list — surfaces what's blocking the merged
+   Sign, Lock & Generate Invoice tap. Amber-toned so it reads as
+   "fix-me" without alarming the customer. */
+.tech-signoff-readiness {
+  margin: 8px 0 0;
+  padding: 10px 12px 10px 26px;
+  background: rgba(224, 168, 90, 0.10);
+  border: 1px solid rgba(224, 168, 90, 0.40);
+  border-radius: 10px;
+  list-style: disc;
+  font-size: 12px;
+  color: #6E4A1A;
+  line-height: 1.5;
+}
+.tech-signoff-readiness li { margin: 2px 0; }
+
+.tech-postsig-link {
+  color: inherit;
+  font-weight: 700;
+  text-decoration: underline;
+}
+
 /* Post-sign read-only display */
 .tech-signoff-signed {
   padding: 14px;
@@ -2767,6 +2789,11 @@ body[data-locked="true"] .tech-finish-bar { opacity: 0.55; pointer-events: none;
   background: #1B4D2E;
   border-color: #1B4D2E;
   color: #fff;
+}
+.tech-postsig-banner[data-state="needs_retry"] {
+  background: #FFF8E6;
+  border-color: #E0A85A;
+  color: #6E4A1A;
 }
 .tech-postsig-icon {
   font-size: 22px;

@@ -6419,56 +6419,68 @@ async function handleApi(req, res, pathname) {
       // Completion cascade — spec §4.3.4. Fires when the WO transitions
       // INTO completed (any prior status). Idempotent at the cascade
       // layer (it short-circuits if a service record already references
-      // this WO), so accidental re-triggers are safe. Best-effort
-      // notifications via the existing email/SMS helpers.
+      // this WO), so accidental re-triggers are safe.
+      //
+      // The cascade is now AWAITED so the PATCH response can return the
+      // freshly-drafted invoice ID — that's how the merged "Sign, Lock &
+      // Generate Invoice" button surfaces the invoice number immediately
+      // (no client-side polling race). The notify hooks below are still
+      // best-effort and fire-and-forget via setImmediate so a slow Gmail
+      // round-trip doesn't block the response.
+      let cascadeResult = null;
       if (updated.status === "completed" && priorStatus !== "completed" && updated.propertyId) {
         const baseUrl = process.env.PUBLIC_BASE_URL || baseUrlFromReq(req);
-        completionCascade.run(updated, {
-          notifyAdmin: async ({ wo, serviceRecord, invoice }) => {
-            const aliasLead = {
-              id: wo.id,
-              sourceLabel: `WO COMPLETED — ${wo.type}`,
-              contact: {
-                name: wo.customerName || "(unknown)",
-                phone: wo.customerPhone || "",
-                email: wo.customerEmail || "",
-                address: wo.address || "",
-                notes: `${serviceRecord.summary}${invoice ? ` · Invoice ${invoice.id} ($${invoice.total.toFixed(2)})` : " · No charge"}`
-              }
-            };
-            await Promise.allSettled([
-              sendNewLeadEmail(aliasLead, { baseUrl }),
-              sendNewLeadSms(aliasLead, { baseUrl })
-            ]);
-          },
-          notifyCustomer: async ({ wo, serviceRecord, invoice }) => {
-            // Reuse the existing customer-notification module but with a
-            // local custom payload — wo isn't a lead, so the existing
-            // applyCrmUpdate path doesn't fit. Send a branded summary
-            // email via the same nodemailer pattern used elsewhere.
-            if (!wo.customerEmail || !process.env.GMAIL_USER || !process.env.GMAIL_APP_PASSWORD) return;
-            let nodemailer;
-            try { nodemailer = require("nodemailer"); } catch { return; }
-            const transporter = nodemailer.createTransport({
-              service: "gmail",
-              auth: { user: process.env.GMAIL_USER, pass: process.env.GMAIL_APP_PASSWORD }
-            });
-            const firstName = (wo.customerName || "").split(" ")[0] || "there";
-            // Reshape the totals line on payment-received-in-field. The
-            // wo.paidOnSite flag is the source of truth at cascade time
-            // (the cascade fires immediately on status → completed; the
-            // flag was set BEFORE that by the tech in the Payment & Billing
-            // block). Spec §4.3.2.
-            const paidInField = wo.paidOnSite === true;
-            const totalLine = invoice && invoice.total > 0
-              ? (paidInField
-                  ? `<p style="margin: 0 0 14px;">Today's total: <strong>$${invoice.total.toFixed(2)} CAD</strong> (incl. HST). <strong>Payment received in the field — thank you.</strong> A receipt invoice will follow for your records.</p>`
-                  : `<p style="margin: 0 0 14px;">Total for today's visit: <strong>$${invoice.total.toFixed(2)} CAD</strong> (incl. HST). An invoice will follow.</p>`)
-              : "";
-            const warranty = serviceRecord.warrantyExpiresAt
-              ? `<p style="margin: 0 0 14px;">Today's work is covered under PJL's <strong>${serviceRecord.warrantyMonths}-month warranty</strong>, valid through ${new Date(serviceRecord.warrantyExpiresAt).toLocaleDateString("en-CA", { month: "long", day: "numeric", year: "numeric" })}.</p>`
-              : "";
-            const html = `
+        try {
+          cascadeResult = await completionCascade.run(updated, {
+            notifyAdmin: async (ctx) => { setImmediate(() => runAdminNotify(ctx, baseUrl).catch((e) => console.warn("[cascade] admin notify failed:", e?.message))); },
+            notifyCustomer: async (ctx) => { setImmediate(() => runCustomerNotify(ctx).catch((e) => console.warn("[cascade] customer notify failed:", e?.message))); }
+          });
+        } catch (err) { console.warn("[cascade] run failed:", err?.message); }
+      }
+
+      // Helpers extracted so the cascade can return fast while notifies
+      // run on the next tick (setImmediate above). Defined inside the
+      // PATCH closure so they have access to the file-level helpers
+      // (sendNewLeadEmail, sendNewLeadSms) without re-requiring.
+      async function runAdminNotify({ wo, serviceRecord, invoice }, adminBaseUrl) {
+        const aliasLead = {
+          id: wo.id,
+          sourceLabel: `WO COMPLETED — ${wo.type}`,
+          contact: {
+            name: wo.customerName || "(unknown)",
+            phone: wo.customerPhone || "",
+            email: wo.customerEmail || "",
+            address: wo.address || "",
+            notes: `${serviceRecord.summary}${invoice ? ` · Invoice ${invoice.id} ($${invoice.total.toFixed(2)})` : " · No charge"}`
+          }
+        };
+        await Promise.allSettled([
+          sendNewLeadEmail(aliasLead, { baseUrl: adminBaseUrl }),
+          sendNewLeadSms(aliasLead, { baseUrl: adminBaseUrl })
+        ]);
+      }
+
+      async function runCustomerNotify({ wo, serviceRecord, invoice }) {
+        // Branded summary email via nodemailer. Skipped when Gmail creds
+        // or customer email aren't set — best-effort by design.
+        if (!wo.customerEmail || !process.env.GMAIL_USER || !process.env.GMAIL_APP_PASSWORD) return;
+        let nodemailer;
+        try { nodemailer = require("nodemailer"); } catch { return; }
+        const transporter = nodemailer.createTransport({
+          service: "gmail",
+          auth: { user: process.env.GMAIL_USER, pass: process.env.GMAIL_APP_PASSWORD }
+        });
+        const firstName = (wo.customerName || "").split(" ")[0] || "there";
+        const paidInField = wo.paidOnSite === true;
+        const totalLine = invoice && invoice.total > 0
+          ? (paidInField
+              ? `<p style="margin: 0 0 14px;">Today's total: <strong>$${invoice.total.toFixed(2)} CAD</strong> (incl. HST). <strong>Payment received in the field — thank you.</strong> A receipt invoice will follow for your records.</p>`
+              : `<p style="margin: 0 0 14px;">Total for today's visit: <strong>$${invoice.total.toFixed(2)} CAD</strong> (incl. HST). An invoice will follow.</p>`)
+          : "";
+        const warranty = serviceRecord.warrantyExpiresAt
+          ? `<p style="margin: 0 0 14px;">Today's work is covered under PJL's <strong>${serviceRecord.warrantyMonths}-month warranty</strong>, valid through ${new Date(serviceRecord.warrantyExpiresAt).toLocaleDateString("en-CA", { month: "long", day: "numeric", year: "numeric" })}.</p>`
+          : "";
+        const html = `
 <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 560px; color: #1a1a1a; line-height: 1.55;">
   <div style="padding: 24px 28px; background: #1B4D2E; border-radius: 8px 8px 0 0;">
     <div style="color: #EAF3DE; font-size: 12px; letter-spacing: 0.12em; text-transform: uppercase; font-weight: 600;">PJL Land Services</div>
@@ -6483,15 +6495,13 @@ async function handleApi(req, res, pathname) {
   </div>
   <p style="margin: 16px 0 0; font-size: 11px; color: #999; text-align: center;">PJL Land Services · Newmarket, Ontario · pjllandservices.com</p>
 </div>`.trim();
-            await transporter.sendMail({
-              from: `"PJL Land Services" <${process.env.GMAIL_USER}>`,
-              to: wo.customerEmail,
-              replyTo: process.env.GMAIL_USER,
-              subject: "Your PJL visit is complete",
-              html
-            });
-          }
-        }).catch((err) => console.warn("[cascade] run failed:", err?.message));
+        await transporter.sendMail({
+          from: `"PJL Land Services" <${process.env.GMAIL_USER}>`,
+          to: wo.customerEmail,
+          replyTo: process.env.GMAIL_USER,
+          subject: "Your PJL visit is complete",
+          html
+        });
       }
 
       // Sign-time sweep: if THIS PATCH just signed the WO, find every
@@ -6520,7 +6530,23 @@ async function handleApi(req, res, pathname) {
         }
       }
 
-      return sendJson(res, 200, { ok: true, workOrder: updated });
+      // Re-fetch the WO if the cascade stamped propertyEditsAppliedAt
+      // (or any other side-effect wrote back). The client wants the
+      // freshest version including the new history entries (cascade_fire,
+      // invoice_drafted) so the History section re-renders correctly.
+      const finalWo = cascadeResult ? await workOrders.get(id) : updated;
+      const responseBody = { ok: true, workOrder: finalWo };
+      if (cascadeResult) {
+        responseBody.cascade = {
+          ran: !cascadeResult.alreadyRan,
+          alreadyRan: !!cascadeResult.alreadyRan,
+          invoiceId: cascadeResult.invoice?.id || null,
+          invoiceTotal: cascadeResult.invoice?.total ?? null,
+          invoiceDraftError: cascadeResult.invoiceDraftError || null,
+          propertyEditsApplied: !!cascadeResult.propertyEditsApplied
+        };
+      }
+      return sendJson(res, 200, responseBody);
     } catch (error) {
       return sendJson(res, 400, { ok: false, errors: [error.message || "Couldn't update work order."] });
     }
