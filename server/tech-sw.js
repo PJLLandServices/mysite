@@ -54,14 +54,20 @@
 // gate — adds the Confirm materials list button + materialsConfirmedAt
 // field + clear-on-mutate. Touches work-order-tech.html + .js, so the
 // SW cache needs to invalidate.
+// Bumped 2026-05-12 (v15 → v16): offline-queue.js fix — strip If-Match
+// from queued PATCHes at enqueue + replay. Patrick reported issue-add
+// gets "Syncing X files" then reload loses the work; root cause was
+// stale If-Match on queued replays → 409 → silent dequeue. Also adds
+// /crm/offline-queue.js to STATIC_ASSETS so the SW versions it now.
 // Lesson: bump this in the same commit as any change to the files in
 // STATIC_ASSETS, otherwise the field tech sees old behaviour even
 // after Render redeploys.
-const CACHE_VERSION = "pjl-tech-v15";
+const CACHE_VERSION = "pjl-tech-v16";
 const STATIC_ASSETS = [
   "/crm/work-order-tech.html",
   "/crm/work-order-tech.js",
   "/crm/work-order-tech.css",
+  "/crm/offline-queue.js",
   "/crm/voice-input.js",
   "/pricing.json",
   "/parts.json"

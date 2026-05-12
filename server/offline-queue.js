@@ -111,6 +111,24 @@
     // Queue the mutation.
     const body = (init.body && typeof init.body === "string") ? init.body : null;
     const headers = init.headers ? Object.fromEntries(new Headers(init.headers)) : { "content-type": "application/json" };
+    // Strip If-Match — queued mutations have lost their concurrency
+    // context the moment they were captured locally. By the time
+    // replay fires (signal returns, page reload, whenever), the
+    // server's wo.updatedAt has moved on (any other PATCH advanced
+    // it). Replaying with a stale If-Match → 409 → the replay
+    // handler dequeues without retry → the tech's work is silently
+    // dropped. Stripping If-Match lets queued replays land. The
+    // trade-off: two techs editing the same WO concurrently could
+    // overwrite each other's changes via queue. Acceptable — techs
+    // don't share WOs in practice, and the alternative (losing
+    // captured field work) is worse. Same reasoning for ETag/
+    // If-None-Match if anything else ever sets them.
+    delete headers["If-Match"];
+    delete headers["if-match"];
+    delete headers["If-None-Match"];
+    delete headers["if-none-match"];
+    delete headers.ETag;
+    delete headers.etag;
     await enqueue({ url, method, body, headers });
     await refreshCount();
     // Synthesize a success response so the caller's UI doesn't error.
@@ -139,9 +157,19 @@
       all.sort((a, b) => new Date(a.queuedAt) - new Date(b.queuedAt));
       for (const entry of all) {
         try {
+          // Defensive strip of concurrency headers on replay — covers
+          // legacy queue entries enqueued before the enqueue-time strip
+          // landed. A stale If-Match → 409 → silent dequeue → lost work.
+          const replayHeaders = { ...(entry.headers || {}) };
+          delete replayHeaders["If-Match"];
+          delete replayHeaders["if-match"];
+          delete replayHeaders["If-None-Match"];
+          delete replayHeaders["if-none-match"];
+          delete replayHeaders.ETag;
+          delete replayHeaders.etag;
           const res = await fetch(entry.url, {
             method: entry.method,
-            headers: entry.headers,
+            headers: replayHeaders,
             body: entry.body
           });
           if (res.ok || res.status < 500) {
