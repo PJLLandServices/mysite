@@ -282,7 +282,17 @@ Smaller object — mostly:
 - Source quote (if any)
 - Resulting work order(s) — one booking can produce multiple WOs (multi-day repairs)
 
-**Spec deferred for detailed pass.** Touched on but not formally designed.
+**Cancellation lifecycle (Brief B):** Admins/techs can cancel a booking from `/admin/schedule` via the action panel on a booking card. Cancel is a *soft* operation:
+- Status flips to `cancelled`; `cancelledAt`, `cancelledBy`, `cancellationReason` are stamped.
+- History entry is appended (audit trail — read-only thereafter).
+- `lead.booking.status` mirrors the new state so legacy CRM/portal renderers see the cancellation.
+- Customer email is fire-and-forget (default ON, admin can uncheck). Email failure does NOT roll back the cancel — the UI surfaces "cancelled; email failed".
+- Downstream rules: cancelled bookings don't count toward the week-total badge, can't have a WO created from them (409), and are excluded from the iCal feed (Brief C).
+- Visible on the canvas with strikethrough + a CANCELLED pill (kept for context, not hidden).
+
+**Hard delete** is admin-only, requires typing the booking ID in a confirmation field, and refuses if a linked WO is past `scheduled` (use Cancel instead). Strips the booking record entirely + clears the lead.booking pointer.
+
+**Spec deferred for detailed pass beyond cancel/delete.** Touched on but not formally designed.
 
 ### 4.3 Work Order Folder
 

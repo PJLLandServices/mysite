@@ -14,6 +14,7 @@
   <link rel="stylesheet" href="/crm/crm.css">
   <link rel="stylesheet" href="/crm/schedule.css">
   <link rel="stylesheet" href="/crm/crm-reschedule.css">
+  <link rel="stylesheet" href="/js/time-picker.css?v=1">
 </head>
 <body class="pjl-crm-body">
   <aside class="pjl-admin-nav" id="navMenu" aria-label="PJL CRM Navigation">
@@ -225,6 +226,68 @@
     </form>
   </dialog>
 
+  <!-- Booking action panel — opens when a booking card on the canvas is tapped. -->
+  <!-- Reschedule / Cancel / Delete branches. Delete hidden for non-admin sessions. -->
+  <dialog id="bookingActionDialog" class="booking-action-dialog">
+    <header>
+      <h2>Manage appointment</h2>
+      <button type="button" class="pjl-btn pjl-btn-outline" id="bookingActionClose" aria-label="Close">×</button>
+    </header>
+    <dl class="booking-action-summary" id="bookingActionSummary"></dl>
+    <div class="booking-action-buttons">
+      <button type="button" class="pjl-btn pjl-btn-primary" id="bookingActionReschedule">Reschedule</button>
+      <button type="button" class="pjl-btn pjl-btn-outline" id="bookingActionCancel">Cancel booking</button>
+      <button type="button" class="pjl-btn pjl-btn-danger" id="bookingActionDelete" hidden>Delete (admin)</button>
+    </div>
+    <p class="booking-action-status" id="bookingActionStatus" role="status"></p>
+  </dialog>
+
+  <!-- Cancel booking modal — requires reason + optional customer notify. -->
+  <dialog id="cancelBookingDialog" class="booking-action-dialog">
+    <header>
+      <h2>Cancel this booking</h2>
+      <button type="button" class="pjl-btn pjl-btn-outline" id="cancelBookingClose" aria-label="Close">×</button>
+    </header>
+    <dl class="booking-action-summary" id="cancelBookingSummary"></dl>
+    <form id="cancelBookingForm">
+      <label class="dialog-label">
+        <span>Reason (required, captures in audit trail)</span>
+        <textarea id="cancelBookingReason" rows="3" maxlength="500" required placeholder="e.g. Customer called to cancel — out of town next week"></textarea>
+      </label>
+      <label class="dialog-toggle">
+        <input type="checkbox" id="cancelBookingNotify" checked>
+        <span>Notify customer by email</span>
+      </label>
+      <p class="dialog-error" id="cancelBookingError" hidden></p>
+      <div class="dialog-actions">
+        <button type="button" class="pjl-btn pjl-btn-outline" id="cancelBookingBack">Back</button>
+        <button type="submit" class="pjl-btn pjl-btn-danger" id="cancelBookingSubmit">Cancel booking</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Hard-delete modal — admin-only; user must type the booking ID to confirm. -->
+  <dialog id="deleteBookingDialog" class="booking-action-dialog">
+    <header>
+      <h2>Permanently delete</h2>
+      <button type="button" class="pjl-btn pjl-btn-outline" id="deleteBookingClose" aria-label="Close">×</button>
+    </header>
+    <dl class="booking-action-summary" id="deleteBookingSummary"></dl>
+    <p class="dialog-warn">This removes the booking entirely. There's no undo. Use <strong>Cancel</strong> if a customer might still want to re-book.</p>
+    <form id="deleteBookingForm">
+      <label class="dialog-label">
+        <span>Type the booking ID below to confirm: <code id="deleteBookingExpectedId">BK-…</code></span>
+        <input type="text" id="deleteBookingConfirmInput" placeholder="BK-2026-0042" autocomplete="off">
+      </label>
+      <p class="dialog-error" id="deleteBookingError" hidden></p>
+      <div class="dialog-actions">
+        <button type="button" class="pjl-btn pjl-btn-outline" id="deleteBookingBack">Back</button>
+        <button type="submit" class="pjl-btn pjl-btn-danger" id="deleteBookingSubmit" disabled>Permanently delete</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="/js/time-picker.js?v=1"></script>
   <script src="/crm/crm-reschedule.js"></script>
   <script src="/crm/schedule.js"></script>
   <script src="/coverage-checker.js"></script>

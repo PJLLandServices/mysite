@@ -268,6 +268,86 @@ async function reschedule(id, { scheduledFor, by = "admin", actorName = "", reas
   return next;
 }
 
+// Soft cancel — flips status to "cancelled", stamps the cancellation
+// fields, appends a history entry. Caller is responsible for sending the
+// customer-facing email (the notify-customer module handles that on a
+// separate code path).
+//
+// Returns:
+//   { ok: false, status: 404 } when the booking doesn't exist
+//   { ok: false, status: 409 } when the booking is already cancelled or
+//                              already completed (no_show / completed are
+//                              terminal — re-cancel is rejected)
+//   { ok: true, booking }      on success
+async function cancel(id, { reason = "", by = "admin", actorName = "" } = {}) {
+  const records = await readAll();
+  const idx = records.findIndex((b) => b.id === id);
+  if (idx === -1) return { ok: false, status: 404, errors: ["Booking not found."] };
+  const current = records[idx];
+  if (current.status === "cancelled") {
+    return { ok: false, status: 409, errors: ["This booking is already cancelled."] };
+  }
+  if (current.status === "completed" || current.status === "no_show") {
+    return { ok: false, status: 409, errors: [`Can't cancel a ${current.status} booking.`] };
+  }
+  const now = new Date().toISOString();
+  const next = {
+    ...current,
+    status: "cancelled",
+    cancelledAt: now,
+    cancelledBy: by,
+    cancellationReason: reason || "",
+    updatedAt: now,
+    history: [...(current.history || []), {
+      ts: now,
+      action: "cancelled",
+      by,
+      note: [
+        actorName ? `${actorName} (${by})` : by,
+        reason ? `reason: ${reason}` : ""
+      ].filter(Boolean).join(" · ")
+    }]
+  };
+  records[idx] = next;
+  await writeAll(records);
+  return { ok: true, booking: next };
+}
+
+// Hard delete — removes the booking record entirely. Admin-only at the
+// route layer. Refuses if the booking has any linked WOs that have moved
+// past the `scheduled` state (i.e. tech has touched the WO). Use Cancel
+// instead in that case.
+//
+// Returns:
+//   { ok: false, status: 404 }                — booking missing
+//   { ok: false, status: 409, linkedWoId }    — has an active linked WO
+//   { ok: true }                              — removed
+async function remove(id, { by = "admin", isActiveWo = null } = {}) {
+  const records = await readAll();
+  const idx = records.findIndex((b) => b.id === id);
+  if (idx === -1) return { ok: false, status: 404, errors: ["Booking not found."] };
+  const current = records[idx];
+  // Caller passes isActiveWo(woId) -> bool that knows the WO lifecycle.
+  // Decoupled here so this lib doesn't have to require work-orders.js.
+  if (typeof isActiveWo === "function" && Array.isArray(current.workOrderIds)) {
+    for (const woId of current.workOrderIds) {
+      try {
+        if (await isActiveWo(woId)) {
+          return {
+            ok: false,
+            status: 409,
+            errors: [`Can't delete — work order ${woId} is already in progress. Cancel the booking instead.`],
+            linkedWoId: woId
+          };
+        }
+      } catch (_) { /* if the WO check throws, treat as still-active for safety */ }
+    }
+  }
+  records.splice(idx, 1);
+  await writeAll(records);
+  return { ok: true, deletedId: id, deletedBy: by };
+}
+
 // Attach a WO id to a booking's workOrderIds[]. Used when techs spin
 // up additional WOs from a single booking (multi-day repairs).
 async function attachWorkOrder(bookingId, woId) {
@@ -293,5 +373,7 @@ module.exports = {
   upsertFromLead,
   update,
   reschedule,
+  cancel,
+  remove,
   attachWorkOrder
 };

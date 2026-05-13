@@ -1,0 +1,302 @@
+/* PJL Unified Time Picker styles.
+   Self-contained — all colour/spacing falls back to literal values so the
+   component works on the public site, the admin pages, AND the portal
+   (which may not load the public site's CSS custom properties). */
+
+.tp {
+  font-family: "DM Sans", system-ui, sans-serif;
+  color: var(--text, #1A1A1A);
+  --tp-green: var(--green, #1B4D2E);
+  --tp-green-mid: var(--green-mid, #2D6A42);
+  --tp-green-pale: var(--green-pale, #EAF3DE);
+  --tp-amber: var(--amber, #E07B24);
+  --tp-amber-light: var(--amber-light, #F59B4A);
+  --tp-border: var(--border, #E2E0D4);
+  --tp-muted: var(--text-muted, #7A7A72);
+  --tp-bg: #fff;
+}
+.tp-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* ---------- Calendar ---------- */
+.tp-calendar {
+  background: var(--tp-bg);
+  border: 1px solid var(--tp-border);
+  border-radius: 12px;
+  padding: 14px 14px 16px;
+}
+.tp-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.tp-month-label {
+  margin: 0;
+  font-family: "Barlow Condensed", "DM Sans", sans-serif;
+  font-weight: 600;
+  font-size: 22px;
+  letter-spacing: 0.01em;
+  color: var(--tp-green);
+  text-transform: uppercase;
+}
+.tp-nav {
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  border: 1px solid var(--tp-border);
+  background: var(--tp-bg);
+  color: var(--tp-green);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: inherit;
+}
+.tp-nav:hover:not(:disabled) {
+  background: var(--tp-green-pale);
+  border-color: var(--tp-green);
+}
+.tp-nav:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.tp-weekdays {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 4px;
+  margin-bottom: 6px;
+}
+.tp-weekdays > span {
+  text-align: center;
+  font-family: "Barlow Condensed", "DM Sans", sans-serif;
+  font-weight: 600;
+  font-size: 12px;
+  letter-spacing: 0.12em;
+  color: var(--tp-muted);
+  padding: 6px 0;
+}
+
+.tp-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 4px;
+}
+.tp-grid[aria-busy="true"] { opacity: 0.65; }
+
+.tp-day {
+  aspect-ratio: 1 / 1;
+  border: 1px solid transparent;
+  background: var(--tp-bg);
+  color: var(--text, #1A1A1A);
+  border-radius: 8px;
+  font: inherit;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+}
+.tp-day.is-available {
+  background: var(--tp-green-pale);
+  color: var(--tp-green);
+  border-color: var(--tp-green-pale);
+}
+.tp-day.is-available:hover {
+  border-color: var(--tp-green);
+  background: #DDEACB;
+}
+.tp-day.is-unavailable {
+  color: #BBB7A8;
+  background: transparent;
+  cursor: not-allowed;
+}
+.tp-day.is-other-month {
+  color: #D0CCC0;
+}
+.tp-day.is-other-month.is-available {
+  /* Out-of-month days can still be available (last 2 days of prev month
+     when viewing the current month, etc.) — let them stay tappable but
+     visually demoted so the focus stays on the in-month band. */
+  color: var(--tp-green);
+  opacity: 0.55;
+}
+.tp-day.is-today {
+  outline: 2px solid var(--tp-amber);
+  outline-offset: -2px;
+}
+.tp-day.is-selected {
+  background: var(--tp-green);
+  color: #fff;
+  border-color: var(--tp-green);
+}
+.tp-day.is-selected.is-today {
+  outline-color: var(--tp-amber-light);
+}
+
+.tp-month-empty {
+  margin: 12px 4px 0;
+  text-align: center;
+  font-size: 14px;
+  color: var(--tp-muted);
+  font-style: italic;
+}
+.tp-error {
+  margin: 12px 4px 0;
+  font-size: 13px;
+  color: #b53b1c;
+}
+
+/* ---------- Slot list (below calendar) ---------- */
+.tp-slots {
+  background: var(--tp-bg);
+  border: 1px solid var(--tp-border);
+  border-radius: 12px;
+  padding: 14px;
+}
+.tp-slots-label {
+  margin: 0 0 10px;
+  font-family: "Barlow Condensed", "DM Sans", sans-serif;
+  font-weight: 600;
+  font-size: 16px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--tp-green);
+}
+.tp-slot-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+  gap: 8px;
+}
+.tp-slot {
+  min-height: 44px;
+  padding: 10px 10px;
+  border: 1.5px solid var(--tp-green);
+  background: var(--tp-bg);
+  color: var(--tp-green);
+  border-radius: 8px;
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+}
+.tp-slot:hover:not(:disabled) {
+  background: var(--tp-green-pale);
+}
+.tp-slot.is-selected {
+  background: var(--tp-green);
+  color: #fff;
+}
+.tp-slot-time { font-size: 15px; }
+.tp-slot-dur {
+  font-family: "Barlow Condensed", "DM Sans", sans-serif;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  opacity: 0.8;
+  font-weight: 600;
+}
+
+/* ---------- Custom time (admin only) ---------- */
+.tp-custom {
+  background: var(--tp-bg);
+  border: 1px dashed var(--tp-border);
+  border-radius: 12px;
+  padding: 12px 14px;
+}
+.tp-custom-toggle {
+  width: 100%;
+  background: transparent;
+  border: none;
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--tp-amber);
+  text-align: left;
+  cursor: pointer;
+  padding: 6px 0;
+  min-height: 32px;
+}
+.tp-custom-toggle:hover { text-decoration: underline; }
+.tp-custom-body[hidden] { display: none; }
+.tp-custom-body {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.tp-custom-help {
+  margin: 0;
+  font-size: 13px;
+  color: var(--tp-muted);
+  font-style: italic;
+}
+.tp-custom-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.tp-custom-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+  color: var(--tp-muted);
+}
+.tp-custom-field input {
+  border: 1px solid var(--tp-border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font: inherit;
+  font-size: 14px;
+  min-height: 44px;
+}
+.tp-custom-submit {
+  align-self: flex-start;
+  background: linear-gradient(135deg, var(--tp-amber-light) 0%, var(--tp-amber) 100%);
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  padding: 10px 18px;
+  font-family: inherit;
+  font-weight: 700;
+  font-size: 14px;
+  min-height: 44px;
+  cursor: pointer;
+}
+.tp-custom-submit:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.tp-custom-error {
+  margin: 0;
+  font-size: 13px;
+  color: #b53b1c;
+}
+
+/* ---------- Narrow viewports (iPhone SE ~ 320px / standard ≤ 375px) ---------- */
+@media (max-width: 420px) {
+  .tp-calendar { padding: 10px 8px 12px; }
+  .tp-month-label { font-size: 19px; }
+  .tp-grid { gap: 3px; }
+  .tp-weekdays { gap: 3px; }
+  .tp-weekdays > span { padding: 4px 0; font-size: 11px; }
+  .tp-day { font-size: 14px; border-radius: 7px; }
+  .tp-slot-grid { grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); }
+  .tp-custom-fields { grid-template-columns: 1fr; }
+}

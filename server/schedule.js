@@ -120,7 +120,11 @@ async function loadAll() {
       label: l.booking.serviceLabel || "Booking",
       customer: l.contact?.name || "Customer",
       address: l.contact?.address || "",
-      status: l.crm?.status
+      status: l.crm?.status,
+      // Mirror from lead.booking — the cancel route writes status here so
+      // legacy CRM/portal consumers see the cancellation without rewiring.
+      bookingStatus: l.booking.status || "confirmed",
+      cancelledAt: l.booking.cancelledAt || null
     }));
   if (settingsResp.ok) {
     defaults = settingsResp.defaults;
@@ -174,20 +178,27 @@ function render() {
     // so screen readers + keyboard users can also activate them.
     const dayBookings = bookings.filter((b) => sameDay(new Date(b.start), day));
     dayBookings.forEach((b) => {
+      const isCancelled = b.bookingStatus === "cancelled";
       const card = document.createElement("button");
       card.type = "button";
-      card.className = "schedule-event schedule-booking";
-      card.title = "Click to reschedule this appointment";
+      card.className = "schedule-event schedule-booking" + (isCancelled ? " is-cancelled" : "");
+      card.title = isCancelled
+        ? "Cancelled — click for details / delete"
+        : "Click to manage this appointment";
       card.dataset.leadId = b.id;
       card.dataset.start = b.start;
+      card.dataset.bookingStatus = b.bookingStatus;
       card.innerHTML = `
         <span class="event-time">${escapeHtml(fmtTime(b.start))} – ${escapeHtml(fmtTime(b.end))}</span>
         <strong>${escapeHtml(b.label)}</strong>
         <span>${escapeHtml(b.customer)}</span>
-        <span class="event-reschedule-hint">📅 Reschedule</span>
+        ${isCancelled
+          ? `<span class="event-cancelled-pill">Cancelled</span>`
+          : `<span class="event-reschedule-hint">📅 Manage</span>`}
       `;
       dayCol.append(card);
-      totalBookedMs += new Date(b.end) - new Date(b.start);
+      // Cancelled bookings don't consume booked-hours on the totals strip.
+      if (!isCancelled) totalBookedMs += new Date(b.end) - new Date(b.start);
     });
 
     // Blocks on this day
@@ -217,7 +228,11 @@ function render() {
     scheduleWeek.append(dayCol);
   }
 
+  // Week-total badge: count CONFIRMED bookings only. Cancelled bookings
+  // remain on the canvas (greyed) but don't contribute to the headline
+  // "N bookings this week" number — they're not real work for Patrick.
   weekBookings.textContent = bookings.filter((b) => {
+    if (b.bookingStatus === "cancelled") return false;
     const t = new Date(b.start).getTime();
     return t >= weekStart.getTime() && t < addDays(weekStart, 7).getTime();
   }).length;
@@ -290,19 +305,21 @@ nextWeekBtn.addEventListener("click", () => { weekStart = addDays(weekStart, 7);
 // re-rendered every week-change, so attaching per-card listeners is
 // fragile — one missed re-attachment leaves dead cards. Delegating
 // to scheduleWeek (which exists for the page lifetime) means the
-// reschedule click ALWAYS fires regardless of when the cards were
-// rendered or how many times the grid has been redrawn.
+// click ALWAYS fires regardless of when the cards were rendered.
+//
+// Click no longer goes straight to reschedule — instead it opens the
+// action panel (Reschedule / Cancel / Delete) so Patrick can pick the
+// right branch per Brief B §3.3.
 scheduleWeek.addEventListener("click", (event) => {
   const card = event.target.closest(".schedule-booking");
   if (!card) return;
-  if (typeof window.openCrmReschedule !== "function") return;
   const leadId = card.dataset.leadId;
   const start = card.dataset.start;
   if (!leadId) return;
-  window.openCrmReschedule({
+  openBookingActionPanel({
     leadId,
     scheduledFor: start || undefined,
-    onDone: () => loadAll().then(render).catch(() => {})
+    bookingStatus: card.dataset.bookingStatus || "confirmed"
   });
 });
 
@@ -435,6 +452,10 @@ function resetBookingForm() {
   if (bookingPropertyResults) {
     bookingPropertyResults.hidden = true;
     bookingPropertyResults.innerHTML = "";
+  }
+  if (typeof bookingPickerDestroy === "function") {
+    try { bookingPickerDestroy(); } catch (_) {}
+    bookingPickerDestroy = null;
   }
   bookingSlotResults.innerHTML = "";
   bookingSlotHelp.hidden = false;
@@ -569,7 +590,14 @@ function scheduleAvailLookup() {
   el?.addEventListener("blur", scheduleAvailLookup);
 });
 
-async function loadAvailability() {
+let bookingPickerDestroy = null;
+
+// Mount (or re-mount) the shared month-calendar picker into the +Book
+// modal's slot host. The loader closes over the current form inputs and
+// rebuilds the URL each fetch — so any change to service / address that
+// triggers scheduleAvailLookup() ends up calling mountTimePicker again
+// with the same host, and the picker re-renders against the new query.
+function loadAvailability() {
   const serviceKey = bookingService.value;
   const address = bookingAddress.value.trim();
   if (!serviceKey || !address) {
@@ -578,114 +606,40 @@ async function loadAvailability() {
     bookingSlotResults.innerHTML = "";
     bookingSlotStart.value = "";
     bookingSubmit.disabled = true;
+    if (typeof bookingPickerDestroy === "function") {
+      try { bookingPickerDestroy(); } catch (_) {}
+      bookingPickerDestroy = null;
+    }
     return;
   }
-  // Don't refetch if nothing meaningful changed.
   const key = `${serviceKey}|${address}`;
-  if (key === bookingAvailLastKey && bookingSlotResults.children.length) return;
+  if (key === bookingAvailLastKey && bookingPickerDestroy) return;
   bookingAvailLastKey = key;
-  bookingSlotHelp.hidden = false;
-  bookingSlotHelp.textContent = "Loading slots…";
-  bookingSlotResults.innerHTML = "";
+  bookingSlotHelp.hidden = true;
   bookingSlotStart.value = "";
   bookingSubmit.disabled = true;
-  try {
-    const url = `/api/booking/availability?service=${encodeURIComponent(serviceKey)}&address=${encodeURIComponent(address)}`;
-    const r = await fetch(url);
-    const data = await r.json();
-    if (!data.ok) throw new Error((data.errors || ["Couldn't load slots."]).join(" "));
-    renderSlotResults(data.days || []);
-  } catch (err) {
+  if (typeof window.mountTimePicker !== "function") {
     bookingSlotHelp.hidden = false;
-    bookingSlotHelp.textContent = err.message || "Couldn't load slots.";
-  }
-}
-
-// Bucket a day's slots into Morning / Midday / Afternoon / Evening.
-// Returns the FIRST available slot per bucket so the time picker is
-// max 4 buttons per day. Same logic as the reschedule + follow-up
-// pickers — keep them in sync.
-function condenseSlotsForDay(slots) {
-  const buckets = [
-    { key: "morning",   label: "Morning",   from: 8,  to: 11 },
-    { key: "midday",    label: "Midday",    from: 11, to: 14 },
-    { key: "afternoon", label: "Afternoon", from: 14, to: 17 },
-    { key: "evening",   label: "Evening",   from: 17, to: 22 }
-  ];
-  return buckets
-    .map((b) => ({
-      ...b,
-      slot: (slots || []).find((s) => {
-        const h = new Date(s.start).getHours();
-        return h >= b.from && h < b.to;
-      })
-    }))
-    .filter((b) => b.slot);
-}
-
-// Date-first picker. Vertical list of date rows; tapping one expands
-// its 4 time buckets inline below. Only one date open at a time.
-// No drawers, no slides — single-panel inline expand.
-function renderSlotResults(days) {
-  bookingSlotResults.innerHTML = "";
-  let totalDays = 0;
-  days.forEach((day) => {
-    if ((day.slots || []).length) totalDays++;
-  });
-  if (!totalDays) {
-    bookingSlotHelp.hidden = true;
-    const empty = document.createElement("p");
-    empty.className = "booking-slot-empty";
-    empty.textContent = "No available slots in the next 14 days. Try a different service or check the working-hours rules below.";
-    bookingSlotResults.appendChild(empty);
+    bookingSlotHelp.textContent = "Time picker failed to load. Refresh the page and try again.";
     return;
   }
-  bookingSlotHelp.hidden = true;
-  days.forEach((day) => {
-    const condensed = condenseSlotsForDay(day.slots);
-    if (!condensed.length) return;
-    const dateBtn = document.createElement("button");
-    dateBtn.type = "button";
-    dateBtn.className = "booking-slot-date";
-    dateBtn.innerHTML = `
-      <span class="booking-slot-date-label"></span>
-      <span class="booking-slot-date-count"></span>
-    `;
-    dateBtn.querySelector(".booking-slot-date-label").textContent = day.label || day.date || "";
-    dateBtn.querySelector(".booking-slot-date-count").textContent = `${condensed.length} time${condensed.length === 1 ? "" : "s"}`;
-    const times = document.createElement("div");
-    times.className = "booking-slot-times";
-    times.hidden = true;
-    condensed.forEach((b) => {
-      const btn = document.createElement("button");
-      btn.type = "button";
-      btn.className = "booking-slot-btn";
-      btn.dataset.slotStart = b.slot.start;
-      const time = new Date(b.slot.start).toLocaleTimeString("en-CA", { hour: "numeric", minute: "2-digit" });
-      btn.innerHTML = `${time}<span class="booking-slot-bucket">${b.label}</span>`;
-      btn.addEventListener("click", () => {
-        bookingSlotResults.querySelectorAll(".booking-slot-btn.is-selected")
-          .forEach((x) => x.classList.remove("is-selected"));
-        btn.classList.add("is-selected");
-        bookingSlotStart.value = b.slot.start;
-        bookingSubmit.disabled = false;
-      });
-      times.appendChild(btn);
-    });
-    dateBtn.addEventListener("click", () => {
-      bookingSlotResults.querySelectorAll(".booking-slot-date.is-open").forEach((d) => d.classList.remove("is-open"));
-      bookingSlotResults.querySelectorAll(".booking-slot-times").forEach((t) => { t.hidden = true; });
-      const wasOpen = dateBtn.dataset.open === "1";
-      if (!wasOpen) {
-        dateBtn.classList.add("is-open");
-        times.hidden = false;
-        dateBtn.dataset.open = "1";
-      } else {
-        dateBtn.dataset.open = "0";
-      }
-    });
-    bookingSlotResults.appendChild(dateBtn);
-    bookingSlotResults.appendChild(times);
+  bookingPickerDestroy = window.mountTimePicker(bookingSlotResults, {
+    mode: "admin",
+    allowCustomTime: true,
+    loadAvailability: async ({ from, to }) => {
+      const url = `/api/booking/availability`
+        + `?service=${encodeURIComponent(serviceKey)}`
+        + `&address=${encodeURIComponent(address)}`
+        + `&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`;
+      const r = await fetch(url, { cache: "no-store" });
+      const data = await r.json();
+      if (!data.ok) throw new Error((data.errors || ["Couldn't load slots."]).join(" "));
+      return { days: data.days || [] };
+    },
+    onSelect: (iso) => {
+      bookingSlotStart.value = iso;
+      bookingSubmit.disabled = false;
+    }
   });
 }
 
@@ -784,5 +738,276 @@ function escapeHtml(s) {
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
 }
+
+// ---------------------------------------------------------------
+// Booking action panel — opens when a card on the canvas is clicked.
+// Branches to Reschedule (shared crm-reschedule modal), Cancel (new
+// modal with reason + notify), or Delete (admin-only, hard delete).
+// ---------------------------------------------------------------
+
+const actionDialog          = document.getElementById("bookingActionDialog");
+const actionClose           = document.getElementById("bookingActionClose");
+const actionSummary         = document.getElementById("bookingActionSummary");
+const actionRescheduleBtn   = document.getElementById("bookingActionReschedule");
+const actionCancelBtn       = document.getElementById("bookingActionCancel");
+const actionDeleteBtn       = document.getElementById("bookingActionDelete");
+const actionStatus          = document.getElementById("bookingActionStatus");
+
+const cancelDialog          = document.getElementById("cancelBookingDialog");
+const cancelClose           = document.getElementById("cancelBookingClose");
+const cancelBack            = document.getElementById("cancelBookingBack");
+const cancelForm            = document.getElementById("cancelBookingForm");
+const cancelReason          = document.getElementById("cancelBookingReason");
+const cancelNotify          = document.getElementById("cancelBookingNotify");
+const cancelSummary         = document.getElementById("cancelBookingSummary");
+const cancelSubmit          = document.getElementById("cancelBookingSubmit");
+const cancelError           = document.getElementById("cancelBookingError");
+
+const deleteDialog          = document.getElementById("deleteBookingDialog");
+const deleteClose           = document.getElementById("deleteBookingClose");
+const deleteBack            = document.getElementById("deleteBookingBack");
+const deleteForm            = document.getElementById("deleteBookingForm");
+const deleteSummary         = document.getElementById("deleteBookingSummary");
+const deleteExpectedIdEl    = document.getElementById("deleteBookingExpectedId");
+const deleteConfirmInput    = document.getElementById("deleteBookingConfirmInput");
+const deleteSubmit          = document.getElementById("deleteBookingSubmit");
+const deleteError           = document.getElementById("deleteBookingError");
+
+// Pending action context — the leadId + resolved bookingId + the
+// summary fields are stashed here so the Cancel + Delete dialogs can
+// be opened from the action panel and read the same record without a
+// second lookup.
+let pendingAction = null; // { leadId, scheduledFor, bookingId, summary, bookingStatus }
+
+// Admin role gate. Hide the Delete button entirely for tech users so
+// the visible affordance matches their permissions. The server still
+// enforces requireAdmin on DELETE — this is just to avoid showing a
+// button that would 403.
+let viewerRole = null;
+(async function detectRole() {
+  try {
+    const r = await fetch("/api/session", { cache: "no-store" });
+    const data = await r.json();
+    // /api/session returns { ok, authenticated, role, user } — role is
+    // top-level. Default null = "not admin", so Delete stays hidden.
+    if (data && data.ok && data.authenticated) viewerRole = data.role || null;
+  } catch (_) { /* leave null; Delete stays hidden by default */ }
+})();
+
+function showDialog(dialog) {
+  if (!dialog) return;
+  if (typeof dialog.showModal === "function") dialog.showModal();
+  else dialog.setAttribute("open", "");
+}
+function closeDialog(dialog) {
+  if (!dialog) return;
+  if (typeof dialog.close === "function") dialog.close();
+  else dialog.removeAttribute("open");
+}
+
+function summaryHtml({ label, customer, address, scheduledFor, status }) {
+  const when = scheduledFor
+    ? new Date(scheduledFor).toLocaleString("en-CA", {
+        weekday: "long", month: "long", day: "numeric", hour: "numeric", minute: "2-digit"
+      })
+    : "—";
+  const statusRow = status === "cancelled"
+    ? `<dt>Status</dt><dd><strong style="color:#7A7A72;">Cancelled</strong></dd>`
+    : "";
+  return `
+    <dt>Service</dt><dd>${escapeHtml(label || "Booking")}</dd>
+    <dt>Customer</dt><dd>${escapeHtml(customer || "—")}</dd>
+    <dt>Address</dt><dd>${escapeHtml(address || "—")}</dd>
+    <dt>When</dt><dd>${escapeHtml(when)}</dd>
+    ${statusRow}
+  `;
+}
+
+async function resolveBookingByLead(leadId, scheduledFor) {
+  // Same lookup the reschedule modal uses — match exact start time when
+  // we have it (a lead may have a follow-up plus an original booking).
+  // Returns the booking record, or null if none exists yet.
+  const r = await fetch(`/api/bookings?leadId=${encodeURIComponent(leadId)}`);
+  const data = await r.json();
+  if (!data.ok || !Array.isArray(data.bookings) || !data.bookings.length) return null;
+  if (scheduledFor) {
+    const exact = data.bookings.find((b) => b.scheduledFor === scheduledFor);
+    if (exact) return exact;
+  }
+  return data.bookings[0];
+}
+
+async function openBookingActionPanel({ leadId, scheduledFor, bookingStatus }) {
+  if (!leadId) return;
+  // Find the matching booking row from the cached canvas state so we can
+  // populate the summary instantly (the canonical record fetch happens
+  // in the background and updates pendingAction.bookingId before the
+  // user reaches the Cancel/Delete flows).
+  const localMatch = bookings.find((b) => b.id === leadId && (!scheduledFor || b.start === scheduledFor));
+  const summary = localMatch
+    ? { label: localMatch.label, customer: localMatch.customer, address: localMatch.address, scheduledFor: localMatch.start, status: localMatch.bookingStatus }
+    : { label: "Booking", customer: "", address: "", scheduledFor };
+  pendingAction = { leadId, scheduledFor, bookingId: null, summary, bookingStatus: bookingStatus || "confirmed" };
+  actionSummary.innerHTML = summaryHtml(summary);
+  actionStatus.textContent = "";
+  // Reschedule + Cancel are meaningless on an already-cancelled booking
+  // — hide both, leaving only Delete (admin) on the panel.
+  const cancelled = pendingAction.bookingStatus === "cancelled";
+  actionRescheduleBtn.hidden = cancelled;
+  actionCancelBtn.hidden = cancelled;
+  actionDeleteBtn.hidden = viewerRole !== "admin";
+  showDialog(actionDialog);
+  // Resolve the canonical bookingId in the background — the user can
+  // click Reschedule (which calls openCrmReschedule by leadId anyway)
+  // or wait briefly for Cancel/Delete to enable.
+  resolveBookingByLead(leadId, scheduledFor).then((rec) => {
+    if (!rec) return;
+    if (pendingAction && pendingAction.leadId === leadId) {
+      pendingAction.bookingId = rec.id;
+    }
+  }).catch(() => {});
+}
+
+actionClose?.addEventListener("click", () => closeDialog(actionDialog));
+actionRescheduleBtn?.addEventListener("click", () => {
+  if (!pendingAction || typeof window.openCrmReschedule !== "function") return;
+  const { leadId, scheduledFor } = pendingAction;
+  closeDialog(actionDialog);
+  window.openCrmReschedule({
+    leadId,
+    scheduledFor: scheduledFor || undefined,
+    onDone: () => loadAll().catch(() => {})
+  });
+});
+
+actionCancelBtn?.addEventListener("click", async () => {
+  if (!pendingAction) return;
+  if (!pendingAction.bookingId) {
+    actionStatus.textContent = "Resolving booking…";
+    pendingAction.bookingId = (await resolveBookingByLead(pendingAction.leadId, pendingAction.scheduledFor))?.id || null;
+    actionStatus.textContent = "";
+  }
+  if (!pendingAction.bookingId) {
+    actionStatus.textContent = "Couldn't find the booking record — refresh and try again.";
+    return;
+  }
+  closeDialog(actionDialog);
+  cancelSummary.innerHTML = summaryHtml(pendingAction.summary);
+  cancelReason.value = "";
+  cancelNotify.checked = true;
+  cancelError.hidden = true;
+  cancelSubmit.disabled = false;
+  cancelSubmit.textContent = "Cancel booking";
+  showDialog(cancelDialog);
+});
+
+actionDeleteBtn?.addEventListener("click", async () => {
+  if (!pendingAction) return;
+  if (!pendingAction.bookingId) {
+    actionStatus.textContent = "Resolving booking…";
+    pendingAction.bookingId = (await resolveBookingByLead(pendingAction.leadId, pendingAction.scheduledFor))?.id || null;
+    actionStatus.textContent = "";
+  }
+  if (!pendingAction.bookingId) {
+    actionStatus.textContent = "Couldn't find the booking record — refresh and try again.";
+    return;
+  }
+  closeDialog(actionDialog);
+  deleteSummary.innerHTML = summaryHtml(pendingAction.summary);
+  deleteExpectedIdEl.textContent = pendingAction.bookingId;
+  deleteConfirmInput.value = "";
+  deleteSubmit.disabled = true;
+  deleteError.hidden = true;
+  showDialog(deleteDialog);
+});
+
+cancelClose?.addEventListener("click", () => closeDialog(cancelDialog));
+cancelBack?.addEventListener("click", () => closeDialog(cancelDialog));
+deleteClose?.addEventListener("click", () => closeDialog(deleteDialog));
+deleteBack?.addEventListener("click", () => closeDialog(deleteDialog));
+
+cancelForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (!pendingAction?.bookingId) return;
+  const reason = cancelReason.value.trim();
+  if (!reason) {
+    cancelError.hidden = false;
+    cancelError.textContent = "Reason is required.";
+    cancelReason.focus();
+    return;
+  }
+  cancelError.hidden = true;
+  cancelSubmit.disabled = true;
+  cancelSubmit.textContent = "Cancelling…";
+  try {
+    const r = await fetch(`/api/bookings/${encodeURIComponent(pendingAction.bookingId)}/cancel`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        reason,
+        notifyCustomer: cancelNotify.checked
+      })
+    });
+    const data = await r.json();
+    if (!r.ok || !data.ok) {
+      throw new Error((data.errors || ["Couldn't cancel."]).join(" "));
+    }
+    closeDialog(cancelDialog);
+    // Surface email-send failure as a toast so Patrick knows the cancel
+    // committed but the customer didn't get the email. The cancel itself
+    // is already in the books — this is just a heads-up to follow up.
+    if (data.notify && data.notify.ok === false && !data.notify.skipped) {
+      settingsStatus.textContent = "Booking cancelled. Customer email failed — retry from settings if needed.";
+    } else if (data.notify && data.notify.skipped) {
+      settingsStatus.textContent = "Booking cancelled. (Customer not notified per checkbox.)";
+    } else {
+      settingsStatus.textContent = "Booking cancelled. Customer notified.";
+    }
+    setTimeout(() => { settingsStatus.textContent = ""; }, 6000);
+    await loadAll();
+  } catch (err) {
+    cancelError.hidden = false;
+    cancelError.textContent = err.message || "Couldn't cancel.";
+    cancelSubmit.disabled = false;
+    cancelSubmit.textContent = "Cancel booking";
+  }
+});
+
+deleteConfirmInput?.addEventListener("input", () => {
+  const expected = pendingAction?.bookingId || "";
+  deleteSubmit.disabled = deleteConfirmInput.value.trim() !== expected;
+  deleteError.hidden = true;
+});
+
+deleteForm?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (!pendingAction?.bookingId) return;
+  if (deleteConfirmInput.value.trim() !== pendingAction.bookingId) {
+    deleteError.hidden = false;
+    deleteError.textContent = "Type the booking ID exactly as shown.";
+    return;
+  }
+  deleteError.hidden = true;
+  deleteSubmit.disabled = true;
+  deleteSubmit.textContent = "Deleting…";
+  try {
+    const r = await fetch(`/api/bookings/${encodeURIComponent(pendingAction.bookingId)}`, { method: "DELETE" });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok || !data.ok) {
+      const msg = (data.errors || ["Couldn't delete."]).join(" ");
+      const tail = data.linkedWoId ? ` (Linked: ${data.linkedWoId})` : "";
+      throw new Error(msg + tail);
+    }
+    closeDialog(deleteDialog);
+    settingsStatus.textContent = `Booking ${pendingAction.bookingId} permanently deleted.`;
+    setTimeout(() => { settingsStatus.textContent = ""; }, 6000);
+    await loadAll();
+  } catch (err) {
+    deleteError.hidden = false;
+    deleteError.textContent = err.message || "Couldn't delete.";
+    deleteSubmit.disabled = false;
+    deleteSubmit.textContent = "Permanently delete";
+  }
+});
 
 loadAll();

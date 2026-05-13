@@ -7,9 +7,9 @@
 // inside the card. NO bottom-sheet, NO slide-up, NO drawer. Patrick
 // explicitly does not want sliding panels in any modal.
 //
-// The same /api/bookings/:id/availability + /api/bookings/:id/reschedule
-// endpoints back this UI; the customer-side portal modal is a parallel
-// implementation against /api/portal/:token/* routes.
+// The day + time picker is the shared component from /js/time-picker.js
+// (mode: "admin", custom-time enabled). Admin reschedule uses
+// /api/bookings/:id/availability + /api/bookings/:id/reschedule.
 
 (function () {
   if (window.openCrmReschedule) return; // already loaded
@@ -20,6 +20,7 @@
   let onDoneCb = null;
   let selectedSlot = "";
   let bookingId = "";
+  let pickerDestroy = null;
 
   function ensureModal() {
     if (modal) return modal;
@@ -37,7 +38,7 @@
         <div class="crm-resched-body">
           <p class="crm-resched-current">Currently scheduled: <strong data-current>—</strong></p>
           <p class="crm-resched-help" data-help>Loading available times…</p>
-          <div class="crm-resched-slots" data-slots></div>
+          <div class="crm-resched-picker" data-picker></div>
           <label class="crm-resched-reason-label">Reason / note (optional)</label>
           <textarea class="crm-resched-reason" rows="2" maxlength="200" placeholder="e.g. customer asked to push back a day"></textarea>
           <div class="crm-resched-actions">
@@ -61,98 +62,44 @@
     return modal;
   }
 
-  // Bucket a day's slots into Morning / Midday / Afternoon / Evening.
-  // Returns the FIRST slot in each bucket so the time picker shows max
-  // 4 buttons. Empty buckets are skipped.
-  function condenseSlotsForDay(slots) {
-    const buckets = [
-      { key: "morning",   label: "Morning",   from: 8,  to: 11 },
-      { key: "midday",    label: "Midday",    from: 11, to: 14 },
-      { key: "afternoon", label: "Afternoon", from: 14, to: 17 },
-      { key: "evening",   label: "Evening",   from: 17, to: 22 }
-    ];
-    return buckets
-      .map((b) => ({
-        ...b,
-        slot: slots.find((s) => {
-          const h = new Date(s.start).getHours();
-          return h >= b.from && h < b.to;
-        })
-      }))
-      .filter((b) => b.slot);
-  }
-
-  // Render a date-first picker. The user picks a date from the list
-  // (cleaner + more scannable than 25 days of buttons stacked), then
-  // picks a time bucket below the chosen date. Only one date stays
-  // expanded at a time. Inline expand — no slide / drawer / sheet.
-  function renderSlots(days) {
-    const slotsEl = modal.querySelector("[data-slots]");
-    const helpEl = modal.querySelector("[data-help]");
-    slotsEl.innerHTML = "";
-    let totalDays = 0;
-    days.forEach((day) => {
-      const condensed = condenseSlotsForDay(day.slots || []);
-      if (!condensed.length) return;
-      totalDays++;
-      const dateBtn = document.createElement("button");
-      dateBtn.type = "button";
-      dateBtn.className = "crm-resched-date";
-      dateBtn.innerHTML = `
-        <span class="crm-resched-date-label">${escapeHtml(day.label || day.date || "")}</span>
-        <span class="crm-resched-date-count">${condensed.length} time${condensed.length === 1 ? "" : "s"}</span>
-      `;
-      const timesRow = document.createElement("div");
-      timesRow.className = "crm-resched-times";
-      timesRow.hidden = true;
-      condensed.forEach((b) => {
-        const btn = document.createElement("button");
-        btn.type = "button";
-        btn.className = "crm-resched-slot-btn";
-        const time = new Date(b.slot.start).toLocaleTimeString("en-CA", {
-          hour: "numeric", minute: "2-digit"
-        });
-        btn.innerHTML = `${time}<span class="crm-resched-bucket">${b.label}</span>`;
-        btn.addEventListener("click", () => {
-          slotsEl.querySelectorAll(".crm-resched-slot-btn.is-selected").forEach((x) => x.classList.remove("is-selected"));
-          btn.classList.add("is-selected");
-          selectedSlot = b.slot.start;
-          modal.querySelector(".crm-resched-submit").disabled = false;
-          modal.querySelector(".crm-resched-error").hidden = true;
-        });
-        timesRow.appendChild(btn);
-      });
-      dateBtn.addEventListener("click", () => {
-        // Toggle: collapse all other dates, expand this one.
-        slotsEl.querySelectorAll(".crm-resched-date.is-open").forEach((d) => d.classList.remove("is-open"));
-        slotsEl.querySelectorAll(".crm-resched-times").forEach((t) => { t.hidden = true; });
-        const wasOpen = dateBtn.dataset.open === "1";
-        if (!wasOpen) {
-          dateBtn.classList.add("is-open");
-          timesRow.hidden = false;
-          dateBtn.dataset.open = "1";
-        } else {
-          dateBtn.dataset.open = "0";
-        }
-      });
-      slotsEl.appendChild(dateBtn);
-      slotsEl.appendChild(timesRow);
-    });
-    if (!totalDays) {
+  // Drive the shared time picker from the admin reschedule endpoint. Each
+  // visible-range request hits /api/bookings/:id/availability with ?from/?to.
+  // onSelect captures the picked slot (regular or admin custom-time) and
+  // enables the Confirm new time button.
+  function mountPicker() {
+    const host = modal.querySelector("[data-picker]");
+    if (typeof window.mountTimePicker !== "function") {
+      const helpEl = modal.querySelector("[data-help]");
       helpEl.hidden = false;
-      helpEl.textContent = "No available slots in the next 30 days. Block the calendar for a custom time, or adjust working hours in /admin/schedule.";
-    } else {
-      helpEl.hidden = true;
+      helpEl.textContent = "Time picker failed to load. Refresh the page and try again.";
+      return;
     }
-  }
-
-  function escapeHtml(value) {
-    return String(value ?? "")
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;")
-      .replace(/'/g, "&#039;");
+    pickerDestroy = window.mountTimePicker(host, {
+      mode: "admin",
+      allowCustomTime: true,
+      loadAvailability: async ({ from, to }) => {
+        if (!bookingId) return { days: [] };
+        const url = `/api/bookings/${encodeURIComponent(bookingId)}/availability`
+          + `?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`;
+        const r = await fetch(url, { cache: "no-store" });
+        const data = await r.json();
+        if (!data.ok) throw new Error((data.errors || ["Couldn't load times."]).join(" "));
+        // The first fetch carries `currentScheduledFor` — refresh the
+        // header line so the admin always sees the current booking time.
+        if (data.currentScheduledFor) {
+          const d = new Date(data.currentScheduledFor);
+          modal.querySelector("[data-current]").textContent = d.toLocaleString("en-CA", {
+            weekday: "long", month: "long", day: "numeric", hour: "numeric", minute: "2-digit"
+          });
+        }
+        return { days: data.days || [] };
+      },
+      onSelect: (iso) => {
+        selectedSlot = iso;
+        modal.querySelector(".crm-resched-submit").disabled = false;
+        modal.querySelector(".crm-resched-error").hidden = true;
+      }
+    });
   }
 
   async function resolveBookingId({ bookingId: bid, leadId, scheduledFor }) {
@@ -188,14 +135,15 @@
     modal.hidden = false;
     document.body.style.overflow = "hidden";
     const helpEl = modal.querySelector("[data-help]");
-    const slotsEl = modal.querySelector("[data-slots]");
+    const pickerEl = modal.querySelector("[data-picker]");
     const currentEl = modal.querySelector("[data-current]");
     const errorEl = modal.querySelector(".crm-resched-error");
     const statusEl = modal.querySelector(".crm-resched-status");
     const submitEl = modal.querySelector(".crm-resched-submit");
-    helpEl.hidden = false;
-    helpEl.textContent = "Loading available times…";
-    slotsEl.innerHTML = "";
+    // Tear down any picker left from a previous open() so we don't double-mount.
+    if (typeof pickerDestroy === "function") { try { pickerDestroy(); } catch (_) {} pickerDestroy = null; }
+    helpEl.hidden = true;
+    pickerEl.innerHTML = "";
     currentEl.textContent = "—";
     errorEl.hidden = true;
     statusEl.textContent = "";
@@ -205,16 +153,7 @@
       const id = await resolveBookingId(opts);
       if (!id) throw new Error("No booking record found for this customer.");
       bookingId = id;
-      const r = await fetch(`/api/bookings/${encodeURIComponent(id)}/availability`, { cache: "no-store" });
-      const data = await r.json();
-      if (!data.ok) throw new Error((data.errors || ["Couldn't load times."]).join(" "));
-      if (data.currentScheduledFor) {
-        const d = new Date(data.currentScheduledFor);
-        currentEl.textContent = d.toLocaleString("en-CA", {
-          weekday: "long", month: "long", day: "numeric", hour: "numeric", minute: "2-digit"
-        });
-      }
-      renderSlots(data.days || []);
+      mountPicker();
     } catch (err) {
       helpEl.hidden = false;
       helpEl.textContent = err.message || "Couldn't load times.";
@@ -228,6 +167,7 @@
     selectedSlot = "";
     bookingId = "";
     onDoneCb = null;
+    if (typeof pickerDestroy === "function") { try { pickerDestroy(); } catch (_) {} pickerDestroy = null; }
   }
 
   async function submit() {

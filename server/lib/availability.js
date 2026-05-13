@@ -364,12 +364,84 @@ function groupByDay(slots) {
   return Array.from(out.values());
 }
 
+// Same as groupByDay but as a Map keyed by date string. Used by
+// expandDaysToRange so we can splice slots back in by O(1) lookup.
+function groupByDayMap(slots) {
+  const map = new Map();
+  for (const day of groupByDay(slots)) map.set(day.date, day);
+  return map;
+}
+
+// Parse a "YYYY-MM-DD" string into a local-midnight Date. Returns null on
+// anything that doesn't parse cleanly — callers can fall back to defaults.
+function parseLocalDateKey(value) {
+  if (!value || typeof value !== "string") return null;
+  const m = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return null;
+  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  d.setHours(0, 0, 0, 0);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function dateKey(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+// Build a full date-by-date array for [from..to] inclusive, splicing in
+// the slot-bearing days returned by the engine and backfilling everything
+// else as { slots: [], reason }.
+//
+//   reason: "past"            — date is before "today" (local).
+//   reason: "closed"          — day-of-week's hours are null (Sunday by default).
+//   reason: "no_availability" — open day but no slot survived the engine
+//                               (fully booked / blocked / lead-time pinch).
+//
+// The picker just needs an empty slots array to render a day as unavailable;
+// the reason is purely informational (tooltip / future use).
+function expandDaysToRange(slots, { from, to, hours, now } = {}) {
+  if (!(from instanceof Date) || !(to instanceof Date)) {
+    // Defensive — fall back to the old (slot-bearing-only) shape.
+    return groupByDay(slots);
+  }
+  const daysWithSlots = groupByDayMap(slots);
+  const today = new Date(now || Date.now());
+  today.setHours(0, 0, 0, 0);
+  const dayHours = hours || DEFAULT_HOURS;
+  const out = [];
+  const cursor = new Date(from);
+  cursor.setHours(0, 0, 0, 0);
+  const last = new Date(to);
+  last.setHours(0, 0, 0, 0);
+  while (cursor.getTime() <= last.getTime()) {
+    const key = dateKey(cursor);
+    const existing = daysWithSlots.get(key);
+    if (existing && existing.slots.length) {
+      out.push(existing);
+    } else {
+      let reason = "no_availability";
+      if (cursor.getTime() < today.getTime()) reason = "past";
+      else if (!dayHours[cursor.getDay()]) reason = "closed";
+      out.push({
+        date: key,
+        label: cursor.toLocaleDateString("en-CA", { weekday: "long", month: "short", day: "numeric" }),
+        slots: [],
+        reason
+      });
+    }
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  return out;
+}
+
 module.exports = {
   BOOKABLE_SERVICES,
   DEFAULT_HOURS,
   DEFAULT_SETTINGS,
   listAvailableSlots,
   groupByDay,
+  groupByDayMap,
+  expandDaysToRange,
+  parseLocalDateKey,
   parseHHmmToMinutes,
   minutesToHHmm
 };

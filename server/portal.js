@@ -786,28 +786,7 @@ const reschedError    = document.getElementById("reschedError");
 const reschedStatus   = document.getElementById("reschedStatus");
 
 let reschedSelectedSlot = "";
-
-// Bucket the day's slots into Morning / Midday / Afternoon / Evening,
-// returning the FIRST available slot in each bucket. So instead of a
-// 14-button strip, the customer sees max 4 buttons per day with a clear
-// time-of-day label. Buckets keep the picker scannable.
-function condenseSlotsForDay(slots) {
-  const buckets = [
-    { key: "morning",   label: "Morning",   from: 8,  to: 11 },
-    { key: "midday",    label: "Midday",    from: 11, to: 14 },
-    { key: "afternoon", label: "Afternoon", from: 14, to: 17 },
-    { key: "evening",   label: "Evening",   from: 17, to: 22 }
-  ];
-  return buckets
-    .map((b) => ({
-      ...b,
-      slot: slots.find((s) => {
-        const h = new Date(s.start).getHours();
-        return h >= b.from && h < b.to;
-      })
-    }))
-    .filter((b) => b.slot);
-}
+let reschedPickerDestroy = null;
 
 function openReschedModal() {
   if (!reschedModal) return;
@@ -822,9 +801,17 @@ function closeReschedModal() {
   if (reschedSubmit) reschedSubmit.disabled = true;
   if (reschedError) reschedError.hidden = true;
   if (reschedStatus) reschedStatus.textContent = "";
+  if (typeof reschedPickerDestroy === "function") {
+    try { reschedPickerDestroy(); } catch (_) {}
+    reschedPickerDestroy = null;
+  }
   if (reschedSlots) reschedSlots.innerHTML = "";
 }
 
+// Preflight + picker mount. The /reschedule-availability endpoint also
+// reports the 24-hour gate (tooLate); we ask for it once on open and only
+// mount the month-calendar picker if the customer is outside the gate.
+// Within 24h, the body is hidden and the "call us" panel takes over.
 reschedBtn?.addEventListener("click", async () => {
   const token = tokenFromLocation();
   if (!token) return;
@@ -833,10 +820,16 @@ reschedBtn?.addEventListener("click", async () => {
   reschedBody.hidden = true;
   reschedHelp.hidden = false;
   reschedHelp.textContent = "Loading available times…";
-  reschedSlots.innerHTML = "";
   reschedSelectedSlot = "";
   reschedSubmit.disabled = true;
+  if (typeof reschedPickerDestroy === "function") {
+    try { reschedPickerDestroy(); } catch (_) {}
+    reschedPickerDestroy = null;
+  }
+  if (reschedSlots) reschedSlots.innerHTML = "";
   try {
+    // Preflight WITHOUT from/to — small response, just the tooLate flag +
+    // the current booking time so the body header can be filled in.
     const r = await fetch(`/api/portal/${encodeURIComponent(token)}/reschedule-availability`, { cache: "no-store" });
     const data = await r.json();
     if (!data.ok) throw new Error((data.errors || ["Couldn't load times."]).join(" "));
@@ -846,79 +839,48 @@ reschedBtn?.addEventListener("click", async () => {
       return;
     }
     reschedBody.hidden = false;
+    reschedHelp.hidden = true;
     if (data.currentScheduledFor) {
       const d = new Date(data.currentScheduledFor);
       reschedCurrent.textContent = d.toLocaleString("en-CA", {
         weekday: "long", month: "long", day: "numeric", hour: "numeric", minute: "2-digit"
       });
     }
-    renderReschedSlots(data.days || []);
+    mountReschedPicker(token);
   } catch (err) {
     reschedHelp.hidden = false;
     reschedHelp.textContent = err.message || "Couldn't load available times.";
   }
 });
 
-// Date-first picker. The customer scans dates as a vertical list, taps
-// one to reveal the (max 4) time buckets for that day inline. Only one
-// date is open at a time. No drawers, no slide-up.
-function renderReschedSlots(days) {
-  reschedSlots.innerHTML = "";
-  let totalDays = 0;
-  days.forEach((day) => {
-    const condensed = condenseSlotsForDay(day.slots || []);
-    if (!condensed.length) return;
-    totalDays++;
-    const dateBtn = document.createElement("button");
-    dateBtn.type = "button";
-    dateBtn.className = "portal-resched-date";
-    dateBtn.innerHTML = `
-      <span class="portal-resched-date-label">${day.label || day.date}</span>
-      <span class="portal-resched-date-count">${condensed.length} time${condensed.length === 1 ? "" : "s"}</span>
-    `;
-    const times = document.createElement("div");
-    times.className = "portal-resched-times";
-    times.hidden = true;
-    condensed.forEach((b) => {
-      const btn = document.createElement("button");
-      btn.type = "button";
-      btn.className = "portal-resched-slot-btn";
-      btn.dataset.slotStart = b.slot.start;
-      const time = new Date(b.slot.start).toLocaleTimeString("en-CA", {
-        hour: "numeric", minute: "2-digit"
-      });
-      btn.innerHTML = `${time}<span class="portal-resched-slot-bucket">${b.label}</span>`;
-      btn.addEventListener("click", () => {
-        reschedSlots.querySelectorAll(".portal-resched-slot-btn.is-selected")
-          .forEach((b) => b.classList.remove("is-selected"));
-        btn.classList.add("is-selected");
-        reschedSelectedSlot = b.slot.start;
-        reschedSubmit.disabled = false;
-        reschedError.hidden = true;
-      });
-      times.appendChild(btn);
-    });
-    dateBtn.addEventListener("click", () => {
-      reschedSlots.querySelectorAll(".portal-resched-date.is-open").forEach((d) => d.classList.remove("is-open"));
-      reschedSlots.querySelectorAll(".portal-resched-times").forEach((t) => { t.hidden = true; });
-      const wasOpen = dateBtn.dataset.open === "1";
-      if (!wasOpen) {
-        dateBtn.classList.add("is-open");
-        times.hidden = false;
-        dateBtn.dataset.open = "1";
-      } else {
-        dateBtn.dataset.open = "0";
-      }
-    });
-    reschedSlots.appendChild(dateBtn);
-    reschedSlots.appendChild(times);
-  });
-  if (!totalDays) {
+function mountReschedPicker(token) {
+  if (typeof window.mountTimePicker !== "function") {
     reschedHelp.hidden = false;
-    reschedHelp.textContent = "No available times in the next 30 days. Please call (905) 960-0181.";
-  } else {
-    reschedHelp.hidden = true;
+    reschedHelp.textContent = "Time picker failed to load. Please refresh the page.";
+    return;
   }
+  reschedPickerDestroy = window.mountTimePicker(reschedSlots, {
+    mode: "customer",
+    loadAvailability: async ({ from, to }) => {
+      const url = `/api/portal/${encodeURIComponent(token)}/reschedule-availability`
+        + `?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`;
+      const r = await fetch(url, { cache: "no-store" });
+      const data = await r.json();
+      if (!data.ok) throw new Error((data.errors || ["Couldn't load times."]).join(" "));
+      // Rare: clock crossed the 24h boundary while the modal is open.
+      // Swap to the call-us panel; picker stays mounted but won't matter.
+      if (data.tooLate) {
+        reschedTooLate.hidden = false;
+        reschedBody.hidden = true;
+      }
+      return { days: data.days || [] };
+    },
+    onSelect: (iso) => {
+      reschedSelectedSlot = iso;
+      reschedSubmit.disabled = false;
+      reschedError.hidden = true;
+    }
+  });
 }
 
 reschedClose?.addEventListener("click", closeReschedModal);

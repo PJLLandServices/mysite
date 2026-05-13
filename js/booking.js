@@ -22,9 +22,7 @@
     address: "",
     formattedAddress: "",
     zoneCount: null,    // number 1-50 OR "unsure" (kept for booking notes)
-    selectedDate: null, // YYYY-MM-DD
-    selectedSlot: null, // { start, end, timeLabel, ... }
-    days: [],           // grouped slots from /api/booking/availability
+    selectedSlot: null, // { start, end, timeLabel, dayLabel, durationMinutes }
     services: {},       // catalog from /api/booking/services
     familyFilter: null, // when set, only services with this `family` are shown
     propertyType: "residential", // toggle on the seasonal-service grid: "residential" or "commercial"
@@ -62,11 +60,7 @@
   const addressHeading = document.getElementById("addressHeading");
   const contactHeading = document.getElementById("contactHeading");
   const dayLoading = document.getElementById("dayLoading");
-  const dayStrip = document.getElementById("dayStrip");
-  const timeSection = document.getElementById("timeSection");
-  const timeGrid = document.getElementById("timeGrid");
-  const timeLead = document.getElementById("timeLead");
-  const noSlots = document.getElementById("noSlots");
+  const timePickerHost = document.getElementById("timePickerHost");
   const whenError = document.getElementById("whenError");
   const whenLead = document.getElementById("whenLead");
   const contactSummary = document.getElementById("contactSummary");
@@ -398,17 +392,15 @@
   });
 
   // ===== Availability =====
-  async function loadAvailability() {
-    state.days = [];
-    state.selectedDate = null;
+  // The day + time picker is now a single shared component (js/time-picker.js)
+  // that renders a month-calendar + slot list. We hand it a loader function
+  // that fetches /api/booking/availability for the visible 6-week window, and
+  // an onSelect callback that captures the chosen slot and advances to the
+  // contact step. The picker itself owns its empty / loading / error states.
+  function loadAvailability() {
     state.selectedSlot = null;
-    dayLoading.hidden = false;
-    dayStrip.hidden = true;
-    timeSection.hidden = true;
-    noSlots.hidden = true;
+    dayLoading.hidden = true;
     whenError.hidden = true;
-    dayStrip.innerHTML = "";
-    timeGrid.innerHTML = "";
 
     // Personalize the heading + lead when we have the customer's name from
     // the handoff session. Otherwise fall back to the generic copy that
@@ -424,83 +416,48 @@
         `Showing real-time openings for ${state.serviceMeta.label} at ${friendlyAddress}.`;
     }
 
-    try {
-      const url = ((window.PJL_API_BASE || "") + `/api/booking/availability?service=${encodeURIComponent(state.serviceKey)}&address=${encodeURIComponent(state.address)}&days=14`);
-      const response = await fetch(url, { cache: "no-store" });
-      const data = await response.json();
-      if (!response.ok || !data.ok) throw new Error((data.errors || ["Couldn't load availability."]).join(" "));
-      state.days = data.days || [];
-      state.formattedAddress = data.address || state.address;
-      renderDays();
-    } catch (error) {
-      whenError.textContent = error.message || "We couldn't load availability right now. Please try again or call us.";
+    if (typeof window.mountTimePicker !== "function") {
+      whenError.textContent = "Time picker failed to load. Please refresh the page or call (905) 960-0181.";
       whenError.hidden = false;
-    } finally {
-      dayLoading.hidden = true;
-    }
-  }
-
-  function renderDays() {
-    dayStrip.innerHTML = "";
-    if (!state.days.length) {
-      noSlots.hidden = false;
       return;
     }
-    dayStrip.hidden = false;
-    state.days.forEach((day) => {
-      const date = new Date(`${day.date}T12:00:00`);
-      const card = document.createElement("button");
-      card.type = "button";
-      card.className = "day-card" + (day.slots.length === 0 ? " is-empty" : "");
-      card.dataset.dayDate = day.date;
-      card.disabled = day.slots.length === 0;
-      card.innerHTML = `
-        <span class="dow">${date.toLocaleDateString("en-CA", { weekday: "short" })}</span>
-        <span class="date">${date.getDate()}</span>
-        <span class="month">${date.toLocaleDateString("en-CA", { month: "short" })}</span>
-        <span class="slots-pill">${day.slots.length} slot${day.slots.length === 1 ? "" : "s"}</span>
-      `;
-      dayStrip.append(card);
+
+    window.mountTimePicker(timePickerHost, {
+      mode: "customer",
+      loadAvailability: async ({ from, to }) => {
+        const url = (window.PJL_API_BASE || "")
+          + `/api/booking/availability`
+          + `?service=${encodeURIComponent(state.serviceKey)}`
+          + `&address=${encodeURIComponent(state.address)}`
+          + `&from=${encodeURIComponent(from)}`
+          + `&to=${encodeURIComponent(to)}`;
+        const response = await fetch(url, { cache: "no-store" });
+        const data = await response.json();
+        if (!response.ok || !data.ok) {
+          throw new Error((data.errors || ["Couldn't load availability."]).join(" "));
+        }
+        // Server-canonical address — keep state in sync so the contact-step
+        // summary shows what the geocoder resolved, not what was typed.
+        state.formattedAddress = data.address || state.address;
+        return { days: data.days || [] };
+      },
+      onSelect: (iso, slotMeta) => {
+        state.selectedSlot = {
+          start: slotMeta.start || iso,
+          end: slotMeta.end || null,
+          timeLabel: slotMeta.timeLabel || new Date(iso).toLocaleTimeString("en-CA", { hour: "numeric", minute: "2-digit" }),
+          dayLabel: slotMeta.dayLabel || new Date(iso).toLocaleDateString("en-CA", { weekday: "long", month: "short", day: "numeric" }),
+          durationMinutes: slotMeta.durationMinutes || state.serviceMeta.minutes
+        };
+        // Brief debounce so the visual "selected" state lands before the
+        // contact step swaps in — matches the previous flow's feel.
+        setTimeout(() => {
+          renderContactSummary();
+          showStep("contact");
+        }, 200);
+      }
     });
   }
-
-  dayStrip.addEventListener("click", (event) => {
-    const card = event.target.closest("[data-day-date]");
-    if (!card || card.disabled) return;
-    state.selectedDate = card.dataset.dayDate;
-    dayStrip.querySelectorAll(".day-card").forEach((c) => c.classList.remove("is-active"));
-    card.classList.add("is-active");
-    renderTimes();
-  });
-
-  function renderTimes() {
-    const day = state.days.find((d) => d.date === state.selectedDate);
-    if (!day) return;
-    timeGrid.innerHTML = "";
-    timeSection.hidden = false;
-    timeLead.textContent = `${day.label} — pick a start time:`;
-    day.slots.forEach((slot) => {
-      const btn = document.createElement("button");
-      btn.type = "button";
-      btn.className = "time-btn";
-      btn.dataset.slotStart = slot.start;
-      btn.textContent = slot.timeLabel;
-      timeGrid.append(btn);
-    });
-  }
-
-  timeGrid.addEventListener("click", (event) => {
-    const btn = event.target.closest("[data-slot-start]");
-    if (!btn) return;
-    const day = state.days.find((d) => d.date === state.selectedDate);
-    state.selectedSlot = day.slots.find((s) => s.start === btn.dataset.slotStart);
-    timeGrid.querySelectorAll(".time-btn").forEach((b) => b.classList.remove("is-active"));
-    btn.classList.add("is-active");
-    setTimeout(() => {
-      renderContactSummary();
-      showStep("contact");
-    }, 250);
-  });
 
   function renderContactSummary() {
     if (!state.selectedSlot) return;
@@ -617,7 +574,6 @@
     state.serviceKey = null;
     state.serviceMeta = null;
     state.address = "";
-    state.selectedDate = null;
     state.selectedSlot = null;
     addressInput.value = "";
     bookFirst.value = "";

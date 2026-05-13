@@ -49,6 +49,12 @@ Everything else is built-in or vendored.
 ├── sprinkler-service-<town>.html               (14 service-area pages)
 ├── style.css                                   (public site CSS)
 ├── coverage-checker.js                         (Google Places + Distance Matrix)
+├── js/
+│   ├── booking.js                              (public booking flow state machine)
+│   ├── time-picker.js / time-picker.css        (shared month-calendar + slot picker)
+│   ├── pricing-injector.js                     (HTML price spans -> pricing.json)
+│   ├── sprinkler-builder.js                    (cost-tool builder)
+│   └── chat-widget.js                          (in-page chat handoff)
 ├── parts.json                                  (hardware catalog — 129 SKUs)
 ├── pricing.json                                (service pricing — single source of truth)
 ├── _partials/{nav,footer}.html                 (build.js sources)
@@ -90,7 +96,7 @@ form except where noted.
 | `work-orders.js` | Work Order | `WO-XXXXXXXX` (random alphabet) | One per visit. Zones, issues, photos, signature, on-site quote, materials packed, `paidOnSite`, `propertyEditsAppliedAt`, `intakeGuarantee.matched`, `history[]`. Lock-protected fields enforced via `SCOPE_PROTECTED_FIELDS` constant (Brief A). |
 | `quotes.js` | Quote | `Q-YYYY-NNNN` | Versioned, signed estimate. Two flavours: `ai_repair_quote` (AI chat) and `on_site_quote` (tech-built). |
 | `invoices.js` | Invoice | `I-YYYY-NNNN` | Auto-drafted by completion cascade, lifecycle draft → sent → paid → void. |
-| `bookings.js` | Booking | `BK-YYYY-NNNN` | First-class appointment record. Mirrors `lead.booking` but is canonical. |
+| `bookings.js` | Booking | `BK-YYYY-NNNN` | First-class appointment record. Mirrors `lead.booking` but is canonical. Exposes `cancel()` (soft, adds `cancelledAt/By/Reason` + history) and `remove()` (hard delete; refuses when a linked WO is past `scheduled` — caller passes `isActiveWo` to gate without coupling to work-orders.js). |
 | `projects.js` | Project | `PROJ-YYYY-NNNN` | Multi-WO container for named jobs. Lifecycle planning → active → complete → archived. |
 | `material-lists.js` | Material List | `ML-YYYY-NNNN` | Bill of materials. Line items reference parts.json SKUs + quantities + status (`need` / `ordered` / `have`). Attachable to a project / WO / quote / standalone. |
 | `purchase-orders.js` | Purchase Order | `PO-YYYY-NNNN` | One supplier's slice of a material list's `need` lines. Lifecycle draft → sent → partially_received → received → cancelled. |
@@ -100,7 +106,7 @@ form except where noted.
 | `completion-cascade.js` | — | n/a | Fires on WO status → completed. Idempotent. Creates service record on property, draft invoice (with `paidOnSiteAtCompletion` flag), customer + admin emails, warranty stamp. Applies property edits via `computePropertyEdits()` (Brief D — zone/controller diffs, new zones flagged for Patrick review) gated by `wo.propertyEditsAppliedAt`. Logs `cascade_fire`, `invoice_drafted` (when a draft was created), and `property_edits_applied` history entries. When the cascade throws mid-flight, the PATCH handler appends `cascade_failed` to the WO history and surfaces `cascade.error` in the response — the WO stays signed + locked + completed (recoverable via /run-cascade or /create-invoice). |
 | `issue-rollup.js` | — | n/a | Maps zone issues into priced line items for the on-site quote. Manifold rule, controller subtype tier selection, etc. |
 | `pricing.js` | — | n/a | `priceForBooking(serviceKey, zoneCount)` reads `pricing.json`. |
-| `availability.js` | — | n/a | Slot generator + `BOOKABLE_SERVICES` catalog. |
+| `availability.js` | — | n/a | Slot generator + `BOOKABLE_SERVICES` catalog. Endpoints can pass `from`/`to` (YYYY-MM-DD); `expandDaysToRange()` backfills every day in the range with `{slots, reason}` so the month-calendar picker can render available + unavailable cells in one pass. |
 | `schedule-store.js` | — | n/a | Calendar blocks + per-day hour overrides. |
 | `geocode.js` | — | n/a | Google Geocoding wrapper + cache. |
 | `distance.js` | — | n/a | Distance Matrix + Haversine fallback. |
@@ -108,7 +114,7 @@ form except where noted.
 | `po-pdf.js` | — | n/a | Branded purchase order PDF (pdfkit). |
 | `notify-email.js` | — | n/a | Admin email on new lead (Gmail SMTP). |
 | `notify-sms.js` | — | n/a | Admin SMS on new lead (Twilio). |
-| `notify-customer.js` | — | n/a | Customer-facing transition emails / SMSes (booking confirmed, on the way, etc). |
+| `notify-customer.js` | — | n/a | Customer-facing transition emails / SMSes (booking confirmed, on the way, etc). Also exports `sendBookingCancellation(booking, {reason, notify, baseUrl})` — fire-and-forget cancellation email triggered from `/admin/schedule`. |
 | `notify-supplier.js` | — | n/a | Supplier email with PO PDF attachment. |
 | `quickbooks.js` | — | n/a | OAuth + invoice push + items sync + Payments charges. Token blob encrypted at rest (AES-256-GCM, key from `TOKEN_ENCRYPTION_KEY` or derived from `QB_CLIENT_SECRET`). Exports: `pushInvoice`, `pushItem`, `syncAllItems`, `listTaxCodes`, `listIncomeAccounts`, `getItemsMap`, `setItemMap`, `chargeCard`, `recordPaymentForInvoice`, `voidInvoice`, OAuth helpers. **Inert** until `QB_CLIENT_ID` / `QB_CLIENT_SECRET` env vars are set + admin connects via OAuth. |
 | `booking-sessions.js` | — | n/a | AI handoff session storage (used by the chat widget). |
@@ -217,7 +223,7 @@ Pages with their primary route + purpose:
 | `crm-nav.js` | Hamburger toggle + logout button wiring. |
 | `crm-parts.js` / `crm-parts.css` | Shared parts catalog renderer (category > subcategory > items checkbox tree). Used by WO materials checklist + follow-up modal. |
 | `crm-followup.js` / `crm-followup.css` | Follow-up WO trigger modal (slot picker + materials selector). |
-| `crm-reschedule.js` / `crm-reschedule.css` | Reschedule appointment modal. |
+| `crm-reschedule.js` / `crm-reschedule.css` | Admin reschedule modal. Hosts the shared month-calendar time picker (`/js/time-picker.js`) in `admin` mode with the custom-time override enabled. |
 | `voice-input.js` | Web Speech API helper. Any field with `data-voice-input` attribute gets a mic button. |
 | `tech-sw.js` | ServiceWorker scoped to `/admin/work-order/`. Caches HTML/JS/CSS/pricing.json/parts.json. Network-first WO/property GETs with cache fallback. |
 | `offline-queue.js` | IndexedDB outbound queue. Synthesizes 202 on offline, replays FIFO on reconnect, auto-reloads after drain. |
@@ -253,6 +259,16 @@ Bookings + scheduling
   POST   /api/booking                            ← public booking submit
   GET    /api/bookings, /api/bookings/:id
   PATCH  /api/bookings/:id
+  POST   /api/bookings/:id/cancel                ← soft cancel; body {reason, notifyCustomer}.
+                                                   Admin or tech. Stamps cancelledAt/By/Reason,
+                                                   appends history entry, mirrors status into
+                                                   lead.booking, optionally emails the customer
+                                                   via sendBookingCancellation(). 409 if already
+                                                   cancelled/completed.
+  DELETE /api/bookings/:id                       ← hard delete; admin-only (requireAdmin).
+                                                   Refuses (409) if a linked WO has moved past
+                                                   `scheduled`. Strips lead.booking on success
+                                                   so the lead no longer dangles a stale ref.
   GET    /api/schedule/...                       ← slots, blocks, hour overrides
 
 Work Orders

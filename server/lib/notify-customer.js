@@ -766,9 +766,85 @@ async function sendAdminPasswordResetLink(user, magicLink) {
   }
 }
 
+// Cancellation email — sent when an admin cancels a booking via
+// `/admin/schedule`. Matter-of-fact tone (no fall-closing upsell, no
+// apology theatre). Caller passes the canonical booking record + the
+// reason text the admin entered. `notify` defaults to true; when false
+// this returns { ok: true, skipped: true } without touching SMTP — used
+// when Patrick unchecks the "Notify customer by email" checkbox.
+async function sendBookingCancellation(booking, { reason = "", notify = true, baseUrl } = {}) {
+  if (!notify) return { ok: true, skipped: true, reason: "notify=false" };
+  const transporter = getTransporter();
+  if (!transporter) {
+    console.warn(`[booking-cancel] Skipped (no Gmail config) — bookingId=${booking?.id}`);
+    return { ok: false, skipped: true };
+  }
+  const to = String(booking?.customerEmail || "").trim();
+  if (!to) return { ok: false, skipped: true, reason: "no email on booking" };
+
+  const rawName = (booking.customerName || "").split(" ")[0] || "";
+  const greeting = rawName ? `Hi ${escapeHtml(rawName)},` : "Hi there,";
+  const serviceLabel = booking.serviceLabel || "appointment";
+  const start = booking.scheduledFor ? new Date(booking.scheduledFor) : null;
+  const dateStr = (start && !Number.isNaN(start.getTime()))
+    ? start.toLocaleDateString("en-CA", { weekday: "long", month: "long", day: "numeric" })
+    : "";
+  const timeStr = (start && !Number.isNaN(start.getTime()))
+    ? start.toLocaleTimeString("en-CA", { hour: "numeric", minute: "2-digit" })
+    : "";
+  const whenText = (dateStr && timeStr)
+    ? `<strong>${escapeHtml(dateStr)}</strong> at <strong>${escapeHtml(timeStr)}</strong>`
+    : "your scheduled time";
+  const reasonText = String(reason || "").trim();
+  // Public base URL: a deep link back to the booking page on the public
+  // site (book.html) so the customer can re-book in one click if they
+  // want. No coupon, no upsell, no pushy CTAs.
+  const publicBase = (process.env.PUBLIC_BASE_URL || baseUrl || "https://pjllandservices.com").replace(/\/+$/, "");
+  const ctaUrl = `${publicBase}/book.html`;
+
+  const { html, text } = brandedEmail({
+    headline: "Your appointment has been cancelled",
+    bodyHtml: `
+      <p style="margin: 0 0 12px;">${greeting}</p>
+      <p style="margin: 0 0 12px;">We've cancelled your ${escapeHtml(serviceLabel)} for ${whenText}.</p>
+      ${reasonText ? `<p style="margin: 0 0 12px;"><strong>Reason:</strong> ${escapeHtml(reasonText)}</p>` : ""}
+      <p style="margin: 0 0 12px;">If you'd like to re-book a different time, the link below takes you to our online booking page. If you'd rather we sort it out by phone, just give us a call.</p>
+    `,
+    bodyText: [
+      `Hi ${rawName || "there"},`,
+      "",
+      `We've cancelled your ${serviceLabel}${dateStr ? ` for ${dateStr}` : ""}${timeStr ? ` at ${timeStr}` : ""}.`,
+      reasonText ? `Reason: ${reasonText}` : "",
+      "",
+      "If you'd like to re-book a different time, visit our online booking page. Or call us to sort it out by phone."
+    ].filter(Boolean).join("\n"),
+    ctaLabel: "Re-book online",
+    ctaUrl,
+    footerNote: `Questions? Call PJL at <a href="tel:+19059600181" style="color:#1B4D2E;">(905) 960-0181</a> or reply to this email.`,
+    baseUrl
+  });
+
+  try {
+    const info = await transporter.sendMail({
+      from: `"PJL Land Services" <${process.env.GMAIL_USER}>`,
+      to,
+      replyTo: process.env.GMAIL_USER,
+      subject: `Appointment cancelled — PJL Land Services`,
+      html,
+      text
+    });
+    console.log(`[booking-cancel] sent bookingId=${booking.id} to=${to} id=${info.messageId}`);
+    return { ok: true, messageId: info.messageId };
+  } catch (error) {
+    console.error(`[booking-cancel] failed bookingId=${booking?.id}:`, error.message);
+    return { ok: false, error: error.message };
+  }
+}
+
 module.exports = {
   notifyCustomer,
   eventForTransition,
+  sendBookingCancellation,
   sendInvoiceToCustomer,
   sendPaymentReceipt,
   sendCustomerLoginLink,

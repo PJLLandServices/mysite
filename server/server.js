@@ -35,9 +35,9 @@ const crypto = require("node:crypto");
 
 const { sendNewLeadEmail } = require("./lib/notify-email");
 const { sendNewLeadSms } = require("./lib/notify-sms");
-const { notifyCustomer, eventForTransition, sendInvoiceToCustomer, sendPaymentReceipt } = require("./lib/notify-customer");
+const { notifyCustomer, eventForTransition, sendInvoiceToCustomer, sendPaymentReceipt, sendBookingCancellation } = require("./lib/notify-customer");
 const { geocode, PJL_BASE } = require("./lib/geocode");
-const { BOOKABLE_SERVICES, DEFAULT_HOURS, DEFAULT_SETTINGS, listAvailableSlots, groupByDay } = require("./lib/availability");
+const { BOOKABLE_SERVICES, DEFAULT_HOURS, DEFAULT_SETTINGS, listAvailableSlots, groupByDay, expandDaysToRange, parseLocalDateKey } = require("./lib/availability");
 const scheduleStore = require("./lib/schedule-store");
 const { priceForBooking, deriveSeasonalKey } = require("./lib/pricing");
 const bookingSessions = require("./lib/booking-sessions");
@@ -1722,7 +1722,7 @@ async function activeBookings() {
 // Same contract as /api/booking/availability but service + address come
 // from the booking record (not query params), and the booking's own
 // current slot is removed from the conflict math.
-async function rescheduleAvailability(bookingId) {
+async function rescheduleAvailability(bookingId, { from, to } = {}) {
   const bookingRec = await bookings.get(bookingId);
   if (!bookingRec) return { ok: false, status: 404, errors: ["Booking not found."] };
   const serviceKey = bookingRec.serviceKey;
@@ -1739,22 +1739,36 @@ async function rescheduleAvailability(bookingId) {
   const scheduleData = await scheduleStore.read();
   const mergedHours = { ...DEFAULT_HOURS, ...(scheduleData.hours || {}) };
   const mergedSettings = { ...DEFAULT_SETTINGS, ...(scheduleData.settings || {}) };
+  // When the picker supplies an explicit visible range, scan far enough to
+  // reach the latest day in view. Otherwise fall back to the legacy 30-day
+  // window the old reschedule modal used.
+  const now = new Date();
+  const fromDate = parseLocalDateKey(from);
+  const toDate = parseLocalDateKey(to);
+  let daysAhead = 30;
+  if (toDate) {
+    daysAhead = Math.min(120, Math.max(1, Math.ceil((toDate.getTime() - now.getTime()) / 86400000) + 1));
+  }
   const slots = await listAvailableSlots({
     serviceKey,
     customerCoords: geo.coords,
     bookings: otherBookings,
     blocks: scheduleData.blocks,
-    daysAhead: 30,
+    daysAhead,
     hours: mergedHours,
     settings: mergedSettings
   });
+  const days = (fromDate && toDate)
+    ? expandDaysToRange(slots, { from: fromDate, to: toDate, hours: mergedHours, now })
+    : groupByDay(slots);
   return {
     ok: true,
     data: {
       service: { key: serviceKey, ...BOOKABLE_SERVICES[serviceKey] },
       currentScheduledFor: bookingRec.scheduledFor,
       address: geo.coords?.formattedAddress || address,
-      days: groupByDay(slots),
+      range: (fromDate && toDate) ? { from, to } : null,
+      days,
       totalSlots: slots.length
     }
   };
@@ -4762,6 +4776,121 @@ async function handleApi(req, res, pathname) {
     }
   }
 
+  // DELETE /api/bookings/:id — hard delete. Admin-only (techs can cancel
+  // via the soft path below). Refuses if a linked WO has moved past
+  // `scheduled` — that's the "tech has touched the work" boundary; use
+  // Cancel instead.
+  if (bookingMatch && req.method === "DELETE") {
+    try {
+      const session = await requireAdmin(req);
+      if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required to delete bookings."] });
+      const id = decodeURIComponent(bookingMatch[1]);
+      const result = await bookings.remove(id, {
+        by: session.uid || "admin",
+        isActiveWo: async (woId) => {
+          const wo = await workOrders.get(woId);
+          if (!wo) return false;
+          // "Active" = anything past initial scheduling but not cancelled.
+          return wo.status && wo.status !== "scheduled" && wo.status !== "cancelled";
+        }
+      });
+      if (!result.ok) {
+        const body = { ok: false, errors: result.errors };
+        if (result.linkedWoId) body.linkedWoId = result.linkedWoId;
+        return sendJson(res, result.status || 400, body);
+      }
+      // Also strip lead.booking if it pointed at this id, so the lead
+      // doesn't carry a dangling reference.
+      try {
+        const allLeads = await readLeads();
+        let mutated = false;
+        for (const lead of allLeads) {
+          if (lead?.booking?.bookingId === id) {
+            delete lead.booking;
+            mutated = true;
+          }
+        }
+        if (mutated) await writeLeads(allLeads);
+      } catch (e) {
+        console.warn("[booking delete] lead.booking cleanup failed:", e?.message);
+      }
+      return sendJson(res, 200, { ok: true, deletedId: result.deletedId });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't delete booking."] });
+    }
+  }
+
+  // POST /api/bookings/:id/cancel — soft cancel. Available to both admin
+  // and tech (real-world events: customer called, weather, illness).
+  // Body: { reason: string (required, 1-500 chars), notifyCustomer: bool }
+  // Side effects:
+  //   - Booking record: status=cancelled + cancelledAt/By/Reason + history
+  //   - Lead.booking.status mirror (legacy consumers see the cancellation)
+  //   - Customer email (only when notifyCustomer !== false) — fire-and-forget
+  //     so a Gmail outage doesn't roll back the cancel
+  const cancelBookingMatch = pathname.match(/^\/api\/bookings\/([^/]+)\/cancel$/);
+  if (cancelBookingMatch && req.method === "POST") {
+    try {
+      const session = await requireUser(req);
+      if (!session) return sendJson(res, 401, { ok: false, errors: ["Sign in required."] });
+      const id = decodeURIComponent(cancelBookingMatch[1]);
+      const payload = await parseRequestBody(req);
+      const reason = String(payload?.reason || "").trim().slice(0, 500);
+      if (!reason) {
+        return sendJson(res, 422, { ok: false, errors: ["A reason is required so the audit trail captures why."] });
+      }
+      const notify = payload?.notifyCustomer !== false; // default ON
+      const result = await bookings.cancel(id, {
+        reason,
+        by: session.role === "admin" ? "admin" : "tech",
+        actorName: session.uid || ""
+      });
+      if (!result.ok) {
+        return sendJson(res, result.status || 400, { ok: false, errors: result.errors });
+      }
+      const cancelled = result.booking;
+      // Mirror into lead.booking so existing CRM/schedule rendering that
+      // reads l.booking sees the cancelled state without a refactor.
+      try {
+        if (cancelled.leadId) {
+          const allLeads = await readLeads();
+          const lead = allLeads.find((l) => l.id === cancelled.leadId);
+          if (lead && lead.booking) {
+            lead.booking.status = "cancelled";
+            lead.booking.cancelledAt = cancelled.cancelledAt;
+            lead.booking.cancellationReason = cancelled.cancellationReason;
+            await writeLeads(allLeads);
+          }
+        }
+      } catch (e) {
+        console.warn("[booking cancel] lead.booking mirror failed:", e?.message);
+      }
+      // Customer email — fire-and-forget. The cancel itself is committed
+      // regardless; an email failure surfaces as `notifyResult.ok=false`
+      // so the UI can show "cancelled, email failed — retry?" copy.
+      let notifyResult = { ok: true, skipped: !notify };
+      if (notify) {
+        try {
+          notifyResult = await sendBookingCancellation(cancelled, {
+            reason,
+            notify: true,
+            baseUrl: baseUrlFromReq(req)
+          });
+        } catch (e) {
+          console.warn("[booking cancel] notify failed:", e?.message);
+          notifyResult = { ok: false, error: e?.message || "Email failed." };
+        }
+      }
+      return sendJson(res, 200, {
+        ok: true,
+        booking: cancelled,
+        notify: notifyResult
+      });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't cancel booking."] });
+    }
+  }
+
   // ---------- Reschedule slot lookup (admin) ---------------------------
   // Returns available slots for this booking's service tier + address,
   // EXCLUDING this booking's own current slot from the conflict math (so
@@ -4770,7 +4899,11 @@ async function handleApi(req, res, pathname) {
   if (adminRescheduleAvailMatch && req.method === "GET") {
     try {
       const id = decodeURIComponent(adminRescheduleAvailMatch[1]);
-      const result = await rescheduleAvailability(id);
+      const url = new URL(req.url, baseUrlFromReq(req));
+      const result = await rescheduleAvailability(id, {
+        from: url.searchParams.get("from"),
+        to: url.searchParams.get("to")
+      });
       if (!result.ok) return sendJson(res, result.status || 400, { ok: false, errors: result.errors });
       return sendJson(res, 200, { ok: true, ...result.data });
     } catch (err) {
@@ -5711,6 +5844,7 @@ async function handleApi(req, res, pathname) {
   if (portalRescheduleSlotsMatch && req.method === "GET") {
     try {
       const token = decodeURIComponent(portalRescheduleSlotsMatch[1]);
+      const url = new URL(req.url, baseUrlFromReq(req));
       const allLeads = await readLeads();
       const lead = allLeads.find((l) => (l.portal?.token || portalTokenForId(l.id)) === token);
       if (!lead) return sendJson(res, 404, { ok: false, errors: ["Portal not found."] });
@@ -5719,7 +5853,12 @@ async function handleApi(req, res, pathname) {
       const tooLate = currentStart ? (currentStart.getTime() - Date.now()) < 24 * 60 * 60 * 1000 : false;
       let bookingRec = (await bookings.listByLead(lead.id))[0];
       if (!bookingRec) bookingRec = await bookings.upsertFromLead(lead);
-      const result = bookingRec ? await rescheduleAvailability(bookingRec.id) : { ok: false, errors: ["No booking."] };
+      const result = bookingRec
+        ? await rescheduleAvailability(bookingRec.id, {
+            from: url.searchParams.get("from"),
+            to: url.searchParams.get("to")
+          })
+        : { ok: false, errors: ["No booking."] };
       if (!result.ok) return sendJson(res, result.status || 400, { ok: false, errors: result.errors });
       return sendJson(res, 200, { ok: true, tooLate, ...result.data });
     } catch (err) {
@@ -6577,6 +6716,19 @@ async function handleApi(req, res, pathname) {
       }
       if (!lead && !property) {
         return sendJson(res, 422, { ok: false, errors: ["Pass leadId or propertyId."] });
+      }
+
+      // Cancelled-booking guard (Brief B §3.4). A cancelled booking
+      // shouldn't spawn a WO — if the booking was killed for any reason
+      // (customer cancel, weather, double-book), creating a WO behind it
+      // would put a "ghost" tech run on the calendar with no real visit.
+      // Block at the lead.booking.status mirror so legacy callers that
+      // pass only a leadId are still gated.
+      if (lead?.booking?.status === "cancelled") {
+        return sendJson(res, 409, {
+          ok: false,
+          errors: ["This booking was cancelled — re-book before creating a work order."]
+        });
       }
 
       // Reuse the booking's customer-facing WO ID when one already
@@ -8444,7 +8596,22 @@ Customer signature captured at ${new Date().toISOString()}.`;
       const url = new URL(req.url, baseUrlFromReq(req));
       const serviceKey = normalizeString(url.searchParams.get("service"), 60);
       const address = normalizeString(url.searchParams.get("address"), 320);
-      const daysAhead = Math.min(60, Math.max(1, Number(url.searchParams.get("days")) || 14));
+      // The time-picker passes from/to (YYYY-MM-DD) to request the 6-week
+      // visible window. Legacy callers (no from/to) get the old 14-day
+      // "only days with slots" shape via groupByDay.
+      const fromParam = url.searchParams.get("from");
+      const toParam = url.searchParams.get("to");
+      const fromDate = parseLocalDateKey(fromParam);
+      const toDate = parseLocalDateKey(toParam);
+      const now = new Date();
+      let daysAhead;
+      if (toDate) {
+        // Scan far enough to reach the latest visible day. 120-day cap is
+        // ~3 forward months from "now" — well past the picker's 6-week window.
+        daysAhead = Math.min(120, Math.max(1, Math.ceil((toDate.getTime() - now.getTime()) / 86400000) + 1));
+      } else {
+        daysAhead = Math.min(60, Math.max(1, Number(url.searchParams.get("days")) || 14));
+      }
 
       if (!serviceKey || !BOOKABLE_SERVICES[serviceKey]) {
         return sendJson(res, 422, { ok: false, errors: ["Pick a service to see availability."] });
@@ -8470,12 +8637,17 @@ Customer signature captured at ${new Date().toISOString()}.`;
         settings: mergedSettings
       });
 
+      const days = (fromDate && toDate)
+        ? expandDaysToRange(slots, { from: fromDate, to: toDate, hours: mergedHours, now })
+        : groupByDay(slots);
+
       return sendJson(res, 200, {
         ok: true,
         service: { key: serviceKey, ...BOOKABLE_SERVICES[serviceKey] },
         address: geo.coords?.formattedAddress || address,
         geocodeOk: geo.ok === true,
-        days: groupByDay(slots),
+        range: (fromDate && toDate) ? { from: fromParam, to: toParam } : null,
+        days,
         totalSlots: slots.length
       });
     } catch (error) {

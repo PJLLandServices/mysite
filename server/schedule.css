@@ -728,3 +728,142 @@
     padding: 16px 16px calc(16px + env(safe-area-inset-bottom));
   }
 }
+
+/* ---- Cancelled booking card on the schedule canvas ---- */
+/* When a booking is cancelled, the card stays visible on the grid but is
+   visually demoted: strikethrough on the label + time, muted background,
+   plus a CANCELLED pill so the state is obvious at a glance. */
+.schedule-booking.is-cancelled {
+  background: rgba(120, 120, 120, 0.08);
+  border-color: rgba(120, 120, 120, 0.30);
+  opacity: 0.78;
+}
+.schedule-booking.is-cancelled:hover {
+  background: rgba(120, 120, 120, 0.14);
+  border-color: rgba(120, 120, 120, 0.45);
+  opacity: 1;
+}
+.schedule-booking.is-cancelled .event-time,
+.schedule-booking.is-cancelled strong,
+.schedule-booking.is-cancelled > span {
+  text-decoration: line-through;
+  color: #7A7A72;
+}
+.schedule-booking.is-cancelled .event-time { color: #7A7A72; }
+.schedule-booking.is-cancelled .event-reschedule-hint { display: none; }
+.schedule-booking .event-cancelled-pill {
+  display: inline-block;
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  background: #7A7A72;
+  color: #fff;
+  padding: 2px 8px;
+  border-radius: 4px;
+  margin-top: 4px;
+  text-decoration: none !important;  /* override the strikethrough above */
+  align-self: flex-start;
+}
+
+/* ---- Booking action dialog (Reschedule / Cancel / Delete picker) ---- */
+.booking-action-dialog::backdrop { background: rgba(15, 31, 20, 0.55); }
+.booking-action-dialog {
+  width: min(440px, 96vw);
+  padding: 22px 24px 20px;
+  border: 0;
+  border-radius: 14px;
+  box-shadow: 0 20px 60px rgba(15, 31, 20, 0.25);
+}
+.booking-action-dialog header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #E2E0D4;
+}
+.booking-action-dialog header h2 {
+  margin: 0;
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 22px;
+  color: #1B4D2E;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+.booking-action-summary {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 14px;
+  margin: 0 0 14px;
+  font-size: 14px;
+}
+.booking-action-summary dt {
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #7A7A72;
+  padding-top: 2px;
+}
+.booking-action-summary dd { margin: 0; color: #1A1A1A; }
+.booking-action-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.booking-action-buttons button { width: 100%; min-height: 44px; }
+.booking-action-status {
+  margin: 8px 0 0;
+  font-size: 13px;
+  color: #1B4D2E;
+  min-height: 18px;
+}
+.dialog-label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  color: #4A4A4A;
+  margin-bottom: 12px;
+}
+.dialog-label textarea,
+.dialog-label input {
+  font: inherit;
+  font-size: 14px;
+  padding: 10px 12px;
+  border: 1px solid #E2E0D4;
+  border-radius: 8px;
+  min-height: 44px;
+  resize: vertical;
+}
+.dialog-toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 14px;
+  color: #1A1A1A;
+  margin-bottom: 14px;
+}
+.dialog-toggle input { width: 18px; height: 18px; }
+.dialog-warn {
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  font-size: 13px;
+  color: #8a2c0f;
+  background: #FBE9DF;
+  border: 1px solid #F0C5A8;
+  border-radius: 8px;
+}
+.dialog-warn code {
+  font-family: "Menlo", "Consolas", monospace;
+  font-size: 12px;
+  background: rgba(255, 255, 255, 0.6);
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+@media (max-width: 480px) {
+  .booking-action-dialog { width: 100vw; max-height: 100vh; border-radius: 0; padding: 16px 14px; }
+}
