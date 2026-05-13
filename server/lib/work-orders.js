@@ -296,6 +296,14 @@ function blankWorkOrder() {
     // failure — the tech must answer one way or the other). On a
     // signed WO this is part of the locked contract.
     needsReturnVisit: null,
+    // Labour hours on-site (Patrick 2026-05-13). Decimal hours (e.g.
+    // 1.5 = 1h 30m). Captured for back-office accounting on
+    // service_visit / spring_opening / fall_closing WOs — these
+    // flat-fee visits already include labour in the quoted price; the
+    // tracking is internal-only (cost analysis, tech performance, not
+    // billed separately). null = not yet logged. Auto-suggested from
+    // (departedAt - arrivedAt) at render time but tech can override.
+    labourHours: null,
     // Append-only audit trail per spec §10 r4 ("All status changes
     // logged forever") and §4.3.3 r5 (signed-WO contract). Mirrors
     // invoices.history[] / quotes.history[] in shape so the rendering
@@ -626,7 +634,7 @@ async function update(id, patch) {
   // pointers — those are set at create time and shouldn't be edited from
   // the form.
   const next = { ...current };
-  const allowedTop = ["type", "status", "scheduledFor", "diagnosis", "techNotes", "customerName", "customerPhone", "customerEmail", "address", "locked", "arrivedAt", "departedAt", "followupOfWoId", "paidOnSite", "propertyEditsAppliedAt", "needsReturnVisit"];
+  const allowedTop = ["type", "status", "scheduledFor", "diagnosis", "techNotes", "customerName", "customerPhone", "customerEmail", "address", "locked", "arrivedAt", "departedAt", "followupOfWoId", "paidOnSite", "propertyEditsAppliedAt", "needsReturnVisit", "labourHours"];
   for (const key of allowedTop) {
     if (Object.prototype.hasOwnProperty.call(patch, key)) next[key] = patch[key];
   }

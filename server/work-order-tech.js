@@ -17,7 +17,7 @@
 // tech-sw.js's CACHE_VERSION. If this string doesn't match the SW
 // cache version after deploy, the iPhone is serving stale JS — clear
 // website data and reload.
-const TECH_BUILD_VERSION = "tech-v34";
+const TECH_BUILD_VERSION = "tech-v35";
 function _setBadge(text, isError) {
   try {
     const badge = document.getElementById("techBuildBadge");
@@ -421,6 +421,10 @@ let state = {
   // visibility of the Parts-to-bring-back + Schedule-follow-up
   // sections. false = visit closes today. null = forces pre-sign gate.
   needsReturnVisit: null,
+  // Labour hours on-site (v35, Patrick 2026-05-13). Decimal hours
+  // captured for internal cost tracking. Not billed separately —
+  // flat fees on service / seasonal WOs already include labour.
+  labourHours: null,
   // On-site execution timestamps — auto-stamped on status flip to
   // on_site / completed (spec §4.3.2 On-Site Execution).
   arrivedAt: null,
@@ -4056,6 +4060,10 @@ async function init() {
     state.needsReturnVisit = wo.needsReturnVisit === true ? true
       : wo.needsReturnVisit === false ? false
       : null;
+    // Labour hours (v35) — coerce to a non-negative number or null.
+    state.labourHours = Number.isFinite(Number(wo.labourHours)) && Number(wo.labourHours) >= 0
+      ? Number(wo.labourHours)
+      : null;
     // Cascade-merge follow-up — brief-literal §4.6 materials gate
     // state. Server-side hydrate auto-fills for fall_closing + empty-
     // materials WOs so the gate doesn't block there.
@@ -4911,7 +4919,57 @@ function renderPaymentBlock() {
   const noRadio = document.getElementById("techPayCapturedNo");
   if (yesRadio) yesRadio.checked = state.paidOnSite === true;
   if (noRadio)  noRadio.checked  = state.paidOnSite === false;
+  // v35 — labour hours field. Reflect persisted value into the input.
+  // The hint line below the input shows the auto-suggestion derived
+  // from (departedAt - arrivedAt) when both are set — tech can use it
+  // as a starting point or override entirely.
+  const hoursInput = document.getElementById("techLabourHours");
+  const hoursHint = document.getElementById("techLabourHoursHint");
+  if (hoursInput) {
+    hoursInput.value = state.labourHours != null ? String(state.labourHours) : "";
+  }
+  if (hoursHint) {
+    if (state.arrivedAt && state.departedAt) {
+      const ms = new Date(state.departedAt).getTime() - new Date(state.arrivedAt).getTime();
+      if (Number.isFinite(ms) && ms > 0) {
+        // Round to nearest 0.25 hr (15-min increment). Min 0.25.
+        const hrs = Math.max(0.25, Math.round((ms / 3_600_000) * 4) / 4);
+        hoursHint.textContent = `On-site time (auto-suggestion): ${hrs.toFixed(2)} hrs from arrival → departure`;
+        hoursHint.hidden = false;
+      } else {
+        hoursHint.hidden = true;
+      }
+    } else {
+      hoursHint.textContent = "Set when arrival + departure timestamps are recorded.";
+      hoursHint.hidden = false;
+    }
+  }
 }
+
+// v35 — Labour hours change → PATCH. Wired to `change` (fires on blur
+// or Enter, not every keystroke) so we don't spam the server. Empty
+// string clears the value back to null. Out-of-range entries get
+// silently reverted to the last persisted value with an alert.
+document.getElementById("techLabourHours")?.addEventListener("change", (event) => {
+  if (state.locked) return;
+  const raw = String(event.target.value || "").trim();
+  if (raw === "") {
+    state.labourHours = null;
+    patchWorkOrder({ labourHours: null });
+    return;
+  }
+  const hours = Number(raw);
+  if (!Number.isFinite(hours) || hours < 0 || hours > 12) {
+    alert("Labour hours must be a number between 0 and 12 (decimal OK, e.g. 1.5).");
+    event.target.value = state.labourHours != null ? String(state.labourHours) : "";
+    return;
+  }
+  // Round to nearest 0.25 hr for consistency with the auto-suggestion.
+  const rounded = Math.round(hours * 4) / 4;
+  state.labourHours = rounded;
+  event.target.value = String(rounded);
+  patchWorkOrder({ labourHours: rounded });
+});
 
 // Wire the radio change → PATCH. Spec §4.3.2 Payment & Billing requires
 // this to persist; the cascade reads it to flag the draft invoice.

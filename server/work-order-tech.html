@@ -475,6 +475,22 @@
         <label><input type="radio" name="techPayCaptured" value="yes" id="techPayCapturedYes"> <span>Yes</span></label>
         <label><input type="radio" name="techPayCaptured" value="no" id="techPayCapturedNo"> <span>No — invoice to follow</span></label>
       </fieldset>
+      <!-- Labour hours (v35, Patrick 2026-05-13). Internal accounting field
+           — tracked for service_visit / spring_opening / fall_closing WOs
+           where the flat fee already includes labour in the quoted price
+           but PJL wants to know how long the visit took for cost analysis.
+           Not surfaced to the customer. Decimal hours (1.5 = 1h 30m). A
+           helper line below the input shows the auto-suggested value
+           from (departedAt - arrivedAt) when both timestamps are set. -->
+      <div class="tech-payment-labour" style="margin-top:14px;padding-top:14px;border-top:1px solid #e0ddd1;">
+        <label for="techLabourHours" style="display:block;margin:0 0 6px;font-size:13px;color:#444;font-weight:500;">Labour hours on-site</label>
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+          <input type="number" id="techLabourHours" step="0.25" min="0" max="12" placeholder="e.g. 1.5" inputmode="decimal"
+            style="width:120px;padding:10px;font-size:16px;border:1px solid #c9c6b8;border-radius:6px;">
+          <span style="font-size:12px;color:#666;">Decimal hours (1.5 = 1h 30m)</span>
+        </div>
+        <p id="techLabourHoursHint" style="margin:6px 0 0;font-size:12px;color:#888;" hidden></p>
+      </div>
       <p class="tech-payment-invoice" id="techPayInvoiceLine">No draft invoice yet. One will be created when the visit is marked completed.</p>
     </section>
 

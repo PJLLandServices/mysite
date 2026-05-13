@@ -171,6 +171,15 @@
 //   • Crude (interrupts typing) but reliable. Proper render-without-
 //     reload fix is a follow-up. Right now we need photos to APPEAR.
 // Touches work-order-tech.js only.
+// Bumped 2026-05-13 (v34 → v35): labour-hours capture. Patrick:
+// "service calls, spring openings (and if bypassed in fall closing)
+// all need labour. times." Added a wo.labourHours decimal field
+// (1.5 = 1h 30m) on the WO record, surfaced in the Payment & Billing
+// section as a number input. Auto-suggestion from (departedAt -
+// arrivedAt) shown in a hint line so the tech has a starting point
+// without typing the math. Not billed to the customer — the flat
+// fees on service/seasonal WOs already include labour in the quoted
+// price; this is internal cost tracking only.
 // Bumped 2026-05-12 (v33 → v34): leak subtypes route to correct repair.
 // Patrick: "when i select 'leak' in the repair requirements, and select
 // auto build quote with repairs required... it puts non required
@@ -321,7 +330,7 @@
 //     and signature last. Tap-jump from the pre-sign checklist
 //     row to #techPaymentSection still works as a fallback.
 // Touches work-order-tech.html only.
-const CACHE_VERSION = "pjl-tech-v34";
+const CACHE_VERSION = "pjl-tech-v35";
 const STATIC_ASSETS = [
   "/crm/work-order-tech.html",
   "/crm/work-order-tech.js",
