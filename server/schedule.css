@@ -864,6 +864,32 @@
   padding: 1px 5px;
   border-radius: 4px;
 }
+/* .pjl-btn-outline is built for dark-background hero strips — white
+   text + a 26%-white border. Dropped onto the white modal card it
+   renders as a blank rectangle. Same override pattern crm.css uses
+   inside .pjl-crm-hero, but scoped to this dialog so we don't leak. */
+.booking-action-dialog .pjl-btn-outline {
+  background: #fff;
+  border: 1px solid #E2E0D4;
+  color: #1B4D2E;
+  box-shadow: none;
+}
+.booking-action-dialog .pjl-btn-outline:hover {
+  background: #FAFAF5;
+  border-color: #1B4D2E;
+  color: #1B4D2E;
+}
+/* Header close-X is a tiny icon, not a full-width action button — strip
+   the pjl-btn defaults that would otherwise size it like the others. */
+.booking-action-dialog header .pjl-btn-outline {
+  min-height: 36px;
+  width: 36px;
+  padding: 0;
+  font-size: 22px;
+  font-weight: 600;
+  line-height: 1;
+}
+
 @media (max-width: 480px) {
   .booking-action-dialog { width: 100vw; max-height: 100vh; border-radius: 0; padding: 16px 14px; }
 }
