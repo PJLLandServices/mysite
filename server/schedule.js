@@ -763,12 +763,8 @@ const cancelSummary         = document.getElementById("cancelBookingSummary");
 const cancelSubmit          = document.getElementById("cancelBookingSubmit");
 const cancelError           = document.getElementById("cancelBookingError");
 
-const deleteDialog          = document.getElementById("deleteBookingDialog");
-const deleteClose           = document.getElementById("deleteBookingClose");
-const deleteBack            = document.getElementById("deleteBookingBack");
-const deleteSummary         = document.getElementById("deleteBookingSummary");
-const deleteSubmit          = document.getElementById("deleteBookingSubmit");
-const deleteError           = document.getElementById("deleteBookingError");
+// Delete uses a native browser confirm() — no HTML modal — so there's
+// no DOM to wire up here. The handler lives inline on actionDeleteBtn.
 
 // Pending action context — the leadId + resolved bookingId + the
 // summary fields are stashed here so the Cancel + Delete dialogs can
@@ -898,6 +894,8 @@ actionCancelBtn?.addEventListener("click", async () => {
   showDialog(cancelDialog);
 });
 
+// Hard delete uses a native confirm() — bulletproof + Patrick's
+// preferred level of friction. No HTML dialog to fail-to-wire-up.
 actionDeleteBtn?.addEventListener("click", async () => {
   if (!pendingAction) return;
   if (!pendingAction.bookingId) {
@@ -909,18 +907,38 @@ actionDeleteBtn?.addEventListener("click", async () => {
     actionStatus.textContent = "Couldn't find the booking record — refresh and try again.";
     return;
   }
-  closeDialog(actionDialog);
-  deleteSummary.innerHTML = summaryHtml(pendingAction.summary);
-  deleteSubmit.disabled = false;
-  deleteSubmit.textContent = "Permanently delete";
-  deleteError.hidden = true;
-  showDialog(deleteDialog);
+  const { summary, bookingId } = pendingAction;
+  const lines = [
+    `Permanently delete this booking? There is no undo.`,
+    ``,
+    `${summary.label || "Booking"}`,
+    `${summary.customer || ""}`,
+    `${summary.address || ""}`,
+    summary.scheduledFor
+      ? new Date(summary.scheduledFor).toLocaleString("en-CA", { weekday: "long", month: "long", day: "numeric", hour: "numeric", minute: "2-digit" })
+      : ""
+  ].filter(Boolean).join("\n");
+  if (!window.confirm(lines)) return;
+  try {
+    const r = await fetch(`/api/bookings/${encodeURIComponent(bookingId)}`, { method: "DELETE" });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok || !data.ok) {
+      const msg = (data.errors || ["Couldn't delete."]).join(" ");
+      const tail = data.linkedWoId ? ` (Linked: ${data.linkedWoId})` : "";
+      throw new Error(msg + tail);
+    }
+    closeDialog(actionDialog);
+    settingsStatus.textContent = `Booking ${bookingId} permanently deleted.`;
+    setTimeout(() => { settingsStatus.textContent = ""; }, 6000);
+    await loadAll();
+  } catch (err) {
+    // Surface inside the action panel — it's still open at this point.
+    actionStatus.textContent = err.message || "Couldn't delete.";
+  }
 });
 
 cancelClose?.addEventListener("click", () => closeDialog(cancelDialog));
 cancelBack?.addEventListener("click", () => closeDialog(cancelDialog));
-deleteClose?.addEventListener("click", () => closeDialog(deleteDialog));
-deleteBack?.addEventListener("click", () => closeDialog(deleteDialog));
 
 cancelForm?.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -969,42 +987,6 @@ cancelForm?.addEventListener("submit", async (event) => {
   }
 });
 
-// Plain confirm-button delete. No type-the-id friction — the red button
-// + the no-undo warning + the admin-only gate is enough. If the
-// background booking-id resolution failed (rare but possible), surface
-// it here instead of failing silently.
-deleteSubmit?.addEventListener("click", async () => {
-  if (!pendingAction) return;
-  if (!pendingAction.bookingId) {
-    pendingAction.bookingId = (await resolveBookingByLead(pendingAction.leadId, pendingAction.scheduledFor))?.id || null;
-  }
-  if (!pendingAction.bookingId) {
-    deleteError.hidden = false;
-    deleteError.textContent = "Couldn't find the booking record — refresh the page and try again.";
-    return;
-  }
-  deleteError.hidden = true;
-  deleteSubmit.disabled = true;
-  deleteSubmit.textContent = "Deleting…";
-  try {
-    const r = await fetch(`/api/bookings/${encodeURIComponent(pendingAction.bookingId)}`, { method: "DELETE" });
-    const data = await r.json().catch(() => ({}));
-    if (!r.ok || !data.ok) {
-      const msg = (data.errors || ["Couldn't delete."]).join(" ");
-      const tail = data.linkedWoId ? ` (Linked: ${data.linkedWoId})` : "";
-      throw new Error(msg + tail);
-    }
-    const deletedId = pendingAction.bookingId;
-    closeDialog(deleteDialog);
-    settingsStatus.textContent = `Booking ${deletedId} permanently deleted.`;
-    setTimeout(() => { settingsStatus.textContent = ""; }, 6000);
-    await loadAll();
-  } catch (err) {
-    deleteError.hidden = false;
-    deleteError.textContent = err.message || "Couldn't delete.";
-    deleteSubmit.disabled = false;
-    deleteSubmit.textContent = "Permanently delete";
-  }
-});
+// (Delete is handled inline on actionDeleteBtn above via native confirm().)
 
 loadAll();

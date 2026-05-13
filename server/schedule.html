@@ -266,27 +266,14 @@
     </form>
   </dialog>
 
-  <!-- Hard-delete modal — admin-only confirm. Single explicit click on the
-       red "Permanently delete" button after acknowledging the summary +
-       no-undo warning. (Earlier draft required typing the booking ID as
-       extra friction; Patrick rejected that in favour of a plain confirm.) -->
-  <dialog id="deleteBookingDialog" class="booking-action-dialog">
-    <header>
-      <h2>Permanently delete</h2>
-      <button type="button" class="pjl-btn pjl-btn-outline" id="deleteBookingClose" aria-label="Close">×</button>
-    </header>
-    <dl class="booking-action-summary" id="deleteBookingSummary"></dl>
-    <p class="dialog-warn">This removes the booking entirely. There's no undo. Use <strong>Cancel</strong> if a customer might still want to re-book.</p>
-    <p class="dialog-error" id="deleteBookingError" hidden></p>
-    <div class="dialog-actions">
-      <button type="button" class="pjl-btn pjl-btn-outline" id="deleteBookingBack">Back</button>
-      <button type="button" class="pjl-btn pjl-btn-danger" id="deleteBookingSubmit">Permanently delete</button>
-    </div>
-  </dialog>
+  <!-- Hard-delete uses a native browser confirm() — no HTML modal. The
+       admin-only gate + the native "OK / Cancel" prompt is the right
+       amount of friction. Patrick explicitly rejected the type-the-id
+       and HTML-dialog versions. -->
 
   <script src="/js/time-picker.js?v=1"></script>
-  <script src="/crm/crm-reschedule.js"></script>
-  <script src="/crm/schedule.js"></script>
+  <script src="/crm/crm-reschedule.js?v=2"></script>
+  <script src="/crm/schedule.js?v=2"></script>
   <script src="/coverage-checker.js"></script>
     <script async defer src="https://maps.googleapis.com/maps/api/js?key=AIzaSyBrORBeXbpNTJvoi2PDhDDs6Iy-BGSU30M&libraries=places&callback=initCoverageCheck&loading=async"></script>
 </body>
