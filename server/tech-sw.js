@@ -89,10 +89,28 @@
 // per file, 40 MB body), no client-side EXIF/watermark. We can add
 // watermark server-side later once we know uploads actually land.
 // Touches work-order-tech.js only.
+// Bumped 2026-05-12 (v19 → v20): the per-stage label DID surface a
+// real signal — Patrick saw "Reading 1/1…" hang forever. So the
+// hang is FileReader, not the network. v20:
+//   • Switch readAsDataURL → readAsArrayBuffer. The DataURL path has
+//     to materialise the whole "data:image/heic;base64,…" string,
+//     which iOS Safari can stall on for large iCloud-backed HEICs.
+//     ArrayBuffer is the lower-level read; we chunk the base64
+//     conversion ourselves (8 KB at a time so we don't blow the
+//     fromCharCode stack on big files).
+//   • Add FileReader.onprogress → live "Reading … 47%" updates so
+//     a slow iCloud download shows motion instead of dead silence.
+//   • Show file size in the label ("Reading 1/1 · 12.3 MB · 47%…")
+//     so we can see if it's a 4 MB normal photo or a 30 MB iCloud
+//     monster.
+//   • 60 s hard timeout on FileReader. After v19 hung indefinitely,
+//     a clear timeout error ("if iCloud, open Photos and tap to
+//     download first") beats forever-spin.
+// Touches work-order-tech.js only.
 // Lesson: bump this in the same commit as any change to the files in
 // STATIC_ASSETS, otherwise the field tech sees old behaviour even
 // after Render redeploys.
-const CACHE_VERSION = "pjl-tech-v19";
+const CACHE_VERSION = "pjl-tech-v20";
 const STATIC_ASSETS = [
   "/crm/work-order-tech.html",
   "/crm/work-order-tech.js",

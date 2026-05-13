@@ -434,16 +434,75 @@ const WO_ALLOWED_UPLOAD_TYPES = new Set([
   "image/jpeg", "image/png", "image/webp", "image/heic", "image/heif", "image/gif", "application/pdf"
 ]);
 
-function readFileAsBase64(file) {
+// v20 — readAsArrayBuffer instead of readAsDataURL. Patrick reported v19
+// hangs on "Reading 1/1…" indefinitely (the FileReader stage). The
+// suspicion: readAsDataURL has to allocate a giant string (base64 +
+// data URL prefix) and iOS Safari can stall on that for large iCloud-
+// backed HEICs. ArrayBuffer is the lower-level path — same data, no
+// string encoding inside FileReader — and we do the base64 conversion
+// ourselves in chunks. Bonus: progress events are reliable on the
+// ArrayBuffer path; surface "Reading … 47%" so the tech can see motion
+// instead of a frozen label. Also adds an explicit 60 s timeout so a
+// genuine hang surfaces an actionable error instead of forever-spin.
+function readFileAsBase64(file, onProgress) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
-    reader.onerror = () => reject(new Error("Couldn't read that file."));
-    reader.onload = () => {
-      const result = String(reader.result || "");
-      const idx = result.indexOf(",");
-      resolve(idx >= 0 ? result.slice(idx + 1) : result);
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      try { reader.abort(); } catch (_e) { /* tolerate */ }
+      reject(new Error(
+        `Reading "${file.name || "file"}" timed out after 60 s. If this is an iCloud photo, open the Photos app and tap the image first so it downloads, then retry.`
+      ));
+    }, 60_000);
+    reader.onerror = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(new Error(`Couldn't read "${file.name || "file"}": ${reader.error?.message || "unknown error"}`));
     };
-    reader.readAsDataURL(file);
+    reader.onabort = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(new Error("File read was aborted."));
+    };
+    reader.onprogress = (evt) => {
+      if (!onProgress || !evt.lengthComputable) return;
+      onProgress(evt.loaded / evt.total);
+    };
+    reader.onload = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try {
+        const buf = reader.result;
+        if (!buf || !(buf instanceof ArrayBuffer)) {
+          throw new Error("FileReader produced no ArrayBuffer.");
+        }
+        // Convert ArrayBuffer → base64 in chunks. Doing it as one big
+        // String.fromCharCode(...new Uint8Array(buf)) blows the JS stack
+        // for files >~64 KB. 8 KB chunks are well under any iOS limit.
+        const bytes = new Uint8Array(buf);
+        const chunkSize = 8192;
+        let binary = "";
+        for (let i = 0; i < bytes.length; i += chunkSize) {
+          const slice = bytes.subarray(i, Math.min(i + chunkSize, bytes.length));
+          binary += String.fromCharCode.apply(null, slice);
+        }
+        resolve(btoa(binary));
+      } catch (err) {
+        reject(err);
+      }
+    };
+    try {
+      reader.readAsArrayBuffer(file);
+    } catch (err) {
+      settled = true;
+      clearTimeout(timer);
+      reject(new Error(`Couldn't start reading "${file.name || "file"}": ${err?.message || "unknown error"}`));
+    }
   });
 }
 
@@ -475,7 +534,8 @@ async function uploadWoPhotos(files, meta = {}) {
   const photos = [];
   for (let i = 0; i < arr.length; i++) {
     const f = arr[i];
-    setUploadStatus(`Reading ${i + 1}/${arr.length}…`);
+    const sizeMb = (f.size / 1_000_000).toFixed(1);
+    setUploadStatus(`Reading ${i + 1}/${arr.length} · ${sizeMb} MB…`);
     const fileType = (f.type || "").toLowerCase();
     if (!fileType || !WO_ALLOWED_UPLOAD_TYPES.has(fileType)) {
       const lowerName = (f.name || "").toLowerCase();
@@ -498,8 +558,14 @@ async function uploadWoPhotos(files, meta = {}) {
       else resolvedType = "image/jpeg"; // safe default
     }
     // Read RAW bytes. Server handles the storage + format detection.
-    const base64 = await readFileAsBase64(f);
+    // onProgress surfaces "Reading 1/1 · 12.3 MB · 47%…" so a slow read
+    // (iCloud download, large HEIC) shows motion instead of a dead spin.
+    const base64 = await readFileAsBase64(f, (pct) => {
+      const pctStr = Math.round(pct * 100);
+      setUploadStatus(`Reading ${i + 1}/${arr.length} · ${sizeMb} MB · ${pctStr}%…`);
+    });
     if (!base64) throw new Error(`Couldn't read "${f.name || "file"}" — got 0 bytes.`);
+    setUploadStatus(`Sending ${i + 1}/${arr.length}…`);
     photos.push({
       data: base64,
       mediaType: resolvedType,
