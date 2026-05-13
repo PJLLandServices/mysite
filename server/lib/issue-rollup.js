@@ -146,6 +146,18 @@ const SUBTYPE_LABELS = {
     drip:        "Drip emitter",
     other:       "Other head"
   },
+  // v34 — leak subtypes specify WHERE the leak is. Each routes through
+  // a different repair path so picking "leak" doesn't auto-bundle a
+  // manifold rebuild + valve replacements for a leak that's actually
+  // at a cut poly pipe or a broken head.
+  leak: {
+    at_valve:      "Leak at valve / manifold",
+    at_pipe_poly:  "Leak at poly pipe",
+    at_pipe_funny: "Leak at funny pipe",
+    at_head:       "Leak at sprinkler head",
+    at_fitting:    "Leak at fitting / coupling",
+    unknown:       "Leak — source TBD on-site"
+  },
   valve: {
     pgv_full:  "Hunter PGV valve replacement + manifold rebuild",
     solenoid:  "Solenoid only",
@@ -222,13 +234,82 @@ function rollupZone(pricing, zone) {
     }
   }
 
-  // leak + valve — collapse into manifold rebuild per the whole_manifold_rule.
-  const manifoldIssues = [...byType.leak, ...byType.valve];
+  // v34 — leak subtypes route to different repair paths. Only leaks
+  // explicitly tagged "at_valve" trigger the whole_manifold_rule; the
+  // rest go through head / pipe / fitting / diagnostic logic so the
+  // auto-build doesn't pull in manifold + valve parts for a cut poly
+  // pipe or a broken head leak. valve issues always go through the
+  // manifold rule regardless of subtype.
+  const leakAtValve     = byType.leak.filter((i) => i.subtype === "at_valve");
+  const leakAtPipePoly  = byType.leak.filter((i) => i.subtype === "at_pipe_poly");
+  const leakAtPipeFunny = byType.leak.filter((i) => i.subtype === "at_pipe_funny");
+  const leakAtHead      = byType.leak.filter((i) => i.subtype === "at_head");
+  const leakAtFitting   = byType.leak.filter((i) => i.subtype === "at_fitting");
+  const leakUnknown     = byType.leak.filter((i) => !i.subtype || i.subtype === "unknown" || i.subtype === "");
+
+  // Manifold rule: leak-at-valve + every valve issue.
+  const manifoldIssues = [...leakAtValve, ...byType.valve];
   if (manifoldIssues.length) {
     const qty = manifoldIssues.reduce((sum, i) => sum + (Number(i.qty) || 1), 0);
     const ids = manifoldIssues.map((i) => i.id).filter(Boolean);
     const notes = manifoldIssues.map((i) => i.notes).filter(Boolean).join("; ");
     lines.push(...manifoldLineFor(pricing, zoneNumber, qty, ids, notes));
+  }
+
+  // Leak at poly / funny pipe → flat-rate pipe_break_3ft (same as the
+  // pipe issue type would generate). Label preserves the pipe kind so
+  // the customer sees what was repaired.
+  const pipeLikeLeaks = [...leakAtPipePoly, ...leakAtPipeFunny];
+  if (pipeLikeLeaks.length) {
+    const qty = pipeLikeLeaks.reduce((sum, i) => sum + (Number(i.qty) || 1), 0);
+    const ids = pipeLikeLeaks.map((i) => i.id).filter(Boolean);
+    const notes = pipeLikeLeaks.map((i) => i.notes).filter(Boolean).join("; ");
+    let pipeLabel = labelOf(pricing, "pipe_break_3ft");
+    if (leakAtPipePoly.length && !leakAtPipeFunny.length) pipeLabel = "Pipe break repair — poly pipe";
+    else if (leakAtPipeFunny.length && !leakAtPipePoly.length) pipeLabel = "Pipe break repair — funny pipe";
+    lines.push(buildLine({
+      key: "pipe_break_3ft",
+      label: pipeLabel,
+      qty,
+      price: priceOf(pricing, "pipe_break_3ft"),
+      source: { zoneNumbers: [zoneNumber], issueIds: ids },
+      note: notes
+    }));
+  }
+
+  // Leak at sprinkler head → head_replacement (flat per head).
+  if (leakAtHead.length) {
+    const qty = leakAtHead.reduce((sum, i) => sum + (Number(i.qty) || 1), 0);
+    const ids = leakAtHead.map((i) => i.id).filter(Boolean);
+    const notes = leakAtHead.map((i) => i.notes).filter(Boolean).join("; ");
+    lines.push(buildLine({
+      key: "head_replacement",
+      label: "Sprinkler head replacement (leak source)",
+      qty,
+      price: priceOf(pricing, "head_replacement"),
+      source: { zoneNumbers: [zoneNumber], issueIds: ids },
+      note: notes
+    }));
+  }
+
+  // Leak at fitting OR source unknown → diagnostic-only custom line at $0.
+  // No parts auto-added. The tech investigates on-site and manually adds
+  // the actual repair lines. Better to surface "we need to look at it"
+  // than to pre-bill the wrong parts.
+  const undiagnosed = [...leakAtFitting, ...leakUnknown];
+  if (undiagnosed.length) {
+    const ids = undiagnosed.map((i) => i.id).filter(Boolean);
+    const notes = undiagnosed.map((i) => i.notes).filter(Boolean).join("; ");
+    const allFitting = leakAtFitting.length && !leakUnknown.length;
+    lines.push(buildLine({
+      key: null,
+      label: allFitting ? "Leak at fitting / coupling — repair on-site" : "Leak diagnostic — source TBD",
+      qty: 1,
+      price: 0,
+      custom: true,
+      source: { zoneNumbers: [zoneNumber], issueIds: ids },
+      note: notes || "Tech to identify source on-site and add repair line(s)."
+    }));
   }
 
   // wire — diagnostic per-zone + a starting estimate of run replacement

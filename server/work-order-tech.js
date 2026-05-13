@@ -17,7 +17,7 @@
 // tech-sw.js's CACHE_VERSION. If this string doesn't match the SW
 // cache version after deploy, the iPhone is serving stale JS — clear
 // website data and reload.
-const TECH_BUILD_VERSION = "tech-v33";
+const TECH_BUILD_VERSION = "tech-v34";
 function _setBadge(text, isError) {
   try {
     const badge = document.getElementById("techBuildBadge");
@@ -303,10 +303,23 @@ const ZONE_ISSUE_SUBTYPE_OPTIONS = {
     { value: "rain_sensor",  label: "Rain sensor added" },
     { value: "other",        label: "Other controller fix — see notes" }
   ],
-  // leak + other have no subtype prompt — leak rolls into the manifold
-  // rule so the per-line specificity isn't actionable; other is
-  // free-text by definition.
-  leak:  [],
+  // v34 — leak now has subtypes. Previously: ALL leaks auto-pulled
+  // manifold + valve lines (the whole_manifold_rule). That was wrong
+  // for the common cases — cut poly pipe, broken head, fitting leak —
+  // where no manifold work is required. Patrick: "when i select 'leak'
+  // in the repair requirements, and select auto build quote with
+  // repairs required... it puts non required components in." Fix: ask
+  // WHERE the leak is and route the auto-build accordingly. See the
+  // matching switch in lib/issue-rollup.js.
+  leak: [
+    { value: "",             label: "— Where is the leak? —" },
+    { value: "at_valve",     label: "At the valve box / manifold" },
+    { value: "at_pipe_poly", label: "At a poly pipe (1\" or 3/4\")" },
+    { value: "at_pipe_funny", label: "At a 1/2\" funny pipe" },
+    { value: "at_head",      label: "At a sprinkler head" },
+    { value: "at_fitting",   label: "At a fitting / coupling" },
+    { value: "unknown",      label: "Source unknown — needs investigation" }
+  ],
   other: []
 };
 

@@ -171,6 +171,23 @@
 //   • Crude (interrupts typing) but reliable. Proper render-without-
 //     reload fix is a follow-up. Right now we need photos to APPEAR.
 // Touches work-order-tech.js only.
+// Bumped 2026-05-12 (v33 → v34): leak subtypes route to correct repair.
+// Patrick: "when i select 'leak' in the repair requirements, and select
+// auto build quote with repairs required... it puts non required
+// components in." Root cause: lib/issue-rollup.js bundled ALL "leak"
+// issues with valve issues, triggering the whole_manifold_rule (which
+// pulls a manifold rebuild + N valves). That's only correct when the
+// leak is AT the manifold/valve. v34 splits leak into subtypes and
+// routes each:
+//   • at_valve     → manifold rebuild (the original behavior)
+//   • at_pipe_poly → pipe_break_3ft (poly pipe label)
+//   • at_pipe_funny→ pipe_break_3ft (funny pipe label)
+//   • at_head      → head_replacement
+//   • at_fitting   → $0 diagnostic custom line ("repair on-site")
+//   • unknown / "" → $0 diagnostic ("source TBD")
+// valve issues always trigger the manifold rule regardless. Touches
+// work-order-tech.js (subtype dropdown) + lib/issue-rollup.js (rollup
+// logic + SUBTYPE_LABELS).
 // Bumped 2026-05-12 (v32 → v33): mandatory line items in customer
 // review. Patrick: "the customer is able to unselect the service call
 // when looking at the drafted quote." Fix: lines whose `key` matches
@@ -304,7 +321,7 @@
 //     and signature last. Tap-jump from the pre-sign checklist
 //     row to #techPaymentSection still works as a fallback.
 // Touches work-order-tech.html only.
-const CACHE_VERSION = "pjl-tech-v33";
+const CACHE_VERSION = "pjl-tech-v34";
 const STATIC_ASSETS = [
   "/crm/work-order-tech.html",
   "/crm/work-order-tech.js",
