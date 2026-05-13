@@ -447,25 +447,37 @@ function readFileAsBase64(file) {
   });
 }
 
+// Surfaces a per-stage status string on the photo-add label so the
+// tech (and the dev debugging this) can see exactly which step is
+// running. Replaces the silent "Uploading…" forever-spinner with
+// "Reading 1/3…", "Sending 12 MB…", etc.
+function setUploadStatus(text) {
+  document.querySelectorAll(".tech-photo-add, .tech-issue-photo-add").forEach((el) => {
+    const label = el.querySelector("span:last-child");
+    if (label && el.classList.contains("is-uploading")) {
+      label.textContent = text || "Uploading…";
+    }
+  });
+}
+
 async function uploadWoPhotos(files, meta = {}) {
   const arr = Array.from(files || []);
   if (!arr.length) return null;
-  // Geo is read from the synchronous cache — never prompt during upload.
-  // The prompt was firing on every photo (annoying) AND was interrupting
-  // the file-picker flow on iPhone (broke uploads). Prefetched silently
-  // at page load; if it isn't cached by now, watermark just omits geo.
+  // v19 simplification — strip ALL client-side processing. Previous
+  // versions tried to resize + watermark + re-encode via canvas, which
+  // hung iOS Safari on big iPhone HEICs (data URL size limit, then
+  // bitmap memory OOM even with createImageBitmap). The server already
+  // accepts raw HEIC/PDF/JPEG/PNG/WebP/GIF, verifies magic bytes, and
+  // caps at 25 MB per file — same protections, fewer client moving
+  // parts. Watermarking can be added back server-side later if needed
+  // (it was a warranty-protection nice-to-have, not a hard requirement).
   const geo = getCachedGeoSync();
   const photos = [];
-  // Best-effort sequence label for the watermark — counts NEW media
-  // about to land. Server filename uses real n; this is just visual.
-  const existingCount = (state.photos || []).length;
-  let seq = 0;
-  for (const f of arr) {
+  for (let i = 0; i < arr.length; i++) {
+    const f = arr[i];
+    setUploadStatus(`Reading ${i + 1}/${arr.length}…`);
     const fileType = (f.type || "").toLowerCase();
-    // Reject unsupported types up-front with a clear message so the
-    // tech sees what went wrong (vs. silent skip the old code did).
     if (!fileType || !WO_ALLOWED_UPLOAD_TYPES.has(fileType)) {
-      // Some Android pickers send empty type for .heic — accept by ext.
       const lowerName = (f.name || "").toLowerCase();
       const heicByExt = lowerName.endsWith(".heic") || lowerName.endsWith(".heif");
       const pdfByExt = lowerName.endsWith(".pdf");
@@ -473,50 +485,28 @@ async function uploadWoPhotos(files, meta = {}) {
         throw new Error(`Unsupported file type${fileType ? ` "${fileType}"` : ""}. Allowed: JPEG, PNG, HEIC, WebP, GIF, PDF.`);
       }
     }
-    // Pre-flight 25 MB cap — fail fast, no wasted upload.
     if (f.size > WO_MAX_UPLOAD_BYTES) {
       const fileMb = (f.size / 1_000_000).toFixed(1);
       throw new Error(`File too large — 25 MB max (this one is ${fileMb} MB).`);
     }
-    seq += 1;
-    const takenAt = new Date();
-    const seqLabel = `#${existingCount + seq}`;
     let resolvedType = fileType;
     if (!resolvedType) {
       const lowerName = (f.name || "").toLowerCase();
       if (lowerName.endsWith(".heic")) resolvedType = "image/heic";
       else if (lowerName.endsWith(".heif")) resolvedType = "image/heif";
       else if (lowerName.endsWith(".pdf")) resolvedType = "application/pdf";
+      else resolvedType = "image/jpeg"; // safe default
     }
-    let payload;
-    if (resolvedType === "application/pdf") {
-      // PDFs skip canvas — send raw base64. The server stores as-is and
-      // the UI renders a tap-through tile (no inline preview).
-      const base64 = await readFileAsBase64(f);
-      payload = { data: base64, mediaType: "application/pdf", label: f.name || "" };
-    } else if (WO_PROCESSABLE_IMAGE_TYPES.has(resolvedType)) {
-      // Canvas-decodable images: resize, watermark, re-encode as JPEG.
-      // Existing path — unchanged.
-      const processed = await processPhotoForUpload(f, { geo, takenAt, woId: state.id, seqLabel });
-      payload = { data: processed.base64, mediaType: processed.mediaType };
-    } else {
-      // HEIC/HEIF — try canvas (Safari decodes natively), fall back to
-      // raw upload on decode failure (other browsers).
-      try {
-        const processed = await processPhotoForUpload(f, { geo, takenAt, woId: state.id, seqLabel });
-        payload = { data: processed.base64, mediaType: processed.mediaType };
-      } catch (_canvasErr) {
-        const base64 = await readFileAsBase64(f);
-        payload = { data: base64, mediaType: resolvedType };
-      }
-    }
+    // Read RAW bytes. Server handles the storage + format detection.
+    const base64 = await readFileAsBase64(f);
+    if (!base64) throw new Error(`Couldn't read "${f.name || "file"}" — got 0 bytes.`);
     photos.push({
-      ...payload,
+      data: base64,
+      mediaType: resolvedType,
       geo: geo || null,
-      takenAt: takenAt.toISOString(),
+      takenAt: new Date().toISOString(),
       ...meta,
-      // Caller-supplied meta.label overrides our fallback (PDF filename).
-      label: meta.label || payload.label || ""
+      label: meta.label || f.name || ""
     });
   }
   if (!photos.length) return null;

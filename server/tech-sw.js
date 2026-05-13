@@ -77,10 +77,22 @@
 //      native; handles 48 MP HEICs without the Image() silent hang).
 //      Image+blob URL is now the fallback.
 // Touches work-order-tech.js only.
+// Bumped 2026-05-12 (v18 → v19): photo upload — strip ALL client-side
+// processing. Patrick reported v17 + v18 STILL hung on iPhone after
+// multiple decode-path attempts. Burning hours guessing at why iOS
+// Safari hangs on canvas/Image/createImageBitmap. New approach:
+//   • Remove canvas pipeline entirely (no resize, no watermark)
+//   • Read the raw file as base64 via FileReader and ship it as-is
+//   • Per-stage status text on the upload chip so a hang at least
+//     tells us WHICH stage hung ("Reading 1/3…" vs "Uploading…")
+// Trade-offs accepted: bigger uploads (server already accepts 25 MB
+// per file, 40 MB body), no client-side EXIF/watermark. We can add
+// watermark server-side later once we know uploads actually land.
+// Touches work-order-tech.js only.
 // Lesson: bump this in the same commit as any change to the files in
 // STATIC_ASSETS, otherwise the field tech sees old behaviour even
 // after Render redeploys.
-const CACHE_VERSION = "pjl-tech-v18";
+const CACHE_VERSION = "pjl-tech-v19";
 const STATIC_ASSETS = [
   "/crm/work-order-tech.html",
   "/crm/work-order-tech.js",
