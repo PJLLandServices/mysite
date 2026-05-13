@@ -17,7 +17,7 @@
 // tech-sw.js's CACHE_VERSION. If this string doesn't match the SW
 // cache version after deploy, the iPhone is serving stale JS — clear
 // website data and reload.
-const TECH_BUILD_VERSION = "tech-v22";
+const TECH_BUILD_VERSION = "tech-v23";
 function _setBadge(text, isError) {
   try {
     const badge = document.getElementById("techBuildBadge");
@@ -55,58 +55,92 @@ window.addEventListener("unhandledrejection", (evt) => {
   _setBadge(`PROMISE ERR: ${msg}`.slice(0, 200), true);
 });
 
-// v22 — Pre-attach the visit-photo upload listener at the very top of
-// the module, BEFORE any unguarded DOM references could throw. Same
-// for the per-file logic, hoisted function declarations let us refer
-// to uploadWoPhotos/setUploadStatus here — they get resolved when the
-// click fires, by which time the rest of the module has run.
+// v23 — Brain-dead photo upload. We've been chasing a phantom for 6
+// rounds. This rewrite:
+//   • Bypasses queuedFetch entirely (uses plain fetch).
+//   • Bypasses the setUploadStatus label dance (uses alerts).
+//   • Bypasses AbortController.
+//   • Bypasses my chunked-base64 encoder (plain readAsDataURL).
+//   • Bypasses every layer that could silently fail.
 //
-// Why: 4 rounds of upload fixes "did nothing" from the user's view.
-// Strong suspicion: a later unguarded `sheetClose.addEventListener`
-// or similar was throwing, aborting module execution before the
-// photo listener attached. If that's the case, the global error
-// handler above now paints the failure into the badge — but this
-// also belt-and-suspenders the upload path so it works regardless.
-//
-// We use a flag to avoid double-binding if a downstream attachment
-// also fires (the original site at line ~1926 is still in place).
+// alert() at every step so the tech sees EXACTLY where the upload
+// stops. Yes, the alerts are intrusive — once we know this works
+// we'll remove them. For now, intrusive > invisible.
 let _photoListenerAttached = false;
 function _bindPhotoUploadListener() {
   if (_photoListenerAttached) return;
   const input = document.getElementById("techWoPhotoInput");
-  if (!input) return; // DOM not ready or HTML out of sync
+  if (!input) return;
   _photoListenerAttached = true;
   input.addEventListener("change", async (event) => {
-    if (typeof state !== "undefined" && state && state.locked) return;
     const files = event.target.files;
-    const addBtn = document.querySelector(".tech-photo-add");
-    if (addBtn) addBtn.classList.add("is-uploading");
-    setUploadStatus(`Picked ${files ? files.length : 0} file(s)…`);
+    alert(`[1/4] change event fired. files.length=${files ? files.length : "null"}`);
     if (!files || !files.length) {
-      setUploadStatus("No file selected — try again.");
-      setTimeout(() => {
-        if (addBtn) addBtn.classList.remove("is-uploading");
-        setUploadStatus(null);
-      }, 1500);
+      event.target.value = "";
       return;
     }
+    const file = files[0];
+    alert(`[2/4] read file: name="${file.name}" type="${file.type}" size=${file.size}`);
+    let base64;
     try {
-      const wo = await uploadWoPhotos(files, { category: "general" });
-      if (wo) {
-        state.photos = wo.photos || [];
-        if (typeof renderWoPhotos === "function") renderWoPhotos();
-        if (typeof renderPostSigBanner === "function") renderPostSigBanner();
-      }
+      base64 = await new Promise((resolve, reject) => {
+        const r = new FileReader();
+        r.onerror = () => reject(new Error("FileReader error: " + (r.error?.message || "unknown")));
+        r.onload = () => {
+          const s = String(r.result || "");
+          const idx = s.indexOf(",");
+          resolve(idx >= 0 ? s.slice(idx + 1) : s);
+        };
+        r.readAsDataURL(file);
+      });
     } catch (err) {
-      alert(err.message || "Couldn't upload photo.");
-    } finally {
-      if (addBtn) addBtn.classList.remove("is-uploading");
+      alert(`[2/4 FAILED] ${err.message}`);
       event.target.value = "";
+      return;
     }
+    alert(`[3/4] file read OK (${base64.length} base64 chars). POSTing to server…`);
+    const woId = (typeof state !== "undefined" && state && state.id) ? state.id : null;
+    if (!woId) {
+      alert("[3/4 FAILED] state.id is missing — page hasn't fully loaded?");
+      event.target.value = "";
+      return;
+    }
+    let res, data;
+    try {
+      res = await fetch(`/api/work-orders/${encodeURIComponent(woId)}/photos`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          photos: [{
+            data: base64,
+            mediaType: file.type || "image/jpeg",
+            category: "general",
+            label: file.name || ""
+          }]
+        })
+      });
+      data = await res.json().catch(() => ({}));
+    } catch (err) {
+      alert(`[4/4 NETWORK FAILED] ${err.message}`);
+      event.target.value = "";
+      return;
+    }
+    if (!res.ok) {
+      alert(`[4/4 SERVER FAILED] HTTP ${res.status}: ${(data.errors && data.errors[0]) || "no error message"}`);
+      event.target.value = "";
+      return;
+    }
+    alert(`[4/4 SUCCESS] uploaded! Server returned photo n=${data.added?.[0]?.n}. Reload to see thumbnail.`);
+    // Best-effort UI refresh.
+    if (data.workOrder && typeof state !== "undefined" && state) {
+      state.photos = data.workOrder.photos || [];
+      if (typeof renderWoPhotos === "function") {
+        try { renderWoPhotos(); } catch (_e) {}
+      }
+    }
+    event.target.value = "";
   });
 }
-// Try once at script load (DOM should be ready since script tag is at
-// end of body), and again on DOMContentLoaded as a belt-and-suspenders.
 _bindPhotoUploadListener();
 document.addEventListener("DOMContentLoaded", _bindPhotoUploadListener);
 

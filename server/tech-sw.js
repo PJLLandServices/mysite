@@ -149,7 +149,14 @@
 // Lesson: bump this in the same commit as any change to the files in
 // STATIC_ASSETS, otherwise the field tech sees old behaviour even
 // after Render redeploys.
-const CACHE_VERSION = "pjl-tech-v22";
+// Bumped 2026-05-12 (v22 → v23): brain-dead diagnostic upload. After
+// v17-v22 all failed (last one: "literally NOTHING" on desktop AND
+// iphone), this rip out queuedFetch, setUploadStatus, AbortController,
+// chunked base64, and every other layer. Replace with: FileReader →
+// fetch → done, with alert() at each step so the tech sees exactly
+// where it stops. Intrusive, but invisible failure has cost us 6
+// rounds. Touches work-order-tech.js only.
+const CACHE_VERSION = "pjl-tech-v23";
 const STATIC_ASSETS = [
   "/crm/work-order-tech.html",
   "/crm/work-order-tech.js",
