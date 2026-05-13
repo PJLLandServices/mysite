@@ -17,7 +17,7 @@
 // tech-sw.js's CACHE_VERSION. If this string doesn't match the SW
 // cache version after deploy, the iPhone is serving stale JS — clear
 // website data and reload.
-const TECH_BUILD_VERSION = "tech-v27";
+const TECH_BUILD_VERSION = "tech-v28";
 function _setBadge(text, isError) {
   try {
     const badge = document.getElementById("techBuildBadge");
@@ -1176,16 +1176,55 @@ techZoneList.addEventListener("click", (event) => {
 // zone even if the touch event fires twice). Disable for ~600 ms across
 // the PATCH round-trip, then re-enable.
 const techAddZoneBtn = document.getElementById("techAddZoneBtn");
-techAddZoneBtn?.addEventListener("click", () => {
-  if (state.locked) return;
-  if (techAddZoneBtn.dataset.busy === "1") return;
-  techAddZoneBtn.dataset.busy = "1";
-  techAddZoneBtn.setAttribute("disabled", "");
-  setTimeout(() => {
-    techAddZoneBtn.removeAttribute("disabled");
-    delete techAddZoneBtn.dataset.busy;
-  }, 600);
 
+// v28 — Multi-select zone picker. For service_visit WOs the tech often
+// only investigates a subset of the property's zones (e.g. zone 4 + 7,
+// skipping 1-3, 5, 6). Tapping "+ Add zone" opens a picker showing the
+// property's known zones with checkboxes; the tech ticks the relevant
+// ones and taps "Add selected." Zones already on the WO are filtered
+// out. Spring/fall WOs scaffold all property zones at create time so
+// they don't typically need this — but the picker is available for
+// any type as long as the property has zones.
+function openZonePicker() {
+  const picker = document.getElementById("techZonePicker");
+  const list = document.getElementById("techZonePickerList");
+  if (!picker || !list) return;
+  const propertyZones = (state.linkedProperty && state.linkedProperty.system && Array.isArray(state.linkedProperty.system.zones))
+    ? state.linkedProperty.system.zones : [];
+  const onWoNumbers = new Set((state.zones || []).map((z) => Number(z.number)).filter(Boolean));
+  const candidates = propertyZones
+    .filter((pz) => pz && Number(pz.number) > 0 && !onWoNumbers.has(Number(pz.number)))
+    .sort((a, b) => Number(a.number) - Number(b.number));
+  if (!candidates.length) {
+    // Nothing to pick — fall back to blank-zone add.
+    picker.hidden = true;
+    addBlankZoneAndOpen();
+    return;
+  }
+  list.innerHTML = candidates.map((pz) => {
+    const n = Number(pz.number);
+    const loc = String(pz.location || pz.label || `Zone ${n}`);
+    return `<li>
+      <label style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:#fff;border:1px solid #e0ddd1;border-radius:6px;cursor:pointer;">
+        <input type="checkbox" value="${n}" style="width:20px;height:20px;flex-shrink:0;">
+        <span style="display:flex;flex-direction:column;gap:2px;flex:1;">
+          <strong style="font-size:14px;">Zone ${n}</strong>
+          <span style="font-size:12px;color:#555;">${escapeHtml(loc)}</span>
+        </span>
+      </label>
+    </li>`;
+  }).join("");
+  picker.hidden = false;
+  // Scroll the picker into view so the tech doesn't have to hunt.
+  picker.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+function closeZonePicker() {
+  const picker = document.getElementById("techZonePicker");
+  if (picker) picker.hidden = true;
+}
+
+function addBlankZoneAndOpen() {
   const usedNumbers = (state.zones || [])
     .map((z) => Number(z.number) || 0)
     .filter((n) => n > 0);
@@ -1205,9 +1244,80 @@ techAddZoneBtn?.addEventListener("click", () => {
   });
   renderZones();
   patchWorkOrder({ zones: state.zones });
-  // Open the just-added zone for immediate edit. Sort-by-number doesn't
-  // mutate state.zones so the new entry sits at length - 1.
   openZoneSheet(state.zones.length - 1);
+}
+
+techAddZoneBtn?.addEventListener("click", () => {
+  if (state.locked) return;
+  if (techAddZoneBtn.dataset.busy === "1") return;
+  techAddZoneBtn.dataset.busy = "1";
+  techAddZoneBtn.setAttribute("disabled", "");
+  setTimeout(() => {
+    techAddZoneBtn.removeAttribute("disabled");
+    delete techAddZoneBtn.dataset.busy;
+  }, 600);
+
+  // If the property has known zones, open the multi-select picker.
+  // Otherwise (no linked property, or empty zone list), fall straight
+  // through to the legacy blank-zone behavior.
+  const propertyZones = (state.linkedProperty && state.linkedProperty.system && Array.isArray(state.linkedProperty.system.zones))
+    ? state.linkedProperty.system.zones : [];
+  if (propertyZones.length) {
+    openZonePicker();
+  } else {
+    addBlankZoneAndOpen();
+  }
+});
+
+// Picker action wiring — multi-add the checked zones with metadata
+// pulled from the property record (location, sprinklerTypes, coverage)
+// so the tech doesn't have to retype what's already known.
+document.getElementById("techZonePickerAdd")?.addEventListener("click", () => {
+  const picker = document.getElementById("techZonePicker");
+  if (!picker) return;
+  const checked = picker.querySelectorAll('input[type="checkbox"]:checked');
+  if (!checked.length) {
+    closeZonePicker();
+    return;
+  }
+  const propertyZones = (state.linkedProperty && state.linkedProperty.system && Array.isArray(state.linkedProperty.system.zones))
+    ? state.linkedProperty.system.zones : [];
+  const blankChecks = {};
+  for (const k of ZONE_CHECK_KEYS) blankChecks[k] = false;
+  const addedNumbers = [];
+  checked.forEach((cb) => {
+    const n = Number(cb.value);
+    if (!n) return;
+    const pz = propertyZones.find((p) => Number(p.number) === n);
+    state.zones.push({
+      number: n,
+      kind: "zone",
+      location: pz ? (pz.location || pz.label || `Zone ${n}`) : `Zone ${n}`,
+      sprinklerTypes: (pz && Array.isArray(pz.sprinklerTypes)) ? pz.sprinklerTypes.slice() : [],
+      coverage: (pz && Array.isArray(pz.coverage)) ? pz.coverage.slice() : [],
+      status: "",
+      notes: "",
+      checks: { ...blankChecks },
+      issues: []
+    });
+    addedNumbers.push(n);
+  });
+  renderZones();
+  patchWorkOrder({ zones: state.zones });
+  closeZonePicker();
+  // If the tech added exactly one zone, open it for immediate edit —
+  // matches the single-add flow. If they added multiple, leave the
+  // zone list visible so they can pick which one to work on first.
+  if (addedNumbers.length === 1) {
+    const idx = state.zones.findIndex((z) => Number(z.number) === addedNumbers[0]);
+    if (idx >= 0) openZoneSheet(idx);
+  }
+});
+
+document.getElementById("techZonePickerCancel")?.addEventListener("click", closeZonePicker);
+document.getElementById("techZonePickerAddBlank")?.addEventListener("click", () => {
+  closeZonePicker();
+  addBlankZoneAndOpen();
 });
 
 // ---- Zone-edit bottom sheet -------------------------------------

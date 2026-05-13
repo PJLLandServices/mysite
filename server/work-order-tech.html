@@ -184,6 +184,25 @@
       </header>
       <p class="tech-empty-zones" id="techEmptyZones" hidden>No zones on this work order yet. Tap + Add zone to log work.</p>
       <ul class="tech-zone-list" id="techZoneList"></ul>
+
+      <!-- Zone picker (v28). Service-visit WOs open this when the tech
+           taps "+ Add zone(s)" — multi-select from the property's known
+           zones so the tech can pick zones 4 + 7 without scrolling
+           through (or marking) zones 1–3, 5, 6. Hidden by default;
+           opened/closed by JS. Inline-styled so no CSS cache bump.
+           Property zones already on the WO are filtered out of the
+           list (use the per-zone Delete button to remove). -->
+      <div id="techZonePicker" hidden
+        style="margin-top:8px;padding:12px;border:1px solid #d9d6c8;border-radius:8px;background:#faf9f4;">
+        <p style="margin:0 0 8px;font-size:13px;color:#444;">Pick the zones you're investigating. The rest stay off this work order — no need to check them.</p>
+        <ul id="techZonePickerList" style="list-style:none;padding:0;margin:0 0 12px;display:flex;flex-direction:column;gap:6px;"></ul>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <button type="button" id="techZonePickerCancel" style="flex:1;min-width:100px;padding:10px 12px;background:#fff;border:1px solid #c9c6b8;border-radius:6px;font-weight:500;cursor:pointer;">Cancel</button>
+          <button type="button" id="techZonePickerAdd" style="flex:2;min-width:140px;padding:10px 12px;background:#1B4D2E;color:#fff;border:none;border-radius:6px;font-weight:600;cursor:pointer;">Add selected zones</button>
+        </div>
+        <p style="margin:10px 0 0;font-size:12px;color:#666;">Need a zone that isn't in the property's profile? <button type="button" id="techZonePickerAddBlank" style="background:none;border:none;color:#1B4D2E;text-decoration:underline;cursor:pointer;padding:0;font:inherit;">Add a blank zone instead</button>.</p>
+      </div>
+
       <button type="button" class="tech-zone-issue-add" id="techAddZoneBtn">+ Add zone</button>
     </section>
 

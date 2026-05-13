@@ -171,6 +171,20 @@
 //   • Crude (interrupts typing) but reliable. Proper render-without-
 //     reload fix is a follow-up. Right now we need photos to APPEAR.
 // Touches work-order-tech.js only.
+// Bumped 2026-05-12 (v27 → v28): multi-select zone picker on +Add zone.
+// Patrick's service-call flow: arrive at house, problem is zone 4,
+// shouldn't have to check zones 1-3. Tapping "+ Add zone" now opens
+// an inline picker listing the property's known zones (filtered to
+// those NOT already on the WO) with checkboxes. Tech ticks the
+// relevant zones, taps "Add selected" — all chosen zones get added
+// to the WO in one shot, with location/sprinklerTypes/coverage
+// pre-filled from the property record. The "+Add a blank zone
+// instead" link inside the picker is the escape hatch for zones
+// the property profile doesn't know about. Falls through to the
+// legacy single-blank-zone behavior when the WO has no linked
+// property or every property zone is already on the WO. Touches
+// work-order-tech.html (new picker DOM) + work-order-tech.js
+// (openZonePicker + the new click handlers).
 // Bumped 2026-05-12 (v26 → v27): return-visit Yes/No gate. Patrick's
 // service-call flow: tech investigates only the problem zones, builds
 // a quote, then explicitly answers "Need a return visit?" before
@@ -207,7 +221,7 @@
 //     and signature last. Tap-jump from the pre-sign checklist
 //     row to #techPaymentSection still works as a fallback.
 // Touches work-order-tech.html only.
-const CACHE_VERSION = "pjl-tech-v27";
+const CACHE_VERSION = "pjl-tech-v28";
 const STATIC_ASSETS = [
   "/crm/work-order-tech.html",
   "/crm/work-order-tech.js",
