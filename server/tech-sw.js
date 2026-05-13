@@ -171,6 +171,18 @@
 //   • Crude (interrupts typing) but reliable. Proper render-without-
 //     reload fix is a follow-up. Right now we need photos to APPEAR.
 // Touches work-order-tech.js only.
+// Bumped 2026-05-12 (v28 → v29): zone picker refactored from multi-
+// select checkboxes to sequential one-at-a-time tap-to-add. Patrick
+// described the actual service-call workflow: arrive at site → test
+// zone 3 at the controller → diagnose → open WO → tap zone 3 → work
+// on zone 3 → finish → tap +Add zone → tap zone 8 → repeat. The v28
+// checkbox multi-select was wrong — it batched-add but the tech wants
+// focus on one zone at a time. v29 makes each picker row a button
+// that adds-and-opens that single zone, with the next zone being
+// picked from the still-open WO when the tech is ready.
+// Touches work-order-tech.html (picker DOM simplified) +
+// work-order-tech.js (new addPropertyZoneAndOpen() + delegated click
+// handler on the picker list, batch-add handler removed).
 // Bumped 2026-05-12 (v27 → v28): multi-select zone picker on +Add zone.
 // Patrick's service-call flow: arrive at house, problem is zone 4,
 // shouldn't have to check zones 1-3. Tapping "+ Add zone" now opens
@@ -221,7 +233,7 @@
 //     and signature last. Tap-jump from the pre-sign checklist
 //     row to #techPaymentSection still works as a fallback.
 // Touches work-order-tech.html only.
-const CACHE_VERSION = "pjl-tech-v28";
+const CACHE_VERSION = "pjl-tech-v29";
 const STATIC_ASSETS = [
   "/crm/work-order-tech.html",
   "/crm/work-order-tech.js",
