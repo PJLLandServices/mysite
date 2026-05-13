@@ -249,26 +249,38 @@ let state = {
 // this — it returns null fast on subsequent invocations (no re-prompt).
 let _cachedGeo = undefined; // undefined = not yet asked
 
-async function getCurrentGeo() {
-  if (_cachedGeo !== undefined) return _cachedGeo;
+// Returns the cached geo (or null) IMMEDIATELY without prompting.
+// Watermark uses this — never block the upload on a geo permission
+// prompt. The prompt is annoying every page load (iOS quirk) AND it
+// breaks the file-picker flow when it interrupts mid-upload. Geo
+// is a nice-to-have watermark, not a requirement.
+function getCachedGeoSync() {
+  return _cachedGeo === undefined ? null : _cachedGeo;
+}
+
+// Fire-and-forget geo prefetch on page load. Resolves _cachedGeo so
+// later upload calls find it. NEVER awaited from the upload path —
+// upload proceeds immediately whether geo is cached or not.
+// enableHighAccuracy disabled (cellular triangulation is enough for
+// a watermark "where was this photo taken" tag, and high-accuracy
+// triggers GPS which prompts more aggressively on iOS).
+function prefetchGeoInBackground() {
+  if (_cachedGeo !== undefined) return;
   if (typeof navigator === "undefined" || !("geolocation" in navigator)) {
     _cachedGeo = null;
-    return null;
+    return;
   }
-  return new Promise((resolve) => {
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        _cachedGeo = {
-          lat: pos.coords.latitude,
-          lng: pos.coords.longitude,
-          accuracy: pos.coords.accuracy
-        };
-        resolve(_cachedGeo);
-      },
-      () => { _cachedGeo = null; resolve(null); },
-      { enableHighAccuracy: true, timeout: 8000, maximumAge: 60_000 }
-    );
-  });
+  navigator.geolocation.getCurrentPosition(
+    (pos) => {
+      _cachedGeo = {
+        lat: pos.coords.latitude,
+        lng: pos.coords.longitude,
+        accuracy: pos.coords.accuracy
+      };
+    },
+    () => { _cachedGeo = null; },
+    { enableHighAccuracy: false, timeout: 8000, maximumAge: 3_600_000 }
+  );
 }
 
 // Burn a watermark strip onto a canvas. Bottom-right corner, semi-
@@ -327,61 +339,81 @@ async function processPhotoForUpload(file, opts = {}) {
     formatGeoStamp(geo),
     [opts.woId, opts.seqLabel].filter(Boolean).join(" · ")
   ];
-  // iOS Safari fix: use URL.createObjectURL (blob: URL, no size cap)
-  // instead of FileReader.readAsDataURL (base64 data: URL, ~10 MB cap
-  // on iOS). A 48 MP iPhone HEIC base64-encodes to 7–20 MB and silently
-  // hangs Image.onload on iOS — neither load nor error fires, leaving
-  // the "Uploading…" state stuck forever. Blob URLs avoid the encode
-  // step entirely and have no size limit.
-  //
-  // Also wrap the whole thing in a 30 s timeout so if anything still
-  // goes sideways, the tech gets a clear error instead of an indefinite
-  // spinner.
-  const objectUrl = URL.createObjectURL(file);
-  let cleanedUp = false;
-  const cleanup = () => {
-    if (cleanedUp) return;
-    cleanedUp = true;
-    try { URL.revokeObjectURL(objectUrl); } catch { /* tolerate */ }
-  };
-  return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      cleanup();
-      reject(new Error("Photo processing timed out (30 s). The file may be too large or in an unsupported format — try a smaller export."));
-    }, 30_000);
-    const img = new Image();
-    // decoding="async" hints to the browser not to block the event
-    // loop, helpful for big HEICs.
-    img.decoding = "async";
-    img.onerror = () => {
-      clearTimeout(timeout);
-      cleanup();
-      reject(new Error("Couldn't decode that image. Try a different file or convert to JPEG."));
-    };
-    img.onload = () => {
-      clearTimeout(timeout);
-      try {
-        const longest = Math.max(img.naturalWidth || img.width, img.naturalHeight || img.height);
-        const scale = longest > 1280 ? 1280 / longest : 1;
-        const w = Math.max(1, Math.round((img.naturalWidth || img.width) * scale));
-        const h = Math.max(1, Math.round((img.naturalHeight || img.height) * scale));
-        const canvas = document.createElement("canvas");
-        canvas.width = w;
-        canvas.height = h;
-        const ctx = canvas.getContext("2d");
-        ctx.drawImage(img, 0, 0, w, h);
-        applyPjlWatermark(canvas, ctx, watermarkLines);
-        const dataUrl = canvas.toDataURL("image/jpeg", 0.82);
-        const base64 = dataUrl.split(",", 2)[1] || "";
-        cleanup();
-        resolve({ base64, mediaType: "image/jpeg" });
-      } catch (err) {
-        cleanup();
-        reject(err instanceof Error ? err : new Error("Couldn't process that image."));
-      }
-    };
-    img.src = objectUrl;
+  // Wrap everything in a 30 s timeout so a stuck decode surfaces a
+  // clear error instead of leaving "Uploading…" indefinitely. Race
+  // against the timer.
+  const timeoutPromise = new Promise((_resolve, reject) => {
+    setTimeout(() => reject(new Error(
+      "Photo processing timed out (30 s). The file may be too large or in an unsupported format — try a smaller export, or take a fresh photo."
+    )), 30_000);
   });
+  return Promise.race([
+    doProcessPhoto(file, watermarkLines),
+    timeoutPromise
+  ]);
+}
+
+// Inner decode → resize → watermark → encode. iOS Safari fix: prefer
+// createImageBitmap (decodes natively, handles 48 MP HEIC without the
+// data-URL + Image() hang the old path suffered from). Falls back to
+// the Image + createObjectURL path on older browsers.
+async function doProcessPhoto(file, watermarkLines) {
+  let bitmap = null;
+  let objectUrl = null;
+  try {
+    // Path A — createImageBitmap. Supported by iOS Safari 15+; the
+    // iOS-recommended API for decoding large camera photos. Avoids the
+    // Image/onload silent-hang issue entirely.
+    if (typeof createImageBitmap === "function") {
+      try {
+        bitmap = await createImageBitmap(file);
+      } catch (err) {
+        console.warn("[photo] createImageBitmap failed, falling back:", err?.message);
+        bitmap = null;
+      }
+    }
+    // Path B — fallback. Image + blob: URL. Slightly worse on big HEICs
+    // but still avoids the >10 MB data-URL trap.
+    if (!bitmap) {
+      objectUrl = URL.createObjectURL(file);
+      bitmap = await new Promise((resolve, reject) => {
+        const img = new Image();
+        img.decoding = "async";
+        img.onerror = () => reject(new Error("Couldn't decode that image. Try a different file or convert to JPEG."));
+        img.onload = () => resolve(img);
+        img.src = objectUrl;
+      });
+    }
+    const sourceW = bitmap.width || bitmap.naturalWidth || 0;
+    const sourceH = bitmap.height || bitmap.naturalHeight || 0;
+    if (!sourceW || !sourceH) {
+      throw new Error("Image has no readable dimensions. Try a different file.");
+    }
+    const longest = Math.max(sourceW, sourceH);
+    const scale = longest > 1280 ? 1280 / longest : 1;
+    const w = Math.max(1, Math.round(sourceW * scale));
+    const h = Math.max(1, Math.round(sourceH * scale));
+    const canvas = document.createElement("canvas");
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext("2d");
+    ctx.drawImage(bitmap, 0, 0, w, h);
+    applyPjlWatermark(canvas, ctx, watermarkLines);
+    const dataUrl = canvas.toDataURL("image/jpeg", 0.82);
+    const base64 = dataUrl.split(",", 2)[1] || "";
+    if (!base64) throw new Error("Couldn't encode the resized image.");
+    return { base64, mediaType: "image/jpeg" };
+  } finally {
+    // Memory hygiene — close the ImageBitmap (frees native bitmap
+    // memory immediately instead of waiting for GC) and revoke the
+    // blob URL.
+    if (bitmap && typeof bitmap.close === "function") {
+      try { bitmap.close(); } catch { /* tolerate */ }
+    }
+    if (objectUrl) {
+      try { URL.revokeObjectURL(objectUrl); } catch { /* tolerate */ }
+    }
+  }
 }
 
 // Upload one or more files to /api/work-orders/:id/photos. `meta` is
@@ -418,9 +450,11 @@ function readFileAsBase64(file) {
 async function uploadWoPhotos(files, meta = {}) {
   const arr = Array.from(files || []);
   if (!arr.length) return null;
-  // Geolocation prompt fires here — once per page load. Returns null on
-  // denial / timeout, in which case the watermark + uploaded meta omit it.
-  const geo = await getCurrentGeo();
+  // Geo is read from the synchronous cache — never prompt during upload.
+  // The prompt was firing on every photo (annoying) AND was interrupting
+  // the file-picker flow on iPhone (broke uploads). Prefetched silently
+  // at page load; if it isn't cached by now, watermark just omits geo.
+  const geo = getCachedGeoSync();
   const photos = [];
   // Best-effort sequence label for the watermark — counts NEW media
   // about to land. Server filename uses real n; this is just visual.

@@ -67,10 +67,20 @@
 // timeout + 90 s upload timeout so a hang surfaces a clear error
 // instead of leaving "Uploading…" indefinitely. Touches
 // work-order-tech.js only.
+// Bumped 2026-05-12 (v17 → v18): photo upload follow-up — Patrick
+// reported v17 STILL hung on iPhone and the geo permission prompt
+// was firing on every upload. Two fixes:
+//   1. Removed geo from the upload critical path entirely. The
+//      watermark uses a SYNC cached geo (set null until/unless a
+//      prefetch resolves it). No more prompt-blocking-upload.
+//   2. Switched primary decode path to createImageBitmap (iOS-
+//      native; handles 48 MP HEICs without the Image() silent hang).
+//      Image+blob URL is now the fallback.
+// Touches work-order-tech.js only.
 // Lesson: bump this in the same commit as any change to the files in
 // STATIC_ASSETS, otherwise the field tech sees old behaviour even
 // after Render redeploys.
-const CACHE_VERSION = "pjl-tech-v17";
+const CACHE_VERSION = "pjl-tech-v18";
 const STATIC_ASSETS = [
   "/crm/work-order-tech.html",
   "/crm/work-order-tech.js",
