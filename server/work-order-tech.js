@@ -17,7 +17,7 @@
 // tech-sw.js's CACHE_VERSION. If this string doesn't match the SW
 // cache version after deploy, the iPhone is serving stale JS — clear
 // website data and reload.
-const TECH_BUILD_VERSION = "tech-v24";
+const TECH_BUILD_VERSION = "tech-v25";
 function _setBadge(text, isError) {
   try {
     const badge = document.getElementById("techBuildBadge");

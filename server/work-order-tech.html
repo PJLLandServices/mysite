@@ -328,70 +328,6 @@
       <textarea id="techNotes" rows="5" placeholder="Anything else worth recording…" data-voice-input></textarea>
     </details>
 
-    <!-- Customer sign-off — the legally binding moment per spec §4.3.2.
-         Pre-sign: typed customer name + signature canvas + acknowledgement
-         checkbox + submit button. Post-sign: read-only display of the
-         captured image, name, date/time. Server fills in IP + userAgent
-         on sign and flips wo.locked to true. -->
-    <section class="tech-section tech-signoff" id="techSignoffSection">
-      <h2 class="tech-section-title">Customer sign-off</h2>
-
-      <div class="tech-signoff-form" id="techSignoffForm">
-        <!-- Pre-sign checklist (Brief: WO Field-Readiness §6.3) — every
-             gate that has to pass before the merged "Sign, Lock &
-             Generate Invoice" button activates. Always visible. Each
-             row has a status icon (✓ done / ⨯ pending), the gate name,
-             and tap-jumps to the relevant capture surface so the tech
-             can resolve gaps without scrolling around. Replaces the
-             former "failures only" inline list. -->
-        <section class="tech-pre-sign-checklist" aria-labelledby="techPreSignTitle">
-          <p class="tech-pre-sign-eyebrow" id="techPreSignTitle">Before signing</p>
-          <ul class="tech-pre-sign-list" id="techPreSignList"></ul>
-        </section>
-
-        <label class="tech-signoff-name-label">
-          <span>Customer name (printed)</span>
-          <input type="text" id="techSignoffName" placeholder="e.g. Patrick Lalande" autocomplete="off" autocapitalize="words">
-        </label>
-
-        <p class="tech-signoff-canvas-label">Customer signature</p>
-        <div class="tech-signoff-canvas-wrap">
-          <canvas id="techSignoffCanvas" class="tech-signoff-canvas" width="600" height="200"></canvas>
-          <button type="button" class="tech-signoff-clear" id="techSignoffClear">Clear</button>
-        </div>
-
-        <label class="tech-signoff-ack">
-          <input type="checkbox" id="techSignoffAck">
-          <span>I authorize the work described above</span>
-        </label>
-
-        <button type="button" class="tech-signoff-submit" id="techSignoffSubmit" disabled>Sign, lock &amp; generate invoice</button>
-        <p class="tech-signoff-note">Once signed, the work order locks, completes the visit, and drafts a customer invoice. Scope additions after sign-off need a fresh signature.</p>
-
-        <!-- Cascade recovery surfaces (Brief: WO Field-Readiness §6.5).
-             Conditionally rendered: visible only when the WO is locked
-             AND the cascade didn't produce a downstream artifact (no
-             invoice / no cascade_fire history entry). Hidden on a clean
-             WO so the surface stays uncluttered. -->
-        <div class="tech-cascade-recovery" id="techCascadeRecovery" hidden>
-          <p class="tech-cascade-recovery-help" id="techCascadeRecoveryHelp">This visit signed and locked but the invoice didn't draft. Use the buttons below to recover.</p>
-          <button type="button" class="tech-cascade-recovery-btn" id="techGenerateInvoiceBtn" hidden>Generate invoice now</button>
-          <button type="button" class="tech-cascade-recovery-btn tech-cascade-recovery-btn--outline" id="techRunCascadeBtn" hidden>Re-run cascade</button>
-          <p class="tech-cascade-recovery-status" id="techCascadeRecoveryStatus" hidden></p>
-        </div>
-      </div>
-
-      <div class="tech-signoff-signed" id="techSignoffSigned" hidden>
-        <div class="tech-signoff-image-wrap">
-          <img id="techSignoffImage" alt="Customer signature">
-        </div>
-        <p class="tech-signoff-signed-meta">
-          Signed by <strong id="techSignoffSignedName"></strong>
-          <span id="techSignoffSignedAt"></span>
-        </p>
-      </div>
-    </section>
-
     <!-- Property Updates Captured — auto-tracked by the completion
          cascade (zone description changes, new zones, controller info).
          Surfaced here so the tech sees what's about to flow back into
@@ -471,9 +407,79 @@
       <fieldset class="tech-payment-captured">
         <legend>Payment captured on-site?</legend>
         <label><input type="radio" name="techPayCaptured" value="yes" id="techPayCapturedYes"> <span>Yes</span></label>
-        <label><input type="radio" name="techPayCaptured" value="no" id="techPayCapturedNo" checked> <span>No — invoice to follow</span></label>
+        <label><input type="radio" name="techPayCaptured" value="no" id="techPayCapturedNo"> <span>No — invoice to follow</span></label>
       </fieldset>
       <p class="tech-payment-invoice" id="techPayInvoiceLine">No draft invoice yet. One will be created when the visit is marked completed.</p>
+    </section>
+
+    <!-- Customer sign-off — the legally binding moment per spec §4.3.2.
+         Pre-sign: typed customer name + signature canvas + acknowledgement
+         checkbox + submit button. Post-sign: read-only display of the
+         captured image, name, date/time. Server fills in IP + userAgent
+         on sign and flips wo.locked to true.
+         Moved (2026-05-12) to live AFTER Payment & Billing in the page
+         flow so the tech naturally selects payment before reaching the
+         signature canvas. Previously sat right under visit photos,
+         which surfaced the signoff form before the tech had any chance
+         to pick a payment method, leading to "Pre-sign gates unmet:
+         payment method not selected" errors at submit time. -->
+    <section class="tech-section tech-signoff" id="techSignoffSection">
+      <h2 class="tech-section-title">Customer sign-off</h2>
+
+      <div class="tech-signoff-form" id="techSignoffForm">
+        <!-- Pre-sign checklist (Brief: WO Field-Readiness §6.3) — every
+             gate that has to pass before the merged "Sign, Lock &
+             Generate Invoice" button activates. Always visible. Each
+             row has a status icon (✓ done / ⨯ pending), the gate name,
+             and tap-jumps to the relevant capture surface so the tech
+             can resolve gaps without scrolling around. Replaces the
+             former "failures only" inline list. -->
+        <section class="tech-pre-sign-checklist" aria-labelledby="techPreSignTitle">
+          <p class="tech-pre-sign-eyebrow" id="techPreSignTitle">Before signing</p>
+          <ul class="tech-pre-sign-list" id="techPreSignList"></ul>
+        </section>
+
+        <label class="tech-signoff-name-label">
+          <span>Customer name (printed)</span>
+          <input type="text" id="techSignoffName" placeholder="e.g. Patrick Lalande" autocomplete="off" autocapitalize="words">
+        </label>
+
+        <p class="tech-signoff-canvas-label">Customer signature</p>
+        <div class="tech-signoff-canvas-wrap">
+          <canvas id="techSignoffCanvas" class="tech-signoff-canvas" width="600" height="200"></canvas>
+          <button type="button" class="tech-signoff-clear" id="techSignoffClear">Clear</button>
+        </div>
+
+        <label class="tech-signoff-ack">
+          <input type="checkbox" id="techSignoffAck">
+          <span>I authorize the work described above</span>
+        </label>
+
+        <button type="button" class="tech-signoff-submit" id="techSignoffSubmit" disabled>Sign, lock &amp; generate invoice</button>
+        <p class="tech-signoff-note">Once signed, the work order locks, completes the visit, and drafts a customer invoice. Scope additions after sign-off need a fresh signature.</p>
+
+        <!-- Cascade recovery surfaces (Brief: WO Field-Readiness §6.5).
+             Conditionally rendered: visible only when the WO is locked
+             AND the cascade didn't produce a downstream artifact (no
+             invoice / no cascade_fire history entry). Hidden on a clean
+             WO so the surface stays uncluttered. -->
+        <div class="tech-cascade-recovery" id="techCascadeRecovery" hidden>
+          <p class="tech-cascade-recovery-help" id="techCascadeRecoveryHelp">This visit signed and locked but the invoice didn't draft. Use the buttons below to recover.</p>
+          <button type="button" class="tech-cascade-recovery-btn" id="techGenerateInvoiceBtn" hidden>Generate invoice now</button>
+          <button type="button" class="tech-cascade-recovery-btn tech-cascade-recovery-btn--outline" id="techRunCascadeBtn" hidden>Re-run cascade</button>
+          <p class="tech-cascade-recovery-status" id="techCascadeRecoveryStatus" hidden></p>
+        </div>
+      </div>
+
+      <div class="tech-signoff-signed" id="techSignoffSigned" hidden>
+        <div class="tech-signoff-image-wrap">
+          <img id="techSignoffImage" alt="Customer signature">
+        </div>
+        <p class="tech-signoff-signed-meta">
+          Signed by <strong id="techSignoffSignedName"></strong>
+          <span id="techSignoffSignedAt"></span>
+        </p>
+      </div>
     </section>
 
     <!-- History — append-only audit trail per spec §10 r4. Collapsed

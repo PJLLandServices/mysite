@@ -171,7 +171,22 @@
 //   • Crude (interrupts typing) but reliable. Proper render-without-
 //     reload fix is a follow-up. Right now we need photos to APPEAR.
 // Touches work-order-tech.js only.
-const CACHE_VERSION = "pjl-tech-v24";
+// Bumped 2026-05-12 (v24 → v25): tech-mode layout + payment-radio fix.
+// Patrick hit "Pre-sign gates unmet: payment method not selected" at
+// submit time even though the No radio LOOKED checked. Two bugs:
+//   • HTML had `checked` on the No radio, but the JS unchecks both
+//     radios on render when state.paidOnSite is null. Visual was
+//     lying about state. Removed `checked`. Tech now sees BOTH
+//     radios unchecked → forced to actively pick one → state goes
+//     to true/false → submit gate passes.
+//   • The Signoff section sat above Payment in the HTML flow, so
+//     the tech reached the signature canvas before ever scrolling
+//     past payment. Moved Signoff to live AFTER Payment & Billing,
+//     so the natural top-to-bottom scroll surfaces payment first
+//     and signature last. Tap-jump from the pre-sign checklist
+//     row to #techPaymentSection still works as a fallback.
+// Touches work-order-tech.html only.
+const CACHE_VERSION = "pjl-tech-v25";
 const STATIC_ASSETS = [
   "/crm/work-order-tech.html",
   "/crm/work-order-tech.js",
