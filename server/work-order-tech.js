@@ -17,11 +17,98 @@
 // tech-sw.js's CACHE_VERSION. If this string doesn't match the SW
 // cache version after deploy, the iPhone is serving stale JS — clear
 // website data and reload.
-const TECH_BUILD_VERSION = "tech-v21";
-try {
-  const _badge = document.getElementById("techBuildBadge");
-  if (_badge) _badge.textContent = TECH_BUILD_VERSION;
-} catch (_e) { /* tolerate */ }
+const TECH_BUILD_VERSION = "tech-v22";
+function _setBadge(text, isError) {
+  try {
+    const badge = document.getElementById("techBuildBadge");
+    if (!badge) return;
+    badge.textContent = text;
+    if (isError) {
+      badge.style.background = "rgba(220,38,38,0.95)";
+      badge.style.color = "#fff";
+      badge.style.maxWidth = "85vw";
+      badge.style.whiteSpace = "normal";
+      badge.style.wordBreak = "break-word";
+    }
+  } catch (_e) { /* tolerate */ }
+}
+_setBadge(TECH_BUILD_VERSION, false);
+
+// v22 — Global error surface. After v17/18/19/20/21 all "did nothing"
+// from Patrick's perspective, the likely root cause is a JS error
+// somewhere in this module that aborts execution BEFORE the photo
+// upload handler attaches (line ~1900+ in this file). Without
+// dev-tools access in the field, we never see those errors. This
+// listener catches them and paints the message into the build badge
+// so the tech can read it out — instant diagnostic without Safari
+// Web Inspector. Same for unhandled promise rejections (async paths).
+window.addEventListener("error", (evt) => {
+  const msg = evt?.error?.message || evt?.message || "unknown error";
+  const where = evt?.filename ? ` (${evt.filename.split("/").pop()}:${evt.lineno || "?"})` : "";
+  console.error("[tech-js] uncaught:", evt?.error || msg);
+  _setBadge(`JS ERR: ${msg}${where}`.slice(0, 200), true);
+});
+window.addEventListener("unhandledrejection", (evt) => {
+  const reason = evt?.reason;
+  const msg = (reason && reason.message) || String(reason || "unknown rejection");
+  console.error("[tech-js] unhandled rejection:", reason);
+  _setBadge(`PROMISE ERR: ${msg}`.slice(0, 200), true);
+});
+
+// v22 — Pre-attach the visit-photo upload listener at the very top of
+// the module, BEFORE any unguarded DOM references could throw. Same
+// for the per-file logic, hoisted function declarations let us refer
+// to uploadWoPhotos/setUploadStatus here — they get resolved when the
+// click fires, by which time the rest of the module has run.
+//
+// Why: 4 rounds of upload fixes "did nothing" from the user's view.
+// Strong suspicion: a later unguarded `sheetClose.addEventListener`
+// or similar was throwing, aborting module execution before the
+// photo listener attached. If that's the case, the global error
+// handler above now paints the failure into the badge — but this
+// also belt-and-suspenders the upload path so it works regardless.
+//
+// We use a flag to avoid double-binding if a downstream attachment
+// also fires (the original site at line ~1926 is still in place).
+let _photoListenerAttached = false;
+function _bindPhotoUploadListener() {
+  if (_photoListenerAttached) return;
+  const input = document.getElementById("techWoPhotoInput");
+  if (!input) return; // DOM not ready or HTML out of sync
+  _photoListenerAttached = true;
+  input.addEventListener("change", async (event) => {
+    if (typeof state !== "undefined" && state && state.locked) return;
+    const files = event.target.files;
+    const addBtn = document.querySelector(".tech-photo-add");
+    if (addBtn) addBtn.classList.add("is-uploading");
+    setUploadStatus(`Picked ${files ? files.length : 0} file(s)…`);
+    if (!files || !files.length) {
+      setUploadStatus("No file selected — try again.");
+      setTimeout(() => {
+        if (addBtn) addBtn.classList.remove("is-uploading");
+        setUploadStatus(null);
+      }, 1500);
+      return;
+    }
+    try {
+      const wo = await uploadWoPhotos(files, { category: "general" });
+      if (wo) {
+        state.photos = wo.photos || [];
+        if (typeof renderWoPhotos === "function") renderWoPhotos();
+        if (typeof renderPostSigBanner === "function") renderPostSigBanner();
+      }
+    } catch (err) {
+      alert(err.message || "Couldn't upload photo.");
+    } finally {
+      if (addBtn) addBtn.classList.remove("is-uploading");
+      event.target.value = "";
+    }
+  });
+}
+// Try once at script load (DOM should be ready since script tag is at
+// end of body), and again on DOMContentLoaded as a belt-and-suspenders.
+_bindPhotoUploadListener();
+document.addEventListener("DOMContentLoaded", _bindPhotoUploadListener);
 
 const techHeader = document.getElementById("techHeader");
 const techBack = document.getElementById("techBack");
@@ -1923,6 +2010,12 @@ function renderPhotoThumb(photo) {
 
 // Visit-photo upload — fires when the file picker emits a change. Mobile
 // browsers honor `capture="environment"` to open the camera directly.
+// NOTE: v22 also binds this handler at the top of the file as a safety
+// net (before any other code can throw). The early bind sets
+// _photoListenerAttached=true; if so, we skip this binding to avoid
+// double-uploads. This block is kept so we still attach in the rare
+// case the early bind didn't find the input element.
+if (typeof _photoListenerAttached === "undefined" || !_photoListenerAttached) {
 document.getElementById("techWoPhotoInput")?.addEventListener("change", async (event) => {
   if (state.locked) return;
   const input = event.target;
@@ -1959,6 +2052,7 @@ document.getElementById("techWoPhotoInput")?.addEventListener("change", async (e
     input.value = "";  // reset so picking the same file re-fires change
   }
 });
+} // end fallback-only `if (!_photoListenerAttached)`
 
 // Lightbox — taps anywhere dismiss it. Single shared element so we
 // don't have to render one per thumbnail.

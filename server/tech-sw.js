@@ -127,10 +127,29 @@
 // Touches HTML + JS — HTML cache must invalidate too. The HTML uses
 // network-first so a fresh load gets the new markup; only the JS
 // fetch is cache-first.
+// Bumped 2026-05-12 (v21 → v22): Patrick reported v21 also "did
+// nothing" — AND it failed on DESKTOP too. That rules out iOS-
+// specific issues. New hypothesis: a JS error somewhere in
+// work-order-tech.js aborts module execution BEFORE the photo
+// upload event handler attaches. The file has many unguarded
+// `someEl.addEventListener(...)` calls; if any `someEl` is null
+// (HTML+JS schema mismatch, partial cache), the whole module
+// stops, the upload handler never binds, and tap-to-pick goes
+// silent. v22:
+//   • Global `window.error` + `window.unhandledrejection` handlers
+//     paint the error message into the build badge (red bg). So
+//     a thrown TypeError now shows up as "JS ERR: …" instead of
+//     being invisible without dev-tools.
+//   • Pre-attach the visit-photo upload listener at the TOP of the
+//     script, before any unguarded code can throw. Belt-and-
+//     suspenders: even if a later `addEventListener` blows up, the
+//     photo handler is already bound. The original attachment at
+//     line ~2011 is kept as a no-op fallback.
+// Touches work-order-tech.js only.
 // Lesson: bump this in the same commit as any change to the files in
 // STATIC_ASSETS, otherwise the field tech sees old behaviour even
 // after Render redeploys.
-const CACHE_VERSION = "pjl-tech-v21";
+const CACHE_VERSION = "pjl-tech-v22";
 const STATIC_ASSETS = [
   "/crm/work-order-tech.html",
   "/crm/work-order-tech.js",
