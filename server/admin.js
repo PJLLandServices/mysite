@@ -1360,12 +1360,29 @@ loadLeads();
             propertyId: conflictProp.id,
             propertyAddress: conflictProp.address,
             previousCustomerName: conflictProp.previousCustomerName,
-            previousCustomerEmail: conflictProp.previousCustomerEmail
+            previousCustomerEmail: conflictProp.previousCustomerEmail,
+            // Server marks each conflict with whether its property is
+            // still in properties.json. Default true for back-compat
+            // with older server responses.
+            propertyExists: conflictProp.propertyExists !== false
           });
         }
       }
       count.textContent = String(rows.length);
-      list.innerHTML = rows.map((r) => `
+      list.innerHTML = rows.map((r) => {
+        // When the property has been deleted/renamed since the conflict
+        // was recorded, "Resolve on property →" dead-ends on the
+        // property page's "couldn't be loaded" error. In that case hide
+        // the Resolve button, promote Dismiss to the primary visual,
+        // and surface a one-line explanation.
+        const resolveAction = r.propertyExists
+          ? `<a class="pjl-btn pjl-btn-primary" style="padding: 5px 10px; font-size: 12px;" href="/admin/property/${encodeURIComponent(r.propertyId)}">Resolve on property →</a>`
+          : "";
+        const dismissClass = r.propertyExists ? "pjl-btn pjl-btn-outline" : "pjl-btn pjl-btn-primary";
+        const orphanNote = r.propertyExists
+          ? ""
+          : `<div style="color: #9b6500; margin-top: 4px; font-size: 11px;">Target property <span style="font-family: ui-monospace, Menlo, Consolas, monospace;">${esc(r.propertyId)}</span> no longer exists in properties.json — Dismiss is the only action available.</div>`;
+        return `
         <div style="background: #fff; border: 1px solid #d6a800; border-radius: 6px; padding: 10px 14px; display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between;">
           <div style="flex: 1 1 320px; font-size: 13px;">
             <strong>${esc(r.leadName) || "(unnamed lead)"}</strong>
@@ -1378,13 +1395,15 @@ loadLeads();
               previously owned by <strong>${esc(r.previousCustomerName) || "(unnamed)"}</strong>
               &lt;${esc(r.previousCustomerEmail)}&gt;
             </div>
+            ${orphanNote}
           </div>
           <div style="display: flex; gap: 8px; flex-wrap: wrap;">
-            <a class="pjl-btn pjl-btn-primary" style="padding: 5px 10px; font-size: 12px;" href="/admin/property/${encodeURIComponent(r.propertyId)}">Resolve on property →</a>
-            <button type="button" class="pjl-btn pjl-btn-outline" style="padding: 5px 10px; font-size: 12px;" data-dismiss-lead="${esc(r.leadId)}">Dismiss</button>
+            ${resolveAction}
+            <button type="button" class="${dismissClass}" style="padding: 5px 10px; font-size: 12px;" data-dismiss-lead="${esc(r.leadId)}">Dismiss</button>
           </div>
         </div>
-      `).join("");
+        `;
+      }).join("");
 
       list.querySelectorAll("[data-dismiss-lead]").forEach((btn) => {
         btn.addEventListener("click", async () => {

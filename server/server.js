@@ -3198,7 +3198,16 @@ async function handleApi(req, res, pathname) {
   // The detection happens at intake (server.js around line 2210),
   // this endpoint just surfaces the queue for the CRM dashboard.
   if (req.method === "GET" && pathname === "/api/admin/property-link-conflicts") {
-    const allLeads = await readLeads();
+    // Cross-reference each stored conflict against the live properties
+    // file so the banner can tell the user when "Resolve on property →"
+    // would dead-end on a property that no longer exists (deleted,
+    // renamed, or never migrated). Without this flag the banner shows
+    // a button that navigates to "This property couldn't be loaded."
+    const [allLeads, allProperties] = await Promise.all([
+      readLeads(),
+      properties.list()
+    ]);
+    const knownPropertyIds = new Set(allProperties.map((p) => p.id));
     const conflicts = [];
     for (const lead of allLeads) {
       if (!Array.isArray(lead.propertyLinkConflicts) || !lead.propertyLinkConflicts.length) continue;
@@ -3209,7 +3218,10 @@ async function handleApi(req, res, pathname) {
         leadEmail: lead.contact?.email || "",
         leadPhone: lead.contact?.phone || "",
         leadAddress: lead.contact?.address || "",
-        conflicts: lead.propertyLinkConflicts
+        conflicts: lead.propertyLinkConflicts.map((c) => ({
+          ...c,
+          propertyExists: knownPropertyIds.has(c.id)
+        }))
       });
     }
     return sendJson(res, 200, { ok: true, conflicts });

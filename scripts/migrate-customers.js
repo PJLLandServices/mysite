@@ -58,6 +58,8 @@ const REPORT_DIR = path.join(DATA_DIR, "migration-reports");
 
 const ARGS = new Set(process.argv.slice(2));
 const APPLY_MODE = ARGS.has("--apply") || ARGS.has("--commit");
+const BACKFILL_ONLY = ARGS.has("--backfill-only");
+const LIST_TEST_CUSTOMERS = ARGS.has("--list-test-customers");
 const EMIT_JSON = ARGS.has("--json") || true; // Always emit JSON for now.
 
 // ---- File helpers ----------------------------------------------------
@@ -285,6 +287,12 @@ function assignStatus(customer, leadsByCustomer, workOrders) {
 // ---- Main migration walk --------------------------------------------
 
 async function run() {
+  // Sub-modes that don't touch customers.json. Listed before the main
+  // dry-run / --apply branch so they exit cleanly without printing the
+  // migration banner.
+  if (LIST_TEST_CUSTOMERS) return listTestCustomers();
+  if (BACKFILL_ONLY) return runBackfillOnly();
+
   const banner = [
     "",
     "============================================================",
@@ -681,6 +689,281 @@ async function run() {
   console.log("");
   console.log(` Rollback: rm -r server/data && mv ${path.relative(REPO_ROOT, backupDir)} server/data`);
   console.log("");
+}
+
+// ---- Backfill-only mode ----------------------------------------------
+//
+// Repair tool for the case where customers.json is correct but historical
+// entities don't have customerId set (e.g. the original --apply was
+// interrupted, customers.json was hand-populated, or post-migration code
+// paths landed entities without stamping the field). The customer-detail
+// page filters its tabs by `entity.customerId === customer.id`, so a
+// missing reference renders as empty Bookings / WOs / Quotes / Invoices.
+//
+// Behaviour:
+//   - Refuses to run if customers.json is missing or empty.
+//   - Walks each entity file and matches every record WITHOUT a
+//     customerId against the existing customer set (email → phone).
+//     Records that already have customerId are left untouched.
+//   - Snapshots server/data/ to server/data-backup-<ts>-backfill/
+//     before any write.
+//   - Writes only the entity files whose records changed; never
+//     touches customers.json or the leadId redirect map.
+//
+// Usage: node scripts/migrate-customers.js --backfill-only
+async function runBackfillOnly() {
+  console.log("");
+  console.log("============================================================");
+  console.log(" PJL — Customer backfill (entity customerId only)");
+  console.log("============================================================");
+  console.log("");
+
+  const customersRes = await readJsonArray("customers.json");
+  if (customersRes.missing || !Array.isArray(customersRes.records) || !customersRes.records.length) {
+    console.error(" ❌ server/data/customers.json is missing or empty.");
+    console.error("    Backfill mode requires an existing customer set.");
+    console.error("    Run npm run migrate:customers:apply first.");
+    process.exit(2);
+  }
+  const customers = customersRes.records;
+  console.log(` Loaded ${customers.length} customers from customers.json.`);
+  console.log("");
+
+  const leadsRes     = await readJsonArray("leads.json");
+  const propsRes     = await readJsonArray("properties.json");
+  const bookingsRes  = await readJsonArray("bookings.json");
+  const wosRes       = await readJsonArray("work-orders.json");
+  const quotesRes    = await readJsonArray("quotes.json");
+  const invoicesRes  = await readJsonArray("invoices.json");
+  const projectsRes  = await readJsonArray("projects.json");
+
+  const leads          = leadsRes.records;
+  const properties     = propsRes.records;
+  const bookings       = bookingsRes.records;
+  const workOrders     = wosRes.records;
+  const quoteRecords   = quotesRes.records;
+  const invoiceRecords = invoicesRes.records;
+  const projectRecords = projectsRes.records;
+
+  // Build the lookup maps that resolveEntityCustomerId() consults. In
+  // backfill mode we *preserve* any existing customerId rather than
+  // recomputing — the customer set is the source of truth, but the
+  // entity's stamped reference is too if it's already there.
+  const leadToCustomer = {};
+  for (const lead of leads) {
+    if (!lead || typeof lead !== "object") continue;
+    if (lead.customerId) { leadToCustomer[lead.id] = lead.customerId; continue; }
+    const matched = matchCustomer(customers, {
+      email: lead.contact?.email,
+      phone: lead.contact?.phone
+    });
+    if (matched) leadToCustomer[lead.id] = matched.customer.id;
+  }
+
+  const propertyToCustomer = {};
+  for (const property of properties) {
+    if (!property || typeof property !== "object") continue;
+    if (property.customerId) { propertyToCustomer[property.id] = property.customerId; continue; }
+    const matched = matchCustomer(customers, {
+      email: property.customerEmail,
+      phone: property.customerPhone
+    });
+    if (matched) propertyToCustomer[property.id] = matched.customer.id;
+  }
+
+  const ctx = { customers, leadToCustomer, propertyToCustomer };
+
+  function bucket(label, total) {
+    return { label, total, alreadySet: 0, stamped: 0, unresolved: 0 };
+  }
+  const stats = {
+    leads:      bucket("leads",      leads.length),
+    properties: bucket("properties", properties.length),
+    bookings:   bucket("bookings",   bookings.length),
+    workOrders: bucket("workOrders", workOrders.length),
+    quotes:     bucket("quotes",     quoteRecords.length),
+    invoices:   bucket("invoices",   invoiceRecords.length),
+    projects:   bucket("projects",   projectRecords.length)
+  };
+
+  // backfill(entity, statsBucket, resolver) — stamps customerId from
+  // resolver() ONLY when the entity doesn't already have one. The
+  // existing value is treated as authoritative; backfill never
+  // overwrites.
+  function backfill(entity, statsBucket, resolver) {
+    if (!entity || typeof entity !== "object") return;
+    if (entity.customerId) { statsBucket.alreadySet++; return; }
+    const cid = resolver();
+    if (cid) {
+      entity.customerId = cid;
+      statsBucket.stamped++;
+    } else {
+      statsBucket.unresolved++;
+    }
+  }
+
+  for (const lead of leads) {
+    backfill(lead, stats.leads, () =>
+      leadToCustomer[lead?.id] || resolveEntityCustomerId(lead, ctx));
+  }
+  for (const property of properties) {
+    backfill(property, stats.properties, () =>
+      propertyToCustomer[property?.id] || resolveEntityCustomerId(property, ctx));
+  }
+  for (const booking of bookings) {
+    backfill(booking, stats.bookings, () => resolveEntityCustomerId(booking, ctx));
+  }
+  for (const wo of workOrders) {
+    backfill(wo, stats.workOrders, () => resolveEntityCustomerId(wo, ctx));
+  }
+  for (const quote of quoteRecords) {
+    backfill(quote, stats.quotes, () => resolveEntityCustomerId(quote, ctx));
+  }
+  // Invoices try via woId first (the WO got stamped a moment ago).
+  const woById = new Map(workOrders.filter((w) => w?.id).map((w) => [w.id, w]));
+  for (const invoice of invoiceRecords) {
+    backfill(invoice, stats.invoices, () => {
+      if (invoice?.woId && woById.get(invoice.woId)?.customerId) {
+        return woById.get(invoice.woId).customerId;
+      }
+      return resolveEntityCustomerId(invoice, ctx);
+    });
+  }
+  // Projects try via sourceQuoteId first.
+  const quoteById = new Map(quoteRecords.filter((q) => q?.id).map((q) => [q.id, q]));
+  for (const project of projectRecords) {
+    backfill(project, stats.projects, () => {
+      if (project?.sourceQuoteId && quoteById.get(project.sourceQuoteId)?.customerId) {
+        return quoteById.get(project.sourceQuoteId).customerId;
+      }
+      return resolveEntityCustomerId(project, ctx);
+    });
+  }
+
+  console.log(" Backfill summary:");
+  console.log("");
+  console.log("   Entity        Total   Already  Stamped  Unresolved");
+  console.log("   ------        -----   -------  -------  ----------");
+  for (const key of ["leads", "properties", "bookings", "workOrders", "quotes", "invoices", "projects"]) {
+    const s = stats[key];
+    console.log(`   ${s.label.padEnd(12)}  ${String(s.total).padStart(5)}   ${String(s.alreadySet).padStart(7)}  ${String(s.stamped).padStart(7)}  ${String(s.unresolved).padStart(10)}`);
+  }
+  console.log("");
+
+  const totalStamped = Object.values(stats).reduce((sum, s) => sum + s.stamped, 0);
+  if (!totalStamped) {
+    console.log(" Nothing to backfill — every entity already has customerId set,");
+    console.log(" or no matching customer could be found by email/phone.");
+    console.log(" No files written.");
+    console.log("");
+    return;
+  }
+
+  // Snapshot then write.
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const backupDir = path.join(REPO_ROOT, "server", `data-backup-${stamp}-backfill`);
+  console.log(`   Backing up server/data/ → ${path.relative(REPO_ROOT, backupDir)} ...`);
+  await fs.cp(DATA_DIR, backupDir, { recursive: true });
+  console.log("   ✓ Backup complete.");
+
+  async function writeArray(name, records, statsBucket) {
+    const full = path.join(DATA_DIR, name);
+    await fs.writeFile(full, JSON.stringify(records, null, 2) + "\n", "utf8");
+    console.log(`   ✓ ${name.padEnd(22)} ${records.length} records (${statsBucket.stamped} newly stamped)`);
+  }
+
+  if (stats.leads.stamped)      await writeArray("leads.json",       leads,          stats.leads);
+  if (stats.properties.stamped) await writeArray("properties.json",  properties,     stats.properties);
+  if (stats.bookings.stamped)   await writeArray("bookings.json",    bookings,       stats.bookings);
+  if (stats.workOrders.stamped) await writeArray("work-orders.json", workOrders,     stats.workOrders);
+  if (stats.quotes.stamped)     await writeArray("quotes.json",      quoteRecords,   stats.quotes);
+  if (stats.invoices.stamped)   await writeArray("invoices.json",    invoiceRecords, stats.invoices);
+  if (stats.projects.stamped)   await writeArray("projects.json",    projectRecords, stats.projects);
+
+  console.log("");
+  console.log(` ✓ Stamped ${totalStamped} customerId references across ${Object.values(stats).filter((s) => s.stamped > 0).length} entity files.`);
+  console.log(`   Rollback: rm -r server/data && mv ${path.relative(REPO_ROOT, backupDir)} server/data`);
+  console.log("");
+}
+
+// ---- Test-customer report --------------------------------------------
+//
+// READ-ONLY scan over customers.json that flags records matching common
+// test-data heuristics (sentinel emails, "test"/"asdf" tokens, very short
+// names, placeholder phones, etc.). Outputs a markdown table for Patrick
+// to review.
+//
+// No deletes. No writes. Patrick reviews and authorizes deletion
+// separately via the admin UI or a one-shot script.
+//
+// Usage: node scripts/migrate-customers.js --list-test-customers
+const TEST_BARE_NAMES = new Set([
+  "x", "y", "z", "a", "b", "c", "aa", "bb", "xx", "yy",
+  "n/a", "na", "none",
+  "test", "asdf", "qwer", "name", "customer", "user"
+]);
+const TEST_NAME_TOKENS = /\b(test|asdf|asdfgh|qwerty?|foo\s*bar|hello\s*world|hi\s*there)\b/i;
+const TEST_EMAIL_TOKENS = /(@example\.|@test\.|@localhost|@asdf|@qwerty|test\+|nospam|fake@|noreply@example)/i;
+
+function classifyTestCustomer(c) {
+  const reasons = [];
+  const name    = String(c.name  || "").trim();
+  const lcName  = name.toLowerCase();
+  const email   = String(c.email || "").toLowerCase();
+  const phone   = String(c.phone || "").trim();
+  const digits  = phone.replace(/\D/g, "");
+
+  if (TEST_BARE_NAMES.has(lcName))   reasons.push(`bare-name "${name}"`);
+  if (TEST_NAME_TOKENS.test(name))   reasons.push("name contains test/asdf/etc");
+  if (TEST_EMAIL_TOKENS.test(email)) reasons.push("sentinel-looking email");
+  if (lcName && lcName === phone.toLowerCase()) reasons.push("name === phone");
+  if (name && name.length <= 2)      reasons.push("very short name");
+  if (!name && !email && !phone)     reasons.push("blank record");
+  if (/^0{6,}$|^1{6,}$|^5{6,}$|^9{6,}$|^1234567/.test(digits)) {
+    reasons.push(`placeholder phone "${phone}"`);
+  }
+  // No properties, no leads of record, status still 'lead' months later —
+  // often a one-shot test that never went anywhere. We can't see leads
+  // from here without more I/O, so skip that signal in this conservative
+  // scan.
+
+  return reasons;
+}
+
+async function listTestCustomers() {
+  const customersRes = await readJsonArray("customers.json");
+  if (customersRes.missing || !Array.isArray(customersRes.records) || !customersRes.records.length) {
+    console.log("# Test-customer report");
+    console.log("");
+    console.log("customers.json is missing or empty — nothing to scan.");
+    return;
+  }
+  const customers = customersRes.records;
+  const flagged = [];
+  for (const c of customers) {
+    const reasons = classifyTestCustomer(c);
+    if (reasons.length) flagged.push({ customer: c, reasons });
+  }
+
+  console.log("# Test-customer report");
+  console.log("");
+  console.log(`Scanned **${customers.length}** customer records. Flagged **${flagged.length}** as likely test data.`);
+  console.log("");
+  console.log("Heuristics: bare placeholder names (x, asdf, test), sentinel emails (@example.com, @test.*),");
+  console.log("name-equals-phone, very short (≤2 char) names, repeating-digit phones.");
+  console.log("");
+  if (!flagged.length) {
+    console.log("No candidates found.");
+    return;
+  }
+  console.log("| ID | Name | Email | Phone | Why |");
+  console.log("|----|------|-------|-------|-----|");
+  for (const { customer: c, reasons } of flagged) {
+    const cell = (v) => String(v == null ? "—" : v).replace(/\|/g, "\\|") || "—";
+    console.log(`| ${cell(c.id)} | ${cell(c.name)} | ${cell(c.email)} | ${cell(c.phone)} | ${reasons.join("; ")} |`);
+  }
+  console.log("");
+  console.log("**Review and authorize each deletion separately.** No deletes have been performed.");
 }
 
 run().catch((err) => {
