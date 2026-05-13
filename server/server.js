@@ -3452,6 +3452,20 @@ async function handleApi(req, res, pathname) {
         return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't update customer."] });
       }
     }
+    if (req.method === "DELETE") {
+      // Hard-delete. The lib refuses if any entity still references this
+      // customer; the UI shows that response so Patrick can Merge first
+      // when the customer is linked to real bookings/WOs/etc. Test data
+      // and clean duplicates with no references go straight through.
+      const result = await customers.hardDelete(id);
+      if (!result.ok) {
+        if (result.references) {
+          return sendJson(res, 409, { ok: false, error: result.error, references: result.references });
+        }
+        return sendJson(res, 404, { ok: false, error: result.error });
+      }
+      return sendJson(res, 200, { ok: true, deleted: { id: result.customer.id, name: result.customer.name } });
+    }
   }
 
   // POST /api/customer/:id/merge — merge another customer INTO this

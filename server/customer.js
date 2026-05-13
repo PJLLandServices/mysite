@@ -565,6 +565,54 @@ mergeConfirm.addEventListener("click", async () => {
   }
 });
 
+// ---- Delete ------------------------------------------------------
+//
+// Hard-delete the customer record. Server-side is the source of truth
+// for whether deletion is allowed — if anything references this
+// customer (booking, WO, quote, invoice, property, lead, project), the
+// API returns 409 with a `references` map and Patrick is told to Merge
+// first. Otherwise the record is removed and the page redirects back
+// to the customers index.
+
+const deleteBtn = document.getElementById("deleteBtn");
+const deleteErrorEl = document.getElementById("deleteError");
+
+deleteBtn?.addEventListener("click", async () => {
+  if (!original) return;
+  const label = original.name || original.id;
+  if (!confirm(`Delete ${label}?\n\nThis is permanent. Use Cancel if you're not sure — you can soft-delete by setting status to Inactive instead.`)) {
+    return;
+  }
+  deleteErrorEl.hidden = true;
+  deleteBtn.disabled = true;
+  try {
+    const res = await fetch(`/api/customer/${encodeURIComponent(customerId)}`, {
+      method: "DELETE",
+      credentials: "same-origin"
+    });
+    const body = await res.json();
+    if (!res.ok || !body.ok) {
+      if (body.references) {
+        const counts = Object.entries(body.references)
+          .map(([kind, ids]) => `${ids.length} ${kind}`)
+          .join(", ");
+        deleteErrorEl.textContent = `Can't delete — this customer is linked to ${counts}. Use Merge to combine them into another customer first.`;
+      } else {
+        deleteErrorEl.textContent = body?.error || "Couldn't delete.";
+      }
+      deleteErrorEl.hidden = false;
+      deleteBtn.disabled = false;
+      return;
+    }
+    // Successful delete — return to the customer index.
+    location.href = "/admin/customers";
+  } catch (err) {
+    deleteErrorEl.textContent = err?.message || "Network error.";
+    deleteErrorEl.hidden = false;
+    deleteBtn.disabled = false;
+  }
+});
+
 // ---- Initial load -------------------------------------------------
 
 async function load() {

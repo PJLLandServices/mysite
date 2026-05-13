@@ -339,8 +339,8 @@ async function update(id, patch, { by = "admin", note = "", action = "updated" }
   return next;
 }
 
-// Soft-delete via status → "inactive". Hard-deletion is intentionally
-// not exposed — a customer linked from any signed WO / sent quote /
+// Soft-delete via status → "inactive". Used as the default "remove"
+// path because a customer linked from any signed WO / sent quote /
 // issued invoice must remain resolvable forever for legal/audit reasons.
 async function remove(id, { by = "admin", note = "" } = {}) {
   return update(
@@ -348,6 +348,52 @@ async function remove(id, { by = "admin", note = "" } = {}) {
     { status: "inactive" },
     { by, note, action: "soft_deleted" }
   );
+}
+
+// Hard-delete — actually removes the record from customers.json.
+// Refuses if any entity references this customer. Caller must use
+// merge() first when they want to combine duplicates, or accept
+// loss-of-link when nothing is yet attached (typical for test data
+// and accidental near-duplicates with no bookings/WOs/etc yet).
+//
+// Returns { ok: true, customer } on success, or
+//         { ok: false, error, references } when blocked.
+async function hardDelete(id) {
+  const records = await readAll();
+  const idx = records.findIndex((c) => c.id === id);
+  if (idx === -1) return { ok: false, error: "Customer not found." };
+
+  const dataDir = path.join(__dirname, "..", "data");
+  const filesToCheck = [
+    "leads.json", "properties.json", "bookings.json",
+    "work-orders.json", "quotes.json", "invoices.json", "projects.json"
+  ];
+  const references = {};
+  for (const file of filesToCheck) {
+    const fullPath = path.join(dataDir, file);
+    if (!fsSync.existsSync(fullPath)) continue;
+    try {
+      const raw = await fs.readFile(fullPath, "utf8");
+      const arr = JSON.parse(raw || "[]");
+      if (!Array.isArray(arr)) continue;
+      const matches = arr.filter((r) => r && r.customerId === id);
+      if (matches.length) {
+        references[file.replace(".json", "")] = matches.map((r) => r.id).filter(Boolean);
+      }
+    } catch (err) {
+      console.warn(`[hardDelete] couldn't check ${file}:`, err.message);
+    }
+  }
+  if (Object.keys(references).length) {
+    return {
+      ok: false,
+      error: "Customer is referenced by other records. Use merge to combine them, or remove the references first.",
+      references
+    };
+  }
+  const removed = records.splice(idx, 1)[0];
+  await writeAll(records);
+  return { ok: true, customer: removed };
 }
 
 // ---- Matching --------------------------------------------------------
@@ -530,6 +576,7 @@ module.exports = {
   create,
   update,
   remove,
+  hardDelete,
   findByEmail,
   findByPhone,
   findByIdentifier,
