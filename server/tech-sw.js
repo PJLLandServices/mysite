@@ -59,10 +59,18 @@
 // gets "Syncing X files" then reload loses the work; root cause was
 // stale If-Match on queued replays → 409 → silent dequeue. Also adds
 // /crm/offline-queue.js to STATIC_ASSETS so the SW versions it now.
+// Bumped 2026-05-12 (v16 → v17): photo upload "Uploading…" stuck fix.
+// processPhotoForUpload was using FileReader.readAsDataURL → Image.src
+// = data: URL, which iOS Safari silently hangs on for >10 MB data URLs
+// (typical for 48 MP iPhone HEICs base64-encoded). Switched to
+// URL.createObjectURL (blob: URL, no size cap) and added 30 s decode
+// timeout + 90 s upload timeout so a hang surfaces a clear error
+// instead of leaving "Uploading…" indefinitely. Touches
+// work-order-tech.js only.
 // Lesson: bump this in the same commit as any change to the files in
 // STATIC_ASSETS, otherwise the field tech sees old behaviour even
 // after Render redeploys.
-const CACHE_VERSION = "pjl-tech-v16";
+const CACHE_VERSION = "pjl-tech-v17";
 const STATIC_ASSETS = [
   "/crm/work-order-tech.html",
   "/crm/work-order-tech.js",

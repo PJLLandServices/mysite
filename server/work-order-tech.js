@@ -327,17 +327,44 @@ async function processPhotoForUpload(file, opts = {}) {
     formatGeoStamp(geo),
     [opts.woId, opts.seqLabel].filter(Boolean).join(" · ")
   ];
+  // iOS Safari fix: use URL.createObjectURL (blob: URL, no size cap)
+  // instead of FileReader.readAsDataURL (base64 data: URL, ~10 MB cap
+  // on iOS). A 48 MP iPhone HEIC base64-encodes to 7–20 MB and silently
+  // hangs Image.onload on iOS — neither load nor error fires, leaving
+  // the "Uploading…" state stuck forever. Blob URLs avoid the encode
+  // step entirely and have no size limit.
+  //
+  // Also wrap the whole thing in a 30 s timeout so if anything still
+  // goes sideways, the tech gets a clear error instead of an indefinite
+  // spinner.
+  const objectUrl = URL.createObjectURL(file);
+  let cleanedUp = false;
+  const cleanup = () => {
+    if (cleanedUp) return;
+    cleanedUp = true;
+    try { URL.revokeObjectURL(objectUrl); } catch { /* tolerate */ }
+  };
   return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onerror = () => reject(new Error("Couldn't read that file."));
-    reader.onload = () => {
-      const img = new Image();
-      img.onerror = () => reject(new Error("Couldn't decode that image."));
-      img.onload = () => {
-        const longest = Math.max(img.width, img.height);
+    const timeout = setTimeout(() => {
+      cleanup();
+      reject(new Error("Photo processing timed out (30 s). The file may be too large or in an unsupported format — try a smaller export."));
+    }, 30_000);
+    const img = new Image();
+    // decoding="async" hints to the browser not to block the event
+    // loop, helpful for big HEICs.
+    img.decoding = "async";
+    img.onerror = () => {
+      clearTimeout(timeout);
+      cleanup();
+      reject(new Error("Couldn't decode that image. Try a different file or convert to JPEG."));
+    };
+    img.onload = () => {
+      clearTimeout(timeout);
+      try {
+        const longest = Math.max(img.naturalWidth || img.width, img.naturalHeight || img.height);
         const scale = longest > 1280 ? 1280 / longest : 1;
-        const w = Math.round(img.width * scale);
-        const h = Math.round(img.height * scale);
+        const w = Math.max(1, Math.round((img.naturalWidth || img.width) * scale));
+        const h = Math.max(1, Math.round((img.naturalHeight || img.height) * scale));
         const canvas = document.createElement("canvas");
         canvas.width = w;
         canvas.height = h;
@@ -346,11 +373,14 @@ async function processPhotoForUpload(file, opts = {}) {
         applyPjlWatermark(canvas, ctx, watermarkLines);
         const dataUrl = canvas.toDataURL("image/jpeg", 0.82);
         const base64 = dataUrl.split(",", 2)[1] || "";
+        cleanup();
         resolve({ base64, mediaType: "image/jpeg" });
-      };
-      img.src = reader.result;
+      } catch (err) {
+        cleanup();
+        reject(err instanceof Error ? err : new Error("Couldn't process that image."));
+      }
     };
-    reader.readAsDataURL(file);
+    img.src = objectUrl;
   });
 }
 
@@ -461,11 +491,28 @@ async function uploadWoPhotos(files, meta = {}) {
   // with no signal, the upload gets staged in IndexedDB and replays
   // on reconnect — no lost photos.
   const fetchFn = (window.PJLOffline && window.PJLOffline.queuedFetch) || fetch;
-  const response = await fetchFn(`/api/work-orders/${encodeURIComponent(state.id)}/photos`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ photos })
-  });
+  // 90 s upload timeout — slow cellular can take a while for a 5 MB
+  // PDF, but anything longer is almost certainly hung (browser default
+  // is "wait forever"). AbortController surfaces a network error to
+  // the catch block above, which clears the "Uploading…" state.
+  const controller = new AbortController();
+  const uploadTimeout = setTimeout(() => controller.abort(), 90_000);
+  let response;
+  try {
+    response = await fetchFn(`/api/work-orders/${encodeURIComponent(state.id)}/photos`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ photos }),
+      signal: controller.signal
+    });
+  } catch (err) {
+    clearTimeout(uploadTimeout);
+    if (err && err.name === "AbortError") {
+      throw new Error("Upload timed out (90 s). The file may be too large for the current connection — try a smaller export or retry on Wi-Fi.");
+    }
+    throw err;
+  }
+  clearTimeout(uploadTimeout);
   const data = await response.json().catch(() => ({}));
   if (!response.ok && !data.queued) {
     throw new Error((data.errors && data.errors[0]) || "Couldn't upload photo.");
