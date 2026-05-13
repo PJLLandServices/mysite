@@ -171,6 +171,17 @@
 //   • Crude (interrupts typing) but reliable. Proper render-without-
 //     reload fix is a follow-up. Right now we need photos to APPEAR.
 // Touches work-order-tech.js only.
+// Bumped 2026-05-12 (v26 → v27): return-visit Yes/No gate. Patrick's
+// service-call flow: tech investigates only the problem zones, builds
+// a quote, then explicitly answers "Need a return visit?" before
+// signing. Yes reveals the "Parts to bring back" + "Schedule follow-
+// up" sections (which were always-visible before today). No keeps
+// them hidden — the visit closes with today's repairs only. The
+// answer is also a pre-sign gate (client + server defense in depth):
+// the tech cannot sign with the question still in null state. Adds
+// the new field to lib/work-orders.js blankWorkOrder + allowedTop,
+// the gate to server.js computeServerSidePreSignFailures, the HTML
+// radio section, and JS state + handler + applyReturnVisitVisibility().
 // Bumped 2026-05-12 (v25 → v26): floating photo button (FAB). Patrick's
 // stated preference: "i'd love for the 'add photo' section to float
 // with the entire page. upload photos pertaining to the workorder at
@@ -196,7 +207,7 @@
 //     and signature last. Tap-jump from the pre-sign checklist
 //     row to #techPaymentSection still works as a fallback.
 // Touches work-order-tech.html only.
-const CACHE_VERSION = "pjl-tech-v26";
+const CACHE_VERSION = "pjl-tech-v27";
 const STATIC_ASSETS = [
   "/crm/work-order-tech.html",
   "/crm/work-order-tech.js",

@@ -354,11 +354,27 @@
          visit. Each item starts at qty 0 and uses a − / + stepper.
          Persists to wo.materialsPacked ({ sku: qty }) as taps happen.
          Pre-feeds the follow-up modal so the tech doesn't dial in the
-         same items twice. Always visible (not gated behind the modal)
-         so the tech can capture mid-visit "we need to come back with X."
+         same items twice. Hidden by default — only revealed once the
+         tech answers "Yes" to "Need a return visit?" above. Service
+         calls where today's repair completed the job leave both this
+         AND the Follow-up section hidden.
          The "Custom parts" block below the tree captures anything not
          in the parts.json catalog (one-off items, special-order, etc.). -->
-    <section class="tech-section tech-bringback" id="techBringbackSection">
+
+    <!-- Return-visit decision (Patrick 2026-05-12 service-call flow).
+         The tech answers Yes/No before signing. Yes reveals "Parts to
+         bring back" + "Schedule follow-up" below. No keeps them hidden.
+         null = not yet answered, which the pre-sign gate blocks. -->
+    <section class="tech-section tech-return-gate" id="techReturnGateSection">
+      <h2 class="tech-section-title">Need a return visit?</h2>
+      <p class="tech-section-help">If yes, you'll get a parts-to-bring-back list and the option to schedule the follow-up. If no, today's visit closes this work order.</p>
+      <fieldset class="tech-return-gate-radios" style="border:none;padding:0;margin:0;display:flex;gap:12px;flex-wrap:wrap;">
+        <label style="flex:1;min-width:140px;display:flex;align-items:center;gap:8px;padding:14px;border:1px solid #ddd;border-radius:8px;cursor:pointer;"><input type="radio" name="techReturnGate" value="yes" id="techReturnGateYes"> <span>Yes — coming back</span></label>
+        <label style="flex:1;min-width:140px;display:flex;align-items:center;gap:8px;padding:14px;border:1px solid #ddd;border-radius:8px;cursor:pointer;"><input type="radio" name="techReturnGate" value="no" id="techReturnGateNo"> <span>No — done today</span></label>
+      </fieldset>
+    </section>
+
+    <section class="tech-section tech-bringback" id="techBringbackSection" hidden>
       <h2 class="tech-section-title">Parts to bring back</h2>
       <p class="tech-section-help">Tap − / + to set how many of each part you need on the truck for a return visit. Saves automatically. When you tap "Schedule follow-up" below, these — plus any custom parts — are pre-loaded.</p>
       <p class="tech-bringback-status" id="techBringbackStatus"><span data-count>0</span> picked · <span data-saved>idle</span></p>
@@ -397,7 +413,7 @@
          deferred, weather delay). Per spec §4.3.2. Creates the new
          WO with materials list pre-loaded and the original scope
          pointer attached for audit. -->
-    <section class="tech-section tech-followup" id="techFollowupSection">
+    <section class="tech-section tech-followup" id="techFollowupSection" hidden>
       <h2 class="tech-section-title">Follow-up visit</h2>
       <p class="tech-section-help">Tap when today's work needs a second visit. Pulls in the parts you ticked above, lets you pick a date/time, and creates a linked WO with the unfinished scope.</p>
       <button type="button" class="tech-followup-btn" id="techFollowupBtn">📅 Schedule follow-up visit</button>

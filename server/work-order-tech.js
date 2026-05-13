@@ -17,7 +17,7 @@
 // tech-sw.js's CACHE_VERSION. If this string doesn't match the SW
 // cache version after deploy, the iPhone is serving stale JS — clear
 // website data and reload.
-const TECH_BUILD_VERSION = "tech-v26";
+const TECH_BUILD_VERSION = "tech-v27";
 function _setBadge(text, isError) {
   try {
     const badge = document.getElementById("techBuildBadge");
@@ -403,6 +403,11 @@ let state = {
   // to follow. Read by the cascade to flag the draft invoice and shape
   // the customer email copy (spec §4.3.2 Payment & Billing).
   paidOnSite: null,
+  // Return-visit decision (v27, Patrick's service-call flow). Same
+  // tri-state shape as paidOnSite. true = need to come back, drives
+  // visibility of the Parts-to-bring-back + Schedule-follow-up
+  // sections. false = visit closes today. null = forces pre-sign gate.
+  needsReturnVisit: null,
   // On-site execution timestamps — auto-stamped on status flip to
   // on_site / completed (spec §4.3.2 On-Site Execution).
   arrivedAt: null,
@@ -2330,10 +2335,13 @@ function renderPreSignChecklist({ name, ack, drawn, bonusGateOk }) {
 
   // Gate list — preserves the brief's example order. Each entry:
   //   key: stable id, label: human text, ok: bool, jumpTo: css selector.
+  // Return-visit gate (v27) — tri-state. true/false both satisfy.
+  const returnOk = state.needsReturnVisit === true || state.needsReturnVisit === false;
   const gates = [
     { key: "name",  label: "Customer name entered",  ok: !!name,  jumpTo: "#techSignoffName" },
     { key: "ack",   label: "Acknowledgment ticked",  ok: ack,     jumpTo: "#techSignoffAck" },
     { key: "drawn", label: "Signature drawn",        ok: drawn,   jumpTo: "#techSignoffCanvas" },
+    { key: "return", label: "Need a return visit? (Yes / No)", ok: returnOk, jumpTo: "#techReturnGateSection" },
     { key: "payment", label: "Payment method selected", ok: paymentOk, jumpTo: "#techPaymentSection" }
   ];
   if (ig.applies) {
@@ -2424,6 +2432,12 @@ function preSignReadinessFailures() {
   // draft invoice. null = neither radio chosen.
   if (state.paidOnSite !== true && state.paidOnSite !== false) {
     fails.push("Pick a payment method (Yes / No — invoice to follow).");
+  }
+  // Return-visit decision gate (v27). Forces the tech to answer "Yes"
+  // (which reveals the parts-to-bring-back + follow-up sections) or
+  // "No" (today's visit closes the work order) before signing.
+  if (state.needsReturnVisit !== true && state.needsReturnVisit !== false) {
+    fails.push("Answer 'Need a return visit?' (Yes or No).");
   }
   // Materials check — only blocks when the section is visible (follow-
   // up visit with a packing list) AND there's an unpacked row. Non-
@@ -3792,6 +3806,10 @@ async function init() {
     state.paidOnSite = wo.paidOnSite === true ? true
       : wo.paidOnSite === false ? false
       : null;
+    // Same tri-state coercion for needsReturnVisit (v27).
+    state.needsReturnVisit = wo.needsReturnVisit === true ? true
+      : wo.needsReturnVisit === false ? false
+      : null;
     // Cascade-merge follow-up — brief-literal §4.6 materials gate
     // state. Server-side hydrate auto-fills for fall_closing + empty-
     // materials WOs so the gate doesn't block there.
@@ -3886,6 +3904,11 @@ async function init() {
 
     renderRunStatus();
     renderZones();
+
+    // Return-visit gate visibility (v27). Apply on initial load so the
+    // bringback + followup sections show up correctly for WOs that
+    // already have a needsReturnVisit answer persisted.
+    if (typeof applyReturnVisitVisibility === "function") applyReturnVisitVisibility();
 
     // Property updates preview (Brief D / spec §10 r3 + §4.3.2) — the
     // server's GET decorator computes what would flow back to the
@@ -4659,6 +4682,38 @@ document.getElementById("techPaymentSection")?.addEventListener("change", (event
   // Pre-sign checklist surfaces this gate (Brief: WO Field-Readiness
   // §6.2). Re-render immediately so the ✓ flips without waiting for
   // the PATCH round-trip.
+  updateSignoffSubmitState();
+});
+
+// Return-visit decision (v27). Tri-state radio: Yes (true) reveals the
+// Parts-to-bring-back + Schedule-follow-up sections, No (false) keeps
+// them hidden. Toggles the section visibility immediately so the tech
+// doesn't have to wait on the PATCH round-trip.
+function applyReturnVisitVisibility() {
+  const bringback = document.getElementById("techBringbackSection");
+  const followup = document.getElementById("techFollowupSection");
+  const wantsReturn = state.needsReturnVisit === true;
+  if (bringback) bringback.hidden = !wantsReturn;
+  if (followup) followup.hidden = !wantsReturn;
+  // Mirror state into the radio inputs (matches the renderPaymentSection
+  // pattern — JS is the source of truth, HTML defaults are overridden).
+  const yes = document.getElementById("techReturnGateYes");
+  const no = document.getElementById("techReturnGateNo");
+  if (yes) yes.checked = state.needsReturnVisit === true;
+  if (no) no.checked = state.needsReturnVisit === false;
+}
+document.getElementById("techReturnGateSection")?.addEventListener("change", (event) => {
+  if (event.target.name !== "techReturnGate") return;
+  const value = event.target.value === "yes" ? true
+    : event.target.value === "no" ? false
+    : null;
+  if (state.needsReturnVisit === value) return;
+  state.needsReturnVisit = value;
+  patchWorkOrder({ needsReturnVisit: value });
+  applyReturnVisitVisibility();
+  // The return-visit gate is one of the pre-sign failures (v27 server
+  // + client check). Re-render the checklist + the submit-button
+  // enable state without waiting on the PATCH round-trip.
   updateSignoffSubmitState();
 });
 

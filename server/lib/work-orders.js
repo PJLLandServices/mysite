@@ -289,6 +289,13 @@ function blankWorkOrder() {
     // followupOfWoId points at the parent if this IS a follow-up.
     followupWoIds: [],
     followupOfWoId: null,
+    // Return-visit decision (Patrick 2026-05-12 service-call flow). The
+    // tech picks Yes/No before signing; the tech UI hides the "Parts
+    // to bring back" + "Schedule follow-up" sections unless this is
+    // true. null = not yet decided (which is also a pre-sign gate
+    // failure — the tech must answer one way or the other). On a
+    // signed WO this is part of the locked contract.
+    needsReturnVisit: null,
     // Append-only audit trail per spec §10 r4 ("All status changes
     // logged forever") and §4.3.3 r5 (signed-WO contract). Mirrors
     // invoices.history[] / quotes.history[] in shape so the rendering
@@ -619,7 +626,7 @@ async function update(id, patch) {
   // pointers — those are set at create time and shouldn't be edited from
   // the form.
   const next = { ...current };
-  const allowedTop = ["type", "status", "scheduledFor", "diagnosis", "techNotes", "customerName", "customerPhone", "customerEmail", "address", "locked", "arrivedAt", "departedAt", "followupOfWoId", "paidOnSite", "propertyEditsAppliedAt"];
+  const allowedTop = ["type", "status", "scheduledFor", "diagnosis", "techNotes", "customerName", "customerPhone", "customerEmail", "address", "locked", "arrivedAt", "departedAt", "followupOfWoId", "paidOnSite", "propertyEditsAppliedAt", "needsReturnVisit"];
   for (const key of allowedTop) {
     if (Object.prototype.hasOwnProperty.call(patch, key)) next[key] = patch[key];
   }

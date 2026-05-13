@@ -6496,6 +6496,14 @@ async function handleApi(req, res, pathname) {
         if (merged.paidOnSite !== true && merged.paidOnSite !== false) {
           fails.push("payment method not selected");
         }
+        // Return-visit decision (Patrick 2026-05-12). Forces the tech
+        // to explicitly answer "Yes — coming back" or "No — done today"
+        // before signing. Drives whether the customer's invoice frames
+        // this as a complete repair vs. a multi-visit job, and whether
+        // parts get queued for a follow-up. null = not yet answered.
+        if (merged.needsReturnVisit !== true && merged.needsReturnVisit !== false) {
+          fails.push("return-visit question not answered");
+        }
         // AI bonus decision gate (only when applies).
         if (merged.intakeGuarantee && merged.intakeGuarantee.applies) {
           if (merged.intakeGuarantee.matched !== true && merged.intakeGuarantee.matched !== false) {
