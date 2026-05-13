@@ -17,7 +17,7 @@
 // tech-sw.js's CACHE_VERSION. If this string doesn't match the SW
 // cache version after deploy, the iPhone is serving stale JS — clear
 // website data and reload.
-const TECH_BUILD_VERSION = "tech-v37";
+const TECH_BUILD_VERSION = "tech-v38";
 function _setBadge(text, isError) {
   try {
     const badge = document.getElementById("techBuildBadge");
@@ -1361,6 +1361,13 @@ function addZoneAndOpen(zoneNumber) {
 // v31 "tech +Add zone does nothing" — most likely cause was a null
 // binding. Delegation on document survives any of those failure modes
 // AND keeps working if the button is re-rendered dynamically.
+//
+// v38 — Type-aware behavior. Spring openings and fall closings are
+// walk-the-whole-system visits where the tech goes zone 1 → 2 → 3 →
+// etc. consecutively. The "pick any number" dialog is overkill there;
+// "+ Add zone" should just append the next consecutive number.
+// Service visits stay on the dialog path (tech picks specific
+// non-consecutive zones, e.g. 3, 8, 12).
 let _addZoneBusy = false;
 document.addEventListener("click", async (event) => {
   if (!event.target.closest("#techAddZoneBtn")) return;
@@ -1369,12 +1376,18 @@ document.addEventListener("click", async (event) => {
   if (_addZoneBusy) return;
   _addZoneBusy = true;
   setTimeout(() => { _addZoneBusy = false; }, 600);
-  // Use the styled in-app dialog directly. The inline #techZonePicker
-  // DOM is no longer relied upon — if it loads, that's a bonus; if
-  // not (Patrick's v30/v31 case), the dialog still works.
+
+  // Seasonal WOs → next consecutive zone, no prompt.
+  if (state.type === "spring_opening" || state.type === "fall_closing") {
+    const used = (state.zones || []).map((z) => Number(z.number) || 0).filter((n) => n > 0);
+    const next = used.length ? Math.max(...used) + 1 : 1;
+    addZoneAndOpen(next);
+    return;
+  }
+
+  // Service visit (or unknown type) → styled dialog.
   const n = await showZoneNumberDialog();
   if (n == null) return;
-  // Refuse duplicates with a friendly nudge.
   const existing = new Set((state.zones || []).map((z) => Number(z.number)).filter(Boolean));
   if (existing.has(n)) {
     alert(`Zone ${n} is already on this work order — tap it in the list above to edit.`);

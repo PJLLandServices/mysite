@@ -641,20 +641,32 @@ async function addZoneRow(zone) {
   // button), open the styled in-app dialog. Same brand UI both on
   // tech-mode and here. Refuses non-numeric / out-of-range entries
   // and duplicates.
+  //
+  // v38 — Type-aware. Spring openings + fall closings are walk-the-
+  // whole-system visits, so "+ Add zone" just appends the next
+  // consecutive number (no prompt). Service visits keep the dialog
+  // for non-consecutive picks (zone 3, then 8, then 12).
   let seed = zone;
   if (!seed) {
-    const n = await showZoneNumberDialog();
-    if (n == null) return;
+    const woType = loadedWorkOrder?.type || "";
     const onPage = new Set();
     woZones.querySelectorAll(".wo-zone-num").forEach((el) => {
       const v = Number(String(el.textContent || "").replace(/[^0-9]/g, ""));
       if (v > 0) onPage.add(v);
     });
-    if (onPage.has(n)) {
-      alert(`Zone ${n} is already on this work order.`);
-      return;
+    if (woType === "spring_opening" || woType === "fall_closing") {
+      const max = onPage.size ? Math.max(...onPage) : 0;
+      const next = max + 1;
+      seed = { number: next, location: "", sprinklerTypes: [], coverage: [], status: "", notes: "" };
+    } else {
+      const n = await showZoneNumberDialog();
+      if (n == null) return;
+      if (onPage.has(n)) {
+        alert(`Zone ${n} is already on this work order.`);
+        return;
+      }
+      seed = { number: n, location: "", sprinklerTypes: [], coverage: [], status: "", notes: "" };
     }
-    seed = { number: n, location: "", sprinklerTypes: [], coverage: [], status: "", notes: "" };
   }
   const wrap = document.createElement("div");
   wrap.innerHTML = zoneRowHtml(seed);

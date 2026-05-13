@@ -171,6 +171,20 @@
 //   • Crude (interrupts typing) but reliable. Proper render-without-
 //     reload fix is a follow-up. Right now we need photos to APPEAR.
 // Touches work-order-tech.js only.
+// Bumped 2026-05-13 (v37 → v38): +Add zone behavior splits by WO type.
+// Patrick: "for the spring openings, and fall closings this standard
+// is out of the door. During a Spring Opening, or Fall Closing our job
+// scope is starting for zone 1, and working our way through the
+// entire system... so the +Add Zone should provide concecutive zone
+// numbers." Branched the click handler:
+//   • spring_opening / fall_closing → "+Add zone" appends the next
+//     consecutive number with no prompt. Tech walks zone-by-zone
+//     through the whole system; the dialog is friction.
+//   • service_visit (and anything else) → keep the v32 styled
+//     dialog. Tech goes to specific zones (3, 8, 12) and needs to
+//     pick non-consecutive numbers.
+// Both tech-mode and the desktop work-order page get the same split.
+// Touches work-order-tech.js + work-order.js.
 // Bumped 2026-05-13 (v36 → v37): payment flow refinement. Patrick:
 // "we are highly unlikely to recieve payment in person - infact if
 // they pay in person i don't even want to send a reciept. I want
@@ -361,7 +375,7 @@
 //     and signature last. Tap-jump from the pre-sign checklist
 //     row to #techPaymentSection still works as a fallback.
 // Touches work-order-tech.html only.
-const CACHE_VERSION = "pjl-tech-v37";
+const CACHE_VERSION = "pjl-tech-v38";
 const STATIC_ASSETS = [
   "/crm/work-order-tech.html",
   "/crm/work-order-tech.js",
