@@ -269,14 +269,16 @@ function blankWorkOrder() {
     // explicit confirmation of the current visit's materials.
     materialsConfirmedAt: null,
     // Payment captured on-site? (spec §4.3.2 Payment & Billing).
-    //   null  — tech hasn't decided yet (default for unsigned visits)
-    //   true  — paid in the field (cascade flags invoice with paidOnSiteAtCompletion)
-    //   false — explicitly "No, invoice to follow"
-    // Read by completion-cascade.js to set invoice.paidOnSiteAtCompletion
-    // and to reshape the customer email copy. Patrick still reviews each
-    // draft invoice before sending, even when paid on-site — auto-paid
-    // invoices in QB before reconciliation are a Bad Idea.
-    paidOnSite: null,
+    //   false — "No, invoice to follow" (default — Patrick's stated
+    //           real-world default. "we are highly unlikely to recieve
+    //           payment in person... I want everything to be billed
+    //           through online.")
+    //   true  — paid in the field (rare; cascade flags invoice with
+    //           paidOnSiteAtCompletion but no receipt is auto-emailed)
+    //   null  — legacy unset (treated as false on load in tech UI)
+    // Patrick still reviews each draft invoice before sending — auto-
+    // paid invoices in QB before reconciliation are a Bad Idea.
+    paidOnSite: false,
     // Property updates flow-back idempotency marker (Brief D / spec §10 r3).
     // Set to ISO timestamp when the cascade has applied this WO's
     // property edits (zone description changes, controller info, new

@@ -6801,11 +6801,17 @@ async function handleApi(req, res, pathname) {
           auth: { user: process.env.GMAIL_USER, pass: process.env.GMAIL_APP_PASSWORD }
         });
         const firstName = (wo.customerName || "").split(" ")[0] || "there";
-        const paidInField = wo.paidOnSite === true;
+        // v37 — Patrick: "if they pay in person i don't even want to
+        // send a reciept. I want everything to be billed through
+        // online." Removed the paidInField receipt-style branch.
+        // Every customer gets the same "invoice will follow" copy.
+        // The invoice itself goes out via the regular admin-review
+        // flow (Patrick reviews each draft, then sends from the
+        // invoice page or QB). paidOnSiteAtCompletion still gets
+        // stamped on the invoice record for accounting / QB
+        // reconciliation, just not surfaced in the customer email.
         const totalLine = invoice && invoice.total > 0
-          ? (paidInField
-              ? `<p style="margin: 0 0 14px;">Today's total: <strong>$${invoice.total.toFixed(2)} CAD</strong> (incl. HST). <strong>Payment received in the field — thank you.</strong> A receipt invoice will follow for your records.</p>`
-              : `<p style="margin: 0 0 14px;">Total for today's visit: <strong>$${invoice.total.toFixed(2)} CAD</strong> (incl. HST). An invoice will follow.</p>`)
+          ? `<p style="margin: 0 0 14px;">Total for today's visit: <strong>$${invoice.total.toFixed(2)} CAD</strong> (incl. HST). An invoice will follow.</p>`
           : "";
         const warranty = serviceRecord.warrantyExpiresAt
           ? `<p style="margin: 0 0 14px;">Today's work is covered under PJL's <strong>${serviceRecord.warrantyMonths}-month warranty</strong>, valid through ${new Date(serviceRecord.warrantyExpiresAt).toLocaleDateString("en-CA", { month: "long", day: "numeric", year: "numeric" })}.</p>`

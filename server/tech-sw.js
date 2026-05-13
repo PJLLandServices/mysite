@@ -171,6 +171,21 @@
 //   • Crude (interrupts typing) but reliable. Proper render-without-
 //     reload fix is a follow-up. Right now we need photos to APPEAR.
 // Touches work-order-tech.js only.
+// Bumped 2026-05-13 (v36 → v37): payment flow refinement. Patrick:
+// "we are highly unlikely to recieve payment in person - infact if
+// they pay in person i don't even want to send a reciept. I want
+// everything to be billed through online." Two changes:
+//   1. blankWorkOrder.paidOnSite defaults to false ("No — invoice to
+//      follow") instead of null. Tech UI also coerces legacy null
+//      values to false on load. The pre-sign gate auto-passes; the
+//      tech only has to tap "Yes" if they actually took payment.
+//   2. Cascade customer email no longer differentiates copy based on
+//      paidOnSite. Every visit gets the same "invoice will follow"
+//      copy — no receipt-style acknowledgment of in-person payment.
+//      paidOnSiteAtCompletion still stamps on the invoice record for
+//      QB / accounting reconciliation, just not surfaced to the
+//      customer. Touches lib/work-orders.js + work-order-tech.js +
+//      server.js (cascade customer notify).
 // Bumped 2026-05-13 (v35 → v36): custom line item catalog. Patrick:
 // "we need to be able to input a 'customer line item' — in the event
 // for example we need to add a sprinkler head etc. etc. be able to
@@ -346,7 +361,7 @@
 //     and signature last. Tap-jump from the pre-sign checklist
 //     row to #techPaymentSection still works as a fallback.
 // Touches work-order-tech.html only.
-const CACHE_VERSION = "pjl-tech-v36";
+const CACHE_VERSION = "pjl-tech-v37";
 const STATIC_ASSETS = [
   "/crm/work-order-tech.html",
   "/crm/work-order-tech.js",

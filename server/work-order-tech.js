@@ -17,7 +17,7 @@
 // tech-sw.js's CACHE_VERSION. If this string doesn't match the SW
 // cache version after deploy, the iPhone is serving stale JS — clear
 // website data and reload.
-const TECH_BUILD_VERSION = "tech-v36";
+const TECH_BUILD_VERSION = "tech-v37";
 function _setBadge(text, isError) {
   try {
     const badge = document.getElementById("techBuildBadge");
@@ -4165,11 +4165,12 @@ async function init() {
     }
     state.followupOfWoId = wo.followupOfWoId || null;
     state.followupWoIds = Array.isArray(wo.followupWoIds) ? wo.followupWoIds : [];
-    // Coerce paidOnSite to one of true / false / null. Defends against
-    // legacy records or accidental string values.
-    state.paidOnSite = wo.paidOnSite === true ? true
-      : wo.paidOnSite === false ? false
-      : null;
+    // v37 — paidOnSite defaults to false ("No, invoice to follow") per
+    // Patrick: "we are highly unlikely to recieve payment in person...
+    // I want everything to be billed through online." Legacy records
+    // with paidOnSite=null are coerced to false on load so the pre-sign
+    // gate passes without action. Only an explicit true is preserved.
+    state.paidOnSite = wo.paidOnSite === true ? true : false;
     // Same tri-state coercion for needsReturnVisit (v27).
     state.needsReturnVisit = wo.needsReturnVisit === true ? true
       : wo.needsReturnVisit === false ? false
