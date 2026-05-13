@@ -7293,6 +7293,21 @@ async function handleApi(req, res, pathname) {
         const idx = Number(d.lineItemIdx);
         if (Number.isInteger(idx)) decisionByIdx.set(idx, d.accepted !== false);
       }
+      // v33 — defense-in-depth: a malicious or replayed client could
+      // bypass the disabled checkbox and try to decline the service-
+      // call trip fee / seasonal flat fee. Force-accept any line
+      // whose key matches the mandatory pattern. Customer can decline
+      // individual repairs but not the visit itself.
+      const isMandatoryKey = (key) => {
+        if (!key) return false;
+        if (key === "service_call") return true;
+        if (key.startsWith("spring_open_")) return true;
+        if (key.startsWith("fall_close_")) return true;
+        return false;
+      };
+      builderLines.forEach((line, idx) => {
+        if (isMandatoryKey(line.key)) decisionByIdx.set(idx, true);
+      });
       const acceptedLines = [];
       const declinedLines = [];
       const finalDecisions = [];

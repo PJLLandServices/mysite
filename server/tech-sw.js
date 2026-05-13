@@ -171,6 +171,24 @@
 //   • Crude (interrupts typing) but reliable. Proper render-without-
 //     reload fix is a follow-up. Right now we need photos to APPEAR.
 // Touches work-order-tech.js only.
+// Bumped 2026-05-12 (v32 → v33): mandatory line items in customer
+// review. Patrick: "the customer is able to unselect the service call
+// when looking at the drafted quote." Fix: lines whose `key` matches
+// service_call / spring_open_* / fall_close_* are now rendered with
+// a disabled+checked checkbox and a "REQUIRED" pill next to the
+// label. The change handler also force-resets any attempt to decline
+// a mandatory line back to accepted (defense against DevTools
+// bypass). Server-side defense in /on-site-quote/accept overrides
+// decisionByIdx to force-accept mandatory keys before snapshotting.
+// Customer can still decline individual repair lines. Touches
+// work-order-tech.js + server.js.
+// Deferred items Patrick flagged for later:
+//   • Auto-build quote includes non-required components when a "leak"
+//     issue is selected. The issue-rollup logic needs another pass
+//     to filter to only mandatory parts for the chosen issue type.
+//   • Labour times for service_call, spring_open_*, fall_close_*
+//     line items. Currently flat fees; need to attach a labour-hours
+//     field for back-office accounting.
 // Bumped 2026-05-12 (v31 → v32): styled in-app zone dialog + event-
 // delegated +Add zone click. Two fixes:
 //   (a) Patrick on the dashboard: "the dashboard works but i wish it
@@ -286,7 +304,7 @@
 //     and signature last. Tap-jump from the pre-sign checklist
 //     row to #techPaymentSection still works as a fallback.
 // Touches work-order-tech.html only.
-const CACHE_VERSION = "pjl-tech-v32";
+const CACHE_VERSION = "pjl-tech-v33";
 const STATIC_ASSETS = [
   "/crm/work-order-tech.html",
   "/crm/work-order-tech.js",

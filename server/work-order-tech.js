@@ -17,7 +17,7 @@
 // tech-sw.js's CACHE_VERSION. If this string doesn't match the SW
 // cache version after deploy, the iPhone is serving stale JS — clear
 // website data and reload.
-const TECH_BUILD_VERSION = "tech-v32";
+const TECH_BUILD_VERSION = "tech-v33";
 function _setBadge(text, isError) {
   try {
     const badge = document.getElementById("techBuildBadge");
@@ -3065,6 +3065,23 @@ function updateOnSiteShowBtnState() {
   }
 }
 
+// v33 — mandatory line items. Patrick: "the customer is able to unselect
+// the service call when looking at the drafted quote." Service-call
+// trip fees and seasonal opening/closing flat fees aren't optional —
+// they're the cost of the visit being booked at all. A customer can
+// decline an individual repair but cannot decline the act of the tech
+// showing up. Mandatory keys:
+//   • service_call           — the on-site trip fee for service_visit WOs
+//   • spring_open_*          — seasonal flat fees (residential + commercial)
+//   • fall_close_*           — seasonal flat fees (residential + commercial)
+function isMandatoryLineKey(key) {
+  if (!key) return false;
+  if (key === "service_call") return true;
+  if (key.startsWith("spring_open_")) return true;
+  if (key.startsWith("fall_close_")) return true;
+  return false;
+}
+
 function renderOnSiteReview() {
   const lines = (state.onSiteQuote && state.onSiteQuote.builderLineItems) || [];
   const linesEl = document.getElementById("techOnSiteReviewLines");
@@ -3072,22 +3089,40 @@ function renderOnSiteReview() {
   if (!linesEl) return;
 
   // Initialize decisions to "all accepted" if not already shaped.
+  // Mandatory lines are FORCED to accepted=true regardless of any
+  // prior state so a stale partial-decline can't carry over.
   if (!Array.isArray(state.onSiteDecisions) || state.onSiteDecisions.length !== lines.length) {
     state.onSiteDecisions = lines.map((_l, i) => ({ lineItemIdx: i, accepted: true }));
   }
+  lines.forEach((line, i) => {
+    if (isMandatoryLineKey(line.key) && state.onSiteDecisions[i]) {
+      state.onSiteDecisions[i].accepted = true;
+    }
+  });
 
   linesEl.innerHTML = "";
   lines.forEach((line, idx) => {
     const decision = state.onSiteDecisions[idx];
     const accepted = decision ? decision.accepted : true;
+    const mandatory = isMandatoryLineKey(line.key);
     const li = document.createElement("li");
     li.className = "tech-on-site-review-line";
     li.dataset.idx = String(idx);
     li.dataset.accepted = accepted ? "1" : "0";
+    if (mandatory) li.dataset.mandatory = "1";
+    // Mandatory rows: render the checkbox disabled + checked, drop a
+    // "REQUIRED" pill next to the label so the customer sees WHY they
+    // can't toggle it. Optional rows: normal checkbox.
+    const checkboxHtml = mandatory
+      ? `<input type="checkbox" data-decision-idx="${idx}" checked disabled aria-disabled="true">`
+      : `<input type="checkbox" data-decision-idx="${idx}" ${accepted ? "checked" : ""}>`;
+    const requiredPill = mandatory
+      ? ` <span style="display:inline-block;background:#1B4D2E;color:#fff;font-size:10px;font-weight:700;letter-spacing:0.5px;padding:2px 8px;border-radius:10px;margin-left:6px;vertical-align:middle;text-transform:uppercase;">Required</span>`
+      : "";
     li.innerHTML = `
       <label class="tech-on-site-review-checkbox">
-        <input type="checkbox" data-decision-idx="${idx}" ${accepted ? "checked" : ""}>
-        <span class="tech-on-site-review-line-label">${escapeHtml(line.label || "(unlabeled)")}</span>
+        ${checkboxHtml}
+        <span class="tech-on-site-review-line-label">${escapeHtml(line.label || "(unlabeled)")}${requiredPill}</span>
       </label>
       <div class="tech-on-site-review-line-meta">
         <span>Qty ${escapeHtml(String(line.qty || 1))}</span>
@@ -3297,11 +3332,21 @@ document.getElementById("techOnSiteReviewLines")?.addEventListener("change", (ev
   if (!event.target.matches("[data-decision-idx]")) return;
   const idx = Number(event.target.dataset.decisionIdx);
   if (!Array.isArray(state.onSiteDecisions) || idx < 0 || idx >= state.onSiteDecisions.length) return;
+  // v33 — refuse to decline a mandatory line. Defense-in-depth on top
+  // of the `disabled` attribute (a customer with DevTools could still
+  // uncheck it; force back to true).
+  const lines = (state.onSiteQuote && state.onSiteQuote.builderLineItems) || [];
+  const line = lines[idx];
+  if (line && isMandatoryLineKey(line.key)) {
+    event.target.checked = true;
+    state.onSiteDecisions[idx].accepted = true;
+    return;
+  }
   state.onSiteDecisions[idx].accepted = !!event.target.checked;
   const li = event.target.closest(".tech-on-site-review-line");
   if (li) li.dataset.accepted = event.target.checked ? "1" : "0";
-  // Recompute totals (accepted-only)
-  const lines = state.onSiteQuote.builderLineItems || [];
+  // Recompute totals (accepted-only). `lines` is already in scope
+  // from the mandatory-line check above.
   const acceptedLines = lines.filter((_l, i) => state.onSiteDecisions[i]?.accepted);
   const t = totalsForLines(acceptedLines);
   const totalsEl = document.getElementById("techOnSiteReviewTotals");
