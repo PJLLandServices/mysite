@@ -3213,12 +3213,55 @@ async function handleApi(req, res, pathname) {
   // authenticated user (admin or tech can view + reply). The auth wall
   // for the /api/admin/* tree is already enforced upstream by the
   // generic admin-routes gate; these handlers add the application logic.
+  //
+  // Legacy heal: portal messages received BEFORE the two-way thread
+  // shipped only landed in lead.crm.activity as "Customer message via
+  // portal: …" entries. We migrate those into lead.portal.messages on
+  // first admin view so they show up in the inbox.
+  function migratePortalActivityToThread(lead) {
+    if (!lead.portal || typeof lead.portal !== "object") lead.portal = {};
+    if (!Array.isArray(lead.portal.messages)) lead.portal.messages = [];
+    const activity = Array.isArray(lead.crm?.activity) ? lead.crm.activity : [];
+    const knownTs = new Set(lead.portal.messages.map((m) => m.ts));
+    let added = false;
+    for (const entry of activity) {
+      const text = String(entry?.text || "");
+      const match = text.match(/^Customer message via portal:\s*([\s\S]+)$/);
+      if (!match) continue;
+      if (knownTs.has(entry.at)) continue;
+      const body = match[1].trim();
+      if (!body) continue;
+      lead.portal.messages.push({
+        id: `mid-legacy-${String(entry.at).replace(/[^a-z0-9]/gi, "")}`,
+        from: "customer",
+        body,
+        ts: entry.at,
+        readByAdmin: false
+      });
+      knownTs.add(entry.at);
+      added = true;
+    }
+    if (added) {
+      lead.portal.messages.sort((a, b) => new Date(a.ts) - new Date(b.ts));
+    }
+    return added;
+  }
 
   // GET /api/admin/portal-messages — inbox list across all leads.
   // Returns one entry per lead that has at least one message, sorted by
   // last-message timestamp DESC, with name/phone/lastMessage/unreadCount.
   if (req.method === "GET" && pathname === "/api/admin/portal-messages") {
     const allLeads = await readLeads();
+    // Heal legacy data so messages from before the thread shipped show
+    // up in the inbox. Mutates leads in-memory; persist if anything moved.
+    let healedAny = false;
+    for (const lead of allLeads) {
+      if (migratePortalActivityToThread(lead)) healedAny = true;
+    }
+    if (healedAny) {
+      try { await writeLeads(allLeads); }
+      catch (e) { console.warn("[portal-msg migrate] writeLeads failed:", e?.message); }
+    }
     const threads = [];
     for (const lead of allLeads) {
       const msgs = Array.isArray(lead.portal?.messages) ? lead.portal.messages : [];
@@ -3250,6 +3293,14 @@ async function handleApi(req, res, pathname) {
   // the badge without pulling the whole inbox payload.
   if (req.method === "GET" && pathname === "/api/admin/portal-messages/unread-count") {
     const allLeads = await readLeads();
+    let healedAny = false;
+    for (const lead of allLeads) {
+      if (migratePortalActivityToThread(lead)) healedAny = true;
+    }
+    if (healedAny) {
+      try { await writeLeads(allLeads); }
+      catch (e) { console.warn("[portal-msg migrate] writeLeads failed:", e?.message); }
+    }
     let count = 0;
     for (const lead of allLeads) {
       const msgs = Array.isArray(lead.portal?.messages) ? lead.portal.messages : [];
@@ -3271,6 +3322,12 @@ async function handleApi(req, res, pathname) {
     const idx = allLeads.findIndex((l) => l.id === leadId);
     if (idx === -1) return sendJson(res, 404, { ok: false, errors: ["Lead not found."] });
     const lead = allLeads[idx];
+    // Same heal applies to single-thread view in case the admin clicks
+    // straight through to a thread URL without hitting the inbox first.
+    if (migratePortalActivityToThread(lead)) {
+      try { await writeLeads(allLeads); }
+      catch (e) { console.warn("[portal-msg migrate] writeLeads failed:", e?.message); }
+    }
 
     if (req.method === "GET" && !sub) {
       const msgs = Array.isArray(lead.portal?.messages) ? lead.portal.messages : [];
