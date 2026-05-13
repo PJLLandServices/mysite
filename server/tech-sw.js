@@ -171,6 +171,26 @@
 //   • Crude (interrupts typing) but reliable. Proper render-without-
 //     reload fix is a follow-up. Right now we need photos to APPEAR.
 // Touches work-order-tech.js only.
+// Bumped 2026-05-12 (v29 → v30): zone picker — direct number entry.
+// Patrick reported v29 "still only wants to load consecutively." Root
+// cause: when the linked property has no zones in its profile (new
+// customer or freshly-onboarded property), the v29 picker silently
+// fell back to addBlankZoneAndOpen() which assigned sequential
+// numbers (1, 2, 3...). So a tech wanting zone 3 first got zone 1.
+// v30 fix:
+//   • The picker always opens (no silent fallback). It shows TWO
+//     paths: known property zones as tap rows (auto-populates) +
+//     a number input ("Add zone 3" / "Add zone 8" / "Add zone 12")
+//     that works regardless of the property profile state.
+//   • Removed the sequential auto-numbering branch entirely. Every
+//     zone added is the number the tech intended.
+//   • New properties: tech types "3", taps Add → zone 3 created with
+//     location "Zone 3" (the tech then types the actual location in
+//     the edit sheet; the completion cascade syncs it back to the
+//     property profile via newZones).
+// Touches work-order-tech.html (number input + restructured panel) +
+// work-order-tech.js (new addZoneAndOpen() replacing the previous
+// addBlankZoneAndOpen + addPropertyZoneAndOpen pair).
 // Bumped 2026-05-12 (v28 → v29): zone picker refactored from multi-
 // select checkboxes to sequential one-at-a-time tap-to-add. Patrick
 // described the actual service-call workflow: arrive at site → test
@@ -233,7 +253,7 @@
 //     and signature last. Tap-jump from the pre-sign checklist
 //     row to #techPaymentSection still works as a fallback.
 // Touches work-order-tech.html only.
-const CACHE_VERSION = "pjl-tech-v29";
+const CACHE_VERSION = "pjl-tech-v30";
 const STATIC_ASSETS = [
   "/crm/work-order-tech.html",
   "/crm/work-order-tech.js",

@@ -17,7 +17,7 @@
 // tech-sw.js's CACHE_VERSION. If this string doesn't match the SW
 // cache version after deploy, the iPhone is serving stale JS — clear
 // website data and reload.
-const TECH_BUILD_VERSION = "tech-v29";
+const TECH_BUILD_VERSION = "tech-v30";
 function _setBadge(text, isError) {
   try {
     const badge = document.getElementById("techBuildBadge");
@@ -1177,48 +1177,56 @@ techZoneList.addEventListener("click", (event) => {
 // the PATCH round-trip, then re-enable.
 const techAddZoneBtn = document.getElementById("techAddZoneBtn");
 
-// v29 — Sequential one-at-a-time zone picker. Patrick's described
-// workflow: arrive at site → test zone 3 at the controller → diagnose
-// → tap zone 3 in the picker → zone is added to the WO and the edit
-// sheet opens immediately so the tech works one zone at a time. After
-// finishing zone 3, tech taps "+ Add zone" again to grab zone 8, etc.
-// No checkboxes, no batch-add — each row in the picker is a button
-// that adds-and-opens that specific zone. New-customer / new-property
-// flow: blank-zone escape hatch at the bottom of the picker.
+// v30 — Zone picker, ANY zone number. Patrick's actual workflow:
+// service call for Zone 3 pipe break + Zone 8 sprinkler head off +
+// Zone 12 sprinkler head broken. Tech goes zone-by-zone, picking
+// specific non-consecutive numbers (3, then 8, then 12). The picker
+// supports two paths and ALWAYS lets the tech enter any zone number:
+//   • Tap a row from the property's known zone profile (auto-fills
+//     location / sprinkler types / coverage from the property record).
+//   • Type any number 1–99 into the input → "Add zone" (covers new
+//     properties without zones in profile, and zones the profile
+//     doesn't know about).
+// Crucially: NO sequential auto-numbering. The tech picks the actual
+// number every time. New-property zones flow back to the property
+// profile via the existing completion cascade (newZones).
 function openZonePicker() {
   const picker = document.getElementById("techZonePicker");
+  const knownWrap = document.getElementById("techZonePickerKnown");
   const list = document.getElementById("techZonePickerList");
-  if (!picker || !list) return;
+  const numInput = document.getElementById("techZonePickerNumber");
+  if (!picker || !list || !knownWrap) return;
   const propertyZones = (state.linkedProperty && state.linkedProperty.system && Array.isArray(state.linkedProperty.system.zones))
     ? state.linkedProperty.system.zones : [];
   const onWoNumbers = new Set((state.zones || []).map((z) => Number(z.number)).filter(Boolean));
   const candidates = propertyZones
     .filter((pz) => pz && Number(pz.number) > 0 && !onWoNumbers.has(Number(pz.number)))
     .sort((a, b) => Number(a.number) - Number(b.number));
-  if (!candidates.length) {
-    // Nothing to pick — fall back to blank-zone add (covers the
-    // new-customer case where the property has no zones in profile).
-    picker.hidden = true;
-    addBlankZoneAndOpen();
-    return;
+  if (candidates.length) {
+    knownWrap.hidden = false;
+    list.innerHTML = candidates.map((pz) => {
+      const n = Number(pz.number);
+      const loc = String(pz.location || pz.label || `Zone ${n}`);
+      return `<li>
+        <button type="button" class="tech-zone-pick-row" data-zone-number="${n}"
+          style="width:100%;display:flex;align-items:center;gap:12px;padding:14px 14px;background:#fff;border:1px solid #e0ddd1;border-radius:6px;cursor:pointer;text-align:left;font:inherit;">
+          <strong style="font-size:15px;flex-shrink:0;min-width:60px;color:#1B4D2E;">Zone ${n}</strong>
+          <span style="font-size:13px;color:#444;flex:1;">${escapeHtml(loc)}</span>
+          <span aria-hidden="true" style="font-size:18px;color:#1B4D2E;flex-shrink:0;">→</span>
+        </button>
+      </li>`;
+    }).join("");
+  } else {
+    // Property has no zones (or all already on WO) — hide the known
+    // list, lean entirely on the number input. The tech can still
+    // add any zone they want.
+    knownWrap.hidden = true;
+    list.innerHTML = "";
   }
-  // Each row is a tap-to-add button (NOT a checkbox). Tapping a row
-  // adds that one zone and opens its edit sheet — matches the
-  // sequential workflow.
-  list.innerHTML = candidates.map((pz) => {
-    const n = Number(pz.number);
-    const loc = String(pz.location || pz.label || `Zone ${n}`);
-    return `<li>
-      <button type="button" class="tech-zone-pick-row" data-zone-number="${n}"
-        style="width:100%;display:flex;align-items:center;gap:12px;padding:14px 14px;background:#fff;border:1px solid #e0ddd1;border-radius:6px;cursor:pointer;text-align:left;font:inherit;">
-        <strong style="font-size:15px;flex-shrink:0;min-width:60px;color:#1B4D2E;">Zone ${n}</strong>
-        <span style="font-size:13px;color:#444;flex:1;">${escapeHtml(loc)}</span>
-        <span aria-hidden="true" style="font-size:18px;color:#1B4D2E;flex-shrink:0;">→</span>
-      </button>
-    </li>`;
-  }).join("");
+  if (numInput) numInput.value = "";
   picker.hidden = false;
   picker.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  if (numInput) numInput.focus();
 }
 
 function closeZonePicker() {
@@ -1226,35 +1234,22 @@ function closeZonePicker() {
   if (picker) picker.hidden = true;
 }
 
-function addBlankZoneAndOpen() {
-  const usedNumbers = (state.zones || [])
-    .map((z) => Number(z.number) || 0)
-    .filter((n) => n > 0);
-  const nextNum = usedNumbers.length ? Math.max(...usedNumbers) + 1 : 1;
-  const blankChecks = {};
-  for (const k of ZONE_CHECK_KEYS) blankChecks[k] = false;
-  state.zones.push({
-    number: nextNum,
-    kind: "zone",
-    location: `Zone ${nextNum}`,
-    sprinklerTypes: [],
-    coverage: [],
-    status: "",
-    notes: "",
-    checks: { ...blankChecks },
-    issues: []
-  });
-  renderZones();
-  patchWorkOrder({ zones: state.zones });
-  openZoneSheet(state.zones.length - 1);
-}
-
-// Add an existing property zone by number — pulls location + sprinkler
-// types + coverage from the property record so the tech doesn't have
-// to retype known data. Then opens the zone for immediate editing.
-function addPropertyZoneAndOpen(zoneNumber) {
+// Add a specific zone number to the WO. Pulls metadata from the
+// linked property's zone record when one exists for that number;
+// otherwise the zone starts with just its number + location text
+// "Zone N" for the tech to fill in. NO sequential auto-numbering.
+// Always opens the new zone's edit sheet immediately.
+function addZoneAndOpen(zoneNumber) {
   const n = Number(zoneNumber);
-  if (!n) return;
+  if (!n || n < 1 || n > 99) {
+    alert("Zone number must be between 1 and 99.");
+    return;
+  }
+  const existingNumbers = new Set((state.zones || []).map((z) => Number(z.number)).filter(Boolean));
+  if (existingNumbers.has(n)) {
+    alert(`Zone ${n} is already on this work order — open it from the zones list above to edit.`);
+    return;
+  }
   const propertyZones = (state.linkedProperty && state.linkedProperty.system && Array.isArray(state.linkedProperty.system.zones))
     ? state.linkedProperty.system.zones : [];
   const pz = propertyZones.find((p) => Number(p.number) === n);
@@ -1287,31 +1282,43 @@ techAddZoneBtn?.addEventListener("click", () => {
     techAddZoneBtn.removeAttribute("disabled");
     delete techAddZoneBtn.dataset.busy;
   }, 600);
-  const propertyZones = (state.linkedProperty && state.linkedProperty.system && Array.isArray(state.linkedProperty.system.zones))
-    ? state.linkedProperty.system.zones : [];
-  if (propertyZones.length) {
-    openZonePicker();
-  } else {
-    addBlankZoneAndOpen();
-  }
+  // Always open the picker. The picker handles both paths (property
+  // zones if any + number input always). No more silent fallback to
+  // sequential blank-zone-add.
+  openZonePicker();
 });
 
-// Delegated click handler — one listener for the list, matches the
-// per-row button by data-zone-number. Beats binding N listeners on
-// every picker open.
+// Tap a row from the property's known zones — adds that zone with
+// auto-populated metadata, opens edit sheet.
 document.getElementById("techZonePickerList")?.addEventListener("click", (event) => {
   const btn = event.target.closest(".tech-zone-pick-row");
   if (!btn) return;
   const n = Number(btn.dataset.zoneNumber);
   if (!n) return;
-  addPropertyZoneAndOpen(n);
+  addZoneAndOpen(n);
+});
+
+// "Add zone" by typed number — pick any zone 1–99, in any order.
+document.getElementById("techZonePickerAddByNumber")?.addEventListener("click", () => {
+  const input = document.getElementById("techZonePickerNumber");
+  const n = Number(input?.value);
+  if (!Number.isFinite(n) || n < 1 || n > 99) {
+    alert("Please enter a zone number between 1 and 99.");
+    if (input) input.focus();
+    return;
+  }
+  addZoneAndOpen(n);
+});
+
+// Enter-key on the number input fires the same add.
+document.getElementById("techZonePickerNumber")?.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") {
+    event.preventDefault();
+    document.getElementById("techZonePickerAddByNumber")?.click();
+  }
 });
 
 document.getElementById("techZonePickerCancel")?.addEventListener("click", closeZonePicker);
-document.getElementById("techZonePickerAddBlank")?.addEventListener("click", () => {
-  closeZonePicker();
-  addBlankZoneAndOpen();
-});
 
 // ---- Zone-edit bottom sheet -------------------------------------
 

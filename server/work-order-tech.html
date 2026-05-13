@@ -185,22 +185,41 @@
       <p class="tech-empty-zones" id="techEmptyZones" hidden>No zones on this work order yet. Tap + Add zone to log work.</p>
       <ul class="tech-zone-list" id="techZoneList"></ul>
 
-      <!-- Zone picker (v29). Sequential one-at-a-time flow per Patrick's
-           service-call workflow: tech tests zone 3 at the controller,
-           diagnoses, taps zone 3 here → zone is added to the WO + the
-           edit sheet opens immediately. After completing zone 3, tech
-           taps "+ Add zone" again, picks zone 8, etc. No checkboxes,
-           no batch-add — one focused investigation at a time.
-           Hidden by default; opened/closed by JS. Inline-styled so no
-           CSS cache bump. Zones already on the WO are filtered out. -->
+      <!-- Zone picker (v30). Sequential one-at-a-time per Patrick: arrive,
+           test zone 3 at controller, diagnose, pick zone 3 here → edit
+           sheet opens. After finishing, tap +Add zone, pick zone 8, etc.
+           Two ways to pick: tap a row from the property's known zones
+           (auto-populates location/sprinkler types/coverage from the
+           profile), OR type any zone number directly (covers new
+           properties without zones in profile + zones the profile
+           doesn't know about). NO sequential auto-numbering — every
+           zone number the tech adds is intentional. -->
       <div id="techZonePicker" hidden
         style="margin-top:8px;padding:12px;border:1px solid #d9d6c8;border-radius:8px;background:#faf9f4;">
-        <p style="margin:0 0 10px;font-size:13px;color:#444;">Tap the zone you're working on. It gets added to this work order and opens for editing.</p>
-        <ul id="techZonePickerList" style="list-style:none;padding:0;margin:0 0 12px;display:flex;flex-direction:column;gap:6px;"></ul>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <p style="margin:0 0 10px;font-size:13px;color:#444;font-weight:600;">Which zone are you working on?</p>
+
+        <!-- Known property zones — hidden if the property has none in
+             profile, or if all are already on the WO. -->
+        <div id="techZonePickerKnown" hidden>
+          <p style="margin:0 0 6px;font-size:12px;color:#666;">From this property's profile:</p>
+          <ul id="techZonePickerList" style="list-style:none;padding:0;margin:0 0 12px;display:flex;flex-direction:column;gap:6px;"></ul>
+        </div>
+
+        <!-- Direct number entry — always visible. Works for any zone
+             1–99 regardless of whether the property profile knows it. -->
+        <div style="padding-top:8px;border-top:1px solid #e0ddd1;">
+          <p style="margin:0 0 6px;font-size:12px;color:#666;">Or pick a specific zone number:</p>
+          <div style="display:flex;gap:8px;align-items:stretch;">
+            <input type="number" id="techZonePickerNumber" min="1" max="99" inputmode="numeric" placeholder="e.g. 3"
+              style="flex:1;min-width:0;padding:10px 12px;font-size:16px;border:1px solid #c9c6b8;border-radius:6px;">
+            <button type="button" id="techZonePickerAddByNumber"
+              style="flex-shrink:0;padding:10px 16px;background:#1B4D2E;color:#fff;border:none;border-radius:6px;font-weight:600;cursor:pointer;">Add zone</button>
+          </div>
+        </div>
+
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;">
           <button type="button" id="techZonePickerCancel" style="flex:1;min-width:100px;padding:10px 12px;background:#fff;border:1px solid #c9c6b8;border-radius:6px;font-weight:500;cursor:pointer;">Cancel</button>
         </div>
-        <p style="margin:10px 0 0;font-size:12px;color:#666;">Zone not in the property profile? <button type="button" id="techZonePickerAddBlank" style="background:none;border:none;color:#1B4D2E;text-decoration:underline;cursor:pointer;padding:0;font:inherit;">Add a blank zone</button>.</p>
       </div>
 
       <button type="button" class="tech-zone-issue-add" id="techAddZoneBtn">+ Add zone</button>
