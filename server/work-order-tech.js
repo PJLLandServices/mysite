@@ -12,6 +12,17 @@
 //
 // Same API as the desktop page (PATCH /api/work-orders/:id).
 
+// Build version stamp — read out loud by Patrick on the iPhone so we
+// can confirm exactly which JS is running. Update in lockstep with
+// tech-sw.js's CACHE_VERSION. If this string doesn't match the SW
+// cache version after deploy, the iPhone is serving stale JS — clear
+// website data and reload.
+const TECH_BUILD_VERSION = "tech-v21";
+try {
+  const _badge = document.getElementById("techBuildBadge");
+  if (_badge) _badge.textContent = TECH_BUILD_VERSION;
+} catch (_e) { /* tolerate */ }
+
 const techHeader = document.getElementById("techHeader");
 const techBack = document.getElementById("techBack");
 const techId = document.getElementById("techId");
@@ -1201,8 +1212,17 @@ function renderIssuePhotos(host, issueId, zone) {
     if (state.locked) return;
     const input = event.target;
     const files = input.files;
-    if (!files || !files.length) return;
+    // v21 — same immediate diagnostic as the visit-photo handler.
     label.classList.add("is-uploading");
+    setUploadStatus(`Picked ${files ? files.length : 0} file(s)…`);
+    if (!files || !files.length) {
+      setUploadStatus("No file selected — try again.");
+      setTimeout(() => {
+        label.classList.remove("is-uploading");
+        setUploadStatus(null);
+      }, 1500);
+      return;
+    }
     try {
       const wo = await uploadWoPhotos(files, {
         category: "issue",
@@ -1907,9 +1927,23 @@ document.getElementById("techWoPhotoInput")?.addEventListener("change", async (e
   if (state.locked) return;
   const input = event.target;
   const files = input.files;
-  if (!files || !files.length) return;
+  // v21 — immediate diagnostic. If the user picks a file and sees
+  // NOTHING change, we can't tell whether the change event fired
+  // empty or whether the handler ran but stalled. This adds a
+  // visible "Picked N file(s)…" stamp BEFORE any async work so we
+  // know the handler at least executed. The is-uploading class is
+  // added FIRST so setUploadStatus has a target to update.
   const addBtn = document.querySelector(".tech-photo-add");
   if (addBtn) addBtn.classList.add("is-uploading");
+  setUploadStatus(`Picked ${files ? files.length : 0} file(s)…`);
+  if (!files || !files.length) {
+    setUploadStatus("No file selected — try again.");
+    setTimeout(() => {
+      if (addBtn) addBtn.classList.remove("is-uploading");
+      setUploadStatus(null);
+    }, 1500);
+    return;
+  }
   try {
     const wo = await uploadWoPhotos(files, { category: "general" });
     if (wo) {

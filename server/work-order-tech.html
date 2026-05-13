@@ -28,6 +28,12 @@
     </div>
     <div class="tech-saving" id="techSaving" hidden>Saving…</div>
   </header>
+  <!-- Build version badge — bottom-left corner. JS overwrites the text
+       on load to confirm which JS bundle is actually running. If this
+       stays "html only" the JS never executed; if it shows an older
+       version than the SW deployed, the iPhone is on a stale cache.
+       Inline styles to dodge a CSS cache bump too. -->
+  <div id="techBuildBadge" style="position:fixed;bottom:6px;left:6px;z-index:9999;font:600 11px/1 system-ui,-apple-system,sans-serif;color:#666;background:rgba(255,255,255,.85);padding:3px 6px;border-radius:4px;pointer-events:none">html only</div>
 
   <main class="tech-main" id="techMain" hidden>
     <!-- Locked banner — visible when the WO has been signed off. The

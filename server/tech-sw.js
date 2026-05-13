@@ -107,10 +107,30 @@
 //     a clear timeout error ("if iCloud, open Photos and tap to
 //     download first") beats forever-spin.
 // Touches work-order-tech.js only.
+// Bumped 2026-05-12 (v20 → v21): Patrick reported v20 "back to doing
+// nothing" — i.e. NO status change at all on file pick. That's
+// unlikely to be a real regression in v20's code path (the first
+// setUploadStatus call is at the top of the loop, before any async
+// work). Strong suspicion: iPhone is still on stale cached JS
+// (v18/v19) and hasn't actually picked up v20 yet. v21 adds:
+//   • Visible build version badge in the bottom-left corner of every
+//     tech page. JS sets it to "tech-v21" on load. If Patrick reads
+//     it as "html only" → JS never executed. If it shows v19/v20 →
+//     stale cache and we need a force-refresh. If v21 → he's
+//     current and the bug is somewhere else.
+//   • Immediate "Picked N file(s)…" status the moment the change
+//     event fires, BEFORE any async work. If user picks a file and
+//     sees nothing at all, the change event isn't firing (or fires
+//     with 0 files).
+//   • "No file selected — try again." stamp when files is empty (so
+//     a misfire is visible rather than silent).
+// Touches HTML + JS — HTML cache must invalidate too. The HTML uses
+// network-first so a fresh load gets the new markup; only the JS
+// fetch is cache-first.
 // Lesson: bump this in the same commit as any change to the files in
 // STATIC_ASSETS, otherwise the field tech sees old behaviour even
 // after Render redeploys.
-const CACHE_VERSION = "pjl-tech-v20";
+const CACHE_VERSION = "pjl-tech-v21";
 const STATIC_ASSETS = [
   "/crm/work-order-tech.html",
   "/crm/work-order-tech.js",
