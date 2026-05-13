@@ -4785,6 +4785,11 @@ async function handleApi(req, res, pathname) {
       const session = await requireAdmin(req);
       if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required to delete bookings."] });
       const id = decodeURIComponent(bookingMatch[1]);
+      // Fetch the canonical record BEFORE remove() so we can resolve
+      // its leadId for the lead.booking cleanup below — the legacy
+      // embedded lead.booking shape doesn't carry the canonical BK- id,
+      // so we can't match it on a field after the record is gone.
+      const bookingToDelete = await bookings.get(id);
       const result = await bookings.remove(id, {
         by: session.uid || "admin",
         isActiveWo: async (woId) => {
@@ -4799,18 +4804,20 @@ async function handleApi(req, res, pathname) {
         if (result.linkedWoId) body.linkedWoId = result.linkedWoId;
         return sendJson(res, result.status || 400, body);
       }
-      // Also strip lead.booking if it pointed at this id, so the lead
-      // doesn't carry a dangling reference.
+      // Strip lead.booking on the linked lead so the schedule canvas
+      // (which reads /api/quotes → lead.booking) stops rendering the
+      // ghost. Without this the booking disappears from bookings.json
+      // but stays on screen because the canvas iterates leads, not the
+      // canonical bookings store.
       try {
-        const allLeads = await readLeads();
-        let mutated = false;
-        for (const lead of allLeads) {
-          if (lead?.booking?.bookingId === id) {
+        if (bookingToDelete?.leadId) {
+          const allLeads = await readLeads();
+          const lead = allLeads.find((l) => l.id === bookingToDelete.leadId);
+          if (lead && lead.booking) {
             delete lead.booking;
-            mutated = true;
+            await writeLeads(allLeads);
           }
         }
-        if (mutated) await writeLeads(allLeads);
       } catch (e) {
         console.warn("[booking delete] lead.booking cleanup failed:", e?.message);
       }
