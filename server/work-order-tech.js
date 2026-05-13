@@ -17,7 +17,7 @@
 // tech-sw.js's CACHE_VERSION. If this string doesn't match the SW
 // cache version after deploy, the iPhone is serving stale JS — clear
 // website data and reload.
-const TECH_BUILD_VERSION = "tech-v35";
+const TECH_BUILD_VERSION = "tech-v36";
 function _setBadge(text, isError) {
   try {
     const badge = document.getElementById("techBuildBadge");
@@ -3305,14 +3305,128 @@ document.getElementById("techOnSiteLines")?.addEventListener("input", (event) =>
   scheduleBuilderPersist();
 });
 
-document.getElementById("techOnSiteAddBtn")?.addEventListener("click", () => {
+// v36 — Custom line item dialog. Replaces the previous behavior of
+// pushing a blank row (which forced the tech to type label + price
+// every time). Now: tap "+ Add line" → modal opens with the rolling
+// catalog of previously-used custom items + a form to create a new
+// one. Tap a saved item → adds to the current quote + bumps its
+// usedCount on the server. Type a new one + Add → saves to the
+// catalog + adds to the current quote. The catalog ranks by usage,
+// so the most-frequently-used items surface first.
+async function showCustomLineDialog() {
+  document.getElementById("pjlCustomLineDialog")?.remove();
+  // Fetch the catalog first so we can render the saved-items list
+  // immediately. Tolerate a network failure — the form still works
+  // for one-off adds.
+  let savedItems = [];
+  try {
+    const res = await fetch("/api/custom-line-items");
+    const data = await res.json();
+    if (data && Array.isArray(data.items)) savedItems = data.items;
+  } catch (_e) { /* network error — show empty list */ }
+
+  return new Promise((resolve) => {
+    const backdrop = document.createElement("div");
+    backdrop.id = "pjlCustomLineDialog";
+    backdrop.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:10001;display:flex;align-items:center;justify-content:center;padding:20px;";
+    const dialog = document.createElement("div");
+    dialog.style.cssText = "background:#fff;border-radius:14px;padding:20px;max-width:500px;width:100%;max-height:90vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,0.35);box-sizing:border-box;";
+    const savedRowsHtml = savedItems.length
+      ? savedItems.map((it) => `
+          <button type="button" class="pjl-cli-row" data-id="${escapeHtml(it.id)}" data-label="${escapeHtml(it.label)}" data-price="${escapeHtml(String(it.price))}"
+            style="width:100%;display:flex;align-items:center;gap:10px;padding:12px;background:#fff;border:1px solid #e0ddd1;border-radius:6px;cursor:pointer;text-align:left;font:inherit;margin-bottom:6px;">
+            <span style="flex:1;font-size:14px;color:#222;">${escapeHtml(it.label)}</span>
+            <strong style="font-size:14px;color:#1B4D2E;flex-shrink:0;">$${Number(it.price).toFixed(2)}</strong>
+            <span aria-hidden="true" style="color:#1B4D2E;flex-shrink:0;">→</span>
+          </button>
+        `).join("")
+      : `<p style="margin:0;padding:14px;background:#faf9f4;border-radius:6px;font-size:13px;color:#666;text-align:center;">No saved line items yet. Add your first one below.</p>`;
+    dialog.innerHTML = `
+      <h3 style="margin:0 0 6px;color:#1B4D2E;font-family:'Barlow Condensed',system-ui,sans-serif;font-size:22px;font-weight:700;letter-spacing:0.5px;text-transform:uppercase;">Add custom line</h3>
+      <p style="margin:0 0 14px;color:#555;font-size:13px;">Tap a saved line to add it, or create a new one below.</p>
+
+      <div style="margin-bottom:18px;">
+        <p style="margin:0 0 8px;font-size:12px;color:#666;font-weight:500;text-transform:uppercase;letter-spacing:0.5px;">Saved lines</p>
+        <div id="pjlCliList" style="max-height:280px;overflow-y:auto;">${savedRowsHtml}</div>
+      </div>
+
+      <div style="padding-top:14px;border-top:1px solid #e0ddd1;">
+        <p style="margin:0 0 8px;font-size:12px;color:#666;font-weight:500;text-transform:uppercase;letter-spacing:0.5px;">New line</p>
+        <label style="display:block;margin-bottom:8px;">
+          <span style="display:block;font-size:13px;color:#444;margin-bottom:4px;">Description</span>
+          <input type="text" id="pjlCliLabel" maxlength="200" placeholder="e.g. Add a sprinkler head"
+            style="width:100%;padding:10px;font-size:15px;border:1px solid #c9c6b8;border-radius:6px;box-sizing:border-box;">
+        </label>
+        <label style="display:block;margin-bottom:12px;">
+          <span style="display:block;font-size:13px;color:#444;margin-bottom:4px;">Price ($)</span>
+          <input type="number" id="pjlCliPrice" min="0" step="0.01" inputmode="decimal" placeholder="e.g. 85.00"
+            style="width:100%;padding:10px;font-size:15px;border:1px solid #c9c6b8;border-radius:6px;box-sizing:border-box;">
+        </label>
+        <button type="button" id="pjlCliAddNew" style="width:100%;padding:12px;background:#1B4D2E;color:#fff;border:none;border-radius:8px;font-weight:600;cursor:pointer;font-size:15px;">Save &amp; add to quote</button>
+      </div>
+
+      <button type="button" id="pjlCliCancel" style="width:100%;margin-top:10px;padding:12px;background:#fff;border:1px solid #c9c6b8;border-radius:8px;font-weight:500;cursor:pointer;font-size:14px;color:#444;">Cancel</button>
+    `;
+    backdrop.appendChild(dialog);
+    document.body.appendChild(backdrop);
+
+    function cleanup() { backdrop.remove(); }
+
+    // Tap a saved row → resolve with the picked item (and bump usage server-side).
+    dialog.querySelector("#pjlCliList")?.addEventListener("click", async (e) => {
+      const btn = e.target.closest(".pjl-cli-row");
+      if (!btn) return;
+      const id = btn.dataset.id;
+      const label = btn.dataset.label;
+      const price = Number(btn.dataset.price);
+      // Fire-and-forget usage bump.
+      fetch(`/api/custom-line-items/${encodeURIComponent(id)}/use`, { method: "POST" }).catch(() => {});
+      cleanup();
+      resolve({ label, price, id });
+    });
+
+    // New-line save.
+    dialog.querySelector("#pjlCliAddNew").addEventListener("click", async () => {
+      const labelInput = dialog.querySelector("#pjlCliLabel");
+      const priceInput = dialog.querySelector("#pjlCliPrice");
+      const label = String(labelInput.value || "").trim();
+      const price = Number(priceInput.value);
+      if (!label) { labelInput.style.borderColor = "#c00"; labelInput.focus(); return; }
+      if (!Number.isFinite(price) || price <= 0) { priceInput.style.borderColor = "#c00"; priceInput.focus(); return; }
+      try {
+        const res = await fetch("/api/custom-line-items", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ label, price })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.ok) {
+          alert((data.errors && data.errors[0]) || "Couldn't save line item.");
+          return;
+        }
+        cleanup();
+        resolve({ label: data.item.label, price: Number(data.item.price), id: data.item.id });
+      } catch (err) {
+        alert("Network error: " + (err.message || "couldn't save."));
+      }
+    });
+
+    dialog.querySelector("#pjlCliCancel").addEventListener("click", () => { cleanup(); resolve(null); });
+    backdrop.addEventListener("click", (e) => { if (e.target === backdrop) { cleanup(); resolve(null); } });
+    setTimeout(() => dialog.querySelector("#pjlCliLabel")?.focus(), 50);
+  });
+}
+
+document.getElementById("techOnSiteAddBtn")?.addEventListener("click", async () => {
   if (state.locked) return;
+  const picked = await showCustomLineDialog();
+  if (!picked) return;
   state.onSiteQuote.builderLineItems = state.onSiteQuote.builderLineItems || [];
   state.onSiteQuote.builderLineItems.push({
     key: null,
-    label: "",
+    label: picked.label,
     qty: 1,
-    originalPrice: 0,
+    originalPrice: Math.round(Number(picked.price) * 100) / 100,
     overridePrice: null,
     custom: true,
     source: { zoneNumbers: [], issueIds: [] },

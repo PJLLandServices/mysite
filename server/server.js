@@ -47,6 +47,7 @@ const workOrders = require("./lib/work-orders");
 const quotes = require("./lib/quotes");
 const invoices = require("./lib/invoices");
 const completionCascade = require("./lib/completion-cascade");
+const customLineItems = require("./lib/custom-line-items");
 const settings = require("./lib/settings");
 const issueRollup = require("./lib/issue-rollup");
 const { generateQuotePdf } = require("./lib/quote-pdf");
@@ -534,6 +535,7 @@ function needsAuth(method, pathname) {
   if (pathname.startsWith("/api/invoices")) return "user";
   if (pathname.startsWith("/api/settings")) return "user";
   if (pathname === "/api/parts") return "user";
+  if (pathname.startsWith("/api/custom-line-items")) return "user";
   if (pathname.startsWith("/api/admin/quickbooks")) return "user";
   if (pathname.startsWith("/api/bookings")) return "user";
   if (pathname.startsWith("/api/suppliers")) return "user";
@@ -4909,6 +4911,58 @@ async function handleApi(req, res, pathname) {
     });
     res.end(body);
     return;
+  }
+
+  // ---------- Custom line item catalog (v36, Patrick 2026-05-13) -------
+  // Rolling collection of free-form quote lines techs can re-use. The
+  // tech adds "Add a sprinkler head" with a custom price on Visit A;
+  // next visit it surfaces in the picker as a tap-to-add option
+  // instead of being retyped. Shared across all techs (PJL is small).
+  //
+  //   GET  /api/custom-line-items           — list (sorted by usage)
+  //   POST /api/custom-line-items           — create { label, price }
+  //   POST /api/custom-line-items/:id/use   — increment usedCount
+  //   DELETE /api/custom-line-items/:id     — remove
+  if (req.method === "GET" && pathname === "/api/custom-line-items") {
+    try {
+      const items = await customLineItems.list();
+      return sendJson(res, 200, { ok: true, items });
+    } catch (err) {
+      return sendJson(res, 500, { ok: false, errors: [err.message || "Couldn't load custom line items."] });
+    }
+  }
+  if (req.method === "POST" && pathname === "/api/custom-line-items") {
+    try {
+      const payload = await parseRequestBody(req);
+      const created = await customLineItems.add({
+        label: payload?.label,
+        price: payload?.price,
+        createdBy: "tech"
+      });
+      return sendJson(res, 201, { ok: true, item: created });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't save line item."] });
+    }
+  }
+  const cliUseMatch = pathname.match(/^\/api\/custom-line-items\/([^/]+)\/use$/);
+  if (cliUseMatch && req.method === "POST") {
+    try {
+      const updated = await customLineItems.recordUse(decodeURIComponent(cliUseMatch[1]));
+      if (!updated) return sendJson(res, 404, { ok: false, errors: ["Line item not found."] });
+      return sendJson(res, 200, { ok: true, item: updated });
+    } catch (err) {
+      return sendJson(res, 500, { ok: false, errors: [err.message || "Couldn't record use."] });
+    }
+  }
+  const cliDeleteMatch = pathname.match(/^\/api\/custom-line-items\/([^/]+)$/);
+  if (cliDeleteMatch && req.method === "DELETE") {
+    try {
+      const ok = await customLineItems.remove(decodeURIComponent(cliDeleteMatch[1]));
+      if (!ok) return sendJson(res, 404, { ok: false, errors: ["Line item not found."] });
+      return sendJson(res, 200, { ok: true });
+    } catch (err) {
+      return sendJson(res, 500, { ok: false, errors: [err.message || "Couldn't delete."] });
+    }
   }
 
   // ---------- Follow-up WO trigger (spec §4.3.2) ------------------------

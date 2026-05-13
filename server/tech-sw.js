@@ -171,6 +171,22 @@
 //   • Crude (interrupts typing) but reliable. Proper render-without-
 //     reload fix is a follow-up. Right now we need photos to APPEAR.
 // Touches work-order-tech.js only.
+// Bumped 2026-05-13 (v35 → v36): custom line item catalog. Patrick:
+// "we need to be able to input a 'customer line item' — in the event
+// for example we need to add a sprinkler head etc. etc. be able to
+// insert, and price it. We should also keep a rolling collection of
+// the 'customer line items'." Built:
+//   • Server: lib/custom-line-items.js (CRUD on data/custom-line-
+//     items.json) + GET/POST/DELETE + POST /:id/use routes. Records
+//     sort by usedCount desc, lastUsedAt desc — most-used surfaces
+//     first.
+//   • Tech UI: replaced the "+ Add line" blank-row push with a
+//     styled dialog. Shows saved items as tap-to-add rows + a form
+//     to create a new one (label + price → saves to catalog and
+//     adds to the current quote in one shot). Same brand styling
+//     as the zone dialog and the on-site signoff modals.
+// Auto-dedupes by (label, price) — saving the same item twice
+// bumps usedCount instead of creating a near-duplicate row.
 // Bumped 2026-05-13 (v34 → v35): labour-hours capture. Patrick:
 // "service calls, spring openings (and if bypassed in fall closing)
 // all need labour. times." Added a wo.labourHours decimal field
@@ -330,7 +346,7 @@
 //     and signature last. Tap-jump from the pre-sign checklist
 //     row to #techPaymentSection still works as a fallback.
 // Touches work-order-tech.html only.
-const CACHE_VERSION = "pjl-tech-v35";
+const CACHE_VERSION = "pjl-tech-v36";
 const STATIC_ASSETS = [
   "/crm/work-order-tech.html",
   "/crm/work-order-tech.js",
