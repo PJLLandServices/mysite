@@ -266,7 +266,10 @@
     </form>
   </dialog>
 
-  <!-- Hard-delete modal — admin-only; user must type the booking ID to confirm. -->
+  <!-- Hard-delete modal — admin-only confirm. Single explicit click on the
+       red "Permanently delete" button after acknowledging the summary +
+       no-undo warning. (Earlier draft required typing the booking ID as
+       extra friction; Patrick rejected that in favour of a plain confirm.) -->
   <dialog id="deleteBookingDialog" class="booking-action-dialog">
     <header>
       <h2>Permanently delete</h2>
@@ -274,17 +277,11 @@
     </header>
     <dl class="booking-action-summary" id="deleteBookingSummary"></dl>
     <p class="dialog-warn">This removes the booking entirely. There's no undo. Use <strong>Cancel</strong> if a customer might still want to re-book.</p>
-    <form id="deleteBookingForm">
-      <label class="dialog-label">
-        <span>Type the booking ID below to confirm: <code id="deleteBookingExpectedId">BK-…</code></span>
-        <input type="text" id="deleteBookingConfirmInput" placeholder="BK-2026-0042" autocomplete="off">
-      </label>
-      <p class="dialog-error" id="deleteBookingError" hidden></p>
-      <div class="dialog-actions">
-        <button type="button" class="pjl-btn pjl-btn-outline" id="deleteBookingBack">Back</button>
-        <button type="submit" class="pjl-btn pjl-btn-danger" id="deleteBookingSubmit" disabled>Permanently delete</button>
-      </div>
-    </form>
+    <p class="dialog-error" id="deleteBookingError" hidden></p>
+    <div class="dialog-actions">
+      <button type="button" class="pjl-btn pjl-btn-outline" id="deleteBookingBack">Back</button>
+      <button type="button" class="pjl-btn pjl-btn-danger" id="deleteBookingSubmit">Permanently delete</button>
+    </div>
   </dialog>
 
   <script src="/js/time-picker.js?v=1"></script>

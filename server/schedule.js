@@ -766,10 +766,7 @@ const cancelError           = document.getElementById("cancelBookingError");
 const deleteDialog          = document.getElementById("deleteBookingDialog");
 const deleteClose           = document.getElementById("deleteBookingClose");
 const deleteBack            = document.getElementById("deleteBookingBack");
-const deleteForm            = document.getElementById("deleteBookingForm");
 const deleteSummary         = document.getElementById("deleteBookingSummary");
-const deleteExpectedIdEl    = document.getElementById("deleteBookingExpectedId");
-const deleteConfirmInput    = document.getElementById("deleteBookingConfirmInput");
 const deleteSubmit          = document.getElementById("deleteBookingSubmit");
 const deleteError           = document.getElementById("deleteBookingError");
 
@@ -914,9 +911,8 @@ actionDeleteBtn?.addEventListener("click", async () => {
   }
   closeDialog(actionDialog);
   deleteSummary.innerHTML = summaryHtml(pendingAction.summary);
-  deleteExpectedIdEl.textContent = pendingAction.bookingId;
-  deleteConfirmInput.value = "";
-  deleteSubmit.disabled = true;
+  deleteSubmit.disabled = false;
+  deleteSubmit.textContent = "Permanently delete";
   deleteError.hidden = true;
   showDialog(deleteDialog);
 });
@@ -973,18 +969,18 @@ cancelForm?.addEventListener("submit", async (event) => {
   }
 });
 
-deleteConfirmInput?.addEventListener("input", () => {
-  const expected = pendingAction?.bookingId || "";
-  deleteSubmit.disabled = deleteConfirmInput.value.trim() !== expected;
-  deleteError.hidden = true;
-});
-
-deleteForm?.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  if (!pendingAction?.bookingId) return;
-  if (deleteConfirmInput.value.trim() !== pendingAction.bookingId) {
+// Plain confirm-button delete. No type-the-id friction — the red button
+// + the no-undo warning + the admin-only gate is enough. If the
+// background booking-id resolution failed (rare but possible), surface
+// it here instead of failing silently.
+deleteSubmit?.addEventListener("click", async () => {
+  if (!pendingAction) return;
+  if (!pendingAction.bookingId) {
+    pendingAction.bookingId = (await resolveBookingByLead(pendingAction.leadId, pendingAction.scheduledFor))?.id || null;
+  }
+  if (!pendingAction.bookingId) {
     deleteError.hidden = false;
-    deleteError.textContent = "Type the booking ID exactly as shown.";
+    deleteError.textContent = "Couldn't find the booking record — refresh the page and try again.";
     return;
   }
   deleteError.hidden = true;
@@ -998,8 +994,9 @@ deleteForm?.addEventListener("submit", async (event) => {
       const tail = data.linkedWoId ? ` (Linked: ${data.linkedWoId})` : "";
       throw new Error(msg + tail);
     }
+    const deletedId = pendingAction.bookingId;
     closeDialog(deleteDialog);
-    settingsStatus.textContent = `Booking ${pendingAction.bookingId} permanently deleted.`;
+    settingsStatus.textContent = `Booking ${deletedId} permanently deleted.`;
     setTimeout(() => { settingsStatus.textContent = ""; }, 6000);
     await loadAll();
   } catch (err) {
