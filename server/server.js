@@ -2190,30 +2190,30 @@ async function handlePortalLoginApi(req, res, pathname) {
     if (!claimed) {
       return redirect(res, "/portal/login?error=expired");
     }
-    // Brief 4 — subjectId can be either:
-    //   - "CUST-NNNN"  → new tokens (post-Brief 4 issue path)
-    //   - UUID         → legacy tokens still in customer inboxes
-    // Resolve to a customer record either way. For the portal redirect
-    // we then look up the customer's most recent lead and use its
-    // existing portal.token — keeps /portal/<token> URLs working
-    // without redesigning the portal page right now.
+    // subjectId can be a customer id (current intake path) OR a lead id
+    // (legacy tokens still sitting in customer inboxes). The format check
+    // used to be `startsWith("CUST-")`, but customer ids switched to
+    // plain QuickBooks-style numerics in the May 2026 xlsx renumber, so
+    // a prefix check no longer disambiguates the two shapes. Resolve as
+    // a customer first; fall back to the lead path when that misses.
     const subjectId = result.record.subjectId;
     const leads = await readLeads();
     let customer = null;
     let lead = null;
-    if (subjectId.startsWith("CUST-")) {
+    if (subjectId) {
       customer = await customers.get(subjectId, { withProperties: false });
       if (customer) {
         const customerLeads = leads
           .filter((l) => l.customerId === subjectId)
           .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
         lead = customerLeads[0] || null;
-      }
-    } else {
-      // Legacy token — subjectId is a lead id.
-      lead = leads.find((l) => l.id === subjectId) || null;
-      if (lead?.customerId) {
-        customer = await customers.get(lead.customerId, { withProperties: false });
+      } else {
+        // subjectId is a lead id (legacy magic link, or a customer
+        // whose record has since been renumbered/merged).
+        lead = leads.find((l) => l.id === subjectId) || null;
+        if (lead?.customerId) {
+          customer = await customers.get(lead.customerId, { withProperties: false });
+        }
       }
     }
     if (!customer && !lead) {

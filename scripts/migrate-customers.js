@@ -60,6 +60,7 @@ const ARGS = new Set(process.argv.slice(2));
 const APPLY_MODE = ARGS.has("--apply") || ARGS.has("--commit");
 const BACKFILL_ONLY = ARGS.has("--backfill-only");
 const LIST_TEST_CUSTOMERS = ARGS.has("--list-test-customers");
+const RENUMBER = ARGS.has("--renumber");
 const EMIT_JSON = ARGS.has("--json") || true; // Always emit JSON for now.
 
 // ---- File helpers ----------------------------------------------------
@@ -292,6 +293,7 @@ async function run() {
   // migration banner.
   if (LIST_TEST_CUSTOMERS) return listTestCustomers();
   if (BACKFILL_ONLY) return runBackfillOnly();
+  if (RENUMBER) return runRenumber();
 
   const banner = [
     "",
@@ -964,6 +966,229 @@ async function listTestCustomers() {
   }
   console.log("");
   console.log("**Review and authorize each deletion separately.** No deletes have been performed.");
+}
+
+// ---- Renumber-from-xlsx mode -----------------------------------------
+//
+// Replaces the system-generated CUST-NNNN ids with the canonical
+// QuickBooks customer ids from scripts/data/xlsx-customer-ids.json.
+// Every entity reference (leads, properties, bookings, work-orders,
+// quotes, invoices, projects) is rewritten in lockstep, so the
+// "one customer = one id" invariant holds across the entire system.
+//
+// Matching order: email (exact, lowercased) → name (case-insensitive,
+// whitespace-normalized) → phone (digits-only). Customers with no
+// xlsx match (test data, post-export web leads) get the next
+// sequential id after the highest xlsx id.
+//
+// Dry-run by default. Pass --apply to commit.
+//
+// Usage:
+//   node scripts/migrate-customers.js --renumber
+//   node scripts/migrate-customers.js --renumber --apply
+async function runRenumber() {
+  console.log("");
+  console.log("============================================================");
+  console.log(` PJL — Renumber customers from xlsx ${APPLY_MODE ? "(APPLY)" : "(dry-run)"}`);
+  console.log("============================================================");
+  console.log("");
+
+  // Load the canonical xlsx-extracted records.
+  const canonicalFile = path.join(REPO_ROOT, "scripts", "data", "xlsx-customer-ids.json");
+  if (!fsSync.existsSync(canonicalFile)) {
+    console.error(` ❌ Canonical ID file not found: ${path.relative(REPO_ROOT, canonicalFile)}`);
+    console.error("    Regenerate from the source xlsx and re-run.");
+    process.exit(2);
+  }
+  const canonical = JSON.parse(await fs.readFile(canonicalFile, "utf8"));
+  if (!Array.isArray(canonical) || !canonical.length) {
+    console.error(" ❌ Canonical ID file is empty or malformed.");
+    process.exit(2);
+  }
+  console.log(` Loaded ${canonical.length} canonical customer ids from xlsx.`);
+
+  // Load customers.json (required).
+  const customersRes = await readJsonArray("customers.json");
+  if (customersRes.missing || !Array.isArray(customersRes.records) || !customersRes.records.length) {
+    console.error(" ❌ server/data/customers.json is missing or empty.");
+    console.error("    Renumber mode requires existing customer records to renumber.");
+    process.exit(2);
+  }
+  const customers = customersRes.records;
+  console.log(` Loaded ${customers.length} customers from customers.json.`);
+  console.log("");
+
+  // ---- Build canonical lookups -----------------------------------
+  function normalizeName(value) {
+    return String(value || "").trim().toLowerCase().replace(/\s+/g, " ");
+  }
+  const byEmail = new Map();
+  const byName  = new Map();
+  const byPhone = new Map();
+  let maxCanonicalId = 0;
+  for (const row of canonical) {
+    const id = String(row.id || "").trim();
+    if (!id) continue;
+    const n = parseInt(id, 10);
+    if (Number.isFinite(n) && n > maxCanonicalId) maxCanonicalId = n;
+    if (row.email) byEmail.set(normalizeEmail(row.email), id);
+    if (row.name)  byName.set(normalizeName(row.name), id);
+    if (row.phone) byPhone.set(normalizePhone(row.phone), id);
+  }
+
+  // ---- Plan the renumbering --------------------------------------
+  // rename: old-id → new-id (every customer record gets one entry)
+  // unmatched: customer records that didn't hit any canonical row
+  // collisions: two different customers pointing at the same canonical id
+  const rename = new Map();
+  const unmatched = [];
+  const matchedBy = { email: 0, name: 0, phone: 0 };
+  const reverseAssignment = new Map(); // new-id → [old-ids that got it]
+
+  function recordAssignment(oldId, newId) {
+    rename.set(oldId, newId);
+    if (!reverseAssignment.has(newId)) reverseAssignment.set(newId, []);
+    reverseAssignment.get(newId).push(oldId);
+  }
+
+  for (const c of customers) {
+    const email = normalizeEmail(c.email);
+    const name  = normalizeName(c.name);
+    const phone = normalizePhone(c.phone);
+
+    let matchedId = null;
+    if (email && byEmail.has(email)) { matchedId = byEmail.get(email); matchedBy.email++; }
+    else if (name && byName.has(name)) { matchedId = byName.get(name); matchedBy.name++; }
+    else if (phone && byPhone.has(phone)) { matchedId = byPhone.get(phone); matchedBy.phone++; }
+
+    if (matchedId) {
+      recordAssignment(c.id, matchedId);
+    } else {
+      unmatched.push(c);
+    }
+  }
+
+  // Assign sequential ids to the unmatched customers, starting from
+  // max-xlsx-id + 1. Sort by createdAt so the assignment is stable
+  // across re-runs.
+  unmatched.sort((a, b) => String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
+  let nextSequential = maxCanonicalId + 1;
+  for (const c of unmatched) {
+    recordAssignment(c.id, String(nextSequential));
+    nextSequential++;
+  }
+
+  // ---- Report ----------------------------------------------------
+  console.log(" Matching:");
+  console.log(`   by email .......... ${matchedBy.email}`);
+  console.log(`   by name ........... ${matchedBy.name}`);
+  console.log(`   by phone .......... ${matchedBy.phone}`);
+  console.log(`   unmatched ......... ${unmatched.length} (will be assigned ${maxCanonicalId + 1}–${nextSequential - 1})`);
+  console.log("");
+
+  // Collision detection: two customer records pointing at the same
+  // canonical id. Hard failure — Patrick must resolve before --apply.
+  const collisions = [];
+  for (const [newId, oldIds] of reverseAssignment.entries()) {
+    if (oldIds.length > 1) collisions.push({ newId, oldIds });
+  }
+  if (collisions.length) {
+    console.log(" ⚠ COLLISIONS — multiple customer records would be renumbered to the same id:");
+    for (const c of collisions) {
+      console.log(`   ${c.newId}  ←  ${c.oldIds.join(", ")}`);
+    }
+    console.log("");
+    console.log(" Resolve by merging the duplicate customers in customers.json before");
+    console.log(" running --apply (the /admin/customer/<id> Merge button does this).");
+    if (APPLY_MODE) {
+      console.error(" ❌ Refusing to --apply with unresolved collisions.");
+      process.exit(2);
+    }
+  }
+
+  // Show the planned renames (first 50 to keep stdout sane).
+  console.log(" Planned renames (showing up to 50):");
+  console.log("");
+  console.log("   Old id        →  New id      Customer");
+  console.log("   ------           ------      --------");
+  let shown = 0;
+  for (const c of customers) {
+    if (shown >= 50) break;
+    const newId = rename.get(c.id);
+    const tag = unmatched.includes(c) ? "[new, no xlsx match]" : "";
+    console.log(`   ${String(c.id).padEnd(13)} →  ${String(newId).padEnd(10)}  ${(c.name || "(unnamed)").slice(0, 40)} ${tag}`);
+    shown++;
+  }
+  if (customers.length > 50) console.log(`   ... ${customers.length - 50} more`);
+  console.log("");
+
+  if (!APPLY_MODE) {
+    console.log(" Dry-run only. Re-run with --apply to commit the renumber.");
+    console.log("");
+    return;
+  }
+
+  // ---- Apply -----------------------------------------------------
+  // Load every entity file so the rewrites happen in lockstep.
+  const leadsRes     = await readJsonArray("leads.json");
+  const propsRes     = await readJsonArray("properties.json");
+  const bookingsRes  = await readJsonArray("bookings.json");
+  const wosRes       = await readJsonArray("work-orders.json");
+  const quotesRes    = await readJsonArray("quotes.json");
+  const invoicesRes  = await readJsonArray("invoices.json");
+  const projectsRes  = await readJsonArray("projects.json");
+
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const backupDir = path.join(REPO_ROOT, "server", `data-backup-${stamp}-renumber`);
+  console.log(`   Backing up server/data/ → ${path.relative(REPO_ROOT, backupDir)} ...`);
+  await fs.cp(DATA_DIR, backupDir, { recursive: true });
+  console.log("   ✓ Backup complete.");
+
+  // Apply the rename: customer.id, then customerId on every entity.
+  function remapField(record, field) {
+    if (!record || typeof record !== "object") return false;
+    const current = record[field];
+    if (!current) return false;
+    const next = rename.get(current);
+    if (!next || next === current) return false;
+    record[field] = next;
+    return true;
+  }
+
+  let rewrites = { customers: 0, leads: 0, properties: 0, bookings: 0, workOrders: 0, quotes: 0, invoices: 0, projects: 0 };
+
+  for (const c of customers) {
+    const next = rename.get(c.id);
+    if (next && next !== c.id) { c.id = next; rewrites.customers++; }
+  }
+  for (const lead of leadsRes.records)         if (remapField(lead, "customerId"))    rewrites.leads++;
+  for (const p    of propsRes.records)         if (remapField(p,    "customerId"))    rewrites.properties++;
+  for (const b    of bookingsRes.records)      if (remapField(b,    "customerId"))    rewrites.bookings++;
+  for (const w    of wosRes.records)           if (remapField(w,    "customerId"))    rewrites.workOrders++;
+  for (const q    of quotesRes.records)        if (remapField(q,    "customerId"))    rewrites.quotes++;
+  for (const i    of invoicesRes.records)      if (remapField(i,    "customerId"))    rewrites.invoices++;
+  for (const pr   of projectsRes.records)      if (remapField(pr,   "customerId"))    rewrites.projects++;
+
+  async function writeArray(name, records, count) {
+    const full = path.join(DATA_DIR, name);
+    await fs.writeFile(full, JSON.stringify(records, null, 2) + "\n", "utf8");
+    console.log(`   ✓ ${name.padEnd(22)} ${records.length} records (${count} renamed)`);
+  }
+  await writeArray("customers.json",   customers,              rewrites.customers);
+  if (rewrites.leads)      await writeArray("leads.json",       leadsRes.records,    rewrites.leads);
+  if (rewrites.properties) await writeArray("properties.json",  propsRes.records,    rewrites.properties);
+  if (rewrites.bookings)   await writeArray("bookings.json",    bookingsRes.records, rewrites.bookings);
+  if (rewrites.workOrders) await writeArray("work-orders.json", wosRes.records,      rewrites.workOrders);
+  if (rewrites.quotes)     await writeArray("quotes.json",      quotesRes.records,   rewrites.quotes);
+  if (rewrites.invoices)   await writeArray("invoices.json",    invoicesRes.records, rewrites.invoices);
+  if (rewrites.projects)   await writeArray("projects.json",    projectsRes.records, rewrites.projects);
+
+  console.log("");
+  console.log(` ✓ Renumber complete: ${rewrites.customers} customers + ${
+    Object.entries(rewrites).filter(([k]) => k !== "customers").reduce((sum, [, v]) => sum + v, 0)
+  } entity references rewritten.`);
+  console.log(`   Rollback: rm -r server/data && mv ${path.relative(REPO_ROOT, backupDir)} server/data`);
+  console.log("");
 }
 
 run().catch((err) => {

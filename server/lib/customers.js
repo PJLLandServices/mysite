@@ -160,16 +160,22 @@ function normalizePayload(payload) {
   };
 }
 
+// Next customer id. Originally produced "CUST-NNNN". After the May 2026
+// xlsx renumber the canonical format is plain QuickBooks-style numeric
+// strings (e.g. "19931884"). Both formats are tolerated by the parser so
+// the function keeps working through the transition; new ids emit in the
+// numeric form to match the renumbered set.
 async function nextCustomerId() {
   const records = await readAll();
   let max = 0;
   for (const c of records) {
-    if (typeof c.id === "string" && c.id.startsWith("CUST-")) {
-      const n = parseInt(c.id.slice(5), 10);
-      if (Number.isFinite(n) && n > max) max = n;
-    }
+    if (typeof c.id !== "string") continue;
+    let n = NaN;
+    if (c.id.startsWith("CUST-")) n = parseInt(c.id.slice(5), 10);
+    else if (/^\d+$/.test(c.id))  n = parseInt(c.id, 10);
+    if (Number.isFinite(n) && n > max) max = n;
   }
-  return `CUST-${String(max + 1).padStart(4, "0")}`;
+  return String(max + 1);
 }
 
 // ---- CRUD -----------------------------------------------------------
