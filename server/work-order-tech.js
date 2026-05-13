@@ -17,7 +17,7 @@
 // tech-sw.js's CACHE_VERSION. If this string doesn't match the SW
 // cache version after deploy, the iPhone is serving stale JS — clear
 // website data and reload.
-const TECH_BUILD_VERSION = "tech-v23";
+const TECH_BUILD_VERSION = "tech-v24";
 function _setBadge(text, isError) {
   try {
     const badge = document.getElementById("techBuildBadge");
@@ -55,17 +55,18 @@ window.addEventListener("unhandledrejection", (evt) => {
   _setBadge(`PROMISE ERR: ${msg}`.slice(0, 200), true);
 });
 
-// v23 — Brain-dead photo upload. We've been chasing a phantom for 6
-// rounds. This rewrite:
-//   • Bypasses queuedFetch entirely (uses plain fetch).
-//   • Bypasses the setUploadStatus label dance (uses alerts).
-//   • Bypasses AbortController.
-//   • Bypasses my chunked-base64 encoder (plain readAsDataURL).
-//   • Bypasses every layer that could silently fail.
+// v24 — Photos ARE uploading. The history viewer shows 6+ successful
+// "Photo uploaded +1 (general)" entries proving every attempt landed
+// on the server. The bug was never upload — it was the UI failing to
+// refresh after upload, so from the tech's seat it looked like
+// "nothing happened" while the server happily stored each photo.
 //
-// alert() at every step so the tech sees EXACTLY where the upload
-// stops. Yes, the alerts are intrusive — once we know this works
-// we'll remove them. For now, intrusive > invisible.
+// Quick fix: after a successful upload, hard-reload the page. The
+// page re-fetches the WO and renders the photo strip from scratch
+// with the new photos included. Crude (kills any unsaved typing
+// in progress) but reliable. Proper fix is to debug why
+// state.photos = data.workOrder.photos / renderWoPhotos() wasn't
+// surfacing the new thumb — that's a follow-up.
 let _photoListenerAttached = false;
 function _bindPhotoUploadListener() {
   if (_photoListenerAttached) return;
@@ -74,13 +75,25 @@ function _bindPhotoUploadListener() {
   _photoListenerAttached = true;
   input.addEventListener("change", async (event) => {
     const files = event.target.files;
-    alert(`[1/4] change event fired. files.length=${files ? files.length : "null"}`);
-    if (!files || !files.length) {
-      event.target.value = "";
-      return;
-    }
+    if (!files || !files.length) { event.target.value = ""; return; }
     const file = files[0];
-    alert(`[2/4] read file: name="${file.name}" type="${file.type}" size=${file.size}`);
+    // Show an unmissable "Uploading…" overlay so the tech knows
+    // something is happening. Removed on success (via reload) or
+    // on error (via the catch path).
+    const overlay = document.createElement("div");
+    overlay.id = "techUploadOverlay";
+    overlay.style.cssText = "position:fixed;inset:0;z-index:99999;background:rgba(27,77,46,0.92);color:#fff;display:flex;flex-direction:column;align-items:center;justify-content:center;font:600 18px/1.4 system-ui,-apple-system,sans-serif;padding:24px;text-align:center;";
+    overlay.innerHTML = `
+      <div style="font-size:48px;margin-bottom:12px">📷</div>
+      <div id="techUploadMsg">Reading photo…</div>
+      <div style="opacity:0.7;margin-top:8px;font-size:14px">${file.name || ""} · ${(file.size/1_000_000).toFixed(1)} MB</div>
+    `;
+    document.body.appendChild(overlay);
+    const setMsg = (m) => { const el = document.getElementById("techUploadMsg"); if (el) el.textContent = m; };
+    function teardownOverlay() {
+      const el = document.getElementById("techUploadOverlay");
+      if (el) el.remove();
+    }
     let base64;
     try {
       base64 = await new Promise((resolve, reject) => {
@@ -94,14 +107,16 @@ function _bindPhotoUploadListener() {
         r.readAsDataURL(file);
       });
     } catch (err) {
-      alert(`[2/4 FAILED] ${err.message}`);
+      teardownOverlay();
+      alert("Couldn't read the photo: " + err.message);
       event.target.value = "";
       return;
     }
-    alert(`[3/4] file read OK (${base64.length} base64 chars). POSTing to server…`);
+    setMsg("Uploading to server…");
     const woId = (typeof state !== "undefined" && state && state.id) ? state.id : null;
     if (!woId) {
-      alert("[3/4 FAILED] state.id is missing — page hasn't fully loaded?");
+      teardownOverlay();
+      alert("Page hasn't finished loading yet — wait a moment and try again.");
       event.target.value = "";
       return;
     }
@@ -121,24 +136,23 @@ function _bindPhotoUploadListener() {
       });
       data = await res.json().catch(() => ({}));
     } catch (err) {
-      alert(`[4/4 NETWORK FAILED] ${err.message}`);
+      teardownOverlay();
+      alert("Network error: " + err.message);
       event.target.value = "";
       return;
     }
     if (!res.ok) {
-      alert(`[4/4 SERVER FAILED] HTTP ${res.status}: ${(data.errors && data.errors[0]) || "no error message"}`);
+      teardownOverlay();
+      alert(`Server rejected upload (HTTP ${res.status}): ${(data.errors && data.errors[0]) || "no error"}`);
       event.target.value = "";
       return;
     }
-    alert(`[4/4 SUCCESS] uploaded! Server returned photo n=${data.added?.[0]?.n}. Reload to see thumbnail.`);
-    // Best-effort UI refresh.
-    if (data.workOrder && typeof state !== "undefined" && state) {
-      state.photos = data.workOrder.photos || [];
-      if (typeof renderWoPhotos === "function") {
-        try { renderWoPhotos(); } catch (_e) {}
-      }
-    }
-    event.target.value = "";
+    // Success. Reload the page so the photo strip re-renders with the
+    // new thumbnail. This is the proven path — the audit log confirms
+    // uploads have been succeeding; only the in-place render was
+    // failing. Reload guarantees the tech sees their photo.
+    setMsg("Saved! Refreshing…");
+    setTimeout(() => location.reload(), 400);
   });
 }
 _bindPhotoUploadListener();

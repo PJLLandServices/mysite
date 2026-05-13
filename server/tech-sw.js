@@ -156,7 +156,22 @@
 // fetch → done, with alert() at each step so the tech sees exactly
 // where it stops. Intrusive, but invisible failure has cost us 6
 // rounds. Touches work-order-tech.js only.
-const CACHE_VERSION = "pjl-tech-v23";
+// Bumped 2026-05-12 (v23 → v24): MASSIVE breakthrough. Patrick's WO
+// history viewer shows 6+ successful "Photo uploaded +1 (general)"
+// audit entries spanning every test attempt. The uploads were
+// LANDING on the server the whole time. The bug was never upload —
+// it was the UI failing to refresh after upload so the new thumb
+// never appeared in the photo strip. From the tech's seat: "nothing
+// happens." From the server's seat: 6 photos saved to disk.
+// v24 stops trying to fix the upload (it was always fine) and fixes
+// the actual bug:
+//   • Big "Uploading…" overlay so the tech KNOWS something is happening
+//   • After successful POST, location.reload() — page re-fetches WO
+//     and re-renders the photo strip from scratch with the new photo
+//   • Crude (interrupts typing) but reliable. Proper render-without-
+//     reload fix is a follow-up. Right now we need photos to APPEAR.
+// Touches work-order-tech.js only.
+const CACHE_VERSION = "pjl-tech-v24";
 const STATIC_ASSETS = [
   "/crm/work-order-tech.html",
   "/crm/work-order-tech.js",
