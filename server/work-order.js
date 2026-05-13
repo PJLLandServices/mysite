@@ -584,7 +584,33 @@ function nextZoneNumber() {
 
 function addZoneRow(zone) {
   woEmptyZones.hidden = true;
-  const seed = zone || { number: nextZoneNumber(), location: "", sprinklerTypes: [], coverage: [], status: "", notes: "" };
+  // v31 — when called without a pre-built zone (i.e. the +Add zone
+  // button), prompt for the actual zone number instead of assigning
+  // the next sequential one. Patrick's service-call flow: arrive for
+  // Zone 3 pipe break + Zone 8 head + Zone 12 head — non-consecutive
+  // zone numbers. The old nextZoneNumber() auto-incremented to 1,2,3
+  // regardless. Now: tech types 3, gets zone 3. Types 8, gets zone 8.
+  let seed = zone;
+  if (!seed) {
+    const raw = window.prompt("Which zone number? (1-99)");
+    if (raw === null) return; // user cancelled
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n < 1 || n > 99) {
+      alert("Zone number must be between 1 and 99.");
+      return;
+    }
+    // Refuse duplicates so the row list stays unique.
+    const onPage = new Set();
+    woZones.querySelectorAll(".wo-zone-num").forEach((el) => {
+      const v = Number(String(el.textContent || "").replace(/[^0-9]/g, ""));
+      if (v > 0) onPage.add(v);
+    });
+    if (onPage.has(n)) {
+      alert(`Zone ${n} is already on this work order.`);
+      return;
+    }
+    seed = { number: n, location: "", sprinklerTypes: [], coverage: [], status: "", notes: "" };
+  }
   const wrap = document.createElement("div");
   wrap.innerHTML = zoneRowHtml(seed);
   woZones.appendChild(wrap.firstElementChild);

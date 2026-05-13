@@ -171,6 +171,22 @@
 //   • Crude (interrupts typing) but reliable. Proper render-without-
 //     reload fix is a follow-up. Right now we need photos to APPEAR.
 // Touches work-order-tech.js only.
+// Bumped 2026-05-12 (v30 → v31): zone picker bulletproof + desktop fix.
+// Patrick reported v30 still failing in two places:
+//   (a) Tech-mode "+ Add zone" did nothing. Most likely cause: stale
+//       HTML cache (v28/v29 markup loaded alongside v30 JS), so the
+//       JS expected DOM nodes that didn't exist and returned early.
+//       Fix: openZonePicker() now falls back to window.prompt() when
+//       the picker DOM is incomplete. Always works regardless of
+//       cache state. Full picker still preferred when it loads clean.
+//   (b) The DESKTOP work-order page (/admin/work-order/:id, NOT
+//       tech mode — separate file) was still auto-numbering. v30
+//       only touched tech-mode. Now work-order.js's addZoneRow()
+//       also prompts for the zone number when the +Add zone button
+//       is clicked. Same number-or-cancel pattern. Duplicates
+//       refused.
+// Touches work-order-tech.js (bulletproof picker) + work-order.js
+// (desktop add-zone prompt).
 // Bumped 2026-05-12 (v29 → v30): zone picker — direct number entry.
 // Patrick reported v29 "still only wants to load consecutively." Root
 // cause: when the linked property has no zones in its profile (new
@@ -253,7 +269,7 @@
 //     and signature last. Tap-jump from the pre-sign checklist
 //     row to #techPaymentSection still works as a fallback.
 // Touches work-order-tech.html only.
-const CACHE_VERSION = "pjl-tech-v30";
+const CACHE_VERSION = "pjl-tech-v31";
 const STATIC_ASSETS = [
   "/crm/work-order-tech.html",
   "/crm/work-order-tech.js",

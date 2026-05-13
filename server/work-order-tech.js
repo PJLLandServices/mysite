@@ -17,7 +17,7 @@
 // tech-sw.js's CACHE_VERSION. If this string doesn't match the SW
 // cache version after deploy, the iPhone is serving stale JS — clear
 // website data and reload.
-const TECH_BUILD_VERSION = "tech-v30";
+const TECH_BUILD_VERSION = "tech-v31";
 function _setBadge(text, isError) {
   try {
     const badge = document.getElementById("techBuildBadge");
@@ -1192,17 +1192,32 @@ const techAddZoneBtn = document.getElementById("techAddZoneBtn");
 // profile via the existing completion cascade (newZones).
 function openZonePicker() {
   const picker = document.getElementById("techZonePicker");
+  const numInput = document.getElementById("techZonePickerNumber");
+  // BULLETPROOF FALLBACK (v31). If the picker DOM is missing — e.g.
+  // stale HTML cached at v28/v29 alongside v30+ JS — drop to a
+  // browser prompt(). Always works, no DOM dependency. This is the
+  // safety net for Patrick's "Add zone does nothing" report on
+  // tech-v30. The full picker is preferred when it loads.
+  if (!picker || !numInput) {
+    const raw = window.prompt("Which zone number? (1-99)");
+    if (raw === null) return; // user cancelled
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n < 1 || n > 99) {
+      alert("Zone number must be between 1 and 99.");
+      return;
+    }
+    addZoneAndOpen(n);
+    return;
+  }
   const knownWrap = document.getElementById("techZonePickerKnown");
   const list = document.getElementById("techZonePickerList");
-  const numInput = document.getElementById("techZonePickerNumber");
-  if (!picker || !list || !knownWrap) return;
   const propertyZones = (state.linkedProperty && state.linkedProperty.system && Array.isArray(state.linkedProperty.system.zones))
     ? state.linkedProperty.system.zones : [];
   const onWoNumbers = new Set((state.zones || []).map((z) => Number(z.number)).filter(Boolean));
   const candidates = propertyZones
     .filter((pz) => pz && Number(pz.number) > 0 && !onWoNumbers.has(Number(pz.number)))
     .sort((a, b) => Number(a.number) - Number(b.number));
-  if (candidates.length) {
+  if (candidates.length && knownWrap && list) {
     knownWrap.hidden = false;
     list.innerHTML = candidates.map((pz) => {
       const n = Number(pz.number);
@@ -1216,12 +1231,12 @@ function openZonePicker() {
         </button>
       </li>`;
     }).join("");
-  } else {
+  } else if (knownWrap) {
     // Property has no zones (or all already on WO) — hide the known
     // list, lean entirely on the number input. The tech can still
     // add any zone they want.
     knownWrap.hidden = true;
-    list.innerHTML = "";
+    if (list) list.innerHTML = "";
   }
   if (numInput) numInput.value = "";
   picker.hidden = false;
