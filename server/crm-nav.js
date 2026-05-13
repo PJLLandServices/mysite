@@ -28,3 +28,7 @@
     });
   }
 })();
+// The portal-message unread badge lives in /crm/nav-badges.js so it can
+// be loaded on every admin page (including pages with inline nav-toggle
+// scripts that would otherwise double-bind if they also pulled in this
+// crm-nav.js).

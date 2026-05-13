@@ -841,10 +841,121 @@ async function sendBookingCancellation(booking, { reason = "", notify = true, ba
   }
 }
 
+// Admin-side email when a customer sends a portal message. Includes the
+// full message text + a CTA link to /admin/messages so Patrick can read
+// the message inline AND jump straight to the thread to reply. Goes to
+// NOTIFY_TO_EMAIL (or GMAIL_USER fallback) — same recipient as the
+// existing new-lead alerts.
+async function sendPortalMessageAlertEmail(lead, message, { baseUrl } = {}) {
+  const transporter = getTransporter();
+  if (!transporter) {
+    console.warn(`[portal-msg-alert] Skipped (no Gmail config) — leadId=${lead?.id}`);
+    return { ok: false, skipped: true };
+  }
+  const to = process.env.NOTIFY_TO_EMAIL || process.env.GMAIL_USER;
+  if (!to) return { ok: false, skipped: true, reason: "no admin email configured" };
+  const customerName = lead?.contact?.name || "A customer";
+  const phone = lead?.contact?.phone || "";
+  const messagesLink = (process.env.PUBLIC_BASE_URL || baseUrl || "https://pjllandservices.com").replace(/\/+$/, "") + "/admin/messages";
+  const { html, text } = brandedEmail({
+    headline: "New portal message",
+    bodyHtml: `
+      <p style="margin: 0 0 12px;"><strong>${escapeHtml(customerName)}</strong>${phone ? ` &middot; ${escapeHtml(phone)}` : ""} sent a message via the customer portal:</p>
+      <blockquote style="margin: 0 0 16px; padding: 12px 14px; background: #fff; border-left: 3px solid #1B4D2E; font-style: italic; color: #1A1A1A;">${escapeHtml(message).replace(/\n/g, "<br>")}</blockquote>
+      <p style="margin: 0 0 8px;">Reply from the Messages inbox below.</p>
+    `,
+    bodyText: [
+      `${customerName}${phone ? ` (${phone})` : ""} sent a message via the customer portal:`,
+      "",
+      message,
+      "",
+      "Reply from the Messages inbox."
+    ].join("\n"),
+    ctaLabel: "Open Messages inbox",
+    ctaUrl: messagesLink,
+    footerNote: `Lead ID: ${escapeHtml(lead?.id || "")}`,
+    baseUrl
+  });
+  try {
+    const info = await transporter.sendMail({
+      from: `"PJL Portal" <${process.env.GMAIL_USER}>`,
+      to,
+      replyTo: lead?.contact?.email || undefined,
+      subject: `Portal message from ${customerName}`,
+      html,
+      text
+    });
+    console.log(`[portal-msg-alert] sent leadId=${lead.id} to=${to} id=${info.messageId}`);
+    return { ok: true, messageId: info.messageId };
+  } catch (error) {
+    console.error(`[portal-msg-alert] failed leadId=${lead?.id}:`, error.message);
+    return { ok: false, error: error.message };
+  }
+}
+
+// Customer-side email when the admin replies to a portal message.
+// Notifies the customer that there's a new message waiting in their
+// portal. Body includes the reply text inline so the customer doesn't
+// have to log in to see it, but the CTA still opens the portal so they
+// can respond in-thread.
+async function sendPortalReplyToCustomer(lead, replyBody, { baseUrl } = {}) {
+  const transporter = getTransporter();
+  if (!transporter) {
+    console.warn(`[portal-reply] Skipped (no Gmail config) — leadId=${lead?.id}`);
+    return { ok: false, skipped: true };
+  }
+  const to = String(lead?.contact?.email || "").trim();
+  if (!to) return { ok: false, skipped: true, reason: "no email on lead" };
+  const firstName = lead?.contact?.firstName || (lead?.contact?.name || "").split(" ")[0] || "";
+  const greeting = firstName ? `Hi ${escapeHtml(firstName)},` : "Hi there,";
+  const publicBase = (process.env.PUBLIC_BASE_URL || baseUrl || "https://pjllandservices.com").replace(/\/+$/, "");
+  const portalToken = lead?.portal?.token;
+  const portalUrl = portalToken ? `${publicBase}/portal/${portalToken}` : `${publicBase}/portal`;
+  const { html, text } = brandedEmail({
+    headline: "PJL replied to your message",
+    bodyHtml: `
+      <p style="margin: 0 0 12px;">${greeting}</p>
+      <p style="margin: 0 0 12px;">Patrick at PJL Land Services just sent you a reply via your customer portal:</p>
+      <blockquote style="margin: 0 0 16px; padding: 12px 14px; background: #fff; border-left: 3px solid #1B4D2E; font-style: italic; color: #1A1A1A;">${escapeHtml(replyBody).replace(/\n/g, "<br>")}</blockquote>
+      <p style="margin: 0 0 8px;">You can continue the conversation in your portal.</p>
+    `,
+    bodyText: [
+      `Hi ${firstName || "there"},`,
+      "",
+      "Patrick at PJL Land Services just sent you a reply via your customer portal:",
+      "",
+      replyBody,
+      "",
+      "You can continue the conversation in your portal."
+    ].join("\n"),
+    ctaLabel: "Open my portal",
+    ctaUrl: portalUrl,
+    footerNote: `Questions? Call <a href="tel:+19059600181" style="color:#1B4D2E;">(905) 960-0181</a>.`,
+    baseUrl
+  });
+  try {
+    const info = await transporter.sendMail({
+      from: `"PJL Land Services" <${process.env.GMAIL_USER}>`,
+      to,
+      replyTo: process.env.GMAIL_USER,
+      subject: "PJL replied to your message",
+      html,
+      text
+    });
+    console.log(`[portal-reply] sent leadId=${lead.id} to=${to} id=${info.messageId}`);
+    return { ok: true, messageId: info.messageId };
+  } catch (error) {
+    console.error(`[portal-reply] failed leadId=${lead?.id}:`, error.message);
+    return { ok: false, error: error.message };
+  }
+}
+
 module.exports = {
   notifyCustomer,
   eventForTransition,
   sendBookingCancellation,
+  sendPortalMessageAlertEmail,
+  sendPortalReplyToCustomer,
   sendInvoiceToCustomer,
   sendPaymentReceipt,
   sendCustomerLoginLink,

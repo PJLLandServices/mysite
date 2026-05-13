@@ -34,8 +34,8 @@ const crypto = require("node:crypto");
 })();
 
 const { sendNewLeadEmail } = require("./lib/notify-email");
-const { sendNewLeadSms } = require("./lib/notify-sms");
-const { notifyCustomer, eventForTransition, sendInvoiceToCustomer, sendPaymentReceipt, sendBookingCancellation } = require("./lib/notify-customer");
+const { sendNewLeadSms, sendPortalMessageSms } = require("./lib/notify-sms");
+const { notifyCustomer, eventForTransition, sendInvoiceToCustomer, sendPaymentReceipt, sendBookingCancellation, sendPortalMessageAlertEmail, sendPortalReplyToCustomer } = require("./lib/notify-customer");
 const { geocode, PJL_BASE } = require("./lib/geocode");
 const { BOOKABLE_SERVICES, DEFAULT_HOURS, DEFAULT_SETTINGS, listAvailableSlots, groupByDay, expandDaysToRange, parseLocalDateKey } = require("./lib/availability");
 const scheduleStore = require("./lib/schedule-store");
@@ -540,6 +540,7 @@ function needsAuth(method, pathname) {
   if (pathname === "/admin/schedule" || pathname === "/admin/schedule/") return "user";
   if (pathname === "/admin/handoff" || pathname === "/admin/handoff/") return "user";
   if (pathname === "/admin/chats" || pathname === "/admin/chats/") return "user";
+  if (pathname === "/admin/messages" || pathname === "/admin/messages/") return "user";
   if (pathname === "/admin/customers" || pathname === "/admin/customers/") return "user";
   if (/^\/admin\/customer\/[^/]+/.test(pathname)) return "user";
   if (pathname === "/admin/bookings" || pathname === "/admin/bookings/") return "user";
@@ -592,6 +593,8 @@ function needsAuth(method, pathname) {
   if (pathname === "/api/parts" || pathname.startsWith("/api/parts/")) return "user";
   if (pathname.startsWith("/api/custom-line-items")) return "user";
   if (pathname.startsWith("/api/admin/quickbooks")) return "user";
+  // Portal-messages inbox (two-way thread with customers).
+  if (pathname === "/api/admin/portal-messages" || pathname.startsWith("/api/admin/portal-messages/")) return "user";
   if (pathname.startsWith("/api/bookings")) return "user";
   if (pathname.startsWith("/api/suppliers")) return "user";
   if (pathname.startsWith("/api/material-lists")) return "user";
@@ -686,7 +689,14 @@ function portalTokenForId(id) {
 function defaultPortal(id, now = new Date().toISOString()) {
   return {
     token: portalTokenForId(id),
-    createdAt: now
+    createdAt: now,
+    // Two-way thread between customer and admin. Each message:
+    //   { id, from: "customer"|"admin", body, ts,
+    //     readByAdmin?: boolean,   (only set for customer messages)
+    //     readByCustomer?: boolean (only set for admin replies) }
+    // Empty by default; appended by /api/portal/:token/message and
+    // /api/admin/portal-messages/:leadId/reply.
+    messages: []
   };
 }
 
@@ -1569,6 +1579,19 @@ async function portalPayloadForLead(lead, req) {
       token: lead.portal?.token || portalTokenForId(lead.id),
       url: contact.portalUrl
     },
+    // Two-way message thread. Both customer and admin entries are
+    // returned in chronological order so the portal can render the
+    // conversation. readByAdmin is admin-side state only; readByCustomer
+    // is what the portal uses to decide whether to badge unread replies.
+    messages: Array.isArray(lead.portal?.messages)
+      ? lead.portal.messages.map((m) => ({
+          id: m.id,
+          from: m.from,
+          body: m.body,
+          ts: m.ts,
+          readByCustomer: Boolean(m.readByCustomer)
+        }))
+      : [],
     // Customer's property profile (read-only on the portal). Surfaces the
     // zone list, controller / shutoff / blowout locations, valve boxes —
     // everything Patrick needs to remember about the system, the customer
@@ -3145,22 +3168,37 @@ async function handleApi(req, res, pathname) {
       if (action === "message") {
         const message = normalizeString(payload.message, 1500);
         if (!message) return sendJson(res, 422, { ok: false, errors: ["Please write a message."] });
+
+        // Append to the lead.portal.messages thread so the customer +
+        // admin both see a real conversation, not just a one-shot alert.
+        if (!lead.portal || typeof lead.portal !== "object") lead.portal = {};
+        if (!Array.isArray(lead.portal.messages)) lead.portal.messages = [];
+        const msgEntry = {
+          id: `mid-${crypto.randomBytes(8).toString("hex")}`,
+          from: "customer",
+          body: message,
+          ts: now,
+          readByAdmin: false
+        };
+        lead.portal.messages.push(msgEntry);
+
+        // Keep writing to the legacy activity log too — the lead detail
+        // page in /admin shows it there, and we don't want to break
+        // existing operator habits.
         leads[idx] = applyCrmUpdate(lead, {
           activityNote: `Customer message via portal: ${message}`
         });
         delete leads[idx]._statusTransition;
         await writeLeads(leads);
 
-        // Bounce a short admin alert so Patrick sees the message immediately.
+        // Admin notifications — both now include the message text inline
+        // so Patrick can read it directly on his phone without opening
+        // the CRM. SMS is truncated to one segment; email carries the
+        // full body + a deep link to /admin/messages.
         const decorated = decorateLeadForAdmin(leads[idx], req);
-        const aliasLead = {
-          ...decorated,
-          sourceLabel: "Portal Message — " + (decorated.sourceLabel || ""),
-          contact: { ...decorated.contact, notes: message }
-        };
         Promise.allSettled([
-          sendNewLeadEmail(aliasLead, { baseUrl }),
-          sendNewLeadSms(aliasLead, { baseUrl })
+          sendPortalMessageAlertEmail(decorated, message, { baseUrl }),
+          sendPortalMessageSms(decorated, message, { baseUrl })
         ]).catch(() => {});
 
         return sendJson(res, 200, { ok: true });
@@ -3168,6 +3206,152 @@ async function handleApi(req, res, pathname) {
     } catch (error) {
       return sendJson(res, 400, { ok: false, errors: [error.message || "Unable to process portal action."] });
     }
+  }
+
+  // ---------- Admin portal-messages inbox (Brief: two-way thread) ------
+  // All three endpoints under /api/admin/portal-messages require an
+  // authenticated user (admin or tech can view + reply). The auth wall
+  // for the /api/admin/* tree is already enforced upstream by the
+  // generic admin-routes gate; these handlers add the application logic.
+
+  // GET /api/admin/portal-messages — inbox list across all leads.
+  // Returns one entry per lead that has at least one message, sorted by
+  // last-message timestamp DESC, with name/phone/lastMessage/unreadCount.
+  if (req.method === "GET" && pathname === "/api/admin/portal-messages") {
+    const allLeads = await readLeads();
+    const threads = [];
+    for (const lead of allLeads) {
+      const msgs = Array.isArray(lead.portal?.messages) ? lead.portal.messages : [];
+      if (!msgs.length) continue;
+      const last = msgs[msgs.length - 1];
+      const unreadCount = msgs.filter((m) => m.from === "customer" && !m.readByAdmin).length;
+      threads.push({
+        leadId: lead.id,
+        customerName: lead.contact?.name || "",
+        customerPhone: lead.contact?.phone || "",
+        customerEmail: lead.contact?.email || "",
+        portalToken: lead.portal?.token || null,
+        messageCount: msgs.length,
+        unreadCount,
+        lastMessage: {
+          from: last.from,
+          body: last.body,
+          ts: last.ts
+        }
+      });
+    }
+    threads.sort((a, b) => new Date(b.lastMessage.ts) - new Date(a.lastMessage.ts));
+    const totalUnread = threads.reduce((sum, t) => sum + t.unreadCount, 0);
+    return sendJson(res, 200, { ok: true, threads, totalUnread });
+  }
+
+  // GET /api/admin/portal-messages/unread-count — small endpoint just
+  // for the nav badge. Returns { ok, count } so crm-nav.js can refresh
+  // the badge without pulling the whole inbox payload.
+  if (req.method === "GET" && pathname === "/api/admin/portal-messages/unread-count") {
+    const allLeads = await readLeads();
+    let count = 0;
+    for (const lead of allLeads) {
+      const msgs = Array.isArray(lead.portal?.messages) ? lead.portal.messages : [];
+      for (const m of msgs) {
+        if (m.from === "customer" && !m.readByAdmin) count++;
+      }
+    }
+    return sendJson(res, 200, { ok: true, count });
+  }
+
+  // GET /api/admin/portal-messages/:leadId — single thread (full message list).
+  // POST /api/admin/portal-messages/:leadId/reply — admin reply (appends to thread).
+  // POST /api/admin/portal-messages/:leadId/read — mark all customer messages read.
+  const adminThreadMatch = pathname.match(/^\/api\/admin\/portal-messages\/([^/]+)(\/reply|\/read)?$/);
+  if (adminThreadMatch) {
+    const leadId = decodeURIComponent(adminThreadMatch[1]);
+    const sub = adminThreadMatch[2] || "";
+    const allLeads = await readLeads();
+    const idx = allLeads.findIndex((l) => l.id === leadId);
+    if (idx === -1) return sendJson(res, 404, { ok: false, errors: ["Lead not found."] });
+    const lead = allLeads[idx];
+
+    if (req.method === "GET" && !sub) {
+      const msgs = Array.isArray(lead.portal?.messages) ? lead.portal.messages : [];
+      return sendJson(res, 200, {
+        ok: true,
+        thread: {
+          leadId: lead.id,
+          customerName: lead.contact?.name || "",
+          customerPhone: lead.contact?.phone || "",
+          customerEmail: lead.contact?.email || "",
+          portalToken: lead.portal?.token || null,
+          messages: msgs
+        }
+      });
+    }
+
+    if (req.method === "POST" && sub === "/reply") {
+      try {
+        const payload = await parseRequestBody(req);
+        const replyBody = normalizeString(payload?.message, 1500);
+        if (!replyBody) return sendJson(res, 422, { ok: false, errors: ["Please write a reply."] });
+        if (!lead.portal || typeof lead.portal !== "object") lead.portal = {};
+        if (!Array.isArray(lead.portal.messages)) lead.portal.messages = [];
+        const nowTs = new Date().toISOString();
+        const entry = {
+          id: `mid-${crypto.randomBytes(8).toString("hex")}`,
+          from: "admin",
+          body: replyBody,
+          ts: nowTs,
+          readByCustomer: false
+        };
+        lead.portal.messages.push(entry);
+        // Mark all CUSTOMER messages as read — by the time the admin
+        // replies, they've obviously seen the thread.
+        for (const m of lead.portal.messages) {
+          if (m.from === "customer" && !m.readByAdmin) m.readByAdmin = true;
+        }
+        // Audit log entry on the lead so the activity timeline carries
+        // the reply too (parallel to the customer-message activity).
+        allLeads[idx] = applyCrmUpdate(lead, {
+          activityNote: `Admin reply via portal: ${replyBody}`
+        });
+        delete allLeads[idx]._statusTransition;
+        await writeLeads(allLeads);
+        // Fire customer email (fire-and-forget — reply is committed
+        // regardless of SMTP outcome).
+        const baseUrl = process.env.PUBLIC_BASE_URL || baseUrlFromReq(req);
+        sendPortalReplyToCustomer(allLeads[idx], replyBody, { baseUrl }).catch(() => {});
+        return sendJson(res, 200, { ok: true, message: entry });
+      } catch (err) {
+        return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't post reply."] });
+      }
+    }
+
+    if (req.method === "POST" && sub === "/read") {
+      if (!Array.isArray(lead.portal?.messages)) return sendJson(res, 200, { ok: true, marked: 0 });
+      let marked = 0;
+      for (const m of lead.portal.messages) {
+        if (m.from === "customer" && !m.readByAdmin) { m.readByAdmin = true; marked++; }
+      }
+      if (marked) await writeLeads(allLeads);
+      return sendJson(res, 200, { ok: true, marked });
+    }
+  }
+
+  // Portal-side: customer marks admin replies as read on portal load so
+  // the unread badge in the portal UI clears once they've seen them.
+  const portalReadMatch = pathname.match(/^\/api\/portal\/([^/]+)\/messages\/read$/);
+  if (portalReadMatch && req.method === "POST") {
+    const token = decodeURIComponent(portalReadMatch[1]);
+    const allLeads = await readLeads();
+    const idx = allLeads.findIndex((l) => (l.portal?.token || portalTokenForId(l.id)) === token);
+    if (idx === -1) return sendJson(res, 404, { ok: false, errors: ["Portal not found."] });
+    const lead = allLeads[idx];
+    if (!Array.isArray(lead.portal?.messages)) return sendJson(res, 200, { ok: true, marked: 0 });
+    let marked = 0;
+    for (const m of lead.portal.messages) {
+      if (m.from === "admin" && !m.readByCustomer) { m.readByCustomer = true; marked++; }
+    }
+    if (marked) await writeLeads(allLeads);
+    return sendJson(res, 200, { ok: true, marked });
   }
 
   if (req.method === "GET" && pathname === "/api/quotes.csv") {
@@ -9200,6 +9384,9 @@ function resolveStaticTarget(pathname) {
   }
   if (pathname === "/admin/chats" || pathname === "/admin/chats/") {
     return { dir: SERVER_DIR, relative: "/chats.html" };
+  }
+  if (pathname === "/admin/messages" || pathname === "/admin/messages/") {
+    return { dir: SERVER_DIR, relative: "/messages.html" };
   }
   if (pathname === "/admin/schedule" || pathname === "/admin/schedule/") {
     return { dir: SERVER_DIR, relative: "/schedule.html" };

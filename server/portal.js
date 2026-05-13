@@ -39,6 +39,7 @@ const acceptButton = document.getElementById("acceptButton");
 const acceptStatus = document.getElementById("acceptStatus");
 const messageForm = document.getElementById("messageForm");
 const messageBody = document.getElementById("messageBody");
+const messageThread = document.getElementById("messageThread");
 const messageStatus = document.getElementById("messageStatus");
 const activityCard = document.getElementById("activityCard");
 const activityList = document.getElementById("activityList");
@@ -254,6 +255,42 @@ function renderActivity(activity) {
   activityCard.hidden = false;
 }
 
+// Two-way message thread above the send-a-message form. Renders both
+// admin replies and the customer's own past messages so they can see
+// the conversation history. After paint, marks any unread admin replies
+// as read on the server (best-effort, ignored on failure).
+function renderMessageThread(messages) {
+  if (!messageThread) return;
+  if (!messages || !messages.length) {
+    messageThread.hidden = true;
+    messageThread.innerHTML = "";
+    return;
+  }
+  messageThread.innerHTML = "";
+  let hasUnreadAdmin = false;
+  messages.forEach((m) => {
+    const div = document.createElement("div");
+    const isAdmin = m.from === "admin";
+    const unread = isAdmin && !m.readByCustomer;
+    if (unread) hasUnreadAdmin = true;
+    div.className = "portal-message-bubble from-" + (isAdmin ? "admin" : "customer") + (unread ? " is-unread" : "");
+    const who = isAdmin ? "PJL" : "You";
+    const when = formatDateTime(m.ts);
+    div.innerHTML = `${escapeHtml(m.body || "")}<span class="portal-message-bubble-meta">${escapeHtml(who)} · ${escapeHtml(when)}</span>`;
+    messageThread.appendChild(div);
+  });
+  messageThread.hidden = false;
+  // Auto-scroll to latest.
+  try { messageThread.scrollTop = messageThread.scrollHeight; } catch (_) {}
+  // Mark admin replies as read — fire-and-forget, no UI dependency.
+  if (hasUnreadAdmin) {
+    const token = tokenFromLocation();
+    if (token) {
+      fetch(`/api/portal/${encodeURIComponent(token)}/messages/read`, { method: "POST" }).catch(() => {});
+    }
+  }
+}
+
 function renderWorkOrder(data) {
   // Surface the work-order envelope when the lead came in via the booking
   // flow. Older leads (Formspree-era contact requests) don't have one and
@@ -387,6 +424,7 @@ function renderPortal(data) {
   renderTimeline(project.status);
   renderPhotos(project.photos);
   renderActivity(project.activity);
+  renderMessageThread(Array.isArray(data.messages) ? data.messages : []);
   renderSystem(data.property);
   renderWorkOrder(data);
   // Open recommendations card — fetches deferred items the customer can

@@ -657,6 +657,55 @@ h1 {
   min-height: 18px;
 }
 
+/* ============= Message thread (two-way conversation) ============= */
+.portal-message-thread {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 12px 0 18px;
+  padding: 14px;
+  background: #FAFAF5;
+  border: 1px solid rgba(15, 31, 20, 0.10);
+  border-radius: 10px;
+  max-height: 360px;
+  overflow-y: auto;
+}
+.portal-message-thread[hidden] { display: none; }
+.portal-message-bubble {
+  max-width: 80%;
+  padding: 10px 14px;
+  border-radius: 12px;
+  font-size: 14px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.portal-message-bubble.from-customer {
+  align-self: flex-end;
+  background: #1B4D2E;
+  color: #fff;
+  border-bottom-right-radius: 4px;
+}
+.portal-message-bubble.from-admin {
+  align-self: flex-start;
+  background: #fff;
+  color: #0F1F14;
+  border: 1px solid rgba(15, 31, 20, 0.10);
+  border-bottom-left-radius: 4px;
+}
+.portal-message-bubble.is-unread {
+  box-shadow: 0 0 0 2px rgba(224, 123, 36, 0.40);
+}
+.portal-message-bubble-meta {
+  display: block;
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  opacity: 0.75;
+  margin-top: 4px;
+}
+
 /* ============= Activity log ============= */
 .portal-activity-list {
   list-style: none;

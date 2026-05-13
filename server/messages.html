@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#0F1F14">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>PJL CRM — Portal Messages</title>
+  <link rel="icon" type="image/svg+xml" href="/crm/pjl-logo-mark.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/crm/crm.css">
+  <style>
+    /* Messages inbox — single-column thread list. Each row is a customer
+       thread; click to expand inline and show the full conversation +
+       a reply box. No page-leave; admins triage and reply from one view. */
+    .msg-hero-meta {
+      display: flex; gap: 14px; flex-wrap: wrap;
+      margin-top: 8px;
+      font-family: "Barlow Condensed", sans-serif;
+      font-size: 13px; letter-spacing: 0.08em; text-transform: uppercase;
+      color: #FAFAF5;
+    }
+    .msg-hero-meta strong { color: #fff; }
+
+    .msg-empty {
+      background: #fff; border: 1px dashed #E2E0D4;
+      border-radius: 12px; padding: 28px 24px;
+      text-align: center; color: #7A7A72;
+    }
+
+    .msg-thread-list {
+      list-style: none; padding: 0; margin: 0;
+      display: flex; flex-direction: column; gap: 10px;
+    }
+    .msg-thread {
+      background: #fff;
+      border: 1px solid #E2E0D4;
+      border-radius: 12px;
+      overflow: hidden;
+      transition: border-color 0.15s;
+    }
+    .msg-thread:hover { border-color: #1B4D2E; }
+    .msg-thread.is-unread { border-color: #E07B24; }
+
+    .msg-thread-summary {
+      width: 100%;
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 8px 14px;
+      padding: 14px 18px;
+      cursor: pointer;
+      background: transparent;
+      border: 0;
+      font: inherit;
+      text-align: left;
+      color: inherit;
+    }
+    .msg-thread.is-unread .msg-thread-summary { background: #FDF0E4; }
+    .msg-thread-name {
+      font-weight: 700;
+      color: #1B4D2E;
+      font-size: 15px;
+    }
+    .msg-thread-name .msg-unread-badge {
+      display: inline-block;
+      background: #E07B24;
+      color: #fff;
+      font-family: "Barlow Condensed", sans-serif;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      padding: 2px 7px;
+      border-radius: 10px;
+      margin-left: 8px;
+      vertical-align: 1px;
+    }
+    .msg-thread-phone { color: #7A7A72; font-size: 13px; }
+    .msg-thread-preview {
+      grid-column: 1 / -1;
+      color: #4A4A4A;
+      font-size: 14px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+    }
+    .msg-thread-preview .preview-from {
+      font-family: "Barlow Condensed", sans-serif;
+      font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase;
+      color: #7A7A72; margin-right: 6px;
+    }
+    .msg-thread-time {
+      grid-row: 1; grid-column: 2;
+      font-family: "Barlow Condensed", sans-serif;
+      font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase;
+      color: #7A7A72;
+      align-self: start; white-space: nowrap;
+    }
+
+    .msg-thread-body {
+      border-top: 1px solid #E2E0D4;
+      padding: 16px 18px;
+      background: #FAFAF5;
+      display: none;
+    }
+    .msg-thread.is-open .msg-thread-body { display: block; }
+
+    .msg-bubbles {
+      display: flex; flex-direction: column; gap: 10px;
+      margin-bottom: 16px;
+      max-height: 50vh; overflow-y: auto;
+      padding-right: 4px;
+    }
+    .msg-bubble {
+      max-width: 80%;
+      padding: 10px 14px;
+      border-radius: 12px;
+      font-size: 14px;
+      line-height: 1.45;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+    .msg-bubble.from-customer {
+      align-self: flex-start;
+      background: #EAF3DE;
+      color: #0F1F14;
+      border-bottom-left-radius: 4px;
+    }
+    .msg-bubble.from-admin {
+      align-self: flex-end;
+      background: #1B4D2E;
+      color: #fff;
+      border-bottom-right-radius: 4px;
+    }
+    .msg-bubble-meta {
+      display: block;
+      font-family: "Barlow Condensed", sans-serif;
+      font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase;
+      opacity: 0.75;
+      margin-top: 4px;
+    }
+
+    .msg-reply-form {
+      display: flex; flex-direction: column; gap: 10px;
+    }
+    .msg-reply-form textarea {
+      font: inherit;
+      font-size: 14px;
+      padding: 10px 12px;
+      border: 1px solid #E2E0D4;
+      border-radius: 10px;
+      min-height: 88px;
+      resize: vertical;
+    }
+    .msg-reply-actions {
+      display: flex; justify-content: space-between; align-items: center;
+      gap: 10px;
+    }
+    .msg-reply-status {
+      font-size: 13px;
+      color: #1B4D2E;
+      min-height: 18px;
+    }
+    .msg-reply-error {
+      color: #b53b1c;
+      font-size: 13px;
+    }
+
+    @media (max-width: 600px) {
+      .msg-thread-summary { padding: 12px 14px; grid-template-columns: 1fr; }
+      .msg-thread-time { grid-row: auto; grid-column: 1; }
+      .msg-thread-body { padding: 14px; }
+      .msg-bubble { max-width: 90%; }
+    }
+  </style>
+</head>
+<body class="pjl-crm-body">
+  <aside class="pjl-admin-nav" id="navMenu" aria-label="PJL CRM Navigation">
+    <header class="pjl-side-brand">
+      <a href="/" class="pjl-side-logo"><img src="/crm/pjl-logo.svg" alt="PJL Land Services"></a>
+    </header>
+    <div class="pjl-nav-links">
+      <a href="/admin/today">Today</a>
+      <a href="/admin/messages" class="is-active">Messages <span class="pjl-nav-badge" data-portal-msg-badge hidden></span></a>
+      <a href="/admin">CRM</a>
+      <a href="/admin/schedule">Schedule</a>
+      <a href="/admin/handoff">Handoff</a>
+      <a href="/admin/bookings">Bookings</a>
+      <a href="/admin/customers">Customers</a>
+      <a href="/admin/properties">Properties</a>
+      <a href="/admin/projects">Projects</a>
+      <a href="/admin/work-orders">Work orders</a>
+      <a href="/admin/quote-folder">Quotes</a>
+      <a href="/admin/invoices">Invoices</a>
+      <a href="/admin/material-lists">Materials</a>
+      <a href="/admin/chats">AI Chats</a>
+      <a href="/admin/users">Users</a>
+      <a href="/admin/settings">Settings</a>
+    </div>
+    <footer class="pjl-side-footer">
+      <a class="pjl-side-phone" href="tel:+19059600181">(905) 960-0181</a>
+      <button class="pjl-nav-logout" type="button" id="logoutButton">Log out</button>
+    </footer>
+  </aside>
+
+  <div class="pjl-app">
+    <header class="pjl-app-topbar">
+      <button class="pjl-nav-toggle" type="button" id="navToggle" aria-label="Menu" aria-expanded="false" aria-controls="navMenu">
+        <span class="pjl-nav-toggle-bar"></span>
+        <span class="pjl-nav-toggle-bar"></span>
+        <span class="pjl-nav-toggle-bar"></span>
+      </button>
+      <span class="pjl-app-title">Messages</span>
+      <a class="pjl-app-phone" href="tel:+19059600181">(905) 960-0181</a>
+    </header>
+
+    <main class="pjl-crm-shell">
+      <header class="pjl-crm-hero">
+        <div>
+          <p class="pjl-page-eyebrow">Customer portal</p>
+          <h1>Portal messages.</h1>
+          <p>Two-way thread with customers. Tap a row to read + reply inline.</p>
+          <p class="msg-hero-meta">
+            <span><strong id="threadTotal">0</strong> threads</span>
+            <span><strong id="unreadTotal">0</strong> unread</span>
+          </p>
+        </div>
+      </header>
+
+      <section>
+        <p class="msg-empty" id="emptyState" hidden>
+          No portal messages yet. When a customer sends a message from their portal,
+          the thread appears here.
+        </p>
+        <ul class="msg-thread-list" id="threadList"></ul>
+      </section>
+    </main>
+  </div>
+
+  <script src="/crm/crm-nav.js"></script>
+  <script src="/crm/messages.js?v=1"></script>
+  <script src="/crm/nav-badges.js?v=1"></script>
+</body>
+</html>

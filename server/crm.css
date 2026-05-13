@@ -147,6 +147,25 @@
   font-weight: 700;
 }
 .pjl-nav-links a.is-active::after { display: none; }
+/* Unread-message badge — auto-populated by crm-nav.js for the
+   Messages link in every admin nav. Hidden until count > 0. */
+.pjl-nav-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--pjl-amber, #E07B24);
+  color: #fff;
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 1px 7px;
+  border-radius: 10px;
+  margin-left: auto;
+  min-width: 22px;
+  line-height: 1.5;
+}
+.pjl-nav-badge[hidden] { display: none; }
 .pjl-nav-links .pjl-nav-cta {
   margin: 6px 0 0;
   background: linear-gradient(135deg, #F59B4A 0%, #C96A2A 100%);
