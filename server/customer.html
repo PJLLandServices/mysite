@@ -123,11 +123,15 @@
           </div>
           <p class="customer-modal-error" id="saveError" hidden></p>
           <div style="margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--crm-border, #d4d2cb);">
-            <button type="button" class="pjl-btn pjl-btn-outline" id="mergeBtn" style="width: 100%; padding: 6px 12px; font-size: 12px;">⇨ Merge another customer into this one</button>
+            <!-- crm.css .pjl-btn-outline is designed for the dark hero
+                 (white text on transparent + faint white border). On the
+                 light admin sidebar it renders invisible, so the merge
+                 + delete buttons override colors inline. -->
+            <button type="button" class="pjl-btn pjl-btn-outline" id="mergeBtn" style="width: 100%; padding: 8px 12px; font-size: 12px; background: #fff; color: #c96a2a; border: 1.5px solid #c96a2a; min-height: 0;">⇨ Merge another customer into this one</button>
             <p style="margin: 6px 0 0; font-size: 11px; color: var(--crm-muted, #888);">Use when an xlsx-imported placeholder turns out to be the same person as a real lead.</p>
           </div>
           <div style="margin-top: 14px;">
-            <button type="button" class="pjl-btn pjl-btn-danger" id="deleteBtn" style="width: 100%; padding: 6px 12px; font-size: 12px;">Delete this customer</button>
+            <button type="button" class="pjl-btn pjl-btn-danger" id="deleteBtn" style="width: 100%; padding: 8px 12px; font-size: 12px; background: #9b2b2b; color: #fff; border: 0; min-height: 0;">Delete this customer</button>
             <p style="margin: 6px 0 0; font-size: 11px; color: var(--crm-muted, #888);">Only allowed when nothing is linked to this customer. Otherwise Merge first.</p>
             <p class="customer-modal-error" id="deleteError" hidden style="margin-top: 8px;"></p>
           </div>
