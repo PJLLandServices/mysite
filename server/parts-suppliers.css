@@ -156,3 +156,507 @@
   .ps-table td.ps-supplier-cell { padding-top: 8px; }
   .ps-desc { min-width: 0; }
 }
+
+/* ============================================================
+   Catalog management — toolbar, inline edit, modals, NEW pill,
+   modified indicator, deleted-row treatment, kebab menu.
+   ============================================================ */
+
+.ps-catalog-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 12px 14px;
+  background: #FAFAF5;
+  border: 1px solid #E2E0D4;
+  border-radius: 10px;
+  margin: 0 0 14px;
+}
+.ps-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 14px;
+  border-radius: 8px;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  min-height: 40px;
+  white-space: nowrap;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+.ps-action--primary {
+  background: #1B4D2E;
+  color: #fff;
+  border: 1px solid #1B4D2E;
+}
+.ps-action--primary:hover { background: #154025; }
+.ps-action--outline {
+  background: #fff;
+  color: #1B4D2E;
+  border: 1px solid #1B4D2E;
+}
+.ps-action--outline:hover { background: #EAF3DE; }
+.ps-action--ghost {
+  background: transparent;
+  color: #1B4D2E;
+  border: 1px dashed #B6BFA8;
+}
+.ps-action--ghost:hover { background: #FAFAF5; }
+.ps-action-icon {
+  font-weight: 800;
+  font-size: 16px;
+  line-height: 1;
+}
+
+/* Toast / status banner inside the toolbar. */
+.ps-toast {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  background: #1B4D2E;
+  color: #fff;
+  padding: 8px 14px;
+  border-radius: 8px;
+  font-size: 13px;
+  max-width: 540px;
+}
+.ps-toast--error { background: #9B2B2B; }
+.ps-toast[hidden] { display: none; }
+.ps-toast-undo {
+  background: transparent;
+  color: #fff;
+  border: 1px solid rgba(255,255,255,0.45);
+  padding: 4px 10px;
+  border-radius: 5px;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+.ps-toast-undo:hover { background: rgba(255,255,255,0.12); }
+
+/* New SKU pill — runtime additions. */
+.ps-new-pill {
+  display: inline-block;
+  margin-left: 6px;
+  background: #EAF3DE;
+  color: #1B4D2E;
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  padding: 2px 6px;
+  border-radius: 4px;
+  vertical-align: middle;
+}
+
+/* Price cell — keep the button looking like text but make it clickable
+   without a button border. */
+.ps-price-cell {
+  position: relative;
+  white-space: nowrap;
+}
+.ps-price-edit {
+  background: transparent;
+  border: 0;
+  padding: 4px 6px;
+  border-radius: 4px;
+  font: inherit;
+  font-family: "Barlow Condensed", sans-serif;
+  font-weight: 700;
+  color: #1B4D2E;
+  font-size: 14px;
+  cursor: pointer;
+  text-align: left;
+}
+.ps-price-edit:hover { background: #FAFAF5; }
+.ps-price-edit:focus { outline: 2px solid rgba(27,77,46,0.25); outline-offset: 1px; }
+.ps-price-input {
+  width: 84px;
+  padding: 4px 8px;
+  border: 1px solid #1B4D2E;
+  border-radius: 4px;
+  font: inherit;
+  font-family: "Barlow Condensed", sans-serif;
+  font-weight: 700;
+  color: #1B4D2E;
+  background: #fff;
+}
+.ps-price-input.ps-input-error {
+  border-color: #9B2B2B;
+  background: #FFF2F2;
+}
+.ps-price-revert {
+  display: inline-block;
+  background: #E07B24;
+  color: #fff;
+  border: 0;
+  border-radius: 50%;
+  width: 12px;
+  height: 12px;
+  line-height: 10px;
+  text-align: center;
+  font-size: 12px;
+  cursor: pointer;
+  padding: 0;
+  margin-right: 4px;
+  vertical-align: middle;
+  animation: psFadeIn 0.3s ease;
+}
+@keyframes psFadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+/* Kebab menu */
+.ps-actions-col { width: 32px; text-align: right; }
+.ps-kebab {
+  background: transparent;
+  border: 0;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  font-size: 18px;
+  cursor: pointer;
+  color: #555;
+}
+.ps-kebab:hover { background: #F0EEE3; color: #1B4D2E; }
+.ps-kebab[aria-expanded="true"] { background: #EAF3DE; color: #1B4D2E; }
+.ps-kebab-menu {
+  position: absolute;
+  z-index: 1100;
+  background: #fff;
+  border: 1px solid #D8D5C5;
+  border-radius: 8px;
+  box-shadow: 0 12px 30px rgba(15,31,20,0.18);
+  padding: 4px;
+}
+.ps-kebab-menu[hidden] { display: none; }
+.ps-kebab-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  padding: 8px 12px;
+  font: inherit;
+  cursor: pointer;
+  border-radius: 5px;
+  color: #1F2A22;
+}
+.ps-kebab-item:hover { background: #FAFAF5; }
+.ps-kebab-item--danger { color: #9B2B2B; }
+.ps-kebab-item--danger:hover { background: #FFF2F2; }
+
+/* Empty state inside the table body. */
+.ps-empty {
+  padding: 30px;
+  text-align: center;
+  color: #7A7A72;
+}
+
+/* Deleted section */
+.ps-deleted-toggle {
+  margin: 14px 0;
+}
+.ps-table-wrap--deleted {
+  margin-top: 10px;
+  border-style: dashed;
+  background: #FAFAF5;
+}
+.ps-table--deleted tbody tr {
+  opacity: 0.7;
+}
+.ps-table--deleted .ps-sku,
+.ps-table--deleted .ps-cat strong,
+.ps-table--deleted .ps-price { color: #555; }
+
+/* ===== Modals ============================================== */
+.ps-modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(15,31,20,0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1200;
+  padding: 20px;
+  animation: psModalFade 0.15s ease;
+}
+@keyframes psModalFade {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.ps-modal[hidden] { display: none; }
+.ps-modal-card {
+  background: #fff;
+  border-radius: 12px;
+  width: 100%;
+  max-width: 540px;
+  max-height: calc(100vh - 40px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 24px 60px rgba(0,0,0,0.28);
+}
+.ps-modal-card--wide { max-width: 980px; }
+.ps-modal-card--narrow { max-width: 420px; }
+.ps-modal-head {
+  padding: 18px 22px 8px;
+  border-bottom: 1px solid #F0EEE3;
+}
+.ps-modal-head h2 {
+  margin: 0 0 4px;
+  font-family: "Barlow Condensed", sans-serif;
+  font-weight: 700;
+  font-size: 22px;
+  color: #1F2A22;
+}
+.ps-modal-help {
+  margin: 0;
+  font-size: 13px;
+  color: #555;
+  line-height: 1.45;
+}
+.ps-modal-body {
+  padding: 16px 22px;
+  overflow-y: auto;
+  flex: 1;
+}
+.ps-modal-foot {
+  padding: 14px 22px;
+  border-top: 1px solid #F0EEE3;
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  background: #FAFAF5;
+}
+.ps-modal-error {
+  margin: 10px 0 0;
+  font-size: 13px;
+  color: #9B2B2B;
+  background: #FFF2F2;
+  padding: 8px 10px;
+  border-radius: 6px;
+}
+
+/* Add-parts modal — grid table editor */
+.ps-add-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.ps-add-table th {
+  background: #FAFAF5;
+  text-align: left;
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #1B4D2E;
+  padding: 8px 8px;
+  border-bottom: 1px solid #E2E0D4;
+  white-space: nowrap;
+}
+.ps-add-table td {
+  padding: 6px 6px;
+  vertical-align: top;
+  border-bottom: 1px solid #F0EEE3;
+}
+.ps-add-table input,
+.ps-add-table select {
+  width: 100%;
+  min-width: 60px;
+  padding: 6px 8px;
+  border: 1px solid #D8D5C5;
+  border-radius: 5px;
+  font: inherit;
+  background: #fff;
+}
+.ps-add-table input:focus,
+.ps-add-table select:focus {
+  border-color: #1B4D2E;
+  outline: 2px solid rgba(27,77,46,0.15);
+}
+.ps-row-remove {
+  background: transparent;
+  border: 0;
+  font-size: 18px;
+  color: #9B2B2B;
+  cursor: pointer;
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+}
+.ps-row-remove:hover { background: #FFF2F2; }
+.ps-add-another {
+  margin-top: 10px;
+  background: transparent;
+  border: 1px dashed #B6BFA8;
+  padding: 8px 14px;
+  border-radius: 6px;
+  font: inherit;
+  font-weight: 600;
+  color: #1B4D2E;
+  cursor: pointer;
+}
+.ps-add-another:hover { background: #FAFAF5; }
+
+/* Edit-details modal — single-column form. */
+.ps-edit-form {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px 16px;
+}
+.ps-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #555;
+}
+.ps-field--wide { grid-column: 1 / -1; }
+.ps-field input,
+.ps-field select {
+  padding: 8px 10px;
+  border: 1px solid #D8D5C5;
+  border-radius: 6px;
+  font: inherit;
+  font-weight: 400;
+  color: #1F2A22;
+  background: #fff;
+}
+.ps-field input:focus,
+.ps-field select:focus {
+  border-color: #1B4D2E;
+  outline: 2px solid rgba(27,77,46,0.15);
+}
+.ps-field input[readonly] {
+  background: #F0EEE3;
+  color: #555;
+}
+.ps-field-help {
+  font-style: normal;
+  font-weight: 400;
+  color: #7A7A72;
+  font-size: 11px;
+}
+
+/* Import wizard */
+.ps-dropzone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 36px 20px;
+  border: 2px dashed #B6BFA8;
+  border-radius: 12px;
+  background: #FAFAF5;
+  cursor: pointer;
+  text-align: center;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+.ps-dropzone:hover,
+.ps-dropzone.is-drag {
+  background: #EAF3DE;
+  border-color: #1B4D2E;
+}
+.ps-dropzone-icon { font-size: 28px; color: #1B4D2E; font-weight: 800; }
+.ps-dropzone-help { font-size: 12px; color: #555; }
+.ps-link-btn {
+  background: transparent;
+  border: 0;
+  color: #1B4D2E;
+  text-decoration: underline;
+  cursor: pointer;
+  font: inherit;
+  padding: 0;
+}
+.ps-import-summary {
+  background: #FAFAF5;
+  border: 1px solid #E2E0D4;
+  border-radius: 8px;
+  padding: 10px 14px;
+  margin: 0 0 16px;
+  font-size: 13px;
+}
+.ps-diff-section {
+  margin-bottom: 12px;
+  border: 1px solid #E2E0D4;
+  border-radius: 8px;
+  overflow: hidden;
+}
+.ps-diff-section summary {
+  padding: 10px 14px;
+  background: #FAFAF5;
+  cursor: pointer;
+  font-size: 13px;
+  user-select: none;
+}
+.ps-diff-section summary strong { color: #1B4D2E; font-family: "Barlow Condensed", sans-serif; font-size: 14px; letter-spacing: 0.04em; }
+.ps-diff-count { color: #555; font-size: 12px; margin-left: 4px; }
+.ps-diff-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.ps-diff-table th {
+  background: #fff;
+  text-align: left;
+  padding: 8px 10px;
+  border-bottom: 1px solid #F0EEE3;
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 11px;
+  font-weight: 700;
+  color: #555;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.ps-diff-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid #F0EEE3;
+  vertical-align: top;
+}
+.ps-diff-field { display: inline-block; }
+.ps-delete-toggle {
+  display: block;
+  padding: 10px 14px;
+  background: #FFF7EE;
+  border-bottom: 1px solid #F0EEE3;
+  font-size: 13px;
+  color: #1F2A22;
+  font-weight: 600;
+}
+.ps-delete-toggle em { display: block; font-weight: 400; color: #7A5500; font-size: 11px; margin-top: 2px; }
+.ps-delete-toggle input { margin-right: 8px; vertical-align: middle; }
+
+.ps-danger {
+  background: linear-gradient(135deg, #C13333 0%, #8B1A1A 100%);
+  box-shadow: 0 10px 28px rgba(192,30,30,0.32);
+}
+
+/* Mobile tweaks */
+@media (max-width: 640px) {
+  .ps-modal { padding: 0; }
+  .ps-modal-card {
+    max-width: none;
+    width: 100%;
+    height: 100%;
+    max-height: 100%;
+    border-radius: 0;
+  }
+  .ps-edit-form { grid-template-columns: 1fr; }
+  .ps-add-table {
+    font-size: 12px;
+  }
+}
+@media (max-width: 480px) {
+  .ps-catalog-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .ps-action { justify-content: center; }
+  .ps-toast { margin-left: 0; }
+}

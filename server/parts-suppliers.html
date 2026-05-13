@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <meta name="theme-color" content="#0F1F14">
-  <title>Catalog assignments — PJL</title>
+  <title>Catalog — PJL</title>
   <link rel="icon" type="image/svg+xml" href="/crm/pjl-logo-mark.svg">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -49,7 +49,7 @@
         <span class="pjl-nav-toggle-bar"></span>
         <span class="pjl-nav-toggle-bar"></span>
       </button>
-      <span class="pjl-app-title">Catalog assignments</span>
+      <span class="pjl-app-title">Catalog</span>
       <a class="pjl-app-phone" href="tel:+19059600181">(905) 960-0181</a>
     </header>
 
@@ -58,11 +58,24 @@
         <a href="/admin/material-lists">Material lists</a>
         <a href="/admin/purchase-orders">Purchase orders</a>
         <a href="/admin/suppliers">Suppliers</a>
-        <a href="/admin/parts-suppliers" class="is-active" aria-current="page">Catalog assignments</a>
+        <a href="/admin/parts-suppliers" class="is-active" aria-current="page">Catalog</a>
       </nav>
 
       <section class="suppliers-explainer">
-        <p><strong>Catalog assignments</strong> map each SKU in your parts catalog to a supplier. When you generate a Purchase Order from a material list, PJL groups the outstanding <em>need</em> lines by their assigned supplier and emits one PO per vendor. Unassigned SKUs block PO generation, so it's worth populating this table once and updating as suppliers change.</p>
+        <p><strong>Catalog</strong> is the master list of every part PJL stocks or installs. Add new SKUs as you start using them, edit prices when suppliers change theirs, and assign each SKU to its primary supplier. Material lists and purchase orders pull from this catalog &mdash; unassigned SKUs block PO generation, so it&rsquo;s worth keeping suppliers populated as the catalog grows. Existing accepted quotes are unaffected by price changes here; their prices are locked in at quote creation.</p>
+      </section>
+
+      <section class="ps-catalog-toolbar" aria-label="Catalog actions">
+        <button type="button" class="ps-action ps-action--primary" id="addPartsBtn">
+          <span class="ps-action-icon" aria-hidden="true">+</span><span>Add parts</span>
+        </button>
+        <button type="button" class="ps-action ps-action--outline" id="importBtn">
+          <span class="ps-action-icon" aria-hidden="true">&uarr;</span><span>Import xlsx</span>
+        </button>
+        <button type="button" class="ps-action ps-action--outline" id="exportBtn">
+          <span class="ps-action-icon" aria-hidden="true">&darr;</span><span>Export xlsx</span>
+        </button>
+        <span class="ps-toast" id="psToast" role="status" aria-live="polite" hidden></span>
       </section>
 
       <section class="suppliers-toolbar ps-toolbar">
@@ -78,7 +91,7 @@
         <span class="ps-count" id="psCount"></span>
       </section>
 
-      <p class="mlb-loading" id="psLoading">Loading catalog…</p>
+      <p class="mlb-loading" id="psLoading">Loading catalog&hellip;</p>
       <p class="mlb-error" id="psError" role="alert" hidden></p>
 
       <div class="ps-table-wrap" id="psTableWrap" hidden>
@@ -90,9 +103,31 @@
               <th>Category</th>
               <th>Price</th>
               <th>Primary supplier</th>
+              <th class="ps-actions-col" aria-label="Actions"></th>
             </tr>
           </thead>
           <tbody id="psBody"></tbody>
+        </table>
+      </div>
+
+      <div class="ps-deleted-toggle" id="psDeletedToggle" hidden>
+        <button type="button" class="ps-action ps-action--ghost" id="psDeletedToggleBtn" aria-expanded="false">
+          Show deleted <span id="psDeletedCount">(0)</span>
+        </button>
+      </div>
+
+      <div class="ps-table-wrap ps-table-wrap--deleted" id="psDeletedWrap" hidden>
+        <table class="ps-table ps-table--deleted">
+          <thead>
+            <tr>
+              <th>SKU</th>
+              <th>Description</th>
+              <th>Category</th>
+              <th>Price</th>
+              <th class="ps-actions-col" aria-label="Actions"></th>
+            </tr>
+          </thead>
+          <tbody id="psDeletedBody"></tbody>
         </table>
       </div>
     </main>
@@ -110,6 +145,194 @@
     </div>
   </div>
 
+  <!-- Kebab menu (single shared popover, repositioned per-row at open time). -->
+  <div class="ps-kebab-menu" id="psKebabMenu" hidden role="menu">
+    <button type="button" class="ps-kebab-item" data-kebab-action="edit" role="menuitem">Edit details</button>
+    <button type="button" class="ps-kebab-item ps-kebab-item--danger" data-kebab-action="delete" role="menuitem">Delete</button>
+  </div>
+
+  <!-- ===== Add parts modal ===== -->
+  <div class="ps-modal" id="addPartsModal" hidden role="dialog" aria-modal="true" aria-labelledby="addPartsTitle">
+    <div class="ps-modal-card ps-modal-card--wide">
+      <div class="ps-modal-head">
+        <h2 id="addPartsTitle">Add parts to catalog</h2>
+        <p class="ps-modal-help">Enter one part per row. SKUs must be unique. Prices in dollars &mdash; they&rsquo;re stored as integer cents under the hood.</p>
+      </div>
+      <div class="ps-modal-body">
+        <table class="ps-add-table" id="addPartsTable">
+          <thead>
+            <tr>
+              <th>SKU *</th>
+              <th>Part #</th>
+              <th>Category *</th>
+              <th>Subcategory *</th>
+              <th>Size</th>
+              <th>Description *</th>
+              <th>Price ($) *</th>
+              <th>Unit</th>
+              <th aria-label="Remove"></th>
+            </tr>
+          </thead>
+          <tbody id="addPartsRows"></tbody>
+        </table>
+        <button type="button" class="ps-add-another" id="addAnotherRowBtn">+ Add another row</button>
+        <p class="ps-modal-error" id="addPartsError" hidden role="alert"></p>
+      </div>
+      <div class="ps-modal-foot">
+        <button type="button" class="pjl-btn pjl-btn-outline" id="addPartsCancel">Cancel</button>
+        <button type="button" class="pjl-btn pjl-btn-primary" id="addPartsSubmit">Save 1 part</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== Edit details modal ===== -->
+  <div class="ps-modal" id="editPartModal" hidden role="dialog" aria-modal="true" aria-labelledby="editPartTitle">
+    <div class="ps-modal-card">
+      <div class="ps-modal-head">
+        <h2 id="editPartTitle">Edit SKU</h2>
+      </div>
+      <div class="ps-modal-body">
+        <form id="editPartForm" class="ps-edit-form">
+          <label class="ps-field">
+            <span>SKU</span>
+            <input name="sku" id="editSku" readonly>
+            <em class="ps-field-help">Cannot be changed &mdash; delete and re-add if you need to rename.</em>
+          </label>
+          <label class="ps-field">
+            <span>Part #</span>
+            <input name="partNumber" id="editPartNumber" maxlength="64">
+          </label>
+          <label class="ps-field">
+            <span>Category</span>
+            <select name="category" id="editCategory" required></select>
+          </label>
+          <label class="ps-field">
+            <span>Subcategory</span>
+            <input name="subcategory" id="editSubcategory" maxlength="120" required>
+          </label>
+          <label class="ps-field">
+            <span>Size</span>
+            <input name="size" id="editSize" maxlength="40">
+          </label>
+          <label class="ps-field ps-field--wide">
+            <span>Description</span>
+            <input name="description" id="editDescription" maxlength="240" required>
+          </label>
+          <label class="ps-field">
+            <span>Price ($)</span>
+            <input name="price" id="editPrice" type="number" step="0.01" min="0" required>
+          </label>
+          <label class="ps-field">
+            <span>Unit</span>
+            <input name="unit" id="editUnit" list="ps-unit-options" maxlength="30">
+            <datalist id="ps-unit-options">
+              <option value="each">
+              <option value="roll">
+              <option value="coil">
+              <option value="bag">
+              <option value="box">
+              <option value="bundle">
+              <option value="ft">
+              <option value="m">
+            </datalist>
+          </label>
+          <p class="ps-modal-error" id="editPartError" hidden role="alert"></p>
+        </form>
+      </div>
+      <div class="ps-modal-foot">
+        <button type="button" class="pjl-btn pjl-btn-outline" id="editPartCancel">Cancel</button>
+        <button type="button" class="pjl-btn pjl-btn-primary" id="editPartSubmit">Save changes</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== Delete confirm modal ===== -->
+  <div class="ps-modal" id="deletePartModal" hidden role="dialog" aria-modal="true" aria-labelledby="deletePartTitle">
+    <div class="ps-modal-card ps-modal-card--narrow">
+      <div class="ps-modal-head">
+        <h2 id="deletePartTitle">Delete part?</h2>
+      </div>
+      <div class="ps-modal-body">
+        <p id="deletePartCopy">Delete this SKU from catalog?</p>
+      </div>
+      <div class="ps-modal-foot">
+        <button type="button" class="pjl-btn pjl-btn-outline" id="deletePartCancel">Keep</button>
+        <button type="button" class="pjl-btn pjl-btn-primary ps-danger" id="deletePartConfirm">Delete</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== Import wizard ===== -->
+  <div class="ps-modal" id="importModal" hidden role="dialog" aria-modal="true" aria-labelledby="importTitle">
+    <div class="ps-modal-card ps-modal-card--wide">
+      <div class="ps-modal-head">
+        <h2 id="importTitle">Import catalog from xlsx</h2>
+        <p class="ps-modal-help" id="importHelp">Upload an xlsx file with columns: sku, partNumber, category, subcategory, size, description, price, unit. Column order doesn&rsquo;t matter. The &ldquo;sku&rdquo; column is required for every row.</p>
+      </div>
+
+      <div class="ps-modal-body">
+        <!-- Step 1 — upload -->
+        <div id="importStep1">
+          <label class="ps-dropzone" for="importFile">
+            <input type="file" id="importFile" accept=".xlsx,.xls" hidden>
+            <span class="ps-dropzone-icon" aria-hidden="true">&uarr;</span>
+            <strong>Click to choose an xlsx file</strong>
+            <span class="ps-dropzone-help">or drag &amp; drop here</span>
+          </label>
+          <p class="ps-modal-help">
+            <button type="button" class="ps-link-btn" id="downloadTemplateBtn">Download blank template</button>
+          </p>
+          <p class="ps-modal-error" id="importStep1Error" hidden role="alert"></p>
+        </div>
+
+        <!-- Step 2 — diff preview -->
+        <div id="importStep2" hidden>
+          <p class="ps-import-summary" id="importSummary"></p>
+
+          <details class="ps-diff-section" id="importDiffAdded" open>
+            <summary><strong>Added</strong> <span class="ps-diff-count" data-section="added">(0)</span></summary>
+            <table class="ps-diff-table">
+              <thead><tr><th></th><th>SKU</th><th>Description</th><th>Price</th></tr></thead>
+              <tbody data-tbody="added"></tbody>
+            </table>
+          </details>
+
+          <details class="ps-diff-section" id="importDiffEdited" open>
+            <summary><strong>Edited</strong> <span class="ps-diff-count" data-section="edited">(0)</span></summary>
+            <table class="ps-diff-table">
+              <thead><tr><th></th><th>SKU</th><th>Change</th></tr></thead>
+              <tbody data-tbody="edited"></tbody>
+            </table>
+          </details>
+
+          <details class="ps-diff-section" id="importDiffDeleted">
+            <summary><strong>Missing from file</strong> <span class="ps-diff-count" data-section="deleted">(0)</span></summary>
+            <label class="ps-delete-toggle">
+              <input type="checkbox" id="importDeleteEnabled">
+              Delete SKUs that are missing from this file
+              <em class="ps-field-help">Off by default &mdash; uploading a partial file won&rsquo;t wipe SKUs you didn&rsquo;t include.</em>
+            </label>
+            <table class="ps-diff-table">
+              <thead><tr><th></th><th>SKU</th><th>Description</th></tr></thead>
+              <tbody data-tbody="deleted"></tbody>
+            </table>
+          </details>
+
+          <p class="ps-modal-error" id="importStep2Error" hidden role="alert"></p>
+        </div>
+      </div>
+
+      <div class="ps-modal-foot">
+        <button type="button" class="pjl-btn pjl-btn-outline" id="importCancel">Cancel</button>
+        <button type="button" class="pjl-btn pjl-btn-primary" id="importApply" hidden>Apply changes</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- SheetJS via CDN — same version + load pattern as properties-import.
+       Browser-side parse/build keeps the server xlsx-dep-free and mirrors
+       the existing import flow. -->
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
   <script src="/crm/crm-nav.js"></script>
   <script src="/crm/parts-suppliers.js"></script>
 </body>

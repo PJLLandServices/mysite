@@ -197,6 +197,30 @@ async function clearSyncErrors() {
   return settings;
 }
 
+// Generic audit-trail append. Used by callers OUTSIDE of admin-defaults
+// /quickbooks (e.g. catalog edits — see lib/parts.js). Same 50-entry
+// rolling buffer; oldest entries fall off the end.
+//
+// `action` is a dotted string like "catalog.add" / "catalog.import" so
+// the UI can filter by namespace. `before` / `after` are optional
+// structured payloads; `note` is the human-readable summary the audit
+// viewer surfaces.
+async function recordAudit({ who = "admin", action, before = null, after = null, note = "" } = {}) {
+  if (!action) throw new Error("audit action required");
+  const settings = await readAll();
+  settings.audit.unshift({
+    ts: new Date().toISOString(),
+    who,
+    action: String(action),
+    before,
+    after,
+    note: String(note || "")
+  });
+  if (settings.audit.length > 50) settings.audit.length = 50;
+  await writeAll(settings);
+  return settings;
+}
+
 module.exports = {
   NOTIFY_MODES,
   DEFAULT_SETTINGS,
@@ -206,6 +230,7 @@ module.exports = {
   updateQuickbooks,
   recordSyncError,
   clearSyncErrors,
+  recordAudit,
   resolveMode,
   shouldSendEmail,
   shouldSendSms

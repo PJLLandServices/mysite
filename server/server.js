@@ -58,6 +58,7 @@ const suppliers = require("./lib/suppliers");
 const materialLists = require("./lib/material-lists");
 const projects = require("./lib/projects");
 const partSuppliers = require("./lib/part-suppliers");
+const partsLib = require("./lib/parts");
 const purchaseOrders = require("./lib/purchase-orders");
 const users = require("./lib/users");
 const magicTokens = require("./lib/magic-tokens");
@@ -217,34 +218,88 @@ const FEATURES = PRICING.items;
 // parts.json — catalog + service_materials mapping (spec §1.2). Loaded
 // once at boot; failure is non-fatal (the materials checklist hides if
 // PARTS is null). The file lives at the repo root next to pricing.json.
-const PARTS = (function loadParts() {
+//
+// Two layers sit on top of the baseline:
+//   1. parts-overrides.json — runtime catalog edits (adds/edits/deletes)
+//      owned by the admin UI (lib/parts.js). These are merged in here
+//      at boot and re-merged on every admin write so /api/parts returns
+//      the current effective catalog without a server restart.
+//   2. part-suppliers.json — per-SKU supplier assignments (lib/part-
+//      suppliers.js). These layer ON TOP of the catalog-overrides merge.
+//
+// BASELINE_PARTS keeps an untouched copy of the original parts.json so
+// the override merge always starts from a known-good state. PARTS holds
+// the current effective catalog and is what /api/parts (and consumers
+// using PARTS in-process) read.
+let BASELINE_PARTS = null;
+let PARTS = null;
+let CATALOG_VERSION = 0;  // bumped on every catalog write; surfaced as X-Catalog-Version
+(function loadParts() {
   try {
     const partsPath = path.resolve(__dirname, "..", "parts.json");
     const cat = JSON.parse(fsSync.readFileSync(partsPath, "utf8"));
-    // Merge per-SKU supplier overrides at boot. The override file is the
-    // source of truth for supplier assignments (see lib/part-suppliers.js
-    // for why we don't edit parts.json from the admin UI). Sync read keeps
-    // the existing const-init flow simple; refreshPartSupplierMerge() picks
-    // up subsequent admin edits without restart.
-    try {
-      const overridePath = path.join(__dirname, "data", "part-suppliers.json");
-      if (fsSync.existsSync(overridePath)) {
-        const overrides = JSON.parse(fsSync.readFileSync(overridePath, "utf8") || "{}");
-        partSuppliers.mergeIntoCatalog(cat.parts || {}, overrides);
-      } else {
-        // No overrides yet — still ensure every part has a supplierIds[]
-        // so consumers can rely on the field's existence.
-        partSuppliers.mergeIntoCatalog(cat.parts || {}, {});
-      }
-    } catch (err) {
-      console.warn("[parts] could not merge supplier overrides:", err?.message);
-    }
-    return cat;
+    // Stash the baseline before merging overrides so we can re-merge
+    // cleanly on every write.
+    BASELINE_PARTS = JSON.parse(JSON.stringify(cat.parts || {}));
+    PARTS = cat;
+    rebuildCatalogFromOverrides({ initial: true });
   } catch (err) {
     console.warn("[parts] could not load parts.json — materials checklist will be hidden:", err?.message);
-    return null;
+    PARTS = null;
+    BASELINE_PARTS = null;
   }
 })();
+
+// Re-merge the catalog from BASELINE_PARTS + parts-overrides.json +
+// part-suppliers.json. Called at boot, and after every admin write to
+// the catalog or supplier-assignment files. Bumps CATALOG_VERSION so
+// the SW/clients can detect a change.
+function rebuildCatalogFromOverrides({ initial = false } = {}) {
+  if (!PARTS || !BASELINE_PARTS) return;
+  let catalogOverrides = partsLib.EMPTY_OVERRIDES;
+  let supplierOverrides = {};
+  try {
+    const overridePath = path.join(__dirname, "data", "parts-overrides.json");
+    if (fsSync.existsSync(overridePath)) {
+      catalogOverrides = JSON.parse(fsSync.readFileSync(overridePath, "utf8") || "{}");
+    }
+  } catch (err) {
+    console.warn("[parts] could not read parts-overrides.json:", err?.message);
+  }
+  try {
+    const supPath = path.join(__dirname, "data", "part-suppliers.json");
+    if (fsSync.existsSync(supPath)) {
+      supplierOverrides = JSON.parse(fsSync.readFileSync(supPath, "utf8") || "{}");
+    }
+  } catch (err) {
+    console.warn("[parts] could not read part-suppliers.json:", err?.message);
+  }
+  // Merge catalog overrides onto baseline → assigns to PARTS.parts.
+  PARTS.parts = partsLib.mergeOverrides(BASELINE_PARTS, catalogOverrides);
+  // Layer supplier assignments on top. mergeIntoCatalog mutates in place
+  // and also normalises missing supplierIds to [].
+  partSuppliers.mergeIntoCatalog(PARTS.parts, supplierOverrides);
+  if (!initial) CATALOG_VERSION++;
+}
+
+function fmtMoneyFromCents(cents) {
+  const n = Number(cents) || 0;
+  return "$" + (n / 100).toFixed(2);
+}
+
+// In-process stage for xlsx imports. Browser SheetJS parses → POSTs the
+// parsed rows to /api/parts/import/preview → we compute a diff, stash
+// it here keyed by importId, and return the diff for the user to
+// review. /api/parts/import/commit reads from this map. Entries expire
+// after 15 minutes (cleaned up lazily on the next request).
+const importStaging = new Map();
+const IMPORT_STAGE_TTL_MS = 15 * 60 * 1000;
+function cleanupImportStaging() {
+  const cutoff = Date.now() - IMPORT_STAGE_TTL_MS;
+  for (const [id, entry] of importStaging.entries()) {
+    if (entry.ts < cutoff) importStaging.delete(id);
+  }
+}
 
 const CRM_STATUSES = new Set(["new", "contacted", "site_visit", "quoted", "won", "lost"]);
 const CRM_PRIORITIES = new Set(["normal", "high", "urgent"]);
@@ -534,7 +589,7 @@ function needsAuth(method, pathname) {
   if (pathname.startsWith("/api/work-orders")) return "user";
   if (pathname.startsWith("/api/invoices")) return "user";
   if (pathname.startsWith("/api/settings")) return "user";
-  if (pathname === "/api/parts") return "user";
+  if (pathname === "/api/parts" || pathname.startsWith("/api/parts/")) return "user";
   if (pathname.startsWith("/api/custom-line-items")) return "user";
   if (pathname.startsWith("/api/admin/quickbooks")) return "user";
   if (pathname.startsWith("/api/bookings")) return "user";
@@ -4913,18 +4968,257 @@ async function handleApi(req, res, pathname) {
     // Catalog rarely changes intra-session — let the browser cache it
     // for 5 min and the SW serve it offline. Bypass sendJson because
     // sendJson hard-codes cache-control: no-store.
-    const body = JSON.stringify({
+    //
+    // The `?admin=1` flag exposes the override classification (added /
+    // edited / deleted SKUs) so the catalog admin UI can paint NEW
+    // badges + "modified" indicators + the "Show deleted" toggle. We
+    // keep the public payload (no admin flag) lean — tech-mode + PO/ML
+    // builders don't need that classification.
+    const url = new URL(req.url, baseUrlFromReq(req));
+    const wantAdminMeta = url.searchParams.get("admin") === "1";
+    const payload = {
       ok: true,
       categories: PARTS.categories || [],
       parts: PARTS.parts || {},
       service_materials: PARTS.service_materials || {}
-    });
+    };
+    if (wantAdminMeta) {
+      // Read the override file fresh so the response always reflects
+      // what's on disk (the in-memory PARTS.parts is the merged result
+      // and doesn't tell us WHICH SKUs are runtime additions vs edited
+      // baseline vs untouched).
+      try {
+        const overrides = await partsLib.readOverrides();
+        const cls = partsLib.classifyOverrides(BASELINE_PARTS, overrides);
+        payload.overrides = {
+          addedSkus: [...cls.addedSkus],
+          editedSkus: [...cls.editedSkus],
+          deletedSkus: [...cls.deletedSkus],
+          // Per-SKU edit payload so the UI can show "original price"
+          // tooltips on the modified indicator (and "Restore baseline"
+          // affordance for individual fields).
+          edited: overrides.edited || {}
+        };
+        // Baseline snapshot for the modified-indicator hover ("price
+        // changed from $X.XX"). Only the editable fields, only the
+        // SKUs that have edits.
+        const baselineForEdits = {};
+        for (const sku of cls.editedSkus) {
+          if (BASELINE_PARTS[sku]) {
+            baselineForEdits[sku] = {
+              priceCents: BASELINE_PARTS[sku].priceCents,
+              description: BASELINE_PARTS[sku].description,
+              category: BASELINE_PARTS[sku].category,
+              subcategory: BASELINE_PARTS[sku].subcategory,
+              size: BASELINE_PARTS[sku].size,
+              unit: BASELINE_PARTS[sku].unit,
+              partNumber: BASELINE_PARTS[sku].partNumber
+            };
+          }
+        }
+        payload.overrides.baseline = baselineForEdits;
+        // Also surface the parts that have been soft-deleted (their
+        // baseline records — the UI shows them in the "Show deleted"
+        // toggle with a Restore action).
+        const deletedParts = {};
+        for (const sku of cls.deletedSkus) {
+          if (BASELINE_PARTS[sku]) deletedParts[sku] = { ...BASELINE_PARTS[sku], supplierIds: [] };
+        }
+        payload.overrides.deletedParts = deletedParts;
+      } catch (err) {
+        // Don't fail the whole response if override read fails — the
+        // base catalog still works.
+        payload.overrides = { addedSkus: [], editedSkus: [], deletedSkus: [], edited: {}, baseline: {}, deletedParts: {}, _error: err.message };
+      }
+    }
+    const body = JSON.stringify(payload);
     res.writeHead(200, {
       "content-type": "application/json; charset=utf-8",
-      "cache-control": "public, max-age=300"
+      "cache-control": wantAdminMeta ? "no-store" : "public, max-age=300",
+      "x-catalog-version": String(CATALOG_VERSION)
     });
     res.end(body);
     return;
+  }
+
+  // ---------- Catalog management (admin) ---------------------------------
+  // Runtime CRUD on the parts catalog. Edits live in parts-overrides.json
+  // (lib/parts.js); the baseline parts.json is never touched. See lib/
+  // parts.js header comment for the merge precedence + override-file
+  // schema.
+  //
+  // After every write we rebuild the in-memory catalog so a follow-up
+  // GET /api/parts (and any in-process consumer reading PARTS.parts)
+  // sees the change without a restart.
+
+  function categoriesAllowedSet() {
+    if (!PARTS || !Array.isArray(PARTS.categories)) return new Set();
+    return new Set(PARTS.categories.map((c) => c.key).filter(Boolean));
+  }
+
+  // POST /api/parts          — add a single part
+  // POST /api/parts (bulk)   — add many at once via { parts: [...] }
+  if (req.method === "POST" && pathname === "/api/parts") {
+    if (!BASELINE_PARTS) return sendJson(res, 503, { ok: false, errors: ["Parts baseline not loaded."] });
+    try {
+      const payload = await parseRequestBody(req);
+      const allowed = categoriesAllowedSet();
+      if (Array.isArray(payload?.parts)) {
+        const created = await partsLib.addMany(BASELINE_PARTS, payload.parts, { allowedCategories: allowed });
+        rebuildCatalogFromOverrides();
+        await settings.recordAudit({
+          who: "admin",
+          action: "catalog.add",
+          note: `Added ${created.length} part${created.length === 1 ? "" : "s"} (${created.map((p) => p.sku).join(", ")})`,
+          after: { skus: created.map((p) => p.sku) }
+        });
+        return sendJson(res, 201, { ok: true, created });
+      }
+      const created = await partsLib.addOne(BASELINE_PARTS, payload, { allowedCategories: allowed });
+      rebuildCatalogFromOverrides();
+      await settings.recordAudit({
+        who: "admin",
+        action: "catalog.add",
+        note: `Added ${created.sku}`,
+        after: { sku: created.sku }
+      });
+      return sendJson(res, 201, { ok: true, part: created });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't add part."] });
+    }
+  }
+
+  // PATCH /api/parts/:sku — edit fields on an existing SKU.
+  const partEditMatch = pathname.match(/^\/api\/parts\/([^/]+)$/);
+  if (partEditMatch && req.method === "PATCH") {
+    if (!BASELINE_PARTS) return sendJson(res, 503, { ok: false, errors: ["Parts baseline not loaded."] });
+    try {
+      const sku = decodeURIComponent(partEditMatch[1]);
+      const patch = await parseRequestBody(req);
+      const before = PARTS.parts[sku] ? { ...PARTS.parts[sku] } : null;
+      const updated = await partsLib.update(BASELINE_PARTS, sku, patch, { allowedCategories: categoriesAllowedSet() });
+      rebuildCatalogFromOverrides();
+      // Build a human note focused on the most common edit: price.
+      const noteParts = [];
+      if (before && updated && before.priceCents !== updated.priceCents) {
+        noteParts.push(`price ${fmtMoneyFromCents(before.priceCents)} → ${fmtMoneyFromCents(updated.priceCents)}`);
+      }
+      const otherChanged = Object.keys(patch || {}).filter((k) => k !== "price" && k !== "priceCents");
+      if (otherChanged.length) noteParts.push(`fields: ${otherChanged.join(", ")}`);
+      await settings.recordAudit({
+        who: "admin",
+        action: "catalog.edit",
+        note: `Edited ${sku}${noteParts.length ? " — " + noteParts.join("; ") : ""}`,
+        before, after: updated
+      });
+      return sendJson(res, 200, { ok: true, sku, part: updated });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't update part."] });
+    }
+  }
+
+  // DELETE /api/parts/:sku — soft-delete (tombstone). Runtime additions
+  // get removed from `added` rather than tombstoned.
+  if (partEditMatch && req.method === "DELETE") {
+    if (!BASELINE_PARTS) return sendJson(res, 503, { ok: false, errors: ["Parts baseline not loaded."] });
+    try {
+      const sku = decodeURIComponent(partEditMatch[1]);
+      const result = await partsLib.softDelete(BASELINE_PARTS, sku);
+      rebuildCatalogFromOverrides();
+      await settings.recordAudit({
+        who: "admin",
+        action: "catalog.delete",
+        note: `Deleted ${sku}${result.mode === "removed-from-added" ? " (runtime addition)" : ""}`,
+        before: { sku, mode: result.mode }
+      });
+      return sendJson(res, 200, { ok: true, ...result });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't delete part."] });
+    }
+  }
+
+  // POST /api/parts/:sku/restore — un-tombstone a soft-deleted SKU.
+  const partRestoreMatch = pathname.match(/^\/api\/parts\/([^/]+)\/restore$/);
+  if (partRestoreMatch && req.method === "POST") {
+    if (!BASELINE_PARTS) return sendJson(res, 503, { ok: false, errors: ["Parts baseline not loaded."] });
+    try {
+      const sku = decodeURIComponent(partRestoreMatch[1]);
+      const result = await partsLib.restore(sku);
+      rebuildCatalogFromOverrides();
+      if (result.wasDeleted) {
+        await settings.recordAudit({
+          who: "admin",
+          action: "catalog.restore",
+          note: `Restored ${sku}`,
+          after: { sku }
+        });
+      }
+      return sendJson(res, 200, { ok: true, ...result });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't restore part."] });
+    }
+  }
+
+  // POST /api/parts/import/preview — accept parsed rows from the browser
+  // (SheetJS parses xlsx client-side; see parts-suppliers.js), return a
+  // diff against the current merged catalog. Stages the parsed data in
+  // memory keyed by importId. The commit step (next route) reads from
+  // that stage.
+  //
+  // Body: { rows: [{sku,...}, ...], includeDeletions: bool }
+  if (req.method === "POST" && pathname === "/api/parts/import/preview") {
+    if (!BASELINE_PARTS) return sendJson(res, 503, { ok: false, errors: ["Parts baseline not loaded."] });
+    try {
+      const payload = await parseRequestBody(req, { maxBytes: 4_000_000 });
+      const rows = Array.isArray(payload?.rows) ? payload.rows : [];
+      const includeDeletions = payload?.includeDeletions === true;
+      if (rows.length === 0) {
+        return sendJson(res, 400, { ok: false, errors: ["No rows in the uploaded file."] });
+      }
+      const diff = partsLib.computeImportDiff(PARTS.parts || {}, rows, { includeDeletions });
+      const importId = "imp_" + Math.random().toString(36).slice(2, 12);
+      // Stage for 15 min. Cleanup runs on next request via the timestamp
+      // check below.
+      importStaging.set(importId, {
+        ts: Date.now(),
+        staged: { added: diff.added, edited: diff.edited, deleted: diff.deleted }
+      });
+      cleanupImportStaging();
+      return sendJson(res, 200, { ok: true, importId, diff });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't process the file."] });
+    }
+  }
+
+  // POST /api/parts/import/commit — apply a staged import.
+  // Body: { importId, selections: { added: [...], edited: [...], deleted: [...] } }
+  if (req.method === "POST" && pathname === "/api/parts/import/commit") {
+    if (!BASELINE_PARTS) return sendJson(res, 503, { ok: false, errors: ["Parts baseline not loaded."] });
+    try {
+      const payload = await parseRequestBody(req);
+      cleanupImportStaging();
+      const entry = payload?.importId ? importStaging.get(payload.importId) : null;
+      if (!entry) {
+        return sendJson(res, 410, { ok: false, errors: ["Import session expired. Re-upload the file."] });
+      }
+      const counts = await partsLib.applyImport(
+        BASELINE_PARTS,
+        entry.staged,
+        payload.selections || {},
+        { allowedCategories: categoriesAllowedSet() }
+      );
+      importStaging.delete(payload.importId);
+      rebuildCatalogFromOverrides();
+      await settings.recordAudit({
+        who: "admin",
+        action: "catalog.import",
+        note: `Imported xlsx: ${counts.added} added, ${counts.edited} edited, ${counts.deleted} deleted`,
+        after: counts
+      });
+      return sendJson(res, 200, { ok: true, counts });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't apply import."] });
+    }
   }
 
   // ---------- Custom line item catalog (v36, Patrick 2026-05-13) -------
@@ -5609,8 +5903,11 @@ async function handleApi(req, res, pathname) {
       const payload = await parseRequestBody(req);
       const map = await partSuppliers.bulkSet(payload.updates || {});
       // Refresh the in-memory PARTS catalog so the next /api/parts call
-      // returns the updated supplierIds without a server restart.
-      if (PARTS && PARTS.parts) partSuppliers.mergeIntoCatalog(PARTS.parts, map);
+      // returns the updated supplierIds (and any concurrent catalog
+      // overrides) without a server restart. Goes through the full
+      // rebuild so the catalog-overrides layer isn't accidentally
+      // dropped by a supplier-only merge.
+      rebuildCatalogFromOverrides();
       return sendJson(res, 200, { ok: true, partSuppliers: map });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't update part-supplier map."] });
@@ -5625,10 +5922,9 @@ async function handleApi(req, res, pathname) {
       const sku = decodeURIComponent(partSupplierMatch[1]);
       const payload = await parseRequestBody(req);
       const ids = await partSuppliers.setForSku(sku, payload.supplierIds || []);
-      // Refresh the cached catalog for this SKU specifically.
-      if (PARTS && PARTS.parts && PARTS.parts[sku]) {
-        PARTS.parts[sku].supplierIds = ids.slice();
-      }
+      // Refresh the cached catalog through the full rebuild so catalog
+      // overrides aren't dropped.
+      rebuildCatalogFromOverrides();
       return sendJson(res, 200, { ok: true, sku, supplierIds: ids });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't update SKU supplier."] });
