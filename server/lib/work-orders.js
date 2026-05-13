@@ -688,6 +688,20 @@ async function update(id, patch) {
   if (Array.isArray(patch.zones)) next.zones = patch.zones.map(hydrateZone);
   if (Array.isArray(patch.additionalRepairs)) next.additionalRepairs = patch.additionalRepairs;
   if (Array.isArray(patch.lineItems)) next.lineItems = patch.lineItems;
+  // Photos — wholesale replace when sent. Both the upload endpoint
+  // (/api/work-orders/:id/photos POST) and the delete endpoint
+  // (/api/work-orders/:id/photos/:n DELETE) compute the full intended
+  // photos array and PATCH it back through this function. Without this
+  // branch, `photos` is silently dropped (it's not in allowedTop), the
+  // files land on disk + the history audit entry is written, but the
+  // WO record's photos[] array never updates — so the GET response
+  // returns the old array, state.photos has no new entries, and the
+  // photo strip stays empty no matter how many uploads you do. That
+  // mismatch (audit says "+1 photo" but no thumbnail appears) is
+  // exactly what Patrick was seeing for hours on 2026-05-12 across
+  // tech-mode photo-upload versions v17-v23. Fix lives here, not in
+  // the upload UI.
+  if (Array.isArray(patch.photos)) next.photos = patch.photos;
   // On-site quote field — shallow-merged so partial updates don't clobber
   // siblings. The endpoints handle field-by-field validation; this layer
   // just persists what's allowed through.
