@@ -171,6 +171,23 @@
 //   • Crude (interrupts typing) but reliable. Proper render-without-
 //     reload fix is a follow-up. Right now we need photos to APPEAR.
 // Touches work-order-tech.js only.
+// Bumped 2026-05-12 (v31 → v32): styled in-app zone dialog + event-
+// delegated +Add zone click. Two fixes:
+//   (a) Patrick on the dashboard: "the dashboard works but i wish it
+//       wasn't a prompt like youve made it. it pops up from what
+//       looks like the webpage. Can you change it so it looks like
+//       my website UI?" → built a styled in-app modal (Barlow
+//       Condensed heading, PJL green CTA) used on both desktop and
+//       tech-mode. Replaces window.prompt() everywhere.
+//   (b) Patrick on tech-mode: "literally when you click +Add zone....
+//       nothing appears lol" → switched the tech-mode +Add zone click
+//       from direct binding (techAddZoneBtn?.addEventListener) to
+//       event delegation on document. Direct binding silently no-ops
+//       when the button reference is null at module-load time (iOS
+//       Safari + stale HTML cache + late-DOM scenarios). Delegation
+//       survives all of those.
+// Touches work-order-tech.js + work-order.js (both pages get the
+// same showZoneNumberDialog helper inline) + SW bump.
 // Bumped 2026-05-12 (v30 → v31): zone picker bulletproof + desktop fix.
 // Patrick reported v30 still failing in two places:
 //   (a) Tech-mode "+ Add zone" did nothing. Most likely cause: stale
@@ -269,7 +286,7 @@
 //     and signature last. Tap-jump from the pre-sign checklist
 //     row to #techPaymentSection still works as a fallback.
 // Touches work-order-tech.html only.
-const CACHE_VERSION = "pjl-tech-v31";
+const CACHE_VERSION = "pjl-tech-v32";
 const STATIC_ASSETS = [
   "/crm/work-order-tech.html",
   "/crm/work-order-tech.js",

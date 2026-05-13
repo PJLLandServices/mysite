@@ -17,7 +17,7 @@
 // tech-sw.js's CACHE_VERSION. If this string doesn't match the SW
 // cache version after deploy, the iPhone is serving stale JS — clear
 // website data and reload.
-const TECH_BUILD_VERSION = "tech-v31";
+const TECH_BUILD_VERSION = "tech-v32";
 function _setBadge(text, isError) {
   try {
     const badge = document.getElementById("techBuildBadge");
@@ -1177,6 +1177,61 @@ techZoneList.addEventListener("click", (event) => {
 // the PATCH round-trip, then re-enable.
 const techAddZoneBtn = document.getElementById("techAddZoneBtn");
 
+// v32 — Styled zone-number dialog. Replaces both window.prompt() (ugly
+// browser system UI, sometimes blocked in iOS PWAs) and the inline
+// #techZonePicker DOM (which silently went missing on Patrick's
+// iPhone for unknown reasons). The dialog is built on the fly,
+// appended to document.body, and resolves a Promise with either the
+// zone number (1-99) or null on cancel. Branded styling: Barlow
+// Condensed heading, PJL green CTA. Works regardless of HTML cache
+// state or PWA install state.
+function showZoneNumberDialog() {
+  return new Promise((resolve) => {
+    document.getElementById("pjlZoneDialog")?.remove();
+    const backdrop = document.createElement("div");
+    backdrop.id = "pjlZoneDialog";
+    backdrop.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:10001;display:flex;align-items:center;justify-content:center;padding:20px;";
+    const dialog = document.createElement("div");
+    dialog.style.cssText = "background:#fff;border-radius:14px;padding:24px;max-width:400px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,0.35);box-sizing:border-box;";
+    dialog.innerHTML = `
+      <h3 style="margin:0 0 6px;color:#1B4D2E;font-family:'Barlow Condensed',system-ui,sans-serif;font-size:22px;font-weight:700;letter-spacing:0.5px;text-transform:uppercase;">Add zone</h3>
+      <p style="margin:0 0 16px;color:#555;font-size:14px;">Which zone are you working on? (1–99)</p>
+      <input type="number" id="pjlZoneDialogInput" min="1" max="99" inputmode="numeric" placeholder="e.g. 3"
+        style="width:100%;padding:14px;font-size:18px;border:2px solid #d9d6c8;border-radius:8px;box-sizing:border-box;margin-bottom:16px;outline:none;">
+      <div style="display:flex;gap:10px;">
+        <button type="button" id="pjlZoneDialogCancel" style="flex:1;padding:12px;background:#fff;border:1px solid #c9c6b8;border-radius:8px;font-weight:500;cursor:pointer;font-size:15px;color:#444;">Cancel</button>
+        <button type="button" id="pjlZoneDialogOk" style="flex:2;padding:12px;background:#1B4D2E;color:#fff;border:none;border-radius:8px;font-weight:600;cursor:pointer;font-size:15px;">Add zone</button>
+      </div>
+    `;
+    backdrop.appendChild(dialog);
+    document.body.appendChild(backdrop);
+    const input = dialog.querySelector("#pjlZoneDialogInput");
+    const okBtn = dialog.querySelector("#pjlZoneDialogOk");
+    const cancelBtn = dialog.querySelector("#pjlZoneDialogCancel");
+    function cleanup() { backdrop.remove(); }
+    function tryOk() {
+      const n = Number(input.value);
+      if (!Number.isFinite(n) || n < 1 || n > 99) {
+        input.style.borderColor = "#c00";
+        input.focus();
+        return;
+      }
+      cleanup();
+      resolve(n);
+    }
+    okBtn.addEventListener("click", tryOk);
+    cancelBtn.addEventListener("click", () => { cleanup(); resolve(null); });
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); tryOk(); }
+      else if (e.key === "Escape") { cleanup(); resolve(null); }
+    });
+    backdrop.addEventListener("click", (e) => {
+      if (e.target === backdrop) { cleanup(); resolve(null); }
+    });
+    setTimeout(() => input.focus(), 50);
+  });
+}
+
 // v30 — Zone picker, ANY zone number. Patrick's actual workflow:
 // service call for Zone 3 pipe break + Zone 8 sprinkler head off +
 // Zone 12 sprinkler head broken. Tech goes zone-by-zone, picking
@@ -1193,20 +1248,14 @@ const techAddZoneBtn = document.getElementById("techAddZoneBtn");
 function openZonePicker() {
   const picker = document.getElementById("techZonePicker");
   const numInput = document.getElementById("techZonePickerNumber");
-  // BULLETPROOF FALLBACK (v31). If the picker DOM is missing — e.g.
-  // stale HTML cached at v28/v29 alongside v30+ JS — drop to a
-  // browser prompt(). Always works, no DOM dependency. This is the
-  // safety net for Patrick's "Add zone does nothing" report on
-  // tech-v30. The full picker is preferred when it loads.
+  // BULLETPROOF FALLBACK (v32). If the picker DOM is missing — stale
+  // HTML cache or iOS PWA prompt-block — fall back to the styled
+  // in-app dialog. Always works, brand-consistent UI (no browser
+  // system prompt).
   if (!picker || !numInput) {
-    const raw = window.prompt("Which zone number? (1-99)");
-    if (raw === null) return; // user cancelled
-    const n = Number(raw);
-    if (!Number.isFinite(n) || n < 1 || n > 99) {
-      alert("Zone number must be between 1 and 99.");
-      return;
-    }
-    addZoneAndOpen(n);
+    showZoneNumberDialog().then((n) => {
+      if (n != null) addZoneAndOpen(n);
+    });
     return;
   }
   const knownWrap = document.getElementById("techZonePickerKnown");
@@ -1288,19 +1337,33 @@ function addZoneAndOpen(zoneNumber) {
   if (idx >= 0) openZoneSheet(idx);
 }
 
-techAddZoneBtn?.addEventListener("click", () => {
-  if (state.locked) return;
-  if (techAddZoneBtn.dataset.busy === "1") return;
-  techAddZoneBtn.dataset.busy = "1";
-  techAddZoneBtn.setAttribute("disabled", "");
-  setTimeout(() => {
-    techAddZoneBtn.removeAttribute("disabled");
-    delete techAddZoneBtn.dataset.busy;
-  }, 600);
-  // Always open the picker. The picker handles both paths (property
-  // zones if any + number input always). No more silent fallback to
-  // sequential blank-zone-add.
-  openZonePicker();
+// v32 — Event delegation. Direct binding `techAddZoneBtn?.addEventListener`
+// silently no-ops when techAddZoneBtn is null at module-load time
+// (e.g. stale HTML cache where the button has a different id, or the
+// element somehow wasn't in the DOM at script-run). Patrick reported
+// v31 "tech +Add zone does nothing" — most likely cause was a null
+// binding. Delegation on document survives any of those failure modes
+// AND keeps working if the button is re-rendered dynamically.
+let _addZoneBusy = false;
+document.addEventListener("click", async (event) => {
+  if (!event.target.closest("#techAddZoneBtn")) return;
+  event.preventDefault();
+  if (typeof state !== "undefined" && state && state.locked) return;
+  if (_addZoneBusy) return;
+  _addZoneBusy = true;
+  setTimeout(() => { _addZoneBusy = false; }, 600);
+  // Use the styled in-app dialog directly. The inline #techZonePicker
+  // DOM is no longer relied upon — if it loads, that's a bonus; if
+  // not (Patrick's v30/v31 case), the dialog still works.
+  const n = await showZoneNumberDialog();
+  if (n == null) return;
+  // Refuse duplicates with a friendly nudge.
+  const existing = new Set((state.zones || []).map((z) => Number(z.number)).filter(Boolean));
+  if (existing.has(n)) {
+    alert(`Zone ${n} is already on this work order — tap it in the list above to edit.`);
+    return;
+  }
+  addZoneAndOpen(n);
 });
 
 // Tap a row from the property's known zones — adds that zone with

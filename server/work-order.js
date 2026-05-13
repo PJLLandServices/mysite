@@ -582,24 +582,69 @@ function nextZoneNumber() {
   return max + 1;
 }
 
-function addZoneRow(zone) {
+// v32 — Styled in-app dialog (same shape + branding as the tech-mode
+// version). Replaces the v31 window.prompt() popup that looked like
+// a browser system dialog (Patrick: "i wish it wasn't a prompt like
+// youve made it. it pops up from what looks like the webpage. Can
+// you change it so it looks like my website UI?"). Returns a Promise
+// resolving to the typed zone number, or null on cancel.
+function showZoneNumberDialog() {
+  return new Promise((resolve) => {
+    document.getElementById("pjlZoneDialog")?.remove();
+    const backdrop = document.createElement("div");
+    backdrop.id = "pjlZoneDialog";
+    backdrop.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:10001;display:flex;align-items:center;justify-content:center;padding:20px;";
+    const dialog = document.createElement("div");
+    dialog.style.cssText = "background:#fff;border-radius:14px;padding:24px;max-width:400px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,0.35);box-sizing:border-box;";
+    dialog.innerHTML = `
+      <h3 style="margin:0 0 6px;color:#1B4D2E;font-family:'Barlow Condensed',system-ui,sans-serif;font-size:22px;font-weight:700;letter-spacing:0.5px;text-transform:uppercase;">Add zone</h3>
+      <p style="margin:0 0 16px;color:#555;font-size:14px;">Which zone are you working on? (1–99)</p>
+      <input type="number" id="pjlZoneDialogInput" min="1" max="99" inputmode="numeric" placeholder="e.g. 3"
+        style="width:100%;padding:14px;font-size:18px;border:2px solid #d9d6c8;border-radius:8px;box-sizing:border-box;margin-bottom:16px;outline:none;">
+      <div style="display:flex;gap:10px;">
+        <button type="button" id="pjlZoneDialogCancel" style="flex:1;padding:12px;background:#fff;border:1px solid #c9c6b8;border-radius:8px;font-weight:500;cursor:pointer;font-size:15px;color:#444;">Cancel</button>
+        <button type="button" id="pjlZoneDialogOk" style="flex:2;padding:12px;background:#1B4D2E;color:#fff;border:none;border-radius:8px;font-weight:600;cursor:pointer;font-size:15px;">Add zone</button>
+      </div>
+    `;
+    backdrop.appendChild(dialog);
+    document.body.appendChild(backdrop);
+    const input = dialog.querySelector("#pjlZoneDialogInput");
+    const okBtn = dialog.querySelector("#pjlZoneDialogOk");
+    const cancelBtn = dialog.querySelector("#pjlZoneDialogCancel");
+    function cleanup() { backdrop.remove(); }
+    function tryOk() {
+      const n = Number(input.value);
+      if (!Number.isFinite(n) || n < 1 || n > 99) {
+        input.style.borderColor = "#c00";
+        input.focus();
+        return;
+      }
+      cleanup();
+      resolve(n);
+    }
+    okBtn.addEventListener("click", tryOk);
+    cancelBtn.addEventListener("click", () => { cleanup(); resolve(null); });
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); tryOk(); }
+      else if (e.key === "Escape") { cleanup(); resolve(null); }
+    });
+    backdrop.addEventListener("click", (e) => {
+      if (e.target === backdrop) { cleanup(); resolve(null); }
+    });
+    setTimeout(() => input.focus(), 50);
+  });
+}
+
+async function addZoneRow(zone) {
   woEmptyZones.hidden = true;
-  // v31 — when called without a pre-built zone (i.e. the +Add zone
-  // button), prompt for the actual zone number instead of assigning
-  // the next sequential one. Patrick's service-call flow: arrive for
-  // Zone 3 pipe break + Zone 8 head + Zone 12 head — non-consecutive
-  // zone numbers. The old nextZoneNumber() auto-incremented to 1,2,3
-  // regardless. Now: tech types 3, gets zone 3. Types 8, gets zone 8.
+  // v32 — when called without a pre-built zone (i.e. the +Add zone
+  // button), open the styled in-app dialog. Same brand UI both on
+  // tech-mode and here. Refuses non-numeric / out-of-range entries
+  // and duplicates.
   let seed = zone;
   if (!seed) {
-    const raw = window.prompt("Which zone number? (1-99)");
-    if (raw === null) return; // user cancelled
-    const n = Number(raw);
-    if (!Number.isFinite(n) || n < 1 || n > 99) {
-      alert("Zone number must be between 1 and 99.");
-      return;
-    }
-    // Refuse duplicates so the row list stays unique.
+    const n = await showZoneNumberDialog();
+    if (n == null) return;
     const onPage = new Set();
     woZones.querySelectorAll(".wo-zone-num").forEach((el) => {
       const v = Number(String(el.textContent || "").replace(/[^0-9]/g, ""));
