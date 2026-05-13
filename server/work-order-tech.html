@@ -35,6 +35,18 @@
        Inline styles to dodge a CSS cache bump too. -->
   <div id="techBuildBadge" style="position:fixed;bottom:6px;left:6px;z-index:9999;font:600 11px/1 system-ui,-apple-system,sans-serif;color:#666;background:rgba(255,255,255,.85);padding:3px 6px;border-radius:4px;pointer-events:none">html only</div>
 
+  <!-- Floating photo button (FAB) — bottom-right corner. Always available
+       while the WO is open + editable so the tech can capture a photo at
+       any moment without scrolling. Tapping triggers the existing
+       techWoPhotoInput file picker; the upload flow is unchanged. Hidden
+       by default — JS unhides it once state loads and locked === false.
+       Uses env(safe-area-inset-bottom) so it stays above the iPhone home
+       indicator. Inline styles to dodge a CSS cache invalidation. -->
+  <button type="button" id="techFloatingPhotoBtn" aria-label="Add photo to this work order" hidden
+    style="position:fixed;right:16px;bottom:calc(20px + env(safe-area-inset-bottom));width:64px;height:64px;border-radius:50%;background:#1B4D2E;color:#fff;font-size:30px;line-height:1;border:none;box-shadow:0 6px 18px rgba(0,0,0,0.28);z-index:1000;cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0;">
+    <span aria-hidden="true">📷</span>
+  </button>
+
   <main class="tech-main" id="techMain" hidden>
     <!-- Locked banner — visible when the WO has been signed off. The
          tech can still scroll/read everything but interactive controls

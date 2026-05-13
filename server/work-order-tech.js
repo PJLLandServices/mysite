@@ -17,7 +17,7 @@
 // tech-sw.js's CACHE_VERSION. If this string doesn't match the SW
 // cache version after deploy, the iPhone is serving stale JS — clear
 // website data and reload.
-const TECH_BUILD_VERSION = "tech-v25";
+const TECH_BUILD_VERSION = "tech-v26";
 function _setBadge(text, isError) {
   try {
     const badge = document.getElementById("techBuildBadge");
@@ -157,6 +157,33 @@ function _bindPhotoUploadListener() {
 }
 _bindPhotoUploadListener();
 document.addEventListener("DOMContentLoaded", _bindPhotoUploadListener);
+
+// Floating photo button (v26). Same upload pipeline as the Visit-photos
+// section — the FAB just triggers a programmatic click on the hidden
+// file input. Visibility is managed by updateFloatingPhotoBtn() which
+// gets called every time state.locked could have flipped (load,
+// signature submit, server PATCH).
+function _bindFloatingPhotoBtn() {
+  const fab = document.getElementById("techFloatingPhotoBtn");
+  if (!fab || fab.dataset.bound === "1") return;
+  fab.dataset.bound = "1";
+  fab.addEventListener("click", () => {
+    if (typeof state !== "undefined" && state && state.locked) return;
+    const input = document.getElementById("techWoPhotoInput");
+    if (input) input.click();
+  });
+}
+function updateFloatingPhotoBtn() {
+  const fab = document.getElementById("techFloatingPhotoBtn");
+  if (!fab) return;
+  // Show once we have a WO loaded AND it isn't locked. On a fresh page
+  // load (state.id not yet hydrated) keep it hidden so it doesn't
+  // appear before the WO data has been fetched.
+  const ready = typeof state !== "undefined" && state && state.id && !state.locked;
+  fab.hidden = !ready;
+}
+_bindFloatingPhotoBtn();
+document.addEventListener("DOMContentLoaded", _bindFloatingPhotoBtn);
 
 const techHeader = document.getElementById("techHeader");
 const techBack = document.getElementById("techBack");
@@ -2622,6 +2649,9 @@ function applyLockState(locked) {
   const banner = document.getElementById("techLockedBanner");
   const meta = document.getElementById("techLockedMeta");
   if (banner) banner.hidden = !locked;
+  // Floating photo FAB hides on locked WO (no more uploads accepted)
+  // and appears as soon as the WO is editable.
+  if (typeof updateFloatingPhotoBtn === "function") updateFloatingPhotoBtn();
   if (locked && meta) {
     const parts = [];
     if (state.signature?.customerName) parts.push(`by ${state.signature.customerName}`);

@@ -171,6 +171,16 @@
 //   • Crude (interrupts typing) but reliable. Proper render-without-
 //     reload fix is a follow-up. Right now we need photos to APPEAR.
 // Touches work-order-tech.js only.
+// Bumped 2026-05-12 (v25 → v26): floating photo button (FAB). Patrick's
+// stated preference: "i'd love for the 'add photo' section to float
+// with the entire page. upload photos pertaining to the workorder at
+// any time." Added a fixed bottom-right circular button (📷) that
+// triggers the existing techWoPhotoInput file picker. Visible while
+// the WO is open and editable; hidden once it locks. Same upload
+// pipeline as the in-section "Add visit photo" label — the FAB is
+// purely a trigger surface for the existing input. Touches
+// work-order-tech.html (new FAB element) + work-order-tech.js
+// (click binding + applyLockState() hook to toggle visibility).
 // Bumped 2026-05-12 (v24 → v25): tech-mode layout + payment-radio fix.
 // Patrick hit "Pre-sign gates unmet: payment method not selected" at
 // submit time even though the No radio LOOKED checked. Two bugs:
@@ -186,7 +196,7 @@
 //     and signature last. Tap-jump from the pre-sign checklist
 //     row to #techPaymentSection still works as a fallback.
 // Touches work-order-tech.html only.
-const CACHE_VERSION = "pjl-tech-v25";
+const CACHE_VERSION = "pjl-tech-v26";
 const STATIC_ASSETS = [
   "/crm/work-order-tech.html",
   "/crm/work-order-tech.js",
