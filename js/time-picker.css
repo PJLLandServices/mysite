@@ -175,8 +175,11 @@
 }
 .tp-slot-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
-  gap: 8px;
+  /* Bucket buttons need more horizontal room than the old "8:00 AM"
+     buttons did — auto-fill at 180px gives the labels two-up on desktop
+     and one-up on mobile. */
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 10px;
 }
 .tp-slot {
   min-height: 44px;

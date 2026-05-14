@@ -195,9 +195,26 @@ const DEFAULT_HOURS = {
 const DEFAULT_SETTINGS = {
   bufferMinutes: 15,         // breathing room between jobs (parking, equipment)
   leadTimeHours: 5,          // soonest a slot can start from "now"
-  slotIncrementMinutes: 30,  // how often candidate slots start (08:00, 08:30, 09:00, ...)
+  slotIncrementMinutes: 30,  // legacy — only used if BOOKING_BUCKETS is empty
   daysAhead: 14              // how many days into the future the calendar scans
 };
+
+// Customer-facing booking buckets. ONE customer per bucket per day —
+// Patrick committed to dropping the 20-slot grid in favour of two
+// labelled windows so the booking page reads like "morning or afternoon"
+// instead of "pick a precise minute." Booking record stores the bucket
+// start as scheduledFor and the bucket length as durationMinutes; the
+// customer never sees a precise time anywhere (confirmation, portal,
+// email all show the bucket label). Patrick's iCal feed blocks the
+// whole bucket window so he can't double-book the same morning.
+//
+// Saturday's working hours (8AM-12PM) only fit the morning bucket;
+// the afternoon entry is silently skipped per-day if it doesn't fit
+// the open..close window.
+const BOOKING_BUCKETS = [
+  { key: "morning",   label: "Morning Appointment",   from: "08:00", to: "12:00", windowLabel: "8 AM – 12 PM" },
+  { key: "afternoon", label: "Afternoon Appointment", from: "12:00", to: "17:00", windowLabel: "12 PM – 5 PM" }
+];
 
 // =============== Helpers ===============
 
@@ -257,10 +274,6 @@ async function listAvailableSlots(opts = {}) {
   const leadTimeMs = cfg.leadTimeHours * 60 * 60 * 1000;
   const earliestStart = now.getTime() + leadTimeMs;
   const buffer = cfg.bufferMinutes;
-  // Per-service override beats the global default. Commercial services use a
-  // 300-min increment so customers see two cleanly spaced AM/PM slots.
-  const incrementMin = service.slotIncrementMinutes || cfg.slotIncrementMinutes;
-  const slotDuration = service.minutes;
 
   // Bookings normalized: only future, only with start/end/coords. Sorted by start.
   const norm = bookings
@@ -291,7 +304,6 @@ async function listAvailableSlots(opts = {}) {
 
     const openMin = parseHHmmToMinutes(window.open);
     const closeMin = parseHHmmToMinutes(window.close);
-    const lastStartMin = parseHHmmToMinutes(window.lastStart);
 
     // Bookings on this day, sorted.
     const dayBookings = norm.filter((b) => sameDayLocal(b.start, day));
@@ -300,49 +312,59 @@ async function listAvailableSlots(opts = {}) {
       b.start, b.end, dateAtLocalMinutes(day, openMin), dateAtLocalMinutes(day, closeMin)
     ));
 
-    for (let m = openMin; m <= lastStartMin; m += incrementMin) {
-      const slotStart = dateAtLocalMinutes(day, m);
-      const slotEnd = new Date(slotStart.getTime() + slotDuration * 60 * 1000);
+    // One candidate per bucket per day. Bucket must fit fully inside
+    // the day's open..close window (so Saturday's 8-12 hours yield only
+    // a morning bucket — the afternoon one is silently skipped).
+    for (const bucket of BOOKING_BUCKETS) {
+      const bucketFromMin = parseHHmmToMinutes(bucket.from);
+      const bucketToMin = parseHHmmToMinutes(bucket.to);
+      // Bucket must fit fully inside the day's open/close window.
+      if (bucketFromMin < openMin) continue;
+      if (bucketToMin > closeMin) continue;
 
-      // Window guards.
-      if (slotEnd.getTime() > dateAtLocalMinutes(day, closeMin).getTime()) continue;
+      const slotStart = dateAtLocalMinutes(day, bucketFromMin);
+      const slotEnd = dateAtLocalMinutes(day, bucketToMin);
+      const bucketDurationMin = bucketToMin - bucketFromMin;
+
+      // Lead time guard — bucket start must be at least leadTimeHours away.
       if (slotStart.getTime() < earliestStart) continue;
 
-      // Block guards.
+      // Admin-blocked time inside the bucket → bucket unavailable.
       if (dayBlocks.some((b) => rangeOverlaps(slotStart, slotEnd, b.start, b.end))) continue;
 
-      // Direct conflict with another booking?
-      if (dayBookings.some((b) => rangeOverlaps(slotStart, slotEnd, b.start, b.end))) continue;
+      // Bucket-occupied check: any existing booking whose start falls
+      // inside this bucket window means the bucket is taken. One
+      // customer per bucket per day — that's the whole point of the
+      // bucket UX.
+      const occupied = dayBookings.some((b) =>
+        b.start.getTime() >= slotStart.getTime() && b.start.getTime() < slotEnd.getTime()
+      );
+      if (occupied) continue;
 
-      // Find immediate prev / next bookings on this day.
-      const prev = [...dayBookings].reverse().find((b) => b.end.getTime() <= slotStart.getTime());
-      const next = dayBookings.find((b) => b.start.getTime() >= slotEnd.getTime());
-
-      // Travel from prev — if no prev, this is the first job of the day and PJL
-      // is presumed to depart from base; we don't gate on travel from base
-      // (Patrick can leave whenever). The lead time + open hour already
-      // handle "is the day even started yet."
-      if (prev) {
-        const travelIn = await travelMinutes(prev.coords, customerCoords);
-        const earliestSlotStart = prev.end.getTime() + (travelIn + buffer) * 60 * 1000;
-        if (slotStart.getTime() < earliestSlotStart) continue;
-      }
-
-      // Travel to next — must finish, drive there, and have buffer before next starts.
-      if (next) {
-        const travelOut = await travelMinutes(customerCoords, next.coords);
-        const latestSlotEnd = next.start.getTime() - (travelOut + buffer) * 60 * 1000;
-        if (slotEnd.getTime() > latestSlotEnd) continue;
-      }
+      // Travel-time gating is intentionally skipped in bucket mode.
+      // Each bucket is 4–5 hours wide; the noon transition between
+      // morning and afternoon is a 0-minute gap on paper, but the
+      // bucket's deliberate looseness ("we'll arrive sometime in this
+      // window") absorbs travel naturally. Applying the old
+      // prev.end + travel + buffer check would refuse every afternoon
+      // slot whenever a morning booking exists, which is wrong: the
+      // buckets are designed to fit two distinct customers per day
+      // with travel inside the bucket window, not between adjacent
+      // slot boundaries.
 
       results.push({
         start: slotStart.toISOString(),
         end: slotEnd.toISOString(),
-        durationMinutes: slotDuration,
+        durationMinutes: bucketDurationMin,
         serviceKey,
         serviceLabel: service.label,
         dayLabel: dayLabel(slotStart),
-        timeLabel: slotStart.toLocaleTimeString("en-CA", { hour: "numeric", minute: "2-digit" })
+        // timeLabel becomes the bucket label so every downstream display
+        // (confirmation copy, time-picker button, portal "your appointment
+        // is at X" line) reads "Morning Appointment" instead of "8:00 AM".
+        timeLabel: bucket.label,
+        bucketKey: bucket.key,
+        bucketWindow: bucket.windowLabel
       });
     }
   }
@@ -435,6 +457,7 @@ function expandDaysToRange(slots, { from, to, hours, now } = {}) {
 
 module.exports = {
   BOOKABLE_SERVICES,
+  BOOKING_BUCKETS,
   DEFAULT_HOURS,
   DEFAULT_SETTINGS,
   listAvailableSlots,

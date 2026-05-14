@@ -447,7 +447,13 @@
           end: slotMeta.end || null,
           timeLabel: slotMeta.timeLabel || new Date(iso).toLocaleTimeString("en-CA", { hour: "numeric", minute: "2-digit" }),
           dayLabel: slotMeta.dayLabel || new Date(iso).toLocaleDateString("en-CA", { weekday: "long", month: "short", day: "numeric" }),
-          durationMinutes: slotMeta.durationMinutes || state.serviceMeta.minutes
+          durationMinutes: slotMeta.durationMinutes || state.serviceMeta.minutes,
+          // Bucket-mode fields. When present, customer-facing copy uses
+          // bucketWindow ("8 AM – 12 PM") instead of the service's
+          // on-site duration — Patrick committed to no precise times in
+          // customer-facing surfaces.
+          bucketKey: slotMeta.bucketKey || null,
+          bucketWindow: slotMeta.bucketWindow || null
         };
         // Brief debounce so the visual "selected" state lands before the
         // contact step swaps in — matches the previous flow's feel.
@@ -464,12 +470,17 @@
     const zoneRow = state.zoneCount
       ? `<dt>Zones</dt><dd>${escapeHtml(zoneCountLabel(state.zoneCount))}</dd>`
       : "";
-    const durationLabel = state.serviceMeta.displayMinutes || `${state.serviceMeta.minutes} min`;
+    // Bucket mode: show the bucket window ("8 AM – 12 PM") instead of
+    // the service's on-site duration. Customer never sees a precise
+    // arrival time anywhere downstream.
+    const timeSubLabel = state.selectedSlot.bucketWindow
+      || state.serviceMeta.displayMinutes
+      || `${state.serviceMeta.minutes} min`;
     contactSummary.innerHTML = `
       <dt>Service</dt><dd>${escapeHtml(state.serviceMeta.label)}</dd>
       ${zoneRow}
       <dt>Day</dt><dd>${escapeHtml(state.selectedSlot.dayLabel)}</dd>
-      <dt>Time</dt><dd>${escapeHtml(state.selectedSlot.timeLabel)} (${escapeHtml(durationLabel)})</dd>
+      <dt>Time</dt><dd>${escapeHtml(state.selectedSlot.timeLabel)} (${escapeHtml(timeSubLabel)})</dd>
       <dt>Address</dt><dd>${escapeHtml(state.formattedAddress)}</dd>
     `;
   }
@@ -543,7 +554,14 @@
       const detailIntro = finalFirstName
         ? `Thanks ${escapeHtml(finalFirstName)} — your `
         : "Your ";
-      confirmDetail.innerHTML = `${detailIntro}${escapeHtml(state.serviceMeta.label)} is set for <strong>${escapeHtml(state.selectedSlot.dayLabel)}</strong> at <strong>${escapeHtml(state.selectedSlot.timeLabel)}</strong>.`;
+      // Bucket-mode reads naturally with an em-dash separator and the
+      // window subtitle: "Tuesday May 14 — Morning Appointment (8 AM – 12 PM)".
+      // Legacy non-bucket slots fall back to "...set for <day> at <time>"
+      // so the copy stays sensible if buckets are ever turned off.
+      const bucketTail = state.selectedSlot.bucketWindow
+        ? `<strong>${escapeHtml(state.selectedSlot.dayLabel)}</strong> &mdash; <strong>${escapeHtml(state.selectedSlot.timeLabel)}</strong> (${escapeHtml(state.selectedSlot.bucketWindow)})`
+        : `<strong>${escapeHtml(state.selectedSlot.dayLabel)}</strong> at <strong>${escapeHtml(state.selectedSlot.timeLabel)}</strong>`;
+      confirmDetail.innerHTML = `${detailIntro}${escapeHtml(state.serviceMeta.label)} is set for ${bucketTail}.`;
       portalCta.href = data.portalUrl || "#";
       showStep("confirm");
     } catch (error) {

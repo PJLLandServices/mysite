@@ -267,13 +267,15 @@
         btn.type = "button";
         btn.className = "tp-slot" + (selectedSlotStart === slot.start ? " is-selected" : "");
         btn.dataset.slotStart = slot.start;
-        const time = slot.timeLabel || new Date(slot.start).toLocaleTimeString("en-CA", {
+        const primary = slot.timeLabel || new Date(slot.start).toLocaleTimeString("en-CA", {
           hour: "numeric", minute: "2-digit"
         });
-        const duration = slot.durationMinutes
-          ? `<span class="tp-slot-dur">${slot.durationMinutes} min</span>`
-          : "";
-        btn.innerHTML = `<span class="tp-slot-time">${escapeHtml(time)}</span>${duration}`;
+        // bucketWindow ("8 AM – 12 PM") shows under the label when present;
+        // legacy slots without it fall back to the duration in minutes.
+        const subtitle = slot.bucketWindow
+          ? `<span class="tp-slot-dur">${escapeHtml(slot.bucketWindow)}</span>`
+          : (slot.durationMinutes ? `<span class="tp-slot-dur">${slot.durationMinutes} min</span>` : "");
+        btn.innerHTML = `<span class="tp-slot-time">${escapeHtml(primary)}</span>${subtitle}`;
         slotGridEl.appendChild(btn);
       });
       slotsBlock.hidden = false;

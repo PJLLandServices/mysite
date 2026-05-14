@@ -159,12 +159,29 @@ function fill(template, vars) {
 // Format a booking start time into customer-facing date/time strings.
 // Eastern Time is enforced server-wide via process.env.TZ in server.js,
 // so toLocale* will produce the right zone naturally.
+//
+// Bucket-mode: when lead.booking carries bucketLabel ("Morning
+// Appointment") + bucketWindow ("8 AM – 12 PM"), we substitute those
+// for the precise time so confirmation emails read "your service is
+// booked on Tuesday May 14 — Morning Appointment (8 AM – 12 PM)"
+// instead of leaking a precise arrival hour. Patrick's rule: customers
+// never see a precise time on customer-facing surfaces.
 function bookingDateTime(lead) {
   const start = lead.booking?.start ? new Date(lead.booking.start) : null;
   if (!start || Number.isNaN(start.getTime())) return { dateStr: "", timeStr: "" };
+  const bucketLabel = lead.booking?.bucketLabel;
+  const bucketWindow = lead.booking?.bucketWindow;
+  // Bucket replaces the precise time. timeStr is what the {timeStr}
+  // template placeholder substitutes, so "...at {timeStr}" reads
+  // "...at Morning Appointment (8 AM – 12 PM)" without touching any
+  // template body. Legacy bookings without a bucket fall back to the
+  // hour:minute display.
+  const timeStr = bucketLabel
+    ? (bucketWindow ? `${bucketLabel} (${bucketWindow})` : bucketLabel)
+    : start.toLocaleTimeString("en-CA", { hour: "numeric", minute: "2-digit" });
   return {
     dateStr: start.toLocaleDateString("en-CA", { weekday: "long", month: "long", day: "numeric" }),
-    timeStr: start.toLocaleTimeString("en-CA", { hour: "numeric", minute: "2-digit" })
+    timeStr
   };
 }
 

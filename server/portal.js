@@ -305,13 +305,26 @@ function renderWorkOrder(data) {
   workOrderStatus.textContent = (wo.status || "scheduled").replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
   workOrderService.textContent = booking.serviceLabel || "—";
   workOrderPrice.textContent = wo.priceLabel || (wo.total ? `$${wo.total}` : "Custom quote");
-  workOrderDuration.textContent = booking.durationMinutes ? `${booking.durationMinutes} min` : "—";
+  // Bucket-mode hides the on-site duration line in favour of the bucket
+  // window ("8 AM – 12 PM"). Legacy bookings without a bucket fall back
+  // to the old "<N> min" display.
+  workOrderDuration.textContent = booking.bucketWindow
+    || (booking.durationMinutes ? `${booking.durationMinutes} min` : "—");
 
   if (booking.start) {
     const start = new Date(booking.start);
-    workOrderWhen.textContent = start.toLocaleString("en-CA", {
-      weekday: "long", month: "long", day: "numeric", hour: "numeric", minute: "2-digit"
-    });
+    if (booking.bucketLabel) {
+      // "Tuesday, May 14 — Morning Appointment"
+      const dayPart = start.toLocaleDateString("en-CA", {
+        weekday: "long", month: "long", day: "numeric"
+      });
+      workOrderWhen.textContent = `${dayPart} — ${booking.bucketLabel}`;
+    } else {
+      // Legacy bookings (pre-bucket): still show precise time.
+      workOrderWhen.textContent = start.toLocaleString("en-CA", {
+        weekday: "long", month: "long", day: "numeric", hour: "numeric", minute: "2-digit"
+      });
+    }
   } else {
     workOrderWhen.textContent = "—";
   }

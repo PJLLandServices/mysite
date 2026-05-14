@@ -1561,7 +1561,13 @@ async function portalPayloadForLead(lead, req) {
       end: lead.booking.end,
       durationMinutes: lead.booking.durationMinutes,
       serviceLabel: lead.booking.serviceLabel,
-      zoneCount: lead.booking.zoneCount
+      zoneCount: lead.booking.zoneCount,
+      // Bucket-mode display fields. The portal "Your appointment is at
+      // X" line uses these instead of a precise time so the customer
+      // sees "Morning Appointment (8 AM – 12 PM)" exactly as on the
+      // confirmation page.
+      bucketLabel: lead.booking.bucketLabel || null,
+      bucketWindow: lead.booking.bucketWindow || null
     } : null,
     workOrder: lead.booking?.workOrder ? {
       id: lead.booking.workOrder.id,
@@ -1917,7 +1923,6 @@ async function rescheduleBooking({ bookingId, slotStart, actor = "admin", actorN
   const service = BOOKABLE_SERVICES[serviceKey];
   if (!service) return { ok: false, status: 422, errors: ["Booking has no recognizable service tier — call PJL to reschedule."] };
   const startDate = new Date(slotStart);
-  const endDate = new Date(startDate.getTime() + service.minutes * 60 * 1000);
 
   const address = bookingRec.address || lead?.contact?.address || "";
   if (!address) return { ok: false, status: 422, errors: ["Address missing on the booking — can't compute drive times."] };
@@ -1940,6 +1945,10 @@ async function rescheduleBooking({ bookingId, slotStart, actor = "admin", actorN
   if (!matched) {
     return { ok: false, status: 409, errors: ["That slot isn't available — please pick another time."] };
   }
+  // Bucket-mode: the slot end is the bucket window end (12:00 / 17:00).
+  // matched.end carries that ISO string from listAvailableSlots; same
+  // for durationMinutes (bucket length, not service.minutes).
+  const endDate = new Date(matched.end);
 
   // 1) Push the canonical bookings.json record.
   const updatedBooking = await bookings.reschedule(bookingId, {
@@ -1953,6 +1962,13 @@ async function rescheduleBooking({ bookingId, slotStart, actor = "admin", actorN
   if (lead && lead.booking) {
     lead.booking.start = startDate.toISOString();
     lead.booking.end = endDate.toISOString();
+    // Bucket-mode: keep the legacy snapshot in sync with the new slot's
+    // bucket fields. Without this, the portal "Your appointment is at X"
+    // copy would show the OLD bucket label after a reschedule.
+    lead.booking.durationMinutes = matched.durationMinutes;
+    lead.booking.bucketKey = matched.bucketKey || null;
+    lead.booking.bucketWindow = matched.bucketWindow || null;
+    lead.booking.bucketLabel = matched.timeLabel || null;
     lead.crm = lead.crm || {};
     lead.crm.activity = Array.isArray(lead.crm.activity) ? lead.crm.activity : [];
     const prev = bookingRec.scheduledFor ? new Date(bookingRec.scheduledFor) : null;
@@ -9072,7 +9088,6 @@ Customer signature captured at ${new Date().toISOString()}.`;
       if (!service) return sendJson(res, 422, { ok: false, errors: ["Unknown service."] });
       const startDate = new Date(slotStart);
       if (Number.isNaN(startDate.getTime())) return sendJson(res, 422, { ok: false, errors: ["Invalid slot time."] });
-      const endDate = new Date(startDate.getTime() + service.minutes * 60 * 1000);
 
       // Re-validate: the same slot must still be available now (someone else might
       // have grabbed it in the seconds since the calendar was rendered).
@@ -9098,6 +9113,11 @@ Customer signature captured at ${new Date().toISOString()}.`;
       if (!matched) {
         return sendJson(res, 409, { ok: false, errors: ["That slot was just taken. Please pick another time."] });
       }
+      // Use the bucket end as the booking end so the canonical
+      // bookings.json record (and Patrick's iCal feed) span the full
+      // bucket window. matched.end is the bucket end ISO string;
+      // matched.durationMinutes is the bucket length.
+      const endDate = new Date(matched.end);
 
       // Build the lead. Status is set to a category that maps to "scheduled" —
       // for site visits we go "site_visit", for direct work we go "won" (because
@@ -9196,7 +9216,16 @@ Customer signature captured at ${new Date().toISOString()}.`;
       result.lead.booking = {
         start: startDate.toISOString(),
         end: endDate.toISOString(),
-        durationMinutes: service.minutes,
+        // Bucket-mode: durationMinutes is the bucket window length (e.g.
+        // 240 for morning). Patrick's iCal therefore shows the full
+        // 8–12 / 12–5 block. service.minutes still describes on-site
+        // time; we capture it separately so WO + invoicing logic can
+        // reach it without re-computing.
+        durationMinutes: matched.durationMinutes,
+        onSiteMinutes: service.minutes,
+        bucketKey: matched.bucketKey || null,
+        bucketWindow: matched.bucketWindow || null,
+        bucketLabel: matched.timeLabel || null,
         serviceKey,
         serviceLabel: service.label,
         zoneCount,
