@@ -56,6 +56,51 @@ function extractStreetAndCity(address) {
   return { street, city };
 }
 
+// Build the LOCATION value in the exact form iOS auto-recognizes for
+// the Maps tap affordance:
+//   "<House Number> <Street Name>, <Town>, ON <Postal Code>, Canada"
+// Single-line, comma-separated, province + postal as one segment.
+//
+// Prefers the lead's structured contact fields (set by applyCrmUpdate
+// at intake / edit time); falls back to parsing the booking.address
+// blob when the lead is missing structured data (legacy records).
+function formatMapsAddress(lead, booking) {
+  const c = (lead && lead.contact) || {};
+  const sn = String(c.streetNumber || "").trim();
+  const sname = String(c.streetName || "").trim();
+  const town = String(c.town || "").trim();
+  const postal = String(c.postalCode || "").trim();
+  if (sn && sname && town) {
+    const street = `${sn} ${sname}`;
+    const provincePostal = `ON${postal ? " " + postal : ""}`;
+    return [street, town, provincePostal, "Canada"].join(", ");
+  }
+  // Parsing fallback for legacy data without structured contact fields.
+  const raw = String(booking?.address || "").trim();
+  if (!raw) return "";
+  // Split on newlines first (the PJL canonical multi-line form), then
+  // commas (already-flattened cases). Filter empties.
+  const lines = raw.split(/\n+/).map((p) => p.trim()).filter(Boolean);
+  // Detect the "<Town> ON <Postal>" line and split city from province.
+  const out = [];
+  for (const line of lines) {
+    const m = line.match(/^(.+?)\s+(ON\b[\s\S]*)$/i);
+    if (m) {
+      out.push(m[1].trim());
+      out.push(m[2].trim());
+    } else {
+      // Already comma-separated? Push individual parts.
+      const innerCommas = line.split(",").map((p) => p.trim()).filter(Boolean);
+      if (innerCommas.length > 1) {
+        for (const ic of innerCommas) out.push(ic);
+      } else {
+        out.push(line);
+      }
+    }
+  }
+  return out.join(", ");
+}
+
 // Resolve the human-facing title prefix. Prefers FAMILY_SHORT_NAMES; if
 // the service has no family or an unknown one, falls back to the
 // bookable service label (trimmed of the parenthetical tier suffix).
@@ -70,13 +115,36 @@ function shortServiceName(booking) {
 }
 
 // Build the VEVENT block for one booking. Returns an array of lines.
-function buildVevent(booking, { baseUrl, now }) {
+// `lead` (optional) is the resolved lead record for this booking — we
+// prefer its structured contact fields when available so the LOCATION
+// renders in the form iOS auto-recognizes for the Maps tap.
+function buildVevent(booking, { baseUrl, now, lead = null }) {
   const start = new Date(booking.scheduledFor);
   const duration = Number(booking.durationMinutes) || DEFAULT_DURATION_MIN;
   const end = new Date(start.getTime() + duration * 60 * 1000);
 
   const uid = `${booking.id}@pjllandservices.com`;
-  const { street, city } = extractStreetAndCity(booking.address);
+
+  // The Maps-tappable address goes into LOCATION. Title's "<service> -
+  // <street>, <city>" tail comes from the same source so the two stay
+  // consistent. When the lead has structured contact fields they win;
+  // otherwise we parse booking.address.
+  const mapsAddress = formatMapsAddress(lead, booking);
+  let street = "";
+  let city = "";
+  if (lead && lead.contact) {
+    const c = lead.contact;
+    const sn = String(c.streetNumber || "").trim();
+    const sname = String(c.streetName || "").trim();
+    if (sn && sname) street = `${sn} ${sname}`;
+    if (c.town) city = String(c.town).trim();
+  }
+  if (!street || !city) {
+    const parsed = extractStreetAndCity(booking.address);
+    if (!street) street = parsed.street;
+    if (!city) city = parsed.city;
+  }
+
   const titlePrefix = shortServiceName(booking);
   const locationParts = [street, city].filter(Boolean).join(", ");
   const summary = locationParts
@@ -111,8 +179,8 @@ function buildVevent(booking, { baseUrl, now }) {
     `DTEND;TZID=America/Toronto:${formatLocalDateTime(end)}`,
     `SUMMARY:${escapeIcalValue(summary)}`
   ];
-  if (booking.address) {
-    lines.push(`LOCATION:${escapeIcalValue(booking.address)}`);
+  if (mapsAddress) {
+    lines.push(`LOCATION:${escapeIcalValue(mapsAddress)}`);
   }
   if (description) {
     lines.push(`DESCRIPTION:${escapeIcalValue(description)}`);
@@ -149,7 +217,17 @@ function wrapCalendar(eventLines) {
 // no information — there's no way to tell from the response whether the
 // endpoint exists, whether the token is wrong, or whether the feed is
 // disabled.
-async function generateIcsForToken(token, { baseUrl = "https://pjllandservices.com" } = {}) {
+//
+// `leads` is the full leads array (passed from server.js because
+// readLeads lives there to avoid a circular dep). We use it to:
+//   1. Heal lead.booking → canonical bookings.json for any leads whose
+//      booking hasn't been upserted yet (fixes "I have 4 bookings but
+//      only 2 show up" — see /admin/schedule reads /api/quotes which
+//      iterates lead.booking; the feed reads bookings.json which only
+//      contains records that went through upsertFromLead).
+//   2. Look up the lead per booking so we can format the address from
+//      structured contact fields for the iOS Maps tap.
+async function generateIcsForToken(token, { baseUrl = "https://pjllandservices.com", leads = [] } = {}) {
   const cfg = await settings.get();
   const feed = cfg.icalFeed || {};
   if (!feed.enabled || !feed.token) return { ok: false, status: 404 };
@@ -162,7 +240,29 @@ async function generateIcsForToken(token, { baseUrl = "https://pjllandservices.c
   const crypto = require("node:crypto");
   if (!crypto.timingSafeEqual(a, b)) return { ok: false, status: 404 };
 
-  const all = await bookings.list();
+  // Heal: any lead with a real lead.booking that doesn't have a
+  // canonical bookings.json record gets upserted now. Idempotent — if
+  // the canonical record exists, upsertFromLead refreshes it without
+  // duplicating. Failures are swallowed so one bad lead doesn't break
+  // the feed for the rest.
+  let initialBookings = await bookings.list();
+  const canonicalByLead = new Set(initialBookings.map((b) => b.leadId).filter(Boolean));
+  let healed = false;
+  for (const lead of leads) {
+    if (!lead?.booking?.start) continue;
+    if (canonicalByLead.has(lead.id)) continue;
+    try {
+      const upserted = await bookings.upsertFromLead(lead);
+      if (upserted) healed = true;
+    } catch (_) { /* skip silently — feed still emits everything else */ }
+  }
+  const all = healed ? await bookings.list() : initialBookings;
+
+  const leadById = new Map();
+  for (const lead of leads) {
+    if (lead && lead.id) leadById.set(lead.id, lead);
+  }
+
   const now = new Date();
   const earliest = new Date(now.getTime() - PAST_WINDOW_MS);
   const latest = new Date(now.getTime() + FUTURE_WINDOW_MS);
@@ -176,9 +276,11 @@ async function generateIcsForToken(token, { baseUrl = "https://pjllandservices.c
     const start = new Date(b.scheduledFor);
     if (Number.isNaN(start.getTime())) continue;
     if (start < earliest || start > latest) continue;
-    // Skip bookings with no address (rare but possible from legacy data).
-    if (!b.address || !String(b.address).trim()) continue;
-    events.push(...buildVevent(b, { baseUrl: cleanBase, now }));
+    // No longer skip on empty address — we'll just omit LOCATION if we
+    // can't resolve one. The event still shows on Patrick's calendar
+    // and the title carries the customer's identifier.
+    const lead = b.leadId ? leadById.get(b.leadId) || null : null;
+    events.push(...buildVevent(b, { baseUrl: cleanBase, now, lead }));
     included++;
   }
 
@@ -191,6 +293,7 @@ module.exports = {
   // Exported for unit-style tests + the smoke script.
   FAMILY_SHORT_NAMES,
   extractStreetAndCity,
+  formatMapsAddress,
   shortServiceName,
   buildVevent,
   wrapCalendar

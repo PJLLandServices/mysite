@@ -9699,7 +9699,16 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "GET" && icalMatch) {
       try {
         const token = decodeURIComponent(icalMatch[1]);
-        const result = await generateIcsForToken(token, { baseUrl: baseUrlFromReq(req) });
+        // Pass leads through so the feed can (a) heal lead.booking →
+        // canonical bookings.json for records not yet upserted, and (b)
+        // resolve structured contact fields for the Maps-tappable
+        // address format. readLeads lives in server.js so we lift it
+        // here rather than circular-importing into ical-feed.js.
+        const leadsForFeed = await readLeads().catch(() => []);
+        const result = await generateIcsForToken(token, {
+          baseUrl: baseUrlFromReq(req),
+          leads: leadsForFeed
+        });
         if (!result.ok) {
           res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
           res.end("Not found");

@@ -107,8 +107,9 @@
             <li>Paste the URL. iOS verifies it and adds a calendar called <strong>PJL Land Services</strong>.</li>
             <li>Open the <strong>Calendar</strong> app — your bookings appear in the calendar list.</li>
           </ol>
+          <p><strong>How often it refreshes:</strong> iPhone polls subscribed calendars roughly <em>every hour</em> by default — there's no way for PJL to push faster than Apple polls. The server itself rebuilds the feed within ~5 minutes of any change, so a deleted or cancelled booking drops out of the feed quickly, but the phone may show it stale for up to an hour. <strong>To force a refresh now:</strong> open the Calendar app → tap <em>Calendars</em> at the bottom → pull down the list. iOS re-fetches every subscribed calendar immediately.</p>
           <p><strong>Security note:</strong> the URL itself is the credential — anyone with the link sees your schedule. Don't share it. If it leaks, hit <strong>Regenerate</strong>; the old URL stops working immediately and you'll need to re-add the new one to your phone.</p>
-          <p><strong>What's in the feed:</strong> confirmed bookings only (cancelled ones drop out automatically). 90 days of history + 1 year forward. Event title is <em>"&lt;service&gt; - &lt;street&gt;, &lt;city&gt;"</em>, location is the full address (tap to open Maps).</p>
+          <p><strong>What's in the feed:</strong> confirmed bookings only (cancelled and deleted ones drop out automatically). 90 days of history + 1 year forward. Event title is <em>"&lt;service&gt; - &lt;street&gt;, &lt;city&gt;"</em>; location is the full address in the form iOS Maps auto-recognizes (single-line, comma-separated, <code>… , ON L4A 1A1, Canada</code>).</p>
         </details>
       </section>
 
