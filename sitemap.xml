@@ -17,7 +17,7 @@
   <!-- Core service pages — high priority -->
   <url>
     <loc>https://www.pjllandservices.com/sprinkler-systems.html</loc>
-    <lastmod>2026-04-30</lastmod>
+    <lastmod>2026-05-13</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.9</priority>
     <image:image>
@@ -189,12 +189,22 @@
   <!-- Blog index -->
   <url>
     <loc>https://www.pjllandservices.com/blog.html</loc>
-    <lastmod>2026-04-30</lastmod>
+    <lastmod>2026-05-13</lastmod>
     <changefreq>weekly</changefreq>
     <priority>0.85</priority>
   </url>
 
   <!-- Individual blog posts (chronological, newest first) -->
+  <url>
+    <loc>https://www.pjllandservices.com/blog-drip-line-vs-soaker-hose-spray-gta.html</loc>
+    <lastmod>2026-05-13</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.7</priority>
+    <image:image>
+      <image:loc>https://www.pjllandservices.com/rain-bird-xfde-emitter-spacing.jpg</image:loc>
+      <image:title>Rain Bird XFDE dripline with pressure-compensating emitters — drip irrigation for GTA garden beds by PJL Land Services</image:title>
+    </image:image>
+  </url>
   <url>
     <loc>https://www.pjllandservices.com/blog-tree-irrigation-newmarket-gta.html</loc>
     <lastmod>2026-04-30</lastmod>
