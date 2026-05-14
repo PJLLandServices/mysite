@@ -19,6 +19,7 @@
 
 const bookings = require("./bookings");
 const settings = require("./settings");
+const properties = require("./properties");
 const { BOOKABLE_SERVICES } = require("./availability");
 const {
   escapeIcalValue,
@@ -56,18 +57,44 @@ function extractStreetAndCity(address) {
   return { street, city };
 }
 
+// Parse a raw address blob into the canonical Maps-friendly form.
+// Handles both the multi-line CRM-edited shape and the comma-separated
+// Google Places autocomplete shape, plus messy hybrids. See the spec
+// in formatMapsAddress() comments.
+function parseAddressBlob(raw) {
+  const clean = String(raw || "").trim();
+  if (!clean) return "";
+  const segments = clean.split(/[\n,]+/).map((p) => p.trim()).filter(Boolean);
+  const out = [];
+  for (const seg of segments) {
+    const glued = seg.match(/^(.+?)\s+(ON\b[\s\S]*)$/i);
+    if (glued) {
+      out.push(glued[1].trim());
+      out.push(glued[2].trim());
+    } else {
+      out.push(seg);
+    }
+  }
+  return out.join(", ");
+}
+
 // Build the LOCATION value in the exact form iOS auto-recognizes for
 // the Maps tap affordance:
 //   "<House Number> <Street Name>, <Town>, ON <Postal Code>, Canada"
 // Single-line, comma-separated, province + postal as one segment.
 //
-// Prefers the lead's structured contact fields (set by applyCrmUpdate
-// at intake / edit time); falls back to parsing the booking.address
-// blob when the lead is missing structured data (legacy records OR
-// leads created through the public booking flow, which stores the
-// Google Places autocomplete string verbatim and doesn't populate
-// streetNumber/streetName/town/postalCode).
-function formatMapsAddress(lead, booking) {
+// Source-of-truth precedence:
+//   1. property.address (canonical — Patrick's spec, kept in sync via
+//      cascadePropertyToLinkedRecords on property PATCH).
+//   2. Lead's structured contact fields (streetNumber/streetName/town/
+//      postalCode — set by applyCrmUpdate at CRM-edit time).
+//   3. Parsed booking.address (legacy records OR leads created through
+//      the public booking flow, which stores the Google Places
+//      autocomplete string verbatim).
+function formatMapsAddress(lead, booking, property = null) {
+  if (property && property.address) {
+    return parseAddressBlob(property.address);
+  }
   const c = (lead && lead.contact) || {};
   const sn = String(c.streetNumber || "").trim();
   const sname = String(c.streetName || "").trim();
@@ -78,35 +105,7 @@ function formatMapsAddress(lead, booking) {
     const provincePostal = `ON${postal ? " " + postal : ""}`;
     return [street, town, provincePostal, "Canada"].join(", ");
   }
-
-  const raw = String(booking?.address || "").trim();
-  if (!raw) return "";
-
-  // Two real-world input shapes:
-  //   (a) CRM-edited:    "<street>\n<town> ON <postal>\nCanada"   (multi-line)
-  //   (b) Booking-flow:  "<street>, <town>, ON <postal>, Canada"  (Google Places autocomplete)
-  // Plus messy hybrids ("<street>, <town> ON <postal>, Canada" — comma
-  // separated, but the town + province + postal still glued together).
-  //
-  // Strategy: split on EITHER newlines or commas to get a flat segment
-  // list, then within each segment check if it still contains a glued
-  // "<town> ON <postal>" pair and split that on the " ON " boundary.
-  // Final join with ", " on the cleaned-up segments.
-  const segments = raw.split(/[\n,]+/).map((p) => p.trim()).filter(Boolean);
-  const out = [];
-  for (const seg of segments) {
-    // Detect glued "<Town> ON <postal>" only — bare "ON" with nothing
-    // after it (or with another postal-shaped tail) is the signal. The
-    // \b after ON guards against street names like "Ontario" or "Onyx".
-    const glued = seg.match(/^(.+?)\s+(ON\b[\s\S]*)$/i);
-    if (glued) {
-      out.push(glued[1].trim());
-      out.push(glued[2].trim());
-    } else {
-      out.push(seg);
-    }
-  }
-  return out.join(", ");
+  return parseAddressBlob(booking?.address);
 }
 
 // Resolve the human-facing title prefix. Prefers FAMILY_SHORT_NAMES; if
@@ -123,24 +122,28 @@ function shortServiceName(booking) {
 }
 
 // Build the VEVENT block for one booking. Returns an array of lines.
-// `lead` (optional) is the resolved lead record for this booking — we
-// prefer its structured contact fields when available so the LOCATION
-// renders in the form iOS auto-recognizes for the Maps tap.
-function buildVevent(booking, { baseUrl, now, lead = null }) {
+// `lead` and `property` (both optional) feed the address resolver so
+// LOCATION renders in the iOS-Maps-friendly canonical form. Property
+// wins when set; falls back to lead structured fields, then parsed
+// booking.address. See formatMapsAddress() for precedence rules.
+function buildVevent(booking, { baseUrl, now, lead = null, property = null }) {
   const start = new Date(booking.scheduledFor);
   const duration = Number(booking.durationMinutes) || DEFAULT_DURATION_MIN;
   const end = new Date(start.getTime() + duration * 60 * 1000);
 
   const uid = `${booking.id}@pjllandservices.com`;
 
-  // The Maps-tappable address goes into LOCATION. Title's "<service> -
-  // <street>, <city>" tail comes from the same source so the two stay
-  // consistent. When the lead has structured contact fields they win;
-  // otherwise we parse booking.address.
-  const mapsAddress = formatMapsAddress(lead, booking);
+  // Use the same precedence (property → lead structured → parsed blob)
+  // for both LOCATION and the title's "<street>, <city>" tail so the
+  // two stay consistent.
+  const mapsAddress = formatMapsAddress(lead, booking, property);
   let street = "";
   let city = "";
-  if (lead && lead.contact) {
+  if (property && property.address) {
+    const parsed = extractStreetAndCity(property.address);
+    street = parsed.street;
+    city = parsed.city;
+  } else if (lead && lead.contact) {
     const c = lead.contact;
     const sn = String(c.streetNumber || "").trim();
     const sname = String(c.streetName || "").trim();
@@ -271,6 +274,23 @@ async function generateIcsForToken(token, { baseUrl = "https://pjllandservices.c
     if (lead && lead.id) leadById.set(lead.id, lead);
   }
 
+  // Resolve every property linked to an in-window booking once, up
+  // front, so we don't hit the disk per-event. property.address is
+  // the source of truth — booking.address is a snapshot that goes
+  // stale when admin edits the property without re-saving the
+  // booking. We prefer property.address whenever it's set.
+  const propertyIds = new Set();
+  for (const b of all) {
+    if (b.propertyId) propertyIds.add(b.propertyId);
+  }
+  const propertyById = new Map();
+  for (const pid of propertyIds) {
+    try {
+      const p = await properties.get(pid);
+      if (p) propertyById.set(pid, p);
+    } catch (_) { /* skip; falls back to booking.address */ }
+  }
+
   const now = new Date();
   const earliest = new Date(now.getTime() - PAST_WINDOW_MS);
   const latest = new Date(now.getTime() + FUTURE_WINDOW_MS);
@@ -288,7 +308,12 @@ async function generateIcsForToken(token, { baseUrl = "https://pjllandservices.c
     // can't resolve one. The event still shows on Patrick's calendar
     // and the title carries the customer's identifier.
     const lead = b.leadId ? leadById.get(b.leadId) || null : null;
-    events.push(...buildVevent(b, { baseUrl: cleanBase, now, lead }));
+    const property = b.propertyId ? propertyById.get(b.propertyId) || null : null;
+    // Pass property through to buildVevent. formatMapsAddress prefers
+    // property.address over any stale snapshot in booking.address or
+    // stale structured fields on the lead. Defence-in-depth alongside
+    // the cascade-on-property-PATCH that syncs snapshots eagerly.
+    events.push(...buildVevent(b, { baseUrl: cleanBase, now, lead, property }));
     included++;
   }
 

@@ -1742,6 +1742,81 @@ async function activeBookings() {
   return fromLeads;
 }
 
+// Sync property.address (+ customer name/phone) into every lead and
+// booking that references this property. Called after PATCH on a
+// property record so a single address edit reaches every downstream
+// surface in one shot (schedule canvas modal, iCal feed, /api/quotes
+// payload, customer detail page, etc.). Idempotent — fields that
+// already match are skipped silently.
+//
+// Returns { leadsUpdated, bookingsUpdated } so the API can echo the
+// scope of the change back to the admin UI for a confirmation toast.
+async function cascadePropertyToLinkedRecords(property) {
+  const result = { leadsUpdated: 0, bookingsUpdated: 0 };
+  if (!property || !property.id) return result;
+  const propAddress = String(property.address || "").trim();
+  const propName = String(property.customerName || "").trim();
+  const propPhone = String(property.customerPhone || "").trim();
+  if (!propAddress) return result; // nothing to cascade
+
+  // Leads — write lead.contact.address (and name/phone if the property
+  // has them set). The booking modal + /api/quotes both read these
+  // fields, so this is the path that makes the address visible
+  // everywhere outside the canonical Booking folder.
+  try {
+    const allLeads = await readLeads();
+    let leadsTouched = false;
+    for (const lead of allLeads) {
+      if (lead.propertyId !== property.id) continue;
+      if (!lead.contact) lead.contact = {};
+      let touched = false;
+      if (lead.contact.address !== propAddress) {
+        lead.contact.address = propAddress;
+        touched = true;
+      }
+      if (propName && lead.contact.name !== propName) {
+        lead.contact.name = propName;
+        touched = true;
+      }
+      if (propPhone && lead.contact.phone !== propPhone) {
+        lead.contact.phone = propPhone;
+        touched = true;
+      }
+      // lead.booking is the legacy embedded shape; it doesn't carry a
+      // separate address field, so syncing lead.contact is enough.
+      if (touched) {
+        result.leadsUpdated++;
+        leadsTouched = true;
+      }
+    }
+    if (leadsTouched) await writeLeads(allLeads);
+  } catch (err) {
+    console.warn("[property cascade] leads sync failed:", err?.message);
+  }
+
+  // Bookings (canonical store) — write booking.address through the
+  // official update() helper so updatedAt + history stay consistent.
+  try {
+    const all = await bookings.list();
+    for (const b of all) {
+      if (b.propertyId !== property.id) continue;
+      const patch = {};
+      if (b.address !== propAddress) patch.address = propAddress;
+      if (propName && b.customerName !== propName) patch.customerName = propName;
+      if (propPhone && b.customerPhone !== propPhone) patch.customerPhone = propPhone;
+      if (Object.keys(patch).length === 0) continue;
+      try {
+        await bookings.update(b.id, patch);
+        result.bookingsUpdated++;
+      } catch (e) { /* skip one bad booking; keep going */ }
+    }
+  } catch (err) {
+    console.warn("[property cascade] bookings sync failed:", err?.message);
+  }
+
+  return result;
+}
+
 // Returns available slots for an existing booking's reschedule modal.
 // Same contract as /api/booking/availability but service + address come
 // from the booking record (not query params), and the booking's own
@@ -4074,7 +4149,21 @@ async function handleApi(req, res, pathname) {
       }
       const updated = await properties.update(id, sanitized);
       if (!updated) return sendJson(res, 404, { ok: false, errors: ["Property not found."] });
-      return sendJson(res, 200, { ok: true, property: updated });
+
+      // Cascade canonical fields to linked leads + bookings. The property
+      // record is the source of truth for address + customer contact;
+      // leads and bookings carry snapshot copies for back-compat with
+      // /api/quotes and the schedule canvas. Without this cascade, edits
+      // to a property's address stay invisible everywhere else until the
+      // booking is rescheduled or the lead is manually re-saved. Patrick
+      // hit this exact bug: updated property to "21 Hill Country Dr,
+      // Whitchurch-Stouffville, ON L4A 3T2, Canada" but the booking
+      // modal + iCal feed still showed the old "21 Hill Country Drive,
+      // Stouffville". Idempotent — if booking.address already matches,
+      // the update is a no-op.
+      const sync = await cascadePropertyToLinkedRecords(updated);
+
+      return sendJson(res, 200, { ok: true, property: updated, sync });
     } catch (error) {
       return sendJson(res, 400, { ok: false, errors: [error.message || "Couldn't update property."] });
     }
