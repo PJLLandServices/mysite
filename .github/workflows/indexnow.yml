@@ -1,0 +1,37 @@
+name: IndexNow notification
+
+# Ping Bing's IndexNow API every time main moves. Tells Bing (and any
+# IndexNow-participating engine) to re-crawl, so updates show up in search
+# within minutes instead of waiting for natural discovery.
+#
+# The IndexNow key is public by design (verified via the .txt file at the
+# site root) so no GitHub secret is needed.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}   # allow manual "Run workflow" from the Actions tab
+
+# If a new push happens while a previous run is in-flight, cancel the old
+# one — only the latest set of URLs matters.
+concurrency:
+  group: indexnow-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # Wait briefly so Render's deploy has time to publish the new content
+      # before Bing arrives to crawl. Render typically deploys in 1–3 min.
+      - name: Wait for Render deploy to settle
+        run: sleep 90
+
+      - name: Submit URLs to IndexNow
+        run: node scripts/indexnow-submit.js

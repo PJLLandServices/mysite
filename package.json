@@ -17,6 +17,7 @@
     "lint:prices": "node scripts/lint-no-hardcoded-prices.mjs",
     "lint:qb-mappings": "node scripts/lint-qb-mappings.mjs",
     "test:pricing": "node scripts/test-pricing.mjs",
+    "indexnow": "node scripts/indexnow-submit.js",
     "migrate:customers": "node scripts/migrate-customers.js",
     "migrate:customers:apply": "node scripts/migrate-customers.js --apply",
     "migrate:customers:backfill": "node scripts/migrate-customers.js --backfill-only",
