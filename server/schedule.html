@@ -57,45 +57,55 @@
       <a class="pjl-app-phone" href="tel:+19059600181">(905) 960-0181</a>
     </header>
 
-  <main class="pjl-crm-shell">
-    <header class="pjl-crm-hero">
-      <div>
-        <p class="pjl-page-eyebrow">Schedule</p>
-        <h1>Book windows, blocks &amp; bookings on one canvas.</h1>
-        <p>Drag a range to block time off. Existing bookings show in green. Customer-side availability respects every block here.</p>
+  <main class="pjl-crm-shell cal-shell">
+    <!-- Google-Calendar-style toolbar. Today + nav arrows + date label
+         on the left, view switcher + actions on the right. -->
+    <header class="cal-toolbar">
+      <div class="cal-toolbar-left">
+        <button type="button" class="cal-today" id="calToday">Today</button>
+        <button type="button" class="cal-nav" id="calPrev" aria-label="Previous">&lsaquo;</button>
+        <button type="button" class="cal-nav" id="calNext" aria-label="Next">&rsaquo;</button>
+        <h1 class="cal-title" id="calTitle">May 2026</h1>
       </div>
-      <div class="pjl-hero-card" aria-hidden="true">
-        <div class="pjl-hero-frame">
-          <img src="/crm/pjl-sprinkler-hero.jpg" alt="">
-          <span class="pjl-frame-tag">This week</span>
-          <span class="pjl-frame-ribbon"><span></span>Calendar live</span>
+      <div class="cal-toolbar-right">
+        <div class="cal-view-switcher" role="tablist" aria-label="View">
+          <button type="button" class="cal-view-btn" data-view="day"   role="tab">Day</button>
+          <button type="button" class="cal-view-btn is-active" data-view="week"  role="tab">Week</button>
+          <button type="button" class="cal-view-btn" data-view="month" role="tab">Month</button>
         </div>
+        <button type="button" class="pjl-btn pjl-btn-primary" id="addBooking">+ Book a customer</button>
+        <button type="button" class="pjl-btn pjl-btn-outline" id="addBlock">Block off time</button>
       </div>
     </header>
 
-    <section class="schedule-toolbar">
-      <button type="button" class="pjl-btn pjl-btn-outline" id="prevWeek">&larr; Prev week</button>
-      <span class="schedule-range" id="weekRange"></span>
-      <button type="button" class="pjl-btn pjl-btn-outline" id="nextWeek">Next week &rarr;</button>
-      <button type="button" class="pjl-btn pjl-btn-primary" id="addBooking">+ Book a customer</button>
-      <button type="button" class="pjl-btn pjl-btn-outline" id="addBlock">Block off time</button>
-    </section>
+    <div class="cal-layout">
+      <!-- Sidebar: mini-calendar + condensed stats + active blocks list -->
+      <aside class="cal-sidebar" aria-label="Calendar sidebar">
+        <div class="cal-mini" id="calMini"></div>
 
-    <section class="schedule-stats">
-      <div><span>Bookings this week</span><strong id="weekBookings">0</strong></div>
-      <div><span>Hours blocked</span><strong id="weekBlockHours">0</strong></div>
-      <div><span>Bookable hours left</span><strong id="weekFreeHours">0</strong></div>
-    </section>
+        <div class="cal-stats">
+          <div><span>Bookings this week</span><strong id="weekBookings">0</strong></div>
+          <div><span>Hours blocked</span><strong id="weekBlockHours">0</strong></div>
+          <div><span>Bookable hours left</span><strong id="weekFreeHours">0</strong></div>
+        </div>
 
-    <p class="schedule-tip">📅 <strong>To reschedule a booking:</strong> tap any booking card below to move it. Customer is notified by email + text.</p>
-    <section class="schedule-week" id="scheduleWeek" aria-label="Weekly calendar"></section>
+        <div class="cal-side-blocks">
+          <h3>Active blocks</h3>
+          <ul class="cal-block-list" id="blockList">
+            <li class="empty">No blocked time.</li>
+          </ul>
+        </div>
+      </aside>
 
-    <section class="schedule-blocks">
-      <h2>Active blocks</h2>
-      <ul class="schedule-block-list" id="blockList">
-        <li class="empty">No blocked time. Use the &ldquo;Block off time&rdquo; button to add a vacation, holiday, or appointment.</li>
-      </ul>
-    </section>
+      <!-- Main calendar canvas. Three view sub-trees; only the active
+           one is shown via the data-active-view attribute on the
+           parent. -->
+      <section class="cal-canvas" id="calCanvas" data-active-view="week" aria-label="Calendar canvas">
+        <div class="cal-view cal-view-day"   data-view="day"></div>
+        <div class="cal-view cal-view-week"  data-view="week"></div>
+        <div class="cal-view cal-view-month" data-view="month"></div>
+      </section>
+    </div>
 
     <section class="schedule-settings" id="settingsCard">
       <h2>Working hours &amp; rules</h2>

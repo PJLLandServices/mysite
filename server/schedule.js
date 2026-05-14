@@ -21,11 +21,19 @@
   });
 })();
 
-const weekRange = document.getElementById("weekRange");
-const prevWeekBtn = document.getElementById("prevWeek");
-const nextWeekBtn = document.getElementById("nextWeek");
+// Google-Calendar-style schedule (Patrick's request). Day / Week / Month
+// views share a single cursorDate and currentView state; the toolbar
+// changes navigation behaviour to match (prev/next a day, week, or
+// month). The mini-calendar in the sidebar always shows a single
+// month's grid for quick jumping to any date.
+const calToday = document.getElementById("calToday");
+const calPrev = document.getElementById("calPrev");
+const calNext = document.getElementById("calNext");
+const calTitle = document.getElementById("calTitle");
+const calCanvas = document.getElementById("calCanvas");
+const calMini = document.getElementById("calMini");
+const viewBtns = Array.from(document.querySelectorAll(".cal-view-btn"));
 const addBlockBtn = document.getElementById("addBlock");
-const scheduleWeek = document.getElementById("scheduleWeek");
 const blockList = document.getElementById("blockList");
 const weekBookings = document.getElementById("weekBookings");
 const weekBlockHours = document.getElementById("weekBlockHours");
@@ -46,12 +54,64 @@ const settingsStatus = document.getElementById("settingsStatus");
 const logoutButton = document.getElementById("logoutButton");
 
 const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+const DOW_LETTERS = ["S", "M", "T", "W", "T", "F", "S"];
+const MONTH_NAMES = [
+  "January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December"
+];
 
-let weekStart = startOfWeek(new Date());
+// Time-grid sizing. 1 px = 1 minute so the math in renderTimeGrid stays
+// trivial. Day starts at 6 AM, ends at 10 PM; covers Patrick's working
+// hours plus an hour of headroom either side for events that hang over.
+const GRID_DAY_START_HOUR = 6;
+const GRID_DAY_END_HOUR = 22;
+const GRID_HOUR_HEIGHT_PX = 60;
+const GRID_HOURS = GRID_DAY_END_HOUR - GRID_DAY_START_HOUR;
+const GRID_TOTAL_HEIGHT_PX = GRID_HOURS * GRID_HOUR_HEIGHT_PX;
+
+// Map serviceKey/family -> CSS class for the colour coding strip on
+// each event card. Mirrors the FAMILY_SHORT_NAMES in ical-feed.js but
+// scoped to the schedule UI.
+function eventColorClass(serviceKey) {
+  if (!serviceKey) return "";
+  if (serviceKey.startsWith("spring_open"))   return "svc-spring";
+  if (serviceKey.startsWith("fall_close"))    return "svc-fall";
+  if (serviceKey === "sprinkler_repair")      return "svc-repair";
+  if (serviceKey === "hydrawise_retrofit")    return "svc-install";
+  if (serviceKey === "site_visit")            return "svc-consult";
+  return "";
+}
+
+let cursorDate = startOfDay(new Date());      // anchor for the current view
+let currentView = "week";                     // "day" | "week" | "month"
+let miniMonth = startOfMonth(new Date());     // mini-calendar's visible month
 let blocks = [];
 let bookings = [];
 let defaults = { hours: {}, settings: {}, services: {} };
 let overrides = { hours: {}, settings: {} };
+
+function startOfDay(date) {
+  const d = new Date(date);
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+function startOfMonth(date) {
+  const d = new Date(date);
+  d.setDate(1);
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
+function endOfMonth(date) {
+  const d = new Date(date);
+  d.setMonth(d.getMonth() + 1, 0);
+  d.setHours(23, 59, 59, 999);
+  return d;
+}
+function isSameDate(a, b) {
+  return a.getFullYear() === b.getFullYear()
+    && a.getMonth() === b.getMonth()
+    && a.getDate() === b.getDate();
+}
 
 function startOfWeek(date) {
   const d = new Date(date);
@@ -121,6 +181,8 @@ async function loadAll() {
       customer: l.contact?.name || "Customer",
       address: l.contact?.address || "",
       status: l.crm?.status,
+      // serviceKey drives the color-coding class on the calendar event.
+      serviceKey: l.booking.serviceKey || "",
       // Mirror from lead.booking — the cancel route writes status here so
       // legacy CRM/portal consumers see the cancellation without rewiring.
       bookingStatus: l.booking.status || "confirmed",
@@ -134,117 +196,335 @@ async function loadAll() {
   render();
 }
 
+// ---------------------------------------------------------------
+// View dispatcher
+// ---------------------------------------------------------------
+
 function render() {
-  weekRange.textContent = fmtRange(weekStart);
-  scheduleWeek.innerHTML = "";
+  calCanvas.dataset.activeView = currentView;
+  viewBtns.forEach((b) => b.classList.toggle("is-active", b.dataset.view === currentView));
+  updateTitle();
+  renderMini();
 
-  const hours = effectiveHours();
-  let totalBlockedMs = 0;
-  let totalBookedMs = 0;
-  let totalBookableMs = 0;
-
-  for (let i = 0; i < 7; i++) {
-    const day = addDays(weekStart, i);
-    const dow = day.getDay();
-    const window = hours[dow];
-    const dayCol = document.createElement("div");
-    dayCol.className = "schedule-day";
-
-    const head = document.createElement("header");
-    head.innerHTML = `<strong>${DAY_NAMES[dow].slice(0, 3)}</strong><span>${fmtDate(day)}</span>`;
-    dayCol.append(head);
-
-    if (!window) {
-      const closed = document.createElement("div");
-      closed.className = "schedule-closed";
-      closed.textContent = "Closed";
-      dayCol.append(closed);
-      scheduleWeek.append(dayCol);
-      continue;
-    }
-
-    const open = document.createElement("div");
-    open.className = "schedule-window";
-    open.innerHTML = `<span>Window</span><strong>${escapeHtml(window.open)}–${escapeHtml(window.close)}</strong>`;
-    dayCol.append(open);
-
-    const startMs = setHHmm(day, window.open).getTime();
-    const endMs = setHHmm(day, window.close).getTime();
-    totalBookableMs += endMs - startMs;
-
-    // Bookings on this day. Each card carries the leadId + start time
-    // as data-* attributes; the click is handled via event delegation
-    // on scheduleWeek (set up once, below loadAll). Cards are <button>s
-    // so screen readers + keyboard users can also activate them.
-    const dayBookings = bookings.filter((b) => sameDay(new Date(b.start), day));
-    dayBookings.forEach((b) => {
-      const isCancelled = b.bookingStatus === "cancelled";
-      const card = document.createElement("button");
-      card.type = "button";
-      card.className = "schedule-event schedule-booking" + (isCancelled ? " is-cancelled" : "");
-      card.title = isCancelled
-        ? "Cancelled — click for details / delete"
-        : "Click to manage this appointment";
-      card.dataset.leadId = b.id;
-      card.dataset.start = b.start;
-      card.dataset.bookingStatus = b.bookingStatus;
-      card.innerHTML = `
-        <span class="event-time">${escapeHtml(fmtTime(b.start))} – ${escapeHtml(fmtTime(b.end))}</span>
-        <strong>${escapeHtml(b.label)}</strong>
-        <span>${escapeHtml(b.customer)}</span>
-        ${isCancelled
-          ? `<span class="event-cancelled-pill">Cancelled</span>`
-          : `<span class="event-reschedule-hint">📅 Manage</span>`}
-      `;
-      dayCol.append(card);
-      // Cancelled bookings don't consume booked-hours on the totals strip.
-      if (!isCancelled) totalBookedMs += new Date(b.end) - new Date(b.start);
-    });
-
-    // Blocks on this day
-    const dayBlocks = blocks.filter((b) => rangesOverlap(new Date(b.start), new Date(b.end), setHHmm(day, "00:00"), setHHmm(addDays(day, 1), "00:00")));
-    dayBlocks.forEach((b) => {
-      const card = document.createElement("div");
-      card.className = "schedule-event schedule-block";
-      card.innerHTML = `
-        <span class="event-time">${escapeHtml(fmtTime(b.start))} – ${escapeHtml(fmtTime(b.end))}</span>
-        <strong>${escapeHtml(b.label)}</strong>
-        <button type="button" class="event-delete" data-block-id="${escapeHtml(b.id)}" aria-label="Remove block">×</button>
-      `;
-      dayCol.append(card);
-      // Count only the block portion that intersects this day's window.
-      const overlapStart = Math.max(new Date(b.start).getTime(), startMs);
-      const overlapEnd = Math.min(new Date(b.end).getTime(), endMs);
-      if (overlapEnd > overlapStart) totalBlockedMs += overlapEnd - overlapStart;
-    });
-
-    if (!dayBookings.length && !dayBlocks.length) {
-      const empty = document.createElement("div");
-      empty.className = "schedule-empty";
-      empty.textContent = "Open";
-      dayCol.append(empty);
-    }
-
-    scheduleWeek.append(dayCol);
-  }
-
-  // Week-total badge: count CONFIRMED bookings only. Cancelled bookings
-  // remain on the canvas (greyed) but don't contribute to the headline
-  // "N bookings this week" number — they're not real work for Patrick.
-  weekBookings.textContent = bookings.filter((b) => {
-    if (b.bookingStatus === "cancelled") return false;
-    const t = new Date(b.start).getTime();
-    return t >= weekStart.getTime() && t < addDays(weekStart, 7).getTime();
-  }).length;
-  weekBlockHours.textContent = (totalBlockedMs / 3_600_000).toFixed(1);
-  weekFreeHours.textContent = Math.max(0, (totalBookableMs - totalBookedMs - totalBlockedMs) / 3_600_000).toFixed(1);
+  if (currentView === "day") renderDay();
+  else if (currentView === "month") renderMonth();
+  else renderWeek();
 
   renderBlockList();
+  recomputeStats();
+}
+
+function updateTitle() {
+  if (currentView === "day") {
+    calTitle.textContent = cursorDate.toLocaleDateString("en-CA", {
+      weekday: "long", month: "long", day: "numeric", year: "numeric"
+    });
+  } else if (currentView === "month") {
+    calTitle.textContent = `${MONTH_NAMES[cursorDate.getMonth()]} ${cursorDate.getFullYear()}`;
+  } else {
+    const start = startOfWeek(cursorDate);
+    const end = addDays(start, 6);
+    const sameMonth = start.getMonth() === end.getMonth();
+    const sameYear = start.getFullYear() === end.getFullYear();
+    if (sameMonth) {
+      calTitle.textContent = `${MONTH_NAMES[start.getMonth()]} ${start.getDate()}–${end.getDate()}, ${start.getFullYear()}`;
+    } else if (sameYear) {
+      calTitle.textContent = `${MONTH_NAMES[start.getMonth()]} ${start.getDate()} – ${MONTH_NAMES[end.getMonth()]} ${end.getDate()}, ${start.getFullYear()}`;
+    } else {
+      calTitle.textContent = `${MONTH_NAMES[start.getMonth()]} ${start.getDate()}, ${start.getFullYear()} – ${MONTH_NAMES[end.getMonth()]} ${end.getDate()}, ${end.getFullYear()}`;
+    }
+  }
+}
+
+// ---------------------------------------------------------------
+// Day + Week views (shared time grid)
+// ---------------------------------------------------------------
+
+function renderDay() {
+  const host = calCanvas.querySelector('[data-view="day"]');
+  host.innerHTML = renderTimeGridShell([cursorDate]);
+  layoutEvents(host, [cursorDate]);
+  drawNowLine(host, [cursorDate]);
+}
+
+function renderWeek() {
+  const host = calCanvas.querySelector('[data-view="week"]');
+  const start = startOfWeek(cursorDate);
+  const days = [];
+  for (let i = 0; i < 7; i++) days.push(addDays(start, i));
+  host.innerHTML = renderTimeGridShell(days);
+  layoutEvents(host, days);
+  drawNowLine(host, days);
+}
+
+// Build the static time-grid scaffolding for an array of Date objects
+// (1 for Day view, 7 for Week). The CSS picks up --cal-day-cols /
+// --cal-hours / --cal-hour-h to size the columns + rows.
+function renderTimeGridShell(days) {
+  const today = startOfDay(new Date());
+  const dayColsTemplate = `repeat(${days.length}, 1fr)`;
+  const headDays = days.map((d) => {
+    const isToday = isSameDate(d, today);
+    return `
+      <div class="cal-tg-head-day${isToday ? " is-today" : ""}" data-date="${dateKey(d)}">
+        <span class="dow">${DAY_NAMES[d.getDay()].slice(0, 3)}</span>
+        <span class="num">${d.getDate()}</span>
+      </div>`;
+  }).join("");
+  const hourLabels = [];
+  for (let h = GRID_DAY_START_HOUR; h < GRID_DAY_END_HOUR; h++) {
+    const label = h === 12 ? "12 PM" : h > 12 ? `${h - 12} PM` : `${h} AM`;
+    hourLabels.push(`<div class="cal-tg-hour-label">${label}</div>`);
+  }
+  const dayCols = days.map((d) => {
+    const hourCells = [];
+    for (let h = 0; h < GRID_HOURS; h++) {
+      hourCells.push(`<div class="cal-tg-day-hour" data-hour="${GRID_DAY_START_HOUR + h}"></div>`);
+    }
+    return `<div class="cal-tg-day" data-date="${dateKey(d)}">${hourCells.join("")}</div>`;
+  }).join("");
+
+  return `
+    <div class="cal-tg-head" style="--cal-day-cols: ${dayColsTemplate};">
+      <div class="cal-tg-head-spacer"></div>
+      <div class="cal-tg-head-days" style="--cal-day-cols: ${dayColsTemplate};">${headDays}</div>
+    </div>
+    <div class="cal-tg-body" style="--cal-hour-h: ${GRID_HOUR_HEIGHT_PX}px; --cal-hours: ${GRID_HOURS}; --cal-grid-height: ${GRID_TOTAL_HEIGHT_PX}px;">
+      <div class="cal-tg-hours">${hourLabels.join("")}</div>
+      <div class="cal-tg-days" style="--cal-day-cols: ${dayColsTemplate};">${dayCols}</div>
+    </div>
+  `;
+}
+
+// Drop events + admin blocks into the rendered grid. Positioning is by
+// CSS top/height in px (1 px = 1 minute). Bookings whose time falls
+// outside the GRID_DAY_START_HOUR..GRID_DAY_END_HOUR window are clipped.
+function layoutEvents(host, days) {
+  const dayCols = host.querySelectorAll(".cal-tg-day");
+  const dayByKey = new Map();
+  dayCols.forEach((c) => dayByKey.set(c.dataset.date, c));
+
+  // Admin blocks first (render BEHIND events).
+  for (const block of blocks) {
+    const bStart = new Date(block.start);
+    const bEnd = new Date(block.end);
+    for (const day of days) {
+      const dayStart = startOfDay(day);
+      const dayEnd = new Date(dayStart.getTime() + 86400000);
+      if (bEnd <= dayStart || bStart >= dayEnd) continue;
+      const lo = new Date(Math.max(bStart, dayStart));
+      const hi = new Date(Math.min(bEnd, dayEnd));
+      const { top, height } = clipToGrid(lo, hi, day);
+      if (height <= 0) continue;
+      const col = dayByKey.get(dateKey(day));
+      if (!col) continue;
+      const div = document.createElement("div");
+      div.className = "cal-tg-block";
+      div.style.top = `${top}px`;
+      div.style.height = `${height}px`;
+      div.textContent = block.label || "Blocked";
+      col.appendChild(div);
+    }
+  }
+
+  // Bookings.
+  for (const b of bookings) {
+    const start = new Date(b.start);
+    const end = new Date(b.end);
+    for (const day of days) {
+      if (!isSameDate(start, day)) continue;
+      const { top, height } = clipToGrid(start, end, day);
+      if (height <= 0) continue;
+      const col = dayByKey.get(dateKey(day));
+      if (!col) continue;
+      const isCancelled = b.bookingStatus === "cancelled";
+      const colorClass = eventColorClass(b.serviceKey);
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = `cal-event${isCancelled ? " is-cancelled" : ""}${colorClass ? " " + colorClass : ""}`;
+      btn.style.top = `${top}px`;
+      btn.style.height = `${Math.max(height, 22)}px`;
+      btn.dataset.leadId = b.id;
+      btn.dataset.start = b.start;
+      btn.dataset.bookingStatus = b.bookingStatus;
+      btn.title = isCancelled
+        ? "Cancelled — tap for details"
+        : "Tap to manage this appointment";
+      const timeStr = `${fmtTime(b.start)} – ${fmtTime(b.end)}`;
+      btn.innerHTML = `
+        <strong>${escapeHtml(b.label)}</strong>
+        <span class="cal-event-meta">${escapeHtml(b.customer)} · ${escapeHtml(timeStr)}</span>
+      `;
+      col.appendChild(btn);
+    }
+  }
+}
+
+// Clip a [start, end] interval to the grid's hour window for a given day.
+// Returns top + height in px, with negatives zero'd out.
+function clipToGrid(start, end, day) {
+  const gridStart = setHHmm(day, `${String(GRID_DAY_START_HOUR).padStart(2, "0")}:00`);
+  const gridEnd = setHHmm(day, `${String(GRID_DAY_END_HOUR).padStart(2, "0")}:00`);
+  const lo = new Date(Math.max(start, gridStart));
+  const hi = new Date(Math.min(end, gridEnd));
+  const top = Math.max(0, (lo - gridStart) / 60000);
+  const height = Math.max(0, (hi - lo) / 60000);
+  return { top, height };
+}
+
+function drawNowLine(host, days) {
+  const now = new Date();
+  const today = startOfDay(now);
+  const targetIdx = days.findIndex((d) => isSameDate(d, today));
+  if (targetIdx === -1) return;
+  if (now.getHours() < GRID_DAY_START_HOUR || now.getHours() >= GRID_DAY_END_HOUR) return;
+  const col = host.querySelectorAll(".cal-tg-day")[targetIdx];
+  if (!col) return;
+  const gridStart = setHHmm(today, `${String(GRID_DAY_START_HOUR).padStart(2, "0")}:00`);
+  const top = Math.max(0, (now - gridStart) / 60000);
+  const line = document.createElement("div");
+  line.className = "cal-tg-now-line";
+  line.style.top = `${top}px`;
+  col.appendChild(line);
+}
+
+// ---------------------------------------------------------------
+// Month view
+// ---------------------------------------------------------------
+
+function renderMonth() {
+  const host = calCanvas.querySelector('[data-view="month"]');
+  const first = startOfMonth(cursorDate);
+  const startOffset = first.getDay();
+  const gridStart = addDays(first, -startOffset);
+  const today = startOfDay(new Date());
+
+  const weekdays = DOW_LETTERS.map((l) => `<span>${l}</span>`).join("");
+  const rows = [];
+  for (let r = 0; r < 6; r++) {
+    const cells = [];
+    for (let c = 0; c < 7; c++) {
+      const cellDate = addDays(gridStart, r * 7 + c);
+      const inThisMonth = cellDate.getMonth() === first.getMonth();
+      const isToday = isSameDate(cellDate, today);
+      const dayBookings = bookings.filter((b) => isSameDate(new Date(b.start), cellDate));
+      const eventPills = dayBookings.slice(0, 3).map((b) => {
+        const isCancelled = b.bookingStatus === "cancelled";
+        const colorClass = eventColorClass(b.serviceKey);
+        return `<button type="button" class="cal-month-event${isCancelled ? " is-cancelled" : ""}${colorClass ? " " + colorClass : ""}"
+          data-lead-id="${escapeHtml(b.id)}" data-start="${escapeHtml(b.start)}" data-booking-status="${escapeHtml(b.bookingStatus)}"
+          title="${escapeHtml(b.label)} — ${escapeHtml(b.customer)}">${escapeHtml(fmtTime(b.start))} ${escapeHtml(b.label)}</button>`;
+      }).join("");
+      const more = dayBookings.length > 3
+        ? `<span class="cal-month-more">+${dayBookings.length - 3} more</span>`
+        : "";
+      cells.push(`
+        <div class="cal-month-cell${inThisMonth ? "" : " is-other-month"}${isToday ? " is-today" : ""}" data-date="${dateKey(cellDate)}">
+          <span class="cal-month-cell-num">${cellDate.getDate()}</span>
+          ${eventPills}
+          ${more}
+        </div>
+      `);
+    }
+    rows.push(`<div class="cal-month-row">${cells.join("")}</div>`);
+  }
+
+  host.innerHTML = `
+    <div class="cal-month" style="--cal-month-h: 720px;">
+      <div class="cal-month-weekdays">${weekdays}</div>
+      ${rows.join("")}
+    </div>
+  `;
+}
+
+// ---------------------------------------------------------------
+// Sidebar: mini-calendar + stats + block list
+// ---------------------------------------------------------------
+
+function renderMini() {
+  const first = startOfMonth(miniMonth);
+  const startOffset = first.getDay();
+  const gridStart = addDays(first, -startOffset);
+  const today = startOfDay(new Date());
+
+  const cells = [];
+  for (let i = 0; i < 42; i++) {
+    const cellDate = addDays(gridStart, i);
+    const inThisMonth = cellDate.getMonth() === first.getMonth();
+    const isToday = isSameDate(cellDate, today);
+    const isSelected = isSameDate(cellDate, cursorDate);
+    const cls = [
+      inThisMonth ? "" : "is-other-month",
+      isToday ? "is-today" : "",
+      isSelected ? "is-selected" : ""
+    ].filter(Boolean).join(" ");
+    cells.push(`<button type="button" class="${cls}" data-date="${dateKey(cellDate)}">${cellDate.getDate()}</button>`);
+  }
+
+  calMini.innerHTML = `
+    <div class="cal-mini-header">
+      <button type="button" class="cal-mini-nav" data-mini-prev aria-label="Previous month">‹</button>
+      <span class="cal-mini-month">${MONTH_NAMES[first.getMonth()]} ${first.getFullYear()}</span>
+      <button type="button" class="cal-mini-nav" data-mini-next aria-label="Next month">›</button>
+    </div>
+    <div class="cal-mini-weekdays">${DOW_LETTERS.map((l) => `<span>${l}</span>`).join("")}</div>
+    <div class="cal-mini-grid">${cells.join("")}</div>
+  `;
+}
+
+function recomputeStats() {
+  // Stats track the visible period (day / week / month). Cancelled
+  // bookings are excluded from the booked-hours total because they
+  // aren't real work; they remain visible on the canvas though.
+  const hours = effectiveHours();
+  let periodStart, periodEnd;
+  if (currentView === "day") {
+    periodStart = startOfDay(cursorDate);
+    periodEnd = new Date(periodStart.getTime() + 86400000);
+  } else if (currentView === "month") {
+    periodStart = startOfMonth(cursorDate);
+    periodEnd = new Date(endOfMonth(cursorDate).getTime() + 1);
+  } else {
+    periodStart = startOfWeek(cursorDate);
+    periodEnd = addDays(periodStart, 7);
+  }
+
+  let booked = 0, blocked = 0, bookable = 0;
+  // bookable hours: sum of working windows that fall inside the period.
+  let cursor = new Date(periodStart);
+  while (cursor < periodEnd) {
+    const window = hours[cursor.getDay()];
+    if (window) {
+      const openMs = setHHmm(cursor, window.open).getTime();
+      const closeMs = setHHmm(cursor, window.close).getTime();
+      bookable += Math.max(0, closeMs - openMs);
+    }
+    cursor = addDays(cursor, 1);
+  }
+  for (const b of bookings) {
+    if (b.bookingStatus === "cancelled") continue;
+    const s = new Date(b.start).getTime();
+    if (s < periodStart.getTime() || s >= periodEnd.getTime()) continue;
+    booked += new Date(b.end) - new Date(b.start);
+  }
+  for (const blk of blocks) {
+    const s = Math.max(new Date(blk.start), periodStart);
+    const e = Math.min(new Date(blk.end), periodEnd);
+    if (e > s) blocked += e - s;
+  }
+  const confirmedCount = bookings.filter((b) => {
+    if (b.bookingStatus === "cancelled") return false;
+    const s = new Date(b.start).getTime();
+    return s >= periodStart.getTime() && s < periodEnd.getTime();
+  }).length;
+  weekBookings.textContent = confirmedCount;
+  weekBlockHours.textContent = (blocked / 3_600_000).toFixed(1);
+  weekFreeHours.textContent = Math.max(0, (bookable - booked - blocked) / 3_600_000).toFixed(1);
 }
 
 function renderBlockList() {
   if (!blocks.length) {
-    blockList.innerHTML = `<li class="empty">No blocked time. Use the &ldquo;Block off time&rdquo; button to add a vacation, holiday, or appointment.</li>`;
+    blockList.innerHTML = `<li class="empty">No blocked time.</li>`;
     return;
   }
   blockList.innerHTML = "";
@@ -255,10 +535,18 @@ function renderBlockList() {
         <strong>${escapeHtml(b.label)}</strong>
         <span>${escapeHtml(fmtDateTime(b.start))} → ${escapeHtml(fmtDateTime(b.end))}</span>
       </div>
-      <button type="button" data-block-id="${escapeHtml(b.id)}" class="pjl-btn pjl-btn-outline">Remove</button>
+      <button type="button" data-block-id="${escapeHtml(b.id)}" aria-label="Remove">×</button>
     `;
     blockList.append(li);
   });
+}
+
+// Local YYYY-MM-DD key for indexing into the day-column map.
+function dateKey(d) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
 }
 
 function renderSettings() {
@@ -298,28 +586,80 @@ function rangesOverlap(aStart, aEnd, bStart, bEnd) {
   return aStart.getTime() < bEnd.getTime() && aEnd.getTime() > bStart.getTime();
 }
 
-prevWeekBtn.addEventListener("click", () => { weekStart = addDays(weekStart, -7); render(); });
-nextWeekBtn.addEventListener("click", () => { weekStart = addDays(weekStart, 7); render(); });
+// ---------------------------------------------------------------
+// Navigation: Today / prev / next adapt to the current view.
+// Prev/next step by 1 day / 7 days / 1 month depending on currentView.
+// ---------------------------------------------------------------
+calToday.addEventListener("click", () => {
+  cursorDate = startOfDay(new Date());
+  miniMonth = startOfMonth(cursorDate);
+  render();
+});
+calPrev.addEventListener("click", () => {
+  if (currentView === "day") cursorDate = addDays(cursorDate, -1);
+  else if (currentView === "month") cursorDate = addMonths(cursorDate, -1);
+  else cursorDate = addDays(cursorDate, -7);
+  miniMonth = startOfMonth(cursorDate);
+  render();
+});
+calNext.addEventListener("click", () => {
+  if (currentView === "day") cursorDate = addDays(cursorDate, 1);
+  else if (currentView === "month") cursorDate = addMonths(cursorDate, 1);
+  else cursorDate = addDays(cursorDate, 7);
+  miniMonth = startOfMonth(cursorDate);
+  render();
+});
 
-// Delegated click for booking cards on the schedule grid. Cards are
-// re-rendered every week-change, so attaching per-card listeners is
-// fragile — one missed re-attachment leaves dead cards. Delegating
-// to scheduleWeek (which exists for the page lifetime) means the
-// click ALWAYS fires regardless of when the cards were rendered.
-//
-// Click no longer goes straight to reschedule — instead it opens the
-// action panel (Reschedule / Cancel / Delete) so Patrick can pick the
-// right branch per Brief B §3.3.
-scheduleWeek.addEventListener("click", (event) => {
-  const card = event.target.closest(".schedule-booking");
-  if (!card) return;
-  const leadId = card.dataset.leadId;
-  const start = card.dataset.start;
+// View switcher.
+viewBtns.forEach((btn) => {
+  btn.addEventListener("click", () => {
+    const v = btn.dataset.view;
+    if (v !== "day" && v !== "week" && v !== "month") return;
+    currentView = v;
+    render();
+  });
+});
+
+// Mini-calendar interactions: prev/next month buttons, click a date
+// to jump the main view to it.
+calMini.addEventListener("click", (event) => {
+  if (event.target.closest("[data-mini-prev]")) {
+    miniMonth = addMonths(miniMonth, -1);
+    renderMini();
+    return;
+  }
+  if (event.target.closest("[data-mini-next]")) {
+    miniMonth = addMonths(miniMonth, 1);
+    renderMini();
+    return;
+  }
+  const cell = event.target.closest("[data-date]");
+  if (!cell) return;
+  const [y, m, d] = cell.dataset.date.split("-").map(Number);
+  cursorDate = new Date(y, m - 1, d);
+  render();
+});
+
+function addMonths(date, delta) {
+  const d = new Date(date);
+  d.setMonth(d.getMonth() + delta);
+  return d;
+}
+
+// Delegated click for booking events on the calendar canvas. Same
+// behaviour as before -- opens the action panel (Reschedule / Cancel /
+// Delete). Catches both the time-grid .cal-event buttons (day/week)
+// and the .cal-month-event pills (month).
+calCanvas.addEventListener("click", (event) => {
+  const evtEl = event.target.closest(".cal-event, .cal-month-event");
+  if (!evtEl) return;
+  const leadId = evtEl.dataset.leadId;
+  const start = evtEl.dataset.start;
   if (!leadId) return;
   openBookingActionPanel({
     leadId,
     scheduledFor: start || undefined,
-    bookingStatus: card.dataset.bookingStatus || "confirmed"
+    bookingStatus: evtEl.dataset.bookingStatus || "confirmed"
   });
 });
 
