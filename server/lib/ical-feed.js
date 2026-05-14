@@ -63,7 +63,10 @@ function extractStreetAndCity(address) {
 //
 // Prefers the lead's structured contact fields (set by applyCrmUpdate
 // at intake / edit time); falls back to parsing the booking.address
-// blob when the lead is missing structured data (legacy records).
+// blob when the lead is missing structured data (legacy records OR
+// leads created through the public booking flow, which stores the
+// Google Places autocomplete string verbatim and doesn't populate
+// streetNumber/streetName/town/postalCode).
 function formatMapsAddress(lead, booking) {
   const c = (lead && lead.contact) || {};
   const sn = String(c.streetNumber || "").trim();
@@ -75,27 +78,32 @@ function formatMapsAddress(lead, booking) {
     const provincePostal = `ON${postal ? " " + postal : ""}`;
     return [street, town, provincePostal, "Canada"].join(", ");
   }
-  // Parsing fallback for legacy data without structured contact fields.
+
   const raw = String(booking?.address || "").trim();
   if (!raw) return "";
-  // Split on newlines first (the PJL canonical multi-line form), then
-  // commas (already-flattened cases). Filter empties.
-  const lines = raw.split(/\n+/).map((p) => p.trim()).filter(Boolean);
-  // Detect the "<Town> ON <Postal>" line and split city from province.
+
+  // Two real-world input shapes:
+  //   (a) CRM-edited:    "<street>\n<town> ON <postal>\nCanada"   (multi-line)
+  //   (b) Booking-flow:  "<street>, <town>, ON <postal>, Canada"  (Google Places autocomplete)
+  // Plus messy hybrids ("<street>, <town> ON <postal>, Canada" — comma
+  // separated, but the town + province + postal still glued together).
+  //
+  // Strategy: split on EITHER newlines or commas to get a flat segment
+  // list, then within each segment check if it still contains a glued
+  // "<town> ON <postal>" pair and split that on the " ON " boundary.
+  // Final join with ", " on the cleaned-up segments.
+  const segments = raw.split(/[\n,]+/).map((p) => p.trim()).filter(Boolean);
   const out = [];
-  for (const line of lines) {
-    const m = line.match(/^(.+?)\s+(ON\b[\s\S]*)$/i);
-    if (m) {
-      out.push(m[1].trim());
-      out.push(m[2].trim());
+  for (const seg of segments) {
+    // Detect glued "<Town> ON <postal>" only — bare "ON" with nothing
+    // after it (or with another postal-shaped tail) is the signal. The
+    // \b after ON guards against street names like "Ontario" or "Onyx".
+    const glued = seg.match(/^(.+?)\s+(ON\b[\s\S]*)$/i);
+    if (glued) {
+      out.push(glued[1].trim());
+      out.push(glued[2].trim());
     } else {
-      // Already comma-separated? Push individual parts.
-      const innerCommas = line.split(",").map((p) => p.trim()).filter(Boolean);
-      if (innerCommas.length > 1) {
-        for (const ic of innerCommas) out.push(ic);
-      } else {
-        out.push(line);
-      }
+      out.push(seg);
     }
   }
   return out.join(", ");
