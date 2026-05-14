@@ -49,6 +49,7 @@ const invoices = require("./lib/invoices");
 const completionCascade = require("./lib/completion-cascade");
 const customLineItems = require("./lib/custom-line-items");
 const settings = require("./lib/settings");
+const { generateIcsForToken } = require("./lib/ical-feed");
 const issueRollup = require("./lib/issue-rollup");
 const { generateQuotePdf } = require("./lib/quote-pdf");
 const { generateInvoicePdf } = require("./lib/invoice-pdf");
@@ -6004,6 +6005,41 @@ async function handleApi(req, res, pathname) {
     }
   }
 
+  // ---------- iCal feed (Brief C) --------------------------------------
+  // Three admin actions: generate (idempotent — returns existing token
+  // if already enabled), regenerate (always issues a new token), and
+  // disable (clears the token; subscribers start hitting 404). The
+  // full URL is composed client-side from the returned token + the
+  // page's origin so the server doesn't need to know its public URL.
+  if (req.method === "POST" && pathname === "/api/settings/ical-feed/generate") {
+    try {
+      const updated = await settings.generateIcalToken({ who: "admin" });
+      const base = (process.env.PUBLIC_BASE_URL || baseUrlFromReq(req)).replace(/\/+$/, "");
+      const url = updated.icalFeed.token ? `${base}/calendar/${updated.icalFeed.token}.ics` : null;
+      return sendJson(res, 200, { ok: true, settings: updated, url });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't generate feed."] });
+    }
+  }
+  if (req.method === "POST" && pathname === "/api/settings/ical-feed/regenerate") {
+    try {
+      const updated = await settings.regenerateIcalToken({ who: "admin" });
+      const base = (process.env.PUBLIC_BASE_URL || baseUrlFromReq(req)).replace(/\/+$/, "");
+      const url = updated.icalFeed.token ? `${base}/calendar/${updated.icalFeed.token}.ics` : null;
+      return sendJson(res, 200, { ok: true, settings: updated, url });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't regenerate feed."] });
+    }
+  }
+  if (req.method === "POST" && pathname === "/api/settings/ical-feed/disable") {
+    try {
+      const updated = await settings.disableIcalFeed({ who: "admin" });
+      return sendJson(res, 200, { ok: true, settings: updated });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't disable feed."] });
+    }
+  }
+
   // Customer-side notification preferences (portal-toggleable). Stored
   // on the lead so they can be set per-customer without a separate
   // record. Token-resolved (NOT admin cookie).
@@ -9653,6 +9689,36 @@ const server = http.createServer(async (req, res) => {
     if (req.method === "GET" && pathname === "/portal/login/verify") {
       const verifyHandled = await handlePortalLoginApi(req, res, "/api/portal/login/verify");
       if (verifyHandled !== false) return;
+    }
+
+    // iCal feed (Brief C) — public, token-gated. The :token in the URL
+    // IS the credential, so this path is NOT in needsAuth(). Mismatch /
+    // disabled both return 404 (no information leak about whether the
+    // endpoint exists or the token is wrong).
+    const icalMatch = pathname.match(/^\/calendar\/([^/]+)\.ics$/);
+    if (req.method === "GET" && icalMatch) {
+      try {
+        const token = decodeURIComponent(icalMatch[1]);
+        const result = await generateIcsForToken(token, { baseUrl: baseUrlFromReq(req) });
+        if (!result.ok) {
+          res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
+          res.end("Not found");
+          return;
+        }
+        // 5-min cache. Apple Calendar polls roughly hourly; this just
+        // keeps multi-device hits from re-running the booking scan.
+        res.writeHead(200, {
+          "content-type": "text/calendar; charset=utf-8",
+          "cache-control": "public, max-age=300"
+        });
+        res.end(result.ics);
+        return;
+      } catch (err) {
+        console.warn("[ical-feed] generation failed:", err?.message || err);
+        res.writeHead(500, { "content-type": "text/plain; charset=utf-8" });
+        res.end("Feed unavailable");
+        return;
+      }
     }
 
     const requiredLevel = needsAuth(req.method, pathname);

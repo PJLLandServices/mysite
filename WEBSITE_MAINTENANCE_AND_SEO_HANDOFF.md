@@ -641,6 +641,7 @@ Plus, at the **repo root**:
 | `/portal/<token>` | Customer's private portal page | Public, but the URL contains a 24-character per-customer token derived from the lead ID — unguessable in practice |
 | `/crm/*` | CRM-only assets (admin.js, crm.css, login.css, etc.) | Public (no sensitive data — the lead data behind them IS gated) |
 | `/api/quotes` (GET), `/api/contacts*`, `/api/quotes/:id` | Lead-data APIs | **CRM session required** |
+| `/calendar/<token>.ics` | iPhone Calendar feed for Patrick's phone (Brief C). text/calendar response with confirmed bookings, -90d / +365d window, Toronto VTIMEZONE. | Public; the 32-hex token IS the auth. 404 on mismatch / disabled (no info leak). |
 
 The auth gate is in `needsAuth()` in `server.js`. The full source-of-truth for routing is `resolveStaticTarget()` in the same file.
 

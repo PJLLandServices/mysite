@@ -71,6 +71,47 @@
         </div>
       </section>
 
+      <section class="settings-card" id="icalCard" hidden>
+        <h2>iPhone Calendar sync</h2>
+        <p class="settings-help">Subscribe your iPhone Calendar app to your PJL schedule. Confirmed bookings appear automatically; the calendar refreshes itself roughly hourly. Read-only — edits on your phone don't write back to PJL.</p>
+
+        <!-- Before-generate state -->
+        <div id="icalBefore">
+          <button type="button" class="settings-save" id="icalGenerateBtn">Generate calendar URL</button>
+          <p class="settings-status" id="icalStatus"></p>
+        </div>
+
+        <!-- After-generate state -->
+        <div id="icalAfter" hidden>
+          <div class="settings-row settings-row-stack">
+            <div>
+              <strong>Calendar URL</strong>
+              <p class="settings-row-help">Paste this into iPhone Settings → Calendar → Accounts → Add Account → Other → Add Subscribed Calendar.</p>
+            </div>
+            <input type="text" id="icalUrl" readonly class="settings-select" style="font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px;">
+          </div>
+          <div class="settings-qb-actions">
+            <button type="button" class="settings-save" id="icalCopyBtn">Copy URL</button>
+            <button type="button" class="settings-save settings-qb-disconnect" id="icalRegenerateBtn">Regenerate</button>
+            <button type="button" class="settings-save settings-qb-disconnect" id="icalDisableBtn">Disable</button>
+          </div>
+          <p class="settings-status" id="icalStatusAfter"></p>
+          <p class="settings-row-help" id="icalRegeneratedAt"></p>
+        </div>
+
+        <details class="settings-qb-setup">
+          <summary>Setup instructions (iPhone)</summary>
+          <ol>
+            <li>Generate the URL above and tap <strong>Copy URL</strong>.</li>
+            <li>On your iPhone: <strong>Settings → Calendar → Accounts → Add Account → Other → Add Subscribed Calendar</strong>.</li>
+            <li>Paste the URL. iOS verifies it and adds a calendar called <strong>PJL Land Services</strong>.</li>
+            <li>Open the <strong>Calendar</strong> app — your bookings appear in the calendar list.</li>
+          </ol>
+          <p><strong>Security note:</strong> the URL itself is the credential — anyone with the link sees your schedule. Don't share it. If it leaks, hit <strong>Regenerate</strong>; the old URL stops working immediately and you'll need to re-add the new one to your phone.</p>
+          <p><strong>What's in the feed:</strong> confirmed bookings only (cancelled ones drop out automatically). 90 days of history + 1 year forward. Event title is <em>"&lt;service&gt; - &lt;street&gt;, &lt;city&gt;"</em>, location is the full address (tap to open Maps).</p>
+        </details>
+      </section>
+
       <section class="settings-card" id="quickbooksCard">
         <h2>QuickBooks Online</h2>
         <p class="settings-help">Push draft invoices, customers, and items into your QuickBooks account so you don't have to re-key the numbers.</p>

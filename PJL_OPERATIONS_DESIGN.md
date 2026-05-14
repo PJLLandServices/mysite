@@ -65,6 +65,16 @@ Two layers:
 - **Per-customer overrides** — for VIPs or quiet customers
 - **Customer-side preferences** — each customer's own portal preferences (text reminders, email-only, no marketing texts, etc.)
 
+### 1.4 Integrations
+
+PJL runs lean on third-party services — only what materially helps operations:
+
+- **Gmail SMTP** (admin alerts + customer-facing transactional emails). Disabled outputs are graceful no-ops.
+- **Twilio SMS** (admin alerts + portal-message body inlined per Brief). Same graceful-skip behaviour.
+- **Google Maps + Distance Matrix** (booking availability travel-time gating, address autocomplete on coverage check + book).
+- **QuickBooks Online** (estimate + invoice push; per-line item refs + HST tax-code wiring shipped May 10).
+- **iPhone Calendar (read-only, Brief C)** — token-gated `/calendar/<token>.ics` feed. Confirmed bookings only, -90d / +365d window, Toronto TZ. The URL itself is the credential (single 32-hex token in `settings.icalFeed`); regenerate invalidates leaked URLs in one click from `/admin/settings`. Subscriptions refresh roughly hourly per Apple's default. One-way only — edits on the iPhone don't write back.
+
 ---
 
 ## 2. Core Folders

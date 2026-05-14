@@ -34,9 +34,109 @@ async function load() {
   document.getElementById("settingsLoading").hidden = true;
   document.getElementById("adminDefaultsCard").hidden = false;
   document.getElementById("auditCard").hidden = false;
+  document.getElementById("icalCard").hidden = false;
   renderGrid();
   renderAudit();
+  renderIcalFeed();
 }
+
+// iPhone Calendar Sync card — toggles between the before-generate state
+// (single "Generate calendar URL" button) and the after-generate state
+// (URL + copy/regen/disable buttons) based on currentSettings.icalFeed.
+function renderIcalFeed() {
+  const feed = (currentSettings && currentSettings.icalFeed) || { enabled: false, token: null };
+  const before = document.getElementById("icalBefore");
+  const after = document.getElementById("icalAfter");
+  const urlInput = document.getElementById("icalUrl");
+  const stamp = document.getElementById("icalRegeneratedAt");
+  if (feed.enabled && feed.token) {
+    before.hidden = true;
+    after.hidden = false;
+    const origin = window.location.origin.replace(/\/+$/, "");
+    urlInput.value = `${origin}/calendar/${feed.token}.ics`;
+    if (feed.regeneratedAt) {
+      stamp.textContent = `Generated ${new Date(feed.regeneratedAt).toLocaleString("en-CA", { dateStyle: "medium", timeStyle: "short" })}`;
+    } else {
+      stamp.textContent = "";
+    }
+  } else {
+    before.hidden = false;
+    after.hidden = true;
+    urlInput.value = "";
+    stamp.textContent = "";
+  }
+}
+
+async function postIcal(action) {
+  const r = await fetch(`/api/settings/ical-feed/${action}`, { method: "POST" });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok || !data.ok) {
+    throw new Error((data.errors || ["Couldn't update feed."]).join(" "));
+  }
+  currentSettings = data.settings;
+  renderIcalFeed();
+  // Audit grid reflects the new entry too.
+  renderAudit();
+  return data;
+}
+
+document.getElementById("icalGenerateBtn")?.addEventListener("click", async () => {
+  const btn = document.getElementById("icalGenerateBtn");
+  const status = document.getElementById("icalStatus");
+  btn.disabled = true;
+  status.textContent = "Generating…";
+  try {
+    await postIcal("generate");
+    status.textContent = "";
+  } catch (err) {
+    status.textContent = err.message || "Couldn't generate.";
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+document.getElementById("icalRegenerateBtn")?.addEventListener("click", async () => {
+  if (!confirm("Regenerate the calendar URL?\n\nThe current URL on your iPhone will stop working — you'll need to add the new one. Use this if the URL leaked.")) return;
+  const status = document.getElementById("icalStatusAfter");
+  status.textContent = "Regenerating…";
+  try {
+    await postIcal("regenerate");
+    status.textContent = "New URL ready. Re-add it to your iPhone Calendar.";
+    setTimeout(() => { status.textContent = ""; }, 6000);
+  } catch (err) {
+    status.textContent = err.message || "Couldn't regenerate.";
+  }
+});
+
+document.getElementById("icalDisableBtn")?.addEventListener("click", async () => {
+  if (!confirm("Disable the calendar feed?\n\nYour iPhone subscription will stop receiving updates and existing events may disappear.")) return;
+  const status = document.getElementById("icalStatusAfter");
+  status.textContent = "Disabling…";
+  try {
+    await postIcal("disable");
+    status.textContent = "";
+  } catch (err) {
+    status.textContent = err.message || "Couldn't disable.";
+  }
+});
+
+document.getElementById("icalCopyBtn")?.addEventListener("click", async () => {
+  const url = document.getElementById("icalUrl").value;
+  const status = document.getElementById("icalStatusAfter");
+  if (!url) return;
+  try {
+    await navigator.clipboard.writeText(url);
+    status.textContent = "Copied!";
+    setTimeout(() => { status.textContent = ""; }, 2500);
+  } catch (_) {
+    // Older Safari might not have async clipboard — fall back to selecting.
+    const input = document.getElementById("icalUrl");
+    input.focus();
+    input.select();
+    status.textContent = "Copied (manual: ⌘C to confirm)";
+    setTimeout(() => { status.textContent = ""; }, 4000);
+  }
+});
 
 function renderGrid() {
   const grid = document.getElementById("adminDefaultsGrid");

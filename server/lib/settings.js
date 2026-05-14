@@ -13,6 +13,11 @@
 //       estimateAutoPushOnAccept, invoiceAutoPushOnCascade,
 //       lastSyncErrors: [{ ts, entityType, entityId, error }]   // cap 20
 //     },
+//     icalFeed: {
+//       enabled,           // boolean — false until first generate
+//       token,             // 32-char hex; null when disabled / never generated
+//       regeneratedAt      // ISO timestamp of last generate/regenerate
+//     },
 //     audit: [{ ts, who, action, before, after }]               // cap 50
 //   }
 //
@@ -23,11 +28,18 @@
 const fs = require("node:fs/promises");
 const fsSync = require("node:fs");
 const path = require("node:path");
+const crypto = require("node:crypto");
 
 const FILE = path.join(__dirname, "..", "data", "settings.json");
 
 const NOTIFY_MODES = ["email_sms", "email", "sms", "silent"];
 const SYNC_ERRORS_CAP = 20;
+
+const DEFAULT_ICAL_FEED = {
+  enabled: false,
+  token: null,
+  regeneratedAt: null
+};
 
 const DEFAULT_QUICKBOOKS = {
   hstTaxCodeId: null,
@@ -49,6 +61,7 @@ const DEFAULT_SETTINGS = {
     portalPreAuth: "email"
   },
   quickbooks: { ...DEFAULT_QUICKBOOKS, lastSyncErrors: [] },
+  icalFeed: { ...DEFAULT_ICAL_FEED },
   audit: []
 };
 
@@ -77,6 +90,7 @@ async function writeAll(settings) {
 
 function hydrate(s) {
   const qb = s?.quickbooks || {};
+  const ical = s?.icalFeed || {};
   return {
     adminDefaults: { ...DEFAULT_SETTINGS.adminDefaults, ...(s?.adminDefaults || {}) },
     quickbooks: {
@@ -87,6 +101,11 @@ function hydrate(s) {
       estimateAutoPushOnAccept: qb.estimateAutoPushOnAccept === true,
       invoiceAutoPushOnCascade: qb.invoiceAutoPushOnCascade === true,
       lastSyncErrors: Array.isArray(qb.lastSyncErrors) ? qb.lastSyncErrors.slice(0, SYNC_ERRORS_CAP) : []
+    },
+    icalFeed: {
+      enabled: ical.enabled === true,
+      token: typeof ical.token === "string" && ical.token ? ical.token : null,
+      regeneratedAt: ical.regeneratedAt || null
     },
     audit: Array.isArray(s?.audit) ? s.audit : []
   };
@@ -197,6 +216,84 @@ async function clearSyncErrors() {
   return settings;
 }
 
+// ---------- iCal feed token management (Brief C) -------------------
+// The feed at GET /calendar/:token.ics is gated by this token alone —
+// no other auth. The token IS the credential, so regenerate invalidates
+// the old URL (use when sharing the URL leaks it accidentally).
+
+function makeIcalToken() {
+  return crypto.randomBytes(16).toString("hex"); // 32 hex chars
+}
+
+// Idempotent generate — returns the existing token if one is already
+// set and enabled. Use regenerateIcalToken() to force a new token.
+async function generateIcalToken({ who = "admin" } = {}) {
+  const settings = await readAll();
+  if (settings.icalFeed.enabled && settings.icalFeed.token) {
+    return settings;
+  }
+  const before = { ...settings.icalFeed };
+  settings.icalFeed = {
+    enabled: true,
+    token: makeIcalToken(),
+    regeneratedAt: new Date().toISOString()
+  };
+  settings.audit.unshift({
+    ts: new Date().toISOString(),
+    who,
+    action: "icalFeed.generate",
+    // Don't write tokens into the audit log — only the side effect.
+    before: { enabled: before.enabled },
+    after: { enabled: true },
+    note: "iCal feed generated"
+  });
+  if (settings.audit.length > 50) settings.audit.length = 50;
+  await writeAll(settings);
+  return settings;
+}
+
+async function regenerateIcalToken({ who = "admin" } = {}) {
+  const settings = await readAll();
+  const before = { ...settings.icalFeed };
+  settings.icalFeed = {
+    enabled: true,
+    token: makeIcalToken(),
+    regeneratedAt: new Date().toISOString()
+  };
+  settings.audit.unshift({
+    ts: new Date().toISOString(),
+    who,
+    action: "icalFeed.regenerate",
+    before: { enabled: before.enabled },
+    after: { enabled: true },
+    note: "iCal feed token regenerated (old URL now invalid)"
+  });
+  if (settings.audit.length > 50) settings.audit.length = 50;
+  await writeAll(settings);
+  return settings;
+}
+
+async function disableIcalFeed({ who = "admin" } = {}) {
+  const settings = await readAll();
+  const before = { ...settings.icalFeed };
+  settings.icalFeed = {
+    enabled: false,
+    token: null,
+    regeneratedAt: settings.icalFeed.regeneratedAt
+  };
+  settings.audit.unshift({
+    ts: new Date().toISOString(),
+    who,
+    action: "icalFeed.disable",
+    before: { enabled: before.enabled },
+    after: { enabled: false },
+    note: "iCal feed disabled (subscribers will hit 404)"
+  });
+  if (settings.audit.length > 50) settings.audit.length = 50;
+  await writeAll(settings);
+  return settings;
+}
+
 // Generic audit-trail append. Used by callers OUTSIDE of admin-defaults
 // /quickbooks (e.g. catalog edits — see lib/parts.js). Same 50-entry
 // rolling buffer; oldest entries fall off the end.
@@ -231,6 +328,9 @@ module.exports = {
   recordSyncError,
   clearSyncErrors,
   recordAudit,
+  generateIcalToken,
+  regenerateIcalToken,
+  disableIcalFeed,
   resolveMode,
   shouldSendEmail,
   shouldSendSms

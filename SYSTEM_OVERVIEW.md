@@ -102,7 +102,9 @@ form except where noted.
 | `purchase-orders.js` | Purchase Order | `PO-YYYY-NNNN` | One supplier's slice of a material list's `need` lines. Lifecycle draft → sent → partially_received → received → cancelled. |
 | `suppliers.js` | Supplier | `SUP-NNN` (no year prefix) | Vendor records (name, contact, email, phone, address). |
 | `part-suppliers.js` | — | n/a | Override map at `data/part-suppliers.json` mapping SKU → supplierIds[]. parts.json's `supplierIds` field is a placeholder; this file is the source of truth. |
-| `settings.js` | — | n/a | Admin notification preferences + 50-entry audit trail. |
+| `settings.js` | — | n/a | Admin notification preferences + 50-entry audit trail + iCal-feed token (Brief C: `icalFeed.{enabled, token, regeneratedAt}` — token is the credential for the public `/calendar/<token>.ics` feed). |
+| `ical-feed.js` | — | n/a | Builds the read-only `.ics` feed for iPhone Calendar subscription. Filters bookings to `status === confirmed` and a -90d / +365d window; uses stable `BK-…@pjllandservices.com` UIDs so reschedules update the existing event. |
+| `ical-format.js` | — | n/a | Hand-rolled RFC 5545 helpers: value escaping, 75-octet line folding, Toronto VTIMEZONE block, local + UTC date formatters. |
 | `completion-cascade.js` | — | n/a | Fires on WO status → completed. Idempotent. Creates service record on property, draft invoice (with `paidOnSiteAtCompletion` flag), customer + admin emails, warranty stamp. Applies property edits via `computePropertyEdits()` (Brief D — zone/controller diffs, new zones flagged for Patrick review) gated by `wo.propertyEditsAppliedAt`. Logs `cascade_fire`, `invoice_drafted` (when a draft was created), and `property_edits_applied` history entries. When the cascade throws mid-flight, the PATCH handler appends `cascade_failed` to the WO history and surfaces `cascade.error` in the response — the WO stays signed + locked + completed (recoverable via /run-cascade or /create-invoice). |
 | `issue-rollup.js` | — | n/a | Maps zone issues into priced line items for the on-site quote. Manifold rule, controller subtype tier selection, etc. |
 | `pricing.js` | — | n/a | `priceForBooking(serviceKey, zoneCount)` reads `pricing.json`. |
@@ -377,9 +379,26 @@ Purchase Orders
 Settings + misc
   GET    /api/settings
   PATCH  /api/settings
+  POST   /api/settings/ical-feed/generate         ← Brief C: idempotent;
+                                                   returns existing token if
+                                                   already enabled.
+  POST   /api/settings/ical-feed/regenerate       ← issues a fresh token;
+                                                   the old URL stops working
+                                                   immediately (leak handling).
+  POST   /api/settings/ical-feed/disable          ← clears the token; future
+                                                   requests to /calendar/*.ics
+                                                   return 404.
   GET    /api/pricing                            ← public pricing.json read
   GET    /api/chat-transcripts                   ← admin
   POST   /api/chat-transcripts                   ← public widget upserts
+
+Public token-gated
+  GET    /calendar/:token.ics                    ← iPhone Calendar feed
+                                                   (Brief C). text/calendar
+                                                   response; 404 on token
+                                                   mismatch OR feed disabled
+                                                   (no info leak). 5-min
+                                                   public Cache-Control.
 ```
 
 ## Core workflows
