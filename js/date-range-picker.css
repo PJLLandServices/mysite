@@ -1,0 +1,155 @@
+/* PJL Date-Range Picker — Expedia-style two-date range selection.
+   Same visual vocabulary as the time-picker: green available cells,
+   amber today ring, mobile-first cell sizing. Range painting shades
+   every cell from rangeStart..rangeEnd (or rangeStart..hoverDate
+   while the second click is pending). */
+
+.drp {
+  font-family: "DM Sans", system-ui, sans-serif;
+  color: var(--text, #1A1A1A);
+  --drp-green: var(--green, #1B4D2E);
+  --drp-green-mid: var(--green-mid, #2D6A42);
+  --drp-green-pale: var(--green-pale, #EAF3DE);
+  --drp-amber: var(--amber, #E07B24);
+  --drp-border: var(--border, #E2E0D4);
+  --drp-muted: var(--text-muted, #7A7A72);
+  --drp-bg: #fff;
+}
+.drp-wrap {
+  background: var(--drp-bg);
+  border: 1px solid var(--drp-border);
+  border-radius: 12px;
+  padding: 14px;
+}
+.drp-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.drp-month-label {
+  margin: 0;
+  font-family: "Barlow Condensed", "DM Sans", sans-serif;
+  font-weight: 600;
+  font-size: 20px;
+  letter-spacing: 0.01em;
+  color: var(--drp-green);
+  text-transform: uppercase;
+}
+.drp-nav {
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  border: 1px solid var(--drp-border);
+  background: var(--drp-bg);
+  color: var(--drp-green);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: inherit;
+}
+.drp-nav:hover:not(:disabled) {
+  background: var(--drp-green-pale);
+  border-color: var(--drp-green);
+}
+.drp-nav:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.drp-weekdays {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 4px;
+  margin-bottom: 6px;
+}
+.drp-weekdays > span {
+  text-align: center;
+  font-family: "Barlow Condensed", "DM Sans", sans-serif;
+  font-weight: 600;
+  font-size: 12px;
+  letter-spacing: 0.12em;
+  color: var(--drp-muted);
+  padding: 6px 0;
+}
+
+.drp-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 4px;
+}
+.drp-day {
+  aspect-ratio: 1 / 1;
+  border: 1px solid transparent;
+  background: var(--drp-bg);
+  color: var(--text, #1A1A1A);
+  border-radius: 8px;
+  font: inherit;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+}
+.drp-day:hover:not(:disabled):not(.is-disabled) {
+  background: var(--drp-green-pale);
+  border-color: var(--drp-green);
+}
+.drp-day.is-disabled,
+.drp-day:disabled {
+  color: #BBB7A8;
+  background: transparent;
+  cursor: not-allowed;
+  border-color: transparent;
+}
+.drp-day.is-other-month {
+  color: #D0CCC0;
+}
+.drp-day.is-today {
+  outline: 2px solid var(--drp-amber);
+  outline-offset: -2px;
+}
+/* Range painting — light tint in the middle, dark on the endpoints. */
+.drp-day.is-in-range {
+  background: var(--drp-green-pale);
+  color: var(--drp-green);
+  border-radius: 4px;
+  border-color: transparent;
+}
+.drp-day.is-range-start,
+.drp-day.is-range-end {
+  background: var(--drp-green);
+  color: #fff;
+  border-color: var(--drp-green);
+}
+.drp-day.is-range-single {
+  /* single-day range — keep the rounded edges. */
+  border-radius: 8px;
+}
+.drp-day.is-range-start { border-top-right-radius: 4px; border-bottom-right-radius: 4px; }
+.drp-day.is-range-end   { border-top-left-radius: 4px;  border-bottom-left-radius: 4px; }
+.drp-day.is-range-start.is-range-end { border-radius: 8px; }
+
+.drp-hint {
+  margin: 12px 0 0;
+  font-size: 13px;
+  color: var(--drp-muted);
+  font-style: italic;
+  min-height: 18px;
+}
+
+@media (max-width: 420px) {
+  .drp-wrap { padding: 10px 8px 12px; }
+  .drp-month-label { font-size: 18px; }
+  .drp-grid { gap: 3px; }
+  .drp-weekdays { gap: 3px; }
+  .drp-weekdays > span { padding: 4px 0; font-size: 11px; }
+  .drp-day { font-size: 14px; border-radius: 7px; }
+}

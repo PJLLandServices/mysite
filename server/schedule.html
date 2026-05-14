@@ -15,6 +15,7 @@
   <link rel="stylesheet" href="/crm/schedule.css">
   <link rel="stylesheet" href="/crm/crm-reschedule.css">
   <link rel="stylesheet" href="/js/time-picker.css?v=1">
+  <link rel="stylesheet" href="/js/date-range-picker.css?v=1">
 </head>
 <body class="pjl-crm-body">
   <aside class="pjl-admin-nav" id="navMenu" aria-label="PJL CRM Navigation">
@@ -122,7 +123,10 @@
     </main>
   </div><!-- /.pjl-app -->
 
-  <!-- Block-off dialog -->
+  <!-- Block-off dialog. Range picker replaces the old datetime-local
+       pair: tap the first day, tap the last day, blocks the whole
+       range. Multi-day vacations land in one save instead of two
+       manual datetime entries. -->
   <dialog id="blockDialog" class="schedule-dialog">
     <form method="dialog" id="blockForm">
       <h3>Block off time</h3>
@@ -130,20 +134,11 @@
         <span>Label</span>
         <input type="text" id="blockLabel" placeholder="Vacation, dentist, holiday..." maxlength="120" required>
       </label>
-      <div class="dialog-grid">
-        <label>
-          <span>Start</span>
-          <input type="datetime-local" id="blockStart" required>
-        </label>
-        <label>
-          <span>End</span>
-          <input type="datetime-local" id="blockEnd" required>
-        </label>
-      </div>
+      <div id="blockRangeHost"></div>
       <p class="dialog-error" id="blockError" hidden></p>
       <div class="dialog-actions">
         <button type="button" class="pjl-btn pjl-btn-outline" id="blockCancel">Cancel</button>
-        <button type="submit" class="pjl-btn pjl-btn-primary">Save block</button>
+        <button type="submit" class="pjl-btn pjl-btn-primary" id="blockSubmit" disabled>Save block</button>
       </div>
     </form>
   </dialog>
@@ -273,6 +268,7 @@
        and HTML-dialog versions. -->
 
   <script src="/js/time-picker.js?v=1"></script>
+  <script src="/js/date-range-picker.js?v=1"></script>
   <script src="/crm/crm-reschedule.js?v=2"></script>
   <script src="/crm/schedule.js?v=2"></script>
   <script src="/coverage-checker.js"></script>

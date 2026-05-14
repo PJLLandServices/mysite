@@ -33,8 +33,8 @@ const weekFreeHours = document.getElementById("weekFreeHours");
 const blockDialog = document.getElementById("blockDialog");
 const blockForm = document.getElementById("blockForm");
 const blockLabel = document.getElementById("blockLabel");
-const blockStart = document.getElementById("blockStart");
-const blockEnd = document.getElementById("blockEnd");
+const blockRangeHost = document.getElementById("blockRangeHost");
+const blockSubmit = document.getElementById("blockSubmit");
 const blockCancel = document.getElementById("blockCancel");
 const blockError = document.getElementById("blockError");
 const hoursGrid = document.getElementById("hoursGrid");
@@ -323,13 +323,48 @@ scheduleWeek.addEventListener("click", (event) => {
   });
 });
 
+// Range picker drives the Block-off-time dialog. blockRange holds the
+// most recent {start, end} from the picker so the form submit doesn't
+// have to re-read the DOM. Submit stays disabled until both endpoints
+// are picked.
+let blockRange = { start: null, end: null };
+let blockPickerDestroy = null;
+
+function startOfDay(d) {
+  const out = new Date(d);
+  out.setHours(0, 0, 0, 0);
+  return out;
+}
+function endOfDay(d) {
+  const out = new Date(d);
+  out.setHours(23, 59, 59, 999);
+  return out;
+}
+
 addBlockBtn.addEventListener("click", () => {
   blockLabel.value = "";
-  const now = new Date();
-  now.setMinutes(0, 0, 0);
-  blockStart.value = toLocalInput(now);
-  blockEnd.value = toLocalInput(new Date(now.getTime() + 60 * 60 * 1000));
+  blockRange = { start: null, end: null };
   blockError.hidden = true;
+  blockSubmit.disabled = true;
+  // Re-mount the range picker fresh each open so the previous state
+  // doesn't leak into a new block. mountDateRangePicker is idempotent
+  // but we also clear blockRange above for safety.
+  if (typeof blockPickerDestroy === "function") {
+    try { blockPickerDestroy(); } catch (_) {}
+    blockPickerDestroy = null;
+  }
+  if (typeof window.mountDateRangePicker === "function") {
+    blockPickerDestroy = window.mountDateRangePicker(blockRangeHost, {
+      allowPast: false,
+      onChange: ({ start, end }) => {
+        blockRange = { start, end };
+        // Enable submit only once the full range is set.
+        blockSubmit.disabled = !(start && end);
+      }
+    });
+  } else {
+    blockRangeHost.innerHTML = `<p class="dialog-error">Range picker failed to load. Refresh the page.</p>`;
+  }
   if (typeof blockDialog.showModal === "function") blockDialog.showModal();
   else blockDialog.setAttribute("open", "");
 });
@@ -339,30 +374,45 @@ blockCancel.addEventListener("click", () => blockDialog.close());
 blockForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   blockError.hidden = true;
+  if (!blockRange.start || !blockRange.end) {
+    blockError.textContent = "Pick a date range first.";
+    blockError.hidden = false;
+    return;
+  }
+  if (!blockLabel.value.trim()) {
+    blockError.textContent = "Add a label (vacation, holiday, etc.).";
+    blockError.hidden = false;
+    blockLabel.focus();
+    return;
+  }
+  // Full-day block: from 00:00 of the first selected day to 23:59:59
+  // of the last selected day. The availability engine's rangeOverlaps
+  // check treats any overlap with this range as blocked, so every slot
+  // inside the picked range is removed from /api/booking/availability.
+  const startIso = startOfDay(blockRange.start).toISOString();
+  const endIso = endOfDay(blockRange.end).toISOString();
+  blockSubmit.disabled = true;
   try {
     const response = await fetch("/api/schedule/blocks", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         label: blockLabel.value.trim(),
-        start: new Date(blockStart.value).toISOString(),
-        end: new Date(blockEnd.value).toISOString()
+        start: startIso,
+        end: endIso
       })
     });
     const data = await response.json();
     if (!response.ok || !data.ok) throw new Error((data.errors || ["Couldn't save block."]).join(" "));
     blockDialog.close();
+    if (typeof blockPickerDestroy === "function") { try { blockPickerDestroy(); } catch (_) {} blockPickerDestroy = null; }
     await loadAll();
   } catch (err) {
     blockError.textContent = err.message;
     blockError.hidden = false;
+    blockSubmit.disabled = false;
   }
 });
-
-function toLocalInput(date) {
-  const pad = (n) => String(n).padStart(2, "0");
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
-}
 
 // Click-to-delete blocks (works in the calendar grid OR the active-blocks list).
 document.addEventListener("click", async (event) => {
