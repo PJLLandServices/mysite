@@ -83,7 +83,9 @@ function eventColorClass(serviceKey) {
 }
 
 let cursorDate = startOfDay(new Date());      // anchor for the current view
-let currentView = "week";                     // "day" | "week" | "month"
+// Default Week on desktop, Day on phones — the 7-column week is too
+// cramped to be useful at ≤ 600 px wide. Patrick can switch manually.
+let currentView = (typeof window !== "undefined" && window.innerWidth < 600) ? "day" : "week";
 let miniMonth = startOfMonth(new Date());     // mini-calendar's visible month
 let blocks = [];
 let bookings = [];

@@ -411,9 +411,33 @@ body.is-nav-open .pjl-nav-toggle-bar:nth-child(3) {
   box-shadow: 0 10px 28px rgba(224,123,36,0.38);
 }
 
+/* PERMANENT DEFAULT (May 14, 2026): outline buttons render correctly on
+   LIGHT backgrounds by default — green text on a white card with a
+   subtle border. Originally this class was tuned for the dark hero
+   strip (white-on-transparent), but the CRM has long since moved to
+   white-card layouts everywhere; the legacy default produced invisible
+   buttons on every new toolbar / dialog and forced page authors to
+   add scoped overrides. The hero override below still wins specificity
+   when needed. For the rare dark-background placement, opt-in to
+   .pjl-btn-outline-dark which keeps the old white-on-transparent look. */
 .pjl-btn-outline {
+  background: #fff;
+  border: 1.5px solid rgba(27, 77, 46, 0.30);
+  color: var(--pjl-green, #1B4D2E);
+}
+.pjl-btn-outline:hover {
+  background: rgba(27, 77, 46, 0.06);
+  border-color: var(--pjl-green, #1B4D2E);
+}
+.pjl-btn-outline-dark {
   background: transparent;
-  border: 1.5px solid rgba(255,255,255,0.26);
+  border: 1.5px solid rgba(255, 255, 255, 0.26);
+  color: #fff;
+}
+.pjl-btn-outline-dark:hover {
+  background: rgba(255, 255, 255, 0.09);
+  border-color: rgba(255, 255, 255, 0.48);
+  color: #fff;
 }
 
 .pjl-btn:hover {
@@ -422,11 +446,6 @@ body.is-nav-open .pjl-nav-toggle-bar:nth-child(3) {
 
 .pjl-btn-primary:hover {
   box-shadow: 0 16px 36px rgba(224,123,36,0.55);
-}
-
-.pjl-btn-outline:hover {
-  background: rgba(255,255,255,0.09);
-  border-color: rgba(255,255,255,0.48);
 }
 
 .pjl-btn:disabled {

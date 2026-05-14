@@ -500,11 +500,105 @@
   .cal-layout { grid-template-columns: 1fr; }
   .cal-sidebar { order: 2; }
 }
+
+/* iPhone / phone-portrait optimization. The calendar is the most
+   space-constrained surface PJL has -- 7-column week + hour gutter +
+   sidebar doesn't fit a 375px viewport. Strategy:
+   - Hide sidebar entirely on phones (nav buttons replace mini-calendar).
+   - Stack the toolbar into 2 rows; action buttons go full-width.
+   - Week view scrolls horizontally so each column stays readable.
+   - Month cells drop event labels in favour of colored stripe dots.
+   - Hour gutter narrows to 40px; events scale down. */
 @media (max-width: 720px) {
-  .cal-shell { padding: 12px 12px 16px; }
-  .cal-toolbar { padding: 8px 10px; gap: 8px; }
-  .cal-title { font-size: 18px; }
-  .cal-view-btn { padding: 6px 10px; font-size: 13px; }
+  .cal-shell { padding: 8px 8px 16px; }
+
+  /* Toolbar: title row + actions row, both edge-to-edge */
+  .cal-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+    padding: 8px 10px;
+  }
+  .cal-toolbar-left {
+    display: grid;
+    grid-template-columns: auto auto auto 1fr;
+    gap: 6px;
+    align-items: center;
+  }
+  .cal-title {
+    font-size: 15px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    text-align: right;
+    min-width: 0;
+  }
+  .cal-today { padding: 6px 10px; font-size: 13px; }
+  .cal-nav { width: 32px; height: 32px; font-size: 16px; }
+
+  .cal-toolbar-right {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+  }
+  .cal-view-switcher { grid-column: 1 / -1; }
+  .cal-toolbar-right .pjl-btn { padding: 9px 8px; font-size: 13px; min-height: 40px; }
+
+  /* Sidebar: out of the way on phone — the toolbar's nav handles it. */
+  .cal-sidebar { display: none; }
+  .cal-layout { grid-template-columns: 1fr; gap: 0; }
+
+  /* Canvas: edge-to-edge */
+  .cal-canvas { border-radius: 8px; }
+
+  /* Time grid: narrower hour gutter + smaller text */
+  .cal-tg-head, .cal-tg-body { grid-template-columns: 40px 1fr; }
+  .cal-tg-hour-label { font-size: 9px; padding: 2px 4px; }
+  .cal-tg-head-day { padding: 6px 2px; }
+  .cal-tg-head-day .dow { font-size: 10px; }
+  .cal-tg-head-day .num { width: 22px; height: 22px; font-size: 13px; }
+  .cal-event { left: 2px; right: 2px; padding: 3px 5px; }
+  .cal-event strong { font-size: 11px; }
+  .cal-event .cal-event-meta { font-size: 10px; }
+
+  /* Week view: scroll the column block horizontally so 7 days stay
+     readable. The hour gutter scrolls with the columns so the rows
+     line up; sticky positioning gets weird inside grid templates so
+     we just accept the gutter scrolls too. */
+  .cal-view-week .cal-tg-head-days,
+  .cal-view-week .cal-tg-days {
+    min-width: 700px;
+  }
+  .cal-view-week .cal-tg-head,
+  .cal-view-week .cal-tg-body {
+    overflow-x: auto;
+  }
+
+  /* Month view: compact cells with stripe-style event dots instead
+     of full-text pills. Patrick can tap a date to drill in (future
+     wire) or use the mini-cal (when shown). For now keep up to 2
+     dot indicators + a "+N" badge. */
+  .cal-month-row { min-height: 64px; }
+  .cal-month-cell { padding: 2px 4px 6px; }
+  .cal-month-cell-num { width: 18px; height: 18px; font-size: 11px; }
+  .cal-month-event {
+    /* Hide text; render as a 3px-tall stripe in the service-family
+       background colour (which the .svc-* class supplies). */
+    font-size: 0;
+    line-height: 0;
+    height: 4px;
+    margin-top: 2px;
+    padding: 0;
+    border-radius: 2px;
+  }
+  .cal-month-more { font-size: 9px; padding-left: 4px; margin-top: 4px; }
+}
+
+/* Narrower still: iPhone SE / portrait (≤ 380px) */
+@media (max-width: 380px) {
+  .cal-toolbar-left { grid-template-columns: auto auto 1fr; }
+  .cal-today { display: none; } /* prev/next reach the same goal */
+  .cal-title { font-size: 14px; }
 }
 
 /* ============================================================
