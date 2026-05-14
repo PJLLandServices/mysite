@@ -9216,13 +9216,13 @@ Customer signature captured at ${new Date().toISOString()}.`;
       result.lead.booking = {
         start: startDate.toISOString(),
         end: endDate.toISOString(),
-        // Bucket-mode: durationMinutes is the bucket window length (e.g.
-        // 240 for morning). Patrick's iCal therefore shows the full
-        // 8–12 / 12–5 block. service.minutes still describes on-site
-        // time; we capture it separately so WO + invoicing logic can
-        // reach it without re-computing.
+        // durationMinutes is the on-site service duration (service.minutes
+        // from BOOKABLE_SERVICES). Multiple bookings can land inside the
+        // same bucket — the bucket is a customer-facing LABEL, not a
+        // capacity reservation. Patrick's iCal shows the real visit
+        // window (e.g. 8:00–8:45 for a 45-min spring opening); the
+        // customer sees only "Morning Appointment (8 AM – 12 PM)".
         durationMinutes: matched.durationMinutes,
-        onSiteMinutes: service.minutes,
         bucketKey: matched.bucketKey || null,
         bucketWindow: matched.bucketWindow || null,
         bucketLabel: matched.timeLabel || null,
