@@ -4133,6 +4133,12 @@ async function handleApi(req, res, pathname) {
     try {
       const id = decodeURIComponent(propertyMatch[1]);
       const payload = await parseRequestBody(req);
+      // Capture the previous address so we know whether to re-geocode
+      // after the update. The property record stores coords explicitly;
+      // when address changes those coords go stale and the iCal feed's
+      // X-APPLE-STRUCTURED-LOCATION would point at the old pin.
+      const before = await properties.get(id);
+      const previousAddress = String(before?.address || "").trim();
       // Guard against the admin accidentally clobbering structural fields
       // (id, leadIds, customerEmail) — only allow profile / system edits.
       const sanitized = {};
@@ -4147,8 +4153,29 @@ async function handleApi(req, res, pathname) {
           if (Object.prototype.hasOwnProperty.call(payload.system, key)) sanitized.system[key] = payload.system[key];
         }
       }
-      const updated = await properties.update(id, sanitized);
+      let updated = await properties.update(id, sanitized);
       if (!updated) return sendJson(res, 404, { ok: false, errors: ["Property not found."] });
+
+      // If address changed, refresh the geocoded coords so the iCal
+      // feed's structured-location pin tracks the new address. Failure
+      // here is non-blocking — the property update is already committed.
+      const newAddress = String(updated.address || "").trim();
+      if (newAddress && newAddress !== previousAddress) {
+        try {
+          const geo = await geocode(newAddress);
+          if (geo.ok && geo.coords && geo.coords.lat != null) {
+            updated = await properties.update(id, {
+              coords: {
+                lat: geo.coords.lat,
+                lng: geo.coords.lng,
+                formattedAddress: geo.coords.formattedAddress || newAddress
+              }
+            });
+          }
+        } catch (err) {
+          console.warn("[property update] re-geocode failed:", err?.message);
+        }
+      }
 
       // Cascade canonical fields to linked leads + bookings. The property
       // record is the source of truth for address + customer contact;

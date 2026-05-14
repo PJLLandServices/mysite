@@ -57,6 +57,34 @@ function extractStreetAndCity(address) {
   return { street, city };
 }
 
+// Apple's structured-location format. This is what makes the address
+// reliably tappable on iPhone — plain LOCATION text-recognition is
+// flaky across iOS versions and address shapes. With X-APPLE-STRUCTURED-
+// LOCATION carrying explicit lat/lng (geo: URI value), the Calendar app
+// gives the user a tap affordance that opens Maps AT THE COORDS — no
+// re-geocoding, no ambiguity.
+//
+// Spec by example (from a working Apple Calendar export):
+//   X-APPLE-STRUCTURED-LOCATION;VALUE=URI;X-ADDRESS="21 Hill Country …";
+//     X-APPLE-RADIUS=49.91;X-TITLE="21 Hill Country Drive":geo:43.96,-79.24
+//
+// Address + title go in quoted parameters; the geo: URI is the value
+// after the final colon. Folding still handled by the caller's joinIcal.
+function buildAppleStructuredLocation(addressLine, titleText, coords) {
+  if (!coords || typeof coords.lat !== "number" || typeof coords.lng !== "number") return null;
+  // Quoted-string params can't carry embedded double quotes per RFC 5545
+  // §3.1.1; strip them defensively. Newlines become literal \n per the
+  // same spec (Apple parses both these and a literal newline inside the
+  // quote — \n is the portable choice).
+  const sanitize = (s) => String(s || "")
+    .replace(/"/g, "")
+    .replace(/\r\n|\r|\n/g, "\\n");
+  const addr = sanitize(addressLine);
+  const title = sanitize(titleText || addressLine);
+  const geo = `geo:${coords.lat},${coords.lng}`;
+  return `X-APPLE-STRUCTURED-LOCATION;VALUE=URI;X-ADDRESS="${addr}";X-APPLE-RADIUS=49.91307587;X-TITLE="${title}":${geo}`;
+}
+
 // Parse a raw address blob into the canonical Maps-friendly form.
 // Handles both the multi-line CRM-edited shape and the comma-separated
 // Google Places autocomplete shape, plus messy hybrids. See the spec
@@ -191,7 +219,28 @@ function buildVevent(booking, { baseUrl, now, lead = null, property = null }) {
     `SUMMARY:${escapeIcalValue(summary)}`
   ];
   if (mapsAddress) {
+    // Plain-text LOCATION for non-Apple consumers (Google Calendar,
+    // Outlook, etc.) and as the fallback when Apple's structured-
+    // location parsing misfires.
     lines.push(`LOCATION:${escapeIcalValue(mapsAddress)}`);
+    // X-APPLE-STRUCTURED-LOCATION is what makes the address reliably
+    // tappable on iPhone Calendar. Prefer property.coords (canonical,
+    // refreshed on every property PATCH); fall back to whatever the
+    // booking flow stashed on lead.booking.coords; otherwise omit and
+    // rely on Apple's text recognition.
+    let coords = null;
+    if (property && property.coords && property.coords.lat != null) {
+      coords = property.coords;
+    } else if (lead && lead.booking && lead.booking.coords && lead.booking.coords.lat != null) {
+      coords = lead.booking.coords;
+    }
+    if (coords) {
+      const structured = buildAppleStructuredLocation(mapsAddress, mapsAddress, coords);
+      if (structured) lines.push(structured);
+      // GEO is the RFC 5545 portable lat/lng property. Cheap to include,
+      // helps non-Apple clients show a map link too.
+      lines.push(`GEO:${coords.lat};${coords.lng}`);
+    }
   }
   if (description) {
     lines.push(`DESCRIPTION:${escapeIcalValue(description)}`);
