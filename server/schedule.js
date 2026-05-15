@@ -83,9 +83,10 @@ function eventColorClass(serviceKey) {
 }
 
 let cursorDate = startOfDay(new Date());      // anchor for the current view
-// Default Week on desktop, Day on phones — the 7-column week is too
-// cramped to be useful at ≤ 600 px wide. Patrick can switch manually.
-let currentView = (typeof window !== "undefined" && window.innerWidth < 600) ? "day" : "week";
+// Default to Day on first load -- Patrick wants today's appointments
+// front-and-center on every visit. Week + Month are still available
+// via the toolbar switcher.
+let currentView = "day";
 let miniMonth = startOfMonth(new Date());     // mini-calendar's visible month
 let blocks = [];
 let bookings = [];
@@ -181,6 +182,7 @@ async function loadAll() {
       end: l.booking.end,
       label: l.booking.serviceLabel || "Booking",
       customer: l.contact?.name || "Customer",
+      phone: l.contact?.phone || "",
       address: l.contact?.address || "",
       status: l.crm?.status,
       // serviceKey drives the color-coding class on the calendar event.
@@ -341,25 +343,69 @@ function layoutEvents(host, days) {
       if (!col) continue;
       const isCancelled = b.bookingStatus === "cancelled";
       const colorClass = eventColorClass(b.serviceKey);
-      const btn = document.createElement("button");
-      btn.type = "button";
-      btn.className = `cal-event${isCancelled ? " is-cancelled" : ""}${colorClass ? " " + colorClass : ""}`;
-      btn.style.top = `${top}px`;
-      btn.style.height = `${Math.max(height, 22)}px`;
-      btn.dataset.leadId = b.id;
-      btn.dataset.start = b.start;
-      btn.dataset.bookingStatus = b.bookingStatus;
-      btn.title = isCancelled
+      // <div role="button"> instead of a real <button> so we can legally
+      // nest the <a href="tel:..."> tap-to-call link inside. Keyboard
+      // users still get Enter/Space activation via the listener below.
+      const evtEl = document.createElement("div");
+      evtEl.setAttribute("role", "button");
+      evtEl.setAttribute("tabindex", "0");
+      evtEl.className = `cal-event${isCancelled ? " is-cancelled" : ""}${colorClass ? " " + colorClass : ""}`;
+      evtEl.style.top = `${top}px`;
+      // Bumped the minimum height from 22 to 84 so the 4 lines of detail
+      // (service / customer / address / phone) all fit even on the
+      // tightest 45-min bucket slot.
+      evtEl.style.height = `${Math.max(height, 84)}px`;
+      evtEl.dataset.leadId = b.id;
+      evtEl.dataset.start = b.start;
+      evtEl.dataset.bookingStatus = b.bookingStatus;
+      evtEl.title = isCancelled
         ? "Cancelled — tap for details"
         : "Tap to manage this appointment";
       const timeStr = `${fmtTime(b.start)} – ${fmtTime(b.end)}`;
-      btn.innerHTML = `
-        <strong>${escapeHtml(b.label)}</strong>
-        <span class="cal-event-meta">${escapeHtml(b.customer)} · ${escapeHtml(timeStr)}</span>
+      const shortAddr = shortAddress(b.address);
+      const phoneTel = b.phone ? telHref(b.phone) : "";
+      // Phone is rendered as a real <a tel:> so iOS hands the tap off
+      // to the dialer. event.stopPropagation on the link keeps the
+      // outer "open action panel" click from also firing.
+      const phoneHtml = phoneTel
+        ? `<a class="cal-event-phone" href="${escapeHtml(phoneTel)}" onclick="event.stopPropagation()">${escapeHtml(b.phone)}</a>`
+        : "";
+      evtEl.innerHTML = `
+        <strong class="cal-event-svc">${escapeHtml(b.label)}</strong>
+        <span class="cal-event-customer">${escapeHtml(b.customer)}</span>
+        ${shortAddr ? `<span class="cal-event-addr">${escapeHtml(shortAddr)}</span>` : ""}
+        ${phoneHtml}
+        <span class="cal-event-time">${escapeHtml(timeStr)}</span>
       `;
-      col.appendChild(btn);
+      col.appendChild(evtEl);
     }
   }
+}
+
+// Trim a PJL address blob down to "street, town" for the calendar card
+// display. Server-side ical-feed has the same idea but we duplicate
+// the parser here so we don't have to round-trip.
+function shortAddress(addr) {
+  if (!addr) return "";
+  const segments = String(addr).split(/[\n,]+/).map((p) => p.trim()).filter(Boolean);
+  if (!segments.length) return "";
+  const street = segments[0];
+  let town = segments[1] || "";
+  // Strip "ON L4A 1A1" tail from the town segment if it's glued in.
+  town = town.replace(/\s+ON\b.*$/i, "").trim();
+  return [street, town].filter(Boolean).join(", ");
+}
+
+// Build a tel: URI that iOS Safari recognizes. Strips formatting so
+// "(905) 960-0181" becomes "tel:+19059600181" -- iPhone's dialer
+// handles both, but the +1 form is the most portable.
+function telHref(phone) {
+  const digits = String(phone || "").replace(/[^\d]/g, "");
+  if (!digits) return "";
+  // North American 10-digit number? Prefix +1. Leave already-+ numbers alone.
+  if (digits.length === 10) return `tel:+1${digits}`;
+  if (digits.length === 11 && digits.startsWith("1")) return `tel:+${digits}`;
+  return `tel:${digits}`;
 }
 
 // Clip a [start, end] interval to the grid's hour window for a given day.
@@ -648,11 +694,13 @@ function addMonths(date, delta) {
   return d;
 }
 
-// Delegated click for booking events on the calendar canvas. Same
-// behaviour as before -- opens the action panel (Reschedule / Cancel /
-// Delete). Catches both the time-grid .cal-event buttons (day/week)
-// and the .cal-month-event pills (month).
+// Delegated click for booking events on the calendar canvas. Catches
+// both the time-grid .cal-event blocks (day/week) and the
+// .cal-month-event pills (month). The tel: phone link inside an event
+// stops propagation itself so iOS hands the tap to the dialer instead
+// of opening the action panel.
 calCanvas.addEventListener("click", (event) => {
+  if (event.target.closest(".cal-event-phone")) return;
   const evtEl = event.target.closest(".cal-event, .cal-month-event");
   if (!evtEl) return;
   const leadId = evtEl.dataset.leadId;
@@ -663,6 +711,18 @@ calCanvas.addEventListener("click", (event) => {
     scheduledFor: start || undefined,
     bookingStatus: evtEl.dataset.bookingStatus || "confirmed"
   });
+});
+
+// Keyboard activation for the event cards (they're div role="button" so
+// they don't get the native button keyboard handling for free).
+calCanvas.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter" && event.key !== " ") return;
+  const evtEl = event.target.closest(".cal-event");
+  if (!evtEl) return;
+  // Don't trap Space/Enter when focus is on the inner tel: link.
+  if (event.target.closest(".cal-event-phone")) return;
+  event.preventDefault();
+  evtEl.click();
 });
 
 // Range picker drives the Block-off-time dialog. blockRange holds the

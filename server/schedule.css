@@ -323,11 +323,15 @@
   border-radius: 50%;
 }
 
-/* Events drawn-to-scale inside .cal-tg-day. JS sets top + height in px. */
+/* Events drawn-to-scale inside .cal-tg-day. JS sets top + height in px.
+   Cards now render 4 lines of detail: service (bold) / customer /
+   short address / clickable phone, plus a small time stamp at the
+   bottom. Min height is set in JS (84px) so all 4 lines fit even for
+   short bookings. Longer events extend naturally. */
 .cal-event {
   position: absolute;
   left: 4px; right: 4px;
-  padding: 4px 8px;
+  padding: 6px 9px;
   border-radius: 6px;
   border-left: 3px solid;
   background: #EAF3DE;
@@ -337,23 +341,60 @@
   overflow: hidden;
   cursor: pointer;
   z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  outline: none;
 }
 .cal-event:hover { box-shadow: 0 4px 12px rgba(15, 31, 20, 0.18); z-index: 2; }
-.cal-event strong {
+.cal-event:focus-visible { outline: 2px solid #1B4D2E; outline-offset: 1px; z-index: 2; }
+.cal-event-svc {
   display: block;
   font-size: 12px;
   font-weight: 700;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  color: #0F1F14;
 }
-.cal-event .cal-event-meta {
+.cal-event-customer {
+  display: block;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: #1B4D2E;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cal-event-addr {
   display: block;
   font-size: 11px;
   color: #4A4A4A;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.cal-event-phone {
+  display: inline-block;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: #1B4D2E;
+  text-decoration: underline;
+  text-decoration-color: rgba(27, 77, 46, 0.40);
+  text-underline-offset: 2px;
+  white-space: nowrap;
+  /* Larger hit area on phones — tap-to-call needs to be easy. */
+  padding: 2px 0;
+  margin-top: 1px;
+}
+.cal-event-phone:hover { text-decoration-color: #1B4D2E; }
+.cal-event-time {
+  display: block;
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+  color: #7A7A72;
+  margin-top: auto;       /* push time stamp to bottom of the card */
 }
 .cal-event.is-cancelled {
   background: rgba(120, 120, 120, 0.10);
@@ -548,18 +589,29 @@
   .cal-sidebar { display: none; }
   .cal-layout { grid-template-columns: 1fr; gap: 0; }
 
-  /* Canvas: edge-to-edge */
+  /* Canvas: edge-to-edge with native momentum scrolling on iOS. The
+     bottom padding clears the home-indicator on iPhone 17 Pro Max. */
   .cal-canvas { border-radius: 8px; }
+  .cal-tg-body, .cal-view-week .cal-tg-head, .cal-view-week .cal-tg-body {
+    -webkit-overflow-scrolling: touch;
+  }
+  .cal-shell { padding-bottom: calc(16px + env(safe-area-inset-bottom)); }
 
-  /* Time grid: narrower hour gutter + smaller text */
-  .cal-tg-head, .cal-tg-body { grid-template-columns: 40px 1fr; }
-  .cal-tg-hour-label { font-size: 9px; padding: 2px 4px; }
-  .cal-tg-head-day { padding: 6px 2px; }
+  /* Time grid: narrower hour gutter + slightly tighter text. */
+  .cal-tg-head, .cal-tg-body { grid-template-columns: 44px 1fr; }
+  .cal-tg-hour-label { font-size: 10px; padding: 2px 4px; }
+  .cal-tg-head-day { padding: 6px 4px; }
   .cal-tg-head-day .dow { font-size: 10px; }
-  .cal-tg-head-day .num { width: 22px; height: 22px; font-size: 13px; }
-  .cal-event { left: 2px; right: 2px; padding: 3px 5px; }
-  .cal-event strong { font-size: 11px; }
-  .cal-event .cal-event-meta { font-size: 10px; }
+  .cal-tg-head-day .num { width: 24px; height: 24px; font-size: 13px; }
+  /* Event card on phones — keep all 4 lines of detail visible. Tighter
+     padding gives more vertical real estate for the text without
+     squashing the touch target. */
+  .cal-event { left: 3px; right: 3px; padding: 5px 7px; }
+  .cal-event-svc { font-size: 12px; }
+  .cal-event-customer { font-size: 12px; }
+  .cal-event-addr { font-size: 11px; }
+  .cal-event-phone { font-size: 12px; padding: 4px 0; }   /* bigger tap target */
+  .cal-event-time { font-size: 10px; }
 
   /* Week view: scroll the column block horizontally so 7 days stay
      readable. The hour gutter scrolls with the columns so the rows

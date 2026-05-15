@@ -192,6 +192,32 @@
       }
     }
 
+    // Class-only repaint that updates the visual range state WITHOUT
+    // rebuilding the grid DOM. Critical on iPhone Safari: the previous
+    // implementation tore down + rebuilt the entire grid on every
+    // mouseover, so after the first tap the synthetic mouseover fired
+    // before the synthetic click could land — the click target was a
+    // stale DOM node and the second click never registered.
+    // Re-use this from click AND hover; only month navigation needs a
+    // full renderGrid() rebuild.
+    function paintRange() {
+      const cells = gridEl.querySelectorAll(".drp-day");
+      cells.forEach((btn) => {
+        if (btn.disabled) return;
+        const key = btn.dataset.date;
+        if (!key) return;
+        const cellDate = parseDateKey(key);
+        cellDate.setHours(0, 0, 0, 0);
+        const isStart = rangeStart && isSameDay(cellDate, rangeStart);
+        const isEnd = rangeEnd && isSameDay(cellDate, rangeEnd);
+        const inRange = cellInRange(cellDate);
+        btn.classList.toggle("is-range-start", Boolean(isStart));
+        btn.classList.toggle("is-range-end", Boolean(isEnd));
+        btn.classList.toggle("is-range-single", Boolean(isStart && isEnd));
+        btn.classList.toggle("is-in-range", Boolean(inRange && !isStart && !isEnd));
+      });
+    }
+
     function handleCellClick(cell) {
       // Three states: nothing → start; start only → end (with swap); both → reset to new start.
       if (!rangeStart || (rangeStart && rangeEnd)) {
@@ -215,10 +241,17 @@
           }
         }
       }
-      renderGrid();
+      paintRange();
       renderHint();
       commit();
     }
+
+    // Detect touch-capable devices so we can skip the hover handlers
+    // entirely. On iOS, mouseover fires synthetically after every tap;
+    // even with the class-only paint above, skipping the work is cheaper
+    // and clearer.
+    const hasTouch = typeof window !== "undefined"
+      && ("ontouchstart" in window || (navigator.maxTouchPoints || 0) > 0);
 
     // Wire interactions.
     prevBtn.addEventListener("click", () => {
@@ -226,13 +259,13 @@
       viewMonth--;
       if (viewMonth < 0) { viewMonth = 11; viewYear--; }
       renderHeader();
-      renderGrid();
+      renderGrid();           // month changed → cells change → full rebuild
     });
     nextBtn.addEventListener("click", () => {
       viewMonth++;
       if (viewMonth > 11) { viewMonth = 0; viewYear++; }
       renderHeader();
-      renderGrid();
+      renderGrid();           // month changed → cells change → full rebuild
     });
     gridEl.addEventListener("click", (event) => {
       const btn = event.target.closest(".drp-day");
@@ -241,21 +274,25 @@
       if (!key) return;
       handleCellClick(parseDateKey(key));
     });
-    gridEl.addEventListener("mouseover", (event) => {
-      // Hover preview only matters when we have a start but no end yet.
-      if (!rangeStart || rangeEnd) return;
-      const btn = event.target.closest(".drp-day");
-      if (!btn || btn.disabled) return;
-      const key = btn.dataset.date;
-      if (!key) return;
-      hoverDate = parseDateKey(key);
-      renderGrid();
-    });
-    gridEl.addEventListener("mouseleave", () => {
-      if (!hoverDate) return;
-      hoverDate = null;
-      renderGrid();
-    });
+    if (!hasTouch) {
+      gridEl.addEventListener("mouseover", (event) => {
+        // Hover preview only matters when we have a start but no end yet.
+        if (!rangeStart || rangeEnd) return;
+        const btn = event.target.closest(".drp-day");
+        if (!btn || btn.disabled) return;
+        const key = btn.dataset.date;
+        if (!key) return;
+        const nextHover = parseDateKey(key);
+        if (hoverDate && isSameDay(nextHover, hoverDate)) return;
+        hoverDate = nextHover;
+        paintRange();
+      });
+      gridEl.addEventListener("mouseleave", () => {
+        if (!hoverDate) return;
+        hoverDate = null;
+        paintRange();
+      });
+    }
 
     // First paint.
     renderHeader();
