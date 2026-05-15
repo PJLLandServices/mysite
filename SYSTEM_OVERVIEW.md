@@ -93,7 +93,7 @@ form except where noted.
 | File | Entity | ID format | Purpose |
 |---|---|---|---|
 | `properties.js` | Property | `P-YYYY-NNNN` | Customer site profile (zones, valves, controller, blow-out, deferred issues, service records). One per physical address. Zones land with `pendingReview: true` when the WO completion cascade discovers them on-site (Brief D). |
-| `work-orders.js` | Work Order | `WO-XXXXXXXX` (random alphabet) | One per visit. Zones, issues, photos, signature OR signatureBypass (mutually exclusive), on-site quote, materials packed, `paidOnSite`, `propertyEditsAppliedAt`, `intakeGuarantee.matched`, `history[]`. Lock-protected fields enforced via `SCOPE_PROTECTED_FIELDS` constant (Brief A). |
+| `work-orders.js` | Work Order | `WO-XXXXXXXX` (random alphabet) | One per visit. Zones, issues, photos, signature OR signatureBypass (mutually exclusive), on-site quote, materials packed, `paidOnSite`, `propertyEditsAppliedAt`, `intakeGuarantee.matched`, `history[]`. Lock-protected fields enforced via `SCOPE_PROTECTED_FIELDS` constant (Brief A). Bypass acts as a unified end-of-visit completion event covering both on-site quote acceptance (when builder has additions beyond baseline) and completion lock; bypass-completed WOs with `coversQuoteAcceptance: true` do NOT produce `on_site_quote` Quote records — `signatureBypass.acceptedScopeSnapshot` (deep-copied builder lines + totals) is the authoritative scope record. |
 | `quotes.js` | Quote | `Q-YYYY-NNNN` | Versioned, signed estimate. Two flavours: `ai_repair_quote` (AI chat) and `on_site_quote` (tech-built). |
 | `invoices.js` | Invoice | `I-YYYY-NNNN` | Auto-drafted by completion cascade, lifecycle draft → sent → paid → void. |
 | `bookings.js` | Booking | `BK-YYYY-NNNN` | First-class appointment record. Mirrors `lead.booking` but is canonical. Exposes `cancel()` (soft, adds `cancelledAt/By/Reason` + history) and `remove()` (hard delete; refuses when a linked WO is past `scheduled` — caller passes `isActiveWo` to gate without coupling to work-orders.js). |
@@ -314,12 +314,26 @@ Work Orders
   POST   /api/work-orders/:id/intake-guarantee/decide               ← AI Correct Diagnosis Bonus decision (Brief F).
                                                                        Body: { matched: bool, mismatchReason?: string }.
                                                                        On match: appends -1hr labour credit to builder.
-  POST   /api/work-orders/:id/signature-bypass                      ← admin-authorized completion bypass.
+  POST   /api/work-orders/:id/signature-bypass                      ← admin-authorized unified bypass.
                                                                        Body: { reason, note, acknowledgeWarning? }.
-                                                                       Sets wo.locked = true; mutually exclusive
-                                                                       with signature. 409 if scope additions exist
-                                                                       without acknowledgeWarning: true. 422
-                                                                       presign_gate_unmet if photo/zone/payment/
+                                                                       Sets wo.locked = true. Acts as a single
+                                                                       end-of-visit event covering BOTH on-site
+                                                                       quote acceptance (when builder has additions)
+                                                                       AND completion signature. Does NOT create
+                                                                       on_site_quote Quote record; builder is
+                                                                       snapshotted into signatureBypass.acceptedScopeSnapshot.
+                                                                       Mutually exclusive with signature. 409 codes:
+                                                                         - already_signed / already_bypassed
+                                                                         - pending_remote_approval (send-for-approval
+                                                                           Quote pending customer signature)
+                                                                         - quote_already_accepted (drawn-signature
+                                                                           accept already fired — use that path's
+                                                                           completion signature instead)
+                                                                         - scope_additions_require_acknowledgement
+                                                                           (additions beyond baseline; retry with
+                                                                           acknowledgeWarning: true)
+                                                                         - invalid_state (terminal status)
+                                                                       422 presign_gate_unmet if photo/zone/payment/
                                                                        return-visit/AI-bonus/materials gates aren't
                                                                        satisfied. Bypass-time sweep resolves any
                                                                        carry-forward "Repair now" deferred items

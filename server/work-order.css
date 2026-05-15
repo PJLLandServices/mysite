@@ -2093,11 +2093,53 @@ body[data-locked="true"] .wo-zone-location {
   color: var(--pjl-text);
   line-height: 1.45;
 }
+.wo-bypass-warning-noquote {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  background: #fff7e0;
+  border: 1px solid #f0d488;
+  border-radius: 6px;
+  font-size: 13px;
+  color: #6E4A1A;
+  line-height: 1.45;
+}
+.wo-bypass-warning-mirror {
+  margin: 0 0 10px;
+  padding: 8px 12px;
+  background: #fafaf5;
+  border: 1px solid rgba(15, 31, 20, 0.15);
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--pjl-text);
+  line-height: 1.4;
+  word-wrap: break-word;
+}
+.wo-bypass-warning-note {
+  white-space: pre-wrap;
+}
 .wo-bypass-confirm-anyway.pjl-btn-primary {
   background: linear-gradient(135deg, #c0413a 0%, #8a1f1f 100%);
   box-shadow: 0 8px 22px rgba(138, 31, 31, 0.32);
 }
 .wo-bypass-confirm-anyway.pjl-btn-primary:hover {
   box-shadow: 0 12px 28px rgba(138, 31, 31, 0.45);
+}
+
+/* Post-bypass scope display — desktop mirror of the tech variant. */
+.wo-signoff-bypassed-scope {
+  margin: 6px 0 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--pjl-green);
+}
+.wo-signoff-bypassed-noquote {
+  margin: 6px 0 0;
+  padding: 8px 12px;
+  background: rgba(224, 168, 90, 0.12);
+  border-left: 3px solid rgba(224, 168, 90, 0.55);
+  border-radius: 4px;
+  font-size: 12px;
+  color: #6E4A1A;
+  line-height: 1.45;
 }
 

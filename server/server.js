@@ -7987,6 +7987,28 @@ async function handleApi(req, res, pathname) {
           errors: ["Bypass already recorded for this work order. See WO history."]
         });
       }
+      // Mutual exclusion with the on-site-quote flows. Send-for-approval
+      // sets onSiteQuote.status = "sent_for_remote_approval"; accept (or
+      // its remote-signature counterpart) sets accepted / partially_accepted /
+      // declined and attaches quoteId. Either path means a customer-
+      // signature posture already exists — bypass would either duplicate
+      // or contradict it, so refuse with a code the UI can route on.
+      const onSiteStatus = wo.onSiteQuote?.status;
+      const hasAttachedQuote = !!wo.onSiteQuote?.quoteId;
+      if (hasAttachedQuote && onSiteStatus === "sent_for_remote_approval") {
+        return sendJson(res, 409, {
+          ok: false,
+          error: "pending_remote_approval",
+          errors: ["A remote-approval quote is pending customer signature. Cancel the pending quote (or wait for the customer) before bypassing."]
+        });
+      }
+      if (hasAttachedQuote && (onSiteStatus === "accepted" || onSiteStatus === "partially_accepted" || onSiteStatus === "declined")) {
+        return sendJson(res, 409, {
+          ok: false,
+          error: "quote_already_accepted",
+          errors: ["An on-site quote was already accepted with a customer signature. Use the regular completion-signature path instead of bypass."]
+        });
+      }
       const terminal = new Set(["completed", "cancelled", "no_show"]);
       if (terminal.has(wo.status)) {
         return sendJson(res, 409, {
@@ -8066,7 +8088,11 @@ async function handleApi(req, res, pathname) {
           {
             reason: payload?.reason,
             note: payload?.note,
-            bypassedBy: "admin"
+            bypassedBy: "admin",
+            // Forward the warning-acknowledged flag so the verb's own
+            // scope-additions guard (defense-in-depth) doesn't re-throw
+            // after the route already passed the pre-flight check above.
+            acknowledgeWarning: payload?.acknowledgeWarning === true
           },
           { ip, userAgent }
         );
@@ -8076,8 +8102,19 @@ async function handleApi(req, res, pathname) {
         if (code === "wo_not_found") {
           return sendJson(res, 404, { ok: false, error: code, errors: [err.message] });
         }
-        if (code === "already_signed" || code === "already_bypassed" || code === "invalid_state") {
+        if (code === "already_signed" || code === "already_bypassed"
+            || code === "invalid_state" || code === "pending_remote_approval"
+            || code === "quote_already_accepted") {
           return sendJson(res, 409, { ok: false, error: code, errors: [err.message] });
+        }
+        if (code === "scope_additions_require_acknowledgement") {
+          return sendJson(res, 409, {
+            ok: false,
+            error: code,
+            errors: [err.message],
+            additionCount: err.additionCount,
+            additionTotal: err.additionTotal
+          });
         }
         if (code === "invalid_reason" || code === "note_too_short") {
           return sendJson(res, 400, { ok: false, error: code, errors: [err.message] });

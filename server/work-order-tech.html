@@ -579,15 +579,22 @@
       <!-- Post-bypass display — replaces the canvas form when a
            signature bypass has been recorded. Mutually exclusive with
            #techSignoffSigned (server enforces signature/bypass exclusion).
-           Shows the audit record + a Mark Complete CTA that triggers
-           the same status flip as the regular post-sign path. -->
+           Shows the audit record (reason / who / when / note) AND the
+           accepted-scope snapshot when the bypass also covered an
+           on-site-quote acceptance (coversQuoteAcceptance flag).
+           Mark Complete CTA reuses the existing
+           data-run-status="completed" handler. -->
       <div class="tech-signoff-bypassed" id="techSignoffBypassed" hidden>
         <div class="tech-signoff-bypassed-banner">
           <span class="tech-signoff-bypassed-icon" aria-hidden="true">✓</span>
           <div>
-            <p class="tech-signoff-bypassed-headline">Completion authorized via signature bypass</p>
+            <p class="tech-signoff-bypassed-headline" id="techSignoffBypassedHeadline">Visit authorized via signature bypass</p>
             <p class="tech-signoff-bypassed-meta" id="techSignoffBypassedMeta"></p>
             <p class="tech-signoff-bypassed-note" id="techSignoffBypassedNote"></p>
+            <p class="tech-signoff-bypassed-scope" id="techSignoffBypassedScope" hidden></p>
+            <p class="tech-signoff-bypassed-noquote" id="techSignoffBypassedNoQuote" hidden>
+              No on-site quote created — the work order's builder is the scope record.
+            </p>
           </div>
         </div>
         <button type="button" class="tech-signoff-submit tech-signoff-bypassed-complete" data-run-status="completed">Mark visit completed →</button>
@@ -794,12 +801,28 @@
 
       <!-- Scope-additions warning state — populated by the 409 retry path.
            Hidden by default; swapped in when the server returns
-           scope_additions_require_acknowledgement. -->
+           scope_additions_require_acknowledgement.
+           Two-checkbox gate per v2 brief: verbal-acceptance + scope-
+           additions-ack must BOTH be checked before Confirm enables. -->
       <div class="tech-bypass-warning" id="techBypassWarning" hidden>
-        <p class="tech-bypass-warning-headline"><span aria-hidden="true">⚠</span> Scope additions in the builder</p>
-        <p class="tech-bypass-warning-body" id="techBypassWarningBody">This work order has line items beyond the baseline. Bypassing signature on a visit with added scope means the customer hasn't signed off on the additions.</p>
+        <p class="tech-bypass-warning-headline"><span aria-hidden="true">⚠</span> Bypass with scope additions</p>
+        <p class="tech-bypass-warning-body" id="techBypassWarningBody">This bypass will record verbal acceptance of line items beyond the baseline service fee.</p>
+        <p class="tech-bypass-warning-noquote">
+          <strong>No on-site quote will be created</strong> in the quote folder — the work order's builder is the only record of what was accepted.
+        </p>
         <p class="tech-bypass-warning-suggest">Consider: <strong>Send for Remote Approval</strong> instead — the customer signs the additions remotely from their phone.</p>
 
+        <p class="tech-sheet-label" id="techBypassWarningReasonLabel">Reason</p>
+        <p class="tech-bypass-warning-mirror" id="techBypassWarningReasonMirror"></p>
+
+        <p class="tech-sheet-label">Note</p>
+        <p class="tech-bypass-warning-mirror tech-bypass-warning-note" id="techBypassWarningNoteMirror"></p>
+        <p class="tech-bypass-hint">Edit reason or note above (in the default panel) if needed — they apply to this bypass.</p>
+
+        <label class="tech-signoff-ack tech-bypass-ack">
+          <input type="checkbox" id="techBypassWarningVerbalAck">
+          <span>I confirm verbal acceptance was given</span>
+        </label>
         <label class="tech-signoff-ack tech-bypass-ack">
           <input type="checkbox" id="techBypassWarningAck">
           <span>I acknowledge the customer verbally accepted the full scope including additions</span>
@@ -807,7 +830,7 @@
 
         <div class="tech-bypass-actions">
           <button type="button" class="tech-bypass-remote" id="techBypassRemoteApproval">Send for remote approval instead</button>
-          <button type="button" class="tech-bypass-submit tech-bypass-submit-anyway" id="techBypassConfirmAnyway" disabled>Confirm bypass anyway</button>
+          <button type="button" class="tech-bypass-submit tech-bypass-submit-anyway" id="techBypassConfirmAnyway" disabled>Confirm bypass</button>
         </div>
       </div>
     </div>

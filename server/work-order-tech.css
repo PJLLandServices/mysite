@@ -3270,3 +3270,52 @@ body[data-locked="true"] .tech-finish-bar { opacity: 0.55; pointer-events: none;
   color: var(--tech-text, #1a1a1a);
   line-height: 1.45;
 }
+.tech-bypass-warning-noquote {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  background: #fff7e0;
+  border: 1px solid #f0d488;
+  border-radius: 6px;
+  font-size: 13px;
+  color: #6E4A1A;
+  line-height: 1.45;
+}
+.tech-bypass-warning-mirror {
+  margin: 0 0 10px;
+  padding: 8px 12px;
+  background: #fafaf5;
+  border: 1px solid var(--tech-border, #d1d5cf);
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--tech-text, #1a1a1a);
+  line-height: 1.4;
+  word-wrap: break-word;
+}
+.tech-bypass-warning-mirror:empty::before {
+  content: "—";
+  color: var(--tech-text-muted, #888);
+}
+.tech-bypass-warning-note {
+  white-space: pre-wrap;
+}
+
+/* Post-bypass scope display — only shown when coversQuoteAcceptance
+   is true (i.e., bypass also accepted scope additions). The orange
+   noquote chip reinforces that this WO doesn't appear in the quote
+   folder. */
+.tech-signoff-bypassed-scope {
+  margin: 6px 0 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--tech-green, #1B4D2E);
+}
+.tech-signoff-bypassed-noquote {
+  margin: 4px 0 0;
+  padding: 6px 10px;
+  background: rgba(224, 168, 90, 0.12);
+  border-left: 3px solid rgba(224, 168, 90, 0.55);
+  border-radius: 4px;
+  font-size: 12px;
+  color: #6E4A1A;
+  line-height: 1.4;
+}

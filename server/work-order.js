@@ -1732,13 +1732,30 @@ function renderSignoff(wo) {
     signed.hidden = true;
     if (bypassed) {
       bypassed.hidden = false;
+      const headline = document.getElementById("woSignoffBypassedHeadline");
       const meta = document.getElementById("woSignoffBypassedMeta");
       const note = document.getElementById("woSignoffBypassedNote");
+      const scopeEl = document.getElementById("woSignoffBypassedScope");
+      const noQuoteEl = document.getElementById("woSignoffBypassedNoQuote");
       const reasonLabel = woBypassReasonLabel(bypass.reason);
       const by = bypass.bypassedBy || "admin";
       const at = bypass.ts ? formatDateTime(bypass.ts) : "—";
+      const covers = bypass.coversQuoteAcceptance === true;
+      if (headline) headline.textContent = covers
+        ? "Visit authorized via signature bypass (incl. on-site quote acceptance)"
+        : "Visit authorized via signature bypass";
       if (meta) meta.textContent = `${reasonLabel} · Recorded by ${by} · ${at}`;
       if (note) note.textContent = bypass.note || "";
+      const snap = bypass.acceptedScopeSnapshot;
+      if (scopeEl && snap && covers) {
+        const count = Array.isArray(snap.builderLineItems) ? snap.builderLineItems.length : 0;
+        scopeEl.hidden = false;
+        scopeEl.textContent = `Scope accepted: ${count} line item${count === 1 ? "" : "s"}, $${(Number(snap.subtotal) || 0).toFixed(2)} + HST = $${(Number(snap.total) || 0).toFixed(2)}`;
+      } else if (scopeEl) {
+        scopeEl.hidden = true;
+        scopeEl.textContent = "";
+      }
+      if (noQuoteEl) noQuoteEl.hidden = !covers;
     }
     return;
   }
@@ -2756,8 +2773,10 @@ function openWoBypassModal() {
   if (err) { err.hidden = true; err.textContent = ""; }
   const ack = document.getElementById("woBypassAck");
   const warnAck = document.getElementById("woBypassWarningAck");
+  const warnVerbalAck = document.getElementById("woBypassWarningVerbalAck");
   if (ack) ack.checked = false;
   if (warnAck) warnAck.checked = false;
+  if (warnVerbalAck) warnVerbalAck.checked = false;
   modal.hidden = false;
   updateWoBypassSubmitState();
 }
@@ -2776,9 +2795,15 @@ function updateWoBypassSubmitState() {
 }
 
 function updateWoBypassWarningSubmitState() {
-  const ack = !!document.getElementById("woBypassWarningAck")?.checked;
+  // v2 brief: two-checkbox gate in the additions warning state.
+  // Verbal-acceptance ack + scope-additions ack both required, plus
+  // a valid reason + >=10-char note (mirrored from the default panel).
+  const reason = document.getElementById("woBypassReason")?.value || "";
+  const note = (document.getElementById("woBypassNote")?.value || "").trim();
+  const verbalAck = !!document.getElementById("woBypassWarningVerbalAck")?.checked;
+  const additionsAck = !!document.getElementById("woBypassWarningAck")?.checked;
   const btn = document.getElementById("woBypassConfirmAnyway");
-  if (btn) btn.disabled = !ack;
+  if (btn) btn.disabled = !(reason && note.length >= 10 && verbalAck && additionsAck);
 }
 
 async function submitWoBypass(acknowledgeWarning) {
@@ -2812,12 +2837,30 @@ async function submitWoBypass(acknowledgeWarning) {
       const body = document.getElementById("woBypassBody");
       const warn = document.getElementById("woBypassWarning");
       const warnBody = document.getElementById("woBypassWarningBody");
+      const reasonMirror = document.getElementById("woBypassWarningReasonMirror");
+      const noteMirror = document.getElementById("woBypassWarningNoteMirror");
       if (body) body.hidden = true;
       if (warn) warn.hidden = false;
       if (warnBody && Number.isFinite(Number(data.additionCount))) {
         const total = Number(data.additionTotal) || 0;
-        warnBody.textContent = `This work order has ${data.additionCount} line item${data.additionCount === 1 ? "" : "s"} beyond the baseline. Bypassing signature on a visit with added scope means the customer hasn't signed off on $${total.toFixed(2)} of additional work.`;
+        warnBody.textContent = `This bypass will record verbal acceptance of ${data.additionCount} line item${data.additionCount === 1 ? "" : "s"} totaling $${total.toFixed(2)} beyond the baseline service fee.`;
       }
+      if (reasonMirror) reasonMirror.textContent = woBypassReasonLabel(reason);
+      if (noteMirror) noteMirror.textContent = note || "—";
+      // Pre-fill the note with the dollar amount if still on default.
+      const noteEl = document.getElementById("woBypassNote");
+      if (noteEl && Number.isFinite(Number(data.additionTotal))) {
+        const total = Number(data.additionTotal) || 0;
+        const DEFAULT_NOTE = "Customer not home — signature bypassed, verbal acceptance recorded.";
+        if (noteEl.value.trim() === DEFAULT_NOTE) {
+          noteEl.value = `Customer verbally accepted $${total.toFixed(2)} of additions — `;
+          if (noteMirror) noteMirror.textContent = noteEl.value;
+        }
+      }
+      const verbal = document.getElementById("woBypassWarningVerbalAck");
+      const additions = document.getElementById("woBypassWarningAck");
+      if (verbal) verbal.checked = false;
+      if (additions) additions.checked = false;
       updateWoBypassWarningSubmitState();
       submitBtn.disabled = false;
       submitBtn.textContent = orig;
@@ -2847,10 +2890,21 @@ async function submitWoBypass(acknowledgeWarning) {
 document.getElementById("woBypassOpenBtn")?.addEventListener("click", openWoBypassModal);
 document.getElementById("woBypassClose")?.addEventListener("click", closeWoBypassModal);
 document.getElementById("woBypassCancel")?.addEventListener("click", closeWoBypassModal);
-document.getElementById("woBypassReason")?.addEventListener("change", updateWoBypassSubmitState);
-document.getElementById("woBypassNote")?.addEventListener("input", updateWoBypassSubmitState);
+document.getElementById("woBypassReason")?.addEventListener("change", () => {
+  updateWoBypassSubmitState();
+  const mirror = document.getElementById("woBypassWarningReasonMirror");
+  if (mirror) mirror.textContent = woBypassReasonLabel(document.getElementById("woBypassReason")?.value || "");
+  updateWoBypassWarningSubmitState();
+});
+document.getElementById("woBypassNote")?.addEventListener("input", () => {
+  updateWoBypassSubmitState();
+  const mirror = document.getElementById("woBypassWarningNoteMirror");
+  if (mirror) mirror.textContent = (document.getElementById("woBypassNote")?.value || "").trim() || "—";
+  updateWoBypassWarningSubmitState();
+});
 document.getElementById("woBypassAck")?.addEventListener("change", updateWoBypassSubmitState);
 document.getElementById("woBypassWarningAck")?.addEventListener("change", updateWoBypassWarningSubmitState);
+document.getElementById("woBypassWarningVerbalAck")?.addEventListener("change", updateWoBypassWarningSubmitState);
 document.getElementById("woBypassSubmit")?.addEventListener("click", () => submitWoBypass(false));
 document.getElementById("woBypassConfirmAnyway")?.addEventListener("click", () => submitWoBypass(true));
 document.getElementById("woBypassRemoteApproval")?.addEventListener("click", () => {

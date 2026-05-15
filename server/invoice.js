@@ -304,8 +304,24 @@ async function refreshAuthPosture(woId) {
       const b = wo.signatureBypass;
       const reasonLabel = bypassReasonLabel(b.reason);
       const by = b.bypassedBy || "admin";
+      const covers = b.coversQuoteAcceptance === true;
       card.hidden = false;
-      summary.textContent = `Verbal acceptance bypass recorded by ${by} on ${fmtDate(b.ts)} — reason: ${reasonLabel}`;
+      // Two posture variants per v2 brief §3.4.4:
+      //   bypass-only:               "Verbal acceptance bypass..."
+      //   bypass+quote-acceptance:   "Verbal acceptance bypass (incl.
+      //                              on-site quote acceptance) ...
+      //                              Scope: N line items, $XXX.XX."
+      // The "incl." variant signals to whoever reviews the invoice that
+      // there is no separate Quote record in the folder — the bypass
+      // record is the scope record.
+      if (covers && b.acceptedScopeSnapshot) {
+        const snap = b.acceptedScopeSnapshot;
+        const count = Array.isArray(snap.builderLineItems) ? snap.builderLineItems.length : 0;
+        const total = Number(snap.total) || 0;
+        summary.textContent = `Verbal acceptance bypass (incl. on-site quote acceptance) recorded by ${by} on ${fmtDate(b.ts)} — reason: ${reasonLabel}. Scope: ${count} line item${count === 1 ? "" : "s"}, $${total.toFixed(2)}.`;
+      } else {
+        summary.textContent = `Verbal acceptance bypass recorded by ${by} on ${fmtDate(b.ts)} — reason: ${reasonLabel}`;
+      }
       if (detail) {
         if (b.note) { detail.hidden = false; detail.textContent = b.note; }
         else { detail.hidden = true; detail.textContent = ""; }

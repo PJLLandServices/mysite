@@ -216,6 +216,8 @@ Every box knows its parent and its child. No orphans.
 
 **B. Formal Quote** — for installs, retrofits, renovations. Polished branded PDF (matches QuickBooks format) + SMS with portal link. Customer accepts in portal with signature pad. Signature + IP + timestamp + user agent logged for legal trail.
 
+**Note on bypass-completed WOs:** When a work order is completed via signature bypass (admin-authorized verbal acceptance — see §4.3) AND the bypass also covers on-site quote acceptance (the builder carried lines beyond baseline), **no `on_site_quote` Quote record is created in this folder**. The WO's builder line items, snapshotted onto the bypass record (`acceptedScopeSnapshot`), are the authoritative scope record. Reporting that joins WOs to Quotes must account for this path — some WOs will not appear here.
+
 **Routing logic — when does AI quote vs. capture lead:**
 
 - If work is on the locked-rate list in `pricing.json` → AI generates `ai_repair_quote`
@@ -442,32 +444,57 @@ WORK ORDER FOLDER
     (history[]) and give the tech legal cover to start work; they are
     NOT signatures.
 
-    End-of-visit signature bypass (admin-authorized, recorded acceptance)
+    End-of-visit signature bypass (unified — admin-authorized)
     When the customer is not physically present at visit end, admin may
-    record a signature bypass in place of a drawn signature. The bypass
-    requires: reason (customer_not_home / trusted_customer_verbal / other),
-    a note (default: "Customer not home — signature bypassed, verbal
-    acceptance recorded"), and an explicit confirmation that verbal
-    acceptance was given. Bypass captures: customer printed name (from
-    property/customer record), reason, note, bypassedBy (admin identity),
-    server-stamped ISO timestamp, IP, userAgent.
+    record a signature bypass in place of the drawn-signature path. The
+    bypass is a SINGLE end-of-visit action that retroactively covers
+    BOTH the on-site quote acceptance (if any) AND the completion
+    signature. It is captured at the moment of completion, not mid-visit.
+
+    Bypass captures:
+      - reason (customer_not_home / trusted_customer_verbal / other)
+      - required note (≥10 chars; default "Customer not home —
+        signature bypassed, verbal acceptance recorded"; when scope
+        additions are present, the UI pre-fills the note with the
+        dollar amount + space for verbal-acceptance context)
+      - customer printed name (from property/customer/lead record)
+      - bypassedBy identity (admin today; tech in future)
+      - server-stamped ISO ts + IP + userAgent
+      - acceptedScopeSnapshot: deep-copied builder line items +
+        subtotal + hst + total at bypass time (the immutable scope
+        record — belt-and-suspenders alongside SCOPE_PROTECTED_FIELDS)
+      - coversQuoteAcceptance: derived bool, true when the builder
+        carried lines beyond baseline + AI bonus credit at bypass time
 
     A bypass IS NOT a signature. It is an honest record of verbal
-    acceptance at end-of-visit, deliberately distinguished from the
-    drawn-signature legal posture. However, a bypass DOES lock the WO
-    (`wo.locked = true`) and fires the same completion cascade —
+    acceptance at end-of-visit. However, a bypass DOES set
+    `wo.locked = true` and fires the same completion cascade —
     operationally it is equivalent to a signature for downstream flow.
 
     When the on-site quote builder contains line items beyond the
-    baseline seasonal fee (i.e., the customer is being billed for added
-    scope not previously authorized), bypass requires an additional
-    explicit acknowledgement that the customer verbally accepted the
-    full scope including additions. The UI surfaces this as a warning
-    with a "Send for remote approval instead" option as the preferred
-    path.
+    baseline seasonal fee (i.e., the customer is being billed for
+    additional scope beyond what was booked), bypass requires an
+    additional explicit acknowledgement that the customer verbally
+    accepted the full scope including additions. The UI surfaces this
+    as a warning state with TWO checkboxes (verbal-acceptance +
+    scope-additions-ack) and a "Send for remote approval instead"
+    button as the preferred alternative.
+
+    Critically: when bypass covers a quote acceptance (builder has
+    additions), **no `on_site_quote` Quote record is created in the
+    quote folder.** The WO's builder, snapshotted onto the bypass
+    record, is the legal scope record. This is a deliberate choice —
+    the bypass record IS the acceptance record, and creating a separate
+    Quote record without a signature would be misleading.
 
     `wo.signature` and `wo.signatureBypass` are mutually exclusive —
-    a WO has one or the other, never both.
+    a WO carries one or the other, never both. Bypass also refuses
+    with 409 when:
+      - `pending_remote_approval`: a send-for-approval Quote is
+        pending customer signature (cancel it first, or wait)
+      - `quote_already_accepted`: an on-site quote was already
+        accepted with a drawn signature (use the regular completion-
+        signature path instead)
 
     All pre-sign gates above apply to bypass too (zone walk-through,
     completion photos, payment method, return-visit, AI bonus when
@@ -888,8 +915,8 @@ These are the rules that protect the design from drift. Number them so they can 
 9. **Quotes are versioned, not edited.** Once sent, revisions create new versions.
 10. **Customer/property separation is permanent.** Don't conflate them, ever.
 11. **Signed or bypass-locked work order is the contract.** Locked once signed OR bypass-recorded (`wo.locked === true`). Scope-protected fields refuse PATCH with 409 — see §4.3.3 r5 for the canonical list (`SCOPE_PROTECTED_FIELDS` in `server/lib/work-orders.js`). Status, photos, materials, paidOnSite, and notes still accept edits and append to `history[]`.
-    - **Signature bypass is not a signature.** Bypass records verbal acceptance at end-of-visit when the customer is not present. It carries weaker legal posture than a drawn signature but the same operational lock. Bypass is admin-authorized and audited; `wo.signature` and `wo.signatureBypass` are mutually exclusive.
-12. **Scope changes require fresh signature.** Pre-signature scope changes (during the visit) are part of the same WO and the single completion signature covers them. Post-signature scope changes (e.g., customer asks for additional work after signing) require either (a) a fresh signature on a new scope-change record, or (b) a follow-up WO with its own signature flow. The on-site-quote endpoints all 409 once `wo.locked === true`.
+    - **Signature bypass is not a signature.** Bypass records verbal acceptance at end-of-visit when the customer is not present, and unifies the on-site quote acceptance with the completion lock in a single audited event. It carries weaker legal posture than a drawn signature but the same operational lock. Admin-authorized and audited. When bypass covers a quote acceptance (`coversQuoteAcceptance: true`), no `on_site_quote` Quote record is created — the WO builder snapshot (`signatureBypass.acceptedScopeSnapshot`) is the scope record. `wo.signature` and `wo.signatureBypass` are mutually exclusive; bypass also refuses when a pending or already-accepted on-site Quote exists on the WO.
+12. **Scope changes require fresh signature.** Pre-signature scope changes (during the visit) are part of the same WO and the single completion signature covers them. Post-signature scope changes (e.g., customer asks for additional work after signing) require either (a) a fresh signature on a new scope-change record, or (b) a follow-up WO with its own signature flow. The on-site-quote endpoints all 409 once `wo.locked === true`. Post-bypass scope changes follow the same rules as post-signature scope changes — bypass locks scope identically to a signature.
 13. **Emergency fall overrides notify Patrick immediately.** Real-time, not nightly review.
 14. **Customer portal can only edit non-structural fields.** Phone, email, best time, prefs. Nothing else.
 15. **Three-year deferred flag forces a decision.** No infinite carry-forward.

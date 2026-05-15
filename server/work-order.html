@@ -341,16 +341,21 @@
 
         <!-- Post-bypass display — replaces the canvas form when a
              signature bypass has been recorded. Mutually exclusive with
-             #woSignoffSigned (server enforces). Mark Complete CTA reuses
-             the existing [data-run-status="completed"] handler — same
-             status transition + cascade as the regular post-sign path. -->
+             #woSignoffSigned (server enforces). Shows accepted scope
+             when coversQuoteAcceptance is true (bypass unified the
+             on-site quote acceptance with the completion lock).
+             Mark Complete CTA reuses [data-run-status="completed"]. -->
         <div class="wo-signoff-bypassed" id="woSignoffBypassed" hidden>
           <div class="wo-signoff-bypassed-banner">
             <span class="wo-signoff-bypassed-icon" aria-hidden="true">✓</span>
             <div>
-              <p class="wo-signoff-bypassed-headline">Completion authorized via signature bypass</p>
+              <p class="wo-signoff-bypassed-headline" id="woSignoffBypassedHeadline">Visit authorized via signature bypass</p>
               <p class="wo-signoff-bypassed-meta" id="woSignoffBypassedMeta"></p>
               <p class="wo-signoff-bypassed-note" id="woSignoffBypassedNote"></p>
+              <p class="wo-signoff-bypassed-scope" id="woSignoffBypassedScope" hidden></p>
+              <p class="wo-signoff-bypassed-noquote" id="woSignoffBypassedNoQuote" hidden>
+                No on-site quote created — the work order's builder is the scope record.
+              </p>
             </div>
           </div>
           <button type="button" class="pjl-btn pjl-btn-primary wo-signoff-submit wo-signoff-bypassed-complete" data-run-status="completed">Mark visit completed →</button>
@@ -520,10 +525,23 @@
       </div>
 
       <div class="wo-bypass-warning" id="woBypassWarning" hidden>
-        <p class="wo-bypass-warning-headline"><span aria-hidden="true">⚠</span> Scope additions in the builder</p>
-        <p class="wo-bypass-warning-body" id="woBypassWarningBody">This work order has line items beyond the baseline. Bypassing signature on a visit with added scope means the customer hasn't signed off on the additions.</p>
+        <p class="wo-bypass-warning-headline"><span aria-hidden="true">⚠</span> Bypass with scope additions</p>
+        <p class="wo-bypass-warning-body" id="woBypassWarningBody">This bypass will record verbal acceptance of line items beyond the baseline service fee.</p>
+        <p class="wo-bypass-warning-noquote">
+          <strong>No on-site quote will be created</strong> in the quote folder — the work order's builder is the only record of what was accepted.
+        </p>
         <p class="wo-bypass-warning-suggest">Consider: <strong>Send for Remote Approval</strong> instead — the customer signs the additions remotely from their phone.</p>
 
+        <p class="wo-bypass-label">Reason</p>
+        <p class="wo-bypass-warning-mirror" id="woBypassWarningReasonMirror">—</p>
+        <p class="wo-bypass-label">Note</p>
+        <p class="wo-bypass-warning-mirror wo-bypass-warning-note" id="woBypassWarningNoteMirror">—</p>
+        <p class="wo-bypass-hint">Edit reason or note in the default panel — they apply to this bypass.</p>
+
+        <label class="wo-bypass-ack">
+          <input type="checkbox" id="woBypassWarningVerbalAck">
+          <span>I confirm verbal acceptance was given</span>
+        </label>
         <label class="wo-bypass-ack">
           <input type="checkbox" id="woBypassWarningAck">
           <span>I acknowledge the customer verbally accepted the full scope including additions</span>
@@ -531,7 +549,7 @@
 
         <div class="wo-bypass-actions">
           <button type="button" class="pjl-btn pjl-btn-outline" id="woBypassRemoteApproval">Send for remote approval instead</button>
-          <button type="button" class="pjl-btn pjl-btn-primary wo-bypass-confirm-anyway" id="woBypassConfirmAnyway" disabled>Confirm bypass anyway</button>
+          <button type="button" class="pjl-btn pjl-btn-primary wo-bypass-confirm-anyway" id="woBypassConfirmAnyway" disabled>Confirm bypass</button>
         </div>
       </div>
     </div>

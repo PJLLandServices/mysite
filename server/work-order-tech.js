@@ -2396,11 +2396,28 @@ function renderSignoff() {
       bypassed.hidden = false;
       const meta = document.getElementById("techSignoffBypassedMeta");
       const note = document.getElementById("techSignoffBypassedNote");
+      const headline = document.getElementById("techSignoffBypassedHeadline");
+      const scopeEl = document.getElementById("techSignoffBypassedScope");
+      const noQuoteEl = document.getElementById("techSignoffBypassedNoQuote");
       const reasonLabel = bypassReasonLabel(state.signatureBypass.reason);
       const recordedBy = state.signatureBypass.bypassedBy || "admin";
       const recordedAt = state.signatureBypass.ts ? formatDateTime(state.signatureBypass.ts) : "—";
+      const covers = state.signatureBypass.coversQuoteAcceptance === true;
+      if (headline) headline.textContent = covers
+        ? "Visit authorized via signature bypass (incl. on-site quote acceptance)"
+        : "Visit authorized via signature bypass";
       if (meta) meta.textContent = `${reasonLabel} · Recorded by ${recordedBy} · ${recordedAt}`;
       if (note) note.textContent = state.signatureBypass.note || "";
+      const snap = state.signatureBypass.acceptedScopeSnapshot;
+      if (scopeEl && snap && covers) {
+        const count = Array.isArray(snap.builderLineItems) ? snap.builderLineItems.length : 0;
+        scopeEl.hidden = false;
+        scopeEl.textContent = `Scope accepted: ${count} line item${count === 1 ? "" : "s"}, ${formatMoney(snap.subtotal)} + HST = ${formatMoney(snap.total)}`;
+      } else if (scopeEl) {
+        scopeEl.hidden = true;
+        scopeEl.textContent = "";
+      }
+      if (noQuoteEl) noQuoteEl.hidden = !covers;
     }
     return;
   }
@@ -2939,8 +2956,10 @@ function openBypassSheet() {
   // across opens (less re-typing).
   const ack = document.getElementById("techBypassAck");
   const warnAck = document.getElementById("techBypassWarningAck");
+  const warnVerbalAck = document.getElementById("techBypassWarningVerbalAck");
   if (ack) ack.checked = false;
   if (warnAck) warnAck.checked = false;
+  if (warnVerbalAck) warnVerbalAck.checked = false;
   sheet.hidden = false;
   document.body.classList.add("tech-sheet-open");
   updateBypassSubmitState();
@@ -2962,9 +2981,17 @@ function updateBypassSubmitState() {
 }
 
 function updateBypassWarningSubmitState() {
-  const ack = !!document.getElementById("techBypassWarningAck")?.checked;
+  // v2 brief: two-checkbox gate in the additions warning state.
+  // Verbal-acceptance ack + scope-additions ack both required, in
+  // addition to a reason and >=10-char note (mirrored from the default
+  // panel above — the warning state doesn't re-render those inputs,
+  // it just shows their current values so the tech can confirm).
+  const reason = document.getElementById("techBypassReason")?.value || "";
+  const note = (document.getElementById("techBypassNote")?.value || "").trim();
+  const verbalAck = !!document.getElementById("techBypassWarningVerbalAck")?.checked;
+  const additionsAck = !!document.getElementById("techBypassWarningAck")?.checked;
   const btn = document.getElementById("techBypassConfirmAnyway");
-  if (btn) btn.disabled = !ack;
+  if (btn) btn.disabled = !(reason && note.length >= 10 && verbalAck && additionsAck);
 }
 
 async function submitBypass(acknowledgeWarning) {
@@ -3003,12 +3030,36 @@ async function submitBypass(acknowledgeWarning) {
       const body = document.getElementById("techBypassBody");
       const warn = document.getElementById("techBypassWarning");
       const warnBody = document.getElementById("techBypassWarningBody");
+      const reasonMirror = document.getElementById("techBypassWarningReasonMirror");
+      const noteMirror = document.getElementById("techBypassWarningNoteMirror");
       if (body) body.hidden = true;
       if (warn) warn.hidden = false;
       if (warnBody && Number.isFinite(Number(data.additionCount))) {
         const total = Number(data.additionTotal) || 0;
-        warnBody.textContent = `This work order has ${data.additionCount} line item${data.additionCount === 1 ? "" : "s"} beyond the baseline. Bypassing signature on a visit with added scope means the customer hasn't signed off on $${total.toFixed(2)} of additional work.`;
+        warnBody.textContent = `This bypass will record verbal acceptance of ${data.additionCount} line item${data.additionCount === 1 ? "" : "s"} totaling $${total.toFixed(2)} beyond the baseline service fee.`;
       }
+      // Mirror reason + note from the default panel so the tech can
+      // confirm them before tapping Confirm. Editing happens back in
+      // the default panel (we don't double-render inputs).
+      if (reasonMirror) reasonMirror.textContent = bypassReasonLabel(reason);
+      if (noteMirror) noteMirror.textContent = note || "—";
+      // v2 brief: pre-fill the note with the dollar amount + a
+      // placeholder for verbal-acceptance context if the tech is still
+      // on the default placeholder text. Tech can edit before confirm.
+      const noteEl = document.getElementById("techBypassNote");
+      if (noteEl && Number.isFinite(Number(data.additionTotal))) {
+        const total = Number(data.additionTotal) || 0;
+        const DEFAULT_NOTE = "Customer not home — signature bypassed, verbal acceptance recorded.";
+        if (noteEl.value.trim() === DEFAULT_NOTE) {
+          noteEl.value = `Customer verbally accepted $${total.toFixed(2)} of additions — `;
+          if (noteMirror) noteMirror.textContent = noteEl.value;
+        }
+      }
+      // Reset the warning checkboxes for this retry session.
+      const verbal = document.getElementById("techBypassWarningVerbalAck");
+      const additions = document.getElementById("techBypassWarningAck");
+      if (verbal) verbal.checked = false;
+      if (additions) additions.checked = false;
       updateBypassWarningSubmitState();
       submitBtn.disabled = false;
       submitBtn.textContent = orig;
@@ -3044,10 +3095,23 @@ async function submitBypass(acknowledgeWarning) {
 document.getElementById("techBypassOpenBtn")?.addEventListener("click", openBypassSheet);
 document.getElementById("techBypassClose")?.addEventListener("click", closeBypassSheet);
 document.getElementById("techBypassCancel")?.addEventListener("click", closeBypassSheet);
-document.getElementById("techBypassReason")?.addEventListener("change", updateBypassSubmitState);
-document.getElementById("techBypassNote")?.addEventListener("input", updateBypassSubmitState);
+document.getElementById("techBypassReason")?.addEventListener("change", () => {
+  updateBypassSubmitState();
+  // Mirror keeps the warning panel in sync when the tech edits reason
+  // between attempts without reopening the sheet.
+  const mirror = document.getElementById("techBypassWarningReasonMirror");
+  if (mirror) mirror.textContent = bypassReasonLabel(document.getElementById("techBypassReason")?.value || "");
+  updateBypassWarningSubmitState();
+});
+document.getElementById("techBypassNote")?.addEventListener("input", () => {
+  updateBypassSubmitState();
+  const mirror = document.getElementById("techBypassWarningNoteMirror");
+  if (mirror) mirror.textContent = (document.getElementById("techBypassNote")?.value || "").trim() || "—";
+  updateBypassWarningSubmitState();
+});
 document.getElementById("techBypassAck")?.addEventListener("change", updateBypassSubmitState);
 document.getElementById("techBypassWarningAck")?.addEventListener("change", updateBypassWarningSubmitState);
+document.getElementById("techBypassWarningVerbalAck")?.addEventListener("change", updateBypassWarningSubmitState);
 document.getElementById("techBypassSubmit")?.addEventListener("click", () => submitBypass(false));
 document.getElementById("techBypassConfirmAnyway")?.addEventListener("click", () => submitBypass(true));
 document.getElementById("techBypassRemoteApproval")?.addEventListener("click", () => {
