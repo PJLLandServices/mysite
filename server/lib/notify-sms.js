@@ -6,12 +6,18 @@
 //   TWILIO_AUTH_TOKEN   — paired with the SID
 //   TWILIO_FROM_NUMBER  — the Twilio phone number you bought, in E.164 format (+15551234567)
 //   NOTIFY_TO_PHONE     — your cell phone, also E.164 (+19059600181 for Patrick)
-//   PUBLIC_BASE_URL     — used to build the CRM link in the SMS body.
-//                         If absent, link is omitted.
+//   PUBLIC_BASE_URL     — public origin for the CRM link in the SMS body.
+//                         See server/lib/public-base-url.js for the full
+//                         resolution order (env-var-authoritative, then a
+//                         dev-localhost fallback, then the canonical
+//                         pjllandservices.com domain — never the request's
+//                         own .onrender.com host).
 //
 // If any Twilio var is missing, this module logs a clear message and returns
 // { ok: false, skipped: true } — lead intake still succeeds. SMS turns on the
 // moment all four vars are populated.
+
+const { resolvePublicBaseUrl } = require("./public-base-url");
 
 function isConfigured() {
   return Boolean(
@@ -22,21 +28,21 @@ function isConfigured() {
   );
 }
 
-function buildSmsBody(lead, baseUrl) {
+function buildSmsBody(lead) {
   const sourceLabel = lead.sourceLabel || lead.source || "Lead";
   const name = lead.contact?.name || "Unknown";
   // Try to extract a town from the address — splits "123 Main St, Newmarket ON L3Y 1A1"
   // into ["123 Main St", "Newmarket ON L3Y 1A1"] and grabs the second piece.
   const addressParts = String(lead.contact?.address || "").split(",").map((s) => s.trim()).filter(Boolean);
   const town = addressParts[1] ? addressParts[1].replace(/\s+ON\b.*/i, "").trim() : "";
-  const link = baseUrl ? `\n${String(baseUrl).replace(/\/+$/, "")}/admin` : "";
+  const link = `\n${resolvePublicBaseUrl()}/admin`;
   const where = town ? ` in ${town}` : "";
   // Twilio SMS segments are 160 GSM-7 chars or 70 UCS-2 chars. Keep it short to
   // stay in a single segment (avoids surprise per-message charges).
   return `New PJL ${sourceLabel}: ${name}${where} - ${lead.contact?.phone || ""}${link}`.trim();
 }
 
-async function sendNewLeadSms(lead, { baseUrl } = {}) {
+async function sendNewLeadSms(lead) {
   if (!isConfigured()) {
     console.warn("[sms] Twilio env vars not set — skipping SMS notification (lead still saved).");
     console.warn("[sms] Lead:", lead.id, "-", lead.sourceLabel || lead.source, "-", lead.contact?.name);
@@ -51,7 +57,7 @@ async function sendNewLeadSms(lead, { baseUrl } = {}) {
   const body = new URLSearchParams({
     To: process.env.NOTIFY_TO_PHONE,
     From: process.env.TWILIO_FROM_NUMBER,
-    Body: buildSmsBody(lead, baseUrl || "")
+    Body: buildSmsBody(lead)
   });
 
   try {
@@ -81,7 +87,7 @@ async function sendNewLeadSms(lead, { baseUrl } = {}) {
 // message text inline so Patrick reads it on his phone immediately
 // without clicking through to the CRM. Truncates to fit one SMS
 // segment so we don't accidentally pay for multi-segment messages.
-async function sendPortalMessageSms(lead, message, { baseUrl } = {}) {
+async function sendPortalMessageSms(lead, message) {
   if (!isConfigured()) {
     console.warn("[sms] Twilio env vars not set — skipping portal-msg SMS (message still saved).");
     return { ok: false, skipped: true };
@@ -93,12 +99,12 @@ async function sendPortalMessageSms(lead, message, { baseUrl } = {}) {
 
   const name = lead.contact?.name || "a customer";
   const phone = lead.contact?.phone || "";
-  const link = baseUrl ? `${String(baseUrl).replace(/\/+$/, "")}/admin/messages` : "";
+  const link = `${resolvePublicBaseUrl()}/admin/messages`;
   // Reserve characters for prefix + name + phone + link, then fit the
   // message body into whatever's left. GSM-7 single segment is 160 chars;
   // we target 150 to leave headroom.
   const prefix = `PJL portal msg from ${name}${phone ? ` (${phone})` : ""}: `;
-  const linkPart = link ? `\n${link}` : "";
+  const linkPart = `\n${link}`;
   const budget = Math.max(20, 150 - prefix.length - linkPart.length);
   const msg = String(message || "").trim();
   const fitted = msg.length > budget ? msg.slice(0, budget - 1) + "…" : msg;

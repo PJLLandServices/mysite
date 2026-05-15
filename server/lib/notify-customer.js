@@ -15,6 +15,14 @@
 // Reuses the same Gmail + Twilio credentials as the admin notify modules.
 // If credentials aren't configured, this module logs and skips silently —
 // the underlying CRM action still completes.
+//
+// All outbound link hosts resolve via resolvePublicBaseUrl() — see
+// server/lib/public-base-url.js. PUBLIC_BASE_URL is the authoritative
+// source; the helper falls back to https://pjllandservices.com (or a
+// localhost URL in non-prod) but never to the request's .onrender.com
+// subdomain.
+
+const { resolvePublicBaseUrl } = require("./public-base-url");
 
 let nodemailerCache = null;
 function getNodemailer() {
@@ -185,7 +193,7 @@ function bookingDateTime(lead) {
   };
 }
 
-function buildEmail(event, lead, baseUrl) {
+function buildEmail(event, lead) {
   const tpl = TEMPLATES[event];
   if (!tpl) return null;
   const rawName = lead.contact?.firstName || (lead.contact?.name || "").split(" ")[0] || "";
@@ -193,9 +201,7 @@ function buildEmail(event, lead, baseUrl) {
   // {namePrefix} resolves to "Hi Patrick, " when we know their name and to ""
   // when we don't — keeps SMS / short copy from reading "Hi , your service…".
   const namePrefix = rawName ? `Hi ${rawName}, ` : "";
-  // Strip any trailing slash on baseUrl — PUBLIC_BASE_URL on Render can
-  // carry one, and we don't want "...com//portal/<token>".
-  const cleanBase = String(baseUrl || "").replace(/\/+$/, "");
+  const cleanBase = resolvePublicBaseUrl();
   const portalUrl = lead.portalUrl || `${cleanBase}/portal/${lead.portal?.token || ""}`;
   const total = moneyText(lead.totals?.expectedTotal);
   const { dateStr, timeStr } = bookingDateTime(lead);
@@ -206,10 +212,10 @@ function buildEmail(event, lead, baseUrl) {
   const subject = fill(tpl.subject, vars);
   const headline = fill(tpl.headline, vars);
   const body = fill(tpl.body, vars);
-  // Same publicBaseUrl pattern as the invoice + receipt templates so
-  // the embedded logo's absolute src resolves correctly when this
-  // email lands in any inbox.
-  const publicBaseUrl = (process.env.PUBLIC_BASE_URL || baseUrl || "https://pjllandservices.com").replace(/\/+$/, "");
+  // publicBaseUrl is the absolute origin used for email-embedded image
+  // sources (the logo). Same resolver as the portal link above so the
+  // logo and CTA always agree on host.
+  const publicBaseUrl = cleanBase;
 
   const html = `
 <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 560px; color: #1a1a1a; line-height: 1.55;">
@@ -256,12 +262,12 @@ function buildEmail(event, lead, baseUrl) {
   return { subject, html, text };
 }
 
-function buildSms(event, lead, baseUrl) {
+function buildSms(event, lead) {
   const tpl = TEMPLATES[event];
   if (!tpl) return "";
   const rawName = lead.contact?.firstName || (lead.contact?.name || "").split(" ")[0] || "";
   const namePrefix = rawName ? `Hi ${rawName}, ` : "";
-  const cleanBase = String(baseUrl || "").replace(/\/+$/, "");
+  const cleanBase = resolvePublicBaseUrl();
   const portalUrl = lead.portalUrl || `${cleanBase}/portal/${lead.portal?.token || ""}`;
   const total = moneyText(lead.totals?.expectedTotal);
   const { dateStr, timeStr } = bookingDateTime(lead);
@@ -270,7 +276,7 @@ function buildSms(event, lead, baseUrl) {
   return fill(tpl.sms, { namePrefix, portalUrl, total, dateStr, timeStr, serviceLabel, workOrderId });
 }
 
-async function sendCustomerEmail(event, lead, baseUrl) {
+async function sendCustomerEmail(event, lead) {
   const transporter = getTransporter();
   if (!transporter) {
     console.warn(`[customer-email] Skipped (no Gmail config) — event=${event} lead=${lead.id}`);
@@ -278,7 +284,7 @@ async function sendCustomerEmail(event, lead, baseUrl) {
   }
   const to = (lead.contact?.email || "").trim();
   if (!to) return { ok: false, skipped: true, reason: "no email on lead" };
-  const built = buildEmail(event, lead, baseUrl || "");
+  const built = buildEmail(event, lead);
   if (!built) return { ok: false, skipped: true, reason: `unknown event ${event}` };
   try {
     const info = await transporter.sendMail({
@@ -297,14 +303,14 @@ async function sendCustomerEmail(event, lead, baseUrl) {
   }
 }
 
-async function sendCustomerSms(event, lead, baseUrl) {
+async function sendCustomerSms(event, lead) {
   if (!smsConfigured()) {
     console.warn(`[customer-sms] Skipped (no Twilio config) — event=${event} lead=${lead.id}`);
     return { ok: false, skipped: true };
   }
   const to = (lead.contact?.phone || "").trim();
   if (!to) return { ok: false, skipped: true, reason: "no phone on lead" };
-  const body = buildSms(event, lead, baseUrl || "");
+  const body = buildSms(event, lead);
   if (!body) return { ok: false, skipped: true };
 
   const sid = process.env.TWILIO_ACCOUNT_SID;
@@ -348,10 +354,10 @@ function eventForTransition(fromStatus, toStatus) {
 
 // Public API — fire-and-forget. The caller doesn't await this; failures are
 // logged but never block the user-facing CRM action.
-function notifyCustomer(event, lead, { baseUrl } = {}) {
+function notifyCustomer(event, lead) {
   return Promise.allSettled([
-    sendCustomerEmail(event, lead, baseUrl),
-    sendCustomerSms(event, lead, baseUrl)
+    sendCustomerEmail(event, lead),
+    sendCustomerSms(event, lead)
   ]);
 }
 
@@ -462,11 +468,10 @@ async function sendInvoiceToCustomer(invoice, pdfBuffer, opts = {}) {
     `Prefer to pay by phone? Call <a href="tel:+19059600181" style="color:#1B4D2E;text-decoration:none;">(905) 960-0181</a>.`;
 
   // Public base URL — used to resolve email-embedded image src (logo).
-  // PUBLIC_BASE_URL is set on Render (currently the onrender URL,
-  // updated to pjllandservices.com after DNS cutover). Email clients
-  // need an absolute URL on `<img src>` since they have no way to
-  // resolve relative paths.
-  const publicBaseUrl = (process.env.PUBLIC_BASE_URL || opts.publicBaseUrl || "https://pjllandservices.com").replace(/\/+$/, "");
+  // Email clients need an absolute URL on `<img src>` since they have no
+  // way to resolve relative paths. resolvePublicBaseUrl() honours
+  // PUBLIC_BASE_URL when set, otherwise lands on pjllandservices.com.
+  const publicBaseUrl = resolvePublicBaseUrl();
 
   const vars = {
     customer: { firstName: escapeHtml(firstName) },
@@ -578,9 +583,9 @@ async function sendPaymentReceipt(invoice, pdfBuffer, opts = {}) {
   const confirmationLineText = chargeId ? `Confirmation:  ${chargeId}\n` : "";
 
   // Same publicBaseUrl pattern as sendInvoiceToCustomer — used for the
-  // email-embedded logo src. Defaults to the production custom domain
-  // so even if PUBLIC_BASE_URL is unset somehow, the email still loads.
-  const publicBaseUrl = (process.env.PUBLIC_BASE_URL || opts.publicBaseUrl || "https://pjllandservices.com").replace(/\/+$/, "");
+  // email-embedded logo src. resolvePublicBaseUrl() guarantees a usable
+  // host even if PUBLIC_BASE_URL is unset.
+  const publicBaseUrl = resolvePublicBaseUrl();
 
   const vars = {
     customer: { firstName: escapeHtml(firstName) },
@@ -644,8 +649,8 @@ async function sendPaymentReceipt(invoice, pdfBuffer, opts = {}) {
 // since logs can leak credentials. The token is short-lived and single-
 // use, but defense-in-depth still applies.
 
-function brandedEmail({ headline, bodyHtml, bodyText, ctaLabel, ctaUrl, footerNote, baseUrl }) {
-  const publicBaseUrl = (process.env.PUBLIC_BASE_URL || baseUrl || "https://pjllandservices.com").replace(/\/+$/, "");
+function brandedEmail({ headline, bodyHtml, bodyText, ctaLabel, ctaUrl, footerNote }) {
+  const publicBaseUrl = resolvePublicBaseUrl();
   const html = `
 <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 560px; color: #1a1a1a; line-height: 1.55;">
   <div style="background: #1B4D2E; border-radius: 8px 8px 0 0; padding: 24px 28px;">
@@ -789,7 +794,7 @@ async function sendAdminPasswordResetLink(user, magicLink) {
 // reason text the admin entered. `notify` defaults to true; when false
 // this returns { ok: true, skipped: true } without touching SMTP — used
 // when Patrick unchecks the "Notify customer by email" checkbox.
-async function sendBookingCancellation(booking, { reason = "", notify = true, baseUrl } = {}) {
+async function sendBookingCancellation(booking, { reason = "", notify = true } = {}) {
   if (!notify) return { ok: true, skipped: true, reason: "notify=false" };
   const transporter = getTransporter();
   if (!transporter) {
@@ -816,7 +821,7 @@ async function sendBookingCancellation(booking, { reason = "", notify = true, ba
   // Public base URL: a deep link back to the booking page on the public
   // site (book.html) so the customer can re-book in one click if they
   // want. No coupon, no upsell, no pushy CTAs.
-  const publicBase = (process.env.PUBLIC_BASE_URL || baseUrl || "https://pjllandservices.com").replace(/\/+$/, "");
+  const publicBase = resolvePublicBaseUrl();
   const ctaUrl = `${publicBase}/book.html`;
 
   const { html, text } = brandedEmail({
@@ -837,8 +842,7 @@ async function sendBookingCancellation(booking, { reason = "", notify = true, ba
     ].filter(Boolean).join("\n"),
     ctaLabel: "Re-book online",
     ctaUrl,
-    footerNote: `Questions? Call PJL at <a href="tel:+19059600181" style="color:#1B4D2E;">(905) 960-0181</a> or reply to this email.`,
-    baseUrl
+    footerNote: `Questions? Call PJL at <a href="tel:+19059600181" style="color:#1B4D2E;">(905) 960-0181</a> or reply to this email.`
   });
 
   try {
@@ -863,7 +867,7 @@ async function sendBookingCancellation(booking, { reason = "", notify = true, ba
 // the message inline AND jump straight to the thread to reply. Goes to
 // NOTIFY_TO_EMAIL (or GMAIL_USER fallback) — same recipient as the
 // existing new-lead alerts.
-async function sendPortalMessageAlertEmail(lead, message, { baseUrl } = {}) {
+async function sendPortalMessageAlertEmail(lead, message) {
   const transporter = getTransporter();
   if (!transporter) {
     console.warn(`[portal-msg-alert] Skipped (no Gmail config) — leadId=${lead?.id}`);
@@ -873,7 +877,7 @@ async function sendPortalMessageAlertEmail(lead, message, { baseUrl } = {}) {
   if (!to) return { ok: false, skipped: true, reason: "no admin email configured" };
   const customerName = lead?.contact?.name || "A customer";
   const phone = lead?.contact?.phone || "";
-  const messagesLink = (process.env.PUBLIC_BASE_URL || baseUrl || "https://pjllandservices.com").replace(/\/+$/, "") + "/admin/messages";
+  const messagesLink = `${resolvePublicBaseUrl()}/admin/messages`;
   const { html, text } = brandedEmail({
     headline: "New portal message",
     bodyHtml: `
@@ -890,8 +894,7 @@ async function sendPortalMessageAlertEmail(lead, message, { baseUrl } = {}) {
     ].join("\n"),
     ctaLabel: "Open Messages inbox",
     ctaUrl: messagesLink,
-    footerNote: `Lead ID: ${escapeHtml(lead?.id || "")}`,
-    baseUrl
+    footerNote: `Lead ID: ${escapeHtml(lead?.id || "")}`
   });
   try {
     const info = await transporter.sendMail({
@@ -915,7 +918,7 @@ async function sendPortalMessageAlertEmail(lead, message, { baseUrl } = {}) {
 // portal. Body includes the reply text inline so the customer doesn't
 // have to log in to see it, but the CTA still opens the portal so they
 // can respond in-thread.
-async function sendPortalReplyToCustomer(lead, replyBody, { baseUrl } = {}) {
+async function sendPortalReplyToCustomer(lead, replyBody) {
   const transporter = getTransporter();
   if (!transporter) {
     console.warn(`[portal-reply] Skipped (no Gmail config) — leadId=${lead?.id}`);
@@ -925,7 +928,7 @@ async function sendPortalReplyToCustomer(lead, replyBody, { baseUrl } = {}) {
   if (!to) return { ok: false, skipped: true, reason: "no email on lead" };
   const firstName = lead?.contact?.firstName || (lead?.contact?.name || "").split(" ")[0] || "";
   const greeting = firstName ? `Hi ${escapeHtml(firstName)},` : "Hi there,";
-  const publicBase = (process.env.PUBLIC_BASE_URL || baseUrl || "https://pjllandservices.com").replace(/\/+$/, "");
+  const publicBase = resolvePublicBaseUrl();
   const portalToken = lead?.portal?.token;
   const portalUrl = portalToken ? `${publicBase}/portal/${portalToken}` : `${publicBase}/portal`;
   const { html, text } = brandedEmail({
@@ -947,8 +950,7 @@ async function sendPortalReplyToCustomer(lead, replyBody, { baseUrl } = {}) {
     ].join("\n"),
     ctaLabel: "Open my portal",
     ctaUrl: portalUrl,
-    footerNote: `Questions? Call <a href="tel:+19059600181" style="color:#1B4D2E;">(905) 960-0181</a>.`,
-    baseUrl
+    footerNote: `Questions? Call <a href="tel:+19059600181" style="color:#1B4D2E;">(905) 960-0181</a>.`
   });
   try {
     const info = await transporter.sendMail({

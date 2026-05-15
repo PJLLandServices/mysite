@@ -5,14 +5,20 @@
 //   GMAIL_APP_PASSWORD  — a Gmail "app password" (NOT your regular password —
 //                         create one at https://myaccount.google.com/apppasswords)
 //   NOTIFY_TO_EMAIL     — where the alert goes (defaults to GMAIL_USER)
-//   PUBLIC_BASE_URL     — your site's public URL, used to build the CRM link
-//                         in the email body (e.g. https://pjllandservices.com).
-//                         Defaults to the request host if absent.
+//   PUBLIC_BASE_URL     — public origin for the CRM link in the email body
+//                         (e.g. https://pjllandservices.com). See
+//                         server/lib/public-base-url.js for the full
+//                         resolution order — env-var-authoritative, dev
+//                         localhost fallback, then the canonical PJL domain.
+//                         Never falls back to the request host (which on
+//                         Render is the *.onrender.com subdomain).
 //
 // If GMAIL_USER or GMAIL_APP_PASSWORD is missing, this module logs a clear
 // message to the console and returns { ok: false, skipped: true } — the lead
 // intake itself still succeeds. That way the site keeps working before you've
 // configured email, and starts emailing the moment you set the env vars.
+
+const { resolvePublicBaseUrl } = require("./public-base-url");
 
 let nodemailerCache = null;
 function getNodemailer() {
@@ -55,13 +61,13 @@ function escapeHtml(value) {
     .replace(/'/g, "&#039;");
 }
 
-function buildLeadEmail(lead, baseUrl) {
+function buildLeadEmail(lead) {
   const sourceLabel = lead.sourceLabel || lead.source || "General Lead";
   const town = (lead.contact?.address || "").split(",")[1]?.trim() || lead.contact?.address || "";
   const subject = `New PJL Lead — ${sourceLabel} — ${lead.contact?.name || "Unknown"}`;
-  // Trailing slash on baseUrl (PUBLIC_BASE_URL env var) would otherwise
-  // produce "...com//admin" / "...com//portal/<token>".
-  const cleanBase = String(baseUrl || "").replace(/\/+$/, "");
+  // resolvePublicBaseUrl strips trailing slashes and never returns the
+  // request's .onrender.com host — see public-base-url.js for the order.
+  const cleanBase = resolvePublicBaseUrl();
   const adminUrl = `${cleanBase}/admin`;
   const portalUrl = lead.portalUrl || `${cleanBase}/portal/${lead.portal?.token || ""}`;
 
@@ -126,7 +132,7 @@ function buildLeadEmail(lead, baseUrl) {
   };
 }
 
-async function sendNewLeadEmail(lead, { baseUrl } = {}) {
+async function sendNewLeadEmail(lead) {
   const transporter = getTransporter();
   if (!transporter) {
     console.warn("[email] GMAIL_USER / GMAIL_APP_PASSWORD not set — skipping email notification (lead still saved).");
@@ -136,7 +142,7 @@ async function sendNewLeadEmail(lead, { baseUrl } = {}) {
 
   const to = process.env.NOTIFY_TO_EMAIL || process.env.GMAIL_USER;
   const fromAddress = process.env.GMAIL_USER;
-  const { subject, html, text } = buildLeadEmail(lead, baseUrl || "");
+  const { subject, html, text } = buildLeadEmail(lead);
 
   try {
     const info = await transporter.sendMail({
