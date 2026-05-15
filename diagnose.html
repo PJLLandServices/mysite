@@ -11,9 +11,11 @@
 <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700;800&family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="css/chat-widget.css">
 <!-- Cloudflare Turnstile — invisible-by-default bot challenge. The chat
-     widget renders the widget inside its booking/contact-capture forms
-     when those bubbles surface. See WEBSITE_MAINTENANCE §15.14. -->
-<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
+     widget passes chatSessionId so the server bypasses Turnstile for chat
+     submissions, but we still ship the api.js + sitekey shim so future
+     pages that embed a cf-turnstile div work. See WEBSITE_MAINTENANCE §15.14. -->
+<script src="/api/public-config.js"></script>
+<script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit&onload=onloadTurnstileCallback" async defer></script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   html, body {

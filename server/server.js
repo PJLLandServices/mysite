@@ -3153,6 +3153,24 @@ async function handleApi(req, res, pathname) {
     return;
   }
 
+  // ---- Public client config (Turnstile sitekey shim) ----
+  // Tiny JS endpoint loaded sync in <head> of every form page. Sets
+  // window.PJL_TURNSTILE_SITEKEY so js/anti-bot.js can render widgets
+  // with the real key instead of the hardcoded test key baked into the
+  // static HTML. Returns an empty-string assignment when the env var
+  // is unset (local dev / pre-Turnstile state) — anti-bot.js falls
+  // back to Cloudflare's always-passes test key in that case.
+  if (req.method === "GET" && pathname === "/api/public-config.js") {
+    const sitekey = String(process.env.TURNSTILE_SITE_KEY || "");
+    const js = `window.PJL_TURNSTILE_SITEKEY = ${JSON.stringify(sitekey)};\n`;
+    res.writeHead(200, {
+      "content-type": "application/javascript; charset=utf-8",
+      "cache-control": "public, max-age=60"
+    });
+    res.end(js);
+    return;
+  }
+
   // ---- Chat transcripts (public POST upsert, admin GET) ----
   if (req.method === "POST" && pathname === "/api/chat-transcripts") {
     try {

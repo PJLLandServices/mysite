@@ -2,64 +2,89 @@
  * Client-side anti-bot helpers — companion to server/lib/anti-bot.js.
  *
  * Each public form on the site:
- *   1. Includes a Cloudflare Turnstile <script> in <head>.
- *   2. Renders an off-screen honeypot input named "contact_website" via the
- *      shared `.pjl-hp-field` CSS class.
- *   3. Renders a hidden `_ts` input that this script stamps with Date.now()
+ *   1. Loads `/api/public-config.js` SYNCHRONOUSLY in <head> — sets
+ *      window.PJL_TURNSTILE_SITEKEY from the server-side env var.
+ *   2. Loads Cloudflare's api.js with `?render=explicit&onload=onloadTurnstileCallback`
+ *      so it doesn't auto-render on page load. We render programmatically
+ *      below — eliminates the race where Cloudflare scans the DOM and
+ *      renders widgets with the hardcoded TEST sitekey before our client
+ *      JS gets a chance to swap in the real key.
+ *   3. Renders an off-screen honeypot input named "contact_website" via
+ *      the shared `.pjl-hp-field` CSS class.
+ *   4. Renders a hidden `_ts` input that this script stamps with Date.now()
  *      on page load (or, for the sprinkler-builder, on builder-open).
- *   4. Renders a `<div class="cf-turnstile pjl-turnstile" data-sitekey="..." data-callback="pjlOnTurnstile">`.
- *      Managed mode → invisible for clean traffic, a small interactive
- *      challenge for the suspicious 1–5%.
+ *   5. Renders `<div class="cf-turnstile pjl-turnstile">` placeholders that
+ *      we hydrate via turnstile.render() once Cloudflare's api.js is ready.
  *
- * The form's submit handler decorates its payload via `window.pjlAntiBot.augmentPayload(form)`
- * — pulls the three defense fields off the form and writes them into the
- * outgoing JSON body. Keeps every form's submit code three lines lighter.
- *
- * The site key here is Cloudflare's "always passes" TEST key. Patrick
- * swaps it for the production key once the domain is registered with
- * Cloudflare; see WEBSITE_MAINTENANCE_AND_SEO_HANDOFF.md §15.14 for the
- * step-by-step. Forms can also override the key via window.PJL_TURNSTILE_SITEKEY
- * before this script runs.
+ * The form's submit handler decorates its payload via
+ * `window.pjlAntiBot.augmentPayload(payload, form)` — pulls the three
+ * defense fields off the form and merges them into the outgoing JSON.
  */
 (function () {
   'use strict';
 
-  var DEFAULT_SITEKEY = '1x00000000000000000000AA'; // Cloudflare TEST key (always-passes invisible)
-  var siteKey = (typeof window !== 'undefined' && window.PJL_TURNSTILE_SITEKEY) || DEFAULT_SITEKEY;
-
-  // Per-widget tokens. Turnstile invokes data-callback="pjlOnTurnstile"
-  // with the verification token; we stash by widget-id so multi-form
-  // pages don't collide.
-  var tokensByWidget = Object.create(null);
+  // Cloudflare TEST key — always-passes invisible widget. Used as a
+  // fallback when window.PJL_TURNSTILE_SITEKEY is empty (local dev,
+  // pre-Turnstile rollout). When the real key arrives via the
+  // /api/public-config.js endpoint, it takes priority.
+  var DEFAULT_SITEKEY = '1x00000000000000000000AA';
   var lastToken = '';
 
-  // Global callback Turnstile invokes when the challenge resolves.
-  // `widgetId` is the Cloudflare-internal id; we also keep a lastToken
-  // so single-form pages can read it without juggling ids.
-  window.pjlOnTurnstile = function (token, widgetId) {
-    if (typeof token === 'string' && token) {
-      lastToken = token;
-      if (widgetId) tokensByWidget[widgetId] = token;
-    }
-  };
+  function currentSitekey() {
+    return (typeof window !== 'undefined' && window.PJL_TURNSTILE_SITEKEY)
+      ? String(window.PJL_TURNSTILE_SITEKEY)
+      : DEFAULT_SITEKEY;
+  }
 
-  // Sweep the page on DOM ready: rewrite data-sitekey on every Turnstile
-  // div to the configured key, stamp every _ts input with the current ms,
-  // and ensure honeypot inputs are wired to ignore browser autocomplete.
-  function bootstrap() {
-    var nodes = document.querySelectorAll('.cf-turnstile[data-sitekey]');
+  // Explicit-render path. We loaded Cloudflare's api.js with
+  // `?render=explicit&onload=onloadTurnstileCallback` — when it finishes
+  // loading, it calls this global. We then walk every .cf-turnstile div
+  // on the page and render it with the right sitekey. Idempotent — the
+  // data-pjl-rendered guard means a second invocation (e.g. from our
+  // local bootstrap fallback below) skips already-mounted widgets.
+  function renderAllWidgets() {
+    if (typeof window === 'undefined' || !window.turnstile || typeof window.turnstile.render !== 'function') return;
+    var key = currentSitekey();
+    var nodes = document.querySelectorAll('.cf-turnstile');
     for (var i = 0; i < nodes.length; i++) {
       var el = nodes[i];
-      // Only swap if the page hasn't already set a real key.
-      if (!el.dataset.sitekey || el.dataset.sitekey === DEFAULT_SITEKEY) {
-        el.dataset.sitekey = siteKey;
+      if (el.dataset.pjlRendered === '1') continue;
+      el.dataset.pjlRendered = '1';
+      try {
+        window.turnstile.render(el, {
+          sitekey: key,
+          callback: function (token) { if (typeof token === 'string') lastToken = token; },
+          'error-callback': function () { /* let the server gate handle missing-token; user-facing copy lives there */ },
+          theme: el.dataset.theme || 'light'
+        });
+      } catch (err) {
+        // Don't take the page down if Turnstile fails to render. Server
+        // will reject submissions without a token — same UX as a network
+        // failure on the api.js download.
+        if (typeof console !== 'undefined' && console.warn) {
+          console.warn('[anti-bot] turnstile.render failed:', err && err.message);
+        }
       }
-      if (!el.dataset.callback) el.dataset.callback = 'pjlOnTurnstile';
     }
+  }
+
+  // Cloudflare invokes this when api.js finishes loading. Global name
+  // must match the `onload=` query param on the script src.
+  window.onloadTurnstileCallback = function () { renderAllWidgets(); };
+
+  // Back-compat shim: legacy data-callback="pjlOnTurnstile" from earlier
+  // auto-render builds still routes the token into our global. Harmless
+  // for the explicit-render path (the callback set inside render() takes
+  // priority and writes the same global).
+  window.pjlOnTurnstile = function (token) { if (typeof token === 'string' && token) lastToken = token; };
+
+  function bootstrap() {
     var tsInputs = document.querySelectorAll('input[data-pjl-ts]');
-    for (var j = 0; j < tsInputs.length; j++) {
-      tsInputs[j].value = String(Date.now());
-    }
+    for (var j = 0; j < tsInputs.length; j++) tsInputs[j].value = String(Date.now());
+    // If Cloudflare's onload already fired (it can, depending on cache /
+    // ordering), the widgets are mounted. If api.js is still in flight,
+    // this no-ops and the onload callback above will fire it later.
+    renderAllWidgets();
   }
 
   if (document.readyState === 'loading') {
@@ -79,10 +104,10 @@
     var ts = root.querySelector('input[name="_ts"]');
     payload.contact_website = hp ? String(hp.value || '') : '';
     payload._ts = ts ? Number(ts.value) || 0 : 0;
-    // Prefer a per-form token if Turnstile populated the form's own
-    // hidden field (it usually does — Cloudflare also writes the token
-    // to <input name="cf-turnstile-response"> automatically); otherwise
-    // fall back to the most recent global token.
+    // Turnstile injects <input name="cf-turnstile-response"> inside the
+    // widget container with the verification token. Prefer the per-form
+    // value; fall back to the last-seen global token if the form has
+    // no widget (chat-widget capture forms, etc.).
     var widgetField = root.querySelector('input[name="cf-turnstile-response"]');
     var widgetVal = widgetField ? String(widgetField.value || '') : '';
     payload.cfTurnstileResponse = widgetVal || lastToken || '';
@@ -100,9 +125,6 @@
     input.value = String(Date.now());
   }
 
-  // Compose a fresh payload object directly from a form's input fields.
-  // Convenience for the simpler forms — supplies the three defense
-  // fields and the page context that the backend expects.
   function basePayload(form) {
     var payload = {
       pageUrl: typeof location !== 'undefined' ? location.href : '',
@@ -116,6 +138,6 @@
     anchorTs: anchorTs,
     basePayload: basePayload,
     getToken: function () { return lastToken; },
-    siteKey: siteKey
+    siteKey: currentSitekey
   };
 })();

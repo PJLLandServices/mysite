@@ -55,9 +55,10 @@
 </script>
 <!-- Cloudflare Turnstile — invisible-by-default bot challenge. See
      WEBSITE_MAINTENANCE §15.14. _ts is anchored on builder-open (first
-     tier click), not page load, so customers exploring the gallery for
-     a few minutes before picking a tier don't trip the stale-token guard. -->
-<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
+     tier click), not page load. public-config.js + explicit render keep
+     the real sitekey in the rendered widget. -->
+<script src="/api/public-config.js"></script>
+<script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit&onload=onloadTurnstileCallback" async defer></script>
 </head>
 <body>
 

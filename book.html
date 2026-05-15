@@ -486,8 +486,11 @@
 }
 </script>
 <!-- Cloudflare Turnstile — invisible-by-default bot challenge. Renders
-     on Step 4 (Contact step). See WEBSITE_MAINTENANCE §15.14. -->
-<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
+     on Step 4 (Contact step). See WEBSITE_MAINTENANCE §15.14.
+     public-config.js + explicit render keep the real sitekey in the
+     rendered widget; otherwise the static HTML's test key would win. -->
+<script src="/api/public-config.js"></script>
+<script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit&onload=onloadTurnstileCallback" async defer></script>
 </head>
 <body>
 

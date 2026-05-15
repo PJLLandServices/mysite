@@ -282,8 +282,12 @@
 </style>
   <link rel="stylesheet" href="css/chat-widget.css">
   <!-- Cloudflare Turnstile — invisible-by-default bot challenge. Pairs with
-       server/lib/anti-bot.js + js/anti-bot.js. See WEBSITE_MAINTENANCE §15.14. -->
-  <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
+       server/lib/anti-bot.js + js/anti-bot.js. See WEBSITE_MAINTENANCE §15.14.
+       public-config.js MUST load first (sync) so window.PJL_TURNSTILE_SITEKEY
+       is set before our render call. Cloudflare api.js is in explicit-render
+       mode so it doesn't race the client to mount widgets with the test key. -->
+  <script src="/api/public-config.js"></script>
+  <script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit&onload=onloadTurnstileCallback" async defer></script>
 </head>
 <body>
 
