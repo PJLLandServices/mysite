@@ -121,7 +121,13 @@ function blankList() {
     // Capped at 200 entries to bound JSON growth on long-lived lists.
     history: [
       { ts: created, action: "created", by: "admin", note: "" }
-    ]
+    ],
+
+    // Bulk-operations soft state. NOTE: material-lists has a pre-existing
+    // status="archived" that's part of its STATUSES enum and is independent
+    // from this soft-delete flag. deletedAt = Trash (30-day purge); the
+    // existing archived status remains as it was.
+    deletedAt: null
   };
 }
 
@@ -141,7 +147,8 @@ function hydrate(rec) {
     address: typeof rec?.address === "string" ? rec.address : "",
     notes: typeof rec?.notes === "string" ? rec.notes : "",
     lineItems: Array.isArray(rec?.lineItems) ? rec.lineItems.map(hydrateLine) : [],
-    history: Array.isArray(rec?.history) ? rec.history.slice(-200) : []
+    history: Array.isArray(rec?.history) ? rec.history.slice(-200) : [],
+    deletedAt: typeof rec?.deletedAt === "string" ? rec.deletedAt : null
   };
 }
 
@@ -182,9 +189,10 @@ function appendHistory(record, entry) {
 
 // ---- CRUD -----------------------------------------------------------
 
-async function list({ status = null, parentType = null, parentId = null, includeArchived = false } = {}) {
+async function list({ status = null, parentType = null, parentId = null, includeArchived = false, includeDeleted = false } = {}) {
   const records = await readAll();
   return records.filter((r) => {
+    if (!includeDeleted && r.deletedAt) return false;
     if (!includeArchived && r.status === "archived" && status !== "archived") return false;
     if (status && r.status !== status) return false;
     if (parentType && r.parentType !== parentType) return false;
@@ -350,6 +358,46 @@ function computeTotals(record, partsMap) {
   return totals;
 }
 
+// ---- Soft-delete (bulk operations) ----------------------------------
+
+async function softDelete(id) {
+  const records = await readAll();
+  const idx = records.findIndex((r) => r.id === id);
+  if (idx === -1) throw new Error("Material list not found");
+  if (records[idx].deletedAt) throw new Error("Already in Trash");
+  records[idx] = { ...records[idx], deletedAt: nowIso(), updatedAt: nowIso() };
+  await writeAll(records);
+  return records[idx];
+}
+
+async function restore(id) {
+  const records = await readAll();
+  const idx = records.findIndex((r) => r.id === id);
+  if (idx === -1) throw new Error("Material list not found");
+  if (!records[idx].deletedAt) throw new Error("Not in Trash");
+  records[idx] = { ...records[idx], deletedAt: null, updatedAt: nowIso() };
+  await writeAll(records);
+  return records[idx];
+}
+
+async function listDeleted() {
+  const records = await readAll();
+  return records.filter((r) => r.deletedAt);
+}
+
+async function purgeDeleted({ olderThanMs = 30 * 24 * 60 * 60 * 1000 } = {}) {
+  const records = await readAll();
+  const cutoff = Date.now() - olderThanMs;
+  const kept = records.filter((r) => {
+    if (!r.deletedAt) return true;
+    const t = Date.parse(r.deletedAt);
+    return !Number.isFinite(t) || t > cutoff;
+  });
+  const purged = records.length - kept.length;
+  if (purged > 0) await writeAll(kept);
+  return purged;
+}
+
 module.exports = {
   STATUSES,
   LINE_STATUSES,
@@ -361,5 +409,9 @@ module.exports = {
   update,
   remove,
   computeTotals,
-  deriveStatus
+  deriveStatus,
+  softDelete,
+  restore,
+  listDeleted,
+  purgeDeleted
 };

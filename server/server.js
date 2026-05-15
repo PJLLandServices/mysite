@@ -65,6 +65,7 @@ const users = require("./lib/users");
 const magicTokens = require("./lib/magic-tokens");
 const rateLimit = require("./lib/rate-limit");
 const antiBot = require("./lib/anti-bot");
+const bulkActions = require("./lib/bulk-actions");
 const { sendCustomerLoginLink, sendAdminPasswordResetLink } = require("./lib/notify-customer");
 
 // Short, customer-friendly work order ID. Eight chars from a UUIDv4 base32-ish
@@ -536,6 +537,13 @@ function needsAuth(method, pathname) {
   // Admin-only surfaces
   if (pathname === "/admin/users" || pathname === "/admin/users/") return "admin";
   if (pathname === "/api/users" || pathname.startsWith("/api/users/")) return "admin";
+  // Bulk operations + Trash (Session 2 brief). Admin-only — destructive
+  // batch actions on records (delete, archive, status-change). The frontend
+  // checks via `requireAdmin` are convenience; the server is the source of
+  // truth. Techs see a 403 if they hit these endpoints.
+  if (pathname.startsWith("/api/admin/bulk/")) return "admin";
+  if (pathname.startsWith("/api/admin/trash/")) return "admin";
+  if (pathname === "/admin/trash" || pathname === "/admin/trash/") return "admin";
   // CRM pages — admin OR tech.
   if (pathname === "/admin" || pathname === "/admin/") return "user";
   if (pathname === "/admin/today" || pathname === "/admin/today/") return "user";
@@ -762,6 +770,14 @@ function hydrateLead(lead) {
     ...lead,
     status,
     archived: Boolean(lead.archived),
+    // Bulk-operations soft state (admin CRM §). archived is the pre-existing
+    // manual archive (permanent, no purge). deletedAt is NEW soft-delete with
+    // 30-day Trash retention before hard purge. The two are independent: a
+    // lead can be archived, deleted (in Trash), neither, or both. Default
+    // list endpoints filter out deletedAt; the trash view explicitly fetches
+    // them.
+    deletedAt: typeof lead.deletedAt === "string" ? lead.deletedAt : null,
+    botFlagged: lead.botFlagged === true,
     // Older leads written before source-tagging existed get the default source.
     source: resolveSource(lead.source),
     // customerId (Brief 2): null on legacy leads until the migration
@@ -781,6 +797,82 @@ function hydrateLead(lead) {
       activity: Array.isArray(crm.activity) ? crm.activity : defaultCrm(now).activity
     }
   };
+}
+
+// Bulk-operations leads helpers — used by lib/bulk-actions.js so the leads
+// soft-delete / restore / purge paths route through the same readLeads /
+// writeLeads pair the rest of server.js uses. Exposed via the leadsHelpers
+// object passed into bulkActions.attach() at server boot.
+async function softDeleteLead(id) {
+  const leads = await readLeads();
+  const idx = leads.findIndex((l) => l.id === id);
+  if (idx === -1) throw new Error("Lead not found");
+  if (leads[idx].deletedAt) throw new Error("Already in Trash");
+  leads[idx] = { ...leads[idx], deletedAt: new Date().toISOString() };
+  await writeLeads(leads);
+  return leads[idx];
+}
+
+async function restoreLead(id) {
+  const leads = await readLeads();
+  const idx = leads.findIndex((l) => l.id === id);
+  if (idx === -1) throw new Error("Lead not found");
+  if (!leads[idx].deletedAt) throw new Error("Not in Trash");
+  leads[idx] = { ...leads[idx], deletedAt: null };
+  await writeLeads(leads);
+  return leads[idx];
+}
+
+async function listDeletedLeads() {
+  const leads = await readLeads();
+  return leads.filter((l) => l.deletedAt);
+}
+
+async function purgeDeletedLeads({ olderThanMs = 30 * 24 * 60 * 60 * 1000 } = {}) {
+  const leads = await readLeads();
+  const cutoff = Date.now() - olderThanMs;
+  const kept = leads.filter((l) => {
+    if (!l.deletedAt) return true;
+    const t = Date.parse(l.deletedAt);
+    return !Number.isFinite(t) || t > cutoff;
+  });
+  const purged = leads.length - kept.length;
+  if (purged > 0) await writeLeads(kept);
+  return purged;
+}
+
+// Hard-delete a single lead by id — used by /admin/trash's "Permanently
+// delete" action via the bulk-actions purge handler. Returns the removed
+// record or throws if not found / not currently in Trash (the trash view
+// can only purge records that are already soft-deleted).
+async function hardDeleteLead(id) {
+  const leads = await readLeads();
+  const idx = leads.findIndex((l) => l.id === id);
+  if (idx === -1) throw new Error("Lead not found");
+  if (!leads[idx].deletedAt) throw new Error("Lead is not in Trash — restore or soft-delete first");
+  const [removed] = leads.splice(idx, 1);
+  await writeLeads(leads);
+  return removed;
+}
+
+// Update a CRM field on a lead (status, priority, archived, botFlagged) —
+// the bulk-actions dispatcher routes status/priority/archive/tag actions
+// through here so each per-lead failure is reported individually.
+async function updateLeadCrmField(id, patch) {
+  const leads = await readLeads();
+  const idx = leads.findIndex((l) => l.id === id);
+  if (idx === -1) throw new Error("Lead not found");
+  const current = leads[idx];
+  const nextCrm = { ...current.crm };
+  if (patch.status && CRM_STATUSES.has(patch.status)) nextCrm.status = patch.status;
+  if (patch.priority && CRM_PRIORITIES.has(patch.priority)) nextCrm.priority = patch.priority;
+  const next = { ...current, crm: nextCrm };
+  if (typeof patch.archived === "boolean") next.archived = patch.archived;
+  if (typeof patch.botFlagged === "boolean") next.botFlagged = patch.botFlagged;
+  if (nextCrm.status !== current.crm.status) next.status = nextCrm.status;
+  leads[idx] = hydrateLead(next);
+  await writeLeads(leads);
+  return leads[idx];
 }
 
 function validateLead(payload) {
@@ -2700,10 +2792,13 @@ async function handleApi(req, res, pathname) {
     const leads = await readLeads();
     // Admin can opt-in to archived leads via ?include=archived. By default
     // archived leads are filtered out to keep the dashboard focused.
+    // Soft-deleted leads (deletedAt set) are ALWAYS filtered out here —
+    // they only surface in the /admin/trash view via /api/admin/trash/leads.
     const url = new URL(req.url, baseUrlFromReq(req));
     const include = url.searchParams.get("include") || "";
     const showArchived = include === "archived" || include === "all";
-    const filtered = showArchived ? leads : leads.filter((lead) => !lead.archived);
+    const liveLeads = leads.filter((lead) => !lead.deletedAt);
+    const filtered = showArchived ? liveLeads : liveLeads.filter((lead) => !lead.archived);
 
     // Build a leadId -> Quote map in one quotes.list() pass so the CRM list
     // can render the Quote card without N+1 fetches. Most leads have no
@@ -2724,8 +2819,9 @@ async function handleApi(req, res, pathname) {
       }),
       sources: SOURCES,
       counts: {
-        active: leads.filter((l) => !l.archived).length,
-        archived: leads.filter((l) => l.archived).length
+        active: liveLeads.filter((l) => !l.archived).length,
+        archived: liveLeads.filter((l) => l.archived).length,
+        trashed: leads.filter((l) => l.deletedAt).length
       }
     });
   }
@@ -2938,6 +3034,110 @@ async function handleApi(req, res, pathname) {
       return sendJson(res, 200, { ok: true, updated: updatedIds.length });
     } catch (error) {
       return sendJson(res, 400, { ok: false, errors: [error.message || "Unable to bulk update."] });
+    }
+  }
+
+  // ---- Bulk operations (Session 2 brief) -----------------------------
+  //
+  // One endpoint dispatches across all 8 admin resources. Body shape:
+  //   { action: "delete"|"dismiss"|..., ids: ["id1", ...], payload?: {...} }
+  // Whitelist + per-record gates live in lib/bulk-actions.js. All routes
+  // are admin-only (gated above by needsAuth → /api/admin/bulk/*).
+
+  const bulkMatch = pathname.match(/^\/api\/admin\/bulk\/([^/]+)\/?$/);
+  if (bulkMatch && req.method === "POST") {
+    try {
+      const resource = decodeURIComponent(bulkMatch[1]);
+      // Cap payload at 256 KB — 500 ids of ~50 chars + headers fits well
+      // inside this. Refuse anything bigger at the parse boundary so a
+      // malformed huge body can't OOM the process.
+      const payload = await parseRequestBody(req, { maxBytes: 256_000 });
+      const session = await requireAdmin(req);
+      const action = typeof payload.action === "string" ? payload.action : "";
+      const ids = Array.isArray(payload.ids) ? payload.ids : [];
+      const actionPayload = payload.payload && typeof payload.payload === "object" ? payload.payload : null;
+
+      const result = await bulkActions.handleBulkAction({
+        resource,
+        action,
+        ids,
+        payload: actionPayload,
+        session
+      });
+
+      if (!result.ok && result.status === 400) {
+        return sendJson(res, 400, { ok: false, error: result.error });
+      }
+      if (result.status && result.status !== 200) {
+        return sendJson(res, result.status, { ok: false, error: result.error });
+      }
+
+      // After lead bulk operations that remove leads from the active list,
+      // null leadId on linked work orders so they don't dangle. Mirrors
+      // the cleanup the legacy /api/quotes/bulk-delete endpoint runs.
+      if (resource === "leads" && (action === "delete" || action === "purge") && result.succeededIds.length > 0) {
+        try {
+          const idSet = new Set(result.succeededIds);
+          const allWos = await workOrders.list({ includeDeleted: true, includeArchived: true });
+          for (const wo of allWos) {
+            if (wo.leadId && idSet.has(wo.leadId)) {
+              await workOrders.update(wo.id, { leadId: null });
+            }
+          }
+        } catch (e) {
+          console.warn("[bulk-actions] WO leadId cleanup failed:", e?.message);
+        }
+      }
+
+      // For invoices.resend / purchase-orders.resend: the bulk handler in
+      // lib/bulk-actions.js appends a history entry on each record (intent),
+      // but actually rendering each PDF + dispatching an email per record is
+      // too heavy to do synchronously in one bulk request. The frontend
+      // surfaces a "Re-send queued. Click each record to re-send the email."
+      // affordance after a bulk resend. Single-record resend continues to
+      // work via the existing /api/invoices/:id/send-action endpoint.
+
+      return sendJson(res, 200, {
+        ok: result.ok,
+        resource: result.resource,
+        action: result.action,
+        succeededIds: result.succeededIds,
+        failedIds: result.failedIds,
+        message: result.message
+      });
+    } catch (error) {
+      console.error("[bulk-actions] dispatch error:", error);
+      return sendJson(res, 500, { ok: false, error: error?.message || "Bulk action failed." });
+    }
+  }
+
+  // GET /api/admin/trash/:resource — list soft-deleted records for the
+  // /admin/trash view. Each resource returns the records with deletedAt set.
+  const trashListMatch = pathname.match(/^\/api\/admin\/trash\/([^/]+)\/?$/);
+  if (trashListMatch && req.method === "GET") {
+    try {
+      const resource = decodeURIComponent(trashListMatch[1]);
+      const records = await bulkActions.listTrash(resource);
+      return sendJson(res, 200, { ok: true, resource, records });
+    } catch (error) {
+      if (error?.name === "ValidationError") {
+        return sendJson(res, 400, { ok: false, error: error.message });
+      }
+      return sendJson(res, 500, { ok: false, error: error?.message || "Trash list failed." });
+    }
+  }
+
+  // GET /api/admin/archive/:resource — list archived (NOT deleted) records.
+  // Only properties, work-orders, and suppliers have archived. Other
+  // resources return an empty array.
+  const archiveListMatch = pathname.match(/^\/api\/admin\/archive\/([^/]+)\/?$/);
+  if (archiveListMatch && req.method === "GET") {
+    try {
+      const resource = decodeURIComponent(archiveListMatch[1]);
+      const records = await bulkActions.listArchive(resource);
+      return sendJson(res, 200, { ok: true, resource, records });
+    } catch (error) {
+      return sendJson(res, 500, { ok: false, error: error?.message || "Archive list failed." });
     }
   }
 
@@ -9929,6 +10129,11 @@ function resolveStaticTarget(pathname) {
   if (pathname === "/admin/settings" || pathname === "/admin/settings/") {
     return { dir: SERVER_DIR, relative: "/settings.html" };
   }
+  // Trash recovery view (Session 2 brief). Admin-only, gated above. Shows
+  // soft-deleted records across resources with restore + permanent-purge.
+  if (pathname === "/admin/trash" || pathname === "/admin/trash/") {
+    return { dir: SERVER_DIR, relative: "/trash.html" };
+  }
   // Materials management (Phase 1 of the BoM/PO system). Suppliers index,
   // Material Lists index, and per-list builder. The builder regex must come
   // BEFORE the index match isn't strictly necessary (different paths) but
@@ -10166,6 +10371,19 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
+// Wire the leads handlers into the bulk-actions dispatcher. Done here
+// (module scope, after the helpers are declared) so the dispatcher can
+// route leads actions without server.js exposing readLeads/writeLeads
+// directly to the lib layer. attach() is idempotent.
+bulkActions.attachLeadsHelpers({
+  softDelete: softDeleteLead,
+  restore: restoreLead,
+  listDeleted: listDeletedLeads,
+  purgeDeleted: purgeDeletedLeads,
+  hardDelete: hardDeleteLead,
+  updateCrm: updateLeadCrmField
+});
+
 server.listen(PORT, HOST, () => {
   console.log(`PJL site + lead receiver running at http://${HOST}:${PORT}`);
   console.log(`  Public homepage:   http://${HOST}:${PORT}/`);
@@ -10184,4 +10402,24 @@ server.listen(PORT, HOST, () => {
   };
   sweepQuotes();
   setInterval(sweepQuotes, 6 * 60 * 60 * 1000);
+
+  // Trash purge sweep (Session 2 brief). Hard-deletes records soft-deleted
+  // more than 30 days ago. Runs at startup AND every 24 hours so the
+  // operator never has to think about it. Audit log captures each purge.
+  const sweepTrash = async () => {
+    try {
+      const results = await bulkActions.purgeAllExpired();
+      const summary = Object.entries(results)
+        .filter(([, count]) => typeof count === "number" && count > 0)
+        .map(([res, count]) => `${res}=${count}`)
+        .join(", ");
+      if (summary) console.log(`[bulk-actions] nightly Trash purge: ${summary}`);
+    } catch (err) {
+      console.warn("[bulk-actions] nightly Trash purge failed:", err?.message);
+    }
+  };
+  // Initial sweep on boot — catches anything that aged out while the
+  // server was down. After that, every 24 hours.
+  sweepTrash();
+  setInterval(sweepTrash, 24 * 60 * 60 * 1000);
 });

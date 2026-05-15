@@ -338,6 +338,13 @@ function blankWorkOrder() {
     //           empty for events where they don't make sense.
     // Append-only; never edited or removed in normal operation.
     history: [],
+    // Bulk-operations soft state. `deletedAt` = draft WO sent to /admin/trash
+    // (30-day retention before purge). `archivedAt` = completed WO archived
+    // out of the active list (kept indefinitely — never auto-purged). Per
+    // brief: only drafts can be soft-deleted; only completed WOs can be
+    // archived. Both default null on new records.
+    deletedAt: null,
+    archivedAt: null,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString()
   };
@@ -371,7 +378,9 @@ function hydrate(w) {
         : []
     },
     locked: w?.locked === true,
-    history: Array.isArray(w?.history) ? w.history : []
+    history: Array.isArray(w?.history) ? w.history : [],
+    deletedAt: typeof w?.deletedAt === "string" ? w.deletedAt : null,
+    archivedAt: typeof w?.archivedAt === "string" ? w.archivedAt : null
   };
   // Cascade-merge follow-up — auto-confirm the materials gate for the
   // cases where there's nothing to confirm: fall_closing (find-only,
@@ -756,8 +765,17 @@ function scaffoldZonesFromProperty(property) {
 
 // ---- CRUD -----------------------------------------------------------
 
-async function list() {
-  return readAll();
+// list() hides soft-deleted (draft trash) and archived (completed) WOs by
+// default. Pass { includeDeleted } / { includeArchived } to surface them
+// — the /admin/trash view does that. Existing callers pass no args and
+// keep seeing only active WOs.
+async function list({ includeDeleted = false, includeArchived = false } = {}) {
+  const records = await readAll();
+  return records.filter((w) => {
+    if (!includeDeleted && w.deletedAt) return false;
+    if (!includeArchived && w.archivedAt) return false;
+    return true;
+  });
 }
 
 async function get(id) {
@@ -1021,6 +1039,67 @@ async function remove(id) {
   return removed;
 }
 
+// ---- Soft-delete / soft-archive (bulk operations) -------------------
+//
+// Per-resource business rule (brief §3.1): only DRAFT work orders can be
+// soft-deleted (signed/completed WOs are contractual). Only COMPLETED WOs
+// can be archived (the active list shouldn't hide work in progress).
+// The helpers below DO NOT enforce the status gate — that runs at the
+// bulk-actions dispatcher so the per-record failure is reported per-id.
+
+async function softDelete(id) {
+  const records = await readAll();
+  const idx = records.findIndex((w) => w.id === id);
+  if (idx === -1) throw new Error("Work order not found");
+  if (records[idx].deletedAt) throw new Error("Already in Trash");
+  records[idx] = { ...records[idx], deletedAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+  await writeAll(records);
+  return records[idx];
+}
+
+async function restore(id) {
+  const records = await readAll();
+  const idx = records.findIndex((w) => w.id === id);
+  if (idx === -1) throw new Error("Work order not found");
+  if (!records[idx].deletedAt && !records[idx].archivedAt) throw new Error("Not in Trash or archive");
+  records[idx] = { ...records[idx], deletedAt: null, archivedAt: null, updatedAt: new Date().toISOString() };
+  await writeAll(records);
+  return records[idx];
+}
+
+async function softArchive(id) {
+  const records = await readAll();
+  const idx = records.findIndex((w) => w.id === id);
+  if (idx === -1) throw new Error("Work order not found");
+  if (records[idx].archivedAt) throw new Error("Already archived");
+  records[idx] = { ...records[idx], archivedAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+  await writeAll(records);
+  return records[idx];
+}
+
+async function listDeleted() {
+  const records = await readAll();
+  return records.filter((w) => w.deletedAt);
+}
+
+async function listArchived() {
+  const records = await readAll();
+  return records.filter((w) => w.archivedAt && !w.deletedAt);
+}
+
+async function purgeDeleted({ olderThanMs = 30 * 24 * 60 * 60 * 1000 } = {}) {
+  const records = await readAll();
+  const cutoff = Date.now() - olderThanMs;
+  const kept = records.filter((w) => {
+    if (!w.deletedAt) return true;
+    const t = Date.parse(w.deletedAt);
+    return !Number.isFinite(t) || t > cutoff;
+  });
+  const purged = records.length - kept.length;
+  if (purged > 0) await writeAll(kept);
+  return purged;
+}
+
 module.exports = {
   TEMPLATES,
   ZONE_STATUSES,
@@ -1043,5 +1122,11 @@ module.exports = {
   listByLead,
   create,
   update,
-  remove
+  remove,
+  softDelete,
+  restore,
+  softArchive,
+  listDeleted,
+  listArchived,
+  purgeDeleted
 };

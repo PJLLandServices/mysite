@@ -159,7 +159,7 @@ function render() {
          </div>`
       : "";
     return `
-      <li class="ml-card${showRunButton ? " is-stuck" : ""}">
+      <li class="ml-card${showRunButton ? " is-stuck" : ""}" data-wo-id="${escapeHtml(wo.id)}">
         <a class="ml-card-link" href="/admin/work-order/${encodeURIComponent(wo.id)}">
           <div class="ml-card-head">
             <h3 class="ml-card-name">${escapeHtml(customer)}</h3>
@@ -181,6 +181,13 @@ function render() {
       </li>
     `;
   }).join("");
+  // Wire the bulk-selection toolbar (Session 2 brief). Refresh on every
+  // render so newly-rendered rows get checkboxes.
+  if (window.pjlBulkWiring) {
+    window.pjlBulkWiring.attach("work-orders", {
+      onActionComplete: () => { try { load(); } catch {} }
+    });
+  }
 }
 
 // Per-card "Run cascade now" — calls POST /run-cascade (Brief: WO

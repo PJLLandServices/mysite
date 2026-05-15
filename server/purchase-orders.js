@@ -86,7 +86,7 @@ function render() {
       ? `<br>Received ${escapeHtml(fmtDate(po.receivedAt))}`
       : "";
     return `
-      <li class="ml-card">
+      <li class="ml-card" data-po-id="${escapeHtml(po.id)}">
         <a class="ml-card-link" href="/admin/purchase-order/${encodeURIComponent(po.id)}">
           <div class="ml-card-head">
             <h3 class="ml-card-name">${escapeHtml(po.supplierName || "(no supplier)")}</h3>
@@ -105,6 +105,12 @@ function render() {
       </li>
     `;
   }).join("");
+  // Wire bulk-selection toolbar (Session 2 brief).
+  if (window.pjlBulkWiring) {
+    window.pjlBulkWiring.attach("purchase-orders", {
+      onActionComplete: () => { try { load(); } catch {} }
+    });
+  }
 }
 
 els.search.addEventListener("input", () => render());

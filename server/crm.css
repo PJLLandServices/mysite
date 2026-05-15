@@ -2632,3 +2632,524 @@ body.crm-drawer-locked { overflow: hidden; }
   .confirm-actions { flex-direction: column-reverse; }
   .confirm-actions > * { width: 100%; min-height: 48px; }
 }
+
+/* ============================================================== */
+/* Bulk operations (Session 2 brief)                              */
+/* Shared across all admin list pages — leads, properties,        */
+/* work orders, quotes, invoices, material lists, suppliers, POs. */
+/* ============================================================== */
+
+/* ARIA live region — visually hidden, audible by screen readers. */
+.pjl-bulk-announce {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Row checkbox wrap — flex-child the page can position freely. */
+.pjl-bulk-checkbox-wrap {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px;
+  margin-right: 4px;
+  cursor: pointer;
+  user-select: none;
+}
+.pjl-bulk-checkbox {
+  width: 20px;
+  height: 20px;
+  margin: 0;
+  cursor: pointer;
+  accent-color: var(--pjl-amber);
+}
+
+/* Selected-row visual: 3px amber left border + cream tint. The
+   page's own row styling stays intact — we just stack two cues. */
+.pjl-bulk-row-selected {
+  background: var(--pjl-cream) !important;
+  box-shadow: inset 3px 0 0 var(--pjl-amber);
+}
+
+/* Floating bulk-action toolbar. Desktop: sticky at viewport top.
+   Mobile: fixed at bottom. Animates in on first selection. */
+.pjl-bulk-toolbar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 600;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 14px 24px;
+  background: var(--pjl-dark);
+  color: #FFFFFF;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.25);
+  transform: translateY(-110%);
+  transition: transform 0.2s ease-out;
+  font-family: "DM Sans", sans-serif;
+}
+.pjl-bulk-toolbar.pjl-bulk-toolbar-open {
+  transform: translateY(0);
+}
+.pjl-bulk-toolbar.pjl-bulk-toolbar-closing {
+  transform: translateY(-110%);
+}
+
+.pjl-bulk-toolbar-count {
+  font-weight: 600;
+  font-size: 15px;
+  white-space: nowrap;
+}
+
+.pjl-bulk-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+}
+
+.pjl-bulk-toolbar-btn {
+  background: transparent;
+  border: 1px solid rgba(255,255,255,0.55);
+  color: #FFFFFF;
+  padding: 8px 16px;
+  font-size: 14px;
+  font-weight: 500;
+  border-radius: 4px;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background 0.12s ease;
+}
+.pjl-bulk-toolbar-btn:hover:not(:disabled) {
+  background: rgba(255,255,255,0.10);
+}
+.pjl-bulk-toolbar-btn:focus-visible {
+  outline: 2px solid var(--pjl-amber);
+  outline-offset: 2px;
+}
+.pjl-bulk-toolbar-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.pjl-bulk-toolbar-btn-destructive {
+  background: #D32F2F;
+  border-color: #D32F2F;
+}
+.pjl-bulk-toolbar-btn-destructive:hover:not(:disabled) {
+  background: #B71C1C;
+  border-color: #B71C1C;
+}
+
+.pjl-bulk-toolbar-trailing {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-left: auto;
+}
+.pjl-bulk-toolbar-clear {
+  background: transparent;
+  border: 0;
+  color: rgba(255,255,255,0.85);
+  font-size: 14px;
+  text-decoration: underline;
+  cursor: pointer;
+  font-family: inherit;
+  padding: 4px 6px;
+}
+.pjl-bulk-toolbar-clear:hover {
+  color: #FFFFFF;
+}
+.pjl-bulk-toolbar-close {
+  background: transparent;
+  border: 0;
+  color: #FFFFFF;
+  font-size: 26px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 4px 10px;
+  border-radius: 4px;
+}
+.pjl-bulk-toolbar-close:hover {
+  background: rgba(255,255,255,0.10);
+}
+
+/* While a bulk action is in flight, dim the page slightly so the
+   user understands clicks are queued / awaiting server response. */
+body.pjl-bulk-toolbar-busy {
+  cursor: progress;
+}
+
+/* Mobile: anchor toolbar at bottom of viewport instead of top. */
+@media (max-width: 768px) {
+  .pjl-bulk-toolbar {
+    top: auto;
+    bottom: 0;
+    padding: 12px 16px;
+    background: rgba(15, 31, 20, 0.97);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    box-shadow: 0 -4px 16px rgba(0,0,0,0.25);
+    flex-wrap: wrap;
+    transform: translateY(110%);
+  }
+  .pjl-bulk-toolbar.pjl-bulk-toolbar-open {
+    transform: translateY(0);
+  }
+  .pjl-bulk-toolbar.pjl-bulk-toolbar-closing {
+    transform: translateY(110%);
+  }
+  .pjl-bulk-toolbar-actions {
+    order: 2;
+    width: 100%;
+    overflow-x: auto;
+    flex-wrap: nowrap;
+  }
+  .pjl-bulk-toolbar-trailing {
+    order: 1;
+    margin-left: auto;
+  }
+}
+
+/* Push the page content down when the desktop toolbar is open so
+   the first row isn't occluded. Pages opt-in by adding the
+   .pjl-bulk-page class to a wrapping container (or it can sit on
+   body). Optional but recommended. */
+@media (min-width: 769px) {
+  body.pjl-bulk-page .pjl-bulk-toolbar.pjl-bulk-toolbar-open ~ * {
+    /* no-op selector; reserved for future use */
+  }
+}
+
+/* Confirmation modal (typed-DELETE friction for >5 records). */
+.pjl-bulk-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.6);
+  z-index: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  animation: pjl-bulk-modal-fade 0.15s ease-out;
+}
+@keyframes pjl-bulk-modal-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.pjl-bulk-modal-panel {
+  max-width: 480px;
+  width: 100%;
+  background: var(--pjl-cream);
+  border-radius: 8px;
+  padding: 24px;
+  box-shadow: 0 12px 48px rgba(0,0,0,0.35);
+  font-family: "DM Sans", sans-serif;
+}
+.pjl-bulk-modal-title {
+  margin: 0 0 12px;
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 28px;
+  text-transform: uppercase;
+  letter-spacing: -0.01em;
+  color: var(--pjl-dark);
+}
+.pjl-bulk-modal-body {
+  margin: 0 0 18px;
+  font-size: 15px;
+  line-height: 1.55;
+  color: var(--pjl-text);
+}
+.pjl-bulk-modal-typed-label {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--pjl-text-mid);
+  margin: 0 0 6px;
+}
+.pjl-bulk-modal-typed-input {
+  display: block;
+  width: 100%;
+  margin: 0 0 18px;
+  padding: 10px 12px;
+  border: 1.5px solid var(--pjl-border);
+  border-radius: 6px;
+  font-size: 16px;
+  font-family: "DM Sans", sans-serif;
+  background: #FFFFFF;
+  color: var(--pjl-text);
+}
+.pjl-bulk-modal-typed-input:focus {
+  outline: none;
+  border-color: var(--pjl-amber);
+  box-shadow: 0 0 0 3px var(--pjl-amber-pale);
+}
+.pjl-bulk-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+.pjl-bulk-modal-btn {
+  padding: 10px 18px;
+  font-size: 14px;
+  font-weight: 600;
+  border-radius: 6px;
+  border: 1.5px solid transparent;
+  cursor: pointer;
+  font-family: "DM Sans", sans-serif;
+  min-width: 90px;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+.pjl-bulk-modal-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.pjl-bulk-modal-btn-secondary {
+  background: #FFFFFF;
+  border-color: var(--pjl-border);
+  color: var(--pjl-text);
+}
+.pjl-bulk-modal-btn-secondary:hover:not(:disabled) {
+  background: var(--pjl-cream);
+  border-color: var(--pjl-text-muted);
+}
+.pjl-bulk-modal-btn-primary {
+  background: var(--pjl-green);
+  border-color: var(--pjl-green);
+  color: #FFFFFF;
+}
+.pjl-bulk-modal-btn-primary:hover:not(:disabled) {
+  background: var(--pjl-green-mid);
+  border-color: var(--pjl-green-mid);
+}
+.pjl-bulk-modal-btn-destructive {
+  background: #D32F2F;
+  border-color: #D32F2F;
+  color: #FFFFFF;
+}
+.pjl-bulk-modal-btn-destructive:hover:not(:disabled) {
+  background: #B71C1C;
+  border-color: #B71C1C;
+}
+
+@media (max-width: 600px) {
+  .pjl-bulk-modal-backdrop { align-items: flex-end; padding: 0; }
+  .pjl-bulk-modal-panel {
+    max-width: 100%;
+    border-radius: 14px 14px 0 0;
+    padding: 22px 18px 18px;
+  }
+  .pjl-bulk-modal-actions { flex-direction: column-reverse; }
+  .pjl-bulk-modal-actions > * { width: 100%; min-height: 48px; }
+}
+
+/* Toast notifications. Bottom-right desktop, bottom-stretch mobile.
+   Stack vertically with 8px gaps. Auto-dismiss in 10 seconds. */
+.pjl-bulk-toast-container {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  z-index: 800;
+  display: flex;
+  flex-direction: column-reverse;
+  gap: 8px;
+  max-width: 420px;
+  pointer-events: none;
+}
+.pjl-bulk-toast {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  background: var(--pjl-dark);
+  color: #FFFFFF;
+  border-radius: 8px;
+  box-shadow: 0 6px 20px rgba(0,0,0,0.25);
+  font-family: "DM Sans", sans-serif;
+  font-size: 14px;
+  line-height: 1.4;
+  pointer-events: auto;
+  animation: pjl-bulk-toast-in 0.2s ease-out;
+}
+.pjl-bulk-toast-leaving {
+  opacity: 0;
+  transform: translateY(8px);
+  transition: opacity 0.18s ease, transform 0.18s ease;
+}
+@keyframes pjl-bulk-toast-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.pjl-bulk-toast-success {
+  border-left: 4px solid var(--pjl-green-light);
+}
+.pjl-bulk-toast-error {
+  background: #5C1717;
+  border-left: 4px solid #FF8A80;
+}
+.pjl-bulk-toast-glyph {
+  flex: 0 0 auto;
+  font-size: 18px;
+  line-height: 1;
+}
+.pjl-bulk-toast-text {
+  flex: 1 1 auto;
+}
+.pjl-bulk-toast-undo {
+  background: transparent;
+  border: 0;
+  color: #FFFFFF;
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  text-decoration: underline;
+  cursor: pointer;
+  padding: 4px 6px;
+  margin-left: 4px;
+}
+.pjl-bulk-toast-undo:hover {
+  text-decoration: none;
+}
+.pjl-bulk-toast-undo:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.pjl-bulk-toast-close {
+  background: transparent;
+  border: 0;
+  color: rgba(255,255,255,0.85);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 4px;
+}
+.pjl-bulk-toast-close:hover {
+  color: #FFFFFF;
+}
+
+@media (max-width: 600px) {
+  .pjl-bulk-toast-container {
+    left: 16px;
+    right: 16px;
+    max-width: none;
+    bottom: 16px;
+  }
+}
+
+/* Trash view (/admin/trash) — resource picker + record list. */
+.pjl-trash-shell {
+  padding: 24px;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+.pjl-trash-shell h1 {
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 38px;
+  text-transform: uppercase;
+  margin: 0 0 8px;
+  color: var(--pjl-dark);
+}
+.pjl-trash-shell .pjl-trash-lede {
+  margin: 0 0 24px;
+  color: var(--pjl-text-mid);
+  font-size: 15px;
+}
+.pjl-trash-resource-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 0 0 20px;
+  border-bottom: 1px solid var(--pjl-border);
+}
+.pjl-trash-tab {
+  background: transparent;
+  border: 0;
+  border-bottom: 3px solid transparent;
+  padding: 10px 16px;
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--pjl-text-mid);
+  cursor: pointer;
+  position: relative;
+  bottom: -1px;
+}
+.pjl-trash-tab:hover {
+  color: var(--pjl-dark);
+}
+.pjl-trash-tab.is-active {
+  color: var(--pjl-green);
+  border-bottom-color: var(--pjl-amber);
+}
+.pjl-trash-tab .pjl-trash-tab-count {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 8px;
+  background: var(--pjl-green-pale);
+  color: var(--pjl-green);
+  border-radius: 999px;
+  font-size: 12px;
+}
+.pjl-trash-tab.is-active .pjl-trash-tab-count {
+  background: var(--pjl-amber-pale);
+  color: var(--pjl-amber);
+}
+.pjl-trash-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.pjl-trash-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  background: #FFFFFF;
+  border: 1px solid var(--pjl-border);
+  border-radius: 8px;
+  font-size: 14px;
+}
+.pjl-trash-row-meta {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.pjl-trash-row-title {
+  font-weight: 600;
+  color: var(--pjl-dark);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pjl-trash-row-sub {
+  font-size: 12px;
+  color: var(--pjl-text-muted);
+}
+.pjl-trash-empty {
+  padding: 32px 24px;
+  text-align: center;
+  background: #FFFFFF;
+  border: 1px dashed var(--pjl-border);
+  border-radius: 8px;
+  color: var(--pjl-text-muted);
+}
+.pjl-trash-empty h3 {
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 22px;
+  margin: 0 0 8px;
+  color: var(--pjl-text-mid);
+}
+

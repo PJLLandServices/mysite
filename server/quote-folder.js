@@ -73,7 +73,7 @@ async function load() {
       ? `<a class="invoices-row-sub" href="/admin/project/${encodeURIComponent(proj.id)}">↗ ${escapeHtml(proj.id)}</a>`
       : `<button type="button" class="invoices-row-sub" data-quote-id="${escapeHtml(q.id)}" data-action="convert" style="background:none;border:none;color:#1B4D2E;cursor:pointer;text-decoration:underline;padding:0;font:inherit">Convert to project</button>`;
     return `
-      <tr>
+      <tr class="quote-row" data-quote-id="${escapeHtml(q.id)}">
         <td>
           <strong>${escapeHtml(q.id)}</strong>${q.version > 1 ? ` <span class="invoices-row-sub">v${q.version}</span>` : ""}
           <br><a class="invoices-row-sub" href="/api/admin/quote-folder/${encodeURIComponent(q.id)}/pdf" target="_blank" rel="noopener">📄 PDF</a>
@@ -87,6 +87,12 @@ async function load() {
       </tr>
     `;
   }).join("");
+  // Wire bulk-selection toolbar (Session 2 brief). Re-runs on each render.
+  if (window.pjlBulkWiring) {
+    window.pjlBulkWiring.attach("quotes", {
+      onActionComplete: () => { try { load(); } catch {} }
+    });
+  }
 }
 
 async function convertToProject(quoteId) {

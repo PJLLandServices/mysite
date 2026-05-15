@@ -33,6 +33,7 @@
       <a href="/admin/invoices">Invoices</a>
       <a href="/admin/material-lists">Materials</a>
       <a href="/admin/chats">AI Chats</a>
+      <a href="/admin/trash">Trash</a>
       <a href="/admin/users">Users</a>
       <a href="/admin/settings">Settings</a>
     </div>
@@ -466,7 +467,80 @@
     </div>
   </div>
 
+  <script src="/crm/bulk-toast.js"></script>
+  <script src="/crm/bulk-modal.js"></script>
+  <script src="/crm/bulk-selection.js"></script>
   <script src="/crm/admin.js"></script>
   <script src="/crm/nav-badges.js?v=1"></script>
+  <script>
+    // Wire the unified bulk-operations floating toolbar for leads.
+    // Coexists with the existing inline toolbar (#bulkToolbar) — that
+    // one handles inline Set stage / Set priority / Archive. This one
+    // handles the destructive + spam-flag actions per the Session 2
+    // brief: Dismiss, Tag as spam, Change stage, Delete (soft).
+    document.addEventListener("DOMContentLoaded", () => {
+      if (!window.pjlBulkSelection) return;
+      let bulkHandle = null;
+      function setupBulk() {
+        if (bulkHandle) { bulkHandle.refresh(); return; }
+        bulkHandle = window.pjlBulkSelection.init({
+          resource: "leads",
+          listSelector: "#leadList",
+          rowSelector: ".crm-card",
+          idAttribute: "data-lead-id",
+          actions: [
+            {
+              id: "dismiss",
+              label: "Dismiss",
+              confirmTitle: (n) => "Dismiss " + n + " " + (n === 1 ? "lead" : "leads") + "?",
+              confirmBody: "These leads will be marked as Lost. You can change them back from the lead detail panel.",
+              confirmLabel: "Dismiss",
+              run: (ids) => window.pjlBulkSelection.callBulk("leads", "dismiss", ids)
+            },
+            {
+              id: "tag-spam",
+              label: "Tag as spam",
+              confirmTitle: (n) => "Flag " + n + " " + (n === 1 ? "lead" : "leads") + " as bot spam?",
+              confirmBody: "These leads will be tagged so you can find them again in Trash or via filters. They stay in the active list — use Delete to move them to Trash.",
+              confirmLabel: "Tag as spam",
+              run: (ids) => window.pjlBulkSelection.callBulk("leads", "tag", ids, { tag: "bot-spam" })
+            },
+            {
+              id: "delete",
+              label: "Delete",
+              destructive: true,
+              requireTypedConfirm: (n) => n > 5,
+              confirmTitle: (n) => "Delete " + n + " " + (n === 1 ? "lead" : "leads") + "?",
+              confirmBody: "These leads will be moved to Trash and permanently deleted after 30 days. You can restore them from Trash anytime before then.",
+              confirmLabel: "Delete",
+              run: (ids) => window.pjlBulkSelection.callBulk("leads", "delete", ids),
+              undo: (ids) => window.pjlBulkSelection.callBulk("leads", "restore", ids)
+            }
+          ],
+          onActionComplete: () => {
+            // The existing admin.js exposes a global refresh helper via the
+            // "Refresh Leads" button. Reuse it so the list re-renders after
+            // a bulk action (which removes succeeded rows). Falls back to a
+            // page reload if no helper is available.
+            const btn = document.getElementById("refreshLeads");
+            if (btn) btn.click();
+            else location.reload();
+            // Re-decorate after the next paint so new rows get checkboxes.
+            setTimeout(() => bulkHandle && bulkHandle.refresh(), 600);
+          }
+        });
+      }
+      setupBulk();
+      // Re-init on visibility — when admin.js re-renders after a refresh,
+      // the new rows need decoration. A 500ms tick after each refresh
+      // catches the typical render cadence.
+      const refreshBtn = document.getElementById("refreshLeads");
+      if (refreshBtn) {
+        refreshBtn.addEventListener("click", () => {
+          setTimeout(() => bulkHandle && bulkHandle.refresh(), 500);
+        });
+      }
+    });
+  </script>
 </body>
 </html>

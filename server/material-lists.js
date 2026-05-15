@@ -115,7 +115,7 @@ function renderLists() {
     const customerLine = rec.customerName || rec.customerEmail || "—";
     const addressLine = rec.address ? ` &middot; ${escapeHtml(rec.address)}` : "";
     return `
-      <li class="ml-card${rec.status === "archived" ? " is-archived" : ""}">
+      <li class="ml-card${rec.status === "archived" ? " is-archived" : ""}" data-list-id="${escapeHtml(rec.id)}">
         <a class="ml-card-link" href="/admin/material-list/${encodeURIComponent(rec.id)}">
           <div class="ml-card-head">
             <h3 class="ml-card-name">${escapeHtml(rec.name || "(untitled list)")}</h3>
@@ -138,6 +138,12 @@ function renderLists() {
       </li>
     `;
   }).join("");
+  // Wire bulk-selection toolbar (Session 2 brief).
+  if (window.pjlBulkWiring) {
+    window.pjlBulkWiring.attach("material-lists", {
+      onActionComplete: () => { try { loadLists(); } catch {} }
+    });
+  }
 }
 
 function openNewForm() {

@@ -205,6 +205,15 @@ function blankProperty() {
     //     promotedPhotoIds: []           // photos copied to property.photos
     //   }
     serviceRecords: [],
+    // Bulk-operations soft state (admin CRM § Bulk operations).
+    //   deletedAt:   set by softDelete; record hidden from default list()
+    //                and purged 30 days after this timestamp.
+    //   archivedAt:  set by softArchive; record hidden from default list()
+    //                but kept indefinitely (manual restore from /admin/trash).
+    // Both default to null on new records; never written via update() —
+    // only the soft-state helpers below toggle them.
+    deletedAt: null,
+    archivedAt: null,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString()
   };
@@ -263,7 +272,9 @@ function hydrate(p) {
     leadIds: Array.isArray(p?.leadIds) ? p.leadIds : [],
     workOrderIds: Array.isArray(p?.workOrderIds) ? p.workOrderIds : [],
     deferredIssues: Array.isArray(p?.deferredIssues) ? p.deferredIssues.map(hydrateDeferred) : [],
-    serviceRecords: Array.isArray(p?.serviceRecords) ? p.serviceRecords : []
+    serviceRecords: Array.isArray(p?.serviceRecords) ? p.serviceRecords : [],
+    deletedAt: typeof p?.deletedAt === "string" ? p.deletedAt : null,
+    archivedAt: typeof p?.archivedAt === "string" ? p.archivedAt : null
   };
 }
 
@@ -549,8 +560,17 @@ async function relinkLead({ leadId, fromPropertyId, toPropertyId }) {
 
 // ---- CRUD for the admin UI ------------------------------------------
 
-async function list() {
-  return readAll();
+// list() filters soft-deleted records (deletedAt set) by default — the
+// /admin/trash view passes { includeDeleted: true } to see them. Archived
+// records are also filtered by default; pass { includeArchived: true } to
+// include them. Pass both flags to see EVERY property regardless of state.
+async function list({ includeDeleted = false, includeArchived = false } = {}) {
+  const records = await readAll();
+  return records.filter((p) => {
+    if (!includeDeleted && p.deletedAt) return false;
+    if (!includeArchived && p.archivedAt) return false;
+    return true;
+  });
 }
 
 async function get(id) {
@@ -934,6 +954,63 @@ async function create({ customerId, address, customerName, customerEmail, custom
   return property;
 }
 
+// ---- Soft-delete / soft-archive (bulk operations) -------------------
+
+async function softDelete(id) {
+  const records = await readAll();
+  const idx = records.findIndex((p) => p.id === id);
+  if (idx === -1) throw new Error("Property not found");
+  if (records[idx].deletedAt) throw new Error("Already in Trash");
+  records[idx] = { ...records[idx], deletedAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+  await writeAll(records);
+  return records[idx];
+}
+
+async function restore(id) {
+  const records = await readAll();
+  const idx = records.findIndex((p) => p.id === id);
+  if (idx === -1) throw new Error("Property not found");
+  if (!records[idx].deletedAt && !records[idx].archivedAt) throw new Error("Not in Trash or archive");
+  records[idx] = { ...records[idx], deletedAt: null, archivedAt: null, updatedAt: new Date().toISOString() };
+  await writeAll(records);
+  return records[idx];
+}
+
+async function softArchive(id) {
+  const records = await readAll();
+  const idx = records.findIndex((p) => p.id === id);
+  if (idx === -1) throw new Error("Property not found");
+  if (records[idx].archivedAt) throw new Error("Already archived");
+  records[idx] = { ...records[idx], archivedAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+  await writeAll(records);
+  return records[idx];
+}
+
+async function listDeleted() {
+  const records = await readAll();
+  return records.filter((p) => p.deletedAt);
+}
+
+async function listArchived() {
+  const records = await readAll();
+  return records.filter((p) => p.archivedAt && !p.deletedAt);
+}
+
+// Hard-delete all records whose deletedAt is older than `olderThanMs`.
+// Used by the nightly /admin/trash purge — returns the count purged.
+async function purgeDeleted({ olderThanMs = 30 * 24 * 60 * 60 * 1000 } = {}) {
+  const records = await readAll();
+  const cutoff = Date.now() - olderThanMs;
+  const kept = records.filter((p) => {
+    if (!p.deletedAt) return true;
+    const t = Date.parse(p.deletedAt);
+    return !Number.isFinite(t) || t > cutoff;
+  });
+  const purged = records.length - kept.length;
+  if (purged > 0) await writeAll(kept);
+  return purged;
+}
+
 module.exports = {
   attachLead,
   relinkLead,
@@ -954,5 +1031,11 @@ module.exports = {
   listDeferred,
   addServiceRecord,
   findServiceRecordByWo,
-  applySystemUpdates
+  applySystemUpdates,
+  softDelete,
+  restore,
+  softArchive,
+  listDeleted,
+  listArchived,
+  purgeDeleted
 };

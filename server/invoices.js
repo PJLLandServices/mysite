@@ -33,7 +33,7 @@ async function load() {
   emptyEl.hidden = true;
   tableEl.hidden = false;
   tableBody.innerHTML = items.map((inv) => `
-    <tr data-invoice-id="${escapeHtml(inv.id)}">
+    <tr class="invoice-row" data-invoice-id="${escapeHtml(inv.id)}">
       <td><a href="/admin/invoice/${encodeURIComponent(inv.id)}">${escapeHtml(inv.id)}</a></td>
       <td>
         <strong>${escapeHtml(inv.customerName || "—")}</strong>
@@ -45,6 +45,9 @@ async function load() {
       <td>${escapeHtml(fmtDate(inv.createdAt))}</td>
     </tr>
   `).join("");
+  // Wire bulk-selection toolbar (Session 2 brief). Each call refreshes
+  // the controller's row scan since the table just re-rendered.
+  if (window.pjlBulkWiring) window.pjlBulkWiring.attach("invoices", { onActionComplete: load });
 }
 
 filterBtns.forEach((btn) => {

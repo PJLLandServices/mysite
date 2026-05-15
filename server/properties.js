@@ -144,12 +144,24 @@ function render() {
       const link = document.createElement("a");
       link.href = `/admin/property/${encodeURIComponent(p.id)}`;
       link.className = "property-card";
+      // Carry data-id on the active-mode row too so the new bulk-selection
+      // toolbar (Session 2 brief) can decorate it. The legacy in-page
+      // select mode continues to use its own checkbox+selected Set.
+      link.dataset.id = p.id;
       link.innerHTML = inner;
       grid.appendChild(link);
     }
   });
 
   updateBulkBar(filtered);
+  // Wire the new bulk-selection toolbar (Session 2 brief). Skipped in
+  // the legacy in-page "select" mode — that one owns its own selection
+  // state and would conflict with two competing checkboxes per row.
+  if (!selecting && window.pjlBulkWiring) {
+    window.pjlBulkWiring.attach("properties", {
+      onActionComplete: () => { try { reload(); } catch {} }
+    });
+  }
 }
 
 function applyToggle(id, isSelected) {

@@ -198,7 +198,12 @@ function blankQuote() {
     // Audit trail — every status change appends an entry.
     history: [
       { ts: created, action: "created", by: "system", note: "" }
-    ]
+    ],
+
+    // Bulk-operations soft state. Only draft / expired quotes are eligible
+    // for soft-delete (per brief: accepted/sent quotes are contractual).
+    // 30-day Trash retention before purge. Gate enforced at the dispatcher.
+    deletedAt: null
   };
 }
 
@@ -214,7 +219,8 @@ function hydrate(q) {
     lineItems: Array.isArray(q?.lineItems) ? q.lineItems : [],
     decisions: Array.isArray(q?.decisions) ? q.decisions : [],
     workOrderIds: Array.isArray(q?.workOrderIds) ? q.workOrderIds : [],
-    history: Array.isArray(q?.history) ? q.history : []
+    history: Array.isArray(q?.history) ? q.history : [],
+    deletedAt: typeof q?.deletedAt === "string" ? q.deletedAt : null
   };
 }
 
@@ -297,8 +303,12 @@ function validateQuotePayload(payload, pricingItems) {
 
 // ---- CRUD -----------------------------------------------------------
 
-async function list() {
-  return readAll();
+// list() hides soft-deleted quotes by default. /admin/trash passes
+// { includeDeleted: true } to see them.
+async function list({ includeDeleted = false } = {}) {
+  const records = await readAll();
+  if (includeDeleted) return records;
+  return records.filter((q) => !q.deletedAt);
 }
 
 async function get(id) {
@@ -573,6 +583,61 @@ async function expireStaleQuotes({ now = new Date() } = {}) {
   return { expired, considered };
 }
 
+// Hard-remove a quote by id (used by /admin/trash permanent-delete). The
+// trash dispatcher checks deletedAt before calling — accepted/sent quotes
+// can't get here.
+async function remove(id) {
+  const records = await readAll();
+  const idx = records.findIndex((q) => q.id === id);
+  if (idx === -1) return null;
+  const [removed] = records.splice(idx, 1);
+  await writeAll(records);
+  return removed;
+}
+
+// ---- Soft-delete (bulk operations) ----------------------------------
+//
+// Eligibility (brief §3.1): only draft or expired quotes can be soft-deleted
+// — accepted/sent ones are contractual. Gate enforced at dispatcher.
+
+async function softDelete(id) {
+  const records = await readAll();
+  const idx = records.findIndex((q) => q.id === id);
+  if (idx === -1) throw new Error("Quote not found");
+  if (records[idx].deletedAt) throw new Error("Already in Trash");
+  records[idx] = { ...records[idx], deletedAt: new Date().toISOString() };
+  await writeAll(records);
+  return records[idx];
+}
+
+async function restore(id) {
+  const records = await readAll();
+  const idx = records.findIndex((q) => q.id === id);
+  if (idx === -1) throw new Error("Quote not found");
+  if (!records[idx].deletedAt) throw new Error("Not in Trash");
+  records[idx] = { ...records[idx], deletedAt: null };
+  await writeAll(records);
+  return records[idx];
+}
+
+async function listDeleted() {
+  const records = await readAll();
+  return records.filter((q) => q.deletedAt);
+}
+
+async function purgeDeleted({ olderThanMs = 30 * 24 * 60 * 60 * 1000 } = {}) {
+  const records = await readAll();
+  const cutoff = Date.now() - olderThanMs;
+  const kept = records.filter((q) => {
+    if (!q.deletedAt) return true;
+    const t = Date.parse(q.deletedAt);
+    return !Number.isFinite(t) || t > cutoff;
+  });
+  const purged = records.length - kept.length;
+  if (purged > 0) await writeAll(kept);
+  return purged;
+}
+
 module.exports = {
   STATUSES,
   TYPES,
@@ -591,5 +656,10 @@ module.exports = {
   expireStaleQuotes,
   attachWorkOrder,
   markSentForApproval,
-  getByApprovalToken
+  getByApprovalToken,
+  remove,
+  softDelete,
+  restore,
+  listDeleted,
+  purgeDeleted
 };

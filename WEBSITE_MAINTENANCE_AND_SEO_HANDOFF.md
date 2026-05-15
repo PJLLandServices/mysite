@@ -808,16 +808,70 @@ The CSV is more useful than the raw JSON for archiving — opens in Excel, struc
 **`leads.json` got corrupted (file is no longer valid JSON).**
 → Stop the server. Open `server/data/leads.json` in a text editor. If it's truncated, paste the last good copy from your CSV exports (rebuild as JSON — tedious but doable). If it's totally broken, replace contents with `[]` and restart — you'll lose any leads not yet exported. **This is why §15.11 backups matter.**
 
-### 15.13 Things to absolutely never do
+### 15.13 Bulk operations + Trash (admin-only)
 
-1. **Never commit `.env` or `server/data/`.** Both are in `.gitignore`. If `.env` is ever pushed to GitHub, **rotate every credential in it immediately** (Gmail app password, Twilio auth token).
-2. **Never disable HTTPS** in production. Render does this for free; don't override it.
-3. **Never log raw passwords** anywhere. The login flow uses scrypt + salt; if you change auth code, preserve that.
-4. **Never expose `/api/quotes/:id` GET, `/api/contacts*`, `/api/quotes.csv`, or `/admin` without authentication.** Those endpoints contain customer PII (names, phones, addresses). The auth gate in `needsAuth()` is the only thing protecting them — don't punch holes in it.
-5. **Never edit `users.json` or `auth.json` by hand.** Use `npm run create-user` to add an account, `/admin/users` to manage existing ones, and the `/reset-password` flow to rotate a credential.
-6. **Never reintroduce the single-password pattern in `auth.json`.** Post-migration, that file holds the session secret and nothing else. Restoring `passwordHash` / `salt` fields would silently break per-user identity and let a tech log in as Patrick.
-7. **Never log magic-token IDs or session-cookie values.** Both are credentials. Log "sent magic-link to user X" — never the link itself. The verification endpoints are deliberately silent on the token contents in error responses.
-8. **Never set a CRM account password to anything you use elsewhere.** Hashed at rest, but treat it like any production credential.
+Every admin list page in the CRM supports multi-select via a checkbox column + a floating action toolbar. The toolbar surfaces destructive actions (delete, archive, status-change) for the selected records, all routed through one unified endpoint.
+
+**Endpoint:** `POST /api/admin/bulk/:resource`
+**Auth gate:** `requireAdmin` (admin-only, not tech). The gate runs in `needsAuth()` in `server.js` — paths under `/api/admin/bulk/*` and `/api/admin/trash/*` return 401/403 to anyone but admin.
+
+**Per-resource action whitelist** (`server/lib/bulk-actions.js`):
+
+| Resource | Actions | Delete semantics |
+|---|---|---|
+| `leads` | `delete`, `dismiss`, `change-stage`, `tag`, `restore`, `purge` | Soft → Trash |
+| `properties` | `delete`, `archive`, `unarchive`, `restore`, `purge` | Soft → Trash + archive |
+| `work-orders` | `change-status`, `archive`, `unarchive`, `delete-drafts`, `restore`, `purge` | Soft (drafts only) + archive (completed) |
+| `quotes` | `expire`, `delete-drafts`, `restore`, `purge` | Soft (draft/expired only) |
+| `invoices` | `change-status`, `resend` | **No delete** (accounting / QuickBooks ledger) |
+| `material-lists` | `delete`, `change-status`, `restore`, `purge` | Soft → Trash |
+| `suppliers` | `archive`, `unarchive` | **No delete** (parts catalog references them) |
+| `purchase-orders` | `change-status`, `resend`, `delete-drafts`, `restore`, `purge` | Soft (drafts only) |
+
+**Soft-delete model — two distinct soft-states:**
+- `deletedAt: <ISO>` — sent to Trash. Auto-purged 30 days after this timestamp via a nightly sweep at server boot + every 24 hours. Restorable from `/admin/trash`.
+- `archivedAt: <ISO>` (properties + work-orders) or `archived: boolean` (suppliers — legacy) — hidden from active lists but **never auto-purged**. Restorable indefinitely.
+
+The fields are independent. Each lib module's `list()` filters out both by default. Pass `{ includeDeleted: true }` or `{ includeArchived: true }` to opt in (the Trash view does this).
+
+**Confirmation friction:**
+- 1–5 records: plain confirm modal.
+- 6+ records: requires typing `DELETE` in the modal before the confirm button enables. Live in `server/bulk-modal.js`.
+
+**Toast + Undo:**
+- Successful soft-delete / archive / status-change shows a toast with **Undo** button visible for 10 seconds. Undo calls the inverse action (restore / unarchive / change-status-back).
+- Live in `server/bulk-toast.js`.
+
+**Audit log: `server/data/bulk-actions.log`** (append-only, rotates at 5 MB → `bulk-actions.log.1`). One pipe-delimited line per action:
+```
+2026-05-15T20:14:32Z | adminSess:a3f8e2b1 | leads | delete | 47 | id_xyz,id_abc,... | success
+```
+Failed / partial actions and nightly purge sweeps both log here. Never exposed via API.
+
+**Frontend modules** (under `/crm/`):
+- `bulk-selection.js` — controller (checkbox decoration, range-select, toolbar)
+- `bulk-modal.js` — confirmation modal with typed-DELETE friction
+- `bulk-toast.js` — undo-capable toast notifications
+- `bulk-wiring.js` — per-resource action configs (one place to edit if you change the per-resource action set)
+- `crm.css` — `.pjl-bulk-*` styles (toolbar, modal, toasts, row visuals, Trash view)
+
+**Trash view** lives at `/admin/trash` (admin-only). Tab strip per resource; each tab calls `GET /api/admin/trash/:resource` to list soft-deleted records and exposes Restore + Permanently delete. Per-record purge (the "Permanently delete" button) does a hard delete immediately — bypasses the 30-day window.
+
+**Adding a new resource** to the bulk layer:
+1. Add `deletedAt: null` (and `archivedAt: null` if needed) to the lib's blank shape + hydrate.
+2. Add `{ includeDeleted, includeArchived }` filtering to its `list()`.
+3. Add `softDelete(id)`, `restore(id)`, `listDeleted()`, `purgeDeleted({ olderThanMs })` exports.
+4. Register the resource in `ACTION_WHITELIST` (in `server/lib/bulk-actions.js`) and `getHandler()` for the actions you want.
+5. Register in `purgeAllExpired()` so the nightly sweep covers it.
+6. Add a config entry in `server/bulk-wiring.js` (`listSelector`, `rowSelector`, `idAttribute`, `actions`).
+7. Patch the list page's render to add `data-<resource>-id="..."` on each row and call `pjlBulkWiring.attach("resource-name")` after the render.
+8. Add the resource's tab to the array at the top of `server/trash.js`.
+
+**Things to know:**
+- `requireAdmin` is the gate — tech users get a 403, no exceptions.
+- Per-record gates (e.g. "only drafts can be soft-deleted") are enforced at the handler level in `bulk-actions.js`, NOT at the endpoint level. Failures are reported per-id in the response `failedIds[]` array; succeeded records still process.
+- The bulk endpoint caps requests at **500 ids**. The frontend chunks larger selections (not currently in use — there's no "select across all pages" UI yet).
+- Resend (invoices, POs) only appends an audit-log entry. To actually re-fire emails per record, open each one and use the per-record Resend button. Bulk-resend is intent-only because PDF rendering per record is too heavy for one synchronous batch.
 
 ### 15.14 Anti-bot defense layer
 
@@ -883,6 +937,17 @@ The use of Cloudflare Turnstile + the 30-day IP retention are disclosed in `priv
 - `contact.html`, `index.html`, `quote.html`, `book.html`, `diagnose.html` — explicit `<script>` tag in `<head>`.
 - All chat-widget pages (~48 pages: blog posts, service areas, faq, etc.) — `js/chat-widget.js` lazy-loads `js/anti-bot.js` on first form-bubble render, so honeypot + `_ts` flow even where the explicit Turnstile script isn't in the HTML.
 - `estimate.html` is the one exception — it submits to Formspree (not the PJL backend), so it relies on Formspree's native `_gotcha` honeypot only. Turnstile would have nowhere to verify against.
+
+### 15.15 Things to absolutely never do
+
+1. **Never commit `.env` or `server/data/`.** Both are in `.gitignore`. If `.env` is ever pushed to GitHub, **rotate every credential in it immediately** (Gmail app password, Twilio auth token).
+2. **Never disable HTTPS** in production. Render does this for free; don't override it.
+3. **Never log raw passwords** anywhere. The login flow uses scrypt + salt; if you change auth code, preserve that.
+4. **Never expose `/api/quotes/:id` GET, `/api/contacts*`, `/api/quotes.csv`, or `/admin` without authentication.** Those endpoints contain customer PII (names, phones, addresses). The auth gate in `needsAuth()` is the only thing protecting them — don't punch holes in it.
+5. **Never edit `users.json` or `auth.json` by hand.** Use `npm run create-user` to add an account, `/admin/users` to manage existing ones, and the `/reset-password` flow to rotate a credential.
+6. **Never reintroduce the single-password pattern in `auth.json`.** Post-migration, that file holds the session secret and nothing else. Restoring `passwordHash` / `salt` fields would silently break per-user identity and let a tech log in as Patrick.
+7. **Never log magic-token IDs or session-cookie values.** Both are credentials. Log "sent magic-link to user X" — never the link itself. The verification endpoints are deliberately silent on the token contents in error responses.
+8. **Never set a CRM account password to anything you use elsewhere.** Hashed at rest, but treat it like any production credential.
 
 ---
 

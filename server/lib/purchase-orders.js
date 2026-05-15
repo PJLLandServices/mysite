@@ -162,7 +162,12 @@ function blankPo() {
 
     history: [
       { ts: created, action: "created", by: "admin", note: "" }
-    ]
+    ],
+
+    // Bulk-operations soft state. Only draft POs are eligible for soft-delete
+    // (sent / received POs touch supplier orders and inventory state). Gate
+    // enforced at dispatcher.
+    deletedAt: null
   };
 }
 
@@ -174,7 +179,8 @@ function hydrate(rec) {
     status: STATUSES.includes(rec?.status) ? rec.status : "draft",
     sourceMaterialListIds: Array.isArray(rec?.sourceMaterialListIds) ? rec.sourceMaterialListIds.slice() : [],
     lineItems: Array.isArray(rec?.lineItems) ? rec.lineItems.map(hydrateLine) : [],
-    history: Array.isArray(rec?.history) ? rec.history.slice(-200) : []
+    history: Array.isArray(rec?.history) ? rec.history.slice(-200) : [],
+    deletedAt: typeof rec?.deletedAt === "string" ? rec.deletedAt : null
   };
 }
 
@@ -205,9 +211,10 @@ function recomputeSubtotal(record) {
 
 // ---- CRUD -----------------------------------------------------------
 
-async function list({ status = null, supplierId = null, materialListId = null } = {}) {
+async function list({ status = null, supplierId = null, materialListId = null, includeDeleted = false } = {}) {
   const records = await readAll();
   return records.filter((r) => {
+    if (!includeDeleted && r.deletedAt) return false;
     if (status && r.status !== status) return false;
     if (supplierId && r.supplierId !== supplierId) return false;
     if (materialListId && !(r.sourceMaterialListIds || []).includes(materialListId)) return false;
@@ -573,6 +580,46 @@ async function markResent(id, { toEmail, toName, subject } = {}) {
   return rec;
 }
 
+// ---- Soft-delete (bulk operations) ----------------------------------
+
+async function softDelete(id) {
+  const records = await readAll();
+  const idx = records.findIndex((r) => r.id === id);
+  if (idx === -1) throw new Error("Purchase order not found");
+  if (records[idx].deletedAt) throw new Error("Already in Trash");
+  records[idx] = { ...records[idx], deletedAt: nowIso(), updatedAt: nowIso() };
+  await writeAll(records);
+  return records[idx];
+}
+
+async function restore(id) {
+  const records = await readAll();
+  const idx = records.findIndex((r) => r.id === id);
+  if (idx === -1) throw new Error("Purchase order not found");
+  if (!records[idx].deletedAt) throw new Error("Not in Trash");
+  records[idx] = { ...records[idx], deletedAt: null, updatedAt: nowIso() };
+  await writeAll(records);
+  return records[idx];
+}
+
+async function listDeleted() {
+  const records = await readAll();
+  return records.filter((r) => r.deletedAt);
+}
+
+async function purgeDeleted({ olderThanMs = 30 * 24 * 60 * 60 * 1000 } = {}) {
+  const records = await readAll();
+  const cutoff = Date.now() - olderThanMs;
+  const kept = records.filter((r) => {
+    if (!r.deletedAt) return true;
+    const t = Date.parse(r.deletedAt);
+    return !Number.isFinite(t) || t > cutoff;
+  });
+  const purged = records.length - kept.length;
+  if (purged > 0) await writeAll(kept);
+  return purged;
+}
+
 module.exports = {
   STATUSES,
   list,
@@ -586,5 +633,9 @@ module.exports = {
   reorderFrom,
   remove,
   planDraftsFromMaterialList,
-  deriveReceiveStatus
+  deriveReceiveStatus,
+  softDelete,
+  restore,
+  listDeleted,
+  purgeDeleted
 };

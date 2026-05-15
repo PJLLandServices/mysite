@@ -80,6 +80,13 @@ function renderList() {
       </li>
     `;
   }).join("");
+  // Wire bulk-selection toolbar (Session 2 brief). Suppliers are
+  // archive-only — no soft-delete because they're referenced by parts.json.
+  if (window.pjlBulkWiring) {
+    window.pjlBulkWiring.attach("suppliers", {
+      onActionComplete: () => { try { loadSuppliers(); } catch {} }
+    });
+  }
 }
 
 function openForm({ supplier = null } = {}) {
