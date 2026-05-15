@@ -147,6 +147,16 @@
             <p class="invoice-action-link"><span>Work order</span> <a id="invoiceWoLink" href="#">—</a></p>
             <p class="invoice-action-link"><span>Property</span> <a id="invoicePropertyLink" href="#">—</a></p>
           </section>
+
+          <!-- Authorization posture — admin-only visibility per
+               Signature Bypass for WO Completion brief §3.4.4. Shows
+               which path (signature or bypass) authorized this invoice.
+               Customer-facing PDF + email do NOT carry this info. -->
+          <section class="invoice-action-card" id="invoiceAuthCard" hidden>
+            <span class="invoice-action-label">Authorization</span>
+            <p class="invoice-action-meta" id="invoiceAuthSummary">—</p>
+            <p class="invoice-action-status" id="invoiceAuthDetail" hidden></p>
+          </section>
         </aside>
       </div>
     </main>

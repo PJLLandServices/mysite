@@ -7943,6 +7943,178 @@ async function handleApi(req, res, pathname) {
     return;
   }
 
+  // ======== Signature bypass (Signature Bypass for WO Completion brief) ========
+  // Admin-authored alternative to the drawn-signature path used when the
+  // customer is not physically present at visit end (left for work, vacant
+  // winter home, etc.). Operationally equivalent to a drawn signature for
+  // wo.locked + the completion cascade, but deliberately distinguished in
+  // legal posture — bypass IS NOT a signature, it's an honest record of
+  // verbal acceptance.
+  //
+  // Friction by design: requires reason + ≥10-char note + ack checkbox in
+  // the UI. When the on-site quote builder has line items beyond the
+  // baseline seasonal fee + AI bonus credit, the route returns 409
+  // scope_additions_require_acknowledgement so the UI MUST surface the
+  // warning and pass acknowledgeWarning: true on retry.
+  //
+  // After capture, the route fires the same deferred-issue sweep as the
+  // regular signature path (carry-forward "Repair now" items resolve at
+  // the lock-flip moment per hard rule §11). Cascade itself does NOT fire
+  // here — the tech taps "Mark visit completed" separately to flip status
+  // to completed, which triggers the regular cascade path.
+  const woSignatureBypassMatch = pathname.match(/^\/api\/work-orders\/([^/]+)\/signature-bypass$/);
+  if (woSignatureBypassMatch && req.method === "POST") {
+    try {
+      const id = decodeURIComponent(woSignatureBypassMatch[1]);
+      const payload = await parseRequestBody(req);
+      const wo = await workOrders.get(id);
+      if (!wo) return sendJson(res, 404, { ok: false, error: "wo_not_found", errors: ["Work order not found."] });
+
+      // Mutual-exclusion guards happen inside the lib verb too, but we
+      // check here first to return cleaner per-error codes for the UI
+      // (the verb's generic 400 path is the catch-all).
+      if (wo.signature && wo.signature.signed === true) {
+        return sendJson(res, 409, {
+          ok: false,
+          error: "already_signed",
+          errors: ["This work order is already signed — bypass not available."]
+        });
+      }
+      if (wo.signatureBypass) {
+        return sendJson(res, 409, {
+          ok: false,
+          error: "already_bypassed",
+          errors: ["Bypass already recorded for this work order. See WO history."]
+        });
+      }
+      const terminal = new Set(["completed", "cancelled", "no_show"]);
+      if (terminal.has(wo.status)) {
+        return sendJson(res, 409, {
+          ok: false,
+          error: "invalid_state",
+          errors: [`Work order is in terminal state "${wo.status}" — bypass not available.`]
+        });
+      }
+
+      // Pre-sign gates — mirrors the drawn-signature path's gate set
+      // minus the drawn-canvas + customer-name + ack gates (those are
+      // bypass's own friction in the UI). Bypass does NOT relax the
+      // photo, zone, payment, return-visit, AI bonus, or materials
+      // gates; only the canvas requirement.
+      const gateFails = [];
+      const zones = Array.isArray(wo.zones) ? wo.zones : [];
+      const untouched = zones.filter((z) => {
+        if (z.status && z.status !== "") return false;
+        const checks = z.checks || {};
+        return !Object.values(checks).some(Boolean);
+      });
+      if (untouched.length) {
+        gateFails.push(`${untouched.length} zone${untouched.length === 1 ? "" : "s"} not reviewed`);
+      }
+      const minPhotos = workOrders.PHOTO_REQUIREMENT_BY_TYPE[wo.type] ?? 1;
+      if (minPhotos > 0) {
+        const photoCount = Array.isArray(wo.photos) ? wo.photos.length : 0;
+        if (photoCount < minPhotos) {
+          gateFails.push(`${minPhotos} completion photo${minPhotos === 1 ? "" : "s"} required`);
+        }
+      }
+      if (wo.paidOnSite !== true && wo.paidOnSite !== false) {
+        gateFails.push("payment method not selected");
+      }
+      if (wo.needsReturnVisit !== true && wo.needsReturnVisit !== false) {
+        gateFails.push("return-visit question not answered");
+      }
+      if (wo.intakeGuarantee && wo.intakeGuarantee.applies) {
+        if (wo.intakeGuarantee.matched !== true && wo.intakeGuarantee.matched !== false) {
+          gateFails.push("AI bonus decision not recorded");
+        }
+      }
+      if (!wo.materialsConfirmedAt) {
+        gateFails.push("materials list not confirmed");
+      }
+      if (gateFails.length) {
+        return sendJson(res, 422, {
+          ok: false,
+          error: "presign_gate_unmet",
+          errors: [`Pre-sign gates unmet: ${gateFails.join("; ")}`],
+          gateFailures: gateFails
+        });
+      }
+
+      // Scope-additions check — when the builder has lines beyond
+      // baseline + AI bonus credit, refuse the first attempt and surface
+      // the warning state in the UI. The UI's "Confirm bypass anyway"
+      // button retries with acknowledgeWarning: true.
+      const scopeAdditions = workOrders.summarizeScopeAdditions(wo);
+      if (scopeAdditions.hasAdditions && payload?.acknowledgeWarning !== true) {
+        return sendJson(res, 409, {
+          ok: false,
+          error: "scope_additions_require_acknowledgement",
+          errors: [`This work order has ${scopeAdditions.additionCount} line item${scopeAdditions.additionCount === 1 ? "" : "s"} beyond the baseline ($${scopeAdditions.additionTotal.toFixed(2)}). Bypassing signature on a visit with added scope requires an explicit acknowledgement.`],
+          additionCount: scopeAdditions.additionCount,
+          additionTotal: scopeAdditions.additionTotal
+        });
+      }
+
+      const ip = (req.headers["x-forwarded-for"] || "").split(",")[0].trim() || req.socket?.remoteAddress || "";
+      const userAgent = req.headers["user-agent"] || "";
+
+      let updated;
+      try {
+        updated = await workOrders.captureSignatureBypass(
+          id,
+          {
+            reason: payload?.reason,
+            note: payload?.note,
+            bypassedBy: "admin"
+          },
+          { ip, userAgent }
+        );
+      } catch (err) {
+        // Map lib-level error codes to HTTP status codes.
+        const code = err?.code || "";
+        if (code === "wo_not_found") {
+          return sendJson(res, 404, { ok: false, error: code, errors: [err.message] });
+        }
+        if (code === "already_signed" || code === "already_bypassed" || code === "invalid_state") {
+          return sendJson(res, 409, { ok: false, error: code, errors: [err.message] });
+        }
+        if (code === "invalid_reason" || code === "note_too_short") {
+          return sendJson(res, 400, { ok: false, error: code, errors: [err.message] });
+        }
+        return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't record signature bypass."] });
+      }
+
+      // Bypass-time sweep — mirrors the sign-time sweep in the PATCH
+      // route. Carry-forward "Repair now" deferred items resolve at the
+      // lock-flip moment regardless of which path locked the WO. Hard
+      // rule §11: bypass-locked WO is the contract, same as a signed WO.
+      if (updated.propertyId) {
+        try {
+          const allDeferred = await properties.listDeferred(updated.propertyId, { status: "in_progress" });
+          for (const entry of allDeferred) {
+            if (entry?.resolution?.resolvedInWoId === updated.id) {
+              await properties.updateDeferredIssue(updated.propertyId, entry.id, {
+                status: "resolved",
+                resolution: {
+                  ...entry.resolution,
+                  resolvedAt: updated.signatureBypass?.ts || new Date().toISOString(),
+                  resolvedBy: "bypass-recorded"
+                }
+              });
+            }
+          }
+        } catch (err) {
+          console.warn("[wo-bypass] deferred sweep failed:", err?.message);
+        }
+      }
+
+      return sendJson(res, 201, { ok: true, workOrder: updated });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't record signature bypass."] });
+    }
+  }
+
   // ======== AI Correct Diagnosis Bonus (Brief F / spec §4.3.3 r6) ========
   // Tech taps "Diagnosis matched" or "Didn't match" on the cheat-sheet
   // bonus card BEFORE customer signature. On match: credit a -1 hour

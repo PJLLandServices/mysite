@@ -385,6 +385,11 @@ let state = {
   zones: [],
   serviceChecklist: {},
   signature: { signed: false, customerName: "", imageData: "", acknowledgement: false, signedAt: null },
+  // Signature bypass — admin-authored alternative to the drawn-signature
+  // path. Mutually exclusive with signature. null = no bypass recorded.
+  // Populated by the bypass capture endpoint; locks the WO same as a
+  // signature would.
+  signatureBypass: null,
   photos: [],
   locked: false,
   intakeGuarantee: { applies: false, scope: "", sourceQuoteId: null },
@@ -1063,8 +1068,10 @@ const TECH_PHOTO_REQUIREMENT_BY_TYPE = {
 // Empty = green light to complete. Spec §4.3.3 rule #14.
 function walkoutCheckFailures() {
   const fails = [];
-  // Signature captured?
-  if (!state.signature?.signed) {
+  // Signature OR bypass captured? Bypass is operationally equivalent to
+  // a signature for completion purposes (lock + cascade); only the legal
+  // posture differs. Either one satisfies this gate.
+  if (!state.signature?.signed && !state.signatureBypass) {
     fails.push("Customer hasn't signed off yet (use the Customer sign-off section).");
   }
   // All zones touched? "Touched" = has a status set, or has at least one
@@ -2370,15 +2377,38 @@ document.getElementById("techPhotoLightbox")?.addEventListener("click", () => {
 
 // ---- Customer sign-off + signature pad --------------------------
 
-// Switch the sign-off section between pre-sign (form + canvas) and
-// post-sign (read-only image + name + date) based on state.signature.signed.
+// Switch the sign-off section between three mutually-exclusive states:
+//   pre-capture (form + canvas + bypass link) — no signature, no bypass
+//   signed     — drawn-signature path completed
+//   bypassed   — signature-bypass path completed (admin authored)
+// Signature and bypass are mutually exclusive on the server; this UI
+// mirrors that posture.
 function renderSignoff() {
   const form = document.getElementById("techSignoffForm");
   const signed = document.getElementById("techSignoffSigned");
+  const bypassed = document.getElementById("techSignoffBypassed");
   if (!form || !signed) return;
+
+  if (state.signatureBypass) {
+    form.hidden = true;
+    signed.hidden = true;
+    if (bypassed) {
+      bypassed.hidden = false;
+      const meta = document.getElementById("techSignoffBypassedMeta");
+      const note = document.getElementById("techSignoffBypassedNote");
+      const reasonLabel = bypassReasonLabel(state.signatureBypass.reason);
+      const recordedBy = state.signatureBypass.bypassedBy || "admin";
+      const recordedAt = state.signatureBypass.ts ? formatDateTime(state.signatureBypass.ts) : "—";
+      if (meta) meta.textContent = `${reasonLabel} · Recorded by ${recordedBy} · ${recordedAt}`;
+      if (note) note.textContent = state.signatureBypass.note || "";
+    }
+    return;
+  }
+
   if (state.signature && state.signature.signed) {
     form.hidden = true;
     signed.hidden = false;
+    if (bypassed) bypassed.hidden = true;
     const img = document.getElementById("techSignoffImage");
     const nameEl = document.getElementById("techSignoffSignedName");
     const atEl = document.getElementById("techSignoffSignedAt");
@@ -2390,12 +2420,24 @@ function renderSignoff() {
   } else {
     form.hidden = false;
     signed.hidden = true;
+    if (bypassed) bypassed.hidden = true;
     // Lazy-init the signature pad on first render.
     if (!state.signaturePad) {
       const canvas = document.getElementById("techSignoffCanvas");
       if (canvas) state.signaturePad = createSignaturePad(canvas, updateSignoffSubmitState);
     }
     updateSignoffSubmitState();
+  }
+}
+
+// Map reason slug → human label for display. Kept inline so the lib's
+// BYPASS_REASONS set doesn't need to ship a second labels constant.
+function bypassReasonLabel(slug) {
+  switch (slug) {
+    case "customer_not_home": return "Customer not home";
+    case "trusted_customer_verbal": return "Trusted customer — verbal acceptance";
+    case "other": return "Other";
+    default: return "Signature bypass";
   }
 }
 
@@ -2783,7 +2825,10 @@ document.getElementById("techSignoffSubmit")?.addEventListener("click", async ()
 function renderCascadeRecovery() {
   const wrap = document.getElementById("techCascadeRecovery");
   if (!wrap) return;
-  const locked = state.locked === true || state.signature?.signed === true;
+  // Bypass locks the WO same as a signature; the recovery surface needs
+  // to render on bypass-locked WOs too so a cascade hard-fail mid-flight
+  // gets the retry UI (when bypass → tap Mark Complete → cascade trips).
+  const locked = state.locked === true || state.signature?.signed === true || !!state.signatureBypass;
   if (!locked) { wrap.hidden = true; return; }
   const history = Array.isArray(state.history) ? state.history : [];
   const cascadeFired = history.some((h) => h && h.action === "cascade_fire");
@@ -2872,6 +2917,154 @@ document.getElementById("techRunCascadeBtn")?.addEventListener("click", async ()
   }
 });
 
+// ---- Signature bypass sheet ----------------------------------------
+// Friction-bearing alternative to drawn signature when the customer is
+// not present at visit end. Reason + ≥10-char note + verbal-acceptance
+// ack before the Record button enables. Scope-additions warning state
+// (server returns 409 scope_additions_require_acknowledgement) swaps
+// the sheet body to the warning view with a second ack + "Send for
+// remote approval" escape hatch.
+function openBypassSheet() {
+  if (state.locked || state.signature?.signed || state.signatureBypass) return;
+  const sheet = document.getElementById("techBypassSheet");
+  if (!sheet) return;
+  // Reset both panels so a previous warning-state retry doesn't leak.
+  const body = document.getElementById("techBypassBody");
+  const warn = document.getElementById("techBypassWarning");
+  const err = document.getElementById("techBypassError");
+  if (body) body.hidden = false;
+  if (warn) warn.hidden = true;
+  if (err) { err.hidden = true; err.textContent = ""; }
+  // Reset ack checkboxes; preserve the default note + reason selection
+  // across opens (less re-typing).
+  const ack = document.getElementById("techBypassAck");
+  const warnAck = document.getElementById("techBypassWarningAck");
+  if (ack) ack.checked = false;
+  if (warnAck) warnAck.checked = false;
+  sheet.hidden = false;
+  document.body.classList.add("tech-sheet-open");
+  updateBypassSubmitState();
+}
+
+function closeBypassSheet() {
+  const sheet = document.getElementById("techBypassSheet");
+  if (!sheet) return;
+  sheet.hidden = true;
+  document.body.classList.remove("tech-sheet-open");
+}
+
+function updateBypassSubmitState() {
+  const reason = document.getElementById("techBypassReason")?.value || "";
+  const note = (document.getElementById("techBypassNote")?.value || "").trim();
+  const ack = !!document.getElementById("techBypassAck")?.checked;
+  const submit = document.getElementById("techBypassSubmit");
+  if (submit) submit.disabled = !(reason && note.length >= 10 && ack);
+}
+
+function updateBypassWarningSubmitState() {
+  const ack = !!document.getElementById("techBypassWarningAck")?.checked;
+  const btn = document.getElementById("techBypassConfirmAnyway");
+  if (btn) btn.disabled = !ack;
+}
+
+async function submitBypass(acknowledgeWarning) {
+  const submitBtn = acknowledgeWarning
+    ? document.getElementById("techBypassConfirmAnyway")
+    : document.getElementById("techBypassSubmit");
+  const errEl = document.getElementById("techBypassError");
+  if (!submitBtn || !state.id) return;
+  const reason = document.getElementById("techBypassReason")?.value || "";
+  const note = (document.getElementById("techBypassNote")?.value || "").trim();
+  if (!reason || note.length < 10) {
+    if (errEl) { errEl.hidden = false; errEl.textContent = "Pick a reason and write a note (≥10 chars)."; }
+    return;
+  }
+  const orig = submitBtn.textContent;
+  submitBtn.disabled = true;
+  submitBtn.textContent = "Recording…";
+  if (errEl) { errEl.hidden = true; errEl.textContent = ""; }
+
+  try {
+    const fetchFn = (typeof window !== "undefined" && window.PJLOffline && typeof window.PJLOffline.queuedFetch === "function")
+      ? window.PJLOffline.queuedFetch
+      : fetch.bind(window);
+    const r = await fetchFn(`/api/work-orders/${encodeURIComponent(state.id)}/signature-bypass`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ reason, note, acknowledgeWarning: !!acknowledgeWarning })
+    });
+    const data = await r.json().catch(() => ({}));
+
+    // Scope-additions: server gates the first attempt without
+    // acknowledgeWarning. Swap the sheet body to the warning state and
+    // let the tech either escalate to remote approval or confirm bypass
+    // anyway. The retry sends acknowledgeWarning: true.
+    if (r.status === 409 && data?.error === "scope_additions_require_acknowledgement") {
+      const body = document.getElementById("techBypassBody");
+      const warn = document.getElementById("techBypassWarning");
+      const warnBody = document.getElementById("techBypassWarningBody");
+      if (body) body.hidden = true;
+      if (warn) warn.hidden = false;
+      if (warnBody && Number.isFinite(Number(data.additionCount))) {
+        const total = Number(data.additionTotal) || 0;
+        warnBody.textContent = `This work order has ${data.additionCount} line item${data.additionCount === 1 ? "" : "s"} beyond the baseline. Bypassing signature on a visit with added scope means the customer hasn't signed off on $${total.toFixed(2)} of additional work.`;
+      }
+      updateBypassWarningSubmitState();
+      submitBtn.disabled = false;
+      submitBtn.textContent = orig;
+      return;
+    }
+
+    if (!r.ok || !data?.ok) {
+      const msg = (data && data.errors && data.errors[0]) || "Couldn't record bypass.";
+      if (errEl) { errEl.hidden = false; errEl.textContent = msg; }
+      submitBtn.disabled = false;
+      submitBtn.textContent = orig;
+      return;
+    }
+
+    // Success — apply the new locked + bypass state and close the sheet.
+    state.signatureBypass = data.workOrder.signatureBypass || null;
+    state.locked = data.workOrder.locked === true;
+    state.updatedAt = data.workOrder.updatedAt || state.updatedAt;
+    if (Array.isArray(data.workOrder.history)) state.history = data.workOrder.history;
+    closeBypassSheet();
+    renderSignoff();
+    renderPostSigBanner();
+    renderTechHistory();
+    applyLockState(state.locked);
+    renderCascadeRecovery();
+  } catch (err) {
+    if (errEl) { errEl.hidden = false; errEl.textContent = err?.message || "Network error. Try again."; }
+    submitBtn.disabled = false;
+    submitBtn.textContent = orig;
+  }
+}
+
+document.getElementById("techBypassOpenBtn")?.addEventListener("click", openBypassSheet);
+document.getElementById("techBypassClose")?.addEventListener("click", closeBypassSheet);
+document.getElementById("techBypassCancel")?.addEventListener("click", closeBypassSheet);
+document.getElementById("techBypassReason")?.addEventListener("change", updateBypassSubmitState);
+document.getElementById("techBypassNote")?.addEventListener("input", updateBypassSubmitState);
+document.getElementById("techBypassAck")?.addEventListener("change", updateBypassSubmitState);
+document.getElementById("techBypassWarningAck")?.addEventListener("change", updateBypassWarningSubmitState);
+document.getElementById("techBypassSubmit")?.addEventListener("click", () => submitBypass(false));
+document.getElementById("techBypassConfirmAnyway")?.addEventListener("click", () => submitBypass(true));
+document.getElementById("techBypassRemoteApproval")?.addEventListener("click", () => {
+  // Close the bypass sheet and forward the tech to the existing
+  // send-for-approval flow — that's the preferred path when scope
+  // additions exist. The button lives in the on-site quote section
+  // (see #techOnSiteSendApprovalBtn handler above).
+  closeBypassSheet();
+  const remoteBtn = document.getElementById("techOnSiteSendApprovalBtn");
+  if (remoteBtn) {
+    remoteBtn.scrollIntoView({ behavior: "smooth", block: "center" });
+    remoteBtn.focus();
+  } else {
+    alert("Open the on-site quote section and tap 'Send for remote approval'.");
+  }
+});
+
 // Apply the locked / unlocked state across the whole page. When locked,
 // the body gets data-locked="true" so CSS can grey out interactive
 // surfaces; we also explicitly disable form inputs and buttons (defence
@@ -2886,8 +3079,13 @@ function applyLockState(locked) {
   if (typeof updateFloatingPhotoBtn === "function") updateFloatingPhotoBtn();
   if (locked && meta) {
     const parts = [];
-    if (state.signature?.customerName) parts.push(`by ${state.signature.customerName}`);
-    if (state.signature?.signedAt) parts.push(formatDateTime(state.signature.signedAt));
+    if (state.signatureBypass) {
+      parts.push(`bypass: ${bypassReasonLabel(state.signatureBypass.reason)}`);
+      if (state.signatureBypass.ts) parts.push(formatDateTime(state.signatureBypass.ts));
+    } else {
+      if (state.signature?.customerName) parts.push(`by ${state.signature.customerName}`);
+      if (state.signature?.signedAt) parts.push(formatDateTime(state.signature.signedAt));
+    }
     meta.textContent = parts.length ? `· ${parts.join(" · ")}` : "";
   }
   // Disable run-status taps, zone taps, notes, and checklist taps.
@@ -4121,6 +4319,7 @@ async function init() {
     state.zones = Array.isArray(wo.zones) ? wo.zones.map((z) => ({ ...z })) : [];
     state.serviceChecklist = (wo.serviceChecklist && typeof wo.serviceChecklist === "object") ? { ...wo.serviceChecklist } : {};
     state.signature = wo.signature || state.signature;
+    state.signatureBypass = wo.signatureBypass || null;
     state.photos = Array.isArray(wo.photos) ? wo.photos : [];
     state.locked = wo.locked === true;
     state.intakeGuarantee = (wo.intakeGuarantee && typeof wo.intakeGuarantee === "object")
@@ -4994,35 +5193,42 @@ function renderPostSigBanner() {
   const detail = document.getElementById("techPostSigDetail");
   if (!banner || !headline || !detail) return;
   const signed = !!state.signature?.signed;
+  const bypassed = !!state.signatureBypass;
+  const captured = signed || bypassed;
   const completed = state.status === "completed";
 
   if (completed) {
     banner.hidden = false;
     banner.dataset.state = "completed";
     if (icon) icon.textContent = "✓";
-    headline.textContent = "Visit signed, locked, and completed.";
+    headline.textContent = bypassed && !signed
+      ? "Visit bypass-locked and completed."
+      : "Visit signed, locked, and completed.";
     detail.innerHTML = state.completedInvoiceId
       ? `Draft invoice <a href="/admin/invoice/${encodeURIComponent(state.completedInvoiceId)}" class="tech-postsig-link">${state.completedInvoiceId.replace(/</g, "&lt;")}</a> on file. Customer summary email sent.`
       : "Service record on file. No charge for this visit.";
     return;
   }
 
-  if (!signed) {
-    // Pre-signature — banner stays hidden. The sign-section readiness
+  if (!captured) {
+    // Pre-capture — banner stays hidden. The sign-section readiness
     // list (below the Sign, Lock & Generate Invoice button) is the
     // pre-sig narrative now.
     banner.hidden = true;
     return;
   }
 
-  // Edge case: signed but status didn't flip to completed. Happens when
-  // the cascade gate trips (e.g. WO has no linked propertyId) so the
-  // server applied the signature + lock but didn't run the cascade.
-  // Surface a recovery hint pointing at the fallback button.
+  // Edge case: captured (signed or bypassed) but status didn't flip to
+  // completed. Happens when the cascade gate trips (e.g. WO has no
+  // linked propertyId) so the server applied the lock but didn't run
+  // the cascade. Surface a recovery hint pointing at the fallback
+  // button.
   banner.hidden = false;
   banner.dataset.state = "needs_retry";
   if (icon) icon.textContent = "↻";
-  headline.textContent = "Signed and locked — completion didn't fire.";
+  headline.textContent = bypassed && !signed
+    ? "Bypass recorded — completion didn't fire."
+    : "Signed and locked — completion didn't fire.";
   detail.textContent = "Likely no linked property on the WO. Open it in the desktop editor to link a property and re-run the cascade.";
 }
 

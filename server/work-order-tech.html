@@ -541,6 +541,18 @@
         <button type="button" class="tech-signoff-submit" id="techSignoffSubmit" disabled>Sign, lock &amp; generate invoice</button>
         <p class="tech-signoff-note">Once signed, the work order locks, completes the visit, and drafts a customer invoice. Scope additions after sign-off need a fresh signature.</p>
 
+        <!-- Signature bypass — visually subordinate text link below the
+             primary submit. Tap opens a bottom sheet with reason +
+             editable default note + verbal-acceptance acknowledgement.
+             Used when the customer is not physically present at visit
+             end (left for work, vacant winter home). Records an honest
+             audit-trail entry, locks the WO like a signature would,
+             but is deliberately distinguished from a drawn signature
+             in legal posture. -->
+        <p class="tech-signoff-bypass-link-wrap">
+          <button type="button" class="tech-signoff-bypass-link" id="techBypassOpenBtn">Customer not present to sign?</button>
+        </p>
+
         <!-- Cascade recovery surfaces (Brief: WO Field-Readiness §6.5).
              Conditionally rendered: visible only when the WO is locked
              AND the cascade didn't produce a downstream artifact (no
@@ -562,6 +574,23 @@
           Signed by <strong id="techSignoffSignedName"></strong>
           <span id="techSignoffSignedAt"></span>
         </p>
+      </div>
+
+      <!-- Post-bypass display — replaces the canvas form when a
+           signature bypass has been recorded. Mutually exclusive with
+           #techSignoffSigned (server enforces signature/bypass exclusion).
+           Shows the audit record + a Mark Complete CTA that triggers
+           the same status flip as the regular post-sign path. -->
+      <div class="tech-signoff-bypassed" id="techSignoffBypassed" hidden>
+        <div class="tech-signoff-bypassed-banner">
+          <span class="tech-signoff-bypassed-icon" aria-hidden="true">✓</span>
+          <div>
+            <p class="tech-signoff-bypassed-headline">Completion authorized via signature bypass</p>
+            <p class="tech-signoff-bypassed-meta" id="techSignoffBypassedMeta"></p>
+            <p class="tech-signoff-bypassed-note" id="techSignoffBypassedNote"></p>
+          </div>
+        </div>
+        <button type="button" class="tech-signoff-submit tech-signoff-bypassed-complete" data-run-status="completed">Mark visit completed →</button>
       </div>
     </section>
 
@@ -717,6 +746,70 @@
         <button type="button" class="tech-emergency-submit" id="techEmergencySubmit" disabled>Page Patrick &amp; create follow-up</button>
       </div>
       <p class="tech-emergency-error" id="techEmergencyError" hidden role="alert"></p>
+    </div>
+  </div>
+
+  <!-- Signature bypass bottom sheet — opens when the tech taps
+       "Customer not present to sign?" inside the sign-off section.
+       Friction-bearing by design: reason select + editable note (≥10
+       chars) + explicit verbal-acceptance acknowledgement before the
+       Record button enables. On 409 scope_additions_require_acknowledgement
+       from the server, the sheet content swaps to the warning state
+       (a second ack + the "Send for remote approval" escape hatch). -->
+  <div class="tech-sheet" id="techBypassSheet" hidden role="dialog" aria-modal="true" aria-labelledby="techBypassTitle">
+    <div class="tech-sheet-card">
+      <header class="tech-sheet-head">
+        <button type="button" class="tech-sheet-close" id="techBypassClose" aria-label="Cancel">×</button>
+        <h2 id="techBypassTitle">Bypass on-site signature</h2>
+      </header>
+
+      <!-- Default state — reason + note + ack -->
+      <div class="tech-bypass-body" id="techBypassBody">
+        <p class="tech-bypass-help">Use only when the customer is not present at visit end. A verbal acceptance must have been given. This is recorded in the audit trail.</p>
+
+        <label class="tech-sheet-label" for="techBypassReason">Reason</label>
+        <select id="techBypassReason" class="tech-bypass-select">
+          <option value="">— Select reason —</option>
+          <option value="customer_not_home">Customer not home</option>
+          <option value="trusted_customer_verbal">Trusted customer — verbal acceptance</option>
+          <option value="other">Other</option>
+        </select>
+
+        <label class="tech-sheet-label" for="techBypassNote">Note</label>
+        <textarea id="techBypassNote" class="tech-bypass-textarea" rows="3" maxlength="2000" placeholder="Customer not home — signature bypassed, verbal acceptance recorded." data-voice-input>Customer not home — signature bypassed, verbal acceptance recorded.</textarea>
+        <p class="tech-bypass-hint">Minimum 10 characters. Voice-to-text enabled.</p>
+
+        <label class="tech-signoff-ack tech-bypass-ack">
+          <input type="checkbox" id="techBypassAck">
+          <span>I confirm verbal acceptance was given</span>
+        </label>
+
+        <p class="tech-bypass-error" id="techBypassError" hidden role="alert"></p>
+
+        <div class="tech-bypass-actions">
+          <button type="button" class="tech-bypass-cancel" id="techBypassCancel">Cancel</button>
+          <button type="button" class="tech-bypass-submit" id="techBypassSubmit" disabled>Record bypass</button>
+        </div>
+      </div>
+
+      <!-- Scope-additions warning state — populated by the 409 retry path.
+           Hidden by default; swapped in when the server returns
+           scope_additions_require_acknowledgement. -->
+      <div class="tech-bypass-warning" id="techBypassWarning" hidden>
+        <p class="tech-bypass-warning-headline"><span aria-hidden="true">⚠</span> Scope additions in the builder</p>
+        <p class="tech-bypass-warning-body" id="techBypassWarningBody">This work order has line items beyond the baseline. Bypassing signature on a visit with added scope means the customer hasn't signed off on the additions.</p>
+        <p class="tech-bypass-warning-suggest">Consider: <strong>Send for Remote Approval</strong> instead — the customer signs the additions remotely from their phone.</p>
+
+        <label class="tech-signoff-ack tech-bypass-ack">
+          <input type="checkbox" id="techBypassWarningAck">
+          <span>I acknowledge the customer verbally accepted the full scope including additions</span>
+        </label>
+
+        <div class="tech-bypass-actions">
+          <button type="button" class="tech-bypass-remote" id="techBypassRemoteApproval">Send for remote approval instead</button>
+          <button type="button" class="tech-bypass-submit tech-bypass-submit-anyway" id="techBypassConfirmAnyway" disabled>Confirm bypass anyway</button>
+        </div>
+      </div>
     </div>
   </div>
 

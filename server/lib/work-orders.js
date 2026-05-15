@@ -232,6 +232,24 @@ function blankWorkOrder() {
       ip: null,
       userAgent: null
     },
+    // End-of-visit signature bypass — admin-authored alternative to the
+    // drawn-signature path used when the customer is not physically present
+    // at visit end (left for work, vacant winter home, etc.). NOT a fake
+    // signature: it's an honest record of verbal acceptance, deliberately
+    // distinguished from `signature` in legal posture but operationally
+    // equivalent for wo.locked and the completion cascade.
+    //
+    // `signature` and `signatureBypass` are mutually exclusive — a WO
+    // carries one or the other, never both. Server enforces at capture.
+    //
+    //   reason: "customer_not_home" | "trusted_customer_verbal" | "other"
+    //   note: free text; min 10 chars (trimmed)
+    //   customerNamePrinted: pulled server-side from the customer/property
+    //                        record at capture time — never client-supplied
+    //   bypassedBy: "admin" today; carries a tech identity when real tech
+    //               accounts exist (future)
+    //   ts, ip, userAgent: server-stamped at capture
+    signatureBypass: null,
     // On-site Quote (Issues → Draft Quote rollup, spec §4.3.2). Tech
     // builds it from zone.issues during the visit; customer signs to
     // accept selected lines; declined lines flow into the property's
@@ -339,6 +357,12 @@ function hydrate(w) {
     intakeGuarantee: { ...base.intakeGuarantee, ...(w?.intakeGuarantee || {}) },
     serviceChecklist: { ...(w?.serviceChecklist || {}) },
     signature: { ...base.signature, ...(w?.signature || {}) },
+    // Bypass record. `null` is the canonical unset value; the capture
+    // verb writes the full object. We never partial-merge — once set,
+    // the record is frozen by SCOPE_PROTECTED_FIELDS.
+    signatureBypass: (w?.signatureBypass && typeof w.signatureBypass === "object")
+      ? { ...w.signatureBypass }
+      : null,
     onSiteQuote: {
       ...base.onSiteQuote,
       ...(w?.onSiteQuote || {}),
@@ -391,6 +415,7 @@ const SCOPE_PROTECTED_FIELDS = [
   "additionalRepairs",
   "onSiteQuote",
   "signature",
+  "signatureBypass",
   "customerId",
   "customerName",
   "customerEmail",
@@ -414,6 +439,138 @@ function findProtectedFieldTouched(payload) {
     if (SCOPE_PROTECTED_FIELDS.includes(key)) return key;
   }
   return null;
+}
+
+// Derives whether the on-site quote builder carries line items beyond the
+// expected baseline for the WO type. Used by the signature-bypass capture
+// path to decide whether to surface the scope-additions warning state —
+// bypassing without a drawn signature on a visit with added scope is the
+// riskiest version of the flow (the customer hasn't physically signed off
+// on additions), so the UI forces an explicit second acknowledgement.
+//
+// Unified rule across WO types: a builder line is a "scope addition"
+// unless it's flagged source.baseline === true (the seasonal-fee seed
+// for spring/fall, or the install baseline for builds) OR
+// source.aiBonusCredit === true (the AI Correct Diagnosis Bonus credit).
+// The brief's per-type rules collapse to this single rule because fall
+// closings ARE seeded with a baseline seasonal-fee line at create time
+// (and via the self-healing path in GET /api/work-orders/:id), so the
+// "any line at all = addition" reading would incorrectly fire on every
+// fall closing. Emergency overrides on fall closings always add new
+// non-baseline lines, so they still get caught here.
+//
+// Returns { hasAdditions, additionCount, additionTotal } so the route can
+// surface the count + dollar amount in the warning copy without recomputing.
+function summarizeScopeAdditions(wo) {
+  const lines = Array.isArray(wo?.onSiteQuote?.builderLineItems)
+    ? wo.onSiteQuote.builderLineItems
+    : [];
+  const isBaseline = (l) => l && l.source && (l.source.baseline === true);
+  const isAiCredit = (l) => l && l.source && (l.source.aiBonusCredit === true);
+  const additions = lines.filter((l) => {
+    if (!l) return false;
+    return !isBaseline(l) && !isAiCredit(l);
+  });
+  let additionTotal = 0;
+  for (const l of additions) {
+    const qty = Number(l.qty) || 0;
+    const price = Number(l.overridePrice !== null && l.overridePrice !== undefined
+      ? l.overridePrice
+      : l.originalPrice) || 0;
+    additionTotal += qty * price;
+  }
+  return {
+    hasAdditions: additions.length > 0,
+    additionCount: additions.length,
+    additionTotal: Math.round(additionTotal * 100) / 100
+  };
+}
+
+// Capture a signature bypass — admin-authored alternative to the drawn
+// signature for end-of-visit completion. Sets wo.locked = true and writes
+// signatureBypass with server-stamped audit metadata. Mutually exclusive
+// with signature; throws on already-signed / already-bypassed / terminal-
+// status WOs. The dispatcher route layers auth + scope-additions handling
+// on top of this verb.
+//
+// `meta` carries server-stamped audit fields: { ip, userAgent }. They're
+// never accepted from the client payload — same posture as the regular
+// signature capture.
+const BYPASS_REASONS = new Set(["customer_not_home", "trusted_customer_verbal", "other"]);
+
+async function captureSignatureBypass(woId, { reason, note, bypassedBy }, { ip, userAgent } = {}) {
+  const records = await readAll();
+  const idx = records.findIndex((w) => w.id === woId);
+  if (idx === -1) {
+    const err = new Error("Work order not found.");
+    err.code = "wo_not_found";
+    throw err;
+  }
+  const current = records[idx];
+
+  if (current.signature && current.signature.signed === true) {
+    const err = new Error("Work order is already signed — bypass not available.");
+    err.code = "already_signed";
+    throw err;
+  }
+  if (current.signatureBypass) {
+    const err = new Error("Signature bypass already recorded for this work order.");
+    err.code = "already_bypassed";
+    throw err;
+  }
+  const terminal = new Set(["completed", "cancelled", "no_show"]);
+  if (terminal.has(current.status)) {
+    const err = new Error(`Work order is in terminal state "${current.status}" — bypass not available.`);
+    err.code = "invalid_state";
+    throw err;
+  }
+
+  if (!BYPASS_REASONS.has(reason)) {
+    const err = new Error("Reason must be customer_not_home, trusted_customer_verbal, or other.");
+    err.code = "invalid_reason";
+    throw err;
+  }
+  const trimmedNote = String(note || "").trim();
+  if (trimmedNote.length < 10) {
+    const err = new Error("Note must be at least 10 characters explaining the bypass.");
+    err.code = "note_too_short";
+    throw err;
+  }
+
+  // Customer printed name pulled from the WO snapshot. The snapshot was
+  // copied from the customer/property/lead record at WO create time
+  // (see create()); using it here keeps the bypass record honest about
+  // who the customer was when the visit happened, regardless of any
+  // downstream customer-record renames.
+  const customerNamePrinted = (current.customerName || "").trim();
+
+  const now = new Date().toISOString();
+  const next = { ...current };
+  next.signatureBypass = {
+    reason,
+    note: trimmedNote.slice(0, 2000),
+    customerNamePrinted,
+    bypassedBy: bypassedBy || "admin",
+    ts: now,
+    ip: ip || "",
+    userAgent: userAgent || ""
+  };
+  next.locked = true;
+  next.updatedAt = now;
+
+  if (!Array.isArray(next.history)) next.history = [];
+  next.history.push({
+    ts: now,
+    action: "signature_bypassed",
+    by: bypassedBy || "admin",
+    note: `Reason: ${reason}${trimmedNote ? ` — ${trimmedNote}` : ""}`,
+    before: { signatureBypass: null, locked: !!current.locked },
+    after: { signatureBypass: { reason, note: trimmedNote, customerNamePrinted, bypassedBy: bypassedBy || "admin", ts: now }, locked: true }
+  });
+
+  records[idx] = next;
+  await writeAll(records);
+  return next;
 }
 
 // Append a history entry to a WO without going through `update()` (which
@@ -791,9 +948,12 @@ module.exports = {
   WO_PHOTO_CATEGORIES,
   PHOTO_REQUIREMENT_BY_TYPE,
   SCOPE_PROTECTED_FIELDS,
+  BYPASS_REASONS,
   templateForServiceKey,
   canBuildOnSiteQuote,
   findProtectedFieldTouched,
+  summarizeScopeAdditions,
+  captureSignatureBypass,
   appendHistory,
   list,
   get,

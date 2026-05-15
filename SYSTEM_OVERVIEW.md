@@ -93,7 +93,7 @@ form except where noted.
 | File | Entity | ID format | Purpose |
 |---|---|---|---|
 | `properties.js` | Property | `P-YYYY-NNNN` | Customer site profile (zones, valves, controller, blow-out, deferred issues, service records). One per physical address. Zones land with `pendingReview: true` when the WO completion cascade discovers them on-site (Brief D). |
-| `work-orders.js` | Work Order | `WO-XXXXXXXX` (random alphabet) | One per visit. Zones, issues, photos, signature, on-site quote, materials packed, `paidOnSite`, `propertyEditsAppliedAt`, `intakeGuarantee.matched`, `history[]`. Lock-protected fields enforced via `SCOPE_PROTECTED_FIELDS` constant (Brief A). |
+| `work-orders.js` | Work Order | `WO-XXXXXXXX` (random alphabet) | One per visit. Zones, issues, photos, signature OR signatureBypass (mutually exclusive), on-site quote, materials packed, `paidOnSite`, `propertyEditsAppliedAt`, `intakeGuarantee.matched`, `history[]`. Lock-protected fields enforced via `SCOPE_PROTECTED_FIELDS` constant (Brief A). |
 | `quotes.js` | Quote | `Q-YYYY-NNNN` | Versioned, signed estimate. Two flavours: `ai_repair_quote` (AI chat) and `on_site_quote` (tech-built). |
 | `invoices.js` | Invoice | `I-YYYY-NNNN` | Auto-drafted by completion cascade, lifecycle draft → sent → paid → void. |
 | `bookings.js` | Booking | `BK-YYYY-NNNN` | First-class appointment record. Mirrors `lead.booking` but is canonical. Exposes `cancel()` (soft, adds `cancelledAt/By/Reason` + history) and `remove()` (hard delete; refuses when a linked WO is past `scheduled` — caller passes `isActiveWo` to gate without coupling to work-orders.js). |
@@ -285,8 +285,9 @@ Work Orders
   POST   /api/work-orders                                           ← create from lead/property/booking; seeds seasonal-fee baseline line
   PATCH  /api/work-orders/:id                                       ← zones, issues, signature, status, photos, paidOnSite, etc.
                                                                        Returns 409 wo_locked when payload touches SCOPE_PROTECTED_FIELDS
-                                                                       on a signed WO (lineItems, signature, customer/property/booking
-                                                                       links, intakeGuarantee, type, etc.). Status forward-progression,
+                                                                       on a signed OR bypass-locked WO (lineItems, signature,
+                                                                       signatureBypass, customer/property/booking links,
+                                                                       intakeGuarantee, type, etc.). Status forward-progression,
                                                                        photos, materials, paidOnSite, notes still accepted.
                                                                        Merged "Sign, Lock & Generate Invoice" tap (WO Field-Readiness
                                                                        brief): payload of { signature, status:"completed", arrivedAt?,
@@ -313,6 +314,16 @@ Work Orders
   POST   /api/work-orders/:id/intake-guarantee/decide               ← AI Correct Diagnosis Bonus decision (Brief F).
                                                                        Body: { matched: bool, mismatchReason?: string }.
                                                                        On match: appends -1hr labour credit to builder.
+  POST   /api/work-orders/:id/signature-bypass                      ← admin-authorized completion bypass.
+                                                                       Body: { reason, note, acknowledgeWarning? }.
+                                                                       Sets wo.locked = true; mutually exclusive
+                                                                       with signature. 409 if scope additions exist
+                                                                       without acknowledgeWarning: true. 422
+                                                                       presign_gate_unmet if photo/zone/payment/
+                                                                       return-visit/AI-bonus/materials gates aren't
+                                                                       satisfied. Bypass-time sweep resolves any
+                                                                       carry-forward "Repair now" deferred items
+                                                                       (same as the signature path's sweep).
   POST   /api/work-orders/:id/on-site-quote/build                   ← run issue-rollup, store builder draft (preserves baseline + bonus credit)
   PATCH  /api/work-orders/:id/on-site-quote/builder                 ← tech edits builder lines; refuses to drop credit line while bonus matched
   POST   /api/work-orders/:id/on-site-quote/accept                  ← customer signature → on_site_quote Quote record + sink declines to deferred

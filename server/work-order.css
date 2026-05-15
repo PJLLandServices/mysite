@@ -1879,3 +1879,225 @@ body[data-locked="true"] .wo-zone-location {
   0%, 100% { box-shadow: 0 0 0 0 rgba(192, 58, 44, 0.6); }
   50%      { box-shadow: 0 0 0 8px rgba(192, 58, 44, 0); }
 }
+
+/* --- Signature bypass (Signature Bypass for WO Completion brief) -----
+   Desktop equivalent of the tech-mode bottom sheet. Visually subordinate
+   link below the primary CTA; centred modal for the capture UI; post-
+   bypass status banner replaces the canvas form. */
+.wo-signoff-bypass-link-wrap {
+  margin: 12px 0 0;
+}
+.wo-signoff-bypass-link {
+  background: transparent;
+  border: 0;
+  padding: 6px 0;
+  font: inherit;
+  font-size: 13px;
+  color: var(--pjl-text-mid);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+.wo-signoff-bypass-link:hover,
+.wo-signoff-bypass-link:focus-visible {
+  color: var(--pjl-green);
+}
+
+.wo-signoff-bypassed {
+  max-width: 720px;
+}
+.wo-signoff-bypassed-banner {
+  display: flex;
+  gap: 14px;
+  padding: 16px 18px;
+  background: rgba(74, 140, 92, 0.08);
+  border: 1px solid rgba(74, 140, 92, 0.35);
+  border-radius: 10px;
+  margin-bottom: 14px;
+}
+.wo-signoff-bypassed-icon {
+  flex: 0 0 32px;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--pjl-green);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 18px;
+}
+.wo-signoff-bypassed-headline {
+  margin: 0 0 4px;
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--pjl-green);
+}
+.wo-signoff-bypassed-meta {
+  margin: 0 0 4px;
+  font-size: 14px;
+  color: var(--pjl-text);
+}
+.wo-signoff-bypassed-note {
+  margin: 0;
+  font-size: 13px;
+  color: var(--pjl-text-mid);
+  font-style: italic;
+}
+
+/* Modal — centred dialog with overlay. Matches the source-picker modal
+   pattern already in this stylesheet. */
+.wo-bypass-modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 31, 20, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 150;
+  animation: wo-bypass-fade 0.18s ease both;
+}
+.wo-bypass-modal[hidden] { display: none; }
+@keyframes wo-bypass-fade {
+  from { background: rgba(15, 31, 20, 0); }
+  to   { background: rgba(15, 31, 20, 0.55); }
+}
+.wo-bypass-card {
+  background: #fff;
+  width: min(560px, 92vw);
+  max-height: 92vh;
+  overflow-y: auto;
+  border-radius: 12px;
+  padding: 20px 22px 24px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.25);
+}
+.wo-bypass-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+.wo-bypass-head h2 {
+  margin: 0;
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 22px;
+  letter-spacing: 0.04em;
+  color: var(--pjl-green);
+}
+.wo-bypass-close {
+  border: 0;
+  background: transparent;
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--pjl-text-mid);
+  cursor: pointer;
+  border-radius: 50%;
+  width: 32px;
+  height: 32px;
+  line-height: 1;
+}
+.wo-bypass-close:hover { background: rgba(15, 31, 20, 0.05); color: var(--pjl-text); }
+.wo-bypass-help {
+  margin: 4px 0 14px;
+  font-size: 13px;
+  color: var(--pjl-text-mid);
+  line-height: 1.45;
+}
+.wo-bypass-label {
+  display: block;
+  margin: 12px 0 6px;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--pjl-text-mid);
+}
+.wo-bypass-select,
+.wo-bypass-textarea {
+  font: inherit;
+  font-size: 15px;
+  width: 100%;
+  padding: 10px 12px;
+  background: #fff;
+  border: 1px solid rgba(15, 31, 20, 0.20);
+  border-radius: 8px;
+  box-sizing: border-box;
+  color: var(--pjl-text);
+}
+.wo-bypass-textarea {
+  min-height: 80px;
+  line-height: 1.4;
+  resize: vertical;
+}
+.wo-bypass-hint {
+  margin: 4px 0 12px;
+  font-size: 12px;
+  color: var(--pjl-text-mid);
+}
+.wo-bypass-ack {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 10px 0 14px;
+  font-size: 14px;
+  color: var(--pjl-text);
+  cursor: pointer;
+}
+.wo-bypass-ack input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  margin-top: 2px;
+  accent-color: var(--pjl-green);
+  flex-shrink: 0;
+  cursor: pointer;
+}
+.wo-bypass-error {
+  margin: 0 0 12px;
+  padding: 8px 12px;
+  background: #fdecea;
+  border: 1px solid #f5c6c6;
+  border-radius: 8px;
+  color: #8a1f1f;
+  font-size: 13px;
+}
+.wo-bypass-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+.wo-bypass-warning-headline {
+  margin: 4px 0 8px;
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 18px;
+  font-weight: 600;
+  color: #8a1f1f;
+}
+.wo-bypass-warning-body {
+  margin: 0 0 10px;
+  font-size: 14px;
+  color: var(--pjl-text);
+  line-height: 1.45;
+}
+.wo-bypass-warning-suggest {
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  background: rgba(74, 140, 92, 0.08);
+  border-left: 3px solid var(--pjl-green);
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--pjl-text);
+  line-height: 1.45;
+}
+.wo-bypass-confirm-anyway.pjl-btn-primary {
+  background: linear-gradient(135deg, #c0413a 0%, #8a1f1f 100%);
+  box-shadow: 0 8px 22px rgba(138, 31, 31, 0.32);
+}
+.wo-bypass-confirm-anyway.pjl-btn-primary:hover {
+  box-shadow: 0 12px 28px rgba(138, 31, 31, 0.45);
+}
+

@@ -1069,14 +1069,18 @@ function renderPostSigBanner(wo) {
   const detail = document.getElementById("woPostSigDetail");
   const completeBtn = document.getElementById("woPostSigCompleteBtn");
   if (!banner || !headline || !detail) return;
-  const signed = wo.locked === true || wo.signature?.signed === true;
+  const signed = wo.signature?.signed === true;
+  const bypassed = !!wo.signatureBypass;
+  const captured = wo.locked === true || signed || bypassed;
   const completed = wo.status === "completed";
 
   if (completedInvoiceForBanner) {
     banner.hidden = false;
     banner.dataset.state = "completed";
     if (icon) icon.textContent = "✓";
-    headline.textContent = "Visit signed, locked, and completed.";
+    headline.textContent = bypassed && !signed
+      ? "Visit bypass-locked and completed."
+      : "Visit signed, locked, and completed.";
     const safeId = String(completedInvoiceForBanner).replace(/</g, "&lt;");
     detail.innerHTML = `Draft invoice <a href="/admin/invoice/${encodeURIComponent(completedInvoiceForBanner)}" class="wo-postsig-link">${safeId}</a> on file. Customer summary email sent.`;
     if (completeBtn) completeBtn.hidden = true;
@@ -1086,25 +1090,28 @@ function renderPostSigBanner(wo) {
     banner.hidden = false;
     banner.dataset.state = "completed";
     if (icon) icon.textContent = "✓";
-    headline.textContent = "Visit signed, locked, and completed.";
+    headline.textContent = bypassed && !signed
+      ? "Visit bypass-locked and completed."
+      : "Visit signed, locked, and completed.";
     detail.textContent = "Service record on file. No invoice for this visit (no billable line items).";
     if (completeBtn) completeBtn.hidden = true;
     return;
   }
-  if (!signed) {
+  if (!captured) {
     banner.hidden = true;
     if (completeBtn) completeBtn.hidden = true;
     return;
   }
 
-  // Edge case: signed but status didn't flip (cascade gate tripped on
-  // missing propertyId, or this is a legacy WO from before the merge).
-  // Surface the recovery path — the "Mark visit completed" fallback +
-  // the existing manual Run Cascade button below.
+  // Edge case: captured (signed or bypassed) but status didn't flip
+  // (cascade gate tripped on missing propertyId, or this is a legacy
+  // WO from before the merge). Surface the recovery path.
   banner.hidden = false;
   banner.dataset.state = "needs_retry";
   if (icon) icon.textContent = "↻";
-  headline.textContent = "Signed and locked — completion didn't fire.";
+  headline.textContent = bypassed && !signed
+    ? "Bypass recorded — completion didn't fire."
+    : "Signed and locked — completion didn't fire.";
   detail.textContent = "Tap Mark Complete to retry the cascade, or use Re-run completion cascade below.";
   if (completeBtn) completeBtn.hidden = false;
 }
@@ -1198,7 +1205,9 @@ function renderOnSiteQuote(wo) {
   section.hidden = false;
 
   const isFallClosing = wo.type === "fall_closing";
-  const isSigned = wo.locked === true || wo.signature?.signed === true;
+  // "Signed" here means "locked by any path" — both drawn signature and
+  // signature bypass freeze the on-site quote builder per hard rule §11.
+  const isSigned = wo.locked === true || wo.signature?.signed === true || !!wo.signatureBypass;
   const lines = (wo.onSiteQuote && wo.onSiteQuote.builderLineItems) || [];
   const status = wo.onSiteQuote?.status;
   const quoteId = wo.onSiteQuote?.quoteId;
@@ -1713,11 +1722,31 @@ document.getElementById("woServiceChecklistList")?.addEventListener("click", asy
 function renderSignoff(wo) {
   const form = document.getElementById("woSignoffForm");
   const signed = document.getElementById("woSignoffSigned");
+  const bypassed = document.getElementById("woSignoffBypassed");
   if (!form || !signed) return;
   const sig = wo && wo.signature;
+  const bypass = wo && wo.signatureBypass;
+
+  if (bypass) {
+    form.hidden = true;
+    signed.hidden = true;
+    if (bypassed) {
+      bypassed.hidden = false;
+      const meta = document.getElementById("woSignoffBypassedMeta");
+      const note = document.getElementById("woSignoffBypassedNote");
+      const reasonLabel = woBypassReasonLabel(bypass.reason);
+      const by = bypass.bypassedBy || "admin";
+      const at = bypass.ts ? formatDateTime(bypass.ts) : "—";
+      if (meta) meta.textContent = `${reasonLabel} · Recorded by ${by} · ${at}`;
+      if (note) note.textContent = bypass.note || "";
+    }
+    return;
+  }
+
   if (sig && sig.signed) {
     form.hidden = true;
     signed.hidden = false;
+    if (bypassed) bypassed.hidden = true;
     const img = document.getElementById("woSignoffImage");
     const nameEl = document.getElementById("woSignoffSignedName");
     const atEl = document.getElementById("woSignoffSignedAt");
@@ -1727,11 +1756,21 @@ function renderSignoff(wo) {
   } else {
     form.hidden = false;
     signed.hidden = true;
+    if (bypassed) bypassed.hidden = true;
     if (!signaturePadInstance) {
       const canvas = document.getElementById("woSignoffCanvas");
       if (canvas) signaturePadInstance = createWoSignaturePad(canvas, updateWoSignoffSubmitState);
     }
     updateWoSignoffSubmitState();
+  }
+}
+
+function woBypassReasonLabel(slug) {
+  switch (slug) {
+    case "customer_not_home": return "Customer not home";
+    case "trusted_customer_verbal": return "Trusted customer — verbal acceptance";
+    case "other": return "Other";
+    default: return "Signature bypass";
   }
 }
 
@@ -2699,5 +2738,130 @@ function formatDateOnly(value) {
   if (Number.isNaN(d.getTime())) return "—";
   return d.toLocaleDateString("en-CA", { month: "short", day: "numeric", year: "numeric" });
 }
+
+// ---- Signature bypass modal (desktop) -------------------------------
+// Same posture as tech mode's bottom sheet — reason + ≥10-char note +
+// verbal-acceptance ack before Record enables. Scope-additions warning
+// state swaps the body on 409 scope_additions_require_acknowledgement.
+function openWoBypassModal() {
+  if (!loadedWorkOrder) return;
+  if (loadedWorkOrder.locked || loadedWorkOrder.signature?.signed || loadedWorkOrder.signatureBypass) return;
+  const modal = document.getElementById("woBypassModal");
+  if (!modal) return;
+  const body = document.getElementById("woBypassBody");
+  const warn = document.getElementById("woBypassWarning");
+  const err = document.getElementById("woBypassError");
+  if (body) body.hidden = false;
+  if (warn) warn.hidden = true;
+  if (err) { err.hidden = true; err.textContent = ""; }
+  const ack = document.getElementById("woBypassAck");
+  const warnAck = document.getElementById("woBypassWarningAck");
+  if (ack) ack.checked = false;
+  if (warnAck) warnAck.checked = false;
+  modal.hidden = false;
+  updateWoBypassSubmitState();
+}
+
+function closeWoBypassModal() {
+  const modal = document.getElementById("woBypassModal");
+  if (modal) modal.hidden = true;
+}
+
+function updateWoBypassSubmitState() {
+  const reason = document.getElementById("woBypassReason")?.value || "";
+  const note = (document.getElementById("woBypassNote")?.value || "").trim();
+  const ack = !!document.getElementById("woBypassAck")?.checked;
+  const submit = document.getElementById("woBypassSubmit");
+  if (submit) submit.disabled = !(reason && note.length >= 10 && ack);
+}
+
+function updateWoBypassWarningSubmitState() {
+  const ack = !!document.getElementById("woBypassWarningAck")?.checked;
+  const btn = document.getElementById("woBypassConfirmAnyway");
+  if (btn) btn.disabled = !ack;
+}
+
+async function submitWoBypass(acknowledgeWarning) {
+  const id = getWorkOrderId();
+  if (!id) return;
+  const submitBtn = acknowledgeWarning
+    ? document.getElementById("woBypassConfirmAnyway")
+    : document.getElementById("woBypassSubmit");
+  const errEl = document.getElementById("woBypassError");
+  if (!submitBtn) return;
+  const reason = document.getElementById("woBypassReason")?.value || "";
+  const note = (document.getElementById("woBypassNote")?.value || "").trim();
+  if (!reason || note.length < 10) {
+    if (errEl) { errEl.hidden = false; errEl.textContent = "Pick a reason and write a note (≥10 chars)."; }
+    return;
+  }
+  const orig = submitBtn.textContent;
+  submitBtn.disabled = true;
+  submitBtn.textContent = "Recording…";
+  if (errEl) { errEl.hidden = true; errEl.textContent = ""; }
+
+  try {
+    const r = await fetch(`/api/work-orders/${encodeURIComponent(id)}/signature-bypass`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reason, note, acknowledgeWarning: !!acknowledgeWarning })
+    });
+    const data = await r.json().catch(() => ({}));
+
+    if (r.status === 409 && data?.error === "scope_additions_require_acknowledgement") {
+      const body = document.getElementById("woBypassBody");
+      const warn = document.getElementById("woBypassWarning");
+      const warnBody = document.getElementById("woBypassWarningBody");
+      if (body) body.hidden = true;
+      if (warn) warn.hidden = false;
+      if (warnBody && Number.isFinite(Number(data.additionCount))) {
+        const total = Number(data.additionTotal) || 0;
+        warnBody.textContent = `This work order has ${data.additionCount} line item${data.additionCount === 1 ? "" : "s"} beyond the baseline. Bypassing signature on a visit with added scope means the customer hasn't signed off on $${total.toFixed(2)} of additional work.`;
+      }
+      updateWoBypassWarningSubmitState();
+      submitBtn.disabled = false;
+      submitBtn.textContent = orig;
+      return;
+    }
+
+    if (!r.ok || !data?.ok) {
+      const msg = (data && data.errors && data.errors[0]) || "Couldn't record bypass.";
+      if (errEl) { errEl.hidden = false; errEl.textContent = msg; }
+      submitBtn.disabled = false;
+      submitBtn.textContent = orig;
+      return;
+    }
+
+    // Success — refresh the loaded WO state and re-render the sign-off
+    // section so it swaps to the bypass status banner.
+    loadedWorkOrder = data.workOrder;
+    closeWoBypassModal();
+    populateForm(loadedWorkOrder);
+  } catch (err) {
+    if (errEl) { errEl.hidden = false; errEl.textContent = err?.message || "Network error. Try again."; }
+    submitBtn.disabled = false;
+    submitBtn.textContent = orig;
+  }
+}
+
+document.getElementById("woBypassOpenBtn")?.addEventListener("click", openWoBypassModal);
+document.getElementById("woBypassClose")?.addEventListener("click", closeWoBypassModal);
+document.getElementById("woBypassCancel")?.addEventListener("click", closeWoBypassModal);
+document.getElementById("woBypassReason")?.addEventListener("change", updateWoBypassSubmitState);
+document.getElementById("woBypassNote")?.addEventListener("input", updateWoBypassSubmitState);
+document.getElementById("woBypassAck")?.addEventListener("change", updateWoBypassSubmitState);
+document.getElementById("woBypassWarningAck")?.addEventListener("change", updateWoBypassWarningSubmitState);
+document.getElementById("woBypassSubmit")?.addEventListener("click", () => submitWoBypass(false));
+document.getElementById("woBypassConfirmAnyway")?.addEventListener("click", () => submitWoBypass(true));
+document.getElementById("woBypassRemoteApproval")?.addEventListener("click", () => {
+  closeWoBypassModal();
+  const remoteBtn = document.getElementById("woOnSiteSendApprovalBtn");
+  if (remoteBtn) {
+    remoteBtn.scrollIntoView({ behavior: "smooth", block: "center" });
+    remoteBtn.focus();
+  } else {
+    alert("Open the on-site quote section and tap 'Send for remote approval'.");
+  }
+});
 
 init();

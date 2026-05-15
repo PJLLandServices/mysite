@@ -320,6 +320,13 @@
           <button type="button" class="pjl-btn pjl-btn-primary wo-signoff-submit" id="woSignoffSubmit" disabled>Sign, lock &amp; generate invoice</button>
           <ul class="wo-signoff-readiness" id="woSignoffReadiness" hidden></ul>
           <p class="wo-signoff-note">Signing locks the WO, completes the visit, and drafts the customer invoice in one tap. Scope additions after sign require a fresh signature.</p>
+
+          <!-- Signature bypass entry point — same posture as tech mode.
+               Subordinate text link below the primary CTA. Tap opens the
+               desktop bypass modal (#woBypassModal below). -->
+          <p class="wo-signoff-bypass-link-wrap">
+            <button type="button" class="wo-signoff-bypass-link" id="woBypassOpenBtn">Customer not present to sign?</button>
+          </p>
         </div>
 
         <div class="wo-signoff-signed" id="woSignoffSigned" hidden>
@@ -330,6 +337,23 @@
             Signed by <strong id="woSignoffSignedName"></strong>
             <span id="woSignoffSignedAt"></span>
           </p>
+        </div>
+
+        <!-- Post-bypass display — replaces the canvas form when a
+             signature bypass has been recorded. Mutually exclusive with
+             #woSignoffSigned (server enforces). Mark Complete CTA reuses
+             the existing [data-run-status="completed"] handler — same
+             status transition + cascade as the regular post-sign path. -->
+        <div class="wo-signoff-bypassed" id="woSignoffBypassed" hidden>
+          <div class="wo-signoff-bypassed-banner">
+            <span class="wo-signoff-bypassed-icon" aria-hidden="true">✓</span>
+            <div>
+              <p class="wo-signoff-bypassed-headline">Completion authorized via signature bypass</p>
+              <p class="wo-signoff-bypassed-meta" id="woSignoffBypassedMeta"></p>
+              <p class="wo-signoff-bypassed-note" id="woSignoffBypassedNote"></p>
+            </div>
+          </div>
+          <button type="button" class="pjl-btn pjl-btn-primary wo-signoff-submit wo-signoff-bypassed-complete" data-run-status="completed">Mark visit completed →</button>
         </div>
       </section>
 
@@ -448,6 +472,66 @@
         <div class="wo-source-picker-custom-row">
           <input type="text" id="woSourcePickerCustomInput" placeholder="e.g. Front yard rotors" maxlength="120">
           <button type="button" class="wo-source-picker-custom-btn" id="woSourcePickerCustomBtn">Use</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Signature bypass modal — opens when Patrick taps "Customer not
+       present to sign?" inside the desktop sign-off section. Same
+       posture as the tech-mode bottom sheet: reason + ≥10-char note +
+       verbal-acceptance ack before Record enables. On 409
+       scope_additions_require_acknowledgement from the server, the
+       body swaps to the warning state with a second ack + the "Send
+       for remote approval" escape hatch. -->
+  <div class="wo-bypass-modal" id="woBypassModal" hidden role="dialog" aria-modal="true" aria-labelledby="woBypassTitle">
+    <div class="wo-bypass-card">
+      <header class="wo-bypass-head">
+        <h2 id="woBypassTitle">Bypass on-site signature</h2>
+        <button type="button" class="wo-bypass-close" id="woBypassClose" aria-label="Cancel">×</button>
+      </header>
+
+      <div class="wo-bypass-body" id="woBypassBody">
+        <p class="wo-bypass-help">Use only when the customer is not present at visit end. A verbal acceptance must have been given. This is recorded in the audit trail.</p>
+
+        <label class="wo-bypass-label" for="woBypassReason">Reason</label>
+        <select id="woBypassReason" class="wo-bypass-select">
+          <option value="">— Select reason —</option>
+          <option value="customer_not_home">Customer not home</option>
+          <option value="trusted_customer_verbal">Trusted customer — verbal acceptance</option>
+          <option value="other">Other</option>
+        </select>
+
+        <label class="wo-bypass-label" for="woBypassNote">Note</label>
+        <textarea id="woBypassNote" class="wo-bypass-textarea" rows="3" maxlength="2000" placeholder="Customer not home — signature bypassed, verbal acceptance recorded." data-voice-input>Customer not home — signature bypassed, verbal acceptance recorded.</textarea>
+        <p class="wo-bypass-hint">Minimum 10 characters. Voice-to-text enabled.</p>
+
+        <label class="wo-bypass-ack">
+          <input type="checkbox" id="woBypassAck">
+          <span>I confirm verbal acceptance was given</span>
+        </label>
+
+        <p class="wo-bypass-error" id="woBypassError" hidden role="alert"></p>
+
+        <div class="wo-bypass-actions">
+          <button type="button" class="pjl-btn pjl-btn-outline" id="woBypassCancel">Cancel</button>
+          <button type="button" class="pjl-btn pjl-btn-primary" id="woBypassSubmit" disabled>Record bypass</button>
+        </div>
+      </div>
+
+      <div class="wo-bypass-warning" id="woBypassWarning" hidden>
+        <p class="wo-bypass-warning-headline"><span aria-hidden="true">⚠</span> Scope additions in the builder</p>
+        <p class="wo-bypass-warning-body" id="woBypassWarningBody">This work order has line items beyond the baseline. Bypassing signature on a visit with added scope means the customer hasn't signed off on the additions.</p>
+        <p class="wo-bypass-warning-suggest">Consider: <strong>Send for Remote Approval</strong> instead — the customer signs the additions remotely from their phone.</p>
+
+        <label class="wo-bypass-ack">
+          <input type="checkbox" id="woBypassWarningAck">
+          <span>I acknowledge the customer verbally accepted the full scope including additions</span>
+        </label>
+
+        <div class="wo-bypass-actions">
+          <button type="button" class="pjl-btn pjl-btn-outline" id="woBypassRemoteApproval">Send for remote approval instead</button>
+          <button type="button" class="pjl-btn pjl-btn-primary wo-bypass-confirm-anyway" id="woBypassConfirmAnyway" disabled>Confirm bypass anyway</button>
         </div>
       </div>
     </div>

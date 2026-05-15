@@ -441,6 +441,43 @@ WORK ORDER FOLDER
     Mid-visit verbal acceptances are captured as audit-log events
     (history[]) and give the tech legal cover to start work; they are
     NOT signatures.
+
+    End-of-visit signature bypass (admin-authorized, recorded acceptance)
+    When the customer is not physically present at visit end, admin may
+    record a signature bypass in place of a drawn signature. The bypass
+    requires: reason (customer_not_home / trusted_customer_verbal / other),
+    a note (default: "Customer not home — signature bypassed, verbal
+    acceptance recorded"), and an explicit confirmation that verbal
+    acceptance was given. Bypass captures: customer printed name (from
+    property/customer record), reason, note, bypassedBy (admin identity),
+    server-stamped ISO timestamp, IP, userAgent.
+
+    A bypass IS NOT a signature. It is an honest record of verbal
+    acceptance at end-of-visit, deliberately distinguished from the
+    drawn-signature legal posture. However, a bypass DOES lock the WO
+    (`wo.locked = true`) and fires the same completion cascade —
+    operationally it is equivalent to a signature for downstream flow.
+
+    When the on-site quote builder contains line items beyond the
+    baseline seasonal fee (i.e., the customer is being billed for added
+    scope not previously authorized), bypass requires an additional
+    explicit acknowledgement that the customer verbally accepted the
+    full scope including additions. The UI surfaces this as a warning
+    with a "Send for remote approval instead" option as the preferred
+    path.
+
+    `wo.signature` and `wo.signatureBypass` are mutually exclusive —
+    a WO has one or the other, never both.
+
+    All pre-sign gates above apply to bypass too (zone walk-through,
+    completion photos, payment method, return-visit, AI bonus when
+    applicable, materials confirmation). Only the canvas + printed-name
+    + acknowledgement-checkbox gates are replaced by the bypass-specific
+    reason + note + verbal-acceptance acknowledgement. The server
+    enforces the same gate set at the bypass endpoint
+    (POST /signature-bypass) and returns 422 presign_gate_unmet with
+    gateFailures[] when any gate fails.
+
     Scope additions discovered AFTER signature require a fresh signature
     on the new scope (see §10 r12). For original-scope completions, one
     signature covers the whole visit.
@@ -535,11 +572,12 @@ WORK ORDER FOLDER
       { ts, action, by, note, before?, after? }
         - ts: ISO timestamp
         - action: short slug (status_change, signature_capture,
-                 photo_upload, photo_delete, quote_built, customer_accepted,
-                 customer_declined_all, remote_approval_sent, issue_deferred,
-                 issues_bulk_deferred, emergency_override, carry_forward_*,
-                 cascade_fire, cascade_failed, invoice_drafted, ai_bonus_decided,
-                 followup_created, property_edits_applied, patch, etc.)
+                 signature_bypassed, photo_upload, photo_delete, quote_built,
+                 customer_accepted, customer_declined_all, remote_approval_sent,
+                 issue_deferred, issues_bulk_deferred, emergency_override,
+                 carry_forward_*, cascade_fire, cascade_failed, invoice_drafted,
+                 ai_bonus_decided, followup_created, property_edits_applied,
+                 patch, etc.)
         - by: "admin" | "tech" | "system" | "customer"
         - note: human-readable summary
         - before/after: optional state snapshots (set on status changes,
@@ -555,7 +593,7 @@ WORK ORDER FOLDER
 2. **Property info is pulled FRESH at WO open.** WO doesn't store its own copy — it links. Photos taken on the WO are stored on the WO and optionally promoted to property folder.
 3. **Status transitions are forward-only.** Skips allowed, reverses not.
 4. **Scope changes require fresh signature.** Original signature is for original scope only.
-5. **Signed WO is the contract.** Once `wo.locked === true` (set at signature capture), the following scope-protected fields are locked and any PATCH that touches them returns 409: `lineItems`, `additionalRepairs`, `onSiteQuote`, `signature`, `customerName`, `customerEmail`, `customerPhone`, `address`, `propertyId`, `leadId`, `intakeGuarantee`, `aiBonusMatched`, `type` (canonical list lives in `SCOPE_PROTECTED_FIELDS` in `server/lib/work-orders.js`). Status progression, photos, materials updates, paidOnSite, internal notes, and follow-up linkage continue to flow and append to `history[]` — the WO remains a live operational document after sign-off; only the *scope* is frozen.
+5. **Signed or bypass-locked WO is the contract.** Once `wo.locked === true` (set at signature capture OR signature bypass capture), the following scope-protected fields are locked and any PATCH that touches them returns 409: `lineItems`, `additionalRepairs`, `onSiteQuote`, `signature`, `signatureBypass`, `customerName`, `customerEmail`, `customerPhone`, `address`, `propertyId`, `leadId`, `intakeGuarantee`, `aiBonusMatched`, `type` (canonical list lives in `SCOPE_PROTECTED_FIELDS` in `server/lib/work-orders.js`). Status progression, photos, materials updates, paidOnSite, internal notes, and follow-up linkage continue to flow and append to `history[]` — the WO remains a live operational document after sign-off; only the *scope* is frozen.
 6. **AI-Correct-Diagnosis Bonus is enforced.** If WO carries the flag, tech sees a banner: "AI-correct-diagnosis bonus eligible for [scope]. If on-site diagnosis matches, credit the customer ONE HOUR of repair labour free on the diagnosed work." Diagnostic + repair labour billed normally at $95/hr.
 7. **Cancellations and no-shows are terminal states** with logged reasons.
 8. **Fall closings cannot auto-quote.** Hard rule. Issues → deferred items only.
@@ -849,7 +887,8 @@ These are the rules that protect the design from drift. Number them so they can 
 8. **AI never invents prices.** `pricing.json` or it's a lead.
 9. **Quotes are versioned, not edited.** Once sent, revisions create new versions.
 10. **Customer/property separation is permanent.** Don't conflate them, ever.
-11. **Signed work order is the contract.** Locked once signed (`wo.locked === true`). Scope-protected fields refuse PATCH with 409 — see §4.3.3 r5 for the canonical list (`SCOPE_PROTECTED_FIELDS` in `server/lib/work-orders.js`). Status, photos, materials, paidOnSite, and notes still accept edits and append to `history[]`.
+11. **Signed or bypass-locked work order is the contract.** Locked once signed OR bypass-recorded (`wo.locked === true`). Scope-protected fields refuse PATCH with 409 — see §4.3.3 r5 for the canonical list (`SCOPE_PROTECTED_FIELDS` in `server/lib/work-orders.js`). Status, photos, materials, paidOnSite, and notes still accept edits and append to `history[]`.
+    - **Signature bypass is not a signature.** Bypass records verbal acceptance at end-of-visit when the customer is not present. It carries weaker legal posture than a drawn signature but the same operational lock. Bypass is admin-authorized and audited; `wo.signature` and `wo.signatureBypass` are mutually exclusive.
 12. **Scope changes require fresh signature.** Pre-signature scope changes (during the visit) are part of the same WO and the single completion signature covers them. Post-signature scope changes (e.g., customer asks for additional work after signing) require either (a) a fresh signature on a new scope-change record, or (b) a follow-up WO with its own signature flow. The on-site-quote endpoints all 409 once `wo.locked === true`.
 13. **Emergency fall overrides notify Patrick immediately.** Real-time, not nightly review.
 14. **Customer portal can only edit non-structural fields.** Phone, email, best time, prefs. Nothing else.

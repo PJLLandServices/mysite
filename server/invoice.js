@@ -77,6 +77,12 @@ function render(inv) {
   const woLink = document.getElementById("invoiceWoLink");
   if (inv.woId) { woLink.href = `/admin/work-order/${encodeURIComponent(inv.woId)}`; woLink.textContent = inv.woId; }
   else { woLink.removeAttribute("href"); woLink.textContent = "—"; }
+
+  // Authorization posture — admin-only display. Surfaces which path
+  // (drawn signature vs signature bypass) authorized this invoice so
+  // Patrick can audit the legal record without opening the WO. Fetched
+  // lazily so the invoice render isn't blocked on a second round-trip.
+  refreshAuthPosture(inv.woId).catch(() => {});
   const propLink = document.getElementById("invoicePropertyLink");
   if (inv.propertyId) { propLink.href = `/admin/property/${encodeURIComponent(inv.propertyId)}`; propLink.textContent = "Open property"; }
   else { propLink.removeAttribute("href"); propLink.textContent = "—"; }
@@ -273,5 +279,62 @@ render = function (inv) {
   origRender(inv);
   refreshQbBlock();
 };
+
+// ---- Authorization posture (admin-only) -----------------------------
+// Pulls the linked WO and renders which path authorized this invoice:
+//   - drawn signature  → "Signed by [name] on [date]"
+//   - signature bypass → "Verbal acceptance bypass recorded by [admin]
+//                         on [date] — reason: [reason]"
+// Customer-facing PDF + email do NOT include this info per the
+// Signature Bypass for WO Completion brief §3.4.4 (admin-only visibility).
+async function refreshAuthPosture(woId) {
+  const card = document.getElementById("invoiceAuthCard");
+  const summary = document.getElementById("invoiceAuthSummary");
+  const detail = document.getElementById("invoiceAuthDetail");
+  if (!card || !summary) return;
+  if (!woId) { card.hidden = true; return; }
+  try {
+    const r = await fetch(`/api/work-orders/${encodeURIComponent(woId)}`, { cache: "no-store" });
+    if (!r.ok) { card.hidden = true; return; }
+    const data = await r.json().catch(() => ({}));
+    const wo = data && data.ok && data.workOrder ? data.workOrder : null;
+    if (!wo) { card.hidden = true; return; }
+
+    if (wo.signatureBypass) {
+      const b = wo.signatureBypass;
+      const reasonLabel = bypassReasonLabel(b.reason);
+      const by = b.bypassedBy || "admin";
+      card.hidden = false;
+      summary.textContent = `Verbal acceptance bypass recorded by ${by} on ${fmtDate(b.ts)} — reason: ${reasonLabel}`;
+      if (detail) {
+        if (b.note) { detail.hidden = false; detail.textContent = b.note; }
+        else { detail.hidden = true; detail.textContent = ""; }
+      }
+      return;
+    }
+    if (wo.signature && wo.signature.signed) {
+      const s = wo.signature;
+      card.hidden = false;
+      summary.textContent = `Signed by ${s.customerName || "(unknown)"} on ${fmtDate(s.signedAt)}`;
+      if (detail) { detail.hidden = true; detail.textContent = ""; }
+      return;
+    }
+    // WO exists but not yet authorized — useful signal on a draft invoice.
+    card.hidden = false;
+    summary.textContent = "WO not yet signed or bypassed.";
+    if (detail) { detail.hidden = true; detail.textContent = ""; }
+  } catch (_e) {
+    card.hidden = true;
+  }
+}
+
+function bypassReasonLabel(slug) {
+  switch (slug) {
+    case "customer_not_home": return "Customer not home";
+    case "trusted_customer_verbal": return "Trusted customer — verbal acceptance";
+    case "other": return "Other";
+    default: return "Signature bypass";
+  }
+}
 
 load();

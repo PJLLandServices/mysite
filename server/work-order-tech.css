@@ -3073,3 +3073,200 @@ body[data-locked="true"] .tech-finish-bar { opacity: 0.55; pointer-events: none;
   color: #888;
   font-style: italic;
 }
+
+/* --- Signature bypass (Signature Bypass for WO Completion brief) -----
+   Visually subordinate text link below the primary "Sign, Lock &
+   Generate Invoice" button. Bottom-sheet styled with the existing
+   .tech-sheet language. Post-bypass display is a green status banner +
+   reused .tech-signoff-submit button styling for the Mark Complete CTA. */
+.tech-signoff-bypass-link-wrap {
+  margin: 14px 0 0;
+  text-align: center;
+}
+.tech-signoff-bypass-link {
+  background: transparent;
+  border: 0;
+  padding: 6px 8px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--tech-text-muted, #555);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+  min-height: 36px;
+}
+.tech-signoff-bypass-link:hover,
+.tech-signoff-bypass-link:focus-visible {
+  color: var(--tech-green, #1B4D2E);
+}
+
+.tech-signoff-bypassed {
+  margin: 8px 0 0;
+}
+.tech-signoff-bypassed-banner {
+  display: flex;
+  gap: 12px;
+  padding: 14px 16px;
+  background: rgba(27, 77, 46, 0.08);
+  border: 1px solid rgba(27, 77, 46, 0.25);
+  border-radius: 10px;
+  margin-bottom: 12px;
+}
+.tech-signoff-bypassed-icon {
+  flex: 0 0 28px;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--tech-green, #1B4D2E);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 16px;
+}
+.tech-signoff-bypassed-headline {
+  margin: 0 0 4px;
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--tech-green, #1B4D2E);
+}
+.tech-signoff-bypassed-meta {
+  margin: 0 0 4px;
+  font-size: 13px;
+  color: var(--tech-text, #1a1a1a);
+}
+.tech-signoff-bypassed-note {
+  margin: 0;
+  font-size: 12px;
+  color: var(--tech-text-muted, #555);
+  font-style: italic;
+}
+.tech-signoff-bypassed-complete {
+  width: 100%;
+  margin-top: 6px;
+}
+
+/* Bypass sheet body */
+.tech-bypass-help {
+  margin: 6px 0 14px;
+  font-size: 13px;
+  color: var(--tech-text-muted, #555);
+  line-height: 1.45;
+}
+.tech-bypass-select {
+  font: inherit;
+  font-size: 16px;
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 12px;
+  margin: 0 0 14px;
+  background: #fff;
+  border: 1px solid var(--tech-border, #d1d5cf);
+  border-radius: 10px;
+  box-sizing: border-box;
+  color: var(--tech-text, #1a1a1a);
+}
+.tech-bypass-textarea {
+  font: inherit;
+  font-size: 15px;
+  width: 100%;
+  min-height: 88px;
+  padding: 10px 12px;
+  margin: 0 0 4px;
+  background: #fff;
+  border: 1px solid var(--tech-border, #d1d5cf);
+  border-radius: 10px;
+  box-sizing: border-box;
+  color: var(--tech-text, #1a1a1a);
+  line-height: 1.4;
+  resize: vertical;
+}
+.tech-bypass-hint {
+  margin: 0 0 12px;
+  font-size: 12px;
+  color: var(--tech-text-muted, #555);
+}
+.tech-bypass-ack {
+  margin: 4px 0 12px;
+}
+.tech-bypass-error {
+  margin: 0 0 12px;
+  padding: 8px 12px;
+  background: #fdecea;
+  border: 1px solid #f5c6c6;
+  border-radius: 8px;
+  color: #8a1f1f;
+  font-size: 13px;
+  line-height: 1.4;
+}
+.tech-bypass-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 6px;
+}
+.tech-bypass-cancel,
+.tech-bypass-remote {
+  flex: 1 1 140px;
+  min-height: 48px;
+  padding: 12px 16px;
+  font: inherit;
+  font-size: 15px;
+  background: transparent;
+  border: 1px solid var(--tech-border, #d1d5cf);
+  border-radius: 10px;
+  color: var(--tech-text, #1a1a1a);
+  cursor: pointer;
+}
+.tech-bypass-cancel:hover,
+.tech-bypass-remote:hover {
+  background: rgba(15, 31, 20, 0.05);
+}
+.tech-bypass-submit {
+  flex: 2 1 180px;
+  min-height: 48px;
+  padding: 12px 16px;
+  font: inherit;
+  font-size: 15px;
+  font-weight: 600;
+  background: var(--tech-green, #1B4D2E);
+  color: #fff;
+  border: 0;
+  border-radius: 10px;
+  cursor: pointer;
+}
+.tech-bypass-submit:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.tech-bypass-submit-anyway {
+  background: #8a1f1f;
+}
+
+/* Warning state */
+.tech-bypass-warning-headline {
+  margin: 4px 0 8px;
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 18px;
+  font-weight: 600;
+  color: #8a1f1f;
+}
+.tech-bypass-warning-body {
+  margin: 0 0 10px;
+  font-size: 14px;
+  color: var(--tech-text, #1a1a1a);
+  line-height: 1.45;
+}
+.tech-bypass-warning-suggest {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  background: rgba(27, 77, 46, 0.06);
+  border-left: 3px solid var(--tech-green, #1B4D2E);
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--tech-text, #1a1a1a);
+  line-height: 1.45;
+}
