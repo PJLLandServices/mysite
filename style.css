@@ -3259,3 +3259,34 @@ section.hero[aria-label="PJL Land Services hero"] .hero__services-sep {
   color: var(--amber);
   margin: 32px 0 -8px;
 }
+
+/* Anti-bot honeypot. Wraps a label + input that's positioned off-screen
+   so sighted users don't see it but form-stuffer bots fill it. Using
+   off-screen positioning (not display:none) on purpose — many bots skip
+   display:none fields; this defeats them. tabindex="-1" + aria-hidden on
+   the input keep keyboard users and screen readers out of the trap. */
+.pjl-hp-field {
+  position: absolute !important;
+  left: -10000px !important;
+  top: auto !important;
+  width: 1px !important;
+  height: 1px !important;
+  overflow: hidden !important;
+}
+
+/* Cloudflare Turnstile container. Reserve the Managed-widget slot
+   ahead of time so the interactive challenge (if it ever surfaces)
+   doesn't cause CLS. 65px matches the rendered widget height; the
+   widget itself is centered inside. */
+.pjl-turnstile {
+  min-height: 65px;
+  margin: 12px 0;
+  display: flex;
+  justify-content: center;
+}
+.pjl-turnstile:empty {
+  /* Before api.js renders the widget there's nothing to show; keep the
+     slot reserved (no border, no spinner — Managed mode is invisible
+     for clean traffic). */
+  min-height: 65px;
+}

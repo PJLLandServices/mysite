@@ -211,12 +211,22 @@
   }
 
   // ── Tier card click handler ──────────────────────────────────
+  // First tier click also anchors the anti-bot _ts time-trap on the
+  // form. The brief calls for the trap to fire on builder-open (not
+  // page render), so a customer who spends three minutes admiring the
+  // gallery before picking a tier isn't penalized for "thinking time"
+  // — only the time between tier-click and submit counts.
+  let tsAnchored = false;
   tierCards.forEach(card => {
     card.addEventListener('click', () => {
       const tier = parseInt(card.dataset.tier, 10);
       if (!tier) return;
 
       state.tier = tier;
+      if (!tsAnchored && window.pjlAntiBot) {
+        window.pjlAntiBot.anchorTs(quoteForm);
+        tsAnchored = true;
+      }
 
       // Update card selected states
       tierCards.forEach(c => {
@@ -366,7 +376,7 @@
     ];
     if (p.notes) noteLines.push("", "Customer notes:", p.notes);
 
-    const body = JSON.stringify({
+    const payload = {
       source: "sprinkler_quote",
       contact: {
         name:    p.name,
@@ -378,12 +388,13 @@
       pageUrl: window.location.href,
       userAgent: navigator.userAgent,
       mode: "sprinkler-quote-builder"
-    });
+    };
+    if (window.pjlAntiBot) window.pjlAntiBot.augmentPayload(payload, quoteForm);
 
     fetch((window.PJL_API_BASE || '') + '/api/quotes', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-      body
+      body: JSON.stringify(payload)
     })
       .then(async (res) => {
         const data = await res.json().catch(() => ({}));

@@ -281,6 +281,9 @@
 }
 </style>
   <link rel="stylesheet" href="css/chat-widget.css">
+  <!-- Cloudflare Turnstile — invisible-by-default bot challenge. Pairs with
+       server/lib/anti-bot.js + js/anti-bot.js. See WEBSITE_MAINTENANCE §15.14. -->
+  <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
 </head>
 <body>
 
@@ -460,8 +463,18 @@
                 <label for="cf-message">Message</label>
                 <textarea id="cf-message" name="message" placeholder="Tell us about your property and what you're looking for..."></textarea>
               </div>
-              <!-- Honeypot for bot filtering — real users won't fill a hidden field. -->
-              <input type="text" name="_gotcha" tabindex="-1" autocomplete="off" style="display:none !important;" aria-hidden="true">
+              <!-- Anti-bot layer (see WEBSITE_MAINTENANCE §15.14):
+                   1. Off-screen honeypot — form-stuffer bots fill it; real users + screen
+                      readers skip it. Position absolute beats display:none for bot coverage.
+                   2. _ts time-trap — js/anti-bot.js stamps Date.now() on render; <2.5s
+                      submit = bot, >30 day stale = expired. Server rejects either.
+                   3. cf-turnstile widget — Managed mode, invisible for clean traffic. -->
+              <div class="pjl-hp-field" aria-hidden="true">
+                <label for="cf-website">Website (leave blank)</label>
+                <input type="text" id="cf-website" name="contact_website" tabindex="-1" autocomplete="off">
+              </div>
+              <input type="hidden" name="_ts" data-pjl-ts value="0">
+              <div class="cf-turnstile pjl-turnstile" data-sitekey="1x00000000000000000000AA" data-callback="pjlOnTurnstile" data-theme="light"></div>
               <div class="form-submit-row">
                 <button type="submit" id="cf-submit" class="btn btn-green" style="width:100%;justify-content:center;">Send Message →</button>
               </div>
@@ -493,10 +506,13 @@
 <script src="coverage-checker.js"></script>
 <script async defer src="https://maps.googleapis.com/maps/api/js?key=AIzaSyBrORBeXbpNTJvoi2PDhDDs6Iy-BGSU30M&libraries=places&callback=initCoverageCheck&loading=async"></script>
 <script src="nav.js?v=2"></script>
+<script src="js/anti-bot.js?v=1"></script>
 <script>
-/* Contact form — Formspree submission via fetch().
-   Posts to the form's action URL, swaps in a success or error panel,
-   keeps the user on the page. No mailto: bounce. */
+/* Contact form — fetch POST to /api/quotes.
+   Anti-bot fields (contact_website honeypot, _ts time-trap, cf-turnstile
+   token) are pulled off the DOM by window.pjlAntiBot.augmentPayload and
+   merged into the body. Server rejects on any layer fail; we surface a
+   friendly error with the phone number — never strand a real customer. */
 (function () {
   const form    = document.getElementById('contactForm');
   const submit  = document.getElementById('cf-submit');
@@ -507,13 +523,6 @@
   form.addEventListener('submit', async function (e) {
     e.preventDefault();
     error.hidden = true;
-
-    // Bot honeypot — real users never fill this hidden field. Pretend success silently.
-    if (form.elements._gotcha && form.elements._gotcha.value) {
-      form.hidden = true;
-      success.hidden = false;
-      return;
-    }
 
     submit.disabled = true;
     const originalText = submit.innerHTML;
@@ -541,6 +550,7 @@
       pageUrl: window.location.href,
       userAgent: navigator.userAgent
     };
+    window.pjlAntiBot && window.pjlAntiBot.augmentPayload(payload, form);
 
     try {
       const res = await fetch((window.PJL_API_BASE || '') + '/api/quotes', {
@@ -554,10 +564,19 @@
         success.hidden = false;
         success.scrollIntoView({ behavior: 'smooth', block: 'center' });
       } else {
-        throw new Error((body.errors || ['Submission failed']).join(' '));
+        throw new Error((body.errors && body.errors.length ? body.errors.join(' ') : `Submission failed (${res.status})`));
       }
     } catch (err) {
+      // Server-supplied 4xx messages already include the phone number; the
+      // error panel below also shows the email fallback so the customer
+      // always has two non-form paths to reach us.
+      const msg = String(err.message || '').trim();
+      if (msg) {
+        const p = error.querySelector('p');
+        if (p) p.innerHTML = msg + ' Or email <a href="mailto:info@pjllandservices.com">info@pjllandservices.com</a> directly.';
+      }
       error.hidden = false;
+      error.scrollIntoView({ behavior: 'smooth', block: 'center' });
       submit.disabled = false;
       submit.innerHTML = originalText;
       console.error('Contact form error:', err);

@@ -652,6 +652,15 @@
         </div>
         <div class="form-group" style="margin-top:14px"><label>Additional notes</label><textarea id="f-notes" placeholder="Anything else about your property or project..."></textarea></div>
       </div>
+      <!-- Anti-bot honeypot. This page submits to Formspree (not the PJL
+           backend), so we ride Formspree's native `_gotcha` honeypot
+           support. Off-screen via .pjl-hp-field so sighted users + screen
+           readers never see it. See WEBSITE_MAINTENANCE §15.14 — server-
+           side defense layer doesn't apply to this Formspree path. -->
+      <div class="pjl-hp-field" aria-hidden="true">
+        <label for="f-gotcha">Website (leave blank)</label>
+        <input type="text" id="f-gotcha" name="_gotcha" tabindex="-1" autocomplete="off">
+      </div>
       <div class="btn-row">
         <button class="btn btn-secondary" onclick="goStep('bundle')">← Adjust estimate</button>
         <button class="btn btn-amber" onclick="submitForm()">Send My Enquiry →</button>
@@ -992,6 +1001,10 @@ function submitForm() {
   formData.append('notes', notes || 'None');
   formData.append('_subject', `Installation Estimate — ${svcLabel} | ${first} ${last}`);
   formData.append('_source', 'Installation Estimate Builder');
+  // Forward the honeypot value — Formspree natively recognizes _gotcha
+  // and silently drops the submission if it's non-empty.
+  const gotchaEl = document.getElementById('f-gotcha');
+  if (gotchaEl) formData.append('_gotcha', gotchaEl.value || '');
 
   fetch('https://formspree.io/f/mvzdjolv', {
     method: 'POST',
@@ -1338,6 +1351,10 @@ function submitForm() {
   formData.append('notes', notes || 'None');
   formData.append('_subject', `Installation Estimate — ${svcLabel} | ${first} ${last}`);
   formData.append('_source', 'Installation Estimate Builder');
+  // Forward the honeypot value — Formspree natively recognizes _gotcha
+  // and silently drops the submission if it's non-empty.
+  const gotchaEl = document.getElementById('f-gotcha');
+  if (gotchaEl) formData.append('_gotcha', gotchaEl.value || '');
 
   fetch('https://formspree.io/f/mvzdjolv', {
     method: 'POST',

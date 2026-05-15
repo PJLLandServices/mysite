@@ -743,3 +743,17 @@ body.has-savings-float .pjl-chat-launcher {
     width: 100%;
   }
 }
+
+/* Anti-bot honeypot — mirrors the .pjl-hp-field rule in style.css so the
+   off-screen positioning works even on pages that don't load style.css
+   (the dedicated chat-only landing pages like diagnose.html). Real users
+   never see the input; form-stuffer bots fill it and trip the server
+   gate. See server/lib/anti-bot.js. */
+.pjl-hp-field {
+  position: absolute !important;
+  left: -10000px !important;
+  top: auto !important;
+  width: 1px !important;
+  height: 1px !important;
+  overflow: hidden !important;
+}

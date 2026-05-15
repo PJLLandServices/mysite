@@ -53,6 +53,11 @@
   }
 }
 </script>
+<!-- Cloudflare Turnstile — invisible-by-default bot challenge. See
+     WEBSITE_MAINTENANCE §15.14. _ts is anchored on builder-open (first
+     tier click), not page load, so customers exploring the gallery for
+     a few minutes before picking a tier don't trip the stale-token guard. -->
+<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
 </head>
 <body>
 
@@ -341,6 +346,15 @@
       <input type="hidden" id="qfFrontFeatures" name="front_features" value="">
       <input type="hidden" id="qfBackFeatures" name="back_features" value="">
 
+      <!-- Anti-bot trio (see WEBSITE_MAINTENANCE §15.14). _ts is anchored
+           on first tier-click by sprinkler-builder.js, not page load. -->
+      <div class="pjl-hp-field" aria-hidden="true">
+        <label for="qfWebsite">Website (leave blank)</label>
+        <input type="text" id="qfWebsite" name="contact_website" tabindex="-1" autocomplete="off">
+      </div>
+      <input type="hidden" name="_ts" id="qfTs" value="0">
+      <div class="cf-turnstile pjl-turnstile" data-sitekey="1x00000000000000000000AA" data-callback="pjlOnTurnstile" data-theme="light"></div>
+
       <div class="quote-form__error" id="qfError" hidden></div>
 
       <button type="submit" class="quote-form__submit" id="qfSubmit">
@@ -374,7 +388,8 @@
 <script src="coverage-checker.js"></script>
 <script async defer src="https://maps.googleapis.com/maps/api/js?key=AIzaSyBrORBeXbpNTJvoi2PDhDDs6Iy-BGSU30M&libraries=places&callback=initCoverageCheck&loading=async"></script>
 <script src="nav.js?v=2"></script>
-<script src="js/sprinkler-builder.js?v=2"></script>
+<script src="js/anti-bot.js?v=1"></script>
+<script src="js/sprinkler-builder.js?v=3"></script>
 <script src="js/pricing-injector.js" defer></script>
 </body>
 </html>

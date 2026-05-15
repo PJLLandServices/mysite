@@ -1672,6 +1672,10 @@
   ]
 }
 </script>
+<!-- Cloudflare Turnstile — invisible-by-default bot challenge for the
+     homepage quick-book form. Pairs with server/lib/anti-bot.js +
+     js/anti-bot.js. See WEBSITE_MAINTENANCE §15.14. -->
+<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
 </head>
 <body>
 <script>
@@ -1873,7 +1877,14 @@
           <option value="landscape_lighting">Landscape Lighting</option>
         </select>
         <input type="text" id="qb-address" name="address" placeholder="Start typing your address…" class="sd-bridge__input sd-bridge__input--full js-address-autocomplete" autocomplete="off">
-        <input type="text" name="_gotcha" tabindex="-1" autocomplete="off" style="display:none !important;" aria-hidden="true">
+        <!-- Anti-bot trio (see WEBSITE_MAINTENANCE §15.14):
+             off-screen honeypot · _ts time-trap · Turnstile Managed widget. -->
+        <div class="pjl-hp-field" aria-hidden="true">
+          <label for="qb-website">Website (leave blank)</label>
+          <input type="text" id="qb-website" name="contact_website" tabindex="-1" autocomplete="off">
+        </div>
+        <input type="hidden" name="_ts" data-pjl-ts value="0">
+        <div class="cf-turnstile pjl-turnstile" data-sitekey="1x00000000000000000000AA" data-callback="pjlOnTurnstile" data-theme="dark"></div>
         <button type="submit" class="sd-bridge__submit" id="qb-submit">Book Now — Same Day Available</button>
         <p class="sd-bridge__result sd-bridge__result--success" id="qb-success" hidden>✓ Thanks — we've got your request and will be in touch shortly. For urgent service, call <a href="tel:+19059600181">(905) 960-0181</a>.</p>
         <p class="sd-bridge__result sd-bridge__result--error" id="qb-error" hidden>Something went wrong. Please call <a href="tel:+19059600181">(905) 960-0181</a> or email <a href="mailto:info@pjllandservices.com">info@pjllandservices.com</a>.</p>
@@ -2452,11 +2463,13 @@
 <script src="coverage-checker.js"></script>
 <script async defer src="https://maps.googleapis.com/maps/api/js?key=AIzaSyBrORBeXbpNTJvoi2PDhDDs6Iy-BGSU30M&libraries=places&callback=initCoverageCheck&loading=async"></script>
 <script src="nav.js?v=2"></script>
+<script src="js/anti-bot.js?v=1"></script>
 
 <script>
 /* Homepage Quick-Book — posts to the PJL backend at /api/quotes.
    The "service" select carries the source key (spring_opening, sprinkler_repair, etc.)
-   so the lead lands directly in the right CRM pipeline. */
+   so the lead lands directly in the right CRM pipeline. Anti-bot fields
+   (contact_website / _ts / cfTurnstileResponse) are merged in below. */
 (function () {
   const form    = document.getElementById('quickBookForm');
   const submit  = document.getElementById('qb-submit');
@@ -2467,12 +2480,6 @@
   form.addEventListener('submit', async function (e) {
     e.preventDefault();
     error.hidden = true;
-
-    if (form.elements._gotcha && form.elements._gotcha.value) {
-      form.querySelectorAll('input, select, button').forEach(el => { if (el.type !== 'hidden') el.hidden = true; });
-      success.hidden = false;
-      return;
-    }
 
     submit.disabled = true;
     const originalText = submit.textContent;
@@ -2492,6 +2499,7 @@
       userAgent: navigator.userAgent,
       mode: 'homepage-quickbook'
     };
+    window.pjlAntiBot && window.pjlAntiBot.augmentPayload(payload, form);
 
     // Render free tier sleeps when idle — first request after sleep returns
     // 502/timeout. Retry once after a brief delay so cold-start doesn't lose

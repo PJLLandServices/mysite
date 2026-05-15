@@ -18,6 +18,21 @@
   "use strict";
   if (window.pjlChat) return; // already initialized on this page
 
+  // Anti-bot helpers (window.pjlAntiBot) are loaded explicitly on the
+  // dedicated form pages (contact, book, quote, index, diagnose). On the
+  // 40+ blog / service / area pages that only host the chat launcher we
+  // inject the helper lazily so the chat form bubbles still send a real
+  // `_ts` + honeypot + Turnstile token. The script is small (~3 KB) and
+  // does nothing until a chat form bubble is rendered, so the lazy load
+  // is invisible to anyone who never opens the chat.
+  if (!window.pjlAntiBot && !document.querySelector('script[data-pjl-antibot]')) {
+    const s = document.createElement("script");
+    s.src = "/js/anti-bot.js?v=1";
+    s.defer = true;
+    s.dataset.pjlAntibot = "1";
+    document.head.appendChild(s);
+  }
+
   // -------- Configuration --------
   const WORKER_URL = "https://jolly-meadow-6c29.patrick-812.workers.dev/";
   const LEAD_ENDPOINT = "https://pjl-land-services-onrender-com.onrender.com/api/quotes";
@@ -832,6 +847,11 @@
           <div class="full"><label>Service address</label><input type="text" name="address" placeholder="Street, City"></div>
           <div class="full"><label>Anything else we should know?</label><textarea name="notes" rows="2" placeholder="Access notes, gate code, dog on property..."></textarea></div>
         </div>
+        <div class="pjl-hp-field" aria-hidden="true">
+          <label for="pjl-chat-website">Website (leave blank)</label>
+          <input type="text" id="pjl-chat-website" name="contact_website" tabindex="-1" autocomplete="off">
+        </div>
+        <input type="hidden" name="_ts" value="0">
         <button type="submit">Send My Details →</button>
       </form>
     `;
@@ -839,7 +859,12 @@
     messagesEl.appendChild(row);
     scrollToBottom();
 
-    bubble.querySelector("form").addEventListener("submit", (e) => {
+    const leadForm = bubble.querySelector("form");
+    // Anchor the anti-bot _ts the moment the form bubble appears. Bots that
+    // POST directly to /api/quotes without ever rendering this bubble carry
+    // no fresh stamp; server rejects.
+    if (window.pjlAntiBot) window.pjlAntiBot.anchorTs(leadForm);
+    leadForm.addEventListener("submit", (e) => {
       e.preventDefault();
       const f = Object.fromEntries(new FormData(e.target).entries());
       submitLead(f, e.target);
@@ -946,6 +971,10 @@
       quotePayload: state.pendingQuote || null,
       photos
     };
+    // Anti-bot fields: honeypot + _ts. Turnstile is bypassed server-side
+    // when chatSessionId is present (multi-turn conversation is already
+    // a strong human signal). See server/lib/anti-bot.js skipTurnstile.
+    if (window.pjlAntiBot) window.pjlAntiBot.augmentPayload(payload, formEl);
 
     fetch(LEAD_ENDPOINT, {
       method: "POST",
@@ -995,6 +1024,11 @@
           <div><label>Phone <span class="req">*</span></label><input type="tel" name="phone" required></div>
           <div class="full"><label>Service address</label><input type="text" name="address" placeholder="Street, City"></div>
         </div>
+        <div class="pjl-hp-field" aria-hidden="true">
+          <label for="pjl-chat-capture-website">Website (leave blank)</label>
+          <input type="text" id="pjl-chat-capture-website" name="contact_website" tabindex="-1" autocomplete="off">
+        </div>
+        <input type="hidden" name="_ts" value="0">
         <button type="submit">Add Me to the List →</button>
       </form>
     `;
@@ -1002,7 +1036,9 @@
     messagesEl.appendChild(row);
     scrollToBottom();
 
-    bubble.querySelector("form").addEventListener("submit", (e) => {
+    const captureForm = bubble.querySelector("form");
+    if (window.pjlAntiBot) window.pjlAntiBot.anchorTs(captureForm);
+    captureForm.addEventListener("submit", (e) => {
       e.preventDefault();
       const f = Object.fromEntries(new FormData(e.target).entries());
       submitContactCapture(f, e.target);
@@ -1042,6 +1078,7 @@
       chatSessionId: state.chatSessionId || null,
       photos: []
     };
+    if (window.pjlAntiBot) window.pjlAntiBot.augmentPayload(payload, formEl);
 
     fetch(LEAD_ENDPOINT, {
       method: "POST",

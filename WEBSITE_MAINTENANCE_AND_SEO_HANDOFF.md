@@ -819,6 +819,71 @@ The CSV is more useful than the raw JSON for archiving — opens in Excel, struc
 7. **Never log magic-token IDs or session-cookie values.** Both are credentials. Log "sent magic-link to user X" — never the link itself. The verification endpoints are deliberately silent on the token contents in error responses.
 8. **Never set a CRM account password to anything you use elsewhere.** Hashed at rest, but treat it like any production credential.
 
+### 15.14 Anti-bot defense layer
+
+Five layered checks gate every public lead-intake submission. They run before any disk write or notification fan-out — blocked attempts never reach `leads.json`, never fire Twilio. All five live in `server/lib/anti-bot.js`; the client-side companions live in `js/anti-bot.js` and are wired into each public form.
+
+**Layers, in execution order:**
+
+| # | Layer | What it catches |
+|---|---|---|
+| 1 | Honeypot — `contact_website` off-screen input | Form-stuffer bots that fill every input |
+| 2 | Time-trap — `_ts` hidden field (Date.now() at render) | Bots that submit in <2.5s; stale tabs >30 days |
+| 3 | Per-IP rate-limit (5 submissions / 10 min sliding) | Same-IP burst submitters |
+| 4 | Gmail-localpart normalization (informational) | Dot-trick aliases collapsed into `contact.emailNormalized` |
+| 5 | Cloudflare Turnstile (Managed mode) | Sophisticated bots that pass 1–4 |
+
+Honeypot uses `position: absolute; left: -10000px` (off-screen) — *not* `display: none`, because many bots skip display:none fields. The wrapper class is `.pjl-hp-field` in `style.css`.
+
+**Setting up Turnstile (one-time):**
+
+1. Free Cloudflare account → **Turnstile** → "Add site".
+2. Domain: `pjllandservices.com`. Widget mode: **Managed** (invisible for clean traffic, optional checkbox for suspicious sessions).
+3. Cloudflare gives back two values:
+   - **Site Key** (public, safe in HTML) → set `TURNSTILE_SITE_KEY` in Render dashboard.
+   - **Secret Key** (server only, never expose) → set `TURNSTILE_SECRET_KEY` in Render dashboard.
+4. Until both are set, the form HTML continues to render with Cloudflare's "always passes" TEST key `1x00000000000000000000AA`, and the server-side verify call is skipped. Bots are still blocked by layers 1–4.
+5. Once the env vars are set on Render, the existing `js/anti-bot.js` helper picks up the production key on next deploy — no HTML rewrite needed.
+
+**Where the protected endpoints are:**
+
+- `POST /api/quotes` — main lead intake (contact form, homepage quick-book, sprinkler-builder, AI chat).
+- `POST /api/booking/reserve` — direct booking flow.
+
+Both endpoints call `antiBot.checkSubmission()` before doing anything else. The AI chat path passes `skipTurnstile: true` because the multi-turn conversation is already a strong human signal — a bot that holds a credible back-and-forth with the AI has cleared a higher bar than Turnstile sets.
+
+**Forensics — `server/data/bot-blocked.log`:**
+
+Every blocked attempt writes one JSON line: timestamp, IP, user-agent, reason, payload snippet (first 500 chars). Rotates to `bot-blocked.log.1` at 5 MB. **IPs are retained 30 days then purged** — same convention as the `/login` audit log. Patrick can inspect the file to spot patterns ("are we seeing real customer false positives or actual spam?").
+
+The file lives behind `DATA_DIR` and is never served via any HTTP route.
+
+**If a real customer hits a false positive:**
+
+The friendly error messages already point at `(905) 960-0181` for a phone fallback. To temporarily exempt a specific IP, the safest path is:
+
+1. Look up the rejected IP in `server/data/bot-blocked.log`.
+2. Confirm via Patrick that it's a real customer.
+3. If the false positive was from Turnstile (rare in Managed mode), tell the customer to refresh and try again; Cloudflare's risk scoring is per-session.
+4. If it was rate-limit, the bucket resets after 10 minutes — just ask the customer to wait.
+5. Persistent false positives → raise the limits in `server/lib/anti-bot.js` (search for `RATE_LIMIT_MAX` and `MIN_FORM_TIME_MS`).
+
+There is no IP allow-list — adding one would be a security smell, and false positives from this layer are rare enough that the phone fallback is the right escape hatch.
+
+**Gmail normalization details:**
+
+`contact.email` keeps the customer's actual spelling (`K.enny.Benny+work@gmail.com`) for display and reply. `contact.emailNormalized` carries the canonical form (`kennybenny@gmail.com`) — dots stripped, `+suffix` removed, lower-cased. Same underlying inbox no matter how many variants a spammer types. **`leads.json` is forward-only**: existing records are not backfilled. The bulk-operations brief (Session 2) handles that for the cleanup phase.
+
+**Privacy disclosure:**
+
+The use of Cloudflare Turnstile + the 30-day IP retention are disclosed in `privacy-policy.html` §06 ("Anti-Spam and Bot Protection").
+
+**Pages with the Turnstile widget loaded:**
+
+- `contact.html`, `index.html`, `quote.html`, `book.html`, `diagnose.html` — explicit `<script>` tag in `<head>`.
+- All chat-widget pages (~48 pages: blog posts, service areas, faq, etc.) — `js/chat-widget.js` lazy-loads `js/anti-bot.js` on first form-bubble render, so honeypot + `_ts` flow even where the explicit Turnstile script isn't in the HTML.
+- `estimate.html` is the one exception — it submits to Formspree (not the PJL backend), so it relies on Formspree's native `_gotcha` honeypot only. Turnstile would have nowhere to verify against.
+
 ---
 
 *End of document. Update this file when your changes affect any of the topics above.*

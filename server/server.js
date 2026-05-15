@@ -64,6 +64,7 @@ const purchaseOrders = require("./lib/purchase-orders");
 const users = require("./lib/users");
 const magicTokens = require("./lib/magic-tokens");
 const rateLimit = require("./lib/rate-limit");
+const antiBot = require("./lib/anti-bot");
 const { sendCustomerLoginLink, sendAdminPasswordResetLink } = require("./lib/notify-customer");
 
 // Short, customer-friendly work order ID. Eight chars from a UUIDv4 base32-ish
@@ -2445,6 +2446,20 @@ async function handleApi(req, res, pathname) {
       // include up to 5 attached photos (each capped client-side at ~1MB).
       const payload = await parseRequestBody(req, { maxBytes: QUOTE_POST_MAX_BYTES });
 
+      // Anti-bot gate: honeypot, time-trap, per-IP rate limit, Turnstile.
+      // Runs BEFORE any disk write or notification fan-out so blocked
+      // attempts never reach leads.json and never fire Twilio. The chat-
+      // widget path skips Turnstile because the chat session itself is a
+      // strong human signal (a multi-turn back-and-forth with the AI).
+      const fromChatSession = !!payload?.chatSessionId;
+      const verdict = await antiBot.checkSubmission({
+        body: payload,
+        ip: callerIp(req),
+        userAgent: req.headers["user-agent"] || "",
+        skipTurnstile: fromChatSession
+      });
+      if (!verdict.ok) return sendJson(res, verdict.status, verdict.responseBody);
+
       // Validate photos BEFORE we do the lead-write so that a malformed photo
       // batch never produces an orphan lead with "no photos available."
       let validatedPhotos;
@@ -2474,6 +2489,14 @@ async function handleApi(req, res, pathname) {
 
       const result = validateLead(payload);
       if (!result.ok) return sendJson(res, 422, { ok: false, errors: result.errors });
+
+      // Forward-only emailNormalized — collapses Gmail dot-trick and
+      // +suffix aliases to a single canonical form for future dedupe.
+      // contact.email keeps the customer's actual spelling for display.
+      // Existing leads.json records are NOT backfilled.
+      if (verdict.normalizedEmail && result.lead.contact) {
+        result.lead.contact.emailNormalized = verdict.normalizedEmail;
+      }
 
       // Brief 2 — resolve the canonical customer record before
       // persisting the lead. Soft-failure: if resolution throws,
@@ -9286,6 +9309,21 @@ Customer signature captured at ${new Date().toISOString()}.`;
   if (req.method === "POST" && pathname === "/api/booking/reserve") {
     try {
       const payload = await parseRequestBody(req);
+
+      // Anti-bot gate identical to /api/quotes. The booking flow is
+      // multi-step (service pick → address → slot pick → contact), so
+      // the time-trap is anchored on page load — bots that POST
+      // directly to this endpoint without rendering book.html trip it
+      // immediately. Rate-limit is shared across both lead-intake
+      // endpoints so a bot can't switch endpoints to extend its window.
+      const verdict = await antiBot.checkSubmission({
+        body: payload,
+        ip: callerIp(req),
+        userAgent: req.headers["user-agent"] || "",
+        skipTurnstile: false
+      });
+      if (!verdict.ok) return sendJson(res, verdict.status, verdict.responseBody);
+
       const serviceKey = normalizeString(payload.serviceKey, 60);
       // Optional pre-booking session — AI handoff carrying a diagnosis +
       // customer hints. We resolve it here so the diagnosis can be attached
@@ -9347,6 +9385,11 @@ Customer signature captured at ${new Date().toISOString()}.`;
       };
       const result = validateLead(intakePayload);
       if (!result.ok) return sendJson(res, 422, { ok: false, errors: result.errors });
+
+      // Forward-only emailNormalized — see /api/quotes handler for rationale.
+      if (verdict.normalizedEmail && result.lead.contact) {
+        result.lead.contact.emailNormalized = verdict.normalizedEmail;
+      }
 
       // Customer-confirmed zone count (1-50 or "unsure"), only collected for
       // seasonal flows. Stored on the booking so Patrick can see it in the

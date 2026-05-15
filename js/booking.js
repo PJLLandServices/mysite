@@ -536,6 +536,11 @@
         pageUrl: window.location.href,
         userAgent: navigator.userAgent
       };
+      // Anti-bot defense layer (see WEBSITE_MAINTENANCE §15.14). Pulls
+      // contact_website (honeypot), _ts (time-trap stamp), and
+      // cfTurnstileResponse off the page and merges them into the payload
+      // so /api/booking/reserve can validate before reserving the slot.
+      if (window.pjlAntiBot) window.pjlAntiBot.augmentPayload(payload);
       const response = await fetch((window.PJL_API_BASE || "") + "/api/booking/reserve", {
         method: "POST",
         headers: { "content-type": "application/json" },

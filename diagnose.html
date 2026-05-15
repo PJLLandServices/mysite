@@ -10,6 +10,10 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700;800&family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="css/chat-widget.css">
+<!-- Cloudflare Turnstile — invisible-by-default bot challenge. The chat
+     widget renders the widget inside its booking/contact-capture forms
+     when those bubbles surface. See WEBSITE_MAINTENANCE §15.14. -->
+<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   html, body {
@@ -96,6 +100,7 @@
     </div>
   </main>
 
+  <script src="js/anti-bot.js?v=1"></script>
   <script src="js/chat-widget.js" defer></script>
   <script>
     // Auto-open the chat panel on this dedicated landing page.
