@@ -35,8 +35,13 @@
 
   // -------- Configuration --------
   const WORKER_URL = "https://jolly-meadow-6c29.patrick-812.workers.dev/";
-  const LEAD_ENDPOINT = "https://pjl-land-services-onrender-com.onrender.com/api/quotes";
-  const TRANSCRIPT_ENDPOINT = "https://pjl-land-services-onrender-com.onrender.com/api/chat-transcripts";
+  // Same-origin post-DNS-cutover (see memory/dns_cutover_done.md). These
+  // used to be absolute onrender URLs to bridge the Wix-hosted public site
+  // to the Render API; now pjllandservices.com IS Render so cross-origin
+  // is wrong — it caused the response redirect chain to drop users onto
+  // onrender.com.
+  const LEAD_ENDPOINT = "/api/quotes";
+  const TRANSCRIPT_ENDPOINT = "/api/chat-transcripts";
   const FORM_TRIGGER = "[SHOW_BOOKING_FORM]";
   const CAPTURE_TRIGGER = "[SHOW_CONTACT_CAPTURE]";
   // [QUOTE_JSON:{...}] travels alongside [SHOW_BOOKING_FORM] for repair quotes.

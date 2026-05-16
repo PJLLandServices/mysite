@@ -1,40 +1,16 @@
 // PJL Land Services — Shared JS
 
 // ── API base detection ──
-// Public-site forms (contact, homepage same-day, quote builder, booking page)
-// POST to /api/quotes and friends. When the page is served from a domain that
-// isn't running our Render Node.js backend (i.e. pre-DNS-cutover, when
-// pjllandservices.com still points at Wix/Cloudflare), a relative URL hits
-// the wrong host and 404s with "Something went wrong."
+// Post-DNS-cutover (see memory/dns_cutover_done.md), pjllandservices.com IS
+// Render — the public site and the API live at the same origin. Every form
+// POST is now same-origin, so PJL_API_BASE is "" everywhere.
 //
-// This shim picks the right base at runtime:
-//   - On Render (*.onrender.com) or localhost: relative URL (same origin)
-//   - Anywhere else (public domain pre-cutover): absolute Render URL
-//
-// CORS is configured server-side to allow the public domain, so cross-origin
-// works. Once DNS cuts over and pjllandservices.com IS Render, the same
-// detection naturally falls back to relative — no code change needed.
-//
-// All public-facing fetches should prefix `window.PJL_API_BASE` to their path.
-window.PJL_API_BASE = (function () {
-  var h = (window.location && window.location.hostname) || "";
-  if (!h || h === "localhost" || h === "127.0.0.1") return "";
-  if (h.indexOf("onrender.com") !== -1) return "";
-  return "https://pjl-land-services-onrender-com.onrender.com";
-})();
-
-// ── Backend warm-up ping ──
-// Render free tier sleeps when idle. First request after sleep returns
-// HTTP 502 (cold-start, ~5-15s spin-up). Fire a no-op ping when the page
-// loads so by the time a user fills out a form (~30s+) the server is awake.
-// Failure is silent and irrelevant — the actual form submissions retry on
-// their own.
-if (window.PJL_API_BASE) {
-  try {
-    fetch(window.PJL_API_BASE + "/api/health", { method: "GET", mode: "cors", cache: "no-store" })
-      .catch(function () { /* swallow — wake-up is best-effort */ });
-  } catch (e) { /* ignore */ }
-}
+// Historical note: this used to detect Wix-hosted pages (pre-cutover) and
+// route them cross-origin to the onrender subdomain. That bridge is dead;
+// leaving it in caused every form on pjllandservices.com to POST to the
+// onrender host, which then 30x-redirected users onto that host and made
+// the PJL logo "feel" like it kept them on render.
+window.PJL_API_BASE = "";
 
 // ── Navigation scroll effect ──
 document.documentElement.classList.add('js-reveal');

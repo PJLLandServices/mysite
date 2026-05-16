@@ -26,13 +26,13 @@
    second source of truth — it's intended to be regenerated periodically
    from pricing.json by a build script.
 
-   Endpoint: tries same-origin first (post-cutover), falls back to the
-   onrender.com URL (pre-cutover, when this script runs on GitHub Pages).
+   Endpoint: same-origin /api/pricing. Pre-cutover this had an absolute
+   onrender fallback for when the script ran on Wix; post-cutover that
+   bridge is dead and only causes onrender URLs to leak into the page.
    ============================================================= */
 (function () {
   "use strict";
   const PRIMARY = "/api/pricing";
-  const FALLBACK = "https://pjl-land-services-onrender-com.onrender.com/api/pricing";
 
   function formatMoney(value, opts) {
     const num = Number(value);
@@ -101,14 +101,9 @@
     try {
       const pricing = await fetchPricing(PRIMARY);
       applyPricing(pricing);
-    } catch (e1) {
-      try {
-        const pricing = await fetchPricing(FALLBACK);
-        applyPricing(pricing);
-      } catch (e2) {
-        // Both endpoints failed — page keeps its hardcoded fallback values.
-        console.warn("[pricing-injector] could not fetch pricing, using HTML fallback:", e2?.message);
-      }
+    } catch (e) {
+      // /api/pricing failed — page keeps its HTML-hardcoded fallback values.
+      console.warn("[pricing-injector] could not fetch pricing, using HTML fallback:", e?.message);
     }
   }
 

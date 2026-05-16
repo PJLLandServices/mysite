@@ -2251,8 +2251,10 @@ async function handleIdentityApi(req, res, pathname) {
       }
       rateLimit.record(rateKey);
       const token = await magicTokens.issue("admin_password_reset", id, { requestIp: callerIp(req) });
-      const baseUrl = process.env.PUBLIC_BASE_URL || baseUrlFromReq(req);
-      const link = joinUrl(baseUrl, "/reset-password", { t: token.id });
+      // Magic link goes into an outbound email — must always be the public
+      // canonical host. resolvePublicBaseUrl() prevents the .onrender.com
+      // host from leaking in when PUBLIC_BASE_URL is unset.
+      const link = joinUrl(resolvePublicBaseUrl(), "/reset-password", { t: token.id });
       // Send the email. Best-effort — if Gmail isn't configured, surface
       // the link so the admin can hand it off out-of-band. (No magic
       // tokens are EVER logged or returned in production-config errors.)
@@ -2454,7 +2456,9 @@ async function handlePortalLoginApi(req, res, pathname) {
 
     try {
       const matches = await resolveLoginIdentifier(identifier);
-      const baseUrl = process.env.PUBLIC_BASE_URL || baseUrlFromReq(req);
+      // Magic link is embedded in a customer-facing email — must always be
+      // the canonical public host. See server/lib/public-base-url.js.
+      const baseUrl = resolvePublicBaseUrl();
       // Brief 4 — dedup matched leads by customerId so a customer
       // with two leads gets ONE magic link tied to their customer
       // record, not two pointing at separate leads. The subject of
@@ -3824,12 +3828,13 @@ async function handleApi(req, res, pathname) {
     try {
       const payload = await parseRequestBody(req);
       const session = await bookingSessions.createSession(payload);
-      const baseUrl = process.env.PUBLIC_BASE_URL || baseUrlFromReq(req);
+      // bookingUrl is returned to admin UI which copies/pastes it into
+      // customer-facing channels — keep it on the canonical public host.
       return sendJson(res, 201, {
         ok: true,
         token: session.token,
         expiresAt: new Date(session.expiresAt).toISOString(),
-        bookingUrl: joinUrl(baseUrl, "/book.html", { session: session.token })
+        bookingUrl: joinUrl(resolvePublicBaseUrl(), "/book.html", { session: session.token })
       });
     } catch (error) {
       return sendJson(res, 400, { ok: false, errors: [error.message || "Couldn't create session."] });
@@ -4695,11 +4700,10 @@ async function handleApi(req, res, pathname) {
       const pdfBuffer = await generateInvoicePdf(renderInv);
 
       // Build the public payment URL the customer clicks from the email.
-      // PUBLIC_BASE_URL is the live URL Render ships with (or the custom
-      // domain post-DNS cutover). Falls back to the request's own origin
-      // for local dev.
-      const publicBase = (process.env.PUBLIC_BASE_URL || baseUrlFromReq(req) || "").replace(/\/+$/, "");
-      const viewLink = paymentToken && publicBase
+      // resolvePublicBaseUrl() — env-var-authoritative, then the canonical
+      // pjllandservices.com host. Never the .onrender.com request host.
+      const publicBase = resolvePublicBaseUrl();
+      const viewLink = paymentToken
         ? `${publicBase}/pay/invoice/${encodeURIComponent(invId)}?t=${encodeURIComponent(paymentToken)}`
         : "";
 
@@ -5134,14 +5138,16 @@ async function handleApi(req, res, pathname) {
         await quotes.attachWorkOrder(quoteRecord.id, wo.id);
       }
 
-      // Generate the approval token + URL.
+      // Generate the approval token + URL. Approval URL is embedded in
+      // customer-facing SMS/email — must always be the canonical public
+      // host (resolvePublicBaseUrl handles env-var + production-domain
+      // fallback so it never lands on .onrender.com).
       const token = crypto.randomBytes(16).toString("hex");
-      const baseUrl = baseUrlFromReq(req);
       const channels = [];
       if (sendEmail) channels.push("email");
       if (sendSms) channels.push("sms");
       await quotes.markSentForApproval(quoteRecord.id, { token, channels, toEmail, toPhone });
-      const approvalUrl = `${baseUrl.replace(/\/+$/, "")}/approve/${encodeURIComponent(quoteRecord.id)}?t=${token}`;
+      const approvalUrl = `${resolvePublicBaseUrl()}/approve/${encodeURIComponent(quoteRecord.id)}?t=${token}`;
 
       const results = { smsSent: false, smsError: null, emailSent: false, emailError: null, approvalUrl };
       const firstName = (wo.customerName || "").split(" ")[0] || "there";
@@ -6420,7 +6426,9 @@ async function handleApi(req, res, pathname) {
   if (req.method === "POST" && pathname === "/api/settings/ical-feed/generate") {
     try {
       const updated = await settings.generateIcalToken({ who: "admin" });
-      const base = (process.env.PUBLIC_BASE_URL || baseUrlFromReq(req)).replace(/\/+$/, "");
+      // iCal feed URL gets pasted into Apple/Google Calendar — must be the
+      // canonical public host so the subscription survives DNS edges.
+      const base = resolvePublicBaseUrl();
       const url = updated.icalFeed.token ? `${base}/calendar/${updated.icalFeed.token}.ics` : null;
       return sendJson(res, 200, { ok: true, settings: updated, url });
     } catch (err) {
@@ -6430,7 +6438,7 @@ async function handleApi(req, res, pathname) {
   if (req.method === "POST" && pathname === "/api/settings/ical-feed/regenerate") {
     try {
       const updated = await settings.regenerateIcalToken({ who: "admin" });
-      const base = (process.env.PUBLIC_BASE_URL || baseUrlFromReq(req)).replace(/\/+$/, "");
+      const base = resolvePublicBaseUrl();
       const url = updated.icalFeed.token ? `${base}/calendar/${updated.icalFeed.token}.ics` : null;
       return sendJson(res, 200, { ok: true, settings: updated, url });
     } catch (err) {
@@ -9513,14 +9521,12 @@ Customer signature captured at ${new Date().toISOString()}.`;
       // Patrick's hands, not the AI.
       payload.source = "admin_manual";
       const session = await bookingSessions.createSession(payload);
-      // ALWAYS use the request's host for the bookingUrl. PUBLIC_BASE_URL
-      // is intentionally ignored here: if Patrick is on /admin/handoff via
-      // the .onrender.com URL, his admin login proves that domain is live
-      // and reachable, so any link we send the customer using that domain
-      // will work. PUBLIC_BASE_URL can be set to the public domain pre-
-      // DNS-cutover and silently break links — req.host is always honest.
-      const baseUrl = baseUrlFromReq(req);
-      const bookingUrl = joinUrl(baseUrl, "/book.html", { session: session.token });
+      // bookingUrl is embedded in a customer-facing SMS/email — must
+      // always be the canonical public host. The old pre-DNS-cutover
+      // logic ("use req.host because PUBLIC_BASE_URL may be stale") no
+      // longer applies post-cutover (memory/dns_cutover_done.md). Route
+      // through resolvePublicBaseUrl() so this never lands on onrender.
+      const bookingUrl = joinUrl(resolvePublicBaseUrl(), "/book.html", { session: session.token });
 
       const hints = session.payload.customerHints || {};
       const firstName = hints.firstName || "";
@@ -10094,9 +10100,11 @@ Customer signature captured at ${new Date().toISOString()}.`;
       const lead = allLeads[idx];
 
       // Decorate with portalUrl + booking shape so the template fills out
-      // {firstName}, {serviceLabel}, {portalUrl} correctly.
+      // {firstName}, {serviceLabel}, {portalUrl} correctly. baseUrl is
+      // passed but the notify module resolves its own canonical host now;
+      // we still compute the right one here for forward compatibility.
       const decorated = decorateLeadForAdmin(lead, req);
-      const baseUrl = baseUrlFromReq(req);
+      const baseUrl = resolvePublicBaseUrl();
 
       // Fire-and-forget — don't block the tech on Twilio/Gmail latency.
       // Errors land in the server log; the UI gets an immediate ok.

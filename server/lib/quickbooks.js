@@ -5,8 +5,8 @@
 //   1. Create a QuickBooks Developer app at https://developer.intuit.com
 //      Type: "Accounting" scope. Production environment when ready.
 //   2. Set Redirect URI on the QB app to:
-//        https://<your-render-or-public-domain>/api/admin/quickbooks/callback
-//      (Currently: https://pjl-land-services-onrender-com.onrender.com/api/admin/quickbooks/callback)
+//        https://<your-public-domain>/api/admin/quickbooks/callback
+//      (Currently: https://pjllandservices.com/api/admin/quickbooks/callback)
 //   3. Set Render env vars:
 //        QB_CLIENT_ID         (from QB app dashboard)
 //        QB_CLIENT_SECRET     (from QB app dashboard)
