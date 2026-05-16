@@ -7126,11 +7126,15 @@ async function handleApi(req, res, pathname) {
     return sendJson(res, 200, { ok: true, removed });
   }
 
-  // POST /api/purchase-orders/:id/send — render PDF, email supplier via
-  // existing nodemailer/Gmail, flip status to sent, flip source material-
-  // list lines to "ordered" with poId backref. The PDF library + email
-  // sender are loaded here lazily so a server without nodemailer creds
-  // doesn't fail on boot.
+  // POST /api/purchase-orders/:id/send — render PDF + CSV, snapshot
+  // them to disk, email the supplier, flip status to sent, flip source
+  // material-list lines to "ordered" with poId backref.
+  //
+  // Snapshot-on-send (PO Document Redesign brief §3.5): both files are
+  // written to server/data/purchase-orders/files/ and the paths are
+  // persisted on the PO record. A future /resend reads these files
+  // unchanged — the supplier always receives byte-identical documents
+  // regardless of subsequent parts.json edits.
   const poSendMatch = pathname.match(/^\/api\/purchase-orders\/([^/]+)\/send$/);
   if (poSendMatch && req.method === "POST") {
     try {
@@ -7145,23 +7149,59 @@ async function handleApi(req, res, pathname) {
       if (!toEmail) {
         return sendJson(res, 422, { ok: false, errors: ["Supplier email is empty. Add it to the supplier record or this PO."] });
       }
-      const subject = String(payload.subject || `Purchase Order ${po.id} from PJL Land Services`).slice(0, 200);
 
-      // Render PDF + send email. notify-supplier handles nodemailer.
+      // Render PDF + CSV. notify-supplier composes the subject from the
+      // PO if no override is given.
       const { generatePoPdf } = require("./lib/po-pdf");
-      const { sendPurchaseOrderEmail } = require("./lib/notify-supplier");
+      const { generatePoCsv } = require("./lib/po-csv");
+      const { sendPurchaseOrderEmail, buildSubject } = require("./lib/notify-supplier");
       const pdfBuffer = await generatePoPdf(po);
+      const csvBuffer = generatePoCsv(po);
+      const subject = String(payload.subject || buildSubject(po)).slice(0, 200);
+
+      // Write both files to the per-PO snapshot directory. Paths persist
+      // on the PO record as repo-relative strings so the resend handler
+      // can find them again. mkdir -p is idempotent.
+      const poFilesDir = path.join(DATA_DIR, "purchase-orders", "files");
+      await fs.mkdir(poFilesDir, { recursive: true });
+      const pdfFsPath = path.join(poFilesDir, `${po.id}.pdf`);
+      const csvFsPath = path.join(poFilesDir, `${po.id}.csv`);
+      await fs.writeFile(pdfFsPath, pdfBuffer);
+      await fs.writeFile(csvFsPath, csvBuffer);
+      // Store paths repo-relative — survives moving the install dir.
+      const pdfPath = path.relative(SERVER_DIR, pdfFsPath).split(path.sep).join("/");
+      const csvPath = path.relative(SERVER_DIR, csvFsPath).split(path.sep).join("/");
+
+      // descriptionFor is injected so notify-supplier.js stays decoupled
+      // from parts.json. po-pdf.js has its own copy of the same lookup.
+      const { parts: catalogParts } = PARTS || { parts: {} };
+      const descriptionFor = (sku) => {
+        const p = catalogParts && catalogParts[sku];
+        if (!p) return `(SKU ${sku})`;
+        const sizeBit = p.size ? `${p.size} — ` : "";
+        return `${sizeBit}${p.description || sku}`;
+      };
+
       await sendPurchaseOrderEmail({
         po,
         toEmail,
         toName: payload.toName || po.supplierContactName || po.supplierName,
         subject,
         bodyText: payload.bodyText || "",
-        pdfBuffer
+        pdfBuffer,
+        csvBuffer,
+        descriptionFor
       });
 
-      // Flip the PO state.
-      const sentPo = await purchaseOrders.markSent(id, { toEmail, toName: payload.toName, subject });
+      // Flip the PO state — persist the document paths so the resend
+      // path can find the snapshotted files.
+      const sentPo = await purchaseOrders.markSent(id, {
+        toEmail,
+        toName: payload.toName,
+        subject,
+        pdfPath,
+        csvPath
+      });
 
       // Flip every source material-list line to "ordered" with this PO id.
       // Group line ids by source list so we patch each list once.
@@ -7294,6 +7334,12 @@ async function handleApi(req, res, pathname) {
   // POST /api/purchase-orders/:id/resend — re-email the PDF to the
   // supplier. Status stays whatever it was (sent / partially_received).
   // Useful when the supplier didn't reply or asks for a copy.
+  //
+  // Snapshot-on-send idempotency rule: a sent PO carries pdfPath + csvPath
+  // on its record. Re-send reads those files unchanged and re-attaches
+  // them — byte-identical to the original send. We NEVER regenerate from
+  // the current PO + parts.json on resend, so a parts.json edit after
+  // send cannot retroactively alter a sent document.
   const poResendMatch = pathname.match(/^\/api\/purchase-orders\/([^/]+)\/resend$/);
   if (poResendMatch && req.method === "POST") {
     try {
@@ -7308,17 +7354,55 @@ async function handleApi(req, res, pathname) {
       if (!toEmail) {
         return sendJson(res, 422, { ok: false, errors: ["Recipient email is empty."] });
       }
-      const subject = String(payload.subject || po.emailSubject || `Purchase Order ${po.id} from PJL Land Services`).slice(0, 200);
       const { generatePoPdf } = require("./lib/po-pdf");
-      const { sendPurchaseOrderEmail } = require("./lib/notify-supplier");
-      const pdfBuffer = await generatePoPdf(po);
+      const { generatePoCsv } = require("./lib/po-csv");
+      const { sendPurchaseOrderEmail, buildSubject } = require("./lib/notify-supplier");
+
+      // Prefer the stored snapshot if it exists; fall back to live
+      // regeneration if not (legacy POs sent before the snapshot layer
+      // landed have no stored files). The fallback is best-effort —
+      // documents may differ from the original send.
+      let pdfBuffer, csvBuffer;
+      const snapshotMissingWarn = [];
+      if (po.pdfPath) {
+        try {
+          pdfBuffer = await fs.readFile(path.join(SERVER_DIR, po.pdfPath));
+        } catch {
+          snapshotMissingWarn.push("PDF");
+        }
+      }
+      if (po.csvPath) {
+        try {
+          csvBuffer = await fs.readFile(path.join(SERVER_DIR, po.csvPath));
+        } catch {
+          snapshotMissingWarn.push("CSV");
+        }
+      }
+      if (!pdfBuffer) pdfBuffer = await generatePoPdf(po);
+      if (!csvBuffer) csvBuffer = generatePoCsv(po);
+      if (snapshotMissingWarn.length) {
+        console.warn(`[po-resend] ${po.id} snapshot missing for: ${snapshotMissingWarn.join(", ")} — regenerated live`);
+      }
+
+      const subject = String(payload.subject || po.emailSubject || buildSubject(po)).slice(0, 200);
+
+      const { parts: catalogParts } = PARTS || { parts: {} };
+      const descriptionFor = (sku) => {
+        const p = catalogParts && catalogParts[sku];
+        if (!p) return `(SKU ${sku})`;
+        const sizeBit = p.size ? `${p.size} — ` : "";
+        return `${sizeBit}${p.description || sku}`;
+      };
+
       await sendPurchaseOrderEmail({
         po,
         toEmail,
         toName: payload.toName || po.supplierContactName || po.supplierName,
         subject,
         bodyText: payload.bodyText || "",
-        pdfBuffer
+        pdfBuffer,
+        csvBuffer,
+        descriptionFor
       });
       const updated = await purchaseOrders.markResent(id, { toEmail, toName: payload.toName, subject });
       return sendJson(res, 200, { ok: true, purchaseOrder: updated });
@@ -7343,16 +7427,25 @@ async function handleApi(req, res, pathname) {
     }
   }
 
-  // GET /api/purchase-orders/:id/pdf — download a PDF of any PO. Useful
-  // for the admin to grab a copy locally or to re-send the same PDF.
+  // GET /api/purchase-orders/:id/pdf — download a PDF of any PO. Sent
+  // POs return the snapshotted PDF byte-identical to what the supplier
+  // received; drafts and any sent PO missing a snapshot regenerate live
+  // from the current record.
   const poPdfMatch = pathname.match(/^\/api\/purchase-orders\/([^/]+)\/pdf$/);
   if (poPdfMatch && req.method === "GET") {
     try {
       const id = decodeURIComponent(poPdfMatch[1]);
       const po = await purchaseOrders.get(id);
       if (!po) return sendJson(res, 404, { ok: false, errors: ["Purchase order not found."] });
-      const { generatePoPdf } = require("./lib/po-pdf");
-      const pdf = await generatePoPdf(po);
+
+      let pdf = null;
+      if (po.pdfPath) {
+        try { pdf = await fs.readFile(path.join(SERVER_DIR, po.pdfPath)); } catch {}
+      }
+      if (!pdf) {
+        const { generatePoPdf } = require("./lib/po-pdf");
+        pdf = await generatePoPdf(po);
+      }
       res.writeHead(200, {
         "content-type": "application/pdf",
         "content-disposition": `inline; filename="${po.id}.pdf"`,
@@ -7362,6 +7455,35 @@ async function handleApi(req, res, pathname) {
       return;
     } catch (err) {
       return sendJson(res, 500, { ok: false, errors: [err.message || "Couldn't render PDF."] });
+    }
+  }
+
+  // GET /api/purchase-orders/:id/csv — download the CSV companion. Same
+  // prefer-snapshot / fall-back-to-live logic as the PDF endpoint.
+  const poCsvMatch = pathname.match(/^\/api\/purchase-orders\/([^/]+)\/csv$/);
+  if (poCsvMatch && req.method === "GET") {
+    try {
+      const id = decodeURIComponent(poCsvMatch[1]);
+      const po = await purchaseOrders.get(id);
+      if (!po) return sendJson(res, 404, { ok: false, errors: ["Purchase order not found."] });
+
+      let csv = null;
+      if (po.csvPath) {
+        try { csv = await fs.readFile(path.join(SERVER_DIR, po.csvPath)); } catch {}
+      }
+      if (!csv) {
+        const { generatePoCsv } = require("./lib/po-csv");
+        csv = generatePoCsv(po);
+      }
+      res.writeHead(200, {
+        "content-type": "text/csv; charset=utf-8",
+        "content-disposition": `attachment; filename="${po.id}.csv"`,
+        "cache-control": "no-store"
+      });
+      res.end(csv);
+      return;
+    } catch (err) {
+      return sendJson(res, 500, { ok: false, errors: [err.message || "Couldn't render CSV."] });
     }
   }
 

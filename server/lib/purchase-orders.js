@@ -167,7 +167,17 @@ function blankPo() {
     // Bulk-operations soft state. Only draft POs are eligible for soft-delete
     // (sent / received POs touch supplier orders and inventory state). Gate
     // enforced at dispatcher.
-    deletedAt: null
+    deletedAt: null,
+
+    // Snapshot-on-send paths (PO Document Redesign brief §3.5). When the
+    // PO transitions draft → sent, the rendered PDF and the CSV companion
+    // are written to disk and these fields are set. Re-sending uses the
+    // stored files unchanged — byte-identical to the original send. A
+    // parts.json change after send NEVER alters the documents a supplier
+    // already received. Null on draft POs; immutable once sent.
+    pdfPath: null,
+    csvPath: null,
+    documentsGeneratedAt: null
   };
 }
 
@@ -180,7 +190,10 @@ function hydrate(rec) {
     sourceMaterialListIds: Array.isArray(rec?.sourceMaterialListIds) ? rec.sourceMaterialListIds.slice() : [],
     lineItems: Array.isArray(rec?.lineItems) ? rec.lineItems.map(hydrateLine) : [],
     history: Array.isArray(rec?.history) ? rec.history.slice(-200) : [],
-    deletedAt: typeof rec?.deletedAt === "string" ? rec.deletedAt : null
+    deletedAt: typeof rec?.deletedAt === "string" ? rec.deletedAt : null,
+    pdfPath: typeof rec?.pdfPath === "string" ? rec.pdfPath : null,
+    csvPath: typeof rec?.csvPath === "string" ? rec.csvPath : null,
+    documentsGeneratedAt: typeof rec?.documentsGeneratedAt === "string" ? rec.documentsGeneratedAt : null
   };
 }
 
@@ -297,11 +310,16 @@ async function update(id, patch = {}) {
   return next;
 }
 
-// Mark a draft as sent. Records the email send-state snapshot. Caller
-// (server.js) is responsible for: actually rendering the PDF, calling
-// the email sender, and flipping the source material-list lines to
-// "ordered" with poId backref.
-async function markSent(id, { toEmail, toName, subject } = {}) {
+// Mark a draft as sent. Records the email send-state snapshot AND the
+// stored-document paths (PO Document Redesign brief §3.5 — snapshot-on-
+// send). Caller (server.js) is responsible for: rendering the PDF +
+// CSV, writing them to disk, calling the email sender, and flipping
+// the source material-list lines to "ordered" with poId backref.
+//
+// `pdfPath` and `csvPath` are repo-relative paths under server/data/.
+// Once set on a sent PO they are IMMUTABLE — the resend path reads
+// these files verbatim; the supplier always receives the same bytes.
+async function markSent(id, { toEmail, toName, subject, pdfPath, csvPath } = {}) {
   const records = await readAll();
   const idx = records.findIndex((r) => r.id === id);
   if (idx === -1) return null;
@@ -316,6 +334,11 @@ async function markSent(id, { toEmail, toName, subject } = {}) {
   rec.emailedToName = String(toName || rec.supplierContactName || rec.supplierName || "");
   rec.emailSubject = String(subject || `Purchase Order ${rec.id}`).slice(0, 200);
   rec.updatedAt = rec.sentAt;
+  // Stored-document paths. The caller passes both — partial snapshots
+  // (one without the other) would break the resend idempotency guarantee.
+  if (pdfPath) rec.pdfPath = String(pdfPath);
+  if (csvPath) rec.csvPath = String(csvPath);
+  if (pdfPath || csvPath) rec.documentsGeneratedAt = rec.sentAt;
   appendHistory(rec, { action: "sent", note: rec.emailedToEmail });
   records[idx] = rec;
   await writeAll(records);

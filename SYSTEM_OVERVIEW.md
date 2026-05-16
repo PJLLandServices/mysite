@@ -462,7 +462,9 @@ Click "Generate purchase orders" on the list builder
 Server groups need-lines by primary supplier, creates one PO-YYYY-NNNN
 draft per supplier, snapshots prices from parts.json at create time.
    ↓
-Admin reviews PO detail, clicks Send  →  PDF rendered + emailed to supplier;
+Admin reviews PO detail, clicks Send  →  PDF + CSV rendered, snapshotted to
+                                          server/data/purchase-orders/files/,
+                                          emailed to supplier;
                                           source list lines flip need → ordered
    ↓
 Supplier delivers (full or partial)  →  Record receipt with per-line qtys
@@ -476,6 +478,58 @@ fresh prices from catalog).
    ↓
 Cancel: outstanding lines flip ordered → need; received lines stay have.
 ```
+
+#### PO documents (PDF + CSV)
+
+When a PO transitions from `draft` to `sent`, two files are generated and
+stored on disk:
+
+- `server/data/purchase-orders/files/<PO-ID>.pdf` — formal one-page
+  (or multi-page) document for the supplier's records. Seven-region
+  layout: top accent rule, header (PJL identity + PO number + issued
+  date), Vendor / Ship To columns, line-items table (`# · SKU ·
+  Description · Qty · Unit · Unit Price · Line Total`), totals
+  (subtotal-only; HST is the supplier's job), notes (references the
+  PO id + the CSV attachment), footer with PJL contact line.
+- `server/data/purchase-orders/files/<PO-ID>.csv` — RFC 4180 CSV with
+  the line-item data. Six columns: `SKU, Description, Qty, Unit,
+  UnitPrice, LineTotal`. Prices in decimal dollars (supplier systems
+  expect this). UTF-8 with BOM so Excel on Windows handles em-dashes
+  correctly. CRLF line endings.
+
+Paths are persisted on the PO record as `pdfPath` + `csvPath` (repo-
+relative) with `documentsGeneratedAt` carrying the generation
+timestamp. **Both files are immutable** once the PO is `sent` — the
+`/resend` endpoint reads these files unchanged, so the supplier
+receives byte-identical documents regardless of subsequent
+`parts.json` edits. Drafts regenerate documents on each preview.
+
+The email sent to the supplier on `draft → sent`:
+
+- Subject: `PO-YYYY-NNNN — PJL Land Services — N items, $TOTAL`
+- From: `PJL Land Services <{GMAIL_USER}>` (canonically
+  `info@pjllandservices.com`).
+- Both PDF and CSV attached.
+- HTML body contains a quick-paste `<table>` (real table, not `<pre>`)
+  styled to look like a code block. Highlighting + copying it pastes
+  into Excel with the cells separated automatically — the entire
+  point of the quick-paste feature.
+- Plain-text fallback with column-aligned text for clients that strip
+  HTML.
+
+Helpers live in:
+
+- `server/lib/po-pdf.js` — the 7-region renderer
+- `server/lib/po-csv.js` — RFC 4180 CSV writer
+- `server/lib/notify-supplier.js` — email composition + send
+- `server/lib/format.js` — `formatUnit()` (fixes the old "eachs"
+  pluralization bug; `each → ea`, `ft → ft`, `roll → roll`) and
+  `formatVendorAddress()` (title-cases all-caps stored addresses, puts
+  Canadian postal codes on their own line)
+- `server/lib/company.js` — single source for sender contact (name,
+  city, phone, website, email, brand green hex). Sender email reads
+  `process.env.GMAIL_USER` at call time with `info@pjllandservices.com`
+  as the fallback.
 
 ### 3. Quote → project (multi-WO job)
 
@@ -519,7 +573,12 @@ TZ                    = America/Toronto                    (forced by server.js)
 PORT                  = 4173                                (Render injects)
 HOST                  = 0.0.0.0                             (Render scanner needs this)
 PUBLIC_BASE_URL       = https://pjllandservices.com         (post-DNS-cutover)
-GMAIL_USER            = info@pjllandservices.com or similar
+GMAIL_USER            = info@pjllandservices.com             (SINGLE SOURCE for sender email — POs,
+                                                              invoices, quotes, customer-portal mail
+                                                              all From: this address. Surfaced
+                                                              programmatically via server/lib/company.js
+                                                              `email()`. Falls back to the hardcoded
+                                                              info@pjllandservices.com when unset.)
 GMAIL_APP_PASSWORD    = (Gmail app password, not regular pw)
 NOTIFY_TO_EMAIL       = (defaults to GMAIL_USER)
 TWILIO_ACCOUNT_SID    = ...

@@ -12,6 +12,7 @@
     status: document.getElementById("poStatus"),
     sourceList: document.getElementById("poSourceList"),
     pdfLink: document.getElementById("poPdfLink"),
+    csvLink: document.getElementById("poCsvLink"),
 
     supplierName: document.getElementById("poSupplierName"),
     supplierContactName: document.getElementById("poSupplierContactName"),
@@ -149,6 +150,12 @@
       : "";
     els.pdfLink.href = `/api/purchase-orders/${encodeURIComponent(state.po.id)}/pdf`;
     els.pdfLink.hidden = false;
+    if (els.csvLink) {
+      // CSV is generated alongside the PDF on send; for drafts it's a
+      // live render. Either way the endpoint always returns something.
+      els.csvLink.href = `/api/purchase-orders/${encodeURIComponent(state.po.id)}/csv`;
+      els.csvLink.hidden = false;
+    }
 
     setIfNotFocused(els.supplierName, state.po.supplierName);
     setIfNotFocused(els.supplierContactName, state.po.supplierContactName);
