@@ -19,6 +19,12 @@
   let modal = null;
   let onDoneCb = null;
   let selectedSlot = "";
+  // Tracks whether the currently-selected time came from a standard
+  // bucket slot ("slot") or the admin Custom time override
+  // ("admin_custom"). The server skips the slot-availability match
+  // check for admin_custom because those times are, by design, outside
+  // the normal slot grid.
+  let selectedSource = "slot";
   let bookingId = "";
   let pickerDestroy = null;
 
@@ -94,8 +100,9 @@
         }
         return { days: data.days || [] };
       },
-      onSelect: (iso) => {
+      onSelect: (iso, slotMeta) => {
         selectedSlot = iso;
+        selectedSource = (slotMeta && slotMeta.source === "admin_custom") ? "admin_custom" : "slot";
         modal.querySelector(".crm-resched-submit").disabled = false;
         modal.querySelector(".crm-resched-error").hidden = true;
       }
@@ -130,6 +137,7 @@
   async function open(opts = {}) {
     ensureModal();
     selectedSlot = "";
+    selectedSource = "slot";
     bookingId = "";
     onDoneCb = typeof opts.onDone === "function" ? opts.onDone : null;
     modal.hidden = false;
@@ -165,6 +173,7 @@
     modal.hidden = true;
     document.body.style.overflow = "";
     selectedSlot = "";
+    selectedSource = "slot";
     bookingId = "";
     onDoneCb = null;
     if (typeof pickerDestroy === "function") { try { pickerDestroy(); } catch (_) {} pickerDestroy = null; }
@@ -185,6 +194,7 @@
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
           slotStart: selectedSlot,
+          source: selectedSource,  // "admin_custom" bypasses the slot-match check server-side
           reason: (reasonEl.value || "").trim()
         })
       });

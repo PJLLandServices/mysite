@@ -1984,7 +1984,7 @@ async function rescheduleAvailability(bookingId, { from, to } = {}) {
 //
 // `actor` is "admin" or "customer". When "customer", Patrick gets paged
 // in addition to the customer's own confirmation.
-async function rescheduleBooking({ bookingId, slotStart, actor = "admin", actorName = "", reason = "", req } = {}) {
+async function rescheduleBooking({ bookingId, slotStart, source = "slot", actor = "admin", actorName = "", reason = "", req } = {}) {
   if (!slotStart || Number.isNaN(Date.parse(slotStart))) {
     return { ok: false, status: 422, errors: ["Pick a valid time slot."] };
   }
@@ -2008,39 +2008,58 @@ async function rescheduleBooking({ bookingId, slotStart, actor = "admin", actorN
   const leadIdx = bookingRec.leadId ? allLeads.findIndex((l) => l.id === bookingRec.leadId) : -1;
   const lead = leadIdx >= 0 ? allLeads[leadIdx] : null;
 
-  // Validate the new slot. Service + duration come from the booking
-  // record; address geocoding is required because the engine factors
-  // travel time. We exclude THIS booking's own occupancy from the
-  // conflict check (otherwise the customer collides with themselves).
   const serviceKey = bookingRec.serviceKey;
   const service = BOOKABLE_SERVICES[serviceKey];
   if (!service) return { ok: false, status: 422, errors: ["Booking has no recognizable service tier — call PJL to reschedule."] };
   const startDate = new Date(slotStart);
 
-  const address = bookingRec.address || lead?.contact?.address || "";
-  if (!address) return { ok: false, status: 422, errors: ["Address missing on the booking — can't compute drive times."] };
-  const geo = await geocode(address);
-  const allActive = await activeBookings();
-  const otherBookings = allActive.filter((b) => b.leadId !== bookingRec.leadId);
-  const scheduleData = await scheduleStore.read();
-  const mergedHours = { ...DEFAULT_HOURS, ...(scheduleData.hours || {}) };
-  const mergedSettings = { ...DEFAULT_SETTINGS, ...(scheduleData.settings || {}) };
-  const candidateSlots = await listAvailableSlots({
-    serviceKey,
-    customerCoords: geo.coords,
-    bookings: otherBookings,
-    blocks: scheduleData.blocks,
-    daysAhead: 60,
-    hours: mergedHours,
-    settings: mergedSettings
-  });
-  const matched = candidateSlots.find((s) => s.start === startDate.toISOString());
-  if (!matched) {
-    return { ok: false, status: 409, errors: ["That slot isn't available — please pick another time."] };
+  let matched;
+  if (source === "admin_custom") {
+    // Admin Custom-time override: explicitly outside the standard bucket
+    // grid (Patrick picked a precise minute via the picker's Custom time
+    // affordance). Skip the listAvailableSlots match — that engine only
+    // emits bucket slots and would reject any precise time. The admin
+    // is acknowledging this is an unusual scheduling. Synthesize a
+    // matched record with bucket fields blanked so the downstream
+    // mirror clears any prior bucket label on lead.booking.
+    matched = {
+      start: startDate.toISOString(),
+      end: new Date(startDate.getTime() + service.minutes * 60 * 1000).toISOString(),
+      durationMinutes: service.minutes,
+      serviceKey,
+      serviceLabel: service.label,
+      dayLabel: startDate.toLocaleDateString("en-CA", { weekday: "long", month: "short", day: "numeric" }),
+      timeLabel: null,
+      bucketKey: null,
+      bucketWindow: null,
+      isCustom: true
+    };
+  } else {
+    // Standard bucket slot: re-validate via listAvailableSlots.
+    const address = bookingRec.address || lead?.contact?.address || "";
+    if (!address) return { ok: false, status: 422, errors: ["Address missing on the booking — can't compute drive times."] };
+    const geo = await geocode(address);
+    const allActive = await activeBookings();
+    const otherBookings = allActive.filter((b) => b.leadId !== bookingRec.leadId);
+    const scheduleData = await scheduleStore.read();
+    const mergedHours = { ...DEFAULT_HOURS, ...(scheduleData.hours || {}) };
+    const mergedSettings = { ...DEFAULT_SETTINGS, ...(scheduleData.settings || {}) };
+    const candidateSlots = await listAvailableSlots({
+      serviceKey,
+      customerCoords: geo.coords,
+      bookings: otherBookings,
+      blocks: scheduleData.blocks,
+      daysAhead: 60,
+      hours: mergedHours,
+      settings: mergedSettings
+    });
+    matched = candidateSlots.find((s) => s.start === startDate.toISOString());
+    if (!matched) {
+      return { ok: false, status: 409, errors: ["That slot isn't available — please pick another time."] };
+    }
   }
-  // Bucket-mode: the slot end is the bucket window end (12:00 / 17:00).
-  // matched.end carries that ISO string from listAvailableSlots; same
-  // for durationMinutes (bucket length, not service.minutes).
+  // Bucket-mode: the slot end is the bucket window end for standard
+  // bucket slots; for admin_custom it's start + service.minutes.
   const endDate = new Date(matched.end);
 
   // 1) Push the canonical bookings.json record.
@@ -5541,12 +5560,19 @@ async function handleApi(req, res, pathname) {
   const adminRescheduleMatch = pathname.match(/^\/api\/bookings\/([^/]+)\/reschedule$/);
   if (adminRescheduleMatch && req.method === "PATCH") {
     try {
+      const body = await parseRequestBody(req);
       const result = await rescheduleBooking({
         bookingId: decodeURIComponent(adminRescheduleMatch[1]),
-        slotStart: (await parseRequestBody(req)).slotStart,
+        slotStart: body.slotStart,
+        // "admin_custom" comes from the time-picker's Custom time
+        // override; the server then skips the slot-availability match
+        // since custom times are by design outside the bucket grid.
+        // Only the admin path accepts this — portal reschedule never
+        // surfaces a custom-time UI.
+        source: body.source === "admin_custom" ? "admin_custom" : "slot",
         actor: "admin",
         actorName: "Patrick",
-        reason: "",
+        reason: typeof body.reason === "string" ? body.reason.slice(0, 200) : "",
         req
       });
       if (!result.ok) return sendJson(res, result.status || 400, { ok: false, errors: result.errors });
@@ -9562,26 +9588,53 @@ Customer signature captured at ${new Date().toISOString()}.`;
       const geo = await geocode(address);
       const customerCoords = geo.coords;
 
-      const [bookings, scheduleData] = await Promise.all([activeBookings(), scheduleStore.read()]);
-      const mergedHours = { ...DEFAULT_HOURS, ...(scheduleData.hours || {}) };
-      const mergedSettings = { ...DEFAULT_SETTINGS, ...(scheduleData.settings || {}) };
-      const stillAvailable = await listAvailableSlots({
-        serviceKey,
-        customerCoords,
-        bookings,
-        blocks: scheduleData.blocks,
-        daysAhead: 30,
-        hours: mergedHours,
-        settings: mergedSettings
-      });
-      const matched = stillAvailable.find((s) => s.start === startDate.toISOString());
-      if (!matched) {
-        return sendJson(res, 409, { ok: false, errors: ["That slot was just taken. Please pick another time."] });
+      // Admin Custom-time override (Brief A §3.2): the time-picker's
+      // Custom time block sends source: "admin_custom" for any precise
+      // minute outside the bucket grid. Honor it ONLY if the request
+      // carries an admin session — public customer bookings can't
+      // forge this and skip the slot check.
+      const claimsAdminCustom = payload.source === "admin_custom";
+      const adminSession = claimsAdminCustom ? await requireUser(req) : null;
+      const useAdminCustom = claimsAdminCustom && adminSession;
+
+      let matched;
+      if (useAdminCustom) {
+        // Synthesize a slot record from the precise time. End uses
+        // service.minutes (the actual visit duration) so the booking
+        // record + iCal show a real visit window, not a 4-hour bucket.
+        matched = {
+          start: startDate.toISOString(),
+          end: new Date(startDate.getTime() + service.minutes * 60 * 1000).toISOString(),
+          durationMinutes: service.minutes,
+          serviceKey,
+          serviceLabel: service.label,
+          dayLabel: startDate.toLocaleDateString("en-CA", { weekday: "long", month: "short", day: "numeric" }),
+          timeLabel: null,
+          bucketKey: null,
+          bucketWindow: null,
+          isCustom: true
+        };
+      } else {
+        // Standard path: re-validate against the bucket grid.
+        const [bookings, scheduleData] = await Promise.all([activeBookings(), scheduleStore.read()]);
+        const mergedHours = { ...DEFAULT_HOURS, ...(scheduleData.hours || {}) };
+        const mergedSettings = { ...DEFAULT_SETTINGS, ...(scheduleData.settings || {}) };
+        const stillAvailable = await listAvailableSlots({
+          serviceKey,
+          customerCoords,
+          bookings,
+          blocks: scheduleData.blocks,
+          daysAhead: 30,
+          hours: mergedHours,
+          settings: mergedSettings
+        });
+        matched = stillAvailable.find((s) => s.start === startDate.toISOString());
+        if (!matched) {
+          return sendJson(res, 409, { ok: false, errors: ["That slot was just taken. Please pick another time."] });
+        }
       }
-      // Use the bucket end as the booking end so the canonical
-      // bookings.json record (and Patrick's iCal feed) span the full
-      // bucket window. matched.end is the bucket end ISO string;
-      // matched.durationMinutes is the bucket length.
+      // matched.end is the bucket end for standard bucket slots, or
+      // start + service.minutes for admin-custom precise times.
       const endDate = new Date(matched.end);
 
       // Build the lead. Status is set to a category that maps to "scheduled" —

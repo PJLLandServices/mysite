@@ -913,6 +913,7 @@ function resetBookingForm() {
   bookingSlotHelp.hidden = false;
   bookingSlotHelp.textContent = "Fill in service + email + address to load available slots.";
   bookingSlotStart.value = "";
+  bookingSlotSource = "slot";
   bookingError.hidden = true;
   bookingError.textContent = "";
   bookingSubmit.disabled = true;
@@ -1043,6 +1044,11 @@ function scheduleAvailLookup() {
 });
 
 let bookingPickerDestroy = null;
+// Tracks whether the currently-picked time came from a bucket slot or
+// from the admin "Custom time" override (admin_custom). Sent with the
+// booking-reserve POST so the server can skip its slot-availability
+// match for custom times -- those are explicitly outside the grid.
+let bookingSlotSource = "slot";
 
 // Mount (or re-mount) the shared month-calendar picker into the +Book
 // modal's slot host. The loader closes over the current form inputs and
@@ -1088,8 +1094,9 @@ function loadAvailability() {
       if (!data.ok) throw new Error((data.errors || ["Couldn't load slots."]).join(" "));
       return { days: data.days || [] };
     },
-    onSelect: (iso) => {
+    onSelect: (iso, slotMeta) => {
       bookingSlotStart.value = iso;
+      bookingSlotSource = (slotMeta && slotMeta.source === "admin_custom") ? "admin_custom" : "slot";
       bookingSubmit.disabled = false;
     }
   });
@@ -1139,6 +1146,7 @@ bookingForm?.addEventListener("submit", async (event) => {
   const payload = {
     serviceKey,
     slotStart,
+    source: bookingSlotSource,  // "admin_custom" bypasses slot-availability check (admin-gated server-side)
     contact: {
       firstName,
       lastName,
