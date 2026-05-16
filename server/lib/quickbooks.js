@@ -617,9 +617,15 @@ async function chargeCard({ amountCents, currency = "CAD", cardToken, invoiceId,
     },
     body: JSON.stringify(body)
   });
+  const rawText = await r.clone().text().catch(() => "");
   const data = await r.json().catch(() => ({}));
   if (!r.ok) {
-    const detail = data?.errors?.[0] || data?.fault?.error?.[0] || data?.error || data;
+    console.warn(
+      "[charge] HTTP " + r.status +
+      " intuit_tid=" + (r.headers.get("intuit_tid") || "none") +
+      " body=" + rawText.slice(0, 2000)
+    );
+    const detail = data?.errors?.[0] || data?.Errors?.[0] || data?.fault?.error?.[0] || data?.Fault?.Error?.[0] || data?.error || data;
     const msg = detail?.message || detail?.detail || JSON.stringify(detail).slice(0, 200);
     throw new Error(`Charge failed (HTTP ${r.status}): ${msg}`);
   }

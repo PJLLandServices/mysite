@@ -36,6 +36,7 @@ const crypto = require("node:crypto");
 const { sendNewLeadEmail } = require("./lib/notify-email");
 const { sendNewLeadSms, sendPortalMessageSms } = require("./lib/notify-sms");
 const { notifyCustomer, eventForTransition, sendInvoiceToCustomer, sendPaymentReceipt, sendBookingCancellation, sendPortalMessageAlertEmail, sendPortalReplyToCustomer } = require("./lib/notify-customer");
+const { resolvePublicBaseUrl } = require("./lib/public-base-url");
 const { geocode, PJL_BASE } = require("./lib/geocode");
 const { BOOKABLE_SERVICES, DEFAULT_HOURS, DEFAULT_SETTINGS, listAvailableSlots, groupByDay, expandDaysToRange, parseLocalDateKey } = require("./lib/availability");
 const scheduleStore = require("./lib/schedule-store");
@@ -5601,7 +5602,7 @@ async function handleApi(req, res, pathname) {
       return sendJson(res, 503, { ok: false, errors: ["QuickBooks credentials missing — set QB_CLIENT_ID + QB_CLIENT_SECRET in Render env vars first."] });
     }
     const state = crypto.randomBytes(16).toString("hex");
-    const baseUrl = baseUrlFromReq(req);
+    const baseUrl = resolvePublicBaseUrl();
     const redirectUri = `${baseUrl.replace(/\/+$/, "")}/api/admin/quickbooks/callback`;
     const authUrl = quickbooks.buildAuthUrl(state, redirectUri);
     res.writeHead(302, { location: authUrl });
@@ -5625,7 +5626,7 @@ async function handleApi(req, res, pathname) {
       if (!code || !realmId) {
         return sendJson(res, 400, { ok: false, errors: ["QB callback missing code or realmId."] });
       }
-      const baseUrl = baseUrlFromReq(req);
+      const baseUrl = resolvePublicBaseUrl();
       const redirectUri = `${baseUrl.replace(/\/+$/, "")}/api/admin/quickbooks/callback`;
       await quickbooks.exchangeCodeForTokens(code, realmId, redirectUri);
       res.writeHead(302, { location: "/admin/settings?qb=connected" });
