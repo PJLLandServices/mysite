@@ -1503,7 +1503,14 @@ function contactRecordForLead(lead, req) {
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) errors.push("Email address is missing or invalid.");
 
   const portalPath = `/portal/${lead.portal?.token || portalTokenForId(lead.id)}`;
-  const portalUrl = joinUrl(baseUrlFromReq(req), portalPath);
+  // resolvePublicBaseUrl() — NOT baseUrlFromReq(req). The portal URL gets
+  // stamped onto the decorated lead and carried into every downstream
+  // customer-facing notification (received/quoted/booked/etc). If we used
+  // req.headers.host here, Render's internal *.onrender.com hostname would
+  // leak into customer-facing SMS/email even when PUBLIC_BASE_URL is set
+  // correctly — because the notify modules read lead.portalUrl first and
+  // only fall back to their own helper when it's empty.
+  const portalUrl = joinUrl(resolvePublicBaseUrl(), portalPath);
 
   return {
     ready: errors.length === 0,
@@ -2108,7 +2115,7 @@ async function rescheduleBooking({ bookingId, slotStart, source = "slot", actor 
   if (lead) {
     const aliasLead = {
       ...lead,
-      portalUrl: lead.portal?.token ? joinUrl(baseUrl, `/portal/${lead.portal.token}`) : null
+      portalUrl: lead.portal?.token ? joinUrl(resolvePublicBaseUrl(), `/portal/${lead.portal.token}`) : null
     };
     notifyCustomer("rescheduled", aliasLead, { baseUrl }).catch(() => {});
   }
@@ -2797,11 +2804,10 @@ async function handleApi(req, res, pathname) {
 
       // Return the portal URL too so the chat widget's thank-you screen can
       // surface it as the customer's "you're now a PJL customer" link.
-      // Use joinUrl rather than a template literal — PUBLIC_BASE_URL on
-      // Render can carry a trailing slash, which would otherwise produce
-      // a double-slash like "...com//portal/<token>".
+      // resolvePublicBaseUrl() handles trailing-slash stripping AND avoids
+      // the .onrender.com leak when PUBLIC_BASE_URL is unset.
       const portalToken = result.lead.portal?.token;
-      const portalUrl = portalToken ? joinUrl(baseUrl, `/portal/${portalToken}`) : null;
+      const portalUrl = portalToken ? joinUrl(resolvePublicBaseUrl(), `/portal/${portalToken}`) : null;
       return sendJson(res, 201, { ok: true, leadId: result.lead.id, portalUrl });
     } catch (error) {
       return sendJson(res, 400, { ok: false, errors: [error.message || "Unable to receive quote request."] });
