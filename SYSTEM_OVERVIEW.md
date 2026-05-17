@@ -629,6 +629,32 @@ npm start                        # http://127.0.0.1:4173
 HTML, and rebuilds the AI worker prompt. `npm run build:check` exits
 non-zero if anything's out of sync — useful as a pre-push gate.
 
+## QA tooling
+
+### UI audit captures
+
+`npm run audit:ui` captures every admin page at four viewport widths
+(iPhone 17 Pro Max 440×956, iPad portrait 820×1180, MacBook 14" 1512×982,
+desktop 1920×1080) for visual layout audit. Output lands in
+`audit/captures/` as `<page>__<viewport>.png` files with a self-contained
+gallery at `audit/captures/index.html`.
+
+Requirements:
+- `npm start` running on http://127.0.0.1:4173 (separate terminal)
+- `AUDIT_USER` env var set to an admin email in `server/data/users.json`
+- `AUDIT_PASS` env var set to that user's password
+- One-time setup: `npx playwright install chromium`
+
+Detail pages (property, project, work-order, invoice, material list,
+purchase order) auto-resolve a representative ID from the most recently
+updated record in the corresponding `server/data/<entity>.json` file.
+Empty entity files are skipped with a warning, not a hard failure.
+
+Run before merging any layout-touching change. Re-run after the merge to
+verify the fix and catch regressions. Prior captures are cleared at the
+start of every run so the folder always reflects the latest state.
+Playwright is `devDependencies` only — it does not ship to production.
+
 ## Glossary of IDs
 
 | Prefix | Entity | Example |

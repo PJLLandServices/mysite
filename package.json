@@ -23,7 +23,8 @@
     "migrate:customers:backfill": "node scripts/migrate-customers.js --backfill-only",
     "migrate:customers:test-list": "node scripts/migrate-customers.js --list-test-customers",
     "migrate:customers:renumber": "node scripts/migrate-customers.js --renumber",
-    "migrate:customers:renumber:apply": "node scripts/migrate-customers.js --renumber --apply"
+    "migrate:customers:renumber:apply": "node scripts/migrate-customers.js --renumber --apply",
+    "audit:ui": "node scripts/ui-audit.js"
   },
   "engines": {
     "node": ">=18"
@@ -33,6 +34,7 @@
     "pdfkit": "^0.17.2"
   },
   "devDependencies": {
+    "playwright": "^1.49.1",
     "sharp": "^0.34.5"
   }
 }

@@ -20,6 +20,8 @@ images/builder.zip
 
 # Audit artifacts
 responsive-audit/
+audit/captures/
+audit/.auth-state.json
 
 # Temp files
 *.tmp
