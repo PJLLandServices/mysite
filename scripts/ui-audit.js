@@ -59,6 +59,7 @@ const INDEX_PAGES = [
   ["chats", "/admin/chats"],
   ["suppliers", "/admin/suppliers"],
   ["parts-suppliers", "/admin/parts-suppliers"],
+  ["users", "/admin/users"],
   ["settings", "/admin/settings"],
 ];
 

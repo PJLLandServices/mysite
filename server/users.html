@@ -10,6 +10,84 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/crm/crm.css">
+  <style>
+    /* Users table: defaults are inline-styled for desktop; this block
+     * adds a mobile collapse so the 7-column row stops blowing the
+     * viewport horizontally on iPhone (was 649px wide on 440px viewport).
+     * Each row becomes a 4-row grid card: name + role on top, email
+     * below, last-login + status, then the action buttons wrapping. */
+    @media (max-width: 700px) {
+      #usersTable thead { display: none; }
+      #usersTable,
+      #usersTable tbody { display: block; width: 100%; }
+      #usersTable tr {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        column-gap: 12px;
+        row-gap: 4px;
+        padding: 12px 14px !important;
+        border-top: 1px solid #ECEAE0;
+      }
+      #usersTable td {
+        display: block;
+        padding: 0 !important;
+        border: 0;
+        min-width: 0;
+      }
+      /* Hide the bare ID column on mobile — admin doesn't act on it. */
+      #usersTable tbody td:nth-of-type(1) { display: none; }
+      /* Name (with optional "(you)" pill) — top-left, bold. */
+      #usersTable tbody td:nth-of-type(2) {
+        grid-column: 1;
+        grid-row: 1;
+        font-weight: 600;
+      }
+      /* Email — full-width row, truncate on overflow. */
+      #usersTable tbody td:nth-of-type(3) {
+        grid-column: 1 / -1;
+        grid-row: 2;
+        font-size: 13px;
+        color: #555;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      /* Role badge — top-right. */
+      #usersTable tbody td:nth-of-type(4) {
+        grid-column: 2;
+        grid-row: 1;
+        justify-self: end;
+      }
+      /* Last login — left of row 3. */
+      #usersTable tbody td:nth-of-type(5) {
+        grid-column: 1;
+        grid-row: 3;
+        font-size: 12px !important;
+        color: #777 !important;
+      }
+      /* Status badge — right of row 3. */
+      #usersTable tbody td:nth-of-type(6) {
+        grid-column: 2;
+        grid-row: 3;
+        justify-self: end;
+      }
+      /* Actions — full-width row 4, wrap buttons so all 4 stay visible. */
+      #usersTable tbody td:nth-of-type(7) {
+        grid-column: 1 / -1;
+        grid-row: 4;
+        text-align: left !important;
+        margin-top: 6px;
+        display: flex !important;
+        flex-wrap: wrap;
+        gap: 6px;
+      }
+      #usersTable tbody td:nth-of-type(7) button {
+        flex: 0 0 auto;
+        font-size: 12px;
+        padding: 6px 10px !important;
+      }
+    }
+  </style>
 </head>
 <body class="pjl-crm-body">
   <aside class="pjl-admin-nav" id="navMenu" aria-label="PJL CRM Navigation">

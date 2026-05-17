@@ -83,16 +83,83 @@
 .invoices-status--void { background: #EFEFE5; color: #777; text-decoration: line-through; }
 
 @media (max-width: 700px) {
+  /* Compact 3-row card per invoice / quote — replaces the prior label-
+   * stack pattern (which relied on data-label attrs that invoices.js
+   * never set, leaving every row with empty pseudo-labels and ~250px
+   * of vertical space). Target ~90px per row.
+   *
+   *   row 1:  invoice id          status
+   *   row 2:  customer name       total $
+   *   row 3:  address (truncated) date
+   *
+   * The bulk-checkbox <td> auto-injected by bulk-wiring.js is lifted
+   * out of the grid with absolute positioning so it doesn't steal a
+   * row. WO link column hides — that target is also reachable from
+   * the invoice detail page. */
   .invoices-table thead { display: none; }
-  .invoices-table tr { display: block; padding: 12px 0; border-bottom: 1px solid #E5E5DD; }
-  .invoices-table td { display: flex; justify-content: space-between; padding: 4px 14px; border: 0; }
-  .invoices-table td::before {
-    content: attr(data-label);
+  .invoices-table,
+  .invoices-table tbody { display: block; }
+  .invoices-table tr {
+    position: relative;
+    display: grid;
+    grid-template-columns: 1fr auto;
+    column-gap: 12px;
+    row-gap: 2px;
+    padding: 12px 14px;
+    border-bottom: 1px solid #E5E5DD;
+  }
+  .invoices-table tr:has(> .pjl-bulk-checkbox-cell) { padding-left: 40px; }
+  .invoices-table td {
+    display: block;
+    padding: 0;
+    border: 0;
+    min-width: 0;
+  }
+  .invoices-table td::before { content: none; }
+  /* bulk-wiring decorates with an extra leading <td>. When present it's
+   * always the first child; lift it out of the grid. */
+  .invoices-table tr > .pjl-bulk-checkbox-cell {
+    position: absolute;
+    left: 4px;
+    top: 50%;
+    transform: translateY(-50%);
+  }
+  /* nth-of-type counts the auto-injected bulk-checkbox <td> too — using
+   * nth-last-of-type instead keeps the mapping stable whether the
+   * checkbox cell is present or not. Data cells (last 6, in render
+   * order): 6=id, 5=customer, 4=wo link, 3=total, 2=status, 1=date. */
+  .invoices-table tbody td:nth-last-of-type(6) {
+    grid-column: 1; grid-row: 1;
     font-weight: 600;
+  }
+  .invoices-table tbody td:nth-last-of-type(5) {
+    grid-column: 1; grid-row: 2;
+    overflow: hidden;
+  }
+  .invoices-table tbody td:nth-last-of-type(5) strong { font-weight: 500; font-size: 14px; }
+  .invoices-table tbody td:nth-last-of-type(5) .invoices-row-sub {
+    display: block;
+    font-size: 12px;
     color: #777;
-    text-transform: uppercase;
-    font-size: 11px;
-    letter-spacing: 0.04em;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .invoices-table tbody td:nth-last-of-type(4) { display: none; }
+  .invoices-table tbody td:nth-last-of-type(3) {
+    grid-column: 2; grid-row: 2;
+    justify-self: end;
+    font-weight: 600;
+  }
+  .invoices-table tbody td:nth-last-of-type(2) {
+    grid-column: 2; grid-row: 1;
+    justify-self: end;
+  }
+  .invoices-table tbody td:nth-last-of-type(1) {
+    grid-column: 1 / -1; grid-row: 3;
+    justify-self: end;
+    font-size: 12px;
+    color: #777;
   }
 }
 
