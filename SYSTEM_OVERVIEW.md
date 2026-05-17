@@ -247,9 +247,25 @@ Leads / CRM
   POST   /api/quotes                             ← public lead intake
   GET    /api/quotes                             ← admin list
   GET    /api/quotes.csv                         ← export
-  GET    /api/contacts.vcf                       ← vCard export
   PATCH  /api/quotes/:id                         ← stage change, notes
   POST   /api/quotes/:id/convert-to-project      ← spawn project, re-parent attached lists
+
+Customers (CUST-NNNN — the person; source of truth for CURRENT contact info)
+  GET    /api/customers                          ← list, decorated with propertyCount + lastActivityAt
+  GET    /api/customer/:id                       ← single, decorated with properties + bookings + WOs + quotes + invoices
+  POST   /api/customer                           ← manual create from admin UI
+  PATCH  /api/customer/:id                       ← edit identity / status / notes
+  DELETE /api/customer/:id                       ← hard-delete; refuses if any entity still references this customer
+  POST   /api/customer/:id/merge                 ← absorb { secondaryId } INTO this customer, re-point every reference
+  POST   /api/customer/:id/communication         ← append a manual comm record
+  GET    /api/customer/:id/vcard                 ← VCARD 3.0 download for iPhone Contacts; records vcfDownloads[method=individual]
+  POST   /api/customers/vcards.vcf               ← body { ids: [...] }; concatenated VCARD batch; records vcfDownloads[method=bulk]
+                                                   with a shared batchId. Missing ids skipped silently; count exposed via
+                                                   X-Customers-Skipped response header.
+  Snapshots-vs-source-of-truth: transactional entities (WO / Quote / Invoice / Booking / Project) continue to snapshot
+  customerName/Email/Phone at sign time. Those snapshots remain the source of truth for AS-OF-SIGNING contact info
+  (legal records); the Customer entity is the source of truth for CURRENT contact info. Editing a Customer never
+  back-rewrites historical snapshots.
 
 Properties
   GET    /api/properties

@@ -105,6 +105,7 @@ function applyLinked(customer) {
   renderQuotes(customer.quotes || []);
   renderInvoices(customer.invoices || []);
   renderCommunications(customer.communicationRecords || []);
+  renderDownloads(customer.vcfDownloads || []);
   renderHistory(customer.history || []);
 
   document.getElementById("countProperties").textContent = (customer.properties || []).length;
@@ -113,6 +114,7 @@ function applyLinked(customer) {
   document.getElementById("countQuotes").textContent = (customer.quotes || []).length;
   document.getElementById("countInvoices").textContent = (customer.invoices || []).length;
   document.getElementById("countCommunications").textContent = (customer.communicationRecords || []).length;
+  document.getElementById("countDownloads").textContent = (customer.vcfDownloads || []).length;
   document.getElementById("countHistory").textContent = (customer.history || []).length;
 }
 
@@ -268,6 +270,26 @@ function renderHistory(history) {
   `).join("");
 }
 
+// vCard download history — every individual / bulk export of this
+// customer's contact card. Useful for spotting accidental double-imports
+// and for confirming "did Patrick already have this contact on his
+// phone?" without guessing.
+function renderDownloads(downloads) {
+  const el = document.getElementById("panelDownloads");
+  if (!downloads.length) {
+    el.innerHTML = `<p class="customer-tab-empty">No vCard downloads yet. Tap "⬇ Download vCard" in the summary to import this customer into iPhone Contacts.</p>`;
+    return;
+  }
+  const ordered = [...downloads].sort((a, b) => (b.downloadedAt || "").localeCompare(a.downloadedAt || ""));
+  el.innerHTML = ordered.map((d) => `
+    <div class="customer-vcf-row">
+      <span class="ts">${formatDateTime(d.downloadedAt)}</span>
+      <span><span class="method is-${esc(d.method || "individual")}">${esc(d.method || "individual")}</span></span>
+      <span class="batch">${d.batchId ? esc(d.batchId) : ""}</span>
+    </div>
+  `).join("");
+}
+
 // ---- Tabs ---------------------------------------------------------
 
 tabHeaders.forEach((header) => {
@@ -362,6 +384,54 @@ if (logoutButton) {
     location.href = "/login";
   });
 }
+
+// ---- vCard download ----------------------------------------------
+//
+// Fetch-and-blob path (not a plain <a download>) so the page can stay
+// loaded and reload the customer afterward to surface the new entry in
+// the Downloads tab without a manual refresh. Server side handles the
+// audit-log append on the GET endpoint, so a single round-trip covers
+// both download and recording.
+const downloadVcardBtn = document.getElementById("downloadVcardBtn");
+downloadVcardBtn?.addEventListener("click", async () => {
+  if (!customerId) return;
+  const originalText = downloadVcardBtn.textContent;
+  downloadVcardBtn.disabled = true;
+  downloadVcardBtn.textContent = "Preparing…";
+  try {
+    const res = await fetch(`/api/customer/${encodeURIComponent(customerId)}/vcard`, {
+      credentials: "same-origin"
+    });
+    if (!res.ok) {
+      let msg = `Download failed (HTTP ${res.status}).`;
+      try {
+        const body = await res.json();
+        if (body?.error) msg = body.error;
+      } catch {}
+      alert(msg);
+      return;
+    }
+    const cd = res.headers.get("Content-Disposition") || "";
+    const fnMatch = cd.match(/filename="([^"]+)"/);
+    const filename = fnMatch ? fnMatch[1] : `${customerId}.vcf`;
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    // Refresh so the new vcfDownloads[] entry appears in the tab.
+    await load();
+  } catch (err) {
+    alert(err?.message || "Network error.");
+  } finally {
+    downloadVcardBtn.disabled = false;
+    downloadVcardBtn.textContent = originalText;
+  }
+});
 
 // ---- Add property modal ------------------------------------------
 

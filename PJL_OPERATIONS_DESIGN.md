@@ -110,6 +110,8 @@ CUSTOMER FOLDER
 
 **Why customer is separate from property:** A customer is a person. A property is a place. Most customers have one property. Some have a home and a cottage. Some sell a house and the new owner inherits the system documentation. Separating them now prevents painful untangling later.
 
+**Implementation status (as of 2026-05-16):** The Customer Folder is live in v1 as `server/lib/customers.js` + `server/data/customers.json` with admin pages at `/admin/customers` and `/admin/customer/<id>`. Populated fields: name, spouseName, phone, spousePhone, email, spouseEmail, billingAddress, customerSince, source, status (`lead`/`active`/`inactive`/`lost`), quickbooksId, internalNotes, notificationPrefs, communicationRecords, vcfDownloads, history. The per-customer and bulk vCard download (`/api/customer/:id/vcard`, `POST /api/customers/vcards.vcf`) lets Patrick import customers into iPhone Contacts for Siri-based dialling from the truck; each download appends to vcfDownloads[] for audit. **Snapshots-vs-source-of-truth:** the Customer record is the source of truth for CURRENT contact info; transactional entities (WO / Quote / Invoice / Booking / Project) continue to snapshot name/email/phone at sign time and those snapshots are the source of truth for AS-OF-SIGNING info. Editing a Customer never back-rewrites historical snapshots.
+
 ### 2.2 Property Folder (the place)
 
 ```
@@ -173,6 +175,8 @@ When new info arrives, match before creating:
 - **Customer match:** email first → phone second → otherwise new
 - **Property match:** address
 - **Conflict case:** known property + unknown customer → flag for Patrick's review (could be the new owner of an old customer's house). Do NOT auto-merge.
+
+**Implementation:** wired into the public lead intake (`POST /api/quotes` → `resolveCustomerForLead`) and the property auto-link cascade (`properties.attachLead`). Match failure on a real intake is a soft-warn — the lead is still saved with `customerId=null` so a public-form submission never breaks if the customer lookup throws. `customers.findByIdentifier()` is the canonical entry point; bookings, magic-link auth, and the conflict detector all funnel through it.
 
 ### 3.2 "And then what" — cascades by door
 

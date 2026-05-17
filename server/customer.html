@@ -64,6 +64,13 @@
           <span class="customer-card-id" id="summaryId">—</span>
           <span class="customer-status" id="summaryStatus">lead</span>
 
+          <!-- Primary action — Patrick's reason for opening this page is
+               usually to import the customer into iPhone Contacts for
+               Siri-based dialling. Putting Download at the top of the
+               summary keeps it one-tap from the page load. -->
+          <button type="button" class="customer-download-btn" id="downloadVcardBtn">⬇ Download vCard</button>
+          <p class="customer-download-help" id="downloadVcardHelp" style="margin: 4px 0 0; font-size: 11px; color: var(--crm-muted, #666); text-align: center;">Import into iPhone Contacts for Siri calling.</p>
+
           <div class="customer-summary-field">
             <label>Name</label>
             <input type="text" data-field="name" maxlength="200">
@@ -146,6 +153,7 @@
             <button type="button" class="customer-tab-header" data-tab="quotes" role="tab">Quotes <span class="count" id="countQuotes">0</span></button>
             <button type="button" class="customer-tab-header" data-tab="invoices" role="tab">Invoices <span class="count" id="countInvoices">0</span></button>
             <button type="button" class="customer-tab-header" data-tab="communications" role="tab">Communications <span class="count" id="countCommunications">0</span></button>
+            <button type="button" class="customer-tab-header" data-tab="downloads" role="tab">Downloads <span class="count" id="countDownloads">0</span></button>
             <button type="button" class="customer-tab-header" data-tab="history" role="tab">History <span class="count" id="countHistory">0</span></button>
           </nav>
 
@@ -183,6 +191,9 @@
               <button type="button" class="pjl-btn pjl-btn-primary" id="commAdd" style="align-self: flex-start;">Add record</button>
             </div>
             <div id="panelCommunications"></div>
+          </div>
+          <div class="customer-tab-panel" data-tab="downloads" hidden>
+            <div id="panelDownloads"></div>
           </div>
           <div class="customer-tab-panel" data-tab="history" hidden>
             <div id="panelHistory"></div>

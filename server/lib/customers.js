@@ -115,6 +115,13 @@ function blankCustomer() {
       overrides: {}
     },
     communicationRecords: [],
+    // vCard download audit log — appended whenever Patrick downloads
+    // this customer's .vcf to import into iPhone Contacts. Useful so
+    // a re-download is visible (intentional new copy) and a duplicate
+    // import can be reasoned about. Entries: { downloadedAt, method,
+    // batchId } where method is "individual" | "bulk" and batchId is
+    // set on bulk downloads to group them.
+    vcfDownloads: [],
     history: [{ ts: created, action: "created", by: "system", note: "" }],
     createdAt: created,
     updatedAt: created
@@ -134,6 +141,7 @@ function hydrate(c) {
     communicationRecords: Array.isArray(c?.communicationRecords)
       ? c.communicationRecords
       : [],
+    vcfDownloads: Array.isArray(c?.vcfDownloads) ? c.vcfDownloads : [],
     history: Array.isArray(c?.history) ? c.history : []
   };
   // Re-normalize email/phone on read so legacy/imported records get
@@ -567,6 +575,158 @@ async function mergeCustomers(primaryId, secondaryId, { by = "admin", note = "" 
   };
 }
 
+// ---- vCard generation ------------------------------------------------
+//
+// Renders customer records as VCARD 3.0 for iPhone Contacts import. The
+// motivating use case is Siri callability from the truck — "Hey Siri,
+// call <FirstName> from PJL Land Services" matches on the FN + ORG
+// fields. Version 3.0 chosen for broadest iOS / macOS / iCloud
+// compatibility. Single ORG value (no parenthetical) so Siri's fuzzy
+// matcher doesn't get confused.
+//
+// Bulk export concatenates multiple BEGIN:VCARD…END:VCARD blocks into
+// one .vcf file — macOS Contacts and iCloud.com both accept this for
+// batch import. Each individual record's REV field uses the customer's
+// updatedAt timestamp so re-imports de-dupe correctly.
+
+const VCARD_ORG = "PJL Land Services";
+
+// Escape RFC 6350 special characters. Same shape as the lead-side
+// renderVCard() in server.js so output is consistent.
+function escapeVCardValue(value) {
+  return String(value == null ? "" : value)
+    .replace(/\\/g, "\\\\")
+    .replace(/\r?\n/g, "\\n")
+    .replace(/;/g, "\\;")
+    .replace(/,/g, "\\,");
+}
+
+// Split a single "name" string into family / given for the structured N
+// field. Heuristic: split on the LAST space — "Mary Anne Smith" becomes
+// given="Mary Anne", family="Smith". Empty input yields blanks; a single
+// token goes into `given` with family blank (iOS still imports cleanly).
+function splitName(fullName) {
+  const trimmed = String(fullName || "").trim();
+  if (!trimmed) return { given: "", family: "" };
+  const idx = trimmed.lastIndexOf(" ");
+  if (idx === -1) return { given: trimmed, family: "" };
+  return {
+    given: trimmed.slice(0, idx).trim(),
+    family: trimmed.slice(idx + 1).trim()
+  };
+}
+
+// Compact ISO 8601 for REV — "20260516T093000Z". Falls back to "now" if
+// the customer record lacks an updatedAt for some reason.
+function vcardRev(iso) {
+  const d = iso ? new Date(iso) : new Date();
+  const valid = !Number.isNaN(d.getTime()) ? d : new Date();
+  return valid.toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z");
+}
+
+// Resolve the address that lands in ADR. The spec says home address;
+// our schema has billingAddress (often null = "use primary property"),
+// so when billingAddress is blank we look at the first property in the
+// decorated customer (`customer.properties[0].address`). If neither is
+// present we omit ADR entirely — iOS displays the contact fine without
+// an address and the user can edit later.
+function resolveAddress(customer) {
+  if (customer?.billingAddress) return String(customer.billingAddress);
+  if (Array.isArray(customer?.properties) && customer.properties.length) {
+    return String(customer.properties[0].address || "");
+  }
+  return "";
+}
+
+// Build a single VCARD 3.0 block. CRLF line endings per RFC 6350. The
+// trailing CRLF after END:VCARD is required so concatenation produces a
+// valid multi-card .vcf without an extra separator.
+function toVCard(customer) {
+  if (!customer) return "";
+  const { given, family } = splitName(customer.name);
+  const fullName = customer.name || customer.id || "";
+  const address = resolveAddress(customer);
+
+  const lines = [
+    "BEGIN:VCARD",
+    "VERSION:3.0",
+    `N:${escapeVCardValue(family)};${escapeVCardValue(given)};;;`,
+    `FN:${escapeVCardValue(fullName)}`,
+    `ORG:${escapeVCardValue(VCARD_ORG)}`
+  ];
+  if (customer.phone) {
+    lines.push(`TEL;TYPE=CELL,VOICE:${escapeVCardValue(customer.phone)}`);
+  }
+  if (customer.email) {
+    lines.push(`EMAIL;TYPE=INTERNET:${escapeVCardValue(customer.email)}`);
+  }
+  if (address) {
+    // ADR slots: po-box;ext;street;locality;region;postal;country.
+    // v1 dumps the resolved address string into the street slot; iOS
+    // displays it as a single-line address. A future brief can parse
+    // structured locality / region / postal from Google Places.
+    lines.push(`ADR;TYPE=HOME:;;${escapeVCardValue(address)};;;;`);
+  }
+  lines.push(`REV:${vcardRev(customer.updatedAt)}`);
+  lines.push("END:VCARD");
+  return lines.join("\r\n") + "\r\n";
+}
+
+// Concatenate VCARDs back-to-back. Already-CRLF-terminated by toVCard(),
+// so no extra separator needed.
+function toVCardBatch(customerList) {
+  if (!Array.isArray(customerList) || !customerList.length) return "";
+  return customerList.map(toVCard).filter(Boolean).join("");
+}
+
+// Append a download audit entry. method = "individual" | "bulk".
+// batchId is supplied for bulk so a single click produces one shared id
+// across every customer in the selection. Does not throw on missing
+// customer — returns null so a logging failure can't break the
+// download itself.
+async function recordVcfDownload(id, method, batchId = null) {
+  const records = await readAll();
+  const idx = records.findIndex((c) => c.id === id);
+  if (idx === -1) return null;
+  const entry = {
+    downloadedAt: nowIso(),
+    method: method === "bulk" ? "bulk" : "individual",
+    batchId: method === "bulk" ? (batchId || null) : null
+  };
+  records[idx].vcfDownloads = [
+    ...(Array.isArray(records[idx].vcfDownloads) ? records[idx].vcfDownloads : []),
+    entry
+  ];
+  records[idx].updatedAt = nowIso();
+  await writeAll(records);
+  return records[idx];
+}
+
+// One-shot batch recorder for bulk downloads. Reads + writes
+// customers.json once even when many ids are involved — avoids the
+// N reads / N writes / last-write-wins race that a loop of individual
+// recordVcfDownload calls would create. Returns the count of records
+// that were actually updated (missing ids are silently skipped, same
+// shape as the bulk endpoint's overall skip behaviour).
+async function recordVcfDownloadBatch(ids, batchId) {
+  const idSet = new Set((Array.isArray(ids) ? ids : []).map(String));
+  if (!idSet.size) return 0;
+  const records = await readAll();
+  const ts = nowIso();
+  let updated = 0;
+  for (const r of records) {
+    if (!idSet.has(r.id)) continue;
+    r.vcfDownloads = [
+      ...(Array.isArray(r.vcfDownloads) ? r.vcfDownloads : []),
+      { downloadedAt: ts, method: "bulk", batchId: batchId || null }
+    ];
+    r.updatedAt = ts;
+    updated++;
+  }
+  if (updated) await writeAll(records);
+  return updated;
+}
+
 module.exports = {
   STATUSES,
   normalizeEmail,
@@ -581,5 +741,9 @@ module.exports = {
   findByPhone,
   findByIdentifier,
   addCommunication,
-  mergeCustomers
+  mergeCustomers,
+  toVCard,
+  toVCardBatch,
+  recordVcfDownload,
+  recordVcfDownloadBatch
 };

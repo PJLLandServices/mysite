@@ -86,6 +86,19 @@
     </main>
   </div><!-- /.pjl-app -->
 
+  <!-- Bulk download bar — appears whenever one or more customers are
+       checked in the list. POSTs the id list to /api/customers/vcards.vcf
+       and triggers the resulting .vcf as a single download (intended for
+       laptop → iCloud Contacts bulk import). Fixed-bottom positioning so
+       it's always reachable on long lists; main shell gets bottom padding
+       when the bar is shown so the last row isn't covered. -->
+  <div class="customers-bulkbar" id="customersBulkbar" hidden>
+    <span class="customers-bulkbar-count" id="customersBulkbarCount">0 selected</span>
+    <button type="button" class="customers-bulkbar-link" id="customersBulkbarSelectAll">Select all visible</button>
+    <button type="button" class="customers-bulkbar-link" id="customersBulkbarClear">Clear</button>
+    <button type="button" class="pjl-btn pjl-btn-primary" id="customersBulkbarDownload">⬇ Download 0 vCards</button>
+  </div>
+
   <div class="customer-modal" id="newCustomerModal" hidden role="dialog" aria-modal="true" aria-labelledby="newCustomerTitle">
     <div class="customer-modal-card">
       <h2 id="newCustomerTitle">New customer</h2>

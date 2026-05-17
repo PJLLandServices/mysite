@@ -640,7 +640,9 @@ Plus, at the **repo root**:
 | `/reset-password?t=<mt_id>` | Admin/tech password-reset landing page | Public (token IS the auth) |
 | `/portal/<token>` | Customer's private portal page | Public, but the URL contains a 24-character per-customer token derived from the lead ID — unguessable in practice |
 | `/crm/*` | CRM-only assets (admin.js, crm.css, login.css, etc.) | Public (no sensitive data — the lead data behind them IS gated) |
-| `/api/quotes` (GET), `/api/contacts*`, `/api/quotes/:id` | Lead-data APIs | **CRM session required** |
+| `/api/quotes` (GET), `/api/contacts`, `/api/quotes/:id` | Lead-data APIs | **CRM session required** |
+| `/admin/customers`, `/admin/customer/<id>` | Customer directory + per-customer profile (identity, properties, bookings, WO/quotes/invoices, communications, vCard downloads) | **CRM session required** |
+| `/api/customers*`, `/api/customer/*` | Customer CRUD + per-customer & bulk vCard download (`/api/customer/:id/vcard`, `POST /api/customers/vcards.vcf`) | **CRM session required** |
 | `/calendar/<token>.ics` | iPhone Calendar feed for Patrick's phone (Brief C). text/calendar response with confirmed bookings, -90d / +365d window, Toronto VTIMEZONE. | Public; the 32-hex token IS the auth. 404 on mismatch / disabled (no info leak). |
 
 The auth gate is in `needsAuth()` in `server.js`. The full source-of-truth for routing is `resolveStaticTarget()` in the same file.
@@ -943,11 +945,12 @@ The use of Cloudflare Turnstile + the 30-day IP retention are disclosed in `priv
 1. **Never commit `.env` or `server/data/`.** Both are in `.gitignore`. If `.env` is ever pushed to GitHub, **rotate every credential in it immediately** (Gmail app password, Twilio auth token).
 2. **Never disable HTTPS** in production. Render does this for free; don't override it.
 3. **Never log raw passwords** anywhere. The login flow uses scrypt + salt; if you change auth code, preserve that.
-4. **Never expose `/api/quotes/:id` GET, `/api/contacts*`, `/api/quotes.csv`, or `/admin` without authentication.** Those endpoints contain customer PII (names, phones, addresses). The auth gate in `needsAuth()` is the only thing protecting them — don't punch holes in it.
+4. **Never expose `/api/quotes/:id` GET, `/api/contacts`, `/api/quotes.csv`, `/api/customers*`, `/api/customer/*`, or `/admin` without authentication.** Those endpoints contain customer PII (names, phones, addresses) and per-customer vCard downloads. The auth gate in `needsAuth()` is the only thing protecting them — don't punch holes in it.
 5. **Never edit `users.json` or `auth.json` by hand.** Use `npm run create-user` to add an account, `/admin/users` to manage existing ones, and the `/reset-password` flow to rotate a credential.
 6. **Never reintroduce the single-password pattern in `auth.json`.** Post-migration, that file holds the session secret and nothing else. Restoring `passwordHash` / `salt` fields would silently break per-user identity and let a tech log in as Patrick.
 7. **Never log magic-token IDs or session-cookie values.** Both are credentials. Log "sent magic-link to user X" — never the link itself. The verification endpoints are deliberately silent on the token contents in error responses.
 8. **Never set a CRM account password to anything you use elsewhere.** Hashed at rest, but treat it like any production credential.
+9. **Never migrate the portal token from lead-derived to customer-derived.** `/portal/<token>` URLs are stable because the token is derived from the lead ID (`portalTokenForId(lead.id)`). Re-keying to `customer.id` would invalidate every active customer portal link in the wild. If you ever genuinely need to consolidate by customer, generate new tokens, keep the lead-derived tokens as permanent aliases, and roll the change out gradually.
 
 ---
 

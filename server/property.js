@@ -560,9 +560,42 @@ createWoVisit?.addEventListener("click",  () => createFieldWoFromButton("service
 
 // ---- Form populate + save ----------------------------------------
 
+// Customer identity for the property form. Source of truth is the
+// Customer record (CUST-NNNN) reached via property.customerId; the
+// embedded customerName/Email/Phone are the legacy snapshot used as
+// the display fallback (and the link target) when customerId hasn't
+// been backfilled yet. Edit link points at the customer profile when
+// linked, otherwise the customer index where Patrick can search/create.
+function populateCustomerDisplay(property) {
+  const nameEl = document.getElementById("propertyCustomerDisplayName");
+  const metaEl = document.getElementById("propertyCustomerDisplayMeta");
+  const linkEl = document.getElementById("propertyCustomerEditLink");
+  const fallbackEl = document.getElementById("propertyCustomerFallbackNote");
+  if (!nameEl || !metaEl || !linkEl || !fallbackEl) return;
+
+  const name = property.customerName || "(no name on file)";
+  const metaParts = [property.customerEmail, property.customerPhone].filter(Boolean);
+  nameEl.textContent = name;
+  metaEl.textContent = metaParts.length ? metaParts.join(" · ") : "—";
+
+  if (property.customerId) {
+    linkEl.href = `/admin/customer/${encodeURIComponent(property.customerId)}`;
+    linkEl.textContent = "Edit customer →";
+    fallbackEl.hidden = true;
+  } else {
+    linkEl.href = "/admin/customers";
+    linkEl.textContent = "Open Customers →";
+    fallbackEl.hidden = false;
+  }
+}
+
 function populateForm(property) {
-  propertyForm.elements.customerName.value = property.customerName || "";
-  propertyForm.elements.customerPhone.value = property.customerPhone || "";
+  // Customer identity is now read-only in this section — populate the
+  // display block instead of input fields. Source of truth: the
+  // Customer record (CUST-NNNN) reached via property.customerId; the
+  // embedded customerName/Email/Phone are the legacy snapshot used as
+  // the display fallback when customerId hasn't been backfilled.
+  populateCustomerDisplay(property);
   propertyForm.elements.address.value = property.address || "";
   const sys = property.system || {};
   propertyForm.elements.controllerLocation.value = sys.controllerLocation || "";
@@ -597,9 +630,11 @@ function collectForm() {
     }))
     .filter((b) => b.location);
 
+  // Customer identity (name / phone) is owned by the Customer record,
+  // not by this page — omit those fields from the patch. The lib's
+  // shallow merge preserves existing snapshot values when fields are
+  // absent, so omission is safe.
   return {
-    customerName: propertyForm.elements.customerName.value.trim(),
-    customerPhone: propertyForm.elements.customerPhone.value.trim(),
     address: propertyForm.elements.address.value.trim(),
     system: {
       controllerLocation: propertyForm.elements.controllerLocation.value.trim(),

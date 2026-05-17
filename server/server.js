@@ -579,7 +579,7 @@ function needsAuth(method, pathname) {
   if (pathname === "/admin/purchase-orders" || pathname === "/admin/purchase-orders/") return "user";
   if (/^\/admin\/purchase-order\/[^/]+\/?$/.test(pathname)) return "user";
   if (pathname === "/api/quotes" && method === "GET") return "user";
-  if (pathname === "/api/quotes.csv" || pathname === "/api/contacts" || pathname === "/api/contacts.vcf") return "user";
+  if (pathname === "/api/quotes.csv" || pathname === "/api/contacts") return "user";
   if (/^\/api\/quotes\/[^/]+/.test(pathname)) return "user";
   // Chat transcripts: POST is public (customer's chat upserts its own transcript).
   // GET endpoints (list + detail) are admin-only.
@@ -2865,19 +2865,6 @@ async function handleApi(req, res, pathname) {
     return sendJson(res, 200, { ok: true, contacts });
   }
 
-  if (req.method === "GET" && pathname === "/api/contacts.vcf") {
-    const leads = await readLeads();
-    const contacts = leads.map((lead) => contactRecordForLead(lead, req)).filter((contact) => contact.ready);
-    if (!contacts.length) return sendJson(res, 422, { ok: false, errors: ["No contact-ready leads are available for vCard export."] });
-    res.writeHead(200, {
-      "content-type": "text/vcard; charset=utf-8",
-      "content-disposition": "attachment; filename=\"pjl-new-contacts.vcf\"",
-      "cache-control": "no-store"
-    });
-    res.end(contacts.map(renderVCard).join(""));
-    return;
-  }
-
   const contactMatch = pathname.match(/^\/api\/quotes\/([^/]+)\/contact(\.vcf)?$/);
   if (contactMatch && req.method === "GET") {
     const leadId = decodeURIComponent(contactMatch[1]);
@@ -4182,6 +4169,83 @@ async function handleApi(req, res, pathname) {
       return sendJson(res, 200, { ok: true, customer: updated });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't add record."] });
+    }
+  }
+
+  // vCard download — single customer. Renders VCARD 3.0 keyed on the
+  // customer record (not the lead). The motivating use case is iPhone
+  // Contacts import so Patrick can call customers from the truck via
+  // Siri — "Hey Siri, call <FirstName> from PJL Land Services". Each
+  // download is appended to the customer's vcfDownloads[] audit log.
+  const customerVcardMatch = pathname.match(/^\/api\/customer\/([^/]+)\/vcard$/);
+  if (customerVcardMatch && req.method === "GET") {
+    const id = decodeURIComponent(customerVcardMatch[1]);
+    const customer = await customers.get(id, { withProperties: true });
+    if (!customer) return sendJson(res, 404, { ok: false, error: "Customer not found." });
+    const vcard = customers.toVCard(customer);
+    try {
+      await customers.recordVcfDownload(id, "individual");
+    } catch (err) {
+      console.warn("[vcard] couldn't record individual download for", id, err?.message);
+    }
+    const safeName = String(customer.name || customer.id)
+      .replace(/[^a-zA-Z0-9_-]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 60) || "customer";
+    res.writeHead(200, {
+      "content-type": "text/vcard; charset=utf-8",
+      "content-disposition": `attachment; filename="${safeName}-PJL.vcf"`,
+      "cache-control": "no-store"
+    });
+    res.end(vcard);
+    return;
+  }
+
+  // vCard download — bulk. Body: { ids: ["CUST-…", …] }. Returns a
+  // single .vcf concatenating all matching customers; missing / deleted
+  // ids are silently skipped (count exposed via X-Customers-Skipped).
+  // POST instead of GET because the id list can be long and id arrays
+  // in query strings are ugly. Each downloaded customer gets a vcfDownloads[]
+  // entry sharing one batchId so a bulk import is auditable as one
+  // event. Recording happens in a single read+write batch to avoid the
+  // last-write-wins race a parallel per-customer write would create.
+  if (req.method === "POST" && pathname === "/api/customers/vcards.vcf") {
+    try {
+      const payload = await parseRequestBody(req);
+      const rawIds = Array.isArray(payload?.ids) ? payload.ids : [];
+      const ids = rawIds.map((v) => String(v == null ? "" : v).trim()).filter(Boolean);
+      if (!ids.length) {
+        return sendJson(res, 400, { ok: false, error: "ids array required" });
+      }
+      const batchId = `BULK-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
+      const found = [];
+      let skipped = 0;
+      for (const id of ids) {
+        const c = await customers.get(id, { withProperties: true });
+        if (c) found.push(c); else skipped += 1;
+      }
+      if (!found.length) {
+        return sendJson(res, 404, { ok: false, error: "No matching customers found." });
+      }
+      const vcardBatch = customers.toVCardBatch(found);
+      try {
+        await customers.recordVcfDownloadBatch(found.map((c) => c.id), batchId);
+      } catch (err) {
+        console.warn("[vcard-bulk] batch record-download failed:", err?.message);
+      }
+      const today = new Date().toISOString().slice(0, 10);
+      res.writeHead(200, {
+        "content-type": "text/vcard; charset=utf-8",
+        "content-disposition": `attachment; filename="pjl-customers-${today}.vcf"`,
+        "cache-control": "no-store",
+        "x-customers-skipped": String(skipped),
+        "x-customers-batch-id": batchId
+      });
+      res.end(vcardBatch);
+      return;
+    } catch (err) {
+      console.warn("[vcard-bulk] error:", err?.message || err);
+      return sendJson(res, 400, { ok: false, error: err.message || "Couldn't generate vCards." });
     }
   }
 

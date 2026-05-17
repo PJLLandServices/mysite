@@ -80,17 +80,18 @@
     <form class="property-form" id="propertyForm" hidden>
       <section class="property-section">
         <h2>Customer</h2>
-        <div class="property-row">
-          <label>
-            <span>Customer name</span>
-            <input type="text" name="customerName" autocomplete="off">
-          </label>
-          <label>
-            <span>Customer phone</span>
-            <input type="tel" name="customerPhone" autocomplete="off">
-          </label>
+        <!-- Customer identity (name / phone / email) is no longer edited
+             from here. The Customer record is the source of truth for
+             CURRENT contact info; transactional snapshots on WO / Quote
+             / Invoice / Booking / Project remain frozen at sign time.
+             Use the Edit link to update the canonical record. -->
+        <div class="property-customer-display" id="propertyCustomerDisplay" style="display: grid; gap: 4px; padding: 12px 14px; background: #fafaf7; border: 1px solid var(--crm-border, #d4d2cb); border-radius: 8px;">
+          <p style="margin: 0; font-size: 15px; font-weight: 600;" id="propertyCustomerDisplayName">—</p>
+          <p style="margin: 0; font-size: 13px; color: var(--crm-muted, #555);" id="propertyCustomerDisplayMeta">—</p>
+          <p style="margin: 4px 0 0;"><a id="propertyCustomerEditLink" href="/admin/customers" style="font-size: 12px; font-weight: 600; color: #0F1F14; text-decoration: underline;">Edit customer →</a></p>
         </div>
-        <label class="property-full">
+        <p id="propertyCustomerFallbackNote" hidden style="margin: 6px 0 0; font-size: 12px; color: var(--crm-muted, #888); font-style: italic;">No customer record linked yet — using the legacy contact snapshot from before the Customers folder existed. <a href="/admin/customers">Open Customers</a> to link or create one.</p>
+        <label class="property-full" style="margin-top: 14px;">
           <span>Property address</span>
           <input class="js-address-autocomplete" type="text" name="address" autocomplete="off">
         </label>
