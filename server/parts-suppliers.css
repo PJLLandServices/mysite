@@ -139,22 +139,60 @@
    rows: each part renders as a stacked block instead of a true table.
    Touch targets stay >= 40px for the supplier selector. */
 @media (max-width: 720px) {
+  /* Mobile catalog rows: 3-row grid card instead of the 6-cell stack.
+   * Previously each <tr> went `display: block` and every <td> stacked
+   * vertically — six lines per part, ~260px tall, multiplied across
+   * 129 SKUs = a ~34,000px page on iPhone. The grid drops the page
+   * height by ~60% and keeps every interactive control (price edit,
+   * supplier select, kebab) on the same card with no horizontal scroll.
+   * Category column hides — it's redundant with the category filter
+   * dropdown in the toolbar above. */
   .ps-table thead { display: none; }
-  .ps-table, .ps-table tbody, .ps-table tr, .ps-table td {
-    display: block;
-    width: 100%;
-  }
+  .ps-table, .ps-table tbody { display: block; width: 100%; }
+
   .ps-table tr {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    grid-template-areas:
+      "sku     price"
+      "desc    desc"
+      "sup     actions";
+    column-gap: 10px;
+    row-gap: 4px;
     padding: 10px 14px;
     border-bottom: 1px solid #F0EEE3;
+    width: 100%;
   }
   .ps-table tr.is-missing { border-left: 3px solid #E07B24; }
+
   .ps-table td {
-    padding: 4px 0;
+    display: block;
+    padding: 0;
     border-bottom: none;
+    width: auto;
   }
-  .ps-table td.ps-supplier-cell { padding-top: 8px; }
-  .ps-desc { min-width: 0; }
+  /* Map cells to grid areas. Column order matches renderRow():
+   * 1=SKU, 2=Description, 3=Category, 4=Price, 5=Supplier, 6=Actions. */
+  .ps-table td:nth-child(1) { grid-area: sku;     align-self: center; }
+  .ps-table td:nth-child(2) { grid-area: desc;    min-width: 0; }
+  .ps-table td:nth-child(3) { display: none; }
+  .ps-table td:nth-child(4) { grid-area: price;   justify-self: end; align-self: center; }
+  .ps-table td:nth-child(5) { grid-area: sup;     min-width: 0; padding-top: 4px; }
+  .ps-table td:nth-child(6) { grid-area: actions; justify-self: end; align-self: center; }
+
+  /* Description truncates to a single line — full text on tap-through. */
+  .ps-table .ps-desc { min-width: 0; }
+  .ps-table .ps-desc-text {
+    display: -webkit-box;
+    -webkit-line-clamp: 1;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    word-break: break-word;
+  }
+  /* Supplier select fills its grid cell so the dropdown affordance is
+   * obvious even when no supplier is assigned. */
+  .ps-table .ps-supplier-select { width: 100%; }
 }
 
 /* ============================================================
