@@ -11041,9 +11041,16 @@ async function renderPortalWithOg(req, res, pathname, url) {
     const seasonRaw = String(url.searchParams.get("season") || "").trim().toLowerCase();
     const season = (seasonRaw === "spring" || seasonRaw === "fall") ? seasonRaw : null;
 
-    // Lookup. The same pattern used everywhere in this file for
-    // portal-token resolution: explicit lead.portal.token wins,
-    // otherwise the deterministic per-id derivative.
+    // Lookup. Two parallel token namespaces:
+    //   1. Lead tokens — every lead has `portal.token` (explicit or
+    //      derived via portalTokenForId(lead.id)). Existing flow,
+    //      checked first.
+    //   2. Property tokens — every property has a deterministic
+    //      token via portalTokenForId(property.id). This is the
+    //      seasonal-outreach link format (see outreach.js
+    //      resolvePortalToken). Checked as a fallback so outreach
+    //      previews work for properties that have no linked lead
+    //      with a token (xlsx imports, legacy records).
     let firstName = "there";
     let property = null;
     try {
@@ -11051,6 +11058,10 @@ async function renderPortalWithOg(req, res, pathname, url) {
       const lead = leads.find((l) => (l.portal?.token || portalTokenForId(l.id)) === token);
       if (lead && lead.propertyId) {
         property = await properties.get(lead.propertyId);
+      } else if (!lead) {
+        // Lead miss — try the property namespace.
+        const allProperties = await properties.list();
+        property = allProperties.find((p) => p.id && portalTokenForId(p.id) === token) || null;
       }
       // Prefer the property's snapshot customerName (the name-
       // invariant per §3.9 guarantees this is non-blank for live

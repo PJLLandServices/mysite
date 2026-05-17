@@ -27,17 +27,12 @@
 //     level for v1)
 
 const crypto = require("node:crypto");
-const fs = require("node:fs/promises");
-const fsSync = require("node:fs");
-const path = require("node:path");
 
 const properties = require("./properties");
 const bookings = require("./bookings");
 const settings = require("./settings");
 const notify = require("./notify-customer");
 const { resolvePublicBaseUrl } = require("./public-base-url");
-
-const LEADS_FILE = path.join(__dirname, "..", "data", "leads.json");
 
 // ---- Constants (brief §3.6 + §3.7) ---------------------------------
 
@@ -138,38 +133,26 @@ function isInSeasonWindow(iso, season, year) {
   return true;
 }
 
-// Read leads.json once per call. PJL volume makes this cheap;
-// caching across calls would require cache-invalidation logic
-// that's not worth the complexity at this scale.
-async function readLeads() {
-  try {
-    if (!fsSync.existsSync(LEADS_FILE)) return [];
-    const raw = await fs.readFile(LEADS_FILE, "utf8");
-    const parsed = JSON.parse(raw || "[]");
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
-}
-
-// Resolve the portal token for a property by walking its leadIds.
-// Returns the most-recent lead's portal.token (or null if no
-// leadId chain reaches a token). The most-recent rule lines up
-// with what the customer expects when they tap the link — they
-// land in the same portal session that's been showing their most
-// recent project.
+// Resolve the portal token for a property. Returns a deterministic
+// per-property token derived from the property id — same SHA-256
+// "pjl-portal:<id>" → base64url[0..24] scheme the lead system uses
+// (server.js portalTokenForId). Every property has a usable token
+// the moment it exists, regardless of whether a lead has been
+// attached or whether that lead has a `portal.token` field.
 //
-// All leads carry a portal.token in current intake flow, but
-// legacy / partial-import records may not, hence the filter.
-async function resolvePortalToken(property, leadsCache = null) {
-  if (!property) return null;
-  const leadIds = Array.isArray(property.leadIds) ? property.leadIds : [];
-  if (!leadIds.length) return null;
-  const leads = leadsCache || await readLeads();
-  const matched = leads.filter((l) => leadIds.includes(l.id) && l.portal?.token);
-  if (!matched.length) return null;
-  matched.sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
-  return matched[0].portal.token;
+// Round 1 walked property.leadIds[] looking for a tokened lead;
+// that left every xlsx-imported / legacy-pre-lead-intake property
+// unsendable. Patrick's intent (brief + clarification): every
+// property is eligible by default, the operator deselects.
+//
+// `leadsCache` arg kept for back-compat with callers; ignored.
+function resolvePortalToken(property, _leadsCache = null) {
+  if (!property || !property.id) return null;
+  return crypto
+    .createHash("sha256")
+    .update(`pjl-portal:${property.id}`)
+    .digest("base64url")
+    .slice(0, 24);
 }
 
 // Build the customer-facing portal URL with the season hint that
@@ -244,7 +227,6 @@ async function listCandidates({ season, year, filter = "all" } = {}) {
   const seasonKey = properties.seasonKey(year, season);
 
   const allProperties = await properties.list();  // excludes deleted+archived
-  const leadsCache = await readLeads();
 
   const eligible = allProperties.filter((p) => p.seasonalEligibility?.[eligibilityKey] !== false);
 
@@ -260,7 +242,7 @@ async function listCandidates({ season, year, filter = "all" } = {}) {
     const emailOn = p.commPrefs?.seasonalRemindersEmail !== false;
     const optedOutSeason = seasonState.optOutThisSeason === true;
     const optedOutAll = !smsOn && !emailOn;
-    const portalToken = await resolvePortalToken(p, leadsCache);
+    const portalToken = resolvePortalToken(p);
     return {
       propertyId: p.id,
       code: p.code || "",
@@ -442,8 +424,6 @@ async function sendBulk({
   const result = { batchId, sent: 0, skipped: [], errors: [] };
 
   try {
-    const leadsCache = await readLeads();
-
     for (const propertyId of propertyIds) {
       const property = await properties.get(propertyId);
       if (!property) {
@@ -488,11 +468,14 @@ async function sendBulk({
         continue;
       }
 
-      // Portal token resolution. No token → no link to send,
-      // no value to the recipient, skip.
-      const portalToken = await resolvePortalToken(property, leadsCache);
+      // Portal token — deterministic SHA-256 of property.id. Every
+      // property has a usable token the moment it's created, so a
+      // missing token here would mean a corrupted property record.
+      const portalToken = resolvePortalToken(property);
       if (!portalToken) {
-        result.skipped.push({ propertyId, reason: "no_portal_token" });
+        // Defensive — would only fire on a property with no id,
+        // which shouldn't be possible through the lib.
+        result.skipped.push({ propertyId, reason: "no_property_id" });
         continue;
       }
 
@@ -679,8 +662,7 @@ async function sendTest({
     if (property) {
       firstName = firstNameOf(property.customerName);
       propertyAddress = streetAddressOf(property.address) || propertyAddress;
-      const leadsCache = await readLeads();
-      const token = await resolvePortalToken(property, leadsCache);
+      const token = resolvePortalToken(property);
       if (token) portalLink = buildPortalLink(token, season);
     }
   }
