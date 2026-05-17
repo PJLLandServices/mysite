@@ -226,7 +226,19 @@ __PJL_PROTECT_26__
 @media (prefers-reduced-motion: reduce) {
   .field-tile__video { display: none; }
   .field-tile { background: linear-gradient(135deg, var(--green) 0%, var(--green-mid) 100%); }
-}</style>
+}
+
+/* TEMP 2026-05-16 — Hero action row (orange Google CTA + tel: phone link)
+   plus a brighter "pop" gradient + soft glow scoped to the temp hero's
+   <em class="pop">Google.</em>, so the original em rule (used by the
+   restored hero's "PJL.") is untouched.
+   Delete this block when the TEMP HERO is removed and the original hero
+   is restored. See: reviews-page-temp-strip-brief.md */
+.reviews-hero-actions{display:flex;flex-wrap:wrap;align-items:center;gap:16px 24px;margin-top:8px;}
+.reviews-hero-phone{color:rgba(255,255,255,.88);font-weight:600;border-bottom:1px solid rgba(255,255,255,.30);padding-bottom:3px;transition:color .2s ease,border-color .2s ease;}
+.reviews-hero-phone:hover{color:var(--amber-light);border-bottom-color:var(--amber-light);}
+.reviews-hero h1 em.pop{background:linear-gradient(135deg,#FFE3B0 0%,#FFC270 28%,#F59B4A 60%,#E07B24 100%);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;filter:drop-shadow(0 0 22px rgba(245,155,74,.42)) drop-shadow(0 2px 6px rgba(224,123,36,.45));}
+@media(max-width:480px){.reviews-hero-actions{gap:14px 18px;}.reviews-hero-actions .aggregate-cta{width:100%;justify-content:center;}}</style>
 <script type="application/ld+json">
 {
   "@context": "https://schema.org",
@@ -252,12 +264,25 @@ __PJL_PROTECT_26__
 </div>
 <!-- @@PJL:nav-END -->
 
-<!-- Editor banner — REMOVE this <div> entirely once real reviews are pasted in -->
+<!-- TEMP REMOVED 2026-05-16 — Editor banner stripped while real Google reviews
+     are being sourced (the banner itself references "placeholders" and would
+     be orphaned with the review cards commented out). Restore this block
+     alongside the stats band, aggregate card, and review grid below.
+     See: reviews-page-temp-strip-brief.md -->
+<!--
 <div class="editor-banner">
   ⚠️ <strong>Editor note:</strong> The reviews below are <strong>placeholders</strong>. Replace each <code>.review-card.placeholder</code> with a real customer review (delete the <code>.placeholder</code> class), then uncomment the JSON-LD schema in <code>&lt;head&gt;</code>. Remove this banner when done.
 </div>
+-->
 
-<!-- Hero -->
+<!-- TEMP REPLACED 2026-05-16 — Original hero copy promised "real reviews from
+     real properties" with a feed visible below. While the placeholder review
+     cards are commented out, that promise can't be kept, so the hero copy +
+     CTAs below have been rewritten to honestly point visitors at Google.
+     Restore the ORIGINAL hero (preserved as the comment immediately below)
+     once real Google reviews are sourced, and delete the TEMP HERO block
+     that follows it. See: reviews-page-temp-strip-brief.md -->
+<!--
 <section class="reviews-hero">
   <div class="container reviews-hero-inner">
     <div class="breadcrumbs"><a href="index.html">Home</a><span>›</span><span>Reviews</span></div>
@@ -266,8 +291,31 @@ __PJL_PROTECT_26__
     <p>Real reviews from real properties — Google, Facebook, and direct customer testimonials. We post the good and the constructive. We never edit, never filter, and we never write our own.</p>
   </div>
 </section>
+-->
 
-<!-- Stats band — placeholder numbers will become real once Patrick confirms -->
+<!-- TEMP HERO 2026-05-16 — Delete this whole <section> when restoring the
+     original hero above. See: reviews-page-temp-strip-brief.md -->
+<section class="reviews-hero">
+  <div class="container reviews-hero-inner">
+    <div class="breadcrumbs"><a href="index.html">Home</a><span>›</span><span>Reviews</span></div>
+    <span class="reviews-eyebrow">Reviews · Live on Google</span>
+    <h1>Reviews live on <em class="pop">Google.</em></h1>
+    <p>Our reviews live on our Google Business profile — verified, public, and unfiltered. Read what neighbours across Newmarket, Aurora, Richmond Hill, and the rest of York Region have said, or leave your own.</p>
+    <div class="reviews-hero-actions">
+      <a href="https://g.page/r/CYxgaMP9EmcbEAI/review" target="_blank" rel="noopener" class="aggregate-cta">Read reviews on Google →</a>
+      <a href="tel:+19059600181" class="reviews-hero-phone">Or call (905) 960-0181</a>
+    </div>
+  </div>
+</section>
+
+<!-- TEMP REMOVED 2026-05-16 — Stats band stripped while real Google reviews
+     are being sourced. Contains [X.X] and [XXX] placeholder values. Note:
+     "10+ years" and "100% local crew" are real, but they're inside the
+     same 4-cell grid as the placeholders and would leave a lopsided
+     strip if pulled out alone. Restore the whole strip together once
+     real review numbers replace the placeholders.
+     See: reviews-page-temp-strip-brief.md -->
+<!--
 <section class="review-stats">
   <div class="container">
     <div class="review-stats-grid">
@@ -291,8 +339,18 @@ __PJL_PROTECT_26__
     </div>
   </div>
 </section>
+-->
 
-<!-- Reviews grid -->
+<!-- TEMP REMOVED 2026-05-16 — Aggregate [4.9]/5 card + "Recent reviews"
+     heading + grid of 6 placeholder review cards. Stripped while real
+     Google reviews are being sourced. Note: the 6 inner placeholder-
+     review label-comments that originally sat above each card were
+     removed, because HTML does not allow nested comments. The card
+     markup itself is preserved verbatim. Restore by uncommenting this
+     block, then replacing the [4.9], [XXX], [Customer Name], and
+     [REPLACE THIS WITH A REAL REVIEW] tokens with real values.
+     See: reviews-page-temp-strip-brief.md -->
+<!--
 <section class="reviews-section">
   <div class="container" style="max-width:1080px;">
 
@@ -310,7 +368,6 @@ __PJL_PROTECT_26__
 
     <div class="reviews-grid">
 
-      <!-- PLACEHOLDER REVIEW 1 — replace with a real one -->
       <div class="review-card placeholder">
         <div class="review-stars">★ ★ ★ ★ ★</div>
         <p class="review-body">"[REPLACE THIS WITH A REAL REVIEW] Patrick installed a 6-zone Hydrawise system at our Newmarket property in May. Honest pricing, on time, no upsell. Came back to fine-tune coverage a week later — included in the quote, no questions asked. Would recommend to any neighbour."</p>
@@ -324,7 +381,6 @@ __PJL_PROTECT_26__
         </div>
       </div>
 
-      <!-- PLACEHOLDER REVIEW 2 -->
       <div class="review-card placeholder">
         <div class="review-stars">★ ★ ★ ★ ★</div>
         <p class="review-body">"[REPLACE THIS WITH A REAL REVIEW] Called PJL on a Saturday morning when one of our zones wouldn't shut off. Patrick was at the house by noon, diagnosed a stuck valve, fixed it for the quoted $180. Best repair experience we've had in 12 years of owning the system."</p>
@@ -338,7 +394,6 @@ __PJL_PROTECT_26__
         </div>
       </div>
 
-      <!-- PLACEHOLDER REVIEW 3 -->
       <div class="review-card placeholder">
         <div class="review-stars">★ ★ ★ ★ ★</div>
         <p class="review-body">"[REPLACE THIS WITH A REAL REVIEW] We had PJL design and install our landscape lighting after seeing their work at a neighbour's house. The dusk consultation was free, the design was thoughtful, and the install crew was respectful of our property. Three years in and every fixture still looks brand new."</p>
@@ -352,7 +407,6 @@ __PJL_PROTECT_26__
         </div>
       </div>
 
-      <!-- PLACEHOLDER REVIEW 4 -->
       <div class="review-card placeholder">
         <div class="review-stars">★ ★ ★ ★ ★</div>
         <p class="review-body">"[REPLACE THIS WITH A REAL REVIEW] Patrick has been doing our spring openings and fall winterization for five years now. Always on time, always reasonable pricing. When our 12-year-old controller finally died last spring, he installed a Hydrawise and walked us through the app — water bill dropped 30% over the season."</p>
@@ -366,7 +420,6 @@ __PJL_PROTECT_26__
         </div>
       </div>
 
-      <!-- PLACEHOLDER REVIEW 5 -->
       <div class="review-card placeholder">
         <div class="review-stars">★ ★ ★ ★ ★</div>
         <p class="review-body">"[REPLACE THIS WITH A REAL REVIEW] We were renovating our backyard and PJL came out for a pre-renovation walk-through before our landscaper started. Marked every sprinkler line, gave us a written plan, then came back after the patio was done to add drip in the new beds. Saved us thousands in 'emergency' irrigation work."</p>
@@ -380,7 +433,6 @@ __PJL_PROTECT_26__
         </div>
       </div>
 
-      <!-- PLACEHOLDER REVIEW 6 -->
       <div class="review-card placeholder">
         <div class="review-stars">★ ★ ★ ★ ★</div>
         <p class="review-body">"[REPLACE THIS WITH A REAL REVIEW] After getting three quotes for a new sprinkler system, PJL was the only one that did a proper soil and pressure test before quoting. The price was middle of the pack but the work and design quality were significantly better. Three-year warranty has been honoured every time we've had a question."</p>
@@ -398,6 +450,7 @@ __PJL_PROTECT_26__
 
   </div>
 </section>
+-->
 
 <!-- Moments from the field — happy customers (and their dogs) -->
 <section class="section" style="padding-top:48px; padding-bottom:48px;">
