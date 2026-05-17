@@ -2899,8 +2899,57 @@ async function handleApi(req, res, pathname) {
     const token = decodeURIComponent(portalMatch[1]);
     const leads = await readLeads();
     const lead = leads.find((item) => (item.portal?.token || portalTokenForId(item.id)) === token);
-    if (!lead) return sendJson(res, 404, { ok: false, errors: ["Customer portal not found."] });
-    return sendJson(res, 200, { ok: true, portal: await portalPayloadForLead(lead, req) });
+    if (lead) {
+      return sendJson(res, 200, { ok: true, portal: await portalPayloadForLead(lead, req) });
+    }
+    // Property token fallback (seasonal outreach). Outreach links are
+    // /portal/<propertyToken>?season=spring|fall — the token here is
+    // derived from property.id, not a lead. When that's the case, mint
+    // a fresh booking session with the property's customer info and
+    // hand the client a redirect to /book.html so the customer lands
+    // on the booking flow pre-filled.
+    const allProperties = await properties.list();
+    const property = allProperties.find((p) => p.id && portalTokenForId(p.id) === token) || null;
+    if (property) {
+      const url = new URL(req.url, baseUrlFromReq(req));
+      const seasonRaw = String(url.searchParams.get("season") || "").trim().toLowerCase();
+      const season = (seasonRaw === "spring" || seasonRaw === "fall") ? seasonRaw : null;
+      const fullName = String(property.customerName || "").trim();
+      const firstName = fullName ? fullName.split(/\s+/)[0] : "";
+      const lastName = fullName ? fullName.split(/\s+/).slice(1).join(" ") : "";
+      // Best-effort zone count from the property profile — used to
+      // suggest a sensible spring_open_/fall_close_ service variant.
+      // If zones aren't filled in we leave suggestedService blank and
+      // let the customer pick on the booking form.
+      const zoneCount = Array.isArray(property.system?.zones) ? property.system.zones.length : 0;
+      const suggestedService = (season && zoneCount > 0)
+        ? `${season === "spring" ? "spring_open" : "fall_close"}_${zoneCount}z`
+        : "";
+      const sessionPayload = {
+        source: "seasonal_outreach",
+        suggestedService,
+        customerHints: {
+          firstName,
+          lastName,
+          email: String(property.customerEmail || "").trim(),
+          phone: String(property.customerPhone || "").trim(),
+          address: String(property.address || "").trim(),
+          zoneCount: zoneCount > 0 ? zoneCount : null
+        }
+      };
+      try {
+        const session = await bookingSessions.createSession(sessionPayload);
+        return sendJson(res, 200, {
+          ok: true,
+          redirect: `/book.html?session=${encodeURIComponent(session.token)}`
+        });
+      } catch (err) {
+        console.warn("[portal-property-redirect] session create failed:", err?.message || err);
+        // Fallthrough — better to return 404 than throw on a portal
+        // page load.
+      }
+    }
+    return sendJson(res, 404, { ok: false, errors: ["Customer portal not found."] });
   }
 
   const leadMatch = pathname.match(/^\/api\/quotes\/([^/]+)$/);
