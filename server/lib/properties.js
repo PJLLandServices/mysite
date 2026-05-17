@@ -643,13 +643,30 @@ async function update(id, patch) {
     }
   }
 
-  // Patch is shallow-merged at the top level. `system` is merged one level
-  // deep so the admin page can update individual fields without resending
-  // the entire system block.
+  // Patch is shallow-merged at the top level. `system`,
+  // `seasonalEligibility`, and `commPrefs` are merged one level deep
+  // so the admin page can update individual sub-fields without
+  // resending the whole block (and, critically, without wiping the
+  // commPrefs.optOutTokens secrets that aren't surfaced in the UI).
   const next = {
     ...current,
     ...patch,
     system: { ...current.system, ...(patch.system || {}) },
+    seasonalEligibility: {
+      ...(current.seasonalEligibility || {}),
+      ...(patch.seasonalEligibility || {})
+    },
+    commPrefs: patch.commPrefs
+      ? {
+          ...(current.commPrefs || {}),
+          ...patch.commPrefs,
+          // Tokens are never patched from the UI; preserve them.
+          optOutTokens: {
+            ...(current.commPrefs?.optOutTokens || {}),
+            ...(patch.commPrefs?.optOutTokens || {})
+          }
+        }
+      : current.commPrefs,
     updatedAt: new Date().toISOString()
   };
   // If address changed, refresh the normalized cache.

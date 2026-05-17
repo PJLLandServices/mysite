@@ -202,6 +202,13 @@ When new info arrives, match before creating:
 **Inbound email prompting intake:**
 - Initial prompt → wait 5–7 days → reminder #1 → wait 5–7 days → reminder #2 → mark as "stale, never completed" and stop
 
+### 3.3 Outbound doors
+
+PJL's outbound message channels are constrained by CASL (Canada's Anti-Spam Legislation) — every marketing-style send requires implied or explicit consent and a working unsubscribe path. Transactional sends (booking confirmations, on-the-way pings) are CASL-exempt; bulk marketing-style sends are not.
+
+- **Transactional (CASL-exempt):** notify-customer.js lifecycle templates (received / reviewed / quoted / booked / on the way / rescheduled / cancelled). No unsubscribe required.
+- **Seasonal Outreach (marketing-style, CASL-bound — first system-supported broadcast channel):** `outreach.sendBulk` from `/admin/outreach`. Implied consent from existing customer relationship; explicit unsubscribe path required on every send. Email includes a footer link (per-channel + "stop everything"); SMS includes "Reply STOP to opt out." Per-property comm prefs gate dispatch.
+
 ---
 
 ## 4. Transaction Flow (the chain of work)
@@ -780,6 +787,18 @@ gated at 3/hour per user.
 - Email-only mode
 - No marketing texts
 - Override Patrick's defaults for this customer
+- **Seasonal SMS reminders** (yes/no) — controls whether
+  `outreach.sendBulk` may dispatch spring/fall booking nudges by
+  text. Lives at `property.commPrefs.seasonalRemindersSMS` until the
+  Customer Folder Phase 2 migration; then migrates up to customer.
+- **Seasonal email reminders** (yes/no) — mirror of the above for
+  email. Lives at `property.commPrefs.seasonalRemindersEmail` until
+  the same migration.
+- **Per-property opt-out tokens** — three stable 32-hex tokens
+  (`seasonalSMS`, `seasonalEmail`, `seasonalAll`) at
+  `property.commPrefs.optOutTokens`, minted lazily on first
+  outreach send. Public `/unsubscribe/<token>?type=email|sms|all`
+  page validates and flips the corresponding pref.
 
 ---
 
@@ -924,6 +943,8 @@ These are the rules that protect the design from drift. Number them so they can 
 13. **Emergency fall overrides notify Patrick immediately.** Real-time, not nightly review.
 14. **Customer portal can only edit non-structural fields.** Phone, email, best time, prefs. Nothing else.
 15. **Three-year deferred flag forces a decision.** No infinite carry-forward.
+16. **Marketing-style sends honor comm prefs and CASL.** Every outreach message includes an unsubscribe path (per-channel and "stop everything"). Email gets a footer link; SMS gets "Reply STOP to opt out." Per-property comm prefs (`seasonalRemindersSMS`, `seasonalRemindersEmail`) gate dispatch — `outreach.sendBulk` will not text a property whose `seasonalRemindersSMS=false`, will not email one whose `seasonalRemindersEmail=false`, and will not send anything to a property whose `seasonalOutreach[year:season].optOutThisSeason=true`. No exceptions.
+17. **Every property carries a complete customer name.** `property.customerName` is non-blank at create, update, and bulk-import. Validation hard-rejects blank patches with `code: MISSING_NAME`. Backfilled before outreach v1 ships, enforced at every write boundary going forward. The OG preview card "Hey {firstName}, …" depends on this invariant. No exceptions.
 
 ---
 
