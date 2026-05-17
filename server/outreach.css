@@ -429,8 +429,9 @@
 
 .outreach-modal-foot {
   display: flex;
-  justify-content: flex-end;
-  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
   padding: 12px 16px;
   border-top: 1px solid #e5e5dd;
   background: #FAFAF5;
@@ -441,6 +442,33 @@
      scrolls, the footer stays visible at the dialog's bottom edge,
      and the keyboard overlay covers OS UI rather than the foot. */
   flex-wrap: wrap;
+}
+.outreach-modal-foot-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-left: auto;
+}
+/* Pre-flight test-send block — sits on the left side of the modal
+   foot on desktop, stacks above the Cancel/Send buttons on mobile.
+   The hint reassures the operator that nothing reaches a customer. */
+.outreach-test-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  flex: 1 1 200px;
+}
+.outreach-test-hint {
+  font-size: 11px;
+  color: #777;
+  line-height: 1.4;
+}
+.outreach-test-hint code {
+  background: #f4f2ec;
+  padding: 0 4px;
+  border-radius: 3px;
+  font-size: 10px;
 }
 
 /* Compose form fields */

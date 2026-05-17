@@ -633,6 +633,116 @@ async function sendBulk({
   return result;
 }
 
+// ---- Public: test send (pre-flight verification) -----------------
+//
+// Fires a single message — using the same render path as a real
+// sendBulk — to the admin's own NOTIFY_TO_PHONE / NOTIFY_TO_EMAIL
+// recipients. Lets Patrick verify exactly what customers will see
+// before blasting to 45+ people. Deliberately does NOT:
+//   - append a touch entry to any property record (it's a test,
+//     not a real send — the audit trail stays clean)
+//   - engage the concurrent-send lock (Patrick can hammer this
+//     button while iterating on copy without locking himself out)
+//   - mint opt-out tokens on the sampled property
+//
+// `sampleId` (optional) is the property id whose data drives the
+// merge tags — typically the first selected row in the operator's
+// list. Without it, fallback placeholders are used so the test
+// still works even when nothing's selected.
+async function sendTest({
+  season,
+  year,
+  channels = ["sms", "email"],
+  subject = "",
+  smsBody = "",
+  emailBody = "",
+  sampleId
+} = {}) {
+  if (season !== "spring" && season !== "fall") {
+    throw new Error(`Unknown season: ${season}`);
+  }
+  const wantsSms = channels.includes("sms");
+  const wantsEmail = channels.includes("email");
+  if (!wantsSms && !wantsEmail) {
+    throw new Error("At least one channel (sms or email) is required.");
+  }
+  const seasonName = SEASON_LABEL[season];
+
+  // Sample data — first selected recipient if provided, otherwise a
+  // placeholder so a "send test" before selecting anyone still goes
+  // through with something readable.
+  let firstName = "Patrick";
+  let propertyAddress = "(sample property)";
+  let portalLink = `${resolvePublicBaseUrl()}/portal/sample-token?season=${season}`;
+  if (sampleId) {
+    const property = await properties.get(sampleId);
+    if (property) {
+      firstName = firstNameOf(property.customerName);
+      propertyAddress = streetAddressOf(property.address) || propertyAddress;
+      const leadsCache = await readLeads();
+      const token = await resolvePortalToken(property, leadsCache);
+      if (token) portalLink = buildPortalLink(token, season);
+    }
+  }
+
+  // Test recipients — reuse the same env vars that drive admin
+  // lead-intake notifications. Each channel is skipped if its
+  // recipient env var isn't set so a partial config still tests
+  // what it can.
+  const testEmail = String(process.env.NOTIFY_TO_EMAIL || process.env.GMAIL_USER || "").trim();
+  const testPhone = String(process.env.NOTIFY_TO_PHONE || "").trim();
+
+  const result = { sentTo: { email: null, phone: null }, channels: {}, errors: [] };
+
+  if (wantsEmail) {
+    if (!testEmail) {
+      result.channels.email = { skipped: true, reason: "no_notify_email_env" };
+    } else {
+      const r = await notify.sendOutreachEmail({
+        to: testEmail,
+        firstName,
+        propertyAddress,
+        seasonName,
+        portalLink,
+        // Brief 2: prepend a clear marker so a test message is
+        // unmistakable in the operator's inbox. Doesn't affect the
+        // actual outreach send (which uses subject verbatim).
+        subject: `[TEST] ${subject || `Time to book your ${seasonName}`}`.slice(0, 250),
+        emailBody,
+        // Test sends include the unsubscribe footer with placeholder
+        // URLs so the layout matches the real customer email, but
+        // the links go nowhere — clicking a placeholder won't unsub
+        // any real customer.
+        unsubscribeUrlEmail: `${resolvePublicBaseUrl()}/unsubscribe/sample-test-token?type=email`,
+        unsubscribeUrlAll: `${resolvePublicBaseUrl()}/unsubscribe/sample-test-token?type=all`
+      });
+      result.channels.email = r;
+      if (r.ok) result.sentTo.email = testEmail;
+      else if (r.error) result.errors.push({ channel: "email", error: r.error });
+    }
+  }
+
+  if (wantsSms) {
+    if (!testPhone) {
+      result.channels.sms = { skipped: true, reason: "no_notify_phone_env" };
+    } else {
+      const r = await notify.sendOutreachSms({
+        to: testPhone,
+        firstName,
+        propertyAddress,
+        seasonName,
+        portalLink,
+        smsBody: smsBody ? `[TEST] ${smsBody}` : smsBody
+      });
+      result.channels.sms = r;
+      if (r.ok) result.sentTo.phone = testPhone;
+      else if (r.error) result.errors.push({ channel: "sms", error: r.error });
+    }
+  }
+
+  return result;
+}
+
 // ---- Module exports -----------------------------------------------
 
 module.exports = {
@@ -641,6 +751,7 @@ module.exports = {
   SEASON_LABEL,
   listCandidates,
   sendBulk,
+  sendTest,
   setOptOutForSeason,
   honorUnsubscribe,
   deriveBookingState,
