@@ -21,25 +21,72 @@
   gap: 18px;
 }
 
+/* Each section is a <details> element so it can collapse on mobile.
+ * The custom marker is suppressed in favor of a chevron we draw ourselves;
+ * the body is a wrapper div so flex/gap rules still apply when open. */
 .handoff-section {
-  border: none;
-  padding: 0;
+  display: block;
   margin: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
+  padding: 0;
+  border: none;
 }
-.handoff-section legend {
+.handoff-section + .handoff-section {
+  border-top: 1px solid rgba(27, 77, 46, 0.10);
+  padding-top: 10px;
+  margin-top: 10px;
+}
+.handoff-section-summary-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 0 0 6px;
+  list-style: none;
+  cursor: default;
   font-family: "Barlow Condensed", sans-serif;
   font-size: 14px;
   letter-spacing: 0.10em;
   text-transform: uppercase;
   color: #1B4D2E;
   font-weight: 700;
-  padding: 0 0 6px;
-  border-bottom: 1px solid rgba(27, 77, 46, 0.10);
-  width: 100%;
-  margin-bottom: 6px;
+}
+.handoff-section-summary-row::-webkit-details-marker { display: none; }
+.handoff-section-summary-row::marker { content: ""; }
+.handoff-section-title {
+  flex: 0 0 auto;
+}
+.handoff-section-preview {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-family: "DM Sans", system-ui, sans-serif;
+  font-size: 12px;
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+  color: rgba(15, 31, 20, 0.55);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  /* Default hidden — only the closed-mobile branch shows it. */
+  display: none;
+}
+.handoff-section-chevron {
+  display: none;
+  flex: 0 0 auto;
+  width: 12px;
+  height: 12px;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: rotate(45deg) translate(-2px, -2px);
+  transition: transform 0.15s ease;
+}
+.handoff-section[open] > .handoff-section-summary-row .handoff-section-chevron {
+  transform: rotate(-135deg) translate(-2px, -2px);
+}
+.handoff-section-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 6px;
 }
 
 .handoff-row {
@@ -296,7 +343,51 @@
   .handoff-result { position: static; }
 }
 @media (max-width: 700px) {
-  .handoff-form { padding: 18px 16px; gap: 14px; }
+  .handoff-form { padding: 14px 14px; gap: 8px; }
   .handoff-row { grid-template-columns: 1fr; }
   .handoff-result { padding: 18px 16px; }
+
+  /* Accordion mode: only one section open at a time. Tap the summary row
+   * to expand a section (JS closes the others). Closed-section preview text
+   * shows what's already filled so the user knows what's there. */
+  .handoff-section {
+    border: 1px solid rgba(27, 77, 46, 0.10);
+    border-radius: 10px;
+    background: #fff;
+    padding: 0;
+  }
+  .handoff-section + .handoff-section {
+    border-top: 1px solid rgba(27, 77, 46, 0.10);
+    margin-top: 0;
+    padding-top: 0;
+  }
+  .handoff-section-summary-row {
+    cursor: pointer;
+    padding: 14px 14px;
+    min-height: 44px;
+    align-items: center;
+    user-select: none;
+    -webkit-tap-highlight-color: rgba(27, 77, 46, 0.08);
+  }
+  .handoff-section[open] > .handoff-section-summary-row {
+    border-bottom: 1px solid rgba(27, 77, 46, 0.08);
+  }
+  .handoff-section-chevron { display: block; }
+  .handoff-section:not([open]) > .handoff-section-summary-row .handoff-section-preview {
+    display: block;
+  }
+  .handoff-section-body { padding: 12px 14px 14px; gap: 12px; }
+  /* When a section has a value, surface that in the preview chip — JS sets
+   * .has-value on the section so we can color the preview text. */
+  .handoff-section.has-value > .handoff-section-summary-row .handoff-section-preview {
+    color: rgba(27, 77, 46, 0.85);
+  }
+  /* Surface required-but-empty sections after a submit attempt. */
+  .handoff-section.has-error {
+    border-color: rgba(208, 72, 72, 0.45);
+    background: rgba(208, 72, 72, 0.03);
+  }
+  .handoff-section.has-error > .handoff-section-summary-row .handoff-section-preview {
+    color: #a92e2e;
+  }
 }

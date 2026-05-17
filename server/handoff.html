@@ -72,8 +72,13 @@
 
     <section class="handoff-grid">
       <form class="handoff-form" id="handoffForm">
-        <fieldset class="handoff-section">
-          <legend>Customer</legend>
+        <details class="handoff-section" data-section="customer" open>
+          <summary class="handoff-section-summary-row">
+            <span class="handoff-section-title">Customer</span>
+            <span class="handoff-section-preview" data-section-preview></span>
+            <span class="handoff-section-chevron" aria-hidden="true"></span>
+          </summary>
+          <div class="handoff-section-body">
           <div style="position: relative; margin-bottom: 12px;">
             <label style="display: block; font-size: 12px; font-weight: 600; color: #555; margin-bottom: 4px;">
               Find existing customer
@@ -110,19 +115,31 @@
             <span>Property address (start typing for suggestions)</span>
             <input type="text" name="address" id="handoffAddress" class="js-address-autocomplete" autocomplete="off" placeholder="123 Main Street, Newmarket ON">
           </label>
-        </fieldset>
+          </div>
+        </details>
 
-        <fieldset class="handoff-section">
-          <legend>What we'll be doing</legend>
+        <details class="handoff-section" data-section="items">
+          <summary class="handoff-section-summary-row">
+            <span class="handoff-section-title">What we'll be doing</span>
+            <span class="handoff-section-preview" data-section-preview></span>
+            <span class="handoff-section-chevron" aria-hidden="true"></span>
+          </summary>
+          <div class="handoff-section-body">
           <p class="handoff-help">
             Add every service / line item the customer should see on their work order. The first item determines the appointment slot length. Add more rows for additional repair items, parts, or labour line items — all show up on the work order with their quantities.
           </p>
           <div class="handoff-items" id="handoffItems"></div>
           <button type="button" class="handoff-add-item" id="addItemBtn">+ Add another item</button>
-        </fieldset>
+          </div>
+        </details>
 
-        <fieldset class="handoff-section">
-          <legend>Other context</legend>
+        <details class="handoff-section" data-section="context">
+          <summary class="handoff-section-summary-row">
+            <span class="handoff-section-title">Other context</span>
+            <span class="handoff-section-preview" data-section-preview></span>
+            <span class="handoff-section-chevron" aria-hidden="true"></span>
+          </summary>
+          <div class="handoff-section-body">
           <div class="handoff-row">
             <label>
               <span>Zone count (if known)</span>
@@ -140,10 +157,16 @@
               </select>
             </label>
           </div>
-        </fieldset>
+          </div>
+        </details>
 
-        <fieldset class="handoff-section">
-          <legend>Diagnosis</legend>
+        <details class="handoff-section" data-section="diagnosis">
+          <summary class="handoff-section-summary-row">
+            <span class="handoff-section-title">Diagnosis</span>
+            <span class="handoff-section-preview" data-section-preview></span>
+            <span class="handoff-section-chevron" aria-hidden="true"></span>
+          </summary>
+          <div class="handoff-section-body">
           <label class="handoff-full">
             <span>Short summary (one line — shown bold on the work order)</span>
             <input type="text" name="diagnosisSummary" maxlength="280" placeholder="e.g. Zone 3 valve diaphragm failure — recommend manifold rebuild">
@@ -156,10 +179,16 @@
             <span>Customer notes (optional — gate code, dog, hidden valve box, etc.)</span>
             <textarea name="notes" rows="2" maxlength="1500" placeholder="Gate code 1234. Dog usually out back."></textarea>
           </label>
-        </fieldset>
+          </div>
+        </details>
 
-        <fieldset class="handoff-section handoff-send">
-          <legend>Send to customer</legend>
+        <details class="handoff-section" data-section="send">
+          <summary class="handoff-section-summary-row">
+            <span class="handoff-section-title">Send to customer</span>
+            <span class="handoff-section-preview" data-section-preview></span>
+            <span class="handoff-section-chevron" aria-hidden="true"></span>
+          </summary>
+          <div class="handoff-section-body">
           <label class="handoff-checkbox">
             <input type="checkbox" name="sendSms" checked>
             <span>📱 SMS to phone above</span>
@@ -171,7 +200,8 @@
           <p class="handoff-help">
             Uncheck both to just generate a link you can copy/paste manually.
           </p>
-        </fieldset>
+          </div>
+        </details>
 
         <div class="handoff-actions">
           <button type="submit" class="pjl-btn pjl-btn-primary" id="submitBtn">Generate &amp; Send Link</button>

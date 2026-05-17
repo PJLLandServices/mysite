@@ -424,3 +424,154 @@ handoffDoneBtn.addEventListener("click", () => {
     form.elements.address.value = "";
   });
 })();
+
+// ---- Accordion (mobile only) -----------------------------------------
+//
+// Patrick uses this page on his phone during a handoff call. With every
+// fieldset open at once, the form scrolls ~1100px — well past one screen.
+// Below 700px we treat each section as a collapsible: one open at a time,
+// closed sections show a one-line preview of what's filled in.
+// On desktop everything stays open (the JS forces .open and CSS hides the
+// chevron + preview text), so the layout matches the old design.
+(function setupHandoffAccordion() {
+  const sections = Array.from(document.querySelectorAll("details.handoff-section"));
+  if (!sections.length) return;
+  const mq = window.matchMedia("(max-width: 700px)");
+
+  function isMobile() { return mq.matches; }
+
+  function applyModeFromMediaQuery() {
+    if (isMobile()) {
+      // First section open, others closed — unless the user already chose one.
+      const anyOpen = sections.some((s) => s.open);
+      if (!anyOpen) sections.forEach((s, i) => { s.open = i === 0; });
+    } else {
+      // Desktop: keep them all expanded.
+      sections.forEach((s) => { s.open = true; });
+    }
+  }
+
+  // Only-one-open enforcement on mobile.
+  sections.forEach((section) => {
+    section.addEventListener("toggle", () => {
+      if (!isMobile()) {
+        // Desktop closed-by-user: snap back open. Cheap guard against
+        // accidental clicks on the legend-like row.
+        if (!section.open) section.open = true;
+        return;
+      }
+      if (section.open) {
+        sections.forEach((other) => { if (other !== section) other.open = false; });
+        // Once the user explicitly engages with a section, clear any
+        // submit-attempt error styling on it.
+        section.classList.remove("has-error");
+      }
+    });
+  });
+
+  // ---- Preview generators -------------------------------------------
+  //
+  // Each section's collapsed header shows a one-line summary of what's
+  // already filled, so the user can scan at a glance without expanding.
+
+  const previews = {
+    customer() {
+      const f = (form.elements.firstName?.value || "").trim();
+      const l = (form.elements.lastName?.value || "").trim();
+      const p = (form.elements.phone?.value || "").trim();
+      const e = (form.elements.email?.value || "").trim();
+      const name = `${f} ${l}`.trim();
+      if (name && p) return `${name} · ${p}`;
+      if (name) return name;
+      if (p) return p;
+      if (e) return e;
+      return "— not yet";
+    },
+    items() {
+      const rows = Array.from(handoffItems.querySelectorAll(".handoff-item-row"));
+      const filled = rows.filter((r) => r.querySelector(".item-key")?.value);
+      if (!filled.length) return "— pick a service";
+      const firstKey = filled[0].querySelector(".item-key").value;
+      const label = (features[firstKey] && features[firstKey].label) || firstKey;
+      if (filled.length === 1) return label;
+      return `${label} +${filled.length - 1} more`;
+    },
+    context() {
+      const z = (form.elements.zoneCount?.value || "").trim();
+      const s = (form.elements.severity?.value || "normal").trim();
+      let zoneLabel;
+      if (!z) zoneLabel = "no zone info";
+      else if (z === "unsure") zoneLabel = "zones: unsure";
+      else zoneLabel = `${z} zone${z === "1" ? "" : "s"}`;
+      const sevLabel = s === "urgent" ? "Urgent" : "Normal";
+      return `${zoneLabel} · ${sevLabel}`;
+    },
+    diagnosis() {
+      const s = (form.elements.diagnosisSummary?.value || "").trim();
+      if (s) return s.length > 60 ? s.slice(0, 60) + "…" : s;
+      const long = (form.elements.diagnosis?.value || "").trim();
+      if (long) return long.length > 60 ? long.slice(0, 60) + "…" : long;
+      return "— not yet";
+    },
+    send() {
+      const sms = form.elements.sendSms?.checked;
+      const email = form.elements.sendEmail?.checked;
+      if (sms && email) return "SMS + Email";
+      if (sms) return "SMS only";
+      if (email) return "Email only";
+      return "Link only (copy/paste)";
+    }
+  };
+
+  function refreshPreview(section) {
+    const key = section.dataset.section;
+    const fn = previews[key];
+    if (!fn) return;
+    const text = fn();
+    const previewEl = section.querySelector("[data-section-preview]");
+    if (previewEl) previewEl.textContent = text;
+    const hasValue = text && !text.startsWith("—") && text !== "Link only (copy/paste)" && text !== "no zone info · Normal";
+    section.classList.toggle("has-value", Boolean(hasValue));
+  }
+
+  function refreshAllPreviews() { sections.forEach(refreshPreview); }
+
+  // Update previews live as the form changes. Event delegation on the form
+  // covers dynamically-added item rows too.
+  form.addEventListener("input", refreshAllPreviews);
+  form.addEventListener("change", refreshAllPreviews);
+  // The "What we'll be doing" rows are added by JS; observe its container
+  // so the preview reflects added/removed rows even without an input event.
+  new MutationObserver(refreshAllPreviews).observe(handoffItems, { childList: true });
+
+  // Open any section with invalid required fields BEFORE the browser tries
+  // to focus the invalid field. Without this, a missing required field
+  // inside a collapsed <details> can't receive focus and the user sees no
+  // visible cue about what's wrong.
+  function expandSectionsWithInvalidFields() {
+    let firstInvalid = null;
+    sections.forEach((section) => {
+      const invalid = section.querySelector("input:invalid, select:invalid, textarea:invalid");
+      if (invalid) {
+        section.classList.add("has-error");
+        if (isMobile() && !section.open) section.open = true;
+        if (!firstInvalid) firstInvalid = invalid;
+      } else {
+        section.classList.remove("has-error");
+      }
+    });
+    return firstInvalid;
+  }
+  // Run on the button's click (before the native submit / validation fires).
+  submitBtn.addEventListener("click", () => { expandSectionsWithInvalidFields(); });
+
+  // React to viewport changes (rotation, dev-tools resize). matchMedia
+  // events are cheaper than scrolling resize listeners.
+  if (typeof mq.addEventListener === "function") {
+    mq.addEventListener("change", applyModeFromMediaQuery);
+  } else if (typeof mq.addListener === "function") {
+    mq.addListener(applyModeFromMediaQuery);
+  }
+  applyModeFromMediaQuery();
+  refreshAllPreviews();
+})();
