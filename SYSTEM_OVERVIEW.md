@@ -92,7 +92,7 @@ form except where noted.
 
 | File | Entity | ID format | Purpose |
 |---|---|---|---|
-| `properties.js` | Property | `P-YYYY-NNNN` | Customer site profile (zones, valves, controller, blow-out, deferred issues, service records). One per physical address. Zones land with `pendingReview: true` when the WO completion cascade discovers them on-site (Brief D). |
+| `properties.js` | Property | `P-YYYY-NNNN` | Customer site profile (zones, valves, controller, blow-out, deferred issues, service records, seasonal eligibility + outreach state + comm prefs). One per physical address. Zones land with `pendingReview: true` when the WO completion cascade discovers them on-site (Brief D). **Name invariant** (feature-seasonal-outreach-brief §3.9): `customerName` must be non-blank at `create`, `update`, and `bulkUpsert` — validation rejects blank patches with `code: MISSING_NAME`. Helpers: `seasonKey`, `recordOutreachTouch`, `setSeasonalOptOut`, `setSeasonalCommPref`, `setSeasonalEligibility`, `mintOptOutTokensIfMissing`, `findByOptOutToken`, `auditMissingCustomerName`. |
 | `work-orders.js` | Work Order | `WO-XXXXXXXX` (random alphabet) | One per visit. Zones, issues, photos, signature OR signatureBypass (mutually exclusive), on-site quote, materials packed, `paidOnSite`, `propertyEditsAppliedAt`, `intakeGuarantee.matched`, `history[]`. Lock-protected fields enforced via `SCOPE_PROTECTED_FIELDS` constant (Brief A). Bypass acts as a unified end-of-visit completion event covering both on-site quote acceptance (when builder has additions beyond baseline) and completion lock; bypass-completed WOs with `coversQuoteAcceptance: true` do NOT produce `on_site_quote` Quote records — `signatureBypass.acceptedScopeSnapshot` (deep-copied builder lines + totals) is the authoritative scope record. |
 | `quotes.js` | Quote | `Q-YYYY-NNNN` | Versioned, signed estimate. Two flavours: `ai_repair_quote` (AI chat) and `on_site_quote` (tech-built). |
 | `invoices.js` | Invoice | `I-YYYY-NNNN` | Auto-drafted by completion cascade, lifecycle draft → sent → paid → void. |
@@ -102,7 +102,7 @@ form except where noted.
 | `purchase-orders.js` | Purchase Order | `PO-YYYY-NNNN` | One supplier's slice of a material list's `need` lines. Lifecycle draft → sent → partially_received → received → cancelled. |
 | `suppliers.js` | Supplier | `SUP-NNN` (no year prefix) | Vendor records (name, contact, email, phone, address). |
 | `part-suppliers.js` | — | n/a | Override map at `data/part-suppliers.json` mapping SKU → supplierIds[]. parts.json's `supplierIds` field is a placeholder; this file is the source of truth. |
-| `settings.js` | — | n/a | Admin notification preferences + 50-entry audit trail + iCal-feed token (Brief C: `icalFeed.{enabled, token, regeneratedAt}` — token is the credential for the public `/calendar/<token>.ics` feed) + `contactInfo.customerSupportPhone` (surfaced verbatim in portal blocked-state copy when self-service reschedule/cancel is refused). Exposes `updateContactInfo()` for the `/api/settings/contact-info` PATCH endpoint. |
+| `settings.js` | — | n/a | Admin notification preferences + 50-entry audit trail + iCal-feed token (Brief C: `icalFeed.{enabled, token, regeneratedAt}` — token is the credential for the public `/calendar/<token>.ics` feed) + `contactInfo.customerSupportPhone` (surfaced verbatim in portal blocked-state copy when self-service reschedule/cancel is refused; exposes `updateContactInfo()` for the `/api/settings/contact-info` PATCH endpoint) + per-season outreach templates (`outreachTemplates.{spring,fall}.{subject,smsBody,emailBody}`, saved via `saveOutreachTemplate`). |
 | `ical-feed.js` | — | n/a | Builds the read-only `.ics` feed for iPhone Calendar subscription. Filters bookings to `status === confirmed` and a -90d / +365d window; uses stable `BK-…@pjllandservices.com` UIDs so reschedules update the existing event. |
 | `ical-format.js` | — | n/a | Hand-rolled RFC 5545 helpers: value escaping, 75-octet line folding, Toronto VTIMEZONE block, local + UTC date formatters. |
 | `completion-cascade.js` | — | n/a | Fires on WO status → completed. Idempotent. Creates service record on property, draft invoice (with `paidOnSiteAtCompletion` flag), customer + admin emails, warranty stamp. Applies property edits via `computePropertyEdits()` (Brief D — zone/controller diffs, new zones flagged for Patrick review) gated by `wo.propertyEditsAppliedAt`. Logs `cascade_fire`, `invoice_drafted` (when a draft was created), and `property_edits_applied` history entries. When the cascade throws mid-flight, the PATCH handler appends `cascade_failed` to the WO history and surfaces `cascade.error` in the response — the WO stays signed + locked + completed (recoverable via /run-cascade or /create-invoice). |
@@ -116,7 +116,8 @@ form except where noted.
 | `po-pdf.js` | — | n/a | Branded purchase order PDF (pdfkit). |
 | `notify-email.js` | — | n/a | Admin email on new lead (Gmail SMTP). |
 | `notify-sms.js` | — | n/a | Admin SMS on new lead (Twilio). |
-| `notify-customer.js` | — | n/a | Customer-facing transition emails / SMSes (booking confirmed, on the way, etc). Also exports `sendBookingCancellation(booking, {reason, notify, baseUrl})` — fire-and-forget cancellation email triggered from `/admin/schedule`. |
+| `notify-customer.js` | — | n/a | Customer-facing transition emails / SMSes (booking confirmed, on the way, etc). Also exports `sendBookingCancellation(booking, {reason, notify, baseUrl})` — fire-and-forget cancellation email triggered from `/admin/schedule` — and `sendOutreachEmail` / `sendOutreachSms` (feature-seasonal-outreach-brief.md §3.5) used by `outreach.js` for the bulk booking-nudge batches. Outreach senders append a CASL unsubscribe footer (email) and the literal "Reply STOP to opt out." line (SMS), idempotent against operator-supplied STOP. |
+| `outreach.js` | — | n/a | Seasonal bulk-nudge engine (feature-seasonal-outreach-brief.md). Lists eligible properties per season+year (`listCandidates`), orchestrates per-recipient send through `notify-customer.js` with 300 ms Twilio + 100 ms Gmail pacing and a module-level concurrent-send lock (`sendBulk` → `{batchId, sent, skipped[], errors[]}`), derives "booked for season" state from bookings.json (`deriveBookingState`), validates and applies unsubscribe tokens (`honorUnsubscribe`), and persists per-season templates via `settings.js`. Hardcoded `SEASON_WINDOWS` (spring Mar 1 – Jun 30, fall Sep 1 – Dec 15) and `SEASONAL_SERVICE_PREFIXES` (`spring_open_`, `fall_close_`). |
 | `notify-supplier.js` | — | n/a | Supplier email with PO PDF attachment. |
 | `quickbooks.js` | — | n/a | OAuth + invoice push + items sync + Payments charges. Token blob encrypted at rest (AES-256-GCM, key from `TOKEN_ENCRYPTION_KEY` or derived from `QB_CLIENT_SECRET`). Exports: `pushInvoice`, `pushItem`, `syncAllItems`, `listTaxCodes`, `listIncomeAccounts`, `getItemsMap`, `setItemMap`, `chargeCard`, `recordPaymentForInvoice`, `voidInvoice`, OAuth helpers. **Inert** until `QB_CLIENT_ID` / `QB_CLIENT_SECRET` env vars are set + admin connects via OAuth. |
 | `booking-sessions.js` | — | n/a | AI handoff session storage (used by the chat widget). |
@@ -131,7 +132,7 @@ auth.json                  ← session secret only (post-migration). NEVER reint
 users.json                  ← USR-NNN admin/tech accounts (per-user scrypt hash + salt). Created via npm run create-user.
 magic-tokens.json           ← short-lived, single-use mt_<32hex> tokens (customer_login, admin_password_reset).
 leads.json                 ← inbound leads (the CRM core; lead.id is the customer identity for portal sessions)
-properties.json            ← customer site profiles
+properties.json            ← customer site profiles (now includes seasonalEligibility, seasonalOutreach[YYYY:season].{touches[], optOutThisSeason}, and commPrefs.{seasonalRemindersSMS, seasonalRemindersEmail, optOutTokens}; customerName is required non-blank)
 work-orders.json           ← per-visit field documents
 quotes.json                ← Q-YYYY-NNNN records
 invoices.json              ← I-YYYY-NNNN records
@@ -157,12 +158,12 @@ wo-photos/<woId>/<n>.<ext> ← work-order photos (pre/in/post-work + per-issue)
 
 Each admin page is one HTML + one JS + (sometimes) one CSS file. The
 sidebar is duplicated in every page's HTML and synchronized by hand
-when entries change. Standard sidebar order (13 items):
+when entries change. Standard sidebar order (17 items):
 
 ```
-Today  ·  CRM  ·  Schedule  ·  Handoff  ·  Properties  ·  Projects  ·
-Work orders  ·  Quotes  ·  Invoices  ·  Materials  ·  AI Chats  ·
-Users  ·  Settings
+Today  ·  Messages  ·  CRM  ·  Schedule  ·  Handoff  ·  Outreach  ·
+Bookings  ·  Customers  ·  Properties  ·  Projects  ·  Work orders  ·
+Quotes  ·  Invoices  ·  Materials  ·  AI Chats  ·  Users  ·  Settings
 ```
 
 Pages with their primary route + purpose:
@@ -173,6 +174,7 @@ Pages with their primary route + purpose:
 | `admin.html` | `/admin` | Lead pipeline / CRM dashboard. Search, filter by stage, open lead detail card. Inline quote display + property link conflict detection. |
 | `schedule.html` | `/admin/schedule` | Booking calendar. Block hours, manual booking creation. |
 | `handoff.html` | `/admin/handoff` | Manual handoff — admin sends a customer a booking link + portal access. |
+| `outreach.html` | `/admin/outreach` | Seasonal Outreach (feature-seasonal-outreach-brief.md). Picks Spring or Fall + year; lists every eligible property with its booking state, contact state, and opt-out state; filters; bulk-sends a portal booking link via email + SMS via `outreach.sendBulk`; per-season message template editor; backfill banner for properties with a blank `customerName`. |
 | `properties.html` | `/admin/properties` | Properties index (vertical list). |
 | `property.html` | `/admin/property/<id>` | Per-property profile. Zones, valves, controller, blow-out, access notes, service records, deferred issues. |
 | `properties-import.html` | `/admin/properties/import` | xlsx bulk import wizard. |
@@ -196,7 +198,8 @@ Pages with their primary route + purpose:
 | `users.html` | `/admin/users` | Admin-only per-user account management (CRUD, disable, reset password). Tech role gets 403. |
 | `customer-login.html` | `/portal/login` | Customer self-serve magic-link request page (email/phone/address → emailed login link). |
 | `reset-password.html` | `/reset-password?t=<mt_id>` | Admin/tech password reset landing page (magic-token-gated). |
-| `portal.html` | `/portal/<token>` | Customer-facing portal: project request, deferred recommendations (pre-authorize with signature), signed quotes, scheduled appointments, notification prefs. Self-service appointment moves: **Reschedule** (once per booking, >24hrs out) and **Cancel** (with captured reason, >24hrs out) — both gated server-side via `/api/portal/:token/booking-actions` preflight, with greyed buttons and a phone-fallback row when blocked. The permanent `<token>` URL stays valid; magic-link sessions redirect here after setting a `customer:<leadId>` cookie. |
+| `portal.html` | `/portal/<token>` | Customer-facing portal: project request, deferred recommendations (pre-authorize with signature), signed quotes, scheduled appointments, notification prefs. Self-service appointment moves: **Reschedule** (once per booking, >24hrs out) and **Cancel** (with captured reason, >24hrs out) — both gated server-side via `/api/portal/:token/booking-actions` preflight, with greyed buttons and a phone-fallback row when blocked. The permanent `<token>` URL stays valid; magic-link sessions redirect here after setting a `customer:<leadId>` cookie. **Server-side Open Graph substitution** (feature-seasonal-outreach-brief.md §3.8): handler reads the token + optional `?season=spring\|fall` query param, looks up lead → property → customerName, then string-replaces `{{ogTitle}}` / `{{ogDescription}}` / `{{ogImageUrl}}` / `{{canonicalUrl}}` placeholders in `portal.html` before responding. Produces a personalized iMessage / Slack / Facebook preview card per recipient. Canonical URL always uses `PUBLIC_BASE_URL` (production host), never `*.onrender.com`. |
+| `unsubscribe.html` | `/unsubscribe/<token>` | **Public** confirm-then-POST page for the CASL unsubscribe flow. Token in URL IS the credential; type comes from `?type=email\|sms\|all`. POSTs to `/api/outreach/unsubscribe` which flips the matching `commPref` off via `outreach.honorUnsubscribe`. Self-contained styles (no `/crm/` CSS dependency) so the page renders even if a carrier rewrites asset URLs. |
 | `approve.html` | `/approve/<id>?t=<token>` | Customer-facing on-site quote approval (signature canvas + PDF download). |
 
 ### Identity & access — authentication model
@@ -656,6 +659,40 @@ Blocked (greyed)   → workorder-blocked row beneath the buttons surfaces
                      to the configured support phone.
 ```
 
+### 5. Seasonal outreach loop (feature-seasonal-outreach-brief.md)
+
+```
+Patrick visits /admin/outreach a few weeks before each season.
+   ↓
+Picks Spring or Fall + year. Page lists every property where
+seasonalEligibility[season]=true, derives booking state from
+bookings.json (deriveBookingState — serviceKey prefix +
+scheduledFor in season window, excluding cancelled/no_show),
+derives contact state from property.seasonalOutreach[year:season].touches.
+   ↓
+Patrick filters to "Not booked", selects all (or a subset),
+composes a message (or uses the saved template), confirms send.
+   ↓
+outreach.sendBulk iterates: skip ineligible / opted-out / missing-name
+/ no-portal-token / no-contact with reasons; mint per-property
+opt-out tokens lazily on first send; send email + SMS via
+notify-customer.sendOutreachEmail / sendOutreachSms with 300ms
+Twilio + 100ms Gmail pacing; append a touch entry per success;
+return per-recipient outcome { batchId, sent, skipped[], errors[] }.
+   ↓
+Customer's phone fetches the portal link to generate a preview card.
+Portal handler (renderPortalWithOg in server.js) reads the
+token + ?season query param, substitutes the OG meta tag
+placeholders with personalized title + season-keyed hero image.
+   ↓
+Customer taps portal link in their message, books their service.
+Booking flows through standard cascade unchanged.
+   ↓
+A week later Patrick reopens /admin/outreach. "Not booked" now
+shows only the customers who haven't booked yet. He re-sends to
+that subset.
+```
+
 ## External integrations
 
 | Service | Purpose | Trigger | Required env vars |
@@ -724,6 +761,23 @@ These have memory entries; surface them in any AI / specialist context.
   must use `var(--hero-nav-clearance)`. Never hardcode.
 - **Brand:** Logo is the full "PJL Land Services" lockup; don't strip
   the wordmark. Headings use Barlow Condensed.
+- **Property name invariant** (feature-seasonal-outreach-brief.md §3.9):
+  every property carries a non-blank `customerName`. Enforced at
+  `properties.create`, `properties.update`, and `properties.bulkUpsert`
+  (rows with blank names go into the import error summary, not the
+  live data). Backfilled before outreach v1 ships; required going
+  forward. No exceptions — the OG preview card depends on a clean
+  first name.
+- **Outreach marketing comms honor CASL.** Every email from
+  `outreach.sendBulk` includes an unsubscribe footer (per-channel +
+  "stop everything" path); every SMS includes "Reply STOP to opt out."
+  Per-property comm prefs gate dispatch. The public
+  `/unsubscribe/<token>` page handles recipient-side opt-out without
+  an admin session.
+- **PUBLIC_BASE_URL is required in production.** The server hard-fails
+  at startup when `NODE_ENV=production` and `PUBLIC_BASE_URL` is
+  unset. Outreach links and OG canonical URLs always use this host;
+  never fall back to `*.onrender.com`.
 
 ## How to run locally
 

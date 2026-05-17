@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#0F1F14">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>PJL — Seasonal Outreach</title>
+  <link rel="icon" type="image/svg+xml" href="/crm/pjl-logo-mark.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/crm/crm.css">
+  <link rel="stylesheet" href="/crm/outreach.css">
+</head>
+<body class="pjl-crm-body">
+  <aside class="pjl-admin-nav" id="navMenu" aria-label="PJL CRM Navigation">
+    <header class="pjl-side-brand">
+      <a href="/" class="pjl-side-logo"><img src="/crm/pjl-logo.svg" alt="PJL Land Services"></a>
+    </header>
+    <div class="pjl-nav-links">
+      <a href="/admin/today">Today</a>
+      <a href="/admin/messages">Messages <span class="pjl-nav-badge" data-portal-msg-badge hidden></span></a>
+      <a href="/admin">CRM</a>
+      <a href="/admin/schedule">Schedule</a>
+      <a href="/admin/handoff">Handoff</a>
+      <a href="/admin/outreach" class="is-active">Outreach</a>
+      <a href="/admin/bookings">Bookings</a>
+      <a href="/admin/customers">Customers</a>
+      <a href="/admin/properties">Properties</a>
+      <a href="/admin/projects">Projects</a>
+      <a href="/admin/work-orders">Work orders</a>
+      <a href="/admin/quote-folder">Quotes</a>
+      <a href="/admin/invoices">Invoices</a>
+      <a href="/admin/material-lists">Materials</a>
+      <a href="/admin/chats">AI Chats</a>
+      <a href="/admin/users">Users</a>
+      <a href="/admin/settings">Settings</a>
+    </div>
+    <footer class="pjl-side-footer">
+      <a class="pjl-side-phone" href="tel:+19059600181">(905) 960-0181</a>
+      <button class="pjl-nav-logout" type="button" id="logoutButton">Log out</button>
+    </footer>
+  </aside>
+
+  <div class="pjl-app">
+    <header class="pjl-app-topbar">
+      <button class="pjl-nav-toggle" type="button" id="navToggle" aria-label="Menu" aria-expanded="false" aria-controls="navMenu">
+        <span class="pjl-nav-toggle-bar"></span>
+        <span class="pjl-nav-toggle-bar"></span>
+        <span class="pjl-nav-toggle-bar"></span>
+      </button>
+      <span class="pjl-app-title">Outreach</span>
+      <a class="pjl-app-phone" href="tel:+19059600181">(905) 960-0181</a>
+    </header>
+
+    <main class="pjl-crm-shell">
+      <!-- Page header — season/year selectors + Edit template trigger.
+           Sticky on desktop so the controls stay visible while
+           scrolling the property list. -->
+      <header class="outreach-head">
+        <div class="outreach-head-title">
+          <p class="pjl-page-eyebrow">Seasonal nudge</p>
+          <h1>Seasonal Outreach</h1>
+        </div>
+        <div class="outreach-head-controls">
+          <label class="outreach-control">
+            <span>Season</span>
+            <select id="seasonSelect">
+              <option value="spring">Spring opening</option>
+              <option value="fall">Fall closing</option>
+            </select>
+          </label>
+          <label class="outreach-control">
+            <span>Year</span>
+            <select id="yearSelect"><!-- options injected by JS --></select>
+          </label>
+          <button type="button" class="pjl-btn pjl-btn-outline" id="editTemplateBtn">Edit message template</button>
+        </div>
+      </header>
+
+      <!-- Backfill banner: shown when audit-missing-names returns > 0.
+           The brief's §3.9 invariant says every property needs a
+           non-blank customerName; this banner surfaces the work
+           queue without making it a hard block. -->
+      <div class="outreach-banner outreach-banner-warn" id="missingNameBanner" hidden>
+        <strong id="missingNameCount">0</strong>
+        <span>properties are missing a customer name. Outreach will skip them. <a href="#" id="missingNameLink">Show list →</a></span>
+      </div>
+
+      <!-- Stats row: counts over the eligible population for the
+           current season/year. Brief §3.4. The counts are computed
+           server-side and reflect the unfiltered set, so the numbers
+           don't shift when the operator toggles the filter chips. -->
+      <section class="outreach-stats" aria-label="Outreach totals" id="statsRow">
+        <div class="outreach-stat"><dt>Eligible</dt><dd id="statEligible">—</dd></div>
+        <div class="outreach-stat"><dt>Contacted</dt><dd id="statContacted">—</dd></div>
+        <div class="outreach-stat"><dt>Booked</dt><dd id="statBooked">—</dd></div>
+        <div class="outreach-stat"><dt>Awaiting</dt><dd id="statAwaiting">—</dd></div>
+        <div class="outreach-stat"><dt>Opted out</dt><dd id="statOptedOut">—</dd></div>
+      </section>
+
+      <!-- Filter chips. "Not booked" is the default — the operational
+           question is always "who hasn't booked yet." Each chip
+           re-queries the candidates endpoint with filter=...; totals
+           don't change, the list does. -->
+      <nav class="outreach-filters" id="filterChips" aria-label="Filter the list">
+        <button type="button" class="outreach-chip" data-filter="all">All</button>
+        <button type="button" class="outreach-chip is-active" data-filter="not_booked">Not booked</button>
+        <button type="button" class="outreach-chip" data-filter="not_contacted">Not contacted</button>
+        <button type="button" class="outreach-chip" data-filter="contacted_no_booking">Contacted, no booking</button>
+        <button type="button" class="outreach-chip" data-filter="booked">Booked</button>
+        <button type="button" class="outreach-chip" data-filter="opted_out">Opted out</button>
+      </nav>
+
+      <!-- Property list. Renders as a row layout on desktop, stacked
+           cards on narrow viewports (CSS-only via container query /
+           media query). Booked rows are visually disabled and have
+           their checkbox disabled — the brief explicitly calls this
+           out as a UX requirement. -->
+      <section class="outreach-list-wrap">
+        <div class="outreach-list-head">
+          <label class="outreach-row-check outreach-select-all">
+            <input type="checkbox" id="selectAll" aria-label="Select all visible">
+            <span id="selectAllLabel">Select all visible</span>
+          </label>
+          <span class="outreach-loading" id="loadingHint" hidden>Loading…</span>
+        </div>
+        <ul class="outreach-list" id="candidateList" aria-busy="false">
+          <!-- Rendered by outreach.js renderList(). Each row is a <li>
+               with .outreach-row, checkbox, name, address, state pills. -->
+        </ul>
+        <p class="outreach-empty" id="emptyState" hidden>
+          No properties match the current filter. Try another filter, or check that you've imported customers with seasonal services.
+        </p>
+      </section>
+    </main>
+  </div><!-- /.pjl-app -->
+
+  <!-- Sticky bottom action bar. Visible only when at least one row
+       is selected. The list has bottom padding equal to this bar's
+       height so the last row never hides behind it. -->
+  <footer class="outreach-action-bar" id="actionBar" hidden>
+    <span class="outreach-action-count" id="actionCount">0 selected</span>
+    <div class="outreach-action-buttons">
+      <button type="button" class="pjl-btn pjl-btn-outline" id="skipSeasonBtn">Skip this season</button>
+      <button type="button" class="pjl-btn pjl-btn-primary" id="composeBtn">Compose &amp; send →</button>
+    </div>
+  </footer>
+
+  <!-- Compose modal — opens on "Compose & send". Pre-fills from the
+       saved template (if any). At narrow widths the body + preview
+       stack vertically. The send button stays inside the scrolling
+       modal body and "sticks" above the virtual keyboard via the
+       modal's overflow:auto + the button being at the bottom of the
+       scroll area, so a focused textarea pushes the button up rather
+       than off-screen. -->
+  <dialog class="outreach-modal" id="composeModal" aria-labelledby="composeTitle">
+    <form method="dialog" class="outreach-modal-form" id="composeForm">
+      <header class="outreach-modal-head">
+        <h2 id="composeTitle">Compose &amp; send</h2>
+        <button type="button" class="outreach-modal-close" id="composeCloseBtn" aria-label="Close">×</button>
+      </header>
+      <div class="outreach-modal-body">
+        <div class="outreach-compose">
+          <fieldset class="outreach-compose-channels">
+            <legend>Channels</legend>
+            <label class="outreach-channel">
+              <input type="checkbox" name="channel" value="sms" checked>
+              <span>📱 SMS</span>
+            </label>
+            <label class="outreach-channel">
+              <input type="checkbox" name="channel" value="email" checked>
+              <span>✉️ Email</span>
+            </label>
+          </fieldset>
+
+          <label class="outreach-field">
+            <span>Subject <small>(email only)</small></span>
+            <input type="text" id="composeSubject" name="subject" maxlength="200" placeholder="Time to book your Spring Opening">
+          </label>
+
+          <label class="outreach-field">
+            <span>SMS body <small id="smsCharCount">0 / 160</small></span>
+            <textarea id="composeSmsBody" name="smsBody" rows="3" maxlength="320" placeholder="Hi {{firstName}}, time to book your {{seasonName}} at {{propertyAddress}}. Tap to schedule: {{portalLink}}"></textarea>
+          </label>
+
+          <label class="outreach-field">
+            <span>Email body</span>
+            <textarea id="composeEmailBody" name="emailBody" rows="8" placeholder="Hi {{firstName}},&#10;&#10;Hope you had a great winter. It's time to schedule your {{seasonName}} at {{propertyAddress}}. Tap below to pick a slot — I'll see you out there.&#10;&#10;Patrick"></textarea>
+          </label>
+
+          <p class="outreach-merge-hint">
+            Merge tags: <code>{{firstName}}</code>, <code>{{propertyAddress}}</code>, <code>{{seasonName}}</code>, <code>{{portalLink}}</code>.
+            Every email gets an unsubscribe footer; every SMS gets "Reply STOP to opt out."
+          </p>
+        </div>
+
+        <aside class="outreach-preview" aria-label="Preview for first recipient">
+          <header class="outreach-preview-head">
+            <strong>Preview</strong>
+            <span class="outreach-preview-recipient" id="previewRecipient">—</span>
+          </header>
+          <div class="outreach-preview-block">
+            <span class="outreach-preview-eyebrow">SMS</span>
+            <pre class="outreach-preview-body" id="previewSms">—</pre>
+          </div>
+          <div class="outreach-preview-block">
+            <span class="outreach-preview-eyebrow">Subject</span>
+            <p class="outreach-preview-subject" id="previewSubject">—</p>
+            <span class="outreach-preview-eyebrow">Email body</span>
+            <pre class="outreach-preview-body" id="previewEmail">—</pre>
+          </div>
+        </aside>
+      </div>
+
+      <!-- Skip reasons summary: appears when any selected property
+           will be filtered out (no contact info, comm pref off, etc.).
+           Brief §3.4 calls this out explicitly. -->
+      <section class="outreach-skip-summary" id="skipSummary" hidden>
+        <strong>Some recipients will be skipped:</strong>
+        <ul id="skipSummaryList"></ul>
+      </section>
+
+      <footer class="outreach-modal-foot">
+        <button type="button" class="pjl-btn pjl-btn-outline" id="composeCancelBtn">Cancel</button>
+        <button type="submit" class="pjl-btn pjl-btn-primary" id="composeSendBtn">Send to <span id="composeSendCount">0</span> recipients</button>
+      </footer>
+    </form>
+  </dialog>
+
+  <!-- Edit-template modal — opens on "Edit message template". Saves
+       to settings.outreachTemplates[season] so the compose modal
+       seeds from it next time the page opens. -->
+  <dialog class="outreach-modal" id="templateModal" aria-labelledby="templateTitle">
+    <form method="dialog" class="outreach-modal-form" id="templateForm">
+      <header class="outreach-modal-head">
+        <h2 id="templateTitle">Edit template — <span id="templateSeasonLabel">Spring</span></h2>
+        <button type="button" class="outreach-modal-close" id="templateCloseBtn" aria-label="Close">×</button>
+      </header>
+      <div class="outreach-modal-body outreach-modal-body-single">
+        <label class="outreach-field">
+          <span>Subject <small>(email only)</small></span>
+          <input type="text" id="templateSubject" name="subject" maxlength="200">
+        </label>
+        <label class="outreach-field">
+          <span>SMS body</span>
+          <textarea id="templateSmsBody" name="smsBody" rows="3" maxlength="320"></textarea>
+        </label>
+        <label class="outreach-field">
+          <span>Email body</span>
+          <textarea id="templateEmailBody" name="emailBody" rows="8"></textarea>
+        </label>
+        <p class="outreach-merge-hint">
+          Merge tags: <code>{{firstName}}</code>, <code>{{propertyAddress}}</code>, <code>{{seasonName}}</code>, <code>{{portalLink}}</code>.
+        </p>
+      </div>
+      <footer class="outreach-modal-foot">
+        <button type="button" class="pjl-btn pjl-btn-outline" id="templateCancelBtn">Cancel</button>
+        <button type="submit" class="pjl-btn pjl-btn-primary" id="templateSaveBtn">Save as default</button>
+      </footer>
+    </form>
+  </dialog>
+
+  <!-- Send results toast — shown after a send batch lands. Reports
+       counts of sent, skipped, errors so Patrick sees the outcome at
+       a glance without scanning a modal. -->
+  <div class="outreach-toast" id="resultToast" hidden role="status">
+    <strong id="toastTitle">Sent.</strong>
+    <p id="toastBody"></p>
+    <button type="button" class="outreach-toast-close" id="toastClose" aria-label="Dismiss">×</button>
+  </div>
+
+  <script src="/crm/outreach.js"></script>
+  <script src="/crm/nav-badges.js?v=1"></script>
+</body>
+</html>

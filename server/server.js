@@ -551,6 +551,7 @@ function needsAuth(method, pathname) {
   if (pathname === "/admin/today" || pathname === "/admin/today/") return "user";
   if (pathname === "/admin/schedule" || pathname === "/admin/schedule/") return "user";
   if (pathname === "/admin/handoff" || pathname === "/admin/handoff/") return "user";
+  if (pathname === "/admin/outreach" || pathname === "/admin/outreach/") return "user";
   if (pathname === "/admin/chats" || pathname === "/admin/chats/") return "user";
   if (pathname === "/admin/messages" || pathname === "/admin/messages/") return "user";
   if (pathname === "/admin/customers" || pathname === "/admin/customers/") return "user";
@@ -10828,6 +10829,11 @@ function resolveStaticTarget(pathname) {
   }
   if (pathname === "/admin/handoff" || pathname === "/admin/handoff/") {
     return { dir: SERVER_DIR, relative: "/handoff.html" };
+  }
+  // Seasonal outreach (feature-seasonal-outreach-brief.md). Property-
+  // driven bulk send page for the spring + fall booking nudge.
+  if (pathname === "/admin/outreach" || pathname === "/admin/outreach/") {
+    return { dir: SERVER_DIR, relative: "/outreach.html" };
   }
   // Today's Schedule — the tech's daily morning hub. Lists today's
   // confirmed bookings with navigate/notify/open-WO actions per row.

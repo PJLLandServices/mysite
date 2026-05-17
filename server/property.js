@@ -571,9 +571,11 @@ function populateCustomerDisplay(property) {
   const metaEl = document.getElementById("propertyCustomerDisplayMeta");
   const linkEl = document.getElementById("propertyCustomerEditLink");
   const fallbackEl = document.getElementById("propertyCustomerFallbackNote");
+  const warnEl = document.getElementById("propertyCustomerNameWarn");
   if (!nameEl || !metaEl || !linkEl || !fallbackEl) return;
 
-  const name = property.customerName || "(no name on file)";
+  const rawName = String(property.customerName || "").trim();
+  const name = rawName || "(no name on file)";
   const metaParts = [property.customerEmail, property.customerPhone].filter(Boolean);
   nameEl.textContent = name;
   metaEl.textContent = metaParts.length ? metaParts.join(" · ") : "—";
@@ -586,6 +588,13 @@ function populateCustomerDisplay(property) {
     linkEl.href = "/admin/customers";
     linkEl.textContent = "Open Customers →";
     fallbackEl.hidden = false;
+  }
+
+  // Name-invariant warning — surfaces the missing-name state so
+  // Patrick sees it without having to open the outreach audit
+  // (feature-seasonal-outreach-brief.md §3.9).
+  if (warnEl) {
+    warnEl.hidden = Boolean(rawName);
   }
 }
 
@@ -605,6 +614,26 @@ function populateForm(property) {
   propertyForm.elements.notes.value = sys.notes || "";
   renderZones(sys.zones || []);
   renderValveBoxes(sys.valveBoxes || []);
+  // Seasonal eligibility + comm prefs
+  // (feature-seasonal-outreach-brief.md §3.1). Defaults follow the
+  // lib's normalize-on-read — `springOpening !== false` so a property
+  // imported before the schema landed reads as eligible. Both toggle
+  // pairs are saved alongside the rest of the patch through the
+  // standard form submit.
+  const elig = property.seasonalEligibility || {};
+  const prefs = property.commPrefs || {};
+  if (propertyForm.elements.eligSpring) {
+    propertyForm.elements.eligSpring.checked = elig.springOpening !== false;
+  }
+  if (propertyForm.elements.eligFall) {
+    propertyForm.elements.eligFall.checked = elig.fallClosing !== false;
+  }
+  if (propertyForm.elements.prefSms) {
+    propertyForm.elements.prefSms.checked = prefs.seasonalRemindersSMS !== false;
+  }
+  if (propertyForm.elements.prefEmail) {
+    propertyForm.elements.prefEmail.checked = prefs.seasonalRemindersEmail !== false;
+  }
 }
 
 function collectForm() {
@@ -634,6 +663,11 @@ function collectForm() {
   // not by this page — omit those fields from the patch. The lib's
   // shallow merge preserves existing snapshot values when fields are
   // absent, so omission is safe.
+  //
+  // seasonalEligibility + commPrefs ride along on the same PATCH so a
+  // single Save profile click captures every change in one audit
+  // step. The lib deep-merges these so the unsurfaced
+  // commPrefs.optOutTokens secrets aren't wiped by a UI patch.
   return {
     address: propertyForm.elements.address.value.trim(),
     system: {
@@ -644,6 +678,14 @@ function collectForm() {
       notes: propertyForm.elements.notes.value.trim(),
       zones,
       valveBoxes
+    },
+    seasonalEligibility: {
+      springOpening: Boolean(propertyForm.elements.eligSpring?.checked),
+      fallClosing: Boolean(propertyForm.elements.eligFall?.checked)
+    },
+    commPrefs: {
+      seasonalRemindersSMS: Boolean(propertyForm.elements.prefSms?.checked),
+      seasonalRemindersEmail: Boolean(propertyForm.elements.prefEmail?.checked)
     }
   };
 }
