@@ -20,6 +20,34 @@
   outline-offset: 0;
 }
 
+/* Legacy .ml-filters pill row — still used by purchase-orders.html
+ * for its status filter, so keep the styling alive even after
+ * material-lists.html switched to the .ml-filter-row dropdowns below.
+ * Removing this earlier left PO Index's filter buttons unstyled. */
+.ml-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+.ml-filters button {
+  padding: 8px 14px;
+  border: 1px solid #C7C0A8;
+  border-radius: 999px;
+  background: #fff;
+  cursor: pointer;
+  font-size: 13px;
+  color: #4A4A44;
+  white-space: nowrap;
+  min-height: 36px;
+}
+.ml-filters button.is-active {
+  background: #1B4D2E;
+  color: #fff;
+  border-color: #1B4D2E;
+}
+.ml-filters button:hover:not(.is-active) { background: #F5F2E5; }
+
 /* Filter row — two inline dropdowns (Status + Parent) replaces the
  * previous two pill rows (~150px tall on iPhone) with a single row of
  * compact native selects. iOS uses its native picker wheel which keeps
