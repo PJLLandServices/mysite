@@ -925,6 +925,56 @@
   padding: 18px 22px;
   margin-bottom: 32px;
 }
+
+/* Working hours & rules collapses by default — it's set-once
+ * configuration that bloated the schedule page by ~1000px on iPad and
+ * ~1100px on iPhone. Tapping the heading opens it. JS auto-opens it
+ * when a status message lands inside so user-visible feedback isn't
+ * hidden behind a closed disclosure. */
+.schedule-settings-collapse {
+  display: block;
+}
+.schedule-settings-collapse > summary {
+  list-style: none;
+  cursor: pointer;
+  padding: 4px 0;
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  user-select: none;
+  -webkit-tap-highlight-color: rgba(27, 77, 46, 0.06);
+}
+.schedule-settings-collapse > summary::-webkit-details-marker { display: none; }
+.schedule-settings-collapse > summary::marker { content: ""; }
+.schedule-settings-collapse > summary > h2 {
+  margin: 0;
+  flex: 0 1 auto;
+}
+.schedule-settings-summary-hint {
+  flex: 1 1 auto;
+  font-size: 12px;
+  color: rgba(15, 31, 20, 0.45);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.schedule-settings-collapse > summary::after {
+  content: "";
+  flex: 0 0 auto;
+  width: 10px;
+  height: 10px;
+  border-right: 2px solid rgba(27, 77, 46, 0.55);
+  border-bottom: 2px solid rgba(27, 77, 46, 0.55);
+  transform: rotate(45deg) translate(-2px, -2px);
+  transition: transform 0.15s ease;
+}
+.schedule-settings-collapse[open] > summary::after {
+  transform: rotate(-135deg) translate(-2px, -2px);
+}
+.schedule-settings-collapse[open] > summary {
+  margin-bottom: 10px;
+  border-bottom: 1px solid rgba(27, 77, 46, 0.08);
+}
+
 .schedule-settings h2 {
   font-family: "Barlow Condensed", sans-serif;
   font-size: 22px;

@@ -51,7 +51,19 @@ const settingBuffer = document.getElementById("settingBuffer");
 const settingIncrement = document.getElementById("settingIncrement");
 const saveSettings = document.getElementById("saveSettings");
 const settingsStatus = document.getElementById("settingsStatus");
+const scheduleSettingsCollapse = document.querySelector(".schedule-settings-collapse");
 const logoutButton = document.getElementById("logoutButton");
+
+// settingsStatus doubles as the booking-success/delete toast (see
+// `Booked. WO …` and `Booking … permanently deleted.` writes below).
+// When the Working hours panel is collapsed those toasts would be
+// invisible — auto-open the panel any time text lands in the status
+// span so the user actually sees the feedback.
+if (scheduleSettingsCollapse && settingsStatus) {
+  new MutationObserver(() => {
+    if (settingsStatus.textContent.trim()) scheduleSettingsCollapse.open = true;
+  }).observe(settingsStatus, { childList: true, characterData: true, subtree: true });
+}
 
 const DAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 const DOW_LETTERS = ["S", "M", "T", "W", "T", "F", "S"];

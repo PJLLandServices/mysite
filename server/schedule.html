@@ -108,27 +108,32 @@
     </div>
 
     <section class="schedule-settings" id="settingsCard">
-      <h2>Working hours &amp; rules</h2>
-      <p class="settings-note">Defaults shown. Override per day if your real schedule differs from the spec.</p>
-      <div class="settings-grid" id="hoursGrid"></div>
-      <div class="settings-engine">
-        <label>
-          <span>Lead time (hours before earliest slot)</span>
-          <input type="number" min="0" max="48" step="1" id="settingLeadHours" value="5">
-        </label>
-        <label>
-          <span>Buffer between jobs (minutes)</span>
-          <input type="number" min="0" max="60" step="5" id="settingBuffer" value="15">
-        </label>
-        <label>
-          <span>Slot increment (minutes)</span>
-          <input type="number" min="15" max="120" step="15" id="settingIncrement" value="30">
-        </label>
-      </div>
-      <div class="settings-actions">
-        <button type="button" class="pjl-btn pjl-btn-primary" id="saveSettings">Save rules</button>
-        <span id="settingsStatus" role="status"></span>
-      </div>
+      <details class="schedule-settings-collapse">
+        <summary>
+          <h2>Working hours &amp; rules</h2>
+          <span class="schedule-settings-summary-hint">Open / close</span>
+        </summary>
+        <p class="settings-note">Defaults shown. Override per day if your real schedule differs from the spec.</p>
+        <div class="settings-grid" id="hoursGrid"></div>
+        <div class="settings-engine">
+          <label>
+            <span>Lead time (hours before earliest slot)</span>
+            <input type="number" min="0" max="48" step="1" id="settingLeadHours" value="5">
+          </label>
+          <label>
+            <span>Buffer between jobs (minutes)</span>
+            <input type="number" min="0" max="60" step="5" id="settingBuffer" value="15">
+          </label>
+          <label>
+            <span>Slot increment (minutes)</span>
+            <input type="number" min="15" max="120" step="15" id="settingIncrement" value="30">
+          </label>
+        </div>
+        <div class="settings-actions">
+          <button type="button" class="pjl-btn pjl-btn-primary" id="saveSettings">Save rules</button>
+          <span id="settingsStatus" role="status"></span>
+        </div>
+      </details>
     </section>
     </main>
   </div><!-- /.pjl-app -->
