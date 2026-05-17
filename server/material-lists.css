@@ -90,7 +90,19 @@
   background: #fff;
   border: 1px solid #E2E0D4;
   border-radius: 12px;
-  padding: 0;
+  /* Padding lives on the card, not on .ml-card-link. purchase-orders.js
+   * renders an inner <a class="ml-source-pill"> (the source material-list
+   * link) inside the .ml-card-link wrapper. HTML5 forbids nested anchors,
+   * so the parser auto-closes the outer link at the inner one — orphaning
+   * .ml-card-source-row / .ml-card-lines / .ml-card-stats as siblings of
+   * .ml-card-link rather than children, losing the link's padding. With
+   * padding on .ml-card itself, those orphaned siblings still sit inside
+   * the card's visible border. The clean case (material-lists, projects,
+   * work-orders, where no nested anchor exists) renders identically since
+   * .ml-card-link { display: block } just fills the padded content box.
+   * The 44px left reserves space for the absolutely-positioned bulk
+   * checkbox below. */
+  padding: 14px 16px 14px 44px;
   overflow: hidden;
   transition: box-shadow 120ms ease, border-color 120ms ease;
 }
@@ -99,13 +111,6 @@
 
 .ml-card-link {
   display: block;
-  /* Left padding reserves space for the bulk-checkbox that
-   * bulk-wiring.js injects as a sibling. Previously used :has() to
-   * apply this conditionally but the selector wasn't reliably
-   * matching the dynamically-injected wrap on production Chrome, so
-   * the checkbox kept overlapping the card content. Bulk-wiring is
-   * always attached on these pages anyway, so reserve unconditionally. */
-  padding: 14px 16px 14px 44px;
   color: inherit;
   text-decoration: none;
 }
