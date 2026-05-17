@@ -48,22 +48,25 @@
   border-bottom-color: #1B4D2E;
 }
 
-/* Below 700px the four sub-nav tabs (Material lists / Purchase orders /
- * Suppliers / Catalog assignments) don't fit on a single 408px-wide
- * card row, so the last tab gets silently clipped off the right edge
- * — the overflow-x: auto scroller is non-obvious. Allow wrapping and
- * shrink the padding so all four stay tappable on two rows. */
+/* Below 700px the four sub-nav tabs don't fit on a single 408px-wide
+ * card row. Keep them on one horizontal-scroll line; hide the
+ * scrollbar so the strip reads as native swipe content. */
 @media (max-width: 700px) {
   .suppliers-subnav {
-    flex-wrap: wrap;
-    overflow-x: visible;
+    flex-wrap: nowrap;
+    white-space: nowrap;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
     gap: 0 2px;
+    scrollbar-width: none;
   }
+  .suppliers-subnav::-webkit-scrollbar { display: none; }
   .suppliers-subnav a {
     padding: 9px 12px;
     font-size: 13px;
     letter-spacing: 0.08em;
     min-height: 40px;
+    flex: 0 0 auto;
   }
 }
 

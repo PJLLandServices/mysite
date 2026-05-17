@@ -20,15 +20,41 @@
   outline-offset: 0;
 }
 
-/* Legacy .ml-filters pill row — still used by purchase-orders.html
- * for its status filter, so keep the styling alive even after
- * material-lists.html switched to the .ml-filter-row dropdowns below.
- * Removing this earlier left PO Index's filter buttons unstyled. */
+/* Filter groups — Status + Parent each wrapped in a <fieldset
+ * class="ml-filter-group"> with a <legend class="ml-filter-legend"> so
+ * the two filter dimensions read as distinct rather than as one
+ * continuous chip blob. */
+.ml-filter-group {
+  border: 0;
+  margin: 0 0 10px;
+  padding: 0;
+  min-width: 0;
+}
+.ml-filter-group + .ml-filter-group {
+  margin-top: 4px;
+  padding-top: 10px;
+  border-top: 1px solid #ECEAE0;
+}
+.ml-filter-legend {
+  display: block;
+  padding: 0;
+  margin-bottom: 6px;
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #7A7A72;
+}
+
+/* Pill chip row — used by ml-filter-group on the ML page AND by
+ * purchase-orders.html for its standalone status filter. Keep the rule
+ * unconditionally so PO Index's filters stay styled. */
 .ml-filters {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  margin-bottom: 14px;
+  margin-bottom: 0;
 }
 .ml-filters button {
   padding: 8px 14px;
@@ -48,56 +74,13 @@
 }
 .ml-filters button:hover:not(.is-active) { background: #F5F2E5; }
 
-/* Filter row — two inline dropdowns (Status + Parent) replaces the
- * previous two pill rows (~150px tall on iPhone) with a single row of
- * compact native selects. iOS uses its native picker wheel which keeps
- * the tap target at the platform-standard 44pt. */
-.ml-filter-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px 18px;
-  margin-bottom: 14px;
-  align-items: center;
-}
-.ml-filter-control {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-}
-.ml-filter-label {
-  font-family: "Barlow Condensed", sans-serif;
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: #7A7A72;
-}
-.ml-filter-select {
-  padding: 8px 12px;
-  border: 1px solid #C7C0A8;
-  border-radius: 8px;
-  background: #fff;
-  font: inherit;
-  font-size: 14px;
-  color: #1F2A22;
-  cursor: pointer;
-  min-height: 40px;
-  /* Keep the native dropdown caret. Suppressing it with appearance:none
-   * + a custom inline-SVG background-image broke on iOS Safari (raw <
-   * inside data: URI is invalid), leaving the field looking like a
-   * flat text rectangle. */
-}
-.ml-filter-select:focus {
-  outline: 2px solid rgba(27,77,46,0.20);
-  outline-offset: 0;
-  border-color: #1B4D2E;
-}
-
 /* Card grid */
 .ml-cards {
   list-style: none;
   margin: 0;
-  padding: 0;
+  /* Bottom safe-area inset keeps the last card's metric row above
+   * Safari's bottom toolbar on iPhone 17 Pro Max. */
+  padding: 0 0 max(16px, env(safe-area-inset-bottom));
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -127,11 +110,13 @@
   text-decoration: none;
 }
 
+/* Bulk-checkbox positioned top-left of the card to match the supplier
+ * card pattern (single shared bulk-select layout across ml-card,
+ * supplier-card, property-card). */
 .ml-card > .pjl-bulk-checkbox-wrap {
   position: absolute;
-  top: 50%;
+  top: 14px;
   left: 6px;
-  transform: translateY(-50%);
   margin: 0;
   padding: 6px;
   z-index: 2;

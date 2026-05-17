@@ -16,8 +16,8 @@ const els = {
   newCancel: document.getElementById("newListCancel"),
   search: document.getElementById("listSearch"),
   includeArchived: document.getElementById("includeArchived"),
-  statusSelect: document.getElementById("mlStatusFilter"),
-  parentSelect: document.getElementById("mlParentFilter")
+  filterButtons: document.querySelectorAll("[data-status-filter]"),
+  parentFilterButtons: document.querySelectorAll("[data-parent-filter]")
 };
 
 // Display labels for the parent type chip on each card.
@@ -201,14 +201,20 @@ els.newCancel.addEventListener("click", closeNewForm);
 els.newForm.addEventListener("submit", saveNew);
 els.search.addEventListener("input", () => renderLists());
 els.includeArchived.addEventListener("change", loadLists);
-els.statusSelect.addEventListener("change", () => {
-  currentStatus = els.statusSelect.value || "";
-  loadLists();
+els.filterButtons.forEach((btn) => {
+  btn.addEventListener("click", () => {
+    currentStatus = btn.dataset.statusFilter || "";
+    els.filterButtons.forEach((b) => b.classList.toggle("is-active", b === btn));
+    loadLists();
+  });
 });
-els.parentSelect.addEventListener("change", () => {
-  currentParentFilter = els.parentSelect.value || "";
-  // Parent filter is client-side only — no server round-trip needed.
-  renderLists();
+els.parentFilterButtons.forEach((btn) => {
+  btn.addEventListener("click", () => {
+    currentParentFilter = btn.dataset.parentFilter || "";
+    els.parentFilterButtons.forEach((b) => b.classList.toggle("is-active", b === btn));
+    // Parent filter is client-side only — no server round-trip needed.
+    renderLists();
+  });
 });
 
 loadLists();
