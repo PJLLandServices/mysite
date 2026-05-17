@@ -2904,10 +2904,11 @@ async function handleApi(req, res, pathname) {
     }
     // Property token fallback (seasonal outreach). Outreach links are
     // /portal/<propertyToken>?season=spring|fall — the token here is
-    // derived from property.id, not a lead. When that's the case, mint
-    // a fresh booking session with the property's customer info and
-    // hand the client a redirect to /book.html so the customer lands
-    // on the booking flow pre-filled.
+    // derived from property.id, not a lead. Return a property-shaped
+    // payload so portal.js can render a property-aware landing page
+    // (greeting + property summary + "Book your seasonal service"
+    // CTA). Session minting is deferred until the customer taps
+    // Book — see POST /api/portal/:token/begin-booking below.
     const allProperties = await properties.list();
     const property = allProperties.find((p) => p.id && portalTokenForId(p.id) === token) || null;
     if (property) {
@@ -2916,16 +2917,66 @@ async function handleApi(req, res, pathname) {
       const season = (seasonRaw === "spring" || seasonRaw === "fall") ? seasonRaw : null;
       const fullName = String(property.customerName || "").trim();
       const firstName = fullName ? fullName.split(/\s+/)[0] : "";
-      const lastName = fullName ? fullName.split(/\s+/).slice(1).join(" ") : "";
-      // Best-effort zone count from the property profile — used to
-      // suggest a sensible spring_open_/fall_close_ service variant.
-      // If zones aren't filled in we leave suggestedService blank and
-      // let the customer pick on the booking form.
       const zoneCount = Array.isArray(property.system?.zones) ? property.system.zones.length : 0;
-      const suggestedService = (season && zoneCount > 0)
-        ? `${season === "spring" ? "spring_open" : "fall_close"}_${zoneCount}z`
-        : "";
-      const sessionPayload = {
+      const seasonName = season === "spring" ? "Spring Opening"
+                       : season === "fall"   ? "Fall Closing"
+                       : "";
+      // Recent service records (last 3) give the customer some
+      // continuity — "we were here in Apr 2025, want us back?"
+      const recentServices = Array.isArray(property.serviceRecords)
+        ? property.serviceRecords.slice(0, 3).map((r) => ({
+            id: r.id,
+            woType: r.woType || "service_visit",
+            completedAt: r.completedAt || null,
+            summary: r.summary || ""
+          }))
+        : [];
+      return sendJson(res, 200, {
+        ok: true,
+        propertyPortal: {
+          customerName: fullName,
+          firstName,
+          address: String(property.address || "").trim(),
+          email: String(property.customerEmail || "").trim(),
+          phone: String(property.customerPhone || "").trim(),
+          zoneCount,
+          controllerBrand: property.system?.controllerBrand || "",
+          controllerLocation: property.system?.controllerLocation || "",
+          recentServices,
+          season,
+          seasonName
+        }
+      });
+    }
+    return sendJson(res, 404, { ok: false, errors: ["Customer portal not found."] });
+  }
+
+  // POST /api/portal/<propertyToken>/begin-booking — mints a fresh
+  // booking session pre-loaded with the property's customer hints and
+  // suggested seasonal service variant. Fired from the "Book your
+  // seasonal service" button on the property-portal view. Returns
+  // { ok: true, redirect: "/book.html?session=..." }. Sessions have
+  // a 1-hour TTL so this is per-tap, not per-link.
+  const beginBookingMatch = pathname.match(/^\/api\/portal\/([^/]+)\/begin-booking$/);
+  if (beginBookingMatch && req.method === "POST") {
+    const token = decodeURIComponent(beginBookingMatch[1]);
+    const allProperties = await properties.list();
+    const property = allProperties.find((p) => p.id && portalTokenForId(p.id) === token) || null;
+    if (!property) {
+      return sendJson(res, 404, { ok: false, errors: ["Property not found."] });
+    }
+    const url = new URL(req.url, baseUrlFromReq(req));
+    const seasonRaw = String(url.searchParams.get("season") || "").trim().toLowerCase();
+    const season = (seasonRaw === "spring" || seasonRaw === "fall") ? seasonRaw : null;
+    const fullName = String(property.customerName || "").trim();
+    const firstName = fullName ? fullName.split(/\s+/)[0] : "";
+    const lastName = fullName ? fullName.split(/\s+/).slice(1).join(" ") : "";
+    const zoneCount = Array.isArray(property.system?.zones) ? property.system.zones.length : 0;
+    const suggestedService = (season && zoneCount > 0)
+      ? `${season === "spring" ? "spring_open" : "fall_close"}_${zoneCount}z`
+      : "";
+    try {
+      const session = await bookingSessions.createSession({
         source: "seasonal_outreach",
         suggestedService,
         customerHints: {
@@ -2936,20 +2987,15 @@ async function handleApi(req, res, pathname) {
           address: String(property.address || "").trim(),
           zoneCount: zoneCount > 0 ? zoneCount : null
         }
-      };
-      try {
-        const session = await bookingSessions.createSession(sessionPayload);
-        return sendJson(res, 200, {
-          ok: true,
-          redirect: `/book.html?session=${encodeURIComponent(session.token)}`
-        });
-      } catch (err) {
-        console.warn("[portal-property-redirect] session create failed:", err?.message || err);
-        // Fallthrough — better to return 404 than throw on a portal
-        // page load.
-      }
+      });
+      return sendJson(res, 200, {
+        ok: true,
+        redirect: `/book.html?session=${encodeURIComponent(session.token)}`
+      });
+    } catch (err) {
+      console.warn("[begin-booking] session create failed:", err?.message || err);
+      return sendJson(res, 500, { ok: false, errors: ["Couldn't start a booking session."] });
     }
-    return sendJson(res, 404, { ok: false, errors: ["Customer portal not found."] });
   }
 
   const leadMatch = pathname.match(/^\/api\/quotes\/([^/]+)$/);
