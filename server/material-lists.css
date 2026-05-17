@@ -45,7 +45,7 @@
   color: #7A7A72;
 }
 .ml-filter-select {
-  padding: 8px 30px 8px 12px;
+  padding: 8px 12px;
   border: 1px solid #C7C0A8;
   border-radius: 8px;
   background: #fff;
@@ -54,12 +54,10 @@
   color: #1F2A22;
   cursor: pointer;
   min-height: 40px;
-  appearance: none;
-  -webkit-appearance: none;
-  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'><path fill='none' stroke='%231B4D2E' stroke-width='2' d='M1 1l5 5 5-5'/></svg>");
-  background-repeat: no-repeat;
-  background-position: right 10px center;
-  background-size: 12px 8px;
+  /* Keep the native dropdown caret. Suppressing it with appearance:none
+   * + a custom inline-SVG background-image broke on iOS Safari (raw <
+   * inside data: URI is invalid), leaving the field looking like a
+   * flat text rectangle. */
 }
 .ml-filter-select:focus {
   outline: 2px solid rgba(27,77,46,0.20);
