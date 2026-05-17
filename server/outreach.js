@@ -27,6 +27,7 @@
   const seasonSelect = $("#seasonSelect");
   const yearSelect = $("#yearSelect");
   const editTemplateBtn = $("#editTemplateBtn");
+  const headerSendTestBtn = $("#headerSendTestBtn");
   const filterSelect = $("#filterSelect");
   const candidateList = $("#candidateList");
   const emptyState = $("#emptyState");
@@ -582,32 +583,27 @@
     updateComposePreview();
   });
 
-  // Test send (pre-flight verification). Single message to
-  // NOTIFY_TO_PHONE / NOTIFY_TO_EMAIL using the same render path
-  // a real send would. No touch is recorded; the operator can
-  // hammer this while iterating on copy without locking
-  // themselves out or polluting the audit trail.
-  composeSendTestBtn.addEventListener("click", async () => {
-    const channels = selectedChannels();
-    if (!channels.length) {
+  // Shared test-send. Both the in-modal "Send a test to me" button
+  // and the page-header "Send test to me" button funnel through
+  // here. The header button uses the saved template values (no
+  // compose form open); the modal button uses what's currently in
+  // the compose form. Either way the server's outreach.sendTest
+  // skips the touch + concurrent-send lock so the audit trail stays
+  // clean and Patrick can fire repeatedly while iterating.
+  async function runTestSend({ button, body }) {
+    const channels = body.channels;
+    if (!channels || !channels.length) {
       showToast("Pick a channel", "Select at least one of SMS or Email.", { variant: "warn" });
       return;
     }
-    const sample = firstSelectedRow();
-    composeSendTestBtn.disabled = true;
-    composeSendTestBtn.classList.add("is-loading");
-    const originalLabel = composeSendTestBtn.textContent;
-    composeSendTestBtn.textContent = "Sending test…";
+    const original = button?.textContent;
+    if (button) {
+      button.disabled = true;
+      button.classList.add("is-loading");
+      button.textContent = "Sending test…";
+    }
     try {
-      const result = await api("POST", "/api/outreach/send-test", {
-        season: state.season,
-        year: state.year,
-        channels,
-        subject: composeSubject.value,
-        smsBody: composeSmsBody.value,
-        emailBody: composeEmailBody.value,
-        sampleId: sample ? sample.propertyId : null
-      });
+      const result = await api("POST", "/api/outreach/send-test", body);
       const dest = [];
       if (result.sentTo?.email) dest.push(`email → ${result.sentTo.email}`);
       if (result.sentTo?.phone) dest.push(`SMS → ${result.sentTo.phone}`);
@@ -616,26 +612,87 @@
         if (outcome?.skipped) skips.push(`${ch} skipped (${outcome.reason || "no recipient"})`);
       }
       const errBits = (result.errors || []).map((e) => `${e.channel}: ${e.error}`);
-      if (dest.length === 0 && skips.length === 0 && errBits.length === 0) {
-        showToast("Test send didn't dispatch", "Check NOTIFY_TO_PHONE / NOTIFY_TO_EMAIL env vars.", { variant: "warn" });
+      const lines = [];
+      if (dest.length) lines.push(`Sent: ${dest.join(" · ")}`);
+      if (skips.length) lines.push(skips.join(" · "));
+      if (errBits.length) lines.push(`Errors: ${errBits.join(" · ")}`);
+      // Title reflects what ACTUALLY happened. Three states:
+      //   - Nothing dispatched (both channels skipped or no recipient)
+      //   - Some dispatched, some failed or skipped (partial)
+      //   - All dispatched cleanly
+      let title;
+      let variant = "info";
+      if (dest.length === 0 && errBits.length === 0) {
+        title = "Test didn't dispatch";
+        variant = "warn";
+        if (skips.length === 0) lines.unshift("Check NOTIFY_TO_PHONE / NOTIFY_TO_EMAIL env vars.");
+      } else if (errBits.length) {
+        title = "Test had errors";
+        variant = "warn";
+      } else if (skips.length) {
+        title = "Test partly sent";
+        variant = "warn";
       } else {
-        const lines = [];
-        if (dest.length) lines.push(`Sent: ${dest.join(" · ")}`);
-        if (skips.length) lines.push(skips.join(" · "));
-        if (errBits.length) lines.push(`Errors: ${errBits.join(" · ")}`);
-        showToast(
-          errBits.length ? "Test had errors" : "Test sent — check your inbox",
-          lines.join("\n"),
-          { variant: errBits.length ? "warn" : "info" }
-        );
+        title = "Test sent — check your inbox";
       }
+      showToast(title, lines.join("\n"), { variant });
     } catch (err) {
       showToast("Test send failed", err.message || "Unknown error.", { variant: "warn" });
     } finally {
-      composeSendTestBtn.disabled = false;
-      composeSendTestBtn.classList.remove("is-loading");
-      composeSendTestBtn.textContent = originalLabel;
+      if (button) {
+        button.disabled = false;
+        button.classList.remove("is-loading");
+        button.textContent = original;
+      }
     }
+  }
+
+  // In-modal test send — uses the compose form's current values
+  // plus the first selected row's merge data (or placeholders if
+  // nothing's selected).
+  composeSendTestBtn.addEventListener("click", () => {
+    const sample = firstSelectedRow();
+    runTestSend({
+      button: composeSendTestBtn,
+      body: {
+        season: state.season,
+        year: state.year,
+        channels: selectedChannels(),
+        subject: composeSubject.value,
+        smsBody: composeSmsBody.value,
+        emailBody: composeEmailBody.value,
+        sampleId: sample ? sample.propertyId : null
+      }
+    });
+  });
+
+  // Header-level test send — reachable without opening the compose
+  // modal or selecting any rows. Uses the SAVED template for this
+  // season (or sensible defaults if no template is saved yet).
+  // This is the path Patrick uses to verify a saved template
+  // before the season opens — the brief's mock didn't have it but
+  // a "test before the modal even opens" flow turned out to be
+  // load-bearing once the disabled-row state existed.
+  headerSendTestBtn.addEventListener("click", () => {
+    const tpl = state.templates[state.season] || { subject: "", smsBody: "", emailBody: "" };
+    const seasonName = state.season === "spring" ? "Spring Opening" : "Fall Closing";
+    // Pick the first SELECTABLE row (not disabled) for merge data,
+    // even if it's not checked — gives the template a real address
+    // to render against. Falls back to placeholders inside
+    // sendTest() if none of the candidates are selectable.
+    const firstSelectable = state.candidates.find((r) => !rowDisabledReason(r));
+    runTestSend({
+      button: headerSendTestBtn,
+      body: {
+        season: state.season,
+        year: state.year,
+        channels: ["sms", "email"],
+        subject: tpl.subject || `Time to book your ${seasonName}`,
+        smsBody: tpl.smsBody,
+        emailBody: tpl.emailBody,
+        sampleId: firstSelectable ? firstSelectable.propertyId : null
+      }
+    });
   });
 
   composeForm.addEventListener("submit", async (event) => {
