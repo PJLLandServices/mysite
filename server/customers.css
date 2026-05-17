@@ -57,24 +57,32 @@
   gap: 10px;
 }
 
-/* Each row wraps three siblings: a checkbox (for bulk select), the
-   navigable card link, and a per-row download anchor. Grid keeps them
-   aligned and lets the card link consume all the leftover space. */
+/* One row = one visual box. Checkbox sits at the left, card link fills
+   the middle (and is the navigation target), download anchor is a flush
+   right-side cell separated by a hairline. Earlier draft gave each of
+   the three siblings its own border + background, which read as three
+   floating chips per row — Patrick called it out as visually fragmented
+   ("grinds my gears"). Unifying the frame fixes the desktop look and
+   removes the cramped-flanking-boxes problem on iPhone too. */
 .customer-row {
   display: grid;
   grid-template-columns: auto 1fr auto;
-  gap: 8px;
+  gap: 0;
   align-items: stretch;
+  background: #fff;
+  border: 1px solid var(--crm-border, #d4d2cb);
+  border-radius: 8px;
+  overflow: hidden;
+  transition: border-color 0.15s;
 }
+
+.customer-row:hover { border-color: #0F1F14; }
 
 .customer-row-check {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 0 10px;
-  background: #fff;
-  border: 1px solid var(--crm-border, #d4d2cb);
-  border-radius: 8px;
+  padding: 0 14px;
   cursor: pointer;
   user-select: none;
 }
@@ -86,33 +94,55 @@
   accent-color: #0F1F14;
 }
 
+/* Override the standalone .customer-card frame when it's nested inside
+   a .customer-row — the row wrapper owns the border / background, the
+   card is just flow content. Bookings still uses .customer-card on its
+   own and keeps the boxed look there. */
+.customer-row .customer-card {
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  padding: 10px 14px;
+  /* Three-column flow on desktop: name / contact / status. Stat columns
+     intentionally dropped — they ate horizontal real estate and the
+     brief never asked for them. */
+  grid-template-columns: minmax(160px, 1.3fr) minmax(180px, 1.6fr) auto;
+  gap: 14px;
+}
+
+.customer-row .customer-card:hover { transform: none; }
+
 .customer-row-download {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 0 16px;
-  background: #fff;
-  border: 1px solid var(--crm-border, #d4d2cb);
-  border-radius: 8px;
+  padding: 0 18px;
   text-decoration: none;
   color: #0F1F14;
   font-size: 20px;
   font-weight: 600;
-  transition: border-color 0.15s, background 0.15s;
-  min-width: 48px; /* iOS tap target floor */
+  border-left: 1px solid var(--crm-border, #d4d2cb);
+  transition: background 0.15s;
+  min-width: 56px; /* iOS tap target floor */
 }
 
-.customer-row-download:hover {
-  background: #fafaf7;
-  border-color: #0F1F14;
-}
-
+.customer-row-download:hover { background: #fafaf7; }
 .customer-row-download:active { transform: translateY(1px); }
 
-@media (max-width: 600px) {
-  .customer-row { gap: 6px; }
-  .customer-row-check { padding: 0 6px; }
-  .customer-row-download { padding: 0 12px; min-width: 44px; font-size: 18px; }
+@media (max-width: 700px) {
+  /* Reflow the nested card into the iPhone-polish 2-row stack: name +
+     status on top, contact full-width below. Stats are gone so the
+     polish's stat-positioning rules become no-ops — no conflict. */
+  .customer-row .customer-card {
+    grid-template-columns: 1fr auto;
+    gap: 4px 12px;
+    padding: 10px 12px;
+  }
+  .customer-row .customer-card .customer-card-name { grid-column: 1; grid-row: 1; min-width: 0; }
+  .customer-row .customer-card .customer-status { grid-column: 2; grid-row: 1; justify-self: end; align-self: start; }
+  .customer-row .customer-card .customer-card-contact { grid-column: 1 / -1; grid-row: 2; min-width: 0; }
+  .customer-row-check { padding: 0 8px; }
+  .customer-row-download { padding: 0 12px; min-width: 48px; font-size: 18px; }
 }
 
 .customer-card {
@@ -127,34 +157,6 @@
   text-decoration: none;
   color: var(--crm-text, #1a1a1a);
   transition: border-color 0.15s, transform 0.05s;
-}
-
-/* Phones can't fit a 5-column grid whose minimum widths add up to
- * ~340px+ chrome — the row blows the viewport. Stack into a 3-row
- * layout under 700px: name + status on row 1, contact on row 2, stats
- * side-by-side on row 3. */
-@media (max-width: 700px) {
-  .customer-card {
-    grid-template-columns: 1fr auto;
-    gap: 6px 12px;
-    padding: 12px 14px;
-  }
-  .customer-card-name { grid-column: 1; grid-row: 1; min-width: 0; }
-  .customer-status { grid-column: 2; grid-row: 1; justify-self: end; align-self: start; }
-  .customer-card-contact { grid-column: 1 / -1; grid-row: 2; min-width: 0; }
-  .customer-card .customer-card-stat:nth-of-type(1) { grid-column: 1; grid-row: 3; }
-  .customer-card .customer-card-stat:nth-of-type(2) { grid-column: 2; grid-row: 3; }
-  .customer-card .customer-card-stat {
-    text-align: left;
-    min-width: 0;
-    display: inline-flex;
-    align-items: baseline;
-    gap: 4px;
-  }
-  .customer-card .customer-card-stat strong {
-    display: inline;
-    font-size: 14px;
-  }
 }
 
 .customer-card:hover {

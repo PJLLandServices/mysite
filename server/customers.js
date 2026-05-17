@@ -94,14 +94,15 @@ function render() {
   for (const c of filtered) {
     const row = document.createElement("div");
     row.className = "customer-row";
-    const propertyCount = c.propertyCount || 0;
-    const lastActivity = formatDate(c.lastActivityAt || c.updatedAt || c.createdAt);
     const idAttr = escapeHtml(c.id);
     const isChecked = selectedIds.has(c.id);
     // The card link spans the middle column; checkbox + download anchor
-    // flank it on either side. We use a plain <a download> for the
+    // flank it on either side. Plain <a download> is enough for the
     // per-row download — the server's Content-Disposition: attachment
     // header turns it into a save dialog without leaving the page.
+    // Stat columns (propertyCount, lastActivity) dropped — they ate
+    // horizontal space on desktop and stacked awkwardly on iPhone, and
+    // the original brief didn't ask for them anyway.
     row.innerHTML = `
       <label class="customer-row-check" title="Select for bulk download">
         <input type="checkbox" data-customer-id="${idAttr}"${isChecked ? " checked" : ""}>
@@ -115,14 +116,6 @@ function render() {
         <div class="customer-card-contact">
           <span>${escapeHtml(c.email) || "—"}</span>
           <span>${escapeHtml(c.phone) || "—"}</span>
-        </div>
-        <div class="customer-card-stat">
-          <strong>${propertyCount}</strong>
-          ${propertyCount === 1 ? "property" : "properties"}
-        </div>
-        <div class="customer-card-stat">
-          <strong>${lastActivity}</strong>
-          last activity
         </div>
         <span class="customer-status is-${escapeHtml(c.status || "lead")}">${escapeHtml(c.status || "lead")}</span>
       </a>
