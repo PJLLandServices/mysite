@@ -255,7 +255,11 @@
     if (row.optedOutAll || (!row.commPrefs.seasonalRemindersSMS && !row.commPrefs.seasonalRemindersEmail)) {
       return "Opted out of seasonal reminders.";
     }
-    if (!row.portalToken) return "No portal token on file — needs at least one prior lead.";
+    // Every property gets a deterministic portal token derived
+    // from its id (see outreach.js resolvePortalToken). The only
+    // way to land here without one is a record so corrupted it
+    // has no id — defensive, shouldn't fire in production.
+    if (!row.portalToken) return "Property record is missing an id.";
     return null;
   }
 
