@@ -62,6 +62,20 @@
         <p class="settings-status" id="adminDefaultsStatus"></p>
       </section>
 
+      <section class="settings-card" id="contactInfoCard" hidden>
+        <h2>Customer-facing contact</h2>
+        <p class="settings-help">Phone number shown to customers when self-serve actions on the portal are blocked ("Within 24 hours — please call …"). Used in every fallback message; change here and the new number takes effect everywhere on the next portal render.</p>
+        <div class="settings-row settings-row-stack">
+          <div>
+            <strong>Customer support phone</strong>
+            <p class="settings-row-help">Format however you want it to read on the portal — "(905) 960-0181" works.</p>
+          </div>
+          <input type="tel" id="contactInfoPhone" class="settings-select" placeholder="(905) 960-0181" autocomplete="tel">
+        </div>
+        <button type="button" class="settings-save" id="contactInfoSave" disabled>Save</button>
+        <p class="settings-status" id="contactInfoStatus"></p>
+      </section>
+
       <section class="settings-card" id="exportsCard">
         <h2>Exports &amp; downloads</h2>
         <p class="settings-help">Pull-from-CRM data dumps. CSV opens in Excel / Sheets. Phone contacts now live on the <a href="/admin/customers">Customers</a> page — tap the Download button on a row to import one to iPhone Contacts, or multi-select for a bulk import.</p>

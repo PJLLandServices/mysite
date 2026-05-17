@@ -33,11 +33,52 @@ async function load() {
   currentSettings = data.settings;
   document.getElementById("settingsLoading").hidden = true;
   document.getElementById("adminDefaultsCard").hidden = false;
+  document.getElementById("contactInfoCard").hidden = false;
   document.getElementById("auditCard").hidden = false;
   document.getElementById("icalCard").hidden = false;
   renderGrid();
   renderAudit();
   renderIcalFeed();
+  renderContactInfo();
+}
+
+// Contact-info card. Reads the customer-facing support phone from the
+// current settings payload + listens for edits. The save button stays
+// disabled until the field differs from what's loaded, so a click never
+// re-POSTs the same value.
+function renderContactInfo() {
+  const input = document.getElementById("contactInfoPhone");
+  const save = document.getElementById("contactInfoSave");
+  const status = document.getElementById("contactInfoStatus");
+  if (!input || !save) return;
+  const current = (currentSettings?.contactInfo?.customerSupportPhone || "").trim();
+  input.value = current;
+  save.disabled = true;
+  if (status) status.textContent = "";
+  input.oninput = () => {
+    save.disabled = input.value.trim() === current;
+  };
+  save.onclick = async () => {
+    const value = input.value.trim();
+    save.disabled = true;
+    status.textContent = "Saving…";
+    try {
+      const r = await fetch("/api/settings/contact-info", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ customerSupportPhone: value })
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok || !data.ok) throw new Error((data.errors || ["Couldn't save."]).join(" "));
+      currentSettings = data.settings;
+      status.textContent = "Saved.";
+      renderContactInfo();
+      renderAudit();
+    } catch (err) {
+      status.textContent = err.message || "Save failed.";
+      save.disabled = false;
+    }
+  };
 }
 
 // iPhone Calendar Sync card — toggles between the before-generate state

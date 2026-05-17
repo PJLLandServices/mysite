@@ -1980,6 +1980,21 @@ async function rescheduleAvailability(bookingId, { from, to } = {}) {
   };
 }
 
+// Read the customer-facing support phone from settings (admin-editable
+// at /admin/settings → Contact info). Surfaced verbatim in portal error
+// states when self-service is blocked. Cached-by-call rather than at
+// module load so a settings update is picked up on the next portal
+// render without restarting the server.
+async function customerSupportPhone() {
+  try {
+    const s = await settings.get();
+    const phone = s?.contactInfo?.customerSupportPhone;
+    return (typeof phone === "string" && phone.trim()) || "(905) 960-0181";
+  } catch {
+    return "(905) 960-0181";
+  }
+}
+
 // Shared reschedule logic — used by both the admin endpoint
 // (PATCH /api/bookings/:id/reschedule) and the customer portal endpoint
 // (PATCH /api/portal/:token/reschedule). Validates the new slot, mutates
@@ -1999,7 +2014,18 @@ async function rescheduleBooking({ bookingId, slotStart, source = "slot", actor 
   const bookingRec = await bookings.get(bookingId);
   if (!bookingRec) return { ok: false, status: 404, errors: ["Booking not found."] };
   if (bookingRec.status === "cancelled" || bookingRec.status === "completed" || bookingRec.status === "no_show") {
-    return { ok: false, status: 409, errors: ["This appointment can't be rescheduled — its status is " + bookingRec.status + "."] };
+    return { ok: false, status: 409, code: "not_modifiable_status", errors: ["This appointment can't be rescheduled — its status is " + bookingRec.status + "."] };
+  }
+
+  // Customer-side caps (skipped for admin actors — Patrick can move
+  // bookings as many times as he needs to). Refusal codes match the
+  // preflight endpoint so the portal modal can map error → message
+  // without parsing strings.
+  if (actor === "customer") {
+    const count = Number.isFinite(bookingRec.rescheduleCount) ? bookingRec.rescheduleCount : 0;
+    if (count >= 1) {
+      return { ok: false, status: 409, code: "reschedule_limit_reached", errors: ["You've already rescheduled this appointment once — please call us for any further changes."] };
+    }
   }
 
   // Look up the linked WO (if any) — we need to update wo.scheduledFor
@@ -2008,7 +2034,12 @@ async function rescheduleBooking({ bookingId, slotStart, source = "slot", actor 
   const linkedWoIds = Array.isArray(bookingRec.workOrderIds) ? bookingRec.workOrderIds : [];
   const linkedWos = (await Promise.all(linkedWoIds.map((wid) => workOrders.get(wid)))).filter(Boolean);
   if (linkedWos.some((w) => w.arrivedAt)) {
-    return { ok: false, status: 409, errors: ["Technician has already arrived for this appointment — use the follow-up flow instead."] };
+    return { ok: false, status: 409, code: "wo_locked", errors: ["Technician has already arrived for this appointment — use the follow-up flow instead."] };
+  }
+  // Multi-WO bookings (rare — multi-day repair jobs) need a phone call
+  // for customer-side changes; admin can still touch them via the CRM.
+  if (actor === "customer" && linkedWos.length > 1) {
+    return { ok: false, status: 409, code: "multi_wo_booking", errors: ["This appointment spans multiple work orders — please call us so we can coordinate the move."] };
   }
 
   // Look up the lead so we can update lead.booking + lead.crm.activity.
@@ -6480,6 +6511,19 @@ async function handleApi(req, res, pathname) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't update settings."] });
     }
   }
+  // Contact-info — currently just the customer-facing support phone.
+  // Surfaced verbatim in portal error-state fallback copy when self-
+  // service reschedule/cancel is blocked. Patrick changes the number
+  // here and every portal user sees the new value on the next render.
+  if (req.method === "PATCH" && pathname === "/api/settings/contact-info") {
+    try {
+      const payload = await parseRequestBody(req);
+      const updated = await settings.updateContactInfo(payload, { who: "admin" });
+      return sendJson(res, 200, { ok: true, settings: updated });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't update contact info."] });
+    }
+  }
 
   // ---------- iCal feed (Brief C) --------------------------------------
   // Three admin actions: generate (idempotent — returns existing token
@@ -6634,6 +6678,11 @@ async function handleApi(req, res, pathname) {
   // refused and the client falls back to "call us" copy. Outside that
   // window: same flow as admin reschedule, plus Patrick gets paged so
   // he sees the change immediately.
+  //
+  // Customer-side caps (rescheduleCount >= 1, multi-WO booking) are
+  // enforced inside rescheduleBooking() — the helper returns a `code`
+  // field which we map to phoneFallback so the modal can render the
+  // "call us" copy without parsing strings.
   const portalRescheduleMatch = pathname.match(/^\/api\/portal\/([^/]+)\/reschedule$/);
   if (portalRescheduleMatch && req.method === "PATCH") {
     try {
@@ -6643,6 +6692,7 @@ async function handleApi(req, res, pathname) {
       if (!lead) return sendJson(res, 404, { ok: false, errors: ["Portal not found."] });
       if (!lead.booking) return sendJson(res, 422, { ok: false, errors: ["No appointment on file to reschedule."] });
       const payload = await parseRequestBody(req);
+      const phoneFallback = await customerSupportPhone();
 
       // 24-hour gate. Compare the CURRENT scheduled start to "now". If the
       // appointment is less than 24 hours away, the customer must call us.
@@ -6651,8 +6701,10 @@ async function handleApi(req, res, pathname) {
       if (currentStart && msUntilCurrent < 24 * 60 * 60 * 1000) {
         return sendJson(res, 403, {
           ok: false,
+          code: "inside_cutoff",
           tooLate: true,
-          errors: ["This appointment is within 24 hours — please call (905) 960-0181 and Patrick will move it for you."]
+          phoneFallback,
+          errors: [`This appointment is within 24 hours — please call ${phoneFallback} and Patrick will move it for you.`]
         });
       }
 
@@ -6670,10 +6722,280 @@ async function handleApi(req, res, pathname) {
         reason: typeof payload.reason === "string" ? payload.reason.slice(0, 200) : "",
         req
       });
-      if (!result.ok) return sendJson(res, result.status || 400, { ok: false, errors: result.errors });
+      if (!result.ok) {
+        return sendJson(res, result.status || 400, {
+          ok: false,
+          code: result.code || null,
+          phoneFallback,
+          errors: result.errors
+        });
+      }
       return sendJson(res, 200, { ok: true, booking: result.booking, slot: result.slot });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't reschedule."] });
+    }
+  }
+
+  // ---------- Customer-side preflight (portal) -------------------------
+  // GET /api/portal/:token/booking-actions — single round-trip that the
+  // portal page calls on load to decide which action buttons to render
+  // active vs. greyed out. Computed server-side from:
+  //   - current scheduled time vs. now (24-hour gate)
+  //   - bookings.rescheduleCount  (1 max for customer self-service)
+  //   - linked WO state           (locked if tech has arrived or status
+  //                                 in_progress/signed/completed)
+  //   - linkedWoIds.length        (multi-WO bookings refused for cust)
+  //   - booking.status            (only confirmed/tentative are mutable)
+  //
+  // Always returns 200 with a structured payload; the UI uses the
+  // canReschedule/canCancel flags + reason codes to gate the buttons.
+  // 404 is only returned when the token itself doesn't match a lead.
+  const portalActionsMatch = pathname.match(/^\/api\/portal\/([^/]+)\/booking-actions$/);
+  if (portalActionsMatch && req.method === "GET") {
+    try {
+      const token = decodeURIComponent(portalActionsMatch[1]);
+      const leads = await readLeads();
+      const lead = leads.find((l) => (l.portal?.token || portalTokenForId(l.id)) === token);
+      if (!lead) return sendJson(res, 404, { ok: false, errors: ["Portal not found."] });
+      const phoneFallback = await customerSupportPhone();
+      if (!lead.booking) {
+        return sendJson(res, 200, {
+          ok: true,
+          hasBooking: false,
+          canReschedule: false,
+          canCancel: false,
+          reasons: { reschedule: "no_booking", cancel: "no_booking" },
+          phoneFallback
+        });
+      }
+
+      let bookingRec = (await bookings.listByLead(lead.id))[0];
+      if (!bookingRec) bookingRec = await bookings.upsertFromLead(lead);
+
+      const currentStart = bookingRec?.scheduledFor ? new Date(bookingRec.scheduledFor) : null;
+      const hoursUntil = currentStart ? (currentStart.getTime() - Date.now()) / (60 * 60 * 1000) : null;
+      const insideCutoff = hoursUntil !== null && hoursUntil < 24;
+
+      const statusLocked = bookingRec
+        && bookingRec.status !== "confirmed"
+        && bookingRec.status !== "tentative";
+
+      const rescheduleCount = bookingRec && Number.isFinite(bookingRec.rescheduleCount)
+        ? bookingRec.rescheduleCount : 0;
+      const limitReached = rescheduleCount >= 1;
+
+      const linkedWoIds = Array.isArray(bookingRec?.workOrderIds) ? bookingRec.workOrderIds : [];
+      const linkedWos = (await Promise.all(linkedWoIds.map((wid) => workOrders.get(wid)))).filter(Boolean);
+      const woLocked = linkedWos.some((w) =>
+        w.arrivedAt
+        || w.status === "in_progress"
+        || w.status === "signed"
+        || w.status === "completed"
+      );
+      const multiWo = linkedWoIds.length > 1;
+
+      // Compose reason codes — most-specific first wins. Order matches
+      // the brief's checklist so the UI message reads naturally.
+      function reasonFor(action) {
+        if (!bookingRec) return "no_booking";
+        if (statusLocked) return "not_modifiable_status";
+        if (multiWo) return "multi_wo_booking";
+        if (woLocked) return "wo_locked";
+        if (insideCutoff) return "inside_cutoff";
+        if (action === "reschedule" && limitReached) return "reschedule_limit_reached";
+        return "ok";
+      }
+      const reschedReason = reasonFor("reschedule");
+      const cancelReason = reasonFor("cancel");
+      return sendJson(res, 200, {
+        ok: true,
+        hasBooking: true,
+        bookingId: bookingRec?.id || null,
+        scheduledFor: bookingRec?.scheduledFor || null,
+        hoursUntilAppointment: hoursUntil,
+        rescheduleCount,
+        canReschedule: reschedReason === "ok",
+        canCancel: cancelReason === "ok",
+        reasons: { reschedule: reschedReason, cancel: cancelReason },
+        phoneFallback
+      });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't load actions."] });
+    }
+  }
+
+  // ---------- Customer-side cancel (portal) ---------------------------
+  // POST /api/portal/:token/cancel — body { reason }. Same auth model as
+  // the reschedule endpoint (token-implicit booking lookup, no bookingId
+  // in URL — one portal = one upcoming booking). Hard gates:
+  //   - reason required (trimmed non-empty, 1-500 chars)
+  //   - >24hrs to scheduledFor
+  //   - linked WO in modifiable status
+  //   - not multi-WO
+  //   - booking status modifiable
+  // On success: flips booking to cancelled (cancelledBy=customer),
+  // cascades to linked WO (status=cancelled + history entry), fires the
+  // existing customer-facing cancellation email, and pages Patrick.
+  // Idempotent: re-calling on an already-cancelled booking returns 200
+  // with the existing record and does NOT re-fire notifications.
+  const portalCancelMatch = pathname.match(/^\/api\/portal\/([^/]+)\/cancel$/);
+  if (portalCancelMatch && req.method === "POST") {
+    try {
+      const token = decodeURIComponent(portalCancelMatch[1]);
+      const leads = await readLeads();
+      const leadIdx = leads.findIndex((l) => (l.portal?.token || portalTokenForId(l.id)) === token);
+      const lead = leadIdx >= 0 ? leads[leadIdx] : null;
+      if (!lead) return sendJson(res, 404, { ok: false, errors: ["Portal not found."] });
+      if (!lead.booking) return sendJson(res, 422, { ok: false, errors: ["No appointment on file to cancel."] });
+
+      const payload = await parseRequestBody(req);
+      const reason = String(payload?.reason || "").trim().slice(0, 500);
+      const phoneFallback = await customerSupportPhone();
+      if (!reason) {
+        return sendJson(res, 422, {
+          ok: false,
+          code: "missing_reason",
+          errors: ["Pick a reason or write one in so we know what happened."]
+        });
+      }
+
+      let bookingRec = (await bookings.listByLead(lead.id))[0];
+      if (!bookingRec) bookingRec = await bookings.upsertFromLead(lead);
+      if (!bookingRec) return sendJson(res, 422, { ok: false, errors: ["No bookable record on this appointment."] });
+
+      // Idempotent: cancelling an already-cancelled booking returns the
+      // record without re-firing notifications. The portal's preflight
+      // already gates this on the happy path; this is the race-condition
+      // backstop for double-clicks on flaky mobile signal.
+      if (bookingRec.status === "cancelled") {
+        return sendJson(res, 200, { ok: true, booking: bookingRec, alreadyCancelled: true });
+      }
+
+      // 24-hour gate — server-side time only (never trust client clocks).
+      const currentStart = bookingRec.scheduledFor ? new Date(bookingRec.scheduledFor) : null;
+      const msUntilCurrent = currentStart ? currentStart.getTime() - Date.now() : Number.POSITIVE_INFINITY;
+      if (currentStart && msUntilCurrent < 24 * 60 * 60 * 1000) {
+        return sendJson(res, 409, {
+          ok: false,
+          code: "inside_cutoff",
+          tooLate: true,
+          phoneFallback,
+          errors: [`This appointment is within 24 hours — please call ${phoneFallback} and Patrick will cancel it for you.`]
+        });
+      }
+
+      // WO state checks. Multi-WO and arrived/in-progress/signed/completed
+      // all force a phone call. Customer can't unwind a job that's underway.
+      const linkedWoIds = Array.isArray(bookingRec.workOrderIds) ? bookingRec.workOrderIds : [];
+      const linkedWos = (await Promise.all(linkedWoIds.map((wid) => workOrders.get(wid)))).filter(Boolean);
+      if (linkedWos.some((w) => w.arrivedAt || w.status === "in_progress" || w.status === "signed" || w.status === "completed")) {
+        return sendJson(res, 409, {
+          ok: false,
+          code: "wo_locked",
+          phoneFallback,
+          errors: ["This appointment is already in progress — please call us."]
+        });
+      }
+      if (linkedWoIds.length > 1) {
+        return sendJson(res, 409, {
+          ok: false,
+          code: "multi_wo_booking",
+          phoneFallback,
+          errors: ["This appointment spans multiple work orders — please call us so we can coordinate the cancel."]
+        });
+      }
+
+      // 1) Flip the canonical booking record.
+      const cancelResult = await bookings.cancel(bookingRec.id, {
+        reason,
+        by: "customer",
+        actorName: lead.contact?.name || "customer"
+      });
+      if (!cancelResult.ok) {
+        return sendJson(res, cancelResult.status || 400, {
+          ok: false,
+          phoneFallback,
+          errors: cancelResult.errors
+        });
+      }
+      const cancelled = cancelResult.booking;
+
+      // 2) Mirror to lead.booking (legacy read cache) and append a CRM
+      //    activity entry so the cancellation shows in the admin timeline.
+      try {
+        if (lead.booking) {
+          lead.booking.status = "cancelled";
+          lead.booking.cancelledAt = cancelled.cancelledAt;
+          lead.booking.cancellationReason = cancelled.cancellationReason;
+        }
+        lead.crm = lead.crm || {};
+        lead.crm.activity = Array.isArray(lead.crm.activity) ? lead.crm.activity : [];
+        lead.crm.activity.unshift({
+          at: new Date().toISOString(),
+          type: "update",
+          text: `Customer cancelled appointment${reason ? ` — ${reason}` : ""}`
+        });
+        lead.crm.lastUpdated = new Date().toISOString();
+        leads[leadIdx] = lead;
+        await writeLeads(leads);
+      } catch (e) {
+        console.warn("[portal cancel] lead mirror failed:", e?.message);
+      }
+
+      // 3) Cascade to linked WOs — flip to cancelled + add a distinct
+      //    history breadcrumb so the audit trail explains WHY the WO
+      //    moved (rather than the bare status_change entry that update()
+      //    writes on its own). Best-effort: if any single WO update fails
+      //    we log and continue rather than rolling back the booking cancel
+      //    (the customer-facing "your appointment is cancelled" contract
+      //    takes priority).
+      for (const wo of linkedWos) {
+        try {
+          if (wo.status !== "cancelled") {
+            await workOrders.update(wo.id, {
+              status: "cancelled",
+              __by: "customer",
+              __statusNote: `Cascade from booking cancel${reason ? `: ${reason}` : ""}`
+            });
+          }
+          await workOrders.appendHistory(wo.id, {
+            action: "booking_cancelled_cascade",
+            by: "customer",
+            note: `Booking ${bookingRec.id} cancelled by customer${reason ? `: ${reason}` : ""}`
+          });
+        } catch (err) {
+          console.warn(`[portal cancel] WO ${wo.id} cascade failed:`, err?.message);
+        }
+      }
+
+      // 4) Customer confirmation email — fire-and-forget. Reuses the
+      //    existing template; the customer can re-book via book.html.
+      const baseUrl = process.env.PUBLIC_BASE_URL || baseUrlFromReq(req);
+      sendBookingCancellation(cancelled, { reason, notify: true, baseUrl }).catch(() => {});
+
+      // 5) Page Patrick. Reuses the new-lead email/SMS shells with a
+      //    distinct sourceLabel so the alert reads "Customer cancelled
+      //    their appointment" in the inbox rather than masquerading as a
+      //    fresh inquiry.
+      const aliasLead = {
+        id: lead.id,
+        sourceLabel: "Customer cancelled their appointment",
+        contact: {
+          name: lead.contact?.name || "(unknown)",
+          phone: lead.contact?.phone || "",
+          email: lead.contact?.email || "",
+          address: lead.contact?.address || "",
+          notes: `Was: ${bookingRec.scheduledFor || "(unscheduled)"}. Reason: ${reason}`
+        }
+      };
+      Promise.allSettled([
+        sendNewLeadEmail(aliasLead, { baseUrl }),
+        sendNewLeadSms(aliasLead, { baseUrl })
+      ]).catch(() => {});
+
+      return sendJson(res, 200, { ok: true, booking: cancelled });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't cancel."] });
     }
   }
 

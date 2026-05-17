@@ -96,13 +96,13 @@ form except where noted.
 | `work-orders.js` | Work Order | `WO-XXXXXXXX` (random alphabet) | One per visit. Zones, issues, photos, signature OR signatureBypass (mutually exclusive), on-site quote, materials packed, `paidOnSite`, `propertyEditsAppliedAt`, `intakeGuarantee.matched`, `history[]`. Lock-protected fields enforced via `SCOPE_PROTECTED_FIELDS` constant (Brief A). Bypass acts as a unified end-of-visit completion event covering both on-site quote acceptance (when builder has additions beyond baseline) and completion lock; bypass-completed WOs with `coversQuoteAcceptance: true` do NOT produce `on_site_quote` Quote records — `signatureBypass.acceptedScopeSnapshot` (deep-copied builder lines + totals) is the authoritative scope record. |
 | `quotes.js` | Quote | `Q-YYYY-NNNN` | Versioned, signed estimate. Two flavours: `ai_repair_quote` (AI chat) and `on_site_quote` (tech-built). |
 | `invoices.js` | Invoice | `I-YYYY-NNNN` | Auto-drafted by completion cascade, lifecycle draft → sent → paid → void. |
-| `bookings.js` | Booking | `BK-YYYY-NNNN` | First-class appointment record. Mirrors `lead.booking` but is canonical. Exposes `cancel()` (soft, adds `cancelledAt/By/Reason` + history) and `remove()` (hard delete; refuses when a linked WO is past `scheduled` — caller passes `isActiveWo` to gate without coupling to work-orders.js). |
+| `bookings.js` | Booking | `BK-YYYY-NNNN` | First-class appointment record. Mirrors `lead.booking` but is canonical. Exposes `cancel()` (soft, adds `cancelledAt/By/Reason` + history), `reschedule()` (sets `scheduledFor` + bumps `rescheduleCount` + history), and `remove()` (hard delete; refuses when a linked WO is past `scheduled` — caller passes `isActiveWo` to gate without coupling to work-orders.js). Schema includes `rescheduleCount` (capped at 1 for customer self-service via the portal endpoint; admin bypasses the cap). |
 | `projects.js` | Project | `PROJ-YYYY-NNNN` | Multi-WO container for named jobs. Lifecycle planning → active → complete → archived. |
 | `material-lists.js` | Material List | `ML-YYYY-NNNN` | Bill of materials. Line items reference parts.json SKUs + quantities + status (`need` / `ordered` / `have`). Attachable to a project / WO / quote / standalone. |
 | `purchase-orders.js` | Purchase Order | `PO-YYYY-NNNN` | One supplier's slice of a material list's `need` lines. Lifecycle draft → sent → partially_received → received → cancelled. |
 | `suppliers.js` | Supplier | `SUP-NNN` (no year prefix) | Vendor records (name, contact, email, phone, address). |
 | `part-suppliers.js` | — | n/a | Override map at `data/part-suppliers.json` mapping SKU → supplierIds[]. parts.json's `supplierIds` field is a placeholder; this file is the source of truth. |
-| `settings.js` | — | n/a | Admin notification preferences + 50-entry audit trail + iCal-feed token (Brief C: `icalFeed.{enabled, token, regeneratedAt}` — token is the credential for the public `/calendar/<token>.ics` feed). |
+| `settings.js` | — | n/a | Admin notification preferences + 50-entry audit trail + iCal-feed token (Brief C: `icalFeed.{enabled, token, regeneratedAt}` — token is the credential for the public `/calendar/<token>.ics` feed) + `contactInfo.customerSupportPhone` (surfaced verbatim in portal blocked-state copy when self-service reschedule/cancel is refused). Exposes `updateContactInfo()` for the `/api/settings/contact-info` PATCH endpoint. |
 | `ical-feed.js` | — | n/a | Builds the read-only `.ics` feed for iPhone Calendar subscription. Filters bookings to `status === confirmed` and a -90d / +365d window; uses stable `BK-…@pjllandservices.com` UIDs so reschedules update the existing event. |
 | `ical-format.js` | — | n/a | Hand-rolled RFC 5545 helpers: value escaping, 75-octet line folding, Toronto VTIMEZONE block, local + UTC date formatters. |
 | `completion-cascade.js` | — | n/a | Fires on WO status → completed. Idempotent. Creates service record on property, draft invoice (with `paidOnSiteAtCompletion` flag), customer + admin emails, warranty stamp. Applies property edits via `computePropertyEdits()` (Brief D — zone/controller diffs, new zones flagged for Patrick review) gated by `wo.propertyEditsAppliedAt`. Logs `cascade_fire`, `invoice_drafted` (when a draft was created), and `property_edits_applied` history entries. When the cascade throws mid-flight, the PATCH handler appends `cascade_failed` to the WO history and surfaces `cascade.error` in the response — the WO stays signed + locked + completed (recoverable via /run-cascade or /create-invoice). |
@@ -196,7 +196,7 @@ Pages with their primary route + purpose:
 | `users.html` | `/admin/users` | Admin-only per-user account management (CRUD, disable, reset password). Tech role gets 403. |
 | `customer-login.html` | `/portal/login` | Customer self-serve magic-link request page (email/phone/address → emailed login link). |
 | `reset-password.html` | `/reset-password?t=<mt_id>` | Admin/tech password reset landing page (magic-token-gated). |
-| `portal.html` | `/portal/<token>` | Customer-facing read-only portal: project request, deferred recommendations, signed quotes, scheduled appointments, notification prefs. The permanent `<token>` URL stays valid; magic-link sessions redirect here after setting a `customer:<leadId>` cookie. |
+| `portal.html` | `/portal/<token>` | Customer-facing portal: project request, deferred recommendations (pre-authorize with signature), signed quotes, scheduled appointments, notification prefs. Self-service appointment moves: **Reschedule** (once per booking, >24hrs out) and **Cancel** (with captured reason, >24hrs out) — both gated server-side via `/api/portal/:token/booking-actions` preflight, with greyed buttons and a phone-fallback row when blocked. The permanent `<token>` URL stays valid; magic-link sessions redirect here after setting a `customer:<leadId>` cookie. |
 | `approve.html` | `/approve/<id>?t=<token>` | Customer-facing on-site quote approval (signature canvas + PDF download). |
 
 ### Identity & access — authentication model
@@ -235,7 +235,10 @@ Pages with their primary route + purpose:
 
 All routes admin-gated unless noted. Auth via session cookie set by
 `POST /api/login`. Public endpoints: `/api/quotes` (POST lead intake),
-`/api/booking`, `/api/portal/<token>`, `/api/approve/:id/:token`.
+`/api/booking`, `/api/portal/<token>` (and its `/booking-actions`,
+`/reschedule-availability`, `/reschedule`, `/cancel`, `/messages`,
+`/deferred/...` siblings — all token-authenticated, never an admin
+session), `/api/approve/:id/:token`.
 
 ```
 Authentication
@@ -419,7 +422,11 @@ Purchase Orders
 
 Settings + misc
   GET    /api/settings
-  PATCH  /api/settings
+  PATCH  /api/settings/admin-defaults
+  PATCH  /api/settings/contact-info               ← body { customerSupportPhone }.
+                                                   Surfaced verbatim in portal
+                                                   self-service blocked-state
+                                                   copy ("call us at …").
   POST   /api/settings/ical-feed/generate         ← Brief C: idempotent;
                                                    returns existing token if
                                                    already enabled.
@@ -432,6 +439,56 @@ Settings + misc
   GET    /api/pricing                            ← public pricing.json read
   GET    /api/chat-transcripts                   ← admin
   POST   /api/chat-transcripts                   ← public widget upserts
+
+Customer portal (token-authenticated, no admin session)
+  GET    /api/portal/:token                       ← read-only portal payload
+                                                   (project, services, work
+                                                   order, messages, prefs).
+  GET    /api/portal/:token/booking-actions       ← preflight for self-service
+                                                   buttons. Returns
+                                                   { canReschedule, canCancel,
+                                                     reasons: { reschedule, cancel },
+                                                     hoursUntilAppointment,
+                                                     rescheduleCount,
+                                                     phoneFallback }. Reason
+                                                   codes: ok | inside_cutoff |
+                                                   reschedule_limit_reached |
+                                                   wo_locked | multi_wo_booking |
+                                                   not_modifiable_status | no_booking.
+  GET    /api/portal/:token/reschedule-availability ← month-calendar slots for the
+                                                   booking's service + address,
+                                                   excluding the customer's own
+                                                   current occupancy from the
+                                                   conflict math. Also returns
+                                                   tooLate flag.
+  PATCH  /api/portal/:token/reschedule             ← body { slotStart, reason }.
+                                                   Enforces: status modifiable,
+                                                   >24hrs out, rescheduleCount<1,
+                                                   not multi-WO, WO not arrived.
+                                                   409 with { code, phoneFallback,
+                                                   errors[] } on any gate failure.
+                                                   On success: booking + linked WO
+                                                   scheduledFor update, customer
+                                                   confirmation email, Patrick
+                                                   gets paged.
+  POST   /api/portal/:token/cancel                 ← body { reason } (required,
+                                                   trimmed non-empty, 1-500 chars).
+                                                   Same gates as reschedule (minus
+                                                   the count cap). On success:
+                                                   booking flips to cancelled
+                                                   (cancelledBy=customer), linked
+                                                   WOs cascade-cancelled with
+                                                   booking_cancelled_cascade history
+                                                   entry, customer confirmation
+                                                   email + Patrick paged.
+                                                   Idempotent: re-call on already-
+                                                   cancelled returns 200 with the
+                                                   record, does NOT re-fire
+                                                   notifications.
+  POST   /api/portal/:token/message                ← customer-to-PJL message thread.
+  POST   /api/portal/:token/accept                 ← formal quote acceptance.
+  POST   /api/portal/:token/deferred/:id/pre-authorize ← signature on a deferred
+                                                   recommendation.
 
 Public token-gated
   GET    /calendar/:token.ics                    ← iPhone Calendar feed
@@ -560,6 +617,43 @@ to the new project.
    ↓
 Admin attaches WOs to the project as jobs schedule. Project rolls up
 multiple visits + multiple material lists + a single source quote.
+```
+
+### 4. Customer self-service booking changes (portal)
+
+```
+Customer opens /portal/<token>, sees upcoming booking on WO card.
+   ↓
+Portal calls GET /api/portal/:token/booking-actions on load.
+   Preflight (server-computed, never trust client clocks):
+     - status in { confirmed, tentative } ?
+     - hoursUntilAppointment >= 24 ?
+     - rescheduleCount < 1            (reschedule only)
+     - linkedWoIds.length === 1 ?
+     - no linked WO in arrived / in_progress / signed / completed ?
+   ↓
+Returns canReschedule / canCancel + per-action reason code +
+  phoneFallback (from settings.contactInfo.customerSupportPhone).
+   ↓
+Reschedule active  → modal opens, slot picker from
+                     GET /api/portal/:token/reschedule-availability
+                     (excludes customer's own current occupancy from
+                     conflict math). PATCH /api/portal/:token/reschedule
+                     with { slotStart, reason }. On success: booking +
+                     linked WO scheduledFor cascade, rescheduleCount++,
+                     customer email + Patrick paged.
+   ↓
+Cancel active      → modal opens with reason chips + free-text. POST
+                     /api/portal/:token/cancel { reason } (required
+                     non-empty). On success: booking.status=cancelled
+                     + cancelledBy=customer + cancellationReason +
+                     cancelledAt, linked WO cascade-cancelled with
+                     booking_cancelled_cascade history entry, customer
+                     email + Patrick paged. Idempotent on repeat.
+   ↓
+Blocked (greyed)   → workorder-blocked row beneath the buttons surfaces
+                     the most-specific reason copy + a tap-to-call link
+                     to the configured support phone.
 ```
 
 ## External integrations

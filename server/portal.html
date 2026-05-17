@@ -60,6 +60,16 @@
         </dl>
         <div class="workorder-actions" id="workOrderActions">
           <button type="button" class="portal-btn portal-btn-secondary" id="rescheduleBtn">Change appointment</button>
+          <button type="button" class="portal-btn portal-btn-danger" id="cancelBtn">Cancel appointment</button>
+        </div>
+        <!-- Phone-fallback prompt shown when both actions are blocked
+             (inside 24-hour cutoff, WO already in progress, multi-WO
+             booking, etc.). Tap-to-call on iPhone via the tel: link.
+             Surfaces server-supplied messages so the copy stays in sync
+             with the gate reason. -->
+        <div class="workorder-blocked" id="workOrderBlocked" hidden>
+          <p class="workorder-blocked-text" id="workOrderBlockedText"></p>
+          <a class="workorder-blocked-call" id="workOrderBlockedCall" href="tel:+19059600181">Call PJL</a>
         </div>
         <p class="workorder-note" id="workOrderNote" hidden></p>
         <section class="workorder-diagnosis" id="workOrderDiagnosis" hidden>
@@ -171,6 +181,51 @@
             </div>
             <p class="portal-resched-error" id="reschedError" hidden role="alert"></p>
             <p class="portal-resched-status" id="reschedStatus" role="status"></p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Cancel-appointment modal. Mirrors the reschedule modal pattern.
+           Reason chips + free-text fallback; server requires non-empty
+           reason after trim. Inside-24h falls through to a "call us"
+           panel — same UX as reschedule. -->
+      <div class="portal-resched-modal" id="cancelModal" hidden role="dialog" aria-modal="true" aria-labelledby="cancelTitle">
+        <div class="portal-resched-card">
+          <header class="portal-resched-header">
+            <h2 id="cancelTitle">Cancel appointment</h2>
+            <button type="button" class="portal-resched-close" id="cancelClose" aria-label="Close">×</button>
+          </header>
+
+          <div class="portal-resched-toolate" id="cancelTooLate" hidden>
+            <p><strong>Your appointment is within 24 hours.</strong></p>
+            <p>To keep our schedule accurate this close to a visit, we don't allow self-serve cancellations inside the 24-hour window. Please call us and Patrick will cancel it for you.</p>
+            <a class="portal-btn portal-btn-primary" id="cancelTooLateCall" href="tel:+19059600181">Call (905) 960-0181</a>
+          </div>
+
+          <div class="portal-resched-body" id="cancelBody">
+            <p class="portal-cancel-when">
+              Cancelling: <strong id="cancelCurrent">—</strong>
+            </p>
+            <p class="portal-cancel-help">Pick the reason that fits best — Patrick reads every one.</p>
+            <fieldset class="portal-cancel-chips" id="cancelChips">
+              <legend class="visually-hidden">Reason</legend>
+              <label class="portal-cancel-chip"><input type="radio" name="cancelReasonChip" value="Scheduling conflict"><span>Scheduling conflict</span></label>
+              <label class="portal-cancel-chip"><input type="radio" name="cancelReasonChip" value="Won't be home"><span>Won't be home</span></label>
+              <label class="portal-cancel-chip"><input type="radio" name="cancelReasonChip" value="Going a different route"><span>Going a different route</span></label>
+              <label class="portal-cancel-chip"><input type="radio" name="cancelReasonChip" value="Property sold or moving"><span>Sold / moving</span></label>
+              <label class="portal-cancel-chip"><input type="radio" name="cancelReasonChip" value="Other"><span>Other</span></label>
+            </fieldset>
+            <label class="portal-resched-reason-label" for="cancelReason">Anything else? <span id="cancelReasonHint">(optional)</span></label>
+            <textarea id="cancelReason" class="portal-resched-reason" rows="2" maxlength="500" placeholder="e.g. moving the irrigation install to next spring"></textarea>
+            <p class="portal-cancel-warning">
+              Once cancelled, you'll need to use the booking page or call us to rebook.
+            </p>
+            <div class="portal-resched-actions">
+              <button type="button" class="portal-resched-cancel" id="cancelDismiss">Keep appointment</button>
+              <button type="button" class="portal-btn portal-btn-danger" id="cancelSubmit" disabled>Confirm cancel</button>
+            </div>
+            <p class="portal-resched-error" id="cancelError" hidden role="alert"></p>
+            <p class="portal-resched-status" id="cancelStatus" role="status"></p>
           </div>
         </div>
       </div>

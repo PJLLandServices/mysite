@@ -297,6 +297,7 @@ Smaller object — mostly:
 - Prep notes
 - Source quote (if any)
 - Resulting work order(s) — one booking can produce multiple WOs (multi-day repairs)
+- **Self-service modification fields** (customer-side portal moves): `rescheduleCount` (capped at 1 for customer self-service; admin reschedules bump the counter too but bypass the cap), `cancelledBy` (`customer` | `admin` | `tech` | `no_show` | null), `cancellationReason`, `cancelledAt`.
 
 **Cancellation lifecycle (Brief B):** Admins/techs can cancel a booking from `/admin/schedule` via the action panel on a booking card. Cancel is a *soft* operation:
 - Status flips to `cancelled`; `cancelledAt`, `cancelledBy`, `cancellationReason` are stamped.
@@ -767,12 +768,18 @@ gated at 3/hour per user.
 - **Pre-authorize** deferred recommendations with binding e-signature
 - Accept / decline formal quotes with signature pad
 - View upcoming bookings
+- **Reschedule** an upcoming booking once, up to 24 hours before the appointment (one self-service reschedule per booking; admin can move it further from the CRM)
+- **Cancel** an upcoming booking up to 24 hours before the appointment, with a captured reason (reason chip + optional free-text, "Other" requires free-text)
 
 ### 6.2 What customers cannot do
 
 - Edit address, system info, zones, photos (read-only — those come from work orders)
 - Delete records
 - Change billing info (handled in QuickBooks)
+- Reschedule a booking a second time via the portal (must call after the first self-service move)
+- Reschedule or cancel within 24 hours of the appointment (phone fallback only — server-enforced)
+- Cancel or reschedule a booking whose linked work order is already in progress, signed, or completed (locked state — phone fallback)
+- Cancel or reschedule a multi-WO booking (multi-day repair jobs — must call to coordinate)
 
 ### 6.3 Notification preferences (per customer)
 
@@ -922,8 +929,9 @@ These are the rules that protect the design from drift. Number them so they can 
     - **Signature bypass is not a signature.** Bypass records verbal acceptance at end-of-visit when the customer is not present, and unifies the on-site quote acceptance with the completion lock in a single audited event. It carries weaker legal posture than a drawn signature but the same operational lock. Admin-authorized and audited. When bypass covers a quote acceptance (`coversQuoteAcceptance: true`), no `on_site_quote` Quote record is created — the WO builder snapshot (`signatureBypass.acceptedScopeSnapshot`) is the scope record. `wo.signature` and `wo.signatureBypass` are mutually exclusive; bypass also refuses when a pending or already-accepted on-site Quote exists on the WO.
 12. **Scope changes require fresh signature.** Pre-signature scope changes (during the visit) are part of the same WO and the single completion signature covers them. Post-signature scope changes (e.g., customer asks for additional work after signing) require either (a) a fresh signature on a new scope-change record, or (b) a follow-up WO with its own signature flow. The on-site-quote endpoints all 409 once `wo.locked === true`. Post-bypass scope changes follow the same rules as post-signature scope changes — bypass locks scope identically to a signature.
 13. **Emergency fall overrides notify Patrick immediately.** Real-time, not nightly review.
-14. **Customer portal can only edit non-structural fields.** Phone, email, best time, prefs. Nothing else.
+14. **Customer portal write surface is explicit and limited.** (a) non-structural fields — phone, email, best time, prefs; (b) pre-authorization signatures on deferred recommendations; (c) formal quote acceptance signatures; (d) one self-service reschedule per booking up to 24 hours out; (e) self-service cancellation with reason up to 24 hours out. Anything else is admin-only. New write surfaces require an explicit revision of this rule.
 15. **Three-year deferred flag forces a decision.** No infinite carry-forward.
+16. **Self-service portal modifications enforce time and frequency rules server-side.** The portal UI greys out blocked actions via `GET /api/portal/:token/booking-actions` preflight; the underlying mutation endpoints (`PATCH /api/portal/:token/reschedule`, `POST /api/portal/:token/cancel`) enforce the same gates with 409 responses carrying a typed `code` field and a `phoneFallback` string from `settings.contactInfo.customerSupportPhone`. UI is a courtesy; API is the truth. Admin endpoints (`PATCH /api/bookings/:id/reschedule`, `POST /api/bookings/:id/cancel`) bypass the cutoff and frequency caps — Patrick can move bookings as many times as he needs to.
 
 ---
 

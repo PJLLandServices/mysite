@@ -291,6 +291,85 @@ function renderMessageThread(messages) {
   }
 }
 
+// Map preflight reason codes to customer-facing copy. Phone substitution
+// is done by the caller; keep the messages framed around the *why* so
+// the customer knows whether to wait, call, or shrug. Order in the
+// portal-blocked row matches the most-specific reason first.
+const BLOCK_REASON_COPY = {
+  inside_cutoff: "Your appointment is within 24 hours — please call us to change it.",
+  reschedule_limit_reached: "You've already rescheduled this appointment once. For any further changes, please call us.",
+  wo_locked: "This appointment is already underway — please call us.",
+  multi_wo_booking: "This appointment spans multiple visits — please call us so we can coordinate.",
+  not_modifiable_status: "This appointment can't be changed online — please call us.",
+  no_booking: "",
+  ok: ""
+};
+
+let lastPreflight = null; // cached so reschedule/cancel handlers can read phoneFallback synchronously
+
+// Single round-trip on portal load. Decides which action buttons appear
+// active, greyed out, or hidden entirely on the work order card. The
+// server returns the *most-specific* reason per action; we map that
+// onto a single explanatory line + a tap-to-call link beneath the
+// buttons. Recomputed on each loadPortal() so the page stays honest
+// after a reschedule/cancel.
+async function loadBookingActions() {
+  const token = tokenFromLocation();
+  if (!token) return null;
+  try {
+    const r = await fetch(`/api/portal/${encodeURIComponent(token)}/booking-actions`, { cache: "no-store" });
+    const data = await r.json().catch(() => ({}));
+    if (!data.ok) return null;
+    lastPreflight = data;
+    applyPreflightToButtons(data);
+    return data;
+  } catch {
+    return null;
+  }
+}
+
+function applyPreflightToButtons(preflight) {
+  if (!preflight || !preflight.hasBooking) return;
+  const reschedule = document.getElementById("rescheduleBtn");
+  const cancel = document.getElementById("cancelBtn");
+  const blocked = document.getElementById("workOrderBlocked");
+  const blockedText = document.getElementById("workOrderBlockedText");
+  const blockedCall = document.getElementById("workOrderBlockedCall");
+
+  // Reset before applying — the same card stays mounted across reloads.
+  if (reschedule) { reschedule.disabled = false; reschedule.classList.remove("is-blocked"); }
+  if (cancel) { cancel.disabled = false; cancel.classList.remove("is-blocked"); }
+  if (blocked) blocked.hidden = true;
+
+  // Disable each button independently so the "already rescheduled once"
+  // state still allows the customer to cancel.
+  if (reschedule && !preflight.canReschedule) {
+    reschedule.disabled = true;
+    reschedule.classList.add("is-blocked");
+  }
+  if (cancel && !preflight.canCancel) {
+    cancel.disabled = true;
+    cancel.classList.add("is-blocked");
+  }
+
+  // Surface a single phone-fallback row when EITHER action is blocked
+  // (per brief: greyed buttons must be explained inline, not silently
+  // disabled). When both are blocked the more-specific reason wins; when
+  // only one is blocked we still surface the prompt so the customer
+  // knows what to do for the locked action.
+  const blockingReason = !preflight.canReschedule
+    ? preflight.reasons?.reschedule
+    : (!preflight.canCancel ? preflight.reasons?.cancel : null);
+  if (blockingReason && blockingReason !== "ok" && blocked && blockedText && blockedCall) {
+    const copy = BLOCK_REASON_COPY[blockingReason] || "Please call us for help with this appointment.";
+    const phone = preflight.phoneFallback || "(905) 960-0181";
+    blockedText.textContent = copy;
+    blockedCall.textContent = `Call ${phone}`;
+    blockedCall.href = `tel:${phone.replace(/[^0-9+]/g, "")}`;
+    blocked.hidden = false;
+  }
+}
+
 function renderWorkOrder(data) {
   // Surface the work-order envelope when the lead came in via the booking
   // flow. Older leads (Formspree-era contact requests) don't have one and
@@ -440,6 +519,11 @@ function renderPortal(data) {
   renderMessageThread(Array.isArray(data.messages) ? data.messages : []);
   renderSystem(data.property);
   renderWorkOrder(data);
+  // Preflight for the work-order action buttons — runs in parallel with
+  // recommendations and prefs. Decides which buttons appear active
+  // (>24hrs out, never rescheduled, WO modifiable, single-WO booking)
+  // vs. greyed with a phone-fallback row beneath.
+  loadBookingActions().catch((err) => console.warn("[booking-actions]", err?.message));
   // Open recommendations card — fetches deferred items the customer can
   // pre-authorize. Async; reveals the card when ready, hidden until then.
   loadRecommendations().catch((err) => console.warn("[recommendations]", err?.message));
@@ -957,14 +1041,20 @@ reschedSubmit?.addEventListener("click", async () => {
     });
     const data = await r.json();
     if (!r.ok || !data.ok) {
-      if (data.tooLate) {
+      if (data.tooLate || data.code === "inside_cutoff") {
         // Rare race: passed the gate on availability but missed it on submit.
         reschedTooLate.hidden = false;
         reschedBody.hidden = true;
         reschedStatus.textContent = "";
         return;
       }
-      throw new Error((data.errors || ["Couldn't reschedule."]).join(" "));
+      // For limit_reached / wo_locked / multi_wo errors, the buttons
+      // SHOULD have been greyed by preflight but a race could have let
+      // a click slip through. Either way we surface the server message
+      // plus the phone fallback.
+      const phone = data.phoneFallback || lastPreflight?.phoneFallback || "(905) 960-0181";
+      const msg = (data.errors || ["Couldn't reschedule."]).join(" ");
+      throw new Error(`${msg} Call ${phone}.`);
     }
     reschedStatus.textContent = "Done — refreshing your appointment…";
     setTimeout(() => {
@@ -976,5 +1066,149 @@ reschedSubmit?.addEventListener("click", async () => {
     reschedError.hidden = false;
     reschedError.textContent = err.message || "Couldn't reschedule.";
     reschedStatus.textContent = "";
+  }
+});
+
+// ---- Cancel (customer self-serve) -----------------------------------
+// Mirrors the reschedule modal pattern. Preflight gates the button on
+// open; if the customer somehow opens it inside the cutoff (race), the
+// modal swaps to the "call us" panel. Reason is the chip value unless
+// "Other" is selected OR free-text is provided — free text wins when
+// present so the customer can elaborate beyond the chip label.
+
+const cancelBtn      = document.getElementById("cancelBtn");
+const cancelModal    = document.getElementById("cancelModal");
+const cancelClose    = document.getElementById("cancelClose");
+const cancelDismiss  = document.getElementById("cancelDismiss");
+const cancelTooLate  = document.getElementById("cancelTooLate");
+const cancelTooLateCall = document.getElementById("cancelTooLateCall");
+const cancelBody     = document.getElementById("cancelBody");
+const cancelCurrent  = document.getElementById("cancelCurrent");
+const cancelChips    = document.getElementById("cancelChips");
+const cancelReasonEl = document.getElementById("cancelReason");
+const cancelReasonHint = document.getElementById("cancelReasonHint");
+const cancelSubmit   = document.getElementById("cancelSubmit");
+const cancelError    = document.getElementById("cancelError");
+const cancelStatus   = document.getElementById("cancelStatus");
+
+function selectedChipReason() {
+  const checked = cancelChips?.querySelector('input[name="cancelReasonChip"]:checked');
+  return checked ? checked.value : "";
+}
+
+function effectiveCancelReason() {
+  // Free-text wins when present (lets the customer elaborate beyond a
+  // chip label). Otherwise the chip label IS the reason. "Other" with
+  // no free text returns empty so the submit stays disabled.
+  const free = (cancelReasonEl?.value || "").trim();
+  if (free) return free;
+  const chip = selectedChipReason();
+  if (!chip) return "";
+  if (chip === "Other") return ""; // Other requires free-text elaboration
+  return chip;
+}
+
+function updateCancelSubmitState() {
+  if (!cancelSubmit) return;
+  cancelSubmit.disabled = !effectiveCancelReason();
+  // Hint copy: "Other" forces free-text required, everything else is optional.
+  if (cancelReasonHint) {
+    cancelReasonHint.textContent = selectedChipReason() === "Other" ? "(required)" : "(optional)";
+  }
+}
+
+function openCancelModal() {
+  if (!cancelModal) return;
+  cancelModal.hidden = false;
+  document.body.style.overflow = "hidden";
+}
+function closeCancelModal() {
+  if (!cancelModal) return;
+  cancelModal.hidden = true;
+  document.body.style.overflow = "";
+  if (cancelChips) {
+    cancelChips.querySelectorAll('input[name="cancelReasonChip"]').forEach((el) => { el.checked = false; });
+  }
+  if (cancelReasonEl) cancelReasonEl.value = "";
+  if (cancelError) cancelError.hidden = true;
+  if (cancelStatus) cancelStatus.textContent = "";
+  updateCancelSubmitState();
+}
+
+cancelBtn?.addEventListener("click", () => {
+  if (cancelBtn.disabled) return; // preflight-greyed, ignore
+  // Refresh preflight before opening so a stale page can't bypass the
+  // cutoff via a stale "canCancel: true". Cheap call.
+  loadBookingActions().then((data) => {
+    if (!data || !data.hasBooking) return;
+    openCancelModal();
+    cancelBody.hidden = true;
+    cancelTooLate.hidden = true;
+    if (data.canCancel) {
+      cancelBody.hidden = false;
+      if (data.scheduledFor && cancelCurrent) {
+        const d = new Date(data.scheduledFor);
+        cancelCurrent.textContent = d.toLocaleString("en-CA", {
+          weekday: "long", month: "long", day: "numeric", hour: "numeric", minute: "2-digit"
+        });
+      }
+    } else {
+      cancelTooLate.hidden = false;
+      // Wire the call button to the actual configured number.
+      const phone = data.phoneFallback || "(905) 960-0181";
+      if (cancelTooLateCall) {
+        cancelTooLateCall.textContent = `Call ${phone}`;
+        cancelTooLateCall.href = `tel:${phone.replace(/[^0-9+]/g, "")}`;
+      }
+    }
+    updateCancelSubmitState();
+  });
+});
+
+cancelClose?.addEventListener("click", closeCancelModal);
+cancelDismiss?.addEventListener("click", closeCancelModal);
+cancelModal?.addEventListener("click", (e) => { if (e.target === cancelModal) closeCancelModal(); });
+cancelChips?.addEventListener("change", updateCancelSubmitState);
+cancelReasonEl?.addEventListener("input", updateCancelSubmitState);
+
+cancelSubmit?.addEventListener("click", async () => {
+  const token = tokenFromLocation();
+  if (!token) return;
+  const reason = effectiveCancelReason();
+  if (!reason) return;
+  cancelSubmit.disabled = true;
+  cancelError.hidden = true;
+  cancelStatus.textContent = "Cancelling your appointment…";
+  try {
+    const r = await fetch(`/api/portal/${encodeURIComponent(token)}/cancel`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ reason })
+    });
+    const data = await r.json();
+    if (!r.ok || !data.ok) {
+      if (data.tooLate || data.code === "inside_cutoff") {
+        // Race: gate passed on open but missed at confirm.
+        cancelTooLate.hidden = false;
+        cancelBody.hidden = true;
+        cancelStatus.textContent = "";
+        return;
+      }
+      const phone = data.phoneFallback || lastPreflight?.phoneFallback || "(905) 960-0181";
+      const msg = (data.errors || ["Couldn't cancel."]).join(" ");
+      throw new Error(`${msg} Call ${phone}.`);
+    }
+    cancelStatus.textContent = customerFirstName
+      ? `Done — refreshing, ${customerFirstName}…`
+      : "Done — refreshing…";
+    setTimeout(() => {
+      closeCancelModal();
+      window.location.reload();
+    }, 800);
+  } catch (err) {
+    cancelSubmit.disabled = false;
+    cancelError.hidden = false;
+    cancelError.textContent = err.message || "Couldn't cancel.";
+    cancelStatus.textContent = "";
   }
 });

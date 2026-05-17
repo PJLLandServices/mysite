@@ -51,6 +51,15 @@ const DEFAULT_QUICKBOOKS = {
   lastSyncErrors: []
 };
 
+// Customer-facing fallback phone — surfaced verbatim on portal error
+// states when self-service is blocked ("Within 24 hours of your
+// appointment — please call (905) 960-0181"). Stored centrally so the
+// number can be changed without touching code or templates. Default is
+// PJL's main line; Patrick can override in /admin/settings.
+const DEFAULT_CONTACT_INFO = {
+  customerSupportPhone: "(905) 960-0181"
+};
+
 const DEFAULT_SETTINGS = {
   adminDefaults: {
     newLead: "email_sms",
@@ -62,6 +71,7 @@ const DEFAULT_SETTINGS = {
   },
   quickbooks: { ...DEFAULT_QUICKBOOKS, lastSyncErrors: [] },
   icalFeed: { ...DEFAULT_ICAL_FEED },
+  contactInfo: { ...DEFAULT_CONTACT_INFO },
   audit: []
 };
 
@@ -91,6 +101,7 @@ async function writeAll(settings) {
 function hydrate(s) {
   const qb = s?.quickbooks || {};
   const ical = s?.icalFeed || {};
+  const contact = s?.contactInfo || {};
   return {
     adminDefaults: { ...DEFAULT_SETTINGS.adminDefaults, ...(s?.adminDefaults || {}) },
     quickbooks: {
@@ -106,6 +117,11 @@ function hydrate(s) {
       enabled: ical.enabled === true,
       token: typeof ical.token === "string" && ical.token ? ical.token : null,
       regeneratedAt: ical.regeneratedAt || null
+    },
+    contactInfo: {
+      customerSupportPhone: typeof contact.customerSupportPhone === "string" && contact.customerSupportPhone.trim()
+        ? contact.customerSupportPhone.trim()
+        : DEFAULT_CONTACT_INFO.customerSupportPhone
     },
     audit: Array.isArray(s?.audit) ? s.audit : []
   };
@@ -216,6 +232,30 @@ async function clearSyncErrors() {
   return settings;
 }
 
+// Update the contact-info block. Today this is just the
+// customerSupportPhone (used in portal error-state fallback copy when
+// self-service reschedule/cancel is blocked). Audit-trailed. Trims
+// whitespace and falls back to the default if blank.
+async function updateContactInfo(patch, { who = "admin", note = "" } = {}) {
+  const settings = await readAll();
+  const before = { ...settings.contactInfo };
+  if (patch && typeof patch.customerSupportPhone === "string") {
+    const trimmed = patch.customerSupportPhone.trim();
+    settings.contactInfo.customerSupportPhone = trimmed || DEFAULT_CONTACT_INFO.customerSupportPhone;
+  }
+  settings.audit.unshift({
+    ts: new Date().toISOString(),
+    who,
+    action: "contactInfo",
+    before,
+    after: { ...settings.contactInfo },
+    note
+  });
+  if (settings.audit.length > 50) settings.audit.length = 50;
+  await writeAll(settings);
+  return settings;
+}
+
 // ---------- iCal feed token management (Brief C) -------------------
 // The feed at GET /calendar/:token.ics is gated by this token alone —
 // no other auth. The token IS the credential, so regenerate invalidates
@@ -321,10 +361,12 @@ async function recordAudit({ who = "admin", action, before = null, after = null,
 module.exports = {
   NOTIFY_MODES,
   DEFAULT_SETTINGS,
+  DEFAULT_CONTACT_INFO,
   SYNC_ERRORS_CAP,
   get,
   updateAdminDefaults,
   updateQuickbooks,
+  updateContactInfo,
   recordSyncError,
   clearSyncErrors,
   recordAudit,

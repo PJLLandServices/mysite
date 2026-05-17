@@ -95,6 +95,12 @@ function blank() {
     prepNotes: "",
     sourceQuoteId: null,
     workOrderIds: [],
+    // Customer self-service guard. Bumped on every reschedule (admin
+    // too — admins just bypass the cap downstream). The portal cancel/
+    // reschedule endpoint refuses customer reschedules once this hits 1;
+    // after that the customer must call. See server.js
+    // customerActionPreflight() for the gate.
+    rescheduleCount: 0,
     createdAt: created,
     updatedAt: created,
     history: [{ ts: created, action: "created", by: "system", note: "" }]
@@ -107,7 +113,8 @@ function hydrate(b) {
     ...base,
     ...b,
     workOrderIds: Array.isArray(b?.workOrderIds) ? b.workOrderIds : [],
-    history: Array.isArray(b?.history) ? b.history : []
+    history: Array.isArray(b?.history) ? b.history : [],
+    rescheduleCount: Number.isFinite(b?.rescheduleCount) ? b.rescheduleCount : 0
   };
 }
 
@@ -252,6 +259,11 @@ async function reschedule(id, { scheduledFor, by = "admin", actorName = "", reas
   const previous = current.scheduledFor;
   const next = { ...current };
   next.scheduledFor = scheduledFor;
+  // Counter bumps on EVERY reschedule (admin too). The customer-side
+  // cap (1 max) is enforced at the portal endpoint, not here — that
+  // way admin can still move the booking after the customer's
+  // single self-service move without juggling a second counter.
+  next.rescheduleCount = (Number.isFinite(current.rescheduleCount) ? current.rescheduleCount : 0) + 1;
   next.updatedAt = new Date().toISOString();
   next.history = [...(current.history || []), {
     ts: next.updatedAt,
