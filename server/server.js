@@ -10380,6 +10380,37 @@ Customer signature captured at ${new Date().toISOString()}.`;
     }
   }
 
+  // Test send (feature-seasonal-outreach-brief.md follow-up). Fires
+  // ONE message to the admin's own NOTIFY_TO_PHONE / NOTIFY_TO_EMAIL
+  // recipients using the same render path a real send would. No
+  // touch is appended; no concurrent-send lock is engaged. Lets the
+  // operator verify the composed message before blasting to a real
+  // batch.
+  if (req.method === "POST" && pathname === "/api/outreach/send-test") {
+    try {
+      const payload = await parseRequestBody(req);
+      const season = String(payload?.season || "").toLowerCase();
+      const year = Number(payload?.year);
+      const channels = Array.isArray(payload?.channels) && payload.channels.length
+        ? payload.channels.filter((c) => c === "sms" || c === "email")
+        : ["sms", "email"];
+      if (season !== "spring" && season !== "fall") return sendJson(res, 400, { ok: false, errors: ["season must be spring or fall."] });
+      if (!channels.length) return sendJson(res, 400, { ok: false, errors: ["At least one channel (sms or email) is required."] });
+      const result = await outreach.sendTest({
+        season,
+        year,
+        channels,
+        subject: String(payload?.subject || ""),
+        smsBody: String(payload?.smsBody || ""),
+        emailBody: String(payload?.emailBody || ""),
+        sampleId: payload?.sampleId ? String(payload.sampleId) : null
+      });
+      return sendJson(res, 200, { ok: true, ...result });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't send test message."] });
+    }
+  }
+
   if (req.method === "POST" && pathname === "/api/outreach/opt-out-season") {
     try {
       const payload = await parseRequestBody(req);

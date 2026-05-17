@@ -232,8 +232,14 @@
       </section>
 
       <footer class="outreach-modal-foot">
-        <button type="button" class="pjl-btn pjl-btn-outline" id="composeCancelBtn">Cancel</button>
-        <button type="submit" class="pjl-btn pjl-btn-primary" id="composeSendBtn">Send to <span id="composeSendCount">0</span> recipients</button>
+        <div class="outreach-test-row">
+          <button type="button" class="pjl-btn pjl-btn-outline" id="composeSendTestBtn">Send a test to me</button>
+          <small class="outreach-test-hint">Fires one message to <code>NOTIFY_TO_PHONE</code> / <code>NOTIFY_TO_EMAIL</code> using the first selected recipient's data. No customer is contacted, no touch is recorded.</small>
+        </div>
+        <div class="outreach-modal-foot-actions">
+          <button type="button" class="pjl-btn pjl-btn-outline" id="composeCancelBtn">Cancel</button>
+          <button type="submit" class="pjl-btn pjl-btn-primary" id="composeSendBtn">Send to <span id="composeSendCount">0</span> recipients</button>
+        </div>
       </footer>
     </form>
   </dialog>

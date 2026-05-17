@@ -45,6 +45,7 @@
   const smsCharCount = $("#smsCharCount");
   const composeSendCount = $("#composeSendCount");
   const composeSendBtn = $("#composeSendBtn");
+  const composeSendTestBtn = $("#composeSendTestBtn");
   const composeCloseBtn = $("#composeCloseBtn");
   const composeCancelBtn = $("#composeCancelBtn");
   const previewRecipient = $("#previewRecipient");
@@ -579,6 +580,62 @@
   composeForm.addEventListener("change", () => {
     updateSkipSummary();
     updateComposePreview();
+  });
+
+  // Test send (pre-flight verification). Single message to
+  // NOTIFY_TO_PHONE / NOTIFY_TO_EMAIL using the same render path
+  // a real send would. No touch is recorded; the operator can
+  // hammer this while iterating on copy without locking
+  // themselves out or polluting the audit trail.
+  composeSendTestBtn.addEventListener("click", async () => {
+    const channels = selectedChannels();
+    if (!channels.length) {
+      showToast("Pick a channel", "Select at least one of SMS or Email.", { variant: "warn" });
+      return;
+    }
+    const sample = firstSelectedRow();
+    composeSendTestBtn.disabled = true;
+    composeSendTestBtn.classList.add("is-loading");
+    const originalLabel = composeSendTestBtn.textContent;
+    composeSendTestBtn.textContent = "Sending test…";
+    try {
+      const result = await api("POST", "/api/outreach/send-test", {
+        season: state.season,
+        year: state.year,
+        channels,
+        subject: composeSubject.value,
+        smsBody: composeSmsBody.value,
+        emailBody: composeEmailBody.value,
+        sampleId: sample ? sample.propertyId : null
+      });
+      const dest = [];
+      if (result.sentTo?.email) dest.push(`email → ${result.sentTo.email}`);
+      if (result.sentTo?.phone) dest.push(`SMS → ${result.sentTo.phone}`);
+      const skips = [];
+      for (const [ch, outcome] of Object.entries(result.channels || {})) {
+        if (outcome?.skipped) skips.push(`${ch} skipped (${outcome.reason || "no recipient"})`);
+      }
+      const errBits = (result.errors || []).map((e) => `${e.channel}: ${e.error}`);
+      if (dest.length === 0 && skips.length === 0 && errBits.length === 0) {
+        showToast("Test send didn't dispatch", "Check NOTIFY_TO_PHONE / NOTIFY_TO_EMAIL env vars.", { variant: "warn" });
+      } else {
+        const lines = [];
+        if (dest.length) lines.push(`Sent: ${dest.join(" · ")}`);
+        if (skips.length) lines.push(skips.join(" · "));
+        if (errBits.length) lines.push(`Errors: ${errBits.join(" · ")}`);
+        showToast(
+          errBits.length ? "Test had errors" : "Test sent — check your inbox",
+          lines.join("\n"),
+          { variant: errBits.length ? "warn" : "info" }
+        );
+      }
+    } catch (err) {
+      showToast("Test send failed", err.message || "Unknown error.", { variant: "warn" });
+    } finally {
+      composeSendTestBtn.disabled = false;
+      composeSendTestBtn.classList.remove("is-loading");
+      composeSendTestBtn.textContent = originalLabel;
+    }
   });
 
   composeForm.addEventListener("submit", async (event) => {
