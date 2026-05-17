@@ -74,19 +74,27 @@
         </label>
       </section>
 
-      <section class="ml-filters" aria-label="Status filter">
-        <button type="button" data-status-filter="" class="is-active">All</button>
-        <button type="button" data-status-filter="draft">Draft</button>
-        <button type="button" data-status-filter="in_progress">In progress</button>
-        <button type="button" data-status-filter="complete">Complete</button>
-        <button type="button" data-status-filter="archived">Archived</button>
-      </section>
-      <section class="ml-filters" aria-label="Parent filter">
-        <button type="button" data-parent-filter="" class="is-active">Any parent</button>
-        <button type="button" data-parent-filter="project">Project</button>
-        <button type="button" data-parent-filter="work_order">Work order</button>
-        <button type="button" data-parent-filter="quote">Quote</button>
-        <button type="button" data-parent-filter="standalone">Standalone</button>
+      <section class="ml-filter-row" aria-label="Filters">
+        <label class="ml-filter-control">
+          <span class="ml-filter-label">Status</span>
+          <select id="mlStatusFilter" class="ml-filter-select">
+            <option value="">All</option>
+            <option value="draft">Draft</option>
+            <option value="in_progress">In progress</option>
+            <option value="complete">Complete</option>
+            <option value="archived">Archived</option>
+          </select>
+        </label>
+        <label class="ml-filter-control">
+          <span class="ml-filter-label">Parent</span>
+          <select id="mlParentFilter" class="ml-filter-select">
+            <option value="">Any</option>
+            <option value="project">Project</option>
+            <option value="work_order">Work order</option>
+            <option value="quote">Quote</option>
+            <option value="standalone">Standalone</option>
+          </select>
+        </label>
       </section>
 
       <form class="supplier-form" id="newListForm" hidden aria-label="New material list">

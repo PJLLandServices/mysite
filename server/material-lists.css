@@ -20,33 +20,51 @@
   outline-offset: 0;
 }
 
-/* Status filter pills (mirrors invoices.css filter row pattern) */
-.ml-filters {
+/* Filter row — two inline dropdowns (Status + Parent) replaces the
+ * previous two pill rows (~150px tall on iPhone) with a single row of
+ * compact native selects. iOS uses its native picker wheel which keeps
+ * the tap target at the platform-standard 44pt. */
+.ml-filter-row {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 12px 18px;
   margin-bottom: 14px;
-  overflow-x: auto;
-  -webkit-overflow-scrolling: touch;
+  align-items: center;
 }
-.ml-filters button {
-  padding: 8px 14px;
+.ml-filter-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.ml-filter-label {
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #7A7A72;
+}
+.ml-filter-select {
+  padding: 8px 30px 8px 12px;
   border: 1px solid #C7C0A8;
-  border-radius: 999px;
+  border-radius: 8px;
   background: #fff;
+  font: inherit;
+  font-size: 14px;
+  color: #1F2A22;
   cursor: pointer;
-  font-size: 13px;
-  color: #4A4A44;
-  white-space: nowrap;
-  min-height: 36px;
+  min-height: 40px;
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'><path fill='none' stroke='%231B4D2E' stroke-width='2' d='M1 1l5 5 5-5'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  background-size: 12px 8px;
 }
-.ml-filters button.is-active {
-  background: #1B4D2E;
-  color: #fff;
+.ml-filter-select:focus {
+  outline: 2px solid rgba(27,77,46,0.20);
+  outline-offset: 0;
   border-color: #1B4D2E;
-}
-.ml-filters button:hover:not(.is-active) {
-  background: #F5F2E5;
 }
 
 /* Card grid */
