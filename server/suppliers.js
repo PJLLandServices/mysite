@@ -53,17 +53,25 @@ function renderList() {
   els.empty.hidden = true;
   els.list.innerHTML = cachedSuppliers.map((s) => {
     const tel = telHref(s.phone);
-    const lines = [];
-    if (s.contactName) lines.push(escapeHtml(s.contactName));
+    const metaLines = [];
+    if (s.contactName) {
+      metaLines.push(`<div class="supplier-card-contact">${escapeHtml(s.contactName)}</div>`);
+    }
     if (s.email) {
-      lines.push(`<a href="mailto:${escapeHtml(s.email)}">${escapeHtml(s.email)}</a>`);
+      metaLines.push(`<div class="supplier-card-email"><a href="mailto:${escapeHtml(s.email)}">${escapeHtml(s.email)}</a></div>`);
     }
     if (s.phone) {
-      lines.push(tel
+      const phoneInner = tel
         ? `<a href="${escapeHtml(tel)}">${escapeHtml(s.phone)}</a>`
-        : escapeHtml(s.phone));
+        : escapeHtml(s.phone);
+      metaLines.push(`<div class="supplier-card-phone">${phoneInner}</div>`);
     }
-    if (s.address) lines.push(escapeHtml(s.address));
+    if (s.address) {
+      metaLines.push(`<div class="supplier-card-address">${escapeHtml(s.address)}</div>`);
+    }
+    const metaHtml = metaLines.length
+      ? metaLines.join("")
+      : `<div class="supplier-card-empty"><em>No contact details yet.</em></div>`;
     return `
       <li class="supplier-card${s.archived ? " is-archived" : ""}" data-supplier-id="${escapeHtml(s.id)}">
         <h3 class="supplier-card-name">
@@ -75,7 +83,7 @@ function renderList() {
           <button type="button" data-action="edit">Edit</button>
           <button type="button" data-action="archive" class="${s.archived ? "" : "is-danger"}">${s.archived ? "Restore" : "Archive"}</button>
         </div>
-        <div class="supplier-card-meta">${lines.join(" &middot; ") || "<em>No contact details yet.</em>"}</div>
+        <div class="supplier-card-meta">${metaHtml}</div>
         ${s.notes ? `<p class="supplier-card-notes">${escapeHtml(s.notes)}</p>` : ""}
       </li>
     `;

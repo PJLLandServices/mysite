@@ -165,6 +165,58 @@
 }
 .ml-card-meta strong { color: #1F2A22; }
 
+/* PO card hierarchy — Properties-style structured rows instead of a
+ * flat <br>-separated meta blob.
+ *   .ml-card-source-row : "From [pill]"   (top of body)
+ *   .ml-card-lines      : column of dated events
+ *   .ml-card-line       : "Created <strong>" date row
+ *   .ml-source-pill     : green chip linking to the source material list
+ */
+.ml-card-source-row {
+  font-size: 13px;
+  color: #4A4A44;
+  margin-bottom: 6px;
+}
+.ml-source-pill {
+  display: inline-block;
+  font-family: ui-monospace, "SFMono-Regular", monospace;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: #1B4D2E;
+  background: rgba(74, 140, 92, 0.14);
+  padding: 2px 8px;
+  border-radius: 999px;
+  text-decoration: none;
+  vertical-align: baseline;
+}
+.ml-source-pill:hover { background: rgba(74, 140, 92, 0.22); }
+.ml-source-pill--manual {
+  color: #7A7A72;
+  background: rgba(15, 31, 20, 0.06);
+  font-family: "Barlow Condensed", sans-serif;
+  font-style: italic;
+  font-weight: 600;
+}
+.ml-card-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
+  color: #7A7A72;
+  line-height: 1.5;
+}
+.ml-card-line strong {
+  display: inline-block;
+  min-width: 64px;
+  font-weight: 600;
+  color: #4A4A44;
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
 .ml-card-stats {
   display: flex;
   flex-wrap: wrap;

@@ -76,14 +76,14 @@ function render() {
   els.container.innerHTML = items.map((po) => {
     const lineCount = (po.lineItems || []).length;
     const sourceList = (po.sourceMaterialListIds || [])[0];
-    const sourceLink = sourceList
-      ? `<a href="/admin/material-list/${encodeURIComponent(sourceList)}" style="color:#1B4D2E;text-decoration:none">${escapeHtml(sourceList)}</a>`
-      : "<em>(manual)</em>";
+    const sourcePill = sourceList
+      ? `<a class="ml-source-pill" href="/admin/material-list/${encodeURIComponent(sourceList)}">${escapeHtml(sourceList)}</a>`
+      : `<span class="ml-source-pill ml-source-pill--manual">manual</span>`;
     const sentLine = po.sentAt
-      ? `<br>Sent ${escapeHtml(fmtDate(po.sentAt))}${po.emailedToEmail ? ` to ${escapeHtml(po.emailedToEmail)}` : ""}`
+      ? `<div class="ml-card-line"><strong>Sent</strong> ${escapeHtml(fmtDate(po.sentAt))}${po.emailedToEmail ? ` to ${escapeHtml(po.emailedToEmail)}` : ""}</div>`
       : "";
     const receivedLine = po.receivedAt
-      ? `<br>Received ${escapeHtml(fmtDate(po.receivedAt))}`
+      ? `<div class="ml-card-line"><strong>Received</strong> ${escapeHtml(fmtDate(po.receivedAt))}</div>`
       : "";
     return `
       <li class="ml-card" data-po-id="${escapeHtml(po.id)}">
@@ -93,12 +93,13 @@ function render() {
             <span class="ml-card-id">${escapeHtml(po.id)}</span>
             <span class="po-status po-status--${escapeHtml(po.status)}">${escapeHtml(STATUS_LABELS[po.status] || po.status)}</span>
           </div>
-          <div class="ml-card-meta">
-            ${lineCount} line${lineCount === 1 ? "" : "s"} &middot; from ${sourceLink}
-            <br>Created ${escapeHtml(fmtDate(po.createdAt))}
+          <div class="ml-card-source-row">From ${sourcePill}</div>
+          <div class="ml-card-lines">
+            <div class="ml-card-line"><strong>Created</strong> ${escapeHtml(fmtDate(po.createdAt))}</div>
             ${sentLine}${receivedLine}
           </div>
           <div class="ml-card-stats">
+            <span class="ml-stat"><span class="ml-stat-num">${lineCount}</span><span class="ml-stat-label">${lineCount === 1 ? "line" : "lines"}</span></span>
             <span class="ml-card-total">${fmtCents(po.subtotalCents)}</span>
           </div>
         </a>
