@@ -75,26 +75,34 @@
         </label>
       </section>
 
-      <fieldset class="ml-filter-group" aria-label="Status filter">
-        <legend class="ml-filter-legend">Status</legend>
-        <section class="ml-filters">
-          <button type="button" data-status-filter="" class="is-active">All</button>
-          <button type="button" data-status-filter="draft">Draft</button>
-          <button type="button" data-status-filter="in_progress">In progress</button>
-          <button type="button" data-status-filter="complete">Complete</button>
-          <button type="button" data-status-filter="archived">Archived</button>
-        </section>
-      </fieldset>
-      <fieldset class="ml-filter-group" aria-label="Parent filter">
-        <legend class="ml-filter-legend">Parent</legend>
-        <section class="ml-filters">
-          <button type="button" data-parent-filter="" class="is-active">Any parent</button>
-          <button type="button" data-parent-filter="project">Project</button>
-          <button type="button" data-parent-filter="work_order">Work order</button>
-          <button type="button" data-parent-filter="quote">Quote</button>
-          <button type="button" data-parent-filter="standalone">Standalone</button>
-        </section>
-      </fieldset>
+      <section class="ml-filter-bar" aria-label="Filters">
+        <details class="ml-popover" data-popover="status">
+          <summary class="ml-popover-trigger" aria-label="Filter by status">
+            <span class="ml-popover-text">Status: <span data-popover-label="status">All</span></span>
+            <span class="ml-popover-chevron" aria-hidden="true"></span>
+          </summary>
+          <div class="ml-popover-menu" role="menu" aria-label="Status">
+            <button type="button" role="menuitemradio" aria-checked="true"  data-status-filter=""            class="is-active">All</button>
+            <button type="button" role="menuitemradio" aria-checked="false" data-status-filter="draft">Draft</button>
+            <button type="button" role="menuitemradio" aria-checked="false" data-status-filter="in_progress">In progress</button>
+            <button type="button" role="menuitemradio" aria-checked="false" data-status-filter="complete">Complete</button>
+            <button type="button" role="menuitemradio" aria-checked="false" data-status-filter="archived">Archived</button>
+          </div>
+        </details>
+        <details class="ml-popover" data-popover="parent">
+          <summary class="ml-popover-trigger" aria-label="Filter by parent">
+            <span class="ml-popover-text">Parent: <span data-popover-label="parent">Any</span></span>
+            <span class="ml-popover-chevron" aria-hidden="true"></span>
+          </summary>
+          <div class="ml-popover-menu" role="menu" aria-label="Parent">
+            <button type="button" role="menuitemradio" aria-checked="true"  data-parent-filter=""           class="is-active">Any parent</button>
+            <button type="button" role="menuitemradio" aria-checked="false" data-parent-filter="project">Project</button>
+            <button type="button" role="menuitemradio" aria-checked="false" data-parent-filter="work_order">Work order</button>
+            <button type="button" role="menuitemradio" aria-checked="false" data-parent-filter="quote">Quote</button>
+            <button type="button" role="menuitemradio" aria-checked="false" data-parent-filter="standalone">Standalone</button>
+          </div>
+        </details>
+      </section>
 
       <form class="supplier-form" id="newListForm" hidden aria-label="New material list">
         <h2>New material list</h2>

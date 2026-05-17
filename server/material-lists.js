@@ -39,6 +39,25 @@ const STATUS_LABELS = {
   archived: "Archived"
 };
 
+// Short labels shown inside the filter-popover trigger button — e.g.
+// "Status: All" / "Parent: Any" when default, "Status: Draft" /
+// "Parent: Project" when a specific option is picked. Keep these in sync
+// with the menu options in material-lists.html.
+const STATUS_TRIGGER_LABELS = {
+  "": "All",
+  draft: "Draft",
+  in_progress: "In progress",
+  complete: "Complete",
+  archived: "Archived"
+};
+const PARENT_TRIGGER_LABELS = {
+  "": "Any",
+  project: "Project",
+  work_order: "Work order",
+  quote: "Quote",
+  standalone: "Standalone"
+};
+
 let currentStatus = "";
 let currentParentFilter = "";   // "" | "project" | "work_order" | "quote" | "standalone"
 let cachedLists = [];
@@ -201,17 +220,59 @@ els.newCancel.addEventListener("click", closeNewForm);
 els.newForm.addEventListener("submit", saveNew);
 els.search.addEventListener("input", () => renderLists());
 els.includeArchived.addEventListener("change", loadLists);
+// Popover plumbing — each <details class="ml-popover"> is a single-select
+// dropdown. Selecting an option updates the trigger label, marks the
+// option active, and closes the popover. Outside-tap + Escape also close.
+const popovers = Array.from(document.querySelectorAll(".ml-popover"));
+function closeAllPopovers(except) {
+  popovers.forEach((d) => { if (d !== except) d.open = false; });
+}
+// Mutual exclusion — opening one popover closes the other.
+popovers.forEach((d) => {
+  d.addEventListener("toggle", () => { if (d.open) closeAllPopovers(d); });
+});
+// Outside-tap to close. pointerdown fires before click so the popover is
+// closed before the (now-orphaned) click would have landed on a menu item.
+document.addEventListener("pointerdown", (event) => {
+  if (!popovers.some((d) => d.open)) return;
+  if (event.target.closest && event.target.closest(".ml-popover")) return;
+  closeAllPopovers(null);
+});
+// Escape closes any open popover.
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape") return;
+  if (popovers.some((d) => d.open)) closeAllPopovers(null);
+});
+
+function setPopoverLabel(kind, value) {
+  const el = document.querySelector(`[data-popover-label="${kind}"]`);
+  if (!el) return;
+  const map = kind === "status" ? STATUS_TRIGGER_LABELS : PARENT_TRIGGER_LABELS;
+  el.textContent = map[value] || map[""];
+}
+function markActive(buttons, picked) {
+  buttons.forEach((b) => {
+    const active = b === picked;
+    b.classList.toggle("is-active", active);
+    b.setAttribute("aria-checked", active ? "true" : "false");
+  });
+}
+
 els.filterButtons.forEach((btn) => {
   btn.addEventListener("click", () => {
     currentStatus = btn.dataset.statusFilter || "";
-    els.filterButtons.forEach((b) => b.classList.toggle("is-active", b === btn));
+    markActive(els.filterButtons, btn);
+    setPopoverLabel("status", currentStatus);
+    closeAllPopovers(null);
     loadLists();
   });
 });
 els.parentFilterButtons.forEach((btn) => {
   btn.addEventListener("click", () => {
     currentParentFilter = btn.dataset.parentFilter || "";
-    els.parentFilterButtons.forEach((b) => b.classList.toggle("is-active", b === btn));
+    markActive(els.parentFilterButtons, btn);
+    setPopoverLabel("parent", currentParentFilter);
+    closeAllPopovers(null);
     // Parent filter is client-side only — no server round-trip needed.
     renderLists();
   });

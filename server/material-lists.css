@@ -20,36 +20,115 @@
   outline-offset: 0;
 }
 
-/* Filter groups — Status + Parent each wrapped in a <fieldset
- * class="ml-filter-group"> with a <legend class="ml-filter-legend"> so
- * the two filter dimensions read as distinct rather than as one
- * continuous chip blob. */
-.ml-filter-group {
-  border: 0;
+/* Filter popovers — Status + Parent each collapse into a compact
+ * <details class="ml-popover"> trigger button. The pill-row pattern is
+ * preserved below for purchase-orders / projects / work-orders, which
+ * still use .ml-filters directly. */
+.ml-filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
   margin: 0 0 10px;
-  padding: 0;
+}
+.ml-popover {
+  position: relative;
   min-width: 0;
 }
-.ml-filter-group + .ml-filter-group {
-  margin-top: 4px;
-  padding-top: 10px;
-  border-top: 1px solid #ECEAE0;
+.ml-popover-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  min-height: 36px;
+  border: 1px solid #C7C0A8;
+  border-radius: 999px;
+  background: #fff;
+  cursor: pointer;
+  font-size: 13px;
+  color: #4A4A44;
+  white-space: nowrap;
+  list-style: none;
+  user-select: none;
 }
-.ml-filter-legend {
-  display: block;
-  padding: 0;
-  margin-bottom: 6px;
-  font-family: "Barlow Condensed", sans-serif;
-  font-size: 12px;
+.ml-popover-trigger::-webkit-details-marker { display: none; }
+.ml-popover-trigger::marker { content: ""; }
+.ml-popover-trigger:hover { background: #F5F2E5; }
+.ml-popover-trigger:focus-visible {
+  outline: 2px solid rgba(27,77,46,0.30);
+  outline-offset: 2px;
+}
+.ml-popover[open] > .ml-popover-trigger {
+  background: #F5F2E5;
+  border-color: #1B4D2E;
+}
+.ml-popover-text { font-weight: 500; }
+.ml-popover-text [data-popover-label] { font-weight: 700; color: #1F2A22; }
+.ml-popover-chevron {
+  display: inline-block;
+  width: 0;
+  height: 0;
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-top: 5px solid currentColor;
+  transition: transform 150ms ease;
+}
+.ml-popover[open] .ml-popover-chevron { transform: rotate(180deg); }
+
+.ml-popover-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  min-width: 200px;
+  max-width: calc(100vw - 32px);
+  padding: 6px;
+  background: #fff;
+  border: 1px solid #D8D5C5;
+  border-radius: 12px;
+  box-shadow: 0 8px 24px rgba(15, 31, 20, 0.14);
+}
+.ml-popover-menu button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 10px 12px;
+  min-height: 44px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  text-align: left;
+  font: inherit;
+  font-size: 14px;
+  color: #4A4A44;
+  cursor: pointer;
+}
+.ml-popover-menu button::before {
+  content: "";
+  display: inline-block;
+  width: 14px;
+  flex: 0 0 auto;
+  color: #1B4D2E;
   font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: #7A7A72;
+  text-align: center;
+}
+.ml-popover-menu button.is-active::before { content: "\2713"; }
+.ml-popover-menu button.is-active {
+  color: #1B4D2E;
+  font-weight: 600;
+  background: rgba(74, 140, 92, 0.10);
+}
+.ml-popover-menu button:hover:not(.is-active) { background: #F5F2E5; }
+.ml-popover-menu button:focus-visible {
+  outline: 2px solid rgba(27,77,46,0.30);
+  outline-offset: -2px;
 }
 
-/* Pill chip row — used by ml-filter-group on the ML page AND by
- * purchase-orders.html for its standalone status filter. Keep the rule
- * unconditionally so PO Index's filters stay styled. */
+/* Pill chip row — kept for purchase-orders / projects / work-orders
+ * indexes that still use .ml-filters directly. Material lists no longer
+ * uses this rule (replaced by .ml-popover above). */
 .ml-filters {
   display: flex;
   flex-wrap: wrap;
