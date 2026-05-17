@@ -197,23 +197,17 @@
   background: #fff;
   border: 1px solid #E2E0D4;
   border-radius: 12px;
-  padding: 14px 16px;
+  /* Unconditional 44px left padding reserves space for the bulk-checkbox
+   * that bulk-wiring.js injects as a grid-first-child. Conditional
+   * :has() approach was unreliable on production Chrome with
+   * dynamically-inserted siblings. */
+  padding: 14px 16px 14px 44px;
   display: grid;
   grid-template-columns: 1fr auto;
   gap: 8px 16px;
   align-items: start;
 }
 
-/* bulk-selection.js injects <label class="pjl-bulk-checkbox-wrap"> as
- * the first child of every row. supplier-card is a grid container, so
- * the wrap lands in the first auto-placed cell (the 1fr column) and
- * justify-content: center on the wrap pushes the checkbox to dead
- * horizontal center — "above everything" per Patrick. Same fix as
- * property-card: lift the wrap out of the grid via absolute pos and
- * reserve left padding only when one is actually present. */
-.supplier-card:has(> .pjl-bulk-checkbox-wrap) {
-  padding-left: 44px;
-}
 .supplier-card > .pjl-bulk-checkbox-wrap {
   position: absolute;
   top: 14px;

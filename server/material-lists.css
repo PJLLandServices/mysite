@@ -88,16 +88,17 @@
 
 .ml-card-link {
   display: block;
-  padding: 14px 16px;
+  /* Left padding reserves space for the bulk-checkbox that
+   * bulk-wiring.js injects as a sibling. Previously used :has() to
+   * apply this conditionally but the selector wasn't reliably
+   * matching the dynamically-injected wrap on production Chrome, so
+   * the checkbox kept overlapping the card content. Bulk-wiring is
+   * always attached on these pages anyway, so reserve unconditionally. */
+  padding: 14px 16px 14px 44px;
   color: inherit;
   text-decoration: none;
 }
 
-/* bulk-selection.js injects the checkbox wrap as the FIRST child of
- * the <li>, before .ml-card-link. Without explicit placement it sits
- * at the top of the card as its own row, leaving white space above
- * the content (Patrick's "tight to the bumpers"). Lift it out of flow
- * and pad the link to the right of where the checkbox now lives. */
 .ml-card > .pjl-bulk-checkbox-wrap {
   position: absolute;
   top: 50%;
@@ -106,9 +107,6 @@
   margin: 0;
   padding: 6px;
   z-index: 2;
-}
-.ml-card:has(> .pjl-bulk-checkbox-wrap) > .ml-card-link {
-  padding-left: 44px;
 }
 
 .ml-card-head {
