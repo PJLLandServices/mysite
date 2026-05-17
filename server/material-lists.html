@@ -56,11 +56,20 @@
     </header>
 
     <main class="suppliers-shell">
-      <nav class="suppliers-subnav" aria-label="Materials sub-sections">
-        <a href="/admin/material-lists" class="is-active" aria-current="page">Material lists</a>
-        <a href="/admin/purchase-orders">Purchase orders</a>
-        <a href="/admin/suppliers">Suppliers</a>
-        <a href="/admin/parts-suppliers">Catalog</a>
+      <nav class="suppliers-subnav" aria-label="Materials sub-section">
+        <details class="suppliers-subnav-collapse">
+          <summary class="suppliers-subnav-trigger">
+            <span class="suppliers-subnav-trigger-eyebrow">Materials</span>
+            <span class="suppliers-subnav-trigger-current">Material lists</span>
+            <span class="suppliers-subnav-trigger-chevron" aria-hidden="true"></span>
+          </summary>
+          <div class="suppliers-subnav-list">
+            <a href="/admin/material-lists" class="is-active" aria-current="page">Material lists</a>
+            <a href="/admin/purchase-orders">Purchase orders</a>
+            <a href="/admin/suppliers">Suppliers</a>
+            <a href="/admin/parts-suppliers">Catalog</a>
+          </div>
+        </details>
       </nav>
 
       <section class="suppliers-explainer">

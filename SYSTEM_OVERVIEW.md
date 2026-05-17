@@ -191,6 +191,7 @@ Pages with their primary route + purpose:
 | `suppliers.html` | `/admin/suppliers` | Supplier records. |
 | `parts-suppliers.html` | `/admin/parts-suppliers` | Bulk catalog assignment grid (SKU → primary supplier). |
 | `purchase-orders.html` | `/admin/purchase-orders` | PO index. Status filter + "Show closed" toggle. |
+| (Materials sub-nav) | — | The four pages above (`material-lists.html`, `purchase-orders.html`, `suppliers.html`, `parts-suppliers.html`) share a `.suppliers-subnav` strip duplicated by hand. Below 768px the strip collapses into a single `<details>` dropdown ("Materials → <current> ▾"); open/close behaviour lives in `crm-nav.js`. |
 | `purchase-order.html` | `/admin/purchase-order/<id>` | PO detail. Send modal (email + PDF), partial-receive modal, reorder, cancel. |
 | `chats.html` | `/admin/chats` | AI chat transcripts (booked + abandoned). |
 | `settings.html` | `/admin/settings` | Notification defaults, audit trail, QB connect, exports. |
