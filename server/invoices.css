@@ -165,14 +165,21 @@
     color: #777;
   }
 
-  /* Quote-folder card: 3-row × 2-col grid. Internal grid has 4 rows so
-     Total ($) and Status badge can stack in row-2-right while the Customer
-     cell on the left spans the same vertical range. Brief 2 / Option 1.
+  /* Quote-folder card: 3-row × 3-col grid (checkbox | left | right).
+     Internal grid has 4 rows so Total ($) and Status stack in row-2-right
+     while the Customer cell on the left spans the same vertical range
+     (Brief 2 / Option 1).
 
-     Checkbox is taken out of the grid entirely — it's an absolute overlay
-     at the card's top-left corner. Only the row-1 Type cell pads around
-     it; rows 2-3 use the card's full content width, so the customer email
-     and quote ID don't get pushed in by the checkbox column.
+     The checkbox sits in column 1 as a regular grid item, NOT a
+     position-absolute overlay — iOS Safari has long-standing quirks
+     positioning descendants of table elements (a position:absolute <td>
+     can fall back to in-flow placement and end up rendered mid-card).
+     This layout has to work flawlessly on iPhone Safari per the brief.
+
+     Column 1 is fixed at 30px and the checkbox-wrap padding is shrunk
+     here so the column doesn't push the left content too far in. The
+     checkbox column spans all 4 rows with align-self: start so it hugs
+     the top-left corner.
 
      `minmax(0, 1fr)` (not bare `1fr`) on the customer column is required —
      1fr's implicit min-width is `auto` (= min-content), and the customer
@@ -182,13 +189,12 @@
      handles the long unbroken email by wrapping mid-word. */
   .invoices-table tr.quote-row {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-columns: 30px minmax(0, 1fr) auto;
     grid-template-rows: auto auto auto auto;
-    column-gap: 12px;
+    column-gap: 8px;
     row-gap: 4px;
     align-items: start;
-    padding: 12px 14px;
-    position: relative;
+    padding: 12px;
   }
   .quote-row > td {
     display: block;
@@ -199,18 +205,21 @@
   .quote-row > td::before { display: none; }
 
   .quote-row > .pjl-bulk-checkbox-cell {
-    position: absolute;
-    top: 6px;
-    left: 6px;
-    z-index: 1;
+    grid-column: 1;
+    grid-row: 1 / span 4;
+    align-self: start;
   }
-  .quote-row > .qf-cell-type      { grid-column: 1; grid-row: 1; padding-left: 36px; }
-  .quote-row > .qf-cell-customer  { grid-column: 1; grid-row: 2 / span 2; align-self: center; overflow-wrap: anywhere; }
-  .quote-row > .qf-cell-quote-id  { grid-column: 1; grid-row: 4; }
-  .quote-row > .qf-cell-date      { grid-column: 2; grid-row: 1; text-align: right; }
-  .quote-row > .qf-cell-total     { grid-column: 2; grid-row: 2; text-align: right; align-self: end; }
-  .quote-row > .qf-cell-status    { grid-column: 2; grid-row: 3; text-align: right; align-self: start; }
-  .quote-row > .qf-cell-materials { grid-column: 2; grid-row: 4; text-align: right; }
+  .quote-row > .pjl-bulk-checkbox-cell .pjl-bulk-checkbox-wrap {
+    padding: 4px 0;
+    margin-right: 0;
+  }
+  .quote-row > .qf-cell-type      { grid-column: 2; grid-row: 1; }
+  .quote-row > .qf-cell-customer  { grid-column: 2; grid-row: 2 / span 2; align-self: center; overflow-wrap: anywhere; }
+  .quote-row > .qf-cell-quote-id  { grid-column: 2; grid-row: 4; }
+  .quote-row > .qf-cell-date      { grid-column: 3; grid-row: 1; text-align: right; }
+  .quote-row > .qf-cell-total     { grid-column: 3; grid-row: 2; text-align: right; align-self: end; font-weight: 700; font-size: 15px; }
+  .quote-row > .qf-cell-status    { grid-column: 3; grid-row: 3; text-align: right; align-self: start; }
+  .quote-row > .qf-cell-materials { grid-column: 3; grid-row: 4; text-align: right; }
 }
 
 .quote-folder-intro { margin: 0 0 14px; color: #555; font-size: 14px; }
