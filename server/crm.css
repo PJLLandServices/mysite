@@ -2668,6 +2668,15 @@ body.crm-drawer-locked { overflow: hidden; }
   cursor: pointer;
   user-select: none;
 }
+
+/* Empty <th> the bulk-selection controller inserts at the front of the
+   thead so column headers stay aligned with their data when a checkbox
+   <td> is prepended to each row. Sized to the checkbox cell so the data
+   columns flow correctly underneath their labels. */
+.pjl-bulk-checkbox-th {
+  width: 44px;
+  padding: 0;
+}
 .pjl-bulk-checkbox {
   width: 20px;
   height: 20px;

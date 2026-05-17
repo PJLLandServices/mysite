@@ -3,8 +3,11 @@
 
 .invoices-body { background: #FAFAF5; min-height: 100vh; }
 
+/* Shell width — the table is the primary content on this page and it
+   wants width on ultrawide monitors. The yellow callout below caps its
+   own text at ~850px so prose stays readable even when the shell is wide. */
 .invoices-shell {
-  max-width: 1100px;
+  max-width: 1800px;
   margin: 0 auto;
   padding: 24px 20px 60px;
 }
@@ -161,6 +164,53 @@
     font-size: 12px;
     color: #777;
   }
+
+  /* Quote-folder card: 3-row × 2-col grid. Internal grid has 4 rows so
+     Total ($) and Status badge can stack in row-2-right while the Customer
+     cell on the left spans the same vertical range. Brief 2 / Option 1.
+
+     Checkbox is taken out of the grid entirely — it's an absolute overlay
+     at the card's top-left corner. Only the row-1 Type cell pads around
+     it; rows 2-3 use the card's full content width, so the customer email
+     and quote ID don't get pushed in by the checkbox column.
+
+     `minmax(0, 1fr)` (not bare `1fr`) on the customer column is required —
+     1fr's implicit min-width is `auto` (= min-content), and the customer
+     email's min-content can exceed the viewport, forcing the whole table
+     to overflow and the page to scroll horizontally. minmax(0,1fr) lets
+     the column shrink past min-content; overflow-wrap on the customer cell
+     handles the long unbroken email by wrapping mid-word. */
+  .invoices-table tr.quote-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-rows: auto auto auto auto;
+    column-gap: 12px;
+    row-gap: 4px;
+    align-items: start;
+    padding: 12px 14px;
+    position: relative;
+  }
+  .quote-row > td {
+    display: block;
+    padding: 0;
+    margin: 0;
+    border: 0;
+  }
+  .quote-row > td::before { display: none; }
+
+  .quote-row > .pjl-bulk-checkbox-cell {
+    position: absolute;
+    top: 6px;
+    left: 6px;
+    z-index: 1;
+  }
+  .quote-row > .qf-cell-type      { grid-column: 1; grid-row: 1; padding-left: 36px; }
+  .quote-row > .qf-cell-customer  { grid-column: 1; grid-row: 2 / span 2; align-self: center; overflow-wrap: anywhere; }
+  .quote-row > .qf-cell-quote-id  { grid-column: 1; grid-row: 4; }
+  .quote-row > .qf-cell-date      { grid-column: 2; grid-row: 1; text-align: right; }
+  .quote-row > .qf-cell-total     { grid-column: 2; grid-row: 2; text-align: right; align-self: end; }
+  .quote-row > .qf-cell-status    { grid-column: 2; grid-row: 3; text-align: right; align-self: start; }
+  .quote-row > .qf-cell-materials { grid-column: 2; grid-row: 4; text-align: right; }
 }
 
 .quote-folder-intro { margin: 0 0 14px; color: #555; font-size: 14px; }
@@ -172,6 +222,7 @@
 .invoices-status--cancelled { background: #EFEFE5; color: #999; }
 
 .invoices-explainer {
+  max-width: 850px;
   margin: 0 0 18px;
   padding: 12px 14px;
   background: #FFF8E6;

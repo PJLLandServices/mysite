@@ -72,18 +72,22 @@ async function load() {
     const projAction = proj
       ? `<a class="invoices-row-sub" href="/admin/project/${encodeURIComponent(proj.id)}">↗ ${escapeHtml(proj.id)}</a>`
       : `<button type="button" class="invoices-row-sub" data-quote-id="${escapeHtml(q.id)}" data-action="convert" style="background:none;border:none;color:#1B4D2E;cursor:pointer;text-decoration:underline;padding:0;font:inherit">Convert to project</button>`;
+    // Per-cell classes (qf-cell-*) let the mobile CSS place each <td>
+    // into a 3-row × 2-col grid (see invoices.css → @media (max-width:700px)
+    // → .quote-row). Desktop view ignores them — the table still flows by
+    // DOM order, matching the <thead> column order.
     return `
       <tr class="quote-row" data-quote-id="${escapeHtml(q.id)}">
-        <td>
+        <td class="qf-cell-quote-id">
           <strong>${escapeHtml(q.id)}</strong>${q.version > 1 ? ` <span class="invoices-row-sub">v${q.version}</span>` : ""}
           <br><a class="invoices-row-sub" href="/api/admin/quote-folder/${encodeURIComponent(q.id)}/pdf" target="_blank" rel="noopener">📄 PDF</a>
         </td>
-        <td>${escapeHtml(TYPE_LABELS[q.type] || q.type)}</td>
-        <td>${escapeHtml(customer)}<br><span class="invoices-row-sub">${leadLink}</span></td>
-        <td class="invoices-amount">${fmt(q.total)}</td>
-        <td><span class="invoices-status invoices-status--${escapeHtml(q.status)}">${escapeHtml(q.status)}</span></td>
-        <td>${escapeHtml(fmtDate(q.createdAt))}${q.validUntil ? `<br><span class="invoices-row-sub">expires ${escapeHtml(fmtDate(q.validUntil))}</span>` : ""}</td>
-        <td>${mlChip}<br>${projAction}</td>
+        <td class="qf-cell-type">${escapeHtml(TYPE_LABELS[q.type] || q.type)}</td>
+        <td class="qf-cell-customer">${escapeHtml(customer)}<br><span class="invoices-row-sub">${leadLink}</span></td>
+        <td class="invoices-amount qf-cell-total">${fmt(q.total)}</td>
+        <td class="qf-cell-status"><span class="invoices-status invoices-status--${escapeHtml(q.status)}">${escapeHtml(q.status)}</span></td>
+        <td class="qf-cell-date">${escapeHtml(fmtDate(q.createdAt))}${q.validUntil ? `<br><span class="invoices-row-sub">expires ${escapeHtml(fmtDate(q.validUntil))}</span>` : ""}</td>
+        <td class="qf-cell-materials">${mlChip}<br>${projAction}</td>
       </tr>
     `;
   }).join("");

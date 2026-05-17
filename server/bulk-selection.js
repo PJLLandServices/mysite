@@ -178,6 +178,20 @@
           cell.className = "pjl-bulk-checkbox-cell";
           cell.appendChild(wrap);
           row.insertBefore(cell, row.firstChild);
+          // Also insert a matching <th> at the front of the thead row so
+          // column widths and header labels stay aligned with the data.
+          // Without this, every <th> ends up over the previous column and
+          // an empty 8th column appears on the right (visible bug on
+          // /admin/quote-folder and /admin/invoices).
+          const table = state.listEl.closest("table") ||
+            (state.listEl.parentElement && state.listEl.parentElement.closest && state.listEl.parentElement.closest("table"));
+          const headerRow = table && table.querySelector("thead tr");
+          if (headerRow && !headerRow.querySelector(".pjl-bulk-checkbox-th")) {
+            const th = document.createElement("th");
+            th.className = "pjl-bulk-checkbox-th";
+            th.setAttribute("aria-hidden", "true");
+            headerRow.insertBefore(th, headerRow.firstChild);
+          }
         } else {
           row.insertBefore(wrap, row.firstChild);
         }
