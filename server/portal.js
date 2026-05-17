@@ -539,19 +539,20 @@ async function loadPortal() {
   }
 
   try {
-    // Pass the season query param through so the API can mint a
-    // booking session pre-loaded with the right spring/fall service
-    // when the token resolves to a property (seasonal outreach flow).
+    // Pass the season query param through so the API knows whether
+    // this came from a seasonal outreach link (spring/fall) — the
+    // property-portal renderer adjusts headings + the book CTA copy
+    // accordingly.
     const seasonParam = new URLSearchParams(window.location.search).get("season");
     const apiUrl = `/api/portal/${encodeURIComponent(token)}${seasonParam ? `?season=${encodeURIComponent(seasonParam)}` : ""}`;
     const response = await fetch(apiUrl, { cache: "no-store" });
     const data = await response.json();
     if (!response.ok || !data.ok) throw new Error("Portal not found.");
-    // Property tokens (seasonal outreach) get a redirect to a fresh
-    // booking session on /book.html — the portal page itself only
-    // renders for lead tokens.
-    if (data.redirect) {
-      window.location.replace(data.redirect);
+    // Property tokens (seasonal outreach) get a property-aware landing
+    // — greeting + property summary + a "Book your seasonal service"
+    // button that mints a fresh booking session on demand.
+    if (data.propertyPortal) {
+      renderPropertyPortal(data.propertyPortal);
       return;
     }
     renderPortal(data.portal);
@@ -560,6 +561,95 @@ async function loadPortal() {
     portalTitle.textContent = "Portal unavailable";
     portalIntro.textContent = "Please contact PJL Land Services directly.";
   }
+}
+
+// Property-portal render path (seasonal outreach). Swaps the hero
+// title for a seasonal greeting, fills in the property summary card,
+// and wires the Book button to POST /api/portal/<token>/begin-booking
+// which mints a fresh booking session and redirects to /book.html
+// with the customer's hints pre-loaded.
+function renderPropertyPortal(payload) {
+  const firstName = payload.firstName || "there";
+  const seasonName = payload.seasonName || "appointment";
+  portalTitle.textContent = payload.seasonName
+    ? `Hey ${firstName}, ready for your ${seasonName}?`
+    : `Hey ${firstName}, time to book your service`;
+  portalIntro.textContent = "We've got your property on file — pick a slot and we'll be there.";
+
+  const seasonLabelEl = document.getElementById("portalPropertySeasonLabel");
+  const headingEl = document.getElementById("portalPropertyHeading");
+  const subheadEl = document.getElementById("portalPropertySubhead");
+  const addressEl = document.getElementById("portalPropertyAddress");
+  const zonesEl = document.getElementById("portalPropertyZones");
+  const controllerEl = document.getElementById("portalPropertyController");
+  const contactEl = document.getElementById("portalPropertyContact");
+  const bookBtn = document.getElementById("portalPropertyBookBtn");
+  const historySec = document.getElementById("portalPropertyHistory");
+  const historyList = document.getElementById("portalPropertyHistoryList");
+
+  if (payload.seasonName) {
+    seasonLabelEl.textContent = payload.seasonName;
+    headingEl.textContent = `Book your ${payload.seasonName}`;
+    bookBtn.textContent = `Book my ${payload.seasonName} →`;
+  } else {
+    seasonLabelEl.textContent = "PJL Land Services";
+    headingEl.textContent = "Book a service";
+    bookBtn.textContent = "Book your appointment →";
+  }
+  subheadEl.textContent = payload.zoneCount
+    ? `${payload.zoneCount}-zone system on file — we'll bring what we need.`
+    : "We've got your property details on file.";
+
+  addressEl.textContent = payload.address || "—";
+  zonesEl.textContent = payload.zoneCount > 0
+    ? `${payload.zoneCount} ${payload.zoneCount === 1 ? "zone" : "zones"}`
+    : "Not yet confirmed";
+  const controllerBits = [payload.controllerBrand, payload.controllerLocation].filter(Boolean);
+  controllerEl.textContent = controllerBits.length ? controllerBits.join(" — ") : "Not on file";
+  const contactBits = [payload.customerName, payload.email, payload.phone].filter(Boolean);
+  contactEl.textContent = contactBits.join(" · ") || "—";
+
+  // Recent service records — small continuity touch ("we were here
+  // in Apr 2025, want us back?"). Hidden when there's no history.
+  if (Array.isArray(payload.recentServices) && payload.recentServices.length) {
+    historyList.innerHTML = payload.recentServices.map((r) => {
+      const date = r.completedAt
+        ? new Date(r.completedAt).toLocaleDateString("en-CA", { year: "numeric", month: "short", day: "numeric" })
+        : "";
+      const typeLabel = r.woType === "spring_opening" ? "Spring opening"
+                       : r.woType === "fall_closing" ? "Fall closing"
+                       : r.woType === "repair" ? "Repair visit"
+                       : "Service visit";
+      const summaryBit = r.summary ? ` — ${r.summary}` : "";
+      return `<li><strong>${date}</strong> · ${typeLabel}${summaryBit}</li>`;
+    }).join("");
+    historySec.hidden = false;
+  } else {
+    historySec.hidden = true;
+  }
+
+  // Wire the Book button — mints a fresh booking session on every
+  // tap, then redirects. Idempotent enough; sessions auto-expire in
+  // an hour and the customer just gets a new one if they revisit.
+  bookBtn.onclick = async () => {
+    bookBtn.disabled = true;
+    bookBtn.textContent = "Opening booking…";
+    try {
+      const token = tokenFromLocation();
+      const seasonParam = new URLSearchParams(window.location.search).get("season");
+      const url = `/api/portal/${encodeURIComponent(token)}/begin-booking${seasonParam ? `?season=${encodeURIComponent(seasonParam)}` : ""}`;
+      const r = await fetch(url, { method: "POST", cache: "no-store" });
+      const d = await r.json();
+      if (!r.ok || !d.ok || !d.redirect) throw new Error("Booking session failed to start.");
+      window.location.assign(d.redirect);
+    } catch (err) {
+      bookBtn.disabled = false;
+      bookBtn.textContent = `Book my ${seasonName} →`;
+      alert("Sorry, the booking page didn't load. Please call (905) 960-0181.");
+    }
+  };
+
+  document.getElementById("portalPropertySection").hidden = false;
 }
 
 acceptButton.addEventListener("click", async () => {

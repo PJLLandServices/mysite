@@ -50,6 +50,37 @@
       <p id="portalIntro">One moment while we open your PJL project details.</p>
     </section>
 
+    <!-- Seasonal-outreach property landing. Shown when /portal/<token>
+         resolves to a property (not a lead) — the customer was sent
+         here from a seasonal outreach email/SMS. Summarizes the
+         property + offers a one-tap booking session.
+         (feature-seasonal-outreach-brief.md follow-up.) -->
+    <section class="portal-property" id="portalPropertySection" hidden>
+      <article class="portal-card portal-property-card">
+        <header class="portal-property-head">
+          <span class="portal-property-eyebrow" id="portalPropertySeasonLabel">Your seasonal service</span>
+          <h2 id="portalPropertyHeading">Time to book your service</h2>
+          <p class="portal-property-sub" id="portalPropertySubhead">We're ready when you are.</p>
+        </header>
+        <dl class="portal-property-grid">
+          <div><dt>Property</dt><dd id="portalPropertyAddress">—</dd></div>
+          <div><dt>Zones on file</dt><dd id="portalPropertyZones">—</dd></div>
+          <div><dt>Controller</dt><dd id="portalPropertyController">—</dd></div>
+          <div><dt>On file for</dt><dd id="portalPropertyContact">—</dd></div>
+        </dl>
+        <div class="portal-property-actions">
+          <button type="button" class="portal-btn portal-btn-primary" id="portalPropertyBookBtn">Book your appointment →</button>
+          <p class="portal-property-note">
+            Or call <a href="tel:+19059600181">(905) 960-0181</a> and we'll set it up by phone.
+          </p>
+        </div>
+        <section class="portal-property-history" id="portalPropertyHistory" hidden>
+          <h3>Recent visits</h3>
+          <ul id="portalPropertyHistoryList"></ul>
+        </section>
+      </article>
+    </section>
+
     <section class="portal-timeline" id="portalTimeline" hidden aria-label="Project status">
       <ol class="timeline-track">
         <li data-step="received"><span class="timeline-dot"></span><span class="timeline-label">Request received</span></li>
