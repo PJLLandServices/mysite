@@ -10835,6 +10835,29 @@ async function renderPortalWithOg(req, res, pathname, url) {
         // Lead miss — try the property namespace.
         const allProperties = await properties.list();
         property = allProperties.find((p) => p.id && portalTokenForId(p.id) === token) || null;
+        // If the property has a linked lead, redirect to that lead's
+        // portal — customer should land in their existing customer
+        // portal (project history, messages, recent jobs, contact
+        // prefs), not a stripped-down property-only landing.
+        // The outreach link's seasonal hint flows through the
+        // redirect so the lead portal still picks up ?season=spring.
+        if (property) {
+          const linkedLeads = leads.filter((l) => l.propertyId === property.id);
+          if (linkedLeads.length) {
+            linkedLeads.sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+            const recent = linkedLeads[0];
+            const leadToken = recent.portal?.token || portalTokenForId(recent.id);
+            const redirectUrl = `/portal/${encodeURIComponent(leadToken)}${season ? `?season=${season}` : ""}`;
+            res.writeHead(302, {
+              location: redirectUrl,
+              "cache-control": "no-store"
+            });
+            res.end();
+            return true;
+          }
+          // No linked leads — fall through to the property-portal
+          // landing (greeting + property summary + Book CTA).
+        }
       }
       // Prefer the property's snapshot customerName (the name-
       // invariant per §3.9 guarantees this is non-blank for live
