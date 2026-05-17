@@ -539,9 +539,21 @@ async function loadPortal() {
   }
 
   try {
-    const response = await fetch(`/api/portal/${encodeURIComponent(token)}`, { cache: "no-store" });
+    // Pass the season query param through so the API can mint a
+    // booking session pre-loaded with the right spring/fall service
+    // when the token resolves to a property (seasonal outreach flow).
+    const seasonParam = new URLSearchParams(window.location.search).get("season");
+    const apiUrl = `/api/portal/${encodeURIComponent(token)}${seasonParam ? `?season=${encodeURIComponent(seasonParam)}` : ""}`;
+    const response = await fetch(apiUrl, { cache: "no-store" });
     const data = await response.json();
     if (!response.ok || !data.ok) throw new Error("Portal not found.");
+    // Property tokens (seasonal outreach) get a redirect to a fresh
+    // booking session on /book.html — the portal page itself only
+    // renders for lead tokens.
+    if (data.redirect) {
+      window.location.replace(data.redirect);
+      return;
+    }
     renderPortal(data.portal);
   } catch {
     portalError.hidden = false;
