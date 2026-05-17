@@ -99,7 +99,7 @@ function render() {
       </div>
       <div class="customer-card-stat">
         <strong>${propertyCount}</strong>
-        property${propertyCount === 1 ? "" : "ies"}
+        ${propertyCount === 1 ? "property" : "properties"}
       </div>
       <div class="customer-card-stat">
         <strong>${lastActivity}</strong>

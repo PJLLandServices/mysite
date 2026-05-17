@@ -47,6 +47,8 @@ const INDEX_PAGES = [
   ["crm", "/admin"],
   ["schedule", "/admin/schedule"],
   ["handoff", "/admin/handoff"],
+  ["bookings", "/admin/bookings"],
+  ["customers", "/admin/customers"],
   ["properties", "/admin/properties"],
   ["projects", "/admin/projects"],
   ["work-orders", "/admin/work-orders"],
