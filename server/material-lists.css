@@ -49,6 +49,22 @@
   background: #F5F2E5;
 }
 
+/* On phones the two ml-filters rows (status + parent) ate three rows
+ * of pill chips and ~150px of vertical space before any content.
+ * Shrink the pills + tighten the gaps so each row fits on one line. */
+@media (max-width: 700px) {
+  .ml-filters {
+    gap: 4px;
+    margin-bottom: 6px;
+  }
+  .ml-filters + .ml-filters { margin-top: 0; }
+  .ml-filters button {
+    padding: 4px 10px;
+    font-size: 12px;
+    min-height: 28px;
+  }
+}
+
 /* Card grid */
 .ml-cards {
   list-style: none;

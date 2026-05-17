@@ -28,6 +28,20 @@
 }
 .invoices-filters button.is-active { background: #1B4D2E; color: #fff; border-color: #1B4D2E; }
 
+/* Same filter compaction as ml-filters — fewer pixels per pill so the
+ * 5-7 pill rows on invoices / quotes / purchase-orders index stop
+ * stealing two rows of the page on phones. */
+@media (max-width: 700px) {
+  .invoices-filters {
+    gap: 4px;
+    margin-bottom: 10px;
+  }
+  .invoices-filters button {
+    padding: 4px 10px;
+    font-size: 12px;
+  }
+}
+
 .invoices-empty {
   text-align: center;
   color: #777;
