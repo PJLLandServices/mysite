@@ -48,6 +48,25 @@
   border-bottom-color: #1B4D2E;
 }
 
+/* Below 700px the four sub-nav tabs (Material lists / Purchase orders /
+ * Suppliers / Catalog assignments) don't fit on a single 408px-wide
+ * card row, so the last tab gets silently clipped off the right edge
+ * — the overflow-x: auto scroller is non-obvious. Allow wrapping and
+ * shrink the padding so all four stay tappable on two rows. */
+@media (max-width: 700px) {
+  .suppliers-subnav {
+    flex-wrap: wrap;
+    overflow-x: visible;
+    gap: 0 2px;
+  }
+  .suppliers-subnav a {
+    padding: 9px 12px;
+    font-size: 13px;
+    letter-spacing: 0.08em;
+    min-height: 40px;
+  }
+}
+
 .suppliers-explainer {
   background: #FCFBF4;
   border: 1px solid #E2E0D4;
@@ -260,12 +279,23 @@
   .supplier-card {
     grid-template-columns: 1fr;
   }
+  /* Edit + Archive sit on a tight inline row at natural width rather
+   * than stretching to fill the full card. The previous flex:1 made
+   * the buttons huge and the card eat ~140px of vertical space for
+   * what's really two small affordances. */
   .supplier-card-actions {
     flex-direction: row;
     align-items: stretch;
+    justify-content: flex-end;
+    gap: 6px;
+    margin-top: 4px;
   }
   .supplier-card-actions button {
-    flex: 1;
+    flex: 0 0 auto;
+    min-height: 36px;
+    min-width: 0;
+    padding: 6px 14px;
+    font-size: 13px;
   }
 }
 
