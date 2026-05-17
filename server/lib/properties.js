@@ -205,6 +205,37 @@ function blankProperty() {
     //     promotedPhotoIds: []           // photos copied to property.photos
     //   }
     serviceRecords: [],
+    // Seasonal-outreach plumbing (feature-seasonal-outreach-brief.md).
+    //   seasonalEligibility — which seasonal services Patrick expects
+    //     this property to book. Drives the candidates list on
+    //     /admin/outreach. Defaults to both true on first read — the
+    //     overwhelming common case is "this is a residential irrigation
+    //     customer who opens in spring and closes in fall."
+    //   seasonalOutreach   — keyed by "YYYY:season" so multi-year
+    //     history is flat (no nesting). Each entry's touches[] is the
+    //     append-only audit of every message we sent for that
+    //     season + year. optOutThisSeason lets Patrick skip a property
+    //     for one season without flipping eligibility permanently.
+    //   commPrefs          — CASL plumbing for marketing-style sends.
+    //     seasonalReminders{SMS,Email} are the per-channel opt-outs
+    //     the recipient controls (via unsubscribe link) or Patrick
+    //     controls (via property page). optOutTokens are minted once
+    //     per property at first outreach send and reused; lookup
+    //     happens linearly across properties.json (fine at PJL scale).
+    seasonalEligibility: {
+      springOpening: true,
+      fallClosing: true
+    },
+    seasonalOutreach: {},
+    commPrefs: {
+      seasonalRemindersSMS: true,
+      seasonalRemindersEmail: true,
+      optOutTokens: {
+        seasonalSMS: null,
+        seasonalEmail: null,
+        seasonalAll: null
+      }
+    },
     // Bulk-operations soft state (admin CRM § Bulk operations).
     //   deletedAt:   set by softDelete; record hidden from default list()
     //                and purged 30 days after this timestamp.
@@ -264,6 +295,8 @@ function hydrateDeferred(entry) {
 // keep working as the schema grows. Pure shape-merge, no value mutation.
 function hydrate(p) {
   const base = blankProperty();
+  const incomingCommPrefs = p?.commPrefs || {};
+  const incomingTokens = incomingCommPrefs.optOutTokens || {};
   return {
     ...base,
     ...p,
@@ -273,6 +306,22 @@ function hydrate(p) {
     workOrderIds: Array.isArray(p?.workOrderIds) ? p.workOrderIds : [],
     deferredIssues: Array.isArray(p?.deferredIssues) ? p.deferredIssues.map(hydrateDeferred) : [],
     serviceRecords: Array.isArray(p?.serviceRecords) ? p.serviceRecords : [],
+    seasonalEligibility: {
+      ...base.seasonalEligibility,
+      ...(p?.seasonalEligibility || {})
+    },
+    seasonalOutreach: (p?.seasonalOutreach && typeof p.seasonalOutreach === "object")
+      ? p.seasonalOutreach
+      : {},
+    commPrefs: {
+      seasonalRemindersSMS: incomingCommPrefs.seasonalRemindersSMS !== false,
+      seasonalRemindersEmail: incomingCommPrefs.seasonalRemindersEmail !== false,
+      optOutTokens: {
+        seasonalSMS: typeof incomingTokens.seasonalSMS === "string" ? incomingTokens.seasonalSMS : null,
+        seasonalEmail: typeof incomingTokens.seasonalEmail === "string" ? incomingTokens.seasonalEmail : null,
+        seasonalAll: typeof incomingTokens.seasonalAll === "string" ? incomingTokens.seasonalAll : null
+      }
+    },
     deletedAt: typeof p?.deletedAt === "string" ? p.deletedAt : null,
     archivedAt: typeof p?.archivedAt === "string" ? p.archivedAt : null
   };
@@ -584,6 +633,16 @@ async function update(id, patch) {
   if (idx === -1) return null;
   const current = properties[idx];
 
+  // Name invariant — refuse a patch that would blank customerName. Other
+  // patches (no customerName key in the patch) pass through unchanged.
+  if (patch && Object.prototype.hasOwnProperty.call(patch, "customerName")) {
+    if (!patch.customerName || !String(patch.customerName).trim()) {
+      const err = new Error("Customer name can't be blank.");
+      err.code = "MISSING_NAME";
+      throw err;
+    }
+  }
+
   // Patch is shallow-merged at the top level. `system` is merged one level
   // deep so the admin page can update individual fields without resending
   // the entire system block.
@@ -680,6 +739,7 @@ async function bulkUpsert(records) {
     try {
       const email = normalizeEmail(r.customerEmail);
       const addrNorm = normalizeAddress(r.address);
+      const rowName = String(r.customerName || "").trim();
 
       // Try to find a matching existing property to UPDATE.
       let target = null;
@@ -695,6 +755,22 @@ async function bulkUpsert(records) {
       }
       if (!target && addrNorm) {
         target = properties.find((p) => p.addressNormalized === addrNorm && !p.customerEmail);
+      }
+
+      // Name invariant (brief §3.9). A row that would land a property
+      // with a blank customerName is flagged here rather than silently
+      // imported, so the admin sees missing-name rows in the summary
+      // and can correct the source xlsx before re-importing. Existing
+      // properties whose target.customerName is already populated
+      // tolerate a blank row (we keep the existing value).
+      const existingName = String(target?.customerName || "").trim();
+      if (!rowName && !existingName) {
+        summary.errors.push({
+          row: i,
+          code: "missing_name",
+          message: "Row is missing a customer name."
+        });
+        continue;
       }
 
       if (target) {
@@ -939,6 +1015,15 @@ async function transferOwner(propertyId, { newCustomerId, by = "admin", note = "
 async function create({ customerId, address, customerName, customerEmail, customerPhone, coords }) {
   if (!customerId) throw new Error("customerId is required.");
   if (!address || !String(address).trim()) throw new Error("Address is required.");
+  // Name invariant (feature-seasonal-outreach-brief.md §3.9). The seasonal
+  // outreach OG card reads "Hey {firstName}," — a blank customerName would
+  // produce a broken preview. Enforced at every write boundary so the
+  // invariant holds without a migration script.
+  if (!customerName || !String(customerName).trim()) {
+    const err = new Error("Customer name is required.");
+    err.code = "MISSING_NAME";
+    throw err;
+  }
   const records = await readAll();
   const property = blankProperty();
   property.code = nextPropertyCode(records, String(new Date().getUTCFullYear()));
@@ -1011,6 +1096,208 @@ async function purgeDeleted({ olderThanMs = 30 * 24 * 60 * 60 * 1000 } = {}) {
   return purged;
 }
 
+// ---- Seasonal outreach helpers --------------------------------------
+//
+// Property is the storage layer for the outreach state (touches,
+// per-season opt-outs, comm prefs, unsubscribe tokens). The outreach
+// lib (server/lib/outreach.js) orchestrates send mechanics and calls
+// into these helpers for the writes. Keeping the writes here avoids
+// the outreach lib reaching directly into properties.json layout.
+
+// Build the "YYYY:season" key used inside seasonalOutreach. Matches
+// the brief §3.1 example. Year is an integer; season is "spring" or
+// "fall". Defensive trim/cast so a stray string year still slots in.
+function seasonKey(year, season) {
+  return `${Number(year)}:${String(season || "").toLowerCase()}`;
+}
+
+function emptySeasonState() {
+  return { touches: [], optOutThisSeason: false };
+}
+
+// Stable opt-out token — 32-char hex. Same shape as the iCal feed
+// token in settings.js. Tokens are minted once per property at first
+// outreach send (or eagerly via this helper) and then reused; the
+// unsubscribe page scans properties.json linearly to find the match.
+function makeOptOutToken() {
+  return crypto.randomBytes(16).toString("hex");
+}
+
+// Idempotent: if a property already has all three opt-out tokens
+// minted, returns the property unchanged. Otherwise fills in the
+// missing slot(s) and persists. Returns the (possibly mutated) record.
+async function mintOptOutTokensIfMissing(propertyId) {
+  const records = await readAll();
+  const idx = records.findIndex((p) => p.id === propertyId);
+  if (idx === -1) return null;
+  const target = records[idx];
+  const tokens = target.commPrefs?.optOutTokens || {};
+  const updated = {
+    seasonalSMS: tokens.seasonalSMS || makeOptOutToken(),
+    seasonalEmail: tokens.seasonalEmail || makeOptOutToken(),
+    seasonalAll: tokens.seasonalAll || makeOptOutToken()
+  };
+  // No write if nothing changed.
+  if (
+    tokens.seasonalSMS === updated.seasonalSMS &&
+    tokens.seasonalEmail === updated.seasonalEmail &&
+    tokens.seasonalAll === updated.seasonalAll
+  ) {
+    return target;
+  }
+  target.commPrefs = {
+    seasonalRemindersSMS: target.commPrefs?.seasonalRemindersSMS !== false,
+    seasonalRemindersEmail: target.commPrefs?.seasonalRemindersEmail !== false,
+    optOutTokens: updated
+  };
+  target.updatedAt = new Date().toISOString();
+  records[idx] = target;
+  await writeAll(records);
+  return target;
+}
+
+// Linear scan to find a property by one of its three opt-out tokens.
+// `type` narrows which slot to match against:
+//   "sms"   → commPrefs.optOutTokens.seasonalSMS
+//   "email" → commPrefs.optOutTokens.seasonalEmail
+//   "all"   → commPrefs.optOutTokens.seasonalAll
+// Returns the property record or null. PJL-scale (hundreds of
+// properties) makes the linear scan trivial; rotate to an index only
+// if we ever cross ~10,000 records.
+async function findByOptOutToken(token, type) {
+  if (!token) return null;
+  const slot = type === "sms" ? "seasonalSMS"
+            : type === "email" ? "seasonalEmail"
+            : type === "all" ? "seasonalAll"
+            : null;
+  if (!slot) return null;
+  const records = await readAll();
+  return records.find((p) => p.commPrefs?.optOutTokens?.[slot] === token) || null;
+}
+
+// Append an outreach touch to a property's seasonalOutreach[year:season]
+// bucket. Each touch records the channels actually delivered (sms,
+// email, or both), who triggered the send, and the messageBatchId
+// shared by every recipient of a single bulk send. Lazy-initializes
+// the per-season entry on first touch.
+async function recordOutreachTouch(propertyId, { season, year, channels, by, messageBatchId }) {
+  const records = await readAll();
+  const idx = records.findIndex((p) => p.id === propertyId);
+  if (idx === -1) return null;
+  const target = records[idx];
+  const key = seasonKey(year, season);
+  if (!target.seasonalOutreach || typeof target.seasonalOutreach !== "object") {
+    target.seasonalOutreach = {};
+  }
+  if (!target.seasonalOutreach[key]) {
+    target.seasonalOutreach[key] = emptySeasonState();
+  }
+  const touch = {
+    ts: new Date().toISOString(),
+    channels: Array.isArray(channels) ? channels.slice() : [],
+    by: String(by || "patrick"),
+    messageBatchId: messageBatchId || null
+  };
+  target.seasonalOutreach[key].touches = [
+    ...(target.seasonalOutreach[key].touches || []),
+    touch
+  ];
+  target.updatedAt = new Date().toISOString();
+  records[idx] = target;
+  await writeAll(records);
+  return touch;
+}
+
+// Patrick-side "skip this property for this one season" toggle. Doesn't
+// touch seasonalEligibility (which is the permanent opt-in) — only the
+// per-season override.
+async function setSeasonalOptOut(propertyId, { season, year, value }) {
+  const records = await readAll();
+  const idx = records.findIndex((p) => p.id === propertyId);
+  if (idx === -1) return null;
+  const target = records[idx];
+  const key = seasonKey(year, season);
+  if (!target.seasonalOutreach || typeof target.seasonalOutreach !== "object") {
+    target.seasonalOutreach = {};
+  }
+  if (!target.seasonalOutreach[key]) {
+    target.seasonalOutreach[key] = emptySeasonState();
+  }
+  target.seasonalOutreach[key].optOutThisSeason = Boolean(value);
+  target.updatedAt = new Date().toISOString();
+  records[idx] = target;
+  await writeAll(records);
+  return target;
+}
+
+// Toggle a single comm pref (sms / email). Used by both:
+//   - the public unsubscribe POST (recipient flips a pref off)
+//   - the admin property page (Patrick flips a pref via the toggles)
+// `type` is "sms" | "email" | "all". Setting "all" off flips both
+// channels — symmetric with the seasonalAll opt-out token.
+async function setSeasonalCommPref(propertyId, type, value) {
+  const records = await readAll();
+  const idx = records.findIndex((p) => p.id === propertyId);
+  if (idx === -1) return null;
+  const target = records[idx];
+  const next = {
+    seasonalRemindersSMS: target.commPrefs?.seasonalRemindersSMS !== false,
+    seasonalRemindersEmail: target.commPrefs?.seasonalRemindersEmail !== false,
+    optOutTokens: target.commPrefs?.optOutTokens || {
+      seasonalSMS: null, seasonalEmail: null, seasonalAll: null
+    }
+  };
+  if (type === "sms") next.seasonalRemindersSMS = Boolean(value);
+  else if (type === "email") next.seasonalRemindersEmail = Boolean(value);
+  else if (type === "all") {
+    next.seasonalRemindersSMS = Boolean(value);
+    next.seasonalRemindersEmail = Boolean(value);
+  } else {
+    throw new Error(`Unknown comm-pref type: ${type}`);
+  }
+  target.commPrefs = next;
+  target.updatedAt = new Date().toISOString();
+  records[idx] = target;
+  await writeAll(records);
+  return target;
+}
+
+// Toggle a single seasonal eligibility flag (springOpening / fallClosing).
+// When false, the property is excluded from outreach candidates lists
+// entirely for that season (not just opted out — it's marked as "this
+// property doesn't book this kind of service").
+async function setSeasonalEligibility(propertyId, season, value) {
+  const records = await readAll();
+  const idx = records.findIndex((p) => p.id === propertyId);
+  if (idx === -1) return null;
+  const target = records[idx];
+  const slot = season === "spring" ? "springOpening"
+            : season === "fall" ? "fallClosing"
+            : null;
+  if (!slot) throw new Error(`Unknown season: ${season}`);
+  target.seasonalEligibility = {
+    springOpening: target.seasonalEligibility?.springOpening !== false,
+    fallClosing: target.seasonalEligibility?.fallClosing !== false,
+    [slot]: Boolean(value)
+  };
+  target.updatedAt = new Date().toISOString();
+  records[idx] = target;
+  await writeAll(records);
+  return target;
+}
+
+// One-shot audit: which live properties have a blank customerName?
+// Surfaced on the outreach page (and as an admin endpoint) so Patrick
+// can backfill before the first send. Excludes soft-deleted +
+// archived records — those don't participate in outreach anyway.
+async function auditMissingCustomerName() {
+  const records = await readAll();
+  return records.filter((p) => {
+    if (p.deletedAt || p.archivedAt) return false;
+    return !String(p.customerName || "").trim();
+  });
+}
+
 module.exports = {
   attachLead,
   relinkLead,
@@ -1037,5 +1324,14 @@ module.exports = {
   softArchive,
   listDeleted,
   listArchived,
-  purgeDeleted
+  purgeDeleted,
+  // Seasonal outreach helpers (see top of section).
+  seasonKey,
+  mintOptOutTokensIfMissing,
+  findByOptOutToken,
+  recordOutreachTouch,
+  setSeasonalOptOut,
+  setSeasonalCommPref,
+  setSeasonalEligibility,
+  auditMissingCustomerName
 };

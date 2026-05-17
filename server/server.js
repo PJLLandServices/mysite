@@ -50,6 +50,7 @@ const invoices = require("./lib/invoices");
 const completionCascade = require("./lib/completion-cascade");
 const customLineItems = require("./lib/custom-line-items");
 const settings = require("./lib/settings");
+const outreach = require("./lib/outreach");
 const { generateIcsForToken } = require("./lib/ical-feed");
 const issueRollup = require("./lib/issue-rollup");
 const { generateQuotePdf } = require("./lib/quote-pdf");
@@ -619,6 +620,13 @@ function needsAuth(method, pathname) {
   // Property-ownership conflict review queue (Brief 3 follow-up).
   if (pathname === "/api/admin/property-link-conflicts") return "user";
   if (pathname.startsWith("/api/admin/property-link-conflicts/")) return "user";
+  // Seasonal outreach (feature-seasonal-outreach-brief.md). The
+  // /unsubscribe page and the corresponding unsubscribe POST are
+  // public (the token in the URL IS the credential — same model
+  // as the iCal feed). Everything else under /api/outreach/* is
+  // admin/tech-only.
+  if (pathname === "/api/outreach/unsubscribe") return null;
+  if (pathname.startsWith("/api/outreach/")) return "user";
   // Availability lookups + the public booking endpoint stay public.
   return null;
 }
@@ -10316,6 +10324,149 @@ Customer signature captured at ${new Date().toISOString()}.`;
     }
   }
 
+  // ---- Seasonal outreach (feature-seasonal-outreach-brief.md) ----
+  //
+  // Bulk booking-nudge engine. Patrick visits /admin/outreach a few
+  // weeks before each season, picks Spring or Fall + year, filters
+  // to "Not booked", composes a message, sends to all unbooked
+  // properties at once. A week later he reopens the page and the
+  // people who booked are filtered out automatically. See the brief
+  // for the full operational story.
+  //
+  // Admin/tech-only EXCEPT the public unsubscribe POST (the token
+  // in the URL is the credential).
+
+  if (req.method === "GET" && pathname === "/api/outreach/candidates") {
+    try {
+      const url = new URL(req.url, baseUrlFromReq(req));
+      const season = (url.searchParams.get("season") || "").toLowerCase();
+      const year = Number(url.searchParams.get("year"));
+      const filter = url.searchParams.get("filter") || "all";
+      const result = await outreach.listCandidates({ season, year, filter });
+      return sendJson(res, 200, { ok: true, ...result });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't load outreach candidates."] });
+    }
+  }
+
+  if (req.method === "POST" && pathname === "/api/outreach/send") {
+    try {
+      const session = await requireUser(req);
+      const payload = await parseRequestBody(req, { maxBytes: 2_000_000 });
+      const propertyIds = Array.isArray(payload?.propertyIds) ? payload.propertyIds : [];
+      const season = String(payload?.season || "").toLowerCase();
+      const year = Number(payload?.year);
+      const channels = Array.isArray(payload?.channels) && payload.channels.length
+        ? payload.channels.filter((c) => c === "sms" || c === "email")
+        : ["sms", "email"];
+      const subject = String(payload?.subject || "");
+      const smsBody = String(payload?.smsBody || "");
+      const emailBody = String(payload?.emailBody || "");
+      if (!propertyIds.length) return sendJson(res, 400, { ok: false, errors: ["propertyIds is required."] });
+      if (season !== "spring" && season !== "fall") return sendJson(res, 400, { ok: false, errors: ["season must be spring or fall."] });
+      if (!Number.isFinite(year)) return sendJson(res, 400, { ok: false, errors: ["year is required."] });
+      if (!channels.length) return sendJson(res, 400, { ok: false, errors: ["At least one channel (sms or email) is required."] });
+      const result = await outreach.sendBulk({
+        propertyIds, season, year, channels, subject, smsBody, emailBody,
+        by: session?.uid || "admin"
+      });
+      return sendJson(res, 200, { ok: true, ...result });
+    } catch (err) {
+      if (err && err.code === "SEND_LOCKED") {
+        return sendJson(res, 429, { ok: false, errors: [err.message] });
+      }
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't send outreach batch."] });
+    }
+  }
+
+  if (req.method === "POST" && pathname === "/api/outreach/opt-out-season") {
+    try {
+      const payload = await parseRequestBody(req);
+      const propertyId = String(payload?.propertyId || "");
+      const season = String(payload?.season || "").toLowerCase();
+      const year = Number(payload?.year);
+      const optOut = Boolean(payload?.optOut);
+      if (!propertyId) return sendJson(res, 400, { ok: false, errors: ["propertyId is required."] });
+      if (season !== "spring" && season !== "fall") return sendJson(res, 400, { ok: false, errors: ["season must be spring or fall."] });
+      if (!Number.isFinite(year)) return sendJson(res, 400, { ok: false, errors: ["year is required."] });
+      const updated = await outreach.setOptOutForSeason(propertyId, season, year, optOut);
+      if (!updated) return sendJson(res, 404, { ok: false, errors: ["Property not found."] });
+      return sendJson(res, 200, { ok: true, propertyId, updated: true });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't set seasonal opt-out."] });
+    }
+  }
+
+  if (req.method === "GET" && pathname === "/api/outreach/templates") {
+    try {
+      const templates = await outreach.getTemplates();
+      return sendJson(res, 200, { ok: true, ...templates });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't load templates."] });
+    }
+  }
+
+  if (req.method === "PATCH" && pathname === "/api/outreach/templates") {
+    try {
+      const session = await requireUser(req);
+      const payload = await parseRequestBody(req);
+      const season = String(payload?.season || "").toLowerCase();
+      if (season !== "spring" && season !== "fall") {
+        return sendJson(res, 400, { ok: false, errors: ["season must be spring or fall."] });
+      }
+      const updated = await outreach.saveTemplate(season, {
+        subject: payload?.subject,
+        smsBody: payload?.smsBody,
+        emailBody: payload?.emailBody
+      }, { who: session?.uid || "admin", note: "Edited outreach template" });
+      return sendJson(res, 200, { ok: true, updated: true, templates: updated });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't save template."] });
+    }
+  }
+
+  // Audit endpoint for the §3.9 name-invariant backfill. Surfaces
+  // every live property with a blank customerName so Patrick can
+  // walk the list before the first outreach send.
+  if (req.method === "GET" && pathname === "/api/outreach/audit-missing-names") {
+    try {
+      const missing = await properties.auditMissingCustomerName();
+      return sendJson(res, 200, {
+        ok: true,
+        count: missing.length,
+        properties: missing.map((p) => ({
+          id: p.id,
+          code: p.code || "",
+          address: p.address || "",
+          customerEmail: p.customerEmail || "",
+          customerPhone: p.customerPhone || ""
+        }))
+      });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't run audit."] });
+    }
+  }
+
+  // Public unsubscribe. Token in body, validated server-side via
+  // properties.findByOptOutToken — slot-specific to defeat token
+  // reuse across channels. Brief §3.3.
+  if (req.method === "POST" && pathname === "/api/outreach/unsubscribe") {
+    try {
+      const payload = await parseRequestBody(req);
+      const token = String(payload?.token || "").trim();
+      const type = String(payload?.type || "").toLowerCase();
+      if (!token) return sendJson(res, 400, { ok: false, error: "invalid_token" });
+      if (type !== "sms" && type !== "email" && type !== "all") {
+        return sendJson(res, 400, { ok: false, error: "invalid_type" });
+      }
+      const result = await outreach.honorUnsubscribe(token, type);
+      if (!result) return sendJson(res, 400, { ok: false, error: "invalid_token" });
+      return sendJson(res, 200, { ok: true, unsubscribed: true, type: result.type });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, error: err.message || "Couldn't process unsubscribe." });
+    }
+  }
+
   sendJson(res, 404, { ok: false, errors: ["API endpoint not found."] });
 }
 
@@ -10471,10 +10622,140 @@ function resolveStaticTarget(pathname) {
   if (pathname.startsWith("/approve/")) {
     return { dir: SERVER_DIR, relative: "/approve.html" };
   }
+  // Public unsubscribe confirmation page
+  // (feature-seasonal-outreach-brief.md §3.3). The token in the
+  // URL IS the credential; the page POSTs to /api/outreach/
+  // unsubscribe to flip the recipient's commPref off. Falls back
+  // to the same handler for trailing-slash variants.
+  if (pathname.startsWith("/unsubscribe/")) {
+    return { dir: SERVER_DIR, relative: "/unsubscribe.html" };
+  }
   if (pathname.startsWith("/crm/")) {
     return { dir: SERVER_DIR, relative: pathname.slice("/crm".length) };
   }
   return { dir: SITE_DIR, relative: pathname };
+}
+
+// Season-keyed Open Graph hero images. Reuses the existing public-
+// site service-page hero photos at their existing public URLs — no
+// new asset created (brief §6 "Out of Scope: Replacing the OG hero
+// images"). The no-season default is the homepage hero so a stale
+// portal link without ?season still renders a branded card.
+const OG_HERO_IMAGES = {
+  spring: "https://www.pjllandservices.com/hunter-pgp-rotor-action.jpg",
+  fall:   "https://www.pjllandservices.com/fall-sprinkler-running.jpg",
+  default: "https://www.pjllandservices.com/homepage-hero.jpg"
+};
+
+// Escape a string for safe embedding inside an HTML attribute. The
+// OG meta tags expand into `content="..."` so any double-quote /
+// ampersand in the customer name would break the markup or
+// (worse) inject. Same idea as the existing escapeHtml in
+// notify-customer.js but inlined here so server.js doesn't need to
+// reach into a notification module.
+function escapeAttribute(value) {
+  return String(value == null ? "" : value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+// /portal/<token> handler — server-side render of portal.html with
+// personalized Open Graph meta tags. Brief §3.8.
+//
+// Inputs: req, res, the cleaned `pathname`, and the parsed `url`
+// (we re-use the caller's parsed URL so we read the same query
+// string the caller did).
+//
+// Returns true when the request was served (caller stops here),
+// false on a fatal disk-read error (caller falls through to
+// serveStatic so the page still renders without OG personalization).
+async function renderPortalWithOg(req, res, pathname, url) {
+  try {
+    // Extract token from /portal/<token>[/]. Strip leading
+    // "/portal/" and any trailing slash.
+    const tail = pathname.slice("/portal/".length).replace(/\/$/, "");
+    if (!tail) return false;  // bare /portal/ — let serveStatic handle
+    const token = decodeURIComponent(tail);
+    const seasonRaw = String(url.searchParams.get("season") || "").trim().toLowerCase();
+    const season = (seasonRaw === "spring" || seasonRaw === "fall") ? seasonRaw : null;
+
+    // Lookup. The same pattern used everywhere in this file for
+    // portal-token resolution: explicit lead.portal.token wins,
+    // otherwise the deterministic per-id derivative.
+    let firstName = "there";
+    let property = null;
+    try {
+      const leads = await readLeads();
+      const lead = leads.find((l) => (l.portal?.token || portalTokenForId(l.id)) === token);
+      if (lead && lead.propertyId) {
+        property = await properties.get(lead.propertyId);
+      }
+      // Prefer the property's snapshot customerName (the name-
+      // invariant per §3.9 guarantees this is non-blank for live
+      // outreach). Fall back to the lead's contact name when the
+      // property is missing — handles the stale-link edge case.
+      const rawName = property?.customerName
+        || lead?.contact?.firstName
+        || (lead?.contact?.name || "").split(/\s+/)[0]
+        || "";
+      const fromFullName = rawName.split(/\s+/)[0];
+      firstName = (fromFullName && fromFullName.trim()) || "there";
+    } catch (err) {
+      // Lookup failed — fall through with the generic defaults
+      // rather than 500ing on the page request.
+      console.warn("[portal-og] lookup failed:", err.message);
+    }
+
+    const serviceLabel = season === "spring" ? "Spring Opening"
+                       : season === "fall"   ? "Fall Closing"
+                       : "appointment";
+    const ogTitle = firstName === "there"
+      ? `Book your ${serviceLabel} with PJL Land Services`
+      : `Hey ${firstName}, book your ${serviceLabel} with PJL Land Services`;
+    const ogDescription = "Tap to schedule your appointment with PJL Land Services.";
+    const ogImageUrl = OG_HERO_IMAGES[season] || OG_HERO_IMAGES.default;
+
+    // Canonical URL ALWAYS uses the production host — never the
+    // request's host header. Brief §3.8: "Canonical URL is
+    // production: pjllandservices.com/portal/..., never
+    // *.onrender.com." Use resolvePublicBaseUrl so a local-dev
+    // PUBLIC_BASE_URL override (or the localhost fallback) flows
+    // through; production has PUBLIC_BASE_URL set explicitly (the
+    // startup guard enforces this).
+    const base = resolvePublicBaseUrl();
+    const canonicalUrl = `${base}/portal/${encodeURIComponent(token)}${season ? `?season=${season}` : ""}`;
+
+    const portalHtmlPath = path.join(SERVER_DIR, "portal.html");
+    const raw = await fs.readFile(portalHtmlPath, "utf8");
+    const substitutions = {
+      "{{ogTitle}}": escapeAttribute(ogTitle),
+      "{{ogDescription}}": escapeAttribute(ogDescription),
+      "{{ogImageUrl}}": escapeAttribute(ogImageUrl),
+      "{{canonicalUrl}}": escapeAttribute(canonicalUrl)
+    };
+    let rendered = raw;
+    for (const [placeholder, value] of Object.entries(substitutions)) {
+      rendered = rendered.split(placeholder).join(value);
+    }
+
+    res.writeHead(200, {
+      "content-type": "text/html; charset=utf-8",
+      // no-store so iMessage's preview-fetch always gets the
+      // current personalized variant. iMessage caches the
+      // *response* of a unique URL — and every customer's link
+      // is unique by token, so the no-store header doesn't
+      // defeat per-recipient caching downstream.
+      "cache-control": "no-store"
+    });
+    res.end(rendered);
+    return true;
+  } catch (err) {
+    console.warn("[portal-og] render failed:", err.message);
+    return false;
+  }
 }
 
 async function serveStatic(req, res, pathname) {
@@ -10633,6 +10914,27 @@ const server = http.createServer(async (req, res) => {
       }
     }
 
+    // /portal/<token> — server-side Open Graph substitution before
+    // serveStatic. Pasting a portal link into iMessage / Slack /
+    // Facebook produces a personalized preview card with the
+    // recipient's first name and the correct season hero image.
+    // Brief: feature-seasonal-outreach-brief.md §3.8.
+    //
+    // The login + verify subpaths under /portal/ are handled
+    // separately above (different files); this branch only matches
+    // the canonical "token in URL" portal entry. On any lookup
+    // miss we still serve portal.html with safe generic OG values
+    // so a stale-but-valid link still renders.
+    if (req.method === "GET" && pathname.startsWith("/portal/") &&
+        pathname !== "/portal/login" && pathname !== "/portal/login/" &&
+        pathname !== "/portal/login/verify") {
+      const handled = await renderPortalWithOg(req, res, pathname, url);
+      if (handled) return;
+      // Fall through to serveStatic on a fatal lookup error so the
+      // page itself can still load (the OG card just won't be
+      // personalized).
+    }
+
     if (pathname.startsWith("/api/")) {
       await handleApi(req, res, pathname);
     } else {
@@ -10655,6 +10957,31 @@ bulkActions.attachLeadsHelpers({
   hardDelete: hardDeleteLead,
   updateCrm: updateLeadCrmField
 });
+
+// PUBLIC_BASE_URL startup guard
+// (feature-seasonal-outreach-brief.md §3.8). The outreach pipeline
+// embeds the production host into customer-facing portal links and
+// the canonical OG meta tags; a missing PUBLIC_BASE_URL would
+// silently land customers on *.onrender.com previews. Crash loudly
+// in production rather than serve a broken preview card. In
+// non-prod environments we log a warning and fall back to the
+// localhost helper in resolvePublicBaseUrl() — so dev can still
+// boot without setting the env var.
+if (!String(process.env.PUBLIC_BASE_URL || "").trim()) {
+  if (process.env.NODE_ENV === "production") {
+    console.error(
+      "[startup] PUBLIC_BASE_URL is required in production. " +
+      "Set it on the host (e.g. https://pjllandservices.com) and restart."
+    );
+    process.exit(1);
+  } else {
+    console.warn(
+      "[startup] PUBLIC_BASE_URL is unset — outreach portal links " +
+      "will use the localhost fallback (resolvePublicBaseUrl). " +
+      "Set PUBLIC_BASE_URL to silence this warning."
+    );
+  }
+}
 
 server.listen(PORT, HOST, () => {
   console.log(`PJL site + lead receiver running at http://${HOST}:${PORT}`);
