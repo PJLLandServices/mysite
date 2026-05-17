@@ -1566,11 +1566,17 @@ body.is-nav-open .pjl-nav-toggle-bar:nth-child(3) {
     flex: 1 1 auto;
   }
 
-  /* Pipeline tabs become a horizontal scroller on phones (the equal-
-     width desktop layout would crush them too small here). */
+  /* Pipeline tabs wrap to multiple rows on phones rather than
+     horizontal-scrolling — the swipe affordance was non-obvious and the
+     last pill ("Site visit 0", "Stuck completions") was being clipped
+     off-screen without indication. Two-row wrap gives every pill a
+     fully visible tap target and the row height grows by ~36px, which
+     is a fair trade. */
   .pipeline-tabs {
-    overflow-x: auto;
-    flex-wrap: nowrap;
+    flex-wrap: wrap;
+    overflow-x: visible;
+    max-width: 100%;
+    min-width: 0;
   }
   .pipeline-tabs button {
     flex: 0 0 auto;
