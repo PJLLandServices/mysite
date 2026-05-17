@@ -60,6 +60,17 @@ const DEFAULT_CONTACT_INFO = {
   customerSupportPhone: "(905) 960-0181"
 };
 
+// Seasonal-outreach message templates (feature-seasonal-outreach-brief.md
+// §3.2). Patrick saves a per-season subject + SMS body + email body from
+// the compose modal's "Save as default" path; the outreach page seeds the
+// compose form from these on next open. Empty strings are valid — they
+// signal "no saved template yet, start blank."
+const BLANK_OUTREACH_TEMPLATE = { subject: "", smsBody: "", emailBody: "" };
+const DEFAULT_OUTREACH_TEMPLATES = {
+  spring: { ...BLANK_OUTREACH_TEMPLATE },
+  fall: { ...BLANK_OUTREACH_TEMPLATE }
+};
+
 const DEFAULT_SETTINGS = {
   adminDefaults: {
     newLead: "email_sms",
@@ -72,6 +83,10 @@ const DEFAULT_SETTINGS = {
   quickbooks: { ...DEFAULT_QUICKBOOKS, lastSyncErrors: [] },
   icalFeed: { ...DEFAULT_ICAL_FEED },
   contactInfo: { ...DEFAULT_CONTACT_INFO },
+  outreachTemplates: {
+    spring: { ...BLANK_OUTREACH_TEMPLATE },
+    fall: { ...BLANK_OUTREACH_TEMPLATE }
+  },
   audit: []
 };
 
@@ -102,6 +117,15 @@ function hydrate(s) {
   const qb = s?.quickbooks || {};
   const ical = s?.icalFeed || {};
   const contact = s?.contactInfo || {};
+  const out = s?.outreachTemplates || {};
+  const pickTemplate = (key) => {
+    const t = out[key] || {};
+    return {
+      subject: typeof t.subject === "string" ? t.subject : "",
+      smsBody: typeof t.smsBody === "string" ? t.smsBody : "",
+      emailBody: typeof t.emailBody === "string" ? t.emailBody : ""
+    };
+  };
   return {
     adminDefaults: { ...DEFAULT_SETTINGS.adminDefaults, ...(s?.adminDefaults || {}) },
     quickbooks: {
@@ -122,6 +146,10 @@ function hydrate(s) {
       customerSupportPhone: typeof contact.customerSupportPhone === "string" && contact.customerSupportPhone.trim()
         ? contact.customerSupportPhone.trim()
         : DEFAULT_CONTACT_INFO.customerSupportPhone
+    },
+    outreachTemplates: {
+      spring: pickTemplate("spring"),
+      fall: pickTemplate("fall")
     },
     audit: Array.isArray(s?.audit) ? s.audit : []
   };
@@ -334,6 +362,37 @@ async function disableIcalFeed({ who = "admin" } = {}) {
   return settings;
 }
 
+// Save a seasonal-outreach template (subject + smsBody + emailBody).
+// `season` must be "spring" or "fall". Missing keys in the patch keep
+// the existing value; passing an empty string clears that piece. Audit-
+// stamps under "outreachTemplates.<season>".
+async function saveOutreachTemplate(season, patch, { who = "admin", note = "" } = {}) {
+  const slot = season === "spring" || season === "fall" ? season : null;
+  if (!slot) throw new Error(`Unknown season for outreach template: ${season}`);
+  const settings = await readAll();
+  const current = settings.outreachTemplates?.[slot] || { ...BLANK_OUTREACH_TEMPLATE };
+  const next = {
+    subject: typeof patch?.subject === "string" ? patch.subject : current.subject,
+    smsBody: typeof patch?.smsBody === "string" ? patch.smsBody : current.smsBody,
+    emailBody: typeof patch?.emailBody === "string" ? patch.emailBody : current.emailBody
+  };
+  settings.outreachTemplates = {
+    ...settings.outreachTemplates,
+    [slot]: next
+  };
+  settings.audit.unshift({
+    ts: new Date().toISOString(),
+    who,
+    action: `outreachTemplates.${slot}`,
+    before: current,
+    after: next,
+    note
+  });
+  if (settings.audit.length > 50) settings.audit.length = 50;
+  await writeAll(settings);
+  return settings;
+}
+
 // Generic audit-trail append. Used by callers OUTSIDE of admin-defaults
 // /quickbooks (e.g. catalog edits — see lib/parts.js). Same 50-entry
 // rolling buffer; oldest entries fall off the end.
@@ -373,6 +432,7 @@ module.exports = {
   generateIcalToken,
   regenerateIcalToken,
   disableIcalFeed,
+  saveOutreachTemplate,
   resolveMode,
   shouldSendEmail,
   shouldSendSms

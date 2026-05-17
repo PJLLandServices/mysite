@@ -969,6 +969,220 @@ async function sendPortalReplyToCustomer(lead, replyBody) {
   }
 }
 
+// ---- Seasonal outreach senders --------------------------------------
+//
+// Property-driven (NOT lead-driven) bulk-send pipeline for Patrick's
+// twice-a-year "time to book your opening / closing" nudge. The outreach
+// lib (server/lib/outreach.js) is the orchestrator; these two functions
+// are the per-recipient dispatchers. Inputs are primitives (resolved
+// contact + composed body) rather than the lead record, since outreach
+// composes its own message from a user-typed template, not from one of
+// the lifecycle templates above.
+//
+// Both senders honor the same skip-and-return contract the rest of this
+// module uses (config gone → { ok: false, skipped }, missing recipient →
+// { ok: false, skipped }, send failure → { ok: false, error }) so the
+// outreach orchestrator's per-recipient outcome table is uniform.
+
+// Merge-tag substitution. Brief §3.4 supports {{firstName}},
+// {{propertyAddress}}, {{seasonName}}, {{portalLink}}. Keep this regex
+// in sync with the README in the compose modal so the recipient
+// preview matches what actually gets sent.
+function substituteOutreachTags(template, vars) {
+  if (!template) return "";
+  return String(template).replace(/\{\{\s*(firstName|propertyAddress|seasonName|portalLink)\s*\}\}/g, (_match, key) => {
+    const value = vars[key];
+    return value == null ? "" : String(value);
+  });
+}
+
+// Plain-text outreach body → HTML. Preserves paragraph breaks
+// (blank-line-separated) and within-paragraph line breaks. Escapes
+// HTML so a customer typing "<3" doesn't render as a broken tag.
+// Deliberately limited: this is "rich-enough text," not a full
+// markdown renderer — keeping the email compose textarea
+// expectations honest.
+function plainBodyToHtml(text) {
+  if (!text) return "";
+  const escaped = escapeHtml(text);
+  return escaped
+    .split(/\n{2,}/)
+    .map((para) => `<p style="margin: 0 0 14px;">${para.replace(/\n/g, "<br>")}</p>`)
+    .join("");
+}
+
+// Outreach email. `unsubscribeUrlEmail` flips just the email channel;
+// `unsubscribeUrlAll` flips both channels (the recipient's "stop
+// everything" path). Brief §3.5 mandates both surfaces in the footer.
+async function sendOutreachEmail({
+  to,
+  firstName,
+  propertyAddress,
+  seasonName,
+  portalLink,
+  subject,
+  emailBody,
+  unsubscribeUrlEmail,
+  unsubscribeUrlAll
+}) {
+  const transporter = getTransporter();
+  if (!transporter) {
+    return { ok: false, skipped: true, reason: "no_gmail_config" };
+  }
+  const toAddr = String(to || "").trim();
+  if (!toAddr) return { ok: false, skipped: true, reason: "no_email" };
+
+  const vars = {
+    firstName: firstName || "there",
+    propertyAddress: propertyAddress || "",
+    seasonName: seasonName || "",
+    portalLink: portalLink || ""
+  };
+  const renderedSubject = substituteOutreachTags(subject || `Time to book your ${vars.seasonName}`, vars);
+  const renderedBody = substituteOutreachTags(emailBody || "", vars);
+  const bodyHtml = plainBodyToHtml(renderedBody);
+
+  const publicBase = resolvePublicBaseUrl();
+  const footerHtmlLines = [
+    `<p style="margin: 24px 0 0; padding-top: 14px; border-top: 1px solid #e5e5dd; font-size: 12px; color: #777;">`,
+    `You're receiving this because you're a PJL Land Services customer.<br>`,
+    unsubscribeUrlEmail
+      ? `To stop seasonal email reminders, <a href="${escapeHtml(unsubscribeUrlEmail)}" style="color:#1B4D2E;">click here</a>. `
+      : "",
+    unsubscribeUrlAll
+      ? `To stop all seasonal reminders (email + SMS), <a href="${escapeHtml(unsubscribeUrlAll)}" style="color:#1B4D2E;">click here</a>.`
+      : "",
+    `</p>`
+  ];
+  const footerHtml = footerHtmlLines.join("");
+  const footerText = [
+    "",
+    "---",
+    "You're receiving this because you're a PJL Land Services customer.",
+    unsubscribeUrlEmail ? `To stop seasonal email reminders: ${unsubscribeUrlEmail}` : "",
+    unsubscribeUrlAll ? `To stop all seasonal reminders: ${unsubscribeUrlAll}` : ""
+  ].filter((l) => l !== "").join("\n");
+
+  const html = `
+<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 560px; color: #1a1a1a; line-height: 1.55;">
+  <div style="background: #1B4D2E; border-radius: 8px 8px 0 0; padding: 24px 28px;">
+    <table cellpadding="0" cellspacing="0" border="0" width="100%">
+      <tr>
+        <td valign="middle" style="padding-right: 16px;">
+          <h1 style="margin: 0; color: #fff; font-size: 22px; font-weight: 700; line-height: 1.2;">${escapeHtml(vars.seasonName || "Seasonal reminder")}</h1>
+        </td>
+        <td valign="middle" align="right" width="180" style="width: 180px;">
+          <img src="${escapeHtml(publicBase)}/crm/pjl-logo.svg" alt="PJL Land Services" width="180" style="display:block;border:0;outline:none;text-decoration:none;width:180px;max-width:180px;height:auto;">
+        </td>
+      </tr>
+    </table>
+  </div>
+  <div style="padding: 24px 28px; background: #FAFAF5; border: 1px solid #e5e5dd; border-top: none; border-radius: 0 0 8px 8px;">
+    ${bodyHtml}
+    ${portalLink ? `<p style="margin: 0 0 18px;"><a href="${escapeHtml(portalLink)}" style="display: inline-block; padding: 11px 20px; background: #E07B24; color: #fff; text-decoration: none; border-radius: 6px; font-weight: 600;">Open your portal</a></p>` : ""}
+    <p style="margin: 24px 0 0; font-size: 13px; color: #777;">
+      Questions? Call <a href="tel:+19059600181" style="color: #1B4D2E;">(905) 960-0181</a> or reply to this email.
+    </p>
+    ${footerHtml}
+  </div>
+  <p style="margin: 16px 0 0; font-size: 11px; color: #999; text-align: center;">
+    PJL Land Services · Newmarket, Ontario · pjllandservices.com
+  </p>
+</div>`.trim();
+
+  const text = [
+    renderedBody,
+    portalLink ? `\nOpen your portal: ${portalLink}` : "",
+    "",
+    "Questions? Call (905) 960-0181.",
+    footerText,
+    "",
+    "PJL Land Services — Newmarket, Ontario"
+  ].filter((l) => l !== "").join("\n");
+
+  try {
+    const info = await transporter.sendMail({
+      from: `"PJL Land Services" <${process.env.GMAIL_USER}>`,
+      to: toAddr,
+      replyTo: process.env.GMAIL_USER,
+      subject: renderedSubject,
+      html,
+      text
+    });
+    console.log(`[outreach-email] sent to=${toAddr} id=${info.messageId}`);
+    return { ok: true, messageId: info.messageId };
+  } catch (error) {
+    console.error(`[outreach-email] failed:`, error.message);
+    return { ok: false, error: error.message };
+  }
+}
+
+// Outreach SMS. Twilio handles STOP at the carrier level (no inbound
+// webhook needed for v1) but every body still carries the literal
+// "Reply STOP to opt out." line so the recipient sees the path.
+// Idempotent — if Patrick already typed "STOP" into his template,
+// we don't double-append.
+async function sendOutreachSms({
+  to,
+  firstName,
+  propertyAddress,
+  seasonName,
+  portalLink,
+  smsBody
+}) {
+  if (!smsConfigured()) {
+    return { ok: false, skipped: true, reason: "no_twilio_config" };
+  }
+  const toNum = String(to || "").trim();
+  if (!toNum) return { ok: false, skipped: true, reason: "no_phone" };
+
+  const vars = {
+    firstName: firstName || "there",
+    propertyAddress: propertyAddress || "",
+    seasonName: seasonName || "",
+    portalLink: portalLink || ""
+  };
+  let body = substituteOutreachTags(smsBody || "", vars);
+  if (!body.trim()) {
+    // Defensive default if the caller passes an empty body — the
+    // recipient still gets a useful message rather than a blank one.
+    body = `Hi ${vars.firstName}, time to book your ${vars.seasonName} at ${vars.propertyAddress}. ${vars.portalLink}`;
+  }
+  // CASL / brief §1: every outreach SMS includes the STOP path. Skip
+  // the append when the body already mentions STOP so we don't end up
+  // with "Reply STOP to opt out. Reply STOP to opt out."
+  if (!/\bSTOP\b/i.test(body)) {
+    body = `${body.trim()}\nReply STOP to opt out.`;
+  }
+
+  const sid = process.env.TWILIO_ACCOUNT_SID;
+  const token = process.env.TWILIO_AUTH_TOKEN;
+  const url = `https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(sid)}/Messages.json`;
+  const auth = Buffer.from(`${sid}:${token}`).toString("base64");
+  const payload = new URLSearchParams({
+    To: toNum,
+    From: process.env.TWILIO_FROM_NUMBER,
+    Body: body
+  });
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Authorization": `Basic ${auth}`, "Content-Type": "application/x-www-form-urlencoded" },
+      body: payload.toString()
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      console.error(`[outreach-sms] Twilio rejected:`, response.status, data?.message);
+      return { ok: false, error: data?.message || `Twilio status ${response.status}` };
+    }
+    console.log(`[outreach-sms] sent to=${toNum} sid=${data.sid}`);
+    return { ok: true, sid: data.sid };
+  } catch (error) {
+    console.error(`[outreach-sms] failed:`, error.message);
+    return { ok: false, error: error.message };
+  }
+}
+
 module.exports = {
   notifyCustomer,
   eventForTransition,
@@ -978,5 +1192,8 @@ module.exports = {
   sendInvoiceToCustomer,
   sendPaymentReceipt,
   sendCustomerLoginLink,
-  sendAdminPasswordResetLink
+  sendAdminPasswordResetLink,
+  sendOutreachEmail,
+  sendOutreachSms,
+  substituteOutreachTags
 };

@@ -7,6 +7,29 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <title>PJL Customer Portal</title>
+  <!--
+    Open Graph tags — server-rendered. The /portal/<token> handler in
+    server.js reads the token + optional ?season query param, looks up
+    the lead/property/customer, and substitutes the four {{...}} tokens
+    below before the response goes out. Pasting the link into iMessage,
+    Slack, or Facebook produces a personalized preview card.
+
+    Brief: feature-seasonal-outreach-brief.md §3.8.
+
+    If you see the literal {{ogTitle}} etc. rendering in a browser, the
+    server-side substitution didn't run — check the /portal/<token>
+    handler in server.js (it should map placeholders to real values
+    before res.end()).
+  -->
+  <meta property="og:title" content="{{ogTitle}}">
+  <meta property="og:description" content="{{ogDescription}}">
+  <meta property="og:image" content="{{ogImageUrl}}">
+  <meta property="og:url" content="{{canonicalUrl}}">
+  <meta property="og:type" content="website">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="{{ogTitle}}">
+  <meta name="twitter:description" content="{{ogDescription}}">
+  <meta name="twitter:image" content="{{ogImageUrl}}">
   <link rel="icon" type="image/svg+xml" href="/crm/pjl-logo-mark.svg">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>

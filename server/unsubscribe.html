@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#1B4D2E">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Unsubscribe — PJL Land Services</title>
+  <link rel="icon" type="image/svg+xml" href="/crm/pjl-logo-mark.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    /*
+      Public unsubscribe page — feature-seasonal-outreach-brief.md §3.3.
+      No admin auth; the token in the URL IS the credential. The /api/
+      outreach/unsubscribe POST flips the corresponding commPref off.
+
+      Self-contained styles (no /crm/ stylesheet dependency) so the page
+      stays usable even if a recipient hits it from a mobile carrier
+      that's stripped or rewritten asset URLs.
+    */
+    *, *::before, *::after { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: 'DM Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      color: #1a1a1a;
+      background: #FAFAF5;
+      line-height: 1.55;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+    .card {
+      width: 100%;
+      max-width: 480px;
+      background: #fff;
+      border-radius: 12px;
+      border: 1px solid #e5e5dd;
+      padding: 28px 24px 24px;
+      box-shadow: 0 4px 18px rgba(0, 0, 0, 0.05);
+    }
+    .brandbar {
+      background: #1B4D2E;
+      color: #fff;
+      border-radius: 12px 12px 0 0;
+      padding: 18px 24px;
+      margin: -28px -24px 22px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .brandbar img {
+      height: 28px;
+      width: auto;
+      display: block;
+    }
+    h1 {
+      font-family: 'Barlow Condensed', sans-serif;
+      font-weight: 700;
+      font-size: 28px;
+      line-height: 1.1;
+      margin: 0 0 14px;
+    }
+    p { margin: 0 0 14px; }
+    .muted { color: #666; font-size: 14px; }
+    button {
+      font-family: inherit;
+      font-size: 16px;
+      font-weight: 600;
+      cursor: pointer;
+      border: none;
+      border-radius: 8px;
+      padding: 12px 20px;
+      width: 100%;
+      transition: background 0.15s ease;
+    }
+    .btn-primary { background: #E07B24; color: #fff; }
+    .btn-primary:hover { background: #c66b1e; }
+    .btn-primary:disabled { background: #b3b3aa; cursor: not-allowed; }
+    .btn-secondary {
+      background: transparent;
+      color: #1B4D2E;
+      border: 1px solid #1B4D2E;
+      margin-top: 10px;
+    }
+    .footer-note {
+      margin-top: 22px;
+      font-size: 12px;
+      color: #999;
+      text-align: center;
+    }
+    [hidden] { display: none !important; }
+    .status-ok h1 { color: #1B4D2E; }
+    .status-error h1 { color: #c0392b; }
+  </style>
+</head>
+<body>
+  <main class="card" id="card">
+    <div class="brandbar">
+      <img src="/crm/pjl-logo.svg" alt="PJL Land Services">
+    </div>
+
+    <section id="confirm">
+      <h1 id="confirmTitle">Stop seasonal reminders?</h1>
+      <p id="confirmIntro">
+        Tap the button below to unsubscribe from PJL Land Services seasonal
+        booking reminders. This affects marketing-style nudges only — you'll
+        still get appointment confirmations for any service you've booked.
+      </p>
+      <button id="confirmBtn" class="btn-primary" type="button">Unsubscribe</button>
+      <p class="muted" style="margin-top: 16px;">
+        Changed your mind? Just close this tab — nothing happens until you tap the button.
+      </p>
+    </section>
+
+    <section id="done" hidden>
+      <h1 id="doneTitle">You're unsubscribed.</h1>
+      <p id="doneBody">
+        We've removed you from PJL Land Services seasonal reminders. You can
+        always re-enable them by replying to any PJL email or calling
+        <a href="tel:+19059600181" style="color: #1B4D2E;">(905) 960-0181</a>.
+      </p>
+    </section>
+
+    <section id="error" hidden class="status-error">
+      <h1>This link isn't valid.</h1>
+      <p id="errorBody">
+        The unsubscribe link may have already been used or is no longer
+        recognized. If you'd like to stop seasonal reminders, reply to any
+        PJL email or call <a href="tel:+19059600181" style="color: #1B4D2E;">(905) 960-0181</a>
+        and we'll handle it.
+      </p>
+    </section>
+  </main>
+
+  <p class="footer-note">PJL Land Services · Newmarket, Ontario · pjllandservices.com</p>
+
+  <script>
+    (function () {
+      // The token is the last path segment of /unsubscribe/<token>.
+      // Type comes from the ?type query param ("email" | "sms" | "all").
+      // Both pieces are validated server-side; the page is purely a
+      // confirm-then-POST UI.
+      const url = new URL(window.location.href);
+      const segments = url.pathname.split("/").filter(Boolean);
+      const token = segments[segments.length - 1] || "";
+      const rawType = url.searchParams.get("type") || "all";
+      const type = ["email", "sms", "all"].includes(rawType) ? rawType : "all";
+
+      const card = document.getElementById("card");
+      const confirmSection = document.getElementById("confirm");
+      const confirmIntro = document.getElementById("confirmIntro");
+      const confirmTitle = document.getElementById("confirmTitle");
+      const confirmBtn = document.getElementById("confirmBtn");
+      const doneSection = document.getElementById("done");
+      const errorSection = document.getElementById("error");
+      const doneTitle = document.getElementById("doneTitle");
+
+      // Adjust the copy by type. The "stop everything" path reads
+      // differently from a channel-specific stop so the recipient
+      // knows exactly what they're disabling.
+      if (type === "email") {
+        confirmTitle.textContent = "Stop PJL email reminders?";
+        confirmIntro.textContent =
+          "Tap the button below to stop seasonal booking reminders by email. " +
+          "Text reminders (if you're getting them) will continue unless you stop those separately.";
+        confirmBtn.textContent = "Stop email reminders";
+      } else if (type === "sms") {
+        confirmTitle.textContent = "Stop PJL text reminders?";
+        confirmIntro.textContent =
+          "Tap the button below to stop seasonal booking reminders by text. " +
+          "Email reminders (if you're getting them) will continue unless you stop those separately.";
+        confirmBtn.textContent = "Stop text reminders";
+      } else {
+        confirmTitle.textContent = "Stop all PJL seasonal reminders?";
+        confirmIntro.textContent =
+          "Tap the button below to stop all seasonal booking reminders — both email and text. " +
+          "You'll still get confirmations for any service you actually book.";
+        confirmBtn.textContent = "Stop all seasonal reminders";
+      }
+
+      if (!token) {
+        confirmSection.hidden = true;
+        errorSection.hidden = false;
+        return;
+      }
+
+      confirmBtn.addEventListener("click", async () => {
+        confirmBtn.disabled = true;
+        confirmBtn.textContent = "Working…";
+        try {
+          const res = await fetch("/api/outreach/unsubscribe", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ token, type })
+          });
+          const body = await res.json().catch(() => ({}));
+          if (!res.ok || body.ok === false) {
+            confirmSection.hidden = true;
+            errorSection.hidden = false;
+            return;
+          }
+          confirmSection.hidden = true;
+          doneSection.hidden = false;
+          if (type === "email") doneTitle.textContent = "Email reminders stopped.";
+          else if (type === "sms") doneTitle.textContent = "Text reminders stopped.";
+          else doneTitle.textContent = "You're unsubscribed.";
+        } catch (err) {
+          confirmSection.hidden = true;
+          errorSection.hidden = false;
+        }
+      });
+    })();
+  </script>
+</body>
+</html>
