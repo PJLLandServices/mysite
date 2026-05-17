@@ -65,6 +65,28 @@
   min-height: 44px;
 }
 
+/* Header button group — Edit template + Send test ride together on
+   the same row instead of each on their own layer. Mobile-first:
+   the group itself is a flex-row that lets the two buttons sit
+   side-by-side once the inner labels are short enough to fit. On
+   wider viewports the group flows inline with the season + year
+   selects via the parent .outreach-head-controls. */
+.outreach-head-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  flex: 1 1 auto;
+}
+.outreach-head-buttons .pjl-btn {
+  flex: 1 1 0;
+  /* Tighter horizontal padding than the default pjl-btn — these
+     two are utility buttons in the page chrome, not primary CTAs,
+     so the smaller hit area is fine and lets both labels fit
+     a 330px content column with room to spare. */
+  padding: 12px 14px;
+  white-space: nowrap;
+}
+
 /* ---- Banners ----------------------------------------------------- */
 
 .outreach-banner {
