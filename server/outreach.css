@@ -131,34 +131,40 @@
   color: #1B4D2E;
 }
 
-/* ---- Filter chips ----------------------------------------------- */
-/* Brief §4: filter chips wrap cleanly — no chip cut off mid-text,
-   no chips overlapping, no chips pushed off-screen. */
+/* ---- Filter row -------------------------------------------------- */
+/* Single labeled select — replaces the original chip-row design.
+   At 700-ish px viewports the chip row was wrapping to two lines
+   (last chip cut off into a half-empty second row, brief §4
+   "chips wrap cleanly" notwithstanding); collapsing to a dropdown
+   keeps one line at every width and matches the header's season +
+   year selectors. */
 
-.outreach-filters {
+.outreach-filter-row {
   display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
+  align-items: flex-end;
   margin: 0 0 16px;
 }
-.outreach-chip {
-  font: inherit;
-  font-size: 14px;
-  font-weight: 600;
-  background: #fff;
-  color: #1B4D2E;
-  border: 1px solid #1B4D2E;
-  border-radius: 999px;
-  padding: 8px 14px;
-  cursor: pointer;
-  min-height: 36px;
-  white-space: nowrap;
-  transition: background 0.15s ease, color 0.15s ease;
+.outreach-filter {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 0 1 320px;
+  min-width: 0;
 }
-.outreach-chip:hover { background: #f0f7f2; }
-.outreach-chip.is-active {
-  background: #1B4D2E;
-  color: #fff;
+.outreach-filter > span {
+  font-size: 12px;
+  font-weight: 600;
+  color: #555;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.outreach-filter select {
+  font: inherit;
+  padding: 10px 12px;
+  border: 1px solid #d4d2cb;
+  border-radius: 6px;
+  background: #fff;
+  min-height: 44px;
 }
 
 /* ---- Property list ---------------------------------------------- */
@@ -688,8 +694,9 @@
     max-width: 420px;
   }
 
-  /* Filter chips can be a bit larger on desktop. */
-  .outreach-chip { font-size: 14px; padding: 10px 16px; }
+  /* Filter dropdown — cap the width so it doesn't span the whole
+     content column on a wide display. */
+  .outreach-filter { flex: 0 0 260px; }
 
   /* Stats numbers can run a touch bigger on a real screen. */
   .outreach-stat dd { font-size: 30px; }

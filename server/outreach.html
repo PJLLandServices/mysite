@@ -101,18 +101,26 @@
         <div class="outreach-stat"><dt>Opted out</dt><dd id="statOptedOut">—</dd></div>
       </section>
 
-      <!-- Filter chips. "Not booked" is the default — the operational
-           question is always "who hasn't booked yet." Each chip
-           re-queries the candidates endpoint with filter=...; totals
-           don't change, the list does. -->
-      <nav class="outreach-filters" id="filterChips" aria-label="Filter the list">
-        <button type="button" class="outreach-chip" data-filter="all">All</button>
-        <button type="button" class="outreach-chip is-active" data-filter="not_booked">Not booked</button>
-        <button type="button" class="outreach-chip" data-filter="not_contacted">Not contacted</button>
-        <button type="button" class="outreach-chip" data-filter="contacted_no_booking">Contacted, no booking</button>
-        <button type="button" class="outreach-chip" data-filter="booked">Booked</button>
-        <button type="button" class="outreach-chip" data-filter="opted_out">Opted out</button>
-      </nav>
+      <!-- Show filter. "Not booked" is the default — the operational
+           question is always "who hasn't booked yet." Changing the
+           selection re-queries the candidates endpoint with
+           filter=...; totals don't change, the list does. Was a chip
+           row originally; collapsed to a single dropdown so it never
+           takes a second line on narrow desktop widths or the Render
+           preview iframe. -->
+      <div class="outreach-filter-row">
+        <label class="outreach-filter">
+          <span>Show</span>
+          <select id="filterSelect">
+            <option value="all">All</option>
+            <option value="not_booked" selected>Not booked</option>
+            <option value="not_contacted">Not contacted</option>
+            <option value="contacted_no_booking">Contacted, no booking</option>
+            <option value="booked">Booked</option>
+            <option value="opted_out">Opted out</option>
+          </select>
+        </label>
+      </div>
 
       <!-- Property list. Renders as a row layout on desktop, stacked
            cards on narrow viewports (CSS-only via container query /

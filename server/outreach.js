@@ -27,7 +27,7 @@
   const seasonSelect = $("#seasonSelect");
   const yearSelect = $("#yearSelect");
   const editTemplateBtn = $("#editTemplateBtn");
-  const filterChips = $("#filterChips");
+  const filterSelect = $("#filterSelect");
   const candidateList = $("#candidateList");
   const emptyState = $("#emptyState");
   const loadingHint = $("#loadingHint");
@@ -365,15 +365,12 @@
     renderActionBar();
   });
 
-  // ---- Filter chips --------------------------------------------------
+  // ---- Filter dropdown -----------------------------------------------
 
-  filterChips.addEventListener("click", (event) => {
-    const target = event.target.closest('.outreach-chip');
-    if (!target) return;
-    const filter = target.dataset.filter;
-    if (!filter || filter === state.filter) return;
-    state.filter = filter;
-    filterChips.querySelectorAll(".outreach-chip").forEach((c) => c.classList.toggle("is-active", c === target));
+  filterSelect.addEventListener("change", () => {
+    const next = filterSelect.value;
+    if (!next || next === state.filter) return;
+    state.filter = next;
     loadCandidates();
   });
 
@@ -693,6 +690,7 @@
   function boot() {
     populateYearSelect();
     seasonSelect.value = state.season;
+    filterSelect.value = state.filter;
     Promise.allSettled([
       loadCandidates(),
       loadTemplates(),
