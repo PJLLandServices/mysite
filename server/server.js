@@ -11267,7 +11267,13 @@ async function serveStatic(req, res, pathname) {
     const ext = path.extname(filePath).toLowerCase();
     const headers = {
       "content-type": MIME_TYPES[ext] || "application/octet-stream",
-      "cache-control": ext === ".html" ? "no-store" : "public, max-age=30"
+      "cache-control": ext === ".html" ? "no-store" : "public, max-age=30",
+      // iOS Safari/Chrome require Range support for HTML5 <video>. They probe
+      // the moov atom via a byte-range request before deciding to play; with
+      // a plain 200 response they silently refuse playback even when the file
+      // is correctly encoded and faststart-optimized. Advertise it always so
+      // clients know we can serve partial content.
+      "accept-ranges": "bytes"
     };
     // ServiceWorker scope override: tech-sw.js is served from /crm/ but
     // needs to control /admin/work-order/*/tech URLs. The Service-Worker-
@@ -11277,8 +11283,56 @@ async function serveStatic(req, res, pathname) {
       headers["service-worker-allowed"] = "/admin/work-order/";
       headers["cache-control"] = "no-store";
     }
-    res.writeHead(200, headers);
-    res.end(await fs.readFile(filePath));
+
+    // Parse Range header (RFC 7233). Supports "bytes=N-", "bytes=N-M",
+    // "bytes=-N" (suffix length). Anything malformed -> 416.
+    const total = stat.size;
+    let start = 0;
+    let end = total - 1;
+    let status = 200;
+    const rangeHeader = req.headers.range;
+    if (rangeHeader) {
+      const match = /^bytes=(\d*)-(\d*)$/.exec(rangeHeader);
+      if (!match || (match[1] === "" && match[2] === "")) {
+        res.writeHead(416, { "content-range": `bytes */${total}` });
+        res.end();
+        return;
+      }
+      const reqStart = match[1] === "" ? null : parseInt(match[1], 10);
+      const reqEnd = match[2] === "" ? null : parseInt(match[2], 10);
+      if (reqStart === null) {
+        // Suffix range: last N bytes
+        start = Math.max(0, total - reqEnd);
+        end = total - 1;
+      } else {
+        start = reqStart;
+        end = reqEnd === null ? total - 1 : Math.min(reqEnd, total - 1);
+      }
+      if (start > end || start >= total || start < 0) {
+        res.writeHead(416, { "content-range": `bytes */${total}` });
+        res.end();
+        return;
+      }
+      status = 206;
+      headers["content-range"] = `bytes ${start}-${end}/${total}`;
+    }
+    headers["content-length"] = end - start + 1;
+
+    res.writeHead(status, headers);
+    if (req.method === "HEAD") {
+      res.end();
+      return;
+    }
+    const stream = fsSync.createReadStream(filePath, { start, end });
+    stream.on("error", () => {
+      if (!res.headersSent) {
+        res.writeHead(500, { "content-type": "text/plain; charset=utf-8" });
+        res.end("Server error");
+      } else {
+        res.destroy();
+      }
+    });
+    stream.pipe(res);
   } catch {
     res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
     res.end("Not found");
