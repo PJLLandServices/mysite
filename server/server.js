@@ -346,7 +346,10 @@ const MIME_TYPES = {
   ".jpeg": "image/jpeg",
   ".svg": "image/svg+xml; charset=utf-8",
   ".ico": "image/x-icon",
-  ".vcf": "text/vcard; charset=utf-8"
+  ".vcf": "text/vcard; charset=utf-8",
+  ".mp4": "video/mp4",
+  ".webm": "video/webm",
+  ".mov": "video/quicktime"
 };
 
 function sendJson(res, status, payload) {
