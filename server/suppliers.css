@@ -303,24 +303,27 @@
   background: #fff;
   border: 1px solid #E2E0D4;
   border-radius: 12px;
-  /* Unconditional 44px left padding reserves space for the bulk-checkbox
-   * that bulk-wiring.js injects as a grid-first-child. Conditional
-   * :has() approach was unreliable on production Chrome with
-   * dynamically-inserted siblings. */
-  padding: 14px 16px 14px 44px;
+  padding: 14px 16px;
   display: grid;
   grid-template-columns: 1fr auto;
   gap: 8px 16px;
   align-items: start;
 }
 
-.supplier-card > .pjl-bulk-checkbox-wrap {
-  position: absolute;
-  top: 14px;
-  left: 6px;
+/* Bulk-checkbox is relocated by suppliers.js into the .supplier-card-name
+ * <h3> so it sits inline with the supplier name. The h3 isn't a flex
+ * container, so we make it one here just so the wrap aligns cleanly
+ * with the inline name + id + archived badge that follow it. */
+.supplier-card-name {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0 8px;
+}
+.supplier-card-name > .pjl-bulk-checkbox-wrap {
   margin: 0;
-  padding: 6px;
-  z-index: 2;
+  padding: 0 4px 0 0;
+  flex: 0 0 auto;
 }
 .supplier-card.is-archived { opacity: 0.55; }
 .supplier-card-name {

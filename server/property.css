@@ -398,24 +398,15 @@
 }
 
 /* bulk-selection.js injects a <label class="pjl-bulk-checkbox-wrap"> as
- * the first child of every row so users can multi-select for the
- * bulk-action toolbar. Without explicit placement the wrap is auto-
- * placed into the property-card grid's first cell and shoves the
- * customer name, address, and email down a row — Patrick called the
- * layout "annoying". Lift the wrap out of the grid with absolute
- * positioning so the card layout stays as-designed; the :has() rule
- * only reserves left padding on cards that actually carry one. */
-.property-card:has(> .pjl-bulk-checkbox-wrap) {
-  padding-left: 44px;
-}
-.property-card > .pjl-bulk-checkbox-wrap {
-  position: absolute;
-  top: 50%;
-  left: 6px;
-  transform: translateY(-50%);
+ * the first child of every row. properties.js then relocates the wrap
+ * into .property-card-head so the checkbox sits inline with the customer
+ * name — no reserved indent column on the card (Patrick's feedback on
+ * the prior absolute-overlay pattern). */
+.property-card-head > .pjl-bulk-checkbox-wrap {
   margin: 0;
-  padding: 6px;
-  z-index: 2;
+  padding: 0 4px 0 0;
+  flex: 0 0 auto;
+  align-self: center;
 }
 .property-card:hover {
   border-color: rgba(27, 77, 46, 0.35);

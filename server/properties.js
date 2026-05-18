@@ -161,6 +161,13 @@ function render() {
     window.pjlBulkWiring.attach("properties", {
       onActionComplete: () => { try { reload(); } catch {} }
     });
+    // Relocate the injected wrap into .property-card-head so the checkbox
+    // sits inline with the customer name instead of indenting the card.
+    grid.querySelectorAll(".property-card").forEach((card) => {
+      const wrap = card.querySelector(":scope > .pjl-bulk-checkbox-wrap");
+      const head = card.querySelector(".property-card-head");
+      if (wrap && head) head.insertBefore(wrap, head.firstChild);
+    });
   }
 }
 

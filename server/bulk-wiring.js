@@ -37,8 +37,8 @@
       ]
     },
     quotes: {
-      listSelector: "#quotesBody",
-      rowSelector: "tr.quote-row",
+      listSelector: "#quotesContainer",
+      rowSelector: ".qf-card",
       idAttribute: "data-quote-id",
       actions: () => [
         action_expire(),

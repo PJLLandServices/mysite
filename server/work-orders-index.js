@@ -188,6 +188,14 @@ function render() {
       onActionComplete: () => { try { load(); } catch {} }
     });
   }
+  // Relocate the injected wrap into .ml-card-head so it sits inline with
+  // the customer name instead of indenting the whole card (Patrick's
+  // feedback on the quote-folder rebuild: no reserved checkbox column).
+  els.container.querySelectorAll(".ml-card").forEach((card) => {
+    const wrap = card.querySelector(":scope > .pjl-bulk-checkbox-wrap");
+    const head = card.querySelector(".ml-card-head");
+    if (wrap && head) head.insertBefore(wrap, head.firstChild);
+  });
 }
 
 // Per-card "Run cascade now" — calls POST /run-cascade (Brief: WO

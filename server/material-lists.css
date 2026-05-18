@@ -178,10 +178,8 @@
    * padding on .ml-card itself, those orphaned siblings still sit inside
    * the card's visible border. The clean case (material-lists, projects,
    * work-orders, where no nested anchor exists) renders identically since
-   * .ml-card-link { display: block } just fills the padded content box.
-   * The 44px left reserves space for the absolutely-positioned bulk
-   * checkbox below. */
-  padding: 14px 16px 14px 44px;
+   * .ml-card-link { display: block } just fills the padded content box. */
+  padding: 14px 16px;
   overflow: hidden;
   transition: box-shadow 120ms ease, border-color 120ms ease;
 }
@@ -194,16 +192,16 @@
   text-decoration: none;
 }
 
-/* Bulk-checkbox positioned top-left of the card to match the supplier
- * card pattern (single shared bulk-select layout across ml-card,
- * supplier-card, property-card). */
-.ml-card > .pjl-bulk-checkbox-wrap {
-  position: absolute;
-  top: 14px;
-  left: 6px;
+/* Bulk-checkbox is relocated by the per-page JS into .ml-card-head so it
+ * sits inline with the card name — no reserved indent column on the card
+ * (Patrick: "the checkbox is literally still in its own column" feedback
+ * on the prior overlay pattern). Strip the wrap's default padding here
+ * so it hugs the start of the header. */
+.ml-card-head > .pjl-bulk-checkbox-wrap {
   margin: 0;
-  padding: 6px;
-  z-index: 2;
+  padding: 0 4px 0 0;
+  flex: 0 0 auto;
+  align-self: center;
 }
 
 .ml-card-head {

@@ -163,6 +163,19 @@ function renderLists() {
       onActionComplete: () => { try { loadLists(); } catch {} }
     });
   }
+  relocateBulkCheckboxes();
+}
+
+// bulk-selection.js injects the checkbox-wrap as the first child of each
+// <li class="ml-card">. Move it into .ml-card-head so it sits inline with
+// the card name instead of stealing an indent column. Idempotent: the
+// :scope > selector only matches when the wrap is still a direct child.
+function relocateBulkCheckboxes() {
+  els.container.querySelectorAll(".ml-card").forEach((card) => {
+    const wrap = card.querySelector(":scope > .pjl-bulk-checkbox-wrap");
+    const head = card.querySelector(".ml-card-head");
+    if (wrap && head) head.insertBefore(wrap, head.firstChild);
+  });
 }
 
 function openNewForm() {

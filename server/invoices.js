@@ -48,6 +48,25 @@ async function load() {
   // Wire bulk-selection toolbar (Session 2 brief). Each call refreshes
   // the controller's row scan since the table just re-rendered.
   if (window.pjlBulkWiring) window.pjlBulkWiring.attach("invoices", { onActionComplete: load });
+  // bulk-selection.js injects a leading <td class="pjl-bulk-checkbox-cell">
+  // on every row + a matching <th> in thead. Move the wrap into the
+  // invoice-id <td> so the checkbox sits inline with the ID instead of
+  // claiming its own column (desktop) / reserving 40px of indent (mobile
+  // card view). Hide the now-empty leading <td>/<th> with `hidden` so
+  // they don't render but the bulk controller's "has wrap?" / "has th?"
+  // re-injection guards still find them and skip duplicate inserts.
+  tableBody.querySelectorAll("tr.invoice-row").forEach((row) => {
+    const bulkCell = row.querySelector(":scope > .pjl-bulk-checkbox-cell");
+    if (!bulkCell) return;
+    const wrap = bulkCell.querySelector(".pjl-bulk-checkbox-wrap");
+    const firstDataCell = Array.from(row.children).find((td) => td !== bulkCell && td.tagName === "TD");
+    if (wrap && firstDataCell) {
+      firstDataCell.insertBefore(wrap, firstDataCell.firstChild);
+      bulkCell.hidden = true;
+    }
+  });
+  const bulkTh = tableEl.querySelector("thead .pjl-bulk-checkbox-th");
+  if (bulkTh) bulkTh.hidden = true;
 }
 
 filterBtns.forEach((btn) => {

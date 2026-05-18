@@ -15,6 +15,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/crm/crm.css">
   <link rel="stylesheet" href="/crm/invoices.css">
+  <link rel="stylesheet" href="/crm/quote-folder.css">
 </head>
 <body class="pjl-crm-body invoices-body">
   <aside class="pjl-admin-nav" id="navMenu" aria-label="PJL CRM Navigation">
@@ -72,20 +73,7 @@
         <button type="button" data-status-filter="expired">Expired</button>
       </section>
       <p class="invoices-empty" id="quotesEmpty" hidden>No quotes match.</p>
-      <table class="invoices-table" id="quotesTable" hidden>
-        <thead>
-          <tr>
-            <th>Quote #</th>
-            <th>Type</th>
-            <th>Customer</th>
-            <th>Total</th>
-            <th>Status</th>
-            <th>Created</th>
-            <th>Materials &amp; project</th>
-          </tr>
-        </thead>
-        <tbody id="quotesBody"></tbody>
-      </table>
+      <div class="qf-list" id="quotesContainer" hidden></div>
     </main>
   </div>
 

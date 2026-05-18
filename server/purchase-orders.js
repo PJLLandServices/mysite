@@ -112,6 +112,13 @@ function render() {
       onActionComplete: () => { try { load(); } catch {} }
     });
   }
+  // Relocate the injected wrap into .ml-card-head so the checkbox sits
+  // inline with the supplier name instead of indenting the whole card.
+  els.container.querySelectorAll(".ml-card").forEach((card) => {
+    const wrap = card.querySelector(":scope > .pjl-bulk-checkbox-wrap");
+    const head = card.querySelector(".ml-card-head");
+    if (wrap && head) head.insertBefore(wrap, head.firstChild);
+  });
 }
 
 els.search.addEventListener("input", () => render());

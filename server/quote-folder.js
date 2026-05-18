@@ -1,12 +1,11 @@
-const tableBody = document.getElementById("quotesBody");
-const tableEl = document.getElementById("quotesTable");
+const containerEl = document.getElementById("quotesContainer");
 const emptyEl = document.getElementById("quotesEmpty");
 const filterBtns = document.querySelectorAll("[data-status-filter]");
 
 const TYPE_LABELS = {
-  ai_repair_quote: "AI repair",
-  on_site_quote: "On-site",
-  formal_quote: "Formal"
+  ai_repair_quote: "AI repair quote",
+  on_site_quote: "On-site quote",
+  formal_quote: "Formal quote"
 };
 
 let currentFilter = "";
@@ -16,13 +15,12 @@ function escapeHtml(s) {
     .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;").replace(/'/g, "&#039;");
 }
-function fmt(n) { return "$" + (Number(n) || 0).toFixed(2); }
 function fmtDate(iso) {
   if (!iso) return "—";
   return new Date(iso).toLocaleDateString("en-CA", { month: "short", day: "numeric", year: "numeric" });
 }
 
-// Phase 2 — fetched alongside quotes so each row can render a chip
+// Phase 2 — fetched alongside quotes so each card can render a chip
 // showing "X lists" attached and surface "Convert to project" /
 // "Open project" depending on whether a project already exists for the
 // quote.
@@ -50,45 +48,62 @@ async function load() {
   }
 
   if (!items.length) {
-    tableEl.hidden = true;
+    containerEl.hidden = true;
     emptyEl.hidden = false;
     return;
   }
   emptyEl.hidden = true;
-  tableEl.hidden = false;
-  tableBody.innerHTML = items.map((q) => {
+  containerEl.hidden = false;
+  containerEl.innerHTML = items.map((q) => {
     // Lead deep-link if we have a leadId — quotes don't have their own
     // detail page yet, so the lead detail (which embeds the Quote card)
-    // is the closest thing to a "quote view."
+    // is the closest thing to a "quote view." The card itself opens this
+    // URL on tap (see the delegated click handler below); "Open in CRM"
+    // is also kept as an explicit action link for desktop affordance.
     const customer = q.customerEmail || "(no email)";
-    const leadLink = q.leadId
-      ? `<a href="/admin#lead-${encodeURIComponent(q.leadId)}">Open in CRM</a>`
-      : "—";
+    const leadHref = q.leadId ? `/admin#lead-${encodeURIComponent(q.leadId)}` : "";
     const mlCount = mlCountByQuote.get(q.id) || 0;
     const proj = projectByQuote.get(q.id);
-    const mlChip = mlCount
-      ? `<a class="invoices-row-sub" href="/admin/material-lists" data-quote-id="${escapeHtml(q.id)}" data-action="filter-materials">📋 ${mlCount} list${mlCount === 1 ? "" : "s"}</a>`
-      : `<span class="invoices-row-sub" style="color:#7A7A72">no materials</span>`;
-    const projAction = proj
-      ? `<a class="invoices-row-sub" href="/admin/project/${encodeURIComponent(proj.id)}">↗ ${escapeHtml(proj.id)}</a>`
-      : `<button type="button" class="invoices-row-sub" data-quote-id="${escapeHtml(q.id)}" data-action="convert" style="background:none;border:none;color:#1B4D2E;cursor:pointer;text-decoration:underline;padding:0;font:inherit">Convert to project</button>`;
-    // Per-cell classes (qf-cell-*) let the mobile CSS place each <td>
-    // into a 3-row × 2-col grid (see invoices.css → @media (max-width:700px)
-    // → .quote-row). Desktop view ignores them — the table still flows by
-    // DOM order, matching the <thead> column order.
+
+    // Material status — preserve the existing derivation (chip with count
+    // when there are attached lists, "no materials" otherwise).
+    const materialsLine = mlCount
+      ? `<a href="/admin/material-lists" data-quote-id="${escapeHtml(q.id)}" data-action="filter-materials">📋 ${mlCount} list${mlCount === 1 ? "" : "s"}</a>`
+      : `no materials`;
+
+    // Build actions list — each action is rendered only when applicable.
+    // The renderer joins them with dot separators so a hidden action
+    // doesn't leave a dangling "·".
+    const actions = [];
+    if (leadHref) {
+      actions.push(`<a href="${leadHref}">Open in CRM</a>`);
+    }
+    actions.push(`<a href="/api/admin/quote-folder/${encodeURIComponent(q.id)}/pdf" target="_blank" rel="noopener">PDF</a>`);
+    if (proj) {
+      actions.push(`<a href="/admin/project/${encodeURIComponent(proj.id)}">↗ ${escapeHtml(proj.id)}</a>`);
+    } else {
+      actions.push(`<button type="button" data-quote-id="${escapeHtml(q.id)}" data-action="convert">Convert to project</button>`);
+    }
+    const actionsHtml = actions.join(`<span class="qf-card__sep" aria-hidden="true">·</span>`);
+
+    const versionTag = q.version > 1 ? `<span class="qf-card__id-version">v${escapeHtml(q.version)}</span>` : "";
+    const typeLabel = TYPE_LABELS[q.type] || q.type || "Quote";
+    const datesLine = q.validUntil
+      ? `${escapeHtml(fmtDate(q.createdAt))} <span class="qf-card__sep" aria-hidden="true">·</span> expires ${escapeHtml(fmtDate(q.validUntil))}`
+      : escapeHtml(fmtDate(q.createdAt));
+
     return `
-      <tr class="quote-row" data-quote-id="${escapeHtml(q.id)}">
-        <td class="qf-cell-quote-id">
-          <strong>${escapeHtml(q.id)}</strong>${q.version > 1 ? ` <span class="invoices-row-sub">v${q.version}</span>` : ""}
-          <br><a class="invoices-row-sub" href="/api/admin/quote-folder/${encodeURIComponent(q.id)}/pdf" target="_blank" rel="noopener">📄 PDF</a>
-        </td>
-        <td class="qf-cell-type">${escapeHtml(TYPE_LABELS[q.type] || q.type)}</td>
-        <td class="qf-cell-customer">${escapeHtml(customer)}<br><span class="invoices-row-sub">${leadLink}</span></td>
-        <td class="invoices-amount qf-cell-total">${fmt(q.total)}</td>
-        <td class="qf-cell-status"><span class="invoices-status invoices-status--${escapeHtml(q.status)}">${escapeHtml(q.status)}</span></td>
-        <td class="qf-cell-date">${escapeHtml(fmtDate(q.createdAt))}${q.validUntil ? `<br><span class="invoices-row-sub">expires ${escapeHtml(fmtDate(q.validUntil))}</span>` : ""}</td>
-        <td class="qf-cell-materials">${mlChip}<br>${projAction}</td>
-      </tr>
+      <article class="qf-card" data-quote-id="${escapeHtml(q.id)}"${leadHref ? ` data-href="${leadHref}"` : ""}>
+        <header class="qf-card__head">
+          <span class="qf-card__id">${escapeHtml(q.id)}${versionTag}</span>
+          <span class="qf-card__status invoices-status invoices-status--${escapeHtml(q.status)}">${escapeHtml(q.status)}</span>
+        </header>
+        <p class="qf-card__type">${escapeHtml(typeLabel)}</p>
+        <p class="qf-card__customer">${escapeHtml(customer)}</p>
+        <p class="qf-card__dates">${datesLine}</p>
+        <p class="qf-card__materials">${materialsLine}</p>
+        <nav class="qf-card__actions">${actionsHtml}</nav>
+      </article>
     `;
   }).join("");
   // Wire bulk-selection toolbar (Session 2 brief). Re-runs on each render.
@@ -97,6 +112,17 @@ async function load() {
       onActionComplete: () => { try { load(); } catch {} }
     });
   }
+  // bulk-selection.js injects the checkbox-wrap as the first child of each
+  // <article>. We want it visually inline with the Q-ID in the header row
+  // (not in its own indent column), so relocate it into <header> after the
+  // injection. Idempotent: if the wrap is already inside the header (re-
+  // render path), the querySelector(':scope > .pjl-bulk-checkbox-wrap')
+  // won't match and the move is skipped.
+  containerEl.querySelectorAll(".qf-card").forEach((card) => {
+    const wrap = card.querySelector(":scope > .pjl-bulk-checkbox-wrap");
+    const head = card.querySelector(":scope > .qf-card__head");
+    if (wrap && head) head.insertBefore(wrap, head.firstChild);
+  });
 }
 
 async function convertToProject(quoteId) {
@@ -118,15 +144,25 @@ async function convertToProject(quoteId) {
   }
 }
 
-// Delegated click handler for both the convert button and the materials
-// filter link (the latter just navigates — the materials index then
-// filters client-side via its own search box).
-tableBody.addEventListener("click", (event) => {
+// Delegated click handler for both the convert button + materials link,
+// and for card-level navigation. The card root is the tap target for
+// "open the quote in CRM"; inner anchors, buttons, and the bulk-select
+// checkbox short-circuit that so they execute their own actions instead
+// of also navigating away.
+containerEl.addEventListener("click", (event) => {
   const convertBtn = event.target.closest("[data-action='convert']");
   if (convertBtn) {
     event.preventDefault();
     convertToProject(convertBtn.dataset.quoteId);
     return;
+  }
+  // Inner anchors, buttons, or the bulk-select checkbox: let them handle
+  // themselves — don't fire the card-level navigation.
+  if (event.target.closest("a, button, .pjl-bulk-checkbox-wrap, input[type='checkbox']")) return;
+
+  const card = event.target.closest(".qf-card");
+  if (card && card.dataset.href) {
+    location.href = card.dataset.href;
   }
 });
 
