@@ -1,0 +1,107 @@
+/* /admin/bookings index card — single-column vertical stack at every
+ * viewport. No media query: the same stack reads at iPhone Pro Max
+ * width and at desktop width.
+ *
+ * History: the bookings card previously reused .customer-card (a
+ * 5-column grid sized for the customers index). At iPhone Pro Max
+ * widths the total content width — BK-ID + customer · service +
+ * address · datetime · WO count · status badge — exceeded the 430 px
+ * viewport, the document scrolled horizontally, and the right-anchored
+ * status badge rendered partially off-screen. Patching column widths
+ * could not fix it because the content sum alone was too wide for the
+ * phone. This block deletes that horizontal layout entirely and rebuilds
+ * the card with vertical-stack semantics + a self-contained overflow
+ * guardrail.
+ *
+ * Patterned after .qf-card in quote-folder.css. Same shape, same
+ * spacing tokens, same hover treatment so the two index pages feel
+ * like siblings. */
+
+.bk-card {
+  box-sizing: border-box;
+  display: block;
+  overflow: hidden;
+  background: #fff;
+  border: 1px solid #E2E0D4;
+  border-radius: 12px;
+  padding: 12px 16px 14px;
+  text-decoration: none;
+  color: inherit;
+  transition: box-shadow 120ms ease, border-color 120ms ease;
+}
+.bk-card:hover {
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.06);
+  border-color: #C7C0A8;
+}
+.bk-card:active { transform: translateY(1px); }
+
+.bk-card__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.bk-card__id {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-family: ui-monospace, "SFMono-Regular", monospace;
+  font-size: 15px;
+  font-weight: 700;
+  color: #1F2A22;
+  /* BK-IDs are short fixed-format tokens — never break them. */
+  word-break: keep-all;
+}
+.bk-card__status {
+  flex: 0 0 auto;
+  margin-left: auto;
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+.bk-card__status--confirmed { background: #E0EBFF; color: #2A4A8C; }
+.bk-card__status--tentative { background: #FFF4E0; color: #7A5C00; }
+.bk-card__status--completed { background: #E8F4ED; color: #1B4D2E; }
+.bk-card__status--cancelled { background: #EFEFE5; color: #999; }
+.bk-card__status--no_show   { background: #E8E5D7; color: #4A4A44; }
+
+.bk-card__service,
+.bk-card__customer,
+.bk-card__address,
+.bk-card__datetime,
+.bk-card__state {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.4;
+  word-break: normal;
+  /* `anywhere` lets long unbroken strings (multi-word addresses, etc.)
+   * wrap on word boundaries first and fall through to mid-token wraps
+   * before they ever overflow the card. */
+  overflow-wrap: anywhere;
+}
+.bk-card__service {
+  color: #7A7A72;
+  margin-bottom: 8px;
+}
+.bk-card__customer {
+  color: #1F2A22;
+  font-weight: 500;
+  margin-top: 4px;
+}
+.bk-card__address {
+  color: #4A4A44;
+  margin-top: 2px;
+}
+.bk-card__datetime {
+  color: #1F2A22;
+  margin-top: 2px;
+  font-variant-numeric: tabular-nums;
+}
+.bk-card__state {
+  color: #7A7A72;
+  margin-top: 2px;
+}

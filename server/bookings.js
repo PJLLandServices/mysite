@@ -38,7 +38,30 @@ function formatDateTime(iso) {
   if (!iso) return "—";
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "—";
-  return d.toLocaleString("en-CA", { year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  const date = d.toLocaleDateString("en-CA", { year: "numeric", month: "short", day: "numeric" });
+  const time = d.toLocaleTimeString("en-CA", { hour: "2-digit", minute: "2-digit" });
+  return `${date} · ${time}`;
+}
+
+// Header badge label (raw status). Map underscore → space-separated word
+// so "no_show" reads as "No-show" in uppercase rather than "NO_SHOW".
+function statusBadgeLabel(status) {
+  const map = {
+    confirmed: "Confirmed",
+    tentative: "Tentative",
+    completed: "Completed",
+    cancelled: "Cancelled",
+    no_show: "No-show"
+  };
+  return map[status] || "Confirmed";
+}
+
+// Lifecycle word for the bottom row. Distinct from the badge label —
+// a "confirmed" booking with a scheduled time is "Scheduled" in
+// lifecycle terms (per brief mockup).
+function lifecycleLabel(status) {
+  if (status === "confirmed") return "Scheduled";
+  return statusBadgeLabel(status);
 }
 
 function searchable(b) {
@@ -69,30 +92,27 @@ function render() {
   emptyEl.hidden = true;
 
   for (const b of filtered) {
-    const link = document.createElement("a");
-    link.className = "customer-card";
-    link.href = `/admin/booking/${encodeURIComponent(b.id)}`;
+    const status = b.status || "confirmed";
     const woCount = (b.workOrderIds || []).length;
-    link.innerHTML = `
-      <div class="customer-card-name">
-        <strong>${esc(b.id)}</strong>
-        <span class="customer-card-id">${esc(b.customerName) || "(no customer)"}</span>
-      </div>
-      <div class="customer-card-contact">
-        <span>${esc(b.serviceLabel || b.serviceKey || "—")}</span>
-        <span>${esc(b.address) || "—"}</span>
-      </div>
-      <div class="customer-card-stat">
-        <strong>${formatDateTime(b.scheduledFor)}</strong>
-        scheduled
-      </div>
-      <div class="customer-card-stat">
-        <strong>${woCount}</strong>
-        WO${woCount === 1 ? "" : "s"}
-      </div>
-      <span class="customer-status is-${esc(b.status || "confirmed")}">${esc(b.status || "confirmed")}</span>
+    const stateText = woCount > 0
+      ? `${lifecycleLabel(status)} · ${woCount} work order${woCount === 1 ? "" : "s"}`
+      : lifecycleLabel(status);
+    const card = document.createElement("a");
+    card.className = "bk-card";
+    card.href = `/admin/booking/${encodeURIComponent(b.id)}`;
+    card.dataset.bookingId = b.id;
+    card.innerHTML = `
+      <header class="bk-card__head">
+        <span class="bk-card__id">${esc(b.id)}</span>
+        <span class="bk-card__status bk-card__status--${esc(status)}">${esc(statusBadgeLabel(status))}</span>
+      </header>
+      <p class="bk-card__service">${esc(b.serviceLabel || b.serviceKey || "—")}</p>
+      <p class="bk-card__customer">${esc(b.customerName) || "(no customer)"}</p>
+      <p class="bk-card__address">${esc(b.address) || "—"}</p>
+      <p class="bk-card__datetime">${esc(formatDateTime(b.scheduledFor))}</p>
+      <p class="bk-card__state">${esc(stateText)}</p>
     `;
-    listEl.appendChild(link);
+    listEl.appendChild(card);
   }
 }
 

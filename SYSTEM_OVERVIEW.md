@@ -182,7 +182,7 @@ Pages with their primary route + purpose:
 | `schedule.html` | `/admin/schedule` | Booking calendar. Block hours, manual booking creation. |
 | `handoff.html` | `/admin/handoff` | Manual handoff — admin sends a customer a booking link + portal access. |
 | `outreach.html` | `/admin/outreach` | Seasonal Outreach (feature-seasonal-outreach-brief.md). Picks Spring or Fall + year; lists every eligible property with its booking state, contact state, and opt-out state; filters; bulk-sends a portal booking link via email + SMS via `outreach.sendBulk`; per-season message template editor; backfill banner for properties with a blank `customerName`. |
-| `bookings.html` | `/admin/bookings` | Bookings folder index — every booking record with customer + property + appointment state, filtered/searchable. |
+| `bookings.html` | `/admin/bookings` | Bookings folder index — every booking record with customer + property + appointment state, filtered/searchable. Cards are a single-column vertical stack (`.bk-card` in `bookings.css`), consistent with the quote-folder rebuild — no horizontal multi-column treatment, same stack reads at every viewport. |
 | `booking.html` | `/admin/booking/<id>` | Per-booking detail page. |
 | `properties.html` | `/admin/properties` | Properties index (vertical list). |
 | `property.html` | `/admin/property/<id>` | Per-property profile. Zones, valves, controller, blow-out, access notes, service records, deferred issues. |
