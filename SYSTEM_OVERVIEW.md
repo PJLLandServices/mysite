@@ -166,6 +166,13 @@ Bookings  ·  Customers  ·  Properties  ·  Projects  ·  Work orders  ·
 Quotes  ·  Invoices  ·  Materials  ·  AI Chats  ·  Users  ·  Settings
 ```
 
+Every admin HTML file includes `apple-mobile-web-app-capable="yes"` +
+`apple-mobile-web-app-status-bar-style="black-translucent"` + viewport
+`viewport-fit=cover` so the admin runs as a proper iPhone Home Screen
+standalone app: the dark green topbar extends under the status bar
+glyphs (no white sliver above), and `env(safe-area-inset-top)` reserves
+inner padding so content sits below the time/bell/battery.
+
 Pages with their primary route + purpose:
 
 | Page | Route | What it does |
@@ -175,6 +182,8 @@ Pages with their primary route + purpose:
 | `schedule.html` | `/admin/schedule` | Booking calendar. Block hours, manual booking creation. |
 | `handoff.html` | `/admin/handoff` | Manual handoff — admin sends a customer a booking link + portal access. |
 | `outreach.html` | `/admin/outreach` | Seasonal Outreach (feature-seasonal-outreach-brief.md). Picks Spring or Fall + year; lists every eligible property with its booking state, contact state, and opt-out state; filters; bulk-sends a portal booking link via email + SMS via `outreach.sendBulk`; per-season message template editor; backfill banner for properties with a blank `customerName`. |
+| `bookings.html` | `/admin/bookings` | Bookings folder index — every booking record with customer + property + appointment state, filtered/searchable. |
+| `booking.html` | `/admin/booking/<id>` | Per-booking detail page. |
 | `properties.html` | `/admin/properties` | Properties index (vertical list). |
 | `property.html` | `/admin/property/<id>` | Per-property profile. Zones, valves, controller, blow-out, access notes, service records, deferred issues. |
 | `properties-import.html` | `/admin/properties/import` | xlsx bulk import wizard. |
@@ -225,7 +234,7 @@ Pages with their primary route + purpose:
 
 | File | Purpose |
 |---|---|
-| `crm.css` | Sidebar + topbar shell + buttons. The visual frame. |
+| `crm.css` | Sidebar + topbar shell + buttons. The visual frame. Mobile topbar uses `padding-top: max(<base>, env(safe-area-inset-top))` so the dark green bar's inner content (hamburger + eyebrow) clears the iPhone status bar in iOS standalone mode (Add to Home Screen). The background still extends to the very top so the status-bar glyphs sit on green, not on a white sliver. |
 | `crm-nav.js` | Hamburger toggle + logout button wiring. |
 | `crm-parts.js` / `crm-parts.css` | Shared parts catalog renderer (category > subcategory > items checkbox tree). Used by WO materials checklist + follow-up modal. |
 | `crm-followup.js` / `crm-followup.css` | Follow-up WO trigger modal (slot picker + materials selector). |
