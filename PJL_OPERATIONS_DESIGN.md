@@ -119,6 +119,14 @@ PROPERTY FOLDER
   Property Information
     - Service address (Apple Maps format for one-tap calendar directions)
     - Spring opening cost / Fall closing cost for this property
+        (per-property override; falls back to pricing.json tier by zone count
+         via pricing.resolveSeasonalPrice)
+    - Additional plumbing to blow out in fall? (yes/no)
+        If yes: additional cost + short description (cabana, pool house,
+        remote hose bib, etc.). Drives a second baseline line on
+        fall_closing WOs AND attaches the fall_additional_plumbing
+        disclaimer to the resulting invoice — text in
+        server/lib/invoices.js INVOICE_DISCLAIMERS.
     - Number of zones
     - Access & logistics (gate code, dog warning, parking notes, scheduling preferences)
 
@@ -347,6 +355,15 @@ WORK ORDER FOLDER
     - Status: scheduled / dispatched / en_route / on_site / 
               in_progress / completed / cancelled / no_show
     - Created from: booking link (REQUIRED — every WO has one)
+    - Seasonal WOs (spring_opening / fall_closing) seed one or two
+      baseline lines at creation via pricing.resolveSeasonalPrice():
+        * Main seasonal fee (override → tier → custom-quote skip)
+        * For fall_closing on a property with
+          seasonalPricing.hasAdditionalFallBlowout, a second baseline
+          line for the additional plumbing (cabana / pool house / etc.).
+      Both carry source.baseline=true and are scope-protected once the
+      WO is signed (snapshot rule — later property edits don't mutate
+      the seeded lines).
 
   The Cheat Sheet (rendered first when tech opens WO)
     - Service address (one-tap maps)
@@ -653,6 +670,10 @@ When tech taps "Complete":
 - Customer notified with summary
 - Patrick notified
 - QuickBooks invoice generated (drafted)
+- If WO is fall_closing AND property.seasonalPricing.hasAdditionalFallBlowout
+  is true, the draft invoice carries the fall_additional_plumbing
+  disclaimer key. Idempotent via Set semantics in invoices.update —
+  cascade re-fires never duplicate keys.
 - Customer portal updated to show completed work
 - Warranty clock starts (1 year repairs / 3 years installs)
 

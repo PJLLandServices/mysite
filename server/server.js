@@ -40,7 +40,7 @@ const { resolvePublicBaseUrl } = require("./lib/public-base-url");
 const { geocode, PJL_BASE } = require("./lib/geocode");
 const { BOOKABLE_SERVICES, DEFAULT_HOURS, DEFAULT_SETTINGS, listAvailableSlots, groupByDay, expandDaysToRange, parseLocalDateKey } = require("./lib/availability");
 const scheduleStore = require("./lib/schedule-store");
-const { priceForBooking, deriveSeasonalKey } = require("./lib/pricing");
+const { priceForBooking, deriveSeasonalKey, resolveSeasonalPrice } = require("./lib/pricing");
 const bookingSessions = require("./lib/booking-sessions");
 const properties = require("./lib/properties");
 const customers = require("./lib/customers");
@@ -2965,6 +2965,20 @@ async function handleApi(req, res, pathname) {
             summary: r.summary || ""
           }))
         : [];
+      // Pre-resolved seasonal pricing for the portal property card.
+      // Sent as { spring: {...}, fall: {...} } with the cabana add-on
+      // separate when applicable. Customer never sees "(override)"
+      // labelling — that's an internal concept. The portal just shows
+      // the dollar amount.
+      const sp = property.seasonalPricing || {};
+      const springResolved = resolveSeasonalPrice(property, "spring_opening");
+      const fallResolved   = resolveSeasonalPrice(property, "fall_closing");
+      const additionalFall = (sp.hasAdditionalFallBlowout === true && Number.isFinite(Number(sp.additionalFallBlowoutPrice)))
+        ? {
+            price: Math.round(Number(sp.additionalFallBlowoutPrice) * 100) / 100,
+            description: String(sp.additionalFallBlowoutDescription || "").trim() || "Additional plumbing"
+          }
+        : null;
       return sendJson(res, 200, {
         ok: true,
         propertyPortal: {
@@ -2978,7 +2992,15 @@ async function handleApi(req, res, pathname) {
           controllerLocation: property.system?.controllerLocation || "",
           recentServices,
           season,
-          seasonName
+          seasonName,
+          seasonalPricing: {
+            springOpening: springResolved.custom
+              ? null
+              : { price: springResolved.price },
+            fallClosing: fallResolved.custom
+              ? null
+              : { price: fallResolved.price, additional: additionalFall }
+          }
         }
       });
     }
@@ -4616,7 +4638,15 @@ async function handleApi(req, res, pathname) {
       if (q) decorated.quote = q;
       return decorated;
     });
-    return sendJson(res, 200, { ok: true, property, leads: linkedLeads });
+    // Pre-resolved seasonal price for the admin UI — saves the client
+    // from duplicating the override/tier/custom logic. Includes both
+    // services so the page can label each row with (override) /
+    // (default tier — N zones) / (custom quote) without a second call.
+    const seasonalPricingResolved = {
+      spring_opening: resolveSeasonalPrice(property, "spring_opening"),
+      fall_closing:   resolveSeasonalPrice(property, "fall_closing")
+    };
+    return sendJson(res, 200, { ok: true, property, leads: linkedLeads, seasonalPricingResolved });
   }
 
   if (propertyMatch && req.method === "PATCH") {
@@ -4642,6 +4672,48 @@ async function handleApi(req, res, pathname) {
         for (const key of allowedSys) {
           if (Object.prototype.hasOwnProperty.call(payload.system, key)) sanitized.system[key] = payload.system[key];
         }
+      }
+      // Per-property seasonal pricing
+      // (feature-per-property-seasonal-pricing-brief.md §3.1, §3.4).
+      // Lib's hydrateSeasonalPricing handles normalization (cabana off →
+      // strip dependent fields). Route enforces the inverse invariant:
+      // when hasAdditionalFallBlowout === true, additionalFallBlowoutPrice
+      // MUST be a finite non-negative number, otherwise the on-site quote
+      // would seed a meaningless $0 additional-plumbing line that silently
+      // adds the disclaimer to invoices.
+      if (payload.seasonalPricing && typeof payload.seasonalPricing === "object") {
+        const sp = {};
+        const allowedSP = [
+          "springOpeningPrice",
+          "fallClosingPrice",
+          "hasAdditionalFallBlowout",
+          "additionalFallBlowoutPrice",
+          "additionalFallBlowoutDescription"
+        ];
+        for (const key of allowedSP) {
+          if (Object.prototype.hasOwnProperty.call(payload.seasonalPricing, key)) {
+            sp[key] = payload.seasonalPricing[key];
+          }
+        }
+        // Validate the conditional rule against the merged result, because
+        // a partial patch (e.g. just `{ hasAdditionalFallBlowout: true }`)
+        // would otherwise pass through and seed a null-priced second line.
+        // Coercion gotcha: Number(null) === 0, which would lie about
+        // "valid". Reject null/undefined/empty BEFORE coercion.
+        if (sp.hasAdditionalFallBlowout === true) {
+          const candidatePrice = Object.prototype.hasOwnProperty.call(sp, "additionalFallBlowoutPrice")
+            ? sp.additionalFallBlowoutPrice
+            : (before?.seasonalPricing?.additionalFallBlowoutPrice ?? null);
+          const isExplicitNull = candidatePrice === null || candidatePrice === undefined || candidatePrice === "";
+          const n = Number(candidatePrice);
+          if (isExplicitNull || !Number.isFinite(n) || n < 0) {
+            return sendJson(res, 400, {
+              ok: false,
+              errors: ["Additional fall-closing plumbing blow-out is enabled — set a dollar amount (or turn the toggle off)."]
+            });
+          }
+        }
+        sanitized.seasonalPricing = sp;
       }
       let updated = await properties.update(id, sanitized);
       if (!updated) return sendJson(res, 404, { ok: false, errors: ["Property not found."] });
@@ -4680,7 +4752,14 @@ async function handleApi(req, res, pathname) {
       // the update is a no-op.
       const sync = await cascadePropertyToLinkedRecords(updated);
 
-      return sendJson(res, 200, { ok: true, property: updated, sync });
+      // Echo back the resolved seasonal pricing so the admin page can
+      // refresh its hint lines (override / tier-default / custom-quote)
+      // without a follow-up GET. Mirrors the GET response shape.
+      const seasonalPricingResolved = {
+        spring_opening: resolveSeasonalPrice(updated, "spring_opening"),
+        fall_closing:   resolveSeasonalPrice(updated, "fall_closing")
+      };
+      return sendJson(res, 200, { ok: true, property: updated, sync, seasonalPricingResolved });
     } catch (error) {
       return sendJson(res, 400, { ok: false, errors: [error.message || "Couldn't update property."] });
     }
@@ -7125,7 +7204,14 @@ async function handleApi(req, res, pathname) {
   if (invoiceMatch && req.method === "GET") {
     const inv = await invoices.get(decodeURIComponent(invoiceMatch[1]));
     if (!inv) return sendJson(res, 404, { ok: false, errors: ["Invoice not found."] });
-    return sendJson(res, 200, { ok: true, invoice: inv });
+    // Decorate with resolved disclaimer text so the admin editor +
+    // any future portal view doesn't need to ship its own copy of the
+    // INVOICE_DISCLAIMERS map. Text lives only on the server (and in
+    // the PDF generator), preventing drift.
+    const disclaimerObjects = (inv.disclaimers || [])
+      .map((k) => invoices.INVOICE_DISCLAIMERS[k] ? { key: k, ...invoices.INVOICE_DISCLAIMERS[k] } : null)
+      .filter(Boolean);
+    return sendJson(res, 200, { ok: true, invoice: inv, disclaimerObjects });
   }
   if (invoiceMatch && req.method === "PATCH") {
     try {
@@ -8062,65 +8148,109 @@ async function handleApi(req, res, pathname) {
       // Seasonal-fee seeding — spring_opening / fall_closing WOs come
       // pre-loaded with the booked service fee as a billable line item.
       // Without this, the on-site quote starts empty and the completion
-      // cascade has nothing to invoice. Seasonal pricing comes from
-      // pricing.json (same key the booking used). For service_visit we
-      // don't seed — those are AI-quote-driven or repair-only and the
-      // rollup adds a service_call when repairs are found.
+      // cascade has nothing to invoice. For service_visit we don't seed —
+      // those are AI-quote-driven or repair-only and the rollup adds a
+      // service_call when repairs are found.
       //
       // The seeded line carries `source.baseline: true` so the on-site
       // quote build endpoint preserves it across rollup re-runs.
-      // Without that flag, "Generate from issues" would wipe it.
       //
-      // Key derivation order:
-      //   1. lead.booking.serviceKey when present (most accurate — the
-      //      customer paid for that exact tier)
-      //   2. deriveSeasonalKey(type, propertyZoneCount) when the booking
-      //      didn't carry a serviceKey (WOs created from /admin/handoff,
-      //      from the property page, or legacy leads where serviceKey
-      //      wasn't captured). Reads pricing.json's seasonal_tiers.
-      // Either way the WO ships with a baseline line; tech can adjust
-      // the qty/price if the on-site reality differs from the tier.
+      // Resolution order (delegated to pricing.resolveSeasonalPrice):
+      //   1. property.seasonalPricing.{springOpeningPrice,fallClosingPrice}
+      //      when set — per-property override wins over everything.
+      //   2. pricing.json zone-tier fallback via deriveSeasonalKey.
+      //   3. Custom-quote case (16+ residential, 9+ commercial, no
+      //      override) → NO baseline seeded; tech builds the on-site
+      //      quote manually.
+      // Snapshotted at creation — later edits to property.seasonalPricing
+      // do NOT mutate this WO's baseline (per brief Hard Rule #2).
+      //
+      // For fall_closing on a property with
+      // seasonalPricing.hasAdditionalFallBlowout, a SECOND baseline line
+      // captures the cabana / additional plumbing fee. Tagged with
+      // source.propertyAdditionalFallBlowout=true so the cascade can
+      // identify it for the invoice disclaimer.
       if (type === "spring_opening" || type === "fall_closing") {
         try {
-          let seedKey = lead?.booking?.serviceKey ? String(lead.booking.serviceKey) : "";
-          if (!seedKey || !PRICING.items?.[seedKey]) {
-            // Derive from WO type + property zone count.
-            const zoneCount = Array.isArray(property?.system?.zones)
-              ? property.system.zones.length
-              : 0;
-            seedKey = deriveSeasonalKey(type, zoneCount, false) || "";
-          }
-          const catalogItem = seedKey ? PRICING.items?.[seedKey] : null;
-          if (catalogItem) {
-            // Year = the year the service is actually performed. Prefer
-            // the booking's scheduled start (what the customer paid for)
-            // and fall back to WO creation year.
+          const resolved = property
+            ? resolveSeasonalPrice(property, type)
+            : (() => {
+                // No property linked (ad-hoc WO from /admin/handoff).
+                // Fall back to the old booking-serviceKey path so the
+                // baseline still gets seeded from what the customer paid.
+                const fallbackKey = lead?.booking?.serviceKey && PRICING.items?.[lead.booking.serviceKey]
+                  ? String(lead.booking.serviceKey)
+                  : (deriveSeasonalKey(type, 0, false) || "");
+                const item = fallbackKey ? PRICING.items?.[fallbackKey] : null;
+                if (!item) return { price: 0, source: "custom_quote_required", custom: true, key: null };
+                if (item.quoteType === "custom") {
+                  return { price: 0, source: "custom_quote_required", custom: true, key: fallbackKey };
+                }
+                return {
+                  price: Math.round((Number(item.price) || 0) * 100) / 100,
+                  source: "pricing_json_tier",
+                  custom: false,
+                  key: fallbackKey
+                };
+              })();
+          if (resolved.custom) {
+            // Custom-quote tier (16+ residential / 9+ commercial) and no
+            // override on the property — don't seed a meaningless $0 line.
+            // Tech adds lines manually on-site.
+            console.warn(`[wo-seed] ${wo.id}: custom-quote seasonal tier — no baseline seeded (tech adds on-site)`);
+          } else {
             const refDate = lead?.booking?.start
               ? new Date(lead.booking.start)
               : new Date(wo.scheduledFor || wo.createdAt || Date.now());
             const refYear = refDate.getUTCFullYear();
             const typeLabel = type === "spring_opening" ? "Spring Opening" : "Fall Closing";
             const seasonalLine = {
-              key: seedKey,
+              // When resolved from an override the line has no
+              // pricing.json key — use the derived tier key as a stable
+              // analytics fingerprint, falling back to the derived key
+              // even if not used for pricing.
+              key: resolved.key || deriveSeasonalKey(type, Array.isArray(property?.system?.zones) ? property.system.zones.length : 0, false) || "",
               label: `${typeLabel} (${refYear})`,
               qty: 1,
-              originalPrice: Math.round((Number(catalogItem.price) || 0) * 100) / 100,
+              originalPrice: resolved.price,
               overridePrice: null,
               custom: false,
               source: { zoneNumbers: [], issueIds: [], baseline: true },
-              note: ""
+              note: resolved.source === "property_override" ? "Per-property rate" : ""
             };
+            const builderLineItems = [seasonalLine];
+            // Optional additional fall-closing plumbing line.
+            const sp = property?.seasonalPricing || {};
+            if (type === "fall_closing" && sp.hasAdditionalFallBlowout === true) {
+              const addlPrice = Number(sp.additionalFallBlowoutPrice);
+              if (Number.isFinite(addlPrice) && addlPrice >= 0) {
+                const desc = String(sp.additionalFallBlowoutDescription || "").trim() || "Additional plumbing";
+                builderLineItems.push({
+                  key: "fall_additional_plumbing",
+                  label: `Additional plumbing blow-out — ${desc}`,
+                  qty: 1,
+                  originalPrice: Math.round(addlPrice * 100) / 100,
+                  overridePrice: null,
+                  custom: false,
+                  source: {
+                    zoneNumbers: [],
+                    issueIds: [],
+                    baseline: true,
+                    propertyAdditionalFallBlowout: true
+                  },
+                  note: ""
+                });
+              }
+            }
             const seededWo = await workOrders.update(wo.id, {
               onSiteQuote: {
                 ...wo.onSiteQuote,
                 status: "draft",
                 lastBuiltAt: new Date().toISOString(),
-                builderLineItems: [seasonalLine]
+                builderLineItems
               }
             });
             if (seededWo) wo = seededWo;
-          } else {
-            console.warn(`[wo-seed] no pricing.json entry for serviceKey ${seedKey}; WO created without seasonal fee line`);
           }
         } catch (err) {
           console.warn("[wo-seed] seasonal-fee seed failed:", err?.message);
@@ -8207,49 +8337,82 @@ async function handleApi(req, res, pathname) {
     // line with source.baseline === true is the fingerprint that says
     // "already seeded, leave alone."
     //
-    // Same key derivation order as the create path: lead.booking.serviceKey
-    // first, then deriveSeasonalKey(type, propertyZoneCount). Without the
-    // fallback, WOs created without a booking serviceKey could never
-    // self-heal — the bug Patrick hit when a fresh spring opening WO
-    // showed up with no service-fee line.
+    // Mirrors the create-time seed: resolveSeasonalPrice() applies the
+    // property override → tier → custom-quote cascade. For fall_closing
+    // on a property with hasAdditionalFallBlowout, seeds the second
+    // baseline line too. Snapshot-at-seed-time semantics still hold —
+    // the WO doesn't track property edits after this point.
     if (wo.type === "spring_opening" || wo.type === "fall_closing") {
       const existingBuilder = Array.isArray(wo.onSiteQuote?.builderLineItems) ? wo.onSiteQuote.builderLineItems : [];
       const hasBaseline = existingBuilder.some((l) => l && l.source && l.source.baseline === true);
       if (!hasBaseline) {
-        let seedKey = lead?.booking?.serviceKey ? String(lead.booking.serviceKey) : "";
-        if (!seedKey || !PRICING.items?.[seedKey]) {
-          const zoneCount = Array.isArray(property?.system?.zones)
-            ? property.system.zones.length
-            : 0;
-          seedKey = deriveSeasonalKey(wo.type, zoneCount, false) || "";
-        }
-        const catalogItem = seedKey ? PRICING.items?.[seedKey] : null;
-        if (catalogItem) {
+        const resolved = property
+          ? resolveSeasonalPrice(property, wo.type)
+          : (() => {
+              const fallbackKey = lead?.booking?.serviceKey && PRICING.items?.[lead.booking.serviceKey]
+                ? String(lead.booking.serviceKey)
+                : (deriveSeasonalKey(wo.type, 0, false) || "");
+              const item = fallbackKey ? PRICING.items?.[fallbackKey] : null;
+              if (!item) return { price: 0, source: "custom_quote_required", custom: true, key: null };
+              if (item.quoteType === "custom") {
+                return { price: 0, source: "custom_quote_required", custom: true, key: fallbackKey };
+              }
+              return {
+                price: Math.round((Number(item.price) || 0) * 100) / 100,
+                source: "pricing_json_tier",
+                custom: false,
+                key: fallbackKey
+              };
+            })();
+        if (!resolved.custom) {
           const refDate = lead?.booking?.start
             ? new Date(lead.booking.start)
             : new Date(wo.scheduledFor || wo.createdAt || Date.now());
           const refYear = refDate.getUTCFullYear();
           const typeLabel = wo.type === "spring_opening" ? "Spring Opening" : "Fall Closing";
           const seasonalLine = {
-            key: seedKey,
+            key: resolved.key || deriveSeasonalKey(wo.type, Array.isArray(property?.system?.zones) ? property.system.zones.length : 0, false) || "",
             label: `${typeLabel} (${refYear})`,
             qty: 1,
-            originalPrice: Math.round((Number(catalogItem.price) || 0) * 100) / 100,
+            originalPrice: resolved.price,
             overridePrice: null,
             custom: false,
             source: { zoneNumbers: [], issueIds: [], baseline: true },
-            note: ""
+            note: resolved.source === "property_override" ? "Per-property rate" : ""
           };
+          const seededLines = [seasonalLine];
+          const sp = property?.seasonalPricing || {};
+          if (wo.type === "fall_closing" && sp.hasAdditionalFallBlowout === true) {
+            const addlPrice = Number(sp.additionalFallBlowoutPrice);
+            if (Number.isFinite(addlPrice) && addlPrice >= 0) {
+              const desc = String(sp.additionalFallBlowoutDescription || "").trim() || "Additional plumbing";
+              seededLines.push({
+                key: "fall_additional_plumbing",
+                label: `Additional plumbing blow-out — ${desc}`,
+                qty: 1,
+                originalPrice: Math.round(addlPrice * 100) / 100,
+                overridePrice: null,
+                custom: false,
+                source: {
+                  zoneNumbers: [],
+                  issueIds: [],
+                  baseline: true,
+                  propertyAdditionalFallBlowout: true
+                },
+                note: ""
+              });
+            }
+          }
           try {
             wo = await workOrders.update(wo.id, {
               onSiteQuote: {
                 ...wo.onSiteQuote,
                 status: existingBuilder.length ? wo.onSiteQuote?.status : "draft",
                 lastBuiltAt: wo.onSiteQuote?.lastBuiltAt || new Date().toISOString(),
-                builderLineItems: [seasonalLine, ...existingBuilder]
+                builderLineItems: [...seededLines, ...existingBuilder]
               }
             });
-            console.log(`[wo-self-heal] seeded seasonal fee on ${wo.id} (${seedKey}, $${catalogItem.price})`);
+            console.log(`[wo-self-heal] seeded seasonal fee on ${wo.id} (${resolved.source}, $${resolved.price}${seededLines.length > 1 ? ` + $${seededLines[1].originalPrice} additional` : ""})`);
           } catch (err) {
             console.warn("[wo-self-heal] seed failed:", err?.message);
           }

@@ -226,6 +226,22 @@ function blankProperty() {
       springOpening: true,
       fallClosing: true
     },
+    // Per-property seasonal pricing (feature-per-property-seasonal-
+    // pricing-brief.md). Spring/fall override the pricing.json tier
+    // when set; null/undefined falls back to the zone-tier lookup via
+    // pricing.resolveSeasonalPrice(). hasAdditionalFallBlowout drives
+    // a second baseline line on fall_closing WOs AND attaches the
+    // `fall_additional_plumbing` disclaimer to the resulting invoice.
+    // The Customer service_call rate ($95) is NOT overridable here —
+    // resolveSeasonalPrice() refuses any service type other than
+    // 'spring_opening' / 'fall_closing'.
+    seasonalPricing: {
+      springOpeningPrice: null,
+      fallClosingPrice: null,
+      hasAdditionalFallBlowout: false,
+      additionalFallBlowoutPrice: null,
+      additionalFallBlowoutDescription: ""
+    },
     seasonalOutreach: {},
     commPrefs: {
       seasonalRemindersSMS: true,
@@ -291,6 +307,42 @@ function hydrateDeferred(entry) {
   };
 }
 
+// Coerce a stored or incoming seasonalPricing object into a clean shape.
+// Used by hydrate() at read time AND by update() at write time so the
+// conditional rule (hasAdditionalFallBlowout === false → strip the two
+// dependent fields) holds at every persistence boundary. Pure function —
+// returns a fresh object, doesn't mutate input.
+//
+// Rules per feature-per-property-seasonal-pricing-brief.md §3.1:
+//   springOpeningPrice / fallClosingPrice / additionalFallBlowoutPrice:
+//     finite non-negative number → kept (rounded to cents)
+//     otherwise (null, "", undefined, NaN, negative) → null
+//   hasAdditionalFallBlowout: Boolean coerced
+//   additionalFallBlowoutDescription: trimmed string, max 200 chars
+//   When hasAdditionalFallBlowout === false: the two dependent fields
+//     are forced to null/"".
+function normalizeMoney(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0) return null;
+  return Math.round(n * 100) / 100;
+}
+
+function hydrateSeasonalPricing(raw) {
+  const src = (raw && typeof raw === "object") ? raw : {};
+  const hasAdditional = src.hasAdditionalFallBlowout === true;
+  const out = {
+    springOpeningPrice: normalizeMoney(src.springOpeningPrice),
+    fallClosingPrice:   normalizeMoney(src.fallClosingPrice),
+    hasAdditionalFallBlowout: hasAdditional,
+    additionalFallBlowoutPrice:
+      hasAdditional ? normalizeMoney(src.additionalFallBlowoutPrice) : null,
+    additionalFallBlowoutDescription:
+      hasAdditional ? String(src.additionalFallBlowoutDescription || "").trim().slice(0, 200) : ""
+  };
+  return out;
+}
+
 // Backfill any missing keys on properties read from disk so older records
 // keep working as the schema grows. Pure shape-merge, no value mutation.
 function hydrate(p) {
@@ -310,6 +362,7 @@ function hydrate(p) {
       ...base.seasonalEligibility,
       ...(p?.seasonalEligibility || {})
     },
+    seasonalPricing: hydrateSeasonalPricing(p?.seasonalPricing),
     seasonalOutreach: (p?.seasonalOutreach && typeof p.seasonalOutreach === "object")
       ? p.seasonalOutreach
       : {},
@@ -644,10 +697,19 @@ async function update(id, patch) {
   }
 
   // Patch is shallow-merged at the top level. `system`,
-  // `seasonalEligibility`, and `commPrefs` are merged one level deep
-  // so the admin page can update individual sub-fields without
-  // resending the whole block (and, critically, without wiping the
-  // commPrefs.optOutTokens secrets that aren't surfaced in the UI).
+  // `seasonalEligibility`, `seasonalPricing`, and `commPrefs` are
+  // merged one level deep so the admin page can update individual
+  // sub-fields without resending the whole block (and, critically,
+  // without wiping the commPrefs.optOutTokens secrets that aren't
+  // surfaced in the UI). seasonalPricing then re-normalizes the merged
+  // result so the conditional rule (cabana off → null the dependent
+  // fields) holds even when the patch sets one field at a time.
+  const mergedSeasonalPricing = patch && Object.prototype.hasOwnProperty.call(patch, "seasonalPricing")
+    ? hydrateSeasonalPricing({
+        ...(current.seasonalPricing || {}),
+        ...(patch.seasonalPricing || {})
+      })
+    : current.seasonalPricing;
   const next = {
     ...current,
     ...patch,
@@ -656,6 +718,7 @@ async function update(id, patch) {
       ...(current.seasonalEligibility || {}),
       ...(patch.seasonalEligibility || {})
     },
+    seasonalPricing: mergedSeasonalPricing,
     commPrefs: patch.commPrefs
       ? {
           ...(current.commPrefs || {}),

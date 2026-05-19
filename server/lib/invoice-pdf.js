@@ -24,6 +24,7 @@
 const PDFDocument = require("pdfkit");
 const fsSync = require("node:fs");
 const path = require("node:path");
+const { INVOICE_DISCLAIMERS } = require("./invoices");
 
 // ---- Brand palette (matches _design/invoice-pdf-preview.html) -------
 const GREEN = "#1B4D2E";
@@ -191,6 +192,13 @@ function normalize(raw) {
     + "Warranty: 1 year on repairs, 3 years on full installs.";
   const terms = inv.terms || "Due on completion";
 
+  // Disclaimers — resolve keys to { title, body } pairs using the
+  // single-source-of-truth INVOICE_DISCLAIMERS map. Unknown keys drop
+  // silently (same as hydrate semantics on the JSON side).
+  const disclaimers = (Array.isArray(inv.disclaimers) ? inv.disclaimers : [])
+    .map((k) => (typeof k === "string" && INVOICE_DISCLAIMERS[k]) ? { key: k, ...INVOICE_DISCLAIMERS[k] } : null)
+    .filter(Boolean);
+
   return {
     id: inv.id || "",
     status,
@@ -213,6 +221,7 @@ function normalize(raw) {
     taxAmount,
     total,
     noteToCustomer,
+    disclaimers,
     portalToken: inv.portalToken || null,
     eTransferEmail: inv.eTransferEmail || "info@pjllandservices.com"
   };
@@ -261,6 +270,7 @@ function generateInvoicePdf(rawInvoice) {
       drawCustomerBand(doc, inv);
       drawDetailsStrip(doc, inv);
       drawLineItems(doc, inv);
+      drawDisclaimers(doc, inv);
       drawBottomSplit(doc, inv);
       drawFooter(doc);
 
@@ -507,6 +517,57 @@ function drawLineItems(doc, inv) {
   }
 
   doc.y = y + 2;
+  doc.x = MARGIN_X;
+}
+
+// ---- Disclaimers ----------------------------------------------------
+// Amber-tint callout block below the line items, above the bottom
+// split. One card per attached disclaimer key. Page-break safe — if the
+// next disclaimer wouldn't fit before the bottom split (which the
+// caller pushes to a new page when y > 640), add a page first so the
+// callout doesn't get clipped.
+function drawDisclaimers(doc, inv) {
+  if (!Array.isArray(inv.disclaimers) || inv.disclaimers.length === 0) return;
+  const startY = doc.y + 8;
+  const padX = 14;
+  const padY = 10;
+  let y = startY;
+  for (const d of inv.disclaimers) {
+    // Conservative height estimate: title (16pt) + 4pt gap + body wrap.
+    // pdfkit's heightOfString is the source of truth for the wrap.
+    const bodyHeight = doc.font(fontBody()).fontSize(10).heightOfString(d.body, {
+      width: CONTENT_W - padX * 2,
+      lineGap: 2
+    });
+    const cardH = padY * 2 + 16 + 4 + bodyHeight;
+    // Page-break safety. Bottom split needs ~180pt of room — if this
+    // disclaimer would push y past 600, paginate.
+    if (y + cardH > 600) {
+      doc.addPage();
+      y = MARGIN_X;
+    }
+    // Amber-tint background + left border.
+    doc.save();
+    doc.rect(MARGIN_X, y, CONTENT_W, cardH).fill("#FFF8EC");
+    doc.rect(MARGIN_X, y, 4, cardH).fill(AMBER);
+    doc.restore();
+    doc.strokeColor("#E3B97A").lineWidth(0.5);
+    doc.rect(MARGIN_X, y, CONTENT_W, cardH).stroke();
+    // Title
+    doc.font(fontHeading(doc)).fontSize(11).fillColor("#6B3A09");
+    doc.text(d.title, MARGIN_X + padX, y + padY, {
+      width: CONTENT_W - padX * 2,
+      characterSpacing: 0.8
+    });
+    // Body
+    doc.font(fontBody()).fontSize(10).fillColor("#2B2A26");
+    doc.text(d.body, MARGIN_X + padX, y + padY + 16 + 4, {
+      width: CONTENT_W - padX * 2,
+      lineGap: 2
+    });
+    y += cardH + 6;
+  }
+  doc.y = y + 4;
   doc.x = MARGIN_X;
 }
 

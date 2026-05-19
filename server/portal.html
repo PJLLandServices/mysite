@@ -73,6 +73,32 @@
           <div><dt>Controller</dt><dd id="portalPropertyController">—</dd></div>
           <div><dt>On file for</dt><dd id="portalPropertyContact">—</dd></div>
         </dl>
+        <!-- Read-only seasonal pricing
+             (feature-per-property-seasonal-pricing-brief.md §3.5). The
+             customer sees what their next seasonal visit will be billed
+             at — resolved server-side (override → tier → custom). When
+             the fall additional plumbing toggle is on, the additional
+             line is shown separately so the customer can recognize it
+             on their invoice. Custom-quote tiers are surfaced as
+             "Custom quote — confirmed on-site". -->
+        <section class="portal-property-seasonal" id="portalPropertySeasonal" hidden style="margin: 16px 0 0; padding: 14px 16px; background: rgba(27,77,46,0.04); border: 1px solid rgba(27,77,46,0.18); border-radius: 8px;">
+          <h3 style="margin: 0 0 8px; font-size: 14px; font-weight: 600; color: #1B4D2E; text-transform: uppercase; letter-spacing: 0.04em;">Seasonal services at this property</h3>
+          <dl style="margin: 0; display: grid; gap: 6px;">
+            <div id="portalPropertySpringRow" hidden style="display: flex; justify-content: space-between; gap: 12px;">
+              <dt style="margin: 0; color: #555;">Spring opening</dt>
+              <dd style="margin: 0; font-weight: 600;" id="portalPropertySpringPrice">—</dd>
+            </div>
+            <div id="portalPropertyFallRow" hidden style="display: flex; justify-content: space-between; gap: 12px;">
+              <dt style="margin: 0; color: #555;">Fall closing</dt>
+              <dd style="margin: 0; font-weight: 600;" id="portalPropertyFallPrice">—</dd>
+            </div>
+            <div id="portalPropertyFallAddRow" hidden style="display: flex; justify-content: space-between; gap: 12px; font-size: 13px;">
+              <dt style="margin: 0; padding-left: 14px; color: #555;" id="portalPropertyFallAddLabel">↳ Additional plumbing blow-out</dt>
+              <dd style="margin: 0; font-weight: 600;" id="portalPropertyFallAddPrice">—</dd>
+            </div>
+          </dl>
+          <p id="portalPropertySeasonalNote" hidden style="margin: 10px 0 0; font-size: 12px; color: #555; font-style: italic;"></p>
+        </section>
         <div class="portal-property-actions">
           <button type="button" class="portal-btn portal-btn-primary" id="portalPropertyBookBtn">Book your appointment →</button>
           <p class="portal-property-note">

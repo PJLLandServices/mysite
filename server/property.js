@@ -598,7 +598,7 @@ function populateCustomerDisplay(property) {
   }
 }
 
-function populateForm(property) {
+function populateForm(property, seasonalPricingResolved) {
   // Customer identity is now read-only in this section — populate the
   // display block instead of input fields. Source of truth: the
   // Customer record (CUST-NNNN) reached via property.customerId; the
@@ -634,7 +634,58 @@ function populateForm(property) {
   if (propertyForm.elements.prefEmail) {
     propertyForm.elements.prefEmail.checked = prefs.seasonalRemindersEmail !== false;
   }
+  populateSeasonalPricing(property.seasonalPricing || {}, seasonalPricingResolved || null);
 }
+
+// Hydrate the Seasonal Pricing card: override fields, cabana toggle,
+// conditional sub-rows. Hint line under each override input shows the
+// server-resolved value with a (override) / (default tier — N zones) /
+// (custom quote) tag, so Patrick can see what the WO seeder will use
+// without doing tier-arithmetic in his head.
+function populateSeasonalPricing(sp, resolved) {
+  const springInput = document.getElementById("seasonalSpringPrice");
+  const fallInput   = document.getElementById("seasonalFallPrice");
+  const springHint  = document.getElementById("seasonalSpringHint");
+  const fallHint    = document.getElementById("seasonalFallHint");
+  const yesRadio    = document.getElementById("seasonalAdditionalFallYes");
+  const noRadio     = document.getElementById("seasonalAdditionalFallNo");
+  const subFields   = document.getElementById("seasonalAdditionalFallFields");
+  const descInput   = document.getElementById("seasonalAdditionalFallDescription");
+  const priceInput  = document.getElementById("seasonalAdditionalFallPrice");
+  if (!springInput || !fallInput || !yesRadio || !noRadio || !subFields) return;
+
+  springInput.value = (sp.springOpeningPrice !== null && sp.springOpeningPrice !== undefined) ? sp.springOpeningPrice : "";
+  fallInput.value   = (sp.fallClosingPrice   !== null && sp.fallClosingPrice   !== undefined) ? sp.fallClosingPrice   : "";
+  if (sp.hasAdditionalFallBlowout === true) { yesRadio.checked = true; noRadio.checked = false; }
+  else { noRadio.checked = true; yesRadio.checked = false; }
+  descInput.value  = sp.additionalFallBlowoutDescription || "";
+  priceInput.value = (sp.additionalFallBlowoutPrice !== null && sp.additionalFallBlowoutPrice !== undefined) ? sp.additionalFallBlowoutPrice : "";
+  applyAdditionalFallVisibility();
+
+  if (springHint) springHint.textContent = formatResolvedHint(resolved?.spring_opening);
+  if (fallHint)   fallHint.textContent   = formatResolvedHint(resolved?.fall_closing);
+}
+
+function formatResolvedHint(r) {
+  if (!r) return "—";
+  if (r.source === "property_override") return `In use: $${Number(r.price).toFixed(2)} (override)`;
+  if (r.source === "custom_quote_required") return `In use: Custom quote (${r.zoneCount || 0} zones — no tier price)`;
+  if (r.source === "pricing_json_tier") return `In use: $${Number(r.price).toFixed(2)} (default tier — ${r.zoneCount || 0} zones)`;
+  return "—";
+}
+
+function applyAdditionalFallVisibility() {
+  const yesRadio    = document.getElementById("seasonalAdditionalFallYes");
+  const subFields   = document.getElementById("seasonalAdditionalFallFields");
+  const priceInput  = document.getElementById("seasonalAdditionalFallPrice");
+  if (!yesRadio || !subFields) return;
+  const on = yesRadio.checked;
+  subFields.hidden = !on;
+  if (priceInput) priceInput.required = on;
+}
+
+document.getElementById("seasonalAdditionalFallYes")?.addEventListener("change", applyAdditionalFallVisibility);
+document.getElementById("seasonalAdditionalFallNo")?.addEventListener("change", applyAdditionalFallVisibility);
 
 function collectForm() {
   const zones = Array.from(zonesList.querySelectorAll(".property-zone-row"))
@@ -686,7 +737,36 @@ function collectForm() {
     commPrefs: {
       seasonalRemindersSMS: Boolean(propertyForm.elements.prefSms?.checked),
       seasonalRemindersEmail: Boolean(propertyForm.elements.prefEmail?.checked)
-    }
+    },
+    seasonalPricing: collectSeasonalPricing()
+  };
+}
+
+// Build the seasonalPricing patch from the form. Empty override inputs
+// emit null so the server normalizes back to "use tier default."
+// Cabana off forces the dependent fields to null/empty regardless of
+// what the (potentially still-hidden-but-DOM-present) inputs hold —
+// belt-and-suspenders for the lib's hydrateSeasonalPricing.
+function collectSeasonalPricing() {
+  const springEl  = document.getElementById("seasonalSpringPrice");
+  const fallEl    = document.getElementById("seasonalFallPrice");
+  const yesEl     = document.getElementById("seasonalAdditionalFallYes");
+  const descEl    = document.getElementById("seasonalAdditionalFallDescription");
+  const priceEl   = document.getElementById("seasonalAdditionalFallPrice");
+  function numOrNull(el) {
+    if (!el) return null;
+    const raw = String(el.value || "").trim();
+    if (!raw) return null;
+    const n = Number(raw);
+    return Number.isFinite(n) && n >= 0 ? Math.round(n * 100) / 100 : null;
+  }
+  const has = !!(yesEl && yesEl.checked);
+  return {
+    springOpeningPrice: numOrNull(springEl),
+    fallClosingPrice:   numOrNull(fallEl),
+    hasAdditionalFallBlowout: has,
+    additionalFallBlowoutPrice:       has ? numOrNull(priceEl) : null,
+    additionalFallBlowoutDescription: has ? String(descEl?.value || "").trim().slice(0, 200) : ""
   };
 }
 
@@ -706,8 +786,12 @@ propertyForm.addEventListener("submit", async (event) => {
     if (!response.ok || !data.ok) throw new Error((data.errors || ["Save failed."]).join(" "));
     saveStatus.textContent = "Saved";
     setTimeout(() => { saveStatus.textContent = ""; }, 2000);
-    // Reflect anything the server normalized (e.g. addressNormalized).
-    populateForm(data.property);
+    // Reflect anything the server normalized (e.g. addressNormalized,
+    // seasonalPricing cabana-off → cleared dependent fields). The PATCH
+    // response doesn't carry seasonalPricingResolved — re-fetch the
+    // hints by computing them from the resolved override values when
+    // present, otherwise mark them as stale until the next page load.
+    populateForm(data.property, data.seasonalPricingResolved || null);
   } catch (err) {
     saveStatus.textContent = err.message || "Couldn't save.";
   } finally {
@@ -825,7 +909,7 @@ async function init() {
     propertyLoading.hidden = true;
     propertyForm.hidden = false;
     renderHero(data.property, data.leads || []);
-    populateForm(data.property);
+    populateForm(data.property, data.seasonalPricingResolved || null);
     renderLeadsList(data.leads || []);
     renderFieldWoList(data.property);
     renderDeferredRecommendations(data.property);

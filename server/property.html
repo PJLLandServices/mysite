@@ -158,6 +158,58 @@
         <div class="property-valveboxes" id="valveBoxesList"></div>
       </section>
 
+      <!-- Per-property seasonal pricing
+           (feature-per-property-seasonal-pricing-brief.md). Spring and
+           fall override the pricing.json tier when set; leave blank to
+           use the zone-tier default. The cabana toggle drives a second
+           baseline line on fall_closing WOs and attaches the
+           "Fall Closing Notice — Additional Plumbing / Cabana Blow-Out"
+           disclaimer to the resulting invoice. Edits apply to FUTURE
+           work orders only — existing WOs keep their snapshotted lines. -->
+      <section class="property-section property-seasonal-pricing">
+        <h2>Seasonal pricing</h2>
+        <p class="property-section-help">Per-property override for spring opening and fall closing. Leave blank to use the zone-tier default from pricing.json. Changes apply to new work orders only — existing scheduled jobs keep their original pricing.</p>
+
+        <div class="property-row">
+          <label>
+            <span>Spring opening price (override)</span>
+            <input type="number" name="seasonalSpringPrice" id="seasonalSpringPrice" min="0" step="0.01" placeholder="Use default">
+            <small class="property-section-hint" id="seasonalSpringHint" style="display: block; margin-top: 4px; font-size: 12px; color: var(--crm-muted, #666);">—</small>
+          </label>
+          <label>
+            <span>Fall closing price (override)</span>
+            <input type="number" name="seasonalFallPrice" id="seasonalFallPrice" min="0" step="0.01" placeholder="Use default">
+            <small class="property-section-hint" id="seasonalFallHint" style="display: block; margin-top: 4px; font-size: 12px; color: var(--crm-muted, #666);">—</small>
+          </label>
+        </div>
+
+        <fieldset style="border: none; padding: 0; margin: 18px 0 0;">
+          <legend style="font-size: 12px; font-weight: 600; color: #555; text-transform: uppercase; letter-spacing: 0.04em; padding: 0 0 8px;">Additional fall blow-out</legend>
+          <p class="property-section-help" style="margin: 0 0 10px;">Is there a cabana, pool house, or other plumbing connected to the irrigation main that needs blowing out in the fall?</p>
+          <div role="radiogroup" aria-label="Additional plumbing to blow out in fall" style="display: flex; gap: 16px; align-items: center; margin-bottom: 8px;">
+            <label class="property-toggle" style="display: inline-flex; align-items: center; gap: 6px;">
+              <input type="radio" name="seasonalAdditionalFall" value="yes" id="seasonalAdditionalFallYes">
+              <span>Yes</span>
+            </label>
+            <label class="property-toggle" style="display: inline-flex; align-items: center; gap: 6px;">
+              <input type="radio" name="seasonalAdditionalFall" value="no" id="seasonalAdditionalFallNo" checked>
+              <span>No</span>
+            </label>
+          </div>
+          <div class="property-row" id="seasonalAdditionalFallFields" hidden style="margin-top: 12px; padding: 12px; background: #fafaf7; border-left: 3px solid #1b4d2e; border-radius: 4px;">
+            <label class="property-full">
+              <span>What plumbing? (cabana, pool house, remote hose bib, etc.)</span>
+              <input type="text" name="seasonalAdditionalFallDescription" id="seasonalAdditionalFallDescription" maxlength="200" placeholder="e.g. Pool cabana + outdoor shower" data-voice-input>
+            </label>
+            <label>
+              <span>Additional cost ($)</span>
+              <input type="number" name="seasonalAdditionalFallPrice" id="seasonalAdditionalFallPrice" min="0" step="0.01" placeholder="0.00">
+            </label>
+          </div>
+          <p class="property-section-help" style="margin: 10px 0 0; font-style: italic;">When enabled, fall-closing work orders for this property will carry a second baseline line for the additional plumbing, and the resulting invoice will include a written notice that PJL can't assume liability for the cabana plumbing over winter.</p>
+        </fieldset>
+      </section>
+
       <!-- Seasonal outreach controls (feature-seasonal-outreach-brief.md
            §3.1 + §3.4). Eligibility decides whether this property shows
            up in the /admin/outreach candidates list at all; comm prefs
@@ -314,6 +366,7 @@
     </div>
   </div>
 
+  <script src="/voice-input.js"></script>
   <script src="/crm/property.js"></script>
   <script src="/coverage-checker.js"></script>
     <script async defer src="https://maps.googleapis.com/maps/api/js?key=AIzaSyBrORBeXbpNTJvoi2PDhDDs6Iy-BGSU30M&libraries=places&callback=initCoverageCheck&loading=async"></script>

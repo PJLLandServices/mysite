@@ -609,6 +609,12 @@ function renderPropertyPortal(payload) {
   const contactBits = [payload.customerName, payload.email, payload.phone].filter(Boolean);
   contactEl.textContent = contactBits.join(" · ") || "—";
 
+  // Seasonal services block — server-resolved prices, read-only. Customer
+  // sees the override or tier-default value but never "(override)" tags
+  // (those are internal). Custom-quote tiers hide their row (the
+  // customer doesn't have a price yet to show).
+  renderPortalPropertySeasonal(payload.seasonalPricing || null);
+
   // Recent service records — small continuity touch ("we were here
   // in Apr 2025, want us back?"). Hidden when there's no history.
   if (Array.isArray(payload.recentServices) && payload.recentServices.length) {
@@ -650,6 +656,51 @@ function renderPropertyPortal(payload) {
   };
 
   document.getElementById("portalPropertySection").hidden = false;
+}
+
+function renderPortalPropertySeasonal(seasonal) {
+  const wrap = document.getElementById("portalPropertySeasonal");
+  if (!wrap) return;
+  if (!seasonal) { wrap.hidden = true; return; }
+  const fmt = (n) => "$" + Number(n).toFixed(2);
+  const springRow  = document.getElementById("portalPropertySpringRow");
+  const springEl   = document.getElementById("portalPropertySpringPrice");
+  const fallRow    = document.getElementById("portalPropertyFallRow");
+  const fallEl     = document.getElementById("portalPropertyFallPrice");
+  const fallAddRow = document.getElementById("portalPropertyFallAddRow");
+  const fallAddEl  = document.getElementById("portalPropertyFallAddPrice");
+  const fallAddLbl = document.getElementById("portalPropertyFallAddLabel");
+  const noteEl     = document.getElementById("portalPropertySeasonalNote");
+
+  let anyShown = false;
+  if (seasonal.springOpening && Number.isFinite(Number(seasonal.springOpening.price))) {
+    springRow.hidden = false;
+    springEl.textContent = fmt(seasonal.springOpening.price);
+    anyShown = true;
+  } else { springRow.hidden = true; }
+
+  if (seasonal.fallClosing && Number.isFinite(Number(seasonal.fallClosing.price))) {
+    fallRow.hidden = false;
+    fallEl.textContent = fmt(seasonal.fallClosing.price);
+    anyShown = true;
+    const add = seasonal.fallClosing.additional;
+    if (add && Number.isFinite(Number(add.price))) {
+      fallAddRow.hidden = false;
+      fallAddEl.textContent = fmt(add.price);
+      if (add.description) fallAddLbl.textContent = `↳ Additional plumbing — ${add.description}`;
+      noteEl.hidden = false;
+      noteEl.textContent = "Includes additional plumbing not covered by the standard sprinkler-system blow-out. We'll confirm with you when we arrive.";
+    } else {
+      fallAddRow.hidden = true;
+      noteEl.hidden = true;
+    }
+  } else {
+    fallRow.hidden = true;
+    fallAddRow.hidden = true;
+    noteEl.hidden = true;
+  }
+
+  wrap.hidden = !anyShown;
 }
 
 acceptButton.addEventListener("click", async () => {

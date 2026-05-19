@@ -25,6 +25,30 @@ const HST_RATE = 0.13;
 
 const STATUSES = ["draft", "sent", "paid", "void"];
 
+// Invoice disclaimers — keyed by stable slug, rendered verbatim below
+// the line items in both the admin editor and the customer PDF.
+// (feature-per-property-seasonal-pricing-brief.md §3.6 + §3.7).
+// Adding a new disclaimer means adding one key + body here; the
+// rendering surfaces look the array up by slug.
+//
+// The fall_additional_plumbing disclaimer is attached by the completion
+// cascade when a fall_closing WO completes for a property flagged with
+// seasonalPricing.hasAdditionalFallBlowout === true. The text is
+// Patrick's verbatim language (tightened em-dashes, "cabana / additional"
+// spacing fixed) — do not paraphrase.
+const INVOICE_DISCLAIMERS = {
+  fall_additional_plumbing: {
+    title: "Fall Closing Notice — Additional Plumbing / Cabana Blow-Out",
+    body:
+      "We would like to confirm that the fall closing of the cabana / additional " +
+      "plumbing attached to your sprinkler system water main has been completed. " +
+      "While PJL Land Services possesses extensive knowledge of plumbing systems " +
+      "and best practices for ensuring an efficient and thorough closing, we must " +
+      "inform you that we cannot assume liability for any issues that may arise " +
+      "over the winter months."
+  }
+};
+
 async function ensureFile() {
   await fs.mkdir(path.dirname(FILE), { recursive: true });
   if (!fsSync.existsSync(FILE)) {
@@ -80,6 +104,14 @@ function hydrate(inv) {
     // sending or marking paid — this flag is informational, not a
     // status accelerant. Brief C / spec §4.3.2.
     paidOnSiteAtCompletion: inv?.paidOnSiteAtCompletion === true,
+    // Disclaimer keys (not text — text lives in INVOICE_DISCLAIMERS).
+    // Dedupe via Set on read so re-fires can never produce duplicates.
+    // Unknown keys are silently dropped — adding a new disclaimer
+    // requires adding its text to the constant first, otherwise the
+    // rendering surfaces would render an empty block.
+    disclaimers: Array.isArray(inv?.disclaimers)
+      ? Array.from(new Set(inv.disclaimers.filter((k) => typeof k === "string" && INVOICE_DISCLAIMERS[k])))
+      : [],
     createdAt: inv?.createdAt || new Date().toISOString(),
     updatedAt: inv?.updatedAt || new Date().toISOString(),
     history: Array.isArray(inv?.history) ? inv.history : []
@@ -155,7 +187,8 @@ async function createDraft({
   address = "",
   lineItems = [],
   notes = "",
-  paidOnSiteAtCompletion = false
+  paidOnSiteAtCompletion = false,
+  disclaimers = []
 }) {
   // Brief 4 — auto-resolve customerId from email/phone if missing.
   // The completion cascade passes wo.customerId directly post-Brief 2,
@@ -208,15 +241,23 @@ async function createDraft({
     total: totals.total,
     notes,
     paidOnSiteAtCompletion: paidOnSiteAtCompletion === true,
+    disclaimers: Array.isArray(disclaimers) ? disclaimers : [],
     createdAt: now,
     updatedAt: now,
     history: [{
       ts: now,
       action: "draft_created",
       by: "system",
-      note: paidOnSiteAtCompletion === true
-        ? (woId ? `From WO ${woId} — paid on-site at completion` : "Paid on-site at completion")
-        : (woId ? `From WO ${woId}` : "")
+      note: (() => {
+        const baseNote = paidOnSiteAtCompletion === true
+          ? (woId ? `From WO ${woId} — paid on-site at completion` : "Paid on-site at completion")
+          : (woId ? `From WO ${woId}` : "");
+        const validDisclaimers = (Array.isArray(disclaimers) ? disclaimers : [])
+          .filter((k) => typeof k === "string" && INVOICE_DISCLAIMERS[k]);
+        if (!validDisclaimers.length) return baseNote;
+        const disclaimerNote = `disclaimer${validDisclaimers.length === 1 ? "" : "s"} attached: ${validDisclaimers.join(", ")}`;
+        return baseNote ? `${baseNote} · ${disclaimerNote}` : disclaimerNote;
+      })()
     }]
   });
   records.unshift(inv);
@@ -240,6 +281,16 @@ async function update(id, patch) {
     next.subtotal = totals.subtotal;
     next.hst = totals.hst;
     next.total = totals.total;
+  }
+  // Disclaimers — merge via Set so a re-fire of the completion cascade
+  // (or a manual admin add of a different key in the future) never
+  // produces duplicates. Unknown keys are dropped on hydrate.
+  if (patch && Array.isArray(patch.disclaimers)) {
+    const merged = new Set([
+      ...(Array.isArray(current.disclaimers) ? current.disclaimers : []),
+      ...patch.disclaimers.filter((k) => typeof k === "string" && INVOICE_DISCLAIMERS[k])
+    ]);
+    next.disclaimers = Array.from(merged);
   }
   if (patch && patch.status === "sent" && !current.sentAt) next.sentAt = new Date().toISOString();
   if (patch && patch.status === "paid" && !current.paidAt) next.paidAt = new Date().toISOString();
@@ -320,6 +371,7 @@ async function appendHistory(id, entry) {
 module.exports = {
   STATUSES,
   HST_RATE,
+  INVOICE_DISCLAIMERS,
   list,
   get,
   listByWorkOrder,

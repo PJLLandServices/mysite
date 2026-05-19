@@ -220,6 +220,24 @@ async function run(wo, deps = {}) {
   // field-payment flag — the customer email + Patrick's invoice editor
   // both reshape on it, but the invoice STAYS in draft status (Patrick
   // reviews before sending or marking paid in QB). Spec §4.3.2.
+  //
+  // Disclaimer attachment
+  // (feature-per-property-seasonal-pricing-brief.md §3.8). A
+  // fall_closing WO completing on a property flagged with
+  // seasonalPricing.hasAdditionalFallBlowout carries the
+  // `fall_additional_plumbing` disclaimer key. Resolved against the
+  // LIVE property record so it tracks Patrick's current intent even
+  // when the WO was seeded before the toggle was flipped. Idempotent
+  // via Set semantics in invoices.update / hydrate.
+  const disclaimers = [];
+  if (wo.type === "fall_closing") {
+    try {
+      const liveProperty = await properties.get(wo.propertyId);
+      if (liveProperty?.seasonalPricing?.hasAdditionalFallBlowout === true) {
+        disclaimers.push("fall_additional_plumbing");
+      }
+    } catch (err) { console.warn("[cascade] disclaimer property fetch failed:", err?.message); }
+  }
   let invoice = null;
   let invoiceDraftError = null;
   if (lineItems.length) {
@@ -235,7 +253,8 @@ async function run(wo, deps = {}) {
         address: wo.address || "",
         lineItems,
         notes: wo.techNotes ? wo.techNotes.slice(0, 500) : "",
-        paidOnSiteAtCompletion: wo.paidOnSite === true
+        paidOnSiteAtCompletion: wo.paidOnSite === true,
+        disclaimers
       });
     } catch (err) {
       invoiceDraftError = err?.message || "createDraft threw";

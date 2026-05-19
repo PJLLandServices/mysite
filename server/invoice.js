@@ -19,6 +19,8 @@ function fmtDate(iso) {
 
 let currentInvoice = null;
 
+let currentDisclaimerObjects = [];
+
 async function load() {
   if (!idFromPath) return;
   const r = await fetch(`/api/invoices/${encodeURIComponent(idFromPath)}`, { cache: "no-store" });
@@ -28,6 +30,7 @@ async function load() {
     return;
   }
   currentInvoice = data.invoice;
+  currentDisclaimerObjects = Array.isArray(data.disclaimerObjects) ? data.disclaimerObjects : [];
   render(data.invoice);
 }
 
@@ -73,6 +76,26 @@ function render(inv) {
   document.getElementById("invoiceHst").textContent = fmt(inv.hst);
   document.getElementById("invoiceTotal").textContent = fmt(inv.total);
   document.getElementById("invoiceNotes").value = inv.notes || "";
+
+  // Disclaimer callouts (e.g. fall_additional_plumbing). Server returns
+  // the resolved { title, body } pairs in disclaimerObjects so the
+  // client doesn't carry a copy of the text. Rendered as one card per
+  // key, below totals, above terms.
+  const discEl = document.getElementById("invoiceDisclaimers");
+  if (discEl) {
+    if (!currentDisclaimerObjects.length) {
+      discEl.hidden = true;
+      discEl.innerHTML = "";
+    } else {
+      discEl.hidden = false;
+      discEl.innerHTML = currentDisclaimerObjects.map((d) => `
+        <article class="invoice-doc-disclaimer" data-key="${escapeHtml(d.key)}" style="margin: 14px 0 0; padding: 14px 16px; background: #fff8ec; border: 1px solid #e3b97a; border-left: 4px solid #c97824; border-radius: 6px;">
+          <h3 style="margin: 0 0 6px; font-size: 13px; font-weight: 700; color: #6b3a09; text-transform: uppercase; letter-spacing: 0.04em;">${escapeHtml(d.title)}</h3>
+          <p style="margin: 0; font-size: 13px; color: #2b2a26; line-height: 1.5;">${escapeHtml(d.body)}</p>
+        </article>
+      `).join("");
+    }
+  }
 
   const woLink = document.getElementById("invoiceWoLink");
   if (inv.woId) { woLink.href = `/admin/work-order/${encodeURIComponent(inv.woId)}`; woLink.textContent = inv.woId; }

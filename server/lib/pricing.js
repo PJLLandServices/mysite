@@ -146,4 +146,95 @@ function deriveSeasonalKey(woType, zoneCount = 0, commercial = false) {
   return isSpring ? (last.key_spring || null) : (last.key_fall || null);
 }
 
-module.exports = { priceForBooking, deriveSeasonalKey };
+// Resolve the canonical seasonal price for a property + service type.
+// Property override (property.seasonalPricing.springOpeningPrice or
+// fallClosingPrice) wins; falls back to the pricing.json tier lookup
+// by zone count via deriveSeasonalKey(). Per
+// feature-per-property-seasonal-pricing-brief.md §3.2 this is the
+// ONLY entry point for seasonal-fee resolution going forward —
+// priceForBooking() stays for non-seasonal services.
+//
+// service_call ($95 mobilization) is intentionally NOT overridable
+// per-property — the brief calls it out in §6. This helper enforces
+// that by refusing any service type other than spring_opening /
+// fall_closing.
+//
+// Args:
+//   property     — full property record (any shape; missing
+//                  seasonalPricing falls back cleanly)
+//   serviceType  — "spring_opening" | "fall_closing"
+//
+// Returns:
+//   {
+//     price: number,           // dollars (rounded to cents)
+//     source: "property_override" | "pricing_json_tier" | "custom_quote_required",
+//     label: string,           // "$120.00" or "Custom quote"
+//     custom: boolean,         // true when no flat price (caller must
+//                              // not seed a baseline line — surface a
+//                              // custom-quote banner instead)
+//     key:   string | null,    // pricing.json item key when tier-resolved
+//     zoneCount: number,       // input used for tier lookup (0 when no override hit)
+//     tier:  string | null     // human-readable tier label (e.g. "Spring opening — 7-8 zones residential")
+//   }
+function resolveSeasonalPrice(property, serviceType) {
+  if (serviceType !== "spring_opening" && serviceType !== "fall_closing") {
+    throw new Error(
+      `resolveSeasonalPrice: serviceType must be 'spring_opening' or 'fall_closing' (got '${serviceType}'). Per-property overrides do not apply to other services — service_call stays canonical.`
+    );
+  }
+  const sp = (property && typeof property === "object" && property.seasonalPricing && typeof property.seasonalPricing === "object")
+    ? property.seasonalPricing
+    : {};
+  const overrideField = serviceType === "spring_opening" ? "springOpeningPrice" : "fallClosingPrice";
+  const rawOverride = sp[overrideField];
+  if (rawOverride !== null && rawOverride !== undefined) {
+    const n = Number(rawOverride);
+    if (Number.isFinite(n) && n >= 0) {
+      const rounded = Math.round(n * 100) / 100;
+      return {
+        price: rounded,
+        source: "property_override",
+        label: "$" + formatMoney(rounded),
+        custom: false,
+        key: null,
+        zoneCount: 0,
+        tier: null
+      };
+    }
+  }
+  // Tier fallback. Zone count drives the bracket; missing zones bucket
+  // into the 1-4 tier (deriveSeasonalKey's existing behavior).
+  const zoneCount = Array.isArray(property?.system?.zones)
+    ? property.system.zones.length
+    : 0;
+  const key = deriveSeasonalKey(serviceType, zoneCount, false);
+  if (!key || !PRICING?.items?.[key]) {
+    // Defensive: pricing.json never has this state today, but guard so
+    // callers always get the documented shape.
+    return {
+      price: 0, source: "custom_quote_required",
+      label: "Custom quote", custom: true,
+      key, zoneCount, tier: null
+    };
+  }
+  const item = PRICING.items[key];
+  if (item.quoteType === "custom") {
+    return {
+      price: 0, source: "custom_quote_required",
+      label: "Custom quote", custom: true,
+      key, zoneCount, tier: item.label
+    };
+  }
+  const price = Math.round((Number(item.price) || 0) * 100) / 100;
+  return {
+    price,
+    source: "pricing_json_tier",
+    label: "$" + formatMoney(price),
+    custom: false,
+    key,
+    zoneCount,
+    tier: item.label
+  };
+}
+
+module.exports = { priceForBooking, deriveSeasonalKey, resolveSeasonalPrice };
