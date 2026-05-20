@@ -10565,17 +10565,29 @@ Customer signature captured at ${new Date().toISOString()}.`;
     try {
       const payload = await parseRequestBody(req);
 
-      // Anti-bot gate identical to /api/quotes. The booking flow is
-      // multi-step (service pick → address → slot pick → contact), so
-      // the time-trap is anchored on page load — bots that POST
-      // directly to this endpoint without rendering book.html trip it
-      // immediately. Rate-limit is shared across both lead-intake
-      // endpoints so a bot can't switch endpoints to extend its window.
+      // Resolve admin session up-front. Two reasons it has to happen
+      // before the anti-bot gate runs:
+      //   1. Turnstile skip — admin auth IS the bot filter for the
+      //      schedule modal, which renders no Cloudflare widget. Without
+      //      this short-circuit, every admin manual booking gets bounced
+      //      with the public-facing "couldn't verify your submission"
+      //      string, regardless of whether they picked a generated slot
+      //      or a custom time.
+      //   2. admin_custom gate — `source: "admin_custom"` is only
+      //      honored with a real admin session present; spoofing it
+      //      from a public browser falls through to the standard slot
+      //      match below.
+      const adminSession = await requireUser(req);
+      const isAdmin = Boolean(adminSession);
+
+      // Anti-bot gate. Honeypot + time-trap + rate-limit always run —
+      // they're cheap and harmless for admin too. Turnstile is skipped
+      // for admin sessions; the session itself is the bot filter.
       const verdict = await antiBot.checkSubmission({
         body: payload,
         ip: callerIp(req),
         userAgent: req.headers["user-agent"] || "",
-        skipTurnstile: false
+        skipTurnstile: isAdmin
       });
       if (!verdict.ok) return sendJson(res, verdict.status, verdict.responseBody);
 
@@ -10587,44 +10599,121 @@ Customer signature captured at ${new Date().toISOString()}.`;
       const prebooking = sessionToken ? await bookingSessions.getSession(sessionToken) : null;
       const slotStart = normalizeString(payload.slotStart, 40);
       const service = BOOKABLE_SERVICES[serviceKey];
-      if (!service) return sendJson(res, 422, { ok: false, errors: ["Unknown service."] });
+      if (!service) {
+        return sendJson(res, 422, {
+          ok: false,
+          code: "service_unknown",
+          message: "Unknown service key.",
+          errors: ["Unknown service."]
+        });
+      }
       const startDate = new Date(slotStart);
-      if (Number.isNaN(startDate.getTime())) return sendJson(res, 422, { ok: false, errors: ["Invalid slot time."] });
+      if (Number.isNaN(startDate.getTime())) {
+        return sendJson(res, 422, {
+          ok: false,
+          code: "slot_invalid",
+          message: "Slot start time is missing or invalid.",
+          errors: ["Invalid slot time."]
+        });
+      }
 
       // Re-validate: the same slot must still be available now (someone else might
       // have grabbed it in the seconds since the calendar was rendered).
       const contact = payload.contact && typeof payload.contact === "object" ? payload.contact : {};
       const address = normalizeString(contact.address, 320);
-      if (!address) return sendJson(res, 422, { ok: false, errors: ["Address is required for booking."] });
+      if (!address) {
+        return sendJson(res, 422, {
+          ok: false,
+          code: "address_missing",
+          message: "Address is required for booking.",
+          errors: ["Address is required for booking."]
+        });
+      }
       const geo = await geocode(address);
       const customerCoords = geo.coords;
 
-      // Admin Custom-time override (Brief A §3.2): the time-picker's
-      // Custom time block sends source: "admin_custom" for any precise
-      // minute outside the bucket grid. Honor it ONLY if the request
-      // carries an admin session — public customer bookings can't
-      // forge this and skip the slot check.
+      // Admin Custom-time override (Brief A §3.2 + Brief B): the time
+      // picker's Custom time block sends source: "admin_custom" for any
+      // precise minute outside the bucket grid. Honor it ONLY if the
+      // request carries an admin session — public customer bookings
+      // can't forge this and skip the slot check.
       const claimsAdminCustom = payload.source === "admin_custom";
-      const adminSession = claimsAdminCustom ? await requireUser(req) : null;
-      const useAdminCustom = claimsAdminCustom && adminSession;
+      const useAdminCustom = claimsAdminCustom && isAdmin;
 
       let matched;
+      let forcedByAdmin = false;
       if (useAdminCustom) {
-        // Synthesize a slot record from the precise time. End uses
-        // service.minutes (the actual visit duration) so the booking
-        // record + iCal show a real visit window, not a 4-hour bucket.
+        // Physical-conflict check. Force-book bypasses corridor +
+        // hours, but it must NOT silently double-book — overlapping
+        // the same crew with another active booking would create a
+        // navigation / no-show mess. Per Patrick's call, we DO NOT
+        // check admin-created blocks (vacation/lunch) — if you're
+        // force-booking you've already decided to override those.
+        const slotEndDate = new Date(startDate.getTime() + service.minutes * 60 * 1000);
+        const allActive = await activeBookings();
+        const conflict = allActive.find((b) => {
+          if (!b.start || !b.end) return false;
+          const bs = new Date(b.start).getTime();
+          const be = new Date(b.end).getTime();
+          return startDate.getTime() < be && slotEndDate.getTime() > bs;
+        });
+        if (conflict) {
+          // Best-effort BK-ID lookup so the admin UI can link out.
+          // If the canonical Booking record isn't found we still
+          // surface the leadId — admin can grep that.
+          let conflictBookingId = null;
+          try {
+            const linked = await bookings.listByLead(conflict.leadId);
+            const exact = linked.find((b) => b.scheduledFor === conflict.start);
+            conflictBookingId = (exact && exact.id) || (linked[0] && linked[0].id) || null;
+          } catch (_) { /* informational */ }
+          const conflictStart = new Date(conflict.start).toLocaleString("en-CA", {
+            hour: "numeric", minute: "2-digit", weekday: "short", month: "short", day: "numeric"
+          });
+          const idLabel = conflictBookingId || conflict.leadId;
+          return sendJson(res, 409, {
+            ok: false,
+            code: "physical_conflict",
+            message: `Slot conflicts with ${idLabel} at ${conflictStart}. Reschedule that booking first.`,
+            details: {
+              bookingId: conflictBookingId,
+              leadId: conflict.leadId,
+              conflictingStart: conflict.start
+            },
+            errors: [`Slot conflicts with ${idLabel} at ${conflictStart}.`]
+          });
+        }
+
+        // Synthesize a bucket label for the customer-facing surfaces.
+        // Customers never see the precise minute — so we derive a
+        // bucket from the precise time using the same boundaries as
+        // BOOKING_BUCKETS in availability.js:
+        //   < 12:00 → Morning Appointment (8 AM – 12 PM)
+        //   ≥ 12:00 → Afternoon Appointment (12 PM – 5 PM)
+        // Force-bookings outside business hours still get the half-day
+        // bucket. The parenthesized window can slightly overstate the
+        // visit envelope on edge cases (e.g. a 6:30 PM force-book reads
+        // "12 PM – 5 PM") but Patrick chose the literal <12 / ≥12 rule
+        // for consistency — these are unusual bookings he'll touch
+        // base on by phone anyway.
+        const isMorning = startDate.getHours() < 12;
+        const bucketLabel = isMorning ? "Morning Appointment" : "Afternoon Appointment";
+        const bucketWindow = isMorning ? "8 AM – 12 PM" : "12 PM – 5 PM";
+        const bucketKey = isMorning ? "morning" : "afternoon";
+
         matched = {
           start: startDate.toISOString(),
-          end: new Date(startDate.getTime() + service.minutes * 60 * 1000).toISOString(),
+          end: slotEndDate.toISOString(),
           durationMinutes: service.minutes,
           serviceKey,
           serviceLabel: service.label,
           dayLabel: startDate.toLocaleDateString("en-CA", { weekday: "long", month: "short", day: "numeric" }),
-          timeLabel: null,
-          bucketKey: null,
-          bucketWindow: null,
+          timeLabel: bucketLabel,
+          bucketKey,
+          bucketWindow,
           isCustom: true
         };
+        forcedByAdmin = true;
       } else {
         // Standard path: re-validate against the bucket grid.
         const [bookings, scheduleData] = await Promise.all([activeBookings(), scheduleStore.read()]);
@@ -10641,7 +10730,12 @@ Customer signature captured at ${new Date().toISOString()}.`;
         });
         matched = stillAvailable.find((s) => s.start === startDate.toISOString());
         if (!matched) {
-          return sendJson(res, 409, { ok: false, errors: ["That slot was just taken. Please pick another time."] });
+          return sendJson(res, 409, {
+            ok: false,
+            code: "slot_taken",
+            message: "Requested slot is no longer available.",
+            errors: ["That slot was just taken. Please pick another time."]
+          });
         }
       }
       // matched.end is the bucket end for standard bucket slots, or
@@ -10666,7 +10760,15 @@ Customer signature captured at ${new Date().toISOString()}.`;
         mode: "booking"
       };
       const result = validateLead(intakePayload);
-      if (!result.ok) return sendJson(res, 422, { ok: false, errors: result.errors });
+      if (!result.ok) {
+        return sendJson(res, 422, {
+          ok: false,
+          code: "validation_failed",
+          message: (result.errors || []).join(" ") || "Required booking field is missing.",
+          details: { errors: result.errors || [] },
+          errors: result.errors
+        });
+      }
 
       // Forward-only emailNormalized — see /api/quotes handler for rationale.
       if (verdict.normalizedEmail && result.lead.contact) {
@@ -10760,6 +10862,11 @@ Customer signature captured at ${new Date().toISOString()}.`;
         bucketKey: matched.bucketKey || null,
         bucketWindow: matched.bucketWindow || null,
         bucketLabel: matched.timeLabel || null,
+        // Admin force-booking marker. True when this booking was created
+        // via the admin Custom-time path that bypasses corridor + hours.
+        // Surfaces as a badge in admin UIs and as a history entry on the
+        // canonical Booking record for audit.
+        forcedByAdmin,
         serviceKey,
         serviceLabel: service.label,
         zoneCount,
@@ -10872,7 +10979,13 @@ Customer signature captured at ${new Date().toISOString()}.`;
         portalUrl: decorated.portalUrl
       });
     } catch (error) {
-      return sendJson(res, 400, { ok: false, errors: [error.message || "Booking failed."] });
+      const msg = error.message || "Booking failed.";
+      return sendJson(res, 400, {
+        ok: false,
+        code: "booking_failed",
+        message: msg,
+        errors: [msg]
+      });
     }
   }
 

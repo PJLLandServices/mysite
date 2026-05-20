@@ -547,7 +547,25 @@
         body: JSON.stringify(payload)
       });
       const data = await response.json();
-      if (!response.ok || !data.ok) throw new Error((data.errors || ["Couldn't reserve. Please try a different slot."]).join(" "));
+      if (!response.ok || !data.ok) {
+        // Server returns { ok, code, message, details, errors[] } on
+        // failure. The customer-facing copy lives client-side now —
+        // server `message` is admin-grade. Known codes get a polished
+        // string; anything we don't recognise falls back to the
+        // server's errors[] (still customer-readable for public-reachable
+        // codes), then to a generic "try again" line.
+        var CUSTOMER_COPY = {
+          service_unknown: "We didn't recognize that service. Please refresh and pick one from the list.",
+          slot_invalid: "That time didn't look right. Please pick a slot from the calendar.",
+          address_missing: "Please enter the service address before booking.",
+          slot_taken: "That slot was just taken. Please pick another time.",
+          validation_failed: (data.errors || []).join(" ") || "A required field is missing — please review and try again."
+        };
+        var customer = CUSTOMER_COPY[data.code]
+          || (data.errors || []).join(" ")
+          || "Couldn't reserve. Please try a different slot or call (905) 960-0181.";
+        throw new Error(customer);
+      }
       // Success — personalize the confirmation copy with the name they
       // just typed in the contact step (or that was prefilled from the
       // session handoff). Falls back to a generic greeting if somehow

@@ -166,6 +166,14 @@ async function upsertFromLead(lead) {
   const now = new Date().toISOString();
   const booking = lead.booking;
 
+  // Admin force-booking marker. When the lead.booking was created via
+  // the admin Custom-time override, we mirror the flag onto the
+  // canonical record and stamp a force_booked_by_admin entry so audit
+  // history shows "yes, this was created outside the normal corridor
+  // and hours guardrails." Idempotent: a re-sync of an already-mirrored
+  // forced booking should not re-stamp the audit entry.
+  const carriesForceFlag = Boolean(booking.forcedByAdmin);
+
   if (existing) {
     existing.customerId = lead.customerId || existing.customerId;
     existing.customerEmail = (lead.contact?.email || existing.customerEmail || "").toLowerCase();
@@ -182,8 +190,18 @@ async function upsertFromLead(lead) {
       existing.workOrderIds.push(booking.workOrder.id);
     }
     if (lead.quoteId && !existing.sourceQuoteId) existing.sourceQuoteId = lead.quoteId;
+    const alreadyMirroredForce = Boolean(existing.forcedByAdmin);
+    if (carriesForceFlag) existing.forcedByAdmin = true;
     existing.updatedAt = now;
     existing.history.push({ ts: now, action: "synced_from_lead", by: "system", note: "" });
+    if (carriesForceFlag && !alreadyMirroredForce) {
+      existing.history.push({
+        ts: now,
+        action: "force_booked_by_admin",
+        by: "admin",
+        note: "Bypassed corridor + hours guardrails."
+      });
+    }
     await writeAll(records);
     return existing;
   }
@@ -204,8 +222,17 @@ async function upsertFromLead(lead) {
   next.address = lead.contact?.address || "";
   next.status = booking.status || "confirmed";
   next.sourceQuoteId = lead.quoteId || null;
+  if (carriesForceFlag) next.forcedByAdmin = true;
   if (booking.workOrder?.id) next.workOrderIds = [booking.workOrder.id];
   next.history = [{ ts: now, action: "created_from_lead", by: "system", note: `Lead ${lead.id}` }];
+  if (carriesForceFlag) {
+    next.history.push({
+      ts: now,
+      action: "force_booked_by_admin",
+      by: "admin",
+      note: "Bypassed corridor + hours guardrails."
+    });
+  }
   records.unshift(next);
   await writeAll(records);
   return next;

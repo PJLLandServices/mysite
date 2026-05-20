@@ -1182,7 +1182,15 @@ bookingForm?.addEventListener("submit", async (event) => {
     });
     const data = await r.json();
     if (!r.ok || !data.ok) {
-      throw new Error((data.errors || ["Booking failed."]).join(" "));
+      // The server returns { ok, code, message, details, errors[] }
+      // on failure (Brief B §3.2). Admin renders `message` verbatim
+      // since it's already admin-grade prose — no customer translation
+      // needed. Code is shown as small subtext so Patrick can ground
+      // future "why did this fail?" debugging on the symbolic reason.
+      const err = new Error(data.message || (data.errors || ["Booking failed."]).join(" "));
+      err.code = data.code || "";
+      err.details = data.details || null;
+      throw err;
     }
     closeBookingDialog();
     await loadAll();
@@ -1193,7 +1201,13 @@ bookingForm?.addEventListener("submit", async (event) => {
     }
   } catch (err) {
     bookingError.hidden = false;
-    bookingError.textContent = err.message || "Booking failed.";
+    // Prefer the server message; append the code as a small dim suffix
+    // so it's visible without dominating the message. If we have a
+    // physical_conflict with a BK-ID, show it inline so the admin can
+    // tap-to-jump in the future.
+    const baseMsg = err.message || "Booking failed.";
+    const codeStr = err.code ? ` (${err.code})` : "";
+    bookingError.textContent = baseMsg + codeStr;
     bookingSubmit.disabled = false;
   } finally {
     bookingSubmit.textContent = "Book customer";

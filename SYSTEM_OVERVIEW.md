@@ -295,7 +295,12 @@ Properties
   POST   /api/admin/import-properties            ← bulk xlsx upsert
 
 Bookings + scheduling
-  POST   /api/booking                            ← public booking submit
+  POST   /api/booking/reserve                    ← public booking submit; admin sessions can additionally pass
+                                                   `source: "admin_custom"` to bypass corridor + hours guardrails
+                                                   (still respects physical conflicts). Failure payload is
+                                                   `{ ok: false, code, message, details?, errors[] }` —
+                                                   `message` is admin-grade, `errors[]` is customer-friendly
+                                                   for back-compat.
   GET    /api/bookings, /api/bookings/:id
   PATCH  /api/bookings/:id
   POST   /api/bookings/:id/cancel                ← soft cancel; body {reason, notifyCustomer}.
@@ -546,6 +551,25 @@ Status flips to completed  →  completion-cascade fires (idempotent)
    ↓
 Service record on property, I-YYYY-NNNN draft invoice, customer + admin emails,
 warranty stamp.
+```
+
+**Manual admin booking (custom time):** the schedule page exposes a side door for off-grid commitments — corridor-isolated properties, after-hours fits, customer-named precise times.
+
+```
+/admin/schedule → click empty slot or "Book customer" → fill modal,
+   pick a precise minute from the time picker's Custom time block
+   ↓
+POST /api/booking/reserve with { source: "admin_custom", ... }
+   ↓
+Server sees admin session → skips Turnstile, skips corridor + hours
+   guardrails. Still checks physical conflict with any existing booking.
+   ↓
+lead.booking persists with forcedByAdmin: true. Canonical BK-YYYY-NNNN
+   mirrors the flag and stamps a `force_booked_by_admin` entry on history[].
+   ↓
+Customer-facing email/SMS/portal show the half-day bucket
+   ("Morning Appointment (8 AM – 12 PM)") derived from < 12 / ≥ 12.
+Admin surfaces show the precise minute.
 ```
 
 ### 2. Materials → POs (Phase 1-4 of materials management)
@@ -802,6 +826,20 @@ These have memory entries; surface them in any AI / specialist context.
   at startup when `NODE_ENV=production` and `PUBLIC_BASE_URL` is
   unset. Outreach links and OG canonical URLs always use this host;
   never fall back to `*.onrender.com`.
+- **Admin force-booking is admin-only.** The `source: "admin_custom"`
+  flag on `POST /api/booking/reserve` is server-gated by the session
+  cookie — public callers and the AI-chat handoff never send it and
+  have no path to bypass corridor/hours guardrails. Force-booked
+  records carry `forcedByAdmin: true` and a `force_booked_by_admin`
+  entry in the Booking's `history[]`. The Turnstile anti-bot check is
+  skipped for admin/tech sessions on this endpoint — admin auth is
+  the bot filter.
+- **Customer-facing time windows.** Customer surfaces never show a
+  precise minute. Booking start < 12:00 PM = "Morning Appointment
+  (8 AM – 12 PM)"; ≥ 12:00 PM = "Afternoon Appointment (12 PM – 5 PM)".
+  Rule applies to force-booked custom times too. Admin-facing UIs show
+  the precise minute. Labeling lives in
+  `server/lib/notify-customer.js bookingDateTime()`.
 
 ## How to run locally
 

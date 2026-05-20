@@ -324,7 +324,39 @@ Smaller object — mostly:
 
 **Hard delete** is admin-only, requires typing the booking ID in a confirmation field, and refuses if a linked WO is past `scheduled` (use Cancel instead). Strips the booking record entirely + clears the lead.booking pointer.
 
-**Spec deferred for detailed pass beyond cancel/delete.** Touched on but not formally designed.
+#### 4.2.1 Admin force-booking (custom-time override)
+
+From `/admin/schedule`, the "Book customer" modal can put a booking on a precise minute that is not on the public bucket grid — to honour a customer commitment, fit a job into an off-corridor pocket, or override the normal hours guardrails. The time-picker tags such submissions with `source: "admin_custom"` on the booking-reserve POST.
+
+The server (`POST /api/booking/reserve`) honours the flag **only when** the request carries a valid admin/tech session cookie. Public callers and the AI-chat booking handoff never send `source: "admin_custom"` and have no path to bypass guardrails.
+
+When the override is honoured, the server **skips**:
+- Drive-time corridor check (the public listAvailableSlots reachable-from-prev / reachable-to-next math)
+- Hour-of-day / day-of-week gates
+- "Must match an emitted bucket slot" check (arbitrary minute precision allowed)
+
+The override **still applies**:
+- Required fields (name, address, service type, parseable start time)
+- Service type must be a known BOOKABLE_SERVICES key
+- **Physical conflict** with another active booking (returns 409 with `code: "physical_conflict"` and `details.bookingId` so the admin UI can link out). Force does not mean silently double-book.
+- Admin-created calendar blocks are **not** checked — if you are force-booking, you've already decided to override your own block. (Brief B operator-preference call.)
+
+Every force-booked record carries `forcedByAdmin: true` on `lead.booking` and on the canonical Booking record in `bookings.json`, and appends a `force_booked_by_admin` entry to the Booking's `history[]`. Both the embedded read-cache and the canonical record can be queried for "was this force-booked?" without re-parsing the audit trail.
+
+The schedule modal authentcates via the existing admin session cookie (sent on every fetch by default-`same-origin` credentials). The anti-bot/Turnstile gate is bypassed for any request whose session resolves to an admin or tech user — admin auth itself is the bot filter. Honeypot, time-trap, and per-IP rate-limit checks still apply (cheap, harmless).
+
+#### 4.2.2 Customer-facing time window labeling
+
+Customers never see the precise minute of a booking. Customer-facing copy — confirmation emails, SMS, the portal upcoming-bookings list — describes the appointment by half-day bucket:
+
+- Time < 12:00 PM → "Morning Appointment (8 AM – 12 PM)"
+- Time ≥ 12:00 PM → "Afternoon Appointment (12 PM – 5 PM)"
+
+This rule applies to **force-booked custom times as well**. A 10:15 AM force-book is "Morning Appointment" to the customer; a 12:00 PM force-book is "Afternoon Appointment"; a 6:30 PM force-book is also "Afternoon Appointment" (the parenthesized window may slightly overstate the visit envelope on outliers — Patrick's call to keep the rule literal).
+
+The admin-facing UI (today.html, schedule.html, work-order tech mode, booking detail) always shows the precise time. Only customer-facing surfaces translate to the half-day window. Implementation lives in `server/lib/notify-customer.js` `bookingDateTime()`, which reads `lead.booking.bucketLabel` + `bucketWindow` — both populated for force-booked appointments via the synthesis logic in the `/api/booking/reserve` handler.
+
+**Spec deferred for detailed pass beyond cancel/delete + force-book.** Touched on but not formally designed.
 
 ### 4.3 Work Order Folder
 
