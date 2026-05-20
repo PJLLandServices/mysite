@@ -630,47 +630,121 @@ function generateWoReportPdf({ wo, property = {}, customer = {}, mode }) {
   }
 
   // ---- Media Summary ------------------------------------------------
+  // Photos in a 3-up square grid grouped by source. Square cells fit
+  // both portrait (phone) and landscape (DSLR/overview) photos without
+  // wasting the bulk of the cell — pdfkit's `align: "center"` +
+  // `valign: "center"` letterbox/pillarbox the image inside the cell
+  // so portrait photos don't slide to the left with a huge gap. Page
+  // breaks happen at row boundaries (not mid-row) so the bottom of
+  // each page packs tight. Group order: zones (numeric) → General
+  // (WO-level photos with no zoneNumber).
   const renderablePhotos = (wo.photos || []).filter(isPdfRenderableImage);
   if (renderablePhotos.length) {
     sectionHeading(doc, "Media Summary",
       { subtle: "Field documentation captured during the visit." });
 
-    const colW = (doc.page.width - 60 - 60 - 18) / 2; // gap between thumbs
-    let col = 0;
-    let rowStartY = doc.y;
-    let n = 0;
-    for (const p of renderablePhotos) {
-      n += 1;
-      const buf = readPhotoSync(wo.id, p);
-      const x = col === 0 ? 60 : 60 + colW + 18;
-      ensureSpace(doc, 280);
-      if (col === 0) rowStartY = doc.y;
-      try {
-        if (buf) {
-          doc.image(buf, x, rowStartY, { fit: [colW, 200] });
-        } else {
-          doc.rect(x, rowStartY, colW, 200).fillAndStroke("#F5F5F0", PJL_RULE);
-          doc.font("Helvetica").fontSize(9).fillColor(PJL_MUTED);
-          doc.text("Photo unavailable", x, rowStartY + 95,
-            { width: colW, align: "center" });
-        }
-      } catch (_) {
-        doc.rect(x, rowStartY, colW, 200).fillAndStroke("#F5F5F0", PJL_RULE);
-        doc.font("Helvetica").fontSize(9).fillColor(PJL_MUTED);
-        doc.text("Photo unavailable", x, rowStartY + 95,
-          { width: colW, align: "center" });
-      }
-      doc.font("Helvetica").fontSize(8).fillColor(PJL_MUTED);
-      doc.text(`Photo ${n}${p.label ? ` — ${p.label}` : ""}`,
-        x, rowStartY + 204, { width: colW });
-      col += 1;
-      if (col >= 2) {
-        col = 0;
-        doc.y = rowStartY + 230;
-      }
+    // Group photos by source. Zone groups are ordered by zone number;
+    // WO-level photos (no zoneNumber, or zoneNumber=0) go to a final
+    // "General" group.
+    const groups = [];
+    const zoneNums = Array.from(new Set(
+      renderablePhotos
+        .map((p) => Number(p.zoneNumber))
+        .filter((n) => Number.isFinite(n) && n > 0)
+    )).sort((a, b) => a - b);
+    for (const num of zoneNums) {
+      const z = (wo.zones || []).find((zz) => Number(zz.number) === num);
+      groups.push({
+        label: `Zone ${num}${z?.location ? " — " + z.location : ""}`,
+        photos: renderablePhotos.filter((p) => Number(p.zoneNumber) === num)
+      });
     }
-    if (col !== 0) {
-      doc.y = rowStartY + 230;
+    const generalPhotos = renderablePhotos.filter((p) => {
+      const n = Number(p.zoneNumber);
+      return !Number.isFinite(n) || n <= 0;
+    });
+    if (generalPhotos.length) {
+      groups.push({ label: "General", photos: generalPhotos });
+    }
+    // Fallback if no photos carry a zoneNumber at all — still render
+    // everything under one "Field photos" group instead of dropping
+    // the section.
+    if (!groups.length) {
+      groups.push({ label: "Field photos", photos: renderablePhotos });
+    }
+
+    // Grid geometry — 3 square cells across the body width.
+    const bodyLeft = 60;
+    const bodyRight = doc.page.width - 60;
+    const bodyW = bodyRight - bodyLeft;
+    const cols = 3;
+    const colGap = 12;
+    const cellW = Math.floor((bodyW - colGap * (cols - 1)) / cols);
+    const cellH = cellW; // square
+    const captionH = 24;
+    const rowH = cellH + captionH + 8;
+
+    let photoCounter = 0;
+    for (const g of groups) {
+      // Group heading — tight, just enough room.
+      ensureSpace(doc, 24);
+      doc.font("Helvetica-Bold").fontSize(10).fillColor(PJL_TEXT);
+      doc.text(g.label, bodyLeft, doc.y, { width: bodyW });
+      doc.moveDown(0.2);
+
+      let col = 0;
+      let rowY = doc.y;
+      for (const p of g.photos) {
+        photoCounter += 1;
+        // Page-break at row boundary, never mid-row.
+        if (col === 0) {
+          ensureSpace(doc, rowH + 4);
+          rowY = doc.y;
+        }
+        const x = bodyLeft + col * (cellW + colGap);
+        let buf = null;
+        try { buf = readPhotoSync(wo.id, p); } catch (_) { buf = null; }
+        // Background tile so portrait photos (narrower than the cell)
+        // sit on a clean light-grey field instead of floating in white.
+        doc.rect(x, rowY, cellW, cellH).fillAndStroke("#F5F5F0", PJL_RULE);
+        if (buf) {
+          try {
+            doc.image(buf, x, rowY, {
+              fit: [cellW, cellH],
+              align: "center",
+              valign: "center"
+            });
+          } catch (_) {
+            doc.font("Helvetica").fontSize(9).fillColor(PJL_MUTED);
+            doc.text("Photo unavailable", x, rowY + cellH / 2 - 5,
+              { width: cellW, align: "center" });
+          }
+        } else {
+          doc.font("Helvetica").fontSize(9).fillColor(PJL_MUTED);
+          doc.text("Photo unavailable", x, rowY + cellH / 2 - 5,
+            { width: cellW, align: "center" });
+        }
+        // Caption — tight against the cell, two-line cap with ellipsis.
+        doc.font("Helvetica").fontSize(8).fillColor(PJL_MUTED);
+        const captionParts = [`Photo ${photoCounter}`];
+        if (p.label) captionParts.push(String(p.label).slice(0, 80));
+        doc.text(captionParts.join(" — "), x, rowY + cellH + 3, {
+          width: cellW,
+          height: captionH - 4,
+          ellipsis: true
+        });
+
+        col += 1;
+        if (col >= cols) {
+          col = 0;
+          doc.y = rowY + rowH;
+        }
+      }
+      // Advance cursor past the last partial row in this group.
+      if (col !== 0) {
+        doc.y = rowY + rowH;
+      }
+      doc.moveDown(0.3);
     }
   }
 
