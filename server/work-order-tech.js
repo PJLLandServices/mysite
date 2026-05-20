@@ -199,6 +199,7 @@ const techZoneList = document.getElementById("techZoneList");
 const techZonesProgress = document.getElementById("techZonesProgress");
 const techEmptyZones = document.getElementById("techEmptyZones");
 const techNotes = document.getElementById("techNotes");
+const techCustomerNotes = document.getElementById("techCustomerNotes");
 const techMain = document.getElementById("techMain");
 const techLoading = document.getElementById("techLoading");
 const techError = document.getElementById("techError");
@@ -382,6 +383,7 @@ let state = {
   type: "service_visit",
   status: "scheduled",
   techNotes: "",
+  customerNotes: "",
   zones: [],
   serviceChecklist: {},
   signature: { signed: false, customerName: "", imageData: "", acknowledgement: false, signedAt: null },
@@ -916,6 +918,7 @@ async function patchWorkOrder(payload) {
       // happened mid-flight.
       if ("status" in payload)    state.status = data.workOrder.status;
       if ("techNotes" in payload) state.techNotes = data.workOrder.techNotes;
+      if ("customerNotes" in payload) state.customerNotes = data.workOrder.customerNotes;
       if ("zones" in payload) {
         state.zones = data.workOrder.zones;
         // Re-render any UI that derives from zones so server-normalized
@@ -2138,6 +2141,33 @@ function flushVisitNotes() {
   patchWorkOrder({ techNotes: next });
 }
 
+// Customer-visible notes — same debounce + auto-flush pattern as
+// techNotes. Re-runs the pre-sign gate on every input so the signing
+// button enables in real time as soon as the field is non-empty.
+if (techCustomerNotes) {
+  techCustomerNotes.addEventListener("input", () => {
+    if (state.customerNotesTimer) clearTimeout(state.customerNotesTimer);
+    state.customerNotesTimer = setTimeout(flushCustomerNotes, 1200);
+    if (typeof updateSignoffSubmitState === "function") updateSignoffSubmitState();
+  });
+  techCustomerNotes.addEventListener("blur", flushCustomerNotes);
+}
+
+function flushCustomerNotes() {
+  if (state.customerNotesTimer) {
+    clearTimeout(state.customerNotesTimer);
+    state.customerNotesTimer = null;
+  }
+  if (!techCustomerNotes) return;
+  // Locked WOs scope-protect customerNotes server-side; PATCH would 409.
+  // Bail before the network round-trip.
+  if (state.locked) return;
+  const next = techCustomerNotes.value.trim();
+  if (state.customerNotes === next) return;
+  state.customerNotes = next;
+  patchWorkOrder({ customerNotes: next });
+}
+
 // ---- Service-specific checklist ---------------------------------
 
 // Render the service-specific checklist (spring opening / fall closing).
@@ -2738,6 +2768,14 @@ function preSignReadinessFailures() {
   if (!state.materialsConfirmedAt) {
     fails.push("Tap “Confirm materials list is accurate” in the Parts to bring back section.");
   }
+  // Customer-visible notes for the Service Report PDF. Required so
+  // the customer's frozen record carries a narrative for the visit.
+  // Reads from the live textarea (not state) so the gate disables the
+  // submit instantly as the tech types.
+  const liveNotes = (techCustomerNotes?.value ?? state.customerNotes ?? "").trim();
+  if (!liveNotes) {
+    fails.push("Add a customer-visible note for the report (above the signature section).");
+  }
   return fails;
 }
 
@@ -3161,6 +3199,7 @@ function applyLockState(locked) {
   });
   disable("#techRunStatus button");
   disable("#techNotes");
+  disable("#techCustomerNotes");
   disable("#techServiceChecklistList button");
   disable("#techZoneList button");
   disable("#techAddZoneBtn");
@@ -4380,6 +4419,8 @@ async function init() {
     // send it as If-Match. Server returns 409 on stale version.
     state.updatedAt = wo.updatedAt || null;
     state.techNotes = wo.techNotes || "";
+    state.customerNotes = typeof wo.customerNotes === "string" ? wo.customerNotes : "";
+    if (techCustomerNotes) techCustomerNotes.value = state.customerNotes;
     state.zones = Array.isArray(wo.zones) ? wo.zones.map((z) => ({ ...z })) : [];
     state.serviceChecklist = (wo.serviceChecklist && typeof wo.serviceChecklist === "object") ? { ...wo.serviceChecklist } : {};
     state.signature = wo.signature || state.signature;
@@ -4467,6 +4508,7 @@ async function init() {
     techAddress.textContent = wo.address || "—";
     techMeta.textContent = `Updated ${formatDateTime(wo.updatedAt)}`;
     techNotes.value = state.techNotes;
+    if (techCustomerNotes) techCustomerNotes.value = state.customerNotes;
 
     // Property code (P-YYYY-NNNN) — identification badge in the
     // summary section. Hidden when the WO has no linked property

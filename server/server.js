@@ -55,6 +55,8 @@ const { generateIcsForToken } = require("./lib/ical-feed");
 const issueRollup = require("./lib/issue-rollup");
 const { generateQuotePdf } = require("./lib/quote-pdf");
 const { generateInvoicePdf } = require("./lib/invoice-pdf");
+const { generateWoReportPdf, renderWoReportBuffer, reportFilename } = require("./lib/wo-report-pdf");
+const woReportSnapshot = require("./lib/wo-report-snapshot");
 const quickbooks = require("./lib/quickbooks");
 const bookings = require("./lib/bookings");
 const suppliers = require("./lib/suppliers");
@@ -2956,15 +2958,36 @@ async function handleApi(req, res, pathname) {
                        : season === "fall"   ? "Fall Closing"
                        : "";
       // Recent service records (last 3) give the customer some
-      // continuity — "we were here in Apr 2025, want us back?"
-      const recentServices = Array.isArray(property.serviceRecords)
-        ? property.serviceRecords.slice(0, 3).map((r) => ({
-            id: r.id,
-            woType: r.woType || "service_visit",
-            completedAt: r.completedAt || null,
-            summary: r.summary || ""
-          }))
+      // continuity — "we were here in Apr 2025, want us back?".
+      // Each record also carries a Service Report download URL when a
+      // cascade-triggered snapshot exists on the WO (Service Report
+      // brief §3.7). Older WOs completed before the snapshot feature
+      // shipped will omit the URL — the portal hides the link
+      // gracefully in that case.
+      const rawRecords = Array.isArray(property.serviceRecords)
+        ? property.serviceRecords.slice(0, 3)
         : [];
+      const recentServices = await Promise.all(rawRecords.map(async (r) => {
+        const out = {
+          id: r.id,
+          woType: r.woType || "service_visit",
+          completedAt: r.completedAt || null,
+          summary: r.summary || "",
+          reportUrl: null
+        };
+        if (r.woId) {
+          try {
+            const wo = await workOrders.get(r.woId);
+            const snap = wo && Array.isArray(wo.reportSnapshots)
+              ? [...wo.reportSnapshots].reverse().find((s) => s.triggerType === "cascade")
+              : null;
+            if (snap) {
+              out.reportUrl = `/api/portal/${encodeURIComponent(token)}/wo-report-snapshot/${encodeURIComponent(r.woId)}/${encodeURIComponent(snap.snapshotId)}`;
+            }
+          } catch (_) { /* best-effort — leave reportUrl null */ }
+        }
+        return out;
+      }));
       // Pre-resolved seasonal pricing for the portal property card.
       // Sent as { spring: {...}, fall: {...} } with the cabana add-on
       // separate when applicable. Customer never sees "(override)"
@@ -3557,6 +3580,55 @@ async function handleApi(req, res, pathname) {
       return;
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't serve photo."] });
+    }
+  }
+
+  // Customer-facing WO report snapshot download. Token-gated (NOT admin
+  // cookie). Mirrors the wo-photo portal endpoint above. The lead's
+  // linked property must match the WO's property — otherwise 403.
+  //   GET /api/portal/<token>/wo-report-snapshot/<woId>/<snapshotId>
+  // Used by the property portal page's "Download service report" link
+  // on each completed service record. Admin equivalent lives at
+  // /api/work-orders/:id/report-pdf/snapshot/:snapshotId.
+  const portalReportSnapshotMatch = pathname.match(/^\/api\/portal\/([^/]+)\/wo-report-snapshot\/([^/]+)\/([^/]+)$/);
+  if (portalReportSnapshotMatch && req.method === "GET") {
+    try {
+      const token = decodeURIComponent(portalReportSnapshotMatch[1]);
+      const woId = decodeURIComponent(portalReportSnapshotMatch[2]);
+      const snapshotId = decodeURIComponent(portalReportSnapshotMatch[3]);
+      // The portal-token model used elsewhere is keyed off the lead.
+      // For property-portal sessions (where the customer arrived via
+      // /portal/<propertyToken>), the token derives from the property ID;
+      // for lead-portal sessions, from the lead.id. Try both.
+      const leads = await readLeads();
+      let lead = leads.find((l) => (l.portal?.token || portalTokenForId(l.id)) === token);
+      let propertyId = lead?.propertyId || null;
+      if (!propertyId) {
+        // Try property-portal token (derived from property.id).
+        const allProperties = await properties.list();
+        const property = allProperties.find((p) => p.id && portalTokenForId(p.id) === token) || null;
+        if (property) propertyId = property.id;
+      }
+      if (!propertyId) {
+        return sendJson(res, 404, { ok: false, errors: ["Portal not found."] });
+      }
+      const wo = await workOrders.get(woId);
+      if (!wo) return sendJson(res, 404, { ok: false, errors: ["Work order not found."] });
+      if (wo.propertyId !== propertyId) {
+        return sendJson(res, 403, { ok: false, errors: ["Forbidden."] });
+      }
+      const found = await woReportSnapshot.readSnapshot({ woId, snapshotId });
+      if (!found) return sendJson(res, 404, { ok: false, errors: ["Snapshot not found."] });
+      res.writeHead(200, {
+        "content-type": "application/pdf",
+        "content-disposition": `inline; filename="${found.record.filename}"`,
+        "cache-control": "private, max-age=86400",
+        "content-length": found.buffer.length
+      });
+      res.end(found.buffer);
+      return;
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't read snapshot."] });
     }
   }
 
@@ -5480,6 +5552,7 @@ async function handleApi(req, res, pathname) {
     <p style="margin:0 0 14px;">Our tech ran into something on-site at ${(wo.address || "your property").replace(/</g, "&lt;")} and recommends the following repair scope:</p>
     <table style="width:100%;border-collapse:collapse;margin:14px 0;font-size:14px;">${lineRows}</table>
     <p style="margin:12px 0 18px;padding-top:10px;border-top:1px solid #e5e5dd;text-align:right;font-size:15px;"><strong>Total: $${totals.total.toFixed(2)} CAD</strong> (incl. HST)</p>
+    <p style="margin:0 0 14px;font-size:13px;color:#555;">Attached: your repair quote and the on-site inspection report documenting what we found.</p>
     <p style="margin:0 0 18px;text-align:center;">
       <a href="${approvalUrl}" style="display:inline-block;padding:14px 28px;background:#E07B24;color:#fff;text-decoration:none;border-radius:6px;font-weight:600;font-size:15px;">Review &amp; approve</a>
     </p>
@@ -5490,7 +5563,7 @@ async function handleApi(req, res, pathname) {
 </div>`.trim();
             // Generate the quote PDF and attach. Buffered so the
             // sendMail call doesn't race with stream completion.
-            let pdfAttachment = null;
+            const attachments = [];
             try {
               const pdfDoc = generateQuotePdf(quoteRecord, {
                 customer: {
@@ -5506,13 +5579,39 @@ async function handleApi(req, res, pathname) {
                 pdfDoc.on("end", resolve);
                 pdfDoc.on("error", reject);
               });
-              pdfAttachment = {
+              attachments.push({
                 filename: `PJL-Quote-${quoteRecord.id}.pdf`,
                 content: Buffer.concat(chunks),
                 contentType: "application/pdf"
-              };
+              });
             } catch (err) {
               console.warn("[approval-email] PDF attach failed:", err?.message);
+            }
+            // Inspection Report snapshot (Service Report brief, 2026-05-19).
+            // Created per-send: if the customer asks for a revision and
+            // the tech re-sends, a NEW snapshot reflects any updates.
+            // Old snapshots are preserved on reportSnapshots[] for the
+            // legal record. Failures are logged but don't block the email
+            // — the quote PDF alone is still useful.
+            try {
+              const inspectionSnap = await woReportSnapshot.createSnapshot({
+                woId: wo.id,
+                triggerType: "quote_send",
+                quoteId: quoteRecord.id,
+                by: "tech"
+              });
+              const file = await woReportSnapshot.readSnapshot({
+                woId: wo.id, snapshotId: inspectionSnap.snapshotId
+              });
+              if (file) {
+                attachments.push({
+                  filename: file.record.filename,
+                  content: file.buffer,
+                  contentType: "application/pdf"
+                });
+              }
+            } catch (err) {
+              console.warn("[approval-email] inspection report snapshot failed:", err?.message);
             }
             await transporter.sendMail({
               from: `"PJL Land Services" <${process.env.GMAIL_USER}>`,
@@ -5520,7 +5619,7 @@ async function handleApi(req, res, pathname) {
               replyTo: process.env.GMAIL_USER,
               subject: "PJL: please approve today's repair quote",
               html,
-              ...(pdfAttachment ? { attachments: [pdfAttachment] } : {})
+              ...(attachments.length ? { attachments } : {})
             });
             results.emailSent = true;
           } else {
@@ -6679,6 +6778,93 @@ async function handleApi(req, res, pathname) {
       return sendJson(res, 200, { ok: true, ...result });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't run cascade."] });
+    }
+  }
+
+  // ---------- Service / Inspection Report PDF --------------------------
+  // Three endpoints (Service Report brief, 2026-05-19):
+  //   GET  /api/work-orders/:id/report-pdf
+  //     Live render from the current WO state. Admin-only. Mode auto-
+  //     derived from wo.locked (locked → service_report; else →
+  //     inspection_report). Streams the PDF inline so Patrick can
+  //     preview before snapshotting. NOT the customer's source of
+  //     truth — that's the snapshot endpoint below.
+  //   GET  /api/work-orders/:id/report-pdf/snapshot/:snapshotId
+  //     Serves a frozen snapshot from disk. Admin-only here; the
+  //     equivalent customer-facing endpoint is the tokenized
+  //     /api/portal/:token/wo-report-snapshot/:woId/:snapshotId
+  //     below. 404 if not found or woId mismatch.
+  //   POST /api/work-orders/:id/report-pdf/snapshot
+  //     Manual snapshot trigger. Admin-only. Body may carry
+  //     { triggerType: "manual" } (default). Useful for ad-hoc
+  //     dispute-trail snapshots Patrick may want.
+  const woReportLiveMatch = pathname.match(/^\/api\/work-orders\/([^/]+)\/report-pdf$/);
+  if (woReportLiveMatch && req.method === "GET") {
+    try {
+      const id = decodeURIComponent(woReportLiveMatch[1]);
+      const wo = await workOrders.get(id);
+      if (!wo) return sendJson(res, 404, { ok: false, errors: ["Work order not found."] });
+      let property = null;
+      let customer = null;
+      if (wo.propertyId) { try { property = await properties.get(wo.propertyId); } catch (_) {} }
+      if (wo.customerId) { try { customer = await customers.get(wo.customerId); } catch (_) {} }
+      if (!customer) {
+        customer = {
+          customerName: wo.customerName, customerEmail: wo.customerEmail, customerPhone: wo.customerPhone
+        };
+      }
+      const mode = wo.locked === true ? "service_report" : "inspection_report";
+      const filename = reportFilename({ wo, mode });
+      res.writeHead(200, {
+        "content-type": "application/pdf",
+        "content-disposition": `inline; filename="${filename}"`,
+        "cache-control": "no-store"
+      });
+      generateWoReportPdf({ wo, property: property || {}, customer: customer || {}, mode }).pipe(res);
+      return;
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't generate report PDF."] });
+    }
+  }
+
+  const woReportSnapshotGetMatch = pathname.match(/^\/api\/work-orders\/([^/]+)\/report-pdf\/snapshot\/([^/]+)$/);
+  if (woReportSnapshotGetMatch && req.method === "GET") {
+    try {
+      const woId = decodeURIComponent(woReportSnapshotGetMatch[1]);
+      const snapshotId = decodeURIComponent(woReportSnapshotGetMatch[2]);
+      const found = await woReportSnapshot.readSnapshot({ woId, snapshotId });
+      if (!found) return sendJson(res, 404, { ok: false, errors: ["Snapshot not found."] });
+      res.writeHead(200, {
+        "content-type": "application/pdf",
+        "content-disposition": `inline; filename="${found.record.filename}"`,
+        "cache-control": "no-store",
+        "content-length": found.buffer.length
+      });
+      res.end(found.buffer);
+      return;
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't read snapshot."] });
+    }
+  }
+
+  const woReportSnapshotPostMatch = pathname.match(/^\/api\/work-orders\/([^/]+)\/report-pdf\/snapshot$/);
+  if (woReportSnapshotPostMatch && req.method === "POST") {
+    try {
+      const woId = decodeURIComponent(woReportSnapshotPostMatch[1]);
+      const payload = await parseRequestBody(req).catch(() => ({}));
+      const triggerType = payload?.triggerType === "quote_send" || payload?.triggerType === "cascade"
+        ? payload.triggerType
+        : "manual";
+      const quoteId = triggerType === "quote_send" ? (payload?.quoteId || null) : null;
+      const record = await woReportSnapshot.createSnapshot({
+        woId, triggerType, quoteId, by: "admin"
+      });
+      return sendJson(res, 201, { ok: true, snapshot: record });
+    } catch (err) {
+      if (err?.code === "wo_not_found") {
+        return sendJson(res, 404, { ok: false, errors: [err.message] });
+      }
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't create snapshot."] });
     }
   }
 
@@ -8524,6 +8710,14 @@ async function handleApi(req, res, pathname) {
         if (!merged.materialsConfirmedAt) {
           fails.push("materials list not confirmed");
         }
+        // Customer-visible notes for the report (Service Report brief,
+        // 2026-05-19). Required non-empty before signing — the service
+        // report PDF embeds this as the customer-facing narrative for
+        // the visit. Scope-protected at signature so the customer's
+        // copy can't be amended after sign-off.
+        if (typeof merged.customerNotes !== "string" || !merged.customerNotes.trim()) {
+          fails.push("customer-visible notes empty");
+        }
         return fails;
       }
 
@@ -8728,7 +8922,7 @@ async function handleApi(req, res, pathname) {
         ]);
       }
 
-      async function runCustomerNotify({ wo, serviceRecord, invoice }) {
+      async function runCustomerNotify({ wo, serviceRecord, invoice, reportSnapshot }) {
         // Branded summary email via nodemailer. Skipped when Gmail creds
         // or customer email aren't set — best-effort by design.
         if (!wo.customerEmail || !process.env.GMAIL_USER || !process.env.GMAIL_APP_PASSWORD) return;
@@ -8754,6 +8948,12 @@ async function handleApi(req, res, pathname) {
         const warranty = serviceRecord.warrantyExpiresAt
           ? `<p style="margin: 0 0 14px;">Today's work is covered under PJL's <strong>${serviceRecord.warrantyMonths}-month warranty</strong>, valid through ${new Date(serviceRecord.warrantyExpiresAt).toLocaleDateString("en-CA", { month: "long", day: "numeric", year: "numeric" })}.</p>`
           : "";
+        // Service report — attached when the cascade produced a snapshot
+        // (Service Report brief, 2026-05-19). The line goes in the body
+        // so the customer knows what the attachment is.
+        const reportLine = reportSnapshot
+          ? `<p style="margin: 0 0 14px;">Attached: your Service Report — a written summary of today's visit, zone-by-zone, with photos.</p>`
+          : "";
         const html = `
 <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 560px; color: #1a1a1a; line-height: 1.55;">
   <div style="padding: 24px 28px; background: #1B4D2E; border-radius: 8px 8px 0 0;">
@@ -8763,18 +8963,38 @@ async function handleApi(req, res, pathname) {
   <div style="padding: 24px 28px; background: #FAFAF5; border: 1px solid #e5e5dd; border-top: none; border-radius: 0 0 8px 8px;">
     <p style="margin: 0 0 14px;">Hi ${firstName.replace(/</g, "&lt;")},</p>
     <p style="margin: 0 0 14px;">${serviceRecord.summary.replace(/</g, "&lt;")}</p>
+    ${reportLine}
     ${totalLine}
     ${warranty}
     <p style="margin: 18px 0 0; font-size: 13px; color: #777;">Questions? Call <a href="tel:+19059600181" style="color: #1B4D2E;">(905) 960-0181</a> or reply to this email.</p>
   </div>
   <p style="margin: 16px 0 0; font-size: 11px; color: #999; text-align: center;">PJL Land Services · Newmarket, Ontario · pjllandservices.com</p>
 </div>`.trim();
+        // Attach the service report PDF if the cascade produced one.
+        // Read from disk via the snapshotter so we get the exact bytes
+        // frozen at cascade time (not a fresh re-render).
+        const attachments = [];
+        if (reportSnapshot) {
+          try {
+            const file = await woReportSnapshot.readSnapshot({
+              woId: wo.id, snapshotId: reportSnapshot.snapshotId
+            });
+            if (file) {
+              attachments.push({
+                filename: file.record.filename,
+                content: file.buffer,
+                contentType: "application/pdf"
+              });
+            }
+          } catch (err) { console.warn("[cascade] report attach failed:", err?.message); }
+        }
         await transporter.sendMail({
           from: `"PJL Land Services" <${process.env.GMAIL_USER}>`,
           to: wo.customerEmail,
           replyTo: process.env.GMAIL_USER,
           subject: "Your PJL visit is complete",
-          html
+          html,
+          ...(attachments.length ? { attachments } : {})
         });
       }
 

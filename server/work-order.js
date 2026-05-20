@@ -40,6 +40,7 @@ const woDiagnosis = document.getElementById("woDiagnosis");
 const woZones = document.getElementById("woZones");
 const woEmptyZones = document.getElementById("woEmptyZones");
 const woTechNotes = document.getElementById("woTechNotes");
+const woCustomerNotes = document.getElementById("woCustomerNotes");
 const addZoneBtn = document.getElementById("addZoneBtn");
 const saveBtn = document.getElementById("saveBtn");
 const saveStatus = document.getElementById("saveStatus");
@@ -1033,6 +1034,7 @@ async function postIntakeDecisionDesktop(body) {
 
 function populateForm(wo) {
   woTechNotes.value = wo.techNotes || "";
+  if (woCustomerNotes) woCustomerNotes.value = wo.customerNotes || "";
   renderZones(wo.zones || []);
   renderDiagnosis(wo);
   renderIntakeGuarantee(wo);
@@ -1043,6 +1045,7 @@ function populateForm(wo) {
   renderOnSiteQuote(wo);
   renderPostSigBanner(wo);
   renderHistory(wo);
+  renderReportControls(wo);
   applyLockState(wo.locked === true, wo.signature);
 }
 
@@ -2129,6 +2132,7 @@ function collectForm() {
   return {
     status: woStatus.value,
     techNotes: woTechNotes.value.trim(),
+    customerNotes: woCustomerNotes ? woCustomerNotes.value.trim() : "",
     zones,
     serviceChecklist
   };
@@ -2305,6 +2309,106 @@ woRunCascadeBtn?.addEventListener("click", async () => {
     setCascadeStatus(err.message || "Failed.", "error");
   } finally {
     woRunCascadeBtn.disabled = false;
+  }
+});
+
+// ---- Service Report controls (Service Report brief, 2026-05-19) -------
+// Three surfaces:
+//   1. Download report — live render. Mode auto-derived from wo.locked
+//      (locked → service_report; else → inspection_report). Opens in a
+//      new tab so Patrick can preview without losing his place.
+//   2. Generate snapshot now — POST to /report-pdf/snapshot. Adds an
+//      entry to reportSnapshots[] and writes the file to disk. Refresh
+//      the WO on success so the new snapshot appears in the list.
+//   3. Snapshots list — every entry in wo.reportSnapshots[], tagged by
+//      trigger (cascade / quote_send Q-... / manual). Each row links to
+//      the snapshot-serve endpoint.
+const woReportDownloadBtn = document.getElementById("woReportDownloadBtn");
+const woReportSnapshotBtn = document.getElementById("woReportSnapshotBtn");
+const woReportStatus = document.getElementById("woReportStatus");
+const woReportSnapshotsDetails = document.getElementById("woReportSnapshotsDetails");
+const woReportSnapshotsCount = document.getElementById("woReportSnapshotsCount");
+const woReportSnapshotsList = document.getElementById("woReportSnapshotsList");
+
+function setReportStatus(text, kind = "info") {
+  if (!woReportStatus) return;
+  woReportStatus.textContent = text || "";
+  woReportStatus.dataset.kind = kind;
+}
+
+function renderReportControls(wo) {
+  if (!wo || !woReportDownloadBtn) return;
+  const id = encodeURIComponent(wo.id);
+  // Live-render download link. The href works pre- and post-completion;
+  // the server picks the mode based on wo.locked at request time.
+  woReportDownloadBtn.href = `/api/work-orders/${id}/report-pdf`;
+
+  const snaps = Array.isArray(wo.reportSnapshots) ? wo.reportSnapshots.slice() : [];
+  if (woReportSnapshotsCount) woReportSnapshotsCount.textContent = String(snaps.length);
+  if (woReportSnapshotsList) {
+    if (snaps.length === 0) {
+      woReportSnapshotsList.innerHTML = `<li class="wo-report-snapshots-empty">No snapshots yet. The first one is created automatically at completion (or when an on-site quote is sent for remote approval).</li>`;
+    } else {
+      const triggerLabel = (s) => {
+        if (s.triggerType === "cascade") return "Cascade (completion)";
+        if (s.triggerType === "quote_send") return `Sent with ${s.quoteId || "quote"}`;
+        if (s.triggerType === "manual") return "Manual";
+        return s.triggerType || "—";
+      };
+      const fmtDt = (iso) => {
+        if (!iso) return "—";
+        try {
+          return new Date(iso).toLocaleString("en-CA", {
+            month: "short", day: "numeric", year: "numeric",
+            hour: "numeric", minute: "2-digit", timeZone: "America/Toronto"
+          });
+        } catch { return iso; }
+      };
+      woReportSnapshotsList.innerHTML = snaps.slice().reverse().map((s) => {
+        const url = `/api/work-orders/${id}/report-pdf/snapshot/${encodeURIComponent(s.snapshotId)}`;
+        const modeBadge = s.mode === "service_report" ? "Service report" : "Inspection report";
+        return `<li class="wo-report-snapshots-row">
+          <div class="wo-report-snapshots-row-main">
+            <strong>${escapeHtml(modeBadge)}</strong> · ${escapeHtml(triggerLabel(s))}
+            <span class="wo-report-snapshots-row-meta">${escapeHtml(fmtDt(s.ts))}</span>
+          </div>
+          <a class="pjl-btn pjl-btn-outline pjl-btn-small" href="${url}" target="_blank" rel="noopener" download="${escapeHtml(s.filename || "report.pdf")}">Download</a>
+        </li>`;
+      }).join("");
+    }
+  }
+  if (woReportSnapshotsDetails) {
+    woReportSnapshotsDetails.hidden = false; // always visible (shows empty state)
+  }
+}
+
+woReportSnapshotBtn?.addEventListener("click", async () => {
+  const id = getWorkOrderId();
+  if (!id) return;
+  woReportSnapshotBtn.disabled = true;
+  setReportStatus("Generating snapshot…", "info");
+  try {
+    const r = await fetch(`/api/work-orders/${encodeURIComponent(id)}/report-pdf/snapshot`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ triggerType: "manual" })
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok || !data.ok) throw new Error((data.errors && data.errors[0]) || "Couldn't create snapshot.");
+    setReportStatus(`Snapshot ${data.snapshot.snapshotId} created → ${data.snapshot.filename}`, "ok");
+    // Refetch the WO so the snapshots list updates without a hard reload.
+    try {
+      const wr = await fetch(`/api/work-orders/${encodeURIComponent(id)}`);
+      const wd = await wr.json().catch(() => ({}));
+      if (wr.ok && wd.ok && wd.workOrder) {
+        loadedWorkOrder = wd.workOrder;
+        renderReportControls(wd.workOrder);
+      }
+    } catch (_) { /* best-effort refresh */ }
+  } catch (err) {
+    setReportStatus(err.message || "Failed.", "error");
+  } finally {
+    woReportSnapshotBtn.disabled = false;
   }
 });
 

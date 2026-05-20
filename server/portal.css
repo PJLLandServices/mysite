@@ -725,6 +725,22 @@ h1 {
   color: #333;
 }
 .portal-property-history strong { color: var(--green, #1B4D2E); }
+.portal-service-report-link {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 2px 8px;
+  background: rgba(27, 77, 46, 0.08);
+  border: 1px solid rgba(27, 77, 46, 0.20);
+  border-radius: 4px;
+  font-size: 12px;
+  color: var(--green, #1B4D2E);
+  text-decoration: none;
+  white-space: nowrap;
+}
+.portal-service-report-link:hover {
+  background: rgba(27, 77, 46, 0.14);
+  text-decoration: none;
+}
 
 @media (min-width: 640px) {
   .portal-property-grid { grid-template-columns: repeat(2, 1fr); gap: 14px 22px; }

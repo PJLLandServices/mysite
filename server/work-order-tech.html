@@ -382,9 +382,20 @@
 
     <!-- Tech-wide notes for the visit. Collapsed by default. -->
     <details class="tech-collapse">
-      <summary>Visit notes</summary>
+      <summary>Visit notes (internal)</summary>
       <textarea id="techNotes" rows="5" placeholder="Anything else worth recording…" data-voice-input></textarea>
     </details>
+
+    <!-- Customer-visible notes — embedded in the Service Report PDF
+         the customer receives at completion. Required to be non-empty
+         before signing (Service Report brief §3.1). Voice-input enabled
+         for tech speed. Scope-protected at signature — customer's copy
+         can't be amended after sign-off. -->
+    <section class="tech-section tech-customer-notes" id="techCustomerNotesSection">
+      <h2 class="tech-section-title">Customer-visible notes for the report</h2>
+      <p class="tech-section-help">This text is shown to the customer in their Service Report PDF — keep it factual and customer-friendly. Required before signing.</p>
+      <textarea id="techCustomerNotes" rows="4" placeholder="e.g. Walked the system with the customer, opened all six zones, head 3.2 was replaced this morning. System is fully operational." data-voice-input></textarea>
+    </section>
 
     <!-- Property Updates Captured — auto-tracked by the completion
          cascade (zone description changes, new zones, controller info).

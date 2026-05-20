@@ -622,6 +622,49 @@ WORK ORDER FOLDER
       before sending or marking paid in QB.
     - QuickBooks invoice ID (auto-populated post-cascade)
 
+  Customer-visible notes (Service Report brief, 2026-05-19)
+    - `wo.customerNotes` — tech-authored narrative for the customer.
+      Voice-input enabled. Embedded in the Service Report PDF as
+      "Notes for the Customer."
+    - REQUIRED non-empty before signature. Pre-sign gate blocks
+      submission while empty (both client and server enforce).
+    - Scope-protected at signature — locks alongside lineItems /
+      onSiteQuote. `techNotes` remains UNlocked (admin-only, can be
+      amended post-sign).
+
+  Report Snapshots (Service Report brief, 2026-05-19)
+    Each WO carries `reportSnapshots[]` — append-only list of frozen
+    Service / Inspection Report PDFs the customer received. Each entry:
+      { snapshotId, ts, triggerType, mode, quoteId?, filename, path, sha256?, by }
+        triggerType: "quote_send" | "cascade" | "manual"
+        mode:        "inspection_report" (pre-completion) |
+                     "service_report" (post-completion, locked)
+        quoteId:     populated only on quote_send triggers
+        sha256:      hex digest of the PDF bytes (integrity)
+    Files live on the persistent disk at
+    `server/data/wo-reports/<woId>/<snapshotId>.pdf`. Snapshots are the
+    customer's source of truth: the cascade attaches the cascade-trigger
+    snapshot to the completion email, the on-site-quote send-for-approval
+    flow attaches a fresh quote_send snapshot alongside the quote PDF,
+    and the customer portal "Download service report" link serves the
+    most-recent cascade snapshot per service record.
+
+    Cascade snapshot idempotency: `wo.completionReportSnapshotAt` is
+    stamped on first successful cascade snapshot. Re-fires look up the
+    most-recent cascade entry via `findLatestCascadeSnapshot` and reuse
+    it (no duplicate file on disk, no duplicate email — the existing
+    cascade idempotency handles the email side).
+
+    Send-for-approval snapshot semantics: each call to send-for-approval
+    creates a NEW snapshot. If the customer asks for a revision and the
+    tech re-sends, the customer receives a fresh report reflecting any
+    updates. Old snapshots are preserved on `reportSnapshots[]` as the
+    legal record of what was originally offered.
+
+    Snapshot failure mid-cascade leaves `completionReportSnapshotAt`
+    unset; the cascade-recovery admin action (POST /run-cascade) becomes
+    the retry path.
+
   Audit / History (Brief A — append-only, never edited)
     Each WO carries `history[]` mirroring quotes.history / invoices.history.
     Entry shape:
@@ -659,6 +702,7 @@ WORK ORDER FOLDER
 12. **Offline mode mandatory.** Captured locally, synced when service returns.
 13. **Auto-save every change.** Resume where left off.
 14. **Walk-out checklist** before "Complete": signature captured? all zones marked? next-visit flags?
+15. **Customer notes are required at signature.** `wo.customerNotes` must be non-empty before the signature submit unlocks. Pre-sign gate blocks (both client and server enforce). Scope-protected at signature — the customer's frozen Service Report copy can't be amended after sign-off. `techNotes` remains separate (admin-only, unlocked).
 
 #### 4.3.4 Completion cascade
 
@@ -668,13 +712,20 @@ When tech taps "Complete":
 - Photos optionally promoted to property folder
 - Property updates (zone descriptions, new zones, etc.) committed
 - Customer notified with summary
+- Service Report PDF rendered and snapshotted (Service Report brief,
+  2026-05-19); attached to customer email; gated by
+  `wo.completionReportSnapshotAt` for idempotency. Snapshot failures
+  leave the stamp unset and the cascade-recovery admin action becomes
+  the retry path.
 - Patrick notified
 - QuickBooks invoice generated (drafted)
 - If WO is fall_closing AND property.seasonalPricing.hasAdditionalFallBlowout
   is true, the draft invoice carries the fall_additional_plumbing
   disclaimer key. Idempotent via Set semantics in invoices.update —
   cascade re-fires never duplicate keys.
-- Customer portal updated to show completed work
+- Customer portal updated to show completed work (including a
+  "Download service report" link per service record with a cascade
+  snapshot)
 - Warranty clock starts (1 year repairs / 3 years installs)
 
 ---
@@ -974,6 +1025,7 @@ These are the rules that protect the design from drift. Number them so they can 
 16. **Self-service portal modifications enforce time and frequency rules server-side.** The portal UI greys out blocked actions via `GET /api/portal/:token/booking-actions` preflight; the underlying mutation endpoints (`PATCH /api/portal/:token/reschedule`, `POST /api/portal/:token/cancel`) enforce the same gates with 409 responses carrying a typed `code` field and a `phoneFallback` string from `settings.contactInfo.customerSupportPhone`. UI is a courtesy; API is the truth. Admin endpoints (`PATCH /api/bookings/:id/reschedule`, `POST /api/bookings/:id/cancel`) bypass the cutoff and frequency caps — Patrick can move bookings as many times as he needs to.
 17. **Marketing-style sends honor comm prefs and CASL.** Every outreach message includes an unsubscribe path (per-channel and "stop everything"). Email gets a footer link; SMS gets "Reply STOP to opt out." Per-property comm prefs (`seasonalRemindersSMS`, `seasonalRemindersEmail`) gate dispatch — `outreach.sendBulk` will not text a property whose `seasonalRemindersSMS=false`, will not email one whose `seasonalRemindersEmail=false`, and will not send anything to a property whose `seasonalOutreach[year:season].optOutThisSeason=true`. No exceptions.
 18. **Every property carries a complete customer name.** `property.customerName` is non-blank at create, update, and bulk-import. Validation hard-rejects blank patches with `code: MISSING_NAME`. Backfilled before outreach v1 ships, enforced at every write boundary going forward. The OG preview card "Hey {firstName}, …" depends on this invariant. No exceptions.
+19. **Service / Inspection Report PDFs contain no pricing.** Quote and invoice are the financial artifacts; the report is the service-narrative artifact. The renderer (`server/lib/wo-report-pdf.js`) embeds no dollar figures, no line-item costs, and no priced dispositions. Issue dispositions render as words (`Repaired on this visit` / `Deferred to next visit` / `Customer declined`), never as priced lines. Service Report brief, 2026-05-19.
 
 ---
 

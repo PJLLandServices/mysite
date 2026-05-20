@@ -290,10 +290,22 @@
       </section>
 
       <section class="property-section">
-        <h2>Tech notes</h2>
-        <p class="property-section-help">Anything else worth recording — overall system state, customer conversations, follow-up flags.</p>
+        <h2>Tech notes <small style="font-weight:400;color:#6A6A60;">(internal)</small></h2>
+        <p class="property-section-help">Anything else worth recording — overall system state, customer conversations, follow-up flags. Admin-only.</p>
         <label class="property-full">
           <textarea name="techNotes" id="woTechNotes" rows="4" placeholder="e.g. Manifold rebuild needed before next spring; customer wants a quote for Hydrawise upgrade…" data-voice-input></textarea>
+        </label>
+      </section>
+
+      <!-- Customer-visible notes — surfaced in the Service Report PDF
+           the customer receives at completion. Required to be non-empty
+           before signing (Service Report brief §3.1). Scope-protected
+           at signature; customer's copy can't be amended after sign-off. -->
+      <section class="property-section">
+        <h2>Customer-visible notes</h2>
+        <p class="property-section-help">This text appears in the customer's Service Report PDF. Keep it factual and customer-friendly. <strong>Required before signing.</strong></p>
+        <label class="property-full">
+          <textarea name="customerNotes" id="woCustomerNotes" rows="4" placeholder="e.g. Walked the system with the customer, opened all six zones, head 3.2 was replaced this morning. System is fully operational." data-voice-input></textarea>
         </label>
       </section>
 
@@ -415,6 +427,35 @@
           <label><input type="radio" name="woPaidOnSite" value="no" id="woPaidOnSiteNo"> <span>No — invoice to follow</span></label>
         </fieldset>
         <p class="wo-paid-on-site-help">Reshapes the customer email at completion. Invoice still drafts in <em>draft</em> status — Patrick reviews before sending or marking paid.</p>
+      </section>
+
+      <!-- Service / Inspection Report PDF (Service Report brief, 2026-05-19).
+           Three controls:
+             1. Download report — live render, mode auto-derived from
+                wo.locked. Admin preview.
+             2. Generate snapshot now — freezes a copy of the current
+                WO state to disk and records it on reportSnapshots[].
+                Useful for ad-hoc dispute-trail captures.
+             3. Snapshots list — every prior snapshot with a tap-to-
+                download link. Tagged by trigger (cascade / quote_send
+                Q-... / manual) so Patrick can see exactly what the
+                customer received and when. -->
+      <section class="wo-report-actions" id="woReportActions">
+        <header>
+          <h3>Service report</h3>
+          <p>Customer-facing PDF documenting the visit. Snapshots are frozen copies — the customer's source of truth.</p>
+        </header>
+        <div class="wo-report-buttons">
+          <a class="pjl-btn pjl-btn-outline" id="woReportDownloadBtn" target="_blank" rel="noopener">Download report</a>
+          <button type="button" class="pjl-btn pjl-btn-outline" id="woReportSnapshotBtn">Generate snapshot now</button>
+        </div>
+        <p class="wo-report-status" id="woReportStatus"></p>
+        <details class="wo-report-snapshots" id="woReportSnapshotsDetails" hidden>
+          <summary>
+            Snapshots <span class="wo-report-snapshots-count" id="woReportSnapshotsCount">0</span>
+          </summary>
+          <ul class="wo-report-snapshots-list" id="woReportSnapshotsList"></ul>
+        </details>
       </section>
 
       <!-- Cascade-recovery actions — explicit alternatives to the

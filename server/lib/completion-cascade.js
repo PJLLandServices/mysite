@@ -18,6 +18,7 @@
 const properties = require("./properties");
 const invoices = require("./invoices");
 const workOrders = require("./work-orders");
+const woReportSnapshot = require("./wo-report-snapshot");
 
 // Warranty defaults by service type. Spec §4.3.4 says 1yr repairs / 3yr
 // installs. Map service_visit + spring/fall openings to "repair" tier;
@@ -278,14 +279,54 @@ async function run(wo, deps = {}) {
     invoiceId: invoice?.id || null
   });
 
+  // 3b) Service / Inspection Report PDF snapshot (Service Report brief,
+  // 2026-05-19). Gated by wo.completionReportSnapshotAt for idempotency:
+  // re-firing the cascade reuses the existing snapshot instead of
+  // generating a duplicate. Failures here do NOT mark the stamp — the
+  // cascade-recovery admin action is the retry path. Snapshot capture
+  // also re-reads the WO from disk (via createSnapshot's internal get)
+  // so it picks up the propertyEditsApplied state that was just written.
+  let reportSnapshot = null;
+  let reportSnapshotError = null;
+  if (!wo.completionReportSnapshotAt) {
+    try {
+      reportSnapshot = await woReportSnapshot.createSnapshot({
+        woId: wo.id,
+        triggerType: "cascade",
+        by: "system"
+      });
+      try {
+        await workOrders.update(wo.id, {
+          completionReportSnapshotAt: new Date().toISOString()
+        });
+      } catch (stampErr) {
+        // Stamp failure leaves the snapshot record on the WO but
+        // doesn't gate re-fires. Next cascade run will look up the
+        // most-recent cascade entry via findLatestCascadeSnapshot and
+        // skip — same end state.
+        console.warn("[cascade] report snapshot stamp failed:", stampErr?.message);
+      }
+    } catch (err) {
+      reportSnapshotError = err?.message || "snapshot threw";
+      console.warn("[cascade] report snapshot failed:", reportSnapshotError);
+    }
+  } else {
+    // Re-fire: reuse the existing cascade snapshot so the customer
+    // email still carries the attachment (e.g. if the previous run
+    // crashed after the snapshot but before the email).
+    const refreshedWo = await workOrders.get(wo.id);
+    reportSnapshot = woReportSnapshot.findLatestCascadeSnapshot(refreshedWo);
+  }
+
   // 4) Notify (admin + customer). Best-effort — failures are logged but
-  // don't block the cascade.
+  // don't block the cascade. The report snapshot, when produced, is
+  // forwarded so the customer email can attach the frozen PDF.
   if (deps.notifyAdmin) {
-    try { await deps.notifyAdmin({ wo, serviceRecord, invoice }); }
+    try { await deps.notifyAdmin({ wo, serviceRecord, invoice, reportSnapshot }); }
     catch (err) { console.warn("[cascade] admin notify failed:", err?.message); }
   }
   if (deps.notifyCustomer) {
-    try { await deps.notifyCustomer({ wo, serviceRecord, invoice }); }
+    try { await deps.notifyCustomer({ wo, serviceRecord, invoice, reportSnapshot }); }
     catch (err) { console.warn("[cascade] customer notify failed:", err?.message); }
   }
 
@@ -294,12 +335,16 @@ async function run(wo, deps = {}) {
   // here), so re-firing the cascade on an already-completed WO won't
   // spam the history. Brief A spec.
   try {
+    const reportBit = reportSnapshot
+      ? ` · report ${reportSnapshot.snapshotId}`
+      : (reportSnapshotError ? ` · report snapshot failed: ${reportSnapshotError}` : "");
     await workOrders.appendHistory(wo.id, {
       action: "cascade_fire",
       by: "system",
-      note: invoice
+      note: (invoice
         ? `Service record + draft invoice ${invoice.id} ($${Number(invoice.total).toFixed(2)})`
         : (lineItems.length ? `Service record (invoice draft failed: ${invoiceDraftError || "unknown"})` : "Service record (no charge)")
+      ) + reportBit
     });
   } catch (err) { console.warn("[cascade] history append failed:", err?.message); }
 
@@ -337,7 +382,7 @@ async function run(wo, deps = {}) {
     } catch (err) { console.warn("[cascade] property-edits stamp failed:", err?.message); }
   }
 
-  return { ok: true, serviceRecord, invoice, alreadyRan: false, propertyEditsApplied, invoiceDraftError };
+  return { ok: true, serviceRecord, invoice, alreadyRan: false, propertyEditsApplied, invoiceDraftError, reportSnapshot, reportSnapshotError };
 }
 
 module.exports = { run, summarizeWo, lineItemsFromWo, computePropertyEdits, WARRANTY_MONTHS };

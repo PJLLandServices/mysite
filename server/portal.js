@@ -617,6 +617,15 @@ function renderPropertyPortal(payload) {
 
   // Recent service records — small continuity touch ("we were here
   // in Apr 2025, want us back?"). Hidden when there's no history.
+  // Each row carries a "Download service report" link when a cascade-
+  // triggered snapshot exists for the visit (Service Report brief §3.7).
+  // Older WOs completed before the snapshot feature shipped omit the
+  // link gracefully — never link to the live render from the portal.
+  const escapeAttr = (s) => String(s ?? "")
+    .replace(/&/g, "&amp;").replace(/"/g, "&quot;")
+    .replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const escapeText = (s) => String(s ?? "")
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   if (Array.isArray(payload.recentServices) && payload.recentServices.length) {
     historyList.innerHTML = payload.recentServices.map((r) => {
       const date = r.completedAt
@@ -626,8 +635,11 @@ function renderPropertyPortal(payload) {
                        : r.woType === "fall_closing" ? "Fall closing"
                        : r.woType === "repair" ? "Repair visit"
                        : "Service visit";
-      const summaryBit = r.summary ? ` — ${r.summary}` : "";
-      return `<li><strong>${date}</strong> · ${typeLabel}${summaryBit}</li>`;
+      const summaryBit = r.summary ? ` — ${escapeText(r.summary)}` : "";
+      const reportLink = r.reportUrl
+        ? ` <a href="${escapeAttr(r.reportUrl)}" class="portal-service-report-link" target="_blank" rel="noopener">Download service report ↗</a>`
+        : "";
+      return `<li><strong>${escapeText(date)}</strong> · ${escapeText(typeLabel)}${summaryBit}${reportLink}</li>`;
     }).join("");
     historySec.hidden = false;
   } else {

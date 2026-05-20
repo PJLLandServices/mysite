@@ -180,7 +180,13 @@ function blankWorkOrder() {
     additionalRepairs: [],           // Phase 2+ free-form line items (valves/mainline/wire/etc.)
     lineItems: [],                   // Phase 4 — invoice line items
     diagnosis: "",                   // copied from booking handoff if present
-    techNotes: "",                   // tech's overall visit notes
+    techNotes: "",                   // tech's overall visit notes (admin-only)
+    // Customer-facing narrative for the visit (Service / Inspection Report
+    // brief, 2026-05-19). Voice-input enabled. Surfaced in the report PDF
+    // as "Customer-visible notes." REQUIRED non-empty before signature —
+    // see computeServerSidePreSignFailures in server.js. Scope-protected
+    // at signature; locks alongside lineItems / onSiteQuote.
+    customerNotes: "",
     // AI-Correct-Diagnosis Bonus eligibility — copied from the source Quote
     // when this WO is created from a lead with an accepted ai_repair_quote.
     // When `applies` is true, the tech UI shows a banner: "AI-Correct-
@@ -304,6 +310,23 @@ function blankWorkOrder() {
     // Cascade re-fire checks this and skips re-application — ensures we
     // don't double-apply or stomp on subsequent property edits.
     propertyEditsAppliedAt: null,
+    // Service / Inspection Report PDF snapshots (Service Report brief,
+    // 2026-05-19). Append-only list — every send-for-approval, every
+    // cascade fire, and every manual snapshot writes a new entry. The
+    // file lives at server/data/wo-reports/<woId>/<snapshotId>.pdf and
+    // becomes the customer's source of truth (the live render is admin-
+    // only). Each entry:
+    //   { snapshotId, ts, triggerType, mode, quoteId?, filename, path, sha256?, by }
+    //     triggerType: "quote_send" | "cascade" | "manual"
+    //     mode:        "inspection_report" | "service_report"
+    //     quoteId:     populated only on quote_send
+    //     sha256:      integrity hash of the PDF bytes
+    reportSnapshots: [],
+    // Cascade-time report snapshot idempotency stamp. Set on first
+    // successful cascade snapshot creation; gates re-fires (look up the
+    // existing cascade-triggered entry in reportSnapshots[] instead of
+    // generating a duplicate). Same posture as propertyEditsAppliedAt.
+    completionReportSnapshotAt: null,
     // Follow-up linkage — when this WO is the parent of a follow-up
     // service visit, followupWoIds[] back-references the children.
     // followupOfWoId points at the parent if this IS a follow-up.
@@ -380,7 +403,12 @@ function hydrate(w) {
     locked: w?.locked === true,
     history: Array.isArray(w?.history) ? w.history : [],
     deletedAt: typeof w?.deletedAt === "string" ? w.deletedAt : null,
-    archivedAt: typeof w?.archivedAt === "string" ? w.archivedAt : null
+    archivedAt: typeof w?.archivedAt === "string" ? w.archivedAt : null,
+    customerNotes: typeof w?.customerNotes === "string" ? w.customerNotes : "",
+    reportSnapshots: Array.isArray(w?.reportSnapshots) ? w.reportSnapshots : [],
+    completionReportSnapshotAt: typeof w?.completionReportSnapshotAt === "string"
+      ? w.completionReportSnapshotAt
+      : null
   };
   // Cascade-merge follow-up — auto-confirm the materials gate for the
   // cases where there's nothing to confirm: fall_closing (find-only,
@@ -434,7 +462,12 @@ const SCOPE_PROTECTED_FIELDS = [
   "leadId",
   "intakeGuarantee",
   "aiBonusMatched",
-  "type"
+  "type",
+  // Customer-facing visit narrative — locks alongside scope so the
+  // service-report snapshot at completion captures the same notes the
+  // customer attested to at signature (Service Report brief, 2026-05-19).
+  // techNotes remains UNlocked (admin-only, can be amended).
+  "customerNotes"
 ];
 
 // Returns the protected field path that a payload would touch on a
@@ -659,6 +692,43 @@ async function captureSignatureBypass(woId, { reason, note, bypassedBy, acknowle
     }
   });
 
+  records[idx] = next;
+  await writeAll(records);
+  return next;
+}
+
+// Append a report snapshot entry to a WO. Atomic read-modify-write —
+// the snapshotter (server/lib/wo-report-snapshot.js) calls this after
+// the PDF lands on disk. Also writes a paired `report_snapshot_created`
+// history entry so the audit trail records the event in one step.
+// Returns the updated WO or null if not found.
+async function appendReportSnapshot(id, snapshot) {
+  if (!snapshot || typeof snapshot !== "object" || !snapshot.snapshotId) {
+    throw new Error("appendReportSnapshot requires a snapshot record with snapshotId.");
+  }
+  const records = await readAll();
+  const idx = records.findIndex((w) => w.id === id);
+  if (idx === -1) return null;
+  const now = new Date().toISOString();
+  const next = { ...records[idx] };
+  if (!Array.isArray(next.reportSnapshots)) next.reportSnapshots = [];
+  next.reportSnapshots = [...next.reportSnapshots, snapshot];
+  if (!Array.isArray(next.history)) next.history = [];
+  const triggerBit = snapshot.triggerType
+    ? snapshot.triggerType.replace(/_/g, " ")
+    : "snapshot";
+  const noteParts = [
+    `${snapshot.mode === "service_report" ? "Service Report" : "Inspection Report"} (${triggerBit})`
+  ];
+  if (snapshot.quoteId) noteParts.push(`for ${snapshot.quoteId}`);
+  if (snapshot.filename) noteParts.push(`→ ${snapshot.filename}`);
+  next.history.push({
+    ts: now,
+    action: "report_snapshot_created",
+    by: snapshot.by || "system",
+    note: noteParts.join(" ")
+  });
+  next.updatedAt = now;
   records[idx] = next;
   await writeAll(records);
   return next;
@@ -893,7 +963,7 @@ async function update(id, patch) {
   // pointers — those are set at create time and shouldn't be edited from
   // the form.
   const next = { ...current };
-  const allowedTop = ["type", "status", "scheduledFor", "diagnosis", "techNotes", "customerName", "customerPhone", "customerEmail", "address", "locked", "arrivedAt", "departedAt", "followupOfWoId", "paidOnSite", "propertyEditsAppliedAt", "needsReturnVisit", "labourHours"];
+  const allowedTop = ["type", "status", "scheduledFor", "diagnosis", "techNotes", "customerNotes", "customerName", "customerPhone", "customerEmail", "address", "locked", "arrivedAt", "departedAt", "followupOfWoId", "paidOnSite", "propertyEditsAppliedAt", "completionReportSnapshotAt", "needsReturnVisit", "labourHours"];
   for (const key of allowedTop) {
     if (Object.prototype.hasOwnProperty.call(patch, key)) next[key] = patch[key];
   }
@@ -959,6 +1029,11 @@ async function update(id, patch) {
   if (Array.isArray(patch.followupWoIds)) {
     next.followupWoIds = patch.followupWoIds.slice();
   }
+  // Report snapshots — append-only, but wholesale replace through the
+  // PATCH path so the snapshotter (wo-report-snapshot.js) can record a
+  // new entry. The lib enforces append-only-shape; the route exposes no
+  // direct PATCH of this field, only the snapshot endpoint.
+  if (Array.isArray(patch.reportSnapshots)) next.reportSnapshots = patch.reportSnapshots;
   if (Array.isArray(patch.zones)) next.zones = patch.zones.map(hydrateZone);
   if (Array.isArray(patch.additionalRepairs)) next.additionalRepairs = patch.additionalRepairs;
   if (Array.isArray(patch.lineItems)) next.lineItems = patch.lineItems;
@@ -1115,6 +1190,7 @@ module.exports = {
   findProtectedFieldTouched,
   summarizeScopeAdditions,
   captureSignatureBypass,
+  appendReportSnapshot,
   appendHistory,
   list,
   get,

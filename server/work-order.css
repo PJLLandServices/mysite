@@ -1424,6 +1424,103 @@ body[data-locked="true"] .wo-zone-location {
 .wo-cascade-status[data-kind="error"] { color: #C03A2C; font-weight: 600; }
 .wo-cascade-status[data-kind="info"] { color: #555; }
 
+/* Service Report — same visual language as the cascade card above. */
+.wo-report-actions {
+  margin: 24px 0;
+  padding: 18px 20px;
+  background: #FAFAF5;
+  border: 1px solid #E5E5DD;
+  border-radius: 12px;
+}
+.wo-report-actions header h3 {
+  margin: 0 0 4px;
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 18px;
+  color: #1B4D2E;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.wo-report-actions header p {
+  margin: 0 0 12px;
+  font-size: 13px;
+  color: #555;
+  line-height: 1.5;
+}
+.wo-report-buttons {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.wo-report-buttons .pjl-btn-outline {
+  background: #fff;
+  border: 1px solid rgba(27, 77, 46, 0.30);
+  color: #1B4D2E;
+  box-shadow: none;
+}
+.wo-report-buttons .pjl-btn-outline:hover {
+  background: rgba(27, 77, 46, 0.05);
+  border-color: #1B4D2E;
+}
+.wo-report-status {
+  margin: 10px 0 0 !important;
+  font-size: 13px;
+}
+.wo-report-status[data-kind="ok"] { color: #1B4D2E; font-weight: 600; }
+.wo-report-status[data-kind="error"] { color: #C03A2C; font-weight: 600; }
+.wo-report-status[data-kind="info"] { color: #555; }
+.wo-report-snapshots {
+  margin-top: 14px;
+  border-top: 1px solid #E5E5DD;
+  padding-top: 12px;
+}
+.wo-report-snapshots summary {
+  cursor: pointer;
+  font-size: 13px;
+  color: #1B4D2E;
+  font-weight: 600;
+  list-style: none;
+}
+.wo-report-snapshots summary::-webkit-details-marker { display: none; }
+.wo-report-snapshots-count {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 8px;
+  background: rgba(27, 77, 46, 0.10);
+  border-radius: 999px;
+  font-size: 11px;
+}
+.wo-report-snapshots-list {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+}
+.wo-report-snapshots-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid #E5E5DD;
+  font-size: 13px;
+}
+.wo-report-snapshots-row:last-child { border-bottom: none; }
+.wo-report-snapshots-row-main { flex: 1; min-width: 0; }
+.wo-report-snapshots-row-meta {
+  display: block;
+  font-size: 11px;
+  color: #777;
+  margin-top: 2px;
+}
+.wo-report-snapshots-empty {
+  font-size: 12px;
+  color: #777;
+  padding: 10px 0 0;
+}
+.pjl-btn.pjl-btn-small {
+  padding: 6px 12px;
+  font-size: 12px;
+}
+
 /* On-site quote (Brief B) — desktop parity for tech-mode's quote
    builder. List of editable rows + sticky totals + remote-approval
    button. Read-only when the WO is signed/locked. */
