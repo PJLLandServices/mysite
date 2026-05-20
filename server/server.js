@@ -8952,8 +8952,17 @@ async function handleApi(req, res, pathname) {
         // (Service Report brief, 2026-05-19). The line goes in the body
         // so the customer knows what the attachment is.
         const reportLine = reportSnapshot
-          ? `<p style="margin: 0 0 14px;">Attached: your Service Report — a written summary of today's visit, zone-by-zone, with photos.</p>`
+          ? `<p style="margin: 0 0 14px;">Attached: your Service Report — a written summary of today's visit, zone-by-zone, with photos. You can also re-download it any time from your portal under "Recent service" below.</p>`
           : "";
+        // Portal CTA — points to the PROPERTY portal (not the lead portal)
+        // because that's where the service-history list lives and that's
+        // where the "Download service report" link surfaces (Service
+        // Report brief follow-up). Falls back to the lead portal if no
+        // property is linked (defensive — shouldn't happen post-cascade).
+        const cleanBase = resolvePublicBaseUrl();
+        const portalUrl = wo.propertyId
+          ? `${cleanBase}/portal/${portalTokenForId(wo.propertyId)}`
+          : `${cleanBase}/portal`;
         const html = `
 <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 560px; color: #1a1a1a; line-height: 1.55;">
   <div style="padding: 24px 28px; background: #1B4D2E; border-radius: 8px 8px 0 0;">
@@ -8966,6 +8975,9 @@ async function handleApi(req, res, pathname) {
     ${reportLine}
     ${totalLine}
     ${warranty}
+    <p style="margin: 0 0 18px;">
+      <a href="${portalUrl}" style="display: inline-block; padding: 11px 20px; background: #E07B24; color: #fff; text-decoration: none; border-radius: 6px; font-weight: 600;">Open your portal</a>
+    </p>
     <p style="margin: 18px 0 0; font-size: 13px; color: #777;">Questions? Call <a href="tel:+19059600181" style="color: #1B4D2E;">(905) 960-0181</a> or reply to this email.</p>
   </div>
   <p style="margin: 16px 0 0; font-size: 11px; color: #999; text-align: center;">PJL Land Services · Newmarket, Ontario · pjllandservices.com</p>

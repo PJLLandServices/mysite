@@ -725,6 +725,12 @@ h1 {
   color: #333;
 }
 .portal-property-history strong { color: var(--green, #1B4D2E); }
+.portal-property-history-help {
+  margin: 0 0 8px;
+  font-size: 12px;
+  color: #6A6A60;
+  font-style: italic;
+}
 .portal-service-report-link {
   display: inline-block;
   margin-left: 6px;

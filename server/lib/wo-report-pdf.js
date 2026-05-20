@@ -269,6 +269,60 @@ function ruleLine(doc) {
   doc.moveDown(0.3);
 }
 
+// Inline photo row — lays out small thumbnails in rows, captioning each
+// with its label if present. Used for zone-level photos (indented at the
+// zone-card left margin) and issue-level photos (indented under the
+// issue bullet). Brief: ~150px max edge for inline thumbs. pdfkit's
+// `fit:` preserves aspect (no cropping), so portrait phone photos
+// render as ~75×100 inside the 140×100 box instead of getting squished.
+function renderPhotoRow(doc, wo, photos, opts = {}) {
+  if (!photos || !photos.length) return;
+  const x0 = opts.x || 60;
+  const thumbW = opts.thumbW || 140;
+  const thumbH = opts.thumbH || 100;
+  const gap = opts.gap || 10;
+  const captionH = opts.captionH || 12;
+  const rowH = thumbH + captionH + 4;
+
+  const pageRightX = doc.page.width - 60;
+  const availableW = pageRightX - x0;
+  const perRow = Math.max(1, Math.floor((availableW + gap) / (thumbW + gap)));
+
+  let i = 0;
+  while (i < photos.length) {
+    ensureSpace(doc, rowH + 4);
+    const rowY = doc.y;
+    for (let col = 0; col < perRow && i < photos.length; col++) {
+      const p = photos[i];
+      const x = x0 + col * (thumbW + gap);
+      let buf = null;
+      try { buf = readPhotoSync(wo.id, p); } catch (_) { buf = null; }
+      if (buf) {
+        try {
+          doc.image(buf, x, rowY, { fit: [thumbW, thumbH] });
+        } catch (_) {
+          doc.rect(x, rowY, thumbW, thumbH).fillAndStroke("#F5F5F0", PJL_RULE);
+          doc.font("Helvetica").fontSize(8).fillColor(PJL_MUTED);
+          doc.text("Photo unavailable", x, rowY + thumbH / 2 - 5,
+            { width: thumbW, align: "center" });
+        }
+      } else {
+        doc.rect(x, rowY, thumbW, thumbH).fillAndStroke("#F5F5F0", PJL_RULE);
+        doc.font("Helvetica").fontSize(8).fillColor(PJL_MUTED);
+        doc.text("Photo unavailable", x, rowY + thumbH / 2 - 5,
+          { width: thumbW, align: "center" });
+      }
+      if (p.label) {
+        doc.font("Helvetica").fontSize(8).fillColor(PJL_MUTED);
+        doc.text(String(p.label).slice(0, 60), x, rowY + thumbH + 2,
+          { width: thumbW, lineBreak: false, ellipsis: true });
+      }
+      i += 1;
+    }
+    doc.y = rowY + rowH;
+  }
+}
+
 // ---- Renderer entry point --------------------------------------------
 
 function generateWoReportPdf({ wo, property = {}, customer = {}, mode }) {
@@ -294,49 +348,75 @@ function generateWoReportPdf({ wo, property = {}, customer = {}, mode }) {
 
   wirePerPageFooter(doc, wo.id, mode);
 
-  // ---- Header --------------------------------------------------------
+  // ---- Header (mirrors quote-pdf.js shape) ---------------------------
+  // Title left in big green Barlow, "Service Visit" / "Spring Opening
+  // YYYY" / "Fall Closing YYYY" sub-line in amber, PJL Land Services
+  // address block stacked beneath (3 lines), then Work Order /
+  // Conducted on / Tech stacked vertically in light grey. Logo (~160px)
+  // sits top-right, same as the quote.
   const PAGE_W = doc.page.width;
   const MARGIN_X = 60;
-  const top = 50;
+  const top = 40;
   const LOGO_W = 160;
 
   const docTitle = mode === "service_report" ? "SERVICE REPORT" : "INSPECTION REPORT";
-  doc.font(fontHeading()).fontSize(26).fillColor(PJL_GREEN);
-  doc.text(docTitle, MARGIN_X, top, { characterSpacing: 1.4 });
+  doc.font(fontHeading()).fontSize(30).fillColor(PJL_GREEN);
+  doc.text(docTitle, MARGIN_X, top, {
+    characterSpacing: 1.5,
+    width: PAGE_W - MARGIN_X * 2 - LOGO_W - 16,
+    lineGap: 0
+  });
 
-  const subContext = SERVICE_LABEL[wo.type] || "Visit";
-  doc.font(fontHeading()).fontSize(13).fillColor(PJL_AMBER);
-  doc.text(subContext, MARGIN_X, doc.y - 4, { characterSpacing: 1.2 });
+  // Sub-line — service type with year for seasonal visits.
+  const visitIso = wo.arrivedAt || wo.scheduledFor || wo.createdAt || new Date().toISOString();
+  const visitYear = String(new Date(visitIso).getFullYear());
+  const subContextBase = SERVICE_LABEL[wo.type] || "Visit";
+  const subContext = (wo.type === "spring_opening" || wo.type === "fall_closing")
+    ? `${subContextBase} ${visitYear}`
+    : subContextBase;
+  doc.font(fontHeading()).fontSize(15).fillColor(PJL_AMBER);
+  doc.text(subContext, MARGIN_X, doc.y - 2, { characterSpacing: 1.2 });
 
-  // Right-side logo
+  // PJL Land Services address block — three stacked lines, same copy
+  // as the quote PDF.
+  let y = doc.y + 4;
+  doc.font("Helvetica-Bold").fontSize(10).fillColor(PJL_TEXT);
+  doc.text("PJL Land Services", MARGIN_X, y);
+  y = doc.y + 1;
+  doc.font("Helvetica").fontSize(9).fillColor(PJL_MUTED);
+  doc.text("1118 Cenotaph Blvd., Newmarket, ON  L3X 0A5", MARGIN_X, y);
+  y = doc.y;
+  doc.text("info@pjllandservices.com  ·  (905) 960-0181  ·  pjllandservices.com", MARGIN_X, y);
+
+  // Right-side logo — same width + position as quote-pdf.js.
   const logo = logoBuffer();
   if (logo) {
-    doc.image(logo, PAGE_W - MARGIN_X - LOGO_W, top - 10, { width: LOGO_W });
+    doc.image(logo, PAGE_W - MARGIN_X - LOGO_W, top - 12, { width: LOGO_W });
   } else {
-    doc.font(fontHeading()).fontSize(20).fillColor(PJL_GREEN);
-    doc.text("PJL", PAGE_W - MARGIN_X - 200, top, { width: 200, align: "right" });
-    doc.fontSize(10).text("LAND SERVICES", PAGE_W - MARGIN_X - 200, top + 26,
-      { width: 200, align: "right", characterSpacing: 2.5 });
+    doc.font(fontHeading()).fontSize(22).fillColor(PJL_GREEN);
+    doc.text("PJL", PAGE_W - MARGIN_X - 200, top + 6, {
+      width: 200, align: "right", characterSpacing: 1
+    });
+    doc.fontSize(11).fillColor(PJL_GREEN);
+    doc.text("LAND SERVICES", PAGE_W - MARGIN_X - 200, top + 32, {
+      width: 200, align: "right", characterSpacing: 3
+    });
   }
 
-  doc.y = Math.max(doc.y, top + 70);
+  // Stacked meta rows — left margin, light grey. Mirrors how the quote
+  // PDF lays out its "Quote Q-... · Issued ..." line, but Patrick asked
+  // for these three to stack vertically instead of running in one row.
+  doc.y = Math.max(doc.y, 124);
   doc.x = MARGIN_X;
-
-  // Meta strip — WO number, dates, tech
-  doc.moveDown(0.3);
-  doc.font("Helvetica").fontSize(9).fillColor(PJL_MUTED);
+  doc.moveDown(0.6);
   const scheduledIso = wo.scheduledFor || wo.arrivedAt || wo.createdAt;
   const conductedIso = wo.arrivedAt || wo.departedAt || wo.signature?.signedAt || scheduledIso;
-  const metaBits = [
-    `Work Order ${wo.id}`,
-    `Conducted ${fmtDate(conductedIso)}`,
-    "Tech: Patrick Lalande"
-  ];
-  doc.text(metaBits.join("  ·  "), MARGIN_X, doc.y, {
-    width: PAGE_W - MARGIN_X * 2,
-    characterSpacing: 0.3
-  });
-  doc.moveDown(0.4);
+  doc.font("Helvetica").fontSize(9).fillColor(PJL_MUTED);
+  doc.text(`Work Order: ${wo.id}`, MARGIN_X, doc.y, { characterSpacing: 0.2 });
+  doc.text(`Conducted on: ${fmtDate(conductedIso)}`, MARGIN_X, doc.y, { characterSpacing: 0.2 });
+  doc.text(`Tech: Patrick Lalande`, MARGIN_X, doc.y, { characterSpacing: 0.2 });
+
+  doc.moveDown(0.5);
   ruleLine(doc);
   doc.moveDown(0.4);
 
@@ -405,6 +485,20 @@ function generateWoReportPdf({ wo, property = {}, customer = {}, mode }) {
           60, doc.y + 2, { width: doc.page.width - 120 });
       }
 
+      // Zone-level photos — attached to this zone but NOT to a specific
+      // issue. Renders below the meta/checks line, indented to match
+      // the zone card's left margin. Lets the tech document overall
+      // zone state (coverage shot, post-fix overview) without tying
+      // every photo to a single issue.
+      const zonePhotos = (wo.photos || []).filter((p) =>
+        Number(p.zoneNumber) === Number(z.number)
+        && !p.issueId
+        && isPdfRenderableImage(p));
+      if (zonePhotos.length) {
+        doc.moveDown(0.3);
+        renderPhotoRow(doc, wo, zonePhotos, { x: 72, thumbW: 140, thumbH: 100 });
+      }
+
       // Issues nested under the zone
       const issues = Array.isArray(z.issues) ? z.issues : [];
       if (issues.length) {
@@ -421,19 +515,15 @@ function generateWoReportPdf({ wo, property = {}, customer = {}, mode }) {
           doc.font("Helvetica").fontSize(9).fillColor(PJL_MUTED);
           doc.text(`Disposition: ${dispositionFor(issue, wo, mode)}`,
             92, doc.y + 1, { width: doc.page.width - 60 - 92 });
-          // Inline photo for the issue if one is attached
+          // Inline issue photos — ALL of them, not just the first. The
+          // photo-row helper wraps into multiple rows if there are more
+          // than fit on a single line, and falls back to a "Photo
+          // unavailable" placeholder if a file is missing on disk.
           const issuePhotos = (wo.photos || []).filter((p) =>
             p.issueId === issue.id && isPdfRenderableImage(p));
           if (issuePhotos.length) {
-            const photoBuf = readPhotoSync(wo.id, issuePhotos[0]);
-            if (photoBuf) {
-              try {
-                ensureSpace(doc, 110);
-                const photoY = doc.y + 4;
-                doc.image(photoBuf, 92, photoY, { fit: [140, 100] });
-                doc.y = photoY + 102;
-              } catch (_) { /* placeholder fall-through */ }
-            }
+            doc.moveDown(0.2);
+            renderPhotoRow(doc, wo, issuePhotos, { x: 92, thumbW: 140, thumbH: 100 });
           }
         });
       }
