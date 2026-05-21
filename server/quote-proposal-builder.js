@@ -292,29 +292,36 @@
 
   function renderLineItems() {
     const lines = state.quote.lineItems || [];
+    const emptyEl = document.getElementById("pbLinesEmpty");
+    if (emptyEl) emptyEl.hidden = lines.length > 0;
     el.lineList.innerHTML = lines.map((li, idx) => {
-      const sourceLabel = li.source === "pricing" ? "PRICING.JSON"
-        : li.source === "project_rates" ? "PROJECT RATES"
-        : "CUSTOM";
+      const sourceLabel = li.source === "pricing" ? "Pricing.json"
+        : li.source === "project_rates" ? "Project rates"
+        : li.source === "labour" ? "Labour"
+        : "Custom";
       return `
-        <li class="pb-line-item" data-idx="${idx}">
-          <div class="pb-line-row">
-            <input class="pb-line-label" type="text" data-li-label="${idx}" value="${escapeAttr(li.label)}" placeholder="Description">
-            <input class="pb-line-qty" type="number" data-li-qty="${idx}" value="${li.qty}" min="0" step="0.01">
-            <input class="pb-line-price" type="number" data-li-price="${idx}" value="${li.price}" min="0" step="0.01">
-            <button type="button" class="pb-line-remove" data-li-remove="${idx}" aria-label="Remove">×</button>
-          </div>
-          <div class="pb-line-row">
-            <span class="pb-line-source">${sourceLabel}${li.unit ? " · " + li.unit : ""}</span>
-            <span class="pb-line-total" style="margin-left:auto">$${(li.lineTotal || 0).toFixed(2)}</span>
-          </div>
-        </li>
+        <tr class="pb-line-row" data-idx="${idx}">
+          <td class="pb-col-desc" data-label="Description"><input type="text" data-li-label="${idx}" value="${escapeAttr(li.label)}" placeholder="Description"></td>
+          <td class="pb-col-source" data-label="Source"><span class="pb-line-source-badge" data-source="${escapeAttr(li.source || "custom")}">${escapeHtml(sourceLabel)}</span></td>
+          <td class="pb-col-qty" data-label="Qty"><input type="number" data-li-qty="${idx}" value="${li.qty}" min="0" step="0.01"></td>
+          <td class="pb-col-unit" data-label="Unit"><input type="text" data-li-unit="${idx}" value="${escapeAttr(li.unit || "")}" placeholder="each / ft / hr"></td>
+          <td class="pb-col-price" data-label="Unit price"><input type="number" data-li-price="${idx}" value="${li.price}" min="0" step="0.01"></td>
+          <td class="pb-col-total" data-label="Line total">$${(li.lineTotal || 0).toFixed(2)}</td>
+          <td class="pb-col-remove"><button type="button" class="pb-line-remove" data-li-remove="${idx}" aria-label="Remove">×</button></td>
+        </tr>
       `;
     }).join("");
     el.lineList.querySelectorAll("[data-li-label]").forEach((input) => {
       input.addEventListener("input", () => {
         const i = Number(input.dataset.liLabel);
         state.quote.lineItems[i].label = input.value;
+        markDirty();
+      });
+    });
+    el.lineList.querySelectorAll("[data-li-unit]").forEach((input) => {
+      input.addEventListener("input", () => {
+        const i = Number(input.dataset.liUnit);
+        state.quote.lineItems[i].unit = input.value;
         markDirty();
       });
     });

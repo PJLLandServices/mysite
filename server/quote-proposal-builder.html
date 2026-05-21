@@ -134,7 +134,8 @@
             <p class="pb-section-tip" id="pbSectionTip"></p>
           </section>
 
-          <!-- Right sidebar: attachments + line items -->
+          <!-- Right sidebar: attachments only. Line items moved out
+               below into a full-width table per Brief 1 §3.4. -->
           <aside class="pb-side">
             <section class="pb-attach">
               <h3>Attachments</h3>
@@ -145,24 +146,44 @@
               <p class="pb-side-hint">PNG, JPEG, or PDF. 25 MB cap per file, 100 MB total.</p>
               <ul class="pb-attach-list" id="pbAttachList"></ul>
             </section>
-
-            <section class="pb-lines">
-              <h3>Line items</h3>
-              <div class="pb-line-picker">
-                <select id="pbLinePicker">
-                  <option value="">+ Add from project rates…</option>
-                </select>
-                <button type="button" id="pbCustomLine">+ Custom line</button>
-              </div>
-              <ul class="pb-line-list" id="pbLineList"></ul>
-              <div class="pb-totals">
-                <div><span>Subtotal</span><strong id="pbSubtotal">$0.00</strong></div>
-                <div><span>HST (13%)</span><strong id="pbHst">$0.00</strong></div>
-                <div class="pb-total-row"><span>Total CAD</span><strong id="pbTotal">$0.00</strong></div>
-              </div>
-            </section>
           </aside>
         </div>
+
+        <!-- Line items — full-width table below the 3-column layout.
+             Per Brief 1 §3.4 this is its own section, not crammed into
+             the right sidebar. Catalog dropdown + custom line button on
+             top; table grid below; totals + tax pinned at the bottom. -->
+        <section class="pb-lines-table" id="pbLinesPanel">
+          <header class="pb-lines-head">
+            <h3>Line items</h3>
+            <div class="pb-line-picker">
+              <select id="pbLinePicker">
+                <option value="">+ Add from project rates…</option>
+              </select>
+              <button type="button" class="pjl-btn pjl-btn-outline" id="pbCustomLine">+ Custom line</button>
+            </div>
+          </header>
+          <table class="pb-lines-grid" id="pbLinesGrid" role="grid">
+            <thead>
+              <tr>
+                <th class="pb-col-desc">Description</th>
+                <th class="pb-col-source">Source</th>
+                <th class="pb-col-qty">Qty</th>
+                <th class="pb-col-unit">Unit</th>
+                <th class="pb-col-price">Unit price</th>
+                <th class="pb-col-total">Line total</th>
+                <th class="pb-col-remove" aria-label="Remove"></th>
+              </tr>
+            </thead>
+            <tbody id="pbLineList"></tbody>
+          </table>
+          <p class="pb-lines-empty" id="pbLinesEmpty" hidden>No line items yet. Use the picker above to add from project rates, or +Custom line for ad-hoc entries.</p>
+          <div class="pb-totals">
+            <div><span>Subtotal</span><strong id="pbSubtotal">$0.00</strong></div>
+            <div><span>HST (13%)</span><strong id="pbHst">$0.00</strong></div>
+            <div class="pb-total-row"><span>Total CAD</span><strong id="pbTotal">$0.00</strong></div>
+          </div>
+        </section>
 
         <!-- Bottom action bar -->
         <section class="pb-actions">

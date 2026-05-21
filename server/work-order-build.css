@@ -2,12 +2,20 @@
    The .tech-build panel renders only when wo.type === "build", inserted
    as the primary surface above all other tech cards. Mobile-first ordering
    puts session clock first. Desktop work-order.html also uses these
-   classes via .wo-build adoption. */
+   classes via .wo-build adoption.
+
+   Tech mode (work-order-tech.html) is full-bleed, so the panel adopts
+   16px horizontal margins itself. Desktop (work-order.html) puts the
+   panel inside .wo-shell which already has page padding — .wo-build
+   resets the horizontal margins to flow naturally. */
 .tech-build {
   display: flex;
   flex-direction: column;
   gap: 12px;
   margin: 12px 16px 24px;
+}
+.wo-build {
+  margin: 0 0 18px;
 }
 .tech-build-card {
   background: #fff;

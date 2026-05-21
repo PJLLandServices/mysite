@@ -6,10 +6,14 @@
 
 .proposal-body { background: #F5F4EE; }
 
+/* Brief 1 §3.4 / Brief 2 inheritance rule — no max-width on the outer
+   container. Full viewport on desktop, clamp padding on narrow screens
+   so an iPhone Pro Max viewport (~440px wide) doesn't waste horizontal
+   space on margins. */
 .pb-shell {
-  padding: 16px 18px 80px;
-  max-width: 1280px;
-  margin: 0 auto;
+  width: 100%;
+  padding: 16px clamp(12px, 2vw, 32px) 80px;
+  margin: 0;
 }
 
 .pb-back {
@@ -111,18 +115,25 @@
 .pb-meta-wide { grid-column: 1 / -1; }
 .pb-meta-grid textarea { resize: vertical; min-height: 56px; }
 
-/* ---- Three-column layout ---- */
+/* ---- Three-column layout ----
+   Desktop: section nav | main editor | attachments sidebar.
+   Line items are NOT in this grid anymore — they sit in a full-width
+   table below (.pb-lines-table). Brief 1 §3.4. */
 .pb-layout {
   display: grid;
-  grid-template-columns: 220px 1fr 300px;
+  grid-template-columns: 220px 1fr 320px;
   gap: 14px;
   margin-bottom: 18px;
 }
 @media (max-width: 1100px) {
+  /* Tablet: drop the right sidebar to a full-width row below the main
+     editor so it doesn't crush the editor down to ~400px. */
   .pb-layout { grid-template-columns: 200px 1fr; }
   .pb-side { grid-column: 1 / -1; }
 }
 @media (max-width: 760px) {
+  /* Mobile (iPhone Pro Max viewport sits around 440px logical pixels):
+     stack everything single-column. Section nav slides above the editor. */
   .pb-layout { grid-template-columns: 1fr; }
 }
 
@@ -340,87 +351,214 @@
 }
 .pb-attach-actions button:hover { background: #FFE5E0; color: #842F1B; }
 
-.pb-lines { margin-top: 16px; }
-.pb-line-picker { display: flex; gap: 6px; margin-bottom: 10px; }
-.pb-line-picker select { flex: 1; }
-.pb-line-picker button {
-  background: #1B4D2E;
-  color: #fff;
-  border: none;
+/* ---- Line items table (Brief 1 §3.4) ----
+   Full-width section below the 3-column layout. Real table on desktop;
+   collapses to card-stack on mobile so the inputs stay tappable. */
+.pb-lines-table {
+  background: #FFFFFF;
+  border: 1px solid #E5E5DD;
+  border-radius: 10px;
+  padding: 16px;
+  margin-bottom: 18px;
+}
+.pb-lines-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.pb-lines-head h3 {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 16px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #1B4D2E;
+  margin: 0;
+  flex: 0 0 auto;
+}
+.pb-line-picker {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
+  flex: 1 1 280px;
+  max-width: 520px;
+}
+.pb-line-picker select {
+  flex: 1;
+  padding: 8px 10px;
+  border: 1px solid #D6D6CD;
   border-radius: 6px;
-  padding: 6px 10px;
-  font-size: 12px;
-  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  background: #fff;
+  min-width: 0;
+}
+.pb-line-picker button {
+  white-space: nowrap;
 }
 
-.pb-line-list {
-  list-style: none;
-  padding: 0;
-  margin: 0 0 10px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
+/* Table on desktop, card-stack on mobile. */
+.pb-lines-grid {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
 }
-.pb-line-item {
-  padding: 8px;
-  border: 1px solid #E5E5DD;
-  border-radius: 6px;
-  background: #FAFAF5;
-  font-size: 12px;
+.pb-lines-grid thead th {
+  text-align: left;
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #6A6A60;
+  padding: 6px 8px;
+  border-bottom: 2px solid #C5DDB1;
+  font-weight: 700;
 }
-.pb-line-row { display: flex; gap: 4px; margin-bottom: 4px; }
-.pb-line-row input {
+.pb-lines-grid tbody tr {
+  border-bottom: 1px solid #E5E5DD;
+}
+.pb-lines-grid tbody tr:last-child { border-bottom: none; }
+.pb-lines-grid td {
+  padding: 8px 6px;
+  vertical-align: middle;
+}
+.pb-lines-grid input {
   border: 1px solid #D6D6CD;
   border-radius: 4px;
-  padding: 4px 6px;
-  font-size: 12px;
+  padding: 6px 8px;
   font: inherit;
+  font-size: 13px;
+  background: #fff;
+  width: 100%;
+  box-sizing: border-box;
 }
-.pb-line-label { flex: 1; min-width: 0; }
-.pb-line-qty { width: 60px; }
-.pb-line-price { width: 90px; }
-.pb-line-source {
+.pb-col-desc { width: 38%; }
+.pb-col-source { width: 12%; }
+.pb-col-qty { width: 80px; text-align: right; }
+.pb-col-unit { width: 90px; }
+.pb-col-price { width: 110px; text-align: right; }
+.pb-col-total { width: 110px; text-align: right; font-weight: 700; color: #1B4D2E; font-variant-numeric: tabular-nums; }
+.pb-col-remove { width: 40px; text-align: center; }
+
+.pb-lines-grid .pb-col-qty input,
+.pb-lines-grid .pb-col-price input { text-align: right; }
+
+.pb-line-source-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
   font-size: 10px;
-  color: #9A9A90;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-}
-.pb-line-total {
   font-weight: 600;
-  color: #1B4D2E;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
+.pb-line-source-badge[data-source="project_rates"] { background: #EAF3DE; color: #1B4D2E; }
+.pb-line-source-badge[data-source="pricing"] { background: #FDF1E6; color: #8A4A12; }
+.pb-line-source-badge[data-source="custom"] { background: #F0EEE3; color: #6A6A60; }
+.pb-line-source-badge[data-source="labour"] { background: #FFE8C9; color: #8A4A12; }
+
 .pb-line-remove {
   background: none;
-  border: none;
+  border: 1px solid transparent;
+  border-radius: 4px;
   color: #842F1B;
   cursor: pointer;
-  font-size: 14px;
-  padding: 0 4px;
+  font-size: 16px;
+  width: 32px;
+  height: 32px;
+  line-height: 1;
+}
+.pb-line-remove:hover { background: #FFE5E0; border-color: #F5B7A8; }
+
+.pb-lines-empty {
+  text-align: center;
+  font-size: 13px;
+  color: #9A9A90;
+  font-style: italic;
+  padding: 18px;
+}
+
+/* Mobile: collapse the table into card rows. iPhone Pro Max viewport
+   (~440px) needs each line item to be a tappable card with the desc on
+   top and qty/price/total/remove on a wrapped row. */
+@media (max-width: 760px) {
+  .pb-lines-head { flex-direction: column; align-items: stretch; }
+  .pb-line-picker { margin-left: 0; max-width: none; }
+  .pb-lines-grid thead { display: none; }
+  .pb-lines-grid, .pb-lines-grid tbody, .pb-lines-grid tr, .pb-lines-grid td {
+    display: block;
+    width: auto;
+  }
+  .pb-lines-grid tr {
+    background: #FAFAF5;
+    border: 1px solid #E5E5DD;
+    border-radius: 8px;
+    padding: 10px;
+    margin-bottom: 8px;
+    display: grid;
+    grid-template-columns: 1fr auto;
+    grid-template-areas:
+      "desc desc"
+      "source source"
+      "qty unit"
+      "price total"
+      "remove remove";
+    gap: 8px;
+  }
+  .pb-lines-grid td { padding: 0; }
+  .pb-col-desc { grid-area: desc; }
+  .pb-col-source { grid-area: source; }
+  .pb-col-qty { grid-area: qty; text-align: left; }
+  .pb-col-unit { grid-area: unit; }
+  .pb-col-price { grid-area: price; text-align: left; }
+  .pb-col-total { grid-area: total; text-align: right; align-self: end; }
+  .pb-col-remove { grid-area: remove; text-align: right; }
+  .pb-col-qty::before,
+  .pb-col-unit::before,
+  .pb-col-price::before,
+  .pb-col-total::before {
+    content: attr(data-label);
+    display: block;
+    font-size: 10px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: #9A9A90;
+    margin-bottom: 2px;
+    font-weight: 600;
+  }
 }
 
 .pb-totals {
   border-top: 1px solid #E5E5DD;
-  padding-top: 8px;
+  padding-top: 12px;
+  margin-top: 12px;
   display: flex;
   flex-direction: column;
   gap: 4px;
+  max-width: 320px;
+  margin-left: auto;
 }
 .pb-totals div {
   display: flex;
   justify-content: space-between;
-  font-size: 12px;
+  font-size: 13px;
   color: #6A6A60;
 }
 .pb-totals strong { color: #1F2A22; font-variant-numeric: tabular-nums; }
 .pb-total-row {
   border-top: 1px solid #C5DDB1;
-  padding-top: 6px;
+  padding-top: 8px;
   margin-top: 4px;
-  font-size: 14px !important;
+  font-size: 15px !important;
   font-weight: 700;
   color: #1B4D2E !important;
 }
-.pb-total-row strong { color: #1B4D2E !important; font-size: 16px; }
+.pb-total-row strong { color: #1B4D2E !important; font-size: 17px; }
+
+@media (max-width: 760px) {
+  .pb-totals { max-width: none; margin-left: 0; }
+}
 
 /* ---- Action bar ---- */
 .pb-actions {
