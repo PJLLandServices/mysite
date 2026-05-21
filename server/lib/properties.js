@@ -394,6 +394,10 @@ async function addServiceRecord(propertyId, payload) {
   const entry = {
     id,
     woId: payload?.woId || null,
+    // Brief 2 — projectId set when this record was created by the
+    // project-final cascade (build completion). null for ordinary
+    // per-WO cascade firings.
+    projectId: payload?.projectId || null,
     woType: payload?.woType || "service_visit",
     completedAt: payload?.completedAt || now,
     techNotes: payload?.techNotes || "",

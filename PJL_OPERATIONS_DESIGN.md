@@ -418,7 +418,7 @@ The same WO template behaves differently depending on:
 
 **Critical behaviour difference:** In `find_only` (fall closing) mode, the "Authorize now" button is **disabled** — only "Add to deferred recommendations" is available. Hard rule.
 
-**Implementation note (current state):** the four service modes map to three WO `type` values in code: `spring_opening` (find_and_fix), `fall_closing` (find_only), `service_visit` (find_and_fix or fix_only). The `build` mode (new install / retrofit) is the WO template that runs on the project side; the design-phase data home, multi-day install handling, and in-job scope-addition rules are spec'd in Brief 2 (Project Execution Portal) which absorbed Brief H. As of Brief 1 (May 2026), the proposal side of the `build` pipeline is live (`project_proposal` quote type → `createFromProposal` enrichment on Project conversion → tasks[] seeded from line items). The tech-side `build` WO template lands with Brief 2.
+**Implementation note (current state):** the four service modes map to FOUR WO `type` values in code: `spring_opening` (find_and_fix), `fall_closing` (find_only), `service_visit` (find_and_fix or fix_only), and `build` (multi-day install / retrofit under a project). Brief 1 (May 2026) shipped the proposal side. Brief 2 (May 2026) shipped the `build` template — see §4.4 below for the full build execution flow. The `build` template adds a `dailyLog` block to the WO carrying sessions[] (clock in/out, labourer count + note), tasksCompletedToday[], materialsConsumed[], nextDayMaterials/nextDayTasks (carry-forward to the next day's WO), and dailyNotes (voice-input enabled). Build-mode WO completion DOES NOT fire the standard cascade — invoice + customer email + warranty stamp + service record all defer to project completion (see §4.5).
 
 #### 4.3.2 Work Order Structure
 
@@ -802,6 +802,87 @@ When tech taps "Complete":
   "Download service report" link per service record with a cascade
   snapshot)
 - Warranty clock starts (1 year repairs / 3 years installs)
+
+---
+
+### 4.4 Project Folder Execution (Brief 2, May 2026)
+
+A Project (`PROJ-YYYY-NNNN`) groups multi-day build work under a single accepted proposal. Brief 1 set up the proposal-to-project handshake; this section covers the execution loop.
+
+```
+PROJECT FOLDER (execution-relevant fields)
+  tasks[]               — { id (task_xxxxxxxx), description,
+                            sourceLineItemId, status: pending|in_progress|done,
+                            completedAt, completedByWoId, order, notes }
+                          Seeded from accepted-quote line items at conversion.
+                          Manual additions allowed. Edit/delete locked once done.
+  scopeChangeRequests[] — { id (scr_xxxxxxxx), description, capturedBy,
+                            capturedAt, capturedFromWoId, photoIds[],
+                            suggestedLineItems[], estimatedTotal,
+                            draftEmail { to, subject, body },
+                            status: pending_admin_review |
+                                    pending_customer_approval |
+                                    approved | rejected | withdrawn |
+                                    executed_under_revision,
+                            sentAt, resolvedAt, resolvedAs,
+                            resolutionNote, linkedRevisionQuoteId }
+  statusUpdates[]       — { id (su_xxxxxxxx), generatedAt, generatedBy,
+                            recipient { email, name }, deliveryMethod,
+                            snapshot (frozen content), note }
+                          Append-only. Every "Send status update" press
+                          appends one entry.
+  finalWoId             — explicit pointer to the WO that closes the project.
+                          Auto-detected as most recent build WO if unset.
+  projectCompletionAt   — idempotency stamp for completeProject.
+  invoiceGeneratedAt    — idempotency stamp for invoice creation.
+  finalInvoiceId        — the invoice ID created at completion.
+```
+
+**In-scope vs out-of-scope additions:**
+
+- **In-scope** — work added that falls within the original proposal (e.g., proposal said "approximately 500 ft mainline", install needs 540 ft). Captured on the day's WO. No scope-change record needed. Covered by the original acceptance.
+- **Out-of-scope** — work outside the proposal (e.g., customer asks for drip irrigation while crew is on-site). Captured as a scope-change record via the "Note a scope addition" card on the build WO or the project detail page. State machine: `pending_admin_review` → admin reviews + edits draft email → `pending_customer_approval` → customer responds → `approved` / `rejected` / `withdrawn`. On approval (fixed-price projects), admin presses "Generate quote revision" → creates a Q-vN containing original + approved line items, linked to original via `revisionOf` (the original is `superseded` with `supersededBy` back-reference). SCR status → `executed_under_revision`. T&M projects can skip the revision step — bill from actual.
+
+**Project completion preflight:**
+
+Before the cascade runs, `completionPreflight()` returns three buckets:
+- **Blockers** — refuse completion unless admin explicitly overrides:
+  - Unresolved scope-change requests (pending_admin_review / pending_customer_approval)
+  - Approved SCRs without a quote revision (fixed-price projects)
+  - T&M project with no `labourRateLocked`
+- **Warnings** — visible in the completion modal but don't block:
+  - No final WO selected (most recent build WO is used)
+  - Final WO unsigned (customer hasn't signed the closing visit)
+  - Tasks not yet marked done
+- **Okayed** — green checkmarks for confirmation
+
+**Status update generator:**
+
+Manual-press only — no scheduled / automatic delivery. Recipient defaults to project customer; admin can override to a GC contact or other stakeholder. Content auto-generated from project metrics + recent tasks + upcoming tasks + pending SCRs. Frozen snapshot logged on `statusUpdates[]` for every send.
+
+### 4.5 Build Completion Cascade
+
+The standard `completion-cascade.js` short-circuits for build-mode WOs — each day's WO is one slice of execution, not its own contract. Only project completion fires the full cascade.
+
+**Build WO completion** (per-day):
+- `cascade_fire` logged on WO history with `mode: 'build_short_circuit'`
+- No invoice generation
+- No customer email
+- No warranty stamp
+- No service record
+
+**Project completion** (`POST /api/projects/:id/complete`):
+- Runs preflight (see §4.4). Returns 409 with blocker list if any are unresolved.
+- Generates invoice via `runProjectFinalCascade()`:
+  - **Fixed-price billing** — invoice line items mirror `project.proposalSnapshot.lineItems` exactly. Tax recomputed using current 13% HST.
+  - **Time-and-material billing** — invoice lines derived:
+    - One **Project labour** line summing total hours across all build WO sessions (hours × labourersOnSite per session, summed) × `project.labourRateLocked`.
+    - One **Material** line per consumed SKU (grouped across all build WOs, sorted alphabetically by SKU for deterministic output). Label + unit price from parts.json. **If any consumed SKU lacks a retail price in parts.json, the cascade refuses with an error** — admin must set the price before billing. No silent fallbacks.
+- Creates property service record (`projectId` set so the service-record viewer can deep-link back).
+- Sends customer email with invoice attached.
+- Sends admin email with project summary.
+- Sets project status → `complete`, `projectCompletionAt` stamp, `finalInvoiceId` set.
+- Idempotent — re-running returns the existing invoice ID with no duplicate side effects.
 
 ---
 

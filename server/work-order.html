@@ -19,6 +19,7 @@
   <link rel="stylesheet" href="/crm/crm.css">
   <link rel="stylesheet" href="/crm/property.css">
   <link rel="stylesheet" href="/crm/work-order.css">
+  <link rel="stylesheet" href="/crm/work-order-build.css">
   <link rel="stylesheet" href="/crm/crm-reschedule.css">
   <link rel="stylesheet" href="/js/time-picker.css?v=1">
   <link rel="stylesheet" href="/crm/crm-parts.css">
@@ -113,6 +114,88 @@
 
     <p class="property-loading" id="woLoading">Loading work order…</p>
     <p class="property-error" id="woError" hidden>This work order couldn't be loaded.</p>
+
+    <!-- Brief 2: Build-mode cards (desktop). Renders when wo.type ===
+         "build" — same cards as tech mode but desktop layout. -->
+    <section class="tech-build wo-build" id="techBuildPanel" hidden>
+      <section class="tech-build-card tech-build-context">
+        <h2>Build day — <span id="tbProjectName">—</span></h2>
+        <p class="tech-build-meta" id="tbProjectMeta"></p>
+        <a class="tech-build-project-link" id="tbProjectLink" href="#">↗ Open project</a>
+      </section>
+      <section class="tech-build-card tech-build-session">
+        <h2>Session</h2>
+        <div class="tech-build-session-state" id="tbSessionState">Not started</div>
+        <div class="tech-build-session-actions">
+          <button type="button" class="pjl-btn pjl-btn-primary" id="tbStartSession">Start session</button>
+          <button type="button" class="pjl-btn pjl-btn-primary is-danger-ish" id="tbEndSession" hidden>End session</button>
+        </div>
+        <div class="tech-build-labourers" id="tbLabourersBlock" hidden>
+          <label>Labourers on site
+            <input type="number" id="tbLabourersCount" min="1" value="1">
+          </label>
+          <label>Note (optional)
+            <input type="text" id="tbLabourerNote" placeholder="e.g. Mike Schwartz 9–3" maxlength="400">
+          </label>
+        </div>
+        <ul class="tech-build-session-list" id="tbSessionList"></ul>
+      </section>
+      <section class="tech-build-card tech-build-tasks">
+        <h2>Project tasks</h2>
+        <p class="tech-build-tip">Mark tasks done as you complete them.</p>
+        <ul class="tech-build-task-list" id="tbTaskList"></ul>
+      </section>
+      <section class="tech-build-card tech-build-materials">
+        <h2>Materials consumed today</h2>
+        <button type="button" class="pjl-btn pjl-btn-outline" id="tbAddMaterialsBtn">+ Add materials</button>
+        <ul class="tech-build-materials-list" id="tbMaterialsList"></ul>
+      </section>
+      <section class="tech-build-card tech-build-notes">
+        <h2>Daily notes</h2>
+        <textarea id="tbDailyNotes" rows="6" placeholder="End-of-day notes."></textarea>
+        <p class="tech-build-tip" id="tbDailyNotesSaveState">Saved.</p>
+      </section>
+      <section class="tech-build-card tech-build-nextday">
+        <h2>Tomorrow's plan</h2>
+        <label>Tomorrow's tasks
+          <textarea id="tbNextDayTasks" rows="3" placeholder="One task per line."></textarea>
+        </label>
+        <p class="tech-build-tip">Materials carry over from today's "Materials consumed."</p>
+      </section>
+      <section class="tech-build-card tech-build-scope">
+        <h2>Scope addition</h2>
+        <button type="button" class="pjl-btn pjl-btn-outline" id="tbAddScopeBtn">+ Note scope addition</button>
+      </section>
+    </section>
+
+    <!-- Brief 2: Modals (desktop variant uses the same IDs as tech for the JS) -->
+    <div class="tech-modal-backdrop" id="tbMaterialsModal" hidden role="dialog" aria-modal="true">
+      <div class="tech-modal">
+        <h3>Add materials consumed</h3>
+        <input type="search" id="tbMaterialsSearch" placeholder="Search parts" autocomplete="off">
+        <div class="tech-modal-catalog" id="tbMaterialsCatalog"></div>
+        <p class="tech-modal-summary" id="tbMaterialsSummary">No items selected.</p>
+        <div class="tech-modal-actions">
+          <button type="button" class="pjl-btn pjl-btn-outline" id="tbMaterialsCancel">Cancel</button>
+          <button type="button" class="pjl-btn pjl-btn-primary" id="tbMaterialsConfirm">Add selected</button>
+        </div>
+      </div>
+    </div>
+    <div class="tech-modal-backdrop" id="tbScopeModal" hidden role="dialog" aria-modal="true">
+      <div class="tech-modal">
+        <h3>Note a scope addition</h3>
+        <label>Description
+          <textarea id="tbScopeDescription" rows="3" placeholder="What's being added"></textarea>
+        </label>
+        <h4 class="tech-modal-section-title">Suggested line items</h4>
+        <div class="tech-modal-catalog" id="tbScopeCatalog"></div>
+        <p class="tech-modal-summary" id="tbScopeSummary">Estimated $0.00</p>
+        <div class="tech-modal-actions">
+          <button type="button" class="pjl-btn pjl-btn-outline" id="tbScopeCancel">Cancel</button>
+          <button type="button" class="pjl-btn pjl-btn-primary" id="tbScopeSave">Save as draft</button>
+        </div>
+      </div>
+    </div>
 
     <!-- Cheat Sheet — first-on-arrival context for the visit. Populated
          from the linked property + the most-recent completed WO at this
@@ -609,6 +692,7 @@
   <script src="/crm/crm-followup.js"></script>
   <script src="/crm/work-order.js"></script>
   <script src="/crm/wo-materials.js"></script>
+  <script src="/crm/work-order-build.js"></script>
   <script src="/crm/nav-badges.js?v=1"></script>
 </body>
 </html>

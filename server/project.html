@@ -129,15 +129,74 @@
           </details>
         </section>
 
-        <!-- Tasks (Brief 1) — seeded from proposal line items at
-             conversion; admin marks them done as work progresses. -->
+        <!-- Tasks (Brief 1 + 2) — seeded from proposal line items at
+             conversion; admin marks them done as work progresses (per-WO
+             via tech mode) or directly here. Brief 2 adds inline + manual
+             additions, drag-reorder, delete-while-pending. -->
         <section class="proj-section proj-tasks" id="projTasksPanel" hidden>
           <div class="proj-section-head">
             <h2>Tasks</h2>
             <span class="proj-tasks-progress" id="projTasksProgress"></span>
+            <button type="button" class="pjl-btn pjl-btn-outline" id="projAddTaskBtn">+ Add task</button>
           </div>
           <ul class="proj-task-list" id="projTaskList"></ul>
         </section>
+
+        <!-- Brief 2 — Daily log timeline. One collapsible entry per build
+             WO under this project. Sorted newest-first. -->
+        <section class="proj-section proj-daily-log" id="projDailyLogPanel" hidden>
+          <div class="proj-section-head">
+            <h2>Daily log</h2>
+            <button type="button" class="pjl-btn pjl-btn-primary" id="projNewBuildWoBtn">+ New day's WO</button>
+          </div>
+          <p class="proj-empty" id="projDailyLogEmpty" hidden>No build days logged yet. Tap <strong>+ New day's WO</strong> to start day one.</p>
+          <ul class="proj-daily-list" id="projDailyList"></ul>
+        </section>
+
+        <!-- Brief 2 — Scope changes. List of all SCRs with status badges. -->
+        <section class="proj-section proj-scope-changes" id="projScopeChangesPanel" hidden>
+          <div class="proj-section-head">
+            <h2>Scope changes</h2>
+            <button type="button" class="pjl-btn pjl-btn-outline" id="projAddScopeChangeBtn">+ Note a scope addition</button>
+          </div>
+          <p class="proj-empty" id="projScopeChangesEmpty" hidden>No scope changes recorded.</p>
+          <ul class="proj-scope-list" id="projScopeList"></ul>
+        </section>
+
+        <!-- Brief 2 — Status updates history. -->
+        <section class="proj-section proj-status-updates" id="projStatusUpdatesPanel" hidden>
+          <div class="proj-section-head">
+            <h2>Status updates sent</h2>
+          </div>
+          <p class="proj-empty" id="projStatusUpdatesEmpty" hidden>No status updates sent yet.</p>
+          <ul class="proj-status-update-list" id="projStatusUpdateList"></ul>
+        </section>
+
+        <!-- Brief 2 — T&M billing preview (visible only on T&M projects). -->
+        <section class="proj-section proj-billing" id="projBillingPanel" hidden>
+          <div class="proj-section-head">
+            <h2>Billing preview (live)</h2>
+            <button type="button" class="pjl-btn pjl-btn-outline" id="projRefreshBillingBtn">Refresh</button>
+          </div>
+          <ul class="proj-billing-lines" id="projBillingLines"></ul>
+          <div class="proj-billing-totals" id="projBillingTotals"></div>
+          <p class="proj-billing-warn" id="projBillingWarn" hidden></p>
+        </section>
+
+        <!-- Brief 2 — Sticky action sidebar (visible on desktop only via CSS). -->
+        <aside class="proj-sidebar" id="projSidebar" hidden>
+          <h3>Project actions</h3>
+          <button type="button" class="pjl-btn pjl-btn-primary" id="projSendStatusUpdateBtn">Send status update</button>
+          <div class="proj-sidebar-group">
+            <label for="projFinalWoSelect">Mark final WO</label>
+            <select id="projFinalWoSelect">
+              <option value="">(auto-detect)</option>
+            </select>
+            <button type="button" class="pjl-btn pjl-btn-outline" id="projSetFinalWoBtn">Set</button>
+          </div>
+          <button type="button" class="pjl-btn pjl-btn-primary is-danger-ish" id="projCompleteBtn">Complete project</button>
+          <p class="proj-sidebar-hint" id="projCompleteHint"></p>
+        </aside>
 
         <section class="proj-section">
           <div class="proj-section-head">
@@ -192,6 +251,99 @@
       <div class="proj-modal-results" id="attachWoResults"></div>
       <div class="proj-modal-actions">
         <button type="button" class="pjl-btn pjl-btn-outline" id="attachWoCancel">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Brief 2 — Add Task modal -->
+  <div class="proj-modal-backdrop" id="addTaskModal" hidden role="dialog" aria-modal="true">
+    <div class="proj-modal">
+      <h3>Add task</h3>
+      <label class="proj-modal-label">Description
+        <input type="text" id="addTaskDescription" maxlength="400" placeholder="What needs to be done">
+      </label>
+      <label class="proj-modal-label">Notes (optional)
+        <textarea id="addTaskNotes" rows="2" maxlength="2000"></textarea>
+      </label>
+      <div class="proj-modal-actions">
+        <button type="button" class="pjl-btn pjl-btn-outline" id="addTaskCancel">Cancel</button>
+        <button type="button" class="pjl-btn pjl-btn-primary" id="addTaskConfirm">Add task</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Brief 2 — Send Status Update modal -->
+  <div class="proj-modal-backdrop" id="statusUpdateModal" hidden role="dialog" aria-modal="true">
+    <div class="proj-modal proj-modal-wide">
+      <h3>Send status update</h3>
+      <div class="proj-modal-grid">
+        <label class="proj-modal-label">Recipient email
+          <input type="email" id="suRecipientEmail" maxlength="254">
+        </label>
+        <label class="proj-modal-label">Recipient name (optional)
+          <input type="text" id="suRecipientName" maxlength="200">
+        </label>
+        <label class="proj-modal-label proj-modal-wide-field">Preamble (optional)
+          <textarea id="suPreamble" rows="2" maxlength="4000" placeholder="Optional context line that appears at the top of the email."></textarea>
+        </label>
+      </div>
+      <h4 class="proj-modal-section-title">Preview</h4>
+      <div class="proj-modal-preview" id="suPreview"></div>
+      <div class="proj-modal-actions">
+        <button type="button" class="pjl-btn pjl-btn-outline" id="suCancel">Cancel</button>
+        <button type="button" class="pjl-btn pjl-btn-primary" id="suSend">Send update</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Brief 2 — Scope Change Capture modal -->
+  <div class="proj-modal-backdrop" id="scopeChangeModal" hidden role="dialog" aria-modal="true">
+    <div class="proj-modal proj-modal-wide">
+      <h3>Note a scope addition</h3>
+      <label class="proj-modal-label">Description
+        <textarea id="scDescription" rows="3" maxlength="4000" placeholder="What's being added beyond the original scope"></textarea>
+      </label>
+      <h4 class="proj-modal-section-title">Suggested line items (project rates catalog)</h4>
+      <div class="proj-modal-catalog" id="scCatalogPicker"></div>
+      <ul class="proj-modal-selected" id="scSelectedLines"></ul>
+      <p class="proj-modal-total" id="scEstimatedTotal">Estimated total: $0.00</p>
+      <div class="proj-modal-actions">
+        <button type="button" class="pjl-btn pjl-btn-outline" id="scCancel">Cancel</button>
+        <button type="button" class="pjl-btn pjl-btn-primary" id="scSaveDraft">Save as draft</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Brief 2 — Project Completion Confirmation modal -->
+  <div class="proj-modal-backdrop" id="completeProjectModal" hidden role="dialog" aria-modal="true">
+    <div class="proj-modal proj-modal-wide">
+      <h3>Complete project</h3>
+      <p>Running this cascade generates the final invoice, sends customer + admin emails, creates the property service record, and stamps the project complete. This is the binding moment for billing.</p>
+      <h4 class="proj-modal-section-title">Preflight check</h4>
+      <ul class="proj-preflight-list" id="cpPreflight"></ul>
+      <h4 class="proj-modal-section-title">Invoice preview</h4>
+      <div class="proj-modal-invoice" id="cpInvoicePreview"></div>
+      <label class="proj-modal-label">Attestation note (optional)
+        <textarea id="cpAttestationNote" rows="2" maxlength="2000" placeholder="Optional — context about overrides, signed status, etc."></textarea>
+      </label>
+      <label class="proj-modal-checkbox" id="cpOverrideWrap" hidden>
+        <input type="checkbox" id="cpAllowOverride"> Override preflight blockers
+      </label>
+      <div class="proj-modal-actions">
+        <button type="button" class="pjl-btn pjl-btn-outline" id="cpCancel">Cancel</button>
+        <button type="button" class="pjl-btn pjl-btn-primary is-danger-ish" id="cpConfirm">Complete project</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Brief 2 — Status Update snapshot viewer modal -->
+  <div class="proj-modal-backdrop" id="suViewModal" hidden role="dialog" aria-modal="true">
+    <div class="proj-modal proj-modal-wide">
+      <h3>Status update snapshot</h3>
+      <p class="proj-modal-meta" id="suViewMeta"></p>
+      <div class="proj-modal-preview" id="suViewBody"></div>
+      <div class="proj-modal-actions">
+        <button type="button" class="pjl-btn pjl-btn-outline" id="suViewClose">Close</button>
       </div>
     </div>
   </div>

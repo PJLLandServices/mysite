@@ -179,6 +179,7 @@ async function listByProperty(propertyId) {
 async function createDraft({
   woId = null,
   quoteId = null,
+  projectId = null,
   propertyId = null,
   customerId = null,
   customerName = "",
@@ -228,6 +229,8 @@ async function createDraft({
     id,
     woId,
     quoteId,
+    projectId,
+    sourceProjectId: projectId,
     propertyId,
     customerId,
     customerName,

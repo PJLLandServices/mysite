@@ -93,11 +93,11 @@ form except where noted.
 | File | Entity | ID format | Purpose |
 |---|---|---|---|
 | `properties.js` | Property | `P-YYYY-NNNN` | Customer site profile (zones, valves, controller, blow-out, deferred issues, service records, seasonal eligibility + outreach state + comm prefs). One per physical address. Zones land with `pendingReview: true` when the WO completion cascade discovers them on-site (Brief D). **Name invariant** (feature-seasonal-outreach-brief §3.9): `customerName` must be non-blank at `create`, `update`, and `bulkUpsert` — validation rejects blank patches with `code: MISSING_NAME`. Helpers: `seasonKey`, `recordOutreachTouch`, `setSeasonalOptOut`, `setSeasonalCommPref`, `setSeasonalEligibility`, `mintOptOutTokensIfMissing`, `findByOptOutToken`, `auditMissingCustomerName`. **Per-property seasonal pricing** (feature-per-property-seasonal-pricing-brief): now stores `seasonalPricing { springOpeningPrice, fallClosingPrice, hasAdditionalFallBlowout, additionalFallBlowoutPrice, additionalFallBlowoutDescription }`. `hydrateSeasonalPricing()` normalizes on read/write — cabana-off forces dependent fields to null. |
-| `work-orders.js` | Work Order | `WO-XXXXXXXX` (random alphabet) | One per visit. Zones, issues, photos, signature OR signatureBypass (mutually exclusive), on-site quote, materials packed, `paidOnSite`, `propertyEditsAppliedAt`, `intakeGuarantee.matched`, `customerNotes` (customer-visible report narrative, required at signature), `reportSnapshots[]` (append-only list of frozen Service / Inspection Report PDFs), `completionReportSnapshotAt` (idempotency gate), `history[]`. Lock-protected fields enforced via `SCOPE_PROTECTED_FIELDS` constant (Brief A; `customerNotes` joined the list with Service Report brief 2026-05-19). Bypass acts as a unified end-of-visit completion event covering both on-site quote acceptance (when builder has additions beyond baseline) and completion lock; bypass-completed WOs with `coversQuoteAcceptance: true` do NOT produce `on_site_quote` Quote records — `signatureBypass.acceptedScopeSnapshot` (deep-copied builder lines + totals) is the authoritative scope record. |
+| `work-orders.js` | Work Order | `WO-XXXXXXXX` (random alphabet) | One per visit. Zones, issues, photos, signature OR signatureBypass (mutually exclusive), on-site quote, materials packed, `paidOnSite`, `propertyEditsAppliedAt`, `intakeGuarantee.matched`, `customerNotes` (customer-visible report narrative, required at signature), `reportSnapshots[]` (append-only list of frozen Service / Inspection Report PDFs), `completionReportSnapshotAt` (idempotency gate), `history[]`. Lock-protected fields enforced via `SCOPE_PROTECTED_FIELDS` constant (Brief A; `customerNotes` joined the list with Service Report brief 2026-05-19). Bypass acts as a unified end-of-visit completion event covering both on-site quote acceptance (when builder has additions beyond baseline) and completion lock; bypass-completed WOs with `coversQuoteAcceptance: true` do NOT produce `on_site_quote` Quote records — `signatureBypass.acceptedScopeSnapshot` (deep-copied builder lines + totals) is the authoritative scope record. **Brief 2** adds `build` to TEMPLATES (multi-day install / retrofit under a Project) with a `dailyLog` block: `workDate`, `sessions[]` (clock in/out + labourer count + note + startedBy), `tasksCompletedToday[]` (taskId references that sync to project.tasks), `materialsConsumed[]` (SKUs from parts.json), `nextDayMaterials[]` / `nextDayTasks[]` (carry-forward seeds for the next day's WO), `dailyNotes`. Helpers: `blankDailyLog`, `startSession`, `endSession`, `setLabourersForSession`, `markTaskDoneToday`, `unmarkTaskDoneToday`, `recordMaterialConsumed`, `removeMaterialConsumed`, `setNextDayPlan`, `setDailyNotes`, `listBuildWosForProject`. Build WOs accept a `parentProjectId` and use `wo.create({ type: "build", project, workDate, carryFromWoId })`. |
 | `quotes.js` | Quote | `Q-YYYY-NNNN` | Versioned, signed estimate. Three flavours: `ai_repair_quote` (AI chat), `on_site_quote` (tech-built), `project_proposal` (admin-authored multi-section narrative, Brief 1 May 2026). Proposal type carries `branch`, `billingMode`, `proposalSections[]`, `attachments[]`, `customRates`, dual `acceptanceMethod` (`portal_esign` / `pdf_return`), and revision lineage (`revisionOf` / `supersededBy`). Scope-protected fields (`SCOPE_PROTECTED_FIELDS`) refuse PATCH once past draft. Helpers: `updateProposal`, `addAttachment` / `removeAttachment` / `readAttachmentBuffer`, `recordPortalSignAcceptance`, `stagePdfReturn`, `recordPdfReturnAcceptance`, `createRevision`, `snapshotRatesFromCustomer`. |
 | `invoices.js` | Invoice | `I-YYYY-NNNN` | Auto-drafted by completion cascade, lifecycle draft → sent → paid → void. Carries `disclaimers: [...keys]` array — text bodies in the `INVOICE_DISCLAIMERS` constant (currently only `fall_additional_plumbing`). `update()` merges via Set semantics so cascade re-fires never duplicate keys. |
 | `bookings.js` | Booking | `BK-YYYY-NNNN` | First-class appointment record. Mirrors `lead.booking` but is canonical. Exposes `cancel()` (soft, adds `cancelledAt/By/Reason` + history), `reschedule()` (sets `scheduledFor` + bumps `rescheduleCount` + history), and `remove()` (hard delete; refuses when a linked WO is past `scheduled` — caller passes `isActiveWo` to gate without coupling to work-orders.js). Schema includes `rescheduleCount` (capped at 1 for customer self-service via the portal endpoint; admin bypasses the cap). |
-| `projects.js` | Project | `PROJ-YYYY-NNNN` | Multi-WO container for named jobs. Lifecycle planning → active → complete → archived. `createFromProposal(quote, …)` (Brief 1) enriches a project at conversion time from a `project_proposal` quote: `branch`, `billingMode`, `labourRateLocked` (snapshotted from `quote.customRates.labour`), `tasks[]` (seeded from line items — one task per line, status `pending`, `sourceLineItemId` set), `attachments[]` (references to the quote's attachments by id), and a frozen `proposalSnapshot` mirroring the accepted proposal at that instant. |
+| `projects.js` | Project | `PROJ-YYYY-NNNN` | Multi-WO container for named jobs. Lifecycle planning → active → complete → archived. `createFromProposal(quote, …)` (Brief 1) enriches a project at conversion time from a `project_proposal` quote: `branch`, `billingMode`, `labourRateLocked` (snapshotted from `quote.customRates.labour`), `tasks[]` (seeded from line items — one task per line, status `pending`, `sourceLineItemId` set), `attachments[]` (references to the quote's attachments by id), and a frozen `proposalSnapshot` mirroring the accepted proposal at that instant. **Brief 2** adds execution ops: task CRUD (`addTask`, `updateTask`, `removeTask`, `markTaskComplete`, `unmarkTaskComplete`, `seedTasksFromQuote`); scope changes (`createScopeChangeRequest`, `updateScopeChangeRequest`, `sendScopeChangeRequest`, `resolveScopeChangeRequest`, `generateQuoteRevisionFromScopeChange`); status updates (`generateStatusUpdate`); project completion (`markFinalWo`, `completionPreflight`, `completeProject`); metrics + billing rollup (`computeProjectMetrics`, `computeTAndMBilling`). Schema additions: `scopeChangeRequests[]`, `statusUpdates[]`, `finalWoId`, `projectCompletionAt`, `invoiceGeneratedAt`, `finalInvoiceId`. |
 | `material-lists.js` | Material List | `ML-YYYY-NNNN` | Bill of materials. Line items reference parts.json SKUs + quantities + status (`need` / `ordered` / `have`). Attachable to a project / WO / quote / standalone. |
 | `purchase-orders.js` | Purchase Order | `PO-YYYY-NNNN` | One supplier's slice of a material list's `need` lines. Lifecycle draft → sent → partially_received → received → cancelled. |
 | `suppliers.js` | Supplier | `SUP-NNN` (no year prefix) | Vendor records (name, contact, email, phone, address). |
@@ -105,7 +105,7 @@ form except where noted.
 | `settings.js` | — | n/a | Admin notification preferences + 50-entry audit trail + iCal-feed token (Brief C: `icalFeed.{enabled, token, regeneratedAt}` — token is the credential for the public `/calendar/<token>.ics` feed) + `contactInfo.customerSupportPhone` (surfaced verbatim in portal blocked-state copy when self-service reschedule/cancel is refused; exposes `updateContactInfo()` for the `/api/settings/contact-info` PATCH endpoint) + per-season outreach templates (`outreachTemplates.{spring,fall}.{subject,smsBody,emailBody}`, saved via `saveOutreachTemplate`). |
 | `ical-feed.js` | — | n/a | Builds the read-only `.ics` feed for iPhone Calendar subscription. Filters bookings to `status === confirmed` and a -90d / +365d window; uses stable `BK-…@pjllandservices.com` UIDs so reschedules update the existing event. |
 | `ical-format.js` | — | n/a | Hand-rolled RFC 5545 helpers: value escaping, 75-octet line folding, Toronto VTIMEZONE block, local + UTC date formatters. |
-| `completion-cascade.js` | — | n/a | Fires on WO status → completed. Idempotent. Creates service record on property, draft invoice (with `paidOnSiteAtCompletion` flag), customer + admin emails, warranty stamp, **Service Report PDF snapshot** (gated by `wo.completionReportSnapshotAt`; failure leaves stamp unset and the cascade-recovery admin action becomes the retry path). Applies property edits via `computePropertyEdits()` (Brief D — zone/controller diffs, new zones flagged for Patrick review) gated by `wo.propertyEditsAppliedAt`. Logs `cascade_fire`, `invoice_drafted` (when a draft was created), `property_edits_applied`, and `report_snapshot_created` history entries. When the cascade throws mid-flight, the PATCH handler appends `cascade_failed` to the WO history and surfaces `cascade.error` in the response — the WO stays signed + locked + completed (recoverable via /run-cascade or /create-invoice). Attaches `fall_additional_plumbing` disclaimer key when WO is `fall_closing` and `property.seasonalPricing.hasAdditionalFallBlowout` is true (resolved against the LIVE property record, idempotent via Set in `invoices.update`). |
+| `completion-cascade.js` | — | n/a | Fires on WO status → completed. Idempotent. Creates service record on property, draft invoice (with `paidOnSiteAtCompletion` flag), customer + admin emails, warranty stamp, **Service Report PDF snapshot** (gated by `wo.completionReportSnapshotAt`; failure leaves stamp unset and the cascade-recovery admin action becomes the retry path). Applies property edits via `computePropertyEdits()` (Brief D — zone/controller diffs, new zones flagged for Patrick review) gated by `wo.propertyEditsAppliedAt`. Logs `cascade_fire`, `invoice_drafted` (when a draft was created), `property_edits_applied`, and `report_snapshot_created` history entries. When the cascade throws mid-flight, the PATCH handler appends `cascade_failed` to the WO history and surfaces `cascade.error` in the response — the WO stays signed + locked + completed (recoverable via /run-cascade or /create-invoice). Attaches `fall_additional_plumbing` disclaimer key when WO is `fall_closing` and `property.seasonalPricing.hasAdditionalFallBlowout` is true (resolved against the LIVE property record, idempotent via Set in `invoices.update`). **Brief 2** adds service-mode branching: `build` WOs short-circuit the standard cascade (`mode: 'build_short_circuit'`) — invoice + customer email + warranty + service record all defer to project completion. New `runProjectFinalCascade(project, …)` fires when admin presses "Complete project" — generates invoice (T&M via `projects.computeTAndMBilling()` or fixed-price mirroring `proposalSnapshot.lineItems`), creates property service record (`projectId` set), sends emails, stamps 36-mo install warranty. Refuses with `unknownSkus` error when a consumed material SKU has no retail price in parts.json. |
 | `issue-rollup.js` | — | n/a | Maps zone issues into priced line items for the on-site quote. Manifold rule, controller subtype tier selection, etc. |
 | `pricing.js` | — | n/a | `priceForBooking(serviceKey, zoneCount)` reads `pricing.json`. `resolveSeasonalPrice(property, serviceType)` cascades property override → pricing.json tier → custom-quote signal. Only accepts `spring_opening` / `fall_closing` — `service_call` is canonical and never per-property-overridable. |
 | `availability.js` | — | n/a | Slot generator + `BOOKABLE_SERVICES` catalog. Endpoints can pass `from`/`to` (YYYY-MM-DD); `expandDaysToRange()` backfills every day in the range with `{slots, reason}` so the month-calendar picker can render available + unavailable cells in one pass. |
@@ -433,6 +433,38 @@ Projects
   POST   /api/projects/:id/attach-work-order
   POST   /api/projects/:id/detach-work-order
 
+  Project Execution — Brief 2 (May 2026):
+  GET    /api/projects/:id/tasks                 ← list tasks
+  POST   /api/projects/:id/tasks                 ← add task
+  PATCH  /api/projects/:id/tasks/:taskId         ← edit (pending tasks only)
+  DELETE /api/projects/:id/tasks/:taskId         ← remove (pending tasks only)
+  POST   /api/projects/:id/tasks/seed            ← re-seed from accepted quote (refuses if any done)
+  POST   /api/projects/:id/build-wos             ← create a new build-mode WO under this project
+  GET    /api/projects/:id/metrics               ← computed metrics (% complete, hours, days, etc.)
+  GET    /api/projects/:id/billing-preview       ← live invoice preview (T&M rollup or fixed-price)
+  GET    /api/projects/:id/scope-changes
+  POST   /api/projects/:id/scope-changes
+  PATCH  /api/projects/:id/scope-changes/:scrId
+  POST   /api/projects/:id/scope-changes/:scrId/send         ← flip to pending_customer_approval, email
+  POST   /api/projects/:id/scope-changes/:scrId/resolve      ← body { resolution: approved|rejected|withdrawn }
+  POST   /api/projects/:id/scope-changes/:scrId/generate-revision ← creates Q-vN, links SCR
+  GET    /api/projects/:id/status-updates        ← history of past sends
+  POST   /api/projects/:id/status-update         ← generate + send + log snapshot
+  POST   /api/projects/:id/mark-final-wo         ← body { woId }
+  GET    /api/projects/:id/completion-preflight  ← preflight blockers + warnings
+  POST   /api/projects/:id/complete              ← project final cascade (idempotent)
+
+  Build WO daily-log routes:
+  POST   /api/work-orders/:id/sessions                  ← start session
+  PATCH  /api/work-orders/:id/sessions/:sessId/end      ← end session
+  PATCH  /api/work-orders/:id/sessions/:sessId/labourers ← set labourer count + note
+  POST   /api/work-orders/:id/tasks-done                ← body { taskId, photoIds? }
+  DELETE /api/work-orders/:id/tasks-done/:taskId        ← unmark (cross-day guard)
+  POST   /api/work-orders/:id/materials-consumed        ← body { items[] } or { partSku, qty }
+  DELETE /api/work-orders/:id/materials-consumed/:idx
+  PATCH  /api/work-orders/:id/next-day                  ← body { nextDayMaterials, nextDayTasks }
+  PATCH  /api/work-orders/:id/daily-notes               ← body { dailyNotes }
+
 Material Lists
   GET    /api/material-lists                     ← filter ?status, ?parentType, ?parentId, ?withTotals=1
   GET    /api/material-lists/:id
@@ -701,6 +733,64 @@ Admin attaches WOs to the project as jobs schedule. Project rolls up
 multiple visits + multiple material lists + a single source quote.
 ```
 
+### 3a. Project execution — build mode (Brief 2, May 2026)
+
+The full multi-day execution loop from kickoff to billing close-out.
+
+```
+Project converted from accepted proposal (Workflow #3)
+   ↓
+Tasks seeded from quote line items, attachments referenced, snapshot frozen.
+Admin reviews task list on /admin/project/<id>, edits/adds tasks pre-Day-1.
+   ↓
+DAY 1:
+  Admin taps "+ New day's WO" on project page → POST /api/projects/:id/build-wos
+  Creates a build-mode WO. Tech opens it in tech mode on iPhone Safari.
+  Tech taps Start session (labourers = 2, note "Mike Schwartz onsite for sleeve install").
+  Throughout the day:
+    - Marks tasks done as completed (syncs to project.tasks)
+    - Captures photos (optionally task-anchored)
+    - Adds materials consumed via batch catalog picker (parts.json)
+    - Dictates daily notes via voice input
+    - End of day: sets tomorrow's tasks
+  Taps End session.
+   ↓
+DAY 2:
+  Admin taps "+ New day's WO". carryFromWoId carries over yesterday's
+  nextDayMaterials + nextDayTasks (planned, not auto-consumed).
+  Tech promotes carried materials as actually installed.
+   ↓
+If scope addition arises (customer asks for drip irrigation while on-site):
+  Tech taps "Note a scope addition" on the day's WO → SCR captured with
+  description + suggested line items from project-rates.json catalog →
+  scr.status = pending_admin_review.
+  Admin reviews on project page, edits draft email, taps Send to customer →
+  status = pending_customer_approval, email sent.
+  Customer responds → admin marks approved/rejected.
+  If approved + fixed-price project → admin generates Q-vN revision
+  (quotes.createRevision + appends suggested line items). Original quote
+  superseded; new revision linked via revisionOf / supersededBy.
+   ↓
+At any point, admin presses "Send status update" on project page → opens
+modal with recipient + preamble + preview → POST /api/projects/:id/status-update
+sends email + logs frozen snapshot on project.statusUpdates[].
+   ↓
+Final day: customer signs the final WO (existing signature canvas).
+Admin marks this WO as the final WO via sidebar picker.
+Admin presses "Complete project" → opens completion modal with preflight
+check (final WO signed?, tasks done?, scope changes resolved?) + invoice
+preview → POST /api/projects/:id/complete
+   ↓
+Build completion cascade fires:
+  - Invoice generated (T&M rollup or fixed-price mirror)
+  - Property service record created (projectId set, projectId-tagged)
+  - Customer email with invoice attached
+  - Admin email with project summary
+  - Warranty stamp (36 months — install tier)
+  - Project status → complete, projectCompletionAt + finalInvoiceId stamped
+  - Idempotent — re-running returns same invoice ID, no duplicates
+```
+
 ### 4. Customer self-service booking changes (portal)
 
 ```
@@ -933,3 +1023,6 @@ Playwright is `devDependencies` only — it does not ship to production.
 | `att_xxxxxxxx` | Quote attachment / project attachment reference (Brief 1) | `att_K9pQrZ7m` (random) |
 | `sec_xxxxxxxx` | Proposal section inside a project_proposal quote (Brief 1) | `sec_x8WqLP3a` (random) |
 | `task_xxxxxxxx` | Project task seeded from a proposal line item (Brief 1) | `task_aB3cD9eF` (random) |
+| `sess_xxxxxxxx` | WO session (clock-in/out) on a build-mode WO (Brief 2) | `sess_9Pq3aLn4` (random) |
+| `scr_xxxxxxxx` | Scope-change request on a Project (Brief 2) | `scr_Vk2mZpQ8` (random) |
+| `su_xxxxxxxx` | Status-update entry sent to a stakeholder (Brief 2) | `su_3aZ7Lp2M` (random) |

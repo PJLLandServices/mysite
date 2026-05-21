@@ -166,6 +166,30 @@ function computePropertyEdits(wo, property) {
 
 async function run(wo, deps = {}) {
   if (!wo || !wo.id) return { ok: false, errors: ["No WO."] };
+
+  // Brief 2 — build-mode WOs short-circuit. Each calendar day in a
+  // multi-day project completes individually for tracking, but the
+  // invoice / customer email / warranty / service record only fire on
+  // project completion (see runProjectFinalCascade below). The WO's
+  // history still gets the cascade_fire breadcrumb so audit trail is
+  // intact.
+  if (wo.type === "build") {
+    try {
+      await workOrders.appendHistory(wo.id, {
+        action: "cascade_fire",
+        by: "system",
+        note: "build_short_circuit — invoice + service record + warranty deferred to project completion"
+      });
+    } catch (err) { console.warn("[cascade] build short-circuit history failed:", err?.message); }
+    return {
+      ok: true,
+      mode: "build_short_circuit",
+      serviceRecord: null,
+      invoice: null,
+      alreadyRan: false
+    };
+  }
+
   if (!wo.propertyId) return { ok: false, errors: ["WO has no linked property."] };
 
   // Idempotency: if a service record already references this WO, return it.
@@ -385,4 +409,181 @@ async function run(wo, deps = {}) {
   return { ok: true, serviceRecord, invoice, alreadyRan: false, propertyEditsApplied, invoiceDraftError, reportSnapshot, reportSnapshotError };
 }
 
-module.exports = { run, summarizeWo, lineItemsFromWo, computePropertyEdits, WARRANTY_MONTHS };
+// ---- Brief 2: Project-final cascade --------------------------------
+//
+// Runs when an admin presses "Complete project" on a multi-day build
+// project. This is the single cascade fire for the entire project —
+// the per-day build WOs short-circuited above. Generates:
+//
+//   1. Final invoice — T&M (rolled up from sessions + materials) or
+//      fixed-price (mirrored from proposalSnapshot.lineItems).
+//   2. Property service record summarising the project.
+//   3. Customer email with invoice attached.
+//   4. Admin email with project summary.
+//   5. Warranty stamp on project completion date (36 months for install
+//      tier — builds are installs).
+//
+// Idempotent — called by projects.completeProject(), which gates re-runs
+// via project.projectCompletionAt. This function is safe to call again
+// (returns the existing invoice) but the gate is the canonical guard.
+
+async function runProjectFinalCascade(project, { by = "admin", deps = {} } = {}) {
+  if (!project || !project.id) {
+    return { ok: false, errors: ["No project."] };
+  }
+
+  // Idempotent: if the project already has a final invoice ID, return it.
+  if (project.finalInvoiceId) {
+    const existing = await invoices.get(project.finalInvoiceId);
+    if (existing) {
+      return {
+        ok: true,
+        mode: "project_final",
+        invoiceId: existing.id,
+        invoice: existing,
+        alreadyRan: true
+      };
+    }
+  }
+
+  // Build the line items based on billing mode.
+  let lineItems = [];
+  let billingNote = "";
+  let unknownSkus = [];
+  const projects = require("./projects");
+  if (project.billingMode === "time_and_material") {
+    // Lazy-load parts.json from disk to avoid a load-order coupling with
+    // server.js's PARTS global.
+    let partsCatalog = null;
+    try {
+      const fsSync = require("node:fs");
+      const path = require("node:path");
+      partsCatalog = JSON.parse(fsSync.readFileSync(path.resolve(__dirname, "..", "..", "parts.json"), "utf8"));
+    } catch (err) { console.warn("[project-cascade] parts.json read failed:", err?.message); }
+    const billing = await projects.computeTAndMBilling(project.id, { partsCatalog });
+    lineItems = billing.lineItems.map((li) => ({
+      key: li.sourceKey || (li.source === "labour" ? "project_labour" : "custom"),
+      label: li.label,
+      qty: li.qty,
+      price: li.price,
+      lineTotal: li.lineTotal
+    }));
+    unknownSkus = billing.unknownSkus || [];
+    billingNote = `T&M: ${billing.totalHours} person-hours @ $${billing.rate}/hr`;
+  } else {
+    // Fixed-price — mirror the proposal snapshot. If for some reason
+    // the snapshot is missing, fall back to the source quote.
+    const snap = project.proposalSnapshot;
+    if (snap && Array.isArray(snap.lineItems) && snap.lineItems.length) {
+      lineItems = snap.lineItems.map((li) => ({
+        key: li.sourceKey || "custom",
+        label: li.label,
+        qty: li.qty,
+        price: li.price,
+        lineTotal: li.lineTotal
+      }));
+      billingNote = `Fixed price: from proposal ${snap.quoteId}`;
+    } else if (project.sourceQuoteId) {
+      try {
+        const quotes = require("./quotes");
+        const q = await quotes.get(project.sourceQuoteId);
+        if (q && Array.isArray(q.lineItems)) {
+          lineItems = q.lineItems.map((li) => ({
+            key: li.sourceKey || "custom",
+            label: li.label,
+            qty: li.qty,
+            price: li.price,
+            lineTotal: li.lineTotal
+          }));
+          billingNote = `Fixed price: live quote ${q.id}`;
+        }
+      } catch (err) { console.warn("[project-cascade] sourceQuote read failed:", err?.message); }
+    }
+  }
+
+  if (unknownSkus.length) {
+    return {
+      ok: false,
+      mode: "project_final",
+      errors: [
+        `Cannot bill project — these consumed SKUs have no retail price in parts.json: ${unknownSkus.join(", ")}. Set retail prices and retry.`
+      ],
+      unknownSkus
+    };
+  }
+
+  // Create the invoice. Project invoices skip the WO linkage — invoice
+  // links back to the project via sourceProjectId instead.
+  const completedAt = new Date().toISOString();
+  let invoice = null;
+  let invoiceDraftError = null;
+  if (lineItems.length) {
+    try {
+      invoice = await invoices.createDraft({
+        woId: project.finalWoId || null,
+        quoteId: project.sourceQuoteId || null,
+        projectId: project.id,
+        propertyId: project.propertyId,
+        customerId: project.customerId || null,
+        customerName: project.customerName || "",
+        customerEmail: project.customerEmail || "",
+        customerPhone: project.customerPhone || "",
+        address: project.address || "",
+        lineItems,
+        notes: `Project ${project.id} — ${billingNote}`,
+        paidOnSiteAtCompletion: false,
+        disclaimers: []
+      });
+    } catch (err) {
+      invoiceDraftError = err?.message || "createDraft threw";
+      console.warn("[project-cascade] invoice draft failed:", invoiceDraftError);
+    }
+  }
+
+  // Service record on the property.
+  let serviceRecord = null;
+  if (project.propertyId) {
+    try {
+      serviceRecord = await properties.addServiceRecord(project.propertyId, {
+        woId: project.finalWoId || null,
+        woType: "build",
+        projectId: project.id,
+        completedAt,
+        techNotes: `Project ${project.id} completed — ${billingNote}`,
+        summary: `Project completion — ${project.name || project.id}`,
+        lineItems,
+        subtotal: invoice?.subtotal || 0,
+        hst: invoice?.hst || 0,
+        total: invoice?.total || 0,
+        warrantyMonths: WARRANTY_MONTHS.install,
+        warrantyExpiresAt: addMonths(completedAt, WARRANTY_MONTHS.install),
+        invoiceId: invoice?.id || null
+      });
+    } catch (err) {
+      console.warn("[project-cascade] service record failed:", err?.message);
+    }
+  }
+
+  // Notifications — best-effort.
+  if (deps.notifyAdmin) {
+    try { await deps.notifyAdmin({ project, invoice, serviceRecord, mode: "project_final" }); }
+    catch (err) { console.warn("[project-cascade] admin notify failed:", err?.message); }
+  }
+  if (deps.notifyCustomer) {
+    try { await deps.notifyCustomer({ project, invoice, serviceRecord, mode: "project_final" }); }
+    catch (err) { console.warn("[project-cascade] customer notify failed:", err?.message); }
+  }
+
+  return {
+    ok: true,
+    mode: "project_final",
+    invoiceId: invoice?.id || null,
+    invoice,
+    serviceRecord,
+    propertyEditsApplied: false,
+    invoiceDraftError,
+    billingNote
+  };
+}
+
+module.exports = { run, runProjectFinalCascade, summarizeWo, lineItemsFromWo, computePropertyEdits, WARRANTY_MONTHS };

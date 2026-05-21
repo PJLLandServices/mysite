@@ -17,6 +17,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/crm/work-order-tech.css">
+  <link rel="stylesheet" href="/crm/work-order-build.css">
   <link rel="stylesheet" href="/crm/crm-reschedule.css">
   <link rel="stylesheet" href="/js/time-picker.css?v=1">
   <link rel="stylesheet" href="/crm/crm-parts.css">
@@ -80,6 +81,107 @@
       <p class="tech-customer" id="techCustomer">—</p>
       <p class="tech-address" id="techAddress">—</p>
     </section>
+
+    <!-- Brief 2: Build-mode cards. Only visible when wo.type === "build".
+         Mobile-first order: session clock first (primary in-field action),
+         project task checklist, photos, materials consumed, daily notes,
+         next-day plan, scope addition. -->
+    <section class="tech-build" id="techBuildPanel" hidden>
+      <!-- Parent project context -->
+      <section class="tech-build-card tech-build-context">
+        <h2>Build day — <span id="tbProjectName">—</span></h2>
+        <p class="tech-build-meta" id="tbProjectMeta"></p>
+        <a class="tech-build-project-link" id="tbProjectLink" href="#">↗ Open project</a>
+      </section>
+
+      <!-- Session clock — primary surface -->
+      <section class="tech-build-card tech-build-session">
+        <h2>Session</h2>
+        <div class="tech-build-session-state" id="tbSessionState">Not started</div>
+        <div class="tech-build-session-actions">
+          <button type="button" class="pjl-btn pjl-btn-primary" id="tbStartSession">Start session</button>
+          <button type="button" class="pjl-btn pjl-btn-primary is-danger-ish" id="tbEndSession" hidden>End session</button>
+        </div>
+        <div class="tech-build-labourers" id="tbLabourersBlock" hidden>
+          <label>Labourers on site
+            <input type="number" id="tbLabourersCount" min="1" value="1">
+          </label>
+          <label>Note (optional)
+            <input type="text" id="tbLabourerNote" placeholder="e.g. Mike Schwartz 9–3 for sleeve install" maxlength="400">
+          </label>
+        </div>
+        <ul class="tech-build-session-list" id="tbSessionList"></ul>
+      </section>
+
+      <!-- Project task checklist -->
+      <section class="tech-build-card tech-build-tasks">
+        <h2>Project tasks</h2>
+        <p class="tech-build-tip">Mark tasks done as you complete them. Project's master list updates in lockstep.</p>
+        <ul class="tech-build-task-list" id="tbTaskList"></ul>
+      </section>
+
+      <!-- Materials consumed today -->
+      <section class="tech-build-card tech-build-materials">
+        <h2>Materials consumed today</h2>
+        <button type="button" class="pjl-btn pjl-btn-outline" id="tbAddMaterialsBtn">+ Add materials</button>
+        <ul class="tech-build-materials-list" id="tbMaterialsList"></ul>
+      </section>
+
+      <!-- Daily notes -->
+      <section class="tech-build-card tech-build-notes">
+        <h2>Daily notes</h2>
+        <textarea id="tbDailyNotes" rows="6" placeholder="End-of-day notes, what was done, what's blocking tomorrow. Tap the mic to dictate."></textarea>
+        <button type="button" class="tech-voice-btn" id="tbDailyNotesVoice" data-voice-target="tbDailyNotes" aria-label="Dictate notes">🎙</button>
+        <p class="tech-build-tip" id="tbDailyNotesSaveState">Saved.</p>
+      </section>
+
+      <!-- Next-day plan -->
+      <section class="tech-build-card tech-build-nextday">
+        <h2>Tomorrow's plan</h2>
+        <label>Tomorrow's tasks
+          <textarea id="tbNextDayTasks" rows="3" placeholder="One task per line."></textarea>
+        </label>
+        <p class="tech-build-tip">Materials carry over from today's "Materials consumed" — admin promotes them when the new day's WO opens.</p>
+      </section>
+
+      <!-- Scope addition capture -->
+      <section class="tech-build-card tech-build-scope">
+        <h2>Scope addition</h2>
+        <p class="tech-build-tip">Customer asks for something not in the proposal? Capture it here. Admin reviews + sends for approval.</p>
+        <button type="button" class="pjl-btn pjl-btn-outline" id="tbAddScopeBtn">+ Note scope addition</button>
+      </section>
+    </section>
+
+    <!-- Brief 2: Materials catalog modal -->
+    <div class="tech-modal-backdrop" id="tbMaterialsModal" hidden role="dialog" aria-modal="true">
+      <div class="tech-modal">
+        <h3>Add materials consumed</h3>
+        <input type="search" id="tbMaterialsSearch" placeholder="Search parts" autocomplete="off">
+        <div class="tech-modal-catalog" id="tbMaterialsCatalog"></div>
+        <p class="tech-modal-summary" id="tbMaterialsSummary">No items selected.</p>
+        <div class="tech-modal-actions">
+          <button type="button" class="pjl-btn pjl-btn-outline" id="tbMaterialsCancel">Cancel</button>
+          <button type="button" class="pjl-btn pjl-btn-primary" id="tbMaterialsConfirm">Add selected</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Brief 2: Scope addition modal -->
+    <div class="tech-modal-backdrop" id="tbScopeModal" hidden role="dialog" aria-modal="true">
+      <div class="tech-modal">
+        <h3>Note a scope addition</h3>
+        <label>Description
+          <textarea id="tbScopeDescription" rows="3" placeholder="What's being added"></textarea>
+        </label>
+        <h4 class="tech-modal-section-title">Suggested line items</h4>
+        <div class="tech-modal-catalog" id="tbScopeCatalog"></div>
+        <p class="tech-modal-summary" id="tbScopeSummary">Estimated $0.00</p>
+        <div class="tech-modal-actions">
+          <button type="button" class="pjl-btn pjl-btn-outline" id="tbScopeCancel">Cancel</button>
+          <button type="button" class="pjl-btn pjl-btn-primary" id="tbScopeSave">Save as draft</button>
+        </div>
+      </div>
+    </div>
 
     <!-- Cheat Sheet — the first surface a tech reviews on arrival. One-tap
          actions, system overview, access notes, last-service summary. Per
@@ -861,6 +963,7 @@
   <script src="/crm/crm-parts.js"></script>
   <script src="/crm/crm-followup.js"></script>
   <script src="/crm/work-order-tech.js"></script>
+  <script src="/crm/work-order-build.js"></script>
   <script>
     // Register the tech-mode ServiceWorker for offline cache. Scope is
     // explicit — only matches /admin/work-order/*/tech/ URLs so the

@@ -1044,6 +1044,59 @@ function isLikelyDuplicate(leads, lead) {
   });
 }
 
+// Brief 2 — render the project status-update email HTML. Pure
+// function — input is the snapshot stored on project.statusUpdates[],
+// output is the HTML string for the email body. Used at send time AND
+// by the "View snapshot" UI on the project page.
+function renderStatusUpdateHtml(snap) {
+  const esc = (s) => String(s == null ? "" : s)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;").replace(/'/g, "&#039;");
+  const fmtDate = (iso) => iso ? new Date(iso).toLocaleDateString("en-CA", { month: "short", day: "numeric", year: "numeric" }) : "—";
+  const greeting = snap.recipientFirstName ? `Hi ${esc(snap.recipientFirstName)},` : "Hi,";
+  const preambleBlock = snap.preamble ? `<p style="margin:0 0 14px;">${esc(snap.preamble)}</p>` : "";
+  const recentTaskRows = (snap.recentTasks || []).map((t) =>
+    `<li style="margin-bottom:4px;">${esc(t.description)} — completed ${esc(fmtDate(t.completedAt))}</li>`
+  ).join("");
+  const upcomingRows = (snap.upcoming || []).map((t) =>
+    `<li style="margin-bottom:4px;">${esc(t.description)}</li>`
+  ).join("");
+  const scrRows = (snap.pendingScopeChanges || []).map((s) =>
+    `<li style="margin-bottom:4px;">${esc(s.description)} — ${esc(s.status === "pending_customer_approval" ? "awaiting your approval" : "in review")}${s.sentAt ? " (sent " + esc(fmtDate(s.sentAt)) + ")" : ""}</li>`
+  ).join("");
+
+  return `
+<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:600px;color:#1a1a1a;line-height:1.55;">
+  <div style="padding:24px 28px;background:#1B4D2E;border-radius:8px 8px 0 0;">
+    <div style="color:#EAF3DE;font-size:12px;letter-spacing:0.12em;text-transform:uppercase;font-weight:600;">PJL Land Services</div>
+    <h1 style="margin:6px 0 0;color:#fff;font-size:22px;">Project update — ${esc(snap.projectName)}</h1>
+  </div>
+  <div style="padding:24px 28px;background:#FAFAF5;border:1px solid #e5e5dd;border-top:none;border-radius:0 0 8px 8px;">
+    <p style="margin:0 0 14px;">${greeting}</p>
+    ${preambleBlock}
+    <p style="margin:0 0 14px;font-size:13px;color:#555;">Quick status on the <strong>${esc(snap.projectName)}</strong> project${snap.propertyAddress ? " at " + esc(snap.propertyAddress) : ""}:</p>
+    <h3 style="margin:18px 0 6px;font-family:Barlow Condensed,sans-serif;letter-spacing:0.06em;text-transform:uppercase;color:#1B4D2E;font-size:14px;border-bottom:2px solid #C7E0A8;padding-bottom:4px;">Progress</h3>
+    <ul style="margin:6px 0 14px;padding-left:20px;font-size:14px;">
+      <li style="margin-bottom:4px;"><strong>${esc(snap.doneTasks)}</strong> of <strong>${esc(snap.totalTasks)}</strong> tasks complete (<strong>${esc(snap.percentComplete)}%</strong>)</li>
+      <li style="margin-bottom:4px;"><strong>${esc(snap.daysLogged)}</strong> work day${snap.daysLogged === 1 ? "" : "s"} logged</li>
+      <li style="margin-bottom:4px;"><strong>${esc(snap.totalPersonHours)}</strong> person-hours on site to date</li>
+    </ul>
+    ${recentTaskRows ? `
+    <h3 style="margin:18px 0 6px;font-family:Barlow Condensed,sans-serif;letter-spacing:0.06em;text-transform:uppercase;color:#1B4D2E;font-size:14px;border-bottom:2px solid #C7E0A8;padding-bottom:4px;">Completed recently</h3>
+    <ul style="margin:6px 0 14px;padding-left:20px;font-size:14px;">${recentTaskRows}</ul>` : ""}
+    ${upcomingRows ? `
+    <h3 style="margin:18px 0 6px;font-family:Barlow Condensed,sans-serif;letter-spacing:0.06em;text-transform:uppercase;color:#1B4D2E;font-size:14px;border-bottom:2px solid #C7E0A8;padding-bottom:4px;">Upcoming</h3>
+    <ul style="margin:6px 0 14px;padding-left:20px;font-size:14px;">${upcomingRows}</ul>` : ""}
+    ${scrRows ? `
+    <h3 style="margin:18px 0 6px;font-family:Barlow Condensed,sans-serif;letter-spacing:0.06em;text-transform:uppercase;color:#8A4A12;font-size:14px;border-bottom:2px solid #F5C691;padding-bottom:4px;">Pending scope additions</h3>
+    <ul style="margin:6px 0 14px;padding-left:20px;font-size:14px;">${scrRows}</ul>` : ""}
+    <p style="margin:18px 0 0;font-size:13px;">Let me know if you need anything else.</p>
+    <p style="margin:6px 0 0;font-size:13px;">Patrick<br/>PJL Land Services<br/><a href="tel:+19059600181" style="color:#1B4D2E;">(905) 960-0181</a></p>
+  </div>
+  <p style="margin:16px 0 0;font-size:11px;color:#999;text-align:center;">PJL Land Services · Newmarket, Ontario · pjllandservices.com</p>
+</div>`.trim();
+}
+
 async function parseRequestBody(req, { maxBytes = 1_000_000 } = {}) {
   const chunks = [];
   let size = 0;
@@ -7848,6 +7901,521 @@ async function handleApi(req, res, pathname) {
       return sendJson(res, 200, { ok: true, project: updated });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't detach work order."] });
+    }
+  }
+
+  // ---------- Brief 2: Project Execution routes ---------------------
+  //
+  // Tasks, sessions, materials consumed, daily notes, scope changes,
+  // status updates, project completion. All admin-only.
+
+  // ---- Tasks ----
+  const taskListMatch = pathname.match(/^\/api\/projects\/([^/]+)\/tasks$/);
+  if (taskListMatch && req.method === "GET") {
+    try {
+      const id = decodeURIComponent(taskListMatch[1]);
+      const proj = await projects.get(id);
+      if (!proj) return sendJson(res, 404, { ok: false, errors: ["Project not found."] });
+      return sendJson(res, 200, { ok: true, tasks: proj.tasks || [] });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't read tasks."] });
+    }
+  }
+  if (taskListMatch && req.method === "POST") {
+    try {
+      const id = decodeURIComponent(taskListMatch[1]);
+      const payload = await parseRequestBody(req);
+      const task = await projects.addTask(id, {
+        description: payload.description,
+        sourceLineItemId: payload.sourceLineItemId || null,
+        notes: payload.notes || ""
+      });
+      return sendJson(res, 201, { ok: true, task });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't add task."] });
+    }
+  }
+
+  const taskItemMatch = pathname.match(/^\/api\/projects\/([^/]+)\/tasks\/([^/]+)$/);
+  if (taskItemMatch && req.method === "PATCH") {
+    try {
+      const id = decodeURIComponent(taskItemMatch[1]);
+      const taskId = decodeURIComponent(taskItemMatch[2]);
+      const payload = await parseRequestBody(req);
+      const task = await projects.updateTask(id, taskId, payload);
+      return sendJson(res, 200, { ok: true, task });
+    } catch (err) {
+      const status = err.code === "task_locked" ? 409 : err.code === "task_not_found" ? 404 : 400;
+      return sendJson(res, status, { ok: false, errors: [err.message || "Couldn't update task."] });
+    }
+  }
+  if (taskItemMatch && req.method === "DELETE") {
+    try {
+      const id = decodeURIComponent(taskItemMatch[1]);
+      const taskId = decodeURIComponent(taskItemMatch[2]);
+      const result = await projects.removeTask(id, taskId);
+      return sendJson(res, 200, { ok: true, removed: result.removed });
+    } catch (err) {
+      const status = err.code === "task_locked" ? 409 : err.code === "task_not_found" ? 404 : 400;
+      return sendJson(res, status, { ok: false, errors: [err.message || "Couldn't remove task."] });
+    }
+  }
+
+  // POST /api/projects/:id/tasks/seed — re-seed from accepted quote
+  // (refuses if any tasks done)
+  const taskSeedMatch = pathname.match(/^\/api\/projects\/([^/]+)\/tasks\/seed$/);
+  if (taskSeedMatch && req.method === "POST") {
+    try {
+      const id = decodeURIComponent(taskSeedMatch[1]);
+      const proj = await projects.get(id);
+      if (!proj) return sendJson(res, 404, { ok: false, errors: ["Project not found."] });
+      if (!proj.sourceQuoteId) {
+        return sendJson(res, 422, { ok: false, errors: ["Project has no source quote to seed from."] });
+      }
+      const quote = await quotes.get(proj.sourceQuoteId);
+      if (!quote) return sendJson(res, 422, { ok: false, errors: ["Source quote not found."] });
+      const updated = await projects.seedTasksFromQuote(id, quote);
+      return sendJson(res, 200, { ok: true, project: updated });
+    } catch (err) {
+      const status = err.code === "tasks_partially_done" ? 409 : 400;
+      return sendJson(res, status, { ok: false, errors: [err.message || "Couldn't seed tasks."] });
+    }
+  }
+
+  // ---- WO sessions (start / end / labourers) ----
+  const sessionStartMatch = pathname.match(/^\/api\/work-orders\/([^/]+)\/sessions$/);
+  if (sessionStartMatch && req.method === "POST") {
+    try {
+      const woId = decodeURIComponent(sessionStartMatch[1]);
+      const payload = await parseRequestBody(req);
+      const session = await requireAdmin(req);
+      const result = await workOrders.startSession(woId, {
+        labourersOnSite: payload.labourersOnSite,
+        labourerNote: payload.labourerNote || "",
+        by: session?.uid || "admin"
+      });
+      return sendJson(res, 201, { ok: true, ...result });
+    } catch (err) {
+      const status = err.code === "session_already_active" ? 409 : err.code === "wo_not_found" ? 404 : 400;
+      return sendJson(res, status, { ok: false, errors: [err.message || "Couldn't start session."], code: err.code });
+    }
+  }
+
+  const sessionEndMatch = pathname.match(/^\/api\/work-orders\/([^/]+)\/sessions\/([^/]+)\/end$/);
+  if (sessionEndMatch && req.method === "PATCH") {
+    try {
+      const woId = decodeURIComponent(sessionEndMatch[1]);
+      const sessionId = decodeURIComponent(sessionEndMatch[2]);
+      const session = await requireAdmin(req);
+      const result = await workOrders.endSession(woId, sessionId, { by: session?.uid || "admin" });
+      return sendJson(res, 200, { ok: true, ...result });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't end session."] });
+    }
+  }
+
+  const sessionLabourersMatch = pathname.match(/^\/api\/work-orders\/([^/]+)\/sessions\/([^/]+)\/labourers$/);
+  if (sessionLabourersMatch && req.method === "PATCH") {
+    try {
+      const woId = decodeURIComponent(sessionLabourersMatch[1]);
+      const sessionId = decodeURIComponent(sessionLabourersMatch[2]);
+      const payload = await parseRequestBody(req);
+      const session = await requireAdmin(req);
+      const wo = await workOrders.setLabourersForSession(woId, sessionId, payload.count, payload.note || "", {
+        by: session?.uid || "admin"
+      });
+      return sendJson(res, 200, { ok: true, workOrder: wo });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't update labourers."] });
+    }
+  }
+
+  // ---- Tasks done today (on WO) ----
+  const tasksDoneMatch = pathname.match(/^\/api\/work-orders\/([^/]+)\/tasks-done$/);
+  if (tasksDoneMatch && req.method === "POST") {
+    try {
+      const woId = decodeURIComponent(tasksDoneMatch[1]);
+      const payload = await parseRequestBody(req);
+      const session = await requireAdmin(req);
+      const result = await workOrders.markTaskDoneToday(woId, payload.taskId, {
+        photoIds: payload.photoIds || [],
+        by: session?.uid || "admin"
+      });
+      // Also flip the project's master task list.
+      if (result.projectId && !result.alreadyDone) {
+        try {
+          await projects.markTaskComplete(result.projectId, payload.taskId, woId, { by: session?.uid || "admin" });
+        } catch (projErr) {
+          console.warn("[wo tasks-done] project sync failed:", projErr?.message);
+        }
+      }
+      return sendJson(res, 200, { ok: true, ...result });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't mark task done."] });
+    }
+  }
+
+  const tasksUndoneMatch = pathname.match(/^\/api\/work-orders\/([^/]+)\/tasks-done\/([^/]+)$/);
+  if (tasksUndoneMatch && req.method === "DELETE") {
+    try {
+      const woId = decodeURIComponent(tasksUndoneMatch[1]);
+      const taskId = decodeURIComponent(tasksUndoneMatch[2]);
+      const session = await requireAdmin(req);
+      const result = await workOrders.unmarkTaskDoneToday(woId, taskId, { by: session?.uid || "admin" });
+      if (result.projectId && !result.notDoneHere) {
+        try {
+          // Guard: only unmark in project if this WO is the one that
+          // completed it (cross-day correction safety).
+          await projects.unmarkTaskComplete(result.projectId, taskId, woId, { by: session?.uid || "admin" });
+        } catch (projErr) {
+          if (projErr.code !== "task_not_owned_by_wo") {
+            console.warn("[wo tasks-undone] project sync failed:", projErr?.message);
+          }
+        }
+      }
+      return sendJson(res, 200, { ok: true, ...result });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't unmark task."] });
+    }
+  }
+
+  // ---- Materials consumed (on WO) ----
+  const matsConsumedMatch = pathname.match(/^\/api\/work-orders\/([^/]+)\/materials-consumed$/);
+  if (matsConsumedMatch && req.method === "POST") {
+    try {
+      const woId = decodeURIComponent(matsConsumedMatch[1]);
+      const payload = await parseRequestBody(req);
+      const session = await requireAdmin(req);
+      const items = Array.isArray(payload.items) ? payload.items : [payload];
+      const wo = await workOrders.recordMaterialConsumed(woId, items, { by: session?.uid || "admin" });
+      return sendJson(res, 201, { ok: true, workOrder: wo });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't record materials."] });
+    }
+  }
+
+  const matsRemoveMatch = pathname.match(/^\/api\/work-orders\/([^/]+)\/materials-consumed\/(\d+)$/);
+  if (matsRemoveMatch && req.method === "DELETE") {
+    try {
+      const woId = decodeURIComponent(matsRemoveMatch[1]);
+      const entryIndex = Number(matsRemoveMatch[2]);
+      const session = await requireAdmin(req);
+      const wo = await workOrders.removeMaterialConsumed(woId, entryIndex, { by: session?.uid || "admin" });
+      return sendJson(res, 200, { ok: true, workOrder: wo });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't remove material."] });
+    }
+  }
+
+  // ---- Next-day plan (on WO) ----
+  const nextDayMatch = pathname.match(/^\/api\/work-orders\/([^/]+)\/next-day$/);
+  if (nextDayMatch && req.method === "PATCH") {
+    try {
+      const woId = decodeURIComponent(nextDayMatch[1]);
+      const payload = await parseRequestBody(req);
+      const session = await requireAdmin(req);
+      const wo = await workOrders.setNextDayPlan(woId, {
+        nextDayMaterials: payload.nextDayMaterials,
+        nextDayTasks: payload.nextDayTasks
+      }, { by: session?.uid || "admin" });
+      return sendJson(res, 200, { ok: true, workOrder: wo });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't save next-day plan."] });
+    }
+  }
+
+  // ---- Daily notes (on WO) ----
+  const dailyNotesMatch = pathname.match(/^\/api\/work-orders\/([^/]+)\/daily-notes$/);
+  if (dailyNotesMatch && req.method === "PATCH") {
+    try {
+      const woId = decodeURIComponent(dailyNotesMatch[1]);
+      const payload = await parseRequestBody(req);
+      const session = await requireAdmin(req);
+      const wo = await workOrders.setDailyNotes(woId, payload.dailyNotes || "", { by: session?.uid || "admin" });
+      return sendJson(res, 200, { ok: true, workOrder: wo });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't save notes."] });
+    }
+  }
+
+  // ---- Build WO creation under a project ----
+  // POST /api/projects/:id/build-wos — create a new build-mode WO under
+  // the project, optionally carrying forward from a previous build WO.
+  const buildWoCreateMatch = pathname.match(/^\/api\/projects\/([^/]+)\/build-wos$/);
+  if (buildWoCreateMatch && req.method === "POST") {
+    try {
+      const projectId = decodeURIComponent(buildWoCreateMatch[1]);
+      const payload = await parseRequestBody(req);
+      const proj = await projects.get(projectId);
+      if (!proj) return sendJson(res, 404, { ok: false, errors: ["Project not found."] });
+      const property = proj.propertyId ? await properties.get(proj.propertyId) : null;
+      const wo = await workOrders.create({
+        type: "build",
+        project: proj,
+        property,
+        workDate: payload.workDate || null,
+        carryFromWoId: payload.carryFromWoId || null
+      });
+      await projects.attachWorkOrder(projectId, wo.id);
+      return sendJson(res, 201, { ok: true, workOrder: wo });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't create build WO."] });
+    }
+  }
+
+  // ---- Scope changes ----
+  const scopeListMatch = pathname.match(/^\/api\/projects\/([^/]+)\/scope-changes$/);
+  if (scopeListMatch && req.method === "GET") {
+    try {
+      const id = decodeURIComponent(scopeListMatch[1]);
+      const proj = await projects.get(id);
+      if (!proj) return sendJson(res, 404, { ok: false, errors: ["Project not found."] });
+      return sendJson(res, 200, { ok: true, scopeChanges: proj.scopeChangeRequests || [] });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't read scope changes."] });
+    }
+  }
+  if (scopeListMatch && req.method === "POST") {
+    try {
+      const id = decodeURIComponent(scopeListMatch[1]);
+      const payload = await parseRequestBody(req);
+      const session = await requireAdmin(req);
+      const scr = await projects.createScopeChangeRequest(id, payload, { by: session?.uid || "admin" });
+      return sendJson(res, 201, { ok: true, scopeChange: scr });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't create scope change."] });
+    }
+  }
+
+  const scopeItemMatch = pathname.match(/^\/api\/projects\/([^/]+)\/scope-changes\/([^/]+)$/);
+  if (scopeItemMatch && req.method === "PATCH") {
+    try {
+      const id = decodeURIComponent(scopeItemMatch[1]);
+      const scrId = decodeURIComponent(scopeItemMatch[2]);
+      const payload = await parseRequestBody(req);
+      const session = await requireAdmin(req);
+      const scr = await projects.updateScopeChangeRequest(id, scrId, payload, { by: session?.uid || "admin" });
+      return sendJson(res, 200, { ok: true, scopeChange: scr });
+    } catch (err) {
+      const status = err.code === "scr_locked" ? 409 : err.code === "scr_not_found" ? 404 : 400;
+      return sendJson(res, status, { ok: false, errors: [err.message || "Couldn't update scope change."] });
+    }
+  }
+
+  const scopeSendMatch = pathname.match(/^\/api\/projects\/([^/]+)\/scope-changes\/([^/]+)\/send$/);
+  if (scopeSendMatch && req.method === "POST") {
+    try {
+      const id = decodeURIComponent(scopeSendMatch[1]);
+      const scrId = decodeURIComponent(scopeSendMatch[2]);
+      const session = await requireAdmin(req);
+      const scr = await projects.sendScopeChangeRequest(id, scrId, { by: session?.uid || "admin" });
+
+      // Send the email via existing notify infrastructure.
+      if (process.env.GMAIL_USER && process.env.GMAIL_APP_PASSWORD) {
+        try {
+          let nodemailer;
+          try { nodemailer = require("nodemailer"); } catch { nodemailer = null; }
+          if (nodemailer) {
+            const transporter = nodemailer.createTransport({
+              service: "gmail",
+              auth: { user: process.env.GMAIL_USER, pass: process.env.GMAIL_APP_PASSWORD }
+            });
+            await transporter.sendMail({
+              from: `"PJL Land Services" <${process.env.GMAIL_USER}>`,
+              to: scr.draftEmail.to,
+              replyTo: process.env.GMAIL_USER,
+              subject: scr.draftEmail.subject,
+              text: scr.draftEmail.body
+            });
+          }
+        } catch (err) {
+          console.warn("[scope-change send] email failed:", err?.message);
+        }
+      }
+
+      return sendJson(res, 200, { ok: true, scopeChange: scr });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't send scope change."] });
+    }
+  }
+
+  const scopeResolveMatch = pathname.match(/^\/api\/projects\/([^/]+)\/scope-changes\/([^/]+)\/resolve$/);
+  if (scopeResolveMatch && req.method === "POST") {
+    try {
+      const id = decodeURIComponent(scopeResolveMatch[1]);
+      const scrId = decodeURIComponent(scopeResolveMatch[2]);
+      const payload = await parseRequestBody(req);
+      const session = await requireAdmin(req);
+      const scr = await projects.resolveScopeChangeRequest(id, scrId, {
+        resolution: payload.resolution,
+        note: payload.note || ""
+      }, { by: session?.uid || "admin" });
+      return sendJson(res, 200, { ok: true, scopeChange: scr });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't resolve scope change."] });
+    }
+  }
+
+  const scopeRevisionMatch = pathname.match(/^\/api\/projects\/([^/]+)\/scope-changes\/([^/]+)\/generate-revision$/);
+  if (scopeRevisionMatch && req.method === "POST") {
+    try {
+      const id = decodeURIComponent(scopeRevisionMatch[1]);
+      const scrId = decodeURIComponent(scopeRevisionMatch[2]);
+      const session = await requireAdmin(req);
+      const revision = await projects.generateQuoteRevisionFromScopeChange(id, scrId, { by: session?.uid || "admin" });
+      return sendJson(res, 201, { ok: true, quote: revision });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't generate revision."] });
+    }
+  }
+
+  // ---- Status updates ----
+  const statusUpdateListMatch = pathname.match(/^\/api\/projects\/([^/]+)\/status-updates$/);
+  if (statusUpdateListMatch && req.method === "GET") {
+    try {
+      const id = decodeURIComponent(statusUpdateListMatch[1]);
+      const proj = await projects.get(id);
+      if (!proj) return sendJson(res, 404, { ok: false, errors: ["Project not found."] });
+      return sendJson(res, 200, { ok: true, statusUpdates: proj.statusUpdates || [] });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't read status updates."] });
+    }
+  }
+
+  const statusUpdateSendMatch = pathname.match(/^\/api\/projects\/([^/]+)\/status-update$/);
+  if (statusUpdateSendMatch && req.method === "POST") {
+    try {
+      const id = decodeURIComponent(statusUpdateSendMatch[1]);
+      const payload = await parseRequestBody(req);
+      const session = await requireAdmin(req);
+      const recipient = {
+        email: String(payload.recipient?.email || "").trim().toLowerCase(),
+        name: payload.recipient?.name || null
+      };
+      if (!recipient.email) {
+        return sendJson(res, 422, { ok: false, errors: ["Recipient email is required."] });
+      }
+      const metrics = await projects.computeProjectMetrics(id);
+      const entry = await projects.generateStatusUpdate(id, {
+        recipient,
+        preamble: payload.preamble || ""
+      }, { by: session?.uid || "admin", metrics });
+
+      // Send email.
+      let emailSent = false, emailError = null;
+      if (process.env.GMAIL_USER && process.env.GMAIL_APP_PASSWORD) {
+        try {
+          let nodemailer;
+          try { nodemailer = require("nodemailer"); } catch { nodemailer = null; }
+          if (nodemailer) {
+            const transporter = nodemailer.createTransport({
+              service: "gmail",
+              auth: { user: process.env.GMAIL_USER, pass: process.env.GMAIL_APP_PASSWORD }
+            });
+            const html = renderStatusUpdateHtml(entry.snapshot);
+            await transporter.sendMail({
+              from: `"PJL Land Services" <${process.env.GMAIL_USER}>`,
+              to: recipient.email,
+              replyTo: process.env.GMAIL_USER,
+              subject: `Project update — ${entry.snapshot.projectName} — ${new Date().toLocaleDateString("en-CA")}`,
+              html
+            });
+            emailSent = true;
+          } else emailError = "nodemailer not installed";
+        } catch (err) { emailError = err.message; }
+      } else {
+        emailError = "Gmail not configured";
+      }
+
+      return sendJson(res, 201, { ok: true, statusUpdate: entry, emailSent, emailError });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't send status update."] });
+    }
+  }
+
+  // ---- Project completion ----
+  const markFinalMatch = pathname.match(/^\/api\/projects\/([^/]+)\/mark-final-wo$/);
+  if (markFinalMatch && req.method === "POST") {
+    try {
+      const id = decodeURIComponent(markFinalMatch[1]);
+      const payload = await parseRequestBody(req);
+      const session = await requireAdmin(req);
+      const result = await projects.markFinalWo(id, payload.woId, { by: session?.uid || "admin" });
+      return sendJson(res, 200, { ok: true, ...result });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't mark final WO."] });
+    }
+  }
+
+  const completionPreflightMatch = pathname.match(/^\/api\/projects\/([^/]+)\/completion-preflight$/);
+  if (completionPreflightMatch && req.method === "GET") {
+    try {
+      const id = decodeURIComponent(completionPreflightMatch[1]);
+      const checks = await projects.completionPreflight(id);
+      return sendJson(res, 200, { ok: true, checks });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't run preflight."] });
+    }
+  }
+
+  const completeMatch = pathname.match(/^\/api\/projects\/([^/]+)\/complete$/);
+  if (completeMatch && req.method === "POST") {
+    try {
+      const id = decodeURIComponent(completeMatch[1]);
+      const payload = await parseRequestBody(req);
+      const session = await requireAdmin(req);
+      const result = await projects.completeProject(id, {
+        by: session?.uid || "admin",
+        allowOverride: payload.allowOverride === true,
+        attestationNote: payload.attestationNote || ""
+      });
+      return sendJson(res, 200, { ok: true, ...result });
+    } catch (err) {
+      const status = err.code === "preflight_blockers" ? 409 : 400;
+      return sendJson(res, status, {
+        ok: false,
+        errors: [err.message || "Couldn't complete project."],
+        blockers: err.blockers || null,
+        warnings: err.warnings || null
+      });
+    }
+  }
+
+  // ---- T&M billing preview ----
+  const tandmPreviewMatch = pathname.match(/^\/api\/projects\/([^/]+)\/billing-preview$/);
+  if (tandmPreviewMatch && req.method === "GET") {
+    try {
+      const id = decodeURIComponent(tandmPreviewMatch[1]);
+      const proj = await projects.get(id);
+      if (!proj) return sendJson(res, 404, { ok: false, errors: ["Project not found."] });
+      if (proj.billingMode === "time_and_material") {
+        const billing = await projects.computeTAndMBilling(id, { partsCatalog: PARTS });
+        return sendJson(res, 200, { ok: true, billingMode: "time_and_material", ...billing });
+      }
+      // Fixed-price: mirror proposal snapshot.
+      const snap = proj.proposalSnapshot;
+      return sendJson(res, 200, {
+        ok: true,
+        billingMode: "fixed_price",
+        lineItems: snap?.lineItems || [],
+        subtotal: snap?.subtotal || 0,
+        hst: snap?.hst || 0,
+        total: snap?.total || 0
+      });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't compute billing."] });
+    }
+  }
+
+  // ---- Project metrics ----
+  const projectMetricsMatch = pathname.match(/^\/api\/projects\/([^/]+)\/metrics$/);
+  if (projectMetricsMatch && req.method === "GET") {
+    try {
+      const id = decodeURIComponent(projectMetricsMatch[1]);
+      const metrics = await projects.computeProjectMetrics(id);
+      return sendJson(res, 200, { ok: true, metrics });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't compute metrics."] });
     }
   }
 

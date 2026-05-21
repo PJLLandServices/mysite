@@ -44,7 +44,15 @@ const FILE = path.join(__dirname, "..", "data", "work-orders.json");
 const TEMPLATES = {
   spring_opening: { label: "Spring Opening", scaffoldFromProperty: true },
   fall_closing:   { label: "Fall Closing",   scaffoldFromProperty: true },
-  service_visit:  { label: "Service Visit",  scaffoldFromProperty: false }
+  service_visit:  { label: "Service Visit",  scaffoldFromProperty: false },
+  // Brief 2 (May 2026) — build mode for multi-day installs / retrofits
+  // under a Project. Each calendar day is one build WO. Daily-log
+  // structure on the WO captures sessions, labourer count, tasks
+  // completed today, materials consumed, photos (task-anchored),
+  // daily notes, next-day plan. Build WO completion does NOT fire the
+  // standard cascade — only project completion does. See
+  // completion-cascade.js for the short-circuit branch.
+  build:          { label: "Build / Install", scaffoldFromProperty: false }
 };
 
 // Map a booking's serviceKey (from availability.js BOOKABLE_SERVICES) to
@@ -91,7 +99,8 @@ const WO_PHOTO_CATEGORIES = ["pre_work", "in_progress", "post_work", "issue", "g
 const PHOTO_REQUIREMENT_BY_TYPE = {
   spring_opening: 1,    // find_and_fix — proof of zone health post-opening
   service_visit:  1,    // find_and_fix / fix_only — proof of repair
-  fall_closing:   0     // find_only — optional
+  fall_closing:   0,    // find_only — optional
+  build:          0     // multi-day; photos accumulate naturally over days, no single-WO requirement
 };
 
 // Service-specific checklists per spec §4.3.2. Spring openings get a
@@ -117,8 +126,19 @@ const SERVICE_CHECKLISTS = {
     { key: "compressor_disconnected",   label: "Compressor disconnected" },
     { key: "system_winterized",         label: "System winterized" }
   ],
-  service_visit: []
+  service_visit: [],
+  // Build WOs have no fixed checklist — each day is freeform. The daily
+  // notes block + task checklist drive the narrative instead.
+  build: []
 };
+
+// Brief 2 — random 8-char base36 IDs for session / scope-change / etc.
+// Matches the iss_<random8>_<ts> + att_<random8> + sec_<random8> +
+// task_<random8> conventions from Briefs A and 1.
+function wo_random8() {
+  return Math.random().toString(36).slice(2, 10).padEnd(8, "0");
+}
+function newSessionId() { return "sess_" + wo_random8(); }
 
 // ---- File I/O ---------------------------------------------------------
 
@@ -155,6 +175,23 @@ function makeWorkOrderId() {
   const bytes = crypto.randomBytes(8);
   for (let i = 0; i < 8; i++) id += alphabet[bytes[i] % alphabet.length];
   return id;
+}
+
+// Brief 2 — initialize a fresh build-mode daily log. workDate defaults
+// to today's local ISO date (UTC-shifted to Toronto by the caller if
+// needed; this lib uses UTC for storage and lets the UI display in
+// local).
+function blankDailyLog({ workDate = null } = {}) {
+  const today = workDate || new Date().toISOString().slice(0, 10);
+  return {
+    workDate: today,
+    sessions: [],
+    tasksCompletedToday: [],
+    materialsConsumed: [],
+    nextDayMaterials: [],
+    nextDayTasks: [],
+    dailyNotes: ""
+  };
 }
 
 function blankWorkOrder() {
@@ -346,7 +383,37 @@ function blankWorkOrder() {
     // tracking is internal-only (cost analysis, tech performance, not
     // billed separately). null = not yet logged. Auto-suggested from
     // (departedAt - arrivedAt) at render time but tech can override.
+    // For build-mode WOs the daily-log sessions[] is the source of
+    // truth for hours; this field stays null on build WOs.
     labourHours: null,
+    // Brief 2 — build-mode parent project pointer. Required for
+    // type === "build", null otherwise. The project is the source of
+    // truth for the master task list + billing mode + labour rate;
+    // this WO is one day's slice of execution.
+    parentProjectId: null,
+    // Brief 2 — build-mode daily log. Populated only when type === "build".
+    // Stays null for spring/fall/service WOs so the schema doesn't grow
+    // on non-build records. The shape mirrors the brief's §3.1A spec.
+    //
+    //   workDate           — ISO date (YYYY-MM-DD) this WO represents.
+    //                        Defaults to createdAt's date but admin can
+    //                        edit (covers backdated entries).
+    //   sessions           — [{ id, inAt, outAt, labourersOnSite,
+    //                          labourerNote, startedBy }]
+    //                        outAt: null = active; one active session
+    //                        at most per WO (server enforces).
+    //   tasksCompletedToday — [{ taskId, completedAt, photoIds[] }]
+    //                        References project.tasks[].id. Marking a
+    //                        task done here ALSO flips project.tasks.
+    //   materialsConsumed  — [{ partSku, qty, addedAt, note }]
+    //                        SKUs from parts.json. The T&M billing
+    //                        rollup sums these across all build WOs.
+    //   nextDayMaterials   — [{ partSku, qty, addedAt, note }]
+    //                        Pack list for tomorrow. Editable.
+    //   nextDayTasks       — [string] plain text task starters for
+    //                        tomorrow. Seeds the next day's WO notes.
+    //   dailyNotes         — string, voice-input-enabled in tech mode.
+    dailyLog: null,
     // Append-only audit trail per spec §10 r4 ("All status changes
     // logged forever") and §4.3.3 r5 (signed-WO contract). Mirrors
     // invoices.history[] / quotes.history[] in shape so the rendering
@@ -408,7 +475,25 @@ function hydrate(w) {
     reportSnapshots: Array.isArray(w?.reportSnapshots) ? w.reportSnapshots : [],
     completionReportSnapshotAt: typeof w?.completionReportSnapshotAt === "string"
       ? w.completionReportSnapshotAt
-      : null
+      : null,
+    // Brief 2 — build-mode pointers. parentProjectId stays null for
+    // non-build WOs; dailyLog stays null until the WO is build-mode.
+    parentProjectId: typeof w?.parentProjectId === "string" ? w.parentProjectId : null,
+    dailyLog: (() => {
+      if (w?.type !== "build") return null;
+      const dl = w?.dailyLog && typeof w.dailyLog === "object" ? w.dailyLog : {};
+      const base = blankDailyLog({ workDate: dl.workDate });
+      return {
+        ...base,
+        ...dl,
+        sessions: Array.isArray(dl.sessions) ? dl.sessions : [],
+        tasksCompletedToday: Array.isArray(dl.tasksCompletedToday) ? dl.tasksCompletedToday : [],
+        materialsConsumed: Array.isArray(dl.materialsConsumed) ? dl.materialsConsumed : [],
+        nextDayMaterials: Array.isArray(dl.nextDayMaterials) ? dl.nextDayMaterials : [],
+        nextDayTasks: Array.isArray(dl.nextDayTasks) ? dl.nextDayTasks : [],
+        dailyNotes: typeof dl.dailyNotes === "string" ? dl.dailyNotes : ""
+      };
+    })()
   };
   // Cascade-merge follow-up — auto-confirm the materials gate for the
   // cases where there's nothing to confirm: fall_closing (find-only,
@@ -872,14 +957,64 @@ async function listByLead(leadId) {
 // quote propagates onto the WO so the tech sees the bonus-pending banner
 // in field mode (1 hr of repair labour pending — temporarily disabled
 // until the tech confirms the on-site diagnosis matches the AI scope).
-async function create({ type, lead, property, customId, quote = null }) {
+async function create({ type, lead, property, customId, quote = null, project = null, workDate = null, carryFromWoId = null }) {
   if (!TEMPLATES[type]) throw new Error(`Unknown work-order type: ${type}`);
-  if (!lead && !property) throw new Error("Need at least one of lead or property to create a work order.");
+  // Build-mode WOs are project-scoped and don't require a lead — the
+  // proposal acceptance is the original handshake. Property is still
+  // useful for address + zone hints but not required either.
+  if (type !== "build" && !lead && !property) {
+    throw new Error("Need at least one of lead or property to create a work order.");
+  }
+  if (type === "build" && !project) {
+    throw new Error("Build-mode work orders require a parent project.");
+  }
 
   const records = await readAll();
   const wo = blankWorkOrder();
   if (customId) wo.id = customId;
   wo.type = type;
+
+  // Brief 2 — build-mode wiring. parentProjectId + dailyLog seeded.
+  // Customer snapshot pulled from the project (which has it from the
+  // accepted proposal) when no lead/property short-circuits it later.
+  if (type === "build" && project) {
+    wo.parentProjectId = project.id;
+    wo.customerId    = wo.customerId    || project.customerId    || null;
+    wo.customerName  = wo.customerName  || project.customerName  || "";
+    wo.customerEmail = wo.customerEmail || project.customerEmail || "";
+    wo.customerPhone = wo.customerPhone || project.customerPhone || "";
+    wo.address       = wo.address       || project.address       || "";
+    wo.propertyId    = wo.propertyId    || project.propertyId    || null;
+    wo.dailyLog      = blankDailyLog({ workDate });
+
+    // Carry-forward from the previous build day's WO (if specified).
+    // Materials get copied to nextDayMaterials → materialsConsumed
+    // (still editable — not auto-consumed; admin promotes each item
+    // as actually installed). Tasks get appended to dailyNotes as a
+    // starter list. Both carry-overs are non-destructive — admin can
+    // edit or delete before saving.
+    if (carryFromWoId) {
+      try {
+        const prev = records.find((w) => w.id === carryFromWoId);
+        if (prev && prev.dailyLog) {
+          // Copy tomorrow's planned materials to today's "planned" slot
+          // (a separate field would be cleaner but for v1 we mirror them
+          // into nextDayMaterials so the UI can render them as "carried
+          // over from <prev workDate>" and the admin promotes them).
+          if (Array.isArray(prev.dailyLog.nextDayMaterials) && prev.dailyLog.nextDayMaterials.length) {
+            wo.dailyLog.materialsConsumed = []; // start empty; admin promotes
+            wo.dailyLog._carriedMaterials = prev.dailyLog.nextDayMaterials.map((m) => ({ ...m }));
+          }
+          if (Array.isArray(prev.dailyLog.nextDayTasks) && prev.dailyLog.nextDayTasks.length) {
+            wo.dailyLog.dailyNotes = `Carried over from ${prev.dailyLog.workDate}:\n` +
+              prev.dailyLog.nextDayTasks.map((t) => `• ${t}`).join("\n") + "\n\n";
+          }
+        }
+      } catch (err) {
+        console.warn("[wo create] carry-forward failed:", err?.message);
+      }
+    }
+  }
 
   if (property) {
     wo.propertyId = property.id;
@@ -963,7 +1098,7 @@ async function update(id, patch) {
   // pointers — those are set at create time and shouldn't be edited from
   // the form.
   const next = { ...current };
-  const allowedTop = ["type", "status", "scheduledFor", "diagnosis", "techNotes", "customerNotes", "customerName", "customerPhone", "customerEmail", "address", "locked", "arrivedAt", "departedAt", "followupOfWoId", "paidOnSite", "propertyEditsAppliedAt", "completionReportSnapshotAt", "needsReturnVisit", "labourHours"];
+  const allowedTop = ["type", "status", "scheduledFor", "diagnosis", "techNotes", "customerNotes", "customerName", "customerPhone", "customerEmail", "address", "locked", "arrivedAt", "departedAt", "followupOfWoId", "paidOnSite", "propertyEditsAppliedAt", "completionReportSnapshotAt", "needsReturnVisit", "labourHours", "parentProjectId", "dailyLog"];
   for (const key of allowedTop) {
     if (Object.prototype.hasOwnProperty.call(patch, key)) next[key] = patch[key];
   }
@@ -1175,6 +1310,286 @@ async function purgeDeleted({ olderThanMs = 30 * 24 * 60 * 60 * 1000 } = {}) {
   return purged;
 }
 
+// ---- Build-mode operations (Brief 2) -------------------------------
+//
+// Daily-log operations for build WOs. Each helper appends a history
+// entry so the audit trail captures every state change. All helpers
+// refuse to mutate non-build WOs (return an error code) to keep the
+// existing service_visit / spring / fall flows untouched.
+
+function _requireBuild(wo) {
+  if (!wo) {
+    const err = new Error("Work order not found.");
+    err.code = "wo_not_found";
+    throw err;
+  }
+  if (wo.type !== "build") {
+    const err = new Error(`Work order ${wo.id} is not build-mode (type=${wo.type}).`);
+    err.code = "wrong_mode";
+    throw err;
+  }
+  if (wo.locked === true) {
+    const err = new Error(`Work order ${wo.id} is locked. Daily-log edits refused.`);
+    err.code = "wo_locked";
+    throw err;
+  }
+  return wo;
+}
+
+// Start a session. inAt = now. labourersOnSite defaults to 1
+// (Patrick alone unless overridden). Refuses if an active session
+// already exists.
+async function startSession(woId, { labourersOnSite = 1, labourerNote = "", by = "admin" } = {}) {
+  const records = await readAll();
+  const idx = records.findIndex((w) => w.id === woId);
+  if (idx === -1) throw Object.assign(new Error("Work order not found."), { code: "wo_not_found" });
+  const wo = records[idx];
+  _requireBuild(wo);
+
+  const dl = wo.dailyLog;
+  const active = (dl.sessions || []).find((s) => !s.outAt);
+  if (active) {
+    const err = new Error("Session already active on this work order.");
+    err.code = "session_already_active";
+    err.sessionId = active.id;
+    throw err;
+  }
+  const ts = new Date().toISOString();
+  const sess = {
+    id: newSessionId(),
+    inAt: ts,
+    outAt: null,
+    labourersOnSite: Math.max(1, Math.floor(Number(labourersOnSite) || 1)),
+    labourerNote: String(labourerNote || "").slice(0, 400),
+    startedBy: String(by || "admin").slice(0, 80)
+  };
+  dl.sessions = [...(dl.sessions || []), sess];
+  if (!wo.arrivedAt) wo.arrivedAt = ts; // first session also stamps WO arrivedAt
+  wo.history.push({
+    ts,
+    action: "session_start",
+    by,
+    note: `${sess.id} labourers=${sess.labourersOnSite}${labourerNote ? " — " + labourerNote : ""}`
+  });
+  wo.updatedAt = ts;
+  records[idx] = wo;
+  await writeAll(records);
+  return { workOrder: wo, session: sess };
+}
+
+async function endSession(woId, sessionId, { by = "admin" } = {}) {
+  const records = await readAll();
+  const idx = records.findIndex((w) => w.id === woId);
+  if (idx === -1) throw Object.assign(new Error("Work order not found."), { code: "wo_not_found" });
+  const wo = records[idx];
+  _requireBuild(wo);
+
+  const dl = wo.dailyLog;
+  const sIdx = (dl.sessions || []).findIndex((s) => s.id === sessionId);
+  if (sIdx === -1) {
+    throw Object.assign(new Error("Session not found."), { code: "session_not_found" });
+  }
+  const sess = dl.sessions[sIdx];
+  if (sess.outAt) {
+    return { workOrder: wo, session: sess }; // idempotent
+  }
+  const ts = new Date().toISOString();
+  sess.outAt = ts;
+  wo.history.push({
+    ts,
+    action: "session_end",
+    by,
+    note: `${sess.id} duration=${((new Date(ts) - new Date(sess.inAt)) / 3600000).toFixed(2)}h`
+  });
+  wo.updatedAt = ts;
+  records[idx] = wo;
+  await writeAll(records);
+  return { workOrder: wo, session: sess };
+}
+
+async function setLabourersForSession(woId, sessionId, count, note = "", { by = "admin" } = {}) {
+  const records = await readAll();
+  const idx = records.findIndex((w) => w.id === woId);
+  if (idx === -1) throw Object.assign(new Error("Work order not found."), { code: "wo_not_found" });
+  const wo = records[idx];
+  _requireBuild(wo);
+  const sess = (wo.dailyLog.sessions || []).find((s) => s.id === sessionId);
+  if (!sess) throw Object.assign(new Error("Session not found."), { code: "session_not_found" });
+  const safeCount = Math.max(1, Math.floor(Number(count) || 1));
+  const ts = new Date().toISOString();
+  sess.labourersOnSite = safeCount;
+  if (typeof note === "string") sess.labourerNote = note.slice(0, 400);
+  wo.history.push({
+    ts, action: "session_labourers_set", by,
+    note: `${sessionId} count=${safeCount}${note ? " — " + note : ""}`
+  });
+  wo.updatedAt = ts;
+  records[idx] = wo;
+  await writeAll(records);
+  return wo;
+}
+
+// Mark a task done in today's daily log. ALSO flips the project's
+// master task list. Idempotent — re-marking is a no-op. Returns the
+// updated WO and the projectId for the caller to dispatch.
+async function markTaskDoneToday(woId, taskId, { photoIds = [], by = "admin" } = {}) {
+  const records = await readAll();
+  const idx = records.findIndex((w) => w.id === woId);
+  if (idx === -1) throw Object.assign(new Error("Work order not found."), { code: "wo_not_found" });
+  const wo = records[idx];
+  _requireBuild(wo);
+  const dl = wo.dailyLog;
+  const existing = (dl.tasksCompletedToday || []).find((t) => t.taskId === taskId);
+  if (existing) {
+    return { workOrder: wo, alreadyDone: true };
+  }
+  const ts = new Date().toISOString();
+  dl.tasksCompletedToday = [
+    ...(dl.tasksCompletedToday || []),
+    {
+      taskId: String(taskId),
+      completedAt: ts,
+      photoIds: Array.isArray(photoIds) ? photoIds.filter((x) => typeof x === "string") : []
+    }
+  ];
+  wo.history.push({ ts, action: "task_done", by, note: taskId });
+  wo.updatedAt = ts;
+  records[idx] = wo;
+  await writeAll(records);
+  return { workOrder: wo, projectId: wo.parentProjectId };
+}
+
+async function unmarkTaskDoneToday(woId, taskId, { by = "admin" } = {}) {
+  const records = await readAll();
+  const idx = records.findIndex((w) => w.id === woId);
+  if (idx === -1) throw Object.assign(new Error("Work order not found."), { code: "wo_not_found" });
+  const wo = records[idx];
+  _requireBuild(wo);
+  const dl = wo.dailyLog;
+  const before = (dl.tasksCompletedToday || []).length;
+  dl.tasksCompletedToday = (dl.tasksCompletedToday || []).filter((t) => t.taskId !== taskId);
+  if (dl.tasksCompletedToday.length === before) {
+    return { workOrder: wo, notDoneHere: true };
+  }
+  const ts = new Date().toISOString();
+  wo.history.push({ ts, action: "task_unmark", by, note: taskId });
+  wo.updatedAt = ts;
+  records[idx] = wo;
+  await writeAll(records);
+  return { workOrder: wo, projectId: wo.parentProjectId };
+}
+
+async function recordMaterialConsumed(woId, items, { by = "admin" } = {}) {
+  // items can be a single { partSku, qty, note } or an array — supports
+  // batch from the catalog picker.
+  const records = await readAll();
+  const idx = records.findIndex((w) => w.id === woId);
+  if (idx === -1) throw Object.assign(new Error("Work order not found."), { code: "wo_not_found" });
+  const wo = records[idx];
+  _requireBuild(wo);
+  const dl = wo.dailyLog;
+  const ts = new Date().toISOString();
+  const incoming = Array.isArray(items) ? items : [items];
+  const cleaned = [];
+  for (const raw of incoming) {
+    const partSku = String(raw?.partSku || "").trim();
+    const qty = Number(raw?.qty);
+    if (!partSku || !Number.isFinite(qty) || qty <= 0) continue;
+    cleaned.push({
+      partSku,
+      qty,
+      addedAt: ts,
+      note: typeof raw?.note === "string" ? raw.note.slice(0, 400) : ""
+    });
+  }
+  if (!cleaned.length) {
+    throw Object.assign(new Error("No valid material entries."), { code: "no_valid_materials" });
+  }
+  dl.materialsConsumed = [...(dl.materialsConsumed || []), ...cleaned];
+  wo.history.push({
+    ts, action: "materials_consumed", by,
+    note: `${cleaned.length} entries: ${cleaned.map((c) => c.partSku + "x" + c.qty).slice(0, 8).join(", ")}`
+  });
+  wo.updatedAt = ts;
+  records[idx] = wo;
+  await writeAll(records);
+  return wo;
+}
+
+async function removeMaterialConsumed(woId, entryIndex, { by = "admin" } = {}) {
+  const records = await readAll();
+  const idx = records.findIndex((w) => w.id === woId);
+  if (idx === -1) throw Object.assign(new Error("Work order not found."), { code: "wo_not_found" });
+  const wo = records[idx];
+  _requireBuild(wo);
+  const dl = wo.dailyLog;
+  const i = Number(entryIndex);
+  if (!Number.isInteger(i) || i < 0 || i >= (dl.materialsConsumed || []).length) {
+    throw Object.assign(new Error("Material entry index out of range."), { code: "bad_index" });
+  }
+  const removed = dl.materialsConsumed.splice(i, 1)[0];
+  const ts = new Date().toISOString();
+  wo.history.push({ ts, action: "materials_removed", by, note: `${removed.partSku} x${removed.qty}` });
+  wo.updatedAt = ts;
+  records[idx] = wo;
+  await writeAll(records);
+  return wo;
+}
+
+async function setNextDayPlan(woId, { nextDayMaterials, nextDayTasks }, { by = "admin" } = {}) {
+  const records = await readAll();
+  const idx = records.findIndex((w) => w.id === woId);
+  if (idx === -1) throw Object.assign(new Error("Work order not found."), { code: "wo_not_found" });
+  const wo = records[idx];
+  _requireBuild(wo);
+  const dl = wo.dailyLog;
+  const ts = new Date().toISOString();
+  if (Array.isArray(nextDayMaterials)) {
+    dl.nextDayMaterials = nextDayMaterials.map((m) => ({
+      partSku: String(m?.partSku || ""),
+      qty: Number(m?.qty) || 1,
+      addedAt: ts,
+      note: typeof m?.note === "string" ? m.note.slice(0, 400) : ""
+    })).filter((m) => m.partSku);
+  }
+  if (Array.isArray(nextDayTasks)) {
+    dl.nextDayTasks = nextDayTasks
+      .map((t) => String(t || "").trim().slice(0, 400))
+      .filter(Boolean);
+  }
+  wo.history.push({
+    ts, action: "next_day_plan", by,
+    note: `materials=${dl.nextDayMaterials.length} tasks=${dl.nextDayTasks.length}`
+  });
+  wo.updatedAt = ts;
+  records[idx] = wo;
+  await writeAll(records);
+  return wo;
+}
+
+async function setDailyNotes(woId, notes, { by = "admin" } = {}) {
+  const records = await readAll();
+  const idx = records.findIndex((w) => w.id === woId);
+  if (idx === -1) throw Object.assign(new Error("Work order not found."), { code: "wo_not_found" });
+  const wo = records[idx];
+  _requireBuild(wo);
+  wo.dailyLog.dailyNotes = String(notes || "").slice(0, 20000);
+  const ts = new Date().toISOString();
+  wo.history.push({ ts, action: "daily_notes", by, note: `${wo.dailyLog.dailyNotes.length} chars` });
+  wo.updatedAt = ts;
+  records[idx] = wo;
+  await writeAll(records);
+  return wo;
+}
+
+// Find all build WOs for a given project. Used by the project metrics
+// rollup + T&M billing computation.
+async function listBuildWosForProject(projectId) {
+  if (!projectId) return [];
+  const records = await readAll();
+  return records.filter((w) => w.type === "build" && w.parentProjectId === projectId);
+}
+
 module.exports = {
   TEMPLATES,
   ZONE_STATUSES,
@@ -1204,5 +1619,17 @@ module.exports = {
   softArchive,
   listDeleted,
   listArchived,
-  purgeDeleted
+  purgeDeleted,
+  // Brief 2 — build-mode operations
+  blankDailyLog,
+  startSession,
+  endSession,
+  setLabourersForSession,
+  markTaskDoneToday,
+  unmarkTaskDoneToday,
+  recordMaterialConsumed,
+  removeMaterialConsumed,
+  setNextDayPlan,
+  setDailyNotes,
+  listBuildWosForProject
 };
