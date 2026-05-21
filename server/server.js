@@ -10106,15 +10106,24 @@ async function handleApi(req, res, pathname) {
       // PATCH closure so they have access to the file-level helpers
       // (sendNewLeadEmail, sendNewLeadSms) without re-requiring.
       async function runAdminNotify({ wo, serviceRecord, invoice }, adminBaseUrl) {
+        // On bypassed WOs, prepend a visible warning so Patrick notices in
+        // the inbox if he ever forgets which path locked the WO. The note
+        // field is what surfaces in the admin email body via
+        // sendNewLeadEmail's lead-card template.
+        const bypassWarning = wo.signatureBypass
+          ? `⚠ Admin bypass — no customer signature on file (reason: ${wo.signatureBypass.reason || "—"}). `
+          : "";
         const aliasLead = {
           id: wo.id,
-          sourceLabel: `WO COMPLETED — ${wo.type}`,
+          sourceLabel: wo.signatureBypass
+            ? `WO COMPLETED (BYPASS) — ${wo.type}`
+            : `WO COMPLETED — ${wo.type}`,
           contact: {
             name: wo.customerName || "(unknown)",
             phone: wo.customerPhone || "",
             email: wo.customerEmail || "",
             address: wo.address || "",
-            notes: `${serviceRecord.summary}${invoice ? ` · Invoice ${invoice.id} ($${invoice.total.toFixed(2)})` : " · No charge"}`
+            notes: `${bypassWarning}${serviceRecord.summary}${invoice ? ` · Invoice ${invoice.id} ($${invoice.total.toFixed(2)})` : " · No charge"}`
           }
         };
         await Promise.allSettled([
@@ -10134,6 +10143,16 @@ async function handleApi(req, res, pathname) {
           auth: { user: process.env.GMAIL_USER, pass: process.env.GMAIL_APP_PASSWORD }
         });
         const firstName = (wo.customerName || "").split(" ")[0] || "there";
+        // Bypass reshape — when wo.signatureBypass exists, the customer did
+        // not sign on-site. The legal posture is "verbal acceptance recorded
+        // by the admin" rather than "you authorized the work in writing,"
+        // so the email opening drops anything that could imply electronic
+        // sign-off and adds the "tell us within 7 days if anything looks
+        // off" line. Per the Admin Signature Bypass brief §3.4.
+        const isBypassed = !!wo.signatureBypass;
+        const completedDateStr = (serviceRecord.completedAt || wo.departedAt || new Date().toISOString())
+          ? new Date(serviceRecord.completedAt || wo.departedAt || new Date()).toLocaleDateString("en-CA", { month: "long", day: "numeric", year: "numeric" })
+          : "";
         // v37 — Patrick: "if they pay in person i don't even want to
         // send a reciept. I want everything to be billed through
         // online." Removed the paidInField receipt-style branch.
@@ -10155,6 +10174,13 @@ async function handleApi(req, res, pathname) {
         const reportLine = reportSnapshot
           ? `<p style="margin: 0 0 14px;">Attached: your Service Report — a written summary of today's visit, zone-by-zone, with photos. You can also re-download it any time from your portal under "Recent service" below.</p>`
           : "";
+        // Bypass-specific 7-day discrepancy window — only on bypassed WOs.
+        // The signed-WO path already has the customer signature as the
+        // contract; on bypass there is no signature, so we invite the
+        // customer to flag any mismatch before the invoice is finalized.
+        const bypassFollowUp = isBypassed
+          ? `<p style="margin: 0 0 14px;">If anything in the visit summary or invoice does not match your understanding of what was authorized, please contact us within 7 days at <a href="tel:+19059600181" style="color: #1B4D2E;">(905) 960-0181</a> or by replying to this email.</p>`
+          : "";
         // Portal CTA — points to the PROPERTY portal (not the lead portal)
         // because that's where the service-history list lives and that's
         // where the "Download service report" link surfaces (Service
@@ -10164,18 +10190,32 @@ async function handleApi(req, res, pathname) {
         const portalUrl = wo.propertyId
           ? `${cleanBase}/portal/${portalTokenForId(wo.propertyId)}`
           : `${cleanBase}/portal`;
+        // Headline + greeting body diverge between the two paths. Signed
+        // WO: "Today's visit is complete." + visit summary. Bypassed WO:
+        // factual "Work was completed at your property…" framing that
+        // doesn't presuppose the customer was the one authorizing.
+        const headline = isBypassed
+          ? "Your visit summary"
+          : "Today's visit is complete.";
+        const greetingBlock = isBypassed
+          ? `
+    <p style="margin: 0 0 14px;">Hi ${firstName.replace(/</g, "&lt;")},</p>
+    <p style="margin: 0 0 14px;">Work was completed at your property${completedDateStr ? ` on ${completedDateStr.replace(/</g, "&lt;")}` : ""}. Please review the attached summary and the invoice (which will follow separately).</p>
+    <p style="margin: 0 0 14px;">${serviceRecord.summary.replace(/</g, "&lt;")}</p>`
+          : `
+    <p style="margin: 0 0 14px;">Hi ${firstName.replace(/</g, "&lt;")},</p>
+    <p style="margin: 0 0 14px;">${serviceRecord.summary.replace(/</g, "&lt;")}</p>`;
         const html = `
 <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 560px; color: #1a1a1a; line-height: 1.55;">
   <div style="padding: 24px 28px; background: #1B4D2E; border-radius: 8px 8px 0 0;">
     <div style="color: #EAF3DE; font-size: 12px; letter-spacing: 0.12em; text-transform: uppercase; font-weight: 600;">PJL Land Services</div>
-    <h1 style="margin: 6px 0 0; color: #fff; font-size: 22px;">Today's visit is complete.</h1>
+    <h1 style="margin: 6px 0 0; color: #fff; font-size: 22px;">${headline}</h1>
   </div>
-  <div style="padding: 24px 28px; background: #FAFAF5; border: 1px solid #e5e5dd; border-top: none; border-radius: 0 0 8px 8px;">
-    <p style="margin: 0 0 14px;">Hi ${firstName.replace(/</g, "&lt;")},</p>
-    <p style="margin: 0 0 14px;">${serviceRecord.summary.replace(/</g, "&lt;")}</p>
+  <div style="padding: 24px 28px; background: #FAFAF5; border: 1px solid #e5e5dd; border-top: none; border-radius: 0 0 8px 8px;">${greetingBlock}
     ${reportLine}
     ${totalLine}
     ${warranty}
+    ${bypassFollowUp}
     <p style="margin: 0 0 18px;">
       <a href="${portalUrl}" style="display: inline-block; padding: 11px 20px; background: #E07B24; color: #fff; text-decoration: none; border-radius: 6px; font-weight: 600;">Open your portal</a>
     </p>
@@ -10205,7 +10245,9 @@ async function handleApi(req, res, pathname) {
           from: `"PJL Land Services" <${process.env.GMAIL_USER}>`,
           to: wo.customerEmail,
           replyTo: process.env.GMAIL_USER,
-          subject: "Your PJL visit is complete",
+          subject: isBypassed
+            ? "PJL visit summary — please review"
+            : "Your PJL visit is complete",
           html,
           ...(attachments.length ? { attachments } : {})
         });
@@ -10511,50 +10553,22 @@ async function handleApi(req, res, pathname) {
         });
       }
 
-      // Pre-sign gates — mirrors the drawn-signature path's gate set
-      // minus the drawn-canvas + customer-name + ack gates (those are
-      // bypass's own friction in the UI). Bypass does NOT relax the
-      // photo, zone, payment, return-visit, AI bonus, or materials
-      // gates; only the canvas requirement.
-      const gateFails = [];
-      const zones = Array.isArray(wo.zones) ? wo.zones : [];
-      const untouched = zones.filter((z) => {
-        if (z.status && z.status !== "") return false;
-        const checks = z.checks || {};
-        return !Object.values(checks).some(Boolean);
-      });
-      if (untouched.length) {
-        gateFails.push(`${untouched.length} zone${untouched.length === 1 ? "" : "s"} not reviewed`);
-      }
-      const minPhotos = workOrders.PHOTO_REQUIREMENT_BY_TYPE[wo.type] ?? 1;
-      if (minPhotos > 0) {
-        const photoCount = Array.isArray(wo.photos) ? wo.photos.length : 0;
-        if (photoCount < minPhotos) {
-          gateFails.push(`${minPhotos} completion photo${minPhotos === 1 ? "" : "s"} required`);
-        }
-      }
-      if (wo.paidOnSite !== true && wo.paidOnSite !== false) {
-        gateFails.push("payment method not selected");
-      }
-      if (wo.needsReturnVisit !== true && wo.needsReturnVisit !== false) {
-        gateFails.push("return-visit question not answered");
-      }
-      if (wo.intakeGuarantee && wo.intakeGuarantee.applies) {
-        if (wo.intakeGuarantee.matched !== true && wo.intakeGuarantee.matched !== false) {
-          gateFails.push("AI bonus decision not recorded");
-        }
-      }
-      if (!wo.materialsConfirmedAt) {
-        gateFails.push("materials list not confirmed");
-      }
-      if (gateFails.length) {
-        return sendJson(res, 422, {
-          ok: false,
-          error: "presign_gate_unmet",
-          errors: [`Pre-sign gates unmet: ${gateFails.join("; ")}`],
-          gateFailures: gateFails
-        });
-      }
+      // Pre-sign gates intentionally NOT enforced on the bypass path
+      // (Patrick 2026-05-21). The drawn-signature path still enforces
+      // zones-reviewed / completion-photos / payment-method / return-
+      // visit / AI-bonus / materials-confirmed because the tech is
+      // asking the customer to sign in good faith and the gates verify
+      // the work was actually done. Admin bypass has a different legal
+      // posture: Patrick (sole operator-admin) takes responsibility for
+      // locking the WO without those receipts. He doesn't want a chain
+      // of "fix one gate, hit the next" pop-ups in the field. The
+      // server defaults (paidOnSite=false → "invoice to follow",
+      // needsReturnVisit=null → no follow-up auto-scheduled, etc.) are
+      // sensible for a bypass-locked WO. The only checks the bypass
+      // path keeps are: lock state, terminal state, signature/bypass
+      // mutual exclusion, on-site-quote acceptance mutual exclusion,
+      // BYPASS_REASONS membership, note ≥ 10 chars, and the scope-
+      // additions warning (those exist below in the lib verb).
 
       // Scope-additions check — when the builder has lines beyond
       // baseline + AI bonus credit, refuse the first attempt and surface

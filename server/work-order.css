@@ -2000,6 +2000,39 @@ body[data-locked="true"] .wo-zone-location {
   color: var(--pjl-green);
 }
 
+/* Mobile: a finger-tap target dwarfs a 13px underlined link, and Patrick
+   runs the desktop editor on his iPhone in the field. Give the entry
+   point a real button shape on narrow screens so it doesn't disappear
+   beneath the signature canvas. Still subordinate visually — outline,
+   not filled — so it doesn't compete with the primary "Sign, lock"
+   CTA. The wrap also picks up safe-area-inset padding when the bypass
+   block is the bottom of the viewport. */
+@media (max-width: 720px) {
+  .wo-signoff-bypass-link-wrap {
+    margin: 14px 0 0;
+  }
+  .wo-signoff-bypass-link {
+    display: block;
+    width: 100%;
+    box-sizing: border-box;
+    padding: 12px 14px;
+    font-size: 15px;
+    font-weight: 600;
+    text-decoration: none;
+    color: var(--pjl-green);
+    background: #fff;
+    border: 1px solid rgba(74, 140, 92, 0.45);
+    border-radius: 8px;
+    text-align: center;
+    min-height: 44px; /* iOS HIG tap target */
+  }
+  .wo-signoff-bypass-link:hover,
+  .wo-signoff-bypass-link:focus-visible {
+    background: rgba(74, 140, 92, 0.06);
+    color: var(--pjl-green);
+  }
+}
+
 .wo-signoff-bypassed {
   max-width: 720px;
 }
@@ -2046,15 +2079,24 @@ body[data-locked="true"] .wo-zone-location {
 }
 
 /* Modal — centred dialog with overlay. Matches the source-picker modal
-   pattern already in this stylesheet. */
+   pattern already in this stylesheet.
+   iPhone-safe: flex-start + vertical padding so a tall modal scrolls
+   the whole modal into view instead of being centred-clipped at the
+   top. `dvh` accounts for iOS Safari's expanding/collapsing URL bar so
+   the bottom action buttons stay reachable. Older browsers fall back
+   to `vh` via the cascade. */
 .wo-bypass-modal {
   position: fixed;
   inset: 0;
   background: rgba(15, 31, 20, 0.55);
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: center;
+  padding: 5vh 16px;
+  padding: 5dvh 16px;
   z-index: 150;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
   animation: wo-bypass-fade 0.18s ease both;
 }
 .wo-bypass-modal[hidden] { display: none; }
@@ -2064,11 +2106,13 @@ body[data-locked="true"] .wo-zone-location {
 }
 .wo-bypass-card {
   background: #fff;
-  width: min(560px, 92vw);
-  max-height: 92vh;
+  width: min(560px, 100%);
+  max-height: 90vh;
+  max-height: 90dvh;
   overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
   border-radius: 12px;
-  padding: 20px 22px 24px;
+  padding: 20px 22px max(24px, calc(24px + env(safe-area-inset-bottom)));
   box-shadow: 0 24px 60px rgba(0, 0, 0, 0.25);
 }
 .wo-bypass-head {
@@ -2116,7 +2160,10 @@ body[data-locked="true"] .wo-zone-location {
 .wo-bypass-select,
 .wo-bypass-textarea {
   font: inherit;
-  font-size: 15px;
+  /* 16px on mobile keeps iOS Safari from auto-zooming on focus, which
+     would otherwise yank the modal off-centre and hide the Record
+     button. The 15px size is fine on desktop. */
+  font-size: 16px;
   width: 100%;
   padding: 10px 12px;
   background: #fff;
@@ -2124,6 +2171,10 @@ body[data-locked="true"] .wo-zone-location {
   border-radius: 8px;
   box-sizing: border-box;
   color: var(--pjl-text);
+}
+@media (min-width: 721px) {
+  .wo-bypass-select,
+  .wo-bypass-textarea { font-size: 15px; }
 }
 .wo-bypass-textarea {
   min-height: 80px;
@@ -2166,6 +2217,20 @@ body[data-locked="true"] .wo-zone-location {
   gap: 10px;
   justify-content: flex-end;
   flex-wrap: wrap;
+}
+/* On phones, stack Cancel + Record vertically with the primary action
+   on TOP so the thumb-anchor button sits where iOS expects a primary
+   tap target — and neither button gets clipped if the keyboard is up. */
+@media (max-width: 720px) {
+  .wo-bypass-actions {
+    flex-direction: column-reverse;
+    align-items: stretch;
+    gap: 8px;
+  }
+  .wo-bypass-actions .pjl-btn {
+    width: 100%;
+    min-height: 44px;
+  }
 }
 .wo-bypass-warning-headline {
   margin: 4px 0 8px;
