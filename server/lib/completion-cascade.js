@@ -427,7 +427,9 @@ async function run(wo, deps = {}) {
 // via project.projectCompletionAt. This function is safe to call again
 // (returns the existing invoice) but the gate is the canonical guard.
 
-async function runProjectFinalCascade(project, { by = "admin", deps = {} } = {}) {
+async function runProjectFinalCascade(project, opts = {}) {
+  const by = opts.by || "admin";
+  const deps = opts.deps || {};
   if (!project || !project.id) {
     return { ok: false, errors: ["No project."] };
   }
@@ -564,6 +566,46 @@ async function runProjectFinalCascade(project, { by = "admin", deps = {} } = {})
     }
   }
 
+  // ---- Property edits propagation (Brief 2 §3.3 / §3.9) -----------
+  // Sweep all build WOs under this project. Each WO's computePropertyEdits()
+  // diff against the live property is applied — gated by
+  // wo.propertyEditsAppliedAt for per-WO idempotency, and by
+  // project.propertyEditsAppliedAt at the project-level guard. New zones
+  // installed during the build (e.g., "added drip line in west bed") land
+  // with pendingReview:true via applySystemUpdates.
+  let propertyEditsApplied = false;
+  if (project.propertyId && !project.propertyEditsAppliedAt) {
+    try {
+      const liveProperty = await properties.get(project.propertyId);
+      if (liveProperty) {
+        const buildWos = await workOrders.listBuildWosForProject(project.id);
+        for (const wo of buildWos) {
+          if (wo.propertyEditsAppliedAt) continue;
+          const edits = computePropertyEdits(wo, liveProperty);
+          if (!edits.hasChanges) continue;
+          const sysPatch = {
+            zones: [
+              ...edits.zoneEdits.map((ze) => {
+                const woZone = (wo.zones || []).find((z) => Number(z.number) === Number(ze.number)) || {};
+                return {
+                  number: ze.number,
+                  location: woZone.location || "",
+                  sprinklerTypes: Array.isArray(woZone.sprinklerTypes) ? woZone.sprinklerTypes : [],
+                  coverage: Array.isArray(woZone.coverage) ? woZone.coverage : [],
+                  notes: woZone.notes || ""
+                };
+              }),
+              ...edits.newZones
+            ]
+          };
+          await properties.applySystemUpdates(project.propertyId, sysPatch);
+          await workOrders.update(wo.id, { propertyEditsAppliedAt: new Date().toISOString() });
+          propertyEditsApplied = true;
+        }
+      }
+    } catch (err) { console.warn("[project-cascade] property-edits apply failed:", err?.message); }
+  }
+
   // Notifications — best-effort.
   if (deps.notifyAdmin) {
     try { await deps.notifyAdmin({ project, invoice, serviceRecord, mode: "project_final" }); }
@@ -580,7 +622,7 @@ async function runProjectFinalCascade(project, { by = "admin", deps = {} } = {})
     invoiceId: invoice?.id || null,
     invoice,
     serviceRecord,
-    propertyEditsApplied: false,
+    propertyEditsApplied,
     invoiceDraftError,
     billingNote
   };

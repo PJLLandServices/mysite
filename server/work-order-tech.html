@@ -130,8 +130,7 @@
       <!-- Daily notes -->
       <section class="tech-build-card tech-build-notes">
         <h2>Daily notes</h2>
-        <textarea id="tbDailyNotes" rows="6" placeholder="End-of-day notes, what was done, what's blocking tomorrow. Tap the mic to dictate."></textarea>
-        <button type="button" class="tech-voice-btn" id="tbDailyNotesVoice" data-voice-target="tbDailyNotes" aria-label="Dictate notes">🎙</button>
+        <textarea id="tbDailyNotes" data-voice-input rows="6" placeholder="End-of-day notes, what was done, what's blocking tomorrow. Tap the mic to dictate."></textarea>
         <p class="tech-build-tip" id="tbDailyNotesSaveState">Saved.</p>
       </section>
 
@@ -141,7 +140,13 @@
         <label>Tomorrow's tasks
           <textarea id="tbNextDayTasks" rows="3" placeholder="One task per line."></textarea>
         </label>
-        <p class="tech-build-tip">Materials carry over from today's "Materials consumed" — admin promotes them when the new day's WO opens.</p>
+        <div class="tech-build-nextday-mats">
+          <p class="tech-build-tip" style="margin-top:6px"><strong>Tomorrow's materials</strong></p>
+          <button type="button" class="pjl-btn pjl-btn-outline" id="tbNextDayAddMatsBtn">+ Add to pack list</button>
+          <ul class="tech-build-nextday-mats-list" id="tbNextDayMatsList"></ul>
+          <button type="button" class="pjl-btn pjl-btn-outline" id="tbPromoteNextDayMatsBtn" hidden>Promote to material list</button>
+        </div>
+        <p class="tech-build-tip">Materials saved here pre-populate tomorrow's WO; promote to a project material list for actual ordering.</p>
       </section>
 
       <!-- Scope addition capture -->
@@ -166,12 +171,32 @@
       </div>
     </div>
 
+    <!-- Brief 2: Mark task done modal — offers optional photo attachment
+         per brief §3.8. Replaces the prior confirm() prompt. -->
+    <div class="tech-modal-backdrop" id="tbTaskDoneModal" hidden role="dialog" aria-modal="true">
+      <div class="tech-modal">
+        <h3>Mark task done?</h3>
+        <p id="tbTaskDoneDescription" style="margin:0 0 12px;font-size:14px;color:#1F2A22;"></p>
+        <label>Attach photos (optional)
+          <input type="file" id="tbTaskDonePhotos" accept="image/jpeg,image/png,image/heic,image/heif,image/webp" multiple>
+        </label>
+        <p class="tech-build-tip">Updates project's master task list immediately.</p>
+        <div class="tech-modal-actions">
+          <button type="button" class="pjl-btn pjl-btn-outline" id="tbTaskDoneCancel">Cancel</button>
+          <button type="button" class="pjl-btn pjl-btn-primary" id="tbTaskDoneConfirm">Mark done</button>
+        </div>
+      </div>
+    </div>
+
     <!-- Brief 2: Scope addition modal -->
     <div class="tech-modal-backdrop" id="tbScopeModal" hidden role="dialog" aria-modal="true">
       <div class="tech-modal">
         <h3>Note a scope addition</h3>
         <label>Description
-          <textarea id="tbScopeDescription" rows="3" placeholder="What's being added"></textarea>
+          <textarea id="tbScopeDescription" data-voice-input rows="3" placeholder="What's being added"></textarea>
+        </label>
+        <label>Photos (optional)
+          <input type="file" id="tbScopePhotos" accept="image/jpeg,image/png,image/heic,image/heif,image/webp" multiple>
         </label>
         <h4 class="tech-modal-section-title">Suggested line items</h4>
         <div class="tech-modal-catalog" id="tbScopeCatalog"></div>
@@ -179,6 +204,7 @@
         <div class="tech-modal-actions">
           <button type="button" class="pjl-btn pjl-btn-outline" id="tbScopeCancel">Cancel</button>
           <button type="button" class="pjl-btn pjl-btn-primary" id="tbScopeSave">Save as draft</button>
+          <button type="button" class="pjl-btn pjl-btn-primary is-danger-ish" id="tbScopeSaveAndSend" hidden>Save &amp; send to customer</button>
         </div>
       </div>
     </div>

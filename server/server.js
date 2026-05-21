@@ -1044,14 +1044,19 @@ function isLikelyDuplicate(leads, lead) {
   });
 }
 
+// Brief 2 — server-side HTML escape for email templates.
+function escapeHtmlServer(s) {
+  return String(s == null ? "" : s)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;").replace(/'/g, "&#039;");
+}
+
 // Brief 2 — render the project status-update email HTML. Pure
 // function — input is the snapshot stored on project.statusUpdates[],
 // output is the HTML string for the email body. Used at send time AND
 // by the "View snapshot" UI on the project page.
 function renderStatusUpdateHtml(snap) {
-  const esc = (s) => String(s == null ? "" : s)
-    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;").replace(/'/g, "&#039;");
+  const esc = escapeHtmlServer;
   const fmtDate = (iso) => iso ? new Date(iso).toLocaleDateString("en-CA", { month: "short", day: "numeric", year: "numeric" }) : "—";
   const greeting = snap.recipientFirstName ? `Hi ${esc(snap.recipientFirstName)},` : "Hi,";
   const preambleBlock = snap.preamble ? `<p style="margin:0 0 14px;">${esc(snap.preamble)}</p>` : "";
@@ -1090,6 +1095,15 @@ function renderStatusUpdateHtml(snap) {
     ${scrRows ? `
     <h3 style="margin:18px 0 6px;font-family:Barlow Condensed,sans-serif;letter-spacing:0.06em;text-transform:uppercase;color:#8A4A12;font-size:14px;border-bottom:2px solid #F5C691;padding-bottom:4px;">Pending scope additions</h3>
     <ul style="margin:6px 0 14px;padding-left:20px;font-size:14px;">${scrRows}</ul>` : ""}
+    ${(snap.recentPhotos || []).length ? (() => {
+      const baseUrl = process.env.PUBLIC_BASE_URL || "";
+      const strip = snap.recentPhotos.map((p) =>
+        `<img src="${baseUrl}/api/work-orders/${esc(p.woId)}/photos/${esc(p.n)}" alt="" style="width:120px;height:120px;object-fit:cover;border:1px solid #E5E5DD;border-radius:4px;margin-right:6px;margin-bottom:6px;">`
+      ).join("");
+      return `
+    <h3 style="margin:18px 0 6px;font-family:Barlow Condensed,sans-serif;letter-spacing:0.06em;text-transform:uppercase;color:#1B4D2E;font-size:14px;border-bottom:2px solid #C7E0A8;padding-bottom:4px;">Recent on-site photos</h3>
+    <div style="margin:6px 0 14px;">${strip}</div>`;
+    })() : ""}
     <p style="margin:18px 0 0;font-size:13px;">Let me know if you need anything else.</p>
     <p style="margin:6px 0 0;font-size:13px;">Patrick<br/>PJL Land Services<br/><a href="tel:+19059600181" style="color:#1B4D2E;">(905) 960-0181</a></p>
   </div>
@@ -1184,6 +1198,11 @@ function validatePhotos(rawPhotos, maxCount, opts = {}) {
         category: String(p.category || "general"),
         zoneNumber: Number.isFinite(Number(p.zoneNumber)) ? Number(p.zoneNumber) : null,
         issueId: typeof p.issueId === "string" ? p.issueId : null,
+        // Brief 2 — taskId anchors a photo to a specific project task.
+        // Used in build-mode WOs so task-completion modals can attach
+        // photos AND the project task list can render task-anchored
+        // photo thumbnails. Null for non-build / non-anchored photos.
+        taskId: typeof p.taskId === "string" && p.taskId.startsWith("task_") ? p.taskId : null,
         label: typeof p.label === "string" ? p.label.slice(0, 200) : "",
         geo,
         takenAt
@@ -7961,6 +7980,19 @@ async function handleApi(req, res, pathname) {
     }
   }
 
+  // GET /api/projects/:id/task-photos — list task-anchored photo refs
+  // across all build WOs. Used by project task list + status update.
+  const taskPhotosMatch = pathname.match(/^\/api\/projects\/([^/]+)\/task-photos$/);
+  if (taskPhotosMatch && req.method === "GET") {
+    try {
+      const id = decodeURIComponent(taskPhotosMatch[1]);
+      const photos = await projects.listTaskPhotos(id);
+      return sendJson(res, 200, { ok: true, photos });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't read photos."] });
+    }
+  }
+
   // POST /api/projects/:id/tasks/seed — re-seed from accepted quote
   // (refuses if any tasks done)
   const taskSeedMatch = pathname.match(/^\/api\/projects\/([^/]+)\/tasks\/seed$/);
@@ -8031,25 +8063,65 @@ async function handleApi(req, res, pathname) {
   }
 
   // ---- Tasks done today (on WO) ----
+  // Body shape: { taskId, photos?: [{ data, mediaType }] }
+  // Brief 2 §3.8: mark-done modal "opens modal confirming task + offering
+  // to attach photos." Photos uploaded as base64, persisted on wo.photos
+  // with taskId set so the project task list can render thumbnails.
   const tasksDoneMatch = pathname.match(/^\/api\/work-orders\/([^/]+)\/tasks-done$/);
   if (tasksDoneMatch && req.method === "POST") {
     try {
       const woId = decodeURIComponent(tasksDoneMatch[1]);
-      const payload = await parseRequestBody(req);
+      const payload = await parseRequestBody(req, { maxBytes: WO_UPLOAD_POST_MAX_BYTES });
       const session = await requireAdmin(req);
-      const result = await workOrders.markTaskDoneToday(woId, payload.taskId, {
-        photoIds: payload.photoIds || [],
+      const taskId = String(payload.taskId || "").trim();
+      if (!taskId) return sendJson(res, 422, { ok: false, errors: ["taskId is required."] });
+
+      // Upload any attached photos first, stamping taskId on each.
+      const photoMetas = [];
+      if (Array.isArray(payload.photos) && payload.photos.length) {
+        const wo = await workOrders.get(woId);
+        if (!wo) return sendJson(res, 404, { ok: false, errors: ["Work order not found."] });
+        const existing = Array.isArray(wo.photos) ? wo.photos : [];
+        const remaining = MAX_PHOTOS_PER_WO - existing.length;
+        if (remaining > 0) {
+          // Stamp taskId on each photo before validation.
+          const stamped = payload.photos.map((p) => ({ ...p, taskId, category: "in_progress" }));
+          try {
+            const validated = validatePhotos(stamped, remaining, { mode: "wo" });
+            let propertyCode = null;
+            if (wo.propertyId) {
+              try {
+                const linkedProp = await properties.get(wo.propertyId);
+                if (linkedProp && linkedProp.code) propertyCode = linkedProp.code;
+              } catch (_) {}
+            }
+            const baseN = existing.reduce((max, p) => Math.max(max, Number(p.n) || 0), 0);
+            const now = new Date().toISOString();
+            const newMeta = await savePhotosForWorkOrder(woId, validated, now, baseN, {
+              propertyCode,
+              woCode: wo.id
+            });
+            await workOrders.update(woId, { photos: [...existing, ...newMeta] });
+            photoMetas.push(...newMeta);
+          } catch (photoErr) {
+            console.warn("[tasks-done photos] upload failed:", photoErr?.message);
+          }
+        }
+      }
+
+      const result = await workOrders.markTaskDoneToday(woId, taskId, {
+        photoIds: photoMetas.map((p) => String(p.n)),
         by: session?.uid || "admin"
       });
       // Also flip the project's master task list.
       if (result.projectId && !result.alreadyDone) {
         try {
-          await projects.markTaskComplete(result.projectId, payload.taskId, woId, { by: session?.uid || "admin" });
+          await projects.markTaskComplete(result.projectId, taskId, woId, { by: session?.uid || "admin" });
         } catch (projErr) {
           console.warn("[wo tasks-done] project sync failed:", projErr?.message);
         }
       }
-      return sendJson(res, 200, { ok: true, ...result });
+      return sendJson(res, 200, { ok: true, ...result, photosUploaded: photoMetas.length });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't mark task done."] });
     }
@@ -8364,10 +8436,105 @@ async function handleApi(req, res, pathname) {
       const id = decodeURIComponent(completeMatch[1]);
       const payload = await parseRequestBody(req);
       const session = await requireAdmin(req);
+
+      // Brief 2 §3.9: customer + admin emails on project completion.
+      // Wire nodemailer-backed senders here so completeProject can fire
+      // them as part of the cascade. Both are best-effort — the lib
+      // catches errors so an email outage doesn't roll back completion.
+      const deps = {
+        notifyAdmin: async ({ project, invoice, serviceRecord }) => {
+          if (!process.env.GMAIL_USER || !process.env.GMAIL_APP_PASSWORD) return;
+          let nodemailer;
+          try { nodemailer = require("nodemailer"); } catch { return; }
+          const transporter = nodemailer.createTransport({
+            service: "gmail",
+            auth: { user: process.env.GMAIL_USER, pass: process.env.GMAIL_APP_PASSWORD }
+          });
+          const totalLabel = invoice ? `$${Number(invoice.total).toFixed(2)}` : "(no charge)";
+          const subject = `[PJL] Project complete — ${project.name || project.id} — ${totalLabel}`;
+          const baseUrl = process.env.PUBLIC_BASE_URL || baseUrlFromReq(req);
+          const html = `
+<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#1a1a1a;line-height:1.55;">
+  <h2 style="color:#1B4D2E;">Project completed: ${escapeHtmlServer(project.name || project.id)}</h2>
+  <p><strong>Customer:</strong> ${escapeHtmlServer(project.customerName)} (${escapeHtmlServer(project.customerEmail)})</p>
+  <p><strong>Property:</strong> ${escapeHtmlServer(project.address || "—")}</p>
+  <p><strong>Billing mode:</strong> ${escapeHtmlServer(project.billingMode || "—")}</p>
+  <p><strong>Invoice:</strong> ${invoice ? `<a href="${baseUrl}/admin/invoice/${invoice.id}">${invoice.id}</a> — ${totalLabel}` : "(none — no billable lines)"}</p>
+  <p><strong>Service record:</strong> ${serviceRecord ? serviceRecord.id : "(none)"}</p>
+  <p><a href="${baseUrl}/admin/project/${project.id}">Open project →</a></p>
+</div>`.trim();
+          await transporter.sendMail({
+            from: `"PJL CRM" <${process.env.GMAIL_USER}>`,
+            to: process.env.GMAIL_USER,
+            subject,
+            html
+          });
+        },
+        notifyCustomer: async ({ project, invoice }) => {
+          if (!project.customerEmail) return;
+          if (!process.env.GMAIL_USER || !process.env.GMAIL_APP_PASSWORD) return;
+          let nodemailer;
+          try { nodemailer = require("nodemailer"); } catch { return; }
+          const transporter = nodemailer.createTransport({
+            service: "gmail",
+            auth: { user: process.env.GMAIL_USER, pass: process.env.GMAIL_APP_PASSWORD }
+          });
+
+          // Attach the invoice PDF if we have one.
+          const attachments = [];
+          if (invoice?.id) {
+            try {
+              const invoicePdf = require("./lib/invoice-pdf");
+              if (invoicePdf && typeof invoicePdf.generateInvoicePdf === "function") {
+                const pdfDoc = invoicePdf.generateInvoicePdf(invoice);
+                const chunks = [];
+                await new Promise((resolve, reject) => {
+                  pdfDoc.on("data", (c) => chunks.push(c));
+                  pdfDoc.on("end", resolve);
+                  pdfDoc.on("error", reject);
+                });
+                attachments.push({
+                  filename: `PJL-Invoice-${invoice.id}.pdf`,
+                  content: Buffer.concat(chunks),
+                  contentType: "application/pdf"
+                });
+              }
+            } catch (err) {
+              console.warn("[project-complete] invoice PDF attach failed:", err?.message);
+            }
+          }
+
+          const firstName = (project.customerName || "").split(" ")[0] || "there";
+          const html = `
+<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:560px;color:#1a1a1a;line-height:1.55;">
+  <div style="padding:24px 28px;background:#1B4D2E;border-radius:8px 8px 0 0;">
+    <div style="color:#EAF3DE;font-size:12px;letter-spacing:0.12em;text-transform:uppercase;font-weight:600;">PJL Land Services</div>
+    <h1 style="margin:6px 0 0;color:#fff;font-size:22px;">Project complete — ${escapeHtmlServer(project.name || project.id)}.</h1>
+  </div>
+  <div style="padding:24px 28px;background:#FAFAF5;border:1px solid #e5e5dd;border-top:none;border-radius:0 0 8px 8px;">
+    <p>Hi ${escapeHtmlServer(firstName)},</p>
+    <p>Your project at ${escapeHtmlServer(project.address || "your property")} is complete. ${invoice ? `The final invoice (<strong>${invoice.id}</strong>) is attached — total <strong>$${Number(invoice.total).toFixed(2)} CAD</strong> incl. HST.` : "There's nothing to bill on this one — all work covered under the original proposal."}</p>
+    <p>The work carries a <strong>3-year warranty on installs</strong>. Let us know if anything needs follow-up.</p>
+    <p style="margin:24px 0 0;font-size:13px;color:#777;">Questions? Call <a href="tel:+19059600181" style="color:#1B4D2E;">(905) 960-0181</a>.</p>
+    <p style="margin:18px 0 0;">Thank you,<br>Patrick<br>PJL Land Services</p>
+  </div>
+</div>`.trim();
+          await transporter.sendMail({
+            from: `"PJL Land Services" <${process.env.GMAIL_USER}>`,
+            to: project.customerEmail,
+            replyTo: process.env.GMAIL_USER,
+            subject: `PJL: project complete — ${project.name || project.id}`,
+            html,
+            ...(attachments.length ? { attachments } : {})
+          });
+        }
+      };
+
       const result = await projects.completeProject(id, {
         by: session?.uid || "admin",
         allowOverride: payload.allowOverride === true,
-        attestationNote: payload.attestationNote || ""
+        attestationNote: payload.attestationNote || "",
+        deps
       });
       return sendJson(res, 200, { ok: true, ...result });
     } catch (err) {

@@ -70,6 +70,30 @@
       .replace(/"/g, "&quot;").replace(/'/g, "&#039;");
   }
 
+  // Brief 2 — dynamic toast (no host-page HTML dependency). Replaces
+  // alert() for non-trivial result messages. confirm() is allowed for
+  // trivial delete confirms per brief; non-trivial confirms get an
+  // inline modal injected on demand.
+  let _toastEl = null;
+  let _toastTimer = null;
+  function ensureToastEl() {
+    if (_toastEl && document.body.contains(_toastEl)) return _toastEl;
+    const t = document.createElement("div");
+    t.id = "tbToast";
+    t.style.cssText = "position:fixed;bottom:calc(20px + env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);background:#1B4D2E;color:#fff;padding:12px 18px;border-radius:8px;box-shadow:0 6px 18px rgba(0,0,0,0.25);font:600 14px system-ui;z-index:9999;max-width:90vw;text-align:center;display:none;";
+    document.body.appendChild(t);
+    _toastEl = t;
+    return t;
+  }
+  function showToast(msg, { variant = "info", durationMs = 4000 } = {}) {
+    const t = ensureToastEl();
+    t.textContent = msg;
+    t.style.background = variant === "error" ? "#842F1B" : variant === "success" ? "#1B4D2E" : "#1B4D2E";
+    t.style.display = "block";
+    if (_toastTimer) clearTimeout(_toastTimer);
+    _toastTimer = setTimeout(() => { t.style.display = "none"; }, durationMs);
+  }
+
   async function boot() {
     try {
       const r = await fetch(`/api/work-orders/${encodeURIComponent(WO_ID)}`, { cache: "no-store" });
@@ -178,7 +202,7 @@
       `;
     }).join("");
     els.taskList.querySelectorAll(".tech-build-task-mark").forEach((btn) => {
-      btn.addEventListener("click", () => markTaskDone(btn.dataset.taskId));
+      btn.addEventListener("click", () => openTaskDoneModal(btn.dataset.taskId));
     });
   }
 
@@ -217,6 +241,114 @@
   function renderNextDay() {
     const tasks = state.wo.dailyLog?.nextDayTasks || [];
     els.nextDayTasks.value = tasks.join("\n");
+    renderNextDayMats();
+  }
+
+  function renderNextDayMats() {
+    const list = document.getElementById("tbNextDayMatsList");
+    const promoteBtn = document.getElementById("tbPromoteNextDayMatsBtn");
+    if (!list) return;
+    const mats = state.wo.dailyLog?.nextDayMaterials || [];
+    if (!mats.length) {
+      list.innerHTML = "";
+      if (promoteBtn) promoteBtn.hidden = true;
+      return;
+    }
+    list.innerHTML = mats.map((m, idx) => {
+      const part = state.parts?.[m.partSku] || state.parts?.parts?.[m.partSku];
+      const label = part?.label || part?.name || m.partSku;
+      return `<li class="tech-build-material-item" data-idx="${idx}"><span class="tech-build-material-label">${escapeHtml(label)}</span><span class="tech-build-material-qty">× ${escapeHtml(m.qty)}</span><button type="button" class="tech-build-material-remove" data-nextday-idx="${idx}" aria-label="Remove">×</button></li>`;
+    }).join("");
+    list.querySelectorAll("[data-nextday-idx]").forEach((btn) => {
+      btn.addEventListener("click", () => removeNextDayMat(Number(btn.dataset.nextdayIdx)));
+    });
+    if (promoteBtn) promoteBtn.hidden = false;
+  }
+
+  async function removeNextDayMat(idx) {
+    const mats = (state.wo.dailyLog?.nextDayMaterials || []).slice();
+    mats.splice(idx, 1);
+    await saveNextDayMats(mats);
+  }
+
+  async function saveNextDayMats(mats) {
+    try {
+      const r = await fetch(`/api/work-orders/${encodeURIComponent(WO_ID)}/next-day`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          nextDayMaterials: mats,
+          nextDayTasks: (els.nextDayTasks.value || "").split("\n").map((s) => s.trim()).filter(Boolean)
+        })
+      });
+      const data = await r.json().catch(() => ({}));
+      if (data.ok) {
+        state.wo = data.workOrder;
+        renderNextDayMats();
+      }
+    } catch (_) {}
+  }
+
+  // Tomorrow's materials picker — same catalog batch UX as the "Materials
+  // consumed today" picker, just writes to nextDayMaterials instead.
+  let _nextDayMatsDraft = {};
+  function openNextDayMatsModal() {
+    _nextDayMatsDraft = {};
+    // Re-use the materials modal HTML but stamp a flag so confirm goes
+    // to next-day path. Simpler than building a parallel modal.
+    state._nextDayMatsMode = true;
+    state.materialsDraft = {};
+    document.getElementById("tbMaterialsSearch").value = "";
+    renderMaterialsCatalog("");
+    document.querySelector("#tbMaterialsModal h3").textContent = "Add tomorrow's materials";
+    els.materialsModal.hidden = false;
+  }
+
+  async function confirmNextDayMats() {
+    const items = Object.entries(state.materialsDraft).map(([partSku, qty]) => ({ partSku, qty }));
+    if (!items.length) { closeMaterialsModal(); return; }
+    const existing = state.wo.dailyLog?.nextDayMaterials || [];
+    await saveNextDayMats([...existing, ...items.map((i) => ({ ...i, addedAt: new Date().toISOString(), note: "" }))]);
+    state._nextDayMatsMode = false;
+    document.querySelector("#tbMaterialsModal h3").textContent = "Add materials consumed";
+    closeMaterialsModal();
+    showToast(`Added ${items.length} item${items.length === 1 ? "" : "s"} to tomorrow's pack.`, { variant: "success" });
+  }
+
+  async function promoteNextDayMats() {
+    const mats = state.wo.dailyLog?.nextDayMaterials || [];
+    if (!mats.length || !state.project) return;
+    if (!confirm(`Promote ${mats.length} item${mats.length === 1 ? "" : "s"} to a project material list?`)) return;
+    try {
+      // Create a material list with parentType=project, tag='day_pack'.
+      const r = await fetch("/api/material-lists", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: `Day-pack for ${state.wo.dailyLog?.workDate || "tomorrow"}`,
+          parentType: "project",
+          parentId: state.project.id,
+          customerName: state.project.customerName,
+          customerEmail: state.project.customerEmail,
+          address: state.project.address,
+          // Seed with the planned materials. The material-list endpoint
+          // accepts a `items` array of { partSku, qty }; if it ignores
+          // them on create the admin can add them in the builder.
+          items: mats.map((m) => ({ partSku: m.partSku, qty: m.qty, status: "need" })),
+          tag: "day_pack"
+        })
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok || !data.ok) {
+        showToast(data.errors?.[0] || "Promote failed.", { variant: "error" });
+        return;
+      }
+      showToast(`Material list ${data.list?.id} created.`, { variant: "success" });
+      // Open the new list so admin can finalize.
+      if (data.list?.id) {
+        setTimeout(() => { location.href = `/admin/material-list/${encodeURIComponent(data.list.id)}`; }, 800);
+      }
+    } catch (err) { showToast(err.message || "Promote failed.", { variant: "error" }); }
   }
 
   // ---- Actions ----
@@ -235,12 +367,14 @@
       });
       const data = await r.json().catch(() => ({}));
       if (!r.ok || !data.ok) {
-        alert(data.errors?.[0] || `Start failed (${r.status})`);
+        showToast(data.errors?.[0] || `Start failed (${r.status})`, { variant: "error" });
         return;
       }
       state.wo = data.workOrder;
       renderSession();
-    } catch (err) { alert(err.message || "Start failed."); }
+      const lc = data.session?.labourersOnSite || 1;
+      showToast(`Session started · ${lc} labourer${lc === 1 ? "" : "s"}`, { variant: "success" });
+    } catch (err) { showToast(err.message || "Start failed.", { variant: "error" }); }
   }
 
   async function endSession() {
@@ -254,12 +388,13 @@
       });
       const data = await r.json().catch(() => ({}));
       if (!r.ok || !data.ok) {
-        alert(data.errors?.[0] || `End failed (${r.status})`);
+        showToast(data.errors?.[0] || `End failed (${r.status})`, { variant: "error" });
         return;
       }
       state.wo = data.workOrder;
       renderSession();
-    } catch (err) { alert(err.message || "End failed."); }
+      showToast("Session ended.", { variant: "success" });
+    } catch (err) { showToast(err.message || "End failed.", { variant: "error" }); }
   }
 
   async function updateLabourers() {
@@ -281,17 +416,66 @@
     } catch (_) {}
   }
 
-  async function markTaskDone(taskId) {
-    if (!confirm("Mark this task done? Updates the project's master list.")) return;
+  // Open the mark-done modal, which lets the tech attach photos.
+  let _taskDonePending = null;
+  function openTaskDoneModal(taskId) {
+    const task = (state.project?.tasks || []).find((t) => t.id === taskId);
+    if (!task) return;
+    _taskDonePending = taskId;
+    const modal = document.getElementById("tbTaskDoneModal");
+    const desc = document.getElementById("tbTaskDoneDescription");
+    const fileInput = document.getElementById("tbTaskDonePhotos");
+    if (!modal) {
+      // Modal missing (old page) — fall back to legacy confirm flow.
+      if (confirm(`Mark "${task.description}" done?`)) markTaskDone(taskId, []);
+      return;
+    }
+    if (desc) desc.textContent = task.description;
+    if (fileInput) fileInput.value = "";
+    modal.hidden = false;
+  }
+  function closeTaskDoneModal() {
+    const modal = document.getElementById("tbTaskDoneModal");
+    if (modal) modal.hidden = true;
+    _taskDonePending = null;
+  }
+  async function submitTaskDoneModal() {
+    const taskId = _taskDonePending;
+    if (!taskId) return;
+    const fileInput = document.getElementById("tbTaskDonePhotos");
+    const files = fileInput && fileInput.files ? Array.from(fileInput.files) : [];
+    const photos = [];
+    for (const f of files) {
+      // Cap per-file size locally before send; server enforces hard cap.
+      if (f.size > 25 * 1024 * 1024) {
+        showToast(`${f.name} > 25 MB; skipped.`, { variant: "error" });
+        continue;
+      }
+      try {
+        const dataUrl = await new Promise((res, rej) => {
+          const r = new FileReader();
+          r.onload = () => res(r.result);
+          r.onerror = () => rej(new Error("read failed"));
+          r.readAsDataURL(f);
+        });
+        const base64 = String(dataUrl).split(",")[1] || "";
+        photos.push({ data: base64, mediaType: f.type || "image/jpeg" });
+      } catch (_) { /* skip */ }
+    }
+    closeTaskDoneModal();
+    await markTaskDone(taskId, photos);
+  }
+
+  async function markTaskDone(taskId, photos = []) {
     try {
       const r = await fetch(`/api/work-orders/${encodeURIComponent(WO_ID)}/tasks-done`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ taskId })
+        body: JSON.stringify({ taskId, photos })
       });
       const data = await r.json().catch(() => ({}));
       if (!r.ok || !data.ok) {
-        alert(data.errors?.[0] || `Mark failed (${r.status})`);
+        showToast(data.errors?.[0] || `Mark failed (${r.status})`, { variant: "error" });
         return;
       }
       // Refresh project to get updated task state.
@@ -305,7 +489,9 @@
       if (projR?.project) state.project = projR.project;
       renderTasks();
       renderContext();
-    } catch (err) { alert(err.message || "Mark failed."); }
+      const photoCount = data.photosUploaded || 0;
+      showToast(`Task done${photoCount ? ` · ${photoCount} photo${photoCount === 1 ? "" : "s"}` : ""}.`, { variant: "success" });
+    } catch (err) { showToast(err.message || "Mark failed.", { variant: "error" }); }
   }
 
   async function removeMaterial(idx) {
@@ -368,6 +554,8 @@
     els.materialsSummary.textContent = `${entries.length} item${entries.length === 1 ? "" : "s"} · ${entries.reduce((sum, [, q]) => sum + Number(q), 0)} total qty`;
   }
   async function confirmMaterials() {
+    // Dispatch to next-day path if the modal was opened in that mode.
+    if (state._nextDayMatsMode) return confirmNextDayMats();
     const items = Object.entries(state.materialsDraft).map(([partSku, qty]) => ({ partSku, qty }));
     if (!items.length) { closeMaterialsModal(); return; }
     try {
@@ -378,13 +566,14 @@
       });
       const data = await r.json().catch(() => ({}));
       if (!r.ok || !data.ok) {
-        alert(data.errors?.[0] || "Add failed.");
+        showToast(data.errors?.[0] || "Add failed.", { variant: "error" });
         return;
       }
       state.wo = data.workOrder;
       closeMaterialsModal();
       renderMaterials();
-    } catch (err) { alert(err.message || "Add failed."); }
+      showToast(`Added ${items.length} material entr${items.length === 1 ? "y" : "ies"}.`, { variant: "success" });
+    } catch (err) { showToast(err.message || "Add failed.", { variant: "error" }); }
   }
 
   // Daily notes save — debounced.
@@ -482,10 +671,49 @@
       ? `${selected.length} item${selected.length === 1 ? "" : "s"} · estimated $${total.toFixed(2)}`
       : `Estimated $0.00`;
   }
-  async function saveScope() {
+  async function saveScope(sendImmediately = false) {
     const description = els.scopeDescription.value.trim();
-    if (!description) { alert("Description required."); return; }
-    if (!state.project) { alert("This WO has no parent project."); return; }
+    if (!description) { showToast("Description required.", { variant: "error" }); return; }
+    if (!state.project) { showToast("This WO has no parent project.", { variant: "error" }); return; }
+
+    // Upload any attached photos to the WO first (no taskId — these are
+    // SCR-anchored, category 'issue' for backward-compat with renderer).
+    const photoInput = document.getElementById("tbScopePhotos");
+    const files = photoInput && photoInput.files ? Array.from(photoInput.files) : [];
+    const uploadedPhotoNs = [];
+    if (files.length) {
+      const photos = [];
+      for (const f of files) {
+        if (f.size > 25 * 1024 * 1024) {
+          showToast(`${f.name} > 25 MB; skipped.`, { variant: "error" });
+          continue;
+        }
+        try {
+          const dataUrl = await new Promise((res, rej) => {
+            const r = new FileReader();
+            r.onload = () => res(r.result);
+            r.onerror = () => rej(new Error("read failed"));
+            r.readAsDataURL(f);
+          });
+          const base64 = String(dataUrl).split(",")[1] || "";
+          photos.push({ data: base64, mediaType: f.type || "image/jpeg", category: "issue" });
+        } catch (_) { /* skip */ }
+      }
+      if (photos.length) {
+        try {
+          const pr = await fetch(`/api/work-orders/${encodeURIComponent(WO_ID)}/photos`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ photos })
+          });
+          const pd = await pr.json().catch(() => ({}));
+          if (pr.ok && pd.ok && Array.isArray(pd.added)) {
+            uploadedPhotoNs.push(...pd.added.map((p) => String(p.n)));
+          }
+        } catch (err) { console.warn("[scope photos] upload failed:", err?.message); }
+      }
+    }
+
     try {
       const r = await fetch(`/api/projects/${encodeURIComponent(state.project.id)}/scope-changes`, {
         method: "POST",
@@ -493,14 +721,35 @@
         body: JSON.stringify({
           description,
           capturedFromWoId: WO_ID,
+          photoIds: uploadedPhotoNs,
           suggestedLineItems: state.scopeDraft.suggestedLineItems
         })
       });
       const data = await r.json().catch(() => ({}));
-      if (!r.ok || !data.ok) { alert(data.errors?.[0] || "Save failed."); return; }
+      if (!r.ok || !data.ok) { showToast(data.errors?.[0] || "Save failed.", { variant: "error" }); return; }
+      const scrId = data.scopeChange.id;
+
+      // If "Save & send" was the trigger, immediately flip to pending_customer_approval.
+      if (sendImmediately) {
+        try {
+          const sr = await fetch(`/api/projects/${encodeURIComponent(state.project.id)}/scope-changes/${encodeURIComponent(scrId)}/send`, {
+            method: "POST"
+          });
+          const sd = await sr.json().catch(() => ({}));
+          if (!sr.ok || !sd.ok) {
+            showToast(`Saved as draft (${scrId}); send failed: ${sd.errors?.[0] || "?"}`, { variant: "error", durationMs: 7000 });
+          } else {
+            closeScopeModal();
+            showToast(`Sent to customer for approval (${scrId}).`, { variant: "success", durationMs: 6000 });
+            return;
+          }
+        } catch (err) {
+          showToast(`Saved as draft (${scrId}); send failed: ${err.message}`, { variant: "error", durationMs: 7000 });
+        }
+      }
       closeScopeModal();
-      alert(`Scope addition ${data.scopeChange.id} saved. Review and send from the project page.`);
-    } catch (err) { alert(err.message || "Save failed."); }
+      showToast(`Scope addition saved (${scrId}). Review on project page.`, { variant: "success", durationMs: 6000 });
+    } catch (err) { showToast(err.message || "Save failed.", { variant: "error" }); }
   }
 
   function wire() {
@@ -520,8 +769,19 @@
 
     els.addScopeBtn.addEventListener("click", openScopeModal);
     els.scopeCancel.addEventListener("click", closeScopeModal);
-    els.scopeSave.addEventListener("click", saveScope);
+    els.scopeSave.addEventListener("click", () => saveScope(false));
+    document.getElementById("tbScopeSaveAndSend")?.addEventListener("click", () => saveScope(true));
     els.scopeModal.addEventListener("click", (e) => { if (e.target === els.scopeModal) closeScopeModal(); });
+
+    // Task-done modal
+    document.getElementById("tbTaskDoneCancel")?.addEventListener("click", closeTaskDoneModal);
+    document.getElementById("tbTaskDoneConfirm")?.addEventListener("click", submitTaskDoneModal);
+    const taskDoneModal = document.getElementById("tbTaskDoneModal");
+    if (taskDoneModal) taskDoneModal.addEventListener("click", (e) => { if (e.target === taskDoneModal) closeTaskDoneModal(); });
+
+    // Tomorrow's materials picker + promote
+    document.getElementById("tbNextDayAddMatsBtn")?.addEventListener("click", openNextDayMatsModal);
+    document.getElementById("tbPromoteNextDayMatsBtn")?.addEventListener("click", promoteNextDayMats);
   }
 
   boot();

@@ -657,6 +657,54 @@ async function unmarkTaskComplete(projectId, taskId, expectedWoId = null, { by =
 
 // ---- Brief 2: Project metrics & T&M billing -----------------------
 
+// Pure read — list all task-anchored photo refs across the project's
+// build WOs. Returns [{ taskId, woId, n, filename, mediaType, addedAt }].
+// Sorted newest-first. Brief 2 §3.1 + §3.8.
+async function listTaskPhotos(projectId) {
+  const workOrders = require("./work-orders");
+  const buildWos = await workOrders.listBuildWosForProject(projectId);
+  const photos = [];
+  for (const wo of buildWos) {
+    for (const p of (wo.photos || [])) {
+      if (!p.taskId) continue;
+      photos.push({
+        taskId: p.taskId,
+        woId: wo.id,
+        n: p.n,
+        filename: p.filename,
+        mediaType: p.mediaType,
+        addedAt: p.addedAt
+      });
+    }
+  }
+  return photos.sort((a, b) => String(b.addedAt || "").localeCompare(String(a.addedAt || "")));
+}
+
+// Pure read — recent photos (any kind) across all build WOs, capped.
+// Used by the status-update snapshot to embed a photo strip.
+async function listRecentProjectPhotos(projectId, { limit = 6 } = {}) {
+  const workOrders = require("./work-orders");
+  const buildWos = await workOrders.listBuildWosForProject(projectId);
+  const photos = [];
+  for (const wo of buildWos) {
+    for (const p of (wo.photos || [])) {
+      // Skip PDFs — strip is for image attachments only.
+      if (p.mediaType && p.mediaType.startsWith("image/")) {
+        photos.push({
+          woId: wo.id,
+          n: p.n,
+          filename: p.filename,
+          mediaType: p.mediaType,
+          addedAt: p.addedAt,
+          taskId: p.taskId || null
+        });
+      }
+    }
+  }
+  photos.sort((a, b) => String(b.addedAt || "").localeCompare(String(a.addedAt || "")));
+  return photos.slice(0, limit);
+}
+
 // Pure read — returns derived metrics from project + attached build WOs.
 async function computeProjectMetrics(projectId) {
   const proj = await get(projectId);
@@ -985,7 +1033,7 @@ async function generateQuoteRevisionFromScopeChange(projectId, scrId, { by = "ad
 
 // ---- Brief 2: Status updates --------------------------------------
 
-async function generateStatusUpdate(projectId, { recipient, preamble = "" }, { by = "admin", metrics = null, recentWos = [] } = {}) {
+async function generateStatusUpdate(projectId, { recipient, preamble = "" }, { by = "admin", metrics = null, recentPhotos = null } = {}) {
   return _mutate(projectId, async (proj) => {
     const m = metrics || (await computeProjectMetrics(projectId));
 
@@ -1004,6 +1052,9 @@ async function generateStatusUpdate(projectId, { recipient, preamble = "" }, { b
     const pendingScrs = (proj.scopeChangeRequests || []).filter(
       (s) => s.status === "pending_admin_review" || s.status === "pending_customer_approval"
     );
+
+    // Recent photos (4-6) for the email's photo strip per Brief §3.5.
+    const photos = recentPhotos || (await listRecentProjectPhotos(projectId, { limit: 6 }));
 
     const snapshot = {
       projectName: proj.name || proj.id,
@@ -1026,6 +1077,11 @@ async function generateStatusUpdate(projectId, { recipient, preamble = "" }, { b
         description: s.description,
         status: s.status,
         sentAt: s.sentAt
+      })),
+      recentPhotos: photos.map((p) => ({
+        woId: p.woId,
+        n: p.n,
+        addedAt: p.addedAt
       })),
       preamble: String(preamble || "").slice(0, 4000),
       generatedAt: nowIso()
@@ -1143,7 +1199,7 @@ async function completionPreflight(projectId) {
 // record creation is done by completion-cascade.js's
 // runProjectFinalCascade(). This function is responsible for the
 // project-side state machine: stamps + status flip + history.
-async function completeProject(projectId, { by = "admin", allowOverride = false, attestationNote = "" } = {}) {
+async function completeProject(projectId, { by = "admin", allowOverride = false, attestationNote = "", deps = {} } = {}) {
   const proj = await get(projectId);
   if (!proj) throw Object.assign(new Error("Project not found."), { code: "project_not_found" });
 
@@ -1168,8 +1224,10 @@ async function completeProject(projectId, { by = "admin", allowOverride = false,
   // Delegate the actual invoice generation + emails + service record
   // to completion-cascade.js. That module is the long-standing home
   // for cascade side effects and stays the single source of truth.
+  // Brief 2: deps.notifyAdmin / deps.notifyCustomer forwarded so the
+  // route can wire up real email senders.
   const completionCascade = require("./completion-cascade");
-  const cascadeResult = await completionCascade.runProjectFinalCascade(proj, { by });
+  const cascadeResult = await completionCascade.runProjectFinalCascade(proj, { by, deps });
 
   // Update project state.
   return _mutate(projectId, (p) => {
@@ -1213,6 +1271,8 @@ module.exports = {
   // Brief 2 — metrics & billing
   computeProjectMetrics,
   computeTAndMBilling,
+  listTaskPhotos,
+  listRecentProjectPhotos,
   // Brief 2 — scope changes
   createScopeChangeRequest,
   updateScopeChangeRequest,

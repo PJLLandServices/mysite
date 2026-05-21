@@ -348,6 +348,42 @@
     </div>
   </div>
 
+  <!-- Brief 2 — Toast notification (replaces alert() for non-trivial
+       results: scope change sent, status update sent, project completed,
+       errors, etc.). Auto-dismisses after 5s or manual close. -->
+  <div class="proj-toast" id="projToast" hidden role="status" aria-live="polite">
+    <span class="proj-toast-text" id="projToastText"></span>
+    <button type="button" class="proj-toast-close" id="projToastClose" aria-label="Dismiss">×</button>
+  </div>
+
+  <!-- Brief 2 — Confirmation modal (replaces confirm() for non-trivial
+       admin actions: send SCR, approve/reject SCR, revise, set final WO,
+       etc.). Trivial delete confirms still use confirm() per brief. -->
+  <div class="proj-modal-backdrop" id="confirmModal" hidden role="dialog" aria-modal="true">
+    <div class="proj-modal">
+      <h3 id="confirmTitle">Confirm</h3>
+      <p id="confirmBody"></p>
+      <div class="proj-modal-actions">
+        <button type="button" class="pjl-btn pjl-btn-outline" id="confirmCancel">Cancel</button>
+        <button type="button" class="pjl-btn pjl-btn-primary" id="confirmOk">OK</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Brief 2 — Result modal (replaces the rich "alert" results like the
+       Send Status Update confirmation showing recipient + status). Used
+       by the result of any meaningful action. -->
+  <div class="proj-modal-backdrop" id="resultModal" hidden role="dialog" aria-modal="true">
+    <div class="proj-modal">
+      <h3 id="resultTitle">Done</h3>
+      <p id="resultBody"></p>
+      <p id="resultDetail" class="proj-modal-meta" hidden></p>
+      <div class="proj-modal-actions">
+        <button type="button" class="pjl-btn pjl-btn-primary" id="resultOk">OK</button>
+      </div>
+    </div>
+  </div>
+
   <script src="/crm/crm-nav.js"></script>
   <script src="/crm/project.js"></script>
   <script src="/coverage-checker.js"></script>

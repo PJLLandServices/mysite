@@ -255,6 +255,13 @@
     els.tasksProgress.textContent = ordered.length
       ? `${done} of ${ordered.length} complete`
       : "No tasks yet";
+    // Index task-anchored photos by taskId.
+    const photosByTask = new Map();
+    for (const p of (state.exec.taskPhotos || [])) {
+      if (!photosByTask.has(p.taskId)) photosByTask.set(p.taskId, []);
+      photosByTask.get(p.taskId).push(p);
+    }
+
     els.taskList.innerHTML = ordered.map((t) => {
       const checked = t.status === "done" ? " checked" : "";
       const meta = t.completedByWoId
@@ -265,6 +272,12 @@
       const deleteBtn = t.status === "pending"
         ? `<button type="button" class="proj-task-delete" data-task-id="${escapeHtml(t.id)}" aria-label="Remove">×</button>`
         : "";
+      const photos = photosByTask.get(t.id) || [];
+      const photoStrip = photos.length
+        ? `<div class="proj-task-photos">${photos.slice(0, 4).map((p) =>
+            `<a href="/api/work-orders/${encodeURIComponent(p.woId)}/photos/${encodeURIComponent(p.n)}" target="_blank" rel="noopener" title="From ${escapeHtml(p.woId)}"><img src="/api/work-orders/${encodeURIComponent(p.woId)}/photos/${encodeURIComponent(p.n)}" alt=""></a>`
+          ).join("")}${photos.length > 4 ? `<span class="proj-task-photos-more">+${photos.length - 4}</span>` : ""}</div>`
+        : "";
       return `
         <li class="proj-task-item${t.status === "done" ? " is-done" : ""}" data-task-id="${escapeHtml(t.id)}">
           <label>
@@ -273,6 +286,7 @@
           </label>
           ${meta}
           ${deleteBtn}
+          ${photoStrip}
         </li>
       `;
     }).join("");
@@ -652,7 +666,8 @@
     metrics: null,         // last metrics response
     projectRates: null,    // catalog cache
     parts: null,           // parts.json cache for material consumed lookups
-    scopeDraft: null       // working draft for scope-change modal
+    scopeDraft: null,      // working draft for scope-change modal
+    taskPhotos: []         // task-anchored photos across all build WOs
   };
 
   async function refreshProject() {
@@ -662,9 +677,18 @@
       if (data.ok && data.project) {
         state.project = data.project;
         await loadExecBuildWos();
+        await loadTaskPhotos();
         renderAll();
       }
     } catch (err) { console.warn("[refresh] failed:", err?.message); }
+  }
+
+  async function loadTaskPhotos() {
+    try {
+      const r = await fetch(`/api/projects/${encodeURIComponent(state.projectId)}/task-photos`, { cache: "no-store" });
+      const data = await r.json().catch(() => ({}));
+      if (data.ok) state.exec.taskPhotos = data.photos || [];
+    } catch (_) { state.exec.taskPhotos = []; }
   }
 
   async function loadExecBuildWos() {
@@ -808,45 +832,49 @@
     const base = `/api/projects/${encodeURIComponent(state.project.id)}/scope-changes/${encodeURIComponent(scrId)}`;
     try {
       if (action === "send-scr") {
-        if (!confirm("Send this scope addition to the customer for approval?")) return;
+        if (!await askConfirm("Send to customer?", "Email this scope addition to the customer for approval. The proposal will move to 'awaiting customer'.", { okLabel: "Send" })) return;
         const r = await fetch(`${base}/send`, { method: "POST" });
-        if (!r.ok) { alert((await r.json()).errors?.[0] || "Send failed."); return; }
+        if (!r.ok) { showToast((await r.json()).errors?.[0] || "Send failed.", { variant: "error" }); return; }
+        showToast("Scope addition sent to customer.", { variant: "success" });
       } else if (action === "approve-scr") {
-        if (!confirm("Mark this scope change as approved by the customer?")) return;
+        if (!await askConfirm("Mark approved?", "Mark this scope change as approved by the customer. For fixed-price projects, generate a quote revision next.", { okLabel: "Mark approved" })) return;
         const r = await fetch(`${base}/resolve`, {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ resolution: "approved" })
         });
-        if (!r.ok) { alert((await r.json()).errors?.[0] || "Approve failed."); return; }
+        if (!r.ok) { showToast((await r.json()).errors?.[0] || "Approve failed.", { variant: "error" }); return; }
+        showToast("Scope change approved.", { variant: "success" });
       } else if (action === "reject-scr") {
-        if (!confirm("Mark this scope change as rejected by the customer?")) return;
+        if (!await askConfirm("Mark rejected?", "Mark this scope change as rejected by the customer. Work does not proceed.", { okLabel: "Mark rejected" })) return;
         const r = await fetch(`${base}/resolve`, {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ resolution: "rejected" })
         });
-        if (!r.ok) { alert((await r.json()).errors?.[0] || "Reject failed."); return; }
+        if (!r.ok) { showToast((await r.json()).errors?.[0] || "Reject failed.", { variant: "error" }); return; }
+        showToast("Scope change rejected.", { variant: "success" });
       } else if (action === "withdraw-scr") {
-        if (!confirm("Withdraw this scope change request?")) return;
+        if (!await askConfirm("Withdraw?", "Withdraw this scope change request. Stays on the project for audit.", { okLabel: "Withdraw" })) return;
         const r = await fetch(`${base}/resolve`, {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ resolution: "withdrawn" })
         });
-        if (!r.ok) { alert((await r.json()).errors?.[0] || "Withdraw failed."); return; }
+        if (!r.ok) { showToast((await r.json()).errors?.[0] || "Withdraw failed.", { variant: "error" }); return; }
+        showToast("Scope change withdrawn.", { variant: "success" });
       } else if (action === "revise-scr") {
-        if (!confirm("Generate a quote revision (Q-vN) from this approved scope change?")) return;
+        if (!await askConfirm("Generate revision?", "Create a Q-vN containing the original line items plus the approved additions. Customer will need to sign the new revision.", { okLabel: "Generate" })) return;
         const r = await fetch(`${base}/generate-revision`, { method: "POST" });
         const data = await r.json().catch(() => ({}));
-        if (!r.ok || !data.ok) { alert(data.errors?.[0] || "Revision failed."); return; }
-        if (confirm(`Revision ${data.quote.id} created. Open the proposal builder?`)) {
+        if (!r.ok || !data.ok) { showToast(data.errors?.[0] || "Revision failed.", { variant: "error" }); return; }
+        if (await askConfirm("Revision created", `Revision ${data.quote.id} is ready in the proposal builder. Open it now?`, { okLabel: "Open" })) {
           location.href = `/admin/quote/${encodeURIComponent(data.quote.id)}/proposal`;
           return;
         }
       }
       await refreshProject();
-    } catch (err) { alert(err.message || "Action failed."); }
+    } catch (err) { showToast(err.message || "Action failed.", { variant: "error" }); }
   }
 
   function renderStatusUpdates() {
@@ -948,6 +976,64 @@
   function openModal(id) { const m = document.getElementById(id); if (m) m.hidden = false; }
   function closeModal(id) { const m = document.getElementById(id); if (m) m.hidden = true; }
 
+  // Brief 2 — toast / result / confirm helpers replacing alert() and
+  // confirm() per "no native dialogs except trivial deletes" rule.
+  let _toastTimer = null;
+  function showToast(message, { variant = "info", durationMs = 5000 } = {}) {
+    const t = document.getElementById("projToast");
+    const txt = document.getElementById("projToastText");
+    if (!t || !txt) return;
+    txt.textContent = message;
+    t.dataset.variant = variant;
+    t.hidden = false;
+    if (_toastTimer) clearTimeout(_toastTimer);
+    _toastTimer = setTimeout(() => { t.hidden = true; }, durationMs);
+  }
+
+  function showResult(title, body, detail) {
+    const t = document.getElementById("resultTitle");
+    const b = document.getElementById("resultBody");
+    const d = document.getElementById("resultDetail");
+    if (t) t.textContent = title;
+    if (b) b.textContent = body;
+    if (d) {
+      if (detail) {
+        d.textContent = detail;
+        d.hidden = false;
+      } else {
+        d.hidden = true;
+      }
+    }
+    openModal("resultModal");
+  }
+
+  // In-app confirm. Returns a Promise<boolean>. Replaces window.confirm
+  // for non-trivial actions per brief.
+  function askConfirm(title, body, { okLabel = "OK", cancelLabel = "Cancel" } = {}) {
+    return new Promise((resolve) => {
+      const t = document.getElementById("confirmTitle");
+      const b = document.getElementById("confirmBody");
+      const ok = document.getElementById("confirmOk");
+      const cancel = document.getElementById("confirmCancel");
+      if (!t || !b || !ok || !cancel) { resolve(window.confirm(body)); return; }
+      t.textContent = title;
+      b.textContent = body;
+      ok.textContent = okLabel;
+      cancel.textContent = cancelLabel;
+      const cleanup = (val) => {
+        ok.removeEventListener("click", okHandler);
+        cancel.removeEventListener("click", cancelHandler);
+        closeModal("confirmModal");
+        resolve(val);
+      };
+      const okHandler = () => cleanup(true);
+      const cancelHandler = () => cleanup(false);
+      ok.addEventListener("click", okHandler);
+      cancel.addEventListener("click", cancelHandler);
+      openModal("confirmModal");
+    });
+  }
+
   async function openStatusUpdateModal() {
     // Default recipient = project customer email.
     document.getElementById("suRecipientEmail").value = state.project.customerEmail || "";
@@ -983,7 +1069,7 @@
     const email = document.getElementById("suRecipientEmail").value.trim();
     const name = document.getElementById("suRecipientName").value.trim();
     const preamble = document.getElementById("suPreamble").value.trim();
-    if (!email) { alert("Recipient email is required."); return; }
+    if (!email) { showToast("Recipient email is required.", { variant: "error" }); return; }
     try {
       const r = await fetch(`/api/projects/${encodeURIComponent(state.project.id)}/status-update`, {
         method: "POST",
@@ -991,11 +1077,15 @@
         body: JSON.stringify({ recipient: { email, name }, preamble })
       });
       const data = await r.json().catch(() => ({}));
-      if (!r.ok || !data.ok) { alert(data.errors?.[0] || "Send failed."); return; }
+      if (!r.ok || !data.ok) { showToast(data.errors?.[0] || "Send failed.", { variant: "error" }); return; }
       closeModal("statusUpdateModal");
-      alert(data.emailSent ? `Status update sent to ${email}.` : `Logged but email NOT sent: ${data.emailError || "?"}`);
+      if (data.emailSent) {
+        showResult("Status update sent", `Email delivered to ${email}.`, data.statusUpdate?.id ? `Snapshot ${data.statusUpdate.id} logged on project history.` : null);
+      } else {
+        showResult("Logged but not emailed", `The update snapshot was saved, but email delivery failed.`, data.emailError || "Unknown email error.");
+      }
       await refreshProject();
-    } catch (err) { alert(err.message || "Send failed."); }
+    } catch (err) { showToast(err.message || "Send failed.", { variant: "error" }); }
   }
 
   function openStatusUpdateSnapshot(suId) {
@@ -1162,16 +1252,20 @@
       const data = await r.json().catch(() => ({}));
       if (!r.ok || !data.ok) {
         if (data.blockers?.length) {
-          alert("Blocked:\n" + data.blockers.map((b) => "• " + b.message).join("\n"));
+          showResult("Cannot complete", "Preflight blockers must be resolved first.",
+            data.blockers.map((b) => "• " + b.message).join("\n"));
         } else {
-          alert(data.errors?.[0] || "Complete failed.");
+          showToast(data.errors?.[0] || "Complete failed.", { variant: "error" });
         }
         return;
       }
       closeModal("completeProjectModal");
-      alert(`Project completed. Invoice ${data.invoiceId || "(none)"} created.`);
+      const detail = data.invoiceId
+        ? `Invoice ${data.invoiceId} created. Customer + admin emails sent.`
+        : "No billable lines — no invoice. Service record + warranty stamped.";
+      showResult("Project completed.", `Project ${state.project.id} marked complete.`, detail);
       await refreshProject();
-    } catch (err) { alert(err.message || "Complete failed."); }
+    } catch (err) { showToast(err.message || "Complete failed.", { variant: "error" }); }
   }
 
   async function createNewBuildWo() {
@@ -1241,10 +1335,16 @@
     document.getElementById("projRefreshBillingBtn")?.addEventListener("click", refreshBillingPreview);
 
     // Modal click-outside-to-close.
-    ["statusUpdateModal", "scopeChangeModal", "completeProjectModal", "addTaskModal", "suViewModal"].forEach((id) => {
+    ["statusUpdateModal", "scopeChangeModal", "completeProjectModal", "addTaskModal", "suViewModal", "confirmModal", "resultModal"].forEach((id) => {
       const m = document.getElementById(id);
       if (m) m.addEventListener("click", (e) => { if (e.target === m) closeModal(id); });
     });
+
+    // Brief 2 — toast / result wiring.
+    document.getElementById("projToastClose")?.addEventListener("click", () => {
+      document.getElementById("projToast").hidden = true;
+    });
+    document.getElementById("resultOk")?.addEventListener("click", () => closeModal("resultModal"));
   }
 
   // ---- Wire up ------------------------------------------------------
@@ -1311,10 +1411,11 @@
 
   wire();
   wireBrief2();
-  // Wrap boot to also load buildWos before first render.
+  // Wrap boot to also load buildWos + task photos before first render.
   (async () => {
     await boot();
     await loadExecBuildWos();
+    await loadTaskPhotos();
     renderAll();
   })();
 })();
