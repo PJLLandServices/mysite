@@ -685,9 +685,64 @@
     max-height: 100%;
     border-radius: 0;
   }
+  /* iOS standalone mode (apple-mobile-web-app-status-bar-style:
+     black-translucent) overlays the status bar on top of full-screen
+     modals. Reserve safe-area-inset-top at the modal head so the title
+     isn't covered by the time/signal/battery glyphs. The max() preserves
+     the original 18px padding on non-iOS where the inset is 0. */
+  .ps-modal-head {
+    padding-top: max(18px, calc(env(safe-area-inset-top) + 8px));
+  }
   .ps-edit-form { grid-template-columns: 1fr; }
+
+  /* Add Parts table — 9 columns won't fit a 430px viewport even with
+     horizontal scroll. Collapse each <tr> into a stacked field card
+     and use the data-label attribute (set by parts-suppliers.js) as
+     the visible label above each input. */
   .ps-add-table {
-    font-size: 12px;
+    display: block;
+    font-size: 13px;
+  }
+  .ps-add-table thead { display: none; }
+  .ps-add-table tbody { display: block; }
+  .ps-add-table tbody tr.ps-add-row {
+    display: block;
+    background: #FAFAF5;
+    border: 1px solid #E2E0D4;
+    border-radius: 10px;
+    padding: 12px 12px 8px;
+    margin-bottom: 12px;
+  }
+  .ps-add-table tbody td {
+    display: block;
+    padding: 6px 0;
+    border: 0;
+  }
+  .ps-add-table tbody td[data-label]::before {
+    content: attr(data-label);
+    display: block;
+    font-family: "Barlow Condensed", sans-serif;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: #1B4D2E;
+    margin-bottom: 4px;
+  }
+  .ps-add-table tbody td.ps-row-actions {
+    text-align: right;
+    padding-top: 8px;
+  }
+  .ps-row-remove {
+    width: auto;
+    height: auto;
+    padding: 6px 12px;
+    font-size: 14px;
+    font-weight: 600;
+  }
+  .ps-row-remove::after {
+    content: " Remove row";
+    margin-left: 2px;
   }
 }
 @media (max-width: 480px) {

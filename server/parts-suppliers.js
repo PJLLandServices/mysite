@@ -705,16 +705,19 @@
   function appendAddPartsRow() {
     const tr = document.createElement("tr");
     tr.className = "ps-add-row";
+    // data-label attributes drive the mobile (<640px) stacked-card layout —
+    // the CSS uses attr(data-label) on a ::before pseudo-element to show the
+    // field label above each input. Keep these in sync with the <th> text.
     tr.innerHTML = `
-      <td><input type="text" name="sku" maxlength="64" required></td>
-      <td><input type="text" name="partNumber" maxlength="64"></td>
-      <td><select name="category" required><option value="">Choose…</option>${categoryOptionsHtml()}</select></td>
-      <td><input type="text" name="subcategory" maxlength="120" required></td>
-      <td><input type="text" name="size" maxlength="40"></td>
-      <td><input type="text" name="description" maxlength="240" required></td>
-      <td><input type="number" name="price" step="0.01" min="0" required></td>
-      <td><input type="text" name="unit" list="ps-unit-options" maxlength="30" placeholder="each"></td>
-      <td><button type="button" class="ps-row-remove" aria-label="Remove row">&times;</button></td>
+      <td data-label="SKU *"><input type="text" name="sku" maxlength="64" required></td>
+      <td data-label="Part #"><input type="text" name="partNumber" maxlength="64"></td>
+      <td data-label="Category *"><select name="category" required><option value="">Choose…</option>${categoryOptionsHtml()}</select></td>
+      <td data-label="Subcategory *"><input type="text" name="subcategory" maxlength="120" required></td>
+      <td data-label="Size"><input type="text" name="size" maxlength="40"></td>
+      <td data-label="Description *"><input type="text" name="description" maxlength="240" required></td>
+      <td data-label="Price ($) *"><input type="number" name="price" step="0.01" min="0" required></td>
+      <td data-label="Unit"><input type="text" name="unit" list="ps-unit-options" maxlength="30" placeholder="each"></td>
+      <td class="ps-row-actions"><button type="button" class="ps-row-remove" aria-label="Remove row">&times;</button></td>
     `;
     els.addPartsRows.appendChild(tr);
     refreshAddPartsSubmitLabel();
