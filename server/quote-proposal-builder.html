@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#0F1F14">
+  <title>Proposal builder — PJL</title>
+  <link rel="icon" type="image/png" href="/favicon-96x96.png?v=20260518" sizes="96x96" />
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg?v=20260518" />
+  <link rel="shortcut icon" href="/favicon.ico?v=20260518" />
+  <link rel="manifest" href="/site.webmanifest?v=20260518" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/crm/crm.css">
+  <link rel="stylesheet" href="/crm/quote-proposal-builder.css">
+</head>
+<body class="pjl-crm-body proposal-body">
+  <aside class="pjl-admin-nav" id="navMenu" aria-label="PJL CRM Navigation">
+    <header class="pjl-side-brand">
+      <a href="/" class="pjl-side-logo"><img src="/crm/pjl-logo.svg" alt="PJL Land Services"></a>
+    </header>
+    <div class="pjl-nav-links">
+      <a href="/admin/today">Today</a>
+      <a href="/admin/messages">Messages</a>
+      <a href="/admin">CRM</a>
+      <a href="/admin/schedule">Schedule</a>
+      <a href="/admin/handoff">Handoff</a>
+      <a href="/admin/outreach">Outreach</a>
+      <a href="/admin/bookings">Bookings</a>
+      <a href="/admin/customers">Customers</a>
+      <a href="/admin/properties">Properties</a>
+      <a href="/admin/projects">Projects</a>
+      <a href="/admin/work-orders">Work orders</a>
+      <a href="/admin/quote-folder" class="is-active">Quotes</a>
+      <a href="/admin/invoices">Invoices</a>
+      <a href="/admin/material-lists">Materials</a>
+      <a href="/admin/chats">AI Chats</a>
+      <a href="/admin/trash">Trash</a>
+      <a href="/admin/users">Users</a>
+      <a href="/admin/settings">Settings</a>
+    </div>
+    <footer class="pjl-side-footer">
+      <a class="pjl-side-phone" href="tel:+19059600181">(905) 960-0181</a>
+      <button class="pjl-nav-logout" type="button" id="logoutButton">Log out</button>
+    </footer>
+  </aside>
+
+  <div class="pjl-app">
+    <header class="pjl-app-topbar">
+      <button class="pjl-nav-toggle" type="button" id="navToggle" aria-label="Menu" aria-expanded="false" aria-controls="navMenu">
+        <span class="pjl-nav-toggle-bar"></span>
+        <span class="pjl-nav-toggle-bar"></span>
+        <span class="pjl-nav-toggle-bar"></span>
+      </button>
+      <span class="pjl-app-title" id="pbTitle">Proposal builder</span>
+      <a class="pjl-app-phone" href="tel:+19059600181">(905) 960-0181</a>
+    </header>
+
+    <main class="pb-shell">
+      <a class="pb-back" href="/admin/quote-folder">&larr; Quote folder</a>
+      <p class="pb-loading" id="pbLoading">Loading proposal…</p>
+      <p class="pb-error" id="pbError" role="alert" hidden></p>
+
+      <section id="pbApp" hidden>
+        <!-- Top bar: identity + branch + billing -->
+        <section class="pb-topbar">
+          <div class="pb-id-block">
+            <span class="pb-id" id="pbQuoteId">—</span>
+            <span class="pb-status invoices-status" id="pbStatus">draft</span>
+            <span class="pb-version" id="pbVersion" hidden>v1</span>
+            <span class="pb-accept-badge" id="pbAcceptBadge" hidden></span>
+          </div>
+          <div class="pb-meta-grid">
+            <label>
+              <span>Branch</span>
+              <select id="pbBranch">
+                <option value="">(unset)</option>
+                <option value="gc_subcontract">GC Subcontract</option>
+                <option value="direct_residential">Residential</option>
+                <option value="lighting_design">Lighting Design</option>
+                <option value="renovation_coordination">Renovation Coordination</option>
+                <option value="change_order">Change Order</option>
+              </select>
+            </label>
+            <label>
+              <span>Billing mode</span>
+              <select id="pbBillingMode">
+                <option value="fixed_price">Fixed price</option>
+                <option value="time_and_material">Time &amp; material</option>
+              </select>
+            </label>
+            <label>
+              <span>Customer email</span>
+              <input type="email" id="pbCustomerEmail" maxlength="254" placeholder="customer@example.com">
+            </label>
+            <label>
+              <span>Labour rate ($/hr)</span>
+              <input type="number" id="pbLabourRate" min="0" step="0.01" placeholder="From customer's negotiated rate">
+            </label>
+            <label>
+              <span>Valid until</span>
+              <input type="date" id="pbValidUntil">
+            </label>
+            <label class="pb-meta-wide">
+              <span>Scope summary (one paragraph)</span>
+              <textarea id="pbScope" rows="2" maxlength="4000" placeholder="One-paragraph scope summary. Used as the proposal subject line and the cover-summary fallback."></textarea>
+            </label>
+          </div>
+        </section>
+
+        <div class="pb-layout">
+          <!-- Left rail: section nav -->
+          <aside class="pb-rail" aria-label="Sections">
+            <h3>Sections</h3>
+            <ol class="pb-section-list" id="pbSectionList"></ol>
+            <p class="pb-rail-hint">Click a section to edit. Empty sections are hidden in the PDF.</p>
+          </aside>
+
+          <!-- Main pane: section editor -->
+          <section class="pb-main">
+            <header class="pb-main-head">
+              <input type="text" class="pb-section-title" id="pbSectionTitle" maxlength="200" placeholder="Section title">
+              <span class="pb-section-kind" id="pbSectionKind"></span>
+            </header>
+            <textarea class="pb-section-body" id="pbSectionBody" rows="14" maxlength="40000" placeholder="Section body. Plain text; paragraph breaks become spacing in the PDF."></textarea>
+            <div class="pb-attach-anchor">
+              <p>Attachments anchored to this section:</p>
+              <div class="pb-anchor-list" id="pbAnchorList"></div>
+              <select id="pbAnchorPicker">
+                <option value="">+ Add attachment to this section…</option>
+              </select>
+            </div>
+            <p class="pb-section-tip" id="pbSectionTip"></p>
+          </section>
+
+          <!-- Right sidebar: attachments + line items -->
+          <aside class="pb-side">
+            <section class="pb-attach">
+              <h3>Attachments</h3>
+              <label class="pb-upload-btn">
+                <input type="file" id="pbUploadInput" accept="image/png,image/jpeg,application/pdf" hidden>
+                <span>+ Upload image / PDF</span>
+              </label>
+              <p class="pb-side-hint">PNG, JPEG, or PDF. 25 MB cap per file, 100 MB total.</p>
+              <ul class="pb-attach-list" id="pbAttachList"></ul>
+            </section>
+
+            <section class="pb-lines">
+              <h3>Line items</h3>
+              <div class="pb-line-picker">
+                <select id="pbLinePicker">
+                  <option value="">+ Add from project rates…</option>
+                </select>
+                <button type="button" id="pbCustomLine">+ Custom line</button>
+              </div>
+              <ul class="pb-line-list" id="pbLineList"></ul>
+              <div class="pb-totals">
+                <div><span>Subtotal</span><strong id="pbSubtotal">$0.00</strong></div>
+                <div><span>HST (13%)</span><strong id="pbHst">$0.00</strong></div>
+                <div class="pb-total-row"><span>Total CAD</span><strong id="pbTotal">$0.00</strong></div>
+              </div>
+            </section>
+          </aside>
+        </div>
+
+        <!-- Bottom action bar -->
+        <section class="pb-actions">
+          <span class="pb-save-state" id="pbSaveState">Saved</span>
+          <div class="pb-actions-buttons">
+            <a class="pjl-btn pjl-btn-outline" href="#" id="pbPreviewLink" target="_blank" rel="noopener">Preview PDF</a>
+            <button type="button" class="pjl-btn pjl-btn-outline" id="pbReviseBtn" hidden>Create revision</button>
+            <button type="button" class="pjl-btn pjl-btn-primary" id="pbSendBtn">Send for approval</button>
+            <button type="button" class="pjl-btn pjl-btn-primary" id="pbConvertBtn" hidden>Convert to project</button>
+          </div>
+        </section>
+
+        <!-- Admin attestation banner — visible when status is pending_admin_attestation -->
+        <section class="pb-attest" id="pbAttest" hidden>
+          <h3>Customer returned a signed PDF — review &amp; attest</h3>
+          <p id="pbAttestMeta"></p>
+          <p>Open the returned PDF and confirm it's the correctly-signed acceptance for <strong id="pbAttestId"></strong>.</p>
+          <div class="pb-attest-fields">
+            <label><span>Sender email (override if needed)</span><input type="email" id="pbAttestEmail"></label>
+            <label class="pb-meta-wide"><span>Admin note</span><textarea id="pbAttestNote" rows="2" maxlength="2000" placeholder="Optional — context about what you confirmed."></textarea></label>
+          </div>
+          <div class="pb-attest-actions">
+            <a class="pjl-btn pjl-btn-outline" href="#" id="pbAttestOpen" target="_blank" rel="noopener">Open signed PDF</a>
+            <button type="button" class="pjl-btn pjl-btn-primary" id="pbAttestConfirm">Confirm — accept proposal</button>
+          </div>
+        </section>
+      </section>
+    </main>
+  </div>
+
+  <script src="/crm/crm-nav.js"></script>
+  <script src="/crm/quote-proposal-builder.js"></script>
+</body>
+</html>

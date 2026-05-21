@@ -70,10 +70,20 @@
         <button type="button" data-status-filter="" class="is-active">All</button>
         <button type="button" data-status-filter="draft">Drafts</button>
         <button type="button" data-status-filter="sent">Sent</button>
+        <button type="button" data-status-filter="pending_admin_attestation">Awaiting attest</button>
         <button type="button" data-status-filter="accepted">Accepted</button>
         <button type="button" data-status-filter="partially_accepted">Partial</button>
         <button type="button" data-status-filter="declined">Declined</button>
         <button type="button" data-status-filter="expired">Expired</button>
+        <button type="button" data-status-filter="superseded">Superseded</button>
+      </section>
+      <section class="invoices-filters" style="margin-top:6px">
+        <button type="button" data-type-filter="" class="is-active">All types</button>
+        <button type="button" data-type-filter="ai_repair_quote">AI repair</button>
+        <button type="button" data-type-filter="on_site_quote">On-site</button>
+        <button type="button" data-type-filter="project_proposal">Project proposal</button>
+        <span style="flex:1"></span>
+        <a class="pjl-btn pjl-btn-primary" href="#" id="newProposalBtn">+ New project proposal</a>
       </section>
       <p class="invoices-empty" id="quotesEmpty" hidden>No quotes match.</p>
       <div class="qf-list" id="quotesContainer" hidden></div>

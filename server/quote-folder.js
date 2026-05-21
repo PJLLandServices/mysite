@@ -1,14 +1,32 @@
 const containerEl = document.getElementById("quotesContainer");
 const emptyEl = document.getElementById("quotesEmpty");
 const filterBtns = document.querySelectorAll("[data-status-filter]");
+const typeFilterBtns = document.querySelectorAll("[data-type-filter]");
+const newProposalBtn = document.getElementById("newProposalBtn");
 
 const TYPE_LABELS = {
   ai_repair_quote: "AI repair quote",
   on_site_quote: "On-site quote",
-  formal_quote: "Formal quote"
+  formal_quote: "Formal quote",
+  project_proposal: "Project proposal"
+};
+
+const BRANCH_LABELS = {
+  gc_subcontract: "GC Subcontract",
+  direct_residential: "Residential",
+  lighting_design: "Lighting Design",
+  renovation_coordination: "Renovation",
+  change_order: "Change Order"
+};
+
+const ACCEPTANCE_LABELS = {
+  portal_esign: "E-signed",
+  pdf_return: "PDF return",
+  pending: ""
 };
 
 let currentFilter = "";
+let currentTypeFilter = "";
 
 function escapeHtml(s) {
   return String(s == null ? "" : s)
@@ -34,7 +52,11 @@ async function load() {
     fetch("/api/material-lists?includeArchived=1", { cache: "no-store" }).then((r) => r.json()).catch(() => ({})),
     fetch("/api/projects?includeArchived=1", { cache: "no-store" }).then((r) => r.json()).catch(() => ({}))
   ]);
-  const items = (quotesRes.ok && Array.isArray(quotesRes.quotes)) ? quotesRes.quotes : [];
+  let items = (quotesRes.ok && Array.isArray(quotesRes.quotes)) ? quotesRes.quotes : [];
+  // Type filter — applied client-side so a single fetch covers both filters.
+  if (currentTypeFilter) {
+    items = items.filter((q) => q.type === currentTypeFilter);
+  }
   // Build the per-quote indices.
   mlCountByQuote = new Map();
   for (const ml of (mlRes.lists || [])) {
@@ -71,36 +93,55 @@ async function load() {
       ? `<a href="/admin/material-lists" data-quote-id="${escapeHtml(q.id)}" data-action="filter-materials">📋 ${mlCount} list${mlCount === 1 ? "" : "s"}</a>`
       : `no materials`;
 
-    // Build actions list — each action is rendered only when applicable.
-    // The renderer joins them with dot separators so a hidden action
-    // doesn't leave a dangling "·".
+    // Proposal-aware actions: project_proposal quotes get an "Edit
+    // proposal" link to the builder; other types keep the existing
+    // "Open in CRM" lead deep-link.
+    const isProposal = q.type === "project_proposal";
+    const proposalHref = `/admin/quote/${encodeURIComponent(q.id)}/proposal`;
+
     const actions = [];
-    if (leadHref) {
+    if (isProposal) {
+      actions.push(`<a href="${proposalHref}">Edit proposal</a>`);
+    } else if (leadHref) {
       actions.push(`<a href="${leadHref}">Open in CRM</a>`);
     }
     actions.push(`<a href="/api/admin/quote-folder/${encodeURIComponent(q.id)}/pdf" target="_blank" rel="noopener">PDF</a>`);
     if (proj) {
       actions.push(`<a href="/admin/project/${encodeURIComponent(proj.id)}">↗ ${escapeHtml(proj.id)}</a>`);
-    } else {
+    } else if (q.status === "accepted") {
       actions.push(`<button type="button" data-quote-id="${escapeHtml(q.id)}" data-action="convert">Convert to project</button>`);
     }
     const actionsHtml = actions.join(`<span class="qf-card__sep" aria-hidden="true">·</span>`);
 
     const versionTag = q.version > 1 ? `<span class="qf-card__id-version">v${escapeHtml(q.version)}</span>` : "";
     const typeLabel = TYPE_LABELS[q.type] || q.type || "Quote";
+    const branchTag = isProposal && q.branch && BRANCH_LABELS[q.branch]
+      ? `<span class="qf-card__branch">${escapeHtml(BRANCH_LABELS[q.branch])}</span>`
+      : "";
+    const acceptanceTag = isProposal && q.acceptanceMethod && ACCEPTANCE_LABELS[q.acceptanceMethod]
+      ? `<span class="qf-card__accept" data-method="${escapeHtml(q.acceptanceMethod)}">${escapeHtml(ACCEPTANCE_LABELS[q.acceptanceMethod])}</span>`
+      : "";
+    const supersededTag = q.supersededBy
+      ? `<span class="qf-card__superseded" title="Superseded by ${escapeHtml(q.supersededBy)}">superseded by ${escapeHtml(q.supersededBy)}</span>`
+      : "";
     const datesLine = q.validUntil
       ? `${escapeHtml(fmtDate(q.createdAt))} <span class="qf-card__sep" aria-hidden="true">·</span> expires ${escapeHtml(fmtDate(q.validUntil))}`
       : escapeHtml(fmtDate(q.createdAt));
 
+    // For proposals, the card itself opens the builder (not the lead).
+    const cardHref = isProposal ? proposalHref : leadHref;
+
     return `
-      <article class="qf-card" data-quote-id="${escapeHtml(q.id)}"${leadHref ? ` data-href="${leadHref}"` : ""}>
+      <article class="qf-card" data-quote-id="${escapeHtml(q.id)}"${cardHref ? ` data-href="${cardHref}"` : ""}>
         <header class="qf-card__head">
           <span class="qf-card__id">${escapeHtml(q.id)}${versionTag}</span>
           <span class="qf-card__status invoices-status invoices-status--${escapeHtml(q.status)}">${escapeHtml(q.status)}</span>
+          ${acceptanceTag}
         </header>
-        <p class="qf-card__type">${escapeHtml(typeLabel)}</p>
+        <p class="qf-card__type">${escapeHtml(typeLabel)}${branchTag ? " " + branchTag : ""}</p>
         <p class="qf-card__customer">${escapeHtml(customer)}</p>
         <p class="qf-card__dates">${datesLine}</p>
+        ${supersededTag ? `<p class="qf-card__lineage">${supersededTag}</p>` : ""}
         <p class="qf-card__materials">${materialsLine}</p>
         <nav class="qf-card__actions">${actionsHtml}</nav>
       </article>
@@ -173,5 +214,45 @@ filterBtns.forEach((btn) => {
     load();
   });
 });
+
+typeFilterBtns.forEach((btn) => {
+  btn.addEventListener("click", (e) => {
+    if (btn.id === "newProposalBtn") return; // skip — the anchor isn't a filter
+    e.preventDefault();
+    currentTypeFilter = btn.dataset.typeFilter || "";
+    typeFilterBtns.forEach((b) => {
+      if (b.id !== "newProposalBtn") b.classList.toggle("is-active", b === btn);
+    });
+    load();
+  });
+});
+
+// New project proposal — admin path. Creates a draft via POST and
+// redirects into the builder.
+if (newProposalBtn) {
+  newProposalBtn.addEventListener("click", async (e) => {
+    e.preventDefault();
+    const email = prompt("Customer email for the new proposal (can be edited in the builder):");
+    if (email === null) return; // cancelled
+    try {
+      const r = await fetch("/api/quotes/proposal", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          customerEmail: (email || "").trim(),
+          billingMode: "fixed_price"
+        })
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok || !data.ok) {
+        alert(data.errors?.[0] || `Couldn't create proposal (${r.status})`);
+        return;
+      }
+      location.href = `/admin/quote/${encodeURIComponent(data.quote.id)}/proposal`;
+    } catch (err) {
+      alert(err.message || "Couldn't create proposal.");
+    }
+  });
+}
 
 load();

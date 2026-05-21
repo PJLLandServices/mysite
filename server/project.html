@@ -72,6 +72,9 @@
             <span class="proj-header-id-text" id="projId"></span>
             <span class="proj-status" id="projStatus"></span>
             <span class="proj-header-source" id="projSource" hidden></span>
+            <span class="proj-branch" id="projBranch" hidden></span>
+            <span class="proj-billing" id="projBilling" hidden></span>
+            <span class="proj-labour-rate" id="projLabourRate" hidden></span>
           </div>
           <label class="proj-name-field">
             <span>Project name</span>
@@ -107,6 +110,33 @@
               <textarea id="projNotes" rows="2" maxlength="4000" placeholder="Internal notes."></textarea>
             </label>
           </div>
+        </section>
+
+        <!-- Accepted proposal snapshot (Brief 1, May 2026).
+             Only rendered when this project was spun from a project_proposal —
+             reads from project.proposalSnapshot (frozen at conversion). -->
+        <section class="proj-section proj-proposal" id="projProposalPanel" hidden>
+          <div class="proj-section-head">
+            <h2>Accepted proposal</h2>
+            <a class="pjl-btn pjl-btn-outline" id="projProposalPdfLink" href="#" target="_blank" rel="noopener">Open PDF</a>
+          </div>
+          <p class="proj-proposal-meta" id="projProposalMeta"></p>
+          <div class="proj-proposal-totals" id="projProposalTotals"></div>
+          <div class="proj-proposal-attachments" id="projProposalAttachments"></div>
+          <details class="proj-proposal-sections">
+            <summary>View full proposal narrative</summary>
+            <div id="projProposalSections"></div>
+          </details>
+        </section>
+
+        <!-- Tasks (Brief 1) — seeded from proposal line items at
+             conversion; admin marks them done as work progresses. -->
+        <section class="proj-section proj-tasks" id="projTasksPanel" hidden>
+          <div class="proj-section-head">
+            <h2>Tasks</h2>
+            <span class="proj-tasks-progress" id="projTasksProgress"></span>
+          </div>
+          <ul class="proj-task-list" id="projTaskList"></ul>
         </section>
 
         <section class="proj-section">

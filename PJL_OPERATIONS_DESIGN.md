@@ -95,6 +95,10 @@ CUSTOMER FOLDER
     - How did they find PJL Land Services
     - Status: lead / active / inactive / lost
     - QuickBooks Customer ID (link to QB)
+    - Negotiated rates (admin-only): per-customer labour-rate override
+      (e.g. $85/hr GreenTree fair-trade agreement). Snapshots onto a
+      project_proposal quote's `customRates` at creation. Future-
+      extensible to per-foot mainline, per-zone, etc.
 
   Communication Records
     - Date, time, source (email / phone / text / chat / in-person), what about, notes
@@ -229,11 +233,20 @@ Every box knows its parent and its child. No orphans.
 
 ### 4.1 Quote Folder
 
-**Two flavours:**
+**Three flavours:**
 
-**A. AI Repair Quote** — generated in chat from `pricing.json`, for locked-rate work. Lightweight acceptance: customer says "yes send a tech" → booking created → tech confirms scope on-site → signed work order is the binding moment.
+**A. AI Repair Quote (`ai_repair_quote`)** — generated in chat from `pricing.json`, for locked-rate work. Lightweight acceptance: customer says "yes send a tech" → booking created → tech confirms scope on-site → signed work order is the binding moment.
 
-**B. Formal Quote** — for installs, retrofits, renovations. Polished branded PDF (matches QuickBooks format) + SMS with portal link. Customer accepts in portal with signature pad. Signature + IP + timestamp + user agent logged for legal trail.
+**B. On-Site Quote (`on_site_quote`)** — tech walks zones, builds a quote from `pricing.json` on the truck. Customer accepts/declines per line item via on-device signature pad (or off-site remote-approval link). Implementation note: the spec historically called this `formal_quote`; the canonical name in the code (and in the operational lexicon) is `on_site_quote`. `formal_quote` remains in the type enum for legacy records but is no longer emitted.
+
+**C. Project Proposal (`project_proposal`)** — proposal-grade narrative for commercial subcontracts, residential installs, lighting design, renovation coordination, and change orders. Branch-tagged (one of five buckets, see below). Carries multi-section narrative (cover summary → quotation summary → proposed scope → infrastructure list → budget notice → technical reference → project map → line items → acceptance), static-media attachments (Google Earth screenshots, CAD drawings, manufacturer schematics), and per-customer negotiated rates (snapshotted from `customer.negotiatedRates` at creation). Reads its line-items catalog from `server/data/project-rates.json` (admin-only, never exposed publicly). Dual acceptance path: portal e-sign (existing flow) OR print-sign-PDF-return (new flow with admin attestation). Brief 1 (May 2026).
+
+**Branch taxonomy** for `project_proposal`:
+- `gc_subcontract` — GC subcontract work
+- `direct_residential` — direct-to-homeowner installs/retrofits
+- `lighting_design` — landscape lighting (owner-deferred pricing)
+- `renovation_coordination` — landscaper-led reno coordination
+- `change_order` — mid-project scope additions
 
 **Note on bypass-completed WOs:** When a work order is completed via signature bypass (admin-authorized verbal acceptance — see §4.3) AND the bypass also covers on-site quote acceptance (the builder carried lines beyond baseline), **no `on_site_quote` Quote record is created in this folder**. The WO's builder line items, snapshotted onto the bypass record (`acceptedScopeSnapshot`), are the authoritative scope record. Reporting that joins WOs to Quotes must account for this path — some WOs will not appear here.
 
@@ -248,11 +261,19 @@ Every box knows its parent and its child. No orphans.
 ```
 QUOTE FOLDER
   Quote Identity
-    - Quote number (Q-2026-0142, with versioning -v2 if revised)
+    - Quote number (Q-2026-0142, with versioning -v2 if revised; revision
+      lineage carried bidirectionally via revisionOf / supersededBy)
     - Date created
-    - Status: draft / sent / accepted / declined / expired / superseded / cancelled
-    - Type: ai_repair_quote / formal_quote
-    - Created by: AI chat / Patrick / system
+    - Status: draft / sent / accepted / partially_accepted / declined /
+              expired / superseded / cancelled / pending_admin_attestation
+              (last one: project_proposal only, after customer uploads
+              a signed PDF and before admin attests)
+    - Type: ai_repair_quote / on_site_quote / project_proposal
+    - Branch (project_proposal only): gc_subcontract / direct_residential /
+              lighting_design / renovation_coordination / change_order
+    - Billing mode (project_proposal only): fixed_price / time_and_material
+    - Acceptance method: pending / portal_esign / pdf_return
+    - Created by: AI chat / Patrick / tech / system
 
   Who & Where
     - Customer (link)
@@ -289,17 +310,39 @@ QUOTE FOLDER
 
   Outputs (auto-generated)
     - For ai_repair_quote: in-chat quote summary
-    - For formal_quote: branded PDF + email + SMS + portal page
+    - For on_site_quote: branded PDF + email + SMS + portal page
+    - For project_proposal: multi-section narrative PDF + acceptance
+                            block rendering BOTH portal e-sign URL
+                            AND printed signature lines + email PDF
+                            attachment + portal page
+
+  Project Proposal-only blocks
+    - proposalSections[]   — ordered narrative (cover, scope, refs,
+                              line items, acceptance, etc.)
+    - attachments[]        — uploaded images / PDFs, anchored to
+                              specific sections for inline render
+    - customRates          — labour-rate snapshot from the customer
+                              at creation; frozen for the life of the
+                              quote per Hard Rule #2
+    - acceptanceEvidence   — method-specific evidence:
+                              portal_esign: signature image, name,
+                                IP, UA, signedAt
+                              pdf_return:   uploadedPdfAttachmentId,
+                                senderEmail, receivedAt, confirmedBy,
+                                confirmedAt, adminNote
 
   Internal Notes
-  Audit / History (all status changes logged forever)
+  Audit / History (all status changes logged forever — includes section
+    edits, attachment add/remove, acceptance event, project conversion)
 ```
 
 **Hard rules:**
 - Quotes are versioned, not edited. Once sent, cannot be changed — revisions create -v2.
-- Acceptance triggers: status flips, booking auto-created, Patrick notified, customer confirmed, competing drafts closed.
-- Default 30-day expiry. 7-day-out reminder. Auto-expire on day 30.
+- Acceptance triggers: status flips, booking auto-created (ai_repair / on_site), Patrick notified, customer confirmed, competing drafts closed. For `project_proposal`, acceptance does NOT auto-cancel competing drafts (proposals are commonly comparison-shopped, unlike repair quotes).
+- Default 30-day expiry for ai_repair / on_site. **90-day** default for `project_proposal` (commercial buyers often deliberate 60-90 days).
 - AI-Correct-Diagnosis Bonus eligibility preserved on resulting WO. Bonus is conditional and PENDING until the tech confirms on-site diagnosis matches the AI-quoted scope; on confirmed match, tech credits 1 hr of repair labour free; otherwise labour bills normally at $95/hr.
+- **Project Proposal scope lock:** once status moves past `draft`, the fields `proposalSections`, `lineItems`, `attachments`, `branch`, `billingMode`, `customRates`, `scope`, totals, and `type` refuse PATCH with 409 (mirrors the work-orders `SCOPE_PROTECTED_FIELDS` pattern). Status forward-progression, internal notes, history, and acceptanceEvidence (admin attestation lands here) continue to flow.
+- **Project Proposal pricing source:** line items come from `server/data/project-rates.json` (internal admin-only catalog) OR are authored as custom lines with manual label + price. NEVER from `pricing.json` (which is the public catalog and must remain so). The internal catalog is excluded from public hardcoded-price linting + meta sync by being a JSON file under `server/data/`, not a public `.html`.
 
 ### 4.2 Booking Folder
 
@@ -375,7 +418,7 @@ The same WO template behaves differently depending on:
 
 **Critical behaviour difference:** In `find_only` (fall closing) mode, the "Authorize now" button is **disabled** — only "Add to deferred recommendations" is available. Hard rule.
 
-**Implementation note (current state):** the four service modes map to three WO `type` values in code: `spring_opening` (find_and_fix), `fall_closing` (find_only), `service_visit` (find_and_fix or fix_only). The `build` mode (new install / retrofit) is spec'd but its template is not yet implemented — install/retrofit WOs currently fall through to `service_visit`. Brief H (deferred) will add the build template once the design-phase data home, multi-day install handling, and in-job scope-addition rules are settled.
+**Implementation note (current state):** the four service modes map to three WO `type` values in code: `spring_opening` (find_and_fix), `fall_closing` (find_only), `service_visit` (find_and_fix or fix_only). The `build` mode (new install / retrofit) is the WO template that runs on the project side; the design-phase data home, multi-day install handling, and in-job scope-addition rules are spec'd in Brief 2 (Project Execution Portal) which absorbed Brief H. As of Brief 1 (May 2026), the proposal side of the `build` pipeline is live (`project_proposal` quote type → `createFromProposal` enrichment on Project conversion → tasks[] seeded from line items). The tech-side `build` WO template lands with Brief 2.
 
 #### 4.3.2 Work Order Structure
 

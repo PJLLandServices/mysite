@@ -12,6 +12,18 @@
     id: document.getElementById("projId"),
     status: document.getElementById("projStatus"),
     source: document.getElementById("projSource"),
+    branch: document.getElementById("projBranch"),
+    billing: document.getElementById("projBilling"),
+    labourRate: document.getElementById("projLabourRate"),
+    proposalPanel: document.getElementById("projProposalPanel"),
+    proposalMeta: document.getElementById("projProposalMeta"),
+    proposalTotals: document.getElementById("projProposalTotals"),
+    proposalAttachments: document.getElementById("projProposalAttachments"),
+    proposalSections: document.getElementById("projProposalSections"),
+    proposalPdfLink: document.getElementById("projProposalPdfLink"),
+    tasksPanel: document.getElementById("projTasksPanel"),
+    taskList: document.getElementById("projTaskList"),
+    tasksProgress: document.getElementById("projTasksProgress"),
     name: document.getElementById("projName"),
     customerName: document.getElementById("projCustomerName"),
     customerEmail: document.getElementById("projCustomerEmail"),
@@ -153,11 +165,103 @@
     }
   }
 
+  const BRANCH_LABELS = {
+    gc_subcontract: "GC Subcontract",
+    direct_residential: "Residential",
+    lighting_design: "Lighting Design",
+    renovation_coordination: "Renovation Coordination",
+    change_order: "Change Order"
+  };
+
   // ---- Render -------------------------------------------------------
   function renderAll() {
     renderHeader();
+    renderProposalPanel();
+    renderTasks();
     renderWos();
     renderMls();
+  }
+
+  function renderProposalPanel() {
+    const snap = state.project.proposalSnapshot;
+    if (!snap) {
+      els.proposalPanel.hidden = true;
+      return;
+    }
+    els.proposalPanel.hidden = false;
+
+    const acceptDate = snap.acceptedAt
+      ? new Date(snap.acceptedAt).toLocaleDateString("en-CA", { year: "numeric", month: "long", day: "numeric" })
+      : "—";
+    const methodLabel = snap.acceptanceMethod === "portal_esign" ? "portal e-sign"
+      : snap.acceptanceMethod === "pdf_return" ? "signed PDF return"
+      : snap.acceptanceMethod;
+    els.proposalMeta.innerHTML =
+      `Accepted ${escapeHtml(acceptDate)} via ${escapeHtml(methodLabel || "—")} · from ` +
+      `<a href="/admin/quote/${encodeURIComponent(snap.quoteId)}/proposal">${escapeHtml(snap.quoteId)}</a>` +
+      (snap.version > 1 ? ` <span class="proj-proposal-version">v${escapeHtml(snap.version)}</span>` : "");
+
+    els.proposalPdfLink.href = `/api/admin/quote-folder/${encodeURIComponent(snap.quoteId)}/pdf`;
+
+    els.proposalTotals.innerHTML = `
+      <div><span>Subtotal</span><strong>$${(Number(snap.subtotal) || 0).toFixed(2)}</strong></div>
+      <div><span>HST (13%)</span><strong>$${(Number(snap.hst) || 0).toFixed(2)}</strong></div>
+      <div class="proj-proposal-total-row"><span>Total CAD</span><strong>$${(Number(snap.total) || 0).toFixed(2)}</strong></div>
+    `;
+
+    // Attachments — thumbnails (images) or filename links (PDFs).
+    const atts = state.project.attachments || [];
+    if (atts.length) {
+      els.proposalAttachments.innerHTML = atts.map((a) => {
+        const isImage = a.mimeType === "image/png" || a.mimeType === "image/jpeg";
+        const href = `/api/quotes/${encodeURIComponent(snap.quoteId)}/attachments/${encodeURIComponent(a.sourceQuoteAttachmentId)}`;
+        if (isImage) {
+          return `<a href="${href}" target="_blank" rel="noopener" class="proj-attach-thumb-link" title="${escapeHtml(a.caption || a.filename)}"><img src="${href}" alt="${escapeHtml(a.caption || a.filename || "")}"></a>`;
+        }
+        return `<a href="${href}" target="_blank" rel="noopener" class="proj-attach-pdf-link"><span class="proj-attach-icon">📄</span>${escapeHtml(a.caption || a.filename || a.sourceQuoteAttachmentId)}</a>`;
+      }).join("");
+    } else {
+      els.proposalAttachments.innerHTML = "";
+    }
+
+    // Sections — collapsed by default (the <details>); rendered as plain
+    // text so the project page stays scannable.
+    const sections = (snap.proposalSections || []).slice().sort((a, b) => (a.order || 0) - (b.order || 0));
+    els.proposalSections.innerHTML = sections.map((s) => {
+      if (s.kind === "line_items" || s.kind === "acceptance_block") return "";
+      if (!s.body || !s.body.trim()) return "";
+      const body = escapeHtml(s.body).replace(/\n\n+/g, "</p><p>").replace(/\n/g, "<br>");
+      return `<section class="proj-proposal-section"><h4>${escapeHtml(s.title || s.kind)}</h4><p>${body}</p></section>`;
+    }).join("");
+  }
+
+  function renderTasks() {
+    const tasks = state.project.tasks || [];
+    if (!tasks.length) {
+      els.tasksPanel.hidden = true;
+      return;
+    }
+    els.tasksPanel.hidden = false;
+    const ordered = tasks.slice().sort((a, b) => (a.order || 0) - (b.order || 0));
+    const done = ordered.filter((t) => t.status === "done").length;
+    els.tasksProgress.textContent = `${done} of ${ordered.length} complete`;
+    els.taskList.innerHTML = ordered.map((t) => {
+      const checked = t.status === "done" ? " checked" : "";
+      const meta = t.completedByWoId
+        ? `<span class="proj-task-meta">→ <a href="/admin/work-order/${encodeURIComponent(t.completedByWoId)}">${escapeHtml(t.completedByWoId)}</a></span>`
+        : t.completedAt
+          ? `<span class="proj-task-meta">${escapeHtml(new Date(t.completedAt).toLocaleDateString())}</span>`
+          : "";
+      return `
+        <li class="proj-task-item${t.status === "done" ? " is-done" : ""}" data-task-id="${escapeHtml(t.id)}">
+          <label>
+            <input type="checkbox" class="proj-task-check" data-task-id="${escapeHtml(t.id)}"${checked}>
+            <span class="proj-task-desc">${escapeHtml(t.description)}</span>
+          </label>
+          ${meta}
+        </li>
+      `;
+    }).join("");
   }
 
   function renderHeader() {
@@ -171,6 +275,29 @@
       els.source.innerHTML = `Converted from <a href="/admin/quote-folder">${escapeHtml(state.project.sourceQuoteId)}</a>`;
     } else {
       els.source.hidden = true;
+    }
+
+    // Proposal-derived header chips (Brief 1).
+    if (state.project.branch && BRANCH_LABELS[state.project.branch]) {
+      els.branch.hidden = false;
+      els.branch.textContent = BRANCH_LABELS[state.project.branch];
+    } else {
+      els.branch.hidden = true;
+    }
+    if (state.project.billingMode) {
+      els.billing.hidden = false;
+      els.billing.textContent = state.project.billingMode === "time_and_material"
+        ? "Time & material"
+        : "Fixed price";
+      els.billing.className = "proj-billing proj-billing--" + state.project.billingMode;
+    } else {
+      els.billing.hidden = true;
+    }
+    if (state.project.billingMode === "time_and_material" && state.project.labourRateLocked != null) {
+      els.labourRate.hidden = false;
+      els.labourRate.textContent = `$${Number(state.project.labourRateLocked).toFixed(2)}/hr (locked)`;
+    } else {
+      els.labourRate.hidden = true;
     }
 
     setIfNotFocused(els.name, state.project.name);

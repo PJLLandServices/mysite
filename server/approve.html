@@ -30,11 +30,17 @@
     </div>
 
     <article class="approve-card" id="approveCard" hidden>
-      <p class="approve-eyebrow">Repair quote — your approval needed</p>
-      <h1>Your tech recommends the following work.</h1>
+      <p class="approve-eyebrow" id="approveEyebrow">Repair quote — your approval needed</p>
+      <h1 id="approveHeadline">Your tech recommends the following work.</h1>
       <p class="approve-intro" id="approveIntro">Review the scope and price below. When you're ready, sign at the bottom and PJL will get the green light to proceed.</p>
 
       <p class="approve-pdf-link"><a id="approvePdfLink" href="#" target="_blank" rel="noopener">📄 Download PDF copy of this quote</a></p>
+
+      <!-- Proposal narrative — only rendered when type === project_proposal.
+           Sections come from the slim API payload (server-stripped of
+           any private fields). -->
+      <section class="approve-proposal" id="approveProposal" hidden></section>
+
       <section class="approve-lines" id="approveLines"></section>
       <section class="approve-totals">
         <div><span>Subtotal</span><strong id="approveSubtotal">$0.00</strong></div>
@@ -42,9 +48,18 @@
         <div class="approve-totals-row"><span>Total CAD</span><strong id="approveTotal">$0.00</strong></div>
       </section>
 
+      <!-- Method toggle — only shown for project_proposal. Defaults to
+           Option A (e-sign). When the toggle is shown, the two blocks
+           swap under it. Repair / on-site quotes hide the toggle and
+           show only the e-sign block. -->
+      <section class="approve-method-toggle" id="approveMethodToggle" hidden>
+        <button type="button" class="approve-method-btn is-active" data-method="esign">Sign online</button>
+        <button type="button" class="approve-method-btn" data-method="pdf">Print, sign &amp; return</button>
+      </section>
+
       <section class="approve-sign" id="approveSignBlock">
-        <h2>Approve this work</h2>
-        <p>Print your name and sign below. Your signature is the authorization to proceed and is the binding moment for this scope.</p>
+        <h2 id="approveSignHeading">Approve this work</h2>
+        <p id="approveSignIntro">Print your name and sign below. Your signature is the authorization to proceed and is the binding moment for this scope.</p>
         <label class="approve-label" for="approveName">Your name (printed)</label>
         <input type="text" id="approveName" class="approve-input" autocomplete="name" placeholder="Full name">
         <label class="approve-label">Signature</label>
@@ -56,9 +71,26 @@
         <p class="approve-error-msg" id="approveErrorMsg" hidden role="alert"></p>
       </section>
 
+      <!-- PDF-return panel — only for project_proposal. Customer
+           downloads the PDF (the link above), prints, signs, scans,
+           uploads back. We accept image OR PDF; admin attests next. -->
+      <section class="approve-pdf-return" id="approvePdfReturnBlock" hidden>
+        <h2>Return your signed PDF</h2>
+        <p>Download the PDF above, print page with the acceptance block, sign it by hand, scan or photograph the signed page, and upload the file here. Or email it directly to <a id="approveReturnEmail" href="mailto:info@pjllandservices.com">info@pjllandservices.com</a> with proposal <strong id="approveReturnId">—</strong> in the subject.</p>
+        <label class="approve-label" for="approveSenderEmail">Your email (optional, helps us confirm)</label>
+        <input type="email" id="approveSenderEmail" class="approve-input" autocomplete="email" placeholder="you@example.com">
+        <label class="approve-label" for="approvePdfInput">Signed PDF or image</label>
+        <input type="file" id="approvePdfInput" accept="application/pdf,image/jpeg,image/png">
+        <p class="approve-pdf-hint">PDF, JPG, or PNG. Up to 25 MB.</p>
+        <div class="approve-actions">
+          <button type="button" class="approve-submit" id="approvePdfSubmit" disabled>Send signed PDF</button>
+        </div>
+        <p class="approve-error-msg" id="approvePdfErrorMsg" hidden role="alert"></p>
+      </section>
+
       <section class="approve-success" id="approveSuccess" hidden>
-        <h2>✓ Approved.</h2>
-        <p>Thank you, <span id="approveSuccessName">—</span>. PJL has been notified and will follow up shortly. You'll get an invoice once the work is complete.</p>
+        <h2 id="approveSuccessHeadline">✓ Approved.</h2>
+        <p id="approveSuccessBody">Thank you, <span id="approveSuccessName">—</span>. PJL has been notified and will follow up shortly. You'll get an invoice once the work is complete.</p>
         <p class="approve-success-meta" id="approveSuccessMeta"></p>
       </section>
     </article>

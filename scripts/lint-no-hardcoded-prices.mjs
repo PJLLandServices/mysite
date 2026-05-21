@@ -15,6 +15,14 @@
 // Walks the original file line-by-line with a small state machine so error
 // messages report TRUE line numbers, not positions inside a stripped buffer.
 //
+// Scope: ROOT-level *.html only. JSON catalogs under server/data/ (including
+// server/data/project-rates.json — the internal admin-only project rates
+// catalog from Brief 1) are out of scope by construction. If you ever
+// extend this script to walk JSON, exclude server/data/project-rates.json
+// explicitly — those rates are internal-only and must never propagate into
+// public hardcoded-price detection. See pricing.json (public) vs.
+// project-rates.json (internal) separation in SYSTEM_OVERVIEW.md.
+//
 // Modes:
 //   node scripts/lint-no-hardcoded-prices.mjs           # exit 1 if any drift
 //   node scripts/lint-no-hardcoded-prices.mjs --verbose # also print line content

@@ -114,6 +114,16 @@ function blankCustomer() {
       noMarketingTexts: false,
       overrides: {}
     },
+    // Per-customer negotiated rate agreements — labour override (and
+    // any future per-unit overrides) for repeat contractors with
+    // standing fair-trade deals (e.g. GreenTree @ $85/hr). Sparse:
+    // most customers have no entry. Snapshots onto a project_proposal
+    // quote at creation via quotes.snapshotRatesFromCustomer; the
+    // quote then carries its own customRates frozen for legal-record
+    // integrity (Hard Rule #2). Brief 1 (May 2026).
+    negotiatedRates: {
+      labour: null
+    },
     communicationRecords: [],
     // vCard download audit log — appended whenever Patrick downloads
     // this customer's .vcf to import into iPhone Contacts. Useful so
@@ -137,6 +147,10 @@ function hydrate(c) {
       ...base.notificationPrefs,
       ...(c?.notificationPrefs || {}),
       overrides: { ...(c?.notificationPrefs?.overrides || {}) }
+    },
+    negotiatedRates: {
+      ...base.negotiatedRates,
+      ...(c?.negotiatedRates || {})
     },
     communicationRecords: Array.isArray(c?.communicationRecords)
       ? c.communicationRecords
@@ -290,7 +304,8 @@ async function update(id, patch, { by = "admin", note = "", action = "updated" }
     "status",
     "quickbooksId",
     "internalNotes",
-    "notificationPrefs"
+    "notificationPrefs",
+    "negotiatedRates"
   ];
 
   const next = { ...current };
@@ -323,6 +338,23 @@ async function update(id, patch, { by = "admin", note = "", action = "updated" }
         }
       };
       changes.notificationPrefs = true;
+      continue;
+    }
+    if (key === "negotiatedRates" && patch.negotiatedRates) {
+      // Coerce numeric values, drop anything else. null clears the
+      // override (so customer falls back to the catalog default).
+      const incoming = patch.negotiatedRates;
+      const safe = { ...(current.negotiatedRates || {}) };
+      for (const rateKey of Object.keys(incoming)) {
+        const val = incoming[rateKey];
+        if (val === null) {
+          safe[rateKey] = null;
+        } else if (Number.isFinite(Number(val))) {
+          safe[rateKey] = Number(val);
+        }
+      }
+      changes.negotiatedRates = { before: current.negotiatedRates, after: safe };
+      next.negotiatedRates = safe;
       continue;
     }
     if (current[key] !== patch[key]) {

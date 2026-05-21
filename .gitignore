@@ -32,8 +32,16 @@ memory/
 .claude/
 
 # Backend runtime data — never commit. Contains the hashed admin password
-# (auth.json) and all real customer leads (leads.json).
-server/data/
+# (auth.json) and all real customer leads (leads.json). Wildcard-form so
+# the negation below can re-include the static project-rates.json catalog
+# (gitignore won't re-include from an ignored directory).
+server/data/*
+server/data/*/
+# Exception: project-rates.json is a STATIC catalog (admin-only project-scale
+# rates for the proposal builder), NOT runtime-mutable data. Ships with the
+# code so the deployed server has the catalog. Mirror of how pricing.json /
+# parts.json live at the repo root. Brief 1 (May 2026).
+!server/data/project-rates.json
 # Migration safety backups (created by scripts/migrate-customers.js --apply).
 # These snapshot server/data/ before a customer migration runs; they live
 # only on disk and never get committed.

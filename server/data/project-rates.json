@@ -1,0 +1,48 @@
+{
+  "_doc": "Internal project-rates catalog. ADMIN-ONLY. NEVER exposed to public site, AI chat, customer portal, or tech mode. Used exclusively by the project_proposal quote builder for commercial / install / lighting / renovation / change-order line items. Per-customer negotiated rates (customer.negotiatedRates) override these defaults at quote creation and snapshot onto the quote (quote.customRates). Excluded from scripts/lint-no-hardcoded-prices.mjs by file extension (the lint scanner only walks root-level .html). NEVER copy these into pricing.json — pricing.json is the public catalog and must remain so. Brief 1 (May 2026).",
+  "currency": "CAD",
+  "items": {
+    "spring_open_commercial_inspection": {
+      "label": "Commercial Irrigation Spring Opening & Inspection",
+      "price": 285,
+      "unit": "flat",
+      "category": "seasonal_commercial"
+    },
+    "sleeve_hdpe_1_5_per_ft": {
+      "label": "Sleeve material 1-1/2\" HDPE pipe — supplied",
+      "price": 2.68,
+      "unit": "per_ft",
+      "category": "install_material"
+    },
+    "control_wire_install_per_ft": {
+      "label": "Irrigation control wire — supplied + installed",
+      "price": 1.80,
+      "unit": "per_ft",
+      "category": "install_labour_material"
+    },
+    "mainline_install_1in_per_ft": {
+      "label": "1\" sprinkler mainline — supplied + installed",
+      "price": 1.48,
+      "unit": "per_ft",
+      "category": "install_labour_material"
+    },
+    "deep_root_tree_irrigation_per_tree": {
+      "label": "Deep root tree irrigation system — Rain Bird RWS (2 units per tree)",
+      "price": 345,
+      "unit": "per_tree",
+      "category": "install_specialty"
+    },
+    "sprinkler_zone_install_per_zone": {
+      "label": "Sprinkler zone installation — control valve + zone pipe + fittings",
+      "price": 395,
+      "unit": "per_zone",
+      "category": "install_labour_material"
+    },
+    "project_labour_per_hour": {
+      "label": "Project labour — single-man crew, hourly",
+      "price": 95,
+      "unit": "per_hour",
+      "category": "labour"
+    }
+  }
+}

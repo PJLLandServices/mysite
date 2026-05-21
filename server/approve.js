@@ -54,6 +54,85 @@ async function load() {
 function render(q) {
   loading.hidden = true;
   card.hidden = false;
+
+  const isProposal = q.type === "project_proposal";
+
+  // Header copy — proposals get proposal-specific wording.
+  if (isProposal) {
+    document.getElementById("approveEyebrow").textContent = "Project proposal — your acceptance needed";
+    document.getElementById("approveHeadline").textContent = "Your detailed proposal is ready for review.";
+    document.getElementById("approveIntro").textContent =
+      "Review the full scope below. You can accept this proposal either by signing online (Option A) or by printing the PDF, signing by hand, and emailing or uploading the signed copy back (Option B). Both are binding.";
+    document.getElementById("approveMethodToggle").hidden = false;
+    // Render the narrative sections.
+    const propEl = document.getElementById("approveProposal");
+    propEl.hidden = false;
+    propEl.innerHTML = "";
+    const sections = (q.proposalSections || []).slice().sort((a, b) => (a.order || 0) - (b.order || 0));
+    for (const s of sections) {
+      if (s.kind === "line_items" || s.kind === "acceptance_block") continue;
+      if (!s.body && !(s.attachmentIds && s.attachmentIds.length)) continue;
+      const sectionEl = document.createElement("section");
+      sectionEl.className = "approve-section";
+      const title = document.createElement("h3");
+      title.textContent = s.title || s.kind;
+      sectionEl.appendChild(title);
+      if (s.body) {
+        const paragraphs = String(s.body)
+          .replace(/<br\s*\/?>/gi, "\n")
+          .replace(/<[^>]+>/g, "")
+          .replace(/&nbsp;/g, " ")
+          .split(/\n\n+/);
+        for (const p of paragraphs) {
+          if (!p.trim()) continue;
+          const pe = document.createElement("p");
+          pe.textContent = p.trim();
+          sectionEl.appendChild(pe);
+        }
+      }
+      // Anchored attachments — render images inline (PDFs surface as a link).
+      if (Array.isArray(s.attachmentIds) && s.attachmentIds.length) {
+        for (const attId of s.attachmentIds) {
+          const att = (q.attachments || []).find((a) => a.id === attId);
+          if (!att) continue;
+          const isImage = att.mimeType === "image/png" || att.mimeType === "image/jpeg";
+          if (isImage) {
+            const fig = document.createElement("figure");
+            fig.className = "approve-figure";
+            const img = document.createElement("img");
+            img.src = `/api/approve/${encodeURIComponent(quoteId)}/${encodeURIComponent(token)}/attachments/${encodeURIComponent(attId)}`;
+            img.alt = att.caption || att.filename || "";
+            fig.appendChild(img);
+            if (att.caption) {
+              const cap = document.createElement("figcaption");
+              cap.textContent = att.caption;
+              fig.appendChild(cap);
+            }
+            sectionEl.appendChild(fig);
+          } else {
+            const note = document.createElement("p");
+            note.className = "approve-attach-note";
+            note.textContent = `See attachment: ${att.caption || att.filename || attId}`;
+            sectionEl.appendChild(note);
+          }
+        }
+      }
+      propEl.appendChild(sectionEl);
+    }
+    // Wire the method toggle.
+    document.querySelectorAll(".approve-method-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        document.querySelectorAll(".approve-method-btn").forEach((b) => b.classList.toggle("is-active", b === btn));
+        const method = btn.dataset.method;
+        signBlock.hidden = method !== "esign";
+        document.getElementById("approvePdfReturnBlock").hidden = method !== "pdf";
+      });
+    });
+    // PDF-return panel meta.
+    document.getElementById("approveReturnId").textContent = q.id;
+  }
+
+  // Line items.
   linesEl.innerHTML = "";
   for (const l of q.lineItems || []) {
     const row = document.createElement("div");
@@ -81,18 +160,90 @@ function render(q) {
   document.getElementById("approveHst").textContent = fmt(q.hst);
   document.getElementById("approveTotal").textContent = fmt(q.total);
 
-  // If already signed, show success state instead of pad.
-  if (q.signedAt) {
+  // If already signed OR awaiting attestation, show success state instead of pad.
+  if (q.signedAt || q.status === "pending_admin_attestation" || q.status === "accepted") {
     signBlock.hidden = true;
+    document.getElementById("approveMethodToggle").hidden = true;
+    document.getElementById("approvePdfReturnBlock").hidden = true;
     successBlock.hidden = false;
-    document.getElementById("approveSuccessName").textContent = q.signedBy || "(customer)";
-    document.getElementById("approveSuccessMeta").textContent = `Signed ${new Date(q.signedAt).toLocaleString()}`;
+    if (q.status === "pending_admin_attestation") {
+      document.getElementById("approveSuccessHeadline").textContent = "✓ Received.";
+      document.getElementById("approveSuccessBody").innerHTML =
+        "Thanks — we've received your signed PDF. PJL is reviewing it now and will confirm acceptance shortly.";
+    } else {
+      document.getElementById("approveSuccessName").textContent = q.signedBy || "(customer)";
+      document.getElementById("approveSuccessMeta").textContent = q.signedAt
+        ? `Signed ${new Date(q.signedAt).toLocaleString()}`
+        : `Accepted`;
+    }
     return;
   }
 
   // Otherwise wire up the pad.
   pad = createSignaturePad(canvas, updateSubmit);
   updateSubmit();
+  wirePdfReturn();
+}
+
+// PDF-return submit handler — base64 file upload to the tokenized
+// /pdf-return endpoint.
+function wirePdfReturn() {
+  const fileInput = document.getElementById("approvePdfInput");
+  const submitBtn = document.getElementById("approvePdfSubmit");
+  const errMsg = document.getElementById("approvePdfErrorMsg");
+  const senderEmailInput = document.getElementById("approveSenderEmail");
+  if (!fileInput || !submitBtn) return;
+  fileInput.addEventListener("change", () => {
+    const f = fileInput.files?.[0];
+    submitBtn.disabled = !f;
+  });
+  submitBtn.addEventListener("click", async () => {
+    errMsg.hidden = true;
+    const f = fileInput.files?.[0];
+    if (!f) return;
+    if (f.size > 25 * 1024 * 1024) {
+      errMsg.textContent = "File too large — 25 MB max.";
+      errMsg.hidden = false;
+      return;
+    }
+    submitBtn.disabled = true;
+    const orig = submitBtn.textContent;
+    submitBtn.textContent = "Uploading…";
+    try {
+      const dataUrl = await new Promise((res, rej) => {
+        const fr = new FileReader();
+        fr.onload = () => res(fr.result);
+        fr.onerror = () => rej(new Error("Could not read file."));
+        fr.readAsDataURL(f);
+      });
+      const base64 = String(dataUrl).split(",")[1] || "";
+      const r = await fetch(`/api/approve/${encodeURIComponent(quoteId)}/${encodeURIComponent(token)}/pdf-return`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          filename: f.name,
+          data: base64,
+          senderEmail: senderEmailInput.value.trim()
+        })
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok || !data.ok) throw new Error(data.errors?.[0] || "Upload failed.");
+      // Show success — pending admin attest.
+      signBlock.hidden = true;
+      document.getElementById("approveMethodToggle").hidden = true;
+      document.getElementById("approvePdfReturnBlock").hidden = true;
+      successBlock.hidden = false;
+      document.getElementById("approveSuccessHeadline").textContent = "✓ Received.";
+      document.getElementById("approveSuccessBody").innerHTML =
+        "Thanks — we've received your signed PDF. PJL is reviewing it now and will confirm acceptance within one business day.";
+      document.getElementById("approveSuccessMeta").textContent = "Uploaded " + new Date().toLocaleString();
+    } catch (err) {
+      errMsg.textContent = err.message || "Upload failed.";
+      errMsg.hidden = false;
+      submitBtn.disabled = false;
+      submitBtn.textContent = orig;
+    }
+  });
 }
 
 function updateSubmit() {

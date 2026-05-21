@@ -34,6 +34,21 @@ const FILE = path.join(__dirname, "..", "data", "projects.json");
 
 const STATUSES = ["planning", "active", "complete", "archived"];
 
+// Mirrors quotes.js — kept in lockstep. If a new branch is added there,
+// update this list too.
+const BRANCHES = [
+  "gc_subcontract",
+  "direct_residential",
+  "lighting_design",
+  "renovation_coordination",
+  "change_order"
+];
+const BILLING_MODES = ["fixed_price", "time_and_material"];
+
+function random8() {
+  return Math.random().toString(36).slice(2, 10).padEnd(8, "0");
+}
+
 // ---- File I/O ---------------------------------------------------------
 
 async function ensureFile() {
@@ -93,6 +108,36 @@ function blankProject() {
     // on the project header.
     sourceQuoteId: null,
 
+    // -------- project_proposal enrichment (Brief 1, May 2026) --------
+    // Populated when the source quote is a project_proposal. Stay at
+    // their defaults (null/empty) when converted from older
+    // ai_repair_quote / on_site_quote.
+
+    // Branch — mirrored from the quote at conversion time.
+    branch: null,
+    // billingMode — "fixed_price" or "time_and_material".
+    billingMode: null,
+    // labourRateLocked — snapshot of customRates.labour at conversion.
+    // For T&M projects this is the rate that bills forever; for
+    // fixed-price it's informational only. Immutable after conversion.
+    labourRateLocked: null,
+    // tasks[] — seeded from the quote's line items (one task per line)
+    // and edited by Patrick in the pre-Day-1 review before scheduling
+    // (Brief 2 takes over from there). { id, description, sourceLineItemId,
+    // status, completedAt?, completedByWoId?, order }
+    tasks: [],
+    // attachments[] — references to the quote's attachments by id, so
+    // the project page can render the same map / diagram thumbnails
+    // without re-uploading. { id, sourceQuoteAttachmentId, kind,
+    // caption, order }
+    attachments: [],
+    // proposalSnapshot — frozen copy of the accepted proposal at the
+    // moment of conversion. Mirrors sections + line items + totals +
+    // branch + acceptanceMethod + customer/property snapshot. Used to
+    // render the "accepted proposal" view on the project detail page
+    // without re-reading the (possibly archived) quote.
+    proposalSnapshot: null,
+
     // Lifecycle timestamps — auto-stamped on status transitions so the
     // UI can show "Active since Mar 14" without a history scan.
     startedAt: null,    // set when status first flips to "active"
@@ -115,7 +160,13 @@ function hydrate(rec) {
     ...rec,
     status: STATUSES.includes(rec?.status) ? rec.status : "planning",
     workOrderIds: Array.isArray(rec?.workOrderIds) ? rec.workOrderIds.slice() : [],
-    history: Array.isArray(rec?.history) ? rec.history.slice(-200) : []
+    history: Array.isArray(rec?.history) ? rec.history.slice(-200) : [],
+    tasks: Array.isArray(rec?.tasks) ? rec.tasks : [],
+    attachments: Array.isArray(rec?.attachments) ? rec.attachments : [],
+    proposalSnapshot: rec?.proposalSnapshot || null,
+    branch: rec?.branch || null,
+    billingMode: rec?.billingMode || null,
+    labourRateLocked: rec?.labourRateLocked == null ? null : Number(rec.labourRateLocked)
   };
 }
 
@@ -265,6 +316,123 @@ async function update(id, patch = {}) {
   return next;
 }
 
+// Create a new Project from an accepted project_proposal quote.
+//
+// Enriches the standard create() with:
+//   - branch, billingMode mirrored from the quote
+//   - labourRateLocked snapshotted from quote.customRates.labour (T&M
+//     uses this rate; fixed-price keeps it informational)
+//   - tasks[] seeded from quote.lineItems — one task per line, status
+//     "pending", description = line label, sourceLineItemId set
+//   - attachments[] referencing quote.attachments by id (no file copy;
+//     the project reads through to the quote's directory)
+//   - proposalSnapshot frozen copy of the accepted proposal at this
+//     instant (sections + line items + totals + branch + acceptance
+//     method + customer/property snapshot)
+//
+// Idempotent at the caller — the convert-to-project endpoint checks
+// for an existing project with sourceQuoteId === quote.id before
+// invoking this and returns the existing one if found.
+async function createFromProposal(quote, { customerName = "", customerEmail = "", customerPhone = "", address = "", propertyId = null, by = "admin" } = {}) {
+  if (!quote) throw new Error("createFromProposal requires a quote.");
+  if (quote.type !== "project_proposal") {
+    throw new Error("createFromProposal only handles project_proposal quotes.");
+  }
+
+  const namePieces = [];
+  if (customerName) namePieces.push(customerName);
+  namePieces.push(`(from ${quote.id})`);
+  const name = namePieces.join(" ").slice(0, 200);
+
+  // Seed tasks from line items.
+  const tasks = (quote.lineItems || []).map((li, idx) => ({
+    id: "task_" + random8(),
+    description: String(li.label || li.sourceKey || `Task ${idx + 1}`).slice(0, 400),
+    sourceLineItemId: li.id || null,
+    status: "pending",
+    completedAt: null,
+    completedByWoId: null,
+    order: idx
+  }));
+
+  // Reference quote attachments (no file copy — the project reads
+  // through to the quote directory). signed_pdf_return is the
+  // acceptance evidence, not a project artifact — skip it here.
+  const attachments = (quote.attachments || [])
+    .filter((a) => a.kind !== "signed_pdf_return")
+    .map((a, idx) => ({
+      id: "att_" + random8(),
+      sourceQuoteId: quote.id,
+      sourceQuoteAttachmentId: a.id,
+      kind: a.kind,
+      caption: a.caption || a.filename || "",
+      filename: a.filename || "",
+      mimeType: a.mimeType || "",
+      order: idx
+    }));
+
+  // Freeze the proposal snapshot.
+  const proposalSnapshot = {
+    quoteId: quote.id,
+    version: quote.version || 1,
+    branch: quote.branch || null,
+    billingMode: quote.billingMode || null,
+    acceptanceMethod: quote.acceptanceMethod || null,
+    acceptedAt: quote.acceptedAt || null,
+    customerName,
+    customerEmail,
+    customerPhone,
+    address,
+    proposalSections: Array.isArray(quote.proposalSections)
+      ? quote.proposalSections.map((s) => ({ ...s, attachmentIds: [...(s.attachmentIds || [])] }))
+      : [],
+    lineItems: Array.isArray(quote.lineItems) ? quote.lineItems.map((li) => ({ ...li })) : [],
+    subtotal: Number(quote.subtotal) || 0,
+    hst: Number(quote.hst) || 0,
+    total: Number(quote.total) || 0,
+    customRates: { ...(quote.customRates || {}) },
+    scope: quote.scope || "",
+    frozenAt: nowIso()
+  };
+
+  // Delegate to the standard create() so the id-generation + file-write
+  // path is single-source. Then patch the proposal-only fields.
+  const proj = await create({
+    name,
+    customerName,
+    customerEmail,
+    customerPhone,
+    address,
+    propertyId,
+    sourceQuoteId: quote.id,
+    description: quote.scope || "",
+    createdBy: by
+  });
+
+  // Patch the proposal-only fields directly on the record.
+  const records = await readAll();
+  const idx = records.findIndex((r) => r.id === proj.id);
+  if (idx === -1) return proj;
+  records[idx] = {
+    ...records[idx],
+    branch: quote.branch || null,
+    billingMode: quote.billingMode || null,
+    labourRateLocked: Number.isFinite(Number(quote.customRates?.labour))
+      ? Number(quote.customRates.labour)
+      : null,
+    tasks,
+    attachments,
+    proposalSnapshot
+  };
+  appendHistory(records[idx], {
+    action: "proposal_enriched",
+    by,
+    note: `tasks=${tasks.length} attachments=${attachments.length} branch=${quote.branch || "none"}`
+  });
+  await writeAll(records);
+  return records[idx];
+}
+
 // Push a WO id onto the project's workOrderIds[]. Idempotent — if the
 // WO is already attached, returns the project unchanged. Caller is
 // responsible for setting the WO's reverse pointer (Phase 2 keeps this
@@ -324,9 +492,12 @@ async function listByWorkOrder(workOrderId) {
 
 module.exports = {
   STATUSES,
+  BRANCHES,
+  BILLING_MODES,
   list,
   get,
   create,
+  createFromProposal,
   update,
   attachWorkOrder,
   detachWorkOrder,

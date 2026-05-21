@@ -53,7 +53,7 @@ const settings = require("./lib/settings");
 const outreach = require("./lib/outreach");
 const { generateIcsForToken } = require("./lib/ical-feed");
 const issueRollup = require("./lib/issue-rollup");
-const { generateQuotePdf } = require("./lib/quote-pdf");
+const { generateQuotePdf, renderQuotePdf } = require("./lib/quote-pdf");
 const { generateInvoicePdf } = require("./lib/invoice-pdf");
 const { generateWoReportPdf, renderWoReportBuffer, reportFilename } = require("./lib/wo-report-pdf");
 const woReportSnapshot = require("./lib/wo-report-snapshot");
@@ -221,6 +221,21 @@ const PRICING = (function loadPricing() {
   }
 })();
 const FEATURES = PRICING.items;
+
+// Internal project-rates catalog (Brief 1, May 2026). Admin-only.
+// NEVER exposed publicly. Read by /api/admin/project-rates (admin-
+// gated) and the quote-proposal-builder line-items picker. Soft-fail
+// to empty catalog if the file is missing — proposals can still author
+// with custom line items.
+const PROJECT_RATES = (function loadProjectRates() {
+  const ratesPath = path.resolve(__dirname, "data", "project-rates.json");
+  try {
+    return JSON.parse(fsSync.readFileSync(ratesPath, "utf8"));
+  } catch (err) {
+    console.warn("[project-rates] catalog missing — proposal builder will only offer custom lines:", err?.message);
+    return { currency: "CAD", items: {} };
+  }
+})();
 
 // parts.json — catalog + service_materials mapping (spec §1.2). Loaded
 // once at boot; failure is non-fatal (the materials checklist hides if
@@ -572,6 +587,10 @@ function needsAuth(method, pathname) {
   if (pathname === "/admin/invoices" || pathname === "/admin/invoices/") return "user";
   if (pathname === "/admin/quote-folder" || pathname === "/admin/quote-folder/") return "user";
   if (pathname === "/api/admin/quote-folder") return "user";
+  if (/^\/admin\/quote\/[^/]+\/proposal\/?$/.test(pathname)) return "user";
+  if (pathname === "/api/admin/project-rates") return "user";
+  if (/^\/admin\/quote-folder\/[^/]+\/confirm-pdf-acceptance/.test(pathname)) return "user";
+  if (/^\/api\/customers\/[^/]+\/negotiated-rates$/.test(pathname)) return "user";
   if (/^\/admin\/invoice\/[^/]+\/?$/.test(pathname)) return "user";
   if (pathname === "/admin/settings" || pathname === "/admin/settings/") return "user";
   // Materials management (Phase 1 of the BoM/PO system).
@@ -4945,10 +4964,48 @@ async function handleApi(req, res, pathname) {
         "content-disposition": `inline; filename="${q.id}.pdf"`,
         "cache-control": "no-store"
       });
-      generateQuotePdf(q, { customer: customer || {}, property: property || {} }).pipe(res);
+      // Dispatcher — picks the proposal renderer for project_proposal,
+      // falls through to the existing one-page renderer otherwise.
+      renderQuotePdf(q, {
+        customer: customer || {},
+        property: property || {},
+        acceptanceUrl: q.approval?.token
+          ? `${resolvePublicBaseUrl()}/approve/${encodeURIComponent(q.id)}?t=${q.approval.token}`
+          : null,
+        returnEmail: process.env.GMAIL_USER || "info@pjllandservices.com"
+      }).pipe(res);
       return;
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't generate PDF."] });
+    }
+  }
+
+  // Public: GET /api/approve/:id/:token/attachments/:attId — token-gated
+  // attachment serve so the customer-facing /approve page can render
+  // inline images embedded in proposal sections.
+  const approveAttachMatch = pathname.match(/^\/api\/approve\/([^/]+)\/([^/]+)\/attachments\/([^/]+)$/);
+  if (approveAttachMatch && req.method === "GET") {
+    try {
+      const quoteId = decodeURIComponent(approveAttachMatch[1]);
+      const token = decodeURIComponent(approveAttachMatch[2]);
+      const attId = decodeURIComponent(approveAttachMatch[3]);
+      const q = await quotes.getByApprovalToken(quoteId, token);
+      if (!q) return sendJson(res, 404, { ok: false, errors: ["Not found."] });
+      // Don't serve the customer-uploaded signed_pdf_return back to the
+      // customer-facing /approve page — it's evidence, not content.
+      const att = (q.attachments || []).find((a) => a.id === attId && a.kind !== "signed_pdf_return");
+      if (!att) return sendJson(res, 404, { ok: false, errors: ["Attachment not found."] });
+      const file = await quotes.readAttachmentBuffer(quoteId, attId);
+      if (!file) return sendJson(res, 404, { ok: false, errors: ["Attachment not found."] });
+      res.writeHead(200, {
+        "content-type": file.meta.mimeType || "application/octet-stream",
+        "content-length": file.buffer.length,
+        "cache-control": "public, max-age=300"
+      });
+      res.end(file.buffer);
+      return;
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't read attachment."] });
     }
   }
 
@@ -4969,7 +5026,12 @@ async function handleApi(req, res, pathname) {
         "content-disposition": `inline; filename="${q.id}.pdf"`,
         "cache-control": "no-store"
       });
-      generateQuotePdf(q, { customer, property: property || {} }).pipe(res);
+      renderQuotePdf(q, {
+        customer,
+        property: property || {},
+        acceptanceUrl: `${resolvePublicBaseUrl()}/approve/${encodeURIComponent(q.id)}?t=${token}`,
+        returnEmail: process.env.GMAIL_USER || "info@pjllandservices.com"
+      }).pipe(res);
       return;
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't generate PDF."] });
@@ -5667,6 +5729,7 @@ async function handleApi(req, res, pathname) {
       if (!q) return sendJson(res, 404, { ok: false, errors: ["Approval link not found or expired."] });
       const safe = {
         id: q.id,
+        type: q.type,
         status: q.status,
         scope: q.scope,
         lineItems: q.lineItems,
@@ -5676,7 +5739,19 @@ async function handleApi(req, res, pathname) {
         validUntil: q.validUntil,
         sentAt: q.approval?.sentAt || q.sentAt,
         signedAt: q.signature?.signed ? q.signature.signedAt : null,
-        signedBy: q.signature?.signed ? q.signature.customerName : null
+        signedBy: q.signature?.signed ? q.signature.customerName : null,
+        // project_proposal fields — slim view (no attachment URLs, no
+        // private rates). Customer sees the narrative, the totals, and
+        // the acceptance state.
+        branch: q.branch || null,
+        billingMode: q.billingMode || null,
+        proposalSections: Array.isArray(q.proposalSections) ? q.proposalSections : [],
+        attachments: Array.isArray(q.attachments)
+          ? q.attachments
+              .filter((a) => a.kind !== "signed_pdf_return")
+              .map((a) => ({ id: a.id, kind: a.kind, filename: a.filename, mimeType: a.mimeType, caption: a.caption, order: a.order }))
+          : [],
+        acceptanceMethod: q.acceptanceMethod || "pending"
       };
       return sendJson(res, 200, { ok: true, quote: safe });
     } catch (err) {
@@ -5708,10 +5783,22 @@ async function handleApi(req, res, pathname) {
       const ip = (req.headers["x-forwarded-for"] || "").split(",")[0].trim() || req.socket?.remoteAddress || "";
       const userAgent = req.headers["user-agent"] || "";
       const decisions = (q.lineItems || []).map((_l, idx) => ({ lineItemIdx: idx, accepted: true, deferredId: null }));
-      const updated = await quotes.acceptWithSignature(q.id, {
-        customerName, imageData, decisions, ip, userAgent, partial: false,
-        note: "Accepted via remote-approval link"
-      });
+      let updated;
+      if (q.type === "project_proposal") {
+        // Proposal-aware path sets acceptanceMethod + acceptanceEvidence
+        // in addition to the legacy signature{} block. The WO-flip code
+        // below is a no-op for proposals (workOrderIds is empty until
+        // the project is later spun up).
+        updated = await quotes.recordPortalSignAcceptance(q.id, {
+          customerName, imageData, ip, userAgent,
+          note: "Accepted via portal e-sign"
+        });
+      } else {
+        updated = await quotes.acceptWithSignature(q.id, {
+          customerName, imageData, decisions, ip, userAgent, partial: false,
+          note: "Accepted via remote-approval link"
+        });
+      }
 
       // Find the WO this quote was attached to and flip its onSiteQuote
       // status so the tech UI shows "Customer approved at HH:MM."
@@ -7764,12 +7851,382 @@ async function handleApi(req, res, pathname) {
     }
   }
 
+  // ---------- Project Proposal routes (Brief 1) ----------------------
+  //
+  // The project_proposal flow has its own admin builder (separate from
+  // the AI-chat / on-site-tech paths) plus dual customer acceptance.
+  // These routes are clustered here so the existing quote flows stay
+  // untouched.
+
+  // GET /api/admin/project-rates — internal catalog for the proposal
+  // builder's line-items picker. Admin-only. Never call from public
+  // surfaces (the lint scanner verifies the file isn't read from any
+  // public HTML).
+  if (req.method === "GET" && pathname === "/api/admin/project-rates") {
+    const session = await requireAdmin(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+    return sendJson(res, 200, { ok: true, projectRates: PROJECT_RATES });
+  }
+
+  // POST /api/quotes/proposal — create a new project_proposal in draft.
+  // Body: { customerId?, customerEmail?, propertyId?, branch?,
+  // billingMode?, scope?, leadId? }. Returns the new quote.
+  if (req.method === "POST" && pathname === "/api/quotes/proposal") {
+    const session = await requireAdmin(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+    try {
+      const payload = await parseRequestBody(req);
+      const q = await quotes.create({
+        type: "project_proposal",
+        status: "draft",
+        customerId: payload.customerId || null,
+        customerEmail: payload.customerEmail || "",
+        propertyId: payload.propertyId || null,
+        leadId: payload.leadId || null,
+        scope: payload.scope || "",
+        branch: payload.branch || null,
+        billingMode: payload.billingMode || "fixed_price",
+        createdBy: session.uid || "admin"
+      });
+      return sendJson(res, 201, { ok: true, quote: q });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't create proposal."] });
+    }
+  }
+
+  // PATCH /api/quotes/:id/proposal — update a project_proposal in
+  // draft. Returns 409 on scope-protected fields once the proposal has
+  // moved past draft.
+  const proposalPatchMatch = pathname.match(/^\/api\/quotes\/([^/]+)\/proposal$/);
+  if (proposalPatchMatch && req.method === "PATCH") {
+    const session = await requireAdmin(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+    try {
+      const id = decodeURIComponent(proposalPatchMatch[1]);
+      const payload = await parseRequestBody(req, { maxBytes: 4 * 1024 * 1024 });
+      const updated = await quotes.updateProposal(id, payload, { by: session.uid || "admin" });
+      if (!updated) return sendJson(res, 404, { ok: false, errors: ["Proposal not found."] });
+      return sendJson(res, 200, { ok: true, quote: updated });
+    } catch (err) {
+      if (err.code === "proposal_locked") {
+        return sendJson(res, 409, {
+          ok: false,
+          errors: [err.message],
+          error: "proposal_locked",
+          field: err.field || null
+        });
+      }
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't update proposal."] });
+    }
+  }
+
+  // POST /api/quotes/:id/attachments — admin upload. Body:
+  // { kind, caption, filename, mimeType, data } (data is base64,
+  // matching the WO photo upload pattern).
+  const attachmentsPostMatch = pathname.match(/^\/api\/quotes\/([^/]+)\/attachments$/);
+  if (attachmentsPostMatch && req.method === "POST") {
+    const session = await requireAdmin(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+    try {
+      const quoteId = decodeURIComponent(attachmentsPostMatch[1]);
+      const payload = await parseRequestBody(req, { maxBytes: quotes.MAX_ATTACHMENT_BYTES + 1_000_000 });
+      const buffer = Buffer.from(String(payload.data || ""), "base64");
+      const att = await quotes.addAttachment(quoteId, {
+        buffer,
+        mimeType: String(payload.mimeType || "").toLowerCase(),
+        filename: payload.filename || "",
+        kind: payload.kind || "other",
+        caption: payload.caption || "",
+        uploadedBy: session.uid || "admin"
+      });
+      return sendJson(res, 201, { ok: true, attachment: att });
+    } catch (err) {
+      const status = err.code === "proposal_locked" ? 409 : 400;
+      return sendJson(res, status, { ok: false, errors: [err.message || "Couldn't add attachment."] });
+    }
+  }
+
+  // GET /api/quotes/:id/attachments/:attId — admin-gated serve.
+  // (Public access goes through the approve flow which has its own
+  // tokenized handler below.)
+  const attachmentsGetMatch = pathname.match(/^\/api\/quotes\/([^/]+)\/attachments\/([^/]+)$/);
+  if (attachmentsGetMatch && req.method === "GET") {
+    const session = await requireAdmin(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+    try {
+      const quoteId = decodeURIComponent(attachmentsGetMatch[1]);
+      const attId = decodeURIComponent(attachmentsGetMatch[2]);
+      const file = await quotes.readAttachmentBuffer(quoteId, attId);
+      if (!file) return sendJson(res, 404, { ok: false, errors: ["Attachment not found."] });
+      res.writeHead(200, {
+        "content-type": file.meta.mimeType || "application/octet-stream",
+        "content-length": file.buffer.length,
+        "cache-control": "private, max-age=300"
+      });
+      res.end(file.buffer);
+      return;
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't read attachment."] });
+    }
+  }
+
+  if (attachmentsGetMatch && req.method === "DELETE") {
+    const session = await requireAdmin(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+    try {
+      const quoteId = decodeURIComponent(attachmentsGetMatch[1]);
+      const attId = decodeURIComponent(attachmentsGetMatch[2]);
+      const result = await quotes.removeAttachment(quoteId, attId, { by: session.uid || "admin" });
+      return sendJson(res, 200, { ok: true, removed: result.id });
+    } catch (err) {
+      const status = err.code === "proposal_locked" ? 409 : 400;
+      return sendJson(res, status, { ok: false, errors: [err.message || "Couldn't remove attachment."] });
+    }
+  }
+
+  // POST /api/quotes/:id/revise — create a -v2 (or -vN) revision of a
+  // sent proposal. Original gets superseded, new draft returned.
+  const reviseMatch = pathname.match(/^\/api\/quotes\/([^/]+)\/revise$/);
+  if (reviseMatch && req.method === "POST") {
+    const session = await requireAdmin(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+    try {
+      const id = decodeURIComponent(reviseMatch[1]);
+      const revision = await quotes.createRevision(id, { by: session.uid || "admin" });
+      return sendJson(res, 201, { ok: true, quote: revision });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't create revision."] });
+    }
+  }
+
+  // POST /api/quotes/:id/send-proposal-for-approval — admin sends a
+  // draft project_proposal to the customer. Generates a 32-hex token,
+  // marks the quote sent, emails (and optionally texts) the customer
+  // with the approval URL.
+  const proposalSendMatch = pathname.match(/^\/api\/quotes\/([^/]+)\/send-proposal-for-approval$/);
+  if (proposalSendMatch && req.method === "POST") {
+    const session = await requireAdmin(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+    try {
+      const id = decodeURIComponent(proposalSendMatch[1]);
+      const payload = await parseRequestBody(req);
+      const q = await quotes.get(id);
+      if (!q) return sendJson(res, 404, { ok: false, errors: ["Proposal not found."] });
+      if (q.type !== "project_proposal") {
+        return sendJson(res, 422, { ok: false, errors: ["Quote is not a project_proposal."] });
+      }
+      const sendSms = payload?.sendSms === true;
+      const sendEmail = payload?.sendEmail !== false;
+      const toEmail = String(payload?.email || q.customerEmail || "").trim();
+      const toPhone = String(payload?.phone || "").trim();
+      if (sendEmail && !toEmail) {
+        return sendJson(res, 422, { ok: false, errors: ["Customer email is required for email delivery."] });
+      }
+      if (sendSms && !toPhone) {
+        return sendJson(res, 422, { ok: false, errors: ["Customer phone is required for SMS delivery."] });
+      }
+      const channels = [];
+      if (sendEmail) channels.push("email");
+      if (sendSms) channels.push("sms");
+      const token = crypto.randomBytes(16).toString("hex");
+      await quotes.markSentForApproval(q.id, { token, channels, toEmail, toPhone });
+      const approvalUrl = `${resolvePublicBaseUrl()}/approve/${encodeURIComponent(q.id)}?t=${token}`;
+
+      // Email — branded with PDF attachment. SMS deferred to first
+      // real-world send; the email path is the primary channel for
+      // proposal-scale work.
+      const results = { emailSent: false, emailError: null, smsSent: false, smsError: null, approvalUrl };
+      if (sendEmail && process.env.GMAIL_USER && process.env.GMAIL_APP_PASSWORD) {
+        try {
+          let nodemailer;
+          try { nodemailer = require("nodemailer"); } catch { nodemailer = null; }
+          if (nodemailer) {
+            const transporter = nodemailer.createTransport({
+              service: "gmail",
+              auth: { user: process.env.GMAIL_USER, pass: process.env.GMAIL_APP_PASSWORD }
+            });
+            const firstName = (toEmail.split("@")[0] || "there");
+            const branchLabel = q.branch || "project";
+            const html = `
+<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:560px;color:#1a1a1a;line-height:1.55;">
+  <div style="padding:24px 28px;background:#1B4D2E;border-radius:8px 8px 0 0;">
+    <div style="color:#EAF3DE;font-size:12px;letter-spacing:0.12em;text-transform:uppercase;font-weight:600;">PJL Land Services</div>
+    <h1 style="margin:6px 0 0;color:#fff;font-size:22px;">Your proposal — ready for review.</h1>
+  </div>
+  <div style="padding:24px 28px;background:#FAFAF5;border:1px solid #e5e5dd;border-top:none;border-radius:0 0 8px 8px;">
+    <p style="margin:0 0 14px;">Hi,</p>
+    <p style="margin:0 0 14px;">Your detailed proposal (<strong>${q.id}</strong>) is attached and posted at the link below. Total: <strong>$${Number(q.total || 0).toFixed(2)} CAD</strong> incl. HST.</p>
+    <p style="margin:0 0 14px;font-size:13px;color:#555;">You can accept this proposal in either of two ways:</p>
+    <ul style="margin:0 0 14px;padding-left:20px;font-size:13px;color:#333;line-height:1.7;">
+      <li><strong>Sign online</strong> — tap the button below, draw your signature, done.</li>
+      <li><strong>Print, sign, return</strong> — print the attached PDF, sign by hand, scan or photograph it, and email it back to <a href="mailto:info@pjllandservices.com" style="color:#1B4D2E;">info@pjllandservices.com</a>.</li>
+    </ul>
+    <p style="margin:0 0 18px;text-align:center;">
+      <a href="${approvalUrl}" style="display:inline-block;padding:14px 28px;background:#E07B24;color:#fff;text-decoration:none;border-radius:6px;font-weight:600;font-size:15px;">Review &amp; sign online</a>
+    </p>
+    <p style="margin:18px 0 0;font-size:13px;color:#777;">If the button doesn't work, paste this link:<br><span style="color:#1B4D2E;word-break:break-all;">${approvalUrl}</span></p>
+    <p style="margin:24px 0 0;font-size:13px;color:#777;">Questions? Reply to this email or call <a href="tel:+19059600181" style="color:#1B4D2E;">(905) 960-0181</a>.</p>
+  </div>
+  <p style="margin:16px 0 0;font-size:11px;color:#999;text-align:center;">PJL Land Services · Newmarket, Ontario · pjllandservices.com</p>
+</div>`.trim();
+
+            // Attach the proposal PDF.
+            const attachments = [];
+            try {
+              const pdfDoc = renderQuotePdf(q, {
+                customer: { name: "", email: q.customerEmail, phone: toPhone || "" },
+                property: {},
+                acceptanceUrl: approvalUrl,
+                returnEmail: process.env.GMAIL_USER || "info@pjllandservices.com"
+              });
+              const chunks = [];
+              await new Promise((resolve, reject) => {
+                pdfDoc.on("data", (c) => chunks.push(c));
+                pdfDoc.on("end", resolve);
+                pdfDoc.on("error", reject);
+              });
+              attachments.push({
+                filename: `PJL-Proposal-${q.id}.pdf`,
+                content: Buffer.concat(chunks),
+                contentType: "application/pdf"
+              });
+            } catch (err) {
+              console.warn("[proposal-email] PDF attach failed:", err?.message);
+            }
+            await transporter.sendMail({
+              from: `"PJL Land Services" <${process.env.GMAIL_USER}>`,
+              to: toEmail,
+              replyTo: process.env.GMAIL_USER,
+              subject: `PJL proposal ${q.id} — your review and acceptance`,
+              html,
+              ...(attachments.length ? { attachments } : {})
+            });
+            results.emailSent = true;
+          } else {
+            results.emailError = "nodemailer not installed";
+          }
+        } catch (err) { results.emailError = err.message; }
+      } else if (sendEmail) {
+        results.emailError = "Gmail not configured";
+      }
+      return sendJson(res, 200, { ok: true, quote: await quotes.get(id), approvalUrl, ...results });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't send proposal."] });
+    }
+  }
+
+  // POST /api/approve/:id/:token/pdf-return — public route. Customer
+  // uploads a signed PDF (base64 in JSON to match the WO photo
+  // pattern). Body: { filename, data, senderEmail? }. On success
+  // stages the file as a signed_pdf_return attachment and flips status
+  // to pending_admin_attestation.
+  const pdfReturnMatch = pathname.match(/^\/api\/approve\/([^/]+)\/([^/]+)\/pdf-return$/);
+  if (pdfReturnMatch && req.method === "POST") {
+    try {
+      const quoteId = decodeURIComponent(pdfReturnMatch[1]);
+      const token = decodeURIComponent(pdfReturnMatch[2]);
+      const q = await quotes.getByApprovalToken(quoteId, token);
+      if (!q) return sendJson(res, 404, { ok: false, errors: ["Approval link not found or expired."] });
+      if (q.type !== "project_proposal") {
+        return sendJson(res, 422, { ok: false, errors: ["This link doesn't accept PDF returns."] });
+      }
+      const payload = await parseRequestBody(req, { maxBytes: quotes.MAX_ATTACHMENT_BYTES + 1_000_000 });
+      const buffer = Buffer.from(String(payload.data || ""), "base64");
+      const updated = await quotes.stagePdfReturn(q.id, {
+        buffer,
+        filename: payload.filename || `signed-${q.id}.pdf`,
+        senderEmail: payload.senderEmail || ""
+      });
+      // Notify Patrick — there's a PDF return waiting for attestation.
+      try {
+        const aliasLead = {
+          id: updated.id,
+          sourceLabel: `PROPOSAL PDF-RETURN — ${updated.id}`,
+          contact: {
+            name: payload.senderEmail || updated.customerEmail || "Customer",
+            phone: "",
+            email: payload.senderEmail || updated.customerEmail || "",
+            address: "",
+            notes: `Customer returned signed PDF for proposal ${updated.id}. Attest in CRM to mark accepted.`
+          }
+        };
+        const baseUrl = process.env.PUBLIC_BASE_URL || baseUrlFromReq(req);
+        Promise.allSettled([
+          sendNewLeadEmail(aliasLead, { baseUrl })
+        ]).catch(() => {});
+      } catch (_) { /* notification is best-effort */ }
+      return sendJson(res, 200, { ok: true, quote: { id: updated.id, status: updated.status } });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't upload PDF."] });
+    }
+  }
+
+  // POST /api/admin/quote-folder/:id/confirm-pdf-acceptance — admin
+  // attests that the staged PDF return is the legitimate signed
+  // acceptance. Body: { adminNote?, senderEmailOverride? }. Flips
+  // status to accepted and records acceptanceMethod=pdf_return.
+  const confirmPdfMatch = pathname.match(/^\/api\/admin\/quote-folder\/([^/]+)\/confirm-pdf-acceptance$/);
+  if (confirmPdfMatch && req.method === "POST") {
+    const session = await requireAdmin(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+    try {
+      const id = decodeURIComponent(confirmPdfMatch[1]);
+      const payload = await parseRequestBody(req);
+      const updated = await quotes.recordPdfReturnAcceptance(id, {
+        adminUser: session.uid || "admin",
+        adminNote: payload.adminNote || "",
+        senderEmailOverride: payload.senderEmailOverride || ""
+      });
+      if (!updated) return sendJson(res, 404, { ok: false, errors: ["Proposal not found."] });
+      return sendJson(res, 200, { ok: true, quote: updated });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't confirm PDF acceptance."] });
+    }
+  }
+
+  // GET / PATCH /api/customers/:id/negotiated-rates — admin-only.
+  const negotiatedRatesMatch = pathname.match(/^\/api\/customers\/([^/]+)\/negotiated-rates$/);
+  if (negotiatedRatesMatch && req.method === "GET") {
+    const session = await requireAdmin(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+    try {
+      const id = decodeURIComponent(negotiatedRatesMatch[1]);
+      const cust = await customers.get(id, { withProperties: false });
+      if (!cust) return sendJson(res, 404, { ok: false, errors: ["Customer not found."] });
+      return sendJson(res, 200, { ok: true, negotiatedRates: cust.negotiatedRates || {} });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't read rates."] });
+    }
+  }
+  if (negotiatedRatesMatch && req.method === "PATCH") {
+    const session = await requireAdmin(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+    try {
+      const id = decodeURIComponent(negotiatedRatesMatch[1]);
+      const payload = await parseRequestBody(req);
+      const updated = await customers.update(
+        id,
+        { negotiatedRates: payload.rates || {} },
+        { by: session.uid || "admin", note: payload.note || "", action: "negotiated_rates_updated" }
+      );
+      if (!updated) return sendJson(res, 404, { ok: false, errors: ["Customer not found."] });
+      return sendJson(res, 200, { ok: true, customer: updated });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't update rates."] });
+    }
+  }
+
   // POST /api/quotes/:id/convert-to-project — spin a Project out of a
   // Quote: snapshots customer + property, sets sourceQuoteId, and
   // re-parents any material lists that were attached to the quote so
   // they carry over to the project's working list. Returns the new
   // project. Idempotent guard: if a project already exists with this
   // sourceQuoteId, return it without creating a duplicate.
+  //
+  // project_proposal quotes route through projects.createFromProposal
+  // so the new project gets enriched with branch + billingMode +
+  // labourRateLocked + tasks[] (seeded from line items) + attachments[]
+  // (referencing the quote's attachments) + proposalSnapshot.
   const quoteConvertMatch = pathname.match(/^\/api\/quotes\/([^/]+)\/convert-to-project$/);
   if (quoteConvertMatch && req.method === "POST") {
     try {
@@ -7798,23 +8255,32 @@ async function handleApi(req, res, pathname) {
       const address = leadCustomer?.location || leadCustomer?.address || "";
       const propertyId = quote.propertyId || leadCustomer?.propertyId || null;
 
-      // Auto-generate a project name from the customer + quote id. Patrick
-      // can rename it from the project page.
-      const namePieces = [];
-      if (customerName) namePieces.push(customerName);
-      namePieces.push(`(from ${quoteId})`);
-      const name = namePieces.join(" ").slice(0, 200);
+      let proj;
+      if (quote.type === "project_proposal") {
+        // Project_proposal quotes get the full enrichment.
+        proj = await projects.createFromProposal(quote, {
+          customerName, customerEmail, customerPhone, address, propertyId,
+          by: "admin"
+        });
+      } else {
+        // Auto-generate a project name from the customer + quote id. Patrick
+        // can rename it from the project page.
+        const namePieces = [];
+        if (customerName) namePieces.push(customerName);
+        namePieces.push(`(from ${quoteId})`);
+        const name = namePieces.join(" ").slice(0, 200);
 
-      const proj = await projects.create({
-        name,
-        customerName,
-        customerEmail,
-        customerPhone,
-        address,
-        propertyId,
-        sourceQuoteId: quoteId,
-        description: quote.scope || ""
-      });
+        proj = await projects.create({
+          name,
+          customerName,
+          customerEmail,
+          customerPhone,
+          address,
+          propertyId,
+          sourceQuoteId: quoteId,
+          description: quote.scope || ""
+        });
+      }
 
       // Re-parent any material lists that were attached to this quote.
       // The user's spec frames this as "convert quote's list into the
@@ -11510,6 +11976,11 @@ function resolveStaticTarget(pathname) {
   }
   if (pathname === "/admin/quote-folder" || pathname === "/admin/quote-folder/") {
     return { dir: SERVER_DIR, relative: "/quote-folder.html" };
+  }
+  // Project-proposal builder (Brief 1, May 2026). Per-quote editor with
+  // section nav, line-items picker, attachments. Admin-only.
+  if (/^\/admin\/quote\/[^/]+\/proposal\/?$/.test(pathname)) {
+    return { dir: SERVER_DIR, relative: "/quote-proposal-builder.html" };
   }
   if (/^\/admin\/invoice\/[^/]+\/?$/.test(pathname)) {
     return { dir: SERVER_DIR, relative: "/invoice.html" };

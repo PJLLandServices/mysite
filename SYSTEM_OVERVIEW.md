@@ -94,10 +94,10 @@ form except where noted.
 |---|---|---|---|
 | `properties.js` | Property | `P-YYYY-NNNN` | Customer site profile (zones, valves, controller, blow-out, deferred issues, service records, seasonal eligibility + outreach state + comm prefs). One per physical address. Zones land with `pendingReview: true` when the WO completion cascade discovers them on-site (Brief D). **Name invariant** (feature-seasonal-outreach-brief §3.9): `customerName` must be non-blank at `create`, `update`, and `bulkUpsert` — validation rejects blank patches with `code: MISSING_NAME`. Helpers: `seasonKey`, `recordOutreachTouch`, `setSeasonalOptOut`, `setSeasonalCommPref`, `setSeasonalEligibility`, `mintOptOutTokensIfMissing`, `findByOptOutToken`, `auditMissingCustomerName`. **Per-property seasonal pricing** (feature-per-property-seasonal-pricing-brief): now stores `seasonalPricing { springOpeningPrice, fallClosingPrice, hasAdditionalFallBlowout, additionalFallBlowoutPrice, additionalFallBlowoutDescription }`. `hydrateSeasonalPricing()` normalizes on read/write — cabana-off forces dependent fields to null. |
 | `work-orders.js` | Work Order | `WO-XXXXXXXX` (random alphabet) | One per visit. Zones, issues, photos, signature OR signatureBypass (mutually exclusive), on-site quote, materials packed, `paidOnSite`, `propertyEditsAppliedAt`, `intakeGuarantee.matched`, `customerNotes` (customer-visible report narrative, required at signature), `reportSnapshots[]` (append-only list of frozen Service / Inspection Report PDFs), `completionReportSnapshotAt` (idempotency gate), `history[]`. Lock-protected fields enforced via `SCOPE_PROTECTED_FIELDS` constant (Brief A; `customerNotes` joined the list with Service Report brief 2026-05-19). Bypass acts as a unified end-of-visit completion event covering both on-site quote acceptance (when builder has additions beyond baseline) and completion lock; bypass-completed WOs with `coversQuoteAcceptance: true` do NOT produce `on_site_quote` Quote records — `signatureBypass.acceptedScopeSnapshot` (deep-copied builder lines + totals) is the authoritative scope record. |
-| `quotes.js` | Quote | `Q-YYYY-NNNN` | Versioned, signed estimate. Two flavours: `ai_repair_quote` (AI chat) and `on_site_quote` (tech-built). |
+| `quotes.js` | Quote | `Q-YYYY-NNNN` | Versioned, signed estimate. Three flavours: `ai_repair_quote` (AI chat), `on_site_quote` (tech-built), `project_proposal` (admin-authored multi-section narrative, Brief 1 May 2026). Proposal type carries `branch`, `billingMode`, `proposalSections[]`, `attachments[]`, `customRates`, dual `acceptanceMethod` (`portal_esign` / `pdf_return`), and revision lineage (`revisionOf` / `supersededBy`). Scope-protected fields (`SCOPE_PROTECTED_FIELDS`) refuse PATCH once past draft. Helpers: `updateProposal`, `addAttachment` / `removeAttachment` / `readAttachmentBuffer`, `recordPortalSignAcceptance`, `stagePdfReturn`, `recordPdfReturnAcceptance`, `createRevision`, `snapshotRatesFromCustomer`. |
 | `invoices.js` | Invoice | `I-YYYY-NNNN` | Auto-drafted by completion cascade, lifecycle draft → sent → paid → void. Carries `disclaimers: [...keys]` array — text bodies in the `INVOICE_DISCLAIMERS` constant (currently only `fall_additional_plumbing`). `update()` merges via Set semantics so cascade re-fires never duplicate keys. |
 | `bookings.js` | Booking | `BK-YYYY-NNNN` | First-class appointment record. Mirrors `lead.booking` but is canonical. Exposes `cancel()` (soft, adds `cancelledAt/By/Reason` + history), `reschedule()` (sets `scheduledFor` + bumps `rescheduleCount` + history), and `remove()` (hard delete; refuses when a linked WO is past `scheduled` — caller passes `isActiveWo` to gate without coupling to work-orders.js). Schema includes `rescheduleCount` (capped at 1 for customer self-service via the portal endpoint; admin bypasses the cap). |
-| `projects.js` | Project | `PROJ-YYYY-NNNN` | Multi-WO container for named jobs. Lifecycle planning → active → complete → archived. |
+| `projects.js` | Project | `PROJ-YYYY-NNNN` | Multi-WO container for named jobs. Lifecycle planning → active → complete → archived. `createFromProposal(quote, …)` (Brief 1) enriches a project at conversion time from a `project_proposal` quote: `branch`, `billingMode`, `labourRateLocked` (snapshotted from `quote.customRates.labour`), `tasks[]` (seeded from line items — one task per line, status `pending`, `sourceLineItemId` set), `attachments[]` (references to the quote's attachments by id), and a frozen `proposalSnapshot` mirroring the accepted proposal at that instant. |
 | `material-lists.js` | Material List | `ML-YYYY-NNNN` | Bill of materials. Line items reference parts.json SKUs + quantities + status (`need` / `ordered` / `have`). Attachable to a project / WO / quote / standalone. |
 | `purchase-orders.js` | Purchase Order | `PO-YYYY-NNNN` | One supplier's slice of a material list's `need` lines. Lifecycle draft → sent → partially_received → received → cancelled. |
 | `suppliers.js` | Supplier | `SUP-NNN` (no year prefix) | Vendor records (name, contact, email, phone, address). |
@@ -112,7 +112,7 @@ form except where noted.
 | `schedule-store.js` | — | n/a | Calendar blocks + per-day hour overrides. |
 | `geocode.js` | — | n/a | Google Geocoding wrapper + cache. |
 | `distance.js` | — | n/a | Distance Matrix + Haversine fallback. |
-| `quote-pdf.js` | — | n/a | Branded quote PDF (pdfkit). |
+| `quote-pdf.js` | — | n/a | Branded quote PDF (pdfkit). Dispatcher by `quote.type`: `ai_repair_quote` / `on_site_quote` / `formal_quote` (legacy) → one-page `generateQuotePdf`; `project_proposal` → multi-section `renderProjectProposalPdf` with embedded attachments + dual-acceptance block (portal e-sign URL + printed signature lines). Use `renderQuotePdf` for new callers; `generateQuotePdf` remains exported for back-compat. |
 | `po-pdf.js` | — | n/a | Branded purchase order PDF (pdfkit). |
 | `wo-report-pdf.js` | — | n/a | Branded Service / Inspection Report PDF (pdfkit). Two modes: `inspection_report` (pre-completion, attached to send-for-approval emails) and `service_report` (post-completion, attached to the cascade email). Mode auto-derived from `wo.locked`. Renders cheat sheet, zone walkthrough, issues + dispositions, customer-visible notes, optional service-specific checklist (service mode only), signature/bypass block, fall-closing liability disclaimer (fall mode only), and Media Summary. **No prices anywhere** — quote and invoice are the financial artifacts, the report is the service-narrative artifact (Hard Rule 16). |
 | `wo-report-snapshot.js` | — | n/a | Freezes a rendered report to disk at `server/data/wo-reports/<woId>/<snapshotId>.pdf` and records the entry on `wo.reportSnapshots[]` via `workOrders.appendReportSnapshot`. Trigger types: `quote_send`, `cascade`, `manual`. SHA-256 hash recorded for integrity. Exports `createSnapshot`, `readSnapshot`, `findLatestCascadeSnapshot`. |
@@ -155,6 +155,8 @@ quickbooks-items.json      ← PJL key/SKU → QB Item ID map (gitignored, Rende
 photos/<leadId>/<n>.jpg    ← lead intake photos
 wo-photos/<woId>/<n>.<ext> ← work-order photos (pre/in/post-work + per-issue)
 wo-reports/<woId>/<snapshotId>.pdf ← Service / Inspection Report PDF snapshots (Service Report brief, 2026-05-19)
+project-rates.json         ← internal admin-only project-scale rates catalog (Brief 1, May 2026). Mirrors pricing.json item shape. Reads ONLY by /api/admin/project-rates and the quote-proposal-builder line-items picker. NEVER exposed publicly. Excluded from public hardcoded-price lint scope by virtue of being under server/data/ rather than a root *.html.
+quote-attachments/<quoteId>/<attId>.<ext>  ← per-quote uploaded attachments for project_proposal quotes (Brief 1). PNG / JPEG / PDF. 25 MB per file, 100 MB per quote. Customer-uploaded signed_pdf_return PDFs live here too as evidence for admin attestation.
 ```
 
 **Disk usage flag (Service Report brief).** Each snapshot is ~2–5 MB (photos + pdfkit overhead). At ~200 visits/season + occasional quote-send snapshots, expect ~400 MB / year added to the persistent disk. Render Starter currently allocates 1 GB. Narrows headroom but does not breach it for several seasons — watch.
@@ -395,9 +397,26 @@ Work Orders
 
 Quotes
   GET    /api/admin/quote-folder                 ← Q-YYYY-NNNN browser
-  GET    /api/admin/quote-folder/:id/pdf         ← branded PDF
-  POST   /api/quotes/:id/send-for-approval       ← email + SMS to customer
-  POST   /api/approve/:id/:token/sign            ← public signature
+  GET    /api/admin/quote-folder/:id/pdf         ← branded PDF (dispatcher: project_proposal renders the multi-section template)
+  POST   /api/quotes/:id/send-for-approval       ← email + SMS to customer (ai_repair_quote / on_site_quote)
+  POST   /api/approve/:id/:token/sign            ← public e-sign capture (handles project_proposal via recordPortalSignAcceptance)
+  GET    /api/approve/:id/:token/attachments/:attId ← token-gated public attachment serve (for proposal images embedded in /approve)
+
+  Project Proposal — Brief 1 (May 2026):
+  GET    /api/admin/project-rates                ← internal admin-only rates catalog
+  POST   /api/quotes/proposal                    ← create a new project_proposal in draft
+  PATCH  /api/quotes/:id/proposal                ← edit proposal (draft only; 409 on scope-protected fields once locked)
+  POST   /api/quotes/:id/attachments             ← upload static media (PNG/JPEG/PDF, 25 MB cap)
+  GET    /api/quotes/:id/attachments/:attId      ← admin-gated attachment serve
+  DELETE /api/quotes/:id/attachments/:attId      ← remove attachment (draft only)
+  POST   /api/quotes/:id/revise                  ← create -v2 revision; original gets superseded
+  POST   /api/quotes/:id/send-proposal-for-approval ← email branded PDF + acceptance URL
+  POST   /api/approve/:id/:token/pdf-return      ← public — customer uploads signed PDF; flips to pending_admin_attestation
+  POST   /api/admin/quote-folder/:id/confirm-pdf-acceptance ← admin attests staged PDF; flips to accepted
+
+  Customer rates (Brief 1):
+  GET    /api/customers/:id/negotiated-rates     ← admin-only read
+  PATCH  /api/customers/:id/negotiated-rates     ← admin-only write
 
 Invoices
   GET    /api/invoices                           ← filter ?status, ?woId
@@ -663,6 +682,18 @@ Quote accepted  →  click "Convert to project" on quote folder row
 PROJ-YYYY-NNNN created with quote.customerName/email/property snapshot,
 sourceQuoteId set. Idempotent — re-converting returns existing project.
    ↓
+If source quote was a project_proposal (Brief 1 May 2026), the project
+is enriched via projects.createFromProposal():
+  - branch + billingMode mirrored from the quote
+  - labourRateLocked snapshotted from quote.customRates.labour (T&M
+    uses this rate; fixed-price keeps it informational)
+  - tasks[] seeded from quote.lineItems — one task per line, status
+    "pending", sourceLineItemId back-reference set, order preserved
+  - attachments[] references the quote's attachments by id (no file
+    copy — the project reads through to the quote directory)
+  - proposalSnapshot frozen copy of accepted proposal (sections +
+    line items + totals + branch + acceptanceMethod + customer/property)
+   ↓
 Any material lists with parentType=quote, parentId=<quoteId> get re-parented
 to the new project.
    ↓
@@ -899,3 +930,6 @@ Playwright is `devDependencies` only — it does not ship to production.
 | `li_xxxxxxxx` | Material list line | `li_VbjXaKHH` (random) |
 | `poli_xxxxxxxx` | Purchase order line | `poli_QU1cN3Jz` (random) |
 | `iss_xxxxxxxx_<ts>` | Zone issue inside a WO | `iss_a1b2c3_1730000000` |
+| `att_xxxxxxxx` | Quote attachment / project attachment reference (Brief 1) | `att_K9pQrZ7m` (random) |
+| `sec_xxxxxxxx` | Proposal section inside a project_proposal quote (Brief 1) | `sec_x8WqLP3a` (random) |
+| `task_xxxxxxxx` | Project task seeded from a proposal line item (Brief 1) | `task_aB3cD9eF` (random) |

@@ -1,26 +1,43 @@
 // Quotes — the discrete Quote folder per the operations spec (PJL_OPERATIONS_DESIGN.md §4.1).
 //
 // A Quote is a versioned, snapshotted, audit-trailed record of work
-// PJL has offered to a customer at a specific price. Two flavours:
+// PJL has offered to a customer at a specific price. Three flavours:
 //
-//   ai_repair_quote — generated in chat from pricing.json, locked-rate
-//                     parts pricing on repair work, transcript persisted as
-//                     the source of truth. Carries the AI-Correct-Diagnosis
-//                     Bonus eligibility flag — when the tech confirms the
-//                     on-site diagnosis matches the AI-quoted scope, the
-//                     customer is credited 1 hr of repair labour free on
-//                     the resulting WO. Until tech confirmation, the bonus
-//                     is pending and labour bills normally.
+//   ai_repair_quote  — generated in chat from pricing.json, locked-rate
+//                      parts pricing on repair work, transcript persisted as
+//                      the source of truth. Carries the AI-Correct-Diagnosis
+//                      Bonus eligibility flag — when the tech confirms the
+//                      on-site diagnosis matches the AI-quoted scope, the
+//                      customer is credited 1 hr of repair labour free on
+//                      the resulting WO. Until tech confirmation, the bonus
+//                      is pending and labour bills normally.
 //
-//   formal_quote    — installs/retrofits with PDF + signature pad. Not
-//                     implemented in slice 9.7 — placeholder type only.
+//   on_site_quote    — tech walks zones on-site, finds issues, builds a
+//                      quote from pricing.json, customer accepts/declines
+//                      per line. Has its own signature canvas (separate
+//                      from wo.signature) per spec rule 4.
+//
+//   project_proposal — proposal-grade multi-section narrative for
+//                      commercial subcontracts, residential installs,
+//                      lighting design, renovation coordination, and
+//                      change orders. Branch-aware, carries
+//                      proposalSections[] (rich text), attachments[]
+//                      (maps/diagrams), customRates (snapshotted from
+//                      customer.negotiatedRates), and supports BOTH
+//                      portal e-sign AND print-sign-PDF-return as
+//                      legally binding acceptance paths. Reads its
+//                      catalog from server/data/project-rates.json
+//                      (internal-only, never exposed publicly) rather
+//                      than pricing.json. See Brief 1 (May 2026).
 //
 // Hard rules from the spec (numbered in PJL_OPERATIONS_DESIGN.md §10):
 //   2. Quotes snapshot prices at creation. Future pricing.json changes
 //      don't alter accepted quotes — line items carry their own price.
 //   9. Quotes are versioned, not edited. Revisions create a new Quote
-//      with a new id and `supersedesId` pointing at the old one. Slice 9.7
-//      doesn't yet emit revisions, but the schema supports them.
+//      with a new id and `supersedesId` pointing at the old one. The
+//      project_proposal type ships with the revision flow live
+//      (createRevision); ai_repair / on_site continue to discard-and-
+//      re-create per the older slice.
 //
 // The Quote owns the line items. The Lead carries `lead.quoteId` pointing
 // here; legacy `lead.features` continues to mirror the line items so the
@@ -32,16 +49,98 @@
 const fs = require("node:fs/promises");
 const fsSync = require("node:fs");
 const path = require("node:path");
+const crypto = require("node:crypto");
 
 const FILE = path.join(__dirname, "..", "data", "quotes.json");
+const ATTACHMENTS_DIR = path.join(__dirname, "..", "data", "quote-attachments");
 
-const STATUSES = ["draft", "sent", "accepted", "partially_accepted", "declined", "expired", "superseded", "cancelled"];
-// on_site_quote: tech walks zones on-site, finds issues, builds a quote
-// from pricing.json, customer accepts/declines per line. Has its own
-// signature canvas (separate from wo.signature) per spec rule 4.
-// formal_quote: install/retrofit PDF flow, deferred to a future slice.
-const TYPES = ["ai_repair_quote", "formal_quote", "on_site_quote"];
+const STATUSES = [
+  "draft", "sent", "accepted", "partially_accepted",
+  "declined", "expired", "superseded", "cancelled",
+  // project_proposal-only — set when the customer has uploaded a signed
+  // PDF and we're waiting for Patrick to attest it's the real thing.
+  "pending_admin_attestation"
+];
+// formal_quote is kept in the enum for back-compat with any historical
+// records but is no longer emitted; project_proposal supersedes it.
+const TYPES = ["ai_repair_quote", "formal_quote", "on_site_quote", "project_proposal"];
+
+// Branch taxonomy for project_proposal. Five real-world buckets that
+// share the skeleton but differ in templated narrative and
+// responsibility splits. Brief 1 §3.1A.
+const PROPOSAL_BRANCHES = [
+  "gc_subcontract",
+  "direct_residential",
+  "lighting_design",
+  "renovation_coordination",
+  "change_order"
+];
+
+const BILLING_MODES = ["fixed_price", "time_and_material"];
+
+const ACCEPTANCE_METHODS = ["pending", "portal_esign", "pdf_return"];
+
+// Section kinds correspond to the McDonald's Hampshire estimate as the
+// reference real-world layout. The proposal builder UI offers these in
+// the section nav; `custom` exists as an escape hatch for sections that
+// don't fit the standard set.
+const PROPOSAL_SECTION_KINDS = [
+  "cover_summary",
+  "quotation_summary",
+  "proposed_scope",
+  "infrastructure_list",
+  "budget_notice",
+  "technical_reference",
+  "project_map",
+  "line_items",
+  "acceptance_block",
+  "custom"
+];
+
+const ATTACHMENT_KINDS = [
+  "site_map",
+  "technical_diagram",
+  "as_built",
+  "reference_photo",
+  "other",
+  // Used internally when a customer uploads their signed PDF via the
+  // /pdf-return flow — kept in the same attachments[] array but
+  // displayed separately in the admin attestation UI.
+  "signed_pdf_return"
+];
+
+const ATTACHMENT_MIME_WHITELIST = new Set([
+  "image/png",
+  "image/jpeg",
+  "application/pdf"
+]);
+
+const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;        // 25 MB per file
+const MAX_TOTAL_ATTACHMENT_BYTES = 100 * 1024 * 1024; // 100 MB per quote
+
+// Once a project_proposal is past draft (sent / accepted /
+// pending_admin_attestation / etc.), these fields refuse PATCH with 409.
+// Mirrors the work-orders.js SCOPE_PROTECTED_FIELDS pattern. Status
+// progression, internal notes, history, and acceptanceEvidence (admin
+// attestation lands here) continue to flow.
+const SCOPE_PROTECTED_FIELDS = [
+  "proposalSections",
+  "lineItems",
+  "attachments",
+  "branch",
+  "billingMode",
+  "customRates",
+  "scope",
+  "subtotal",
+  "hst",
+  "total",
+  "type"
+];
+
 const DEFAULT_VALIDITY_DAYS = 30;
+// Project proposals get a longer default validity — commercial buyers
+// commonly compare 2-3 vendors over 60-90 days before sign-off.
+const PROPOSAL_DEFAULT_VALIDITY_DAYS = 90;
 const HST_RATE = 0.13;
 
 // ---- File I/O ---------------------------------------------------------
@@ -101,6 +200,15 @@ function plusDaysIso(days) {
   d.setUTCDate(d.getUTCDate() + days);
   return d.toISOString();
 }
+
+// 8-char base36 random suffix — matches the shape of work-orders.js
+// issue ids (iss_<random8>_<ts>). Used for attachment / proposal section
+// / task ids on project_proposal quotes and their derived projects.
+function random8() {
+  return Math.random().toString(36).slice(2, 10).padEnd(8, "0");
+}
+function newAttachmentId() { return "att_" + random8(); }
+function newSectionId()    { return "sec_" + random8(); }
 
 function blankQuote() {
   const created = nowIso();
@@ -195,6 +303,66 @@ function blankQuote() {
       sentToPhone: ""
     },
 
+    // -------- project_proposal-only fields (Brief 1, May 2026) --------
+    // Populated when type === "project_proposal". Stay at their defaults
+    // (null/empty) for ai_repair_quote and on_site_quote so the existing
+    // flows are untouched.
+
+    // Branch — five real-world buckets (see PROPOSAL_BRANCHES). Drives
+    // the proposal builder's templated narrative and the PDF header tag.
+    branch: null,
+
+    // billingMode — "fixed_price" or "time_and_material". When T&M, the
+    // resulting project locks the customer's labour rate at conversion
+    // time (project.labourRateLocked) and uses it for invoice rollup.
+    billingMode: null,
+
+    // proposalSections — ordered multi-section narrative. Each section is
+    // a kind from PROPOSAL_SECTION_KINDS + title + body (rich text /
+    // markdown, sanitized server-side) + optional attachmentIds[] to
+    // anchor static media at the section. order field is the canonical
+    // sort key; insertion order is the fallback.
+    proposalSections: [],
+
+    // attachments — uploaded static media (Google Earth screenshots, CAD
+    // drawings, manufacturer schematics). Files live on disk under
+    // server/data/quote-attachments/<quoteId>/<attId>.<ext>; this array
+    // is the metadata side.
+    attachments: [],
+
+    // customRates — per-quote labour-rate snapshot. Captured from the
+    // customer's negotiatedRates at creation, then frozen onto the quote
+    // for legal-record integrity. Future-extensible (per-foot mainline,
+    // per-zone install, etc.) but v1 only carries labour.
+    customRates: {
+      labour: null
+    },
+
+    // acceptanceMethod — "pending" until accepted. Once accepted, locks
+    // to "portal_esign" or "pdf_return". The two methods produce
+    // different evidence shapes (see acceptanceEvidence) but both
+    // legally bind the customer.
+    acceptanceMethod: "pending",
+
+    // acceptanceEvidence — method-specific. Portal e-sign mirrors the
+    // existing signature{} shape; PDF return captures the uploaded
+    // file path, sender email, admin attestation, and timestamps.
+    acceptanceEvidence: null,
+
+    // validUntilDate — alias of validUntil for proposals, where the
+    // typical default is 90 days. validUntil (above) stays the
+    // authoritative field; this field tracks the same value and exists
+    // for clarity in the proposal-builder UI.
+    validUntilDate: null,
+
+    // revisionOf / supersededBy — quote-revision lineage. When the
+    // customer asks for changes on a sent proposal, createRevision()
+    // clones to a new Q-YYYY-NNNN with revisionOf pointing at the
+    // original; the original gets status: "superseded" and
+    // supersededBy back-reference. Chains extend (v3 → v2 → v1).
+    revisionOf: null,
+    supersededBy: null,
+
     // Audit trail — every status change appends an entry.
     history: [
       { ts: created, action: "created", by: "system", note: "" }
@@ -220,7 +388,19 @@ function hydrate(q) {
     decisions: Array.isArray(q?.decisions) ? q.decisions : [],
     workOrderIds: Array.isArray(q?.workOrderIds) ? q.workOrderIds : [],
     history: Array.isArray(q?.history) ? q.history : [],
-    deletedAt: typeof q?.deletedAt === "string" ? q.deletedAt : null
+    deletedAt: typeof q?.deletedAt === "string" ? q.deletedAt : null,
+    // project_proposal fields — defensive defaults for legacy records
+    // that pre-date the proposal schema.
+    branch: q?.branch || null,
+    billingMode: q?.billingMode || null,
+    proposalSections: Array.isArray(q?.proposalSections) ? q.proposalSections : [],
+    attachments: Array.isArray(q?.attachments) ? q.attachments : [],
+    customRates: { ...base.customRates, ...(q?.customRates || {}) },
+    acceptanceMethod: typeof q?.acceptanceMethod === "string" ? q.acceptanceMethod : "pending",
+    acceptanceEvidence: q?.acceptanceEvidence || null,
+    validUntilDate: q?.validUntilDate || q?.validUntil || null,
+    revisionOf: q?.revisionOf || null,
+    supersededBy: q?.supersededBy || null
   };
 }
 
@@ -327,12 +507,13 @@ async function listByCustomer(email) {
   return records.filter((q) => (q.customerEmail || "").toLowerCase() === target);
 }
 
-// Create a new Quote. Slice 9.7 only emits ai_repair_quote — formal_quote
-// is a future phase. The Quote starts in "sent" status (the AI has shown
-// it to the customer in chat) unless `status` is explicitly passed.
+// Create a new Quote. Handles all three flavours (ai_repair_quote,
+// on_site_quote, project_proposal). For project_proposal the default
+// status is "draft" — Patrick authors sections in the builder before
+// sending — and the default validity is 90 days, not 30.
 async function create({
   type = "ai_repair_quote",
-  status = "sent",
+  status = null,
   customerId = null,
   customerEmail = "",
   propertyId = null,
@@ -345,10 +526,29 @@ async function create({
   total = 0,
   intakeGuarantee = null,
   createdBy = "system",
-  validityDays = DEFAULT_VALIDITY_DAYS
+  validityDays = null,
+  // project_proposal-only
+  branch = null,
+  billingMode = null,
+  proposalSections = null,
+  customRates = null
 } = {}) {
   if (!TYPES.includes(type)) throw new Error(`Unknown quote type: ${type}`);
+
+  // Per-type defaults — proposals start in draft, other types start sent.
+  const isProposal = type === "project_proposal";
+  if (status == null) status = isProposal ? "draft" : "sent";
+  if (validityDays == null) validityDays = isProposal ? PROPOSAL_DEFAULT_VALIDITY_DAYS : DEFAULT_VALIDITY_DAYS;
   if (!STATUSES.includes(status)) throw new Error(`Unknown quote status: ${status}`);
+
+  if (isProposal) {
+    if (branch && !PROPOSAL_BRANCHES.includes(branch)) {
+      throw new Error(`Unknown proposal branch: ${branch}`);
+    }
+    if (billingMode && !BILLING_MODES.includes(billingMode)) {
+      throw new Error(`Unknown billing mode: ${billingMode}`);
+    }
+  }
 
   // Brief 4 — resolve customerId from email if the caller didn't pass
   // it. Soft-failure: a quote without customerId is still valid (the
@@ -385,18 +585,220 @@ async function create({
     q.intakeGuarantee = { ...q.intakeGuarantee, ...intakeGuarantee };
   }
   q.validUntil = plusDaysIso(validityDays);
+  q.validUntilDate = q.validUntil;
   if (status === "sent") q.sentAt = nowIso();
+
+  if (isProposal) {
+    q.branch = branch || null;
+    q.billingMode = billingMode || "fixed_price";
+    if (Array.isArray(proposalSections) && proposalSections.length) {
+      q.proposalSections = proposalSections.map((s, idx) => normalizeProposalSection(s, idx));
+    } else {
+      q.proposalSections = defaultProposalSections();
+    }
+    if (customRates && typeof customRates === "object") {
+      q.customRates = { ...q.customRates, ...customRates };
+    } else if (customerId) {
+      // Snapshot from the customer's negotiatedRates if no rates were
+      // explicitly passed. Soft-failure: blank rates are fine.
+      try {
+        const customersLib = require("./customers");
+        const cust = await customersLib.get(customerId, { withProperties: false });
+        if (cust && cust.negotiatedRates) {
+          q.customRates = { ...q.customRates, ...cust.negotiatedRates };
+        }
+      } catch (_) { /* tolerate */ }
+    }
+  }
 
   q.history.push({
     ts: nowIso(),
     action: status === "sent" ? "sent" : `status:${status}`,
     by: createdBy,
-    note: scope || ""
+    note: scope || (isProposal && branch ? `branch=${branch}` : "")
   });
 
   records.unshift(q);
   await writeAll(records);
   return q;
+}
+
+// Build the default 8-section skeleton for a fresh project_proposal.
+// Patrick fills in the body of each section in the builder UI. Order is
+// the canonical layout from the McDonald's Hampshire estimate.
+function defaultProposalSections() {
+  const skeleton = [
+    { kind: "cover_summary",      title: "Cover summary" },
+    { kind: "quotation_summary",  title: "Quotation summary" },
+    { kind: "proposed_scope",     title: "Proposed scope of work" },
+    { kind: "infrastructure_list", title: "Infrastructure & materials" },
+    { kind: "budget_notice",      title: "Budget & assumptions" },
+    { kind: "technical_reference", title: "Technical reference" },
+    { kind: "project_map",        title: "Project map" },
+    { kind: "line_items",         title: "Itemized pricing" },
+    { kind: "acceptance_block",   title: "Acceptance" }
+  ];
+  return skeleton.map((s, idx) => ({
+    id: newSectionId(),
+    kind: s.kind,
+    title: s.title,
+    body: "",
+    order: idx,
+    attachmentIds: []
+  }));
+}
+
+function normalizeProposalSection(s, idx) {
+  if (!s || typeof s !== "object") s = {};
+  const kind = PROPOSAL_SECTION_KINDS.includes(s.kind) ? s.kind : "custom";
+  return {
+    id: typeof s.id === "string" && s.id.startsWith("sec_") ? s.id : newSectionId(),
+    kind,
+    title: String(s.title || "").slice(0, 200),
+    body: String(s.body || "").slice(0, 40000),
+    order: Number.isFinite(Number(s.order)) ? Number(s.order) : idx,
+    attachmentIds: Array.isArray(s.attachmentIds)
+      ? s.attachmentIds.filter((x) => typeof x === "string" && x.startsWith("att_")).slice(0, 50)
+      : []
+  };
+}
+
+// ---- Lock guard ------------------------------------------------------
+//
+// A project_proposal is "locked" once it has moved past draft. Edits to
+// scope-protected fields (proposalSections, lineItems, attachments,
+// branch, billingMode, customRates, subtotal/hst/total, type) refuse
+// with 409 at the dispatcher. Non-locked fields (status forward-
+// progression, notes, history) keep flowing.
+
+function isProposalLocked(q) {
+  if (!q || q.type !== "project_proposal") return false;
+  return q.status !== "draft";
+}
+
+function findProtectedFieldTouched(payload) {
+  if (!payload || typeof payload !== "object") return null;
+  for (const key of Object.keys(payload)) {
+    if (SCOPE_PROTECTED_FIELDS.includes(key)) return key;
+  }
+  return null;
+}
+
+// ---- Proposal mutators (draft-only) ----------------------------------
+//
+// updateProposal patches scope-protected fields on a draft proposal.
+// Locked proposals throw — caller should catch and 409.
+
+async function updateProposal(id, patch = {}, { by = "admin", note = "" } = {}) {
+  const records = await readAll();
+  const idx = records.findIndex((q) => q.id === id);
+  if (idx === -1) return null;
+  const q = records[idx];
+  if (q.type !== "project_proposal") {
+    const err = new Error("updateProposal only applies to project_proposal quotes.");
+    err.code = "wrong_quote_type";
+    throw err;
+  }
+  if (isProposalLocked(q)) {
+    const touched = findProtectedFieldTouched(patch);
+    if (touched) {
+      const err = new Error(`Proposal is locked. Field "${touched}" cannot be modified.`);
+      err.code = "proposal_locked";
+      err.field = touched;
+      throw err;
+    }
+  }
+
+  if (Object.prototype.hasOwnProperty.call(patch, "branch")) {
+    if (patch.branch && !PROPOSAL_BRANCHES.includes(patch.branch)) {
+      throw new Error(`Unknown proposal branch: ${patch.branch}`);
+    }
+    q.branch = patch.branch || null;
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "billingMode")) {
+    if (patch.billingMode && !BILLING_MODES.includes(patch.billingMode)) {
+      throw new Error(`Unknown billing mode: ${patch.billingMode}`);
+    }
+    q.billingMode = patch.billingMode || "fixed_price";
+  }
+  if (Array.isArray(patch.proposalSections)) {
+    q.proposalSections = patch.proposalSections.map((s, i) => normalizeProposalSection(s, i));
+  }
+  if (Array.isArray(patch.lineItems)) {
+    q.lineItems = patch.lineItems.map(normalizeProposalLineItem);
+    const totals = computeProposalTotals(q.lineItems);
+    q.subtotal = totals.subtotal;
+    q.hst = totals.hst;
+    q.total = totals.total;
+  }
+  if (patch.customRates && typeof patch.customRates === "object") {
+    q.customRates = { ...q.customRates, ...patch.customRates };
+  }
+  if (typeof patch.scope === "string") {
+    q.scope = patch.scope.slice(0, 4000);
+  }
+  if (typeof patch.customerEmail === "string") {
+    q.customerEmail = patch.customerEmail.toLowerCase().trim();
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "customerId")) {
+    q.customerId = patch.customerId || null;
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "propertyId")) {
+    q.propertyId = patch.propertyId || null;
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "leadId")) {
+    q.leadId = patch.leadId || null;
+  }
+  if (typeof patch.validUntilDate === "string") {
+    q.validUntilDate = patch.validUntilDate;
+    q.validUntil = patch.validUntilDate;
+  }
+
+  q.history.push({
+    ts: nowIso(),
+    action: "proposal_updated",
+    by,
+    note: note || `Fields: ${Object.keys(patch).join(", ")}`
+  });
+  records[idx] = q;
+  await writeAll(records);
+  return q;
+}
+
+// Line items on a proposal carry a `source` discriminator so the UI
+// knows whether they came from the public pricing catalog, the
+// internal project-rates catalog, or were authored ad-hoc.
+function normalizeProposalLineItem(raw) {
+  if (!raw || typeof raw !== "object") raw = {};
+  const source = ["pricing", "project_rates", "custom"].includes(raw.source) ? raw.source : "custom";
+  const sourceKey = source === "custom" ? null : (typeof raw.sourceKey === "string" ? raw.sourceKey : null);
+  const qty = Number(raw.qty);
+  const price = Number(raw.price);
+  const safeQty = Number.isFinite(qty) && qty > 0 ? qty : 1;
+  const safePrice = Number.isFinite(price) ? price : 0;
+  const unit = typeof raw.unit === "string" ? raw.unit.slice(0, 40) : "";
+  return {
+    id: typeof raw.id === "string" && raw.id.startsWith("li_") ? raw.id : ("li_" + random8()),
+    source,
+    sourceKey,
+    label: String(raw.label || raw.sourceKey || "Line item").slice(0, 400),
+    description: String(raw.description || "").slice(0, 1000),
+    unit,
+    qty: safeQty,
+    price: safePrice,
+    priceAtCreation: Number.isFinite(Number(raw.priceAtCreation)) ? Number(raw.priceAtCreation) : safePrice,
+    lineTotal: Math.round(safePrice * safeQty * 100) / 100
+  };
+}
+
+function computeProposalTotals(lineItems) {
+  const lines = Array.isArray(lineItems) ? lineItems : [];
+  let subtotal = 0;
+  for (const li of lines) subtotal += Number(li.lineTotal) || 0;
+  subtotal = Math.round(subtotal * 100) / 100;
+  const hst = Math.round(subtotal * HST_RATE * 100) / 100;
+  const total = Math.round((subtotal + hst) * 100) / 100;
+  return { subtotal, hst, total };
 }
 
 // Mark a quote accepted. Bookings auto-create on acceptance per spec §4.1
@@ -638,11 +1040,446 @@ async function purgeDeleted({ olderThanMs = 30 * 24 * 60 * 60 * 1000 } = {}) {
   return purged;
 }
 
+// ---- Attachments ----------------------------------------------------
+//
+// Static media uploads on project_proposal quotes. Saved to disk under
+// server/data/quote-attachments/<quoteId>/<attId>.<ext>; metadata
+// kept on quote.attachments[]. Photos / PDFs only; size capped per file
+// and in aggregate.
+
+function extForMime(mime) {
+  if (mime === "image/png") return "png";
+  if (mime === "image/jpeg") return "jpg";
+  if (mime === "application/pdf") return "pdf";
+  return "bin";
+}
+
+async function ensureAttachmentDir(quoteId) {
+  const dir = path.join(ATTACHMENTS_DIR, quoteId);
+  await fs.mkdir(dir, { recursive: true });
+  return dir;
+}
+
+async function addAttachment(quoteId, { buffer, mimeType, filename, kind = "other", caption = "", uploadedBy = "admin" } = {}) {
+  if (!buffer || !buffer.length) throw new Error("Attachment has no data.");
+  if (!ATTACHMENT_MIME_WHITELIST.has(mimeType)) {
+    throw new Error(`Unsupported attachment type: ${mimeType}. Allowed: PNG, JPEG, PDF.`);
+  }
+  if (buffer.length > MAX_ATTACHMENT_BYTES) {
+    throw new Error(`Attachment too large (${(buffer.length / 1_000_000).toFixed(1)} MB > 25 MB cap).`);
+  }
+  const safeKind = ATTACHMENT_KINDS.includes(kind) ? kind : "other";
+
+  const records = await readAll();
+  const idx = records.findIndex((q) => q.id === quoteId);
+  if (idx === -1) throw new Error(`Quote ${quoteId} not found.`);
+  const q = records[idx];
+
+  // Aggregate cap — sum of existing attachment sizes plus the incoming one.
+  const existingBytes = (q.attachments || []).reduce((sum, a) => sum + (Number(a.sizeBytes) || 0), 0);
+  if (existingBytes + buffer.length > MAX_TOTAL_ATTACHMENT_BYTES) {
+    throw new Error(`Adding this file would exceed the 100 MB total attachment cap for this quote.`);
+  }
+
+  // Locked-proposal gate — only signed_pdf_return is allowed on a
+  // locked proposal (so the customer's PDF return can land), and even
+  // then only when status is "sent" (i.e. awaiting acceptance).
+  if (q.type === "project_proposal" && isProposalLocked(q)) {
+    if (safeKind !== "signed_pdf_return") {
+      const err = new Error(`Proposal is locked. Attachments can't be modified.`);
+      err.code = "proposal_locked";
+      throw err;
+    }
+  }
+
+  const attId = newAttachmentId();
+  const ext = extForMime(mimeType);
+  const dir = await ensureAttachmentDir(quoteId);
+  const onDiskPath = path.join(dir, `${attId}.${ext}`);
+  await fs.writeFile(onDiskPath, buffer);
+
+  const meta = {
+    id: attId,
+    kind: safeKind,
+    filename: String(filename || `${attId}.${ext}`).slice(0, 200),
+    mimeType,
+    sizeBytes: buffer.length,
+    caption: String(caption || "").slice(0, 400),
+    order: (q.attachments || []).length,
+    uploadedAt: nowIso(),
+    uploadedBy: String(uploadedBy || "admin").slice(0, 80)
+  };
+  q.attachments = Array.isArray(q.attachments) ? q.attachments : [];
+  q.attachments.push(meta);
+  q.history.push({
+    ts: nowIso(),
+    action: "attachment_added",
+    by: uploadedBy,
+    note: `${attId} ${safeKind} ${meta.filename}`
+  });
+  records[idx] = q;
+  await writeAll(records);
+  return meta;
+}
+
+async function removeAttachment(quoteId, attachmentId, { by = "admin" } = {}) {
+  const records = await readAll();
+  const idx = records.findIndex((q) => q.id === quoteId);
+  if (idx === -1) throw new Error(`Quote ${quoteId} not found.`);
+  const q = records[idx];
+  if (q.type === "project_proposal" && isProposalLocked(q)) {
+    const err = new Error("Proposal is locked. Attachments can't be removed.");
+    err.code = "proposal_locked";
+    throw err;
+  }
+  const attIdx = (q.attachments || []).findIndex((a) => a.id === attachmentId);
+  if (attIdx === -1) throw new Error(`Attachment ${attachmentId} not found.`);
+  const att = q.attachments[attIdx];
+  q.attachments.splice(attIdx, 1);
+
+  // Also remove the attachment id from any section that anchored it.
+  for (const s of (q.proposalSections || [])) {
+    if (Array.isArray(s.attachmentIds)) {
+      s.attachmentIds = s.attachmentIds.filter((x) => x !== attachmentId);
+    }
+  }
+
+  q.history.push({
+    ts: nowIso(),
+    action: "attachment_removed",
+    by,
+    note: `${attachmentId} ${att.filename || ""}`
+  });
+  records[idx] = q;
+  await writeAll(records);
+
+  // Best-effort file removal — log but don't fail the API call if disk
+  // cleanup errors (the metadata is already removed).
+  try {
+    const ext = extForMime(att.mimeType);
+    const onDiskPath = path.join(ATTACHMENTS_DIR, quoteId, `${attachmentId}.${ext}`);
+    await fs.unlink(onDiskPath);
+  } catch (err) {
+    console.warn(`[quotes] couldn't delete ${attachmentId} on disk:`, err?.message);
+  }
+  return { id: attachmentId };
+}
+
+async function readAttachmentBuffer(quoteId, attachmentId) {
+  const q = await get(quoteId);
+  if (!q) return null;
+  const att = (q.attachments || []).find((a) => a.id === attachmentId);
+  if (!att) return null;
+  const ext = extForMime(att.mimeType);
+  const onDiskPath = path.join(ATTACHMENTS_DIR, quoteId, `${attachmentId}.${ext}`);
+  try {
+    const buf = await fs.readFile(onDiskPath);
+    return { buffer: buf, meta: att };
+  } catch (err) {
+    return null;
+  }
+}
+
+function listAttachments(quote) {
+  return Array.isArray(quote?.attachments) ? quote.attachments : [];
+}
+
+// ---- Customer rate snapshot ------------------------------------------
+
+async function snapshotRatesFromCustomer(quoteId, customerId) {
+  if (!quoteId || !customerId) return null;
+  const records = await readAll();
+  const idx = records.findIndex((q) => q.id === quoteId);
+  if (idx === -1) return null;
+  const q = records[idx];
+  if (q.type !== "project_proposal") return q;
+  try {
+    const customersLib = require("./customers");
+    const cust = await customersLib.get(customerId, { withProperties: false });
+    if (cust && cust.negotiatedRates) {
+      q.customRates = { ...q.customRates, ...cust.negotiatedRates };
+      q.history.push({
+        ts: nowIso(),
+        action: "rates_snapshotted",
+        by: "system",
+        note: `from customer ${customerId}`
+      });
+      records[idx] = q;
+      await writeAll(records);
+    }
+  } catch (_) { /* tolerate */ }
+  return q;
+}
+
+// ---- Dual acceptance -------------------------------------------------
+//
+// Two paths to legally bind a project_proposal:
+//   1. Portal e-sign — customer hits /approve/<id>?t=<token>, draws a
+//      signature, server records acceptanceMethod=portal_esign and
+//      mirrors the evidence into signature{} for back-compat with the
+//      existing approve.js front-end.
+//   2. PDF return — customer downloads the PDF, prints/signs/scans,
+//      uploads the signed copy back via /api/approve/<id>/<token>/
+//      pdf-return. Status flips to pending_admin_attestation; Patrick
+//      attests via /api/admin/quote-folder/<id>/confirm-pdf-acceptance
+//      which sets acceptanceMethod=pdf_return and flips status to
+//      accepted.
+//
+// recordPortalSignAcceptance is the proposal-aware wrapper around the
+// existing acceptWithSignature path; recordPdfReturnAcceptance is the
+// new admin-attestation step.
+
+async function recordPortalSignAcceptance(quoteId, {
+  customerName,
+  imageData,
+  ip,
+  userAgent,
+  by = "customer",
+  note = ""
+} = {}) {
+  const records = await readAll();
+  const idx = records.findIndex((q) => q.id === quoteId);
+  if (idx === -1) return null;
+  const q = records[idx];
+  if (q.acceptanceMethod === "portal_esign" && q.status === "accepted") return q; // idempotent
+
+  const ts = nowIso();
+  q.status = "accepted";
+  q.acceptedAt = ts;
+  q.acceptanceMethod = "portal_esign";
+  q.acceptanceEvidence = {
+    method: "portal_esign",
+    signatureImageDataUrl: String(imageData || ""),
+    customerPrintedName: String(customerName || "").slice(0, 120),
+    signedAt: ts,
+    ip: String(ip || ""),
+    userAgent: String(userAgent || ""),
+    token: q.approval?.token || null
+  };
+  // Mirror onto signature{} so the existing PDF renderer + approve.js
+  // back-end keeps working without conditionals.
+  q.signature = {
+    signed: true,
+    customerName: q.acceptanceEvidence.customerPrintedName,
+    imageData: q.acceptanceEvidence.signatureImageDataUrl,
+    signedAt: ts,
+    ip: q.acceptanceEvidence.ip,
+    userAgent: q.acceptanceEvidence.userAgent
+  };
+  q.history.push({
+    ts,
+    action: "accepted",
+    by,
+    note: note || "Accepted via portal e-sign"
+  });
+  records[idx] = q;
+  await writeAll(records);
+  return q;
+}
+
+// Customer uploads their signed PDF — server stages it as an attachment
+// of kind "signed_pdf_return" and flips status to pending_admin_attestation.
+// The admin attestation step (recordPdfReturnAcceptance below) is what
+// actually accepts the quote — this just stages the evidence.
+async function stagePdfReturn(quoteId, { buffer, filename, senderEmail = "" } = {}) {
+  if (!buffer || !buffer.length) throw new Error("PDF return has no data.");
+  if (buffer.length > MAX_ATTACHMENT_BYTES) {
+    throw new Error(`Signed PDF too large (${(buffer.length / 1_000_000).toFixed(1)} MB > 25 MB cap).`);
+  }
+  // Bypass the standard locked-proposal gate by using kind=signed_pdf_return
+  // (addAttachment whitelists this kind specifically on locked proposals).
+  const att = await addAttachment(quoteId, {
+    buffer,
+    mimeType: "application/pdf",
+    filename: filename || `signed-${quoteId}.pdf`,
+    kind: "signed_pdf_return",
+    caption: senderEmail ? `Received from ${senderEmail}` : "Customer-returned signed PDF",
+    uploadedBy: "customer"
+  });
+
+  const records = await readAll();
+  const idx = records.findIndex((q) => q.id === quoteId);
+  if (idx === -1) return null;
+  const q = records[idx];
+  q.status = "pending_admin_attestation";
+  q.acceptanceEvidence = {
+    method: "pdf_return",
+    uploadedPdfAttachmentId: att.id,
+    senderEmail: String(senderEmail || "").toLowerCase().trim(),
+    receivedAt: nowIso(),
+    confirmedBy: null,
+    confirmedAt: null,
+    adminNote: ""
+  };
+  q.history.push({
+    ts: nowIso(),
+    action: "pdf_return_received",
+    by: "customer",
+    note: senderEmail ? `from ${senderEmail}` : ""
+  });
+  records[idx] = q;
+  await writeAll(records);
+  return q;
+}
+
+async function recordPdfReturnAcceptance(quoteId, { adminUser, adminNote = "", senderEmailOverride = "" } = {}) {
+  const records = await readAll();
+  const idx = records.findIndex((q) => q.id === quoteId);
+  if (idx === -1) return null;
+  const q = records[idx];
+  if (q.status === "accepted" && q.acceptanceMethod === "pdf_return") return q; // idempotent
+  if (!q.acceptanceEvidence || q.acceptanceEvidence.method !== "pdf_return") {
+    throw new Error("No PDF return is staged for this quote.");
+  }
+  const ts = nowIso();
+  q.status = "accepted";
+  q.acceptedAt = ts;
+  q.acceptanceMethod = "pdf_return";
+  q.acceptanceEvidence = {
+    ...q.acceptanceEvidence,
+    senderEmail: senderEmailOverride
+      ? String(senderEmailOverride).toLowerCase().trim()
+      : q.acceptanceEvidence.senderEmail,
+    confirmedBy: String(adminUser || "admin").slice(0, 80),
+    confirmedAt: ts,
+    adminNote: String(adminNote || "").slice(0, 2000)
+  };
+  q.history.push({
+    ts,
+    action: "accepted",
+    by: adminUser || "admin",
+    note: adminNote || "Accepted via PDF-return — admin attested"
+  });
+  records[idx] = q;
+  await writeAll(records);
+  return q;
+}
+
+// ---- Revisions ------------------------------------------------------
+//
+// On a sent project_proposal, customer asks for changes. createRevision
+// clones to a new Q-YYYY-NNNN with revisionOf pointing at the original;
+// the original gets status: "superseded" + supersededBy back-reference.
+// New revision starts in "draft" so Patrick can edit the sections,
+// attachments are copied (new ids, same files duplicated on disk), and
+// the chain extends (v3 → v2 → v1).
+
+async function createRevision(originalId, { by = "admin", note = "" } = {}) {
+  const records = await readAll();
+  const idx = records.findIndex((q) => q.id === originalId);
+  if (idx === -1) throw new Error(`Quote ${originalId} not found.`);
+  const original = records[idx];
+  if (original.type !== "project_proposal") {
+    throw new Error("Only project_proposal quotes support revisions.");
+  }
+  if (original.status === "draft") {
+    throw new Error("Original is still a draft — edit it directly rather than creating a revision.");
+  }
+  if (original.status === "superseded") {
+    throw new Error("Original has already been superseded.");
+  }
+
+  const year = new Date().getUTCFullYear();
+  const newId = await nextQuoteId(year);
+
+  const revision = blankQuote();
+  revision.id = newId;
+  revision.type = "project_proposal";
+  revision.status = "draft";
+  revision.createdAt = nowIso();
+  revision.createdBy = by;
+  revision.version = (Number(original.version) || 1) + 1;
+  revision.supersedesId = original.id;
+  revision.revisionOf = original.id;
+  revision.customerId = original.customerId;
+  revision.customerEmail = original.customerEmail;
+  revision.propertyId = original.propertyId;
+  revision.leadId = original.leadId;
+  revision.branch = original.branch;
+  revision.billingMode = original.billingMode;
+  revision.customRates = { ...original.customRates };
+  revision.scope = original.scope;
+  revision.proposalSections = (original.proposalSections || []).map((s, i) => ({
+    ...s,
+    id: newSectionId(),
+    order: i,
+    attachmentIds: [] // re-anchored below after attachments are copied
+  }));
+  revision.lineItems = (original.lineItems || []).map((li) => ({
+    ...li,
+    id: "li_" + random8()
+  }));
+  const totals = computeProposalTotals(revision.lineItems);
+  revision.subtotal = totals.subtotal;
+  revision.hst = totals.hst;
+  revision.total = totals.total;
+  revision.validUntil = plusDaysIso(PROPOSAL_DEFAULT_VALIDITY_DAYS);
+  revision.validUntilDate = revision.validUntil;
+  revision.history = [
+    { ts: revision.createdAt, action: "created", by, note: `Revision of ${original.id}` }
+  ];
+
+  // Copy attachments — both metadata (with new ids) AND files on disk.
+  // Section attachmentIds are re-mapped in lock-step.
+  const idMap = new Map();
+  revision.attachments = [];
+  for (const att of (original.attachments || [])) {
+    if (att.kind === "signed_pdf_return") continue; // don't carry signed PDFs forward
+    const newAttId = newAttachmentId();
+    idMap.set(att.id, newAttId);
+    revision.attachments.push({ ...att, id: newAttId, uploadedAt: revision.createdAt, uploadedBy: by });
+    try {
+      const ext = extForMime(att.mimeType);
+      const oldPath = path.join(ATTACHMENTS_DIR, original.id, `${att.id}.${ext}`);
+      const newDir = await ensureAttachmentDir(newId);
+      const newPath = path.join(newDir, `${newAttId}.${ext}`);
+      const buf = await fs.readFile(oldPath);
+      await fs.writeFile(newPath, buf);
+    } catch (err) {
+      console.warn(`[quotes] revision attachment copy failed for ${att.id}:`, err?.message);
+    }
+  }
+  // Remap section anchor ids.
+  for (let i = 0; i < revision.proposalSections.length; i++) {
+    const original_sec = original.proposalSections[i];
+    if (Array.isArray(original_sec?.attachmentIds)) {
+      revision.proposalSections[i].attachmentIds = original_sec.attachmentIds
+        .map((oldId) => idMap.get(oldId))
+        .filter(Boolean);
+    }
+  }
+
+  records.unshift(revision);
+
+  // Flip the original to superseded.
+  original.status = "superseded";
+  original.supersededBy = newId;
+  original.history.push({
+    ts: nowIso(),
+    action: "superseded",
+    by,
+    note: note || `Replaced by revision ${newId} (v${revision.version})`
+  });
+
+  await writeAll(records);
+  return revision;
+}
+
 module.exports = {
   STATUSES,
   TYPES,
+  PROPOSAL_BRANCHES,
+  BILLING_MODES,
+  ACCEPTANCE_METHODS,
+  PROPOSAL_SECTION_KINDS,
+  ATTACHMENT_KINDS,
+  ATTACHMENT_MIME_WHITELIST,
+  SCOPE_PROTECTED_FIELDS,
   DEFAULT_VALIDITY_DAYS,
+  PROPOSAL_DEFAULT_VALIDITY_DAYS,
   HST_RATE,
+  MAX_ATTACHMENT_BYTES,
+  MAX_TOTAL_ATTACHMENT_BYTES,
   validateQuotePayload,
   list,
   get,
@@ -661,5 +1498,22 @@ module.exports = {
   softDelete,
   restore,
   listDeleted,
-  purgeDeleted
+  purgeDeleted,
+  // project_proposal-specific
+  isProposalLocked,
+  findProtectedFieldTouched,
+  updateProposal,
+  defaultProposalSections,
+  normalizeProposalSection,
+  normalizeProposalLineItem,
+  computeProposalTotals,
+  addAttachment,
+  removeAttachment,
+  readAttachmentBuffer,
+  listAttachments,
+  snapshotRatesFromCustomer,
+  recordPortalSignAcceptance,
+  stagePdfReturn,
+  recordPdfReturnAcceptance,
+  createRevision
 };

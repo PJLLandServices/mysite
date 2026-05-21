@@ -1,19 +1,15 @@
-// Quote PDF generator (spec §4.1 formal_quote PDF). Branded one-page
-// document the customer can save / print / sign. Uses pdfkit — pure JS,
-// no native binaries, ~500KB install. Generates a stream the caller
-// pipes into the HTTP response or attaches to email.
+// Quote PDF generator. Dispatcher by quote.type:
 //
-// Layout:
-//   - Header: PJL green band with logo text + quote number + date
-//   - Bill-to block: customer name / address / email / phone
-//   - Scope description (if formal quote with rich scope text)
-//   - Line items table: description / qty / unit / total
-//   - Totals: subtotal / HST 13% / total CAD
-//   - Terms block: standard PJL terms (warranty, payment, scope changes)
-//   - Footer: PJL contact + URL
-//   - Signature block (always shown, "Customer signature" with line —
-//     printed copy can be ink-signed; portal-signed quotes get the
-//     image embedded post-sign)
+//   ai_repair_quote / on_site_quote / formal_quote / legacy →
+//     generateQuotePdf (the one-page branded layout below)
+//
+//   project_proposal →
+//     renderProjectProposalPdf (multi-section narrative with embedded
+//     attachments + dual-acceptance block). Brief 1 (May 2026).
+//
+// Both renderers share the brand palette + Barlow Condensed heading
+// font + logo helpers. The dispatcher pattern keeps the existing
+// renderer untouched so AI-repair / on-site flows are not at risk.
 
 const PDFDocument = require("pdfkit");
 const fsSync = require("node:fs");
@@ -282,4 +278,450 @@ function generateQuotePdf(quote, opts = {}) {
   return doc;
 }
 
-module.exports = { generateQuotePdf };
+// ---- Project Proposal PDF (Brief 1) ----------------------------------
+//
+// Multi-section narrative for project_proposal quotes. Layout follows
+// the McDonald's Hampshire Gate estimate as the visual reference:
+//
+//   Page 1 — cover. Big "PROPOSAL" header, quote id, branch tag,
+//            customer + property block.
+//   Body   — proposalSections rendered in order. Each section gets a
+//            green section header (Barlow Condensed) + body prose.
+//            Attachments anchored to a section are rendered inline at
+//            section end (images fit-to-width, PDFs not embedded — a
+//            "See attached: <caption>" footnote instead).
+//   Totals — subtotal / HST / total just before the acceptance block.
+//   Accept — dual-path block: portal e-sign URL/QR (PJL just renders
+//            the URL — no QR lib dependency) AND printed signature
+//            lines for ink-sign + email-back. Both methods presented.
+//   Footer — small print, contact info.
+
+const BRANCH_LABELS = {
+  gc_subcontract: "GC Subcontract",
+  direct_residential: "Residential",
+  lighting_design: "Lighting Design",
+  renovation_coordination: "Renovation Coordination",
+  change_order: "Change Order"
+};
+
+function renderProjectProposalPdf(quote, opts = {}) {
+  const customer = opts.customer || {};
+  const property = opts.property || {};
+  const acceptanceUrl = opts.acceptanceUrl || null;
+  const returnEmail = opts.returnEmail || "info@pjllandservices.com";
+
+  const doc = new PDFDocument({
+    size: "LETTER",
+    margins: { top: 60, bottom: 60, left: 60, right: 60 },
+    info: {
+      Title: `PJL Proposal ${quote.id}`,
+      Author: "PJL Land Services",
+      Subject: quote.scope || "Project proposal",
+      Keywords: `proposal ${quote.id} pjl land services ${quote.branch || ""}`
+    }
+  });
+
+  const barlow = barlowBuffer();
+  if (barlow) doc.registerFont("Barlow-Bold", barlow);
+
+  const PAGE_W = doc.page.width;
+  const MARGIN_X = 60;
+  const contentWidth = PAGE_W - MARGIN_X * 2;
+
+  // ---- Cover page header --------------------------------------------
+  const top = 40;
+  const LOGO_W = 160;
+  doc.font(fontHeading(doc)).fontSize(34).fillColor(PJL_GREEN);
+  doc.text("PROPOSAL", MARGIN_X, top, {
+    characterSpacing: 1.5,
+    width: contentWidth - LOGO_W - 16,
+    lineGap: 0
+  });
+
+  const logo = logoBuffer();
+  if (logo) {
+    doc.image(logo, PAGE_W - MARGIN_X - LOGO_W, top - 12, { width: LOGO_W });
+  } else {
+    doc.font(fontHeading(doc)).fontSize(22).fillColor(PJL_GREEN);
+    doc.text("PJL", PAGE_W - MARGIN_X - 200, top + 6, {
+      width: 200, align: "right", characterSpacing: 1
+    });
+    doc.fontSize(11).fillColor(PJL_GREEN);
+    doc.text("LAND SERVICES", PAGE_W - MARGIN_X - 200, top + 32, {
+      width: 200, align: "right", characterSpacing: 3
+    });
+  }
+
+  let y = top + 50;
+  doc.font("Helvetica-Bold").fontSize(10).fillColor(PJL_TEXT);
+  const branchLabel = quote.branch ? BRANCH_LABELS[quote.branch] || quote.branch : "";
+  const versionTag = (Number(quote.version) || 1) > 1 ? ` · v${quote.version}` : "";
+  doc.text(`${quote.id}${versionTag}${branchLabel ? "  ·  " + branchLabel : ""}`, MARGIN_X, y);
+  y = doc.y + 2;
+  doc.font("Helvetica").fontSize(9).fillColor(PJL_MUTED);
+  doc.text(
+    `Issued ${fmtDate(quote.createdAt)}${quote.validUntil ? `  ·  Valid through ${fmtDate(quote.validUntil)}` : ""}`,
+    MARGIN_X, y
+  );
+
+  // Company contact strip on its own line.
+  y = doc.y + 2;
+  doc.text("PJL Land Services  ·  1118 Cenotaph Blvd., Newmarket, ON  L3X 0A5  ·  (905) 960-0181  ·  info@pjllandservices.com", MARGIN_X, y);
+
+  // Customer + property block.
+  y = Math.max(doc.y, 130) + 14;
+  doc.fillColor(PJL_MUTED).fontSize(9).font("Helvetica-Bold")
+    .text("PREPARED FOR", MARGIN_X, y, { characterSpacing: 1 });
+  doc.fillColor(PJL_TEXT).font("Helvetica").fontSize(12);
+  const billToName = customer.name || customer.customerName || quote.customerEmail || "Customer";
+  doc.text(billToName, MARGIN_X, doc.y + 4);
+  if (property.address || customer.address) {
+    doc.fontSize(10).fillColor(PJL_MUTED).text(property.address || customer.address);
+  }
+  const contactBits = [customer.phone || customer.customerPhone, quote.customerEmail].filter(Boolean);
+  if (contactBits.length) {
+    doc.fontSize(10).fillColor(PJL_MUTED).text(contactBits.join(" · "));
+  }
+  doc.moveDown(1);
+
+  // ---- Sections -----------------------------------------------------
+  const orderedSections = Array.isArray(quote.proposalSections)
+    ? [...quote.proposalSections].sort((a, b) => (Number(a.order) || 0) - (Number(b.order) || 0))
+    : [];
+  // line_items + acceptance_block are auto-rendered after the narrative
+  // sections — skip them here to avoid duplication.
+  const narrativeSections = orderedSections.filter(
+    (s) => s.kind !== "line_items" && s.kind !== "acceptance_block"
+  );
+
+  for (const sec of narrativeSections) {
+    renderSection(doc, sec, quote, { MARGIN_X, contentWidth });
+  }
+
+  // ---- Line items + totals -----------------------------------------
+  doc.moveDown(1);
+  renderProposalLineItems(doc, quote, { MARGIN_X, contentWidth });
+
+  // ---- Acceptance block --------------------------------------------
+  doc.moveDown(1.2);
+  renderAcceptanceBlock(doc, quote, {
+    MARGIN_X, contentWidth, acceptanceUrl, returnEmail
+  });
+
+  // ---- Footer on every page ----------------------------------------
+  // pdfkit lets us register an event for new pages — we add a small
+  // footer after each addPage, but for the simple proposal flow the
+  // body itself flows multi-page automatically so a single end-of-doc
+  // contact line is enough.
+  const restoreBottom = doc.page.margins.bottom;
+  doc.page.margins.bottom = 0;
+  const footerY = doc.page.height - 50;
+  doc.moveTo(MARGIN_X, footerY).lineTo(PAGE_W - MARGIN_X, footerY).strokeColor(PJL_MUTED).lineWidth(0.5).stroke();
+  doc.font("Helvetica").fontSize(9).fillColor(PJL_MUTED);
+  doc.text(
+    "PJL Land Services · Newmarket, Ontario · (905) 960-0181 · pjllandservices.com",
+    MARGIN_X, footerY + 8,
+    { width: PAGE_W - MARGIN_X * 2, align: "center", lineBreak: false }
+  );
+  doc.page.margins.bottom = restoreBottom;
+
+  doc.end();
+  return doc;
+}
+
+// Render one narrative section: green section header (Barlow), body
+// prose underneath (Helvetica), then any anchored attachments. Page
+// break if there isn't room — pdfkit handles continuation automatically
+// when text() crosses the bottom margin.
+function renderSection(doc, sec, quote, { MARGIN_X, contentWidth }) {
+  // Compute section header. If the section is empty (no body, no
+  // attachments), skip it — empty placeholder sections in the builder
+  // shouldn't print as blank pages in the PDF.
+  const hasBody = sec.body && String(sec.body).trim();
+  const hasAttachments = Array.isArray(sec.attachmentIds) && sec.attachmentIds.length;
+  if (!hasBody && !hasAttachments) return;
+
+  // Avoid orphaned headers — if there's <80pt left on the page, break.
+  if (doc.y > doc.page.height - 140) doc.addPage();
+
+  doc.moveDown(0.6);
+  doc.fillColor(PJL_GREEN).font(fontHeading(doc)).fontSize(15);
+  doc.text(String(sec.title || sec.kind || "Section").toUpperCase(), MARGIN_X, doc.y, {
+    characterSpacing: 1.2,
+    width: contentWidth
+  });
+  // Underline rule.
+  const ruleY = doc.y + 2;
+  doc.moveTo(MARGIN_X, ruleY).lineTo(MARGIN_X + 60, ruleY).strokeColor(PJL_GREEN).lineWidth(1.5).stroke();
+  doc.moveDown(0.4);
+
+  if (hasBody) {
+    doc.fillColor(PJL_TEXT).font("Helvetica").fontSize(10);
+    // Sanitize light HTML — strip tags so admin-pasted rich text doesn't
+    // explode the PDF. We treat the body as plain text with paragraph
+    // breaks (\n\n).
+    const plain = String(sec.body)
+      .replace(/<br\s*\/?>/gi, "\n")
+      .replace(/<\/p>/gi, "\n\n")
+      .replace(/<[^>]+>/g, "")
+      .replace(/&nbsp;/g, " ")
+      .replace(/&amp;/g, "&")
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">");
+    const paragraphs = plain.split(/\n\n+/);
+    for (const p of paragraphs) {
+      doc.text(p.trim(), MARGIN_X, doc.y, { width: contentWidth, lineGap: 2 });
+      doc.moveDown(0.4);
+    }
+  }
+
+  // Render anchored attachments inline at section end. Images get
+  // embedded fit-to-width; PDFs surface a "See attached: <caption>"
+  // line because pdfkit can't easily merge multi-page PDF inputs.
+  if (hasAttachments) {
+    for (const attId of sec.attachmentIds) {
+      const att = (quote.attachments || []).find((a) => a.id === attId);
+      if (!att) continue;
+      renderAttachmentInline(doc, att, quote, { MARGIN_X, contentWidth });
+    }
+  }
+}
+
+function renderAttachmentInline(doc, att, quote, { MARGIN_X, contentWidth }) {
+  doc.moveDown(0.4);
+  if (att.mimeType === "image/png" || att.mimeType === "image/jpeg") {
+    try {
+      const ext = att.mimeType === "image/png" ? "png" : "jpg";
+      const imgPath = path.resolve(
+        __dirname, "..", "data", "quote-attachments", quote.id, `${att.id}.${ext}`
+      );
+      if (fsSync.existsSync(imgPath)) {
+        const buf = fsSync.readFileSync(imgPath);
+        // Roughly half-page max so multiple attachments don't push the
+        // proposal to absurd page counts. pdfkit's fit honours aspect.
+        const maxH = 320;
+        if (doc.y + maxH > doc.page.height - 80) doc.addPage();
+        doc.image(buf, MARGIN_X, doc.y, { fit: [contentWidth, maxH], align: "center" });
+        doc.y = doc.y + Math.min(maxH, contentWidth * 0.75) + 4;
+        if (att.caption) {
+          doc.font("Helvetica-Oblique").fontSize(9).fillColor(PJL_MUTED)
+            .text(att.caption, MARGIN_X, doc.y, { width: contentWidth, align: "center" });
+          doc.moveDown(0.4);
+        }
+        return;
+      }
+    } catch (err) {
+      // fall through to caption-only display
+    }
+  }
+  // PDF attachments or fallback for failed image reads.
+  doc.font("Helvetica-Oblique").fontSize(9).fillColor(PJL_MUTED);
+  doc.text(`See attached: ${att.caption || att.filename || att.id}`, MARGIN_X, doc.y, {
+    width: contentWidth
+  });
+  doc.moveDown(0.3);
+}
+
+function renderProposalLineItems(doc, quote, { MARGIN_X, contentWidth }) {
+  if (!Array.isArray(quote.lineItems) || !quote.lineItems.length) return;
+
+  if (doc.y > doc.page.height - 200) doc.addPage();
+
+  doc.fillColor(PJL_GREEN).font(fontHeading(doc)).fontSize(15);
+  doc.text("ITEMIZED PRICING", MARGIN_X, doc.y, { characterSpacing: 1.2 });
+  const ruleY = doc.y + 2;
+  doc.moveTo(MARGIN_X, ruleY).lineTo(MARGIN_X + 60, ruleY).strokeColor(PJL_GREEN).lineWidth(1.5).stroke();
+  doc.moveDown(0.4);
+
+  const colDesc = MARGIN_X;
+  const colQty = MARGIN_X + 280;
+  const colUnit = MARGIN_X + 340;
+  const colTotal = MARGIN_X + 420;
+
+  // Table header.
+  const tableTop = doc.y + 4;
+  doc.fillColor(PJL_MUTED).fontSize(9).font("Helvetica-Bold");
+  doc.text("DESCRIPTION", colDesc, tableTop, { characterSpacing: 1 });
+  doc.text("QTY", colQty, tableTop, { width: 50, align: "right", characterSpacing: 1 });
+  doc.text("UNIT", colUnit, tableTop, { width: 70, align: "right", characterSpacing: 1 });
+  doc.text("LINE TOTAL", colTotal, tableTop, { width: 80, align: "right", characterSpacing: 1 });
+  doc.moveTo(MARGIN_X, tableTop + 14).lineTo(MARGIN_X + contentWidth, tableTop + 14)
+    .strokeColor(PJL_MUTED).lineWidth(0.5).stroke();
+
+  let rowY = tableTop + 22;
+  doc.font("Helvetica").fontSize(10).fillColor(PJL_TEXT);
+  for (const li of quote.lineItems) {
+    if (rowY > doc.page.height - 120) {
+      doc.addPage();
+      rowY = 60;
+    }
+    const label = li.label || li.sourceKey || "Line item";
+    const qty = Number(li.qty) || 1;
+    const price = Number(li.price) || 0;
+    const lineTotal = Number(li.lineTotal) || (price * qty);
+    doc.text(label, colDesc, rowY, { width: 260 });
+    if (li.description) {
+      doc.fontSize(9).fillColor(PJL_MUTED).text(li.description, colDesc, doc.y + 1, { width: 260 });
+      doc.fontSize(10).fillColor(PJL_TEXT);
+    }
+    doc.text(String(qty) + (li.unit ? "" : ""), colQty, rowY, { width: 50, align: "right" });
+    doc.text(fmt(price) + (li.unit ? `/${li.unit.replace("per_", "")}` : ""),
+      colUnit, rowY, { width: 70, align: "right" });
+    doc.text(fmt(lineTotal), colTotal, rowY, { width: 80, align: "right" });
+    rowY = doc.y + 8;
+  }
+
+  // Totals.
+  doc.moveTo(colUnit, rowY).lineTo(MARGIN_X + contentWidth, rowY)
+    .strokeColor(PJL_MUTED).lineWidth(0.5).stroke();
+  rowY += 8;
+  const subtotal = Number(quote.subtotal) || 0;
+  const hst = Number(quote.hst) || Math.round(subtotal * HST_RATE * 100) / 100;
+  const total = Number(quote.total) || Math.round((subtotal + hst) * 100) / 100;
+
+  doc.fillColor(PJL_MUTED).fontSize(10).font("Helvetica");
+  doc.text("Subtotal", colUnit, rowY, { width: 70, align: "right" });
+  doc.fillColor(PJL_TEXT).text(fmt(subtotal), colTotal, rowY, { width: 80, align: "right" });
+  rowY += 16;
+  doc.fillColor(PJL_MUTED).text("HST (13%)", colUnit, rowY, { width: 70, align: "right" });
+  doc.fillColor(PJL_TEXT).text(fmt(hst), colTotal, rowY, { width: 80, align: "right" });
+  rowY += 18;
+  doc.moveTo(colUnit, rowY).lineTo(MARGIN_X + contentWidth, rowY).strokeColor(PJL_GREEN).lineWidth(1).stroke();
+  rowY += 6;
+  doc.fillColor(PJL_GREEN).font("Helvetica-Bold").fontSize(13);
+  doc.text("Total CAD", colUnit, rowY, { width: 70, align: "right" });
+  doc.text(fmt(total), colTotal, rowY, { width: 80, align: "right" });
+  doc.y = rowY + 28;
+
+  if (quote.billingMode === "time_and_material") {
+    doc.font("Helvetica-Oblique").fontSize(9).fillColor(PJL_MUTED);
+    const rate = quote.customRates?.labour;
+    const rateLine = Number.isFinite(Number(rate)) ? `Locked labour rate: $${Number(rate).toFixed(2)}/hr.` : "";
+    doc.text(
+      `Time-and-material billing. Quantities above are estimates; actuals invoiced at the rates shown. ${rateLine}`,
+      MARGIN_X, doc.y, { width: contentWidth }
+    );
+    doc.moveDown(0.4);
+  }
+}
+
+function renderAcceptanceBlock(doc, quote, { MARGIN_X, contentWidth, acceptanceUrl, returnEmail }) {
+  if (doc.y > doc.page.height - 260) doc.addPage();
+
+  doc.fillColor(PJL_GREEN).font(fontHeading(doc)).fontSize(15);
+  doc.text("ACCEPTANCE", MARGIN_X, doc.y, { characterSpacing: 1.2 });
+  const ruleY = doc.y + 2;
+  doc.moveTo(MARGIN_X, ruleY).lineTo(MARGIN_X + 60, ruleY).strokeColor(PJL_GREEN).lineWidth(1.5).stroke();
+  doc.moveDown(0.4);
+
+  doc.fillColor(PJL_TEXT).font("Helvetica").fontSize(10);
+  doc.text(
+    "You may accept this proposal in either of two ways — both produce a legally binding acceptance.",
+    MARGIN_X, doc.y, { width: contentWidth }
+  );
+  doc.moveDown(0.4);
+
+  // Already-accepted branch: show the evidence inline.
+  if (quote.acceptanceMethod === "portal_esign" && quote.signature?.signed) {
+    doc.font("Helvetica-Bold").fontSize(11).fillColor(PJL_GREEN);
+    doc.text("Accepted via portal e-sign.", MARGIN_X, doc.y, { width: contentWidth });
+    try {
+      const m = String(quote.signature.imageData).match(/^data:image\/[a-z]+;base64,(.+)$/);
+      if (m) {
+        const buf = Buffer.from(m[1], "base64");
+        doc.image(buf, MARGIN_X, doc.y + 6, { fit: [220, 60] });
+        doc.y = doc.y + 70;
+      }
+    } catch (_) { /* ignore */ }
+    doc.font("Helvetica").fontSize(10).fillColor(PJL_TEXT);
+    doc.text(`Signed by ${quote.signature.customerName || "—"}`, MARGIN_X, doc.y + 4);
+    if (quote.signature.signedAt) {
+      doc.fontSize(9).fillColor(PJL_MUTED)
+        .text(`on ${new Date(quote.signature.signedAt).toLocaleString("en-CA")}` +
+              (quote.signature.ip ? ` · IP ${quote.signature.ip}` : ""), MARGIN_X, doc.y);
+    }
+    return;
+  }
+  if (quote.acceptanceMethod === "pdf_return" && quote.acceptanceEvidence?.confirmedAt) {
+    doc.font("Helvetica-Bold").fontSize(11).fillColor(PJL_GREEN);
+    doc.text("Accepted via signed PDF return.", MARGIN_X, doc.y, { width: contentWidth });
+    doc.font("Helvetica").fontSize(10).fillColor(PJL_TEXT);
+    doc.text(
+      `Confirmed on ${new Date(quote.acceptanceEvidence.confirmedAt).toLocaleDateString("en-CA")}` +
+      (quote.acceptanceEvidence.senderEmail ? ` · returned from ${quote.acceptanceEvidence.senderEmail}` : ""),
+      MARGIN_X, doc.y + 4, { width: contentWidth }
+    );
+    return;
+  }
+
+  // Two-column layout — left = portal e-sign, right = print + return.
+  const colWidth = (contentWidth - 20) / 2;
+  const leftX = MARGIN_X;
+  const rightX = MARGIN_X + colWidth + 20;
+  const blockTop = doc.y;
+
+  // ---- Left: portal e-sign ----
+  doc.font("Helvetica-Bold").fontSize(11).fillColor(PJL_GREEN);
+  doc.text("Option A — Sign online", leftX, blockTop, { width: colWidth });
+  doc.font("Helvetica").fontSize(9).fillColor(PJL_TEXT);
+  doc.text(
+    "Open the link below on any device. Draw your signature on the page and tap Approve. We're notified immediately.",
+    leftX, doc.y + 4, { width: colWidth }
+  );
+  if (acceptanceUrl) {
+    doc.moveDown(0.4);
+    doc.font("Helvetica-Bold").fontSize(9).fillColor(PJL_GREEN);
+    doc.text(acceptanceUrl, leftX, doc.y, { width: colWidth, link: acceptanceUrl, underline: true });
+  } else {
+    doc.moveDown(0.4);
+    doc.font("Helvetica-Oblique").fontSize(9).fillColor(PJL_MUTED);
+    doc.text("(Acceptance link will be emailed/texted on send.)", leftX, doc.y, { width: colWidth });
+  }
+  const leftBottom = doc.y;
+
+  // ---- Right: print, sign, return ----
+  doc.y = blockTop;
+  doc.font("Helvetica-Bold").fontSize(11).fillColor(PJL_GREEN);
+  doc.text("Option B — Print, sign, return", rightX, blockTop, { width: colWidth });
+  doc.font("Helvetica").fontSize(9).fillColor(PJL_TEXT);
+  doc.text(
+    `Print this page, sign below, and email a scan back to ${returnEmail}. We'll confirm receipt within one business day.`,
+    rightX, doc.y + 4, { width: colWidth }
+  );
+  doc.moveDown(0.6);
+
+  // Signature line + printed name line + date line.
+  const sigY = doc.y + 24;
+  doc.moveTo(rightX, sigY).lineTo(rightX + colWidth - 10, sigY).strokeColor(PJL_TEXT).lineWidth(0.5).stroke();
+  doc.font("Helvetica").fontSize(8).fillColor(PJL_MUTED)
+    .text("Customer signature", rightX, sigY + 3, { width: colWidth });
+
+  const nameY = sigY + 36;
+  doc.moveTo(rightX, nameY).lineTo(rightX + colWidth - 10, nameY).strokeColor(PJL_TEXT).lineWidth(0.5).stroke();
+  doc.font("Helvetica").fontSize(8).fillColor(PJL_MUTED)
+    .text("Printed name", rightX, nameY + 3, { width: colWidth });
+
+  const dateY = nameY + 36;
+  doc.moveTo(rightX, dateY).lineTo(rightX + 120, dateY).strokeColor(PJL_TEXT).lineWidth(0.5).stroke();
+  doc.font("Helvetica").fontSize(8).fillColor(PJL_MUTED)
+    .text("Date", rightX, dateY + 3);
+
+  doc.y = Math.max(leftBottom, dateY + 18);
+}
+
+// ---- Dispatcher ------------------------------------------------------
+
+const _originalGenerateQuotePdf = generateQuotePdf;
+
+function renderQuotePdf(quote, opts = {}) {
+  if (quote && quote.type === "project_proposal") {
+    return renderProjectProposalPdf(quote, opts);
+  }
+  return _originalGenerateQuotePdf(quote, opts);
+}
+
+module.exports = {
+  generateQuotePdf,            // unchanged — back-compat for existing callers
+  renderQuotePdf,              // new dispatcher — prefer this for new code
+  renderProjectProposalPdf     // exported for direct invocation if needed
+};
