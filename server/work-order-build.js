@@ -545,31 +545,133 @@
     return null;
   }
 
+  // Render the parts catalog as a collapsible category > subcategory tree
+  // (matches the material-list builder pattern: `<details>` outer per
+  // category, inner `<details>` per subcategory). Each row gets a -/+
+  // qty stepper that stays keyboard-editable for cases like "I need 25
+  // of these — type it" alongside the common "just 3 — tap +/+/+" path.
+  //
+  // showPrices: false for the tomorrow's-pack picker (Patrick's call —
+  // tomorrow's plan is about WHAT not COST). True for consumed-today.
+  // Search bypasses the tree and renders a flat result list.
   function renderMaterialsCatalog(search) {
-    const parts = state.parts?.parts || state.parts || {};
-    const needle = String(search || "").toLowerCase();
-    const entries = Object.entries(parts).filter(([sku, part]) => {
-      if (!part) return false;
-      if (!needle) return true;
-      const label = String(partLabel(part, sku)).toLowerCase();
-      return sku.toLowerCase().includes(needle) || label.includes(needle);
-    }).slice(0, 100);
-    els.materialsCatalog.innerHTML = entries.map(([sku, part]) => {
-      const label = partLabel(part, sku);
-      const price = partPriceDollars(part);
-      const qty = state.materialsDraft[sku] || 0;
-      const priceTag = Number.isFinite(price) && price > 0
-        ? `<div class="tech-modal-catalog-price">$${price.toFixed(2)}${part.unit ? "/" + escapeHtml(part.unit) : ""}</div>`
-        : `<div class="tech-modal-catalog-price">—</div>`;
-      return `
-        <div class="tech-modal-catalog-row" data-sku="${escapeHtml(sku)}">
-          <div class="tech-modal-catalog-label">${escapeHtml(label)}</div>
-          ${priceTag}
-          <input type="number" class="tech-modal-catalog-qty" data-sku="${escapeHtml(sku)}" min="0" step="1" value="${qty}">
+    const partsRoot = state.parts || {};
+    const partsMap = partsRoot.parts || partsRoot;
+    const categories = Array.isArray(partsRoot.categories) ? partsRoot.categories : [];
+    const showPrices = !state._nextDayMatsMode;
+    const needle = String(search || "").trim().toLowerCase();
+
+    if (needle) {
+      // Search bypasses the tree and shows a flat capped list.
+      const entries = Object.entries(partsMap).filter(([sku, part]) => {
+        if (!part) return false;
+        const hay = [
+          sku, part.partNumber, part.description, part.category,
+          part.subcategory, part.size
+        ].map((v) => String(v || "").toLowerCase()).join(" ");
+        return hay.includes(needle);
+      }).slice(0, 60);
+      els.materialsCatalog.innerHTML = entries.length
+        ? `<div class="tech-cat-search-list">${entries.map(([sku, part]) => renderCatalogRow(sku, part, showPrices)).join("")}</div>`
+        : `<p class="tech-cat-empty">No matching parts.</p>`;
+    } else {
+      // Tree view — group by category > subcategory, sorted within
+      // each by part description for predictable order.
+      const partsByCatSub = new Map();
+      for (const [sku, part] of Object.entries(partsMap)) {
+        if (!part) continue;
+        const cat = part.category || "other";
+        const sub = part.subcategory || "Other";
+        if (!partsByCatSub.has(cat)) partsByCatSub.set(cat, new Map());
+        const subMap = partsByCatSub.get(cat);
+        if (!subMap.has(sub)) subMap.set(sub, []);
+        subMap.get(sub).push([sku, part]);
+      }
+      // Sort items within each subcategory by size-rank then description.
+      function sizeRank(s) {
+        const m = String(s || "").match(/[\d.]+/);
+        return m ? parseFloat(m[0]) : 999;
+      }
+      for (const subMap of partsByCatSub.values()) {
+        for (const list of subMap.values()) {
+          list.sort(([, a], [, b]) =>
+            sizeRank(a.size) - sizeRank(b.size) ||
+            String(a.description || "").localeCompare(String(b.description || ""))
+          );
+        }
+      }
+      // Render — use the canonical category order if defined.
+      const orderedCats = categories.length
+        ? categories.map((c) => c.key)
+        : [...partsByCatSub.keys()];
+      const catLabel = (key) => {
+        const found = categories.find((c) => c.key === key);
+        return found ? found.label : key.charAt(0).toUpperCase() + key.slice(1);
+      };
+      els.materialsCatalog.innerHTML = orderedCats.map((catKey) => {
+        const subMap = partsByCatSub.get(catKey);
+        if (!subMap || !subMap.size) return "";
+        const totalItems = [...subMap.values()].reduce((sum, list) => sum + list.length, 0);
+        const subBlocks = [...subMap.entries()]
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([sub, list]) => `
+            <details class="tech-cat-sub">
+              <summary>
+                ${escapeHtml(sub)}
+                <span class="tech-cat-sub-count">${list.length}</span>
+              </summary>
+              <div class="tech-cat-sub-items">
+                ${list.map(([sku, part]) => renderCatalogRow(sku, part, showPrices)).join("")}
+              </div>
+            </details>
+          `).join("");
+        return `
+          <details class="tech-cat">
+            <summary>
+              ${escapeHtml(catLabel(catKey))}
+              <span class="tech-cat-count">${totalItems}</span>
+            </summary>
+            <div class="tech-cat-body">${subBlocks}</div>
+          </details>
+        `;
+      }).join("");
+    }
+
+    // Wire the steppers + the keyboard inputs once after render.
+    wireCatalogRows();
+    updateMaterialsSummary();
+  }
+
+  // Render a single catalog row — size badge + description + (optional)
+  // price + qty stepper. Used by both the tree view and the search view.
+  function renderCatalogRow(sku, part, showPrices) {
+    const label = partLabel(part, sku);
+    const price = partPriceDollars(part);
+    const qty = state.materialsDraft[sku] || 0;
+    const sizeBadge = part.size ? `<span class="tech-cat-size">${escapeHtml(part.size)}</span>` : "";
+    const priceTag = showPrices && Number.isFinite(price) && price > 0
+      ? `<div class="tech-cat-price">$${price.toFixed(2)}${part.unit ? "/" + escapeHtml(part.unit) : ""}</div>`
+      : "";
+    return `
+      <div class="tech-cat-row" data-sku="${escapeHtml(sku)}">
+        <div class="tech-cat-row-info">
+          <div class="tech-cat-row-desc">${sizeBadge}<span>${escapeHtml(label)}</span></div>
+          <div class="tech-cat-row-meta">
+            <span class="tech-cat-sku">${escapeHtml(sku)}</span>${priceTag ? "<span class=\"tech-cat-sep\">·</span>" + priceTag : ""}
+          </div>
         </div>
-      `;
-    }).join("");
-    els.materialsCatalog.querySelectorAll(".tech-modal-catalog-qty").forEach((input) => {
+        <div class="tech-cat-stepper" role="group" aria-label="Quantity for ${escapeHtml(sku)}">
+          <button type="button" class="tech-cat-stepper-btn" data-stepper="dec" data-sku="${escapeHtml(sku)}" aria-label="Decrease">−</button>
+          <input type="number" inputmode="numeric" min="0" step="1" class="tech-cat-stepper-input" data-sku="${escapeHtml(sku)}" value="${qty}">
+          <button type="button" class="tech-cat-stepper-btn" data-stepper="inc" data-sku="${escapeHtml(sku)}" aria-label="Increase">+</button>
+        </div>
+      </div>
+    `;
+  }
+
+  function wireCatalogRows() {
+    // Set qty from the input (keyboard-editable).
+    els.materialsCatalog.querySelectorAll(".tech-cat-stepper-input").forEach((input) => {
       input.addEventListener("input", () => {
         const sku = input.dataset.sku;
         const q = parseFloat(input.value);
@@ -578,7 +680,24 @@
         updateMaterialsSummary();
       });
     });
-    updateMaterialsSummary();
+    // -/+ buttons increment / decrement.
+    els.materialsCatalog.querySelectorAll(".tech-cat-stepper-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const sku = btn.dataset.sku;
+        const dir = btn.dataset.stepper;
+        const current = Number(state.materialsDraft[sku]) || 0;
+        let next = dir === "inc" ? current + 1 : current - 1;
+        if (next < 0) next = 0;
+        // Update both state + the input field to keep them in sync.
+        const input = els.materialsCatalog.querySelector(
+          `.tech-cat-stepper-input[data-sku="${CSS.escape(sku)}"]`
+        );
+        if (input) input.value = next;
+        if (next > 0) state.materialsDraft[sku] = next;
+        else delete state.materialsDraft[sku];
+        updateMaterialsSummary();
+      });
+    });
   }
   function updateMaterialsSummary() {
     const entries = Object.entries(state.materialsDraft);
