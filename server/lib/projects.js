@@ -815,15 +815,25 @@ async function computeTAndMBilling(projectId, { partsCatalog = null } = {}) {
   for (const sku of sortedSkus) {
     const qty = skuTotals.get(sku);
     const part = partsCatalog?.parts?.[sku] || partsCatalog?.[sku];
-    const label = part?.label || part?.name || sku;
-    // Per the brief: surface a clear error if a consumed SKU has no
-    // retail price — admin must set one before billing.
-    const retail = part?.retail_price ?? part?.retailPrice ?? part?.price;
-    if (!Number.isFinite(Number(retail)) || Number(retail) < 0) {
+    // parts.json shape (spec §1.2): { sku, partNumber, category,
+    // subcategory, size, description, priceCents, unit }. The earlier
+    // implementation looked for `retail_price`/`retailPrice`/`price`
+    // — those don't exist on PJL's catalog entries, so every consumed
+    // SKU got flagged as "unknown" and billing refused to compute.
+    // Use priceCents/100 first; the dollar-field fallbacks remain so a
+    // future catalog with dollar pricing still works.
+    const label = (part?.description
+      ? part.description + (part.size ? ` (${part.size})` : "")
+      : part?.label || part?.name || sku);
+    let unitPrice = null;
+    if (Number.isFinite(Number(part?.priceCents))) unitPrice = Number(part.priceCents) / 100;
+    else if (Number.isFinite(Number(part?.retail_price))) unitPrice = Number(part.retail_price);
+    else if (Number.isFinite(Number(part?.retailPrice))) unitPrice = Number(part.retailPrice);
+    else if (Number.isFinite(Number(part?.price))) unitPrice = Number(part.price);
+    if (unitPrice == null || unitPrice < 0) {
       unknownSkus.push(sku);
       continue;
     }
-    const unitPrice = Number(retail);
     const lineTotal = Math.round(unitPrice * qty * 100) / 100;
     lineItems.push({
       source: "material",

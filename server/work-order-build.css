@@ -314,3 +314,57 @@
   font-size: 16px;
 }
 .tech-build-notes { position: relative; }
+
+/* ---- Uniform PJL button styles for tech mode ---------------------
+   Tech-mode pages don't load crm.css (where .pjl-btn lives) — so any
+   .pjl-btn / .pjl-btn-primary / .pjl-btn-outline classes I used in
+   build-mode modals were rendering as plain browser buttons. Mirror
+   the rules from crm.css here so every button is uniform: amber-on-
+   green for primary, white-with-green-border for outline. */
+.pjl-btn {
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px 18px;
+  border: 0;
+  border-radius: 8px;
+  color: #fff;
+  font: inherit;
+  font-weight: 700;
+  font-size: 14px;
+  cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+  text-decoration: none;
+}
+.pjl-btn:hover { transform: translateY(-1px); }
+.pjl-btn:disabled { opacity: 0.55; cursor: not-allowed; transform: none; }
+
+.pjl-btn-primary {
+  background: linear-gradient(135deg, #F59B4A 0%, #C96A2A 100%);
+  box-shadow: 0 8px 20px rgba(224,123,36,0.32);
+}
+.pjl-btn-primary:hover { box-shadow: 0 12px 28px rgba(224,123,36,0.5); }
+
+.pjl-btn-outline {
+  background: #fff;
+  border: 1.5px solid rgba(27, 77, 46, 0.30);
+  color: #1B4D2E;
+}
+.pjl-btn-outline:hover {
+  background: rgba(27, 77, 46, 0.06);
+  border-color: #1B4D2E;
+}
+
+/* is-danger-ish — green-then-amber for "destructive" primaries like
+   End session, Save & send. */
+.pjl-btn.is-danger-ish,
+.is-danger-ish {
+  background: #E07B24;
+  color: #fff;
+  border: none;
+  box-shadow: 0 8px 20px rgba(224,123,36,0.32);
+}
+.pjl-btn.is-danger-ish:hover,
+.is-danger-ish:hover { background: #C56A1F; box-shadow: 0 12px 28px rgba(224,123,36,0.5); }

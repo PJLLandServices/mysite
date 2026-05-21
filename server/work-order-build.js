@@ -219,7 +219,7 @@
     }
     html += items.map((m, idx) => {
       const part = state.parts?.[m.partSku] || state.parts?.parts?.[m.partSku];
-      const label = part?.label || part?.name || m.partSku;
+      const label = partLabel(part, m.partSku);
       return `
         <li class="tech-build-material-item" data-idx="${idx}">
           <span class="tech-build-material-label">${escapeHtml(label)}</span>
@@ -256,7 +256,7 @@
     }
     list.innerHTML = mats.map((m, idx) => {
       const part = state.parts?.[m.partSku] || state.parts?.parts?.[m.partSku];
-      const label = part?.label || part?.name || m.partSku;
+      const label = partLabel(part, m.partSku);
       return `<li class="tech-build-material-item" data-idx="${idx}"><span class="tech-build-material-label">${escapeHtml(label)}</span><span class="tech-build-material-qty">× ${escapeHtml(m.qty)}</span><button type="button" class="tech-build-material-remove" data-nextday-idx="${idx}" aria-label="Remove">×</button></li>`;
     }).join("");
     list.querySelectorAll("[data-nextday-idx]").forEach((btn) => {
@@ -320,22 +320,28 @@
     if (!mats.length || !state.project) return;
     if (!confirm(`Promote ${mats.length} item${mats.length === 1 ? "" : "s"} to a project material list?`)) return;
     try {
-      // Create a material list with parentType=project, tag='day_pack'.
+      // Create a material list under the project. material-lists.js
+      // expects `lineItems` (not `items`) with shape { sku, qty,
+      // status, notes } — earlier code sent `items` + `partSku` which
+      // got silently dropped and produced an empty list. The fix maps
+      // partSku → sku and items → lineItems.
       const r = await fetch("/api/material-lists", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          name: `Day-pack for ${state.wo.dailyLog?.workDate || "tomorrow"}`,
+          name: `Day-pack for ${state.wo.dailyLog?.workDate || "tomorrow"} (${state.wo.id})`,
           parentType: "project",
           parentId: state.project.id,
           customerName: state.project.customerName,
           customerEmail: state.project.customerEmail,
           address: state.project.address,
-          // Seed with the planned materials. The material-list endpoint
-          // accepts a `items` array of { partSku, qty }; if it ignores
-          // them on create the admin can add them in the builder.
-          items: mats.map((m) => ({ partSku: m.partSku, qty: m.qty, status: "need" })),
-          tag: "day_pack"
+          notes: `Promoted from WO ${state.wo.id} tomorrow's pack on ${new Date().toLocaleDateString("en-CA")}.`,
+          lineItems: mats.map((m) => ({
+            sku: m.partSku,
+            qty: Math.max(1, Math.floor(Number(m.qty) || 1)),
+            status: "need",
+            notes: m.note || ""
+          }))
         })
       });
       const data = await r.json().catch(() => ({}));
@@ -343,10 +349,12 @@
         showToast(data.errors?.[0] || "Promote failed.", { variant: "error" });
         return;
       }
-      showToast(`Material list ${data.list?.id} created.`, { variant: "success" });
-      // Open the new list so admin can finalize.
-      if (data.list?.id) {
-        setTimeout(() => { location.href = `/admin/material-list/${encodeURIComponent(data.list.id)}`; }, 800);
+      const newId = data.list?.id;
+      const lineCount = (data.list?.lineItems || []).length;
+      showToast(`Material list ${newId} created with ${lineCount} item${lineCount === 1 ? "" : "s"}.`, { variant: "success", durationMs: 6000 });
+      // Open the new list so admin can finalize / order.
+      if (newId) {
+        setTimeout(() => { location.href = `/admin/material-list/${encodeURIComponent(newId)}`; }, 1200);
       }
     } catch (err) { showToast(err.message || "Promote failed.", { variant: "error" }); }
   }
@@ -515,21 +523,48 @@
     els.materialsModal.hidden = false;
   }
   function closeMaterialsModal() { els.materialsModal.hidden = true; }
+  // Resolve a parts.json entry's human label. parts.json shape:
+  //   { sku, partNumber, category, subcategory, size, description,
+  //     priceCents, unit }
+  // Earlier code looked for `label`/`name` which don't exist on these
+  // entries — that's why the picker rendered only SKUs.
+  function partLabel(part, sku) {
+    if (!part) return sku;
+    if (part.description) {
+      const sizeBit = part.size ? ` (${part.size})` : "";
+      return part.description + sizeBit;
+    }
+    return part.label || part.name || sku;
+  }
+  function partPriceDollars(part) {
+    if (!part) return null;
+    if (Number.isFinite(Number(part.priceCents))) return Number(part.priceCents) / 100;
+    if (Number.isFinite(Number(part.retail_price))) return Number(part.retail_price);
+    if (Number.isFinite(Number(part.retailPrice))) return Number(part.retailPrice);
+    if (Number.isFinite(Number(part.price))) return Number(part.price);
+    return null;
+  }
+
   function renderMaterialsCatalog(search) {
     const parts = state.parts?.parts || state.parts || {};
     const needle = String(search || "").toLowerCase();
     const entries = Object.entries(parts).filter(([sku, part]) => {
       if (!part) return false;
       if (!needle) return true;
-      const label = String(part.label || part.name || sku).toLowerCase();
+      const label = String(partLabel(part, sku)).toLowerCase();
       return sku.toLowerCase().includes(needle) || label.includes(needle);
     }).slice(0, 100);
     els.materialsCatalog.innerHTML = entries.map(([sku, part]) => {
-      const label = part.label || part.name || sku;
+      const label = partLabel(part, sku);
+      const price = partPriceDollars(part);
       const qty = state.materialsDraft[sku] || 0;
+      const priceTag = Number.isFinite(price) && price > 0
+        ? `<div class="tech-modal-catalog-price">$${price.toFixed(2)}${part.unit ? "/" + escapeHtml(part.unit) : ""}</div>`
+        : `<div class="tech-modal-catalog-price">—</div>`;
       return `
         <div class="tech-modal-catalog-row" data-sku="${escapeHtml(sku)}">
           <div class="tech-modal-catalog-label">${escapeHtml(label)}</div>
+          ${priceTag}
           <input type="number" class="tech-modal-catalog-qty" data-sku="${escapeHtml(sku)}" min="0" step="1" value="${qty}">
         </div>
       `;
