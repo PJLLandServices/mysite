@@ -28,24 +28,25 @@
     });
   }
 })();
-// Materials section sub-nav popover. On viewports < 768px the four-tab
-// strip (Material Lists / Purchase Orders / Suppliers / Catalog) collapses
-// into a single labeled <details> dropdown. Close on outside-tap, on
-// Escape, and after a menu item is tapped (covers bf-cache restores).
-(function setupSubnavPopover() {
-  const subnav = document.querySelector(".suppliers-subnav-collapse");
-  if (!subnav) return;
+// Materials section sub-nav dropdown. On viewports < 768px the four-tab
+// strip (Material Lists / Purchase Orders / Suppliers / Catalog) is
+// hidden by CSS and the parallel <details class="suppliers-subnav-dropdown">
+// takes over. This handler closes the dropdown on outside-tap, on Escape,
+// and after a menu item is tapped (covers bf-cache restores).
+(function setupSubnavDropdown() {
+  const dropdown = document.querySelector(".suppliers-subnav-dropdown");
+  if (!dropdown) return;
   document.addEventListener("pointerdown", (event) => {
-    if (!subnav.open) return;
+    if (!dropdown.open) return;
     const target = event.target;
-    if (target && target.closest && target.closest(".suppliers-subnav-collapse")) return;
-    subnav.open = false;
+    if (target && target.closest && target.closest(".suppliers-subnav-dropdown")) return;
+    dropdown.open = false;
   });
   document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && subnav.open) subnav.open = false;
+    if (event.key === "Escape" && dropdown.open) dropdown.open = false;
   });
-  subnav.querySelectorAll(".suppliers-subnav-list a").forEach((a) => {
-    a.addEventListener("click", () => { subnav.open = false; });
+  dropdown.querySelectorAll(".suppliers-subnav-menu a").forEach((a) => {
+    a.addEventListener("click", () => { dropdown.open = false; });
   });
 })();
 
