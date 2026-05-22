@@ -382,7 +382,7 @@
 // offline-queue.js, work-order-tech.{html,js,css}. See
 // OFFLINE_QUEUE_INVESTIGATION.md for the root-cause analysis and
 // OFFLINE_QUEUE_RECOVERY.md for the field recovery procedure.
-const CACHE_VERSION = "pjl-tech-v40";
+const CACHE_VERSION = "pjl-tech-v41";
 const STATIC_ASSETS = [
   "/crm/work-order-tech.html",
   "/crm/work-order-tech.js",

@@ -17,7 +17,7 @@
 // tech-sw.js's CACHE_VERSION. If this string doesn't match the SW
 // cache version after deploy, the iPhone is serving stale JS — clear
 // website data and reload.
-const TECH_BUILD_VERSION = "tech-v40";
+const TECH_BUILD_VERSION = "tech-v41";
 function _setBadge(text, isError) {
   try {
     const badge = document.getElementById("techBuildBadge");
@@ -1014,6 +1014,28 @@ async function reloadStateFromServer() {
     wo = data.workOrder;
   } catch (err) {
     console.warn("[resync] fetch failed:", err?.message);
+    return;
+  }
+  // Version gate (May 22 — fix #2 for the de704fb drain regression).
+  // If the server hasn't advanced past our local state, the resync would
+  // re-render every main-screen surface for no reason. That's the
+  // visible "twitching" Patrick reported after de704fb shipped. Most
+  // drain events are no-ops at the page level — stuck-entry drops, or
+  // post-enqueue replays of our own just-PATCHed mutations — and the
+  // version match short-circuits all of them. The `state.updatedAt &&`
+  // guard is load-bearing: during init() the field can be null and we
+  // genuinely need to populate state, so we fall through.
+  if (wo.updatedAt && state.updatedAt && wo.updatedAt === state.updatedAt) {
+    return;
+  }
+  // Inflight-at-completion guard. The fetch above took a few hundred ms;
+  // during that window the tech could have started a PATCH. If we
+  // populate state + re-render now, we blow away the in-flight edit
+  // with the pre-PATCH server snapshot. Defer to pendingResync — the
+  // PATCH's hideSaving (inflight→0) is followed by either closeZoneSheet
+  // or the next patchWorkOrder, both of which drain the flag.
+  if (inflight > 0) {
+    pendingResync = true;
     return;
   }
   populateStateFromWO(wo);
