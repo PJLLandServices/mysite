@@ -17,7 +17,7 @@
 // tech-sw.js's CACHE_VERSION. If this string doesn't match the SW
 // cache version after deploy, the iPhone is serving stale JS — clear
 // website data and reload.
-const TECH_BUILD_VERSION = "tech-v39";
+const TECH_BUILD_VERSION = "tech-v40";
 function _setBadge(text, isError) {
   try {
     const badge = document.getElementById("techBuildBadge");
@@ -886,9 +886,177 @@ function hideSaving(err) {
   }
 }
 
+// ---- Resync after offline-queue drain --------------------------------
+// Replaces the old offline-queue.js location.reload() workaround (May 21
+// fix). The reload was wiping in-flight Done-tap PATCHes — the "saves
+// then disappears" regression. New design: drains happen silently, the
+// page resyncs at safe moments (sheet closed, no PATCH in flight).
+//
+// Flow:
+//   1. PJLOffline fires "drain" after a replay batch moves server state.
+//   2. If a zone sheet is open OR a PATCH is in flight, set pendingResync
+//      and wait — resyncing now would clobber in-progress sheet edits or
+//      race with the in-flight PATCH.
+//   3. Otherwise resync immediately via reloadStateFromServer().
+//   4. closeZoneSheet() (Done tap) drains the flag — wait for inflight
+//      to settle, then resync, THEN hide the sheet. The sheet never
+//      closes unexpectedly; the refresh happens exactly when the tech
+//      ends a zone.
+//   5. patchWorkOrder() also drains the flag at the top (only when no
+//      sheet is open) — guards sign-off + paidOnSite + other non-sheet
+//      PATCHes from 409'ing on a stale state.updatedAt.
+let pendingResync = false;
+
+// Wait for `inflight` to drop to 0, capped at maxMs. Resolves either way
+// — if the cap hits, we proceed anyway (the still-pending PATCH will
+// finish in the background; if it fails the offline queue catches it).
+function waitForInflight(maxMs = 3000) {
+  if (inflight === 0) return Promise.resolve();
+  return new Promise((resolve) => {
+    const start = Date.now();
+    const tick = setInterval(() => {
+      if (inflight === 0 || Date.now() - start >= maxMs) {
+        clearInterval(tick);
+        resolve();
+      }
+    }, 50);
+  });
+}
+
+// Pure state writes — given a freshly-fetched WO record, copy every
+// field the rest of the page reads into `state`. No DOM, no renderers —
+// callers do those separately. Same shape as the block init() used to
+// inline; factored here so init() and reloadStateFromServer() stay in
+// lockstep. If a new state field is added, add it here AND verify
+// init()'s downstream DOM/render calls still work after a resync.
+function populateStateFromWO(wo) {
+  state.type = wo.type || "service_visit";
+  state.status = wo.status || "scheduled";
+  state.updatedAt = wo.updatedAt || null;
+  state.techNotes = wo.techNotes || "";
+  state.customerNotes = typeof wo.customerNotes === "string" ? wo.customerNotes : "";
+  // Atomic assignment (not slot-by-slot) so any external reference held
+  // by the open zone sheet at sheet-open time stays pointing at the OLD
+  // array. The resync gate (sheet-open → defer) means this branch only
+  // runs when no sheet is open, but the atomicity is still load-bearing
+  // for any future caller that holds a zone reference.
+  state.zones = Array.isArray(wo.zones) ? wo.zones.map((z) => ({ ...z })) : [];
+  state.serviceChecklist = (wo.serviceChecklist && typeof wo.serviceChecklist === "object") ? { ...wo.serviceChecklist } : {};
+  state.signature = wo.signature || state.signature;
+  state.signatureBypass = wo.signatureBypass || null;
+  state.photos = Array.isArray(wo.photos) ? wo.photos : [];
+  state.locked = wo.locked === true;
+  state.intakeGuarantee = (wo.intakeGuarantee && typeof wo.intakeGuarantee === "object")
+    ? wo.intakeGuarantee
+    : state.intakeGuarantee;
+  state.onSiteQuote = (wo.onSiteQuote && typeof wo.onSiteQuote === "object")
+    ? { ...wo.onSiteQuote, builderLineItems: Array.isArray(wo.onSiteQuote.builderLineItems) ? wo.onSiteQuote.builderLineItems.slice() : [] }
+    : state.onSiteQuote;
+  state.customerName  = wo.customerName  || "";
+  state.customerEmail = wo.customerEmail || "";
+  state.customerPhone = wo.customerPhone || "";
+  state.address = wo.address || "";
+  state.materialsPacked = (() => {
+    const out = {};
+    const raw = wo.materialsPacked;
+    if (!raw || typeof raw !== "object") return out;
+    for (const [sku, val] of Object.entries(raw)) {
+      if (val === true) { out[sku] = 1; continue; }
+      if (val === false || val == null) continue;
+      const n = Math.max(0, Math.floor(Number(val) || 0));
+      if (n > 0) out[sku] = n;
+    }
+    return out;
+  })();
+  state.customParts = Array.isArray(wo.customParts)
+    ? wo.customParts.filter((p) => p && typeof p === "object").map((p) => ({
+        id: p.id || `cp_${Math.random().toString(36).slice(2, 10)}`,
+        name: typeof p.name === "string" ? p.name : "",
+        size: typeof p.size === "string" ? p.size : "",
+        qty: Math.max(0, Math.floor(Number(p.qty) || 0))
+      }))
+    : [];
+  state.arrivedAt = wo.arrivedAt || null;
+  state.departedAt = wo.departedAt || null;
+  const STATUS_ON_OR_AFTER_ARRIVAL = ["on_site", "in_progress", "awaiting_approval", "completed"];
+  if (!state.arrivedAt && STATUS_ON_OR_AFTER_ARRIVAL.includes(state.status)) {
+    state.arrivedAt = wo.updatedAt || wo.createdAt || null;
+  }
+  if (!state.departedAt && state.status === "completed") {
+    state.departedAt = wo.updatedAt || null;
+  }
+  state.followupOfWoId = wo.followupOfWoId || null;
+  state.followupWoIds = Array.isArray(wo.followupWoIds) ? wo.followupWoIds : [];
+  state.paidOnSite = wo.paidOnSite === true ? true : false;
+  state.needsReturnVisit = wo.needsReturnVisit === true ? true
+    : wo.needsReturnVisit === false ? false
+    : null;
+  state.labourHours = Number.isFinite(Number(wo.labourHours)) && Number(wo.labourHours) >= 0
+    ? Number(wo.labourHours)
+    : null;
+  state.materialsConfirmedAt = wo.materialsConfirmedAt || null;
+  state.history = Array.isArray(wo.history) ? wo.history.slice() : [];
+}
+
+// Refetch the WO and re-render every main-screen surface. Does NOT touch
+// the zone sheet (caller guarantees no sheet is open when this runs).
+// Network failure → bail silently; the page keeps its current state and
+// the next drain or patchWorkOrder gate will retry. No alert — the tech
+// shouldn't be interrupted by sync errors.
+async function reloadStateFromServer() {
+  if (!state.id) return;
+  let wo;
+  try {
+    const response = await fetch(`/api/work-orders/${encodeURIComponent(state.id)}`, { cache: "no-store" });
+    if (!response.ok) return;
+    const data = await response.json();
+    if (!data || !data.ok || !data.workOrder) return;
+    wo = data.workOrder;
+  } catch (err) {
+    console.warn("[resync] fetch failed:", err?.message);
+    return;
+  }
+  populateStateFromWO(wo);
+  // Sync the customer-notes textarea (init() does this too at the same
+  // moment in its flow — see right after populateStateFromWO in init).
+  if (techCustomerNotes) techCustomerNotes.value = state.customerNotes;
+  if (techNotes) techNotes.value = state.techNotes;
+  techMeta.textContent = `Updated ${formatDateTime(wo.updatedAt)}`;
+  // Re-render every main-screen surface that reads from state. Mirror
+  // the bottom half of init() — skip ones bound to per-page bootstrap
+  // (cheat sheet, carry-forward, back link, property code) since those
+  // are stable per-WO.
+  if (typeof renderZones === "function") renderZones();
+  if (typeof renderWoPhotos === "function") renderWoPhotos();
+  if (typeof renderRunStatus === "function") renderRunStatus();
+  if (typeof renderExecutionTimestamps === "function") renderExecutionTimestamps();
+  if (typeof renderServiceChecklist === "function") renderServiceChecklist();
+  if (typeof renderOnSiteQuote === "function") renderOnSiteQuote();
+  if (typeof renderSignoff === "function") renderSignoff();
+  if (typeof renderPostSigBanner === "function") renderPostSigBanner();
+  if (typeof renderTechHistory === "function") renderTechHistory();
+  if (typeof renderIntakeGuarantee === "function") renderIntakeGuarantee();
+  if (typeof renderMaterials === "function") renderMaterials();
+  if (typeof renderBringback === "function") renderBringback();
+  if (typeof renderPaymentBlock === "function") renderPaymentBlock();
+  if (typeof renderCascadeRecovery === "function") renderCascadeRecovery();
+  if (typeof applyLockState === "function") applyLockState(state.locked);
+  if (typeof applyReturnVisitVisibility === "function") applyReturnVisitVisibility();
+  if (typeof updateSignoffSubmitState === "function") updateSignoffSubmitState();
+}
+
 async function patchWorkOrder(payload) {
   const id = state.id;
   if (!id) return;
+  // Drain pendingResync before sending — guards sign-off + paidOnSite +
+  // any other non-sheet PATCH from 409'ing on a stale state.updatedAt
+  // after an offline-queue replay. Skipped when a sheet is open: the
+  // sheet's handlers operate on a tech-managed state.zones reference,
+  // and closeZoneSheet() will run the resync on Done instead.
+  if (pendingResync && state.activeZoneIndex < 0) {
+    pendingResync = false;
+    await reloadStateFromServer();
+  }
   showSaving();
   try {
     // Optimistic concurrency — send the last-known updatedAt as
@@ -1645,11 +1813,25 @@ function renderIssuePhotos(host, issueId, zone) {
   host.appendChild(label);
 }
 
-function closeZoneSheet() {
+async function closeZoneSheet() {
   // Final flush: write any pending notes change before we let the sheet
   // close. The blur path handles most of this, but a hard close (back
   // button, escape) skips blur, so we belt-and-suspender here.
   flushZoneNotes();
+  // Wait for the flush's PATCH (and any other in-flight save) to settle
+  // before we resync. 3s cap so a hung request can't pin the sheet open.
+  // After the cap we close anyway — the in-flight PATCH continues in
+  // the background, and if it fails the offline queue catches it.
+  await waitForInflight(3000);
+  // If a drain happened while the sheet was open, the resync was
+  // deferred to this moment. Run it now so the main screen reflects
+  // anything the offline queue replayed in the background. The sheet
+  // stays visually open across the resync — by the time we hide it the
+  // main-screen card preview behind it is already up to date.
+  if (pendingResync) {
+    pendingResync = false;
+    await reloadStateFromServer();
+  }
   techSheet.hidden = true;
   document.body.classList.remove("tech-sheet-open");
   state.activeZoneIndex = -1;
@@ -4413,93 +4595,12 @@ async function init() {
     if (!response.ok || !data.ok) throw new Error("Not found");
 
     const wo = data.workOrder;
-    state.type = wo.type || "service_visit";
-    state.status = wo.status || "scheduled";
-    // Track the WO's version (updatedAt) so subsequent PATCHes can
-    // send it as If-Match. Server returns 409 on stale version.
-    state.updatedAt = wo.updatedAt || null;
-    state.techNotes = wo.techNotes || "";
-    state.customerNotes = typeof wo.customerNotes === "string" ? wo.customerNotes : "";
-    if (techCustomerNotes) techCustomerNotes.value = state.customerNotes;
-    state.zones = Array.isArray(wo.zones) ? wo.zones.map((z) => ({ ...z })) : [];
-    state.serviceChecklist = (wo.serviceChecklist && typeof wo.serviceChecklist === "object") ? { ...wo.serviceChecklist } : {};
-    state.signature = wo.signature || state.signature;
-    state.signatureBypass = wo.signatureBypass || null;
-    state.photos = Array.isArray(wo.photos) ? wo.photos : [];
-    state.locked = wo.locked === true;
-    state.intakeGuarantee = (wo.intakeGuarantee && typeof wo.intakeGuarantee === "object")
-      ? wo.intakeGuarantee
-      : state.intakeGuarantee;
-    state.onSiteQuote = (wo.onSiteQuote && typeof wo.onSiteQuote === "object")
-      ? { ...wo.onSiteQuote, builderLineItems: Array.isArray(wo.onSiteQuote.builderLineItems) ? wo.onSiteQuote.builderLineItems.slice() : [] }
-      : state.onSiteQuote;
-    state.customerName  = wo.customerName  || "";
-    state.customerEmail = wo.customerEmail || "";
-    state.customerPhone = wo.customerPhone || "";
-    // Address comes from the WO (snapshot at create time) or the
-    // linked property if the WO snapshot is empty. Both feed the
-    // follow-up modal's availability lookup.
-    state.address = wo.address || "";
-    // materialsPacked migrated from { sku: bool } to { sku: qty (number) }
-    // in May 2026 (Patrick: tech needs +/- counts, not just ticks).
-    // Coerce legacy `true` values to qty=1, drop `false`/null. New WOs
-    // arrive as numbers already.
-    state.materialsPacked = (() => {
-      const out = {};
-      const raw = wo.materialsPacked;
-      if (!raw || typeof raw !== "object") return out;
-      for (const [sku, val] of Object.entries(raw)) {
-        if (val === true) { out[sku] = 1; continue; }
-        if (val === false || val == null) continue;
-        const n = Math.max(0, Math.floor(Number(val) || 0));
-        if (n > 0) out[sku] = n;
-      }
-      return out;
-    })();
-    // Custom parts not in the parts.json catalog. Each item:
-    //   { id, name, size, qty } — id is a client-side uuid for dedup.
-    state.customParts = Array.isArray(wo.customParts)
-      ? wo.customParts.filter((p) => p && typeof p === "object").map((p) => ({
-          id: p.id || `cp_${Math.random().toString(36).slice(2, 10)}`,
-          name: typeof p.name === "string" ? p.name : "",
-          size: typeof p.size === "string" ? p.size : "",
-          qty: Math.max(0, Math.floor(Number(p.qty) || 0))
-        }))
-      : [];
-    // Back-fill timestamps from status when missing (covers WOs where
-    // the status was advanced server-side or by another session — the
-    // tech opens the WO and expects to see when arrival happened, not
-    // a "—" placeholder). On-site rank: scheduled < dispatched <
-    // en_route < on_site < in_progress < awaiting_approval < completed.
-    state.arrivedAt = wo.arrivedAt || null;
-    state.departedAt = wo.departedAt || null;
-    const STATUS_ON_OR_AFTER_ARRIVAL = ["on_site", "in_progress", "awaiting_approval", "completed"];
-    if (!state.arrivedAt && STATUS_ON_OR_AFTER_ARRIVAL.includes(state.status)) {
-      state.arrivedAt = wo.updatedAt || wo.createdAt || null;
-    }
-    if (!state.departedAt && state.status === "completed") {
-      state.departedAt = wo.updatedAt || null;
-    }
-    state.followupOfWoId = wo.followupOfWoId || null;
-    state.followupWoIds = Array.isArray(wo.followupWoIds) ? wo.followupWoIds : [];
-    // v37 — paidOnSite defaults to false ("No, invoice to follow") per
-    // Patrick: "we are highly unlikely to recieve payment in person...
-    // I want everything to be billed through online." Legacy records
-    // with paidOnSite=null are coerced to false on load so the pre-sign
-    // gate passes without action. Only an explicit true is preserved.
-    state.paidOnSite = wo.paidOnSite === true ? true : false;
-    // Same tri-state coercion for needsReturnVisit (v27).
-    state.needsReturnVisit = wo.needsReturnVisit === true ? true
-      : wo.needsReturnVisit === false ? false
-      : null;
-    // Labour hours (v35) — coerce to a non-negative number or null.
-    state.labourHours = Number.isFinite(Number(wo.labourHours)) && Number(wo.labourHours) >= 0
-      ? Number(wo.labourHours)
-      : null;
-    // Cascade-merge follow-up — brief-literal §4.6 materials gate
-    // state. Server-side hydrate auto-fills for fall_closing + empty-
-    // materials WOs so the gate doesn't block there.
-    state.materialsConfirmedAt = wo.materialsConfirmedAt || null;
+    // Pure state writes — see populateStateFromWO near patchWorkOrder.
+    // reloadStateFromServer() (the offline-queue drain handler) uses
+    // the same helper so the two stay in lockstep. If a new state field
+    // is added, add it to populateStateFromWO and verify the resync
+    // path still re-renders the surface that reads it.
+    populateStateFromWO(wo);
 
     techId.textContent = wo.id;
     techType.textContent = TYPE_LABELS[wo.type] || wo.type;
@@ -4576,7 +4677,7 @@ async function init() {
     // PENDING (temporarily disabled) until the tech confirms the on-site
     // diagnosis matches the AI's quoted scope. Match → credit 1 hr free.
     // Mismatch → bill labour normally at $95/hr, no free hour.
-    state.intakeGuarantee = wo.intakeGuarantee || state.intakeGuarantee;
+    // state.intakeGuarantee already populated by populateStateFromWO.
     renderIntakeGuarantee();
 
     // Back link prefers the lead detail (deep-link) over the desktop
@@ -4610,10 +4711,8 @@ async function init() {
     state.completedInvoiceId = null;
     renderPostSigBanner();
 
-    // History viewer — append-only audit trail. Hydrated from the WO
-    // record on load; doesn't update mid-session (refresh to see
-    // freshly-appended entries). Spec §10 r4.
-    state.history = Array.isArray(wo.history) ? wo.history.slice() : [];
+    // History viewer — append-only audit trail. state.history is
+    // populated by populateStateFromWO above.
     renderTechHistory();
 
     techLoading.hidden = true;
@@ -5583,6 +5682,19 @@ document.addEventListener("click", (event) => {
 if (window.PJLOffline) {
   window.PJLOffline.on("change", renderOfflineBanner);
   renderOfflineBanner();
+  // Drain event — replaces the old offline-queue location.reload()
+  // workaround (May 21 fix). When a replay batch lands or stale entries
+  // are dropped, server state has moved past local `state`. If a sheet
+  // is open OR a PATCH is in flight, defer the resync to closeZoneSheet
+  // (Done-tap) / next patchWorkOrder so we don't clobber in-progress
+  // work. Otherwise refetch + re-render now while the screen is idle.
+  window.PJLOffline.on("drain", () => {
+    if (state.activeZoneIndex >= 0 || inflight > 0) {
+      pendingResync = true;
+      return;
+    }
+    reloadStateFromServer().catch((err) => console.warn("[resync] failed:", err?.message));
+  });
 }
 
 // Patch the global fetch wrapper used by patchWorkOrder so writes get

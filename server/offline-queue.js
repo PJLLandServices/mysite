@@ -39,6 +39,7 @@
   const DB_VERSION = 1;
   const STORE = "queue";
   const listeners = new Set();
+  const drainListeners = new Set();
   let cachedCount = 0;
   // Symptom B defence (May 21 investigation, OFFLINE_QUEUE_INVESTIGATION.md).
   // Counts queue entries dropped because the server's `updatedAt` has moved
@@ -124,6 +125,16 @@
     }
   }
 
+  // Fired once at the end of a replay batch that actually moved server
+  // state. Page-side listeners use it to refetch the WO and re-render
+  // (replacement for the old location.reload() — see May 22 fix).
+  function notifyDrain(payload) {
+    for (const fn of drainListeners) {
+      try { fn(payload); }
+      catch (err) { console.warn("[offline-queue] drain listener", err); }
+    }
+  }
+
   // ---- queuedFetch wrapper -------------------------------------------
   async function queuedFetch(url, init = {}) {
     const method = (init.method || "GET").toUpperCase();
@@ -193,6 +204,8 @@
     replayInFlight = true;
     let drainedAny = false;
     let startedWithItems = false;
+    let replayedCount = 0;
+    let droppedCountThisRun = 0;
     try {
       const all = await listAll();
       startedWithItems = all.length > 0;
@@ -246,6 +259,7 @@
               );
               await dequeue(entry.id);
               droppedAsStale++;
+              droppedCountThisRun++;
               drainedAny = true;
               await refreshCount();
               continue;
@@ -272,6 +286,7 @@
           if (res.ok || res.status < 500) {
             await dequeue(entry.id);
             drainedAny = true;
+            replayedCount++;
           } else {
             console.warn("[offline-queue] server 5xx during replay, keeping queued:", entry.url, res.status);
             break;
@@ -286,20 +301,19 @@
       replayInFlight = false;
       await refreshCount();
     }
-    // Auto-refresh the page after a successful drain so the UI picks
-    // up fresh server state (the replayed PATCHes mutated the WO
-    // server-side; cached state in `state` is stale until we re-fetch).
-    // Skip if the user is mid-edit (active textarea / input has focus
-    // with unsubmitted text) so we don't lose typing in flight.
-    if (drainedAny && startedWithItems && cachedCount === 0) {
-      const active = document.activeElement;
-      const userTyping = active && (active.tagName === "TEXTAREA" || active.tagName === "INPUT") && active.value !== active.defaultValue;
-      if (!userTyping) {
-        // Small delay so the offline banner gets a chance to show "Syncing 0 pending changes…" before reload.
-        setTimeout(() => location.reload(), 350);
-      } else {
-        console.log("[offline-queue] drained but user is typing — skipping auto-reload");
-      }
+    // Notify the page that server state moved (replayed PATCHes wrote
+    // to the WO, and/or stale entries were dropped). The page decides
+    // how to react: re-fetch + re-render now if it's safe (no sheet
+    // open, no in-flight PATCH), or set a `pendingResync` flag that
+    // fires on the next safe moment (Done-tap on a zone sheet, or
+    // before the next user-initiated patchWorkOrder).
+    //
+    // Replaces the May 21 `location.reload()` workaround. That was
+    // wiping in-flight PATCHes when the auto-reload fired before the
+    // tech's Done-tap save had landed — the "saved then disappears"
+    // regression Patrick reported on May 22.
+    if (drainedAny && startedWithItems) {
+      notifyDrain({ replayed: replayedCount, dropped: droppedCountThisRun });
     }
   }
 
@@ -316,9 +330,11 @@
     clearDropped() { droppedAsStale = 0; notify(); },
     on(event, fn) {
       if (event === "change") listeners.add(fn);
+      if (event === "drain")  drainListeners.add(fn);
     },
     off(event, fn) {
       if (event === "change") listeners.delete(fn);
+      if (event === "drain")  drainListeners.delete(fn);
     },
     refresh: refreshCount,
     replay
