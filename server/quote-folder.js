@@ -3,6 +3,8 @@ const emptyEl = document.getElementById("quotesEmpty");
 const filterBtns = document.querySelectorAll("[data-status-filter]");
 const typeFilterBtns = document.querySelectorAll("[data-type-filter]");
 const newProposalBtn = document.getElementById("newProposalBtn");
+const showDeletedToggle = document.getElementById("showDeletedToggle");
+const showDeletedCount = document.getElementById("showDeletedToggleCount");
 
 const TYPE_LABELS = {
   ai_repair_quote: "AI repair quote",
@@ -27,6 +29,10 @@ const ACCEPTANCE_LABELS = {
 
 let currentFilter = "";
 let currentTypeFilter = "";
+// Delete-Quotes brief: when this is on, the index re-fetches with
+// ?includeDeleted=1 and renders deleted rows with subdued styling +
+// a Restore action.
+let showDeleted = false;
 
 function escapeHtml(s) {
   return String(s == null ? "" : s)
@@ -46,13 +52,28 @@ let mlCountByQuote = new Map();    // quoteId -> count of attached lists
 let projectByQuote = new Map();    // quoteId -> project record (if exists)
 
 async function load() {
-  const url = currentFilter ? `/api/admin/quote-folder?status=${encodeURIComponent(currentFilter)}` : "/api/admin/quote-folder";
+  // Compose query string from the status filter + the show-deleted toggle.
+  const qs = [];
+  if (currentFilter) qs.push(`status=${encodeURIComponent(currentFilter)}`);
+  if (showDeleted) qs.push("includeDeleted=1");
+  const url = qs.length ? `/api/admin/quote-folder?${qs.join("&")}` : "/api/admin/quote-folder";
   const [quotesRes, mlRes, projRes] = await Promise.all([
     fetch(url, { cache: "no-store" }).then((r) => r.json()).catch(() => ({})),
     fetch("/api/material-lists?includeArchived=1", { cache: "no-store" }).then((r) => r.json()).catch(() => ({})),
     fetch("/api/projects?includeArchived=1", { cache: "no-store" }).then((r) => r.json()).catch(() => ({}))
   ]);
   let items = (quotesRes.ok && Array.isArray(quotesRes.quotes)) ? quotesRes.quotes : [];
+  // Track how many of the returned items are soft-deleted so we can show
+  // a count next to the toggle.
+  const deletedCount = items.filter((q) => q.deletedAt).length;
+  if (showDeletedCount) {
+    if (showDeleted) {
+      showDeletedCount.hidden = false;
+      showDeletedCount.textContent = `(${deletedCount} hidden)`;
+    } else {
+      showDeletedCount.hidden = true;
+    }
+  }
   // Type filter — applied client-side so a single fetch covers both filters.
   if (currentTypeFilter) {
     items = items.filter((q) => q.type === currentTypeFilter);
@@ -68,6 +89,10 @@ async function load() {
   for (const p of (projRes.projects || [])) {
     if (p.sourceQuoteId) projectByQuote.set(p.sourceQuoteId, p);
   }
+
+  // Cache items so the delete-confirmation modal can read customer /
+  // status / descendants without re-fetching.
+  lastLoadedQuotes = items;
 
   if (!items.length) {
     containerEl.hidden = true;
@@ -99,17 +124,30 @@ async function load() {
     const isProposal = q.type === "project_proposal";
     const proposalHref = `/admin/quote/${encodeURIComponent(q.id)}/proposal`;
 
+    const isDeleted = !!q.deletedAt;
     const actions = [];
     if (isProposal) {
       actions.push(`<a href="${proposalHref}">Edit proposal</a>`);
     } else if (leadHref) {
       actions.push(`<a href="${leadHref}">Open in CRM</a>`);
     }
+    // PDF download stays available on deleted rows (underlying record is
+    // still on disk; per brief §4 edge cases).
     actions.push(`<a href="/api/admin/quote-folder/${encodeURIComponent(q.id)}/pdf" target="_blank" rel="noopener">PDF</a>`);
     if (proj) {
       actions.push(`<a href="/admin/project/${encodeURIComponent(proj.id)}">↗ ${escapeHtml(proj.id)}</a>`);
-    } else if (q.status === "accepted") {
+    } else if (q.status === "accepted" && !isDeleted) {
+      // Convert-to-project disabled on deleted rows — restore first.
       actions.push(`<button type="button" data-quote-id="${escapeHtml(q.id)}" data-action="convert">Convert to project</button>`);
+    } else if (q.status === "accepted" && isDeleted) {
+      actions.push(`<button type="button" class="is-disabled" disabled title="Restore the quote before converting">Convert to project</button>`);
+    }
+    // Delete-Quotes brief §3.6: per-row Delete on every row regardless
+    // of status. Replaced with Restore on already-deleted rows.
+    if (isDeleted) {
+      actions.push(`<button type="button" class="qf-card__restore" data-quote-id="${escapeHtml(q.id)}" data-action="restore">Restore</button>`);
+    } else {
+      actions.push(`<button type="button" class="qf-card__delete" data-quote-id="${escapeHtml(q.id)}" data-action="delete">Delete</button>`);
     }
     const actionsHtml = actions.join(`<span class="qf-card__sep" aria-hidden="true">·</span>`);
 
@@ -129,12 +167,18 @@ async function load() {
       : escapeHtml(fmtDate(q.createdAt));
 
     // For proposals, the card itself opens the builder (not the lead).
-    const cardHref = isProposal ? proposalHref : leadHref;
+    // Deleted rows do NOT open on tap (no card-level navigation) — Patrick
+    // has to Restore first; the inner action buttons still work.
+    const cardHref = (!isDeleted && (isProposal ? proposalHref : leadHref)) || "";
+    const cardClass = `qf-card${isDeleted ? " qf-card--deleted" : ""}`;
+    const deletedTag = isDeleted
+      ? `<span class="qf-card__deleted-tag" title="Deleted ${escapeHtml(fmtDate(q.deletedAt))}${q.deletedBy ? " by " + escapeHtml(q.deletedBy) : ""}">deleted</span>`
+      : "";
 
     return `
-      <article class="qf-card" data-quote-id="${escapeHtml(q.id)}"${cardHref ? ` data-href="${cardHref}"` : ""}>
+      <article class="${cardClass}" data-quote-id="${escapeHtml(q.id)}"${cardHref ? ` data-href="${cardHref}"` : ""}>
         <header class="qf-card__head">
-          <span class="qf-card__id">${escapeHtml(q.id)}${versionTag}</span>
+          <span class="qf-card__id">${escapeHtml(q.id)}${versionTag}${deletedTag}</span>
           <span class="qf-card__status invoices-status invoices-status--${escapeHtml(q.status)}">${escapeHtml(q.status)}</span>
           ${acceptanceTag}
         </header>
@@ -185,6 +229,94 @@ async function convertToProject(quoteId) {
   }
 }
 
+// Compose the descendant-warning string for the delete confirmation
+// modal. Returns "" when the quote has no descendants — the modal
+// renders no warning paragraph in that case. The /api/admin/quote-folder
+// endpoint enriches every quote with this `descendants` block.
+function describeDescendants(q) {
+  const d = q && q.descendants;
+  if (!d) return "";
+  const parts = [];
+  if (Array.isArray(d.bookingIds) && d.bookingIds.length) {
+    parts.push(`${d.bookingIds.length} booking${d.bookingIds.length === 1 ? "" : "s"}`);
+  }
+  if (Array.isArray(d.projectIds) && d.projectIds.length) {
+    parts.push(`${d.projectIds.length} project${d.projectIds.length === 1 ? "" : "s"} (${d.projectIds.join(", ")})`);
+  }
+  if (Array.isArray(d.workOrderIds) && d.workOrderIds.length) {
+    parts.push(`${d.workOrderIds.length} work order${d.workOrderIds.length === 1 ? "" : "s"} (${d.workOrderIds.join(", ")})`);
+  }
+  if (Array.isArray(d.invoiceIds) && d.invoiceIds.length) {
+    parts.push(`${d.invoiceIds.length} invoice${d.invoiceIds.length === 1 ? "" : "s"} (${d.invoiceIds.join(", ")})`);
+  }
+  if (Array.isArray(d.materialListIds) && d.materialListIds.length) {
+    parts.push(`${d.materialListIds.length} material list${d.materialListIds.length === 1 ? "" : "s"}`);
+  }
+  if (!parts.length) return "";
+  return `⚠ This quote is linked to: ${parts.join("; ")}. Those records will remain intact, but the source quote will no longer appear in the index.`;
+}
+
+async function deleteQuote(quoteId) {
+  // Find the cached quote record so we can show customer / status in the
+  // modal and surface the descendant warning. The card payload includes
+  // descendants{} from /api/admin/quote-folder.
+  const card = containerEl.querySelector(`.qf-card[data-quote-id="${CSS.escape(quoteId)}"]`);
+  const cached = lastLoadedQuotes.find((q) => q.id === quoteId);
+  const status = cached ? cached.status : "";
+  const customer = (cached && cached.customerEmail) || "(no email)";
+  const warning = cached ? describeDescendants(cached) : "";
+
+  const confirmed = window.pjlBulkModal
+    ? await window.pjlBulkModal.confirm({
+        title: "Delete this quote?",
+        body: `${quoteId} — ${customer}${status ? " — " + status : ""}\n\nThe quote will be removed from this list. It can be restored later from the "Show deleted" view. Linked bookings, projects, and invoices are not affected.`,
+        warning,
+        confirmLabel: "Delete",
+        cancelLabel: "Cancel",
+        destructive: true
+      })
+    : window.confirm(`Delete ${quoteId}? (Restore later via "Show deleted".)`);
+
+  if (!confirmed) return;
+
+  try {
+    const r = await fetch(`/api/quotes/${encodeURIComponent(quoteId)}`, { method: "DELETE" });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok || !data.ok) {
+      alert((data.errors && data.errors[0]) || `Couldn't delete (${r.status})`);
+      return;
+    }
+    // Optimistic remove if not in show-deleted mode; otherwise re-fetch
+    // so the row gets the deleted styling + Restore button.
+    if (!showDeleted && card) {
+      card.remove();
+    } else {
+      load();
+    }
+  } catch (err) {
+    alert(err.message || "Couldn't delete quote.");
+  }
+}
+
+async function restoreQuote(quoteId) {
+  // No modal needed for restore — single-step action per brief §3.6.
+  try {
+    const r = await fetch(`/api/quotes/${encodeURIComponent(quoteId)}/restore`, { method: "POST" });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok || !data.ok) {
+      alert((data.errors && data.errors[0]) || `Couldn't restore (${r.status})`);
+      return;
+    }
+    load();
+  } catch (err) {
+    alert(err.message || "Couldn't restore quote.");
+  }
+}
+
+// The last response from /api/admin/quote-folder, cached so the delete
+// modal can read customer/status/descendants without an extra fetch.
+let lastLoadedQuotes = [];
+
 // Delegated click handler for both the convert button + materials link,
 // and for card-level navigation. The card root is the tap target for
 // "open the quote in CRM"; inner anchors, buttons, and the bulk-select
@@ -192,9 +324,21 @@ async function convertToProject(quoteId) {
 // of also navigating away.
 containerEl.addEventListener("click", (event) => {
   const convertBtn = event.target.closest("[data-action='convert']");
-  if (convertBtn) {
+  if (convertBtn && !convertBtn.disabled) {
     event.preventDefault();
     convertToProject(convertBtn.dataset.quoteId);
+    return;
+  }
+  const deleteBtn = event.target.closest("[data-action='delete']");
+  if (deleteBtn) {
+    event.preventDefault();
+    deleteQuote(deleteBtn.dataset.quoteId);
+    return;
+  }
+  const restoreBtn = event.target.closest("[data-action='restore']");
+  if (restoreBtn) {
+    event.preventDefault();
+    restoreQuote(restoreBtn.dataset.quoteId);
     return;
   }
   // Inner anchors, buttons, or the bulk-select checkbox: let them handle
@@ -226,6 +370,16 @@ typeFilterBtns.forEach((btn) => {
     load();
   });
 });
+
+// Show-deleted toggle — re-fetches with ?includeDeleted=1 when on and
+// renders deleted rows with subdued styling + Restore action. Delete-
+// Quotes brief §3.6.
+if (showDeletedToggle) {
+  showDeletedToggle.addEventListener("change", () => {
+    showDeleted = !!showDeletedToggle.checked;
+    load();
+  });
+}
 
 // New project proposal — admin path. Creates a draft via POST and
 // redirects into the builder.

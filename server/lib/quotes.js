@@ -368,10 +368,16 @@ function blankQuote() {
       { ts: created, action: "created", by: "system", note: "" }
     ],
 
-    // Bulk-operations soft state. Only draft / expired quotes are eligible
-    // for soft-delete (per brief: accepted/sent quotes are contractual).
-    // 30-day Trash retention before purge. Gate enforced at the dispatcher.
-    deletedAt: null
+    // Bulk-operations soft state. Per Delete-Quotes brief (May 2026):
+    // ANY status is eligible for soft-delete from the quote folder. The
+    // earlier draft/expired-only restriction lives on the legacy bulk
+    // delete-drafts action; the new single-row /api/quotes/:id DELETE
+    // route accepts all statuses (Patrick takes responsibility). 30-day
+    // Trash retention before purge.
+    deletedAt: null,
+    // Who deleted it. "admin" fallback when no session uid; mirrors the
+    // shape used elsewhere in the audit trail.
+    deletedBy: null
   };
 }
 
@@ -389,6 +395,7 @@ function hydrate(q) {
     workOrderIds: Array.isArray(q?.workOrderIds) ? q.workOrderIds : [],
     history: Array.isArray(q?.history) ? q.history : [],
     deletedAt: typeof q?.deletedAt === "string" ? q.deletedAt : null,
+    deletedBy: typeof q?.deletedBy === "string" ? q.deletedBy : null,
     // project_proposal fields — defensive defaults for legacy records
     // that pre-date the proposal schema.
     branch: q?.branch || null,
@@ -970,6 +977,9 @@ async function expireStaleQuotes({ now = new Date() } = {}) {
   let considered = 0;
   const nowMs = now.getTime();
   for (const q of records) {
+    // Skip soft-deleted quotes — no point expiring something already
+    // hidden from the index (Delete-Quotes brief §3.5).
+    if (q.deletedAt) continue;
     if (q.status !== "sent" && q.status !== "draft") continue;
     considered++;
     if (!q.validUntil) continue;
@@ -997,27 +1007,56 @@ async function remove(id) {
   return removed;
 }
 
-// ---- Soft-delete (bulk operations) ----------------------------------
+// ---- Soft-delete -----------------------------------------------------
 //
-// Eligibility (brief §3.1): only draft or expired quotes can be soft-deleted
-// — accepted/sent ones are contractual. Gate enforced at dispatcher.
+// Per the Delete-Quotes brief (May 2026), any quote — regardless of
+// status — can be soft-deleted from the /admin/quote-folder index. The
+// record stays on disk (Hard Rule 4 — all status changes logged forever)
+// and downstream references (bookings, projects, invoices, material
+// lists) are NOT modified. 30-day Trash retention before purge.
+//
+// Idempotency contract: calling softDelete on an already-deleted quote
+// (or restore on an already-active one) returns the current record with
+// no duplicate history entry. The legacy bulk delete-drafts action
+// (lib/bulk-actions.js) layers its draft/expired-only gate on top of
+// this verb at the dispatcher; this lib verb itself stays permissive.
 
-async function softDelete(id) {
+async function softDelete(id, { adminId = "admin" } = {}) {
   const records = await readAll();
   const idx = records.findIndex((q) => q.id === id);
   if (idx === -1) throw new Error("Quote not found");
-  if (records[idx].deletedAt) throw new Error("Already in Trash");
-  records[idx] = { ...records[idx], deletedAt: new Date().toISOString() };
+  if (records[idx].deletedAt) return records[idx]; // idempotent — no duplicate history
+  const ts = nowIso();
+  const by = String(adminId || "admin").slice(0, 80);
+  const next = { ...records[idx], deletedAt: ts, deletedBy: by };
+  if (!Array.isArray(next.history)) next.history = [];
+  next.history = [...next.history, {
+    ts,
+    action: "quote_deleted",
+    by,
+    note: "Quote soft-deleted from index."
+  }];
+  records[idx] = next;
   await writeAll(records);
   return records[idx];
 }
 
-async function restore(id) {
+async function restore(id, { adminId = "admin" } = {}) {
   const records = await readAll();
   const idx = records.findIndex((q) => q.id === id);
   if (idx === -1) throw new Error("Quote not found");
-  if (!records[idx].deletedAt) throw new Error("Not in Trash");
-  records[idx] = { ...records[idx], deletedAt: null };
+  if (!records[idx].deletedAt) return records[idx]; // idempotent — no duplicate history
+  const ts = nowIso();
+  const by = String(adminId || "admin").slice(0, 80);
+  const next = { ...records[idx], deletedAt: null, deletedBy: null };
+  if (!Array.isArray(next.history)) next.history = [];
+  next.history = [...next.history, {
+    ts,
+    action: "quote_restored",
+    by,
+    note: "Quote restored to index."
+  }];
+  records[idx] = next;
   await writeAll(records);
   return records[idx];
 }

@@ -2885,6 +2885,24 @@ body.pjl-bulk-toolbar-busy {
   font-size: 15px;
   line-height: 1.55;
   color: var(--pjl-text);
+  /* Honor newlines in the body string so callers can structure their
+     message into intro + detail without composing separate <p>s. The
+     quote-folder delete modal uses this for "Q-… — customer — status\n\n
+     The quote will be removed…" */
+  white-space: pre-line;
+}
+/* Warning callout below the modal body — used for descendant-reference
+   warnings on delete confirmations and similar "proceed-at-your-own-
+   risk" notices. Amber-on-cream so it reads as a notice, not an error. */
+.pjl-bulk-modal-warning {
+  margin: -6px 0 18px;
+  padding: 10px 12px;
+  background: #FFF5E0;
+  border: 1px solid #F0D488;
+  border-radius: 6px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #6E4A1A;
 }
 .pjl-bulk-modal-typed-label {
   display: block;

@@ -8,16 +8,21 @@
 //   pjlBulkModal.confirm({
 //     title: "Delete 3 leads?",
 //     body:  "These leads will be moved to Trash and permanently deleted after 30 days.",
+//     warning: "⚠ This quote is linked to 2 invoices. Records will remain intact.",
 //     confirmLabel: "Delete",
 //     cancelLabel:  "Cancel",
 //     destructive:  true,            // styles the confirm button red
 //     requireTypedConfirm: false     // when true, requires user to type "DELETE"
 //   })  -> Promise<boolean>
 //
+// `warning` is optional. When set, renders as a styled <p class=
+// "pjl-bulk-modal-warning"> below the body. Plain text only (textContent);
+// no HTML injection.
+//
 // Visual: .pjl-bulk-modal* classes in crm.css.
 
 (function () {
-  function confirm({ title = "Confirm action", body = "", confirmLabel = "Confirm", cancelLabel = "Cancel", destructive = false, requireTypedConfirm = false } = {}) {
+  function confirm({ title = "Confirm action", body = "", warning = "", confirmLabel = "Confirm", cancelLabel = "Cancel", destructive = false, requireTypedConfirm = false } = {}) {
     return new Promise((resolve) => {
       const previouslyFocused = document.activeElement;
 
@@ -44,6 +49,16 @@
       bodyEl.className = "pjl-bulk-modal-body";
       bodyEl.textContent = body;
       panel.appendChild(bodyEl);
+
+      // Optional warning paragraph — styled callout for descendant
+      // references and similar "proceed-at-your-own-discretion" copy.
+      // textContent only; the caller composes the message string.
+      if (warning) {
+        const warnEl = document.createElement("p");
+        warnEl.className = "pjl-bulk-modal-warning";
+        warnEl.textContent = warning;
+        panel.appendChild(warnEl);
+      }
 
       let typedInput = null;
       if (requireTypedConfirm) {

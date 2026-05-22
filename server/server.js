@@ -3204,10 +3204,28 @@ async function handleApi(req, res, pathname) {
   // hide-but-keep state; delete removes the record. Linked work orders
   // get their leadId nulled (we keep the WO since the per-zone state is
   // valuable) and the linked property's leadIds[] back-ref is pruned.
+  //
+  // Path overload (legacy /api/quotes/:id originally handled leads-as-
+  // quotes from the AI-chat era): IDs prefixed with "Q-" route to the
+  // quote soft-delete handler instead, per the Delete-Quotes brief
+  // (May 2026). Lead IDs use the "L-…" prefix and continue to fall
+  // through to the legacy hard-delete behavior below.
   const quoteDeleteMatch = pathname.match(/^\/api\/quotes\/([^/]+)$/);
   if (quoteDeleteMatch && req.method === "DELETE") {
+    const id = decodeURIComponent(quoteDeleteMatch[1]);
+    if (/^Q-\d{4}-/.test(id)) {
+      const session = await requireAdmin(req);
+      if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+      try {
+        const existing = await quotes.get(id);
+        if (!existing) return sendJson(res, 404, { ok: false, errors: ["Quote not found."] });
+        const updated = await quotes.softDelete(id, { adminId: session.uid || "admin" });
+        return sendJson(res, 200, { ok: true, quote: updated });
+      } catch (err) {
+        return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't delete quote."] });
+      }
+    }
     try {
-      const id = decodeURIComponent(quoteDeleteMatch[1]);
       const leads = await readLeads();
       const idx = leads.findIndex((l) => l.id === id);
       if (idx === -1) return sendJson(res, 404, { ok: false, errors: ["Lead not found."] });
@@ -5552,11 +5570,72 @@ async function handleApi(req, res, pathname) {
     const url = new URL(req.url, baseUrlFromReq(req));
     const status = url.searchParams.get("status");
     const type = url.searchParams.get("type");
-    let all = await quotes.list();
+    // Delete-Quotes brief: ?includeDeleted=1 surfaces soft-deleted
+    // quotes in the response so the "Show deleted" toggle on the folder
+    // page can render them with the Restore action. Default behaviour
+    // (no param) continues to hide deleted records.
+    const includeDeleted = url.searchParams.get("includeDeleted") === "1";
+    let all = await quotes.list({ includeDeleted });
     if (status) all = all.filter((q) => q.status === status);
     if (type) all = all.filter((q) => q.type === type);
     all.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-    return sendJson(res, 200, { ok: true, quotes: all });
+
+    // Enrich each quote with a `descendants` summary so the delete-
+    // confirmation modal can warn Patrick about linked records before
+    // soft-deleting. Computed server-side (single inverse-lookup pass
+    // each over invoices / projects / material lists) rather than
+    // fan-out fetched on the client. References ARE NOT modified by
+    // delete — this is purely informational.
+    let descendantsByQuote = null;
+    try {
+      const [allInvoices, allProjects, allMaterialLists] = await Promise.all([
+        invoices.list({ includeArchived: true }).catch(() => []),
+        projects.list({ includeArchived: true }).catch(() => []),
+        materialLists.list({ includeArchived: true }).catch(() => [])
+      ]);
+      descendantsByQuote = new Map();
+      const ensure = (qid) => {
+        if (!descendantsByQuote.has(qid)) {
+          descendantsByQuote.set(qid, {
+            bookingIds: [],
+            workOrderIds: [],
+            projectIds: [],
+            invoiceIds: [],
+            materialListIds: []
+          });
+        }
+        return descendantsByQuote.get(qid);
+      };
+      for (const inv of allInvoices) {
+        if (inv?.quoteId) ensure(inv.quoteId).invoiceIds.push(inv.id);
+      }
+      for (const p of allProjects) {
+        if (p?.sourceQuoteId) ensure(p.sourceQuoteId).projectIds.push(p.id);
+      }
+      for (const ml of allMaterialLists) {
+        if (ml?.parentType === "quote" && ml?.parentId) {
+          ensure(ml.parentId).materialListIds.push(ml.id);
+        }
+      }
+    } catch (err) {
+      console.warn("[quote-folder] descendant enrichment failed:", err?.message);
+    }
+
+    const enriched = all.map((q) => {
+      const d = descendantsByQuote ? (descendantsByQuote.get(q.id) || null) : null;
+      return {
+        ...q,
+        descendants: {
+          bookingIds: q.bookingId ? [q.bookingId] : [],
+          workOrderIds: Array.isArray(q.workOrderIds) ? q.workOrderIds.slice() : [],
+          projectIds: d ? d.projectIds : [],
+          invoiceIds: d ? d.invoiceIds : [],
+          materialListIds: d ? d.materialListIds : []
+        }
+      };
+    });
+
+    return sendJson(res, 200, { ok: true, quotes: enriched });
   }
 
   // ---------- Remote approval flow (spec §4.1 + §4.3) -----------------
@@ -8747,6 +8826,16 @@ async function handleApi(req, res, pathname) {
       const payload = await parseRequestBody(req);
       const q = await quotes.get(id);
       if (!q) return sendJson(res, 404, { ok: false, errors: ["Proposal not found."] });
+      if (q.deletedAt) {
+        // Delete-Quotes brief §4 edge case: refuse send-for-approval on
+        // a soft-deleted quote. Restore first if Patrick actually wants
+        // to send it.
+        return sendJson(res, 409, {
+          ok: false,
+          error: "quote_deleted",
+          errors: ["This quote is in the Trash. Restore it before sending for approval."]
+        });
+      }
       if (q.type !== "project_proposal") {
         return sendJson(res, 422, { ok: false, errors: ["Quote is not a project_proposal."] });
       }
@@ -8893,6 +8982,29 @@ async function handleApi(req, res, pathname) {
       return sendJson(res, 200, { ok: true, quote: { id: updated.id, status: updated.status } });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't upload PDF."] });
+    }
+  }
+
+  // POST /api/quotes/:id/restore — clear deletedAt + deletedBy on a
+  // soft-deleted quote so it reappears in the default index. Idempotent:
+  // calling restore on a non-deleted quote returns 200 with the current
+  // state. Appends a quote_restored history entry.
+  //
+  // (The companion DELETE handler lives earlier in the dispatcher — see
+  // the quote/lead path-overload comment near the legacy lead-delete
+  // route. Putting it there avoids the route-shadowing trap.)
+  const quoteRestoreMatch = pathname.match(/^\/api\/quotes\/([^/]+)\/restore$/);
+  if (quoteRestoreMatch && req.method === "POST") {
+    const session = await requireAdmin(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+    try {
+      const id = decodeURIComponent(quoteRestoreMatch[1]);
+      const existing = await quotes.get(id);
+      if (!existing) return sendJson(res, 404, { ok: false, errors: ["Quote not found."] });
+      const updated = await quotes.restore(id, { adminId: session.uid || "admin" });
+      return sendJson(res, 200, { ok: true, quote: updated });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't restore quote."] });
     }
   }
 

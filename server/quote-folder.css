@@ -165,3 +165,74 @@
   font-style: italic;
 }
 .qf-card__superseded { color: inherit; }
+
+/* Per-row destructive action (Delete-Quotes brief, May 2026). Sits at
+   the end of the action group; subdued red text rather than a filled
+   danger button so it doesn't compete with the green primary actions. */
+.qf-card__actions .qf-card__delete {
+  color: #A02828;
+  font-weight: 600;
+}
+.qf-card__actions .qf-card__delete:hover { text-decoration: underline; }
+
+/* Soft-deleted row styling — visible when the "Show deleted" toggle is
+   on. Subdued opacity, strikethrough on the Q-ID, "Deleted" indicator. */
+.qf-card--deleted {
+  opacity: 0.6;
+  border-style: dashed;
+}
+.qf-card--deleted .qf-card__id {
+  text-decoration: line-through;
+}
+.qf-card__deleted-tag {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: #F6E1DA;
+  color: #842F1B;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-decoration: none; /* defeat the parent's line-through */
+}
+/* Disabled "Convert to project" on deleted rows — same shape as the
+   active button but greyed out + not interactive. */
+.qf-card__actions button[disabled],
+.qf-card__actions .is-disabled {
+  color: #9A9A92;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+.qf-card__actions .qf-card__restore {
+  color: #1B4D2E;
+  font-weight: 600;
+}
+
+/* "Show deleted" toggle row — sits below the existing status / type
+   filter rows. Small + secondary so it doesn't look like another filter
+   button. Checkbox plus label inline. */
+.qf-deleted-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0 0;
+  padding: 8px 12px;
+  font-size: 13px;
+  color: var(--pjl-text-mid);
+}
+.qf-deleted-toggle input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--pjl-green);
+  cursor: pointer;
+}
+.qf-deleted-toggle label {
+  cursor: pointer;
+  user-select: none;
+}
+.qf-deleted-toggle .qf-deleted-toggle-count {
+  font-size: 12px;
+  color: #9A9A92;
+}
