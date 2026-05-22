@@ -13,10 +13,26 @@
 //   pendingCount()            — number of queued mutations
 //   on(event, fn)             — "change" event when queue size shifts
 //
-// Replay strategy: FIFO. Failures (4xx/5xx that aren't network errors)
-// drop the mutation from the queue with a console warning — server
-// rejected it for a real reason, retrying won't help. Network errors
-// keep the mutation queued for the next online attempt.
+// Replay strategy: FIFO. Failures (4xx that aren't network errors) drop
+// the mutation from the queue with a console warning — server rejected
+// it for a real reason, retrying won't help. 5xx halts the loop and
+// keeps the item queued for next time. Network errors also keep the
+// mutation queued.
+//
+// Replay triggers (after May 21 fix):
+//   1. `online` event (offline → online transition)
+//   2. Module first-load (drains anything left from the prior tab close)
+//   3. After every enqueue, when navigator.onLine is true (1s debounce)
+//   4. 30s heartbeat interval (backstop)
+//
+// Staleness check (Symptom B defence, OFFLINE_QUEUE_INVESTIGATION.md):
+// Before each replay batch, the loop probes each WO's current updatedAt
+// once. Any queue entry whose `queuedAt` is older than the server's
+// current `updatedAt` AND whose body touches a wholesale-replace field
+// (zones, lineItems, etc.) is dropped instead of replayed — replaying
+// would clobber the server's newer state with a stale snapshot. Dropped
+// entries are counted in `droppedCount()` and surfaced in the banner so
+// the tech sees the loss instead of it happening silently.
 
 (function setupOfflineQueue() {
   const DB_NAME = "pjl-tech-offline";
@@ -24,6 +40,24 @@
   const STORE = "queue";
   const listeners = new Set();
   let cachedCount = 0;
+  // Symptom B defence (May 21 investigation, OFFLINE_QUEUE_INVESTIGATION.md).
+  // Counts queue entries dropped because the server's `updatedAt` has moved
+  // past the entry's `queuedAt` AND the body touches a wholesale-replace
+  // field (`zones`, `lineItems`, etc.). Dropping is safer than replaying a
+  // stale snapshot that would clobber newer server state — but the tech
+  // needs to see WHEN this happens, so it surfaces in the banner instead of
+  // silently disappearing. Resets to 0 on page reload (in-memory only — no
+  // dead-letter store this round; that can come in a follow-up if useful).
+  let droppedAsStale = 0;
+  // Fields where the server's `update()` does a wholesale replace (see
+  // lib/work-orders.js:1172 and adjacent). A queued PATCH carrying one of
+  // these will overwrite server state with the local snapshot at enqueue
+  // time. If the server has moved on since the entry was queued, that's
+  // destructive — drop the entry instead.
+  const FULL_REPLACE_FIELDS = new Set([
+    "zones", "additionalRepairs", "lineItems", "customParts",
+    "serviceChecklist", "materialsPacked", "photos"
+  ]);
 
   // ---- IndexedDB helpers ---------------------------------------------
   function openDb() {
@@ -85,7 +119,7 @@
 
   function notify() {
     for (const fn of listeners) {
-      try { fn({ count: cachedCount, online: navigator.onLine }); }
+      try { fn({ count: cachedCount, online: navigator.onLine, droppedAsStale }); }
       catch (err) { console.warn("[offline-queue] listener", err); }
     }
   }
@@ -131,6 +165,15 @@
     delete headers.etag;
     await enqueue({ url, method, body, headers });
     await refreshCount();
+    // Symptom A fix (May 21 investigation): schedule a replay attempt
+    // after every enqueue when the device thinks it's online. Without
+    // this, a single transient fetch failure leaves the item in the
+    // queue with NO future drain trigger (the `online` event only
+    // fires on offline→online transitions, not on "online the whole
+    // time but one request flaked"). 1s delay debounces against bursts
+    // of enqueues during rapid tech taps; replay() itself is guarded
+    // by `replayInFlight` so concurrent schedules collapse to one run.
+    if (navigator.onLine) setTimeout(replay, 1000);
     // Synthesize a success response so the caller's UI doesn't error.
     // The data field is empty — callers that immediately re-render from
     // the response should be defensive (most patchWorkOrder callers
@@ -155,7 +198,61 @@
       startedWithItems = all.length > 0;
       // FIFO — oldest queuedAt first.
       all.sort((a, b) => new Date(a.queuedAt) - new Date(b.queuedAt));
+
+      // Symptom B defence (May 21 investigation): probe each WO's current
+      // `updatedAt` ONCE before the loop so we can spot queued snapshots
+      // that the server has already moved past. The expensive case (large
+      // queue) gets one GET per distinct WO URL, not per item. If a probe
+      // fails (offline mid-replay, server down), we skip the staleness
+      // check for that URL and fall back to the existing replay behaviour
+      // — better to risk an over-replay than to drop work because we
+      // couldn't read the server. Only checks GET-able URLs that look
+      // like `/api/work-orders/:id` PATCHes; anything else (custom
+      // endpoints) gets replayed without the staleness check.
+      const wo_urls = [...new Set(
+        all.filter((e) => /^\/api\/work-orders\/[^/]+$/.test(e.url) && e.method === "PATCH").map((e) => e.url)
+      )];
+      const serverUpdatedAtByUrl = {};
+      for (const u of wo_urls) {
+        try {
+          const r = await fetch(u, { cache: "no-store" });
+          if (r.ok) {
+            const j = await r.json().catch(() => ({}));
+            const wo = j.workOrder || j;
+            if (wo && wo.updatedAt) serverUpdatedAtByUrl[u] = wo.updatedAt;
+          }
+        } catch (_e) { /* probe failure → skip the check for this URL */ }
+      }
+
       for (const entry of all) {
+        // Staleness check: drop queued PATCHes whose snapshot the server
+        // has already moved past, when the payload would wholesale-
+        // replace a field. See FULL_REPLACE_FIELDS comment above. This
+        // is the Symptom B fix — without it, a stale `zones` snapshot
+        // replays and clobbers newer server state on disk.
+        const serverUpdatedAt = serverUpdatedAtByUrl[entry.url];
+        if (serverUpdatedAt && entry.queuedAt && entry.queuedAt < serverUpdatedAt) {
+          let parsedBody = null;
+          try { parsedBody = JSON.parse(entry.body || "{}"); } catch { /* tolerate */ }
+          if (parsedBody && typeof parsedBody === "object") {
+            const touched = Object.keys(parsedBody).filter((k) => FULL_REPLACE_FIELDS.has(k));
+            if (touched.length) {
+              console.warn(
+                "[offline-queue] DROP stale full-replace entry to protect newer server state.",
+                "url:", entry.url,
+                "queuedAt:", entry.queuedAt,
+                "serverUpdatedAt:", serverUpdatedAt,
+                "fields:", touched.join(",")
+              );
+              await dequeue(entry.id);
+              droppedAsStale++;
+              drainedAny = true;
+              await refreshCount();
+              continue;
+            }
+          }
+        }
+
         try {
           // Defensive strip of concurrency headers on replay — covers
           // legacy queue entries enqueued before the enqueue-time strip
@@ -210,6 +307,13 @@
   window.PJLOffline = {
     queuedFetch,
     pendingCount: () => cachedCount,
+    // Exposes the in-memory dropped-as-stale counter so the banner can
+    // surface "M dropped" alongside the pending count. Resets on reload
+    // (no persistent dead-letter store this round).
+    droppedCount: () => droppedAsStale,
+    // Manual reset — the banner's "Dismiss" affordance clears the dropped
+    // counter after the tech has acknowledged it.
+    clearDropped() { droppedAsStale = 0; notify(); },
     on(event, fn) {
       if (event === "change") listeners.add(fn);
     },
@@ -230,4 +334,11 @@
   refreshCount().then(() => {
     if (navigator.onLine) replay();
   });
+  // Heartbeat: belt-and-suspenders backstop against missed `online`
+  // events and any future regression that breaks the enqueue auto-
+  // trigger above. Idempotent — replay() no-ops when replayInFlight
+  // is true or when the queue is empty.
+  setInterval(() => {
+    if (navigator.onLine && cachedCount > 0) replay();
+  }, 30_000);
 })();

@@ -2843,6 +2843,23 @@ body[data-locked="true"] .tech-finish-bar { opacity: 0.55; pointer-events: none;
 }
 .tech-offline-icon { font-size: 16px; }
 .tech-offline-text { flex: 1; line-height: 1.4; }
+/* "Retry now" button on the offline banner (May 21 — see
+   OFFLINE_QUEUE_INVESTIGATION.md). Compact button matching the amber
+   banner palette; sits to the right of the status text. Hidden by JS
+   when there's nothing pending. */
+.tech-offline-retry {
+  flex-shrink: 0;
+  padding: 6px 12px;
+  font: 600 12px/1.2 inherit;
+  color: #4a3a00;
+  background: #ffd55a;
+  border: 1px solid #d6a800;
+  border-radius: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.tech-offline-retry:hover { background: #ffc83d; }
+.tech-offline-retry:active { background: #f0b920; }
 
 /* Property-updates preview (Brief D / spec §10 r3 + §4.3.2). Lists
    what will flow back to the property record when the tech marks the

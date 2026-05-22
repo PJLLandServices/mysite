@@ -74,6 +74,12 @@
     <div class="tech-offline-banner" id="techOfflineBanner" hidden role="status">
       <span class="tech-offline-icon" aria-hidden="true">📡</span>
       <span class="tech-offline-text" id="techOfflineText">Offline — changes saved locally and will sync when you reconnect.</span>
+      <!-- Manual "Retry now" — forces an immediate replay attempt.
+           Useful when the banner reads "Syncing N pending changes…" but
+           the count isn't moving. Hidden when there's nothing pending
+           (renderOfflineBanner toggles it). See OFFLINE_QUEUE_RECOVERY.md
+           for the broader recovery procedure. -->
+      <button type="button" class="tech-offline-retry" id="techOfflineRetry" hidden>Retry now</button>
     </div>
 
     <section class="tech-summary">

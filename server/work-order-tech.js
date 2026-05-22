@@ -17,7 +17,7 @@
 // tech-sw.js's CACHE_VERSION. If this string doesn't match the SW
 // cache version after deploy, the iPhone is serving stale JS — clear
 // website data and reload.
-const TECH_BUILD_VERSION = "tech-v38";
+const TECH_BUILD_VERSION = "tech-v39";
 function _setBadge(text, isError) {
   try {
     const badge = document.getElementById("techBuildBadge");
@@ -5513,28 +5513,73 @@ document.getElementById("techFollowupBtn")?.addEventListener("click", async () =
 // ---- Offline banner + queued-mutation status (spec §4.3.3 rule #12) -----
 // Wires the offline-queue helper to the banner up top. Updates on every
 // online/offline transition and every queue change. Hidden when the
-// browser is online AND nothing is queued.
+// browser is online AND nothing is queued AND nothing was dropped.
+//
+// "Retry now" button (May 21 fix, see OFFLINE_QUEUE_INVESTIGATION.md):
+// forces window.PJLOffline.replay() when the queue isn't draining on
+// its own. Visible only when online with pending items.
+//
+// Dropped-as-stale count (May 21 Symptom B defence): the offline queue
+// drops queued PATCHes whose snapshot the server has moved past — see
+// offline-queue.js for the rationale. The drop is counted and surfaced
+// in the banner so the tech knows when work was discarded to protect
+// newer server state. Tap the banner to dismiss the dropped count.
 function renderOfflineBanner() {
   const banner = document.getElementById("techOfflineBanner");
   const text = document.getElementById("techOfflineText");
+  const retryBtn = document.getElementById("techOfflineRetry");
   if (!banner || !text) return;
   const online = navigator.onLine;
   const queued = (window.PJLOffline && window.PJLOffline.pendingCount && window.PJLOffline.pendingCount()) || 0;
-  if (online && queued === 0) {
+  const dropped = (window.PJLOffline && window.PJLOffline.droppedCount && window.PJLOffline.droppedCount()) || 0;
+  if (online && queued === 0 && dropped === 0) {
     banner.hidden = true;
+    if (retryBtn) retryBtn.hidden = true;
     return;
   }
   banner.hidden = false;
+  if (retryBtn) retryBtn.hidden = !(online && queued > 0);
+  let msg;
   if (!online && queued > 0) {
-    text.textContent = `Offline — ${queued} change${queued === 1 ? "" : "s"} saved locally, will sync when you reconnect.`;
+    msg = `Offline — ${queued} change${queued === 1 ? "" : "s"} saved locally, will sync when you reconnect.`;
   } else if (!online) {
-    text.textContent = "Offline — changes will be saved locally and synced when you reconnect.";
+    msg = "Offline — changes will be saved locally and synced when you reconnect.";
+  } else if (queued > 0) {
+    msg = `Syncing ${queued} pending change${queued === 1 ? "" : "s"}…`;
   } else {
-    text.textContent = `Syncing ${queued} pending change${queued === 1 ? "" : "s"}…`;
+    // online && queued === 0 && dropped > 0 — surface the drop until ack.
+    msg = "All synced.";
   }
+  if (dropped > 0) {
+    msg += ` ${dropped} dropped as outdated (server had newer changes — tap to dismiss).`;
+    banner.style.cursor = "pointer";
+  } else {
+    banner.style.cursor = "";
+  }
+  text.textContent = msg;
 }
 window.addEventListener("online", renderOfflineBanner);
 window.addEventListener("offline", renderOfflineBanner);
+// Delegated click handler — splits "Retry now" tap from banner-body tap.
+// Retry tap: force replay. Body tap (when dropped > 0): clear counter.
+document.addEventListener("click", (event) => {
+  const target = event.target;
+  if (!target || !target.closest) return;
+  const retryBtn = target.closest("#techOfflineRetry");
+  if (retryBtn) {
+    event.preventDefault();
+    if (window.PJLOffline && typeof window.PJLOffline.replay === "function") {
+      window.PJLOffline.replay();
+    }
+    return;
+  }
+  const banner = target.closest("#techOfflineBanner");
+  if (!banner) return;
+  if (window.PJLOffline && typeof window.PJLOffline.clearDropped === "function") {
+    const dropped = (window.PJLOffline.droppedCount && window.PJLOffline.droppedCount()) || 0;
+    if (dropped > 0) window.PJLOffline.clearDropped();
+  }
+});
 if (window.PJLOffline) {
   window.PJLOffline.on("change", renderOfflineBanner);
   renderOfflineBanner();

@@ -375,7 +375,14 @@
 //     and signature last. Tap-jump from the pre-sign checklist
 //     row to #techPaymentSection still works as a fallback.
 // Touches work-order-tech.html only.
-const CACHE_VERSION = "pjl-tech-v38";
+// Bumped 2026-05-21 (v38 → v39): offline-queue hardening — replay-on-
+// enqueue (Symptom A fix), pre-replay staleness check that drops queued
+// PATCHes whose snapshot the server has moved past (Symptom B fix), 30s
+// heartbeat, manual "Retry now" button on the offline banner. Touches
+// offline-queue.js, work-order-tech.{html,js,css}. See
+// OFFLINE_QUEUE_INVESTIGATION.md for the root-cause analysis and
+// OFFLINE_QUEUE_RECOVERY.md for the field recovery procedure.
+const CACHE_VERSION = "pjl-tech-v39";
 const STATIC_ASSETS = [
   "/crm/work-order-tech.html",
   "/crm/work-order-tech.js",
