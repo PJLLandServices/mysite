@@ -36,6 +36,24 @@
       <h1 class="tech-header-id" id="techId">WO-—</h1>
     </div>
     <div class="tech-saving" id="techSaving" hidden>Saving…</div>
+    <!-- Offline / queued-mutation banner — appears when navigator.onLine
+         is false OR when there are queued mutations waiting to sync.
+         Lives inside the sticky header as an absolutely-positioned
+         child anchored to the bottom edge (top: 100%) so toggling its
+         `hidden` attribute doesn't push the main content down — fixes
+         the May 22 "twitching" report (b91848a refinement). Inherits
+         the header's stacking context so it sits cleanly above the
+         page content. Spec §4.3.3 rule #12. -->
+    <div class="tech-offline-banner" id="techOfflineBanner" hidden role="status">
+      <span class="tech-offline-icon" aria-hidden="true">📡</span>
+      <span class="tech-offline-text" id="techOfflineText">Offline — changes saved locally and will sync when you reconnect.</span>
+      <!-- Manual "Retry now" — forces an immediate replay attempt.
+           Useful when the banner reads "Syncing N pending changes…" but
+           the count isn't moving. Hidden when there's nothing pending
+           (renderOfflineBanner toggles it). See OFFLINE_QUEUE_RECOVERY.md
+           for the broader recovery procedure. -->
+      <button type="button" class="tech-offline-retry" id="techOfflineRetry" hidden>Retry now</button>
+    </div>
   </header>
   <!-- Build version badge — bottom-left corner. JS overwrites the text
        on load to confirm which JS bundle is actually running. If this
@@ -64,22 +82,6 @@
     <div class="tech-locked-banner" id="techLockedBanner" hidden role="status">
       <span class="tech-locked-icon" aria-hidden="true">🔒</span>
       <span class="tech-locked-text"><strong>Signed and locked</strong> <span id="techLockedMeta"></span></span>
-    </div>
-
-    <!-- Offline / queued-mutation banner — appears when navigator.onLine
-         is false OR when there are queued mutations waiting to sync.
-         Shows the queued count so the tech sees their work isn't lost.
-         Spec §4.3.3 rule #12: "Captured locally, synced when service
-         returns." -->
-    <div class="tech-offline-banner" id="techOfflineBanner" hidden role="status">
-      <span class="tech-offline-icon" aria-hidden="true">📡</span>
-      <span class="tech-offline-text" id="techOfflineText">Offline — changes saved locally and will sync when you reconnect.</span>
-      <!-- Manual "Retry now" — forces an immediate replay attempt.
-           Useful when the banner reads "Syncing N pending changes…" but
-           the count isn't moving. Hidden when there's nothing pending
-           (renderOfflineBanner toggles it). See OFFLINE_QUEUE_RECOVERY.md
-           for the broader recovery procedure. -->
-      <button type="button" class="tech-offline-retry" id="techOfflineRetry" hidden>Retry now</button>
     </div>
 
     <section class="tech-summary">

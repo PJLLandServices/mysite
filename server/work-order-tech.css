@@ -2824,15 +2824,23 @@ body[data-locked="true"] .tech-finish-bar { opacity: 0.55; pointer-events: none;
   50%      { box-shadow: 0 0 0 8px rgba(192, 58, 44, 0); }
 }
 
-/* Offline banner (spec §4.3.3 rule #12) — sits below the locked banner
-   when navigator.onLine is false OR there are queued mutations. Amber
+/* Offline banner (spec §4.3.3 rule #12) — anchored to the bottom edge
+   of the sticky header via position:absolute + top:100%. Takes ZERO
+   document-flow space when toggling its `hidden` attribute, so showing
+   /hiding doesn't push the main content down (fixes the May 22
+   "twitching" regression — see b91848a). Inherits the header's
+   stacking context (z-index 50) so it sits above page content. Amber
    so it's visible without screaming "error" — offline is a normal
    field state, not a failure. */
 .tech-offline-banner {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  margin: 0;
   display: flex;
   align-items: center;
   gap: 10px;
-  margin: 0 16px 8px;
   padding: 10px 14px;
   background: #FFF8E6;
   border: 1px solid #E6D17B;
