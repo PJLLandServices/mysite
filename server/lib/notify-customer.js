@@ -448,7 +448,7 @@ async function sendInvoiceToCustomer(invoice, pdfBuffer, opts = {}) {
   const { html: htmlTpl, text: textTpl } = loadTemplate();
   const firstName = (invoice.customerName || "").trim().split(/\s+/)[0] || "there";
   const totalFormatted = moneyTextCurrency(invoice.total);
-  const eTransferEmail = (opts.eTransferEmail || process.env.GMAIL_USER || "info@pjllandservices.com").trim();
+  const eTransferEmail = (opts.eTransferEmail || process.env.ETRANSFER_EMAIL || "info@pjllandservices.com").trim();
   const viewLink = (opts.viewLink || "").trim();
   const viewLinkVisible = viewLink ? "block" : "none";
   // For the plain-text body, render either the link line or a blank.

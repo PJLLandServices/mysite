@@ -5313,7 +5313,7 @@ async function handleApi(req, res, pathname) {
         total: inv.total,
         currency: inv.currency,
         quickbooksChargeId: inv.quickbooksChargeId,
-        eTransferEmail: process.env.GMAIL_USER || "info@pjllandservices.com"
+        eTransferEmail: process.env.ETRANSFER_EMAIL || "info@pjllandservices.com"
       };
       return sendJson(res, 200, { ok: true, invoice: safe });
     } catch (err) {

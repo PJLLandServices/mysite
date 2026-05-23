@@ -223,7 +223,7 @@ function normalize(raw) {
     noteToCustomer,
     disclaimers,
     portalToken: inv.portalToken || null,
-    eTransferEmail: inv.eTransferEmail || "info@pjllandservices.com"
+    eTransferEmail: inv.eTransferEmail || process.env.ETRANSFER_EMAIL || "info@pjllandservices.com"
   };
 }
 
