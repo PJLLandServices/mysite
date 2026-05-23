@@ -910,13 +910,10 @@
     </div>
   </div>
 
-  <!-- Signature bypass bottom sheet — opens when the tech taps
-       "Customer not present to sign?" inside the sign-off section.
-       Friction-bearing by design: reason select + editable note (≥10
-       chars) + explicit verbal-acceptance acknowledgement before the
-       Record button enables. On 409 scope_additions_require_acknowledgement
-       from the server, the sheet content swaps to the warning state
-       (a second ack + the "Send for remote approval" escape hatch). -->
+  <!-- Signature bypass bottom sheet — absolute admin override (Patrick
+       2026-05-23). One-tap completion when the customer isn't on-site to
+       sign. Server defaults reason to "admin_override" when missing, so
+       no reason picker, no note field, no checkboxes. -->
   <div class="tech-sheet" id="techBypassSheet" hidden role="dialog" aria-modal="true" aria-labelledby="techBypassTitle">
     <div class="tech-sheet-card">
       <header class="tech-sheet-head">
@@ -924,67 +921,14 @@
         <h2 id="techBypassTitle">Bypass on-site signature</h2>
       </header>
 
-      <!-- Default state — reason + note + ack -->
       <div class="tech-bypass-body" id="techBypassBody">
-        <p class="tech-bypass-help">Use only when the customer is not present at visit end. A verbal acceptance must have been given. This is recorded in the audit trail.</p>
-
-        <label class="tech-sheet-label" for="techBypassReason">Reason</label>
-        <select id="techBypassReason" class="tech-bypass-select">
-          <option value="">— Select reason —</option>
-          <option value="customer_not_home">Customer not home</option>
-          <option value="trusted_customer_verbal">Trusted customer — verbal acceptance</option>
-          <option value="other">Other</option>
-        </select>
-
-        <label class="tech-sheet-label" for="techBypassNote">Note</label>
-        <textarea id="techBypassNote" class="tech-bypass-textarea" rows="3" maxlength="2000" placeholder="Customer not home — signature bypassed, verbal acceptance recorded." data-voice-input>Customer not home — signature bypassed, verbal acceptance recorded.</textarea>
-        <p class="tech-bypass-hint">Minimum 10 characters. Voice-to-text enabled.</p>
-
-        <label class="tech-signoff-ack tech-bypass-ack">
-          <input type="checkbox" id="techBypassAck">
-          <span>I confirm verbal acceptance was given</span>
-        </label>
+        <p class="tech-bypass-help">Locks this work order without a customer signature. Recorded as an admin override in the audit trail.</p>
 
         <p class="tech-bypass-error" id="techBypassError" hidden role="alert"></p>
 
         <div class="tech-bypass-actions">
           <button type="button" class="tech-bypass-cancel" id="techBypassCancel">Cancel</button>
-          <button type="button" class="tech-bypass-submit" id="techBypassSubmit" disabled>Record bypass</button>
-        </div>
-      </div>
-
-      <!-- Scope-additions warning state — populated by the 409 retry path.
-           Hidden by default; swapped in when the server returns
-           scope_additions_require_acknowledgement.
-           Two-checkbox gate per v2 brief: verbal-acceptance + scope-
-           additions-ack must BOTH be checked before Confirm enables. -->
-      <div class="tech-bypass-warning" id="techBypassWarning" hidden>
-        <p class="tech-bypass-warning-headline"><span aria-hidden="true">⚠</span> Bypass with scope additions</p>
-        <p class="tech-bypass-warning-body" id="techBypassWarningBody">This bypass will record verbal acceptance of line items beyond the baseline service fee.</p>
-        <p class="tech-bypass-warning-noquote">
-          <strong>No on-site quote will be created</strong> in the quote folder — the work order's builder is the only record of what was accepted.
-        </p>
-        <p class="tech-bypass-warning-suggest">Consider: <strong>Send for Remote Approval</strong> instead — the customer signs the additions remotely from their phone.</p>
-
-        <p class="tech-sheet-label" id="techBypassWarningReasonLabel">Reason</p>
-        <p class="tech-bypass-warning-mirror" id="techBypassWarningReasonMirror"></p>
-
-        <p class="tech-sheet-label">Note</p>
-        <p class="tech-bypass-warning-mirror tech-bypass-warning-note" id="techBypassWarningNoteMirror"></p>
-        <p class="tech-bypass-hint">Edit reason or note above (in the default panel) if needed — they apply to this bypass.</p>
-
-        <label class="tech-signoff-ack tech-bypass-ack">
-          <input type="checkbox" id="techBypassWarningVerbalAck">
-          <span>I confirm verbal acceptance was given</span>
-        </label>
-        <label class="tech-signoff-ack tech-bypass-ack">
-          <input type="checkbox" id="techBypassWarningAck">
-          <span>I acknowledge the customer verbally accepted the full scope including additions</span>
-        </label>
-
-        <div class="tech-bypass-actions">
-          <button type="button" class="tech-bypass-remote" id="techBypassRemoteApproval">Send for remote approval instead</button>
-          <button type="button" class="tech-bypass-submit tech-bypass-submit-anyway" id="techBypassConfirmAnyway" disabled>Confirm bypass</button>
+          <button type="button" class="tech-bypass-submit" id="techBypassSubmit">Bypass signature &amp; complete</button>
         </div>
       </div>
     </div>

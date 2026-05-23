@@ -613,22 +613,20 @@ function summarizeScopeAdditions(wo) {
   };
 }
 
-// Capture a signature bypass — admin-authored alternative to the drawn
-// signature path. Acts as a UNIFIED end-of-visit completion event that
-// retroactively covers both the on-site-quote acceptance (if any
-// additions exist beyond baseline) and the completion signature in a
-// single audited record. Sets wo.locked = true and writes signatureBypass
-// with server-stamped audit metadata. Mutually exclusive with signature
-// AND with any prior accept-quote-with-signature or pending-remote-approval
-// Quote on the WO (those flows have their own signature posture; bypass
-// is a different posture, not a fallback).
+// Capture a signature bypass — absolute admin override (Patrick 2026-05-23).
+// Sets wo.locked = true and writes signatureBypass with server-stamped
+// audit metadata. Only refuses for idempotency (already_signed,
+// already_bypassed) or non-existence (wo_not_found). State-of-WO and
+// scope-additions gating were removed: admin override is final, and a
+// chain of "fix one gate, hit the next" pop-ups in the field is exactly
+// what this path is meant to escape.
 //
-// `meta` carries server-stamped audit fields: { ip, userAgent }. They're
-// never accepted from the client payload — same posture as the regular
-// signature capture.
-const BYPASS_REASONS = new Set(["customer_not_home", "trusted_customer_verbal", "other"]);
+// Legacy export — kept so consumers requiring the slug list don't break.
+// The current path accepts any non-empty reason string (and defaults to
+// "admin_override" when missing/empty).
+const BYPASS_REASONS = new Set(["customer_not_home", "trusted_customer_verbal", "other", "admin_override"]);
 
-async function captureSignatureBypass(woId, { reason, note, bypassedBy, acknowledgeWarning }, { ip, userAgent } = {}) {
+async function captureSignatureBypass(woId, { reason, note, bypassedBy }, { ip, userAgent } = {}) {
   const records = await readAll();
   const idx = records.findIndex((w) => w.id === woId);
   if (idx === -1) {
@@ -648,58 +646,10 @@ async function captureSignatureBypass(woId, { reason, note, bypassedBy, acknowle
     err.code = "already_bypassed";
     throw err;
   }
-  // Mutual exclusion with the existing on-site-quote flows. A WO that
-  // already has a Quote attached via send-for-approval (pending customer
-  // signature) or via on-site-quote/accept (drawn customer signature
-  // already captured) is on a different legal posture — bypass would
-  // duplicate or contradict the Quote's signature record. Refuse and
-  // surface specific codes so the tech UI can offer the right next step
-  // (cancel the pending Quote, or use the normal completion-signature
-  // path on top of the accepted Quote).
-  const onSiteStatus = current.onSiteQuote?.status;
-  const hasAttachedQuote = !!current.onSiteQuote?.quoteId;
-  if (hasAttachedQuote && onSiteStatus === "sent_for_remote_approval") {
-    const err = new Error("A remote-approval quote is pending customer signature. Cancel it before bypassing.");
-    err.code = "pending_remote_approval";
-    throw err;
-  }
-  if (hasAttachedQuote && (onSiteStatus === "accepted" || onSiteStatus === "partially_accepted" || onSiteStatus === "declined")) {
-    const err = new Error("An on-site quote was already accepted with a customer signature. Use the regular completion-signature path.");
-    err.code = "quote_already_accepted";
-    throw err;
-  }
-  const terminal = new Set(["completed", "cancelled", "no_show"]);
-  if (terminal.has(current.status)) {
-    const err = new Error(`Work order is in terminal state "${current.status}" — bypass not available.`);
-    err.code = "invalid_state";
-    throw err;
-  }
 
-  if (!BYPASS_REASONS.has(reason)) {
-    const err = new Error("Reason must be customer_not_home, trusted_customer_verbal, or other.");
-    err.code = "invalid_reason";
-    throw err;
-  }
+  const safeReason = (typeof reason === "string" && reason.trim()) ? reason.trim() : "admin_override";
   const trimmedNote = String(note || "").trim();
-  if (trimmedNote.length < 10) {
-    const err = new Error("Note must be at least 10 characters explaining the bypass.");
-    err.code = "note_too_short";
-    throw err;
-  }
-
-  // Determine whether this bypass also covers the on-site quote
-  // acceptance — i.e., the builder carries lines beyond baseline +
-  // AI bonus credit. If yes, the customer is being billed for added
-  // scope and the UI must have surfaced the warning state with the
-  // extra acknowledgement.
   const scopeSummary = summarizeScopeAdditions(current);
-  if (scopeSummary.hasAdditions && acknowledgeWarning !== true) {
-    const err = new Error(`Scope additions present (${scopeSummary.additionCount} line item${scopeSummary.additionCount === 1 ? "" : "s"}, $${scopeSummary.additionTotal.toFixed(2)}). Customer must verbally accept the additions explicitly.`);
-    err.code = "scope_additions_require_acknowledgement";
-    err.additionCount = scopeSummary.additionCount;
-    err.additionTotal = scopeSummary.additionTotal;
-    throw err;
-  }
 
   // Deep-copy the builder state at bypass time into an immutable
   // acceptedScopeSnapshot. signatureBypass is in SCOPE_PROTECTED_FIELDS,
@@ -732,7 +682,7 @@ async function captureSignatureBypass(woId, { reason, note, bypassedBy, acknowle
   const now = new Date().toISOString();
   const next = { ...current };
   next.signatureBypass = {
-    reason,
+    reason: safeReason,
     note: trimmedNote.slice(0, 2000),
     customerNamePrinted,
     bypassedBy: bypassedBy || "admin",
@@ -745,12 +695,6 @@ async function captureSignatureBypass(woId, { reason, note, bypassedBy, acknowle
       hst,
       total
     },
-    // Derived flag — true when the bypass also acts as the acceptance
-    // event for non-baseline scope. Surfaced in the post-bypass banner,
-    // the invoice admin authorization card, and the history viewer's
-    // audit entry so the legal posture is obvious at a glance. Bypass
-    // with this flag set replaces the on-site-quote/accept flow — no
-    // separate Quote record is created in the quote folder.
     coversQuoteAcceptance: scopeSummary.hasAdditions
   };
   next.locked = true;
@@ -761,11 +705,11 @@ async function captureSignatureBypass(woId, { reason, note, bypassedBy, acknowle
     ts: now,
     action: "signature_bypassed",
     by: bypassedBy || "admin",
-    note: `Reason: ${reason}${scopeSummary.hasAdditions ? ` — incl. on-site quote acceptance ($${total.toFixed(2)})` : ""}${trimmedNote ? ` — ${trimmedNote}` : ""}`,
+    note: `Reason: ${safeReason}${scopeSummary.hasAdditions ? ` — incl. on-site quote acceptance ($${total.toFixed(2)})` : ""}${trimmedNote ? ` — ${trimmedNote}` : ""}`,
     before: { signatureBypass: null, locked: !!current.locked },
     after: {
       signatureBypass: {
-        reason,
+        reason: safeReason,
         note: trimmedNote,
         customerNamePrinted,
         bypassedBy: bypassedBy || "admin",

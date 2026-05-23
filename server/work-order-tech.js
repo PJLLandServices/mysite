@@ -17,7 +17,7 @@
 // tech-sw.js's CACHE_VERSION. If this string doesn't match the SW
 // cache version after deploy, the iPhone is serving stale JS — clear
 // website data and reload.
-const TECH_BUILD_VERSION = "tech-v42";
+const TECH_BUILD_VERSION = "tech-v43";
 function _setBadge(text, isError) {
   try {
     const badge = document.getElementById("techBuildBadge");
@@ -2685,6 +2685,7 @@ function renderSignoff() {
 // BYPASS_REASONS set doesn't need to ship a second labels constant.
 function bypassReasonLabel(slug) {
   switch (slug) {
+    case "admin_override": return "Admin override";
     case "customer_not_home": return "Customer not home";
     case "trusted_customer_verbal": return "Trusted customer — verbal acceptance";
     case "other": return "Other";
@@ -3177,34 +3178,17 @@ document.getElementById("techRunCascadeBtn")?.addEventListener("click", async ()
 });
 
 // ---- Signature bypass sheet ----------------------------------------
-// Friction-bearing alternative to drawn signature when the customer is
-// not present at visit end. Reason + ≥10-char note + verbal-acceptance
-// ack before the Record button enables. Scope-additions warning state
-// (server returns 409 scope_additions_require_acknowledgement) swaps
-// the sheet body to the warning view with a second ack + "Send for
-// remote approval" escape hatch.
+// Absolute admin bypass (Patrick 2026-05-23): one-tap completion when
+// the customer isn't on-site to sign. No reason picker / no note / no
+// checkboxes — the server defaults reason to "admin_override".
 function openBypassSheet() {
   if (state.locked || state.signature?.signed || state.signatureBypass) return;
   const sheet = document.getElementById("techBypassSheet");
   if (!sheet) return;
-  // Reset both panels so a previous warning-state retry doesn't leak.
-  const body = document.getElementById("techBypassBody");
-  const warn = document.getElementById("techBypassWarning");
   const err = document.getElementById("techBypassError");
-  if (body) body.hidden = false;
-  if (warn) warn.hidden = true;
   if (err) { err.hidden = true; err.textContent = ""; }
-  // Reset ack checkboxes; preserve the default note + reason selection
-  // across opens (less re-typing).
-  const ack = document.getElementById("techBypassAck");
-  const warnAck = document.getElementById("techBypassWarningAck");
-  const warnVerbalAck = document.getElementById("techBypassWarningVerbalAck");
-  if (ack) ack.checked = false;
-  if (warnAck) warnAck.checked = false;
-  if (warnVerbalAck) warnVerbalAck.checked = false;
   sheet.hidden = false;
   document.body.classList.add("tech-sheet-open");
-  updateBypassSubmitState();
 }
 
 function closeBypassSheet() {
@@ -3214,40 +3198,10 @@ function closeBypassSheet() {
   document.body.classList.remove("tech-sheet-open");
 }
 
-function updateBypassSubmitState() {
-  const reason = document.getElementById("techBypassReason")?.value || "";
-  const note = (document.getElementById("techBypassNote")?.value || "").trim();
-  const ack = !!document.getElementById("techBypassAck")?.checked;
-  const submit = document.getElementById("techBypassSubmit");
-  if (submit) submit.disabled = !(reason && note.length >= 10 && ack);
-}
-
-function updateBypassWarningSubmitState() {
-  // v2 brief: two-checkbox gate in the additions warning state.
-  // Verbal-acceptance ack + scope-additions ack both required, in
-  // addition to a reason and >=10-char note (mirrored from the default
-  // panel above — the warning state doesn't re-render those inputs,
-  // it just shows their current values so the tech can confirm).
-  const reason = document.getElementById("techBypassReason")?.value || "";
-  const note = (document.getElementById("techBypassNote")?.value || "").trim();
-  const verbalAck = !!document.getElementById("techBypassWarningVerbalAck")?.checked;
-  const additionsAck = !!document.getElementById("techBypassWarningAck")?.checked;
-  const btn = document.getElementById("techBypassConfirmAnyway");
-  if (btn) btn.disabled = !(reason && note.length >= 10 && verbalAck && additionsAck);
-}
-
-async function submitBypass(acknowledgeWarning) {
-  const submitBtn = acknowledgeWarning
-    ? document.getElementById("techBypassConfirmAnyway")
-    : document.getElementById("techBypassSubmit");
+async function submitBypass() {
+  const submitBtn = document.getElementById("techBypassSubmit");
   const errEl = document.getElementById("techBypassError");
   if (!submitBtn || !state.id) return;
-  const reason = document.getElementById("techBypassReason")?.value || "";
-  const note = (document.getElementById("techBypassNote")?.value || "").trim();
-  if (!reason || note.length < 10) {
-    if (errEl) { errEl.hidden = false; errEl.textContent = "Pick a reason and write a note (≥10 chars)."; }
-    return;
-  }
   const orig = submitBtn.textContent;
   submitBtn.disabled = true;
   submitBtn.textContent = "Recording…";
@@ -3260,53 +3214,9 @@ async function submitBypass(acknowledgeWarning) {
     const r = await fetchFn(`/api/work-orders/${encodeURIComponent(state.id)}/signature-bypass`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ reason, note, acknowledgeWarning: !!acknowledgeWarning })
+      body: JSON.stringify({})
     });
     const data = await r.json().catch(() => ({}));
-
-    // Scope-additions: server gates the first attempt without
-    // acknowledgeWarning. Swap the sheet body to the warning state and
-    // let the tech either escalate to remote approval or confirm bypass
-    // anyway. The retry sends acknowledgeWarning: true.
-    if (r.status === 409 && data?.error === "scope_additions_require_acknowledgement") {
-      const body = document.getElementById("techBypassBody");
-      const warn = document.getElementById("techBypassWarning");
-      const warnBody = document.getElementById("techBypassWarningBody");
-      const reasonMirror = document.getElementById("techBypassWarningReasonMirror");
-      const noteMirror = document.getElementById("techBypassWarningNoteMirror");
-      if (body) body.hidden = true;
-      if (warn) warn.hidden = false;
-      if (warnBody && Number.isFinite(Number(data.additionCount))) {
-        const total = Number(data.additionTotal) || 0;
-        warnBody.textContent = `This bypass will record verbal acceptance of ${data.additionCount} line item${data.additionCount === 1 ? "" : "s"} totaling $${total.toFixed(2)} beyond the baseline service fee.`;
-      }
-      // Mirror reason + note from the default panel so the tech can
-      // confirm them before tapping Confirm. Editing happens back in
-      // the default panel (we don't double-render inputs).
-      if (reasonMirror) reasonMirror.textContent = bypassReasonLabel(reason);
-      if (noteMirror) noteMirror.textContent = note || "—";
-      // v2 brief: pre-fill the note with the dollar amount + a
-      // placeholder for verbal-acceptance context if the tech is still
-      // on the default placeholder text. Tech can edit before confirm.
-      const noteEl = document.getElementById("techBypassNote");
-      if (noteEl && Number.isFinite(Number(data.additionTotal))) {
-        const total = Number(data.additionTotal) || 0;
-        const DEFAULT_NOTE = "Customer not home — signature bypassed, verbal acceptance recorded.";
-        if (noteEl.value.trim() === DEFAULT_NOTE) {
-          noteEl.value = `Customer verbally accepted $${total.toFixed(2)} of additions — `;
-          if (noteMirror) noteMirror.textContent = noteEl.value;
-        }
-      }
-      // Reset the warning checkboxes for this retry session.
-      const verbal = document.getElementById("techBypassWarningVerbalAck");
-      const additions = document.getElementById("techBypassWarningAck");
-      if (verbal) verbal.checked = false;
-      if (additions) additions.checked = false;
-      updateBypassWarningSubmitState();
-      submitBtn.disabled = false;
-      submitBtn.textContent = orig;
-      return;
-    }
 
     if (!r.ok || !data?.ok) {
       const msg = (data && data.errors && data.errors[0]) || "Couldn't record bypass.";
@@ -3316,7 +3226,6 @@ async function submitBypass(acknowledgeWarning) {
       return;
     }
 
-    // Success — apply the new locked + bypass state and close the sheet.
     state.signatureBypass = data.workOrder.signatureBypass || null;
     state.locked = data.workOrder.locked === true;
     state.updatedAt = data.workOrder.updatedAt || state.updatedAt;
@@ -3337,39 +3246,7 @@ async function submitBypass(acknowledgeWarning) {
 document.getElementById("techBypassOpenBtn")?.addEventListener("click", openBypassSheet);
 document.getElementById("techBypassClose")?.addEventListener("click", closeBypassSheet);
 document.getElementById("techBypassCancel")?.addEventListener("click", closeBypassSheet);
-document.getElementById("techBypassReason")?.addEventListener("change", () => {
-  updateBypassSubmitState();
-  // Mirror keeps the warning panel in sync when the tech edits reason
-  // between attempts without reopening the sheet.
-  const mirror = document.getElementById("techBypassWarningReasonMirror");
-  if (mirror) mirror.textContent = bypassReasonLabel(document.getElementById("techBypassReason")?.value || "");
-  updateBypassWarningSubmitState();
-});
-document.getElementById("techBypassNote")?.addEventListener("input", () => {
-  updateBypassSubmitState();
-  const mirror = document.getElementById("techBypassWarningNoteMirror");
-  if (mirror) mirror.textContent = (document.getElementById("techBypassNote")?.value || "").trim() || "—";
-  updateBypassWarningSubmitState();
-});
-document.getElementById("techBypassAck")?.addEventListener("change", updateBypassSubmitState);
-document.getElementById("techBypassWarningAck")?.addEventListener("change", updateBypassWarningSubmitState);
-document.getElementById("techBypassWarningVerbalAck")?.addEventListener("change", updateBypassWarningSubmitState);
-document.getElementById("techBypassSubmit")?.addEventListener("click", () => submitBypass(false));
-document.getElementById("techBypassConfirmAnyway")?.addEventListener("click", () => submitBypass(true));
-document.getElementById("techBypassRemoteApproval")?.addEventListener("click", () => {
-  // Close the bypass sheet and forward the tech to the existing
-  // send-for-approval flow — that's the preferred path when scope
-  // additions exist. The button lives in the on-site quote section
-  // (see #techOnSiteSendApprovalBtn handler above).
-  closeBypassSheet();
-  const remoteBtn = document.getElementById("techOnSiteSendApprovalBtn");
-  if (remoteBtn) {
-    remoteBtn.scrollIntoView({ behavior: "smooth", block: "center" });
-    remoteBtn.focus();
-  } else {
-    alert("Open the on-site quote section and tap 'Send for remote approval'.");
-  }
-});
+document.getElementById("techBypassSubmit")?.addEventListener("click", () => submitBypass());
 
 // Apply the locked / unlocked state across the whole page. When locked,
 // the body gets data-locked="true" so CSS can grey out interactive

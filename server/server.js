@@ -5878,6 +5878,20 @@ async function handleApi(req, res, pathname) {
       const token = decodeURIComponent(approvalGetMatch[2]);
       const q = await quotes.getByApprovalToken(quoteId, token);
       if (!q) return sendJson(res, 404, { ok: false, errors: ["Approval link not found or expired."] });
+      // Bypass safety — if the WO this quote belongs to has been
+      // admin-bypassed or locked, the visit is complete and this link
+      // is stale. Surface the completed message instead of a signable page.
+      {
+        const woIds = Array.isArray(q.workOrderIds) ? q.workOrderIds : [];
+        for (const woId of woIds) {
+          try {
+            const wo = await workOrders.get(woId);
+            if (wo && (wo.locked || wo.signatureBypass)) {
+              return sendJson(res, 410, { ok: false, errors: ["This work order has already been completed."] });
+            }
+          } catch (_) { /* ignore */ }
+        }
+      }
       const safe = {
         id: q.id,
         type: q.type,
@@ -5922,6 +5936,21 @@ async function handleApi(req, res, pathname) {
       if (!q) return sendJson(res, 404, { ok: false, errors: ["Approval link not found or expired."] });
       if (q.signature?.signed) {
         return sendJson(res, 200, { ok: true, alreadySigned: true });
+      }
+      // Bypass safety (Patrick 2026-05-23): if the WO this quote belongs
+      // to has been admin-bypassed or otherwise locked, the visit is
+      // complete and this remote-sign link is stale. Reject before
+      // capturing a signature that would conflict with the bypass record.
+      {
+        const woIds = Array.isArray(q.workOrderIds) ? q.workOrderIds : [];
+        for (const woId of woIds) {
+          try {
+            const wo = await workOrders.get(woId);
+            if (wo && (wo.locked || wo.signatureBypass)) {
+              return sendJson(res, 410, { ok: false, errors: ["This work order has already been completed."] });
+            }
+          } catch (_) { /* ignore — non-existent WO falls through to normal flow */ }
+        }
       }
       const customerName = String(payload?.customerName || "").trim();
       const imageData = String(payload?.imageData || "");
@@ -10598,17 +10627,15 @@ async function handleApi(req, res, pathname) {
   // legal posture — bypass IS NOT a signature, it's an honest record of
   // verbal acceptance.
   //
-  // Friction by design: requires reason + ≥10-char note + ack checkbox in
-  // the UI. When the on-site quote builder has line items beyond the
-  // baseline seasonal fee + AI bonus credit, the route returns 409
-  // scope_additions_require_acknowledgement so the UI MUST surface the
-  // warning and pass acknowledgeWarning: true on retry.
-  //
-  // After capture, the route fires the same deferred-issue sweep as the
-  // regular signature path (carry-forward "Repair now" items resolve at
-  // the lock-flip moment per hard rule §11). Cascade itself does NOT fire
-  // here — the tech taps "Mark visit completed" separately to flip status
-  // to completed, which triggers the regular cascade path.
+  // Absolute admin bypass (Patrick 2026-05-23): the only reasons the
+  // server can refuse are (a) the WO doesn't exist, (b) it's already
+  // signed, or (c) bypass is already recorded. Every other former gate
+  // (pending remote approval, accepted quote, terminal state, scope
+  // additions, reason allow-list, ≥10-char note) was a friction surface
+  // Patrick has explicitly removed — admin override is final. Empty/
+  // missing reason defaults to "admin_override" so downstream readers
+  // (PDF, history, invoice) keep a non-empty field on the record. After
+  // capture, fire the same deferred-issue sweep as the signed path.
   const woSignatureBypassMatch = pathname.match(/^\/api\/work-orders\/([^/]+)\/signature-bypass$/);
   if (woSignatureBypassMatch && req.method === "POST") {
     try {
@@ -10616,10 +10643,6 @@ async function handleApi(req, res, pathname) {
       const payload = await parseRequestBody(req);
       const wo = await workOrders.get(id);
       if (!wo) return sendJson(res, 404, { ok: false, error: "wo_not_found", errors: ["Work order not found."] });
-
-      // Mutual-exclusion guards happen inside the lib verb too, but we
-      // check here first to return cleaner per-error codes for the UI
-      // (the verb's generic 400 path is the catch-all).
       if (wo.signature && wo.signature.signed === true) {
         return sendJson(res, 409, {
           ok: false,
@@ -10634,109 +10657,28 @@ async function handleApi(req, res, pathname) {
           errors: ["Bypass already recorded for this work order. See WO history."]
         });
       }
-      // Mutual exclusion with the on-site-quote flows. Send-for-approval
-      // sets onSiteQuote.status = "sent_for_remote_approval"; accept (or
-      // its remote-signature counterpart) sets accepted / partially_accepted /
-      // declined and attaches quoteId. Either path means a customer-
-      // signature posture already exists — bypass would either duplicate
-      // or contradict it, so refuse with a code the UI can route on.
-      const onSiteStatus = wo.onSiteQuote?.status;
-      const hasAttachedQuote = !!wo.onSiteQuote?.quoteId;
-      if (hasAttachedQuote && onSiteStatus === "sent_for_remote_approval") {
-        return sendJson(res, 409, {
-          ok: false,
-          error: "pending_remote_approval",
-          errors: ["A remote-approval quote is pending customer signature. Cancel the pending quote (or wait for the customer) before bypassing."]
-        });
-      }
-      if (hasAttachedQuote && (onSiteStatus === "accepted" || onSiteStatus === "partially_accepted" || onSiteStatus === "declined")) {
-        return sendJson(res, 409, {
-          ok: false,
-          error: "quote_already_accepted",
-          errors: ["An on-site quote was already accepted with a customer signature. Use the regular completion-signature path instead of bypass."]
-        });
-      }
-      const terminal = new Set(["completed", "cancelled", "no_show"]);
-      if (terminal.has(wo.status)) {
-        return sendJson(res, 409, {
-          ok: false,
-          error: "invalid_state",
-          errors: [`Work order is in terminal state "${wo.status}" — bypass not available.`]
-        });
-      }
-
-      // Pre-sign gates intentionally NOT enforced on the bypass path
-      // (Patrick 2026-05-21). The drawn-signature path still enforces
-      // zones-reviewed / completion-photos / payment-method / return-
-      // visit / AI-bonus / materials-confirmed because the tech is
-      // asking the customer to sign in good faith and the gates verify
-      // the work was actually done. Admin bypass has a different legal
-      // posture: Patrick (sole operator-admin) takes responsibility for
-      // locking the WO without those receipts. He doesn't want a chain
-      // of "fix one gate, hit the next" pop-ups in the field. The
-      // server defaults (paidOnSite=false → "invoice to follow",
-      // needsReturnVisit=null → no follow-up auto-scheduled, etc.) are
-      // sensible for a bypass-locked WO. The only checks the bypass
-      // path keeps are: lock state, terminal state, signature/bypass
-      // mutual exclusion, on-site-quote acceptance mutual exclusion,
-      // BYPASS_REASONS membership, note ≥ 10 chars, and the scope-
-      // additions warning (those exist below in the lib verb).
-
-      // Scope-additions check — when the builder has lines beyond
-      // baseline + AI bonus credit, refuse the first attempt and surface
-      // the warning state in the UI. The UI's "Confirm bypass anyway"
-      // button retries with acknowledgeWarning: true.
-      const scopeAdditions = workOrders.summarizeScopeAdditions(wo);
-      if (scopeAdditions.hasAdditions && payload?.acknowledgeWarning !== true) {
-        return sendJson(res, 409, {
-          ok: false,
-          error: "scope_additions_require_acknowledgement",
-          errors: [`This work order has ${scopeAdditions.additionCount} line item${scopeAdditions.additionCount === 1 ? "" : "s"} beyond the baseline ($${scopeAdditions.additionTotal.toFixed(2)}). Bypassing signature on a visit with added scope requires an explicit acknowledgement.`],
-          additionCount: scopeAdditions.additionCount,
-          additionTotal: scopeAdditions.additionTotal
-        });
-      }
 
       const ip = (req.headers["x-forwarded-for"] || "").split(",")[0].trim() || req.socket?.remoteAddress || "";
       const userAgent = req.headers["user-agent"] || "";
+      const reason = (typeof payload?.reason === "string" && payload.reason.trim())
+        ? payload.reason.trim()
+        : "admin_override";
+      const note = typeof payload?.note === "string" ? payload.note : "";
 
       let updated;
       try {
         updated = await workOrders.captureSignatureBypass(
           id,
-          {
-            reason: payload?.reason,
-            note: payload?.note,
-            bypassedBy: "admin",
-            // Forward the warning-acknowledged flag so the verb's own
-            // scope-additions guard (defense-in-depth) doesn't re-throw
-            // after the route already passed the pre-flight check above.
-            acknowledgeWarning: payload?.acknowledgeWarning === true
-          },
+          { reason, note, bypassedBy: "admin" },
           { ip, userAgent }
         );
       } catch (err) {
-        // Map lib-level error codes to HTTP status codes.
         const code = err?.code || "";
         if (code === "wo_not_found") {
           return sendJson(res, 404, { ok: false, error: code, errors: [err.message] });
         }
-        if (code === "already_signed" || code === "already_bypassed"
-            || code === "invalid_state" || code === "pending_remote_approval"
-            || code === "quote_already_accepted") {
+        if (code === "already_signed" || code === "already_bypassed") {
           return sendJson(res, 409, { ok: false, error: code, errors: [err.message] });
-        }
-        if (code === "scope_additions_require_acknowledgement") {
-          return sendJson(res, 409, {
-            ok: false,
-            error: code,
-            errors: [err.message],
-            additionCount: err.additionCount,
-            additionTotal: err.additionTotal
-          });
-        }
-        if (code === "invalid_reason" || code === "note_too_short") {
-          return sendJson(res, 400, { ok: false, error: code, errors: [err.message] });
         }
         return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't record signature bypass."] });
       }
