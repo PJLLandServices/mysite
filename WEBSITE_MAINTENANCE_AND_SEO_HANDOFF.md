@@ -747,9 +747,10 @@ To turn notifications on, copy `.env.example` to `.env` and fill in:
 
 | Variable | Where to get it |
 |---|---|
-| `GMAIL_USER` | Your Google Workspace email address (`info@pjllandservices.com`). |
+| `GMAIL_USER` | The Google Workspace account used to AUTHENTICATE outbound SMTP. Can be `patrick@…` or any address on the Workspace tenant — customer-facing From-headers are not bound to this. Set Gmail's "Send mail as" alias if you want patrick@ to send as info@. |
 | `GMAIL_APP_PASSWORD` | Create at https://myaccount.google.com/apppasswords. **Requires 2-Step Verification first.** This is NOT your regular Gmail password. |
-| `NOTIFY_TO_EMAIL` | Where alerts go. Defaults to `GMAIL_USER` if blank. |
+| `CUSTOMER_EMAIL` | Customer-facing From: + Reply-To: on every customer-bound email AND the e-Transfer / "send PDF back to" address on invoice + quote PDFs. Defaults to `info@pjllandservices.com` when blank — keep that default unless you have a reason to change it. |
+| `NOTIFY_TO_EMAIL` | Where the admin-side "new lead" alert goes. Defaults to `GMAIL_USER` if blank. Internal only — never customer-visible. |
 | `TWILIO_ACCOUNT_SID` | https://console.twilio.com → "Account Info." Starts with `AC`. |
 | `TWILIO_AUTH_TOKEN` | Same place, paired with the SID. |
 | `TWILIO_FROM_NUMBER` | The Twilio number you bought, in E.164 (e.g. `+14165550100`). |

@@ -5062,7 +5062,7 @@ async function handleApi(req, res, pathname) {
         acceptanceUrl: q.approval?.token
           ? `${resolvePublicBaseUrl()}/approve/${encodeURIComponent(q.id)}?t=${q.approval.token}`
           : null,
-        returnEmail: process.env.GMAIL_USER || "info@pjllandservices.com"
+        returnEmail: process.env.CUSTOMER_EMAIL || "info@pjllandservices.com"
       }).pipe(res);
       return;
     } catch (err) {
@@ -5120,7 +5120,7 @@ async function handleApi(req, res, pathname) {
         customer,
         property: property || {},
         acceptanceUrl: `${resolvePublicBaseUrl()}/approve/${encodeURIComponent(q.id)}?t=${token}`,
-        returnEmail: process.env.GMAIL_USER || "info@pjllandservices.com"
+        returnEmail: process.env.CUSTOMER_EMAIL || "info@pjllandservices.com"
       }).pipe(res);
       return;
     } catch (err) {
@@ -5827,9 +5827,9 @@ async function handleApi(req, res, pathname) {
               console.warn("[approval-email] inspection report snapshot failed:", err?.message);
             }
             await transporter.sendMail({
-              from: `"PJL Land Services" <${process.env.GMAIL_USER}>`,
+              from: `"PJL Land Services" <${process.env.CUSTOMER_EMAIL || "info@pjllandservices.com"}>`,
               to: toEmail,
-              replyTo: process.env.GMAIL_USER,
+              replyTo: process.env.CUSTOMER_EMAIL || "info@pjllandservices.com",
               subject: "PJL: please approve today's repair quote",
               html,
               ...(attachments.length ? { attachments } : {})
@@ -8401,9 +8401,9 @@ async function handleApi(req, res, pathname) {
               auth: { user: process.env.GMAIL_USER, pass: process.env.GMAIL_APP_PASSWORD }
             });
             await transporter.sendMail({
-              from: `"PJL Land Services" <${process.env.GMAIL_USER}>`,
+              from: `"PJL Land Services" <${process.env.CUSTOMER_EMAIL || "info@pjllandservices.com"}>`,
               to: scr.draftEmail.to,
-              replyTo: process.env.GMAIL_USER,
+              replyTo: process.env.CUSTOMER_EMAIL || "info@pjllandservices.com",
               subject: scr.draftEmail.subject,
               text: scr.draftEmail.body
             });
@@ -8494,9 +8494,9 @@ async function handleApi(req, res, pathname) {
             });
             const html = renderStatusUpdateHtml(entry.snapshot);
             await transporter.sendMail({
-              from: `"PJL Land Services" <${process.env.GMAIL_USER}>`,
+              from: `"PJL Land Services" <${process.env.CUSTOMER_EMAIL || "info@pjllandservices.com"}>`,
               to: recipient.email,
-              replyTo: process.env.GMAIL_USER,
+              replyTo: process.env.CUSTOMER_EMAIL || "info@pjllandservices.com",
               subject: `Project update — ${entry.snapshot.projectName} — ${new Date().toLocaleDateString("en-CA")}`,
               html
             });
@@ -8628,9 +8628,9 @@ async function handleApi(req, res, pathname) {
   </div>
 </div>`.trim();
           await transporter.sendMail({
-            from: `"PJL Land Services" <${process.env.GMAIL_USER}>`,
+            from: `"PJL Land Services" <${process.env.CUSTOMER_EMAIL || "info@pjllandservices.com"}>`,
             to: project.customerEmail,
-            replyTo: process.env.GMAIL_USER,
+            replyTo: process.env.CUSTOMER_EMAIL || "info@pjllandservices.com",
             subject: `PJL: project complete — ${project.name || project.id}`,
             html,
             ...(attachments.length ? { attachments } : {})
@@ -8930,7 +8930,7 @@ async function handleApi(req, res, pathname) {
                 customer: { name: "", email: q.customerEmail, phone: toPhone || "" },
                 property: {},
                 acceptanceUrl: approvalUrl,
-                returnEmail: process.env.GMAIL_USER || "info@pjllandservices.com"
+                returnEmail: process.env.CUSTOMER_EMAIL || "info@pjllandservices.com"
               });
               const chunks = [];
               await new Promise((resolve, reject) => {
@@ -8947,9 +8947,9 @@ async function handleApi(req, res, pathname) {
               console.warn("[proposal-email] PDF attach failed:", err?.message);
             }
             await transporter.sendMail({
-              from: `"PJL Land Services" <${process.env.GMAIL_USER}>`,
+              from: `"PJL Land Services" <${process.env.CUSTOMER_EMAIL || "info@pjllandservices.com"}>`,
               to: toEmail,
-              replyTo: process.env.GMAIL_USER,
+              replyTo: process.env.CUSTOMER_EMAIL || "info@pjllandservices.com",
               subject: `PJL proposal ${q.id} — your review and acceptance`,
               html,
               ...(attachments.length ? { attachments } : {})
@@ -10383,9 +10383,9 @@ async function handleApi(req, res, pathname) {
           } catch (err) { console.warn("[cascade] report attach failed:", err?.message); }
         }
         await transporter.sendMail({
-          from: `"PJL Land Services" <${process.env.GMAIL_USER}>`,
+          from: `"PJL Land Services" <${process.env.CUSTOMER_EMAIL || "info@pjllandservices.com"}>`,
           to: wo.customerEmail,
-          replyTo: process.env.GMAIL_USER,
+          replyTo: process.env.CUSTOMER_EMAIL || "info@pjllandservices.com",
           subject: isBypassed
             ? "PJL visit summary — please review"
             : "Your PJL visit is complete",
@@ -11745,9 +11745,9 @@ Customer signature captured at ${new Date().toISOString()}.`;
 </div>`.trim();
             const text = `Hi ${safeFirst},\n\nFollowing up on our conversation${summary ? ": " + summary : ""}.\n\nBook your appointment: ${bookingUrl}\n\nQuestions? Call (905) 960-0181.\n\nPJL Land Services`;
             await transporter.sendMail({
-              from: `"PJL Land Services" <${process.env.GMAIL_USER}>`,
+              from: `"PJL Land Services" <${process.env.CUSTOMER_EMAIL || "info@pjllandservices.com"}>`,
               to: email,
-              replyTo: process.env.GMAIL_USER,
+              replyTo: process.env.CUSTOMER_EMAIL || "info@pjllandservices.com",
               subject: "Your PJL booking link is ready",
               html,
               text

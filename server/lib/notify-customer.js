@@ -288,9 +288,9 @@ async function sendCustomerEmail(event, lead) {
   if (!built) return { ok: false, skipped: true, reason: `unknown event ${event}` };
   try {
     const info = await transporter.sendMail({
-      from: `"PJL Land Services" <${process.env.GMAIL_USER}>`,
+      from: `"PJL Land Services" <${process.env.CUSTOMER_EMAIL || "info@pjllandservices.com"}>`,
       to,
-      replyTo: process.env.GMAIL_USER,
+      replyTo: process.env.CUSTOMER_EMAIL || "info@pjllandservices.com",
       subject: built.subject,
       html: built.html,
       text: built.text
@@ -501,9 +501,9 @@ async function sendInvoiceToCustomer(invoice, pdfBuffer, opts = {}) {
 
   try {
     const info = await transporter.sendMail({
-      from: `"PJL Land Services" <${process.env.GMAIL_USER}>`,
+      from: `"PJL Land Services" <${process.env.CUSTOMER_EMAIL || "info@pjllandservices.com"}>`,
       to,
-      replyTo: process.env.GMAIL_USER,
+      replyTo: process.env.CUSTOMER_EMAIL || "info@pjllandservices.com",
       subject,
       html,
       text,
@@ -625,9 +625,9 @@ async function sendPaymentReceipt(invoice, pdfBuffer, opts = {}) {
 
   try {
     const info = await transporter.sendMail({
-      from: `"PJL Land Services" <${process.env.GMAIL_USER}>`,
+      from: `"PJL Land Services" <${process.env.CUSTOMER_EMAIL || "info@pjllandservices.com"}>`,
       to,
-      replyTo: process.env.GMAIL_USER,
+      replyTo: process.env.CUSTOMER_EMAIL || "info@pjllandservices.com",
       subject,
       html,
       text,
@@ -727,9 +727,9 @@ async function sendCustomerLoginLink(lead, magicLink) {
 
   try {
     const info = await transporter.sendMail({
-      from: `"PJL Land Services" <${process.env.GMAIL_USER}>`,
+      from: `"PJL Land Services" <${process.env.CUSTOMER_EMAIL || "info@pjllandservices.com"}>`,
       to,
-      replyTo: process.env.GMAIL_USER,
+      replyTo: process.env.CUSTOMER_EMAIL || "info@pjllandservices.com",
       subject: "Your PJL Land Services portal login link",
       html,
       text
@@ -773,9 +773,9 @@ async function sendAdminPasswordResetLink(user, magicLink) {
 
   try {
     const info = await transporter.sendMail({
-      from: `"PJL Land Services" <${process.env.GMAIL_USER}>`,
+      from: `"PJL Land Services" <${process.env.CUSTOMER_EMAIL || "info@pjllandservices.com"}>`,
       to,
-      replyTo: process.env.GMAIL_USER,
+      replyTo: process.env.CUSTOMER_EMAIL || "info@pjllandservices.com",
       subject: "Reset your PJL CRM password",
       html,
       text
@@ -847,9 +847,9 @@ async function sendBookingCancellation(booking, { reason = "", notify = true } =
 
   try {
     const info = await transporter.sendMail({
-      from: `"PJL Land Services" <${process.env.GMAIL_USER}>`,
+      from: `"PJL Land Services" <${process.env.CUSTOMER_EMAIL || "info@pjllandservices.com"}>`,
       to,
-      replyTo: process.env.GMAIL_USER,
+      replyTo: process.env.CUSTOMER_EMAIL || "info@pjllandservices.com",
       subject: `Appointment cancelled — PJL Land Services`,
       html,
       text
@@ -954,9 +954,9 @@ async function sendPortalReplyToCustomer(lead, replyBody) {
   });
   try {
     const info = await transporter.sendMail({
-      from: `"PJL Land Services" <${process.env.GMAIL_USER}>`,
+      from: `"PJL Land Services" <${process.env.CUSTOMER_EMAIL || "info@pjllandservices.com"}>`,
       to,
-      replyTo: process.env.GMAIL_USER,
+      replyTo: process.env.CUSTOMER_EMAIL || "info@pjllandservices.com",
       subject: "PJL replied to your message",
       html,
       text
@@ -1102,9 +1102,9 @@ async function sendOutreachEmail({
 
   try {
     const info = await transporter.sendMail({
-      from: `"PJL Land Services" <${process.env.GMAIL_USER}>`,
+      from: `"PJL Land Services" <${process.env.CUSTOMER_EMAIL || "info@pjllandservices.com"}>`,
       to: toAddr,
-      replyTo: process.env.GMAIL_USER,
+      replyTo: process.env.CUSTOMER_EMAIL || "info@pjllandservices.com",
       subject: renderedSubject,
       html,
       text

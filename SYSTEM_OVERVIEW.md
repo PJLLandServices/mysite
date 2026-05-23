@@ -702,9 +702,12 @@ Helpers live in:
   `formatVendorAddress()` (title-cases all-caps stored addresses, puts
   Canadian postal codes on their own line)
 - `server/lib/company.js` — single source for sender contact (name,
-  city, phone, website, email, brand green hex). Sender email reads
-  `process.env.GMAIL_USER` at call time with `info@pjllandservices.com`
-  as the fallback.
+  city, phone, website, email, brand green hex). The `email()` helper
+  reads `process.env.GMAIL_USER` (the SMTP-auth account) with
+  `info@pjllandservices.com` as the fallback. Used by supplier-facing
+  PO PDFs + supplier emails only — customer-facing From-headers go
+  through `CUSTOMER_EMAIL` (see the "External integrations" table and
+  the env-vars block below for the split).
 
 ### 3. Quote → project (multi-WO job)
 
@@ -866,7 +869,7 @@ that subset.
 
 | Service | Purpose | Trigger | Required env vars |
 |---|---|---|---|
-| **Gmail SMTP** | Lead notification email, customer transition emails, supplier PO emails | New lead, status changes, PO send | `GMAIL_USER`, `GMAIL_APP_PASSWORD` |
+| **Gmail SMTP** | Lead notification email, customer transition emails, supplier PO emails | New lead, status changes, PO send | `GMAIL_USER`, `GMAIL_APP_PASSWORD` (SMTP auth) + `CUSTOMER_EMAIL` (customer-facing From / Reply-To, defaults to `info@pjllandservices.com`) |
 | **Twilio** | Admin SMS on new lead | New lead intake | `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM_NUMBER`, `NOTIFY_TO_PHONE` |
 | **Google Maps JS API** | Places Autocomplete on every editable address input + Distance Matrix on the public coverage checker | Form interaction | API key hardcoded in HTML script tags (browser key) |
 | **Google Geocoding** | Property coordinates + drive-time analysis (admin only) | Property creation, today schedule | `GOOGLE_MAPS_SERVER_KEY` |
@@ -889,14 +892,23 @@ TZ                    = America/Toronto                    (forced by server.js)
 PORT                  = 4173                                (Render injects)
 HOST                  = 0.0.0.0                             (Render scanner needs this)
 PUBLIC_BASE_URL       = https://pjllandservices.com         (post-DNS-cutover)
-GMAIL_USER            = info@pjllandservices.com             (SINGLE SOURCE for sender email — POs,
-                                                              invoices, quotes, customer-portal mail
-                                                              all From: this address. Surfaced
-                                                              programmatically via server/lib/company.js
-                                                              `email()`. Falls back to the hardcoded
-                                                              info@pjllandservices.com when unset.)
+GMAIL_USER            = patrick@pjllandservices.com           (SMTP auth ONLY — the Google Workspace
+                                                              account whose app password authenticates
+                                                              outbound mail. Customer-facing From-headers
+                                                              are NOT bound to this address; they read
+                                                              CUSTOMER_EMAIL. Supplier POs and lead
+                                                              alerts still use this via company.email().)
 GMAIL_APP_PASSWORD    = (Gmail app password, not regular pw)
-NOTIFY_TO_EMAIL       = (defaults to GMAIL_USER)
+CUSTOMER_EMAIL        = info@pjllandservices.com              (Customer-facing From: + Reply-To: on
+                                                              every customer-bound email AND the
+                                                              e-Transfer / "send PDF back to" address
+                                                              rendered into invoice + quote PDFs.
+                                                              Defaults to info@pjllandservices.com
+                                                              when unset. Decouples SMTP auth identity
+                                                              from the address customers see and reply
+                                                              to. Gmail's Send-As alias lets a patrick@
+                                                              login send with an info@ From-header.)
+NOTIFY_TO_EMAIL       = (defaults to GMAIL_USER — admin-internal lead alerts only)
 TWILIO_ACCOUNT_SID    = ...
 TWILIO_AUTH_TOKEN     = ...
 TWILIO_FROM_NUMBER    = +1...
