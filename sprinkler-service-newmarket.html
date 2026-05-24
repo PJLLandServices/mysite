@@ -135,6 +135,9 @@
 .pricing-newmarket .btn-primary:hover{background:var(--amber-light);}
 .pricing-newmarket .btn-secondary{display:inline-flex;align-items:center;gap:10px;background:#fff;border:1px solid var(--green);color:var(--green);padding:13px 22px;border-radius:99px;font-weight:700;}
 .pricing-newmarket .btn-secondary:hover{background:var(--green-pale);}
+.pricing-cta-row{display:flex;flex-direction:row;flex-wrap:wrap;gap:12px;align-items:center;margin:18px 0;}
+.pricing-cta-row > a{justify-content:center;}
+@media(max-width:429px){.pricing-cta-row{flex-direction:column;align-items:stretch;}.pricing-cta-row > a{width:100%;}}
 .service-checklist{list-style:none;padding:0;margin:18px 0;display:grid;grid-template-columns:1fr;gap:10px;}
 .service-checklist li{background:#fff;border:1px solid var(--border);border-left:3px solid var(--green-light);border-radius:var(--r);padding:12px 16px;font-size:15px;line-height:1.55;color:var(--text);}
 .faq-newmarket details{background:#fff;border:1px solid var(--border);border-radius:var(--r-lg);padding:0;margin:0 0 12px;overflow:hidden;}
@@ -242,7 +245,10 @@
       <p class="pricing-note"><small>Repair labour is billed separately from the service call. <strong>AI-Smart-Intake bonus:</strong> if our AI diagnostic tool correctly predicts the on-site fix, you get one hour of repair labour free on the diagnosed work.</small></p>
       <h3>New Installation — Newmarket</h3>
       <p>Tier 1 (1–4 zones): <strong><span data-price="new_install_t1_base">$585</span> base + <span data-price="new_install_per_zone">$549</span> per zone</strong>. Tier 2 (5–7 zones): <strong><span data-price="new_install_t2_base">$749</span> base + <span data-price="new_install_per_zone">$549</span> per zone</strong>. Includes Hunter heads, Hydrawise WiFi smart controller, and our 3-year installation warranty.</p>
-      <p><a href="quote.html" class="btn-primary">Build Your Quote</a> &nbsp; <a href="tel:+19059600181" class="btn-secondary">Call (905) 960-0181</a></p>
+      <div class="pricing-cta-row">
+        <a href="quote.html" class="btn-primary">Build Your Quote</a>
+        <a href="tel:+19059600181" class="btn-secondary">Call (905) 960-0181</a>
+      </div>
     </section>
 
     <section class="checklist-newmarket" aria-labelledby="checklist-newmarket-heading" style="margin-top:48px;">
