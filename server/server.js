@@ -341,7 +341,8 @@ const SOURCES = {
   fall_closing:         { label: "Fall Closing",          category: "seasonal"  },
   coverage_inquiry:     { label: "Service Area Check",    category: "inquiry"   },
   general_contact:      { label: "General Contact",       category: "inquiry"   },
-  general_lead:         { label: "General Lead",          category: "inquiry"   }
+  general_lead:         { label: "General Lead",          category: "inquiry"   },
+  self_serve:           { label: "Customer Self-Intake",  category: "inquiry"   }
 };
 const DEFAULT_SOURCE = "general_lead";
 
@@ -2951,6 +2952,144 @@ async function handleApi(req, res, pathname) {
       return sendJson(res, 201, { ok: true, leadId: result.lead.id, portalUrl });
     } catch (error) {
       return sendJson(res, 400, { ok: false, errors: [error.message || "Unable to receive quote request."] });
+    }
+  }
+
+  // Public customer self-intake form (/new-customer). Lighter pipeline
+  // than /api/quotes — no Turnstile, no features/totals, no chat hooks.
+  // Honeypot + per-IP rate limit guard against bots; the response is
+  // intentionally always the same generic 200 on bot/limit hits so
+  // attackers can't probe the gate.
+  if (req.method === "POST" && pathname === "/api/new-customer") {
+    const ip = callerIp(req);
+    const rateKey = `new-customer:${ip}`;
+    try {
+      const payload = await parseRequestBody(req);
+
+      // Honeypot — silent no-op on any non-empty value.
+      if (payload && typeof payload.website === "string" && payload.website.trim() !== "") {
+        return sendJson(res, 200, { ok: true });
+      }
+
+      // Per-IP rate limit: 5 submissions per hour. Over limit returns the
+      // same generic OK so abusers can't tell they're being throttled.
+      if (!rateLimit.check(rateKey, 5, 60 * 60 * 1000)) {
+        return sendJson(res, 200, { ok: true });
+      }
+
+      const firstName = normalizeString(payload?.firstName, 80);
+      const lastName  = normalizeString(payload?.lastName, 80);
+      const email     = normalizeEmail(payload?.email);
+      const phone     = normalizePhone(payload?.phone);
+      const address   = normalizeString(payload?.propertyAddress, 240);
+      const notes     = normalizeString(payload?.notes, 1000);
+
+      const emailLooksValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+      if (!firstName || !lastName || !emailLooksValid || !address) {
+        return sendJson(res, 400, {
+          ok: false,
+          error: "Please check the form and try again."
+        });
+      }
+
+      // Record the rate-limit hit only after we've decided to act on a
+      // well-formed submission — drops bots out of the bucket.
+      rateLimit.record(rateKey);
+
+      const fullName = `${firstName} ${lastName}`.trim();
+      const id = crypto.randomUUID();
+      const now = new Date().toISOString();
+      // Patrick reads the lead detail view; pin the property address at
+      // the top of the notes block so it's the first thing he sees.
+      const composedNotes = notes
+        ? `Property address: ${address}\n\n${notes}`
+        : `Property address: ${address}`;
+
+      const lead = {
+        id,
+        createdAt: now,
+        status: "new",
+        source: "self_serve",
+        // Explicit channel marker, separate from the SOURCES enum. Lets
+        // future filters distinguish "Patrick filled this in on the
+        // customer's behalf" from "customer typed it themselves."
+        intakeSource: "self_serve",
+        customerId: null,
+        contact: {
+          name: fullName,
+          firstName,
+          lastName,
+          phone,
+          email,
+          address,
+          notes: composedNotes
+        },
+        features: [],
+        totals: { expectedTotal: 0, submittedTotal: 0, currency: "CAD" },
+        context: {
+          pageUrl: normalizeString(payload?.pageUrl, 500),
+          userAgent: normalizeString(req.headers["user-agent"] || "", 500),
+          mode: "self_serve",
+          transcript: ""
+        },
+        crm: defaultCrm(now),
+        portal: defaultPortal(id, now)
+      };
+
+      // Resolve / create the canonical customer. Failure here is logged
+      // but does NOT block intake — the lead can be backfilled later.
+      try {
+        lead.customerId = await resolveCustomerForLead(lead);
+      } catch (err) {
+        console.error("[new-customer] resolveCustomerForLead failed:", err?.message || err);
+      }
+
+      const leads = await readLeads();
+      leads.unshift(lead);
+      await writeLeads(leads);
+
+      // Auto-link a property under this customer (creates a fresh one
+      // when no match exists). Same helper /api/quotes uses.
+      try {
+        const linkResult = await properties.attachLead({
+          leadId: lead.id,
+          customerId: lead.customerId || null,
+          email: lead.contact.email,
+          name: lead.contact.name,
+          phone: lead.contact.phone,
+          address: lead.contact.address,
+          coords: null
+        });
+        if (linkResult && linkResult.property) {
+          lead.propertyId = linkResult.property.id;
+          lead.propertyLinkStatus = linkResult.status;
+          const liveLeads = await readLeads();
+          const i = liveLeads.findIndex((l) => l.id === lead.id);
+          if (i !== -1) {
+            liveLeads[i].propertyId = linkResult.property.id;
+            liveLeads[i].propertyLinkStatus = linkResult.status;
+            await writeLeads(liveLeads);
+          }
+        }
+      } catch (err) {
+        console.error("[new-customer] property attach failed:", err?.message || err);
+      }
+
+      // Admin notification — fire-and-forget. decorateLeadForAdmin
+      // hydrates sourceLabel + the CRM "Open in CRM" link target.
+      const baseUrl = process.env.PUBLIC_BASE_URL || baseUrlFromReq(req);
+      const decorated = decorateLeadForAdmin(lead, req);
+      sendNewLeadEmail(decorated, { baseUrl }).catch((err) => {
+        console.error("[new-customer] admin email failed:", err?.message || err);
+      });
+
+      return sendJson(res, 200, { ok: true });
+    } catch (error) {
+      console.error("[new-customer] intake error:", error?.message || error);
+      return sendJson(res, 400, {
+        ok: false,
+        error: "Please check the form and try again."
+      });
     }
   }
 
@@ -12837,6 +12976,12 @@ function resolveStaticTarget(pathname) {
   }
   if (pathname === "/book" || pathname === "/book/") {
     return { dir: SITE_DIR, relative: "/book.html" };
+  }
+  // Public customer self-intake form. Patrick texts or shares this URL to
+  // new customers; submissions land as draft leads in the CRM. See the
+  // POST /api/new-customer handler for intake processing.
+  if (pathname === "/new-customer" || pathname === "/new-customer/") {
+    return { dir: SITE_DIR, relative: "/new-customer.html" };
   }
   if (pathname === "/login" || pathname === "/login/") {
     return { dir: SERVER_DIR, relative: "/login.html" };

@@ -19,6 +19,52 @@
   <link rel="stylesheet" href="/crm/crm.css">
   <link rel="stylesheet" href="/crm/property.css">
   <link rel="stylesheet" href="/crm/customers.css">
+  <style>
+    .intake-link-banner {
+      margin: 0 0 18px;
+      padding: 14px 16px;
+      background: rgba(255,255,255,0.04);
+      border: 1px solid rgba(255,255,255,0.10);
+      border-radius: 10px;
+    }
+    .intake-link-banner__row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 10px;
+    }
+    .intake-link-banner__label {
+      font-size: 13px;
+      font-weight: 600;
+      color: rgba(255,255,255,0.78);
+      letter-spacing: 0.01em;
+      white-space: nowrap;
+    }
+    .intake-link-banner__input {
+      flex: 1 1 280px;
+      min-width: 0;
+      padding: 9px 12px;
+      border-radius: 8px;
+      border: 1px solid rgba(255,255,255,0.18);
+      background: rgba(0,0,0,0.25);
+      color: #fff;
+      font-family: ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+      font-size: 13.5px;
+    }
+    .intake-link-banner__input:focus {
+      outline: none;
+      border-color: rgba(245,155,74,0.6);
+    }
+    .intake-link-banner__btn {
+      flex: 0 0 auto;
+      min-width: 88px;
+    }
+    .intake-link-banner__btn.is-copied {
+      background: #2f7a45;
+      color: #fff;
+      border-color: #2f7a45;
+    }
+  </style>
 </head>
 <body class="pjl-crm-body">
   <aside class="pjl-admin-nav" id="navMenu" aria-label="PJL CRM Navigation">
@@ -62,6 +108,22 @@
     </header>
 
     <main class="pjl-crm-shell">
+      <!-- Public customer-intake link. Patrick texts/shares this URL to new
+           customers; their form submission lands as a draft lead in the CRM. -->
+      <section class="intake-link-banner" id="intakeLinkBanner" aria-label="Customer intake link">
+        <div class="intake-link-banner__row">
+          <label for="intakeLinkInput" class="intake-link-banner__label">Customer intake link:</label>
+          <input
+            type="text"
+            id="intakeLinkInput"
+            class="intake-link-banner__input"
+            readonly
+            value=""
+            aria-label="Public customer intake URL">
+          <button type="button" class="intake-link-banner__btn pjl-btn" id="intakeLinkCopyBtn">Copy</button>
+        </div>
+      </section>
+
       <header class="pjl-crm-hero">
         <div>
           <p class="pjl-page-eyebrow">People PJL serves</p>
@@ -123,5 +185,44 @@
 
   <script src="/crm/customers.js"></script>
   <script src="/crm/nav-badges.js?v=1"></script>
+  <script>
+    (function () {
+      var input  = document.getElementById('intakeLinkInput');
+      var button = document.getElementById('intakeLinkCopyBtn');
+      if (!input || !button) return;
+      // window.location.origin resolves to the host the admin loaded on —
+      // on production that's https://pjllandservices.com, which is what
+      // Patrick wants to text to customers.
+      var url = window.location.origin + '/new-customer';
+      input.value = url;
+
+      var resetTimer = null;
+      button.addEventListener('click', function () {
+        var done = function () {
+          var original = button.dataset.original || button.textContent;
+          if (!button.dataset.original) button.dataset.original = original;
+          button.textContent = 'Copied!';
+          button.classList.add('is-copied');
+          if (resetTimer) clearTimeout(resetTimer);
+          resetTimer = setTimeout(function () {
+            button.textContent = button.dataset.original || 'Copy';
+            button.classList.remove('is-copied');
+          }, 1600);
+        };
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(url).then(done, function () {
+            // Fallback if the async clipboard API is blocked.
+            input.select();
+            try { document.execCommand('copy'); } catch (e) {}
+            done();
+          });
+        } else {
+          input.select();
+          try { document.execCommand('copy'); } catch (e) {}
+          done();
+        }
+      });
+    })();
+  </script>
 </body>
 </html>
