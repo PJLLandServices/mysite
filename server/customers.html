@@ -20,49 +20,96 @@
   <link rel="stylesheet" href="/crm/property.css">
   <link rel="stylesheet" href="/crm/customers.css">
   <style>
+    /* Lives on the LIGHT pjl-crm-body cream gradient — must use dark text
+       and a solid-white card, not white-on-white. Matches the other
+       admin cards' contrast. */
     .intake-link-banner {
       margin: 0 0 18px;
-      padding: 14px 16px;
-      background: rgba(255,255,255,0.04);
-      border: 1px solid rgba(255,255,255,0.10);
-      border-radius: 10px;
+      padding: 16px 18px;
+      background: #fff;
+      border: 1px solid var(--pjl-border, #E2E0D4);
+      border-radius: 12px;
+      box-shadow: 0 2px 6px rgba(15, 31, 20, 0.04);
     }
     .intake-link-banner__row {
       display: flex;
       flex-wrap: wrap;
       align-items: center;
-      gap: 10px;
+      gap: 12px;
     }
     .intake-link-banner__label {
       font-size: 13px;
-      font-weight: 600;
-      color: rgba(255,255,255,0.78);
+      font-weight: 700;
+      color: var(--pjl-text, #1A1A1A);
       letter-spacing: 0.01em;
       white-space: nowrap;
     }
-    .intake-link-banner__input {
+    /* <code> element instead of <input>: lets the URL word-break on
+       narrow widths instead of truncating, and the copy action runs
+       off the constructed URL string (not a DOM read), so no input
+       semantics are needed. */
+    .intake-link-banner__url {
       flex: 1 1 280px;
       min-width: 0;
-      padding: 9px 12px;
+      padding: 10px 12px;
       border-radius: 8px;
-      border: 1px solid rgba(255,255,255,0.18);
-      background: rgba(0,0,0,0.25);
-      color: #fff;
+      border: 1px solid var(--pjl-border, #E2E0D4);
+      background: var(--pjl-cream, #FAFAF5);
+      color: var(--pjl-text, #1A1A1A);
       font-family: ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
       font-size: 13.5px;
-    }
-    .intake-link-banner__input:focus {
-      outline: none;
-      border-color: rgba(245,155,74,0.6);
+      line-height: 1.5;
+      overflow-wrap: anywhere;
+      word-break: break-all;
+      user-select: all;
     }
     .intake-link-banner__btn {
       flex: 0 0 auto;
-      min-width: 88px;
+      min-height: 40px;
+      padding: 9px 20px;
+      background: var(--pjl-green, #1B4D2E);
+      color: #fff;
+      border: 1px solid var(--pjl-green, #1B4D2E);
+      border-radius: 8px;
+      font-family: inherit;
+      font-weight: 700;
+      font-size: 14px;
+      letter-spacing: 0.01em;
+      cursor: pointer;
+      transition: background 0.15s ease, transform 0.15s ease;
+    }
+    .intake-link-banner__btn:hover {
+      background: var(--pjl-green-mid, #2D6A42);
+      border-color: var(--pjl-green-mid, #2D6A42);
+    }
+    .intake-link-banner__btn:focus-visible {
+      outline: 2px solid var(--pjl-amber, #E07B24);
+      outline-offset: 2px;
     }
     .intake-link-banner__btn.is-copied {
-      background: #2f7a45;
-      color: #fff;
-      border-color: #2f7a45;
+      background: var(--pjl-green-light, #4A8C5C);
+      border-color: var(--pjl-green-light, #4A8C5C);
+    }
+    /* On narrow widths, drop the label + URL + button onto their own
+       rows so the URL gets the full panel width and the button is a
+       full-width tap target. */
+    @media (max-width: 640px) {
+      .intake-link-banner__row {
+        flex-direction: column;
+        align-items: stretch;
+        gap: 10px;
+      }
+      .intake-link-banner__label {
+        white-space: normal;
+      }
+      .intake-link-banner__url {
+        flex: 1 1 auto;
+        width: 100%;
+      }
+      .intake-link-banner__btn {
+        width: 100%;
+        padding: 12px 20px;
+      }
     }
   </style>
 </head>
@@ -112,15 +159,12 @@
            customers; their form submission lands as a draft lead in the CRM. -->
       <section class="intake-link-banner" id="intakeLinkBanner" aria-label="Customer intake link">
         <div class="intake-link-banner__row">
-          <label for="intakeLinkInput" class="intake-link-banner__label">Customer intake link:</label>
-          <input
-            type="text"
-            id="intakeLinkInput"
-            class="intake-link-banner__input"
-            readonly
-            value=""
-            aria-label="Public customer intake URL">
-          <button type="button" class="intake-link-banner__btn pjl-btn" id="intakeLinkCopyBtn">Copy</button>
+          <span class="intake-link-banner__label" id="intakeLinkLabel">Customer intake link:</span>
+          <code
+            id="intakeLinkUrl"
+            class="intake-link-banner__url"
+            aria-labelledby="intakeLinkLabel"></code>
+          <button type="button" class="intake-link-banner__btn" id="intakeLinkCopyBtn">Copy link</button>
         </div>
       </section>
 
@@ -187,39 +231,47 @@
   <script src="/crm/nav-badges.js?v=1"></script>
   <script>
     (function () {
-      var input  = document.getElementById('intakeLinkInput');
+      var urlEl  = document.getElementById('intakeLinkUrl');
       var button = document.getElementById('intakeLinkCopyBtn');
-      if (!input || !button) return;
+      if (!urlEl || !button) return;
       // window.location.origin resolves to the host the admin loaded on —
       // on production that's https://pjllandservices.com, which is what
       // Patrick wants to text to customers.
       var url = window.location.origin + '/new-customer';
-      input.value = url;
+      urlEl.textContent = url;
+      button.dataset.original = button.textContent;
 
       var resetTimer = null;
+      function flashCopied() {
+        button.textContent = 'Copied!';
+        button.classList.add('is-copied');
+        if (resetTimer) clearTimeout(resetTimer);
+        resetTimer = setTimeout(function () {
+          button.textContent = button.dataset.original || 'Copy link';
+          button.classList.remove('is-copied');
+        }, 1600);
+      }
+      // execCommand fallback for browsers without the async clipboard API.
+      function legacyCopy(text) {
+        var ta = document.createElement('textarea');
+        ta.value = text;
+        ta.setAttribute('readonly', '');
+        ta.style.position = 'absolute';
+        ta.style.left = '-9999px';
+        document.body.appendChild(ta);
+        ta.select();
+        try { document.execCommand('copy'); } catch (e) {}
+        document.body.removeChild(ta);
+      }
       button.addEventListener('click', function () {
-        var done = function () {
-          var original = button.dataset.original || button.textContent;
-          if (!button.dataset.original) button.dataset.original = original;
-          button.textContent = 'Copied!';
-          button.classList.add('is-copied');
-          if (resetTimer) clearTimeout(resetTimer);
-          resetTimer = setTimeout(function () {
-            button.textContent = button.dataset.original || 'Copy';
-            button.classList.remove('is-copied');
-          }, 1600);
-        };
         if (navigator.clipboard && navigator.clipboard.writeText) {
-          navigator.clipboard.writeText(url).then(done, function () {
-            // Fallback if the async clipboard API is blocked.
-            input.select();
-            try { document.execCommand('copy'); } catch (e) {}
-            done();
+          navigator.clipboard.writeText(url).then(flashCopied, function () {
+            legacyCopy(url);
+            flashCopied();
           });
         } else {
-          input.select();
-          try { document.execCommand('copy'); } catch (e) {}
-          done();
+          legacyCopy(url);
+          flashCopied();
         }
       });
     })();
