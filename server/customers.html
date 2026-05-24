@@ -20,96 +20,17 @@
   <link rel="stylesheet" href="/crm/property.css">
   <link rel="stylesheet" href="/crm/customers.css">
   <style>
-    /* Lives on the LIGHT pjl-crm-body cream gradient — must use dark text
-       and a solid-white card, not white-on-white. Matches the other
-       admin cards' contrast. */
-    .intake-link-banner {
-      margin: 0 0 18px;
-      padding: 16px 18px;
-      background: #fff;
-      border: 1px solid var(--pjl-border, #E2E0D4);
-      border-radius: 12px;
-      box-shadow: 0 2px 6px rgba(15, 31, 20, 0.04);
-    }
-    .intake-link-banner__row {
-      display: flex;
-      flex-wrap: wrap;
-      align-items: center;
-      gap: 12px;
-    }
-    .intake-link-banner__label {
-      font-size: 13px;
-      font-weight: 700;
-      color: var(--pjl-text, #1A1A1A);
-      letter-spacing: 0.01em;
-      white-space: nowrap;
-    }
-    /* <code> element instead of <input>: lets the URL word-break on
-       narrow widths instead of truncating, and the copy action runs
-       off the constructed URL string (not a DOM read), so no input
-       semantics are needed. */
-    .intake-link-banner__url {
-      flex: 1 1 280px;
-      min-width: 0;
-      padding: 10px 12px;
-      border-radius: 8px;
-      border: 1px solid var(--pjl-border, #E2E0D4);
-      background: var(--pjl-cream, #FAFAF5);
-      color: var(--pjl-text, #1A1A1A);
-      font-family: ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
-      font-size: 13.5px;
-      line-height: 1.5;
-      overflow-wrap: anywhere;
-      word-break: break-all;
-      user-select: all;
-    }
-    .intake-link-banner__btn {
-      flex: 0 0 auto;
-      min-height: 40px;
-      padding: 9px 20px;
-      background: var(--pjl-green, #1B4D2E);
-      color: #fff;
-      border: 1px solid var(--pjl-green, #1B4D2E);
-      border-radius: 8px;
-      font-family: inherit;
-      font-weight: 700;
-      font-size: 14px;
-      letter-spacing: 0.01em;
-      cursor: pointer;
-      transition: background 0.15s ease, transform 0.15s ease;
-    }
-    .intake-link-banner__btn:hover {
-      background: var(--pjl-green-mid, #2D6A42);
-      border-color: var(--pjl-green-mid, #2D6A42);
-    }
-    .intake-link-banner__btn:focus-visible {
-      outline: 2px solid var(--pjl-amber, #E07B24);
-      outline-offset: 2px;
-    }
-    .intake-link-banner__btn.is-copied {
-      background: var(--pjl-green-light, #4A8C5C);
-      border-color: var(--pjl-green-light, #4A8C5C);
-    }
-    /* On narrow widths, drop the label + URL + button onto their own
-       rows so the URL gets the full panel width and the button is a
-       full-width tap target. */
-    @media (max-width: 640px) {
-      .intake-link-banner__row {
-        flex-direction: column;
-        align-items: stretch;
-        gap: 10px;
-      }
-      .intake-link-banner__label {
-        white-space: normal;
-      }
-      .intake-link-banner__url {
-        flex: 1 1 auto;
-        width: 100%;
-      }
-      .intake-link-banner__btn {
-        width: 100%;
-        padding: 12px 20px;
-      }
+    /* Brief flash when the intake-link button copies. The button itself
+       uses .pjl-btn-outline as a secondary action — green-on-white,
+       subordinate to the orange "+ New customer" primary CTA. */
+    /* !important on background-color because .pjl-btn-outline uses the
+       background: shorthand, and shorthand-vs-longhand cascade can be
+       fragile in some engines when both sides use CSS vars. The other
+       two properties don't need it — confirmed they apply cleanly. */
+    #intakeLinkCopyBtn.is-copied {
+      background-color: var(--pjl-green-pale, #EAF3DE) !important;
+      border-color: var(--pjl-green, #1B4D2E);
+      color: var(--pjl-green, #1B4D2E);
     }
   </style>
 </head>
@@ -155,19 +76,6 @@
     </header>
 
     <main class="pjl-crm-shell">
-      <!-- Public customer-intake link. Patrick texts/shares this URL to new
-           customers; their form submission lands as a draft lead in the CRM. -->
-      <section class="intake-link-banner" id="intakeLinkBanner" aria-label="Customer intake link">
-        <div class="intake-link-banner__row">
-          <span class="intake-link-banner__label" id="intakeLinkLabel">Customer intake link:</span>
-          <code
-            id="intakeLinkUrl"
-            class="intake-link-banner__url"
-            aria-labelledby="intakeLinkLabel"></code>
-          <button type="button" class="intake-link-banner__btn" id="intakeLinkCopyBtn">Copy link</button>
-        </div>
-      </section>
-
       <header class="pjl-crm-hero">
         <div>
           <p class="pjl-page-eyebrow">People PJL serves</p>
@@ -180,6 +88,11 @@
         <input type="search" id="customerSearch" placeholder="Search by name, email, or phone…">
         <span class="customers-count" id="customersCount">—</span>
         <button type="button" class="pjl-btn pjl-btn-primary" id="newCustomerBtn">+ New customer</button>
+        <!-- Copies the public /new-customer URL to clipboard. Secondary
+             action (outline) — subordinate to the primary "+ New customer"
+             CTA, but always available so Patrick can text the link to
+             someone in one tap. -->
+        <button type="button" class="pjl-btn pjl-btn-outline" id="intakeLinkCopyBtn">Copy intake link</button>
       </section>
 
       <nav class="customers-filters" aria-label="Filter by status">
@@ -231,14 +144,13 @@
   <script src="/crm/nav-badges.js?v=1"></script>
   <script>
     (function () {
-      var urlEl  = document.getElementById('intakeLinkUrl');
       var button = document.getElementById('intakeLinkCopyBtn');
-      if (!urlEl || !button) return;
+      if (!button) return;
       // window.location.origin resolves to the host the admin loaded on —
       // on production that's https://pjllandservices.com, which is what
-      // Patrick wants to text to customers.
+      // Patrick wants to text to customers. The URL itself is never
+      // rendered on screen — only placed on the clipboard on click.
       var url = window.location.origin + '/new-customer';
-      urlEl.textContent = url;
       button.dataset.original = button.textContent;
 
       var resetTimer = null;
@@ -247,7 +159,7 @@
         button.classList.add('is-copied');
         if (resetTimer) clearTimeout(resetTimer);
         resetTimer = setTimeout(function () {
-          button.textContent = button.dataset.original || 'Copy link';
+          button.textContent = button.dataset.original || 'Copy intake link';
           button.classList.remove('is-copied');
         }, 1600);
       }
