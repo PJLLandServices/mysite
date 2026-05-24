@@ -60,7 +60,7 @@
     "extra_lighting_timer":       { "label": "Add-on: lighting controller / timer",               "price": 195,   "category": "install_addon", "quoteType": "flat"  }
   },
   "rules": {
-    "spring_fall_no_service_call": "Spring opening / fall closing pricing is all-in. Service call ($95) is NOT charged on top.",
+    "spring_fall_no_service_call": "Spring opening / fall closing is a flat-rate service covering the system check and standard adjustments (alignment, arc, rotation). The $95 service call is NOT charged on top. Any repairs found on-site are flagged, quoted separately, and only performed after customer approval.",
     "service_call_scope": "$95 service call covers mobilization + quick on-site assessment ONLY. It does NOT include any labour. All diagnostic and repair labour is billed separately at $95/hr. Repair quotes are issued with an assumed amount of time for the diagnosed work; if actual time runs over the estimate, additional labour is billed at $95/hr and quoted to the customer before continuing.",
     "ai_intake_correct_diagnosis_bonus": "PJL's ONLY discount: if the AI repair tool correctly diagnoses the repair (i.e., the on-site fix matches what the AI predicted), the customer receives ONE HOUR of repair labour FREE on the diagnosed work. If the AI's diagnosis is wrong, no free hour applies. Anything else found on-site beyond the diagnosed repair is billed at parts + $95/hr, quoted before any extra work.",
     "whole_manifold_rule": "When ANY valve in a box fails, PJL replaces the ENTIRE manifold AND ALL valves in that box together. Never single-valve repair. Quote formula = manifold tier ($135 for 1-3 valves OR $285 for 4-6 valves) + ($74.95 × valve count) + $95 service call.",
