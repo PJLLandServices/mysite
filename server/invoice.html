@@ -169,6 +169,21 @@
             <ul class="invoice-action-list" id="invoiceReminderHistory" hidden></ul>
           </section>
 
+          <!-- Junk-mail warning SMS (Junk-Mail Warning brief, May 2026).
+               Auto-fires ~30s after each invoice email send/resend.
+               customerJunkMailWarningSentAt is reset on every /send so
+               re-sends re-fire. Admin can also fire manually here —
+               same 1-hour rate-limit + force-override pattern as the
+               reminder card above, plus a redundancy skip when the
+               auto-fire "invoice ready" SMS landed within 5 min. -->
+          <section class="invoice-action-card" id="invoiceJunkWarningCard">
+            <span class="invoice-action-label">Junk-mail warning SMS</span>
+            <p class="invoice-action-meta" id="invoiceJunkWarningMeta">—</p>
+            <button type="button" id="invoiceJunkWarningBtn" class="invoice-action-btn">📱 Send warning now</button>
+            <p class="invoice-action-status" id="invoiceJunkWarningStatus"></p>
+            <ul class="invoice-action-list" id="invoiceJunkWarningHistory" hidden></ul>
+          </section>
+
           <section class="invoice-action-card">
             <span class="invoice-action-label">QuickBooks</span>
             <p class="invoice-action-meta" id="invoiceQbMeta">Loading…</p>

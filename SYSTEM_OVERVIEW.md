@@ -626,6 +626,16 @@ sends lost to a server restart.
 
 The body differs from the auto-fire — explicitly framed as "Friendly reminder from PJL Land Services — your invoice for {property} is still outstanding. View and pay here: {portalUrl}. Questions? Call (905) 960-0181." Same portal-invoice link pattern as the auto-fire so the customer lands on the read-only mirror with a Pay button.
 
+**Junk-mail warning SMS** (Junk-Mail Warning brief, May 2026): the third invoice SMS surface. Fires ~30 seconds after each `POST /api/invoices/:id/send` or `/resend` to warn the customer the invoice email may end up in Junk/Spam. Hooked via `setTimeout` inside the send route (fire-and-forget, doesn't block the response).
+
+- **Auto-fire on every send/resend.** `customerJunkMailWarningSentAt` is cleared in the `/send` patch so each new send re-fires a fresh warning. The lib function (`sendInvoiceJunkMailWarningSMS`) is NOT idempotent on this flag — re-firing is the desired behavior.
+- **Manual override button** on the `#invoiceJunkWarningCard` admin card. Endpoint `POST /api/invoices/:id/send-junk-warning` accepts `{ force: true }` — same status-code mapping as the reminder route (200 / 404 / 429 / 409 / 502).
+- **Redundancy guard:** if the auto-fire "invoice ready" SMS landed within the last 5 min, the lib returns `error: "autofire_recent"` (HTTP 409). The auto-fire body already mentions Junk/Spam, so a second SMS in that window would be noise. `force: true` overrides this gate too.
+- **Rate limit:** same 1-hour minimum between successful manual sends, tracked via `customerJunkMailWarningHistory[]`. The 30s auto-fire from `/send` triggers BEFORE the manual route's gate (because clearing `customerJunkMailWarningSentAt` on the /send patch resets the state, and the timer fires once 30s later) — the rate limit is for the manual button only.
+- **Body:** "Heads up from PJL Land Services — we just emailed your invoice for {property}. If you don't see it within a few minutes, please check your Junk/Spam folder. The invoice is also viewable here: {portalUrl}. Questions? Call (905) 960-0181."
+- **Skip codes** (HTTP 409): `voided`, `paid`, `no_phone`, `no_twilio_config`, `disabled`, `opted_out`, `portal_token_failed`, `autofire_recent`. All append `customerJunkMailWarningHistory` entries with `success: false` + reason so the admin UI surfaces every attempt.
+- **Master kill switch:** same `settings.invoiceSms.enabled` flag — flip off to stop ALL three SMS surfaces (auto-fire, reminder, junk warning).
+
 
 **Manual admin booking (custom time):** the schedule page exposes a side door for off-grid commitments — corridor-isolated properties, after-hours fits, customer-named precise times.
 

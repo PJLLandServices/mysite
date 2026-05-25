@@ -540,13 +540,193 @@ document.getElementById("invoiceReminderBtn")?.addEventListener("click", async (
   }
 });
 
-// Wire QB block refresh + reminder card render into the existing invoice
-// render path so they update whenever the invoice is loaded.
+// ---- Manual junk-mail warning SMS (Junk-Mail Warning brief) ----------
+//
+// Third SMS surface alongside the auto-fire "invoice ready" and the
+// manual reminder. Auto-fires ~30s after each invoice email send/resend
+// (server-side setTimeout in /send route). The button on this card is
+// the manual override — same 1-hour rate limit + force prompt as the
+// reminder card, plus an extra "autofire_recent" skip code (409) when
+// the auto-fire "invoice ready" SMS landed in the last 5 min (the auto-
+// fire body already mentions junk/spam — a second SMS in that window
+// would be noise). The force prompt offers to override both the rate
+// limit AND the autofire blackout.
+const JUNK_WARNING_RATE_LIMIT_MS = 60 * 60 * 1000;
+
+function renderJunkWarningCard(inv) {
+  const meta = document.getElementById("invoiceJunkWarningMeta");
+  const btn = document.getElementById("invoiceJunkWarningBtn");
+  const status = document.getElementById("invoiceJunkWarningStatus");
+  const list = document.getElementById("invoiceJunkWarningHistory");
+  if (!meta || !btn || !status || !list) return;
+
+  status.textContent = "";
+  status.dataset.kind = "";
+
+  const history = Array.isArray(inv?.customerJunkMailWarningHistory)
+    ? inv.customerJunkMailWarningHistory
+    : [];
+  const lastSuccessful = [...history].reverse().find((h) => h?.success === true);
+
+  if (inv?.status === "paid") {
+    btn.disabled = true;
+    btn.textContent = "Warning SMS";
+    meta.textContent = "Invoice paid — warning disabled.";
+  } else if (inv?.status === "void") {
+    btn.disabled = true;
+    btn.textContent = "Warning SMS";
+    meta.textContent = "Invoice voided — warning disabled.";
+  } else if (lastSuccessful?.sentAt) {
+    const elapsed = Date.now() - Date.parse(lastSuccessful.sentAt);
+    if (Number.isFinite(elapsed) && elapsed < JUNK_WARNING_RATE_LIMIT_MS) {
+      const remainMin = Math.ceil((JUNK_WARNING_RATE_LIMIT_MS - elapsed) / 60000);
+      btn.disabled = true;
+      btn.textContent = `📱 Available in ${remainMin} min`;
+      meta.textContent = `Last warning ${fmtAgo(lastSuccessful.sentAt)}. Auto-fires on every email /send; manual rate-limit 1h.`;
+    } else {
+      btn.disabled = false;
+      btn.textContent = "📱 Send warning now";
+      meta.textContent = inv.customerPhone
+        ? `Auto-fires ~30s after each email /send. Last warning ${fmtAgo(lastSuccessful.sentAt)}.`
+        : "⚠ No customer phone on this invoice.";
+    }
+  } else {
+    btn.disabled = false;
+    btn.textContent = "📱 Send warning now";
+    meta.textContent = inv?.customerPhone
+      ? `Will send automatically when invoice email is sent. Or fire manually to ${inv.customerPhone}.`
+      : "⚠ No customer phone on this invoice.";
+  }
+
+  // History list — most recent first; same shape/style as the reminder
+  // history. Skip entries (reason: autofire_recent, opted_out, etc.)
+  // show as "Skipped/failed" with the reason inline.
+  list.innerHTML = "";
+  if (history.length === 0) {
+    list.hidden = true;
+  } else {
+    list.hidden = false;
+    const sorted = [...history].reverse();
+    for (const entry of sorted) {
+      const li = document.createElement("li");
+      const when = fmtDate(entry.sentAt);
+      const ago = fmtAgo(entry.sentAt);
+      if (entry.success) {
+        li.innerHTML = `<strong>Sent</strong> on ${when} <span class="invoice-action-meta">(${ago})</span>`;
+        if (entry.body) {
+          const body = document.createElement("p");
+          body.className = "invoice-action-meta";
+          body.style.cssText = "margin: 4px 0 0; font-style: italic; opacity: 0.85;";
+          body.textContent = `"${entry.body}"`;
+          li.appendChild(body);
+        }
+      } else {
+        const reason = entry.reason ? ` — ${entry.reason}` : "";
+        const err = entry.error ? `: ${entry.error}` : "";
+        li.innerHTML = `<strong>Skipped/failed</strong> on ${when}${reason}${err} <span class="invoice-action-meta">(${ago})</span>`;
+      }
+      list.appendChild(li);
+    }
+  }
+}
+
+document.getElementById("invoiceJunkWarningBtn")?.addEventListener("click", async () => {
+  if (!currentInvoice) return;
+
+  const recipient = currentInvoice.customerPhone || "the customer";
+  const customerName = currentInvoice.customerName || "this customer";
+  if (!confirm(`Send a junk-mail warning SMS to ${customerName} at ${recipient}?`)) return;
+
+  const btn = document.getElementById("invoiceJunkWarningBtn");
+  const status = document.getElementById("invoiceJunkWarningStatus");
+  const wasLabel = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "Sending…";
+  status.textContent = "";
+  status.dataset.kind = "info";
+
+  const post = async (body) => {
+    const r = await fetch(`/api/invoices/${encodeURIComponent(idFromPath)}/send-junk-warning`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body || {})
+    });
+    const data = await r.json().catch(() => ({}));
+    return { r, data };
+  };
+
+  try {
+    const { r, data } = await post({});
+
+    if (r.ok && data.ok) {
+      status.textContent = `✓ Warning sent at ${fmtDate(data.sentAt)}.`;
+      status.dataset.kind = "ok";
+      if (data.invoice) {
+        currentInvoice = data.invoice;
+        renderJunkWarningCard(data.invoice);
+      }
+      return;
+    }
+
+    // 429 rate limit OR 409 autofire_recent both offer a force override
+    // (matches the lib's behavior — force: true bypasses both gates).
+    const offersForce = r.status === 429 || (r.status === 409 && data.error === "autofire_recent");
+    if (offersForce) {
+      btn.textContent = wasLabel;
+      btn.disabled = false;
+      status.dataset.kind = "warn";
+      const serverMsg = (data.errors && data.errors[0]) || "Skipped.";
+      status.textContent = serverMsg;
+      const forceConfirm = confirm(`${serverMsg}\n\nSend anyway?`);
+      if (forceConfirm) {
+        btn.disabled = true;
+        btn.textContent = "Sending…";
+        status.textContent = "";
+        const { r: r2, data: data2 } = await post({ force: true });
+        if (r2.ok && data2.ok) {
+          status.textContent = `✓ Warning sent at ${fmtDate(data2.sentAt)} (override).`;
+          status.dataset.kind = "ok";
+          if (data2.invoice) {
+            currentInvoice = data2.invoice;
+            renderJunkWarningCard(data2.invoice);
+          }
+        } else {
+          status.textContent = (data2.errors && data2.errors[0]) || "Force send failed.";
+          status.dataset.kind = "error";
+          btn.disabled = false;
+          btn.textContent = wasLabel;
+        }
+      }
+      return;
+    }
+
+    const msg = (data.errors && data.errors[0]) || data.error || "Warning not sent.";
+    status.textContent = msg;
+    status.dataset.kind = "error";
+    if (data.invoice) {
+      currentInvoice = data.invoice;
+      renderJunkWarningCard(data.invoice);
+    } else {
+      btn.disabled = false;
+      btn.textContent = wasLabel;
+    }
+  } catch (err) {
+    status.textContent = err.message || "Network error.";
+    status.dataset.kind = "error";
+    btn.disabled = false;
+    btn.textContent = wasLabel;
+  }
+});
+
+// Wire QB block refresh + reminder card + junk-warning card render into
+// the existing invoice render path so all three update whenever the
+// invoice is loaded.
 const origRender = render;
 render = function (inv) {
   origRender(inv);
   refreshQbBlock();
   renderReminderCard(inv);
+  renderJunkWarningCard(inv);
 };
 
 // ---- Authorization posture (admin-only) -----------------------------

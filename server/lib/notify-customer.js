@@ -1629,6 +1629,219 @@ async function sendInvoiceReminderSMS({ invoiceId, force } = {}) {
   }
 }
 
+// ---- Invoice junk-mail warning SMS (Junk-Mail Warning brief, May 2026) -
+//
+// Fires ~30s after the admin clicks "Send invoice" email — warns the
+// customer that the invoice was emailed and to check Junk/Spam if they
+// don't see it. Third invoice SMS surface alongside:
+//   - sendInvoiceReadySMS        (auto-fire, post-cascade, ONE per WO)
+//   - sendInvoiceReminderSMS     (manual, admin button, rate-limited 1h)
+// The junk-mail warning is its own field — customerJunkMailWarningSentAt
+// — and is RESET to null on each /send call so a re-send fires fresh.
+//
+// Redundancy guard: if the auto-fire "invoice ready" SMS landed within
+// the last 5 min, skip — the auto-fire body already mentions junk/spam
+// and a second SMS in that window would be noise.
+
+const JUNK_WARNING_AUTOFIRE_BLACKOUT_MS = 5 * 60 * 1000; // 5 min
+const JUNK_WARNING_RATE_LIMIT_MS = 60 * 60 * 1000;        // 1 hour (manual)
+
+function buildInvoiceJunkMailWarningSmsBody(invoice, portalUrl) {
+  const label = shortPropertyLabel(invoice);
+  return (
+    `Heads up from PJL Land Services — we just emailed your invoice for ${label}. ` +
+    `If you don't see it within a few minutes, please check your Junk/Spam folder. ` +
+    `The invoice is also viewable here: ${portalUrl}. ` +
+    `Questions? Call (905) 960-0181.`
+  );
+}
+
+async function appendJunkMailWarningHistoryEntry(invoiceId, entry) {
+  const invoices = require("./invoices");
+  const current = await invoices.get(invoiceId);
+  if (!current) return null;
+  const history = Array.isArray(current.customerJunkMailWarningHistory)
+    ? current.customerJunkMailWarningHistory.slice()
+    : [];
+  history.push({
+    sentAt: entry.sentAt || new Date().toISOString(),
+    channel: entry.channel || "sms",
+    success: entry.success === true,
+    ...(entry.error ? { error: String(entry.error).slice(0, 300) } : {}),
+    ...(entry.body ? { body: String(entry.body).slice(0, 500) } : {}),
+    ...(entry.reason ? { reason: entry.reason } : {})
+  });
+  return invoices.update(invoiceId, { customerJunkMailWarningHistory: history });
+}
+
+// Returns one of:
+//   { ok: true, sentAt, body, sid }
+//   { ok: false, error: "rate_limited", lastSentAt, retryAfterSeconds }
+//   { ok: false, error: "voided" | "paid" | "no_phone" | "no_twilio_config"
+//                       | "disabled" | "opted_out" | "portal_token_failed"
+//                       | "autofire_recent" | "invoice_not_found"
+//                       | "missing_invoice_id" | <twilio error msg> }
+//
+// `autofire_recent` is unique to this function — skips when the auto-
+// fire "invoice ready" SMS already landed within the last 5 min (the
+// auto-fire body already mentions junk/spam). `force: true` bypasses
+// BOTH the 1-hour manual rate limit AND the autofire blackout.
+async function sendInvoiceJunkMailWarningSMS({ invoiceId, force } = {}) {
+  if (!invoiceId) return { ok: false, error: "missing_invoice_id" };
+  const invoices = require("./invoices");
+  const settingsLib = require("./settings");
+
+  const invoice = await invoices.get(invoiceId);
+  if (!invoice) return { ok: false, error: "invoice_not_found" };
+
+  // Master kill switch.
+  let settings;
+  try { settings = await settingsLib.get(); } catch { settings = null; }
+  if (settings?.invoiceSms?.enabled === false) {
+    return { ok: false, error: "disabled" };
+  }
+
+  if (invoice.status === "void") return { ok: false, error: "voided" };
+  if (invoice.status === "paid") return { ok: false, error: "paid" };
+
+  if (!force) {
+    // Redundancy with the auto-fire "invoice ready" SMS — if it landed
+    // within the last 5 min, skip (its body already says "check spam/
+    // junk"). Mostly relevant when the admin manually /send's an
+    // invoice within ~5 min of a WO completion firing the auto-fire.
+    if (invoice.customerSmsSentAt) {
+      const elapsedAutofire = Date.now() - Date.parse(invoice.customerSmsSentAt);
+      if (Number.isFinite(elapsedAutofire) && elapsedAutofire < JUNK_WARNING_AUTOFIRE_BLACKOUT_MS) {
+        await appendJunkMailWarningHistoryEntry(invoiceId, {
+          success: false,
+          reason: "autofire_recent",
+          error: "Auto-fire 'invoice ready' SMS landed within last 5 min — junk warning redundant"
+        });
+        return { ok: false, error: "autofire_recent" };
+      }
+    }
+    // Manual rate limit — 1 hour between successful junk-mail warnings.
+    // Counts only successful sends so an admin can retry after a
+    // Twilio reject without waiting.
+    const history = Array.isArray(invoice.customerJunkMailWarningHistory)
+      ? invoice.customerJunkMailWarningHistory
+      : [];
+    const lastSuccessful = [...history].reverse().find((h) => h?.success === true);
+    if (lastSuccessful?.sentAt) {
+      const elapsed = Date.now() - Date.parse(lastSuccessful.sentAt);
+      if (Number.isFinite(elapsed) && elapsed < JUNK_WARNING_RATE_LIMIT_MS) {
+        const retryAfterSeconds = Math.ceil((JUNK_WARNING_RATE_LIMIT_MS - elapsed) / 1000);
+        return {
+          ok: false,
+          error: "rate_limited",
+          lastSentAt: lastSuccessful.sentAt,
+          retryAfterSeconds
+        };
+      }
+    }
+  }
+
+  const allowed = await resolveSmsAllowed(invoice);
+  if (!allowed) {
+    await appendJunkMailWarningHistoryEntry(invoiceId, {
+      success: false,
+      reason: "opted_out",
+      error: "Customer opted out of text reminders"
+    });
+    return { ok: false, error: "opted_out" };
+  }
+
+  const to = String(invoice.customerPhone || "").trim();
+  if (!to) {
+    await appendJunkMailWarningHistoryEntry(invoiceId, {
+      success: false,
+      reason: "no_phone",
+      error: "No customer phone on invoice"
+    });
+    return { ok: false, error: "no_phone" };
+  }
+
+  if (!smsConfigured()) {
+    return { ok: false, error: "no_twilio_config" };
+  }
+
+  const tokenized = await invoices.ensurePortalToken(invoiceId);
+  const portalToken = tokenized?.portalToken;
+  if (!portalToken) {
+    await appendJunkMailWarningHistoryEntry(invoiceId, {
+      success: false,
+      reason: "portal_token_failed",
+      error: "Couldn't mint portalToken"
+    });
+    return { ok: false, error: "portal_token_failed" };
+  }
+
+  const publicBase = resolvePublicBaseUrl();
+  const portalUrl = `${publicBase}/portal/invoice/${encodeURIComponent(invoiceId)}?t=${encodeURIComponent(portalToken)}`;
+  const body = buildInvoiceJunkMailWarningSmsBody(invoice, portalUrl);
+
+  const sid = process.env.TWILIO_ACCOUNT_SID;
+  const token = process.env.TWILIO_AUTH_TOKEN;
+  const url = `https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(sid)}/Messages.json`;
+  const auth = Buffer.from(`${sid}:${token}`).toString("base64");
+  const payload = new URLSearchParams({
+    To: to,
+    From: process.env.TWILIO_FROM_NUMBER,
+    Body: body
+  });
+
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Authorization": `Basic ${auth}`, "Content-Type": "application/x-www-form-urlencoded" },
+      body: payload.toString()
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const errMsg = String(data?.message || `Twilio HTTP ${response.status}`).slice(0, 300);
+      console.error(`[invoice-junk-warning] invoice=${invoiceId} Twilio rejected:`, response.status, errMsg);
+      await appendJunkMailWarningHistoryEntry(invoiceId, {
+        success: false,
+        reason: "twilio_failed",
+        error: errMsg,
+        body
+      });
+      return { ok: false, error: errMsg };
+    }
+    const sentAt = new Date().toISOString();
+    await appendJunkMailWarningHistoryEntry(invoiceId, {
+      sentAt,
+      success: true,
+      body
+    });
+    // Stamp the "most recent successful warning" pointer + audit-trail
+    // entry. Stamping happens AFTER the history append so the history
+    // is always the source of truth even if the pointer write fails.
+    await invoices.update(invoiceId, { customerJunkMailWarningSentAt: sentAt });
+    try {
+      await invoices.appendHistory(invoiceId, {
+        action: "customer_junk_warning_sent",
+        by: "system",
+        note: `Junk-mail warning SMS to ${to} (sid ${data?.sid || "unknown"})`
+      });
+    } catch (_) { /* best-effort */ }
+    console.log(`[invoice-junk-warning] invoice=${invoiceId} sent to=${to} sid=${data?.sid}`);
+    return { ok: true, sentAt, body, sid: data?.sid };
+  } catch (error) {
+    const errMsg = String(error?.message || "network/runtime error").slice(0, 300);
+    console.error(`[invoice-junk-warning] invoice=${invoiceId} failed:`, errMsg);
+    try {
+      await appendJunkMailWarningHistoryEntry(invoiceId, {
+        success: false,
+        reason: "network_error",
+        error: errMsg,
+        body
+      });
+    } catch (_logErr) {}
+    return { ok: false, error: errMsg };
+  }
+}
+
 module.exports = {
   notifyCustomer,
   eventForTransition,
@@ -1643,6 +1856,7 @@ module.exports = {
   sendOutreachSms,
   substituteOutreachTags,
   sendInvoiceReminderSMS,
+  sendInvoiceJunkMailWarningSMS,
   sendInvoiceReadySMS,
   sweepPendingInvoiceSMS
 };

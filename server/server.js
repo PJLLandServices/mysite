@@ -5360,8 +5360,12 @@ async function handleApi(req, res, pathname) {
 
       // Build the patch for invoices.update(). For /send, flip to sent;
       // for /resend, leave status alone but append a history entry.
+      // Either action also CLEARS customerJunkMailWarningSentAt so the
+      // ~30s post-send junk-mail warning SMS fires fresh on each send /
+      // resend (idempotency on that flag would suppress a legitimate
+      // warning after a resend — the customer needs the heads-up again).
       const now = new Date().toISOString();
-      const patch = {};
+      const patch = { customerJunkMailWarningSentAt: null };
       if (qbInvoiceId && qbInvoiceId !== inv.quickbooksInvoiceId) {
         patch.quickbooksInvoiceId = qbInvoiceId;
       }
@@ -5381,15 +5385,27 @@ async function handleApi(req, res, pathname) {
         // event. quickbooksInvoiceId can still be updated via the patch
         // object if the QB push happened during the resend (it doesn't
         // for /resend — push is /send-only — but kept for symmetry).
-        if (Object.keys(patch).length > 0) {
-          await invoices.update(invId, patch);
-        }
+        await invoices.update(invId, patch);
         updated = await invoices.appendHistory(invId, {
           action: "resent",
           by: "admin",
           note: `Re-emailed to ${inv.customerEmail}.`
         });
       }
+
+      // Junk-mail warning SMS (Junk-Mail Warning brief, May 2026) —
+      // fire-and-forget ~30s after the email send completes. Delay gives
+      // the email a head start so the customer's spam-folder check makes
+      // sense when the SMS arrives. Skip conditions (paid/voided/no-phone/
+      // opt-out/autofire-recent) all return cleanly from the lib without
+      // throwing; surfacing is via customerJunkMailWarningHistory on the
+      // admin invoice page.
+      const JUNK_WARNING_DELAY_MS = 30 * 1000;
+      setTimeout(() => {
+        const { sendInvoiceJunkMailWarningSMS } = require("./lib/notify-customer");
+        sendInvoiceJunkMailWarningSMS({ invoiceId: invId })
+          .catch((err) => console.warn(`[invoice-${action}] junk-mail warning SMS failed for ${invId}:`, err?.message));
+      }, JUNK_WARNING_DELAY_MS);
 
       return sendJson(res, 200, {
         ok: true,
@@ -5497,6 +5513,94 @@ async function handleApi(req, res, pathname) {
     } catch (err) {
       console.error(`[invoice-reminder] route failed for ${invId}:`, err.message);
       return sendJson(res, 500, { ok: false, errors: [err.message || "Couldn't send reminder."] });
+    }
+  }
+
+  // ---------- Invoice junk-mail warning SMS (Junk-Mail Warning brief) ----
+  // POST /api/invoices/:id/send-junk-warning — manual admin trigger for
+  // the same SMS that auto-fires ~30s after the email-send. Same skip
+  // conditions as the reminder route + an extra `autofire_recent` skip
+  // when the auto-fire "invoice ready" SMS landed within the last 5 min
+  // (its body already mentions junk/spam — no second SMS needed). Status
+  // codes mirror the reminder endpoint with one addition:
+  //   200 — sent
+  //   404 — invoice_not_found
+  //   429 — rate_limited
+  //   409 — voided | paid | no_phone | no_twilio_config | disabled |
+  //         opted_out | portal_token_failed | autofire_recent
+  //   502 — Twilio rejected
+  const invoiceJunkWarningMatch = pathname.match(/^\/api\/invoices\/([^/]+)\/send-junk-warning$/);
+  if (invoiceJunkWarningMatch && req.method === "POST") {
+    const invId = decodeURIComponent(invoiceJunkWarningMatch[1]);
+    try {
+      const payload = await parseRequestBody(req).catch(() => ({}));
+      const force = payload?.force === true;
+      const { sendInvoiceJunkMailWarningSMS } = require("./lib/notify-customer");
+      const result = await sendInvoiceJunkMailWarningSMS({ invoiceId: invId, force });
+
+      if (result.ok) {
+        const updated = await invoices.get(invId);
+        return sendJson(res, 200, {
+          ok: true,
+          sentAt: result.sentAt,
+          body: result.body,
+          sid: result.sid || null,
+          invoice: updated
+        });
+      }
+
+      const code = result.error;
+      const skipCodes = new Set(["voided", "paid", "no_phone", "no_twilio_config", "disabled", "opted_out", "portal_token_failed", "autofire_recent"]);
+      const messages = {
+        invoice_not_found: "Invoice not found.",
+        missing_invoice_id: "Invoice ID missing in request URL.",
+        rate_limited: result.retryAfterSeconds
+          ? `Last warning sent ${Math.round((Date.now() - Date.parse(result.lastSentAt)) / 60000)} min ago. Wait ${Math.ceil(result.retryAfterSeconds / 60)} min before sending another.`
+          : "Rate-limited — try again later.",
+        voided: "Invoice is voided — warning not sent.",
+        paid: "Invoice is already paid — warning not sent.",
+        no_phone: "No customer phone on this invoice — warning not sent.",
+        no_twilio_config: "Twilio is not configured on the server — warning not sent.",
+        disabled: "Invoice SMS is disabled in admin settings — warning not sent.",
+        opted_out: "Customer opted out of text reminders — warning not sent.",
+        portal_token_failed: "Couldn't generate a portal link for this invoice.",
+        autofire_recent: "Auto-fire 'invoice ready' SMS sent within the last 5 min — junk warning redundant. Use Force to override."
+      };
+      const msg = messages[code] || code || "Warning not sent.";
+      if (code === "invoice_not_found") {
+        return sendJson(res, 404, { ok: false, error: code, errors: [msg] });
+      }
+      if (code === "missing_invoice_id") {
+        return sendJson(res, 400, { ok: false, error: code, errors: [msg] });
+      }
+      if (code === "rate_limited") {
+        return sendJson(res, 429, {
+          ok: false,
+          error: code,
+          errors: [msg],
+          lastSentAt: result.lastSentAt,
+          retryAfterSeconds: result.retryAfterSeconds
+        });
+      }
+      if (skipCodes.has(code)) {
+        const updated = await invoices.get(invId).catch(() => null);
+        return sendJson(res, 409, {
+          ok: false,
+          error: code,
+          errors: [msg],
+          ...(updated ? { invoice: updated } : {})
+        });
+      }
+      const updated = await invoices.get(invId).catch(() => null);
+      return sendJson(res, 502, {
+        ok: false,
+        error: "send_failed",
+        errors: [msg],
+        ...(updated ? { invoice: updated } : {})
+      });
+    } catch (err) {
+      console.error(`[invoice-junk-warning] route failed for ${invId}:`, err.message);
+      return sendJson(res, 500, { ok: false, errors: [err.message || "Couldn't send warning."] });
     }
   }
 
