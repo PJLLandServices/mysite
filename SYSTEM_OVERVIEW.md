@@ -615,6 +615,18 @@ AND the customer hasn't opted out of text reminders, the cascade also schedules 
 sends lost to a server restart.
 ```
 
+**Manual reminder SMS** (Invoice Reminder brief, May 2026): once the auto-fire has gone out (or been skipped), the admin invoice page exposes a **"📱 Send reminder SMS"** button on the `#invoiceReminderCard` card. Endpoint `POST /api/invoices/:id/send-reminder` is admin-gated, accepts `{ force: true }` to override the rate limit, and:
+
+- **Rate limit:** minimum 1 hour between successful reminders per invoice (tracked via `customerReminderHistory[]` on the invoice record — separate from the auto-fire's `customerSmsSentAt`). Failed attempts don't count toward the gate.
+- **Disabled on paid/voided invoices** — UI greys the button; server returns 409 with `error: "paid"` / `error: "voided"`.
+- **Skip codes** (HTTP 409): `voided`, `paid`, `no_phone`, `no_twilio_config`, `disabled`, `opted_out`, `portal_token_failed`. Each appends a `customerReminderHistory` entry with `success: false` and a `reason` so the admin UI surfaces the attempt even when no SMS shipped.
+- **Rate-limit response** (HTTP 429): returns `lastSentAt` + `retryAfterSeconds`; the UI prompts to override and re-POSTs with `{ force: true }`.
+- **Twilio failures** (HTTP 502): upstream error surfaced through; logged + history-stamped.
+- **Master kill switch:** the same `settings.invoiceSms.enabled` flag that governs the auto-fire also governs manual reminders. Flip it off → both routes no-op.
+
+The body differs from the auto-fire — explicitly framed as "Friendly reminder from PJL Land Services — your invoice for {property} is still outstanding. View and pay here: {portalUrl}. Questions? Call (905) 960-0181." Same portal-invoice link pattern as the auto-fire so the customer lands on the read-only mirror with a Pay button.
+
+
 **Manual admin booking (custom time):** the schedule page exposes a side door for off-grid commitments — corridor-isolated properties, after-hours fits, customer-named precise times.
 
 ```

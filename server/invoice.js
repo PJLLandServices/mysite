@@ -345,12 +345,208 @@ document.getElementById("invoiceSendBtn")?.addEventListener("click", async () =>
   }
 });
 
-// Wire QB block refresh into the existing invoice render path so it
-// updates whenever the invoice is loaded.
+// ---- Manual reminder SMS (Invoice Reminder brief) -------------------
+//
+// The "Send reminder SMS" button on the invoice page fires a manual
+// follow-up SMS distinct from the auto-fire (which only sends once,
+// ~5 min after WO completion). Server enforces a 1-hour rate limit
+// based on customerReminderHistory[]; this UI:
+//   - disables the button when the invoice is paid or voided
+//   - renders the rate-limit countdown live ("Available in 42 min")
+//   - shows a history list of every prior attempt with success/error
+//   - on success, refreshes from server response (no extra round-trip)
+const REMINDER_RATE_LIMIT_MS = 60 * 60 * 1000;
+
+function fmtAgo(iso) {
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return "—";
+  const mins = Math.round((Date.now() - t) / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins} min ago`;
+  const hrs = Math.floor(mins / 60);
+  const rem = mins % 60;
+  if (hrs < 24) return rem ? `${hrs}h ${rem}m ago` : `${hrs}h ago`;
+  const days = Math.floor(hrs / 24);
+  return `${days}d ago`;
+}
+
+function renderReminderCard(inv) {
+  const meta = document.getElementById("invoiceReminderMeta");
+  const btn = document.getElementById("invoiceReminderBtn");
+  const status = document.getElementById("invoiceReminderStatus");
+  const list = document.getElementById("invoiceReminderHistory");
+  if (!meta || !btn || !status || !list) return;
+
+  // Clear transient status when we re-render (a fresh load shouldn't
+  // carry over a stale "Sending…" or error from the last click).
+  status.textContent = "";
+  status.dataset.kind = "";
+
+  const history = Array.isArray(inv?.customerReminderHistory)
+    ? inv.customerReminderHistory
+    : [];
+  const lastSuccessful = [...history].reverse().find((h) => h?.success === true);
+
+  // Button state — paid/voided disable entirely. Otherwise rate-limit
+  // check using the last successful send. The button's enabled state
+  // is the UI-side guardrail; the server enforces independently.
+  if (inv?.status === "paid") {
+    btn.disabled = true;
+    btn.textContent = "Reminder SMS";
+    meta.textContent = "Invoice paid — no reminder needed.";
+  } else if (inv?.status === "void") {
+    btn.disabled = true;
+    btn.textContent = "Reminder SMS";
+    meta.textContent = "Invoice voided — reminder disabled.";
+  } else if (lastSuccessful?.sentAt) {
+    const elapsed = Date.now() - Date.parse(lastSuccessful.sentAt);
+    if (Number.isFinite(elapsed) && elapsed < REMINDER_RATE_LIMIT_MS) {
+      const remainMin = Math.ceil((REMINDER_RATE_LIMIT_MS - elapsed) / 60000);
+      btn.disabled = true;
+      btn.textContent = `📱 Available in ${remainMin} min`;
+      meta.textContent = `Last reminder ${fmtAgo(lastSuccessful.sentAt)}. Minimum 1 hour between manual reminders.`;
+    } else {
+      btn.disabled = false;
+      btn.textContent = "📱 Send reminder SMS";
+      meta.textContent = inv.customerPhone
+        ? `Will send to ${inv.customerPhone}. Last reminder ${fmtAgo(lastSuccessful.sentAt)}.`
+        : "⚠ No customer phone on this invoice.";
+    }
+  } else {
+    btn.disabled = false;
+    btn.textContent = "📱 Send reminder SMS";
+    meta.textContent = inv?.customerPhone
+      ? `Will send to ${inv.customerPhone}.`
+      : "⚠ No customer phone on this invoice.";
+  }
+
+  // History list — most recent first. Show timestamp + outcome (success
+  // shows the SMS body so admin can confirm what the customer received).
+  list.innerHTML = "";
+  if (history.length === 0) {
+    list.hidden = true;
+  } else {
+    list.hidden = false;
+    const sorted = [...history].reverse();
+    for (const entry of sorted) {
+      const li = document.createElement("li");
+      const when = fmtDate(entry.sentAt);
+      const ago = fmtAgo(entry.sentAt);
+      if (entry.success) {
+        li.innerHTML = `<strong>Sent</strong> on ${when} <span class="invoice-action-meta">(${ago})</span>`;
+        if (entry.body) {
+          const body = document.createElement("p");
+          body.className = "invoice-action-meta";
+          body.style.cssText = "margin: 4px 0 0; font-style: italic; opacity: 0.85;";
+          body.textContent = `"${entry.body}"`;
+          li.appendChild(body);
+        }
+      } else {
+        const reason = entry.reason ? ` — ${entry.reason}` : "";
+        const err = entry.error ? `: ${entry.error}` : "";
+        li.innerHTML = `<strong>Skipped/failed</strong> on ${when}${reason}${err} <span class="invoice-action-meta">(${ago})</span>`;
+      }
+      list.appendChild(li);
+    }
+  }
+}
+
+document.getElementById("invoiceReminderBtn")?.addEventListener("click", async () => {
+  if (!currentInvoice) return;
+
+  const recipient = currentInvoice.customerPhone || "the customer";
+  const customerName = currentInvoice.customerName || "this customer";
+  if (!confirm(`Send a reminder SMS to ${customerName} at ${recipient}?`)) return;
+
+  const btn = document.getElementById("invoiceReminderBtn");
+  const status = document.getElementById("invoiceReminderStatus");
+  const wasLabel = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "Sending…";
+  status.textContent = "";
+  status.dataset.kind = "info";
+
+  try {
+    const r = await fetch(`/api/invoices/${encodeURIComponent(idFromPath)}/send-reminder`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({})
+    });
+    const data = await r.json().catch(() => ({}));
+
+    if (r.ok && data.ok) {
+      status.textContent = `✓ Reminder sent at ${fmtDate(data.sentAt)}.`;
+      status.dataset.kind = "ok";
+      if (data.invoice) {
+        currentInvoice = data.invoice;
+        renderReminderCard(data.invoice);
+      }
+      return;
+    }
+
+    // 429 rate-limit — offer force override.
+    if (r.status === 429 && data.error === "rate_limited") {
+      btn.textContent = wasLabel;
+      btn.disabled = false;
+      status.dataset.kind = "warn";
+      const serverMsg = (data.errors && data.errors[0]) || "Rate-limited.";
+      status.textContent = serverMsg;
+      const forceConfirm = confirm(`${serverMsg}\n\nSend anyway (override the rate limit)?`);
+      if (forceConfirm) {
+        btn.disabled = true;
+        btn.textContent = "Sending…";
+        status.textContent = "";
+        const r2 = await fetch(`/api/invoices/${encodeURIComponent(idFromPath)}/send-reminder`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ force: true })
+        });
+        const data2 = await r2.json().catch(() => ({}));
+        if (r2.ok && data2.ok) {
+          status.textContent = `✓ Reminder sent at ${fmtDate(data2.sentAt)} (override).`;
+          status.dataset.kind = "ok";
+          if (data2.invoice) {
+            currentInvoice = data2.invoice;
+            renderReminderCard(data2.invoice);
+          }
+        } else {
+          status.textContent = (data2.errors && data2.errors[0]) || "Force send failed.";
+          status.dataset.kind = "error";
+          btn.disabled = false;
+          btn.textContent = wasLabel;
+        }
+      }
+      return;
+    }
+
+    // 409 skip conditions or 502 Twilio failure — surface the message,
+    // re-enable the button (unless it's a hard "paid"/"voided" state,
+    // which the next render will disable anyway).
+    const msg = (data.errors && data.errors[0]) || data.error || "Reminder not sent.";
+    status.textContent = msg;
+    status.dataset.kind = "error";
+    if (data.invoice) {
+      currentInvoice = data.invoice;
+      renderReminderCard(data.invoice);
+    } else {
+      btn.disabled = false;
+      btn.textContent = wasLabel;
+    }
+  } catch (err) {
+    status.textContent = err.message || "Network error.";
+    status.dataset.kind = "error";
+    btn.disabled = false;
+    btn.textContent = wasLabel;
+  }
+});
+
+// Wire QB block refresh + reminder card render into the existing invoice
+// render path so they update whenever the invoice is loaded.
 const origRender = render;
 render = function (inv) {
   origRender(inv);
   refreshQbBlock();
+  renderReminderCard(inv);
 };
 
 // ---- Authorization posture (admin-only) -----------------------------

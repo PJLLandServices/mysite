@@ -156,6 +156,19 @@
             <p class="invoice-action-meta" id="invoiceSmsScheduledLine" hidden></p>
           </section>
 
+          <!-- Manual reminder SMS (Invoice Reminder brief, May 2026).
+               Distinct from the auto-fire above. 1-hour rate limit;
+               disabled when invoice is paid or voided. Each successful
+               send appends to customerReminderHistory[] for the audit
+               trail. force: true bypasses the rate limit. -->
+          <section class="invoice-action-card" id="invoiceReminderCard">
+            <span class="invoice-action-label">Reminder SMS</span>
+            <p class="invoice-action-meta" id="invoiceReminderMeta">—</p>
+            <button type="button" id="invoiceReminderBtn" class="invoice-action-btn">📱 Send reminder SMS</button>
+            <p class="invoice-action-status" id="invoiceReminderStatus"></p>
+            <ul class="invoice-action-list" id="invoiceReminderHistory" hidden></ul>
+          </section>
+
           <section class="invoice-action-card">
             <span class="invoice-action-label">QuickBooks</span>
             <p class="invoice-action-meta" id="invoiceQbMeta">Loading…</p>

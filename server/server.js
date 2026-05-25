@@ -5406,6 +5406,100 @@ async function handleApi(req, res, pathname) {
     }
   }
 
+  // ---------- Invoice reminder SMS (Invoice Reminder brief, May 2026) ----
+  // POST /api/invoices/:id/send-reminder — manual admin trigger that fires
+  // a follow-up SMS distinct from the auto-fire (which only runs once,
+  // ~5 min after WO completion). Body: optional { force: true } to
+  // bypass the 1-hour rate limit. Status codes:
+  //   200 — sent (returns sentAt + body so the UI can show what shipped)
+  //   404 — invoice_not_found
+  //   429 — rate_limited (returns lastSentAt + retryAfterSeconds)
+  //   409 — voided | paid | no_phone | no_twilio_config | disabled |
+  //         opted_out | portal_token_failed
+  //   502 — Twilio rejected the message (returns the upstream error)
+  //
+  // Admin-gated via the /api/invoices isAdminPath() gate above (same as
+  // the existing /send and /resend endpoints).
+  const invoiceReminderMatch = pathname.match(/^\/api\/invoices\/([^/]+)\/send-reminder$/);
+  if (invoiceReminderMatch && req.method === "POST") {
+    const invId = decodeURIComponent(invoiceReminderMatch[1]);
+    try {
+      const payload = await parseRequestBody(req).catch(() => ({}));
+      const force = payload?.force === true;
+      const notifyCustomer = require("./lib/notify-customer");
+      const result = await notifyCustomer.sendInvoiceReminderSMS({ invoiceId: invId, force });
+
+      if (result.ok) {
+        // Return the freshly-updated invoice so the UI can re-render the
+        // history list without a second round-trip.
+        const updated = await invoices.get(invId);
+        return sendJson(res, 200, {
+          ok: true,
+          sentAt: result.sentAt,
+          body: result.body,
+          sid: result.sid || null,
+          invoice: updated
+        });
+      }
+
+      // Map reason codes to HTTP status. The lib returned a structured
+      // error — pass the same shape through so the UI can branch on it.
+      const code = result.error;
+      const skipCodes = new Set(["voided", "paid", "no_phone", "no_twilio_config", "disabled", "opted_out", "portal_token_failed"]);
+      const messages = {
+        invoice_not_found: "Invoice not found.",
+        missing_invoice_id: "Invoice ID missing in request URL.",
+        rate_limited: result.retryAfterSeconds
+          ? `Last reminder sent ${Math.round((Date.now() - Date.parse(result.lastSentAt)) / 60000)} min ago. Wait ${Math.ceil(result.retryAfterSeconds / 60)} min before sending another.`
+          : "Rate-limited — try again later.",
+        voided: "Invoice is voided — reminder not sent.",
+        paid: "Invoice is already paid — reminder not sent.",
+        no_phone: "No customer phone on this invoice — reminder not sent.",
+        no_twilio_config: "Twilio is not configured on the server — reminder not sent.",
+        disabled: "Invoice SMS is disabled in admin settings — reminder not sent.",
+        opted_out: "Customer opted out of text reminders — reminder not sent.",
+        portal_token_failed: "Couldn't generate a portal link for this invoice."
+      };
+      const msg = messages[code] || code || "Reminder not sent.";
+      if (code === "invoice_not_found") {
+        return sendJson(res, 404, { ok: false, error: code, errors: [msg] });
+      }
+      if (code === "missing_invoice_id") {
+        return sendJson(res, 400, { ok: false, error: code, errors: [msg] });
+      }
+      if (code === "rate_limited") {
+        return sendJson(res, 429, {
+          ok: false,
+          error: code,
+          errors: [msg],
+          lastSentAt: result.lastSentAt,
+          retryAfterSeconds: result.retryAfterSeconds
+        });
+      }
+      if (skipCodes.has(code)) {
+        const updated = await invoices.get(invId).catch(() => null);
+        return sendJson(res, 409, {
+          ok: false,
+          error: code,
+          errors: [msg],
+          ...(updated ? { invoice: updated } : {})
+        });
+      }
+      // Anything else = Twilio/network failure. Surface the upstream
+      // message so the admin can act (e.g. "Phone is not a Twilio number").
+      const updated = await invoices.get(invId).catch(() => null);
+      return sendJson(res, 502, {
+        ok: false,
+        error: "send_failed",
+        errors: [msg],
+        ...(updated ? { invoice: updated } : {})
+      });
+    } catch (err) {
+      console.error(`[invoice-reminder] route failed for ${invId}:`, err.message);
+      return sendJson(res, 500, { ok: false, errors: [err.message || "Couldn't send reminder."] });
+    }
+  }
+
   // ---------- Public portal-invoice view (Invoice SMS brief) ----------
   // Token-gated read-only invoice JSON for the /portal/invoice/:id view
   // linked in the customer SMS. Separate token (portalToken) from the

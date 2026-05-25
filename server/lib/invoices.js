@@ -284,7 +284,7 @@ async function update(id, patch) {
   if (idx === -1) return null;
   const current = records[idx];
   const next = { ...current };
-  const allowed = ["status", "notes", "quickbooksInvoiceId", "quickbooksChargeId", "quickbooksPaymentId", "paymentToken", "portalToken", "customerSmsScheduledAt", "customerSmsSentAt", "customerName", "customerEmail", "customerPhone", "address"];
+  const allowed = ["status", "notes", "quickbooksInvoiceId", "quickbooksChargeId", "quickbooksPaymentId", "paymentToken", "portalToken", "customerSmsScheduledAt", "customerSmsSentAt", "customerReminderHistory", "customerName", "customerEmail", "customerPhone", "address"];
   for (const key of allowed) {
     if (patch && Object.prototype.hasOwnProperty.call(patch, key)) next[key] = patch[key];
   }

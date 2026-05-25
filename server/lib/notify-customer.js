@@ -1420,6 +1420,215 @@ async function sweepPendingInvoiceSMS() {
   return { considered, fired, skipped };
 }
 
+// ---- Manual invoice reminder SMS (Invoice Reminder brief, May 2026) ----
+//
+// Admin-triggered follow-up SMS for invoices that are still outstanding
+// past the initial auto-fire nudge (sendInvoiceReadySMS). Distinct from
+// the auto-fire in three ways:
+//   1. Different body — explicitly framed as a friendly reminder.
+//   2. Not idempotent on customerSmsSentAt — that flag belongs to the
+//      auto-fire. Reminders are governed by customerReminderHistory[]
+//      and a 1-hour rate limit (overridable with { force: true }).
+//   3. Skip conditions return REASON CODES the API can map to HTTP
+//      status (so the UI can render a clear human message and disable
+//      the button when the invoice is paid/voided).
+//
+// All skip / failure paths append a customerReminderHistory entry so the
+// admin UI can show "Last reminder attempted on …" even when no SMS
+// actually went out (e.g. opted out, no phone). The append-on-skip is
+// what gives the UI a complete audit trail per the brief.
+
+const REMINDER_RATE_LIMIT_MS = 60 * 60 * 1000; // 1 hour
+
+// Build the reminder SMS body. Property label + portal URL substituted in.
+function buildInvoiceReminderSmsBody(invoice, portalUrl) {
+  const label = shortPropertyLabel(invoice);
+  return (
+    `Friendly reminder from PJL Land Services — your invoice for ${label} is still outstanding. ` +
+    `View and pay here: ${portalUrl}. ` +
+    `Questions? Call (905) 960-0181.`
+  );
+}
+
+// Append an entry to invoice.customerReminderHistory. Read-modify-write
+// on the parsed array (separate from the email/history audit trail; this
+// is a feature-specific log).
+async function appendReminderHistoryEntry(invoiceId, entry) {
+  const invoices = require("./invoices");
+  const current = await invoices.get(invoiceId);
+  if (!current) return null;
+  const history = Array.isArray(current.customerReminderHistory)
+    ? current.customerReminderHistory.slice()
+    : [];
+  history.push({
+    sentAt: entry.sentAt || new Date().toISOString(),
+    channel: entry.channel || "sms",
+    success: entry.success === true,
+    ...(entry.error ? { error: String(entry.error).slice(0, 300) } : {}),
+    ...(entry.body ? { body: String(entry.body).slice(0, 500) } : {}),
+    ...(entry.reason ? { reason: entry.reason } : {})
+  });
+  return invoices.update(invoiceId, { customerReminderHistory: history });
+}
+
+// Returns one of:
+//   { ok: true, sentAt, body, sid }   — Twilio accepted
+//   { ok: false, error: "rate_limited", lastSentAt, retryAfterSeconds }
+//   { ok: false, error: "voided" | "paid" | "no_phone" | "no_twilio_config"
+//                       | "disabled" | "opted_out" | "portal_token_failed"
+//                       | "invoice_not_found" | "missing_invoice_id"
+//                       | <twilio error msg> }
+//
+// The server's POST /api/invoices/:id/send-reminder endpoint maps these
+// to HTTP status codes (404 for not_found, 429 for rate_limited, 409 for
+// the skip conditions, 200 for success, 502 for Twilio failures).
+async function sendInvoiceReminderSMS({ invoiceId, force } = {}) {
+  if (!invoiceId) return { ok: false, error: "missing_invoice_id" };
+  const invoices = require("./invoices");
+  const settingsLib = require("./settings");
+
+  const invoice = await invoices.get(invoiceId);
+  if (!invoice) return { ok: false, error: "invoice_not_found" };
+
+  // Master kill switch — same setting governs the auto-fire and manual
+  // reminders. Flipping invoiceSms.enabled off should stop both.
+  let settings;
+  try { settings = await settingsLib.get(); } catch { settings = null; }
+  if (settings?.invoiceSms?.enabled === false) {
+    return { ok: false, error: "disabled" };
+  }
+
+  if (invoice.status === "void") {
+    return { ok: false, error: "voided" };
+  }
+  if (invoice.status === "paid") {
+    return { ok: false, error: "paid" };
+  }
+
+  // Rate limit — minimum 1 hour between reminders, computed from the
+  // most-recent successful reminder in the history. Failed attempts do
+  // NOT count toward the gate (so an admin can retry immediately after
+  // a Twilio reject). force: true bypasses entirely.
+  const history = Array.isArray(invoice.customerReminderHistory)
+    ? invoice.customerReminderHistory
+    : [];
+  if (!force) {
+    const lastSuccessful = [...history].reverse().find((h) => h?.success === true);
+    if (lastSuccessful?.sentAt) {
+      const elapsed = Date.now() - Date.parse(lastSuccessful.sentAt);
+      if (Number.isFinite(elapsed) && elapsed < REMINDER_RATE_LIMIT_MS) {
+        const retryAfterSeconds = Math.ceil((REMINDER_RATE_LIMIT_MS - elapsed) / 1000);
+        return {
+          ok: false,
+          error: "rate_limited",
+          lastSentAt: lastSuccessful.sentAt,
+          retryAfterSeconds
+        };
+      }
+    }
+  }
+
+  const allowed = await resolveSmsAllowed(invoice);
+  if (!allowed) {
+    await appendReminderHistoryEntry(invoiceId, {
+      success: false,
+      reason: "opted_out",
+      error: "Customer opted out of text reminders"
+    });
+    return { ok: false, error: "opted_out" };
+  }
+
+  const to = String(invoice.customerPhone || "").trim();
+  if (!to) {
+    await appendReminderHistoryEntry(invoiceId, {
+      success: false,
+      reason: "no_phone",
+      error: "No customer phone on invoice"
+    });
+    return { ok: false, error: "no_phone" };
+  }
+
+  if (!smsConfigured()) {
+    return { ok: false, error: "no_twilio_config" };
+  }
+
+  // Defensive: mint a portalToken if one doesn't exist. Should already
+  // be present (auto-fire flow + completion cascade both call this), but
+  // a manual reminder on an old invoice without one shouldn't 500.
+  const tokenized = await invoices.ensurePortalToken(invoiceId);
+  const portalToken = tokenized?.portalToken;
+  if (!portalToken) {
+    await appendReminderHistoryEntry(invoiceId, {
+      success: false,
+      reason: "portal_token_failed",
+      error: "Couldn't mint portalToken"
+    });
+    return { ok: false, error: "portal_token_failed" };
+  }
+
+  const publicBase = resolvePublicBaseUrl();
+  const portalUrl = `${publicBase}/portal/invoice/${encodeURIComponent(invoiceId)}?t=${encodeURIComponent(portalToken)}`;
+  const body = buildInvoiceReminderSmsBody(invoice, portalUrl);
+
+  const sid = process.env.TWILIO_ACCOUNT_SID;
+  const token = process.env.TWILIO_AUTH_TOKEN;
+  const url = `https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(sid)}/Messages.json`;
+  const auth = Buffer.from(`${sid}:${token}`).toString("base64");
+  const payload = new URLSearchParams({
+    To: to,
+    From: process.env.TWILIO_FROM_NUMBER,
+    Body: body
+  });
+
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Authorization": `Basic ${auth}`, "Content-Type": "application/x-www-form-urlencoded" },
+      body: payload.toString()
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const errMsg = String(data?.message || `Twilio HTTP ${response.status}`).slice(0, 300);
+      console.error(`[invoice-reminder] invoice=${invoiceId} Twilio rejected:`, response.status, errMsg);
+      await appendReminderHistoryEntry(invoiceId, {
+        success: false,
+        reason: "twilio_failed",
+        error: errMsg,
+        body
+      });
+      return { ok: false, error: errMsg };
+    }
+    const sentAt = new Date().toISOString();
+    await appendReminderHistoryEntry(invoiceId, {
+      sentAt,
+      success: true,
+      body
+    });
+    // Mirror to the invoice audit history so it shows in the full timeline.
+    try {
+      await invoices.appendHistory(invoiceId, {
+        action: "customer_reminder_sent",
+        by: "admin",
+        note: `Reminder SMS to ${to} (sid ${data?.sid || "unknown"})`
+      });
+    } catch (_) { /* best-effort */ }
+    console.log(`[invoice-reminder] invoice=${invoiceId} sent to=${to} sid=${data?.sid}`);
+    return { ok: true, sentAt, body, sid: data?.sid };
+  } catch (error) {
+    const errMsg = String(error?.message || "network/runtime error").slice(0, 300);
+    console.error(`[invoice-reminder] invoice=${invoiceId} failed:`, errMsg);
+    try {
+      await appendReminderHistoryEntry(invoiceId, {
+        success: false,
+        reason: "network_error",
+        error: errMsg,
+        body
+      });
+    } catch (_logErr) {}
+    return { ok: false, error: errMsg };
+  }
+}
+
 module.exports = {
   notifyCustomer,
   eventForTransition,
@@ -1433,6 +1642,7 @@ module.exports = {
   sendOutreachEmail,
   sendOutreachSms,
   substituteOutreachTags,
+  sendInvoiceReminderSMS,
   sendInvoiceReadySMS,
   sweepPendingInvoiceSMS
 };
