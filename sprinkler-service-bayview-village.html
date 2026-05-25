@@ -72,8 +72,8 @@
 </script>
 
 <style>
-.area-hero{padding:156px 0 80px;background:linear-gradient(rgba(0,0,0,0.45),rgba(0,0,0,0.45)),url('/assets/hero/sprinkler-service-bayview-village.jpg') center/cover no-repeat,linear-gradient(135deg,var(--dark) 0%,var(--green) 70%,var(--green-mid) 100%);position:relative;overflow:hidden;}
-@media(max-width:640px){.area-hero{background-position:center top,center top;}}
+.area-hero{padding:156px 0 80px;background:linear-gradient(rgba(0,0,0,0.58),rgba(0,0,0,0.58)),url('/assets/hero/sprinkler-service-bayview-village.jpg') center/cover no-repeat,linear-gradient(135deg,var(--dark) 0%,var(--green) 70%,var(--green-mid) 100%);position:relative;overflow:hidden;}
+@media(max-width:640px){.area-hero{padding:var(--hero-nav-clearance) 0 56px;background-position:center top,center top;}}
 .area-hero-inner{position:relative;z-index:2;max-width:820px;}
 .breadcrumbs{font-size:13px;color:rgba(255,255,255,.65);margin-bottom:18px;display:flex;gap:8px;flex-wrap:wrap;}
 .breadcrumbs a{color:rgba(255,255,255,.85);}.breadcrumbs a:hover{color:var(--amber-light);}
@@ -160,10 +160,11 @@
 .faq-city summary::after{content:'+';float:right;color:var(--green);font-weight:700;font-size:22px;line-height:1;margin-left:12px;}
 .faq-city details[open] summary::after{content:'–';}
 .faq-city details p{padding:0 22px 18px;margin:0;font-size:15px;line-height:1.65;color:var(--text-mid);}
-.hero-upgrade-chip{display:inline-flex;align-items:center;gap:8px;background:rgba(255,255,255,0.08);border:1.5px solid var(--green-light);color:#fff;font-size:14px;font-weight:600;padding:9px 18px;border-radius:99px;margin-bottom:24px;text-decoration:none;transition:background .2s ease,border-color .2s ease,transform .2s ease;backdrop-filter:blur(4px);}
-.hero-upgrade-chip:hover{background:rgba(255,255,255,0.14);border-color:var(--amber-light);transform:translateY(-1px);}
+.hero-upgrade-chip{display:flex;align-items:center;gap:8px;width:fit-content;max-width:100%;white-space:nowrap;background:rgba(255,255,255,0.12);border:1.5px solid var(--green-light);color:#fff;font-size:14px;font-weight:600;padding:9px 18px;border-radius:99px;margin:6px 0 28px;text-decoration:none;transition:background .2s ease,border-color .2s ease,transform .2s ease;}
+.hero-upgrade-chip:hover{background:rgba(255,255,255,0.18);border-color:var(--amber-light);transform:translateY(-1px);}
 .hero-upgrade-chip .chip-arrow{transition:transform .2s ease;}
-.hero-upgrade-chip:hover .chip-arrow{transform:translateX(3px);}</style>
+.hero-upgrade-chip:hover .chip-arrow{transform:translateX(3px);}
+@media(max-width:420px){.hero-upgrade-chip{font-size:13px;padding:8px 14px;gap:6px;}}</style>
   <link rel="stylesheet" href="css/chat-widget.css">
 <script type="application/ld+json">
 {
@@ -198,7 +199,7 @@
     <div class="breadcrumbs"><a href="index.html">Home</a><span>›</span><a href="sprinkler-systems.html">Sprinkler Systems</a><span>›</span><a href="sprinkler-service-toronto.html">Toronto</a><span>›</span><a href="sprinkler-service-north-york.html">North York</a><span>›</span><span>Bayview Village</span></div>
     <span class="area-eyebrow">Bayview Village · Mature-Property Retrofits · Same-Day Repair</span>
     <h1>Lawn Sprinklers in Bayview Village</h1>
-    <a href="#hydrawise-upgrade-faq" class="hero-upgrade-chip">🔧 Smart controller retrofit — Hydrawise WiFi from <span data-price="controller_1_4">$595</span> <span class="chip-arrow" aria-hidden="true">→</span></a>
+    <a href="#hydrawise-upgrade-faq" class="hero-upgrade-chip">🔧 Hydrawise smart upgrade — from <span data-price="controller_1_4">$595</span> <span class="chip-arrow" aria-hidden="true">→</span></a>
     <p>Local sprinkler service for Bayview Village's mature 1960s–70s residential properties — Hydrawise smart-controller retrofits, same-day repair, spring openings from <span data-price="spring_open_4z">$90</span>, fall winterization. Newmarket-based crew, no franchise routing.</p>
     <div class="area-hero-actions">
       <a href="book.html?service=sprinkler_repair" class="btn-amber">Book Bayview Village service <span aria-hidden="true">→</span></a>
