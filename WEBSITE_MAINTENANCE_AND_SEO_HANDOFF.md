@@ -187,6 +187,39 @@ When you add a new service-specific page (Spring Opening, Fall Winterization, Re
 
 `style.css` `:root` defines the design tokens. Every per-page `<style>` block respects them via `var(--token)`. Components like `.nav`, `.cta-banner`, `.section-tag`, `.sprk-banner` live in `style.css`. Page-specific layouts live in inline `<style>` blocks per page.
 
+### `.pjl-cta-row` — site-wide responsive button-pair utility
+
+**What it does.** Forces any pair (or trio) of CTA buttons to share equal widths in a row at viewport widths ≥ **430px**, and to stack as full-width buttons of equal width at viewport widths < 430px. Single source of truth for button-row layout across every public page.
+
+**The 430px breakpoint** matches the iPhone Pro Max (430px wide). On Pro Max and any larger device, buttons sit side-by-side with a clean 50/50 split. On every smaller iPhone (Pro, regular, mini, etc.), buttons stack and each fills the container width. The breakpoint originally landed on `.pricing-cta-row` in commit 710910d and was lifted to a global utility in commit XX TODO.
+
+**Defined in:** `style.css` (one block, right after the `.btn-*` family — search for the comment `.pjl-cta-row`).
+
+**Usage.** Add `pjl-cta-row` as a **co-class** on any existing button-row container. Don't replace the existing wrapper class — the utility composes with whatever local margin/padding is set:
+
+```html
+<div class="area-hero-actions pjl-cta-row">
+  <a class="btn-amber" href="...">Book service →</a>
+  <a class="btn-ghost" href="tel:...">📞 (905) 960-0181</a>
+</div>
+
+<div class="pricing-cta-row pjl-cta-row">
+  <a class="btn-primary" href="quote.html">Build Your Quote</a>
+  <a class="btn-secondary" href="tel:...">Call (905) 960-0181</a>
+</div>
+
+<div class="cta-strip-actions pjl-cta-row">
+  <a class="primary" href="book.html">Book service →</a>
+  <a class="ghost" href="tel:...">📞 (905) 960-0181</a>
+</div>
+```
+
+**Why a co-class, not a replacement.** The page-specific `area-hero-actions` / `cta-strip-actions` / `pricing-cta-row` rules still drive margins, vertical spacing, and section-specific positioning (e.g., dark-on-light vs light-on-dark color treatments). The new utility only enforces the row-layout behavior.
+
+**Don't apply to:** the Hydrawise upgrade chip (it's a single CTA, not a pair), or any single-button block. Apply only to containers that hold 2+ peer CTAs that should appear equal.
+
+**To verify on a new page.** At 390px viewport: both buttons stack, both full container width, both same height. At 430px viewport: buttons side-by-side, 50/50 split (give or take the 12px gap), equal heights. At 768px+: same row behavior as 430px.
+
 ---
 
 ## 5. Current Strengths (what's working)
