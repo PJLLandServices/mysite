@@ -414,6 +414,49 @@ img { max-width: 100%; height: auto; display: block; }
   font-size: 14px;
 }
 
+/* ──────────────────────────────────────────────────────────────
+   .pjl-cta-row — site-wide responsive button-pair row utility.
+
+   Behavior:
+   - ≥430px viewport: children split row evenly (50/50 for 2 buttons,
+     33/33/33 for 3, etc.). Equal heights via align-items: stretch.
+   - <430px viewport: children stack vertically, each full-width.
+
+   Apply as a CO-CLASS on any container wrapping a button pair:
+     <div class="area-hero-actions pjl-cta-row"> ... </div>
+     <div class="pricing-cta-row pjl-cta-row"> ... </div>
+     <div class="cta-strip-actions pjl-cta-row"> ... </div>
+
+   The 430px breakpoint is documented in
+   WEBSITE_MAINTENANCE_AND_SEO_HANDOFF.md §3.3 and reflects iPhone
+   Pro Max width (430px) — buttons stay paired on Pro Max, stack on
+   smaller iPhones. Set on commit 710910d (originally on pricing-cta-row)
+   and lifted to global utility in this commit.
+   ────────────────────────────────────────────────────────────── */
+.pjl-cta-row {
+  display: flex;
+  flex-direction: row;
+  gap: 12px;
+  /* !important enforces stretch over any co-class that sets
+     align-items: center (e.g. legacy .pricing-cta-row inline CSS). */
+  align-items: stretch !important;
+  width: 100%;
+}
+.pjl-cta-row > * {
+  flex: 1 1 0 !important;
+  min-width: 0;
+  text-align: center;
+  justify-content: center;
+}
+@media (max-width: 429px) {
+  .pjl-cta-row {
+    flex-direction: column !important;
+  }
+  .pjl-cta-row > * {
+    width: 100% !important;
+  }
+}
+
 /* ── Section banner — gradient header bar (reusable) ── */
 .sprk-banner {
   display: grid;
