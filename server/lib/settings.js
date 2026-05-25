@@ -51,6 +51,18 @@ const DEFAULT_QUICKBOOKS = {
   lastSyncErrors: []
 };
 
+// Invoice-ready SMS defaults (Invoice SMS brief, May 2026). Fires from the
+// completion cascade ~delayMinutes after WO completion, pointing the
+// customer at /portal/invoice/:id?t=<portalToken>. The maxAgeHours window
+// guards the sweep recovery path — invoices whose scheduled time aged out
+// more than this past now (server was down through the whole window) stay
+// unsent rather than firing stale.
+const DEFAULT_INVOICE_SMS = {
+  enabled: true,
+  delayMinutes: 5,
+  maxAgeHours: 24
+};
+
 // Customer-facing fallback phone — surfaced verbatim on portal error
 // states when self-service is blocked ("Within 24 hours of your
 // appointment — please call (905) 960-0181"). Stored centrally so the
@@ -83,6 +95,7 @@ const DEFAULT_SETTINGS = {
   quickbooks: { ...DEFAULT_QUICKBOOKS, lastSyncErrors: [] },
   icalFeed: { ...DEFAULT_ICAL_FEED },
   contactInfo: { ...DEFAULT_CONTACT_INFO },
+  invoiceSms: { ...DEFAULT_INVOICE_SMS },
   outreachTemplates: {
     spring: { ...BLANK_OUTREACH_TEMPLATE },
     fall: { ...BLANK_OUTREACH_TEMPLATE }
@@ -117,6 +130,7 @@ function hydrate(s) {
   const qb = s?.quickbooks || {};
   const ical = s?.icalFeed || {};
   const contact = s?.contactInfo || {};
+  const ism = s?.invoiceSms || {};
   const out = s?.outreachTemplates || {};
   const pickTemplate = (key) => {
     const t = out[key] || {};
@@ -146,6 +160,15 @@ function hydrate(s) {
       customerSupportPhone: typeof contact.customerSupportPhone === "string" && contact.customerSupportPhone.trim()
         ? contact.customerSupportPhone.trim()
         : DEFAULT_CONTACT_INFO.customerSupportPhone
+    },
+    invoiceSms: {
+      enabled: ism.enabled !== false,
+      delayMinutes: Number.isFinite(Number(ism.delayMinutes)) && Number(ism.delayMinutes) >= 0
+        ? Number(ism.delayMinutes)
+        : DEFAULT_INVOICE_SMS.delayMinutes,
+      maxAgeHours: Number.isFinite(Number(ism.maxAgeHours)) && Number(ism.maxAgeHours) > 0
+        ? Number(ism.maxAgeHours)
+        : DEFAULT_INVOICE_SMS.maxAgeHours
     },
     outreachTemplates: {
       spring: pickTemplate("spring"),

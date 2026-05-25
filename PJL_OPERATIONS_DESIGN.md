@@ -802,6 +802,14 @@ When tech taps "Complete":
   "Download service report" link per service record with a cascade
   snapshot)
 - Warranty clock starts (1 year repairs / 3 years installs)
+- **Invoice-ready customer SMS scheduled** (Invoice SMS brief, May
+  2026) — fires ~5 min after the cascade unless the invoice was paid
+  on site, the master switch (`settings.invoiceSms.enabled`) is off,
+  or the customer has opted out of text reminders. Mints a
+  per-invoice `portalToken` for the SMS deep-link
+  (`/portal/invoice/:id?t=<token>`). Idempotent — re-firing the
+  cascade never re-schedules or re-sends. A 2-minute sweep recovers
+  sends lost to a server restart, capped by `invoiceSms.maxAgeHours`.
 
 ---
 
@@ -1005,6 +1013,7 @@ gated at 3/hour per user.
 - View upcoming bookings
 - **Reschedule** an upcoming booking once, up to 24 hours before the appointment (one self-service reschedule per booking; admin can move it further from the CRM)
 - **Cancel** an upcoming booking up to 24 hours before the appointment, with a captured reason (reason chip + optional free-text, "Other" requires free-text)
+- **View an individual invoice** (read-only) via the SMS deep-link at `/portal/invoice/:id?t=<portalToken>` — line items, totals, status, and a "Pay this invoice" button that opens the QB payment page in a new tab. Mirrors the formal invoice without exposing internal notes or audit trail.
 
 ### 6.2 What customers cannot do
 
@@ -1018,7 +1027,7 @@ gated at 3/hour per user.
 
 ### 6.3 Notification preferences (per customer)
 
-- Text reminders (yes/no)
+- Text reminders (yes/no) — also gates the invoice-ready SMS that fires ~5 min after WO completion (Invoice SMS brief, May 2026). When this is `false`, the cascade logs `customer_sms_skipped_opted_out` to invoice history instead of scheduling.
 - Email-only mode
 - No marketing texts
 - Override Patrick's defaults for this customer

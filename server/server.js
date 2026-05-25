@@ -5406,6 +5406,56 @@ async function handleApi(req, res, pathname) {
     }
   }
 
+  // ---------- Public portal-invoice view (Invoice SMS brief) ----------
+  // Token-gated read-only invoice JSON for the /portal/invoice/:id view
+  // linked in the customer SMS. Separate token (portalToken) from the
+  // pay-invoice payment surface so the secrets can be revoked
+  // independently. Wrong/missing token returns 401 with no body so the
+  // existence of the invoice ID is not leaked.
+  const portalInvoiceMatch = pathname.match(/^\/api\/portal\/invoice\/([^/]+)$/);
+  if (portalInvoiceMatch && req.method === "GET") {
+    try {
+      const id = decodeURIComponent(portalInvoiceMatch[1]);
+      const url = new URL(req.url, baseUrlFromReq(req));
+      const t = url.searchParams.get("t") || "";
+      const inv = await invoices.getByPortalToken(id, t);
+      if (!inv) return sendJson(res, 401, { ok: false });
+      // Build the embedded pay URL — this is the "Pay this invoice"
+      // CTA on the portal view. Requires paymentToken on the invoice
+      // (set when Patrick clicks Send-to-customer); if absent, the
+      // portal page shows a banner instead of a fake button.
+      const publicBase = resolvePublicBaseUrl();
+      const payUrl = inv.paymentToken
+        ? `${publicBase}/pay/invoice/${encodeURIComponent(inv.id)}?t=${encodeURIComponent(inv.paymentToken)}`
+        : null;
+      // Short property label — same logic as the SMS body. Drops city/
+      // postal so the customer sees "123 Main St" not the full address.
+      const addressStreet = String(inv.address || "").split(",")[0].trim();
+      // Sanitize: no internal notes, no admin history, no tokens.
+      const safe = {
+        id: inv.id,
+        status: inv.status,
+        createdAt: inv.createdAt,
+        sentAt: inv.sentAt,
+        paidAt: inv.paidAt,
+        voidedAt: inv.voidedAt,
+        customerName: inv.customerName || "",
+        propertyShortLabel: addressStreet || inv.address || "",
+        address: inv.address || "",
+        lineItems: inv.lineItems || [],
+        subtotal: inv.subtotal,
+        hst: inv.hst,
+        total: inv.total,
+        currency: inv.currency,
+        payUrl,
+        quickbooksInvoiceId: inv.quickbooksInvoiceId || null
+      };
+      return sendJson(res, 200, { ok: true, invoice: safe });
+    } catch (err) {
+      return sendJson(res, 500, { ok: false, errors: [err?.message || "Couldn't load invoice."] });
+    }
+  }
+
   // ---------- Public invoice payment API (PR 3) ------------------------
   // Token-gated public endpoints powering /pay/invoice/:id?t=<token>.
   // Auth model: every endpoint here verifies the paymentToken via
@@ -12863,6 +12913,13 @@ function resolveStaticTarget(pathname) {
   if (/^\/pay\/invoice\/[^/]+\/?$/.test(pathname)) {
     return { dir: SERVER_DIR, relative: "/pay.html" };
   }
+  // Public portal-invoice read-only view (Invoice SMS brief). Token-gated
+  // by the JSON API at /api/portal/invoice/:id?t=<token>. HTML is fine
+  // to serve to anyone; without a valid token the JS shows the "link
+  // not valid" state.
+  if (/^\/portal\/invoice\/[^/]+\/?$/.test(pathname)) {
+    return { dir: SERVER_DIR, relative: "/portal-invoice.html" };
+  }
   if (pathname === "/admin/chats" || pathname === "/admin/chats/") {
     return { dir: SERVER_DIR, relative: "/chats.html" };
   }
@@ -13397,9 +13454,14 @@ const server = http.createServer(async (req, res) => {
     // the canonical "token in URL" portal entry. On any lookup
     // miss we still serve portal.html with safe generic OG values
     // so a stale-but-valid link still renders.
+    //
+    // /portal/invoice/:id is the per-invoice portal view (Invoice SMS
+    // brief, May 2026); it has its own static handler + JSON API and
+    // doesn't need lead-OG substitution.
     if (req.method === "GET" && pathname.startsWith("/portal/") &&
         pathname !== "/portal/login" && pathname !== "/portal/login/" &&
-        pathname !== "/portal/login/verify") {
+        pathname !== "/portal/login/verify" &&
+        !pathname.startsWith("/portal/invoice/")) {
       const handled = await renderPortalWithOg(req, res, pathname, url);
       if (handled) return;
       // Fall through to serveStatic on a fatal lookup error so the
@@ -13473,6 +13535,25 @@ server.listen(PORT, HOST, () => {
   };
   sweepQuotes();
   setInterval(sweepQuotes, 6 * 60 * 60 * 1000);
+
+  // Invoice-ready SMS sweep (Invoice SMS brief, May 2026). The primary
+  // fire path is a setTimeout inside the completion cascade; this sweep
+  // is the recovery path that catches pending sends across server
+  // restarts. Boot run picks up anything queued while the server was
+  // down; 2-min interval keeps the recovery window tight without
+  // hammering the file system (it only touches Twilio when a record is
+  // actually due).
+  const { sweepPendingInvoiceSMS } = require("./lib/notify-customer");
+  const sweepInvoiceSms = async () => {
+    try {
+      const result = await sweepPendingInvoiceSMS();
+      if (result?.fired) console.log(`[invoice-sms] sweep fired ${result.fired} SMS (considered ${result.considered}, aged-out ${result.skipped})`);
+    } catch (err) {
+      console.warn("[invoice-sms] sweep failed:", err?.message);
+    }
+  };
+  sweepInvoiceSms();
+  setInterval(sweepInvoiceSms, 2 * 60 * 1000);
 
   // Trash purge sweep (Session 2 brief). Hard-deletes records soft-deleted
   // more than 30 days ago. Runs at startup AND every 24 hours so the

@@ -354,6 +354,90 @@ async function run(wo, deps = {}) {
     catch (err) { console.warn("[cascade] customer notify failed:", err?.message); }
   }
 
+  // 5) Schedule the customer invoice-ready SMS (Invoice SMS brief, May
+  // 2026). Fires ~delayMinutes after this cascade runs, pointing the
+  // customer at the portal-invoice view (which mirrors the invoice and
+  // re-exposes the QB payment link). Gated by:
+  //   - invoice exists with paidOnSiteAtCompletion === false
+  //   - settings.invoiceSms.enabled !== false
+  //   - customer SMS allowed (notificationPrefs.textReminders !== false)
+  //   - customer has a phone on the invoice snapshot
+  //
+  // Idempotent — if customerSmsSentAt is set (sweep already fired) or
+  // customerSmsScheduledAt is already in the future, this skips. The
+  // setTimeout is the primary fire path; sweepPendingInvoiceSMS catches
+  // sends lost to a server restart. Best-effort: failures here log and
+  // continue (the cascade itself doesn't depend on the SMS).
+  if (invoice && invoice.paidOnSiteAtCompletion === false) {
+    try {
+      const settingsLib = require("./settings");
+      const notifyCustomer = require("./notify-customer");
+      const settings = await settingsLib.get();
+      if (settings?.invoiceSms?.enabled !== false) {
+        // Re-fetch the invoice so we see the latest customerSmsSentAt /
+        // customerSmsScheduledAt — a prior cascade re-fire may have
+        // already scheduled.
+        const freshInv = await invoices.get(invoice.id);
+        if (freshInv && !freshInv.customerSmsSentAt && !freshInv.customerSmsScheduledAt) {
+          let smsAllowed = true;
+          let skipReason = null;
+          if (freshInv.customerId) {
+            try {
+              const customers = require("./customers");
+              const cust = await customers.get(freshInv.customerId);
+              if (cust && cust?.notificationPrefs?.textReminders === false) {
+                smsAllowed = false;
+                skipReason = "customer_sms_skipped_opted_out";
+              }
+            } catch (_err) { /* tolerate missing customer record */ }
+          }
+          if (smsAllowed && !String(freshInv.customerPhone || "").trim()) {
+            smsAllowed = false;
+            skipReason = "customer_sms_skipped_no_phone";
+          }
+          if (!smsAllowed) {
+            try {
+              await invoices.appendHistory(freshInv.id, {
+                action: skipReason,
+                by: "system",
+                note: skipReason === "customer_sms_skipped_opted_out"
+                  ? "Customer opted out of text reminders"
+                  : "No customer phone on invoice"
+              });
+            } catch (logErr) { console.warn("[cascade] SMS skip history failed:", logErr?.message); }
+          } else {
+            const delayMinutes = Number.isFinite(Number(settings.invoiceSms?.delayMinutes))
+              ? Number(settings.invoiceSms.delayMinutes)
+              : 5;
+            const delayMs = Math.max(0, delayMinutes * 60 * 1000);
+            const scheduledAt = new Date(Date.now() + delayMs).toISOString();
+            // Mint the portal token at schedule time so the SMS body
+            // (read at send time) has a token to embed.
+            try { await invoices.ensurePortalToken(freshInv.id); }
+            catch (tokErr) { console.warn("[cascade] portalToken mint failed:", tokErr?.message); }
+            await invoices.update(freshInv.id, { customerSmsScheduledAt: scheduledAt });
+            try {
+              await invoices.appendHistory(freshInv.id, {
+                action: "customer_sms_scheduled",
+                by: "system",
+                note: `Scheduled for ${scheduledAt} (delay ${delayMinutes}m)`
+              });
+            } catch (logErr) { console.warn("[cascade] SMS schedule history failed:", logErr?.message); }
+            // Primary fire path. unref() so a long delay doesn't keep
+            // the Node process alive if everything else shut down.
+            const timer = setTimeout(() => {
+              notifyCustomer.sendInvoiceReadySMS({ invoiceId: freshInv.id })
+                .catch((err) => console.warn("[cascade] sendInvoiceReadySMS failed:", err?.message));
+            }, delayMs);
+            if (typeof timer?.unref === "function") timer.unref();
+          }
+        }
+      }
+    } catch (err) {
+      console.warn("[cascade] invoice SMS schedule failed:", err?.message);
+    }
+  }
+
   // Audit-trail breadcrumb on the WO. Only logged on real execution
   // (the alreadyRan: true short-circuit above returns before reaching
   // here), so re-firing the cascade on an already-completed WO won't

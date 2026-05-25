@@ -110,6 +110,56 @@ function render(inv) {
   if (inv.propertyId) { propLink.href = `/admin/property/${encodeURIComponent(inv.propertyId)}`; propLink.textContent = "Open property"; }
   else { propLink.removeAttribute("href"); propLink.textContent = "—"; }
 
+  // SMS-to-customer card (Invoice SMS brief). Three timeline states:
+  //   1. paid-on-site / opted-out / no-phone → "Not scheduled (<reason>)"
+  //   2. scheduled, not yet sent             → "Scheduled for <ts>"
+  //   3. sent                                → "Sent <ts>"
+  // Skip reasons fall out of the history entries the cascade / sender
+  // stamps; the most-recent customer_sms_* entry wins.
+  const smsStatusLine = document.getElementById("invoiceSmsStatusLine");
+  const smsSentLine = document.getElementById("invoiceSmsSentLine");
+  const smsScheduledLine = document.getElementById("invoiceSmsScheduledLine");
+  if (smsStatusLine && smsSentLine && smsScheduledLine) {
+    smsSentLine.hidden = true;
+    smsScheduledLine.hidden = true;
+    if (inv.customerSmsSentAt) {
+      smsStatusLine.textContent = "Sent";
+      smsSentLine.hidden = false;
+      smsSentLine.textContent = `Sent at: ${fmtDate(inv.customerSmsSentAt)}`;
+      if (inv.customerSmsScheduledAt) {
+        smsScheduledLine.hidden = false;
+        smsScheduledLine.textContent = `Scheduled at: ${fmtDate(inv.customerSmsScheduledAt)}`;
+      }
+    } else if (inv.customerSmsScheduledAt) {
+      smsStatusLine.textContent = "Scheduled";
+      smsScheduledLine.hidden = false;
+      smsScheduledLine.textContent = `Scheduled at: ${fmtDate(inv.customerSmsScheduledAt)}`;
+    } else {
+      // No schedule and no send — read the most recent customer_sms_*
+      // history entry to surface the skip reason. Falls back to a
+      // generic "Not scheduled" line when no entry is present
+      // (e.g. paid-on-site invoice).
+      const lastSmsEntry = (Array.isArray(inv.history) ? inv.history : [])
+        .slice()
+        .reverse()
+        .find((h) => typeof h?.action === "string" && h.action.startsWith("customer_sms_"));
+      if (lastSmsEntry) {
+        const reasonMap = {
+          customer_sms_skipped_opted_out: "Not scheduled — customer opted out of text reminders",
+          customer_sms_skipped_no_phone: "Not scheduled — no customer phone on invoice",
+          customer_sms_skipped_voided: "Not scheduled — invoice voided",
+          customer_sms_skipped_paid: "Not scheduled — invoice already paid",
+          customer_sms_failed: "Failed — see invoice history"
+        };
+        smsStatusLine.textContent = reasonMap[lastSmsEntry.action] || "Not scheduled";
+      } else if (inv.paidOnSiteAtCompletion) {
+        smsStatusLine.textContent = "Not scheduled (paid on site)";
+      } else {
+        smsStatusLine.textContent = "Not scheduled";
+      }
+    }
+  }
+
   // Email-to-customer card. Button label + style flip based on status:
   //   draft           → amber primary "Send to customer"
   //   sent/paid/void  → outlined green "Resend" + "Sent <date> to <email>"

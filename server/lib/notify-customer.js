@@ -1183,6 +1183,243 @@ async function sendOutreachSms({
   }
 }
 
+// ---- Invoice-ready SMS (Invoice SMS brief, May 2026) -------------------
+//
+// Fires ~5 min after a WO completion cascade drafts an invoice. The SMS
+// tells the customer the invoice has been emailed, points them at spam/
+// junk if they miss it, and deep-links the portal-invoice view (which
+// re-exposes the QB payment link).
+//
+// Idempotent: re-firing on an invoice with customerSmsSentAt set is a
+// no-op. Customer opt-out and missing-phone branches log to invoice
+// history (so the admin SMS-status block surfaces the skip reason) but
+// don't error.
+
+// Short property label for the SMS body: "123 Main St" — number + street
+// only, no city/postal. Reads from the invoice's address snapshot first
+// (frozen at cascade time, so it can't drift); falls back to "your
+// recent service" when address is blank.
+function shortPropertyLabel(invoice) {
+  const raw = String(invoice?.address || "").trim();
+  if (!raw) return "your recent service";
+  // Take the first comma-segment, which is the street piece for "123 Main
+  // St, Newmarket ON L3Y 1A1"-style addresses. Cap at 50 chars so the SMS
+  // stays in one segment when combined with the rest of the body.
+  const street = raw.split(",")[0].trim();
+  if (!street) return "your recent service";
+  return street.length > 50 ? `${street.slice(0, 47)}…` : street;
+}
+
+// Build the SMS body. Property label + portal URL substituted in. One
+// segment when the URL is short enough; two-segment fallback is fine
+// per the brief.
+function buildInvoiceReadySmsBody(invoice, portalUrl) {
+  const label = shortPropertyLabel(invoice);
+  return (
+    `PJL Land Services: Your invoice for ${label} has been emailed to you. ` +
+    `If you don't see it, please check spam/junk. ` +
+    `View or pay it here: ${portalUrl}`
+  );
+}
+
+// Look up the customer (if customerId is set on the invoice) and read
+// notificationPrefs.textReminders. Default to ALLOWED when the customer
+// record is missing — a customer who interacted via a one-shot lead
+// without becoming a customer record still has a phone on the invoice
+// snapshot, and we honor that. Explicit opt-out (textReminders: false)
+// is the only blocking signal.
+async function resolveSmsAllowed(invoice) {
+  if (!invoice?.customerId) return true;
+  try {
+    const customers = require("./customers");
+    const cust = await customers.get(invoice.customerId);
+    if (!cust) return true;
+    return cust?.notificationPrefs?.textReminders !== false;
+  } catch (_err) {
+    return true;
+  }
+}
+
+// Public API. Reads the invoice fresh at send time (so customer phone
+// changes between schedule and fire are picked up; void status aborts).
+// Returns one of:
+//   { ok: true, skipped: <reason> }   — opted out / no phone / voided / paid
+//   { ok: true, sid }                  — Twilio accepted the message
+//   { ok: false, error }               — Twilio rejected; history stamped
+async function sendInvoiceReadySMS({ invoiceId } = {}) {
+  if (!invoiceId) return { ok: false, error: "missing invoiceId" };
+  const invoices = require("./invoices");
+  const invoice = await invoices.get(invoiceId);
+  if (!invoice) return { ok: false, error: "invoice_not_found" };
+
+  // Idempotency gate — primary fire path + sweep both call this, and a
+  // double-fire would surface as a duplicate SMS in the customer's inbox.
+  if (invoice.customerSmsSentAt) {
+    return { ok: true, skipped: "already_sent" };
+  }
+
+  // Voided between schedule and send — abort. The portal view would still
+  // show the line items, but a "your invoice is on its way" SMS for a
+  // voided invoice is misleading. Log to history so the admin block
+  // surfaces the skip.
+  if (invoice.status === "void") {
+    await invoices.appendHistory(invoiceId, {
+      action: "customer_sms_skipped_voided",
+      by: "system",
+      note: "Invoice voided before SMS fired"
+    });
+    return { ok: true, skipped: "voided" };
+  }
+
+  // Paid via some other path (rare — paid-on-site invoices don't get
+  // scheduled, but Patrick could mark draft → paid manually). No need to
+  // chase payment if it's already in.
+  if (invoice.status === "paid") {
+    await invoices.appendHistory(invoiceId, {
+      action: "customer_sms_skipped_paid",
+      by: "system",
+      note: "Invoice paid before SMS fired"
+    });
+    return { ok: true, skipped: "paid" };
+  }
+
+  const allowed = await resolveSmsAllowed(invoice);
+  if (!allowed) {
+    await invoices.appendHistory(invoiceId, {
+      action: "customer_sms_skipped_opted_out",
+      by: "system",
+      note: "Customer opted out of text reminders"
+    });
+    return { ok: true, skipped: "opted_out" };
+  }
+
+  const to = String(invoice.customerPhone || "").trim();
+  if (!to) {
+    await invoices.appendHistory(invoiceId, {
+      action: "customer_sms_skipped_no_phone",
+      by: "system",
+      note: "No customer phone on invoice"
+    });
+    return { ok: true, skipped: "no_phone" };
+  }
+
+  if (!smsConfigured()) {
+    console.warn(`[invoice-sms] Skipped (no Twilio config) — invoice=${invoiceId}`);
+    return { ok: false, skipped: "no_twilio_config" };
+  }
+
+  // Need a portal token to point the customer somewhere. ensurePortalToken
+  // is idempotent so calling it here (instead of relying on the cascade
+  // having set it) is safe.
+  const tokenized = await invoices.ensurePortalToken(invoiceId);
+  const portalToken = tokenized?.portalToken;
+  if (!portalToken) {
+    await invoices.appendHistory(invoiceId, {
+      action: "customer_sms_failed",
+      by: "system",
+      note: "Couldn't mint portalToken"
+    });
+    return { ok: false, error: "portal_token_failed" };
+  }
+
+  const publicBase = resolvePublicBaseUrl();
+  const portalUrl = `${publicBase}/portal/invoice/${encodeURIComponent(invoiceId)}?t=${encodeURIComponent(portalToken)}`;
+  const body = buildInvoiceReadySmsBody(invoice, portalUrl);
+
+  const sid = process.env.TWILIO_ACCOUNT_SID;
+  const token = process.env.TWILIO_AUTH_TOKEN;
+  const url = `https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(sid)}/Messages.json`;
+  const auth = Buffer.from(`${sid}:${token}`).toString("base64");
+  const payload = new URLSearchParams({
+    To: to,
+    From: process.env.TWILIO_FROM_NUMBER,
+    Body: body
+  });
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Authorization": `Basic ${auth}`, "Content-Type": "application/x-www-form-urlencoded" },
+      body: payload.toString()
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const errMsg = String(data?.message || `Twilio HTTP ${response.status}`).slice(0, 300);
+      console.error(`[invoice-sms] invoice=${invoiceId} Twilio rejected:`, response.status, errMsg);
+      await invoices.appendHistory(invoiceId, {
+        action: "customer_sms_failed",
+        by: "system",
+        note: errMsg
+      });
+      return { ok: false, error: errMsg };
+    }
+    // Twilio accepted — stamp sent time + history entry. The stamp is the
+    // idempotency gate (re-fires no-op above). Update + appendHistory are
+    // separate calls; if the second fails, the SMS is still recorded as
+    // sent (no duplicate) so the failure mode is benign.
+    const sentAt = new Date().toISOString();
+    await invoices.update(invoiceId, { customerSmsSentAt: sentAt });
+    await invoices.appendHistory(invoiceId, {
+      action: "customer_sms_sent",
+      by: "system",
+      note: `Sent to ${to} (sid ${data?.sid || "unknown"})`
+    });
+    console.log(`[invoice-sms] invoice=${invoiceId} sent to=${to} sid=${data?.sid}`);
+    return { ok: true, sid: data?.sid };
+  } catch (error) {
+    const errMsg = String(error?.message || "network/runtime error").slice(0, 300);
+    console.error(`[invoice-sms] invoice=${invoiceId} failed:`, errMsg);
+    try {
+      await invoices.appendHistory(invoiceId, {
+        action: "customer_sms_failed",
+        by: "system",
+        note: errMsg
+      });
+    } catch (_logErr) {}
+    return { ok: false, error: errMsg };
+  }
+}
+
+// Sweep recovery path — finds invoices scheduled to send but not yet
+// sent and within the max-age window, then fires each. Called on server
+// boot (catches pending sends across restarts) and on a recurring
+// interval (catches sends whose setTimeout was lost). Best-effort; logs
+// only. Returns { considered, fired, skipped } for the caller's logs.
+async function sweepPendingInvoiceSMS() {
+  const invoices = require("./invoices");
+  const settingsLib = require("./settings");
+  let settings;
+  try { settings = await settingsLib.get(); } catch { settings = null; }
+  // Honour the master switch — flipping invoiceSms.enabled off should
+  // stop the sweep from picking up already-scheduled records too.
+  if (settings?.invoiceSms?.enabled === false) {
+    return { considered: 0, fired: 0, skipped: 0 };
+  }
+  const maxAgeHours = Number(settings?.invoiceSms?.maxAgeHours) > 0
+    ? Number(settings.invoiceSms.maxAgeHours)
+    : 24;
+  const now = Date.now();
+  const ceiling = now;
+  const floor = now - maxAgeHours * 60 * 60 * 1000;
+
+  let records;
+  try { records = await invoices.list(); } catch { records = []; }
+  let considered = 0;
+  let fired = 0;
+  let skipped = 0;
+  for (const inv of records) {
+    if (!inv?.customerSmsScheduledAt) continue;
+    if (inv.customerSmsSentAt) continue;
+    const t = Date.parse(inv.customerSmsScheduledAt);
+    if (!Number.isFinite(t)) continue;
+    considered += 1;
+    if (t > ceiling) continue; // not yet due
+    if (t < floor) { skipped += 1; continue; } // aged out
+    const result = await sendInvoiceReadySMS({ invoiceId: inv.id });
+    if (result?.ok && result.sid) fired += 1;
+  }
+  return { considered, fired, skipped };
+}
+
 module.exports = {
   notifyCustomer,
   eventForTransition,
@@ -1195,5 +1432,7 @@ module.exports = {
   sendAdminPasswordResetLink,
   sendOutreachEmail,
   sendOutreachSms,
-  substituteOutreachTags
+  substituteOutreachTags,
+  sendInvoiceReadySMS,
+  sweepPendingInvoiceSMS
 };

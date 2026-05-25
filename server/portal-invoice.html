@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Your invoice — PJL Land Services</title>
+  <meta name="robots" content="noindex,nofollow">
+  <link rel="icon" type="image/png" href="/favicon-96x96.png?v=20260518" sizes="96x96" />
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg?v=20260518" />
+  <link rel="shortcut icon" href="/favicon.ico?v=20260518" />
+  <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png?v=20260518" />
+  <meta name="apple-mobile-web-app-title" content="PJL" />
+  <link rel="manifest" href="/site.webmanifest?v=20260518" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/crm/pay.css">
+  <style>
+    /* Page-specific bits for the portal-invoice view. Reuses the
+       customer-facing brand tokens + base layout from pay.css.
+       [hidden] polyfill — page-specific display:inline-block / block
+       rules below would otherwise win against the browser default. */
+    [hidden] { display: none !important; }
+    .pinv-paid-badge {
+      display: inline-block;
+      padding: 6px 12px;
+      background: var(--green);
+      color: #fff;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      margin-top: 8px;
+    }
+    .pinv-status-banner {
+      margin: 0 0 18px;
+      padding: 12px 14px;
+      background: var(--amber-pale);
+      border: 1px solid var(--amber);
+      border-left: 4px solid var(--amber);
+      border-radius: 6px;
+      font-size: 13px;
+      color: #6b3a09;
+      line-height: 1.5;
+    }
+    .pinv-pay-btn {
+      display: inline-block;
+      width: 100%;
+      max-width: 360px;
+      padding: 14px 18px;
+      background: var(--amber);
+      color: #fff;
+      font-size: 16px;
+      font-weight: 700;
+      text-align: center;
+      border-radius: 8px;
+      text-decoration: none;
+      margin: 8px 0 16px;
+    }
+    .pinv-pay-btn:hover {
+      background: var(--amber-hover);
+      color: #fff;
+      text-decoration: none;
+    }
+    .pinv-pay-section { padding-top: 8px; }
+    .pinv-footer-note {
+      margin: 18px 0 0;
+      font-size: 12px;
+      color: var(--text-muted);
+      line-height: 1.5;
+    }
+  </style>
+</head>
+<body class="pay-body">
+  <header class="pay-header">
+    <a class="pay-brand" href="https://pjllandservices.com" aria-label="PJL Land Services">
+      <img src="/crm/pjl-logo-dark.svg" alt="PJL Land Services" class="pay-brand-logo">
+    </a>
+  </header>
+
+  <main class="pay-shell">
+    <p class="pay-loading" id="pinvLoading">Loading invoice…</p>
+
+    <div class="pay-error" id="pinvError" hidden>
+      <h1>This invoice link isn't valid</h1>
+      <p>It may have expired, been used already, or been replaced by a newer one.
+         Please check your most recent email from PJL Land Services, or call
+         <a href="tel:+19059600181">(905) 960-0181</a> and we'll help you out.</p>
+    </div>
+
+    <article class="pay-card" id="pinvCard" hidden>
+      <header class="pay-card-head">
+        <span class="pay-eyebrow">Invoice</span>
+        <h1 class="pay-card-id" id="pinvId">I-2026-0000</h1>
+        <p class="pay-card-issued" id="pinvIssued"></p>
+        <p class="pinv-paid-badge" id="pinvPaidBadge" hidden>PAID</p>
+      </header>
+
+      <section class="pay-summary">
+        <h2 class="pay-section-title">Summary</h2>
+        <p class="pay-form-help" id="pinvBillTo"></p>
+        <table class="pay-summary-table">
+          <thead>
+            <tr><th>Description</th><th class="num">Qty</th><th class="num">Unit</th><th class="num">Total</th></tr>
+          </thead>
+          <tbody id="pinvLines"></tbody>
+          <tfoot>
+            <tr><td colspan="3">Subtotal</td><td class="num" id="pinvSubtotal">$0.00</td></tr>
+            <tr><td colspan="3">HST (13%)</td><td class="num" id="pinvHst">$0.00</td></tr>
+            <tr class="pay-summary-total"><td colspan="3">Total CAD</td><td class="num" id="pinvTotal">$0.00</td></tr>
+          </tfoot>
+        </table>
+      </section>
+
+      <section class="pay-form-section pinv-pay-section" id="pinvPaySection">
+        <h2 class="pay-section-title" id="pinvPayHeading">Pay this invoice</h2>
+        <div id="pinvPayBlock"></div>
+      </section>
+
+      <section class="pay-alt">
+        <h2 class="pay-section-title">Other ways to pay</h2>
+        <p>
+          <strong>E-Transfer:</strong>
+          <a href="mailto:info@pjllandservices.com">info@pjllandservices.com</a>
+        </p>
+        <p>
+          Prefer to pay by phone? Call
+          <a href="tel:+19059600181">(905) 960-0181</a>
+          and we'll take care of it on the line.
+        </p>
+        <p class="pinv-footer-note">
+          Questions? Reply to the email you received or text Patrick at
+          <a href="tel:+19059600181">(905) 960-0181</a>.
+        </p>
+      </section>
+    </article>
+  </main>
+
+  <footer class="pay-footer">
+    PJL Land Services · GST/HST 757080940 RT0001 ·
+    <a href="https://pjllandservices.com">pjllandservices.com</a> ·
+    <a href="tel:+19059600181">(905) 960-0181</a>
+  </footer>
+
+  <script src="/crm/portal-invoice.js" defer></script>
+</body>
+</html>

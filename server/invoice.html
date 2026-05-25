@@ -144,6 +144,18 @@
             <p class="invoice-action-status" id="invoiceSendStatus"></p>
           </section>
 
+          <!-- Invoice-ready SMS status (Invoice SMS brief, May 2026).
+               Surfaces the scheduled / sent timestamps + skip reasons so
+               Patrick can see whether the customer got the nudge SMS
+               without opening the JSON. Customer-facing surfaces never
+               reveal this. -->
+          <section class="invoice-action-card" id="invoiceSmsCard">
+            <span class="invoice-action-label">SMS to customer</span>
+            <p class="invoice-action-meta" id="invoiceSmsStatusLine">—</p>
+            <p class="invoice-action-meta" id="invoiceSmsSentLine" hidden></p>
+            <p class="invoice-action-meta" id="invoiceSmsScheduledLine" hidden></p>
+          </section>
+
           <section class="invoice-action-card">
             <span class="invoice-action-label">QuickBooks</span>
             <p class="invoice-action-meta" id="invoiceQbMeta">Loading…</p>

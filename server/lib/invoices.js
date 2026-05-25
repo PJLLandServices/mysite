@@ -104,6 +104,16 @@ function hydrate(inv) {
     // sending or marking paid — this flag is informational, not a
     // status accelerant. Brief C / spec §4.3.2.
     paidOnSiteAtCompletion: inv?.paidOnSiteAtCompletion === true,
+    // Invoice-ready SMS scheduling (Invoice SMS brief, May 2026).
+    // customerSmsScheduledAt — when the SMS should fire (set by cascade);
+    //   null means "no SMS scheduled" (paid-on-site, opted out, etc.).
+    // customerSmsSentAt — when the SMS actually fired. Idempotency gate.
+    // portalToken — gates /api/portal/invoice/:id?t=<token> read-only view.
+    //   Separate from paymentToken (which gates the embedded payment
+    //   page) so the surfaces have independent secrets.
+    customerSmsScheduledAt: inv?.customerSmsScheduledAt || null,
+    customerSmsSentAt: inv?.customerSmsSentAt || null,
+    portalToken: inv?.portalToken || null,
     // Disclaimer keys (not text — text lives in INVOICE_DISCLAIMERS).
     // Dedupe via Set on read so re-fires can never produce duplicates.
     // Unknown keys are silently dropped — adding a new disclaimer
@@ -274,7 +284,7 @@ async function update(id, patch) {
   if (idx === -1) return null;
   const current = records[idx];
   const next = { ...current };
-  const allowed = ["status", "notes", "quickbooksInvoiceId", "quickbooksChargeId", "quickbooksPaymentId", "paymentToken", "customerName", "customerEmail", "customerPhone", "address"];
+  const allowed = ["status", "notes", "quickbooksInvoiceId", "quickbooksChargeId", "quickbooksPaymentId", "paymentToken", "portalToken", "customerSmsScheduledAt", "customerSmsSentAt", "customerName", "customerEmail", "customerPhone", "address"];
   for (const key of allowed) {
     if (patch && Object.prototype.hasOwnProperty.call(patch, key)) next[key] = patch[key];
   }
@@ -349,6 +359,41 @@ async function getByPaymentToken(id, token) {
   return inv;
 }
 
+// Generate (and persist) a portalToken for the public /portal/invoice/:id?t=
+// read-only view. Mirrors ensurePaymentToken — idempotent, 32-char hex.
+// Distinct token from paymentToken so the portal and payment surfaces
+// can be revoked independently if a leak is ever discovered.
+async function ensurePortalToken(id) {
+  const records = await readAll();
+  const idx = records.findIndex((r) => r.id === id);
+  if (idx === -1) return null;
+  if (records[idx].portalToken) return records[idx];
+  const token = cryptoMod.randomBytes(16).toString("hex");
+  records[idx] = {
+    ...records[idx],
+    portalToken: token,
+    updatedAt: new Date().toISOString()
+  };
+  await writeAll(records);
+  return records[idx];
+}
+
+// Look up an invoice by its public portalToken — used by
+// /api/portal/invoice/:id?t=<token> to verify access. Returns null on
+// missing/wrong token so the route 401s without leaking ID existence.
+async function getByPortalToken(id, token) {
+  if (!token || typeof token !== "string") return null;
+  const records = await readAll();
+  const inv = records.find((r) => r.id === id);
+  if (!inv) return null;
+  if (!inv.portalToken) return null;
+  const a = Buffer.from(inv.portalToken);
+  const b = Buffer.from(token);
+  if (a.length !== b.length) return null;
+  if (!cryptoMod.timingSafeEqual(a, b)) return null;
+  return inv;
+}
+
 // Append a single history entry without touching status / line items.
 // Used by the /resend route in server.js so re-emails get a clean audit
 // trail without going through update() (which only logs on status
@@ -383,5 +428,7 @@ module.exports = {
   update,
   appendHistory,
   ensurePaymentToken,
-  getByPaymentToken
+  getByPaymentToken,
+  ensurePortalToken,
+  getByPortalToken
 };
