@@ -306,12 +306,66 @@
   letter-spacing: -0.5px;
 }
 .coverage-territory .where-lead {
-  font-size: clamp(16px, 1.2vw, 17px);
+  font-size: clamp(17px, 1.35vw, 19px);
   color: #2A3A2E;
   margin: 0;
   line-height: 1.6;
 }
 .coverage-territory .where-lead strong { color: var(--green); font-weight: 600; }
+
+/* Stat chips — three equal cards below the lead. Mirrors the
+   .local-detail gradient panel used on the city-page heroes so the
+   coverage section feels like part of the same family. Stacks on
+   narrow viewports. */
+.coverage-territory .cov-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+  margin: 28px 0 16px;
+}
+.coverage-territory .cov-stat {
+  background: linear-gradient(135deg, var(--green-pale) 0%, #f4f9ec 100%);
+  border: 1px solid var(--grey-line);
+  border-left: 3px solid var(--green-light);
+  border-radius: 12px;
+  padding: 18px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.coverage-territory .cov-stat__num {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: clamp(32px, 3.8vw, 42px);
+  font-weight: 700;
+  color: var(--green);
+  line-height: 1;
+  letter-spacing: -0.02em;
+}
+.coverage-territory .cov-stat__lbl {
+  font-size: 13px;
+  color: var(--grey-text);
+  line-height: 1.4;
+  font-weight: 600;
+}
+.coverage-territory .cov-hint {
+  margin: 4px 0 0;
+  font-size: 14px;
+  font-style: italic;
+  color: var(--amber);
+  font-weight: 600;
+}
+@media (max-width: 560px) {
+  .coverage-territory .cov-stats {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+  .coverage-territory .cov-stat {
+    padding: 14px 16px;
+  }
+  .coverage-territory .cov-stat__num {
+    font-size: 30px;
+  }
+}
 
 /* ROW 2 — full-width 4:3 map */
 .coverage-territory .map-frame {
@@ -840,8 +894,23 @@
       <span class="eyebrow">Full Service Territory</span>
       <h2 id="coverage-heading" class="where-headline">Where we cover.</h2>
       <p class="where-lead">
-        Nine core York Region cities — each with their own dedicated service-area page — plus extended coverage across the broader GTA, Simcoe County, Durham, and Peel. Anywhere within roughly <strong>90 minutes of our Newmarket base</strong>. Click any town to see what we do there.
+        Nine core York Region cities — each with their own dedicated service-area page — plus extended coverage across the broader GTA, Simcoe, Durham, and Peel. <strong>Founder-led service</strong>, no franchise routing, no dispatcher handoffs.
       </p>
+      <div class="cov-stats" role="list">
+        <div class="cov-stat" role="listitem">
+          <span class="cov-stat__num">9</span>
+          <span class="cov-stat__lbl">Core York Region cities — each with a dedicated page</span>
+        </div>
+        <div class="cov-stat" role="listitem">
+          <span class="cov-stat__num">25+</span>
+          <span class="cov-stat__lbl">Extended-coverage towns across the GTA &amp; beyond</span>
+        </div>
+        <div class="cov-stat" role="listitem">
+          <span class="cov-stat__num">Same-day</span>
+          <span class="cov-stat__lbl">Repair across the corridor in season</span>
+        </div>
+      </div>
+      <p class="cov-hint">↓ Click any town below to see what we do there.</p>
     </div>
 
     <!-- ROW 2: full-width 4:3 map -->
