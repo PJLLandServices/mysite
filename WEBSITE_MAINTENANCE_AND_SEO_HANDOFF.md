@@ -189,9 +189,9 @@ When you add a new service-specific page (Spring Opening, Fall Winterization, Re
 
 ### `.pjl-cta-row` — site-wide responsive button-pair utility
 
-**What it does.** Forces any pair (or trio) of CTA buttons to share equal widths in a row at viewport widths ≥ **430px**, and to stack as full-width buttons of equal width at viewport widths < 430px. Single source of truth for button-row layout across every public page.
+**What it does.** Forces any pair (or trio) of CTA buttons to share equal widths in a row at viewport widths ≥ **640px**, and to stack as full-width buttons of equal width at viewport widths ≤ 639px. Single source of truth for button-row layout across every public page.
 
-**The 430px breakpoint** matches the iPhone Pro Max (430px wide). On Pro Max and any larger device, buttons sit side-by-side with a clean 50/50 split. On every smaller iPhone (Pro, regular, mini, etc.), buttons stack and each fills the container width. The breakpoint originally landed on `.pricing-cta-row` in commit 710910d and was lifted to a global utility in commit XX TODO.
+**The 640px breakpoint** is the natural step up from iPhone Pro Max (430px) — comfortable tablet-portrait width where the longest labels in PJL's UX kit ("Book Bayview Village service →" + "Call (905) 960-0181") fit at 50/50 without wrapping. Phones — *all* of them, including iPhone Pro Max — always stack the buttons. The breakpoint originally landed on `.pricing-cta-row` in commit 710910d (430px), was lifted to a global utility in commit 175caae (still 430px), and was bumped to 640px after Patrick screenshotted Pro Max with the phone number wrapping mid-character ("(905) 960-" / "0181") at the 430px / 50-split point — long labels couldn't fit at half-width on a 430px viewport.
 
 **Defined in:** `style.css` (one block, right after the `.btn-*` family — search for the comment `.pjl-cta-row`).
 

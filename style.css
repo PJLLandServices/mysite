@@ -418,20 +418,31 @@ img { max-width: 100%; height: auto; display: block; }
    .pjl-cta-row — site-wide responsive button-pair row utility.
 
    Behavior:
-   - ≥430px viewport: children split row evenly (50/50 for 2 buttons,
-     33/33/33 for 3, etc.). Equal heights via align-items: stretch.
-   - <430px viewport: children stack vertically, each full-width.
+   - ≥640px viewport (tablets and desktops): children split row evenly
+     (50/50 for 2 buttons, 33/33/33 for 3, etc.). Equal heights via
+     align-items: stretch.
+   - ≤639px viewport (ALL phones, including iPhone Pro Max at 430px):
+     children stack vertically, each full-width.
 
    Apply as a CO-CLASS on any container wrapping a button pair:
      <div class="area-hero-actions pjl-cta-row"> ... </div>
      <div class="pricing-cta-row pjl-cta-row"> ... </div>
      <div class="cta-strip-actions pjl-cta-row"> ... </div>
 
-   The 430px breakpoint is documented in
-   WEBSITE_MAINTENANCE_AND_SEO_HANDOFF.md §3.3 and reflects iPhone
-   Pro Max width (430px) — buttons stay paired on Pro Max, stack on
-   smaller iPhones. Set on commit 710910d (originally on pricing-cta-row)
-   and lifted to global utility in this commit.
+   Breakpoint history:
+   - Originally 430px on commit 710910d (pricing-cta-row only) — chosen
+     to keep buttons paired on iPhone Pro Max.
+   - Lifted to a global utility on commit 175caae (still 430px).
+   - Bumped to 640px in this commit. At 430px the longest button
+     labels in the kit ("Book Bayview Village service →" +
+     "Call (905) 960-0181") couldn't fit at 50/50 — the phone number
+     wrapped mid-character ("(905) 960-" / "0181") and the long button
+     label wrapped to 3 lines. 640px is the next natural step up: a
+     comfortable tablet-portrait width where labels fit on one line
+     with breathing room. Phones — all of them — always stack.
+
+   See WEBSITE_MAINTENANCE_AND_SEO_HANDOFF.md "Where reusable
+   components are located" for the full design-system reference.
    ────────────────────────────────────────────────────────────── */
 .pjl-cta-row {
   display: flex;
@@ -448,7 +459,7 @@ img { max-width: 100%; height: auto; display: block; }
   text-align: center;
   justify-content: center;
 }
-@media (max-width: 429px) {
+@media (max-width: 639px) {
   .pjl-cta-row {
     flex-direction: column !important;
   }
