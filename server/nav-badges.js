@@ -4,21 +4,47 @@
 // badge counts; it never touches the nav toggle, logout, or anything
 // else that could double-bind.
 (function () {
+  // Helper — populates a badge span with a count, or hides it. Pure
+  // DOM update; the caller does the fetch.
+  function applyCount(badge, count) {
+    if (!badge) return;
+    if (count > 0) {
+      badge.textContent = String(count);
+      badge.hidden = false;
+    } else {
+      badge.hidden = true;
+    }
+  }
+
   // Portal-message unread badge. The Messages nav link on every admin
   // page carries a [data-portal-msg-badge] span; we populate it with
   // the cross-lead unread count on page load.
-  const badge = document.querySelector("[data-portal-msg-badge]");
-  if (!badge) return;
-  fetch("/api/admin/portal-messages/unread-count", { cache: "no-store" })
-    .then((r) => r.json())
-    .then((data) => {
-      if (!data || !data.ok) return;
-      if (data.count > 0) {
-        badge.textContent = String(data.count);
-        badge.hidden = false;
-      } else {
-        badge.hidden = true;
-      }
-    })
-    .catch(() => { /* leave badge hidden — graceful failure */ });
+  const portalBadge = document.querySelector("[data-portal-msg-badge]");
+  if (portalBadge) {
+    fetch("/api/admin/portal-messages/unread-count", { cache: "no-store" })
+      .then((r) => r.json())
+      .then((data) => {
+        if (!data || !data.ok) return;
+        applyCount(portalBadge, data.count);
+      })
+      .catch(() => { /* leave badge hidden — graceful failure */ });
+  }
+
+  // Recently-accepted quotes badge. The Quotes nav link on every admin
+  // page carries a [data-quote-accepted-badge] span; populate with the
+  // count of quotes accepted in the last 7 days that haven't yet been
+  // converted to a project. Click → quote folder filtered to Accepted.
+  // Complements the SMS+email push notifications fired from the three
+  // acceptance routes (Build A); a visible at-a-glance signal even when
+  // Patrick has alert fatigue or missed a push.
+  const quoteBadge = document.querySelector("[data-quote-accepted-badge]");
+  if (quoteBadge) {
+    fetch("/api/admin/quotes/accepted-recently", { cache: "no-store" })
+      .then((r) => r.json())
+      .then((data) => {
+        if (!data || !data.ok) return;
+        applyCount(quoteBadge, data.count);
+      })
+      .catch(() => { /* leave badge hidden — graceful failure */ });
+  }
 })();

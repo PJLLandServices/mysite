@@ -4141,6 +4141,51 @@ async function handleApi(req, res, pathname) {
     return sendJson(res, 200, { ok: true, count });
   }
 
+  // GET /api/admin/quotes/accepted-recently — small endpoint for the
+  // Quotes nav badge. Returns { ok, count } of quotes that were accepted
+  // (or partially_accepted) within the last 7 days and have NOT yet been
+  // converted to a project. Patrick uses this to spot acceptances he
+  // hasn't actioned yet — a glance-and-go signal that complements the
+  // SMS+email push notifications from the three acceptance paths.
+  //
+  // "Not yet converted" = no project.sourceQuoteId pointing at this
+  // quote. Once Patrick clicks Convert-to-Project on the quote folder
+  // row the project record is created with sourceQuoteId set, and the
+  // quote drops out of this count automatically. Quotes flagged as
+  // deletedAt are also excluded.
+  if (req.method === "GET" && pathname === "/api/admin/quotes/accepted-recently") {
+    try {
+      const WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+      const now = Date.now();
+      const cutoff = now - WINDOW_MS;
+      const allQuotes = await quotes.list({ includeDeleted: false });
+      const candidates = allQuotes.filter((q) => {
+        if (!q || q.deletedAt) return false;
+        if (q.status !== "accepted" && q.status !== "partially_accepted") return false;
+        if (!q.acceptedAt) return false;
+        const t = Date.parse(q.acceptedAt);
+        if (!Number.isFinite(t)) return false;
+        return t >= cutoff && t <= now;
+      });
+      let convertedQuoteIds = new Set();
+      try {
+        const allProjects = await projects.list({ includeArchived: true });
+        for (const p of allProjects) {
+          if (p?.sourceQuoteId) convertedQuoteIds.add(p.sourceQuoteId);
+        }
+      } catch (_) {
+        // Project lookup failure shouldn't block the badge — degrade
+        // to counting every recent acceptance until projects.list works
+        // again. Better an over-count than a missed signal.
+      }
+      const count = candidates.filter((q) => !convertedQuoteIds.has(q.id)).length;
+      return sendJson(res, 200, { ok: true, count });
+    } catch (err) {
+      console.warn("[quotes-accepted-recently] failed:", err?.message);
+      return sendJson(res, 200, { ok: true, count: 0 });
+    }
+  }
+
   // GET /api/admin/portal-messages/:leadId — single thread (full message list).
   // POST /api/admin/portal-messages/:leadId/reply — admin reply (appends to thread).
   // POST /api/admin/portal-messages/:leadId/read — mark all customer messages read.
