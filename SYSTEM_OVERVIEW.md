@@ -1022,6 +1022,18 @@ npm start                        # http://127.0.0.1:4173
 HTML, and rebuilds the AI worker prompt. `npm run build:check` exits
 non-zero if anything's out of sync — useful as a pre-push gate.
 
+### Maintenance scripts
+
+- `npm run backfill-booking-customers` — dry-run that lists leads from a
+  self-booking with no `customerId` (the bug fixed in the booking-handler
+  patch). Re-run with `npm run backfill-booking-customers:apply` to
+  resolve each by email/phone or create a fresh `CUST-…` and stamp it
+  back. Safe to re-run: idempotent on already-resolved leads, and
+  customer-resolution is match-first so a partial backfill won't
+  duplicate. Reads `server/data/leads.json` + `server/data/customers.json`,
+  writes both. Designed for one-shot use after deploying the fix; no
+  ongoing schedule.
+
 ## QA tooling
 
 ### UI audit captures

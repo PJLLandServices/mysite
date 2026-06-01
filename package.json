@@ -24,6 +24,8 @@
     "migrate:customers:test-list": "node scripts/migrate-customers.js --list-test-customers",
     "migrate:customers:renumber": "node scripts/migrate-customers.js --renumber",
     "migrate:customers:renumber:apply": "node scripts/migrate-customers.js --renumber --apply",
+    "backfill-booking-customers": "node scripts/backfill-booking-customers.js",
+    "backfill-booking-customers:apply": "node scripts/backfill-booking-customers.js --apply",
     "audit:ui": "node scripts/ui-audit.js"
   },
   "engines": {
