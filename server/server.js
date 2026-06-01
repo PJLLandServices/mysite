@@ -11564,6 +11564,40 @@ async function handleApi(req, res, pathname) {
         });
       } catch (err) { console.warn("[wo-history] customer_accepted entry failed:", err?.message); }
 
+      // Notify Patrick on on-site acceptance. The other two acceptance
+      // paths (POST /api/approve/:id/:token/sign at line ~6316 and POST
+      // /api/portal/:token/accept at line ~3957) already do this via the
+      // alias-lead pattern. Closing the silent gap here so Patrick gets
+      // a push when the tech captures a customer signature in-field.
+      // Wrapped in try/catch — a Twilio/Gmail hiccup must NOT break the
+      // acceptance flow (the customer just signed; the on-site visit
+      // doesn't depend on the alert landing).
+      try {
+        if (quoteRecord) {
+          const baseUrl = process.env.PUBLIC_BASE_URL || baseUrlFromReq(req);
+          const acceptedTotal = Number(quoteRecord.total || 0);
+          const aliasLead = {
+            id: quoteRecord.id,
+            sourceLabel: `ON-SITE ACCEPTED — ${quoteRecord.id}`,
+            contact: {
+              name: customerName,
+              phone: wo.customerPhone || "",
+              email: wo.customerEmail || "",
+              address: wo.address || "",
+              notes: declinedLines.length
+                ? `On-site signature captured. ${customerName} accepted ${acceptedLines.length}/${builderLines.length} lines totaling $${acceptedTotal.toFixed(2)} CAD. ${declinedLines.length} line${declinedLines.length === 1 ? "" : "s"} deferred.`
+                : `On-site signature captured. ${customerName} accepted all ${acceptedLines.length} lines totaling $${acceptedTotal.toFixed(2)} CAD.`
+            }
+          };
+          Promise.allSettled([
+            sendNewLeadEmail(aliasLead, { baseUrl }),
+            sendNewLeadSms(aliasLead, { baseUrl })
+          ]).catch(() => {});
+        }
+      } catch (err) {
+        console.warn("[on-site-accept] admin notify failed:", err?.message);
+      }
+
       return sendJson(res, 200, {
         ok: true,
         workOrder: updated,
