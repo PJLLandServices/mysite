@@ -12652,6 +12652,27 @@ Customer signature captured at ${new Date().toISOString()}.`;
       all.unshift(result.lead);
       await writeLeads(all);
 
+      // Resolve / create the canonical customer record. Same pattern as
+      // /api/quotes (server.js:2766) and /api/new-customer (server.js:3042).
+      // Soft-failure: if resolution throws, the lead is still saved and
+      // the booking confirmation still ships — Patrick can backfill via
+      // scripts/backfill-booking-customers.js. Before this patch landed,
+      // self-bookings created lead + property + booking records but NO
+      // customer record (the Customers admin list reads from
+      // customers.json, so self-bookers like Virginia Lorraine were
+      // invisible there and couldn't be vCard-downloaded).
+      try {
+        result.lead.customerId = await resolveCustomerForLead(result.lead);
+        const liveLeads = await readLeads();
+        const i = liveLeads.findIndex((l) => l.id === result.lead.id);
+        if (i !== -1) {
+          liveLeads[i].customerId = result.lead.customerId;
+          await writeLeads(liveLeads);
+        }
+      } catch (err) {
+        console.error("[customers] booking resolveCustomerForLead failed:", err?.message || err);
+      }
+
       // Auto-link to a customer property using the coords we already have.
       try {
         const linkResult = await properties.attachLead({
