@@ -237,6 +237,35 @@
         <p class="settings-help">Last 50 changes, newest first.</p>
         <ul class="settings-audit" id="auditList"></ul>
       </section>
+
+      <!-- Maintenance ops card (Backfill-Customers-from-Phone brief).
+           Backfills the canonical customer record on leads that
+           self-booked before the fix in commit e2715be. Both dry-run
+           and apply run through the same lib used by the CLI script
+           at scripts/backfill-booking-customers.js — never drifts. -->
+      <section class="settings-card" id="maintenanceCard">
+        <h2>Maintenance — Backfill missing customers</h2>
+        <p class="settings-help">
+          Resolves the canonical customer record for any self-booking lead that
+          doesn't yet have one. Self-bookings between the booking flow shipping
+          and commit <code>e2715be</code> were missing customer profiles and
+          couldn't be vCard-downloaded. Dry-run lists the affected leads;
+          Apply creates / matches the customer record on each.
+          Safe to re-run — idempotent on already-resolved leads.
+        </p>
+        <div class="settings-actions">
+          <button type="button" class="pjl-btn pjl-btn-outline" id="backfillDryBtn">Check for missing customers (dry-run)</button>
+          <button type="button" class="pjl-btn pjl-btn-primary" id="backfillApplyBtn" disabled title="Run a dry-run first to confirm what will change">Run backfill (apply)</button>
+        </div>
+        <p class="settings-help settings-help--status" id="backfillStatus"></p>
+        <div id="backfillResult" hidden>
+          <p class="settings-help" id="backfillResultHeading"></p>
+          <table class="settings-backfill-table" id="backfillTable">
+            <thead><tr><th>Lead ID</th><th>Name</th><th>Email</th><th>Phone</th><th>Booked at</th></tr></thead>
+            <tbody id="backfillTableBody"></tbody>
+          </table>
+        </div>
+      </section>
     </main>
   </div>
 

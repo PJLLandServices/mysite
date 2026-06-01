@@ -1034,6 +1034,20 @@ non-zero if anything's out of sync — useful as a pre-push gate.
   writes both. Designed for one-shot use after deploying the fix; no
   ongoing schedule.
 
+  The same logic is also exposed via an **admin-triggered HTTP
+  endpoint** for use when Patrick can't get to a shell:
+  - `POST /api/admin/backfill-customers` with body `{ apply: bool }`,
+    admin-gated via `requireAdmin`. Returns the same candidate / created /
+    matched / failed shape as the CLI. Caps at 200 candidates per call
+    (`truncated: true` flag when more remain).
+  - UI lives on **`/admin/settings`** under the "Maintenance — Backfill
+    missing customers" card: a Check-for-missing-customers (dry-run)
+    button, an Apply button that stays disabled until a dry-run runs
+    successfully in the same session, and a result table showing every
+    affected lead. Patrick can fire this from his phone.
+  - Both paths (CLI + endpoint) share `server/lib/backfill-booking-customers.js`
+    so they can't drift.
+
 ## QA tooling
 
 ### UI audit captures

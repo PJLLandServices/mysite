@@ -495,6 +495,155 @@ document.getElementById("qbClearErrorsBtn")?.addEventListener("click", async () 
   } catch (e) { /* swallow — UI still re-renders */ }
 });
 
+// ---- Maintenance: backfill missing customers ------------------------
+//
+// Two-button flow:
+//   1. Dry-run shows the candidate list (read-only — server endpoint
+//      defaults to apply:false).
+//   2. Apply button stays DISABLED until a dry-run runs successfully
+//      in the same session — Patrick has to see the list before
+//      committing changes. Once dry-run completes, Apply unlocks.
+//
+// Both buttons POST to /api/admin/backfill-customers with { apply: bool }.
+// Server is admin-gated; an unauthenticated tap gets 401 and the UI
+// surfaces "Admin login required." as the status.
+(function wireBackfillCustomers() {
+  const dryBtn = document.getElementById("backfillDryBtn");
+  const applyBtn = document.getElementById("backfillApplyBtn");
+  const statusEl = document.getElementById("backfillStatus");
+  const resultWrap = document.getElementById("backfillResult");
+  const resultHeading = document.getElementById("backfillResultHeading");
+  const tableBody = document.getElementById("backfillTableBody");
+  if (!dryBtn || !applyBtn || !statusEl) return;
+
+  let lastDryRunTotal = null;
+
+  function setStatus(msg, kind) {
+    statusEl.textContent = msg || "";
+    statusEl.dataset.kind = kind || "";
+  }
+
+  function renderRows(rows) {
+    if (!tableBody) return;
+    tableBody.innerHTML = "";
+    if (!rows || rows.length === 0) {
+      resultWrap.hidden = true;
+      return;
+    }
+    resultWrap.hidden = false;
+    for (const r of rows) {
+      const tr = document.createElement("tr");
+      const cells = [
+        r.leadId || "—",
+        r.name || "—",
+        r.email || "—",
+        r.phone || "—",
+        r.bookedAt ? new Date(r.bookedAt).toLocaleString("en-CA", { dateStyle: "medium", timeStyle: "short" }) : "—"
+      ];
+      for (const text of cells) {
+        const td = document.createElement("td");
+        td.textContent = text;
+        tr.appendChild(td);
+      }
+      tableBody.appendChild(tr);
+    }
+  }
+
+  async function post(apply) {
+    const r = await fetch("/api/admin/backfill-customers", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ apply })
+    });
+    const data = await r.json().catch(() => ({}));
+    return { status: r.status, ok: r.ok, data };
+  }
+
+  dryBtn.addEventListener("click", async () => {
+    dryBtn.disabled = true;
+    applyBtn.disabled = true;
+    setStatus("Checking for missing customers…", "info");
+    try {
+      const { status, ok, data } = await post(false);
+      if (!ok || !data.ok) {
+        const msg = status === 401 || status === 403
+          ? "Admin login required."
+          : (data?.errors && data.errors[0]) || "Dry-run failed.";
+        setStatus(msg, "error");
+        resultWrap.hidden = true;
+        return;
+      }
+      lastDryRunTotal = Number(data.total) || 0;
+      const headingParts = [];
+      headingParts.push(`${lastDryRunTotal} lead${lastDryRunTotal === 1 ? "" : "s"} need backfill.`);
+      if (data.truncated) headingParts.push(`Showing first ${data.candidates.length} (cap 200).`);
+      resultHeading.textContent = headingParts.join(" ");
+      renderRows(data.candidates || []);
+      if (lastDryRunTotal === 0) {
+        setStatus("Nothing to do — every booking already has a linked customer.", "ok");
+        applyBtn.disabled = true;
+      } else {
+        setStatus(`Dry-run complete. Tap "Run backfill" to create / link customer records for ${data.candidates.length} lead${data.candidates.length === 1 ? "" : "s"}.`, "info");
+        applyBtn.disabled = false;
+      }
+    } catch (err) {
+      setStatus(err?.message || "Network error.", "error");
+      resultWrap.hidden = true;
+    } finally {
+      dryBtn.disabled = false;
+    }
+  });
+
+  applyBtn.addEventListener("click", async () => {
+    if (!confirm(`Run backfill on ${lastDryRunTotal} lead${lastDryRunTotal === 1 ? "" : "s"}? This creates / matches customer records and is safe to re-run, but the writes are permanent.`)) return;
+    dryBtn.disabled = true;
+    applyBtn.disabled = true;
+    setStatus("Running backfill…", "info");
+    try {
+      const { status, ok, data } = await post(true);
+      if (!ok || !data.ok) {
+        const msg = status === 401 || status === 403
+          ? "Admin login required."
+          : (data?.errors && data.errors[0]) || "Backfill failed.";
+        setStatus(msg, "error");
+        return;
+      }
+      const created = (data.created || []).length;
+      const matched = (data.matched || []).length;
+      const failed = (data.failed || []).length;
+      const msgParts = [
+        `✓ Done. ${created} created, ${matched} matched, ${failed} failed.`
+      ];
+      if (data.truncated) {
+        const remaining = (data.total || 0) - (data.processed || 0);
+        msgParts.push(`${remaining} more remain — re-run dry-run to continue.`);
+      }
+      setStatus(msgParts.join(" "), failed > 0 ? "warn" : "ok");
+      // Render the combined created+matched list so Patrick sees the
+      // exact records that were touched.
+      const combined = [
+        ...(data.created || []).map((r) => ({ ...r, _action: "created" })),
+        ...(data.matched || []).map((r) => ({ ...r, _action: "matched" }))
+      ];
+      resultHeading.textContent = `${combined.length} record${combined.length === 1 ? "" : "s"} touched.`;
+      renderRows(combined.map((r) => ({
+        leadId: r.leadId,
+        name: r.name + (r._action === "created" ? "  (new)" : "  (matched)"),
+        email: r.email || "—",
+        phone: r.phone || "—",
+        bookedAt: null
+      })));
+      // Apply runs are one-shot — disable until a fresh dry-run.
+      applyBtn.disabled = true;
+      lastDryRunTotal = null;
+    } catch (err) {
+      setStatus(err?.message || "Network error.", "error");
+    } finally {
+      dryBtn.disabled = false;
+    }
+  });
+})();
+
 // Surface query-string hints from the OAuth callback redirect so Patrick
 // gets immediate feedback after authorizing (Intuit bounces back to
 // /admin/settings?qb=connected | denied | error).

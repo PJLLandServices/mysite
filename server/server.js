@@ -4141,6 +4141,46 @@ async function handleApi(req, res, pathname) {
     return sendJson(res, 200, { ok: true, count });
   }
 
+  // POST /api/admin/backfill-customers — admin-triggered version of
+  // the CLI script at scripts/backfill-booking-customers.js. Both
+  // paths share the same logic in server/lib/backfill-booking-customers.js.
+  //
+  // Why: Patrick can't always SSH/console to Render. This endpoint lets
+  // him fire the backfill from his phone via the /admin/settings UI
+  // (see settings.html "Maintenance" card).
+  //
+  // Body: { apply: boolean } — defaults to false (dry-run).
+  // - dry-run returns { ok, dryRun, candidates: [...], total, truncated }
+  // - apply returns { ok, applied, created, matched, failed, total,
+  //   processed, truncated }
+  //
+  // Cap: 200 candidates per call. If more, returns first 200 + truncated:
+  // true. Operator re-runs to continue.
+  //
+  // Admin-gated via explicit requireAdmin call.
+  if (req.method === "POST" && pathname === "/api/admin/backfill-customers") {
+    const session = await requireAdmin(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+    try {
+      const payload = await parseRequestBody(req).catch(() => ({}));
+      const apply = payload?.apply === true;
+      const backfill = require("./lib/backfill-booking-customers");
+      const leads = await readLeads();
+      const result = await backfill.runBackfill({ leads, apply });
+      if (!result.ok) {
+        return sendJson(res, 400, { ok: false, errors: [result.error || "Backfill failed."] });
+      }
+      // Apply mode: lib mutated the leads array in place. Persist it.
+      if (apply && ((result.created?.length || 0) + (result.matched?.length || 0)) > 0) {
+        await writeLeads(leads);
+      }
+      return sendJson(res, 200, result);
+    } catch (err) {
+      console.error("[admin-backfill-customers] failed:", err?.message || err);
+      return sendJson(res, 500, { ok: false, errors: [err?.message || "Backfill failed."] });
+    }
+  }
+
   // GET /api/admin/quotes/accepted-recently — small endpoint for the
   // Quotes nav badge. Returns { ok, count } of quotes that were accepted
   // (or partially_accepted) within the last 7 days and have NOT yet been

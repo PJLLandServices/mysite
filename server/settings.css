@@ -15,6 +15,48 @@
 .settings-card h2 { margin: 0 0 6px; color: #1B4D2E; font-family: "Barlow Condensed", sans-serif; font-size: 22px; }
 .settings-help { margin: 0 0 18px; color: #777; font-size: 13px; line-height: 1.5; }
 
+/* Maintenance card — backfill missing customers (Backfill-Customers-
+   from-Phone brief). Inherits .settings-card styling; this only adds
+   the action-row + result-table specifics. Mobile-first — table
+   horizontally scrolls if it overflows on narrow phones. */
+.settings-actions { display: flex; flex-wrap: wrap; gap: 10px; margin: 8px 0 14px; }
+.settings-actions .pjl-btn { flex: 1 1 200px; min-width: 0; }
+@media (min-width: 640px) {
+  .settings-actions .pjl-btn { flex: 0 1 auto; }
+}
+.settings-help--status {
+  margin: 6px 0 12px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  font-size: 13px;
+  background: transparent;
+  color: #2A3A2E;
+  line-height: 1.5;
+}
+.settings-help--status:empty { padding: 0; }
+.settings-help--status[data-kind="info"] { background: #F0F4FA; color: #1F4670; }
+.settings-help--status[data-kind="ok"]   { background: #E8F4ED; color: #1B4D2E; }
+.settings-help--status[data-kind="warn"] { background: #FCF2E1; color: #7A5311; }
+.settings-help--status[data-kind="error"] { background: #FBE9E7; color: #8C2E22; }
+.settings-backfill-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 10px;
+  font-size: 13px;
+  display: block;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.settings-backfill-table th,
+.settings-backfill-table td {
+  text-align: left;
+  padding: 8px 10px;
+  border-bottom: 1px solid #EAEAE0;
+  white-space: nowrap;
+}
+.settings-backfill-table th { background: #FAFAF5; color: #2A3A2E; font-weight: 600; }
+.settings-backfill-table tbody tr:last-child td { border-bottom: 0; }
+
 .settings-grid { display: flex; flex-direction: column; gap: 10px; margin-bottom: 16px; }
 .settings-row {
   display: grid;
