@@ -7506,12 +7506,18 @@ async function handleApi(req, res, pathname) {
       const baseDiagnosis = `Follow-up to ${parent.id} (${parent.type}). Original visit notes: ${parent.techNotes || "(none)"}`;
       const diagnosis = notes ? `${baseDiagnosis}\n\nFollow-up scope: ${notes}` : baseDiagnosis;
 
-      // Inherit the parent's authorized line items into the follow-up's
-      // on-site quote builder. Filter out baseline (seasonal) lines —
-      // seasonal fee was already charged on the parent; the follow-up
-      // is repair-only.
+      // Inherit ALL parent line items into the follow-up's on-site
+      // quote builder, INCLUDING baseline (seasonal) lines. Patrick's
+      // actual workflow is to defer invoicing until the follow-up
+      // completes and bill once at the end — so the spring opening /
+      // fall closing flat fee from the parent visit needs to roll
+      // forward to the follow-up's invoice. The old filter assumed
+      // parent was invoiced separately first; in practice that's not
+      // how it's done. If the rare "parent already billed" case ever
+      // applies, the tech can delete the carry-over line from the
+      // builder before signing.
       const parentLines = Array.isArray(parent.onSiteQuote?.builderLineItems)
-        ? parent.onSiteQuote.builderLineItems.filter((l) => !(l && l.source && l.source.baseline === true))
+        ? parent.onSiteQuote.builderLineItems.slice()
         : [];
 
       // wo.materialsPacked is the qty map { sku: qty } shape since the
