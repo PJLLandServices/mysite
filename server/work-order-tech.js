@@ -17,7 +17,7 @@
 // tech-sw.js's CACHE_VERSION. If this string doesn't match the SW
 // cache version after deploy, the iPhone is serving stale JS — clear
 // website data and reload.
-const TECH_BUILD_VERSION = "tech-v43";
+const TECH_BUILD_VERSION = "tech-v44";
 function _setBadge(text, isError) {
   try {
     const badge = document.getElementById("techBuildBadge");
@@ -55,18 +55,21 @@ window.addEventListener("unhandledrejection", (evt) => {
   _setBadge(`PROMISE ERR: ${msg}`.slice(0, 200), true);
 });
 
-// v24 — Photos ARE uploading. The history viewer shows 6+ successful
-// "Photo uploaded +1 (general)" entries proving every attempt landed
-// on the server. The bug was never upload — it was the UI failing to
-// refresh after upload, so from the tech's seat it looked like
-// "nothing happened" while the server happily stored each photo.
+// v43 — Visit-photo input + floating FAB upload path.
 //
-// Quick fix: after a successful upload, hard-reload the page. The
-// page re-fetches the WO and renders the photo strip from scratch
-// with the new photos included. Crude (kills any unsaved typing
-// in progress) but reliable. Proper fix is to debug why
-// state.photos = data.workOrder.photos / renderWoPhotos() wasn't
-// surfacing the new thumb — that's a follow-up.
+// History: the original v24 fix hard-reloaded the page after a
+// successful upload to guarantee the new thumb appeared. That worked
+// but blew away any in-progress typing — Patrick reported the long
+// "Uploading…" overlay followed by "resets the entire page" exactly
+// matches that reload. The issue-photo path (uploadWoPhotos at
+// line ~724, called from renderIssuePhotos) has been doing surgical
+// state.photos = wo.photos + renderWoPhotos() updates for months
+// without complaints, so we mirror that pattern here too:
+//   - set state.photos from the server response
+//   - sync state.updatedAt (so the next If-Match header is fresh)
+//   - re-render the photo strip + any gates that depend on photo count
+//   - tear down the overlay
+// No location.reload() — keeps in-progress typing alive.
 let _photoListenerAttached = false;
 function _bindPhotoUploadListener() {
   if (_photoListenerAttached) return;
@@ -147,12 +150,20 @@ function _bindPhotoUploadListener() {
       event.target.value = "";
       return;
     }
-    // Success. Reload the page so the photo strip re-renders with the
-    // new thumbnail. This is the proven path — the audit log confirms
-    // uploads have been succeeding; only the in-place render was
-    // failing. Reload guarantees the tech sees their photo.
-    setMsg("Saved! Refreshing…");
-    setTimeout(() => location.reload(), 400);
+    // Success — surgical state update, no reload. Mirrors the issue-
+    // photo path (uploadWoPhotos callsite at line ~1817). Setting
+    // state.updatedAt with the fresh value keeps the next If-Match
+    // header in sync so a follow-up notes-debounce PATCH doesn't 409.
+    if (data && data.workOrder) {
+      state.photos = data.workOrder.photos || [];
+      if (data.workOrder.updatedAt) state.updatedAt = data.workOrder.updatedAt;
+      if (typeof renderWoPhotos === "function") renderWoPhotos();
+      // Photo gate may have just flipped (pre-sign checklist counts photos).
+      if (typeof renderPostSigBanner === "function") renderPostSigBanner();
+      if (typeof updateSignoffSubmitState === "function") updateSignoffSubmitState();
+    }
+    teardownOverlay();
+    event.target.value = "";
   });
 }
 _bindPhotoUploadListener();
