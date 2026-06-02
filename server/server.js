@@ -7679,6 +7679,88 @@ async function handleApi(req, res, pathname) {
     }
   }
 
+  // POST /api/work-orders/:id/pull-baseline-from-parent — backfill the
+  // baseline (seasonal) line items from the parent WO onto a follow-up
+  // WO's builder. Used to recover follow-ups created before the
+  // baseline-filter drop (server.js:7493 history), or any time a
+  // follow-up's builder somehow ended up missing the parent's
+  // baseline lines. Idempotent at the line level: matches by
+  // line.key + source.baseline === true so a re-tap doesn't duplicate.
+  // Refuses on locked / signed follow-ups (their scope is frozen).
+  const woPullBaselineMatch = pathname.match(/^\/api\/work-orders\/([^/]+)\/pull-baseline-from-parent$/);
+  if (woPullBaselineMatch && req.method === "POST") {
+    try {
+      const session = await requireUser(req);
+      if (!session) return sendJson(res, 401, { ok: false, errors: ["Sign-in required."] });
+      const id = decodeURIComponent(woPullBaselineMatch[1]);
+      const child = await workOrders.get(id);
+      if (!child) return sendJson(res, 404, { ok: false, errors: ["Work order not found."] });
+      if (child.locked || child.signature?.signed) {
+        return sendJson(res, 409, { ok: false, errors: ["Work order is signed and locked — can't modify line items."] });
+      }
+      if (!child.followupOfWoId) {
+        return sendJson(res, 422, { ok: false, errors: ["This work order isn't a follow-up — there's no parent to pull from."] });
+      }
+      const parent = await workOrders.get(child.followupOfWoId);
+      if (!parent) {
+        return sendJson(res, 422, { ok: false, errors: [`Parent ${child.followupOfWoId} not found.`] });
+      }
+      const parentBaselines = (parent.onSiteQuote?.builderLineItems || [])
+        .filter((l) => l && l.source && l.source.baseline === true);
+      if (!parentBaselines.length) {
+        return sendJson(res, 422, { ok: false, errors: ["Parent has no baseline (seasonal) lines to pull."] });
+      }
+      const childLines = Array.isArray(child.onSiteQuote?.builderLineItems)
+        ? child.onSiteQuote.builderLineItems.slice()
+        : [];
+      // Idempotency — skip baselines already present (matched by key
+      // when set, otherwise by label + baseline flag). A second tap
+      // becomes a no-op rather than duplicating the seasonal line.
+      const alreadyPresent = (line) => childLines.some((c) => {
+        const sameBaseline = !!(c && c.source && c.source.baseline === true);
+        if (!sameBaseline) return false;
+        if (line.key && c.key) return c.key === line.key;
+        return (c.label || "") === (line.label || "");
+      });
+      const toAdd = parentBaselines.filter((l) => !alreadyPresent(l));
+      if (!toAdd.length) {
+        return sendJson(res, 200, {
+          ok: true,
+          added: 0,
+          message: "Already up to date — baseline lines from parent are already on this WO.",
+          workOrder: child
+        });
+      }
+      const enrichedAdds = toAdd.map((l) => ({
+        ...l,
+        note: l.note ? `[from ${parent.id}] ${l.note}` : `[inherited from ${parent.id}]`
+      }));
+      const nextLines = [...enrichedAdds, ...childLines];
+      const updated = await workOrders.update(id, {
+        onSiteQuote: {
+          ...(child.onSiteQuote || {}),
+          status: child.onSiteQuote?.status && child.onSiteQuote.status !== "none" ? child.onSiteQuote.status : "draft",
+          lastBuiltAt: new Date().toISOString(),
+          builderLineItems: nextLines
+        }
+      });
+      try {
+        await workOrders.appendHistory(id, {
+          action: "baseline_pulled_from_parent",
+          by: session.role || "tech",
+          note: `+${enrichedAdds.length} baseline line${enrichedAdds.length === 1 ? "" : "s"} from ${parent.id}`
+        });
+      } catch (err) { console.warn("[wo-history] pull-baseline entry failed:", err?.message); }
+      return sendJson(res, 200, {
+        ok: true,
+        added: enrichedAdds.length,
+        workOrder: updated
+      });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't pull baseline."] });
+    }
+  }
+
   // ---------- Manual completion-cascade triggers --------------------
   // Two endpoints for explicit admin re-runs / on-demand creation:
   //   POST /api/work-orders/:id/create-invoice — drafts an invoice from

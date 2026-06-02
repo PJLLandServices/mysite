@@ -1861,6 +1861,37 @@ body.tech-lightbox-open { overflow: hidden; }
 .tech-on-site-build-btn:active { background: rgba(74, 140, 92, 0.14); border-color: var(--tech-green); }
 .tech-on-site-build-btn:disabled { opacity: 0.5; pointer-events: none; }
 
+/* Pull-baseline-from-parent — recovery surface on follow-up WOs. Amber
+   warning palette so the tech recognizes this as a "fix the inherited
+   data" action, not a routine builder operation. */
+.tech-on-site-pull-baseline-btn {
+  width: 100%;
+  margin-top: 8px;
+  padding: 10px 14px;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  background: #FFF8E6;
+  color: #6A4A00;
+  border: 1px dashed #E6D17B;
+  border-radius: 8px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 44px;
+}
+.tech-on-site-pull-baseline-btn:active { background: #FAEFC9; }
+.tech-on-site-pull-baseline-btn:disabled { opacity: 0.5; pointer-events: none; }
+.tech-on-site-pull-baseline-status {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: #6A4A00;
+}
+.tech-on-site-pull-baseline-status[data-kind="ok"]    { color: #1B4D2E; font-weight: 600; }
+.tech-on-site-pull-baseline-status[data-kind="error"] { color: #8C2E22; font-weight: 600; }
+
 .tech-on-site-lines {
   list-style: none;
   margin: 0;

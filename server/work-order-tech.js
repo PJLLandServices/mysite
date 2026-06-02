@@ -17,7 +17,7 @@
 // tech-sw.js's CACHE_VERSION. If this string doesn't match the SW
 // cache version after deploy, the iPhone is serving stale JS — clear
 // website data and reload.
-const TECH_BUILD_VERSION = "tech-v45";
+const TECH_BUILD_VERSION = "tech-v46";
 function _setBadge(text, isError) {
   try {
     const badge = document.getElementById("techBuildBadge");
@@ -3469,6 +3469,7 @@ function renderOnSiteBuilder() {
   const totalsEl = document.getElementById("techOnSiteTotals");
   const linesEl = document.getElementById("techOnSiteLines");
   const countEl = document.getElementById("techOnSiteQuoteCount");
+  const pullBaselineBtn = document.getElementById("techOnSitePullBaselineBtn");
 
   // Build button label flips between "Generate from issues" (first run) and
   // "Re-generate from issues" (re-run after edits).
@@ -3478,6 +3479,17 @@ function renderOnSiteBuilder() {
   if (addBtn) addBtn.hidden = !lines.length;
   if (showBtn) showBtn.hidden = !lines.length;
   updateOnSiteShowBtnState();
+  // Pull-baseline-from-parent button visibility: only show on follow-up
+  // WOs whose builder doesn't already contain a baseline line. This is
+  // the recovery surface for follow-ups created before the
+  // baseline-filter drop (the old filter at server.js:7493 stripped
+  // seasonal lines from inherited parent scope, causing the spring
+  // opening to vanish from invoices). Hidden once the line is pulled.
+  if (pullBaselineBtn) {
+    const isFollowup = !!state.followupOfWoId;
+    const hasBaseline = lines.some((l) => l && l.source && l.source.baseline === true);
+    pullBaselineBtn.hidden = !(isFollowup && !hasBaseline);
+  }
 
   if (!linesEl) return;
   linesEl.innerHTML = "";
@@ -3897,6 +3909,41 @@ document.getElementById("techOnSiteAddBtn")?.addEventListener("click", async () 
   });
   renderOnSiteBuilder();
   persistBuilderLines();
+});
+
+// Pull baseline (seasonal) lines from the parent visit. Backfill path
+// for follow-up WOs created before the baseline-filter drop — without
+// this, the seasonal flat fee silently disappeared from the invoice.
+// Idempotent server-side; surfaces the count added in the status line.
+document.getElementById("techOnSitePullBaselineBtn")?.addEventListener("click", async () => {
+  if (state.locked) return;
+  const btn = document.getElementById("techOnSitePullBaselineBtn");
+  const status = document.getElementById("techOnSitePullBaselineStatus");
+  if (btn) btn.disabled = true;
+  if (status) { status.hidden = false; status.textContent = "Pulling seasonal lines from parent…"; status.dataset.kind = "info"; }
+  try {
+    const r = await fetch(`/api/work-orders/${encodeURIComponent(state.id)}/pull-baseline-from-parent`, { method: "POST" });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok || !data.ok) throw new Error((data.errors && data.errors[0]) || "Couldn't pull baseline.");
+    if (data.workOrder) {
+      state.onSiteQuote = data.workOrder.onSiteQuote || state.onSiteQuote;
+      if (data.workOrder.updatedAt) state.updatedAt = data.workOrder.updatedAt;
+      renderOnSiteBuilder();
+    }
+    if (status) {
+      if (data.added > 0) {
+        status.textContent = `Added ${data.added} seasonal line${data.added === 1 ? "" : "s"} from the parent visit.`;
+        status.dataset.kind = "ok";
+      } else {
+        status.textContent = data.message || "Already up to date.";
+        status.dataset.kind = "info";
+      }
+    }
+  } catch (err) {
+    if (status) { status.textContent = err.message || "Couldn't pull baseline."; status.dataset.kind = "error"; }
+  } finally {
+    if (btn) btn.disabled = false;
+  }
 });
 
 document.getElementById("techOnSiteShowBtn")?.addEventListener("click", () => {

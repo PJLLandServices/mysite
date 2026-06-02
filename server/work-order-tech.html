@@ -418,6 +418,15 @@
           <span aria-hidden="true">📝</span>
           <span>Generate from issues</span>
         </button>
+        <!-- Pull-baseline-from-parent — only shown on follow-up WOs that
+             are missing baseline lines from the parent. Recovery path for
+             follow-ups created before the baseline-filter drop. Hidden by
+             default; renderOnSiteBuilder() reveals it based on state. -->
+        <button type="button" class="tech-on-site-pull-baseline-btn" id="techOnSitePullBaselineBtn" hidden>
+          <span aria-hidden="true">↩️</span>
+          <span>Pull seasonal line from parent visit</span>
+        </button>
+        <p class="tech-on-site-pull-baseline-status" id="techOnSitePullBaselineStatus" hidden></p>
         <ul class="tech-on-site-lines" id="techOnSiteLines"></ul>
         <button type="button" class="tech-on-site-add-btn" id="techOnSiteAddBtn" hidden>+ Add custom line</button>
         <p class="tech-on-site-totals" id="techOnSiteTotals" hidden></p>

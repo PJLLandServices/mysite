@@ -347,6 +347,13 @@
           <p>Fall closings don't quote on-site (PJL operations rule 8). Issues found this visit get saved to deferred recommendations on the property. Use tech mode to capture them.</p>
         </div>
 
+        <!-- Pull-baseline-from-parent — recovery surface for follow-up
+             WOs whose builder is missing the parent's seasonal flat fee
+             (created before the baseline-filter drop). Hidden by
+             default; renderOnSiteQuote toggles visibility. -->
+        <button type="button" class="pjl-btn pjl-btn-outline" id="woOnSitePullBaselineBtn" hidden style="margin-bottom:8px">↩️ Pull seasonal line from parent visit</button>
+        <p class="wo-on-site-pull-baseline-status" id="woOnSitePullBaselineStatus" hidden></p>
+
         <!-- Builder list — editable when unsigned, read-only when signed.
              Same shape as tech mode's tech-on-site-lines. -->
         <ul class="wo-on-site-lines" id="woOnSiteLines"></ul>

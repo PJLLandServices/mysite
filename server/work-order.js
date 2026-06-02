@@ -1225,6 +1225,8 @@ function renderOnSiteQuote(wo) {
   const remoteEl = document.getElementById("woOnSiteRemoteSection");
   const titleEl = document.getElementById("woOnSiteQuoteTitle");
   const helpEl = document.getElementById("woOnSiteQuoteHelp");
+  const pullBaselineBtn = document.getElementById("woOnSitePullBaselineBtn");
+  const pullBaselineStatus = document.getElementById("woOnSitePullBaselineStatus");
 
   // Reset visibility
   if (buildBtn) buildBtn.hidden = true;
@@ -1232,6 +1234,17 @@ function renderOnSiteQuote(wo) {
   if (deferEl) deferEl.hidden = true;
   if (statusEl) { statusEl.hidden = true; statusEl.textContent = ""; }
   if (remoteEl) remoteEl.hidden = true;
+  if (pullBaselineBtn) pullBaselineBtn.hidden = true;
+  if (pullBaselineStatus) pullBaselineStatus.hidden = true;
+
+  // Pull-baseline-from-parent — recovery surface on follow-up WOs whose
+  // builder is missing the parent's seasonal lines (created before the
+  // baseline-filter drop at server.js:7493). Visible only when the WO
+  // is a follow-up AND has no baseline line present AND is unsigned.
+  if (!isSigned && wo.followupOfWoId) {
+    const hasBaseline = lines.some((l) => l && l.source && l.source.baseline === true);
+    if (!hasBaseline && pullBaselineBtn) pullBaselineBtn.hidden = false;
+  }
 
   // Find_only — defer-only banner, no builder.
   if (isFallClosing) {
@@ -1380,6 +1393,43 @@ document.getElementById("woOnSiteBuildBtn")?.addEventListener("click", async () 
     }
   } catch (err) {
     alert(err.message || "Couldn't build quote.");
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+});
+
+// Pull baseline (seasonal) lines from the parent visit — recovery
+// path for follow-up WOs created before the baseline-filter drop.
+// Idempotent server-side; re-tapping after a successful pull is a no-op.
+document.getElementById("woOnSitePullBaselineBtn")?.addEventListener("click", async () => {
+  if (!loadedWorkOrder) return;
+  const id = getWorkOrderId();
+  if (!id) return;
+  const btn = document.getElementById("woOnSitePullBaselineBtn");
+  const status = document.getElementById("woOnSitePullBaselineStatus");
+  if (btn) btn.disabled = true;
+  if (status) { status.hidden = false; status.textContent = "Pulling seasonal lines from parent…"; status.dataset.kind = "info"; }
+  try {
+    const r = await fetch(`/api/work-orders/${encodeURIComponent(id)}/pull-baseline-from-parent`, { method: "POST" });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok || !data.ok) throw new Error((data.errors && data.errors[0]) || "Couldn't pull baseline.");
+    if (data.workOrder) {
+      loadedWorkOrder = data.workOrder;
+      renderOnSiteQuote(data.workOrder);
+    }
+    if (status) {
+      if (data.added > 0) {
+        status.textContent = `Added ${data.added} seasonal line${data.added === 1 ? "" : "s"} from the parent visit.`;
+        status.dataset.kind = "ok";
+        status.hidden = false;
+      } else {
+        status.textContent = data.message || "Already up to date.";
+        status.dataset.kind = "info";
+        status.hidden = false;
+      }
+    }
+  } catch (err) {
+    if (status) { status.textContent = err.message || "Couldn't pull baseline."; status.dataset.kind = "error"; status.hidden = false; }
   } finally {
     if (btn) btn.disabled = false;
   }
