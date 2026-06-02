@@ -2713,23 +2713,74 @@ function createSignaturePad(canvas, onChange) {
   let drawing = false;
   let dirty = false;
 
+  // Snapshot / resize / restore — ALL synchronous. The earlier
+  // toDataURL → new Image() → img.onload restore had an async gap
+  // between the canvas-clear (canvas.width assignment) and the snapshot
+  // landing back. On iOS Safari, layout shifts (post-on-site-accept
+  // re-render, address-bar reveal/collapse) fire resize during a
+  // customer's signature, hit that async gap, and the in-flight stroke
+  // ends up under a snapshot drawn on top — visually it looks like
+  // "doesn't populate" / "goes blank." Replacing with
+  // getImageData+putImageData for same-size restores and an offscreen
+  // canvas + drawImage for resized restores closes the window entirely.
+  // Source for the resized case is a canvas (synchronous), NOT an Image
+  // (async load).
   function fitCanvas() {
     const rect = canvas.getBoundingClientRect();
     if (!rect.width || !rect.height) return;
     const dpr = window.devicePixelRatio || 1;
-    // Preserve any existing strokes by snapshotting before resize.
-    const snapshot = canvas.width ? canvas.toDataURL() : null;
-    canvas.width = Math.round(rect.width * dpr);
-    canvas.height = Math.round(rect.height * dpr);
+    const oldW = canvas.width;
+    const oldH = canvas.height;
+    const newW = Math.round(rect.width * dpr);
+    const newH = Math.round(rect.height * dpr);
+    // Already the right size? No-op — never touch canvas.width, since
+    // that ALONE would clear pixel data even if we set it to the same
+    // value. The earlier code rewrote .width/.height unconditionally,
+    // which forced a snapshot+restore on every resize tick even when
+    // nothing actually changed. iOS Safari fires resize on every
+    // address-bar reveal — most of those are no-ops at the pixel level.
+    if (oldW === newW && oldH === newH) {
+      // Still re-set stroke style in case the context got reset some
+      // other way (rare, but cheap to be defensive).
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      ctx.strokeStyle = "#0F1F14";
+      ctx.lineWidth = 2.2 * dpr;
+      return;
+    }
+    // Capture pixel data SYNCHRONOUSLY before the clear. Guard against
+    // a zero-dim source (first call from createSignaturePad before any
+    // dimensions are set) — getImageData(0,0,0,0) throws IndexSizeError.
+    let snapshot = null;
+    if (dirty && oldW > 0 && oldH > 0) {
+      try { snapshot = ctx.getImageData(0, 0, oldW, oldH); }
+      catch (_err) { /* tainted or oversized — fall through, drawing is lost but no crash */ }
+    }
+    // Resize clears the canvas + resets context state. Both attribute
+    // assignments together (rather than just width or just height) so a
+    // mid-resize getBoundingClientRect from a concurrent handler can't
+    // read a half-resized canvas.
+    canvas.width = newW;
+    canvas.height = newH;
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
     ctx.strokeStyle = "#0F1F14";
     ctx.lineWidth = 2.2 * dpr;
-    if (snapshot && dirty) {
-      const img = new Image();
-      img.onload = () => ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-      img.src = snapshot;
+    if (!snapshot) return;
+    if (oldW === newW && oldH === newH) {
+      // Shouldn't reach (the no-op gate above returns), but the same-size
+      // restore is the trivial path: putImageData is exact pixel copy.
+      ctx.putImageData(snapshot, 0, 0);
+      return;
     }
+    // Different dimensions — putImageData doesn't scale, so route through
+    // an offscreen canvas and drawImage (which DOES scale, and which is
+    // synchronous when the source is a canvas — no Image() load).
+    const tmp = document.createElement("canvas");
+    tmp.width = oldW;
+    tmp.height = oldH;
+    tmp.getContext("2d").putImageData(snapshot, 0, 0);
+    ctx.drawImage(tmp, 0, 0, newW, newH);
   }
   fitCanvas();
   window.addEventListener("resize", fitCanvas);
@@ -3619,6 +3670,11 @@ function persistBuilderLines() {
       // Server sometimes corrects line shapes (re-snapshots originalPrice).
       // Pull the canonical version back so subsequent edits are based on truth.
       state.onSiteQuote = data.workOrder.onSiteQuote || state.onSiteQuote;
+      // Sync updatedAt so the version-gate in reloadStateFromServer
+      // recognizes this as a no-op resync — otherwise the next offline-
+      // queue drain triggers a full re-render fan-out which on iOS
+      // Safari can trip a resize → fitCanvas mid-signature.
+      if (data.workOrder.updatedAt) state.updatedAt = data.workOrder.updatedAt;
       // Don't re-render on success — the user is mid-edit; their inputs
       // already reflect the truth.
     }
@@ -3646,6 +3702,7 @@ document.getElementById("techOnSiteBuildBtn")?.addEventListener("click", async (
     }
     if (data.workOrder) {
       state.onSiteQuote = data.workOrder.onSiteQuote || state.onSiteQuote;
+      if (data.workOrder.updatedAt) state.updatedAt = data.workOrder.updatedAt;
     }
     state.onSiteUiMode = "builder";
     renderOnSiteQuote();
@@ -3917,7 +3974,10 @@ document.getElementById("techOnSiteSubmitBtn")?.addEventListener("click", async 
       });
       const data = await r.json().catch(() => ({}));
       if (!r.ok || !data.ok) throw new Error((data.errors && data.errors[0]) || "Couldn't save.");
-      if (data.workOrder) state.onSiteQuote = data.workOrder.onSiteQuote || state.onSiteQuote;
+      if (data.workOrder) {
+        state.onSiteQuote = data.workOrder.onSiteQuote || state.onSiteQuote;
+        if (data.workOrder.updatedAt) state.updatedAt = data.workOrder.updatedAt;
+      }
     } else {
       const imageData = state.onSiteSigPad.toDataURL();
       const r = await fetch(`/api/work-orders/${encodeURIComponent(state.id)}/on-site-quote/accept`, {
@@ -3932,7 +3992,18 @@ document.getElementById("techOnSiteSubmitBtn")?.addEventListener("click", async 
       });
       const data = await r.json().catch(() => ({}));
       if (!r.ok || !data.ok) throw new Error((data.errors && data.errors[0]) || "Couldn't accept.");
-      if (data.workOrder) state.onSiteQuote = data.workOrder.onSiteQuote || state.onSiteQuote;
+      if (data.workOrder) {
+        state.onSiteQuote = data.workOrder.onSiteQuote || state.onSiteQuote;
+        // Critical sync: the on-site accept POST advances the WO's
+        // updatedAt server-side. Without echoing it into state, the
+        // next reloadStateFromServer falls through the version-gate
+        // and triggers a full re-render — historically suspected as
+        // the trigger for the final-signature canvas reset on iOS.
+        // fitCanvas is now sync-safe too (no async restore window),
+        // but closing the drift here means the re-render never even
+        // fires in the first place.
+        if (data.workOrder.updatedAt) state.updatedAt = data.workOrder.updatedAt;
+      }
     }
     state.onSiteUiMode = "submitted";
     renderOnSiteQuote();
@@ -3987,6 +4058,7 @@ document.getElementById("techOnSiteSendApprovalBtn")?.addEventListener("click", 
     const refreshed = await fetch(`/api/work-orders/${encodeURIComponent(state.id)}`).then((r) => r.json()).catch(() => null);
     if (refreshed?.workOrder?.onSiteQuote) {
       state.onSiteQuote = refreshed.workOrder.onSiteQuote;
+      if (refreshed.workOrder.updatedAt) state.updatedAt = refreshed.workOrder.updatedAt;
       renderOnSiteQuote();
     }
   } catch (err) {
@@ -4316,6 +4388,7 @@ document.getElementById("techCarryForwardList")?.addEventListener("click", async
     if (!r.ok || !data.ok) throw new Error((data.errors && data.errors[0]) || "Couldn't update.");
     if (action === "repair_now" && data.workOrder?.onSiteQuote) {
       state.onSiteQuote = data.workOrder.onSiteQuote;
+      if (data.workOrder.updatedAt) state.updatedAt = data.workOrder.updatedAt;
       renderOnSiteQuote();
     }
     // Re-fetch — items can disappear (resolved/dismissed/repair_now flips to in_progress).
@@ -5213,6 +5286,7 @@ async function postIntakeDecision(body) {
     if (data.workOrder) {
       state.intakeGuarantee = data.workOrder.intakeGuarantee || state.intakeGuarantee;
       state.onSiteQuote = data.workOrder.onSiteQuote || state.onSiteQuote;
+      if (data.workOrder.updatedAt) state.updatedAt = data.workOrder.updatedAt;
     }
     renderIntakeGuarantee();
     renderOnSiteQuote();
