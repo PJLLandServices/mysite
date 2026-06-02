@@ -6611,14 +6611,35 @@ async function handleApi(req, res, pathname) {
 
       // Notify Patrick — customer just committed money.
       const baseUrl = process.env.PUBLIC_BASE_URL || baseUrlFromReq(req);
+      // Surface the accepted line items + total in the structured fields
+      // of the email so Patrick sees what was signed without having to
+      // open the CRM. Without these, buildLeadEmail falls back to its
+      // "no items" / "$0.00" defaults — historically a source of "the
+      // quote for that amount was accepted but there is no quote for
+      // this amount anywhere" confusion.
+      const lineItemsForEmail = (Array.isArray(updated.lineItems) ? updated.lineItems : []).map((li) => {
+        const qty = Number(li.qty) || 1;
+        const lineTotal = Number(li.lineTotal);
+        const unit = Number.isFinite(lineTotal) && qty > 0
+          ? lineTotal / qty
+          : Number(li.overridePrice != null ? li.overridePrice : (li.price != null ? li.price : li.originalPrice)) || 0;
+        return {
+          label: li.label || li.key || "(unnamed line)",
+          qty,
+          price: unit,
+          quoteType: "flat"
+        };
+      });
       const aliasLead = {
         id: updated.id,
         sourceLabel: `REMOTE APPROVAL — ${updated.id}`,
+        features: lineItemsForEmail,
+        totals: { expectedTotal: Number(updated.total) || 0 },
         contact: {
           name: customerName,
           phone: updated.approval?.sentToPhone || "",
           email: updated.approval?.sentToEmail || updated.customerEmail || "",
-          address: "",
+          address: updated.customerAddress || "",
           notes: `Customer approved $${Number(updated.total).toFixed(2)} CAD via remote link.`
         }
       };
@@ -11861,9 +11882,28 @@ async function handleApi(req, res, pathname) {
         if (quoteRecord) {
           const baseUrl = process.env.PUBLIC_BASE_URL || baseUrlFromReq(req);
           const acceptedTotal = Number(quoteRecord.total || 0);
+          // Mirror the remote-approval fix: surface accepted line items
+          // + total in the structured email fields. Without this, the
+          // template falls back to "no items" / "$0.00" and Patrick
+          // can't tell what the customer just signed for.
+          const lineItemsForEmail = acceptedLines.map((li) => {
+            const qty = Number(li.qty) || 1;
+            const lineTotal = Number(li.lineTotal);
+            const unit = Number.isFinite(lineTotal) && qty > 0
+              ? lineTotal / qty
+              : Number(li.overridePrice != null ? li.overridePrice : (li.price != null ? li.price : li.originalPrice)) || 0;
+            return {
+              label: li.label || li.key || "(unnamed line)",
+              qty,
+              price: unit,
+              quoteType: "flat"
+            };
+          });
           const aliasLead = {
             id: quoteRecord.id,
             sourceLabel: `ON-SITE ACCEPTED — ${quoteRecord.id}`,
+            features: lineItemsForEmail,
+            totals: { expectedTotal: acceptedTotal },
             contact: {
               name: customerName,
               phone: wo.customerPhone || "",
