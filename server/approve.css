@@ -58,6 +58,54 @@
   box-shadow: 0 4px 24px rgba(15, 31, 20, 0.08);
 }
 
+/* Tech preview banner — shown only when the WO's "Preview as customer"
+   button generated this URL. Uses warning-amber so it's unmistakably
+   non-customer copy. Sticky-positioned inside the card so it stays
+   visible while the tech scrolls through the customer view below. */
+.approve-preview-banner {
+  position: sticky;
+  top: 12px;
+  margin: -8px -8px 22px;
+  padding: 14px 18px;
+  background: linear-gradient(180deg, #FCE9B5 0%, #FBDB91 100%);
+  border: 1px solid #C99A23;
+  border-radius: 12px;
+  z-index: 5;
+  box-shadow: 0 2px 8px rgba(154, 110, 18, 0.18);
+}
+.approve-preview-banner-row {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  color: #6B4D08;
+}
+.approve-preview-icon {
+  font-size: 24px;
+  line-height: 1;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+.approve-preview-banner strong {
+  display: block;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  font-size: 13px;
+  margin-bottom: 4px;
+}
+.approve-preview-banner p {
+  margin: 0;
+  font-size: 13.5px;
+  line-height: 1.45;
+}
+/* When in preview mode, fade the action buttons to make non-interactivity
+   obvious. Pointer events stay on so the click handler can intercept
+   and show the "preview only" toast. */
+.approve-card.is-preview .approve-submit,
+.approve-card.is-preview .approve-pdf-submit {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 .approve-eyebrow {
   display: inline-block;
   margin: 0 0 12px;

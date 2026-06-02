@@ -358,8 +358,11 @@
 
         <!-- Send-for-approval — same endpoint tech mode uses. Available
              only when there's something to send and the WO is not yet
-             signed. Reads customer email/phone from the WO. -->
+             signed. Reads customer email/phone from the WO. The Preview
+             button opens the exact customer view in a new tab — no
+             email/SMS dispatched. -->
         <div class="wo-on-site-remote" id="woOnSiteRemoteSection" hidden>
+          <button type="button" class="pjl-btn pjl-btn-outline" id="woOnSitePreviewBtn">👁️ Preview as customer</button>
           <button type="button" class="pjl-btn pjl-btn-outline" id="woOnSiteSendApprovalBtn">📨 Send for customer approval (email + SMS)</button>
           <p class="wo-on-site-remote-status" id="woOnSiteRemoteStatus" hidden></p>
         </div>

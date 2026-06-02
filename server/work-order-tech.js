@@ -17,7 +17,7 @@
 // tech-sw.js's CACHE_VERSION. If this string doesn't match the SW
 // cache version after deploy, the iPhone is serving stale JS — clear
 // website data and reload.
-const TECH_BUILD_VERSION = "tech-v44";
+const TECH_BUILD_VERSION = "tech-v45";
 function _setBadge(text, isError) {
   try {
     const badge = document.getElementById("techBuildBadge");
@@ -4011,6 +4011,53 @@ document.getElementById("techOnSiteSubmitBtn")?.addEventListener("click", async 
     submit.disabled = false;
     submit.textContent = "Sign & accept";
     alert(err.message || "Couldn't save.");
+  }
+});
+
+// Preview as customer — generates a draft_preview quote and opens
+// /approve/<id>?t=<token>&preview=1 in a new tab so the tech can see
+// the exact customer view (line items, total, signature pad) before
+// committing to send. No email/SMS dispatched, no Q-YYYY-NNNN counter
+// burned on subsequent previews (server mutates the same preview
+// quote in place). The preview page's PREVIEW MODE banner +
+// neutered submit make the non-binding nature unmistakable.
+document.getElementById("techOnSitePreviewBtn")?.addEventListener("click", async () => {
+  if (state.locked) return;
+  const btn = document.getElementById("techOnSitePreviewBtn");
+  const status = document.getElementById("techOnSiteRemoteStatus");
+  if (btn) btn.disabled = true;
+  if (status) { status.hidden = false; status.textContent = "Generating preview…"; status.dataset.kind = "info"; }
+  try {
+    const r = await fetch(`/api/work-orders/${encodeURIComponent(state.id)}/quote-preview`, {
+      method: "POST",
+      headers: { "content-type": "application/json" }
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok || !data.ok) throw new Error((data.errors && data.errors[0]) || "Couldn't generate preview.");
+    if (status) {
+      status.textContent = `Preview ${data.quoteId} ready — opening in a new tab. The customer is NOT notified.`;
+      status.dataset.kind = "ok";
+    }
+    // window.open may be blocked by Safari if it isn't perceived as a
+    // direct user gesture (we hit await before opening). Fall back to
+    // location.assign in a synthetic anchor click so the URL is at
+    // least reachable from the status line.
+    const opened = window.open(data.previewUrl, "_blank", "noopener");
+    if (!opened && status) {
+      status.innerHTML = `Preview ${data.quoteId} ready. <a href="${data.previewUrl}" target="_blank" rel="noopener">Open preview in a new tab</a>. The customer is NOT notified.`;
+    }
+    // Refresh WO so onSiteQuote.quoteId is in sync — the preview
+    // endpoint stamps it server-side. Without this sync, the next
+    // preview tap would 409 if the version-gate caught up first.
+    const refreshed = await fetch(`/api/work-orders/${encodeURIComponent(state.id)}`).then((r) => r.json()).catch(() => null);
+    if (refreshed?.workOrder?.onSiteQuote) {
+      state.onSiteQuote = refreshed.workOrder.onSiteQuote;
+      if (refreshed.workOrder.updatedAt) state.updatedAt = refreshed.workOrder.updatedAt;
+    }
+  } catch (err) {
+    if (status) { status.textContent = err.message || "Couldn't generate preview."; status.dataset.kind = "error"; }
+  } finally {
+    if (btn) btn.disabled = false;
   }
 });
 

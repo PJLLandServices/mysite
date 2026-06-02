@@ -59,7 +59,13 @@ const STATUSES = [
   "declined", "expired", "superseded", "cancelled",
   // project_proposal-only — set when the customer has uploaded a signed
   // PDF and we're waiting for Patrick to attest it's the real thing.
-  "pending_admin_attestation"
+  "pending_admin_attestation",
+  // on_site_quote — tech-only "see what the customer will see" preview.
+  // Carries a real approval.token so /approve/<id>?t=... renders the
+  // exact customer view, but the /sign endpoint refuses (server-side
+  // enforcement) and the page surfaces a PREVIEW banner + neutered
+  // submit. Auto-purges after 24h if not converted to "sent".
+  "draft_preview"
 ];
 // formal_quote is kept in the enum for back-compat with any historical
 // records but is no longer emitted; project_proposal supersedes it.
@@ -940,11 +946,15 @@ async function markSentForApproval(id, { token, channels = [], toEmail = "", toP
     sentToEmail: String(toEmail || "").toLowerCase().trim(),
     sentToPhone: String(toPhone || "").trim()
   };
-  if (q.status === "draft") q.status = "sent";
+  // Promote draft → sent on send. Also handle draft_preview → sent so
+  // a tech who previewed first can flip the existing record without
+  // burning a fresh Q-YYYY-NNNN (Option B preview-to-send conversion).
+  const wasPreview = q.status === "draft_preview";
+  if (q.status === "draft" || q.status === "draft_preview") q.status = "sent";
   if (!q.sentAt) q.sentAt = ts;
   q.history.push({
     ts, action: "sent_for_approval", by: "tech",
-    note: `via ${q.approval.sentVia.join("+") || "manual"}`
+    note: `${wasPreview ? "Promoted from preview, " : ""}via ${q.approval.sentVia.join("+") || "manual"}`
   });
   records[idx] = q;
   await writeAll(records);
@@ -993,6 +1003,140 @@ async function expireStaleQuotes({ now = new Date() } = {}) {
   }
   if (expired) await writeAll(records);
   return { expired, considered };
+}
+
+// Refresh the snapshotted line items + totals on an existing
+// draft / draft_preview quote. Used when the tech edits the builder
+// between previews (or between preview and send) — without this, the
+// reused-quote path in send-for-approval would ship the stale snapshot
+// from the first preview. Refuses on any status past draft to protect
+// the audit trail (Hard Rule 4 — accepted quotes are immutable).
+async function refreshLineItems(id, { lineItems, subtotal, hst, total } = {}) {
+  if (!id) throw new Error("refreshLineItems needs id");
+  if (!Array.isArray(lineItems)) throw new Error("refreshLineItems needs lineItems[]");
+  const records = await readAll();
+  const idx = records.findIndex((q) => q.id === id);
+  if (idx === -1) return null;
+  const q = records[idx];
+  if (q.status !== "draft" && q.status !== "draft_preview") {
+    throw new Error(`Quote ${id} is in status "${q.status}" — line items are frozen.`);
+  }
+  q.lineItems = lineItems;
+  q.subtotal = Number(subtotal) || 0;
+  q.hst = Number(hst) || 0;
+  q.total = Number(total) || 0;
+  q.history.push({
+    ts: nowIso(),
+    action: "line_items_refreshed",
+    by: "tech",
+    note: `Refreshed ${q.lineItems.length} line${q.lineItems.length === 1 ? "" : "s"}`
+  });
+  records[idx] = q;
+  await writeAll(records);
+  return q;
+}
+
+// Mark an existing quote as a tech-only preview. Reuses the same
+// approval.token field that markSentForApproval uses, so /approve/<id>
+// renders the same customer view — but status stays "draft_preview"
+// instead of flipping to "sent", and no sentAt / sentVia is recorded
+// (this isn't a customer-facing transmission). Idempotent — calling
+// this on an existing draft_preview rotates the token and refreshes
+// the timestamp.
+async function markAsPreview(id, { token, by = "tech" } = {}) {
+  if (!id || !token) throw new Error("markAsPreview needs id + token");
+  const records = await readAll();
+  const idx = records.findIndex((q) => q.id === id);
+  if (idx === -1) return null;
+  const q = records[idx];
+  if (q.status === "sent" || q.status === "accepted" || q.status === "partially_accepted") {
+    throw new Error(`Quote ${id} is already ${q.status} — can't downgrade to preview.`);
+  }
+  const ts = nowIso();
+  q.status = "draft_preview";
+  q.approval = {
+    token,
+    // previewAt rather than sentAt — this is NOT a customer transmission
+    previewAt: ts,
+    sentVia: [],
+    sentToEmail: "",
+    sentToPhone: ""
+  };
+  q.history.push({
+    ts, action: "preview_generated", by,
+    note: "Tech-only preview link issued"
+  });
+  records[idx] = q;
+  await writeAll(records);
+  return q;
+}
+
+// Convert a draft_preview quote into a real sent quote. Used by the
+// send-for-approval endpoint when the tech previewed first then sent.
+// Rotates the token (so the preview URL is invalidated when the real
+// customer URL is generated), flips status to "sent", and stamps
+// sentAt + sentVia. Idempotent if already sent — returns the quote
+// unchanged. Returns null if the quote isn't found OR isn't in
+// draft_preview state (caller should fall back to creating a fresh
+// quote in that case).
+async function convertPreviewToSent(id, { token, channels = [], toEmail = "", toPhone = "" } = {}) {
+  if (!id || !token) throw new Error("convertPreviewToSent needs id + token");
+  const records = await readAll();
+  const idx = records.findIndex((q) => q.id === id);
+  if (idx === -1) return null;
+  const q = records[idx];
+  if (q.status !== "draft_preview") return null;
+  const ts = nowIso();
+  q.status = "sent";
+  q.approval = {
+    token,
+    sentAt: ts,
+    sentVia: Array.isArray(channels) ? channels.slice() : [],
+    sentToEmail: String(toEmail || "").toLowerCase().trim(),
+    sentToPhone: String(toPhone || "").trim()
+  };
+  if (!q.sentAt) q.sentAt = ts;
+  q.history.push({
+    ts, action: "sent_for_approval", by: "tech",
+    note: `Promoted from preview, via ${q.approval.sentVia.join("+") || "manual"}`
+  });
+  records[idx] = q;
+  await writeAll(records);
+  return q;
+}
+
+// Sweep abandoned preview quotes. Preview quotes that have been sitting
+// in draft_preview state for more than `maxAgeMs` are presumed stale —
+// the tech either previewed and walked away, or moved on without
+// sending. Soft-delete them so they stay on disk for audit (Hard Rule 4)
+// but disappear from the /admin/quote-folder index. Returns
+// { swept, considered } so the caller can log.
+async function sweepStalePreviewQuotes({ now = new Date(), maxAgeMs = 24 * 60 * 60 * 1000 } = {}) {
+  const records = await readAll();
+  let swept = 0;
+  let considered = 0;
+  const cutoffMs = now.getTime() - maxAgeMs;
+  for (const q of records) {
+    if (q.status !== "draft_preview") continue;
+    if (q.deletedAt) continue;
+    considered++;
+    const previewMs = q.approval?.previewAt
+      ? new Date(q.approval.previewAt).getTime()
+      : new Date(q.createdAt).getTime();
+    if (Number.isFinite(previewMs) && previewMs < cutoffMs) {
+      q.deletedAt = now.toISOString();
+      q.deletedBy = "system";
+      q.history.push({
+        ts: now.toISOString(),
+        action: "preview_auto_swept",
+        by: "system",
+        note: `Abandoned preview, no send within ${Math.round(maxAgeMs / 3600000)}h`
+      });
+      swept++;
+    }
+  }
+  if (swept) await writeAll(records);
+  return { swept, considered };
 }
 
 // Hard-remove a quote by id (used by /admin/trash permanent-delete). The
@@ -1532,6 +1676,10 @@ module.exports = {
   expireStaleQuotes,
   attachWorkOrder,
   markSentForApproval,
+  markAsPreview,
+  convertPreviewToSent,
+  sweepStalePreviewQuotes,
+  refreshLineItems,
   getByApprovalToken,
   remove,
   softDelete,

@@ -2696,6 +2696,15 @@ body[data-locked="true"] .tech-finish-bar { opacity: 0.55; pointer-events: none;
 }
 .tech-on-site-remote-btn:active { transform: scale(0.99); }
 .tech-on-site-remote-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+/* Preview button — visually subordinate to the send button (which is
+   the destructive customer-facing action). Neutral grey-green border
+   so it reads as "look first" rather than "send for real." Sits
+   above the send button in the action stack with 8px gap. */
+.tech-on-site-remote-btn--preview {
+  margin-bottom: 8px;
+  border-color: #708A78;
+  color: #2D4A37;
+}
 .tech-on-site-remote-status {
   margin: 8px 0 0;
   font-size: 13px;

@@ -6174,6 +6174,18 @@ async function handleApi(req, res, pathname) {
           createdBy: "tech"
         });
         await quotes.attachWorkOrder(quoteRecord.id, wo.id);
+      } else if (quoteRecord.status === "draft" || quoteRecord.status === "draft_preview") {
+        // Refresh snapshot from the current builder — tech may have
+        // edited between preview and send. The line-items refresh is
+        // gated by status (refuses on sent/accepted) so this is safe.
+        // Without this, send-for-approval after a preview would ship
+        // the stale preview snapshot.
+        quoteRecord = await quotes.refreshLineItems(quoteRecord.id, {
+          lineItems: acceptedSnapshot,
+          subtotal: totals.subtotal,
+          hst: totals.hst,
+          total: totals.total
+        });
       }
 
       // Generate the approval token + URL. Approval URL is embedded in
@@ -6340,6 +6352,120 @@ async function handleApi(req, res, pathname) {
     }
   }
 
+  // POST /api/work-orders/:id/quote-preview — admin/tech "👁️ Preview as
+  // customer" path. Builds a draft_preview quote from the current
+  // builder state (or refreshes an existing preview) and returns a
+  // tokenized /approve/<id>?t=... URL. The approve page renders the
+  // exact customer view but with a PREVIEW MODE banner + neutered
+  // submit. The /sign endpoint also refuses draft_preview server-side.
+  //
+  // Subsequent calls on the same WO mutate the same preview quote in
+  // place (so the Q-YYYY-NNNN counter doesn't burn an ID per preview).
+  // Calling /on-site-quote/send-for-approval afterwards promotes the
+  // preview → sent (no new Q-id) and dispatches the real email/SMS.
+  // Abandoned previews auto-purge after 24h via sweepStalePreviewQuotes.
+  const woQuotePreviewMatch = pathname.match(/^\/api\/work-orders\/([^/]+)\/quote-preview$/);
+  if (woQuotePreviewMatch && req.method === "POST") {
+    try {
+      // Tech-or-admin gate — preview pages reveal full builder pricing
+      // so we require a real session even though no customer-facing
+      // transmission happens.
+      const session = await requireUser(req);
+      if (!session) return sendJson(res, 401, { ok: false, errors: ["Sign-in required."] });
+      const id = decodeURIComponent(woQuotePreviewMatch[1]);
+      const wo = await workOrders.get(id);
+      if (!wo) return sendJson(res, 404, { ok: false, errors: ["Work order not found."] });
+      if (wo.locked || wo.signature?.signed) {
+        return sendJson(res, 409, { ok: false, errors: ["Work order is locked — preview not available."] });
+      }
+      const builderLines = Array.isArray(wo.onSiteQuote?.builderLineItems) ? wo.onSiteQuote.builderLineItems : [];
+      if (!builderLines.length) {
+        return sendJson(res, 422, { ok: false, errors: ["Build the on-site quote first — nothing to preview."] });
+      }
+      // Snapshot identical to send-for-approval's so the customer sees
+      // the same shape they'd get on a real send.
+      const acceptedSnapshot = builderLines.map((line) => ({
+        ...line,
+        price: line.overridePrice != null ? Number(line.overridePrice) : Number(line.originalPrice),
+        lineTotal: Math.round((line.overridePrice != null ? Number(line.overridePrice) : Number(line.originalPrice)) * (Number(line.qty) || 1) * 100) / 100
+      }));
+      const totals = issueRollup.totalsFor(builderLines);
+      const token = crypto.randomBytes(16).toString("hex");
+
+      // Reuse an existing quote on this WO if there is one — but only
+      // if its status allows it (draft / draft_preview). If the existing
+      // quote is already sent or accepted, refuse: previewing on top of
+      // a real send would corrupt the audit trail. Tech can delete the
+      // existing quote first if they really want a fresh preview.
+      let quoteRecord = null;
+      if (wo.onSiteQuote?.quoteId) {
+        quoteRecord = await quotes.get(wo.onSiteQuote.quoteId);
+      }
+      if (quoteRecord && quoteRecord.status !== "draft" && quoteRecord.status !== "draft_preview") {
+        return sendJson(res, 409, {
+          ok: false,
+          errors: [`Quote ${quoteRecord.id} is already ${quoteRecord.status} — preview not available. Build a new on-site quote to preview a different scope.`]
+        });
+      }
+      if (!quoteRecord) {
+        quoteRecord = await quotes.create({
+          type: "on_site_quote",
+          status: "draft_preview",
+          customerEmail: wo.customerEmail || "",
+          propertyId: wo.propertyId,
+          leadId: wo.leadId || null,
+          source: { chatSessionId: null, pageUrl: null, userAgent: req.headers["user-agent"] || "" },
+          scope: `On-site quote from ${wo.id} — preview`,
+          lineItems: acceptedSnapshot,
+          subtotal: totals.subtotal,
+          hst: totals.hst,
+          total: totals.total,
+          createdBy: "tech"
+        });
+        await quotes.attachWorkOrder(quoteRecord.id, wo.id);
+      } else {
+        // Existing quote — refresh line items + totals in case the tech
+        // edited the builder between previews.
+        await quotes.refreshLineItems(quoteRecord.id, {
+          lineItems: acceptedSnapshot,
+          subtotal: totals.subtotal,
+          hst: totals.hst,
+          total: totals.total
+        });
+      }
+      // markAsPreview rotates the token and re-stamps previewAt — runs
+      // both for new quotes and refreshed ones.
+      quoteRecord = await quotes.markAsPreview(quoteRecord.id, { token, by: session.role || "tech" });
+
+      // Stamp the WO's onSiteQuote.quoteId so subsequent preview / send
+      // calls find this quote (same pattern as send-for-approval).
+      if (wo.onSiteQuote?.quoteId !== quoteRecord.id) {
+        await workOrders.update(id, {
+          onSiteQuote: { ...wo.onSiteQuote, quoteId: quoteRecord.id }
+        });
+      }
+
+      try {
+        await workOrders.appendHistory(id, {
+          action: "quote_preview_generated",
+          by: session.role || "tech",
+          note: `Preview for ${quoteRecord.id} — ${acceptedSnapshot.length} line${acceptedSnapshot.length === 1 ? "" : "s"}, $${Number(totals.total).toFixed(2)}`
+        });
+      } catch (err) { console.warn("[wo-history] quote_preview entry failed:", err?.message); }
+
+      const previewUrl = `${resolvePublicBaseUrl()}/approve/${encodeURIComponent(quoteRecord.id)}?t=${token}&preview=1`;
+      return sendJson(res, 201, {
+        ok: true,
+        quoteId: quoteRecord.id,
+        previewUrl,
+        // Useful for the tech UI to show "preview valid until …" copy.
+        expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
+      });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't generate preview."] });
+    }
+  }
+
   // Public — customer hits this when they tap the email/SMS link. Returns
   // a slim payload (no IP/audit data) so it's safe to render in the
   // /approve/<id> page client-side.
@@ -6368,6 +6494,12 @@ async function handleApi(req, res, pathname) {
         id: q.id,
         type: q.type,
         status: q.status,
+        // Preview mode flag — set when this quote is a tech-only preview
+        // (status === "draft_preview"). The approve page client uses
+        // this to surface the PREVIEW MODE banner and neuter the submit
+        // button. The /sign endpoint also refuses these server-side, so
+        // this is purely a UX disclosure.
+        isPreview: q.status === "draft_preview",
         scope: q.scope,
         lineItems: q.lineItems,
         subtotal: q.subtotal,
@@ -6406,6 +6538,17 @@ async function handleApi(req, res, pathname) {
       const payload = await parseRequestBody(req);
       const q = await quotes.getByApprovalToken(quoteId, token);
       if (!q) return sendJson(res, 404, { ok: false, errors: ["Approval link not found or expired."] });
+      // Preview-mode safety: refuse to record an acceptance on a
+      // draft_preview quote. The client UI also surfaces a PREVIEW
+      // banner and intercepts the submit, but a stale tab / scripted
+      // POST could route around that — this is the server-side enforce.
+      if (q.status === "draft_preview") {
+        return sendJson(res, 409, {
+          ok: false,
+          code: "preview_only",
+          errors: ["This is a preview link — no acceptance can be recorded. The tech must send the real approval link first."]
+        });
+      }
       if (q.signature?.signed) {
         return sendJson(res, 200, { ok: true, alreadySigned: true });
       }
@@ -13926,6 +14069,15 @@ server.listen(PORT, HOST, () => {
       if (result.expired) console.log(`[quotes] auto-expired ${result.expired} stale quote(s)`);
     } catch (err) {
       console.warn("[quotes] auto-expire sweep failed:", err?.message);
+    }
+    // Preview-quote sweep — soft-deletes draft_preview quotes older
+    // than 24h (the tech previewed and walked away without sending).
+    // Same cadence as the expire sweep; cheap to piggyback on.
+    try {
+      const result = await quotes.sweepStalePreviewQuotes();
+      if (result.swept) console.log(`[quotes] auto-swept ${result.swept} stale preview(s)`);
+    } catch (err) {
+      console.warn("[quotes] preview sweep failed:", err?.message);
     }
   };
   sweepQuotes();

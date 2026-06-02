@@ -30,6 +30,21 @@
     </div>
 
     <article class="approve-card" id="approveCard" hidden>
+      <!-- Tech-only preview banner. Shown when ?preview=1 AND the quote
+           is in draft_preview status. Customer URLs never get this
+           combination — the real send-for-approval flips status to
+           "sent" first. The banner is sticky-prominent so the tech
+           always knows they're looking at a non-binding preview. -->
+      <aside class="approve-preview-banner" id="approvePreviewBanner" hidden>
+        <div class="approve-preview-banner-row">
+          <span class="approve-preview-icon" aria-hidden="true">👁️</span>
+          <div>
+            <strong>PREVIEW MODE</strong>
+            <p>This is what the customer will see. No acceptance can be recorded here — close the tab and tap "Send for customer approval" in the work order when you're ready to send it.</p>
+          </div>
+        </div>
+      </aside>
+
       <p class="approve-eyebrow" id="approveEyebrow">Repair quote — your approval needed</p>
       <h1 id="approveHeadline">Your tech recommends the following work.</h1>
       <p class="approve-intro" id="approveIntro">Review the scope and price below. When you're ready, sign at the bottom and PJL will get the green light to proceed.</p>

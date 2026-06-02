@@ -1478,6 +1478,50 @@ document.getElementById("woOnSiteLines")?.addEventListener("input", (event) => {
   persistOnSiteBuilder();
 });
 
+// "Preview as customer" — opens the exact /approve/<id> page the
+// customer would see, but with a PREVIEW MODE banner and a neutered
+// submit (server-side /sign also refuses preview quotes). No email
+// or SMS dispatched. Reuses the on-site quote builder's current state
+// without burning a Q-YYYY-NNNN counter on subsequent previews (server
+// mutates the same draft_preview record in place).
+document.getElementById("woOnSitePreviewBtn")?.addEventListener("click", async () => {
+  if (!loadedWorkOrder) return;
+  const id = getWorkOrderId();
+  if (!id) return;
+  const btn = document.getElementById("woOnSitePreviewBtn");
+  const statusEl = document.getElementById("woOnSiteRemoteStatus");
+  if (btn) btn.disabled = true;
+  if (statusEl) { statusEl.hidden = false; statusEl.textContent = "Generating preview…"; statusEl.dataset.kind = "info"; }
+  try {
+    const r = await fetch(`/api/work-orders/${encodeURIComponent(id)}/quote-preview`, {
+      method: "POST",
+      headers: { "content-type": "application/json" }
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok || !data.ok) throw new Error((data.errors && data.errors[0]) || "Couldn't generate preview.");
+    const opened = window.open(data.previewUrl, "_blank", "noopener");
+    if (statusEl) {
+      if (opened) {
+        statusEl.textContent = `Preview ${data.quoteId} ready — opened in a new tab. The customer is NOT notified.`;
+      } else {
+        statusEl.innerHTML = `Preview ${data.quoteId} ready. <a href="${data.previewUrl}" target="_blank" rel="noopener">Open preview in a new tab</a>. The customer is NOT notified.`;
+      }
+      statusEl.dataset.kind = "ok";
+    }
+    // Pick up the now-stamped onSiteQuote.quoteId so a follow-up
+    // "Send for customer approval" reuses the same record.
+    const refreshed = await fetch(`/api/work-orders/${encodeURIComponent(id)}`).then((r) => r.json()).catch(() => null);
+    if (refreshed?.workOrder) {
+      loadedWorkOrder = refreshed.workOrder;
+      renderOnSiteQuote(refreshed.workOrder);
+    }
+  } catch (err) {
+    if (statusEl) { statusEl.textContent = err.message || "Couldn't generate preview."; statusEl.dataset.kind = "error"; }
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+});
+
 // "Send for customer approval" — same endpoint tech mode uses. Reuses
 // the WO's customer email + phone snapshot. Confirm-then-fire pattern;
 // status surfaces in the wo-on-site-remote-status element.
