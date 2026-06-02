@@ -1,9 +1,9 @@
 // Shared follow-up scheduling modal. Loaded on the desktop WO + tech WO
 // pages. Exposes window.openCrmFollowup({ workOrderId, parentAddress })
-// and handles everything in one single-panel modal — date+time slots
-// (condensed into Morning / Midday / Afternoon / Evening), parts
-// checklist (grouped by category from parts.json), notes textarea, and
-// two submit buttons:
+// and handles everything in one single-panel modal — date+time picker
+// (full month grid + admin Custom time block via the shared
+// /js/time-picker.js module), parts checklist (grouped by category from
+// parts.json), notes textarea, and two submit buttons:
 //   - "Schedule + create WO" (primary): POSTs with slotStart + materials.
 //   - "Create WO, schedule later" (secondary): POSTs without slotStart;
 //     legacy "Patrick to call customer" fallback.
@@ -25,6 +25,13 @@
   let parentCustomParts = [];
   let onDoneCb = null;
   let selectedSlot = "";
+  // Tracks whether the currently-selected time came from a standard
+  // bucket slot ("slot") or the admin Custom time override
+  // ("admin_custom"). The followup endpoint skips the slot-availability
+  // match for admin_custom because those times are, by design, outside
+  // the normal slot grid.
+  let selectedSource = "slot";
+  let pickerDestroy = null;
   let partsCatalog = null;
 
   function ensureModal() {
@@ -89,89 +96,51 @@
     return modal;
   }
 
-  function condenseSlotsForDay(slots) {
-    const buckets = [
-      { key: "morning",   label: "Morning",   from: 8,  to: 11 },
-      { key: "midday",    label: "Midday",    from: 11, to: 14 },
-      { key: "afternoon", label: "Afternoon", from: 14, to: 17 },
-      { key: "evening",   label: "Evening",   from: 17, to: 22 }
-    ];
-    return buckets
-      .map((b) => ({
-        ...b,
-        slot: slots.find((s) => {
-          const h = new Date(s.start).getHours();
-          return h >= b.from && h < b.to;
-        })
-      }))
-      .filter((b) => b.slot);
-  }
-
-  function escapeHtml(value) {
+  function escapeAttr(value) {
     return String(value ?? "")
       .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
       .replace(/"/g, "&quot;")
-      .replace(/'/g, "&#039;");
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
   }
 
-  // Date-first picker. Tap a date row → expands time buckets inline
-  // below. Other dates collapse. No drawer, no slide.
-  function renderSlots(days) {
-    const slotsEl = modal.querySelector("[data-slots]");
+  // Mount the shared unified time picker into [data-slots]. Each
+  // visible-range request fetches /api/booking/availability?from=&to=
+  // for sprinkler_repair against the parent's address. onSelect captures
+  // the picked slot (regular bucket OR admin custom-time) and enables
+  // the primary submit. Custom time picks set selectedSource =
+  // "admin_custom" so the server skips the grid-match (mirrors the
+  // crm-reschedule modal).
+  function mountPicker() {
+    const host = modal.querySelector("[data-slots]");
     const helpEl = modal.querySelector("[data-slots-help]");
-    slotsEl.innerHTML = "";
-    let totalDays = 0;
-    days.forEach((day) => {
-      const condensed = condenseSlotsForDay(day.slots || []);
-      if (!condensed.length) return;
-      totalDays++;
-      const dateBtn = document.createElement("button");
-      dateBtn.type = "button";
-      dateBtn.className = "crm-followup-date";
-      dateBtn.innerHTML = `
-        <span class="crm-followup-date-label">${escapeHtml(day.label || day.date || "")}</span>
-        <span class="crm-followup-date-count">${condensed.length} time${condensed.length === 1 ? "" : "s"}</span>
-      `;
-      const times = document.createElement("div");
-      times.className = "crm-followup-times";
-      times.hidden = true;
-      condensed.forEach((b) => {
-        const btn = document.createElement("button");
-        btn.type = "button";
-        btn.className = "crm-followup-slot-btn";
-        const time = new Date(b.slot.start).toLocaleTimeString("en-CA", { hour: "numeric", minute: "2-digit" });
-        btn.innerHTML = `${time}<span class="crm-followup-bucket">${b.label}</span>`;
-        btn.addEventListener("click", () => {
-          slotsEl.querySelectorAll(".crm-followup-slot-btn.is-selected").forEach((x) => x.classList.remove("is-selected"));
-          btn.classList.add("is-selected");
-          selectedSlot = b.slot.start;
-          modal.querySelector(".crm-followup-submit").disabled = false;
-        });
-        times.appendChild(btn);
-      });
-      dateBtn.addEventListener("click", () => {
-        slotsEl.querySelectorAll(".crm-followup-date.is-open").forEach((d) => d.classList.remove("is-open"));
-        slotsEl.querySelectorAll(".crm-followup-times").forEach((t) => { t.hidden = true; });
-        const wasOpen = dateBtn.dataset.open === "1";
-        if (!wasOpen) {
-          dateBtn.classList.add("is-open");
-          times.hidden = false;
-          dateBtn.dataset.open = "1";
-        } else {
-          dateBtn.dataset.open = "0";
-        }
-      });
-      slotsEl.appendChild(dateBtn);
-      slotsEl.appendChild(times);
-    });
-    if (!totalDays) {
+    host.innerHTML = "";
+    if (typeof window.mountTimePicker !== "function") {
       helpEl.hidden = false;
-      helpEl.textContent = "No available slots in the next 30 days. Use 'Create WO — schedule later' and Patrick will call to slot it.";
-    } else {
-      helpEl.hidden = true;
+      helpEl.textContent = "Time picker failed to load. Refresh the page and try again.";
+      return;
     }
+    helpEl.hidden = true;
+    pickerDestroy = window.mountTimePicker(host, {
+      mode: "admin",
+      allowCustomTime: true,
+      loadAvailability: async ({ from, to }) => {
+        const url = `/api/booking/availability`
+          + `?service=sprinkler_repair`
+          + `&address=${encodeURIComponent(parentAddress)}`
+          + `&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`;
+        const r = await fetch(url, { cache: "no-store" });
+        const data = await r.json();
+        if (!data.ok) throw new Error((data.errors || ["Couldn't load times."]).join(" "));
+        return { days: data.days || [] };
+      },
+      onSelect: (iso, slotMeta) => {
+        selectedSlot = iso;
+        selectedSource = (slotMeta && slotMeta.source === "admin_custom") ? "admin_custom" : "slot";
+        modal.querySelector(".crm-followup-submit").disabled = false;
+        modal.querySelector(".crm-followup-error").hidden = true;
+      }
+    });
   }
 
   // Render the parts catalog into the modal via the shared CrmParts
@@ -227,14 +196,6 @@
     });
   }
 
-  function escapeAttr(value) {
-    return String(value ?? "")
-      .replace(/&/g, "&amp;")
-      .replace(/"/g, "&quot;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;");
-  }
-
   // Wire +/- + direct typing for the custom-parts inherited block. Lazy
   // attached to the modal once.
   function wireCustomPartsControls() {
@@ -287,6 +248,7 @@
       : [];
     onDoneCb = typeof opts.onDone === "function" ? opts.onDone : null;
     selectedSlot = "";
+    selectedSource = "slot";
     if (!workOrderId) return;
 
     modal.hidden = false;
@@ -296,32 +258,16 @@
     modal.querySelector(".crm-followup-error").hidden = true;
     modal.querySelector(".crm-followup-status").textContent = "";
     modal.querySelector("[data-notes]").value = "";
-    modal.querySelector("[data-slots]").innerHTML = "";
     modal.querySelector("[data-parts]").textContent = "Loading parts catalog…";
-    const slotsHelp = modal.querySelector("[data-slots-help]");
-    slotsHelp.hidden = false;
-    slotsHelp.textContent = "Loading available times…";
 
-    // Two parallel fetches: availability for sprinkler_repair (the
-    // default service for follow-ups) and the parts catalog. Either
-    // failure is non-fatal — we degrade gracefully.
-    // Catalog goes through CrmParts.loadCatalog so the tech-mode
-    // bringback section + this modal share one fetch per session.
-    const availUrl = `/api/booking/availability?service=sprinkler_repair&address=${encodeURIComponent(parentAddress)}&days=30`;
+    // Mount the shared time picker (handles its own availability fetches
+    // per visible month). Parts catalog loads in parallel — either
+    // failure degrades gracefully.
+    mountPicker();
     const partsLoad = (window.CrmParts && window.CrmParts.loadCatalog)
       ? window.CrmParts.loadCatalog().catch((err) => ({ _err: err.message || "load failed" }))
       : Promise.resolve({ _err: "CrmParts not loaded" });
-    const [availResp, partsResp] = await Promise.all([
-      fetch(availUrl).then((r) => r.json()).catch((err) => ({ ok: false, errors: [err.message] })),
-      partsLoad
-    ]);
-
-    if (availResp.ok) {
-      renderSlots(availResp.days || []);
-    } else {
-      slotsHelp.hidden = false;
-      slotsHelp.textContent = (availResp.errors || ["Couldn't load times."]).join(" ");
-    }
+    const partsResp = await partsLoad;
 
     if (partsResp && !partsResp._err && partsResp.parts) {
       partsCatalog = partsResp;
@@ -333,9 +279,14 @@
 
   function close() {
     if (!modal) return;
+    if (typeof pickerDestroy === "function") {
+      try { pickerDestroy(); } catch (_) { /* swallow */ }
+      pickerDestroy = null;
+    }
     modal.hidden = true;
     document.body.style.overflow = "";
     selectedSlot = "";
+    selectedSource = "slot";
     workOrderId = "";
     onDoneCb = null;
   }
@@ -364,7 +315,10 @@
       .map((p) => ({ name: p.name, size: p.size, qty: Math.floor(Number(p.qty) || 0) }));
 
     const body = { notes, materials, customParts };
-    if (withSlot) body.slotStart = selectedSlot;
+    if (withSlot) {
+      body.slotStart = selectedSlot;
+      body.source = selectedSource;  // "admin_custom" bypasses the slot-match check server-side
+    }
     try {
       const r = await fetch(`/api/work-orders/${encodeURIComponent(workOrderId)}/followup`, {
         method: "POST",

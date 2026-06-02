@@ -7247,8 +7247,20 @@ async function handleApi(req, res, pathname) {
 
       // Validate the slot up-front (before creating anything) so we never
       // leave half a record behind on a bad slot.
+      //
+      // Two paths:
+      //   1. Standard slot — match against the bucket grid via
+      //      listAvailableSlots() (same as the public booking flow).
+      //   2. Admin custom time — `source: "admin_custom"` from the
+      //      shared time-picker. Skip the grid-match (custom times
+      //      are by design outside the bucket grid), run an explicit
+      //      physical-overlap check instead. Mirrors /api/booking/reserve
+      //      at the admin_custom branch. Requires admin or tech session
+      //      so a stray public client can't forge it.
       let validatedSlot = null;
       let bookingRec = null;
+      const claimsAdminCustom = payload.source === "admin_custom";
+      let forcedByAdmin = false;
       if (slotStart) {
         const service = BOOKABLE_SERVICES[serviceKey];
         if (!service || !service.bookable) {
@@ -7260,23 +7272,63 @@ async function handleApi(req, res, pathname) {
         }
         const address = parent.address || "";
         if (!address) return sendJson(res, 422, { ok: false, errors: ["Parent WO has no address — can't compute drive times."] });
-        const geo = await geocode(address);
-        const allActive = await activeBookings();
-        const scheduleData = await scheduleStore.read();
-        const mergedHours = { ...DEFAULT_HOURS, ...(scheduleData.hours || {}) };
-        const mergedSettings = { ...DEFAULT_SETTINGS, ...(scheduleData.settings || {}) };
-        const candidates = await listAvailableSlots({
-          serviceKey,
-          customerCoords: geo.coords,
-          bookings: allActive,
-          blocks: scheduleData.blocks,
-          daysAhead: 30,
-          hours: mergedHours,
-          settings: mergedSettings
-        });
-        validatedSlot = candidates.find((s) => s.start === startDate.toISOString());
-        if (!validatedSlot) {
-          return sendJson(res, 409, { ok: false, errors: ["That slot was just taken — please pick another time."] });
+
+        const useAdminCustom = claimsAdminCustom && Boolean(await requireUser(req));
+        if (useAdminCustom) {
+          // Physical-overlap check against currently active bookings.
+          // Same rule as /api/booking/reserve: skip corridor + hours
+          // + admin-block checks (force-booking overrides those), but
+          // refuse to silently double-book the crew.
+          const slotEndDate = new Date(startDate.getTime() + service.minutes * 60 * 1000);
+          const allActive = await activeBookings();
+          const conflict = allActive.find((b) => {
+            if (!b.start || !b.end) return false;
+            const bs = new Date(b.start).getTime();
+            const be = new Date(b.end).getTime();
+            return startDate.getTime() < be && slotEndDate.getTime() > bs;
+          });
+          if (conflict) {
+            const conflictStart = new Date(conflict.start).toLocaleString("en-CA", {
+              hour: "numeric", minute: "2-digit", weekday: "short", month: "short", day: "numeric"
+            });
+            return sendJson(res, 409, {
+              ok: false,
+              code: "physical_conflict",
+              message: `Custom time conflicts with ${conflict.leadId || "an existing booking"} at ${conflictStart}. Reschedule that booking first.`,
+              errors: [`Custom time conflicts with ${conflict.leadId || "an existing booking"} at ${conflictStart}.`]
+            });
+          }
+          const isMorning = startDate.getHours() < 12;
+          validatedSlot = {
+            start: startDate.toISOString(),
+            end: slotEndDate.toISOString(),
+            durationMinutes: service.minutes,
+            serviceKey,
+            serviceLabel: service.label,
+            timeLabel: isMorning ? "Morning Appointment" : "Afternoon Appointment",
+            bucketKey: isMorning ? "morning" : "afternoon",
+            isCustom: true
+          };
+          forcedByAdmin = true;
+        } else {
+          const geo = await geocode(address);
+          const allActive = await activeBookings();
+          const scheduleData = await scheduleStore.read();
+          const mergedHours = { ...DEFAULT_HOURS, ...(scheduleData.hours || {}) };
+          const mergedSettings = { ...DEFAULT_SETTINGS, ...(scheduleData.settings || {}) };
+          const candidates = await listAvailableSlots({
+            serviceKey,
+            customerCoords: geo.coords,
+            bookings: allActive,
+            blocks: scheduleData.blocks,
+            daysAhead: 30,
+            hours: mergedHours,
+            settings: mergedSettings
+          });
+          validatedSlot = candidates.find((s) => s.start === startDate.toISOString());
+          if (!validatedSlot) {
+            return sendJson(res, 409, { ok: false, errors: ["That slot was just taken — please pick another time."] });
+          }
         }
       }
 
@@ -7361,9 +7413,10 @@ async function handleApi(req, res, pathname) {
           prepNotes: notes ? `Follow-up scope: ${notes}` : "",
           sourceQuoteId: null,
           workOrderIds: [followup.id],
+          source: forcedByAdmin ? "admin_custom" : "slot",
           createdAt: now,
           updatedAt: now,
-          history: [{ ts: now, action: "created_followup", by: "admin", note: `Follow-up to ${parent.id}` }]
+          history: [{ ts: now, action: "created_followup", by: "admin", note: `Follow-up to ${parent.id}${forcedByAdmin ? " (custom time)" : ""}` }]
         };
         const allWithNew = [newBooking, ...allRec];
         try {
@@ -7397,7 +7450,10 @@ async function handleApi(req, res, pathname) {
           allLeads[li].crm.activity.unshift({
             at: new Date().toISOString(),
             type: "update",
-            text: `Follow-up WO ${followup.id} created (from ${parent.id}). Scheduled: ${when}.${materials.length ? ` Materials: ${materials.length} SKU${materials.length === 1 ? "" : "s"}.` : ""}`
+            text: (() => {
+              const skuCount = Object.keys(materialsQty).length;
+              return `Follow-up WO ${followup.id} created (from ${parent.id}). Scheduled: ${when}${forcedByAdmin ? " (custom time)" : ""}.${skuCount ? ` Materials: ${skuCount} SKU${skuCount === 1 ? "" : "s"}.` : ""}`;
+            })()
           });
           allLeads[li].crm.lastUpdated = new Date().toISOString();
           await writeLeads(allLeads);
@@ -7405,8 +7461,9 @@ async function handleApi(req, res, pathname) {
       }
       // Notify Patrick. Two flavors based on whether we slotted it.
       const baseUrl = process.env.PUBLIC_BASE_URL || baseUrlFromReq(req);
+      const skuCount = Object.keys(materialsQty).length;
       const noticeNotes = validatedSlot
-        ? `Follow-up booked: ${followup.id} on ${new Date(validatedSlot.start).toLocaleString("en-CA")}.${materials.length ? ` Pre-loaded ${materials.length} part(s).` : ""}${notes ? " Scope: " + notes : ""}`
+        ? `Follow-up booked: ${followup.id} on ${new Date(validatedSlot.start).toLocaleString("en-CA")}${forcedByAdmin ? " (custom time)" : ""}.${skuCount ? ` Pre-loaded ${skuCount} part(s).` : ""}${notes ? " Scope: " + notes : ""}`
         : `Tech requested follow-up from ${parent.id}. New WO: ${followup.id}. Call customer to schedule.`;
       const aliasLead = {
         id: parent.id,
@@ -7432,7 +7489,7 @@ async function handleApi(req, res, pathname) {
         await workOrders.appendHistory(parent.id, {
           action: "followup_created",
           by: "tech",
-          note: `Follow-up WO ${followup.id}${validatedSlot ? ` scheduled for ${validatedSlot.start}` : " (unscheduled — needs manual booking)"}`
+          note: `Follow-up WO ${followup.id}${validatedSlot ? ` scheduled for ${validatedSlot.start}${forcedByAdmin ? " (custom time)" : ""}` : " (unscheduled — needs manual booking)"}`
         });
         await workOrders.appendHistory(followup.id, {
           action: "created_as_followup",
