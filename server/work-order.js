@@ -1307,6 +1307,20 @@ function renderOnSiteLines(lines, { readonly }) {
     li.dataset.idx = String(idx);
     const overridden = line.overridePrice != null && Number(line.overridePrice) !== Number(line.originalPrice);
     const priceVal = line.overridePrice != null ? Number(line.overridePrice) : Number(line.originalPrice);
+    // Resolve inheritance chip + clean note. Handles both new
+    // (source.inheritedFromWoId) and legacy ([from WO-X]-prefixed note)
+    // shapes. Customer renderers (approve.js, quote-pdf.js) strip
+    // the same legacy prefix but never render the chip.
+    let inheritedFrom = line.source?.inheritedFromWoId || "";
+    let displayNote = String(line.note || "");
+    const legacyMatch = displayNote.match(/^\[(?:inherited from|from)\s+(WO-[A-Z0-9-]+)\]\s*(.*)$/i);
+    if (legacyMatch) {
+      if (!inheritedFrom) inheritedFrom = legacyMatch[1];
+      displayNote = (legacyMatch[2] || "").trim();
+    }
+    const inheritChip = inheritedFrom ? `<p class="wo-on-site-line-inherit" aria-label="Inherited from parent visit">↩️ inherited from ${escapeHtml(inheritedFrom)}</p>` : "";
+    const noteEl = displayNote ? `<p class="wo-on-site-line-note">${escapeHtml(displayNote)}</p>` : "";
+
     if (readonly) {
       li.innerHTML = `
         <div class="wo-on-site-line-head">
@@ -1318,7 +1332,8 @@ function renderOnSiteLines(lines, { readonly }) {
           <span class="wo-on-site-line-meta">${woFormatMoney(priceVal)}${overridden ? ' <em class="wo-on-site-overridden">override</em>' : ""}</span>
           <span class="wo-on-site-line-total">${woFormatMoney(woLineRowTotal(line))}</span>
         </div>
-        ${line.note ? `<p class="wo-on-site-line-note">${escapeHtml(line.note)}</p>` : ""}
+        ${inheritChip}
+        ${noteEl}
       `;
     } else {
       li.innerHTML = `
@@ -1337,7 +1352,8 @@ function renderOnSiteLines(lines, { readonly }) {
           </label>
           <span class="wo-on-site-line-total">${woFormatMoney(woLineRowTotal(line))}</span>
         </div>
-        ${line.note ? `<p class="wo-on-site-line-note">${escapeHtml(line.note)}</p>` : ""}
+        ${inheritChip}
+        ${noteEl}
       `;
     }
     linesEl.appendChild(li);

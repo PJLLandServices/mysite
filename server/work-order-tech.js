@@ -3515,7 +3515,23 @@ function renderOnSiteBuilder() {
         </label>
         <span class="tech-on-site-line-total">${formatMoney(lineRowTotal(line))}</span>
       </div>
-      ${line.note ? `<p class="tech-on-site-line-note">${escapeHtml(line.note)}</p>` : ""}
+      ${(() => {
+        // Resolve inheritance breadcrumb from source.inheritedFromWoId
+        // (new shape) OR parse it from line.note's legacy prefix (records
+        // written before the 2026-06-02 fix). Either way, render the
+        // chip + a clean note. Customer-facing renderers do the same
+        // strip but skip the chip.
+        let inheritedFrom = line.source?.inheritedFromWoId || "";
+        let displayNote = String(line.note || "");
+        const legacyMatch = displayNote.match(/^\[(?:inherited from|from)\s+(WO-[A-Z0-9-]+)\]\s*(.*)$/i);
+        if (legacyMatch) {
+          if (!inheritedFrom) inheritedFrom = legacyMatch[1];
+          displayNote = (legacyMatch[2] || "").trim();
+        }
+        const chip = inheritedFrom ? `<p class="tech-on-site-line-inherit" aria-label="Inherited from parent visit">↩️ inherited from ${escapeHtml(inheritedFrom)}</p>` : "";
+        const noteEl = displayNote ? `<p class="tech-on-site-line-note">${escapeHtml(displayNote)}</p>` : "";
+        return chip + noteEl;
+      })()}
     `;
     linesEl.appendChild(li);
   });

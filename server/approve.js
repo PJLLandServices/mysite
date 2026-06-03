@@ -147,6 +147,15 @@ function render(q) {
     document.getElementById("approveReturnId").textContent = q.id;
   }
 
+  // Strip the admin-only "[inherited from WO-XXX]" / "[from WO-XXX]"
+  // breadcrumb from line.note before showing to the customer. New
+  // follow-ups (post 2026-06-02 fix) store the breadcrumb in
+  // source.inheritedFromWoId instead, so line.note is clean. This
+  // regex covers the legacy polluted records that were written
+  // before the fix.
+  function customerNote(raw) {
+    return String(raw || "").replace(/^\[(?:inherited from|from)\s+WO-[A-Z0-9-]+\]\s*/i, "").trim();
+  }
   // Line items.
   linesEl.innerHTML = "";
   for (const l of q.lineItems || []) {
@@ -154,10 +163,11 @@ function render(q) {
     row.className = "approve-line";
     const price = (l.overridePrice != null && Number.isFinite(Number(l.overridePrice))) ? Number(l.overridePrice) : Number(l.price || l.originalPrice || 0);
     const lineTotal = Number.isFinite(Number(l.lineTotal)) ? Number(l.lineTotal) : price * (Number(l.qty) || 1);
+    const cleanNote = customerNote(l.note);
     row.innerHTML = `
       <div class="approve-line-desc">
         <strong>${escapeHtml(l.label || l.key || "Line")}</strong>
-        ${l.note ? `<p class="approve-line-note">${escapeHtml(l.note)}</p>` : ""}
+        ${cleanNote ? `<p class="approve-line-note">${escapeHtml(cleanNote)}</p>` : ""}
       </div>
       <div class="approve-line-qty">× ${escapeHtml(String(l.qty || 1))}</div>
       <div class="approve-line-amount">${fmt(lineTotal)}</div>

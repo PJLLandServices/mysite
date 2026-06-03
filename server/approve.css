@@ -141,14 +141,27 @@
 .approve-line {
   display: grid;
   grid-template-columns: 1fr auto auto;
-  gap: 12px;
-  padding: 12px 0;
+  gap: 14px;
+  padding: 16px 0;
   align-items: baseline;
   border-bottom: 1px solid #F1F1E8;
+  line-height: 1.45;
 }
 .approve-line:last-child { border-bottom: 0; }
-.approve-line-desc strong { color: #1F2A22; font-size: 15px; }
-.approve-line-note { margin: 4px 0 0; color: #777; font-size: 13px; }
+.approve-line-desc strong {
+  display: block;
+  color: #1F2A22;
+  font-size: 15px;
+  font-weight: 600;
+  margin-bottom: 2px;
+}
+.approve-line-note {
+  margin: 6px 0 0;
+  color: #6B6B5E;
+  font-size: 13px;
+  line-height: 1.5;
+  font-style: italic;
+}
 .approve-line-qty { color: #777; font-size: 13px; font-variant-numeric: tabular-nums; }
 .approve-line-amount { color: #1F2A22; font-weight: 600; font-variant-numeric: tabular-nums; }
 

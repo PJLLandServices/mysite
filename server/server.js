@@ -7536,7 +7536,17 @@ async function handleApi(req, res, pathname) {
           ...followup.onSiteQuote,
           status: "draft",
           lastBuiltAt: new Date().toISOString(),
-          builderLineItems: parentLines.map((l) => ({ ...l, note: l.note ? `[from ${parent.id}] ${l.note}` : `[inherited from ${parent.id}]` }))
+          // Store the "inherited from <parentId>" breadcrumb on
+          // source.inheritedFromWoId, NOT on line.note — note is
+          // customer-facing (rendered on /approve and the quote PDF).
+          // Admin renderers (work-order.js, work-order-tech.js) detect
+          // source.inheritedFromWoId and surface a small chip; customer
+          // renderers ignore the source field entirely. line.note stays
+          // for any real, customer-relevant context the tech added.
+          builderLineItems: parentLines.map((l) => ({
+            ...l,
+            source: { ...(l.source || {}), inheritedFromWoId: parent.id }
+          }))
         } : followup.onSiteQuote
       };
       if (validatedSlot) {
@@ -7733,7 +7743,12 @@ async function handleApi(req, res, pathname) {
       }
       const enrichedAdds = toAdd.map((l) => ({
         ...l,
-        note: l.note ? `[from ${parent.id}] ${l.note}` : `[inherited from ${parent.id}]`
+        // Breadcrumb on source, NOT on note. See the parallel write at
+        // the followup-create endpoint for rationale: note is rendered
+        // to the customer on /approve and the PDF — putting "[inherited
+        // from WO-...]" there leaks an internal admin breadcrumb. The
+        // source.inheritedFromWoId field is admin-only.
+        source: { ...(l.source || {}), inheritedFromWoId: parent.id }
       }));
       const nextLines = [...enrichedAdds, ...childLines];
       const updated = await workOrders.update(id, {
@@ -11715,6 +11730,13 @@ async function handleApi(req, res, pathname) {
         };
         if (inSource.baseline === true) cleanedSource.baseline = true;
         if (inSource.aiBonusCredit === true) cleanedSource.aiBonusCredit = true;
+        // Preserve the admin-only "inherited from parent WO" breadcrumb
+        // across builder PATCHes so it survives a tech edit + save round
+        // trip. Without this, every save would strip the field and the
+        // admin chip would disappear after the first PATCH.
+        if (typeof inSource.inheritedFromWoId === "string" && inSource.inheritedFromWoId) {
+          cleanedSource.inheritedFromWoId = inSource.inheritedFromWoId.slice(0, 40);
+        }
         cleaned.push({
           key: custom ? null : key,
           label: typeof raw.label === "string" ? raw.label.slice(0, 200) : (cat ? cat.label : "Custom line"),

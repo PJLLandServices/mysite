@@ -168,6 +168,11 @@ function generateQuotePdf(quote, opts = {}) {
 
   let rowY = tableTop + 22;
   doc.font("Helvetica").fontSize(10).fillColor(PJL_TEXT);
+  // Strip the admin-only "[inherited from WO-XXX]" breadcrumb from
+  // line.note for customer-facing PDF output. New writes (post
+  // 2026-06-02) store the breadcrumb on source.inheritedFromWoId
+  // instead — line.note is clean. This handles legacy polluted records.
+  const customerNoteForPdf = (raw) => String(raw || "").replace(/^\[(?:inherited from|from)\s+WO-[A-Z0-9-]+\]\s*/i, "").trim();
   for (const line of quote.lineItems || []) {
     const label = line.label || line.key || "Line";
     const qty = Number(line.qty) || 1;
@@ -175,9 +180,10 @@ function generateQuotePdf(quote, opts = {}) {
       : (Number.isFinite(Number(line.price)) ? Number(line.price)
         : Number(line.originalPrice) || 0);
     const lineTotal = Number.isFinite(Number(line.lineTotal)) ? Number(line.lineTotal) : (unitPrice * qty);
+    const cleanNote = customerNoteForPdf(line.note);
     doc.text(label, colDesc, rowY, { width: 250 });
-    if (line.note) {
-      doc.fontSize(9).fillColor(PJL_MUTED).text(line.note, colDesc, doc.y + 1, { width: 250 });
+    if (cleanNote) {
+      doc.fontSize(9).fillColor(PJL_MUTED).text(cleanNote, colDesc, doc.y + 1, { width: 250 });
       doc.fontSize(10).fillColor(PJL_TEXT);
     }
     doc.text(String(qty), colQty, rowY, { width: 50, align: "right" });

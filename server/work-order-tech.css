@@ -2014,6 +2014,18 @@ body.tech-lightbox-open { overflow: hidden; }
   line-height: 1.4;
   font-style: italic;
 }
+/* Admin-only breadcrumb showing the parent WO ID for inherited lines.
+   Customer-facing renderers (server/approve.js, server/lib/quote-pdf.js)
+   read line.note only — they never see this. Distinct from the note
+   styling (muted blue tint, smaller) so Patrick can scan at a glance. */
+.tech-on-site-line-inherit {
+  margin: 4px 0 0;
+  font-size: 11px;
+  color: #5A6E7F;
+  line-height: 1.3;
+  letter-spacing: 0.02em;
+  font-family: ui-monospace, "SF Mono", Consolas, monospace;
+}
 .tech-on-site-overridden {
   font-style: normal;
   font-weight: 700;
