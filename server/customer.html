@@ -101,6 +101,17 @@
             <label>Spouse phone</label>
             <input type="tel" data-field="spousePhone" maxlength="40">
           </div>
+          <!-- Spouse-CC toggle. When on, every invoice email + SMS for
+               this customer ALSO goes to the spouse contact above.
+               Pre-checks the per-send "CC spouse" checkbox on the
+               invoice admin page; Patrick can still override per-send. -->
+          <div class="customer-summary-field customer-summary-field--toggle">
+            <label class="customer-cc-toggle">
+              <input type="checkbox" data-field="copySpouseOnInvoices" data-field-type="boolean">
+              <span>📋 CC spouse on invoices + payment reminders</span>
+            </label>
+            <p class="customer-cc-toggle-help">When enabled, invoices and SMS reminders also go to the spouse's email + phone above. Patrick can still uncheck "CC spouse" on individual sends from the invoice page.</p>
+          </div>
           <div class="customer-summary-field">
             <label>Billing address (if different)</label>
             <textarea data-field="billingAddress" rows="2" maxlength="400"></textarea>

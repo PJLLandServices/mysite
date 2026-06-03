@@ -18,6 +18,11 @@ function fmtDate(iso) {
 }
 
 let currentInvoice = null;
+// Cached customer record for spouse-CC fields. Fetched after the
+// invoice loads so the three per-send "CC spouse" toggles can pre-fill
+// from copySpouseOnInvoices + show the spouseEmail / spousePhone
+// disclosure text. Null when the invoice has no customerId.
+let currentCustomer = null;
 
 let currentDisclaimerObjects = [];
 
@@ -31,7 +36,79 @@ async function load() {
   }
   currentInvoice = data.invoice;
   currentDisclaimerObjects = Array.isArray(data.disclaimerObjects) ? data.disclaimerObjects : [];
+  // Fetch the customer record so the spouse-CC toggles can pre-fill
+  // from copySpouseOnInvoices. Non-fatal — invoices without a
+  // customerId or whose customer fetch fails just hide the toggles.
+  currentCustomer = null;
+  if (currentInvoice.customerId) {
+    try {
+      const cr = await fetch(`/api/customer/${encodeURIComponent(currentInvoice.customerId)}`, { cache: "no-store" });
+      const cd = await cr.json().catch(() => ({}));
+      if (cd && cd.ok && cd.customer) currentCustomer = cd.customer;
+    } catch (_) { /* tolerate */ }
+  }
   render(data.invoice);
+  syncSpouseToggles();
+}
+
+// Initialize the three per-send CC-spouse toggles from the cached
+// customer record. Called after every render. Each toggle is hidden
+// when the spouse channel (email or phone) is empty; visible + pre-
+// checked when copySpouseOnInvoices is true.
+function syncSpouseToggles() {
+  const cust = currentCustomer || {};
+  const flag = cust.copySpouseOnInvoices === true;
+  const spouseEmail = (cust.spouseEmail || "").trim();
+  const spousePhone = (cust.spousePhone || "").trim();
+
+  function wire(toggleId, checkboxId, disclosureId, channelValue, label) {
+    const toggle = document.getElementById(toggleId);
+    const checkbox = document.getElementById(checkboxId);
+    const disclosure = document.getElementById(disclosureId);
+    if (!toggle || !checkbox || !disclosure) return;
+    if (!channelValue) {
+      // No spouse channel of this type — hide the whole row.
+      toggle.hidden = true;
+      disclosure.hidden = true;
+      checkbox.checked = false;
+      return;
+    }
+    toggle.hidden = false;
+    checkbox.checked = flag;
+    if (flag) {
+      disclosure.hidden = false;
+      disclosure.textContent = `Will also CC: ${channelValue}`;
+    } else {
+      disclosure.hidden = true;
+    }
+    // Re-check the disclosure when the checkbox flips.
+    if (!checkbox.dataset.spouseWired) {
+      checkbox.dataset.spouseWired = "1";
+      checkbox.addEventListener("change", () => {
+        if (checkbox.checked) {
+          disclosure.hidden = false;
+          disclosure.textContent = `Will also CC: ${channelValue}`;
+        } else {
+          disclosure.hidden = true;
+        }
+      });
+    }
+  }
+  wire("invoiceSendSpouseToggle", "invoiceSendSpouseCheckbox", "invoiceSendSpouseDisclosure", spouseEmail, "spouse email");
+  wire("invoiceReminderSpouseToggle", "invoiceReminderSpouseCheckbox", "invoiceReminderSpouseDisclosure", spousePhone, "spouse phone");
+  wire("invoiceJunkWarningSpouseToggle", "invoiceJunkWarningSpouseCheckbox", "invoiceJunkWarningSpouseDisclosure", spousePhone, "spouse phone");
+}
+
+// Read the checkbox state for a given send action. Returns boolean
+// when the toggle is visible, null when hidden (server interprets
+// null as "use the customer's profile flag default"). The latter
+// case shouldn't happen if the toggles are wired correctly, but
+// stays as defense-in-depth.
+function readSpouseToggle(checkboxId, toggleId) {
+  const toggle = document.getElementById(toggleId);
+  const checkbox = document.getElementById(checkboxId);
+  if (!toggle || !checkbox || toggle.hidden) return null;
+  return checkbox.checked;
 }
 
 function render(inv) {
@@ -320,7 +397,13 @@ document.getElementById("invoiceSendBtn")?.addEventListener("click", async () =>
   status.textContent = "";
   status.dataset.kind = "info";
   try {
-    const r = await fetch(`/api/invoices/${encodeURIComponent(idFromPath)}/${action}`, { method: "POST" });
+    // Per-send "CC spouse" override. Read the checkbox; null when hidden.
+    const includeSpouse = readSpouseToggle("invoiceSendSpouseCheckbox", "invoiceSendSpouseToggle");
+    const r = await fetch(`/api/invoices/${encodeURIComponent(idFromPath)}/${action}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(includeSpouse === null ? {} : { includeSpouse })
+    });
     const data = await r.json().catch(() => ({}));
     if (!r.ok || !data.ok) throw new Error((data.errors && data.errors[0]) || "Send failed.");
     currentInvoice = data.invoice;
@@ -467,10 +550,12 @@ document.getElementById("invoiceReminderBtn")?.addEventListener("click", async (
   status.dataset.kind = "info";
 
   try {
+    const includeSpouse = readSpouseToggle("invoiceReminderSpouseCheckbox", "invoiceReminderSpouseToggle");
+    const baseBody = includeSpouse === null ? {} : { includeSpouse };
     const r = await fetch(`/api/invoices/${encodeURIComponent(idFromPath)}/send-reminder`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({})
+      body: JSON.stringify(baseBody)
     });
     const data = await r.json().catch(() => ({}));
 
@@ -499,7 +584,7 @@ document.getElementById("invoiceReminderBtn")?.addEventListener("click", async (
         const r2 = await fetch(`/api/invoices/${encodeURIComponent(idFromPath)}/send-reminder`, {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ force: true })
+          body: JSON.stringify({ ...baseBody, force: true })
         });
         const data2 = await r2.json().catch(() => ({}));
         if (r2.ok && data2.ok) {
@@ -656,7 +741,9 @@ document.getElementById("invoiceJunkWarningBtn")?.addEventListener("click", asyn
   };
 
   try {
-    const { r, data } = await post({});
+    const includeSpouse = readSpouseToggle("invoiceJunkWarningSpouseCheckbox", "invoiceJunkWarningSpouseToggle");
+    const baseBody = includeSpouse === null ? {} : { includeSpouse };
+    const { r, data } = await post(baseBody);
 
     if (r.ok && data.ok) {
       status.textContent = `✓ Warning sent at ${fmtDate(data.sentAt)}.`;
@@ -682,7 +769,7 @@ document.getElementById("invoiceJunkWarningBtn")?.addEventListener("click", asyn
         btn.disabled = true;
         btn.textContent = "Sending…";
         status.textContent = "";
-        const { r: r2, data: data2 } = await post({ force: true });
+        const { r: r2, data: data2 } = await post({ ...baseBody, force: true });
         if (r2.ok && data2.ok) {
           status.textContent = `✓ Warning sent at ${fmtDate(data2.sentAt)} (override).`;
           status.dataset.kind = "ok";

@@ -431,6 +431,35 @@ Invoices
                                                    missing token so ID existence isn't
                                                    leaked. (Invoice SMS brief, May 2026)
 
+  Invoice CC-spouse (Spouse-CC brief, June 2026):
+    All 5 invoice send paths (manual email /send + /resend, auto-fire
+    "invoice ready" SMS, manual reminder SMS, auto-fire and manual
+    junk-mail warning SMS) optionally CC the customer's spouse contact.
+    Customer schema:
+      customer.copySpouseOnInvoices: bool — profile flag, default false
+      customer.notificationPrefs.spouseTextReminders: bool — CASL gate
+        for spouse SMS, default true
+      customer.spouseEmail / customer.spousePhone — already-existing
+        first-class fields
+    Endpoints accept body { includeSpouse: bool? }:
+      true  → force-include spouse this send (overrides profile flag off)
+      false → force-skip spouse this send (overrides profile flag on)
+      null / omitted → use the customer's profile flag default
+    Lib helper: notify-customer.js → resolveSpouseRecipients(invoice, includeSpouse)
+      returns { spouseEmail, spousePhone, smsAllowed }.
+    Spouse SMS sends fire AFTER the primary success (so a primary
+    Twilio failure doesn't leave the spouse hanging). Each spouse
+    attempt logs to invoices.history[] with a *_spouse action suffix
+    (customer_sms_sent_spouse, customer_reminder_sent_spouse,
+    customer_junk_warning_sent_spouse, plus _failed_spouse /
+    _skipped_spouse variants).
+    Email send adds the spouseEmail as a `cc:` on the nodemailer
+    call — single round-trip, both recipients see each other.
+    Admin UI: /admin/customer/:id has the profile-level checkbox;
+    /admin/invoice/:id has per-send checkboxes on each send card
+    that pre-fill from the profile flag and show a "Will also CC:
+    spouse@email.com" disclosure when checked.
+
 Projects
   GET    /api/projects                           ← filter ?status, ?propertyId
   GET    /api/projects/:id                       ← includes attached material lists

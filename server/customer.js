@@ -84,7 +84,11 @@ function applyToForm(customer) {
   for (const el of editableFields) {
     const field = el.dataset.field;
     const value = customer[field];
-    if (el.tagName === "SELECT") {
+    if (el.dataset.fieldType === "boolean") {
+      // Checkboxes: read the boolean. Defaults to false for missing /
+      // legacy records.
+      el.checked = value === true;
+    } else if (el.tagName === "SELECT") {
       el.value = value || "lead";
     } else if (el.tagName === "TEXTAREA") {
       el.value = value || "";
@@ -303,11 +307,18 @@ tabHeaders.forEach((header) => {
 // ---- Editable fields ----------------------------------------------
 
 editableFields.forEach((el) => {
-  el.addEventListener("input", () => {
+  const isBoolean = el.dataset.fieldType === "boolean";
+  // Booleans (checkboxes) fire "change", not "input". Listen for both
+  // so the same handler covers strings AND checkboxes.
+  const evt = isBoolean ? "change" : "input";
+  el.addEventListener(evt, () => {
     if (!original) return;
     const field = el.dataset.field;
-    const newValue = el.value;
-    const oldValue = original[field] == null ? "" : original[field];
+    const newValue = isBoolean ? el.checked : el.value;
+    const oldValueRaw = original[field];
+    const oldValue = isBoolean
+      ? (oldValueRaw === true)
+      : (oldValueRaw == null ? "" : oldValueRaw);
     if (newValue === oldValue) {
       delete pendingPatch[field];
     } else {

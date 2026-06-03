@@ -140,6 +140,14 @@
           <section class="invoice-action-card" id="invoiceSendCard">
             <span class="invoice-action-label">Email to customer</span>
             <p class="invoice-action-meta" id="invoiceSentMeta"></p>
+            <!-- CC-spouse per-send checkbox. Pre-checked when the customer's
+                 copySpouseOnInvoices profile flag is on. Patrick can override
+                 per-send. Hidden when the customer has no spouseEmail on file. -->
+            <label class="invoice-action-cc-toggle" id="invoiceSendSpouseToggle" hidden>
+              <input type="checkbox" id="invoiceSendSpouseCheckbox">
+              <span>CC spouse on this invoice</span>
+            </label>
+            <p class="invoice-action-cc-disclosure" id="invoiceSendSpouseDisclosure" hidden></p>
             <button type="button" id="invoiceSendBtn" class="invoice-action-btn invoice-action-btn--amber">Send to customer</button>
             <p class="invoice-action-status" id="invoiceSendStatus"></p>
           </section>
@@ -164,6 +172,11 @@
           <section class="invoice-action-card" id="invoiceReminderCard">
             <span class="invoice-action-label">Reminder SMS</span>
             <p class="invoice-action-meta" id="invoiceReminderMeta">—</p>
+            <label class="invoice-action-cc-toggle" id="invoiceReminderSpouseToggle" hidden>
+              <input type="checkbox" id="invoiceReminderSpouseCheckbox">
+              <span>CC spouse on this reminder</span>
+            </label>
+            <p class="invoice-action-cc-disclosure" id="invoiceReminderSpouseDisclosure" hidden></p>
             <button type="button" id="invoiceReminderBtn" class="invoice-action-btn">📱 Send reminder SMS</button>
             <p class="invoice-action-status" id="invoiceReminderStatus"></p>
             <ul class="invoice-action-list" id="invoiceReminderHistory" hidden></ul>
@@ -179,6 +192,11 @@
           <section class="invoice-action-card" id="invoiceJunkWarningCard">
             <span class="invoice-action-label">Junk-mail warning SMS</span>
             <p class="invoice-action-meta" id="invoiceJunkWarningMeta">—</p>
+            <label class="invoice-action-cc-toggle" id="invoiceJunkWarningSpouseToggle" hidden>
+              <input type="checkbox" id="invoiceJunkWarningSpouseCheckbox">
+              <span>CC spouse on this warning</span>
+            </label>
+            <p class="invoice-action-cc-disclosure" id="invoiceJunkWarningSpouseDisclosure" hidden></p>
             <button type="button" id="invoiceJunkWarningBtn" class="invoice-action-btn">📱 Send warning now</button>
             <p class="invoice-action-status" id="invoiceJunkWarningStatus"></p>
             <ul class="invoice-action-list" id="invoiceJunkWarningHistory" hidden></ul>

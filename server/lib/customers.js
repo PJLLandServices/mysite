@@ -110,10 +110,21 @@ function blankCustomer() {
     internalNotes: "",
     notificationPrefs: {
       textReminders: true,
+      // Spouse-CC SMS — gated independently from textReminders so a
+      // household can opt the primary out while the spouse stays
+      // subscribed (or vice versa). Defaults true. Only relevant when
+      // copySpouseOnInvoices is also true AND spousePhone is set.
+      spouseTextReminders: true,
       emailOnly: false,
       noMarketingTexts: false,
       overrides: {}
     },
+    // When true AND spouseEmail/spousePhone are populated, every
+    // invoice email + SMS that targets this customer ALSO goes to the
+    // spouse. Pre-checks the per-send "CC spouse" checkbox on the
+    // invoice admin page; Patrick can still override per-send.
+    // Default false — opt-in feature.
+    copySpouseOnInvoices: false,
     // Per-customer negotiated rate agreements — labour override (and
     // any future per-unit overrides) for repeat contractors with
     // standing fair-trade deals (e.g. GreenTree @ $85/hr). Sparse:
@@ -305,7 +316,8 @@ async function update(id, patch, { by = "admin", note = "", action = "updated" }
     "quickbooksId",
     "internalNotes",
     "notificationPrefs",
-    "negotiatedRates"
+    "negotiatedRates",
+    "copySpouseOnInvoices"
   ];
 
   const next = { ...current };

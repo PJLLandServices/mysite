@@ -5377,6 +5377,13 @@ async function handleApi(req, res, pathname) {
     const invId = decodeURIComponent(invoiceSendMatch[1]);
     const action = invoiceSendMatch[2]; // "send" or "resend"
     try {
+      // Per-send "CC spouse" override. Body shape: { includeSpouse: bool? }.
+      // null / undefined → use the customer's copySpouseOnInvoices profile
+      // flag. true / false → explicit per-send override.
+      const sendBody = await parseRequestBody(req).catch(() => ({}));
+      const includeSpouse = typeof sendBody?.includeSpouse === "boolean"
+        ? sendBody.includeSpouse
+        : null;
       const inv = await invoices.get(invId);
       if (!inv) return sendJson(res, 404, { ok: false, errors: ["Invoice not found."] });
 
@@ -5440,7 +5447,8 @@ async function handleApi(req, res, pathname) {
       // admin sees the underlying error. Status is NOT flipped on failure.
       await sendInvoiceToCustomer(renderInv, pdfBuffer, {
         resend: action === "resend",
-        viewLink
+        viewLink,
+        includeSpouse
       });
 
       // Build the patch for invoices.update(). For /send, flip to sent;
@@ -5488,7 +5496,10 @@ async function handleApi(req, res, pathname) {
       const JUNK_WARNING_DELAY_MS = 30 * 1000;
       setTimeout(() => {
         const { sendInvoiceJunkMailWarningSMS } = require("./lib/notify-customer");
-        sendInvoiceJunkMailWarningSMS({ invoiceId: invId })
+        // Forward the per-send includeSpouse override to the junk-mail
+        // warning so the spouse-CC decision is consistent across the
+        // email + the warning SMS that fires 30s later.
+        sendInvoiceJunkMailWarningSMS({ invoiceId: invId, includeSpouse })
           .catch((err) => console.warn(`[invoice-${action}] junk-mail warning SMS failed for ${invId}:`, err?.message));
       }, JUNK_WARNING_DELAY_MS);
 
@@ -5527,8 +5538,11 @@ async function handleApi(req, res, pathname) {
     try {
       const payload = await parseRequestBody(req).catch(() => ({}));
       const force = payload?.force === true;
+      const includeSpouse = typeof payload?.includeSpouse === "boolean"
+        ? payload.includeSpouse
+        : null;
       const notifyCustomer = require("./lib/notify-customer");
-      const result = await notifyCustomer.sendInvoiceReminderSMS({ invoiceId: invId, force });
+      const result = await notifyCustomer.sendInvoiceReminderSMS({ invoiceId: invId, force, includeSpouse });
 
       if (result.ok) {
         // Return the freshly-updated invoice so the UI can re-render the
@@ -5620,8 +5634,11 @@ async function handleApi(req, res, pathname) {
     try {
       const payload = await parseRequestBody(req).catch(() => ({}));
       const force = payload?.force === true;
+      const includeSpouse = typeof payload?.includeSpouse === "boolean"
+        ? payload.includeSpouse
+        : null;
       const { sendInvoiceJunkMailWarningSMS } = require("./lib/notify-customer");
-      const result = await sendInvoiceJunkMailWarningSMS({ invoiceId: invId, force });
+      const result = await sendInvoiceJunkMailWarningSMS({ invoiceId: invId, force, includeSpouse });
 
       if (result.ok) {
         const updated = await invoices.get(invId);

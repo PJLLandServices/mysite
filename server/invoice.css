@@ -208,6 +208,32 @@
 .invoice-action-status { margin: 0; font-size: 12px; }
 .invoice-action-status[data-kind="ok"]    { color: #1B4D2E; font-weight: 600; }
 .invoice-action-status[data-kind="error"] { color: #C03A2C; font-weight: 600; }
+.invoice-action-status[data-kind="warn"]  { color: #7A5311; font-weight: 600; }
+
+/* Per-send "CC spouse" toggle. Pre-checked when the customer's profile
+   flag copySpouseOnInvoices is on; Patrick can override per-send. The
+   disclosure underneath spells out which email/phone will be CC'd so
+   the action is unmistakable before tapping send. */
+.invoice-action-cc-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #2A3A2E;
+  cursor: pointer;
+  margin: -4px 0 -2px;
+}
+.invoice-action-cc-toggle input[type="checkbox"] {
+  margin: 0;
+  cursor: pointer;
+  accent-color: #1B4D2E;
+}
+.invoice-action-cc-disclosure {
+  margin: 0 0 0 20px;
+  font-size: 11px;
+  color: #555;
+  font-style: italic;
+}
 
 .invoice-action-select {
   font-family: inherit;

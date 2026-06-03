@@ -499,10 +499,17 @@ async function sendInvoiceToCustomer(invoice, pdfBuffer, opts = {}) {
   const subjectPrefix = opts.resend ? "Invoice reminder" : "Your invoice";
   const subject = `${subjectPrefix} ${invoice.id || ""} — ${totalFormatted} — PJL Land Services`;
 
+  // Spouse CC — opts.includeSpouse can override the profile flag
+  // (true / false / null = use profile default).
+  const spouseRecip = await resolveSpouseRecipients(invoice, opts.includeSpouse);
+  const ccList = [];
+  if (spouseRecip.spouseEmail) ccList.push(spouseRecip.spouseEmail);
+
   try {
     const info = await transporter.sendMail({
       from: `"PJL Land Services" <${process.env.CUSTOMER_EMAIL || "info@pjllandservices.com"}>`,
       to,
+      ...(ccList.length ? { cc: ccList } : {}),
       replyTo: process.env.CUSTOMER_EMAIL || "info@pjllandservices.com",
       subject,
       html,
@@ -513,8 +520,8 @@ async function sendInvoiceToCustomer(invoice, pdfBuffer, opts = {}) {
         contentType: "application/pdf"
       }]
     });
-    console.log(`[invoice-email] sent invoice=${invoice.id} to=${to} id=${info.messageId}${opts.resend ? " (resend)" : ""}`);
-    return { ok: true, messageId: info.messageId };
+    console.log(`[invoice-email] sent invoice=${invoice.id} to=${to}${ccList.length ? ` cc=${ccList.join(",")}` : ""} id=${info.messageId}${opts.resend ? " (resend)" : ""}`);
+    return { ok: true, messageId: info.messageId, ccSpouse: ccList.length > 0 };
   } catch (error) {
     console.error(`[invoice-email] failed for invoice=${invoice.id}:`, error.message);
     throw new Error(`Email send failed: ${error.message}`);
@@ -1240,13 +1247,139 @@ async function resolveSmsAllowed(invoice) {
   }
 }
 
+// Resolve the spouse-CC recipients for an invoice. Looks up the
+// customer record to read copySpouseOnInvoices + spouse contact +
+// spouseTextReminders CASL gate.
+//
+// `includeSpouse` (caller override):
+//   - true  → force-include spouse even if profile flag is off
+//   - false → force-skip spouse even if profile flag is on
+//   - null/undefined → use the profile's copySpouseOnInvoices flag
+//
+// Returns:
+//   { spouseEmail, spousePhone, smsAllowed }
+// Where spouseEmail/spousePhone are empty strings when no spouse is
+// to be CC'd (callers can do `if (recip.spouseEmail) sendCc(...)`).
+// smsAllowed gates ONLY the SMS path — emails ignore it.
+// Fire an invoice SMS to the spouse (parallel to the primary send).
+// Used by all three SMS paths (ready/reminder/junk-warning). Each
+// path passes its own action prefix so the history entry namespace
+// matches the primary's (`customer_sms_sent_spouse`, etc.).
+//
+// Returns { ok, sid?, error?, skipped? } so callers can include the
+// spouse-attempt result in their own return value if needed.
+async function fireSpouseInvoiceSms(invoice, body, opts) {
+  const {
+    includeSpouse,
+    actionSent,
+    actionFailed,
+    actionSkipped
+  } = opts || {};
+  const invoices = require("./invoices");
+  const recip = await resolveSpouseRecipients(invoice, includeSpouse);
+  // Not flagged for CC (profile flag off + no override true) — no-op,
+  // not even a skip entry (the absence of a flag isn't an "event").
+  if (!recip.spouseEmail && !recip.spousePhone) return null;
+  if (!recip.spousePhone) {
+    await invoices.appendHistory(invoice.id, {
+      action: actionSkipped,
+      by: "system",
+      note: "Spouse-CC enabled but no spouse phone on customer record."
+    });
+    return { ok: true, skipped: "no_spouse_phone" };
+  }
+  if (!recip.smsAllowed) {
+    await invoices.appendHistory(invoice.id, {
+      action: actionSkipped,
+      by: "system",
+      note: "Spouse opted out (notificationPrefs.spouseTextReminders=false)."
+    });
+    return { ok: true, skipped: "spouse_opted_out" };
+  }
+  if (!smsConfigured()) {
+    return { ok: false, skipped: "no_twilio_config" };
+  }
+  const sid = process.env.TWILIO_ACCOUNT_SID;
+  const token = process.env.TWILIO_AUTH_TOKEN;
+  const url = `https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(sid)}/Messages.json`;
+  const auth = Buffer.from(`${sid}:${token}`).toString("base64");
+  const payload = new URLSearchParams({
+    To: recip.spousePhone,
+    From: process.env.TWILIO_FROM_NUMBER,
+    Body: body
+  });
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Authorization": `Basic ${auth}`, "Content-Type": "application/x-www-form-urlencoded" },
+      body: payload.toString()
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const errMsg = String(data?.message || `Twilio HTTP ${response.status}`).slice(0, 300);
+      console.error(`[invoice-sms-spouse] invoice=${invoice.id} Twilio rejected:`, response.status, errMsg);
+      try {
+        await invoices.appendHistory(invoice.id, {
+          action: actionFailed,
+          by: "system",
+          note: `Spouse SMS failed: ${errMsg}`
+        });
+      } catch (_) {}
+      return { ok: false, error: errMsg };
+    }
+    try {
+      await invoices.appendHistory(invoice.id, {
+        action: actionSent,
+        by: "system",
+        note: `Spouse SMS to ${recip.spousePhone} (sid ${data?.sid || "unknown"})`
+      });
+    } catch (_) {}
+    console.log(`[invoice-sms-spouse] invoice=${invoice.id} sent to=${recip.spousePhone} sid=${data?.sid}`);
+    return { ok: true, sid: data?.sid };
+  } catch (error) {
+    const errMsg = String(error?.message || "network/runtime error").slice(0, 300);
+    console.error(`[invoice-sms-spouse] invoice=${invoice.id} failed:`, errMsg);
+    try {
+      await invoices.appendHistory(invoice.id, {
+        action: actionFailed,
+        by: "system",
+        note: `Spouse SMS failed: ${errMsg}`
+      });
+    } catch (_) {}
+    return { ok: false, error: errMsg };
+  }
+}
+
+async function resolveSpouseRecipients(invoice, includeSpouse) {
+  const empty = { spouseEmail: "", spousePhone: "", smsAllowed: false };
+  if (!invoice?.customerId) return empty;
+  try {
+    const customers = require("./customers");
+    const cust = await customers.get(invoice.customerId);
+    if (!cust) return empty;
+    // Decide whether to include based on caller override + profile flag.
+    let include;
+    if (includeSpouse === true) include = true;
+    else if (includeSpouse === false) include = false;
+    else include = cust.copySpouseOnInvoices === true;
+    if (!include) return empty;
+    return {
+      spouseEmail: String(cust.spouseEmail || "").trim(),
+      spousePhone: String(cust.spousePhone || "").trim(),
+      smsAllowed: cust?.notificationPrefs?.spouseTextReminders !== false
+    };
+  } catch (_err) {
+    return empty;
+  }
+}
+
 // Public API. Reads the invoice fresh at send time (so customer phone
 // changes between schedule and fire are picked up; void status aborts).
 // Returns one of:
 //   { ok: true, skipped: <reason> }   — opted out / no phone / voided / paid
 //   { ok: true, sid }                  — Twilio accepted the message
 //   { ok: false, error }               — Twilio rejected; history stamped
-async function sendInvoiceReadySMS({ invoiceId } = {}) {
+async function sendInvoiceReadySMS({ invoiceId, includeSpouse } = {}) {
   if (!invoiceId) return { ok: false, error: "missing invoiceId" };
   const invoices = require("./invoices");
   const invoice = await invoices.get(invoiceId);
@@ -1364,7 +1497,17 @@ async function sendInvoiceReadySMS({ invoiceId } = {}) {
       note: `Sent to ${to} (sid ${data?.sid || "unknown"})`
     });
     console.log(`[invoice-sms] invoice=${invoiceId} sent to=${to} sid=${data?.sid}`);
-    return { ok: true, sid: data?.sid };
+    // Spouse-CC: fire AFTER the primary success (so a primary
+    // Twilio failure doesn't leave the spouse hanging without a
+    // matching primary). The spouse send is independent — its own
+    // history entries, doesn't block or unwind the primary.
+    const spouseResult = await fireSpouseInvoiceSms(invoice, body, {
+      includeSpouse,
+      actionSent: "customer_sms_sent_spouse",
+      actionFailed: "customer_sms_failed_spouse",
+      actionSkipped: "customer_sms_skipped_spouse"
+    });
+    return { ok: true, sid: data?.sid, spouse: spouseResult };
   } catch (error) {
     const errMsg = String(error?.message || "network/runtime error").slice(0, 300);
     console.error(`[invoice-sms] invoice=${invoiceId} failed:`, errMsg);
@@ -1482,7 +1625,7 @@ async function appendReminderHistoryEntry(invoiceId, entry) {
 // The server's POST /api/invoices/:id/send-reminder endpoint maps these
 // to HTTP status codes (404 for not_found, 429 for rate_limited, 409 for
 // the skip conditions, 200 for success, 502 for Twilio failures).
-async function sendInvoiceReminderSMS({ invoiceId, force } = {}) {
+async function sendInvoiceReminderSMS({ invoiceId, force, includeSpouse } = {}) {
   if (!invoiceId) return { ok: false, error: "missing_invoice_id" };
   const invoices = require("./invoices");
   const settingsLib = require("./settings");
@@ -1613,7 +1756,17 @@ async function sendInvoiceReminderSMS({ invoiceId, force } = {}) {
       });
     } catch (_) { /* best-effort */ }
     console.log(`[invoice-reminder] invoice=${invoiceId} sent to=${to} sid=${data?.sid}`);
-    return { ok: true, sentAt, body, sid: data?.sid };
+    // Spouse-CC: fire after primary success. Logs to the invoice's
+    // top-level audit history (not customerReminderHistory — that
+    // array drives the 1-hour rate-limit gate, which should only
+    // track primary sends; the spouse is CC'd, not independent).
+    const spouseResult = await fireSpouseInvoiceSms(invoice, body, {
+      includeSpouse,
+      actionSent: "customer_reminder_sent_spouse",
+      actionFailed: "customer_reminder_failed_spouse",
+      actionSkipped: "customer_reminder_skipped_spouse"
+    });
+    return { ok: true, sentAt, body, sid: data?.sid, spouse: spouseResult };
   } catch (error) {
     const errMsg = String(error?.message || "network/runtime error").slice(0, 300);
     console.error(`[invoice-reminder] invoice=${invoiceId} failed:`, errMsg);
@@ -1686,7 +1839,7 @@ async function appendJunkMailWarningHistoryEntry(invoiceId, entry) {
 // fire "invoice ready" SMS already landed within the last 5 min (the
 // auto-fire body already mentions junk/spam). `force: true` bypasses
 // BOTH the 1-hour manual rate limit AND the autofire blackout.
-async function sendInvoiceJunkMailWarningSMS({ invoiceId, force } = {}) {
+async function sendInvoiceJunkMailWarningSMS({ invoiceId, force, includeSpouse } = {}) {
   if (!invoiceId) return { ok: false, error: "missing_invoice_id" };
   const invoices = require("./invoices");
   const settingsLib = require("./settings");
@@ -1826,7 +1979,14 @@ async function sendInvoiceJunkMailWarningSMS({ invoiceId, force } = {}) {
       });
     } catch (_) { /* best-effort */ }
     console.log(`[invoice-junk-warning] invoice=${invoiceId} sent to=${to} sid=${data?.sid}`);
-    return { ok: true, sentAt, body, sid: data?.sid };
+    // Spouse-CC.
+    const spouseResult = await fireSpouseInvoiceSms(invoice, body, {
+      includeSpouse,
+      actionSent: "customer_junk_warning_sent_spouse",
+      actionFailed: "customer_junk_warning_failed_spouse",
+      actionSkipped: "customer_junk_warning_skipped_spouse"
+    });
+    return { ok: true, sentAt, body, sid: data?.sid, spouse: spouseResult };
   } catch (error) {
     const errMsg = String(error?.message || "network/runtime error").slice(0, 300);
     console.error(`[invoice-junk-warning] invoice=${invoiceId} failed:`, errMsg);
@@ -1858,5 +2018,6 @@ module.exports = {
   sendInvoiceReminderSMS,
   sendInvoiceJunkMailWarningSMS,
   sendInvoiceReadySMS,
-  sweepPendingInvoiceSMS
+  sweepPendingInvoiceSMS,
+  resolveSpouseRecipients
 };
