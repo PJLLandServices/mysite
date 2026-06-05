@@ -13481,7 +13481,13 @@ Customer signature captured at ${new Date().toISOString()}.`;
         PALETTE_LIST,
         "Match every visible marking on the plan to one of these 20 entries by hex. Do not invent a 21st color.",
         "",
-        "WHAT COUNTS AS A ZONE MARKING — detect ALL of these forms:",
+        "DOMAIN RULE — read this first:",
+        "In irrigation plans, each ZONE represents one valve / one circuit. All sprinkler heads, lines, and area markings fed by a single valve are drawn in the SAME color. So:",
+        "- Each distinct color on the plan = exactly ONE zone.",
+        "- If you see the same color in multiple places (e.g., red circles in the upper-left AND red circles in the lower-right), that is STILL ONE zone — combine the locations into a single entry's `label` and `notes`.",
+        "- The total number of zones you return MUST equal the total number of distinct colors visible on the plan. Not the number of clusters. Not the number of markings.",
+        "",
+        "WHAT COUNTS AS A ZONE MARKING — detect ALL of these forms (then group by color):",
         "- Colored outlined areas (a polygon traced around a lawn/bed)",
         "- Colored filled areas (a solid-tinted region)",
         "- Colored solid OR dashed lines or paths (pipe runs, drip lines, boundary strokes, hatching)",
@@ -13492,25 +13498,24 @@ Customer signature captured at ${new Date().toISOString()}.`;
         "- Any other colored mark a human installer might have drawn",
         "",
         "CRITICAL DETECTION RULES — read carefully, this is where models usually fail:",
-        "1. For every visible marking on the plan — every line, every circle, every outlined area, every filled shape, every arrow, every annotation — identify which of the 20 colors it matches and produce one zone entry per distinct CLUSTER of markings.",
-        "2. Spatially separated groups of the SAME color are SEPARATE zones, not one. Red circles in the top-left and red circles in the bottom-right are TWO entries, both color=\"red\", with distinct labels and notes (e.g. labels \"front-left cluster\" and \"rear-right cluster\").",
-        "3. COUNT the distinct color clusters before writing JSON. If you see 12 distinct color groupings, return exactly 12 entries. If 15, return 15. Do not stop short.",
-        "4. Do not merge. Do not skip. Do not dedupe by color name — same color, different cluster = different entry.",
-        "5. Err HARD on the side of returning MORE entries. False positives are easy for the user to delete; missed zones are invisible to them.",
-        "6. Don't merge similar shades. Lime ≠ Green ≠ Dark Green. Sky Blue ≠ Blue ≠ Navy ≠ Cyan ≠ Teal. Red ≠ Dark Red ≠ Magenta ≠ Pink.",
-        "7. Don't skip faint or small markings. A single colored circle is still a zone.",
-        "8. If you see a colored marking that you cannot confidently snap to one of the 20 entries, OMIT THAT MARKING entirely rather than guessing — better to lose one than to label it wrong. Never invent off-list color names.",
+        "1. Identify every visible marking. Then GROUP them by color. Return exactly one entry per distinct color group.",
+        "2. COUNT the distinct colors before writing JSON. If you see 12 distinct colors, return exactly 12 entries. If 15, return 15. Do not stop short.",
+        "3. When a color appears in multiple places, combine them into ONE entry — describe the locations in `label` (semicolon-joined, e.g. \"front-left circles; rear-right circles\") and any extra observation in `notes`.",
+        "4. Don't merge similar shades. Lime ≠ Green ≠ Dark Green. Sky Blue ≠ Blue ≠ Navy ≠ Cyan ≠ Teal. Red ≠ Dark Red ≠ Magenta ≠ Pink. Each shade is its own valve.",
+        "5. Don't skip faint or small markings. A single colored circle on its own still counts — its color is still one zone.",
+        "6. If you see a colored marking that you cannot confidently snap to one of the 20 entries, OMIT THAT MARKING entirely rather than guessing — better to lose one than to label it wrong. Never invent off-list color names.",
         "",
         "OUTPUT — STRICT JSON only, no prose, no code fences, no commentary:",
-        "Schema: { \"zones\": [ { \"color\": <one of the 20 keys above>, \"label\": <short location, may be empty>, \"material\": <e.g. \"grass\", \"mulch bed\", \"hedge\", may be empty>, \"notes\": <observation about which cluster, may be empty> } ] }",
+        "Schema: { \"zones\": [ { \"color\": <one of the 20 keys above>, \"label\": <short location(s), may be empty>, \"material\": <e.g. \"grass\", \"mulch bed\", \"hedge\", may be empty>, \"notes\": <observation, may be empty> } ] }",
         "",
         "- Every entry's `color` field MUST be one of the 20 keys verbatim. Never blank, never null, never a 21st color.",
-        "- Keep labels under 40 characters. Keep notes under 120 characters.",
+        "- Each color appears AT MOST ONCE in the output.",
+        "- Keep labels under 80 characters (room for combined locations). Keep notes under 200 characters.",
         "- If you can't identify a property feature for the label, leave it blank — never make it up.",
         "- If the image has NO color-coded zone markings at all, return { \"zones\": [] }."
       ].join("\n");
 
-      const userText = "Identify every color-coded zone marking cluster in this property image. Count the distinct clusters first — your response must contain exactly that many zone entries. Spatially separated clusters of the same color get SEPARATE entries. Return ONLY the JSON object specified — no markdown, no explanation.";
+      const userText = "Identify every color-coded marking on this property image, then group them by color. Return one zone entry per distinct color — each color is ONE valve / ONE zone, even if the markings appear in multiple places on the plan. Count the distinct colors first; your response must contain exactly that many entries. Return ONLY the JSON object specified — no markdown, no explanation.";
 
       // Call Anthropic — same /v1/messages endpoint, same headers, same
       // model family the chat Worker uses. Vision lives on the same API:
@@ -13575,47 +13580,81 @@ Customer signature captured at ${new Date().toISOString()}.`;
       // Normalize each AI-returned zone into the shape the
       // irrigation-zone-schedule client expects.
       //
-      // CHANGED Phase 3 bug-fix: no longer dedupes by color — spatially
-      // separated clusters of the same color are SEPARATE zones per
-      // Patrick's site-plan reality. Entries with missing/blank/unknown
-      // `color` are DROPPED (not relabeled) and counted in `skipped` so
-      // the UI can flag that the AI was uncertain about some markings.
-      // Drop-with-flag is kinder than silent relabel: a wrong color is
-      // more confusing than a missing zone (Patrick's call).
+      // DOMAIN RULE (reversed from earlier Phase 3 bug-fix): one color =
+      // one zone = one valve. If the model still returns multiple entries
+      // with the same color despite the prompt, MERGE them — concatenate
+      // labels (semicolon-joined), join notes as sentences, prefer the
+      // first non-empty material. Defense-in-depth against prompt drift;
+      // the prompt now tells the model to combine, but we enforce here.
+      //
+      // Entries with missing/blank/unknown `color` are DROPPED (not
+      // relabeled) and counted in `skipped` so the UI can flag that the
+      // AI was uncertain about some markings. Drop-with-flag is kinder
+      // than silent relabel: a wrong color is more confusing than a
+      // missing zone (Patrick's call).
       const norm = String;
       const truncate = (s, n) => (norm(s || "")).trim().slice(0, n);
-      const zones = [];
+      // Index by color so duplicates can be folded into the first entry.
+      const byColor = new Map();
       let skipped = 0;
       const skipReasons = { blank: 0, unknown: 0 };
+
+      // Idempotent merge helpers — handles the "AI returned the same
+      // location twice" case by deduping individual clauses.
+      const mergeLabels = (existing, addition) => {
+        const addClean = truncate(addition, 80);
+        if (!addClean) return existing;
+        if (!existing) return addClean;
+        const parts = existing.split(/;\s*/).map((s) => s.trim()).filter(Boolean);
+        if (parts.includes(addClean)) return existing;
+        parts.push(addClean);
+        return parts.join("; ").slice(0, 200);
+      };
+      const mergeNotes = (existing, addition) => {
+        const addClean = truncate(addition, 200);
+        if (!addClean) return existing;
+        if (!existing) return addClean;
+        if (existing.includes(addClean)) return existing;
+        const sep = /[.!?]$/.test(existing.trim()) ? " " : ". ";
+        return (existing + sep + addClean).slice(0, 400);
+      };
+
       for (const z of rawZones) {
         const colorRaw = norm(z?.color || "").toLowerCase().trim();
-        if (!colorRaw) {
-          // Empty / null / undefined color.
-          skipped++;
-          skipReasons.blank++;
-          continue;
+        if (!colorRaw) { skipped++; skipReasons.blank++; continue; }
+        if (!COLOR_KEYS.includes(colorRaw)) { skipped++; skipReasons.unknown++; continue; }
+
+        const incomingLabel    = truncate(z?.label, 80);
+        const incomingMaterial = truncate(z?.material, 60);
+        const incomingNotes    = truncate(z?.notes, 200);
+
+        if (byColor.has(colorRaw)) {
+          // Already seen this color — fold the new info into the existing
+          // entry rather than creating a duplicate.
+          const existing = byColor.get(colorRaw);
+          existing.label    = mergeLabels(existing.label, incomingLabel);
+          existing.notes    = mergeNotes(existing.notes, incomingNotes);
+          if (!existing.material && incomingMaterial) existing.material = incomingMaterial;
+        } else {
+          byColor.set(colorRaw, {
+            color: colorRaw,
+            label: incomingLabel,
+            material: incomingMaterial,
+            notes: incomingNotes
+          });
+          // Hard cap — 20-color palette means at most 20 unique entries.
+          if (byColor.size >= 20) break;
         }
-        if (!COLOR_KEYS.includes(colorRaw)) {
-          // Off-palette color (synonyms, hex strings, made-up names).
-          skipped++;
-          skipReasons.unknown++;
-          continue;
-        }
-        zones.push({
-          color: colorRaw,
-          label: truncate(z?.label, 40),
-          material: truncate(z?.material, 60),
-          notes: truncate(z?.notes, 120)
-        });
-        // 40-entry hard cap — well past any residential site (highest
-        // realistic count is ~25 zones on an estate property).
-        if (zones.length >= 40) break;
       }
 
-      // Cheap usage log so Patrick can eyeball spend + detection rate over
-      // time. Includes raw count + skipped reasons to flag prompt drift.
+      const zones = Array.from(byColor.values());
+      const merged = rawZones.length - skipped - zones.length;
+
+      // Usage log — single-line + tagged, easy to grep from Render logs.
+      // Includes raw / merged / skipped counts so detection drift is
+      // diagnosable from the log stream alone.
       const usage = aiData?.usage || {};
-      console.log(`[irrigation-extract] ip=${callerIp(req)} zones=${zones.length} skipped=${skipped} (blank=${skipReasons.blank} unknown=${skipReasons.unknown}) raw=${rawZones.length} in_tok=${usage.input_tokens || 0} out_tok=${usage.output_tokens || 0}`);
+      console.log(`[irrigation-extract] ip=${callerIp(req)} zones=${zones.length} merged=${merged} skipped=${skipped} (blank=${skipReasons.blank} unknown=${skipReasons.unknown}) raw=${rawZones.length} in_tok=${usage.input_tokens || 0} out_tok=${usage.output_tokens || 0}`);
 
       return sendJson(res, 200, { ok: true, zones, skipped });
     } catch (error) {
