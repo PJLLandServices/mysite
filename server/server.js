@@ -1364,7 +1364,10 @@ const PUBLIC_API_PATHS = new Set([
   "/api/booking/reserve",
   // Pricing dictionary — public so any page (including pricing.html on
   // GitHub Pages) can fetch the live catalog and render from it.
-  "/api/pricing"
+  "/api/pricing",
+  // Irrigation-zone-schedule AI photo extraction (irrigation-zone-schedule.html).
+  // Unauth fillable tool — IP-rate-limited (10/hr) to cap API spend.
+  "/api/irrigation-extract-zones"
 ]);
 function isPublicApiPath(pathname) {
   if (PUBLIC_API_PATHS.has(pathname)) return true;
@@ -13362,6 +13365,195 @@ Customer signature captured at ${new Date().toISOString()}.`;
       return sendJson(res, 200, { ok: true, workOrder: wo, created: true });
     } catch (error) {
       return sendJson(res, 400, { ok: false, errors: [error.message || "Couldn't open work order."] });
+    }
+  }
+
+  // Irrigation zone schedule — AI photo extraction. The unauth fillable
+  // tool at /irrigation-zone-schedule.html POSTs a property image data
+  // URL here; we forward it to Anthropic's vision API and return a
+  // normalized zones[] array the page can plug into its central state.
+  //
+  // Rate-limited per IP (10 calls/hour) since the endpoint is unauth and
+  // each call costs real Anthropic tokens. The cap is a circuit breaker
+  // against scripted abuse, not against legitimate Patrick re-runs.
+  //
+  // Env: ANTHROPIC_API_KEY. The same key the chat Worker already uses
+  // (worker/worker.js) — Patrick may need to add it to Render's env even
+  // if Cloudflare already has it. Endpoint returns 503 if unset so the
+  // UI can show "AI not configured" instead of a generic 500.
+  if (req.method === "POST" && pathname === "/api/irrigation-extract-zones") {
+    try {
+      const apiKey = process.env.ANTHROPIC_API_KEY || "";
+      if (!apiKey) {
+        return sendJson(res, 503, {
+          ok: false,
+          error: "AI photo extraction isn't configured on this server yet."
+        });
+      }
+
+      // IP rate-limit. 10/hr is generous for an honest tester re-running
+      // against the same image; below the per-day cap of any free-tier
+      // abuse pattern.
+      const ipKey = `irrigation-extract:${callerIp(req)}`;
+      const HOUR = 60 * 60 * 1000;
+      if (!rateLimit.check(ipKey, 10, HOUR)) {
+        return sendJson(res, 429, {
+          ok: false,
+          error: "You’ve hit the hourly limit for AI analysis. Try again in an hour, or fill the zones in manually."
+        });
+      }
+
+      // 12 MB payload cap — base64 inflates a 5 MB image to ~6.7 MB and we
+      // want headroom for the JSON wrapping. parseRequestBody throws on
+      // overflow; we surface that as a friendly 413.
+      let payload;
+      try {
+        payload = await parseRequestBody(req, { maxBytes: 12_000_000 });
+      } catch {
+        return sendJson(res, 413, {
+          ok: false,
+          error: "That image is too large. Try a smaller export (under ~8 MB)."
+        });
+      }
+
+      const imageDataUrl = String(payload?.imageDataUrl || "");
+      // Permissive data-URL shape check. Reject anything that doesn't
+      // smell like an image data URL up-front to keep Anthropic happy.
+      const match = imageDataUrl.match(/^data:(image\/(?:png|jpeg|webp|gif));base64,([A-Za-z0-9+/=]+)$/);
+      if (!match) {
+        return sendJson(res, 400, {
+          ok: false,
+          error: "Upload a PNG, JPG, WebP or GIF image first."
+        });
+      }
+      const mediaType = match[1];
+      const base64Data = match[2];
+
+      // Decode-size sanity check. Anthropic's hard image limit is 5 MB per
+      // image; we mirror that here so we can return a clean 413 rather
+      // than parse a 4xx from upstream.
+      const approxBytes = Math.floor(base64Data.length * 0.75);
+      if (approxBytes > 5_200_000) {
+        return sendJson(res, 413, {
+          ok: false,
+          error: "Image exceeds Anthropic's 5 MB cap. Re-export at lower resolution."
+        });
+      }
+
+      // Record the rate-limit hit only after we've passed validation.
+      // Failed validation shouldn't burn through Patrick's hourly quota.
+      rateLimit.record(ipKey);
+
+      // The wire colors recognised by the irrigation-zone-schedule
+      // dropdown. The prompt below constrains the model to these so we
+      // don't have to map fuzzy color names back to keys.
+      const COLOR_KEYS = ["red","orange","yellow","green","blue","violet","brown","pink","tan","gray","white","black"];
+
+      const systemPrompt = [
+        "You are an irrigation system analyst.",
+        "You read site plans, architectural drawings, hand-sketched property layouts, and aerial photos to identify color-coded irrigation zones.",
+        "Zones are typically drawn as colored outlines around lawn / bed areas, colored fill blocks, or colored lines tracing pipe runs.",
+        "Each distinct color is one zone.",
+        "",
+        "Return STRICT JSON only — no prose, no code fences, no commentary.",
+        "Schema: { \"zones\": [ { \"color\": <one of: red, orange, yellow, green, blue, violet, brown, pink, tan, gray, white, black>, \"label\": <short location, e.g. \"front lawn west\", may be empty>, \"material\": <e.g. \"grass\", \"mulch bed\", \"hedge\", may be empty>, \"notes\": <observation, may be empty> } ] }",
+        "",
+        "Rules:",
+        "- Only include colors you can SEE on the image as zone markings. Don't invent zones.",
+        "- If the image has no color-coded zone markings, return { \"zones\": [] }.",
+        "- Don't list the same color twice.",
+        "- Keep labels under 40 characters. Keep notes under 120 characters.",
+        "- If you can't identify a property feature for the label, leave it blank — never make it up."
+      ].join("\n");
+
+      const userText = "Identify every color-coded zone in this property image. Return ONLY the JSON object specified — no markdown, no explanation.";
+
+      // Call Anthropic — same /v1/messages endpoint, same headers, same
+      // model family the chat Worker uses. Vision lives on the same API:
+      // image content blocks alongside the text block.
+      const aiRes = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-api-key": apiKey,
+          "anthropic-version": "2023-06-01"
+        },
+        body: JSON.stringify({
+          model: "claude-sonnet-4-5",
+          max_tokens: 2048,
+          system: systemPrompt,
+          messages: [{
+            role: "user",
+            content: [
+              { type: "image", source: { type: "base64", media_type: mediaType, data: base64Data } },
+              { type: "text", text: userText }
+            ]
+          }]
+        })
+      });
+
+      if (!aiRes.ok) {
+        const errText = await aiRes.text().catch(() => "");
+        console.error("Anthropic vision API error:", aiRes.status, errText.slice(0, 500));
+        return sendJson(res, 502, {
+          ok: false,
+          error: "AI analysis failed (technical issue). Add zones manually below."
+        });
+      }
+
+      const aiData = await aiRes.json();
+      const replyText = (aiData?.content?.[0]?.text || "").trim();
+
+      // Strip ```json fences if the model snuck them in despite the prompt.
+      let jsonText = replyText;
+      const fenceMatch = jsonText.match(/```(?:json)?\s*([\s\S]*?)```/);
+      if (fenceMatch) jsonText = fenceMatch[1].trim();
+
+      let parsed;
+      try { parsed = JSON.parse(jsonText); } catch {
+        console.error("Anthropic vision returned non-JSON:", replyText.slice(0, 400));
+        return sendJson(res, 502, {
+          ok: false,
+          error: "AI returned a response we couldn't parse. Add zones manually."
+        });
+      }
+
+      const rawZones = Array.isArray(parsed?.zones) ? parsed.zones : [];
+
+      // Normalize each AI-returned zone into the shape the
+      // irrigation-zone-schedule client expects, dropping anything
+      // unrecognised. We don't trust the model to follow every rule —
+      // this defensive pass enforces the schema.
+      const norm = String;
+      const truncate = (s, n) => (norm(s || "")).trim().slice(0, n);
+      const seenColors = new Set();
+      const zones = [];
+      for (const z of rawZones) {
+        const color = norm(z?.color || "").toLowerCase().trim();
+        if (!COLOR_KEYS.includes(color)) continue;
+        if (seenColors.has(color)) continue;
+        seenColors.add(color);
+        zones.push({
+          color,
+          label: truncate(z?.label, 40),
+          material: truncate(z?.material, 60),
+          notes: truncate(z?.notes, 120)
+        });
+        if (zones.length >= 20) break; // hard cap — far past any realistic property
+      }
+
+      // Cheap usage log so Patrick can eyeball spend over time. Keep it
+      // single-line + tagged — easy to grep out of Render's log stream.
+      const usage = aiData?.usage || {};
+      console.log(`[irrigation-extract] ip=${callerIp(req)} zones=${zones.length} in_tok=${usage.input_tokens || 0} out_tok=${usage.output_tokens || 0}`);
+
+      return sendJson(res, 200, { ok: true, zones });
+    } catch (error) {
+      console.error("[irrigation-extract] unexpected error:", error);
+      return sendJson(res, 500, {
+        ok: false,
+        error: "AI analysis failed (technical issue). Add zones manually below."
+      });
     }
   }
 
