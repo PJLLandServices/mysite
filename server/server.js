@@ -13475,6 +13475,73 @@ Customer signature captured at ${new Date().toISOString()}.`;
         .map((c) => `  - "${c.key}" (${c.name}, ${c.hex})`)
         .join("\n");
 
+      // Defensive color-name normalizer. Patrick saw two "Dark Red" entries
+      // in the table after 81a135f — meaning two entries with normalize-
+      // equivalent color names slipped through the Map merge. Tightening
+      // to handle every variant the model has plausibly produced:
+      //   - "Dark Red", "dark red", "DARK RED"        → "dark red"
+      //   - "DarkRed", "dark-red", "dark_red"          → "dark red"
+      //   - "Dark Red " (trailing NBSP), "Dark Red"→ "dark red"
+      //   - "#8B0000" (hex of dark red)                → "dark red"
+      //   - "Dark Red #8B0000" (model added hex)       → "dark red"
+      //   - "maroon", "crimson" (common synonyms)      → "dark red"
+      // Anything else → null, dropped as `unknown`.
+      const NORM_KEY = (s) => String(s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+      const CANON = new Map(COLOR_PALETTE.map((c) => [NORM_KEY(c.key), c.key]));
+      const HEX_TO_KEY = new Map(COLOR_PALETTE.map((c) => [c.hex.toLowerCase(), c.key]));
+      // Common synonyms the model has historically produced for the 20
+      // palette entries. Keys are NORM_KEY-normalized so they share the
+      // same lookup table as the canonical names.
+      const SYNONYMS = new Map([
+        ["maroon",    "dark red"],
+        ["crimson",   "dark red"],
+        ["scarlet",   "red"],
+        ["turquoise", "cyan"],
+        ["aqua",      "cyan"],
+        ["aquamarine","cyan"],
+        ["lightblue", "sky blue"],
+        ["azure",     "sky blue"],
+        ["lavender",  "purple"],
+        ["violet",    "purple"],
+        ["indigo",    "navy"],
+        ["midnight",  "navy"],
+        ["forest",    "dark green"],
+        ["forestgreen","dark green"],
+        ["olive",     "dark green"],
+        ["chartreuse","lime"],
+        ["amber",     "gold"],
+        ["mustard",   "gold"],
+        ["fuchsia",   "magenta"],
+        ["hotpink",   "pink"],
+        ["salmon",    "pink"],
+        ["beige",     "tan"],
+        ["khaki",     "tan"],
+        ["chocolate", "brown"],
+        ["sienna",    "brown"],
+        ["charcoal",  "black"],
+        ["silver",    "gray"],
+        ["grey",      "gray"]
+      ]);
+
+      function canonicalizeColor(input){
+        const raw = String(input || "").trim();
+        if (!raw) return null;
+        // Try hex match first (with or without #, plus 3-char shorthand).
+        const hexMatch = raw.match(/#?([0-9a-f]{6}|[0-9a-f]{3})\b/i);
+        if (hexMatch){
+          let hex = hexMatch[1].toLowerCase();
+          if (hex.length === 3) hex = hex.split("").map((c) => c + c).join("");
+          const key = "#" + hex;
+          if (HEX_TO_KEY.has(key)) return HEX_TO_KEY.get(key);
+        }
+        // Strip any hex codes out, then normalize the name part.
+        const nameOnly = raw.replace(/#?[0-9a-f]{6}\b/gi, "");
+        const nk = NORM_KEY(nameOnly);
+        if (CANON.has(nk)) return CANON.get(nk);
+        if (SYNONYMS.has(nk)) return SYNONYMS.get(nk);
+        return null;
+      }
+
       const systemPrompt = [
         "You are an irrigation system analyst.",
         "The user has marked this site plan using EXACTLY these 20 colors and only these 20 colors:",
@@ -13619,25 +13686,36 @@ Customer signature captured at ${new Date().toISOString()}.`;
         return (existing + sep + addClean).slice(0, 400);
       };
 
+      // Diagnostic: capture every raw color string the model produced so
+      // failures self-diagnose from the log stream alone (no need to
+      // reproduce). Limited to first 30 chars per entry, comma-joined.
+      const rawColorLog = rawZones
+        .map((z) => String(z?.color ?? "").trim().slice(0, 30) || "<blank>")
+        .join(",");
+
       for (const z of rawZones) {
-        const colorRaw = norm(z?.color || "").toLowerCase().trim();
-        if (!colorRaw) { skipped++; skipReasons.blank++; continue; }
-        if (!COLOR_KEYS.includes(colorRaw)) { skipped++; skipReasons.unknown++; continue; }
+        const canonical = canonicalizeColor(z?.color);
+        if (!canonical) {
+          const raw = String(z?.color || "").trim();
+          if (!raw) { skipped++; skipReasons.blank++; }
+          else       { skipped++; skipReasons.unknown++; }
+          continue;
+        }
 
         const incomingLabel    = truncate(z?.label, 80);
         const incomingMaterial = truncate(z?.material, 60);
         const incomingNotes    = truncate(z?.notes, 200);
 
-        if (byColor.has(colorRaw)) {
+        if (byColor.has(canonical)) {
           // Already seen this color — fold the new info into the existing
           // entry rather than creating a duplicate.
-          const existing = byColor.get(colorRaw);
+          const existing = byColor.get(canonical);
           existing.label    = mergeLabels(existing.label, incomingLabel);
           existing.notes    = mergeNotes(existing.notes, incomingNotes);
           if (!existing.material && incomingMaterial) existing.material = incomingMaterial;
         } else {
-          byColor.set(colorRaw, {
-            color: colorRaw,
+          byColor.set(canonical, {
+            color: canonical,
             label: incomingLabel,
             material: incomingMaterial,
             notes: incomingNotes
@@ -13651,10 +13729,10 @@ Customer signature captured at ${new Date().toISOString()}.`;
       const merged = rawZones.length - skipped - zones.length;
 
       // Usage log — single-line + tagged, easy to grep from Render logs.
-      // Includes raw / merged / skipped counts so detection drift is
-      // diagnosable from the log stream alone.
+      // Includes raw / merged / skipped counts + the raw color strings the
+      // model produced, so detection drift is diagnosable without a repro.
       const usage = aiData?.usage || {};
-      console.log(`[irrigation-extract] ip=${callerIp(req)} zones=${zones.length} merged=${merged} skipped=${skipped} (blank=${skipReasons.blank} unknown=${skipReasons.unknown}) raw=${rawZones.length} in_tok=${usage.input_tokens || 0} out_tok=${usage.output_tokens || 0}`);
+      console.log(`[irrigation-extract] ip=${callerIp(req)} zones=${zones.length} merged=${merged} skipped=${skipped} (blank=${skipReasons.blank} unknown=${skipReasons.unknown}) raw=${rawZones.length} raw_colors="${rawColorLog}" in_tok=${usage.input_tokens || 0} out_tok=${usage.output_tokens || 0}`);
 
       return sendJson(res, 200, { ok: true, zones, skipped });
     } catch (error) {
