@@ -13444,29 +13444,70 @@ Customer signature captured at ${new Date().toISOString()}.`;
       // Failed validation shouldn't burn through Patrick's hourly quota.
       rateLimit.record(ipKey);
 
-      // The wire colors recognised by the irrigation-zone-schedule
-      // dropdown. The prompt below constrains the model to these so we
-      // don't have to map fuzzy color names back to keys.
-      const COLOR_KEYS = ["red","orange","yellow","green","blue","violet","brown","pink","tan","gray","white","black"];
+      // The 20-color named palette the irrigation-zone-schedule UI uses
+      // (Phase 3). The prompt below anchors the vision model to these
+      // exact names + hex codes so it doesn't merge visually similar
+      // shades or invent off-list colors.
+      const COLOR_PALETTE = [
+        { name: "Red",        key: "red",        hex: "#FF0000" },
+        { name: "Dark Red",   key: "dark red",   hex: "#8B0000" },
+        { name: "Orange",     key: "orange",     hex: "#FF8C00" },
+        { name: "Yellow",     key: "yellow",     hex: "#FFD700" },
+        { name: "Lime",       key: "lime",       hex: "#32CD32" },
+        { name: "Green",      key: "green",      hex: "#00A000" },
+        { name: "Dark Green", key: "dark green", hex: "#006400" },
+        { name: "Teal",       key: "teal",       hex: "#008080" },
+        { name: "Cyan",       key: "cyan",       hex: "#00CED1" },
+        { name: "Sky Blue",   key: "sky blue",   hex: "#00BFFF" },
+        { name: "Blue",       key: "blue",       hex: "#0000FF" },
+        { name: "Navy",       key: "navy",       hex: "#000080" },
+        { name: "Purple",     key: "purple",     hex: "#800080" },
+        { name: "Magenta",    key: "magenta",    hex: "#FF00FF" },
+        { name: "Pink",       key: "pink",       hex: "#FF69B4" },
+        { name: "Brown",      key: "brown",      hex: "#8B4513" },
+        { name: "Tan",        key: "tan",        hex: "#D2B48C" },
+        { name: "Gray",       key: "gray",       hex: "#808080" },
+        { name: "Black",      key: "black",      hex: "#000000" },
+        { name: "Gold",       key: "gold",       hex: "#DAA520" }
+      ];
+      const COLOR_KEYS = COLOR_PALETTE.map((c) => c.key);
+      const PALETTE_LIST = COLOR_PALETTE
+        .map((c) => `  - "${c.key}" (${c.name}, ${c.hex})`)
+        .join("\n");
 
       const systemPrompt = [
         "You are an irrigation system analyst.",
         "You read site plans, architectural drawings, hand-sketched property layouts, and aerial photos to identify color-coded irrigation zones.",
-        "Zones are typically drawn as colored outlines around lawn / bed areas, colored fill blocks, or colored lines tracing pipe runs.",
-        "Each distinct color is one zone.",
+        "",
+        "ZONE MARKINGS CAN APPEAR IN MANY FORMS — detect ALL of these:",
+        "- Colored outlined areas (a polygon traced around a lawn/bed)",
+        "- Colored filled areas (a solid-tinted region)",
+        "- Colored lines or paths (pipe runs, drip lines, boundary strokes)",
+        "- Colored circles or dots (individual sprinkler heads, valves, zone markers)",
+        "- Colored arrows or callouts",
+        "- Numbered + colored labels",
+        "",
+        "COLOR PALETTE — you may ONLY use these 20 color values for the `color` field. Match every marking you see to the closest entry by hex:",
+        PALETTE_LIST,
         "",
         "Return STRICT JSON only — no prose, no code fences, no commentary.",
-        "Schema: { \"zones\": [ { \"color\": <one of: red, orange, yellow, green, blue, violet, brown, pink, tan, gray, white, black>, \"label\": <short location, e.g. \"front lawn west\", may be empty>, \"material\": <e.g. \"grass\", \"mulch bed\", \"hedge\", may be empty>, \"notes\": <observation, may be empty> } ] }",
         "",
-        "Rules:",
-        "- Only include colors you can SEE on the image as zone markings. Don't invent zones.",
-        "- If the image has no color-coded zone markings, return { \"zones\": [] }.",
-        "- Don't list the same color twice.",
+        "Schema: { \"zones\": [ { \"color\": <one of the keys above>, \"label\": <short location, e.g. \"front lawn west\", may be empty>, \"material\": <e.g. \"grass\", \"mulch bed\", \"hedge\", may be empty>, \"notes\": <observation, may be empty> } ] }",
+        "",
+        "DETECTION DISCIPLINE — read carefully:",
+        "- Return ONE entry per distinct color you see, even when that color appears in multiple spatially separated clusters of the same drawing.",
+        "  Example: red circles in the front yard + red circles in the back yard → ONE entry, color=\"red\", with notes like \"front + back clusters\".",
+        "- COUNT the distinct colors before you write the JSON. If you can see N distinct colors, return exactly N entries.",
+        "- Err on the side of returning MORE zones rather than fewer. A false positive is easy for the user to delete; a missed zone is invisible.",
+        "- Don't merge similar shades. Lime ≠ Green ≠ Dark Green. Sky Blue ≠ Blue ≠ Navy ≠ Cyan ≠ Teal. Red ≠ Dark Red ≠ Magenta ≠ Pink.",
+        "- Don't skip faint or small markings. A single colored circle is still a zone.",
+        "- If a color clearly doesn't match any palette entry, pick the CLOSEST entry rather than dropping the zone.",
+        "- If the image has no color-coded zone markings at all, return { \"zones\": [] }.",
         "- Keep labels under 40 characters. Keep notes under 120 characters.",
         "- If you can't identify a property feature for the label, leave it blank — never make it up."
       ].join("\n");
 
-      const userText = "Identify every color-coded zone in this property image. Return ONLY the JSON object specified — no markdown, no explanation.";
+      const userText = "Identify every color-coded zone marking in this property image. Return ONLY the JSON object specified — no markdown, no explanation. Count the distinct colors first; your response must contain exactly that many zone entries.";
 
       // Call Anthropic — same /v1/messages endpoint, same headers, same
       // model family the chat Worker uses. Vision lives on the same API:

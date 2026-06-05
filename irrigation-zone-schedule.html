@@ -20,12 +20,10 @@
 /* ============================================================
    PJL Irrigation Zone Schedule — fillable + portrait PDF
    ============================================================
-   Single source of truth: a central zones[] array. The desktop
-   table, the mobile zone list, the mobile sheet, and the print
-   mirrors all derive from / write back to that array.
-   Phase 1 (2026-06-05): mobile-first UX matches the WO tech
-   zone sheet pattern (server/work-order-tech.*). Print output
-   is byte-for-byte equivalent to commit 668a15f.
+   Phase 3 (2026-06-05): 20-color named palette, multi-select
+   Type field, collapsed Days-to-Water column, Notes sub-row in
+   print, AI prompt anchored to fixed colors, print fixes for
+   the upload UI bleeding through.
    ============================================================ */
 
 :root{
@@ -161,7 +159,7 @@ body.sheet-open{overflow:hidden;}
   .lh-title{font-size:26px;}
 }
 
-/* ============ Doc row (Project / Controller / Date / Drawn By) ============ */
+/* ============ Doc row (Project / Controller / Date Created / Drawn By) ============ */
 .doc-row{
   display:grid;grid-template-columns:repeat(4,1fr);gap:12px;
   margin-top:20px;
@@ -229,9 +227,14 @@ body.sheet-open{overflow:hidden;}
   font-size:12px;color:var(--text-muted);text-align:center;
   margin-top:8px;font-style:italic;
 }
+@media (max-width:768px){
+  .plan{margin:18px 0 16px;}
+  .plan-dropzone{min-height:200px;padding:24px 18px;}
+  .plan-dropzone-icon{font-size:36px;}
+  .plan-dropzone-title{font-size:15px;}
+}
 
 /* ============ AI photo extraction ============ */
-/* Sits below the uploaded image. Hidden until an image is loaded. */
 .ai-bar{
   display:none;
   margin-top:14px;
@@ -298,7 +301,7 @@ body.sheet-open{overflow:hidden;}
   .ai-btn-undo{width:100%;justify-content:center;}
 }
 
-/* AI-detected badge on mobile cards. Cleared on first manual edit. */
+/* AI-detected badge on mobile cards */
 .zone-list-ai-badge{
   position:absolute;top:6px;right:6px;
   font-size:11px;line-height:1;
@@ -310,12 +313,6 @@ body.sheet-open{overflow:hidden;}
   font-weight:600;
 }
 .zone-list-item{position:relative;}
-@media (max-width:768px){
-  .plan{margin:18px 0 16px;}
-  .plan-dropzone{min-height:200px;padding:24px 18px;}
-  .plan-dropzone-icon{font-size:36px;}
-  .plan-dropzone-title{font-size:15px;}
-}
 
 /* ============ Zone section: shared head ============ */
 .zone-section{margin-top:8px;}
@@ -331,6 +328,7 @@ body.sheet-open{overflow:hidden;}
 .zone-section-count{font-size:12px;color:var(--text-muted);}
 
 /* ============ Desktop zone table ============ */
+/* 8 columns now: # | Color | Zone Description | Type | Status | Run Time | Days to Water | (delete) */
 .zone-table{
   width:100%;
   border-collapse:collapse;
@@ -350,22 +348,18 @@ body.sheet-open{overflow:hidden;}
   padding:6px 5px;border:1px solid var(--border);vertical-align:top;
   background:var(--paper);
 }
-.zone-table tbody tr:nth-child(even) td{background:var(--cream);}
-.zone-table tbody tr:hover td{background:var(--green-tint);}
+.zone-table tbody tr.zr-main:nth-of-type(odd) td{background:var(--cream);}
+.zone-table tbody tr.zr-main:hover td{background:var(--green-tint);}
 
 /* Column widths tuned for portrait Letter 7.5" usable width */
-.zone-table colgroup col:nth-child(1){width:3.2%;}   /* # */
-.zone-table colgroup col:nth-child(2){width:9.5%;}   /* Color */
-.zone-table colgroup col:nth-child(3){width:13%;}    /* Location */
-.zone-table colgroup col:nth-child(4){width:13%;}    /* Material */
-.zone-table colgroup col:nth-child(5){width:9%;}     /* Type */
-.zone-table colgroup col:nth-child(6){width:8%;}     /* Status */
-.zone-table colgroup col:nth-child(7){width:6%;}     /* Run */
-.zone-table colgroup col:nth-child(8){width:13%;}    /* Days */
-.zone-table colgroup col:nth-child(9){width:6%;}     /* O/E */
-.zone-table colgroup col:nth-child(10){width:6%;}    /* Every */
-.zone-table colgroup col:nth-child(11){width:10%;}   /* Notes */
-.zone-table colgroup col:nth-child(12){width:3.3%;}  /* delete */
+.zone-table colgroup col:nth-child(1){width:5%;}     /* # */
+.zone-table colgroup col:nth-child(2){width:12%;}    /* Color */
+.zone-table colgroup col:nth-child(3){width:24%;}    /* Zone Description */
+.zone-table colgroup col:nth-child(4){width:15%;}    /* Type */
+.zone-table colgroup col:nth-child(5){width:9%;}     /* Status */
+.zone-table colgroup col:nth-child(6){width:8%;}     /* Run Time */
+.zone-table colgroup col:nth-child(7){width:23%;}    /* Days to Water */
+.zone-table colgroup col:nth-child(8){width:4%;}     /* delete */
 
 /* Cell inputs */
 .zone-table input[type=text],
@@ -404,19 +398,20 @@ body.sheet-open{overflow:hidden;}
   padding-right:12px;
 }
 
-/* Type select */
-.type-cell select{
-  font:inherit;font-size:11px;font-weight:600;
-  border:0;background:transparent;
-  padding:2px 0;color:var(--text);outline:none;width:100%;min-width:0;
-  appearance:none;
-  -webkit-appearance:none;
-  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='8' height='5' viewBox='0 0 8 5'><path fill='%237A7A72' d='M0 0l4 5 4-5z'/></svg>");
-  background-repeat:no-repeat;background-position:right 2px center;
-  padding-right:12px;
+/* Type cell — checkbox-style pills inline */
+.type-pills{display:flex;flex-wrap:wrap;gap:3px;align-items:center;}
+.type-pills .pill{
+  font:inherit;font-size:10px;font-weight:700;
+  padding:3px 7px;border-radius:99px;
+  border:1px solid var(--border-strong);
+  background:#fff;color:var(--text-muted);
+  cursor:pointer;letter-spacing:0.04em;text-transform:uppercase;
+  line-height:1;user-select:none;
 }
+.type-pills .pill:hover{border-color:var(--green-light);color:var(--green);}
+.type-pills .pill.is-on{background:var(--green);color:#fff;border-color:var(--green);}
 
-/* Pills (Status existing/new, days, odd/even) — desktop table flavor */
+/* Pills (Status existing/new) */
 .pill-group{display:flex;flex-wrap:wrap;gap:3px;align-items:center;}
 .pill{
   font:inherit;font-size:10px;font-weight:700;
@@ -428,12 +423,23 @@ body.sheet-open{overflow:hidden;}
 }
 .pill:hover{border-color:var(--green-light);color:var(--green);}
 .pill.is-on{background:var(--green);color:#fff;border-color:var(--green);}
-.pill--day{padding:3px 6px;font-size:10px;min-width:18px;text-align:center;}
-.pill--day.is-on{background:var(--green-mid);border-color:var(--green-mid);}
-.pill--oe{padding:3px 7px;}
-.pill--oe.is-on{background:var(--amber);border-color:var(--amber);}
 .pill--ex.is-on{background:var(--text-mid);border-color:var(--text-mid);}
 .pill--new.is-on{background:var(--green);border-color:var(--green);}
+
+/* Days-to-Water cell — compact display of day pills + O/E + every-N. */
+.dtw-pills{display:flex;flex-wrap:wrap;gap:3px;align-items:center;margin-bottom:3px;}
+.pill--day{padding:3px 6px;font-size:10px;min-width:18px;text-align:center;}
+.pill--day.is-on{background:var(--green-mid);border-color:var(--green-mid);color:#fff;}
+.pill--oe{padding:3px 7px;}
+.pill--oe.is-on{background:var(--amber);border-color:var(--amber);color:#fff;}
+.dtw-every{
+  display:flex;align-items:center;gap:4px;
+  font-size:10px;color:var(--text-muted);font-weight:600;letter-spacing:0.03em;text-transform:uppercase;
+}
+.dtw-every input[type=number]{
+  width:36px;font-size:11px;border:1px solid var(--border);background:#fff;
+  padding:2px 4px;border-radius:4px;text-align:center;
+}
 
 /* Per-row delete */
 .row-del{
@@ -443,6 +449,21 @@ body.sheet-open{overflow:hidden;}
   width:100%;
 }
 .row-del:hover{color:var(--red);background:rgba(192,58,44,0.08);}
+
+/* Notes sub-row — printed beneath a zone whose notes are non-empty.
+   Visible on screen too so the layout is the same in both surfaces. */
+.zone-table tr.zr-notes td{
+  background:rgba(74,140,92,0.04) !important;
+  border-top:0;
+  font-style:italic;color:var(--text-mid);
+  padding:4px 10px 6px 14px;font-size:11.5px;
+  line-height:1.45;
+}
+.zone-table tr.zr-notes .zr-notes-label{
+  font-style:normal;font-weight:700;letter-spacing:0.04em;
+  color:var(--green);font-size:10px;text-transform:uppercase;
+  margin-right:6px;
+}
 
 /* Add zone row */
 .add-zone-row{
@@ -460,7 +481,6 @@ body.sheet-open{overflow:hidden;}
 }
 
 /* ============ Mobile zone list ============ */
-/* Hidden by default; shown ≤768px (screen only). */
 .zone-list{display:none;list-style:none;margin:0;padding:0;flex-direction:column;gap:8px;}
 .zone-list-item{margin:0;padding:0;}
 .zone-list-btn{
@@ -521,8 +541,6 @@ body.sheet-open{overflow:hidden;}
   font-size:13px;color:var(--text-muted);
   background:var(--cream);border:1px dashed var(--border-strong);border-radius:10px;
 }
-
-/* Show the mobile list / hide the table on phones (screen only). */
 @media screen and (max-width:768px){
   .zone-table-wrap{display:none;}
   .zone-list{display:flex;}
@@ -592,7 +610,7 @@ body.sheet-open{overflow:hidden;}
   min-height:44px;
   padding:10px 12px;
   font:inherit;
-  font-size:16px;  /* ≥16px → iOS won't zoom on focus */
+  font-size:16px;
   font-weight:500;
   color:var(--text);
   background:#fff;
@@ -613,7 +631,6 @@ body.sheet-open{overflow:hidden;}
   width:36px;height:36px;border-radius:8px;
   border:1px solid rgba(0,0,0,0.18);
 }
-/* Pill groups inside the sheet — large tap targets (≥44px). */
 .zsheet-pills{
   display:flex;flex-wrap:wrap;gap:8px;
 }
@@ -728,7 +745,7 @@ body.sheet-open{overflow:hidden;}
   .sheet-footer{grid-template-columns:1fr;gap:10px;}
 }
 
-/* Print-flat shadow elements (kept in sync by state; hidden on screen) */
+/* Print-flat shadow elements */
 .sched-print{display:none;}
 .cname-print{display:none;}
 
@@ -736,8 +753,12 @@ body.sheet-open{overflow:hidden;}
 @page{size:Letter portrait;margin:0.45in 0.45in 0.55in 0.45in;}
 @media print{
   html,body{background:#fff;}
+  /* Hide all UI chrome AND all upload-flow UI (dropzone, caption, AI bar,
+     toolbar, add/delete) — only the actual uploaded image prints. */
   .toolbar,.add-zone-row,.row-del,.plan-clear,
-  .plan-dropzone:not(.has-image),
+  .plan-dropzone,
+  .plan-caption,
+  .ai-bar,
   .zone-list,
   .zsheet,
   th:last-child,td:last-child{display:none !important;}
@@ -758,9 +779,12 @@ body.sheet-open{overflow:hidden;}
     border:1px solid var(--green-pale);
     background:var(--green-tint) !important;
   }
+  /* Plan figure: collapse to zero when no image is uploaded; otherwise show
+     just the image. .has-image flag on the dropzone tracks upload state. */
   .plan{margin:14px 0;}
+  .plan:not(:has(.plan-img-wrap:not([hidden]))){margin:0;}
+  .plan-img-wrap[hidden]{display:none !important;}
   .plan-img{max-height:3.6in;page-break-inside:avoid;}
-  .plan-caption{font-size:10px;margin-top:4px;}
   .zone-section-title{font-size:16px;}
   .zone-table{font-size:9.5px;page-break-inside:auto;display:table !important;}
   .zone-table th{
@@ -771,11 +795,15 @@ body.sheet-open{overflow:hidden;}
   .zone-table thead{display:table-header-group;}
   .zone-table tr{page-break-inside:avoid;}
   .zone-table td{padding:4px 4px;}
-  /* Hide interactive controls; show the flattened text mirrors */
+  /* Hide interactive controls; show flattened text mirrors */
   .zone-table input[type=text],
   .zone-table input[type=number],
   .zone-table select,
   .pill-group,
+  .type-pills,
+  .dtw-pills,
+  .dtw-every,
+  .color-cell select,
   .doc-cell .editable,
   .lh-contact .editable{display:none !important;}
   .sched-print,.cname-print{display:inline !important;white-space:normal;}
@@ -785,13 +813,14 @@ body.sheet-open{overflow:hidden;}
   .lh-contact{text-align:right !important;font-size:11px !important;}
   .lh-contact .sched-print{font-size:11px;line-height:1.5;}
   .letterhead{grid-template-columns:auto 1fr !important;gap:24px !important;}
-  /* Cell row coloring still helps readability when printed in colour */
-  .zone-table tbody tr:nth-child(even) td{background:#f8f8f3 !important;}
-  /* Color swatch stays visible — communicates wire color in print */
+  .zone-table tbody tr.zr-main:nth-of-type(odd) td{background:#f8f8f3 !important;}
   .swatch{width:14px;height:14px;border:1px solid #999;}
   .sheet-footer{margin-top:14px;font-size:9.5px;grid-template-columns:1fr auto !important;}
-  /* Strip the dashed border on the upload zone if no image (it's hidden anyway) */
-  .plan-dropzone{border:0;background:transparent;padding:0;min-height:0;}
+  /* Notes sub-row stays visible in print, but compacted. */
+  .zone-table tr.zr-notes td{
+    background:#f0f5ec !important;font-size:9px;padding:3px 8px 4px 14px;
+  }
+  .zone-table tr.zr-notes .zr-notes-label{font-size:8.5px;}
 }
 </style>
 </head>
@@ -829,19 +858,19 @@ body.sheet-open{overflow:hidden;}
     <span class="lh-eyebrow">Field-ready · Customer-shareable</span>
   </div>
 
-  <!-- Project / Controller / Date / Drawn By -->
+  <!-- Project / Controller / Date Created / Drawn By -->
   <section class="doc-row" aria-label="Document metadata">
     <div class="doc-cell">
       <span class="doc-cell-label">Project / Site</span>
-      <span class="editable" contenteditable="true" data-print="doc-project" data-placeholder="Customer name / property address">Customer / property address</span>
+      <span class="editable" contenteditable="true" data-print="doc-project" id="docProject" data-placeholder="Customer name / property address">Customer / property address</span>
     </div>
     <div class="doc-cell">
       <span class="doc-cell-label">Controller</span>
       <span class="editable" contenteditable="true" data-print="doc-controller" data-placeholder="e.g. Hunter HPC-400 Hydrawise">Hunter HPC-400 Hydrawise</span>
     </div>
     <div class="doc-cell">
-      <span class="doc-cell-label">Date</span>
-      <span class="editable" contenteditable="true" data-print="doc-date" data-placeholder="YYYY-MM-DD">—</span>
+      <span class="doc-cell-label">Date Created</span>
+      <span class="editable" contenteditable="true" data-print="doc-date" id="docDate" data-placeholder="YYYY-MM-DD">—</span>
     </div>
     <div class="doc-cell">
       <span class="doc-cell-label">Drawn By</span>
@@ -863,7 +892,7 @@ body.sheet-open{overflow:hidden;}
     </div>
     <figcaption class="plan-caption" id="planCaption">Site plan — uploaded image renders here and prints at the top of the PDF.</figcaption>
 
-    <!-- AI extraction (visible only once an image is uploaded) -->
+    <!-- AI extraction (visible only once an image is uploaded; never prints) -->
     <div class="ai-bar" id="aiBar">
       <div class="ai-bar-copy">
         <p class="ai-bar-title">✨ Auto-detect zones</p>
@@ -893,21 +922,17 @@ body.sheet-open{overflow:hidden;}
     <div class="zone-table-wrap">
       <table class="zone-table" id="zoneTable">
         <colgroup>
-          <col><col><col><col><col><col><col><col><col><col><col><col>
+          <col><col><col><col><col><col><col><col>
         </colgroup>
         <thead>
           <tr>
-            <th scope="col">#</th>
-            <th scope="col">Color</th>
-            <th scope="col">Location</th>
-            <th scope="col">Material / Heads</th>
+            <th scope="col">Zone #</th>
+            <th scope="col">Zone Color</th>
+            <th scope="col">Zone Description</th>
             <th scope="col">Type</th>
             <th scope="col">Status</th>
-            <th scope="col">Run<br>(min)</th>
-            <th scope="col">Days</th>
-            <th scope="col">O/E</th>
-            <th scope="col">Every<br>(days)</th>
-            <th scope="col">Notes</th>
+            <th scope="col">Run Time<br>(min)</th>
+            <th scope="col">Days to Water</th>
             <th scope="col" aria-label="Remove"></th>
           </tr>
         </thead>
@@ -945,12 +970,12 @@ body.sheet-open{overflow:hidden;}
     </header>
 
     <div class="zsheet-section">
-      <label class="zsheet-label" for="zsLocation">Location</label>
+      <label class="zsheet-label" for="zsLocation">Zone description</label>
       <input type="text" class="zsheet-input" id="zsLocation" placeholder="Front lawn N" autocomplete="off">
     </div>
 
     <div class="zsheet-section">
-      <label class="zsheet-label" for="zsColor">Wire color</label>
+      <label class="zsheet-label" for="zsColor">Zone color</label>
       <div class="zsheet-color-row">
         <span class="swatch" id="zsSwatch" aria-hidden="true"></span>
         <select class="zsheet-select" id="zsColor"></select>
@@ -958,13 +983,8 @@ body.sheet-open{overflow:hidden;}
     </div>
 
     <div class="zsheet-section">
-      <label class="zsheet-label" for="zsMaterial">Material / heads</label>
-      <input type="text" class="zsheet-input" id="zsMaterial" placeholder='Hunter PGP 4"' autocomplete="off">
-    </div>
-
-    <div class="zsheet-section">
-      <label class="zsheet-label" for="zsType">Sprinkler type</label>
-      <select class="zsheet-select" id="zsType"></select>
+      <span class="zsheet-label">Type</span>
+      <div class="zsheet-pills" id="zsType" role="group" aria-label="Sprinkler type — pick one or more"></div>
     </div>
 
     <div class="zsheet-section">
@@ -1014,27 +1034,40 @@ body.sheet-open{overflow:hidden;}
   'use strict';
 
   // ============ Domain data ============
+  // 20-color named palette (Phase 3, 2026-06-05). Patrick commits to using
+  // ONLY these 20 going forward, which lets the vision prompt anchor on
+  // exact hex codes for far tighter detection. `key` lowercases the
+  // display name for stable AI-payload mapping; `hex` is the literal
+  // swatch color.
   var COLORS = [
-    {key:'',          label:'—',      hex:'transparent'},
-    {key:'red',       label:'Red',    hex:'#D63031'},
-    {key:'orange',    label:'Orange', hex:'#E07B24'},
-    {key:'yellow',    label:'Yellow', hex:'#F1C40F'},
-    {key:'green',     label:'Green',  hex:'#1B8A4D'},
-    {key:'blue',      label:'Blue',   hex:'#2D6FB4'},
-    {key:'violet',    label:'Violet', hex:'#7C3AED'},
-    {key:'brown',     label:'Brown',  hex:'#7A4E2A'},
-    {key:'pink',      label:'Pink',   hex:'#EC78A9'},
-    {key:'tan',       label:'Tan',    hex:'#C8A572'},
-    {key:'gray',      label:'Gray',   hex:'#6B7280'},
-    {key:'white',     label:'White',  hex:'#F4F4EF'},
-    {key:'black',     label:'Black',  hex:'#222222'}
+    {key:'',           label:'—',          hex:'transparent'},
+    {key:'red',        label:'Red',        hex:'#FF0000'},
+    {key:'dark red',   label:'Dark Red',   hex:'#8B0000'},
+    {key:'orange',     label:'Orange',     hex:'#FF8C00'},
+    {key:'yellow',     label:'Yellow',     hex:'#FFD700'},
+    {key:'lime',       label:'Lime',       hex:'#32CD32'},
+    {key:'green',      label:'Green',      hex:'#00A000'},
+    {key:'dark green', label:'Dark Green', hex:'#006400'},
+    {key:'teal',       label:'Teal',       hex:'#008080'},
+    {key:'cyan',       label:'Cyan',       hex:'#00CED1'},
+    {key:'sky blue',   label:'Sky Blue',   hex:'#00BFFF'},
+    {key:'blue',       label:'Blue',       hex:'#0000FF'},
+    {key:'navy',       label:'Navy',       hex:'#000080'},
+    {key:'purple',     label:'Purple',     hex:'#800080'},
+    {key:'magenta',    label:'Magenta',    hex:'#FF00FF'},
+    {key:'pink',       label:'Pink',       hex:'#FF69B4'},
+    {key:'brown',      label:'Brown',      hex:'#8B4513'},
+    {key:'tan',        label:'Tan',        hex:'#D2B48C'},
+    {key:'gray',       label:'Gray',       hex:'#808080'},
+    {key:'black',      label:'Black',      hex:'#000000'},
+    {key:'gold',       label:'Gold',       hex:'#DAA520'}
   ];
   var COLOR_BY_KEY = {};
   COLORS.forEach(function(c){ COLOR_BY_KEY[c.key] = c; });
 
-  var TYPES = ['', 'Spray', 'Rotor', 'MP Rotator', 'Drip', 'Bubbler', 'Micro-spray'];
+  // Type — now multi-select. 3 fixed options per Patrick.
+  var TYPES = ['Drip', 'Rotors', 'Pop-ups'];
 
-  // Day-of-week — Sunday-first matches Hydrawise / most NA controllers.
   var DAYS = [
     {key:'sun', label:'S', short:'Su'},
     {key:'mon', label:'M', short:'Mo'},
@@ -1046,8 +1079,6 @@ body.sheet-open{overflow:hidden;}
   ];
 
   // ============ Central state ============
-  // Single source of truth. Every UI surface (mobile list, mobile sheet,
-  // desktop table, print mirrors) reads from / writes to this array.
   var zones = [];
   var activeIdx = -1;
 
@@ -1055,27 +1086,37 @@ body.sheet-open{overflow:hidden;}
     return {
       color:'',
       location:'',
-      material:'',
-      type:'',
-      status:'',      // '' | 'Existing' | 'New'
+      type:[],        // multi-select array of TYPES keys
+      status:'',
       runMin:'',
       days:{sun:false,mon:false,tue:false,wed:false,thu:false,fri:false,sat:false},
-      oe:'',          // '' | 'Odd' | 'Even'
+      oe:'',
       everyDays:'',
       notes:'',
-      // AI provenance — set to true when populated by /api/irrigation-extract-zones.
-      // Cleared on first manual edit so the ✨ badge disappears once Patrick
-      // has personally touched the zone. Never prints.
       aiDetected:false
     };
   }
 
-  // Format a list of days as short labels — used in print mirrors and
-  // the mobile-card sub line.
   function daysLabel(zone){
     var out = [];
     DAYS.forEach(function(d){ if (zone.days[d.key]) out.push(d.short); });
     return out.join(' ');
+  }
+
+  // "Days to water" combined label — day pills + O/E + every-N-days,
+  // each in its own clause when present. Used in the table cell mirror
+  // and the mobile card sub line.
+  function daysToWaterLabel(zone){
+    var bits = [];
+    var dl = daysLabel(zone);
+    if (dl) bits.push(dl);
+    if (zone.oe) bits.push(zone.oe + ' days');
+    if (zone.everyDays) bits.push('Every ' + zone.everyDays + 'd');
+    return bits.join(' · ');
+  }
+
+  function typeLabel(zone){
+    return (zone.type || []).join(', ');
   }
 
   // ============ DOM refs ============
@@ -1091,6 +1132,8 @@ body.sheet-open{overflow:hidden;}
   var planImg     = document.getElementById('planImg');
   var planImgWrap = document.getElementById('planImgWrap');
   var planClear   = document.getElementById('planClear');
+  var docProject  = document.getElementById('docProject');
+  var docDate     = document.getElementById('docDate');
 
   // Sheet refs
   var zsheet      = document.getElementById('zsheet');
@@ -1099,7 +1142,6 @@ body.sheet-open{overflow:hidden;}
   var zsheetDone  = document.getElementById('zsheetDone');
   var zsheetDel   = document.getElementById('zsheetDelete');
   var zsLocation  = document.getElementById('zsLocation');
-  var zsMaterial  = document.getElementById('zsMaterial');
   var zsColor     = document.getElementById('zsColor');
   var zsSwatch    = document.getElementById('zsSwatch');
   var zsType      = document.getElementById('zsType');
@@ -1110,19 +1152,34 @@ body.sheet-open{overflow:hidden;}
   var zsOE        = document.getElementById('zsOE');
   var zsNotes     = document.getElementById('zsNotes');
 
-  // ============ Populate sheet selects + day pills ============
+  // ============ Auto-populate Date Created ============
+  // Today in YYYY-MM-DD. The cell is contenteditable so Patrick can
+  // override it; the .sched-print mirror is wired below alongside all
+  // other contenteditables.
+  (function(){
+    var d = new Date();
+    var iso = d.getFullYear() + '-' +
+              String(d.getMonth() + 1).padStart(2, '0') + '-' +
+              String(d.getDate()).padStart(2, '0');
+    docDate.textContent = iso;
+  })();
+
+  // ============ Populate sheet color select + type pills + day pills ============
   COLORS.forEach(function(c){
     var o = document.createElement('option');
     o.value = c.key;
-    o.textContent = c.label;
+    o.textContent = c.label + (c.hex !== 'transparent' ? '  (' + c.hex + ')' : '');
     o.dataset.hex = c.hex;
     zsColor.appendChild(o);
   });
   TYPES.forEach(function(t){
-    var o = document.createElement('option');
-    o.value = t;
-    o.textContent = t || '—';
-    zsType.appendChild(o);
+    var b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'zsheet-pill';
+    b.dataset.type = t;
+    b.setAttribute('aria-pressed', 'false');
+    b.textContent = t;
+    zsType.appendChild(b);
   });
   DAYS.forEach(function(d){
     var b = document.createElement('button');
@@ -1136,13 +1193,11 @@ body.sheet-open{overflow:hidden;}
   });
 
   // ============ Desktop table row factory ============
-  // Builds one <tr> bound to zones[idx]. Each interactive control
-  // mutates zones[idx] on input, then calls applyZoneToRow + syncListItem
-  // so the mirrors / mobile card stay in sync. (When the sheet is open
-  // we also push edits there via applyZoneToSheet().)
+  // 8 columns: # | Color | Description | Type | Status | RunTime | DaysToWater | (delete)
   function makeRow(idx){
     var z = zones[idx];
     var tr = document.createElement('tr');
+    tr.className = 'zr-main';
     tr.dataset.idx = String(idx);
 
     // #
@@ -1204,7 +1259,7 @@ body.sheet-open{overflow:hidden;}
       td.appendChild(print);
       return td;
     }
-    function numCell(field, placeholder, min, step){
+    function numCell(field, placeholder, min, step, onChange){
       var td = document.createElement('td');
       var input = document.createElement('input');
       input.type = 'number';
@@ -1221,6 +1276,7 @@ body.sheet-open{overflow:hidden;}
         z[field] = input.value;
         clearAiBadge(idx);
         print.textContent = input.value;
+        if (onChange) onChange();
         syncListItem(idx);
       });
       td.appendChild(input);
@@ -1228,37 +1284,37 @@ body.sheet-open{overflow:hidden;}
       return td;
     }
 
-    // Location
+    // Zone Description
     tr.appendChild(textCell('location', 'Front lawn N'));
-    // Material / heads
-    tr.appendChild(textCell('material', 'Hunter PGP 4"'));
 
-    // Type select
+    // Type — multi-select pill group
     var tdType = document.createElement('td');
-    tdType.className = 'type-cell';
-    var typeSel = document.createElement('select');
-    typeSel.dataset.field = 'type';
-    TYPES.forEach(function(t){
-      var o = document.createElement('option');
-      o.value = t;
-      o.textContent = t || '—';
-      if (t === z.type) o.selected = true;
-      typeSel.appendChild(o);
-    });
+    var typeGroup = document.createElement('div');
+    typeGroup.className = 'type-pills';
     var typePrint = document.createElement('span');
     typePrint.className = 'sched-print';
-    typePrint.textContent = z.type || '';
-    typeSel.addEventListener('change', function(){
-      z.type = typeSel.value;
-      clearAiBadge(idx);
-      typePrint.textContent = z.type || '';
-      syncListItem(idx);
+    typePrint.textContent = typeLabel(z);
+    var typePillEls = {};
+    TYPES.forEach(function(t){
+      var p = pill(t, 'pill');
+      p.dataset.type = t;
+      if (z.type.indexOf(t) !== -1) p.classList.add('is-on');
+      p.addEventListener('click', function(){
+        var i = z.type.indexOf(t);
+        if (i === -1) z.type.push(t); else z.type.splice(i, 1);
+        clearAiBadge(idx);
+        p.classList.toggle('is-on', z.type.indexOf(t) !== -1);
+        typePrint.textContent = typeLabel(z);
+        syncListItem(idx);
+      });
+      typePillEls[t] = p;
+      typeGroup.appendChild(p);
     });
-    tdType.appendChild(typeSel);
+    tdType.appendChild(typeGroup);
     tdType.appendChild(typePrint);
     tr.appendChild(tdType);
 
-    // Status: EXISTING / NEW (mutex)
+    // Status mutex
     var tdStatus = document.createElement('td');
     var statusGroup = document.createElement('div');
     statusGroup.className = 'pill-group';
@@ -1290,15 +1346,13 @@ body.sheet-open{overflow:hidden;}
     tdStatus.appendChild(statusPrint);
     tr.appendChild(tdStatus);
 
-    // Run time (min)
+    // Run Time
     tr.appendChild(numCell('runMin', '20', 0, 1));
 
-    // Days: 7 pills, independent
-    var tdDays = document.createElement('td');
-    var daysGroup = document.createElement('div');
-    daysGroup.className = 'pill-group';
-    var daysPrint = document.createElement('span');
-    daysPrint.className = 'sched-print';
+    // Days to Water — combined: day pills + O/E + every-N inline.
+    var tdDtw = document.createElement('td');
+    var dtwPills = document.createElement('div');
+    dtwPills.className = 'dtw-pills';
     var dayPillEls = {};
     DAYS.forEach(function(d){
       var p = pill(d.label, 'pill pill--day');
@@ -1308,54 +1362,69 @@ body.sheet-open{overflow:hidden;}
         z.days[d.key] = !z.days[d.key];
         clearAiBadge(idx);
         p.classList.toggle('is-on', z.days[d.key]);
-        daysPrint.textContent = daysLabel(z);
+        dtwPrint.textContent = daysToWaterLabel(z);
         syncListItem(idx);
       });
       dayPillEls[d.key] = p;
-      daysGroup.appendChild(p);
+      dtwPills.appendChild(p);
     });
-    daysPrint.textContent = daysLabel(z);
-    tdDays.appendChild(daysGroup);
-    tdDays.appendChild(daysPrint);
-    tr.appendChild(tdDays);
-
-    // O/E mutex
-    var tdOE = document.createElement('td');
-    var oeGroup = document.createElement('div');
-    oeGroup.className = 'pill-group';
     var pillO = pill('O', 'pill pill--oe');
     var pillE = pill('E', 'pill pill--oe');
-    var oePrint = document.createElement('span');
-    oePrint.className = 'sched-print';
     function paintOE(){
       pillO.classList.toggle('is-on', z.oe === 'Odd');
       pillE.classList.toggle('is-on', z.oe === 'Even');
-      oePrint.textContent = z.oe || '';
     }
     paintOE();
     pillO.addEventListener('click', function(){
       z.oe = (z.oe === 'Odd') ? '' : 'Odd';
       clearAiBadge(idx);
       paintOE();
+      dtwPrint.textContent = daysToWaterLabel(z);
       syncListItem(idx);
     });
     pillE.addEventListener('click', function(){
       z.oe = (z.oe === 'Even') ? '' : 'Even';
       clearAiBadge(idx);
       paintOE();
+      dtwPrint.textContent = daysToWaterLabel(z);
       syncListItem(idx);
     });
-    oeGroup.appendChild(pillO);
-    oeGroup.appendChild(pillE);
-    tdOE.appendChild(oeGroup);
-    tdOE.appendChild(oePrint);
-    tr.appendChild(tdOE);
+    dtwPills.appendChild(pillO);
+    dtwPills.appendChild(pillE);
 
-    // Every N days
-    tr.appendChild(numCell('everyDays', '1', 1, 1));
+    // Every N days inline
+    var dtwEvery = document.createElement('div');
+    dtwEvery.className = 'dtw-every';
+    var everyLbl = document.createElement('span');
+    everyLbl.textContent = 'Every';
+    var everyInput = document.createElement('input');
+    everyInput.type = 'number';
+    everyInput.inputMode = 'numeric';
+    everyInput.min = '1';
+    everyInput.step = '1';
+    everyInput.placeholder = '—';
+    everyInput.value = z.everyDays || '';
+    everyInput.dataset.field = 'everyDays';
+    var everyUnit = document.createElement('span');
+    everyUnit.textContent = 'days';
+    everyInput.addEventListener('input', function(){
+      z.everyDays = everyInput.value;
+      clearAiBadge(idx);
+      dtwPrint.textContent = daysToWaterLabel(z);
+      syncListItem(idx);
+    });
+    dtwEvery.appendChild(everyLbl);
+    dtwEvery.appendChild(everyInput);
+    dtwEvery.appendChild(everyUnit);
 
-    // Notes
-    tr.appendChild(textCell('notes', 'Cycle + soak'));
+    var dtwPrint = document.createElement('span');
+    dtwPrint.className = 'sched-print';
+    dtwPrint.textContent = daysToWaterLabel(z);
+
+    tdDtw.appendChild(dtwPills);
+    tdDtw.appendChild(dtwEvery);
+    tdDtw.appendChild(dtwPrint);
+    tr.appendChild(tdDtw);
 
     // Delete column
     var tdDel = document.createElement('td');
@@ -1366,34 +1435,30 @@ body.sheet-open{overflow:hidden;}
     delBtn.setAttribute('aria-label', 'Remove zone');
     delBtn.textContent = '✕';
     delBtn.addEventListener('click', function(){
-      // Find current index from the DOM order — index may have shifted
-      // since this row was built (other rows deleted ahead of it).
-      var i = Array.prototype.indexOf.call(zoneBody.children, tr);
+      var i = Array.prototype.indexOf.call(zoneBody.querySelectorAll('tr.zr-main'), tr);
       if (i < 0) return;
       deleteZone(i);
     });
     tdDel.appendChild(delBtn);
     tr.appendChild(tdDel);
 
-    // Cache refs for re-sync from sheet edits.
     tr._refs = {
       num: tdNum,
       colorSel: colorSel,
       swatch: swatch,
       colorPrint: colorPrint,
-      typeSel: typeSel,
+      typeGroup: typeGroup,
+      typePillEls: typePillEls,
       typePrint: typePrint,
       pillEx: pillEx,
       pillNew: pillNew,
       statusPrint: statusPrint,
       dayPillEls: dayPillEls,
-      daysPrint: daysPrint,
       pillO: pillO,
       pillE: pillE,
-      oePrint: oePrint,
-      // Plain inputs by data-field.
-      inputs: tr.querySelectorAll('input[type=text],input[type=number]'),
-      // Per-text-input sched-print mirrors (live next to each input).
+      everyInput: everyInput,
+      dtwPrint: dtwPrint,
+      // Plain inputs indexed by field name
       printMirrors: (function(){
         var map = {};
         tr.querySelectorAll('input[data-field]').forEach(function(inp){
@@ -1401,7 +1466,10 @@ body.sheet-open{overflow:hidden;}
           if (m && m.classList.contains('sched-print')) map[inp.dataset.field] = m;
         });
         return map;
-      })()
+      })(),
+      inputs: tr.querySelectorAll('input[type=text]:not([data-field="everyDays"]),input[type=number]:not([data-field="everyDays"])'),
+      locationInput: tr.querySelector('input[data-field="location"]'),
+      runInput: tr.querySelector('input[data-field="runMin"]')
     };
 
     return tr;
@@ -1416,48 +1484,47 @@ body.sheet-open{overflow:hidden;}
   }
 
   // ============ Apply zones[idx] back into its desktop row ============
-  // Used after the mobile sheet (or anything else) mutates state — keeps
-  // the table row in lockstep without rebuilding the whole row.
   function applyZoneToRow(idx){
-    var tr = zoneBody.children[idx];
+    var trs = zoneBody.querySelectorAll('tr.zr-main');
+    var tr = trs[idx];
     if (!tr || !tr._refs) return;
     var r = tr._refs;
     var z = zones[idx];
 
     r.num.textContent = String(idx + 1);
 
-    // Color
     r.colorSel.value = z.color;
     r.swatch.style.background = (COLOR_BY_KEY[z.color] || COLORS[0]).hex;
     r.colorPrint.textContent = (COLOR_BY_KEY[z.color] || COLORS[0]).label;
 
-    // Plain inputs (location, material, runMin, everyDays, notes)
-    Array.prototype.forEach.call(r.inputs, function(inp){
-      var f = inp.dataset.field;
-      if (!f) return;
-      inp.value = z[f] || '';
-      if (r.printMirrors[f]) r.printMirrors[f].textContent = z[f] || '';
+    if (r.locationInput){
+      r.locationInput.value = z.location || '';
+      if (r.printMirrors.location) r.printMirrors.location.textContent = z.location || '';
+    }
+    if (r.runInput){
+      r.runInput.value = z.runMin || '';
+      if (r.printMirrors.runMin) r.printMirrors.runMin.textContent = z.runMin || '';
+    }
+    if (r.everyInput) r.everyInput.value = z.everyDays || '';
+
+    // Type pills
+    TYPES.forEach(function(t){
+      if (r.typePillEls[t]) r.typePillEls[t].classList.toggle('is-on', z.type.indexOf(t) !== -1);
     });
+    r.typePrint.textContent = typeLabel(z);
 
-    // Type
-    r.typeSel.value = z.type;
-    r.typePrint.textContent = z.type || '';
-
-    // Status pills
+    // Status
     r.pillEx.classList.toggle('is-on', z.status === 'Existing');
     r.pillNew.classList.toggle('is-on', z.status === 'New');
     r.statusPrint.textContent = z.status || '';
 
-    // Day pills
+    // Day pills + O/E
     DAYS.forEach(function(d){
       r.dayPillEls[d.key].classList.toggle('is-on', !!z.days[d.key]);
     });
-    r.daysPrint.textContent = daysLabel(z);
-
-    // O/E pills
     r.pillO.classList.toggle('is-on', z.oe === 'Odd');
     r.pillE.classList.toggle('is-on', z.oe === 'Even');
-    r.oePrint.textContent = z.oe || '';
+    r.dtwPrint.textContent = daysToWaterLabel(z);
   }
 
   // ============ Mobile zone list ============
@@ -1472,17 +1539,14 @@ body.sheet-open{overflow:hidden;}
     btn.dataset.idx = String(idx);
     if (z.status) btn.dataset.status = z.status;
 
-    // #
     var num = document.createElement('span');
     num.className = 'zone-list-num';
     num.textContent = String(idx + 1);
 
-    // swatch
     var sw = document.createElement('span');
     sw.className = 'zone-list-swatch';
     sw.style.background = (COLOR_BY_KEY[z.color] || COLORS[0]).hex;
 
-    // body (label + optional sub)
     var body = document.createElement('span');
     body.className = 'zone-list-body';
     var label = document.createElement('span');
@@ -1492,12 +1556,11 @@ body.sheet-open{overflow:hidden;}
     body.appendChild(label);
 
     var subBits = [];
-    if (z.type) subBits.push(z.type);
+    var tl = typeLabel(z);
+    if (tl) subBits.push(tl);
     if (z.runMin) subBits.push(z.runMin + ' min');
-    var dl = daysLabel(z);
-    if (dl) subBits.push(dl);
-    else if (z.oe) subBits.push(z.oe);
-    else if (z.everyDays) subBits.push('Every ' + z.everyDays + 'd');
+    var dtw = daysToWaterLabel(z);
+    if (dtw) subBits.push(dtw);
     if (subBits.length){
       var sub = document.createElement('span');
       sub.className = 'zone-list-sub';
@@ -1505,13 +1568,11 @@ body.sheet-open{overflow:hidden;}
       body.appendChild(sub);
     }
 
-    // status pill (right-aligned)
     var pillEl = document.createElement('span');
     if (z.status === 'Existing'){ pillEl.className = 'zone-list-pill is-ex'; pillEl.textContent = 'Existing'; }
     else if (z.status === 'New'){ pillEl.className = 'zone-list-pill is-new'; pillEl.textContent = 'New'; }
     else { pillEl.className = 'zone-list-pill'; pillEl.style.visibility = 'hidden'; pillEl.textContent = '—'; }
 
-    // chevron
     var chev = document.createElement('span');
     chev.className = 'zone-list-chev';
     chev.setAttribute('aria-hidden','true');
@@ -1523,8 +1584,6 @@ body.sheet-open{overflow:hidden;}
     btn.appendChild(pillEl);
     btn.appendChild(chev);
     btn.addEventListener('click', function(){
-      // Re-read index from current DOM order — keeps us correct even if
-      // earlier zones got deleted while this card was visible.
       var i = Array.prototype.indexOf.call(zoneList.children, li);
       if (i < 0) return;
       openSheet(i);
@@ -1532,8 +1591,6 @@ body.sheet-open{overflow:hidden;}
 
     li.appendChild(btn);
 
-    // AI badge — small ✨ chip in the top-right corner of the card.
-    // Disappears the moment Patrick edits the zone (clearAiBadge below).
     if (z.aiDetected){
       var badge = document.createElement('span');
       badge.className = 'zone-list-ai-badge';
@@ -1544,37 +1601,20 @@ body.sheet-open{overflow:hidden;}
     return li;
   }
 
-  // Strip the ✨ AI flag once Patrick touches a zone. Called from every
-  // field-mutation path (table input, sheet input, pill click, color
-  // dropdown). The card re-renders on the next syncListItem call.
   function clearAiBadge(idx){
     var z = zones[idx];
     if (z && z.aiDetected){ z.aiDetected = false; }
   }
 
   function syncListItem(idx){
-    // Replace just the affected card in place — keeps focus / scroll
-    // outside of it untouched.
     var li = zoneList.children[idx];
     if (!li) return;
     var fresh = buildListItem(idx);
     li.replaceWith(fresh);
   }
 
-  function renderListAll(){
-    zoneList.innerHTML = '';
-    if (!zones.length){
-      var empty = document.createElement('li');
-      empty.className = 'zone-list-empty';
-      empty.textContent = 'No zones yet — tap +Add zone above to start.';
-      zoneList.appendChild(empty);
-      return;
-    }
-    zones.forEach(function(_, i){ zoneList.appendChild(buildListItem(i)); });
-  }
-
   function renumberCount(){
-    Array.prototype.forEach.call(zoneBody.children, function(tr, i){
+    zoneBody.querySelectorAll('tr.zr-main').forEach(function(tr, i){
       if (tr._refs) tr._refs.num.textContent = String(i + 1);
     });
     zoneCountEl.textContent = zones.length + ' zone' + (zones.length === 1 ? '' : 's');
@@ -1591,13 +1631,11 @@ body.sheet-open{overflow:hidden;}
   function deleteZone(idx){
     if (idx < 0 || idx >= zones.length) return;
     zones.splice(idx, 1);
-    // Remove from both views — index aligned with DOM order.
-    var rowToRemove = zoneBody.children[idx];
+    var rowToRemove = zoneBody.querySelectorAll('tr.zr-main')[idx];
     if (rowToRemove) rowToRemove.remove();
     var liToRemove = zoneList.children[idx];
     if (liToRemove) liToRemove.remove();
-    // Renumber + refresh the trailing rows / cards so their indices match.
-    Array.prototype.forEach.call(zoneBody.children, function(tr, i){
+    zoneBody.querySelectorAll('tr.zr-main').forEach(function(tr, i){
       if (tr._refs) tr._refs.num.textContent = String(i + 1);
       tr.dataset.idx = String(i);
     });
@@ -1610,15 +1648,13 @@ body.sheet-open{overflow:hidden;}
     zoneCountEl.textContent = zones.length + ' zone' + (zones.length === 1 ? '' : 's');
   }
 
-  // ============ Bottom sheet (mobile zone editor) ============
+  // ============ Bottom sheet ============
   function openSheet(idx){
     if (idx < 0 || idx >= zones.length) return;
     activeIdx = idx;
     applyZoneToSheet();
     zsheet.hidden = false;
     document.body.classList.add('sheet-open');
-    // Don't autofocus an input — opens iOS keyboard immediately which is
-    // jarring. Focus the close button so screen-readers know where they are.
     setTimeout(function(){ zsheetBack.focus(); }, 30);
   }
 
@@ -1633,18 +1669,20 @@ body.sheet-open{overflow:hidden;}
     var z = zones[activeIdx];
     zsheetTitle.textContent = 'Zone ' + (activeIdx + 1);
     zsLocation.value = z.location || '';
-    zsMaterial.value = z.material || '';
     zsColor.value = z.color || '';
     zsSwatch.style.background = (COLOR_BY_KEY[z.color] || COLORS[0]).hex;
-    zsType.value = z.type || '';
     zsRun.value = z.runMin || '';
     zsEvery.value = z.everyDays || '';
     zsNotes.value = z.notes || '';
+    // Type pills (multi)
+    zsType.querySelectorAll('[data-type]').forEach(function(b){
+      b.setAttribute('aria-pressed', z.type.indexOf(b.dataset.type) !== -1 ? 'true' : 'false');
+    });
     // Status
     zsStatus.querySelectorAll('[data-status]').forEach(function(b){
       b.setAttribute('aria-pressed', b.dataset.status === z.status ? 'true' : 'false');
     });
-    // Day pills
+    // Days
     zsDays.querySelectorAll('[data-day]').forEach(function(b){
       b.setAttribute('aria-pressed', z.days[b.dataset.day] ? 'true' : 'false');
     });
@@ -1655,9 +1693,6 @@ body.sheet-open{overflow:hidden;}
   }
 
   // ============ Sheet field bindings ============
-  // Every input in the sheet mutates zones[activeIdx] and immediately
-  // syncs the desktop row + mobile card. Auto-saves on input; the Done
-  // button just closes (matches WO tech UX).
   function bindSheetText(el, field){
     el.addEventListener('input', function(){
       if (activeIdx < 0) return;
@@ -1668,7 +1703,6 @@ body.sheet-open{overflow:hidden;}
     });
   }
   bindSheetText(zsLocation, 'location');
-  bindSheetText(zsMaterial, 'material');
   bindSheetText(zsNotes,    'notes');
   bindSheetText(zsRun,      'runMin');
   bindSheetText(zsEvery,    'everyDays');
@@ -1681,15 +1715,21 @@ body.sheet-open{overflow:hidden;}
     applyZoneToRow(activeIdx);
     syncListItem(activeIdx);
   });
-  zsType.addEventListener('change', function(){
-    if (activeIdx < 0) return;
-    zones[activeIdx].type = zsType.value;
+
+  // Type (multi)
+  zsType.addEventListener('click', function(e){
+    var btn = e.target.closest('[data-type]');
+    if (!btn || activeIdx < 0) return;
+    var z = zones[activeIdx];
+    var t = btn.dataset.type;
+    var i = z.type.indexOf(t);
+    if (i === -1) z.type.push(t); else z.type.splice(i, 1);
     clearAiBadge(activeIdx);
+    btn.setAttribute('aria-pressed', z.type.indexOf(t) !== -1 ? 'true' : 'false');
     applyZoneToRow(activeIdx);
     syncListItem(activeIdx);
   });
 
-  // Status pills (mutex)
   zsStatus.addEventListener('click', function(e){
     var btn = e.target.closest('[data-status]');
     if (!btn || activeIdx < 0) return;
@@ -1703,7 +1743,6 @@ body.sheet-open{overflow:hidden;}
     syncListItem(activeIdx);
   });
 
-  // Day pills (independent)
   zsDays.addEventListener('click', function(e){
     var btn = e.target.closest('[data-day]');
     if (!btn || activeIdx < 0) return;
@@ -1716,7 +1755,6 @@ body.sheet-open{overflow:hidden;}
     syncListItem(activeIdx);
   });
 
-  // O/E pills (mutex)
   zsOE.addEventListener('click', function(e){
     var btn = e.target.closest('[data-oe]');
     if (!btn || activeIdx < 0) return;
@@ -1730,7 +1768,6 @@ body.sheet-open{overflow:hidden;}
     syncListItem(activeIdx);
   });
 
-  // Sheet close handlers
   zsheetBack.addEventListener('click', closeSheet);
   zsheetDone.addEventListener('click', closeSheet);
   zsheet.addEventListener('click', function(e){
@@ -1797,9 +1834,6 @@ body.sheet-open{overflow:hidden;}
   planClear.addEventListener('click', function(){ setPlanImage(null); });
 
   // ============ AI photo extraction ============
-  // Sends the current data URL to /api/irrigation-extract-zones. On
-  // success, swaps the central zones[] for the AI result + re-renders.
-  // Pre-AI zones are stashed so "Undo AI" can restore them.
   var btnAnalyze     = document.getElementById('btnAnalyze');
   var btnAnalyzeText = document.getElementById('btnAnalyzeText');
   var btnUndoAi      = document.getElementById('btnUndoAi');
@@ -1815,14 +1849,10 @@ body.sheet-open{overflow:hidden;}
   function showUndo(){ btnUndoAi.classList.add('is-visible'); }
   function hideUndo(){ btnUndoAi.classList.remove('is-visible'); preAiZonesSnapshot = null; }
 
-  // Replace zones[] wholesale from a fresh array. Tears down the existing
-  // table + list rows and rebuilds them from the supplied state. This is
-  // the only path that wipes the DOM; per-zone edits go through the
-  // sync helpers and keep focus.
   function replaceZones(newZones){
     zones = newZones.map(function(z){
-      // Defensive copy — the AI payload arrays/objects shouldn't leak.
       return Object.assign(makeZone(), z, {
+        type: Array.isArray(z.type) ? z.type.slice() : [],
         days: Object.assign({}, makeZone().days, z.days || {})
       });
     });
@@ -1843,9 +1873,11 @@ body.sheet-open{overflow:hidden;}
   }
 
   function snapshotZonesForUndo(){
-    // Deep-ish clone — days is the only nested object.
     preAiZonesSnapshot = zones.map(function(z){
-      return Object.assign({}, z, { days: Object.assign({}, z.days) });
+      return Object.assign({}, z, {
+        type: (z.type || []).slice(),
+        days: Object.assign({}, z.days)
+      });
     });
   }
 
@@ -1878,15 +1910,14 @@ body.sheet-open{overflow:hidden;}
         showAiStatus('info', "AI didn't detect any color-coded zones in this image. Add zones manually below.");
         return;
       }
-      // Snapshot what's there now (so Undo can restore it), then map AI
-      // payload → full zone records and replace.
       snapshotZonesForUndo();
       var fresh = detected.map(function(d){
         var z = makeZone();
-        z.color    = d.color || '';
+        z.color    = (d.color || '').toLowerCase();
         z.location = d.label || '';
-        z.material = d.material || '';
         z.notes    = d.notes || '';
+        // Server may return material as a tag — fold into notes if no notes already.
+        if (d.material && !z.notes) z.notes = d.material;
         z.aiDetected = true;
         return z;
       });
@@ -1905,8 +1936,6 @@ body.sheet-open{overflow:hidden;}
 
   btnUndoAi.addEventListener('click', function(){
     if (!preAiZonesSnapshot){
-      // No snapshot means nothing to undo — just wipe the AI batch and
-      // re-seed 12 empties so Patrick gets back to a clean tool.
       replaceZones(Array.from({length:12}, makeZone));
     } else {
       replaceZones(preAiZonesSnapshot);
@@ -1917,9 +1946,6 @@ body.sheet-open{overflow:hidden;}
   });
 
   // ============ Letterhead / doc-row contenteditable mirrors ============
-  // contenteditable elements get a sibling .sched-print mirror so that
-  // when @media print hides the editable (caret artifacts on some browsers)
-  // the printed PDF still shows the typed text.
   document.querySelectorAll('[contenteditable="true"]').forEach(function(el){
     var mirror = document.createElement('span');
     mirror.className = 'sched-print';
@@ -1929,33 +1955,78 @@ body.sheet-open{overflow:hidden;}
   });
 
   // ============ Print prep ============
-  // Mirrors are kept current by every mutation. prepPrint only has to
-  // hide empty rows so blank zones don't waste page space.
+  // (a) Skip empty rows.
+  // (b) Inject a Notes sub-row for any zone with non-empty notes, with
+  //     colspan across all visible columns. The sub-row is removed in
+  //     restorePrint() so it doesn't leak onto the screen view.
+  // (c) Set document.title so Chrome's Save-as-PDF picks the right name.
+  var originalTitle = null;
+  // 7 visible columns in print (delete column is hidden via th/td:last-child).
+  var PRINT_COLSPAN = 7;
+
   function prepPrint(){
-    var rows = zoneBody.querySelectorAll('tr');
-    Array.prototype.forEach.call(rows, function(tr, i){
+    // Build the per-zone notes sub-rows + skip empties.
+    var mains = zoneBody.querySelectorAll('tr.zr-main');
+    Array.prototype.forEach.call(mains, function(tr, i){
       var z = zones[i];
       if (!z) return;
-      var any =
+      var hasAnything =
         (z.location || '').trim() ||
-        (z.material || '').trim() ||
         (z.notes || '').trim() ||
-        z.type || z.status || z.color || z.oe ||
+        z.status || z.color || z.oe ||
+        (z.type && z.type.length) ||
         (z.runMin || '').toString().trim() ||
         (z.everyDays || '').toString().trim() ||
         DAYS.some(function(d){ return z.days[d.key]; });
-      if (!any){
+      if (!hasAnything){
         tr.dataset.printSkip = '1';
         tr.style.display = 'none';
+        return;
+      }
+      // Inject notes sub-row if needed (one per main row; idempotent).
+      var notesText = (z.notes || '').trim();
+      if (notesText){
+        var sub = document.createElement('tr');
+        sub.className = 'zr-notes';
+        sub.dataset.injected = '1';
+        var td = document.createElement('td');
+        td.colSpan = PRINT_COLSPAN;
+        var labelSpan = document.createElement('span');
+        labelSpan.className = 'zr-notes-label';
+        labelSpan.textContent = 'Notes';
+        td.appendChild(labelSpan);
+        td.appendChild(document.createTextNode(notesText));
+        sub.appendChild(td);
+        tr.parentNode.insertBefore(sub, tr.nextSibling);
       }
     });
+
+    // PDF filename — YYYY-MM-DD - Project - PJL Land Services Zone Schedule
+    originalTitle = document.title;
+    var iso = (docDate.textContent || '').trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)){
+      var d = new Date();
+      iso = d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+    }
+    var proj = (docProject.textContent || '').trim();
+    if (!proj || proj === 'Customer / property address') proj = 'Untitled Site';
+    // Sanitize: collapse newlines, strip path-hostile chars, trim length.
+    proj = proj.replace(/[\r\n\t]+/g,' ').replace(/[\\/:*?"<>|]+/g,'').replace(/\s+/g,' ').trim().slice(0,80);
+    document.title = iso + ' - ' + proj + ' - PJL Land Services Zone Schedule';
   }
+
   function restorePrint(){
-    var rows = zoneBody.querySelectorAll('tr[data-print-skip="1"]');
-    Array.prototype.forEach.call(rows, function(tr){
+    // Remove injected notes sub-rows.
+    zoneBody.querySelectorAll('tr.zr-notes[data-injected="1"]').forEach(function(tr){ tr.remove(); });
+    // Restore hidden empties.
+    zoneBody.querySelectorAll('tr.zr-main[data-print-skip="1"]').forEach(function(tr){
       tr.style.display = '';
       delete tr.dataset.printSkip;
     });
+    if (originalTitle !== null){
+      document.title = originalTitle;
+      originalTitle = null;
+    }
   }
 
   // ============ Clear sheet ============
@@ -1986,13 +2057,14 @@ body.sheet-open{overflow:hidden;}
   }
   seed(12);
 
-  // Expose a small dev hook so the harness can introspect state without
-  // having to scrape DOM in tests. Read-only — not for production use.
   window.__zsched = {
     getZones: function(){ return zones; },
     getActive: function(){ return activeIdx; },
     openSheet: openSheet,
-    closeSheet: closeSheet
+    closeSheet: closeSheet,
+    replaceZones: replaceZones,
+    prepPrint: prepPrint,
+    restorePrint: restorePrint
   };
 
 })();
