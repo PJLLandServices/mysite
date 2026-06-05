@@ -1930,7 +1930,23 @@ body.sheet-open{overflow:hidden;}
       if (skipped > 0){
         baseMsg += ' (skipped ' + skipped + ' marking' + (skipped === 1 ? '' : 's') + ' the AI couldn’t classify)';
       }
-      showAiStatus('success', baseMsg + ' — review and edit.');
+      // Palette breakdown — show which of the 20 palette colors the model
+      // returned and which were absent. Lets Patrick see at a glance
+      // whether the model genuinely missed a color, or whether he used a
+      // different palette entry than he thought (e.g. Cyan vs Teal).
+      var foundSet = {};
+      detected.forEach(function(d){ if (d && d.color) foundSet[String(d.color).toLowerCase()] = true; });
+      var palette = COLORS.filter(function(c){ return c.key; }); // drop the blank-key entry
+      var foundLabels   = palette.filter(function(c){ return  foundSet[c.key]; }).map(function(c){ return c.label; });
+      var absentLabels  = palette.filter(function(c){ return !foundSet[c.key]; }).map(function(c){ return c.label; });
+      var paletteMsg = '';
+      if (foundLabels.length){
+        paletteMsg += ' Found: ' + foundLabels.join(', ') + '.';
+      }
+      if (absentLabels.length){
+        paletteMsg += ' Not present: ' + absentLabels.join(', ') + '.';
+      }
+      showAiStatus('success', baseMsg + ' — review and edit.' + paletteMsg);
       showUndo();
     } catch (err) {
       console.error('analyze error', err);
