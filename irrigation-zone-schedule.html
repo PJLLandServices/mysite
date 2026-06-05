@@ -1,0 +1,940 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="description" content="Irrigation zone schedule — fillable site-plan + zone-by-zone summary printable as a portrait PDF. PJL Land Services.">
+<meta name="robots" content="noindex, follow">
+<link rel="canonical" href="https://www.pjllandservices.com/irrigation-zone-schedule.html">
+<link rel="icon" type="image/png" href="/favicon-96x96.png" sizes="96x96" />
+<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+<link rel="shortcut icon" href="/favicon.ico" />
+<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+<meta name="apple-mobile-web-app-title" content="PJL" />
+<title>Irrigation Zone Schedule — PJL Land Services</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700;800&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+<style>
+/* ============================================================
+   PJL Irrigation Zone Schedule — fillable + portrait PDF
+   ============================================================
+   Self-contained: brand tokens inlined, no external CSS except
+   the Google Font CSS (Chrome embeds fonts on Print → Save PDF).
+   ============================================================ */
+
+:root{
+  --green:#1B4D2E;
+  --green-mid:#2D6A42;
+  --green-light:#4A8C5C;
+  --green-pale:#EAF3DE;
+  --green-tint:#F4F9EC;
+  --amber:#E07B24;
+  --amber-light:#F59B4A;
+  --amber-pale:#FDF0E4;
+  --cream:#FAFAF5;
+  --paper:#FFFFFF;
+  --dark:#0F1F14;
+  --text:#1A1A1A;
+  --text-mid:#4A4A4A;
+  --text-muted:#7A7A72;
+  --border:#E2E0D4;
+  --border-strong:#C9C5B5;
+  --shadow:0 4px 24px rgba(15,31,20,0.10);
+}
+*{box-sizing:border-box;}
+html,body{margin:0;padding:0;}
+body{
+  font-family:'DM Sans','Helvetica Neue',Arial,sans-serif;
+  font-size:14px;
+  line-height:1.5;
+  color:var(--text);
+  background:var(--cream);
+  -webkit-print-color-adjust:exact;
+  print-color-adjust:exact;
+}
+:focus-visible{outline:2px solid var(--green-light);outline-offset:2px;border-radius:4px;}
+
+/* ============ Screen toolbar ============ */
+.toolbar{
+  position:sticky;top:0;z-index:10;
+  background:var(--dark);
+  border-bottom:1px solid rgba(255,255,255,0.06);
+  padding:12px clamp(12px,2vw,24px);
+  display:flex;flex-wrap:wrap;align-items:center;gap:10px;
+}
+.toolbar-brand{
+  font-family:'Barlow Condensed',sans-serif;
+  font-weight:700;
+  font-size:14px;
+  letter-spacing:0.14em;
+  text-transform:uppercase;
+  color:rgba(255,255,255,0.78);
+  margin-right:auto;
+  display:inline-flex;
+  align-items:center;
+  gap:8px;
+}
+.toolbar-brand::before{content:'';display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--amber-light);box-shadow:0 0 0 3px rgba(245,155,74,0.30);}
+.tb-btn{
+  font-family:inherit;font-size:13px;font-weight:600;
+  padding:9px 16px;border-radius:99px;cursor:pointer;
+  border:1px solid rgba(255,255,255,0.18);
+  background:rgba(255,255,255,0.06);
+  color:#fff;
+  display:inline-flex;align-items:center;gap:8px;
+  transition:background .15s ease,border-color .15s ease,transform .15s ease;
+}
+.tb-btn:hover{background:rgba(255,255,255,0.12);border-color:rgba(255,255,255,0.28);}
+.tb-btn:active{transform:translateY(1px);}
+.tb-btn--primary{background:var(--amber);border-color:var(--amber);}
+.tb-btn--primary:hover{background:var(--amber-light);border-color:var(--amber-light);}
+.tb-btn--ghost{background:transparent;}
+.tb-help{font-size:12px;color:rgba(255,255,255,0.55);margin-left:8px;}
+
+/* ============ Sheet container (the printable page) ============ */
+.sheet-wrap{padding:clamp(16px,3vw,40px);display:flex;justify-content:center;}
+.sheet{
+  width:100%;max-width:8.5in;
+  background:var(--paper);
+  border:1px solid var(--border);
+  border-radius:12px;
+  box-shadow:var(--shadow);
+  padding:clamp(22px,3vw,40px);
+  position:relative;
+}
+
+/* ============ Letterhead ============ */
+.letterhead{
+  display:grid;grid-template-columns:auto 1fr;gap:24px;align-items:center;
+  padding-bottom:18px;border-bottom:3px solid var(--green);
+}
+.lh-logo img{display:block;height:64px;width:auto;}
+.lh-contact{font-size:12px;line-height:1.55;color:var(--text-mid);text-align:right;}
+.lh-contact .editable{display:inline-block;min-width:30px;}
+.lh-contact .lh-row{display:block;}
+.lh-contact strong{color:var(--text);font-weight:600;}
+
+.lh-title-row{
+  display:flex;align-items:center;justify-content:space-between;gap:18px;
+  margin-top:22px;
+}
+.lh-title{
+  font-family:'Barlow Condensed',sans-serif;
+  font-weight:800;
+  font-size:32px;
+  line-height:1.05;
+  color:var(--green);
+  margin:0;
+  letter-spacing:-0.01em;
+  text-transform:uppercase;
+}
+.lh-eyebrow{
+  font-size:11px;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;
+  color:var(--amber);
+  display:inline-flex;align-items:center;gap:6px;
+}
+.lh-eyebrow::before{content:'';display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--amber);}
+
+/* ============ Doc row (Project / Controller / Date / Drawn By) ============ */
+.doc-row{
+  display:grid;grid-template-columns:repeat(4,1fr);gap:12px;
+  margin-top:20px;
+  padding:14px 16px;
+  background:var(--green-tint);
+  border:1px solid var(--green-pale);
+  border-radius:10px;
+}
+.doc-cell{display:flex;flex-direction:column;gap:3px;min-width:0;}
+.doc-cell-label{
+  font-size:10px;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;
+  color:var(--green);
+}
+.doc-cell .editable{
+  font-size:14px;font-weight:600;color:var(--text);
+  padding:6px 0 4px;border-bottom:1px solid var(--border-strong);
+  min-height:24px;outline:none;
+}
+.doc-cell .editable:focus{border-bottom-color:var(--green);}
+
+/* ============ Site plan figure ============ */
+.plan{
+  margin:24px 0 22px;
+  padding:0;
+}
+.plan-dropzone{
+  position:relative;
+  width:100%;
+  min-height:280px;
+  border:2px dashed var(--border-strong);
+  border-radius:12px;
+  background:var(--cream);
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  text-align:center;padding:32px 24px;cursor:pointer;
+  transition:border-color .15s ease,background .15s ease;
+}
+.plan-dropzone:hover{border-color:var(--green-light);background:var(--green-tint);}
+.plan-dropzone.is-dragover{border-color:var(--green);background:var(--green-pale);}
+.plan-dropzone-icon{
+  font-size:42px;line-height:1;margin-bottom:10px;opacity:0.55;
+}
+.plan-dropzone-title{
+  font-family:'Barlow Condensed',sans-serif;
+  font-weight:700;font-size:18px;letter-spacing:0.04em;text-transform:uppercase;
+  color:var(--green);margin-bottom:4px;
+}
+.plan-dropzone-hint{font-size:12px;color:var(--text-muted);max-width:36ch;line-height:1.55;}
+.plan-dropzone input[type=file]{position:absolute;inset:0;opacity:0;cursor:pointer;}
+.plan-img-wrap{position:relative;}
+.plan-img{
+  display:block;width:100%;max-height:5.5in;object-fit:contain;
+  border-radius:10px;border:1px solid var(--border);background:var(--cream);
+}
+.plan-clear{
+  position:absolute;top:10px;right:10px;
+  background:rgba(15,31,20,0.78);color:#fff;border:0;
+  font-size:12px;font-weight:600;padding:6px 12px;border-radius:99px;cursor:pointer;
+}
+.plan-clear:hover{background:rgba(15,31,20,0.92);}
+.plan-caption{
+  font-size:12px;color:var(--text-muted);text-align:center;
+  margin-top:8px;font-style:italic;
+}
+
+/* ============ Zone table ============ */
+.zone-section{margin-top:8px;}
+.zone-section-head{
+  display:flex;align-items:baseline;justify-content:space-between;gap:12px;
+  margin-bottom:10px;
+}
+.zone-section-title{
+  font-family:'Barlow Condensed',sans-serif;
+  font-weight:800;font-size:22px;letter-spacing:0.02em;text-transform:uppercase;
+  color:var(--green);margin:0;
+}
+.zone-section-count{font-size:12px;color:var(--text-muted);}
+.zone-table{
+  width:100%;
+  border-collapse:collapse;
+  font-size:12px;
+  table-layout:fixed;
+}
+.zone-table th{
+  background:var(--green);color:#fff;
+  font-family:'Barlow Condensed',sans-serif;
+  font-weight:700;font-size:11px;letter-spacing:0.08em;text-transform:uppercase;
+  padding:8px 6px;text-align:left;
+  border:1px solid var(--green-mid);
+}
+.zone-table thead th:first-child{border-top-left-radius:6px;}
+.zone-table thead th:last-child{border-top-right-radius:6px;}
+.zone-table td{
+  padding:6px 5px;border:1px solid var(--border);vertical-align:top;
+  background:var(--paper);
+}
+.zone-table tbody tr:nth-child(even) td{background:var(--cream);}
+.zone-table tbody tr:hover td{background:var(--green-tint);}
+
+/* Column widths tuned for portrait Letter 7.5" usable width */
+.zone-table colgroup col:nth-child(1){width:3.2%;}   /* # */
+.zone-table colgroup col:nth-child(2){width:9.5%;}   /* Color */
+.zone-table colgroup col:nth-child(3){width:13%;}    /* Location */
+.zone-table colgroup col:nth-child(4){width:13%;}    /* Material */
+.zone-table colgroup col:nth-child(5){width:9%;}     /* Type */
+.zone-table colgroup col:nth-child(6){width:8%;}     /* Status */
+.zone-table colgroup col:nth-child(7){width:6%;}     /* Run */
+.zone-table colgroup col:nth-child(8){width:13%;}    /* Days */
+.zone-table colgroup col:nth-child(9){width:6%;}     /* O/E */
+.zone-table colgroup col:nth-child(10){width:6%;}    /* Every */
+.zone-table colgroup col:nth-child(11){width:10%;}   /* Notes */
+.zone-table colgroup col:nth-child(12){width:3.3%;}  /* delete */
+
+/* Cell inputs */
+.zone-table input[type=text],
+.zone-table input[type=number]{
+  width:100%;
+  font:inherit;font-size:12px;color:var(--text);
+  border:0;background:transparent;
+  padding:2px 0;outline:none;
+  min-width:0;
+}
+.zone-table input[type=text]:focus,
+.zone-table input[type=number]:focus,
+.zone-table select:focus{
+  background:#fff;outline:2px solid var(--green-light);outline-offset:-2px;border-radius:3px;
+}
+.zone-table input[type=number]{-moz-appearance:textfield;}
+.zone-table input[type=number]::-webkit-outer-spin-button,
+.zone-table input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none;margin:0;}
+.zone-num{text-align:center;font-weight:700;color:var(--green);}
+
+/* Color cell */
+.color-cell{display:flex;align-items:center;gap:6px;}
+.swatch{
+  width:18px;height:18px;border-radius:4px;
+  border:1px solid rgba(0,0,0,0.18);
+  flex-shrink:0;
+}
+.color-cell select{
+  font:inherit;font-size:11px;font-weight:600;
+  border:0;background:transparent;
+  padding:2px 0;color:var(--text);outline:none;width:100%;min-width:0;
+  appearance:none;
+  -webkit-appearance:none;
+  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='8' height='5' viewBox='0 0 8 5'><path fill='%237A7A72' d='M0 0l4 5 4-5z'/></svg>");
+  background-repeat:no-repeat;background-position:right 2px center;
+  padding-right:12px;
+}
+
+/* Type select */
+.type-cell select{
+  font:inherit;font-size:11px;font-weight:600;
+  border:0;background:transparent;
+  padding:2px 0;color:var(--text);outline:none;width:100%;min-width:0;
+  appearance:none;
+  -webkit-appearance:none;
+  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='8' height='5' viewBox='0 0 8 5'><path fill='%237A7A72' d='M0 0l4 5 4-5z'/></svg>");
+  background-repeat:no-repeat;background-position:right 2px center;
+  padding-right:12px;
+}
+
+/* Pills (Status existing/new, days, odd/even) */
+.pill-group{display:flex;flex-wrap:wrap;gap:3px;align-items:center;}
+.pill{
+  font:inherit;font-size:10px;font-weight:700;
+  padding:3px 7px;border-radius:99px;
+  border:1px solid var(--border-strong);
+  background:#fff;color:var(--text-muted);
+  cursor:pointer;letter-spacing:0.04em;text-transform:uppercase;
+  line-height:1;user-select:none;min-width:0;
+}
+.pill:hover{border-color:var(--green-light);color:var(--green);}
+.pill.is-on{background:var(--green);color:#fff;border-color:var(--green);}
+.pill--day{padding:3px 6px;font-size:10px;min-width:18px;text-align:center;}
+.pill--day.is-on{background:var(--green-mid);border-color:var(--green-mid);}
+.pill--oe{padding:3px 7px;}
+.pill--oe.is-on{background:var(--amber);border-color:var(--amber);}
+.pill--ex.is-on{background:var(--text-mid);border-color:var(--text-mid);}
+.pill--new.is-on{background:var(--green);border-color:var(--green);}
+
+/* Per-row delete */
+.row-del{
+  background:transparent;border:0;cursor:pointer;
+  color:var(--text-muted);font-size:16px;line-height:1;
+  padding:4px 6px;border-radius:4px;
+  width:100%;
+}
+.row-del:hover{color:#C03A2C;background:rgba(192,58,44,0.08);}
+
+/* Add zone row */
+.add-zone-row{
+  margin-top:10px;display:flex;justify-content:center;
+}
+.add-zone-btn{
+  font:inherit;font-size:13px;font-weight:600;
+  padding:9px 18px;border-radius:99px;cursor:pointer;
+  border:1px dashed var(--border-strong);background:transparent;
+  color:var(--green);
+}
+.add-zone-btn:hover{border-color:var(--green);background:var(--green-tint);}
+
+/* Footer note (legend / hints) */
+.sheet-footer{
+  margin-top:24px;padding-top:14px;border-top:1px solid var(--border);
+  display:grid;grid-template-columns:1fr auto;gap:16px;align-items:end;
+  font-size:11px;color:var(--text-muted);line-height:1.55;
+}
+.legend{display:flex;flex-wrap:wrap;gap:14px;align-items:center;}
+.legend-item{display:inline-flex;align-items:center;gap:5px;}
+.legend-pill{
+  font-size:9px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;
+  padding:2px 6px;border-radius:99px;color:#fff;
+}
+.lg-existing{background:var(--text-mid);}
+.lg-new{background:var(--green);}
+.lg-oe{background:var(--amber);}
+
+/* Print-flat shadow elements (filled by prepPrint(); hidden on screen) */
+.sched-print{display:none;}
+.cname-print{display:none;}
+
+/* ============ Print rules ============ */
+@page{size:Letter portrait;margin:0.45in 0.45in 0.55in 0.45in;}
+@media print{
+  html,body{background:#fff;}
+  .toolbar,.add-zone-row,.row-del,.plan-clear,
+  .plan-dropzone:not(.has-image),
+  th:last-child,td:last-child{display:none !important;}
+  .sheet-wrap{padding:0;}
+  .sheet{
+    max-width:none;width:100%;
+    border:0;box-shadow:none;border-radius:0;
+    padding:0;
+  }
+  .letterhead{padding-bottom:12px;border-bottom-width:2px;}
+  .lh-logo img{height:50px;}
+  .lh-title{font-size:24px;}
+  .lh-title-row{margin-top:14px;}
+  .doc-row{
+    padding:10px 12px;margin-top:14px;
+    border:1px solid var(--green-pale);
+    background:var(--green-tint) !important;
+  }
+  .plan{margin:14px 0;}
+  .plan-img{max-height:3.6in;page-break-inside:avoid;}
+  .plan-caption{font-size:10px;margin-top:4px;}
+  .zone-section-title{font-size:16px;}
+  .zone-table{font-size:9.5px;page-break-inside:auto;}
+  .zone-table th{
+    padding:5px 4px;font-size:9px;
+    background:var(--green) !important;color:#fff !important;
+    -webkit-print-color-adjust:exact;print-color-adjust:exact;
+  }
+  .zone-table thead{display:table-header-group;}
+  .zone-table tr{page-break-inside:avoid;}
+  .zone-table td{padding:4px 4px;}
+  /* Hide interactive controls; show the flattened text mirrors */
+  .zone-table input[type=text],
+  .zone-table input[type=number],
+  .zone-table select,
+  .pill-group,
+  .doc-cell .editable,
+  .lh-contact .editable{display:none !important;}
+  .sched-print,.cname-print{display:inline !important;white-space:normal;}
+  .doc-cell{gap:1px;}
+  .doc-cell-label{font-size:8.5px;}
+  .doc-cell .sched-print{font-size:11.5px;font-weight:600;}
+  .lh-contact .sched-print{font-size:11px;line-height:1.5;}
+  /* Cell row coloring still helps readability when printed in colour */
+  .zone-table tbody tr:nth-child(even) td{background:#f8f8f3 !important;}
+  /* Color swatch stays visible — communicates wire color in print */
+  .swatch{width:14px;height:14px;border:1px solid #999;}
+  .sheet-footer{margin-top:14px;font-size:9.5px;}
+  /* Strip the dashed border on the upload zone if no image (it's hidden anyway) */
+  .plan-dropzone{border:0;background:transparent;padding:0;min-height:0;}
+}
+</style>
+</head>
+<body>
+
+<!-- ============ Screen-only toolbar ============ -->
+<div class="toolbar">
+  <span class="toolbar-brand">PJL Land Services · Irrigation Zone Schedule</span>
+  <button type="button" class="tb-btn tb-btn--primary" id="btnPrint">
+    <span aria-hidden="true">🖨</span> Print / Save as PDF
+  </button>
+  <button type="button" class="tb-btn" id="btnAddZone">+ Add zone</button>
+  <button type="button" class="tb-btn tb-btn--ghost" id="btnClear">Clear sheet</button>
+  <span class="tb-help">Tip: portrait, fit-to-page in Chrome's print dialog.</span>
+</div>
+
+<!-- ============ The printable sheet ============ -->
+<div class="sheet-wrap">
+<div class="sheet" id="sheet">
+
+  <!-- Letterhead -->
+  <header class="letterhead">
+    <div class="lh-logo">
+      <img src="/logo.svg" alt="PJL Land Services">
+    </div>
+    <div class="lh-contact" id="lhContact">
+      <span class="lh-row"><strong>PJL Land Services</strong></span>
+      <span class="lh-row">Newmarket, Ontario · <span class="editable" contenteditable="true" data-print="contact-area">Greater Toronto Area</span></span>
+      <span class="lh-row">(905) 960-0181 · info@pjllandservices.com</span>
+      <span class="lh-row"><span class="editable" contenteditable="true" data-print="contact-extra">www.pjllandservices.com</span></span>
+    </div>
+  </header>
+  <div class="lh-title-row">
+    <h1 class="lh-title">Irrigation Zone Schedule</h1>
+    <span class="lh-eyebrow">Field-ready · Customer-shareable</span>
+  </div>
+
+  <!-- Project / Controller / Date / Drawn By -->
+  <section class="doc-row" aria-label="Document metadata">
+    <div class="doc-cell">
+      <span class="doc-cell-label">Project / Site</span>
+      <span class="editable" contenteditable="true" data-print="doc-project" data-placeholder="Customer name / property address">Customer / property address</span>
+    </div>
+    <div class="doc-cell">
+      <span class="doc-cell-label">Controller</span>
+      <span class="editable" contenteditable="true" data-print="doc-controller" data-placeholder="e.g. Hunter HPC-400 Hydrawise">Hunter HPC-400 Hydrawise</span>
+    </div>
+    <div class="doc-cell">
+      <span class="doc-cell-label">Date</span>
+      <span class="editable" contenteditable="true" data-print="doc-date" data-placeholder="YYYY-MM-DD">—</span>
+    </div>
+    <div class="doc-cell">
+      <span class="doc-cell-label">Drawn By</span>
+      <span class="editable" contenteditable="true" data-print="doc-drawer">Patrick Lalande</span>
+    </div>
+  </section>
+
+  <!-- Site plan upload -->
+  <figure class="plan">
+    <div class="plan-dropzone" id="planDrop">
+      <div class="plan-dropzone-icon" aria-hidden="true">📐</div>
+      <div class="plan-dropzone-title">Drop or click to upload property site plan</div>
+      <div class="plan-dropzone-hint">PNG, JPG or PDF page export. The image will be embedded so the saved PDF stays self-contained.</div>
+      <input type="file" id="planFile" accept="image/png,image/jpeg,image/webp">
+    </div>
+    <div class="plan-img-wrap" id="planImgWrap" hidden>
+      <img class="plan-img" id="planImg" alt="Property site plan">
+      <button type="button" class="plan-clear" id="planClear">✕ Replace</button>
+    </div>
+    <figcaption class="plan-caption" id="planCaption">Site plan — uploaded image renders here and prints at the top of the PDF.</figcaption>
+  </figure>
+
+  <!-- Zone table -->
+  <section class="zone-section" aria-label="Zone schedule">
+    <div class="zone-section-head">
+      <h2 class="zone-section-title">Zone schedule</h2>
+      <span class="zone-section-count" id="zoneCount">0 zones</span>
+    </div>
+    <table class="zone-table" id="zoneTable">
+      <colgroup>
+        <col><col><col><col><col><col><col><col><col><col><col><col>
+      </colgroup>
+      <thead>
+        <tr>
+          <th scope="col">#</th>
+          <th scope="col">Color</th>
+          <th scope="col">Location</th>
+          <th scope="col">Material / Heads</th>
+          <th scope="col">Type</th>
+          <th scope="col">Status</th>
+          <th scope="col">Run<br>(min)</th>
+          <th scope="col">Days</th>
+          <th scope="col">O/E</th>
+          <th scope="col">Every<br>(days)</th>
+          <th scope="col">Notes</th>
+          <th scope="col" aria-label="Remove"></th>
+        </tr>
+      </thead>
+      <tbody id="zoneBody"></tbody>
+    </table>
+    <div class="add-zone-row">
+      <button type="button" class="add-zone-btn" id="btnAddZoneInline">+ Add zone</button>
+    </div>
+  </section>
+
+  <!-- Footer / legend -->
+  <footer class="sheet-footer">
+    <div class="legend">
+      <span class="legend-item"><span class="legend-pill lg-existing">EX</span> existing</span>
+      <span class="legend-item"><span class="legend-pill lg-new">NEW</span> new install</span>
+      <span class="legend-item"><span class="legend-pill lg-oe">O / E</span> odd / even day</span>
+      <span class="legend-item">Days: M T W T F S S (toggle independently)</span>
+    </div>
+    <div>
+      Generated by pjllandservices.com · <span class="editable" contenteditable="true" data-print="footer-note">Confirm with controller before activating.</span>
+    </div>
+  </footer>
+
+</div><!-- /.sheet -->
+</div><!-- /.sheet-wrap -->
+
+<script>
+(function(){
+  'use strict';
+
+  // ============ Domain data ============
+  // Standard controller wire colors + sensible default order. The
+  // "label" prints alongside the swatch in the PDF.
+  var COLORS = [
+    {key:'',          label:'—',      hex:'transparent'},
+    {key:'red',       label:'Red',    hex:'#D63031'},
+    {key:'orange',    label:'Orange', hex:'#E07B24'},
+    {key:'yellow',    label:'Yellow', hex:'#F1C40F'},
+    {key:'green',     label:'Green',  hex:'#1B8A4D'},
+    {key:'blue',      label:'Blue',   hex:'#2D6FB4'},
+    {key:'violet',    label:'Violet', hex:'#7C3AED'},
+    {key:'brown',     label:'Brown',  hex:'#7A4E2A'},
+    {key:'pink',      label:'Pink',   hex:'#EC78A9'},
+    {key:'tan',       label:'Tan',    hex:'#C8A572'},
+    {key:'gray',      label:'Gray',   hex:'#6B7280'},
+    {key:'white',     label:'White',  hex:'#F4F4EF'},
+    {key:'black',     label:'Black',  hex:'#222222'}
+  ];
+
+  var TYPES = ['', 'Spray', 'Rotor', 'MP Rotator', 'Drip', 'Bubbler', 'Micro-spray'];
+
+  // Day-of-week labels — Sunday-first matches Hydrawise / most North-American
+  // controllers. Letters chosen so the duplicates (T, S) are still readable.
+  var DAYS = [
+    {key:'sun', label:'S'},
+    {key:'mon', label:'M'},
+    {key:'tue', label:'T'},
+    {key:'wed', label:'W'},
+    {key:'thu', label:'T'},
+    {key:'fri', label:'F'},
+    {key:'sat', label:'S'}
+  ];
+
+  // ============ DOM refs ============
+  var zoneBody    = document.getElementById('zoneBody');
+  var zoneCountEl = document.getElementById('zoneCount');
+  var btnPrint    = document.getElementById('btnPrint');
+  var btnAddZone  = document.getElementById('btnAddZone');
+  var btnAddInline= document.getElementById('btnAddZoneInline');
+  var btnClear    = document.getElementById('btnClear');
+  var planDrop    = document.getElementById('planDrop');
+  var planFile    = document.getElementById('planFile');
+  var planImg     = document.getElementById('planImg');
+  var planImgWrap = document.getElementById('planImgWrap');
+  var planClear   = document.getElementById('planClear');
+
+  // ============ Zone row factory ============
+  // Each row is built once and kept in the DOM. Interactive controls
+  // mutate their associated .sched-print mirror elements so prepPrint()
+  // simply unhides them — there is NO async race between the live state
+  // and the printable text. (This is the Patrick-reported "incorrect
+  // change" bug fixed: state lives in the cell, not in a stale snapshot.)
+  function makeRow(){
+    var tr = document.createElement('tr');
+
+    // #
+    var tdNum = document.createElement('td');
+    tdNum.className = 'zone-num';
+    tr.appendChild(tdNum);
+
+    // Color
+    var tdColor = document.createElement('td');
+    var colorWrap = document.createElement('div');
+    colorWrap.className = 'color-cell';
+    var swatch = document.createElement('span');
+    swatch.className = 'swatch';
+    swatch.style.background = 'transparent';
+    var colorSel = document.createElement('select');
+    COLORS.forEach(function(c){
+      var o = document.createElement('option');
+      o.value = c.key;
+      o.textContent = c.label;
+      o.dataset.hex = c.hex;
+      colorSel.appendChild(o);
+    });
+    var colorPrint = document.createElement('span');
+    colorPrint.className = 'sched-print';
+    colorPrint.textContent = '—';
+    colorSel.addEventListener('change', function(){
+      var hex = colorSel.selectedOptions[0].dataset.hex || 'transparent';
+      swatch.style.background = hex;
+      colorPrint.textContent = colorSel.selectedOptions[0].textContent;
+    });
+    colorWrap.appendChild(swatch);
+    colorWrap.appendChild(colorSel);
+    colorWrap.appendChild(colorPrint);
+    tdColor.appendChild(colorWrap);
+    tr.appendChild(tdColor);
+
+    // Helper: text input + matching print mirror, wired to keep in sync.
+    function textCell(placeholder){
+      var td = document.createElement('td');
+      var input = document.createElement('input');
+      input.type = 'text';
+      if (placeholder) input.placeholder = placeholder;
+      var print = document.createElement('span');
+      print.className = 'sched-print';
+      input.addEventListener('input', function(){ print.textContent = input.value; });
+      td.appendChild(input);
+      td.appendChild(print);
+      return td;
+    }
+    function numCell(placeholder, min, step){
+      var td = document.createElement('td');
+      var input = document.createElement('input');
+      input.type = 'number';
+      input.placeholder = placeholder || '';
+      if (min !== undefined) input.min = String(min);
+      if (step !== undefined) input.step = String(step);
+      var print = document.createElement('span');
+      print.className = 'sched-print';
+      input.addEventListener('input', function(){ print.textContent = input.value; });
+      td.appendChild(input);
+      td.appendChild(print);
+      return td;
+    }
+
+    // Location
+    tr.appendChild(textCell('Front lawn N'));
+    // Material / heads
+    tr.appendChild(textCell('Hunter PGP 4"'));
+
+    // Type select
+    var tdType = document.createElement('td');
+    tdType.className = 'type-cell';
+    var typeSel = document.createElement('select');
+    TYPES.forEach(function(t){
+      var o = document.createElement('option');
+      o.value = t;
+      o.textContent = t || '—';
+      typeSel.appendChild(o);
+    });
+    var typePrint = document.createElement('span');
+    typePrint.className = 'sched-print';
+    typeSel.addEventListener('change', function(){ typePrint.textContent = typeSel.value || '—'; });
+    tdType.appendChild(typeSel);
+    tdType.appendChild(typePrint);
+    tr.appendChild(tdType);
+
+    // Status: EXISTING / NEW (mutually exclusive)
+    var tdStatus = document.createElement('td');
+    var statusGroup = document.createElement('div');
+    statusGroup.className = 'pill-group';
+    var pillEx = pill('EX', 'pill pill--ex');
+    var pillNew = pill('NEW', 'pill pill--new');
+    var statusPrint = document.createElement('span');
+    statusPrint.className = 'sched-print';
+    function toggleStatus(on, off, label){
+      on.classList.add('is-on');
+      off.classList.remove('is-on');
+      statusPrint.textContent = label;
+    }
+    pillEx.addEventListener('click', function(){
+      if (pillEx.classList.contains('is-on')) {
+        pillEx.classList.remove('is-on'); statusPrint.textContent = '';
+      } else { toggleStatus(pillEx, pillNew, 'Existing'); }
+    });
+    pillNew.addEventListener('click', function(){
+      if (pillNew.classList.contains('is-on')) {
+        pillNew.classList.remove('is-on'); statusPrint.textContent = '';
+      } else { toggleStatus(pillNew, pillEx, 'New'); }
+    });
+    statusGroup.appendChild(pillEx);
+    statusGroup.appendChild(pillNew);
+    tdStatus.appendChild(statusGroup);
+    tdStatus.appendChild(statusPrint);
+    tr.appendChild(tdStatus);
+
+    // Run time (min)
+    tr.appendChild(numCell('20', 0, 1));
+
+    // Days: 7 pills, each independent
+    var tdDays = document.createElement('td');
+    var daysGroup = document.createElement('div');
+    daysGroup.className = 'pill-group';
+    var daysPrint = document.createElement('span');
+    daysPrint.className = 'sched-print';
+    var dayPillEls = {};
+    DAYS.forEach(function(d){
+      var p = pill(d.label, 'pill pill--day');
+      p.dataset.day = d.key;
+      p.addEventListener('click', function(){
+        p.classList.toggle('is-on');
+        // Recompute label from current state — single source of truth
+        var on = DAYS
+          .map(function(dd){ return dayPillEls[dd.key].classList.contains('is-on') ? dd.key.charAt(0).toUpperCase() + dd.key.charAt(1) : null; })
+          .filter(Boolean);
+        daysPrint.textContent = on.length ? on.join(' ') : '';
+      });
+      dayPillEls[d.key] = p;
+      daysGroup.appendChild(p);
+    });
+    tdDays.appendChild(daysGroup);
+    tdDays.appendChild(daysPrint);
+    tr.appendChild(tdDays);
+
+    // O/E: mutually exclusive pair
+    var tdOE = document.createElement('td');
+    var oeGroup = document.createElement('div');
+    oeGroup.className = 'pill-group';
+    var pillO = pill('O', 'pill pill--oe');
+    var pillE = pill('E', 'pill pill--oe');
+    var oePrint = document.createElement('span');
+    oePrint.className = 'sched-print';
+    pillO.addEventListener('click', function(){
+      if (pillO.classList.contains('is-on')) {
+        pillO.classList.remove('is-on'); oePrint.textContent = '';
+      } else {
+        pillO.classList.add('is-on'); pillE.classList.remove('is-on');
+        oePrint.textContent = 'Odd';
+      }
+    });
+    pillE.addEventListener('click', function(){
+      if (pillE.classList.contains('is-on')) {
+        pillE.classList.remove('is-on'); oePrint.textContent = '';
+      } else {
+        pillE.classList.add('is-on'); pillO.classList.remove('is-on');
+        oePrint.textContent = 'Even';
+      }
+    });
+    oeGroup.appendChild(pillO);
+    oeGroup.appendChild(pillE);
+    tdOE.appendChild(oeGroup);
+    tdOE.appendChild(oePrint);
+    tr.appendChild(tdOE);
+
+    // Every N days
+    tr.appendChild(numCell('1', 1, 1));
+
+    // Notes
+    tr.appendChild(textCell('Cycle + soak'));
+
+    // Delete column
+    var tdDel = document.createElement('td');
+    var delBtn = document.createElement('button');
+    delBtn.type = 'button';
+    delBtn.className = 'row-del';
+    delBtn.title = 'Remove zone';
+    delBtn.setAttribute('aria-label', 'Remove zone');
+    delBtn.textContent = '✕';
+    delBtn.addEventListener('click', function(){
+      tr.remove();
+      renumber();
+    });
+    tdDel.appendChild(delBtn);
+    tr.appendChild(tdDel);
+
+    return tr;
+  }
+
+  // ============ Pill factory ============
+  function pill(label, className){
+    var btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = className;
+    btn.textContent = label;
+    return btn;
+  }
+
+  // ============ Renumber zones ============
+  function renumber(){
+    var rows = zoneBody.querySelectorAll('tr');
+    Array.prototype.forEach.call(rows, function(tr, i){
+      var num = tr.querySelector('.zone-num');
+      if (num) num.textContent = String(i + 1);
+    });
+    zoneCountEl.textContent = rows.length + ' zone' + (rows.length === 1 ? '' : 's');
+  }
+
+  // ============ Add zone ============
+  function addZone(){
+    zoneBody.appendChild(makeRow());
+    renumber();
+  }
+
+  // ============ Clear sheet ============
+  function clearSheet(){
+    if (!confirm('Clear all zones and the site plan? Document metadata stays.')) return;
+    zoneBody.innerHTML = '';
+    seed(12);
+    setPlanImage(null);
+  }
+
+  // ============ Site plan upload ============
+  function setPlanImage(dataUrl){
+    if (dataUrl){
+      planImg.src = dataUrl;
+      planImgWrap.hidden = false;
+      planDrop.classList.add('has-image');
+      planDrop.hidden = true;
+    } else {
+      planImg.removeAttribute('src');
+      planImgWrap.hidden = true;
+      planDrop.classList.remove('has-image');
+      planDrop.hidden = false;
+      planFile.value = '';
+    }
+  }
+  function handleFile(file){
+    if (!file) return;
+    if (!/^image\//.test(file.type)){
+      alert('Pick an image file (PNG, JPG or WebP).');
+      return;
+    }
+    var reader = new FileReader();
+    reader.onload = function(e){ setPlanImage(e.target.result); };
+    reader.onerror = function(){ alert('Could not read that file.'); };
+    reader.readAsDataURL(file);
+  }
+  planFile.addEventListener('change', function(e){ handleFile(e.target.files && e.target.files[0]); });
+  ['dragenter','dragover'].forEach(function(t){
+    planDrop.addEventListener(t, function(e){ e.preventDefault(); planDrop.classList.add('is-dragover'); });
+  });
+  ['dragleave','dragend','drop'].forEach(function(t){
+    planDrop.addEventListener(t, function(e){
+      e.preventDefault();
+      planDrop.classList.remove('is-dragover');
+      if (t === 'drop'){
+        var f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+        handleFile(f);
+      }
+    });
+  });
+  planClear.addEventListener('click', function(){ setPlanImage(null); });
+
+  // ============ Editable contenteditable mirrors ============
+  // The doc-row cells and letterhead contact lines are contenteditable
+  // <span> elements. Each has a [data-print] flag we use to ensure the
+  // .sched-print text in the same cell mirrors the live edit — but
+  // contenteditable elements show their own text in print as well, so
+  // we don't need a separate mirror for these; the @media print rule
+  // hides their hover styling, not the text itself.
+  // (See @media print — .editable stays visible.)
+  document.querySelectorAll('[contenteditable="true"]').forEach(function(el){
+    el.addEventListener('focus', function(){ el.dataset.focused = '1'; });
+    el.addEventListener('blur', function(){ delete el.dataset.focused; });
+  });
+  // Wait — we DO hide .editable in print and rely on a mirror because
+  // contenteditable elements can render with caret/focus rings in print
+  // on some browsers. Wire mirrors:
+  document.querySelectorAll('[contenteditable="true"]').forEach(function(el){
+    var mirror = document.createElement('span');
+    mirror.className = 'sched-print';
+    mirror.textContent = el.textContent;
+    el.parentNode.insertBefore(mirror, el.nextSibling);
+    el.addEventListener('input', function(){ mirror.textContent = el.textContent; });
+  });
+
+  // ============ Print prep ============
+  // The per-cell .sched-print mirrors are continuously updated on every
+  // input/change/click event handler — so a print at any moment reflects
+  // the live state. This handler also strips empty rows from print
+  // (rows where Location + Material + Notes + days are all blank) so a
+  // sheet with 8 used zones doesn't waste page space on 4 blank ones.
+  function prepPrint(){
+    var rows = zoneBody.querySelectorAll('tr');
+    Array.prototype.forEach.call(rows, function(tr){
+      var inputs = tr.querySelectorAll('input[type=text],input[type=number]');
+      var anyText = false;
+      Array.prototype.forEach.call(inputs, function(i){ if (i.value.trim()) anyText = true; });
+      var anyPill = tr.querySelectorAll('.pill.is-on').length > 0;
+      var color = tr.querySelector('.color-cell select').value;
+      if (!anyText && !anyPill && !color){
+        tr.dataset.printSkip = '1';
+        tr.style.display = 'none';
+      }
+    });
+  }
+  function restorePrint(){
+    var rows = zoneBody.querySelectorAll('tr[data-print-skip="1"]');
+    Array.prototype.forEach.call(rows, function(tr){
+      tr.style.display = '';
+      delete tr.dataset.printSkip;
+    });
+  }
+
+  // ============ Wire toolbar buttons ============
+  btnAddZone.addEventListener('click', addZone);
+  btnAddInline.addEventListener('click', addZone);
+  btnClear.addEventListener('click', clearSheet);
+  btnPrint.addEventListener('click', function(){
+    prepPrint();
+    setTimeout(function(){ window.print(); }, 30);
+  });
+  window.addEventListener('afterprint', restorePrint);
+  // beforeprint fires reliably in Chrome too; mirror prepPrint there to
+  // catch keyboard Cmd-P / Ctrl-P paths that bypass our button.
+  window.addEventListener('beforeprint', prepPrint);
+
+  // ============ Seed 12 initial zones ============
+  function seed(n){
+    for (var i = 0; i < n; i++) addZone();
+  }
+  seed(12);
+
+})();
+</script>
+
+</body>
+</html>
