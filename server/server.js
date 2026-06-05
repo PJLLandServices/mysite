@@ -13477,37 +13477,40 @@ Customer signature captured at ${new Date().toISOString()}.`;
 
       const systemPrompt = [
         "You are an irrigation system analyst.",
-        "You read site plans, architectural drawings, hand-sketched property layouts, and aerial photos to identify color-coded irrigation zones.",
+        "The user has marked this site plan using EXACTLY these 20 colors and only these 20 colors:",
+        PALETTE_LIST,
+        "Match every visible marking on the plan to one of these 20 entries by hex. Do not invent a 21st color.",
         "",
-        "ZONE MARKINGS CAN APPEAR IN MANY FORMS — detect ALL of these:",
+        "WHAT COUNTS AS A ZONE MARKING — detect ALL of these forms:",
         "- Colored outlined areas (a polygon traced around a lawn/bed)",
         "- Colored filled areas (a solid-tinted region)",
-        "- Colored lines or paths (pipe runs, drip lines, boundary strokes)",
-        "- Colored circles or dots (individual sprinkler heads, valves, zone markers)",
-        "- Colored arrows or callouts",
-        "- Numbered + colored labels",
+        "- Colored solid OR dashed lines or paths (pipe runs, drip lines, boundary strokes, hatching)",
+        "- Colored circles, dots, X-marks, triangles, or any sprinkler-head symbol",
+        "- Colored arrows pointing at features",
+        "- Colored brackets, callouts, or annotation symbols",
+        "- Numbered labels in a distinct color",
+        "- Any other colored mark a human installer might have drawn",
         "",
-        "COLOR PALETTE — you may ONLY use these 20 color values for the `color` field. Match every marking you see to the closest entry by hex:",
-        PALETTE_LIST,
+        "CRITICAL DETECTION RULES — read carefully, this is where models usually fail:",
+        "1. For every visible marking on the plan — every line, every circle, every outlined area, every filled shape, every arrow, every annotation — identify which of the 20 colors it matches and produce one zone entry per distinct CLUSTER of markings.",
+        "2. Spatially separated groups of the SAME color are SEPARATE zones, not one. Red circles in the top-left and red circles in the bottom-right are TWO entries, both color=\"red\", with distinct labels and notes (e.g. labels \"front-left cluster\" and \"rear-right cluster\").",
+        "3. COUNT the distinct color clusters before writing JSON. If you see 12 distinct color groupings, return exactly 12 entries. If 15, return 15. Do not stop short.",
+        "4. Do not merge. Do not skip. Do not dedupe by color name — same color, different cluster = different entry.",
+        "5. Err HARD on the side of returning MORE entries. False positives are easy for the user to delete; missed zones are invisible to them.",
+        "6. Don't merge similar shades. Lime ≠ Green ≠ Dark Green. Sky Blue ≠ Blue ≠ Navy ≠ Cyan ≠ Teal. Red ≠ Dark Red ≠ Magenta ≠ Pink.",
+        "7. Don't skip faint or small markings. A single colored circle is still a zone.",
+        "8. If you see a colored marking that you cannot confidently snap to one of the 20 entries, OMIT THAT MARKING entirely rather than guessing — better to lose one than to label it wrong. Never invent off-list color names.",
         "",
-        "Return STRICT JSON only — no prose, no code fences, no commentary.",
+        "OUTPUT — STRICT JSON only, no prose, no code fences, no commentary:",
+        "Schema: { \"zones\": [ { \"color\": <one of the 20 keys above>, \"label\": <short location, may be empty>, \"material\": <e.g. \"grass\", \"mulch bed\", \"hedge\", may be empty>, \"notes\": <observation about which cluster, may be empty> } ] }",
         "",
-        "Schema: { \"zones\": [ { \"color\": <one of the keys above>, \"label\": <short location, e.g. \"front lawn west\", may be empty>, \"material\": <e.g. \"grass\", \"mulch bed\", \"hedge\", may be empty>, \"notes\": <observation, may be empty> } ] }",
-        "",
-        "DETECTION DISCIPLINE — read carefully:",
-        "- Return ONE entry per distinct color you see, even when that color appears in multiple spatially separated clusters of the same drawing.",
-        "  Example: red circles in the front yard + red circles in the back yard → ONE entry, color=\"red\", with notes like \"front + back clusters\".",
-        "- COUNT the distinct colors before you write the JSON. If you can see N distinct colors, return exactly N entries.",
-        "- Err on the side of returning MORE zones rather than fewer. A false positive is easy for the user to delete; a missed zone is invisible.",
-        "- Don't merge similar shades. Lime ≠ Green ≠ Dark Green. Sky Blue ≠ Blue ≠ Navy ≠ Cyan ≠ Teal. Red ≠ Dark Red ≠ Magenta ≠ Pink.",
-        "- Don't skip faint or small markings. A single colored circle is still a zone.",
-        "- If a color clearly doesn't match any palette entry, pick the CLOSEST entry rather than dropping the zone.",
-        "- If the image has no color-coded zone markings at all, return { \"zones\": [] }.",
+        "- Every entry's `color` field MUST be one of the 20 keys verbatim. Never blank, never null, never a 21st color.",
         "- Keep labels under 40 characters. Keep notes under 120 characters.",
-        "- If you can't identify a property feature for the label, leave it blank — never make it up."
+        "- If you can't identify a property feature for the label, leave it blank — never make it up.",
+        "- If the image has NO color-coded zone markings at all, return { \"zones\": [] }."
       ].join("\n");
 
-      const userText = "Identify every color-coded zone marking in this property image. Return ONLY the JSON object specified — no markdown, no explanation. Count the distinct colors first; your response must contain exactly that many zone entries.";
+      const userText = "Identify every color-coded zone marking cluster in this property image. Count the distinct clusters first — your response must contain exactly that many zone entries. Spatially separated clusters of the same color get SEPARATE entries. Return ONLY the JSON object specified — no markdown, no explanation.";
 
       // Call Anthropic — same /v1/messages endpoint, same headers, same
       // model family the chat Worker uses. Vision lives on the same API:
@@ -13521,7 +13524,15 @@ Customer signature captured at ${new Date().toISOString()}.`;
         },
         body: JSON.stringify({
           model: "claude-sonnet-4-5",
-          max_tokens: 2048,
+          // 4096 — Patrick reported 8 zones detected when 12+ were drawn;
+          // under-detection sometimes signals a truncated response. The
+          // schema is small per-entry (~40 tokens) so 4096 supports ~80
+          // entries before truncation, well past any realistic property.
+          max_tokens: 4096,
+          // Deterministic output — same image should yield the same zone
+          // list across retries. Helps when Patrick A/B-tests color
+          // changes on the plan.
+          temperature: 0,
           system: systemPrompt,
           messages: [{
             role: "user",
@@ -13562,33 +13573,51 @@ Customer signature captured at ${new Date().toISOString()}.`;
       const rawZones = Array.isArray(parsed?.zones) ? parsed.zones : [];
 
       // Normalize each AI-returned zone into the shape the
-      // irrigation-zone-schedule client expects, dropping anything
-      // unrecognised. We don't trust the model to follow every rule —
-      // this defensive pass enforces the schema.
+      // irrigation-zone-schedule client expects.
+      //
+      // CHANGED Phase 3 bug-fix: no longer dedupes by color — spatially
+      // separated clusters of the same color are SEPARATE zones per
+      // Patrick's site-plan reality. Entries with missing/blank/unknown
+      // `color` are DROPPED (not relabeled) and counted in `skipped` so
+      // the UI can flag that the AI was uncertain about some markings.
+      // Drop-with-flag is kinder than silent relabel: a wrong color is
+      // more confusing than a missing zone (Patrick's call).
       const norm = String;
       const truncate = (s, n) => (norm(s || "")).trim().slice(0, n);
-      const seenColors = new Set();
       const zones = [];
+      let skipped = 0;
+      const skipReasons = { blank: 0, unknown: 0 };
       for (const z of rawZones) {
-        const color = norm(z?.color || "").toLowerCase().trim();
-        if (!COLOR_KEYS.includes(color)) continue;
-        if (seenColors.has(color)) continue;
-        seenColors.add(color);
+        const colorRaw = norm(z?.color || "").toLowerCase().trim();
+        if (!colorRaw) {
+          // Empty / null / undefined color.
+          skipped++;
+          skipReasons.blank++;
+          continue;
+        }
+        if (!COLOR_KEYS.includes(colorRaw)) {
+          // Off-palette color (synonyms, hex strings, made-up names).
+          skipped++;
+          skipReasons.unknown++;
+          continue;
+        }
         zones.push({
-          color,
+          color: colorRaw,
           label: truncate(z?.label, 40),
           material: truncate(z?.material, 60),
           notes: truncate(z?.notes, 120)
         });
-        if (zones.length >= 20) break; // hard cap — far past any realistic property
+        // 40-entry hard cap — well past any residential site (highest
+        // realistic count is ~25 zones on an estate property).
+        if (zones.length >= 40) break;
       }
 
-      // Cheap usage log so Patrick can eyeball spend over time. Keep it
-      // single-line + tagged — easy to grep out of Render's log stream.
+      // Cheap usage log so Patrick can eyeball spend + detection rate over
+      // time. Includes raw count + skipped reasons to flag prompt drift.
       const usage = aiData?.usage || {};
-      console.log(`[irrigation-extract] ip=${callerIp(req)} zones=${zones.length} in_tok=${usage.input_tokens || 0} out_tok=${usage.output_tokens || 0}`);
+      console.log(`[irrigation-extract] ip=${callerIp(req)} zones=${zones.length} skipped=${skipped} (blank=${skipReasons.blank} unknown=${skipReasons.unknown}) raw=${rawZones.length} in_tok=${usage.input_tokens || 0} out_tok=${usage.output_tokens || 0}`);
 
-      return sendJson(res, 200, { ok: true, zones });
+      return sendJson(res, 200, { ok: true, zones, skipped });
     } catch (error) {
       console.error("[irrigation-extract] unexpected error:", error);
       return sendJson(res, 500, {

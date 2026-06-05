@@ -1922,7 +1922,15 @@ body.sheet-open{overflow:hidden;}
         return z;
       });
       replaceZones(fresh);
-      showAiStatus('success', 'Detected ' + detected.length + ' zone' + (detected.length === 1 ? '' : 's') + ' — review and edit.');
+      // The server returns a `skipped` count when it dropped AI entries
+      // with missing or unrecognized colors. Surface that so Patrick
+      // knows whether the AI was uncertain about parts of the plan.
+      var skipped = Number(data.skipped) || 0;
+      var baseMsg = 'Detected ' + detected.length + ' zone' + (detected.length === 1 ? '' : 's');
+      if (skipped > 0){
+        baseMsg += ' (skipped ' + skipped + ' marking' + (skipped === 1 ? '' : 's') + ' the AI couldn’t classify)';
+      }
+      showAiStatus('success', baseMsg + ' — review and edit.');
       showUndo();
     } catch (err) {
       console.error('analyze error', err);
