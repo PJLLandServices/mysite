@@ -13437,6 +13437,124 @@ Customer signature captured at ${new Date().toISOString()}.`;
       // Failed validation shouldn't burn through Patrick's hourly quota.
       rateLimit.record(ipKey);
 
+      // 20-color named palette + helpers (moved up so pixel-sampling
+      // below can use them BEFORE the AI call).
+      const COLOR_PALETTE = [
+        { name: "Red",        key: "red",        hex: "#FF0000" },
+        { name: "Dark Red",   key: "dark red",   hex: "#8B0000" },
+        { name: "Orange",     key: "orange",     hex: "#FF8C00" },
+        { name: "Yellow",     key: "yellow",     hex: "#FFD700" },
+        { name: "Lime",       key: "lime",       hex: "#32CD32" },
+        { name: "Green",      key: "green",      hex: "#00A000" },
+        { name: "Dark Green", key: "dark green", hex: "#006400" },
+        { name: "Teal",       key: "teal",       hex: "#008080" },
+        { name: "Cyan",       key: "cyan",       hex: "#00CED1" },
+        { name: "Sky Blue",   key: "sky blue",   hex: "#00BFFF" },
+        { name: "Blue",       key: "blue",       hex: "#0000FF" },
+        { name: "Navy",       key: "navy",       hex: "#000080" },
+        { name: "Purple",     key: "purple",     hex: "#800080" },
+        { name: "Magenta",    key: "magenta",    hex: "#FF00FF" },
+        { name: "Pink",       key: "pink",       hex: "#FF69B4" },
+        { name: "Brown",      key: "brown",      hex: "#8B4513" },
+        { name: "Tan",        key: "tan",        hex: "#D2B48C" },
+        { name: "Gray",       key: "gray",       hex: "#808080" },
+        { name: "Black",      key: "black",      hex: "#000000" },
+        { name: "Gold",       key: "gold",       hex: "#DAA520" }
+      ];
+      const COLOR_KEYS = COLOR_PALETTE.map((c) => c.key);
+      const PALETTE_BY_KEY = new Map(COLOR_PALETTE.map((c) => [c.key, c]));
+      const hexToRgb = (h) => {
+        const x = h.replace("#", "");
+        return [parseInt(x.slice(0,2),16), parseInt(x.slice(2,4),16), parseInt(x.slice(4,6),16)];
+      };
+
+      // ===== Pixel-based palette detection =====
+      // The 20-color palette is fixed. We don't ask the AI to guess what
+      // colors are on the plan — we determine it programmatically by
+      // counting pixels that fall within RGB distance of each palette
+      // hex. The AI is only used for descriptions (label / material /
+      // notes) of the colors we already know are present.
+      //
+      // Tuning notes:
+      //   - dist=30 (RGB Euclidean) catches a marking's body but rejects
+      //     the anti-aliased halo around its edges.
+      //   - minCount=100 filters JPEG artifacts and stray pixels.
+      //   - We skip near-white pixels (background paper) AND near-
+      //     grayscale pixels (low saturation = text, scan lines, gray
+      //     paper). That means Gray/Black palette entries are NOT
+      //     pixel-detectable in v1 — Patrick can add them manually if a
+      //     plan ever uses them as zone colors. Worth it to avoid being
+      //     drowned in false positives from annotation text.
+      const PIXEL_DIST_SQ = 30 * 30;
+      const PIXEL_MIN_COUNT = 100;
+      const SATURATION_GATE = 25; // max(R,G,B) - min(R,G,B) must exceed this
+      let pixelDetection = null;
+      let orientedBuffer = originalBuffer;
+      try {
+        // Normalize orientation up-front so the pixel sampler AND the AI
+        // call both see the same image.
+        orientedBuffer = await sharp(originalBuffer, { failOn: "none" }).rotate().toBuffer();
+
+        const pipeline = sharp(orientedBuffer, { failOn: "none" });
+        const meta = await pipeline.metadata();
+        const longEdge = Math.max(meta.width || 0, meta.height || 0);
+        const samplePipe = longEdge > 800
+          ? pipeline.resize({
+              width:  (meta.width >= meta.height) ? 800 : null,
+              height: (meta.height > meta.width)  ? 800 : null,
+              fit: "inside"
+            })
+          : pipeline;
+        const { data: raw, info } = await samplePipe
+          .removeAlpha()
+          .raw()
+          .toBuffer({ resolveWithObject: true });
+        const ch = info.channels;
+        const targets = COLOR_PALETTE.map((c) => ({ ...c, _rgb: hexToRgb(c.hex), count: 0 }));
+
+        for (let i = 0; i + 2 < raw.length; i += ch) {
+          const r = raw[i], g = raw[i+1], b = raw[i+2];
+          // Background paper.
+          if (r > 235 && g > 235 && b > 235) continue;
+          // Grayscale/text/anti-alias — too easily confused with palette
+          // Gray / Black. Skip the whole achromatic axis in v1.
+          const maxC = Math.max(r, g, b), minC = Math.min(r, g, b);
+          if (maxC - minC < SATURATION_GATE) continue;
+          // Nearest palette entry within threshold.
+          let bestT = null, bestD = PIXEL_DIST_SQ;
+          for (const t of targets) {
+            const dr = r - t._rgb[0], dg = g - t._rgb[1], db = b - t._rgb[2];
+            const d = dr*dr + dg*dg + db*db;
+            if (d < bestD) { bestD = d; bestT = t; }
+          }
+          if (bestT) bestT.count++;
+        }
+
+        pixelDetection = {
+          width: info.width,
+          height: info.height,
+          counts: targets.map((t) => ({ key: t.key, count: t.count })),
+          present: targets
+            .filter((t) => t.count > PIXEL_MIN_COUNT)
+            .map((t) => ({ key: t.key, name: t.name, hex: t.hex, count: t.count }))
+        };
+      } catch (err) {
+        console.warn("[irrigation-extract] pixel detection failed:", err.message);
+      }
+
+      // No colors detected → short-circuit. Don't waste an Anthropic call
+      // (and tell the user clearly what happened).
+      if (pixelDetection && pixelDetection.present.length === 0) {
+        console.log(`[irrigation-extract] ip=${callerIp(req)} zones=0 detection=pixel reason=no-colors-present`);
+        return sendJson(res, 200, {
+          ok: true,
+          zones: [],
+          skipped: 0,
+          detection: "pixel",
+          paletteDetected: []
+        });
+      }
+
       // ===== Image preprocessing =====
       // Upscale to 2400px on the long edge before sending to the vision
       // model. Patrick reported the model missing faint colors (Teal,
@@ -13451,12 +13569,12 @@ Customer signature captured at ${new Date().toISOString()}.`;
       //
       // If sharp fails for any reason (corrupt input, exotic format),
       // fall back to the original buffer so the user still gets a result.
-      let processedBuffer = originalBuffer;
+      let processedBuffer = orientedBuffer;
       let processedMediaType = mediaType;
       let upscaledFrom = "(unknown)";
       let upscaledTo = "(unknown)";
       try {
-        const img = sharp(originalBuffer, { failOn: "none" });
+        const img = sharp(orientedBuffer, { failOn: "none" });
         const meta = await img.metadata();
         upscaledFrom = `${meta.width || "?"}x${meta.height || "?"}`;
         const longEdge = Math.max(meta.width || 0, meta.height || 0);
@@ -13508,34 +13626,11 @@ Customer signature captured at ${new Date().toISOString()}.`;
       const upstreamBase64 = processedBuffer.toString("base64");
       const upstreamMediaType = processedMediaType;
 
-      // The 20-color named palette the irrigation-zone-schedule UI uses
-      // (Phase 3). The prompt below anchors the vision model to these
-      // exact names + hex codes so it doesn't merge visually similar
-      // shades or invent off-list colors.
-      const COLOR_PALETTE = [
-        { name: "Red",        key: "red",        hex: "#FF0000" },
-        { name: "Dark Red",   key: "dark red",   hex: "#8B0000" },
-        { name: "Orange",     key: "orange",     hex: "#FF8C00" },
-        { name: "Yellow",     key: "yellow",     hex: "#FFD700" },
-        { name: "Lime",       key: "lime",       hex: "#32CD32" },
-        { name: "Green",      key: "green",      hex: "#00A000" },
-        { name: "Dark Green", key: "dark green", hex: "#006400" },
-        { name: "Teal",       key: "teal",       hex: "#008080" },
-        { name: "Cyan",       key: "cyan",       hex: "#00CED1" },
-        { name: "Sky Blue",   key: "sky blue",   hex: "#00BFFF" },
-        { name: "Blue",       key: "blue",       hex: "#0000FF" },
-        { name: "Navy",       key: "navy",       hex: "#000080" },
-        { name: "Purple",     key: "purple",     hex: "#800080" },
-        { name: "Magenta",    key: "magenta",    hex: "#FF00FF" },
-        { name: "Pink",       key: "pink",       hex: "#FF69B4" },
-        { name: "Brown",      key: "brown",      hex: "#8B4513" },
-        { name: "Tan",        key: "tan",        hex: "#D2B48C" },
-        { name: "Gray",       key: "gray",       hex: "#808080" },
-        { name: "Black",      key: "black",      hex: "#000000" },
-        { name: "Gold",       key: "gold",       hex: "#DAA520" }
-      ];
-      const COLOR_KEYS = COLOR_PALETTE.map((c) => c.key);
-      const PALETTE_LIST = COLOR_PALETTE
+      // (COLOR_PALETTE / COLOR_KEYS were declared above for the pixel
+      // sampler. The vision model now receives only the colors the
+      // sampler already confirmed are present — not the full palette.)
+      const presentList = (pixelDetection && pixelDetection.present) || [];
+      const PRESENT_LIST = presentList
         .map((c) => `  - "${c.key}" (${c.name}, ${c.hex})`)
         .join("\n");
 
@@ -13606,70 +13701,36 @@ Customer signature captured at ${new Date().toISOString()}.`;
         return null;
       }
 
-      // Numbered checklist (1..20) — required pre-write step the model
-      // runs against every palette entry. Patrick reported the model
-      // genuinely missing faint colors (Teal, one Green variant) on his
-      // hand-drawn plans; explicit per-item enumeration outperforms a
-      // free "find all colors" instruction by a wide margin.
-      const CHECKLIST = COLOR_PALETTE
-        .map((c, i) => `  ${String(i + 1).padStart(2)}. ${c.name} (${c.hex})`)
-        .join("\n");
-
+      // NEW (Phase 4) prompt — DESCRIBE only. The pixel sampler above
+      // already determined which palette colors are present. The model
+      // only needs to describe where each one appears + suggest a
+      // material/type, freeing it from the unreliable hue-classification
+      // task that was missing colors in earlier phases.
       const systemPrompt = [
         "You are an irrigation system analyst.",
-        "The user has marked this site plan using EXACTLY these 20 colors and only these 20 colors:",
-        PALETTE_LIST,
-        "Match every visible marking on the plan to one of these 20 entries by hex. Do not invent a 21st color.",
+        "I have programmatically pre-detected which of the user's 20 palette colors are present in this site plan. You do NOT need to identify colors — you only need to DESCRIBE where each pre-detected color appears.",
         "",
-        "DOMAIN RULE — read this first:",
-        "In irrigation plans, each ZONE represents one valve / one circuit. All sprinkler heads, lines, and area markings fed by a single valve are drawn in the SAME color. So:",
-        "- Each distinct color on the plan = exactly ONE zone.",
-        "- If you see the same color in multiple places (e.g., red circles in the upper-left AND red circles in the lower-right), that is STILL ONE zone — combine the locations into a single entry's `label` and `notes`.",
-        "- The total number of zones you return MUST equal the total number of distinct colors visible on the plan. Not the number of clusters. Not the number of markings.",
+        "Pre-detected palette colors present in this image:",
+        PRESENT_LIST,
         "",
-        "WHAT COUNTS AS A ZONE MARKING — detect ALL of these forms (then group by color):",
-        "- Colored outlined areas (a polygon traced around a lawn/bed)",
-        "- Colored filled areas (a solid-tinted region)",
-        "- Colored solid OR dashed lines or paths (pipe runs, drip lines, boundary strokes, hatching)",
-        "- Colored circles, dots, X-marks, triangles, or any sprinkler-head symbol",
-        "- Colored arrows pointing at features",
-        "- Colored brackets, callouts, or annotation symbols",
-        "- Numbered labels in a distinct color",
-        "- Any other colored mark a human installer might have drawn",
+        "For each color above (and ONLY for colors above), produce one zone entry with:",
+        "- color: the lowercase key exactly as listed (e.g. \"dark red\", \"sky blue\")",
+        "- label: where on the plan you see this color. Be specific about location — \"front-left circles\", \"rear lawn outline\", \"side strip near driveway\". If the color appears in multiple places, semicolon-join them (e.g. \"front-left circles; rear-right circles\"). Under 80 characters.",
+        "- material: best guess at irrigation type from the marking shape — one of \"drip\", \"rotors\", \"pop-ups\", or blank if unclear. Drip is usually dashed/dotted lines or small repeating dots; rotors are typically large circle-and-arc symbols; pop-ups are small filled dots clustered as heads. If you can't tell, leave blank.",
+        "- notes: any extra useful observation (e.g. \"clustered in 2 groups\", \"appears to follow walkway\"). Under 200 characters. May be blank.",
         "",
-        "===== MANDATORY PRE-WRITE CHECKLIST SWEEP =====",
-        "Before writing ANY JSON, mentally scan the image for EACH of the 20 colors below, one at a time, in this exact order. For each color, ask: \"Do I see any marking of this color anywhere on the plan — any line, any circle, any dot, any outline, any arrow, any annotation, even a faint one?\" If yes, include exactly one entry for that color in your output. If no, skip it. This per-color sweep is required — do not skip it. It prevents you from overlooking faint or small markings of less-common colors.",
+        "STRICT RULES:",
+        "1. Return exactly ONE entry per pre-detected color above. Do not skip any color in the list.",
+        "2. Do NOT add colors I didn't pre-detect. If you think you see Magenta on the plan but it's not in the list above, do NOT include it — my pixel sampler is the authoritative color list.",
+        "3. Each entry's `color` field MUST be one of the listed keys verbatim, lowercase.",
+        "4. If a color appears in multiple spatially separated places on the plan, that is still ONE entry — describe both locations in the `label` (semicolon-joined). Each color = one valve = one zone.",
         "",
-        CHECKLIST,
-        "",
-        "Especially watch for these often-overlooked palette colors that resemble each other or are easy to dismiss as background:",
-        "- Teal (#008080) — distinct from Cyan (#00CED1), Sky Blue (#00BFFF), and Dark Green (#006400)",
-        "- Lime (#32CD32) — distinct from Green (#00A000) and Dark Green (#006400)",
-        "- Dark Green (#006400) — distinct from Green (#00A000) and Teal (#008080)",
-        "- Dark Red (#8B0000) — distinct from Red (#FF0000), Brown (#8B4513), and Magenta (#FF00FF)",
-        "- Sky Blue (#00BFFF) — distinct from Cyan (#00CED1), Blue (#0000FF), and Teal (#008080)",
-        "- Pink (#FF69B4) — distinct from Magenta (#FF00FF) and Red (#FF0000)",
-        "Each of these is its own valve when present.",
-        "===============================================",
-        "",
-        "CRITICAL DETECTION RULES:",
-        "1. Run the checklist sweep above first. Then group every detected marking by color.",
-        "2. Don't merge similar shades. Lime ≠ Green ≠ Dark Green. Sky Blue ≠ Blue ≠ Navy ≠ Cyan ≠ Teal. Red ≠ Dark Red ≠ Magenta ≠ Pink. Each shade is its own valve.",
-        "3. Don't skip faint or small markings. A single colored circle on its own still counts — its color is still one zone.",
-        "4. When a color appears in multiple places, combine them into ONE entry — describe the locations in `label` (semicolon-joined, e.g. \"front-left circles; rear-right circles\") and any extra observation in `notes`.",
-        "5. If you see a colored marking that you cannot confidently snap to one of the 20 entries, OMIT THAT MARKING entirely rather than guessing — better to lose one than to label it wrong. Never invent off-list color names.",
-        "",
-        "OUTPUT — STRICT JSON only, no prose, no code fences, no commentary:",
-        "Schema: { \"zones\": [ { \"color\": <one of the 20 keys above>, \"label\": <short location(s), may be empty>, \"material\": <e.g. \"grass\", \"mulch bed\", \"hedge\", may be empty>, \"notes\": <observation, may be empty> } ] }",
-        "",
-        "- Every entry's `color` field MUST be one of the 20 keys verbatim (lowercase, e.g. \"dark red\", \"sky blue\"). Never blank, never null, never a 21st color, never a hex code.",
-        "- Each color appears AT MOST ONCE in the output.",
-        "- Keep labels under 80 characters. Keep notes under 200 characters.",
-        "- If you can't identify a property feature for the label, leave it blank — never make it up.",
-        "- If the image has NO color-coded zone markings at all, return { \"zones\": [] }."
+        "OUTPUT — STRICT JSON only. No prose. No code fences. No commentary.",
+        "Schema: { \"zones\": [ { \"color\": <key>, \"label\": <string>, \"material\": <string>, \"notes\": <string> } ] }"
       ].join("\n");
 
-      const userText = "Run the per-color checklist sweep from the system prompt against this property image — scan once for each of the 20 palette colors in order, then return one zone entry per color you saw. Each color is ONE valve / ONE zone even if the marking appears in multiple places. Return ONLY the JSON object specified — no markdown, no explanation.";
+      const presentNames = presentList.map((c) => c.name).join(", ");
+      const userText = `For this property image, describe where each of these pre-detected colors appears: ${presentNames}. Return one entry per color in the JSON schema specified — do not add colors not in this list, do not skip any color in this list.`;
 
       // Call Anthropic — same /v1/messages endpoint, same headers, same
       // model family the chat Worker uses. Vision lives on the same API:
@@ -13703,33 +13764,45 @@ Customer signature captured at ${new Date().toISOString()}.`;
         })
       });
 
+      // Helper — build a fallback zones[] from the pixel-detected palette
+      // so the client always gets the right colors even when the AI call
+      // fails. Labels/material/notes blank for manual fill-in.
+      const fallbackFromPixels = () => presentList.map((c) => ({
+        color: c.key,
+        label: "",
+        material: "",
+        notes: ""
+      }));
+
+      let rawZones = [];
+      let aiData = null;
+      let aiOk = true;
+
       if (!aiRes.ok) {
         const errText = await aiRes.text().catch(() => "");
         console.error("Anthropic vision API error:", aiRes.status, errText.slice(0, 500));
-        return sendJson(res, 502, {
-          ok: false,
-          error: "AI analysis failed (technical issue). Add zones manually below."
-        });
+        aiOk = false;
+      } else {
+        aiData = await aiRes.json();
+        const replyText = (aiData?.content?.[0]?.text || "").trim();
+        let jsonText = replyText;
+        const fenceMatch = jsonText.match(/```(?:json)?\s*([\s\S]*?)```/);
+        if (fenceMatch) jsonText = fenceMatch[1].trim();
+        try {
+          const parsed = JSON.parse(jsonText);
+          rawZones = Array.isArray(parsed?.zones) ? parsed.zones : [];
+        } catch {
+          console.error("Anthropic vision returned non-JSON:", replyText.slice(0, 400));
+          aiOk = false;
+        }
       }
 
-      const aiData = await aiRes.json();
-      const replyText = (aiData?.content?.[0]?.text || "").trim();
-
-      // Strip ```json fences if the model snuck them in despite the prompt.
-      let jsonText = replyText;
-      const fenceMatch = jsonText.match(/```(?:json)?\s*([\s\S]*?)```/);
-      if (fenceMatch) jsonText = fenceMatch[1].trim();
-
-      let parsed;
-      try { parsed = JSON.parse(jsonText); } catch {
-        console.error("Anthropic vision returned non-JSON:", replyText.slice(0, 400));
-        return sendJson(res, 502, {
-          ok: false,
-          error: "AI returned a response we couldn't parse. Add zones manually."
-        });
+      // If the AI couldn't be reached or its output was unparseable, ship
+      // the pixel-detected colors with blank labels. Patrick still gets
+      // the right zones — just no descriptions to start from.
+      if (!aiOk) {
+        rawZones = fallbackFromPixels();
       }
-
-      const rawZones = Array.isArray(parsed?.zones) ? parsed.zones : [];
 
       // Normalize each AI-returned zone into the shape the
       // irrigation-zone-schedule client expects.
@@ -13773,16 +13846,23 @@ Customer signature captured at ${new Date().toISOString()}.`;
         return (existing + sep + addClean).slice(0, 400);
       };
 
+      // Restrict AI-emitted colors to ONLY the pixel-detected set. The
+      // pixel sampler is authoritative — anything the model adds (e.g.
+      // hallucinated colors) gets dropped; anything it skips gets filled
+      // in below from the pixel-detected list.
+      const presentKeySet = new Set(presentList.map((c) => c.key));
+
       // Diagnostic: capture every raw color string the model produced so
-      // failures self-diagnose from the log stream alone (no need to
-      // reproduce). Limited to first 30 chars per entry, comma-joined.
+      // failures self-diagnose from the log stream alone.
       const rawColorLog = rawZones
         .map((z) => String(z?.color ?? "").trim().slice(0, 30) || "<blank>")
         .join(",");
 
       for (const z of rawZones) {
         const canonical = canonicalizeColor(z?.color);
-        if (!canonical) {
+        if (!canonical || !presentKeySet.has(canonical)) {
+          // Either uninterpretable OR a palette color the pixel sampler
+          // did NOT find. Drop and count — the AI hallucinated.
           const raw = String(z?.color || "").trim();
           if (!raw) { skipped++; skipReasons.blank++; }
           else       { skipped++; skipReasons.unknown++; }
@@ -13794,8 +13874,6 @@ Customer signature captured at ${new Date().toISOString()}.`;
         const incomingNotes    = truncate(z?.notes, 200);
 
         if (byColor.has(canonical)) {
-          // Already seen this color — fold the new info into the existing
-          // entry rather than creating a duplicate.
           const existing = byColor.get(canonical);
           existing.label    = mergeLabels(existing.label, incomingLabel);
           existing.notes    = mergeNotes(existing.notes, incomingNotes);
@@ -13807,21 +13885,45 @@ Customer signature captured at ${new Date().toISOString()}.`;
             material: incomingMaterial,
             notes: incomingNotes
           });
-          // Hard cap — 20-color palette means at most 20 unique entries.
-          if (byColor.size >= 20) break;
         }
       }
 
-      const zones = Array.from(byColor.values());
-      const merged = rawZones.length - skipped - zones.length;
+      // Fill in any pixel-detected colors the AI didn't describe — Patrick
+      // still gets an entry per real color, just with blank fields he can
+      // fill in by hand. This is the safety net: the pixel sampler's list
+      // is what reaches the client, no matter how the AI behaved.
+      let pixelFilled = 0;
+      for (const c of presentList) {
+        if (!byColor.has(c.key)) {
+          byColor.set(c.key, { color: c.key, label: "", material: "", notes: "" });
+          pixelFilled++;
+        }
+      }
 
-      // Usage log — single-line + tagged, easy to grep from Render logs.
-      // Includes raw / merged / skipped counts + the raw color strings the
-      // model produced, so detection drift is diagnosable without a repro.
+      // Emit zones in the SAME order as the pixel-detected list (palette
+      // order), not insertion order — makes the UI deterministic.
+      const zones = presentList.map((c) => byColor.get(c.key)).filter(Boolean);
+      const merged = rawZones.length - skipped - (zones.length - pixelFilled);
+
+      // Compact diagnostic: per-color pixel counts so Patrick can tune
+      // thresholds and see why a color was or wasn't detected.
+      const pixelCountsCompact = (pixelDetection?.counts || [])
+        .filter((c) => c.count > 0)
+        .map((c) => `${c.key}=${c.count}`)
+        .join(",");
+
       const usage = aiData?.usage || {};
-      console.log(`[irrigation-extract] ip=${callerIp(req)} zones=${zones.length} merged=${merged} skipped=${skipped} (blank=${skipReasons.blank} unknown=${skipReasons.unknown}) raw=${rawZones.length} upscale=${upscaledFrom}→${upscaledTo} kb=${Math.round(processedBuffer.length / 1024)} raw_colors="${rawColorLog}" in_tok=${usage.input_tokens || 0} out_tok=${usage.output_tokens || 0}`);
+      console.log(`[irrigation-extract] ip=${callerIp(req)} zones=${zones.length} pixel_present=${presentList.length} pixel_filled=${pixelFilled} ai_merged=${merged} ai_skipped=${skipped} (blank=${skipReasons.blank} unknown=${skipReasons.unknown}) ai_raw=${rawZones.length} upscale=${upscaledFrom}→${upscaledTo} kb=${Math.round(processedBuffer.length / 1024)} pixel_counts="${pixelCountsCompact}" ai_raw_colors="${rawColorLog}" in_tok=${usage.input_tokens || 0} out_tok=${usage.output_tokens || 0} ai_ok=${aiOk}`);
 
-      return sendJson(res, 200, { ok: true, zones, skipped });
+      return sendJson(res, 200, {
+        ok: true,
+        zones,
+        skipped,
+        detection: "pixel+ai",
+        aiOk,
+        pixelFilled,
+        paletteDetected: presentList.map((c) => ({ key: c.key, name: c.name, hex: c.hex, count: c.count }))
+      });
     } catch (error) {
       console.error("[irrigation-extract] unexpected error:", error);
       return sendJson(res, 500, {

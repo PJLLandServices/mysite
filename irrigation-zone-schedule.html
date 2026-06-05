@@ -379,6 +379,17 @@ body.sheet-open{overflow:hidden;}
 .zone-table input[type=number]::-webkit-outer-spin-button,
 .zone-table input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none;margin:0;}
 .zone-num{text-align:center;font-weight:700;color:var(--green);}
+.zone-num input[type="number"]{
+  width:100%;font:inherit;font-size:12px;font-weight:700;
+  color:var(--green);background:transparent;border:0;outline:none;
+  padding:2px 0;text-align:center;
+  -moz-appearance:textfield;
+}
+.zone-num input[type="number"]::-webkit-outer-spin-button,
+.zone-num input[type="number"]::-webkit-inner-spin-button{-webkit-appearance:none;margin:0;}
+.zone-num input[type="number"]:focus{
+  background:#fff;outline:2px solid var(--green-light);outline-offset:-2px;border-radius:3px;
+}
 
 /* Color cell */
 .color-cell{display:flex;align-items:center;gap:6px;}
@@ -970,6 +981,11 @@ body.sheet-open{overflow:hidden;}
     </header>
 
     <div class="zsheet-section">
+      <label class="zsheet-label" for="zsZoneNum">Controller zone number</label>
+      <input type="number" class="zsheet-input" id="zsZoneNum" min="1" max="99" step="1" inputmode="numeric" placeholder="1">
+    </div>
+
+    <div class="zsheet-section">
       <label class="zsheet-label" for="zsLocation">Zone description</label>
       <input type="text" class="zsheet-input" id="zsLocation" placeholder="Front lawn N" autocomplete="off">
     </div>
@@ -1082,8 +1098,12 @@ body.sheet-open{overflow:hidden;}
   var zones = [];
   var activeIdx = -1;
 
-  function makeZone(){
+  function makeZone(zoneNum){
     return {
+      // Controller-zone number — what Patrick wires on the timer (e.g.
+      // Hunter HPC-400 valve 7). Defaults to detection order; editable.
+      // Print sorts ascending by this number.
+      zoneNum: Number(zoneNum) || 1,
       color:'',
       location:'',
       type:[],        // multi-select array of TYPES keys
@@ -1095,6 +1115,16 @@ body.sheet-open{overflow:hidden;}
       notes:'',
       aiDetected:false
     };
+  }
+
+  // Next unused zoneNum (max + 1) so add-after-delete doesn't duplicate.
+  function nextZoneNum(){
+    var maxN = 0;
+    for (var i = 0; i < zones.length; i++){
+      var n = Number(zones[i].zoneNum) || 0;
+      if (n > maxN) maxN = n;
+    }
+    return maxN + 1;
   }
 
   function daysLabel(zone){
@@ -1141,6 +1171,7 @@ body.sheet-open{overflow:hidden;}
   var zsheetBack  = document.getElementById('zsheetBack');
   var zsheetDone  = document.getElementById('zsheetDone');
   var zsheetDel   = document.getElementById('zsheetDelete');
+  var zsZoneNum   = document.getElementById('zsZoneNum');
   var zsLocation  = document.getElementById('zsLocation');
   var zsColor     = document.getElementById('zsColor');
   var zsSwatch    = document.getElementById('zsSwatch');
@@ -1200,10 +1231,29 @@ body.sheet-open{overflow:hidden;}
     tr.className = 'zr-main';
     tr.dataset.idx = String(idx);
 
-    // #
+    // # — editable controller-zone number (1..99). Defaults to detection
+    // order; print sorts by this value ascending.
     var tdNum = document.createElement('td');
     tdNum.className = 'zone-num';
-    tdNum.textContent = String(idx + 1);
+    var numInput = document.createElement('input');
+    numInput.type = 'number';
+    numInput.inputMode = 'numeric';
+    numInput.min = '1';
+    numInput.max = '99';
+    numInput.step = '1';
+    numInput.value = String(z.zoneNum);
+    numInput.dataset.field = 'zoneNum';
+    var numPrint = document.createElement('span');
+    numPrint.className = 'sched-print';
+    numPrint.textContent = String(z.zoneNum);
+    numInput.addEventListener('input', function(){
+      var v = parseInt(numInput.value, 10);
+      if (Number.isFinite(v) && v > 0) z.zoneNum = v;
+      numPrint.textContent = String(z.zoneNum);
+      syncListItem(idx);
+    });
+    tdNum.appendChild(numInput);
+    tdNum.appendChild(numPrint);
     tr.appendChild(tdNum);
 
     // Color
@@ -1444,6 +1494,8 @@ body.sheet-open{overflow:hidden;}
 
     tr._refs = {
       num: tdNum,
+      numInput: numInput,
+      numPrint: numPrint,
       colorSel: colorSel,
       swatch: swatch,
       colorPrint: colorPrint,
@@ -1491,7 +1543,9 @@ body.sheet-open{overflow:hidden;}
     var r = tr._refs;
     var z = zones[idx];
 
-    r.num.textContent = String(idx + 1);
+    // zoneNum is user-editable; push state into the input + print mirror.
+    if (r.numInput) r.numInput.value = String(z.zoneNum);
+    if (r.numPrint) r.numPrint.textContent = String(z.zoneNum);
 
     r.colorSel.value = z.color;
     r.swatch.style.background = (COLOR_BY_KEY[z.color] || COLORS[0]).hex;
@@ -1541,7 +1595,10 @@ body.sheet-open{overflow:hidden;}
 
     var num = document.createElement('span');
     num.className = 'zone-list-num';
-    num.textContent = String(idx + 1);
+    // Mobile cards show the editable controller-zone number (matches the
+    // desktop table + the printed PDF). List order stays detection order
+    // so Patrick doesn't lose track while editing.
+    num.textContent = String(z.zoneNum);
 
     var sw = document.createElement('span');
     sw.className = 'zone-list-swatch';
@@ -1614,15 +1671,14 @@ body.sheet-open{overflow:hidden;}
   }
 
   function renumberCount(){
-    zoneBody.querySelectorAll('tr.zr-main').forEach(function(tr, i){
-      if (tr._refs) tr._refs.num.textContent = String(i + 1);
-    });
+    // zoneNum is user-editable now — don't overwrite it. Just refresh the
+    // count summary.
     zoneCountEl.textContent = zones.length + ' zone' + (zones.length === 1 ? '' : 's');
   }
 
   // ============ Add / Delete ============
   function addZone(){
-    zones.push(makeZone());
+    zones.push(makeZone(nextZoneNum()));
     zoneBody.appendChild(makeRow(zones.length - 1));
     zoneList.appendChild(buildListItem(zones.length - 1));
     renumberCount();
@@ -1635,15 +1691,14 @@ body.sheet-open{overflow:hidden;}
     if (rowToRemove) rowToRemove.remove();
     var liToRemove = zoneList.children[idx];
     if (liToRemove) liToRemove.remove();
+    // Don't rewrite zoneNum — it's user-editable. Just refresh the
+    // dataset.idx attributes so card → openSheet wiring stays correct.
     zoneBody.querySelectorAll('tr.zr-main').forEach(function(tr, i){
-      if (tr._refs) tr._refs.num.textContent = String(i + 1);
       tr.dataset.idx = String(i);
     });
     Array.prototype.forEach.call(zoneList.children, function(li, i){
       var btn = li.querySelector('.zone-list-btn');
       if (btn) btn.dataset.idx = String(i);
-      var num = li.querySelector('.zone-list-num');
-      if (num) num.textContent = String(i + 1);
     });
     zoneCountEl.textContent = zones.length + ' zone' + (zones.length === 1 ? '' : 's');
   }
@@ -1668,6 +1723,7 @@ body.sheet-open{overflow:hidden;}
     if (activeIdx < 0) return;
     var z = zones[activeIdx];
     zsheetTitle.textContent = 'Zone ' + (activeIdx + 1);
+    zsZoneNum.value = String(z.zoneNum);
     zsLocation.value = z.location || '';
     zsColor.value = z.color || '';
     zsSwatch.style.background = (COLOR_BY_KEY[z.color] || COLORS[0]).hex;
@@ -1706,6 +1762,18 @@ body.sheet-open{overflow:hidden;}
   bindSheetText(zsNotes,    'notes');
   bindSheetText(zsRun,      'runMin');
   bindSheetText(zsEvery,    'everyDays');
+
+  // zoneNum binding — integer-only, doesn't clear the AI badge (metadata
+  // not zone content). Pushes back into the desktop row + mobile card.
+  zsZoneNum.addEventListener('input', function(){
+    if (activeIdx < 0) return;
+    var v = parseInt(zsZoneNum.value, 10);
+    if (Number.isFinite(v) && v > 0) {
+      zones[activeIdx].zoneNum = v;
+      applyZoneToRow(activeIdx);
+      syncListItem(activeIdx);
+    }
+  });
 
   zsColor.addEventListener('change', function(){
     if (activeIdx < 0) return;
@@ -1850,8 +1918,12 @@ body.sheet-open{overflow:hidden;}
   function hideUndo(){ btnUndoAi.classList.remove('is-visible'); preAiZonesSnapshot = null; }
 
   function replaceZones(newZones){
-    zones = newZones.map(function(z){
-      return Object.assign(makeZone(), z, {
+    zones = newZones.map(function(z, i){
+      // Preserve incoming zoneNum (e.g. when restoring a pre-AI snapshot)
+      // or default to detection order (i + 1) for fresh AI-detected zones.
+      var zn = Number(z && z.zoneNum) || (i + 1);
+      return Object.assign(makeZone(zn), z, {
+        zoneNum: zn,
         type: Array.isArray(z.type) ? z.type.slice() : [],
         days: Object.assign({}, makeZone().days, z.days || {})
       });
@@ -1985,14 +2057,38 @@ body.sheet-open{overflow:hidden;}
   //     restorePrint() so it doesn't leak onto the screen view.
   // (c) Set document.title so Chrome's Save-as-PDF picks the right name.
   var originalTitle = null;
+  var originalRowOrder = null;
   // 7 visible columns in print (delete column is hidden via th/td:last-child).
   var PRINT_COLSPAN = 7;
 
   function prepPrint(){
-    // Build the per-zone notes sub-rows + skip empties.
-    var mains = zoneBody.querySelectorAll('tr.zr-main');
-    Array.prototype.forEach.call(mains, function(tr, i){
-      var z = zones[i];
+    // Snapshot the current DOM row order so afterprint can restore it.
+    originalRowOrder = Array.prototype.slice.call(zoneBody.querySelectorAll('tr.zr-main'));
+
+    // Sort a working copy by zoneNum ascending. Rows the user hasn't
+    // numbered (parses to NaN) sink to the end.
+    var sorted = originalRowOrder.slice().sort(function(a, b){
+      var ai = Array.prototype.indexOf.call(originalRowOrder, a);
+      var bi = Array.prototype.indexOf.call(originalRowOrder, b);
+      var an = parseInt((zones[ai] || {}).zoneNum, 10);
+      var bn = parseInt((zones[bi] || {}).zoneNum, 10);
+      if (!Number.isFinite(an)) an = Infinity;
+      if (!Number.isFinite(bn)) bn = Infinity;
+      if (an !== bn) return an - bn;
+      return ai - bi; // stable tie-break by original position
+    });
+
+    // Re-attach in sorted order. zoneBody.appendChild on an existing node
+    // MOVES it — no clone needed.
+    sorted.forEach(function(tr){ zoneBody.appendChild(tr); });
+
+    // Now walk in the NEW (sorted) order, applying skip + injecting notes
+    // sub-rows. Index `i` here is the *sorted* position, but we need the
+    // *original* index to look up zone state — read it from dataset.idx.
+    sorted.forEach(function(tr){
+      var origIdx = parseInt(tr.dataset.idx, 10);
+      if (!Number.isFinite(origIdx)) return;
+      var z = zones[origIdx];
       if (!z) return;
       var hasAnything =
         (z.location || '').trim() ||
@@ -2007,7 +2103,6 @@ body.sheet-open{overflow:hidden;}
         tr.style.display = 'none';
         return;
       }
-      // Inject notes sub-row if needed (one per main row; idempotent).
       var notesText = (z.notes || '').trim();
       if (notesText){
         var sub = document.createElement('tr');
@@ -2034,7 +2129,6 @@ body.sheet-open{overflow:hidden;}
     }
     var proj = (docProject.textContent || '').trim();
     if (!proj || proj === 'Customer / property address') proj = 'Untitled Site';
-    // Sanitize: collapse newlines, strip path-hostile chars, trim length.
     proj = proj.replace(/[\r\n\t]+/g,' ').replace(/[\\/:*?"<>|]+/g,'').replace(/\s+/g,' ').trim().slice(0,80);
     document.title = iso + ' - ' + proj + ' - PJL Land Services Zone Schedule';
   }
@@ -2047,6 +2141,11 @@ body.sheet-open{overflow:hidden;}
       tr.style.display = '';
       delete tr.dataset.printSkip;
     });
+    // Restore the original DOM row order — appendChild moves existing nodes.
+    if (originalRowOrder){
+      originalRowOrder.forEach(function(tr){ zoneBody.appendChild(tr); });
+      originalRowOrder = null;
+    }
     if (originalTitle !== null){
       document.title = originalTitle;
       originalTitle = null;
