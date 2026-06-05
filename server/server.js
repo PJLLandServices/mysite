@@ -11,6 +11,9 @@ const fs = require("node:fs/promises");
 const fsSync = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
+// sharp — image upscale before vision API call (irrigation-extract-zones).
+// Already in package.json; used by scripts/compress-images.js elsewhere.
+const sharp = require("sharp");
 
 // Load .env at boot (if it exists). Tiny inline parser — no dotenv dependency.
 // .env lives in the repo root and holds Gmail + Twilio credentials. Never committed.
@@ -13403,16 +13406,16 @@ Customer signature captured at ${new Date().toISOString()}.`;
         });
       }
 
-      // 12 MB payload cap — base64 inflates a 5 MB image to ~6.7 MB and we
-      // want headroom for the JSON wrapping. parseRequestBody throws on
-      // overflow; we surface that as a friendly 413.
+      // 20 MB payload cap — bumped from 12 MB for the upscale flow. Base64
+      // inflates a ~13 MB image to ~17 MB; we want headroom on top.
+      // parseRequestBody throws on overflow; we surface that as a friendly 413.
       let payload;
       try {
-        payload = await parseRequestBody(req, { maxBytes: 12_000_000 });
+        payload = await parseRequestBody(req, { maxBytes: 20_000_000 });
       } catch {
         return sendJson(res, 413, {
           ok: false,
-          error: "That image is too large. Try a smaller export (under ~8 MB)."
+          error: "That image is too large. Try a smaller export (under ~13 MB)."
         });
       }
 
@@ -13426,23 +13429,84 @@ Customer signature captured at ${new Date().toISOString()}.`;
           error: "Upload a PNG, JPG, WebP or GIF image first."
         });
       }
-      const mediaType = match[1];
-      const base64Data = match[2];
-
-      // Decode-size sanity check. Anthropic's hard image limit is 5 MB per
-      // image; we mirror that here so we can return a clean 413 rather
-      // than parse a 4xx from upstream.
-      const approxBytes = Math.floor(base64Data.length * 0.75);
-      if (approxBytes > 5_200_000) {
-        return sendJson(res, 413, {
-          ok: false,
-          error: "Image exceeds Anthropic's 5 MB cap. Re-export at lower resolution."
-        });
-      }
+      let mediaType = match[1];
+      let base64Data = match[2];
+      const originalBuffer = Buffer.from(base64Data, "base64");
 
       // Record the rate-limit hit only after we've passed validation.
       // Failed validation shouldn't burn through Patrick's hourly quota.
       rateLimit.record(ipKey);
+
+      // ===== Image preprocessing =====
+      // Upscale to 2400px on the long edge before sending to the vision
+      // model. Patrick reported the model missing faint colors (Teal,
+      // one variant of Green) on hand-drawn / photographed plans;
+      // bumping resolution gives small markings more pixels to land on
+      // and substantially improves per-color recall.
+      //
+      // We re-encode as JPEG quality 88 (PNG would be lossless but
+      // 3-5× larger; the model doesn't need lossless for color ID).
+      // GIF inputs are coerced to PNG by sharp's pipeline anyway, so we
+      // standardize on JPEG for the upstream call.
+      //
+      // If sharp fails for any reason (corrupt input, exotic format),
+      // fall back to the original buffer so the user still gets a result.
+      let processedBuffer = originalBuffer;
+      let processedMediaType = mediaType;
+      let upscaledFrom = "(unknown)";
+      let upscaledTo = "(unknown)";
+      try {
+        const img = sharp(originalBuffer, { failOn: "none" });
+        const meta = await img.metadata();
+        upscaledFrom = `${meta.width || "?"}x${meta.height || "?"}`;
+        const longEdge = Math.max(meta.width || 0, meta.height || 0);
+        const target = 2400;
+        const scaleNeeded = longEdge > 0 && longEdge < target;
+        const out = await img
+          .rotate() // honor EXIF orientation before resizing
+          .resize({
+            width:  (meta.width  && meta.width  >= meta.height) ? target : null,
+            height: (meta.height && meta.height >  meta.width)  ? target : null,
+            withoutEnlargement: !scaleNeeded,
+            fit: "inside"
+          })
+          .jpeg({ quality: 88, mozjpeg: true })
+          .toBuffer({ resolveWithObject: true });
+        processedBuffer = out.data;
+        processedMediaType = "image/jpeg";
+        upscaledTo = `${out.info.width}x${out.info.height}`;
+      } catch (preErr) {
+        console.warn("[irrigation-extract] sharp preprocess failed, sending original:", preErr.message);
+      }
+
+      // Post-upscale size check. Anthropic's hard image limit is 5 MB
+      // per image; clamp here so we can return a clean 413 rather than
+      // parse a 4xx from upstream. JPEG q=88 of a 2400px-edge image is
+      // typically 600 KB – 2 MB, so this guard almost never fires.
+      if (processedBuffer.length > 5_200_000) {
+        // Step down JPEG quality once to try to fit under the cap.
+        try {
+          const retried = await sharp(processedBuffer)
+            .jpeg({ quality: 72, mozjpeg: true })
+            .toBuffer();
+          if (retried.length <= 5_200_000) {
+            processedBuffer = retried;
+          } else {
+            return sendJson(res, 413, {
+              ok: false,
+              error: "Image is too large even after compression. Re-export at lower resolution."
+            });
+          }
+        } catch {
+          return sendJson(res, 413, {
+            ok: false,
+            error: "Image exceeds Anthropic's 5 MB cap. Re-export at lower resolution."
+          });
+        }
+      }
+
+      const upstreamBase64 = processedBuffer.toString("base64");
+      const upstreamMediaType = processedMediaType;
 
       // The 20-color named palette the irrigation-zone-schedule UI uses
       // (Phase 3). The prompt below anchors the vision model to these
@@ -13542,6 +13606,15 @@ Customer signature captured at ${new Date().toISOString()}.`;
         return null;
       }
 
+      // Numbered checklist (1..20) — required pre-write step the model
+      // runs against every palette entry. Patrick reported the model
+      // genuinely missing faint colors (Teal, one Green variant) on his
+      // hand-drawn plans; explicit per-item enumeration outperforms a
+      // free "find all colors" instruction by a wide margin.
+      const CHECKLIST = COLOR_PALETTE
+        .map((c, i) => `  ${String(i + 1).padStart(2)}. ${c.name} (${c.hex})`)
+        .join("\n");
+
       const systemPrompt = [
         "You are an irrigation system analyst.",
         "The user has marked this site plan using EXACTLY these 20 colors and only these 20 colors:",
@@ -13564,25 +13637,39 @@ Customer signature captured at ${new Date().toISOString()}.`;
         "- Numbered labels in a distinct color",
         "- Any other colored mark a human installer might have drawn",
         "",
-        "CRITICAL DETECTION RULES — read carefully, this is where models usually fail:",
-        "1. Identify every visible marking. Then GROUP them by color. Return exactly one entry per distinct color group.",
-        "2. COUNT the distinct colors before writing JSON. If you see 12 distinct colors, return exactly 12 entries. If 15, return 15. Do not stop short.",
-        "3. When a color appears in multiple places, combine them into ONE entry — describe the locations in `label` (semicolon-joined, e.g. \"front-left circles; rear-right circles\") and any extra observation in `notes`.",
-        "4. Don't merge similar shades. Lime ≠ Green ≠ Dark Green. Sky Blue ≠ Blue ≠ Navy ≠ Cyan ≠ Teal. Red ≠ Dark Red ≠ Magenta ≠ Pink. Each shade is its own valve.",
-        "5. Don't skip faint or small markings. A single colored circle on its own still counts — its color is still one zone.",
-        "6. If you see a colored marking that you cannot confidently snap to one of the 20 entries, OMIT THAT MARKING entirely rather than guessing — better to lose one than to label it wrong. Never invent off-list color names.",
+        "===== MANDATORY PRE-WRITE CHECKLIST SWEEP =====",
+        "Before writing ANY JSON, mentally scan the image for EACH of the 20 colors below, one at a time, in this exact order. For each color, ask: \"Do I see any marking of this color anywhere on the plan — any line, any circle, any dot, any outline, any arrow, any annotation, even a faint one?\" If yes, include exactly one entry for that color in your output. If no, skip it. This per-color sweep is required — do not skip it. It prevents you from overlooking faint or small markings of less-common colors.",
+        "",
+        CHECKLIST,
+        "",
+        "Especially watch for these often-overlooked palette colors that resemble each other or are easy to dismiss as background:",
+        "- Teal (#008080) — distinct from Cyan (#00CED1), Sky Blue (#00BFFF), and Dark Green (#006400)",
+        "- Lime (#32CD32) — distinct from Green (#00A000) and Dark Green (#006400)",
+        "- Dark Green (#006400) — distinct from Green (#00A000) and Teal (#008080)",
+        "- Dark Red (#8B0000) — distinct from Red (#FF0000), Brown (#8B4513), and Magenta (#FF00FF)",
+        "- Sky Blue (#00BFFF) — distinct from Cyan (#00CED1), Blue (#0000FF), and Teal (#008080)",
+        "- Pink (#FF69B4) — distinct from Magenta (#FF00FF) and Red (#FF0000)",
+        "Each of these is its own valve when present.",
+        "===============================================",
+        "",
+        "CRITICAL DETECTION RULES:",
+        "1. Run the checklist sweep above first. Then group every detected marking by color.",
+        "2. Don't merge similar shades. Lime ≠ Green ≠ Dark Green. Sky Blue ≠ Blue ≠ Navy ≠ Cyan ≠ Teal. Red ≠ Dark Red ≠ Magenta ≠ Pink. Each shade is its own valve.",
+        "3. Don't skip faint or small markings. A single colored circle on its own still counts — its color is still one zone.",
+        "4. When a color appears in multiple places, combine them into ONE entry — describe the locations in `label` (semicolon-joined, e.g. \"front-left circles; rear-right circles\") and any extra observation in `notes`.",
+        "5. If you see a colored marking that you cannot confidently snap to one of the 20 entries, OMIT THAT MARKING entirely rather than guessing — better to lose one than to label it wrong. Never invent off-list color names.",
         "",
         "OUTPUT — STRICT JSON only, no prose, no code fences, no commentary:",
         "Schema: { \"zones\": [ { \"color\": <one of the 20 keys above>, \"label\": <short location(s), may be empty>, \"material\": <e.g. \"grass\", \"mulch bed\", \"hedge\", may be empty>, \"notes\": <observation, may be empty> } ] }",
         "",
-        "- Every entry's `color` field MUST be one of the 20 keys verbatim. Never blank, never null, never a 21st color.",
+        "- Every entry's `color` field MUST be one of the 20 keys verbatim (lowercase, e.g. \"dark red\", \"sky blue\"). Never blank, never null, never a 21st color, never a hex code.",
         "- Each color appears AT MOST ONCE in the output.",
-        "- Keep labels under 80 characters (room for combined locations). Keep notes under 200 characters.",
+        "- Keep labels under 80 characters. Keep notes under 200 characters.",
         "- If you can't identify a property feature for the label, leave it blank — never make it up.",
         "- If the image has NO color-coded zone markings at all, return { \"zones\": [] }."
       ].join("\n");
 
-      const userText = "Identify every color-coded marking on this property image, then group them by color. Return one zone entry per distinct color — each color is ONE valve / ONE zone, even if the markings appear in multiple places on the plan. Count the distinct colors first; your response must contain exactly that many entries. Return ONLY the JSON object specified — no markdown, no explanation.";
+      const userText = "Run the per-color checklist sweep from the system prompt against this property image — scan once for each of the 20 palette colors in order, then return one zone entry per color you saw. Each color is ONE valve / ONE zone even if the marking appears in multiple places. Return ONLY the JSON object specified — no markdown, no explanation.";
 
       // Call Anthropic — same /v1/messages endpoint, same headers, same
       // model family the chat Worker uses. Vision lives on the same API:
@@ -13609,7 +13696,7 @@ Customer signature captured at ${new Date().toISOString()}.`;
           messages: [{
             role: "user",
             content: [
-              { type: "image", source: { type: "base64", media_type: mediaType, data: base64Data } },
+              { type: "image", source: { type: "base64", media_type: upstreamMediaType, data: upstreamBase64 } },
               { type: "text", text: userText }
             ]
           }]
@@ -13732,7 +13819,7 @@ Customer signature captured at ${new Date().toISOString()}.`;
       // Includes raw / merged / skipped counts + the raw color strings the
       // model produced, so detection drift is diagnosable without a repro.
       const usage = aiData?.usage || {};
-      console.log(`[irrigation-extract] ip=${callerIp(req)} zones=${zones.length} merged=${merged} skipped=${skipped} (blank=${skipReasons.blank} unknown=${skipReasons.unknown}) raw=${rawZones.length} raw_colors="${rawColorLog}" in_tok=${usage.input_tokens || 0} out_tok=${usage.output_tokens || 0}`);
+      console.log(`[irrigation-extract] ip=${callerIp(req)} zones=${zones.length} merged=${merged} skipped=${skipped} (blank=${skipReasons.blank} unknown=${skipReasons.unknown}) raw=${rawZones.length} upscale=${upscaledFrom}→${upscaledTo} kb=${Math.round(processedBuffer.length / 1024)} raw_colors="${rawColorLog}" in_tok=${usage.input_tokens || 0} out_tok=${usage.output_tokens || 0}`);
 
       return sendJson(res, 200, { ok: true, zones, skipped });
     } catch (error) {
