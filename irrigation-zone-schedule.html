@@ -379,16 +379,17 @@ body.sheet-open{overflow:hidden;}
 .zone-table input[type=number]::-webkit-outer-spin-button,
 .zone-table input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none;margin:0;}
 .zone-num{text-align:center;font-weight:700;color:var(--green);}
-.zone-num input[type="number"]{
+.zone-num select{
   width:100%;font:inherit;font-size:12px;font-weight:700;
   color:var(--green);background:transparent;border:0;outline:none;
-  padding:2px 0;text-align:center;
-  -moz-appearance:textfield;
+  padding:2px 12px 2px 0;text-align:center;text-align-last:center;
+  cursor:pointer;
+  appearance:none;-webkit-appearance:none;-moz-appearance:none;
+  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='8' height='5' viewBox='0 0 8 5'><path fill='%231B4D2E' d='M0 0l4 5 4-5z'/></svg>");
+  background-repeat:no-repeat;background-position:right 2px center;
 }
-.zone-num input[type="number"]::-webkit-outer-spin-button,
-.zone-num input[type="number"]::-webkit-inner-spin-button{-webkit-appearance:none;margin:0;}
-.zone-num input[type="number"]:focus{
-  background:#fff;outline:2px solid var(--green-light);outline-offset:-2px;border-radius:3px;
+.zone-num select:focus{
+  background-color:#fff;outline:2px solid var(--green-light);outline-offset:-2px;border-radius:3px;
 }
 
 /* Color cell */
@@ -982,7 +983,7 @@ body.sheet-open{overflow:hidden;}
 
     <div class="zsheet-section">
       <label class="zsheet-label" for="zsZoneNum">Controller zone number</label>
-      <input type="number" class="zsheet-input" id="zsZoneNum" min="1" max="99" step="1" inputmode="numeric" placeholder="1">
+      <select class="zsheet-select" id="zsZoneNum"></select>
     </div>
 
     <div class="zsheet-section">
@@ -1195,7 +1196,14 @@ body.sheet-open{overflow:hidden;}
     docDate.textContent = iso;
   })();
 
-  // ============ Populate sheet color select + type pills + day pills ============
+  // ============ Populate sheet selects + pills ============
+  // Controller-zone-number options (1..40, covers Hunter HPC-400 expansion range).
+  for (var zNum = 1; zNum <= 40; zNum++){
+    var zo = document.createElement('option');
+    zo.value = String(zNum);
+    zo.textContent = String(zNum);
+    zsZoneNum.appendChild(zo);
+  }
   COLORS.forEach(function(c){
     var o = document.createElement('option');
     o.value = c.key;
@@ -1231,28 +1239,33 @@ body.sheet-open{overflow:hidden;}
     tr.className = 'zr-main';
     tr.dataset.idx = String(idx);
 
-    // # — editable controller-zone number (1..99). Defaults to detection
-    // order; print sorts by this value ascending.
+    // # — editable controller-zone number (1..40). Dropdown picker (1-40
+    // covers Hunter HPC-400 expansion range with headroom). The moment
+    // the user picks a new number, the entire table + mobile list live-
+    // resort ascending by zoneNum.
     var tdNum = document.createElement('td');
     tdNum.className = 'zone-num';
-    var numInput = document.createElement('input');
-    numInput.type = 'number';
-    numInput.inputMode = 'numeric';
-    numInput.min = '1';
-    numInput.max = '99';
-    numInput.step = '1';
-    numInput.value = String(z.zoneNum);
-    numInput.dataset.field = 'zoneNum';
+    var numSelect = document.createElement('select');
+    numSelect.dataset.field = 'zoneNum';
+    for (var zn = 1; zn <= 40; zn++){
+      var o = document.createElement('option');
+      o.value = String(zn);
+      o.textContent = String(zn);
+      if (zn === Number(z.zoneNum)) o.selected = true;
+      numSelect.appendChild(o);
+    }
     var numPrint = document.createElement('span');
     numPrint.className = 'sched-print';
     numPrint.textContent = String(z.zoneNum);
-    numInput.addEventListener('input', function(){
-      var v = parseInt(numInput.value, 10);
+    numSelect.addEventListener('change', function(){
+      var v = parseInt(numSelect.value, 10);
       if (Number.isFinite(v) && v > 0) z.zoneNum = v;
       numPrint.textContent = String(z.zoneNum);
-      syncListItem(idx);
+      // Live re-sort: the array is reordered and DOM rebuilt from it.
+      // dropdown change already blurred — no focus to preserve.
+      resortZones();
     });
-    tdNum.appendChild(numInput);
+    tdNum.appendChild(numSelect);
     tdNum.appendChild(numPrint);
     tr.appendChild(tdNum);
 
@@ -1494,7 +1507,7 @@ body.sheet-open{overflow:hidden;}
 
     tr._refs = {
       num: tdNum,
-      numInput: numInput,
+      numSelect: numSelect,
       numPrint: numPrint,
       colorSel: colorSel,
       swatch: swatch,
@@ -1543,8 +1556,8 @@ body.sheet-open{overflow:hidden;}
     var r = tr._refs;
     var z = zones[idx];
 
-    // zoneNum is user-editable; push state into the input + print mirror.
-    if (r.numInput) r.numInput.value = String(z.zoneNum);
+    // zoneNum is user-editable; push state into the select + print mirror.
+    if (r.numSelect) r.numSelect.value = String(z.zoneNum);
     if (r.numPrint) r.numPrint.textContent = String(z.zoneNum);
 
     r.colorSel.value = z.color;
@@ -1676,6 +1689,52 @@ body.sheet-open{overflow:hidden;}
     zoneCountEl.textContent = zones.length + ' zone' + (zones.length === 1 ? '' : 's');
   }
 
+  // ============ Live re-sort ============
+  // Patrick walks the controller assigning each zone to its real valve
+  // number. The moment a row's zoneNum changes, both the desktop table
+  // and the mobile list re-sort ascending so the final printed page
+  // reads 1, 2, 3, ... top-to-bottom regardless of detection order.
+  //
+  // Implementation:
+  //   1. Capture the active zone reference (sheet may be open on it).
+  //   2. Stable-sort zones[] in place by zoneNum (same number = tied,
+  //      stable means insertion order survives the tie — matches the
+  //      brief's "the second one shows beneath the first").
+  //   3. Update activeIdx to the active zone's new position.
+  //   4. Tear down + rebuild both surfaces from the sorted state.
+  function resortZones(){
+    var activeZone = (activeIdx >= 0 && activeIdx < zones.length) ? zones[activeIdx] : null;
+    zones.sort(function(a, b){
+      var an = parseInt(a.zoneNum, 10); if (!Number.isFinite(an)) an = 9999;
+      var bn = parseInt(b.zoneNum, 10); if (!Number.isFinite(bn)) bn = 9999;
+      return an - bn;
+    });
+    if (activeZone){
+      var newIdx = zones.indexOf(activeZone);
+      if (newIdx >= 0) activeIdx = newIdx;
+    }
+    rerenderAll();
+  }
+
+  // Tear down + rebuild table rows and mobile cards from the current
+  // zones[] order. Used by resortZones and by AI-replace flows.
+  function rerenderAll(){
+    zoneBody.innerHTML = '';
+    zoneList.innerHTML = '';
+    if (!zones.length){
+      var empty = document.createElement('li');
+      empty.className = 'zone-list-empty';
+      empty.textContent = 'No zones yet — tap +Add zone above to start.';
+      zoneList.appendChild(empty);
+    } else {
+      zones.forEach(function(_, i){
+        zoneBody.appendChild(makeRow(i));
+        zoneList.appendChild(buildListItem(i));
+      });
+    }
+    zoneCountEl.textContent = zones.length + ' zone' + (zones.length === 1 ? '' : 's');
+  }
+
   // ============ Add / Delete ============
   function addZone(){
     zones.push(makeZone(nextZoneNum()));
@@ -1763,15 +1822,14 @@ body.sheet-open{overflow:hidden;}
   bindSheetText(zsRun,      'runMin');
   bindSheetText(zsEvery,    'everyDays');
 
-  // zoneNum binding — integer-only, doesn't clear the AI badge (metadata
-  // not zone content). Pushes back into the desktop row + mobile card.
-  zsZoneNum.addEventListener('input', function(){
+  // zoneNum binding — dropdown select, triggers live-resort. Doesn't
+  // clear the AI badge (metadata not zone content).
+  zsZoneNum.addEventListener('change', function(){
     if (activeIdx < 0) return;
     var v = parseInt(zsZoneNum.value, 10);
     if (Number.isFinite(v) && v > 0) {
       zones[activeIdx].zoneNum = v;
-      applyZoneToRow(activeIdx);
-      syncListItem(activeIdx);
+      resortZones();
     }
   });
 
@@ -1928,20 +1986,9 @@ body.sheet-open{overflow:hidden;}
         days: Object.assign({}, makeZone().days, z.days || {})
       });
     });
-    zoneBody.innerHTML = '';
-    zoneList.innerHTML = '';
-    if (!zones.length){
-      var empty = document.createElement('li');
-      empty.className = 'zone-list-empty';
-      empty.textContent = 'No zones yet — tap +Add zone above to start.';
-      zoneList.appendChild(empty);
-    } else {
-      zones.forEach(function(_, i){
-        zoneBody.appendChild(makeRow(i));
-        zoneList.appendChild(buildListItem(i));
-      });
-    }
-    zoneCountEl.textContent = zones.length + ' zone' + (zones.length === 1 ? '' : 's');
+    // Sort by zoneNum + rebuild — keeps the post-AI surface consistent
+    // with the "always sorted" invariant the dropdown maintains.
+    resortZones();
   }
 
   function snapshotZonesForUndo(){
@@ -2057,38 +2104,16 @@ body.sheet-open{overflow:hidden;}
   //     restorePrint() so it doesn't leak onto the screen view.
   // (c) Set document.title so Chrome's Save-as-PDF picks the right name.
   var originalTitle = null;
-  var originalRowOrder = null;
   // 7 visible columns in print (delete column is hidden via th/td:last-child).
   var PRINT_COLSPAN = 7;
 
   function prepPrint(){
-    // Snapshot the current DOM row order so afterprint can restore it.
-    originalRowOrder = Array.prototype.slice.call(zoneBody.querySelectorAll('tr.zr-main'));
-
-    // Sort a working copy by zoneNum ascending. Rows the user hasn't
-    // numbered (parses to NaN) sink to the end.
-    var sorted = originalRowOrder.slice().sort(function(a, b){
-      var ai = Array.prototype.indexOf.call(originalRowOrder, a);
-      var bi = Array.prototype.indexOf.call(originalRowOrder, b);
-      var an = parseInt((zones[ai] || {}).zoneNum, 10);
-      var bn = parseInt((zones[bi] || {}).zoneNum, 10);
-      if (!Number.isFinite(an)) an = Infinity;
-      if (!Number.isFinite(bn)) bn = Infinity;
-      if (an !== bn) return an - bn;
-      return ai - bi; // stable tie-break by original position
-    });
-
-    // Re-attach in sorted order. zoneBody.appendChild on an existing node
-    // MOVES it — no clone needed.
-    sorted.forEach(function(tr){ zoneBody.appendChild(tr); });
-
-    // Now walk in the NEW (sorted) order, applying skip + injecting notes
-    // sub-rows. Index `i` here is the *sorted* position, but we need the
-    // *original* index to look up zone state — read it from dataset.idx.
-    sorted.forEach(function(tr){
-      var origIdx = parseInt(tr.dataset.idx, 10);
-      if (!Number.isFinite(origIdx)) return;
-      var z = zones[origIdx];
+    // Screen DOM is already sorted by zoneNum (resortZones runs on every
+    // dropdown change). Print just needs to skip empty rows + inject
+    // notes sub-rows + set the PDF filename.
+    var mains = zoneBody.querySelectorAll('tr.zr-main');
+    Array.prototype.forEach.call(mains, function(tr, i){
+      var z = zones[i];
       if (!z) return;
       var hasAnything =
         (z.location || '').trim() ||
@@ -2134,18 +2159,11 @@ body.sheet-open{overflow:hidden;}
   }
 
   function restorePrint(){
-    // Remove injected notes sub-rows.
     zoneBody.querySelectorAll('tr.zr-notes[data-injected="1"]').forEach(function(tr){ tr.remove(); });
-    // Restore hidden empties.
     zoneBody.querySelectorAll('tr.zr-main[data-print-skip="1"]').forEach(function(tr){
       tr.style.display = '';
       delete tr.dataset.printSkip;
     });
-    // Restore the original DOM row order — appendChild moves existing nodes.
-    if (originalRowOrder){
-      originalRowOrder.forEach(function(tr){ zoneBody.appendChild(tr); });
-      originalRowOrder = null;
-    }
     if (originalTitle !== null){
       document.title = originalTitle;
       originalTitle = null;
