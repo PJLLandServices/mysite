@@ -103,14 +103,19 @@ body.sheet-open{overflow:hidden;}
 }
 
 /* ============ Sheet container (the printable page) ============ */
-.sheet-wrap{padding:clamp(16px,3vw,40px);display:flex;justify-content:center;}
+/* Desktop: uses the full monitor width up to a 1600px cap (Patrick was
+   editing inside a cramped ~860px column on a wide display). Mobile
+   stays compact via the @media block. Print is unaffected — the @page
+   rule + @media print width override fully constrain the printed PDF. */
+.sheet-wrap{padding:clamp(16px,3vw,48px);display:flex;justify-content:center;}
 .sheet{
-  width:100%;max-width:8.5in;
+  width:100%;
+  max-width:1600px;
   background:var(--paper);
   border:1px solid var(--border);
   border-radius:12px;
   box-shadow:var(--shadow);
-  padding:clamp(22px,3vw,40px);
+  padding:clamp(22px,3vw,48px);
   position:relative;
 }
 @media (max-width:768px){
@@ -184,7 +189,7 @@ body.sheet-open{overflow:hidden;}
   .doc-cell .editable{font-size:15px;min-height:28px;}
 }
 
-/* ============ Programs config block ============ */
+/* ============ Programs config block — dynamic time list ============ */
 .pgm-row{
   margin-top:14px;
   padding:14px 16px;
@@ -204,32 +209,55 @@ body.sheet-open{overflow:hidden;}
 .pgm-row-hint{
   font-size:11px;color:var(--text-muted);font-style:italic;
 }
-.pgm-row-grid{
-  display:grid;grid-template-columns:repeat(4,1fr);gap:10px;
+.pgm-row-stack{display:flex;flex-direction:column;gap:8px;}
+.pgm-line{
+  display:grid;grid-template-columns:84px 1fr;gap:14px;align-items:center;
+  padding:6px 10px;background:#fff;border:1px solid var(--border);border-radius:8px;
 }
-.pgm-cell{
-  display:flex;flex-direction:column;gap:4px;min-width:0;
-}
-.pgm-cell-label{
-  font-size:10px;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;
+.pgm-line-label{
+  font-family:'Barlow Condensed',sans-serif;
+  font-size:13px;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;
   color:var(--green);
 }
-.pgm-time{
-  font:inherit;font-size:14px;font-weight:600;
-  padding:7px 8px;
+.pgm-times{
+  display:flex;flex-wrap:wrap;gap:6px;align-items:center;
+}
+.pgm-time-chip{
+  display:inline-flex;align-items:center;gap:0;
   border:1px solid var(--border-strong);border-radius:6px;
-  background:#fff;color:var(--text);
-  outline:none;
+  background:var(--green-tint);
 }
-.pgm-time:focus{
-  border-color:var(--green);
-  box-shadow:0 0 0 2px rgba(27,77,46,0.18);
+.pgm-time-chip input[type="time"]{
+  font:inherit;font-size:13px;font-weight:600;
+  padding:5px 8px;border:0;background:transparent;color:var(--text);outline:none;
+  min-width:88px;
 }
+.pgm-time-chip input[type="time"]:focus{
+  background:#fff;
+}
+.pgm-time-remove{
+  font:inherit;font-size:13px;line-height:1;font-weight:700;
+  width:22px;height:24px;padding:0;
+  border:0;background:transparent;color:var(--text-muted);
+  cursor:pointer;border-left:1px solid var(--border);
+}
+.pgm-time-remove:hover{color:var(--red);background:rgba(192,58,44,0.08);}
+.pgm-time-add{
+  font:inherit;font-size:12px;font-weight:600;
+  padding:6px 12px;border-radius:6px;cursor:pointer;
+  border:1px dashed var(--border-strong);background:transparent;
+  color:var(--green);
+}
+.pgm-time-add:hover{border-color:var(--green);background:var(--green-tint);}
+/* Print mirror lives in DOM but only shows in @media print */
+.pgm-line-print{display:none;}
 @media (max-width:768px){
   .pgm-row{padding:12px;}
-  .pgm-row-grid{grid-template-columns:1fr 1fr;gap:10px;}
   .pgm-row-hint{display:none;}
-  .pgm-time{font-size:15px;min-height:36px;}
+  .pgm-line{grid-template-columns:64px 1fr;gap:10px;padding:5px 8px;}
+  .pgm-line-label{font-size:12px;}
+  .pgm-time-chip input[type="time"]{font-size:14px;min-width:84px;}
+  .pgm-time-add{font-size:13px;padding:7px 10px;}
 }
 
 /* ============ Persistence toolbar ============ */
@@ -405,35 +433,38 @@ body.sheet-open{overflow:hidden;}
 .zone-table{
   width:100%;
   border-collapse:collapse;
-  font-size:12px;
+  font-size:13px;
   table-layout:fixed;
 }
 .zone-table th{
   background:var(--green);color:#fff;
   font-family:'Barlow Condensed',sans-serif;
-  font-weight:700;font-size:11px;letter-spacing:0.08em;text-transform:uppercase;
-  padding:8px 6px;text-align:left;
+  font-weight:700;font-size:12px;letter-spacing:0.08em;text-transform:uppercase;
+  padding:10px 8px;text-align:left;
   border:1px solid var(--green-mid);
 }
 .zone-table thead th:first-child{border-top-left-radius:6px;}
 .zone-table thead th:last-child{border-top-right-radius:6px;}
 .zone-table td{
-  padding:6px 5px;border:1px solid var(--border);vertical-align:top;
+  padding:9px 8px;border:1px solid var(--border);vertical-align:middle;
   background:var(--paper);
 }
 .zone-table tbody tr.zr-main:nth-of-type(odd) td{background:var(--cream);}
 .zone-table tbody tr.zr-main:hover td{background:var(--green-tint);}
 
-/* Column widths tuned for portrait Letter 7.5" usable width (9 columns) */
-.zone-table colgroup col:nth-child(1){width:6%;}     /* # */
-.zone-table colgroup col:nth-child(2){width:6%;}     /* Pgm */
-.zone-table colgroup col:nth-child(3){width:5%;}     /* Color swatch */
-.zone-table colgroup col:nth-child(4){width:23%;}    /* Zone Description */
-.zone-table colgroup col:nth-child(5){width:14%;}    /* Type */
-.zone-table colgroup col:nth-child(6){width:9%;}     /* Status */
-.zone-table colgroup col:nth-child(7){width:8%;}     /* Run Time */
-.zone-table colgroup col:nth-child(8){width:25%;}    /* Days to Water */
-.zone-table colgroup col:nth-child(9){width:4%;}     /* delete */
+/* Column widths — apply to both screen and print. At wide desktop
+   (.sheet up to 1600px), the descriptive columns get the breathing room
+   Patrick wanted. Print on Letter portrait keeps the same proportions;
+   total width is just smaller. */
+.zone-table colgroup col:nth-child(1){width:5%;}     /* # */
+.zone-table colgroup col:nth-child(2){width:8%;}     /* Pgm — fits A B C D inline */
+.zone-table colgroup col:nth-child(3){width:4%;}     /* Color swatch */
+.zone-table colgroup col:nth-child(4){width:26%;}    /* Zone Description — widest */
+.zone-table colgroup col:nth-child(5){width:13%;}    /* Type — fits 3 pills inline */
+.zone-table colgroup col:nth-child(6){width:8%;}     /* Status */
+.zone-table colgroup col:nth-child(7){width:7%;}     /* Run Time */
+.zone-table colgroup col:nth-child(8){width:26%;}    /* Days to Water */
+.zone-table colgroup col:nth-child(9){width:3%;}     /* delete */
 
 /* Cell inputs */
 .zone-table input[type=text],
@@ -524,6 +555,19 @@ body.sheet-open{overflow:hidden;}
   float:right;font-weight:600;font-size:10.5px;letter-spacing:0.04em;
   text-transform:none;font-family:'DM Sans',sans-serif;opacity:0.92;
 }
+
+/* Program pills — 4 narrow A/B/C/D pills inline. Multi-select. */
+.pgm-pills{display:flex;flex-wrap:wrap;gap:3px;align-items:center;justify-content:center;}
+.pgm-pills .pill--pgm{
+  font:inherit;font-size:11px;font-weight:700;
+  padding:3px 6px;border-radius:99px;
+  border:1px solid var(--border-strong);
+  background:#fff;color:var(--text-muted);
+  cursor:pointer;line-height:1;user-select:none;
+  min-width:18px;text-align:center;
+}
+.pgm-pills .pill--pgm:hover{border-color:var(--green-light);color:var(--green);}
+.pgm-pills .pill--pgm.is-on{background:var(--green);color:#fff;border-color:var(--green);}
 
 /* Type cell — checkbox-style pills inline */
 .type-pills{display:flex;flex-wrap:wrap;gap:3px;align-items:center;}
@@ -949,11 +993,19 @@ body.sheet-open{overflow:hidden;}
   .pgm-row-head{margin-bottom:6px;}
   .pgm-row-title{font-size:9.5pt;}
   .pgm-row-hint{display:none;}
-  .pgm-row-grid{grid-template-columns:repeat(4,1fr) !important;gap:8px;}
-  .pgm-cell{gap:1px;}
-  .pgm-cell-label{font-size:7.5pt;}
-  .pgm-time{display:none !important;}
-  .pgm-time-print{display:inline !important;font-size:10pt;font-weight:600;color:var(--text);}
+  .pgm-row-stack{gap:4px;}
+  .pgm-line{
+    grid-template-columns:84px 1fr !important;
+    padding:3px 10px;background:transparent !important;border:0;
+    page-break-inside:avoid;break-inside:avoid;
+  }
+  .pgm-line-label{font-size:8.5pt;letter-spacing:0.10em;}
+  /* Hide the interactive time chips + add buttons in print; show mirror. */
+  .pgm-times{display:none !important;}
+  .pgm-line-print{
+    display:inline !important;font-size:10pt;font-weight:600;color:var(--text);
+  }
+  .pgm-line-print:empty::before{content:"—";color:var(--text-muted);}
 
   /* ===== Site plan figure — collapse if no image ===== */
   .plan{margin:10px 0;}
@@ -1002,8 +1054,14 @@ body.sheet-open{overflow:hidden;}
   .dtw-every{display:none !important;}
   .sched-print,.cname-print{display:inline !important;white-space:normal;}
 
-  /* Zebra stripe for legibility */
-  .zone-table tbody tr.zr-main:nth-of-type(odd) td{background:#FAFCF6 !important;}
+  /* Zebra stripe for legibility — clones also get the treatment */
+  .zone-table tbody tr.zr-main:nth-of-type(odd) td,
+  .zone-table tbody tr.zr-print-clone:nth-of-type(odd) td{background:#FAFCF6 !important;}
+  /* Cloned print rows get the same page-break-avoid pair as originals */
+  .zone-table tbody tr.zr-print-clone{
+    page-break-inside:avoid;break-inside:avoid;
+    page-break-after:avoid;break-after:avoid;
+  }
 
   /* Swatch — bigger in print so the color reads from arm's length */
   .swatch{width:14px;height:14px;border:1px solid #444;display:inline-block !important;}
@@ -1108,33 +1166,14 @@ body.sheet-open{overflow:hidden;}
     </div>
   </section>
 
-  <!-- Programs config (start times for A/B/C/D) -->
+  <!-- Programs config (multiple start times per program A/B/C/D) -->
   <section class="pgm-row" aria-label="Programs">
     <div class="pgm-row-head">
       <h2 class="pgm-row-title">Programs</h2>
-      <span class="pgm-row-hint">Start times — zones run sequentially after the program's start.</span>
+      <span class="pgm-row-hint">A program can have multiple start times — add as many as the controller is set to fire.</span>
     </div>
-    <div class="pgm-row-grid">
-      <label class="pgm-cell">
-        <span class="pgm-cell-label">Program A</span>
-        <input type="time" class="pgm-time" data-program="A" aria-label="Program A start time">
-        <span class="sched-print pgm-time-print"></span>
-      </label>
-      <label class="pgm-cell">
-        <span class="pgm-cell-label">Program B</span>
-        <input type="time" class="pgm-time" data-program="B" aria-label="Program B start time">
-        <span class="sched-print pgm-time-print"></span>
-      </label>
-      <label class="pgm-cell">
-        <span class="pgm-cell-label">Program C</span>
-        <input type="time" class="pgm-time" data-program="C" aria-label="Program C start time">
-        <span class="sched-print pgm-time-print"></span>
-      </label>
-      <label class="pgm-cell">
-        <span class="pgm-cell-label">Program D</span>
-        <input type="time" class="pgm-time" data-program="D" aria-label="Program D start time">
-        <span class="sched-print pgm-time-print"></span>
-      </label>
+    <div class="pgm-row-stack" id="pgmStack">
+      <!-- Built dynamically: one row per program with its start-time list. -->
     </div>
   </section>
 
@@ -1245,19 +1284,18 @@ body.sheet-open{overflow:hidden;}
       <h2 class="zsheet-title" id="zsheetTitle">Zone —</h2>
     </header>
 
-    <div class="zsheet-row" style="margin-top:0;">
-      <div>
-        <label class="zsheet-label" for="zsZoneNum">Controller zone #</label>
-        <select class="zsheet-select" id="zsZoneNum"></select>
-      </div>
-      <div>
-        <label class="zsheet-label" for="zsProgram">Program</label>
-        <select class="zsheet-select" id="zsProgram">
-          <option value="A">A</option>
-          <option value="B">B</option>
-          <option value="C">C</option>
-          <option value="D">D</option>
-        </select>
+    <div class="zsheet-section" style="margin-top:0;">
+      <label class="zsheet-label" for="zsZoneNum">Controller zone #</label>
+      <select class="zsheet-select" id="zsZoneNum"></select>
+    </div>
+
+    <div class="zsheet-section">
+      <span class="zsheet-label">Programs — pick one or more</span>
+      <div class="zsheet-pills" id="zsPrograms" role="group" aria-label="Programs">
+        <button type="button" class="zsheet-pill" data-pgm="A" aria-pressed="false">A</button>
+        <button type="button" class="zsheet-pill" data-pgm="B" aria-pressed="false">B</button>
+        <button type="button" class="zsheet-pill" data-pgm="C" aria-pressed="false">C</button>
+        <button type="button" class="zsheet-pill" data-pgm="D" aria-pressed="false">D</button>
       </div>
     </div>
 
@@ -1375,13 +1413,21 @@ body.sheet-open{overflow:hidden;}
   var activeIdx = -1;
 
   // ============ Programs (A/B/C/D) ============
-  // Each program is a scheduled start time on the controller. All zones
-  // assigned to a program run sequentially after that start time.
-  // Print groups zones by program → then sorts by zoneNum within program.
+  // Each program is a scheduled set of start times on the controller.
+  //
+  // Domain corrections (Phase 4+):
+  //   - A program can have MULTIPLE start times per day (e.g. A runs at
+  //     6:00 AM AND 8:00 PM).
+  //   - A zone can belong to MULTIPLE programs (e.g. a high-traffic
+  //     entry bed runs on both A and B).
+  // Data model: programs[K] = [HH:MM, HH:MM, ...]
+  //             zone.programs = ['A', 'B', ...]
+  // Print duplicates each zone into every program it belongs to;
+  // zones in zero programs land in an "Unassigned" tail section.
   var PROGRAM_KEYS = ['A', 'B', 'C', 'D'];
-  var programs = { A:'', B:'', C:'', D:'' };
+  var programs = { A:[], B:[], C:[], D:[] };
 
-  // Render an HH:MM time as "6:00 AM" for the printed program header.
+  // Render an HH:MM time as "6:00 AM" for printed program headers + mirrors.
   function fmtTimeAmPm(hhmm){
     if (!hhmm || !/^\d{1,2}:\d{2}$/.test(hhmm)) return '';
     var parts = hhmm.split(':');
@@ -1391,16 +1437,18 @@ body.sheet-open{overflow:hidden;}
     var h12 = h % 12; if (h12 === 0) h12 = 12;
     return h12 + ':' + m + ' ' + period;
   }
+  function fmtTimesList(arr){
+    return (arr || []).map(fmtTimeAmPm).filter(Boolean).join(', ');
+  }
 
   function makeZone(zoneNum){
     return {
       // Controller-zone number — what Patrick wires on the timer (e.g.
       // Hunter HPC-400 valve 7). Defaults to detection order; editable.
-      // Print sorts ascending by this number within each program.
       zoneNum: Number(zoneNum) || 1,
-      // Program assignment (A/B/C/D). Default 'A' — single-program plans
-      // are the common case.
-      program: 'A',
+      // Program memberships — array of A/B/C/D. Default ['A'] — single-
+      // program is the common case. Empty array → Unassigned in print.
+      programs: ['A'],
       color:'',
       location:'',
       type:[],        // multi-select array of TYPES keys
@@ -1469,7 +1517,7 @@ body.sheet-open{overflow:hidden;}
   var zsheetDone  = document.getElementById('zsheetDone');
   var zsheetDel   = document.getElementById('zsheetDelete');
   var zsZoneNum   = document.getElementById('zsZoneNum');
-  var zsProgram   = document.getElementById('zsProgram');
+  var zsPrograms  = document.getElementById('zsPrograms');
   var zsLocation  = document.getElementById('zsLocation');
   var zsColor     = document.getElementById('zsColor');
   var zsSwatch    = document.getElementById('zsSwatch');
@@ -1566,28 +1614,35 @@ body.sheet-open{overflow:hidden;}
     tdNum.appendChild(numPrint);
     tr.appendChild(tdNum);
 
-    // Program — dropdown A/B/C/D, default 'A'. Resort triggers on change
-    // so the table groups by program automatically (print sorts the same).
+    // Program — multi-select pills A/B/C/D. A zone can belong to 0+
+    // programs; print duplicates the zone into each program it belongs
+    // to. Resort triggers on change so the table groups by first-program
+    // ascending.
     var tdPgm = document.createElement('td');
     tdPgm.className = 'pgm-cell-td';
-    var pgmSelect = document.createElement('select');
-    pgmSelect.dataset.field = 'program';
-    PROGRAM_KEYS.forEach(function(k){
-      var o = document.createElement('option');
-      o.value = k; o.textContent = k;
-      if (k === z.program) o.selected = true;
-      pgmSelect.appendChild(o);
-    });
+    var pgmPillsWrap = document.createElement('div');
+    pgmPillsWrap.className = 'pgm-pills';
     var pgmPrint = document.createElement('span');
     pgmPrint.className = 'sched-print';
-    pgmPrint.textContent = z.program || '';
-    pgmSelect.addEventListener('change', function(){
-      z.program = pgmSelect.value;
-      pgmPrint.textContent = z.program;
-      resortZones();
-      schedulePersist();
+    pgmPrint.textContent = (z.programs || []).join(', ');
+    var pgmPillEls = {};
+    PROGRAM_KEYS.forEach(function(k){
+      var p = pill(k, 'pill pill--pgm');
+      p.dataset.pgm = k;
+      if ((z.programs || []).indexOf(k) !== -1) p.classList.add('is-on');
+      p.addEventListener('click', function(){
+        var i = (z.programs || []).indexOf(k);
+        if (i === -1) z.programs.push(k);
+        else z.programs.splice(i, 1);
+        p.classList.toggle('is-on', z.programs.indexOf(k) !== -1);
+        pgmPrint.textContent = z.programs.join(', ');
+        resortZones();
+        schedulePersist();
+      });
+      pgmPillEls[k] = p;
+      pgmPillsWrap.appendChild(p);
     });
-    tdPgm.appendChild(pgmSelect);
+    tdPgm.appendChild(pgmPillsWrap);
     tdPgm.appendChild(pgmPrint);
     tr.appendChild(tdPgm);
 
@@ -1832,7 +1887,7 @@ body.sheet-open{overflow:hidden;}
       num: tdNum,
       numSelect: numSelect,
       numPrint: numPrint,
-      pgmSelect: pgmSelect,
+      pgmPillEls: pgmPillEls,
       pgmPrint: pgmPrint,
       colorSel: colorSel,
       swatch: swatch,
@@ -1884,8 +1939,13 @@ body.sheet-open{overflow:hidden;}
     if (r.numSelect) r.numSelect.value = String(z.zoneNum);
     if (r.numPrint) r.numPrint.textContent = String(z.zoneNum);
 
-    if (r.pgmSelect) r.pgmSelect.value = z.program || 'A';
-    if (r.pgmPrint) r.pgmPrint.textContent = z.program || '';
+    // Program multi-select pills
+    PROGRAM_KEYS.forEach(function(k){
+      if (r.pgmPillEls && r.pgmPillEls[k]){
+        r.pgmPillEls[k].classList.toggle('is-on', (z.programs || []).indexOf(k) !== -1);
+      }
+    });
+    if (r.pgmPrint) r.pgmPrint.textContent = (z.programs || []).join(', ');
 
     r.colorSel.value = z.color;
     r.swatch.style.background = (COLOR_BY_KEY[z.color] || COLORS[0]).hex;
@@ -2030,12 +2090,20 @@ body.sheet-open{overflow:hidden;}
   //   4. Tear down + rebuild both surfaces from the sorted state.
   function resortZones(){
     var activeZone = (activeIdx >= 0 && activeIdx < zones.length) ? zones[activeIdx] : null;
-    // Sort by program (A→D, blank/unknown sinks to end), then by zoneNum
-    // ascending. Stable sort preserves insertion order on ties.
+    // Screen sort uses FIRST program letter in the zone's programs[]
+    // array (alphabetically earliest A→D), then zoneNum. Unassigned
+    // zones sink to bottom. Stable sort preserves insertion order on
+    // ties. (Print re-arranges separately — duplicates per program +
+    // Unassigned tail block.)
     var pgmRank = {A:0,B:1,C:2,D:3};
+    function firstPgmRank(z){
+      var arr = (z.programs || []).slice().sort();
+      if (!arr.length) return 9;
+      var r = pgmRank[arr[0]];
+      return (r === undefined) ? 9 : r;
+    }
     zones.sort(function(a, b){
-      var ap = pgmRank[a.program]; if (ap === undefined) ap = 9;
-      var bp = pgmRank[b.program]; if (bp === undefined) bp = 9;
+      var ap = firstPgmRank(a), bp = firstPgmRank(b);
       if (ap !== bp) return ap - bp;
       var an = parseInt(a.zoneNum, 10); if (!Number.isFinite(an)) an = 9999;
       var bn = parseInt(b.zoneNum, 10); if (!Number.isFinite(bn)) bn = 9999;
@@ -2115,7 +2183,11 @@ body.sheet-open{overflow:hidden;}
     var z = zones[activeIdx];
     zsheetTitle.textContent = 'Zone ' + (activeIdx + 1);
     zsZoneNum.value = String(z.zoneNum);
-    zsProgram.value = z.program || 'A';
+    // Program multi-select pills hydrate from z.programs[]
+    var pgms = z.programs || [];
+    zsPrograms.querySelectorAll('[data-pgm]').forEach(function(b){
+      b.setAttribute('aria-pressed', pgms.indexOf(b.dataset.pgm) !== -1 ? 'true' : 'false');
+    });
     zsLocation.value = z.location || '';
     zsColor.value = z.color || '';
     zsSwatch.style.background = (COLOR_BY_KEY[z.color] || COLORS[0]).hex;
@@ -2167,11 +2239,18 @@ body.sheet-open{overflow:hidden;}
     }
   });
 
-  // Program picker — A/B/C/D, triggers same resort flow as Zone #.
-  zsProgram.addEventListener('change', function(){
-    if (activeIdx < 0) return;
-    if (PROGRAM_KEYS.indexOf(zsProgram.value) === -1) return;
-    zones[activeIdx].program = zsProgram.value;
+  // Programs multi-pill — pick zero, one, or many. Same resort flow.
+  zsPrograms.addEventListener('click', function(e){
+    var btn = e.target.closest('[data-pgm]');
+    if (!btn || activeIdx < 0) return;
+    var z = zones[activeIdx];
+    var k = btn.dataset.pgm;
+    if (PROGRAM_KEYS.indexOf(k) === -1) return;
+    var i = (z.programs || []).indexOf(k);
+    if (i === -1) z.programs.push(k); else z.programs.splice(i, 1);
+    btn.setAttribute('aria-pressed', z.programs.indexOf(k) !== -1 ? 'true' : 'false');
+    applyZoneToRow(activeIdx);
+    syncListItem(activeIdx);
     resortZones();
     schedulePersist();
   });
@@ -2451,71 +2530,109 @@ body.sheet-open{overflow:hidden;}
   var PRINT_COLSPAN = 8;
 
   function prepPrint(){
-    // Screen DOM is already sorted by (program, zoneNum). Print needs to:
-    //   1. Skip empty rows (no content)
-    //   2. Inject a "PROGRAM X — Start H:MM AM" header row before the
-    //      first non-empty zone of each program. Skip programs with no
-    //      non-empty zones.
-    //   3. Inject a Notes sub-row beneath each zone that has notes.
+    // Multi-program print: rebuild tbody as a sequence of program
+    // sections. Each zone appears in EVERY program it belongs to. Zones
+    // with no programs go in an "Unassigned" tail section.
+    //
+    // Strategy:
+    //   1. Snapshot existing rows so restorePrint can put them back.
+    //   2. Hide all originals (set display:none, marked with data-print-hidden).
+    //   3. Build a fresh sequence: for each program K with assigned zones,
+    //      emit a header row + clones of those zones (sorted by zoneNum)
+    //      + each zone's notes sub-row if any. Then an "Unassigned"
+    //      section if applicable.
     //   4. Set the PDF filename.
-    var mains = Array.prototype.slice.call(zoneBody.querySelectorAll('tr.zr-main'));
-    var lastInjectedPgm = null;
-    var seenPgms = {};
-
-    mains.forEach(function(tr, i){
-      var z = zones[i];
-      if (!z) return;
-      var hasAnything =
-        (z.location || '').trim() ||
-        (z.notes || '').trim() ||
-        z.status || z.color || z.oe ||
-        (z.type && z.type.length) ||
-        (z.runMin || '').toString().trim() ||
-        (z.everyDays || '').toString().trim() ||
-        DAYS.some(function(d){ return z.days[d.key]; });
-      if (!hasAnything){
-        tr.dataset.printSkip = '1';
-        tr.style.display = 'none';
-        return;
-      }
-      // Program header — inject once per program, only when first non-empty
-      // row of that program is encountered.
-      var pgm = z.program || 'A';
-      if (!seenPgms[pgm]){
-        seenPgms[pgm] = true;
-        var header = document.createElement('tr');
-        header.className = 'zr-pgm-head';
-        header.dataset.injected = '1';
-        var hd = document.createElement('td');
-        hd.colSpan = PRINT_COLSPAN;
-        var start = programs[pgm];
-        var startTxt = start ? fmtTimeAmPm(start) : '—';
-        hd.textContent = 'Program ' + pgm;
-        var timeSpan = document.createElement('span');
-        timeSpan.className = 'zr-pgm-time';
-        timeSpan.textContent = 'Start ' + startTxt;
-        hd.appendChild(timeSpan);
-        header.appendChild(hd);
-        tr.parentNode.insertBefore(header, tr);
-        lastInjectedPgm = pgm;
-      }
-      // Notes sub-row
-      var notesText = (z.notes || '').trim();
-      if (notesText){
-        var sub = document.createElement('tr');
-        sub.className = 'zr-notes';
-        sub.dataset.injected = '1';
-        var td = document.createElement('td');
-        td.colSpan = PRINT_COLSPAN;
-        var labelSpan = document.createElement('span');
-        labelSpan.className = 'zr-notes-label';
-        labelSpan.textContent = 'Notes:';
-        td.appendChild(labelSpan);
-        td.appendChild(document.createTextNode(' ' + notesText));
-        sub.appendChild(td);
-        tr.parentNode.insertBefore(sub, tr.nextSibling);
-      }
+    var originalRows = Array.prototype.slice.call(zoneBody.querySelectorAll('tr.zr-main'));
+    // Hide all originals
+    originalRows.forEach(function(tr){
+      tr.dataset.printHidden = '1';
+      tr.style.display = 'none';
     });
+
+    function hasContent(z){
+      return (z.location || '').trim() ||
+             (z.notes || '').trim() ||
+             z.status || z.color || z.oe ||
+             (z.type && z.type.length) ||
+             (z.runMin || '').toString().trim() ||
+             (z.everyDays || '').toString().trim() ||
+             DAYS.some(function(d){ return z.days[d.key]; });
+    }
+    function zoneIdxFor(z){ return zones.indexOf(z); }
+
+    // Group non-empty zones by program assignment
+    var nonEmpty = zones.filter(hasContent);
+    var assignedByPgm = {};
+    PROGRAM_KEYS.forEach(function(K){ assignedByPgm[K] = []; });
+    var unassigned = [];
+    nonEmpty.forEach(function(z){
+      var pgms = (z.programs || []).filter(function(k){ return PROGRAM_KEYS.indexOf(k) !== -1; });
+      if (!pgms.length){ unassigned.push(z); }
+      else { pgms.forEach(function(K){ assignedByPgm[K].push(z); }); }
+    });
+    // Sort each program's zones by zoneNum ascending (stable)
+    function sortByNum(a, b){
+      var an = parseInt(a.zoneNum, 10); if (!Number.isFinite(an)) an = 9999;
+      var bn = parseInt(b.zoneNum, 10); if (!Number.isFinite(bn)) bn = 9999;
+      return an - bn;
+    }
+    PROGRAM_KEYS.forEach(function(K){ assignedByPgm[K].sort(sortByNum); });
+    unassigned.sort(sortByNum);
+
+    function injectSection(headerText, headerSubtitle, list){
+      if (!list.length) return;
+      var header = document.createElement('tr');
+      header.className = 'zr-pgm-head';
+      header.dataset.injected = '1';
+      var hd = document.createElement('td');
+      hd.colSpan = PRINT_COLSPAN;
+      hd.textContent = headerText;
+      if (headerSubtitle){
+        var sub = document.createElement('span');
+        sub.className = 'zr-pgm-time';
+        sub.textContent = headerSubtitle;
+        hd.appendChild(sub);
+      }
+      header.appendChild(hd);
+      zoneBody.appendChild(header);
+
+      list.forEach(function(z){
+        var idx = zoneIdxFor(z);
+        var srcTr = originalRows[idx];
+        if (!srcTr) return;
+        var clone = srcTr.cloneNode(true);
+        clone.classList.add('zr-print-clone');
+        clone.dataset.injected = '1';
+        // cloneNode(deep) copies inline styles + data-* attrs from the
+        // hidden original — undo both so the clone actually renders.
+        clone.style.display = '';
+        delete clone.dataset.printHidden;
+        zoneBody.appendChild(clone);
+        // Notes sub-row
+        var notesText = (z.notes || '').trim();
+        if (notesText){
+          var nsub = document.createElement('tr');
+          nsub.className = 'zr-notes';
+          nsub.dataset.injected = '1';
+          var ntd = document.createElement('td');
+          ntd.colSpan = PRINT_COLSPAN;
+          var labelSpan = document.createElement('span');
+          labelSpan.className = 'zr-notes-label';
+          labelSpan.textContent = 'Notes:';
+          ntd.appendChild(labelSpan);
+          ntd.appendChild(document.createTextNode(' ' + notesText));
+          nsub.appendChild(ntd);
+          zoneBody.appendChild(nsub);
+        }
+      });
+    }
+
+    PROGRAM_KEYS.forEach(function(K){
+      var startList = fmtTimesList(programs[K] || []);
+      var subtitle = startList ? 'Starts ' + startList : 'No start time set';
+      injectSection('Program ' + K, subtitle, assignedByPgm[K]);
+    });
+    injectSection('Unassigned', '', unassigned);
 
     // PDF filename — YYYY-MM-DD - Project - PJL Land Services Zone Schedule
     originalTitle = document.title;
@@ -2531,8 +2648,15 @@ body.sheet-open{overflow:hidden;}
   }
 
   function restorePrint(){
-    zoneBody.querySelectorAll('tr.zr-notes[data-injected="1"]').forEach(function(tr){ tr.remove(); });
-    zoneBody.querySelectorAll('tr.zr-pgm-head[data-injected="1"]').forEach(function(tr){ tr.remove(); });
+    // Remove injected sections: program headers, cloned zone rows,
+    // and per-zone notes sub-rows.
+    zoneBody.querySelectorAll('[data-injected="1"]').forEach(function(tr){ tr.remove(); });
+    // Un-hide originals
+    zoneBody.querySelectorAll('tr.zr-main[data-print-hidden="1"]').forEach(function(tr){
+      tr.style.display = '';
+      delete tr.dataset.printHidden;
+    });
+    // Legacy printSkip flag from older prepPrint (safety belt)
     zoneBody.querySelectorAll('tr.zr-main[data-print-skip="1"]').forEach(function(tr){
       tr.style.display = '';
       delete tr.dataset.printSkip;
@@ -2565,32 +2689,86 @@ body.sheet-open{overflow:hidden;}
   window.addEventListener('afterprint', restorePrint);
   window.addEventListener('beforeprint', prepPrint);
 
-  // ============ Programs config wiring ============
-  // Read time pickers + print mirrors. Inputs are populated from state
-  // on init; changes write back to state and trigger autosave.
-  var pgmInputs = Array.prototype.slice.call(document.querySelectorAll('.pgm-time'));
-  pgmInputs.forEach(function(inp){
-    var key = inp.dataset.program;
-    var mirror = inp.nextElementSibling;
-    if (mirror && mirror.classList.contains('sched-print')){
-      inp.dataset._mirror = '1';
-    }
-    inp.addEventListener('input', function(){
-      programs[key] = inp.value || '';
-      if (mirror) mirror.textContent = fmtTimeAmPm(inp.value);
-      schedulePersist();
-    });
-  });
-  function syncProgramInputs(){
-    pgmInputs.forEach(function(inp){
-      var key = inp.dataset.program;
-      inp.value = programs[key] || '';
-      var mirror = inp.nextElementSibling;
-      if (mirror && mirror.classList.contains('sched-print')){
-        mirror.textContent = fmtTimeAmPm(programs[key] || '');
-      }
+  // ============ Programs config wiring (dynamic time lists) ============
+  // Each program (A/B/C/D) gets a row with N time chips + an "+ add time"
+  // button. Per-program data: programs[K] = ['HH:MM', 'HH:MM', ...].
+  // The print mirror is a hidden span at the end of each row that gets
+  // formatted as "6:00 AM, 8:00 PM" at print time.
+  var pgmStack = document.getElementById('pgmStack');
+  function renderProgramConfig(){
+    pgmStack.innerHTML = '';
+    PROGRAM_KEYS.forEach(function(K){
+      var line = document.createElement('div');
+      line.className = 'pgm-line';
+      line.dataset.program = K;
+
+      var label = document.createElement('span');
+      label.className = 'pgm-line-label';
+      label.textContent = 'Program ' + K;
+      line.appendChild(label);
+
+      var times = document.createElement('div');
+      times.className = 'pgm-times';
+      // Ensure state shape (defensive)
+      if (!Array.isArray(programs[K])) programs[K] = [];
+      programs[K].forEach(function(hhmm, i){
+        times.appendChild(buildTimeChip(K, i, hhmm));
+      });
+      var addBtn = document.createElement('button');
+      addBtn.type = 'button';
+      addBtn.className = 'pgm-time-add';
+      addBtn.textContent = programs[K].length ? '+ add time' : '+ add start time';
+      addBtn.addEventListener('click', function(){
+        programs[K].push('');
+        renderProgramConfig();
+        // Focus the new chip's input for immediate typing
+        var newChip = pgmStack.querySelector('.pgm-line[data-program="' + K + '"] .pgm-times .pgm-time-chip:last-of-type input[type="time"]');
+        if (newChip) newChip.focus();
+        schedulePersist();
+      });
+      times.appendChild(addBtn);
+      line.appendChild(times);
+
+      // Hidden print mirror — populated at print time so the rendered
+      // PDF reads "Starts 6:00 AM, 8:00 PM" inside the program block.
+      var mirror = document.createElement('span');
+      mirror.className = 'sched-print pgm-line-print';
+      mirror.textContent = fmtTimesList(programs[K]);
+      line.appendChild(mirror);
+
+      pgmStack.appendChild(line);
     });
   }
+  function buildTimeChip(K, i, hhmm){
+    var chip = document.createElement('span');
+    chip.className = 'pgm-time-chip';
+    var inp = document.createElement('input');
+    inp.type = 'time';
+    inp.value = hhmm || '';
+    inp.setAttribute('aria-label', 'Program ' + K + ' start time ' + (i + 1));
+    inp.addEventListener('input', function(){
+      programs[K][i] = inp.value || '';
+      // Refresh the print mirror for this line.
+      var line = chip.closest('.pgm-line');
+      var mirror = line && line.querySelector('.pgm-line-print');
+      if (mirror) mirror.textContent = fmtTimesList(programs[K]);
+      schedulePersist();
+    });
+    var rm = document.createElement('button');
+    rm.type = 'button';
+    rm.className = 'pgm-time-remove';
+    rm.setAttribute('aria-label', 'Remove this start time');
+    rm.textContent = '×';
+    rm.addEventListener('click', function(){
+      programs[K].splice(i, 1);
+      renderProgramConfig();
+      schedulePersist();
+    });
+    chip.appendChild(inp);
+    chip.appendChild(rm);
+    return chip;
+  }
+  function syncProgramInputs(){ renderProgramConfig(); }
 
   // ============ Persistence (Change A) ============
   // localStorage key — versioned so future shape changes can migrate.
@@ -2631,12 +2809,17 @@ body.sheet-open{overflow:hidden;}
                'T'+String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0')+':'+String(d.getSeconds()).padStart(2,'0');
       })(),
       docMeta: readDocMeta(),
-      programs: { A: programs.A, B: programs.B, C: programs.C, D: programs.D },
+      programs: {
+        A: (programs.A || []).slice(),
+        B: (programs.B || []).slice(),
+        C: (programs.C || []).slice(),
+        D: (programs.D || []).slice()
+      },
       planImageDataUrl: (planImg.src && planImg.src.indexOf('data:') === 0) ? planImg.src : '',
       zones: zones.map(function(z){
         return {
           zoneNum: z.zoneNum,
-          program: z.program,
+          programs: (z.programs || []).slice(),
           color: z.color,
           location: z.location,
           type: (z.type || []).slice(),
@@ -2654,11 +2837,17 @@ body.sheet-open{overflow:hidden;}
 
   function applySnapshot(snap){
     if (!snap || typeof snap !== 'object') return false;
-    // Programs
+    // Programs — accept new array shape OR migrate old single-string
+    // shape ("06:00") from snapshots saved before this commit.
     if (snap.programs){
       PROGRAM_KEYS.forEach(function(k){
-        programs[k] = String(snap.programs[k] || '');
+        var v = snap.programs[k];
+        if (Array.isArray(v)) programs[k] = v.filter(Boolean).map(String);
+        else if (typeof v === 'string' && v) programs[k] = [v];
+        else programs[k] = [];
       });
+    } else {
+      PROGRAM_KEYS.forEach(function(k){ programs[k] = []; });
     }
     syncProgramInputs();
     // Doc meta (project / controller / date / drawer / contact lines / footer note)
@@ -2675,8 +2864,19 @@ body.sheet-open{overflow:hidden;}
         type: Array.isArray(z.type) ? z.type.slice() : [],
         days: Object.assign({}, fresh.days, z.days || {})
       });
-      // Defensive: clamp program to a known key.
-      if (PROGRAM_KEYS.indexOf(fresh.program) === -1) fresh.program = 'A';
+      // Migrate old single-string `program` → array `programs`.
+      if (!Array.isArray(fresh.programs)){
+        if (typeof z.program === 'string' && z.program){
+          fresh.programs = [z.program];
+        } else if (Array.isArray(z.programs)) {
+          fresh.programs = z.programs.slice();
+        } else {
+          fresh.programs = ['A'];
+        }
+      }
+      // Filter to known keys
+      fresh.programs = fresh.programs.filter(function(k){ return PROGRAM_KEYS.indexOf(k) !== -1; });
+      delete fresh.program;
       return fresh;
     });
     resortZones();
@@ -2777,7 +2977,7 @@ body.sheet-open{overflow:hidden;}
     try { localStorage.removeItem(STORAGE_KEY); } catch(_) {}
     // Reset everything to a blank slate.
     zones = [];
-    PROGRAM_KEYS.forEach(function(k){ programs[k] = ''; });
+    PROGRAM_KEYS.forEach(function(k){ programs[k] = []; });
     syncProgramInputs();
     setPlanImage(null);
     zoneBody.innerHTML = '';

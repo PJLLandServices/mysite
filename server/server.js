@@ -13469,25 +13469,32 @@ Customer signature captured at ${new Date().toISOString()}.`;
       };
 
       // ===== Pixel-based palette detection =====
-      // The 20-color palette is fixed. We don't ask the AI to guess what
-      // colors are on the plan — we determine it programmatically by
-      // counting pixels that fall within RGB distance of each palette
-      // hex. The AI is only used for descriptions (label / material /
-      // notes) of the colors we already know are present.
+      // The 20-color palette is fixed. We determine which colors are on
+      // the plan programmatically by counting pixels that fall within
+      // RGB distance of each palette hex. The AI is only used for
+      // descriptions (label / material / notes) of colors already known
+      // to be present.
       //
-      // Tuning notes:
-      //   - dist=30 (RGB Euclidean) catches a marking's body but rejects
-      //     the anti-aliased halo around its edges.
-      //   - minCount=100 filters JPEG artifacts and stray pixels.
-      //   - We skip near-white pixels (background paper) AND near-
-      //     grayscale pixels (low saturation = text, scan lines, gray
-      //     paper). That means Gray/Black palette entries are NOT
-      //     pixel-detectable in v1 — Patrick can add them manually if a
-      //     plan ever uses them as zone colors. Worth it to avoid being
-      //     drowned in false positives from annotation text.
-      const PIXEL_DIST_SQ = 30 * 30;
-      const PIXEL_MIN_COUNT = 100;
-      const SATURATION_GATE = 25; // max(R,G,B) - min(R,G,B) must exceed this
+      // Tuning (relaxed after Patrick reported under-detection):
+      //   - dist=50 (RGB Euclidean) — was 30. Wider net to tolerate JPEG
+      //     compression artifacts + anti-aliased halos around colored
+      //     lines. Still distant enough that Yellow (#FFD700) doesn't
+      //     get confused with Tan (#D2B48C), Sky Blue with Cyan, etc.
+      //   - minCount=30 — was 100. Lower floor catches thin/small
+      //     markings (a single short colored line at 1600px ≈ 100-300
+      //     pixels; 30 captures even faint dotted markers).
+      //   - Sample resolution 1600px — was 800. 4× more pixels per
+      //     marking → small features survive the noise floor.
+      //   - Background filters intentionally PASS Yellow #FFD700
+      //     (max-min = 255 >> 25 saturation gate; r=255,g=215,b=0 does
+      //     NOT trip the r>235 && g>235 && b>235 paper check because
+      //     g=215) and Tan #D2B48C (max-min = 70 > 25 gate; r=210 does
+      //     not trip 235 paper check). Gray/Black still skipped — would
+      //     otherwise drown in annotation-text false positives.
+      const PIXEL_DIST_SQ = 50 * 50;
+      const PIXEL_MIN_COUNT = 30;
+      const SATURATION_GATE = 25;
+      const SAMPLE_LONG_EDGE = 1600;
       let pixelDetection = null;
       let orientedBuffer = originalBuffer;
       try {
@@ -13498,10 +13505,10 @@ Customer signature captured at ${new Date().toISOString()}.`;
         const pipeline = sharp(orientedBuffer, { failOn: "none" });
         const meta = await pipeline.metadata();
         const longEdge = Math.max(meta.width || 0, meta.height || 0);
-        const samplePipe = longEdge > 800
+        const samplePipe = longEdge > SAMPLE_LONG_EDGE
           ? pipeline.resize({
-              width:  (meta.width >= meta.height) ? 800 : null,
-              height: (meta.height > meta.width)  ? 800 : null,
+              width:  (meta.width >= meta.height) ? SAMPLE_LONG_EDGE : null,
+              height: (meta.height > meta.width)  ? SAMPLE_LONG_EDGE : null,
               fit: "inside"
             })
           : pipeline;
@@ -13905,10 +13912,11 @@ Customer signature captured at ${new Date().toISOString()}.`;
       const zones = presentList.map((c) => byColor.get(c.key)).filter(Boolean);
       const merged = rawZones.length - skipped - (zones.length - pixelFilled);
 
-      // Compact diagnostic: per-color pixel counts so Patrick can tune
-      // thresholds and see why a color was or wasn't detected.
+      // Compact diagnostic: per-color pixel counts for ALL 20 palette
+      // entries (including zeros) so Patrick can see exactly which
+      // colors landed near threshold + which were misclassified. The
+      // log line gets long but it's one line per request — easy to grep.
       const pixelCountsCompact = (pixelDetection?.counts || [])
-        .filter((c) => c.count > 0)
         .map((c) => `${c.key}=${c.count}`)
         .join(",");
 
