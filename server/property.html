@@ -268,6 +268,34 @@
         <button type="button" class="pjl-btn pjl-btn-outline" data-create-wo="fall_closing" id="createWoFall">+ Fall Closing</button>
         <button type="button" class="pjl-btn pjl-btn-outline" data-create-wo="service_visit" id="createWoVisit">+ Service Visit</button>
       </div>
+      <!-- Service-call fee waiver — applies to Service Visit WOs only.
+           Spring/Fall seasonal fees are flat-rate and all-in (no separate
+           trip charge), so the waiver doesn't apply there. Off by default;
+           the detail block (reason + notes) only appears once checked. -->
+      <fieldset class="property-field-wo__waiver" id="woFeeWaiver">
+        <legend class="property-field-wo__waiver-legend">Service call fee — Service Visit only</legend>
+        <label class="property-field-wo__waiver-toggle">
+          <input type="checkbox" id="woWaiveFee">
+          <span>Waive service call fee (<span id="woWaiveFeeAmount">$95</span>)</span>
+        </label>
+        <div class="property-field-wo__waiver-detail" id="woWaiveDetail" hidden>
+          <label class="property-field-wo__waiver-field">
+            <span>Reason</span>
+            <select id="woWaiveReason">
+              <option value="">Select a reason…</option>
+              <option value="warranty">Warranty / callback</option>
+              <option value="contract">Contract member</option>
+              <option value="courtesy">Courtesy / no charge</option>
+              <option value="other">Other (write-in)</option>
+            </select>
+          </label>
+          <label class="property-field-wo__waiver-field">
+            <span>Notes <em id="woWaiveNotesHint">(optional)</em></span>
+            <input type="text" id="woWaiveNotes" maxlength="200" placeholder="e.g. redo of June valve repair">
+          </label>
+          <p class="property-field-wo__waiver-err" id="woWaiveErr" role="alert" hidden></p>
+        </div>
+      </fieldset>
     </section>
 
     <!-- Deferred recommendations — items the customer declined during an

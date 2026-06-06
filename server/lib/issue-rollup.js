@@ -41,6 +41,8 @@
 //
 // Totals follow the same rounding rules as quotes.js (HST 13%, 2 decimal).
 
+const { friendlyWaiverReason } = require("./service-fee-waiver");
+
 const HST_RATE = 0.13;
 
 function round2(n) {
@@ -434,6 +436,7 @@ function rollupIssuesToLineItems(wo, pricing) {
   if (zoneLines.length) {
     const intakeActive = !!(wo && wo.intakeGuarantee && wo.intakeGuarantee.applies);
     const isSeasonal = !!(wo && (wo.type === "spring_opening" || wo.type === "fall_closing"));
+    const feeWaiver = (wo && wo.serviceFeeWaiver && wo.serviceFeeWaiver.waived === true) ? wo.serviceFeeWaiver : null;
     const allZoneNums = Array.from(new Set(zoneLines.flatMap((l) => l.source.zoneNumbers)));
     if (intakeActive) {
       lines.push(buildLine({
@@ -443,6 +446,19 @@ function rollupIssuesToLineItems(wo, pricing) {
         price: 0,
         source: { zoneNumbers: allZoneNums, issueIds: [] },
         note: "Trip already paid on the AI-quoted visit — no second mobilization fee for finds during the same visit"
+      }));
+    } else if (!isSeasonal && feeWaiver) {
+      // Service-call fee waived at WO creation (warranty / contract /
+      // courtesy / other). Emit a $0 line so the customer plainly sees the
+      // credit on the quote/invoice rather than the fee silently vanishing.
+      // The friendly reason rides in the label; the line is mandatory
+      // (key === "service_call") so the customer can't toggle it back on.
+      lines.push(buildLine({
+        key: "service_call",
+        label: `Service call fee — WAIVED (${friendlyWaiverReason(feeWaiver)})`,
+        qty: 1,
+        price: 0,
+        source: { zoneNumbers: allZoneNums, issueIds: [], feeWaived: true, waiverReason: feeWaiver.reason }
       }));
     } else if (!isSeasonal) {
       // Service visit (or other repair-only WO) — full service call.

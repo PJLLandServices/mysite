@@ -942,6 +942,36 @@ function renderDiagnosis(wo) {
   woDiagnosis.textContent = typeof wo.diagnosis === "string" ? wo.diagnosis : JSON.stringify(wo.diagnosis, null, 2);
 }
 
+// Service-call fee waiver banner. Mirrors lib/service-fee-waiver.js's
+// friendly labels — keep in sync. Surfaces an unmissable cue that the $95
+// fee was waived at WO creation so the tech doesn't collect it on-site; the
+// matching $0 "WAIVED" line also shows in the on-site quote builder.
+const WAIVER_REASON_LABELS = {
+  warranty: "Warranty visit",
+  contract: "Contract member",
+  courtesy: "Courtesy",
+  other: "No charge"
+};
+function renderServiceFeeWaiver(wo) {
+  const banner = document.getElementById("woWaiverBanner");
+  const meta = document.getElementById("woWaiverMeta");
+  if (!banner) return;
+  const w = wo && wo.serviceFeeWaiver;
+  if (!w || w.waived !== true) {
+    banner.hidden = true;
+    return;
+  }
+  const friendly = w.reason === "other"
+    ? (w.notes || "No charge")
+    : (WAIVER_REASON_LABELS[w.reason] || "No charge");
+  let text = friendly;
+  // For non-"other" reasons, append the note (if any) as supporting detail —
+  // the friendly category already carries the reason.
+  if (w.reason !== "other" && w.notes) text += ` — ${w.notes}`;
+  if (meta) meta.textContent = `(${text})`;
+  banner.hidden = false;
+}
+
 // AI-Correct-Diagnosis Bonus banner — desktop mirror of tech-mode's
 // banner. Brief F: Match / Didn't Match buttons before signature; on
 // match, the server adds a -1hr labour credit to the on-site quote
@@ -1038,6 +1068,7 @@ function populateForm(wo) {
   renderZones(wo.zones || []);
   renderDiagnosis(wo);
   renderIntakeGuarantee(wo);
+  renderServiceFeeWaiver(wo);
   renderServiceChecklist(wo);
   renderWoPhotos(wo);
   renderSignoff(wo);

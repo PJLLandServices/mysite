@@ -44,6 +44,13 @@ const fieldWoNoZones = document.getElementById("fieldWoNoZones");
 const createWoSpring = document.getElementById("createWoSpring");
 const createWoFall = document.getElementById("createWoFall");
 const createWoVisit = document.getElementById("createWoVisit");
+const woWaiveFee = document.getElementById("woWaiveFee");
+const woWaiveDetail = document.getElementById("woWaiveDetail");
+const woWaiveReason = document.getElementById("woWaiveReason");
+const woWaiveNotes = document.getElementById("woWaiveNotes");
+const woWaiveNotesHint = document.getElementById("woWaiveNotesHint");
+const woWaiveErr = document.getElementById("woWaiveErr");
+const woWaiveFeeAmount = document.getElementById("woWaiveFeeAmount");
 
 const confirmModal = document.getElementById("confirmModal");
 const confirmTitle = document.getElementById("confirmTitle");
@@ -533,15 +540,77 @@ async function renderFieldWoList(property) {
   }
 }
 
+// ---- Service-call fee waiver (Service Visit WOs only) ------------------
+// The $95 service-call fee is only charged on service_visit WOs (the rollup
+// adds it when repairs are found). Spring/Fall are flat-rate with no separate
+// trip charge, so the waiver isn't offered for them. Off by default.
+
+// Pull the canonical service_call price from pricing.json so the checkbox
+// label reflects the live fee rather than a hardcoded "$95".
+(async function hydrateWaiverFeeAmount() {
+  if (!woWaiveFeeAmount) return;
+  try {
+    const res = await fetch("/api/pricing", { cache: "no-store" });
+    const data = await res.json();
+    const price = data?.items?.service_call?.price;
+    if (Number.isFinite(Number(price))) woWaiveFeeAmount.textContent = "$" + Number(price);
+  } catch { /* keep the static fallback */ }
+})();
+
+function clearWaiverError() {
+  if (woWaiveErr) { woWaiveErr.hidden = true; woWaiveErr.textContent = ""; }
+}
+
+// Show/hide the reason+notes block and flip the notes hint to "(required)"
+// when the reason is Other.
+function syncWaiverUi() {
+  const on = !!(woWaiveFee && woWaiveFee.checked);
+  if (woWaiveDetail) woWaiveDetail.hidden = !on;
+  if (woWaiveNotesHint) {
+    woWaiveNotesHint.textContent = woWaiveReason?.value === "other" ? "(required)" : "(optional)";
+  }
+  if (!on) clearWaiverError();
+}
+woWaiveFee?.addEventListener("change", syncWaiverUi);
+woWaiveReason?.addEventListener("change", () => { syncWaiverUi(); clearWaiverError(); });
+woWaiveNotes?.addEventListener("input", clearWaiverError);
+
+// Read + validate the waiver from the form. Returns:
+//   { skip: true }                 — not waived (nothing to attach)
+//   { error: "..." }               — invalid; caller aborts and shows it
+//   { waiver: {...} }              — valid payload for the POST body
+function readServiceFeeWaiver() {
+  if (!woWaiveFee || !woWaiveFee.checked) return { skip: true };
+  const reason = woWaiveReason?.value || "";
+  if (!reason) return { error: "Select a waiver reason." };
+  const notes = (woWaiveNotes?.value || "").trim();
+  if (reason === "other" && !notes) return { error: "Add a note explaining the waiver when the reason is 'Other'." };
+  return { waiver: { waived: true, reason, notes } };
+}
+
 async function createFieldWoFromButton(type) {
   if (!loadedProperty) return;
   const button = document.querySelector(`[data-create-wo="${type}"]`);
+
+  // Only service visits carry a service-call fee, so the waiver only applies
+  // there. Validate before disabling anything so a bad waiver keeps the form
+  // interactive.
+  const body = { type, propertyId: loadedProperty.id };
+  if (type === "service_visit") {
+    const w = readServiceFeeWaiver();
+    if (w.error) {
+      if (woWaiveErr) { woWaiveErr.textContent = w.error; woWaiveErr.hidden = false; }
+      return;
+    }
+    if (w.waiver) body.serviceFeeWaiver = w.waiver;
+  }
+
   if (button) button.disabled = true;
   try {
     const response = await fetch("/api/work-orders", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ type, propertyId: loadedProperty.id })
+      body: JSON.stringify(body)
     });
     const data = await response.json();
     if (!response.ok || !data.ok) {

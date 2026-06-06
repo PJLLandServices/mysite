@@ -363,6 +363,24 @@ body.wo-lightbox-open { overflow: hidden; }
 .wo-locked-icon { font-size: 18px; }
 .wo-locked-banner strong { color: #b13a3a; }
 
+/* Service-call fee waiver banner — green/informational, distinct from the
+   red locked banner. */
+.wo-waiver-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 12px 16px;
+  background: rgba(27, 77, 46, 0.07);
+  border: 1px solid rgba(27, 77, 46, 0.28);
+  border-radius: 10px;
+  font-size: 14px;
+  color: var(--pjl-text);
+}
+.wo-waiver-icon { font-size: 18px; }
+.wo-waiver-banner strong { color: var(--pjl-green, #1B4D2E); }
+.wo-waiver-banner span { color: var(--pjl-text-mid); }
+
 /* Service-specific checklist (Spring / Fall) — single-column tap-pills,
    matches the tech-mode visual language so the checklist behaves
    identically on both surfaces. */

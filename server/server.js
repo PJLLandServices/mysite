@@ -44,6 +44,7 @@ const { geocode, PJL_BASE } = require("./lib/geocode");
 const { BOOKABLE_SERVICES, DEFAULT_HOURS, DEFAULT_SETTINGS, listAvailableSlots, groupByDay, expandDaysToRange, parseLocalDateKey } = require("./lib/availability");
 const scheduleStore = require("./lib/schedule-store");
 const { priceForBooking, deriveSeasonalKey, resolveSeasonalPrice } = require("./lib/pricing");
+const { normalizeServiceFeeWaiver } = require("./lib/service-fee-waiver");
 const bookingSessions = require("./lib/booking-sessions");
 const properties = require("./lib/properties");
 const customers = require("./lib/customers");
@@ -10490,7 +10491,20 @@ async function handleApi(req, res, pathname) {
         try { sourceQuote = await quotes.get(lead.quoteId); }
         catch (err) { console.warn("[quotes] fetch on WO create failed:", err?.message); }
       }
-      let wo = await workOrders.create({ type, lead, property, customId, quote: sourceQuote });
+
+      // Service-call fee waiver (admin WO creation form). Validate the
+      // payload up front so an incomplete waiver (checked with no reason,
+      // or "other" with no note) 422s before we write a WO. Normalizes to
+      // { waived, reason, notes, waivedBy, waivedAt } or null when off.
+      const waiverResult = normalizeServiceFeeWaiver(payload.serviceFeeWaiver, { by: "admin" });
+      if (waiverResult.error) {
+        return sendJson(res, 422, { ok: false, errors: [waiverResult.error] });
+      }
+
+      let wo = await workOrders.create({
+        type, lead, property, customId, quote: sourceQuote,
+        serviceFeeWaiver: waiverResult.waiver
+      });
 
       // Seasonal-fee seeding — spring_opening / fall_closing WOs come
       // pre-loaded with the booked service fee as a billable line item.

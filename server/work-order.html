@@ -112,6 +112,15 @@
       <span id="woLockedMeta"></span>
     </div>
 
+    <!-- Service-call fee waiver banner — visible when this WO was created
+         with the fee waived. Loud so the tech doesn't collect the $95
+         on-site. The $0 "WAIVED" line also appears in the on-site quote. -->
+    <div class="wo-waiver-banner" id="woWaiverBanner" hidden role="status">
+      <span class="wo-waiver-icon" aria-hidden="true">🏷️</span>
+      <strong>Service call fee waived</strong>
+      <span id="woWaiverMeta"></span>
+    </div>
+
     <p class="property-loading" id="woLoading">Loading work order…</p>
     <p class="property-error" id="woError" hidden>This work order couldn't be loaded.</p>
 

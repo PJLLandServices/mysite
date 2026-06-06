@@ -329,6 +329,17 @@ function blankWorkOrder() {
     // gate — that one fires on follow-up packing, this one fires on
     // explicit confirmation of the current visit's materials.
     materialsConfirmedAt: null,
+    // Service-call fee waiver (Patrick 2026-06-06). When set, the $95
+    // service_call mobilization fee is bypassed on this WO — the pricing
+    // rollup emits a $0 "Service call fee — WAIVED (reason)" line instead
+    // of the normal $95 charge, so the customer sees they were credited.
+    // Captured at WO creation (admin form) for service_visit WOs; null on
+    // every other record (and a no-op on seasonal WOs, which never carry a
+    // separate service_call). Shape per lib/service-fee-waiver.js:
+    //   { waived: true, reason, notes, waivedBy, waivedAt }
+    // Scope-protected — frozen once the WO is signed (the customer agreed
+    // to the waived total).
+    serviceFeeWaiver: null,
     // Payment captured on-site? (spec §4.3.2 Payment & Billing).
     //   false — "No, invoice to follow" (default — Patrick's stated
     //           real-world default. "we are highly unlikely to recieve
@@ -460,6 +471,11 @@ function hydrate(w) {
     signatureBypass: (w?.signatureBypass && typeof w.signatureBypass === "object")
       ? { ...w.signatureBypass }
       : null,
+    // Service-call fee waiver — null is the canonical unset value; a valid
+    // waiver is a frozen object written at create time. Never partial-merge.
+    serviceFeeWaiver: (w?.serviceFeeWaiver && typeof w.serviceFeeWaiver === "object" && w.serviceFeeWaiver.waived === true)
+      ? { ...w.serviceFeeWaiver }
+      : null,
     onSiteQuote: {
       ...base.onSiteQuote,
       ...(w?.onSiteQuote || {}),
@@ -548,6 +564,9 @@ const SCOPE_PROTECTED_FIELDS = [
   "intakeGuarantee",
   "aiBonusMatched",
   "type",
+  // Fee waiver changes the customer's contractual total — freeze it once
+  // the signed WO is the contract.
+  "serviceFeeWaiver",
   // Customer-facing visit narrative — locks alongside scope so the
   // service-report snapshot at completion captures the same notes the
   // customer attested to at signature (Service Report brief, 2026-05-19).
@@ -901,7 +920,7 @@ async function listByLead(leadId) {
 // quote propagates onto the WO so the tech sees the bonus-pending banner
 // in field mode (1 hr of repair labour pending — temporarily disabled
 // until the tech confirms the on-site diagnosis matches the AI scope).
-async function create({ type, lead, property, customId, quote = null, project = null, workDate = null, carryFromWoId = null }) {
+async function create({ type, lead, property, customId, quote = null, project = null, workDate = null, carryFromWoId = null, serviceFeeWaiver = null }) {
   if (!TEMPLATES[type]) throw new Error(`Unknown work-order type: ${type}`);
   // Build-mode WOs are project-scoped and don't require a lead — the
   // proposal acceptance is the original handshake. Property is still
@@ -1023,6 +1042,14 @@ async function create({ type, lead, property, customId, quote = null, project = 
       scope: String(quote.intakeGuarantee.scope || "").slice(0, 200),
       sourceQuoteId: quote.id || null
     };
+  }
+
+  // Service-call fee waiver — caller (server.js POST handler) passes a
+  // pre-validated, normalized waiver object (lib/service-fee-waiver.js) or
+  // null. Only meaningful where a service_call is actually charged
+  // (service_visit); harmless no-op on seasonal WOs.
+  if (serviceFeeWaiver && typeof serviceFeeWaiver === "object" && serviceFeeWaiver.waived === true) {
+    wo.serviceFeeWaiver = { ...serviceFeeWaiver };
   }
 
   records.unshift(wo);
