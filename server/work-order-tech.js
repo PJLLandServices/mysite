@@ -2837,35 +2837,136 @@ function createSignaturePad(canvas, onChange) {
 // visit, so the WO must be ready-to-complete at the moment the customer
 // signs. Re-runs on every input change so the tech sees the gating in
 // real time.
+// Friendly, customer-free gate labels + jump targets (Patrick brief,
+// 2026-06-06 — "Option A"). Shared shape with the server's
+// computeServerSidePreSignFailures so a stale-tab / API / offline-replay
+// 422 renders this same blocking-gates sheet. Keyed by gate id.
+const SIGN_GATE_META = {
+  name:             { label: "Enter the customer's printed name", jumpTo: "#techSignoffName" },
+  ack:              { label: "Tick the “I authorize the work” box", jumpTo: "#techSignoffAck" },
+  drawn:            { label: "Have the customer sign on the pad", jumpTo: "#techSignoffCanvas" },
+  bonus:            { label: "Mark the AI intake diagnosis as Matched or Didn't Match", jumpTo: "#techIntakeGuarantee" },
+  customerNotes:    { label: "Add a note about what you did at this visit", jumpTo: "#techCustomerNotesSection" },
+  payment:          { label: "Choose payment method (paid on site or bill later)", jumpTo: "#techPaymentSection" },
+  returnVisit:      { label: "Answer: does this job need a return visit?", jumpTo: "#techReturnGateSection" },
+  materials:        { label: "Confirm materials packed", jumpTo: "#techMaterialsSection" },
+  materialsConfirm: { label: "Confirm materials packed", jumpTo: "#techMaterialsSection" },
+  carryforward:     { label: "Resolve carry-forward items", jumpTo: "#techCarryForward" },
+  zones:            { label: "Review all zones", jumpTo: "#techZoneList" },
+  photos:           { label: "Capture a completion photo", jumpTo: "#techWoPhotosSection" }
+};
+
+function signGate(key, labelOverride) {
+  const meta = SIGN_GATE_META[key] || {};
+  return { key, label: labelOverride || meta.label || key, jumpTo: meta.jumpTo || "" };
+}
+
+// Tracks whether the tech has dismissed the blocking-gates sheet at least
+// once this session, so the Sign button can switch its label to an explicit
+// "tap to see what's blocking" affordance instead of looking inert. Reset
+// the moment every gate clears.
+let signGatesDismissed = false;
+
+// Every unmet blocker between the current WO state and a clean
+// sign-lock-complete — signature prerequisites (name / ack / drawn) AND the
+// readiness gates. Option A: these no longer silently disable the Sign
+// button; tapping it surfaces this list in a sheet with one-tap Resolve
+// jumps. Mirrors the server's computeServerSidePreSignFailures plus the two
+// client-only gates (carry-forward, materials packing) that have no
+// server-side equivalent. Order roughly follows the visible checklist.
+function signGateBlockers() {
+  const blockers = [];
+  const ig = state.intakeGuarantee || {};
+  // Signature prerequisites — the literal act of signing. Skipped when the
+  // WO is already signed (edge case: somehow back on this screen post-sign).
+  if (state.signature?.signed !== true) {
+    const name = (document.getElementById("techSignoffName")?.value || "").trim();
+    const ack = !!document.getElementById("techSignoffAck")?.checked;
+    const drawn = !!(state.signaturePad && state.signaturePad.isDirty());
+    if (!name) blockers.push(signGate("name"));
+    if (!ack) blockers.push(signGate("ack"));
+    if (!drawn) blockers.push(signGate("drawn"));
+  }
+  // AI-Correct-Diagnosis Bonus decision (Brief F) — the gate most often
+  // behind "customer signed but I still had to bypass" on spring openings.
+  if (ig.applies && ig.matched !== true && ig.matched !== false) {
+    blockers.push(signGate("bonus"));
+  }
+  // Zone walk — keep the existing detailed message (brief: don't change).
+  const untouched = (state.zones || []).filter((z) => {
+    if (z.status && z.status !== "") return false;
+    const checks = z.checks || {};
+    return !Object.values(checks).some(Boolean);
+  });
+  if (untouched.length) {
+    blockers.push(signGate("zones", `${untouched.length} zone${untouched.length === 1 ? "" : "s"} haven't been checked yet (zones ${untouched.map((z) => z.number).join(", ")}).`));
+  }
+  // Carry-forward (spring openings only).
+  if (state.type === "spring_opening") {
+    const openCfCards = document.querySelectorAll('#techCarryForwardList [data-deferred-id]');
+    if (openCfCards.length) blockers.push(signGate("carryforward"));
+  }
+  // Completion photo gate — keep the existing message (brief: don't change).
+  const minPhotos = TECH_PHOTO_REQUIREMENT_BY_TYPE[state.type] ?? 1;
+  if (minPhotos > 0) {
+    const photoCount = Array.isArray(state.photos) ? state.photos.length : 0;
+    if (photoCount < minPhotos) {
+      blockers.push(signGate("photos", `Capture ${minPhotos === 1 ? "at least one completion photo" : `at least ${minPhotos} completion photos`} before signing.`));
+    }
+  }
+  // Payment method.
+  if (state.paidOnSite !== true && state.paidOnSite !== false) blockers.push(signGate("payment"));
+  // Return-visit decision.
+  if (state.needsReturnVisit !== true && state.needsReturnVisit !== false) blockers.push(signGate("returnVisit"));
+  // Materials packing — only when the section is visible (follow-up visit).
+  const materialsSection = document.getElementById("techMaterialsSection");
+  if (materialsSection && !materialsSection.hidden) {
+    const rows = document.querySelectorAll("#techMaterialsList .tech-materials-row");
+    if (rows.length) {
+      const unpacked = Array.from(rows).filter((r) => !r.classList.contains("is-packed"));
+      if (unpacked.length) blockers.push(signGate("materials", `Mark ${unpacked.length} remaining material${unpacked.length === 1 ? "" : "s"} as packed (or remove the line items they came from).`));
+    }
+  }
+  // Materials-list confirmation (auto-filled server-side for fall_closing +
+  // empty-materials WOs via hydrate()).
+  if (!state.materialsConfirmedAt) blockers.push(signGate("materialsConfirm"));
+  // Customer-visible notes — read live so the gate clears as the tech types.
+  const liveNotes = (document.getElementById("techCustomerNotes")?.value ?? state.customerNotes ?? "").trim();
+  if (!liveNotes) blockers.push(signGate("customerNotes"));
+  return blockers;
+}
+
 function updateSignoffSubmitState() {
   const submit = document.getElementById("techSignoffSubmit");
   if (!submit) return;
   const name = (document.getElementById("techSignoffName")?.value || "").trim();
   const ack = !!document.getElementById("techSignoffAck")?.checked;
   const drawn = !!(state.signaturePad && state.signaturePad.isDirty());
-  // Brief F — AI bonus decision must be captured before signature when
-  // the WO is bonus-eligible. Gates the submit button so the tech can't
-  // sign a WO with a pending bonus decision (the decision becomes
-  // irrevocable at signature per SCOPE_PROTECTED_FIELDS).
   const ig = state.intakeGuarantee || {};
   const bonusGateOk = !ig.applies || ig.matched === true || ig.matched === false;
-  const readinessFails = preSignReadinessFailures();
-  const readinessOk = readinessFails.length === 0;
-  submit.disabled = !(name && ack && drawn && bonusGateOk && readinessOk);
+
+  // Option A (Patrick 2026-06-06): NEVER silently grey out the Sign button
+  // on unmet gates — a present, signing customer must never be worse off
+  // than an absent-customer bypass. The button stays tappable; tapping
+  // surfaces the blocking-gates sheet. Only a locked WO disables it.
+  const blockers = signGateBlockers();
+  submit.disabled = state.locked === true;
+  if (!blockers.length) signGatesDismissed = false;
+
+  if (blockers.length && signGatesDismissed) {
+    // Tech has already seen the sheet once — make the affordance explicit.
+    submit.textContent = "Tap to see what's blocking →";
+    submit.dataset.blocked = "seen";
+  } else {
+    submit.textContent = "Sign, lock & generate invoice";
+    submit.dataset.blocked = blockers.length ? "pending" : "clear";
+  }
+  submit.title = blockers.length ? blockers.map((b) => b.label).join(" • ") : "";
 
   // Render the always-visible pre-sign checklist (Brief: WO Field-
   // Readiness §6.3). Every gate shows with ✓ or ⨯ + label, regardless
-  // of whether it passes. Tapping a gate scrolls to its capture
-  // surface. Replaces the former "show only on partial fill" pattern.
+  // of whether it passes. Tapping a gate scrolls to its capture surface.
   renderPreSignChecklist({ name, ack, drawn, bonusGateOk });
-
-  if (!bonusGateOk) {
-    submit.title = "Resolve the AI Correct Diagnosis Bonus decision before signing.";
-  } else if (!readinessOk) {
-    submit.title = readinessFails.join(" • ");
-  } else {
-    submit.removeAttribute("title");
-  }
 }
 
 // Build the pre-sign checklist contents — every gate as a row with a
@@ -2972,80 +3073,6 @@ document.getElementById("techPreSignList")?.addEventListener("click", (event) =>
   }
 });
 
-// Same checks as walkoutCheckFailures(), minus the "signature missing"
-// gate — used pre-sign to prove the WO is ready to be marked complete
-// at the moment the customer signs (since signing now also completes
-// the visit per the merged button). Mirrored gates: zone walk, photo
-// gate, carry-forward resolution, plus the newly-promoted paidOnSite
-// + materials check gates per Brief: WO Field-Readiness §6.2.
-function preSignReadinessFailures() {
-  const fails = [];
-  const untouched = (state.zones || []).filter((z) => {
-    if (z.status && z.status !== "") return false;
-    const checks = z.checks || {};
-    return !Object.values(checks).some(Boolean);
-  });
-  if (untouched.length) {
-    fails.push(`${untouched.length} zone${untouched.length === 1 ? "" : "s"} haven't been checked yet (zones ${untouched.map((z) => z.number).join(", ")}).`);
-  }
-  if (state.type === "spring_opening") {
-    const openCfCards = document.querySelectorAll('#techCarryForwardList [data-deferred-id]');
-    if (openCfCards.length) {
-      fails.push(`${openCfCards.length} carry-forward recommendation${openCfCards.length === 1 ? "" : "s"} still need an action (Repair / Decline / Already fixed / Can't locate).`);
-    }
-  }
-  const minPhotos = TECH_PHOTO_REQUIREMENT_BY_TYPE[state.type] ?? 1;
-  if (minPhotos > 0) {
-    const photoCount = Array.isArray(state.photos) ? state.photos.length : 0;
-    if (photoCount < minPhotos) {
-      fails.push(`Capture ${minPhotos === 1 ? "at least one completion photo" : `at least ${minPhotos} completion photos`} before signing.`);
-    }
-  }
-  // Payment-method gate — promoted from post-sign to pre-sign so the
-  // cascade fires with the right paidOnSiteAtCompletion flag on the
-  // draft invoice. null = neither radio chosen.
-  if (state.paidOnSite !== true && state.paidOnSite !== false) {
-    fails.push("Pick a payment method (Yes / No — invoice to follow).");
-  }
-  // Return-visit decision gate (v27). Forces the tech to answer "Yes"
-  // (which reveals the parts-to-bring-back + follow-up sections) or
-  // "No" (today's visit closes the work order) before signing.
-  if (state.needsReturnVisit !== true && state.needsReturnVisit !== false) {
-    fails.push("Answer 'Need a return visit?' (Yes or No).");
-  }
-  // Materials check — only blocks when the section is visible (follow-
-  // up visit with a packing list) AND there's an unpacked row. Non-
-  // follow-up WOs skip this gate entirely.
-  const materialsSection = document.getElementById("techMaterialsSection");
-  if (materialsSection && !materialsSection.hidden) {
-    const rows = document.querySelectorAll("#techMaterialsList .tech-materials-row");
-    if (rows.length) {
-      const unpacked = Array.from(rows).filter((r) => !r.classList.contains("is-packed"));
-      if (unpacked.length) {
-        fails.push(`Mark ${unpacked.length} remaining material${unpacked.length === 1 ? "" : "s"} as packed (or remove the line items they came from).`);
-      }
-    }
-  }
-  // Cascade-merge follow-up — brief-literal §4.6 materials gate.
-  // Layered on top of the techMaterialsSection packing-rows gate
-  // above. This fires when the tech has parts on the truck (Parts to
-  // bring back) and hasn't tapped "Confirm materials list" since the
-  // last qty change. Auto-passes for fall_closing + empty-materials
-  // WOs via hydrate()'s server-side auto-confirm.
-  if (!state.materialsConfirmedAt) {
-    fails.push("Tap “Confirm materials list is accurate” in the Parts to bring back section.");
-  }
-  // Customer-visible notes for the Service Report PDF. Required so
-  // the customer's frozen record carries a narrative for the visit.
-  // Reads from the live textarea (not state) so the gate disables the
-  // submit instantly as the tech types.
-  const liveNotes = (techCustomerNotes?.value ?? state.customerNotes ?? "").trim();
-  if (!liveNotes) {
-    fails.push("Add a customer-visible note for the report (above the signature section).");
-  }
-  return fails;
-}
-
 document.getElementById("techSignoffName")?.addEventListener("input", updateSignoffSubmitState);
 document.getElementById("techSignoffAck")?.addEventListener("change", updateSignoffSubmitState);
 document.getElementById("techSignoffClear")?.addEventListener("click", () => {
@@ -3056,18 +3083,17 @@ document.getElementById("techSignoffClear")?.addEventListener("click", () => {
 document.getElementById("techSignoffSubmit")?.addEventListener("click", async () => {
   if (state.locked) return;
   const submit = document.getElementById("techSignoffSubmit");
-  const nameEl = document.getElementById("techSignoffName");
-  const ackEl  = document.getElementById("techSignoffAck");
-  const customerName = (nameEl?.value || "").trim();
-  if (!customerName || !ackEl?.checked || !state.signaturePad?.isDirty()) return;
 
-  // Last-line defence — gates should already have disabled the button,
-  // but verify before the irreversible PATCH.
-  const readinessFails = preSignReadinessFailures();
-  if (readinessFails.length) {
-    alert("Can't sign yet:\n\n• " + readinessFails.join("\n• ") + "\n\nResolve these first.");
-    return;
-  }
+  // Option A (Patrick 2026-06-06): gather every unmet blocker — signature
+  // prerequisites AND readiness gates — and surface them in one sheet with
+  // one-tap Resolve jumps instead of a silent no-op. The drawn signature
+  // stays on the pad while the tech resolves, so the customer never
+  // re-signs. Once the list is empty, this same tap proceeds to sign.
+  const blockers = signGateBlockers();
+  if (blockers.length) { openGateSheet(blockers); return; }
+
+  // Blockers empty ⇒ name / ack / drawn are all satisfied.
+  const customerName = (document.getElementById("techSignoffName")?.value || "").trim();
 
   submit.disabled = true;
   submit.textContent = "Signing & invoicing…";
@@ -3096,6 +3122,17 @@ document.getElementById("techSignoffSubmit")?.addEventListener("click", async ()
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok || !data.ok) {
+      // Server-side gate backstop tripped (stale tab / API / offline
+      // replay routed around the client checks). Render the SAME sheet from
+      // the structured gateFailures the server returns, so the tech sees
+      // identical, actionable blockers rather than a dead-end alert. The
+      // signature stays on the pad — resolving + re-tapping completes.
+      if (data && data.error === "presign_gate_unmet" && Array.isArray(data.gateFailures) && data.gateFailures.length) {
+        submit.disabled = false;
+        updateSignoffSubmitState();
+        openGateSheet(data.gateFailures.map((g) => signGate(g.key, g.label)));
+        return;
+      }
       throw new Error((data.errors && data.errors[0]) || "Couldn't save signature.");
     }
     state.signature = data.workOrder.signature || state.signature;
@@ -3309,6 +3346,65 @@ document.getElementById("techBypassOpenBtn")?.addEventListener("click", openBypa
 document.getElementById("techBypassClose")?.addEventListener("click", closeBypassSheet);
 document.getElementById("techBypassCancel")?.addEventListener("click", closeBypassSheet);
 document.getElementById("techBypassSubmit")?.addEventListener("click", () => submitBypass());
+
+// ---- Blocking-gates sheet (Option A — Patrick 2026-06-06) -------------
+// Surfaced when the tech taps "Sign, lock & generate invoice" with unmet
+// gates, instead of a silently-disabled button. Lists each blocker with a
+// one-tap Resolve jump. Reuses the same .tech-sheet chrome as the bypass
+// sheet. Does NOT touch the signature pad — the drawn signature survives,
+// so the customer never has to sign twice.
+function openGateSheet(blockers) {
+  const sheet = document.getElementById("techGateSheet");
+  const list = document.getElementById("techGateList");
+  if (!sheet || !list) {
+    // Markup missing (e.g. cached old HTML) — never strand the tech.
+    alert("Before you can lock & close this work order, please:\n\n• " + blockers.map((b) => b.label).join("\n• "));
+    return;
+  }
+  list.innerHTML = blockers.map((b) =>
+    `<li class="tech-gate-row">
+       <span class="tech-gate-icon" aria-hidden="true">✕</span>
+       <span class="tech-gate-label">${escapeHtml(b.label)}</span>
+       ${b.jumpTo ? `<button type="button" class="tech-gate-resolve" data-jump="${escapeHtml(b.jumpTo)}">Resolve →</button>` : ""}
+     </li>`
+  ).join("");
+  sheet.hidden = false;
+  document.body.classList.add("tech-sheet-open");
+}
+
+function closeGateSheet({ dismissed } = {}) {
+  const sheet = document.getElementById("techGateSheet");
+  if (!sheet) return;
+  sheet.hidden = true;
+  document.body.classList.remove("tech-sheet-open");
+  if (dismissed) {
+    // Dismissed without resolving — flip the Sign button's label to an
+    // explicit "tap to see what's blocking" affordance so it never reads
+    // as inert.
+    signGatesDismissed = true;
+    updateSignoffSubmitState();
+  }
+}
+
+// Resolve → jumps to the relevant capture surface and closes the sheet.
+document.getElementById("techGateList")?.addEventListener("click", (event) => {
+  const btn = event.target.closest("[data-jump]");
+  if (!btn) return;
+  const sel = btn.dataset.jump;
+  closeGateSheet();
+  if (!sel) return;
+  const target = document.querySelector(sel);
+  if (!target) return;
+  target.scrollIntoView({ behavior: "smooth", block: "center" });
+  if (target.matches("input, textarea, select")) setTimeout(() => target.focus(), 250);
+});
+
+document.getElementById("techGateClose")?.addEventListener("click", () => closeGateSheet({ dismissed: true }));
+document.getElementById("techGateCancel")?.addEventListener("click", () => closeGateSheet({ dismissed: true }));
+// Tap the scrim (outside the card) to dismiss, matching the zone sheet.
+document.getElementById("techGateSheet")?.addEventListener("click", (event) => {
+  if (event.target === event.currentTarget) closeGateSheet({ dismissed: true });
+});
 
 // Apply the locked / unlocked state across the whole page. When locked,
 // the body gets data-locked="true" so CSS can grey out interactive

@@ -10814,12 +10814,17 @@ async function handleApi(req, res, pathname) {
       if (!existing) return sendJson(res, 404, { ok: false, errors: ["Work order not found."] });
 
       // Server-side pre-sign gate validation (Brief: WO Field-Readiness
-      // §6.4). Mirrors the client's preSignReadinessFailures so a stale
+      // §6.4). Mirrors the client's signGateBlockers so a stale
       // tab or replayed offline mutation can't sign+complete a WO with
       // unmet gates. Pulls the same `wo` snapshot the rest of the
       // handler uses — `payload` overrides for fields the client just
       // touched (paidOnSite especially, since the radio flip + the
       // sign-and-complete PATCH can land in the same tick).
+      // Returns STRUCTURED { key, label } gate failures (Option A, Patrick
+      // 2026-06-06) so a stale-tab / API / offline-replay 422 carries enough
+      // for the client to render the SAME inline blocking-gates sheet the
+      // happy path uses. Labels are customer-free and action-oriented; keys
+      // mirror the client's SIGN_GATE_META so jump targets resolve there.
       function computeServerSidePreSignFailures(wo, patch) {
         const merged = { ...wo, ...patch };
         const fails = [];
@@ -10831,7 +10836,7 @@ async function handleApi(req, res, pathname) {
           return !Object.values(checks).some(Boolean);
         });
         if (untouched.length) {
-          fails.push(`${untouched.length} zone${untouched.length === 1 ? "" : "s"} not reviewed`);
+          fails.push({ key: "zones", label: `${untouched.length} zone${untouched.length === 1 ? "" : "s"} not reviewed` });
         }
         // Completion-photo gate by type (mirrors the lib's
         // PHOTO_REQUIREMENT_BY_TYPE; duplicated here so the gate keeps
@@ -10840,12 +10845,12 @@ async function handleApi(req, res, pathname) {
         if (minPhotos > 0) {
           const photoCount = Array.isArray(merged.photos) ? merged.photos.length : 0;
           if (photoCount < minPhotos) {
-            fails.push(`${minPhotos} completion photo${minPhotos === 1 ? "" : "s"} required`);
+            fails.push({ key: "photos", label: `${minPhotos} completion photo${minPhotos === 1 ? "" : "s"} required` });
           }
         }
         // Payment method — promoted to pre-sign per the brief.
         if (merged.paidOnSite !== true && merged.paidOnSite !== false) {
-          fails.push("payment method not selected");
+          fails.push({ key: "payment", label: "Choose payment method (paid on site or bill later)" });
         }
         // Return-visit decision (Patrick 2026-05-12). Forces the tech
         // to explicitly answer "Yes — coming back" or "No — done today"
@@ -10853,12 +10858,12 @@ async function handleApi(req, res, pathname) {
         // this as a complete repair vs. a multi-visit job, and whether
         // parts get queued for a follow-up. null = not yet answered.
         if (merged.needsReturnVisit !== true && merged.needsReturnVisit !== false) {
-          fails.push("return-visit question not answered");
+          fails.push({ key: "returnVisit", label: "Answer: does this job need a return visit?" });
         }
         // AI bonus decision gate (only when applies).
         if (merged.intakeGuarantee && merged.intakeGuarantee.applies) {
           if (merged.intakeGuarantee.matched !== true && merged.intakeGuarantee.matched !== false) {
-            fails.push("AI bonus decision not recorded");
+            fails.push({ key: "bonus", label: "Mark the AI intake diagnosis as Matched or Didn't Match" });
           }
         }
         // Cascade-merge follow-up — brief-literal §4.6 materials gate.
@@ -10869,7 +10874,7 @@ async function handleApi(req, res, pathname) {
         // above (43c766f) — that one fires on follow-up packing, this
         // fires on explicit confirmation of the current visit's parts.
         if (!merged.materialsConfirmedAt) {
-          fails.push("materials list not confirmed");
+          fails.push({ key: "materialsConfirm", label: "Confirm materials packed" });
         }
         // Customer-visible notes for the report (Service Report brief,
         // 2026-05-19). Required non-empty before signing — the service
@@ -10877,7 +10882,7 @@ async function handleApi(req, res, pathname) {
         // the visit. Scope-protected at signature so the customer's
         // copy can't be amended after sign-off.
         if (typeof merged.customerNotes !== "string" || !merged.customerNotes.trim()) {
-          fails.push("customer-visible notes empty");
+          fails.push({ key: "customerNotes", label: "Add a note about what you did at this visit" });
         }
         return fails;
       }
@@ -10962,7 +10967,7 @@ async function handleApi(req, res, pathname) {
             return sendJson(res, 422, { ok: false, errors: ["Signature image is too large. Try clearing and signing again."] });
           }
           // Defense-in-depth gate validation (Brief: WO Field-Readiness
-          // §6.4). Client-side preSignReadinessFailures already blocks
+          // §6.4). Client-side signGateBlockers already surfaces these
           // most paths, but a stale tab / replayed offline queue / API
           // client could route around it. Re-run the gates server-side
           // so the WO can never lock + transition to completed with an
@@ -10976,7 +10981,7 @@ async function handleApi(req, res, pathname) {
               return sendJson(res, 422, {
                 ok: false,
                 error: "presign_gate_unmet",
-                errors: [`Pre-sign gates unmet: ${gateFails.join("; ")}`],
+                errors: [`Pre-sign gates unmet: ${gateFails.map((g) => g.label).join("; ")}`],
                 gateFailures: gateFails
               });
             }
