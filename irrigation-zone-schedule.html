@@ -184,6 +184,79 @@ body.sheet-open{overflow:hidden;}
   .doc-cell .editable{font-size:15px;min-height:28px;}
 }
 
+/* ============ Programs config block ============ */
+.pgm-row{
+  margin-top:14px;
+  padding:14px 16px;
+  background:var(--cream);
+  border:1px solid var(--border);
+  border-radius:10px;
+}
+.pgm-row-head{
+  display:flex;align-items:baseline;justify-content:space-between;gap:12px;
+  margin-bottom:10px;
+}
+.pgm-row-title{
+  font-family:'Barlow Condensed',sans-serif;
+  font-weight:800;font-size:15px;letter-spacing:0.10em;text-transform:uppercase;
+  color:var(--green);margin:0;
+}
+.pgm-row-hint{
+  font-size:11px;color:var(--text-muted);font-style:italic;
+}
+.pgm-row-grid{
+  display:grid;grid-template-columns:repeat(4,1fr);gap:10px;
+}
+.pgm-cell{
+  display:flex;flex-direction:column;gap:4px;min-width:0;
+}
+.pgm-cell-label{
+  font-size:10px;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;
+  color:var(--green);
+}
+.pgm-time{
+  font:inherit;font-size:14px;font-weight:600;
+  padding:7px 8px;
+  border:1px solid var(--border-strong);border-radius:6px;
+  background:#fff;color:var(--text);
+  outline:none;
+}
+.pgm-time:focus{
+  border-color:var(--green);
+  box-shadow:0 0 0 2px rgba(27,77,46,0.18);
+}
+@media (max-width:768px){
+  .pgm-row{padding:12px;}
+  .pgm-row-grid{grid-template-columns:1fr 1fr;gap:10px;}
+  .pgm-row-hint{display:none;}
+  .pgm-time{font-size:15px;min-height:36px;}
+}
+
+/* ============ Persistence toolbar ============ */
+.persist-bar{
+  display:flex;flex-wrap:wrap;align-items:center;gap:8px;
+  margin-top:18px;margin-bottom:10px;
+}
+.ps-btn{
+  font:inherit;font-size:12px;font-weight:600;
+  padding:7px 12px;border-radius:6px;cursor:pointer;
+  border:1px solid var(--border-strong);
+  background:#fff;color:var(--text);
+  display:inline-flex;align-items:center;gap:6px;
+  transition:background .15s ease, border-color .15s ease;
+}
+.ps-btn:hover{border-color:var(--green);background:var(--green-tint);}
+.ps-btn--danger{color:var(--red);}
+.ps-btn--danger:hover{border-color:var(--red);background:rgba(192,58,44,0.05);}
+.ps-status{
+  font-size:11px;color:var(--text-muted);margin-left:auto;font-style:italic;
+}
+@media (max-width:768px){
+  .persist-bar{margin-top:12px;}
+  .ps-btn{flex:1 1 auto;justify-content:center;font-size:13px;padding:9px 10px;}
+  .ps-status{flex:1 1 100%;text-align:center;margin:0;margin-top:4px;}
+}
+
 /* ============ Site plan figure ============ */
 .plan{
   margin:24px 0 22px;
@@ -351,15 +424,16 @@ body.sheet-open{overflow:hidden;}
 .zone-table tbody tr.zr-main:nth-of-type(odd) td{background:var(--cream);}
 .zone-table tbody tr.zr-main:hover td{background:var(--green-tint);}
 
-/* Column widths tuned for portrait Letter 7.5" usable width */
-.zone-table colgroup col:nth-child(1){width:5%;}     /* # */
-.zone-table colgroup col:nth-child(2){width:12%;}    /* Color */
-.zone-table colgroup col:nth-child(3){width:24%;}    /* Zone Description */
-.zone-table colgroup col:nth-child(4){width:15%;}    /* Type */
-.zone-table colgroup col:nth-child(5){width:9%;}     /* Status */
-.zone-table colgroup col:nth-child(6){width:8%;}     /* Run Time */
-.zone-table colgroup col:nth-child(7){width:23%;}    /* Days to Water */
-.zone-table colgroup col:nth-child(8){width:4%;}     /* delete */
+/* Column widths tuned for portrait Letter 7.5" usable width (9 columns) */
+.zone-table colgroup col:nth-child(1){width:6%;}     /* # */
+.zone-table colgroup col:nth-child(2){width:6%;}     /* Pgm */
+.zone-table colgroup col:nth-child(3){width:5%;}     /* Color swatch */
+.zone-table colgroup col:nth-child(4){width:23%;}    /* Zone Description */
+.zone-table colgroup col:nth-child(5){width:14%;}    /* Type */
+.zone-table colgroup col:nth-child(6){width:9%;}     /* Status */
+.zone-table colgroup col:nth-child(7){width:8%;}     /* Run Time */
+.zone-table colgroup col:nth-child(8){width:25%;}    /* Days to Water */
+.zone-table colgroup col:nth-child(9){width:4%;}     /* delete */
 
 /* Cell inputs */
 .zone-table input[type=text],
@@ -392,22 +466,63 @@ body.sheet-open{overflow:hidden;}
   background-color:#fff;outline:2px solid var(--green-light);outline-offset:-2px;border-radius:3px;
 }
 
-/* Color cell */
-.color-cell{display:flex;align-items:center;gap:6px;}
+/* Color cell — swatch-only (Patrick Phase A/B/C/D). The <select> is kept
+   in the DOM for click-to-pick interaction but visually collapsed to a
+   colored square with a faint chevron hint. The typed color name is
+   gone from both screen and print. */
+.color-cell{
+  position:relative;
+  display:flex;align-items:center;justify-content:center;
+  min-height:22px;
+}
 .swatch{
-  width:18px;height:18px;border-radius:4px;
-  border:1px solid rgba(0,0,0,0.18);
+  width:22px;height:22px;border-radius:4px;
+  border:1px solid rgba(0,0,0,0.25);
   flex-shrink:0;
+  pointer-events:none;
 }
 .color-cell select{
-  font:inherit;font-size:11px;font-weight:600;
+  position:absolute;inset:0;
+  width:100%;height:100%;
+  font-size:0;color:transparent;
   border:0;background:transparent;
-  padding:2px 0;color:var(--text);outline:none;width:100%;min-width:0;
+  cursor:pointer;outline:none;
   appearance:none;
   -webkit-appearance:none;
-  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='8' height='5' viewBox='0 0 8 5'><path fill='%237A7A72' d='M0 0l4 5 4-5z'/></svg>");
+  opacity:0;
+}
+.color-cell select:focus + .swatch,
+.color-cell:hover .swatch{
+  box-shadow:0 0 0 2px var(--green-light);
+}
+
+/* Program cell — narrow centered dropdown showing just the letter. */
+.pgm-cell-td{text-align:center;font-weight:700;color:var(--green);}
+.pgm-cell-td select{
+  width:100%;font:inherit;font-size:12px;font-weight:700;
+  color:var(--green);background:transparent;border:0;outline:none;
+  padding:2px 12px 2px 0;text-align:center;text-align-last:center;
+  cursor:pointer;
+  appearance:none;-webkit-appearance:none;-moz-appearance:none;
+  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='8' height='5' viewBox='0 0 8 5'><path fill='%231B4D2E' d='M0 0l4 5 4-5z'/></svg>");
   background-repeat:no-repeat;background-position:right 2px center;
-  padding-right:12px;
+}
+.pgm-cell-td select:focus{
+  background-color:#fff;outline:2px solid var(--green-light);outline-offset:-2px;border-radius:3px;
+}
+
+/* Program section-header row injected at print time — spans all columns
+   above each program's zones. */
+.zone-table tr.zr-pgm-head td{
+  background:var(--green) !important;color:#fff !important;
+  font-family:'Barlow Condensed',sans-serif;
+  font-weight:700;letter-spacing:0.10em;text-transform:uppercase;
+  font-size:11px;padding:6px 10px;border:1px solid var(--green-mid);
+  -webkit-print-color-adjust:exact;print-color-adjust:exact;
+}
+.zone-table tr.zr-pgm-head .zr-pgm-time{
+  float:right;font-weight:600;font-size:10.5px;letter-spacing:0.04em;
+  text-transform:none;font-family:'DM Sans',sans-serif;opacity:0.92;
 }
 
 /* Type cell — checkbox-style pills inline */
@@ -761,52 +876,122 @@ body.sheet-open{overflow:hidden;}
 .sched-print{display:none;}
 .cname-print{display:none;}
 
-/* ============ Print rules ============ */
-@page{size:Letter portrait;margin:0.45in 0.45in 0.55in 0.45in;}
+/* ============ Print rules — polished trades document ============ */
+@page{
+  size:Letter portrait;
+  margin:0.55in 0.55in 0.7in 0.55in;
+  /* Footer: PJL contact + page numbers. Chrome supports counters here. */
+  @bottom-left   { content: "PJL Land Services · pjllandservices.com · (905) 960-0181"; font-family: 'DM Sans', sans-serif; font-size: 8.5pt; color: #4A4A4A; }
+  @bottom-right  { content: "Page " counter(page) " of " counter(pages); font-family: 'DM Sans', sans-serif; font-size: 8.5pt; color: #4A4A4A; }
+}
 @media print{
   html,body{background:#fff;}
-  /* Hide all UI chrome AND all upload-flow UI (dropzone, caption, AI bar,
-     toolbar, add/delete) — only the actual uploaded image prints. */
+
+  /* Hide all screen-only UI chrome */
   .toolbar,.add-zone-row,.row-del,.plan-clear,
   .plan-dropzone,
   .plan-caption,
   .ai-bar,
+  .persist-bar,
   .zone-list,
   .zsheet,
   th:last-child,td:last-child{display:none !important;}
   .zone-table-wrap{display:block !important;}
+
+  /* Page container resets to full bleed inside the @page margins */
   .sheet-wrap{padding:0;}
   .sheet{
     max-width:none;width:100%;
     border:0;box-shadow:none;border-radius:0;
     padding:0;
   }
-  .letterhead{padding-bottom:12px;border-bottom-width:2px;}
-  .lh-logo img{height:50px;}
-  .lh-title{font-size:24px;}
-  .lh-title-row{margin-top:14px;flex-direction:row;align-items:center;}
+
+  /* ===== Header band ===== */
+  .letterhead{
+    padding-bottom:10px;
+    border-bottom:2.5px solid var(--green);
+    grid-template-columns:auto 1fr !important;
+    gap:18px !important;
+  }
+  .lh-logo img{height:52px;}
+  .lh-contact{text-align:right !important;font-size:9.5pt !important;line-height:1.45;}
+  .lh-contact .sched-print{font-size:9.5pt;}
+  .lh-title-row{margin-top:10px;flex-direction:row;align-items:baseline;justify-content:space-between;}
+  .lh-title{font-size:22pt;letter-spacing:0;}
+  .lh-eyebrow{font-size:8pt;}
+
+  /* ===== Project metadata grid ===== */
   .doc-row{
     grid-template-columns:repeat(4,1fr) !important;
-    padding:10px 12px;margin-top:14px;
+    padding:10px 14px;margin-top:12px;
     border:1px solid var(--green-pale);
     background:var(--green-tint) !important;
+    border-radius:6px;
+    -webkit-print-color-adjust:exact;print-color-adjust:exact;
+    page-break-inside:avoid;
+    break-inside:avoid;
   }
-  /* Plan figure: collapse to zero when no image is uploaded; otherwise show
-     just the image. .has-image flag on the dropzone tracks upload state. */
-  .plan{margin:14px 0;}
+  .doc-cell{gap:2px;}
+  .doc-cell-label{font-size:7.5pt;}
+  .doc-cell .editable,
+  .lh-contact .editable{display:none !important;}
+  .doc-cell .sched-print{font-size:10pt;font-weight:600;}
+
+  /* ===== Programs config block — same look as doc-row ===== */
+  .pgm-row{
+    margin-top:8px;padding:8px 14px;
+    background:var(--cream) !important;
+    border:1px solid var(--border);border-radius:6px;
+    -webkit-print-color-adjust:exact;print-color-adjust:exact;
+    page-break-inside:avoid;
+    break-inside:avoid;
+  }
+  .pgm-row-head{margin-bottom:6px;}
+  .pgm-row-title{font-size:9.5pt;}
+  .pgm-row-hint{display:none;}
+  .pgm-row-grid{grid-template-columns:repeat(4,1fr) !important;gap:8px;}
+  .pgm-cell{gap:1px;}
+  .pgm-cell-label{font-size:7.5pt;}
+  .pgm-time{display:none !important;}
+  .pgm-time-print{display:inline !important;font-size:10pt;font-weight:600;color:var(--text);}
+
+  /* ===== Site plan figure — collapse if no image ===== */
+  .plan{margin:10px 0;}
   .plan:not(:has(.plan-img-wrap:not([hidden]))){margin:0;}
   .plan-img-wrap[hidden]{display:none !important;}
-  .plan-img{max-height:3.6in;page-break-inside:avoid;}
-  .zone-section-title{font-size:16px;}
-  .zone-table{font-size:9.5px;page-break-inside:auto;display:table !important;}
+  .plan-img{
+    max-height:3.4in;
+    page-break-inside:avoid;break-inside:avoid;
+    border:1px solid var(--border-strong);
+    background:#fff;
+  }
+
+  /* ===== Zone section title ===== */
+  .zone-section{margin-top:8px;}
+  .zone-section-head{margin-bottom:4px;padding-top:4px;border-top:0.5px solid var(--border);}
+  .zone-section-title{font-size:12pt;letter-spacing:0.04em;}
+  .zone-section-count{display:none;}
+
+  /* ===== Zone table ===== */
+  .zone-table{font-size:9pt;display:table !important;}
   .zone-table th{
-    padding:5px 4px;font-size:9px;
+    padding:5px 5px;font-size:8.5pt;
     background:var(--green) !important;color:#fff !important;
+    border:1px solid var(--green-mid);
     -webkit-print-color-adjust:exact;print-color-adjust:exact;
   }
   .zone-table thead{display:table-header-group;}
-  .zone-table tr{page-break-inside:avoid;}
-  .zone-table td{padding:4px 4px;}
+  .zone-table td{padding:4px 5px;vertical-align:middle;}
+  .zone-table tbody tr.zr-main{
+    /* Keep a zone's main row + notes sub-row on the same page. break-after
+       avoid pairs with the notes row's break-before avoid (see below). */
+    page-break-inside:avoid;break-inside:avoid;
+    page-break-after:avoid;break-after:avoid;
+  }
+  .zone-table tbody tr.zr-notes{
+    page-break-before:avoid;break-before:avoid;
+    page-break-inside:avoid;break-inside:avoid;
+  }
   /* Hide interactive controls; show flattened text mirrors */
   .zone-table input[type=text],
   .zone-table input[type=number],
@@ -814,25 +999,58 @@ body.sheet-open{overflow:hidden;}
   .pill-group,
   .type-pills,
   .dtw-pills,
-  .dtw-every,
-  .color-cell select,
-  .doc-cell .editable,
-  .lh-contact .editable{display:none !important;}
+  .dtw-every{display:none !important;}
   .sched-print,.cname-print{display:inline !important;white-space:normal;}
-  .doc-cell{gap:1px;}
-  .doc-cell-label{font-size:8.5px;}
-  .doc-cell .sched-print{font-size:11.5px;font-weight:600;}
-  .lh-contact{text-align:right !important;font-size:11px !important;}
-  .lh-contact .sched-print{font-size:11px;line-height:1.5;}
-  .letterhead{grid-template-columns:auto 1fr !important;gap:24px !important;}
-  .zone-table tbody tr.zr-main:nth-of-type(odd) td{background:#f8f8f3 !important;}
-  .swatch{width:14px;height:14px;border:1px solid #999;}
-  .sheet-footer{margin-top:14px;font-size:9.5px;grid-template-columns:1fr auto !important;}
-  /* Notes sub-row stays visible in print, but compacted. */
+
+  /* Zebra stripe for legibility */
+  .zone-table tbody tr.zr-main:nth-of-type(odd) td{background:#FAFCF6 !important;}
+
+  /* Swatch — bigger in print so the color reads from arm's length */
+  .swatch{width:14px;height:14px;border:1px solid #444;display:inline-block !important;}
+  .color-cell{justify-content:center;}
+
+  /* ===== Notes sub-row — "secondary annotation" look ===== */
   .zone-table tr.zr-notes td{
-    background:#f0f5ec !important;font-size:9px;padding:3px 8px 4px 14px;
+    background:#F6F9F1 !important;
+    border:1px solid var(--green-pale);
+    border-top:0;
+    font-size:8.5pt;padding:3px 12px 4px 18px;
+    color:var(--text-mid);
+    line-height:1.4;
   }
-  .zone-table tr.zr-notes .zr-notes-label{font-size:8.5px;}
+  .zone-table tr.zr-notes .zr-notes-label{
+    font-family:'Barlow Condensed',sans-serif;
+    font-size:7.5pt;font-weight:700;letter-spacing:0.10em;
+    color:var(--green);text-transform:uppercase;
+    margin-right:6px;font-style:normal;
+  }
+
+  /* ===== Program header rows (injected in prepPrint) ===== */
+  .zone-table tr.zr-pgm-head{
+    page-break-inside:avoid;break-inside:avoid;
+    page-break-after:avoid;break-after:avoid;
+  }
+  .zone-table tr.zr-pgm-head td{
+    background:var(--green) !important;color:#fff !important;
+    font-family:'Barlow Condensed',sans-serif;font-weight:700;
+    font-size:9pt;letter-spacing:0.10em;text-transform:uppercase;
+    padding:5px 10px;
+    -webkit-print-color-adjust:exact;print-color-adjust:exact;
+  }
+  .zone-table tr.zr-pgm-head .zr-pgm-time{
+    float:right;font-weight:600;font-size:8.5pt;
+    text-transform:none;letter-spacing:0.02em;
+    font-family:'DM Sans',sans-serif;opacity:0.95;
+  }
+
+  /* Hide screen-only legend; keep the printed confirmation note */
+  .sheet-footer{
+    margin-top:12px;font-size:8.5pt;color:var(--text-muted);
+    grid-template-columns:1fr 1fr !important;
+    padding-top:8px;
+    border-top:1px solid var(--green-pale);
+  }
+  .sheet-footer .legend{display:none;}
 }
 </style>
 </head>
@@ -890,6 +1108,36 @@ body.sheet-open{overflow:hidden;}
     </div>
   </section>
 
+  <!-- Programs config (start times for A/B/C/D) -->
+  <section class="pgm-row" aria-label="Programs">
+    <div class="pgm-row-head">
+      <h2 class="pgm-row-title">Programs</h2>
+      <span class="pgm-row-hint">Start times — zones run sequentially after the program's start.</span>
+    </div>
+    <div class="pgm-row-grid">
+      <label class="pgm-cell">
+        <span class="pgm-cell-label">Program A</span>
+        <input type="time" class="pgm-time" data-program="A" aria-label="Program A start time">
+        <span class="sched-print pgm-time-print"></span>
+      </label>
+      <label class="pgm-cell">
+        <span class="pgm-cell-label">Program B</span>
+        <input type="time" class="pgm-time" data-program="B" aria-label="Program B start time">
+        <span class="sched-print pgm-time-print"></span>
+      </label>
+      <label class="pgm-cell">
+        <span class="pgm-cell-label">Program C</span>
+        <input type="time" class="pgm-time" data-program="C" aria-label="Program C start time">
+        <span class="sched-print pgm-time-print"></span>
+      </label>
+      <label class="pgm-cell">
+        <span class="pgm-cell-label">Program D</span>
+        <input type="time" class="pgm-time" data-program="D" aria-label="Program D start time">
+        <span class="sched-print pgm-time-print"></span>
+      </label>
+    </div>
+  </section>
+
   <!-- Site plan upload -->
   <figure class="plan">
     <div class="plan-dropzone" id="planDrop">
@@ -920,6 +1168,21 @@ body.sheet-open{overflow:hidden;}
     </div>
   </figure>
 
+  <!-- Persistence toolbar — screen-only (autosave + manual file IO) -->
+  <div class="persist-bar" id="persistBar">
+    <button type="button" class="ps-btn" id="btnSaveJson" title="Download this schedule as a .json file">
+      <span aria-hidden="true">💾</span> Save to file
+    </button>
+    <button type="button" class="ps-btn" id="btnLoadJson" title="Load a saved schedule .json">
+      <span aria-hidden="true">📂</span> Load from file
+    </button>
+    <input type="file" id="loadJsonInput" accept=".json,application/json" hidden>
+    <button type="button" class="ps-btn ps-btn--danger" id="btnNewSchedule" title="Wipe everything and start fresh">
+      <span aria-hidden="true">🗑</span> New / Clear
+    </button>
+    <span class="ps-status" id="psStatus" aria-live="polite">Auto-saving to this browser</span>
+  </div>
+
   <!-- Zone section: shared head + two views (mobile list + desktop table) -->
   <section class="zone-section" aria-label="Zone schedule">
     <div class="zone-section-head">
@@ -934,12 +1197,13 @@ body.sheet-open{overflow:hidden;}
     <div class="zone-table-wrap">
       <table class="zone-table" id="zoneTable">
         <colgroup>
-          <col><col><col><col><col><col><col><col>
+          <col><col><col><col><col><col><col><col><col>
         </colgroup>
         <thead>
           <tr>
             <th scope="col">Zone #</th>
-            <th scope="col">Zone Color</th>
+            <th scope="col">Pgm</th>
+            <th scope="col" aria-label="Zone Color"></th>
             <th scope="col">Zone Description</th>
             <th scope="col">Type</th>
             <th scope="col">Status</th>
@@ -981,9 +1245,20 @@ body.sheet-open{overflow:hidden;}
       <h2 class="zsheet-title" id="zsheetTitle">Zone —</h2>
     </header>
 
-    <div class="zsheet-section">
-      <label class="zsheet-label" for="zsZoneNum">Controller zone number</label>
-      <select class="zsheet-select" id="zsZoneNum"></select>
+    <div class="zsheet-row" style="margin-top:0;">
+      <div>
+        <label class="zsheet-label" for="zsZoneNum">Controller zone #</label>
+        <select class="zsheet-select" id="zsZoneNum"></select>
+      </div>
+      <div>
+        <label class="zsheet-label" for="zsProgram">Program</label>
+        <select class="zsheet-select" id="zsProgram">
+          <option value="A">A</option>
+          <option value="B">B</option>
+          <option value="C">C</option>
+          <option value="D">D</option>
+        </select>
+      </div>
     </div>
 
     <div class="zsheet-section">
@@ -1099,12 +1374,33 @@ body.sheet-open{overflow:hidden;}
   var zones = [];
   var activeIdx = -1;
 
+  // ============ Programs (A/B/C/D) ============
+  // Each program is a scheduled start time on the controller. All zones
+  // assigned to a program run sequentially after that start time.
+  // Print groups zones by program → then sorts by zoneNum within program.
+  var PROGRAM_KEYS = ['A', 'B', 'C', 'D'];
+  var programs = { A:'', B:'', C:'', D:'' };
+
+  // Render an HH:MM time as "6:00 AM" for the printed program header.
+  function fmtTimeAmPm(hhmm){
+    if (!hhmm || !/^\d{1,2}:\d{2}$/.test(hhmm)) return '';
+    var parts = hhmm.split(':');
+    var h = parseInt(parts[0], 10), m = parts[1];
+    if (!Number.isFinite(h)) return '';
+    var period = h >= 12 ? 'PM' : 'AM';
+    var h12 = h % 12; if (h12 === 0) h12 = 12;
+    return h12 + ':' + m + ' ' + period;
+  }
+
   function makeZone(zoneNum){
     return {
       // Controller-zone number — what Patrick wires on the timer (e.g.
       // Hunter HPC-400 valve 7). Defaults to detection order; editable.
-      // Print sorts ascending by this number.
+      // Print sorts ascending by this number within each program.
       zoneNum: Number(zoneNum) || 1,
+      // Program assignment (A/B/C/D). Default 'A' — single-program plans
+      // are the common case.
+      program: 'A',
       color:'',
       location:'',
       type:[],        // multi-select array of TYPES keys
@@ -1173,6 +1469,7 @@ body.sheet-open{overflow:hidden;}
   var zsheetDone  = document.getElementById('zsheetDone');
   var zsheetDel   = document.getElementById('zsheetDelete');
   var zsZoneNum   = document.getElementById('zsZoneNum');
+  var zsProgram   = document.getElementById('zsProgram');
   var zsLocation  = document.getElementById('zsLocation');
   var zsColor     = document.getElementById('zsColor');
   var zsSwatch    = document.getElementById('zsSwatch');
@@ -1269,36 +1566,62 @@ body.sheet-open{overflow:hidden;}
     tdNum.appendChild(numPrint);
     tr.appendChild(tdNum);
 
-    // Color
+    // Program — dropdown A/B/C/D, default 'A'. Resort triggers on change
+    // so the table groups by program automatically (print sorts the same).
+    var tdPgm = document.createElement('td');
+    tdPgm.className = 'pgm-cell-td';
+    var pgmSelect = document.createElement('select');
+    pgmSelect.dataset.field = 'program';
+    PROGRAM_KEYS.forEach(function(k){
+      var o = document.createElement('option');
+      o.value = k; o.textContent = k;
+      if (k === z.program) o.selected = true;
+      pgmSelect.appendChild(o);
+    });
+    var pgmPrint = document.createElement('span');
+    pgmPrint.className = 'sched-print';
+    pgmPrint.textContent = z.program || '';
+    pgmSelect.addEventListener('change', function(){
+      z.program = pgmSelect.value;
+      pgmPrint.textContent = z.program;
+      resortZones();
+      schedulePersist();
+    });
+    tdPgm.appendChild(pgmSelect);
+    tdPgm.appendChild(pgmPrint);
+    tr.appendChild(tdPgm);
+
+    // Color — swatch-only (Patrick Phase A/B/C/D). The <select> sits on
+    // top of the swatch transparently so click-to-pick still works, but
+    // no typed name renders. Print also gets just the swatch.
     var tdColor = document.createElement('td');
     var colorWrap = document.createElement('div');
     colorWrap.className = 'color-cell';
-    var swatch = document.createElement('span');
-    swatch.className = 'swatch';
-    swatch.style.background = (COLOR_BY_KEY[z.color] || COLORS[0]).hex;
     var colorSel = document.createElement('select');
     colorSel.dataset.field = 'color';
+    colorSel.title = 'Pick wire color';
     COLORS.forEach(function(c){
       var o = document.createElement('option');
       o.value = c.key;
-      o.textContent = c.label;
+      o.textContent = c.label + (c.hex !== 'transparent' ? '  (' + c.hex + ')' : '');
       o.dataset.hex = c.hex;
       if (c.key === z.color) o.selected = true;
       colorSel.appendChild(o);
     });
-    var colorPrint = document.createElement('span');
-    colorPrint.className = 'sched-print';
-    colorPrint.textContent = (COLOR_BY_KEY[z.color] || COLORS[0]).label;
+    var swatch = document.createElement('span');
+    swatch.className = 'swatch';
+    swatch.style.background = (COLOR_BY_KEY[z.color] || COLORS[0]).hex;
     colorSel.addEventListener('change', function(){
       z.color = colorSel.value;
       clearAiBadge(idx);
       swatch.style.background = (COLOR_BY_KEY[z.color] || COLORS[0]).hex;
-      colorPrint.textContent = (COLOR_BY_KEY[z.color] || COLORS[0]).label;
       syncListItem(idx);
+      schedulePersist();
     });
-    colorWrap.appendChild(swatch);
+    // select first (absolutely positioned, transparent), swatch after so
+    // it's the visible target.
     colorWrap.appendChild(colorSel);
-    colorWrap.appendChild(colorPrint);
+    colorWrap.appendChild(swatch);
     tdColor.appendChild(colorWrap);
     tr.appendChild(tdColor);
 
@@ -1509,9 +1832,10 @@ body.sheet-open{overflow:hidden;}
       num: tdNum,
       numSelect: numSelect,
       numPrint: numPrint,
+      pgmSelect: pgmSelect,
+      pgmPrint: pgmPrint,
       colorSel: colorSel,
       swatch: swatch,
-      colorPrint: colorPrint,
       typeGroup: typeGroup,
       typePillEls: typePillEls,
       typePrint: typePrint,
@@ -1560,9 +1884,11 @@ body.sheet-open{overflow:hidden;}
     if (r.numSelect) r.numSelect.value = String(z.zoneNum);
     if (r.numPrint) r.numPrint.textContent = String(z.zoneNum);
 
+    if (r.pgmSelect) r.pgmSelect.value = z.program || 'A';
+    if (r.pgmPrint) r.pgmPrint.textContent = z.program || '';
+
     r.colorSel.value = z.color;
     r.swatch.style.background = (COLOR_BY_KEY[z.color] || COLORS[0]).hex;
-    r.colorPrint.textContent = (COLOR_BY_KEY[z.color] || COLORS[0]).label;
 
     if (r.locationInput){
       r.locationInput.value = z.location || '';
@@ -1704,7 +2030,13 @@ body.sheet-open{overflow:hidden;}
   //   4. Tear down + rebuild both surfaces from the sorted state.
   function resortZones(){
     var activeZone = (activeIdx >= 0 && activeIdx < zones.length) ? zones[activeIdx] : null;
+    // Sort by program (A→D, blank/unknown sinks to end), then by zoneNum
+    // ascending. Stable sort preserves insertion order on ties.
+    var pgmRank = {A:0,B:1,C:2,D:3};
     zones.sort(function(a, b){
+      var ap = pgmRank[a.program]; if (ap === undefined) ap = 9;
+      var bp = pgmRank[b.program]; if (bp === undefined) bp = 9;
+      if (ap !== bp) return ap - bp;
       var an = parseInt(a.zoneNum, 10); if (!Number.isFinite(an)) an = 9999;
       var bn = parseInt(b.zoneNum, 10); if (!Number.isFinite(bn)) bn = 9999;
       return an - bn;
@@ -1783,6 +2115,7 @@ body.sheet-open{overflow:hidden;}
     var z = zones[activeIdx];
     zsheetTitle.textContent = 'Zone ' + (activeIdx + 1);
     zsZoneNum.value = String(z.zoneNum);
+    zsProgram.value = z.program || 'A';
     zsLocation.value = z.location || '';
     zsColor.value = z.color || '';
     zsSwatch.style.background = (COLOR_BY_KEY[z.color] || COLORS[0]).hex;
@@ -1830,7 +2163,17 @@ body.sheet-open{overflow:hidden;}
     if (Number.isFinite(v) && v > 0) {
       zones[activeIdx].zoneNum = v;
       resortZones();
+      schedulePersist();
     }
+  });
+
+  // Program picker — A/B/C/D, triggers same resort flow as Zone #.
+  zsProgram.addEventListener('change', function(){
+    if (activeIdx < 0) return;
+    if (PROGRAM_KEYS.indexOf(zsProgram.value) === -1) return;
+    zones[activeIdx].program = zsProgram.value;
+    resortZones();
+    schedulePersist();
   });
 
   zsColor.addEventListener('change', function(){
@@ -2104,15 +2447,22 @@ body.sheet-open{overflow:hidden;}
   //     restorePrint() so it doesn't leak onto the screen view.
   // (c) Set document.title so Chrome's Save-as-PDF picks the right name.
   var originalTitle = null;
-  // 7 visible columns in print (delete column is hidden via th/td:last-child).
-  var PRINT_COLSPAN = 7;
+  // 8 visible columns in print (delete column hidden via th/td:last-child).
+  var PRINT_COLSPAN = 8;
 
   function prepPrint(){
-    // Screen DOM is already sorted by zoneNum (resortZones runs on every
-    // dropdown change). Print just needs to skip empty rows + inject
-    // notes sub-rows + set the PDF filename.
-    var mains = zoneBody.querySelectorAll('tr.zr-main');
-    Array.prototype.forEach.call(mains, function(tr, i){
+    // Screen DOM is already sorted by (program, zoneNum). Print needs to:
+    //   1. Skip empty rows (no content)
+    //   2. Inject a "PROGRAM X — Start H:MM AM" header row before the
+    //      first non-empty zone of each program. Skip programs with no
+    //      non-empty zones.
+    //   3. Inject a Notes sub-row beneath each zone that has notes.
+    //   4. Set the PDF filename.
+    var mains = Array.prototype.slice.call(zoneBody.querySelectorAll('tr.zr-main'));
+    var lastInjectedPgm = null;
+    var seenPgms = {};
+
+    mains.forEach(function(tr, i){
       var z = zones[i];
       if (!z) return;
       var hasAnything =
@@ -2128,6 +2478,28 @@ body.sheet-open{overflow:hidden;}
         tr.style.display = 'none';
         return;
       }
+      // Program header — inject once per program, only when first non-empty
+      // row of that program is encountered.
+      var pgm = z.program || 'A';
+      if (!seenPgms[pgm]){
+        seenPgms[pgm] = true;
+        var header = document.createElement('tr');
+        header.className = 'zr-pgm-head';
+        header.dataset.injected = '1';
+        var hd = document.createElement('td');
+        hd.colSpan = PRINT_COLSPAN;
+        var start = programs[pgm];
+        var startTxt = start ? fmtTimeAmPm(start) : '—';
+        hd.textContent = 'Program ' + pgm;
+        var timeSpan = document.createElement('span');
+        timeSpan.className = 'zr-pgm-time';
+        timeSpan.textContent = 'Start ' + startTxt;
+        hd.appendChild(timeSpan);
+        header.appendChild(hd);
+        tr.parentNode.insertBefore(header, tr);
+        lastInjectedPgm = pgm;
+      }
+      // Notes sub-row
       var notesText = (z.notes || '').trim();
       if (notesText){
         var sub = document.createElement('tr');
@@ -2137,9 +2509,9 @@ body.sheet-open{overflow:hidden;}
         td.colSpan = PRINT_COLSPAN;
         var labelSpan = document.createElement('span');
         labelSpan.className = 'zr-notes-label';
-        labelSpan.textContent = 'Notes';
+        labelSpan.textContent = 'Notes:';
         td.appendChild(labelSpan);
-        td.appendChild(document.createTextNode(notesText));
+        td.appendChild(document.createTextNode(' ' + notesText));
         sub.appendChild(td);
         tr.parentNode.insertBefore(sub, tr.nextSibling);
       }
@@ -2160,6 +2532,7 @@ body.sheet-open{overflow:hidden;}
 
   function restorePrint(){
     zoneBody.querySelectorAll('tr.zr-notes[data-injected="1"]').forEach(function(tr){ tr.remove(); });
+    zoneBody.querySelectorAll('tr.zr-pgm-head[data-injected="1"]').forEach(function(tr){ tr.remove(); });
     zoneBody.querySelectorAll('tr.zr-main[data-print-skip="1"]').forEach(function(tr){
       tr.style.display = '';
       delete tr.dataset.printSkip;
@@ -2192,20 +2565,306 @@ body.sheet-open{overflow:hidden;}
   window.addEventListener('afterprint', restorePrint);
   window.addEventListener('beforeprint', prepPrint);
 
-  // ============ Seed 12 initial zones ============
+  // ============ Programs config wiring ============
+  // Read time pickers + print mirrors. Inputs are populated from state
+  // on init; changes write back to state and trigger autosave.
+  var pgmInputs = Array.prototype.slice.call(document.querySelectorAll('.pgm-time'));
+  pgmInputs.forEach(function(inp){
+    var key = inp.dataset.program;
+    var mirror = inp.nextElementSibling;
+    if (mirror && mirror.classList.contains('sched-print')){
+      inp.dataset._mirror = '1';
+    }
+    inp.addEventListener('input', function(){
+      programs[key] = inp.value || '';
+      if (mirror) mirror.textContent = fmtTimeAmPm(inp.value);
+      schedulePersist();
+    });
+  });
+  function syncProgramInputs(){
+    pgmInputs.forEach(function(inp){
+      var key = inp.dataset.program;
+      inp.value = programs[key] || '';
+      var mirror = inp.nextElementSibling;
+      if (mirror && mirror.classList.contains('sched-print')){
+        mirror.textContent = fmtTimeAmPm(programs[key] || '');
+      }
+    });
+  }
+
+  // ============ Persistence (Change A) ============
+  // localStorage key — versioned so future shape changes can migrate.
+  var STORAGE_KEY = 'pjl-irrigation-zone-schedule-v1';
+  var SCHEMA_VERSION = 1;
+  var persistTimer = null;
+  var psStatusEl = document.getElementById('psStatus');
+  var initializing = true; // suppress autosave during initial load
+
+  // Capture the project-meta editables + footer-note + contact lines so
+  // they round-trip through save/load. Keyed by their data-print attribute.
+  function readDocMeta(){
+    var map = {};
+    document.querySelectorAll('[contenteditable="true"][data-print]').forEach(function(el){
+      map[el.dataset.print] = (el.textContent || '').trim();
+    });
+    return map;
+  }
+  function writeDocMeta(map){
+    if (!map) return;
+    document.querySelectorAll('[contenteditable="true"][data-print]').forEach(function(el){
+      var k = el.dataset.print;
+      if (k in map){
+        el.textContent = map[k];
+        // Also bump the sibling .sched-print mirror so print reflects loaded value.
+        var m = el.nextElementSibling;
+        if (m && m.classList.contains('sched-print')) m.textContent = map[k];
+      }
+    });
+  }
+
+  function snapshot(){
+    return {
+      version: SCHEMA_VERSION,
+      savedAt: (function(){
+        var d = new Date();
+        return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')+
+               'T'+String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0')+':'+String(d.getSeconds()).padStart(2,'0');
+      })(),
+      docMeta: readDocMeta(),
+      programs: { A: programs.A, B: programs.B, C: programs.C, D: programs.D },
+      planImageDataUrl: (planImg.src && planImg.src.indexOf('data:') === 0) ? planImg.src : '',
+      zones: zones.map(function(z){
+        return {
+          zoneNum: z.zoneNum,
+          program: z.program,
+          color: z.color,
+          location: z.location,
+          type: (z.type || []).slice(),
+          status: z.status,
+          runMin: z.runMin,
+          days: Object.assign({}, z.days),
+          oe: z.oe,
+          everyDays: z.everyDays,
+          notes: z.notes,
+          aiDetected: !!z.aiDetected
+        };
+      })
+    };
+  }
+
+  function applySnapshot(snap){
+    if (!snap || typeof snap !== 'object') return false;
+    // Programs
+    if (snap.programs){
+      PROGRAM_KEYS.forEach(function(k){
+        programs[k] = String(snap.programs[k] || '');
+      });
+    }
+    syncProgramInputs();
+    // Doc meta (project / controller / date / drawer / contact lines / footer note)
+    if (snap.docMeta) writeDocMeta(snap.docMeta);
+    // Plan image (optional — large blob lives in localStorage)
+    if (snap.planImageDataUrl) setPlanImage(snap.planImageDataUrl);
+    else setPlanImage(null);
+    // Zones — restore the array, then rebuild DOM via resortZones which
+    // hits the same code path as live edits.
+    var loaded = Array.isArray(snap.zones) ? snap.zones : [];
+    zones = loaded.map(function(z, i){
+      var fresh = makeZone(Number(z.zoneNum) || (i + 1));
+      Object.assign(fresh, z, {
+        type: Array.isArray(z.type) ? z.type.slice() : [],
+        days: Object.assign({}, fresh.days, z.days || {})
+      });
+      // Defensive: clamp program to a known key.
+      if (PROGRAM_KEYS.indexOf(fresh.program) === -1) fresh.program = 'A';
+      return fresh;
+    });
+    resortZones();
+    if (snap.savedAt) showLastSaved(snap.savedAt);
+    return true;
+  }
+
+  function persistNow(){
+    try {
+      var snap = snapshot();
+      var json = JSON.stringify(snap);
+      try {
+        localStorage.setItem(STORAGE_KEY, json);
+      } catch (err) {
+        // Quota exceeded usually means the plan image is too big. Retry
+        // without it so at least the zone data persists.
+        if (snap.planImageDataUrl) {
+          snap.planImageDataUrl = '';
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(snap));
+          showStatus('Auto-saved (image too large to persist)');
+          return;
+        }
+        throw err;
+      }
+      showLastSaved(snap.savedAt);
+    } catch (err) {
+      console.warn('persist failed', err);
+      showStatus('Could not save (browser storage full?)');
+    }
+  }
+
+  function schedulePersist(){
+    if (initializing) return;
+    if (persistTimer) clearTimeout(persistTimer);
+    persistTimer = setTimeout(persistNow, 500);
+  }
+
+  function showLastSaved(iso){
+    if (!iso) { psStatusEl.textContent = 'Auto-saving to this browser'; return; }
+    // Format as HH:MM AM/PM if today, else MMM D HH:MM
+    var d = new Date(iso);
+    var now = new Date();
+    var isToday = d.getFullYear()===now.getFullYear() && d.getMonth()===now.getMonth() && d.getDate()===now.getDate();
+    var h = d.getHours(), m = String(d.getMinutes()).padStart(2,'0');
+    var period = h >= 12 ? 'PM' : 'AM';
+    var h12 = h % 12; if (h12 === 0) h12 = 12;
+    var time = h12 + ':' + m + ' ' + period;
+    var stamp = isToday ? time : (d.toDateString().split(' ').slice(1,3).join(' ') + ' ' + time);
+    psStatusEl.textContent = 'Last saved ' + stamp;
+  }
+  function showStatus(msg){ psStatusEl.textContent = msg; }
+
+  // ============ Save / Load / Clear buttons ============
+  document.getElementById('btnSaveJson').addEventListener('click', function(){
+    var snap = snapshot();
+    var iso = (docDate.textContent || '').trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)){
+      var d = new Date();
+      iso = d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+    }
+    var proj = (docProject.textContent || '').trim();
+    if (!proj || proj === 'Customer / property address') proj = 'untitled';
+    proj = proj.replace(/[\\/:*?"<>|]+/g,'').replace(/\s+/g,'-').toLowerCase().slice(0,50);
+    var name = proj + '-' + iso + '.pjl-zones.json';
+    var blob = new Blob([JSON.stringify(snap, null, 2)], { type: 'application/json' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url; a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function(){ URL.revokeObjectURL(url); }, 1000);
+  });
+
+  var loadJsonInput = document.getElementById('loadJsonInput');
+  document.getElementById('btnLoadJson').addEventListener('click', function(){ loadJsonInput.click(); });
+  loadJsonInput.addEventListener('change', function(e){
+    var f = e.target.files && e.target.files[0];
+    if (!f) return;
+    if (!confirm('This will replace your current zone schedule. Continue?')) {
+      loadJsonInput.value = '';
+      return;
+    }
+    var reader = new FileReader();
+    reader.onload = function(ev){
+      try {
+        var snap = JSON.parse(ev.target.result);
+        if (!applySnapshot(snap)) throw new Error('not a valid schedule');
+        persistNow(); // overwrite localStorage with the loaded snapshot
+      } catch (err) {
+        alert('Could not read that file — it does not look like a saved PJL zone schedule.');
+      }
+      loadJsonInput.value = '';
+    };
+    reader.readAsText(f);
+  });
+
+  document.getElementById('btnNewSchedule').addEventListener('click', function(){
+    if (!confirm('Clear all zones, programs, project info, and the site plan? This cannot be undone.')) return;
+    try { localStorage.removeItem(STORAGE_KEY); } catch(_) {}
+    // Reset everything to a blank slate.
+    zones = [];
+    PROGRAM_KEYS.forEach(function(k){ programs[k] = ''; });
+    syncProgramInputs();
+    setPlanImage(null);
+    zoneBody.innerHTML = '';
+    zoneList.innerHTML = '';
+    // Reset doc meta to defaults
+    var defaults = {
+      'contact-area':'Greater Toronto Area',
+      'contact-extra':'www.pjllandservices.com',
+      'doc-project':'Customer / property address',
+      'doc-controller':'Hunter HPC-400 Hydrawise',
+      'doc-drawer':'Patrick Lalande',
+      'footer-note':'Confirm with controller before activating.'
+    };
+    writeDocMeta(defaults);
+    // Auto-populate Date Created to today
+    var d = new Date();
+    var iso = d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+    docDate.textContent = iso;
+    writeDocMeta({ 'doc-date': iso });
+    seed(12);
+    showStatus('Cleared — auto-saving fresh schedule');
+    schedulePersist();
+  });
+
+  // Generic state-change hook on other doc-meta editables — also covered
+  // by their existing contenteditable mirror logic, but we attach the
+  // persistence trigger explicitly.
+  document.querySelectorAll('[contenteditable="true"][data-print]').forEach(function(el){
+    el.addEventListener('input', schedulePersist);
+  });
+
+  // Delegated listeners — catches every input + click that mutates zone
+  // state inside the table, mobile list, or sheet. Avoids threading
+  // `schedulePersist()` into ~10 individual makeRow handlers.
+  document.getElementById('zoneTable').addEventListener('input', schedulePersist);
+  document.getElementById('zoneTable').addEventListener('change', schedulePersist);
+  document.getElementById('zoneTable').addEventListener('click', function(e){
+    // Clicking a pill mutates state. addZone delete buttons are also here.
+    if (e.target.closest('.pill, .pill--day, .pill--oe, .row-del')) schedulePersist();
+  });
+  zsheet.addEventListener('input', schedulePersist);
+  zsheet.addEventListener('change', schedulePersist);
+  zsheet.addEventListener('click', function(e){
+    if (e.target.closest('.zsheet-pill, .zsheet-day, .zsheet-back, .zsheet-done, .zsheet-delete')) schedulePersist();
+  });
+
+  // ============ Seed / restore on load ============
   function seed(n){
     for (var i = 0; i < n; i++) addZone();
   }
-  seed(12);
+
+  (function init(){
+    var loaded = false;
+    try {
+      var raw = localStorage.getItem(STORAGE_KEY);
+      if (raw){
+        var snap = JSON.parse(raw);
+        if (snap && snap.version === SCHEMA_VERSION){
+          loaded = applySnapshot(snap);
+        }
+      }
+    } catch (err) { console.warn('restore failed', err); }
+    if (!loaded){
+      seed(12);
+      syncProgramInputs();
+    }
+    initializing = false;
+  })();
+
+  // Mirror schedulePersist for any add/delete that doesn't already trigger.
+  // We piggyback on the existing flow by wrapping addZone/deleteZone.
+  var _addZone = addZone;
+  addZone = function(){ _addZone(); schedulePersist(); };
+  var _deleteZone = deleteZone;
+  deleteZone = function(idx){ _deleteZone(idx); schedulePersist(); };
 
   window.__zsched = {
     getZones: function(){ return zones; },
     getActive: function(){ return activeIdx; },
+    getPrograms: function(){ return Object.assign({}, programs); },
     openSheet: openSheet,
     closeSheet: closeSheet,
     replaceZones: replaceZones,
     prepPrint: prepPrint,
-    restorePrint: restorePrint
+    restorePrint: restorePrint,
+    snapshot: snapshot,
+    persistNow: persistNow
   };
 
 })();
