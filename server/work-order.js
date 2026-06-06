@@ -952,25 +952,128 @@ const WAIVER_REASON_LABELS = {
   courtesy: "Courtesy",
   other: "No charge"
 };
+function woWaiverFriendlyReason(w) {
+  if (!w || w.waived !== true) return "";
+  if (w.reason === "other") return w.notes || "No charge";
+  let text = WAIVER_REASON_LABELS[w.reason] || "No charge";
+  if (w.notes) text += ` — ${w.notes}`;
+  return text;
+}
+
+// Render the 3-state waiver control (offer / form / active). Only applies
+// to service_visit WOs (the only type that carries a $XX service call).
+// Hidden when locked-and-not-waived; the active banner stays visible (read
+// only) on a locked WO that WAS waived so the record is clear.
 function renderServiceFeeWaiver(wo) {
+  const control = document.getElementById("woWaiverControl");
+  const offer = document.getElementById("woWaiverOffer");
+  const form = document.getElementById("woWaiverForm");
   const banner = document.getElementById("woWaiverBanner");
   const meta = document.getElementById("woWaiverMeta");
-  if (!banner) return;
+  const removeBtn = document.getElementById("woWaiverRemoveBtn");
+  if (!control) return;
+
   const w = wo && wo.serviceFeeWaiver;
-  if (!w || w.waived !== true) {
-    banner.hidden = true;
+  const isWaived = !!(w && w.waived === true);
+  const locked = !!(wo && (wo.locked === true || wo.signature?.signed === true || wo.signatureBypass));
+  const applies = !!(wo && wo.type === "service_visit");
+
+  if (!applies || (locked && !isWaived)) {
+    control.hidden = true;
     return;
   }
-  const friendly = w.reason === "other"
-    ? (w.notes || "No charge")
-    : (WAIVER_REASON_LABELS[w.reason] || "No charge");
-  let text = friendly;
-  // For non-"other" reasons, append the note (if any) as supporting detail —
-  // the friendly category already carries the reason.
-  if (w.reason !== "other" && w.notes) text += ` — ${w.notes}`;
-  if (meta) meta.textContent = `(${text})`;
-  banner.hidden = false;
+  control.hidden = false;
+  if (form) form.hidden = true; // collapse the transient form on (re)render
+
+  if (isWaived) {
+    if (offer) offer.hidden = true;
+    if (banner) banner.hidden = false;
+    if (meta) meta.textContent = `(${woWaiverFriendlyReason(w)})`;
+    if (removeBtn) removeBtn.hidden = locked; // can't un-waive a signed WO
+  } else {
+    if (offer) offer.hidden = false;
+    if (banner) banner.hidden = true;
+  }
 }
+
+// POST a waiver change and refresh the waiver control + on-site quote.
+async function postServiceFeeWaiver(body) {
+  const id = getWorkOrderId();
+  if (!id) return;
+  const errEl = document.getElementById("woWaiverFormErr");
+  try {
+    const r = await fetch(`/api/work-orders/${encodeURIComponent(id)}/service-fee-waiver`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok || !data.ok) {
+      const msg = (data.errors && data.errors[0]) || `Couldn't update the waiver (HTTP ${r.status}).`;
+      if (errEl) { errEl.textContent = msg; errEl.hidden = false; }
+      else alert(msg);
+      return;
+    }
+    loadedWorkOrder = data.workOrder;
+    renderServiceFeeWaiver(loadedWorkOrder);
+    renderOnSiteQuote(loadedWorkOrder);
+  } catch (err) {
+    if (errEl) { errEl.textContent = err.message; errEl.hidden = false; }
+    else alert(err.message);
+  }
+}
+
+// Waiver control wiring (static elements — bind once at module load).
+(function wireServiceFeeWaiver() {
+  const offer = document.getElementById("woWaiverOffer");
+  const form = document.getElementById("woWaiverForm");
+  const openBtn = document.getElementById("woWaiverOpenBtn");
+  const cancelBtn = document.getElementById("woWaiverCancelBtn");
+  const applyBtn = document.getElementById("woWaiverApplyBtn");
+  const removeBtn = document.getElementById("woWaiverRemoveBtn");
+  const reasonSel = document.getElementById("woWaiverReasonSel");
+  const notesInput = document.getElementById("woWaiverNotesInput");
+  const notesHint = document.getElementById("woWaiverNotesHint");
+  const errEl = document.getElementById("woWaiverFormErr");
+  if (!form) return;
+
+  const clearErr = () => { if (errEl) { errEl.hidden = true; errEl.textContent = ""; } };
+
+  openBtn?.addEventListener("click", () => {
+    clearErr();
+    if (reasonSel) reasonSel.value = "";
+    if (notesInput) notesInput.value = "";
+    if (notesHint) notesHint.textContent = "(optional)";
+    if (offer) offer.hidden = true;
+    form.hidden = false;
+    reasonSel?.focus();
+  });
+  cancelBtn?.addEventListener("click", () => {
+    clearErr();
+    form.hidden = true;
+    if (offer) offer.hidden = false;
+  });
+  reasonSel?.addEventListener("change", () => {
+    clearErr();
+    if (notesHint) notesHint.textContent = reasonSel.value === "other" ? "(required)" : "(optional)";
+  });
+  notesInput?.addEventListener("input", clearErr);
+  applyBtn?.addEventListener("click", () => {
+    clearErr();
+    const reason = reasonSel?.value || "";
+    if (!reason) { if (errEl) { errEl.textContent = "Select a waiver reason."; errEl.hidden = false; } return; }
+    const notes = (notesInput?.value || "").trim();
+    if (reason === "other" && !notes) {
+      if (errEl) { errEl.textContent = "Add a note explaining the waiver when the reason is 'Other'."; errEl.hidden = false; }
+      return;
+    }
+    postServiceFeeWaiver({ waived: true, reason, notes });
+  });
+  removeBtn?.addEventListener("click", () => {
+    if (!confirm("Remove the waiver and restore the service call fee?")) return;
+    postServiceFeeWaiver({ waived: false });
+  });
+})();
 
 // AI-Correct-Diagnosis Bonus banner — desktop mirror of tech-mode's
 // banner. Brief F: Match / Didn't Match buttons before signature; on

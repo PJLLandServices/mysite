@@ -44,7 +44,7 @@ const { geocode, PJL_BASE } = require("./lib/geocode");
 const { BOOKABLE_SERVICES, DEFAULT_HOURS, DEFAULT_SETTINGS, listAvailableSlots, groupByDay, expandDaysToRange, parseLocalDateKey } = require("./lib/availability");
 const scheduleStore = require("./lib/schedule-store");
 const { priceForBooking, deriveSeasonalKey, resolveSeasonalPrice } = require("./lib/pricing");
-const { normalizeServiceFeeWaiver } = require("./lib/service-fee-waiver");
+const { normalizeServiceFeeWaiver, friendlyWaiverReason } = require("./lib/service-fee-waiver");
 const bookingSessions = require("./lib/booking-sessions");
 const properties = require("./lib/properties");
 const customers = require("./lib/customers");
@@ -11702,6 +11702,88 @@ async function handleApi(req, res, pathname) {
       });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't build on-site quote."] });
+    }
+  }
+
+  // Set / clear the service-call fee waiver on an existing WO (Patrick
+  // 2026-06-06). Lets him bypass the $95 on a WO that's already created —
+  // regardless of which creation form spawned it (property page, handoff,
+  // or a pre-waiver-feature WO). Body: { waived: bool, reason?, notes? }.
+  // Transforms the existing service_call builder line in place (price → 0,
+  // relabel to WAIVED) so the change is immediate WITHOUT re-running
+  // "Generate from issues" (which would clobber the tech's manual edits).
+  // Refused once signed/locked (serviceFeeWaiver is scope-protected).
+  const woWaiverMatch = pathname.match(/^\/api\/work-orders\/([^/]+)\/service-fee-waiver$/);
+  if (woWaiverMatch && req.method === "POST") {
+    try {
+      const id = decodeURIComponent(woWaiverMatch[1]);
+      const payload = await parseRequestBody(req);
+      const wo = await workOrders.get(id);
+      if (!wo) return sendJson(res, 404, { ok: false, errors: ["Work order not found."] });
+      if (wo.locked || wo.signature?.signed) {
+        return sendJson(res, 409, { ok: false, errors: ["Work order is signed and locked — the waiver can't change."] });
+      }
+
+      const waiving = payload?.waived === true;
+      let waiver = null;
+      if (waiving) {
+        const norm = normalizeServiceFeeWaiver(
+          { waived: true, reason: payload.reason, notes: payload.notes },
+          { by: "admin" }
+        );
+        if (norm.error) return sendJson(res, 422, { ok: false, errors: [norm.error] });
+        waiver = norm.waiver;
+      }
+
+      // Transform any existing service_call line so the on-site quote total
+      // reflects the change right away. If no quote has been built yet, the
+      // waiver is simply stored and the rollup applies it on the next build.
+      const scPrice = Number(PRICING.items?.service_call?.price) || 0;
+      const scLabel = PRICING.items?.service_call?.label || "Service call";
+      const lines = Array.isArray(wo.onSiteQuote?.builderLineItems)
+        ? wo.onSiteQuote.builderLineItems.map((l) => ({ ...l }))
+        : [];
+      for (const l of lines) {
+        if (!l || l.key !== "service_call") continue;
+        // Leave AI-intake $0 trip lines alone — they're already free with
+        // their own explanatory note; waiving a $0 line is meaningless.
+        const isIntakeZero = l.source && l.source.feeWaived !== true
+          && Number(l.overridePrice != null ? l.overridePrice : l.originalPrice) === 0;
+        if (waiving) {
+          if (isIntakeZero) continue;
+          l.originalPrice = 0;
+          l.overridePrice = null;
+          l.label = `Service call fee — WAIVED (${friendlyWaiverReason(waiver)})`;
+          l.note = "";
+          l.source = { ...(l.source || {}), feeWaived: true, waiverReason: waiver.reason };
+        } else if (l.source && l.source.feeWaived === true) {
+          // Restore the normal fee from pricing.json.
+          l.originalPrice = scPrice;
+          l.overridePrice = null;
+          l.label = scLabel;
+          const src = { ...(l.source || {}) };
+          delete src.feeWaived;
+          delete src.waiverReason;
+          l.source = src;
+        }
+      }
+      const totals = issueRollup.recomputeTotals(lines);
+      const updated = await workOrders.update(id, {
+        serviceFeeWaiver: waiver,
+        onSiteQuote: { ...wo.onSiteQuote, builderLineItems: lines }
+      });
+      try {
+        await workOrders.appendHistory(id, {
+          action: waiving ? "service_fee_waived" : "service_fee_waiver_removed",
+          by: "admin",
+          note: waiving
+            ? `Service call fee waived — ${friendlyWaiverReason(waiver)}${waiver.notes ? ` (${waiver.notes})` : ""}`
+            : "Service call fee waiver removed — fee restored"
+        });
+      } catch (err) { console.warn("[wo-history] waiver entry failed:", err?.message); }
+      return sendJson(res, 200, { ok: true, workOrder: updated, lineItems: lines, ...totals });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't update the fee waiver."] });
     }
   }
 

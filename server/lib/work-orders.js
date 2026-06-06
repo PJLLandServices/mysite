@@ -1177,6 +1177,16 @@ async function update(id, patch) {
   if (patch.signature && typeof patch.signature === "object") {
     next.signature = { ...current.signature, ...patch.signature };
   }
+  // Service-call fee waiver — set (validated object) or clear (explicit
+  // null to un-waive). The route validates shape via
+  // lib/service-fee-waiver.js and guards wo.locked before calling here;
+  // serviceFeeWaiver is also in SCOPE_PROTECTED_FIELDS so any route using
+  // findProtectedFieldTouched refuses changes on a signed WO.
+  if (Object.prototype.hasOwnProperty.call(patch, "serviceFeeWaiver")) {
+    next.serviceFeeWaiver = (patch.serviceFeeWaiver && typeof patch.serviceFeeWaiver === "object" && patch.serviceFeeWaiver.waived === true)
+      ? { ...patch.serviceFeeWaiver }
+      : null;
+  }
   next.updatedAt = new Date().toISOString();
 
   // Status transition gets a free history entry — caller (dispatcher)

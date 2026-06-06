@@ -379,7 +379,73 @@ body.wo-lightbox-open { overflow: hidden; }
 }
 .wo-waiver-icon { font-size: 18px; }
 .wo-waiver-banner strong { color: var(--pjl-green, #1B4D2E); }
-.wo-waiver-banner span { color: var(--pjl-text-mid); }
+.wo-waiver-banner > span { color: var(--pjl-text-mid); }
+
+/* Waiver control — offer + form states. */
+.wo-waiver { margin-top: 12px; }
+.wo-waiver-offer {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 12px 16px;
+  background: rgba(27, 77, 46, 0.04);
+  border: 1px dashed rgba(27, 77, 46, 0.28);
+  border-radius: 10px;
+  font-size: 14px;
+}
+.wo-waiver-offer-text { flex: 1 1 auto; color: var(--pjl-text-mid); }
+.wo-waiver-offer .pjl-btn { flex: 0 0 auto; }
+.wo-waiver-form {
+  padding: 16px;
+  background: rgba(27, 77, 46, 0.04);
+  border: 1px solid rgba(27, 77, 46, 0.28);
+  border-radius: 10px;
+}
+.wo-waiver-form-fields { display: flex; flex-wrap: wrap; gap: 14px; }
+.wo-waiver-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1 1 220px;
+  font-size: 13px;
+  color: var(--pjl-text-mid);
+}
+.wo-waiver-field > span { font-weight: 600; }
+.wo-waiver-field em { font-weight: 400; font-style: italic; }
+.wo-waiver-field select,
+.wo-waiver-field input {
+  min-height: 40px;
+  padding: 8px 12px;
+  border: 1px solid rgba(27, 77, 46, 0.25);
+  border-radius: 8px;
+  font: inherit;
+  font-size: 14px;
+  background: #fff;
+}
+.wo-waiver-err {
+  margin: 10px 0 0;
+  padding: 8px 12px;
+  background: rgba(177, 58, 58, 0.08);
+  border: 1px solid rgba(177, 58, 58, 0.30);
+  border-radius: 8px;
+  font-size: 13px;
+  color: #b13a3a;
+}
+.wo-waiver-form-actions { display: flex; gap: 10px; margin-top: 14px; }
+.wo-waiver-remove {
+  margin-left: auto;
+  padding: 5px 12px;
+  background: #fff;
+  border: 1px solid rgba(27, 77, 46, 0.30);
+  border-radius: 999px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--pjl-green, #1B4D2E);
+  cursor: pointer;
+}
+.wo-waiver-remove:hover { background: rgba(27, 77, 46, 0.06); }
 
 /* Service-specific checklist (Spring / Fall) — single-column tap-pills,
    matches the tech-mode visual language so the checklist behaves

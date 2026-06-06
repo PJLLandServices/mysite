@@ -112,13 +112,47 @@
       <span id="woLockedMeta"></span>
     </div>
 
-    <!-- Service-call fee waiver banner — visible when this WO was created
-         with the fee waived. Loud so the tech doesn't collect the $95
-         on-site. The $0 "WAIVED" line also appears in the on-site quote. -->
-    <div class="wo-waiver-banner" id="woWaiverBanner" hidden role="status">
-      <span class="wo-waiver-icon" aria-hidden="true">🏷️</span>
-      <strong>Service call fee waived</strong>
-      <span id="woWaiverMeta"></span>
+    <!-- Service-call fee waiver control. Three states (only one visible):
+         · offer  — not waived, unsigned: a "Waive service call fee" button
+         · form   — reason + notes + Apply/Cancel
+         · active — waived: banner + Remove. Loud so the $95 isn't collected.
+         The waiver flips the service_call line to $0 in the on-site quote.
+         Hidden entirely once the WO is signed (read-only contract). -->
+    <div class="wo-waiver" id="woWaiverControl" hidden>
+      <div class="wo-waiver-offer" id="woWaiverOffer" hidden>
+        <span class="wo-waiver-icon" aria-hidden="true">🏷️</span>
+        <span class="wo-waiver-offer-text">Courtesy, warranty, or contract visit? You can waive the service call fee.</span>
+        <button type="button" class="pjl-btn pjl-btn-outline" id="woWaiverOpenBtn">Waive service call fee</button>
+      </div>
+      <div class="wo-waiver-form" id="woWaiverForm" hidden>
+        <div class="wo-waiver-form-fields">
+          <label class="wo-waiver-field">
+            <span>Reason</span>
+            <select id="woWaiverReasonSel">
+              <option value="">Select a reason…</option>
+              <option value="warranty">Warranty / callback</option>
+              <option value="contract">Contract member</option>
+              <option value="courtesy">Courtesy / no charge</option>
+              <option value="other">Other (write-in)</option>
+            </select>
+          </label>
+          <label class="wo-waiver-field">
+            <span>Notes <em id="woWaiverNotesHint">(optional)</em></span>
+            <input type="text" id="woWaiverNotesInput" maxlength="200" placeholder="e.g. redo of June valve repair">
+          </label>
+        </div>
+        <p class="wo-waiver-err" id="woWaiverFormErr" role="alert" hidden></p>
+        <div class="wo-waiver-form-actions">
+          <button type="button" class="pjl-btn pjl-btn-primary" id="woWaiverApplyBtn">Apply waiver</button>
+          <button type="button" class="pjl-btn pjl-btn-outline" id="woWaiverCancelBtn">Cancel</button>
+        </div>
+      </div>
+      <div class="wo-waiver-banner" id="woWaiverBanner" hidden role="status">
+        <span class="wo-waiver-icon" aria-hidden="true">🏷️</span>
+        <strong>Service call fee waived</strong>
+        <span id="woWaiverMeta"></span>
+        <button type="button" class="wo-waiver-remove" id="woWaiverRemoveBtn">Remove</button>
+      </div>
     </div>
 
     <p class="property-loading" id="woLoading">Loading work order…</p>

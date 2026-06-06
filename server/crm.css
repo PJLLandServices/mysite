@@ -3189,3 +3189,72 @@ body.pjl-bulk-toolbar-busy {
   color: var(--pjl-text-mid);
 }
 
+/* Service-call fee waiver block (Service Visit WO creation). Shared by the
+   property page (property.html) and the booking handoff page (admin.html),
+   so it lives here in crm.css rather than a page-specific stylesheet. */
+.property-field-wo__waiver {
+  margin: 12px 0 0;
+  padding: 12px 14px;
+  border: 1px solid rgba(27, 77, 46, 0.18);
+  border-radius: 8px;
+  background: rgba(27, 77, 46, 0.03);
+}
+.property-field-wo__waiver-legend {
+  padding: 0 6px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--pjl-text-mid);
+}
+.property-field-wo__waiver-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--pjl-green);
+  cursor: pointer;
+}
+.property-field-wo__waiver-toggle input { margin: 0; }
+.property-field-wo__waiver-detail {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px dashed rgba(27, 77, 46, 0.18);
+}
+.property-field-wo__waiver-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1 1 200px;
+  font-size: 12px;
+  color: var(--pjl-text-mid);
+}
+.property-field-wo__waiver-field > span { font-weight: 600; }
+.property-field-wo__waiver-field em { font-weight: 400; font-style: italic; }
+.property-field-wo__waiver-field select,
+.property-field-wo__waiver-field input {
+  min-height: 36px;
+  padding: 6px 10px;
+  border: 1px solid rgba(27, 77, 46, 0.25);
+  border-radius: 6px;
+  font-size: 13px;
+  background: #fff;
+}
+.property-field-wo__waiver-err {
+  flex: 1 1 100%;
+  margin: 0;
+  padding: 6px 10px;
+  background: rgba(200, 0, 0, 0.06);
+  border: 1px solid rgba(200, 0, 0, 0.25);
+  border-radius: 6px;
+  font-size: 12px;
+  color: #b00020;
+}
+@media (max-width: 700px) {
+  .property-field-wo__waiver-field { flex: 1 1 100%; }
+}
+

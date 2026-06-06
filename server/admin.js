@@ -115,6 +115,13 @@ const detailFieldWoNolink = document.getElementById("detailFieldWoNolink");
 const createWoSpring = document.getElementById("createWoSpring");
 const createWoFall = document.getElementById("createWoFall");
 const createWoVisit = document.getElementById("createWoVisit");
+const woWaiveFee = document.getElementById("woWaiveFee");
+const woWaiveDetail = document.getElementById("woWaiveDetail");
+const woWaiveReason = document.getElementById("woWaiveReason");
+const woWaiveNotes = document.getElementById("woWaiveNotes");
+const woWaiveNotesHint = document.getElementById("woWaiveNotesHint");
+const woWaiveErr = document.getElementById("woWaiveErr");
+const woWaiveFeeAmount = document.getElementById("woWaiveFeeAmount");
 const customerNotes = document.getElementById("customerNotes");
 const activityList = document.getElementById("activityList");
 const detailPhotosSection = document.getElementById("detailPhotosSection");
@@ -841,6 +848,43 @@ async function renderFieldWoDetail(lead) {
   }
 }
 
+// ---- Service-call fee waiver (Service Visit WOs only) ------------------
+// Mirrors the property-page waiver control. The $95 fee only applies to
+// service_visit WOs; Spring/Fall are flat-rate with no separate trip charge.
+(async function hydrateWaiverFeeAmount() {
+  if (!woWaiveFeeAmount) return;
+  try {
+    const res = await fetch("/api/pricing", { cache: "no-store" });
+    const data = await res.json();
+    const price = data?.items?.service_call?.price;
+    if (Number.isFinite(Number(price))) woWaiveFeeAmount.textContent = "$" + Number(price);
+  } catch { /* keep the static fallback */ }
+})();
+
+function clearWaiverError() {
+  if (woWaiveErr) { woWaiveErr.hidden = true; woWaiveErr.textContent = ""; }
+}
+function syncWaiverUi() {
+  const on = !!(woWaiveFee && woWaiveFee.checked);
+  if (woWaiveDetail) woWaiveDetail.hidden = !on;
+  if (woWaiveNotesHint) {
+    woWaiveNotesHint.textContent = woWaiveReason?.value === "other" ? "(required)" : "(optional)";
+  }
+  if (!on) clearWaiverError();
+}
+woWaiveFee?.addEventListener("change", syncWaiverUi);
+woWaiveReason?.addEventListener("change", () => { syncWaiverUi(); clearWaiverError(); });
+woWaiveNotes?.addEventListener("input", clearWaiverError);
+
+function readServiceFeeWaiver() {
+  if (!woWaiveFee || !woWaiveFee.checked) return { skip: true };
+  const reason = woWaiveReason?.value || "";
+  if (!reason) return { error: "Select a waiver reason." };
+  const notes = (woWaiveNotes?.value || "").trim();
+  if (reason === "other" && !notes) return { error: "Add a note explaining the waiver when the reason is 'Other'." };
+  return { waiver: { waived: true, reason, notes } };
+}
+
 async function createFieldWoFromButton(type) {
   const lead = fieldWoLeadContext;
   if (!lead) return;
@@ -849,12 +893,23 @@ async function createFieldWoFromButton(type) {
     return;
   }
   const button = document.querySelector(`[data-create-wo="${type}"]`);
+
+  const body = { type, leadId: lead.id, propertyId: lead.propertyId || undefined };
+  if (type === "service_visit") {
+    const w = readServiceFeeWaiver();
+    if (w.error) {
+      if (woWaiveErr) { woWaiveErr.textContent = w.error; woWaiveErr.hidden = false; }
+      return;
+    }
+    if (w.waiver) body.serviceFeeWaiver = w.waiver;
+  }
+
   if (button) button.disabled = true;
   try {
     const response = await fetch("/api/work-orders", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ type, leadId: lead.id, propertyId: lead.propertyId || undefined })
+      body: JSON.stringify(body)
     });
     const data = await response.json();
     if (!response.ok || !data.ok) {
