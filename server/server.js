@@ -1171,6 +1171,30 @@ function twilioCandidateUrls(pathname) {
   return [...urls];
 }
 
+// The base URL to emit inside TwiML for Twilio's own callbacks (the Record
+// action + transcribeCallback). Cloudflare 307-redirects the bare apex
+// (pjllandservices.com) to www; Twilio *can* follow that, but rather than
+// rely on redirect-following for the callbacks that fire Patrick's SMS +
+// email, we emit the www host directly so each callback lands on the origin
+// in a single hop. Only rewrites a bare two-label public apex — localhost,
+// IPs, and existing sub-domains (www.*, *.onrender.com) pass through
+// untouched, so local dev and any other host keep working.
+function twilioWebhookBase() {
+  const base = resolvePublicBaseUrl().replace(/\/+$/, "");
+  try {
+    const u = new URL(base);
+    const host = u.hostname;
+    const isIp = /^\d{1,3}(\.\d{1,3}){3}$/.test(host);
+    const isLocal = host === "localhost" || isIp;
+    if (!isLocal && !host.startsWith("www.") && host.split(".").length === 2) {
+      return `${u.protocol}//www.${host}`;
+    }
+    return base;
+  } catch {
+    return base;
+  }
+}
+
 // Verify a Twilio request signature (X-Twilio-Signature). Twilio computes
 // HMAC-SHA1 over (the full request URL + every POST param appended in
 // alphabetical key order) keyed with the account Auth Token, then base64s
@@ -2841,7 +2865,7 @@ async function handleApi(req, res, pathname) {
     if (!allowTwilioWebhook(req, pathname, params, "voice-incoming")) {
       return sendJson(res, 403, { ok: false, errors: ["Invalid Twilio signature."] });
     }
-    const base = resolvePublicBaseUrl();
+    const base = twilioWebhookBase();
     const recordedCb = `${base}/api/twilio-voicemail-recorded`;
     const transcribeCb = `${base}/api/twilio-voicemail-transcription`;
     const xml =
