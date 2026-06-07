@@ -1146,32 +1146,53 @@ async function parseFormBody(req, { maxBytes = 1_000_000 } = {}) {
   return out;
 }
 
+// The set of fully-qualified webhook URLs Twilio might legitimately have
+// signed against, for a given pathname. We rebuild from resolvePublicBaseUrl()
+// — NOT the request Host header — because behind Cloudflare/Render the inbound
+// Host is the *.onrender.com origin, not the public domain Twilio called.
+//
+// The catch: this deployment serves on www.pjllandservices.com (Cloudflare
+// 307-redirects the apex there) but PUBLIC_BASE_URL is the apex
+// (https://pjllandservices.com). Twilio signs against whichever host its
+// webhook URL uses, so we accept BOTH the configured host and its www/apex
+// sibling. Both are PJL-owned and derived from the configured base — never
+// from attacker-controlled input — so widening the set doesn't weaken the
+// check: a forged request still can't produce a valid HMAC without the token.
+function twilioCandidateUrls(pathname) {
+  const base = resolvePublicBaseUrl().replace(/\/+$/, "");
+  const urls = new Set([base + pathname]);
+  try {
+    const u = new URL(base);
+    const sibling = u.hostname.startsWith("www.")
+      ? `${u.protocol}//${u.hostname.slice(4)}`
+      : `${u.protocol}//www.${u.hostname}`;
+    urls.add(sibling + pathname);
+  } catch { /* base wasn't a parseable URL — just use it as-is */ }
+  return [...urls];
+}
+
 // Verify a Twilio request signature (X-Twilio-Signature). Twilio computes
 // HMAC-SHA1 over (the full request URL + every POST param appended in
 // alphabetical key order) keyed with the account Auth Token, then base64s
-// it. We rebuild the URL from resolvePublicBaseUrl() + pathname — NOT the
-// request Host header — because behind Cloudflare/Render the inbound Host is
-// the *.onrender.com origin, whereas Twilio signed against the public
-// webhook URL Patrick configured (https://www.pjllandservices.com/...).
+// it. We accept a match against any candidate URL (www/apex — see above).
 // Returns true on match. See:
 // https://www.twilio.com/docs/usage/security#validating-requests
 function verifyTwilioSignature(req, pathname, params) {
   const token = process.env.TWILIO_AUTH_TOKEN;
   const signature = req.headers["x-twilio-signature"];
   if (!token || !signature) return false;
-  const fullUrl = `${resolvePublicBaseUrl()}${pathname}`;
-  let data = fullUrl;
+  let sigBuf;
+  try { sigBuf = Buffer.from(signature); } catch { return false; }
+  let paramTail = "";
   for (const key of Object.keys(params).sort()) {
-    data += key + params[key];
+    paramTail += key + params[key];
   }
-  const expected = crypto.createHmac("sha1", token).update(Buffer.from(data, "utf8")).digest("base64");
-  try {
-    const a = Buffer.from(signature);
+  for (const fullUrl of twilioCandidateUrls(pathname)) {
+    const expected = crypto.createHmac("sha1", token).update(Buffer.from(fullUrl + paramTail, "utf8")).digest("base64");
     const b = Buffer.from(expected);
-    return a.length === b.length && crypto.timingSafeEqual(a, b);
-  } catch {
-    return false;
+    if (sigBuf.length === b.length && crypto.timingSafeEqual(sigBuf, b)) return true;
   }
+  return false;
 }
 
 // Gate for the Twilio voice webhooks. In production with an Auth Token set,
