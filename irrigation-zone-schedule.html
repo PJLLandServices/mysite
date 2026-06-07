@@ -1258,17 +1258,6 @@ body.sheet-open{overflow:hidden;}
     </div>
   </section>
 
-  <!-- Programs config (multiple start times per program A/B/C/D) -->
-  <section class="pgm-row" aria-label="Programs">
-    <div class="pgm-row-head">
-      <h2 class="pgm-row-title">Programs</h2>
-      <span class="pgm-row-hint">A program can have multiple start times — add as many as the controller is set to fire.</span>
-    </div>
-    <div class="pgm-row-stack" id="pgmStack">
-      <!-- Built dynamically: one row per program with its start-time list. -->
-    </div>
-  </section>
-
   <!-- Site plan upload -->
   <figure class="plan">
     <div class="plan-dropzone" id="planDrop">
@@ -1298,6 +1287,18 @@ body.sheet-open{overflow:hidden;}
       <div class="ai-status" id="aiStatus" role="status" aria-live="polite"></div>
     </div>
   </figure>
+
+  <!-- Programs config — start times + run-time totals. Sits below the site
+       plan and directly above the zone tables it summarizes. -->
+  <section class="pgm-row" aria-label="Programs">
+    <div class="pgm-row-head">
+      <h2 class="pgm-row-title">Programs</h2>
+      <span class="pgm-row-hint">A program can have multiple start times — add as many as the controller is set to fire.</span>
+    </div>
+    <div class="pgm-row-stack" id="pgmStack">
+      <!-- Built dynamically: one row per program with its start-time list. -->
+    </div>
+  </section>
 
   <!-- Persistence toolbar — screen-only (autosave + manual file IO) -->
   <div class="persist-bar" id="persistBar">
