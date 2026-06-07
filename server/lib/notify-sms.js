@@ -136,4 +136,59 @@ async function sendPortalMessageSms(lead, message) {
   }
 }
 
-module.exports = { sendNewLeadSms, sendPortalMessageSms };
+// Call-forward voicemail alert. Telus stays Patrick's customer-facing
+// number; calls he doesn't answer forward to the Twilio number, which
+// records a voicemail (see the /api/twilio-voice-incoming TwiML route in
+// server.js). The moment Twilio's recording callback lands, this fires an
+// SMS to Patrick's cell with a tap-to-listen link so he hears the
+// voicemail without waiting on the (slower, async) transcription email.
+//
+// Uses the SAME Twilio creds + NOTIFY_TO_PHONE destination as the lead
+// SMS above — nothing new to configure. The emoji + recording URL push
+// this past a single GSM-7 segment, but voicemail volume is low so the
+// extra segment cost is negligible (and the link has to be there).
+async function sendVoicemailAlertSms({ from, durationSeconds, recordingUrl } = {}) {
+  if (!isConfigured()) {
+    console.warn("[sms] Twilio env vars not set — skipping voicemail alert SMS (recording still stored by Twilio).");
+    return { ok: false, skipped: true };
+  }
+  const sid = process.env.TWILIO_ACCOUNT_SID;
+  const token = process.env.TWILIO_AUTH_TOKEN;
+  const url = `https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(sid)}/Messages.json`;
+  const auth = Buffer.from(`${sid}:${token}`).toString("base64");
+
+  const caller = String(from || "").trim() || "an unknown number";
+  const durNum = Number(durationSeconds);
+  const dur = Number.isFinite(durNum) && durNum > 0 ? `${durNum}s` : "voicemail";
+  // Append .mp3 so tapping the link opens the audio directly rather than
+  // Twilio's XML metadata page. recordingUrl is Twilio's REST resource URL.
+  const listen = recordingUrl ? `${recordingUrl}.mp3` : "";
+  const body = `📞 New PJL voicemail from ${caller} (${dur}).${listen ? ` Listen: ${listen}` : ""}`;
+
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Authorization": `Basic ${auth}`,
+        "Content-Type": "application/x-www-form-urlencoded"
+      },
+      body: new URLSearchParams({
+        To: process.env.NOTIFY_TO_PHONE,
+        From: process.env.TWILIO_FROM_NUMBER,
+        Body: body
+      }).toString()
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      console.error("[sms] Twilio rejected voicemail alert:", response.status, data?.message || data?.code || "(no detail)");
+      return { ok: false, error: data?.message || `Twilio HTTP ${response.status}` };
+    }
+    console.log("[sms] Sent voicemail alert:", data.sid);
+    return { ok: true, sid: data.sid };
+  } catch (error) {
+    console.error("[sms] Network or runtime error sending voicemail alert:", error.message);
+    return { ok: false, error: error.message };
+  }
+}
+
+module.exports = { sendNewLeadSms, sendPortalMessageSms, sendVoicemailAlertSms };

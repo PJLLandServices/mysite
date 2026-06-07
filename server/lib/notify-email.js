@@ -161,4 +161,137 @@ async function sendNewLeadEmail(lead) {
   }
 }
 
-module.exports = { sendNewLeadEmail };
+// --- Call-forward voicemail email -----------------------------------------
+// Companion to sendVoicemailAlertSms (notify-sms.js). When Twilio finishes
+// transcribing a voicemail it POSTs the text to
+// /api/twilio-voice-incoming's transcribeCallback; that route calls this to
+// email Patrick the transcription, the caller number, duration, timestamp,
+// and a tap-to-listen recording link. If his Gmail transporter can reach
+// the audio, we also attach the .mp3 so the voicemail is in his inbox even
+// if Twilio later expires the recording.
+//
+// Reuses the same getTransporter() + NOTIFY_TO_EMAIL destination as the
+// lead email above — no new credentials.
+
+// Fetch the voicemail audio from Twilio so we can attach it. Twilio's
+// recording media lives at <RecordingUrl>.mp3; we send the account's Basic
+// auth so it works whether or not "HTTP auth for media" is enabled. Returns
+// a nodemailer attachment object, or null on any failure (we then fall back
+// to the link-only email — the recording URL is always in the body).
+async function fetchRecordingAttachment(recordingUrl) {
+  if (!recordingUrl) return null;
+  const sid = process.env.TWILIO_ACCOUNT_SID;
+  const token = process.env.TWILIO_AUTH_TOKEN;
+  if (!sid || !token) return null;
+  try {
+    const auth = Buffer.from(`${sid}:${token}`).toString("base64");
+    const resp = await fetch(`${recordingUrl}.mp3`, {
+      headers: { "Authorization": `Basic ${auth}` }
+    });
+    if (!resp.ok) {
+      console.warn("[email] Could not fetch voicemail audio for attachment:", resp.status);
+      return null;
+    }
+    const buf = Buffer.from(await resp.arrayBuffer());
+    if (!buf.length) return null;
+    // Guard against pathologically large recordings (maxLength is 180s, so
+    // this should never trip — but never attach an unbounded blob).
+    if (buf.length > 15_000_000) {
+      console.warn("[email] Voicemail audio too large to attach; sending link only.");
+      return null;
+    }
+    const sidMatch = String(recordingUrl).match(/(RE[0-9a-f]+)/i);
+    const name = `voicemail-${sidMatch ? sidMatch[1] : "recording"}.mp3`;
+    return { filename: name, content: buf, contentType: "audio/mpeg" };
+  } catch (err) {
+    console.warn("[email] Voicemail audio fetch failed:", err.message);
+    return null;
+  }
+}
+
+function buildVoicemailEmail({ from, durationSeconds, recordingUrl, transcription, receivedAt }) {
+  const caller = String(from || "").trim() || "Unknown number";
+  const durNum = Number(durationSeconds);
+  const durText = Number.isFinite(durNum) && durNum > 0 ? `${durNum} second${durNum === 1 ? "" : "s"}` : "—";
+  const when = (() => {
+    const d = receivedAt ? new Date(receivedAt) : new Date();
+    if (Number.isNaN(d.getTime())) return "";
+    return d.toLocaleString("en-CA", { timeZone: "America/Toronto", dateStyle: "medium", timeStyle: "short" });
+  })();
+  const listenUrl = recordingUrl ? `${recordingUrl}.mp3` : "";
+  const transcript = String(transcription || "").trim();
+  const transcriptHtml = transcript
+    ? escapeHtml(transcript).replace(/\n/g, "<br>")
+    : "<em>No transcription available — Twilio couldn't transcribe this recording. Listen to the audio below.</em>";
+
+  const subject = `New voicemail from ${caller}`;
+
+  const html = `
+<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 560px; color: #1a1a1a;">
+  <h2 style="margin: 0 0 8px; font-size: 22px;">📞 New voicemail</h2>
+  <p style="margin: 0 0 18px; color: #555;">From <strong>${escapeHtml(caller)}</strong>${when ? ` · ${escapeHtml(when)}` : ""}</p>
+
+  <table style="border-collapse: collapse; margin-bottom: 18px;">
+    <tr><td style="padding: 4px 14px 4px 0; color: #777;">Caller</td><td style="padding: 4px 0;"><a href="tel:${escapeHtml(caller)}">${escapeHtml(caller)}</a></td></tr>
+    <tr><td style="padding: 4px 14px 4px 0; color: #777;">Duration</td><td style="padding: 4px 0;">${escapeHtml(durText)}</td></tr>
+    <tr><td style="padding: 4px 14px 4px 0; color: #777;">Received</td><td style="padding: 4px 0;">${escapeHtml(when || "—")}</td></tr>
+  </table>
+
+  <p style="margin: 0 0 6px;"><strong>Transcription</strong> <span style="color:#999; font-weight:400;">(best effort — verify against the audio)</span></p>
+  <blockquote style="margin: 0 0 18px; padding: 12px 16px; background: #f1f0e8; border-left: 3px solid #1f4f6e; border-radius: 4px; line-height: 1.5;">
+    ${transcriptHtml}
+  </blockquote>
+
+  ${listenUrl ? `<p style="margin: 24px 0 0;">
+    <a href="${escapeHtml(listenUrl)}" style="display: inline-block; padding: 10px 18px; background: #1f4f6e; color: white; text-decoration: none; border-radius: 6px; font-weight: 600;">▶ Listen to voicemail</a>
+  </p>` : ""}
+
+  <p style="margin: 24px 0 0; font-size: 12px; color: #999;">
+    Sent by the PJL Land Services voicemail handler. Calls forwarded from your Telus line when unanswered.
+  </p>
+</div>`.trim();
+
+  const textLines = [
+    `New voicemail from ${caller}`,
+    when ? `Received: ${when}` : "",
+    `Duration: ${durText}`,
+    "",
+    "Transcription (best effort):",
+    transcript || "(none — listen to the audio)",
+    "",
+    listenUrl ? `Listen: ${listenUrl}` : ""
+  ];
+
+  return { subject, html, text: textLines.filter(Boolean).join("\n") };
+}
+
+async function sendVoicemailEmail({ from, durationSeconds, recordingUrl, transcription, receivedAt } = {}) {
+  const transporter = getTransporter();
+  if (!transporter) {
+    console.warn("[email] GMAIL_USER / GMAIL_APP_PASSWORD not set — skipping voicemail email (recording still stored by Twilio).");
+    return { ok: false, skipped: true };
+  }
+
+  const to = process.env.NOTIFY_TO_EMAIL || process.env.GMAIL_USER;
+  const fromAddress = process.env.GMAIL_USER;
+  const { subject, html, text } = buildVoicemailEmail({ from, durationSeconds, recordingUrl, transcription, receivedAt });
+  const attachment = await fetchRecordingAttachment(recordingUrl);
+
+  try {
+    const info = await transporter.sendMail({
+      from: `"PJL Voicemail" <${fromAddress}>`,
+      to,
+      subject,
+      html,
+      text,
+      attachments: attachment ? [attachment] : []
+    });
+    console.log("[email] Sent voicemail email:", info.messageId, attachment ? "(with audio)" : "(link only)");
+    return { ok: true, messageId: info.messageId, attached: Boolean(attachment) };
+  } catch (error) {
+    console.error("[email] Failed to send voicemail email:", error.message);
+    return { ok: false, error: error.message };
+  }
+}
+
+module.exports = { sendNewLeadEmail, sendVoicemailEmail };

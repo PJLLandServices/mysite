@@ -36,8 +36,8 @@ const sharp = require("sharp");
   }
 })();
 
-const { sendNewLeadEmail } = require("./lib/notify-email");
-const { sendNewLeadSms, sendPortalMessageSms } = require("./lib/notify-sms");
+const { sendNewLeadEmail, sendVoicemailEmail } = require("./lib/notify-email");
+const { sendNewLeadSms, sendPortalMessageSms, sendVoicemailAlertSms } = require("./lib/notify-sms");
 const { notifyCustomer, eventForTransition, sendInvoiceToCustomer, sendPaymentReceipt, sendBookingCancellation, sendPortalMessageAlertEmail, sendPortalReplyToCustomer } = require("./lib/notify-customer");
 const { resolvePublicBaseUrl } = require("./lib/public-base-url");
 const { geocode, PJL_BASE } = require("./lib/geocode");
@@ -1125,6 +1125,92 @@ async function parseRequestBody(req, { maxBytes = 1_000_000 } = {}) {
     chunks.push(chunk);
   }
   return JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
+}
+
+// Twilio webhooks POST application/x-www-form-urlencoded, not JSON — so the
+// JSON parseRequestBody above would throw on them. This reads the raw body
+// and parses it into a plain object of the form fields. Used by the voice /
+// voicemail webhook routes.
+async function parseFormBody(req, { maxBytes = 1_000_000 } = {}) {
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of req) {
+    size += chunk.length;
+    if (size > maxBytes) throw new Error("Request body is too large.");
+    chunks.push(chunk);
+  }
+  const raw = Buffer.concat(chunks).toString("utf8");
+  const params = new URLSearchParams(raw);
+  const out = {};
+  for (const [k, v] of params) out[k] = v;
+  return out;
+}
+
+// Verify a Twilio request signature (X-Twilio-Signature). Twilio computes
+// HMAC-SHA1 over (the full request URL + every POST param appended in
+// alphabetical key order) keyed with the account Auth Token, then base64s
+// it. We rebuild the URL from resolvePublicBaseUrl() + pathname — NOT the
+// request Host header — because behind Cloudflare/Render the inbound Host is
+// the *.onrender.com origin, whereas Twilio signed against the public
+// webhook URL Patrick configured (https://www.pjllandservices.com/...).
+// Returns true on match. See:
+// https://www.twilio.com/docs/usage/security#validating-requests
+function verifyTwilioSignature(req, pathname, params) {
+  const token = process.env.TWILIO_AUTH_TOKEN;
+  const signature = req.headers["x-twilio-signature"];
+  if (!token || !signature) return false;
+  const fullUrl = `${resolvePublicBaseUrl()}${pathname}`;
+  let data = fullUrl;
+  for (const key of Object.keys(params).sort()) {
+    data += key + params[key];
+  }
+  const expected = crypto.createHmac("sha1", token).update(Buffer.from(data, "utf8")).digest("base64");
+  try {
+    const a = Buffer.from(signature);
+    const b = Buffer.from(expected);
+    return a.length === b.length && crypto.timingSafeEqual(a, b);
+  } catch {
+    return false;
+  }
+}
+
+// Gate for the Twilio voice webhooks. In production with an Auth Token set,
+// a valid signature is REQUIRED (these public routes fire SMS + email, so we
+// don't want them triggerable by anyone who guesses the path). Outside
+// production — local dev, curl smoke tests — we log and allow, so the
+// endpoints stay testable without forging signatures. Returns true if the
+// request should be allowed to proceed.
+function allowTwilioWebhook(req, pathname, params, label) {
+  const enforce = process.env.NODE_ENV === "production" && Boolean(process.env.TWILIO_AUTH_TOKEN);
+  if (!enforce) {
+    if (process.env.NODE_ENV === "production") {
+      console.warn(`[twilio-voice] ${label}: TWILIO_AUTH_TOKEN unset — signature NOT enforced.`);
+    }
+    return true;
+  }
+  const ok = verifyTwilioSignature(req, pathname, params);
+  if (!ok) console.warn(`[twilio-voice] ${label}: rejected — invalid or missing X-Twilio-Signature.`);
+  return ok;
+}
+
+// XML-escape text destined for a TwiML <Say> body. The greeting is a fixed
+// constant today, but escaping keeps the response well-formed if it ever
+// includes a caller-derived value.
+function escapeXml(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
+}
+
+function sendTwiml(res, status, xml) {
+  res.writeHead(status, {
+    "content-type": "text/xml; charset=utf-8",
+    "cache-control": "no-store"
+  });
+  res.end(`<?xml version="1.0" encoding="UTF-8"?>\n${xml}`);
 }
 
 // ----- Photo handling ----------------------------------------------------
@@ -2706,6 +2792,98 @@ async function handleApi(req, res, pathname) {
   if (resetHandled !== false) return;
   const portalLoginHandled = await handlePortalLoginApi(req, res, pathname);
   if (portalLoginHandled !== false) return;
+
+  // ===================================================================
+  // Twilio call-forward voicemail (additive — does NOT touch the SMS
+  // Messaging webhook). Telus stays Patrick's customer-facing number;
+  // unanswered calls forward to the existing Twilio number, whose
+  // "A call comes in" Voice webhook points at /api/twilio-voice-incoming.
+  // That plays a TTS greeting, records a voicemail, then Twilio fires two
+  // async callbacks back here:
+  //   • /api/twilio-voicemail-recorded     → SMS alert (fast)
+  //   • /api/twilio-voicemail-transcription → email w/ transcript + audio
+  // All three are public (Twilio servers, not browsers) and gated by the
+  // X-Twilio-Signature check in allowTwilioWebhook() in production.
+  // ===================================================================
+
+  // Greeting copy is fixed (Patrick-approved). Polly Neural via Twilio Say.
+  const VOICEMAIL_GREETING =
+    "Hello, and thank you for calling PJL Land Services. We cannot answer the phone at the moment. " +
+    "Please leave your name, number, and brief reason for your call and we will return your call shortly. " +
+    "Alternatively please feel free to send a text message for fastest response. Thank you for calling.";
+  const VOICEMAIL_VOICE = "Polly.Matthew-Neural";
+
+  // 1) Incoming call → greeting + record. Twilio expects TwiML back.
+  if (req.method === "POST" && pathname === "/api/twilio-voice-incoming") {
+    let params = {};
+    try { params = await parseFormBody(req); } catch { params = {}; }
+    if (!allowTwilioWebhook(req, pathname, params, "voice-incoming")) {
+      return sendJson(res, 403, { ok: false, errors: ["Invalid Twilio signature."] });
+    }
+    const base = resolvePublicBaseUrl();
+    const recordedCb = `${base}/api/twilio-voicemail-recorded`;
+    const transcribeCb = `${base}/api/twilio-voicemail-transcription`;
+    const xml =
+      `<Response>` +
+        `<Say voice="${VOICEMAIL_VOICE}">${escapeXml(VOICEMAIL_GREETING)}</Say>` +
+        `<Record maxLength="180" playBeep="true" transcribe="true"` +
+          ` transcribeCallback="${escapeXml(transcribeCb)}"` +
+          ` action="${escapeXml(recordedCb)}" method="POST" />` +
+        // Reached only if the caller hangs up before/at the beep with no
+        // recording — Twilio falls through to the verb after <Record>.
+        `<Say voice="${VOICEMAIL_VOICE}">We did not receive a message. Goodbye.</Say>` +
+        `<Hangup/>` +
+      `</Response>`;
+    return sendTwiml(res, 200, xml);
+  }
+
+  // 2) Recording finished → SMS Patrick immediately. Twilio reads the TwiML
+  //    we return as what to do next on the (still-live) call, so we sign off.
+  if (req.method === "POST" && pathname === "/api/twilio-voicemail-recorded") {
+    let params = {};
+    try { params = await parseFormBody(req); } catch { params = {}; }
+    if (!allowTwilioWebhook(req, pathname, params, "voicemail-recorded")) {
+      return sendJson(res, 403, { ok: false, errors: ["Invalid Twilio signature."] });
+    }
+    // Fire-and-forget the SMS — never block returning TwiML on Twilio's
+    // outbound-message API latency, and never 500 the webhook if it fails.
+    sendVoicemailAlertSms({
+      from: params.From,
+      durationSeconds: params.RecordingDuration,
+      recordingUrl: params.RecordingUrl
+    }).catch((err) => console.error("[twilio-voice] voicemail SMS failed:", err?.message || err));
+
+    const xml =
+      `<Response>` +
+        `<Say voice="${VOICEMAIL_VOICE}">Thank you. We will get back to you shortly. Goodbye.</Say>` +
+        `<Hangup/>` +
+      `</Response>`;
+    return sendTwiml(res, 200, xml);
+  }
+
+  // 3) Transcription ready (async, ~tens of seconds later) → email Patrick
+  //    the transcript + recording link + audio attachment. Twilio ignores
+  //    the response body for a transcribeCallback, so a bare 200 is fine.
+  if (req.method === "POST" && pathname === "/api/twilio-voicemail-transcription") {
+    let params = {};
+    try { params = await parseFormBody(req); } catch { params = {}; }
+    if (!allowTwilioWebhook(req, pathname, params, "voicemail-transcription")) {
+      return sendJson(res, 403, { ok: false, errors: ["Invalid Twilio signature."] });
+    }
+    // TranscriptionStatus is "completed" or "failed". On failure Twilio
+    // sends no text — we still email so Patrick gets the audio link.
+    sendVoicemailEmail({
+      from: params.From,
+      durationSeconds: params.RecordingDuration,
+      recordingUrl: params.RecordingUrl,
+      transcription: params.TranscriptionStatus === "failed" ? "" : params.TranscriptionText,
+      receivedAt: new Date().toISOString()
+    }).catch((err) => console.error("[twilio-voice] voicemail email failed:", err?.message || err));
+
+    res.writeHead(204, { "cache-control": "no-store" });
+    res.end();
+    return;
+  }
 
   if (req.method === "POST" && pathname === "/api/quotes") {
     try {
