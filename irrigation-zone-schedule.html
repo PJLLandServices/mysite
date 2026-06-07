@@ -128,7 +128,10 @@ body.sheet-open{overflow:hidden;}
   display:grid;grid-template-columns:auto 1fr;gap:24px;align-items:center;
   padding-bottom:18px;border-bottom:3px solid var(--green);
 }
-.lh-logo img{display:block;height:64px;width:auto;}
+.lh-logo img{
+  display:block;height:96px;width:auto;
+  -webkit-print-color-adjust:exact;print-color-adjust:exact;
+}
 .lh-contact{font-size:12px;line-height:1.55;color:var(--text-mid);text-align:right;}
 .lh-contact .editable{display:inline-block;min-width:30px;}
 .lh-contact .lh-row{display:block;}
@@ -1132,7 +1135,9 @@ body.sheet-open{overflow:hidden;}
   <!-- Letterhead -->
   <header class="letterhead">
     <div class="lh-logo">
-      <img src="/logo.svg" alt="PJL Land Services">
+      <!-- Dark (PJL green #1B4D2E) variant for the white paper background.
+           Same lockup the customer-facing invoice + portal use. -->
+      <img src="/logo-dark.svg" alt="PJL Land Services">
     </div>
     <div class="lh-contact" id="lhContact">
       <span class="lh-row"><strong>PJL Land Services</strong></span>
