@@ -2400,3 +2400,64 @@ body[data-locked="true"] .wo-zone-location {
   line-height: 1.45;
 }
 
+/* Visit dates editor — admin override to backdate scheduled / on-site /
+   completed timestamps when paperwork is filled in after the fact.
+   Collapsed by default so it doesn't crowd the normal flow. */
+.wo-dates-editor {
+  margin: 12px 0 0;
+  border: 1px solid #E5E5DD;
+  border-radius: 8px;
+  background: #FAFAF5;
+}
+.wo-dates-editor > summary {
+  cursor: pointer;
+  padding: 12px 16px;
+  font-size: 14px;
+  font-weight: 600;
+  color: #1B4D2E;
+  list-style: none;
+  user-select: none;
+}
+.wo-dates-editor > summary::-webkit-details-marker { display: none; }
+.wo-dates-editor[open] > summary { border-bottom: 1px solid #E5E5DD; }
+.wo-dates-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 14px;
+  padding: 16px;
+}
+.wo-dates-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #4A4A42;
+}
+.wo-dates-grid input[type="datetime-local"] {
+  padding: 9px 11px;
+  border: 1px solid #CFCFC6;
+  border-radius: 6px;
+  font-size: 14px;
+  font-family: inherit;
+  background: #fff;
+}
+.wo-dates-actions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 0 16px 14px;
+}
+.wo-dates-status {
+  font-size: 13px;
+  font-weight: 600;
+  color: #1B4D2E;
+}
+.wo-dates-help {
+  margin: 0;
+  padding: 0 16px 16px;
+  font-size: 12px;
+  color: #777;
+  line-height: 1.5;
+}
+

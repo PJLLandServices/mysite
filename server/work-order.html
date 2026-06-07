@@ -95,6 +95,35 @@
       </div>
     </header>
 
+    <!-- Visit dates editor (admin) — backdate the scheduled / on-site /
+         completed timestamps when paperwork is filled in after the fact.
+         These fields aren't scope-protected, so they stay editable even
+         after the WO is signed. Saving here PATCHes ONLY the date fields,
+         so it never flips status and never fires the completion cascade
+         (no customer email / invoice). -->
+    <details class="wo-dates-editor" id="woDatesEditor">
+      <summary>📅 Edit visit dates</summary>
+      <div class="wo-dates-grid">
+        <label for="woScheduledForInput">
+          <span>Scheduled</span>
+          <input type="datetime-local" id="woScheduledForInput">
+        </label>
+        <label for="woArrivedAtInput">
+          <span>On site (arrived)</span>
+          <input type="datetime-local" id="woArrivedAtInput">
+        </label>
+        <label for="woDepartedAtInput">
+          <span>Completed (departed)</span>
+          <input type="datetime-local" id="woDepartedAtInput">
+        </label>
+      </div>
+      <div class="wo-dates-actions">
+        <button type="button" class="pjl-btn pjl-btn-primary" id="woDatesSaveBtn">Save dates</button>
+        <span class="wo-dates-status" id="woDatesStatus" role="status"></span>
+      </div>
+      <p class="wo-dates-help">Sets the real visit times. Clear a field to leave it unset. Editing dates here does not send any customer email or generate an invoice.</p>
+    </details>
+
     <!-- Booking activity — populated from bookings.history. Shows the
          audit trail for reschedules and other booking-level updates so
          Patrick can see the change log without leaving this page. -->

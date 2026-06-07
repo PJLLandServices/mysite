@@ -427,6 +427,80 @@ function getWorkOrderId() {
   return parts[2] ? decodeURIComponent(parts[2]) : "";
 }
 
+// ---- Visit-date editing -------------------------------------------
+// Convert a stored ISO timestamp to the value a <input type="datetime-local">
+// expects (local-time "YYYY-MM-DDTHH:mm"), and back. Empty input → null so
+// the field can be cleared. Used by the "Edit visit dates" block, which lets
+// Patrick backdate scheduledFor / arrivedAt / departedAt after the fact.
+function isoToLocalInput(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+function localInputToIso(value) {
+  if (!value) return null;
+  const d = new Date(value); // parsed as local time
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toISOString();
+}
+function populateDateEditor(wo) {
+  const sched = document.getElementById("woScheduledForInput");
+  const arr = document.getElementById("woArrivedAtInput");
+  const dep = document.getElementById("woDepartedAtInput");
+  if (sched) sched.value = isoToLocalInput(wo.scheduledFor);
+  if (arr) arr.value = isoToLocalInput(wo.arrivedAt);
+  if (dep) dep.value = isoToLocalInput(wo.departedAt);
+}
+document.getElementById("woDatesSaveBtn")?.addEventListener("click", async () => {
+  const id = getWorkOrderId();
+  if (!id) return;
+  const btn = document.getElementById("woDatesSaveBtn");
+  const statusEl = document.getElementById("woDatesStatus");
+  const payload = {
+    scheduledFor: localInputToIso(document.getElementById("woScheduledForInput")?.value),
+    arrivedAt: localInputToIso(document.getElementById("woArrivedAtInput")?.value),
+    departedAt: localInputToIso(document.getElementById("woDepartedAtInput")?.value)
+  };
+  // Guard: departed must not precede arrived.
+  if (payload.arrivedAt && payload.departedAt && new Date(payload.departedAt) < new Date(payload.arrivedAt)) {
+    if (statusEl) statusEl.textContent = "Completed time can't be before on-site time.";
+    return;
+  }
+  if (btn) btn.disabled = true;
+  if (statusEl) statusEl.textContent = "Saving…";
+  try {
+    const response = await fetch(`/api/work-orders/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data.ok) throw new Error((data.errors || ["Couldn't save dates."]).join(" "));
+    if (data.workOrder) {
+      loadedWorkOrder = data.workOrder;
+      populateForm(data.workOrder);
+      // Refresh the "scheduled …" line in the hero without clobbering the
+      // property code / back-link, which need property + lead context.
+      const meta = document.getElementById("woMeta");
+      if (meta) {
+        const parts = [];
+        if (data.workOrder.address) parts.push(data.workOrder.address);
+        if (data.workOrder.scheduledFor) parts.push(`scheduled ${formatDateTime(data.workOrder.scheduledFor)}`);
+        parts.push(`updated ${formatDateTime(data.workOrder.updatedAt)}`);
+        meta.textContent = parts.join(" · ");
+      }
+    }
+    if (statusEl) statusEl.textContent = "Dates saved";
+    setTimeout(() => { if (statusEl) statusEl.textContent = ""; }, 2000);
+  } catch (err) {
+    if (statusEl) statusEl.textContent = err.message || "Couldn't save dates.";
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+});
+
 // ---- Zone row rendering -------------------------------------------
 
 function badgeListHtml(values, lookup) {
@@ -1168,6 +1242,7 @@ async function postIntakeDecisionDesktop(body) {
 function populateForm(wo) {
   woTechNotes.value = wo.techNotes || "";
   if (woCustomerNotes) woCustomerNotes.value = wo.customerNotes || "";
+  populateDateEditor(wo);
   renderZones(wo.zones || []);
   renderDiagnosis(wo);
   renderIntakeGuarantee(wo);
