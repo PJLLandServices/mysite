@@ -2857,6 +2857,13 @@ async function handleApi(req, res, pathname) {
     "Please leave your name, number, and brief reason for your call and we will return your call shortly. " +
     "Alternatively please feel free to send a text message for fastest response. Thank you for calling.";
   const VOICEMAIL_VOICE = "Polly.Matthew-Neural";
+  // Speaking rate for the greeting. SSML <prosody rate> — "90%" = 10% slower
+  // than default, a calmer/clearer pace than Polly's stock delivery. Twilio's
+  // <Say> renders SSML for Amazon Polly voices. Drop toward "85%" for slower,
+  // raise toward "100%" for default.
+  const VOICEMAIL_RATE = "90%";
+  const say = (text) =>
+    `<Say voice="${VOICEMAIL_VOICE}"><prosody rate="${VOICEMAIL_RATE}">${escapeXml(text)}</prosody></Say>`;
 
   // 1) Incoming call → greeting + record. Twilio expects TwiML back.
   if (req.method === "POST" && pathname === "/api/twilio-voice-incoming") {
@@ -2870,13 +2877,13 @@ async function handleApi(req, res, pathname) {
     const transcribeCb = `${base}/api/twilio-voicemail-transcription`;
     const xml =
       `<Response>` +
-        `<Say voice="${VOICEMAIL_VOICE}">${escapeXml(VOICEMAIL_GREETING)}</Say>` +
+        say(VOICEMAIL_GREETING) +
         `<Record maxLength="180" playBeep="true" transcribe="true"` +
           ` transcribeCallback="${escapeXml(transcribeCb)}"` +
           ` action="${escapeXml(recordedCb)}" method="POST" />` +
         // Reached only if the caller hangs up before/at the beep with no
         // recording — Twilio falls through to the verb after <Record>.
-        `<Say voice="${VOICEMAIL_VOICE}">We did not receive a message. Goodbye.</Say>` +
+        say("We did not receive a message. Goodbye.") +
         `<Hangup/>` +
       `</Response>`;
     return sendTwiml(res, 200, xml);
@@ -2900,7 +2907,7 @@ async function handleApi(req, res, pathname) {
 
     const xml =
       `<Response>` +
-        `<Say voice="${VOICEMAIL_VOICE}">Thank you. We will get back to you shortly. Goodbye.</Say>` +
+        say("Thank you. We will get back to you shortly. Goodbye.") +
         `<Hangup/>` +
       `</Response>`;
     return sendTwiml(res, 200, xml);
