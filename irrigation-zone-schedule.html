@@ -1085,15 +1085,19 @@ body.sheet-open{overflow:hidden;}
   /* The Pgm column (col 2) is display:none in print, which shifts every later
      cell one colgroup slot to the left (table-layout:fixed maps widths by
      position). So in print the cells map to cols 1-7 as: #, color, desc, type,
-     status, run, days — re-declare those widths to match. (col 8/9 unused; the
-     last/delete column being hidden doesn't shift anything.) */
+     status, run, days — re-declare those widths (sum = 100%) to match. Cols
+     8 & 9 hold NO cells in print, so collapse them to 0 — otherwise their
+     leftover widths reserve ~29% on the right and the table only fills ~70%
+     of the page. */
   .zone-table colgroup col:nth-child(1){width:6%;}    /* Zone # */
   .zone-table colgroup col:nth-child(2){width:5%;}    /* Color swatch */
-  .zone-table colgroup col:nth-child(3){width:32%;}   /* Zone Description */
+  .zone-table colgroup col:nth-child(3){width:33%;}   /* Zone Description */
   .zone-table colgroup col:nth-child(4){width:14%;}   /* Type */
-  .zone-table colgroup col:nth-child(5){width:10%;}   /* Status */
-  .zone-table colgroup col:nth-child(6){width:8%;}    /* Run Time */
-  .zone-table colgroup col:nth-child(7){width:25%;}   /* Days to Water */
+  .zone-table colgroup col:nth-child(5){width:11%;}   /* Status */
+  .zone-table colgroup col:nth-child(6){width:9%;}    /* Run Time */
+  .zone-table colgroup col:nth-child(7){width:22%;}   /* Days to Water */
+  .zone-table colgroup col:nth-child(8),
+  .zone-table colgroup col:nth-child(9){width:0;}     /* unused in print */
   .zone-table th{
     padding:5px 5px;font-size:8.5pt;
     background:var(--green) !important;color:#fff !important;
