@@ -971,6 +971,8 @@ body.sheet-open{overflow:hidden;}
 /* Print-flat shadow elements */
 .sched-print{display:none;}
 .cname-print{display:none;}
+/* Per-program print tables are built in prepPrint and shown only in print. */
+.print-programs{display:none;}
 
 /* ============ Print rules — polished trades document ============ */
 @page{
@@ -991,8 +993,12 @@ body.sheet-open{overflow:hidden;}
   .persist-bar,
   .zone-list,
   .zsheet,
+  .zone-section-head,
   .zone-del-col{display:none !important;}
-  .zone-table-wrap{display:block !important;}
+  /* In print the on-screen editor table is hidden; the per-program tables
+     (built in prepPrint) are what print. */
+  .zone-table-wrap{display:none !important;}
+  .print-programs{display:block;}
 
   /* Page container resets to full bleed inside the @page margins */
   .sheet-wrap{padding:0;}
@@ -1167,28 +1173,37 @@ body.sheet-open{overflow:hidden;}
     margin-right:6px;font-style:normal;
   }
 
-  /* ===== Program header rows (injected in prepPrint) ===== */
-  .zone-table tr.zr-pgm-head{
-    page-break-inside:avoid;break-inside:avoid;
-    page-break-after:avoid;break-after:avoid;
-    /* Start each program on its own page — clean "one table per program". */
-    page-break-before:always;break-before:page;
-  }
-  /* …except the first program, which flows from page 1 under the site plan. */
-  .zone-table tr.zr-pgm-head--first{
-    page-break-before:auto;break-before:auto;
-  }
-  .zone-table tr.zr-pgm-head td{
-    background:var(--green) !important;color:#fff !important;
-    font-family:'Barlow Condensed',sans-serif;font-weight:700;
-    font-size:9pt;letter-spacing:0.10em;text-transform:uppercase;
-    padding:5px 10px;
+  /* ===== Per-program print tables ===== */
+  .print-program-table{width:100%;border-collapse:collapse;margin:0;}
+  /* Each program starts on its own page (except the first, which flows from
+     page 1 under the site plan + Programs summary). */
+  .print-program-table.print-break{page-break-before:always;break-before:page;}
+  /* The whole <thead> (brand header + column headers) repeats on every page
+     and never splits from the first rows. */
+  .print-program-table thead{display:table-header-group;}
+  .print-brandhead{page-break-inside:avoid;break-inside:avoid;page-break-after:avoid;break-after:avoid;}
+  .print-brandhead td{
+    background:#fff !important;
+    border:0 !important;
+    border-left:6px solid var(--green) !important;   /* aligns the left spine */
+    border-bottom:2.5px solid var(--green) !important;
+    padding:2px 0 7px 12px !important;
     -webkit-print-color-adjust:exact;print-color-adjust:exact;
   }
-  .zone-table tr.zr-pgm-head .zr-pgm-time{
-    float:right;font-weight:600;font-size:8.5pt;
-    text-transform:none;letter-spacing:0.02em;
-    font-family:'DM Sans',sans-serif;opacity:0.95;
+  .brandhead-inner{display:flex;align-items:center;gap:14px;}
+  .brandhead-logo{height:42px;width:auto;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
+  .brandhead-text{display:flex;flex-direction:column;gap:2px;min-width:0;}
+  .brandhead-title{
+    font-family:'Barlow Condensed',sans-serif;font-weight:800;
+    font-size:17pt;line-height:1;letter-spacing:0.01em;text-transform:uppercase;
+    color:var(--green);
+  }
+  .brandhead-sub{font-size:8.5pt;color:var(--text-mid);line-height:1.3;}
+  /* Straight left spine: the column-header cells get the same 6px left border
+     as the zone rows' colored tabs, so the tabs no longer protrude past a 1px
+     header border (border-collapse was centering the thick border). */
+  .print-program-table thead tr:not(.print-brandhead) th:first-child{
+    border-left:6px solid var(--green) !important;
   }
 
   /* Hide screen-only legend; keep the printed confirmation note */
@@ -2782,31 +2797,19 @@ body.sheet-open{overflow:hidden;}
   var PRINT_COLSPAN = 8;
 
   function prepPrint(){
-    // Multi-program print: rebuild tbody as a sequence of program
-    // sections. Each zone appears in EVERY program it belongs to. Zones
-    // with no programs go in an "Unassigned" tail section.
+    // Per-program print: build ONE self-contained <table> per program inside
+    // a print-only wrapper (the on-screen editor table is hidden in print).
+    // Each table's <thead> carries a branded header — PJL logo + "Program X"
+    // + that program's start/zones/run-time stats — plus the column headers.
+    // Because a <thead> repeats on every printed page, the branding + program
+    // title land on every page of that program (even if it spans pages).
+    // Each table page-breaks onto its own page (except the first).
     //
-    // Strategy:
-    //   1. Snapshot existing rows so restorePrint can put them back.
-    //   2. Hide all originals (set display:none, marked with data-print-hidden).
-    //   3. Build a fresh sequence: for each program K with assigned zones,
-    //      emit a header row + clones of those zones (sorted by zoneNum)
-    //      + each zone's notes sub-row if any. Then an "Unassigned"
-    //      section if applicable.
-    //   4. Set the PDF filename.
-    //
-    // Idempotency: the Print button calls prepPrint() AND window.print()
-    // fires a `beforeprint` → prepPrint() a second time. Without a reset the
-    // two runs accumulate (orphaned program headers + notes rows). Clear any
-    // prior print scaffolding first so a double-invocation is a no-op-then-
-    // rebuild rather than a pile-up.
+    // Idempotency: the Print button calls prepPrint() AND window.print() fires
+    // `beforeprint` → prepPrint() again. restorePrint() first so a double
+    // invocation rebuilds cleanly instead of stacking duplicates.
     restorePrint();
     var originalRows = Array.prototype.slice.call(zoneBody.querySelectorAll('tr.zr-main'));
-    // Hide all originals
-    originalRows.forEach(function(tr){
-      tr.dataset.printHidden = '1';
-      tr.style.display = 'none';
-    });
 
     function hasContent(z){
       return (z.location || '').trim() ||
@@ -2829,7 +2832,6 @@ body.sheet-open{overflow:hidden;}
       if (!pgms.length){ unassigned.push(z); }
       else { pgms.forEach(function(K){ assignedByPgm[K].push(z); }); }
     });
-    // Sort each program's zones by zoneNum ascending (stable)
     function sortByNum(a, b){
       var an = parseInt(a.zoneNum, 10); if (!Number.isFinite(an)) an = 9999;
       var bn = parseInt(b.zoneNum, 10); if (!Number.isFinite(bn)) bn = 9999;
@@ -2838,76 +2840,103 @@ body.sheet-open{overflow:hidden;}
     PROGRAM_KEYS.forEach(function(K){ assignedByPgm[K].sort(sortByNum); });
     unassigned.sort(sortByNum);
 
-    // Each program prints as its own table starting on a fresh page (a new
-    // program never starts stranded at the bottom of the prior page). The
-    // first section with content stays put so it flows from page 1 after the
-    // site plan; every later one page-breaks before its banner.
-    var firstSection = true;
-    function injectSection(headerText, headerSubtitle, list){
-      if (!list.length) return;
-      var header = document.createElement('tr');
-      header.className = 'zr-pgm-head' + (firstSection ? ' zr-pgm-head--first' : '');
-      firstSection = false;
-      header.dataset.injected = '1';
-      var hd = document.createElement('td');
-      hd.colSpan = PRINT_COLSPAN;
-      hd.textContent = headerText;
-      if (headerSubtitle){
-        var sub = document.createElement('span');
-        sub.className = 'zr-pgm-time';
-        sub.textContent = headerSubtitle;
-        hd.appendChild(sub);
-      }
-      header.appendChild(hd);
-      zoneBody.appendChild(header);
+    var projName = (docProject.textContent || '').trim();
+    if (!projName || projName === 'Customer / property address') projName = '';
+    var colHeaderRow = document.querySelector('#zoneTable thead tr');
 
+    var wrap = document.createElement('div');
+    wrap.className = 'print-programs';
+    wrap.dataset.injected = '1';
+
+    var firstBlock = true;
+    function addProgramTable(titleText, subtitle, list){
+      if (!list.length) return;
+      var table = document.createElement('table');
+      table.className = 'zone-table print-program-table' + (firstBlock ? '' : ' print-break');
+      firstBlock = false;
+
+      var cg = document.createElement('colgroup');
+      for (var c = 0; c < 9; c++) cg.appendChild(document.createElement('col'));
+      table.appendChild(cg);
+
+      var thead = document.createElement('thead');
+
+      // Branded header row (logo + program title + stats) — repeats per page.
+      var brTr = document.createElement('tr');
+      brTr.className = 'print-brandhead';
+      var brTd = document.createElement('td');
+      brTd.colSpan = 9;
+      var inner = document.createElement('div');
+      inner.className = 'brandhead-inner';
+      var img = document.createElement('img');
+      img.className = 'brandhead-logo';
+      img.src = '/logo-dark.svg';
+      img.alt = 'PJL Land Services';
+      var txt = document.createElement('div');
+      txt.className = 'brandhead-text';
+      var ttl = document.createElement('div');
+      ttl.className = 'brandhead-title';
+      ttl.textContent = titleText;
+      var sub = document.createElement('div');
+      sub.className = 'brandhead-sub';
+      sub.textContent = (projName ? projName + '  ·  ' : '') + subtitle;
+      txt.appendChild(ttl);
+      txt.appendChild(sub);
+      inner.appendChild(img);
+      inner.appendChild(txt);
+      brTd.appendChild(inner);
+      brTr.appendChild(brTd);
+      thead.appendChild(brTr);
+
+      // Column headers (clone the on-screen header row).
+      thead.appendChild(colHeaderRow.cloneNode(true));
+      table.appendChild(thead);
+
+      var tbody = document.createElement('tbody');
       list.forEach(function(z, i){
         var idx = zoneIdxFor(z);
         var srcTr = originalRows[idx];
         if (!srcTr) return;
         var clone = srcTr.cloneNode(true);
         clone.classList.add('zr-print-clone');
-        // Re-stripe by position within THIS section so zebra alternates
-        // cleanly regardless of the original zone order.
         clone.classList.remove('zr-band-alt');
         if (i % 2) clone.classList.add('zr-band-alt');
-        clone.dataset.injected = '1';
-        // cloneNode(deep) copies inline styles + data-* attrs from the
-        // hidden original — undo both so the clone actually renders.
         clone.style.display = '';
         delete clone.dataset.printHidden;
-        // Color tab: paint the row's left edge with the zone color so each
-        // printed row visually ties back to its colored region on the map.
+        // Color tab: left edge painted in the zone's color, tying the row to
+        // its colored region on the map.
         var hex = (COLOR_BY_KEY[z.color] || COLORS[0]).hex;
         var firstCell = clone.querySelector('td');
         if (firstCell && hex && hex !== 'transparent'){
           firstCell.style.borderLeft = '6px solid ' + hex;
         }
-        zoneBody.appendChild(clone);
-        // Notes sub-row — only for zones Patrick opted into (showNote) AND
-        // actually typed something. AI-detected text never prints uninvited.
+        tbody.appendChild(clone);
+        // Notes sub-row — only when Patrick opted in (showNote) + typed text.
         var notesText = (z.showNote && z.notes) ? z.notes.trim() : '';
         if (notesText){
           var nsub = document.createElement('tr');
           nsub.className = 'zr-notes';
-          nsub.dataset.injected = '1';
           var ntd = document.createElement('td');
-          ntd.colSpan = PRINT_COLSPAN;
+          ntd.colSpan = 9;
           var labelSpan = document.createElement('span');
           labelSpan.className = 'zr-notes-label';
           labelSpan.textContent = 'Notes:';
           ntd.appendChild(labelSpan);
           ntd.appendChild(document.createTextNode(' ' + notesText));
           nsub.appendChild(ntd);
-          zoneBody.appendChild(nsub);
+          tbody.appendChild(nsub);
         }
       });
+      table.appendChild(tbody);
+      wrap.appendChild(table);
     }
 
     PROGRAM_KEYS.forEach(function(K){
-      injectSection('Program ' + K, programBannerSubtitle(K, assignedByPgm[K]), assignedByPgm[K]);
+      addProgramTable('Program ' + K, programBannerSubtitle(K, assignedByPgm[K]), assignedByPgm[K]);
     });
-    injectSection('Unassigned', unassigned.length + ' zone' + (unassigned.length === 1 ? '' : 's') + ' · not on any program', unassigned);
+    addProgramTable('Unassigned', unassigned.length + ' zone' + (unassigned.length === 1 ? '' : 's') + ' · not on any program', unassigned);
+
+    document.querySelector('.zone-section').appendChild(wrap);
 
     // PDF filename — YYYY-MM-DD - Project - PJL Land Services Zone Schedule
     originalTitle = document.title;
@@ -2923,19 +2952,15 @@ body.sheet-open{overflow:hidden;}
   }
 
   function restorePrint(){
-    // Remove injected sections: program headers, cloned zone rows,
-    // and per-zone notes sub-rows.
-    zoneBody.querySelectorAll('[data-injected="1"]').forEach(function(tr){ tr.remove(); });
-    // Un-hide originals
-    zoneBody.querySelectorAll('tr.zr-main[data-print-hidden="1"]').forEach(function(tr){
+    // Remove the print-only per-program tables wrapper.
+    document.querySelectorAll('.print-programs[data-injected="1"]').forEach(function(el){ el.remove(); });
+    // Safety belt: unhide any rows a legacy prepPrint may have hidden.
+    zoneBody.querySelectorAll('tr.zr-main[data-print-hidden="1"], tr.zr-main[data-print-skip="1"]').forEach(function(tr){
       tr.style.display = '';
       delete tr.dataset.printHidden;
-    });
-    // Legacy printSkip flag from older prepPrint (safety belt)
-    zoneBody.querySelectorAll('tr.zr-main[data-print-skip="1"]').forEach(function(tr){
-      tr.style.display = '';
       delete tr.dataset.printSkip;
     });
+    zoneBody.querySelectorAll('[data-injected="1"]').forEach(function(el){ el.remove(); });
     if (originalTitle !== null){
       document.title = originalTitle;
       originalTitle = null;
