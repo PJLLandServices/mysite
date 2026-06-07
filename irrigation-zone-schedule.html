@@ -129,7 +129,7 @@ body.sheet-open{overflow:hidden;}
   padding-bottom:18px;border-bottom:3px solid var(--green);
 }
 .lh-logo img{
-  display:block;height:96px;width:auto;
+  display:block;height:132px;width:auto;
   -webkit-print-color-adjust:exact;print-color-adjust:exact;
 }
 .lh-contact{font-size:12px;line-height:1.55;color:var(--text-mid);text-align:right;}
@@ -138,7 +138,7 @@ body.sheet-open{overflow:hidden;}
 .lh-contact strong{color:var(--text);font-weight:600;}
 @media (max-width:768px){
   .letterhead{grid-template-columns:1fr;gap:10px;}
-  .lh-logo img{height:46px;}
+  .lh-logo img{height:78px;}
   .lh-contact{text-align:left;font-size:11px;}
 }
 
@@ -254,6 +254,16 @@ body.sheet-open{overflow:hidden;}
 .pgm-time-add:hover{border-color:var(--green);background:var(--green-tint);}
 /* Print mirror lives in DOM but only shows in @media print */
 .pgm-line-print{display:none;}
+/* Live run-time total under each program's start-time chips. */
+.pgm-line-total{
+  grid-column:2;
+  margin-top:5px;
+  font-size:11.5px;font-weight:600;letter-spacing:0.01em;
+  color:var(--green-mid);
+  display:flex;align-items:center;gap:6px;
+}
+.pgm-line-total::before{content:'\23F1';font-size:12px;line-height:1;opacity:0.85;}
+.pgm-line-total:empty{display:none;}
 @media (max-width:768px){
   .pgm-row{padding:12px;}
   .pgm-row-hint{display:none;}
@@ -452,7 +462,11 @@ body.sheet-open{overflow:hidden;}
   padding:9px 8px;border:1px solid var(--border);vertical-align:middle;
   background:var(--paper);
 }
-.zone-table tbody tr.zr-main:nth-of-type(odd) td{background:var(--cream);}
+/* Zebra is applied by an explicit .zr-band-alt class (set per zone index),
+   not :nth-of-type — the editable note row interleaves with the main rows, so
+   nth-of-type would land every zone on the same parity. A zone + its note row
+   share the band so they read as one unit. */
+.zone-table tbody tr.zr-band-alt td{background:var(--cream);}
 .zone-table tbody tr.zr-main:hover td{background:var(--green-tint);}
 
 /* Column widths — apply to both screen and print. At wide desktop
@@ -466,8 +480,8 @@ body.sheet-open{overflow:hidden;}
 .zone-table colgroup col:nth-child(5){width:13%;}    /* Type — fits 3 pills inline */
 .zone-table colgroup col:nth-child(6){width:8%;}     /* Status */
 .zone-table colgroup col:nth-child(7){width:7%;}     /* Run Time */
-.zone-table colgroup col:nth-child(8){width:26%;}    /* Days to Water */
-.zone-table colgroup col:nth-child(9){width:3%;}     /* delete */
+.zone-table colgroup col:nth-child(8){width:24%;}    /* Days to Water */
+.zone-table colgroup col:nth-child(9){width:5%;}     /* actions: note + delete */
 
 /* Cell inputs */
 .zone-table input[type=text],
@@ -615,13 +629,16 @@ body.sheet-open{overflow:hidden;}
   padding:2px 4px;border-radius:4px;text-align:center;
 }
 
-/* Per-row delete */
-.row-del{
+/* Per-row actions: ✎ note toggle + ✕ delete, inline in the last column. */
+.zone-del-col{white-space:nowrap;text-align:center;}
+.row-note,.row-del{
   background:transparent;border:0;cursor:pointer;
-  color:var(--text-muted);font-size:16px;line-height:1;
-  padding:4px 6px;border-radius:4px;
-  width:100%;
+  font-size:15px;line-height:1;
+  padding:4px 4px;border-radius:4px;
+  color:var(--text-muted);
 }
+.row-note:hover{color:var(--green);background:var(--green-tint);}
+.row-note.is-on{color:var(--green);}                 /* a note exists/open */
 .row-del:hover{color:var(--red);background:rgba(192,58,44,0.08);}
 
 /* Notes sub-row — printed beneath a zone whose notes are non-empty.
@@ -637,6 +654,38 @@ body.sheet-open{overflow:hidden;}
   font-style:normal;font-weight:700;letter-spacing:0.04em;
   color:var(--green);font-size:10px;text-transform:uppercase;
   margin-right:6px;
+}
+
+/* Opt-in editable note line under a zone (desktop screen only — hidden in
+   print, which injects its own flattened notes sub-row). Hidden until the
+   zone's ✎ button opens it, so the default table stays clean. */
+.zone-table tr.zr-noterow{display:none;}
+.zone-table tr.zr-noterow.is-open{display:table-row;}
+.zone-table tr.zr-noterow td{
+  border-top:0;
+  padding:0;            /* background inherits the zone's zebra band */
+}
+.zr-noterow-cell{
+  display:flex;align-items:center;gap:8px;
+  padding:3px 12px 6px 16px;
+}
+.zr-noterow-label{
+  flex:0 0 auto;
+  font-size:9.5px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;
+  color:var(--green);
+}
+.zr-noterow-label::before{content:'\270E';margin-right:4px;font-weight:400;}
+.note-input{
+  flex:1 1 auto;min-width:0;
+  font:inherit;font-size:11.5px;font-style:italic;color:var(--text-mid);
+  background:transparent;
+  border:0;border-bottom:1px dashed var(--border-strong);
+  padding:2px 2px;outline:none;
+}
+.note-input::placeholder{color:var(--text-muted);opacity:0.8;}
+.note-input:focus{
+  border-bottom-color:var(--green);
+  font-style:normal;color:var(--text);
 }
 
 /* Add zone row */
@@ -942,7 +991,7 @@ body.sheet-open{overflow:hidden;}
   .persist-bar,
   .zone-list,
   .zsheet,
-  th:last-child,td:last-child{display:none !important;}
+  .zone-del-col{display:none !important;}
   .zone-table-wrap{display:block !important;}
 
   /* Page container resets to full bleed inside the @page margins */
@@ -960,7 +1009,7 @@ body.sheet-open{overflow:hidden;}
     grid-template-columns:auto 1fr !important;
     gap:18px !important;
   }
-  .lh-logo img{height:52px;}
+  .lh-logo img{height:92px;}
   .lh-contact{text-align:right !important;font-size:9.5pt !important;line-height:1.45;}
   .lh-contact .sched-print{font-size:9.5pt;}
   .lh-title-row{margin-top:10px;flex-direction:row;align-items:baseline;justify-content:space-between;}
@@ -980,8 +1029,10 @@ body.sheet-open{overflow:hidden;}
   }
   .doc-cell{gap:2px;}
   .doc-cell-label{font-size:7.5pt;}
-  .doc-cell .editable,
-  .lh-contact .editable{display:none !important;}
+  /* Every contenteditable has a .sched-print mirror; in print we show the
+     mirror and hide the live editable. (Global rule also fixes the footer
+     note, which previously printed twice — editable + mirror.) */
+  .editable{display:none !important;}
   .doc-cell .sched-print{font-size:10pt;font-weight:600;}
 
   /* ===== Programs config block — same look as doc-row ===== */
@@ -1005,6 +1056,8 @@ body.sheet-open{overflow:hidden;}
   .pgm-line-label{font-size:8.5pt;letter-spacing:0.10em;}
   /* Hide the interactive time chips + add buttons in print; show mirror. */
   .pgm-times{display:none !important;}
+  /* Screen total line is replaced by the richer print mirror. */
+  .pgm-line-total{display:none !important;}
   .pgm-line-print{
     display:inline !important;font-size:10pt;font-weight:600;color:var(--text);
   }
@@ -1029,6 +1082,18 @@ body.sheet-open{overflow:hidden;}
 
   /* ===== Zone table ===== */
   .zone-table{font-size:9pt;display:table !important;}
+  /* The Pgm column (col 2) is display:none in print, which shifts every later
+     cell one colgroup slot to the left (table-layout:fixed maps widths by
+     position). So in print the cells map to cols 1-7 as: #, color, desc, type,
+     status, run, days — re-declare those widths to match. (col 8/9 unused; the
+     last/delete column being hidden doesn't shift anything.) */
+  .zone-table colgroup col:nth-child(1){width:6%;}    /* Zone # */
+  .zone-table colgroup col:nth-child(2){width:5%;}    /* Color swatch */
+  .zone-table colgroup col:nth-child(3){width:32%;}   /* Zone Description */
+  .zone-table colgroup col:nth-child(4){width:14%;}   /* Type */
+  .zone-table colgroup col:nth-child(5){width:10%;}   /* Status */
+  .zone-table colgroup col:nth-child(6){width:8%;}    /* Run Time */
+  .zone-table colgroup col:nth-child(7){width:25%;}   /* Days to Water */
   .zone-table th{
     padding:5px 5px;font-size:8.5pt;
     background:var(--green) !important;color:#fff !important;
@@ -1054,21 +1119,33 @@ body.sheet-open{overflow:hidden;}
   .pill-group,
   .type-pills,
   .dtw-pills,
-  .dtw-every{display:none !important;}
+  .dtw-every,
+  /* Whole Pgm column drops out of print: each printed table is already one
+     program (declared by its section banner), so the per-row letter is
+     redundant. Kept on screen for assigning zones to programs. */
+  .zone-pgm-col,
+  .pgm-cell-td,
+  /* The screen's editable note line is replaced in print by the flattened
+     notes sub-row injected per program section (see prepPrint). */
+  .zr-noterow{display:none !important;}
   .sched-print,.cname-print{display:inline !important;white-space:normal;}
 
-  /* Zebra stripe for legibility — clones also get the treatment */
-  .zone-table tbody tr.zr-main:nth-of-type(odd) td,
-  .zone-table tbody tr.zr-print-clone:nth-of-type(odd) td{background:#FAFCF6 !important;}
+  /* Zebra stripe for legibility — driven by the .zr-band-alt class, which
+     prepPrint re-applies per clone position within each program section. */
+  .zone-table tbody tr.zr-band-alt td{background:#FAFCF6 !important;}
   /* Cloned print rows get the same page-break-avoid pair as originals */
   .zone-table tbody tr.zr-print-clone{
     page-break-inside:avoid;break-inside:avoid;
     page-break-after:avoid;break-after:avoid;
   }
 
-  /* Swatch — bigger in print so the color reads from arm's length */
-  .swatch{width:14px;height:14px;border:1px solid #444;display:inline-block !important;}
+  /* Swatch — bigger in print so the color reads from arm's length and ties
+     to the map markings. */
+  .swatch{width:20px;height:20px;border:1px solid rgba(0,0,0,0.45);border-radius:4px;display:inline-block !important;}
   .color-cell{justify-content:center;}
+  /* Zone number — bold anchor that pairs with the color tab + swatch. */
+  .zone-table .zone-num{vertical-align:middle;}
+  .zone-table .zone-num .sched-print{font-size:12pt;font-weight:800;color:var(--green);}
 
   /* ===== Notes sub-row — "secondary annotation" look ===== */
   .zone-table tr.zr-notes td{
@@ -1090,6 +1167,12 @@ body.sheet-open{overflow:hidden;}
   .zone-table tr.zr-pgm-head{
     page-break-inside:avoid;break-inside:avoid;
     page-break-after:avoid;break-after:avoid;
+    /* Start each program on its own page — clean "one table per program". */
+    page-break-before:always;break-before:page;
+  }
+  /* …except the first program, which flows from page 1 under the site plan. */
+  .zone-table tr.zr-pgm-head--first{
+    page-break-before:auto;break-before:auto;
   }
   .zone-table tr.zr-pgm-head td{
     background:var(--green) !important;color:#fff !important;
@@ -1246,14 +1329,14 @@ body.sheet-open{overflow:hidden;}
         <thead>
           <tr>
             <th scope="col">Zone #</th>
-            <th scope="col">Pgm</th>
+            <th scope="col" class="zone-pgm-col">Pgm</th>
             <th scope="col" aria-label="Zone Color"></th>
             <th scope="col">Zone Description</th>
             <th scope="col">Type</th>
             <th scope="col">Status</th>
             <th scope="col">Run Time<br>(min)</th>
             <th scope="col">Days to Water</th>
-            <th scope="col" aria-label="Remove"></th>
+            <th scope="col" class="zone-del-col" aria-label="Remove"></th>
           </tr>
         </thead>
         <tbody id="zoneBody"></tbody>
@@ -1446,6 +1529,85 @@ body.sheet-open{overflow:hidden;}
     return (arr || []).map(fmtTimeAmPm).filter(Boolean).join(', ');
   }
 
+  // ============ Program run-time math ============
+  // A controller runs a program's zones one after another, so a program's
+  // total run length = the sum of its zones' run times. With a single start
+  // time we can also show when it finishes. These power the Programs block
+  // totals (screen + print) and the per-program section banners in the PDF.
+  function zoneRunMinutes(z){
+    var m = parseInt(z && z.runMin, 10);
+    return (Number.isFinite(m) && m > 0) ? m : 0;
+  }
+  // Zones (in current order) whose programs[] includes K.
+  function zonesInProgram(K){
+    return zones.filter(function(z){ return (z.programs || []).indexOf(K) !== -1; });
+  }
+  // "5h 24m" · "45 min" · "0 min"
+  function fmtDuration(min){
+    min = Math.max(0, Math.round(min || 0));
+    if (min < 60) return min + ' min';
+    var h = Math.floor(min / 60), m = min % 60;
+    return m ? (h + 'h ' + m + 'm') : (h + 'h');
+  }
+  // "HH:MM" (24h) + minutes → "h:MM AM/PM", flagged "(+1d)" when it rolls
+  // past midnight (e.g. an 11:00 PM program that runs nearly two hours).
+  function addMinutesToClock(hhmm, addMin){
+    if (!/^\d{1,2}:\d{2}$/.test(hhmm || '')) return '';
+    var parts = hhmm.split(':');
+    var start = parseInt(parts[0], 10) * 60 + parseInt(parts[1], 10);
+    var end = start + Math.max(0, Math.round(addMin || 0));
+    var dayRoll = Math.floor(end / 1440);
+    var mins = ((end % 1440) + 1440) % 1440;
+    var hh = String(Math.floor(mins / 60)).padStart(2, '0') + ':' + String(mins % 60).padStart(2, '0');
+    var label = fmtTimeAmPm(hh);
+    return dayRoll > 0 ? (label + ' (+' + dayRoll + 'd)') : label;
+  }
+  // One stats object per program. `finish` is only set when the program has
+  // exactly one start time (otherwise the end time is ambiguous).
+  function programStats(K){
+    var list = zonesInProgram(K);
+    var totalMin = 0;
+    list.forEach(function(z){ totalMin += zoneRunMinutes(z); });
+    var starts = (programs[K] || []).filter(Boolean);
+    return {
+      count: list.length,
+      totalMin: totalMin,
+      dur: fmtDuration(totalMin),
+      starts: starts,
+      finish: (starts.length === 1 && totalMin > 0) ? addMinutesToClock(starts[0], totalMin) : ''
+    };
+  }
+  // Screen line under the start-time chips: "12 zones · 5h 24m total · ends 7:24 AM"
+  function programScreenTotal(K){
+    var s = programStats(K);
+    if (!s.count) return 'No zones assigned yet';
+    var bits = [s.count + ' zone' + (s.count === 1 ? '' : 's'), s.dur + ' total run'];
+    if (s.finish) bits.push('ends ' + s.finish);
+    return bits.join('  ·  ');
+  }
+  // Print mirror for a program line: "2:00 AM  ·  12 zones · 5h 24m · ends 7:24 AM"
+  function programPrintLine(K){
+    var s = programStats(K);
+    var startPart = s.starts.length ? fmtTimesList(s.starts) : 'No start time';
+    if (!s.count) return startPart + '  ·  No zones assigned';
+    var bits = [startPart, s.count + ' zone' + (s.count === 1 ? '' : 's'), s.dur];
+    if (s.finish) bits.push('ends ' + s.finish);
+    return bits.join('  ·  ');
+  }
+  // Compact subtitle for a printed program section banner, scoped to the
+  // zones actually shown in that section (the print `list`).
+  function programBannerSubtitle(K, list){
+    var totalMin = 0;
+    list.forEach(function(z){ totalMin += zoneRunMinutes(z); });
+    var starts = (programs[K] || []).filter(Boolean);
+    var bits = [];
+    bits.push(starts.length ? ('Starts ' + fmtTimesList(starts)) : 'No start time set');
+    bits.push(list.length + ' zone' + (list.length === 1 ? '' : 's'));
+    bits.push(fmtDuration(totalMin) + ' run');
+    if (starts.length === 1 && totalMin > 0) bits.push('ends ' + addMinutesToClock(starts[0], totalMin));
+    return bits.join('  ·  ');
+  }
+
   function makeZone(zoneNum){
     return {
       // Controller-zone number — what Patrick wires on the timer (e.g.
@@ -1463,6 +1625,10 @@ body.sheet-open{overflow:hidden;}
       oe:'',
       everyDays:'',
       notes:'',
+      // Notes are opt-in: the note line only appears (and only prints) when
+      // Patrick explicitly adds one via the row's ✎ button. Defaults off so
+      // the table stays clean and AI-detected text never shows uninvited.
+      showNote:false,
       aiDetected:false
     };
   }
@@ -1488,8 +1654,14 @@ body.sheet-open{overflow:hidden;}
   // and the mobile card sub line.
   function daysToWaterLabel(zone){
     var bits = [];
-    var dl = daysLabel(zone);
-    if (dl) bits.push(dl);
+    // All seven days selected reads cleaner as "Every day" than the full
+    // "Su Mo Tu We Th Fr Sa" run.
+    var allDays = DAYS.every(function(d){ return zone.days[d.key]; });
+    if (allDays) bits.push('Every day');
+    else {
+      var dl = daysLabel(zone);
+      if (dl) bits.push(dl);
+    }
     if (zone.oe) bits.push(zone.oe + ' days');
     if (zone.everyDays) bits.push('Every ' + zone.everyDays + 'd');
     return bits.join(' · ');
@@ -1586,7 +1758,7 @@ body.sheet-open{overflow:hidden;}
   function makeRow(idx){
     var z = zones[idx];
     var tr = document.createElement('tr');
-    tr.className = 'zr-main';
+    tr.className = 'zr-main' + (idx % 2 ? ' zr-band-alt' : '');
     tr.dataset.idx = String(idx);
 
     // # — editable controller-zone number (1..40). Dropdown picker (1-40
@@ -1629,7 +1801,7 @@ body.sheet-open{overflow:hidden;}
     pgmPillsWrap.className = 'pgm-pills';
     var pgmPrint = document.createElement('span');
     pgmPrint.className = 'sched-print';
-    pgmPrint.textContent = (z.programs || []).join(', ');
+    pgmPrint.textContent = (z.programs || []).join(' · ');
     var pgmPillEls = {};
     PROGRAM_KEYS.forEach(function(k){
       var p = pill(k, 'pill pill--pgm');
@@ -1640,7 +1812,7 @@ body.sheet-open{overflow:hidden;}
         if (i === -1) z.programs.push(k);
         else z.programs.splice(i, 1);
         p.classList.toggle('is-on', z.programs.indexOf(k) !== -1);
-        pgmPrint.textContent = z.programs.join(', ');
+        pgmPrint.textContent = z.programs.join(' · ');
         resortZones();
         schedulePersist();
       });
@@ -1873,7 +2045,33 @@ body.sheet-open{overflow:hidden;}
     tr.appendChild(tdDtw);
 
     // Delete column
+    // Actions: note toggle (✎) + delete (✕). Screen-only column (hidden in
+    // print). Notes are opt-in — ✎ reveals/hides this zone's note line and
+    // lights up when a note is present.
     var tdDel = document.createElement('td');
+    tdDel.className = 'zone-del-col';
+
+    var noteBtn = document.createElement('button');
+    noteBtn.type = 'button';
+    noteBtn.className = 'row-note' + (z.showNote ? ' is-on' : '');
+    noteBtn.title = z.showNote ? 'Hide note' : 'Add a note';
+    noteBtn.setAttribute('aria-label', 'Toggle note for this zone');
+    noteBtn.textContent = '✎';
+    noteBtn.addEventListener('click', function(){
+      z.showNote = !z.showNote;
+      noteBtn.classList.toggle('is-on', z.showNote);
+      noteBtn.title = z.showNote ? 'Hide note' : 'Add a note';
+      var noteRow = tr.nextElementSibling;
+      if (noteRow && noteRow.classList.contains('zr-noterow')){
+        noteRow.classList.toggle('is-open', z.showNote);
+        if (z.showNote){
+          var inp = noteRow.querySelector('.note-input');
+          if (inp) setTimeout(function(){ inp.focus(); }, 0);
+        }
+      }
+      schedulePersist();
+    });
+
     var delBtn = document.createElement('button');
     delBtn.type = 'button';
     delBtn.className = 'row-del';
@@ -1885,6 +2083,7 @@ body.sheet-open{overflow:hidden;}
       if (i < 0) return;
       deleteZone(i);
     });
+    tdDel.appendChild(noteBtn);
     tdDel.appendChild(delBtn);
     tr.appendChild(tdDel);
 
@@ -1892,6 +2091,7 @@ body.sheet-open{overflow:hidden;}
       num: tdNum,
       numSelect: numSelect,
       numPrint: numPrint,
+      noteBtn: noteBtn,
       pgmPillEls: pgmPillEls,
       pgmPrint: pgmPrint,
       colorSel: colorSel,
@@ -1924,6 +2124,40 @@ body.sheet-open{overflow:hidden;}
     return tr;
   }
 
+  // Editable note line shown directly beneath each zone on the desktop table
+  // (on mobile, notes are edited in the bottom sheet). Bound to z.notes — the
+  // same text prints as the flattened notes sub-row under the zone in the PDF.
+  // Patrick asked for notes to read as a line *under* the zone, never another
+  // column.
+  function makeNoteRow(idx){
+    var z = zones[idx];
+    var tr = document.createElement('tr');
+    tr.className = 'zr-noterow' + (idx % 2 ? ' zr-band-alt' : '') + (z.showNote ? ' is-open' : '');
+    tr.dataset.idx = String(idx);
+    var td = document.createElement('td');
+    td.className = 'zr-noterow-cell';
+    td.colSpan = 9;
+    var label = document.createElement('span');
+    label.className = 'zr-noterow-label';
+    label.textContent = 'Notes';
+    var input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'note-input';
+    input.dataset.field = 'notes';
+    input.placeholder = 'Add a note for this zone — prints underneath it';
+    input.value = z.notes || '';
+    input.addEventListener('input', function(){
+      z.notes = input.value;        // operate on the captured object, not idx
+      z.aiDetected = false;         // a human-touched note isn't "AI detected"
+      // Persistence is handled by the delegated #zoneTable input listener.
+    });
+    td.appendChild(label);
+    td.appendChild(input);
+    tr.appendChild(td);
+    tr._noteInput = input;          // let applyZoneToRow keep it in sync
+    return tr;
+  }
+
   function pill(label, className){
     var btn = document.createElement('button');
     btn.type = 'button';
@@ -1950,7 +2184,7 @@ body.sheet-open{overflow:hidden;}
         r.pgmPillEls[k].classList.toggle('is-on', (z.programs || []).indexOf(k) !== -1);
       }
     });
-    if (r.pgmPrint) r.pgmPrint.textContent = (z.programs || []).join(', ');
+    if (r.pgmPrint) r.pgmPrint.textContent = (z.programs || []).join(' · ');
 
     r.colorSel.value = z.color;
     r.swatch.style.background = (COLOR_BY_KEY[z.color] || COLORS[0]).hex;
@@ -1983,6 +2217,15 @@ body.sheet-open{overflow:hidden;}
     r.pillO.classList.toggle('is-on', z.oe === 'Odd');
     r.pillE.classList.toggle('is-on', z.oe === 'Even');
     r.dtwPrint.textContent = daysToWaterLabel(z);
+
+    // Keep the editable desktop note line + ✎ button in sync (e.g. a note
+    // typed/toggled in the mobile sheet should reflect on the table row).
+    if (r.noteBtn) r.noteBtn.classList.toggle('is-on', !!z.showNote);
+    var noteRow = tr.nextElementSibling;
+    if (noteRow && noteRow.classList.contains('zr-noterow')){
+      noteRow.classList.toggle('is-open', !!z.showNote);
+      if (noteRow._noteInput) noteRow._noteInput.value = z.notes || '';
+    }
   }
 
   // ============ Mobile zone list ============
@@ -2134,37 +2377,31 @@ body.sheet-open{overflow:hidden;}
     } else {
       zones.forEach(function(_, i){
         zoneBody.appendChild(makeRow(i));
+        zoneBody.appendChild(makeNoteRow(i));
         zoneList.appendChild(buildListItem(i));
       });
     }
     zoneCountEl.textContent = zones.length + ' zone' + (zones.length === 1 ? '' : 's');
+    refreshProgramTotals();
   }
 
   // ============ Add / Delete ============
   function addZone(){
     zones.push(makeZone(nextZoneNum()));
-    zoneBody.appendChild(makeRow(zones.length - 1));
-    zoneList.appendChild(buildListItem(zones.length - 1));
+    var i = zones.length - 1;
+    zoneBody.appendChild(makeRow(i));
+    zoneBody.appendChild(makeNoteRow(i));
+    zoneList.appendChild(buildListItem(i));
     renumberCount();
   }
 
   function deleteZone(idx){
     if (idx < 0 || idx >= zones.length) return;
     zones.splice(idx, 1);
-    var rowToRemove = zoneBody.querySelectorAll('tr.zr-main')[idx];
-    if (rowToRemove) rowToRemove.remove();
-    var liToRemove = zoneList.children[idx];
-    if (liToRemove) liToRemove.remove();
-    // Don't rewrite zoneNum — it's user-editable. Just refresh the
-    // dataset.idx attributes so card → openSheet wiring stays correct.
-    zoneBody.querySelectorAll('tr.zr-main').forEach(function(tr, i){
-      tr.dataset.idx = String(i);
-    });
-    Array.prototype.forEach.call(zoneList.children, function(li, i){
-      var btn = li.querySelector('.zone-list-btn');
-      if (btn) btn.dataset.idx = String(i);
-    });
-    zoneCountEl.textContent = zones.length + ' zone' + (zones.length === 1 ? '' : 's');
+    // Full rebuild keeps the main row + its note row + zebra band parity +
+    // row→index closures all consistent (each zone is now a 2-row band, so a
+    // surgical single-row removal would leave them misaligned).
+    rerenderAll();
   }
 
   // ============ Bottom sheet ============
@@ -2231,6 +2468,11 @@ body.sheet-open{overflow:hidden;}
   bindSheetText(zsNotes,    'notes');
   bindSheetText(zsRun,      'runMin');
   bindSheetText(zsEvery,    'everyDays');
+  // Typing a note in the sheet opts that zone in, so it shows + prints.
+  zsNotes.addEventListener('input', function(){
+    if (activeIdx < 0) return;
+    if (zsNotes.value.trim()){ zones[activeIdx].showNote = true; applyZoneToRow(activeIdx); }
+  });
 
   // zoneNum binding — dropdown select, triggers live-resort. Doesn't
   // clear the AI badge (metadata not zone content).
@@ -2461,9 +2703,9 @@ body.sheet-open{overflow:hidden;}
         var z = makeZone();
         z.color    = (d.color || '').toLowerCase();
         z.location = d.label || '';
-        z.notes    = d.notes || '';
-        // Server may return material as a tag — fold into notes if no notes already.
-        if (d.material && !z.notes) z.notes = d.material;
+        // Notes are Patrick's to add deliberately — the AI no longer fills the
+        // notes field (its descriptions were unwanted clutter). Detection text
+        // is kept only for the on-screen status summary, not per-zone notes.
         z.aiDetected = true;
         return z;
       });
@@ -2547,6 +2789,13 @@ body.sheet-open{overflow:hidden;}
     //      + each zone's notes sub-row if any. Then an "Unassigned"
     //      section if applicable.
     //   4. Set the PDF filename.
+    //
+    // Idempotency: the Print button calls prepPrint() AND window.print()
+    // fires a `beforeprint` → prepPrint() a second time. Without a reset the
+    // two runs accumulate (orphaned program headers + notes rows). Clear any
+    // prior print scaffolding first so a double-invocation is a no-op-then-
+    // rebuild rather than a pile-up.
+    restorePrint();
     var originalRows = Array.prototype.slice.call(zoneBody.querySelectorAll('tr.zr-main'));
     // Hide all originals
     originalRows.forEach(function(tr){
@@ -2584,10 +2833,16 @@ body.sheet-open{overflow:hidden;}
     PROGRAM_KEYS.forEach(function(K){ assignedByPgm[K].sort(sortByNum); });
     unassigned.sort(sortByNum);
 
+    // Each program prints as its own table starting on a fresh page (a new
+    // program never starts stranded at the bottom of the prior page). The
+    // first section with content stays put so it flows from page 1 after the
+    // site plan; every later one page-breaks before its banner.
+    var firstSection = true;
     function injectSection(headerText, headerSubtitle, list){
       if (!list.length) return;
       var header = document.createElement('tr');
-      header.className = 'zr-pgm-head';
+      header.className = 'zr-pgm-head' + (firstSection ? ' zr-pgm-head--first' : '');
+      firstSection = false;
       header.dataset.injected = '1';
       var hd = document.createElement('td');
       hd.colSpan = PRINT_COLSPAN;
@@ -2601,20 +2856,32 @@ body.sheet-open{overflow:hidden;}
       header.appendChild(hd);
       zoneBody.appendChild(header);
 
-      list.forEach(function(z){
+      list.forEach(function(z, i){
         var idx = zoneIdxFor(z);
         var srcTr = originalRows[idx];
         if (!srcTr) return;
         var clone = srcTr.cloneNode(true);
         clone.classList.add('zr-print-clone');
+        // Re-stripe by position within THIS section so zebra alternates
+        // cleanly regardless of the original zone order.
+        clone.classList.remove('zr-band-alt');
+        if (i % 2) clone.classList.add('zr-band-alt');
         clone.dataset.injected = '1';
         // cloneNode(deep) copies inline styles + data-* attrs from the
         // hidden original — undo both so the clone actually renders.
         clone.style.display = '';
         delete clone.dataset.printHidden;
+        // Color tab: paint the row's left edge with the zone color so each
+        // printed row visually ties back to its colored region on the map.
+        var hex = (COLOR_BY_KEY[z.color] || COLORS[0]).hex;
+        var firstCell = clone.querySelector('td');
+        if (firstCell && hex && hex !== 'transparent'){
+          firstCell.style.borderLeft = '6px solid ' + hex;
+        }
         zoneBody.appendChild(clone);
-        // Notes sub-row
-        var notesText = (z.notes || '').trim();
+        // Notes sub-row — only for zones Patrick opted into (showNote) AND
+        // actually typed something. AI-detected text never prints uninvited.
+        var notesText = (z.showNote && z.notes) ? z.notes.trim() : '';
         if (notesText){
           var nsub = document.createElement('tr');
           nsub.className = 'zr-notes';
@@ -2633,11 +2900,9 @@ body.sheet-open{overflow:hidden;}
     }
 
     PROGRAM_KEYS.forEach(function(K){
-      var startList = fmtTimesList(programs[K] || []);
-      var subtitle = startList ? 'Starts ' + startList : 'No start time set';
-      injectSection('Program ' + K, subtitle, assignedByPgm[K]);
+      injectSection('Program ' + K, programBannerSubtitle(K, assignedByPgm[K]), assignedByPgm[K]);
     });
-    injectSection('Unassigned', '', unassigned);
+    injectSection('Unassigned', unassigned.length + ' zone' + (unassigned.length === 1 ? '' : 's') + ' · not on any program', unassigned);
 
     // PDF filename — YYYY-MM-DD - Project - PJL Land Services Zone Schedule
     originalTitle = document.title;
@@ -2734,14 +2999,37 @@ body.sheet-open{overflow:hidden;}
       times.appendChild(addBtn);
       line.appendChild(times);
 
-      // Hidden print mirror — populated at print time so the rendered
-      // PDF reads "Starts 6:00 AM, 8:00 PM" inside the program block.
+      // Live run-time total — sits under the start-time chips on screen.
+      // "12 zones · 5h 24m total · ends 7:24 AM". Refreshed by
+      // refreshProgramTotals() whenever a zone's run time or program
+      // membership changes.
+      var total = document.createElement('div');
+      total.className = 'pgm-line-total';
+      line.appendChild(total);
+
+      // Print mirror — replaces the chips in the PDF and now also carries
+      // the totals: "2:00 AM · 12 zones · 5h 24m · ends 7:24 AM".
       var mirror = document.createElement('span');
       mirror.className = 'sched-print pgm-line-print';
-      mirror.textContent = fmtTimesList(programs[K]);
       line.appendChild(mirror);
 
       pgmStack.appendChild(line);
+    });
+    refreshProgramTotals();
+  }
+
+  // Recompute + repaint every program's run-time total (screen line + print
+  // mirror) in place — no DOM teardown, so it's safe to call on every
+  // keystroke without stealing focus from the time inputs.
+  function refreshProgramTotals(){
+    if (!pgmStack) return;
+    PROGRAM_KEYS.forEach(function(K){
+      var line = pgmStack.querySelector('.pgm-line[data-program="' + K + '"]');
+      if (!line) return;
+      var totalEl = line.querySelector('.pgm-line-total');
+      if (totalEl) totalEl.textContent = programScreenTotal(K);
+      var mirror = line.querySelector('.pgm-line-print');
+      if (mirror) mirror.textContent = programPrintLine(K);
     });
   }
   function buildTimeChip(K, i, hhmm){
@@ -2753,10 +3041,9 @@ body.sheet-open{overflow:hidden;}
     inp.setAttribute('aria-label', 'Program ' + K + ' start time ' + (i + 1));
     inp.addEventListener('input', function(){
       programs[K][i] = inp.value || '';
-      // Refresh the print mirror for this line.
-      var line = chip.closest('.pgm-line');
-      var mirror = line && line.querySelector('.pgm-line-print');
-      if (mirror) mirror.textContent = fmtTimesList(programs[K]);
+      // Start time feeds the finish-time calc, so refresh the whole
+      // total line + print mirror (not just the times text).
+      refreshProgramTotals();
       schedulePersist();
     });
     var rm = document.createElement('button');
@@ -2834,6 +3121,7 @@ body.sheet-open{overflow:hidden;}
           oe: z.oe,
           everyDays: z.everyDays,
           notes: z.notes,
+          showNote: !!z.showNote,
           aiDetected: !!z.aiDetected
         };
       })
@@ -3017,16 +3305,18 @@ body.sheet-open{overflow:hidden;}
   // Delegated listeners — catches every input + click that mutates zone
   // state inside the table, mobile list, or sheet. Avoids threading
   // `schedulePersist()` into ~10 individual makeRow handlers.
-  document.getElementById('zoneTable').addEventListener('input', schedulePersist);
+  // Run-time edits + program-pill toggles change program totals, so refresh
+  // the Programs block alongside persisting.
+  document.getElementById('zoneTable').addEventListener('input', function(){ refreshProgramTotals(); schedulePersist(); });
   document.getElementById('zoneTable').addEventListener('change', schedulePersist);
   document.getElementById('zoneTable').addEventListener('click', function(e){
     // Clicking a pill mutates state. addZone delete buttons are also here.
-    if (e.target.closest('.pill, .pill--day, .pill--oe, .row-del')) schedulePersist();
+    if (e.target.closest('.pill, .pill--day, .pill--oe, .row-del')){ refreshProgramTotals(); schedulePersist(); }
   });
-  zsheet.addEventListener('input', schedulePersist);
+  zsheet.addEventListener('input', function(){ refreshProgramTotals(); schedulePersist(); });
   zsheet.addEventListener('change', schedulePersist);
   zsheet.addEventListener('click', function(e){
-    if (e.target.closest('.zsheet-pill, .zsheet-day, .zsheet-back, .zsheet-done, .zsheet-delete')) schedulePersist();
+    if (e.target.closest('.zsheet-pill, .zsheet-day, .zsheet-back, .zsheet-done, .zsheet-delete')){ refreshProgramTotals(); schedulePersist(); }
   });
 
   // ============ Seed / restore on load ============
@@ -3055,9 +3345,9 @@ body.sheet-open{overflow:hidden;}
   // Mirror schedulePersist for any add/delete that doesn't already trigger.
   // We piggyback on the existing flow by wrapping addZone/deleteZone.
   var _addZone = addZone;
-  addZone = function(){ _addZone(); schedulePersist(); };
+  addZone = function(){ _addZone(); refreshProgramTotals(); schedulePersist(); };
   var _deleteZone = deleteZone;
-  deleteZone = function(idx){ _deleteZone(idx); schedulePersist(); };
+  deleteZone = function(idx){ _deleteZone(idx); refreshProgramTotals(); schedulePersist(); };
 
   window.__zsched = {
     getZones: function(){ return zones; },
