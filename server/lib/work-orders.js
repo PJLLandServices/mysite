@@ -1447,13 +1447,55 @@ async function unmarkTaskDoneToday(woId, taskId, { by = "admin" } = {}) {
   const wo = records[idx];
   _requireBuild(wo);
   const dl = wo.dailyLog;
-  const before = (dl.tasksCompletedToday || []).length;
-  dl.tasksCompletedToday = (dl.tasksCompletedToday || []).filter((t) => t.taskId !== taskId);
-  if (dl.tasksCompletedToday.length === before) {
+  const list = dl.tasksCompletedToday || [];
+  const removed = list.find((t) => t.taskId === taskId);
+  dl.tasksCompletedToday = list.filter((t) => t.taskId !== taskId);
+  if (!removed) {
     return { workOrder: wo, notDoneHere: true };
   }
+  // How much of the project task's cumulative this WO-day contributed, so the
+  // caller can roll the project cumulative back by exactly that. null = a
+  // legacy binary entry (no recorded delta) → caller does a full unmark.
+  const removedDelta = Object.prototype.hasOwnProperty.call(removed, "percentDelta")
+    ? Math.round(Number(removed.percentDelta) || 0)
+    : null;
   const ts = new Date().toISOString();
   wo.history.push({ ts, action: "task_unmark", by, note: taskId });
+  wo.updatedAt = ts;
+  records[idx] = wo;
+  await writeAll(records);
+  return { workOrder: wo, projectId: wo.parentProjectId, removedDelta };
+}
+
+// Upsert today's *progress* entry for a task on this build-day WO. Unlike
+// markTaskDoneToday (binary), this records a delta of work done today plus the
+// resulting cumulative (percentAfter — the caller computes it from the project
+// task, which is the authoritative cumulative). A second bump the same day
+// accumulates onto the existing entry's percentDelta, refreshes percentAfter,
+// and merges photoIds. This is purely the per-day log line.
+async function addTaskProgressToday(woId, taskId, { percentDelta = 0, percentAfter = null, photoIds = [], by = "admin" } = {}) {
+  const records = await readAll();
+  const idx = records.findIndex((w) => w.id === woId);
+  if (idx === -1) throw Object.assign(new Error("Work order not found."), { code: "wo_not_found" });
+  const wo = records[idx];
+  _requireBuild(wo);
+  const dl = wo.dailyLog;
+  const ts = new Date().toISOString();
+  const delta = Math.round(Number(percentDelta) || 0);
+  const after = percentAfter != null && Number.isFinite(Number(percentAfter)) ? Math.round(Number(percentAfter)) : null;
+  const cleanPhotoIds = Array.isArray(photoIds) ? photoIds.filter((x) => typeof x === "string") : [];
+  const list = Array.isArray(dl.tasksCompletedToday) ? dl.tasksCompletedToday : [];
+  const existing = list.find((t) => t.taskId === String(taskId));
+  if (existing) {
+    existing.percentDelta = Math.round((Number(existing.percentDelta) || 0) + delta);
+    if (after != null) existing.percentAfter = after;
+    existing.completedAt = ts;
+    existing.photoIds = [...(existing.photoIds || []), ...cleanPhotoIds];
+  } else {
+    list.push({ taskId: String(taskId), completedAt: ts, photoIds: cleanPhotoIds, percentDelta: delta, percentAfter: after });
+  }
+  dl.tasksCompletedToday = list;
+  wo.history.push({ ts, action: "task_progress", by, note: `${taskId} ${delta >= 0 ? "+" : ""}${delta}% → ${after == null ? "?" : after}%` });
   wo.updatedAt = ts;
   records[idx] = wo;
   await writeAll(records);
@@ -1608,6 +1650,7 @@ module.exports = {
   setLabourersForSession,
   markTaskDoneToday,
   unmarkTaskDoneToday,
+  addTaskProgressToday,
   recordMaterialConsumed,
   removeMaterialConsumed,
   setNextDayPlan,

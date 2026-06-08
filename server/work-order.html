@@ -260,15 +260,27 @@
     </div>
     <div class="tech-modal-backdrop" id="tbTaskDoneModal" hidden role="dialog" aria-modal="true">
       <div class="tech-modal">
-        <h3>Mark task done?</h3>
-        <p id="tbTaskDoneDescription" style="margin:0 0 12px;font-size:14px;color:#1F2A22;"></p>
+        <h3>Log progress</h3>
+        <p id="tbTaskDoneDescription" style="margin:0 0 4px;font-size:14px;font-weight:600;color:#1F2A22;"></p>
+        <p class="tech-build-tip" id="tbTaskDoneCurrent" style="margin:0 0 12px;"></p>
+        <label class="tech-build-pct-label">How much did you complete today?</label>
+        <div class="tech-build-pct-chips" id="tbTaskDonePctChips">
+          <button type="button" class="tech-build-pct-chip" data-pct="25">+25%</button>
+          <button type="button" class="tech-build-pct-chip" data-pct="50">+50%</button>
+          <button type="button" class="tech-build-pct-chip" data-pct="75">+75%</button>
+          <button type="button" class="tech-build-pct-chip" data-pct="finish">Finish ✓</button>
+        </div>
+        <label class="tech-build-pct-exact">% done today
+          <input type="number" id="tbTaskDonePctInput" min="0" max="100" step="5" inputmode="numeric" placeholder="e.g. 40">
+        </label>
+        <p class="tech-build-pct-preview" id="tbTaskDonePreview"></p>
         <label>Attach photos (optional)
           <input type="file" id="tbTaskDonePhotos" accept="image/jpeg,image/png,image/heic,image/heif,image/webp" multiple>
         </label>
-        <p class="tech-build-tip">Updates project's master task list immediately.</p>
+        <p class="tech-build-tip">Adds to the task's running total. The project's master task list updates immediately.</p>
         <div class="tech-modal-actions">
           <button type="button" class="pjl-btn pjl-btn-outline" id="tbTaskDoneCancel">Cancel</button>
-          <button type="button" class="pjl-btn pjl-btn-primary" id="tbTaskDoneConfirm">Mark done</button>
+          <button type="button" class="pjl-btn pjl-btn-primary" id="tbTaskDoneConfirm">Log progress</button>
         </div>
       </div>
     </div>

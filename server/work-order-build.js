@@ -177,27 +177,44 @@
       return;
     }
     const tasks = (state.project.tasks || []).slice().sort((a, b) => (a.order || 0) - (b.order || 0));
-    const doneToday = new Set((state.wo.dailyLog?.tasksCompletedToday || []).map((t) => t.taskId));
+    const todayEntries = new Map((state.wo.dailyLog?.tasksCompletedToday || []).map((t) => [t.taskId, t]));
     if (!tasks.length) {
       els.taskList.innerHTML = `<li class="tech-build-empty">No tasks defined on this project.</li>`;
       return;
     }
     els.taskList.innerHTML = tasks.map((t) => {
-      const isDone = t.status === "done";
-      const isDoneHere = doneToday.has(t.id);
-      const checkbox = isDone
+      // percentComplete is the cumulative source of truth; done reads as 100
+      // even on legacy records that predate the field.
+      const pct = t.status === "done" ? 100 : Math.max(0, Math.min(100, Number(t.percentComplete) || 0));
+      const isDone = pct >= 100;
+      const todayEntry = todayEntries.get(t.id);
+      const todayDelta = todayEntry && Number.isFinite(Number(todayEntry.percentDelta))
+        ? Math.round(Number(todayEntry.percentDelta)) : 0;
+
+      const action = isDone
         ? `<span class="tech-build-task-check tech-build-task-check--done" aria-hidden="true">✓</span>`
-        : `<button type="button" class="tech-build-task-mark" data-task-id="${escapeHtml(t.id)}">Mark done today</button>`;
-      const doneHereTag = isDone && isDoneHere
-        ? `<span class="tech-build-task-tag">today</span>`
-        : isDone && t.completedByWoId !== state.wo.id
-          ? `<span class="tech-build-task-tag tech-build-task-tag--other">${escapeHtml(t.completedByWoId || "—")}</span>`
-          : "";
+        : `<button type="button" class="tech-build-task-mark" data-task-id="${escapeHtml(t.id)}">${pct > 0 ? "Add %" : "Log progress"}</button>`;
+
+      const todayTag = todayDelta > 0
+        ? `<span class="tech-build-task-tag tech-build-task-tag--today">today +${todayDelta}%</span>`
+        : "";
+      // Only flag "finished by another WO-day" — its own completing WO is implied by ✓.
+      const otherWoTag = isDone && t.completedByWoId && t.completedByWoId !== state.wo.id
+        ? `<span class="tech-build-task-tag tech-build-task-tag--other">${escapeHtml(t.completedByWoId)}</span>`
+        : "";
+
       return `
         <li class="tech-build-task-item${isDone ? " is-done" : ""}" data-task-id="${escapeHtml(t.id)}">
-          ${checkbox}
-          <span class="tech-build-task-desc">${escapeHtml(t.description)}</span>
-          ${doneHereTag}
+          ${action}
+          <div class="tech-build-task-main">
+            <span class="tech-build-task-desc">${escapeHtml(t.description)}</span>
+            <div class="tech-build-task-progress">
+              <div class="tech-build-task-bar"><div class="tech-build-task-bar-fill" style="width:${pct}%"></div></div>
+              <span class="tech-build-task-pct">${pct}%</span>
+              ${todayTag}
+              ${otherWoTag}
+            </div>
+          </div>
         </li>
       `;
     }).join("");
@@ -424,32 +441,66 @@
     } catch (_) {}
   }
 
-  // Open the mark-done modal, which lets the tech attach photos.
-  let _taskDonePending = null;
+  // "Log progress" modal — the tech enters how much of the task got done today
+  // (a delta), optionally attaching photos. _taskDonePending carries the task's
+  // current cumulative so the "Finish" chip and the clamp know the remaining %.
+  let _taskDonePending = null;   // { taskId, current }
+  let _taskDoneDelta = 0;        // the chosen "+% done today"
+
+  function setTaskDoneDelta(value, { fromInput = false } = {}) {
+    const remaining = _taskDonePending ? Math.max(0, 100 - _taskDonePending.current) : 100;
+    _taskDoneDelta = Math.max(0, Math.min(remaining, Math.round(Number(value) || 0)));
+    const input = document.getElementById("tbTaskDonePctInput");
+    if (input && !fromInput) input.value = _taskDoneDelta ? String(_taskDoneDelta) : "";
+    document.querySelectorAll("#tbTaskDonePctChips .tech-build-pct-chip").forEach((c) => {
+      const v = c.dataset.pct === "finish" ? remaining : Number(c.dataset.pct);
+      c.classList.toggle("is-selected", _taskDoneDelta > 0 && v === _taskDoneDelta);
+    });
+    const preview = document.getElementById("tbTaskDonePreview");
+    if (preview) {
+      preview.textContent = _taskDoneDelta > 0 && _taskDonePending
+        ? `→ ${_taskDonePending.current + _taskDoneDelta}% complete after today`
+        : "";
+    }
+  }
+
   function openTaskDoneModal(taskId) {
     const task = (state.project?.tasks || []).find((t) => t.id === taskId);
     if (!task) return;
-    _taskDonePending = taskId;
+    const current = task.status === "done" ? 100 : Math.max(0, Math.min(100, Number(task.percentComplete) || 0));
+    _taskDonePending = { taskId, current };
     const modal = document.getElementById("tbTaskDoneModal");
     const desc = document.getElementById("tbTaskDoneDescription");
     const fileInput = document.getElementById("tbTaskDonePhotos");
     if (!modal) {
-      // Modal missing (old page) — fall back to legacy confirm flow.
-      if (confirm(`Mark "${task.description}" done?`)) markTaskDone(taskId, []);
+      // Modal missing (old page) — fall back to a "finish it" confirm.
+      if (confirm(`Mark "${task.description}" done?`)) submitTaskProgress(taskId, Math.max(0, 100 - current), []);
       return;
     }
     if (desc) desc.textContent = task.description;
+    const cur = document.getElementById("tbTaskDoneCurrent");
+    if (cur) cur.textContent = current > 0 ? `Currently ${current}% complete · ${100 - current}% to go` : "Not started yet";
     if (fileInput) fileInput.value = "";
+    const input = document.getElementById("tbTaskDonePctInput");
+    if (input) { input.value = ""; input.max = String(Math.max(0, 100 - current)); }
+    const confirmBtn = document.getElementById("tbTaskDoneConfirm");
+    if (confirmBtn) confirmBtn.disabled = false;
+    setTaskDoneDelta(0);
     modal.hidden = false;
   }
   function closeTaskDoneModal() {
     const modal = document.getElementById("tbTaskDoneModal");
     if (modal) modal.hidden = true;
     _taskDonePending = null;
+    _taskDoneDelta = 0;
   }
   async function submitTaskDoneModal() {
-    const taskId = _taskDonePending;
-    if (!taskId) return;
+    if (!_taskDonePending) return;
+    const taskId = _taskDonePending.taskId;
+    const delta = _taskDoneDelta;
+    if (delta <= 0) { showToast("Pick how much you got done today.", { variant: "error" }); return; }
+    const confirmBtn = document.getElementById("tbTaskDoneConfirm");
+    if (confirmBtn) confirmBtn.disabled = true; // guard against double-add
     const fileInput = document.getElementById("tbTaskDonePhotos");
     const files = fileInput && fileInput.files ? Array.from(fileInput.files) : [];
     const photos = [];
@@ -471,22 +522,24 @@
       } catch (_) { /* skip */ }
     }
     closeTaskDoneModal();
-    await markTaskDone(taskId, photos);
+    await submitTaskProgress(taskId, delta, photos);
   }
 
-  async function markTaskDone(taskId, photos = []) {
+  // Post a "+% done today" delta. The server adds it to the project task's
+  // cumulative and records the per-day log line, completing the task at 100.
+  async function submitTaskProgress(taskId, percentDelta, photos = []) {
     try {
       const r = await fetch(`/api/work-orders/${encodeURIComponent(WO_ID)}/tasks-done`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ taskId, photos })
+        body: JSON.stringify({ taskId, percentDelta, photos })
       });
       const data = await r.json().catch(() => ({}));
       if (!r.ok || !data.ok) {
-        showToast(data.errors?.[0] || `Mark failed (${r.status})`, { variant: "error" });
+        showToast(data.errors?.[0] || `Save failed (${r.status})`, { variant: "error" });
         return;
       }
-      // Refresh project to get updated task state.
+      // Refresh WO + project to get the updated cumulative / task state.
       const [woR, projR] = await Promise.all([
         fetch(`/api/work-orders/${encodeURIComponent(WO_ID)}`).then((r) => r.json()),
         state.wo.parentProjectId
@@ -497,9 +550,13 @@
       if (projR?.project) state.project = projR.project;
       renderTasks();
       renderContext();
+      const after = typeof data.percentAfter === "number" ? data.percentAfter : null;
       const photoCount = data.photosUploaded || 0;
-      showToast(`Task done${photoCount ? ` · ${photoCount} photo${photoCount === 1 ? "" : "s"}` : ""}.`, { variant: "success" });
-    } catch (err) { showToast(err.message || "Mark failed.", { variant: "error" }); }
+      const msg = after != null && after >= 100
+        ? "Task complete ✓"
+        : (after != null ? `Logged · now ${after}%` : "Progress logged");
+      showToast(`${msg}${photoCount ? ` · ${photoCount} photo${photoCount === 1 ? "" : "s"}` : ""}.`, { variant: "success" });
+    } catch (err) { showToast(err.message || "Save failed.", { variant: "error" }); }
   }
 
   async function removeMaterial(idx) {
@@ -930,6 +987,15 @@
     // Task-done modal
     document.getElementById("tbTaskDoneCancel")?.addEventListener("click", closeTaskDoneModal);
     document.getElementById("tbTaskDoneConfirm")?.addEventListener("click", submitTaskDoneModal);
+    document.querySelectorAll("#tbTaskDonePctChips .tech-build-pct-chip").forEach((chip) => {
+      chip.addEventListener("click", () => {
+        const remaining = _taskDonePending ? Math.max(0, 100 - _taskDonePending.current) : 100;
+        setTaskDoneDelta(chip.dataset.pct === "finish" ? remaining : Number(chip.dataset.pct));
+      });
+    });
+    document.getElementById("tbTaskDonePctInput")?.addEventListener("input", (e) => {
+      setTaskDoneDelta(e.target.value, { fromInput: true });
+    });
     const taskDoneModal = document.getElementById("tbTaskDoneModal");
     if (taskDoneModal) taskDoneModal.addEventListener("click", (e) => { if (e.target === taskDoneModal) closeTaskDoneModal(); });
 

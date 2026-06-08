@@ -147,6 +147,99 @@
   font-weight: 600;
 }
 .tech-build-task-tag--other { background: #FDF1E6; color: #8A4A12; }
+.tech-build-task-tag--today { background: #EAF3DE; color: #1B4D2E; }
+
+/* Per-task grade-of-completion: desc on top, a progress bar + % + tags below. */
+.tech-build-task-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.tech-build-task-main .tech-build-task-desc { flex: 0 0 auto; }
+.tech-build-task-progress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.tech-build-task-bar {
+  flex: 1;
+  min-width: 56px;
+  height: 7px;
+  background: #E5E5DD;
+  border-radius: 999px;
+  overflow: hidden;
+}
+.tech-build-task-bar-fill {
+  height: 100%;
+  background: #1B4D2E;
+  border-radius: 999px;
+  transition: width 0.2s ease;
+}
+.tech-build-task-item.is-done .tech-build-task-bar-fill { background: #2E7D46; }
+.tech-build-task-pct {
+  font-size: 11px;
+  font-weight: 700;
+  color: #1B4D2E;
+  min-width: 30px;
+  text-align: right;
+}
+
+/* "Log progress" modal — quick +% chips + an exact field. */
+.tech-build-pct-label {
+  display: block;
+  margin: 0 0 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #1F2A22;
+}
+.tech-build-pct-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 12px;
+}
+.tech-build-pct-chip {
+  padding: 8px 14px;
+  background: #fff;
+  border: 1px solid #CFCFC6;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #1B4D2E;
+  cursor: pointer;
+}
+.tech-build-pct-chip:hover { border-color: #1B4D2E; }
+.tech-build-pct-chip.is-selected {
+  background: #1B4D2E;
+  border-color: #1B4D2E;
+  color: #fff;
+}
+.tech-build-pct-exact {
+  display: block;
+  margin: 0 0 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #1F2A22;
+}
+.tech-build-pct-exact input {
+  display: block;
+  margin-top: 5px;
+  width: 100%;
+  padding: 9px 11px;
+  border: 1px solid #CFCFC6;
+  border-radius: 6px;
+  font-size: 14px;
+  box-sizing: border-box;
+}
+.tech-build-pct-preview {
+  margin: 0 0 12px;
+  min-height: 16px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #1B4D2E;
+}
 .tech-build-empty {
   font-size: 12px;
   color: #9A9A90;

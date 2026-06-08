@@ -389,6 +389,7 @@ async function createFromProposal(quote, { customerName = "", customerEmail = ""
     description: String(li.label || li.sourceKey || `Task ${idx + 1}`).slice(0, 400),
     sourceLineItemId: li.id || null,
     status: "pending",
+    percentComplete: 0,
     completedAt: null,
     completedByWoId: null,
     order: idx
@@ -561,6 +562,7 @@ async function seedTasksFromQuote(projectId, quote) {
       description: String(li.label || li.sourceKey || `Task ${idx + 1}`).slice(0, 400),
       sourceLineItemId: li.id || null,
       status: "pending",
+      percentComplete: 0,
       completedAt: null,
       completedByWoId: null,
       order: idx,
@@ -582,6 +584,7 @@ async function addTask(projectId, { description, sourceLineItemId = null, notes 
       description: String(description).slice(0, 400),
       sourceLineItemId: sourceLineItemId || null,
       status: "pending",
+      percentComplete: 0,
       completedAt: null,
       completedByWoId: null,
       order: proj.tasks.length,
@@ -627,6 +630,7 @@ async function markTaskComplete(projectId, taskId, completedByWoId, { by = "admi
     if (!t) throw Object.assign(new Error("Task not found."), { code: "task_not_found" });
     if (t.status === "done") return t; // idempotent
     t.status = "done";
+    t.percentComplete = 100;
     t.completedAt = nowIso();
     t.completedByWoId = completedByWoId || null;
     appendHistory(proj, { action: "task_done", by, note: `${taskId} via ${completedByWoId || "manual"}` });
@@ -648,9 +652,45 @@ async function unmarkTaskComplete(projectId, taskId, expectedWoId = null, { by =
       throw err;
     }
     t.status = "pending";
+    t.percentComplete = 0;
     t.completedAt = null;
     t.completedByWoId = null;
     appendHistory(proj, { action: "task_unmarked", by, note: taskId });
+    return t;
+  });
+}
+
+// Apply a *delta* of progress to a task and recompute its state. Positive
+// delta = work done this build day; negative = correction / undo. The task's
+// percentComplete is the cumulative source of truth and `status` follows the
+// invariant: 0 = pending, 1-99 = in_progress, 100 = done. The finishing WO is
+// stamped (completedAt + completedByWoId) only on the upward crossing to 100,
+// and cleared if the task is rolled back below 100. Legacy done tasks read as
+// 100 so a pre-percentComplete record can still be corrected. Returns the task.
+async function addTaskProgress(projectId, taskId, deltaPercent, completedByWoId, { by = "admin" } = {}) {
+  return _mutate(projectId, (proj) => {
+    const t = (proj.tasks || []).find((x) => x.id === taskId);
+    if (!t) throw Object.assign(new Error("Task not found."), { code: "task_not_found" });
+    const cur = t.status === "done" ? 100 : (Number(t.percentComplete) || 0);
+    const delta = Math.round(Number(deltaPercent) || 0);
+    const next = Math.max(0, Math.min(100, cur + delta));
+    const crossedUp = cur < 100 && next >= 100;
+    t.percentComplete = next;
+    if (next >= 100) {
+      t.status = "done";
+      if (crossedUp) {
+        t.completedAt = nowIso();
+        t.completedByWoId = completedByWoId || null;
+      }
+    } else {
+      t.status = next > 0 ? "in_progress" : "pending";
+      t.completedAt = null;
+      t.completedByWoId = null;
+    }
+    appendHistory(proj, {
+      action: "task_progress", by,
+      note: `${taskId} ${delta >= 0 ? "+" : ""}${delta}% → ${next}% via ${completedByWoId || "manual"}`
+    });
     return t;
   });
 }
@@ -714,7 +754,14 @@ async function computeProjectMetrics(projectId) {
 
   const totalTasks = (proj.tasks || []).length;
   const doneTasks = (proj.tasks || []).filter((t) => t.status === "done").length;
-  const percentComplete = totalTasks > 0 ? Math.round((doneTasks / totalTasks) * 100) : 0;
+  // Partial-aware progress: average each task's completion so a half-finished
+  // task moves the bar, not only fully-done ones. done reads as 100 even on
+  // legacy records that predate percentComplete. doneTasks is kept for the
+  // "X of Y tasks" label.
+  const taskPct = (t) => (t.status === "done" ? 100 : (Number(t.percentComplete) || 0));
+  const percentComplete = totalTasks > 0
+    ? Math.round((proj.tasks || []).reduce((sum, t) => sum + taskPct(t), 0) / totalTasks)
+    : 0;
 
   let totalPersonHours = 0;
   let photoCount = 0;
@@ -1278,6 +1325,7 @@ module.exports = {
   removeTask,
   markTaskComplete,
   unmarkTaskComplete,
+  addTaskProgress,
   // Brief 2 — metrics & billing
   computeProjectMetrics,
   computeTAndMBilling,

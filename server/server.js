@@ -9234,11 +9234,34 @@ async function handleApi(req, res, pathname) {
       const taskId = String(payload.taskId || "").trim();
       if (!taskId) return sendJson(res, 422, { ok: false, errors: ["taskId is required."] });
 
+      // Fetch the WO once — we need parentProjectId (to update the project
+      // task) and its photo list. Build WOs carry parentProjectId; it may be
+      // null for an unlinked build WO, in which case we only log locally.
+      const wo = await workOrders.get(woId);
+      if (!wo) return sendJson(res, 404, { ok: false, errors: ["Work order not found."] });
+      const projectId = wo.parentProjectId || null;
+
+      // Current cumulative for this task (the project task is authoritative).
+      let curPct = 0;
+      if (projectId) {
+        try {
+          const proj = await projects.get(projectId);
+          const t = (proj?.tasks || []).find((x) => x.id === taskId);
+          if (t) curPct = t.status === "done" ? 100 : (Number(t.percentComplete) || 0);
+        } catch (_) {}
+      }
+      // percentDelta = "+X% done today". Absent → finish the task (remaining to
+      // 100) so an old/offline client that only knows "Mark done today" still
+      // completes it. Clamp so the cumulative stays within [0, 100].
+      const hasDelta = payload.percentDelta !== undefined && payload.percentDelta !== null && payload.percentDelta !== "";
+      let delta = hasDelta ? Math.round(Number(payload.percentDelta)) : (100 - curPct);
+      if (!Number.isFinite(delta)) delta = 0;
+      delta = Math.max(-curPct, Math.min(100 - curPct, delta));
+      const percentAfter = Math.max(0, Math.min(100, curPct + delta));
+
       // Upload any attached photos first, stamping taskId on each.
       const photoMetas = [];
       if (Array.isArray(payload.photos) && payload.photos.length) {
-        const wo = await workOrders.get(woId);
-        if (!wo) return sendJson(res, 404, { ok: false, errors: ["Work order not found."] });
         const existing = Array.isArray(wo.photos) ? wo.photos : [];
         const remaining = MAX_PHOTOS_PER_WO - existing.length;
         if (remaining > 0) {
@@ -9267,19 +9290,24 @@ async function handleApi(req, res, pathname) {
         }
       }
 
-      const result = await workOrders.markTaskDoneToday(woId, taskId, {
+      // Record the per-day log line (delta + resulting cumulative), then flip
+      // the project's master task (authoritative). Same order as before
+      // (daily log → project), same best-effort project sync.
+      const result = await workOrders.addTaskProgressToday(woId, taskId, {
+        percentDelta: delta,
+        percentAfter,
         photoIds: photoMetas.map((p) => String(p.n)),
         by: session?.uid || "admin"
       });
-      // Also flip the project's master task list.
-      if (result.projectId && !result.alreadyDone) {
+      let projTask = null;
+      if (projectId) {
         try {
-          await projects.markTaskComplete(result.projectId, taskId, woId, { by: session?.uid || "admin" });
+          projTask = await projects.addTaskProgress(projectId, taskId, delta, woId, { by: session?.uid || "admin" });
         } catch (projErr) {
           console.warn("[wo tasks-done] project sync failed:", projErr?.message);
         }
       }
-      return sendJson(res, 200, { ok: true, ...result, photosUploaded: photoMetas.length });
+      return sendJson(res, 200, { ok: true, ...result, task: projTask, percentDelta: delta, percentAfter, photosUploaded: photoMetas.length });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't mark task done."] });
     }
@@ -9294,9 +9322,16 @@ async function handleApi(req, res, pathname) {
       const result = await workOrders.unmarkTaskDoneToday(woId, taskId, { by: session?.uid || "admin" });
       if (result.projectId && !result.notDoneHere) {
         try {
-          // Guard: only unmark in project if this WO is the one that
-          // completed it (cross-day correction safety).
-          await projects.unmarkTaskComplete(result.projectId, taskId, woId, { by: session?.uid || "admin" });
+          if (typeof result.removedDelta === "number") {
+            // Roll the project cumulative back by exactly what THIS WO-day
+            // contributed, preserving progress logged on other days. Always
+            // valid (we only subtract our own delta) so no owner guard needed.
+            await projects.addTaskProgress(result.projectId, taskId, -result.removedDelta, woId, { by: session?.uid || "admin" });
+          } else {
+            // Legacy binary entry (no recorded delta) — full unmark, guarded so
+            // we don't unmark a task another WO completed (cross-day safety).
+            await projects.unmarkTaskComplete(result.projectId, taskId, woId, { by: session?.uid || "admin" });
+          }
         } catch (projErr) {
           if (projErr.code !== "task_not_owned_by_wo") {
             console.warn("[wo tasks-undone] project sync failed:", projErr?.message);
