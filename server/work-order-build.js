@@ -1040,6 +1040,11 @@
       const runBtn = document.getElementById("woRunCascadeBtn");
       if (createBtn) createBtn.hidden = true;   // WO-level invoice is wrong for projects
       if (runBtn) runBtn.hidden = true;
+      // The header blurb ("the completion cascade fires when a tech marks the
+      // visit completed…") is stale on the project flow — the project CTA
+      // below carries the right guidance, so drop it.
+      const blurb = cascade.querySelector("header p");
+      if (blurb) blurb.hidden = true;
       ensureProjectCta(cascade);
       cascade.hidden = !done;
     } else {
