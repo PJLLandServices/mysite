@@ -203,6 +203,12 @@
       const otherWoTag = isDone && t.completedByWoId && t.completedByWoId !== state.wo.id
         ? `<span class="tech-build-task-tag tech-build-task-tag--other">${escapeHtml(t.completedByWoId)}</span>`
         : "";
+      // Reopen — shown only when THIS work order logged progress on the task
+      // (so the rollback route has something to undo). Reverts a wrongly
+      // checked-off task to 0% / not done so the real % can be logged.
+      const reopenBtn = todayEntries.has(t.id)
+        ? `<button type="button" class="tech-build-task-reopen" data-task-id="${escapeHtml(t.id)}" title="Clear this work order's progress on this task">↩ Reopen</button>`
+        : "";
 
       return `
         <li class="tech-build-task-item${isDone ? " is-done" : ""}" data-task-id="${escapeHtml(t.id)}">
@@ -214,6 +220,7 @@
               <span class="tech-build-task-pct">${pct}%</span>
               ${todayTag}
               ${otherWoTag}
+              ${reopenBtn}
             </div>
           </div>
         </li>
@@ -221,6 +228,9 @@
     }).join("");
     els.taskList.querySelectorAll(".tech-build-task-mark").forEach((btn) => {
       btn.addEventListener("click", () => openTaskDoneModal(btn.dataset.taskId));
+    });
+    els.taskList.querySelectorAll(".tech-build-task-reopen").forEach((btn) => {
+      btn.addEventListener("click", () => reopenTask(btn.dataset.taskId));
     });
   }
 
@@ -559,6 +569,36 @@
         : (after != null ? `Logged · now ${after}%` : "Progress logged");
       showToast(`${msg}${photoCount ? ` · ${photoCount} photo${photoCount === 1 ? "" : "s"}` : ""}.`, { variant: "success" });
     } catch (err) { showToast(err.message || "Save failed.", { variant: "error" }); }
+  }
+
+  // Reopen a task: roll back THIS work order's logged progress via the existing
+  // DELETE rollback route. For a task that was simply "checked off" (a legacy
+  // binary completion with no recorded delta) this reverts it to 0% / not done
+  // so the real progress can be logged. Mirrors submitTaskProgress's refresh.
+  async function reopenTask(taskId) {
+    const task = (state.project?.tasks || []).find((t) => t.id === taskId);
+    const label = task ? task.description : "this task";
+    if (!confirm(`Reopen "${label}"? This clears the progress logged on this work order and unmarks it as done.`)) return;
+    try {
+      const r = await fetch(`/api/work-orders/${encodeURIComponent(WO_ID)}/tasks-done/${encodeURIComponent(taskId)}`, { method: "DELETE" });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok || !data.ok) {
+        showToast(data.errors?.[0] || `Couldn't reopen (${r.status})`, { variant: "error" });
+        return;
+      }
+      const [woR, projR] = await Promise.all([
+        fetch(`/api/work-orders/${encodeURIComponent(WO_ID)}`).then((r) => r.json()),
+        state.wo.parentProjectId
+          ? fetch(`/api/projects/${encodeURIComponent(state.wo.parentProjectId)}`).then((r) => r.json())
+          : Promise.resolve(null)
+      ]);
+      state.wo = woR.workOrder;
+      if (projR?.project) state.project = projR.project;
+      renderTasks();
+      renderContext();
+      applyBuildChrome();
+      showToast("Task reopened.", { variant: "success" });
+    } catch (err) { showToast(err.message || "Couldn't reopen.", { variant: "error" }); }
   }
 
   async function removeMaterial(idx) {

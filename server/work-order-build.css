@@ -148,6 +148,19 @@
 }
 .tech-build-task-tag--other { background: #FDF1E6; color: #8A4A12; }
 .tech-build-task-tag--today { background: #EAF3DE; color: #1B4D2E; }
+.tech-build-task-reopen {
+  margin-left: auto;
+  padding: 3px 9px;
+  background: #fff;
+  border: 1px solid #CFCFC6;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #8A4A12;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.tech-build-task-reopen:hover { border-color: #8A4A12; background: #FDF1E6; }
 
 /* Per-task grade-of-completion: desc on top, a progress bar + % + tags below. */
 .tech-build-task-main {
