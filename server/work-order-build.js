@@ -121,6 +121,7 @@
       renderNotes();
       renderNextDay();
       wire();
+      applyBuildChrome();
     } catch (err) {
       console.warn("[wo-build] boot failed:", err?.message);
     }
@@ -550,6 +551,7 @@
       if (projR?.project) state.project = projR.project;
       renderTasks();
       renderContext();
+      applyBuildChrome(); // re-gate Invoice+completion the instant the last task lands
       const after = typeof data.percentAfter === "number" ? data.percentAfter : null;
       const photoCount = data.photosUploaded || 0;
       const msg = after != null && after >= 100
@@ -963,7 +965,92 @@
     } catch (err) { showToast(err.message || "Save failed.", { variant: "error" }); }
   }
 
+  // ---- Build-WO chrome ----------------------------------------------
+  // On build WOs the service-visit sections that work-order.js /
+  // work-order-tech.js render are irrelevant: the binding signature is on
+  // the quotation (not the WO), on-site quotes are only for change orders,
+  // and invoicing happens at PROJECT completion once every task (the scope
+  // of work) is done. applyBuildChrome owns that cleanup and re-runs on each
+  // "wo:rendered" event so it survives the service modules re-rendering.
+  let _changeOrderOpen = false;
+
+  function allTasksDone() {
+    const tasks = state.project && Array.isArray(state.project.tasks) ? state.project.tasks : null;
+    if (!tasks || !tasks.length) return false;
+    return tasks.every((t) => t.status === "done" || (Number(t.percentComplete) || 0) >= 100);
+  }
+
+  function ensureChangeOrderBtn(quote) {
+    let btn = document.getElementById("tbChangeOrderBtn");
+    if (!btn) {
+      btn = document.createElement("button");
+      btn.type = "button";
+      btn.id = "tbChangeOrderBtn";
+      btn.className = quote.id === "woOnSiteQuoteSection" ? "pjl-btn pjl-btn-outline" : "tech-build-task-mark";
+      btn.style.cssText = "margin:12px 0;display:inline-block;";
+      btn.addEventListener("click", () => {
+        _changeOrderOpen = !_changeOrderOpen;
+        applyBuildChrome();
+        if (_changeOrderOpen) quote.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+      quote.parentNode.insertBefore(btn, quote);
+    }
+    btn.textContent = _changeOrderOpen ? "Hide change-order quote" : "＋ Draft change-order quote";
+  }
+
+  function ensureProjectCta(container) {
+    let cta = document.getElementById("tbProjectCompleteCta");
+    if (!cta) {
+      cta = document.createElement("div");
+      cta.id = "tbProjectCompleteCta";
+      cta.style.cssText = "margin-top:12px;";
+      container.appendChild(cta);
+    }
+    const pid = (state.project && state.project.id) || (state.wo && state.wo.parentProjectId) || "";
+    cta.innerHTML = pid
+      ? `<a class="pjl-btn pjl-btn-primary" href="/admin/project/${encodeURIComponent(pid)}">All scope complete — Complete &amp; invoice on project →</a>`
+        + `<p class="tech-build-tip" style="margin:8px 0 0;">Build work orders invoice at project completion, not per visit.</p>`
+      : "";
+    return cta;
+  }
+
+  // Hide the service-visit chrome on build WOs and gate the invoice CTA on
+  // all project tasks being complete. No-op for non-build WOs (boot() returns
+  // before wiring, so the listener is never even attached on those).
+  function applyBuildChrome() {
+    if (!state.wo || state.wo.type !== "build") return;
+
+    // 1) Customer sign-off — removed (signature is on the quotation).
+    const signoff = document.getElementById("woSignoffSection") || document.getElementById("techSignoffSection");
+    if (signoff) signoff.hidden = true;
+
+    // 2) On-site quote — collapsed behind a "Draft change-order quote" toggle.
+    const quote = document.getElementById("woOnSiteQuoteSection") || document.getElementById("techOnSiteQuote");
+    if (quote) {
+      ensureChangeOrderBtn(quote);
+      quote.hidden = !_changeOrderOpen;
+    }
+
+    // 3) Invoice + completion — only once every task is done, routed to the
+    //    project (where a project actually invoices).
+    const done = allTasksDone();
+    const cascade = document.getElementById("woCascadeActions");
+    if (cascade) {
+      const createBtn = document.getElementById("woCreateInvoiceBtn");
+      const runBtn = document.getElementById("woRunCascadeBtn");
+      if (createBtn) createBtn.hidden = true;   // WO-level invoice is wrong for projects
+      if (runBtn) runBtn.hidden = true;
+      ensureProjectCta(cascade);
+      cascade.hidden = !done;
+    } else {
+      // Tech surface has no #woCascadeActions — drop the CTA into the panel.
+      const cta = ensureProjectCta(els.panel);
+      cta.hidden = !done;
+    }
+  }
+
   function wire() {
+    document.addEventListener("wo:rendered", applyBuildChrome);
     els.startSession.addEventListener("click", startSession);
     els.endSession.addEventListener("click", endSession);
     els.labourersCount.addEventListener("change", updateLabourers);

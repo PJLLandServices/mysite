@@ -46,6 +46,11 @@ const saveBtn = document.getElementById("saveBtn");
 const saveStatus = document.getElementById("saveStatus");
 const deleteBtn = document.getElementById("deleteBtn");
 const backLink = document.getElementById("backLink");
+
+// Unsaved-changes guard. Set on any edit to a tracked form field, cleared
+// whenever populateForm re-baselines (initial load + after every successful
+// save). The status dropdown auto-saves, so edits to it don't count.
+let woFormDirty = false;
 const techModeBtn = document.getElementById("techModeBtn");
 const woRescheduleBtn = document.getElementById("woRescheduleBtn");
 const woFollowupBtn = document.getElementById("woFollowupBtn");
@@ -1256,6 +1261,10 @@ function populateForm(wo) {
   renderHistory(wo);
   renderReportControls(wo);
   applyLockState(wo.locked === true, wo.signature);
+  // Build-WO chrome (work-order-build.js) re-applies its section hiding on
+  // this event so it survives this re-render.
+  document.dispatchEvent(new CustomEvent("wo:rendered"));
+  woFormDirty = false; // form now mirrors the saved record
 }
 
 // Mirror of lib's PHOTO_REQUIREMENT_BY_TYPE — keep in sync.
@@ -2481,6 +2490,23 @@ woForm.addEventListener("submit", async (event) => {
     saveStatus.textContent = err.message || "Couldn't save.";
   } finally {
     saveBtn.disabled = false;
+  }
+});
+
+// Unsaved-changes leave guard. Mark dirty on any edit to a tracked field
+// (everything except the auto-saving status dropdown). beforeunload covers
+// reload / tab-close / external nav; the back-link gets an in-app confirm.
+woForm.addEventListener("input", (e) => { if (e.target !== woStatus) woFormDirty = true; });
+woForm.addEventListener("change", (e) => { if (e.target !== woStatus) woFormDirty = true; });
+window.addEventListener("beforeunload", (e) => {
+  if (woFormDirty) { e.preventDefault(); e.returnValue = ""; }
+});
+backLink?.addEventListener("click", (e) => {
+  if (!woFormDirty) return;
+  e.preventDefault();
+  if (confirm("Are you sure you want to leave without saving?")) {
+    woFormDirty = false;
+    window.location.assign(backLink.href);
   }
 });
 

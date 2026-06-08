@@ -4851,6 +4851,9 @@ async function init() {
     renderOnSiteQuote();
     renderSignoff();
     applyLockState(state.locked);
+    // Build-WO chrome (work-order-build.js) re-applies its section hiding on
+    // this event so it survives this render.
+    document.dispatchEvent(new CustomEvent("wo:rendered"));
 
     if (wo.diagnosis) {
       techDiagnosisText.textContent = typeof wo.diagnosis === "string"
