@@ -75,7 +75,9 @@ function generatePoCsv(po) {
   const lines = [];
   lines.push("SKU,Description,Qty,Unit,UnitPrice,LineTotal");
   for (const line of (po.lineItems || [])) {
-    const description = descriptionFor(line.sku);
+    // Resolution order: stored line description → catalog (by SKU) →
+    // "(SKU …)" placeholder. descriptionFor() already does the last two.
+    const description = (line.description || "").trim() || descriptionFor(line.sku);
     const unit = formatUnit(unitFor(line.sku), line.qty);
     const row = [
       quoteField(line.sku || ""),

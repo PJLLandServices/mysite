@@ -189,7 +189,8 @@
       const locked = state.po.status !== "draft";
       els.lines.innerHTML = lines.map((line) => {
         const part = state.catalog.parts[line.sku];
-        const desc = part ? (part.description || part.sku) : `(SKU ${line.sku})`;
+        // stored line description → catalog (by SKU) → "(SKU …)" placeholder
+        const desc = (line.description && line.description.trim()) || (part ? (part.description || part.sku) : `(SKU ${line.sku})`);
         const recv = Number(line.receivedQty) || 0;
         const fullyReceived = recv >= line.qty;
         let recvIndicator = "";
@@ -381,7 +382,8 @@
     const lines = state.po.lineItems || [];
     els.receiveLines.innerHTML = lines.map((line) => {
       const part = state.catalog.parts[line.sku];
-      const desc = part ? (part.description || part.sku) : `(SKU ${line.sku})`;
+      // stored line description → catalog (by SKU) → "(SKU …)" placeholder
+      const desc = (line.description && line.description.trim()) || (part ? (part.description || part.sku) : `(SKU ${line.sku})`);
       const recv = Number(line.receivedQty) || 0;
       const remaining = Math.max(0, line.qty - recv);
       const fullyReceived = remaining === 0;

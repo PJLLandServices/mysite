@@ -93,6 +93,13 @@ function hydrateLine(line) {
     qty: safeQty,
     sourceListId: typeof line?.sourceListId === "string" ? line.sourceListId : null,
     sourceLineId: typeof line?.sourceLineId === "string" ? line.sourceLineId : null,
+    // Description typed on a manual / off-catalog line. Snapshotted here
+    // so the PDF/CSV/detail renderers can show the entered text instead of
+    // re-deriving from parts.json (which falls back to "(SKU …)" when the
+    // SKU isn't catalogued). Blank for catalogue-driven lines, which still
+    // resolve their description from the catalog at render time. 240-char
+    // cap matches parts.js's description limit.
+    description: typeof line?.description === "string" ? line.description.trim().slice(0, 240) : "",
     unitPriceCents: unitCents,
     lineTotalCents: unitCents * safeQty,
     notes: typeof line?.notes === "string" ? line.notes.slice(0, 500) : "",

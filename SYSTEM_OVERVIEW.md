@@ -741,6 +741,19 @@ timestamp. **Both files are immutable** once the PO is `sent` — the
 receives byte-identical documents regardless of subsequent
 `parts.json` edits. Drafts regenerate documents on each preview.
 
+**Manual / off-catalog lines + Description resolution.** Besides the
+catalog-driven `Materials → POs` flow, a PO line can be added manually
+(via `POST /api/purchase-orders` / `PATCH …/:id`) carrying an
+off-catalog `sku` + a typed `description` (+ `unitPriceCents` once
+supplier pricing is known). The line's `description` is snapshotted on
+the record by `hydrateLine` (240-char cap), alongside the catalogued
+fields. Every Description surface — PDF, CSV, and the PO detail page —
+resolves Description in this order: **stored line `description` → catalog
+description by SKU → `(SKU <sku>)` placeholder**. The catalog lookup is
+the fallback for catalogued lines saved without an explicit description;
+the `(SKU …)` placeholder is the last resort only, so an off-catalog SKU
+with a typed description renders that text rather than the placeholder.
+
 The email sent to the supplier on `draft → sent`:
 
 - Subject: `PO-YYYY-NNNN — PJL Land Services — N items, $TOTAL`

@@ -301,7 +301,9 @@ function drawTableHeader(doc, y) {
 
 function drawTableRow(doc, line, rowNum, rowY) {
   const { xs, widths, descWidth } = tableLayout();
-  const description = descriptionFor(line.sku);
+  // Resolution order: stored line description → catalog (by SKU) →
+  // "(SKU …)" placeholder. descriptionFor() already does the last two.
+  const description = (line.description || "").trim() || descriptionFor(line.sku);
   const unitLabel = formatUnit(unitFor(line.sku), line.qty);
 
   // Description height drives row height. Compute it before drawing so
