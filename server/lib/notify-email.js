@@ -209,7 +209,7 @@ async function fetchRecordingAttachment(recordingUrl) {
   }
 }
 
-function buildVoicemailEmail({ from, durationSeconds, recordingUrl, transcription, receivedAt }) {
+function buildVoicemailEmail({ from, durationSeconds, listenUrl, transcription, receivedAt }) {
   const caller = String(from || "").trim() || "Unknown number";
   const durNum = Number(durationSeconds);
   const durText = Number.isFinite(durNum) && durNum > 0 ? `${durNum} second${durNum === 1 ? "" : "s"}` : "—";
@@ -218,7 +218,10 @@ function buildVoicemailEmail({ from, durationSeconds, recordingUrl, transcriptio
     if (Number.isNaN(d.getTime())) return "";
     return d.toLocaleString("en-CA", { timeZone: "America/Toronto", dateStyle: "medium", timeStyle: "short" });
   })();
-  const listenUrl = recordingUrl ? `${recordingUrl}.mp3` : "";
+  // listenUrl is our server-proxied link (no Twilio login required) — see
+  // voicemail-store.js. The raw recordingUrl is used only server-side below
+  // to fetch + attach the audio.
+  const listen = String(listenUrl || "").trim();
   const transcript = String(transcription || "").trim();
   const transcriptHtml = transcript
     ? escapeHtml(transcript).replace(/\n/g, "<br>")
@@ -242,8 +245,8 @@ function buildVoicemailEmail({ from, durationSeconds, recordingUrl, transcriptio
     ${transcriptHtml}
   </blockquote>
 
-  ${listenUrl ? `<p style="margin: 24px 0 0;">
-    <a href="${escapeHtml(listenUrl)}" style="display: inline-block; padding: 10px 18px; background: #1f4f6e; color: white; text-decoration: none; border-radius: 6px; font-weight: 600;">▶ Listen to voicemail</a>
+  ${listen ? `<p style="margin: 24px 0 0;">
+    <a href="${escapeHtml(listen)}" style="display: inline-block; padding: 10px 18px; background: #1f4f6e; color: white; text-decoration: none; border-radius: 6px; font-weight: 600;">▶ Listen to voicemail</a>
   </p>` : ""}
 
   <p style="margin: 24px 0 0; font-size: 12px; color: #999;">
@@ -259,13 +262,13 @@ function buildVoicemailEmail({ from, durationSeconds, recordingUrl, transcriptio
     "Transcription (best effort):",
     transcript || "(none — listen to the audio)",
     "",
-    listenUrl ? `Listen: ${listenUrl}` : ""
+    listen ? `Listen: ${listen}` : ""
   ];
 
   return { subject, html, text: textLines.filter(Boolean).join("\n") };
 }
 
-async function sendVoicemailEmail({ from, durationSeconds, recordingUrl, transcription, receivedAt } = {}) {
+async function sendVoicemailEmail({ from, durationSeconds, recordingUrl, listenUrl, transcription, receivedAt } = {}) {
   const transporter = getTransporter();
   if (!transporter) {
     console.warn("[email] GMAIL_USER / GMAIL_APP_PASSWORD not set — skipping voicemail email (recording still stored by Twilio).");
@@ -274,7 +277,9 @@ async function sendVoicemailEmail({ from, durationSeconds, recordingUrl, transcr
 
   const to = process.env.NOTIFY_TO_EMAIL || process.env.GMAIL_USER;
   const fromAddress = process.env.GMAIL_USER;
-  const { subject, html, text } = buildVoicemailEmail({ from, durationSeconds, recordingUrl, transcription, receivedAt });
+  // listenUrl (server-proxied, no-login) goes in the email body; recordingUrl
+  // (raw Twilio) is used only here to fetch + attach the audio server-side.
+  const { subject, html, text } = buildVoicemailEmail({ from, durationSeconds, listenUrl, transcription, receivedAt });
   const attachment = await fetchRecordingAttachment(recordingUrl);
 
   try {

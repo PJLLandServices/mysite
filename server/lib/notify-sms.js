@@ -147,7 +147,7 @@ async function sendPortalMessageSms(lead, message) {
 // SMS above — nothing new to configure. The emoji + recording URL push
 // this past a single GSM-7 segment, but voicemail volume is low so the
 // extra segment cost is negligible (and the link has to be there).
-async function sendVoicemailAlertSms({ from, durationSeconds, recordingUrl } = {}) {
+async function sendVoicemailAlertSms({ from, durationSeconds, listenUrl } = {}) {
   if (!isConfigured()) {
     console.warn("[sms] Twilio env vars not set — skipping voicemail alert SMS (recording still stored by Twilio).");
     return { ok: false, skipped: true };
@@ -160,9 +160,12 @@ async function sendVoicemailAlertSms({ from, durationSeconds, recordingUrl } = {
   const caller = String(from || "").trim() || "an unknown number";
   const durNum = Number(durationSeconds);
   const dur = Number.isFinite(durNum) && durNum > 0 ? `${durNum}s` : "voicemail";
-  // Append .mp3 so tapping the link opens the audio directly rather than
-  // Twilio's XML metadata page. recordingUrl is Twilio's REST resource URL.
-  const listen = recordingUrl ? `${recordingUrl}.mp3` : "";
+  // listenUrl is our OWN server-proxied URL (server/lib/voicemail-store.js +
+  // the /api/voicemail/recording/:token route) — NOT the raw api.twilio.com
+  // Recording URL, which prompts for Twilio Console credentials Patrick
+  // doesn't have. The proxy authenticates to Twilio server-side and streams
+  // the audio, so tapping this link Just Works on his phone.
+  const listen = String(listenUrl || "").trim();
   const body = `📞 New PJL voicemail from ${caller} (${dur}).${listen ? ` Listen: ${listen}` : ""}`;
 
   try {

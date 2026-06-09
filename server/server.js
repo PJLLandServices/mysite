@@ -40,6 +40,7 @@ const { sendNewLeadEmail, sendVoicemailEmail } = require("./lib/notify-email");
 const { sendNewLeadSms, sendPortalMessageSms, sendVoicemailAlertSms } = require("./lib/notify-sms");
 const { notifyCustomer, eventForTransition, sendInvoiceToCustomer, sendPaymentReceipt, sendBookingCancellation, sendPortalMessageAlertEmail, sendPortalReplyToCustomer } = require("./lib/notify-customer");
 const { resolvePublicBaseUrl } = require("./lib/public-base-url");
+const voicemailStore = require("./lib/voicemail-store");
 const { geocode, PJL_BASE } = require("./lib/geocode");
 const { BOOKABLE_SERVICES, DEFAULT_HOURS, DEFAULT_SETTINGS, listAvailableSlots, groupByDay, expandDaysToRange, parseLocalDateKey } = require("./lib/availability");
 const scheduleStore = require("./lib/schedule-store");
@@ -2897,12 +2898,29 @@ async function handleApi(req, res, pathname) {
     if (!allowTwilioWebhook(req, pathname, params, "voicemail-recorded")) {
       return sendJson(res, 403, { ok: false, errors: ["Invalid Twilio signature."] });
     }
+    // Mint a server-proxied "Listen" URL so the SMS link works without Twilio
+    // Console credentials (see /api/voicemail/recording/:token below). Token
+    // is keyed on RecordingSid, so the later transcription email reuses it.
+    let listenUrl = "";
+    try {
+      if (params.RecordingUrl) {
+        const tok = await voicemailStore.mintToken({
+          recordingSid: params.RecordingSid,
+          recordingUrl: params.RecordingUrl,
+          callSid: params.CallSid,
+          from: params.From
+        });
+        listenUrl = `${twilioWebhookBase()}/api/voicemail/recording/${tok}`;
+      }
+    } catch (err) {
+      console.error("[twilio-voice] could not mint voicemail token:", err?.message || err);
+    }
     // Fire-and-forget the SMS — never block returning TwiML on Twilio's
     // outbound-message API latency, and never 500 the webhook if it fails.
     sendVoicemailAlertSms({
       from: params.From,
       durationSeconds: params.RecordingDuration,
-      recordingUrl: params.RecordingUrl
+      listenUrl
     }).catch((err) => console.error("[twilio-voice] voicemail SMS failed:", err?.message || err));
 
     const xml =
@@ -2922,18 +2940,92 @@ async function handleApi(req, res, pathname) {
     if (!allowTwilioWebhook(req, pathname, params, "voicemail-transcription")) {
       return sendJson(res, 403, { ok: false, errors: ["Invalid Twilio signature."] });
     }
+    // Reuse (or mint) the same server-proxied "Listen" URL the SMS used —
+    // keyed on RecordingSid so it's one token per voicemail.
+    let listenUrl = "";
+    try {
+      if (params.RecordingUrl) {
+        const tok = await voicemailStore.mintToken({
+          recordingSid: params.RecordingSid,
+          recordingUrl: params.RecordingUrl,
+          callSid: params.CallSid,
+          from: params.From
+        });
+        listenUrl = `${twilioWebhookBase()}/api/voicemail/recording/${tok}`;
+      }
+    } catch (err) {
+      console.error("[twilio-voice] could not mint voicemail token (email):", err?.message || err);
+    }
     // TranscriptionStatus is "completed" or "failed". On failure Twilio
     // sends no text — we still email so Patrick gets the audio link.
+    // recordingUrl (raw Twilio) is passed for the server-side mp3 attachment;
+    // listenUrl (proxied) is the clickable link in the body.
     sendVoicemailEmail({
       from: params.From,
       durationSeconds: params.RecordingDuration,
       recordingUrl: params.RecordingUrl,
+      listenUrl,
       transcription: params.TranscriptionStatus === "failed" ? "" : params.TranscriptionText,
       receivedAt: new Date().toISOString()
     }).catch((err) => console.error("[twilio-voice] voicemail email failed:", err?.message || err));
 
     res.writeHead(204, { "cache-control": "no-store" });
     res.end();
+    return;
+  }
+
+  // 4) Public, token-gated audio proxy. The SMS/email "Listen" link points
+  //    here instead of api.twilio.com (which prompts for Console creds Patrick
+  //    doesn't have). We look the token up, authenticate to Twilio with the
+  //    env creds server-side, and stream the mp3 back. Range requests are
+  //    forwarded so iOS inline players can seek. Unknown/expired tokens 404.
+  if (req.method === "GET" && pathname.startsWith("/api/voicemail/recording/")) {
+    const token = decodeURIComponent(pathname.slice("/api/voicemail/recording/".length));
+    const record = await voicemailStore.resolveToken(token);
+    if (!record) {
+      res.writeHead(404, { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" });
+      res.end("This voicemail link has expired or is invalid.");
+      return;
+    }
+    const sid = process.env.TWILIO_ACCOUNT_SID;
+    const tok = process.env.TWILIO_AUTH_TOKEN;
+    if (!sid || !tok) {
+      res.writeHead(502, { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" });
+      res.end("Voicemail playback is not configured on the server.");
+      return;
+    }
+    try {
+      const auth = Buffer.from(`${sid}:${tok}`).toString("base64");
+      const fwdHeaders = { "Authorization": `Basic ${auth}` };
+      if (req.headers["range"]) fwdHeaders["Range"] = req.headers["range"];
+      const upstream = await fetch(`${record.recordingUrl}.mp3`, { headers: fwdHeaders });
+      if (upstream.status !== 200 && upstream.status !== 206) {
+        console.error("[twilio-voice] recording fetch failed:", upstream.status);
+        res.writeHead(upstream.status === 404 ? 404 : 502, { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" });
+        res.end(upstream.status === 404 ? "Recording no longer available." : "Could not load recording.");
+        return;
+      }
+      const outHeaders = {
+        "content-type": "audio/mpeg",
+        "accept-ranges": "bytes",
+        "cache-control": "private, max-age=86400",
+        "content-disposition": `inline; filename="voicemail-${record.recordingSid || "recording"}.mp3"`
+      };
+      const cl = upstream.headers.get("content-length");
+      if (cl) outHeaders["content-length"] = cl;
+      const cr = upstream.headers.get("content-range");
+      if (cr) outHeaders["content-range"] = cr;
+      res.writeHead(upstream.status, outHeaders);
+      if (req.method === "HEAD" || !upstream.body) { res.end(); return; }
+      const { Readable } = require("node:stream");
+      Readable.fromWeb(upstream.body).pipe(res);
+    } catch (err) {
+      console.error("[twilio-voice] recording proxy error:", err?.message || err);
+      if (!res.headersSent) {
+        res.writeHead(502, { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" });
+      }
+      res.end("Could not load recording.");
+    }
     return;
   }
 
