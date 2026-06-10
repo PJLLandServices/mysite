@@ -16,7 +16,7 @@
 
 const fsSync = require("node:fs");
 const path = require("node:path");
-const { formatUnit } = require("./format");
+const { formatUnit, resolveLineDescription } = require("./format");
 
 // Catalog lookup — same as po-pdf.js. The cache is process-lifetime,
 // reset on restart. Snapshot-on-send (server.js) holds the rendered CSV
@@ -34,12 +34,13 @@ function loadParts() {
   return _partsCache;
 }
 
-function descriptionFor(sku) {
-  const cat = loadParts();
-  const part = cat.parts && cat.parts[sku];
-  if (!part) return `(SKU ${sku})`;
-  const sizeBit = part.size ? `${part.size} — ` : "";
-  return `${sizeBit}${part.description || sku}`;
+// Description resolution is shared via format.resolveLineDescription (stored
+// → catalog → placeholder, no size prefix) — identical to the PDF, email,
+// and on-screen detail. The caller passes the merged catalog (PARTS.parts);
+// we fall back to the on-disk parts.json only when none is provided.
+function catalogParts(passed) {
+  if (passed && typeof passed === "object") return passed;
+  return loadParts().parts || {};
 }
 
 function unitFor(sku) {
@@ -69,15 +70,14 @@ function fmtDollars(cents) {
 
 // Render the CSV. Returns a Buffer so the caller can both pipe to HTTP
 // and attach to email without juggling strings vs streams. UTF-8 with
-// a BOM so Excel on Windows interprets non-ASCII characters (the —
-// em-dash that appears in `${size} — ${description}`) correctly.
-function generatePoCsv(po) {
+// a BOM so Excel on Windows interprets non-ASCII characters (em-dashes,
+// accented part names, etc.) inside descriptions correctly.
+function generatePoCsv(po, partsMap) {
+  const catalog = catalogParts(partsMap);
   const lines = [];
   lines.push("SKU,Description,Qty,Unit,UnitPrice,LineTotal");
   for (const line of (po.lineItems || [])) {
-    // Resolution order: stored line description → catalog (by SKU) →
-    // "(SKU …)" placeholder. descriptionFor() already does the last two.
-    const description = (line.description || "").trim() || descriptionFor(line.sku);
+    const description = resolveLineDescription(line, catalog);
     const unit = formatUnit(unitFor(line.sku), line.qty);
     const row = [
       quoteField(line.sku || ""),

@@ -194,4 +194,30 @@ function splitStreetFromCity(line) {
   return [street, cityProv];
 }
 
-module.exports = { formatUnit, formatVendorAddress };
+// resolveLineDescription — THE one description path for a PO line, shared
+// by every render surface (PDF, CSV, supplier email, and — mirrored — the
+// on-screen PO detail table) so they can never disagree. Pure:
+// (line, partsMap) -> string. Precedence:
+//
+//   1. Stored line.description (non-empty) — the snapshot taken at PO
+//      generation, OR a manually-typed off-catalog line. Always wins.
+//   2. partsMap[line.sku].description — live catalog lookup, for legacy
+//      lines generated before the snapshot fix (or blank snapshots).
+//   3. "(SKU <sku>)" placeholder — genuine last resort only.
+//
+// Returns the description text ONLY — never prefixes `size` (the old
+// `${size} — ${desc}` concatenation was a display bug; size already reads
+// naturally inside most catalog descriptions). `partsMap` is the catalog
+// MAP (`{ sku: {...} }`), e.g. PARTS.parts — pass the SAME map to every
+// surface so an override-only SKU resolves identically on all of them.
+function resolveLineDescription(line, partsMap) {
+  const stored = line && typeof line.description === "string" ? line.description.trim() : "";
+  if (stored) return stored;
+  const sku = line && line.sku != null ? String(line.sku) : "";
+  const part = partsMap && Object.prototype.hasOwnProperty.call(partsMap, sku) ? partsMap[sku] : null;
+  const catalogDesc = part && typeof part.description === "string" ? part.description.trim() : "";
+  if (catalogDesc) return catalogDesc;
+  return `(SKU ${sku})`;
+}
+
+module.exports = { formatUnit, formatVendorAddress, resolveLineDescription };

@@ -85,6 +85,19 @@
       .replace(/"/g, "&quot;").replace(/'/g, "&#039;");
   }
   function fmtCents(c) { return "$" + ((Number(c) || 0) / 100).toFixed(2); }
+  // Description resolver — mirror of resolveLineDescription in
+  // server/lib/format.js (the page can't require server code). Stored line
+  // description → catalog by SKU → "(SKU …)" placeholder. No size prefix.
+  // Keep in sync with the lib so the on-screen table matches the PDF/CSV/email.
+  function resolveLineDescription(line) {
+    const stored = line && typeof line.description === "string" ? line.description.trim() : "";
+    if (stored) return stored;
+    const parts = state.catalog && state.catalog.parts ? state.catalog.parts : null;
+    const part = parts && line ? parts[line.sku] : null;
+    const catalogDesc = part && typeof part.description === "string" ? part.description.trim() : "";
+    if (catalogDesc) return catalogDesc;
+    return `(SKU ${line ? line.sku : ""})`;
+  }
   function fmtDateTime(iso) {
     if (!iso) return "—";
     return new Date(iso).toLocaleString("en-CA", { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" });
@@ -109,7 +122,12 @@
     try {
       const [poRes, partsRes] = await Promise.all([
         fetch(`/api/purchase-orders/${encodeURIComponent(state.poId)}`, { cache: "no-store" }).then((r) => r.json()),
-        fetch("/api/parts", { cache: "force-cache" }).then((r) => r.json())
+        // no-store, NOT force-cache: the catalog must be fresh so browsing /
+        // adding new lines snapshots the CURRENT parts.json price. force-cache
+        // served a stale /api/parts (the route sets max-age=300). Existing PO
+        // line items keep their own snapshotted unitPriceCents — unaffected.
+        // This page is not under a service worker, so nothing offline to keep.
+        fetch("/api/parts", { cache: "no-store" }).then((r) => r.json())
       ]);
       if (!poRes.ok || !poRes.purchaseOrder) {
         showError((poRes.errors && poRes.errors[0]) || "Couldn't load purchase order.");
@@ -188,9 +206,7 @@
       els.linesEmpty.hidden = true;
       const locked = state.po.status !== "draft";
       els.lines.innerHTML = lines.map((line) => {
-        const part = state.catalog.parts[line.sku];
-        // stored line description → catalog (by SKU) → "(SKU …)" placeholder
-        const desc = (line.description && line.description.trim()) || (part ? (part.description || part.sku) : `(SKU ${line.sku})`);
+        const desc = resolveLineDescription(line);
         const recv = Number(line.receivedQty) || 0;
         const fullyReceived = recv >= line.qty;
         let recvIndicator = "";
@@ -381,9 +397,7 @@
     els.receiveNote.value = "";
     const lines = state.po.lineItems || [];
     els.receiveLines.innerHTML = lines.map((line) => {
-      const part = state.catalog.parts[line.sku];
-      // stored line description → catalog (by SKU) → "(SKU …)" placeholder
-      const desc = (line.description && line.description.trim()) || (part ? (part.description || part.sku) : `(SKU ${line.sku})`);
+      const desc = resolveLineDescription(line);
       const recv = Number(line.receivedQty) || 0;
       const remaining = Math.max(0, line.qty - recv);
       const fullyReceived = remaining === 0;

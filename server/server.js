@@ -10447,8 +10447,12 @@ async function handleApi(req, res, pathname) {
       const { generatePoPdf } = require("./lib/po-pdf");
       const { generatePoCsv } = require("./lib/po-csv");
       const { sendPurchaseOrderEmail, buildSubject } = require("./lib/notify-supplier");
-      const pdfBuffer = await generatePoPdf(po);
-      const csvBuffer = generatePoCsv(po);
+      // One catalog (the merged in-memory PARTS, incl. runtime overrides)
+      // feeds every render surface so descriptions can't diverge between
+      // the PDF/CSV and the email the way they used to (disk vs memory).
+      const poPartsMap = (PARTS && PARTS.parts) || {};
+      const pdfBuffer = await generatePoPdf(po, poPartsMap);
+      const csvBuffer = generatePoCsv(po, poPartsMap);
       const subject = String(payload.subject || buildSubject(po)).slice(0, 200);
 
       // Write both files to the per-PO snapshot directory. Paths persist
@@ -10464,15 +10468,11 @@ async function handleApi(req, res, pathname) {
       const pdfPath = path.relative(SERVER_DIR, pdfFsPath).split(path.sep).join("/");
       const csvPath = path.relative(SERVER_DIR, csvFsPath).split(path.sep).join("/");
 
-      // descriptionFor is injected so notify-supplier.js stays decoupled
-      // from parts.json. po-pdf.js has its own copy of the same lookup.
-      const { parts: catalogParts } = PARTS || { parts: {} };
-      const descriptionFor = (sku) => {
-        const p = catalogParts && catalogParts[sku];
-        if (!p) return `(SKU ${sku})`;
-        const sizeBit = p.size ? `${p.size} — ` : "";
-        return `${sizeBit}${p.description || sku}`;
-      };
+      // describeLine is injected so notify-supplier.js stays decoupled from
+      // parts.json. Same resolver + same catalog as the PDF/CSV — honors the
+      // stored line description first, then the catalog (no size prefix).
+      const { resolveLineDescription } = require("./lib/format");
+      const describeLine = (line) => resolveLineDescription(line, poPartsMap);
 
       await sendPurchaseOrderEmail({
         po,
@@ -10482,7 +10482,7 @@ async function handleApi(req, res, pathname) {
         bodyText: payload.bodyText || "",
         pdfBuffer,
         csvBuffer,
-        descriptionFor
+        describeLine
       });
 
       // Flip the PO state — persist the document paths so the resend
@@ -10495,20 +10495,24 @@ async function handleApi(req, res, pathname) {
         csvPath
       });
 
-      // Flip every source material-list line to "ordered" with this PO id.
-      // Group line ids by source list so we patch each list once.
-      const linesByList = new Map();
+      // Flip every source material-list line to "ordered" with this PO id,
+      // AND lock its price: stamp the line with the PO line's snapshotted
+      // unitPriceCents so the list stops resolving live from parts.json and
+      // can never disagree with what was actually ordered. Map each source
+      // line id to its PO-line price, grouped by source list so we patch
+      // each list once.
+      const sentPriceByList = new Map();   // listId -> Map(sourceLineId -> unitPriceCents)
       for (const line of sentPo.lineItems) {
         if (!line.sourceListId || !line.sourceLineId) continue;
-        if (!linesByList.has(line.sourceListId)) linesByList.set(line.sourceListId, []);
-        linesByList.get(line.sourceListId).push(line.sourceLineId);
+        if (!sentPriceByList.has(line.sourceListId)) sentPriceByList.set(line.sourceListId, new Map());
+        sentPriceByList.get(line.sourceListId).set(line.sourceLineId, Number(line.unitPriceCents) || 0);
       }
-      for (const [listId, lineIds] of linesByList.entries()) {
+      for (const [listId, priceByLineId] of sentPriceByList.entries()) {
         const list = await materialLists.get(listId);
         if (!list) continue;
         const updatedLines = list.lineItems.map((l) => {
-          if (lineIds.includes(l.id) && l.status === "need") {
-            return { ...l, status: "ordered", poId: sentPo.id };
+          if (priceByLineId.has(l.id) && l.status === "need") {
+            return { ...l, status: "ordered", poId: sentPo.id, frozenPriceCents: priceByLineId.get(l.id) };
           }
           return l;
         });
@@ -10567,6 +10571,8 @@ async function handleApi(req, res, pathname) {
         if (!list) continue;
         const updatedLines = list.lineItems.map((l) => {
           if (sourceLineIds.includes(l.id) && l.status === "ordered" && l.poId === receivedPo.id) {
+            // Keep frozenPriceCents (carried by the spread): a received line
+            // should show the price actually paid, not drift to live catalog.
             return { ...l, status: "have", poId: null };
           }
           return l;
@@ -10611,7 +10617,9 @@ async function handleApi(req, res, pathname) {
         if (!list) continue;
         const updatedLines = list.lineItems.map((l) => {
           if (sourceLineIds.includes(l.id) && l.status === "ordered" && l.poId === cancelledPo.id) {
-            return { ...l, status: "need", poId: null };
+            // Back to a live planning line — release the price lock so it
+            // resolves from the current catalog again.
+            return { ...l, status: "need", poId: null, frozenPriceCents: null };
           }
           return l;
         });
@@ -10670,21 +10678,19 @@ async function handleApi(req, res, pathname) {
           snapshotMissingWarn.push("CSV");
         }
       }
-      if (!pdfBuffer) pdfBuffer = await generatePoPdf(po);
-      if (!csvBuffer) csvBuffer = generatePoCsv(po);
+      // Merged catalog for any live regeneration + the email body. Sent
+      // snapshots (read above) are byte-frozen and not re-rendered.
+      const poPartsMap = (PARTS && PARTS.parts) || {};
+      if (!pdfBuffer) pdfBuffer = await generatePoPdf(po, poPartsMap);
+      if (!csvBuffer) csvBuffer = generatePoCsv(po, poPartsMap);
       if (snapshotMissingWarn.length) {
         console.warn(`[po-resend] ${po.id} snapshot missing for: ${snapshotMissingWarn.join(", ")} — regenerated live`);
       }
 
       const subject = String(payload.subject || po.emailSubject || buildSubject(po)).slice(0, 200);
 
-      const { parts: catalogParts } = PARTS || { parts: {} };
-      const descriptionFor = (sku) => {
-        const p = catalogParts && catalogParts[sku];
-        if (!p) return `(SKU ${sku})`;
-        const sizeBit = p.size ? `${p.size} — ` : "";
-        return `${sizeBit}${p.description || sku}`;
-      };
+      const { resolveLineDescription } = require("./lib/format");
+      const describeLine = (line) => resolveLineDescription(line, poPartsMap);
 
       await sendPurchaseOrderEmail({
         po,
@@ -10694,7 +10700,7 @@ async function handleApi(req, res, pathname) {
         bodyText: payload.bodyText || "",
         pdfBuffer,
         csvBuffer,
-        descriptionFor
+        describeLine
       });
       const updated = await purchaseOrders.markResent(id, { toEmail, toName: payload.toName, subject });
       return sendJson(res, 200, { ok: true, purchaseOrder: updated });
@@ -10736,7 +10742,7 @@ async function handleApi(req, res, pathname) {
       }
       if (!pdf) {
         const { generatePoPdf } = require("./lib/po-pdf");
-        pdf = await generatePoPdf(po);
+        pdf = await generatePoPdf(po, (PARTS && PARTS.parts) || {});
       }
       res.writeHead(200, {
         "content-type": "application/pdf",
@@ -10765,7 +10771,7 @@ async function handleApi(req, res, pathname) {
       }
       if (!csv) {
         const { generatePoCsv } = require("./lib/po-csv");
-        csv = generatePoCsv(po);
+        csv = generatePoCsv(po, (PARTS && PARTS.parts) || {});
       }
       res.writeHead(200, {
         "content-type": "text/csv; charset=utf-8",

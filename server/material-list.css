@@ -428,6 +428,24 @@
 .mlb-line-meta .mlb-line-sku {
   font-family: ui-monospace, "SFMono-Regular", monospace;
 }
+/* Price locked to a sent PO — subtle blue chip (ordered colour family). */
+.mlb-line-locked {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: #DCE5F0;
+  color: #1F4D7A;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  cursor: help;
+}
+/* Deleted-SKU line with no lock — explicit, not a misleading $0. */
+.mlb-line-unavailable {
+  color: #B23A2E;
+  font-weight: 600;
+}
 .mlb-line-controls {
   display: grid;
   grid-template-columns: auto 1fr auto auto;

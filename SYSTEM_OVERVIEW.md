@@ -98,7 +98,7 @@ form except where noted.
 | `invoices.js` | Invoice | `I-YYYY-NNNN` | Auto-drafted by completion cascade, lifecycle draft → sent → paid → void. Carries `disclaimers: [...keys]` array — text bodies in the `INVOICE_DISCLAIMERS` constant (currently only `fall_additional_plumbing`). `update()` merges via Set semantics so cascade re-fires never duplicate keys. |
 | `bookings.js` | Booking | `BK-YYYY-NNNN` | First-class appointment record. Mirrors `lead.booking` but is canonical. Exposes `cancel()` (soft, adds `cancelledAt/By/Reason` + history), `reschedule()` (sets `scheduledFor` + bumps `rescheduleCount` + history), and `remove()` (hard delete; refuses when a linked WO is past `scheduled` — caller passes `isActiveWo` to gate without coupling to work-orders.js). Schema includes `rescheduleCount` (capped at 1 for customer self-service via the portal endpoint; admin bypasses the cap). |
 | `projects.js` | Project | `PROJ-YYYY-NNNN` | Multi-WO container for named jobs. Lifecycle planning → active → complete → archived. `createFromProposal(quote, …)` (Brief 1) enriches a project at conversion time from a `project_proposal` quote: `branch`, `billingMode`, `labourRateLocked` (snapshotted from `quote.customRates.labour`), `tasks[]` (seeded from line items — one task per line, status `pending`, `sourceLineItemId` set), `attachments[]` (references to the quote's attachments by id), and a frozen `proposalSnapshot` mirroring the accepted proposal at that instant. **Brief 2** adds execution ops: task CRUD (`addTask`, `updateTask`, `removeTask`, `markTaskComplete`, `unmarkTaskComplete`, `seedTasksFromQuote`); scope changes (`createScopeChangeRequest`, `updateScopeChangeRequest`, `sendScopeChangeRequest`, `resolveScopeChangeRequest`, `generateQuoteRevisionFromScopeChange`); status updates (`generateStatusUpdate`); project completion (`markFinalWo`, `completionPreflight`, `completeProject`); metrics + billing rollup (`computeProjectMetrics`, `computeTAndMBilling`). Schema additions: `scopeChangeRequests[]`, `statusUpdates[]`, `finalWoId`, `projectCompletionAt`, `invoiceGeneratedAt`, `finalInvoiceId`. |
-| `material-lists.js` | Material List | `ML-YYYY-NNNN` | Bill of materials. Line items reference parts.json SKUs + quantities + status (`need` / `ordered` / `have`). Attachable to a project / WO / quote / standalone. |
+| `material-lists.js` | Material List | `ML-YYYY-NNNN` | Bill of materials. Line items reference parts.json SKUs + quantities + status (`need` / `ordered` / `have`). Attachable to a project / WO / quote / standalone. **Pricing:** a line's unit price resolves **live from parts.json until its PO is sent** (catalog edits show on the next load), then **locks** to the PO-snapshotted price — `frozenPriceCents` is stamped onto the line at send and cleared if the PO is cancelled (a received line keeps the price paid). One pure resolver, `resolveLineUnitPriceCents(line, partsMap)`, feeds **both** read paths — the builder's per-line render/savebar and the `?withTotals=1` server totals — so they can't disagree. The builder fetches `/api/parts` `no-store` (not force-cache) so live prices aren't stale. |
 | `purchase-orders.js` | Purchase Order | `PO-YYYY-NNNN` | One supplier's slice of a material list's `need` lines. Lifecycle draft → sent → partially_received → received → cancelled. |
 | `suppliers.js` | Supplier | `SUP-NNN` (no year prefix) | Vendor records (name, contact, email, phone, address). |
 | `part-suppliers.js` | — | n/a | Override map at `data/part-suppliers.json` mapping SKU → supplierIds[]. parts.json's `supplierIds` field is a placeholder; this file is the source of truth. |
@@ -747,12 +747,30 @@ catalog-driven `Materials → POs` flow, a PO line can be added manually
 off-catalog `sku` + a typed `description` (+ `unitPriceCents` once
 supplier pricing is known). The line's `description` is snapshotted on
 the record by `hydrateLine` (240-char cap), alongside the catalogued
-fields. Every Description surface — PDF, CSV, and the PO detail page —
-resolves Description in this order: **stored line `description` → catalog
-description by SKU → `(SKU <sku>)` placeholder**. The catalog lookup is
-the fallback for catalogued lines saved without an explicit description;
-the `(SKU …)` placeholder is the last resort only, so an off-catalog SKU
-with a typed description renders that text rather than the placeholder.
+fields. **Generation also snapshots it:** `generate-purchase-orders`
+(and `reorderFrom`) stamp each PO line's `description` from the catalog
+at create time, so the stored value is correct going forward and renders
+don't depend on a later catalog lookup.
+
+One shared resolver — **`resolveLineDescription(line, partsMap)` in
+`format.js`** — is THE description path for **every** surface: the PDF,
+the CSV, the supplier email (HTML quick-paste **and** plain-text), and
+(mirrored client-side) the PO detail page. Order: **stored line
+`description` → catalog description by SKU → `(SKU <sku>)` placeholder**.
+It returns the description text **only** — it never prefixes the part
+`size` (the old `1.50 — …` email concatenation was a bug, removed). The
+`(SKU …)` placeholder is the last resort only, so an off-catalog SKU with
+a typed description renders that text rather than the placeholder.
+
+The renderers are fed the **merged in-memory catalog** (`PARTS.parts`,
+which includes runtime overrides) by the caller — `generatePoPdf(po,
+partsMap)` / `generatePoCsv(po, partsMap)` and the email's injected
+`describeLine(line)`. Previously the PDF/CSV self-loaded `parts.json`
+from disk (baseline only) while the email used the in-memory catalog, so
+a runtime-added SKU showed `(SKU …)` on the PDF/CSV but the real text in
+the email. Now all surfaces read the same catalog and can't diverge.
+Already-sent PO documents stay byte-frozen on disk (`pdfPath`/`csvPath`)
+— this affects generation + draft rendering only, never a sent doc.
 
 The email sent to the supplier on `draft → sent`:
 
@@ -773,9 +791,11 @@ Helpers live in:
 - `server/lib/po-csv.js` — RFC 4180 CSV writer
 - `server/lib/notify-supplier.js` — email composition + send
 - `server/lib/format.js` — `formatUnit()` (fixes the old "eachs"
-  pluralization bug; `each → ea`, `ft → ft`, `roll → roll`) and
+  pluralization bug; `each → ea`, `ft → ft`, `roll → roll`),
   `formatVendorAddress()` (title-cases all-caps stored addresses, puts
-  Canadian postal codes on their own line)
+  Canadian postal codes on their own line), and `resolveLineDescription()`
+  (the shared stored→catalog→placeholder description resolver used by every
+  PO surface)
 - `server/lib/company.js` — single source for sender contact (name,
   city, phone, website, email, brand green hex). The `email()` helper
   reads `process.env.GMAIL_USER` (the SMTP-auth account) with

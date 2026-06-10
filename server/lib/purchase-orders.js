@@ -39,6 +39,7 @@ const fs = require("node:fs/promises");
 const fsSync = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
+const { resolveLineDescription } = require("./format");
 
 const FILE = path.join(__dirname, "..", "data", "purchase-orders.json");
 
@@ -519,6 +520,11 @@ function planDraftsFromMaterialList(list, parts) {
       qty,
       sourceListId: list.id,
       sourceLineId: line.id,
+      // Snapshot the description at generation (ML lines carry no
+      // description, so this resolves to the catalog description). Storing
+      // it means every later render reads the same frozen text instead of
+      // re-deriving from a catalog that may differ across surfaces.
+      description: resolveLineDescription(line, parts),
       unitPriceCents: unitCents,
       lineTotalCents: unitCents * qty,
       notes: line.notes || ""
@@ -559,6 +565,9 @@ async function reorderFrom(sourcePoId, parts) {
       // event independent of any material list.
       sourceListId: null,
       sourceLineId: null,
+      // Carry the description forward (source line's stored snapshot wins;
+      // else re-resolve from the catalog at re-order time, like the price).
+      description: resolveLineDescription(line, parts),
       unitPriceCents: unitCents,
       lineTotalCents: unitCents * line.qty,
       notes: line.notes || ""

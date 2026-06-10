@@ -81,15 +81,16 @@ function firstNameOf(fullName) {
 // Description columns separate automatically.
 //
 // `items` is `po.lineItems`. Each row needs `sku`, `qty`, and a
-// description — descriptions are looked up via the caller-provided
-// `descriptionFor` to keep this module catalog-agnostic.
-function renderQuickPasteTable(items, descriptionFor) {
+// description — resolved via the caller-provided `describeLine(line)` (which
+// honors the line's stored description before any catalog lookup), keeping
+// this module catalog-agnostic and consistent with the PDF / CSV / detail.
+function renderQuickPasteTable(items, describeLine) {
   const headStyle = "text-align:left; padding: 0 12px 6px 0; color: #888780; border-bottom: 0.5px solid #d3d1c7; font-weight: 500;";
   const headStyleLast = "text-align:left; padding: 0 0 6px 0; color: #888780; border-bottom: 0.5px solid #d3d1c7; font-weight: 500;";
   const cellStyle = "padding: 6px 12px 0 0;";
   const cellStyleLast = "padding: 6px 0 0 0;";
   const rows = items.map((line) => {
-    const desc = descriptionFor(line.sku);
+    const desc = describeLine(line);
     return `    <tr>
       <td style="${cellStyle}">${escapeHtml(line.sku || "")}</td>
       <td style="${cellStyle}">${escapeHtml(String(line.qty))}</td>
@@ -126,14 +127,14 @@ ${rows}
 // fixed width so the table reads as columns even in monospace plain
 // text. Loses the column-paste advantage (it's a single string) but
 // stays useful for clients that strip HTML.
-function renderQuickPasteText(items, descriptionFor) {
+function renderQuickPasteText(items, describeLine) {
   const skuWidth = Math.max(3, ...items.map((l) => String(l.sku || "").length));
   const qtyWidth = Math.max(3, ...items.map((l) => String(l.qty).length));
   const lines = [];
   lines.push("SKU".padEnd(skuWidth) + "  " + "QTY".padEnd(qtyWidth) + "  DESCRIPTION");
   lines.push("-".repeat(skuWidth) + "  " + "-".repeat(qtyWidth) + "  " + "-".repeat(40));
   for (const line of items) {
-    const desc = descriptionFor(line.sku);
+    const desc = describeLine(line);
     lines.push(
       String(line.sku || "").padEnd(skuWidth) + "  " +
       String(line.qty).padEnd(qtyWidth) + "  " +
@@ -152,9 +153,9 @@ function buildSubject(po) {
 }
 
 // Build the email body — both HTML and plain-text variants from the
-// same template. `descriptionFor` is injected by the caller (server.js)
+// same template. `describeLine` is injected by the caller (server.js)
 // so this module stays decoupled from parts.json.
-function buildPoEmail({ po, toName, customBodyText, descriptionFor }) {
+function buildPoEmail({ po, toName, customBodyText, describeLine }) {
   const greeting = `Hi ${firstNameOf(toName)},`;
   const items = po.lineItems || [];
   const subtotal = fmtCents(po.subtotalCents);
@@ -167,7 +168,7 @@ function buildPoEmail({ po, toName, customBodyText, descriptionFor }) {
     "",
     "Quick-paste line items for your system:",
     "",
-    renderQuickPasteText(items, descriptionFor),
+    renderQuickPasteText(items, describeLine),
     "",
     "CSV is attached for direct system entry. Full document attached as PDF.",
     "",
@@ -185,7 +186,7 @@ function buildPoEmail({ po, toName, customBodyText, descriptionFor }) {
   ].filter((line) => line !== false).join("\n");
 
   // ---- HTML body ------------------------------------------------------
-  const quickPasteHtml = renderQuickPasteTable(items, descriptionFor);
+  const quickPasteHtml = renderQuickPasteTable(items, describeLine);
   const html = `<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, sans-serif; max-width: 600px; color: #1a1a1a; line-height: 1.55; font-size: 14px;">
   <p style="margin: 0 0 14px;">${escapeHtml(greeting)}</p>
   <p style="margin: 0 0 14px;">Please find purchase order <strong>${escapeHtml(po.id)}</strong> attached. Subtotal <strong>${escapeHtml(subtotal)}</strong> before HST.</p>
@@ -216,12 +217,13 @@ function buildPoEmail({ po, toName, customBodyText, descriptionFor }) {
 //   toName           — vendor contact name (drives "Hi <FIRST>,")
 //   pdfBuffer        — bytes of the formal PDF
 //   csvBuffer        — bytes of the CSV companion
-//   descriptionFor   — function (sku) => string; injected for catalog lookup
+//   describeLine     — function (line) => string; injected resolver that
+//                      honors the stored line description before catalog
 //   subject          — optional override; defaults to the brief's pattern
 //   bodyText         — optional caller-supplied extra paragraph
 async function sendPurchaseOrderEmail({
   po, toEmail, toName, subject, bodyText,
-  pdfBuffer, csvBuffer, descriptionFor
+  pdfBuffer, csvBuffer, describeLine
 }) {
   const transporter = getTransporter();
   if (!transporter) {
@@ -230,13 +232,13 @@ async function sendPurchaseOrderEmail({
   if (!toEmail) throw new Error("Recipient email is required.");
   if (!Buffer.isBuffer(pdfBuffer) || !pdfBuffer.length) throw new Error("PDF attachment is empty.");
   if (!Buffer.isBuffer(csvBuffer) || !csvBuffer.length) throw new Error("CSV attachment is empty.");
-  if (typeof descriptionFor !== "function") {
-    throw new Error("descriptionFor (sku) => string is required.");
+  if (typeof describeLine !== "function") {
+    throw new Error("describeLine (line) => string is required.");
   }
 
   const fromAddress = process.env.GMAIL_USER;
   const finalSubject = String(subject || buildSubject(po)).slice(0, 200);
-  const { text, html } = buildPoEmail({ po, toName, customBodyText: bodyText, descriptionFor });
+  const { text, html } = buildPoEmail({ po, toName, customBodyText: bodyText, describeLine });
 
   const info = await transporter.sendMail({
     from: `"${company.NAME}" <${fromAddress}>`,
@@ -264,5 +266,6 @@ async function sendPurchaseOrderEmail({
 
 module.exports = {
   sendPurchaseOrderEmail,
-  buildSubject       // exported for tests and for the server's idempotent re-send path
+  buildSubject,      // exported for tests and for the server's idempotent re-send path
+  buildPoEmail       // exported for tests — verify body matches PDF/CSV
 };

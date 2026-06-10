@@ -132,6 +132,23 @@
     return state.catalog.parts[sku] || null;
   }
 
+  // Resolve a line's per-unit price, in cents. Byte-for-byte mirror of
+  // resolveLineUnitPriceCents in server/lib/material-lists.js (the builder
+  // can't require() server code, so the logic is duplicated — keep the two
+  // in sync). Frozen (line.frozenPriceCents, stamped when the line's PO was
+  // sent) wins; else live from the catalog; else null = price unavailable
+  // (the SKU was deleted from the catalog). No manual-line branch — ML lines
+  // are always catalog SKUs.
+  function resolveLineUnitPriceCents(line) {
+    // null/undefined = not locked; guard before Number() (Number(null) === 0).
+    const rawFrozen = line == null ? null : line.frozenPriceCents;
+    const frozen = Number(rawFrozen);
+    if (rawFrozen != null && Number.isFinite(frozen) && frozen >= 0) return Math.floor(frozen);
+    const part = partFor(line && line.sku);
+    if (part && Number.isFinite(Number(part.priceCents))) return Math.max(0, Math.floor(Number(part.priceCents)));
+    return null;
+  }
+
   // ---- Bootstrapping -------------------------------------------------
   async function boot() {
     state.listId = getListIdFromUrl();
@@ -169,7 +186,15 @@
   }
 
   async function fetchCatalog() {
-    const r = await fetch("/api/parts", { cache: "force-cache" });
+    // no-store, NOT force-cache. The catalog must reflect the latest
+    // parts.json prices on every (re)load: a "need" line resolves its price
+    // live from here, so a catalog edit has to show up when the builder is
+    // reloaded. force-cache returned a STALE /api/parts (the route sets
+    // Cache-Control: max-age=300) — even after the 5 min window it kept
+    // serving the cached copy — which is exactly the stale-price bug. This
+    // page is not under a service worker, so there is no offline cache to
+    // preserve. Matches the work-order build page (also fetches no-store).
+    const r = await fetch("/api/parts", { cache: "no-store" });
     const data = await r.json();
     if (!data || !data.ok) throw new Error("Couldn't load parts catalog.");
     return {
@@ -243,9 +268,18 @@
     const part = partFor(line.sku);
     const desc = part ? (part.description || part.sku) : `Unknown SKU: ${line.sku}`;
     const sizeBadge = part && part.size ? `<span>${escapeHtml(part.size)}</span>` : "";
-    const priceCents = part ? Number(part.priceCents) || 0 : 0;
-    const lineTotal = priceCents * (Number(line.qty) || 0);
+    const unitCents = resolveLineUnitPriceCents(line);     // integer cents | null
+    const priceUnavailable = unitCents == null;
+    const lineTotal = priceUnavailable ? null : unitCents * (Number(line.qty) || 0);
     const unit = part ? (part.unit || "each") : "—";
+    const isFrozen = line.frozenPriceCents != null && Number.isFinite(Number(line.frozenPriceCents));
+    // Price cell. Locked lines show a "locked" hint so that an unchanged
+    // price after a catalog edit reads as intentional (snapshotted to a PO),
+    // not as the old stale-price bug. A deleted SKU with no lock shows an
+    // explicit "price unavailable" rather than a misleading $0.00.
+    const priceCell = priceUnavailable
+      ? `<span class="mlb-line-unavailable">price unavailable</span>`
+      : `<span>${fmtCents(unitCents)} / ${escapeHtml(unit)}</span>${isFrozen ? ` <span class="mlb-line-locked" title="Price locked to ${escapeHtml(line.poId || "a purchase order")} — edit the PO to change it">locked</span>` : ""}`;
     const stateClass = part ? `is-${line.status}` : "is-unknown";
     const statusLabel = line.status === "ordered"
       ? `Ordered${line.poId ? " · " + escapeHtml(line.poId) : ""}`
@@ -258,7 +292,7 @@
           <div class="mlb-line-meta">
             <span class="mlb-line-sku">${escapeHtml(line.sku)}</span>
             ${sizeBadge}
-            <span>${fmtCents(priceCents)} / ${escapeHtml(unit)}</span>
+            ${priceCell}
           </div>
         </div>
         <div class="mlb-line-controls">
@@ -267,7 +301,7 @@
             <input type="number" inputmode="numeric" min="1" max="9999" value="${Number(line.qty) || 1}" data-action="qty" aria-label="Quantity">
             <button type="button" data-action="inc" aria-label="Increase quantity">+</button>
           </div>
-          <span class="mlb-line-total">${fmtCents(lineTotal)}</span>
+          <span class="mlb-line-total">${priceUnavailable ? "—" : fmtCents(lineTotal)}</span>
           <button type="button" class="mlb-line-status-btn" data-action="status" ${statusDisabled} aria-label="Status">${escapeHtml(statusLabel)}</button>
           <button type="button" class="mlb-line-remove" data-action="remove" aria-label="Remove">×</button>
         </div>
@@ -367,9 +401,11 @@
     els.saveTotal.textContent = fmtCents(totals.grandCents);
   }
 
-  // Local totals computation — same logic as server-side computeTotals.
-  // Re-run on every render so the savebar stays in sync with the in-memory
-  // list, not just the last server snapshot.
+  // Local totals computation — same logic + same resolver as server-side
+  // computeTotals (frozen-then-live). Re-run on every render so the savebar
+  // stays in sync with the in-memory list, not just the last server
+  // snapshot. A price-unavailable line (deleted SKU, not locked) contributes
+  // 0, matching the server.
   function computeTotals(list) {
     const out = {
       lineCount: 0, needCount: 0, orderedCount: 0, haveCount: 0,
@@ -377,8 +413,8 @@
     };
     for (const line of list.lineItems || []) {
       out.lineCount++;
-      const part = partFor(line.sku);
-      const cents = (part ? (Number(part.priceCents) || 0) : 0) * (Number(line.qty) || 0);
+      const unit = resolveLineUnitPriceCents(line);
+      const cents = (unit == null ? 0 : unit) * (Number(line.qty) || 0);
       out.grandCents += cents;
       if (line.status === "need")    { out.needCount++;    out.needCents    += cents; }
       if (line.status === "ordered") { out.orderedCount++; out.orderedCents += cents; }

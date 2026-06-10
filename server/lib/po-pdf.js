@@ -23,7 +23,7 @@ const fsSync = require("node:fs");
 const path = require("node:path");
 
 const company = require("./company");
-const { formatUnit, formatVendorAddress } = require("./format");
+const { formatUnit, formatVendorAddress, resolveLineDescription } = require("./format");
 
 // ---- Constants -------------------------------------------------------
 
@@ -97,12 +97,14 @@ function loadParts() {
   return _partsCache;
 }
 
-function descriptionFor(sku) {
-  const cat = loadParts();
-  const part = cat.parts && cat.parts[sku];
-  if (!part) return `(SKU ${sku})`;
-  const sizeBit = part.size ? `${part.size} — ` : "";
-  return `${sizeBit}${part.description || sku}`;
+// Description resolution lives in format.resolveLineDescription (stored line
+// description → catalog → "(SKU …)" placeholder, no size prefix), shared
+// with the CSV, the supplier email, and the on-screen detail table. The
+// caller passes the merged catalog (PARTS.parts) into generatePoPdf; we fall
+// back to the on-disk parts.json only when no catalog is provided.
+function catalogParts(passed) {
+  if (passed && typeof passed === "object") return passed;
+  return loadParts().parts || {};
 }
 
 function unitFor(sku) {
@@ -299,11 +301,9 @@ function drawTableHeader(doc, y) {
   return ruleY + 10; // y of first row
 }
 
-function drawTableRow(doc, line, rowNum, rowY) {
+function drawTableRow(doc, line, rowNum, rowY, catalog) {
   const { xs, widths, descWidth } = tableLayout();
-  // Resolution order: stored line description → catalog (by SKU) →
-  // "(SKU …)" placeholder. descriptionFor() already does the last two.
-  const description = (line.description || "").trim() || descriptionFor(line.sku);
+  const description = resolveLineDescription(line, catalog);
   const unitLabel = formatUnit(unitFor(line.sku), line.qty);
 
   // Description height drives row height. Compute it before drawing so
@@ -452,7 +452,8 @@ function ensureRowFits(doc, currentY, neededHeight, ctx) {
 
 // ---- Main renderer ----------------------------------------------------
 
-function generatePoPdf(po) {
+function generatePoPdf(po, partsMap) {
+  const catalog = catalogParts(partsMap);
   return new Promise((resolve, reject) => {
     try {
       const doc = new PDFDocument({
@@ -483,7 +484,7 @@ function generatePoPdf(po) {
       // enough for the page indicator. Re-measure if exact M-of-M
       // pagination becomes critical.
       const items = Array.isArray(po.lineItems) ? po.lineItems : [];
-      const totalPages = estimateTotalPages(doc, items);
+      const totalPages = estimateTotalPages(doc, items, catalog);
 
       // ---- First page ------------------------------------------------
       drawTopRule(doc);
@@ -499,11 +500,11 @@ function generatePoPdf(po) {
         // Estimate height before drawing so we can paginate ahead of
         // overflow.
         doc.font("Helvetica").fontSize(11);
-        const description = descriptionFor(line.sku);
+        const description = resolveLineDescription(line, catalog);
         const descHeight = doc.heightOfString(description, { width: tableLayout().descWidth });
         const rowHeight = Math.max(descHeight, 14) + 20;
         rowY = ensureRowFits(doc, rowY, rowHeight, ctx);
-        rowY = drawTableRow(doc, line, i + 1, rowY);
+        rowY = drawTableRow(doc, line, i + 1, rowY, catalog);
       }
 
       // ---- Totals + Notes (last page only) ---------------------------
@@ -531,7 +532,7 @@ function generatePoPdf(po) {
 // row heights estimated against the page width; trailing block fixed at
 // 120pt. The estimate runs on a throwaway doc so we don't disturb the
 // real render's font/state.
-function estimateTotalPages(realDoc, items) {
+function estimateTotalPages(realDoc, items, catalog) {
   const probe = new PDFDocument({ size: "LETTER", margins: { top: MARGIN_TOP, bottom: MARGIN_BOTTOM, left: MARGIN_X, right: MARGIN_X } });
   const { descWidth } = tableLayout();
   const headerSpace = 60 /* top rule + sender */ + 70 /* doc identity */ + 16 + 70 /* parties */ + 24 + 28 /* table header */;
@@ -539,7 +540,7 @@ function estimateTotalPages(realDoc, items) {
   let pages = 1;
   for (let i = 0; i < items.length; i++) {
     probe.font("Helvetica").fontSize(11);
-    const description = descriptionFor(items[i].sku);
+    const description = resolveLineDescription(items[i], catalog);
     const descHeight = probe.heightOfString(description, { width: descWidth });
     const rowHeight = Math.max(descHeight, 14) + 20;
     if (used + rowHeight > PAGE_CONTENT_BOTTOM - MARGIN_TOP) {

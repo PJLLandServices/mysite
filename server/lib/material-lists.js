@@ -3,11 +3,16 @@
 // / Quote (Phase 2), turned into one or more Purchase Orders by supplier
 // (Phase 3).
 //
-// Design note: a material list NEVER snapshots descriptions, prices, or
-// units. It only stores `{ sku, qty, status, notes }` per line. parts.json
-// remains the single source of truth — descriptions/prices are looked up
-// at render time and at PO generation time. This is the same discipline
-// the rest of the system uses for the parts catalog (see crm-parts.js).
+// Design note: a material list is a LIVE planning estimate. Descriptions
+// are never snapshotted (always looked up from parts.json at render), and a
+// line's price is resolved LIVE from parts.json too — UNTIL the line's
+// purchase order is SENT, at which point the price locks to the PO's
+// snapshot, stored as `frozenPriceCents` on the line (see
+// resolveLineUnitPriceCents + the send flip in server.js; cancel releases
+// it back to live). The line stores
+// `{ sku, qty, status, poId, frozenPriceCents, notes }`. parts.json stays
+// the source of truth for everything not yet purchased — the same
+// discipline the rest of the system uses for the catalog (see crm-parts.js).
 //
 // ID format: ML-YYYY-NNNN. Per-year counter, mirrors Q-YYYY-NNNN /
 // I-YYYY-NNNN / BK-YYYY-NNNN for visual consistency in the admin.
@@ -77,12 +82,29 @@ function hydrateLine(line) {
   const qty = Number(line?.qty);
   const safeQty = Number.isFinite(qty) && qty > 0 ? Math.floor(qty) : 1;
   const status = LINE_STATUSES.includes(line?.status) ? line.status : "need";
+  // Price lock. null = live (resolve from parts.json at render — a material
+  // list is a live planning estimate, not a snapshot). A non-null value is
+  // the per-unit price stamped onto the line when its PO was SENT (see the
+  // send flip in server.js, which copies the PO line's unitPriceCents — and
+  // that was itself snapshotted from parts.json at PO-generate time, so the
+  // list line and the PO can never disagree). Invariant: a "need" line is on
+  // no PO by definition, so it is ALWAYS live — force null. That single rule
+  // also releases the lock automatically when a cancelled PO flips a line
+  // back to "need", or when the user toggles a received line back to need.
+  // NB: null/undefined means "not locked" — guard before Number() because
+  // Number(null) === 0 would otherwise read as "locked at $0".
+  const rawFrozen = line?.frozenPriceCents;
+  const frozenNum = Number(rawFrozen);
+  const frozenPriceCents = status !== "need" && rawFrozen != null && Number.isFinite(frozenNum) && frozenNum >= 0
+    ? Math.floor(frozenNum)
+    : null;
   return {
     id: typeof line?.id === "string" && line.id ? line.id : makeLineId(),
     sku,
     qty: safeQty,
     status,
     poId: typeof line?.poId === "string" && line.poId ? line.poId : null,
+    frozenPriceCents,
     notes: typeof line?.notes === "string" ? line.notes.slice(0, 500) : ""
   };
 }
@@ -327,10 +349,40 @@ async function remove(id) {
   return removed;
 }
 
+// Resolve a single line's per-unit price, in cents. THE one price path —
+// every read (server totals below, plus the builder's per-line render and
+// savebar, which carry a byte-identical copy of this function; keep them in
+// sync) must go through it so the views can never disagree. Pure:
+// (line, partsMap) -> integer cents | null.
+//
+//   1. Frozen   — line.frozenPriceCents is set (a PO was SENT for this
+//                 line). Return the snapshot verbatim; never re-resolve from
+//                 the catalog, so the list line and the PO stay identical.
+//   2. Live     — not locked + the SKU is in the catalog. Return the current
+//                 parts.json price, so catalog edits show up immediately.
+//   3. Unavail. — not locked + the SKU is absent (deleted from the catalog).
+//                 Return null so callers render a clear "price unavailable"
+//                 state rather than a misleading $0.
+//
+// There is no manual/off-catalog branch: unlike PO lines, material-list
+// lines are always catalog SKUs (the builder only adds known SKUs), so a
+// non-frozen line with no catalog match is a deleted SKU, not a typed price.
+function resolveLineUnitPriceCents(line, partsMap) {
+  // null/undefined = not locked; guard before Number() (Number(null) === 0).
+  const rawFrozen = line == null ? null : line.frozenPriceCents;
+  const frozen = Number(rawFrozen);
+  if (rawFrozen != null && Number.isFinite(frozen) && frozen >= 0) return Math.floor(frozen);
+  const part = line && partsMap && Object.prototype.hasOwnProperty.call(partsMap, line.sku) ? partsMap[line.sku] : null;
+  if (part && Number.isFinite(Number(part.priceCents))) return Math.max(0, Math.floor(Number(part.priceCents)));
+  return null;
+}
+
 // Compute totals against a parts catalog. Caller passes the parts map
-// (catalog.parts from /api/parts). Lines whose SKU isn't found contribute
-// 0 to subtotals but still appear in the per-status counts so the UI can
-// flag them as "unknown SKU". Prices are in cents (parts.json convention).
+// (catalog.parts from /api/parts). Per-unit price comes from
+// resolveLineUnitPriceCents (frozen-then-live). Lines whose SKU isn't found
+// (and aren't price-locked) contribute 0 to subtotals and are counted in
+// both unknownSkuCount (no catalog record) and priceUnavailableCount (no
+// resolvable price) so the UI can flag them. Prices are in cents.
 function computeTotals(record, partsMap) {
   const totals = {
     lineCount: 0,
@@ -338,6 +390,7 @@ function computeTotals(record, partsMap) {
     orderedCount: 0,
     haveCount: 0,
     unknownSkuCount: 0,
+    priceUnavailableCount: 0,
     needSubtotalCents: 0,
     haveSubtotalCents: 0,
     orderedSubtotalCents: 0,
@@ -346,10 +399,10 @@ function computeTotals(record, partsMap) {
   const lines = Array.isArray(record?.lineItems) ? record.lineItems : [];
   for (const line of lines) {
     totals.lineCount++;
-    const part = partsMap && Object.prototype.hasOwnProperty.call(partsMap, line.sku) ? partsMap[line.sku] : null;
-    if (!part) totals.unknownSkuCount++;
-    const unitCents = part && Number.isFinite(Number(part.priceCents)) ? Number(part.priceCents) : 0;
-    const lineCents = unitCents * (Number(line.qty) || 0);
+    if (!(partsMap && Object.prototype.hasOwnProperty.call(partsMap, line.sku))) totals.unknownSkuCount++;
+    const unit = resolveLineUnitPriceCents(line, partsMap);
+    if (unit == null) totals.priceUnavailableCount++;
+    const lineCents = (unit == null ? 0 : unit) * (Number(line.qty) || 0);
     totals.grandSubtotalCents += lineCents;
     if (line.status === "need")    { totals.needCount++;    totals.needSubtotalCents    += lineCents; }
     if (line.status === "ordered") { totals.orderedCount++; totals.orderedSubtotalCents += lineCents; }
@@ -409,6 +462,7 @@ module.exports = {
   update,
   remove,
   computeTotals,
+  resolveLineUnitPriceCents,
   deriveStatus,
   softDelete,
   restore,
