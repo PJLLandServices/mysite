@@ -1833,6 +1833,47 @@ function decorateLeadForAdmin(lead, req) {
   };
 }
 
+// Resolve the customer + property display blocks for a quote's PDF
+// render. Patrick's rule (2026-06-12): every quote must state the
+// customer's FULL information — name, home/service address, phone,
+// email — like any quote would. The chain is resolved LIVE at render
+// time so a quote heals as CRM data improves (e.g. a property added
+// after the quote was created fills the missing service address on the
+// next render/re-send without re-creating the quote):
+//   property:        quote.propertyId → the customer's ONLY property
+//   name/phone/addr: property → lead.contact → customer record
+//                    (customer.billingAddress is the address of last resort)
+async function quoteRenderParties(q) {
+  let property = null;
+  if (q?.propertyId) { try { property = await properties.get(q.propertyId); } catch (_) { /* tolerate */ } }
+  let custRecord = null;
+  if (q?.customerId) { try { custRecord = await customers.get(q.customerId, { withProperties: false }); } catch (_) { /* tolerate */ } }
+  if (!property && q?.customerId) {
+    try {
+      const owned = (await properties.list()).filter((p) => p.customerId === q.customerId);
+      if (owned.length === 1) property = owned[0];
+    } catch (_) { /* tolerate */ }
+  }
+  let leadContact = null;
+  if (q?.leadId) {
+    try { leadContact = (await readLeads()).find((l) => l.id === q.leadId)?.contact || null; }
+    catch (_) { /* tolerate */ }
+  }
+  const billing = custRecord?.billingAddress;
+  const billingStr = typeof billing === "string"
+    ? billing
+    : String(billing?.formatted || billing?.address || "");
+  const customer = {
+    name: property?.customerName || leadContact?.name || custRecord?.name || "",
+    phone: property?.customerPhone || leadContact?.phone || custRecord?.phone || "",
+    address: property?.address || leadContact?.address || billingStr || "",
+    email: q?.customerEmail || leadContact?.email || custRecord?.email || ""
+  };
+  // Renderers read property.address ?? customer.address — hand back a
+  // property-shaped object even when only a fallback address exists.
+  return { customer, property: property || { address: customer.address } };
+}
+
 // Hydrate a decorated lead with its source Quote (if any) so the CRM
 // lead-detail pane can render the Quote card without a second fetch. The
 // list endpoint pre-builds a map for efficiency; single-lead responses
@@ -5659,15 +5700,10 @@ async function handleApi(req, res, pathname) {
       const id = decodeURIComponent(adminQuotePdfMatch[1]);
       const q = await quotes.get(id);
       if (!q) return sendJson(res, 404, { ok: false, errors: ["Quote not found."] });
-      let property = null;
-      if (q.propertyId) { try { property = await properties.get(q.propertyId); } catch (_) {} }
-      let customer = property ? { customerName: property.customerName, customerPhone: property.customerPhone, address: property.address } : null;
-      // Fallback to lead contact if no property
-      if (!customer && q.leadId) {
-        const allLeads = await readLeads();
-        const lead = allLeads.find((l) => l.id === q.leadId);
-        if (lead?.contact) customer = { customerName: lead.contact.name, customerPhone: lead.contact.phone, address: lead.contact.address };
-      }
+      // Full customer info resolved live (property → lead → customer
+      // record) so the PDF always states name + service address +
+      // phone + email when the CRM has them.
+      const parties = await quoteRenderParties(q);
       res.writeHead(200, {
         "content-type": "application/pdf",
         "content-disposition": `inline; filename="${q.id}.pdf"`,
@@ -5676,8 +5712,8 @@ async function handleApi(req, res, pathname) {
       // Dispatcher — picks the proposal renderer for project_proposal,
       // falls through to the existing one-page renderer otherwise.
       renderQuotePdf(q, {
-        customer: customer || {},
-        property: property || {},
+        customer: parties.customer,
+        property: parties.property,
         acceptanceUrl: q.approval?.token
           ? `${resolvePublicBaseUrl()}/approve/${encodeURIComponent(q.id)}?t=${q.approval.token}`
           : null,
@@ -5727,17 +5763,17 @@ async function handleApi(req, res, pathname) {
       const token = decodeURIComponent(approvePdfMatch[2]);
       const q = await quotes.getByApprovalToken(quoteId, token);
       if (!q) return sendJson(res, 404, { ok: false, errors: ["Approval link not found or expired."] });
-      let property = null;
-      if (q.propertyId) { try { property = await properties.get(q.propertyId); } catch (_) {} }
-      let customer = property ? { customerName: property.customerName, customerPhone: property.customerPhone, address: property.address } : {};
+      // Same live full-info resolution as the admin PDF route — the
+      // customer's downloaded copy must carry the service address too.
+      const parties = await quoteRenderParties(q);
       res.writeHead(200, {
         "content-type": "application/pdf",
         "content-disposition": `inline; filename="${q.id}.pdf"`,
         "cache-control": "no-store"
       });
       renderQuotePdf(q, {
-        customer,
-        property: property || {},
+        customer: parties.customer,
+        property: parties.property,
         acceptanceUrl: `${resolvePublicBaseUrl()}/approve/${encodeURIComponent(q.id)}?t=${token}`,
         returnEmail: process.env.CUSTOMER_EMAIL || "info@pjllandservices.com"
       }).pipe(res);
@@ -10155,6 +10191,11 @@ async function handleApi(req, res, pathname) {
       }
 
       // Property — explicit pick, else the only one, else selector list.
+      // A property is REQUIRED (Patrick, 2026-06-12): the quote must
+      // state the home/service address, and the property record is
+      // where that address canonically lives (along with the zone
+      // count). A customer with no property gets a pointed error, not
+      // an address-less quote.
       const custProps = (await properties.list()).filter((p) => p.customerId === customerId);
       const propertyId = normalizeString(payload?.propertyId, 60);
       let property = null;
@@ -10169,6 +10210,19 @@ async function handleApi(req, res, pathname) {
           code: "property_required",
           properties: custProps.map((p) => ({ id: p.id, address: p.address || "(no address)" })),
           errors: ["This customer has multiple properties — pick one."]
+        });
+      } else {
+        return sendJson(res, 422, {
+          ok: false,
+          code: "property_missing",
+          errors: ["This customer has no property on file — the quote needs a service address. Add their property (Properties → New) and re-run; the zone count will save there too."]
+        });
+      }
+      if (!String(property.address || "").trim()) {
+        return sendJson(res, 422, {
+          ok: false,
+          code: "property_missing",
+          errors: ["The selected property has no address — fill it in on the property record first; the quote must state the service address."]
         });
       }
 
@@ -10528,13 +10582,13 @@ async function handleApi(req, res, pathname) {
             // one-page layout.
             const attachments = [];
             try {
+              // Live full-info resolution (property → lead → customer
+              // record) so the emailed PDF states the service address
+              // even when the lead's frozen contact predates it.
+              const parties = await quoteRenderParties(q);
               const pdfDoc = renderQuotePdf(q, {
-                customer: {
-                  name: lead.contact?.name || "",
-                  email: toEmail,
-                  phone: toPhone
-                },
-                property: { address: lead.contact?.address || "" },
+                customer: { ...parties.customer, email: toEmail, phone: parties.customer.phone || toPhone },
+                property: parties.property,
                 acceptanceUrl: approveUrl
               });
               const chunks = [];
