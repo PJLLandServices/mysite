@@ -10199,6 +10199,20 @@ async function handleApi(req, res, pathname) {
       const tier = quotes.resolveControllerTier(zones, FEATURES);
       if (!tier.ok) return sendJson(res, 422, { ok: false, errors: [tier.error] });
 
+      // Service call — Patrick decides per quote (his call, 2026-06-12):
+      // "charge" adds the catalog service_call line; "waive" still STATES
+      // the line on the quote but at $0 with a "regularly $X — waived"
+      // note, mirroring the WO fee-waiver philosophy (show the value,
+      // then give it). No silent default — the modal must ask.
+      const serviceCall = String(payload?.serviceCall || "").trim();
+      if (!tier.custom && serviceCall !== "charge" && serviceCall !== "waive") {
+        return sendJson(res, 422, {
+          ok: false,
+          code: "service_call_required",
+          errors: ["Pick whether to charge or waive the service call on this quote."]
+        });
+      }
+
       // Idempotency — return the existing open draft instead of minting
       // a duplicate (re-running the action is a no-op, brief §4).
       if (!tier.custom) {
@@ -10214,11 +10228,44 @@ async function handleApi(req, res, pathname) {
         }
       }
 
+      // Build the quote lines up front so the lead's features mirror and
+      // the quote record can't disagree. Tier line always; service-call
+      // line per Patrick's charge/waive pick (waived = $0 line that still
+      // STATES the fee — both the rich PDF (description) and the approve
+      // page (note) render the waived text).
+      const callItem = FEATURES.service_call || { label: "Service call", price: 0 };
+      const callPrice = Math.round((Number(callItem.price) || 0) * 100) / 100;
+      const tierPrice = Math.round((Number(tier.item?.price) || 0) * 100) / 100;
+      const quoteLines = tier.custom ? [] : [
+        { key: tier.key, label: tier.item.label, price: tierPrice, qty: 1, lineTotal: tierPrice }
+      ];
+      if (!tier.custom && serviceCall === "charge") {
+        quoteLines.push({ key: "service_call", label: callItem.label, price: callPrice, qty: 1, lineTotal: callPrice });
+      } else if (!tier.custom && serviceCall === "waive") {
+        const waivedText = `Regularly $${callPrice.toFixed(2)} — waived on this upgrade.`;
+        quoteLines.push({
+          key: "service_call",
+          label: `${callItem.label} — WAIVED`,
+          price: 0, qty: 1, lineTotal: 0,
+          note: waivedText,        // approve-page line renderer
+          description: waivedText  // rich-PDF line renderer
+        });
+      }
+
       // Lead row — the CRM anchor the send/accept rails ride on (same
       // as the chat path: activity timeline, portal token, send target).
       const now = new Date().toISOString();
       const leadId = crypto.randomUUID();
-      const featureSel = selectedFeatures([{ key: tier.key, qty: 1 }]);
+      const featureSel = tier.custom
+        ? selectedFeatures([{ key: tier.key, qty: 1 }])
+        : quoteLines.map((l) => ({
+            key: l.key,
+            label: l.label,
+            price: l.price,
+            qty: l.qty,
+            category: (FEATURES[l.key] || {}).category,
+            quoteType: (FEATURES[l.key] || {}).quoteType || "flat"
+          }));
       const lead = {
         id: leadId,
         createdAt: now,
@@ -10274,13 +10321,14 @@ async function handleApi(req, res, pathname) {
         return sendJson(res, 200, { ok: true, custom: true, leadId, zones });
       }
 
-      // Priced tiers — mint the draft quote (price snapshotted from the
+      // Priced tiers — mint the draft quote (prices snapshotted from the
       // catalog; HST math mirrors validateQuotePayload).
-      const price = Math.round((Number(tier.item.price) || 0) * 100) / 100;
-      const hst = Math.round(price * quotes.HST_RATE * 100) / 100;
-      const total = Math.round((price + hst) * 100) / 100;
+      const subtotal = Math.round(quoteLines.reduce((s, l) => s + (Number(l.lineTotal) || 0), 0) * 100) / 100;
+      const hst = Math.round(subtotal * quotes.HST_RATE * 100) / 100;
+      const total = Math.round((subtotal + hst) * 100) / 100;
       const hardware = (String(tier.item.label).match(/\(([^)]+)\)/) || [])[1] || "HPC-400";
-      const scope = `Smart controller upgrade — ${zones} zone${zones === 1 ? "" : "s"} (${hardware})`;
+      const callTag = serviceCall === "charge" ? " + service call" : " — service call waived";
+      const scope = `Smart controller upgrade — ${zones} zone${zones === 1 ? "" : "s"} (${hardware})${callTag}`;
       const quote = await quotes.create({
         type: "ai_repair_quote",
         status: "draft",
@@ -10290,8 +10338,8 @@ async function handleApi(req, res, pathname) {
         leadId,
         source: { chatSessionId: null, pageUrl: "/admin/quote-folder", userAgent: req.headers["user-agent"] || null },
         scope,
-        lineItems: [{ key: tier.key, label: tier.item.label, price, qty: 1, lineTotal: price }],
-        subtotal: price,
+        lineItems: quoteLines,
+        subtotal,
         hst,
         total,
         intakeGuarantee: { applies: false, scope: "" },

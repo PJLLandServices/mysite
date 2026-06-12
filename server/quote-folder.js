@@ -445,6 +445,7 @@ const scq = {
   zonesField: document.getElementById("scqZonesField"),
   zones: document.getElementById("scqZones"),
   zonesNote: document.getElementById("scqZonesNote"),
+  serviceCall: document.getElementById("scqServiceCall"),
   status: document.getElementById("scqStatus"),
   cancel: document.getElementById("scqCancel"),
   create: document.getElementById("scqCreate"),
@@ -457,6 +458,7 @@ function scqReset() {
   scq.zonesField.hidden = true;
   scq.zones.value = "";
   scq.zonesNote.textContent = "";
+  scq.serviceCall.value = ""; // per-quote decision — always re-ask
   scq.status.textContent = "";
   scq.create.disabled = false;
 }
@@ -499,7 +501,11 @@ if (scq.openBtn) {
   scq.create.addEventListener("click", async () => {
     const customerId = scq.customer.value;
     if (!customerId) { scq.status.textContent = "Pick a customer first."; return; }
-    const body = { customerId };
+    // Service call is Patrick's explicit per-quote call — no default.
+    // (Ignored server-side for the 17+ custom branch, but asking up
+    // front keeps the modal a single pass.)
+    if (!scq.serviceCall.value) { scq.status.textContent = "Charge or waive the service call?"; return; }
+    const body = { customerId, serviceCall: scq.serviceCall.value };
     if (!scq.propertyField.hidden && scq.property.value) body.propertyId = scq.property.value;
     if (!scq.zonesField.hidden && scq.zones.value) body.zoneCount = Number(scq.zones.value);
     scq.create.disabled = true;
