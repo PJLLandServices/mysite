@@ -1848,10 +1848,23 @@ async function quoteRenderParties(q) {
   if (q?.propertyId) { try { property = await properties.get(q.propertyId); } catch (_) { /* tolerate */ } }
   let custRecord = null;
   if (q?.customerId) { try { custRecord = await customers.get(q.customerId, { withProperties: false }); } catch (_) { /* tolerate */ } }
-  if (!property && q?.customerId) {
+  if (!property && (q?.customerId || q?.customerEmail)) {
     try {
-      const owned = (await properties.list()).filter((p) => p.customerId === q.customerId);
+      // Match by customerId OR by the property's customerEmail snapshot —
+      // properties created by the booking flow can predate (or miss) the
+      // customerId link, but they carry the email (spec §3.1: email is
+      // the primary matching key). Only auto-adopt an unambiguous match.
+      const qEmail = String(q.customerEmail || "").toLowerCase().trim();
+      const owned = (await properties.list()).filter((p) =>
+        (q.customerId && p.customerId === q.customerId) ||
+        (qEmail && String(p.customerEmail || "").toLowerCase().trim() === qEmail)
+      );
       if (owned.length === 1) property = owned[0];
+      // Several matches: prefer a single one with an address over none.
+      else if (owned.length > 1) {
+        const withAddr = owned.filter((p) => String(p.address || "").trim());
+        if (withAddr.length === 1) property = withAddr[0];
+      }
     } catch (_) { /* tolerate */ }
   }
   let leadContact = null;
@@ -10196,7 +10209,16 @@ async function handleApi(req, res, pathname) {
       // where that address canonically lives (along with the zone
       // count). A customer with no property gets a pointed error, not
       // an address-less quote.
-      const custProps = (await properties.list()).filter((p) => p.customerId === customerId);
+      //
+      // Match by customerId OR customerEmail snapshot — booking-flow
+      // properties can predate the customerId link (the Q-2026-0024
+      // case: real June-booking property, invisible to an id-only
+      // filter). Email is the system's primary matching key (spec §3.1).
+      const custEmailNorm = custEmail.toLowerCase().trim();
+      const custProps = (await properties.list()).filter((p) =>
+        p.customerId === customerId ||
+        (custEmailNorm && String(p.customerEmail || "").toLowerCase().trim() === custEmailNorm)
+      );
       const propertyId = normalizeString(payload?.propertyId, 60);
       let property = null;
       if (propertyId) {
