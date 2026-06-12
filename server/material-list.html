@@ -154,6 +154,7 @@
         <!-- Footer actions -->
         <section class="mlb-footer-actions">
           <button type="button" class="pjl-btn pjl-btn-primary" id="mlbGeneratePosButton">Generate purchase orders</button>
+          <button type="button" class="pjl-btn pjl-btn-outline" id="mlbRequestRfqButton">Request quotation</button>
           <button type="button" class="pjl-btn pjl-btn-outline" id="mlbArchiveButton">Archive list</button>
           <button type="button" class="pjl-btn pjl-btn-outline is-danger" id="mlbDeleteButton">Delete list</button>
         </section>
@@ -185,6 +186,22 @@
       <div class="proj-modal-actions">
         <button type="button" class="pjl-btn pjl-btn-outline" id="mlbPosCancel">Close</button>
         <button type="button" class="pjl-btn pjl-btn-primary" id="mlbPosConfirm" hidden>Create drafts</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Request Quotation (RFQ) preview modal — same plan-then-confirm flow.
+       An RFQ asks suppliers to quote prices; it does NOT commit to buy and
+       leaves every line's status untouched (still "need"). -->
+  <div class="proj-modal-backdrop" id="mlbRfqModal" hidden role="dialog" aria-modal="true">
+    <div class="proj-modal" style="max-width:600px">
+      <h3>Request quotation</h3>
+      <p style="margin:0 0 12px;color:#4A4A44;font-size:13px">PJL groups the outstanding <em>need</em> lines by their assigned supplier and creates one draft <strong>request for quotation</strong> per supplier — an ask for current pricing, <em>not</em> an order. Lines stay marked <em>need</em>; nothing is committed until you generate purchase orders later.</p>
+      <div id="mlbRfqPlan"></div>
+      <p class="supplier-form-error" id="mlbRfqError" role="alert" hidden></p>
+      <div class="proj-modal-actions">
+        <button type="button" class="pjl-btn pjl-btn-outline" id="mlbRfqCancel">Close</button>
+        <button type="button" class="pjl-btn pjl-btn-primary" id="mlbRfqConfirm" hidden>Create drafts</button>
       </div>
     </div>
   </div>

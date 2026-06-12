@@ -100,6 +100,7 @@ form except where noted.
 | `projects.js` | Project | `PROJ-YYYY-NNNN` | Multi-WO container for named jobs. Lifecycle planning → active → complete → archived. `createFromProposal(quote, …)` (Brief 1) enriches a project at conversion time from a `project_proposal` quote: `branch`, `billingMode`, `labourRateLocked` (snapshotted from `quote.customRates.labour`), `tasks[]` (seeded from line items — one task per line, status `pending`, `sourceLineItemId` set), `attachments[]` (references to the quote's attachments by id), and a frozen `proposalSnapshot` mirroring the accepted proposal at that instant. **Brief 2** adds execution ops: task CRUD (`addTask`, `updateTask`, `removeTask`, `markTaskComplete`, `unmarkTaskComplete`, `seedTasksFromQuote`); scope changes (`createScopeChangeRequest`, `updateScopeChangeRequest`, `sendScopeChangeRequest`, `resolveScopeChangeRequest`, `generateQuoteRevisionFromScopeChange`); status updates (`generateStatusUpdate`); project completion (`markFinalWo`, `completionPreflight`, `completeProject`); metrics + billing rollup (`computeProjectMetrics`, `computeTAndMBilling`). Schema additions: `scopeChangeRequests[]`, `statusUpdates[]`, `finalWoId`, `projectCompletionAt`, `invoiceGeneratedAt`, `finalInvoiceId`. |
 | `material-lists.js` | Material List | `ML-YYYY-NNNN` | Bill of materials. Line items reference parts.json SKUs + quantities + status (`need` / `ordered` / `have`). Attachable to a project / WO / quote / standalone. **Pricing:** a line's unit price resolves **live from parts.json until its PO is sent** (catalog edits show on the next load), then **locks** to the PO-snapshotted price — `frozenPriceCents` is stamped onto the line at send and cleared if the PO is cancelled (a received line keeps the price paid). One pure resolver, `resolveLineUnitPriceCents(line, partsMap)`, feeds **both** read paths — the builder's per-line render/savebar and the `?withTotals=1` server totals — so they can't disagree. The builder fetches `/api/parts` `no-store` (not force-cache) so live prices aren't stale. |
 | `purchase-orders.js` | Purchase Order | `PO-YYYY-NNNN` | One supplier's slice of a material list's `need` lines. Lifecycle draft → sent → partially_received → received → cancelled. |
+| `quote-requests.js` | Quote Request (RFQ) | `RFQ-YYYY-NNNN` | The **"ask for a price" sibling of the PO** — asks a supplier to quote, commits to nothing. Generated from a material list's `need` lines grouped by primary supplier (same grouping as PO generation) but **never changes line status** (lines stay `need`) and **never snapshots prices** — lines carry `{ sku, description (snapshot via resolveLineDescription), quantity, unit, quotedPriceCents:null }`. Lifecycle draft → sent → quoted → applied (+ cancelled). Generation is idempotent: re-running **refreshes** the existing draft for (list, supplier) instead of duplicating; non-drafts are never touched. Sent docs frozen at `data/quote-requests/files/`. **Phase B (the return loop):** `recordQuotedPrices(id, {lineId: cents\|null})` records the vendor's reply on a sent/quoted RFQ (partial quotes fine; status follows the data — any priced line → `quoted`, all cleared → back to `sent`); `markApplied` flips quoted → applied and is the double-apply guard (second apply throws). The apply route writes the quoted prices to the parts catalog via the **existing** parts edit path (`partsLib.update` → `rebuildCatalogFromOverrides` → one batched `catalog.rfq-apply` audit entry), skipping deleted SKUs and counting already-matching prices as applied-without-write; open material lists pick the new prices up immediately (live pricing). Never touches `pricing.json`. Retires the old workaround of sending a $0 PO as a "Quotation Request". |
 | `suppliers.js` | Supplier | `SUP-NNN` (no year prefix) | Vendor records (name, contact, email, phone, address). |
 | `part-suppliers.js` | — | n/a | Override map at `data/part-suppliers.json` mapping SKU → supplierIds[]. parts.json's `supplierIds` field is a placeholder; this file is the source of truth. |
 | `settings.js` | — | n/a | Admin notification preferences + 50-entry audit trail + iCal-feed token (Brief C: `icalFeed.{enabled, token, regeneratedAt}` — token is the credential for the public `/calendar/<token>.ics` feed) + `contactInfo.customerSupportPhone` (surfaced verbatim in portal blocked-state copy when self-service reschedule/cancel is refused; exposes `updateContactInfo()` for the `/api/settings/contact-info` PATCH endpoint) + per-season outreach templates (`outreachTemplates.{spring,fall}.{subject,smsBody,emailBody}`, saved via `saveOutreachTemplate`) + **invoice-ready SMS** (`invoiceSms.{enabled, delayMinutes, maxAgeHours}` — master switch + cascade-time delay before the customer SMS fires + sweep-window cap; defaults `enabled:true / delayMinutes:5 / maxAgeHours:24`). |
@@ -142,6 +143,7 @@ bookings.json              ← BK-YYYY-NNNN records
 projects.json              ← PROJ-YYYY-NNNN records
 material-lists.json        ← ML-YYYY-NNNN records
 purchase-orders.json       ← PO-YYYY-NNNN records
+quote-requests.json        ← RFQ-YYYY-NNNN records (+ quote-requests/files/ frozen sent PDFs/CSVs)
 suppliers.json             ← SUP-NNN records
 part-suppliers.json        ← SKU → supplierIds[] override map
 settings.json              ← admin notification defaults + audit
@@ -207,8 +209,10 @@ Pages with their primary route + purpose:
 | `suppliers.html` | `/admin/suppliers` | Supplier records. |
 | `parts-suppliers.html` | `/admin/parts-suppliers` | Bulk catalog assignment grid (SKU → primary supplier). |
 | `purchase-orders.html` | `/admin/purchase-orders` | PO index. Status filter + "Show closed" toggle. |
-| (Materials sub-nav) | — | The four pages above (`material-lists.html`, `purchase-orders.html`, `suppliers.html`, `parts-suppliers.html`) share a `.suppliers-subnav` strip duplicated by hand. Below 768px the strip collapses into a single `<details>` dropdown ("Materials → <current> ▾"); open/close behaviour lives in `crm-nav.js`. |
+| `quote-requests.html` | `/admin/quote-requests` | RFQ index. Status filter (draft/sent/quoted/applied/cancelled) + "Show closed" toggle. No prices anywhere. |
+| (Materials sub-nav) | — | The materials pages (`material-lists.html`, `quote-requests.html`, `purchase-orders.html`, `suppliers.html`, `parts-suppliers.html`) share a `.suppliers-subnav` strip duplicated by hand. Below 768px the strip collapses into a single `<details>` dropdown ("Materials → <current> ▾"); open/close behaviour lives in `crm-nav.js`. |
 | `purchase-order.html` | `/admin/purchase-order/<id>` | PO detail. Send modal (email + PDF), partial-receive modal, reorder, cancel. |
+| `quote-request.html` | `/admin/quote-request/<id>` | RFQ detail. Draft line trim (qty/remove) + notes with auto-save, send modal (emails the vendor a request for pricing — explicitly not an order), resend, cancel, PDF/CSV downloads. On sent/quoted: the **quoted-price quick-grid** (dollars in, cents stored; partial quotes fine; auto-saves changed entries only) and, once quoted, **Review & apply to catalog** — a confirm modal showing current catalog price → quoted with deltas before any write. |
 | `chats.html` | `/admin/chats` | AI chat transcripts (booked + abandoned). |
 | `settings.html` | `/admin/settings` | Notification defaults, audit trail, QB connect, exports. |
 | `login.html` | `/login` | Per-user CRM login (email + password). Credentials live in `users.json`; `auth.json` is the session-secret store only. |
@@ -509,6 +513,19 @@ Material Lists
   DELETE /api/material-lists/:id
   POST   /api/material-lists/:id/plan-purchase-orders         ← dry run
   POST   /api/material-lists/:id/generate-purchase-orders    ← create drafts
+  POST   /api/material-lists/:id/plan-quote-requests          ← dry run (RFQ)
+  POST   /api/material-lists/:id/generate-quote-requests     ← create/refresh RFQ drafts (idempotent; ML lines untouched)
+
+Quote Requests (RFQ)
+  GET    /api/quote-requests                     ← filter ?status, ?supplierId, ?sourceMaterialListId
+  GET    /api/quote-requests/:id
+  PATCH  /api/quote-requests/:id                 ← {lines, notes} draft-only edits, OR {quotedPrices: {lineId: cents|null}} on sent/quoted (quick-grid)
+  POST   /api/quote-requests/:id/send            ← freeze PDF+CSV to disk, email vendor, draft → sent
+  POST   /api/quote-requests/:id/resend          ← re-email the frozen docs byte-identical
+  POST   /api/quote-requests/:id/apply-to-catalog ← quoted only; writes quoted prices to parts catalog via the existing parts edit path; → applied
+  POST   /api/quote-requests/:id/cancel
+  GET    /api/quote-requests/:id/pdf             ← frozen if sent, live preview if draft
+  GET    /api/quote-requests/:id/csv
 
 Suppliers + catalog assignments
   GET    /api/suppliers
@@ -727,7 +744,13 @@ stored on disk:
   date), Vendor / Ship To columns, line-items table (`# · SKU ·
   Description · Qty · Unit · Unit Price · Line Total`), totals
   (subtotal-only; HST is the supplier's job), notes (references the
-  PO id + the CSV attachment), footer with PJL contact line.
+  PO id + the CSV attachment), footer with PJL contact line. Below the
+  notes, a **red revision stamp** ("PRINTED COPY — CHECK YOUR EMAIL FOR
+  REVISIONS") warns the holder of a printout that a revised order
+  arrives by email and the latest emailed version supersedes the paper
+  copy — last page only, paginated together with totals + notes so it
+  never strands alone. (PO PDFs only — the RFQ deliberately doesn't
+  carry it.)
 - `server/data/purchase-orders/files/<PO-ID>.csv` — RFC 4180 CSV with
   the line-item data. Six columns: `SKU, Description, Qty, Unit,
   UnitPrice, LineTotal`. Prices in decimal dollars (supplier systems
@@ -792,10 +815,11 @@ Helpers live in:
 - `server/lib/notify-supplier.js` — email composition + send
 - `server/lib/format.js` — `formatUnit()` (fixes the old "eachs"
   pluralization bug; `each → ea`, `ft → ft`, `roll → roll`),
-  `formatVendorAddress()` (title-cases all-caps stored addresses, puts
-  Canadian postal codes on their own line), and `resolveLineDescription()`
-  (the shared stored→catalog→placeholder description resolver used by every
-  PO surface)
+  `formatVendorAddress()` (title-cases all-caps stored addresses and emits
+  standard Canadian envelope lines — street, then `City, PROV  POSTAL`
+  joined on one line; never a line opening with separator debris), and
+  `resolveLineDescription()` (the shared stored→catalog→placeholder
+  description resolver used by every PO surface)
 - `server/lib/company.js` — single source for sender contact (name,
   city, phone, website, email, brand green hex). The `email()` helper
   reads `process.env.GMAIL_USER` (the SMTP-auth account) with
@@ -803,6 +827,35 @@ Helpers live in:
   PO PDFs + supplier emails only — customer-facing From-headers go
   through `CUSTOMER_EMAIL` (see the "External integrations" table and
   the env-vars block below for the split).
+
+#### RFQ documents (PDF + CSV + email)
+
+The Request for Quotation is the PO's "ask" sibling and its documents are
+deliberately price-free — they must never read like an order:
+
+- **`server/lib/rfq-pdf.js`** — `generateRfqPdf(rfq, partsMap)`. Same
+  7-region layout discipline as `po-pdf.js` (standalone sibling, not a
+  parameterization — po-pdf.js stays untouched). Title reads **"REQUEST
+  FOR QUOTATION"**; parties are VENDOR / **REQUESTED BY** (nothing ships).
+  Items table: `# · SKU · Description · Qty · Unit · QUOTED UNIT PRICE` —
+  the last column is an **empty ruled write-on cell** for the vendor.
+  **No** unit prices, **no** line totals, **no** totals region. The notes
+  region asks for best unit price + lead time, references the RFQ id, and
+  states "this is a request for quotation only — not a purchase order."
+- **`server/lib/rfq-csv.js`** — `generateRfqCsv(rfq, partsMap)`. Columns
+  exactly `SKU,Description,Qty,Unit` (no price columns), RFC 4180 + UTF-8
+  BOM + CRLF like the PO CSV.
+- **Email** (`notify-supplier.js`: `buildRfqSubject` / `buildRfqEmail` /
+  `sendQuoteRequestEmail`) — subject `RFQ-YYYY-NNNN — PJL Land Services —
+  Request for Quotation — N items` (no dollar amount, unlike the PO
+  subject). Reuses the price-free quick-paste table (SKU / QTY /
+  DESCRIPTION) and frames the ask as pricing-only.
+
+All three surfaces resolve descriptions through the shared
+`resolveLineDescription` and are fed the merged in-memory catalog
+(`PARTS.parts`). Send freezes the PDF + CSV to
+`server/data/quote-requests/files/` — immutable thereafter; resend
+re-attaches the frozen bytes (same rule as POs).
 
 ### 3. Quote → project (multi-WO job)
 

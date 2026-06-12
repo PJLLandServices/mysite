@@ -152,6 +152,14 @@ function buildSubject(po) {
   return `${po.id} — ${company.NAME} — ${n} item${n === 1 ? "" : "s"}, ${total}`;
 }
 
+// RFQ subject — deliberately NO dollar amount (an RFQ asks for prices; it
+// must never imply we already have them):
+//   RFQ-YYYY-NNNN — PJL Land Services — Request for Quotation — N items
+function buildRfqSubject(rfq) {
+  const n = (rfq.lines || []).length;
+  return `${rfq.id} — ${company.NAME} — Request for Quotation — ${n} item${n === 1 ? "" : "s"}`;
+}
+
 // Build the email body — both HTML and plain-text variants from the
 // same template. `describeLine` is injected by the caller (server.js)
 // so this module stays decoupled from parts.json.
@@ -205,6 +213,109 @@ function buildPoEmail({ po, toName, customBodyText, describeLine }) {
 </div>`;
 
   return { text: textBody, html };
+}
+
+// Build the RFQ email — the "ask for a price" sibling of the PO email.
+// Same quick-paste table mechanics (they're already price-free: SKU / QTY /
+// DESCRIPTION only), different framing: this asks the vendor to QUOTE, and
+// must never read like an order. RFQ lines store `quantity` (not `qty`), so
+// adapt before handing to the shared renderers.
+function buildRfqEmail({ rfq, toName, customBodyText, describeLine }) {
+  const greeting = `Hi ${firstNameOf(toName)},`;
+  const items = (rfq.lines || []).map((l) => ({ ...l, qty: l.quantity }));
+  const wrappedDescribe = (line) => describeLine(line);
+
+  // ---- Plain text body ------------------------------------------------
+  const textBody = [
+    greeting,
+    "",
+    `Could you please quote your best unit price and lead time for the items below? Request for quotation ${rfq.id} is attached as a PDF — this is a request for pricing only, not a purchase order.`,
+    "",
+    "Quick-paste line items for your system:",
+    "",
+    renderQuickPasteText(items, wrappedDescribe),
+    "",
+    "CSV is attached for direct system entry. Full document attached as PDF.",
+    "",
+    `Please reference ${rfq.id} in your reply.`,
+    "",
+    customBodyText ? customBodyText.trim() : "",
+    customBodyText ? "" : "",
+    "Thanks,",
+    "Patrick",
+    "",
+    "—",
+    company.NAME,
+    `${company.CITY} · ${company.PHONE}`,
+    `${company.email()} · ${company.WEBSITE}`
+  ].filter((line) => line !== false).join("\n");
+
+  // ---- HTML body ------------------------------------------------------
+  const quickPasteHtml = renderQuickPasteTable(items, wrappedDescribe);
+  const html = `<div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, sans-serif; max-width: 600px; color: #1a1a1a; line-height: 1.55; font-size: 14px;">
+  <p style="margin: 0 0 14px;">${escapeHtml(greeting)}</p>
+  <p style="margin: 0 0 14px;">Could you please quote your best unit price and lead time for the items below? Request for quotation <strong>${escapeHtml(rfq.id)}</strong> is attached as a PDF — this is a <strong>request for pricing only</strong>, not a purchase order.</p>
+  <p style="margin: 0 0 8px; color: #555;">Quick-paste line items for your system:</p>
+  ${quickPasteHtml}
+  <p style="margin: 0 0 14px; color: #555;">CSV is attached for direct system entry. Full document attached as PDF.</p>
+  <p style="margin: 0 0 14px;">Please reference <strong>${escapeHtml(rfq.id)}</strong> in your reply.</p>
+  ${customBodyText ? `<p style="margin: 0 0 14px; white-space: pre-wrap;">${escapeHtml(customBodyText)}</p>` : ""}
+  <p style="margin: 22px 0 8px;">Thanks,<br>Patrick</p>
+  <p style="margin: 14px 0 0; color: #888; font-size: 12px; border-top: 0.5px solid #ddd; padding-top: 12px;">
+    ${escapeHtml(company.NAME)}<br>
+    ${escapeHtml(company.CITY)} · ${escapeHtml(company.PHONE)}<br>
+    <a href="mailto:${escapeHtml(company.email())}" style="color: #1B4D2E;">${escapeHtml(company.email())}</a> ·
+    <a href="https://${escapeHtml(company.WEBSITE)}" style="color: #1B4D2E;">${escapeHtml(company.WEBSITE)}</a>
+  </p>
+</div>`;
+
+  return { text: textBody, html };
+}
+
+// Send an RFQ email. Same transporter + failure semantics as the PO sender:
+// throws when Gmail isn't configured or the send fails, so the calling
+// endpoint can return a 500 instead of silently flipping RFQ state.
+async function sendQuoteRequestEmail({
+  rfq, toEmail, toName, subject, bodyText,
+  pdfBuffer, csvBuffer, describeLine
+}) {
+  const transporter = getTransporter();
+  if (!transporter) {
+    throw new Error("Email is not configured on this server (set GMAIL_USER + GMAIL_APP_PASSWORD).");
+  }
+  if (!toEmail) throw new Error("Recipient email is required.");
+  if (!Buffer.isBuffer(pdfBuffer) || !pdfBuffer.length) throw new Error("PDF attachment is empty.");
+  if (!Buffer.isBuffer(csvBuffer) || !csvBuffer.length) throw new Error("CSV attachment is empty.");
+  if (typeof describeLine !== "function") {
+    throw new Error("describeLine (line) => string is required.");
+  }
+
+  const fromAddress = process.env.GMAIL_USER;
+  const finalSubject = String(subject || buildRfqSubject(rfq)).slice(0, 200);
+  const { text, html } = buildRfqEmail({ rfq, toName, customBodyText: bodyText, describeLine });
+
+  const info = await transporter.sendMail({
+    from: `"${company.NAME}" <${fromAddress}>`,
+    to: toEmail,
+    replyTo: fromAddress,
+    subject: finalSubject,
+    text,
+    html,
+    attachments: [
+      {
+        filename: `${rfq.id}.pdf`,
+        content: pdfBuffer,
+        contentType: "application/pdf"
+      },
+      {
+        filename: `${rfq.id}.csv`,
+        content: csvBuffer,
+        contentType: "text/csv; charset=utf-8"
+      }
+    ]
+  });
+  console.log("[rfq-email] Sent", rfq.id, "to", toEmail, "—", info.messageId);
+  return { ok: true, messageId: info.messageId };
 }
 
 // Send a PO email. Throws if Gmail isn't configured or the send fails
@@ -267,5 +378,8 @@ async function sendPurchaseOrderEmail({
 module.exports = {
   sendPurchaseOrderEmail,
   buildSubject,      // exported for tests and for the server's idempotent re-send path
-  buildPoEmail       // exported for tests — verify body matches PDF/CSV
+  buildPoEmail,      // exported for tests — verify body matches PDF/CSV
+  sendQuoteRequestEmail,
+  buildRfqSubject,
+  buildRfqEmail      // exported for tests — verify the RFQ body carries no prices
 };

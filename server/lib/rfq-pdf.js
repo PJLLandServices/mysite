@@ -1,21 +1,26 @@
-// Purchase Order PDF generator. Branded, professional one-page document
-// the supplier receives as an email attachment. Layout follows the
-// seven-region structure from the PO Document Redesign brief:
+// Request for Quotation PDF generator. Branded, professional document
+// the supplier receives as an email attachment — the "ask for a price"
+// sibling of po-pdf.js ("commit to buy"). Layout mirrors the PO's
+// seven-region structure, minus everything that would make it read like
+// an order:
 //
 //   1. Top accent — 4 pt solid PJL-green rule at the page edge
-//   2. Header   — sender brand + contact (left)  /  PO identity (right)
-//   3. Parties  — Vendor (left)  /  Ship To (right), 50/50 columns
-//   4. Items    — 7-column table: # · SKU · Description · Qty · Unit · UnitPrice · LineTotal
-//   5. Totals   — right-aligned subtotal block; HST handled by supplier
-//   6. Notes    — single paragraph referencing the PO id + CSV attachment
+//   2. Header   — sender brand + contact (left)  /  RFQ identity (right)
+//   3. Parties  — Vendor (left)  /  Requested By (right), 50/50 columns
+//   4. Items    — 6-column table: # · SKU · Description · Qty · Unit ·
+//                 Quoted Unit Price (an EMPTY ruled write-on cell — the
+//                 vendor fills it in by hand or in their system)
+//   5. (no totals region — an RFQ carries no prices anywhere)
+//   6. Notes    — quote-your-best-price ask, referencing the RFQ id +
+//                 CSV attachment, explicitly "not a purchase order"
 //   7. Footer   — thin band with PJL contact line, every page
 //
 // Returns Promise<Buffer> so the caller can both stream (HTTP) and
 // attach (email) without juggling streams.
 //
 // Multi-page handling: the header and footer repeat on every page; the
-// continuation header uses a condensed `<PO-ID> — continued, page N of M`
-// label instead of the full sender brand block. Totals appear only on
+// continuation header uses a condensed `<RFQ-ID> — continued, page N of M`
+// label instead of the full sender brand block. Notes appear only on
 // the final page.
 
 const PDFDocument = require("pdfkit");
@@ -29,11 +34,11 @@ const { formatUnit, formatVendorAddress, resolveLineDescription } = require("./f
 
 const PAGE_W = 612;             // US Letter, points
 const PAGE_H = 792;
-const MARGIN_X = 36;            // brief §3.1 page setup
+const MARGIN_X = 36;            // same page setup as po-pdf.js
 const MARGIN_TOP = 28;
 const MARGIN_BOTTOM = 28;
 
-const TOP_RULE_HEIGHT = 4;      // brief §3.1 region 1
+const TOP_RULE_HEIGHT = 4;      // region 1
 
 const PJL_GREEN = company.GREEN_HEX;
 const INK = "#1F2A22";          // primary text — body / titles
@@ -41,12 +46,15 @@ const INK_SECONDARY = "#5A5F58";// secondary text — addresses, labels
 const INK_TERTIARY = "#888780"; // tertiary — section labels, hints
 const RULE = "#1F2A22";         // hairline rules between rows
 const BORDER_HAIR = "#D3D1C7";  // 0.5pt inter-row separators
-const STAMP_RED = "#B23A2E";    // revision-stamp box — must read as a red rubber stamp on print
 
-// Barlow Condensed — same TTF the invoice and quote PDFs use. Falls
-// back to Helvetica-Bold when the font file is missing (local dev
-// without assets). The brief calls for a sans-serif body and reserves
-// Courier for the SKU column.
+// Width of the hand-write line inside the Quoted Unit Price column.
+// Drawn right-aligned within the column so it lands where a printed
+// value would end; ~80pt gives room for "$1,234.56" in pen.
+const WRITE_LINE_W = 80;
+
+// Barlow Condensed — same TTF the invoice, quote, and PO PDFs use.
+// Falls back to Helvetica-Bold when the font file is missing (local
+// dev without assets).
 const BARLOW_BOLD_PATH = path.resolve(__dirname, "..", "assets", "fonts", "BarlowCondensed-Bold.ttf");
 let _barlowBuf = null;
 function barlowBuffer() {
@@ -68,23 +76,18 @@ function fontHeading(doc) {
 
 // ---- Formatters ------------------------------------------------------
 
-function fmtCents(c) {
-  const v = (Number(c) || 0) / 100;
-  return "$" + v.toFixed(2);
-}
 function fmtDate(iso) {
   if (!iso) return "—";
   return new Date(iso).toLocaleDateString("en-CA", { month: "long", day: "numeric", year: "numeric" });
 }
 
-// ---- Catalog lookup (description + unit per SKU) ---------------------
+// ---- Catalog lookup (description + unit fallback per SKU) ------------
 //
-// PO line items store only `sku + qty + unitPriceCents + sourceListId`.
-// Descriptions and units are looked up from parts.json at render time.
-// Cached for the process lifetime; a parts.json change requires a server
-// restart to take effect — which is fine because once a PO has been sent
-// the snapshot-on-send storage layer (see server.js /send handler) holds
-// the rendered PDF byte-identically anyway.
+// RFQ lines snapshot description + unit at generation, so the catalog is
+// only a fallback for blank snapshots / legacy records. The caller passes
+// the merged in-memory catalog (PARTS.parts — baseline + overrides); we
+// fall back to the on-disk parts.json only when no catalog is provided.
+// Same catalogParts(passed) pattern as po-pdf.js / po-csv.js.
 
 let _partsCache = null;
 function loadParts() {
@@ -98,19 +101,18 @@ function loadParts() {
   return _partsCache;
 }
 
-// Description resolution lives in format.resolveLineDescription (stored line
-// description → catalog → "(SKU …)" placeholder, no size prefix), shared
-// with the CSV, the supplier email, and the on-screen detail table. The
-// caller passes the merged catalog (PARTS.parts) into generatePoPdf; we fall
-// back to the on-disk parts.json only when no catalog is provided.
 function catalogParts(passed) {
   if (passed && typeof passed === "object") return passed;
   return loadParts().parts || {};
 }
 
-function unitFor(sku) {
-  const cat = loadParts();
-  const part = cat.parts && cat.parts[sku];
+// Unit resolution: the snapshot on the line wins; catalog unit is the
+// fallback; "each" the last resort (matches the parts.js hydration
+// default). Mirrors the description precedence in resolveLineDescription.
+function unitForLine(line, catalog) {
+  if (line && line.unit) return line.unit;
+  const sku = line && line.sku != null ? String(line.sku) : "";
+  const part = catalog && Object.prototype.hasOwnProperty.call(catalog, sku) ? catalog[sku] : null;
   return (part && part.unit) || "each";
 }
 
@@ -118,37 +120,38 @@ function unitFor(sku) {
 //
 // Built up front so the row renderer can reference the same x-positions
 // every row. Description column flexes — its width is whatever remains
-// after the fixed columns claim their space.
+// after the fixed columns claim their space. Dropping the PO's LineTotal
+// column and widening Unit Price into a write-on cell leaves the RFQ
+// description noticeably roomier than the PO's.
 
 function tableLayout() {
   const left = MARGIN_X;
   const right = PAGE_W - MARGIN_X;
-  // Fixed columns (brief §3.1 region 4 widths).
+  // Fixed columns. quotedPrice is sized so the "QUOTED UNIT PRICE"
+  // header fits on one line at 9pt with 0.6 tracking (~102pt).
   const widths = {
-    rowNum:    24,
-    sku:      110,
-    qty:       38,
-    unit:      38,
-    unitPrice: 70,
-    lineTotal: 78
+    rowNum:      24,
+    sku:        110,
+    qty:         38,
+    unit:        38,
+    quotedPrice: 105
   };
   // Gap between columns (visual breathing room).
   const GAP = 8;
   // Compute description width = remaining space.
   const fixedTotal =
     widths.rowNum + widths.sku + widths.qty + widths.unit +
-    widths.unitPrice + widths.lineTotal + GAP * 6;
+    widths.quotedPrice + GAP * 5;
   const descWidth = right - left - fixedTotal;
 
   let x = left;
   const xs = {};
-  xs.rowNum    = x; x += widths.rowNum + GAP;
-  xs.sku       = x; x += widths.sku + GAP;
-  xs.desc      = x; x += descWidth + GAP;
-  xs.qty       = x; x += widths.qty + GAP;
-  xs.unit      = x; x += widths.unit + GAP;
-  xs.unitPrice = x; x += widths.unitPrice + GAP;
-  xs.lineTotal = x; // last column; no trailing gap
+  xs.rowNum      = x; x += widths.rowNum + GAP;
+  xs.sku         = x; x += widths.sku + GAP;
+  xs.desc        = x; x += descWidth + GAP;
+  xs.qty         = x; x += widths.qty + GAP;
+  xs.unit        = x; x += widths.unit + GAP;
+  xs.quotedPrice = x; // last column; no trailing gap
 
   return { xs, widths, descWidth, left, right };
 }
@@ -162,7 +165,7 @@ function drawTopRule(doc) {
     .restore();
 }
 
-function drawHeaderFull(doc, po) {
+function drawHeaderFull(doc, rfq) {
   const headerTop = TOP_RULE_HEIGHT + 24; // ~28 pt from page top to first text line
   // Sender (left)
   doc.font(fontHeading(doc))
@@ -180,40 +183,41 @@ function drawHeaderFull(doc, po) {
   senderY += 13;
   doc.text(company.email(), MARGIN_X, senderY, { lineBreak: false });
 
-  // Document identity (right) — right-aligned block
+  // Document identity (right) — right-aligned block. The label is the
+  // single loudest "this is not an order" signal on the page.
   const rightWidth = 240;
   const rightX = PAGE_W - MARGIN_X - rightWidth;
 
   doc.font("Helvetica-Bold")
     .fontSize(10)
     .fillColor(INK_TERTIARY)
-    .text("PURCHASE ORDER", rightX, headerTop, {
+    .text("REQUEST FOR QUOTATION", rightX, headerTop, {
       width: rightWidth, align: "right", characterSpacing: 1
     });
 
   doc.font(fontHeading(doc))
     .fontSize(22)
     .fillColor(INK)
-    .text(po.id, rightX, headerTop + 15, {
+    .text(rfq.id, rightX, headerTop + 15, {
       width: rightWidth, align: "right", lineBreak: false
     });
 
   doc.font("Helvetica")
     .fontSize(10)
     .fillColor(INK_SECONDARY)
-    .text(`Issued ${fmtDate(po.createdAt)}`, rightX, headerTop + 44, {
+    .text(`Issued ${fmtDate(rfq.createdAt)}`, rightX, headerTop + 44, {
       width: rightWidth, align: "right"
     });
 
   return headerTop + 70; // y of bottom of full header
 }
 
-function drawHeaderCondensed(doc, po, pageNum, totalPages) {
+function drawHeaderCondensed(doc, rfq, pageNum, totalPages) {
   const headerTop = TOP_RULE_HEIGHT + 24;
   doc.font(fontHeading(doc))
     .fontSize(11)
     .fillColor(INK_SECONDARY)
-    .text(`${po.id} — continued`, MARGIN_X, headerTop, { lineBreak: false });
+    .text(`${rfq.id} — continued`, MARGIN_X, headerTop, { lineBreak: false });
   doc.font("Helvetica")
     .fontSize(10)
     .fillColor(INK_TERTIARY)
@@ -222,25 +226,27 @@ function drawHeaderCondensed(doc, po, pageNum, totalPages) {
   return headerTop + 24;
 }
 
-function drawPartiesBlock(doc, po, startY) {
+function drawPartiesBlock(doc, rfq, startY) {
   const colW = (PAGE_W - MARGIN_X * 2 - 24) / 2; // 24pt gutter
   const leftX = MARGIN_X;
   const rightX = leftX + colW + 24;
 
-  // Section labels
+  // Section labels — the PO's "SHIP TO" becomes "REQUESTED BY": nothing
+  // ships on an inquiry, so the right column is who's asking, not a
+  // delivery address.
   doc.font("Helvetica-Bold")
     .fontSize(9)
     .fillColor(INK_TERTIARY)
     .text("VENDOR", leftX, startY, { characterSpacing: 1, lineBreak: false });
-  doc.text("SHIP TO", rightX, startY, { characterSpacing: 1, lineBreak: false });
+  doc.text("REQUESTED BY", rightX, startY, { characterSpacing: 1, lineBreak: false });
 
   let y = startY + 14;
   // Vendor name
   doc.font(fontHeading(doc))
     .fontSize(13)
     .fillColor(INK)
-    .text(po.supplierName || "(unknown supplier)", leftX, y, { width: colW, lineBreak: false });
-  // Ship-to name
+    .text(rfq.supplierName || "(unknown supplier)", leftX, y, { width: colW, lineBreak: false });
+  // Requesting company name
   doc.text(company.NAME, rightX, y, { width: colW, lineBreak: false });
 
   y += 18;
@@ -249,8 +255,8 @@ function drawPartiesBlock(doc, po, startY) {
   // Vendor details — formatVendorAddress handles the all-caps + postal
   // split; supplier may also have no contact / no email / no phone.
   const vendor = formatVendorAddress({
-    contactName: po.supplierContactName,
-    address: po.supplierAddress
+    contactName: rfq.supplierContactName,
+    address: rfq.supplierAddress
   });
   let vendorY = y;
   if (vendor.attn) {
@@ -261,23 +267,23 @@ function drawPartiesBlock(doc, po, startY) {
     doc.text(line, leftX, vendorY, { width: colW, lineBreak: false });
     vendorY += 13;
   }
-  if (po.supplierEmail) {
-    doc.text(po.supplierEmail, leftX, vendorY, { width: colW, lineBreak: false });
+  if (rfq.supplierEmail) {
+    doc.text(rfq.supplierEmail, leftX, vendorY, { width: colW, lineBreak: false });
     vendorY += 13;
   }
-  if (po.supplierPhone) {
-    doc.text(po.supplierPhone, leftX, vendorY, { width: colW, lineBreak: false });
+  if (rfq.supplierPhone) {
+    doc.text(rfq.supplierPhone, leftX, vendorY, { width: colW, lineBreak: false });
     vendorY += 13;
   }
 
-  // Ship-to details — PJL's contact info; the brief explicitly omits
-  // PJL email here (it's already in the header sender block).
-  let shipY = y;
-  doc.text(company.CITY, rightX, shipY, { width: colW, lineBreak: false });
-  shipY += 13;
-  doc.text(company.PHONE, rightX, shipY, { width: colW, lineBreak: false });
+  // Requested-by details — PJL's contact info; email is omitted here
+  // (it's already in the header sender block), same as the PO ship-to.
+  let reqY = y;
+  doc.text(company.CITY, rightX, reqY, { width: colW, lineBreak: false });
+  reqY += 13;
+  doc.text(company.PHONE, rightX, reqY, { width: colW, lineBreak: false });
 
-  return Math.max(vendorY, shipY) + 6; // y of bottom of parties block
+  return Math.max(vendorY, reqY) + 6; // y of bottom of parties block
 }
 
 function drawTableHeader(doc, y) {
@@ -286,13 +292,12 @@ function drawTableHeader(doc, y) {
     .fontSize(9)
     .fillColor(INK_TERTIARY);
   const headerOpts = { characterSpacing: 0.6, lineBreak: false };
-  doc.text("#",          xs.rowNum,    y, { ...headerOpts, width: widths.rowNum });
-  doc.text("SKU",        xs.sku,       y, { ...headerOpts, width: widths.sku });
-  doc.text("DESCRIPTION",xs.desc,      y, { ...headerOpts, width: tableLayout().descWidth });
-  doc.text("QTY",        xs.qty,       y, { ...headerOpts, width: widths.qty, align: "right" });
-  doc.text("UNIT",       xs.unit,      y, { ...headerOpts, width: widths.unit });
-  doc.text("UNIT PRICE", xs.unitPrice, y, { ...headerOpts, width: widths.unitPrice, align: "right" });
-  doc.text("LINE TOTAL", xs.lineTotal, y, { ...headerOpts, width: widths.lineTotal, align: "right" });
+  doc.text("#",                 xs.rowNum,      y, { ...headerOpts, width: widths.rowNum });
+  doc.text("SKU",               xs.sku,         y, { ...headerOpts, width: widths.sku });
+  doc.text("DESCRIPTION",       xs.desc,        y, { ...headerOpts, width: tableLayout().descWidth });
+  doc.text("QTY",               xs.qty,         y, { ...headerOpts, width: widths.qty, align: "right" });
+  doc.text("UNIT",              xs.unit,        y, { ...headerOpts, width: widths.unit });
+  doc.text("QUOTED UNIT PRICE", xs.quotedPrice, y, { ...headerOpts, width: widths.quotedPrice, align: "right" });
   // 1pt bottom border below the header text
   const ruleY = y + 18;
   doc.save()
@@ -305,7 +310,7 @@ function drawTableHeader(doc, y) {
 function drawTableRow(doc, line, rowNum, rowY, catalog) {
   const { xs, widths, descWidth } = tableLayout();
   const description = resolveLineDescription(line, catalog);
-  const unitLabel = formatUnit(unitFor(line.sku), line.qty);
+  const unitLabel = formatUnit(unitForLine(line, catalog), line.quantity);
 
   // Description height drives row height. Compute it before drawing so
   // every cell can align to the same top + the inter-row rule lands at
@@ -329,31 +334,23 @@ function drawTableRow(doc, line, rowNum, rowY, catalog) {
   doc.font("Helvetica").fontSize(11).fillColor(INK);
   doc.text(description, xs.desc, textY, { width: descWidth });
 
-  // Optional notes under the description (smaller, secondary color)
-  if (line.notes) {
-    const noteY = textY + descHeight + 2;
-    doc.font("Helvetica").fontSize(9).fillColor(INK_SECONDARY);
-    doc.text(line.notes, xs.desc, noteY, { width: descWidth });
-  }
-
-  // Qty — right-aligned, tabular feel via Helvetica + tnum-emulation
+  // Qty — right-aligned. RFQ lines store `quantity` (not the PO's `qty`).
   doc.font("Helvetica").fontSize(11).fillColor(INK);
-  doc.text(String(line.qty), xs.qty, textY, { ...opts, width: widths.qty, align: "right" });
+  doc.text(String(line.quantity), xs.qty, textY, { ...opts, width: widths.qty, align: "right" });
 
   // Unit — secondary color
   doc.font("Helvetica").fontSize(11).fillColor(INK_SECONDARY);
   doc.text(unitLabel, xs.unit, textY, { ...opts, width: widths.unit });
 
-  // Unit price — right-aligned
-  doc.font("Helvetica").fontSize(11).fillColor(INK);
-  doc.text(fmtCents(line.unitPriceCents), xs.unitPrice, textY, {
-    ...opts, width: widths.unitPrice, align: "right"
-  });
-
-  // Line total — right-aligned
-  doc.text(fmtCents(line.lineTotalCents), xs.lineTotal, textY, {
-    ...opts, width: widths.lineTotal, align: "right"
-  });
+  // Quoted unit price — an EMPTY write-on cell: a light hairline the
+  // vendor hand-writes (or types) their price onto. No value is ever
+  // rendered here; quotedPriceCents lives in the data model only.
+  const writeY = textY + 12; // sits where a printed value's baseline would
+  const writeX2 = xs.quotedPrice + widths.quotedPrice;
+  doc.save()
+    .moveTo(writeX2 - WRITE_LINE_W, writeY).lineTo(writeX2, writeY)
+    .strokeColor(INK_TERTIARY).lineWidth(0.6).stroke()
+    .restore();
 
   // Hairline inter-row separator at the bottom of THIS row.
   const ruleY = rowY + rowHeight;
@@ -365,74 +362,17 @@ function drawTableRow(doc, line, rowNum, rowY, catalog) {
   return ruleY;
 }
 
-function drawTotals(doc, po, y) {
-  const blockW = 220;
-  const x = PAGE_W - MARGIN_X - blockW;
+// No drawTotals — an RFQ has no prices, so there is nothing to total.
+// The notes paragraph carries the ask instead.
 
-  // Top border
-  doc.save()
-    .moveTo(x, y).lineTo(x + blockW, y)
-    .strokeColor(INK).lineWidth(1).stroke()
-    .restore();
-
-  const innerY = y + 12;
-
-  doc.font("Helvetica").fontSize(12).fillColor(INK_SECONDARY);
-  doc.text("Subtotal", x, innerY, { width: 100, lineBreak: false });
-  doc.font(fontHeading(doc)).fillColor(INK);
-  doc.text(fmtCents(po.subtotalCents), x + 100, innerY, {
-    width: blockW - 100, align: "right", lineBreak: false
-  });
-
-  const hintY = innerY + 22;
-  doc.font("Helvetica-Oblique").fontSize(9).fillColor(INK_TERTIARY);
-  doc.text("HST calculated at invoice", x, hintY, {
-    width: blockW, align: "right", lineBreak: false
-  });
-
-  return hintY + 18;
-}
-
-function drawNotes(doc, po, y) {
-  const text = `Please reference ${po.id} on invoice and packing slip. CSV of line items attached for system entry.${po.notes ? "\n\n" + po.notes : ""}`;
+function drawNotes(doc, rfq, y) {
+  const text = `Please quote your best unit price and lead time for each item above, and reference ${rfq.id} in your reply. This is a request for quotation only — not a purchase order. CSV of line items attached for system entry.${rfq.notes ? "\n\n" + rfq.notes : ""}`;
   doc.font("Helvetica").fontSize(10).fillColor(INK_SECONDARY);
   doc.text(text, MARGIN_X, y, {
     width: PAGE_W - MARGIN_X * 2,
     lineGap: 4
   });
   return doc.y;
-}
-
-// Red revision stamp — suppliers print POs and pick from the printout at
-// the counter, but a revised order goes out by EMAIL, so a stale paper
-// copy has no way to show it's been superseded. The document itself says
-// so: a red-bordered notice telling the holder to check their inbox
-// before filling the order. Red text + a heavy red rule (no fill) so it
-// still reads as a stamp on a grayscale printer.
-function drawRevisionStamp(doc, y) {
-  const boxW = PAGE_W - MARGIN_X * 2;
-  const PAD = 10;
-  const lead = "PRINTED COPY — CHECK YOUR EMAIL FOR REVISIONS";
-  const body = "If this order has been revised since printing, an updated email has been sent. The most recent emailed version supersedes this copy.";
-  doc.font("Helvetica-Bold").fontSize(10);
-  const leadH = doc.heightOfString(lead, { width: boxW - PAD * 2 });
-  doc.font("Helvetica").fontSize(9);
-  const bodyH = doc.heightOfString(body, { width: boxW - PAD * 2 });
-  const boxH = PAD + leadH + 4 + bodyH + PAD;
-
-  doc.save()
-    .rect(MARGIN_X, y, boxW, boxH)
-    .lineWidth(1.5)
-    .strokeColor(STAMP_RED)
-    .stroke()
-    .restore();
-
-  doc.font("Helvetica-Bold").fontSize(10).fillColor(STAMP_RED);
-  doc.text(lead, MARGIN_X + PAD, y + PAD, { width: boxW - PAD * 2, characterSpacing: 0.6, lineBreak: false });
-  doc.font("Helvetica").fontSize(9).fillColor(STAMP_RED);
-  doc.text(body, MARGIN_X + PAD, y + PAD + leadH + 4, { width: boxW - PAD * 2, lineGap: 2 });
-
-  return y + boxH;
 }
 
 function drawFooter(doc) {
@@ -479,13 +419,13 @@ function ensureRowFits(doc, currentY, neededHeight, ctx) {
   doc.addPage();
   ctx.pageNum += 1;
   drawTopRule(doc);
-  const afterHeader = drawHeaderCondensed(doc, ctx.po, ctx.pageNum, ctx.totalPages);
+  const afterHeader = drawHeaderCondensed(doc, ctx.rfq, ctx.pageNum, ctx.totalPages);
   return drawTableHeader(doc, afterHeader + 24);
 }
 
 // ---- Main renderer ----------------------------------------------------
 
-function generatePoPdf(po, partsMap) {
+function generateRfqPdf(rfq, partsMap) {
   const catalog = catalogParts(partsMap);
   return new Promise((resolve, reject) => {
     try {
@@ -493,10 +433,10 @@ function generatePoPdf(po, partsMap) {
         size: "LETTER",
         margins: { top: MARGIN_TOP, bottom: MARGIN_BOTTOM, left: MARGIN_X, right: MARGIN_X },
         info: {
-          Title: `PJL Purchase Order ${po.id}`,
+          Title: `PJL Request for Quotation ${rfq.id}`,
           Author: company.NAME,
-          Subject: `Purchase Order to ${po.supplierName || "supplier"}`,
-          Keywords: `purchase order ${po.id} pjl land services`
+          Subject: `Request for Quotation to ${rfq.supplierName || "supplier"}`,
+          Keywords: `request for quotation ${rfq.id} pjl land services`
         },
         autoFirstPage: true
         // bufferPages omitted: defaults to false. We manage pagination
@@ -516,16 +456,16 @@ function generatePoPdf(po, partsMap) {
       // optimistic on first pass (estimates description wrap) — close
       // enough for the page indicator. Re-measure if exact M-of-M
       // pagination becomes critical.
-      const items = Array.isArray(po.lineItems) ? po.lineItems : [];
+      const items = Array.isArray(rfq.lines) ? rfq.lines : [];
       const totalPages = estimateTotalPages(doc, items, catalog);
 
       // ---- First page ------------------------------------------------
       drawTopRule(doc);
-      const afterHeader = drawHeaderFull(doc, po);
-      const afterParties = drawPartiesBlock(doc, po, afterHeader + 16);
+      const afterHeader = drawHeaderFull(doc, rfq);
+      const afterParties = drawPartiesBlock(doc, rfq, afterHeader + 16);
       let rowY = drawTableHeader(doc, afterParties + 24);
 
-      const ctx = { po, pageNum: 1, totalPages };
+      const ctx = { rfq, pageNum: 1, totalPages };
 
       // ---- Rows ------------------------------------------------------
       for (let i = 0; i < items.length; i++) {
@@ -540,18 +480,13 @@ function generatePoPdf(po, partsMap) {
         rowY = drawTableRow(doc, line, i + 1, rowY, catalog);
       }
 
-      // ---- Totals + Notes + revision stamp (last page only) ----------
-      // Totals are right-aligned and don't push much height. Notes are
-      // a single short paragraph; the red revision stamp adds ~55pt.
-      // Together they fit in ~175pt; if the final-row Y has less
-      // remaining, push the whole block onto a new page — the stamp must
-      // never strand alone.
-      const trailingHeight = 175;
+      // ---- Notes (last page only; no totals on an RFQ) ----------------
+      // The ask paragraph plus optional rfq.notes fits in ~100pt; if the
+      // final-row Y has less remaining, push it onto a new page.
+      const trailingHeight = 100;
       rowY = ensureRowFits(doc, rowY, trailingHeight, ctx);
 
-      rowY = drawTotals(doc, po, rowY + 18);
-      rowY = drawNotes(doc, po, rowY + 14);
-      rowY = drawRevisionStamp(doc, rowY + 14);
+      rowY = drawNotes(doc, rfq, rowY + 18);
 
       // ---- Footer (this page) ----------------------------------------
       drawFooter(doc);
@@ -566,7 +501,7 @@ function generatePoPdf(po, partsMap) {
 // Estimate total page count up front so the condensed continuation
 // header can say "page 2 of 4" on the second page. Approximation:
 // row heights estimated against the page width; trailing block fixed at
-// 120pt. The estimate runs on a throwaway doc so we don't disturb the
+// 100pt. The estimate runs on a throwaway doc so we don't disturb the
 // real render's font/state.
 function estimateTotalPages(realDoc, items, catalog) {
   const probe = new PDFDocument({ size: "LETTER", margins: { top: MARGIN_TOP, bottom: MARGIN_BOTTOM, left: MARGIN_X, right: MARGIN_X } });
@@ -585,8 +520,8 @@ function estimateTotalPages(realDoc, items, catalog) {
     }
     used += rowHeight;
   }
-  // Reserve final page for trailing totals + notes + revision stamp
-  if (used + 175 > PAGE_CONTENT_BOTTOM - MARGIN_TOP) {
+  // Reserve final page for the trailing notes block
+  if (used + 100 > PAGE_CONTENT_BOTTOM - MARGIN_TOP) {
     pages += 1;
   }
   probe.end();
@@ -595,4 +530,4 @@ function estimateTotalPages(realDoc, items, catalog) {
   return pages;
 }
 
-module.exports = { generatePoPdf };
+module.exports = { generateRfqPdf };

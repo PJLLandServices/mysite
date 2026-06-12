@@ -1,0 +1,376 @@
+/* RFQ detail — Phase A (document + send) and Phase B (price quick-grid +
+   apply-to-catalog review).
+   Builds on the .proj-* shell from projects.css (header card, sections,
+   savebar, modal) exactly like the PO detail does. Self-contained on
+   purpose: status pills + line grid live here rather than leaning on
+   purchase-orders.css, because the RFQ line row is a different shape —
+   no unit-price / line-total columns, an editable qty while draft, and a
+   price column that only exists once the RFQ leaves draft: an editable
+   "vendor quoted" input on sent/quoted (.qr-lines--quoting) or the
+   read-only quoted cell on applied/cancelled (.qr-lines--quoted). */
+
+/* Status pill — same lifecycle palette as POs: neutral draft, blue sent,
+   amber for "vendor answered, needs action" (quoted), green terminal
+   (applied), red cancelled. */
+.qr-status {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.qr-status--draft     { background: #F0EEE3; color: #4A4A44; }
+.qr-status--sent      { background: #DCE5F0; color: #1F4D7A; }
+.qr-status--quoted    { background: #FFF1D6; color: #7A5500; }
+.qr-status--applied   { background: #DDEDD0; color: #1B4D2E; }
+.qr-status--cancelled { background: #FBEAE7; color: #8A2A1F; }
+
+/* "REQUEST FOR QUOTATION" context label — keeps the page unmistakably a
+   price ask even though it's visually a sibling of the PO detail. */
+.qr-doc-label {
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: #7A5500;
+}
+.qr-explainer {
+  margin: 0 0 14px;
+  font-size: 13px;
+  color: #4A4A44;
+  line-height: 1.45;
+}
+
+/* Cancelled banner — the only on-page surface for cancelReason. */
+.qr-cancelled-banner {
+  margin: 0 0 14px;
+  padding: 12px 14px;
+  background: #FBEAE7;
+  border: 1px solid #E8C9C2;
+  border-radius: 8px;
+  color: #8A2A1F;
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+/* Read-only vendor snapshot + timestamps (PATCH only takes lines/notes,
+   so these are labelled values, not inputs). */
+.qr-meta {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 10px 16px;
+  margin-bottom: 12px;
+}
+.qr-meta-label {
+  display: block;
+  margin-bottom: 2px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #7A7A72;
+}
+.qr-meta-value {
+  font-size: 14px;
+  color: #1F2A22;
+  word-break: break-word;
+}
+
+/* Line rows: SKU | description | qty | unit | (quoted) | remove.
+   No subtotal row anywhere — an RFQ carries no money. */
+.qr-lines {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.qr-line {
+  display: grid;
+  grid-template-columns: 80px 1fr 78px 70px 36px;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  background: #FCFBF4;
+  border: 1px solid #E8E5D7;
+  border-radius: 6px;
+}
+.qr-lines.qr-lines--quoted .qr-line {
+  grid-template-columns: 80px 1fr 78px 70px 90px 36px;
+}
+/* Quick-grid mode (sent/quoted): the price column widens to hold an input. */
+.qr-lines.qr-lines--quoting .qr-line {
+  grid-template-columns: 80px 1fr 78px 70px 112px 36px;
+}
+.qr-line-sku {
+  font-family: ui-monospace, "SFMono-Regular", monospace;
+  font-size: 11px;
+  color: #4A4A44;
+}
+.qr-line-desc {
+  font-size: 13px;
+  color: #1F2A22;
+  line-height: 1.35;
+}
+.qr-line-qty {
+  font-family: "Barlow Condensed", sans-serif;
+  font-weight: 700;
+  text-align: right;
+  color: #1F2A22;
+}
+.qr-line-qty-input {
+  width: 64px;
+  padding: 8px 10px;
+  border: 1px solid #C7C0A8;
+  border-radius: 6px;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  text-align: center;
+  background: #fff;
+  -moz-appearance: textfield;
+}
+.qr-line-qty-input::-webkit-outer-spin-button,
+.qr-line-qty-input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+.qr-line-qty-input:focus {
+  border-color: #1B4D2E;
+  outline: 2px solid rgba(27,77,46,0.15);
+}
+.qr-line-unit {
+  font-size: 12px;
+  color: #7A7A72;
+}
+/* Vendor's quoted unit price — read-only, Phase B fills it in. The tiny
+   eyebrow keeps a bare dollar figure from reading as OUR price. */
+.qr-line-quoted {
+  font-family: "Barlow Condensed", sans-serif;
+  font-weight: 700;
+  text-align: right;
+  color: #1B4D2E;
+  font-size: 15px;
+}
+.qr-line-quoted::before {
+  content: "quoted";
+  display: block;
+  font-family: "DM Sans", sans-serif;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #7A7A72;
+}
+/* Phase B quick-grid cell — the vendor's returned price, entered as
+   dollars text. Same eyebrow trick as the read-only cell so a bare dollar
+   figure never reads as OUR price; the $ prefix lives outside the input
+   so the value stays clean parseFloat fodder. Field is 40px+ for thumbs. */
+.qr-line-quote-edit {
+  display: block;
+  text-align: right;
+}
+.qr-line-quote-edit::before {
+  content: "vendor quoted";
+  display: block;
+  margin-bottom: 2px;
+  font-family: "DM Sans", sans-serif;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #7A7A72;
+}
+.qr-line-quote-field {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-height: 40px;
+  padding: 0 8px;
+  background: #fff;
+  border: 1px solid #C7C0A8;
+  border-radius: 6px;
+}
+.qr-line-quote-field:focus-within {
+  border-color: #1B4D2E;
+  outline: 2px solid rgba(27,77,46,0.15);
+}
+.qr-line-quote-prefix {
+  color: #7A7A72;
+  font-size: 13px;
+}
+.qr-line-quote-input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  text-align: right;
+  color: #1F2A22;
+}
+.qr-line-quote-input:focus { outline: none; }
+.qr-line-quote-input::placeholder { color: #C7C0A8; }
+
+.qr-line-remove {
+  width: 32px;
+  height: 32px;
+  border: 1px solid transparent;
+  background: transparent;
+  border-radius: 6px;
+  cursor: pointer;
+  color: #8A2A1F;
+  font-size: 16px;
+}
+.qr-line-remove:hover { background: #FBEAE7; border-color: #E8C9C2; }
+.qr-line.is-locked .qr-line-remove { display: none; }
+
+/* 430px-class phones: description gets its own full-width row; SKU drops
+   (it's on the PDF/CSV); qty + unit + (quoted) + remove share row two. */
+@media (max-width: 540px) {
+  .qr-line { grid-template-columns: 84px 1fr 36px; gap: 6px; }
+  .qr-lines.qr-lines--quoted .qr-line { grid-template-columns: 84px 1fr 90px 36px; }
+  .qr-lines.qr-lines--quoting .qr-line { grid-template-columns: 84px 1fr 112px 36px; }
+  .qr-line-sku { display: none; }
+  .qr-line-desc { grid-column: 1 / -1; }
+  .qr-line-qty { text-align: left; }
+}
+
+/* "N of M priced" — sits beside the line count while the quick-grid is
+   live. Amber while partial (echoes the quoted pill), green at full. */
+.qr-section-counts {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  white-space: nowrap;
+}
+.qr-priced-count {
+  font-size: 13px;
+  font-weight: 600;
+  color: #7A5500;
+}
+.qr-priced-count.is-complete { color: #1B4D2E; }
+
+/* Apply-modal review rows — current catalog price → vendor quoted, one
+   row per priced SKU, before anything is written. Delta colors read from
+   PJL's side of the deal: an increase costs us more (red), a decrease is
+   good news (green), no-change is neutral. Unpriced lines tail the list
+   muted so it's explicit the vendor skipped them and the catalog won't
+   move. Rows live inside .proj-modal (max-width handled there). */
+.qr-apply-rows {
+  list-style: none;
+  margin: 0 0 12px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 50vh;
+  overflow-y: auto;
+}
+.qr-apply-row {
+  display: grid;
+  grid-template-columns: 92px 1fr;
+  gap: 2px 10px;
+  align-items: baseline;
+  padding: 8px 12px;
+  background: #FCFBF4;
+  border: 1px solid #E8E5D7;
+  border-radius: 6px;
+}
+.qr-apply-row--unpriced {
+  background: #F7F6EF;
+  border-style: dashed;
+}
+.qr-apply-sku {
+  font-family: ui-monospace, "SFMono-Regular", monospace;
+  font-size: 11px;
+  color: #4A4A44;
+}
+.qr-apply-prices {
+  text-align: right;
+  font-size: 14px;
+  color: #4A4A44;
+  white-space: nowrap;
+}
+.qr-apply-prices strong {
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 16px;
+  color: #1F2A22;
+}
+.qr-apply-desc {
+  grid-column: 1 / -1;
+  font-size: 12px;
+  color: #7A7A72;
+  line-height: 1.35;
+}
+.qr-apply-delta {
+  font-size: 12px;
+  font-weight: 700;
+}
+.qr-apply-delta--up   { color: #8A2A1F; }   /* costs us more */
+.qr-apply-delta--down { color: #1B4D2E; }   /* costs us less */
+.qr-apply-delta--same {
+  color: #7A7A72;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.qr-apply-note {
+  grid-column: 1 / -1;
+  font-size: 11px;
+  font-weight: 600;
+  color: #7A7A72;
+}
+.qr-apply-note--skip { color: #B23A2E; }
+
+/* Post-apply receipt inside the modal ("3 prices applied, 1 unchanged…"). */
+.qr-apply-summary {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  background: #DDEDD0;
+  border: 1px solid #B5D29A;
+  border-radius: 8px;
+  color: #1B4D2E;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+/* Audit trail — same shape as the PO page's history list. */
+.qr-history {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.qr-history li {
+  display: grid;
+  grid-template-columns: 130px 90px 1fr;
+  gap: 10px;
+  padding: 6px 0;
+  border-bottom: 1px solid #F0EEE3;
+  font-size: 12px;
+  color: #4A4A44;
+}
+.qr-history li:last-child { border-bottom: 0; }
+.qr-history-when { color: #7A7A72; }
+.qr-history-action {
+  font-weight: 700;
+  color: #1B4D2E;
+  text-transform: uppercase;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+}
+.qr-history-note { color: #4A4A44; word-break: break-word; }
+@media (max-width: 540px) {
+  .qr-history li { grid-template-columns: 110px 1fr; }
+  .qr-history-note { grid-column: 1 / -1; }
+}

@@ -70,6 +70,7 @@ const projects = require("./lib/projects");
 const partSuppliers = require("./lib/part-suppliers");
 const partsLib = require("./lib/parts");
 const purchaseOrders = require("./lib/purchase-orders");
+const quoteRequests = require("./lib/quote-requests");
 const users = require("./lib/users");
 const magicTokens = require("./lib/magic-tokens");
 const rateLimit = require("./lib/rate-limit");
@@ -610,6 +611,9 @@ function needsAuth(method, pathname) {
   if (pathname === "/admin/parts-suppliers" || pathname === "/admin/parts-suppliers/") return "user";
   if (pathname === "/admin/purchase-orders" || pathname === "/admin/purchase-orders/") return "user";
   if (/^\/admin\/purchase-order\/[^/]+\/?$/.test(pathname)) return "user";
+  // Quote Requests (RFQ — the "ask for a price" sibling of the PO).
+  if (pathname === "/admin/quote-requests" || pathname === "/admin/quote-requests/") return "user";
+  if (/^\/admin\/quote-request\/[^/]+\/?$/.test(pathname)) return "user";
   if (pathname === "/api/quotes" && method === "GET") return "user";
   if (pathname === "/api/quotes.csv" || pathname === "/api/contacts") return "user";
   if (/^\/api\/quotes\/[^/]+/.test(pathname)) return "user";
@@ -644,6 +648,7 @@ function needsAuth(method, pathname) {
   if (pathname.startsWith("/api/projects")) return "user";
   if (pathname.startsWith("/api/part-suppliers")) return "user";
   if (pathname.startsWith("/api/purchase-orders")) return "user";
+  if (pathname.startsWith("/api/quote-requests")) return "user";
   // Per-lead property link/dismiss/attach + tech actions are admin-only.
   if (/^\/api\/leads\/[^/]+\/(link-property|dismiss-property-suggestion|attach-property|notify-on-route|open-wo)$/.test(pathname)) return "user";
   // Bulk property import is admin-only.
@@ -10785,6 +10790,409 @@ async function handleApi(req, res, pathname) {
     }
   }
 
+  // ---------- Quote Requests (RFQ) ------------------------------------
+  // The "ask for a price" sibling of the Purchase Order. Generated from a
+  // material list's "need" lines grouped by primary supplier — exactly the
+  // PO grouping — but WITHOUT touching line status or snapshotting prices:
+  // an RFQ is an inquiry, not a commitment. Lifecycle draft → sent →
+  // quoted → applied (+ cancelled). Phase A ships draft/sent/cancelled;
+  // quoted/applied arrive with the price-entry + apply-to-catalog loop.
+
+  // POST /api/material-lists/:id/plan-quote-requests — DRY RUN, mirrors
+  // plan-purchase-orders: previews which RFQs Generate would create or
+  // refresh, plus the SKUs blocked by a missing supplier assignment.
+  const listPlanRfqMatch = pathname.match(/^\/api\/material-lists\/([^/]+)\/plan-quote-requests$/);
+  if (listPlanRfqMatch && req.method === "POST") {
+    try {
+      const id = decodeURIComponent(listPlanRfqMatch[1]);
+      const list = await materialLists.get(id);
+      if (!list) return sendJson(res, 404, { ok: false, errors: ["Material list not found."] });
+      const partsMap = (PARTS && PARTS.parts) || {};
+      const plan = quoteRequests.planFromMaterialList(list, partsMap);
+      const allSuppliers = await suppliers.list({ includeArchived: true });
+      const supplierById = new Map(allSuppliers.map((s) => [s.id, s]));
+      // Surface an existing draft per supplier so the modal can say
+      // "refreshes RFQ-…" instead of implying a duplicate gets created.
+      const openDrafts = await quoteRequests.list({ sourceMaterialListId: id, status: "draft" });
+      const draftBySupplier = new Map(openDrafts.map((r) => [r.supplierId, r.id]));
+      const previews = plan.groups.map((g) => ({
+        supplierId: g.supplierId,
+        supplierName: supplierById.get(g.supplierId)?.name || "(unknown supplier)",
+        supplierEmail: supplierById.get(g.supplierId)?.email || "",
+        lineCount: g.lines.length,
+        existingDraftId: draftBySupplier.get(g.supplierId) || null
+      }));
+      return sendJson(res, 200, {
+        ok: true,
+        canGenerate: plan.ok,
+        previews,
+        missingSupplier: plan.missingSupplier,
+        missingSupplierLines: plan.missingSupplierLines
+      });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't plan quote requests."] });
+    }
+  }
+
+  // POST /api/material-lists/:id/generate-quote-requests — create (or
+  // refresh) one draft RFQ per supplier. Idempotent: an existing DRAFT for
+  // (list, supplier) gets its lines replaced; non-drafts are never touched.
+  // The material list itself is NOT modified — lines stay "need".
+  const listGenRfqMatch = pathname.match(/^\/api\/material-lists\/([^/]+)\/generate-quote-requests$/);
+  if (listGenRfqMatch && req.method === "POST") {
+    try {
+      const id = decodeURIComponent(listGenRfqMatch[1]);
+      const list = await materialLists.get(id);
+      if (!list) return sendJson(res, 404, { ok: false, errors: ["Material list not found."] });
+      const partsMap = (PARTS && PARTS.parts) || {};
+      const plan = quoteRequests.planFromMaterialList(list, partsMap);
+      if (!plan.ok) {
+        return sendJson(res, 422, {
+          ok: false,
+          errors: ["Cannot generate quote requests — some need-line SKUs have no supplier assigned."],
+          missingSupplier: plan.missingSupplier
+        });
+      }
+      const allSuppliers = await suppliers.list({ includeArchived: true });
+      const supplierById = new Map(allSuppliers.map((s) => [s.id, s]));
+      const result = await quoteRequests.generateFromMaterialList(list, partsMap, supplierById);
+      return sendJson(res, 201, { ok: true, created: result.created, refreshed: result.refreshed });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't generate quote requests."] });
+    }
+  }
+
+  if (req.method === "GET" && pathname === "/api/quote-requests") {
+    const url = new URL(req.url, baseUrlFromReq(req));
+    const all = await quoteRequests.list({
+      status: url.searchParams.get("status"),
+      supplierId: url.searchParams.get("supplierId"),
+      sourceMaterialListId: url.searchParams.get("sourceMaterialListId")
+    });
+    all.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
+    return sendJson(res, 200, { ok: true, quoteRequests: all });
+  }
+
+  const rfqMatch = pathname.match(/^\/api\/quote-requests\/([^/]+)$/);
+  if (rfqMatch && req.method === "GET") {
+    const id = decodeURIComponent(rfqMatch[1]);
+    const rec = await quoteRequests.get(id);
+    if (!rec) return sendJson(res, 404, { ok: false, errors: ["Quote request not found."] });
+    return sendJson(res, 200, { ok: true, quoteRequest: rec });
+  }
+  if (rfqMatch && req.method === "PATCH") {
+    try {
+      const id = decodeURIComponent(rfqMatch[1]);
+      const payload = await parseRequestBody(req);
+      // Two PATCH shapes share this endpoint (per the RFQ brief):
+      //   { lines, notes }       — draft-only edits (trim before send)
+      //   { quotedPrices: {...} }— Phase B quick-grid: record the vendor's
+      //                            returned prices ({ lineId: cents|null })
+      //                            on a sent/quoted RFQ. Flips sent→quoted.
+      let updated;
+      if (payload && payload.quotedPrices && typeof payload.quotedPrices === "object") {
+        updated = await quoteRequests.recordQuotedPrices(id, payload.quotedPrices);
+      } else {
+        updated = await quoteRequests.update(id, payload);
+      }
+      if (!updated) return sendJson(res, 404, { ok: false, errors: ["Quote request not found."] });
+      return sendJson(res, 200, { ok: true, quoteRequest: updated });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't update quote request."] });
+    }
+  }
+
+  // POST /api/quote-requests/:id/send — render the RFQ PDF + CSV, freeze
+  // them to disk (immutable once sent, same rule as POs), email the vendor,
+  // flip draft → sent. Deliberately NO material-list line flips here —
+  // contrast with PO send, which marks source lines "ordered".
+  const rfqSendMatch = pathname.match(/^\/api\/quote-requests\/([^/]+)\/send$/);
+  if (rfqSendMatch && req.method === "POST") {
+    try {
+      const id = decodeURIComponent(rfqSendMatch[1]);
+      const payload = await parseRequestBody(req).catch(() => ({}));
+      const rfq = await quoteRequests.get(id);
+      if (!rfq) return sendJson(res, 404, { ok: false, errors: ["Quote request not found."] });
+      if (rfq.status !== "draft") {
+        return sendJson(res, 422, { ok: false, errors: [`Can only send a draft quote request. This one is "${rfq.status}".`] });
+      }
+      if (!rfq.lines.length) {
+        return sendJson(res, 422, { ok: false, errors: ["Can't send a quote request with no line items."] });
+      }
+      const toEmail = String(payload.toEmail || rfq.supplierEmail || "").trim().toLowerCase();
+      if (!toEmail) {
+        return sendJson(res, 422, { ok: false, errors: ["Supplier email is empty. Add it to the supplier record or this request."] });
+      }
+
+      const { generateRfqPdf } = require("./lib/rfq-pdf");
+      const { generateRfqCsv } = require("./lib/rfq-csv");
+      const { sendQuoteRequestEmail, buildRfqSubject } = require("./lib/notify-supplier");
+      const rfqPartsMap = (PARTS && PARTS.parts) || {};
+      const pdfBuffer = await generateRfqPdf(rfq, rfqPartsMap);
+      const csvBuffer = generateRfqCsv(rfq, rfqPartsMap);
+      const subject = String(payload.subject || buildRfqSubject(rfq)).slice(0, 200);
+
+      const rfqFilesDir = path.join(DATA_DIR, "quote-requests", "files");
+      await fs.mkdir(rfqFilesDir, { recursive: true });
+      const pdfFsPath = path.join(rfqFilesDir, `${rfq.id}.pdf`);
+      const csvFsPath = path.join(rfqFilesDir, `${rfq.id}.csv`);
+      await fs.writeFile(pdfFsPath, pdfBuffer);
+      await fs.writeFile(csvFsPath, csvBuffer);
+      const pdfPath = path.relative(SERVER_DIR, pdfFsPath).split(path.sep).join("/");
+      const csvPath = path.relative(SERVER_DIR, csvFsPath).split(path.sep).join("/");
+
+      const { resolveLineDescription } = require("./lib/format");
+      const describeLine = (line) => resolveLineDescription(line, rfqPartsMap);
+
+      await sendQuoteRequestEmail({
+        rfq,
+        toEmail,
+        toName: payload.toName || rfq.supplierContactName || rfq.supplierName,
+        subject,
+        bodyText: payload.bodyText || "",
+        pdfBuffer,
+        csvBuffer,
+        describeLine
+      });
+
+      const sentRfq = await quoteRequests.markSent(id, {
+        toEmail,
+        toName: payload.toName,
+        subject,
+        pdfPath,
+        csvPath
+      });
+      return sendJson(res, 200, { ok: true, quoteRequest: sentRfq });
+    } catch (err) {
+      console.warn("[rfq] send failed:", err);
+      return sendJson(res, 500, { ok: false, errors: [err.message || "Couldn't send quote request."] });
+    }
+  }
+
+  // POST /api/quote-requests/:id/resend — re-email the frozen documents,
+  // byte-identical to the original send (reads the snapshot files). Unlike
+  // POs there are no legacy pre-snapshot RFQs (send always stamps both
+  // paths), so the live-regeneration fallback below only fires when a
+  // frozen file has been lost or is unreadable — an anomaly worth logging,
+  // because a regenerated document can drift from what the vendor first
+  // received (blank description snapshots re-resolve against the CURRENT
+  // catalog).
+  const rfqResendMatch = pathname.match(/^\/api\/quote-requests\/([^/]+)\/resend$/);
+  if (rfqResendMatch && req.method === "POST") {
+    try {
+      const id = decodeURIComponent(rfqResendMatch[1]);
+      const payload = await parseRequestBody(req).catch(() => ({}));
+      const rfq = await quoteRequests.get(id);
+      if (!rfq) return sendJson(res, 404, { ok: false, errors: ["Quote request not found."] });
+      if (rfq.status !== "sent" && rfq.status !== "quoted") {
+        return sendJson(res, 422, { ok: false, errors: [`Can only re-send a sent or quoted request. This one is "${rfq.status}".`] });
+      }
+      const toEmail = String(payload.toEmail || rfq.emailedToEmail || rfq.supplierEmail || "").trim().toLowerCase();
+      if (!toEmail) return sendJson(res, 422, { ok: false, errors: ["Recipient email is empty."] });
+
+      const { generateRfqPdf } = require("./lib/rfq-pdf");
+      const { generateRfqCsv } = require("./lib/rfq-csv");
+      const { sendQuoteRequestEmail, buildRfqSubject } = require("./lib/notify-supplier");
+      const rfqPartsMap = (PARTS && PARTS.parts) || {};
+      let pdfBuffer = null, csvBuffer = null;
+      const snapshotMissingWarn = [];
+      if (rfq.pdfPath) {
+        try { pdfBuffer = await fs.readFile(path.join(SERVER_DIR, rfq.pdfPath)); }
+        catch { snapshotMissingWarn.push("PDF"); }
+      }
+      if (rfq.csvPath) {
+        try { csvBuffer = await fs.readFile(path.join(SERVER_DIR, rfq.csvPath)); }
+        catch { snapshotMissingWarn.push("CSV"); }
+      }
+      if (!pdfBuffer) pdfBuffer = await generateRfqPdf(rfq, rfqPartsMap);
+      if (!csvBuffer) csvBuffer = generateRfqCsv(rfq, rfqPartsMap);
+      if (snapshotMissingWarn.length) {
+        console.warn(`[rfq-resend] ${rfq.id} snapshot missing for: ${snapshotMissingWarn.join(", ")} — regenerated live`);
+      }
+
+      const { resolveLineDescription } = require("./lib/format");
+      const describeLine = (line) => resolveLineDescription(line, rfqPartsMap);
+      const subject = String(payload.subject || rfq.emailSubject || buildRfqSubject(rfq)).slice(0, 200);
+
+      await sendQuoteRequestEmail({
+        rfq,
+        toEmail,
+        toName: payload.toName || rfq.supplierContactName || rfq.supplierName,
+        subject,
+        bodyText: payload.bodyText || "",
+        pdfBuffer,
+        csvBuffer,
+        describeLine
+      });
+      const resent = await quoteRequests.markResent(id, { toEmail, toName: payload.toName, subject });
+      return sendJson(res, 200, { ok: true, quoteRequest: resent || rfq });
+    } catch (err) {
+      console.warn("[rfq] resend failed:", err);
+      return sendJson(res, 500, { ok: false, errors: [err.message || "Couldn't re-send quote request."] });
+    }
+  }
+
+  // POST /api/quote-requests/:id/cancel — soft-close. No material-list
+  // flips (RFQ generation never changed the list, so there is nothing to
+  // release — unlike PO cancel).
+  const rfqCancelMatch = pathname.match(/^\/api\/quote-requests\/([^/]+)\/cancel$/);
+  if (rfqCancelMatch && req.method === "POST") {
+    try {
+      const id = decodeURIComponent(rfqCancelMatch[1]);
+      const payload = await parseRequestBody(req).catch(() => ({}));
+      const cancelled = await quoteRequests.markCancelled(id, { reason: payload.reason || "" });
+      if (!cancelled) return sendJson(res, 404, { ok: false, errors: ["Quote request not found."] });
+      return sendJson(res, 200, { ok: true, quoteRequest: cancelled });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't cancel quote request."] });
+    }
+  }
+
+  // POST /api/quote-requests/:id/apply-to-catalog — push the vendor's
+  // quoted prices into the parts catalog. The whole point of the RFQ loop:
+  // catalog updates here flow straight to any open material list (live
+  // pricing) so the eventual Generate-POs snapshots real numbers.
+  //
+  // Catalog-write boundary: this writes parts.json SUPPLIER-COST data via
+  // the EXISTING parts edit path — the same partsLib.update +
+  // rebuildCatalogFromOverrides + audit the PATCH /api/parts/:sku handler
+  // uses. It never touches pricing.json (customer-facing service pricing).
+  // One batched audit entry (the trail caps at 50 — per-SKU entries would
+  // flush it). Double-apply is blocked by the quoted→applied status guard
+  // in markApplied; unknown/deleted SKUs are skipped and reported, and a
+  // quoted price equal to the current catalog price counts as applied
+  // without a redundant write.
+  const rfqApplyMatch = pathname.match(/^\/api\/quote-requests\/([^/]+)\/apply-to-catalog$/);
+  if (rfqApplyMatch && req.method === "POST") {
+    if (!BASELINE_PARTS) return sendJson(res, 503, { ok: false, errors: ["Parts baseline not loaded."] });
+    try {
+      const id = decodeURIComponent(rfqApplyMatch[1]);
+      const rfq = await quoteRequests.get(id);
+      if (!rfq) return sendJson(res, 404, { ok: false, errors: ["Quote request not found."] });
+      if (rfq.status !== "quoted") {
+        return sendJson(res, 422, { ok: false, errors: [`Can only apply a quoted request. This one is "${rfq.status}".`] });
+      }
+
+      // One price per SKU — last priced line wins if a degenerate record
+      // carries duplicates. Unpriced (null) lines are simply not part of
+      // the apply set; the vendor didn't quote them.
+      const centsBySku = new Map();
+      for (const line of rfq.lines) {
+        if (line.quotedPriceCents != null && line.sku) centsBySku.set(line.sku, line.quotedPriceCents);
+      }
+      if (!centsBySku.size) {
+        return sendJson(res, 422, { ok: false, errors: ["No quoted prices to apply — enter at least one price first."] });
+      }
+
+      const applied = [];     // { sku, fromCents, toCents } — actually written
+      const unchanged = [];   // quoted price already matches the catalog
+      const skipped = [];     // SKU missing from the catalog (deleted since quoting)
+      for (const [sku, toCents] of centsBySku.entries()) {
+        const current = PARTS && PARTS.parts && PARTS.parts[sku];
+        if (!current) { skipped.push(sku); continue; }
+        const fromCents = Number(current.priceCents);
+        if (fromCents === toCents) { unchanged.push(sku); continue; }
+        try {
+          await partsLib.update(BASELINE_PARTS, sku, { priceCents: toCents }, { allowedCategories: categoriesAllowedSet() });
+          applied.push({ sku, fromCents: Number.isFinite(fromCents) ? fromCents : null, toCents });
+        } catch (err) {
+          // A failure on one SKU (validation OR a transient write error)
+          // shouldn't abort the rest — report it as skipped. NB: applied is
+          // terminal, so there is no per-SKU retry on the RFQ afterwards;
+          // a skipped price has to be fixed on the parts page. That's why
+          // the all-skipped case below refuses to mark applied at all.
+          console.warn(`[rfq-apply] ${rfq.id}: ${sku} skipped — ${err.message}`);
+          skipped.push(sku);
+        }
+      }
+      if (applied.length) rebuildCatalogFromOverrides();
+
+      const appliedCount = applied.length + unchanged.length;
+      // No progress at all, or every WRITE failed (skips with only
+      // "unchanged" passengers): leave the RFQ quoted so the apply is
+      // retryable — flipping to terminal "applied" when nothing was
+      // actually written would strand the quoted prices behind a
+      // read-only grid.
+      if (!appliedCount || (applied.length === 0 && skipped.length > 0)) {
+        return sendJson(res, 422, {
+          ok: false,
+          errors: [skipped.length
+            ? `No prices could be written (${skipped.length} skipped) — the request stays quoted so you can retry.`
+            : "Nothing could be applied — the quoted SKUs are no longer in the catalog."],
+          skipped
+        });
+      }
+
+      // One audit entry for the whole batch, in the catalog.edit family so
+      // it reads alongside manual price edits.
+      const detail = applied.slice(0, 6).map((a) => `${a.sku} ${fmtMoneyFromCents(a.fromCents)} → ${fmtMoneyFromCents(a.toCents)}`).join(", ");
+      await settings.recordAudit({
+        who: "admin",
+        action: "catalog.rfq-apply",
+        note: `${rfq.id} (${rfq.supplierName || rfq.supplierId}): ${applied.length} price${applied.length === 1 ? "" : "s"} updated${unchanged.length ? `, ${unchanged.length} unchanged` : ""}${skipped.length ? `, ${skipped.length} skipped` : ""}${detail ? ` — ${detail}` : ""}${applied.length > 6 ? ", …" : ""}`,
+        before: { rfqId: rfq.id },
+        after: { applied, unchanged, skipped }
+      });
+
+      const appliedRfq = await quoteRequests.markApplied(id, { appliedCount, skippedSkus: skipped });
+      return sendJson(res, 200, { ok: true, quoteRequest: appliedRfq, applied, unchanged, skipped });
+    } catch (err) {
+      console.warn("[rfq] apply-to-catalog failed:", err);
+      return sendJson(res, 500, { ok: false, errors: [err.message || "Couldn't apply quoted prices."] });
+    }
+  }
+
+  // GET /api/quote-requests/:id/pdf — sent RFQs return the frozen snapshot
+  // byte-identical; drafts regenerate live from the current record.
+  const rfqPdfMatch = pathname.match(/^\/api\/quote-requests\/([^/]+)\/pdf$/);
+  if (rfqPdfMatch && req.method === "GET") {
+    try {
+      const id = decodeURIComponent(rfqPdfMatch[1]);
+      const rfq = await quoteRequests.get(id);
+      if (!rfq) return sendJson(res, 404, { ok: false, errors: ["Quote request not found."] });
+      let pdf = null;
+      if (rfq.pdfPath) { try { pdf = await fs.readFile(path.join(SERVER_DIR, rfq.pdfPath)); } catch {} }
+      if (!pdf) {
+        const { generateRfqPdf } = require("./lib/rfq-pdf");
+        pdf = await generateRfqPdf(rfq, (PARTS && PARTS.parts) || {});
+      }
+      res.writeHead(200, {
+        "content-type": "application/pdf",
+        "content-disposition": `inline; filename="${rfq.id}.pdf"`,
+        "cache-control": "no-store"
+      });
+      res.end(pdf);
+      return;
+    } catch (err) {
+      return sendJson(res, 500, { ok: false, errors: [err.message || "Couldn't render PDF."] });
+    }
+  }
+
+  // GET /api/quote-requests/:id/csv — same prefer-snapshot logic.
+  const rfqCsvMatch = pathname.match(/^\/api\/quote-requests\/([^/]+)\/csv$/);
+  if (rfqCsvMatch && req.method === "GET") {
+    try {
+      const id = decodeURIComponent(rfqCsvMatch[1]);
+      const rfq = await quoteRequests.get(id);
+      if (!rfq) return sendJson(res, 404, { ok: false, errors: ["Quote request not found."] });
+      let csv = null;
+      if (rfq.csvPath) { try { csv = await fs.readFile(path.join(SERVER_DIR, rfq.csvPath)); } catch {} }
+      if (!csv) {
+        const { generateRfqCsv } = require("./lib/rfq-csv");
+        csv = generateRfqCsv(rfq, (PARTS && PARTS.parts) || {});
+      }
+      res.writeHead(200, {
+        "content-type": "text/csv; charset=utf-8",
+        "content-disposition": `attachment; filename="${rfq.id}.csv"`,
+        "cache-control": "no-store"
+      });
+      res.end(csv);
+      return;
+    } catch (err) {
+      return sendJson(res, 500, { ok: false, errors: [err.message || "Couldn't render CSV."] });
+    }
+  }
+
   if (req.method === "GET" && pathname === "/api/work-orders") {
     const url = new URL(req.url, baseUrlFromReq(req));
     const propertyId = url.searchParams.get("propertyId");
@@ -14759,6 +15167,13 @@ function resolveStaticTarget(pathname) {
   }
   if (/^\/admin\/purchase-order\/[^/]+\/?$/.test(pathname)) {
     return { dir: SERVER_DIR, relative: "/purchase-order.html" };
+  }
+  // Quote Requests (RFQ) — index + per-RFQ detail.
+  if (pathname === "/admin/quote-requests" || pathname === "/admin/quote-requests/") {
+    return { dir: SERVER_DIR, relative: "/quote-requests.html" };
+  }
+  if (/^\/admin\/quote-request\/[^/]+\/?$/.test(pathname)) {
+    return { dir: SERVER_DIR, relative: "/quote-request.html" };
   }
   // Projects (Phase 2 — multi-WO container).
   if (pathname === "/admin/projects" || pathname === "/admin/projects/") {

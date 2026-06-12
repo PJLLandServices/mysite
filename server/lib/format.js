@@ -135,13 +135,24 @@ function formatVendorAddress(supplier) {
     if (provMatch) {
       formatted = `${provMatch[1].trim()}, ${provMatch[2]}`;
     }
-    out.lines.push(formatted);
+    // Never emit a line that opens with separator debris — whatever the
+    // splitter produced, the rendered block must read like a person
+    // typed it.
+    formatted = formatted.replace(/^[\s,\-]+/, "").trim();
+    if (formatted) out.lines.push(formatted);
   }
 
   if (postal) {
-    // Postal code on its own line. Per the brief: postal code on its
-    // own line (not appended to city).
-    out.lines.push(postal);
+    // Postal code joins the LAST line (standard Canadian envelope
+    // format: "Milton, ON  L9T 2X6") instead of cascading onto its own
+    // line — three fragments for a one-line address read as a layout
+    // bug, not an address. Own-line only as the fallback when there is
+    // no other line to join.
+    if (out.lines.length) {
+      out.lines[out.lines.length - 1] += `  ${postal}`;
+    } else {
+      out.lines.push(postal);
+    }
   }
 
   return out;
@@ -189,7 +200,11 @@ function splitStreetFromCity(line) {
   }
   if (bestEnd === -1) return [line];
   const street = line.slice(0, bestEnd).trim();
-  const cityProv = line.slice(bestEnd).trim();
+  // The remainder starts right after the street suffix — strip the
+  // separator junk it inherits ("​, Milton, ON" → "Milton, ON"). An
+  // orphaned leading comma here is exactly the "cascade" artifact that
+  // made vendor blocks look machine-mangled on the PO/RFQ PDFs.
+  const cityProv = line.slice(bestEnd).replace(/^[\s,\-]+/, "").trim();
   if (!cityProv) return [street];
   return [street, cityProv];
 }

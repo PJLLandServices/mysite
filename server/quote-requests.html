@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#0F1F14">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <title>Suppliers — PJL</title>
+  <title>Quote requests — PJL</title>
   <link rel="icon" type="image/png" href="/favicon-96x96.png?v=20260518" sizes="96x96" />
   <link rel="icon" type="image/svg+xml" href="/favicon.svg?v=20260518" />
   <link rel="shortcut icon" href="/favicon.ico?v=20260518" />
@@ -18,6 +18,8 @@
   <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/crm/crm.css">
   <link rel="stylesheet" href="/crm/suppliers.css">
+  <link rel="stylesheet" href="/crm/material-lists.css">
+  <link rel="stylesheet" href="/crm/quote-requests.css">
 </head>
 <body class="pjl-crm-body suppliers-body">
   <aside class="pjl-admin-nav" id="navMenu" aria-label="PJL CRM Navigation">
@@ -57,7 +59,7 @@
         <span class="pjl-nav-toggle-bar"></span>
         <span class="pjl-nav-toggle-bar"></span>
       </button>
-      <span class="pjl-app-title">Suppliers</span>
+      <span class="pjl-app-title">Quote requests</span>
       <a class="pjl-app-phone" href="tel:+19059600181">(905) 960-0181</a>
     </header>
 
@@ -65,87 +67,54 @@
       <nav class="suppliers-subnav" aria-label="Materials sub-section">
         <div class="suppliers-subnav-strip">
           <a href="/admin/material-lists">Material lists</a>
-          <a href="/admin/quote-requests">Quote requests</a>
+          <a href="/admin/quote-requests" class="is-active" aria-current="page">Quote requests</a>
           <a href="/admin/purchase-orders">Purchase orders</a>
-          <a href="/admin/suppliers" class="is-active" aria-current="page">Suppliers</a>
+          <a href="/admin/suppliers">Suppliers</a>
           <a href="/admin/parts-suppliers">Catalog</a>
         </div>
         <details class="suppliers-subnav-dropdown">
           <summary class="suppliers-subnav-trigger">
             <span class="suppliers-subnav-trigger-eyebrow">Materials</span>
-            <span class="suppliers-subnav-trigger-current">Suppliers</span>
+            <span class="suppliers-subnav-trigger-current">Quote requests</span>
             <span class="suppliers-subnav-trigger-chevron" aria-hidden="true"></span>
           </summary>
           <div class="suppliers-subnav-menu">
             <a href="/admin/material-lists">Material lists</a>
-            <a href="/admin/quote-requests">Quote requests</a>
+            <a href="/admin/quote-requests" class="is-active" aria-current="page">Quote requests</a>
             <a href="/admin/purchase-orders">Purchase orders</a>
-            <a href="/admin/suppliers" class="is-active" aria-current="page">Suppliers</a>
+            <a href="/admin/suppliers">Suppliers</a>
             <a href="/admin/parts-suppliers">Catalog</a>
           </div>
         </details>
       </nav>
 
       <section class="suppliers-explainer">
-        <p>Vendors PJL buys parts from. Each catalog SKU links to one or more suppliers; POs are grouped by supplier when generated from a material list.</p>
+        <p>Generated from a material list, one RFQ per supplier. Draft → send (emails a price request, no commitment) → quoted. Material-list lines stay <em>need</em> — only a purchase order commits the buy.</p>
       </section>
 
       <section class="suppliers-toolbar">
-        <button type="button" class="pjl-btn pjl-btn-primary" id="newSupplierButton">+ New supplier</button>
+        <input type="search" id="rfqSearch" class="ml-search" placeholder="Search by id, supplier, list">
         <label class="suppliers-toggle">
-          <input type="checkbox" id="includeArchived"> Show archived
+          <input type="checkbox" id="rfqShowClosed"> Show closed RFQs (applied + cancelled)
         </label>
       </section>
 
-      <form class="supplier-form" id="supplierForm" hidden aria-label="New / edit supplier">
-        <input type="hidden" id="supplierIdField">
-        <h2 id="supplierFormTitle">New supplier</h2>
-        <div class="supplier-form-grid">
-          <label class="supplier-field">
-            <span>Name <abbr title="required">*</abbr></span>
-            <input type="text" id="supplierName" required maxlength="200" autocomplete="off">
-          </label>
-          <label class="supplier-field">
-            <span>Contact name</span>
-            <input type="text" id="supplierContactName" maxlength="120" autocomplete="off">
-          </label>
-          <label class="supplier-field">
-            <span>Email <small>(used for POs)</small></span>
-            <input type="email" id="supplierEmail" maxlength="254" autocomplete="off">
-          </label>
-          <label class="supplier-field">
-            <span>Phone</span>
-            <input type="tel" id="supplierPhone" maxlength="40" autocomplete="off">
-          </label>
-          <label class="supplier-field supplier-field--wide">
-            <span>Address</span>
-            <input class="js-address-autocomplete" type="text" id="supplierAddress" maxlength="400" autocomplete="off">
-          </label>
-          <label class="supplier-field supplier-field--wide">
-            <span>Notes</span>
-            <textarea id="supplierNotes" rows="3" maxlength="2000"></textarea>
-          </label>
-        </div>
-        <p class="supplier-form-error" id="supplierFormError" role="alert" hidden></p>
-        <div class="supplier-form-actions">
-          <button type="submit" class="pjl-btn pjl-btn-primary" id="supplierFormSave">Save</button>
-          <button type="button" class="pjl-btn pjl-btn-outline" id="supplierFormCancel">Cancel</button>
-        </div>
-      </form>
+      <section class="ml-filters" aria-label="Status filter">
+        <button type="button" data-status-filter="" class="is-active">All</button>
+        <button type="button" data-status-filter="draft">Draft</button>
+        <button type="button" data-status-filter="sent">Sent</button>
+        <button type="button" data-status-filter="quoted">Quoted</button>
+        <button type="button" data-status-filter="applied">Applied</button>
+        <button type="button" data-status-filter="cancelled">Cancelled</button>
+      </section>
 
-      <p class="suppliers-empty" id="suppliersEmpty" hidden>No suppliers yet. Add the yards / distributors PJL buys parts from.</p>
-      <ul class="suppliers-list" id="suppliersList" aria-label="Suppliers"></ul>
+      <p class="suppliers-empty" id="rfqEmpty" hidden>No quote requests yet — generate one from a material list's Request quotation button.</p>
+      <ul class="ml-cards" id="rfqContainer" aria-label="Quote requests"></ul>
     </main>
   </div>
 
   <script src="/crm/crm-nav.js"></script>
-  <script src="/crm/bulk-toast.js"></script>
-  <script src="/crm/bulk-modal.js"></script>
-  <script src="/crm/bulk-selection.js"></script>
-  <script src="/crm/bulk-wiring.js"></script>
-  <script src="/crm/suppliers.js"></script>
-  <script src="/coverage-checker.js"></script>
-    <script async defer src="https://maps.googleapis.com/maps/api/js?key=AIzaSyBrORBeXbpNTJvoi2PDhDDs6Iy-BGSU30M&libraries=places&callback=initCoverageCheck&loading=async"></script>
+  <script src="/crm/quote-requests.js"></script>
   <script src="/crm/nav-badges.js?v=1"></script>
 </body>
 </html>

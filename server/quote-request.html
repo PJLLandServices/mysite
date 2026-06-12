@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#0F1F14">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>Quote request — PJL</title>
+  <link rel="icon" type="image/png" href="/favicon-96x96.png?v=20260518" sizes="96x96" />
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg?v=20260518" />
+  <link rel="shortcut icon" href="/favicon.ico?v=20260518" />
+  <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png?v=20260518" />
+  <meta name="apple-mobile-web-app-title" content="PJL" />
+  <link rel="manifest" href="/site.webmanifest?v=20260518" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/crm/crm.css">
+  <link rel="stylesheet" href="/crm/suppliers.css">
+  <link rel="stylesheet" href="/crm/material-lists.css">
+  <link rel="stylesheet" href="/crm/projects.css">
+  <link rel="stylesheet" href="/crm/quote-request.css">
+</head>
+<body class="pjl-crm-body suppliers-body">
+  <aside class="pjl-admin-nav" id="navMenu" aria-label="PJL CRM Navigation">
+    <header class="pjl-side-brand">
+      <a href="/" class="pjl-side-logo"><img src="/crm/pjl-logo.svg" alt="PJL Land Services"></a>
+    </header>
+    <div class="pjl-nav-links">
+      <a href="/admin/today">Today</a>
+      <a href="/admin/messages">Messages <span class="pjl-nav-badge" data-portal-msg-badge hidden></span></a>
+      <a href="/admin">CRM</a>
+      <a href="/admin/schedule">Schedule</a>
+      <a href="/admin/handoff">Handoff</a>
+      <a href="/admin/outreach">Outreach</a>
+      <a href="/admin/bookings">Bookings</a>
+      <a href="/admin/customers">Customers</a>
+      <a href="/admin/properties">Properties</a>
+      <a href="/admin/projects">Projects</a>
+      <a href="/admin/work-orders">Work orders</a>
+      <a href="/admin/quote-folder">Quotes <span class="pjl-nav-badge" data-quote-accepted-badge hidden></span></a>
+      <a href="/admin/invoices">Invoices</a>
+      <a href="/admin/material-lists" class="is-active">Materials</a>
+      <a href="/admin/chats">AI Chats</a>
+      <a href="/admin/users">Users</a>
+      <a href="/admin/settings">Settings</a>
+    </div>
+    <footer class="pjl-side-footer">
+      <a class="pjl-side-phone" href="tel:+19059600181">(905) 960-0181</a>
+      <button class="pjl-nav-logout" type="button" id="logoutButton">Log out</button>
+    </footer>
+  </aside>
+
+  <div class="pjl-app">
+    <header class="pjl-app-topbar">
+      <button class="pjl-nav-toggle" type="button" id="navToggle" aria-label="Menu" aria-expanded="false" aria-controls="navMenu">
+        <span class="pjl-nav-toggle-bar"></span>
+        <span class="pjl-nav-toggle-bar"></span>
+        <span class="pjl-nav-toggle-bar"></span>
+      </button>
+      <span class="pjl-app-title">Quote request</span>
+      <a class="pjl-app-phone" href="tel:+19059600181">(905) 960-0181</a>
+    </header>
+
+    <main class="proj-shell">
+      <nav class="suppliers-subnav" aria-label="Materials sub-section">
+        <div class="suppliers-subnav-strip">
+          <a href="/admin/material-lists">Material lists</a>
+          <a href="/admin/quote-requests" class="is-active" aria-current="page">Quote requests</a>
+          <a href="/admin/purchase-orders">Purchase orders</a>
+          <a href="/admin/suppliers">Suppliers</a>
+          <a href="/admin/parts-suppliers">Catalog</a>
+        </div>
+        <details class="suppliers-subnav-dropdown">
+          <summary class="suppliers-subnav-trigger">
+            <span class="suppliers-subnav-trigger-eyebrow">Materials</span>
+            <span class="suppliers-subnav-trigger-current">Quote requests</span>
+            <span class="suppliers-subnav-trigger-chevron" aria-hidden="true"></span>
+          </summary>
+          <div class="suppliers-subnav-menu">
+            <a href="/admin/material-lists">Material lists</a>
+            <a href="/admin/quote-requests" class="is-active" aria-current="page">Quote requests</a>
+            <a href="/admin/purchase-orders">Purchase orders</a>
+            <a href="/admin/suppliers">Suppliers</a>
+            <a href="/admin/parts-suppliers">Catalog</a>
+          </div>
+        </details>
+      </nav>
+
+      <a class="proj-back" href="/admin/quote-requests">&larr; All quote requests</a>
+      <p class="mlb-loading" id="qrLoading">Loading…</p>
+      <p class="mlb-error" id="qrError" role="alert" hidden></p>
+
+      <section id="qrPage" hidden>
+        <!-- Cancelled RFQs keep their full record visible; the banner carries
+             the why so nobody re-sends a dead price ask by accident. -->
+        <div class="qr-cancelled-banner" id="qrCancelledBanner" hidden></div>
+
+        <section class="proj-header">
+          <div class="proj-header-id">
+            <span class="proj-header-id-text" id="qrId"></span>
+            <span class="qr-status" id="qrStatus"></span>
+            <span class="qr-doc-label">Request for Quotation</span>
+            <span class="proj-header-source" id="qrSourceList"></span>
+            <a class="proj-header-source" id="qrPdfLink" target="_blank" rel="noopener" hidden>📄 Download PDF</a>
+            <a class="proj-header-source" id="qrCsvLink" rel="noopener" hidden>📊 Download CSV</a>
+          </div>
+          <p class="qr-explainer">A price ask sent to one vendor — not an order. Nothing is committed, and the source material-list lines stay <em>need</em> no matter what happens here.</p>
+
+          <h2 style="margin:0 0 8px;font-family:'Barlow Condensed',sans-serif;color:#1B4D2E;font-size:18px;letter-spacing:0.06em;text-transform:uppercase">Vendor</h2>
+          <!-- Supplier identity is a snapshot taken at generation (same rule as
+               POs). PATCH only accepts {lines, notes}, so these render read-only
+               by design — fix the supplier record and regenerate if it's wrong. -->
+          <div class="qr-meta">
+            <div>
+              <span class="qr-meta-label">Supplier</span>
+              <span class="qr-meta-value" id="qrSupplierName">—</span>
+            </div>
+            <div>
+              <span class="qr-meta-label">Contact</span>
+              <span class="qr-meta-value" id="qrSupplierContact">—</span>
+            </div>
+            <div>
+              <span class="qr-meta-label">Email <small style="color:#7A7A72">(used for send)</small></span>
+              <span class="qr-meta-value" id="qrSupplierEmail">—</span>
+            </div>
+            <div>
+              <span class="qr-meta-label">Phone</span>
+              <span class="qr-meta-value" id="qrSupplierPhone">—</span>
+            </div>
+            <div>
+              <span class="qr-meta-label">Created</span>
+              <span class="qr-meta-value" id="qrCreatedAt">—</span>
+            </div>
+            <div>
+              <span class="qr-meta-label">Sent</span>
+              <span class="qr-meta-value" id="qrSentAt">—</span>
+            </div>
+          </div>
+          <div class="proj-fields">
+            <label class="proj-fields-wide">
+              <span>Notes (printed on the RFQ PDF)</span>
+              <textarea id="qrNotes" rows="2" maxlength="4000" placeholder="e.g. Need pricing back by Friday; quote delivered to the Maple St site."></textarea>
+            </label>
+          </div>
+        </section>
+
+        <section class="proj-section">
+          <div class="proj-section-head">
+            <h2>Requested items</h2>
+            <span class="qr-section-counts">
+              <span class="mlb-line-count" id="qrLineCount">0 lines</span>
+              <span class="qr-priced-count" id="qrPricedCount" hidden>0 of 0 priced</span>
+            </span>
+          </div>
+          <p class="proj-empty" id="qrLinesEmpty" hidden>No lines on this quote request.</p>
+          <!-- No subtotal row on purpose: an RFQ carries no money. The only
+               prices on this page are the VENDOR'S answers — entered in the
+               quick-grid once the request is sent, never on a draft. -->
+          <ul class="qr-lines" id="qrLines"></ul>
+        </section>
+
+        <section class="proj-section" id="qrHistorySection">
+          <div class="proj-section-head">
+            <h2>Audit trail</h2>
+          </div>
+          <ul class="qr-history" id="qrHistory"></ul>
+        </section>
+
+        <section class="proj-footer-actions">
+          <button type="button" class="pjl-btn pjl-btn-primary" id="qrSendButton" hidden>Send to vendor</button>
+          <button type="button" class="pjl-btn pjl-btn-primary" id="qrApplyButton" hidden>Review &amp; apply to catalog</button>
+          <button type="button" class="pjl-btn pjl-btn-outline" id="qrResendButton" hidden>Re-send PDF</button>
+          <button type="button" class="pjl-btn pjl-btn-outline is-danger" id="qrCancelButton" hidden>Cancel RFQ</button>
+        </section>
+      </section>
+    </main>
+  </div>
+
+  <!-- Sticky savebar for draft autosave -->
+  <div class="proj-savebar" id="qrSavebar" hidden>
+    <div class="proj-savebar-inner">
+      <span style="font-size:12px;color:#7A7A72" id="qrSaveContext">Editable while in draft</span>
+      <span class="proj-savebar-state" id="qrSaveState">Saved</span>
+    </div>
+  </div>
+
+  <!-- Send modal: confirm recipient + optional custom message. The copy
+       leans hard on "this is a price ask, not an order" because the RFQ and
+       PO send flows look near-identical and only one of them commits money. -->
+  <div class="proj-modal-backdrop" id="qrSendModal" hidden role="dialog" aria-modal="true">
+    <div class="proj-modal">
+      <h3>Send quote request</h3>
+      <p style="margin:0 0 12px;color:#4A4A44;font-size:13px">PJL will email the vendor a branded Request for Quotation PDF — a request for pricing, <strong>not a purchase order</strong>. Nothing is ordered, and the source material-list lines stay <em>need</em>.</p>
+      <label style="display:block;margin-bottom:10px">
+        <span style="font-size:11px;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;color:#7A7A72;display:block;margin-bottom:4px">Recipient email</span>
+        <input type="email" id="qrSendTo" style="width:100%;padding:10px 12px;border:1px solid #D8D5C5;border-radius:8px;background:#FCFBF4;font:inherit;min-height:44px">
+      </label>
+      <label style="display:block;margin-bottom:10px">
+        <span style="font-size:11px;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;color:#7A7A72;display:block;margin-bottom:4px">Subject</span>
+        <input type="text" id="qrSendSubject" maxlength="200" style="width:100%;padding:10px 12px;border:1px solid #D8D5C5;border-radius:8px;background:#FCFBF4;font:inherit;min-height:44px">
+      </label>
+      <label style="display:block;margin-bottom:10px">
+        <span style="font-size:11px;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;color:#7A7A72;display:block;margin-bottom:4px">Custom note (optional)</span>
+        <textarea id="qrSendBody" rows="3" style="width:100%;padding:10px 12px;border:1px solid #D8D5C5;border-radius:8px;background:#FCFBF4;font:inherit" placeholder="Anything beyond the standard 'please send your best pricing' wording."></textarea>
+      </label>
+      <p class="supplier-form-error" id="qrSendError" role="alert" hidden></p>
+      <div class="proj-modal-actions">
+        <button type="button" class="pjl-btn pjl-btn-outline" id="qrSendCancel">Cancel</button>
+        <button type="button" class="pjl-btn pjl-btn-primary" id="qrSendConfirm">Send PDF</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Apply modal: review the vendor's prices against the current catalog
+       before committing. The copy spells out the blast radius — this writes
+       PARTS-CATALOG supplier costs (which open material lists pick up live),
+       and never touches customer-facing service pricing. Rows are rendered
+       by JS from state.qr + state.catalog at open time. -->
+  <div class="proj-modal-backdrop" id="qrApplyModal" hidden role="dialog" aria-modal="true">
+    <div class="proj-modal">
+      <h3>Review &amp; apply to catalog</h3>
+      <p style="margin:0 0 12px;color:#4A4A44;font-size:13px">Applying writes the vendor's quoted prices into the <strong>parts catalog</strong> as PJL's supplier cost. Open material lists price from the catalog live, so they pick the new numbers up immediately. Customer-facing service pricing is <strong>not</strong> touched.</p>
+      <ul class="qr-apply-rows" id="qrApplyRows"></ul>
+      <p class="qr-apply-summary" id="qrApplySummary" hidden></p>
+      <p class="supplier-form-error" id="qrApplyError" role="alert" hidden></p>
+      <div class="proj-modal-actions">
+        <button type="button" class="pjl-btn pjl-btn-outline" id="qrApplyCancel">Cancel</button>
+        <button type="button" class="pjl-btn pjl-btn-primary" id="qrApplyConfirm">Apply to catalog</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/crm/crm-nav.js"></script>
+  <script src="/crm/quote-request.js"></script>
+  <script src="/crm/nav-badges.js?v=1"></script>
+</body>
+</html>

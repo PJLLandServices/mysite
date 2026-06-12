@@ -1,0 +1,22 @@
+/* Quote Requests (RFQ) — Phase A.
+   Reuses the .ml-card patterns from material-lists.css and the toolbar /
+   sub-nav patterns from suppliers.css for visual consistency. This file
+   only adds RFQ-specific status colours mirroring the lifecycle
+   (draft -> sent -> quoted -> applied) plus a cancelled state. The pill
+   base mirrors .po-status from purchase-orders.css; duplicated here so
+   the RFQ index doesn't have to pull in the PO stylesheet for one rule. */
+
+.rfq-status {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.rfq-status--draft     { background: #F0EEE3; color: #4A4A44; }
+.rfq-status--sent      { background: #DCE5F0; color: #1F4D7A; }
+.rfq-status--quoted    { background: #FFF1D6; color: #7A5500; }
+.rfq-status--applied   { background: #DDEDD0; color: #1B4D2E; }
+.rfq-status--cancelled { background: #FBEAE7; color: #8A2A1F; }
