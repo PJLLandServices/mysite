@@ -42,6 +42,96 @@ function logoBuffer() {
 }
 function fontHeading(doc) { return barlowBuffer() ? "Barlow-Bold" : "Helvetica-Bold"; }
 
+// Logo height at a given render width, from the PNG's IHDR dimensions
+// (read once per process). Falls back to the known ~0.574 aspect if the
+// buffer is missing/odd so layout math never explodes.
+let _logoAspect = null;
+function logoHeightAt(width) {
+  if (_logoAspect === null) {
+    _logoAspect = 0.574;
+    const buf = logoBuffer();
+    if (buf && buf.length > 24) {
+      try {
+        const w = buf.readUInt32BE(16);
+        const h = buf.readUInt32BE(20);
+        if (w > 0 && h > 0) _logoAspect = h / w;
+      } catch (_) { /* keep fallback */ }
+    }
+  }
+  return Math.round(width * _logoAspect);
+}
+
+// ---- Shared document header (Patrick's layout, 2026-06-12) ------------
+//
+// One header implementation for every quote-family PDF (one-page,
+// project proposal, smart-controller rich layout). Born from a repeat
+// spacing bug: per-renderer headers kept printing a full-width company
+// contact strip that ran underneath the logo. Structural rules here:
+//
+//   - The LEFT column (title, eyebrow, issued line, stacked company
+//     block) is HARD-CAPPED at the logo column's left edge — it cannot
+//     reach the logo no matter how copy grows.
+//   - The document id renders UNDER the logo, right-aligned (per
+//     Patrick's reference mock), not mixed into the left column.
+//   - Company contact info is STACKED on separate short lines, never a
+//     single " · "-joined strip.
+//
+// Returns the y where body content should resume.
+function renderPdfHeader(doc, { title, eyebrow = "", idText = "", issuedLine = "" } = {}) {
+  const PAGE_W = doc.page.width;
+  const MARGIN_X = 60;
+  const LOGO_W = 160;
+  const GAP = 16;
+  const leftWidth = PAGE_W - MARGIN_X * 2 - LOGO_W - GAP; // hard cap — never under the logo
+  const top = 40;
+
+  // Title — big green Barlow, left.
+  doc.font(fontHeading(doc)).fontSize(30).fillColor(PJL_GREEN);
+  doc.text(title, MARGIN_X, top, { characterSpacing: 1.5, width: leftWidth, lineGap: 0 });
+
+  // Right column — logo with the document id right-aligned beneath it.
+  const logo = logoBuffer();
+  let idY;
+  if (logo) {
+    doc.image(logo, PAGE_W - MARGIN_X - LOGO_W, top - 12, { width: LOGO_W });
+    idY = top - 12 + logoHeightAt(LOGO_W) + 8;
+  } else {
+    doc.font(fontHeading(doc)).fontSize(22).fillColor(PJL_GREEN);
+    doc.text("PJL", PAGE_W - MARGIN_X - 200, top + 6, { width: 200, align: "right", characterSpacing: 1 });
+    doc.fontSize(11);
+    doc.text("LAND SERVICES", PAGE_W - MARGIN_X - 200, top + 32, { width: 200, align: "right", characterSpacing: 3 });
+    idY = top + 52;
+  }
+  let rightBottom = idY;
+  if (idText) {
+    doc.font("Helvetica-Bold").fontSize(10).fillColor(PJL_TEXT);
+    doc.text(idText, PAGE_W - MARGIN_X - 200, idY, { width: 200, align: "right" });
+    rightBottom = doc.y;
+  }
+
+  // Left column under the title: eyebrow → issued line → stacked
+  // company block (name bold, then address / phone / email lines).
+  let y = top + 38;
+  if (eyebrow) {
+    doc.font("Helvetica-Bold").fontSize(10).fillColor(PJL_TEXT);
+    doc.text(eyebrow, MARGIN_X, y, { width: leftWidth, characterSpacing: 0.5 });
+    y = doc.y + 2;
+  }
+  if (issuedLine) {
+    doc.font("Helvetica").fontSize(9).fillColor(PJL_MUTED);
+    doc.text(issuedLine, MARGIN_X, y, { width: leftWidth });
+    y = doc.y + 4;
+  }
+  doc.font("Helvetica-Bold").fontSize(9).fillColor(PJL_TEXT);
+  doc.text("PJL Land Services", MARGIN_X, y, { width: leftWidth });
+  doc.font("Helvetica").fontSize(9).fillColor(PJL_MUTED);
+  doc.text("1118 Cenotaph Blvd., Newmarket, ON  L3X 0A5", MARGIN_X, doc.y + 1, { width: leftWidth });
+  doc.text("(905) 960-0181", MARGIN_X, doc.y + 1, { width: leftWidth });
+  doc.text("info@pjllandservices.com", MARGIN_X, doc.y + 1, { width: leftWidth });
+
+  return Math.max(doc.y, rightBottom) + 14;
+}
+
 function fmt(n) {
   const v = Number(n) || 0;
   return "$" + v.toFixed(2);
@@ -72,59 +162,13 @@ function generateQuotePdf(quote, opts = {}) {
   const barlow = barlowBuffer();
   if (barlow) doc.registerFont("Barlow-Bold", barlow);
 
-  // ---- Header (matches invoice-pdf.js) -------------------------------
-  // Green "QUOTE" title on white at the left, real PJL logo right-aligned
-  // to the body content margin (consistent with the customer band, line
-  // items, totals, and footer rule on the rest of the page). No more
-  // full-bleed green band — this is the same look the invoice PDF ships.
-  const PAGE_W = doc.page.width;
-  const MARGIN_X = 60; // quote-pdf has historically used 60 (vs invoice's 40)
-  const top = 40;
-  const leftX = MARGIN_X;
-  const LOGO_W = 160;
-
-  doc.font(fontHeading(doc)).fontSize(30).fillColor(PJL_GREEN);
-  doc.text("QUOTE", leftX, top, {
-    characterSpacing: 1.5,
-    width: PAGE_W - MARGIN_X * 2 - LOGO_W - 16,
-    lineGap: 0
+  // ---- Header (shared layout — see renderPdfHeader) -------------------
+  doc.y = renderPdfHeader(doc, {
+    title: "QUOTE",
+    idText: quote.id,
+    issuedLine: `Issued ${fmtDate(quote.createdAt)}${quote.validUntil ? ` · Valid through ${fmtDate(quote.validUntil)}` : ""}`
   });
-
-  // Company info block — three lines.
-  doc.font("Helvetica-Bold").fontSize(10).fillColor(PJL_TEXT);
-  let y = top + 38;
-  doc.text("PJL Land Services", leftX, y);
-  y = doc.y + 1;
-  doc.font("Helvetica").fontSize(9).fillColor(PJL_MUTED);
-  doc.text("1118 Cenotaph Blvd., Newmarket, ON  L3X 0A5", leftX, y);
-  y = doc.y;
-  doc.text("info@pjllandservices.com  ·  (905) 960-0181  ·  pjllandservices.com", leftX, y);
-  y = doc.y + 2;
-  doc.fontSize(8).fillColor(PJL_MUTED);
-  doc.text(`Quote ${quote.id} · Issued ${fmtDate(quote.createdAt)}${quote.validUntil ? ` · Valid through ${fmtDate(quote.validUntil)}` : ""}`,
-    leftX, y, { characterSpacing: 0.3 });
-
-  // Right side — actual PJL logo PNG (rasterized from logo-dark.svg
-  // with whitespace trimmed). Same size + position as invoice-pdf.js.
-  const logo = logoBuffer();
-  if (logo) {
-    doc.image(logo, PAGE_W - MARGIN_X - LOGO_W, top - 12, { width: LOGO_W });
-  } else {
-    doc.font(fontHeading(doc)).fontSize(22).fillColor(PJL_GREEN);
-    doc.text("PJL", PAGE_W - MARGIN_X - 200, top + 6, {
-      width: 200, align: "right", characterSpacing: 1
-    });
-    doc.fontSize(11).fillColor(PJL_GREEN);
-    doc.text("LAND SERVICES", PAGE_W - MARGIN_X - 200, top + 32, {
-      width: 200, align: "right", characterSpacing: 3
-    });
-  }
-
-  // Reset cursor below the header content (left text bottom is ~y=124,
-  // logo bottom is ~y=120). Tight 6pt gap before bill-to block.
-  doc.y = Math.max(doc.y, 124);
-  doc.x = leftX;
-  doc.moveDown(0.4);
+  doc.x = 60;
 
   // ---- Bill-to block -------------------------------------------------
   doc.fillColor(PJL_MUTED).fontSize(9)
@@ -334,48 +378,15 @@ function renderProjectProposalPdf(quote, opts = {}) {
   const MARGIN_X = 60;
   const contentWidth = PAGE_W - MARGIN_X * 2;
 
-  // ---- Cover page header --------------------------------------------
-  const top = 40;
-  const LOGO_W = 160;
-  doc.font(fontHeading(doc)).fontSize(34).fillColor(PJL_GREEN);
-  doc.text("PROPOSAL", MARGIN_X, top, {
-    characterSpacing: 1.5,
-    width: contentWidth - LOGO_W - 16,
-    lineGap: 0
-  });
-
-  const logo = logoBuffer();
-  if (logo) {
-    doc.image(logo, PAGE_W - MARGIN_X - LOGO_W, top - 12, { width: LOGO_W });
-  } else {
-    doc.font(fontHeading(doc)).fontSize(22).fillColor(PJL_GREEN);
-    doc.text("PJL", PAGE_W - MARGIN_X - 200, top + 6, {
-      width: 200, align: "right", characterSpacing: 1
-    });
-    doc.fontSize(11).fillColor(PJL_GREEN);
-    doc.text("LAND SERVICES", PAGE_W - MARGIN_X - 200, top + 32, {
-      width: 200, align: "right", characterSpacing: 3
-    });
-  }
-
-  let y = top + 50;
-  doc.font("Helvetica-Bold").fontSize(10).fillColor(PJL_TEXT);
+  // ---- Cover page header (shared layout — see renderPdfHeader) -------
   const branchLabel = quote.branch ? BRANCH_LABELS[quote.branch] || quote.branch : "";
   const versionTag = (Number(quote.version) || 1) > 1 ? ` · v${quote.version}` : "";
-  doc.text(`${quote.id}${versionTag}${branchLabel ? "  ·  " + branchLabel : ""}`, MARGIN_X, y);
-  y = doc.y + 2;
-  doc.font("Helvetica").fontSize(9).fillColor(PJL_MUTED);
-  doc.text(
-    `Issued ${fmtDate(quote.createdAt)}${quote.validUntil ? `  ·  Valid through ${fmtDate(quote.validUntil)}` : ""}`,
-    MARGIN_X, y
-  );
-
-  // Company contact strip on its own line.
-  y = doc.y + 2;
-  doc.text("PJL Land Services  ·  1118 Cenotaph Blvd., Newmarket, ON  L3X 0A5  ·  (905) 960-0181  ·  info@pjllandservices.com", MARGIN_X, y);
-
-  // Customer + property block.
-  y = Math.max(doc.y, 130) + 14;
+  let y = renderPdfHeader(doc, {
+    title: "PROPOSAL",
+    eyebrow: branchLabel ? branchLabel.toUpperCase() : "",
+    idText: `${quote.id}${versionTag}`,
+    issuedLine: `Issued ${fmtDate(quote.createdAt)}${quote.validUntil ? `  ·  Valid through ${fmtDate(quote.validUntil)}` : ""}`
+  });
   doc.fillColor(PJL_MUTED).fontSize(9).font("Helvetica-Bold")
     .text("PREPARED FOR", MARGIN_X, y, { characterSpacing: 1 });
   doc.fillColor(PJL_TEXT).font("Helvetica").fontSize(12);
@@ -797,40 +808,13 @@ function renderSmartControllerPdf(quote, opts = {}) {
   const MARGIN_X = 60;
   const contentWidth = PAGE_W - MARGIN_X * 2;
 
-  // ---- Cover header (proposal-style, "QUOTE" title) ------------------
-  const top = 40;
-  const LOGO_W = 160;
-  doc.font(fontHeading(doc)).fontSize(34).fillColor(PJL_GREEN);
-  doc.text("QUOTE", MARGIN_X, top, {
-    characterSpacing: 1.5,
-    width: contentWidth - LOGO_W - 16,
-    lineGap: 0
+  // ---- Cover header (shared layout — see renderPdfHeader) -------------
+  let y = renderPdfHeader(doc, {
+    title: "QUOTE",
+    eyebrow: header.eyebrow || "",
+    idText: quote.id,
+    issuedLine: `Issued ${fmtDate(quote.createdAt)}${quote.validUntil ? `  ·  Valid through ${fmtDate(quote.validUntil)}` : ""}`
   });
-
-  const logo = logoBuffer();
-  if (logo) {
-    doc.image(logo, PAGE_W - MARGIN_X - LOGO_W, top - 12, { width: LOGO_W });
-  } else {
-    doc.font(fontHeading(doc)).fontSize(22).fillColor(PJL_GREEN);
-    doc.text("PJL", PAGE_W - MARGIN_X - 200, top + 6, { width: 200, align: "right", characterSpacing: 1 });
-    doc.fontSize(11).fillColor(PJL_GREEN);
-    doc.text("LAND SERVICES", PAGE_W - MARGIN_X - 200, top + 32, { width: 200, align: "right", characterSpacing: 3 });
-  }
-
-  let y = top + 50;
-  doc.font("Helvetica-Bold").fontSize(10).fillColor(PJL_TEXT);
-  doc.text(`${quote.id}${header.eyebrow ? "  ·  " + header.eyebrow : ""}`, MARGIN_X, y);
-  y = doc.y + 2;
-  doc.font("Helvetica").fontSize(9).fillColor(PJL_MUTED);
-  doc.text(
-    `Issued ${fmtDate(quote.createdAt)}${quote.validUntil ? `  ·  Valid through ${fmtDate(quote.validUntil)}` : ""}`,
-    MARGIN_X, y
-  );
-  y = doc.y + 2;
-  doc.text("PJL Land Services  ·  1118 Cenotaph Blvd., Newmarket, ON  L3X 0A5  ·  (905) 960-0181  ·  info@pjllandservices.com", MARGIN_X, y);
-
-  // Prepared-for block.
-  y = Math.max(doc.y, 130) + 14;
   doc.fillColor(PJL_MUTED).fontSize(9).font("Helvetica-Bold")
     .text("PREPARED FOR", MARGIN_X, y, { characterSpacing: 1 });
   doc.fillColor(PJL_TEXT).font("Helvetica").fontSize(12);
