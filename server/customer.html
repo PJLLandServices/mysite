@@ -112,6 +112,19 @@
             </label>
             <p class="customer-cc-toggle-help">When enabled, invoices and SMS reminders also go to the spouse's email + phone above. Patrick can still uncheck "CC spouse" on individual sends from the invoice page.</p>
           </div>
+          <!-- Separate billing party (billing-party brief). billingName
+               empty = invoices bill to the contact name above; set when a
+               different person/company pays (e.g. a numbered company or
+               property manager). Feeds the invoice billTo snapshot + the
+               QuickBooks customer DisplayName on push. -->
+          <div class="customer-summary-field">
+            <label>Billing name / company (if different)</label>
+            <input type="text" data-field="billingName" maxlength="200" placeholder="Bill invoices to this name instead">
+          </div>
+          <div class="customer-summary-field">
+            <label>Billing email (if different)</label>
+            <input type="email" data-field="billingEmail" maxlength="254">
+          </div>
           <div class="customer-summary-field">
             <label>Billing address (if different)</label>
             <textarea data-field="billingAddress" rows="2" maxlength="400"></textarea>

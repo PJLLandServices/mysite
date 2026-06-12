@@ -92,6 +92,42 @@
 .req { color: var(--amber); }
 .form-submit-row { grid-column: 1 / -1; margin-top: 8px; }
 
+/* "Bill to a different person or company" disclosure — collapsed by
+   default; expanding reveals the four billing fields below. */
+.nc-billing-toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  font-size: 14.5px;
+  color: var(--text-mid);
+  -webkit-tap-highlight-color: transparent;
+}
+.nc-billing-toggle input[type="checkbox"] {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  margin: 0;
+  flex-shrink: 0;
+  accent-color: var(--green);
+}
+.nc-billing-fields {
+  grid-column: 1 / -1;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--green);
+  border-radius: var(--r);
+  padding: 16px;
+  background: rgba(27,77,46,0.03);
+}
+.nc-billing-fields .form-grid { gap: 14px; }
+.nc-billing-hint {
+  grid-column: 1 / -1;
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text-mid);
+}
+
 .nc-error {
   display: none;
   background: rgba(224,123,36,0.08);
@@ -201,6 +237,39 @@
               <textarea id="nc-notes" name="notes" placeholder="Gate code, zone count if known, anything else you'd like to mention…"></textarea>
             </div>
 
+            <!-- Separate billing party — collapsed by default. Expanding
+                 reveals billing name/address (required) + email/phone
+                 (optional). Submits as a structured `billing` object so
+                 the invoice can be issued to a company or another person
+                 without re-keying from free-text notes. -->
+            <div class="form-group full">
+              <label class="nc-billing-toggle">
+                <input type="checkbox" id="nc-bill-other" aria-controls="nc-billing-fields" aria-expanded="false">
+                <span>Bill to a different person or company</span>
+              </label>
+            </div>
+            <div class="nc-billing-fields" id="nc-billing-fields" hidden>
+              <div class="form-grid">
+                <p class="nc-billing-hint">Who should the invoice be made out to? For example, a management company, a business, or a family member.</p>
+                <div class="form-group full">
+                  <label for="nc-bill-name">Billing name / company <span class="req">*</span></label>
+                  <input type="text" id="nc-bill-name" name="billingName" autocomplete="organization" placeholder="e.g. company name, or the person paying">
+                </div>
+                <div class="form-group full">
+                  <label for="nc-bill-address">Billing address <span class="req">*</span></label>
+                  <input type="text" id="nc-bill-address" name="billingAddress" class="js-address-autocomplete" autocomplete="off" placeholder="Start typing the billing address…">
+                </div>
+                <div class="form-group">
+                  <label for="nc-bill-email">Billing email</label>
+                  <input type="email" id="nc-bill-email" name="billingEmail" placeholder="Where the invoice should go (optional)">
+                </div>
+                <div class="form-group">
+                  <label for="nc-bill-phone">Billing phone</label>
+                  <input type="tel" id="nc-bill-phone" name="billingPhone" placeholder="(optional)">
+                </div>
+              </div>
+            </div>
+
             <!-- Honeypot — real users + screen readers skip it; bots fill it. -->
             <div class="pjl-hp-field" aria-hidden="true">
               <label for="nc-website">Website (leave blank)</label>
@@ -246,6 +315,22 @@
   var thanks  = document.getElementById('nc-thanks');
   if (!form) return;
 
+  // Billing disclosure — collapsed by default; checkbox reveals the
+  // billing fields. Values typed then re-collapsed are NOT submitted
+  // (the toggle is the source of truth, not the inputs).
+  var billToggle = document.getElementById('nc-bill-other');
+  var billFields = document.getElementById('nc-billing-fields');
+  if (billToggle && billFields) {
+    billToggle.addEventListener('change', function () {
+      billFields.hidden = !billToggle.checked;
+      billToggle.setAttribute('aria-expanded', billToggle.checked ? 'true' : 'false');
+      if (billToggle.checked) {
+        var firstField = document.getElementById('nc-bill-name');
+        if (firstField) firstField.focus();
+      }
+    });
+  }
+
   function showError(msg) {
     errBox.textContent = msg || 'Please check the form and try again.';
     errBox.classList.add('is-visible');
@@ -255,6 +340,22 @@
   form.addEventListener('submit', async function (e) {
     e.preventDefault();
     errBox.classList.remove('is-visible');
+
+    // Billing block — validated BEFORE the button is disabled so an
+    // early return never leaves the form stuck on "Sending…".
+    var billing = { billTo: 'self' };
+    if (billToggle && billToggle.checked) {
+      var billName    = String((document.getElementById('nc-bill-name')    || {}).value || '').trim();
+      var billAddress = String((document.getElementById('nc-bill-address') || {}).value || '').trim();
+      var billEmail   = String((document.getElementById('nc-bill-email')   || {}).value || '').trim();
+      var billPhone   = String((document.getElementById('nc-bill-phone')   || {}).value || '').trim();
+      if (!billName || !billAddress) {
+        showError('Please fill in the billing name and billing address, or uncheck "Bill to a different person or company."');
+        return;
+      }
+      billing = { billTo: 'other', name: billName, address: billAddress, email: billEmail, phone: billPhone };
+    }
+
     submit.disabled = true;
     var originalText = submit.innerHTML;
     submit.innerHTML = 'Sending…';
@@ -267,7 +368,8 @@
       phone:           String(data.get('phone')           || '').trim(),
       propertyAddress: String(data.get('propertyAddress') || '').trim(),
       notes:           String(data.get('notes')           || '').trim(),
-      website:         String(data.get('website')         || '')
+      website:         String(data.get('website')         || ''),
+      billing:         billing
     };
 
     try {

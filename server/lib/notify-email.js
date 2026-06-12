@@ -79,6 +79,15 @@ function buildLeadEmail(lead) {
 
   const notes = lead.contact?.notes ? `<p><strong>Customer notes:</strong><br>${escapeHtml(lead.contact.notes).replace(/\n/g, "<br>")}</p>` : "";
 
+  // Separate billing party (billing-party brief). Only rendered when the
+  // customer asked to bill someone else — the self-billing email stays
+  // byte-identical to the pre-feature layout.
+  const billing = lead.billing && lead.billing.billTo === "other" ? lead.billing : null;
+  const billingRows = billing ? `
+    <tr><td style="padding: 4px 14px 4px 0; color: #777;">Bill to</td><td style="padding: 4px 0;"><strong>${escapeHtml(billing.name)}</strong></td></tr>
+    <tr><td style="padding: 4px 14px 4px 0; color: #777;">Billing address</td><td style="padding: 4px 0;">${escapeHtml(billing.address)}</td></tr>
+    ${billing.email ? `<tr><td style="padding: 4px 14px 4px 0; color: #777;">Billing email</td><td style="padding: 4px 0;"><a href="mailto:${escapeHtml(billing.email)}">${escapeHtml(billing.email)}</a></td></tr>` : ""}` : "";
+
   const html = `
 <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 560px; color: #1a1a1a;">
   <h2 style="margin: 0 0 8px; font-size: 22px;">New ${escapeHtml(sourceLabel)} lead</h2>
@@ -87,7 +96,7 @@ function buildLeadEmail(lead) {
   <table style="border-collapse: collapse; margin-bottom: 18px;">
     <tr><td style="padding: 4px 14px 4px 0; color: #777;">Phone</td><td style="padding: 4px 0;"><a href="tel:${escapeHtml(lead.contact?.phone || "")}">${escapeHtml(lead.contact?.phone || "")}</a></td></tr>
     <tr><td style="padding: 4px 14px 4px 0; color: #777;">Email</td><td style="padding: 4px 0;"><a href="mailto:${escapeHtml(lead.contact?.email || "")}">${escapeHtml(lead.contact?.email || "")}</a></td></tr>
-    <tr><td style="padding: 4px 14px 4px 0; color: #777;">Address</td><td style="padding: 4px 0;">${escapeHtml(lead.contact?.address || "—")}</td></tr>
+    <tr><td style="padding: 4px 14px 4px 0; color: #777;">Address</td><td style="padding: 4px 0;">${escapeHtml(lead.contact?.address || "—")}</td></tr>${billingRows}
     <tr><td style="padding: 4px 14px 4px 0; color: #777;">Estimated total</td><td style="padding: 4px 0;"><strong>${escapeHtml(moneyText(lead.totals?.expectedTotal))}</strong></td></tr>
   </table>
 
@@ -115,6 +124,11 @@ function buildLeadEmail(lead) {
     `Phone:   ${lead.contact?.phone || ""}`,
     `Email:   ${lead.contact?.email || ""}`,
     `Address: ${lead.contact?.address || "—"}`,
+    ...(billing ? [
+      `Bill to: ${billing.name}`,
+      `Billing address: ${billing.address}`,
+      ...(billing.email ? [`Billing email: ${billing.email}`] : [])
+    ] : []),
     `Total:   ${moneyText(lead.totals?.expectedTotal)}`,
     "",
     "Requested:",

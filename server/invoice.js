@@ -134,10 +134,56 @@ function render(inv) {
   const statusMeta = document.getElementById("invoiceStatusMeta");
   statusMeta.textContent = inv.quickbooksInvoiceId ? `QB: ${inv.quickbooksInvoiceId}` : "Not synced to QuickBooks";
 
-  document.getElementById("invoiceCustomerName").textContent = inv.customerName || "—";
-  document.getElementById("invoiceCustomerAddress").textContent = inv.address || "";
-  const contact = [inv.customerPhone, inv.customerEmail].filter(Boolean).join(" · ");
-  document.getElementById("invoiceCustomerContact").textContent = contact;
+  // Bill-to vs service address (billing-party brief). The billTo
+  // snapshot is set at draft time; when it names a different payer or
+  // address, the Bill-to column carries the payer and the service
+  // address gets its own column. Self-billing (snapshot identical) and
+  // legacy invoices (billTo null) render exactly as before.
+  const billTo = inv.billTo && typeof inv.billTo === "object" ? inv.billTo : null;
+  const billToNameDiffers = Boolean(billTo && billTo.name && billTo.name !== (inv.customerName || ""));
+  const billToDiffers = Boolean(billTo) && (
+    billToNameDiffers || Boolean(billTo.address && billTo.address !== (inv.address || ""))
+  );
+  const serviceCol = document.getElementById("invoiceServiceCol");
+  if (billToDiffers) {
+    document.getElementById("invoiceCustomerName").textContent = billTo.name || inv.customerName || "—";
+    document.getElementById("invoiceCustomerAddress").textContent = billTo.address || inv.address || "";
+    // The paying entity never inherits the service contact's phone.
+    document.getElementById("invoiceCustomerContact").textContent = billTo.email || "";
+    if (serviceCol) {
+      serviceCol.hidden = false;
+      document.getElementById("invoiceServiceName").textContent = inv.customerName || "—";
+      document.getElementById("invoiceServiceAddress").textContent = inv.address || "";
+    }
+  } else {
+    document.getElementById("invoiceCustomerName").textContent = inv.customerName || "—";
+    document.getElementById("invoiceCustomerAddress").textContent = inv.address || "";
+    const contact = [inv.customerPhone, inv.customerEmail].filter(Boolean).join(" · ");
+    document.getElementById("invoiceCustomerContact").textContent = contact;
+    if (serviceCol) serviceCol.hidden = true;
+  }
+
+  // Bill-to editor card — inputs while draft, read-only line after.
+  const billToEdit = document.getElementById("invoiceBillToEdit");
+  const billToReadonly = document.getElementById("invoiceBillToReadonly");
+  if (billToEdit && billToReadonly) {
+    const effective = {
+      name: billTo?.name || inv.customerName || "",
+      address: billTo?.address || inv.address || "",
+      email: billTo?.email || inv.customerEmail || ""
+    };
+    if (inv.status === "draft") {
+      billToEdit.hidden = false;
+      billToReadonly.hidden = true;
+      document.getElementById("invoiceBillToName").value = effective.name;
+      document.getElementById("invoiceBillToAddress").value = effective.address;
+      document.getElementById("invoiceBillToEmail").value = effective.email;
+    } else {
+      billToEdit.hidden = true;
+      billToReadonly.hidden = false;
+      billToReadonly.textContent = `${effective.name}${effective.address ? " · " + effective.address : ""}${effective.email ? " · " + effective.email : ""} (locked after send)`;
+    }
+  }
 
   const linesEl = document.getElementById("invoiceLines");
   linesEl.innerHTML = (inv.lineItems || []).map((l) => `
@@ -310,6 +356,38 @@ document.getElementById("invoiceSaveNotes")?.addEventListener("click", async () 
     currentInvoice = data.invoice;
   } catch (err) {
     alert(err.message || "Failed.");
+  }
+});
+
+// ---- Bill-to editor (billing-party brief) -----------------------------
+// PATCHes the billTo snapshot. Server-side, invoices.update() rejects
+// the edit unless status === "draft" — the UI hides the inputs on
+// non-draft invoices, this is just the matching write path.
+document.getElementById("invoiceBillToSave")?.addEventListener("click", async () => {
+  const statusEl = document.getElementById("invoiceBillToStatus");
+  const billTo = {
+    name: document.getElementById("invoiceBillToName").value.trim(),
+    address: document.getElementById("invoiceBillToAddress").value.trim(),
+    email: document.getElementById("invoiceBillToEmail").value.trim()
+  };
+  if (!billTo.name || !billTo.address) {
+    if (statusEl) statusEl.textContent = "Bill-to needs at least a name and an address.";
+    return;
+  }
+  try {
+    if (statusEl) statusEl.textContent = "Saving…";
+    const r = await fetch(`/api/invoices/${encodeURIComponent(idFromPath)}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ billTo })
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok || !data.ok) throw new Error((data.errors && data.errors[0]) || "Couldn't save bill-to.");
+    currentInvoice = data.invoice;
+    if (statusEl) statusEl.textContent = "Saved.";
+    render(data.invoice);
+  } catch (err) {
+    if (statusEl) statusEl.textContent = err.message || "Failed.";
   }
 });
 

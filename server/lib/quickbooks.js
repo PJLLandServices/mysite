@@ -419,9 +419,32 @@ async function pushInvoice(localInvoice) {
     throw new Error("HST tax code not configured. Open /admin/settings → QuickBooks and pick the HST tax code before pushing invoices (otherwise QB stores $0 tax against an HST-bearing invoice).");
   }
 
+  // Bill-to overlay (billing-party brief §3.9). Invoices drafted after
+  // Jun 2026 carry a billTo snapshot { name, address, email }. When the
+  // snapshot names a DIFFERENT payer than the service contact, the QB
+  // customer is resolved/created as that entity (e.g. "LCIG Investment
+  // Inc."), not the homeowner — that's correct, not a bug. Two rules:
+  //   1. The email match key is the BILLING email only. Falling back to
+  //      the contact email here would email-match the contact person's
+  //      QB customer and bill the wrong entity.
+  //   2. The paying entity never inherits the contact's phone number.
+  // Self-billing invoices (snapshot absent or name matches the contact)
+  // take the original branch with the original inputs — the outgoing QB
+  // payload is byte-identical to the pre-feature push.
+  const billTo = localInvoice.billTo && typeof localInvoice.billTo === "object" ? localInvoice.billTo : {};
+  const billToName = String(billTo.name || "").trim();
+  const billToIsOverride = Boolean(billToName && billToName !== String(localInvoice.customerName || "").trim());
+
   let customer;
   try {
-    customer = await findOrCreateCustomer({
+    customer = await findOrCreateCustomer(billToIsOverride ? {
+      name: billToName,
+      email: String(billTo.email || "").trim() !== String(localInvoice.customerEmail || "").trim()
+        ? String(billTo.email || "").trim()
+        : "",
+      phone: "",
+      address: billTo.address || localInvoice.address
+    } : {
       name: localInvoice.customerName,
       email: localInvoice.customerEmail,
       phone: localInvoice.customerPhone,
@@ -494,8 +517,11 @@ async function pushInvoice(localInvoice) {
       TxnTaxCodeRef: { value: hstTaxCodeId }
     },
     AllowOnlineCreditCardPayment: true,
-    BillEmail: localInvoice.customerEmail
-      ? { Address: localInvoice.customerEmail }
+    // Invoice delivery email: billing email when captured, else the
+    // contact email (brief §3.9 fallback). Self-billing snapshots carry
+    // the contact email already, so this stays byte-identical for them.
+    BillEmail: (billTo.email || localInvoice.customerEmail)
+      ? { Address: billTo.email || localInvoice.customerEmail }
       : (customer.PrimaryEmailAddr || undefined),
     PrivateNote: `PJL local invoice ${localInvoice.id}${localInvoice.woId ? ` from WO ${localInvoice.woId}` : ""}`
   };

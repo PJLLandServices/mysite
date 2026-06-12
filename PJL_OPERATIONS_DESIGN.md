@@ -96,6 +96,10 @@ CUSTOMER FOLDER
     - S/O phone (if necessary)
     - Email
     - S/O email (if necessary)
+    - Billing name / company (if the invoice is issued to someone other
+      than the contact — e.g. a numbered company, property manager, or
+      family member; empty = bill to the contact)
+    - Billing email (if the invoice goes to a different inbox)
     - Billing address (if different from any service address)
     - Customer since (date)
     - How did they find PJL Land Services
@@ -120,7 +124,9 @@ CUSTOMER FOLDER
 
 **Why customer is separate from property:** A customer is a person. A property is a place. Most customers have one property. Some have a home and a cottage. Some sell a house and the new owner inherits the system documentation. Separating them now prevents painful untangling later.
 
-**Implementation status (as of 2026-05-16):** The Customer Folder is live in v1 as `server/lib/customers.js` + `server/data/customers.json` with admin pages at `/admin/customers` and `/admin/customer/<id>`. Populated fields: name, spouseName, phone, spousePhone, email, spouseEmail, billingAddress, customerSince, source, status (`lead`/`active`/`inactive`/`lost`), quickbooksId, internalNotes, notificationPrefs, communicationRecords, vcfDownloads, history. The per-customer and bulk vCard download (`/api/customer/:id/vcard`, `POST /api/customers/vcards.vcf`) lets Patrick import customers into iPhone Contacts for Siri-based dialling from the truck; each download appends to vcfDownloads[] for audit. **Snapshots-vs-source-of-truth:** the Customer record is the source of truth for CURRENT contact info; transactional entities (WO / Quote / Invoice / Booking / Project) continue to snapshot name/email/phone at sign time and those snapshots are the source of truth for AS-OF-SIGNING info. Editing a Customer never back-rewrites historical snapshots.
+**Billing party ≠ contact ≠ property (billing-party brief, Jun 2026):** the person who books the work, the place being serviced, and the entity that pays the invoice are three independent facts — investment-owned residential and property-management work make all three differ routinely (e.g. service at a Vaughan home, invoice issued to a Thornhill numbered company). The contact stays the Customer's `name/email/phone`; the bill-to lives in `billingName/billingEmail/billingAddress` (empty = bill the contact). At intake, `new-customer.html` captures a structured bill-to behind a collapsed "Bill to a different person or company" disclosure (`lead.billing`, persisted only when used) and seeds the Customer's billing fields — never overwriting hand-curated values. Each draft invoice snapshots the resolved bill-to (`invoice.billTo`, locked after send), and the QuickBooks push bills that entity. The self-billing majority path is untouched end to end.
+
+**Implementation status (as of 2026-05-16):** The Customer Folder is live in v1 as `server/lib/customers.js` + `server/data/customers.json` with admin pages at `/admin/customers` and `/admin/customer/<id>`. Populated fields: name, spouseName, phone, spousePhone, email, spouseEmail, billingName, billingEmail, billingAddress, customerSince, source, status (`lead`/`active`/`inactive`/`lost`), quickbooksId, internalNotes, notificationPrefs, communicationRecords, vcfDownloads, history. The per-customer and bulk vCard download (`/api/customer/:id/vcard`, `POST /api/customers/vcards.vcf`) lets Patrick import customers into iPhone Contacts for Siri-based dialling from the truck; each download appends to vcfDownloads[] for audit. **Snapshots-vs-source-of-truth:** the Customer record is the source of truth for CURRENT contact info; transactional entities (WO / Quote / Invoice / Booking / Project) continue to snapshot name/email/phone at sign time and those snapshots are the source of truth for AS-OF-SIGNING info. Editing a Customer never back-rewrites historical snapshots.
 
 ### 2.2 Property Folder (the place)
 
@@ -180,6 +186,7 @@ Confirmed list of every input channel:
 |---|---|
 | AI chat (website) | Whatever customer shares mid-conversation |
 | Booking form (`book.html`) | Full structured intake |
+| Self-intake form (`new-customer.html` → `POST /api/new-customer`) | Contact + property address + notes, plus a structured **bill-to** behind a collapsed "Bill to a different person or company" disclosure (billing name/company + billing address required when used; billing email/phone optional). Lands as `lead.billing` and seeds the Customer's billing fields — no more re-keying a billing entity out of free-text notes. |
 | Admin (Patrick) | Anything — full create/edit access |
 | Customer portal | Limited edits: phone, email, best time to reach |
 | Phone calls | Logged manually only when something significant happens |

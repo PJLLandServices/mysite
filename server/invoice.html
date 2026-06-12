@@ -83,6 +83,16 @@
                 <p class="invoice-doc-sub" id="invoiceCustomerAddress"></p>
                 <p class="invoice-doc-sub" id="invoiceCustomerContact"></p>
               </div>
+              <!-- Service-address column (billing-party brief). Hidden on
+                   the common self-billing invoice; shown only when the
+                   billTo snapshot names a different payer/address, in
+                   which case "Bill to" above carries the payer and this
+                   column carries where the work happened. -->
+              <div id="invoiceServiceCol" hidden>
+                <span class="invoice-doc-label">Service address</span>
+                <p class="invoice-doc-customer" id="invoiceServiceName">—</p>
+                <p class="invoice-doc-sub" id="invoiceServiceAddress"></p>
+              </div>
               <div>
                 <span class="invoice-doc-label">From</span>
                 <p class="invoice-doc-customer">PJL Land Services</p>
@@ -207,6 +217,23 @@
             <p class="invoice-action-meta" id="invoiceQbMeta">Loading…</p>
             <button type="button" id="invoiceQbPushBtn" class="invoice-action-btn invoice-action-btn--primary" hidden>Push to QuickBooks</button>
             <p class="invoice-action-status" id="invoiceQbStatus"></p>
+          </section>
+
+          <!-- Bill-to snapshot editor (billing-party brief §3.3).
+               Editable only while the invoice is a draft — once sent or
+               paid the bill-to is part of the issued document and the
+               server rejects edits, so the inputs swap to a read-only
+               summary. -->
+          <section class="invoice-action-card" id="invoiceBillToCard">
+            <span class="invoice-action-label">Bill to</span>
+            <div id="invoiceBillToEdit">
+              <input type="text" id="invoiceBillToName" class="invoice-billto-input" maxlength="200" placeholder="Name / company on the invoice">
+              <input type="text" id="invoiceBillToAddress" class="invoice-billto-input" maxlength="400" placeholder="Billing address">
+              <input type="email" id="invoiceBillToEmail" class="invoice-billto-input" maxlength="254" placeholder="Billing email">
+              <button type="button" id="invoiceBillToSave" class="invoice-action-btn">Save bill-to</button>
+            </div>
+            <p class="invoice-action-meta" id="invoiceBillToReadonly" hidden></p>
+            <p class="invoice-action-status" id="invoiceBillToStatus"></p>
           </section>
 
           <section class="invoice-action-card">

@@ -83,6 +83,17 @@ function hydrate(inv) {
     customerEmail: inv?.customerEmail || "",
     customerPhone: inv?.customerPhone || "",
     address: inv?.address || "",
+    // Bill-to snapshot (billing-party brief §3.3). Set once at draft time
+    // by createDraft — override-or-fallback from the customer record's
+    // billingName/billingAddress/billingEmail. The PDF and the QB push
+    // read THIS, never the live customer. null on legacy invoices, which
+    // fall back to the flat customer* fields everywhere (no behaviour
+    // change). Editable via update() only while status === "draft".
+    billTo: inv?.billTo && typeof inv.billTo === "object" ? {
+      name: String(inv.billTo.name || ""),
+      address: String(inv.billTo.address || ""),
+      email: String(inv.billTo.email || "")
+    } : null,
     status: STATUSES.includes(inv?.status) ? inv.status : "draft",
     lineItems: Array.isArray(inv?.lineItems) ? inv.lineItems : [],
     subtotal: Number(inv?.subtotal) || 0,
@@ -214,6 +225,30 @@ async function createDraft({
     } catch (err) { /* tolerate */ }
   }
 
+  // Bill-to snapshot (billing-party brief §3.8) — override-or-fallback,
+  // resolved ONCE here so every draft path (WO cascade, project-final
+  // cascade, manual) gets the same rule. The customer record's
+  // billingName/billingAddress/billingEmail win when set; otherwise the
+  // snapshot mirrors the contact fields (self-billing). Later edits to
+  // the customer's billing fields do NOT rewrite this snapshot.
+  let billingName = "";
+  let billingAddress = "";
+  let billingEmail = "";
+  if (customerId) {
+    try {
+      const customersLib = require("./customers");
+      const cust = await customersLib.get(customerId, { withProperties: false });
+      billingName = cust?.billingName || "";
+      billingAddress = cust?.billingAddress || "";
+      billingEmail = cust?.billingEmail || "";
+    } catch (err) { /* tolerate — snapshot falls back to contact fields */ }
+  }
+  const billTo = {
+    name: billingName || customerName || "",
+    address: billingAddress || address || "",
+    email: billingEmail || customerEmail || ""
+  };
+
   const records = await readAll();
   const now = new Date().toISOString();
   const year = new Date().getUTCFullYear();
@@ -247,6 +282,7 @@ async function createDraft({
     customerEmail,
     customerPhone,
     address,
+    billTo,
     status: "draft",
     lineItems: normalized,
     subtotal: totals.subtotal,
@@ -287,6 +323,20 @@ async function update(id, patch) {
   const allowed = ["status", "notes", "quickbooksInvoiceId", "quickbooksChargeId", "quickbooksPaymentId", "paymentToken", "portalToken", "customerSmsScheduledAt", "customerSmsSentAt", "customerReminderHistory", "customerJunkMailWarningSentAt", "customerJunkMailWarningHistory", "customerName", "customerEmail", "customerPhone", "address"];
   for (const key of allowed) {
     if (patch && Object.prototype.hasOwnProperty.call(patch, key)) next[key] = patch[key];
+  }
+  // billTo is a financial snapshot — editable ONLY while the invoice is
+  // still a draft. Once sent/paid/void the bill-to is part of the issued
+  // document and locks (same principle as line items on a signed WO).
+  if (patch && Object.prototype.hasOwnProperty.call(patch, "billTo")) {
+    if (current.status !== "draft") {
+      throw new Error("Bill-to can only be edited while the invoice is a draft.");
+    }
+    const raw = patch.billTo && typeof patch.billTo === "object" ? patch.billTo : {};
+    next.billTo = {
+      name: String(raw.name || "").trim().slice(0, 200),
+      address: String(raw.address || "").trim().slice(0, 400),
+      email: String(raw.email || "").trim().toLowerCase().slice(0, 254)
+    };
   }
   if (patch && Array.isArray(patch.lineItems)) {
     next.lineItems = patch.lineItems;

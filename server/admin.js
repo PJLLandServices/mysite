@@ -127,6 +127,8 @@ const woWaiveNotesHint = document.getElementById("woWaiveNotesHint");
 const woWaiveErr = document.getElementById("woWaiveErr");
 const woWaiveFeeAmount = document.getElementById("woWaiveFeeAmount");
 const customerNotes = document.getElementById("customerNotes");
+const detailBillingSection = document.getElementById("detailBillingSection");
+const detailBilling = document.getElementById("detailBilling");
 const activityList = document.getElementById("activityList");
 const detailPhotosSection = document.getElementById("detailPhotosSection");
 const detailPhotoGrid = document.getElementById("detailPhotoGrid");
@@ -427,6 +429,22 @@ function renderDetail() {
     item.innerHTML = `<span>${escapeHtml(feature.label)}</span><strong>${priceText}</strong>`;
     detailFeatures.append(item);
   });
+
+  // Separate billing party — mirrors the "Bill to" block in the lead
+  // alert email. Only rendered for billTo === "other"; self-billing
+  // leads keep the section hidden entirely.
+  const billing = lead.billing && lead.billing.billTo === "other" ? lead.billing : null;
+  detailBillingSection.hidden = !billing;
+  if (billing) {
+    detailBilling.innerHTML = [
+      `<strong>${escapeHtml(billing.name)}</strong>`,
+      escapeHtml(billing.address),
+      billing.email ? `<a href="mailto:${escapeHtml(billing.email)}">${escapeHtml(billing.email)}</a>` : "",
+      billing.phone ? `<a href="tel:${escapeHtml(billing.phone)}">${escapeHtml(billing.phone)}</a>` : ""
+    ].filter(Boolean).join("<br>");
+  } else {
+    detailBilling.innerHTML = "";
+  }
 
   customerNotes.textContent = lead.contact?.notes || "No customer notes.";
   renderPropertyDetail(lead);

@@ -982,6 +982,37 @@ function validateLead(payload) {
   };
 }
 
+// Separate billing party at intake (billing-party brief, Jun 2026).
+// Validates the optional `billing` block on the /api/quotes and
+// /api/new-customer POST bodies:
+//   { billTo: "self" | "other", name, address, email?, phone? }
+// Returns { ok: true, billing } where billing is null for the common
+// "bill to myself" path (absent block, or billTo === "self") — leads
+// only persist a billing block when there's a real override, so legacy
+// and self-billing records stay byte-identical. For billTo === "other",
+// name + address are required. Unknown billTo values are rejected.
+function parseBillingPayload(raw) {
+  if (raw == null) return { ok: true, billing: null };
+  if (typeof raw !== "object" || Array.isArray(raw)) {
+    return { ok: false, error: "Billing details are malformed." };
+  }
+  const billTo = normalizeString(raw.billTo, 10) || "self";
+  if (billTo === "self") return { ok: true, billing: null };
+  if (billTo !== "other") {
+    return { ok: false, error: "Billing recipient must be \"self\" or \"other\"." };
+  }
+  const name = normalizeString(raw.name, 200);
+  const address = normalizeString(raw.address, 400);
+  const email = normalizeEmail(raw.email);
+  const phone = normalizePhone(raw.phone);
+  if (!name) return { ok: false, error: "Billing name or company is required when billing someone else." };
+  if (!address) return { ok: false, error: "Billing address is required when billing someone else." };
+  if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return { ok: false, error: "Billing email doesn't look valid." };
+  }
+  return { ok: true, billing: { billTo: "other", name, address, email, phone } };
+}
+
 // Resolve or create the canonical customer record for a freshly
 // validated lead. Match order (spec §3.1, audit §5.4): email first,
 // phone second, create new otherwise. New customers default to
@@ -1029,6 +1060,27 @@ async function resolveCustomerForLead(lead) {
       });
     } catch (err) {
       console.warn("[customers] addCommunication failed:", err?.message || err);
+    }
+    // Billing-party brief §3.7 — seed the customer's billing fields from
+    // the lead's structured bill-to, but ONLY into empty fields. A
+    // hand-curated billingName/billingAddress/billingEmail on the
+    // customer record is never overwritten by a later intake.
+    if (lead.billing && lead.billing.billTo === "other") {
+      try {
+        const existing = await customers.get(customerId, { withProperties: false });
+        const patch = {};
+        if (existing && !existing.billingName && lead.billing.name) patch.billingName = lead.billing.name;
+        if (existing && !existing.billingAddress && lead.billing.address) patch.billingAddress = lead.billing.address;
+        if (existing && !existing.billingEmail && lead.billing.email) patch.billingEmail = lead.billing.email;
+        if (Object.keys(patch).length) {
+          await customers.update(customerId, patch, {
+            by: "intake",
+            note: `Billing party from lead ${lead.id}: ${lead.billing.name}`
+          });
+        }
+      } catch (err) {
+        console.warn("[customers] billing seed failed:", err?.message || err);
+      }
     }
   }
   return customerId;
@@ -3181,6 +3233,13 @@ async function handleApi(req, res, pathname) {
       const result = validateLead(payload);
       if (!result.ok) return sendJson(res, 422, { ok: false, errors: result.errors });
 
+      // Separate billing party (billing-party brief) — validated before
+      // any disk write so a malformed billing block never half-saves.
+      // billing stays null (not persisted) on the self-billing path.
+      const billingResult = parseBillingPayload(payload.billing);
+      if (!billingResult.ok) return sendJson(res, 400, { ok: false, errors: [billingResult.error] });
+      if (billingResult.billing) result.lead.billing = billingResult.billing;
+
       // Forward-only emailNormalized — collapses Gmail dot-trick and
       // +suffix aliases to a single canonical form for future dedupe.
       // contact.email keeps the customer's actual spelling for display.
@@ -3456,6 +3515,13 @@ async function handleApi(req, res, pathname) {
         });
       }
 
+      // Separate billing party (billing-party brief). billing is null on
+      // the self-billing path — the lead record stays identical to today.
+      const billingResult = parseBillingPayload(payload?.billing);
+      if (!billingResult.ok) {
+        return sendJson(res, 400, { ok: false, error: billingResult.error });
+      }
+
       // Record the rate-limit hit only after we've decided to act on a
       // well-formed submission — drops bots out of the bucket.
       rateLimit.record(rateKey);
@@ -3499,6 +3565,7 @@ async function handleApi(req, res, pathname) {
         crm: defaultCrm(now),
         portal: defaultPortal(id, now)
       };
+      if (billingResult.billing) lead.billing = billingResult.billing;
 
       // Resolve / create the canonical customer. Failure here is logged
       // but does NOT block intake — the lead can be backfilled later.

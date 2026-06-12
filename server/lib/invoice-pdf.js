@@ -113,6 +113,23 @@ function normalize(raw) {
   const billTo = inv.bill_to || {};
   const shipTo = inv.ship_to || null;
 
+  // Billing-party snapshot (billing-party brief, Jun 2026). Invoices
+  // drafted after the feature carry inv.billTo { name, address, email },
+  // set once at draft time. When it names a different payer (name or
+  // address differs from the service contact), the BILL TO column
+  // renders the snapshot and the service address gets its own column.
+  // Self-billing snapshots (identical values) and legacy invoices
+  // (billTo null) keep the original single-column layout untouched.
+  const snap = inv.billTo && typeof inv.billTo === "object" ? inv.billTo : null;
+  const snapName = String(snap?.name || "").trim();
+  const snapAddr = String(snap?.address || "").trim();
+  const snapEmail = String(snap?.email || "").trim();
+  const contactName = String(inv.customerName || "").trim();
+  const contactAddr = String(inv.address || "").trim();
+  const billingNameDiffers = Boolean(snapName && snapName !== contactName);
+  const billingDiffers = Boolean(snap) &&
+    (billingNameDiffers || (snapAddr && snapAddr !== contactAddr));
+
   // Bill-to: pull from explicit bill_to.* first, fall back to the flat
   // legacy fields the cascade currently writes.
   const billName = billTo.name || inv.customerName || "";
@@ -153,6 +170,26 @@ function normalize(raw) {
     if (sName === billName && sLines.join("\n") === billAddrLines.join("\n")) return null;
     return { name: sName, addrLines: sLines };
   })();
+
+  // Billing override — replaces the bill-to column with the snapshot and
+  // moves the service address into the second column. The paying entity
+  // never inherits the service contact's phone number.
+  const billToOut = billingDiffers ? {
+    name: snapName || contactName,
+    company: "",
+    addrLines: snapAddr ? [snapAddr] : billAddrLines,
+    phone: billingNameDiffers ? "" : billPhone,
+    email: snapEmail
+  } : {
+    name: billName,
+    company: billCompany,
+    addrLines: billAddrLines,
+    phone: billPhone,
+    email: billEmail
+  };
+  const shipOut = billingDiffers
+    ? { name: contactName, addrLines: contactAddr ? [contactAddr] : [] }
+    : ship;
 
   // Line items: support both new and legacy shapes.
   const lineItems = (inv.lineItems || []).map((li) => ({
@@ -206,14 +243,8 @@ function normalize(raw) {
     dueAt,
     sentAt: inv.sentAt || null,
     paidAt: inv.paidAt || null,
-    billTo: {
-      name: billName,
-      company: billCompany,
-      addrLines: billAddrLines,
-      phone: billPhone,
-      email: billEmail
-    },
-    shipTo: ship,
+    billTo: billToOut,
+    shipTo: shipOut,
     terms,
     lineItems,
     subtotal,
@@ -407,10 +438,12 @@ function drawCustomerBand(doc, inv) {
     billY = doc.y;
   }
 
-  // Ship-to column (B2B only)
+  // Service-address column — only rendered when the bill-to differs
+  // from the service location (separate billing party, or a legacy
+  // ship_to record). Self-billing invoices stay single-column.
   if (hasShip) {
     doc.font(fontBodyBold()).fontSize(8).fillColor(TEXT_MUTED);
-    doc.text("SHIP TO", rightX, y, { characterSpacing: 1.4 });
+    doc.text("SERVICE ADDRESS", rightX, y, { characterSpacing: 1.4 });
     let shipY = doc.y + 4;
     doc.font(fontBodyBold()).fontSize(11).fillColor(TEXT);
     doc.text(inv.shipTo.name || "—", rightX, shipY, { width: colW });

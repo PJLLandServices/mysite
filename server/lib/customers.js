@@ -23,6 +23,10 @@
 //     spousePhone:        "..."  (optional)
 //     email:              "jane@example.com"
 //     spouseEmail:        "..."  (optional)
+//     billingName:        ""     (empty = bill to `name`; set when the
+//                                 invoice is issued to a different person
+//                                 or company, e.g. "LCIG Investment Inc.")
+//     billingEmail:       ""     (empty = invoice email goes to `email`)
 //     billingAddress:     string | null   (null = same as primary property)
 //     customerSince:      ISO date — earliest interaction
 //     source:             ai_chat | repair_form | phone | email | import | ...
@@ -102,6 +106,8 @@ function blankCustomer() {
     spousePhone: "",
     email: "",
     spouseEmail: "",
+    billingName: "",
+    billingEmail: "",
     billingAddress: null,
     customerSince: null,
     source: "",
@@ -185,6 +191,8 @@ function normalizePayload(payload) {
     spousePhone: cap(payload?.spousePhone, 40),
     email: cap(payload?.email, 254).toLowerCase(),
     spouseEmail: cap(payload?.spouseEmail, 254).toLowerCase(),
+    billingName: cap(payload?.billingName, 200),
+    billingEmail: cap(payload?.billingEmail, 254).toLowerCase(),
     billingAddress: payload?.billingAddress == null
       ? null
       : cap(payload.billingAddress, 400),
@@ -309,6 +317,8 @@ async function update(id, patch, { by = "admin", note = "", action = "updated" }
     "name", "spouseName",
     "phone", "spousePhone",
     "email", "spouseEmail",
+    "billingName",
+    "billingEmail",
     "billingAddress",
     "customerSince",
     "source",
@@ -576,7 +586,7 @@ async function mergeCustomers(primaryId, secondaryId, { by = "admin", note = "" 
   // Fill primary's blank fields from secondary.
   for (const field of [
     "name", "spouseName", "phone", "spousePhone",
-    "email", "spouseEmail", "billingAddress",
+    "email", "spouseEmail", "billingName", "billingEmail", "billingAddress",
     "source", "quickbooksId", "internalNotes"
   ]) {
     if (!primary[field] && secondary[field]) primary[field] = secondary[field];

@@ -292,6 +292,20 @@
 
 .invoice-action-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
+/* Bill-to editor inputs (billing-party brief) — match the notes
+   textarea styling; stacked with a small gap inside the action card. */
+.invoice-billto-input {
+  font-family: inherit;
+  font-size: 13px;
+  padding: 8px 10px;
+  border: 1px solid #d8d8c9;
+  border-radius: 6px;
+  width: 100%;
+  margin-bottom: 8px;
+  background: #fff;
+}
+.invoice-billto-input:focus { outline: none; border-color: #1B4D2E; }
+
 .invoice-action-card textarea {
   font-family: inherit;
   font-size: 13px;
