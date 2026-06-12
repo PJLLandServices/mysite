@@ -1,0 +1,26 @@
+{
+  "_doc": "Editable narrative content block for the Smart Controller Upgrade quote (rich ai_repair_quote layout, brief 2026-06-12). Edit copy here — no code change needed; ships with the next deploy. HARD RULE: contains NO literal prices. Dollar figures use {{dotted.path}} tokens resolved from pricing.json at render time (e.g. the water-savings headline below). The 'Your investment' price line is NOT here — it renders from the quote's snapshotted lineItems. Section bodies are plain text; blank line = new paragraph, single newline = line break (used for bullet lists). Copy is seeded from the live sprinkler-hydrawise.html page — if the site copy changes materially, revisit this block (known, accepted duplication; flagged in the brief).",
+  "key": "smart-controller",
+  "documentTitle": "Smart Controller Upgrade",
+  "eyebrow": "HYDRAWISE SMART CONTROLLER UPGRADE",
+  "headline": "Your Hydrawise upgrade quote is ready.",
+  "intro": "Everything below is included in the single price at the end — review it on your own time and sign online when you're ready.",
+  "sections": [
+    {
+      "title": "Why upgrade to Hydrawise",
+      "body": "Your current controller runs on a fixed timer — it waters on its schedule whether it rained yesterday, is raining right now, or a heat wave is coming. The Hunter Hydrawise controller replaces that guesswork with Predictive Watering: it pulls real-time local weather and adjusts automatically, skipping runs when rain is forecast, throttling back on cool days, and running longer through hot stretches.\n\nBecause Hydrawise reads the actual forecast, it does the job a manual rain sensor was supposed to do — better, and without the maintenance. If your existing rain sensor is aging or already dead, there is nothing to replace: the upgrade retires it entirely.\n\nYou also get the Hydrawise app on your phone: start, stop, or override any zone from anywhere, see zone-by-zone runtime history, and receive alerts when something is wrong — a stuck valve, lower-than-expected flow, or a missed run. PJL can monitor your system remotely too, which often means we catch a problem before you see it on the lawn."
+    },
+    {
+      "title": "What's included in your install",
+      "body": "One visit, typically about two hours start to finish:\n• Hunter HPC-400 Hydrawise Wi-Fi controller, sized to your system with the right PCM expansion module(s)\n• Removal of your existing controller and a clean swap-over of all zone wiring\n• Wi-Fi connection and Hydrawise app setup on your phone\n• Full seasonal schedule programmed for your zones and plantings\n• A hands-on walkthrough so you're comfortable with the app before we leave\n\nHydrawise retrofits onto most residential irrigation systems regardless of the original brand — Hunter, Rain Bird, Toro, Orbit, Irritrol, or builder-grade."
+    },
+    {
+      "title": "Warranty & water savings",
+      "body": "Your upgrade is covered by a 3-year parts & labour warranty — if the controller or our installation gives you trouble, we make it right at no charge.\n\nWeather-aware watering typically cuts seasonal water use by 30–40% compared to a fixed timer. Depending on your lot and watering habits, that can add up to ${{water_calculator.headline_scenario.annual_savings_cad}} per year — see how your own numbers land with our calculator at pjllandservices.com/water-cost-calculator.html. The upgrade pays for itself, then keeps saving every season after."
+    },
+    {
+      "title": "Technical reference",
+      "body": "PJL installs exactly one controller platform: the Hunter HPC-400 on Hydrawise, tiered to zone count with PCM expansion modules — PCM-300 for 5–7 zone systems, PCM-300 + PCM-900 for 8–16 zones. Larger panels (17+ zones) use the special-order PCM-1600 and are quoted separately after a site assessment.\n\nPatrick is Hunter Hydrawise Certified — trained directly by Hunter Industries on smart-controller programming, hydraulic design, and water-efficient zone configuration — and PJL is a Hunter Authorized Installer. The same Hydrawise controllers we install for customers run on our own systems."
+    }
+  ]
+}

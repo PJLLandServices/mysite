@@ -152,6 +152,14 @@ function blankProperty() {
       blowoutLocation: "",        // e.g. "Rear hose bib, beside deck"
       valveBoxes: [],             // [{ id, location, valveCount, notes }]
       zones: [],                  // [{ number, label, notes }]
+      // Declared zone COUNT (Smart Controller Quote brief, 2026-06-12).
+      // Captured on first use when Patrick picks a count in the
+      // +New Smart Controller Quote modal and the zones[] array above is
+      // empty. zones.length (documented zones) always wins over this
+      // when both exist — this is the "customer told us 6" number, not
+      // the walked-the-property record. Patched via the normal
+      // properties.update() system merge.
+      zoneCount: null,
       notes: ""                   // free-form system-wide notes
     },
     photos: [],                   // [{ id, slot, url, uploadedAt }]   — Phase 5

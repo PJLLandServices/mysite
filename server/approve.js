@@ -71,14 +71,28 @@ function render(q) {
   }
 
   const isProposal = q.type === "project_proposal";
+  // Narrative ai_repair_quotes (smart-controller upgrades) ship
+  // server-synthesized sections + header copy from the content block —
+  // rendered with the same section renderer proposals use, so the
+  // e-sign page matches the rich PDF. E-sign stays the only acceptance
+  // method for these (no PDF-return path exists for ai_repair_quote).
+  const hasNarrative = !isProposal && !!q.narrativeKey && (q.proposalSections || []).length > 0;
 
-  // Header copy — proposals get proposal-specific wording.
+  // Header copy — proposals + narrative quotes get tailored wording.
   if (isProposal) {
     document.getElementById("approveEyebrow").textContent = "Project proposal — your acceptance needed";
     document.getElementById("approveHeadline").textContent = "Your detailed proposal is ready for review.";
     document.getElementById("approveIntro").textContent =
       "Review the full scope below. You can accept this proposal either by signing online (Option A) or by printing the PDF, signing by hand, and emailing or uploading the signed copy back (Option B). Both are binding.";
     document.getElementById("approveMethodToggle").hidden = false;
+  } else if (hasNarrative) {
+    const nh = q.narrativeHeader || {};
+    document.getElementById("approveEyebrow").textContent = "Smart controller upgrade — your approval needed";
+    document.getElementById("approveHeadline").textContent = nh.headline || "Your upgrade quote is ready.";
+    document.getElementById("approveIntro").textContent =
+      (nh.intro || "Review the details below.") + " Sign at the bottom and we'll reach out to schedule your install.";
+  }
+  if (isProposal || hasNarrative) {
     // Render the narrative sections.
     const propEl = document.getElementById("approveProposal");
     propEl.hidden = false;
@@ -134,7 +148,10 @@ function render(q) {
       }
       propEl.appendChild(sectionEl);
     }
-    // Wire the method toggle.
+  }
+  if (isProposal) {
+    // Wire the method toggle (proposal-only — narrative quotes are
+    // e-sign only, the default non-proposal state).
     document.querySelectorAll(".approve-method-btn").forEach((btn) => {
       btn.addEventListener("click", () => {
         document.querySelectorAll(".approve-method-btn").forEach((b) => b.classList.toggle("is-active", b === btn));

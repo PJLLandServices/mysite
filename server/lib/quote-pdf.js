@@ -528,13 +528,13 @@ function renderAttachmentInline(doc, att, quote, { MARGIN_X, contentWidth }) {
   doc.moveDown(0.3);
 }
 
-function renderProposalLineItems(doc, quote, { MARGIN_X, contentWidth }) {
+function renderProposalLineItems(doc, quote, { MARGIN_X, contentWidth, heading = "ITEMIZED PRICING" }) {
   if (!Array.isArray(quote.lineItems) || !quote.lineItems.length) return;
 
   if (doc.y > doc.page.height - 200) doc.addPage();
 
   doc.fillColor(PJL_GREEN).font(fontHeading(doc)).fontSize(15);
-  doc.text("ITEMIZED PRICING", MARGIN_X, doc.y, { characterSpacing: 1.2 });
+  doc.text(heading, MARGIN_X, doc.y, { characterSpacing: 1.2 });
   const ruleY = doc.y + 2;
   doc.moveTo(MARGIN_X, ruleY).lineTo(MARGIN_X + 60, ruleY).strokeColor(PJL_GREEN).lineWidth(1.5).stroke();
   doc.moveDown(0.4);
@@ -611,7 +611,12 @@ function renderProposalLineItems(doc, quote, { MARGIN_X, contentWidth }) {
   }
 }
 
-function renderAcceptanceBlock(doc, quote, { MARGIN_X, contentWidth, acceptanceUrl, returnEmail }) {
+// `docWord` lets non-proposal callers keep the customer-facing copy
+// honest ("this quote" vs "this proposal"); `esignOnly` drops the
+// print-sign-return column — the PDF-return staging path is
+// project_proposal-only server-side, so offering it on other quote
+// types would dead-end the customer.
+function renderAcceptanceBlock(doc, quote, { MARGIN_X, contentWidth, acceptanceUrl, returnEmail, docWord = "proposal", esignOnly = false }) {
   if (doc.y > doc.page.height - 260) doc.addPage();
 
   doc.fillColor(PJL_GREEN).font(fontHeading(doc)).fontSize(15);
@@ -622,13 +627,17 @@ function renderAcceptanceBlock(doc, quote, { MARGIN_X, contentWidth, acceptanceU
 
   doc.fillColor(PJL_TEXT).font("Helvetica").fontSize(10);
   doc.text(
-    "You may accept this proposal in either of two ways — both produce a legally binding acceptance.",
+    esignOnly
+      ? `Accepting this ${docWord} takes a minute — sign online from any device.`
+      : `You may accept this ${docWord} in either of two ways — both produce a legally binding acceptance.`,
     MARGIN_X, doc.y, { width: contentWidth }
   );
   doc.moveDown(0.4);
 
-  // Already-accepted branch: show the evidence inline.
-  if (quote.acceptanceMethod === "portal_esign" && quote.signature?.signed) {
+  // Already-accepted branch: show the evidence inline. ai_repair_quote
+  // signatures land via acceptWithSignature (no acceptanceMethod field
+  // change), so the esignOnly path keys off signature.signed alone.
+  if ((quote.acceptanceMethod === "portal_esign" || esignOnly) && quote.signature?.signed) {
     doc.font("Helvetica-Bold").fontSize(11).fillColor(PJL_GREEN);
     doc.text("Accepted via portal e-sign.", MARGIN_X, doc.y, { width: contentWidth });
     try {
@@ -656,6 +665,33 @@ function renderAcceptanceBlock(doc, quote, { MARGIN_X, contentWidth, acceptanceU
       `Confirmed on ${new Date(quote.acceptanceEvidence.confirmedAt).toLocaleDateString("en-CA")}` +
       (quote.acceptanceEvidence.senderEmail ? ` · returned from ${quote.acceptanceEvidence.senderEmail}` : ""),
       MARGIN_X, doc.y + 4, { width: contentWidth }
+    );
+    return;
+  }
+
+  // Single-option e-sign layout (smart-controller quotes — no PDF-return
+  // path exists for ai_repair_quote, so don't offer one).
+  if (esignOnly) {
+    doc.font("Helvetica-Bold").fontSize(11).fillColor(PJL_GREEN);
+    doc.text("Sign online", MARGIN_X, doc.y, { width: contentWidth });
+    doc.font("Helvetica").fontSize(10).fillColor(PJL_TEXT);
+    doc.text(
+      "Open the link below on any device. Draw your signature on the page and tap Approve — we're notified immediately and will reach out to schedule your install.",
+      MARGIN_X, doc.y + 4, { width: contentWidth }
+    );
+    doc.moveDown(0.4);
+    if (acceptanceUrl) {
+      doc.font("Helvetica-Bold").fontSize(10).fillColor(PJL_GREEN);
+      doc.text(acceptanceUrl, MARGIN_X, doc.y, { width: contentWidth, link: acceptanceUrl, underline: true });
+    } else {
+      doc.font("Helvetica-Oblique").fontSize(9).fillColor(PJL_MUTED);
+      doc.text("(Your personal signing link arrives by email and text when this quote is sent.)", MARGIN_X, doc.y, { width: contentWidth });
+    }
+    doc.moveDown(0.6);
+    doc.font("Helvetica").fontSize(9).fillColor(PJL_MUTED);
+    doc.text(
+      "Prefer paper, or have questions first? Call (905) 960-0181 or reply to the email this quote arrived in.",
+      MARGIN_X, doc.y, { width: contentWidth }
     );
     return;
   }
@@ -715,6 +751,145 @@ function renderAcceptanceBlock(doc, quote, { MARGIN_X, contentWidth, acceptanceU
   doc.y = Math.max(leftBottom, dateY + 18);
 }
 
+// ---- Smart Controller Upgrade PDF (brief 2026-06-12) ------------------
+//
+// Rich, website-grade layout for ai_repair_quote records that carry a
+// narrativeKey (currently only "smart-controller"). Composes the SAME
+// section components the proposal renderer uses — renderSection,
+// renderProposalLineItems, renderAcceptanceBlock — with sections
+// synthesized at render time from the editable content block
+// (server/lib/templates/, via quote-narratives.js). No proposal fork:
+// the quote stays a plain ai_repair_quote; only the rendering differs.
+//
+// Layout: cover header (title + logo + prepared-for) → narrative
+// sections (why Hydrawise / what's included / warranty & savings /
+// technical reference) → "YOUR INVESTMENT" line-items table (from the
+// quote's snapshotted lineItems — pricing.json is never read here) →
+// e-sign-only acceptance block → footer.
+
+const quoteNarratives = require("./quote-narratives");
+
+function renderSmartControllerPdf(quote, opts = {}) {
+  const customer = opts.customer || {};
+  const property = opts.property || {};
+  const acceptanceUrl = opts.acceptanceUrl || null;
+
+  const header = quoteNarratives.headerFor(quote.narrativeKey) || {
+    documentTitle: "Quote", eyebrow: "", headline: "", intro: ""
+  };
+  const sections = quoteNarratives.sectionsFor(quote.narrativeKey);
+
+  const doc = new PDFDocument({
+    size: "LETTER",
+    margins: { top: 60, bottom: 60, left: 60, right: 60 },
+    info: {
+      Title: `PJL Quote ${quote.id} — ${header.documentTitle}`,
+      Author: "PJL Land Services",
+      Subject: quote.scope || header.documentTitle,
+      Keywords: `quote ${quote.id} pjl land services hydrawise smart controller`
+    }
+  });
+
+  const barlow = barlowBuffer();
+  if (barlow) doc.registerFont("Barlow-Bold", barlow);
+
+  const PAGE_W = doc.page.width;
+  const MARGIN_X = 60;
+  const contentWidth = PAGE_W - MARGIN_X * 2;
+
+  // ---- Cover header (proposal-style, "QUOTE" title) ------------------
+  const top = 40;
+  const LOGO_W = 160;
+  doc.font(fontHeading(doc)).fontSize(34).fillColor(PJL_GREEN);
+  doc.text("QUOTE", MARGIN_X, top, {
+    characterSpacing: 1.5,
+    width: contentWidth - LOGO_W - 16,
+    lineGap: 0
+  });
+
+  const logo = logoBuffer();
+  if (logo) {
+    doc.image(logo, PAGE_W - MARGIN_X - LOGO_W, top - 12, { width: LOGO_W });
+  } else {
+    doc.font(fontHeading(doc)).fontSize(22).fillColor(PJL_GREEN);
+    doc.text("PJL", PAGE_W - MARGIN_X - 200, top + 6, { width: 200, align: "right", characterSpacing: 1 });
+    doc.fontSize(11).fillColor(PJL_GREEN);
+    doc.text("LAND SERVICES", PAGE_W - MARGIN_X - 200, top + 32, { width: 200, align: "right", characterSpacing: 3 });
+  }
+
+  let y = top + 50;
+  doc.font("Helvetica-Bold").fontSize(10).fillColor(PJL_TEXT);
+  doc.text(`${quote.id}${header.eyebrow ? "  ·  " + header.eyebrow : ""}`, MARGIN_X, y);
+  y = doc.y + 2;
+  doc.font("Helvetica").fontSize(9).fillColor(PJL_MUTED);
+  doc.text(
+    `Issued ${fmtDate(quote.createdAt)}${quote.validUntil ? `  ·  Valid through ${fmtDate(quote.validUntil)}` : ""}`,
+    MARGIN_X, y
+  );
+  y = doc.y + 2;
+  doc.text("PJL Land Services  ·  1118 Cenotaph Blvd., Newmarket, ON  L3X 0A5  ·  (905) 960-0181  ·  info@pjllandservices.com", MARGIN_X, y);
+
+  // Prepared-for block.
+  y = Math.max(doc.y, 130) + 14;
+  doc.fillColor(PJL_MUTED).fontSize(9).font("Helvetica-Bold")
+    .text("PREPARED FOR", MARGIN_X, y, { characterSpacing: 1 });
+  doc.fillColor(PJL_TEXT).font("Helvetica").fontSize(12);
+  const billToName = customer.name || customer.customerName || quote.customerEmail || "Customer";
+  doc.text(billToName, MARGIN_X, doc.y + 4);
+  if (property.address || customer.address) {
+    doc.fontSize(10).fillColor(PJL_MUTED).text(property.address || customer.address);
+  }
+  const contactBits = [customer.phone || customer.customerPhone, quote.customerEmail].filter(Boolean);
+  if (contactBits.length) {
+    doc.fontSize(10).fillColor(PJL_MUTED).text(contactBits.join(" · "));
+  }
+
+  // Headline + intro from the content block.
+  if (header.headline) {
+    doc.moveDown(0.8);
+    doc.fillColor(PJL_GREEN).font(fontHeading(doc)).fontSize(18);
+    doc.text(header.headline, MARGIN_X, doc.y, { width: contentWidth });
+  }
+  if (header.intro) {
+    doc.moveDown(0.2);
+    doc.fillColor(PJL_TEXT).font("Helvetica").fontSize(10);
+    doc.text(header.intro, MARGIN_X, doc.y, { width: contentWidth, lineGap: 2 });
+  }
+  doc.moveDown(0.6);
+
+  // ---- Narrative sections (reused proposal component) ----------------
+  for (const sec of sections) {
+    renderSection(doc, sec, quote, { MARGIN_X, contentWidth });
+  }
+
+  // ---- Your investment (reused line-items component) ------------------
+  doc.moveDown(1);
+  renderProposalLineItems(doc, quote, { MARGIN_X, contentWidth, heading: "YOUR INVESTMENT" });
+
+  // ---- Acceptance — e-sign only ---------------------------------------
+  doc.moveDown(1.2);
+  renderAcceptanceBlock(doc, quote, {
+    MARGIN_X, contentWidth, acceptanceUrl,
+    docWord: "quote", esignOnly: true
+  });
+
+  // ---- Footer ---------------------------------------------------------
+  const restoreBottom = doc.page.margins.bottom;
+  doc.page.margins.bottom = 0;
+  const footerY = doc.page.height - 50;
+  doc.moveTo(MARGIN_X, footerY).lineTo(PAGE_W - MARGIN_X, footerY).strokeColor(PJL_MUTED).lineWidth(0.5).stroke();
+  doc.font("Helvetica").fontSize(9).fillColor(PJL_MUTED);
+  doc.text(
+    "PJL Land Services · Newmarket, Ontario · (905) 960-0181 · pjllandservices.com",
+    MARGIN_X, footerY + 8,
+    { width: PAGE_W - MARGIN_X * 2, align: "center", lineBreak: false }
+  );
+  doc.page.margins.bottom = restoreBottom;
+
+  doc.end();
+  return doc;
+}
+
 // ---- Dispatcher ------------------------------------------------------
 
 const _originalGenerateQuotePdf = generateQuotePdf;
@@ -723,11 +898,15 @@ function renderQuotePdf(quote, opts = {}) {
   if (quote && quote.type === "project_proposal") {
     return renderProjectProposalPdf(quote, opts);
   }
+  if (quote && quote.type === "ai_repair_quote" && quote.narrativeKey) {
+    return renderSmartControllerPdf(quote, opts);
+  }
   return _originalGenerateQuotePdf(quote, opts);
 }
 
 module.exports = {
   generateQuotePdf,            // unchanged — back-compat for existing callers
-  renderQuotePdf,              // new dispatcher — prefer this for new code
-  renderProjectProposalPdf     // exported for direct invocation if needed
+  renderQuotePdf,              // dispatcher — prefer this for new code
+  renderProjectProposalPdf,    // exported for direct invocation if needed
+  renderSmartControllerPdf     // rich controller layout (narrativeKey quotes)
 };

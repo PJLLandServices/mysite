@@ -83,8 +83,39 @@
         <button type="button" data-type-filter="on_site_quote">On-site</button>
         <button type="button" data-type-filter="project_proposal">Project proposal</button>
         <span style="flex:1"></span>
+        <a class="pjl-btn pjl-btn-primary" href="#" id="newControllerQuoteBtn">+ Smart controller quote</a>
         <a class="pjl-btn pjl-btn-primary" href="#" id="newProposalBtn">+ New project proposal</a>
       </section>
+
+      <!-- +New Smart Controller Quote modal (brief 2026-06-12).
+           Selections ONLY — customer, property (when several), zone
+           count (when none on file). Everything else auto-populates
+           server-side. -->
+      <div class="scq-modal-backdrop" id="scqBackdrop" hidden>
+        <div class="scq-modal" role="dialog" aria-modal="true" aria-labelledby="scqTitle">
+          <h2 id="scqTitle">New smart controller quote</h2>
+          <p class="scq-hint">Pick the customer — contact, address, zone count, narrative, and price all load themselves. The quote lands as a draft for you to review and send.</p>
+          <label class="scq-field">
+            <span>Customer</span>
+            <select id="scqCustomer"><option value="">Loading customers…</option></select>
+          </label>
+          <label class="scq-field" id="scqPropertyField" hidden>
+            <span>Property</span>
+            <select id="scqProperty"></select>
+          </label>
+          <label class="scq-field" id="scqZonesField" hidden>
+            <span>Zone count <em id="scqZonesNote"></em></span>
+            <select id="scqZones">
+              <option value="">Pick zone count…</option>
+            </select>
+          </label>
+          <p class="scq-status" id="scqStatus" role="status"></p>
+          <div class="scq-actions">
+            <button type="button" class="pjl-btn" id="scqCancel">Cancel</button>
+            <button type="button" class="pjl-btn pjl-btn-primary" id="scqCreate">Create draft</button>
+          </div>
+        </div>
+      </div>
       <div class="qf-deleted-toggle">
         <input type="checkbox" id="showDeletedToggle">
         <label for="showDeletedToggle">Show deleted quotes</label>

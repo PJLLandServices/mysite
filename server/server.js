@@ -59,6 +59,7 @@ const outreach = require("./lib/outreach");
 const { generateIcsForToken } = require("./lib/ical-feed");
 const issueRollup = require("./lib/issue-rollup");
 const { generateQuotePdf, renderQuotePdf } = require("./lib/quote-pdf");
+const quoteNarratives = require("./lib/quote-narratives");
 const { generateInvoicePdf } = require("./lib/invoice-pdf");
 const { generateWoReportPdf, renderWoReportBuffer, reportFilename } = require("./lib/wo-report-pdf");
 const woReportSnapshot = require("./lib/wo-report-snapshot");
@@ -348,7 +349,10 @@ const SOURCES = {
   coverage_inquiry:     { label: "Service Area Check",    category: "inquiry"   },
   general_contact:      { label: "General Contact",       category: "inquiry"   },
   general_lead:         { label: "General Lead",          category: "inquiry"   },
-  self_serve:           { label: "Customer Self-Intake",  category: "inquiry"   }
+  self_serve:           { label: "Customer Self-Intake",  category: "inquiry"   },
+  // Admin-initiated quotes (e.g. +New Smart Controller Quote) — Patrick
+  // sparks the work in person, the CRM record is minted from admin.
+  admin_quote:          { label: "Admin Quote",           category: "install"   }
 };
 const DEFAULT_SOURCE = "general_lead";
 
@@ -593,7 +597,12 @@ function needsAuth(method, pathname) {
   if (/^\/admin\/work-order\/[^/]+/.test(pathname)) return "user";
   if (pathname === "/admin/invoices" || pathname === "/admin/invoices/") return "user";
   if (pathname === "/admin/quote-folder" || pathname === "/admin/quote-folder/") return "user";
-  if (pathname === "/api/admin/quote-folder") return "user";
+  // Prefix match — covers the folder index AND its sub-routes
+  // (/:id/pdf, /:id/confirm-pdf-acceptance). The PDF route previously
+  // sat outside this gate entirely (exact-match only) and was publicly
+  // fetchable by guessing sequential Q-ids — fixed 2026-06-12.
+  if (pathname === "/api/admin/quote-folder" || pathname.startsWith("/api/admin/quote-folder/")) return "user";
+  if (pathname === "/api/admin/smart-controller-quote") return "user";
   if (/^\/admin\/quote\/[^/]+\/proposal\/?$/.test(pathname)) return "user";
   if (pathname === "/api/admin/project-rates") return "user";
   if (/^\/admin\/quote-folder\/[^/]+\/confirm-pdf-acceptance/.test(pathname)) return "user";
@@ -3257,6 +3266,10 @@ async function handleApi(req, res, pathname) {
             intakeGuarantee: igRaw
               ? { applies: true, scope: scopeText }
               : { applies: false, scope: "" },
+            // Chat-initiated controller upgrades get the same rich PDF /
+            // approve-page narrative as admin-created ones — one product,
+            // one layout, regardless of which door it came through.
+            narrativeKey: isControllerDraft ? "smart-controller" : null,
             createdBy: "ai_chat"
           });
           if (!isControllerDraft) await quotes.accept(quote.id, { leadId: result.lead.id, by: "customer" });
@@ -6913,7 +6926,17 @@ async function handleApi(req, res, pathname) {
         // the acceptance state.
         branch: q.branch || null,
         billingMode: q.billingMode || null,
-        proposalSections: Array.isArray(q.proposalSections) ? q.proposalSections : [],
+        // Narrative quotes (smart-controller) synthesize their sections
+        // from the content block at read time — the approve page renders
+        // them with the same section renderer proposals use, so the
+        // e-sign surface matches the rich PDF.
+        narrativeKey: q.narrativeKey || null,
+        narrativeHeader: (q.type === "ai_repair_quote" && q.narrativeKey)
+          ? quoteNarratives.headerFor(q.narrativeKey)
+          : null,
+        proposalSections: (q.type === "ai_repair_quote" && q.narrativeKey)
+          ? quoteNarratives.sectionsFor(q.narrativeKey)
+          : (Array.isArray(q.proposalSections) ? q.proposalSections : []),
         attachments: Array.isArray(q.attachments)
           ? q.attachments
               .filter((a) => a.kind !== "signed_pdf_return")
@@ -7006,6 +7029,34 @@ async function handleApi(req, res, pathname) {
             });
           }
         } catch (err) { console.warn("[approval-sign] WO update failed:", err?.message); }
+      }
+
+      // ai_repair_quote e-signs (smart-controller sends) ride a LEAD,
+      // not a WO — flip the lead to "won" so the CRM matches the signed
+      // quote, mirroring what the portal Accept path does. Same
+      // transition hook so the customer notification behaviour is
+      // identical no matter which surface they accepted on.
+      if (updated && updated.type === "ai_repair_quote" && updated.leadId) {
+        try {
+          const allLeads = await readLeads();
+          const li = allLeads.findIndex((l) => l.id === updated.leadId);
+          if (li !== -1) {
+            allLeads[li] = applyCrmUpdate(allLeads[li], {
+              status: "won",
+              activityNote: `Customer e-signed quote ${updated.id} via the approval link.`
+            });
+            const transition = allLeads[li]._statusTransition;
+            delete allLeads[li]._statusTransition;
+            await writeLeads(allLeads);
+            if (transition && transition.from !== transition.to) {
+              const event = eventForTransition(transition.from, transition.to);
+              if (event) {
+                const decoratedLead = decorateLeadForAdmin(allLeads[li], req);
+                notifyCustomer(event, decoratedLead, { baseUrl: process.env.PUBLIC_BASE_URL || baseUrlFromReq(req) }).catch(() => {});
+              }
+            }
+          }
+        } catch (err) { console.warn("[approval-sign] lead flip failed:", err?.message); }
       }
 
       // Notify Patrick — customer just committed money.
@@ -10072,6 +10123,213 @@ async function handleApi(req, res, pathname) {
     }
   }
 
+  // POST /api/admin/smart-controller-quote — the "+New Smart Controller
+  // Quote" action (admin-initiated rich quote brief, 2026-06-12).
+  // Zero per-quote typing: Patrick SELECTS a customer (+ property when
+  // they have several, + zone count when none is on file); everything
+  // else auto-populates — contact from the customer record, address from
+  // the property, price from pricing.json via the zone→tier resolver,
+  // narrative from the smart-controller content block at render time.
+  //
+  // Body: { customerId, propertyId?, zoneCount? }
+  // 422 codes the modal acts on:
+  //   property_required   — multiple properties; body lists them
+  //   zone_count_required — no zones[] / zoneCount on the property
+  // A manually-picked zone count saves back to property.system.zoneCount
+  // (documented zones[] always outrank it). 17+ zones → CRM lead only,
+  // never a priced quote. Idempotent: an open smart-controller draft for
+  // the same property (or customer, when propertyless) is returned
+  // instead of minting a duplicate Q-id.
+  if (req.method === "POST" && pathname === "/api/admin/smart-controller-quote") {
+    const session = await requireAdmin(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+    try {
+      const payload = await parseRequestBody(req);
+      const customerId = normalizeString(payload?.customerId, 60);
+      if (!customerId) return sendJson(res, 422, { ok: false, errors: ["Pick a customer."] });
+      const customer = await customers.get(customerId, { withProperties: false });
+      if (!customer) return sendJson(res, 404, { ok: false, errors: ["Customer not found."] });
+      const custEmail = String(customer.email || "").trim();
+      if (!custEmail) {
+        return sendJson(res, 422, { ok: false, errors: ["This customer has no email on file — the quote send needs one. Add it on the customer record first."] });
+      }
+
+      // Property — explicit pick, else the only one, else selector list.
+      const custProps = (await properties.list()).filter((p) => p.customerId === customerId);
+      const propertyId = normalizeString(payload?.propertyId, 60);
+      let property = null;
+      if (propertyId) {
+        property = custProps.find((p) => p.id === propertyId) || null;
+        if (!property) return sendJson(res, 422, { ok: false, errors: ["That property doesn't belong to this customer."] });
+      } else if (custProps.length === 1) {
+        property = custProps[0];
+      } else if (custProps.length > 1) {
+        return sendJson(res, 422, {
+          ok: false,
+          code: "property_required",
+          properties: custProps.map((p) => ({ id: p.id, address: p.address || "(no address)" })),
+          errors: ["This customer has multiple properties — pick one."]
+        });
+      }
+
+      // Zone count — explicit selection > documented zones[] > declared
+      // zoneCount. Nothing on file and nothing picked → the modal asks.
+      const zonesParam = Number(payload?.zoneCount);
+      const pickedZones = Number.isInteger(zonesParam) && zonesParam >= 1 ? zonesParam : 0;
+      const documentedZones = Array.isArray(property?.system?.zones) ? property.system.zones.length : 0;
+      const declaredZones = Number(property?.system?.zoneCount) || 0;
+      const zones = pickedZones || documentedZones || declaredZones;
+      if (!zones) {
+        return sendJson(res, 422, {
+          ok: false,
+          code: "zone_count_required",
+          errors: ["No zone count on file for this property — pick one (it saves back to the property for next time)."]
+        });
+      }
+      // Save-back (brief §3E) — only when the property has no documented
+      // zones (those outrank a declared count) and the value changed.
+      if (property && pickedZones && !documentedZones && declaredZones !== pickedZones) {
+        try {
+          await properties.update(property.id, { system: { zoneCount: pickedZones } });
+        } catch (err) {
+          console.warn("[smart-controller-quote] zoneCount save-back failed:", err?.message);
+        }
+      }
+
+      const tier = quotes.resolveControllerTier(zones, FEATURES);
+      if (!tier.ok) return sendJson(res, 422, { ok: false, errors: [tier.error] });
+
+      // Idempotency — return the existing open draft instead of minting
+      // a duplicate (re-running the action is a no-op, brief §4).
+      if (!tier.custom) {
+        const existingDraft = (await quotes.list()).find((q) =>
+          q.type === "ai_repair_quote" &&
+          q.narrativeKey === "smart-controller" &&
+          q.status === "draft" &&
+          (property ? q.propertyId === property.id
+                    : (q.customerId === customerId || q.customerEmail === custEmail.toLowerCase()))
+        );
+        if (existingDraft) {
+          return sendJson(res, 200, { ok: true, existing: true, quote: existingDraft, leadId: existingDraft.leadId });
+        }
+      }
+
+      // Lead row — the CRM anchor the send/accept rails ride on (same
+      // as the chat path: activity timeline, portal token, send target).
+      const now = new Date().toISOString();
+      const leadId = crypto.randomUUID();
+      const featureSel = selectedFeatures([{ key: tier.key, qty: 1 }]);
+      const lead = {
+        id: leadId,
+        createdAt: now,
+        status: "new",
+        source: resolveSource("admin_quote"),
+        customerId,
+        contact: {
+          name: String(customer.name || "").slice(0, 120),
+          phone: String(customer.phone || "").slice(0, 40),
+          email: custEmail,
+          address: String(property?.address || "").slice(0, 240),
+          notes: ""
+        },
+        features: featureSel,
+        totals: { expectedTotal: calcTotal(featureSel), submittedTotal: 0, currency: "CAD" },
+        context: {
+          pageUrl: "/admin/quote-folder",
+          userAgent: normalizeString(req.headers["user-agent"], 500),
+          mode: "admin_smart_controller",
+          transcript: ""
+        },
+        crm: defaultCrm(now),
+        portal: defaultPortal(leadId, now)
+      };
+      if (property) {
+        lead.propertyId = property.id;
+        lead.propertyLinkStatus = "linked";
+      }
+
+      // 17+ zones — custom branch: CRM lead only, never a priced quote
+      // (quoteType:"custom" honored; PCM-1600 is special-order).
+      if (tier.custom) {
+        lead.crm.activity.unshift({
+          at: now,
+          type: "update",
+          text: `Smart-controller upgrade — ${zones} zones is beyond the flat tiers (PCM-1600 special order). Custom quote needed; no auto-quote created.`
+        });
+        const leads = await readLeads();
+        leads.unshift(lead);
+        await writeLeads(leads);
+        if (property) {
+          try {
+            const ids = Array.isArray(property.leadIds) ? property.leadIds : [];
+            if (!ids.includes(leadId)) await properties.update(property.id, { leadIds: [...ids, leadId] });
+          } catch (err) { console.warn("[smart-controller-quote] property back-ref failed:", err?.message); }
+        }
+        const baseUrl = process.env.PUBLIC_BASE_URL || baseUrlFromReq(req);
+        const decorated = decorateLeadForAdmin(lead, req);
+        Promise.allSettled([
+          sendNewLeadEmail({ ...decorated, sourceLabel: `17+ ZONE controller — custom quote needed (${decorated.sourceLabel})` }, { baseUrl }),
+          sendNewLeadSms({ ...decorated, sourceLabel: "17+ ZONE controller — custom quote needed" }, { baseUrl })
+        ]).catch(() => {});
+        return sendJson(res, 200, { ok: true, custom: true, leadId, zones });
+      }
+
+      // Priced tiers — mint the draft quote (price snapshotted from the
+      // catalog; HST math mirrors validateQuotePayload).
+      const price = Math.round((Number(tier.item.price) || 0) * 100) / 100;
+      const hst = Math.round(price * quotes.HST_RATE * 100) / 100;
+      const total = Math.round((price + hst) * 100) / 100;
+      const hardware = (String(tier.item.label).match(/\(([^)]+)\)/) || [])[1] || "HPC-400";
+      const scope = `Smart controller upgrade — ${zones} zone${zones === 1 ? "" : "s"} (${hardware})`;
+      const quote = await quotes.create({
+        type: "ai_repair_quote",
+        status: "draft",
+        customerId,
+        customerEmail: custEmail,
+        propertyId: property?.id || null,
+        leadId,
+        source: { chatSessionId: null, pageUrl: "/admin/quote-folder", userAgent: req.headers["user-agent"] || null },
+        scope,
+        lineItems: [{ key: tier.key, label: tier.item.label, price, qty: 1, lineTotal: price }],
+        subtotal: price,
+        hst,
+        total,
+        intakeGuarantee: { applies: false, scope: "" },
+        narrativeKey: "smart-controller",
+        createdBy: session.uid || "admin"
+      });
+
+      lead.quoteId = quote.id;
+      lead.crm.activity.unshift({
+        at: now,
+        type: "update",
+        text: `Smart-controller quote ${quote.id} created (draft) — ${scope} · $${total.toFixed(2)} — review & send`
+      });
+      const leads = await readLeads();
+      leads.unshift(lead);
+      await writeLeads(leads);
+      if (property) {
+        try {
+          const ids = Array.isArray(property.leadIds) ? property.leadIds : [];
+          if (!ids.includes(leadId)) await properties.update(property.id, { leadIds: [...ids, leadId] });
+        } catch (err) { console.warn("[smart-controller-quote] property back-ref failed:", err?.message); }
+      }
+
+      // Review-queue alert — same DRAFT flag the chat path uses, so the
+      // admin inbox reads consistently no matter where the draft came from.
+      const baseUrl = process.env.PUBLIC_BASE_URL || baseUrlFromReq(req);
+      const decorated = decorateLeadForAdmin(lead, req);
+      Promise.allSettled([
+        sendNewLeadEmail({ ...decorated, sourceLabel: `DRAFT controller quote — review & send (${decorated.sourceLabel})` }, { baseUrl }),
+        sendNewLeadSms({ ...decorated, sourceLabel: "DRAFT controller quote — review & send" }, { baseUrl })
+      ]).catch(() => {});
+
+      return sendJson(res, 201, { ok: true, quote, leadId, zones });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't create the smart-controller quote."] });
+    }
+  }
+
   // POST /api/quotes/:id/send-for-approval — Patrick's "tap Send" on a
   // draft ai_repair_quote (AI smart-controller upgrade brief, 2026-06-12).
   // Sends the customer a branded email with the quote PDF attached and a
@@ -10117,30 +10375,39 @@ async function handleApi(req, res, pathname) {
         return sendJson(res, 422, { ok: false, errors: ["No linked lead found for this quote — can't resolve the customer portal."] });
       }
       const lead = leads[leadIdx];
-      const sendEmail = payload?.sendEmail !== false;
-      const sendSms = payload?.sendSms !== false;
       const toEmail = String(payload?.email || q.customerEmail || lead.contact?.email || "").trim();
       const toPhone = String(payload?.phone || lead.contact?.phone || "").trim();
+      const sendEmail = payload?.sendEmail !== false;
+      // SMS defaults to "on when we have a number" — explicit true with
+      // no phone still errors, but a phoneless lead no longer blocks the
+      // email send (admin-created quotes may predate a phone on file).
+      const sendSms = payload?.sendSms != null ? payload.sendSms === true : !!toPhone;
       if (!sendEmail && !sendSms) {
         return sendJson(res, 422, { ok: false, errors: ["Pick at least one delivery channel (email or SMS)."] });
       }
       if (sendEmail && !toEmail) return sendJson(res, 422, { ok: false, errors: ["Customer email is required for email delivery."] });
       if (sendSms && !toPhone) return sendJson(res, 422, { ok: false, errors: ["Customer phone is required for SMS delivery."] });
 
+      // Mint the e-sign approval token — the customer reviews and SIGNS
+      // at /approve/<id>?t=<token> (signature canvas, same surface the
+      // on-site remote-approval flow uses). The lead-portal Accept
+      // button stays live as a fallback acceptance path.
       const channels = [];
       if (sendEmail) channels.push("email");
       if (sendSms) channels.push("sms");
-      await quotes.markSent(q.id, {
-        channels, toEmail, toPhone,
+      const token = crypto.randomBytes(16).toString("hex");
+      await quotes.markSentForApproval(q.id, {
+        token, channels, toEmail, toPhone,
         by: session.uid || "admin"
       });
+      const approveUrl = `${resolvePublicBaseUrl()}/approve/${encodeURIComponent(q.id)}?t=${token}`;
 
-      // Lead → "quoted" so the portal Accept button activates. The
-      // transition notification is intentionally NOT fired (see header
-      // comment) — drop the _statusTransition marker applyCrmUpdate sets.
+      // Lead → "quoted" so the portal stays consistent. The transition
+      // notification is intentionally NOT fired (see header comment) —
+      // drop the _statusTransition marker applyCrmUpdate sets.
       leads[leadIdx] = applyCrmUpdate(lead, {
         status: "quoted",
-        activityNote: `Quote ${q.id} sent to customer (${channels.join("+") || "manual"}) — awaiting acceptance in portal.`
+        activityNote: `Quote ${q.id} sent to customer (${channels.join("+") || "manual"}) — awaiting e-signature.`
       });
       delete leads[leadIdx]._statusTransition;
       await writeLeads(leads);
@@ -10148,12 +10415,12 @@ async function handleApi(req, res, pathname) {
       const portalToken = lead.portal?.token || portalTokenForId(lead.id);
       const portalUrl = joinUrl(resolvePublicBaseUrl(), `/portal/${portalToken}`);
       const firstName = (lead.contact?.name || "").split(" ")[0] || "there";
-      const results = { emailSent: false, emailError: null, smsSent: false, smsError: null, portalUrl };
+      const results = { emailSent: false, emailError: null, smsSent: false, smsError: null, portalUrl, approveUrl };
 
       // SMS — keep within one segment where possible.
       if (sendSms && process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_FROM_NUMBER) {
         try {
-          const smsBody = `Hi ${firstName}, PJL: your quote ${q.id} is ready — $${Number(q.total || 0).toFixed(2)} CAD incl. HST. Review + accept in your portal: ${portalUrl}`;
+          const smsBody = `Hi ${firstName}, PJL: your quote ${q.id} is ready — $${Number(q.total || 0).toFixed(2)} CAD incl. HST. Review + sign here: ${approveUrl}`;
           const sid = process.env.TWILIO_ACCOUNT_SID;
           const tok = process.env.TWILIO_AUTH_TOKEN;
           const url = `https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(sid)}/Messages.json`;
@@ -10196,25 +10463,31 @@ async function handleApi(req, res, pathname) {
     <p style="margin:0 0 14px;">Patrick reviewed your request and your quote (<strong>${q.id}</strong>) is ready:</p>
     <table style="width:100%;border-collapse:collapse;margin:14px 0;font-size:14px;">${lineRows}</table>
     <p style="margin:12px 0 18px;padding-top:10px;border-top:1px solid #e5e5dd;text-align:right;font-size:15px;"><strong>Total: $${Number(q.total || 0).toFixed(2)} CAD</strong> (incl. HST)</p>
-    <p style="margin:0 0 14px;font-size:13px;color:#555;">The full quote is attached as a PDF. When you're ready, accept it in your customer portal and we'll schedule the work.</p>
+    <p style="margin:0 0 14px;font-size:13px;color:#555;">The full quote is attached as a PDF. When you're ready, sign online — it takes a minute on any device — and we'll reach out to schedule the work.</p>
     <p style="margin:0 0 18px;text-align:center;">
-      <a href="${portalUrl}" style="display:inline-block;padding:14px 28px;background:#E07B24;color:#fff;text-decoration:none;border-radius:6px;font-weight:600;font-size:15px;">Review &amp; accept in your portal</a>
+      <a href="${approveUrl}" style="display:inline-block;padding:14px 28px;background:#E07B24;color:#fff;text-decoration:none;border-radius:6px;font-weight:600;font-size:15px;">Review &amp; sign online</a>
     </p>
-    <p style="margin:18px 0 0;font-size:13px;color:#777;">If the button doesn't work, paste this link:<br><span style="color:#1B4D2E;word-break:break-all;">${portalUrl}</span></p>
+    <p style="margin:18px 0 0;font-size:13px;color:#777;">If the button doesn't work, paste this link:<br><span style="color:#1B4D2E;word-break:break-all;">${approveUrl}</span></p>
+    <p style="margin:10px 0 0;font-size:13px;color:#777;">You can also find this quote any time in <a href="${portalUrl}" style="color:#1B4D2E;">your customer portal</a>.</p>
     <p style="margin:24px 0 0;font-size:13px;color:#777;">Questions? Reply to this email or call <a href="tel:+19059600181" style="color:#1B4D2E;">(905) 960-0181</a>.</p>
   </div>
   <p style="margin:16px 0 0;font-size:11px;color:#999;text-align:center;">PJL Land Services · Newmarket, Ontario · pjllandservices.com</p>
 </div>`.trim();
             // Quote PDF — buffered so sendMail doesn't race the stream.
+            // Dispatcher: narrativeKey quotes (smart-controller) get the
+            // rich multi-section layout with the live e-sign link baked
+            // into the acceptance block; plain repair quotes keep the
+            // one-page layout.
             const attachments = [];
             try {
-              const pdfDoc = generateQuotePdf(q, {
+              const pdfDoc = renderQuotePdf(q, {
                 customer: {
                   name: lead.contact?.name || "",
                   email: toEmail,
                   phone: toPhone
                 },
-                property: { address: lead.contact?.address || "" }
+                property: { address: lead.contact?.address || "" },
+                acceptanceUrl: approveUrl
               });
               const chunks = [];
               await new Promise((resolve, reject) => {

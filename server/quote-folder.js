@@ -430,6 +430,128 @@ if (showDeletedToggle) {
   });
 }
 
+// ---- +New Smart Controller Quote (brief 2026-06-12) -------------------
+// Selections only: customer (always), property (only when the customer
+// has several), zone count (only when none is on file — the pick saves
+// back to the property). The server auto-populates everything else and
+// answers with 422 codes (property_required / zone_count_required) that
+// progressively reveal the extra selectors.
+const scq = {
+  backdrop: document.getElementById("scqBackdrop"),
+  openBtn: document.getElementById("newControllerQuoteBtn"),
+  customer: document.getElementById("scqCustomer"),
+  propertyField: document.getElementById("scqPropertyField"),
+  property: document.getElementById("scqProperty"),
+  zonesField: document.getElementById("scqZonesField"),
+  zones: document.getElementById("scqZones"),
+  zonesNote: document.getElementById("scqZonesNote"),
+  status: document.getElementById("scqStatus"),
+  cancel: document.getElementById("scqCancel"),
+  create: document.getElementById("scqCreate"),
+  customersLoaded: false
+};
+
+function scqReset() {
+  scq.propertyField.hidden = true;
+  scq.property.innerHTML = "";
+  scq.zonesField.hidden = true;
+  scq.zones.value = "";
+  scq.zonesNote.textContent = "";
+  scq.status.textContent = "";
+  scq.create.disabled = false;
+}
+
+async function scqLoadCustomers() {
+  if (scq.customersLoaded) return;
+  try {
+    const r = await fetch("/api/customers", { cache: "no-store" });
+    const data = await r.json();
+    const customers = (data.customers || []).slice().sort((a, b) =>
+      String(a.name || "").localeCompare(String(b.name || ""))
+    );
+    scq.customer.innerHTML = `<option value="">Pick a customer…</option>` + customers.map((c) =>
+      `<option value="${escapeHtml(c.id)}">${escapeHtml(c.name || "(no name)")} — ${escapeHtml(c.email || "no email")}</option>`
+    ).join("");
+    scq.customersLoaded = true;
+  } catch (err) {
+    scq.customer.innerHTML = `<option value="">Couldn't load customers</option>`;
+  }
+}
+
+if (scq.openBtn) {
+  // Zone options 1–16 (priced tiers) + 17+ (custom branch, lead only).
+  scq.zones.innerHTML = `<option value="">Pick zone count…</option>` +
+    Array.from({ length: 16 }, (_, i) => `<option value="${i + 1}">${i + 1} zone${i ? "s" : ""}</option>`).join("") +
+    `<option value="17">17+ zones (custom — captures a lead, no priced quote)</option>`;
+
+  scq.openBtn.addEventListener("click", (e) => {
+    e.preventDefault();
+    scqReset();
+    scq.backdrop.hidden = false;
+    scqLoadCustomers();
+  });
+  scq.cancel.addEventListener("click", () => { scq.backdrop.hidden = true; });
+  scq.backdrop.addEventListener("click", (e) => {
+    if (e.target === scq.backdrop) scq.backdrop.hidden = true;
+  });
+  scq.customer.addEventListener("change", scqReset);
+
+  scq.create.addEventListener("click", async () => {
+    const customerId = scq.customer.value;
+    if (!customerId) { scq.status.textContent = "Pick a customer first."; return; }
+    const body = { customerId };
+    if (!scq.propertyField.hidden && scq.property.value) body.propertyId = scq.property.value;
+    if (!scq.zonesField.hidden && scq.zones.value) body.zoneCount = Number(scq.zones.value);
+    scq.create.disabled = true;
+    scq.status.textContent = "Creating…";
+    try {
+      const r = await fetch("/api/admin/smart-controller-quote", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body)
+      });
+      const data = await r.json().catch(() => ({}));
+      scq.create.disabled = false;
+      if (r.status === 422 && data.code === "property_required") {
+        scq.property.innerHTML = `<option value="">Pick a property…</option>` + (data.properties || []).map((p) =>
+          `<option value="${escapeHtml(p.id)}">${escapeHtml(p.address)}</option>`
+        ).join("");
+        scq.propertyField.hidden = false;
+        scq.status.textContent = "This customer has multiple properties — pick the one getting the controller.";
+        return;
+      }
+      if (r.status === 422 && data.code === "zone_count_required") {
+        scq.zonesField.hidden = false;
+        scq.zonesNote.textContent = "(saves back to the property for next time)";
+        scq.status.textContent = "No zone count on file — pick one.";
+        return;
+      }
+      if (!r.ok || !data.ok) {
+        scq.status.textContent = (data.errors && data.errors[0]) || `Couldn't create (${r.status})`;
+        return;
+      }
+      if (data.existing) {
+        scq.backdrop.hidden = true;
+        alert(`A smart-controller draft already exists for this property — ${data.quote.id}. Opening the folder so you can review and send it.`);
+        load();
+        return;
+      }
+      if (data.custom) {
+        scq.backdrop.hidden = true;
+        alert(`${data.zones}+ zones is a custom quote — captured as a CRM lead instead (no priced quote). You'll find it in the CRM.`);
+        load();
+        return;
+      }
+      scq.backdrop.hidden = true;
+      alert(`Draft ${data.quote.id} created — review the PDF, then tap "Send to customer".`);
+      load();
+    } catch (err) {
+      scq.create.disabled = false;
+      scq.status.textContent = err.message || "Couldn't create the quote.";
+    }
+  });
+}
+
 // New project proposal — admin path. Creates a draft via POST and
 // redirects into the builder.
 if (newProposalBtn) {

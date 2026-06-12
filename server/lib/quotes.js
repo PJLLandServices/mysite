@@ -250,6 +250,15 @@ function blankQuote() {
     total: 0,
     currency: "CAD",
 
+    // Narrative content block key (Smart Controller Upgrade brief,
+    // 2026-06-12). When set on an ai_repair_quote (currently only
+    // "smart-controller"), the PDF renderer + the /approve page swap to
+    // the rich multi-section layout, with sections synthesized at
+    // render time from server/lib/templates/ via quote-narratives.js.
+    // The quote record itself stays narrative-free — copy edits to the
+    // block apply to every render, past and future.
+    narrativeKey: null,
+
     // AI Intake Diagnosis Bonus — when set, the resulting WO shows a banner
     // telling the tech "AI-correct-diagnosis bonus applies for [scope] — credit
     // ONE HOUR of repair labour to the customer if the on-site diagnosis matches."
@@ -402,6 +411,7 @@ function hydrate(q) {
     history: Array.isArray(q?.history) ? q.history : [],
     deletedAt: typeof q?.deletedAt === "string" ? q.deletedAt : null,
     deletedBy: typeof q?.deletedBy === "string" ? q.deletedBy : null,
+    narrativeKey: typeof q?.narrativeKey === "string" ? q.narrativeKey : null,
     // project_proposal fields — defensive defaults for legacy records
     // that pre-date the proposal schema.
     branch: q?.branch || null,
@@ -627,6 +637,7 @@ async function create({
   hst = 0,
   total = 0,
   intakeGuarantee = null,
+  narrativeKey = null,
   createdBy = "system",
   validityDays = null,
   // project_proposal-only
@@ -686,6 +697,7 @@ async function create({
   if (intakeGuarantee) {
     q.intakeGuarantee = { ...q.intakeGuarantee, ...intakeGuarantee };
   }
+  if (narrativeKey) q.narrativeKey = String(narrativeKey);
   q.validUntil = plusDaysIso(validityDays);
   q.validUntilDate = q.validUntil;
   if (status === "sent") q.sentAt = nowIso();
@@ -1021,7 +1033,7 @@ async function attachWorkOrder(id, workOrderId) {
 // random hex string — sufficient entropy that brute-forcing the URL is
 // not a practical attack. Channels: ["email"], ["sms"], ["email","sms"],
 // or [] (manual share — Patrick copies the URL himself).
-async function markSentForApproval(id, { token, channels = [], toEmail = "", toPhone = "" } = {}) {
+async function markSentForApproval(id, { token, channels = [], toEmail = "", toPhone = "", by = "tech" } = {}) {
   if (!id || !token) throw new Error("markSentForApproval needs id + token");
   const records = await readAll();
   const idx = records.findIndex((q) => q.id === id);
@@ -1042,7 +1054,7 @@ async function markSentForApproval(id, { token, channels = [], toEmail = "", toP
   if (q.status === "draft" || q.status === "draft_preview") q.status = "sent";
   if (!q.sentAt) q.sentAt = ts;
   q.history.push({
-    ts, action: "sent_for_approval", by: "tech",
+    ts, action: "sent_for_approval", by,
     note: `${wasPreview ? "Promoted from preview, " : ""}via ${q.approval.sentVia.join("+") || "manual"}`
   });
   records[idx] = q;
