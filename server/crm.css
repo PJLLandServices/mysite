@@ -1215,6 +1215,44 @@ body.is-nav-open .pjl-nav-toggle-bar:nth-child(3) {
 .detail-quote__dates:empty {
   display: none;
 }
+/* Draft send control (AI smart-controller upgrade brief, 2026-06-12).
+   Full-width tap target — Patrick reviews drafts on his phone, so this
+   is sized for thumbs, not cursors. */
+.detail-quote__send {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(15, 31, 20, 0.12);
+}
+.detail-quote__send-btn {
+  display: block;
+  width: 100%;
+  padding: 12px 18px;
+  background: #E07B24;
+  color: #fff;
+  border: 0;
+  border-radius: 8px;
+  font-family: inherit;
+  font-size: 15px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.detail-quote__send-btn:hover { background: #C96A1B; }
+.detail-quote__send-btn[disabled] {
+  background: #C7C0A8;
+  cursor: not-allowed;
+}
+.detail-quote__send-note {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: rgba(15, 31, 20, 0.6);
+}
+.detail-quote__send-status {
+  margin: 6px 0 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: #1B4D2E;
+}
+.detail-quote__send-status:empty { display: none; }
 
 .lead-editor textarea {
   resize: vertical;

@@ -131,6 +131,15 @@ async function load() {
     } else if (leadHref) {
       actions.push(`<a href="${leadHref}">Open in CRM</a>`);
     }
+    // Draft AI quotes (smart-controller upgrades) get the "tap Send"
+    // action — fires /api/quotes/:id/send-for-approval (email + SMS +
+    // portal + PDF). Already-sent ones keep a "Re-send" so a failed
+    // email/SMS delivery has a retry surface. Proposals and on-site
+    // quotes have their own send flows; deleted rows restore first.
+    if (!isDeleted && q.type === "ai_repair_quote" && (q.status === "draft" || q.status === "sent")) {
+      const sendLabel = q.status === "draft" ? "Send to customer" : "Re-send";
+      actions.push(`<button type="button" class="qf-card__send" data-quote-id="${escapeHtml(q.id)}" data-action="send">${sendLabel}</button>`);
+    }
     // PDF download stays available on deleted rows (underlying record is
     // still on disk; per brief §4 edge cases).
     actions.push(`<a href="/api/admin/quote-folder/${encodeURIComponent(q.id)}/pdf" target="_blank" rel="noopener">PDF</a>`);
@@ -298,6 +307,40 @@ async function deleteQuote(quoteId) {
   }
 }
 
+// Patrick's "tap Send" on a draft AI quote. Confirms, fires the send
+// endpoint (email w/ PDF + SMS + portal unlock), and surfaces per-channel
+// failures — a markSent quote with a failed email needs a re-send, not
+// silence.
+async function sendQuote(quoteId) {
+  const cached = lastLoadedQuotes.find((q) => q.id === quoteId);
+  const customer = (cached && cached.customerEmail) || "(no email)";
+  const total = cached && Number.isFinite(Number(cached.total))
+    ? ` — $${Number(cached.total).toFixed(2)} incl. HST`
+    : "";
+  if (!confirm(`Send ${quoteId} to ${customer}${total}?\n\nThe customer gets an email with the quote PDF plus an SMS, and can accept it in their portal.`)) return;
+  try {
+    const r = await fetch(`/api/quotes/${encodeURIComponent(quoteId)}/send-for-approval`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({})
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok || !data.ok) {
+      alert((data.errors && data.errors[0]) || `Couldn't send (${r.status})`);
+      return;
+    }
+    const problems = [];
+    if (data.emailError) problems.push(`Email failed: ${data.emailError}`);
+    if (data.smsError) problems.push(`SMS failed: ${data.smsError}`);
+    if (problems.length) {
+      alert(`${quoteId} marked sent, but:\n${problems.join("\n")}\n\nUse Re-send to retry delivery.`);
+    }
+    load();
+  } catch (err) {
+    alert(err.message || "Couldn't send quote.");
+  }
+}
+
 async function restoreQuote(quoteId) {
   // No modal needed for restore — single-step action per brief §3.6.
   try {
@@ -333,6 +376,12 @@ containerEl.addEventListener("click", (event) => {
   if (deleteBtn) {
     event.preventDefault();
     deleteQuote(deleteBtn.dataset.quoteId);
+    return;
+  }
+  const sendBtn = event.target.closest("[data-action='send']");
+  if (sendBtn) {
+    event.preventDefault();
+    sendQuote(sendBtn.dataset.quoteId);
     return;
   }
   const restoreBtn = event.target.closest("[data-action='restore']");

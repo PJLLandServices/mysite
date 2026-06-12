@@ -259,7 +259,8 @@ Every box knows its parent and its child. No orphans.
 **Routing logic — when does AI quote vs. capture lead:**
 
 - If work is on the locked-rate list in `pricing.json` → AI generates `ai_repair_quote`
-- If work is custom (install, retrofit, 8+ zone install, mainline, drip retrofit, lighting, anything off-list) → AI captures lead, notifies Patrick, does NOT quote
+- **Smart-controller upgrade, 1-16 zones** (customer-requested HPC-400/Hydrawise install) → AI-quotable, but as a **DRAFT** `ai_repair_quote` (controller brief, 2026-06-12): the AI collects zone count + contact, the server resolves the tier from `minZones`/`maxZones` in `pricing.json` and mints the quote in `draft`; Patrick is notified ("DRAFT controller quote — review & send"), reviews in admin, and taps Send before anything quote-shaped reaches the customer. Acceptance rides the existing portal flow (lead `quoted` → `won`). The flat tier price is all-in installed — no service call on top. (A DEAD controller diagnosed mid-repair stays on the instant repair path: `service_call` + tier, auto-accepted at booking submit, AI-bonus eligible.)
+- If work is custom (install, **controller 17+ zones**, **controller accessories/add-ons — flow meter, rain sensor, lighting timer**, retrofit beyond a controller swap, 8+ zone install, mainline, drip retrofit, lighting, anything off-list) → AI captures lead, notifies Patrick, does NOT quote
 - If unsure → default to lead capture
 
 **Quote folder structure:**
@@ -1110,7 +1111,7 @@ The AI ("Patrick") is a customer-facing salesperson + diagnostic tool. The full 
 1. **All pricing comes from `pricing.json`.** AI is forbidden from inventing prices.
 2. **Service-call repairs:** AI quotes from price list → customer says yes → booking + ai_repair_quote created.
 3. **Seasonal services:** AI gives ballpark, drives to booking.
-4. **Installs / retrofits:** AI does NOT quote. Captures lead, hands to Patrick.
+4. **Installs / retrofits:** AI does NOT quote. Captures lead, hands to Patrick. **Exception (controller brief, 2026-06-12): smart-controller upgrades 1-16 zones** — flat, locked-rate, on-list — are AI-quotable as a **draft** `ai_repair_quote` (`kind:"controller_upgrade"` + `zones` in the QUOTE_JSON); Patrick reviews and taps Send before the customer gets the formal quote. 17+ zones and any accessory/add-on still route to lead capture.
 5. **AI-Correct-Diagnosis Bonus:** When AI quotes a repair from the price list, the resulting WO carries a bonus flag. If the on-site diagnosis matches the AI's quoted scope, the tech credits the customer ONE HOUR of repair labour free on the diagnosed work. PJL's only discount.
 6. **Quote audit trail:** Every AI repair quote saves the entire chat transcript as the source.
 7. **Notify Patrick immediately** when AI quotes anything.

@@ -82,6 +82,9 @@ const detailQuoteScope = document.getElementById("detailQuoteScope");
 const detailQuoteIntake = document.getElementById("detailQuoteIntake");
 const detailQuoteItems = document.getElementById("detailQuoteItems");
 const detailQuoteDates = document.getElementById("detailQuoteDates");
+const detailQuoteSendWrap = document.getElementById("detailQuoteSendWrap");
+const detailQuoteSendBtn = document.getElementById("detailQuoteSendBtn");
+const detailQuoteSendStatus = document.getElementById("detailQuoteSendStatus");
 const detailPropertySection = document.getElementById("detailPropertySection");
 const detailPropertyMeta = document.getElementById("detailPropertyMeta");
 const detailPropertyOpen = document.getElementById("detailPropertyOpen");
@@ -736,6 +739,62 @@ function renderQuoteDetail(lead) {
     parts.push(`WOs: ${q.workOrderIds.join(", ")}`);
   }
   detailQuoteDates.textContent = parts.join(" · ");
+
+  // Draft send control — only AI repair quotes still in draft (the
+  // smart-controller upgrade flow). Sent/accepted quotes hide it; the
+  // dates line above already tells that part of the story.
+  if (detailQuoteSendWrap) {
+    const sendable = q.type === "ai_repair_quote" && q.status === "draft";
+    detailQuoteSendWrap.hidden = !sendable;
+    if (sendable && detailQuoteSendBtn) {
+      detailQuoteSendBtn.dataset.quoteId = q.id || "";
+      detailQuoteSendBtn.disabled = false;
+    }
+    if (detailQuoteSendStatus) detailQuoteSendStatus.textContent = "";
+  }
+}
+
+// Tap Send on a draft quote → POST /api/quotes/:id/send-for-approval
+// (email w/ PDF + SMS + the portal Accept button activates), then
+// refresh so the card flips to "sent". Per-channel delivery failures
+// are surfaced — a sent quote with a failed email needs a retry, not
+// silence.
+if (detailQuoteSendBtn) {
+  detailQuoteSendBtn.addEventListener("click", async () => {
+    const quoteId = detailQuoteSendBtn.dataset.quoteId;
+    if (!quoteId) return;
+    const lead = leads.find((item) => item.id === activeLeadId);
+    const who = lead?.contact?.email || "the customer";
+    if (!confirm(`Send ${quoteId} to ${who}?\n\nThey get an email with the quote PDF plus an SMS, and can accept it in their portal.`)) return;
+    detailQuoteSendBtn.disabled = true;
+    if (detailQuoteSendStatus) detailQuoteSendStatus.textContent = "Sending…";
+    try {
+      const response = await fetch(`/api/quotes/${encodeURIComponent(quoteId)}/send-for-approval`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({})
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.ok) {
+        throw new Error((data.errors && data.errors[0]) || `Couldn't send (${response.status})`);
+      }
+      // Success feedback is the status chip flipping draft → sent on the
+      // refresh below (the send wrap hides itself once the quote isn't a
+      // draft, so a message inside it wouldn't survive the re-render).
+      // Per-channel delivery failures DO get an alert — the quote is
+      // marked sent either way and Patrick needs to know to retry.
+      const problems = [];
+      if (data.emailError) problems.push(`Email failed: ${data.emailError}`);
+      if (data.smsError) problems.push(`SMS failed: ${data.smsError}`);
+      if (problems.length) {
+        alert(`${quoteId} marked sent, but:\n${problems.join("\n")}\n\nUse Re-send in the Quote folder to retry delivery.`);
+      }
+      await loadLeads();
+    } catch (err) {
+      if (detailQuoteSendStatus) detailQuoteSendStatus.textContent = err.message || "Couldn't send quote.";
+      detailQuoteSendBtn.disabled = false;
+    }
+  });
 }
 
 function renderWorkOrderDetail(lead) {

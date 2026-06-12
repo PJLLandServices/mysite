@@ -417,10 +417,43 @@ function hydrate(q) {
   };
 }
 
+// Resolve a zone count to its controller tier using the minZones/maxZones
+// bounds on pricing.json controller items (added 2026-06-12). The bounds
+// live in the data, not here — this function just walks them, so a future
+// tier re-cut is a pricing.json edit with zero code change. maxZones:null
+// means open-ended (the 17+ custom tier). Returns:
+//   { ok: true, key, item, custom }  — custom=true means quoteType:"custom"
+//                                      (17+ → lead-only, never a priced quote)
+//   { ok: false, error }             — non-integer / out-of-range zone count
+function resolveControllerTier(zones, pricingItems) {
+  const n = Number(zones);
+  if (!Number.isInteger(n) || n < 1) {
+    return { ok: false, error: `Invalid zone count: ${zones}` };
+  }
+  for (const [key, item] of Object.entries(pricingItems || {})) {
+    if (!item || item.category !== "controller") continue;
+    const min = Number(item.minZones);
+    if (!Number.isFinite(min)) continue;
+    const max = item.maxZones == null ? Infinity : Number(item.maxZones);
+    if (n >= min && n <= max) {
+      return { ok: true, key, item, custom: item.quoteType === "custom" };
+    }
+  }
+  return { ok: false, error: `No controller tier covers ${n} zones.` };
+}
+
 // Validate a structured quote payload from the AI chat (the [QUOTE_JSON]
 // token). Each line item key must exist in the live pricing catalog. The
 // AI's stated total is recomputed from pricing.json — we trust the catalog,
 // not the model. Returns { ok, errors, lineItems, subtotal, hst, total }.
+//
+// Controller-upgrade payloads (kind: "controller_upgrade") additionally
+// carry a `zones` count; the tier key is re-resolved server-side from the
+// minZones/maxZones bounds — same philosophy as the price recompute: the
+// catalog, not the model, is the source of truth. A successful controller-
+// upgrade validation sets out.isControllerUpgrade so the intake handler
+// can route it down the draft-then-review-send path instead of the
+// instant-accept repair path.
 //
 // `pricingItems` is the pricing.json `items` map (passed in so quotes.js
 // stays decoupled from the server's PRICING global).
@@ -450,6 +483,15 @@ function validateQuotePayload(payload, pricingItems) {
       errors.push(`Invalid quantity for ${key}: ${raw && raw.qty}`);
       continue;
     }
+    // quoteType:"custom" items carry price 0 in the catalog (17+ zone
+    // controllers, smart_upgrade accessories, mainline repair, …). The
+    // prompt tells the AI never to emit QUOTE_JSON for these — this is
+    // the server-side backstop so a $0 "quote" can never be minted and
+    // the conversation degrades to a plain lead instead.
+    if (pricingItems[key].quoteType === "custom") {
+      errors.push(`${key} is a custom-quote item — capture as a lead, not an AI quote.`);
+      continue;
+    }
     const cat = pricingItems[key];
     const price = Number(cat.price) || 0;
     const lineTotal = Math.round(price * qty * 100) / 100;
@@ -464,6 +506,53 @@ function validateQuotePayload(payload, pricingItems) {
   }
 
   if (errors.length) return out;
+
+  // Controller-upgrade payloads: the AI collected a zone count and picked
+  // a tier; we re-resolve the tier from the data-driven bounds and correct
+  // the line if the AI got the boundary wrong (e.g. 7 zones → 8-16 tier).
+  // Hard requirements — exactly one controller line, qty 1, integer zone
+  // count, and a flat (non-custom) resolved tier. Any miss fails the whole
+  // payload, which the intake handles as graceful degradation: lead saved,
+  // no quote minted, Patrick quotes manually from the transcript.
+  if (payload.kind === "controller_upgrade") {
+    const controllerIdxs = out.lineItems
+      .map((li, i) => ((pricingItems[li.key] || {}).category === "controller" ? i : -1))
+      .filter((i) => i !== -1);
+    if (controllerIdxs.length !== 1) {
+      errors.push(`Controller-upgrade payload needs exactly one controller line (got ${controllerIdxs.length}).`);
+      return out;
+    }
+    const li = out.lineItems[controllerIdxs[0]];
+    if (li.qty !== 1) {
+      errors.push(`Controller line must have qty 1 (got ${li.qty}).`);
+      return out;
+    }
+    const tier = resolveControllerTier(payload.zones, pricingItems);
+    if (!tier.ok) {
+      errors.push(`Controller-upgrade payload needs a valid zone count — ${tier.error}`);
+      return out;
+    }
+    if (tier.custom) {
+      errors.push(`${payload.zones} zones is beyond the flat tiers — custom quote, capture as a lead.`);
+      return out;
+    }
+    if (tier.key !== li.key) {
+      // Same spirit as the price recompute: catalog bounds win. Swap the
+      // line to the resolved tier and surface the correction for logging.
+      out.tierCorrected = { from: li.key, to: tier.key, zones: Number(payload.zones) };
+      const price = Number(tier.item.price) || 0;
+      out.lineItems[controllerIdxs[0]] = {
+        key: tier.key,
+        label: tier.item.label || tier.key,
+        price,
+        qty: 1,
+        lineTotal: price
+      };
+      subtotal = out.lineItems.reduce((sum, l) => sum + (Number(l.lineTotal) || 0), 0);
+    }
+    out.isControllerUpgrade = true;
+    out.zones = Number(payload.zones);
+  }
 
   // Round to 2 decimals to avoid float drift creeping into stored totals.
   subtotal = Math.round(subtotal * 100) / 100;
@@ -955,6 +1044,42 @@ async function markSentForApproval(id, { token, channels = [], toEmail = "", toP
   q.history.push({
     ts, action: "sent_for_approval", by: "tech",
     note: `${wasPreview ? "Promoted from preview, " : ""}via ${q.approval.sentVia.join("+") || "manual"}`
+  });
+  records[idx] = q;
+  await writeAll(records);
+  return q;
+}
+
+// Flip a draft ai_repair_quote to "sent" for the portal-based send path
+// (AI smart-controller upgrade brief, 2026-06-12). Unlike
+// markSentForApproval there is NO approval token — the customer reviews
+// and accepts in their portal (the lead-status quoted→won flow), not on
+// the tokenized /approve page. Re-sending an already-sent quote is
+// allowed (Patrick re-fires the email); status stays "sent", sentAt
+// keeps its first value, and the history records each send.
+async function markSent(id, { channels = [], toEmail = "", toPhone = "", by = "admin", note = "" } = {}) {
+  const records = await readAll();
+  const idx = records.findIndex((q) => q.id === id);
+  if (idx === -1) return null;
+  const q = records[idx];
+  if (q.status !== "draft" && q.status !== "sent") {
+    throw new Error(`Quote ${id} is "${q.status}" — only a draft (or a re-send of a sent quote) can be sent.`);
+  }
+  const ts = nowIso();
+  q.status = "sent";
+  if (!q.sentAt) q.sentAt = ts;
+  q.approval = {
+    ...q.approval,
+    sentAt: ts,
+    sentVia: Array.isArray(channels) ? channels.slice() : [],
+    sentToEmail: String(toEmail || "").toLowerCase().trim(),
+    sentToPhone: String(toPhone || "").trim()
+  };
+  q.history.push({
+    ts,
+    action: "sent",
+    by,
+    note: note || `via ${(Array.isArray(channels) && channels.join("+")) || "manual"}`
   });
   records[idx] = q;
   await writeAll(records);
@@ -1664,6 +1789,7 @@ module.exports = {
   MAX_ATTACHMENT_BYTES,
   MAX_TOTAL_ATTACHMENT_BYTES,
   validateQuotePayload,
+  resolveControllerTier,
   list,
   get,
   listByLead,
@@ -1675,6 +1801,7 @@ module.exports = {
   expire,
   expireStaleQuotes,
   attachWorkOrder,
+  markSent,
   markSentForApproval,
   markAsPreview,
   convertPreviewToSent,

@@ -3080,6 +3080,12 @@ async function handleApi(req, res, pathname) {
           }
         }
       }
+      // Smart-controller upgrade (kind: "controller_upgrade" + zones in the
+      // QUOTE_JSON): rides the same ai_repair_quote rails but as a DRAFT —
+      // Patrick reviews in admin and taps Send before the customer gets the
+      // formal quote. Repair quotes keep the original instant flow where
+      // the booking-form submit IS the acceptance moment.
+      const isControllerDraft = !!(validatedQuote && validatedQuote.isControllerUpgrade);
 
       const result = validateLead(payload);
       if (!result.ok) return sendJson(res, 422, { ok: false, errors: result.errors });
@@ -3182,9 +3188,17 @@ async function handleApi(req, res, pathname) {
       // CRM on next refresh, and the failure is logged to the server log.
       const baseUrl = process.env.PUBLIC_BASE_URL || baseUrlFromReq(req);
       const decoratedLead = decorateLeadForAdmin(result.lead, req);
+      // Controller-upgrade drafts need Patrick to ACT (review & send), not
+      // just know — flag the admin email/SMS so they read as review-queue
+      // items. The customer ack ("received" — no pricing, "you'll hear back
+      // within one business day") stays unchanged; the formal quote email
+      // only goes out when Patrick taps Send.
+      const adminAlertLead = isControllerDraft
+        ? { ...decoratedLead, sourceLabel: `DRAFT controller quote — review & send (${decoratedLead.sourceLabel})` }
+        : decoratedLead;
       Promise.allSettled([
-        sendNewLeadEmail(decoratedLead, { baseUrl }),
-        sendNewLeadSms(decoratedLead, { baseUrl }),
+        sendNewLeadEmail(adminAlertLead, { baseUrl }),
+        sendNewLeadSms(adminAlertLead, { baseUrl }),
         notifyCustomer("received", decoratedLead, { baseUrl })
       ]).then((results) => {
         const labels = ["admin-email", "admin-sms", "customer"];
@@ -3214,9 +3228,19 @@ async function handleApi(req, res, pathname) {
         try {
           const igRaw = payload.quotePayload.intake_guarantee === true;
           const scopeText = String(payload.quotePayload.scope || "").slice(0, 200);
+          if (validatedQuote.tierCorrected) {
+            // The AI picked a tier that doesn't match the stated zone count
+            // — the catalog bounds won. Logged for prompt observability.
+            console.warn("[quotes] controller tier corrected:", validatedQuote.tierCorrected);
+          }
           const quote = await quotes.create({
             type: "ai_repair_quote",
-            status: "sent",
+            // Controller upgrades are drafts: Patrick reviews and taps Send
+            // (POST /api/quotes/:id/send-for-approval) before any quote
+            // reaches the customer. Repair quotes keep the instant flow —
+            // created sent + accepted, the booking-form submit IS the
+            // acceptance moment.
+            status: isControllerDraft ? "draft" : "sent",
             customerEmail: result.lead.contact?.email || "",
             propertyId: result.lead.propertyId || null,
             leadId: result.lead.id,
@@ -3235,7 +3259,7 @@ async function handleApi(req, res, pathname) {
               : { applies: false, scope: "" },
             createdBy: "ai_chat"
           });
-          await quotes.accept(quote.id, { leadId: result.lead.id, by: "customer" });
+          if (!isControllerDraft) await quotes.accept(quote.id, { leadId: result.lead.id, by: "customer" });
 
           // Write quoteId back onto the lead so the CRM, portal, and WO
           // creation can all find the source quote without a separate query.
@@ -3252,19 +3276,30 @@ async function handleApi(req, res, pathname) {
             const now = new Date().toISOString();
             const dollarTotal = `$${quote.total.toFixed(2)}`;
             const igTag = quote.intakeGuarantee?.applies ? " · AI bonus pending" : "";
-            // Two entries: created by AI, then accepted by customer.
-            // Unshift in chronological order so the most recent (accepted)
-            // ends up at the top of the timeline.
-            lead2.crm.activity.unshift({
-              at: now,
-              type: "update",
-              text: `AI repair quote ${quote.id} created — ${quote.scope || "no scope"} · ${dollarTotal}${igTag}`
-            });
-            lead2.crm.activity.unshift({
-              at: now,
-              type: "update",
-              text: `Quote ${quote.id} accepted (booking form submitted)`
-            });
+            if (isControllerDraft) {
+              // Draft path: one entry — the quote exists but nothing has
+              // been sent or accepted yet. The "sent" and "accepted"
+              // entries land later (Send button / portal accept).
+              lead2.crm.activity.unshift({
+                at: now,
+                type: "update",
+                text: `AI controller-upgrade quote ${quote.id} created (draft) — ${quote.scope || "no scope"} · ${dollarTotal} — review & send`
+              });
+            } else {
+              // Two entries: created by AI, then accepted by customer.
+              // Unshift in chronological order so the most recent (accepted)
+              // ends up at the top of the timeline.
+              lead2.crm.activity.unshift({
+                at: now,
+                type: "update",
+                text: `AI repair quote ${quote.id} created — ${quote.scope || "no scope"} · ${dollarTotal}${igTag}`
+              });
+              lead2.crm.activity.unshift({
+                at: now,
+                type: "update",
+                text: `Quote ${quote.id} accepted (booking form submitted)`
+              });
+            }
             lead2.crm.lastUpdated = now;
             await writeLeads(liveLeads2);
           }
@@ -4314,6 +4349,19 @@ async function handleApi(req, res, pathname) {
         const transition = leads[idx]._statusTransition;
         delete leads[idx]._statusTransition;
         await writeLeads(leads);
+
+        // Flip the linked Quote artifact too. Draft-then-send controller
+        // quotes arrive here in "sent" status; legacy ai_repair_quotes
+        // were already accepted at intake (quotes.accept is idempotent
+        // for those). Best-effort — the lead-level acceptance above is
+        // the source of truth for the CRM either way.
+        if (lead.quoteId) {
+          try {
+            await quotes.accept(lead.quoteId, { leadId: lead.id, by: "customer", note: "Accepted via portal" });
+          } catch (err) {
+            console.warn("[portal-accept] quote record flip failed:", err?.message || err);
+          }
+        }
 
         // Notify Patrick that the customer just accepted.
         const decorated = decorateLeadForAdmin(leads[idx], req);
@@ -10021,6 +10069,187 @@ async function handleApi(req, res, pathname) {
       return sendJson(res, 201, { ok: true, quote: revision });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't create revision."] });
+    }
+  }
+
+  // POST /api/quotes/:id/send-for-approval — Patrick's "tap Send" on a
+  // draft ai_repair_quote (AI smart-controller upgrade brief, 2026-06-12).
+  // Sends the customer a branded email with the quote PDF attached and a
+  // portal CTA, plus an SMS with the portal link; flips the quote
+  // draft → sent and the lead → "quoted" so the portal's existing
+  // Accept button lights up. Acceptance then rides the existing portal
+  // flow (lead quoted → won + quotes.accept on the linked record).
+  //
+  // No approval token / no /approve page here — ai_repair_quote
+  // acceptance has never required a signature (the binding moment stays
+  // the signed WO on-site); the portal IS the acceptance surface.
+  // Deliberately does NOT fire the generic "quote-ready" status-
+  // transition notification — this endpoint's own email/SMS replace it,
+  // so the lead status is updated without the transition hook.
+  //
+  // Re-send is allowed while the quote is still "sent" (e.g. customer
+  // lost the email) — history records each send.
+  const aiQuoteSendMatch = pathname.match(/^\/api\/quotes\/([^/]+)\/send-for-approval$/);
+  if (aiQuoteSendMatch && req.method === "POST") {
+    const session = await requireAdmin(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+    try {
+      const id = decodeURIComponent(aiQuoteSendMatch[1]);
+      const payload = await parseRequestBody(req).catch(() => ({}));
+      const q = await quotes.get(id);
+      if (!q) return sendJson(res, 404, { ok: false, errors: ["Quote not found."] });
+      if (q.deletedAt) {
+        return sendJson(res, 409, {
+          ok: false,
+          error: "quote_deleted",
+          errors: ["This quote is in the Trash. Restore it before sending."]
+        });
+      }
+      if (q.type !== "ai_repair_quote") {
+        return sendJson(res, 422, { ok: false, errors: ["This send path is for AI repair quotes — proposals and on-site quotes have their own send actions."] });
+      }
+      if (q.status !== "draft" && q.status !== "sent") {
+        return sendJson(res, 409, { ok: false, errors: [`Quote is "${q.status}" — only a draft (or a re-send of a sent quote) can be sent.`] });
+      }
+      const leads = await readLeads();
+      const leadIdx = leads.findIndex((l) => l.id === q.leadId);
+      if (leadIdx === -1) {
+        return sendJson(res, 422, { ok: false, errors: ["No linked lead found for this quote — can't resolve the customer portal."] });
+      }
+      const lead = leads[leadIdx];
+      const sendEmail = payload?.sendEmail !== false;
+      const sendSms = payload?.sendSms !== false;
+      const toEmail = String(payload?.email || q.customerEmail || lead.contact?.email || "").trim();
+      const toPhone = String(payload?.phone || lead.contact?.phone || "").trim();
+      if (!sendEmail && !sendSms) {
+        return sendJson(res, 422, { ok: false, errors: ["Pick at least one delivery channel (email or SMS)."] });
+      }
+      if (sendEmail && !toEmail) return sendJson(res, 422, { ok: false, errors: ["Customer email is required for email delivery."] });
+      if (sendSms && !toPhone) return sendJson(res, 422, { ok: false, errors: ["Customer phone is required for SMS delivery."] });
+
+      const channels = [];
+      if (sendEmail) channels.push("email");
+      if (sendSms) channels.push("sms");
+      await quotes.markSent(q.id, {
+        channels, toEmail, toPhone,
+        by: session.uid || "admin"
+      });
+
+      // Lead → "quoted" so the portal Accept button activates. The
+      // transition notification is intentionally NOT fired (see header
+      // comment) — drop the _statusTransition marker applyCrmUpdate sets.
+      leads[leadIdx] = applyCrmUpdate(lead, {
+        status: "quoted",
+        activityNote: `Quote ${q.id} sent to customer (${channels.join("+") || "manual"}) — awaiting acceptance in portal.`
+      });
+      delete leads[leadIdx]._statusTransition;
+      await writeLeads(leads);
+
+      const portalToken = lead.portal?.token || portalTokenForId(lead.id);
+      const portalUrl = joinUrl(resolvePublicBaseUrl(), `/portal/${portalToken}`);
+      const firstName = (lead.contact?.name || "").split(" ")[0] || "there";
+      const results = { emailSent: false, emailError: null, smsSent: false, smsError: null, portalUrl };
+
+      // SMS — keep within one segment where possible.
+      if (sendSms && process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_FROM_NUMBER) {
+        try {
+          const smsBody = `Hi ${firstName}, PJL: your quote ${q.id} is ready — $${Number(q.total || 0).toFixed(2)} CAD incl. HST. Review + accept in your portal: ${portalUrl}`;
+          const sid = process.env.TWILIO_ACCOUNT_SID;
+          const tok = process.env.TWILIO_AUTH_TOKEN;
+          const url = `https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(sid)}/Messages.json`;
+          const auth = Buffer.from(`${sid}:${tok}`).toString("base64");
+          const body = new URLSearchParams({ To: toPhone, From: process.env.TWILIO_FROM_NUMBER, Body: smsBody });
+          const r = await fetch(url, {
+            method: "POST",
+            headers: { Authorization: `Basic ${auth}`, "Content-Type": "application/x-www-form-urlencoded" },
+            body: body.toString()
+          });
+          const data = await r.json().catch(() => ({}));
+          if (!r.ok) results.smsError = data?.message || `HTTP ${r.status}`;
+          else results.smsSent = true;
+        } catch (err) { results.smsError = err.message; }
+      } else if (sendSms) {
+        results.smsError = "Twilio not configured";
+      }
+
+      // Email — branded, line items inline, portal CTA, quote PDF attached.
+      if (sendEmail && process.env.GMAIL_USER && process.env.GMAIL_APP_PASSWORD) {
+        try {
+          let nodemailer;
+          try { nodemailer = require("nodemailer"); } catch { nodemailer = null; }
+          if (nodemailer) {
+            const transporter = nodemailer.createTransport({
+              service: "gmail",
+              auth: { user: process.env.GMAIL_USER, pass: process.env.GMAIL_APP_PASSWORD }
+            });
+            const lineRows = (q.lineItems || []).map((l) =>
+              `<tr><td style="padding:6px 0;">${(l.label || l.key || "").replace(/</g, "&lt;")} × ${l.qty}</td><td style="text-align:right;padding:6px 0;font-variant-numeric:tabular-nums;">$${Number(l.lineTotal).toFixed(2)}</td></tr>`
+            ).join("");
+            const html = `
+<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:560px;color:#1a1a1a;line-height:1.55;">
+  <div style="padding:24px 28px;background:#1B4D2E;border-radius:8px 8px 0 0;">
+    <div style="color:#EAF3DE;font-size:12px;letter-spacing:0.12em;text-transform:uppercase;font-weight:600;">PJL Land Services</div>
+    <h1 style="margin:6px 0 0;color:#fff;font-size:22px;">Your quote is ready.</h1>
+  </div>
+  <div style="padding:24px 28px;background:#FAFAF5;border:1px solid #e5e5dd;border-top:none;border-radius:0 0 8px 8px;">
+    <p style="margin:0 0 14px;">Hi ${firstName.replace(/</g, "&lt;")},</p>
+    <p style="margin:0 0 14px;">Patrick reviewed your request and your quote (<strong>${q.id}</strong>) is ready:</p>
+    <table style="width:100%;border-collapse:collapse;margin:14px 0;font-size:14px;">${lineRows}</table>
+    <p style="margin:12px 0 18px;padding-top:10px;border-top:1px solid #e5e5dd;text-align:right;font-size:15px;"><strong>Total: $${Number(q.total || 0).toFixed(2)} CAD</strong> (incl. HST)</p>
+    <p style="margin:0 0 14px;font-size:13px;color:#555;">The full quote is attached as a PDF. When you're ready, accept it in your customer portal and we'll schedule the work.</p>
+    <p style="margin:0 0 18px;text-align:center;">
+      <a href="${portalUrl}" style="display:inline-block;padding:14px 28px;background:#E07B24;color:#fff;text-decoration:none;border-radius:6px;font-weight:600;font-size:15px;">Review &amp; accept in your portal</a>
+    </p>
+    <p style="margin:18px 0 0;font-size:13px;color:#777;">If the button doesn't work, paste this link:<br><span style="color:#1B4D2E;word-break:break-all;">${portalUrl}</span></p>
+    <p style="margin:24px 0 0;font-size:13px;color:#777;">Questions? Reply to this email or call <a href="tel:+19059600181" style="color:#1B4D2E;">(905) 960-0181</a>.</p>
+  </div>
+  <p style="margin:16px 0 0;font-size:11px;color:#999;text-align:center;">PJL Land Services · Newmarket, Ontario · pjllandservices.com</p>
+</div>`.trim();
+            // Quote PDF — buffered so sendMail doesn't race the stream.
+            const attachments = [];
+            try {
+              const pdfDoc = generateQuotePdf(q, {
+                customer: {
+                  name: lead.contact?.name || "",
+                  email: toEmail,
+                  phone: toPhone
+                },
+                property: { address: lead.contact?.address || "" }
+              });
+              const chunks = [];
+              await new Promise((resolve, reject) => {
+                pdfDoc.on("data", (c) => chunks.push(c));
+                pdfDoc.on("end", resolve);
+                pdfDoc.on("error", reject);
+              });
+              attachments.push({
+                filename: `PJL-Quote-${q.id}.pdf`,
+                content: Buffer.concat(chunks),
+                contentType: "application/pdf"
+              });
+            } catch (err) {
+              console.warn("[quote-send] PDF attach failed:", err?.message);
+            }
+            await transporter.sendMail({
+              from: `"PJL Land Services" <${process.env.CUSTOMER_EMAIL || "info@pjllandservices.com"}>`,
+              to: toEmail,
+              replyTo: process.env.CUSTOMER_EMAIL || "info@pjllandservices.com",
+              subject: `PJL quote ${q.id} — ready for your review`,
+              html,
+              ...(attachments.length ? { attachments } : {})
+            });
+            results.emailSent = true;
+          } else {
+            results.emailError = "nodemailer not installed";
+          }
+        } catch (err) { results.emailError = err.message; }
+      } else if (sendEmail) {
+        results.emailError = "Gmail not configured";
+      }
+
+      return sendJson(res, 200, { ok: true, quote: await quotes.get(id), ...results });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't send quote."] });
     }
   }
 

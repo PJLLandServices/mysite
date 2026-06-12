@@ -416,6 +416,15 @@
             </div>
             <ul class="detail-quote__items" id="detailQuoteItems"></ul>
             <p class="detail-quote__dates" id="detailQuoteDates"></p>
+            <!-- Draft send control (AI smart-controller upgrade brief).
+                 Visible only while the quote is a draft: Patrick reviews
+                 the lines above, taps Send → email w/ PDF + SMS + the
+                 portal Accept button activates. -->
+            <div class="detail-quote__send" id="detailQuoteSendWrap" hidden>
+              <button type="button" class="detail-quote__send-btn" id="detailQuoteSendBtn">Send quote to customer</button>
+              <p class="detail-quote__send-note">Emails the quote PDF and texts the portal link. The customer accepts in their portal — nothing has been sent to them yet.</p>
+              <p class="detail-quote__send-status" id="detailQuoteSendStatus" role="status"></p>
+            </div>
           </section>
 
           <section class="detail-section">

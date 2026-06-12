@@ -158,6 +158,60 @@ for (const tier of PRICING.seasonal_tiers.commercial) {
     `seasonal_tiers.commercial["${tier.zones}"]: key_fall="${tier.key_fall}" exists in items`);
 }
 
+// ---- Controller zone→tier resolver (AI smart-controller upgrade brief,
+// 2026-06-12). The tier boundaries are DATA (minZones/maxZones on the
+// controller items); resolveControllerTier in server/lib/quotes.js walks
+// them. Two layers asserted here:
+//   1. The data itself — every controller item carries bounds, the bounds
+//      are contiguous from zone 1 with no overlaps, and exactly one tier
+//      is open-ended (maxZones: null → the 17+ custom tier).
+//   2. The resolver — boundary zone counts land on the expected key, the
+//      open-ended tier resolves as custom, junk input is rejected.
+const { resolveControllerTier } = require(path.join(ROOT, 'server/lib/quotes.js'));
+
+const controllerEntries = Object.entries(PRICING.items)
+  .filter(([, item]) => item.category === 'controller');
+assert(controllerEntries.length >= 2, `controller items exist in pricing.json (got ${controllerEntries.length})`);
+for (const [key, item] of controllerEntries) {
+  assert(Number.isInteger(item.minZones) && item.minZones >= 1,
+    `${key}: minZones is an integer >= 1 (got ${item.minZones})`);
+  assert(item.maxZones === null || (Number.isInteger(item.maxZones) && item.maxZones >= item.minZones),
+    `${key}: maxZones is null or an integer >= minZones (got ${item.maxZones})`);
+}
+const sortedTiers = controllerEntries
+  .slice()
+  .sort((a, b) => a[1].minZones - b[1].minZones);
+assert(sortedTiers[0][1].minZones === 1,
+  `controller tiers start at zone 1 (lowest minZones is ${sortedTiers[0][1].minZones})`);
+for (let i = 1; i < sortedTiers.length; i++) {
+  const prev = sortedTiers[i - 1][1];
+  const cur = sortedTiers[i][1];
+  assert(prev.maxZones !== null && cur.minZones === prev.maxZones + 1,
+    `controller tiers contiguous: ${sortedTiers[i][0]} starts at ${cur.minZones}, previous tier ends at ${prev.maxZones}`);
+}
+const openEnded = sortedTiers.filter(([, item]) => item.maxZones === null);
+assert(openEnded.length === 1 && openEnded[0][1].quoteType === 'custom',
+  `exactly one open-ended controller tier and it's quoteType custom (got ${openEnded.map(([k]) => k).join(', ') || 'none'})`);
+
+const TIER_EXPECTATIONS = [
+  [1, 'controller_1_4', false], [4, 'controller_1_4', false],
+  [5, 'controller_5_7', false], [7, 'controller_5_7', false],
+  [8, 'controller_8_16', false], [16, 'controller_8_16', false],
+  [17, 'controller_17_plus', true], [40, 'controller_17_plus', true]
+];
+for (const [zones, expectedKey, expectCustom] of TIER_EXPECTATIONS) {
+  const r = resolveControllerTier(zones, PRICING.items);
+  assert(r.ok === true && r.key === expectedKey,
+    `resolveControllerTier(${zones}) → ${expectedKey} (got ${r.ok ? r.key : `error: ${r.error}`})`);
+  assert(r.ok && r.custom === expectCustom,
+    `resolveControllerTier(${zones}) custom === ${expectCustom} (got ${r.custom})`);
+}
+for (const bad of [0, -3, 2.5, 'six', NaN, undefined]) {
+  const r = resolveControllerTier(bad, PRICING.items);
+  assert(r.ok === false,
+    `resolveControllerTier(${String(bad)}) rejects invalid input`);
+}
+
 console.log('');
 if (fail === 0) {
   console.log(`test-pricing: PASS — ${pass} assertions, 0 failures.`);

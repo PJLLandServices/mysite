@@ -1,5 +1,5 @@
 {
-  "_doc": "Single source of truth for all PJL pricing. EVERY pricing-aware file in this codebase reads from here. Do not hardcode prices anywhere else. Quote line items snapshot prices at creation time (lead.features captures price as-of-creation). Seasonal tier structure (residential 1-4/5-6/7-8/9-15/16+ and commercial 1-4/5-8/9+) was reconciled 2026-05-02 to match the live interactive calculators on sprinkler-spring-opening.html and sprinkler-fall-winterization.html — those calculators are the canonical customer-facing tier truth. Spring and fall use the same tier prices.",
+  "_doc": "Single source of truth for all PJL pricing. EVERY pricing-aware file in this codebase reads from here. Do not hardcode prices anywhere else. Quote line items snapshot prices at creation time (lead.features captures price as-of-creation). Seasonal tier structure (residential 1-4/5-6/7-8/9-15/16+ and commercial 1-4/5-8/9+) was reconciled 2026-05-02 to match the live interactive calculators on sprinkler-spring-opening.html and sprinkler-fall-winterization.html — those calculators are the canonical customer-facing tier truth. Spring and fall use the same tier prices. Controller items carry minZones/maxZones (added 2026-06-12 for the AI smart-controller upgrade flow) — the zone→tier resolver in server/lib/quotes.js reads these bounds, so tier boundaries are data-driven and testable (scripts/test-pricing.mjs asserts they're contiguous and non-overlapping). maxZones:null means open-ended (17+ → custom).",
   "currency": "CAD",
   "items": {
     "service_call":               { "label": "Service call (mobilization + quick assessment)",    "price": 95,    "category": "service",    "quoteType": "flat"     },
@@ -13,10 +13,10 @@
     "manifold_6valve":            { "label": "6-valve manifold rebuild (covers 4-6 valves)",      "price": 285,   "category": "valve",      "quoteType": "flat"     },
     "valve_hunter_pgv":           { "label": "Hunter PGV-100G valve (per valve replaced)",        "price": 74.95, "category": "valve",      "quoteType": "per-unit" },
 
-    "controller_1_4":             { "label": "Smart controller — 1-4 zones (HPC-400)",            "price": 595,   "category": "controller", "quoteType": "flat"     },
-    "controller_5_7":             { "label": "Smart controller — 5-7 zones (HPC-400 + PCM-300)",  "price": 750,   "category": "controller", "quoteType": "flat"     },
-    "controller_8_16":            { "label": "Smart controller — 8-16 zones (HPC-400 + modules)", "price": 1195,  "category": "controller", "quoteType": "flat"     },
-    "controller_17_plus":         { "label": "Smart controller — 17+ zones (custom quote)",       "price": 0,     "category": "controller", "quoteType": "custom"   },
+    "controller_1_4":             { "label": "Smart controller — 1-4 zones (HPC-400)",            "price": 595,   "category": "controller", "quoteType": "flat",   "minZones": 1,  "maxZones": 4    },
+    "controller_5_7":             { "label": "Smart controller — 5-7 zones (HPC-400 + PCM-300)",  "price": 750,   "category": "controller", "quoteType": "flat",   "minZones": 5,  "maxZones": 7    },
+    "controller_8_16":            { "label": "Smart controller — 8-16 zones (HPC-400 + modules)", "price": 1195,  "category": "controller", "quoteType": "flat",   "minZones": 8,  "maxZones": 16   },
+    "controller_17_plus":         { "label": "Smart controller — 17+ zones (custom quote)",       "price": 0,     "category": "controller", "quoteType": "custom", "minZones": 17, "maxZones": null },
 
     "wire_diagnostic":            { "label": "Wire diagnostics & simple repair (in valve box)",   "price": 187,   "category": "wire",       "quoteType": "flat"     },
     "wire_run_100ft":             { "label": "Wire run replacement — up to 100 ft",               "price": 345,   "category": "wire",       "quoteType": "flat"     },

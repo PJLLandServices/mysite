@@ -175,6 +175,15 @@
 }
 .qf-card__actions .qf-card__delete:hover { text-decoration: underline; }
 
+/* Draft-quote Send / Re-send action (AI smart-controller upgrade brief).
+   Brand orange so the one action that moves a draft forward stands out
+   from the navigation-style links around it. */
+.qf-card__actions .qf-card__send {
+  color: #B85A10;
+  font-weight: 700;
+}
+.qf-card__actions .qf-card__send:hover { text-decoration: underline; }
+
 /* Soft-deleted row styling — visible when the "Show deleted" toggle is
    on. Subdued opacity, strikethrough on the Q-ID, "Deleted" indicator. */
 .qf-card--deleted {
