@@ -1223,6 +1223,21 @@ body.is-nav-open .pjl-nav-toggle-bar:nth-child(3) {
   padding-top: 12px;
   border-top: 1px solid rgba(15, 31, 20, 0.12);
 }
+.detail-quote__preview-btn {
+  display: block;
+  width: 100%;
+  margin-bottom: 8px;
+  padding: 12px 18px;
+  background: #fff;
+  color: #1B4D2E;
+  border: 1.5px solid #1B4D2E;
+  border-radius: 8px;
+  font-family: inherit;
+  font-size: 15px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.detail-quote__preview-btn:hover { background: #EAF3DE; }
 .detail-quote__send-btn {
   display: block;
   width: 100%;

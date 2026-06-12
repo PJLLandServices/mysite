@@ -137,6 +137,12 @@ async function load() {
     // email/SMS delivery has a retry surface. Proposals and on-site
     // quotes have their own send flows; deleted rows restore first.
     if (!isDeleted && q.type === "ai_repair_quote" && (q.status === "draft" || q.status === "sent")) {
+      // "View as customer" opens the exact e-sign page the customer
+      // gets — drafts get a banner'd, non-signable preview link (dies
+      // when the real send rotates the token); sent quotes open the
+      // live link as-is.
+      const previewLabel = q.status === "draft" ? "View as customer" : "Customer link";
+      actions.push(`<button type="button" data-quote-id="${escapeHtml(q.id)}" data-action="preview">${previewLabel}</button>`);
       const sendLabel = q.status === "draft" ? "Send to customer" : "Re-send";
       actions.push(`<button type="button" class="qf-card__send" data-quote-id="${escapeHtml(q.id)}" data-action="send">${sendLabel}</button>`);
     }
@@ -341,6 +347,31 @@ async function sendQuote(quoteId) {
   }
 }
 
+// "View as customer" — opens the customer's exact e-sign page. The tab
+// is opened SYNCHRONOUSLY (before the fetch) so iOS Safari's popup
+// blocker doesn't eat it; the URL lands once the server answers.
+async function previewQuote(quoteId) {
+  const tab = window.open("about:blank", "_blank");
+  try {
+    const r = await fetch(`/api/quotes/${encodeURIComponent(quoteId)}/preview`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({})
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok || !data.ok || !data.previewUrl) {
+      if (tab) tab.close();
+      alert((data.errors && data.errors[0]) || `Couldn't open the preview (${r.status})`);
+      return;
+    }
+    if (tab) tab.location = data.previewUrl;
+    else window.location.href = data.previewUrl; // popup blocked — same-tab fallback
+  } catch (err) {
+    if (tab) tab.close();
+    alert(err.message || "Couldn't open the preview.");
+  }
+}
+
 async function restoreQuote(quoteId) {
   // No modal needed for restore — single-step action per brief §3.6.
   try {
@@ -382,6 +413,12 @@ containerEl.addEventListener("click", (event) => {
   if (sendBtn) {
     event.preventDefault();
     sendQuote(sendBtn.dataset.quoteId);
+    return;
+  }
+  const previewBtn = event.target.closest("[data-action='preview']");
+  if (previewBtn) {
+    event.preventDefault();
+    previewQuote(previewBtn.dataset.quoteId);
     return;
   }
   const restoreBtn = event.target.closest("[data-action='restore']");

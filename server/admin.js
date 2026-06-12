@@ -84,6 +84,7 @@ const detailQuoteItems = document.getElementById("detailQuoteItems");
 const detailQuoteDates = document.getElementById("detailQuoteDates");
 const detailQuoteSendWrap = document.getElementById("detailQuoteSendWrap");
 const detailQuoteSendBtn = document.getElementById("detailQuoteSendBtn");
+const detailQuotePreviewBtn = document.getElementById("detailQuotePreviewBtn");
 const detailQuoteSendStatus = document.getElementById("detailQuoteSendStatus");
 const detailPropertySection = document.getElementById("detailPropertySection");
 const detailPropertyMeta = document.getElementById("detailPropertyMeta");
@@ -750,8 +751,41 @@ function renderQuoteDetail(lead) {
       detailQuoteSendBtn.dataset.quoteId = q.id || "";
       detailQuoteSendBtn.disabled = false;
     }
+    if (sendable && detailQuotePreviewBtn) {
+      detailQuotePreviewBtn.dataset.quoteId = q.id || "";
+    }
     if (detailQuoteSendStatus) detailQuoteSendStatus.textContent = "";
   }
+}
+
+// View as customer — opens the exact e-sign page the customer will get
+// (PREVIEW banner, signing disabled; the link dies when the real send
+// rotates the token). Tab opened synchronously so iOS Safari's popup
+// blocker doesn't eat it.
+if (detailQuotePreviewBtn) {
+  detailQuotePreviewBtn.addEventListener("click", async () => {
+    const quoteId = detailQuotePreviewBtn.dataset.quoteId;
+    if (!quoteId) return;
+    const tab = window.open("about:blank", "_blank");
+    try {
+      const response = await fetch(`/api/quotes/${encodeURIComponent(quoteId)}/preview`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({})
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data.ok || !data.previewUrl) {
+        if (tab) tab.close();
+        if (detailQuoteSendStatus) detailQuoteSendStatus.textContent = (data.errors && data.errors[0]) || `Couldn't open the preview (${response.status})`;
+        return;
+      }
+      if (tab) tab.location = data.previewUrl;
+      else window.location.href = data.previewUrl; // popup blocked — same-tab fallback
+    } catch (err) {
+      if (tab) tab.close();
+      if (detailQuoteSendStatus) detailQuoteSendStatus.textContent = err.message || "Couldn't open the preview.";
+    }
+  });
 }
 
 // Tap Send on a draft quote → POST /api/quotes/:id/send-for-approval

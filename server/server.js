@@ -6983,12 +6983,15 @@ async function handleApi(req, res, pathname) {
         id: q.id,
         type: q.type,
         status: q.status,
-        // Preview mode flag — set when this quote is a tech-only preview
-        // (status === "draft_preview"). The approve page client uses
-        // this to surface the PREVIEW MODE banner and neuter the submit
-        // button. The /sign endpoint also refuses these server-side, so
-        // this is purely a UX disclosure.
-        isPreview: q.status === "draft_preview",
+        // Preview mode flag — set for tech-only previews
+        // (status === "draft_preview") AND for admin "view as customer"
+        // links on still-draft ai_repair_quotes (a draft with an
+        // approval token can only have come from the preview endpoint;
+        // real sends flip status to "sent" first). The approve page
+        // uses this to surface the PREVIEW MODE banner and neuter the
+        // submit button. The /sign endpoint also refuses both
+        // server-side, so this is purely a UX disclosure.
+        isPreview: q.status === "draft_preview" || q.status === "draft",
         scope: q.scope,
         lineItems: q.lineItems,
         subtotal: q.subtotal,
@@ -7041,11 +7044,11 @@ async function handleApi(req, res, pathname) {
       // draft_preview quote. The client UI also surfaces a PREVIEW
       // banner and intercepts the submit, but a stale tab / scripted
       // POST could route around that — this is the server-side enforce.
-      if (q.status === "draft_preview") {
+      if (q.status === "draft_preview" || q.status === "draft") {
         return sendJson(res, 409, {
           ok: false,
           code: "preview_only",
-          errors: ["This is a preview link — no acceptance can be recorded. The tech must send the real approval link first."]
+          errors: ["This is a preview link — no acceptance can be recorded. The quote has to be sent first."]
         });
       }
       if (q.signature?.signed) {
@@ -10511,6 +10514,48 @@ async function handleApi(req, res, pathname) {
       return sendJson(res, 201, { ok: true, quote, leadId, zones });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't create the smart-controller quote."] });
+    }
+  }
+
+  // POST /api/quotes/:id/preview — "View as customer" on an
+  // ai_repair_quote (2026-06-12). For a DRAFT: stamps a preview token
+  // (status stays draft) and returns the /approve URL — the page shows
+  // the PREVIEW banner, the submit is neutered client-side, and /sign
+  // refuses drafts server-side. Sending later mints a fresh token, so
+  // the preview link dies the moment the real one goes out. For a SENT
+  // quote: returns the LIVE customer link unchanged (never rotated —
+  // that would break the link already in the customer's inbox).
+  const aiQuotePreviewMatch = pathname.match(/^\/api\/quotes\/([^/]+)\/preview$/);
+  if (aiQuotePreviewMatch && req.method === "POST") {
+    const session = await requireAdmin(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+    try {
+      const id = decodeURIComponent(aiQuotePreviewMatch[1]);
+      const q = await quotes.get(id);
+      if (!q) return sendJson(res, 404, { ok: false, errors: ["Quote not found."] });
+      if (q.deletedAt) return sendJson(res, 409, { ok: false, errors: ["This quote is in the Trash. Restore it first."] });
+      if (q.type !== "ai_repair_quote") {
+        return sendJson(res, 422, { ok: false, errors: ["View-as-customer preview is for AI repair quotes — proposals and on-site quotes have their own preview flows."] });
+      }
+      if (q.status === "sent" && q.approval?.token) {
+        return sendJson(res, 200, {
+          ok: true,
+          live: true,
+          previewUrl: `${resolvePublicBaseUrl()}/approve/${encodeURIComponent(q.id)}?t=${q.approval.token}`
+        });
+      }
+      if (q.status !== "draft") {
+        return sendJson(res, 409, { ok: false, errors: [`Quote is "${q.status}" — nothing to preview.`] });
+      }
+      const token = crypto.randomBytes(16).toString("hex");
+      await quotes.markDraftPreview(q.id, { token, by: session.uid || "admin" });
+      return sendJson(res, 200, {
+        ok: true,
+        live: false,
+        previewUrl: `${resolvePublicBaseUrl()}/approve/${encodeURIComponent(q.id)}?t=${token}&preview=1`
+      });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't create the preview."] });
     }
   }
 

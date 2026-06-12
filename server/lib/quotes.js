@@ -1173,6 +1173,39 @@ async function refreshLineItems(id, { lineItems, subtotal, hst, total } = {}) {
   return q;
 }
 
+// Stamp a "view as customer" preview token on a DRAFT quote without
+// touching its status (admin quote-folder preview, 2026-06-12). Unlike
+// markAsPreview below, the record stays "draft": the stale-preview
+// sweep must never soft-delete a real reviewable draft, and the
+// folder's Send button keys off draft status. The token lets
+// /approve/<id>?t=… render the exact customer view; the approve GET
+// flags status:"draft" as isPreview (banner + neutered submit) and the
+// /sign route refuses drafts server-side. Sending later
+// (markSentForApproval) mints a FRESH token, which invalidates the
+// preview link by construction. Re-previewing rotates the token.
+async function markDraftPreview(id, { token, by = "admin" } = {}) {
+  if (!id || !token) throw new Error("markDraftPreview needs id + token");
+  const records = await readAll();
+  const idx = records.findIndex((q) => q.id === id);
+  if (idx === -1) return null;
+  const q = records[idx];
+  if (q.status !== "draft") {
+    throw new Error(`Quote ${id} is "${q.status}" — only drafts get preview links (sent quotes have a live customer link).`);
+  }
+  const ts = nowIso();
+  q.approval = {
+    token,
+    previewAt: ts,
+    sentVia: [],
+    sentToEmail: "",
+    sentToPhone: ""
+  };
+  q.history.push({ ts, action: "preview_generated", by, note: "View-as-customer preview link issued" });
+  records[idx] = q;
+  await writeAll(records);
+  return q;
+}
+
 // Mark an existing quote as a tech-only preview. Reuses the same
 // approval.token field that markSentForApproval uses, so /approve/<id>
 // renders the same customer view — but status stays "draft_preview"
@@ -1816,6 +1849,7 @@ module.exports = {
   markSent,
   markSentForApproval,
   markAsPreview,
+  markDraftPreview,
   convertPreviewToSent,
   sweepStalePreviewQuotes,
   refreshLineItems,
