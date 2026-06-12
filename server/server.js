@@ -1833,6 +1833,28 @@ function decorateLeadForAdmin(lead, req) {
   };
 }
 
+// Most recent known service address for a customer email, from the
+// records the rest of the system already trusts — the invoice bill-to
+// renders from exactly these. Leads first (newest), then work orders.
+// Returns "" when nothing is on record anywhere.
+async function lastKnownAddressForEmail(email) {
+  const target = String(email || "").toLowerCase().trim();
+  if (!target) return "";
+  try {
+    const hit = (await readLeads())
+      .filter((l) => String(l.contact?.email || "").toLowerCase().trim() === target && String(l.contact?.address || "").trim())
+      .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))[0];
+    if (hit) return String(hit.contact.address).trim();
+  } catch (_) { /* tolerate */ }
+  try {
+    const hit = (await workOrders.list())
+      .filter((w) => String(w.customerEmail || "").toLowerCase().trim() === target && String(w.address || "").trim())
+      .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))[0];
+    if (hit) return String(hit.address).trim();
+  } catch (_) { /* tolerate */ }
+  return "";
+}
+
 // Resolve the customer + property display blocks for a quote's PDF
 // render. Patrick's rule (2026-06-12): every quote must state the
 // customer's FULL information — name, home/service address, phone,
@@ -1876,10 +1898,16 @@ async function quoteRenderParties(q) {
   const billingStr = typeof billing === "string"
     ? billing
     : String(billing?.formatted || billing?.address || "");
+  // Address chain: property → the quote's own lead → the customer's
+  // OTHER leads / work orders by email (the invoice bill-to source) →
+  // billing address. Stops at the first hit.
+  let address = String(property?.address || leadContact?.address || "").trim();
+  if (!address) address = await lastKnownAddressForEmail(q?.customerEmail);
+  if (!address) address = billingStr;
   const customer = {
     name: property?.customerName || leadContact?.name || custRecord?.name || "",
     phone: property?.customerPhone || leadContact?.phone || custRecord?.phone || "",
-    address: property?.address || leadContact?.address || billingStr || "",
+    address,
     email: q?.customerEmail || leadContact?.email || custRecord?.email || ""
   };
   // Renderers read property.address ?? customer.address — hand back a
@@ -10221,6 +10249,7 @@ async function handleApi(req, res, pathname) {
       );
       const propertyId = normalizeString(payload?.propertyId, 60);
       let property = null;
+      let autoCreatedProperty = false;
       if (propertyId) {
         property = custProps.find((p) => p.id === propertyId) || null;
         if (!property) return sendJson(res, 422, { ok: false, errors: ["That property doesn't belong to this customer."] });
@@ -10234,11 +10263,35 @@ async function handleApi(req, res, pathname) {
           errors: ["This customer has multiple properties — pick one."]
         });
       } else {
-        return sendJson(res, 422, {
-          ok: false,
-          code: "property_missing",
-          errors: ["This customer has no property on file — the quote needs a service address. Add their property (Properties → New) and re-run; the zone count will save there too."]
-        });
+        // No property on file — but the system may already KNOW the
+        // address from this customer's prior leads / work orders (the
+        // invoice bill-to renders from those same records). Auto-create
+        // the property from the most recent one so the quote ships with
+        // its service address and the zone count has a home. Only when
+        // nothing is on record anywhere does this 422.
+        const knownAddress = await lastKnownAddressForEmail(custEmail);
+        if (knownAddress) {
+          try {
+            property = await properties.create({
+              customerId,
+              address: knownAddress,
+              customerName: customer.name || "Customer",
+              customerEmail: custEmail,
+              customerPhone: customer.phone || ""
+            });
+            autoCreatedProperty = true;
+            console.log(`[smart-controller-quote] auto-created property ${property.id} for ${custEmail} from prior service records (${knownAddress})`);
+          } catch (err) {
+            console.warn("[smart-controller-quote] property auto-create failed:", err?.message);
+          }
+        }
+        if (!property) {
+          return sendJson(res, 422, {
+            ok: false,
+            code: "property_missing",
+            errors: ["This customer has no property on file and no address in any prior lead or work order — add their property (Properties → New) and re-run; the zone count will save there too."]
+          });
+        }
       }
       if (!String(property.address || "").trim()) {
         return sendJson(res, 422, {
@@ -10424,6 +10477,13 @@ async function handleApi(req, res, pathname) {
       });
 
       lead.quoteId = quote.id;
+      if (autoCreatedProperty) {
+        lead.crm.activity.unshift({
+          at: now,
+          type: "update",
+          text: `Property auto-created from this customer's prior service records — ${property.address}`
+        });
+      }
       lead.crm.activity.unshift({
         at: now,
         type: "update",
