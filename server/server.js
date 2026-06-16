@@ -3606,12 +3606,19 @@ async function handleApi(req, res, pathname) {
         console.error("[new-customer] property attach failed:", err?.message || err);
       }
 
-      // Admin notification — fire-and-forget. decorateLeadForAdmin
-      // hydrates sourceLabel + the CRM "Open in CRM" link target.
+      // Admin notifications (email + SMS) — fire-and-forget, mirroring the
+      // /api/quotes intake path so every lead source alerts Patrick the same
+      // way. Both run AFTER the honeypot + rate-limit gate above and after the
+      // lead is persisted; a Twilio/Gmail throw is caught here so it can never
+      // fail the intake. decorateLeadForAdmin hydrates sourceLabel (drives the
+      // SMS body + email subject) + the CRM "Open in CRM" link target.
       const baseUrl = process.env.PUBLIC_BASE_URL || baseUrlFromReq(req);
       const decorated = decorateLeadForAdmin(lead, req);
       sendNewLeadEmail(decorated, { baseUrl }).catch((err) => {
         console.error("[new-customer] admin email failed:", err?.message || err);
+      });
+      sendNewLeadSms(decorated, { baseUrl }).catch((err) => {
+        console.error("[new-customer] admin SMS failed:", err?.message || err);
       });
 
       return sendJson(res, 200, { ok: true });
