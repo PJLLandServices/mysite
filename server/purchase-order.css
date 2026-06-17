@@ -39,6 +39,43 @@
   color: #1F2A22;
 }
 .po-line-total { color: #1B4D2E; font-size: 15px; }
+/* Editable qty field (draft POs). 16px font dodges iOS zoom-on-focus;
+   44px min-height keeps it comfortably tappable. */
+.po-line-qty-input {
+  width: 100%;
+  min-height: 44px;
+  padding: 6px 8px;
+  border: 1px solid #D8D5C5;
+  border-radius: 6px;
+  background: #FFFFFF;
+  font-family: "Barlow Condensed", sans-serif;
+  font-weight: 700;
+  font-size: 16px;
+  text-align: center;
+  color: #1F2A22;
+  -moz-appearance: textfield;
+}
+.po-line-qty-input::-webkit-outer-spin-button,
+.po-line-qty-input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+.po-line-qty-input:focus {
+  outline: none;
+  border-color: #1B4D2E;
+  box-shadow: 0 0 0 2px rgba(27, 77, 46, 0.15);
+}
+/* Locked (sent/received/cancelled): render as plain right-aligned text,
+   matching the old static display. */
+.po-line-qty-input:disabled {
+  background: transparent;
+  border-color: transparent;
+  text-align: right;
+  padding-right: 0;
+  color: #1F2A22;
+  -webkit-text-fill-color: #1F2A22;
+  opacity: 1;
+}
 .po-line-remove {
   width: 32px;
   height: 32px;

@@ -222,7 +222,7 @@
               ${escapeHtml(desc)}
               ${recvIndicator}
             </span>
-            <span class="po-line-qty">${line.qty}</span>
+            <span class="po-line-qty"><input type="number" class="po-line-qty-input" min="1" step="1" inputmode="numeric" value="${line.qty}" aria-label="Quantity for ${escapeHtml(line.sku)}"${locked ? " disabled" : ""}></span>
             <span class="po-line-unit">${fmtCents(line.unitPriceCents)}</span>
             <span class="po-line-total">${fmtCents(line.lineTotalCents)}</span>
             <button type="button" class="po-line-remove" data-action="remove-line" aria-label="Remove line">×</button>
@@ -331,6 +331,52 @@
     input.addEventListener("blur", () => {
       if (state.saveTimer || state.pendingError) flushSave();
     });
+  }
+
+  // ---- Per-line qty edit (draft only) -------------------------------
+  // Editing a line's quantity PATCHes the FULL lineItems array — the
+  // server re-hydrates each line (recomputing lineTotalCents) and the
+  // subtotal, so we just swap state.po for the response and re-render.
+  // Validation: integers ≥ 1 only; bad input (0, negative, blank,
+  // non-numeric) snaps the field back to the last valid value.
+  async function saveLineQty(lineId, input) {
+    if (state.po.status !== "draft") return; // only drafts are editable
+    const line = (state.po.lineItems || []).find((l) => l.id === lineId);
+    if (!line) return;
+    const raw = String(input.value).trim();
+    const parsed = Math.floor(Number(raw));
+    if (raw === "" || !Number.isFinite(parsed) || parsed < 1) {
+      input.value = line.qty; // snap back to last valid value
+      return;
+    }
+    if (parsed === line.qty) { input.value = parsed; return; } // no-op (normalize "01" → "1")
+
+    const nextLines = state.po.lineItems.map((l) =>
+      l.id === lineId ? { ...l, qty: parsed } : l
+    );
+    setSaveState("saving");
+    state.pendingError = null;
+    try {
+      const r = await fetch(`/api/purchase-orders/${encodeURIComponent(state.poId)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ lineItems: nextLines })
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok || !data.ok) {
+        state.pendingError = (data.errors && data.errors[0]) || `Save failed (${r.status})`;
+        setSaveState("error");
+        input.value = line.qty; // snap back on failure
+        return;
+      }
+      state.po = data.purchaseOrder;
+      renderLines(); // re-renders qty inputs, per-line totals, and the subtotal
+      setSaveState("saved", state.po.updatedAt);
+    } catch (err) {
+      state.pendingError = err.message || "Save failed";
+      setSaveState("error");
+      input.value = line.qty;
+    }
   }
 
   // ---- Send modal (used for both initial send + re-send) ------------
@@ -536,6 +582,16 @@
     });
     els.receiveAll.addEventListener("click", setReceiveAllRemaining);
     els.receiveConfirm.addEventListener("click", confirmReceive);
+
+    // Per-line qty edits — delegated so it survives re-renders. "change"
+    // fires on blur (and after stepper taps), which feels less janky than
+    // per-keystroke saves on mobile.
+    els.lines.addEventListener("change", (event) => {
+      const input = event.target.closest && event.target.closest("input.po-line-qty-input");
+      if (!input || input.disabled) return;
+      const row = input.closest("[data-line-id]");
+      if (row) saveLineQty(row.dataset.lineId, input);
+    });
 
     els.reorderBtn.addEventListener("click", reorderPo);
     els.cancelBtn.addEventListener("click", cancelPo);
