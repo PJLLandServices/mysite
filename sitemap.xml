@@ -191,12 +191,10 @@
     <changefreq>monthly</changefreq>
     <priority>0.8</priority>
   </url>
-  <url>
-    <loc>https://www.pjllandservices.com/irrigation-zone-schedule.html</loc>
-    <lastmod>2026-06-05</lastmod>
-    <changefreq>yearly</changefreq>
-    <priority>0.3</priority>
-  </url>
+  <!-- irrigation-zone-schedule.html is intentionally noindex (a fillable
+       print/PDF tool, not a search target), so it is deliberately NOT listed
+       here -- a sitemap entry on a noindexed URL is the exact conflict Search
+       Console flags as "Excluded by 'noindex' tag." -->
   <url>
     <loc>https://www.pjllandservices.com/faq.html</loc>
     <lastmod>2026-04-30</lastmod>
