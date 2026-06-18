@@ -408,7 +408,8 @@ const LEGACY_REDIRECTS = {
   "/landscapelighting": "/landscape-lighting.html",
   "/services": "/sprinkler-systems.html",
   "/privacypolicy": "/privacy-policy.html",
-  "/terms-of-service": "/terms-of-service.html"
+  "/terms-of-service": "/terms-of-service.html",
+  "/blog": "/blog.html"
 };
 
 function normalizeString(value, maxLength = 400) {
@@ -16198,9 +16199,36 @@ async function renderPortalWithOg(req, res, pathname, url) {
   }
 }
 
+// Branded 404. Unmatched routes must return the site's 404 page with a real
+// 404 status and NEVER bubble a 5xx — a 502/500 tells Google "temporary, retry
+// later" so dead Wix URLs linger in the index instead of dropping. Best-effort:
+// if 404.html is missing or unreadable we still return a 404 (plain text), and
+// we never write headers twice.
+async function serveNotFound(req, res) {
+  let body = "Not found";
+  let contentType = "text/plain; charset=utf-8";
+  try {
+    body = await fs.readFile(path.join(SITE_DIR, "404.html"), "utf8");
+    contentType = "text/html; charset=utf-8";
+  } catch { /* fall back to the plain-text 404 below */ }
+  if (res.headersSent) return;
+  res.writeHead(404, { "content-type": contentType, "cache-control": "no-store" });
+  res.end(req.method === "HEAD" ? undefined : body);
+}
+
 async function serveStatic(req, res, pathname) {
   const { dir, relative } = resolveStaticTarget(pathname);
-  const safePath = path.normalize(decodeURIComponent(relative)).replace(/^(\.\.[/\\])+/, "");
+  // decodeURIComponent throws on a malformed percent-escape (e.g. a bare "%").
+  // Treat that as an unmatched route → branded 404, rather than letting the
+  // URIError bubble to the top-level handler and surface as a 5xx.
+  let decodedRelative;
+  try {
+    decodedRelative = decodeURIComponent(relative);
+  } catch {
+    await serveNotFound(req, res);
+    return;
+  }
+  const safePath = path.normalize(decodedRelative).replace(/^(\.\.[/\\])+/, "");
   const filePath = path.join(dir, safePath);
 
   // Sandbox: stay inside the chosen dir, never expose runtime data.
@@ -16283,8 +16311,7 @@ async function serveStatic(req, res, pathname) {
     });
     stream.pipe(res);
   } catch {
-    res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
-    res.end("Not found");
+    await serveNotFound(req, res);
   }
 }
 
@@ -16313,6 +16340,29 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(301, { location: legacyTarget + (url.search || ""), "cache-control": "no-store" });
     res.end();
     return;
+  }
+  // Legacy Wix /blog/<slug> ghost URLs → the real flat /blog-<slug>.html
+  // pages. Wix served posts under /blog/<slug>; ours live at /blog-<slug>.html.
+  // One wildcard rule clears the whole family of /blog/... 404s. We only 301
+  // when the flattened target actually exists on disk, so a junk /blog/<x>
+  // with no real post still returns a clean 404 instead of a 301→404 hop
+  // (brief: "do not redirect URLs that have no real equivalent").
+  if (req.method === "GET" || req.method === "HEAD") {
+    const blogGhost = pathname.match(/^\/blog\/([^/]+)\/?$/);
+    if (blogGhost) {
+      const flat = `/blog-${blogGhost[1]}.html`;
+      const flatPath = path.join(SITE_DIR, flat);
+      if (flatPath.startsWith(SITE_DIR)) {
+        try {
+          const st = await fs.stat(flatPath);
+          if (st.isFile()) {
+            res.writeHead(301, { location: flat + (url.search || ""), "cache-control": "no-store" });
+            res.end();
+            return;
+          }
+        } catch { /* no flat target — fall through to the normal 404 */ }
+      }
+    }
   }
   try {
     // CORS: applied early so preflights and cross-origin POSTs to /api/quotes
