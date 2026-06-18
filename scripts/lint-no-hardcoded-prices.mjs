@@ -72,10 +72,9 @@ const ALLOWLIST = [
   { file: 'blog-spring-sprinkler-opening.html', match: 'Pay the $90', reason: 'Rhetorical "From the truck" quote, intentionally rounded.' },
   { file: 'blog-spring-sprinkler-opening.html', match: '$4,000', reason: 'Hypothetical "system value" reference in og:description, not a service price.' },
   { file: 'sprinkler-repair.html', match: '$215 with the service call', reason: 'Aurora field-story narrative total ("Sixty-five minutes door to door. Total: $215 with the service call") — describes one specific past job, not a price-list line item.' },
-  { file: 'blog-sprinkler-cost-gta.html', match: '$304.95', reason: 'Worked-example sum of three published rates ($135 + $74.95 + $95) illustrating the whole-manifold rule. Each component is already a data-price token; this is just the arithmetic the reader walks through.' },
-  { file: 'blog-sprinkler-cost-gta.html', match: '$454.85', reason: 'Worked-example sum of three published rates ($135 + 3×$74.95 + $95) illustrating the whole-manifold rule on a full 3-valve box.' },
-  { file: 'blog-sprinkler-cost-gta.html', match: '$2,781', reason: 'Worked-example sum of $585 + 4×$549 (Tier 1 base + per-zone) illustrating a representative 4-zone install total.' },
-  { file: 'blog-sprinkler-cost-gta.html', match: '$4,253', reason: 'Worked-example sum of $749 + 6×$549 + $210 (Tier 2 base + per-zone + drip add-on) illustrating a representative 6-zone install with drip overlay.' },
+  // (blog-sprinkler-cost-gta.html retired Jun 2026 — folded into
+  //  blog-sprinkler-system-cost-ontario.html. Its worked-example allow-list
+  //  entries were removed with the file.)
 
   // ---- Real-but-not-yet-canonical PJL services ----
   // These ARE PJL service prices but don't have a pricing.json key (yet).
