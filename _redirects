@@ -6,3 +6,5 @@
 /services           /sprinkler-systems.html  301
 /privacypolicy      /privacy-policy.html     301
 /terms-of-service   /terms-of-service.html   301
+/blog               /blog.html               301
+/blog/*             /blog-:splat.html        301
