@@ -220,6 +220,116 @@
 
   <!-- Individual blog posts (chronological, newest first) -->
   <url>
+    <loc>https://www.pjllandservices.com/blog-sprinklers-running-wrong-time.html</loc>
+    <lastmod>2026-06-17</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.8</priority>
+    <image:image>
+      <image:loc>https://www.pjllandservices.com/hunter-hpc-400.jpg</image:loc>
+      <image:title>Why sprinklers run at the wrong time of day — controller fix, Newmarket &amp; GTA</image:title>
+    </image:image>
+  </url>
+  <url>
+    <loc>https://www.pjllandservices.com/blog-how-to-program-hunter-x-core.html</loc>
+    <lastmod>2026-06-17</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.75</priority>
+    <image:image>
+      <image:loc>https://www.pjllandservices.com/hunter-hpc-400.jpg</image:loc>
+      <image:title>How to program a Hunter X-Core sprinkler timer</image:title>
+    </image:image>
+  </url>
+  <url>
+    <loc>https://www.pjllandservices.com/blog-how-to-program-hunter-pro-c.html</loc>
+    <lastmod>2026-06-17</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.75</priority>
+    <image:image>
+      <image:loc>https://www.pjllandservices.com/hunter-hpc-400.jpg</image:loc>
+      <image:title>How to program a Hunter Pro-C sprinkler timer</image:title>
+    </image:image>
+  </url>
+  <url>
+    <loc>https://www.pjllandservices.com/blog-how-to-program-hunter-src.html</loc>
+    <lastmod>2026-06-17</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.75</priority>
+    <image:image>
+      <image:loc>https://www.pjllandservices.com/hunter-hpc-400.jpg</image:loc>
+      <image:title>How to program a Hunter SRC sprinkler timer</image:title>
+    </image:image>
+  </url>
+  <url>
+    <loc>https://www.pjllandservices.com/blog-how-to-program-rain-bird-esp-tm2.html</loc>
+    <lastmod>2026-06-17</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.75</priority>
+    <image:image>
+      <image:loc>https://www.pjllandservices.com/sprinkler-tech.png</image:loc>
+      <image:title>How to program a Rain Bird ESP-TM2 sprinkler timer</image:title>
+    </image:image>
+  </url>
+  <url>
+    <loc>https://www.pjllandservices.com/blog-how-to-program-orbit-sprinkler-timer.html</loc>
+    <lastmod>2026-06-17</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.75</priority>
+    <image:image>
+      <image:loc>https://www.pjllandservices.com/sprinkler-tech.png</image:loc>
+      <image:title>How to program an Orbit sprinkler timer</image:title>
+    </image:image>
+  </url>
+  <url>
+    <loc>https://www.pjllandservices.com/blog-water-pooling-around-sprinkler-head.html</loc>
+    <lastmod>2026-06-17</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.75</priority>
+    <image:image>
+      <image:loc>https://www.pjllandservices.com/leaking-valve-box.jpg</image:loc>
+      <image:title>Water pooling around a sprinkler head — leaking valve repair</image:title>
+    </image:image>
+  </url>
+  <url>
+    <loc>https://www.pjllandservices.com/blog-find-broken-sprinkler-pipe.html</loc>
+    <lastmod>2026-06-17</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.75</priority>
+    <image:image>
+      <image:loc>https://www.pjllandservices.com/pipe-break-repair.jpg</image:loc>
+      <image:title>How to find a broken sprinkler pipe — mainline vs zone leak</image:title>
+    </image:image>
+  </url>
+  <url>
+    <loc>https://www.pjllandservices.com/blog-sprinkler-head-not-spraying.html</loc>
+    <lastmod>2026-06-17</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.75</priority>
+    <image:image>
+      <image:loc>https://www.pjllandservices.com/hunter-pro-spray.jpg</image:loc>
+      <image:title>Sprinkler head not spraying — causes and fixes</image:title>
+    </image:image>
+  </url>
+  <url>
+    <loc>https://www.pjllandservices.com/blog-drip-line-keeps-failing.html</loc>
+    <lastmod>2026-06-17</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.75</priority>
+    <image:image>
+      <image:loc>https://www.pjllandservices.com/rainbird-xfd-dripline.jpg</image:loc>
+      <image:title>Why drip line keeps failing — pressure-compensating tubing</image:title>
+    </image:image>
+  </url>
+  <url>
+    <loc>https://www.pjllandservices.com/blog-sprinkler-coverage-dry-spots.html</loc>
+    <lastmod>2026-06-17</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.75</priority>
+    <image:image>
+      <image:loc>https://www.pjllandservices.com/hunter-pgp-rotor-action.jpg</image:loc>
+      <image:title>Sprinkler dry spots and overspray — how to fix coverage</image:title>
+    </image:image>
+  </url>
+  <url>
     <loc>https://www.pjllandservices.com/blog-drip-line-vs-soaker-hose-spray-gta.html</loc>
     <lastmod>2026-05-13</lastmod>
     <changefreq>monthly</changefreq>
