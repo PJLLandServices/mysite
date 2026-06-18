@@ -408,7 +408,10 @@ const LEGACY_REDIRECTS = {
   "/landscapelighting": "/landscape-lighting.html",
   "/services": "/sprinkler-systems.html",
   "/privacypolicy": "/privacy-policy.html",
-  "/terms-of-service": "/terms-of-service.html"
+  "/terms-of-service": "/terms-of-service.html",
+  // Cost-page consolidation (Jun 2026): the GTA cost post was folded into the
+  // Ontario cost guide (the SEO survivor). 301 the retired slug to it.
+  "/blog-sprinkler-cost-gta.html": "/blog-sprinkler-system-cost-ontario.html"
 };
 
 function normalizeString(value, maxLength = 400) {
