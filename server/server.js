@@ -9372,7 +9372,29 @@ async function handleApi(req, res, pathname) {
     const attachedLists = await materialLists.list({ parentType: "project", parentId: id, includeArchived: true });
     const partsMap = (PARTS && PARTS.parts) || {};
     const enrichedLists = attachedLists.map((rec) => ({ ...rec, totals: materialLists.computeTotals(rec, partsMap) }));
-    return sendJson(res, 200, { ok: true, project: proj, materialLists: enrichedLists });
+    // When the project is linked to a CRM customer, resolve a live summary
+    // so the page can show read-only contact + billing entity + negotiated
+    // rate without trusting the project's snapshot. Billing is displayed
+    // live (no project-level billTo snapshot — the final invoice resolves
+    // its own billTo from customerId at completion).
+    let linkedCustomer = null;
+    if (proj.customerId) {
+      try {
+        const c = await customers.get(proj.customerId, { withProperties: false });
+        if (c) {
+          linkedCustomer = {
+            id: c.id,
+            name: c.name || "",
+            email: c.email || "",
+            phone: c.phone || "",
+            billingName: c.billingName || "",
+            billingEmail: c.billingEmail || "",
+            negotiatedRates: c.negotiatedRates || {}
+          };
+        }
+      } catch (err) { /* tolerate — page falls back to the project snapshot */ }
+    }
+    return sendJson(res, 200, { ok: true, project: proj, materialLists: enrichedLists, linkedCustomer });
   }
   if (projectMatch && req.method === "PATCH") {
     try {

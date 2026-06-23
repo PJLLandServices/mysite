@@ -197,6 +197,105 @@
   border-color: #1B4D2E;
   outline: 2px solid rgba(27,77,46,0.15);
 }
+/* Read-only contact reflections of a linked customer — visibly inert. */
+.proj-fields input.is-readonly {
+  background: #F1EFE6;
+  color: #5A5A52;
+  cursor: default;
+}
+
+/* ---- Customer picker (pick-from-existing) ------------------------- */
+.proj-customer {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.proj-customer-field-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #7A7A72;
+}
+.proj-customer-linked {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid #CDE0D3;
+  border-radius: 8px;
+  background: #F3F8F4;
+}
+.proj-customer-linked-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.proj-customer-linked-main strong {
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 19px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  color: #1B4D2E;
+}
+.proj-customer-linked-id {
+  font-size: 12px;
+  color: #5A7A66;
+  text-decoration: none;
+  font-family: ui-monospace, monospace;
+}
+.proj-customer-linked-id:hover { text-decoration: underline; }
+.proj-customer-linked-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.proj-customer-linked-actions .pjl-btn {
+  padding: 10px 16px;
+  font-size: 13px;
+  min-height: 44px;
+}
+.proj-customer-unlinked {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-start;
+}
+.proj-customer-unlinked .pjl-btn { min-height: 44px; }
+.proj-customer-legacy {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 13px;
+  color: #6A6A60;
+  padding: 8px 10px;
+  border-left: 3px solid #E0BC5A;
+  background: #FCF8EC;
+  border-radius: 0 6px 6px 0;
+}
+.proj-customer-legacy strong { color: #4A4A42; }
+.proj-customer-legacy-hint { font-size: 12px; color: #8A8A80; }
+.proj-customer-billing {
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 13px;
+  color: #4A4A42;
+}
+.proj-customer-billing-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #9A9A8E;
+}
+.proj-customer-billing-self { color: #8A8A80; font-style: italic; }
 
 .proj-section {
   background: #fff;
