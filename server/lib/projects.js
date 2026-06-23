@@ -297,6 +297,32 @@ async function create({
   return rec;
 }
 
+// Resolve a customer by id into the snapshot payload a project stores
+// when it's linked to a CRM customer (Brief: pick-an-existing-customer).
+// Server-side source of truth — the route never trusts client-sent
+// contact values; it sends only the customerId and we resolve the rest
+// here. Throws customer_not_found when the id doesn't resolve so the
+// caller can surface a clear error. Property/address are deliberately
+// NOT part of the snapshot (a customer can own many job-site properties;
+// Patrick sets the project's property by hand).
+async function buildCustomerSnapshot(customerId) {
+  const customersLib = require("./customers");
+  const cust = await customersLib.get(customerId, { withProperties: false });
+  if (!cust) {
+    throw Object.assign(new Error(`Customer ${customerId} not found.`), { code: "customer_not_found" });
+  }
+  const negotiatedLabour = Number(cust?.negotiatedRates?.labour);
+  return {
+    customerId: cust.id,
+    customerName: cust.name || "",
+    customerEmail: cust.email || "",
+    customerPhone: cust.phone || "",
+    // null when the customer has no standing negotiated labour rate, so
+    // the caller can leave the project's existing rate untouched.
+    negotiatedLabourRate: Number.isFinite(negotiatedLabour) && negotiatedLabour > 0 ? negotiatedLabour : null
+  };
+}
+
 // Update top-level fields. Status transitions auto-stamp startedAt /
 // completedAt the first time a project enters those states. Archived is
 // sticky unless the caller explicitly moves it back to a non-archived
@@ -308,8 +334,42 @@ async function update(id, patch = {}) {
   const current = records[idx];
   const next = { ...current };
 
+  // Customer link (pick-an-existing-customer). When customerId is present
+  // we resolve the snapshot server-side and overwrite the contact fields
+  // — any free-text customerName/Email/Phone in the SAME patch is ignored
+  // in favour of the resolved values (catalog-is-source-of-truth). A
+  // customerId of null/"" unlinks the project WITHOUT blanking the
+  // last-known snapshot text, so legacy/unlinked rendering still works.
+  let customerLinkApplied = false;
+  if (Object.prototype.hasOwnProperty.call(patch, "customerId")) {
+    const rawId = patch.customerId == null ? "" : String(patch.customerId).trim();
+    if (rawId) {
+      const snap = await buildCustomerSnapshot(rawId); // throws customer_not_found
+      next.customerId = snap.customerId;
+      next.customerName = snap.customerName;
+      next.customerEmail = snap.customerEmail;
+      next.customerPhone = snap.customerPhone;
+      // Snapshot the negotiated labour rate into the project's EXISTING
+      // rate field (no parallel field). Guard: never clobber a rate that
+      // was locked from an accepted T&M proposal — that one bills forever
+      // and is immutable after conversion.
+      const lockedTAndM = current.billingMode === "time_and_material"
+        && Number.isFinite(Number(current.labourRateLocked))
+        && Number(current.labourRateLocked) > 0;
+      if (snap.negotiatedLabourRate != null && !lockedTAndM) {
+        next.labourRateLocked = snap.negotiatedLabourRate;
+      }
+      customerLinkApplied = true;
+    } else {
+      next.customerId = null;
+    }
+  }
+
   const allowedTop = ["name", "customerName", "customerEmail", "customerPhone", "address", "description", "notes", "propertyId", "sourceQuoteId"];
   for (const key of allowedTop) {
+    // When a customer was just linked, its resolved contact fields win —
+    // ignore any stale free-text contact values in the same patch.
+    if (customerLinkApplied && (key === "customerName" || key === "customerEmail" || key === "customerPhone")) continue;
     if (Object.prototype.hasOwnProperty.call(patch, key)) {
       if (key === "customerEmail") {
         next.customerEmail = String(patch.customerEmail || "").trim().toLowerCase().slice(0, 254);
@@ -348,6 +408,12 @@ async function update(id, patch = {}) {
   if (current.name !== next.name) appendHistory(next, { action: "renamed", note: next.name });
   if (current.propertyId !== next.propertyId) {
     appendHistory(next, { action: "property_changed", note: next.propertyId || "(detached)" });
+  }
+  if (current.customerId !== next.customerId) {
+    appendHistory(next, {
+      action: next.customerId ? "customer_linked" : "customer_unlinked",
+      note: next.customerId ? `${next.customerId} — ${next.customerName || ""}`.trim() : "(unlinked)"
+    });
   }
 
   records[idx] = next;
@@ -1313,6 +1379,7 @@ module.exports = {
   get,
   create,
   createFromProposal,
+  buildCustomerSnapshot,
   update,
   attachWorkOrder,
   detachWorkOrder,

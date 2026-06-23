@@ -81,10 +81,36 @@
             <input type="text" id="projName" maxlength="200" placeholder="Untitled project">
           </label>
           <div class="proj-fields">
-            <label>
-              <span>Customer name</span>
-              <input type="text" id="projCustomerName" maxlength="200">
-            </label>
+            <!-- Customer is pick-from-existing (no free-text). Picking
+                 snapshots contact + negotiated rates server-side and shows
+                 the billing entity live. Property + Address stay manual. -->
+            <div class="proj-fields-wide proj-customer">
+              <span class="proj-customer-field-label">Customer</span>
+              <!-- Linked: read-only pill + Change/Clear -->
+              <div class="proj-customer-linked" id="projCustomerLinked" hidden>
+                <div class="proj-customer-linked-main">
+                  <strong id="projCustomerLinkedName"></strong>
+                  <a class="proj-customer-linked-id" id="projCustomerLinkedLink" href="#"></a>
+                </div>
+                <div class="proj-customer-linked-actions">
+                  <button type="button" class="pjl-btn pjl-btn-outline" id="projCustomerChange">Change</button>
+                  <button type="button" class="pjl-btn pjl-btn-outline" id="projCustomerClear">Clear</button>
+                </div>
+              </div>
+              <!-- Unlinked: picker trigger + (legacy) stored-name prompt -->
+              <div class="proj-customer-unlinked" id="projCustomerUnlinked" hidden>
+                <button type="button" class="pjl-btn pjl-btn-primary" id="projCustomerPick">Pick a customer…</button>
+                <p class="proj-customer-legacy" id="projCustomerLegacy" hidden>
+                  <span>Currently <strong id="projCustomerLegacyName"></strong> — free-text, not linked to a CRM customer.</span>
+                  <span class="proj-customer-legacy-hint">Link to auto-load contact + negotiated rates.</span>
+                </p>
+              </div>
+              <!-- Billing entity (live from the linked customer) -->
+              <p class="proj-customer-billing" id="projCustomerBilling" hidden>
+                <span class="proj-customer-billing-label">Billing</span>
+                <span id="projCustomerBillingText"></span>
+              </p>
+            </div>
             <label>
               <span>Customer email</span>
               <input type="email" id="projCustomerEmail" maxlength="254">
@@ -251,6 +277,21 @@
       <div class="proj-modal-results" id="attachWoResults"></div>
       <div class="proj-modal-actions">
         <button type="button" class="pjl-btn pjl-btn-outline" id="attachWoCancel">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Customer picker modal — pick-from-existing. Mirrors the attach-WO
+       dialog. On select, the server snapshots contact + negotiated rates
+       from the customerId; this list is for searching only. -->
+  <div class="proj-modal-backdrop" id="customerPickModal" hidden role="dialog" aria-modal="true">
+    <div class="proj-modal">
+      <h3>Link a customer</h3>
+      <input type="search" class="proj-modal-search" id="customerPickSearch" placeholder="Search customers by name, email, or phone" autocomplete="off">
+      <p class="proj-empty" id="customerPickHint" style="margin-bottom:8px">Picking loads contact, billing entity, and negotiated rates. Property and address stay manual. Create new customers in the CRM first.</p>
+      <div class="proj-modal-results" id="customerPickResults"></div>
+      <div class="proj-modal-actions">
+        <button type="button" class="pjl-btn pjl-btn-outline" id="customerPickCancel">Close</button>
       </div>
     </div>
   </div>

@@ -25,10 +25,26 @@
     taskList: document.getElementById("projTaskList"),
     tasksProgress: document.getElementById("projTasksProgress"),
     name: document.getElementById("projName"),
-    customerName: document.getElementById("projCustomerName"),
     customerEmail: document.getElementById("projCustomerEmail"),
     customerPhone: document.getElementById("projCustomerPhone"),
     propertyId: document.getElementById("projPropertyId"),
+
+    // Customer picker (pick-from-existing).
+    customerLinked: document.getElementById("projCustomerLinked"),
+    customerLinkedName: document.getElementById("projCustomerLinkedName"),
+    customerLinkedLink: document.getElementById("projCustomerLinkedLink"),
+    customerChange: document.getElementById("projCustomerChange"),
+    customerClear: document.getElementById("projCustomerClear"),
+    customerUnlinked: document.getElementById("projCustomerUnlinked"),
+    customerPick: document.getElementById("projCustomerPick"),
+    customerLegacy: document.getElementById("projCustomerLegacy"),
+    customerLegacyName: document.getElementById("projCustomerLegacyName"),
+    customerBilling: document.getElementById("projCustomerBilling"),
+    customerBillingText: document.getElementById("projCustomerBillingText"),
+    customerPickModal: document.getElementById("customerPickModal"),
+    customerPickSearch: document.getElementById("customerPickSearch"),
+    customerPickResults: document.getElementById("customerPickResults"),
+    customerPickCancel: document.getElementById("customerPickCancel"),
     address: document.getElementById("projAddress"),
     description: document.getElementById("projDescription"),
     notes: document.getElementById("projNotes"),
@@ -81,12 +97,14 @@
     projectId: null,
     project: null,
     materialLists: [],
+    linkedCustomer: null,     // live summary of the linked CRM customer (or null)
     workOrders: new Map(),    // woId -> WO record (cached)
     saveTimer: null,
     saving: false,
     lastSavedAt: null,
     pendingError: null,
-    woSearchCache: null
+    woSearchCache: null,
+    customerSearchCache: null // /api/customers, loaded once for the picker
   };
 
   // ---- Utilities ----------------------------------------------------
@@ -138,6 +156,7 @@
       }
       state.project = data.project;
       state.materialLists = Array.isArray(data.materialLists) ? data.materialLists : [];
+      state.linkedCustomer = data.linkedCustomer || null;
       els.loading.hidden = true;
       els.page.hidden = false;
       els.savebar.hidden = false;
@@ -370,16 +389,71 @@
     }
 
     setIfNotFocused(els.name, state.project.name);
-    setIfNotFocused(els.customerName, state.project.customerName);
     setIfNotFocused(els.customerEmail, state.project.customerEmail);
     setIfNotFocused(els.customerPhone, state.project.customerPhone);
     setIfNotFocused(els.propertyId, state.project.propertyId || "");
     setIfNotFocused(els.address, state.project.address);
     setIfNotFocused(els.description, state.project.description);
     setIfNotFocused(els.notes, state.project.notes);
+
+    renderCustomerLink();
   }
   function setIfNotFocused(el, value) {
-    if (document.activeElement !== el) el.value = value || "";
+    if (el && document.activeElement !== el) el.value = value || "";
+  }
+
+  // Render the customer picker control + read-only contact reflection +
+  // live billing entity. Three visual states:
+  //   linked   — project.customerId set: pill + Change/Clear; email/phone
+  //              read-only reflections of the customer; billing shown.
+  //   legacy   — no customerId but a stored customerName: render the name
+  //              as a "link me" prompt; email/phone stay editable.
+  //   empty    — neither: just the "Pick a customer…" trigger.
+  function renderCustomerLink() {
+    const linked = !!state.project.customerId;
+    const lc = state.linkedCustomer;
+    const legacyName = state.project.customerName || "";
+
+    els.customerLinked.hidden = !linked;
+    els.customerUnlinked.hidden = linked;
+
+    if (linked) {
+      // Prefer the live customer summary; fall back to the project snapshot
+      // if the customer couldn't be resolved (e.g. deleted out from under).
+      els.customerLinkedName.textContent = (lc && lc.name) || legacyName || "(linked customer)";
+      els.customerLinkedLink.textContent = state.project.customerId;
+      els.customerLinkedLink.href = `/admin/customer/${encodeURIComponent(state.project.customerId)}`;
+    } else {
+      const hasLegacy = !!legacyName;
+      els.customerLegacy.hidden = !hasLegacy;
+      if (hasLegacy) els.customerLegacyName.textContent = legacyName;
+    }
+
+    // Email/phone are read-only reflections of the linked customer; for an
+    // unlinked legacy project they stay editable so nothing is lost.
+    setContactReadonly(els.customerEmail, linked);
+    setContactReadonly(els.customerPhone, linked);
+
+    // Billing entity — live from the linked customer (no project snapshot).
+    if (linked && lc) {
+      const billName = lc.billingName || lc.name || "";
+      const billEmail = lc.billingEmail || lc.email || "";
+      const selfBilled = !lc.billingName;
+      const parts = [];
+      if (billName) parts.push(escapeHtml(billName));
+      if (billEmail) parts.push(escapeHtml(billEmail));
+      els.customerBillingText.innerHTML = (parts.join(" · ") || "—") +
+        (selfBilled ? ` <span class="proj-customer-billing-self">(self-billed)</span>` : "");
+      els.customerBilling.hidden = false;
+    } else {
+      els.customerBilling.hidden = true;
+    }
+  }
+
+  function setContactReadonly(input, readonly) {
+    if (!input) return;
+    input.readOnly = !!readonly;
+    input.classList.toggle("is-readonly", !!readonly);
   }
 
   function renderWos() {
@@ -573,6 +647,110 @@
     els.attachWoSearch.value = "";
   }
 
+  // ---- Customer picker (pick-from-existing) -------------------------
+  async function loadCustomerSearchCache() {
+    if (state.customerSearchCache) return state.customerSearchCache;
+    try {
+      const r = await fetch("/api/customers", { credentials: "same-origin", cache: "no-store" });
+      const data = await r.json().catch(() => ({}));
+      state.customerSearchCache = Array.isArray(data.customers) ? data.customers : [];
+    } catch {
+      state.customerSearchCache = [];
+    }
+    return state.customerSearchCache;
+  }
+  function renderCustomerSearchResults(query) {
+    const all = state.customerSearchCache || [];
+    const q = String(query || "").trim().toLowerCase();
+    const qDigits = q.replace(/\D/g, "");
+    // Require a query — the full customer list can be long; this mirrors
+    // the property change-owner picker's type-to-search behaviour.
+    if (!q) {
+      els.customerPickResults.innerHTML = `<p class="proj-empty">Start typing to search customers.</p>`;
+      return;
+    }
+    const matches = all.filter((c) => {
+      const hay = [c.name, c.spouseName, c.email, c.spouseEmail, c.id].filter(Boolean).join(" ").toLowerCase();
+      if (hay.includes(q)) return true;
+      if (qDigits) {
+        const phoneDigits = `${c.phone || ""}${c.spousePhone || ""}`.replace(/\D/g, "");
+        if (phoneDigits.includes(qDigits)) return true;
+      }
+      return false;
+    }).slice(0, 30);
+    if (!matches.length) {
+      els.customerPickResults.innerHTML = `<p class="proj-empty">No customers match. Create the customer in the CRM first, then link it here.</p>`;
+      return;
+    }
+    const currentId = state.project.customerId;
+    els.customerPickResults.innerHTML = matches.map((c) => {
+      const isCurrent = c.id === currentId;
+      const rate = Number(c?.negotiatedRates?.labour);
+      const rateBadge = Number.isFinite(rate) && rate > 0 ? ` &middot; $${rate.toFixed(2)}/hr rate` : "";
+      return `
+        <button type="button" class="proj-modal-row ${isCurrent ? "is-disabled" : ""}" data-customer-id="${escapeHtml(c.id)}" ${isCurrent ? "disabled" : ""}>
+          <div>
+            <div style="font-weight:600;color:#1F2A22">${escapeHtml(c.name || "(unnamed)")}</div>
+            <div style="font-size:12px;color:#7A7A72">${escapeHtml(c.email || c.phone || c.id)}${rateBadge}</div>
+          </div>
+          <span style="font-size:12px;color:#7A7A72">${isCurrent ? "linked" : "+ link"}</span>
+        </button>
+      `;
+    }).join("");
+  }
+  async function openCustomerPickModal() {
+    els.customerPickModal.hidden = false;
+    els.customerPickSearch.value = "";
+    els.customerPickResults.innerHTML = `<p class="proj-empty">Loading customers…</p>`;
+    await loadCustomerSearchCache();
+    renderCustomerSearchResults("");
+    setTimeout(() => els.customerPickSearch.focus(), 100);
+  }
+  function closeCustomerPickModal() {
+    els.customerPickModal.hidden = true;
+    els.customerPickSearch.value = "";
+  }
+  // Link a customer — server resolves the snapshot from the id; we send
+  // only the id and reload so the live billing/rate summary refreshes.
+  async function linkCustomer(customerId) {
+    try {
+      const r = await fetch(`/api/projects/${encodeURIComponent(state.projectId)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ customerId })
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok || !data.ok) {
+        alert((data.errors && data.errors[0]) || "Couldn't link customer.");
+        return;
+      }
+      closeCustomerPickModal();
+      await loadProject();
+      setSaveState("saved", state.project.updatedAt);
+    } catch (err) {
+      alert(err.message || "Couldn't link customer.");
+    }
+  }
+  async function clearCustomer() {
+    if (!confirm("Unlink this customer? The contact details stay on the project but stop tracking the CRM record.")) return;
+    try {
+      const r = await fetch(`/api/projects/${encodeURIComponent(state.projectId)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ customerId: null })
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok || !data.ok) {
+        alert((data.errors && data.errors[0]) || "Couldn't unlink customer.");
+        return;
+      }
+      await loadProject();
+      setSaveState("saved", state.project.updatedAt);
+    } catch (err) {
+      alert(err.message || "Couldn't unlink customer.");
+    }
+  }
+
   // ---- Mutations ----------------------------------------------------
   async function attachWo(woId) {
     const r = await fetch(`/api/projects/${encodeURIComponent(state.projectId)}/attach-work-order`, {
@@ -676,6 +854,7 @@
       const data = await r.json().catch(() => ({}));
       if (data.ok && data.project) {
         state.project = data.project;
+        state.linkedCustomer = data.linkedCustomer || null;
         await loadExecBuildWos();
         await loadTaskPhotos();
         renderAll();
@@ -1350,7 +1529,6 @@
   // ---- Wire up ------------------------------------------------------
   function wire() {
     bindFieldInput(els.name, "name");
-    bindFieldInput(els.customerName, "customerName");
     bindFieldInput(els.customerEmail, "customerEmail");
     bindFieldInput(els.customerPhone, "customerPhone");
     bindFieldInput(els.propertyId, "propertyId");
@@ -1373,6 +1551,21 @@
       const btn = event.target.closest("[data-wo-id]");
       if (!btn || btn.disabled) return;
       attachWo(btn.dataset.woId);
+    });
+
+    // Customer picker
+    els.customerPick.addEventListener("click", openCustomerPickModal);
+    els.customerChange.addEventListener("click", openCustomerPickModal);
+    els.customerClear.addEventListener("click", clearCustomer);
+    els.customerPickCancel.addEventListener("click", closeCustomerPickModal);
+    els.customerPickModal.addEventListener("click", (event) => {
+      if (event.target === els.customerPickModal) closeCustomerPickModal();
+    });
+    els.customerPickSearch.addEventListener("input", () => renderCustomerSearchResults(els.customerPickSearch.value));
+    els.customerPickResults.addEventListener("click", (event) => {
+      const btn = event.target.closest("[data-customer-id]");
+      if (!btn || btn.disabled) return;
+      linkCustomer(btn.dataset.customerId);
     });
 
     els.wosList.addEventListener("click", (event) => {
