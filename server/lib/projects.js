@@ -117,6 +117,14 @@ function blankProject() {
     branch: null,
     // billingMode — "fixed_price" or "time_and_material".
     billingMode: null,
+    // buildTracking — set true to turn a MANUALLY-created project into a
+    // build/execution project (Customer-link follow-up brief, Jun 2026).
+    // Proposal-converted projects already light up the daily-log / task /
+    // status-update surfaces via branch + proposalSnapshot; a hand-made
+    // project has neither, so this flag is the explicit "I'm tracking
+    // build progress on this job" switch. Billing-neutral — it does NOT
+    // set billingMode, so the T&M billing surfaces stay dormant.
+    buildTracking: false,
     // labourRateLocked — snapshot of customRates.labour at conversion.
     // For T&M projects this is the rate that bills forever; for
     // fixed-price it's informational only. Immutable after conversion.
@@ -198,6 +206,7 @@ function hydrate(rec) {
     proposalSnapshot: rec?.proposalSnapshot || null,
     branch: rec?.branch || null,
     billingMode: rec?.billingMode || null,
+    buildTracking: rec?.buildTracking === true,
     labourRateLocked: rec?.labourRateLocked == null ? null : Number(rec.labourRateLocked),
     scopeChangeRequests: Array.isArray(rec?.scopeChangeRequests) ? rec.scopeChangeRequests : [],
     statusUpdates: Array.isArray(rec?.statusUpdates) ? rec.statusUpdates : [],
@@ -362,6 +371,18 @@ async function update(id, patch = {}) {
       customerLinkApplied = true;
     } else {
       next.customerId = null;
+    }
+  }
+
+  // Build-tracking switch — turns a manual project into an execution
+  // project so the daily-log / task / status-update surfaces appear.
+  // One-way in practice (the UI only offers "start"), but the field
+  // accepts false too in case a future flow needs to turn it back off.
+  if (Object.prototype.hasOwnProperty.call(patch, "buildTracking")) {
+    const wantOn = patch.buildTracking === true;
+    if (current.buildTracking !== wantOn) {
+      next.buildTracking = wantOn;
+      appendHistory(next, { action: wantOn ? "build_tracking_started" : "build_tracking_stopped" });
     }
   }
 

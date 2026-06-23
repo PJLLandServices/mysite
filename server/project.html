@@ -138,6 +138,19 @@
           </div>
         </section>
 
+        <!-- Build-tracking CTA — shown only on manual projects that aren't
+             yet tracking build progress. Tapping it lights up the tasks,
+             daily log, and status-update surfaces below. -->
+        <section class="proj-section proj-build-cta" id="projBuildCta" hidden>
+          <div class="proj-build-cta-inner">
+            <div class="proj-build-cta-copy">
+              <h2>Track build progress</h2>
+              <p>Log work days, hours, tasks, materials, and photos — and send the customer progress updates — right from this project.</p>
+            </div>
+            <button type="button" class="pjl-btn pjl-btn-primary" id="projStartBuildBtn">Start build tracking</button>
+          </div>
+        </section>
+
         <!-- Accepted proposal snapshot (Brief 1, May 2026).
              Only rendered when this project was spun from a project_proposal —
              reads from project.proposalSnapshot (frozen at conversion). -->
