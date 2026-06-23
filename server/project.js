@@ -24,6 +24,8 @@
     tasksPanel: document.getElementById("projTasksPanel"),
     taskList: document.getElementById("projTaskList"),
     tasksProgress: document.getElementById("projTasksProgress"),
+    buildCta: document.getElementById("projBuildCta"),
+    startBuildBtn: document.getElementById("projStartBuildBtn"),
     name: document.getElementById("projName"),
     customerEmail: document.getElementById("projCustomerEmail"),
     customerPhone: document.getElementById("projCustomerPhone"),
@@ -133,6 +135,15 @@
     return m ? decodeURIComponent(m[1]) : null;
   }
 
+  // A project shows the build/execution surfaces (tasks, daily log,
+  // status updates, action sidebar) when it came from a proposal
+  // (branch / proposalSnapshot set) OR was manually flipped into build
+  // mode via "Start build tracking" (buildTracking). Single predicate so
+  // every panel agrees.
+  function isBuildProject(p) {
+    return !!(p && (p.branch != null || p.proposalSnapshot != null || p.buildTracking === true));
+  }
+
   // ---- Boot ---------------------------------------------------------
   async function boot() {
     state.projectId = getProjectIdFromUrl();
@@ -195,6 +206,7 @@
   // ---- Render -------------------------------------------------------
   function renderAll() {
     renderHeader();
+    renderBuildCta();
     renderProposalPanel();
     renderTasks();
     renderDailyLog();
@@ -261,9 +273,9 @@
 
   function renderTasks() {
     const tasks = state.project.tasks || [];
-    // Always show the panel for build-mode (project with billingMode set)
-    // so the admin can add tasks even before the first one exists.
-    const isBuild = state.project.billingMode != null;
+    // Always show the panel for build/execution projects so the admin can
+    // add tasks even before the first one exists.
+    const isBuild = isBuildProject(state.project);
     if (!tasks.length && !isBuild) {
       els.tasksPanel.hidden = true;
       return;
@@ -454,6 +466,43 @@
     if (!input) return;
     input.readOnly = !!readonly;
     input.classList.toggle("is-readonly", !!readonly);
+  }
+
+  // The build-tracking CTA only shows on a non-archived project that
+  // isn't already a build/execution project. Once tapped (or for any
+  // proposal-derived project) it stays hidden — the daily-log surfaces
+  // take over.
+  function renderBuildCta() {
+    if (!els.buildCta) return;
+    const show = !isBuildProject(state.project) && state.project.status !== "archived";
+    els.buildCta.hidden = !show;
+  }
+
+  async function startBuildTracking() {
+    if (els.startBuildBtn) els.startBuildBtn.disabled = true;
+    try {
+      const r = await fetch(`/api/projects/${encodeURIComponent(state.projectId)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ buildTracking: true })
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok || !data.ok) {
+        alert((data.errors && data.errors[0]) || "Couldn't start build tracking.");
+        return;
+      }
+      // Full reload so the newly-revealed daily-log / sidebar surfaces
+      // pull their build-WO data.
+      await loadProject();
+      await loadExecBuildWos();
+      await loadTaskPhotos();
+      renderAll();
+      setSaveState("saved", state.project.updatedAt);
+    } catch (err) {
+      alert(err.message || "Couldn't start build tracking.");
+    } finally {
+      if (els.startBuildBtn) els.startBuildBtn.disabled = false;
+    }
   }
 
   function renderWos() {
@@ -896,7 +945,7 @@
     const empty = document.getElementById("projDailyLogEmpty");
     const list = document.getElementById("projDailyList");
     if (!panel) return;
-    const isBuildProj = state.project.branch != null || state.project.proposalSnapshot != null;
+    const isBuildProj = isBuildProject(state.project);
     if (!isBuildProj) {
       panel.hidden = true;
       return;
@@ -952,7 +1001,7 @@
     const empty = document.getElementById("projScopeChangesEmpty");
     const list = document.getElementById("projScopeList");
     if (!panel) return;
-    const isBuildProj = state.project.branch != null || state.project.proposalSnapshot != null;
+    const isBuildProj = isBuildProject(state.project);
     if (!isBuildProj) {
       panel.hidden = true;
       return;
@@ -1061,7 +1110,7 @@
     const empty = document.getElementById("projStatusUpdatesEmpty");
     const list = document.getElementById("projStatusUpdateList");
     if (!panel) return;
-    const isBuildProj = state.project.branch != null || state.project.proposalSnapshot != null;
+    const isBuildProj = isBuildProject(state.project);
     if (!isBuildProj) {
       panel.hidden = true;
       return;
@@ -1092,7 +1141,7 @@
   function renderSidebar() {
     const sidebar = document.getElementById("projSidebar");
     if (!sidebar) return;
-    const isBuildProj = state.project.branch != null || state.project.proposalSnapshot != null;
+    const isBuildProj = isBuildProject(state.project);
     if (!isBuildProj) {
       sidebar.hidden = true;
       return;
@@ -1552,6 +1601,9 @@
       if (!btn || btn.disabled) return;
       attachWo(btn.dataset.woId);
     });
+
+    // Build tracking
+    if (els.startBuildBtn) els.startBuildBtn.addEventListener("click", startBuildTracking);
 
     // Customer picker
     els.customerPick.addEventListener("click", openCustomerPickModal);

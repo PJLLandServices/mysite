@@ -304,6 +304,30 @@
   padding: 14px 16px;
   margin-bottom: 14px;
 }
+/* Build-tracking CTA — a soft-green call to action on manual projects. */
+.proj-build-cta { background: #F3F8F4; border-color: #CDE0D3; }
+.proj-build-cta-inner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.proj-build-cta-copy { min-width: 0; flex: 1 1 240px; }
+.proj-build-cta-copy h2 {
+  margin: 0 0 4px;
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 19px;
+  letter-spacing: 0.03em;
+  color: #1B4D2E;
+}
+.proj-build-cta-copy p {
+  margin: 0;
+  font-size: 13px;
+  color: #4A4A42;
+  line-height: 1.4;
+}
+.proj-build-cta .pjl-btn { flex-shrink: 0; min-height: 44px; }
 .proj-section-head {
   display: flex;
   align-items: baseline;
