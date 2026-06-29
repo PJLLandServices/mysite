@@ -1505,6 +1505,26 @@ a.sprk-comp:focus-visible {
 </head>
 <body>
 
+<!-- Seasonal phase — single source of truth. Computed before first paint and
+     stamped on <html> as data-season-phase so (a) the bottom-of-body hero
+     controller reads it instead of recomputing, and (b) the mid-season
+     #repair promotion below can run CLS-free. Six phases; mirrors index.html's
+     mid-season window (Jun 15–Aug 24). -->
+<script>
+(function(){
+  var d = new Date(), m = d.getMonth(), day = d.getDate(), phase;
+  if (m === 7 && day >= 25)            phase = 'pre-fall';    // Aug 25–31
+  else if (m === 8 && day <= 4)        phase = 'pre-fall';    // Sep 1–4
+  else if (m === 0 && day >= 15)       phase = 'pre-spring';  // Jan 15–31
+  else if (m === 1)                    phase = 'pre-spring';  // Feb
+  else if ((m === 5 && day >= 15) || m === 6 || (m === 7 && day < 25))
+                                       phase = 'midseason';   // Jun 15–Aug 24
+  else if (m >= 8 || m === 0)          phase = 'fall';        // Sep 5–Jan 14
+  else                                 phase = 'spring';      // Mar 1–Jun 14
+  document.documentElement.setAttribute('data-season-phase', phase);
+})();
+</script>
+
 <!-- @@PJL:nav-START {"loc": "Newmarket &amp; GTA", "status": "Same-day repair available", "badge": "Same-day repair · Newmarket &amp; GTA"} -->
 <nav class="nav nav-v2 nav-solid">
   <div class="nav-utility-strip"><div class="nav-utility-strip__inner"><span class="nav-utility-strip__location"><span class="nav-utility-strip__icon" aria-hidden="true"><svg aria-hidden="true" focusable="false" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M8 14.5s5.5-5 5.5-9a5.5 5.5 0 1 0-11 0c0 4 5.5 9 5.5 9Z"/><circle cx="8" cy="5.5" r="2"/></svg></span>Newmarket &amp; GTA</span><span class="nav-utility-strip__same-day"><span class="nav-utility-strip__pulse" aria-hidden="true"></span>Same-day repair available</span><a href="tel:+19059600181" class="nav-utility-strip__phone"><span class="nav-utility-strip__icon" aria-hidden="true"><svg aria-hidden="true" focusable="false" viewBox="0 0 16 16" fill="currentColor"><path d="M3.654 1.328a.678.678 0 0 0-1.015-.063L1.605 2.3c-.483.484-.661 1.169-.45 1.77a17.6 17.6 0 0 0 4.168 6.608 17.6 17.6 0 0 0 6.608 4.168c.601.211 1.286.033 1.77-.45l1.034-1.034a.678.678 0 0 0-.063-1.015l-2.307-1.794a.68.68 0 0 0-.58-.122l-2.19.547a1.75 1.75 0 0 1-1.657-.459L5.482 8.062a1.75 1.75 0 0 1-.46-1.657l.548-2.19a.68.68 0 0 0-.122-.58L3.654 1.328Z"/></svg></span><span>(905) 960-0181</span></a><a href="/login" class="nav-utility-strip__login"><span class="nav-utility-strip__icon" aria-hidden="true"><svg aria-hidden="true" focusable="false" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="6" r="2.5"/><path d="M3 13.5c0-2.485 2.239-4.5 5-4.5s5 2.015 5 4.5"/></svg></span><span>Login</span></a></div></div>
@@ -1892,6 +1912,21 @@ a.sprk-comp:focus-visible {
     </a>
   </div>
 </section>
+
+<!-- Mid-season only: promote the whole #repair section directly above
+     #seasonal. Runs at parse time — both sections already exist in the DOM,
+     the lower sections have not yet rendered — so the move lands before paint
+     (CLS-free). Every other phase leaves the authored order untouched. -->
+<script>
+(function(){
+  if (document.documentElement.getAttribute('data-season-phase') !== 'midseason') return;
+  var seasonal = document.getElementById('seasonal');
+  var repair   = document.getElementById('repair');
+  if (seasonal && repair && seasonal.parentNode) {
+    seasonal.parentNode.insertBefore(repair, seasonal); // #repair now directly above #seasonal
+  }
+})();
+</script>
 
 <!-- Sprinkler System Retrofit -->
 <section class="section" id="retrofit">
@@ -2455,26 +2490,13 @@ a.sprk-comp:focus-visible {
   //   pre-spring = Jan 15 – Feb 28/29 (Spring Opening Fast Approaching —
   //                forward-looking, swap back to summer-spray video to
   //                back the "spring is coming" copy)
-  var now = new Date();
-  var month = now.getMonth(); // 0=Jan, 11=Dec
-  var day = now.getDate();    // 1-31
+  //
+  // Phase is computed once by the inline script right after <body> and stamped
+  // on <html data-season-phase>. Read it here rather than recomputing, so the
+  // hero and the #repair promotion share one source of truth. Fall back to
+  // 'spring' if the attribute is somehow missing.
+  var phase = document.documentElement.getAttribute('data-season-phase') || 'spring';
 
-  var phase;
-  if (month === 7 && day >= 25) {
-    phase = 'pre-fall';        // Aug 25 – Aug 31
-  } else if (month === 8 && day <= 4) {
-    phase = 'pre-fall';        // Sept 1 – Sept 4
-  } else if (month === 0 && day >= 15) {
-    phase = 'pre-spring';      // Jan 15 – Jan 31
-  } else if (month === 1) {
-    phase = 'pre-spring';      // Feb 1 – Feb 28/29
-  } else if ((month === 5 && day >= 15) || month === 6 || (month === 7 && day < 25)) {
-    phase = 'midseason';       // Jun 15 – Aug 24 (mirrors index.html)
-  } else if (month >= 8 || month === 0) {
-    phase = 'fall';            // Sept 5 – Jan 14
-  } else {
-    phase = 'spring';          // Mar 1 – Jun 14
-  }
   // Fall pricing applies to fall + pre-fall; spring pricing applies to
   // spring + pre-spring (pre-spring is selling spring opening).
   var fallMessaging = (phase === 'fall' || phase === 'pre-fall');
