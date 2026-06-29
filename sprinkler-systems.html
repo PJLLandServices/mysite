@@ -236,7 +236,10 @@
 .service-detail-grid {
   display: grid;
   grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr);
-  grid-template-rows: auto auto;
+  /* Row 1 hugs the image; row 2 (1fr) absorbs any slack from the taller
+     overlapping card, so the AI box sits directly under the image instead
+     of being pushed down by a mid-column gap. */
+  grid-template-rows: auto 1fr;
   column-gap: 0;
   row-gap: 24px;
   align-items: start;
@@ -268,9 +271,13 @@
 .service-detail-grid > .sprk-ai {
   grid-column: 1;
   grid-row: 2;
+  align-self: start;        /* hug the image; leave any slack below the box */
   margin: 0;
-  /* keep right edge clear of the card's -80px overlap so content stays visible */
-  padding-right: clamp(20px, 4vw, 96px);
+  /* The card overlaps this column by 80px (margin-left:-80px, z-index:2) and is
+     opaque, so the text must clear a full 80px + breathing room or it gets
+     hidden under the card. A fixed value is robust; the old clamp(…4vw…)
+     resolved below 80px on normal screens and clipped the copy. */
+  padding-right: 104px;
 }
 
 /* Reverse — image on right, card on left, overlap from the right side */
@@ -283,7 +290,8 @@
 .service-detail-grid.reverse > .sprk-ai {
   grid-column: 2;
   padding-right: 20px;
-  padding-left: clamp(20px, 4vw, 96px);
+  /* mirror of the normal case — clear the card's 80px overlap from the left */
+  padding-left: 104px;
 }
 .checklist { margin: 24px 0 32px; display: flex; flex-direction: column; gap: 12px; }
 .checklist-item { display: flex; align-items: flex-start; gap: 12px; font-size: 15px; color: var(--text-mid); }
