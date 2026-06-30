@@ -536,7 +536,7 @@
             <span>I authorize the work described above</span>
           </label>
 
-          <button type="button" class="pjl-btn pjl-btn-primary wo-signoff-submit" id="woSignoffSubmit" disabled>Sign, lock &amp; generate invoice</button>
+          <button type="button" class="pjl-btn pjl-btn-primary wo-signoff-submit" id="woSignoffSubmit">Sign, lock &amp; generate invoice</button>
           <ul class="wo-signoff-readiness" id="woSignoffReadiness" hidden></ul>
           <p class="wo-signoff-note">Signing locks the WO, completes the visit, and drafts the customer invoice in one tap. Scope additions after sign require a fresh signature.</p>
 
@@ -798,6 +798,28 @@
         <div class="wo-bypass-actions">
           <button type="button" class="pjl-btn pjl-btn-outline" id="woBypassRemoteApproval">Send for remote approval instead</button>
           <button type="button" class="pjl-btn pjl-btn-primary wo-bypass-confirm-anyway" id="woBypassConfirmAnyway" disabled>Confirm bypass</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Blocking-gates modal (Option A — Patrick 2026-06-30). Desktop mirror
+       of the tech #techGateSheet. Shown when the tech taps "Sign, lock &
+       generate invoice" with unmet gates, instead of a dead/disabled
+       button. Each row carries a Resolve jump (or one-tap materials
+       confirm); the drawn signature stays on the pad. Reuses the
+       .wo-bypass-modal overlay + card chrome. -->
+  <div class="wo-bypass-modal" id="woGateModal" hidden role="dialog" aria-modal="true" aria-labelledby="woGateTitle">
+    <div class="wo-bypass-card">
+      <header class="wo-bypass-head">
+        <h2 id="woGateTitle">Before you can lock &amp; close</h2>
+        <button type="button" class="wo-bypass-close" id="woGateClose" aria-label="Cancel">×</button>
+      </header>
+      <div class="wo-bypass-body">
+        <p class="wo-bypass-help">Finish these to lock &amp; close. The customer's signature stays on the pad — they won't need to sign again.</p>
+        <ul class="wo-gate-list" id="woGateList"></ul>
+        <div class="wo-bypass-actions">
+          <button type="button" class="pjl-btn pjl-btn-outline" id="woGateCancel">Cancel</button>
         </div>
       </div>
     </div>

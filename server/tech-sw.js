@@ -382,7 +382,18 @@
 // offline-queue.js, work-order-tech.{html,js,css}. See
 // OFFLINE_QUEUE_INVESTIGATION.md for the root-cause analysis and
 // OFFLINE_QUEUE_RECOVERY.md for the field recovery procedure.
-const CACHE_VERSION = "pjl-tech-v47";
+// Bumped 2026-06-30 (v47 → v48): CATCHES UP on 350242f — the Option A
+// completion fix (signGateBlockers + #techGateSheet; Sign button no longer
+// silently disables on unmet gates). That commit shipped
+// work-order-tech.{js,html,css} but FORGOT to bump this, so every field
+// phone kept serving the pre-fix cached JS and Patrick still hit the
+// dead/greyed Sign button after the fix went live on Render. This bump
+// invalidates the v47 cache so the next online load pulls the patched JS.
+// (The recurring lesson, restated: bump CACHE_VERSION in the SAME commit as
+// any STATIC_ASSETS change.) Same commit also ports Option A to the desktop
+// work-order page (work-order.{js,html} — not in STATIC_ASSETS, served
+// network-fresh, so no cache concern there).
+const CACHE_VERSION = "pjl-tech-v48";
 const STATIC_ASSETS = [
   "/crm/work-order-tech.html",
   "/crm/work-order-tech.js",

@@ -595,6 +595,78 @@ body.wo-lightbox-open { overflow: hidden; }
   cursor: not-allowed;
 }
 
+/* Sign button affordance when the user dismissed the gate modal but
+   blockers remain — reads as "tap to see what's blocking" rather than the
+   primary CTA (Option A, 2026-06-30). */
+.wo-signoff-submit[data-blocked="seen"] {
+  background: #fff;
+  color: #B45309;
+  border: 1px solid rgba(224, 123, 36, 0.55);
+}
+
+/* Blocking-gates modal rows (Option A) — reuses .wo-bypass-modal chrome;
+   these style the list body. */
+.wo-gate-list {
+  list-style: none;
+  margin: 0 0 14px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.wo-gate-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  background: #fafaf5;
+  border: 1px solid var(--wo-border, #d8d8cf);
+  border-radius: 10px;
+}
+.wo-gate-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1;
+  background: rgba(224, 123, 36, 0.18);
+  color: #B45309;
+  border: 1px solid rgba(224, 123, 36, 0.45);
+}
+.wo-gate-label {
+  flex: 1 1 auto;
+  font-size: 14px;
+  line-height: 1.4;
+  color: var(--wo-text, #1a1a1a);
+}
+.wo-gate-resolve {
+  flex: 0 0 auto;
+  min-height: 38px;
+  padding: 8px 14px;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  background: var(--pjl-green, #1B4D2E);
+  color: #fff;
+  border: 0;
+  border-radius: 8px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.wo-gate-resolve:active { transform: scale(0.97); }
+.wo-gate-hint {
+  flex: 0 0 auto;
+  font-size: 12px;
+  color: var(--wo-text-muted, #777);
+  font-style: italic;
+  white-space: nowrap;
+}
+
 /* Pre-sign readiness list — same treatment as tech mode. */
 .wo-signoff-readiness {
   margin: 8px 0 0;
