@@ -2192,95 +2192,125 @@ function createWoSignaturePad(canvas, onChange) {
   };
 }
 
+// ---- Option A on desktop (Patrick 2026-06-30) -------------------------
+// Mirror of the tech-mode blocking-gates UX (commit 350242f) ported to the
+// desktop work-order editor. The desktop #woSignoffSubmit button used to
+// hard-disable on any unmet gate — which reads as a dead button and could
+// strand the user on a gate with no desktop control to satisfy it
+// (materialsConfirmedAt). Now the button stays tappable; tapping with unmet
+// gates opens #woGateModal listing each one with a Resolve action.
+
+// Friendly labels + desktop jump targets. Keys mirror SIGN_GATE_META in
+// work-order-tech.js and the server's computeServerSidePreSignFailures, so a
+// server 422 (presign_gate_unmet) renders this same modal. Gates the desktop
+// editor has no control for (returnVisit) carry an empty jumpTo and render a
+// "resolve in tech mode" hint instead of a dead jump.
+const WO_SIGN_GATE_META = {
+  name:             { label: "Enter the customer's printed name", jumpTo: "#woSignoffName" },
+  ack:              { label: "Tick the “I authorize the work” box", jumpTo: "#woSignoffAck" },
+  drawn:            { label: "Have the customer sign on the pad", jumpTo: "#woSignoffCanvas" },
+  bonus:            { label: "Mark the AI intake diagnosis as Matched or Didn't Match", jumpTo: "#woIntakeGuarantee" },
+  customerNotes:    { label: "Add a note about what you did at this visit", jumpTo: "#woCustomerNotes" },
+  payment:          { label: "Choose payment method (paid on site or bill later)", jumpTo: "#woPaidOnSiteSection" },
+  returnVisit:      { label: "Answer: does this job need a return visit?", jumpTo: "" },
+  materials:        { label: "Confirm materials packed", jumpTo: "#woMaterialsSection" },
+  materialsConfirm: { label: "Confirm the materials list is accurate", jumpTo: "" },
+  carryforward:     { label: "Resolve carry-forward items", jumpTo: "#woZones" },
+  zones:            { label: "Review all zones", jumpTo: "#woZones" },
+  photos:           { label: "Capture a completion photo", jumpTo: "#woPhotoStrip" }
+};
+
+function woSignGate(key, labelOverride) {
+  const meta = WO_SIGN_GATE_META[key] || {};
+  return { key, label: labelOverride || meta.label || key, jumpTo: meta.jumpTo || "" };
+}
+
+let woSignGatesDismissed = false;
+
+// Structured list of every unmet blocker on the desktop sign path —
+// signature prerequisites + readiness gates. Mirrors the tech-mode
+// signGateBlockers(); reads the desktop DOM + loadedWorkOrder.
+function woSignGateBlockers() {
+  const wo = loadedWorkOrder;
+  if (!wo) return [];
+  const blockers = [];
+  const ig = wo.intakeGuarantee || {};
+  if (wo.signature?.signed !== true) {
+    const name = (document.getElementById("woSignoffName")?.value || "").trim();
+    const ack = !!document.getElementById("woSignoffAck")?.checked;
+    const drawn = !!(signaturePadInstance && signaturePadInstance.isDirty());
+    if (!name) blockers.push(woSignGate("name"));
+    if (!ack) blockers.push(woSignGate("ack"));
+    if (!drawn) blockers.push(woSignGate("drawn"));
+  }
+  if (ig.applies && ig.matched !== true && ig.matched !== false) {
+    blockers.push(woSignGate("bonus"));
+  }
+  const untouched = (Array.isArray(wo.zones) ? wo.zones : []).filter((z) => {
+    if (z.status && z.status !== "") return false;
+    const checks = z.checks || {};
+    return !Object.values(checks).some(Boolean);
+  });
+  if (untouched.length) {
+    blockers.push(woSignGate("zones", `${untouched.length} zone${untouched.length === 1 ? "" : "s"} haven't been checked yet (zones ${untouched.map((z) => z.number).join(", ")}).`));
+  }
+  if (wo.type === "spring_opening") {
+    const openCfCards = document.querySelectorAll('#woCarryForwardList [data-deferred-id]');
+    if (openCfCards.length) blockers.push(woSignGate("carryforward"));
+  }
+  const minPhotos = WO_PHOTO_REQUIREMENT_BY_TYPE[wo.type] ?? 1;
+  if (minPhotos > 0) {
+    const photoCount = Array.isArray(wo.photos) ? wo.photos.length : 0;
+    if (photoCount < minPhotos) {
+      blockers.push(woSignGate("photos", `Capture ${minPhotos === 1 ? "at least one completion photo" : `at least ${minPhotos} completion photos`} before signing.`));
+    }
+  }
+  if (wo.paidOnSite !== true && wo.paidOnSite !== false) blockers.push(woSignGate("payment"));
+  if (!wo.materialsConfirmedAt) blockers.push(woSignGate("materialsConfirm"));
+  const liveNotes = (document.getElementById("woCustomerNotes")?.value ?? wo.customerNotes ?? "").trim();
+  if (!liveNotes) blockers.push(woSignGate("customerNotes"));
+  return blockers;
+}
+
 function updateWoSignoffSubmitState() {
   const submit = document.getElementById("woSignoffSubmit");
   if (!submit) return;
-  if (loadedWorkOrder?.locked) { submit.disabled = true; return; }
-  const name = (document.getElementById("woSignoffName")?.value || "").trim();
-  const ack = !!document.getElementById("woSignoffAck")?.checked;
-  const drawn = !!(signaturePadInstance && signaturePadInstance.isDirty());
-  // Brief F — AI bonus decision must be captured before signature when
-  // the WO is bonus-eligible. Same gate logic as tech mode.
-  const ig = loadedWorkOrder?.intakeGuarantee || {};
-  const bonusGateOk = !ig.applies || ig.matched === true || ig.matched === false;
-  const readinessFails = woPreSignReadinessFailures();
-  const readinessOk = readinessFails.length === 0;
-  submit.disabled = !(name && ack && drawn && bonusGateOk && readinessOk);
+  // Option A: only a locked WO disables the button. Unmet gates keep it
+  // tappable and get surfaced on tap.
+  submit.disabled = loadedWorkOrder?.locked === true;
+  if (loadedWorkOrder?.locked) return;
 
-  // Inline readiness list mirrors the tech-mode treatment so Patrick
-  // sees from the desktop editor exactly what's blocking sign-off.
+  const name = (document.getElementById("woSignoffName")?.value || "").trim();
+  const drawn = !!(signaturePadInstance && signaturePadInstance.isDirty());
+  const blockers = woSignGateBlockers();
+  if (!blockers.length) woSignGatesDismissed = false;
+
+  if (blockers.length && woSignGatesDismissed) {
+    submit.textContent = "Tap to see what's blocking →";
+    submit.dataset.blocked = "seen";
+  } else {
+    submit.textContent = "Sign, lock & generate invoice";
+    submit.dataset.blocked = blockers.length ? "pending" : "clear";
+  }
+  submit.title = blockers.length ? blockers.map((b) => b.label).join(" • ") : "";
+
+  // Inline readiness list — mirrors the tech-mode checklist so the desktop
+  // editor shows what's blocking even before the modal is opened.
   const readinessList = document.getElementById("woSignoffReadiness");
   if (readinessList) {
-    if (!readinessOk && (name || drawn)) {
+    if (blockers.length && (name || drawn)) {
       readinessList.hidden = false;
-      readinessList.innerHTML = readinessFails
-        .map((f) => `<li>${f.replace(/</g, "&lt;")}</li>`)
-        .join("");
+      readinessList.innerHTML = blockers.map((b) => `<li>${b.label.replace(/</g, "&lt;")}</li>`).join("");
     } else {
       readinessList.hidden = true;
       readinessList.innerHTML = "";
     }
-  }
-
-  if (!bonusGateOk) {
-    submit.title = "Resolve the AI Correct Diagnosis Bonus decision before signing.";
-  } else if (!readinessOk) {
-    submit.title = readinessFails.join(" • ");
-  } else {
-    submit.removeAttribute("title");
   }
 }
 
 // Pre-sign walkout mirror — same gates as tech mode (zones touched,
 // photo threshold, carry-forward resolved, paidOnSite selected,
 // materials confirmed when relevant) minus the signature check.
-// Used to gate the merged "Sign, Lock & Generate Invoice" button so
-// signing only fires the cascade on a fully-complete visit.
-// Brief: WO Field-Readiness §6.2 promotes paidOnSite + materials to
-// pre-sign gates so the cascade fires with correct invoice flags.
-function woPreSignReadinessFailures() {
-  const wo = loadedWorkOrder;
-  if (!wo) return [];
-  const fails = [];
-  const zones = Array.isArray(wo.zones) ? wo.zones : [];
-  const untouched = zones.filter((z) => {
-    if (z.status && z.status !== "") return false;
-    const checks = z.checks || {};
-    return !Object.values(checks).some(Boolean);
-  });
-  if (untouched.length) {
-    fails.push(`${untouched.length} zone${untouched.length === 1 ? "" : "s"} haven't been checked yet (zones ${untouched.map((z) => z.number).join(", ")}).`);
-  }
-  if (wo.type === "spring_opening") {
-    const openCfCards = document.querySelectorAll('#woCarryForwardList [data-deferred-id]');
-    if (openCfCards.length) {
-      fails.push(`${openCfCards.length} carry-forward recommendation${openCfCards.length === 1 ? "" : "s"} still need an action.`);
-    }
-  }
-  const minPhotos = WO_PHOTO_REQUIREMENT_BY_TYPE[wo.type] ?? 1;
-  if (minPhotos > 0) {
-    const photoCount = Array.isArray(wo.photos) ? wo.photos.length : 0;
-    if (photoCount < minPhotos) {
-      fails.push(`Capture ${minPhotos === 1 ? "at least one completion photo" : `at least ${minPhotos} completion photos`} before signing.`);
-    }
-  }
-  // Payment-method gate — promoted to pre-sign so the cascade fires
-  // with the right paidOnSiteAtCompletion flag on the draft invoice.
-  if (wo.paidOnSite !== true && wo.paidOnSite !== false) {
-    fails.push("Pick a payment method (Yes / No — invoice to follow).");
-  }
-  // Cascade-merge follow-up — brief-literal §4.6 materials gate.
-  // Server-side enforces too; this mirrors so the desktop user sees
-  // the specific block reason instead of getting a confusing 422.
-  // Note: desktop has no "Confirm materials" button yet — Patrick can
-  // tap it on tech mode for that WO, or PATCH materialsConfirmedAt
-  // directly via /admin/work-order/<id> dev tooling.
-  if (!wo.materialsConfirmedAt) {
-    fails.push("Confirm the materials list (tap “Confirm materials list is accurate” in tech mode for this WO).");
-  }
-  return fails;
-}
-
 document.getElementById("woSignoffName")?.addEventListener("input", updateWoSignoffSubmitState);
 document.getElementById("woSignoffAck")?.addEventListener("change", updateWoSignoffSubmitState);
 document.getElementById("woSignoffClear")?.addEventListener("click", () => {
@@ -2291,15 +2321,14 @@ document.getElementById("woSignoffClear")?.addEventListener("click", () => {
 document.getElementById("woSignoffSubmit")?.addEventListener("click", async () => {
   if (loadedWorkOrder?.locked) return;
   const submit = document.getElementById("woSignoffSubmit");
-  const customerName = (document.getElementById("woSignoffName")?.value || "").trim();
-  const ack = !!document.getElementById("woSignoffAck")?.checked;
-  if (!customerName || !ack || !signaturePadInstance?.isDirty()) return;
 
-  const readinessFails = woPreSignReadinessFailures();
-  if (readinessFails.length) {
-    alert("Can't sign yet:\n\n• " + readinessFails.join("\n• ") + "\n\nResolve these first.");
-    return;
-  }
+  // Option A: surface unmet gates in the modal instead of a silent no-op.
+  // The drawn signature stays on the pad while the user resolves.
+  const blockers = woSignGateBlockers();
+  if (blockers.length) { openWoGateModal(blockers); return; }
+
+  // Blockers empty ⇒ name / ack / drawn are all satisfied.
+  const customerName = (document.getElementById("woSignoffName")?.value || "").trim();
 
   submit.disabled = true;
   submit.textContent = "Signing & invoicing…";
@@ -2321,7 +2350,17 @@ document.getElementById("woSignoffSubmit")?.addEventListener("click", async () =
       body: JSON.stringify(payload)
     });
     const data = await response.json().catch(() => ({}));
-    if (!response.ok || !data.ok) throw new Error((data.errors && data.errors[0]) || "Couldn't save signature.");
+    if (!response.ok || !data.ok) {
+      // Server gate backstop (stale tab / API). Render the same modal from
+      // the structured gateFailures; the signature stays on the pad.
+      if (data && data.error === "presign_gate_unmet" && Array.isArray(data.gateFailures) && data.gateFailures.length) {
+        submit.disabled = false;
+        submit.textContent = "Sign, lock & generate invoice";
+        openWoGateModal(data.gateFailures.map((g) => woSignGate(g.key, g.label)));
+        return;
+      }
+      throw new Error((data.errors && data.errors[0]) || "Couldn't save signature.");
+    }
     loadedWorkOrder = data.workOrder;
     if (data.cascade && data.cascade.invoiceId) {
       completedInvoiceForBanner = data.cascade.invoiceId;
@@ -3234,6 +3273,92 @@ function closeWoBypassModal() {
   const modal = document.getElementById("woBypassModal");
   if (modal) modal.hidden = true;
 }
+
+// ---- Desktop blocking-gates modal (Option A, Patrick 2026-06-30) -------
+// Mirrors the tech-mode #techGateSheet. Lists each unmet gate with a
+// Resolve action: a jump for gates with a desktop control, a one-tap
+// "Confirm now" for the materials gate (desktop has no packing checklist),
+// and a "resolve in tech mode" hint for gates desktop can't satisfy.
+function openWoGateModal(blockers) {
+  const modal = document.getElementById("woGateModal");
+  const list = document.getElementById("woGateList");
+  if (!modal || !list) {
+    alert("Before you can lock & close this work order, please:\n\n• " + blockers.map((b) => b.label).join("\n• "));
+    return;
+  }
+  list.innerHTML = blockers.map((b) => {
+    let action;
+    if (b.key === "materialsConfirm") {
+      action = `<button type="button" class="wo-gate-resolve" data-gate-confirm-materials="1">Confirm now →</button>`;
+    } else if (b.jumpTo) {
+      action = `<button type="button" class="wo-gate-resolve" data-jump="${escapeHtml(b.jumpTo)}">Resolve →</button>`;
+    } else {
+      action = `<span class="wo-gate-hint">Resolve in tech mode for this WO</span>`;
+    }
+    return `<li class="wo-gate-row">
+      <span class="wo-gate-icon" aria-hidden="true">✕</span>
+      <span class="wo-gate-label">${escapeHtml(b.label)}</span>
+      ${action}
+    </li>`;
+  }).join("");
+  modal.hidden = false;
+}
+
+function closeWoGateModal(opts) {
+  const modal = document.getElementById("woGateModal");
+  if (!modal) return;
+  modal.hidden = true;
+  if (opts && opts.dismissed) {
+    woSignGatesDismissed = true;
+    updateWoSignoffSubmitState();
+  }
+}
+
+// One-tap satisfy for the materials gate — desktop has no packing
+// checklist, so the modal confirms the list directly (mirrors the tech
+// "Confirm materials list is accurate" → PATCH materialsConfirmedAt).
+async function confirmWoMaterials() {
+  if (!loadedWorkOrder || loadedWorkOrder.locked) return;
+  const now = new Date().toISOString();
+  try {
+    const r = await fetch(`/api/work-orders/${encodeURIComponent(getWorkOrderId())}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ materialsConfirmedAt: now })
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok || !data.ok) throw new Error((data.errors && data.errors[0]) || "Couldn't confirm materials.");
+    loadedWorkOrder = data.workOrder || loadedWorkOrder;
+    if (!loadedWorkOrder.materialsConfirmedAt) loadedWorkOrder.materialsConfirmedAt = now;
+  } catch (err) {
+    alert(err.message || "Couldn't confirm materials.");
+    return;
+  }
+  // Re-evaluate: re-open with what's left, or close if the list is clear.
+  updateWoSignoffSubmitState();
+  const remaining = woSignGateBlockers();
+  if (remaining.length) openWoGateModal(remaining);
+  else closeWoGateModal();
+}
+
+// Resolve → jump or inline-confirm; tapping the scrim / Cancel dismisses.
+document.getElementById("woGateList")?.addEventListener("click", (event) => {
+  if (event.target.closest("[data-gate-confirm-materials]")) { confirmWoMaterials(); return; }
+  const jumpBtn = event.target.closest("[data-jump]");
+  if (!jumpBtn) return;
+  const sel = jumpBtn.dataset.jump;
+  closeWoGateModal();
+  if (!sel) return;
+  const target = document.querySelector(sel);
+  if (!target) return;
+  target.scrollIntoView({ behavior: "smooth", block: "center" });
+  if (target.matches("input, textarea, select")) setTimeout(() => target.focus(), 250);
+});
+document.getElementById("woGateClose")?.addEventListener("click", () => closeWoGateModal({ dismissed: true }));
+document.getElementById("woGateCancel")?.addEventListener("click", () => closeWoGateModal({ dismissed: true }));
+document.getElementById("woGateModal")?.addEventListener("click", (event) => {
+  if (event.target === event.currentTarget) closeWoGateModal({ dismissed: true });
+});
 
 function updateWoBypassSubmitState() {
   const reason = document.getElementById("woBypassReason")?.value || "";
