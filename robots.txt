@@ -7,8 +7,6 @@ Allow: /
 
 # Block legacy / orphaned assets
 Disallow: /quote-legacy.html
-Disallow: /.claude/
-Disallow: /memory/
 
 # Block aggressive AI training crawlers (optional — remove if you want
 # the site indexed by AI tools like Perplexity, SearchGPT etc.).
