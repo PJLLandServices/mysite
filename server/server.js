@@ -412,7 +412,12 @@ const LEGACY_REDIRECTS = {
   // Cost-page consolidation (Jun 2026): the GTA cost post was folded into the
   // Ontario cost guide (the SEO survivor). 301 the retired slug to it.
   "/blog-sprinkler-cost-gta.html": "/blog-sprinkler-system-cost-ontario.html",
-  "/blog": "/blog.html"
+  "/blog": "/blog.html",
+  // Retired Toronto neighbourhood pages (Jul 2026): removed from the site;
+  // 301 to their North York parent so the indexed URLs don't 404.
+  "/sprinkler-service-bayview-village.html": "/sprinkler-service-north-york.html",
+  "/sprinkler-service-bridle-path.html": "/sprinkler-service-north-york.html",
+  "/sprinkler-service-willowdale.html": "/sprinkler-service-north-york.html"
 };
 
 function normalizeString(value, maxLength = 400) {
