@@ -1,7 +1,15 @@
 #!/usr/bin/env node
 // scripts/lint-no-hardcoded-prices.mjs
 //
-// CI gate: scans every HTML file for hardcoded $NN amounts that aren't:
+// CI gate: two rules by surface.
+//   • sprinkler-service-*.html (city / service-area pages): STRICT — any
+//     hardcoded dollar amount is drift (these pages must only ever show prices
+//     through the data-price token pipeline). See STRICT_FILE_RE below.
+//   • every other page: canonical-drift only — flags amounts matching a known
+//     pricing.json value (TRACKED_PRICES). Blogs legitimately carry comparison
+//     costs, so they are NOT held to the strict rule.
+//
+// In both cases, scans for hardcoded $NN amounts that aren't:
 //   1. Inside a <span data-price="..."> or <element data-pjl-quote-formula=".."> token
 //   2. Inside a <script ...> or <style> block
 //      (sync-meta-prices.mjs handles JSON-LD description prose;
@@ -44,6 +52,20 @@ const TRACKED_PRICES = [
   '395', '595', '750', '1,195', '1195', '163', '299', '845', '282', '215'
 ];
 const PRICE_RE = new RegExp('\\$(' + TRACKED_PRICES.join('|') + ')\\b', 'g');
+
+// STRICT SURFACES. Service-area / city landing pages (sprinkler-service-*.html)
+// are pure marketing surfaces: every price on them is a real PJL service price
+// that MUST render through the data-price token pipeline. Unlike blog posts,
+// they carry no informational/comparison-cost prose, so ANY hardcoded dollar
+// amount on them is drift — not just amounts that happen to match a current
+// pricing.json value. This is the rule that would have caught the Toronto-page
+// fabricated ranges ($45–$420 repair, $1,400–$8,000 / $4,500–$15,000 lighting,
+// $12,000–$40,000 estate, $250 bylaw) — none of which were canonical values, so
+// the TRACKED_PRICES pass above sailed right past them. Blogs and other pages
+// keep the narrower canonical-drift rule (broadening site-wide would flag ~236
+// legitimate informational amounts across the blog library).
+const STRICT_FILE_RE = /^sprinkler-service-.*\.html$/;
+const ANY_PRICE_RE = /\$\d[\d,]*(?:\.\d+)?/g;
 
 // Allow-list. Each entry: { file, match, reason }.
 // `match` is a substring of the offending line. If the line still contains
@@ -111,8 +133,9 @@ const ALLOWLIST = [
   { file: 'estimate.html', match: '+$175', reason: 'WATER_LABEL JS string (cannot tokenize). Migrate WATER_LABEL.hosebibnew to read pricing.json#hose_bib_install during next install-pricing pass.' },
 
   // ---- Service-area info refs (NOT PJL service prices) ----
-  { file: 'sprinkler-service-king-city.html', match: '$40', reason: 'Generic city-detail dollar reference, not a PJL price.' },
-  { file: 'sprinkler-service-vaughan.html', match: '$40', reason: 'Generic city-detail dollar reference, not a PJL price.' },
+  // (king-city / vaughan '$40' entries removed Jul 2026 — they suppressed the
+  //  '$40,000' estate-range figures, which have since been reworded to
+  //  non-price copy. Service-area pages now carry no hardcoded dollars at all.)
   { file: 'terms-of-service.html', match: '$30', reason: 'Generic legal-text dollar reference.' },
 
   // ---- sprinkler-systems.html JS fallback string. Intentional: when
@@ -165,8 +188,12 @@ function scanFile(filename, html) {
   const originalLines = html.split('\n');
   const violations = [];
 
+  // City / service-area pages are held to the strict any-dollar rule; every
+  // other file keeps the narrower canonical-price drift rule.
+  const priceRe = STRICT_FILE_RE.test(filename) ? ANY_PRICE_RE : PRICE_RE;
+
   for (let i = 0; i < lines.length; i++) {
-    const matches = lines[i].match(PRICE_RE);
+    const matches = lines[i].match(priceRe);
     if (!matches) continue;
     if (isAllowed(filename, originalLines[i])) continue;
     violations.push({

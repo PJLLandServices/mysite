@@ -1,0 +1,43 @@
+name: CI — build & price-lint checks
+
+# Runs the full static-site verification suite on every pull request and every
+# push to main. This is the gate that was MISSING: previously the only workflow
+# was indexnow.yml (a post-merge Bing ping), so `npm run build:check` — which
+# includes the hardcoded-price linter, the partial-build sync check, the
+# meta-price sync check, the sitemap idempotency check, and the pricing tests —
+# only ever ran when a developer remembered to run it locally. Pages could (and
+# did) merge with drift the linter would have caught. This workflow closes that
+# gap: the same command now runs automatically and blocks the merge on failure.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# One in-flight run per ref is enough; cancel superseded runs.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # generate-sitemap.mjs derives <lastmod> from each file's last git
+          # commit date, so it needs full history — a shallow clone would make
+          # the sitemap idempotency check non-deterministic.
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # No `npm ci` needed: every script in `build:check` (build.js and the
+      # scripts/*.mjs checks) uses only Node built-ins. Skipping install keeps
+      # CI fast and avoids pulling native deps (sharp, playwright) that these
+      # checks never touch. If a future check gains a real dependency, add an
+      # `npm ci` step here.
+      - name: Run build + price-lint checks
+        run: npm run build:check
