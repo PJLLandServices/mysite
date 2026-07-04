@@ -72,6 +72,14 @@ const ALLOWLIST = [
   { file: 'blog-spring-sprinkler-opening.html', match: 'Pay the $90', reason: 'Rhetorical "From the truck" quote, intentionally rounded.' },
   { file: 'blog-spring-sprinkler-opening.html', match: '$4,000', reason: 'Hypothetical "system value" reference in og:description, not a service price.' },
   { file: 'sprinkler-repair.html', match: '$215 with the service call', reason: 'Aurora field-story narrative total ("Sixty-five minutes door to door. Total: $215 with the service call") — describes one specific past job, not a price-list line item.' },
+  // ---- Visible FAQ answers: must be BYTE-IDENTICAL to the static FAQPage
+  //      JSON-LD schema text (AEO schema-visible parity requirement). Tokenizing
+  //      with data-price spans would diverge from the plain-text schema and defeat
+  //      the parity; the schema block itself hardcodes these same numbers. Kept in
+  //      sync with pricing.json + the schema by hand when rates change. ----
+  { file: 'sprinkler-repair.html', match: 'Common flat-rate examples', reason: 'FAQ answer #2 (cost) — mirrors static FAQPage schema text verbatim; parity requirement forbids data-price tokenization.' },
+  { file: 'sprinkler-repair.html', match: 'a $95 saving', reason: 'FAQ answer #3 (AI-intake bonus) — mirrors static FAQPage schema text verbatim.' },
+  { file: 'sprinkler-repair.html', match: 'in-box repair runs $95 service call', reason: 'FAQ answer #7 (dead zone) — mirrors static FAQPage schema text verbatim.' },
   // (blog-sprinkler-cost-gta.html retired Jun 2026 — folded into
   //  blog-sprinkler-system-cost-ontario.html. Its worked-example allow-list
   //  entries were removed with the file.)
