@@ -1189,6 +1189,7 @@ These are the rules that protect the design from drift. Number them so they can 
 2. **Quotes snapshot prices at creation.** Future price changes never alter accepted quotes.
 3. **Work orders pull property info fresh.** Updates flow back to property folder on completion.
 4. **All status changes logged forever.** Storage is cheap. Future-you needs the history.
+   - *Scoped deviation:* Voided invoices may be hard-deleted through the tombstone flow (feature-invoice-void-delete-brief.md, 2026-07); the tombstone in `deleted-invoices.json` (frozen snapshot + reason + actor + timestamp, never pruned) is the permanent record. The operational record leaves `invoices.json`; the audit trail does not. Applies to `void` invoices only, through that one flow — no other entity inherits it. Invoice lifecycle with this flow: `draft → sent → paid → void → (deleted, tombstoned)` (delete reachable only from `void`).
 5. **Don't bolt new features onto old structures.** Refactor to fit this design or revise the design.
 6. **Every WO has exactly one booking parent.** No orphans.
 7. **Fall closings never auto-quote on-site.** Find-only mode. Issues → deferred only.

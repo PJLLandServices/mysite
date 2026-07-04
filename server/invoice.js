@@ -883,15 +883,178 @@ document.getElementById("invoiceJunkWarningBtn")?.addEventListener("click", asyn
   }
 });
 
-// Wire QB block refresh + reminder card + junk-warning card render into
-// the existing invoice render path so all three update whenever the
-// invoice is loaded.
+// ---- Void + delete (feature-invoice-void-delete-brief.md §4.4) --------
+//
+// Void is offered on draft/sent; Delete is offered ONLY once the invoice
+// is void. Void-first is the mandatory road to deletion. Both actions run
+// through a modal — void's reason is optional, delete's reason is required
+// and pre-fills from the void reason.
+
+function renderVoidDeleteCard(inv) {
+  const voidBtn = document.getElementById("invoiceVoidBtn");
+  const deleteBtn = document.getElementById("invoiceDeleteBtn");
+  const meta = document.getElementById("invoiceVoidMeta");
+  if (!voidBtn || !deleteBtn || !meta) return;
+
+  const status = inv?.status;
+  const canVoid = status === "draft" || status === "sent";
+  const isVoid = status === "void";
+
+  voidBtn.hidden = !canVoid;
+  deleteBtn.hidden = !isVoid;
+
+  if (isVoid) {
+    meta.hidden = false;
+    const who = inv.voidedBy ? ` by ${inv.voidedBy}` : "";
+    const when = inv.voidedAt ? ` on ${fmtDate(inv.voidedAt)}` : "";
+    const why = inv.voidReason ? ` — “${inv.voidReason}”` : "";
+    meta.textContent = `Voided${who}${when}${why}. Delete removes it permanently (a snapshot is kept in the audit log).`;
+  } else if (status === "paid") {
+    // A paid invoice can't be voided/deleted here — say so instead of an
+    // empty card.
+    meta.hidden = false;
+    meta.textContent = "Paid invoices can’t be voided or deleted here (that’s a QuickBooks credit-memo).";
+  } else {
+    meta.hidden = true;
+    meta.textContent = "";
+  }
+}
+
+// --- Modal helpers ---
+function openModal(id) {
+  const m = document.getElementById(id);
+  if (m) m.hidden = false;
+}
+function closeModal(id) {
+  const m = document.getElementById(id);
+  if (m) m.hidden = true;
+}
+
+// Void modal
+document.getElementById("invoiceVoidBtn")?.addEventListener("click", () => {
+  const err = document.getElementById("voidModalError");
+  if (err) err.textContent = "";
+  const input = document.getElementById("voidReasonInput");
+  if (input) input.value = "";
+  openModal("voidModal");
+  setTimeout(() => input?.focus(), 0);
+});
+document.getElementById("voidCancelBtn")?.addEventListener("click", () => closeModal("voidModal"));
+document.getElementById("voidModal")?.addEventListener("click", (e) => {
+  if (e.target === document.getElementById("voidModal")) closeModal("voidModal");
+});
+
+document.getElementById("voidConfirmBtn")?.addEventListener("click", async () => {
+  if (!currentInvoice) return;
+  const btn = document.getElementById("voidConfirmBtn");
+  const err = document.getElementById("voidModalError");
+  const reason = document.getElementById("voidReasonInput")?.value || "";
+  btn.disabled = true;
+  if (err) err.textContent = "";
+  try {
+    const r = await fetch(`/api/invoices/${encodeURIComponent(idFromPath)}/void`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ reason })
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok || !data.ok) throw new Error((data.errors && data.errors[0]) || "Couldn't void invoice.");
+    currentInvoice = data.invoice;
+    closeModal("voidModal");
+    render(data.invoice);
+    if (data.warning) alert(data.warning);
+  } catch (e) {
+    if (err) err.textContent = e.message || "Failed.";
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+// Delete modal — type-to-confirm + required reason + QB checkbox.
+function syncDeleteConfirmState() {
+  const btn = document.getElementById("deleteConfirmBtn");
+  const idInput = document.getElementById("deleteConfirmInput");
+  const qbRow = document.getElementById("deleteQbCheckRow");
+  const qbCheck = document.getElementById("deleteQbConfirm");
+  if (!btn || !idInput) return;
+  const idMatches = idInput.value.trim() === (currentInvoice?.id || "");
+  const qbOk = qbRow && !qbRow.hidden ? Boolean(qbCheck?.checked) : true;
+  btn.disabled = !(idMatches && qbOk);
+}
+
+document.getElementById("invoiceDeleteBtn")?.addEventListener("click", () => {
+  if (!currentInvoice) return;
+  const err = document.getElementById("deleteModalError");
+  if (err) err.textContent = "";
+  // Pre-fill reason from the void reason (editable).
+  const reasonInput = document.getElementById("deleteReasonInput");
+  if (reasonInput) reasonInput.value = currentInvoice.voidReason || "";
+  const idInput = document.getElementById("deleteConfirmInput");
+  if (idInput) idInput.value = "";
+  const target = document.getElementById("deleteConfirmTarget");
+  if (target) target.textContent = currentInvoice.id;
+  // QB checkbox only when a QB id exists.
+  const qbRow = document.getElementById("deleteQbCheckRow");
+  const qbCheck = document.getElementById("deleteQbConfirm");
+  if (qbRow) qbRow.hidden = !currentInvoice.quickbooksInvoiceId;
+  if (qbCheck) qbCheck.checked = false;
+  syncDeleteConfirmState();
+  openModal("deleteModal");
+  setTimeout(() => reasonInput?.focus(), 0);
+});
+document.getElementById("deleteCancelBtn")?.addEventListener("click", () => closeModal("deleteModal"));
+document.getElementById("deleteModal")?.addEventListener("click", (e) => {
+  if (e.target === document.getElementById("deleteModal")) closeModal("deleteModal");
+});
+document.getElementById("deleteConfirmInput")?.addEventListener("input", syncDeleteConfirmState);
+document.getElementById("deleteQbConfirm")?.addEventListener("change", syncDeleteConfirmState);
+
+document.getElementById("deleteConfirmBtn")?.addEventListener("click", async () => {
+  if (!currentInvoice) return;
+  const btn = document.getElementById("deleteConfirmBtn");
+  const err = document.getElementById("deleteModalError");
+  const reason = document.getElementById("deleteReasonInput")?.value || "";
+  const confirmId = document.getElementById("deleteConfirmInput")?.value.trim() || "";
+  const qbRow = document.getElementById("deleteQbCheckRow");
+  const qbVoidConfirmed = qbRow && !qbRow.hidden
+    ? Boolean(document.getElementById("deleteQbConfirm")?.checked)
+    : false;
+  if (err) err.textContent = "";
+  if (!reason.trim()) { if (err) err.textContent = "A reason is required."; return; }
+  btn.disabled = true;
+  try {
+    const r = await fetch(`/api/invoices/${encodeURIComponent(idFromPath)}`, {
+      method: "DELETE",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ reason, confirmId, qbVoidConfirmed })
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok || !data.ok) throw new Error((data.errors && data.errors[0]) || "Couldn't delete invoice.");
+    // Redirect to the index with a toast payload in the query string.
+    location.href = `/admin/invoices?deleted=${encodeURIComponent(data.deletedId || currentInvoice.id)}`;
+  } catch (e) {
+    if (err) err.textContent = e.message || "Failed.";
+    syncDeleteConfirmState();
+  }
+});
+
+// Close either modal on Escape.
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+  if (!document.getElementById("voidModal")?.hidden) closeModal("voidModal");
+  if (!document.getElementById("deleteModal")?.hidden) closeModal("deleteModal");
+});
+
+// Wire QB block refresh + reminder card + junk-warning card + void/delete
+// card render into the existing invoice render path so all update whenever
+// the invoice is loaded.
 const origRender = render;
 render = function (inv) {
   origRender(inv);
   refreshQbBlock();
   renderReminderCard(inv);
   renderJunkWarningCard(inv);
+  renderVoidDeleteCard(inv);
 };
 
 // ---- Authorization posture (admin-only) -----------------------------

@@ -21,6 +21,12 @@ const fsSync = require("node:fs");
 const path = require("node:path");
 
 const FILE = path.join(__dirname, "..", "data", "invoices.json");
+// Tombstone log for hard-deleted void invoices (feature-invoice-void-delete-
+// brief.md, 2026-07). Append-only, never pruned, never edited. Deliberately
+// EXCLUDED from the customer-delete referential scan (that scan lists files
+// explicitly in customers.hardDelete — this file is not among them), so a
+// tombstone can never re-block deleting the customer it belonged to.
+const DELETED_FILE = path.join(__dirname, "..", "data", "deleted-invoices.json");
 const HST_RATE = 0.13;
 
 const STATUSES = ["draft", "sent", "paid", "void"];
@@ -67,9 +73,42 @@ async function readAll() {
   }
 }
 
+// Atomic write: stage to .tmp, rename over the real file. Prevents a
+// partial invoices.json if the process dies mid-write — matters more now
+// that remove() rewrites the file after appending a tombstone (a torn
+// invoices.json with an already-written tombstone would be recoverable,
+// but a torn write on any path is worth avoiding). Matches parts.js.
 async function writeAll(records) {
   await ensureFile();
-  await fs.writeFile(FILE, JSON.stringify(records, null, 2) + "\n", "utf8");
+  const tmp = FILE + ".tmp";
+  await fs.writeFile(tmp, JSON.stringify(records, null, 2) + "\n", "utf8");
+  await fs.rename(tmp, FILE);
+}
+
+// Append one entry to the tombstone log, atomically. Read-modify-write
+// under the same flat-file model as the rest of the module; the log is
+// tiny (deletions are rare + deliberate) so the full-rewrite cost is a
+// non-issue. Throws on any failure so remove() can abort BEFORE it
+// touches invoices.json — no deletion without an audit record.
+async function appendDeletedTombstone(entry) {
+  await fs.mkdir(path.dirname(DELETED_FILE), { recursive: true });
+  let existing = [];
+  try {
+    const raw = await fsSync.existsSync(DELETED_FILE)
+      ? await fs.readFile(DELETED_FILE, "utf8")
+      : "[]";
+    const parsed = JSON.parse(raw || "[]");
+    if (Array.isArray(parsed)) existing = parsed;
+  } catch {
+    // A corrupt/unreadable tombstone file must not silently swallow the
+    // new record — surface it so the delete aborts and the operator can
+    // look, rather than overwriting a damaged audit log.
+    throw new Error("deleted-invoices.json is unreadable — aborting delete to protect the audit log.");
+  }
+  existing.push(entry);
+  const tmp = DELETED_FILE + ".tmp";
+  await fs.writeFile(tmp, JSON.stringify(existing, null, 2) + "\n", "utf8");
+  await fs.rename(tmp, DELETED_FILE);
 }
 
 function hydrate(inv) {
@@ -108,6 +147,11 @@ function hydrate(inv) {
     sentAt: inv?.sentAt || null,
     paidAt: inv?.paidAt || null,
     voidedAt: inv?.voidedAt || null,
+    // Void audit (feature-invoice-void-delete-brief.md). Set together by
+    // voidInvoice(). voidReason is optional per Patrick's steer — the
+    // mandatory reason lives on the DELETE step / tombstone, not here.
+    voidedBy: inv?.voidedBy || null,
+    voidReason: inv?.voidReason || "",
     // Whether the originating WO had paidOnSite=true at cascade time.
     // Persisted so the customer email + the invoice page can reshape
     // copy ("Thanks, payment received in the field") vs the default
@@ -466,10 +510,150 @@ async function appendHistory(id, entry) {
   return next;
 }
 
+// Void an invoice (feature-invoice-void-delete-brief.md §4.2). Follows the
+// bookings.cancel() shape — returns { ok, status } rather than throwing so
+// the route maps codes to HTTP cleanly.
+//
+//   draft | sent  → void (allowed)
+//   paid          → refused (409 invoice_paid). A paid invoice is a
+//                   financial fact; a genuine error there is a QB
+//                   credit-memo conversation, out of scope.
+//   void          → idempotent: returns the existing record, no duplicate
+//                   history entry (matches cascade idempotency style).
+//
+// `reason` is OPTIONAL (Patrick: the mandatory reason belongs to the
+// DELETE step). When supplied it is stored as voidReason and pre-fills the
+// delete modal. Voiding also cancels any pending-unsent invoice SMS so a
+// customer never gets a payment nudge for a voided invoice.
+async function voidInvoice(id, { reason = "", by = "admin" } = {}) {
+  const records = await readAll();
+  const idx = records.findIndex((r) => r.id === id);
+  if (idx === -1) return { ok: false, status: 404, code: "not_found", errors: ["Invoice not found."] };
+  const current = records[idx];
+
+  if (current.status === "void") {
+    return { ok: true, invoice: current, alreadyVoid: true };
+  }
+  if (current.status === "paid") {
+    return {
+      ok: false,
+      status: 409,
+      code: "invoice_paid",
+      errors: ["A paid invoice can't be voided here — that's a QuickBooks credit-memo. Only draft or sent invoices can be voided."]
+    };
+  }
+  // Only draft / sent remain (paid + void handled above), but guard the
+  // enum explicitly so a future status can't fall through to void.
+  if (current.status !== "draft" && current.status !== "sent") {
+    return { ok: false, status: 409, code: "invalid_status", errors: [`Can't void a "${current.status}" invoice.`] };
+  }
+
+  const now = new Date().toISOString();
+  const trimmedReason = String(reason || "").trim();
+  const next = { ...current };
+  next.status = "void";
+  next.voidedAt = now;
+  next.voidedBy = by;
+  next.voidReason = trimmedReason;
+  next.updatedAt = now;
+  const history = [...(current.history || []), {
+    ts: now,
+    action: "voided",
+    by,
+    note: trimmedReason
+  }];
+
+  // Cancel a pending-unsent invoice SMS. Clearing customerSmsScheduledAt
+  // short-circuits the 2-min sweep's `if (!scheduledAt) continue` guard;
+  // the setTimeout path already aborts on status==="void" — belt and
+  // suspenders. Only touch it when there's actually a pending schedule.
+  if (current.customerSmsScheduledAt && !current.customerSmsSentAt) {
+    next.customerSmsScheduledAt = null;
+    history.push({
+      ts: now,
+      action: "customer_sms_cancelled_voided",
+      by,
+      note: "Pending invoice SMS cancelled — invoice voided."
+    });
+  }
+
+  next.history = history;
+  records[idx] = next;
+  await writeAll(records);
+  return { ok: true, invoice: next };
+}
+
+// Hard-delete a VOID invoice, writing a permanent tombstone first
+// (feature-invoice-void-delete-brief.md §4.2). This is the single sanctioned
+// deviation from Hard Rule 4: the operational record leaves invoices.json,
+// but a frozen snapshot (+ reasons, actor, timestamp) is appended to
+// deleted-invoices.json, which is never pruned. Returns { ok, status, code }.
+//
+// Guards (all refuse with a specific code the UI maps to targeted copy):
+//   - not found                         → 404 not_found
+//   - status !== "void"                 → 409 invoice_not_void (void-first
+//                                         is the ONLY road to deletion)
+//   - empty reason                      → 400 reason_required (the tombstone
+//                                         reason is the permanent record)
+//   - has QB id, no qbVoidConfirmed     → 409 qb_push_exists (QBO is the
+//                                         legal ledger; confirm the manual
+//                                         QBO void before diverging locally)
+async function remove(id, { reason = "", by = "admin", qbVoidConfirmed = false } = {}) {
+  const records = await readAll();
+  const idx = records.findIndex((r) => r.id === id);
+  if (idx === -1) return { ok: false, status: 404, code: "not_found", errors: ["Invoice not found."] };
+  const current = records[idx];
+
+  if (current.status !== "void") {
+    return {
+      ok: false,
+      status: 409,
+      code: "invoice_not_void",
+      errors: ["Only a voided invoice can be deleted. Void it first (with a reason), then delete."]
+    };
+  }
+  const trimmedReason = String(reason || "").trim();
+  if (!trimmedReason) {
+    return { ok: false, status: 400, code: "reason_required", errors: ["A deletion reason is required — it's the permanent audit record."] };
+  }
+  if (current.quickbooksInvoiceId && qbVoidConfirmed !== true) {
+    return {
+      ok: false,
+      status: 409,
+      code: "qb_push_exists",
+      errors: ["This invoice was pushed to QuickBooks. Void it in QBO first, then retry with confirmation."]
+    };
+  }
+
+  const now = new Date().toISOString();
+  const tombstone = {
+    id: current.id,
+    deletedAt: now,
+    deletedBy: by,
+    reason: trimmedReason,
+    voidReason: current.voidReason || "",
+    qbInvoiceId: current.quickbooksInvoiceId || null,
+    qbVoidConfirmed: qbVoidConfirmed === true,
+    // Complete frozen snapshot of the record as it existed at deletion,
+    // history[] included. This IS the audit trail post-deletion.
+    snapshot: current
+  };
+
+  // Tombstone FIRST — if this throws, we abort before mutating
+  // invoices.json. A crash BETWEEN the two writes leaves a tombstone for a
+  // still-present invoice (harmless; a retry re-tombstones + removes).
+  await appendDeletedTombstone(tombstone);
+
+  records.splice(idx, 1);
+  await writeAll(records);
+  return { ok: true, deletedId: id, tombstone };
+}
+
 module.exports = {
   STATUSES,
   HST_RATE,
   INVOICE_DISCLAIMERS,
+  DELETED_FILE,
   list,
   get,
   listByWorkOrder,
@@ -477,6 +661,8 @@ module.exports = {
   createDraft,
   update,
   appendHistory,
+  voidInvoice,
+  remove,
   ensurePaymentToken,
   getByPaymentToken,
   ensurePortalToken,

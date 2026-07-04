@@ -141,6 +141,17 @@
             <p class="invoice-action-meta" id="invoiceStatusMeta"></p>
           </section>
 
+          <!-- Void + delete (feature-invoice-void-delete-brief.md §4.4).
+               Void is visible on draft/sent; Delete is visible ONLY once
+               the invoice is void. Void-first is the mandatory road to
+               deletion. Both open a modal below. -->
+          <section class="invoice-action-card" id="invoiceVoidDeleteCard">
+            <span class="invoice-action-label">Void &amp; delete</span>
+            <p class="invoice-action-meta" id="invoiceVoidMeta" hidden></p>
+            <button type="button" id="invoiceVoidBtn" class="invoice-action-btn invoice-action-btn--outline" hidden>Void invoice</button>
+            <button type="button" id="invoiceDeleteBtn" class="invoice-action-btn invoice-action-btn--danger" hidden>Delete invoice</button>
+          </section>
+
           <section class="invoice-action-card">
             <span class="invoice-action-label">Customer-facing</span>
             <a class="invoice-action-btn" id="invoicePdfLink" href="#" target="_blank" rel="noopener">📄 Open PDF</a>
@@ -260,6 +271,45 @@
         </aside>
       </div>
     </main>
+  </div>
+
+  <!-- Void modal (feature-invoice-void-delete-brief.md §4.4). Reason is
+       optional — the mandatory reason is captured at delete time. -->
+  <div class="invoice-modal" id="voidModal" role="dialog" aria-modal="true" aria-labelledby="voidModalTitle" hidden>
+    <div class="invoice-modal-sheet">
+      <h2 id="voidModalTitle">Void invoice</h2>
+      <p class="invoice-modal-intro">Voiding stops any pending payment reminder and marks the invoice as cancelled. You can delete it afterward. A voided invoice can’t be sent or paid.</p>
+      <label class="invoice-modal-label" for="voidReasonInput">Reason (optional)</label>
+      <textarea class="invoice-modal-textarea" id="voidReasonInput" maxlength="500" placeholder="e.g. Duplicate of I-2026-0041"></textarea>
+      <p class="invoice-modal-error" id="voidModalError"></p>
+      <div class="invoice-modal-actions">
+        <button type="button" class="invoice-action-btn" id="voidCancelBtn">Cancel</button>
+        <button type="button" class="invoice-action-btn invoice-action-btn--outline" id="voidConfirmBtn">Void invoice</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Delete modal (feature-invoice-void-delete-brief.md §4.4). Type-to-
+       confirm + required reason (pre-filled from the void reason) + the QB
+       checkbox when a QuickBooks id exists. -->
+  <div class="invoice-modal" id="deleteModal" role="dialog" aria-modal="true" aria-labelledby="deleteModalTitle" hidden>
+    <div class="invoice-modal-sheet">
+      <h2 id="deleteModalTitle">Delete invoice</h2>
+      <p class="invoice-modal-intro">This permanently removes the invoice. A full snapshot — including this reason — is kept forever in the deletion audit log. This can’t be undone.</p>
+      <label class="invoice-modal-label" for="deleteReasonInput">Reason (required)</label>
+      <textarea class="invoice-modal-textarea" id="deleteReasonInput" maxlength="500" placeholder="Why is this invoice being deleted?"></textarea>
+      <label class="invoice-modal-label" for="deleteConfirmInput">Type the invoice ID to confirm — <strong id="deleteConfirmTarget"></strong></label>
+      <input type="text" class="invoice-modal-input" id="deleteConfirmInput" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="I-2026-0000">
+      <label class="invoice-modal-qbcheck" id="deleteQbCheckRow" hidden>
+        <input type="checkbox" id="deleteQbConfirm">
+        <span>This invoice was pushed to QuickBooks. I have voided it in QuickBooks Online.</span>
+      </label>
+      <p class="invoice-modal-error" id="deleteModalError"></p>
+      <div class="invoice-modal-actions">
+        <button type="button" class="invoice-action-btn" id="deleteCancelBtn">Cancel</button>
+        <button type="button" class="invoice-action-btn invoice-action-btn--danger" id="deleteConfirmBtn" disabled>Delete invoice</button>
+      </div>
+    </div>
   </div>
 
   <script src="/crm/crm-nav.js"></script>

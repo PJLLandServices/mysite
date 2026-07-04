@@ -77,4 +77,22 @@ filterBtns.forEach((btn) => {
   });
 });
 
+// Post-delete toast — the invoice detail page redirects here with
+// ?deleted=<id> after a successful tombstone delete. Show a brief banner,
+// then scrub the param so a refresh doesn't re-toast.
+(function showDeletedToast() {
+  const params = new URLSearchParams(location.search);
+  const deletedId = params.get("deleted");
+  if (!deletedId) return;
+  const toast = document.createElement("div");
+  toast.textContent = `${deletedId} deleted — reason recorded in the audit log.`;
+  toast.setAttribute("role", "status");
+  toast.style.cssText = "position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:#1B4D2E;color:#fff;padding:12px 18px;border-radius:10px;font-size:14px;box-shadow:0 8px 24px rgba(0,0,0,0.25);z-index:2000;max-width:calc(100vw - 32px);text-align:center;";
+  document.body.appendChild(toast);
+  setTimeout(() => toast.remove(), 5000);
+  params.delete("deleted");
+  const qs = params.toString();
+  history.replaceState({}, "", location.pathname + (qs ? `?${qs}` : ""));
+})();
+
 load();

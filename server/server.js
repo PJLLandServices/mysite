@@ -9101,6 +9101,74 @@ async function handleApi(req, res, pathname) {
     }
   }
 
+  // POST /api/invoices/:id/void — reasoned void action (feature-invoice-
+  // void-delete-brief.md §4.3). Admin-only (mirrors the booking hard-delete
+  // precedent — the /api/invoices "user" gate isn't enough for a
+  // destructive-adjacent action). Refuses paid, idempotent on already-void.
+  // Body: { reason?: string }. Mirrors the void to QBO best-effort, same
+  // pattern as the PATCH→void path above.
+  const invoiceVoidMatch = pathname.match(/^\/api\/invoices\/([^/]+)\/void$/);
+  if (invoiceVoidMatch && req.method === "POST") {
+    try {
+      const session = await requireAdmin(req);
+      if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required to void invoices."] });
+      const id = decodeURIComponent(invoiceVoidMatch[1]);
+      const body = await parseRequestBody(req).catch(() => ({}));
+      const reason = typeof body?.reason === "string" ? body.reason : "";
+      const result = await invoices.voidInvoice(id, { reason, by: session.uid || "admin" });
+      if (!result.ok) {
+        return sendJson(res, result.status || 400, { ok: false, code: result.code, errors: result.errors });
+      }
+
+      // Mirror the void to QuickBooks — best-effort, non-blocking, same as
+      // the legacy PATCH→void path. A QB failure surfaces as a warning; the
+      // local void stands. Skip when the invoice was already void (no-op)
+      // or carries no QB id.
+      let qbWarning = null;
+      if (!result.alreadyVoid && result.invoice.quickbooksInvoiceId) {
+        try {
+          if (quickbooks.isConfigured() && (await quickbooks.isConnected())) {
+            await quickbooks.voidInvoice(result.invoice.quickbooksInvoiceId);
+          }
+        } catch (qbErr) {
+          console.warn(`[invoice-void] QB void failed for ${id}: ${qbErr.message}`);
+          qbWarning = `Voided locally, but QuickBooks rejected the void: ${qbErr.message}. Void it manually in QBO before deleting.`;
+        }
+      }
+      return sendJson(res, 200, { ok: true, invoice: result.invoice, warning: qbWarning });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't void invoice."] });
+    }
+  }
+
+  // DELETE /api/invoices/:id — hard-delete a VOID invoice, tombstoned
+  // (feature-invoice-void-delete-brief.md §4.3). Admin-only. Requires the
+  // typed confirmId to match the invoice id (same type-to-confirm shape as
+  // the booking hard delete). Guard codes: invoice_not_void, reason_required,
+  // qb_push_exists, confirm_mismatch — the UI renders targeted copy per code.
+  if (invoiceMatch && req.method === "DELETE") {
+    try {
+      const session = await requireAdmin(req);
+      if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required to delete invoices."] });
+      const id = decodeURIComponent(invoiceMatch[1]);
+      const body = await parseRequestBody(req).catch(() => ({}));
+      const reason = typeof body?.reason === "string" ? body.reason : "";
+      const confirmId = typeof body?.confirmId === "string" ? body.confirmId : "";
+      const qbVoidConfirmed = body?.qbVoidConfirmed === true;
+
+      if (confirmId !== id) {
+        return sendJson(res, 409, { ok: false, code: "confirm_mismatch", errors: ["Type the exact invoice ID to confirm deletion."] });
+      }
+      const result = await invoices.remove(id, { reason, by: session.uid || "admin", qbVoidConfirmed });
+      if (!result.ok) {
+        return sendJson(res, result.status || 400, { ok: false, code: result.code, errors: result.errors });
+      }
+      return sendJson(res, 200, { ok: true, deletedId: result.deletedId });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't delete invoice."] });
+    }
+  }
+
   // ---------- Suppliers ---------------------------------------------
   // Phase 1 of the materials management system. Vendors PJL buys from;
   // referenced from each part in parts.json via supplierIds[]. Used in
