@@ -227,6 +227,30 @@ html[data-season-phase="midseason"] [data-season-card="service"],
 html[data-season-phase="fall"] [data-season-card="fall"],
 html[data-season-phase="pre-fall"] [data-season-card="fall"]{border-color:var(--amber);}
 @media(max-width:760px){.season-spot{grid-template-columns:1fr;}.season-track{grid-template-columns:1fr;}.season-chip{height:130px;}}
+
+/* ---- Hydrawise smart-upgrade band (dedicated section) ---- */
+.hydrawise-band{background:linear-gradient(135deg,var(--green) 0%,var(--green-mid) 100%);color:#fff;}
+.hydrawise-band .hw-grid{display:grid;grid-template-columns:.95fr 1.05fr;gap:clamp(24px,3.5vw,48px);align-items:center;}
+/* Photo is portrait (1280x1707 = 3:4) — box matches its natural shape so nothing
+   gets cover-cropped away. Capped height keeps the band balanced on desktop. */
+.hw-media{position:relative;border-radius:var(--r-xl,20px);overflow:hidden;aspect-ratio:3/4;max-height:560px;justify-self:center;width:100%;max-width:440px;box-shadow:0 20px 50px rgba(0,0,0,.35);}
+.hw-media img{width:100%;height:100%;object-fit:cover;display:block;}
+.hw-media__tag{position:absolute;top:14px;left:14px;background:rgba(15,31,20,.75);backdrop-filter:blur(4px);color:#fff;font-size:12px;font-weight:700;letter-spacing:.05em;padding:6px 13px;border-radius:99px;border:1px solid rgba(255,255,255,.25);}
+.hydrawise-band h2{color:#fff !important;font-size:clamp(26px,3.4vw,40px);margin:0 0 14px;line-height:1.08;}
+.hydrawise-band h2 em{font-style:italic;color:var(--amber-light);}
+.hydrawise-band .hw-lede{color:rgba(255,255,255,.88) !important;font-size:16px;line-height:1.7;margin:0 0 18px;}
+.hw-features{list-style:none;padding:0;margin:0 0 22px;display:grid;grid-template-columns:1fr 1fr;gap:10px 18px;}
+.hw-features li{display:flex;gap:10px;align-items:flex-start;color:rgba(255,255,255,.92);font-size:14.5px;line-height:1.5;}
+.hw-features li b{color:#fff;}
+.hw-features .ic{flex:0 0 auto;width:26px;height:26px;border-radius:8px;background:rgba(255,255,255,.12);display:inline-flex;align-items:center;justify-content:center;font-size:14px;}
+.hw-tiers{display:flex;flex-wrap:wrap;gap:10px;margin:0 0 22px;}
+.hw-tier{background:rgba(255,255,255,.10);border:1px solid rgba(255,255,255,.22);border-radius:14px;padding:10px 16px;text-align:center;}
+.hw-tier small{display:block;color:rgba(255,255,255,.7);font-size:12px;letter-spacing:.04em;text-transform:uppercase;margin-bottom:2px;}
+.hw-tier strong{color:var(--amber-light);font-size:19px;}
+.hw-cred{display:inline-flex;align-items:center;gap:8px;color:rgba(255,255,255,.75);font-size:13px;margin-top:14px;}
+.hydrawise-band .season-actions .s-ghost{background:rgba(255,255,255,.08);border-color:rgba(255,255,255,.35);color:#fff;}
+.hydrawise-band .season-actions .s-ghost:hover{background:rgba(255,255,255,.16);}
+@media(max-width:860px){.hydrawise-band .hw-grid{grid-template-columns:1fr;}.hw-features{grid-template-columns:1fr;}}
 </style>
   <link rel="stylesheet" href="css/chat-widget.css">
 </head>
@@ -425,16 +449,47 @@ html[data-season-phase="pre-fall"] [data-season-card="fall"]{border-color:var(--
         <p>Designed for the lot, not from a template. Hunter heads, Hunter HPC-400 Hydrawise smart controller standard. North York estate builds often run 8-16 zones; Lawrence Park and Forest Hill systems frequently pair lawn zones with drip overlay on hedges and beds.</p>
         <span class="price-tag">Calculator pricing by zone count</span>
       </div>
-      <div class="svc-card">
+      <a href="#hydrawise-toronto" class="svc-card" style="display:block;text-decoration:none;">
         <h3>📡 Hydrawise Smart Upgrade</h3>
         <p>Retrofit your existing system with the Hunter HPC-400 Hydrawise WiFi controller. App control, predictive weather-skipping, real-time leak alerts. Typical install runs under 90 minutes.</p>
-        <span class="price-tag">From <span data-price="controller_1_4">$595</span> (1-4 zones)</span>
-      </div>
+        <span class="price-tag">From <span data-price="controller_1_4">$595</span> (1-4 zones) ↓</span>
+      </a>
       <div class="svc-card">
         <h3>💧 Drip Irrigation</h3>
         <p>Particularly relevant for Lawrence Park and Forest Hill gardens — long hedge runs, perennial beds, raised vegetable beds, container plantings. Designed as a separate zone off your main controller.</p>
         <span class="price-tag">Custom quote by run length</span>
       </div>
+    </div>
+  </div>
+</section>
+
+<!-- Hydrawise smart upgrade — dedicated section (reuses copy + photo from sprinkler-hydrawise.html) -->
+<section class="section hydrawise-band" id="hydrawise-toronto">
+  <div class="container hw-grid" style="max-width:1080px;">
+    <div class="hw-media">
+      <span class="hw-media__tag">📷 Real PJL install — Hunter HPC-400</span>
+      <img src="blog-hydrawise-hpc-install.jpg" alt="Hunter Hydrawise HPC-400 smart controller installed by PJL Land Services" loading="lazy">
+    </div>
+    <div>
+      <h2>The Toronto favourite: a <em>Hydrawise smart upgrade</em>.</h2>
+      <p class="hw-lede">Most Toronto systems we service run controllers that pre-date WiFi. Swap the old timer for a Hunter HPC-400 Hydrawise and the system starts thinking for itself — typical install runs under 90 minutes, and generic-timer households typically cut seasonal watering 30–40%.</p>
+      <ul class="hw-features">
+        <li><span class="ic">🌦️</span><span><b>Weather skipping</b> — skips runs when rain is forecast, throttles on cool days, runs longer in heat.</span></li>
+        <li><span class="ic">📱</span><span><b>Full app control</b> — run, pause or re-program any zone from your phone, anywhere.</span></li>
+        <li><span class="ic">🚨</span><span><b>Smart leak alerts</b> — stuck valve, odd pressure, missed run: you know before the lawn does.</span></li>
+        <li><span class="ic">📊</span><span><b>Runtime history</b> — every run logged, so small faults surface before brown patches do.</span></li>
+      </ul>
+      <div class="hw-tiers">
+        <div class="hw-tier"><small>1–4 zones</small><strong><span data-price="controller_1_4">$595</span></strong></div>
+        <div class="hw-tier"><small>5–7 zones</small><strong><span data-price="controller_5_7">$750</span></strong></div>
+        <div class="hw-tier"><small>8–16 zones</small><strong><span data-price="controller_8_16">$1,195</span></strong></div>
+      </div>
+      <div class="season-actions">
+        <a href="book.html?service=hydrawise_retrofit" class="s-primary">Book your upgrade <span aria-hidden="true">→</span></a>
+        <a href="sprinkler-hydrawise.html" class="s-ghost">Everything Hydrawise does</a>
+        <a href="water-cost-calculator.html" class="s-ghost">Estimate your water savings</a>
+      </div>
+      <span class="hw-cred">🎓 Hunter University trained · Authorized Hydrawise installer · All-in pricing, no surprise add-ons</span>
     </div>
   </div>
 </section>
