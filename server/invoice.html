@@ -285,7 +285,9 @@
         <option value="Duplicate">Duplicate</option>
         <option value="Testing">Testing</option>
         <option value="Required additional work">Required additional work</option>
+        <option value="__other">Other…</option>
       </select>
+      <input type="text" class="invoice-modal-input invoice-modal-other" id="voidReasonOther" maxlength="500" placeholder="Enter a reason" hidden>
       <p class="invoice-modal-error" id="voidModalError"></p>
       <div class="invoice-modal-actions">
         <button type="button" class="invoice-action-btn" id="voidCancelBtn">Cancel</button>
@@ -307,7 +309,9 @@
         <option value="Duplicate">Duplicate</option>
         <option value="Testing">Testing</option>
         <option value="Required additional work">Required additional work</option>
+        <option value="__other">Other…</option>
       </select>
+      <input type="text" class="invoice-modal-input invoice-modal-other" id="deleteReasonOther" maxlength="500" placeholder="Enter a reason" hidden>
       <label class="invoice-modal-check" id="deleteConfirmRow">
         <input type="checkbox" id="deleteConfirmCheck">
         <span>Yes, permanently delete this invoice.</span>

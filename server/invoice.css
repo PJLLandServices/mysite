@@ -355,6 +355,9 @@
   box-sizing: border-box;
 }
 .invoice-modal-textarea { resize: vertical; min-height: 68px; }
+/* Free-text input revealed when the reason dropdown is set to "Other…". */
+.invoice-modal-other { margin-top: 8px; }
+.invoice-modal-other[hidden] { display: none; }
 .invoice-modal-qbcheck {
   display: flex;
   align-items: flex-start;

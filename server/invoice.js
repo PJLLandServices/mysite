@@ -930,14 +930,39 @@ function closeModal(id) {
   if (m) m.hidden = true;
 }
 
+// Reason helpers — the dropdown carries a "__other" sentinel that reveals
+// a free-text input. readReason returns the effective reason (the typed
+// text when "Other…" is selected, the dropdown value otherwise).
+function readReason(selectId, otherId) {
+  const sel = document.getElementById(selectId);
+  const other = document.getElementById(otherId);
+  if (!sel) return "";
+  if (sel.value === "__other") return (other?.value || "").trim();
+  return sel.value;
+}
+function toggleOtherInput(selectId, otherId) {
+  const sel = document.getElementById(selectId);
+  const other = document.getElementById(otherId);
+  if (!sel || !other) return;
+  other.hidden = sel.value !== "__other";
+}
+
 // Void modal
 document.getElementById("invoiceVoidBtn")?.addEventListener("click", () => {
   const err = document.getElementById("voidModalError");
   if (err) err.textContent = "";
   const input = document.getElementById("voidReasonInput");
   if (input) input.value = "";
+  const other = document.getElementById("voidReasonOther");
+  if (other) { other.value = ""; other.hidden = true; }
   openModal("voidModal");
   setTimeout(() => input?.focus(), 0);
+});
+document.getElementById("voidReasonInput")?.addEventListener("change", () => {
+  toggleOtherInput("voidReasonInput", "voidReasonOther");
+  if (document.getElementById("voidReasonInput")?.value === "__other") {
+    setTimeout(() => document.getElementById("voidReasonOther")?.focus(), 0);
+  }
 });
 document.getElementById("voidCancelBtn")?.addEventListener("click", () => closeModal("voidModal"));
 document.getElementById("voidModal")?.addEventListener("click", (e) => {
@@ -948,7 +973,7 @@ document.getElementById("voidConfirmBtn")?.addEventListener("click", async () =>
   if (!currentInvoice) return;
   const btn = document.getElementById("voidConfirmBtn");
   const err = document.getElementById("voidModalError");
-  const reason = document.getElementById("voidReasonInput")?.value || "";
+  const reason = readReason("voidReasonInput", "voidReasonOther");
   btn.disabled = true;
   if (err) err.textContent = "";
   try {
@@ -980,7 +1005,8 @@ function syncDeleteConfirmState() {
   const qbRow = document.getElementById("deleteQbCheckRow");
   const qbCheck = document.getElementById("deleteQbConfirm");
   if (!btn || !reasonSel || !confirmCheck) return;
-  const reasonChosen = Boolean(reasonSel.value);
+  // "Other…" requires the free-text field to be non-empty.
+  const reasonChosen = Boolean(readReason("deleteReasonInput", "deleteReasonOther"));
   const confirmed = Boolean(confirmCheck.checked);
   const qbOk = qbRow && !qbRow.hidden ? Boolean(qbCheck?.checked) : true;
   btn.disabled = !(reasonChosen && confirmed && qbOk);
@@ -990,12 +1016,24 @@ document.getElementById("invoiceDeleteBtn")?.addEventListener("click", () => {
   if (!currentInvoice) return;
   const err = document.getElementById("deleteModalError");
   if (err) err.textContent = "";
-  // Pre-select the reason from the void reason when it matches an option;
-  // otherwise leave on the "Select a reason…" placeholder.
+  // Pre-fill the reason from the void reason: match a fixed option when
+  // possible, else drop a non-empty custom reason into "Other…".
   const reasonSel = document.getElementById("deleteReasonInput");
+  const reasonOther = document.getElementById("deleteReasonOther");
   if (reasonSel) {
     const pre = currentInvoice.voidReason || "";
-    reasonSel.value = Array.from(reasonSel.options).some((o) => o.value === pre) ? pre : "";
+    reasonSel.value = pre;
+    if (pre && reasonSel.value === pre) {
+      // Matched a fixed option.
+      if (reasonOther) { reasonOther.value = ""; reasonOther.hidden = true; }
+    } else if (pre) {
+      // Custom reason — route it through Other.
+      reasonSel.value = "__other";
+      if (reasonOther) { reasonOther.value = pre; reasonOther.hidden = false; }
+    } else {
+      reasonSel.value = "";
+      if (reasonOther) { reasonOther.value = ""; reasonOther.hidden = true; }
+    }
   }
   const confirmCheck = document.getElementById("deleteConfirmCheck");
   if (confirmCheck) confirmCheck.checked = false;
@@ -1012,7 +1050,14 @@ document.getElementById("deleteCancelBtn")?.addEventListener("click", () => clos
 document.getElementById("deleteModal")?.addEventListener("click", (e) => {
   if (e.target === document.getElementById("deleteModal")) closeModal("deleteModal");
 });
-document.getElementById("deleteReasonInput")?.addEventListener("change", syncDeleteConfirmState);
+document.getElementById("deleteReasonInput")?.addEventListener("change", () => {
+  toggleOtherInput("deleteReasonInput", "deleteReasonOther");
+  if (document.getElementById("deleteReasonInput")?.value === "__other") {
+    setTimeout(() => document.getElementById("deleteReasonOther")?.focus(), 0);
+  }
+  syncDeleteConfirmState();
+});
+document.getElementById("deleteReasonOther")?.addEventListener("input", syncDeleteConfirmState);
 document.getElementById("deleteConfirmCheck")?.addEventListener("change", syncDeleteConfirmState);
 document.getElementById("deleteQbConfirm")?.addEventListener("change", syncDeleteConfirmState);
 
@@ -1020,7 +1065,7 @@ document.getElementById("deleteConfirmBtn")?.addEventListener("click", async () 
   if (!currentInvoice) return;
   const btn = document.getElementById("deleteConfirmBtn");
   const err = document.getElementById("deleteModalError");
-  const reason = document.getElementById("deleteReasonInput")?.value || "";
+  const reason = readReason("deleteReasonInput", "deleteReasonOther");
   // The "confirm delete" checkbox is the deliberate gate now; the server
   // still validates confirmId === id, so send the id directly.
   const confirmId = currentInvoice.id;
@@ -1029,7 +1074,7 @@ document.getElementById("deleteConfirmBtn")?.addEventListener("click", async () 
     ? Boolean(document.getElementById("deleteQbConfirm")?.checked)
     : false;
   if (err) err.textContent = "";
-  if (!reason) { if (err) err.textContent = "Choose a reason."; return; }
+  if (!reason) { if (err) err.textContent = "Choose or enter a reason."; return; }
   btn.disabled = true;
   try {
     const r = await fetch(`/api/invoices/${encodeURIComponent(idFromPath)}`, {
