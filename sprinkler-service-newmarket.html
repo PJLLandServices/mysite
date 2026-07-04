@@ -72,6 +72,10 @@
 
 <style>
 .area-hero{padding:156px 0 80px;background:radial-gradient(ellipse 60% 55% at 20% 20%,rgba(74,140,92,.30),transparent 60%),radial-gradient(ellipse 55% 50% at 85% 80%,rgba(224,123,36,.18),transparent 60%),linear-gradient(135deg,var(--dark) 0%,var(--green) 70%,var(--green-mid) 100%);position:relative;overflow:hidden;}
+@media(max-width:640px){.area-hero{padding:var(--hero-nav-clearance) 0 56px;}}
+
+
+
 .area-hero-inner{position:relative;z-index:2;max-width:820px;}
 .breadcrumbs{font-size:13px;color:rgba(255,255,255,.65);margin-bottom:18px;display:flex;gap:8px;flex-wrap:wrap;}
 .breadcrumbs a{color:rgba(255,255,255,.85);}.breadcrumbs a:hover{color:var(--amber-light);}
@@ -88,22 +92,31 @@
 .area-hero-actions .btn-ghost:hover{background:rgba(255,255,255,.10);}
 .area-hero-meta{display:flex;flex-wrap:wrap;gap:14px 22px;color:rgba(255,255,255,.7);font-size:14px;}
 .area-hero-meta strong{color:#fff;font-weight:700;}
+
 .section{padding:clamp(56px,8vw,96px) 0;}
 .section.cream{background:var(--cream);}
 .section h2{font-size:clamp(28px,3.8vw,42px);color:var(--green);margin-bottom:18px;}
 .section p{font-size:17px;line-height:1.75;color:var(--text-mid);margin-bottom:18px;}
+.section ul{padding-left:26px;font-size:17px;color:var(--text-mid);line-height:1.75;}
+.section li{margin-bottom:8px;}
+.section li::marker{color:var(--amber);}
+
 .svc-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px;margin:24px 0;}
 .svc-card{background:#fff;border:1px solid var(--border);border-radius:var(--r-lg);padding:24px;transition:transform .2s ease,box-shadow .2s ease,border-color .2s ease;}
 .svc-card:hover{transform:translateY(-4px);border-color:rgba(74,140,92,.30);box-shadow:0 12px 30px rgba(15,31,20,.08);}
 .svc-card h3{color:var(--green) !important;font-size:19px !important;margin:0 0 8px !important;text-transform:none !important;letter-spacing:-.005em !important;}
 .svc-card p{font-size:15px !important;line-height:1.6 !important;color:var(--text-mid) !important;margin:0 0 12px !important;}
 .svc-card .price-tag{display:inline-block;background:var(--amber-pale);color:var(--amber);font-size:12px;font-weight:700;letter-spacing:.06em;padding:5px 12px;border-radius:99px;}
+
 .neighborhoods{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin-top:18px;}
 .neighborhood{background:#fff;border:1px solid var(--border);border-radius:99px;padding:10px 18px;font-size:14px;color:var(--green);font-weight:600;text-align:center;transition:background .2s ease,border-color .2s ease;}
 .neighborhood:hover{background:var(--green-pale);border-color:var(--green-light);}
+a.neighborhood{text-decoration:none;}
+
 .local-detail{background:linear-gradient(135deg,var(--green-pale) 0%,#f4f9ec 100%);border-left:4px solid var(--green-light);border-radius:0 var(--r-lg) var(--r-lg) 0;padding:24px 28px;margin:24px 0;}
 .local-detail h4{color:var(--green) !important;font-size:18px !important;margin:0 0 8px !important;text-transform:none !important;letter-spacing:-.005em !important;}
 .local-detail p{margin:0 !important;font-size:15px !important;line-height:1.65 !important;color:var(--text) !important;}
+
 .cta-strip{background:linear-gradient(135deg,var(--green) 0%,var(--green-mid) 100%);color:#fff;padding:48px 0;}
 .cta-strip-inner{display:flex;align-items:center;justify-content:space-between;gap:24px;flex-wrap:wrap;}
 .cta-strip h3{color:#fff !important;margin:0 !important;font-size:clamp(22px,2.6vw,28px);text-transform:none !important;letter-spacing:-.005em !important;}
@@ -114,14 +127,15 @@
 .cta-strip-actions .primary:hover{background:var(--amber-light);}
 .cta-strip-actions .ghost{background:rgba(255,255,255,.10);border:1px solid rgba(255,255,255,.20);color:#fff;}
 .cta-strip-actions .ghost:hover{background:rgba(255,255,255,.18);}
-.related-cities{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;margin-top:24px;}
+
+.related-cities{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;margin-top:24px;}
 .related-city{display:block;background:#fff;border:1px solid var(--border);border-radius:var(--r-lg);padding:18px 22px;transition:transform .2s ease,border-color .2s ease,box-shadow .2s ease;}
 .related-city:hover{transform:translateY(-3px);border-color:rgba(74,140,92,.25);box-shadow:0 10px 26px rgba(15,31,20,.06);}
 .related-city h4{color:var(--green) !important;margin:0 0 4px !important;font-size:16px !important;text-transform:none !important;letter-spacing:-.005em !important;}
 .related-city p{margin:0 !important;font-size:13px !important;color:var(--text-muted) !important;line-height:1.4 !important;}
+
 @media(max-width:760px){.svc-grid{grid-template-columns:1fr;}.cta-strip-inner{flex-direction:column;align-items:flex-start;}}
-@media(max-width:640px){.area-hero{padding:var(--hero-nav-clearance) 0 56px;}}
-.pricing-newmarket h3{color:var(--green);font-size:21px;margin:28px 0 12px;text-transform:none;letter-spacing:-.005em;}
+.pricing-city h3{color:var(--green);font-size:21px;margin:28px 0 12px;text-transform:none;letter-spacing:-.005em;}
 .pricing-table{width:100%;border-collapse:collapse;background:#fff;border:1px solid var(--border);border-radius:var(--r-lg);overflow:hidden;margin:0 0 12px;font-size:15px;}
 .pricing-table thead{background:var(--green-pale);}
 .pricing-table th,.pricing-table td{padding:12px 16px;text-align:left;border-bottom:1px solid var(--border);}
@@ -131,29 +145,138 @@
 .pricing-table tbody td{color:var(--text-mid);font-weight:600;}
 .pricing-note{font-size:14px;color:var(--text-muted);margin:0 0 18px;}
 .pricing-note small{font-size:14px;}
-.pricing-newmarket .btn-primary{display:inline-flex;align-items:center;gap:10px;background:var(--amber);color:#fff;padding:13px 24px;border-radius:99px;font-weight:700;box-shadow:0 8px 20px rgba(224,123,36,.30);}
-.pricing-newmarket .btn-primary:hover{background:var(--amber-light);}
-.pricing-newmarket .btn-secondary{display:inline-flex;align-items:center;gap:10px;background:#fff;border:1px solid var(--green);color:var(--green);padding:13px 22px;border-radius:99px;font-weight:700;}
-.pricing-newmarket .btn-secondary:hover{background:var(--green-pale);}
+.pricing-city .btn-primary{display:inline-flex;align-items:center;gap:10px;background:var(--amber);color:#fff;padding:13px 24px;border-radius:99px;font-weight:700;box-shadow:0 8px 20px rgba(224,123,36,.30);}
+.pricing-city .btn-primary:hover{background:var(--amber-light);}
+.pricing-city .btn-secondary{display:inline-flex;align-items:center;gap:10px;background:#fff;border:1px solid var(--green);color:var(--green);padding:13px 22px;border-radius:99px;font-weight:700;}
+.pricing-city .btn-secondary:hover{background:var(--green-pale);}
 .pricing-cta-row{display:flex;flex-direction:row;flex-wrap:wrap;gap:12px;align-items:center;margin:18px 0;}
 .pricing-cta-row > a{justify-content:center;}
-@media(max-width:429px){.pricing-cta-row{flex-direction:column;align-items:stretch;}.pricing-cta-row > a{width:100%;}}
+@media(max-width:639px){.pricing-cta-row{flex-direction:column;align-items:stretch;}.pricing-cta-row > a{width:100%;}}
 .service-checklist{list-style:none;padding:0;margin:18px 0;display:grid;grid-template-columns:1fr;gap:10px;}
 .service-checklist li{background:#fff;border:1px solid var(--border);border-left:3px solid var(--green-light);border-radius:var(--r);padding:12px 16px;font-size:15px;line-height:1.55;color:var(--text);}
-.faq-newmarket details{background:#fff;border:1px solid var(--border);border-radius:var(--r-lg);padding:0;margin:0 0 12px;overflow:hidden;}
-.faq-newmarket details[open]{border-color:rgba(74,140,92,.35);box-shadow:0 6px 18px rgba(15,31,20,.06);}
-.faq-newmarket summary{cursor:pointer;padding:18px 22px;list-style:none;display:block;}
-.faq-newmarket summary::-webkit-details-marker{display:none;}
-.faq-newmarket summary h3{display:inline;color:var(--green);font-size:17px;margin:0;text-transform:none;letter-spacing:-.005em;font-weight:700;}
-.faq-newmarket summary::after{content:'+';float:right;color:var(--green);font-weight:700;font-size:22px;line-height:1;margin-left:12px;}
-.faq-newmarket details[open] summary::after{content:'–';}
-.faq-newmarket details p{padding:0 22px 18px;margin:0;font-size:15px;line-height:1.65;color:var(--text-mid);}</style>
+.faq-city details{background:#fff;border:1px solid var(--border);border-radius:var(--r-lg);padding:0;margin:0 0 12px;overflow:hidden;}
+.faq-city details[open]{border-color:rgba(74,140,92,.35);box-shadow:0 6px 18px rgba(15,31,20,.06);}
+.faq-city summary{cursor:pointer;padding:18px 22px;list-style:none;display:block;}
+.faq-city summary::-webkit-details-marker{display:none;}
+.faq-city summary h3{display:inline;color:var(--green);font-size:17px;margin:0;text-transform:none;letter-spacing:-.005em;font-weight:700;}
+.faq-city summary::after{content:'+';float:right;color:var(--green);font-weight:700;font-size:22px;line-height:1;margin-left:12px;}
+.faq-city details[open] summary::after{content:'–';}
+.faq-city details p{padding:0 22px 18px;margin:0;font-size:15px;line-height:1.65;color:var(--text-mid);}
+.hood-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px;margin-top:24px;}
+.hood-card{background:#fff;border:1px solid var(--border);border-radius:var(--r-lg);padding:0;display:flex;flex-direction:column;text-decoration:none;overflow:hidden;transition:transform .2s ease,box-shadow .2s ease,border-color .2s ease;}
+.hood-card:hover{transform:translateY(-3px);border-color:rgba(74,140,92,.30);box-shadow:0 10px 28px rgba(15,31,20,.08);}
+.hood-card__photo{height:160px;overflow:hidden;}
+.hood-card__photo img{width:100%;height:100%;object-fit:cover;display:block;transition:transform .35s ease;}
+.hood-card:hover .hood-card__photo img{transform:scale(1.05);}
+.hood-card__body{padding:20px 24px 22px;display:flex;flex-direction:column;gap:8px;flex:1;}
+.hood-card h3{color:var(--green) !important;margin:0 !important;font-size:18px !important;text-transform:none !important;letter-spacing:-.005em !important;}
+.hood-card p{margin:0 !important;font-size:14px !important;line-height:1.55 !important;color:var(--text-mid) !important;}
+.hood-card .hood-arrow{color:var(--amber);font-weight:700;font-size:14px;margin-top:auto;}
+/* District blocks — City of Toronto broken out by compass corner */
+.district-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin-top:34px;}
+.district{background:#fff;border:1px solid var(--border);border-radius:var(--r-lg);padding:22px 24px;}
+.district h3{color:var(--green) !important;margin:0 0 4px !important;font-size:18px !important;text-transform:none !important;letter-spacing:-.005em !important;}
+.district > p{margin:0 0 14px !important;font-size:14px !important;line-height:1.55 !important;color:var(--text-mid) !important;}
+.district .neighborhoods{grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;margin-top:0;}
+.district .neighborhood{padding:8px 12px;font-size:13px;background:var(--cream);}
+.district .district-note{margin:12px 0 0 !important;font-size:12.5px !important;color:var(--text-muted) !important;}
+@media(max-width:760px){.district-grid{grid-template-columns:1fr;}}
+
+/* ---- Seasonal "right now" spotlight (auto-switches by date via data-season-phase) ---- */
+.season{background:var(--cream);border-top:1px solid var(--border);border-bottom:1px solid var(--border);}
+.season-eyebrow{display:inline-flex;align-items:center;gap:8px;background:var(--green-pale);color:var(--green);font-size:12px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;padding:7px 15px;border-radius:99px;margin-bottom:18px;}
+.season-eyebrow .dot{width:8px;height:8px;border-radius:50%;background:var(--amber);box-shadow:0 0 0 4px rgba(245,155,74,.30);animation:seasonPulse 2s ease-in-out infinite;}
+@keyframes seasonPulse{0%,100%{opacity:1;}50%{opacity:.35;}}
+/* Each spotlight is hidden; the phase attribute reveals exactly one. With JS off
+   (no attribute) the spring spotlight shows so there is always visible content. */
+.season-spot{display:none;grid-template-columns:1.05fr .95fr;gap:clamp(20px,3vw,40px);align-items:center;}
+html:not([data-season-phase]) .season-spot--spring{display:grid;}
+html[data-season-phase="spring"] .season-spot--spring,
+html[data-season-phase="pre-spring"] .season-spot--spring,
+html[data-season-phase="midseason"] .season-spot--service,
+html[data-season-phase="fall"] .season-spot--fall,
+html[data-season-phase="pre-fall"] .season-spot--fall{display:grid;}
+.season-spot__media{position:relative;border-radius:var(--r-xl,20px);overflow:hidden;aspect-ratio:16/10;box-shadow:0 18px 44px rgba(15,31,20,.16);}
+.season-spot__media img{width:100%;height:100%;object-fit:cover;display:block;}
+.season-spot__tag{position:absolute;top:14px;left:14px;background:var(--amber);color:#fff;font-size:12px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;padding:6px 13px;border-radius:99px;box-shadow:0 6px 16px rgba(224,123,36,.4);}
+.season-spot h2{font-size:clamp(26px,3.4vw,40px);color:var(--green);margin:0 0 12px;line-height:1.08;}
+.season-spot h2 em{font-style:italic;color:var(--amber);}
+.season-spot p{font-size:16px;line-height:1.7;color:var(--text-mid);margin:0 0 14px;}
+.season-spot .season-price{display:inline-block;background:#fff;border:1px solid var(--border);border-radius:99px;padding:8px 16px;font-weight:700;color:var(--green);margin-bottom:20px;font-size:15px;}
+.season-spot .season-price b{color:var(--amber);}
+.season-actions{display:flex;flex-wrap:wrap;gap:12px;}
+.season-actions a{display:inline-flex;align-items:center;gap:9px;padding:13px 24px;border-radius:99px;font-weight:700;font-size:15px;}
+.season-actions .s-primary{background:var(--amber);color:#fff;box-shadow:0 8px 20px rgba(224,123,36,.32);transition:background .2s,transform .2s;}
+.season-actions .s-primary:hover{background:var(--amber-light);transform:translateY(-2px);}
+.season-actions .s-ghost{background:#fff;border:1px solid var(--green);color:var(--green);}
+.season-actions .s-ghost:hover{background:var(--green-pale);}
+/* Year-round mini-grid — always visible (SEO), current season badged NOW */
+.season-track{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:36px;}
+.season-chip{position:relative;display:block;border-radius:var(--r-lg);overflow:hidden;height:150px;text-decoration:none;border:2px solid transparent;transition:transform .2s,border-color .2s;}
+.season-chip:hover{transform:translateY(-3px);}
+.season-chip img{width:100%;height:100%;object-fit:cover;display:block;}
+.season-chip__label{position:absolute;inset:0;display:flex;flex-direction:column;justify-content:flex-end;padding:16px;background:linear-gradient(to top,rgba(15,31,20,.82) 0%,rgba(15,31,20,.15) 55%,transparent 100%);}
+.season-chip__label strong{color:#fff;font-size:16px;line-height:1.2;}
+.season-chip__label span{color:rgba(255,255,255,.82);font-size:13px;margin-top:2px;}
+.season-chip .now-badge{display:none;position:absolute;top:10px;right:10px;background:var(--amber);color:#fff;font-size:11px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;padding:5px 11px;border-radius:99px;align-items:center;gap:6px;}
+.season-chip .now-badge .dot{width:6px;height:6px;border-radius:50%;background:#fff;animation:seasonPulse 2s ease-in-out infinite;}
+html[data-season-phase="spring"] [data-season-card="spring"] .now-badge,
+html[data-season-phase="pre-spring"] [data-season-card="spring"] .now-badge,
+html[data-season-phase="midseason"] [data-season-card="service"] .now-badge,
+html[data-season-phase="fall"] [data-season-card="fall"] .now-badge,
+html[data-season-phase="pre-fall"] [data-season-card="fall"] .now-badge{display:inline-flex;}
+html[data-season-phase="spring"] [data-season-card="spring"],
+html[data-season-phase="pre-spring"] [data-season-card="spring"],
+html[data-season-phase="midseason"] [data-season-card="service"],
+html[data-season-phase="fall"] [data-season-card="fall"],
+html[data-season-phase="pre-fall"] [data-season-card="fall"]{border-color:var(--amber);}
+@media(max-width:760px){.season-spot{grid-template-columns:1fr;}.season-track{grid-template-columns:1fr;}.season-chip{height:130px;}}
+
+/* ---- Hydrawise smart-upgrade band (dedicated section) ---- */
+.hydrawise-band{background:linear-gradient(135deg,var(--green) 0%,var(--green-mid) 100%);color:#fff;}
+.hydrawise-band .hw-grid{display:grid;grid-template-columns:.95fr 1.05fr;gap:clamp(24px,3.5vw,48px);align-items:center;}
+/* Photo is portrait (1280x1707 = 3:4) — box matches its natural shape so nothing
+   gets cover-cropped away. Capped height keeps the band balanced on desktop. */
+.hw-media{position:relative;border-radius:var(--r-xl,20px);overflow:hidden;aspect-ratio:3/4;max-height:560px;justify-self:center;width:100%;max-width:440px;box-shadow:0 20px 50px rgba(0,0,0,.35);}
+.hw-media img{width:100%;height:100%;object-fit:cover;display:block;}
+.hw-media__tag{position:absolute;top:14px;left:14px;background:rgba(15,31,20,.75);backdrop-filter:blur(4px);color:#fff;font-size:12px;font-weight:700;letter-spacing:.05em;padding:6px 13px;border-radius:99px;border:1px solid rgba(255,255,255,.25);}
+.hydrawise-band h2{color:#fff !important;font-size:clamp(26px,3.4vw,40px);margin:0 0 14px;line-height:1.08;}
+.hydrawise-band h2 em{font-style:italic;color:var(--amber-light);}
+.hydrawise-band .hw-lede{color:rgba(255,255,255,.88) !important;font-size:16px;line-height:1.7;margin:0 0 18px;}
+.hw-features{list-style:none;padding:0;margin:0 0 22px;display:grid;grid-template-columns:1fr 1fr;gap:10px 18px;}
+.hw-features li{display:flex;gap:10px;align-items:flex-start;color:rgba(255,255,255,.92);font-size:14.5px;line-height:1.5;}
+.hw-features li b{color:#fff;}
+.hw-features .ic{flex:0 0 auto;width:26px;height:26px;border-radius:8px;background:rgba(255,255,255,.12);display:inline-flex;align-items:center;justify-content:center;font-size:14px;}
+.hw-tiers{display:flex;flex-wrap:wrap;gap:10px;margin:0 0 22px;}
+.hw-tier{background:rgba(255,255,255,.10);border:1px solid rgba(255,255,255,.22);border-radius:14px;padding:10px 16px;text-align:center;}
+.hw-tier small{display:block;color:rgba(255,255,255,.7);font-size:12px;letter-spacing:.04em;text-transform:uppercase;margin-bottom:2px;}
+.hw-tier strong{color:var(--amber-light);font-size:19px;}
+.hw-cred{display:inline-flex;align-items:center;gap:8px;color:rgba(255,255,255,.75);font-size:13px;margin-top:14px;}
+.hydrawise-band .season-actions .s-ghost{background:rgba(255,255,255,.08);border-color:rgba(255,255,255,.35);color:#fff;}
+.hydrawise-band .season-actions .s-ghost:hover{background:rgba(255,255,255,.16);}
+@media(max-width:860px){.hydrawise-band .hw-grid{grid-template-columns:1fr;}.hw-features{grid-template-columns:1fr;}}
+</style>
   <link rel="stylesheet" href="css/chat-widget.css">
 <script type="application/ld+json">
 {"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"Home","item":"https://www.pjllandservices.com/"},{"@type":"ListItem","position":2,"name":"Sprinkler Systems","item":"https://www.pjllandservices.com/sprinkler-systems.html"},{"@type":"ListItem","position":3,"name":"Newmarket","item":"https://www.pjllandservices.com/sprinkler-service-newmarket.html"}]}
 </script>
 </head>
 <body>
+
+<script>
+(function(){
+  var d = new Date(), m = d.getMonth(), day = d.getDate(), phase;
+  if (m === 7 && day >= 25)            phase = 'pre-fall';    // Aug 25–31
+  else if (m === 8 && day <= 4)        phase = 'pre-fall';    // Sep 1–4
+  else if (m === 0 && day >= 15)       phase = 'pre-spring';  // Jan 15–31
+  else if (m === 1)                    phase = 'pre-spring';  // Feb
+  else if ((m === 5 && day >= 15) || m === 6 || (m === 7 && day < 25))
+                                       phase = 'midseason';   // Jun 15–Aug 24
+  else if (m >= 8 || m === 0)          phase = 'fall';        // Sep 5–Jan 14
+  else                                 phase = 'spring';      // Mar 1–Jun 14
+  document.documentElement.setAttribute('data-season-phase', phase);
+})();
+</script>
 
 <!-- @@PJL:nav-START {"loc": "Newmarket-based · Local crew", "status": "Same-day repair", "badge": "Newmarket's local sprinkler crew"} -->
 <nav class="nav nav-v2 nav-solid">
@@ -167,59 +290,243 @@
 </div>
 <!-- @@PJL:nav-END -->
 
+
+<!-- Hero -->
 <section class="area-hero">
   <div class="container area-hero-inner">
-    <div class="breadcrumbs"><a href="index.html">Home</a><span>›</span><span>Service Areas</span><span>›</span><span>Newmarket</span></div>
-    <span class="area-eyebrow">Newmarket-based · Local crew · Same-day repair</span>
-    <h1>Lawn Sprinklers in Newmarket</h1>
-    <p>We're Newmarket's own sprinkler contractor — based in town, living in town, working in town. Every Newmarket neighborhood, every subdivision, every estate property on the rural concessions. Smart Hydrawise installs, same-day repair, <span data-price="spring_open_4z">$90</span> spring openings, fall winterization.</p>
+    <div class="breadcrumbs"><a href="index.html">Home</a><span>›</span><a href="sprinkler-systems.html">Sprinkler Services</a><span>›</span><span>Newmarket</span></div>
+    <span class="area-eyebrow">Newmarket · Same-Day Repair · 3-Year Warranty</span>
+    <h1>Lawn sprinkler service &amp; repair in <em>Newmarket</em>.</h1>
+    <p>We're Newmarket's own sprinkler contractor — based in town, living in town, working in town. Every subdivision, every estate on the rural concessions. Smart Hydrawise installs, same-day repair, spring openings, fall winterization, drip and landscape lighting, all with published pricing.</p>
     <div class="area-hero-actions pjl-cta-row">
       <a href="book.html?service=sprinkler_repair" class="btn-amber">Book Newmarket service <span aria-hidden="true">→</span></a>
       <a href="tel:+19059600181" class="btn-ghost">📞 (905) 960-0181</a>
     </div>
     <div class="area-hero-meta">
       <span>📍 <strong>Newmarket, ON</strong> — our home base</span>
-      <span>⏱️ <strong>~1-2 hr response</strong></span>
+      <span>⏱️ <strong>Same-day repair</strong> · in season, booked before 11&nbsp;AM</span>
       <span>🛡️ <strong>3-year warranty</strong></span>
     </div>
   </div>
 </section>
 
+<!-- Seasonal spotlight — swaps by time of year (data-season-phase on <html>) -->
+<section class="section season">
+  <div class="container" style="max-width:1080px;">
+    <span class="season-eyebrow"><span class="dot" aria-hidden="true"></span>Right now in Newmarket</span>
+
+    <!-- SPRING -->
+    <div class="season-spot season-spot--spring">
+      <div class="season-spot__media">
+        <span class="season-spot__tag">Spring · booking now</span>
+        <img src="backyard-sprinkler-running.jpg" alt="Lawn sprinkler running on a Newmarket property in spring" loading="lazy">
+      </div>
+      <div class="season-spot__body">
+        <h2>It's <em>spring-opening</em> season.</h2>
+        <p>Time to wake the system up. We slow-pressurize the mainline, test every zone, check heads and nozzles, and program the controller for the season — a full system start-up before we leave.</p>
+        <p class="season-price">Spring openings from <b><span data-price="spring_open_4z">$90</span></b> (1&ndash;4 zones)</p>
+        <div class="season-actions">
+          <a href="book.html?service=spring_opening" class="s-primary">Book your spring opening <span aria-hidden="true">→</span></a>
+          <a href="sprinkler-spring-opening.html" class="s-ghost">See what's included</a>
+        </div>
+      </div>
+    </div>
+
+    <!-- IN-SEASON SERVICE -->
+    <div class="season-spot season-spot--service">
+      <div class="season-spot__media">
+        <span class="season-spot__tag">In season · same-day slots</span>
+        <img src="leaking-valve-box.jpg" alt="Sprinkler valve box being diagnosed during an in-season repair in Newmarket" loading="lazy">
+      </div>
+      <div class="season-spot__body">
+        <h2>Peak season — <em>repairs &amp; tune-ups</em>.</h2>
+        <p>Stuck valves, broken heads, mystery wet spots, pressure drops, a controller that's lost the plot — this is prime time to fix it before the summer heat exposes it. Newmarket gets same-day repair slots in season for addresses booked before 11&nbsp;AM, subject to availability.</p>
+        <p class="season-price"><b><span data-price="service_call">$95</span></b> service call + parts &amp; labour</p>
+        <div class="season-actions">
+          <a href="book.html?service=sprinkler_repair" class="s-primary">Book a repair visit <span aria-hidden="true">→</span></a>
+          <a href="sprinkler-repair.html" class="s-ghost">Common faults &amp; pricing</a>
+        </div>
+      </div>
+    </div>
+
+    <!-- FALL -->
+    <div class="season-spot season-spot--fall">
+      <div class="season-spot__media">
+        <span class="season-spot__tag">Fall · book before frost</span>
+        <img src="fall-sprinkler-running.jpg" alt="Sprinkler system running in autumn before winterization in Newmarket" loading="lazy">
+      </div>
+      <div class="season-spot__body">
+        <h2>Fall means <em>winterization</em>.</h2>
+        <p>One hard frost on a system full of water cracks fittings, valves and backflow devices. We run a pro low-pressure compressor blow-out — every lateral and the mainline emptied — before the freeze hits. Book by mid-October.</p>
+        <p class="season-price">Fall closings from <b><span data-price="fall_close_4z">$90</span></b> (1&ndash;4 zones)</p>
+        <div class="season-actions">
+          <a href="book.html?service=fall_winterization" class="s-primary">Book your winterization <span aria-hidden="true">→</span></a>
+          <a href="sprinkler-fall-winterization.html" class="s-ghost">Why it matters</a>
+        </div>
+      </div>
+    </div>
+
+    <!-- Year-round track (always visible; current season badged NOW) -->
+    <div class="season-track">
+      <a href="sprinkler-spring-opening.html" class="season-chip" data-season-card="spring">
+        <span class="now-badge"><span class="dot" aria-hidden="true"></span>Happening now</span>
+        <img src="backyard-sprinkler-running@800w.jpg" alt="Spring sprinkler opening" loading="lazy">
+        <span class="season-chip__label"><strong>Spring Opening</strong><span>from <span data-price="spring_open_4z">$90</span> · Apr–May</span></span>
+      </a>
+      <a href="sprinkler-repair.html" class="season-chip" data-season-card="service">
+        <span class="now-badge"><span class="dot" aria-hidden="true"></span>Happening now</span>
+        <img src="leaking-valve-box@800w.jpg" alt="Summer sprinkler service and repair" loading="lazy">
+        <span class="season-chip__label"><strong>Summer Service &amp; Repair</strong><span>same-day in season</span></span>
+      </a>
+      <a href="sprinkler-fall-winterization.html" class="season-chip" data-season-card="fall">
+        <span class="now-badge"><span class="dot" aria-hidden="true"></span>Happening now</span>
+        <img src="fall-sprinkler-running@800w.jpg" alt="Fall sprinkler winterization" loading="lazy">
+        <span class="season-chip__label"><strong>Fall Winterization</strong><span>from <span data-price="fall_close_4z">$90</span> · Sep–Oct</span></span>
+      </a>
+    </div>
+  </div>
+</section>
+
+<!-- Local intro -->
 <section class="section">
   <div class="container" style="max-width:820px;">
     <h2>The Newmarket sprinkler contractor that's actually <em>from</em> Newmarket.</h2>
-    <p>Most of the sprinkler companies that show up in Newmarket Google searches aren't from Newmarket. They're Toronto-based franchise operations that drive crews up Highway 404 and sub-contract the actual work. PJL is different. Patrick lives in Newmarket, the truck is parked in Newmarket, and when you call (905) 960-0181 you get the owner — not a call centre in Mississauga.</p>
-    <p>Practically, that means: faster response times, accountability you can actually look in the eye, and a deep understanding of what makes Newmarket properties unique. The clay soils. The mature trees in older neighborhoods like Stonehaven East and Bristol-London. The newer subdivisions north of Davis Drive that were all built around the same time and are now all hitting the 15-year mark when sprinkler systems start needing serious attention.</p>
+    <p>Most of the sprinkler companies that show up in Newmarket searches aren't from Newmarket — they're Toronto-based franchise operations that drive crews up Highway 404 and sub-contract the work. PJL is different. Patrick lives in Newmarket, the truck is parked in Newmarket, and when you call (905)&nbsp;960-0181 you get the owner.</p>
+    <p>Practically, that means faster response, accountability you can look in the eye, and a deep read on what makes Newmarket properties tick — the clay soils, the mature trees in Stonehaven East and Bristol-London, and the newer subdivisions north of Davis Drive that are all hitting the 15-year mark where systems start needing serious attention.</p>
 
     <div class="local-detail">
-      <h4>Where Newmarket sprinkler systems are at right now (2026)</h4>
-      <p>Most Newmarket subdivisions built between 2005-2012 are now in the "everything is starting to fail at the same time" window. Original valves are reaching end of life, controllers from that era are pre-WiFi, and 1st-generation pop-up heads are crumbling under the snowblower. We see a lot of "should I repair or just replace the whole thing" calls. Honest answer: it's almost always a partial retrofit (new controller, new valves, refurb the heads) rather than a full tear-out. We'll do that math with you on a free site visit.</p>
+      <h4>Where Newmarket systems are at right now (2026)</h4>
+      <p>Most Newmarket subdivisions built between 2005–2012 are now in the "everything starts failing at once" window — original valves at end of life, pre-WiFi controllers, first-generation pop-up heads crumbling under the snowblower. The honest answer to "repair or replace?" is almost always a partial retrofit (new controller, new valves, refurbished heads) rather than a full tear-out. We'll do that math with you on a free site visit.</p>
     </div>
   </div>
 </section>
 
+<!-- Neighbourhood breakdown -->
+<section class="section cream">
+  <div class="container" style="max-width:1080px;">
+    <h2>Newmarket, neighbourhood by neighbourhood</h2>
+    <p>We cover every Newmarket neighbourhood — the established core, the newer subdivisions, and the rural concessions.</p>
+
+    <div class="district-grid">
+      <div class="district">
+        <h3>🏡 Established Newmarket</h3>
+        <p>Older central streets and mature-lot neighbourhoods where original systems are due for a refresh.</p>
+        <div class="neighborhoods">
+          <div class="neighborhood">Stonehaven</div>
+          <div class="neighborhood">Stonehaven East</div>
+          <div class="neighborhood">Central Newmarket</div>
+          <div class="neighborhood">Old Newmarket</div>
+          <div class="neighborhood">Gorham-College Manor</div>
+          <div class="neighborhood">Huron Heights</div>
+        </div>
+      </div>
+      <div class="district">
+        <h3>🌱 Newer subdivisions</h3>
+        <p>The 2005–2012 build wave now hitting the 15-year service window.</p>
+        <div class="neighborhoods">
+          <div class="neighborhood">Summerhill Estates</div>
+          <div class="neighborhood">Glenway</div>
+          <div class="neighborhood">Copper Hills</div>
+          <div class="neighborhood">Woodland Hill</div>
+          <div class="neighborhood">Bristol-London</div>
+          <div class="neighborhood">Bristol-London Heights</div>
+          <div class="neighborhood">Quaker Hill</div>
+          <div class="neighborhood">Armitage</div>
+        </div>
+      </div>
+      <div class="district">
+        <h3>🧭 Corridors & rural</h3>
+        <p>Main arteries and the estate properties on the concessions.</p>
+        <div class="neighborhoods">
+          <div class="neighborhood">Davis Dr corridor</div>
+          <div class="neighborhood">Yonge St corridor</div>
+          <div class="neighborhood">Mulock Dr corridor</div>
+          <div class="neighborhood">Rural concessions</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Service offerings -->
 <section class="section cream">
   <div class="container" style="max-width:1080px;">
     <h2>What we do across Newmarket</h2>
-    <p>Every service available 7 days a week from April through October.</p>
+    <p>The full service line, 7 days a week from April through October — most Newmarket residential systems run 4–6 zones.</p>
 
     <div class="svc-grid">
-      <div class="svc-card"><h3>🌱 Spring Sprinkler Opening</h3><p>Slow re-pressurization, leak inspection, zone-by-zone test, Hydrawise programming. Most Newmarket residential systems take 35-50 minutes.</p><span class="price-tag">From <span data-price="spring_open_4z">$90</span> (4 zones)</span></div>
-      <div class="svc-card"><h3>🍂 Fall Winterization</h3><p>Pro low-pressure compressor blow-out — every line emptied to survive the Newmarket winter. Book by mid-October.</p><span class="price-tag">From <span data-price="spring_open_4z">$90</span> (4 zones)</span></div>
-      <div class="svc-card"><h3>🔧 Sprinkler Repair</h3><p>Stuck valves, broken heads, pressure issues, mystery wet spots. Same-day across Newmarket — usually within 1-2 hours.</p><span class="price-tag">Per-line-item pricing</span></div>
-      <div class="svc-card"><h3>🛠️ New Installation</h3><p>Custom design, Hunter Hydrawise smart controller standard. 4-6 zone residential typical for Newmarket subdivision lots.</p><span class="price-tag">Calculator pricing by zone count*</span></div>
-      <div class="svc-card"><h3>📡 Smart Controller Retrofit</h3><p>Upgrade old timer-based controllers to Hydrawise. Especially common right now in 15-year-old Newmarket subdivisions.</p><span class="price-tag">From <span data-price="controller_1_4">$595</span></span></div>
-      <div class="svc-card"><h3>✨ Landscape Lighting</h3><p>Custom LED design and install. Path, accent, downlighting for any Newmarket property.</p><span class="price-tag">Custom design – quoted per property</span></div>
+      <div class="svc-card">
+        <h3>🌱 Spring Opening</h3>
+        <p>Slow re-pressurization, zone-by-zone test, leak inspection, nozzle adjustment, controller programming for the season.</p>
+        <span class="price-tag">From <span data-price="spring_open_4z">$90</span> (1-4 zones)</span>
+      </div>
+      <div class="svc-card">
+        <h3>🍂 Fall Winterization</h3>
+        <p>Pro low-pressure compressor blow-out. Every lateral and the mainline emptied so nothing freezes and cracks over winter. Book by mid-October.</p>
+        <span class="price-tag">From <span data-price="fall_close_4z">$90</span> (1-4 zones)</span>
+      </div>
+      <div class="svc-card">
+        <h3>🔧 Sprinkler Repair</h3>
+        <p>Stuck valves, broken heads, pressure issues, mystery wet spots. Same-day across Newmarket in season, subject to availability.</p>
+        <span class="price-tag"><span data-price="service_call">$95</span> service call + parts &amp; labour</span>
+      </div>
+      <div class="svc-card">
+        <h3>🛠️ New Installation</h3>
+        <p>Designed for the lot, not from a template. Hunter heads, Hunter HPC-400 Hydrawise smart controller standard. Four-to-six-zone residential is typical for Newmarket subdivision lots.</p>
+        <span class="price-tag">Calculator pricing by zone count</span>
+      </div>
+      <a href="#hydrawise-newmarket" class="svc-card" style="display:block;text-decoration:none;">
+        <h3>📡 Hydrawise Smart Upgrade</h3>
+        <p>Retrofit your existing system with the Hunter HPC-400 Hydrawise WiFi controller. App control, predictive weather-skipping, wiring-fault alerts. Typical install under 90 minutes.</p>
+        <span class="price-tag">From <span data-price="controller_1_4">$595</span> (1-4 zones) ↓</span>
+      </a>
+      <div class="svc-card">
+        <h3>💧 Drip Irrigation</h3>
+        <p>Long hedge runs, perennial beds, raised vegetable beds, container plantings. Designed as a separate zone off your main controller.</p>
+        <span class="price-tag">Custom quote by run length</span>
+      </div>
     </div>
   </div>
 </section>
 
+<!-- Hydrawise smart upgrade — dedicated section -->
+<section class="section hydrawise-band" id="hydrawise-newmarket">
+  <div class="container hw-grid" style="max-width:1080px;">
+    <div class="hw-media">
+      <span class="hw-media__tag">📷 Real PJL install — Hunter HPC-400</span>
+      <img src="blog-hydrawise-hpc-install.jpg" alt="Hunter Hydrawise HPC-400 smart controller installed by PJL Land Services" loading="lazy">
+    </div>
+    <div>
+      <h2>The Newmarket favourite: a <em>Hydrawise smart upgrade</em>.</h2>
+      <p class="hw-lede">Most Newmarket systems we service run controllers that pre-date WiFi. Swap the old timer for a Hunter HPC-400 Hydrawise and the system starts thinking for itself — typical install runs under 90 minutes, and generic-timer households typically cut seasonal watering 30–40%.</p>
+      <ul class="hw-features">
+        <li><span class="ic">🌦️</span><span><b>Weather skipping</b> — skips runs when rain is forecast, throttles on cool days, runs longer in heat.</span></li>
+        <li><span class="ic">📱</span><span><b>Full app control</b> — run, pause or re-program any zone from your phone, anywhere.</span></li>
+        <li><span class="ic">🚨</span><span><b>Fault alerts</b> — wiring faults, missed runs, WiFi dropouts: you know before the lawn does. Add the optional flow meter for true leak alerts.</span></li>
+        <li><span class="ic">📊</span><span><b>Runtime history</b> — every run logged, so small faults surface before brown patches do.</span></li>
+      </ul>
+      <div class="hw-tiers">
+        <div class="hw-tier"><small>1–4 zones</small><strong><span data-price="controller_1_4">$595</span></strong></div>
+        <div class="hw-tier"><small>5–7 zones</small><strong><span data-price="controller_5_7">$750</span></strong></div>
+        <div class="hw-tier"><small>8–16 zones</small><strong><span data-price="controller_8_16">$1,195</span></strong></div>
+      </div>
+      <div class="season-actions">
+        <a href="book.html?service=hydrawise_retrofit" class="s-primary">Book your upgrade <span aria-hidden="true">→</span></a>
+        <a href="sprinkler-hydrawise.html" class="s-ghost">Everything Hydrawise does</a>
+        <a href="water-cost-calculator.html" class="s-ghost">Estimate your water savings</a>
+      </div>
+      <span class="hw-cred">🎓 Hunter University trained · Authorized Hydrawise installer · All-in pricing, no surprise add-ons</span>
+    </div>
+  </div>
+</section>
+
+<!-- Pricing + checklist + FAQ -->
 <section class="section">
   <div class="container" style="max-width:820px;">
-    <section class="pricing-newmarket" aria-labelledby="pricing-newmarket-heading">
-      <h2 id="pricing-newmarket-heading">Sprinkler Pricing in Newmarket — Published Up Front</h2>
-      <p>We publish pricing because trust starts before you call. Spring openings and fall closings are flat-rate services covering the 10-point system check and standard adjustments (alignment, arc, and rotation — head replacement is a separate repair line). Any repairs needed are flagged on-site, quoted separately, and only carried out after you approve them.</p>
-      <h3>Spring Opening &amp; Fall Closing — Residential (per service)</h3>
+    <section class="pricing-city" aria-labelledby="pricing-newmarket-heading">
+      <h2 id="pricing-newmarket-heading">Sprinkler pricing in Newmarket — published up front</h2>
+      <p>We publish pricing because trust starts before the call. Spring openings and fall closings are flat-rate services covering the system check and standard adjustments (alignment, arc, rotation — head replacement is a separate repair line). Any repairs needed are flagged on-site, quoted separately, and only carried out after your approval.</p>
+      <h3>Spring opening &amp; fall closing — residential (per service)</h3>
       <table class="pricing-table">
         <thead><tr><th scope="col">Zones</th><th scope="col">Service Price (CAD)</th></tr></thead>
         <tbody>
@@ -231,7 +538,8 @@
         </tbody>
       </table>
       <p class="pricing-note"><small>Spring and fall use the same tier prices. Commercial pricing available — call for a quote.</small></p>
-      <h3>Sprinkler Repair — Newmarket</h3>
+
+      <h3>Sprinkler repair — Newmarket</h3>
       <table class="pricing-table">
         <thead><tr><th scope="col">Item</th><th scope="col">Price (CAD)</th></tr></thead>
         <tbody>
@@ -243,34 +551,35 @@
         </tbody>
       </table>
       <p class="pricing-note"><small>Repair labour is billed separately from the service call. <strong>AI-Smart-Intake bonus:</strong> if our AI diagnostic tool correctly predicts the on-site fix, you get one hour of repair labour free on the diagnosed work.</small></p>
-      <h3>New Installation — Newmarket</h3>
-      <p>Tier 1 (1–4 zones): <strong><span data-price="new_install_t1_base">$585</span> base + <span data-price="new_install_per_zone">$549</span> per zone</strong>. Tier 2 (5–7 zones): <strong><span data-price="new_install_t2_base">$749</span> base + <span data-price="new_install_per_zone">$549</span> per zone</strong>. Includes Hunter heads, Hydrawise WiFi smart controller, and our 3-year installation warranty. See the full <a href="blog-sprinkler-system-cost-ontario.html">Ontario sprinkler cost guide</a> for per-zone math, repair rates, and seasonal pricing.</p>
+
+      <h3>New installation — Newmarket</h3>
+      <p>Tier 1 (1–4 zones): <strong><span data-price="new_install_t1_base">$585</span> base + <span data-price="new_install_per_zone">$549</span> per zone</strong>. Tier 2 (5–7 zones): <strong><span data-price="new_install_t2_base">$749</span> base + <span data-price="new_install_per_zone">$549</span> per zone</strong>. Installs include Hunter heads, Hunter HPC-400 Hydrawise WiFi smart controller, and our 3-year warranty.</p>
       <div class="pricing-cta-row pjl-cta-row">
         <a href="quote.html" class="btn-primary">Build Your Quote</a>
         <a href="tel:+19059600181" class="btn-secondary">Call (905) 960-0181</a>
       </div>
     </section>
 
-    <section class="checklist-newmarket" aria-labelledby="checklist-newmarket-heading" style="margin-top:48px;">
-      <h2 id="checklist-newmarket-heading">What's Included in a PJL Spring Opening — Newmarket</h2>
-      <p>Every spring opening in Newmarket includes a full 10-point system check before we leave your property:</p>
+    <section class="checklist-city" aria-labelledby="checklist-newmarket-heading" style="margin-top:48px;">
+      <h2 id="checklist-newmarket-heading">What's included in a PJL spring opening — Newmarket</h2>
+      <p>Every spring opening across Newmarket includes a full system check before we leave the property:</p>
       <ul class="service-checklist">
-        <li>✓ Slow-pressurize the main supply line to prevent water-hammer damage to PVC fittings</li>
+        <li>✓ Slow-pressurize the main supply line to prevent water-hammer damage to fittings</li>
         <li>✓ Test each zone individually for correct pressure, coverage, and rotation</li>
-        <li>✓ Check every sprinkler head for winter damage, misalignment, or clogged nozzles</li>
-        <li>✓ Adjust arc and throw on rotors and pop-up sprays for full coverage</li>
+        <li>✓ Check every head for winter damage, misalignment, or clogged nozzles</li>
+        <li>✓ Adjust arc and throw on rotors and pop-up sprays for full coverage with minimum overspray onto paths and hardscape</li>
         <li>✓ Inspect the manifold and valve box for cracks, leaks, and solenoid faults</li>
-        <li>✓ Verify the Hydrawise (or other smart controller) Wi-Fi connection and program</li>
-        <li>✓ Set the seasonal watering schedule against Newmarket's clay-loam soil profile</li>
-        <li>✓ Confirm rain-sensor function (where installed) — required for water-bylaw compliance</li>
+        <li>✓ Verify Hydrawise (or other smart controller) Wi-Fi connection and program</li>
+        <li>✓ Set the seasonal watering schedule against York Region's odd/even watering bylaw and the local clay-loam soil profile</li>
+        <li>✓ Confirm rain-sensor function (where installed)</li>
         <li>✓ Flag any backflow assembly issues for referral to a certified Ontario backflow tester</li>
-        <li>✓ Walk you through the system and answer any questions on the spot</li>
+        <li>✓ Walk you through the system and answer questions on the spot</li>
       </ul>
       <p><small>Backflow testing is a separately-licensed trade in Ontario. PJL does not service backflow assemblies but can refer you to a certified tester if yours needs annual recertification.</small></p>
     </section>
 
-    <section class="faq-newmarket" aria-labelledby="faq-newmarket-heading" style="margin-top:48px;">
-      <h2 id="faq-newmarket-heading">Newmarket Sprinkler FAQs</h2>
+    <section class="faq-city" aria-labelledby="faq-newmarket-heading" style="margin-top:48px;">
+      <h2 id="faq-newmarket-heading">Newmarket sprinkler FAQs</h2>
       <details><summary><h3>When should I open my sprinkler system in Newmarket?</h3></summary><p>In Newmarket, the safe window for spring opening is typically the second week of April through mid-May, after the last hard frost. Opening too early risks freeze damage to backflow assemblies and exposed risers. We start booking in late March and prioritize repeat customers first — book early to lock in your preferred week.</p></details>
       <details><summary><h3>What does sprinkler repair cost in Newmarket?</h3></summary><p>Our service call (mobilization + on-site assessment) is <span data-price="service_call">$95</span>. Repair labour is billed at <span data-price="hourly_labour" data-price-suffix="/hr">$95</span> from there. Common parts costs: sprinkler head replacement <span data-price="head_replacement">$68</span>, pipe break repair from <span data-price="pipe_break_3ft">$120</span>, full 3-valve manifold rebuild starting at <span data-price="manifold_3valve">$135</span> plus valves. If our AI-Smart-Intake diagnostic tool correctly predicts the fix, you get one hour of repair labour free on the diagnosed work — our only standing discount.</p></details>
       <details><summary><h3>Do you offer same-day sprinkler repair in Newmarket?</h3></summary><p>Yes — during the active irrigation season (mid-April to mid-October), we hold same-day repair slots for Newmarket addresses booked before 11 AM, subject to availability. Outside that window, we book within 24–48 hours.</p></details>
@@ -282,48 +591,39 @@
   </div>
 </section>
 
-<section class="section cream">
-  <div class="container" style="max-width:1080px;">
-    <h2>Newmarket neighborhoods we cover</h2>
-    <p>All of them. We grew up around here.</p>
-    <div class="neighborhoods">
-      <div class="neighborhood">Stonehaven</div>
-      <div class="neighborhood">Stonehaven East</div>
-      <div class="neighborhood">Summerhill Estates</div>
-      <div class="neighborhood">Glenway</div>
-      <div class="neighborhood">Copper Hills</div>
-      <div class="neighborhood">Bristol-London</div>
-      <div class="neighborhood">Bristol-London Heights</div>
-      <div class="neighborhood">Woodland Hill</div>
-      <div class="neighborhood">Quaker Hill</div>
-      <div class="neighborhood">Armitage</div>
-      <div class="neighborhood">Central Newmarket</div>
-      <div class="neighborhood">Old Newmarket</div>
-      <div class="neighborhood">Gorham-College Manor</div>
-      <div class="neighborhood">Huron Heights</div>
-      <div class="neighborhood">Davis Dr corridor</div>
-      <div class="neighborhood">Yonge St corridor</div>
-      <div class="neighborhood">Mulock Dr corridor</div>
-      <div class="neighborhood">Rural concessions</div>
+<!-- CTA strip -->
+<section class="cta-strip">
+  <div class="container cta-strip-inner">
+    <div>
+      <h3>Newmarket homeowners — call your local crew.</h3>
+      <p>We're minutes away. Same-day emergency repair in season, free quotes for installs.</p>
+    </div>
+    <div class="cta-strip-actions pjl-cta-row">
+      <a href="book.html?service=sprinkler_repair" class="primary">Book service →</a>
+      <a href="tel:+19059600181" class="ghost">📞 (905) 960-0181</a>
     </div>
   </div>
 </section>
 
-<section class="cta-strip">
-  <div class="container cta-strip-inner">
-    <div><h3>Newmarket homeowners — call your local crew.</h3><p>We're 5 minutes away. Same-day emergency repair, free quotes for installs.</p></div>
-    <div class="cta-strip-actions pjl-cta-row"><a href="book.html?service=sprinkler_repair" class="primary">Book service →</a><a href="tel:+19059600181" class="ghost">📞 (905) 960-0181</a></div>
-  </div>
-</section>
-
+<!-- Related — adjacent areas + core services -->
 <section class="section">
   <div class="container" style="max-width:1080px;">
-    <h2>Other cities we serve nearby</h2>
+    <h2>Nearby coverage</h2>
+    <p>Adjacent areas for customers comparing service-area coverage:</p>
     <div class="related-cities">
       <a href="sprinkler-service-aurora.html" class="related-city"><h4>Aurora</h4><p>10 min south. Full service.</p></a>
-      <a href="sprinkler-service-king-city.html" class="related-city"><h4>King City</h4><p>Estates &amp; acreage installs.</p></a>
-      <a href="sprinkler-service-richmond-hill.html" class="related-city"><h4>Richmond Hill</h4><p>Mill Pond, Oak Ridges.</p></a>
-      <a href="sprinkler-service-vaughan.html" class="related-city"><h4>Vaughan</h4><p>Maple, Kleinburg, Thornhill.</p></a>
+      <a href="sprinkler-service-east-gwillimbury.html" class="related-city"><h4>East Gwillimbury</h4><p>Sharon, Holland Landing, Queensville.</p></a>
+      <a href="sprinkler-service-king-city.html" class="related-city"><h4>King City</h4><p>Estates & acreage installs.</p></a>
+      <a href="sprinkler-service-stouffville.html" class="related-city"><h4>Stouffville</h4><p>Ballantrae, lake country, rural.</p></a>
+    </div>
+
+    <h2 style="margin-top:64px;">Service deep-dives</h2>
+    <p>If you want to learn more about a specific service before booking, the pages below go deeper.</p>
+    <div class="related-cities">
+      <a href="sprinkler-systems.html" class="related-city"><h4>Sprinkler Systems</h4><p>Design, install, components.</p></a>
+      <a href="sprinkler-repair.html" class="related-city"><h4>Sprinkler Repair</h4><p>Common faults &amp; pricing.</p></a>
+      <a href="sprinkler-hydrawise.html" class="related-city"><h4>Hydrawise Smart Controller</h4><p>Weather-based watering.</p></a>
+      <a href="landscape-lighting.html" class="related-city"><h4>Landscape Lighting</h4><p>LED, marine-grade, app control.</p></a>
     </div>
   </div>
 </section>
