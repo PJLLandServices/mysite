@@ -280,7 +280,12 @@
       <h2 id="voidModalTitle">Void invoice</h2>
       <p class="invoice-modal-intro">Voiding stops any pending payment reminder and marks the invoice as cancelled. You can delete it afterward. A voided invoice can’t be sent or paid.</p>
       <label class="invoice-modal-label" for="voidReasonInput">Reason (optional)</label>
-      <textarea class="invoice-modal-textarea" id="voidReasonInput" maxlength="500" placeholder="e.g. Duplicate of I-2026-0041"></textarea>
+      <select class="invoice-modal-input" id="voidReasonInput">
+        <option value="">Select a reason…</option>
+        <option value="Duplicate">Duplicate</option>
+        <option value="Testing">Testing</option>
+        <option value="Required additional work">Required additional work</option>
+      </select>
       <p class="invoice-modal-error" id="voidModalError"></p>
       <div class="invoice-modal-actions">
         <button type="button" class="invoice-action-btn" id="voidCancelBtn">Cancel</button>
@@ -289,17 +294,24 @@
     </div>
   </div>
 
-  <!-- Delete modal (feature-invoice-void-delete-brief.md §4.4). Type-to-
-       confirm + required reason (pre-filled from the void reason) + the QB
-       checkbox when a QuickBooks id exists. -->
+  <!-- Delete modal (feature-invoice-void-delete-brief.md §4.4). Reason
+       dropdown (required) + a "confirm delete" checkbox + the QB checkbox
+       when a QuickBooks id exists. -->
   <div class="invoice-modal" id="deleteModal" role="dialog" aria-modal="true" aria-labelledby="deleteModalTitle" hidden>
     <div class="invoice-modal-sheet">
       <h2 id="deleteModalTitle">Delete invoice</h2>
       <p class="invoice-modal-intro">This permanently removes the invoice. A full snapshot — including this reason — is kept forever in the deletion audit log. This can’t be undone.</p>
       <label class="invoice-modal-label" for="deleteReasonInput">Reason (required)</label>
-      <textarea class="invoice-modal-textarea" id="deleteReasonInput" maxlength="500" placeholder="Why is this invoice being deleted?"></textarea>
-      <label class="invoice-modal-label" for="deleteConfirmInput">Type the invoice ID to confirm — <strong id="deleteConfirmTarget"></strong></label>
-      <input type="text" class="invoice-modal-input" id="deleteConfirmInput" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="I-2026-0000">
+      <select class="invoice-modal-input" id="deleteReasonInput">
+        <option value="">Select a reason…</option>
+        <option value="Duplicate">Duplicate</option>
+        <option value="Testing">Testing</option>
+        <option value="Required additional work">Required additional work</option>
+      </select>
+      <label class="invoice-modal-check" id="deleteConfirmRow">
+        <input type="checkbox" id="deleteConfirmCheck">
+        <span>Yes, permanently delete this invoice.</span>
+      </label>
       <label class="invoice-modal-qbcheck" id="deleteQbCheckRow" hidden>
         <input type="checkbox" id="deleteQbConfirm">
         <span>This invoice was pushed to QuickBooks. I have voided it in QuickBooks Online.</span>

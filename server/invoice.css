@@ -369,6 +369,18 @@
   line-height: 1.45;
 }
 .invoice-modal-qbcheck input { margin-top: 2px; flex: none; }
+/* Neutral "confirm delete" checkbox row — the deliberate-action gate that
+   replaced the type-the-ID confirmation. */
+.invoice-modal-check {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin: 16px 0 0;
+  font-size: 14px;
+  color: #1F2A22;
+  cursor: pointer;
+}
+.invoice-modal-check input { flex: none; width: 18px; height: 18px; }
 .invoice-modal-error { color: #9B1C1C; font-size: 13px; margin: 12px 0 0; min-height: 1em; }
 .invoice-modal-actions {
   display: flex;

@@ -970,29 +970,35 @@ document.getElementById("voidConfirmBtn")?.addEventListener("click", async () =>
   }
 });
 
-// Delete modal — type-to-confirm + required reason + QB checkbox.
+// Delete modal — reason dropdown (required) + "confirm delete" checkbox
+// + QB checkbox (when a QB id exists). Confirm enables only when a reason
+// is chosen AND the delete checkbox is ticked AND (QB ticked where shown).
 function syncDeleteConfirmState() {
   const btn = document.getElementById("deleteConfirmBtn");
-  const idInput = document.getElementById("deleteConfirmInput");
+  const reasonSel = document.getElementById("deleteReasonInput");
+  const confirmCheck = document.getElementById("deleteConfirmCheck");
   const qbRow = document.getElementById("deleteQbCheckRow");
   const qbCheck = document.getElementById("deleteQbConfirm");
-  if (!btn || !idInput) return;
-  const idMatches = idInput.value.trim() === (currentInvoice?.id || "");
+  if (!btn || !reasonSel || !confirmCheck) return;
+  const reasonChosen = Boolean(reasonSel.value);
+  const confirmed = Boolean(confirmCheck.checked);
   const qbOk = qbRow && !qbRow.hidden ? Boolean(qbCheck?.checked) : true;
-  btn.disabled = !(idMatches && qbOk);
+  btn.disabled = !(reasonChosen && confirmed && qbOk);
 }
 
 document.getElementById("invoiceDeleteBtn")?.addEventListener("click", () => {
   if (!currentInvoice) return;
   const err = document.getElementById("deleteModalError");
   if (err) err.textContent = "";
-  // Pre-fill reason from the void reason (editable).
-  const reasonInput = document.getElementById("deleteReasonInput");
-  if (reasonInput) reasonInput.value = currentInvoice.voidReason || "";
-  const idInput = document.getElementById("deleteConfirmInput");
-  if (idInput) idInput.value = "";
-  const target = document.getElementById("deleteConfirmTarget");
-  if (target) target.textContent = currentInvoice.id;
+  // Pre-select the reason from the void reason when it matches an option;
+  // otherwise leave on the "Select a reason…" placeholder.
+  const reasonSel = document.getElementById("deleteReasonInput");
+  if (reasonSel) {
+    const pre = currentInvoice.voidReason || "";
+    reasonSel.value = Array.from(reasonSel.options).some((o) => o.value === pre) ? pre : "";
+  }
+  const confirmCheck = document.getElementById("deleteConfirmCheck");
+  if (confirmCheck) confirmCheck.checked = false;
   // QB checkbox only when a QB id exists.
   const qbRow = document.getElementById("deleteQbCheckRow");
   const qbCheck = document.getElementById("deleteQbConfirm");
@@ -1000,13 +1006,14 @@ document.getElementById("invoiceDeleteBtn")?.addEventListener("click", () => {
   if (qbCheck) qbCheck.checked = false;
   syncDeleteConfirmState();
   openModal("deleteModal");
-  setTimeout(() => reasonInput?.focus(), 0);
+  setTimeout(() => reasonSel?.focus(), 0);
 });
 document.getElementById("deleteCancelBtn")?.addEventListener("click", () => closeModal("deleteModal"));
 document.getElementById("deleteModal")?.addEventListener("click", (e) => {
   if (e.target === document.getElementById("deleteModal")) closeModal("deleteModal");
 });
-document.getElementById("deleteConfirmInput")?.addEventListener("input", syncDeleteConfirmState);
+document.getElementById("deleteReasonInput")?.addEventListener("change", syncDeleteConfirmState);
+document.getElementById("deleteConfirmCheck")?.addEventListener("change", syncDeleteConfirmState);
 document.getElementById("deleteQbConfirm")?.addEventListener("change", syncDeleteConfirmState);
 
 document.getElementById("deleteConfirmBtn")?.addEventListener("click", async () => {
@@ -1014,13 +1021,15 @@ document.getElementById("deleteConfirmBtn")?.addEventListener("click", async () 
   const btn = document.getElementById("deleteConfirmBtn");
   const err = document.getElementById("deleteModalError");
   const reason = document.getElementById("deleteReasonInput")?.value || "";
-  const confirmId = document.getElementById("deleteConfirmInput")?.value.trim() || "";
+  // The "confirm delete" checkbox is the deliberate gate now; the server
+  // still validates confirmId === id, so send the id directly.
+  const confirmId = currentInvoice.id;
   const qbRow = document.getElementById("deleteQbCheckRow");
   const qbVoidConfirmed = qbRow && !qbRow.hidden
     ? Boolean(document.getElementById("deleteQbConfirm")?.checked)
     : false;
   if (err) err.textContent = "";
-  if (!reason.trim()) { if (err) err.textContent = "A reason is required."; return; }
+  if (!reason) { if (err) err.textContent = "Choose a reason."; return; }
   btn.disabled = true;
   try {
     const r = await fetch(`/api/invoices/${encodeURIComponent(idFromPath)}`, {
