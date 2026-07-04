@@ -14,7 +14,7 @@
 
 - [Sprinkler Systems Overview](https://www.pjllandservices.com/sprinkler-systems.html): Overview of all sprinkler-related services.
 - [Sprinkler Installation](https://www.pjllandservices.com/sprinkler-installation.html): New system installs. Pricing tiers (Canadian dollars, instant-quoted online): Tier 1 (1–4 zones) — $585 base + $549/zone. Tier 2 (5–7 zones) — $749 base + $549/zone. Tier 3 (8+ zones) — custom quote requires site visit. Every install includes a Hunter Hydrawise WiFi smart controller as standard (not an add-on). Pressure-regulated heads, low-pressure nozzles, Hunter valves throughout. 3-year parts-and-labour warranty.
-- [Sprinkler Repair](https://www.pjllandservices.com/sprinkler-repair.html): Same-day repair across the GTA during the April–October season. $95 service call covers mobilization and quick on-site assessment; repair labour billed at $95/hr separately. Common repairs: sprinkler head replacement ($68 per head, any size or type), Hunter PGV valve replacement ($74.95 each), manifold rebuild ($135 for 1–3 valves, $285 for 4–6 valves), wire diagnostics ($187), pipe break repair ($120 for up to 3 ft of irrigation pipe), controller troubleshooting.
+- [Sprinkler Repair](https://www.pjllandservices.com/sprinkler-repair.html): Same-day repair in the York Region core (Newmarket, Aurora, King City & area) during the April–October season; priority scheduling across the rest of the GTA. $95 service call covers mobilization and quick on-site assessment; repair labour billed at $95/hr separately. Common repairs: sprinkler head replacement ($68 per head, any size or type), Hunter PGV valve replacement ($74.95 each), manifold rebuild ($135 for 1–3 valves, $285 for 4–6 valves), wire diagnostics ($187), pipe break repair ($120 for up to 3 ft of irrigation pipe), controller troubleshooting.
 - [Spring Sprinkler Opening](https://www.pjllandservices.com/sprinkler-spring-opening.html): All-in zone-by-zone pressure-up and inspection. Residential tiers: 1–4 zones $90, 5–6 zones $105, 7–8 zones $120, 9–15 zones $165, 16+ zones custom quote. Commercial 1–4 zones $145, 5–8 zones $255, 9+ zones custom. Service-call fee not charged on top.
 - [Fall Sprinkler Winterization](https://www.pjllandservices.com/sprinkler-fall-winterization.html): Compressed-air blowout to prevent freeze damage. Same tier prices as spring opening.
 - [Hunter Hydrawise Smart Controllers](https://www.pjllandservices.com/sprinkler-hydrawise.html): WiFi-enabled controllers with real-time weather-based scheduling, flow monitoring, and remote app access. Standard on every PJL installation. Retrofittable to most existing systems regardless of original brand.
@@ -32,7 +32,7 @@
 
 ## Service areas (city pages)
 
-PJL crews dispatch from a Newmarket base — no franchise routing. Same-day coverage during peak season for most cities below.
+PJL crews dispatch from a Newmarket base — no franchise routing. Same-day repair during peak season is limited to the York Region core (Newmarket, Aurora, King City & area); other cities are priority-scheduled or ride scheduled routes.
 
 - [Newmarket](https://www.pjllandservices.com/sprinkler-service-newmarket.html)
 - [Aurora](https://www.pjllandservices.com/sprinkler-service-aurora.html)
