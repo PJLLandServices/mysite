@@ -72,9 +72,14 @@
 
 <style>
 .area-hero{padding:156px 0 80px;background:radial-gradient(ellipse 60% 55% at 20% 20%,rgba(74,140,92,.30),transparent 60%),radial-gradient(ellipse 55% 50% at 85% 80%,rgba(224,123,36,.18),transparent 60%),linear-gradient(135deg,var(--dark) 0%,var(--green) 70%,var(--green-mid) 100%);position:relative;overflow:hidden;}
+@media(max-width:640px){.area-hero{padding:var(--hero-nav-clearance) 0 56px;}}
+
+
+
 .area-hero-inner{position:relative;z-index:2;max-width:820px;}
 .breadcrumbs{font-size:13px;color:rgba(255,255,255,.65);margin-bottom:18px;display:flex;gap:8px;flex-wrap:wrap;}
-.breadcrumbs a{color:rgba(255,255,255,.85);}.breadcrumbs a:hover{color:var(--amber-light);}.breadcrumbs span{color:rgba(255,255,255,.4);}
+.breadcrumbs a{color:rgba(255,255,255,.85);}.breadcrumbs a:hover{color:var(--amber-light);}
+.breadcrumbs span{color:rgba(255,255,255,.4);}
 .area-eyebrow{display:inline-flex;align-items:center;gap:8px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.14);color:#fff;font-size:12px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;padding:7px 16px;border-radius:99px;margin-bottom:20px;}
 .area-eyebrow::before{content:'';width:6px;height:6px;border-radius:50%;background:var(--amber-light);box-shadow:0 0 0 3px rgba(245,155,74,.35);}
 .area-hero h1{color:#fff;font-size:clamp(38px,5.6vw,70px);line-height:1.04;letter-spacing:-.025em;margin-bottom:20px;}
@@ -87,21 +92,31 @@
 .area-hero-actions .btn-ghost:hover{background:rgba(255,255,255,.10);}
 .area-hero-meta{display:flex;flex-wrap:wrap;gap:14px 22px;color:rgba(255,255,255,.7);font-size:14px;}
 .area-hero-meta strong{color:#fff;font-weight:700;}
-.section{padding:clamp(56px,8vw,96px) 0;}.section.cream{background:var(--cream);}
+
+.section{padding:clamp(56px,8vw,96px) 0;}
+.section.cream{background:var(--cream);}
 .section h2{font-size:clamp(28px,3.8vw,42px);color:var(--green);margin-bottom:18px;}
 .section p{font-size:17px;line-height:1.75;color:var(--text-mid);margin-bottom:18px;}
+.section ul{padding-left:26px;font-size:17px;color:var(--text-mid);line-height:1.75;}
+.section li{margin-bottom:8px;}
+.section li::marker{color:var(--amber);}
+
 .svc-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px;margin:24px 0;}
 .svc-card{background:#fff;border:1px solid var(--border);border-radius:var(--r-lg);padding:24px;transition:transform .2s ease,box-shadow .2s ease,border-color .2s ease;}
 .svc-card:hover{transform:translateY(-4px);border-color:rgba(74,140,92,.30);box-shadow:0 12px 30px rgba(15,31,20,.08);}
 .svc-card h3{color:var(--green) !important;font-size:19px !important;margin:0 0 8px !important;text-transform:none !important;letter-spacing:-.005em !important;}
 .svc-card p{font-size:15px !important;line-height:1.6 !important;color:var(--text-mid) !important;margin:0 0 12px !important;}
 .svc-card .price-tag{display:inline-block;background:var(--amber-pale);color:var(--amber);font-size:12px;font-weight:700;letter-spacing:.06em;padding:5px 12px;border-radius:99px;}
+
 .neighborhoods{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin-top:18px;}
 .neighborhood{background:#fff;border:1px solid var(--border);border-radius:99px;padding:10px 18px;font-size:14px;color:var(--green);font-weight:600;text-align:center;transition:background .2s ease,border-color .2s ease;}
 .neighborhood:hover{background:var(--green-pale);border-color:var(--green-light);}
+a.neighborhood{text-decoration:none;}
+
 .local-detail{background:linear-gradient(135deg,var(--green-pale) 0%,#f4f9ec 100%);border-left:4px solid var(--green-light);border-radius:0 var(--r-lg) var(--r-lg) 0;padding:24px 28px;margin:24px 0;}
 .local-detail h4{color:var(--green) !important;font-size:18px !important;margin:0 0 8px !important;text-transform:none !important;letter-spacing:-.005em !important;}
 .local-detail p{margin:0 !important;font-size:15px !important;line-height:1.65 !important;color:var(--text) !important;}
+
 .cta-strip{background:linear-gradient(135deg,var(--green) 0%,var(--green-mid) 100%);color:#fff;padding:48px 0;}
 .cta-strip-inner{display:flex;align-items:center;justify-content:space-between;gap:24px;flex-wrap:wrap;}
 .cta-strip h3{color:#fff !important;margin:0 !important;font-size:clamp(22px,2.6vw,28px);text-transform:none !important;letter-spacing:-.005em !important;}
@@ -112,13 +127,14 @@
 .cta-strip-actions .primary:hover{background:var(--amber-light);}
 .cta-strip-actions .ghost{background:rgba(255,255,255,.10);border:1px solid rgba(255,255,255,.20);color:#fff;}
 .cta-strip-actions .ghost:hover{background:rgba(255,255,255,.18);}
-.related-cities{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;margin-top:24px;}
+
+.related-cities{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;margin-top:24px;}
 .related-city{display:block;background:#fff;border:1px solid var(--border);border-radius:var(--r-lg);padding:18px 22px;transition:transform .2s ease,border-color .2s ease,box-shadow .2s ease;}
 .related-city:hover{transform:translateY(-3px);border-color:rgba(74,140,92,.25);box-shadow:0 10px 26px rgba(15,31,20,.06);}
 .related-city h4{color:var(--green) !important;margin:0 0 4px !important;font-size:16px !important;text-transform:none !important;letter-spacing:-.005em !important;}
 .related-city p{margin:0 !important;font-size:13px !important;color:var(--text-muted) !important;line-height:1.4 !important;}
+
 @media(max-width:760px){.svc-grid{grid-template-columns:1fr;}.cta-strip-inner{flex-direction:column;align-items:flex-start;}}
-@media(max-width:640px){.area-hero{padding:var(--hero-nav-clearance) 0 56px;}}
 .pricing-city h3{color:var(--green);font-size:21px;margin:28px 0 12px;text-transform:none;letter-spacing:-.005em;}
 .pricing-table{width:100%;border-collapse:collapse;background:#fff;border:1px solid var(--border);border-radius:var(--r-lg);overflow:hidden;margin:0 0 12px;font-size:15px;}
 .pricing-table thead{background:var(--green-pale);}
@@ -135,7 +151,7 @@
 .pricing-city .btn-secondary:hover{background:var(--green-pale);}
 .pricing-cta-row{display:flex;flex-direction:row;flex-wrap:wrap;gap:12px;align-items:center;margin:18px 0;}
 .pricing-cta-row > a{justify-content:center;}
-@media(max-width:429px){.pricing-cta-row{flex-direction:column;align-items:stretch;}.pricing-cta-row > a{width:100%;}}
+@media(max-width:639px){.pricing-cta-row{flex-direction:column;align-items:stretch;}.pricing-cta-row > a{width:100%;}}
 .service-checklist{list-style:none;padding:0;margin:18px 0;display:grid;grid-template-columns:1fr;gap:10px;}
 .service-checklist li{background:#fff;border:1px solid var(--border);border-left:3px solid var(--green-light);border-radius:var(--r);padding:12px 16px;font-size:15px;line-height:1.55;color:var(--text);}
 .faq-city details{background:#fff;border:1px solid var(--border);border-radius:var(--r-lg);padding:0;margin:0 0 12px;overflow:hidden;}
@@ -145,7 +161,101 @@
 .faq-city summary h3{display:inline;color:var(--green);font-size:17px;margin:0;text-transform:none;letter-spacing:-.005em;font-weight:700;}
 .faq-city summary::after{content:'+';float:right;color:var(--green);font-weight:700;font-size:22px;line-height:1;margin-left:12px;}
 .faq-city details[open] summary::after{content:'–';}
-.faq-city details p{padding:0 22px 18px;margin:0;font-size:15px;line-height:1.65;color:var(--text-mid);}</style>
+.faq-city details p{padding:0 22px 18px;margin:0;font-size:15px;line-height:1.65;color:var(--text-mid);}
+.hood-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px;margin-top:24px;}
+.hood-card{background:#fff;border:1px solid var(--border);border-radius:var(--r-lg);padding:0;display:flex;flex-direction:column;text-decoration:none;overflow:hidden;transition:transform .2s ease,box-shadow .2s ease,border-color .2s ease;}
+.hood-card:hover{transform:translateY(-3px);border-color:rgba(74,140,92,.30);box-shadow:0 10px 28px rgba(15,31,20,.08);}
+.hood-card__photo{height:160px;overflow:hidden;}
+.hood-card__photo img{width:100%;height:100%;object-fit:cover;display:block;transition:transform .35s ease;}
+.hood-card:hover .hood-card__photo img{transform:scale(1.05);}
+.hood-card__body{padding:20px 24px 22px;display:flex;flex-direction:column;gap:8px;flex:1;}
+.hood-card h3{color:var(--green) !important;margin:0 !important;font-size:18px !important;text-transform:none !important;letter-spacing:-.005em !important;}
+.hood-card p{margin:0 !important;font-size:14px !important;line-height:1.55 !important;color:var(--text-mid) !important;}
+.hood-card .hood-arrow{color:var(--amber);font-weight:700;font-size:14px;margin-top:auto;}
+/* District blocks — City of Toronto broken out by compass corner */
+.district-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin-top:34px;}
+.district{background:#fff;border:1px solid var(--border);border-radius:var(--r-lg);padding:22px 24px;}
+.district h3{color:var(--green) !important;margin:0 0 4px !important;font-size:18px !important;text-transform:none !important;letter-spacing:-.005em !important;}
+.district > p{margin:0 0 14px !important;font-size:14px !important;line-height:1.55 !important;color:var(--text-mid) !important;}
+.district .neighborhoods{grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;margin-top:0;}
+.district .neighborhood{padding:8px 12px;font-size:13px;background:var(--cream);}
+.district .district-note{margin:12px 0 0 !important;font-size:12.5px !important;color:var(--text-muted) !important;}
+@media(max-width:760px){.district-grid{grid-template-columns:1fr;}}
+
+/* ---- Seasonal "right now" spotlight (auto-switches by date via data-season-phase) ---- */
+.season{background:var(--cream);border-top:1px solid var(--border);border-bottom:1px solid var(--border);}
+.season-eyebrow{display:inline-flex;align-items:center;gap:8px;background:var(--green-pale);color:var(--green);font-size:12px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;padding:7px 15px;border-radius:99px;margin-bottom:18px;}
+.season-eyebrow .dot{width:8px;height:8px;border-radius:50%;background:var(--amber);box-shadow:0 0 0 4px rgba(245,155,74,.30);animation:seasonPulse 2s ease-in-out infinite;}
+@keyframes seasonPulse{0%,100%{opacity:1;}50%{opacity:.35;}}
+/* Each spotlight is hidden; the phase attribute reveals exactly one. With JS off
+   (no attribute) the spring spotlight shows so there is always visible content. */
+.season-spot{display:none;grid-template-columns:1.05fr .95fr;gap:clamp(20px,3vw,40px);align-items:center;}
+html:not([data-season-phase]) .season-spot--spring{display:grid;}
+html[data-season-phase="spring"] .season-spot--spring,
+html[data-season-phase="pre-spring"] .season-spot--spring,
+html[data-season-phase="midseason"] .season-spot--service,
+html[data-season-phase="fall"] .season-spot--fall,
+html[data-season-phase="pre-fall"] .season-spot--fall{display:grid;}
+.season-spot__media{position:relative;border-radius:var(--r-xl,20px);overflow:hidden;aspect-ratio:16/10;box-shadow:0 18px 44px rgba(15,31,20,.16);}
+.season-spot__media img{width:100%;height:100%;object-fit:cover;display:block;}
+.season-spot__tag{position:absolute;top:14px;left:14px;background:var(--amber);color:#fff;font-size:12px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;padding:6px 13px;border-radius:99px;box-shadow:0 6px 16px rgba(224,123,36,.4);}
+.season-spot h2{font-size:clamp(26px,3.4vw,40px);color:var(--green);margin:0 0 12px;line-height:1.08;}
+.season-spot h2 em{font-style:italic;color:var(--amber);}
+.season-spot p{font-size:16px;line-height:1.7;color:var(--text-mid);margin:0 0 14px;}
+.season-spot .season-price{display:inline-block;background:#fff;border:1px solid var(--border);border-radius:99px;padding:8px 16px;font-weight:700;color:var(--green);margin-bottom:20px;font-size:15px;}
+.season-spot .season-price b{color:var(--amber);}
+.season-actions{display:flex;flex-wrap:wrap;gap:12px;}
+.season-actions a{display:inline-flex;align-items:center;gap:9px;padding:13px 24px;border-radius:99px;font-weight:700;font-size:15px;}
+.season-actions .s-primary{background:var(--amber);color:#fff;box-shadow:0 8px 20px rgba(224,123,36,.32);transition:background .2s,transform .2s;}
+.season-actions .s-primary:hover{background:var(--amber-light);transform:translateY(-2px);}
+.season-actions .s-ghost{background:#fff;border:1px solid var(--green);color:var(--green);}
+.season-actions .s-ghost:hover{background:var(--green-pale);}
+/* Year-round mini-grid — always visible (SEO), current season badged NOW */
+.season-track{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:36px;}
+.season-chip{position:relative;display:block;border-radius:var(--r-lg);overflow:hidden;height:150px;text-decoration:none;border:2px solid transparent;transition:transform .2s,border-color .2s;}
+.season-chip:hover{transform:translateY(-3px);}
+.season-chip img{width:100%;height:100%;object-fit:cover;display:block;}
+.season-chip__label{position:absolute;inset:0;display:flex;flex-direction:column;justify-content:flex-end;padding:16px;background:linear-gradient(to top,rgba(15,31,20,.82) 0%,rgba(15,31,20,.15) 55%,transparent 100%);}
+.season-chip__label strong{color:#fff;font-size:16px;line-height:1.2;}
+.season-chip__label span{color:rgba(255,255,255,.82);font-size:13px;margin-top:2px;}
+.season-chip .now-badge{display:none;position:absolute;top:10px;right:10px;background:var(--amber);color:#fff;font-size:11px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;padding:5px 11px;border-radius:99px;align-items:center;gap:6px;}
+.season-chip .now-badge .dot{width:6px;height:6px;border-radius:50%;background:#fff;animation:seasonPulse 2s ease-in-out infinite;}
+html[data-season-phase="spring"] [data-season-card="spring"] .now-badge,
+html[data-season-phase="pre-spring"] [data-season-card="spring"] .now-badge,
+html[data-season-phase="midseason"] [data-season-card="service"] .now-badge,
+html[data-season-phase="fall"] [data-season-card="fall"] .now-badge,
+html[data-season-phase="pre-fall"] [data-season-card="fall"] .now-badge{display:inline-flex;}
+html[data-season-phase="spring"] [data-season-card="spring"],
+html[data-season-phase="pre-spring"] [data-season-card="spring"],
+html[data-season-phase="midseason"] [data-season-card="service"],
+html[data-season-phase="fall"] [data-season-card="fall"],
+html[data-season-phase="pre-fall"] [data-season-card="fall"]{border-color:var(--amber);}
+@media(max-width:760px){.season-spot{grid-template-columns:1fr;}.season-track{grid-template-columns:1fr;}.season-chip{height:130px;}}
+
+/* ---- Hydrawise smart-upgrade band (dedicated section) ---- */
+.hydrawise-band{background:linear-gradient(135deg,var(--green) 0%,var(--green-mid) 100%);color:#fff;}
+.hydrawise-band .hw-grid{display:grid;grid-template-columns:.95fr 1.05fr;gap:clamp(24px,3.5vw,48px);align-items:center;}
+/* Photo is portrait (1280x1707 = 3:4) — box matches its natural shape so nothing
+   gets cover-cropped away. Capped height keeps the band balanced on desktop. */
+.hw-media{position:relative;border-radius:var(--r-xl,20px);overflow:hidden;aspect-ratio:3/4;max-height:560px;justify-self:center;width:100%;max-width:440px;box-shadow:0 20px 50px rgba(0,0,0,.35);}
+.hw-media img{width:100%;height:100%;object-fit:cover;display:block;}
+.hw-media__tag{position:absolute;top:14px;left:14px;background:rgba(15,31,20,.75);backdrop-filter:blur(4px);color:#fff;font-size:12px;font-weight:700;letter-spacing:.05em;padding:6px 13px;border-radius:99px;border:1px solid rgba(255,255,255,.25);}
+.hydrawise-band h2{color:#fff !important;font-size:clamp(26px,3.4vw,40px);margin:0 0 14px;line-height:1.08;}
+.hydrawise-band h2 em{font-style:italic;color:var(--amber-light);}
+.hydrawise-band .hw-lede{color:rgba(255,255,255,.88) !important;font-size:16px;line-height:1.7;margin:0 0 18px;}
+.hw-features{list-style:none;padding:0;margin:0 0 22px;display:grid;grid-template-columns:1fr 1fr;gap:10px 18px;}
+.hw-features li{display:flex;gap:10px;align-items:flex-start;color:rgba(255,255,255,.92);font-size:14.5px;line-height:1.5;}
+.hw-features li b{color:#fff;}
+.hw-features .ic{flex:0 0 auto;width:26px;height:26px;border-radius:8px;background:rgba(255,255,255,.12);display:inline-flex;align-items:center;justify-content:center;font-size:14px;}
+.hw-tiers{display:flex;flex-wrap:wrap;gap:10px;margin:0 0 22px;}
+.hw-tier{background:rgba(255,255,255,.10);border:1px solid rgba(255,255,255,.22);border-radius:14px;padding:10px 16px;text-align:center;}
+.hw-tier small{display:block;color:rgba(255,255,255,.7);font-size:12px;letter-spacing:.04em;text-transform:uppercase;margin-bottom:2px;}
+.hw-tier strong{color:var(--amber-light);font-size:19px;}
+.hw-cred{display:inline-flex;align-items:center;gap:8px;color:rgba(255,255,255,.75);font-size:13px;margin-top:14px;}
+.hydrawise-band .season-actions .s-ghost{background:rgba(255,255,255,.08);border-color:rgba(255,255,255,.35);color:#fff;}
+.hydrawise-band .season-actions .s-ghost:hover{background:rgba(255,255,255,.16);}
+@media(max-width:860px){.hydrawise-band .hw-grid{grid-template-columns:1fr;}.hw-features{grid-template-columns:1fr;}}
+</style>
   <link rel="stylesheet" href="css/chat-widget.css">
 <script type="application/ld+json">
 {
@@ -161,6 +271,21 @@
 </head>
 <body>
 
+<script>
+(function(){
+  var d = new Date(), m = d.getMonth(), day = d.getDate(), phase;
+  if (m === 7 && day >= 25)            phase = 'pre-fall';    // Aug 25–31
+  else if (m === 8 && day <= 4)        phase = 'pre-fall';    // Sep 1–4
+  else if (m === 0 && day >= 15)       phase = 'pre-spring';  // Jan 15–31
+  else if (m === 1)                    phase = 'pre-spring';  // Feb
+  else if ((m === 5 && day >= 15) || m === 6 || (m === 7 && day < 25))
+                                       phase = 'midseason';   // Jun 15–Aug 24
+  else if (m >= 8 || m === 0)          phase = 'fall';        // Sep 5–Jan 14
+  else                                 phase = 'spring';      // Mar 1–Jun 14
+  document.documentElement.setAttribute('data-season-phase', phase);
+})();
+</script>
+
 <!-- @@PJL:nav-START {"loc": "Vaughan &amp; surrounding", "status": "Same-day repair", "badge": "Vaughan sprinkler service"} -->
 <nav class="nav nav-v2 nav-solid">
   <div class="nav-utility-strip"><div class="nav-utility-strip__inner"><span class="nav-utility-strip__location"><span class="nav-utility-strip__icon" aria-hidden="true"><svg aria-hidden="true" focusable="false" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M8 14.5s5.5-5 5.5-9a5.5 5.5 0 1 0-11 0c0 4 5.5 9 5.5 9Z"/><circle cx="8" cy="5.5" r="2"/></svg></span>Vaughan &amp; surrounding</span><span class="nav-utility-strip__same-day"><span class="nav-utility-strip__pulse" aria-hidden="true"></span>Same-day repair</span><a href="tel:+19059600181" class="nav-utility-strip__phone"><span class="nav-utility-strip__icon" aria-hidden="true"><svg aria-hidden="true" focusable="false" viewBox="0 0 16 16" fill="currentColor"><path d="M3.654 1.328a.678.678 0 0 0-1.015-.063L1.605 2.3c-.483.484-.661 1.169-.45 1.77a17.6 17.6 0 0 0 4.168 6.608 17.6 17.6 0 0 0 6.608 4.168c.601.211 1.286.033 1.77-.45l1.034-1.034a.678.678 0 0 0-.063-1.015l-2.307-1.794a.68.68 0 0 0-.58-.122l-2.19.547a1.75 1.75 0 0 1-1.657-.459L5.482 8.062a1.75 1.75 0 0 1-.46-1.657l.548-2.19a.68.68 0 0 0-.122-.58L3.654 1.328Z"/></svg></span><span>(905) 960-0181</span></a><a href="/login" class="nav-utility-strip__login"><span class="nav-utility-strip__icon" aria-hidden="true"><svg aria-hidden="true" focusable="false" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="6" r="2.5"/><path d="M3 13.5c0-2.485 2.239-4.5 5-4.5s5 2.015 5 4.5"/></svg></span><span>Login</span></a></div></div>
@@ -173,49 +298,232 @@
 </div>
 <!-- @@PJL:nav-END -->
 
+
+<!-- Hero -->
 <section class="area-hero">
   <div class="container area-hero-inner">
-    <div class="breadcrumbs"><a href="index.html">Home</a><span>›</span><span>Service Areas</span><span>›</span><span>Vaughan</span></div>
-    <span class="area-eyebrow">Vaughan · Maple · Kleinburg · Thornhill · Woodbridge</span>
-    <h1>Sprinkler service across <em>Vaughan,</em> Ontario.</h1>
-    <p>Lawn sprinkler installation, smart Hydrawise systems and same-day repair across all of Vaughan — Maple, Kleinburg, Thornhill, Woodbridge, Concord, Vellore Village, Patterson, Sonoma Heights. Big enough to handle estate work, local enough to actually answer the phone.</p>
+    <div class="breadcrumbs"><a href="index.html">Home</a><span>›</span><a href="sprinkler-systems.html">Sprinkler Services</a><span>›</span><span>Vaughan</span></div>
+    <span class="area-eyebrow">Vaughan · Same-Day Repair · 3-Year Warranty</span>
+    <h1>Lawn sprinkler service &amp; repair in <em>Vaughan</em>.</h1>
+    <p>From Kleinburg's estate lots to the Maple and Vellore subdivisions, Vaughan is one of the biggest markets we serve. Installation, repair, spring openings, fall winterization, Hydrawise smart upgrades and drip — published pricing, 3-year warranty.</p>
     <div class="area-hero-actions pjl-cta-row">
       <a href="book.html?service=sprinkler_repair" class="btn-amber">Book Vaughan service <span aria-hidden="true">→</span></a>
       <a href="tel:+19059600181" class="btn-ghost">📞 (905) 960-0181</a>
     </div>
     <div class="area-hero-meta">
       <span>📍 <strong>Vaughan, ON</strong></span>
-      <span>⏱️ <strong>~4-5 hr response</strong></span>
+      <span>⏱️ <strong>Same-day repair</strong> · in season, booked before 11&nbsp;AM</span>
       <span>🛡️ <strong>3-year warranty</strong></span>
     </div>
   </div>
 </section>
 
-<section class="section">
-  <div class="container" style="max-width:820px;">
-    <h2>Vaughan irrigation — a city of distinct neighborhoods, each with different needs.</h2>
-    <p>Vaughan isn't really one place. Maple has the new builds and tight subdivision lots. Kleinburg has the estates and acreage. Thornhill has the mature established neighborhoods with significant tree canopies. Woodbridge has the cultural mix of old village core plus newer expansion. Concord is a commercial-industrial belt that needs a completely different irrigation conversation. Each one needs a different approach — and we tailor every quote accordingly.</p>
-    <p>What stays the same across all of Vaughan is the heavy York Region clay soil (slow water absorption, needs cycle &amp; soak programming) and the City of Vaughan watering-restriction bylaws that smart controllers like Hydrawise handle automatically.</p>
+<!-- Seasonal spotlight — swaps by time of year (data-season-phase on <html>) -->
+<section class="section season">
+  <div class="container" style="max-width:1080px;">
+    <span class="season-eyebrow"><span class="dot" aria-hidden="true"></span>Right now in Vaughan</span>
 
-    <div class="local-detail">
-      <h4>Vaughan watering bylaws — your sprinkler should follow them automatically</h4>
-      <p>Vaughan typically restricts lawn watering to alternate days based on house number (odd/even) during summer water-conservation periods. Old timer-based controllers don't know about this — they just keep running the schedule you set. Hydrawise, programmed properly, automatically respects municipal watering windows so you stay compliant without thinking about it. We set this up on every Vaughan install as standard.</p>
+    <!-- SPRING -->
+    <div class="season-spot season-spot--spring">
+      <div class="season-spot__media">
+        <span class="season-spot__tag">Spring · booking now</span>
+        <img src="backyard-sprinkler-running.jpg" alt="Lawn sprinkler running on a Vaughan property in spring" loading="lazy">
+      </div>
+      <div class="season-spot__body">
+        <h2>It's <em>spring-opening</em> season.</h2>
+        <p>Time to wake the system up. We slow-pressurize the mainline, test every zone, check heads and nozzles, and program the controller for the season — a full system start-up before we leave.</p>
+        <p class="season-price">Spring openings from <b><span data-price="spring_open_4z">$90</span></b> (1&ndash;4 zones)</p>
+        <div class="season-actions">
+          <a href="book.html?service=spring_opening" class="s-primary">Book your spring opening <span aria-hidden="true">→</span></a>
+          <a href="sprinkler-spring-opening.html" class="s-ghost">See what's included</a>
+        </div>
+      </div>
+    </div>
+
+    <!-- IN-SEASON SERVICE -->
+    <div class="season-spot season-spot--service">
+      <div class="season-spot__media">
+        <span class="season-spot__tag">In season · same-day slots</span>
+        <img src="leaking-valve-box.jpg" alt="Sprinkler valve box being diagnosed during an in-season repair in Vaughan" loading="lazy">
+      </div>
+      <div class="season-spot__body">
+        <h2>Peak season — <em>repairs &amp; tune-ups</em>.</h2>
+        <p>Stuck valves, broken heads, mystery wet spots, pressure drops, a controller that's lost the plot — this is prime time to fix it before the summer heat exposes it. Vaughan gets same-day repair slots in season for addresses booked before 11&nbsp;AM, subject to availability.</p>
+        <p class="season-price"><b><span data-price="service_call">$95</span></b> service call + parts &amp; labour</p>
+        <div class="season-actions">
+          <a href="book.html?service=sprinkler_repair" class="s-primary">Book a repair visit <span aria-hidden="true">→</span></a>
+          <a href="sprinkler-repair.html" class="s-ghost">Common faults &amp; pricing</a>
+        </div>
+      </div>
+    </div>
+
+    <!-- FALL -->
+    <div class="season-spot season-spot--fall">
+      <div class="season-spot__media">
+        <span class="season-spot__tag">Fall · book before frost</span>
+        <img src="fall-sprinkler-running.jpg" alt="Sprinkler system running in autumn before winterization in Vaughan" loading="lazy">
+      </div>
+      <div class="season-spot__body">
+        <h2>Fall means <em>winterization</em>.</h2>
+        <p>One hard frost on a system full of water cracks fittings, valves and backflow devices. We run a pro low-pressure compressor blow-out — every lateral and the mainline emptied — before the freeze hits. Book by mid-October.</p>
+        <p class="season-price">Fall closings from <b><span data-price="fall_close_4z">$90</span></b> (1&ndash;4 zones)</p>
+        <div class="season-actions">
+          <a href="book.html?service=fall_winterization" class="s-primary">Book your winterization <span aria-hidden="true">→</span></a>
+          <a href="sprinkler-fall-winterization.html" class="s-ghost">Why it matters</a>
+        </div>
+      </div>
+    </div>
+
+    <!-- Year-round track (always visible; current season badged NOW) -->
+    <div class="season-track">
+      <a href="sprinkler-spring-opening.html" class="season-chip" data-season-card="spring">
+        <span class="now-badge"><span class="dot" aria-hidden="true"></span>Happening now</span>
+        <img src="backyard-sprinkler-running@800w.jpg" alt="Spring sprinkler opening" loading="lazy">
+        <span class="season-chip__label"><strong>Spring Opening</strong><span>from <span data-price="spring_open_4z">$90</span> · Apr–May</span></span>
+      </a>
+      <a href="sprinkler-repair.html" class="season-chip" data-season-card="service">
+        <span class="now-badge"><span class="dot" aria-hidden="true"></span>Happening now</span>
+        <img src="leaking-valve-box@800w.jpg" alt="Summer sprinkler service and repair" loading="lazy">
+        <span class="season-chip__label"><strong>Summer Service &amp; Repair</strong><span>same-day in season</span></span>
+      </a>
+      <a href="sprinkler-fall-winterization.html" class="season-chip" data-season-card="fall">
+        <span class="now-badge"><span class="dot" aria-hidden="true"></span>Happening now</span>
+        <img src="fall-sprinkler-running@800w.jpg" alt="Fall sprinkler winterization" loading="lazy">
+        <span class="season-chip__label"><strong>Fall Winterization</strong><span>from <span data-price="fall_close_4z">$90</span> · Sep–Oct</span></span>
+      </a>
     </div>
   </div>
 </section>
 
+<!-- Local intro -->
+<section class="section">
+  <div class="container" style="max-width:820px;">
+    <h2>Full-service sprinkler care across Vaughan.</h2>
+    <p>Vaughan is really a collection of very different communities — the estate properties of Kleinburg and the historic core of Woodbridge, the dense newer subdivisions of Vellore Village, Patterson and Sonoma Heights, and everything around the Vaughan Metropolitan Centre. Each one waters differently, and we scope every job to the lot in front of us.</p>
+    <p>The through-line across Vaughan is age: a huge share of the Maple and Vellore build-out is now 15–20 years old, which is exactly when original controllers, valves and heads start failing together. That's our bread and butter — a smart-controller retrofit and a valve refresh usually beats a full tear-out.</p>
+
+    <div class="local-detail">
+      <h4>Kleinburg estates vs. the subdivision belt</h4>
+      <p>Kleinburg and the Islington-corridor estates run large, designed systems — often 8–14 zones with drip on the gardens and long hedge runs. The Maple, Vellore Village and Patterson subdivisions are more typically 4–6 zone lots hitting their first major service window. Both benefit from a Hydrawise upgrade, but for very different reasons: the estates for scheduling control, the subdivisions for the water-bill savings.</p>
+    </div>
+  </div>
+</section>
+
+<!-- Neighbourhood breakdown -->
+<section class="section cream">
+  <div class="container" style="max-width:1080px;">
+    <h2>Vaughan, neighbourhood by neighbourhood</h2>
+    <p>Villages, estates and the newer subdivision belt — all of Vaughan.</p>
+
+    <div class="district-grid">
+      <div class="district">
+        <h3>🏘️ Villages & communities</h3>
+        <p>The historic and estate cores of Vaughan.</p>
+        <div class="neighborhoods">
+          <div class="neighborhood">Maple</div>
+          <div class="neighborhood">Kleinburg</div>
+          <div class="neighborhood">Woodbridge</div>
+          <div class="neighborhood">Concord</div>
+          <div class="neighborhood">Thornhill</div>
+        </div>
+      </div>
+      <div class="district">
+        <h3>🌱 Newer subdivisions</h3>
+        <p>The 15–20-year build-out now cycling into first major service.</p>
+        <div class="neighborhoods">
+          <div class="neighborhood">Vellore Village</div>
+          <div class="neighborhood">Patterson</div>
+          <div class="neighborhood">Sonoma Heights</div>
+          <div class="neighborhood">Crestwood</div>
+          <div class="neighborhood">Carrville</div>
+        </div>
+      </div>
+      <div class="district">
+        <h3>🧭 Centres & corridors</h3>
+        <p>The VMC and the main arteries crossing the city.</p>
+        <div class="neighborhoods">
+          <div class="neighborhood">Vaughan Metropolitan Centre</div>
+          <div class="neighborhood">Vaughan Mills area</div>
+          <div class="neighborhood">Highway 7 corridor</div>
+          <div class="neighborhood">Highway 27 corridor</div>
+          <div class="neighborhood">Major Mackenzie corridor</div>
+          <div class="neighborhood">Rutherford Rd area</div>
+          <div class="neighborhood">Bathurst St corridor</div>
+          <div class="neighborhood">Yonge St corridor</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Service offerings -->
 <section class="section cream">
   <div class="container" style="max-width:1080px;">
     <h2>What we do across Vaughan</h2>
-    <p>Booking 7 days a week from April through October.</p>
+    <p>Estate design in Kleinburg, subdivision retrofits in Maple and Vellore, and full seasonal service everywhere between.</p>
 
     <div class="svc-grid">
-      <div class="svc-card"><h3>🌱 Spring Sprinkler Opening</h3><p>Slow re-pressurization, leak inspection, zone-by-zone test, Hydrawise programming with Vaughan bylaw compliance.</p><span class="price-tag">From <span data-price="spring_open_4z">$90</span> (4 zones)</span></div>
-      <div class="svc-card"><h3>🍂 Fall Winterization</h3><p>Pro low-pressure compressor blow-out before the first hard frost. Vaughan calendars fill in October.</p><span class="price-tag">From <span data-price="spring_open_4z">$90</span> (4 zones)</span></div>
-      <div class="svc-card"><h3>🔧 Same-Day Repair</h3><p>Stuck valves, broken heads, mystery wet spots. Same-day across Vaughan during season.</p><span class="price-tag">Per-line-item pricing</span></div>
-      <div class="svc-card"><h3>🛠️ New Installation</h3><p>Custom design, Hunter Hydrawise smart controller, full Vaughan bylaw integration. Subdivision-scale and estate-scale both available.</p><span class="price-tag">Calculator pricing by zone count*</span></div>
-      <div class="svc-card"><h3>🏛️ Kleinburg Estate Work</h3><p>Multi-zone estate installs in Kleinburg — well-pump integration where applicable, mature tree irrigation, formal garden hydrozoning.</p><span class="price-tag">Custom-quoted with drawings</span></div>
-      <div class="svc-card"><h3>✨ Landscape Lighting</h3><p>Custom LED design and install — perfect for Thornhill mature properties and Kleinburg architectural homes.</p><span class="price-tag">Custom design – quoted per property</span></div>
+      <div class="svc-card">
+        <h3>🌱 Spring Opening</h3>
+        <p>Slow re-pressurization, zone-by-zone test, leak inspection, nozzle adjustment, controller programming for the season.</p>
+        <span class="price-tag">From <span data-price="spring_open_4z">$90</span> (1-4 zones)</span>
+      </div>
+      <div class="svc-card">
+        <h3>🍂 Fall Winterization</h3>
+        <p>Pro low-pressure compressor blow-out. Every lateral and the mainline emptied so nothing freezes and cracks over winter. Book by mid-October.</p>
+        <span class="price-tag">From <span data-price="fall_close_4z">$90</span> (1-4 zones)</span>
+      </div>
+      <div class="svc-card">
+        <h3>🔧 Sprinkler Repair</h3>
+        <p>Stuck valves, broken heads, pressure issues, mystery wet spots. Same-day across Vaughan in season, subject to availability.</p>
+        <span class="price-tag"><span data-price="service_call">$95</span> service call + parts &amp; labour</span>
+      </div>
+      <div class="svc-card">
+        <h3>🛠️ New Installation</h3>
+        <p>Designed for the lot, not from a template. Hunter heads, Hunter HPC-400 Hydrawise smart controller standard. Kleinburg estates run 8–14 zones; subdivision lots 4–6.</p>
+        <span class="price-tag">Calculator pricing by zone count</span>
+      </div>
+      <a href="#hydrawise-vaughan" class="svc-card" style="display:block;text-decoration:none;">
+        <h3>📡 Hydrawise Smart Upgrade</h3>
+        <p>Retrofit your existing system with the Hunter HPC-400 Hydrawise WiFi controller. App control, predictive weather-skipping, wiring-fault alerts. Typical install under 90 minutes.</p>
+        <span class="price-tag">From <span data-price="controller_1_4">$595</span> (1-4 zones) ↓</span>
+      </a>
+      <div class="svc-card">
+        <h3>💧 Drip Irrigation</h3>
+        <p>Long hedge runs, perennial beds, raised vegetable beds, container plantings. Designed as a separate zone off your main controller.</p>
+        <span class="price-tag">Custom quote by run length</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Hydrawise smart upgrade — dedicated section -->
+<section class="section hydrawise-band" id="hydrawise-vaughan">
+  <div class="container hw-grid" style="max-width:1080px;">
+    <div class="hw-media">
+      <span class="hw-media__tag">📷 Real PJL install — Hunter HPC-400</span>
+      <img src="blog-hydrawise-hpc-install.jpg" alt="Hunter Hydrawise HPC-400 smart controller installed by PJL Land Services" loading="lazy">
+    </div>
+    <div>
+      <h2>The Vaughan favourite: a <em>Hydrawise smart upgrade</em>.</h2>
+      <p class="hw-lede">Most Vaughan systems we service run controllers that pre-date WiFi. Swap the old timer for a Hunter HPC-400 Hydrawise and the system starts thinking for itself — typical install runs under 90 minutes, and generic-timer households typically cut seasonal watering 30–40%.</p>
+      <ul class="hw-features">
+        <li><span class="ic">🌦️</span><span><b>Weather skipping</b> — skips runs when rain is forecast, throttles on cool days, runs longer in heat.</span></li>
+        <li><span class="ic">📱</span><span><b>Full app control</b> — run, pause or re-program any zone from your phone, anywhere.</span></li>
+        <li><span class="ic">🚨</span><span><b>Fault alerts</b> — wiring faults, missed runs, WiFi dropouts: you know before the lawn does. Add the optional flow meter for true leak alerts.</span></li>
+        <li><span class="ic">📊</span><span><b>Runtime history</b> — every run logged, so small faults surface before brown patches do.</span></li>
+      </ul>
+      <div class="hw-tiers">
+        <div class="hw-tier"><small>1–4 zones</small><strong><span data-price="controller_1_4">$595</span></strong></div>
+        <div class="hw-tier"><small>5–7 zones</small><strong><span data-price="controller_5_7">$750</span></strong></div>
+        <div class="hw-tier"><small>8–16 zones</small><strong><span data-price="controller_8_16">$1,195</span></strong></div>
+      </div>
+      <div class="season-actions">
+        <a href="book.html?service=hydrawise_retrofit" class="s-primary">Book your upgrade <span aria-hidden="true">→</span></a>
+        <a href="sprinkler-hydrawise.html" class="s-ghost">Everything Hydrawise does</a>
+        <a href="water-cost-calculator.html" class="s-ghost">Estimate your water savings</a>
+      </div>
+      <span class="hw-cred">🎓 Hunter University trained · Authorized Hydrawise installer · All-in pricing, no surprise add-ons</span>
     </div>
   </div>
 </section>
@@ -224,9 +532,9 @@
 <section class="section">
   <div class="container" style="max-width:820px;">
     <section class="pricing-city" aria-labelledby="pricing-vaughan-heading">
-      <h2 id="pricing-vaughan-heading">Sprinkler Pricing in Vaughan — Published Up Front</h2>
-      <p>We publish pricing because trust starts before you call. Spring openings and fall closings are flat-rate services covering the 10-point system check and standard adjustments (alignment, arc, and rotation — head replacement is a separate repair line). Any repairs needed are flagged on-site, quoted separately, and only carried out after you approve them.</p>
-      <h3>Spring Opening &amp; Fall Closing — Residential (per service)</h3>
+      <h2 id="pricing-vaughan-heading">Sprinkler pricing in Vaughan — published up front</h2>
+      <p>We publish pricing because trust starts before the call. Spring openings and fall closings are flat-rate services covering the system check and standard adjustments (alignment, arc, rotation — head replacement is a separate repair line). Any repairs needed are flagged on-site, quoted separately, and only carried out after your approval.</p>
+      <h3>Spring opening &amp; fall closing — residential (per service)</h3>
       <table class="pricing-table">
         <thead><tr><th scope="col">Zones</th><th scope="col">Service Price (CAD)</th></tr></thead>
         <tbody>
@@ -238,7 +546,8 @@
         </tbody>
       </table>
       <p class="pricing-note"><small>Spring and fall use the same tier prices. Commercial pricing available — call for a quote.</small></p>
-      <h3>Sprinkler Repair — Vaughan</h3>
+
+      <h3>Sprinkler repair — Vaughan</h3>
       <table class="pricing-table">
         <thead><tr><th scope="col">Item</th><th scope="col">Price (CAD)</th></tr></thead>
         <tbody>
@@ -250,8 +559,9 @@
         </tbody>
       </table>
       <p class="pricing-note"><small>Repair labour is billed separately from the service call. <strong>AI-Smart-Intake bonus:</strong> if our AI diagnostic tool correctly predicts the on-site fix, you get one hour of repair labour free on the diagnosed work.</small></p>
-      <h3>New Installation — Vaughan</h3>
-      <p>Tier 1 (1–4 zones): <strong><span data-price="new_install_t1_base">$585</span> base + <span data-price="new_install_per_zone">$549</span> per zone</strong>. Tier 2 (5–7 zones): <strong><span data-price="new_install_t2_base">$749</span> base + <span data-price="new_install_per_zone">$549</span> per zone</strong>. Kleinburg estate properties and larger 8+ zone systems are custom-quoted. All installs include Hunter heads, Hydrawise WiFi smart controller, and our 3-year installation warranty. <a href="blog-sprinkler-system-cost-ontario.html">See the full pricing breakdown →</a></p>
+
+      <h3>New installation — Vaughan</h3>
+      <p>Tier 1 (1–4 zones): <strong><span data-price="new_install_t1_base">$585</span> base + <span data-price="new_install_per_zone">$549</span> per zone</strong>. Tier 2 (5–7 zones): <strong><span data-price="new_install_t2_base">$749</span> base + <span data-price="new_install_per_zone">$549</span> per zone</strong>. Installs include Hunter heads, Hunter HPC-400 Hydrawise WiFi smart controller, and our 3-year warranty.</p>
       <div class="pricing-cta-row pjl-cta-row">
         <a href="quote.html" class="btn-primary">Build Your Quote</a>
         <a href="tel:+19059600181" class="btn-secondary">Call (905) 960-0181</a>
@@ -259,25 +569,25 @@
     </section>
 
     <section class="checklist-city" aria-labelledby="checklist-vaughan-heading" style="margin-top:48px;">
-      <h2 id="checklist-vaughan-heading">What's Included in a PJL Spring Opening — Vaughan</h2>
-      <p>Every spring opening in Vaughan includes a full 10-point system check before we leave your property:</p>
+      <h2 id="checklist-vaughan-heading">What's included in a PJL spring opening — Vaughan</h2>
+      <p>Every spring opening across Vaughan includes a full system check before we leave the property:</p>
       <ul class="service-checklist">
-        <li>✓ Slow-pressurize the main supply line to prevent water-hammer damage to PVC fittings</li>
+        <li>✓ Slow-pressurize the main supply line to prevent water-hammer damage to fittings</li>
         <li>✓ Test each zone individually for correct pressure, coverage, and rotation</li>
-        <li>✓ Check every sprinkler head for winter damage, misalignment, or clogged nozzles</li>
-        <li>✓ Adjust arc and throw on rotors and pop-up sprays for full coverage</li>
+        <li>✓ Check every head for winter damage, misalignment, or clogged nozzles</li>
+        <li>✓ Adjust arc and throw on rotors and pop-up sprays for full coverage with minimum overspray onto paths and hardscape</li>
         <li>✓ Inspect the manifold and valve box for cracks, leaks, and solenoid faults</li>
-        <li>✓ Verify the Hydrawise (or other smart controller) Wi-Fi connection and program</li>
-        <li>✓ Set the seasonal watering schedule against Vaughan's clay-loam soil profile</li>
-        <li>✓ Confirm rain-sensor function (where installed) — required for water-bylaw compliance</li>
+        <li>✓ Verify Hydrawise (or other smart controller) Wi-Fi connection and program</li>
+        <li>✓ Set the seasonal watering schedule against York Region's odd/even watering bylaw and the local clay-loam soil profile</li>
+        <li>✓ Confirm rain-sensor function (where installed)</li>
         <li>✓ Flag any backflow assembly issues for referral to a certified Ontario backflow tester</li>
-        <li>✓ Walk you through the system and answer any questions on the spot</li>
+        <li>✓ Walk you through the system and answer questions on the spot</li>
       </ul>
       <p><small>Backflow testing is a separately-licensed trade in Ontario. PJL does not service backflow assemblies but can refer you to a certified tester if yours needs annual recertification.</small></p>
     </section>
 
     <section class="faq-city" aria-labelledby="faq-vaughan-heading" style="margin-top:48px;">
-      <h2 id="faq-vaughan-heading">Vaughan Sprinkler FAQs</h2>
+      <h2 id="faq-vaughan-heading">Vaughan sprinkler FAQs</h2>
       <details><summary><h3>When should I open my sprinkler system in Vaughan?</h3></summary><p>In Vaughan, the safe window for spring opening is typically the second week of April through mid-May, after the last hard frost. Opening too early risks freeze damage to backflow assemblies and exposed risers. We start booking in late March and prioritize repeat customers first — book early to lock in your preferred week.</p></details>
       <details><summary><h3>What does sprinkler repair cost in Vaughan?</h3></summary><p>Our service call (mobilization + on-site assessment) is <span data-price="service_call">$95</span>. Repair labour is billed at <span data-price="hourly_labour" data-price-suffix="/hr">$95</span> from there. Common parts costs: sprinkler head replacement <span data-price="head_replacement">$68</span>, pipe break repair from <span data-price="pipe_break_3ft">$120</span>, full 3-valve manifold rebuild starting at <span data-price="manifold_3valve">$135</span> plus valves. If our AI-Smart-Intake diagnostic tool correctly predicts the fix, you get one hour of repair labour free on the diagnosed work — our only standing discount.</p></details>
       <details><summary><h3>Do you offer same-day sprinkler repair in Vaughan?</h3></summary><p>Yes — during the active irrigation season (mid-April to mid-October), we hold same-day repair slots for Vaughan addresses booked before 11 AM, subject to availability. Most Vaughan calls land within 4–6 hours of dispatch.</p></details>
@@ -289,49 +599,39 @@
   </div>
 </section>
 
-<section class="section">
-  <div class="container" style="max-width:1080px;">
-    <h2>Vaughan neighborhoods we cover</h2>
-    <p>Every Vaughan neighborhood, every distinct community.</p>
-    <div class="neighborhoods">
-      <div class="neighborhood">Maple</div>
-      <div class="neighborhood">Kleinburg</div>
-      <div class="neighborhood">Thornhill</div>
-      <div class="neighborhood">Woodbridge</div>
-      <div class="neighborhood">Concord</div>
-      <div class="neighborhood">Vellore Village</div>
-      <div class="neighborhood">Patterson</div>
-      <div class="neighborhood">Sonoma Heights</div>
-      <div class="neighborhood">Crestwood</div>
-      <div class="neighborhood">Carrville</div>
-      <div class="neighborhood">Vaughan Mills area</div>
-      <div class="neighborhood">Vaughan Metropolitan Centre</div>
-      <div class="neighborhood">Highway 7 corridor</div>
-      <div class="neighborhood">Highway 27 corridor</div>
-      <div class="neighborhood">Major Mackenzie corridor</div>
-      <div class="neighborhood">Rutherford Rd area</div>
-      <div class="neighborhood">Bathurst St corridor</div>
-      <div class="neighborhood">Yonge St corridor</div>
+<!-- CTA strip -->
+<section class="cta-strip">
+  <div class="container cta-strip-inner">
+    <div>
+      <h3>Vaughan homeowners — book direct.</h3>
+      <p>Same-day repair in season, estate design, published pricing.</p>
+    </div>
+    <div class="cta-strip-actions pjl-cta-row">
+      <a href="book.html?service=sprinkler_repair" class="primary">Book service →</a>
+      <a href="tel:+19059600181" class="ghost">📞 (905) 960-0181</a>
     </div>
   </div>
 </section>
 
-<section class="cta-strip">
-  <div class="container cta-strip-inner">
-    <div><h3>Vaughan homeowners — book direct.</h3><p>Same-day emergency repair. Free on-site quote for installs.</p></div>
-    <div class="cta-strip-actions pjl-cta-row"><a href="book.html?service=sprinkler_repair" class="primary">Book service →</a><a href="tel:+19059600181" class="ghost">📞 (905) 960-0181</a></div>
-  </div>
-</section>
-
+<!-- Related — adjacent areas + core services -->
 <section class="section">
   <div class="container" style="max-width:1080px;">
-    <h2>Other cities we serve nearby</h2>
+    <h2>Nearby coverage</h2>
+    <p>Adjacent areas for customers comparing service-area coverage:</p>
     <div class="related-cities">
-      <a href="sprinkler-service-toronto.html" class="related-city"><h4>Toronto</h4><p>North York, Lawrence Park, Forest Hill.</p></a>
-      <a href="sprinkler-service-newmarket.html" class="related-city"><h4>Newmarket</h4><p>York Region service hub.</p></a>
-      <a href="sprinkler-service-aurora.html" class="related-city"><h4>Aurora</h4><p>Full service.</p></a>
-      <a href="sprinkler-service-king-city.html" class="related-city"><h4>King City</h4><p>Estate &amp; acreage.</p></a>
-      <a href="sprinkler-service-richmond-hill.html" class="related-city"><h4>Richmond Hill</h4><p>Mill Pond, Oak Ridges.</p></a>
+      <a href="sprinkler-service-thornhill.html" class="related-city"><h4>Thornhill</h4><p>Sprinklers + premium lighting.</p></a>
+      <a href="sprinkler-service-richmond-hill.html" class="related-city"><h4>Richmond Hill</h4><p>Oak Ridges, Mill Pond, Bayview Hill.</p></a>
+      <a href="sprinkler-service-king-city.html" class="related-city"><h4>King City</h4><p>Estates & acreage.</p></a>
+      <a href="sprinkler-service-markham.html" class="related-city"><h4>Markham</h4><p>Unionville, Cathedraltown, Berczy.</p></a>
+    </div>
+
+    <h2 style="margin-top:64px;">Service deep-dives</h2>
+    <p>If you want to learn more about a specific service before booking, the pages below go deeper.</p>
+    <div class="related-cities">
+      <a href="sprinkler-systems.html" class="related-city"><h4>Sprinkler Systems</h4><p>Design, install, components.</p></a>
+      <a href="sprinkler-repair.html" class="related-city"><h4>Sprinkler Repair</h4><p>Common faults &amp; pricing.</p></a>
+      <a href="sprinkler-hydrawise.html" class="related-city"><h4>Hydrawise Smart Controller</h4><p>Weather-based watering.</p></a>
+      <a href="landscape-lighting.html" class="related-city"><h4>Landscape Lighting</h4><p>LED, marine-grade, app control.</p></a>
     </div>
   </div>
 </section>

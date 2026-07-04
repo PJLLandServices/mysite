@@ -80,8 +80,11 @@
 </script>
 
 <style>
-.area-hero{padding:156px 0 80px;background:linear-gradient(rgba(0,0,0,0.58),rgba(0,0,0,0.58)),url('/assets/hero/sprinkler-service-toronto.jpg') center/cover no-repeat,linear-gradient(135deg,var(--dark) 0%,var(--green) 70%,var(--green-mid) 100%);position:relative;overflow:hidden;}
-@media(max-width:640px){.area-hero{padding:var(--hero-nav-clearance) 0 56px;background-position:center top,center top;}}
+.area-hero{padding:156px 0 80px;background:radial-gradient(ellipse 60% 55% at 20% 20%,rgba(74,140,92,.30),transparent 60%),radial-gradient(ellipse 55% 50% at 85% 80%,rgba(224,123,36,.18),transparent 60%),linear-gradient(135deg,var(--dark) 0%,var(--green) 70%,var(--green-mid) 100%);position:relative;overflow:hidden;}
+@media(max-width:640px){.area-hero{padding:var(--hero-nav-clearance) 0 56px;}}
+
+
+
 .area-hero-inner{position:relative;z-index:2;max-width:820px;}
 .breadcrumbs{font-size:13px;color:rgba(255,255,255,.65);margin-bottom:18px;display:flex;gap:8px;flex-wrap:wrap;}
 .breadcrumbs a{color:rgba(255,255,255,.85);}.breadcrumbs a:hover{color:var(--amber-light);}
@@ -114,6 +117,11 @@
 .svc-card p{font-size:15px !important;line-height:1.6 !important;color:var(--text-mid) !important;margin:0 0 12px !important;}
 .svc-card .price-tag{display:inline-block;background:var(--amber-pale);color:var(--amber);font-size:12px;font-weight:700;letter-spacing:.06em;padding:5px 12px;border-radius:99px;}
 
+.neighborhoods{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin-top:18px;}
+.neighborhood{background:#fff;border:1px solid var(--border);border-radius:99px;padding:10px 18px;font-size:14px;color:var(--green);font-weight:600;text-align:center;transition:background .2s ease,border-color .2s ease;}
+.neighborhood:hover{background:var(--green-pale);border-color:var(--green-light);}
+a.neighborhood{text-decoration:none;}
+
 .local-detail{background:linear-gradient(135deg,var(--green-pale) 0%,#f4f9ec 100%);border-left:4px solid var(--green-light);border-radius:0 var(--r-lg) var(--r-lg) 0;padding:24px 28px;margin:24px 0;}
 .local-detail h4{color:var(--green) !important;font-size:18px !important;margin:0 0 8px !important;text-transform:none !important;letter-spacing:-.005em !important;}
 .local-detail p{margin:0 !important;font-size:15px !important;line-height:1.65 !important;color:var(--text) !important;}
@@ -129,7 +137,7 @@
 .cta-strip-actions .ghost{background:rgba(255,255,255,.10);border:1px solid rgba(255,255,255,.20);color:#fff;}
 .cta-strip-actions .ghost:hover{background:rgba(255,255,255,.18);}
 
-.related-cities{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;margin-top:24px;}
+.related-cities{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;margin-top:24px;}
 .related-city{display:block;background:#fff;border:1px solid var(--border);border-radius:var(--r-lg);padding:18px 22px;transition:transform .2s ease,border-color .2s ease,box-shadow .2s ease;}
 .related-city:hover{transform:translateY(-3px);border-color:rgba(74,140,92,.25);box-shadow:0 10px 26px rgba(15,31,20,.06);}
 .related-city h4{color:var(--green) !important;margin:0 0 4px !important;font-size:16px !important;text-transform:none !important;letter-spacing:-.005em !important;}
@@ -163,15 +171,118 @@
 .faq-city summary::after{content:'+';float:right;color:var(--green);font-weight:700;font-size:22px;line-height:1;margin-left:12px;}
 .faq-city details[open] summary::after{content:'–';}
 .faq-city details p{padding:0 22px 18px;margin:0;font-size:15px;line-height:1.65;color:var(--text-mid);}
-.lottypes{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:18px;margin:24px 0;}
-.lottype{background:#fff;border:1px solid var(--border);border-radius:var(--r-lg);padding:22px 24px;}
-.lottype-tag{display:inline-block;background:var(--green-pale);color:var(--green);font-size:11px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;padding:4px 10px;border-radius:99px;margin-bottom:10px;}
-.lottype h3{color:var(--green) !important;font-size:18px !important;margin:0 0 8px !important;text-transform:none !important;letter-spacing:-.005em !important;}
-.lottype p{margin:0 !important;font-size:14px !important;line-height:1.6 !important;color:var(--text-mid) !important;}
+.hood-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px;margin-top:24px;}
+.hood-card{background:#fff;border:1px solid var(--border);border-radius:var(--r-lg);padding:0;display:flex;flex-direction:column;text-decoration:none;overflow:hidden;transition:transform .2s ease,box-shadow .2s ease,border-color .2s ease;}
+.hood-card:hover{transform:translateY(-3px);border-color:rgba(74,140,92,.30);box-shadow:0 10px 28px rgba(15,31,20,.08);}
+.hood-card__photo{height:160px;overflow:hidden;}
+.hood-card__photo img{width:100%;height:100%;object-fit:cover;display:block;transition:transform .35s ease;}
+.hood-card:hover .hood-card__photo img{transform:scale(1.05);}
+.hood-card__body{padding:20px 24px 22px;display:flex;flex-direction:column;gap:8px;flex:1;}
+.hood-card h3{color:var(--green) !important;margin:0 !important;font-size:18px !important;text-transform:none !important;letter-spacing:-.005em !important;}
+.hood-card p{margin:0 !important;font-size:14px !important;line-height:1.55 !important;color:var(--text-mid) !important;}
+.hood-card .hood-arrow{color:var(--amber);font-weight:700;font-size:14px;margin-top:auto;}
+/* District blocks — City of Toronto broken out by compass corner */
+.district-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin-top:34px;}
+.district{background:#fff;border:1px solid var(--border);border-radius:var(--r-lg);padding:22px 24px;}
+.district h3{color:var(--green) !important;margin:0 0 4px !important;font-size:18px !important;text-transform:none !important;letter-spacing:-.005em !important;}
+.district > p{margin:0 0 14px !important;font-size:14px !important;line-height:1.55 !important;color:var(--text-mid) !important;}
+.district .neighborhoods{grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;margin-top:0;}
+.district .neighborhood{padding:8px 12px;font-size:13px;background:var(--cream);}
+.district .district-note{margin:12px 0 0 !important;font-size:12.5px !important;color:var(--text-muted) !important;}
+@media(max-width:760px){.district-grid{grid-template-columns:1fr;}}
+
+/* ---- Seasonal "right now" spotlight (auto-switches by date via data-season-phase) ---- */
+.season{background:var(--cream);border-top:1px solid var(--border);border-bottom:1px solid var(--border);}
+.season-eyebrow{display:inline-flex;align-items:center;gap:8px;background:var(--green-pale);color:var(--green);font-size:12px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;padding:7px 15px;border-radius:99px;margin-bottom:18px;}
+.season-eyebrow .dot{width:8px;height:8px;border-radius:50%;background:var(--amber);box-shadow:0 0 0 4px rgba(245,155,74,.30);animation:seasonPulse 2s ease-in-out infinite;}
+@keyframes seasonPulse{0%,100%{opacity:1;}50%{opacity:.35;}}
+/* Each spotlight is hidden; the phase attribute reveals exactly one. With JS off
+   (no attribute) the spring spotlight shows so there is always visible content. */
+.season-spot{display:none;grid-template-columns:1.05fr .95fr;gap:clamp(20px,3vw,40px);align-items:center;}
+html:not([data-season-phase]) .season-spot--spring{display:grid;}
+html[data-season-phase="spring"] .season-spot--spring,
+html[data-season-phase="pre-spring"] .season-spot--spring,
+html[data-season-phase="midseason"] .season-spot--service,
+html[data-season-phase="fall"] .season-spot--fall,
+html[data-season-phase="pre-fall"] .season-spot--fall{display:grid;}
+.season-spot__media{position:relative;border-radius:var(--r-xl,20px);overflow:hidden;aspect-ratio:16/10;box-shadow:0 18px 44px rgba(15,31,20,.16);}
+.season-spot__media img{width:100%;height:100%;object-fit:cover;display:block;}
+.season-spot__tag{position:absolute;top:14px;left:14px;background:var(--amber);color:#fff;font-size:12px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;padding:6px 13px;border-radius:99px;box-shadow:0 6px 16px rgba(224,123,36,.4);}
+.season-spot h2{font-size:clamp(26px,3.4vw,40px);color:var(--green);margin:0 0 12px;line-height:1.08;}
+.season-spot h2 em{font-style:italic;color:var(--amber);}
+.season-spot p{font-size:16px;line-height:1.7;color:var(--text-mid);margin:0 0 14px;}
+.season-spot .season-price{display:inline-block;background:#fff;border:1px solid var(--border);border-radius:99px;padding:8px 16px;font-weight:700;color:var(--green);margin-bottom:20px;font-size:15px;}
+.season-spot .season-price b{color:var(--amber);}
+.season-actions{display:flex;flex-wrap:wrap;gap:12px;}
+.season-actions a{display:inline-flex;align-items:center;gap:9px;padding:13px 24px;border-radius:99px;font-weight:700;font-size:15px;}
+.season-actions .s-primary{background:var(--amber);color:#fff;box-shadow:0 8px 20px rgba(224,123,36,.32);transition:background .2s,transform .2s;}
+.season-actions .s-primary:hover{background:var(--amber-light);transform:translateY(-2px);}
+.season-actions .s-ghost{background:#fff;border:1px solid var(--green);color:var(--green);}
+.season-actions .s-ghost:hover{background:var(--green-pale);}
+/* Year-round mini-grid — always visible (SEO), current season badged NOW */
+.season-track{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:36px;}
+.season-chip{position:relative;display:block;border-radius:var(--r-lg);overflow:hidden;height:150px;text-decoration:none;border:2px solid transparent;transition:transform .2s,border-color .2s;}
+.season-chip:hover{transform:translateY(-3px);}
+.season-chip img{width:100%;height:100%;object-fit:cover;display:block;}
+.season-chip__label{position:absolute;inset:0;display:flex;flex-direction:column;justify-content:flex-end;padding:16px;background:linear-gradient(to top,rgba(15,31,20,.82) 0%,rgba(15,31,20,.15) 55%,transparent 100%);}
+.season-chip__label strong{color:#fff;font-size:16px;line-height:1.2;}
+.season-chip__label span{color:rgba(255,255,255,.82);font-size:13px;margin-top:2px;}
+.season-chip .now-badge{display:none;position:absolute;top:10px;right:10px;background:var(--amber);color:#fff;font-size:11px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;padding:5px 11px;border-radius:99px;align-items:center;gap:6px;}
+.season-chip .now-badge .dot{width:6px;height:6px;border-radius:50%;background:#fff;animation:seasonPulse 2s ease-in-out infinite;}
+html[data-season-phase="spring"] [data-season-card="spring"] .now-badge,
+html[data-season-phase="pre-spring"] [data-season-card="spring"] .now-badge,
+html[data-season-phase="midseason"] [data-season-card="service"] .now-badge,
+html[data-season-phase="fall"] [data-season-card="fall"] .now-badge,
+html[data-season-phase="pre-fall"] [data-season-card="fall"] .now-badge{display:inline-flex;}
+html[data-season-phase="spring"] [data-season-card="spring"],
+html[data-season-phase="pre-spring"] [data-season-card="spring"],
+html[data-season-phase="midseason"] [data-season-card="service"],
+html[data-season-phase="fall"] [data-season-card="fall"],
+html[data-season-phase="pre-fall"] [data-season-card="fall"]{border-color:var(--amber);}
+@media(max-width:760px){.season-spot{grid-template-columns:1fr;}.season-track{grid-template-columns:1fr;}.season-chip{height:130px;}}
+
+/* ---- Hydrawise smart-upgrade band (dedicated section) ---- */
+.hydrawise-band{background:linear-gradient(135deg,var(--green) 0%,var(--green-mid) 100%);color:#fff;}
+.hydrawise-band .hw-grid{display:grid;grid-template-columns:.95fr 1.05fr;gap:clamp(24px,3.5vw,48px);align-items:center;}
+/* Photo is portrait (1280x1707 = 3:4) — box matches its natural shape so nothing
+   gets cover-cropped away. Capped height keeps the band balanced on desktop. */
+.hw-media{position:relative;border-radius:var(--r-xl,20px);overflow:hidden;aspect-ratio:3/4;max-height:560px;justify-self:center;width:100%;max-width:440px;box-shadow:0 20px 50px rgba(0,0,0,.35);}
+.hw-media img{width:100%;height:100%;object-fit:cover;display:block;}
+.hw-media__tag{position:absolute;top:14px;left:14px;background:rgba(15,31,20,.75);backdrop-filter:blur(4px);color:#fff;font-size:12px;font-weight:700;letter-spacing:.05em;padding:6px 13px;border-radius:99px;border:1px solid rgba(255,255,255,.25);}
+.hydrawise-band h2{color:#fff !important;font-size:clamp(26px,3.4vw,40px);margin:0 0 14px;line-height:1.08;}
+.hydrawise-band h2 em{font-style:italic;color:var(--amber-light);}
+.hydrawise-band .hw-lede{color:rgba(255,255,255,.88) !important;font-size:16px;line-height:1.7;margin:0 0 18px;}
+.hw-features{list-style:none;padding:0;margin:0 0 22px;display:grid;grid-template-columns:1fr 1fr;gap:10px 18px;}
+.hw-features li{display:flex;gap:10px;align-items:flex-start;color:rgba(255,255,255,.92);font-size:14.5px;line-height:1.5;}
+.hw-features li b{color:#fff;}
+.hw-features .ic{flex:0 0 auto;width:26px;height:26px;border-radius:8px;background:rgba(255,255,255,.12);display:inline-flex;align-items:center;justify-content:center;font-size:14px;}
+.hw-tiers{display:flex;flex-wrap:wrap;gap:10px;margin:0 0 22px;}
+.hw-tier{background:rgba(255,255,255,.10);border:1px solid rgba(255,255,255,.22);border-radius:14px;padding:10px 16px;text-align:center;}
+.hw-tier small{display:block;color:rgba(255,255,255,.7);font-size:12px;letter-spacing:.04em;text-transform:uppercase;margin-bottom:2px;}
+.hw-tier strong{color:var(--amber-light);font-size:19px;}
+.hw-cred{display:inline-flex;align-items:center;gap:8px;color:rgba(255,255,255,.75);font-size:13px;margin-top:14px;}
+.hydrawise-band .season-actions .s-ghost{background:rgba(255,255,255,.08);border-color:rgba(255,255,255,.35);color:#fff;}
+.hydrawise-band .season-actions .s-ghost:hover{background:rgba(255,255,255,.16);}
+@media(max-width:860px){.hydrawise-band .hw-grid{grid-template-columns:1fr;}.hw-features{grid-template-columns:1fr;}}
 </style>
   <link rel="stylesheet" href="css/chat-widget.css">
 </head>
 <body>
+
+<script>
+(function(){
+  var d = new Date(), m = d.getMonth(), day = d.getDate(), phase;
+  if (m === 7 && day >= 25)            phase = 'pre-fall';    // Aug 25–31
+  else if (m === 8 && day <= 4)        phase = 'pre-fall';    // Sep 1–4
+  else if (m === 0 && day >= 15)       phase = 'pre-spring';  // Jan 15–31
+  else if (m === 1)                    phase = 'pre-spring';  // Feb
+  else if ((m === 5 && day >= 15) || m === 6 || (m === 7 && day < 25))
+                                       phase = 'midseason';   // Jun 15–Aug 24
+  else if (m >= 8 || m === 0)          phase = 'fall';        // Sep 5–Jan 14
+  else                                 phase = 'spring';      // Mar 1–Jun 14
+  document.documentElement.setAttribute('data-season-phase', phase);
+})();
+</script>
 
 <!-- @@PJL:nav-START {"loc": "Forest Hill &amp; Toronto", "status": "Priority scheduling for Toronto bookings", "badge": "Priority scheduling · Forest Hill"} -->
 <nav class="nav nav-v2 nav-solid">
@@ -185,105 +296,226 @@
 </div>
 <!-- @@PJL:nav-END -->
 
+
+<!-- Hero -->
 <section class="area-hero">
   <div class="container area-hero-inner">
-    <div class="breadcrumbs"><a href="index.html">Home</a><span>›</span><a href="sprinkler-systems.html">Sprinkler Services</a><span>›</span><a href="sprinkler-service-toronto.html">Toronto</a><span>›</span><span>Forest Hill</span></div>
-    <span class="area-eyebrow">Forest Hill · Hedge Lines · Drip + Lighting Integration</span>
+    <div class="breadcrumbs"><a href="index.html">Home</a><span>›</span><a href="sprinkler-systems.html">Sprinkler Services</a><span>›</span><span>Forest Hill</span></div>
+    <span class="area-eyebrow">Forest Hill · Priority Scheduling · 1-Year Guarantee</span>
     <h1>Lawn sprinkler service &amp; repair in <em>Forest Hill</em>.</h1>
-    <p>An affluent, established Toronto neighbourhood where mature trees and hedge-lined property edges define the landscape. We design, install, repair and maintain residential irrigation systems built for Forest Hill's character — discreet head placement, drip overlay along the cedar lines, and the option to bring landscape lighting into the same trench while we're there.</p>
+    <p>Forest Hill is one of Toronto's most established neighbourhoods — mature trees, hedge-lined properties, and steady demand for discreet drip and landscape lighting alongside the lawn irrigation. Installs, repair, seasonal service and Hydrawise smart upgrades, published pricing, priority scheduling.</p>
     <div class="area-hero-actions pjl-cta-row">
       <a href="book.html?service=sprinkler_repair" class="btn-amber">Book Forest Hill service <span aria-hidden="true">→</span></a>
       <a href="tel:+19059600181" class="btn-ghost">📞 (905) 960-0181</a>
     </div>
     <div class="area-hero-meta">
-      <span>📍 <strong>Forest Hill, Toronto</strong></span>
-      <span>⏱️ <strong>Priority scheduling</strong> · 1-3 business days in season</span>
+      <span>📍 <strong>Forest Hill, ON</strong></span>
+      <span>⏱️ <strong>Priority scheduling</strong> · 1&ndash;3 business days in season</span>
       <span>🛡️ <strong>1-year guarantee</strong></span>
     </div>
   </div>
 </section>
 
-<section class="section">
-  <div class="container" style="max-width:820px;">
-    <h2>Two Forest Hills, one approach.</h2>
-    <p>Forest Hill isn't one lot type. The estates along Russell Hill Road, Old Forest Hill Road and Dunvegan are some of the largest residential properties in central Toronto. The lots through Forest Hill Village, around Eglinton and Spadina, are tighter — still premium, but the irrigation plan looks very different. Our job on either is the same: design something that fits the property, runs efficiently, and disappears into the landscape.</p>
+<!-- Seasonal spotlight — swaps by time of year (data-season-phase on <html>) -->
+<section class="section season">
+  <div class="container" style="max-width:1080px;">
+    <span class="season-eyebrow"><span class="dot" aria-hidden="true"></span>Right now in Forest Hill</span>
 
-    <div class="lottypes">
-      <div class="lottype">
-        <span class="lottype-tag">Estate</span>
-        <h3>Russell Hill / Old Forest Hill</h3>
-        <p>0.4 to 1 acre+ lots backing onto the Cedarvale Ravine or the Beltline. Full multi-zone designs (8-14 zones typical), pressure-regulated heads on slope, dedicated drip overlay zones for long hedge runs and beds, often paired with a landscape lighting install through the same trench.</p>
+    <!-- SPRING -->
+    <div class="season-spot season-spot--spring">
+      <div class="season-spot__media">
+        <span class="season-spot__tag">Spring · booking now</span>
+        <img src="backyard-sprinkler-running.jpg" alt="Lawn sprinkler running on a Forest Hill property in spring" loading="lazy">
       </div>
-      <div class="lottype">
-        <span class="lottype-tag">Village core</span>
-        <h3>Forest Hill Village</h3>
-        <p>Tighter premium lots through the streets around Spadina and Eglinton. 4-7 zone systems, smaller designed footprints, often the priority is replacing an aging 1990s install with something that runs quietly and connects to a phone. Discreet head placement is the recurring brief.</p>
-      </div>
-      <div class="lottype">
-        <span class="lottype-tag">Hedge lines</span>
-        <h3>Drip overlay retrofits</h3>
-        <p>Most existing Forest Hill systems were installed lawn-only; the cedar and boxwood hedges were watered by hand or not at all. A drip overlay zone tied into the existing controller is a one-day retrofit on most lots — and saves both the hedge and the water that used to overspray onto the sidewalk.</p>
-      </div>
-      <div class="lottype">
-        <span class="lottype-tag">Canopy work</span>
-        <h3>Heritage tree routing</h3>
-        <p>Forest Hill canopy is significant. Toronto Municipal Code Chapter 658 protects any private tree with a trunk diameter of 30 cm or more — trenching through the protected root zone can require a permit. We walk the property before quoting and route around protected trees. More pipe, intact canopy.</p>
+      <div class="season-spot__body">
+        <h2>It's <em>spring-opening</em> season.</h2>
+        <p>Time to wake the system up. We slow-pressurize the mainline, test every zone, check heads and nozzles, and program the controller for the season — a full system start-up before we leave.</p>
+        <p class="season-price">Spring openings from <b><span data-price="spring_open_4z">$90</span></b> (1&ndash;4 zones)</p>
+        <div class="season-actions">
+          <a href="book.html?service=spring_opening" class="s-primary">Book your spring opening <span aria-hidden="true">→</span></a>
+          <a href="sprinkler-spring-opening.html" class="s-ghost">See what's included</a>
+        </div>
       </div>
     </div>
 
-    <div class="local-detail">
-      <h4>About scheduling — Forest Hill</h4>
-      <p>Forest Hill is roughly 55-65 minutes from our Newmarket base depending on traffic. Toronto repair calls are booked on a <strong>priority basis</strong> — most jobs land within 1-3 business days during peak season. We do not guarantee same-day for Toronto because honest dispatch from an hour away cannot keep that promise; York Region addresses get true same-day routing.</p>
+    <!-- IN-SEASON SERVICE -->
+    <div class="season-spot season-spot--service">
+      <div class="season-spot__media">
+        <span class="season-spot__tag">In season · priority scheduling</span>
+        <img src="leaking-valve-box.jpg" alt="Sprinkler valve box being diagnosed during an in-season repair in Forest Hill" loading="lazy">
+      </div>
+      <div class="season-spot__body">
+        <h2>Peak season — <em>repairs &amp; tune-ups</em>.</h2>
+        <p>Stuck valves, broken heads, mystery wet spots, pressure drops, a controller that's lost the plot — this is prime time to fix it before the summer heat exposes it. Forest Hill runs on priority scheduling: usually 1&ndash;3 business days, sooner when a crew's already routing through.</p>
+        <p class="season-price"><b><span data-price="service_call">$95</span></b> service call + parts &amp; labour</p>
+        <div class="season-actions">
+          <a href="book.html?service=sprinkler_repair" class="s-primary">Book a repair visit <span aria-hidden="true">→</span></a>
+          <a href="sprinkler-repair.html" class="s-ghost">Common faults &amp; pricing</a>
+        </div>
+      </div>
+    </div>
+
+    <!-- FALL -->
+    <div class="season-spot season-spot--fall">
+      <div class="season-spot__media">
+        <span class="season-spot__tag">Fall · book before frost</span>
+        <img src="fall-sprinkler-running.jpg" alt="Sprinkler system running in autumn before winterization in Forest Hill" loading="lazy">
+      </div>
+      <div class="season-spot__body">
+        <h2>Fall means <em>winterization</em>.</h2>
+        <p>One hard frost on a system full of water cracks fittings, valves and backflow devices. We run a pro low-pressure compressor blow-out — every lateral and the mainline emptied — before the freeze hits. Book by mid-October.</p>
+        <p class="season-price">Fall closings from <b><span data-price="fall_close_4z">$90</span></b> (1&ndash;4 zones)</p>
+        <div class="season-actions">
+          <a href="book.html?service=fall_winterization" class="s-primary">Book your winterization <span aria-hidden="true">→</span></a>
+          <a href="sprinkler-fall-winterization.html" class="s-ghost">Why it matters</a>
+        </div>
+      </div>
+    </div>
+
+    <!-- Year-round track (always visible; current season badged NOW) -->
+    <div class="season-track">
+      <a href="sprinkler-spring-opening.html" class="season-chip" data-season-card="spring">
+        <span class="now-badge"><span class="dot" aria-hidden="true"></span>Happening now</span>
+        <img src="backyard-sprinkler-running@800w.jpg" alt="Spring sprinkler opening" loading="lazy">
+        <span class="season-chip__label"><strong>Spring Opening</strong><span>from <span data-price="spring_open_4z">$90</span> · Apr–May</span></span>
+      </a>
+      <a href="sprinkler-repair.html" class="season-chip" data-season-card="service">
+        <span class="now-badge"><span class="dot" aria-hidden="true"></span>Happening now</span>
+        <img src="leaking-valve-box@800w.jpg" alt="Summer sprinkler service and repair" loading="lazy">
+        <span class="season-chip__label"><strong>Summer Service &amp; Repair</strong><span>priority scheduling</span></span>
+      </a>
+      <a href="sprinkler-fall-winterization.html" class="season-chip" data-season-card="fall">
+        <span class="now-badge"><span class="dot" aria-hidden="true"></span>Happening now</span>
+        <img src="fall-sprinkler-running@800w.jpg" alt="Fall sprinkler winterization" loading="lazy">
+        <span class="season-chip__label"><strong>Fall Winterization</strong><span>from <span data-price="fall_close_4z">$90</span> · Sep–Oct</span></span>
+      </a>
     </div>
   </div>
 </section>
 
+<!-- Local intro -->
+<section class="section">
+  <div class="container" style="max-width:820px;">
+    <h2>Discreet irrigation and lighting for Forest Hill.</h2>
+    <p>Forest Hill properties are premium, mature and often tighter than they look — deep lots framed by hedge lines and specimen trees. The irrigation that suits them is discreet: low-profile heads, a drip overlay on the hedges and beds, and tidy routing that respects the established roots.</p>
+    <p>We run Forest Hill on priority scheduling from Newmarket, usually 1–3 business days in season. Like Thornhill, it's a strong market for pairing irrigation with a low-voltage LED lighting design — homeowners who've invested in the garden want it lit, and doing both on one visit keeps the trenching to a single pass.</p>
+
+    <div class="local-detail">
+      <h4>Hedge-line drip on premium lots</h4>
+      <p>The long cedar and boxwood hedge lines that define so many Forest Hill properties are ideally watered by drip rather than spray — it puts water at the root, keeps the foliage dry (less disease), and doesn't oversplash the interlock or the neighbour's fence. We design the drip as its own zone off the Hydrawise controller, alongside the lawn zones, and can plan a landscape-lighting run on the same visit while the trench is open.</p>
+    </div>
+  </div>
+</section>
+
+<!-- Neighbourhood breakdown -->
 <section class="section cream">
   <div class="container" style="max-width:1080px;">
-    <h2>What we run most in Forest Hill</h2>
-    <p>The Forest Hill workload mixes hedge drip retrofits on existing systems, full designed installs on the larger estate lots, and the occasional integrated irrigation-plus-landscape-lighting build that takes advantage of having one crew and one trench.</p>
+    <h2>Forest Hill, neighbourhood by neighbourhood</h2>
+    <p>Forest Hill and the adjacent premium midtown pockets.</p>
+
+    <div class="district-grid">
+      <div class="district">
+        <h3>🌳 Forest Hill</h3>
+        <p>The village core and its upper and lower streets.</p>
+        <div class="neighborhoods">
+          <div class="neighborhood">Forest Hill Village</div>
+          <div class="neighborhood">Upper Forest Hill</div>
+          <div class="neighborhood">Lower Forest Hill</div>
+          <div class="neighborhood">Chaplin Estates</div>
+        </div>
+      </div>
+      <div class="district">
+        <h3>🏡 Adjacent premium pockets</h3>
+        <p>Nearby established neighbourhoods on the same priority scheduling.</p>
+        <div class="neighborhoods">
+          <div class="neighborhood">Cedarvale</div>
+          <div class="neighborhood">Humewood</div>
+          <div class="neighborhood">Casa Loma</div>
+          <div class="neighborhood">Deer Park</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Service offerings -->
+<section class="section cream">
+  <div class="container" style="max-width:1080px;">
+    <h2>What we do across Forest Hill</h2>
+    <p>Discreet lawn-and-drip systems, landscape lighting, and full seasonal service — priority-scheduled from Newmarket.</p>
 
     <div class="svc-grid">
       <div class="svc-card">
-        <h3>💧 Hedge Drip Overlay</h3>
-        <p>Add a low-flow drip zone to an existing lawn-only system to feed the cedar / boxwood / hornbeam hedge lines. Runs independent of the lawn rotors. One-day retrofit on most properties.</p>
-        <span class="price-tag">Custom quote by run length</span>
-      </div>
-      <div class="svc-card">
-        <h3>✨ Sprinkler + Lighting Combo Install</h3>
-        <p>When a new sprinkler install is going in, we route LED <a href="landscape-lighting.html">landscape lighting</a> cable in the same trench. Marine-grade fixtures, app control, no second pass through the lawn.</p>
-        <span class="price-tag">Custom quote per scope</span>
-      </div>
-      <div class="svc-card">
-        <h3>🛠️ Estate System Install</h3>
-        <p>For Russell Hill / Old Forest Hill estate lots: full 8-14 zone designs with pressure-regulated heads on slope, dedicated drip overlay zones, Hunter HPC-400 Hydrawise smart controller, hidden head placement throughout.</p>
-        <span class="price-tag">Custom scope, transparent line items</span>
-      </div>
-      <div class="svc-card">
-        <h3>🔧 Sprinkler Repair</h3>
-        <p>Stuck valves, broken heads, mystery wet spots near a tree root, low pressure on the longest zone, controller faults on aging Rain Bird / Hunter ESP units. Priority scheduling 1-3 business days in season.</p>
-        <span class="price-tag"><span data-price="service_call">$95</span> service call + parts &amp; labour</span>
-      </div>
-      <div class="svc-card">
         <h3>🌱 Spring Opening</h3>
-        <p>Slow re-pressurization, zone-by-zone test, leak inspection, nozzle adjustment, full controller programming. Drip zones get a separate pressure check.</p>
+        <p>Slow re-pressurization, zone-by-zone test, leak inspection, nozzle adjustment, controller programming for the season.</p>
         <span class="price-tag">From <span data-price="spring_open_4z">$90</span> (1-4 zones)</span>
       </div>
       <div class="svc-card">
         <h3>🍂 Fall Winterization</h3>
-        <p>Pro low-pressure compressor blow-out — every lateral and the mainline emptied before the first hard frost. Critical for estate systems where a cracked mainline under hardscape is a much larger repair.</p>
-        <span class="price-tag">From <span data-price="spring_open_4z">$90</span> (1-4 zones)</span>
+        <p>Pro low-pressure compressor blow-out. Every lateral and the mainline emptied so nothing freezes and cracks over winter. Book by mid-October.</p>
+        <span class="price-tag">From <span data-price="fall_close_4z">$90</span> (1-4 zones)</span>
+      </div>
+      <div class="svc-card">
+        <h3>🔧 Sprinkler Repair</h3>
+        <p>Stuck valves, broken heads, pressure issues, mystery wet spots. Priority scheduling for Forest Hill — usually 1–3 business days in season.</p>
+        <span class="price-tag"><span data-price="service_call">$95</span> service call + parts &amp; labour</span>
+      </div>
+      <div class="svc-card">
+        <h3>🛠️ New Installation</h3>
+        <p>Designed for the lot, not from a template. Hunter heads, Hunter HPC-400 Hydrawise smart controller standard. Forest Hill lots often pair discreet drip with a lighting design.</p>
+        <span class="price-tag">Calculator pricing by zone count</span>
+      </div>
+      <a href="#hydrawise-forest-hill" class="svc-card" style="display:block;text-decoration:none;">
+        <h3>📡 Hydrawise Smart Upgrade</h3>
+        <p>Retrofit your existing system with the Hunter HPC-400 Hydrawise WiFi controller. App control, predictive weather-skipping, wiring-fault alerts. Typical install under 90 minutes.</p>
+        <span class="price-tag">From <span data-price="controller_1_4">$595</span> (1-4 zones) ↓</span>
+      </a>
+      <div class="svc-card">
+        <h3>💧 Drip Irrigation</h3>
+        <p>Long hedge runs, perennial beds, raised vegetable beds, container plantings. Designed as a separate zone off your main controller.</p>
+        <span class="price-tag">Custom quote by run length</span>
       </div>
     </div>
   </div>
 </section>
 
+<!-- Hydrawise smart upgrade — dedicated section -->
+<section class="section hydrawise-band" id="hydrawise-forest-hill">
+  <div class="container hw-grid" style="max-width:1080px;">
+    <div class="hw-media">
+      <span class="hw-media__tag">📷 Real PJL install — Hunter HPC-400</span>
+      <img src="blog-hydrawise-hpc-install.jpg" alt="Hunter Hydrawise HPC-400 smart controller installed by PJL Land Services" loading="lazy">
+    </div>
+    <div>
+      <h2>The Forest Hill favourite: a <em>Hydrawise smart upgrade</em>.</h2>
+      <p class="hw-lede">Most Forest Hill systems we service run controllers that pre-date WiFi. Swap the old timer for a Hunter HPC-400 Hydrawise and the system starts thinking for itself — typical install runs under 90 minutes, and generic-timer households typically cut seasonal watering 30–40%.</p>
+      <ul class="hw-features">
+        <li><span class="ic">🌦️</span><span><b>Weather skipping</b> — skips runs when rain is forecast, throttles on cool days, runs longer in heat.</span></li>
+        <li><span class="ic">📱</span><span><b>Full app control</b> — run, pause or re-program any zone from your phone, anywhere.</span></li>
+        <li><span class="ic">🚨</span><span><b>Fault alerts</b> — wiring faults, missed runs, WiFi dropouts: you know before the lawn does. Add the optional flow meter for true leak alerts.</span></li>
+        <li><span class="ic">📊</span><span><b>Runtime history</b> — every run logged, so small faults surface before brown patches do.</span></li>
+      </ul>
+      <div class="hw-tiers">
+        <div class="hw-tier"><small>1–4 zones</small><strong><span data-price="controller_1_4">$595</span></strong></div>
+        <div class="hw-tier"><small>5–7 zones</small><strong><span data-price="controller_5_7">$750</span></strong></div>
+        <div class="hw-tier"><small>8–16 zones</small><strong><span data-price="controller_8_16">$1,195</span></strong></div>
+      </div>
+      <div class="season-actions">
+        <a href="book.html?service=hydrawise_retrofit" class="s-primary">Book your upgrade <span aria-hidden="true">→</span></a>
+        <a href="sprinkler-hydrawise.html" class="s-ghost">Everything Hydrawise does</a>
+        <a href="water-cost-calculator.html" class="s-ghost">Estimate your water savings</a>
+      </div>
+      <span class="hw-cred">🎓 Hunter University trained · Authorized Hydrawise installer · All-in pricing, no surprise add-ons</span>
+    </div>
+  </div>
+</section>
+
+<!-- Pricing + checklist + FAQ -->
 <section class="section">
   <div class="container" style="max-width:820px;">
-    <section class="pricing-city" aria-labelledby="pricing-fh-heading">
-      <h2 id="pricing-fh-heading">Pricing — Forest Hill</h2>
-      <p>Same pricing as the rest of the GTA — no Forest Hill premium. Spring openings and fall closings are flat-rate. Repair labour is billed against the service call. Hedge drip overlays and designed estate installs are scoped on-site.</p>
-
+    <section class="pricing-city" aria-labelledby="pricing-forest-hill-heading">
+      <h2 id="pricing-forest-hill-heading">Sprinkler pricing in Forest Hill — published up front</h2>
+      <p>We publish pricing because trust starts before the call. Spring openings and fall closings are flat-rate services covering the system check and standard adjustments (alignment, arc, rotation — head replacement is a separate repair line). Any repairs needed are flagged on-site, quoted separately, and only carried out after your approval.</p>
       <h3>Spring opening &amp; fall closing — residential (per service)</h3>
       <table class="pricing-table">
         <thead><tr><th scope="col">Zones</th><th scope="col">Service Price (CAD)</th></tr></thead>
@@ -295,8 +527,9 @@
           <tr><th scope="row">16+ zones</th><td>Custom quote</td></tr>
         </tbody>
       </table>
+      <p class="pricing-note"><small>Spring and fall use the same tier prices. Commercial pricing available — call for a quote.</small></p>
 
-      <h3>Sprinkler repair</h3>
+      <h3>Sprinkler repair — Forest Hill</h3>
       <table class="pricing-table">
         <thead><tr><th scope="col">Item</th><th scope="col">Price (CAD)</th></tr></thead>
         <tbody>
@@ -305,35 +538,38 @@
           <tr><th scope="row">Sprinkler head replacement (any size, any type)</th><td><span data-price="head_replacement">$68</span></td></tr>
           <tr><th scope="row">Pipe break repair (up to 3 ft of 1" pipe)</th><td><span data-price="pipe_break_3ft">$120</span></td></tr>
           <tr><th scope="row">3-valve manifold rebuild</th><td><span data-price="manifold_3valve">$135</span> + valves</td></tr>
-          <tr><th scope="row">6-valve manifold rebuild</th><td><span data-price="manifold_6valve">$285</span> + valves</td></tr>
         </tbody>
       </table>
-      <p class="pricing-note"><small>When any valve in a box fails, we replace the entire manifold and all valves in that box together — never a single-valve repair on a partially-aged set.</small></p>
+      <p class="pricing-note"><small>Repair labour is billed separately from the service call. <strong>AI-Smart-Intake bonus:</strong> if our AI diagnostic tool correctly predicts the on-site fix, you get one hour of repair labour free on the diagnosed work.</small></p>
 
       <h3>New installation — Forest Hill</h3>
-      <p>Tier 1 (1–4 zones): <strong><span data-price="new_install_t1_base">$585</span> base + <span data-price="new_install_per_zone">$549</span> per zone</strong>. Tier 2 (5–7 zones): <strong><span data-price="new_install_t2_base">$749</span> base + <span data-price="new_install_per_zone">$549</span> per zone</strong>. Estate systems (8-14 zones, typical on Russell Hill / Old Forest Hill lots) are scoped on-site. Combined irrigation-plus-lighting builds are quoted as a single line-itemized package.</p>
+      <p>Tier 1 (1–4 zones): <strong><span data-price="new_install_t1_base">$585</span> base + <span data-price="new_install_per_zone">$549</span> per zone</strong>. Tier 2 (5–7 zones): <strong><span data-price="new_install_t2_base">$749</span> base + <span data-price="new_install_per_zone">$549</span> per zone</strong>. Installs include Hunter heads, Hunter HPC-400 Hydrawise WiFi smart controller, and our 1-year guarantee.</p>
       <div class="pricing-cta-row pjl-cta-row">
         <a href="quote.html" class="btn-primary">Build Your Quote</a>
         <a href="tel:+19059600181" class="btn-secondary">Call (905) 960-0181</a>
       </div>
     </section>
 
-    <section class="checklist-city" aria-labelledby="checklist-fh-heading" style="margin-top:48px;">
-      <h2 id="checklist-fh-heading">What we check on a Forest Hill spring opening</h2>
+    <section class="checklist-city" aria-labelledby="checklist-forest-hill-heading" style="margin-top:48px;">
+      <h2 id="checklist-forest-hill-heading">What's included in a PJL spring opening — Forest Hill</h2>
+      <p>Every spring opening across Forest Hill includes a full system check before we leave the property:</p>
       <ul class="service-checklist">
-        <li>✓ Slow re-pressurize the mainline to protect older fittings on systems 20-plus years in the ground</li>
-        <li>✓ Test each zone individually for pressure, coverage and rotation — including drip overlay zones, which need a separate pressure check</li>
-        <li>✓ Walk hedge drip lines to confirm emitters are still seated under mulch</li>
-        <li>✓ Inspect every head for winter damage and adjust arc and throw so long throws don't overshoot onto sidewalks or window glass</li>
-        <li>✓ Check manifold and valve boxes — including any secondary boxes feeding back-yard zones on the larger lots</li>
+        <li>✓ Slow-pressurize the main supply line to prevent water-hammer damage to fittings</li>
+        <li>✓ Test each zone individually for correct pressure, coverage, and rotation</li>
+        <li>✓ Check every head for winter damage, misalignment, or clogged nozzles</li>
+        <li>✓ Adjust arc and throw on rotors and pop-up sprays for full coverage with minimum overspray onto paths and hardscape</li>
+        <li>✓ Inspect the manifold and valve box for cracks, leaks, and solenoid faults</li>
         <li>✓ Verify Hydrawise (or other smart controller) Wi-Fi connection and program</li>
-        <li>✓ Tune programs for cycle-and-soak on any zones that sit on slope near the Cedarvale Ravine or Beltline</li>
-        <li>✓ Flag any backflow assembly issues for a certified Ontario backflow tester</li>
+        <li>✓ Set the seasonal watering schedule against the City of Toronto's voluntary conservation guidance</li>
+        <li>✓ Confirm rain-sensor function (where installed)</li>
+        <li>✓ Flag any backflow assembly issues for referral to a certified Ontario backflow tester</li>
+        <li>✓ Walk you through the system and answer questions on the spot</li>
       </ul>
+      <p><small>Backflow testing is a separately-licensed trade in Ontario. PJL does not service backflow assemblies but can refer you to a certified tester if yours needs annual recertification.</small></p>
     </section>
 
-    <section class="faq-city" aria-labelledby="faq-fh-heading" style="margin-top:48px;">
-      <h2 id="faq-fh-heading">Forest Hill sprinkler FAQs</h2>
+    <section class="faq-city" aria-labelledby="faq-forest-hill-heading" style="margin-top:48px;">
+      <h2 id="faq-forest-hill-heading">Forest Hill sprinkler FAQs</h2>
       <details><summary><h3>What kind of properties does PJL work in Forest Hill?</h3></summary><p>Forest Hill lots range from very large estates along Russell Hill Road and Old Forest Hill Road to tighter premium lots in and around Forest Hill Village. The common factors across both ends of that spectrum are mature trees, hedge-lined property edges (cedar, boxwood, hornbeam), and homeowners who want infrastructure to disappear into the landscape. Our work here is a mix of full designed systems on the larger lots, hedge-line drip retrofits, repairs to existing 1990s-2000s systems, and integrated landscape lighting installs.</p></details>
       <details><summary><h3>Do you do drip irrigation along Forest Hill hedge lines?</h3></summary><p>Yes, this is one of our most-requested services in Forest Hill. Long cedar and boxwood hedges that define the property edge benefit from a dedicated drip overlay zone — low pressure, low flow, hidden under mulch, delivered to the root zone where the hedge actually needs it. No spray on the sidewalk or the next-door property's hardscape. Independent program from the lawn zones. See our <a href="drip-irrigation.html">drip irrigation page</a> for more.</p></details>
       <details><summary><h3>Can you integrate sprinkler installation with landscape lighting in Forest Hill?</h3></summary><p>Yes — this is one of our two service lines, and Forest Hill is where the integration pays off most. When we are installing or replacing a sprinkler mainline, we can route landscape lighting cable in the same trench. LED, marine-grade fixtures, app-controlled. The single-trench install saves the customer the cost of opening the lawn twice. See our <a href="landscape-lighting.html">landscape lighting page</a> for details.</p></details>
@@ -343,11 +579,12 @@
   </div>
 </section>
 
+<!-- CTA strip -->
 <section class="cta-strip">
   <div class="container cta-strip-inner">
     <div>
       <h3>Forest Hill homeowners — book direct.</h3>
-      <p>Hedge-line drip, estate installs, integrated lighting. Published pricing. 1-year guarantee.</p>
+      <p>Priority scheduling, published pricing, 1-year guarantee.</p>
     </div>
     <div class="cta-strip-actions pjl-cta-row">
       <a href="book.html?service=sprinkler_repair" class="primary">Book service →</a>
@@ -356,16 +593,25 @@
   </div>
 </section>
 
+<!-- Related — adjacent areas + core services -->
 <section class="section">
   <div class="container" style="max-width:1080px;">
-    <h2>Related</h2>
+    <h2>Nearby coverage</h2>
+    <p>Adjacent areas for customers comparing service-area coverage:</p>
     <div class="related-cities">
-      <a href="sprinkler-service-toronto.html" class="related-city"><h4>Toronto (hub)</h4><p>All Toronto coverage overview.</p></a>
-      <a href="sprinkler-service-north-york.html" class="related-city"><h4>North York</h4><p>Estate &amp; multi-zone work.</p></a>
-      <a href="sprinkler-service-lawrence-park.html" class="related-city"><h4>Lawrence Park</h4><p>Garden suburb · drip + lawn.</p></a>
-      <a href="drip-irrigation.html" class="related-city"><h4>Drip Irrigation</h4><p>Hedges, beds, containers.</p></a>
-      <a href="landscape-lighting.html" class="related-city"><h4>Landscape Lighting</h4><p>LED, marine-grade, app control.</p></a>
+      <a href="sprinkler-service-toronto.html" class="related-city"><h4>Toronto</h4><p>City-wide hub page.</p></a>
+      <a href="sprinkler-service-north-york.html" class="related-city"><h4>North York</h4><p>Estate lots, Yonge corridor.</p></a>
+      <a href="sprinkler-service-lawrence-park.html" class="related-city"><h4>Lawrence Park</h4><p>Garden suburb, drip + lawn.</p></a>
+      <a href="sprinkler-service-thornhill.html" class="related-city"><h4>Thornhill</h4><p>Sprinklers + premium lighting.</p></a>
+    </div>
+
+    <h2 style="margin-top:64px;">Service deep-dives</h2>
+    <p>If you want to learn more about a specific service before booking, the pages below go deeper.</p>
+    <div class="related-cities">
+      <a href="sprinkler-systems.html" class="related-city"><h4>Sprinkler Systems</h4><p>Design, install, components.</p></a>
       <a href="sprinkler-repair.html" class="related-city"><h4>Sprinkler Repair</h4><p>Common faults &amp; pricing.</p></a>
+      <a href="sprinkler-hydrawise.html" class="related-city"><h4>Hydrawise Smart Controller</h4><p>Weather-based watering.</p></a>
+      <a href="landscape-lighting.html" class="related-city"><h4>Landscape Lighting</h4><p>LED, marine-grade, app control.</p></a>
     </div>
   </div>
 </section>

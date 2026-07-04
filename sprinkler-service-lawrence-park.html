@@ -80,8 +80,11 @@
 </script>
 
 <style>
-.area-hero{padding:156px 0 80px;background:linear-gradient(rgba(0,0,0,0.58),rgba(0,0,0,0.58)),url('/assets/hero/sprinkler-service-toronto.jpg') center/cover no-repeat,linear-gradient(135deg,var(--dark) 0%,var(--green) 70%,var(--green-mid) 100%);position:relative;overflow:hidden;}
-@media(max-width:640px){.area-hero{padding:var(--hero-nav-clearance) 0 56px;background-position:center top,center top;}}
+.area-hero{padding:156px 0 80px;background:radial-gradient(ellipse 60% 55% at 20% 20%,rgba(74,140,92,.30),transparent 60%),radial-gradient(ellipse 55% 50% at 85% 80%,rgba(224,123,36,.18),transparent 60%),linear-gradient(135deg,var(--dark) 0%,var(--green) 70%,var(--green-mid) 100%);position:relative;overflow:hidden;}
+@media(max-width:640px){.area-hero{padding:var(--hero-nav-clearance) 0 56px;}}
+
+
+
 .area-hero-inner{position:relative;z-index:2;max-width:820px;}
 .breadcrumbs{font-size:13px;color:rgba(255,255,255,.65);margin-bottom:18px;display:flex;gap:8px;flex-wrap:wrap;}
 .breadcrumbs a{color:rgba(255,255,255,.85);}.breadcrumbs a:hover{color:var(--amber-light);}
@@ -114,6 +117,11 @@
 .svc-card p{font-size:15px !important;line-height:1.6 !important;color:var(--text-mid) !important;margin:0 0 12px !important;}
 .svc-card .price-tag{display:inline-block;background:var(--amber-pale);color:var(--amber);font-size:12px;font-weight:700;letter-spacing:.06em;padding:5px 12px;border-radius:99px;}
 
+.neighborhoods{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin-top:18px;}
+.neighborhood{background:#fff;border:1px solid var(--border);border-radius:99px;padding:10px 18px;font-size:14px;color:var(--green);font-weight:600;text-align:center;transition:background .2s ease,border-color .2s ease;}
+.neighborhood:hover{background:var(--green-pale);border-color:var(--green-light);}
+a.neighborhood{text-decoration:none;}
+
 .local-detail{background:linear-gradient(135deg,var(--green-pale) 0%,#f4f9ec 100%);border-left:4px solid var(--green-light);border-radius:0 var(--r-lg) var(--r-lg) 0;padding:24px 28px;margin:24px 0;}
 .local-detail h4{color:var(--green) !important;font-size:18px !important;margin:0 0 8px !important;text-transform:none !important;letter-spacing:-.005em !important;}
 .local-detail p{margin:0 !important;font-size:15px !important;line-height:1.65 !important;color:var(--text) !important;}
@@ -129,7 +137,7 @@
 .cta-strip-actions .ghost{background:rgba(255,255,255,.10);border:1px solid rgba(255,255,255,.20);color:#fff;}
 .cta-strip-actions .ghost:hover{background:rgba(255,255,255,.18);}
 
-.related-cities{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;margin-top:24px;}
+.related-cities{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;margin-top:24px;}
 .related-city{display:block;background:#fff;border:1px solid var(--border);border-radius:var(--r-lg);padding:18px 22px;transition:transform .2s ease,border-color .2s ease,box-shadow .2s ease;}
 .related-city:hover{transform:translateY(-3px);border-color:rgba(74,140,92,.25);box-shadow:0 10px 26px rgba(15,31,20,.06);}
 .related-city h4{color:var(--green) !important;margin:0 0 4px !important;font-size:16px !important;text-transform:none !important;letter-spacing:-.005em !important;}
@@ -163,14 +171,118 @@
 .faq-city summary::after{content:'+';float:right;color:var(--green);font-weight:700;font-size:22px;line-height:1;margin-left:12px;}
 .faq-city details[open] summary::after{content:'–';}
 .faq-city details p{padding:0 22px 18px;margin:0;font-size:15px;line-height:1.65;color:var(--text-mid);}
-.gardenpoints{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px;margin-top:24px;}
-.gardenpoints .gp{background:#fff;border:1px solid var(--border);border-radius:var(--r-lg);padding:20px 22px;}
-.gardenpoints .gp h3{color:var(--green) !important;font-size:17px !important;margin:0 0 8px !important;text-transform:none !important;letter-spacing:-.005em !important;}
-.gardenpoints .gp p{margin:0 !important;font-size:14px !important;line-height:1.6 !important;color:var(--text-mid) !important;}
+.hood-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px;margin-top:24px;}
+.hood-card{background:#fff;border:1px solid var(--border);border-radius:var(--r-lg);padding:0;display:flex;flex-direction:column;text-decoration:none;overflow:hidden;transition:transform .2s ease,box-shadow .2s ease,border-color .2s ease;}
+.hood-card:hover{transform:translateY(-3px);border-color:rgba(74,140,92,.30);box-shadow:0 10px 28px rgba(15,31,20,.08);}
+.hood-card__photo{height:160px;overflow:hidden;}
+.hood-card__photo img{width:100%;height:100%;object-fit:cover;display:block;transition:transform .35s ease;}
+.hood-card:hover .hood-card__photo img{transform:scale(1.05);}
+.hood-card__body{padding:20px 24px 22px;display:flex;flex-direction:column;gap:8px;flex:1;}
+.hood-card h3{color:var(--green) !important;margin:0 !important;font-size:18px !important;text-transform:none !important;letter-spacing:-.005em !important;}
+.hood-card p{margin:0 !important;font-size:14px !important;line-height:1.55 !important;color:var(--text-mid) !important;}
+.hood-card .hood-arrow{color:var(--amber);font-weight:700;font-size:14px;margin-top:auto;}
+/* District blocks — City of Toronto broken out by compass corner */
+.district-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin-top:34px;}
+.district{background:#fff;border:1px solid var(--border);border-radius:var(--r-lg);padding:22px 24px;}
+.district h3{color:var(--green) !important;margin:0 0 4px !important;font-size:18px !important;text-transform:none !important;letter-spacing:-.005em !important;}
+.district > p{margin:0 0 14px !important;font-size:14px !important;line-height:1.55 !important;color:var(--text-mid) !important;}
+.district .neighborhoods{grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;margin-top:0;}
+.district .neighborhood{padding:8px 12px;font-size:13px;background:var(--cream);}
+.district .district-note{margin:12px 0 0 !important;font-size:12.5px !important;color:var(--text-muted) !important;}
+@media(max-width:760px){.district-grid{grid-template-columns:1fr;}}
+
+/* ---- Seasonal "right now" spotlight (auto-switches by date via data-season-phase) ---- */
+.season{background:var(--cream);border-top:1px solid var(--border);border-bottom:1px solid var(--border);}
+.season-eyebrow{display:inline-flex;align-items:center;gap:8px;background:var(--green-pale);color:var(--green);font-size:12px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;padding:7px 15px;border-radius:99px;margin-bottom:18px;}
+.season-eyebrow .dot{width:8px;height:8px;border-radius:50%;background:var(--amber);box-shadow:0 0 0 4px rgba(245,155,74,.30);animation:seasonPulse 2s ease-in-out infinite;}
+@keyframes seasonPulse{0%,100%{opacity:1;}50%{opacity:.35;}}
+/* Each spotlight is hidden; the phase attribute reveals exactly one. With JS off
+   (no attribute) the spring spotlight shows so there is always visible content. */
+.season-spot{display:none;grid-template-columns:1.05fr .95fr;gap:clamp(20px,3vw,40px);align-items:center;}
+html:not([data-season-phase]) .season-spot--spring{display:grid;}
+html[data-season-phase="spring"] .season-spot--spring,
+html[data-season-phase="pre-spring"] .season-spot--spring,
+html[data-season-phase="midseason"] .season-spot--service,
+html[data-season-phase="fall"] .season-spot--fall,
+html[data-season-phase="pre-fall"] .season-spot--fall{display:grid;}
+.season-spot__media{position:relative;border-radius:var(--r-xl,20px);overflow:hidden;aspect-ratio:16/10;box-shadow:0 18px 44px rgba(15,31,20,.16);}
+.season-spot__media img{width:100%;height:100%;object-fit:cover;display:block;}
+.season-spot__tag{position:absolute;top:14px;left:14px;background:var(--amber);color:#fff;font-size:12px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;padding:6px 13px;border-radius:99px;box-shadow:0 6px 16px rgba(224,123,36,.4);}
+.season-spot h2{font-size:clamp(26px,3.4vw,40px);color:var(--green);margin:0 0 12px;line-height:1.08;}
+.season-spot h2 em{font-style:italic;color:var(--amber);}
+.season-spot p{font-size:16px;line-height:1.7;color:var(--text-mid);margin:0 0 14px;}
+.season-spot .season-price{display:inline-block;background:#fff;border:1px solid var(--border);border-radius:99px;padding:8px 16px;font-weight:700;color:var(--green);margin-bottom:20px;font-size:15px;}
+.season-spot .season-price b{color:var(--amber);}
+.season-actions{display:flex;flex-wrap:wrap;gap:12px;}
+.season-actions a{display:inline-flex;align-items:center;gap:9px;padding:13px 24px;border-radius:99px;font-weight:700;font-size:15px;}
+.season-actions .s-primary{background:var(--amber);color:#fff;box-shadow:0 8px 20px rgba(224,123,36,.32);transition:background .2s,transform .2s;}
+.season-actions .s-primary:hover{background:var(--amber-light);transform:translateY(-2px);}
+.season-actions .s-ghost{background:#fff;border:1px solid var(--green);color:var(--green);}
+.season-actions .s-ghost:hover{background:var(--green-pale);}
+/* Year-round mini-grid — always visible (SEO), current season badged NOW */
+.season-track{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:36px;}
+.season-chip{position:relative;display:block;border-radius:var(--r-lg);overflow:hidden;height:150px;text-decoration:none;border:2px solid transparent;transition:transform .2s,border-color .2s;}
+.season-chip:hover{transform:translateY(-3px);}
+.season-chip img{width:100%;height:100%;object-fit:cover;display:block;}
+.season-chip__label{position:absolute;inset:0;display:flex;flex-direction:column;justify-content:flex-end;padding:16px;background:linear-gradient(to top,rgba(15,31,20,.82) 0%,rgba(15,31,20,.15) 55%,transparent 100%);}
+.season-chip__label strong{color:#fff;font-size:16px;line-height:1.2;}
+.season-chip__label span{color:rgba(255,255,255,.82);font-size:13px;margin-top:2px;}
+.season-chip .now-badge{display:none;position:absolute;top:10px;right:10px;background:var(--amber);color:#fff;font-size:11px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;padding:5px 11px;border-radius:99px;align-items:center;gap:6px;}
+.season-chip .now-badge .dot{width:6px;height:6px;border-radius:50%;background:#fff;animation:seasonPulse 2s ease-in-out infinite;}
+html[data-season-phase="spring"] [data-season-card="spring"] .now-badge,
+html[data-season-phase="pre-spring"] [data-season-card="spring"] .now-badge,
+html[data-season-phase="midseason"] [data-season-card="service"] .now-badge,
+html[data-season-phase="fall"] [data-season-card="fall"] .now-badge,
+html[data-season-phase="pre-fall"] [data-season-card="fall"] .now-badge{display:inline-flex;}
+html[data-season-phase="spring"] [data-season-card="spring"],
+html[data-season-phase="pre-spring"] [data-season-card="spring"],
+html[data-season-phase="midseason"] [data-season-card="service"],
+html[data-season-phase="fall"] [data-season-card="fall"],
+html[data-season-phase="pre-fall"] [data-season-card="fall"]{border-color:var(--amber);}
+@media(max-width:760px){.season-spot{grid-template-columns:1fr;}.season-track{grid-template-columns:1fr;}.season-chip{height:130px;}}
+
+/* ---- Hydrawise smart-upgrade band (dedicated section) ---- */
+.hydrawise-band{background:linear-gradient(135deg,var(--green) 0%,var(--green-mid) 100%);color:#fff;}
+.hydrawise-band .hw-grid{display:grid;grid-template-columns:.95fr 1.05fr;gap:clamp(24px,3.5vw,48px);align-items:center;}
+/* Photo is portrait (1280x1707 = 3:4) — box matches its natural shape so nothing
+   gets cover-cropped away. Capped height keeps the band balanced on desktop. */
+.hw-media{position:relative;border-radius:var(--r-xl,20px);overflow:hidden;aspect-ratio:3/4;max-height:560px;justify-self:center;width:100%;max-width:440px;box-shadow:0 20px 50px rgba(0,0,0,.35);}
+.hw-media img{width:100%;height:100%;object-fit:cover;display:block;}
+.hw-media__tag{position:absolute;top:14px;left:14px;background:rgba(15,31,20,.75);backdrop-filter:blur(4px);color:#fff;font-size:12px;font-weight:700;letter-spacing:.05em;padding:6px 13px;border-radius:99px;border:1px solid rgba(255,255,255,.25);}
+.hydrawise-band h2{color:#fff !important;font-size:clamp(26px,3.4vw,40px);margin:0 0 14px;line-height:1.08;}
+.hydrawise-band h2 em{font-style:italic;color:var(--amber-light);}
+.hydrawise-band .hw-lede{color:rgba(255,255,255,.88) !important;font-size:16px;line-height:1.7;margin:0 0 18px;}
+.hw-features{list-style:none;padding:0;margin:0 0 22px;display:grid;grid-template-columns:1fr 1fr;gap:10px 18px;}
+.hw-features li{display:flex;gap:10px;align-items:flex-start;color:rgba(255,255,255,.92);font-size:14.5px;line-height:1.5;}
+.hw-features li b{color:#fff;}
+.hw-features .ic{flex:0 0 auto;width:26px;height:26px;border-radius:8px;background:rgba(255,255,255,.12);display:inline-flex;align-items:center;justify-content:center;font-size:14px;}
+.hw-tiers{display:flex;flex-wrap:wrap;gap:10px;margin:0 0 22px;}
+.hw-tier{background:rgba(255,255,255,.10);border:1px solid rgba(255,255,255,.22);border-radius:14px;padding:10px 16px;text-align:center;}
+.hw-tier small{display:block;color:rgba(255,255,255,.7);font-size:12px;letter-spacing:.04em;text-transform:uppercase;margin-bottom:2px;}
+.hw-tier strong{color:var(--amber-light);font-size:19px;}
+.hw-cred{display:inline-flex;align-items:center;gap:8px;color:rgba(255,255,255,.75);font-size:13px;margin-top:14px;}
+.hydrawise-band .season-actions .s-ghost{background:rgba(255,255,255,.08);border-color:rgba(255,255,255,.35);color:#fff;}
+.hydrawise-band .season-actions .s-ghost:hover{background:rgba(255,255,255,.16);}
+@media(max-width:860px){.hydrawise-band .hw-grid{grid-template-columns:1fr;}.hw-features{grid-template-columns:1fr;}}
 </style>
   <link rel="stylesheet" href="css/chat-widget.css">
 </head>
 <body>
+
+<script>
+(function(){
+  var d = new Date(), m = d.getMonth(), day = d.getDate(), phase;
+  if (m === 7 && day >= 25)            phase = 'pre-fall';    // Aug 25–31
+  else if (m === 8 && day <= 4)        phase = 'pre-fall';    // Sep 1–4
+  else if (m === 0 && day >= 15)       phase = 'pre-spring';  // Jan 15–31
+  else if (m === 1)                    phase = 'pre-spring';  // Feb
+  else if ((m === 5 && day >= 15) || m === 6 || (m === 7 && day < 25))
+                                       phase = 'midseason';   // Jun 15–Aug 24
+  else if (m >= 8 || m === 0)          phase = 'fall';        // Sep 5–Jan 14
+  else                                 phase = 'spring';      // Mar 1–Jun 14
+  document.documentElement.setAttribute('data-season-phase', phase);
+})();
+</script>
 
 <!-- @@PJL:nav-START {"loc": "Lawrence Park &amp; Toronto", "status": "Priority scheduling for Toronto bookings", "badge": "Priority scheduling · Lawrence Park"} -->
 <nav class="nav nav-v2 nav-solid">
@@ -184,102 +296,228 @@
 </div>
 <!-- @@PJL:nav-END -->
 
+
+<!-- Hero -->
 <section class="area-hero">
   <div class="container area-hero-inner">
-    <div class="breadcrumbs"><a href="index.html">Home</a><span>›</span><a href="sprinkler-systems.html">Sprinkler Services</a><span>›</span><a href="sprinkler-service-toronto.html">Toronto</a><span>›</span><span>Lawrence Park</span></div>
-    <span class="area-eyebrow">Lawrence Park · Garden Suburb · Drip + Lawn</span>
-    <h1>Sprinkler service &amp; irrigation for <em>Lawrence Park</em>.</h1>
-    <p>One of Toronto's original garden suburbs, Lawrence Park is the kind of neighbourhood a designed irrigation system was built for — large landscaped lots, curving tree-lined streets, mature gardens and hedge lines that benefit as much from drip overlay as from lawn sprinkler zones. We design, install, repair and maintain both.</p>
+    <div class="breadcrumbs"><a href="index.html">Home</a><span>›</span><a href="sprinkler-systems.html">Sprinkler Services</a><span>›</span><span>Lawrence Park</span></div>
+    <span class="area-eyebrow">Lawrence Park · Priority Scheduling · 1-Year Guarantee</span>
+    <h1>Lawn sprinkler service &amp; repair in <em>Lawrence Park</em>.</h1>
+    <p>Lawrence Park is one of Toronto's original garden suburbs — curving streets, large landscaped lots, established gardens where drip pairs naturally with the lawn zones. Installs, repair, seasonal service and Hydrawise smart upgrades, published pricing, priority scheduling.</p>
     <div class="area-hero-actions pjl-cta-row">
       <a href="book.html?service=sprinkler_repair" class="btn-amber">Book Lawrence Park service <span aria-hidden="true">→</span></a>
       <a href="tel:+19059600181" class="btn-ghost">📞 (905) 960-0181</a>
     </div>
     <div class="area-hero-meta">
-      <span>📍 <strong>Lawrence Park, Toronto</strong></span>
-      <span>⏱️ <strong>Priority scheduling</strong> · 1-3 business days in season</span>
+      <span>📍 <strong>Lawrence Park, ON</strong></span>
+      <span>⏱️ <strong>Priority scheduling</strong> · 1&ndash;3 business days in season</span>
       <span>🛡️ <strong>1-year guarantee</strong></span>
     </div>
   </div>
 </section>
 
-<section class="section">
-  <div class="container" style="max-width:820px;">
-    <h2>Lawrence Park is a garden neighbourhood — irrigation should follow.</h2>
-    <p>Lawrence Park began as a planned development in the early 1900s — one of Toronto's first garden suburbs, with curving streets that follow the contour of the land rather than the grid. The result is a neighbourhood of unusually large lots for central Toronto, set back from the road behind established hedge lines, with a deep tradition of design-led landscaping. The gardens here are not afterthoughts.</p>
-    <p>That history changes how we approach the irrigation. The aesthetic is "infrastructure should disappear." Pop-up heads tucked along bed edges instead of marching across the lawn. Drip lines hidden under mulch, not strapped to fences. Smart controllers in the garage or basement rather than on the front of the house. And — most relevant — separate program zones for lawn versus garden because the watering needs are completely different.</p>
+<!-- Seasonal spotlight — swaps by time of year (data-season-phase on <html>) -->
+<section class="section season">
+  <div class="container" style="max-width:1080px;">
+    <span class="season-eyebrow"><span class="dot" aria-hidden="true"></span>Right now in Lawrence Park</span>
 
-    <div class="gardenpoints">
-      <div class="gp">
-        <h3>Lawn zones, tuned for canopy shade</h3>
-        <p>Heavy canopy from heritage maples and oaks puts large sections of Lawrence Park lawn in part-shade most of the day. Shaded turf needs ~30-40% less water than full-sun turf. Each zone gets its own program step that reflects what it actually faces, not a single property-wide schedule.</p>
+    <!-- SPRING -->
+    <div class="season-spot season-spot--spring">
+      <div class="season-spot__media">
+        <span class="season-spot__tag">Spring · booking now</span>
+        <img src="backyard-sprinkler-running.jpg" alt="Lawn sprinkler running on a Lawrence Park property in spring" loading="lazy">
       </div>
-      <div class="gp">
-        <h3>Drip overlay for the gardens</h3>
-        <p>Long perennial borders, cottage-style beds, established hedge runs (cedar, boxwood, hornbeam). All run cleanly off a separate low-flow drip zone — independent program, independent run time, separate from the lawn rotors. Water goes to roots, not foliage.</p>
-      </div>
-      <div class="gp">
-        <h3>Heritage tree routing</h3>
-        <p>Toronto Municipal Code Chapter 658 (the Private Tree By-law) protects any private tree with a trunk diameter of 30 cm or more. We walk the property, identify protected trees, and route mainline + laterals to stay clear of the protected root zones. More pipe, intact canopy.</p>
-      </div>
-      <div class="gp">
-        <h3>Discreet head placement</h3>
-        <p>4-inch pop-ups along bed edges, not 6-inch heads in the middle of the lawn. Rotors set into mulch transitions instead of grass islands. Where a head has to sit visible in a sightline, we use low-profile bodies and matched colour caps.</p>
+      <div class="season-spot__body">
+        <h2>It's <em>spring-opening</em> season.</h2>
+        <p>Time to wake the system up. We slow-pressurize the mainline, test every zone, check heads and nozzles, and program the controller for the season — a full system start-up before we leave.</p>
+        <p class="season-price">Spring openings from <b><span data-price="spring_open_4z">$90</span></b> (1&ndash;4 zones)</p>
+        <div class="season-actions">
+          <a href="book.html?service=spring_opening" class="s-primary">Book your spring opening <span aria-hidden="true">→</span></a>
+          <a href="sprinkler-spring-opening.html" class="s-ghost">See what's included</a>
+        </div>
       </div>
     </div>
 
-    <div class="local-detail">
-      <h4>About scheduling — Lawrence Park</h4>
-      <p>Lawrence Park is roughly 55 minutes from our Newmarket base via the 404, DVP and the Avenue Road exit. Toronto repair calls are booked on a <strong>priority basis</strong> — most jobs land within 1-3 business days during peak season. Same-day is a York Region commitment (Newmarket, Aurora, King City, Richmond Hill); Toronto is next-available with priority slots so you get a real arrival window, not an optimistic guess.</p>
+    <!-- IN-SEASON SERVICE -->
+    <div class="season-spot season-spot--service">
+      <div class="season-spot__media">
+        <span class="season-spot__tag">In season · priority scheduling</span>
+        <img src="leaking-valve-box.jpg" alt="Sprinkler valve box being diagnosed during an in-season repair in Lawrence Park" loading="lazy">
+      </div>
+      <div class="season-spot__body">
+        <h2>Peak season — <em>repairs &amp; tune-ups</em>.</h2>
+        <p>Stuck valves, broken heads, mystery wet spots, pressure drops, a controller that's lost the plot — this is prime time to fix it before the summer heat exposes it. Lawrence Park runs on priority scheduling: usually 1&ndash;3 business days, sooner when a crew's already routing through.</p>
+        <p class="season-price"><b><span data-price="service_call">$95</span></b> service call + parts &amp; labour</p>
+        <div class="season-actions">
+          <a href="book.html?service=sprinkler_repair" class="s-primary">Book a repair visit <span aria-hidden="true">→</span></a>
+          <a href="sprinkler-repair.html" class="s-ghost">Common faults &amp; pricing</a>
+        </div>
+      </div>
+    </div>
+
+    <!-- FALL -->
+    <div class="season-spot season-spot--fall">
+      <div class="season-spot__media">
+        <span class="season-spot__tag">Fall · book before frost</span>
+        <img src="fall-sprinkler-running.jpg" alt="Sprinkler system running in autumn before winterization in Lawrence Park" loading="lazy">
+      </div>
+      <div class="season-spot__body">
+        <h2>Fall means <em>winterization</em>.</h2>
+        <p>One hard frost on a system full of water cracks fittings, valves and backflow devices. We run a pro low-pressure compressor blow-out — every lateral and the mainline emptied — before the freeze hits. Book by mid-October.</p>
+        <p class="season-price">Fall closings from <b><span data-price="fall_close_4z">$90</span></b> (1&ndash;4 zones)</p>
+        <div class="season-actions">
+          <a href="book.html?service=fall_winterization" class="s-primary">Book your winterization <span aria-hidden="true">→</span></a>
+          <a href="sprinkler-fall-winterization.html" class="s-ghost">Why it matters</a>
+        </div>
+      </div>
+    </div>
+
+    <!-- Year-round track (always visible; current season badged NOW) -->
+    <div class="season-track">
+      <a href="sprinkler-spring-opening.html" class="season-chip" data-season-card="spring">
+        <span class="now-badge"><span class="dot" aria-hidden="true"></span>Happening now</span>
+        <img src="backyard-sprinkler-running@800w.jpg" alt="Spring sprinkler opening" loading="lazy">
+        <span class="season-chip__label"><strong>Spring Opening</strong><span>from <span data-price="spring_open_4z">$90</span> · Apr–May</span></span>
+      </a>
+      <a href="sprinkler-repair.html" class="season-chip" data-season-card="service">
+        <span class="now-badge"><span class="dot" aria-hidden="true"></span>Happening now</span>
+        <img src="leaking-valve-box@800w.jpg" alt="Summer sprinkler service and repair" loading="lazy">
+        <span class="season-chip__label"><strong>Summer Service &amp; Repair</strong><span>priority scheduling</span></span>
+      </a>
+      <a href="sprinkler-fall-winterization.html" class="season-chip" data-season-card="fall">
+        <span class="now-badge"><span class="dot" aria-hidden="true"></span>Happening now</span>
+        <img src="fall-sprinkler-running@800w.jpg" alt="Fall sprinkler winterization" loading="lazy">
+        <span class="season-chip__label"><strong>Fall Winterization</strong><span>from <span data-price="fall_close_4z">$90</span> · Sep–Oct</span></span>
+      </a>
     </div>
   </div>
 </section>
 
+<!-- Local intro -->
+<section class="section">
+  <div class="container" style="max-width:820px;">
+    <h2>Sprinkler and drip care for a garden suburb — Lawrence Park.</h2>
+    <p>Lawrence Park was designed as a garden suburb, and it still lives up to it: curving, tree-lined streets, generous lots, and gardens that have been tended for generations. That's exactly the setting where a well-designed irrigation system — lawn zones plus a drip overlay on the beds and hedges — earns its keep.</p>
+    <p>We run Lawrence Park on priority scheduling from Newmarket, usually 1–3 business days in season. The work here leans toward careful, low-profile systems: heads that disappear into the lawn, drip that keeps the perennial beds honest, and a Hydrawise controller that trims water use without anyone touching a dial.</p>
+
+    <div class="local-detail">
+      <h4>Lawn zones plus a drip overlay</h4>
+      <p>The established gardens of Lawrence Park are ideal for a two-part system: conventional pop-up or rotor zones for the lawn, and a separate low-flow drip zone for the perennial beds, hedge lines and any raised beds. Run off the same Hydrawise controller, the drip waters slowly at the root where it's efficient, while the lawn zones handle the open turf. It's the setup that keeps a mature garden looking effortless.</p>
+    </div>
+  </div>
+</section>
+
+<!-- Neighbourhood breakdown -->
 <section class="section cream">
   <div class="container" style="max-width:1080px;">
-    <h2>What we run most in Lawrence Park</h2>
-    <p>Volume here skews toward designed system installs on larger lots, repair calls on existing 1990s-2000s vintage systems, and adding drip overlay zones to systems that were originally lawn-only.</p>
+    <h2>Lawrence Park, neighbourhood by neighbourhood</h2>
+    <p>Lawrence Park and the surrounding midtown garden pockets.</p>
+
+    <div class="district-grid">
+      <div class="district">
+        <h3>🌳 Lawrence Park & midtown gardens</h3>
+        <p>The garden-suburb core and its neighbouring park streets.</p>
+        <div class="neighborhoods">
+          <div class="neighborhood">Lawrence Park</div>
+          <div class="neighborhood">Lytton Park</div>
+          <div class="neighborhood">Wanless Park</div>
+          <div class="neighborhood">Bedford Park</div>
+          <div class="neighborhood">Teddington Park</div>
+          <div class="neighborhood">Yonge-Lawrence Village</div>
+        </div>
+      </div>
+      <div class="district">
+        <h3>🏡 Adjacent garden pockets</h3>
+        <p>Nearby established neighbourhoods on the same priority scheduling.</p>
+        <div class="neighborhoods">
+          <div class="neighborhood">Chaplin Estates</div>
+          <div class="neighborhood">Moore Park</div>
+          <div class="neighborhood">Rosedale</div>
+          <div class="neighborhood">Leaside</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Service offerings -->
+<section class="section cream">
+  <div class="container" style="max-width:1080px;">
+    <h2>What we do across Lawrence Park</h2>
+    <p>Low-profile lawn-and-drip systems, careful retrofits, and full seasonal service — priority-scheduled from Newmarket.</p>
 
     <div class="svc-grid">
       <div class="svc-card">
-        <h3>💧 Drip Irrigation Design</h3>
-        <p>The headline Lawrence Park service. Long perennial borders, established hedge runs, raised vegetable beds, specimen-tree wells. Separate low-flow zone(s) on the main controller, independent program, hidden under mulch.</p>
-        <span class="price-tag">Custom quote by run length</span>
-      </div>
-      <div class="svc-card">
-        <h3>🛠️ Full System Design + Install</h3>
-        <p>For Lawrence Park lots that don't have a system yet, or where the existing 1990s install needs a real replacement rather than another patch. Hunter heads, Hunter HPC-400 Hydrawise smart controller, discreet head layout, drip overlay built in from the start.</p>
-        <span class="price-tag">Custom scope, transparent line items</span>
-      </div>
-      <div class="svc-card">
-        <h3>🔧 Sprinkler Repair</h3>
-        <p>Stuck valves, broken heads, root-disrupted laterals near old maples, controller faults, pressure problems on long borders. Priority scheduling — 1-3 business days in season.</p>
-        <span class="price-tag"><span data-price="service_call">$95</span> service call + parts &amp; labour</span>
-      </div>
-      <div class="svc-card">
         <h3>🌱 Spring Opening</h3>
-        <p>Slow re-pressurization, zone-by-zone test, leak inspection, nozzle adjustment, controller programming for the season with shade-tuned schedules on the canopy zones.</p>
+        <p>Slow re-pressurization, zone-by-zone test, leak inspection, nozzle adjustment, controller programming for the season.</p>
         <span class="price-tag">From <span data-price="spring_open_4z">$90</span> (1-4 zones)</span>
       </div>
       <div class="svc-card">
         <h3>🍂 Fall Winterization</h3>
-        <p>Pro low-pressure compressor blow-out — every lateral and the mainline emptied so nothing freezes over winter. Book by mid-October before the first hard frost.</p>
-        <span class="price-tag">From <span data-price="spring_open_4z">$90</span> (1-4 zones)</span>
+        <p>Pro low-pressure compressor blow-out. Every lateral and the mainline emptied so nothing freezes and cracks over winter. Book by mid-October.</p>
+        <span class="price-tag">From <span data-price="fall_close_4z">$90</span> (1-4 zones)</span>
       </div>
       <div class="svc-card">
+        <h3>🔧 Sprinkler Repair</h3>
+        <p>Stuck valves, broken heads, pressure issues, mystery wet spots. Priority scheduling for Lawrence Park — usually 1–3 business days in season.</p>
+        <span class="price-tag"><span data-price="service_call">$95</span> service call + parts &amp; labour</span>
+      </div>
+      <div class="svc-card">
+        <h3>🛠️ New Installation</h3>
+        <p>Designed for the lot, not from a template. Hunter heads, Hunter HPC-400 Hydrawise smart controller standard. Lawrence Park systems frequently pair lawn zones with a drip overlay.</p>
+        <span class="price-tag">Calculator pricing by zone count</span>
+      </div>
+      <a href="#hydrawise-lawrence-park" class="svc-card" style="display:block;text-decoration:none;">
         <h3>📡 Hydrawise Smart Upgrade</h3>
-        <p>Retrofit an older Rain Bird or Hunter PRO-C with the Hunter HPC-400 Hydrawise WiFi controller. App control, predictive weather-skipping, wiring-fault alerts. Typically under 90 minutes on the wall.</p>
-        <span class="price-tag">From <span data-price="controller_1_4">$595</span> (1-4 zones)</span>
+        <p>Retrofit your existing system with the Hunter HPC-400 Hydrawise WiFi controller. App control, predictive weather-skipping, wiring-fault alerts. Typical install under 90 minutes.</p>
+        <span class="price-tag">From <span data-price="controller_1_4">$595</span> (1-4 zones) ↓</span>
+      </a>
+      <div class="svc-card">
+        <h3>💧 Drip Irrigation</h3>
+        <p>Long hedge runs, perennial beds, raised vegetable beds, container plantings. Designed as a separate zone off your main controller.</p>
+        <span class="price-tag">Custom quote by run length</span>
       </div>
     </div>
   </div>
 </section>
 
+<!-- Hydrawise smart upgrade — dedicated section -->
+<section class="section hydrawise-band" id="hydrawise-lawrence-park">
+  <div class="container hw-grid" style="max-width:1080px;">
+    <div class="hw-media">
+      <span class="hw-media__tag">📷 Real PJL install — Hunter HPC-400</span>
+      <img src="blog-hydrawise-hpc-install.jpg" alt="Hunter Hydrawise HPC-400 smart controller installed by PJL Land Services" loading="lazy">
+    </div>
+    <div>
+      <h2>The Lawrence Park favourite: a <em>Hydrawise smart upgrade</em>.</h2>
+      <p class="hw-lede">Most Lawrence Park systems we service run controllers that pre-date WiFi. Swap the old timer for a Hunter HPC-400 Hydrawise and the system starts thinking for itself — typical install runs under 90 minutes, and generic-timer households typically cut seasonal watering 30–40%.</p>
+      <ul class="hw-features">
+        <li><span class="ic">🌦️</span><span><b>Weather skipping</b> — skips runs when rain is forecast, throttles on cool days, runs longer in heat.</span></li>
+        <li><span class="ic">📱</span><span><b>Full app control</b> — run, pause or re-program any zone from your phone, anywhere.</span></li>
+        <li><span class="ic">🚨</span><span><b>Fault alerts</b> — wiring faults, missed runs, WiFi dropouts: you know before the lawn does. Add the optional flow meter for true leak alerts.</span></li>
+        <li><span class="ic">📊</span><span><b>Runtime history</b> — every run logged, so small faults surface before brown patches do.</span></li>
+      </ul>
+      <div class="hw-tiers">
+        <div class="hw-tier"><small>1–4 zones</small><strong><span data-price="controller_1_4">$595</span></strong></div>
+        <div class="hw-tier"><small>5–7 zones</small><strong><span data-price="controller_5_7">$750</span></strong></div>
+        <div class="hw-tier"><small>8–16 zones</small><strong><span data-price="controller_8_16">$1,195</span></strong></div>
+      </div>
+      <div class="season-actions">
+        <a href="book.html?service=hydrawise_retrofit" class="s-primary">Book your upgrade <span aria-hidden="true">→</span></a>
+        <a href="sprinkler-hydrawise.html" class="s-ghost">Everything Hydrawise does</a>
+        <a href="water-cost-calculator.html" class="s-ghost">Estimate your water savings</a>
+      </div>
+      <span class="hw-cred">🎓 Hunter University trained · Authorized Hydrawise installer · All-in pricing, no surprise add-ons</span>
+    </div>
+  </div>
+</section>
+
+<!-- Pricing + checklist + FAQ -->
 <section class="section">
   <div class="container" style="max-width:820px;">
-    <section class="pricing-city" aria-labelledby="pricing-lp-heading">
-      <h2 id="pricing-lp-heading">Pricing — Lawrence Park</h2>
-      <p>Same pricing as the rest of the GTA — no Lawrence Park premium. Spring openings and fall closings are flat-rate. Repair labour is billed against the service call. Drip overlay zones and designed new installs are scoped on-site.</p>
-
+    <section class="pricing-city" aria-labelledby="pricing-lawrence-park-heading">
+      <h2 id="pricing-lawrence-park-heading">Sprinkler pricing in Lawrence Park — published up front</h2>
+      <p>We publish pricing because trust starts before the call. Spring openings and fall closings are flat-rate services covering the system check and standard adjustments (alignment, arc, rotation — head replacement is a separate repair line). Any repairs needed are flagged on-site, quoted separately, and only carried out after your approval.</p>
       <h3>Spring opening &amp; fall closing — residential (per service)</h3>
       <table class="pricing-table">
         <thead><tr><th scope="col">Zones</th><th scope="col">Service Price (CAD)</th></tr></thead>
@@ -291,9 +529,9 @@
           <tr><th scope="row">16+ zones</th><td>Custom quote</td></tr>
         </tbody>
       </table>
-      <p class="pricing-note"><small>Drip overlay zones count toward the zone total for service pricing — a 6-zone system with two drip zones is priced as 8 zones for opening / closing.</small></p>
+      <p class="pricing-note"><small>Spring and fall use the same tier prices. Commercial pricing available — call for a quote.</small></p>
 
-      <h3>Sprinkler repair</h3>
+      <h3>Sprinkler repair — Lawrence Park</h3>
       <table class="pricing-table">
         <thead><tr><th scope="col">Item</th><th scope="col">Price (CAD)</th></tr></thead>
         <tbody>
@@ -304,32 +542,36 @@
           <tr><th scope="row">3-valve manifold rebuild</th><td><span data-price="manifold_3valve">$135</span> + valves</td></tr>
         </tbody>
       </table>
+      <p class="pricing-note"><small>Repair labour is billed separately from the service call. <strong>AI-Smart-Intake bonus:</strong> if our AI diagnostic tool correctly predicts the on-site fix, you get one hour of repair labour free on the diagnosed work.</small></p>
 
       <h3>New installation — Lawrence Park</h3>
-      <p>Tier 1 (1–4 zones): <strong><span data-price="new_install_t1_base">$585</span> base + <span data-price="new_install_per_zone">$549</span> per zone</strong>. Tier 2 (5–7 zones): <strong><span data-price="new_install_t2_base">$749</span> base + <span data-price="new_install_per_zone">$549</span> per zone</strong>. Designed garden-suburb installs typically run 6-12 zones once drip overlay is included; scoped on-site.</p>
+      <p>Tier 1 (1–4 zones): <strong><span data-price="new_install_t1_base">$585</span> base + <span data-price="new_install_per_zone">$549</span> per zone</strong>. Tier 2 (5–7 zones): <strong><span data-price="new_install_t2_base">$749</span> base + <span data-price="new_install_per_zone">$549</span> per zone</strong>. Installs include Hunter heads, Hunter HPC-400 Hydrawise WiFi smart controller, and our 1-year guarantee.</p>
       <div class="pricing-cta-row pjl-cta-row">
         <a href="quote.html" class="btn-primary">Build Your Quote</a>
         <a href="tel:+19059600181" class="btn-secondary">Call (905) 960-0181</a>
       </div>
     </section>
 
-    <section class="checklist-city" aria-labelledby="checklist-lp-heading" style="margin-top:48px;">
-      <h2 id="checklist-lp-heading">What we check on a Lawrence Park spring opening</h2>
+    <section class="checklist-city" aria-labelledby="checklist-lawrence-park-heading" style="margin-top:48px;">
+      <h2 id="checklist-lawrence-park-heading">What's included in a PJL spring opening — Lawrence Park</h2>
+      <p>Every spring opening across Lawrence Park includes a full system check before we leave the property:</p>
       <ul class="service-checklist">
-        <li>✓ Slow re-pressurize the main supply line to protect older fittings</li>
-        <li>✓ Test each zone individually — including drip overlay zones, which need a separate pressure check</li>
-        <li>✓ Inspect every head for winter damage, misalignment, or settling from heavy snow</li>
-        <li>✓ Walk drip lines to confirm emitters are still seated under mulch and not chewed by wildlife</li>
-        <li>✓ Adjust arc and throw on rotors so the long throws don't overshoot onto hardscape or window glass</li>
-        <li>✓ Check manifold and valve box for leaks and solenoid faults</li>
-        <li>✓ Program shaded canopy zones at lower run times than full-sun zones</li>
-        <li>✓ Verify Hydrawise (or other smart controller) Wi-Fi connection</li>
-        <li>✓ Flag any backflow assembly issues for a certified Ontario backflow tester</li>
+        <li>✓ Slow-pressurize the main supply line to prevent water-hammer damage to fittings</li>
+        <li>✓ Test each zone individually for correct pressure, coverage, and rotation</li>
+        <li>✓ Check every head for winter damage, misalignment, or clogged nozzles</li>
+        <li>✓ Adjust arc and throw on rotors and pop-up sprays for full coverage with minimum overspray onto paths and hardscape</li>
+        <li>✓ Inspect the manifold and valve box for cracks, leaks, and solenoid faults</li>
+        <li>✓ Verify Hydrawise (or other smart controller) Wi-Fi connection and program</li>
+        <li>✓ Set the seasonal watering schedule against the City of Toronto's voluntary conservation guidance</li>
+        <li>✓ Confirm rain-sensor function (where installed)</li>
+        <li>✓ Flag any backflow assembly issues for referral to a certified Ontario backflow tester</li>
+        <li>✓ Walk you through the system and answer questions on the spot</li>
       </ul>
+      <p><small>Backflow testing is a separately-licensed trade in Ontario. PJL does not service backflow assemblies but can refer you to a certified tester if yours needs annual recertification.</small></p>
     </section>
 
-    <section class="faq-city" aria-labelledby="faq-lp-heading" style="margin-top:48px;">
-      <h2 id="faq-lp-heading">Lawrence Park sprinkler FAQs</h2>
+    <section class="faq-city" aria-labelledby="faq-lawrence-park-heading" style="margin-top:48px;">
+      <h2 id="faq-lawrence-park-heading">Lawrence Park sprinkler FAQs</h2>
       <details><summary><h3>What is Lawrence Park's character as an irrigation neighbourhood?</h3></summary><p>Lawrence Park is one of Toronto's original garden suburbs — a planned community of curving tree-lined streets and large landscaped lots developed beginning in the early 1900s. The neighbourhood is known for mature gardens, established hedge lines and design-conscious homeowners who want infrastructure to disappear into the landscape. That makes Lawrence Park well suited to a lawn-zone-plus-drip-overlay design where heads are placed discreetly along bed edges and drip lines run hidden under mulch.</p></details>
       <details><summary><h3>Do you handle drip irrigation for established gardens in Lawrence Park?</h3></summary><p>Yes — this is one of our most-requested services here. Long perennial borders, established hedge runs (cedar, boxwood, hornbeam), specimen tree wells and raised beds all benefit from a drip overlay zone that runs independently from the lawn sprinkler zones. Lower flow, lower pressure, less waste, and no spray on the hardscape or window glass. See our <a href="drip-irrigation.html">drip irrigation page</a> for more.</p></details>
       <details><summary><h3>How does the mature tree canopy affect a new sprinkler install in Lawrence Park?</h3></summary><p>Lawrence Park sits under significant heritage canopy. Toronto's Private Tree By-law (Municipal Code Chapter 658) protects any private tree with a trunk diameter of 30 cm or more — trenching inside the protected root zone can require a permit. On a typical Lawrence Park lot that constrains where the mainline can run; we walk the property before quoting and route around protected trees. Canopy shade also matters for zone design: shaded lawn zones need less water than full-sun zones, so they go on separate program steps.</p></details>
@@ -339,11 +581,12 @@
   </div>
 </section>
 
+<!-- CTA strip -->
 <section class="cta-strip">
   <div class="container cta-strip-inner">
     <div>
       <h3>Lawrence Park homeowners — book direct.</h3>
-      <p>Garden-suburb irrigation done right. Published pricing. 1-year guarantee.</p>
+      <p>Priority scheduling, published pricing, 1-year guarantee.</p>
     </div>
     <div class="cta-strip-actions pjl-cta-row">
       <a href="book.html?service=sprinkler_repair" class="primary">Book service →</a>
@@ -352,15 +595,24 @@
   </div>
 </section>
 
+<!-- Related — adjacent areas + core services -->
 <section class="section">
   <div class="container" style="max-width:1080px;">
-    <h2>Related</h2>
+    <h2>Nearby coverage</h2>
+    <p>Adjacent areas for customers comparing service-area coverage:</p>
     <div class="related-cities">
-      <a href="sprinkler-service-toronto.html" class="related-city"><h4>Toronto (hub)</h4><p>All Toronto coverage overview.</p></a>
-      <a href="sprinkler-service-north-york.html" class="related-city"><h4>North York</h4><p>Estate &amp; multi-zone work to the north.</p></a>
-      <a href="sprinkler-service-forest-hill.html" class="related-city"><h4>Forest Hill</h4><p>Hedge drip + landscape lighting.</p></a>
-      <a href="drip-irrigation.html" class="related-city"><h4>Drip Irrigation</h4><p>Hedges, beds, containers.</p></a>
+      <a href="sprinkler-service-toronto.html" class="related-city"><h4>Toronto</h4><p>City-wide hub page.</p></a>
+      <a href="sprinkler-service-north-york.html" class="related-city"><h4>North York</h4><p>Estate lots, Yonge corridor.</p></a>
+      <a href="sprinkler-service-forest-hill.html" class="related-city"><h4>Forest Hill</h4><p>Hedge lines, drip + lighting.</p></a>
+      <a href="sprinkler-service-thornhill.html" class="related-city"><h4>Thornhill</h4><p>Sprinklers + premium lighting.</p></a>
+    </div>
+
+    <h2 style="margin-top:64px;">Service deep-dives</h2>
+    <p>If you want to learn more about a specific service before booking, the pages below go deeper.</p>
+    <div class="related-cities">
+      <a href="sprinkler-systems.html" class="related-city"><h4>Sprinkler Systems</h4><p>Design, install, components.</p></a>
       <a href="sprinkler-repair.html" class="related-city"><h4>Sprinkler Repair</h4><p>Common faults &amp; pricing.</p></a>
+      <a href="sprinkler-hydrawise.html" class="related-city"><h4>Hydrawise Smart Controller</h4><p>Weather-based watering.</p></a>
       <a href="landscape-lighting.html" class="related-city"><h4>Landscape Lighting</h4><p>LED, marine-grade, app control.</p></a>
     </div>
   </div>
