@@ -31,7 +31,6 @@ const TARGETS = [
   'hydrawise-display-desktop.png',
   'estate-sprinkler-sunset.jpg',
   'installation-before-after.jpg',
-  'tech-valve-box-service.jpg',
 ];
 
 // Most heroes/featured photos render full-width on mobile and at varying
