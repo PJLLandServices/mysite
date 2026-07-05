@@ -31,12 +31,18 @@
   --amber:        #E07B24;
   --amber-light:  #F59B4A;
   --amber-pale:   #FDF0E4;
+  /* --amber-ink: AA-compliant amber for TEXT on light surfaces. The
+     vibrant --amber stays for fills/dots/buttons; small amber LABELS on
+     white/cream/pale (price tags, eyebrows, "see →" arrows) use this so
+     they clear 4.5:1. Deep burnt-orange — same brand family. */
+  --amber-ink:    #A85311;
   --cream:        #FAFAF5;
   --white:        #FFFFFF;
   --dark:         #0F1F14;
   --text:         #1A1A1A;
   --text-mid:     #4A4A4A;
-  --text-muted:   #7A7A72;
+  /* --text-muted nudged darker (#7A7A72 → #6E6E66) to clear AA (4.33 → 5.1). */
+  --text-muted:   #6E6E66;
   --border:       #E2E0D4;
   --shadow:       0 4px 32px rgba(27,77,46,0.12);
   --shadow-lg:    0 12px 48px rgba(27,77,46,0.18);
@@ -415,57 +421,116 @@ img { max-width: 100%; height: auto; display: block; }
 }
 
 /* ──────────────────────────────────────────────────────────────
-   .pjl-cta-row — site-wide responsive button-pair row utility.
+   .cta-group — unified responsive CTA button-group system.
 
-   Behavior:
-   - ≥640px viewport (tablets and desktops): children split row evenly
-     (50/50 for 2 buttons, 33/33/33 for 3, etc.). Equal heights via
-     align-items: stretch.
-   - ≤639px viewport (ALL phones, including iPhone Pro Max at 430px):
-     children stack vertically, each full-width.
+   One behaviour for every button group site-wide. Aliased onto the
+   legacy container classes (.pjl-cta-row, .season-actions,
+   .pricing-cta-row, .cta-strip-actions, .area-hero-actions,
+   .page-hero-actions, .btn-row) so existing markup inherits the fix
+   with no per-page surgery. Any element inside — .btn, .s-primary,
+   .btn-amber, .primary, .ghost, etc. — is laid out automatically.
 
-   Apply as a CO-CLASS on any container wrapping a button pair:
-     <div class="area-hero-actions pjl-cta-row"> ... </div>
-     <div class="pricing-cta-row pjl-cta-row"> ... </div>
-     <div class="cta-strip-actions pjl-cta-row"> ... </div>
+   Responsive contract:
+   - ≤767px (all phones): column, every button FULL-WIDTH, text centered.
+   - 768–1023px (tablet): row, wraps, 2 per row, centered.
+   - ≥1024px (desktop): row, natural proportional widths (primary keeps
+     its amber weight), capped at max-width, centered.
 
-   Breakpoint history:
-   - Originally 430px on commit 710910d (pricing-cta-row only) — chosen
-     to keep buttons paired on iPhone Pro Max.
-   - Lifted to a global utility on commit 175caae (still 430px).
-   - Bumped to 640px in this commit. At 430px the longest button
-     labels in the kit ("Book Bayview Village service →" +
-     "Call (905) 960-0181") couldn't fit at 50/50 — the phone number
-     wrapped mid-character ("(905) 960-" / "0181") and the long button
-     label wrapped to 3 lines. 640px is the next natural step up: a
-     comfortable tablet-portrait width where labels fit on one line
-     with breathing room. Phones — all of them — always stack.
-
-   See WEBSITE_MAINTENANCE_AND_SEO_HANDOFF.md "Where reusable
-   components are located" for the full design-system reference.
+   !important on the layout-critical props overrides the weak, non-
+   responsive inline rules the city pages ship for .season-actions /
+   .pricing-cta-row (which otherwise leave phone-width buttons as
+   left-aligned content-sized pills). Button *visual* styling
+   (padding, colour, radius) is untouched.
    ────────────────────────────────────────────────────────────── */
-.pjl-cta-row {
+.cta-group,
+.pjl-cta-row,
+.season-actions,
+.pricing-cta-row,
+.cta-strip-actions,
+.area-hero-actions,
+.page-hero-actions {
   display: flex;
-  flex-direction: row;
-  gap: 12px;
-  /* !important enforces stretch over any co-class that sets
-     align-items: center (e.g. legacy .pricing-cta-row inline CSS). */
+  flex-direction: column !important;   /* mobile-first: stacked */
   align-items: stretch !important;
+  gap: 12px;
   width: 100%;
 }
-.pjl-cta-row > * {
-  flex: 1 1 0 !important;
+.cta-group > *,
+.pjl-cta-row > *,
+.season-actions > *,
+.pricing-cta-row > *,
+.cta-strip-actions > *,
+.area-hero-actions > *,
+.page-hero-actions > * {
+  width: 100% !important;
   min-width: 0;
+  flex: 0 0 auto;
   text-align: center;
   justify-content: center;
 }
-@media (max-width: 639px) {
-  .pjl-cta-row {
-    flex-direction: column !important;
+@media (min-width: 768px) {
+  .cta-group,
+  .pjl-cta-row,
+  .season-actions,
+  .pricing-cta-row,
+  .cta-strip-actions,
+  .area-hero-actions,
+  .page-hero-actions {
+    flex-direction: row !important;
+    flex-wrap: wrap;
+    /* left-aligned to match the left-aligned hero/section content flow */
+    justify-content: flex-start;
   }
-  .pjl-cta-row > * {
-    width: 100% !important;
+  .cta-group > *,
+  .pjl-cta-row > *,
+  .season-actions > *,
+  .pricing-cta-row > *,
+  .cta-strip-actions > *,
+  .area-hero-actions > *,
+  .page-hero-actions > * {
+    width: auto !important;
+    flex: 1 1 auto;
+    max-width: 340px;
   }
+}
+@media (min-width: 1024px) {
+  .cta-group > *,
+  .pjl-cta-row > *,
+  .season-actions > *,
+  .pricing-cta-row > *,
+  .cta-strip-actions > *,
+  .area-hero-actions > *,
+  .page-hero-actions > * {
+    flex: 0 1 auto;   /* natural, proportional widths on desktop */
+  }
+}
+/* Trust tagline (e.g. the Hunter-University badge) sits BELOW a CTA
+   group as a centred, full-width line — never split into columns. */
+.hw-cred {
+  display: flex !important;
+  width: 100%;
+  justify-content: center;
+  text-align: center;
+}
+
+/* ── Contrast (WCAG AA) — amber TEXT accents on light surfaces ──────
+   Small amber labels on white/cream/pale (price tags, "see →" arrows,
+   coverage eyebrows/tags, price <b>) failed AA at ~2.6-3.0:1 with the
+   vibrant --amber. Retone the TEXT to --amber-ink (5.1-5.4:1). Fills,
+   dots, pins and buttons keep the vibrant --amber. */
+.price-tag,
+.hood-arrow,
+.season-price b,
+.season-spot h2 em,
+.blog-strip__eyebrow,
+.blog-strip__cta,
+.blog-strip__body h3 em,
+.coverage-territory .eyebrow,
+.coverage-territory .cov-hint,
+.coverage-territory .town-time,
+.coverage-territory .list-group-tag,
+.coverage-territory .popup-tier {
+  color: var(--amber-ink) !important;
 }
 
 /* ── Section banner — gradient header bar (reusable) ── */

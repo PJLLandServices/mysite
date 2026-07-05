@@ -421,12 +421,16 @@
   letter-spacing: -0.2px;
   line-height: 1.1;
   margin: 0;
+  /* Overlay sits on deep-green; a global .coverage-territory p rule was
+     overriding the inherited white → grey-on-green (~1.1:1, invisible). */
+  color: #fff;
 }
 .coverage-territory .map-title-overlay .ovs {
   font-size: 11px;
   opacity: 0.85;
   margin: 2px 0 0 0;
   letter-spacing: 0.04em;
+  color: #fff;
 }
 
 /* Map legend — bottom-right */
