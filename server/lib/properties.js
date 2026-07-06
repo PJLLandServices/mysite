@@ -1227,19 +1227,25 @@ async function mintOptOutTokensIfMissing(propertyId) {
   const updated = {
     seasonalSMS: tokens.seasonalSMS || makeOptOutToken(),
     seasonalEmail: tokens.seasonalEmail || makeOptOutToken(),
-    seasonalAll: tokens.seasonalAll || makeOptOutToken()
+    seasonalAll: tokens.seasonalAll || makeOptOutToken(),
+    // Review-request emails are their own consent channel (Jul 2026) —
+    // opting out of seasonal reminders shouldn't kill review asks and
+    // vice versa.
+    reviewEmail: tokens.reviewEmail || makeOptOutToken()
   };
   // No write if nothing changed.
   if (
     tokens.seasonalSMS === updated.seasonalSMS &&
     tokens.seasonalEmail === updated.seasonalEmail &&
-    tokens.seasonalAll === updated.seasonalAll
+    tokens.seasonalAll === updated.seasonalAll &&
+    tokens.reviewEmail === updated.reviewEmail
   ) {
     return target;
   }
   target.commPrefs = {
     seasonalRemindersSMS: target.commPrefs?.seasonalRemindersSMS !== false,
     seasonalRemindersEmail: target.commPrefs?.seasonalRemindersEmail !== false,
+    reviewRequestsEmail: target.commPrefs?.reviewRequestsEmail !== false,
     optOutTokens: updated
   };
   target.updatedAt = new Date().toISOString();
@@ -1261,6 +1267,7 @@ async function findByOptOutToken(token, type) {
   const slot = type === "sms" ? "seasonalSMS"
             : type === "email" ? "seasonalEmail"
             : type === "all" ? "seasonalAll"
+            : type === "review" ? "reviewEmail"
             : null;
   if (!slot) return null;
   const records = await readAll();
@@ -1335,12 +1342,14 @@ async function setSeasonalCommPref(propertyId, type, value) {
   const next = {
     seasonalRemindersSMS: target.commPrefs?.seasonalRemindersSMS !== false,
     seasonalRemindersEmail: target.commPrefs?.seasonalRemindersEmail !== false,
+    reviewRequestsEmail: target.commPrefs?.reviewRequestsEmail !== false,
     optOutTokens: target.commPrefs?.optOutTokens || {
-      seasonalSMS: null, seasonalEmail: null, seasonalAll: null
+      seasonalSMS: null, seasonalEmail: null, seasonalAll: null, reviewEmail: null
     }
   };
   if (type === "sms") next.seasonalRemindersSMS = Boolean(value);
   else if (type === "email") next.seasonalRemindersEmail = Boolean(value);
+  else if (type === "review") next.reviewRequestsEmail = Boolean(value);
   else if (type === "all") {
     next.seasonalRemindersSMS = Boolean(value);
     next.seasonalRemindersEmail = Boolean(value);

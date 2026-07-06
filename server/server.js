@@ -56,6 +56,7 @@ const completionCascade = require("./lib/completion-cascade");
 const customLineItems = require("./lib/custom-line-items");
 const settings = require("./lib/settings");
 const outreach = require("./lib/outreach");
+const reviewRequests = require("./lib/review-requests");
 const { generateIcsForToken } = require("./lib/ical-feed");
 const issueRollup = require("./lib/issue-rollup");
 const { generateQuotePdf, renderQuotePdf } = require("./lib/quote-pdf");
@@ -592,6 +593,11 @@ function needsAuth(method, pathname) {
   if (pathname === "/admin/schedule" || pathname === "/admin/schedule/") return "user";
   if (pathname === "/admin/handoff" || pathname === "/admin/handoff/") return "user";
   if (pathname === "/admin/outreach" || pathname === "/admin/outreach/") return "user";
+  if (pathname === "/admin/review-requests" || pathname === "/admin/review-requests/") return "user";
+  // Google review request automation. The /rr/<token> click redirect
+  // is public (the token is the credential); everything under
+  // /api/review-requests is admin/tech-only.
+  if (pathname.startsWith("/api/review-requests")) return "user";
   if (pathname === "/admin/chats" || pathname === "/admin/chats/") return "user";
   if (pathname === "/admin/messages" || pathname === "/admin/messages/") return "user";
   if (pathname === "/admin/customers" || pathname === "/admin/customers/") return "user";
@@ -15931,7 +15937,7 @@ Customer signature captured at ${new Date().toISOString()}.`;
       const token = String(payload?.token || "").trim();
       const type = String(payload?.type || "").toLowerCase();
       if (!token) return sendJson(res, 400, { ok: false, error: "invalid_token" });
-      if (type !== "sms" && type !== "email" && type !== "all") {
+      if (type !== "sms" && type !== "email" && type !== "all" && type !== "review") {
         return sendJson(res, 400, { ok: false, error: "invalid_type" });
       }
       const result = await outreach.honorUnsubscribe(token, type);
@@ -15939,6 +15945,64 @@ Customer signature captured at ${new Date().toISOString()}.`;
       return sendJson(res, 200, { ok: true, unsubscribed: true, type: result.type });
     } catch (err) {
       return sendJson(res, 400, { ok: false, error: err.message || "Couldn't process unsubscribe." });
+    }
+  }
+
+  // ---- Google review requests (design_handoff_review_request_emails,
+  // Jul 2026). Admin surface for the automated 2-email sequence: list
+  // what's in flight, flip the automation on/off, cancel a sequence
+  // (the "customer replied to email 1" suppression is manual — Gmail
+  // SMTP has no inbound hook), and fire a test render at the admin.
+
+  if (req.method === "GET" && pathname === "/api/review-requests") {
+    try {
+      const [records, s] = await Promise.all([reviewRequests.list(), settings.get()]);
+      return sendJson(res, 200, { ok: true, records, settings: s.reviewRequests });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't load review requests."] });
+    }
+  }
+
+  if (req.method === "PATCH" && pathname === "/api/review-requests/settings") {
+    try {
+      const session = await requireUser(req);
+      const payload = await parseRequestBody(req);
+      const updated = await settings.updateReviewRequests(payload || {}, {
+        who: session?.uid || "admin",
+        note: "Edited on /admin/review-requests"
+      });
+      return sendJson(res, 200, { ok: true, settings: updated.reviewRequests });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't save review-request settings."] });
+    }
+  }
+
+  const rrCancelMatch = pathname.match(/^\/api\/review-requests\/([^/]+)\/cancel$/);
+  if (req.method === "POST" && rrCancelMatch) {
+    try {
+      const session = await requireUser(req);
+      const payload = await parseRequestBody(req).catch(() => ({}));
+      const updated = await reviewRequests.cancel(decodeURIComponent(rrCancelMatch[1]), {
+        by: session?.uid || "admin",
+        reason: String(payload?.reason || "").slice(0, 200)
+      });
+      if (!updated) return sendJson(res, 404, { ok: false, errors: ["Sequence not found."] });
+      return sendJson(res, 200, { ok: true, record: updated });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't cancel sequence."] });
+    }
+  }
+
+  if (req.method === "POST" && pathname === "/api/review-requests/test-send") {
+    try {
+      const payload = await parseRequestBody(req).catch(() => ({}));
+      const result = await reviewRequests.sendTest({
+        which: payload?.which,
+        to: payload?.to ? String(payload.to) : null
+      });
+      return sendJson(res, 200, { ok: true, ...result });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't send test email."] });
     }
   }
 
@@ -16134,6 +16198,9 @@ function resolveStaticTarget(pathname) {
   // to the same handler for trailing-slash variants.
   if (pathname.startsWith("/unsubscribe/")) {
     return { dir: SERVER_DIR, relative: "/unsubscribe.html" };
+  }
+  if (pathname === "/admin/review-requests" || pathname === "/admin/review-requests/") {
+    return { dir: SERVER_DIR, relative: "/review-requests.html" };
   }
   if (pathname.startsWith("/crm/")) {
     return { dir: SERVER_DIR, relative: pathname.slice("/crm".length) };
@@ -16527,6 +16594,27 @@ const server = http.createServer(async (req, res) => {
       }
     }
 
+    // Review-request CTA redirect — public, token-gated (the token in
+    // the URL IS the credential, same model as the iCal feed). Stamps
+    // the click (email-2 suppression proxy) then 302s to the real
+    // Google review URL. Unknown token → 404, no info leak.
+    const rrMatch = pathname.match(/^\/rr\/([A-Za-z0-9]+)$/);
+    if (req.method === "GET" && rrMatch) {
+      try {
+        const target = await reviewRequests.recordCtaClick(rrMatch[1]);
+        if (target) {
+          res.writeHead(302, { location: target, "cache-control": "no-store" });
+          res.end();
+          return;
+        }
+      } catch (err) {
+        console.warn("[review-requests] click redirect failed:", err?.message);
+      }
+      res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
+      res.end("Not found");
+      return;
+    }
+
     const requiredLevel = needsAuth(req.method, pathname);
     if (requiredLevel) {
       const session = requiredLevel === "admin"
@@ -16676,6 +16764,24 @@ server.listen(PORT, HOST, () => {
   };
   sweepInvoiceSms();
   setInterval(sweepInvoiceSms, 2 * 60 * 1000);
+
+  // Google review request sweep (design handoff, Jul 2026). Due times
+  // are persisted in review-requests.json (no in-memory timers — the
+  // 7-day delays have to survive Render deploys), so this sweep IS the
+  // fire path. 5-minute cadence: sends snap to Tue–Thu 10:00 Toronto
+  // slots, so the worst case lands a few minutes after 10.
+  const sweepReviewRequests = async () => {
+    try {
+      const result = await reviewRequests.sweepDue();
+      if (result?.sent || result?.suppressed) {
+        console.log(`[review-requests] sweep sent ${result.sent || 0}, suppressed ${result.suppressed || 0} (considered ${result.considered})`);
+      }
+    } catch (err) {
+      console.warn("[review-requests] sweep failed:", err?.message);
+    }
+  };
+  sweepReviewRequests();
+  setInterval(sweepReviewRequests, 5 * 60 * 1000);
 
   // Trash purge sweep (Session 2 brief). Hard-deletes records soft-deleted
   // more than 30 days ago. Runs at startup AND every 24 hours so the

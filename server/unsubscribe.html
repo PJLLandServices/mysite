@@ -154,7 +154,7 @@
       const segments = url.pathname.split("/").filter(Boolean);
       const token = segments[segments.length - 1] || "";
       const rawType = url.searchParams.get("type") || "all";
-      const type = ["email", "sms", "all"].includes(rawType) ? rawType : "all";
+      const type = ["email", "sms", "all", "review"].includes(rawType) ? rawType : "all";
 
       const card = document.getElementById("card");
       const confirmSection = document.getElementById("confirm");
@@ -174,6 +174,12 @@
           "Tap the button below to stop seasonal booking reminders by email. " +
           "Text reminders (if you're getting them) will continue unless you stop those separately.";
         confirmBtn.textContent = "Stop email reminders";
+      } else if (type === "review") {
+        confirmTitle.textContent = "Stop PJL review-request emails?";
+        confirmIntro.textContent =
+          "Tap the button below and we'll stop asking for Google reviews after your service visits. " +
+          "Booking confirmations and seasonal reminders (if you get them) aren't affected.";
+        confirmBtn.textContent = "Stop review-request emails";
       } else if (type === "sms") {
         confirmTitle.textContent = "Stop PJL text reminders?";
         confirmIntro.textContent =
@@ -212,6 +218,7 @@
           confirmSection.hidden = true;
           doneSection.hidden = false;
           if (type === "email") doneTitle.textContent = "Email reminders stopped.";
+          else if (type === "review") doneTitle.textContent = "Review-request emails stopped.";
           else if (type === "sms") doneTitle.textContent = "Text reminders stopped.";
           else doneTitle.textContent = "You're unsubscribed.";
         } catch (err) {

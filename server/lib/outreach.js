@@ -342,10 +342,22 @@ async function setOptOutForSeason(propertyId, season, year, value) {
 // invalid" page without leaking which slot the token belonged to.
 async function honorUnsubscribe(token, type) {
   if (!token) return null;
-  if (type !== "sms" && type !== "email" && type !== "all") return null;
+  if (type !== "sms" && type !== "email" && type !== "all" && type !== "review") return null;
   const property = await properties.findByOptOutToken(token, type);
   if (!property) return null;
   const updated = await properties.setSeasonalCommPref(property.id, type, false);
+  // Review-channel opt-out also kills any in-flight review-request
+  // sequence for this property immediately (the sweep would catch it
+  // at send time anyway, but the admin page should show "cancelled"
+  // right away). Best-effort.
+  if (type === "review") {
+    try {
+      const reviewRequests = require("./review-requests");
+      await reviewRequests.cancelPending({ propertyId: property.id, reason: "unsubscribed" });
+    } catch (err) {
+      console.warn("[outreach] review-sequence cancel on unsubscribe failed:", err?.message);
+    }
+  }
   return {
     propertyId: property.id,
     type,

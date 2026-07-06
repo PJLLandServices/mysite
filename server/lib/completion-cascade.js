@@ -438,6 +438,28 @@ async function run(wo, deps = {}) {
     }
   }
 
+  // 6) Enqueue the Google review request sequence (design handoff, Jul
+  // 2026). Persisted schedule — email 1 fires ~7 days out via the
+  // review-requests sweep in server.js, so nothing is lost to restarts.
+  // scheduleForWo carries its own gates (feature enabled, customer
+  // email present, per-property opt-out, one-per-customer-per-6-months,
+  // idempotent per WO) and never throws into the cascade.
+  try {
+    const reviewRequests = require("./review-requests");
+    const rr = await reviewRequests.scheduleForWo(wo);
+    if (rr?.scheduled) {
+      try {
+        await workOrders.appendHistory(wo.id, {
+          action: "review_request_scheduled",
+          by: "system",
+          note: `${rr.record.id} — email 1 due ${rr.record.email1.dueAt}`
+        });
+      } catch (logErr) { console.warn("[cascade] review-request history failed:", logErr?.message); }
+    }
+  } catch (err) {
+    console.warn("[cascade] review-request schedule failed:", err?.message);
+  }
+
   // Audit-trail breadcrumb on the WO. Only logged on real execution
   // (the alreadyRan: true short-circuit above returns before reaching
   // here), so re-firing the cascade on an already-completed WO won't

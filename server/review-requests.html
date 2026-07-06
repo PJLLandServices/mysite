@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#0F1F14">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>PJL — Review Requests</title>
+  <link rel="icon" type="image/png" href="/favicon-96x96.png?v=20260518" sizes="96x96" />
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg?v=20260518" />
+  <link rel="shortcut icon" href="/favicon.ico?v=20260518" />
+  <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png?v=20260518" />
+  <meta name="apple-mobile-web-app-title" content="PJL" />
+  <link rel="manifest" href="/site.webmanifest?v=20260518" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/crm/crm.css">
+  <style>
+    .rr-shell { display: flex; flex-direction: column; gap: 20px; }
+    .rr-head { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 12px; }
+    .rr-head h1 { margin: 0; }
+    .rr-card {
+      background: #fff; border: 1px solid #E2E0D4; border-radius: 14px;
+      padding: 18px 20px;
+    }
+    .rr-settings-grid {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 14px; margin-top: 14px;
+    }
+    .rr-field { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: #5A6B5E; }
+    .rr-field input {
+      padding: 8px 10px; border: 1px solid #E2E0D4; border-radius: 8px;
+      font: inherit; color: #1a2a1e; background: #FAFAF5;
+    }
+    .rr-toggle-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+    .rr-status-pill {
+      display: inline-block; padding: 4px 12px; border-radius: 999px;
+      font-size: 13px; font-weight: 600;
+    }
+    .rr-status-pill.on { background: #E4F2E8; color: #1B4D2E; }
+    .rr-status-pill.off { background: #F4EFE4; color: #8a6d3b; }
+    .rr-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 14px; }
+    .rr-note { font-size: 12.5px; color: #8FA093; margin: 10px 0 0; line-height: 1.55; }
+    table.rr-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    .rr-table th {
+      text-align: left; font-size: 11.5px; letter-spacing: .06em; text-transform: uppercase;
+      color: #8FA093; padding: 8px 10px; border-bottom: 1px solid #E2E0D4;
+    }
+    .rr-table td { padding: 10px; border-bottom: 1px solid #F0EEE4; vertical-align: top; }
+    .rr-table tr:last-child td { border-bottom: none; }
+    .rr-chip {
+      display: inline-block; padding: 2px 10px; border-radius: 999px;
+      font-size: 12px; font-weight: 600; white-space: nowrap;
+    }
+    .rr-chip.scheduled          { background: #E8F0FB; color: #23528f; }
+    .rr-chip.reminder_scheduled { background: #FDF0E4; color: #9a5416; }
+    .rr-chip.completed          { background: #E4F2E8; color: #1B4D2E; }
+    .rr-chip.suppressed         { background: #F0EEE4; color: #6b6f62; }
+    .rr-chip.cancelled          { background: #F7E7E4; color: #93392b; }
+    .rr-sub { display: block; font-size: 12px; color: #8FA093; margin-top: 2px; }
+    .rr-empty { padding: 26px 10px; text-align: center; color: #8FA093; font-size: 14px; }
+    .rr-cancel-btn {
+      background: none; border: 1px solid #E2E0D4; border-radius: 8px;
+      padding: 5px 12px; font: inherit; font-size: 12.5px; color: #93392b; cursor: pointer;
+    }
+    .rr-cancel-btn:hover { border-color: #93392b; }
+    .rr-clicked { color: #1B4D2E; font-weight: 600; }
+    .rr-table-wrap { overflow-x: auto; }
+    @media (max-width: 700px) {
+      .rr-table th:nth-child(4), .rr-table td:nth-child(4) { display: none; }
+    }
+  </style>
+</head>
+<body class="pjl-crm-body">
+  <aside class="pjl-admin-nav" id="navMenu" aria-label="PJL CRM Navigation">
+    <header class="pjl-side-brand">
+      <a href="/" class="pjl-side-logo"><img src="/crm/pjl-logo.svg" alt="PJL Land Services"></a>
+    </header>
+    <div class="pjl-nav-links">
+      <a href="/admin/today">Today</a>
+      <a href="/admin/messages">Messages <span class="pjl-nav-badge" data-portal-msg-badge hidden></span></a>
+      <a href="/admin">CRM</a>
+      <a href="/admin/schedule">Schedule</a>
+      <a href="/admin/handoff">Handoff</a>
+      <a href="/admin/outreach">Outreach</a>
+      <a href="/admin/review-requests" class="is-active">Reviews</a>
+      <a href="/admin/bookings">Bookings</a>
+      <a href="/admin/customers">Customers</a>
+      <a href="/admin/properties">Properties</a>
+      <a href="/admin/projects">Projects</a>
+      <a href="/admin/work-orders">Work orders</a>
+      <a href="/admin/quote-folder">Quotes <span class="pjl-nav-badge" data-quote-accepted-badge hidden></span></a>
+      <a href="/admin/invoices">Invoices</a>
+      <a href="/admin/material-lists">Materials</a>
+      <a href="/admin/chats">AI Chats</a>
+      <a href="/admin/users">Users</a>
+      <a href="/admin/settings">Settings</a>
+    </div>
+    <footer class="pjl-side-footer">
+      <a class="pjl-side-phone" href="tel:+19059600181">(905) 960-0181</a>
+      <button class="pjl-nav-logout" type="button" id="logoutButton">Log out</button>
+    </footer>
+  </aside>
+
+  <div class="pjl-app">
+    <header class="pjl-app-topbar">
+      <button class="pjl-nav-toggle" type="button" id="navToggle" aria-label="Menu" aria-expanded="false" aria-controls="navMenu">
+        <span class="pjl-nav-toggle-bar"></span>
+        <span class="pjl-nav-toggle-bar"></span>
+        <span class="pjl-nav-toggle-bar"></span>
+      </button>
+      <span class="pjl-app-title">Review Requests</span>
+      <a class="pjl-app-phone" href="tel:+19059600181">(905) 960-0181</a>
+    </header>
+
+    <main class="pjl-crm-shell rr-shell">
+      <header class="rr-head">
+        <div>
+          <p class="pjl-page-eyebrow">Google reviews</p>
+          <h1>Review Requests</h1>
+        </div>
+      </header>
+
+      <!-- Automation settings. The master switch is the whole story:
+           while OFF, completed WOs do not enqueue and nothing sends. -->
+      <section class="rr-card" aria-label="Automation settings">
+        <div class="rr-toggle-row">
+          <span class="rr-status-pill off" id="statusPill">Automation OFF</span>
+          <label style="display:flex; align-items:center; gap:8px; font-size:14px; cursor:pointer;">
+            <input type="checkbox" id="enabledToggle">
+            <span>Ask customers for a Google review after completed work orders</span>
+          </label>
+        </div>
+        <div class="rr-settings-grid">
+          <label class="rr-field">
+            <span>Days after completion → Email 1</span>
+            <input type="number" id="delayDays" min="0" max="60" step="1">
+          </label>
+          <label class="rr-field">
+            <span>Days after Email 1 → Reminder</span>
+            <input type="number" id="reminderDelayDays" min="0" max="60" step="1">
+          </label>
+          <label class="rr-field">
+            <span>From name</span>
+            <input type="text" id="fromName" maxlength="80">
+          </label>
+          <label class="rr-field">
+            <span>Google review URL</span>
+            <input type="url" id="googleReviewUrl">
+          </label>
+        </div>
+        <div class="rr-actions">
+          <button type="button" class="pjl-btn pjl-btn-primary" id="saveBtn">Save settings</button>
+          <button type="button" class="pjl-btn pjl-btn-outline" id="testBtn1">Send test — Email 1</button>
+          <button type="button" class="pjl-btn pjl-btn-outline" id="testBtn2">Send test — Email 2</button>
+        </div>
+        <p class="rr-note">
+          Sends land Tue–Thu around 10:00. One sequence per customer per 6 months.
+          The reminder skips automatically when the review link was clicked, the customer
+          unsubscribed, or a new job was booked. If a customer <strong>replies</strong> to
+          Email 1, cancel their sequence below — replies can't be detected automatically.
+        </p>
+        <p class="rr-note" id="flash" hidden></p>
+      </section>
+
+      <!-- In-flight + past sequences -->
+      <section class="rr-card" aria-label="Sequences">
+        <div class="rr-table-wrap">
+          <table class="rr-table">
+            <thead>
+              <tr>
+                <th>Customer</th>
+                <th>Status</th>
+                <th>Timeline</th>
+                <th>Work order</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="rowsBody"></tbody>
+          </table>
+          <div class="rr-empty" id="emptyState" hidden>
+            No sequences yet. When the automation is on, every completed work order
+            with a customer email enqueues here.
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    (function () {
+      const els = {
+        pill: document.getElementById("statusPill"),
+        enabled: document.getElementById("enabledToggle"),
+        delayDays: document.getElementById("delayDays"),
+        reminderDelayDays: document.getElementById("reminderDelayDays"),
+        fromName: document.getElementById("fromName"),
+        googleReviewUrl: document.getElementById("googleReviewUrl"),
+        saveBtn: document.getElementById("saveBtn"),
+        testBtn1: document.getElementById("testBtn1"),
+        testBtn2: document.getElementById("testBtn2"),
+        rows: document.getElementById("rowsBody"),
+        empty: document.getElementById("emptyState"),
+        flash: document.getElementById("flash")
+      };
+
+      function flash(message, isError) {
+        els.flash.textContent = message;
+        els.flash.style.color = isError ? "#93392b" : "#1B4D2E";
+        els.flash.hidden = false;
+        clearTimeout(flash._t);
+        flash._t = setTimeout(() => { els.flash.hidden = true; }, 6000);
+      }
+
+      function fmtDate(iso) {
+        if (!iso) return "—";
+        try {
+          return new Date(iso).toLocaleString("en-CA", {
+            timeZone: "America/Toronto",
+            month: "short", day: "numeric", hour: "numeric", minute: "2-digit"
+          });
+        } catch { return iso; }
+      }
+
+      const STATUS_LABELS = {
+        scheduled: "Email 1 queued",
+        reminder_scheduled: "Reminder queued",
+        completed: "Done — both sent",
+        suppressed: "Skipped",
+        cancelled: "Cancelled"
+      };
+      const REASON_LABELS = {
+        cta_clicked: "review link clicked",
+        new_job_booked: "new job booked",
+        unsubscribed: "unsubscribed",
+        aged_out: "slot aged out",
+        cancelled_by_admin: "cancelled by admin"
+      };
+
+      function escapeText(value) {
+        const div = document.createElement("div");
+        div.textContent = String(value == null ? "" : value);
+        return div.innerHTML;
+      }
+
+      function renderSettings(s) {
+        els.enabled.checked = s.enabled === true;
+        els.delayDays.value = s.delayDays;
+        els.reminderDelayDays.value = s.reminderDelayDays;
+        els.fromName.value = s.fromName || "";
+        els.googleReviewUrl.value = s.googleReviewUrl || "";
+        els.pill.textContent = s.enabled ? "Automation ON" : "Automation OFF";
+        els.pill.classList.toggle("on", s.enabled === true);
+        els.pill.classList.toggle("off", s.enabled !== true);
+      }
+
+      function timelineCell(r) {
+        const bits = [];
+        if (r.email1.sentAt) bits.push(`Email 1 sent ${fmtDate(r.email1.sentAt)}`);
+        else if (r.email1.dueAt && (r.status === "scheduled")) bits.push(`Email 1 due ${fmtDate(r.email1.dueAt)}`);
+        if (r.email2.sentAt) bits.push(`Reminder sent ${fmtDate(r.email2.sentAt)}`);
+        else if (r.email2.dueAt && r.status === "reminder_scheduled") bits.push(`Reminder due ${fmtDate(r.email2.dueAt)}`);
+        if (r.ctaClickedAt) bits.push(`<span class="rr-clicked">★ Link clicked ${fmtDate(r.ctaClickedAt)}</span>`);
+        return bits.join("<br>") || "—";
+      }
+
+      function render(records) {
+        els.rows.innerHTML = "";
+        els.empty.hidden = records.length > 0;
+        for (const r of records) {
+          const tr = document.createElement("tr");
+          const reason = r.suppressReason ? (REASON_LABELS[r.suppressReason] || r.suppressReason) : "";
+          const active = r.status === "scheduled" || r.status === "reminder_scheduled";
+          tr.innerHTML = `
+            <td>
+              ${escapeText(r.customerName || r.email)}
+              <span class="rr-sub">${escapeText(r.email)} · ${escapeText(r.service)}</span>
+            </td>
+            <td>
+              <span class="rr-chip ${escapeText(r.status)}">${STATUS_LABELS[r.status] || escapeText(r.status)}</span>
+              ${reason ? `<span class="rr-sub">${escapeText(reason)}</span>` : ""}
+            </td>
+            <td>${timelineCell(r)}</td>
+            <td><span class="rr-sub" style="margin-top:0">${escapeText(r.woId)}</span></td>
+            <td>${active ? `<button type="button" class="rr-cancel-btn" data-cancel="${escapeText(r.id)}">Cancel</button>` : ""}</td>
+          `;
+          els.rows.appendChild(tr);
+        }
+      }
+
+      async function load() {
+        const res = await fetch("/api/review-requests");
+        const body = await res.json();
+        if (!res.ok || body.ok === false) {
+          flash((body.errors && body.errors[0]) || "Couldn't load review requests.", true);
+          return;
+        }
+        renderSettings(body.settings || {});
+        render(body.records || []);
+      }
+
+      els.saveBtn.addEventListener("click", async () => {
+        els.saveBtn.disabled = true;
+        try {
+          const res = await fetch("/api/review-requests/settings", {
+            method: "PATCH",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              enabled: els.enabled.checked,
+              delayDays: Number(els.delayDays.value),
+              reminderDelayDays: Number(els.reminderDelayDays.value),
+              fromName: els.fromName.value,
+              googleReviewUrl: els.googleReviewUrl.value
+            })
+          });
+          const body = await res.json();
+          if (!res.ok || body.ok === false) throw new Error((body.errors && body.errors[0]) || "Save failed.");
+          renderSettings(body.settings || {});
+          flash("Settings saved.");
+        } catch (err) {
+          flash(err.message, true);
+        } finally {
+          els.saveBtn.disabled = false;
+        }
+      });
+
+      async function sendTest(which, btn) {
+        btn.disabled = true;
+        const original = btn.textContent;
+        btn.textContent = "Sending…";
+        try {
+          const res = await fetch("/api/review-requests/test-send", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ which })
+          });
+          const body = await res.json();
+          if (!res.ok || body.ok === false) throw new Error((body.errors && body.errors[0]) || "Test send failed.");
+          flash(`Test email ${which} sent to ${body.to}.`);
+        } catch (err) {
+          flash(err.message, true);
+        } finally {
+          btn.disabled = false;
+          btn.textContent = original;
+        }
+      }
+      els.testBtn1.addEventListener("click", () => sendTest(1, els.testBtn1));
+      els.testBtn2.addEventListener("click", () => sendTest(2, els.testBtn2));
+
+      els.rows.addEventListener("click", async (event) => {
+        const btn = event.target.closest("[data-cancel]");
+        if (!btn) return;
+        if (!confirm("Cancel this review-request sequence? No further emails will send to this customer for this job.")) return;
+        btn.disabled = true;
+        try {
+          const res = await fetch(`/api/review-requests/${encodeURIComponent(btn.dataset.cancel)}/cancel`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ reason: "cancelled from admin page" })
+          });
+          const body = await res.json();
+          if (!res.ok || body.ok === false) throw new Error((body.errors && body.errors[0]) || "Cancel failed.");
+          await load();
+          flash("Sequence cancelled.");
+        } catch (err) {
+          btn.disabled = false;
+          flash(err.message, true);
+        }
+      });
+
+      load().catch((err) => flash(err.message || "Couldn't load.", true));
+    })();
+  </script>
+  <script src="/crm/crm-nav.js"></script>
+  <script src="/crm/nav-badges.js?v=1"></script>
+</body>
+</html>

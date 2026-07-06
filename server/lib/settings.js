@@ -72,6 +72,19 @@ const DEFAULT_CONTACT_INFO = {
   customerSupportPhone: "(905) 960-0181"
 };
 
+// Google review request automation (design_handoff_review_request_emails,
+// Jul 2026). OFF by default — completions while disabled do not enqueue,
+// so flipping it on later can't retro-email old customers. The review
+// URL is the hardcoded destination from the handoff; delays are in days
+// and land on the next Tue–Thu 10:00 America/Toronto slot.
+const DEFAULT_REVIEW_REQUESTS = {
+  enabled: false,
+  delayDays: 7,
+  reminderDelayDays: 7,
+  googleReviewUrl: "https://g.page/r/CYxgaMP9EmcbEBM/review",
+  fromName: "Patrick from PJL Land Services"
+};
+
 // Seasonal-outreach message templates (feature-seasonal-outreach-brief.md
 // §3.2). Patrick saves a per-season subject + SMS body + email body from
 // the compose modal's "Save as default" path; the outreach page seeds the
@@ -96,6 +109,7 @@ const DEFAULT_SETTINGS = {
   icalFeed: { ...DEFAULT_ICAL_FEED },
   contactInfo: { ...DEFAULT_CONTACT_INFO },
   invoiceSms: { ...DEFAULT_INVOICE_SMS },
+  reviewRequests: { ...DEFAULT_REVIEW_REQUESTS },
   outreachTemplates: {
     spring: { ...BLANK_OUTREACH_TEMPLATE },
     fall: { ...BLANK_OUTREACH_TEMPLATE }
@@ -131,6 +145,7 @@ function hydrate(s) {
   const ical = s?.icalFeed || {};
   const contact = s?.contactInfo || {};
   const ism = s?.invoiceSms || {};
+  const rr = s?.reviewRequests || {};
   const out = s?.outreachTemplates || {};
   const pickTemplate = (key) => {
     const t = out[key] || {};
@@ -169,6 +184,21 @@ function hydrate(s) {
       maxAgeHours: Number.isFinite(Number(ism.maxAgeHours)) && Number(ism.maxAgeHours) > 0
         ? Number(ism.maxAgeHours)
         : DEFAULT_INVOICE_SMS.maxAgeHours
+    },
+    reviewRequests: {
+      enabled: rr.enabled === true,
+      delayDays: Number.isFinite(Number(rr.delayDays)) && Number(rr.delayDays) >= 0
+        ? Number(rr.delayDays)
+        : DEFAULT_REVIEW_REQUESTS.delayDays,
+      reminderDelayDays: Number.isFinite(Number(rr.reminderDelayDays)) && Number(rr.reminderDelayDays) >= 0
+        ? Number(rr.reminderDelayDays)
+        : DEFAULT_REVIEW_REQUESTS.reminderDelayDays,
+      googleReviewUrl: typeof rr.googleReviewUrl === "string" && rr.googleReviewUrl.trim()
+        ? rr.googleReviewUrl.trim()
+        : DEFAULT_REVIEW_REQUESTS.googleReviewUrl,
+      fromName: typeof rr.fromName === "string" && rr.fromName.trim()
+        ? rr.fromName.trim()
+        : DEFAULT_REVIEW_REQUESTS.fromName
     },
     outreachTemplates: {
       spring: pickTemplate("spring"),
@@ -300,6 +330,44 @@ async function updateContactInfo(patch, { who = "admin", note = "" } = {}) {
     action: "contactInfo",
     before,
     after: { ...settings.contactInfo },
+    note
+  });
+  if (settings.audit.length > 50) settings.audit.length = 50;
+  await writeAll(settings);
+  return settings;
+}
+
+// Update the reviewRequests namespace (Google review email automation).
+// Audit-stamped like the other settings writers. Only known keys move;
+// unknown keys in the patch are ignored.
+async function updateReviewRequests(patch, { who = "admin", note = "" } = {}) {
+  const settings = await readAll();
+  const before = { ...settings.reviewRequests };
+  const next = { ...settings.reviewRequests };
+  if (patch && typeof patch === "object") {
+    if (Object.prototype.hasOwnProperty.call(patch, "enabled")) {
+      next.enabled = patch.enabled === true;
+    }
+    for (const key of ["delayDays", "reminderDelayDays"]) {
+      if (Object.prototype.hasOwnProperty.call(patch, key)) {
+        const n = Number(patch[key]);
+        if (Number.isFinite(n) && n >= 0 && n <= 60) next[key] = n;
+      }
+    }
+    if (typeof patch.googleReviewUrl === "string" && patch.googleReviewUrl.trim()) {
+      next.googleReviewUrl = patch.googleReviewUrl.trim();
+    }
+    if (typeof patch.fromName === "string" && patch.fromName.trim()) {
+      next.fromName = patch.fromName.trim().slice(0, 80);
+    }
+  }
+  settings.reviewRequests = next;
+  settings.audit.unshift({
+    ts: new Date().toISOString(),
+    who,
+    action: "reviewRequests",
+    before,
+    after: { ...next },
     note
   });
   if (settings.audit.length > 50) settings.audit.length = 50;
@@ -449,6 +517,7 @@ module.exports = {
   updateAdminDefaults,
   updateQuickbooks,
   updateContactInfo,
+  updateReviewRequests,
   recordSyncError,
   clearSyncErrors,
   recordAudit,
