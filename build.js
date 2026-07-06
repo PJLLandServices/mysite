@@ -36,6 +36,7 @@ const PARTIALS_DIR = path.join(ROOT, '_partials');
 const PARTIALS = [
   ['nav', 'nav.html'],
   ['footer', 'footer.html'],
+  ['analytics', 'analytics.html'],
 ];
 
 const SKIP_FILES = new Set([
