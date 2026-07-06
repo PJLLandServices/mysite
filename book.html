@@ -495,6 +495,16 @@
      rendered widget; otherwise the static HTML's test key would win. -->
 <script src="/api/public-config.js"></script>
 <script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit&onload=onloadTurnstileCallback" async defer></script>
+<!-- @@PJL:analytics-START -->
+<!-- Google Analytics 4 -->
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-1B5RJLKKBR"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+  gtag('config', 'G-1B5RJLKKBR');
+</script>
+<!-- @@PJL:analytics-END -->
 </head>
 <body>
 
