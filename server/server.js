@@ -15993,6 +15993,35 @@ Customer signature captured at ${new Date().toISOString()}.`;
     }
   }
 
+  // Backfill: dry-run scan of recently completed WOs (with invoice
+  // status so Patrick can see which jobs are fully settled), then an
+  // explicit enqueue of only the checked ids. Enqueue re-runs the full
+  // gate stack per WO — double-submits degrade to skips.
+  if (req.method === "GET" && pathname === "/api/review-requests/backfill-candidates") {
+    try {
+      const url = new URL(req.url, baseUrlFromReq(req));
+      const result = await reviewRequests.backfillCandidates({
+        sinceDays: url.searchParams.get("days") || 60
+      });
+      return sendJson(res, 200, { ok: true, ...result });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't scan completed work orders."] });
+    }
+  }
+
+  if (req.method === "POST" && pathname === "/api/review-requests/backfill") {
+    try {
+      const session = await requireUser(req);
+      const payload = await parseRequestBody(req);
+      const woIds = Array.isArray(payload?.woIds) ? payload.woIds : [];
+      if (!woIds.length) return sendJson(res, 400, { ok: false, errors: ["woIds is required."] });
+      const result = await reviewRequests.backfillEnqueue({ woIds, by: session?.uid || "admin" });
+      return sendJson(res, 200, { ok: true, ...result });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't enqueue work orders."] });
+    }
+  }
+
   if (req.method === "POST" && pathname === "/api/review-requests/test-send") {
     try {
       const payload = await parseRequestBody(req).catch(() => ({}));

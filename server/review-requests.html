@@ -165,6 +165,53 @@
         <p class="rr-note" id="flash" hidden></p>
       </section>
 
+      <!-- Backfill: pull already-completed WOs into the queue. The
+           cascade only catches completions after the feature shipped;
+           this is the explicit two-step (scan → review → enqueue) for
+           recent history. -->
+      <section class="rr-card" aria-label="Backfill">
+        <div class="rr-toggle-row" style="justify-content:space-between;">
+          <strong style="font-size:15px;">Load recent completed work orders</strong>
+          <div style="display:flex; gap:10px; align-items:center;">
+            <label class="rr-field" style="flex-direction:row; align-items:center; gap:6px;">
+              <span>Look back</span>
+              <select id="backfillDays" style="padding:7px 10px; border:1px solid #E2E0D4; border-radius:8px; font:inherit; background:#FAFAF5;">
+                <option value="30">30 days</option>
+                <option value="60" selected>60 days</option>
+                <option value="90">90 days</option>
+              </select>
+            </label>
+            <button type="button" class="pjl-btn pjl-btn-outline" id="backfillScanBtn">Scan</button>
+          </div>
+        </div>
+        <div id="backfillResults" hidden>
+          <div class="rr-table-wrap" style="margin-top:14px;">
+            <table class="rr-table">
+              <thead>
+                <tr>
+                  <th style="width:34px;"><input type="checkbox" id="backfillAll" title="Select all eligible"></th>
+                  <th>Customer</th>
+                  <th>Completed</th>
+                  <th>Invoice</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody id="backfillBody"></tbody>
+            </table>
+          </div>
+          <div class="rr-actions">
+            <button type="button" class="pjl-btn pjl-btn-primary" id="backfillEnqueueBtn" disabled>Queue selected</button>
+          </div>
+          <p class="rr-note">
+            Checked jobs get the normal sequence — Email 1 lands on the next Tue–Thu 10:00 slot
+            (jobs completed under a week ago wait out the remainder of the 7 days first).
+            Unchecked-able rows show why they're skipped. Draft invoices start unchecked —
+            tick them yourself if the job is settled.
+          </p>
+        </div>
+        <div class="rr-empty" id="backfillEmpty" hidden>No completed work orders found in that window.</div>
+      </section>
+
       <!-- In-flight + past sequences -->
       <section class="rr-card" aria-label="Sequences">
         <div class="rr-table-wrap">
@@ -203,7 +250,14 @@
         testBtn2: document.getElementById("testBtn2"),
         rows: document.getElementById("rowsBody"),
         empty: document.getElementById("emptyState"),
-        flash: document.getElementById("flash")
+        flash: document.getElementById("flash"),
+        backfillDays: document.getElementById("backfillDays"),
+        backfillScanBtn: document.getElementById("backfillScanBtn"),
+        backfillResults: document.getElementById("backfillResults"),
+        backfillEmpty: document.getElementById("backfillEmpty"),
+        backfillBody: document.getElementById("backfillBody"),
+        backfillAll: document.getElementById("backfillAll"),
+        backfillEnqueueBtn: document.getElementById("backfillEnqueueBtn")
       };
 
       function flash(message, isError) {
@@ -348,6 +402,95 @@
       }
       els.testBtn1.addEventListener("click", () => sendTest(1, els.testBtn1));
       els.testBtn2.addEventListener("click", () => sendTest(2, els.testBtn2));
+
+      // ---- Backfill ----
+      const SKIP_LABELS = {
+        no_email: "no email on file",
+        already_queued: "already in the queue",
+        cooldown_6_months: "asked within 6 months",
+        newer_job_in_list: "newer job below covers this customer",
+        opted_out: "unsubscribed from review emails"
+      };
+      const INVOICE_LABELS = { none: "no charge", draft: "draft", sent: "sent", paid: "paid" };
+
+      function refreshEnqueueButton() {
+        const checked = els.backfillBody.querySelectorAll("input[data-wo]:checked").length;
+        els.backfillEnqueueBtn.disabled = checked === 0;
+        els.backfillEnqueueBtn.textContent = checked ? `Queue ${checked} selected` : "Queue selected";
+      }
+
+      function renderBackfill(candidates) {
+        els.backfillBody.innerHTML = "";
+        els.backfillResults.hidden = candidates.length === 0;
+        els.backfillEmpty.hidden = candidates.length > 0;
+        for (const c of candidates) {
+          const tr = document.createElement("tr");
+          const settled = c.invoiceStatus === "sent" || c.invoiceStatus === "paid" || c.invoiceStatus === "none";
+          const checkedAttr = c.eligible && settled ? "checked" : "";
+          const disabledAttr = c.eligible ? "" : "disabled";
+          tr.innerHTML = `
+            <td><input type="checkbox" data-wo="${escapeText(c.woId)}" ${checkedAttr} ${disabledAttr}></td>
+            <td>
+              ${escapeText(c.customerName || c.email)}
+              <span class="rr-sub">${escapeText(c.email || "—")} · ${escapeText(c.service)} · ${escapeText(c.woId)}</span>
+            </td>
+            <td>${fmtDate(c.completedAt)}</td>
+            <td>${INVOICE_LABELS[c.invoiceStatus] || escapeText(c.invoiceStatus)}${c.invoiceSentAt ? `<span class="rr-sub">sent ${fmtDate(c.invoiceSentAt)}</span>` : ""}</td>
+            <td>${c.eligible
+              ? `<span class="rr-chip scheduled">ready</span>`
+              : `<span class="rr-chip suppressed">skip</span><span class="rr-sub">${escapeText(SKIP_LABELS[c.reason] || c.reason)}</span>`}</td>
+          `;
+          els.backfillBody.appendChild(tr);
+        }
+        els.backfillAll.checked = false;
+        refreshEnqueueButton();
+      }
+
+      els.backfillScanBtn.addEventListener("click", async () => {
+        els.backfillScanBtn.disabled = true;
+        els.backfillScanBtn.textContent = "Scanning…";
+        try {
+          const res = await fetch(`/api/review-requests/backfill-candidates?days=${encodeURIComponent(els.backfillDays.value)}`);
+          const body = await res.json();
+          if (!res.ok || body.ok === false) throw new Error((body.errors && body.errors[0]) || "Scan failed.");
+          renderBackfill(body.candidates || []);
+        } catch (err) {
+          flash(err.message, true);
+        } finally {
+          els.backfillScanBtn.disabled = false;
+          els.backfillScanBtn.textContent = "Scan";
+        }
+      });
+
+      els.backfillAll.addEventListener("change", () => {
+        for (const cb of els.backfillBody.querySelectorAll("input[data-wo]:not(:disabled)")) {
+          cb.checked = els.backfillAll.checked;
+        }
+        refreshEnqueueButton();
+      });
+      els.backfillBody.addEventListener("change", refreshEnqueueButton);
+
+      els.backfillEnqueueBtn.addEventListener("click", async () => {
+        const woIds = [...els.backfillBody.querySelectorAll("input[data-wo]:checked")].map((cb) => cb.dataset.wo);
+        if (!woIds.length) return;
+        if (!confirm(`Queue review-request emails for ${woIds.length} completed job${woIds.length === 1 ? "" : "s"}?`)) return;
+        els.backfillEnqueueBtn.disabled = true;
+        try {
+          const res = await fetch("/api/review-requests/backfill", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ woIds })
+          });
+          const body = await res.json();
+          if (!res.ok || body.ok === false) throw new Error((body.errors && body.errors[0]) || "Couldn't queue jobs.");
+          flash(`Queued ${body.enqueued} job${body.enqueued === 1 ? "" : "s"}${body.skipped ? ` (${body.skipped} skipped)` : ""}.`);
+          els.backfillScanBtn.click();
+          await load();
+        } catch (err) {
+          flash(err.message, true);
+          refreshEnqueueButton();
+        }
+      });
 
       els.rows.addEventListener("click", async (event) => {
         const btn = event.target.closest("[data-cancel]");

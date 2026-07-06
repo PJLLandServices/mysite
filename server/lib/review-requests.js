@@ -296,10 +296,15 @@ async function unsubscribeUrlFor(record) {
   }
 }
 
-// ---- Creation (called from the completion cascade) --------------------
+// ---- Creation (called from the completion cascade + backfill) ----------
 
 // Gates, in order. Returns { scheduled, reason, record }.
-async function scheduleForWo(wo) {
+// opts.anchorAt (ISO string) re-anchors the delay to a past completion
+// date — the backfill path. A job completed 10 days ago with a 7-day
+// delay is already "due", so it lands on the next send slot from now
+// rather than a week out.
+// opts.source tags the history entry ("cascade" | "backfill").
+async function scheduleForWo(wo, opts = {}) {
   if (!wo || !wo.id) return { scheduled: false, reason: "no_wo" };
 
   const settingsLib = require("./settings");
@@ -340,7 +345,12 @@ async function scheduleForWo(wo) {
 
   const now = new Date();
   const delayDays = Number.isFinite(Number(config.delayDays)) ? Number(config.delayDays) : 7;
-  const dueAt = nextSendSlot(new Date(now.getTime() + delayDays * 24 * 60 * 60 * 1000));
+  const anchorMs = opts.anchorAt ? new Date(opts.anchorAt).getTime() : now.getTime();
+  const baseMs = Math.max(
+    now.getTime(),
+    (Number.isFinite(anchorMs) ? anchorMs : now.getTime()) + delayDays * 24 * 60 * 60 * 1000
+  );
+  const dueAt = nextSendSlot(new Date(baseMs));
 
   const record = {
     id: makeId(),
@@ -361,7 +371,7 @@ async function scheduleForWo(wo) {
     email2: { dueAt: null, sentAt: null, messageId: null },
     createdAt: now.toISOString(),
     updatedAt: now.toISOString(),
-    history: [historyEntry("scheduled", `Email 1 due ${dueAt.toISOString()} (WO ${wo.id} completed)`)]
+    history: [historyEntry("scheduled", `Email 1 due ${dueAt.toISOString()} (WO ${wo.id} completed${opts.source === "backfill" ? "; enqueued via backfill" : ""})`)]
   };
   records.push(record);
   await writeAll(records);
@@ -594,6 +604,154 @@ async function sweepDue() {
   }
 }
 
+// ---- Backfill (load already-completed WOs into the queue) --------------
+//
+// The cascade only catches completions AFTER the feature shipped; this
+// pulls recent history in. Two-step by design: candidates() is a pure
+// dry-run the admin reviews, enqueue() only touches the WO ids they
+// explicitly checked. Nothing here sends — enqueued records ride the
+// same sweep + gates as cascade-created ones.
+
+// When a WO actually completed: the status_change→completed history
+// entry, else the cascade_fire breadcrumb, else departure/update stamps.
+function woCompletedAt(wo) {
+  const h = Array.isArray(wo?.history) ? wo.history : [];
+  for (let i = h.length - 1; i >= 0; i--) {
+    if (h[i]?.action === "status_change" && h[i]?.after === "completed") return h[i].ts;
+  }
+  for (let i = h.length - 1; i >= 0; i--) {
+    if (h[i]?.action === "cascade_fire") return h[i].ts;
+  }
+  return wo?.departedAt || wo?.updatedAt || wo?.createdAt || null;
+}
+
+async function backfillCandidates({ sinceDays = 60 } = {}) {
+  const days = Number.isFinite(Number(sinceDays)) ? Math.min(Math.max(Number(sinceDays), 1), 365) : 60;
+  const cutoffMs = Date.now() - days * 24 * 60 * 60 * 1000;
+
+  const workOrders = require("./work-orders");
+  const invoices = require("./invoices");
+  const properties = require("./properties");
+
+  const [allWos, allInvoices, records] = await Promise.all([
+    workOrders.list(),
+    invoices.list().catch(() => []),
+    readAll()
+  ]);
+
+  const invoiceByWo = new Map();
+  for (const inv of allInvoices) {
+    if (!inv?.woId || inv.status === "void") continue;
+    // Newest non-void invoice wins if a WO somehow has several.
+    const prev = invoiceByWo.get(inv.woId);
+    if (!prev || String(inv.createdAt || "") > String(prev.createdAt || "")) {
+      invoiceByWo.set(inv.woId, inv);
+    }
+  }
+
+  const woIdsWithRecord = new Set(records.map((r) => r.woId));
+  const cooldownCutoff = Date.now() - COOLDOWN_DAYS * 24 * 60 * 60 * 1000;
+  const recentByCustomer = new Set();
+  const recentByEmail = new Set();
+  for (const r of records) {
+    if (new Date(r.createdAt).getTime() < cooldownCutoff) continue;
+    if (r.customerId) recentByCustomer.add(r.customerId);
+    if (r.email) recentByEmail.add(r.email);
+  }
+
+  const completed = allWos
+    .filter((wo) => wo.status === "completed" && wo.type !== "build")
+    .map((wo) => ({ wo, completedAt: woCompletedAt(wo) }))
+    .filter((x) => x.completedAt && new Date(x.completedAt).getTime() >= cutoffMs)
+    .sort((a, b) => String(b.completedAt).localeCompare(String(a.completedAt)));
+
+  // One ask per customer: within this batch only the NEWEST completed WO
+  // per customer stays eligible; older siblings are flagged.
+  const seenCustomerKeys = new Set();
+
+  const candidates = [];
+  for (const { wo, completedAt } of completed) {
+    const email = String(wo.customerEmail || "").trim().toLowerCase();
+    const invoice = invoiceByWo.get(wo.id) || null;
+    const customerKey = wo.customerId || email;
+
+    let reason = null;
+    if (!email) reason = "no_email";
+    else if (woIdsWithRecord.has(wo.id)) reason = "already_queued";
+    else if ((wo.customerId && recentByCustomer.has(wo.customerId)) || recentByEmail.has(email)) reason = "cooldown_6_months";
+    else if (customerKey && seenCustomerKeys.has(customerKey)) reason = "newer_job_in_list";
+
+    if (!reason && wo.propertyId) {
+      try {
+        const property = await properties.get(wo.propertyId);
+        if (property?.commPrefs?.reviewRequestsEmail === false) reason = "opted_out";
+      } catch { /* tolerate */ }
+    }
+
+    if (!reason && customerKey) seenCustomerKeys.add(customerKey);
+
+    candidates.push({
+      woId: wo.id,
+      woType: wo.type,
+      customerName: wo.customerName || "",
+      email,
+      service: servicePhrase(wo.type),
+      completedAt,
+      invoiceId: invoice?.id || null,
+      invoiceStatus: invoice ? invoice.status : "none",
+      invoiceSentAt: invoice?.sentAt || null,
+      eligible: !reason,
+      reason
+    });
+  }
+  return { sinceDays: days, candidates };
+}
+
+// Enqueue the explicitly-selected WO ids. Each one re-runs the full
+// scheduleForWo gate stack (so a double-submit or a same-customer pair
+// degrades to a skip, never a duplicate).
+async function backfillEnqueue({ woIds = [], by = "admin" } = {}) {
+  const settingsLib = require("./settings");
+  const settings = await settingsLib.get();
+  if (settings.reviewRequests?.enabled !== true) {
+    throw new Error("Turn the automation on first — backfilled sequences would never send while it's off.");
+  }
+  const workOrders = require("./work-orders");
+  const results = [];
+  for (const rawId of woIds.slice(0, 200)) {
+    const woId = String(rawId || "");
+    try {
+      const wo = await workOrders.get(woId);
+      if (!wo) { results.push({ woId, scheduled: false, reason: "wo_not_found" }); continue; }
+      if (wo.status !== "completed") { results.push({ woId, scheduled: false, reason: "not_completed" }); continue; }
+      const r = await scheduleForWo(wo, { anchorAt: woCompletedAt(wo), source: "backfill" });
+      results.push({
+        woId,
+        scheduled: r.scheduled === true,
+        reason: r.scheduled ? null : r.reason,
+        recordId: r.record?.id || null,
+        email1DueAt: r.record?.email1?.dueAt || null
+      });
+      if (r.scheduled) {
+        try {
+          await workOrders.appendHistory(woId, {
+            action: "review_request_scheduled",
+            by,
+            note: `${r.record.id} — backfill; email 1 due ${r.record.email1.dueAt}`
+          });
+        } catch { /* history is best-effort */ }
+      }
+    } catch (err) {
+      results.push({ woId, scheduled: false, reason: err?.message || "enqueue_failed" });
+    }
+  }
+  return {
+    enqueued: results.filter((r) => r.scheduled).length,
+    skipped: results.filter((r) => !r.scheduled).length,
+    results
+  };
+}
+
 // ---- Admin helpers -----------------------------------------------------
 
 async function list() {
@@ -641,6 +799,8 @@ module.exports = {
   cancelPending,
   recordCtaClick,
   sendTest,
+  backfillCandidates,
+  backfillEnqueue,
   nextSendSlot,
   // exported for tests
   withinFireWindow,
