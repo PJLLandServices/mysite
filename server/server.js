@@ -15993,6 +15993,25 @@ Customer signature captured at ${new Date().toISOString()}.`;
     }
   }
 
+  // Mark / unmark a sequence as "customer left a review" — the manual
+  // confirmation of an actual submitted review (Google doesn't notify us
+  // on submit). Marking reviewed also stops any pending send.
+  const rrReviewedMatch = pathname.match(/^\/api\/review-requests\/([^/]+)\/reviewed$/);
+  if (req.method === "POST" && rrReviewedMatch) {
+    try {
+      const session = await requireUser(req);
+      const payload = await parseRequestBody(req).catch(() => ({}));
+      const updated = await reviewRequests.setReviewed(decodeURIComponent(rrReviewedMatch[1]), {
+        reviewed: payload?.reviewed !== false,
+        by: session?.uid || "admin"
+      });
+      if (!updated) return sendJson(res, 404, { ok: false, errors: ["Sequence not found."] });
+      return sendJson(res, 200, { ok: true, record: updated });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't update review status."] });
+    }
+  }
+
   // Backfill: dry-run scan of recently completed WOs (with invoice
   // status so Patrick can see which jobs are fully settled), then an
   // explicit enqueue of only the checked ids. Enqueue re-runs the full

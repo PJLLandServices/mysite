@@ -67,10 +67,26 @@
     }
     .rr-cancel-btn:hover { border-color: #93392b; }
     .rr-clicked { color: #1B4D2E; font-weight: 600; }
-    .rr-table-wrap { overflow-x: auto; }
-    @media (max-width: 700px) {
-      .rr-table th:nth-child(4), .rr-table td:nth-child(4) { display: none; }
+    .rr-reviewed-badge { color: #1B4D2E; font-weight: 700; white-space: nowrap; }
+    .rr-review-btn {
+      background: none; border: 1px solid #C9A24B; border-radius: 8px;
+      padding: 5px 12px; font: inherit; font-size: 12.5px; color: #8a6d20; cursor: pointer;
     }
+    .rr-review-btn:hover { border-color: #8a6d20; background: #FBF6E9; }
+    .rr-review-undo {
+      background: none; border: none; padding: 0; margin-left: 8px;
+      font: inherit; font-size: 12px; color: #8FA093; cursor: pointer; text-decoration: underline;
+    }
+    .rr-stats { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 16px; }
+    .rr-stat {
+      flex: 1 1 120px; background: #FAFAF5; border: 1px solid #E2E0D4;
+      border-radius: 12px; padding: 12px 14px;
+    }
+    .rr-stat dt { font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: #8FA093; margin: 0; }
+    .rr-stat dd { margin: 4px 0 0; font-size: 24px; font-weight: 700; color: #1B4D2E; font-family: 'Barlow Condensed', sans-serif; }
+    .rr-filter-row { margin-bottom: 12px; }
+    .rr-table-wrap { overflow-x: auto; }
+    .rr-table { min-width: 640px; }
   </style>
 </head>
 <body class="pjl-crm-body">
@@ -220,6 +236,27 @@
 
       <!-- In-flight + past sequences -->
       <section class="rr-card" aria-label="Sequences">
+        <!-- Conversion tally. "Opened link" = clicked the review CTA (an
+             automatic proxy — they reached the Google form). "Reviews left"
+             = confirmed reviews you've marked (Google doesn't tell us when
+             one is actually posted). -->
+        <div class="rr-stats" id="statsStrip" hidden>
+          <div class="rr-stat"><dt>Contacted</dt><dd id="statContacted">—</dd></div>
+          <div class="rr-stat"><dt>Opened link</dt><dd id="statClicked">—</dd></div>
+          <div class="rr-stat"><dt>Reviews left</dt><dd id="statReviewed">—</dd></div>
+          <div class="rr-stat"><dt>Conversion</dt><dd id="statConversion">—</dd></div>
+        </div>
+        <div class="rr-filter-row">
+          <label class="rr-field" style="flex-direction:row; align-items:center; gap:6px;">
+            <span>Show</span>
+            <select id="seqFilter" style="padding:7px 10px; border:1px solid #E2E0D4; border-radius:8px; font:inherit; background:#FAFAF5;">
+              <option value="all">All</option>
+              <option value="reviewed">Reviews left</option>
+              <option value="clicked_unreviewed">Opened link, not yet marked</option>
+              <option value="active">In flight</option>
+            </select>
+          </label>
+        </div>
         <div class="rr-table-wrap">
           <table class="rr-table">
             <thead>
@@ -227,6 +264,7 @@
                 <th>Customer</th>
                 <th>Status</th>
                 <th>Timeline</th>
+                <th>Review</th>
                 <th>Work order</th>
                 <th></th>
               </tr>
@@ -257,6 +295,12 @@
         rows: document.getElementById("rowsBody"),
         empty: document.getElementById("emptyState"),
         flash: document.getElementById("flash"),
+        statsStrip: document.getElementById("statsStrip"),
+        statContacted: document.getElementById("statContacted"),
+        statClicked: document.getElementById("statClicked"),
+        statReviewed: document.getElementById("statReviewed"),
+        statConversion: document.getElementById("statConversion"),
+        seqFilter: document.getElementById("seqFilter"),
         backfillDays: document.getElementById("backfillDays"),
         backfillScanBtn: document.getElementById("backfillScanBtn"),
         backfillResults: document.getElementById("backfillResults"),
@@ -344,15 +388,51 @@
         return bits.join("<br>") || "—";
       }
 
+      let allRecords = [];
+
+      // A record counts as "contacted" once at least one message actually
+      // went out (email 1 or the text). Pending/cancelled-before-send
+      // records don't count toward conversion.
+      function wasContacted(r) {
+        return Boolean((r.email1 && r.email1.sentAt) || (r.sms && r.sms.sentAt));
+      }
+
+      function renderStats(records) {
+        const contacted = records.filter(wasContacted);
+        const clicked = contacted.filter((r) => r.ctaClickedAt).length;
+        const reviewed = records.filter((r) => r.reviewedAt).length;
+        els.statsStrip.hidden = records.length === 0;
+        els.statContacted.textContent = contacted.length;
+        els.statClicked.textContent = clicked;
+        els.statReviewed.textContent = reviewed;
+        els.statConversion.textContent = contacted.length
+          ? `${Math.round((reviewed / contacted.length) * 100)}%`
+          : "—";
+      }
+
+      function passesFilter(r, filter) {
+        if (filter === "reviewed") return Boolean(r.reviewedAt);
+        if (filter === "clicked_unreviewed") return Boolean(r.ctaClickedAt) && !r.reviewedAt;
+        if (filter === "active") return r.status === "scheduled" || r.status === "reminder_scheduled";
+        return true;
+      }
+
       function render(records) {
+        allRecords = records;
+        renderStats(records);
+        const filter = els.seqFilter.value;
+        const shown = records.filter((r) => passesFilter(r, filter));
         els.rows.innerHTML = "";
-        els.empty.hidden = records.length > 0;
-        for (const r of records) {
+        els.empty.hidden = shown.length > 0;
+        for (const r of shown) {
           const tr = document.createElement("tr");
           const reason = r.suppressReason ? (REASON_LABELS[r.suppressReason] || r.suppressReason) : "";
           const active = r.status === "scheduled" || r.status === "reminder_scheduled";
           const channelTag = r.channel === "sms" ? "📱 text" : "✉ email";
           const contact = r.channel === "sms" ? (r.phone || r.email || "") : (r.email || "");
+          const reviewCell = r.reviewedAt
+            ? `<span class="rr-reviewed-badge">★ Reviewed</span><span class="rr-sub">${fmtDate(r.reviewedAt)}<button type="button" class="rr-review-undo" data-unreview="${escapeText(r.id)}">undo</button></span>`
+            : `<button type="button" class="rr-review-btn" data-review="${escapeText(r.id)}">Mark reviewed</button>${r.ctaClickedAt ? `<span class="rr-sub">opened the link</span>` : ""}`;
           tr.innerHTML = `
             <td>
               ${escapeText(r.customerName || contact)}
@@ -363,12 +443,15 @@
               ${reason ? `<span class="rr-sub">${escapeText(reason)}</span>` : ""}
             </td>
             <td>${timelineCell(r)}</td>
+            <td>${reviewCell}</td>
             <td><span class="rr-sub" style="margin-top:0">${escapeText(r.woId)}</span></td>
             <td>${active ? `<button type="button" class="rr-cancel-btn" data-cancel="${escapeText(r.id)}">Cancel</button>` : ""}</td>
           `;
           els.rows.appendChild(tr);
         }
       }
+
+      els.seqFilter.addEventListener("change", () => render(allRecords));
 
       async function load() {
         const res = await fetch("/api/review-requests");
@@ -568,7 +651,30 @@
       els.backfillEnqueueBtn.addEventListener("click", () => runAction("queue", els.backfillEnqueueBtn));
       els.backfillSmsBtn.addEventListener("click", () => runAction("sms", els.backfillSmsBtn));
 
+      async function setReviewed(id, reviewed, btn) {
+        btn.disabled = true;
+        try {
+          const res = await fetch(`/api/review-requests/${encodeURIComponent(id)}/reviewed`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ reviewed })
+          });
+          const body = await res.json();
+          if (!res.ok || body.ok === false) throw new Error((body.errors && body.errors[0]) || "Couldn't update.");
+          await load();
+          flash(reviewed ? "Marked as reviewed. 🎉" : "Review mark cleared.");
+        } catch (err) {
+          btn.disabled = false;
+          flash(err.message, true);
+        }
+      }
+
       els.rows.addEventListener("click", async (event) => {
+        const reviewBtn = event.target.closest("[data-review]");
+        if (reviewBtn) return void setReviewed(reviewBtn.dataset.review, true, reviewBtn);
+        const undoBtn = event.target.closest("[data-unreview]");
+        if (undoBtn) return void setReviewed(undoBtn.dataset.unreview, false, undoBtn);
+
         const btn = event.target.closest("[data-cancel]");
         if (!btn) return;
         if (!confirm("Cancel this review-request sequence? No further emails will send to this customer for this job.")) return;

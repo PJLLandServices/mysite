@@ -380,6 +380,8 @@ async function scheduleForWo(wo, opts = {}) {
     ctaToken: makeToken(),
     ctaClickedAt: null,
     ctaClickCount: 0,
+    reviewedAt: null,
+    reviewedBy: null,
     email1: { dueAt: dueAt.toISOString(), sentAt: null, messageId: null },
     email2: { dueAt: null, sentAt: null, messageId: null },
     createdAt: now.toISOString(),
@@ -411,6 +413,33 @@ async function cancel(id, { by = "admin", reason = "" } = {}) {
     r.status = "cancelled";
     r.suppressReason = reason || "cancelled_by_admin";
     r.history.push(historyEntry("cancelled", `${by}${reason ? ` — ${reason}` : ""}`));
+  });
+}
+
+// Mark (or unmark) that a customer actually left a review. Google gives
+// no callback when a review is submitted — a CTA click only means they
+// OPENED the review page. This is the manual confirmation: the operator
+// sees a new review land (Google emails on each new review / the GBP
+// dashboard) and records it here. Marking reviewed also stops any
+// pending send — the goal is met, no need to nudge again.
+async function setReviewed(id, { reviewed = true, by = "admin" } = {}) {
+  return updateRecord(id, (r) => {
+    if (reviewed) {
+      r.reviewedAt = r.reviewedAt || new Date().toISOString();
+      r.reviewedBy = by;
+      if (r.status === "scheduled" || r.status === "reminder_scheduled") {
+        // Terminalize so the sweep won't fire the (now pointless) next
+        // email. Null the pending due times for good measure.
+        r.status = "completed";
+        r.email2.dueAt = null;
+        if (!r.email1.sentAt) r.email1.dueAt = null;
+      }
+      r.history.push(historyEntry("marked_reviewed", `Confirmed review left (${by})`));
+    } else {
+      r.reviewedAt = null;
+      r.reviewedBy = null;
+      r.history.push(historyEntry("unmarked_reviewed", `Review mark cleared (${by})`));
+    }
   });
 }
 
@@ -986,6 +1015,8 @@ async function sendSmsRequestsNow({ woIds = [], by = "admin" } = {}) {
         ctaToken: makeToken(),
         ctaClickedAt: null,
         ctaClickCount: 0,
+        reviewedAt: null,
+        reviewedBy: null,
         email1: { dueAt: null, sentAt: null, messageId: null },
         email2: { dueAt: null, sentAt: null, messageId: null },
         sms: { sentAt: null, sid: null },
@@ -1083,6 +1114,7 @@ module.exports = {
   list,
   cancel,
   cancelPending,
+  setReviewed,
   recordCtaClick,
   sendTest,
   backfillCandidates,
