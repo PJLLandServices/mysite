@@ -334,15 +334,20 @@ async function scheduleForWo(wo, opts = {}) {
 
   const records = await readAll();
 
-  // Idempotent per WO (cascade can re-fire).
-  if (records.some((r) => r.woId === wo.id)) {
+  // Idempotent per WO for the EMAIL channel (cascade can re-fire). An SMS
+  // record for the same WO does NOT block the email sequence and vice
+  // versa — they're independent asks (the SMS path exists precisely to
+  // reach customers whose email is filtered).
+  if (records.some((r) => r.woId === wo.id && r.channel !== "sms")) {
     return { scheduled: false, reason: "already_scheduled_for_wo" };
   }
 
-  // One sequence per customer per 6 months, regardless of job count.
-  // Customers without an id are matched by email.
+  // One EMAIL sequence per customer per 6 months, regardless of job
+  // count. Customers without an id are matched by email. SMS sends have
+  // their own separate cooldown (see sendSmsRequestsNow).
   const cutoff = Date.now() - COOLDOWN_DAYS * 24 * 60 * 60 * 1000;
   const recent = records.find((r) => {
+    if (r.channel === "sms") return false;
     if (new Date(r.createdAt).getTime() < cutoff) return false;
     if (wo.customerId && r.customerId === wo.customerId) return true;
     return r.email === email;
@@ -367,7 +372,9 @@ async function scheduleForWo(wo, opts = {}) {
     customerName: wo.customerName || "",
     firstName: firstNameOf(wo.customerName),
     email,
+    phone: null,
     service: servicePhrase(wo.type),
+    channel: "email",          // "email" | "sms"
     status: "scheduled",       // scheduled | reminder_scheduled | completed | suppressed | cancelled
     suppressReason: null,
     ctaToken: makeToken(),
@@ -495,6 +502,98 @@ async function email2Suppression(record) {
     if (newer) return "new_job_booked";
   } catch { /* list failure → don't suppress on a guess */ }
   return null;
+}
+
+// ---- SMS channel (Twilio) ---------------------------------------------
+//
+// For customers whose email is filtered (Yahoo/AOL junk folders, strict
+// spam gateways), an email review ask never lands. A text does. This is
+// a single-touch, send-now-only path — no reminder text (a nagging
+// follow-up text reads worse than an email), and it's independent of the
+// email sequence so a customer we already emailed for a filtered inbox
+// can still be reached by text for the same job.
+
+function smsConfigured() {
+  return Boolean(
+    process.env.TWILIO_ACCOUNT_SID &&
+    process.env.TWILIO_AUTH_TOKEN &&
+    process.env.TWILIO_FROM_NUMBER
+  );
+}
+
+// Normalize to E.164 for North America. Returns null when the input
+// can't be made into a plausible number (so the caller skips instead of
+// handing Twilio garbage).
+function normalizePhone(raw) {
+  const s = String(raw || "").trim();
+  if (!s) return null;
+  if (s.startsWith("+")) {
+    const d = s.slice(1).replace(/\D/g, "");
+    return d.length >= 10 ? `+${d}` : null;
+  }
+  const digits = s.replace(/\D/g, "");
+  if (digits.length === 10) return `+1${digits}`;
+  if (digits.length === 11 && digits.startsWith("1")) return `+${digits}`;
+  return null;
+}
+
+function buildReviewSmsBody(record, url) {
+  return (
+    `Hi ${record.firstName || "there"}, it's PJL Land Services — thanks again for your ${record.service}. ` +
+    `If we did right by you, a quick Google review means a lot to a local crew: ${url}`
+  );
+}
+
+// Twilio REST send — same shape as notify-customer.js's outreach SMS
+// (carrier-level STOP, "Reply STOP to opt out." appended). Returns
+// { ok, sid } / { ok:false, reason }.
+async function sendReviewSms(record, url) {
+  if (!smsConfigured()) return { ok: false, reason: "no_twilio_config" };
+  const toNum = normalizePhone(record.phone);
+  if (!toNum) return { ok: false, reason: "bad_phone" };
+  let body = buildReviewSmsBody(record, url);
+  if (!/\bSTOP\b/i.test(body)) body = `${body.trim()}\nReply STOP to opt out.`;
+  const sid = process.env.TWILIO_ACCOUNT_SID;
+  const token = process.env.TWILIO_AUTH_TOKEN;
+  const twilioUrl = `https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(sid)}/Messages.json`;
+  const auth = Buffer.from(`${sid}:${token}`).toString("base64");
+  const payload = new URLSearchParams({ To: toNum, From: process.env.TWILIO_FROM_NUMBER, Body: body });
+  try {
+    const response = await fetch(twilioUrl, {
+      method: "POST",
+      headers: { Authorization: `Basic ${auth}`, "Content-Type": "application/x-www-form-urlencoded" },
+      body: payload.toString()
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      console.error("[review-requests] Twilio rejected:", response.status, data?.message);
+      return { ok: false, reason: data?.message || `twilio_${response.status}` };
+    }
+    return { ok: true, sid: data.sid };
+  } catch (err) {
+    console.error("[review-requests] SMS send failed:", err?.message);
+    return { ok: false, reason: err?.message || "twilio_failed" };
+  }
+}
+
+// An SMS record that still counts (blocks a re-text of the same WO).
+function hasActiveSms(records, woId) {
+  return records.some((r) =>
+    r.woId === woId && r.channel === "sms" &&
+    (r.status === "scheduled" || r.status === "completed"));
+}
+
+// Prior SMS review sent to this customer within the cooldown. Matched by
+// customerId, else by normalized phone. Only completed sends count (a
+// failed attempt shouldn't lock the customer out of a retry).
+function smsCooldownHit(records, { customerId, phone }) {
+  const cutoff = Date.now() - COOLDOWN_DAYS * 24 * 60 * 60 * 1000;
+  return records.some((r) => {
+    if (r.channel !== "sms" || r.status !== "completed") return false;
+    if (new Date(r.createdAt).getTime() < cutoff) return false;
+    if (customerId && r.customerId === customerId) return true;
+    return phone && r.phone === phone;
+  });
 }
 
 let sweepInProgress = false;
@@ -655,14 +754,18 @@ async function backfillCandidates({ sinceDays = 60 } = {}) {
     }
   }
 
-  const woIdsWithRecord = new Set(records.map((r) => r.woId));
+  // Email channel: "already queued" + 6-month cooldown look at EMAIL
+  // records only (channel !== "sms"), so a prior text doesn't block an
+  // email and vice versa.
+  const woIdsWithEmailRecord = new Set(records.filter((r) => r.channel !== "sms").map((r) => r.woId));
   const cooldownCutoff = Date.now() - COOLDOWN_DAYS * 24 * 60 * 60 * 1000;
-  const recentByCustomer = new Set();
-  const recentByEmail = new Set();
+  const emailRecentByCustomer = new Set();
+  const emailRecentByEmail = new Set();
   for (const r of records) {
+    if (r.channel === "sms") continue;
     if (new Date(r.createdAt).getTime() < cooldownCutoff) continue;
-    if (r.customerId) recentByCustomer.add(r.customerId);
-    if (r.email) recentByEmail.add(r.email);
+    if (r.customerId) emailRecentByCustomer.add(r.customerId);
+    if (r.email) emailRecentByEmail.add(r.email);
   }
 
   const completed = allWos
@@ -671,43 +774,67 @@ async function backfillCandidates({ sinceDays = 60 } = {}) {
     .filter((x) => x.completedAt && new Date(x.completedAt).getTime() >= cutoffMs)
     .sort((a, b) => String(b.completedAt).localeCompare(String(a.completedAt)));
 
-  // One ask per customer: within this batch only the NEWEST completed WO
-  // per customer stays eligible; older siblings are flagged.
+  // One ask per customer: candidates are sorted newest-first, so the
+  // first time we see a customer is their newest job. Older siblings are
+  // flagged (both channels).
   const seenCustomerKeys = new Set();
+
+  // Property review opt-out — fetched once per property, cached.
+  const optOutCache = new Map();
+  async function reviewOptedOut(propertyId) {
+    if (!propertyId) return false;
+    if (optOutCache.has(propertyId)) return optOutCache.get(propertyId);
+    let out = false;
+    try {
+      const property = await properties.get(propertyId);
+      out = property?.commPrefs?.reviewRequestsEmail === false;
+    } catch { /* tolerate */ }
+    optOutCache.set(propertyId, out);
+    return out;
+  }
 
   const candidates = [];
   for (const { wo, completedAt } of completed) {
     const email = String(wo.customerEmail || "").trim().toLowerCase();
+    const phone = normalizePhone(wo.customerPhone);
     const invoice = invoiceByWo.get(wo.id) || null;
-    const customerKey = wo.customerId || email;
+    const customerKey = wo.customerId || email || phone;
+    const isNewest = customerKey ? !seenCustomerKeys.has(customerKey) : true;
+    if (customerKey) seenCustomerKeys.add(customerKey);
+    const optedOut = await reviewOptedOut(wo.propertyId);
 
+    // Email eligibility.
     let reason = null;
     if (!email) reason = "no_email";
-    else if (woIdsWithRecord.has(wo.id)) reason = "already_queued";
-    else if ((wo.customerId && recentByCustomer.has(wo.customerId)) || recentByEmail.has(email)) reason = "cooldown_6_months";
-    else if (customerKey && seenCustomerKeys.has(customerKey)) reason = "newer_job_in_list";
+    else if (woIdsWithEmailRecord.has(wo.id)) reason = "already_queued";
+    else if ((wo.customerId && emailRecentByCustomer.has(wo.customerId)) || emailRecentByEmail.has(email)) reason = "cooldown_6_months";
+    else if (!isNewest) reason = "newer_job_in_list";
+    else if (optedOut) reason = "opted_out";
 
-    if (!reason && wo.propertyId) {
-      try {
-        const property = await properties.get(wo.propertyId);
-        if (property?.commPrefs?.reviewRequestsEmail === false) reason = "opted_out";
-      } catch { /* tolerate */ }
-    }
-
-    if (!reason && customerKey) seenCustomerKeys.add(customerKey);
+    // SMS eligibility — independent of email records for the same WO.
+    let smsReason = null;
+    if (!phone) smsReason = "no_phone";
+    else if (optedOut) smsReason = "opted_out";
+    else if (hasActiveSms(records, wo.id)) smsReason = "already_texted";
+    else if (!isNewest) smsReason = "newer_job_in_list";
+    else if (smsCooldownHit(records, { customerId: wo.customerId, phone })) smsReason = "sms_cooldown";
 
     candidates.push({
       woId: wo.id,
       woType: wo.type,
       customerName: wo.customerName || "",
       email,
+      hasPhone: Boolean(phone),
+      phoneDisplay: wo.customerPhone || "",
       service: servicePhrase(wo.type),
       completedAt,
       invoiceId: invoice?.id || null,
       invoiceStatus: invoice ? invoice.status : "none",
       invoiceSentAt: invoice?.sentAt || null,
       eligible: !reason,
-      reason
+      reason,
+      smsEligible: !smsReason,
+      smsReason
     });
   }
   return { sinceDays: days, candidates };
@@ -798,6 +925,119 @@ async function backfillEnqueue({ woIds = [], by = "admin", sendNow = false } = {
   };
 }
 
+// Send a review-request TEXT right now to the selected completed WOs.
+// Single-touch, immediate, paced. Each WO runs the SMS gate stack
+// (phone present, review opt-out, no active text for the WO, 6-month SMS
+// cooldown) — independent of the email sequence, so a customer we
+// already emailed for a filtered inbox can still be texted for the same
+// job. A failed send marks the record cancelled (reason sms_send_failed)
+// so it doesn't block a retry.
+async function sendSmsRequestsNow({ woIds = [], by = "admin" } = {}) {
+  const settingsLib = require("./settings");
+  const settings = await settingsLib.get();
+  if (settings.reviewRequests?.enabled !== true) {
+    throw new Error("Turn the automation on first — review texts are part of the same automation.");
+  }
+  if (!smsConfigured()) {
+    throw new Error("Texting isn't configured (TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN / TWILIO_FROM_NUMBER).");
+  }
+  const workOrders = require("./work-orders");
+  const properties = require("./properties");
+  const results = [];
+  let first = true;
+  for (const rawId of woIds.slice(0, 200)) {
+    const woId = String(rawId || "");
+    try {
+      const wo = await workOrders.get(woId);
+      if (!wo) { results.push({ woId, sent: false, reason: "wo_not_found" }); continue; }
+      if (wo.status !== "completed") { results.push({ woId, sent: false, reason: "not_completed" }); continue; }
+
+      const phone = normalizePhone(wo.customerPhone);
+      const email = String(wo.customerEmail || "").trim().toLowerCase();
+      const records = await readAll();
+
+      let reason = null;
+      if (!phone) reason = "no_phone";
+      else if (hasActiveSms(records, wo.id)) reason = "already_texted";
+      else if (smsCooldownHit(records, { customerId: wo.customerId, phone })) reason = "sms_cooldown";
+      if (!reason && wo.propertyId) {
+        try {
+          const property = await properties.get(wo.propertyId);
+          if (property?.commPrefs?.reviewRequestsEmail === false) reason = "opted_out";
+        } catch { /* tolerate */ }
+      }
+      if (reason) { results.push({ woId, sent: false, reason }); continue; }
+
+      const now = new Date();
+      const record = {
+        id: makeId(),
+        woId: wo.id,
+        woType: wo.type || "service_visit",
+        customerId: wo.customerId || null,
+        propertyId: wo.propertyId || null,
+        customerName: wo.customerName || "",
+        firstName: firstNameOf(wo.customerName),
+        email,
+        phone,
+        service: servicePhrase(wo.type),
+        channel: "sms",
+        status: "scheduled",
+        suppressReason: null,
+        ctaToken: makeToken(),
+        ctaClickedAt: null,
+        ctaClickCount: 0,
+        email1: { dueAt: null, sentAt: null, messageId: null },
+        email2: { dueAt: null, sentAt: null, messageId: null },
+        sms: { sentAt: null, sid: null },
+        createdAt: now.toISOString(),
+        updatedAt: now.toISOString(),
+        history: [historyEntry("scheduled", `SMS review request (WO ${wo.id} completed)`)]
+      };
+      // Persist BEFORE sending so the /rr/<token> click target is durable
+      // even if the process dies mid-send.
+      const all = await readAll();
+      all.push(record);
+      await writeAll(all);
+
+      if (!first) await sleep(SEND_NOW_PACING_MS);
+      first = false;
+
+      const url = trackedReviewUrl(record);
+      const send = await sendReviewSms(record, url);
+      if (send.ok) {
+        await updateRecord(record.id, (r) => {
+          r.status = "completed";
+          r.sms = { sentAt: new Date().toISOString(), sid: send.sid || null };
+          r.history.push(historyEntry("sms_sent", `Text sent${send.sid ? ` (sid ${send.sid})` : ""}`));
+        });
+        try {
+          await workOrders.appendHistory(woId, {
+            action: "review_request_scheduled",
+            by,
+            note: `${record.id} — review text sent to ${phone}`
+          });
+        } catch { /* best-effort */ }
+        console.log(`[review-requests] review text sent for ${record.id} to ${phone}`);
+        results.push({ woId, sent: true, reason: null, recordId: record.id });
+      } else {
+        await updateRecord(record.id, (r) => {
+          r.status = "cancelled";
+          r.suppressReason = "sms_send_failed";
+          r.history.push(historyEntry("cancelled", `SMS send failed: ${send.reason}`));
+        });
+        results.push({ woId, sent: false, reason: send.reason });
+      }
+    } catch (err) {
+      results.push({ woId, sent: false, reason: err?.message || "send_failed" });
+    }
+  }
+  return {
+    sent: results.filter((r) => r.sent).length,
+    skipped: results.filter((r) => !r.sent).length,
+    results
+  };
+}
+
 // ---- Admin helpers -----------------------------------------------------
 
 async function list() {
@@ -847,6 +1087,7 @@ module.exports = {
   sendTest,
   backfillCandidates,
   backfillEnqueue,
+  sendSmsRequestsNow,
   nextSendSlot,
   // exported for tests
   withinFireWindow,

@@ -16026,6 +16026,22 @@ Customer signature captured at ${new Date().toISOString()}.`;
     }
   }
 
+  // Send review-request TEXTS now to the selected completed WOs — the
+  // path for customers whose email is filtered (Yahoo/AOL junk, strict
+  // spam gateways). Single text per customer, no reminder text.
+  if (req.method === "POST" && pathname === "/api/review-requests/backfill-sms") {
+    try {
+      const session = await requireUser(req);
+      const payload = await parseRequestBody(req);
+      const woIds = Array.isArray(payload?.woIds) ? payload.woIds : [];
+      if (!woIds.length) return sendJson(res, 400, { ok: false, errors: ["woIds is required."] });
+      const result = await reviewRequests.sendSmsRequestsNow({ woIds, by: session?.uid || "admin" });
+      return sendJson(res, 200, { ok: true, ...result });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't send review texts."] });
+    }
+  }
+
   if (req.method === "POST" && pathname === "/api/review-requests/test-send") {
     try {
       const payload = await parseRequestBody(req).catch(() => ({}));

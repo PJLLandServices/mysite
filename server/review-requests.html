@@ -193,7 +193,8 @@
                   <th>Customer</th>
                   <th>Completed</th>
                   <th>Invoice</th>
-                  <th>Status</th>
+                  <th>Email</th>
+                  <th>Text</th>
                 </tr>
               </thead>
               <tbody id="backfillBody"></tbody>
@@ -202,13 +203,16 @@
           <div class="rr-actions">
             <button type="button" class="pjl-btn pjl-btn-primary" id="backfillSendNowBtn" disabled>Send Email 1 now</button>
             <button type="button" class="pjl-btn pjl-btn-outline" id="backfillEnqueueBtn" disabled>Queue for next slot</button>
+            <button type="button" class="pjl-btn pjl-btn-outline" id="backfillSmsBtn" disabled>Send text now</button>
           </div>
           <p class="rr-note">
-            <strong>Send Email 1 now</strong> emails the checked customers right away (paced, a fraction of a
-            second apart) and schedules each reminder a week out. <strong>Queue for next slot</strong> instead
-            parks Email 1 for the next Tue–Thu 10:00 send. Either way the reminder, suppression, and
-            unsubscribe rules are identical. Unchecked-able rows show why they're skipped; draft invoices
-            start unchecked — tick them yourself if the job is settled.
+            <strong>Send text now</strong> is for customers whose email gets filtered (Yahoo/AOL junk, etc.) —
+            it texts the checked customers a Google review link with the same click tracking, no reminder text.
+            A row can be textable even if it was already emailed, so long as it has a phone number.
+            <strong>Send Email 1 now</strong> emails right away (reminder a week out); <strong>Queue for next
+            slot</strong> parks Email 1 for the next Tue–Thu 10:00 send. Each button only acts on the checked
+            rows valid for that channel; the Email/Text columns show what's available or why it's skipped.
+            Draft invoices start unchecked — tick them yourself if the job is settled.
           </p>
         </div>
         <div class="rr-empty" id="backfillEmpty" hidden>No completed work orders found in that window.</div>
@@ -260,7 +264,8 @@
         backfillBody: document.getElementById("backfillBody"),
         backfillAll: document.getElementById("backfillAll"),
         backfillEnqueueBtn: document.getElementById("backfillEnqueueBtn"),
-        backfillSendNowBtn: document.getElementById("backfillSendNowBtn")
+        backfillSendNowBtn: document.getElementById("backfillSendNowBtn"),
+        backfillSmsBtn: document.getElementById("backfillSmsBtn")
       };
 
       function flash(message, isError) {
@@ -293,8 +298,20 @@
         new_job_booked: "new job booked",
         unsubscribed: "unsubscribed",
         aged_out: "slot aged out",
-        cancelled_by_admin: "cancelled by admin"
+        cancelled_by_admin: "cancelled by admin",
+        sms_send_failed: "text failed to send"
       };
+
+      // Channel-aware status label — an SMS record is a single text, not
+      // a 2-email sequence, so it reads differently.
+      function statusLabel(r) {
+        if (r.channel === "sms") {
+          if (r.status === "completed") return "Text sent";
+          if (r.status === "scheduled") return "Text sending…";
+          if (r.status === "cancelled") return "Text cancelled";
+        }
+        return STATUS_LABELS[r.status] || r.status;
+      }
 
       function escapeText(value) {
         const div = document.createElement("div");
@@ -315,10 +332,14 @@
 
       function timelineCell(r) {
         const bits = [];
-        if (r.email1.sentAt) bits.push(`Email 1 sent ${fmtDate(r.email1.sentAt)}`);
-        else if (r.email1.dueAt && (r.status === "scheduled")) bits.push(`Email 1 due ${fmtDate(r.email1.dueAt)}`);
-        if (r.email2.sentAt) bits.push(`Reminder sent ${fmtDate(r.email2.sentAt)}`);
-        else if (r.email2.dueAt && r.status === "reminder_scheduled") bits.push(`Reminder due ${fmtDate(r.email2.dueAt)}`);
+        if (r.channel === "sms") {
+          if (r.sms && r.sms.sentAt) bits.push(`Text sent ${fmtDate(r.sms.sentAt)}`);
+        } else {
+          if (r.email1.sentAt) bits.push(`Email 1 sent ${fmtDate(r.email1.sentAt)}`);
+          else if (r.email1.dueAt && (r.status === "scheduled")) bits.push(`Email 1 due ${fmtDate(r.email1.dueAt)}`);
+          if (r.email2.sentAt) bits.push(`Reminder sent ${fmtDate(r.email2.sentAt)}`);
+          else if (r.email2.dueAt && r.status === "reminder_scheduled") bits.push(`Reminder due ${fmtDate(r.email2.dueAt)}`);
+        }
         if (r.ctaClickedAt) bits.push(`<span class="rr-clicked">★ Link clicked ${fmtDate(r.ctaClickedAt)}</span>`);
         return bits.join("<br>") || "—";
       }
@@ -330,13 +351,15 @@
           const tr = document.createElement("tr");
           const reason = r.suppressReason ? (REASON_LABELS[r.suppressReason] || r.suppressReason) : "";
           const active = r.status === "scheduled" || r.status === "reminder_scheduled";
+          const channelTag = r.channel === "sms" ? "📱 text" : "✉ email";
+          const contact = r.channel === "sms" ? (r.phone || r.email || "") : (r.email || "");
           tr.innerHTML = `
             <td>
-              ${escapeText(r.customerName || r.email)}
-              <span class="rr-sub">${escapeText(r.email)} · ${escapeText(r.service)}</span>
+              ${escapeText(r.customerName || contact)}
+              <span class="rr-sub">${channelTag} · ${escapeText(contact)} · ${escapeText(r.service)}</span>
             </td>
             <td>
-              <span class="rr-chip ${escapeText(r.status)}">${STATUS_LABELS[r.status] || escapeText(r.status)}</span>
+              <span class="rr-chip ${escapeText(r.status)}">${escapeText(statusLabel(r))}</span>
               ${reason ? `<span class="rr-sub">${escapeText(reason)}</span>` : ""}
             </td>
             <td>${timelineCell(r)}</td>
@@ -410,18 +433,31 @@
       const SKIP_LABELS = {
         no_email: "no email on file",
         already_queued: "already in the queue",
-        cooldown_6_months: "asked within 6 months",
+        cooldown_6_months: "emailed within 6 months",
         newer_job_in_list: "newer job below covers this customer",
-        opted_out: "unsubscribed from review emails"
+        opted_out: "unsubscribed from review requests",
+        no_phone: "no phone number",
+        already_texted: "already texted",
+        sms_cooldown: "texted within 6 months"
       };
       const INVOICE_LABELS = { none: "no charge", draft: "draft", sent: "sent", paid: "paid" };
 
+      function channelCell(eligible, reason) {
+        return eligible
+          ? `<span class="rr-chip scheduled">ready</span>`
+          : `<span class="rr-chip suppressed">skip</span><span class="rr-sub">${escapeText(SKIP_LABELS[reason] || reason || "—")}</span>`;
+      }
+
       function refreshEnqueueButton() {
-        const checked = els.backfillBody.querySelectorAll("input[data-wo]:checked").length;
-        els.backfillEnqueueBtn.disabled = checked === 0;
-        els.backfillSendNowBtn.disabled = checked === 0;
-        els.backfillEnqueueBtn.textContent = checked ? `Queue ${checked} for next slot` : "Queue for next slot";
-        els.backfillSendNowBtn.textContent = checked ? `Send Email 1 now (${checked})` : "Send Email 1 now";
+        const checked = [...els.backfillBody.querySelectorAll("input[data-wo]:checked")];
+        const emailN = checked.filter((cb) => cb.dataset.emailEligible === "1").length;
+        const smsN = checked.filter((cb) => cb.dataset.smsEligible === "1").length;
+        els.backfillSendNowBtn.disabled = emailN === 0;
+        els.backfillEnqueueBtn.disabled = emailN === 0;
+        els.backfillSmsBtn.disabled = smsN === 0;
+        els.backfillSendNowBtn.textContent = emailN ? `Send Email 1 now (${emailN})` : "Send Email 1 now";
+        els.backfillEnqueueBtn.textContent = emailN ? `Queue ${emailN} for next slot` : "Queue for next slot";
+        els.backfillSmsBtn.textContent = smsN ? `Send text now (${smsN})` : "Send text now";
       }
 
       function renderBackfill(candidates) {
@@ -431,19 +467,26 @@
         for (const c of candidates) {
           const tr = document.createElement("tr");
           const settled = c.invoiceStatus === "sent" || c.invoiceStatus === "paid" || c.invoiceStatus === "none";
+          // Row is tickable if EITHER channel can act on it. Pre-checked
+          // only when the email ask is ready and the invoice is settled —
+          // the common case; SMS-only rows the operator ticks by hand.
+          const selectable = c.eligible || c.smsEligible;
           const checkedAttr = c.eligible && settled ? "checked" : "";
-          const disabledAttr = c.eligible ? "" : "disabled";
+          const disabledAttr = selectable ? "" : "disabled";
+          const phoneSub = c.phoneDisplay
+            ? `<span class="rr-sub">${escapeText(c.email || "no email")} · ☎ ${escapeText(c.phoneDisplay)}</span>`
+            : `<span class="rr-sub">${escapeText(c.email || "no email")} · no phone</span>`;
           tr.innerHTML = `
-            <td><input type="checkbox" data-wo="${escapeText(c.woId)}" ${checkedAttr} ${disabledAttr}></td>
+            <td><input type="checkbox" data-wo="${escapeText(c.woId)}" data-email-eligible="${c.eligible ? 1 : 0}" data-sms-eligible="${c.smsEligible ? 1 : 0}" ${checkedAttr} ${disabledAttr}></td>
             <td>
-              ${escapeText(c.customerName || c.email)}
-              <span class="rr-sub">${escapeText(c.email || "—")} · ${escapeText(c.service)} · ${escapeText(c.woId)}</span>
+              ${escapeText(c.customerName || c.email || c.phoneDisplay)}
+              ${phoneSub}
+              <span class="rr-sub">${escapeText(c.service)} · ${escapeText(c.woId)}</span>
             </td>
             <td>${fmtDate(c.completedAt)}</td>
             <td>${INVOICE_LABELS[c.invoiceStatus] || escapeText(c.invoiceStatus)}${c.invoiceSentAt ? `<span class="rr-sub">sent ${fmtDate(c.invoiceSentAt)}</span>` : ""}</td>
-            <td>${c.eligible
-              ? `<span class="rr-chip scheduled">ready</span>`
-              : `<span class="rr-chip suppressed">skip</span><span class="rr-sub">${escapeText(SKIP_LABELS[c.reason] || c.reason)}</span>`}</td>
+            <td>${channelCell(c.eligible, c.reason)}</td>
+            <td>${channelCell(c.smsEligible, c.smsReason)}</td>
           `;
           els.backfillBody.appendChild(tr);
         }
@@ -475,43 +518,55 @@
       });
       els.backfillBody.addEventListener("change", refreshEnqueueButton);
 
-      async function runBackfill(sendNow) {
-        const woIds = [...els.backfillBody.querySelectorAll("input[data-wo]:checked")].map((cb) => cb.dataset.wo);
+      // mode: "email-now" | "queue" | "sms". Each button submits only the
+      // checked rows valid for its channel.
+      async function runAction(mode, btn) {
+        const eligAttr = mode === "sms" ? "smsEligible" : "emailEligible";
+        const woIds = [...els.backfillBody.querySelectorAll("input[data-wo]:checked")]
+          .filter((cb) => cb.dataset[eligAttr] === "1")
+          .map((cb) => cb.dataset.wo);
         if (!woIds.length) return;
         const n = woIds.length;
-        const jobs = `${n} completed job${n === 1 ? "" : "s"}`;
-        const prompt = sendNow
-          ? `Send Email 1 right now to ${jobs}? Customers will receive it within moments.`
-          : `Queue review-request emails for ${jobs} on the next Tue–Thu 10:00 slot?`;
+        const jobs = `${n} customer${n === 1 ? "" : "s"}`;
+        const prompt = mode === "sms"
+          ? `Text a Google review link to ${jobs} now? They'll receive it within moments.`
+          : mode === "email-now"
+            ? `Send Email 1 right now to ${jobs}? They'll receive it within moments.`
+            : `Queue review-request emails for ${jobs} on the next Tue–Thu 10:00 slot?`;
         if (!confirm(prompt)) return;
-        els.backfillEnqueueBtn.disabled = true;
-        els.backfillSendNowBtn.disabled = true;
-        const activeBtn = sendNow ? els.backfillSendNowBtn : els.backfillEnqueueBtn;
-        const activeLabel = activeBtn.textContent;
-        activeBtn.textContent = sendNow ? "Sending…" : "Queuing…";
+        [els.backfillEnqueueBtn, els.backfillSendNowBtn, els.backfillSmsBtn].forEach((b) => { b.disabled = true; });
+        const activeLabel = btn.textContent;
+        btn.textContent = mode === "queue" ? "Queuing…" : "Sending…";
         try {
-          const res = await fetch("/api/review-requests/backfill", {
+          const url = mode === "sms" ? "/api/review-requests/backfill-sms" : "/api/review-requests/backfill";
+          const payload = mode === "sms" ? { woIds } : { woIds, sendNow: mode === "email-now" };
+          const res = await fetch(url, {
             method: "POST",
             headers: { "content-type": "application/json" },
-            body: JSON.stringify({ woIds, sendNow })
+            body: JSON.stringify(payload)
           });
           const body = await res.json();
           if (!res.ok || body.ok === false) throw new Error((body.errors && body.errors[0]) || "Couldn't process jobs.");
           const skipTail = body.skipped ? ` (${body.skipped} skipped)` : "";
-          flash(sendNow
-            ? `Sent Email 1 to ${body.sent} customer${body.sent === 1 ? "" : "s"}${skipTail}.`
-            : `Queued ${body.enqueued} job${body.enqueued === 1 ? "" : "s"}${skipTail}.`);
+          if (mode === "sms") {
+            flash(`Texted ${body.sent} customer${body.sent === 1 ? "" : "s"}${skipTail}.`);
+          } else if (mode === "email-now") {
+            flash(`Sent Email 1 to ${body.sent} customer${body.sent === 1 ? "" : "s"}${skipTail}.`);
+          } else {
+            flash(`Queued ${body.enqueued} job${body.enqueued === 1 ? "" : "s"}${skipTail}.`);
+          }
           els.backfillScanBtn.click();
           await load();
         } catch (err) {
           flash(err.message, true);
         } finally {
-          activeBtn.textContent = activeLabel;
+          btn.textContent = activeLabel;
           refreshEnqueueButton();
         }
       }
-      els.backfillEnqueueBtn.addEventListener("click", () => runBackfill(false));
-      els.backfillSendNowBtn.addEventListener("click", () => runBackfill(true));
+      els.backfillSendNowBtn.addEventListener("click", () => runAction("email-now", els.backfillSendNowBtn));
+      els.backfillEnqueueBtn.addEventListener("click", () => runAction("queue", els.backfillEnqueueBtn));
+      els.backfillSmsBtn.addEventListener("click", () => runAction("sms", els.backfillSmsBtn));
 
       els.rows.addEventListener("click", async (event) => {
         const btn = event.target.closest("[data-cancel]");
