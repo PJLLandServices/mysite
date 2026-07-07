@@ -1346,6 +1346,178 @@ img { max-width: 100%; height: auto; display: block; }
   gap: 6px;
 }
 
+/* ── Tiered homepage variant ──────────────────────────────────
+   Only the homepage runs the tiered priority-town cluster (Home turf /
+   York Region / Toronto). Everything here is scoped to grids preceded by
+   a __tier label — the flat blocks on sprinkler-systems.html and
+   landscape-lighting.html carry no __tier, so they render unchanged. */
+.service-areas-block__tier {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--green);
+  margin: 34px 0 14px;
+}
+.service-areas-block__tier:first-of-type { margin-top: 0; }
+
+/* Firm 3-up on the homepage tiers (base component stays auto-fit). */
+.service-areas-block__tier + .service-areas-block__grid {
+  grid-template-columns: repeat(3, 1fr);
+}
+
+/* Tile head: pin left, chip right. */
+.service-areas-block__tile-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+.service-areas-block__tile-head .service-areas-block__tile-pin { margin-bottom: 0; }
+
+/* Chips. Colour reinforces the text label, never carries meaning alone. */
+.service-areas-block__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  padding: 4px 10px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.service-areas-block__chip--sameday {
+  background: var(--amber-pale);
+  color: var(--amber-ink);
+}
+.service-areas-block__chip--sameday::before {
+  content: '';
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: var(--amber);
+}
+.service-areas-block__chip--priority {
+  background: var(--green-pale);
+  color: var(--green);
+}
+.service-areas-block__chip--toronto {
+  background: rgba(255,255,255,0.16);
+  color: #fff;
+}
+
+/* Tier 1 turf tiles — amber left edge marks the same-day core. */
+.service-areas-block__tile--turf { border-left: 3px solid var(--amber); }
+
+/* Tier 3 Toronto tile — full-width dark horizontal split. */
+.service-areas-block__tile--wide {
+  grid-column: 1 / -1;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  background: var(--green);
+  border-color: var(--green);
+}
+.service-areas-block__tile--wide:hover { border-color: var(--green-mid); }
+.service-areas-block__tile--wide .service-areas-block__tile-pin {
+  background: rgba(255,255,255,0.16);
+  color: #fff;
+}
+.service-areas-block__tile--wide h4 { color: #fff !important; }
+.service-areas-block__tile--wide p { color: rgba(255,255,255,0.78) !important; }
+.service-areas-block__tile--wide .service-areas-block__tile-arrow {
+  margin-top: 0;
+  padding-top: 0;
+  color: #fff;
+  white-space: nowrap;
+}
+
+/* Arrow slide on hover — scoped to the homepage tiled grids. */
+.service-areas-block__tier + .service-areas-block__grid .service-areas-block__tile-arrow span {
+  display: inline-block;
+  transition: transform 0.3s cubic-bezier(0.2,0.8,0.2,1);
+}
+.service-areas-block__tier + .service-areas-block__grid .service-areas-block__tile:hover .service-areas-block__tile-arrow span {
+  transform: translateX(4px);
+}
+
+/* Foot — coverage link + chip legend. */
+.service-areas-block__foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-top: 28px;
+  padding-top: 20px;
+  border-top: 1px solid var(--border);
+}
+.service-areas-block__foot-link {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--green);
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.service-areas-block__foot-link:hover { color: var(--green-mid); }
+.service-areas-block__legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.service-areas-block__legend li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--text-mid);
+}
+.service-areas-block__legend-swatch {
+  width: 12px; height: 12px;
+  border-radius: 4px;
+  flex: none;
+}
+.service-areas-block__legend-swatch--sameday { background: var(--amber); }
+.service-areas-block__legend-swatch--priority { background: var(--green-light); }
+
+/* Keyboard focus — visible on every tile and the foot link. */
+.service-areas-block__tile:focus-visible,
+.service-areas-block__foot-link:focus-visible {
+  outline: 2px solid var(--amber);
+  outline-offset: 2px;
+}
+
+@media (max-width: 860px) {
+  .service-areas-block__tier + .service-areas-block__grid { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 560px) {
+  .service-areas-block__tier + .service-areas-block__grid { grid-template-columns: 1fr; }
+  .service-areas-block__tile--wide {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 14px;
+  }
+  .service-areas-block__tile--wide .service-areas-block__tile-arrow { white-space: normal; }
+}
+
+/* Motion — honour reduced-motion: kill the lift and arrow slide. */
+@media (prefers-reduced-motion: reduce) {
+  .service-areas-block__tile { transition: none; }
+  .service-areas-block__tile:hover { transform: none; }
+  .service-areas-block__tier + .service-areas-block__grid .service-areas-block__tile-arrow span,
+  .service-areas-block__tier + .service-areas-block__grid .service-areas-block__tile:hover .service-areas-block__tile-arrow span {
+    transition: none;
+    transform: none;
+  }
+}
+
 /* ── Responsive ── */
 @media (max-width: 1024px) {
   .footer-grid { grid-template-columns: 1fr 1fr; }

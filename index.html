@@ -547,12 +547,6 @@
 .svc-link{font-size:14px;font-weight:700;color:var(--svc-accent,var(--green));display:inline-flex;align-items:center;gap:8px;letter-spacing:.02em;}
 .svc-arrow{display:inline-block;transition:transform .3s cubic-bezier(.2,.8,.2,1);}
 .svc:hover .svc-arrow{transform:translateX(6px);}
-/* Areas scroll */
-.areas-strip{background:var(--green-pale);padding:18px 0;overflow:hidden;}
-.areas-scroll{display:flex;animation:scrollAreas 28s linear infinite;white-space:nowrap;}
-.area-item{padding:0 28px;font-size:12px;font-weight:700;color:var(--green);letter-spacing:.1em;text-transform:uppercase;display:flex;align-items:center;gap:10px;}
-.area-item::after{content:'✦';font-size:7px;color:var(--amber);}
-@keyframes scrollAreas{from{transform:translateX(0);}to{transform:translateX(-50%);}}
 /* Stats */
 .stats-sec{padding:72px 0;background:var(--green);position:relative;overflow:hidden;}
 .stats-sec::before{content:'';position:absolute;top:-80px;right:-80px;width:400px;height:400px;background:rgba(255,255,255,0.04);border-radius:50%;}
@@ -2378,15 +2372,128 @@
   </div>
 </section>
 
-<!-- Areas scrolling -->
-<div class="areas-strip">
-  <div style="overflow:hidden;">
-    <div class="areas-scroll">
-      <span class="area-item">Toronto</span><span class="area-item">Brampton</span><span class="area-item">Mississauga</span><span class="area-item">Vaughan</span><span class="area-item">Woodbridge</span><span class="area-item">North York</span><span class="area-item">Oakville</span><span class="area-item">Newmarket</span><span class="area-item">Aurora</span><span class="area-item">Richmond Hill</span><span class="area-item">Barrie</span><span class="area-item">Bradford</span><span class="area-item">Innisfil</span><span class="area-item">Keswick</span><span class="area-item">East Gwillimbury</span>
-      <span class="area-item">Toronto</span><span class="area-item">Brampton</span><span class="area-item">Mississauga</span><span class="area-item">Vaughan</span><span class="area-item">Woodbridge</span><span class="area-item">North York</span><span class="area-item">Oakville</span><span class="area-item">Newmarket</span><span class="area-item">Aurora</span><span class="area-item">Richmond Hill</span><span class="area-item">Barrie</span><span class="area-item">Bradford</span><span class="area-item">Innisfil</span><span class="area-item">Keswick</span><span class="area-item">East Gwillimbury</span>
+<!-- Service areas — tiered priority-town link cluster -->
+<section class="service-areas-block">
+  <div class="container">
+    <div class="service-areas-block__head">
+      <span class="service-areas-block__eyebrow"><span aria-hidden="true">📍</span> Where we serve</span>
+      <h2>Serving York Region &amp; the Greater Toronto Area</h2>
+      <p>Newmarket-based, no franchise routing — the same crew on every job. Same-day repair across the York Region core, priority scheduling into Toronto and the wider GTA. Find your city for local neighbourhoods, soil notes, and an honest response time.</p>
+    </div>
+
+    <p class="service-areas-block__tier">Home turf · same-day repair</p>
+    <div class="service-areas-block__grid">
+      <a href="sprinkler-service-newmarket.html" class="service-areas-block__tile service-areas-block__tile--turf">
+        <span class="service-areas-block__tile-head">
+          <span class="service-areas-block__tile-pin" aria-hidden="true">📍</span>
+          <span class="service-areas-block__chip service-areas-block__chip--sameday">Same-day</span>
+        </span>
+        <h4>Newmarket</h4>
+        <p>Our home base. Stonehaven, Summerhill, Glenway, Copper Hills.</p>
+        <span class="service-areas-block__tile-arrow">View Newmarket area <span aria-hidden="true">→</span></span>
+      </a>
+      <a href="sprinkler-service-aurora.html" class="service-areas-block__tile service-areas-block__tile--turf">
+        <span class="service-areas-block__tile-head">
+          <span class="service-areas-block__tile-pin" aria-hidden="true">📍</span>
+          <span class="service-areas-block__chip service-areas-block__chip--sameday">Same-day</span>
+        </span>
+        <h4>Aurora</h4>
+        <p>Hills of St Andrew, Bayview Wellington, Aurora Highlands.</p>
+        <span class="service-areas-block__tile-arrow">View Aurora area <span aria-hidden="true">→</span></span>
+      </a>
+      <a href="sprinkler-service-king-city.html" class="service-areas-block__tile service-areas-block__tile--turf">
+        <span class="service-areas-block__tile-head">
+          <span class="service-areas-block__tile-pin" aria-hidden="true">📍</span>
+          <span class="service-areas-block__chip service-areas-block__chip--sameday">Same-day</span>
+        </span>
+        <h4>King City</h4>
+        <p>Estate &amp; acreage. King Heights, Nobleton-edge, rural lots.</p>
+        <span class="service-areas-block__tile-arrow">View King City area <span aria-hidden="true">→</span></span>
+      </a>
+    </div>
+
+    <p class="service-areas-block__tier">Across York Region</p>
+    <div class="service-areas-block__grid">
+      <a href="sprinkler-service-richmond-hill.html" class="service-areas-block__tile">
+        <span class="service-areas-block__tile-head">
+          <span class="service-areas-block__tile-pin" aria-hidden="true">📍</span>
+          <span class="service-areas-block__chip service-areas-block__chip--priority">Priority scheduling</span>
+        </span>
+        <h4>Richmond Hill</h4>
+        <p>Mill Pond, Oak Ridges Moraine, Bayview Hill, Jefferson.</p>
+        <span class="service-areas-block__tile-arrow">View Richmond Hill area <span aria-hidden="true">→</span></span>
+      </a>
+      <a href="sprinkler-service-markham.html" class="service-areas-block__tile">
+        <span class="service-areas-block__tile-head">
+          <span class="service-areas-block__tile-pin" aria-hidden="true">📍</span>
+          <span class="service-areas-block__chip service-areas-block__chip--priority">Priority scheduling</span>
+        </span>
+        <h4>Markham</h4>
+        <p>Unionville, Angus Glen, Cornell, Markham Village, Cathedraltown.</p>
+        <span class="service-areas-block__tile-arrow">View Markham area <span aria-hidden="true">→</span></span>
+      </a>
+      <a href="sprinkler-service-vaughan.html" class="service-areas-block__tile">
+        <span class="service-areas-block__tile-head">
+          <span class="service-areas-block__tile-pin" aria-hidden="true">📍</span>
+          <span class="service-areas-block__chip service-areas-block__chip--priority">Priority scheduling</span>
+        </span>
+        <h4>Vaughan</h4>
+        <p>Maple, Kleinburg, Thornhill, Woodbridge.</p>
+        <span class="service-areas-block__tile-arrow">View Vaughan area <span aria-hidden="true">→</span></span>
+      </a>
+      <a href="sprinkler-service-stouffville.html" class="service-areas-block__tile">
+        <span class="service-areas-block__tile-head">
+          <span class="service-areas-block__tile-pin" aria-hidden="true">📍</span>
+          <span class="service-areas-block__chip service-areas-block__chip--priority">Priority scheduling</span>
+        </span>
+        <h4>Stouffville</h4>
+        <p>Ballantrae, Bloomington, Vandorf, Bethesda.</p>
+        <span class="service-areas-block__tile-arrow">View Stouffville area <span aria-hidden="true">→</span></span>
+      </a>
+      <a href="sprinkler-service-east-gwillimbury.html" class="service-areas-block__tile">
+        <span class="service-areas-block__tile-head">
+          <span class="service-areas-block__tile-pin" aria-hidden="true">📍</span>
+          <span class="service-areas-block__chip service-areas-block__chip--priority">Priority scheduling</span>
+        </span>
+        <h4>East Gwillimbury</h4>
+        <p>Sharon, Holland Landing, Mount Albert, Queensville.</p>
+        <span class="service-areas-block__tile-arrow">View East Gwillimbury area <span aria-hidden="true">→</span></span>
+      </a>
+      <a href="sprinkler-service-thornhill.html" class="service-areas-block__tile">
+        <span class="service-areas-block__tile-head">
+          <span class="service-areas-block__tile-pin" aria-hidden="true">📍</span>
+          <span class="service-areas-block__chip service-areas-block__chip--priority">Priority scheduling</span>
+        </span>
+        <h4>Thornhill</h4>
+        <p>Old Thornhill, Royal Orchard, Thornhill Woods.</p>
+        <span class="service-areas-block__tile-arrow">View Thornhill area <span aria-hidden="true">→</span></span>
+      </a>
+    </div>
+
+    <p class="service-areas-block__tier">Into Toronto &amp; the GTA</p>
+    <div class="service-areas-block__grid">
+      <a href="sprinkler-service-toronto.html" class="service-areas-block__tile service-areas-block__tile--wide">
+        <span class="service-areas-block__wide-main">
+          <span class="service-areas-block__tile-head">
+            <span class="service-areas-block__tile-pin" aria-hidden="true">📍</span>
+            <span class="service-areas-block__chip service-areas-block__chip--toronto">Priority scheduling</span>
+          </span>
+          <h4>Toronto &amp; the GTA</h4>
+          <p>North York, Lawrence Park, Forest Hill and across the GTA core — dedicated pages for each.</p>
+        </span>
+        <span class="service-areas-block__tile-arrow">View Toronto coverage <span aria-hidden="true">→</span></span>
+      </a>
+    </div>
+
+    <div class="service-areas-block__foot">
+      <a href="coverage-map.html" class="service-areas-block__foot-link">See all coverage areas <span aria-hidden="true">→</span></a>
+      <ul class="service-areas-block__legend">
+        <li><span class="service-areas-block__legend-swatch service-areas-block__legend-swatch--sameday" aria-hidden="true"></span> Same-day repair — York Region core</li>
+        <li><span class="service-areas-block__legend-swatch service-areas-block__legend-swatch--priority" aria-hidden="true"></span> Priority scheduling — wider GTA</li>
+      </ul>
     </div>
   </div>
-</div>
+</section>
 
 <!-- CTA -->
 <section class="cta-sec">
