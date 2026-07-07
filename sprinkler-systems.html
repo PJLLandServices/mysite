@@ -588,7 +588,7 @@
   gap: 10px;
   margin-top: 4px;
 }
-.sprk-seasonal__actions .btn { flex: 0 1 auto; }
+.sprk-seasonal__actions .btn { flex: 1 1 auto; }
 @media (max-width: 480px) {
   .sprk-seasonal__actions { flex-direction: column; align-items: stretch; gap: 8px; }
   .sprk-seasonal__actions .btn {
@@ -1181,6 +1181,17 @@ a.sprk-comp:focus-visible {
   .install-deep-callout { grid-template-columns: 1fr; }
   .install-deep-callout__cta { justify-content: center; }
 }
+/* Shared banner CTA pill — unifies the water-cost, install-guide and repair-guide
+   callout pills to one size (min 232px), centred label, full-width on mobile. */
+.sprk-banner-cta {
+  display: inline-flex; align-items: center; justify-content: center; gap: 10px;
+  background: var(--amber); color: #fff; font-weight: 700; font-size: 15px;
+  padding: 14px 24px; border-radius: 99px; white-space: nowrap;
+  min-width: 232px; box-shadow: 0 8px 20px rgba(224,123,36,0.40);
+  transition: background 0.2s ease;
+}
+.sprk-banner-cta:hover { background: var(--amber-light); }
+@media (max-width: 720px) { .sprk-banner-cta { width: 100%; } }
 
 /* Property range grid (legacy, retained in case still used elsewhere) */
 .sprk-property-grid {
@@ -1923,7 +1934,7 @@ a.sprk-comp:focus-visible {
         <h3>Learn more about sprinkler repair.</h3>
         <p>Common failure modes, what we diagnose on-site, repair pricing, the 1-year repair guarantee and how the AI-intake bonus credits a correct diagnosis with 1 hour of repair labour free — all on the dedicated repair page.</p>
       </div>
-      <div class="install-deep-callout__cta">
+      <div class="install-deep-callout__cta sprk-banner-cta">
         <span>See the repair guide</span>
         <span aria-hidden="true">→</span>
       </div>
@@ -2076,7 +2087,7 @@ a.sprk-comp:focus-visible {
         <h3 style="font-family:'Barlow Condensed',sans-serif;color:#fff;text-shadow:none;font-size:clamp(20px,2.4vw,26px);text-transform:uppercase;letter-spacing:-0.01em;margin:0 0 6px;line-height:1.1;">Water Cost Calculator</h3>
         <p style="color:rgba(255,255,255,0.85);font-size:14px;margin:0;">See your real annual water bill across 20 GTA municipalities — and what a Hydrawise smart controller saves on top.</p>
       </div>
-      <span style="display:inline-flex;align-items:center;gap:8px;background:var(--amber);color:#fff;font-weight:600;padding:11px 20px;border-radius:8px;font-size:14px;">Run the numbers <span aria-hidden="true">→</span></span>
+      <span class="sprk-banner-cta">Run the numbers <span aria-hidden="true">→</span></span>
     </a>
 
     <!-- Planning an install? Deep-dive callout linking to dedicated installation page -->
@@ -2086,7 +2097,7 @@ a.sprk-comp:focus-visible {
         <h3>Read the full installation guide.</h3>
         <p>Planning-first design, contractor coordination, future-proofing, the 7-step install process and what separates a good install from a bad one — all on the dedicated installation page.</p>
       </div>
-      <div class="install-deep-callout__cta">
+      <div class="install-deep-callout__cta sprk-banner-cta">
         <span>See the installation guide</span>
         <span aria-hidden="true">→</span>
       </div>

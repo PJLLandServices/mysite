@@ -247,13 +247,20 @@ html[data-season-phase="pre-fall"] [data-season-card="fall"]{border-color:var(--
 .hw-features li{display:flex;gap:10px;align-items:flex-start;color:rgba(255,255,255,.92);font-size:14.5px;line-height:1.5;}
 .hw-features li b{color:#fff;}
 .hw-features .ic{flex:0 0 auto;width:26px;height:26px;border-radius:8px;background:rgba(255,255,255,.12);display:inline-flex;align-items:center;justify-content:center;font-size:14px;}
-.hw-tiers{display:flex;flex-wrap:wrap;gap:10px;margin:0 0 22px;}
+.hw-tiers{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:0 0 22px;}@media(max-width:480px){.hw-tiers{grid-template-columns:1fr;}}
 .hw-tier{background:rgba(255,255,255,.10);border:1px solid rgba(255,255,255,.22);border-radius:14px;padding:10px 16px;text-align:center;}
 .hw-tier small{display:block;color:rgba(255,255,255,.7);font-size:12px;letter-spacing:.04em;text-transform:uppercase;margin-bottom:2px;}
 .hw-tier strong{color:var(--amber-light);font-size:19px;}
 .hw-cred{display:inline-flex;align-items:center;gap:8px;color:rgba(255,255,255,.75);font-size:13px;margin-top:14px;}
 .hydrawise-band .season-actions .s-ghost{background:rgba(255,255,255,.08);border-color:rgba(255,255,255,.35);color:#fff;}
 .hydrawise-band .season-actions .s-ghost:hover{background:rgba(255,255,255,.16);}
+/* Hydrawise band actions: primary full-width, two ghosts in an even row beneath.
+   Scoped override of the global .cta-group/.season-actions layout for this band only. */
+.hydrawise-band .season-actions{flex-direction:column !important;align-items:stretch !important;gap:10px;}
+.hydrawise-band .season-actions>*{width:100% !important;max-width:none !important;flex:0 0 auto !important;}
+.hydrawise-band .season-actions .s-primary,.hydrawise-band .season-actions .s-ghost{justify-content:center;}
+.hydrawise-band .season-actions__ghosts{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
+@media(max-width:480px){.hydrawise-band .season-actions__ghosts{grid-template-columns:1fr;}}
 @media(max-width:860px){.hydrawise-band .hw-grid{grid-template-columns:1fr;}.hw-features{grid-template-columns:1fr;}}
 </style>
   <link rel="stylesheet" href="css/chat-widget.css">
@@ -522,8 +529,10 @@ html[data-season-phase="pre-fall"] [data-season-card="fall"]{border-color:var(--
       </div>
       <div class="season-actions">
         <a href="book.html?service=hydrawise_retrofit" class="s-primary">Book your upgrade <span aria-hidden="true">→</span></a>
-        <a href="sprinkler-hydrawise.html" class="s-ghost">Everything Hydrawise does</a>
-        <a href="water-cost-calculator.html" class="s-ghost">Estimate your water savings</a>
+        <div class="season-actions__ghosts">
+          <a href="sprinkler-hydrawise.html" class="s-ghost">Everything Hydrawise does</a>
+          <a href="water-cost-calculator.html" class="s-ghost">Estimate your water savings</a>
+        </div>
       </div>
       <span class="hw-cred">🎓 Hunter University trained · Authorized Hydrawise installer · All-in pricing, no surprise add-ons</span>
     </div>

@@ -391,6 +391,7 @@ img { max-width: 100%; height: auto; display: block; }
 .btn {
   display: inline-flex;
   align-items: center;
+  justify-content: center;   /* centres the label whenever the button is stretched full-width */
   gap: 8px;
   padding: 14px 32px;
   border-radius: 8px;
