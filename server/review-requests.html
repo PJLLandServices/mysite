@@ -200,13 +200,15 @@
             </table>
           </div>
           <div class="rr-actions">
-            <button type="button" class="pjl-btn pjl-btn-primary" id="backfillEnqueueBtn" disabled>Queue selected</button>
+            <button type="button" class="pjl-btn pjl-btn-primary" id="backfillSendNowBtn" disabled>Send Email 1 now</button>
+            <button type="button" class="pjl-btn pjl-btn-outline" id="backfillEnqueueBtn" disabled>Queue for next slot</button>
           </div>
           <p class="rr-note">
-            Checked jobs get the normal sequence — Email 1 lands on the next Tue–Thu 10:00 slot
-            (jobs completed under a week ago wait out the remainder of the 7 days first).
-            Unchecked-able rows show why they're skipped. Draft invoices start unchecked —
-            tick them yourself if the job is settled.
+            <strong>Send Email 1 now</strong> emails the checked customers right away (paced, a fraction of a
+            second apart) and schedules each reminder a week out. <strong>Queue for next slot</strong> instead
+            parks Email 1 for the next Tue–Thu 10:00 send. Either way the reminder, suppression, and
+            unsubscribe rules are identical. Unchecked-able rows show why they're skipped; draft invoices
+            start unchecked — tick them yourself if the job is settled.
           </p>
         </div>
         <div class="rr-empty" id="backfillEmpty" hidden>No completed work orders found in that window.</div>
@@ -257,7 +259,8 @@
         backfillEmpty: document.getElementById("backfillEmpty"),
         backfillBody: document.getElementById("backfillBody"),
         backfillAll: document.getElementById("backfillAll"),
-        backfillEnqueueBtn: document.getElementById("backfillEnqueueBtn")
+        backfillEnqueueBtn: document.getElementById("backfillEnqueueBtn"),
+        backfillSendNowBtn: document.getElementById("backfillSendNowBtn")
       };
 
       function flash(message, isError) {
@@ -416,7 +419,9 @@
       function refreshEnqueueButton() {
         const checked = els.backfillBody.querySelectorAll("input[data-wo]:checked").length;
         els.backfillEnqueueBtn.disabled = checked === 0;
-        els.backfillEnqueueBtn.textContent = checked ? `Queue ${checked} selected` : "Queue selected";
+        els.backfillSendNowBtn.disabled = checked === 0;
+        els.backfillEnqueueBtn.textContent = checked ? `Queue ${checked} for next slot` : "Queue for next slot";
+        els.backfillSendNowBtn.textContent = checked ? `Send Email 1 now (${checked})` : "Send Email 1 now";
       }
 
       function renderBackfill(candidates) {
@@ -470,27 +475,43 @@
       });
       els.backfillBody.addEventListener("change", refreshEnqueueButton);
 
-      els.backfillEnqueueBtn.addEventListener("click", async () => {
+      async function runBackfill(sendNow) {
         const woIds = [...els.backfillBody.querySelectorAll("input[data-wo]:checked")].map((cb) => cb.dataset.wo);
         if (!woIds.length) return;
-        if (!confirm(`Queue review-request emails for ${woIds.length} completed job${woIds.length === 1 ? "" : "s"}?`)) return;
+        const n = woIds.length;
+        const jobs = `${n} completed job${n === 1 ? "" : "s"}`;
+        const prompt = sendNow
+          ? `Send Email 1 right now to ${jobs}? Customers will receive it within moments.`
+          : `Queue review-request emails for ${jobs} on the next Tue–Thu 10:00 slot?`;
+        if (!confirm(prompt)) return;
         els.backfillEnqueueBtn.disabled = true;
+        els.backfillSendNowBtn.disabled = true;
+        const activeBtn = sendNow ? els.backfillSendNowBtn : els.backfillEnqueueBtn;
+        const activeLabel = activeBtn.textContent;
+        activeBtn.textContent = sendNow ? "Sending…" : "Queuing…";
         try {
           const res = await fetch("/api/review-requests/backfill", {
             method: "POST",
             headers: { "content-type": "application/json" },
-            body: JSON.stringify({ woIds })
+            body: JSON.stringify({ woIds, sendNow })
           });
           const body = await res.json();
-          if (!res.ok || body.ok === false) throw new Error((body.errors && body.errors[0]) || "Couldn't queue jobs.");
-          flash(`Queued ${body.enqueued} job${body.enqueued === 1 ? "" : "s"}${body.skipped ? ` (${body.skipped} skipped)` : ""}.`);
+          if (!res.ok || body.ok === false) throw new Error((body.errors && body.errors[0]) || "Couldn't process jobs.");
+          const skipTail = body.skipped ? ` (${body.skipped} skipped)` : "";
+          flash(sendNow
+            ? `Sent Email 1 to ${body.sent} customer${body.sent === 1 ? "" : "s"}${skipTail}.`
+            : `Queued ${body.enqueued} job${body.enqueued === 1 ? "" : "s"}${skipTail}.`);
           els.backfillScanBtn.click();
           await load();
         } catch (err) {
           flash(err.message, true);
+        } finally {
+          activeBtn.textContent = activeLabel;
           refreshEnqueueButton();
         }
-      });
+      }
+      els.backfillEnqueueBtn.addEventListener("click", () => runBackfill(false));
+      els.backfillSendNowBtn.addEventListener("click", () => runBackfill(true));
 
       els.rows.addEventListener("click", async (event) => {
         const btn = event.target.closest("[data-cancel]");

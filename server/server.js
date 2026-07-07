@@ -16015,7 +16015,11 @@ Customer signature captured at ${new Date().toISOString()}.`;
       const payload = await parseRequestBody(req);
       const woIds = Array.isArray(payload?.woIds) ? payload.woIds : [];
       if (!woIds.length) return sendJson(res, 400, { ok: false, errors: ["woIds is required."] });
-      const result = await reviewRequests.backfillEnqueue({ woIds, by: session?.uid || "admin" });
+      const result = await reviewRequests.backfillEnqueue({
+        woIds,
+        by: session?.uid || "admin",
+        sendNow: payload?.sendNow === true
+      });
       return sendJson(res, 200, { ok: true, ...result });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't enqueue work orders."] });

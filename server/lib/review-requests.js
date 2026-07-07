@@ -65,6 +65,12 @@ const MAX_OVERDUE_DAYS = 14;
 // Six-month cooldown between sequences for the same customer.
 const COOLDOWN_DAYS = 183;
 
+// Gap between messages in a manual "send now" batch — keeps a block of
+// Gmail sends from tripping rate/spam heuristics. Matches the seasonal
+// outreach engine's pacing; override with GMAIL_PACING_MS.
+const SEND_NOW_PACING_MS = Number(process.env.GMAIL_PACING_MS) || 150;
+function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
+
 // ---- Store (same flat-JSON + tmp-rename idiom as invoices.js) -------
 
 async function ensureFile() {
@@ -707,46 +713,86 @@ async function backfillCandidates({ sinceDays = 60 } = {}) {
   return { sinceDays: days, candidates };
 }
 
+// Send Email 1 right now for a freshly-created record and advance it to
+// reminder_scheduled. Same state transition as the sweep's email-1
+// branch, but bypasses the Tue–Thu slot because the operator explicitly
+// asked to send now. Returns { ok, reason }. A missing/failed send
+// leaves the record "scheduled" so the sweep still retries it later.
+async function deliverEmail1Now(record, settings) {
+  const result = await sendEmail(1, record, settings);
+  if (!result.ok) return { ok: false, reason: result.reason || "send_failed" };
+  const reminderDelayDays = Number.isFinite(Number(settings.reviewRequests?.reminderDelayDays))
+    ? Number(settings.reviewRequests.reminderDelayDays) : 7;
+  await updateRecord(record.id, (r) => {
+    r.email1.sentAt = new Date().toISOString();
+    r.email1.messageId = result.messageId || null;
+    const due2 = nextSendSlot(new Date(Date.now() + reminderDelayDays * 24 * 60 * 60 * 1000));
+    r.email2.dueAt = due2.toISOString();
+    r.status = "reminder_scheduled";
+    r.history.push(historyEntry("email1_sent", `Sent now (manual batch); reminder due ${due2.toISOString()}`));
+  });
+  console.log(`[review-requests] send-now email 1 for ${record.id} to ${record.email}`);
+  return { ok: true };
+}
+
 // Enqueue the explicitly-selected WO ids. Each one re-runs the full
 // scheduleForWo gate stack (so a double-submit or a same-customer pair
 // degrades to a skip, never a duplicate).
-async function backfillEnqueue({ woIds = [], by = "admin" } = {}) {
+//
+// sendNow=true fires Email 1 immediately (paced) instead of parking it
+// for the next send slot — the "send a block right now" path. The
+// reminder still schedules normally.
+async function backfillEnqueue({ woIds = [], by = "admin", sendNow = false } = {}) {
   const settingsLib = require("./settings");
   const settings = await settingsLib.get();
   if (settings.reviewRequests?.enabled !== true) {
     throw new Error("Turn the automation on first — backfilled sequences would never send while it's off.");
   }
+  if (sendNow && !getTransporter()) {
+    throw new Error("Gmail isn't configured (GMAIL_USER / GMAIL_APP_PASSWORD) — can't send now.");
+  }
   const workOrders = require("./work-orders");
   const results = [];
+  let firstSend = true;
   for (const rawId of woIds.slice(0, 200)) {
     const woId = String(rawId || "");
     try {
       const wo = await workOrders.get(woId);
-      if (!wo) { results.push({ woId, scheduled: false, reason: "wo_not_found" }); continue; }
-      if (wo.status !== "completed") { results.push({ woId, scheduled: false, reason: "not_completed" }); continue; }
+      if (!wo) { results.push({ woId, scheduled: false, sent: false, reason: "wo_not_found" }); continue; }
+      if (wo.status !== "completed") { results.push({ woId, scheduled: false, sent: false, reason: "not_completed" }); continue; }
       const r = await scheduleForWo(wo, { anchorAt: woCompletedAt(wo), source: "backfill" });
-      results.push({
+      const entry = {
         woId,
         scheduled: r.scheduled === true,
+        sent: false,
         reason: r.scheduled ? null : r.reason,
         recordId: r.record?.id || null,
         email1DueAt: r.record?.email1?.dueAt || null
-      });
+      };
       if (r.scheduled) {
         try {
           await workOrders.appendHistory(woId, {
             action: "review_request_scheduled",
             by,
-            note: `${r.record.id} — backfill; email 1 due ${r.record.email1.dueAt}`
+            note: `${r.record.id} — backfill${sendNow ? " (send now)" : ""}; email 1 due ${r.record.email1.dueAt}`
           });
         } catch { /* history is best-effort */ }
+        if (sendNow) {
+          if (!firstSend) await sleep(SEND_NOW_PACING_MS);
+          firstSend = false;
+          const del = await deliverEmail1Now(r.record, settings);
+          entry.sent = del.ok;
+          if (!del.ok) entry.reason = del.reason;
+        }
       }
+      results.push(entry);
     } catch (err) {
-      results.push({ woId, scheduled: false, reason: err?.message || "enqueue_failed" });
+      results.push({ woId, scheduled: false, sent: false, reason: err?.message || "enqueue_failed" });
     }
   }
   return {
     enqueued: results.filter((r) => r.scheduled).length,
+    sent: results.filter((r) => r.sent).length,
     skipped: results.filter((r) => !r.scheduled).length,
     results
   };
