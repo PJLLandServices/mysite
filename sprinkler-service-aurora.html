@@ -213,7 +213,7 @@ html[data-season-phase="pre-fall"] .season-spot--fall{display:grid;}
 .season-actions .s-ghost:hover{background:var(--green-pale);}
 /* Seasonal-spotlight actions: two balanced, equal-width buttons filling the column
    (overrides the global .cta-group left-packed natural widths for this section). */
-@media(min-width:768px){.season-spot .season-actions>*{flex:1 1 0 !important;max-width:none !important;width:auto !important;justify-content:center;}}
+@media(min-width:768px){.season-spot .season-actions>*{flex:1 1 auto !important;max-width:none !important;width:auto !important;justify-content:center;}}
 /* Year-round mini-grid — always visible (SEO), current season badged NOW */
 .season-track{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:36px;}
 .season-chip{position:relative;display:block;border-radius:var(--r-lg);overflow:hidden;height:150px;text-decoration:none;border:2px solid transparent;transition:transform .2s,border-color .2s;}
