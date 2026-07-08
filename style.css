@@ -505,6 +505,13 @@ img { max-width: 100%; height: auto; display: block; }
     flex: 0 1 auto;   /* natural, proportional widths on desktop */
   }
 }
+/* CTA strip: the actions cluster is meant to sit BESIDE the copy — its parent
+   .cta-strip-inner is justify-content:space-between. Keep it hugging its own
+   width on desktop so the alias's width:100% doesn't stretch it full-width and
+   float the buttons far to the left. Mobile keeps the stacked full-width CTAs. */
+@media (min-width: 768px) {
+  .cta-strip-inner .cta-strip-actions { width: auto; flex: 0 1 auto; }
+}
 /* Trust tagline (e.g. the Hunter-University badge) sits BELOW a CTA
    group as a centred, full-width line — never split into columns. */
 .hw-cred {
