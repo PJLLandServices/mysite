@@ -393,7 +393,21 @@
 // any STATIC_ASSETS change.) Same commit also ports Option A to the desktop
 // work-order page (work-order.{js,html} — not in STATIC_ASSETS, served
 // network-fresh, so no cache concern there).
-const CACHE_VERSION = "pjl-tech-v48";
+// Bumped 2026-07-09 (v48 → v49): field-input protection (diagnosis-tech-
+// mode-wo-reload-dataloss brief). Resync/echo repaints no longer touch a
+// field the tech is typing or dictating into:
+//   • reloadStateFromServer gains an isTechEditing() guard — defers the
+//     repaint while a text field is focused / dictation is live / a notes
+//     debounce is pending, and adopts the server's updatedAt so the next
+//     save doesn't 409 into the "Reload now" conflict nag.
+//   • patchWorkOrder's zones-echo no longer rebuilds the issue rows while
+//     the tech is editing one (the rebuild was replacing the focused input
+//     and detaching the live SpeechRecognition target — dictated words
+//     silently vanished).
+//   • voice-input.js exposes window.PJLVoice (isActive/activeField) +
+//     fires "pjl-voice-end" so deferred resyncs drain on dictation end.
+// Touches work-order-tech.js + voice-input.js (both in STATIC_ASSETS).
+const CACHE_VERSION = "pjl-tech-v49";
 const STATIC_ASSETS = [
   "/crm/work-order-tech.html",
   "/crm/work-order-tech.js",

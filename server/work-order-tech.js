@@ -918,6 +918,31 @@ function hideSaving(err) {
 //      PATCHes from 409'ing on a stale state.updatedAt.
 let pendingResync = false;
 
+// INVARIANT (diagnosis-tech-mode-wo-reload-dataloss brief, Jul 2026):
+// the human at the keyboard wins over a background server echo. No
+// resync/repaint path may overwrite an input value or replace a DOM
+// subtree while the tech is typing or dictating into it. Any refresh
+// that would touch an in-use field must defer (pendingResync) until
+// blur + dictation-idle. A blind full-form re-hydrate reintroduces the
+// field-data-loss bug — don't add one.
+//
+// "Editing" = a text-entry element holds focus, a voice-input dictation
+// session is live, or a notes debounce is still pending (typed text that
+// hasn't flushed to state yet).
+const NON_TEXT_INPUT_TYPES = new Set(["checkbox", "radio", "button", "submit", "reset", "file", "range", "color", "hidden"]);
+function isTechEditing() {
+  const el = document.activeElement;
+  const focusedTextEntry = !!el && (
+    el.tagName === "TEXTAREA" ||
+    el.tagName === "SELECT" ||
+    (el.tagName === "INPUT" && !NON_TEXT_INPUT_TYPES.has((el.type || "text").toLowerCase())) ||
+    el.isContentEditable === true
+  );
+  const dictating = !!(window.PJLVoice && window.PJLVoice.isActive && window.PJLVoice.isActive());
+  const pendingFlush = !!(state.notesTimer || state.customerNotesTimer || state.issueInputTimer || state.zoneNotesTimer);
+  return focusedTextEntry || dictating || pendingFlush;
+}
+
 // Wait for `inflight` to drop to 0, capped at maxMs. Resolves either way
 // — if the cap hits, we proceed anyway (the still-pending PATCH will
 // finish in the background; if it fails the offline queue catches it).
@@ -1014,7 +1039,12 @@ function populateStateFromWO(wo) {
 // Network failure → bail silently; the page keeps its current state and
 // the next drain or patchWorkOrder gate will retry. No alert — the tech
 // shouldn't be interrupted by sync errors.
-async function reloadStateFromServer() {
+//
+// `force: true` skips the version gate. Needed when draining a resync
+// that was deferred while the tech was editing: the editing branch below
+// adopts the server's updatedAt (to keep If-Match fresh), so by drain
+// time the versions match even though the DOM was never repainted.
+async function reloadStateFromServer({ force = false } = {}) {
   if (!state.id) return;
   let wo;
   try {
@@ -1027,6 +1057,29 @@ async function reloadStateFromServer() {
     console.warn("[resync] fetch failed:", err?.message);
     return;
   }
+  const versionMatches = !!(wo.updatedAt && state.updatedAt && wo.updatedAt === state.updatedAt);
+  // Editing guard (Jul 2026 data-loss fix — see the invariant comment at
+  // isTechEditing). Repainting now would overwrite the field the tech is
+  // typing/dictating into with the server's older value, and replacing
+  // its node kills the live SpeechRecognition session. Two moves instead:
+  //   1. Adopt the server's updatedAt. The drain that got us here was
+  //      (almost always) our own queued writes replaying — the DOM is
+  //      already ahead of or equal to the server. Without the adoption,
+  //      the tech's next save carries a stale If-Match → 409 → the
+  //      "Reload now" conflict nag → tap → reload → field wiped. That
+  //      nag loop was the "constantly pushes for updates" symptom.
+  //      Trade-off consciously accepted: a genuinely concurrent co-tech
+  //      edit in this exact window would be overwritten silently instead
+  //      of 409ing — same trade-off the offline queue already makes by
+  //      stripping If-Match on replay (techs don't share WOs in practice).
+  //   2. Defer the actual repaint to pendingResync; the focusout /
+  //      voice-end idle drain (or closeZoneSheet / next patchWorkOrder)
+  //      runs it with force:true once the tech is idle.
+  if (isTechEditing()) {
+    if (wo.updatedAt) state.updatedAt = wo.updatedAt;
+    if (!versionMatches) pendingResync = true;
+    return;
+  }
   // Version gate (May 22 — fix #2 for the de704fb drain regression).
   // If the server hasn't advanced past our local state, the resync would
   // re-render every main-screen surface for no reason. That's the
@@ -1036,7 +1089,7 @@ async function reloadStateFromServer() {
   // version match short-circuits all of them. The `state.updatedAt &&`
   // guard is load-bearing: during init() the field can be null and we
   // genuinely need to populate state, so we fall through.
-  if (wo.updatedAt && state.updatedAt && wo.updatedAt === state.updatedAt) {
+  if (!force && versionMatches) {
     return;
   }
   // Inflight-at-completion guard. The fetch above took a few hundred ms;
@@ -1050,10 +1103,16 @@ async function reloadStateFromServer() {
     return;
   }
   populateStateFromWO(wo);
-  // Sync the customer-notes textarea (init() does this too at the same
-  // moment in its flow — see right after populateStateFromWO in init).
-  if (techCustomerNotes) techCustomerNotes.value = state.customerNotes;
-  if (techNotes) techNotes.value = state.techNotes;
+  // Sync the notes textareas (init() does this too at the same moment in
+  // its flow — see right after populateStateFromWO in init). Belt-and-
+  // suspenders per-field guard: isTechEditing() already deferred when a
+  // field was focused/dirty, but never overwrite a textarea that is
+  // focused or mid-dictation even if a future code path gets here.
+  const safeToWrite = (el) =>
+    el && document.activeElement !== el &&
+    !(window.PJLVoice && window.PJLVoice.activeField && window.PJLVoice.activeField() === el);
+  if (safeToWrite(techCustomerNotes)) techCustomerNotes.value = state.customerNotes;
+  if (safeToWrite(techNotes)) techNotes.value = state.techNotes;
   techMeta.textContent = `Updated ${formatDateTime(wo.updatedAt)}`;
   // Re-render every main-screen surface that reads from state. Mirror
   // the bottom half of init() — skip ones bound to per-page bootstrap
@@ -1088,7 +1147,11 @@ async function patchWorkOrder(payload) {
   // and closeZoneSheet() will run the resync on Done instead.
   if (pendingResync && state.activeZoneIndex < 0) {
     pendingResync = false;
-    await reloadStateFromServer();
+    // force: the deferred-while-editing branch adopted updatedAt, so the
+    // version gate would otherwise short-circuit this drain. If the tech
+    // is STILL editing, reloadStateFromServer re-defers and this PATCH
+    // proceeds on the already-adopted version — no 409.
+    await reloadStateFromServer({ force: true });
   }
   showSaving();
   try {
@@ -1128,7 +1191,19 @@ async function patchWorkOrder(payload) {
         // Readiness §4 — "create an issue, new issue appears in the
         // zone's issue list immediately, no page reload."
         if (typeof renderZones === "function") renderZones();
-        if (state.activeZoneIndex >= 0 && typeof renderSheetIssues === "function") {
+        // Skip the issue-row rebuild while the tech is typing or
+        // dictating into one of those rows (Jul 2026 data-loss fix).
+        // renderSheetIssues() does innerHTML="" + rebuild, which
+        // replaces the focused input mid-edit: keyboard closes, and an
+        // active dictation session keeps writing into the detached node
+        // — the words silently vanish. This echo repaint adds nothing
+        // for a row edit (the DOM already shows what we just sent);
+        // structural changes (add/remove/type change) re-render through
+        // their own handlers with focus outside the rows.
+        const voiceField = window.PJLVoice && window.PJLVoice.activeField ? window.PJLVoice.activeField() : null;
+        const editingIssueRow = sheetIssues &&
+          (sheetIssues.contains(document.activeElement) || (voiceField && sheetIssues.contains(voiceField)));
+        if (state.activeZoneIndex >= 0 && typeof renderSheetIssues === "function" && !editingIssueRow) {
           const liveZone = state.zones[state.activeZoneIndex];
           if (liveZone) renderSheetIssues(liveZone);
         }
@@ -1863,7 +1938,7 @@ async function closeZoneSheet() {
   // main-screen card preview behind it is already up to date.
   if (pendingResync) {
     pendingResync = false;
-    await reloadStateFromServer();
+    await reloadStateFromServer({ force: true });
   }
   techSheet.hidden = true;
   document.body.classList.remove("tech-sheet-open");
@@ -2036,7 +2111,13 @@ sheetIssues.addEventListener("input", (event) => {
       event.target.classList.contains("tech-zone-issue-notes")) {
     if (state.issueInputTimer) clearTimeout(state.issueInputTimer);
     const card = event.target.closest("[data-issue-id]");
-    state.issueInputTimer = setTimeout(() => flushIssueRow(card), 800);
+    // Null the handle when the debounce fires — isTechEditing() reads it
+    // as "typed text not yet flushed"; a stale fired-timer id would pin
+    // the editing guard on and defer resyncs forever.
+    state.issueInputTimer = setTimeout(() => {
+      state.issueInputTimer = null;
+      flushIssueRow(card);
+    }, 800);
   }
 });
 
@@ -5889,6 +5970,30 @@ if (window.PJLOffline) {
     reloadStateFromServer().catch((err) => console.warn("[resync] failed:", err?.message));
   });
 }
+
+// Idle drain for resyncs deferred while the tech was editing (Jul 2026
+// data-loss fix). closeZoneSheet and patchWorkOrder already drain
+// pendingResync on their own paths; this covers the remaining case —
+// a drain arrived mid-typing/mid-dictation on the main screen and the
+// tech then simply stopped (blurred the field / ended dictation) without
+// another save. The 250ms settle delay lets focus hop between fields
+// (blur→focus on the next input) without a repaint firing in the gap.
+(function wireIdleResyncDrain() {
+  let settleTimer = null;
+  function maybeDrain() {
+    if (settleTimer) clearTimeout(settleTimer);
+    settleTimer = setTimeout(() => {
+      settleTimer = null;
+      if (!pendingResync) return;
+      if (state.activeZoneIndex >= 0 || inflight > 0) return;
+      if (isTechEditing()) return;
+      pendingResync = false;
+      reloadStateFromServer({ force: true }).catch((err) => console.warn("[resync] idle drain failed:", err?.message));
+    }, 250);
+  }
+  document.addEventListener("focusout", maybeDrain);
+  document.addEventListener("pjl-voice-end", maybeDrain);
+})();
 
 // Patch the global fetch wrapper used by patchWorkOrder so writes get
 // queued offline. Only intercept the WO PATCH path — other endpoints

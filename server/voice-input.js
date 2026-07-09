@@ -22,6 +22,16 @@
   let activeBtn = null;
   let appendStart = 0;
 
+  // Page-level guard API. Resync/re-render code must not repaint a field
+  // (or a subtree containing it) while a dictation session is writing
+  // into it — replacing the node detaches it and the recognizer's output
+  // silently vanishes. `pjl-voice-end` fires on document when a session
+  // ends so deferred repaints know when it's safe to run.
+  window.PJLVoice = {
+    isActive: () => !!activeRec,
+    activeField: () => activeField
+  };
+
   function attachMic(field) {
     if (!field || field.dataset.voiceWired === "1") return;
     field.dataset.voiceWired = "1";
@@ -109,6 +119,9 @@
         activeRec = null;
         activeField = null;
         activeBtn = null;
+        // Let deferred repaints (offline-queue resync etc.) know the
+        // session is over and the field is safe to touch again.
+        document.dispatchEvent(new CustomEvent("pjl-voice-end"));
       }
     };
 
