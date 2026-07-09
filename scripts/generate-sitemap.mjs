@@ -191,12 +191,32 @@ function main() {
   const current = fs.existsSync(SITEMAP_PATH) ? fs.readFileSync(SITEMAP_PATH, 'utf8') : null;
 
   if (CHECK) {
-    if (xml !== current) {
-      console.error('generate-sitemap: FAIL — sitemap.xml is stale. Run `node scripts/generate-sitemap.mjs`.');
-      process.exit(1);
+    if (xml === current) {
+      console.log(`generate-sitemap: check OK — ${count} URLs, sitemap.xml up to date.`);
+      return;
     }
-    console.log(`generate-sitemap: check OK — ${count} URLs, sitemap.xml up to date.`);
-    return;
+    // A page's <lastmod> is derived from its last git-commit date, so the very
+    // commit that edits a page can never also ship a sitemap.xml carrying that
+    // same commit's date — the date does not exist until the commit is made.
+    // That made this gate fail on essentially every content commit and forced a
+    // throwaway "refresh sitemap" follow-up commit to turn CI green. In --check
+    // we therefore ignore lastmod-only drift (purely cosmetic; regenerated on
+    // the next `npm run build`) and fail ONLY on structural drift: a changed URL
+    // set or changed <changefreq>/<priority>/<image:image> SEO metadata.
+    const stripLastmod = (s) =>
+      s == null ? s : s.replace(/<lastmod>[^<]*<\/lastmod>/g, '<lastmod/>');
+    if (stripLastmod(xml) === stripLastmod(current)) {
+      console.log(
+        `generate-sitemap: check OK — ${count} URLs (lastmod timestamps differ; ` +
+        `refreshed automatically on the next build).`
+      );
+      return;
+    }
+    console.error(
+      'generate-sitemap: FAIL — sitemap.xml is structurally stale (URL set or SEO ' +
+      'metadata changed). Run `node scripts/generate-sitemap.mjs`.'
+    );
+    process.exit(1);
   }
 
   if (xml === current) {
