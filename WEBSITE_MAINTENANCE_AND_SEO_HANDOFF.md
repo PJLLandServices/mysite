@@ -622,10 +622,9 @@ server/
 ├── admin.js               ← CRM dashboard JS — fetches leads, renders cards,
 │                            handles filters, saves edits via PATCH /api/quotes/:id.
 ├── crm.css                ← CRM-only styling.
-├── login.html / .js / .css ← The /login page (admin/tech email + password).
+├── login.html / .js / .css ← The unified /login door (staff email + password
+│                            AND customer magic-link requests; /portal/login 301s here).
 ├── users.html / .js       ← Admin-only /admin/users page (account CRUD).
-├── customer-login.html / .js
-│                          ← Customer self-serve /portal/login magic-link request.
 ├── reset-password.html / .js
 │                          ← Admin/tech password-reset landing page (magic-token-gated).
 ├── portal.html / .js      ← Customer-facing /portal/<token> page.
@@ -664,10 +663,10 @@ Plus, at the **repo root**:
 | `/sprinkler-systems.html`, `/contact.html`, etc. | The corresponding HTML file from the repo root | Public |
 | `/style.css`, `/logo.svg`, `/images/...` | Public site assets from the repo root | Public |
 | `/api/quotes` (POST) | Lead intake (creates a lead, fires notifications) | Public |
-| `/login` | CRM login page (email + password) | Public |
+| `/login` | Unified sign-in door — staff email + password, customers email-only (magic link) | Public |
 | `/admin` | CRM dashboard | **CRM session (admin or tech) required** |
 | `/admin/users` | Per-user account management | **CRM session, role=admin only** |
-| `/portal/login` | Customer self-serve magic-link request page | Public |
+| `/portal/login` | 301 → `/login` (page retired Jul 2026) | Public |
 | `/api/portal/request-link` (POST) | Customer asks for an emailed login link | Public, rate-limited (3/hour per identifier, 10/hour per IP) |
 | `/api/portal/login/verify?t=<mt_id>` | Magic-link click target — sets customer cookie + redirects to `/portal/<token>` | Public (token IS the auth) |
 | `/reset-password?t=<mt_id>` | Admin/tech password-reset landing page | Public (token IS the auth) |

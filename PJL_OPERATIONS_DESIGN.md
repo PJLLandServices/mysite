@@ -789,7 +789,7 @@ WORK ORDER FOLDER
 10. **Voice-to-text on every text field** (tech speed).
 11. **Camera shortcuts in every photo field.**
 12. **Offline mode mandatory.** Captured locally, synced when service returns.
-13. **Auto-save every change.** Resume where left off.
+13. **Auto-save every change.** Resume where left off. **Field-dirty guard (Jul 2026):** the human editing a field wins over a background server echo — no resync, queue-drain reconcile, or save-response repaint may overwrite an input value (or replace its DOM node) while that field is focused, a dictation session is live, or a debounced save is pending. Saves debounce to a short pause / blur, not per-keystroke. Deferred repaints run at blur + dictation-idle. This is an invariant: a future "simplification" that re-hydrates the whole form from a GET reintroduces the field-data-loss bug.
 14. **Walk-out checklist** before "Complete": signature captured? all zones marked? next-visit flags?
 15. **Customer notes are required at signature.** `wo.customerNotes` must be non-empty before the signature submit unlocks. Pre-sign gate blocks (both client and server enforce). Scope-protected at signature — the customer's frozen Service Report copy can't be amended after sign-off. `techNotes` remains separate (admin-only, unlocked).
 
@@ -983,10 +983,37 @@ in the CRM). Sessions last 30 days rolling. Add an account via
 **Customers** — `customer` is *not* a discrete entity; the customer
 record IS the lead record in `leads.json`. The permanent
 `/portal/<token>` URL stays valid (token derived from the lead ID); the
-new magic-link flow at `/portal/login` lets the customer request a
-fresh emailed link if they lost the original. Magic-link verify sets a
+magic-link flow — now on the unified `/login` door (see below;
+`/portal/login` 301s there) — lets the customer request a fresh emailed
+link if they lost the original. Magic-link verify sets a
 `uid: "customer:<leadId>"` session cookie (30 day rolling) and redirects
 to the same permanent portal URL.
+
+**Unified login door (Jul 2026 — accepted deviation, decision owner
+Patrick).** `/login` is the single human-facing sign-in URL for BOTH
+staff and customers: one form (email + optional password, button "Login
+Now"). `POST /api/login` decides server-side, password-first:
+1. Email + non-blank password matches a `users.json` staff account →
+   staff session, redirect to `/admin` (honours `?next=`).
+2. **Every other outcome** — blank password, wrong password, disabled
+   account, unknown email, valid customer email — reuses the
+   `request-link` internals (`requestPortalMagicLink`, not a fork) and
+   returns one generic 200 "If an account exists, check your email for
+   a sign-in link." Byte-identical across branches.
+Precedence when an email is both a staff account and a customer lead:
+password present → staff attempt; blank → customer link.
+**Why this shape (the logged trade-off):** an identifier-first flow
+(type email → page reveals password vs magic-link) needs an identity
+probe that leaks staff-vs-customer status and reopens the
+timing-enumeration channel this design deliberately closed. The two
+auth *mechanisms* stay separate; only the *pages* merged. Do NOT
+"simplify" this into a lookup-then-branch flow — that reintroduces the
+enumeration leak. Both rate limiters apply independently and before any
+lookup (staff attempts: `/api/login` 10/IP/15min; magic-link fallback:
+3/hr/identifier + 10/hr/IP). A staff member who submits a blank
+password gets the generic "check your email" (no email arrives unless
+they're also a lead) — acceptable; the password field carries a
+"Staff only" cue.
 
 **Cookie shape.** All sessions carry `{uid, role, exp}` JSON HMAC-signed
 with the secret in `auth.json`. Tampering → 401. Roles: `admin`, `tech`,

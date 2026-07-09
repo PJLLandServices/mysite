@@ -157,6 +157,15 @@ h1 {
   cursor: wait;
 }
 
+/* Helper line under an input (e.g. "Staff only — customers can leave
+   this blank"). Distinct from `.login-form span`, which styles the
+   uppercase field labels. */
+.login-hint {
+  color: rgba(255,255,255,0.55);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
 .login-error {
   margin: 0;
   padding: 11px 12px;

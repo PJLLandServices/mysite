@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#0F1F14">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <title>PJL CRM Login</title>
+  <title>Sign in — PJL Land Services</title>
   <link rel="icon" type="image/png" href="/favicon-96x96.png?v=20260518" sizes="96x96" />
   <link rel="icon" type="image/svg+xml" href="/favicon.svg?v=20260518" />
   <link rel="shortcut icon" href="/favicon.ico?v=20260518" />
@@ -22,9 +22,9 @@
   <main class="login-shell">
     <section class="login-panel">
       <a href="/" class="login-logo"><img src="/crm/pjl-logo.svg" alt="PJL Land Services"></a>
-      <p class="login-eyebrow">Private CRM Access</p>
-      <h1>Sign in to the PJL lead center.</h1>
-      <p class="login-copy">Per-user accounts for PJL admins and technicians. Customers — go to <a href="/portal/login" style="color:#F59B4A;">your portal sign-in</a>.</p>
+      <p class="login-eyebrow">Account Sign-in</p>
+      <h1>Sign in to PJL Land Services.</h1>
+      <p class="login-copy">Customer? Enter your email and we'll send you a sign-in link. Staff sign in with email and password.</p>
 
       <form id="loginForm" class="login-form">
         <label>
@@ -33,11 +33,18 @@
         </label>
         <label>
           <span>Password</span>
-          <input type="password" name="password" autocomplete="current-password" required>
+          <input type="password" name="password" autocomplete="current-password">
+          <small class="login-hint">Staff only — customers can leave this blank.</small>
         </label>
         <p id="loginError" class="login-error" hidden></p>
-        <button type="submit">Unlock CRM <span aria-hidden="true">&rarr;</span></button>
+        <button type="submit">Login Now</button>
       </form>
+
+      <div id="loginMagicConfirm" class="login-copy" hidden style="margin-top: 28px; padding:18px 20px; border-radius:14px; background:rgba(255,255,255,0.06); border:1px solid rgba(255,255,255,0.18); color:#fff;">
+        <p style="margin:0 0 12px;"><strong>If an account exists, check your email for a sign-in link.</strong></p>
+        <p style="margin:0 0 8px;">Please check your inbox (and spam folder). The link is valid for 30 minutes.</p>
+        <p style="margin:0;">Staff: use your email and password. If you don't receive an email within a few minutes, call us at <a href="tel:+19059600181" style="color:#F59B4A;">(905) 960-0181</a>.</p>
+      </div>
     </section>
   </main>
 
