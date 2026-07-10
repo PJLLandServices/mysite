@@ -1,0 +1,27 @@
+{
+  "_doc": "Municipal water rates for the Sprinkler System Builder (sitebuilder.html). combinedRate = water + sewer, $ per cubic metre (m3) — the all-in volumetric rate an irrigation system pays on a standard residential meter (no deduct meter). Derived from the MUNICIPAL_RATES table inline in water-cost-calculator.html — that page keeps its own copy; update BOTH when a municipality changes rates. verified:false entries are estimates pending a bill/bylaw check. Gallon convention: irrigation GPM figures are US gallons (1 US gal = 0.00378541 m3).",
+  "unit": "m3",
+  "gallons": "US",
+  "towns": [
+    { "key": "newmarket",              "name": "Newmarket",               "region": "York Region",     "combinedRate": 5.04, "verified": true,  "effective": "2026" },
+    { "key": "aurora",                 "name": "Aurora",                  "region": "York Region",     "combinedRate": 5.80, "verified": true,  "effective": "May 2025" },
+    { "key": "east_gwillimbury",       "name": "East Gwillimbury",        "region": "York Region",     "combinedRate": 5.03, "verified": true,  "effective": "2026" },
+    { "key": "richmond_hill",          "name": "Richmond Hill",           "region": "York Region",     "combinedRate": 5.96, "verified": true,  "effective": "Apr 2026" },
+    { "key": "markham",                "name": "Markham",                 "region": "York Region",     "combinedRate": 5.37, "verified": true,  "effective": "Apr 2026" },
+    { "key": "vaughan",                "name": "Vaughan",                 "region": "York Region",     "combinedRate": 5.30, "verified": false, "effective": "2025 est" },
+    { "key": "thornhill",              "name": "Thornhill",               "region": "York Region",     "combinedRate": 5.30, "verified": false, "effective": "2025 est" },
+    { "key": "king",                   "name": "King Township",           "region": "York Region",     "combinedRate": 5.20, "verified": false, "effective": "2025 est" },
+    { "key": "whitchurch_stouffville", "name": "Whitchurch-Stouffville",  "region": "York Region",     "combinedRate": 5.20, "verified": false, "effective": "2025 est" },
+    { "key": "georgina",               "name": "Georgina (Keswick)",      "region": "York Region",     "combinedRate": 5.20, "verified": false, "effective": "2025 est" },
+    { "key": "toronto",                "name": "Toronto",                 "region": "City of Toronto", "combinedRate": 4.86, "verified": true,  "effective": "Jan 2026" },
+    { "key": "mississauga",            "name": "Mississauga",             "region": "Peel Region",     "combinedRate": 2.58, "verified": true,  "effective": "Apr 2026" },
+    { "key": "brampton",               "name": "Brampton",                "region": "Peel Region",     "combinedRate": 2.58, "verified": true,  "effective": "Apr 2026" },
+    { "key": "caledon",                "name": "Caledon",                 "region": "Peel Region",     "combinedRate": 2.58, "verified": true,  "effective": "Apr 2026" },
+    { "key": "pickering",              "name": "Pickering",               "region": "Durham Region",   "combinedRate": 3.79, "verified": true,  "effective": "2026" },
+    { "key": "whitby",                 "name": "Whitby",                  "region": "Durham Region",   "combinedRate": 3.79, "verified": true,  "effective": "2026" },
+    { "key": "oshawa",                 "name": "Oshawa",                  "region": "Durham Region",   "combinedRate": 3.79, "verified": true,  "effective": "2026" },
+    { "key": "bradford",               "name": "Bradford W. Gwillimbury", "region": "Simcoe County",   "combinedRate": 4.20, "verified": false, "effective": "2025 est" },
+    { "key": "innisfil",               "name": "Innisfil",                "region": "Simcoe County",   "combinedRate": 4.20, "verified": false, "effective": "2025 est" },
+    { "key": "barrie",                 "name": "Barrie",                  "region": "City of Barrie",  "combinedRate": 4.20, "verified": false, "effective": "2026 est" }
+  ]
+}
