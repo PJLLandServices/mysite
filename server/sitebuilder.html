@@ -216,20 +216,46 @@
 // Values read from Hunter's official PGP-ADJ cutsheet (CA-Cutsheet-PGP-EM)
 // at 3.0 bar (~44 PSI, mid of Hunter's 1.7-4.5 bar recommended range),
 // converted from metric (m x 3.281 = ft; m3/hr x 4.403 = US GPM).
+// Three racks: red standard #1-#12 (ships on PGP-ADJ, 25deg), blue
+// standard #1.5-#8.0 (PGP-ADJ-B / rack P/N 665300), grey low-angle (13deg).
 const PGP_NOZZLES = {
-  b15:{label:"#1.5 blue",     r:32, g:1.5},
-  b20:{label:"#2.0 blue",     r:34, g:1.9},
-  b25:{label:"#2.5 blue",     r:35, g:2.4},
-  b30:{label:"#3.0 blue",     r:38, g:3.0},
-  b40:{label:"#4.0 blue",     r:40, g:4.0},
-  b50:{label:"#5.0 blue",     r:42, g:5.0},
-  b60:{label:"#6.0 blue",     r:43, g:6.0},
-  b80:{label:"#8.0 blue",     r:44, g:8.0},
-  g20:{label:"2.0 low-angle", r:27, g:2.0},
-  g25:{label:"2.5 low-angle", r:32, g:2.6},
-  g35:{label:"3.5 low-angle", r:33, g:3.3},
-  g45:{label:"4.5 low-angle", r:34, g:4.1}
+  // Blue standard
+  b15:{label:"#1.5 blue",     rack:"blue", r:32, g:1.5},
+  b20:{label:"#2.0 blue",     rack:"blue", r:34, g:1.9},
+  b25:{label:"#2.5 blue",     rack:"blue", r:35, g:2.4},
+  b30:{label:"#3.0 blue",     rack:"blue", r:38, g:3.0},
+  b40:{label:"#4.0 blue",     rack:"blue", r:40, g:4.0},
+  b50:{label:"#5.0 blue",     rack:"blue", r:42, g:5.0},
+  b60:{label:"#6.0 blue",     rack:"blue", r:43, g:6.0},
+  b80:{label:"#8.0 blue",     rack:"blue", r:44, g:8.0},
+  // Grey low-angle
+  g20:{label:"2.0 low-angle", rack:"grey", r:27, g:2.0},
+  g25:{label:"2.5 low-angle", rack:"grey", r:32, g:2.6},
+  g35:{label:"3.5 low-angle", rack:"grey", r:33, g:3.3},
+  g45:{label:"4.5 low-angle", rack:"grey", r:34, g:4.1},
+  // Red standard (factory rack on PGP-ADJ)
+  r1: {label:"#1 red",  rack:"red", r:29, g:0.7},
+  r2: {label:"#2 red",  rack:"red", r:30, g:0.8},
+  r3: {label:"#3 red",  rack:"red", r:31, g:1.1},
+  r4: {label:"#4 red",  rack:"red", r:33, g:1.5},
+  r5: {label:"#5 red",  rack:"red", r:36, g:1.9},
+  r6: {label:"#6 red",  rack:"red", r:36, g:2.5},
+  r7: {label:"#7 red",  rack:"red", r:38, g:3.2},
+  r8: {label:"#8 red",  rack:"red", r:39, g:3.8},
+  r9: {label:"#9 red",  rack:"red", r:41, g:4.6},
+  r10:{label:"#10 red", rack:"red", r:44, g:6.3},
+  r11:{label:"#11 red", rack:"red", r:46, g:8.4},
+  r12:{label:"#12 red", rack:"red", r:47, g:11.0}
 };
+// Grouped <optgroup> options for the rotor nozzle selector.
+function pgpOptions(sel){
+  const groups=[["red","Red standard"],["blue","Blue standard"],["grey","Grey low-angle"]];
+  return groups.map(([rack,label])=>{
+    const opts=Object.entries(PGP_NOZZLES).filter(([,v])=>v.rack===rack)
+      .map(([k,v])=>`<option value="${k}" ${sel===k?'selected':''}>${v.label} (${v.r}ft / ${v.g})</option>`).join('');
+    return opts?`<optgroup label="${label}">${opts}</optgroup>`:'';
+  }).join('');
+}
 // Hunter MP Rotator - matched precip (arc-scaled flow), @40 PSI @360deg.
 const MP_NOZZLES = {
   mp1000:{label:"MP1000", r:14, g:0.75},
@@ -447,7 +473,7 @@ function optionList(map, sel){
 }
 // Family-specific selectors (nozzle / body / dripline) for one area card.
 function familyFieldsHtml(a,i){
-  if(a.family==="rotor") return `<div class="fld"><label>PGP nozzle</label><select onchange="upd(${i},'rotorNoz',this.value)">${optionList(PGP_NOZZLES,a.rotorNoz)}</select></div>`;
+  if(a.family==="rotor") return `<div class="fld"><label>PGP nozzle</label><select onchange="upd(${i},'rotorNoz',this.value)">${pgpOptions(a.rotorNoz)}</select></div>`;
   if(a.family==="mp")    return `<div class="fld"><label>MP model</label><select onchange="upd(${i},'mpNoz',this.value)">${optionList(MP_NOZZLES,a.mpNoz)}</select></div>`;
   if(a.family==="spray") return `
         <div class="fld"><label>Pop-up body</label><select onchange="upd(${i},'sprayBody',this.value)">${optionList(SPRAY_BODIES,a.sprayBody)}</select></div>
