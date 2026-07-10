@@ -114,10 +114,9 @@ const TEMPLATES = {
     subject: "Your PJL service is booked — {serviceLabel} on {dateStr}",
     headline: "Your service is booked.",
     body:
-      "Hi {firstName}, this confirms your PJL Land Services {serviceLabel} on {dateStr} at {timeStr}. " +
-      "Your work order ({workOrderId}) is ready in your portal. We'll send a reminder the day before " +
-      "and your technician will keep you updated as they head out to your property. " +
-      "If anything changes, call (905) 960-0181 — we're happy to reschedule.",
+      "Hi {firstName}, your PJL Land Services {serviceLabel} on {dateStr} at {timeStr} is confirmed. " +
+      "Your work order ({workOrderId}) is available in your customer portal. If we run into any issues on our end, " +
+      "we'll reach out directly. To make changes, use your portal or call us at (905) 960-0181.",
     sms: "{namePrefix}your PJL service is confirmed: {serviceLabel} on {dateStr} at {timeStr}. Work order {workOrderId}. Details: {portalUrl}"
   },
   site_visit: {
@@ -243,7 +242,10 @@ function buildEmail(event, lead) {
       Questions? Call <a href="tel:+19059600181" style="color: #1B4D2E;">(905) 960-0181</a> or reply to this email.
     </p>
   </div>
-  <p style="margin: 16px 0 0; font-size: 11px; color: #999; text-align: center;">
+  <p style="margin: 16px 0 0; font-size: 12px; color: #888; text-align: center; line-height: 1.5;">
+    To view or manage this appointment anytime, visit pjllandservices.com and tap Customer Login in the navigation bar. On mobile, tap the menu icon first.
+  </p>
+  <p style="margin: 12px 0 0; font-size: 11px; color: #999; text-align: center;">
     PJL Land Services · Newmarket, Ontario · pjllandservices.com
   </p>
 </div>`.trim();
