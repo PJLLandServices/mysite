@@ -188,6 +188,21 @@
     <div class="hint">Rates are the <b>combined water + sewer volumetric charge</b> on a standard residential meter (no irrigation deduct meter). GPM figures are <b>US gallons</b> (1 US gal = 0.00378541 m³). Blank run-time = the default above; type a number to override one zone. Drip zones are included at their computed flow (they run far longer at low GPM — set a realistic per-zone run time).</div>
   </div>
 
+  <div class="panel">
+    <h2>5 · Zones, Valves &amp; Timing</h2>
+    <div class="grand" id="extras"></div>
+    <div class="hint" id="extrasNote"></div>
+  </div>
+
+  <div class="panel">
+    <h2>6 · Bill of Materials</h2>
+    <div class="costwrap">
+      <table class="cost" id="bomTable"><tbody><tr><td class="zl">Add an area above to build the parts list.</td></tr></tbody></table>
+    </div>
+    <div class="grand" id="bomGrand" style="margin-top:14px"></div>
+    <div class="hint" id="bomNote"></div>
+  </div>
+
 </div>
 
 <script>
@@ -572,6 +587,145 @@ function legend(p){
   for(let z=0;z<p.zones;z++) l+=`<span><i class="dot" style="background:var(${ZC[z%ZC.length]})"></i>Zone ${z+1}</span>`;
   l+='</div><div class="arckey">Wedges show each head’s spray arc &amp; direction · color = zone</div>';
   return l;
+}
+
+/* ════════════════ Extras — valves, pipe/wire, timing ════════════════ */
+
+function pipeForGPM(gpm){
+  if(gpm<=4) return '1/2"';
+  if(gpm<=8) return '3/4"';
+  if(gpm<=13) return '1"';
+  if(gpm<=22) return '1-1/4"';
+  if(gpm<=30) return '1-1/2"';
+  return '2"';
+}
+function fmtHM(mins){ mins=Math.round(mins); const h=Math.floor(mins/60), m=mins%60; return h>0?`${h}h ${m}m`:`${m}m`; }
+const MANIFOLD_PER_BOX = 4;   // valves grouped per manifold box (typical)
+
+function renderExtras(){
+  const box=el('extras'); if(!box) return;
+  const plans=LAST_PLANS.map(x=>x.plan);
+  if(!plans.length){ box.innerHTML=''; el('extrasNote').textContent=''; return; }
+  const totalZones=plans.reduce((s,p)=>s+p.zones,0);
+  const allZoneGPM=plans.flatMap(p=>p.zoneGPM);
+  const peakZoneGPM=allZoneGPM.length?Math.max(...allZoneGPM):0;
+  const valves=totalZones;
+  const boxes=Math.max(1,Math.ceil(valves/MANIFOLD_PER_BOX));
+  const conductors=totalZones+2;                 // zones + common + 1 spare
+  const mainline=pipeForGPM(peakZoneGPM);
+  let windowMin=0; wcZones.forEach((z,i)=>{ windowMin += zoneMinutes(i); });
+
+  box.innerHTML=`
+    <div class="stat"><div class="n">${valves}</div><div class="l">valves (1/zone)</div></div>
+    <div class="stat"><div class="n">${boxes}</div><div class="l">manifold box${boxes>1?'es':''}</div></div>
+    <div class="stat"><div class="n">${mainline}</div><div class="l">mainline size</div></div>
+    <div class="stat"><div class="n">${conductors}</div><div class="l">wire conductors</div></div>
+    <div class="stat"><div class="n">${fmtHM(windowMin)}</div><div class="l">full cycle</div></div>`;
+  el('extrasNote').innerHTML=
+    `Each zone runs on its own valve; group ~${MANIFOLD_PER_BOX} valves per manifold box. `+
+    `Mainline sized to peak single-zone flow (${peakZoneGPM.toFixed(1)} GPM — zones run one at a time); laterals sized per zone. `+
+    `Wire = ${totalZones} zone + 1 common + 1 spare conductor. `+
+    `<b>Full-system cycle ${fmtHM(windowMin)}</b> at the current run times — split across start times to fit the local watering-day window. Pipe/wire lengths are on-site measurements.`;
+}
+
+/* ════════════════ Bill of Materials (priced from /api/parts) ════════════════ */
+
+let PARTS_MAP=null, partsLoading=null;
+function loadParts(){
+  if(PARTS_MAP) return Promise.resolve(PARTS_MAP);
+  if(!partsLoading){
+    partsLoading=fetch('/api/parts').then(r=>r.json())
+      .then(j=>{ PARTS_MAP=(j&&j.parts)||{}; return PARTS_MAP; })
+      .catch(()=>{ PARTS_MAP={}; return PARTS_MAP; });
+  }
+  return partsLoading;
+}
+function seriesSize(key){ return {s8:'8',s10:'10',s12:'12',s15:'15'}[key]||'12'; }
+
+// Aggregate the parts list from the current plans.
+function buildBOM(parts){
+  const cat={}, non=[];
+  const add=(sku,qty)=>{ qty=Math.round(qty); if(sku && qty>0) cat[sku]=(cat[sku]||0)+qty; };
+  const addNon=(label,qty)=>{ qty=Math.round(qty); if(qty>0) non.push({label,qty}); };
+  const sf=parseFloat(el('spacingFactor').value)||1;
+  let totalZones=0, lateralFt=0;
+
+  LAST_PLANS.forEach(({area,plan:p})=>{
+    totalZones+=p.zones;
+    if(p.kind!=='drip' && p.heads.length){
+      lateralFt += p.heads.length * Math.max(headSpec(area).r*sf,1) * 0.6;  // rough trunk+branch
+    }
+    if(p.family==='rotor'){ add('HSPGPADJ', p.heads.length); }
+    else if(p.family==='mp'){ add('HSPROS04PRS30', p.heads.length); addNon('MP Rotator nozzle - '+((MP_NOZZLES[area.mpNoz]||{}).label||''), p.heads.length); }
+    else if(p.family==='spray'){
+      add((SPRAY_BODIES[area.sprayBody]||SPRAY_BODIES.b4).sku, p.heads.length);
+      const sz=seriesSize(area.spraySeries);
+      if(parts['RBN'+sz+'Q']) add('RBN'+sz+'Q', p.arcCount[90]); else addNon('RB nozzle '+sz+'Q', p.arcCount[90]);
+      if(parts['RBN'+sz+'H']) add('RBN'+sz+'H', p.arcCount[180]); else addNon('RB nozzle '+sz+'H', p.arcCount[180]);
+      addNon('RB nozzle '+sz+'F (full circle - not stocked)', p.arcCount[360]);
+    }
+    else if(p.family==='strip'){
+      add((SPRAY_BODIES[area.stripBody]||SPRAY_BODIES.b4).sku, p.heads.length);
+      const map={cst:'RBN15CST', sst:'RBN15SST'};
+      const sku=map[area.stripNoz];
+      if(sku && parts[sku]) add(sku, p.heads.length);
+      else addNon('RB '+((STRIP_NOZZLES[area.stripNoz]||{}).label||area.stripNoz)+' (not stocked)', p.heads.length);
+    }
+    else if(p.family==='drip'){
+      const d=p.product, ft=Math.ceil(p.dripLengthFt);
+      if(d.roll2){ const big=Math.floor(ft/d.roll2.ft), rem=ft-big*d.roll2.ft; if(big>0) add(d.roll2.sku,big); if(rem>0) add(d.sku,Math.ceil(rem/d.rollFt)); }
+      else add(d.sku, Math.ceil(ft/d.rollFt));
+      add('RBDPSIM30X075', p.zones);                                  // pressure reg / zone
+      add('RBDXFFTEE', Math.max(1,Math.round(p.dripLengthFt/50)));
+      add('RBDXFELB',  Math.max(2,Math.round(p.dripLengthFt/40)));
+      add('RBDXFFCOUP',Math.max(1,Math.round(p.dripLengthFt/250)));
+      add('CTISDRIPSTAPLES25', Math.max(1,Math.ceil((p.dripLengthFt/3)/25)));
+    }
+  });
+
+  add('PGV100G', totalZones);                                          // 1" valve / zone
+  const boxes=Math.ceil(totalZones/MANIFOLD_PER_BOX);
+  add('VB111011', boxes);                                              // 10" round manifold box
+  if(lateralFt>0) add('POPO75400', Math.ceil(lateralFt/400));          // 3/4" lateral (estimate)
+
+  if(totalZones>0){
+    if(totalZones<=4) add('HCX2400',1);
+    else if(totalZones<=6) add('HCX2600',1);
+    else if(totalZones<=8) add('HCX2800',1);
+    else if(totalZones<=14) add('HCX21400',1);
+    else { add('HCHPC400',1); const ext=Math.ceil((totalZones-6)/9); add('HCPCM900',ext); }
+  }
+
+  const lines=Object.entries(cat).map(([sku,qty])=>{
+    const pt=parts[sku];
+    return {sku, desc:pt?pt.description:sku, qty, priceCents:pt?pt.priceCents:null, unit:pt?pt.unit:'each'};
+  }).sort((a,b)=>a.sku.localeCompare(b.sku));
+  non.forEach(n=>lines.push({sku:'-', desc:n.label, qty:n.qty, priceCents:null, unit:'each'}));
+  const subtotalCents=lines.reduce((s,l)=>s+(l.priceCents!=null?l.priceCents*l.qty:0),0);
+  return {lines, subtotalCents, lateralFt:Math.ceil(lateralFt)};
+}
+
+async function renderBOM(){
+  const tb=el('bomTable'); if(!tb) return;
+  if(!LAST_PLANS.length){ tb.innerHTML='<tbody><tr><td class="zl">Add an area above to build the parts list.</td></tr></tbody>'; el('bomGrand').innerHTML=''; el('bomNote').textContent=''; return; }
+  const parts=await loadParts();
+  const {lines, subtotalCents, lateralFt}=buildBOM(parts);
+  let h='<thead><tr><th class="zl">SKU</th><th class="zl">Item</th><th>Qty</th><th>Unit</th><th>Unit $</th><th>Line $</th></tr></thead><tbody>';
+  lines.forEach(l=>{
+    const unitP=l.priceCents!=null?money(l.priceCents/100):'-';
+    const lineP=l.priceCents!=null?money(l.priceCents*l.qty/100):'-';
+    h+=`<tr><td class="zl">${esc(l.sku)}</td><td class="area" style="max-width:280px">${esc(l.desc)}</td><td>${l.qty}</td><td>${esc(l.unit||'each')}</td><td>${unitP}</td><td>${lineP}</td></tr>`;
+  });
+  h+=`<tr class="tot"><td class="zl" colspan="5">Materials subtotal (catalog items)</td><td>${money(subtotalCents/100)}</td></tr></tbody>`;
+  tb.innerHTML=h;
+  const missing=lines.filter(l=>l.priceCents==null).length;
+  el('bomGrand').innerHTML=`
+    <div class="stat"><div class="n">${money(subtotalCents/100)}</div><div class="l">materials subtotal</div></div>
+    <div class="stat"><div class="n">${lines.length}</div><div class="l">line items</div></div>`;
+  el('bomNote').innerHTML=
+    `Priced live from the parts catalog — before tax, labour, and mainline pipe. `+
+    (missing?`<span style="color:var(--warn)">${missing} line(s) not in the catalog</span> (MP / full-circle / EST-LCS-RCS nozzles) — price separately. `:'')+
+    `Lateral pipe (${lateralFt} ft, 3/4") is a layout estimate; mainline size is in section 5 — measure runs on site.`;
 }
 
 /* ════════════════ Water-Cost Calculator (town rates) ════════════════ */
