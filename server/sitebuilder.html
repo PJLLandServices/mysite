@@ -136,7 +136,7 @@
       <div class="fld"><label>Available flow (GPM)</label><input id="availGPM" type="number" value="8" step="0.5"></div>
       <div class="fld"><label>Static pressure (PSI)</label><input id="psi" type="number" value="60" step="1"></div>
       <div class="fld"><label>Supply size</label>
-        <select id="supply"><option>1"</option><option>3/4"</option><option>1-1/4"</option></select></div>
+        <select id="supply"><option>1/2"</option><option>3/4"</option><option selected>1"</option><option>1-1/4"</option></select></div>
       <div class="fld"><label>Zone GPM ceiling</label><input id="ceiling" type="number" value="7.8" step="0.1"></div>
       <div class="fld"><label>Head-to-head factor</label>
         <select id="spacingFactor">
@@ -185,80 +185,200 @@
     </div>
     <div class="grand" id="wcGrand" style="margin-top:14px"></div>
     <div class="hint" id="wcHeadline" style="font-size:13px"></div>
-    <div class="hint">Rates are the <b>combined water + sewer volumetric charge</b> on a standard residential meter (no irrigation deduct meter). GPM figures are <b>US gallons</b> (1 US gal = 0.00378541 m³). Blank run-time = the default above; type a number to override one zone. Drip zones are excluded — their flow depends on emitter count, meter on site.</div>
+    <div class="hint">Rates are the <b>combined water + sewer volumetric charge</b> on a standard residential meter (no irrigation deduct meter). GPM figures are <b>US gallons</b> (1 US gal = 0.00378541 m³). Blank run-time = the default above; type a number to override one zone. Drip zones are included at their computed flow (they run far longer at low GPM — set a realistic per-zone run time).</div>
   </div>
 
 </div>
 
 <script>
-// radius(ft) & gpm are at working pressure. matched=true → flow scales with arc (MP/spray). matched=false → fixed flow (gear rotors).
-const HEADS = {
-  "pgp4":  {name:"Hunter PGP · #4 nozzle",      r:32, g:2.6, kind:"rotor", matched:false},
-  "pgp2":  {name:"Hunter PGP · #2 nozzle",      r:30, g:1.8, kind:"rotor", matched:false},
-  "pgp15": {name:"Hunter PGP · #1.5 nozzle",    r:28, g:1.3, kind:"rotor", matched:false},
-  "mp2000":{name:"MP Rotator · MP2000 (approx)",r:18, g:2.0, kind:"rotor", matched:true},
-  "mp3000":{name:"MP Rotator · MP3000 (approx)",r:28, g:3.7, kind:"rotor", matched:true},
-  "spray15":{name:"RB spray · 15' MPR (approx)",r:15, g:3.7, kind:"rotor", matched:true},
-  "cst":   {name:"RB pop-up · CST strip nozzle",r:30, g:1.1, kind:"strip", matched:false},
-  "drip":  {name:"Drip / bed zone",             r:0,  g:0,   kind:"drip",  matched:false}
+/* ==== Head catalogs - manufacturer performance data ====
+   HARD RULE: a zone never mixes head families. Rotor / spray / strip /
+   drip each run on their own valves (different precipitation rates). The
+   builder enforces this structurally - one family per area, zones split
+   per-area. See the family partition note in compute().               */
+
+// Hunter PGP / PGP-Ultra / I-20 gear rotor - FIXED GPM at any arc.
+// Blue standard nozzles @45 PSI; gray low-angle @40 PSI. (Hunter spec.)
+const PGP_NOZZLES = {
+  b15:{label:"#1.5 blue",     r:31, g:1.5},
+  b20:{label:"#2.0 blue",     r:34, g:2.0},
+  b25:{label:"#2.5 blue",     r:35, g:2.5},
+  b30:{label:"#3.0 blue",     r:38, g:3.0},
+  b40:{label:"#4.0 blue",     r:40, g:4.0},
+  b50:{label:"#5.0 blue",     r:42, g:5.0},
+  b60:{label:"#6.0 blue",     r:43, g:6.0},
+  b80:{label:"#8.0 blue",     r:44, g:8.0},
+  g20:{label:"2.0 low-angle", r:27, g:1.9},
+  g25:{label:"2.5 low-angle", r:30, g:2.5},
+  g35:{label:"3.5 low-angle", r:32, g:3.1},
+  g45:{label:"4.5 low-angle", r:34, g:3.9}
+};
+// Hunter MP Rotator - matched precip (arc-scaled flow), @40 PSI @360deg.
+const MP_NOZZLES = {
+  mp1000:{label:"MP1000", r:14, g:0.75},
+  mp2000:{label:"MP2000", r:21, g:1.70},
+  mp3000:{label:"MP3000", r:30, g:4.27}
+};
+// Rain Bird MPR fixed spray nozzles - matched precip @30 PSI. Radius by
+// series; flow by pattern (q/h/f = 90/180/360). Pro-Spray body is PRS30.
+const SPRAY_SERIES = {
+  s8: {label:"8 ft",  r:8,  q:0.26, h:0.52, f:1.05},
+  s10:{label:"10 ft", r:10, q:0.39, h:0.79, f:1.58},
+  s12:{label:"12 ft", r:12, q:0.65, h:1.30, f:2.60},
+  s15:{label:"15 ft", r:15, q:0.92, h:1.85, f:3.70}
+};
+// Pop-up body - good / better / best. Hydraulically identical; height +
+// SKU drive the BOM. Inventory: Pro-Spray 4"/6"/12" PRS30.
+const SPRAY_BODIES = {
+  b4: {label:'4" pop (good)',  sku:"HSPROS04PRS30"},
+  b6: {label:'6" pop (better)',sku:"HSPROS06SIPRS30"},
+  b12:{label:'12" pop (best)', sku:"HSPROS12SIPRS30"}
+};
+// Rain Bird 15-series strip nozzles @30 PSI - rectangle W x L + GPM.
+const STRIP_NOZZLES = {
+  cst:{label:"15 CST - centre strip", w:4, len:30, g:1.21, cover:"both"},
+  sst:{label:"15 SST - side strip",   w:4, len:30, g:1.21, cover:"side"},
+  est:{label:"15 EST - end strip",    w:4, len:15, g:0.61, cover:"end"},
+  lcs:{label:"15 LCS - left corner",  w:4, len:15, g:0.49, cover:"corner"},
+  rcs:{label:"15 RCS - right corner", w:4, len:15, g:0.49, cover:"corner"},
+  s9: {label:"9 SST - side strip",    w:9, len:18, g:1.73, cover:"side"}
+};
+// Dripline - area-wide, 12" emitter + row spacing. Inventory products.
+const DRIP_PRODUCTS = {
+  xf09:{label:'XF Dripline 0.9 GPH - 12" (XFDE)', gph:0.9, emitterIn:12, sku:"XFDE912250", rollFt:250, roll2:{sku:"XFDE912500", ft:500}},
+  ld08:{label:'Landscape 0.8 GPH - 12" (LDQ)',    gph:0.8, emitterIn:12, sku:"LDQ0812100", rollFt:100}
+};
+const FAMILIES = {
+  rotor:{label:"Gear rotor - Hunter PGP",        kind:"rotor"},
+  mp:   {label:"MP Rotator",                     kind:"rotor"},
+  spray:{label:"Pop-up spray - Pro-Spray + RB",  kind:"spray"},
+  strip:{label:"Strip nozzle (narrow area)",     kind:"strip"},
+  drip: {label:"Drip line (area-wide)",          kind:"drip"}
+};
+const FAMILY_ORDER = ["rotor","mp","spray","strip","drip"];
+
+// Legacy v1 head keys -> v2 family selection (migrate old saved designs).
+const LEGACY_HEAD_MAP = {
+  pgp4:["rotor","rotorNoz","b40"], pgp2:["rotor","rotorNoz","b20"], pgp15:["rotor","rotorNoz","b15"],
+  mp2000:["mp","mpNoz","mp2000"], mp3000:["mp","mpNoz","mp3000"],
+  spray15:["spray","spraySeries","s15"], cst:["strip","stripNoz","cst"], drip:["drip","dripProduct","xf09"]
 };
 
+function familyDefaults(a){
+  if(a.family==="rotor" && !a.rotorNoz) a.rotorNoz="b40";
+  if(a.family==="mp"    && !a.mpNoz)    a.mpNoz="mp2000";
+  if(a.family==="spray"){ if(!a.sprayBody) a.sprayBody="b4"; if(!a.spraySeries) a.spraySeries="s12"; }
+  if(a.family==="strip"){ if(!a.stripNoz) a.stripNoz="sst"; if(!a.stripBody) a.stripBody="b4"; }
+  if(a.family==="drip"){ if(!a.dripProduct) a.dripProduct="xf09"; if(a.overagePct==null) a.overagePct=10; }
+}
+// Normalize an area (migrate legacy head key, fill family defaults).
+function ensureArea(a){
+  if(!a.family){ const m = LEGACY_HEAD_MAP[a.head] || ["rotor","rotorNoz","b40"]; a.family=m[0]; a[m[1]]=m[2]; }
+  if(!FAMILIES[a.family]) a.family="rotor";
+  familyDefaults(a);
+  return a;
+}
+// Resolve an area's effective head spec (radius/flow/kind) from selections.
+function headSpec(a){
+  ensureArea(a);
+  if(a.family==="rotor"){ const n=PGP_NOZZLES[a.rotorNoz]||PGP_NOZZLES.b40; return {family:"rotor",kind:"rotor",matched:false,r:n.r,g:n.g,noz:n,label:"Hunter PGP "+n.label}; }
+  if(a.family==="mp"){    const n=MP_NOZZLES[a.mpNoz]||MP_NOZZLES.mp2000; return {family:"mp",kind:"rotor",matched:true,r:n.r,g:n.g,noz:n,label:"Hunter "+n.label}; }
+  if(a.family==="spray"){ const s=SPRAY_SERIES[a.spraySeries]||SPRAY_SERIES.s12; const b=SPRAY_BODIES[a.sprayBody]||SPRAY_BODIES.b4; return {family:"spray",kind:"spray",matched:true,r:s.r,g:s.f,series:s,body:b,label:b.label.split(" ")[0]+' Pro-Spray, RB '+s.label}; }
+  if(a.family==="strip"){ const s=STRIP_NOZZLES[a.stripNoz]||STRIP_NOZZLES.sst; const b=SPRAY_BODIES[a.stripBody]||SPRAY_BODIES.b4; return {family:"strip",kind:"strip",matched:false,r:s.len/2,g:s.g,strip:s,body:b,label:"RB "+s.label}; }
+  const d=DRIP_PRODUCTS[a.dripProduct]||DRIP_PRODUCTS.xf09; return {family:"drip",kind:"drip",matched:false,r:0,g:0,drip:d,label:d.label};
+}
+
 const DEFAULT_AREAS = [
-  {name:"Front Yard (lawn)",            mode:"rect", L:60, W:40, sqft:2416, avgW:40, head:"pgp4", r:32, g:2.6},
-  {name:"Driveway Side Strips",         mode:"rect", L:158,W:4,  sqft:631,  avgW:4,  head:"cst",  r:30, g:1.1},
-  {name:"Backyard By House (grass)",    mode:"rect", L:55, W:44, sqft:2400, avgW:44, head:"pgp4", r:30, g:2.6},
-  {name:"Backyard Behind House (grass)",mode:"rect", L:70, W:40, sqft:2800, avgW:40, head:"pgp4", r:32, g:2.6}
+  {name:"Front Yard (lawn)",             mode:"rect", L:60, W:40, sqft:2400, avgW:40, family:"rotor", rotorNoz:"b40"},
+  {name:"Driveway Side Strips",          mode:"rect", L:158,W:4,  sqft:632,  avgW:4,  family:"strip", stripNoz:"sst", stripBody:"b4"},
+  {name:"Backyard By House (grass)",     mode:"rect", L:55, W:44, sqft:2420, avgW:44, family:"rotor", rotorNoz:"b40"},
+  {name:"Backyard Behind House (grass)", mode:"rect", L:70, W:40, sqft:2800, avgW:40, family:"rotor", rotorNoz:"b40"}
 ];
+function newArea(){ return {name:"New Area", mode:"rect", L:40, W:30, sqft:1200, avgW:30, family:"spray", sprayBody:"b4", spraySeries:"s12"}; }
 
 const ZC=["--z1","--z2","--z3","--z4","--z5","--z6","--z7","--z8"];
 let areas=[];
 const el=id=>document.getElementById(id);
 const num=id=>parseFloat(el(id).value)||0;
 
+const STR_KEYS = new Set(["name","mode","family","rotorNoz","mpNoz","sprayBody","spraySeries","stripNoz","stripBody","dripProduct"]);
+const RENDER_KEYS = new Set(["mode","family","rotorNoz","mpNoz","sprayBody","spraySeries","stripNoz","stripBody","dripProduct"]);
 function loadDefaults(){ areas=JSON.parse(JSON.stringify(DEFAULT_AREAS)); render(); markDirty(); }
-function addArea(){ areas.push({name:"New Area",mode:"rect",L:40,W:30,sqft:1200,avgW:30,head:"pgp4",r:32,g:2.6}); render(); markDirty(); }
+function addArea(){ areas.push(newArea()); render(); markDirty(); }
 function delArea(i){ areas.splice(i,1); render(); markDirty(); }
-function onHeadChange(i,v){ areas[i].head=v; areas[i].r=HEADS[v].r; areas[i].g=HEADS[v].g; render(); markDirty(); }
-function upd(i,k,v){ areas[i][k]=(k==='name'||k==='mode'||k==='head')?v:parseFloat(v)||0; compute(); markDirty(); }
+function upd(i,k,v){
+  areas[i][k] = STR_KEYS.has(k) ? v : (parseFloat(v)||0);
+  if(k==="family") familyDefaults(areas[i]);
+  if(RENDER_KEYS.has(k)) render(); else compute();
+  markDirty();
+}
 
 function geom(a){
   if(a.mode==='rect'){ const L=Math.max(a.L,1),W=Math.max(a.W,1); return {L,W,sqft:L*W}; }
   const W=Math.max(a.avgW,1); return {L:Math.max(a.sqft/W,1),W,sqft:a.sqft};
 }
 
+// Greedy-pack heads into zones by the GPM ceiling (insertion order).
+function packZones(heads, ceiling){
+  let z=0, acc=0;
+  heads.forEach(hd=>{ if(acc>0 && acc+hd.gpm>ceiling+0.001){ z++; acc=0; } hd.zone=z; acc+=hd.gpm; });
+  const zones=z+1;
+  const zoneGPM=new Array(zones).fill(0);
+  heads.forEach(hd=>{ zoneGPM[hd.zone]+=hd.gpm; });
+  return {zones, zoneGPM};
+}
+
 function plan(a){
-  const h=HEADS[a.head], gm=geom(a);
-  const ceiling=num('ceiling'), sf=parseFloat(el('spacingFactor').value)||1;
-  if(h.kind==='drip') return {kind:'drip',L:gm.L,W:gm.W,sqft:gm.sqft,heads:[],zones:1};
+  ensureArea(a);
+  const h=headSpec(a), gm=geom(a);
+  const ceiling=Math.max(num('ceiling'),0.1), sf=parseFloat(el('spacingFactor').value)||1;
+
+  // ---- Drip: area-wide dripline (12" emitter + row spacing) ----
+  if(h.kind==='drip'){
+    const d=h.drip;
+    const rowFt=Math.max(d.emitterIn,1)/12;                 // row spacing in ft
+    const overage=1+((parseFloat(a.overagePct)||0)/100);
+    const baseLen=gm.sqft/rowFt;                            // straight-run tube length
+    const lengthFt=baseLen*overage;
+    const emitters=Math.round(lengthFt/rowFt);              // one emitter every rowFt
+    const totalGPH=emitters*d.gph;
+    const totalGPM=totalGPH/60;
+    const zones=Math.max(1, Math.ceil(totalGPM/ceiling - 1e-6));
+    const zoneGPM=new Array(zones).fill(totalGPM/zones);
+    return {family:"drip",kind:"drip",matched:false,L:gm.L,W:gm.W,sqft:gm.sqft,heads:[],zones,zoneGPM,
+      product:d,dripLengthFt:lengthFt,dripBaseLenFt:baseLen,emitters,totalGPH,totalGPM,rowFt};
+  }
 
   let heads=[];
-  if(h.kind==='strip'){
-    const cov=Math.max(a.r*sf,1);
-    const n=Math.max(2,Math.round(gm.L/cov)+1);
-    for(let i=0;i<n;i++) heads.push({xft:i*(gm.L/(n-1)),yft:gm.W/2,arc:180,dir:-Math.PI/2,gpm:a.g});
-  } else {
-    const sp=Math.max(a.r*sf,1);
-    const nx=Math.max(2,Math.round(gm.L/sp)+1), ny=Math.max(2,Math.round(gm.W/sp)+1);
-    for(let i=0;i<nx;i++)for(let j=0;j<ny;j++){
-      const oL=i===0,oR=i===nx-1,oT=j===0,oB=j===ny-1;
-      const nb=(oL||oR?1:0)+(oT||oB?1:0);
-      const arc=nb===2?90:nb===1?180:360;
-      const dx=oL?1:oR?-1:0, dy=oT?1:oB?-1:0;
-      const dir=(arc===360)?0:Math.atan2(dy,dx);
-      const gpm=h.matched? a.g*(arc/360) : a.g;
-      heads.push({xft:i*(gm.L/(nx-1)),yft:j*(gm.W/(ny-1)),arc,dir,gpm});
-    }
+  // ---- Strip: single run of strip nozzles along the length ----
+  if(h.kind==="strip"){
+    const s=h.strip, per=Math.max(s.len,1);
+    const n=Math.max(1, Math.round(gm.L/per));
+    for(let i=0;i<n;i++) heads.push({xft:(i+0.5)*(gm.L/n), yft:gm.W/2, arc:180, dir:-Math.PI/2, gpm:h.g, r:h.r});
+    const pk=packZones(heads,ceiling);
+    return {family:"strip",kind:"strip",matched:false,L:gm.L,W:gm.W,sqft:gm.sqft,heads,zones:pk.zones,zoneGPM:pk.zoneGPM,
+      strip:s,body:h.body,arcCount:{90:0,180:n,360:0},totalGPM:heads.reduce((t,x)=>t+x.gpm,0)};
   }
-  // greedy pack into zones (column-major order already) by GPM ceiling
-  let z=0,acc=0;
-  heads.forEach(hd=>{ if(acc>0 && acc+hd.gpm>ceiling+0.001){z++;acc=0;} hd.zone=z; acc+=hd.gpm; });
-  const zones=z+1;
-  const zoneGPM=new Array(zones).fill(0), zoneMixArc=Array.from({length:zones},()=>new Set());
-  heads.forEach(hd=>{ zoneGPM[hd.zone]+=hd.gpm; zoneMixArc[hd.zone].add(hd.arc); });
+
+  // ---- Rotor / spray: arc-aware grid ----
+  const sp=Math.max(h.r*sf,1);
+  const nx=Math.max(2,Math.round(gm.L/sp)+1), ny=Math.max(2,Math.round(gm.W/sp)+1);
+  for(let i=0;i<nx;i++)for(let j=0;j<ny;j++){
+    const oL=i===0,oR=i===nx-1,oT=j===0,oB=j===ny-1;
+    const nb=(oL||oR?1:0)+(oT||oB?1:0);
+    const arc=nb===2?90:nb===1?180:360;
+    const dx=oL?1:oR?-1:0, dy=oT?1:oB?-1:0;
+    const dir=(arc===360)?0:Math.atan2(dy,dx);
+    const gpm=h.matched? h.g*(arc/360) : h.g;
+    heads.push({xft:i*(gm.L/(nx-1)),yft:j*(gm.W/(ny-1)),arc,dir,gpm,r:h.r});
+  }
+  const pk=packZones(heads,ceiling);
+  const zoneMixArc=Array.from({length:pk.zones},()=>new Set());
+  heads.forEach(hd=>zoneMixArc[hd.zone].add(hd.arc));
   const arcCount={90:0,180:0,360:0}; heads.forEach(hd=>arcCount[hd.arc]++);
-  const mixedRotor = !h.matched && h.kind==='rotor' && zoneMixArc.some(s=>s.size>1);
-  return {kind:h.kind,matched:h.matched,L:gm.L,W:gm.W,sqft:gm.sqft,heads,zones,zoneGPM,arcCount,mixedRotor,
-    totalGPM:heads.reduce((s,x)=>s+x.gpm,0)};
+  const mixedRotor = h.family==="rotor" && !h.matched && zoneMixArc.some(x=>x.size>1);
+  return {family:h.family,kind:h.kind,matched:h.matched,L:gm.L,W:gm.W,sqft:gm.sqft,heads,zones:pk.zones,zoneGPM:pk.zoneGPM,
+    arcCount,mixedRotor,body:h.body,series:h.series,noz:h.noz,totalGPM:heads.reduce((t,x)=>t+x.gpm,0)};
 }
 
 function sector(cx,cy,r,a0,a1){
@@ -268,47 +388,74 @@ function sector(cx,cy,r,a0,a1){
 }
 
 function sketch(a,p){
-  if(p.kind==='drip') return `<svg viewBox="0 0 320 150"><rect x="10" y="15" width="300" height="120" rx="8" fill="#e8f5e9" stroke="#c8dccb"/><text x="160" y="70" text-anchor="middle" font-size="14" fill="#5b6b63">Drip / bed zone</text><text x="160" y="90" text-anchor="middle" font-size="11" fill="#8aa">meter to plant count on site</text></svg>`;
-  const W=320,H=Math.min(240,Math.max(150, 40+ (p.W/p.L)*280)), pad=26;
-  const iw=W-pad*2, ih=H-pad*2, ratio=p.L/p.W;
+  const W=320,H=Math.min(240,Math.max(150, 40+ (p.W/Math.max(p.L,0.1))*280)), pad=26;
+  const iw=W-pad*2, ih=H-pad*2, ratio=p.L/Math.max(p.W,0.1);
   let dw=iw, dh=iw/ratio; if(dh>ih){dh=ih;dw=ih*ratio;}
-  const ox=(W-dw)/2, oy=(H-dh)/2, unit=dw/p.L; // uniform (aspect preserved)
+  const ox=(W-dw)/2, oy=(H-dh)/2, unit=dw/Math.max(p.L,0.1); // uniform (aspect preserved)
   let s=`<svg viewBox="0 0 ${W} ${H}">`;
   s+=`<rect x="${ox}" y="${oy}" width="${dw}" height="${dh}" rx="3" fill="#eef6ef" stroke="#bcd3bf" stroke-width="1.5"/>`;
-  // spray wedges
-  p.heads.forEach(hd=>{
-    const cx=ox+hd.xft*unit, cy=oy+hd.yft*unit, rr=Math.max(HEADS[a.head].r*unit*0.98,4);
-    const col=`var(${ZC[hd.zone%ZC.length]})`;
-    if(hd.arc===360){
-      s+=`<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${rr.toFixed(1)}" fill="${col}" fill-opacity="0.10" stroke="${col}" stroke-opacity="0.30" stroke-width="0.6"/>`;
-    } else {
-      const half=(hd.arc*Math.PI/180)/2;
-      s+=`<path d="${sector(cx,cy,rr,hd.dir-half,hd.dir+half)}" fill="${col}" fill-opacity="0.13" stroke="${col}" stroke-opacity="0.30" stroke-width="0.6"/>`;
+  if(p.kind==='drip'){
+    // dashed rows represent the dripline runs (spaced by row spacing).
+    const rows=Math.max(2, Math.min(26, Math.round(p.W/(p.rowFt||1))));
+    for(let r=0;r<rows;r++){
+      const y=oy + (r+0.5)*(dh/rows);
+      s+=`<line x1="${(ox+2).toFixed(1)}" y1="${y.toFixed(1)}" x2="${(ox+dw-2).toFixed(1)}" y2="${y.toFixed(1)}" stroke="var(--z5)" stroke-width="1" stroke-dasharray="3 2" stroke-opacity="0.65"/>`;
     }
-  });
-  // head dots
-  p.heads.forEach(hd=>{
-    const cx=ox+hd.xft*unit, cy=oy+hd.yft*unit, col=`var(${ZC[hd.zone%ZC.length]})`;
-    s+=`<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="3.3" fill="${col}" stroke="#fff" stroke-width="1"/>`;
-  });
+    s+=`<text x="${(ox+dw/2).toFixed(0)}" y="${(oy+dh/2+3).toFixed(0)}" text-anchor="middle" font-size="10" fill="#00838f">${Math.round(p.dripLengthFt)} ft dripline</text>`;
+  } else {
+    p.heads.forEach(hd=>{
+      const cx=ox+hd.xft*unit, cy=oy+hd.yft*unit, rr=Math.max((hd.r||10)*unit*0.98,4);
+      const col=`var(${ZC[hd.zone%ZC.length]})`;
+      if(hd.arc===360){
+        s+=`<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${rr.toFixed(1)}" fill="${col}" fill-opacity="0.10" stroke="${col}" stroke-opacity="0.30" stroke-width="0.6"/>`;
+      } else {
+        const half=(hd.arc*Math.PI/180)/2;
+        s+=`<path d="${sector(cx,cy,rr,hd.dir-half,hd.dir+half)}" fill="${col}" fill-opacity="0.13" stroke="${col}" stroke-opacity="0.30" stroke-width="0.6"/>`;
+      }
+    });
+    p.heads.forEach(hd=>{
+      const cx=ox+hd.xft*unit, cy=oy+hd.yft*unit, col=`var(${ZC[hd.zone%ZC.length]})`;
+      s+=`<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="3.3" fill="${col}" stroke="#fff" stroke-width="1"/>`;
+    });
+  }
   s+=`<text x="${ox+dw/2}" y="${(oy+dh+15).toFixed(0)}" text-anchor="middle" font-size="10" fill="#5b6b63">${p.L.toFixed(0)} ft</text>`;
   s+=`<text x="${(ox-10).toFixed(0)}" y="${(oy+dh/2).toFixed(0)}" text-anchor="middle" font-size="10" fill="#5b6b63" transform="rotate(-90 ${(ox-10).toFixed(0)} ${(oy+dh/2).toFixed(0)})">${p.W.toFixed(0)} ft</text>`;
   s+=`</svg>`;
   return s;
 }
 
+function optionList(map, sel){
+  return Object.entries(map).map(([k,v])=>`<option value="${k}" ${sel===k?'selected':''}>${v.label}</option>`).join('');
+}
+// Family-specific selectors (nozzle / body / dripline) for one area card.
+function familyFieldsHtml(a,i){
+  if(a.family==="rotor") return `<div class="fld"><label>PGP nozzle</label><select onchange="upd(${i},'rotorNoz',this.value)">${optionList(PGP_NOZZLES,a.rotorNoz)}</select></div>`;
+  if(a.family==="mp")    return `<div class="fld"><label>MP model</label><select onchange="upd(${i},'mpNoz',this.value)">${optionList(MP_NOZZLES,a.mpNoz)}</select></div>`;
+  if(a.family==="spray") return `
+        <div class="fld"><label>Pop-up body</label><select onchange="upd(${i},'sprayBody',this.value)">${optionList(SPRAY_BODIES,a.sprayBody)}</select></div>
+        <div class="fld"><label>RB nozzle</label><select onchange="upd(${i},'spraySeries',this.value)">${optionList(SPRAY_SERIES,a.spraySeries)}</select></div>`;
+  if(a.family==="strip") return `
+        <div class="fld"><label>Strip nozzle</label><select onchange="upd(${i},'stripNoz',this.value)">${optionList(STRIP_NOZZLES,a.stripNoz)}</select></div>
+        <div class="fld"><label>Pop-up body</label><select onchange="upd(${i},'stripBody',this.value)">${optionList(SPRAY_BODIES,a.stripBody)}</select></div>`;
+  if(a.family==="drip")  return `
+        <div class="fld"><label>Dripline</label><select onchange="upd(${i},'dripProduct',this.value)">${optionList(DRIP_PRODUCTS,a.dripProduct)}</select></div>
+        <div class="fld adv"><label>Shape overage %</label><input type="number" min="0" step="5" value="${a.overagePct==null?10:a.overagePct}" oninput="upd(${i},'overagePct',this.value)"></div>`;
+  return "";
+}
+
 function render(){
   const box=el('areas'); box.innerHTML='';
   areas.forEach((a,i)=>{
-    const opts=Object.entries(HEADS).map(([k,v])=>`<option value="${k}" ${a.head===k?'selected':''}>${v.name}</option>`).join('');
+    ensureArea(a);
     const rect=a.mode==='rect';
+    const famOpts=FAMILY_ORDER.map(k=>`<option value="${k}" ${a.family===k?'selected':''}>${FAMILIES[k].label}</option>`).join('');
     const c=document.createElement('div'); c.className='areacard';
     c.innerHTML=`
       <div class="areahead">
-        <div class="fld"><label>Area name</label><input type="text" value="${a.name}" oninput="upd(${i},'name',this.value)"></div>
+        <div class="fld"><label>Area name</label><input type="text" value="${esc(a.name)}" oninput="upd(${i},'name',this.value)"></div>
         <div class="fld"><label>Input mode</label>
           <select onchange="upd(${i},'mode',this.value)">
-            <option value="rect" ${rect?'selected':''}>Rectangle (L × W)</option>
+            <option value="rect" ${rect?'selected':''}>Rectangle (L x W)</option>
             <option value="sqft" ${!rect?'selected':''}>Known sq ft + avg width</option>
           </select></div>
         ${rect?`
@@ -318,9 +465,8 @@ function render(){
           <div class="fld"><label>Area (sq ft)</label><input type="number" value="${a.sqft}" oninput="upd(${i},'sqft',this.value)"></div>
           <div class="fld"><label>Avg width (ft)</label><input type="number" value="${a.avgW}" oninput="upd(${i},'avgW',this.value)"></div>
         `}
-        <div class="fld"><label>Head / nozzle</label><select onchange="onHeadChange(${i},this.value)">${opts}</select></div>
-        <div class="fld adv"><label>Radius (ft)</label><input type="number" value="${a.r}" oninput="upd(${i},'r',this.value)"></div>
-        <div class="fld adv"><label>Flow /head</label><input type="number" step="0.1" value="${a.g}" oninput="upd(${i},'g',this.value)"></div>
+        <div class="fld"><label>Head family</label><select onchange="upd(${i},'family',this.value)">${famOpts}</select></div>
+        ${familyFieldsHtml(a,i)}
         <button class="del" onclick="delArea(${i})">Remove</button>
       </div>
       <div class="areabody">
@@ -332,60 +478,92 @@ function render(){
   compute();
 }
 
+let LAST_PLANS = [];   // [{area, plan}] — consumed by extras + BOM
+
 function compute(){
   let totZones=0, totHeads=0, maxZ=0;
   const ceiling=num('ceiling');
   const zoneList=[];
+  LAST_PLANS = [];
   areas.forEach((a,i)=>{
-    const p=plan(a), rb=el('res'+i), sb=el('sk'+i);
+    ensureArea(a);
+    const p=plan(a); LAST_PLANS.push({area:a, plan:p});
+    const rb=el('res'+i), sb=el('sk'+i);
     if(!rb) return;
+    const h=headSpec(a);
+
     if(p.kind==='drip'){
-      rb.innerHTML=`<div class="big"><div class="stat"><div class="n">${p.sqft.toFixed(0)}</div><div class="l">sq ft</div></div><div class="stat"><div class="n">1</div><div class="l">zone</div></div></div><div class="prescribe"><b>Prescription:</b> Low-flow drip / point emitters — meter to plant count on site.</div>`;
-      sb.innerHTML=sketch(a,p); totZones+=1;
-      zoneList.push({area:a.name,gpm:0,drip:true});
+      rb.innerHTML=`
+        <div class="big">
+          <div class="stat"><div class="n">${p.sqft.toFixed(0)}</div><div class="l">sq ft</div></div>
+          <div class="stat"><div class="n">${Math.round(p.dripLengthFt)}</div><div class="l">ft dripline</div></div>
+          <div class="stat"><div class="n">${p.zones}</div><div class="l">zone${p.zones>1?'s':''}</div></div>
+          <div class="stat"><div class="n">${p.totalGPM.toFixed(1)}</div><div class="l">total GPM</div></div>
+        </div>
+        <table class="spec">
+          <tr><td>Dripline</td><td>${esc(p.product.label)}</td></tr>
+          <tr><td>Emitter / row spacing</td><td>${p.product.emitterIn}" x ${p.product.emitterIn}"</td></tr>
+          <tr><td>Tube length (+${a.overagePct||0}% overage)</td><td>${Math.round(p.dripLengthFt)} ft</td></tr>
+          <tr><td>Emitters (approx)</td><td>~${p.emitters.toLocaleString()}</td></tr>
+          <tr><td>Flow</td><td>${Math.round(p.totalGPH)} GPH (${p.totalGPM.toFixed(1)} GPM)</td></tr>
+          <tr><td>Zones (under ${ceiling} GPM)</td><td>${p.zones}</td></tr>
+        </table>
+        <div class="prescribe"><b>Prescription:</b> Area-wide <b>${esc(p.product.label)}</b> - ~${Math.round(p.dripLengthFt)} ft on 12" rows, ${p.zones} drip zone${p.zones>1?'s':''} on ${p.zones>1?'their own':'its own'} pressure-regulated valve${p.zones>1?'s':''}.</div>`;
+      sb.innerHTML=sketch(a,p);
+      totZones+=p.zones; maxZ=Math.max(maxZ,...p.zoneGPM);
+      p.zoneGPM.forEach(g=>zoneList.push({area:a.name,gpm:g,family:'drip'}));
       return;
     }
+
     const n=p.heads.length;
-    const arc=`${p.arcCount[90]}×90° · ${p.arcCount[180]}×180° · ${p.arcCount[360]}×360°`;
-    const perHead=HEADS[a.head].matched?`${(a.g).toFixed(1)} GPM @360° (arc-scaled)`:`${(a.g).toFixed(1)} GPM (fixed, any arc)`;
-    const kind=HEADS[a.head].kind==='strip'?`${n} heads · single run`:`${n} heads`;
-    const flag=p.mixedRotor?`<div class="flag">⚠ This zone mixes arcs on gear rotors (not matched-precip). Group same-arc heads where you can, or compensate with a longer run time for the higher-precip 90° heads on Hydrawise.</div>`:'';
+    const arc=`${p.arcCount[90]}x90 - ${p.arcCount[180]}x180 - ${p.arcCount[360]}x360`;
+    const flowNote=h.matched?'matched precip (arc-scaled flow)':'fixed GPM at any arc';
+    const zoneGpmStr=p.zoneGPM.map(g=>g.toFixed(1)).join(' / ');
+    const flag=p.mixedRotor?`<div class="flag">! Zone mixes arcs on gear rotors (not matched-precip). Group same-arc heads where you can, or bump the run time for the 90 heads on Hydrawise.</div>`:'';
     rb.innerHTML=`
       <div class="big">
         <div class="stat"><div class="n">${p.sqft.toFixed(0)}</div><div class="l">sq ft</div></div>
-        <div class="stat"><div class="n">${n}</div><div class="l">heads</div></div>
+        <div class="stat"><div class="n">${n}</div><div class="l">head${n>1?'s':''}</div></div>
         <div class="stat"><div class="n">${p.zones}</div><div class="l">zone${p.zones>1?'s':''}</div></div>
         <div class="stat"><div class="n">${p.totalGPM.toFixed(1)}</div><div class="l">total GPM</div></div>
       </div>
       <table class="spec">
-        <tr><td>Head format</td><td>${HEADS[a.head].name}</td></tr>
-        <tr><td>Working dims (L × W)</td><td>${p.L.toFixed(0)} × ${p.W.toFixed(0)} ft</td></tr>
-        <tr><td>Radius / spacing</td><td>${a.r} ft / ${(a.r*(parseFloat(el('spacingFactor').value))).toFixed(0)} ft</td></tr>
-        <tr><td>Arc mix</td><td>${arc}</td></tr>
-        <tr><td>Flow per head</td><td>${perHead}</td></tr>
-        <tr><td>GPM per zone</td><td>${p.zoneGPM.map(g=>g.toFixed(1)).join(' / ')}</td></tr>
+        <tr><td>Head</td><td>${esc(h.label)}</td></tr>
+        <tr><td>Working dims (L x W)</td><td>${p.L.toFixed(0)} x ${p.W.toFixed(0)} ft</td></tr>
+        <tr><td>Radius / spacing</td><td>${h.r} ft / ${(h.r*(parseFloat(el('spacingFactor').value))).toFixed(0)} ft</td></tr>
+        <tr><td>${p.kind==='strip'?'Strip pattern':'Arc mix'}</td><td>${p.kind==='strip'?(p.strip.w+"ft x "+p.strip.len+"ft x "+n):arc}</td></tr>
+        <tr><td>Flow model</td><td>${flowNote}</td></tr>
+        <tr><td>GPM per zone</td><td>${zoneGpmStr}</td></tr>
       </table>
-      <div class="prescribe"><b>Prescription:</b> ${kind} of <b>${HEADS[a.head].name}</b> —
-        arc mix ${arc} — split into <b>${p.zones} zone${p.zones>1?'s':''}</b>
-        (${p.zoneGPM.map(g=>g.toFixed(1)).join(' / ')} GPM), each under the ${ceiling} ceiling.</div>
+      <div class="prescribe"><b>Prescription:</b> ${n} x <b>${esc(h.label)}</b>${p.kind==='strip'?' along a single run':' - arc mix '+arc} - <b>${p.zones} zone${p.zones>1?'s':''}</b> (${zoneGpmStr} GPM), each under the ${ceiling} GPM ceiling.</div>
       ${flag}`;
     sb.innerHTML=sketch(a,p)+legend(p);
     totZones+=p.zones; totHeads+=n; maxZ=Math.max(maxZ,...p.zoneGPM);
-    p.zoneGPM.forEach(g=>zoneList.push({area:a.name,gpm:g,drip:false}));
+    p.zoneGPM.forEach(g=>zoneList.push({area:a.name,gpm:g,family:p.family}));
   });
+
   const avail=num('availGPM');
+  const famZones={};
+  LAST_PLANS.forEach(x=>{ const f=x.plan.family; famZones[f]=(famZones[f]||0)+x.plan.zones; });
+  const famSummary=Object.entries(famZones).map(([f,z])=>`${z} ${(FAMILIES[f]?FAMILIES[f].label.split(' ')[0]:f).toLowerCase()}`).join(' + ');
+
   el('grand').innerHTML=`
     <div class="stat"><div class="n">${areas.length}</div><div class="l">areas</div></div>
-    <div class="stat"><div class="n">${totHeads}</div><div class="l">total heads</div></div>
+    <div class="stat"><div class="n">${totHeads}</div><div class="l">spray/rotor heads</div></div>
     <div class="stat"><div class="n">${totZones}</div><div class="l">total zones</div></div>
     <div class="stat"><div class="n">${maxZ.toFixed(1)}</div><div class="l">peak zone GPM</div></div>
     <div class="stat"><div class="n">${avail.toFixed(1)}</div><div class="l">avail GPM</div></div>`;
-  const ctrl=totZones<=6?"6-station":totZones<=12?"12-station":"16-station";
+  const ctrl=totZones<=6?"6-station":totZones<=12?"12-station":`${totZones}-station (HPC + PCM modules)`;
   const ok=maxZ<=avail+0.001;
-  el('grandNote').innerHTML=`Recommended controller: <b>Hydrawise ${ctrl}</b> (Pro-HC / HPC). `+
-    (ok?`<span style="color:var(--ok)">✓ Peak zone (${maxZ.toFixed(1)} GPM) is within available supply (${avail} GPM).</span>`
-       :`<span style="color:var(--warn)">⚠ Peak zone (${maxZ.toFixed(1)} GPM) exceeds available ${avail} GPM — lower the ceiling or use a lower-flow nozzle.</span>`);
+  el('grandNote').innerHTML=
+    `Recommended controller: <b>Hydrawise ${ctrl}</b> (Pro-HC / HPC). `+
+    (ok?`<span style="color:var(--ok)">OK - peak zone (${maxZ.toFixed(1)} GPM) within available ${avail} GPM.</span>`
+       :`<span style="color:var(--warn)">! Peak zone (${maxZ.toFixed(1)} GPM) exceeds available ${avail} GPM - lower the ceiling or use a lower-flow nozzle.</span>`)+
+    `<br><span style="color:var(--ok)">Zone integrity OK - rotor / spray / strip / drip never share a valve${famSummary?' ('+famSummary+')':''}.</span>`;
+
   wcZones=zoneList;
+  if(typeof renderExtras==='function') renderExtras();
+  if(typeof renderBOM==='function') renderBOM();
   renderCosts(false);
 }
 
