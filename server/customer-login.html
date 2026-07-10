@@ -23,12 +23,12 @@
       <a href="/" class="login-logo"><img src="/crm/pjl-logo.svg" alt="PJL Land Services"></a>
       <p class="login-eyebrow">Customer Portal Sign-in</p>
       <h1>Find your PJL portal.</h1>
-      <p class="login-copy">Enter the email, phone number, or property address you used when you booked. We'll email you a one-time login link that's valid for 30 minutes.</p>
+      <p class="login-copy">Enter the email address you used when you booked. We'll email you a one-time login link that's valid for 30 minutes.</p>
 
       <form id="portalLoginForm" class="login-form">
         <label>
-          <span>Email, phone, or property address</span>
-          <input type="text" name="identifier" required autofocus autocomplete="off">
+          <span>Email address</span>
+          <input type="email" name="identifier" required autofocus autocomplete="email">
         </label>
         <p id="portalLoginError" class="login-error" hidden></p>
         <button type="submit">Email me a login link <span aria-hidden="true">&rarr;</span></button>
