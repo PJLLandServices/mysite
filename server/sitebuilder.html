@@ -61,6 +61,17 @@
   .grand .stat{min-width:110px}
   .adv{font-size:11px;color:var(--muted)}
   .adv input{width:66px !important}
+  /* ---- Project link bar ---- */
+  #projectPanel{background:linear-gradient(180deg,#fff,#f6faf6)}
+  .projbar{display:flex;flex-wrap:wrap;gap:10px 12px;align-items:center;font-size:14px}
+  .projbar .plink{font-weight:700;color:var(--green-d);background:var(--green-l);border:1px solid var(--line);border-radius:6px;padding:2px 8px}
+  .projbar .pname{font-weight:600}
+  .projbar select{padding:9px 10px;border:1px solid var(--line);border-radius:8px;font-size:16px;background:#fff;min-width:240px}
+  .projbar .saved{font-size:12px;color:var(--muted)}
+  .projbar .saved.unsaved{color:var(--warn);font-weight:600}
+  .projbar .grow{flex:1 1 auto}
+  button.save{background:var(--green);border-color:var(--green)}
+  button.save[disabled]{opacity:.5;cursor:not-allowed}
   /* ---- Water-cost table ---- */
   .costwrap{overflow-x:auto;margin-top:12px;-webkit-overflow-scrolling:touch}
   table.cost{width:100%;border-collapse:collapse;font-size:13px;min-width:640px}
@@ -113,6 +124,11 @@
 </header>
 
 <div class="wrap">
+
+  <div class="panel" id="projectPanel">
+    <h2>Project</h2>
+    <div class="projbar" id="projectBar"><span class="saved">Loading…</span></div>
+  </div>
 
   <div class="panel">
     <h2>1 · Water Supply</h2>
@@ -199,11 +215,11 @@ let areas=[];
 const el=id=>document.getElementById(id);
 const num=id=>parseFloat(el(id).value)||0;
 
-function loadDefaults(){ areas=JSON.parse(JSON.stringify(DEFAULT_AREAS)); render(); }
-function addArea(){ areas.push({name:"New Area",mode:"rect",L:40,W:30,sqft:1200,avgW:30,head:"pgp4",r:32,g:2.6}); render(); }
-function delArea(i){ areas.splice(i,1); render(); }
-function onHeadChange(i,v){ areas[i].head=v; areas[i].r=HEADS[v].r; areas[i].g=HEADS[v].g; render(); }
-function upd(i,k,v){ areas[i][k]=(k==='name'||k==='mode'||k==='head')?v:parseFloat(v)||0; compute(); }
+function loadDefaults(){ areas=JSON.parse(JSON.stringify(DEFAULT_AREAS)); render(); markDirty(); }
+function addArea(){ areas.push({name:"New Area",mode:"rect",L:40,W:30,sqft:1200,avgW:30,head:"pgp4",r:32,g:2.6}); render(); markDirty(); }
+function delArea(i){ areas.splice(i,1); render(); markDirty(); }
+function onHeadChange(i,v){ areas[i].head=v; areas[i].r=HEADS[v].r; areas[i].g=HEADS[v].g; render(); markDirty(); }
+function upd(i,k,v){ areas[i][k]=(k==='name'||k==='mode'||k==='head')?v:parseFloat(v)||0; compute(); markDirty(); }
 
 function geom(a){
   if(a.mode==='rect'){ const L=Math.max(a.L,1),W=Math.max(a.W,1); return {L,W,sqft:L*W}; }
@@ -559,6 +575,8 @@ function onTownChange(){
   updateCostCells();
 }
 
+let pendingTownValue = null;   // town key to apply once the rate list loads
+
 fetch(RATES_URL, {cache:'no-store'})
   .then(res=>{ if(!res.ok) throw new Error('HTTP '+res.status); return res.json(); })
   .then(json=>{
@@ -567,18 +585,193 @@ fetch(RATES_URL, {cache:'no-store'})
     TOWNS = towns;
   })
   .catch(()=>{ TOWNS = FALLBACK_TOWNS; ratesOffline = true; })
-  .finally(()=>{ buildTownSelect(); renderCosts(true); });
+  .finally(()=>{
+    buildTownSelect();
+    if(pendingTownValue){ el('wcTown').value = pendingTownValue; pendingTownValue = null; }
+    onTownChange();          // sync custom-rate field visibility + costs
+    renderCosts(true);
+  });
 
-el('wcTown').addEventListener('change', onTownChange);
-['wcRun','wcCycles','wcWeeks','wcManualRate','wcManualUnit'].forEach(id=>{
-  el(id).addEventListener('input', updateCostCells);
-  el(id).addEventListener('change', updateCostCells);
+/* ════════════════ Project link — load / save ════════════════ */
+
+const PROJECT_ID = new URLSearchParams(location.search).get('project') || null;
+const GLOBAL_INPUT_IDS = ['availGPM','psi','supply','ceiling','spacingFactor','wcTown','wcRun','wcCycles','wcWeeks','wcManualRate','wcManualUnit'];
+let linkedProject = null;   // { id, name, customerName }
+let projectList = null;     // for the standalone picker
+let lastSavedLabel = null;
+let dirty = false;
+let appReady = false, restoring = false;
+
+function markDirty(){ if(!appReady || restoring) return; if(!dirty){ dirty = true; updateProjectBar(); } }
+
+function fmtSaved(iso){
+  if(!iso) return null;
+  const d = new Date(iso);
+  if(isNaN(d)) return null;
+  return d.toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'});
+}
+
+function serializeState(){
+  const inputs = {};
+  GLOBAL_INPUT_IDS.forEach(id=>{ const e = el(id); if(e) inputs[id] = e.value; });
+  return {
+    version: 2,
+    savedAt: new Date().toISOString(),
+    inputs,
+    areas: JSON.parse(JSON.stringify(areas)),
+    wcRunOverrides: JSON.parse(JSON.stringify(wcRunOverrides))
+  };
+}
+
+function restoreState(blob){
+  if(!blob || typeof blob !== 'object') return false;
+  restoring = true;
+  try{
+    if(blob.inputs && typeof blob.inputs === 'object'){
+      Object.entries(blob.inputs).forEach(([id,v])=>{
+        if(id === 'wcTown'){ return; }               // applied after the rate list loads
+        const e = el(id); if(e != null && v != null) e.value = v;
+      });
+      if(blob.inputs.wcTown){
+        if(TOWNS){ el('wcTown').value = blob.inputs.wcTown; } else { pendingTownValue = blob.inputs.wcTown; }
+      }
+    }
+    if(Array.isArray(blob.areas)) areas = JSON.parse(JSON.stringify(blob.areas));
+    if(blob.wcRunOverrides && typeof blob.wcRunOverrides === 'object'){
+      Object.keys(wcRunOverrides).forEach(k=>delete wcRunOverrides[k]);
+      Object.assign(wcRunOverrides, blob.wcRunOverrides);
+    }
+    render();          // rebuilds area cards + runs compute()
+    if(TOWNS) onTownChange();
+    return true;
+  } catch(_){ return false; }
+  finally { restoring = false; }
+}
+
+async function loadProjectList(){
+  try{
+    const res = await fetch('/api/projects?includeArchived=0', {headers:{'Accept':'application/json'}});
+    if(!res.ok) return;
+    const j = await res.json();
+    if(j.ok && Array.isArray(j.projects)) projectList = j.projects;
+  } catch(_){ /* leave picker empty */ }
+  updateProjectBar();
+}
+
+function updateProjectBar(){
+  const bar = el('projectBar');
+  if(!bar) return;
+  if(linkedProject){
+    const cust = linkedProject.customerName ? ' · ' + esc(linkedProject.customerName) : '';
+    let status;
+    if(dirty) status = '<span class="saved unsaved">Unsaved changes</span>';
+    else if(lastSavedLabel) status = `<span class="saved">Saved ${esc(lastSavedLabel)}</span>`;
+    else status = '<span class="saved">No design saved yet</span>';
+    bar.innerHTML =
+      `<span class="plink">${esc(linkedProject.id)}</span>` +
+      `<span class="pname">${esc(linkedProject.name || '(unnamed project)')}${cust}</span>` +
+      `<span class="grow"></span>${status}` +
+      `<button class="save" id="saveBtn" onclick="saveDesign()">Save to project</button>`;
+  } else {
+    const opts = (projectList || []).map(p=>
+      `<option value="${esc(p.id)}">${esc(p.id)} — ${esc(p.name || '(unnamed)')}${p.customerName ? ' · ' + esc(p.customerName) : ''}</option>`
+    ).join('');
+    const picker = projectList
+      ? `<select id="projPick" aria-label="Attach to project"><option value="">— pick a project —</option>${opts}</select>` +
+        `<button class="save" onclick="attachToPicked()">Attach &amp; save</button>`
+      : `<span class="saved">Loading projects…</span>`;
+    bar.innerHTML =
+      `<span>Free sketch — not linked to a project.</span>${picker}` +
+      `<span class="grow"></span>` +
+      `<span class="saved">Attach to a project to save this design.</span>`;
+  }
+}
+
+async function saveDesign(){
+  if(!linkedProject) return;
+  const btn = el('saveBtn');
+  if(btn){ btn.disabled = true; btn.textContent = 'Saving…'; }
+  try{
+    const blob = serializeState();
+    const res = await fetch('/api/projects/' + encodeURIComponent(linkedProject.id), {
+      method:'PATCH',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ systemDesign: blob })
+    });
+    const j = await res.json().catch(()=>({}));
+    if(res.ok && j.ok){
+      dirty = false;
+      lastSavedLabel = fmtSaved(blob.savedAt) || 'just now';
+    } else {
+      alert('Save failed: ' + ((j.errors && j.errors[0]) || ('HTTP ' + res.status)));
+    }
+  } catch(err){
+    alert('Save failed: ' + (err.message || err));
+  } finally {
+    updateProjectBar();
+  }
+}
+
+async function attachToPicked(){
+  const pick = el('projPick');
+  const id = pick ? pick.value : '';
+  if(!id){ alert('Pick a project first.'); return; }
+  const p = (projectList || []).find(x=>x.id === id);
+  linkedProject = { id, name: p ? p.name : '', customerName: p ? p.customerName : '' };
+  // Reflect the link in the URL so a refresh keeps it (and matches the
+  // project-page deep link).
+  const u = new URL(location.href); u.searchParams.set('project', id);
+  history.replaceState(null, '', u);
+  await saveDesign();
+}
+
+async function initApp(){
+  // Global-input listeners (compute + dirty). supply size is design-only
+  // for now (drives BOM later); still flag it dirty.
+  ['availGPM','psi','ceiling','spacingFactor'].forEach(id=>{
+    el(id).addEventListener('input', ()=>{ compute(); markDirty(); });
+    el(id).addEventListener('change', ()=>{ compute(); markDirty(); });
+  });
+  el('supply').addEventListener('change', markDirty);
+  el('wcTown').addEventListener('change', ()=>{ onTownChange(); markDirty(); });
+  ['wcRun','wcCycles','wcWeeks','wcManualRate','wcManualUnit'].forEach(id=>{
+    el(id).addEventListener('input', ()=>{ updateCostCells(); markDirty(); });
+    el(id).addEventListener('change', ()=>{ updateCostCells(); markDirty(); });
+  });
+
+  if(PROJECT_ID){
+    let restored = false;
+    try{
+      const res = await fetch('/api/projects/' + encodeURIComponent(PROJECT_ID), {headers:{'Accept':'application/json'}});
+      if(res.ok){
+        const j = await res.json();
+        if(j.ok && j.project){
+          linkedProject = { id: j.project.id, name: j.project.name, customerName: j.project.customerName };
+          if(j.project.systemDesign){
+            restored = restoreState(j.project.systemDesign);
+            lastSavedLabel = fmtSaved(j.project.systemDesign.savedAt);
+          }
+        }
+      }
+    } catch(_){ /* fall through to defaults */ }
+    if(!restored) loadDefaults();
+    // If PROJECT_ID was bad/unknown, leave linkedProject null → free sketch.
+    if(!linkedProject) loadProjectList();
+  } else {
+    loadDefaults();
+    loadProjectList();
+  }
+
+  dirty = false;
+  appReady = true;
+  updateProjectBar();
+}
+
+window.addEventListener('beforeunload', (e)=>{
+  if(dirty && linkedProject){ e.preventDefault(); e.returnValue = ''; }
 });
 
-['availGPM','psi','ceiling','spacingFactor'].forEach(id=>{
-  el(id).addEventListener('input',compute); el(id).addEventListener('change',compute);
-});
-loadDefaults();
+initApp();
 </script>
 </body>
 </html>
