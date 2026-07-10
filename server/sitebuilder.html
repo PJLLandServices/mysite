@@ -290,6 +290,7 @@ function familyDefaults(a){
 function ensureArea(a){
   if(!a.family){ const m = LEGACY_HEAD_MAP[a.head] || ["rotor","rotorNoz","b40"]; a.family=m[0]; a[m[1]]=m[2]; }
   if(!FAMILIES[a.family]) a.family="rotor";
+  delete a.head; delete a.r; delete a.g;   // drop legacy v1 fields once migrated
   familyDefaults(a);
   return a;
 }
