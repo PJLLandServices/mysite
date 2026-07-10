@@ -213,20 +213,22 @@
    per-area. See the family partition note in compute().               */
 
 // Hunter PGP / PGP-Ultra / I-20 gear rotor - FIXED GPM at any arc.
-// Blue standard nozzles @45 PSI; gray low-angle @40 PSI. (Hunter spec.)
+// Values read from Hunter's official PGP-ADJ cutsheet (CA-Cutsheet-PGP-EM)
+// at 3.0 bar (~44 PSI, mid of Hunter's 1.7-4.5 bar recommended range),
+// converted from metric (m x 3.281 = ft; m3/hr x 4.403 = US GPM).
 const PGP_NOZZLES = {
-  b15:{label:"#1.5 blue",     r:31, g:1.5},
-  b20:{label:"#2.0 blue",     r:34, g:2.0},
-  b25:{label:"#2.5 blue",     r:35, g:2.5},
+  b15:{label:"#1.5 blue",     r:32, g:1.5},
+  b20:{label:"#2.0 blue",     r:34, g:1.9},
+  b25:{label:"#2.5 blue",     r:35, g:2.4},
   b30:{label:"#3.0 blue",     r:38, g:3.0},
   b40:{label:"#4.0 blue",     r:40, g:4.0},
   b50:{label:"#5.0 blue",     r:42, g:5.0},
   b60:{label:"#6.0 blue",     r:43, g:6.0},
   b80:{label:"#8.0 blue",     r:44, g:8.0},
-  g20:{label:"2.0 low-angle", r:27, g:1.9},
-  g25:{label:"2.5 low-angle", r:30, g:2.5},
-  g35:{label:"3.5 low-angle", r:32, g:3.1},
-  g45:{label:"4.5 low-angle", r:34, g:3.9}
+  g20:{label:"2.0 low-angle", r:27, g:2.0},
+  g25:{label:"2.5 low-angle", r:32, g:2.6},
+  g35:{label:"3.5 low-angle", r:33, g:3.3},
+  g45:{label:"4.5 low-angle", r:34, g:4.1}
 };
 // Hunter MP Rotator - matched precip (arc-scaled flow), @40 PSI @360deg.
 const MP_NOZZLES = {
