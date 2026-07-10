@@ -721,35 +721,17 @@ async function handleAuth(req, res, pathname) {
       const payload = await parseRequestBody(req);
       const email = String(payload?.email || "").trim().toLowerCase();
       const password = String(payload?.password || "");
-      // Always run the scrypt verify — even on a blank password — so the
-      // timing envelope of every non-staff branch below stays uniform
-      // (verifyPassword itself dummy-hashes on unknown emails).
       const user = await users.verifyPassword(email, password);
-      if (password && user && !user.disabled) {
-        await setSessionCookie(req, res, { uid: user.id, role: user.role });
-        users.recordLogin(user.id).catch((err) => {
-          console.warn("[auth] recordLogin failed:", err?.message);
-        });
-        return sendJson(res, 200, { ok: true, role: user.role });
+      if (!user || user.disabled) {
+        // Identical message + status for "wrong email," "wrong password,"
+        // and "disabled account." Don't leak which branch failed.
+        return sendJson(res, 401, { ok: false, errors: ["Invalid credentials."] });
       }
-      // Unified door fallback (brief §11, Jul 2026). EVERY other outcome
-      // — blank password, wrong password, disabled staff account, email
-      // that isn't a staff account, unknown email — routes into the
-      // existing customer magic-link path and returns ONE generic
-      // response. Never reveal which branch was taken: a wrong staff
-      // password must be indistinguishable from an unknown email or a
-      // valid customer email. Precedence for an email that is BOTH a
-      // staff account and a customer lead: password present → staff
-      // attempt above; blank password → customer link here.
-      // requestPortalMagicLink applies the request-link rate limits
-      // (3/hr per identifier, 10/hr per IP) before any lookup, on top of
-      // the /api/login IP limiter already checked at the top.
-      await requestPortalMagicLink(email, ip);
-      return sendJson(res, 200, {
-        ok: true,
-        magicLink: true,
-        message: "If an account exists, check your email for a sign-in link."
+      await setSessionCookie(req, res, { uid: user.id, role: user.role });
+      users.recordLogin(user.id).catch((err) => {
+        console.warn("[auth] recordLogin failed:", err?.message);
       });
+      return sendJson(res, 200, { ok: true, role: user.role });
     } catch {
       return sendJson(res, 400, { ok: false, errors: ["Unable to log in."] });
     }
@@ -2958,11 +2940,11 @@ async function handlePortalLoginApi(req, res, pathname) {
     const t = url.searchParams.get("t") || "";
     const result = await magicTokens.verify(t, "customer_login");
     if (!result.ok) {
-      return redirect(res, "/login?error=expired");
+      return redirect(res, "/portal/login?error=expired");
     }
     const claimed = await magicTokens.markUsed(t);
     if (!claimed) {
-      return redirect(res, "/login?error=expired");
+      return redirect(res, "/portal/login?error=expired");
     }
     // subjectId can be a customer id (current intake path) OR a lead id
     // (legacy tokens still sitting in customer inboxes). The format check
@@ -2991,7 +2973,7 @@ async function handlePortalLoginApi(req, res, pathname) {
       }
     }
     if (!customer && !lead) {
-      return redirect(res, "/login?error=expired");
+      return redirect(res, "/portal/login?error=expired");
     }
     // Stamp lastLoginAt on the lead the customer lands on, for the
     // existing portal-login audit trail.
@@ -16268,8 +16250,11 @@ function resolveStaticTarget(pathname) {
   if (pathname === "/admin/users" || pathname === "/admin/users/") {
     return { dir: SERVER_DIR, relative: "/users.html" };
   }
-  // NOTE: /portal/login no longer maps to a page — it 301s to the
-  // unified /login door in the request handler (brief §11, Jul 2026).
+  // Customer portal magic-link login. Public page; the form POSTs to
+  // /api/portal/request-link which always returns the generic 200.
+  if (pathname === "/portal/login" || pathname === "/portal/login/") {
+    return { dir: SERVER_DIR, relative: "/customer-login.html" };
+  }
   // Admin/tech password reset (via emailed magic link). Public page; the
   // token in ?t=<id> is the credential, validated by /api/reset-password.
   if (pathname === "/reset-password" || pathname === "/reset-password/") {
@@ -16633,22 +16618,6 @@ const server = http.createServer(async (req, res) => {
 
     const authHandled = await handleAuth(req, res, pathname);
     if (authHandled !== false) return;
-
-    // Unified login door (brief §11, Jul 2026): /portal/login is retired
-    // as a page — 301 to /login, which now handles both staff passwords
-    // and customer magic-link requests. Permanent 301 (old bookmarks /
-    // cached nav links should re-learn), query string preserved so
-    // ?error=expired from a stale magic-link click still surfaces.
-    // /portal/login/verify (the emailed link target) and the permanent
-    // /portal/<token> URLs are untouched.
-    if (req.method === "GET" && (pathname === "/portal/login" || pathname === "/portal/login/")) {
-      res.writeHead(301, {
-        location: "/login" + (url.search || ""),
-        "cache-control": "no-store"
-      });
-      res.end();
-      return;
-    }
 
     // Magic-link customer verify — the URL the customer clicks in their
     // email is /portal/login/verify (no /api/ prefix per the spec). The
