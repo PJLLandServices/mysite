@@ -37,6 +37,7 @@
       <a href="/admin/customers">Customers</a>
       <a href="/admin/properties">Properties</a>
       <a href="/admin/projects" class="is-active">Projects</a>
+      <a href="/admin/sitebuilder">System Builder</a>
       <a href="/admin/work-orders">Work orders</a>
       <a href="/admin/quote-folder">Quotes <span class="pjl-nav-badge" data-quote-accepted-badge hidden></span></a>
       <a href="/admin/invoices">Invoices</a>
@@ -250,7 +251,10 @@
         <section class="proj-section">
           <div class="proj-section-head">
             <h2>Material lists</h2>
-            <button type="button" class="pjl-btn pjl-btn-primary" id="newMaterialListButton">+ New material list</button>
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
+              <a class="pjl-btn pjl-btn-outline" id="projDesignSystemLink" href="/admin/sitebuilder">Design system</a>
+              <button type="button" class="pjl-btn pjl-btn-primary" id="newMaterialListButton">+ New material list</button>
+            </div>
           </div>
           <p class="proj-empty" id="projMlsEmpty" hidden>No material lists yet. Create one to track parts for this project.</p>
           <ul class="proj-row-list" id="projMlsList"></ul>

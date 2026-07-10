@@ -148,6 +148,10 @@
   async function boot() {
     state.projectId = getProjectIdFromUrl();
     if (!state.projectId) { showError("No project id in URL."); return; }
+    // Point the "Design system" button at the Sprinkler System Builder,
+    // pre-linked to this install so the saved design attaches here.
+    const dsl = document.getElementById("projDesignSystemLink");
+    if (dsl) dsl.href = `/admin/sitebuilder?project=${encodeURIComponent(state.projectId)}`;
     await loadProject();
   }
 
