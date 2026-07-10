@@ -418,7 +418,11 @@ const LEGACY_REDIRECTS = {
   // 301 to their North York parent so the indexed URLs don't 404.
   "/sprinkler-service-bayview-village.html": "/sprinkler-service-north-york.html",
   "/sprinkler-service-bridle-path.html": "/sprinkler-service-north-york.html",
-  "/sprinkler-service-willowdale.html": "/sprinkler-service-north-york.html"
+  "/sprinkler-service-willowdale.html": "/sprinkler-service-north-york.html",
+  // Sprinkler System Builder was briefly published publicly (Jul 10 2026)
+  // then moved behind the staff login. 301 the old public URL to the
+  // gated route (which itself redirects anonymous users to /login).
+  "/sitebuilder.html": "/admin/sitebuilder"
 };
 
 function normalizeString(value, maxLength = 400) {
@@ -631,6 +635,10 @@ function needsAuth(method, pathname) {
   // Projects (Phase 2 — multi-WO container that material lists attach to).
   if (pathname === "/admin/projects" || pathname === "/admin/projects/") return "user";
   if (/^\/admin\/project\/[^/]+\/?$/.test(pathname)) return "user";
+  // Sprinkler System Builder — internal install-design tool. Staff-gated
+  // (admin OR tech). Saves designs onto project.systemDesign via the
+  // existing /api/projects/:id PATCH, so no dedicated API prefix here.
+  if (pathname === "/admin/sitebuilder" || pathname === "/admin/sitebuilder/") return "user";
   // Catalog ↔ supplier assignments + Purchase Orders (Phase 3).
   if (pathname === "/admin/parts-suppliers" || pathname === "/admin/parts-suppliers/") return "user";
   if (pathname === "/admin/purchase-orders" || pathname === "/admin/purchase-orders/") return "user";
@@ -16224,6 +16232,10 @@ function resolveStaticTarget(pathname) {
   }
   if (/^\/admin\/project\/[^/]+\/?$/.test(pathname)) {
     return { dir: SERVER_DIR, relative: "/project.html" };
+  }
+  // Sprinkler System Builder (staff-gated internal design tool).
+  if (pathname === "/admin/sitebuilder" || pathname === "/admin/sitebuilder/") {
+    return { dir: SERVER_DIR, relative: "/sitebuilder.html" };
   }
   // Tech-mode pop-out — mobile-first, tap-optimized layout. Same WO id,
   // different page. Route check must come BEFORE the desktop editor's

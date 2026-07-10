@@ -13,3 +13,5 @@
 /sprinkler-service-bayview-village.html  /sprinkler-service-north-york.html  301
 /sprinkler-service-bridle-path.html      /sprinkler-service-north-york.html  301
 /sprinkler-service-willowdale.html       /sprinkler-service-north-york.html  301
+# Sprinkler System Builder moved behind the staff login (Jul 2026).
+/sitebuilder.html   /admin/sitebuilder   301

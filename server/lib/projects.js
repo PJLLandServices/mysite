@@ -99,6 +99,15 @@ function blankProject() {
     description: "",   // one-paragraph scope ("retrofit front yard, 14 zones")
     notes: "",         // free-form internal notes
 
+    // systemDesign — the saved Sprinkler System Builder design for this
+    // install (server/sitebuilder.html, /admin/sitebuilder). Opaque JSON
+    // blob owned by the builder UI: supply inputs, per-area head/nozzle
+    // spec, computed zones, drip footage, BOM, water-cost inputs. null
+    // until a design is saved against the project. Written whole via
+    // PATCH /api/projects/:id { systemDesign: {...} }; the server only
+    // size-caps + timestamps it, never interprets the shape.
+    systemDesign: null,
+
     // Linked work orders. Push via attachWorkOrder; remove via
     // detachWorkOrder. Order is insertion order — UI sorts as needed.
     workOrderIds: [],
@@ -214,7 +223,8 @@ function hydrate(rec) {
     projectCompletionAt: typeof rec?.projectCompletionAt === "string" ? rec.projectCompletionAt : null,
     invoiceGeneratedAt: typeof rec?.invoiceGeneratedAt === "string" ? rec.invoiceGeneratedAt : null,
     propertyEditsAppliedAt: typeof rec?.propertyEditsAppliedAt === "string" ? rec.propertyEditsAppliedAt : null,
-    finalInvoiceId: typeof rec?.finalInvoiceId === "string" ? rec.finalInvoiceId : null
+    finalInvoiceId: typeof rec?.finalInvoiceId === "string" ? rec.finalInvoiceId : null,
+    systemDesign: (rec && typeof rec.systemDesign === "object") ? rec.systemDesign : null
   };
 }
 
@@ -383,6 +393,26 @@ async function update(id, patch = {}) {
     if (current.buildTracking !== wantOn) {
       next.buildTracking = wantOn;
       appendHistory(next, { action: wantOn ? "build_tracking_started" : "build_tracking_stopped" });
+    }
+  }
+
+  // systemDesign — whole-blob write from the Sprinkler System Builder.
+  // Stored opaque; only validated for type + size (guard against a
+  // runaway payload bloating projects.json). Pass null to clear.
+  if (Object.prototype.hasOwnProperty.call(patch, "systemDesign")) {
+    const sd = patch.systemDesign;
+    if (sd == null) {
+      next.systemDesign = null;
+      appendHistory(next, { action: "system_design_cleared" });
+    } else if (typeof sd === "object") {
+      const size = JSON.stringify(sd).length;
+      if (size > 512 * 1024) {
+        throw new Error("System design is too large to save (over 512 KB).");
+      }
+      next.systemDesign = sd;
+      appendHistory(next, { action: "system_design_saved", note: `${size} bytes` });
+    } else {
+      throw new Error("systemDesign must be an object or null.");
     }
   }
 
