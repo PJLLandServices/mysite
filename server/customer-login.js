@@ -16,7 +16,7 @@ const confirmPanel = document.getElementById("portalLoginConfirm");
 // page.
 const params = new URLSearchParams(window.location.search);
 if (params.get("error") === "expired") {
-  error.textContent = "That login link has expired or already been used. Enter your details below to get a fresh one.";
+  error.textContent = "That login link has expired or already been used. Enter your email below to get a fresh one.";
   error.hidden = false;
 }
 
@@ -27,7 +27,7 @@ form.addEventListener("submit", async (event) => {
   const fd = new FormData(form);
   const identifier = String(fd.get("identifier") || "").trim();
   if (!identifier) {
-    error.textContent = "Please enter your email, phone, or address.";
+    error.textContent = "Please enter your email address.";
     error.hidden = false;
     return;
   }
