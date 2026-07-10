@@ -8,11 +8,11 @@
     { "key": "east_gwillimbury",       "name": "East Gwillimbury",        "region": "York Region",     "combinedRate": 5.03, "verified": true,  "effective": "2026" },
     { "key": "richmond_hill",          "name": "Richmond Hill",           "region": "York Region",     "combinedRate": 5.96, "verified": true,  "effective": "Apr 2026" },
     { "key": "markham",                "name": "Markham",                 "region": "York Region",     "combinedRate": 5.37, "verified": true,  "effective": "Apr 2026" },
-    { "key": "vaughan",                "name": "Vaughan",                 "region": "York Region",     "combinedRate": 5.30, "verified": false, "effective": "2025 est" },
-    { "key": "thornhill",              "name": "Thornhill",               "region": "York Region",     "combinedRate": 5.30, "verified": false, "effective": "2025 est" },
-    { "key": "king",                   "name": "King Township",           "region": "York Region",     "combinedRate": 5.20, "verified": false, "effective": "2025 est" },
-    { "key": "whitchurch_stouffville", "name": "Whitchurch-Stouffville",  "region": "York Region",     "combinedRate": 5.20, "verified": false, "effective": "2025 est" },
-    { "key": "georgina",               "name": "Georgina (Keswick)",      "region": "York Region",     "combinedRate": 5.20, "verified": false, "effective": "2025 est" },
+    { "key": "vaughan",                "name": "Vaughan",                 "region": "York Region",     "combinedRate": 5.56, "verified": false, "effective": "2026 est (derived from official increase)" },
+    { "key": "thornhill",              "name": "Thornhill",               "region": "York Region",     "combinedRate": 5.56, "verified": false, "effective": "2026 est (Vaughan/Markham — not its own municipality)" },
+    { "key": "king",                   "name": "King Township",           "region": "York Region",     "combinedRate": 4.87, "verified": true,  "effective": "2025" },
+    { "key": "whitchurch_stouffville", "name": "Whitchurch-Stouffville",  "region": "York Region",     "combinedRate": 5.99, "verified": true,  "effective": "Apr 2026" },
+    { "key": "georgina",               "name": "Georgina (Keswick)",      "region": "York Region",     "combinedRate": 7.62, "verified": false, "effective": "2025 (official page; outlier, verify bill)" },
     { "key": "toronto",                "name": "Toronto",                 "region": "City of Toronto", "combinedRate": 4.86, "verified": true,  "effective": "Jan 2026" },
     { "key": "mississauga",            "name": "Mississauga",             "region": "Peel Region",     "combinedRate": 2.58, "verified": true,  "effective": "Apr 2026" },
     { "key": "brampton",               "name": "Brampton",                "region": "Peel Region",     "combinedRate": 2.58, "verified": true,  "effective": "Apr 2026" },
@@ -20,8 +20,8 @@
     { "key": "pickering",              "name": "Pickering",               "region": "Durham Region",   "combinedRate": 3.79, "verified": true,  "effective": "2026" },
     { "key": "whitby",                 "name": "Whitby",                  "region": "Durham Region",   "combinedRate": 3.79, "verified": true,  "effective": "2026" },
     { "key": "oshawa",                 "name": "Oshawa",                  "region": "Durham Region",   "combinedRate": 3.79, "verified": true,  "effective": "2026" },
-    { "key": "bradford",               "name": "Bradford W. Gwillimbury", "region": "Simcoe County",   "combinedRate": 4.20, "verified": false, "effective": "2025 est" },
-    { "key": "innisfil",               "name": "Innisfil",                "region": "Simcoe County",   "combinedRate": 4.20, "verified": false, "effective": "2025 est" },
-    { "key": "barrie",                 "name": "Barrie",                  "region": "City of Barrie",  "combinedRate": 4.20, "verified": false, "effective": "2026 est" }
+    { "key": "bradford",               "name": "Bradford W. Gwillimbury", "region": "Simcoe County",   "combinedRate": 4.00, "verified": false, "effective": "2025 est (site unscrapable — verify bylaw)" },
+    { "key": "innisfil",               "name": "Innisfil",                "region": "Simcoe County",   "combinedRate": 4.36, "verified": true,  "effective": "Apr 2026" },
+    { "key": "barrie",                 "name": "Barrie",                  "region": "City of Barrie",  "combinedRate": 3.37, "verified": true,  "effective": "May 2026" }
   ]
 }
