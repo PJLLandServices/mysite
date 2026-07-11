@@ -467,6 +467,34 @@ function pointInPoly(x,y,poly){
 }
 function validPoly(a){ return a.mode==='custom' && Array.isArray(a.poly) && a.poly.length>=3; }
 function circlePoly(cx,cy,r,n){ n=n||48; const p=[]; for(let i=0;i<n;i++){ const t=i/n*2*Math.PI; p.push({x:cx+r*Math.cos(t), y:cy+r*Math.sin(t)}); } return p; }
+// A polygon is rectilinear if every edge is axis-aligned (L / T / step beds).
+function isRectilinear(poly){
+  for(let i=0;i<poly.length;i++){ const A=poly[i],B=poly[(i+1)%poly.length];
+    if(Math.abs(A.x-B.x)>0.05 && Math.abs(A.y-B.y)>0.05) return false;
+  }
+  return true;
+}
+// Decompose a rectilinear polygon into tiling rectangles (horizontal bands,
+// then merge vertically-adjacent bands of equal x/width into maximal rects).
+function rectDecompose(poly){
+  const ys=[...new Set(poly.map(p=>Math.round(p.y*100)/100))].sort((a,b)=>a-b);
+  const bands=[];
+  for(let i=0;i<ys.length-1;i++){
+    const y0=ys[i], y1=ys[i+1], ym=(y0+y1)/2, xs=[];
+    for(let j=0;j<poly.length;j++){ const A=poly[j], B=poly[(j+1)%poly.length];
+      if((A.y>ym)!==(B.y>ym)){ xs.push(A.x+(B.x-A.x)*(ym-A.y)/((B.y-A.y)||1e-9)); }
+    }
+    xs.sort((a,b)=>a-b);
+    for(let k=0;k+1<xs.length;k+=2){ if(xs[k+1]-xs[k]>0.05) bands.push({x:xs[k], y:y0, w:xs[k+1]-xs[k], h:y1-y0}); }
+  }
+  bands.sort((a,b)=>a.x-b.x || a.y-b.y);
+  const merged=[];
+  for(const b of bands){
+    const prev=merged.find(m=>Math.abs(m.x-b.x)<0.05 && Math.abs(m.w-b.w)<0.05 && Math.abs((m.y+m.h)-b.y)<0.05);
+    if(prev) prev.h+=b.h; else merged.push({x:b.x,y:b.y,w:b.w,h:b.h});
+  }
+  return merged;
+}
 function isCircle(a){ return a.mode==='custom' && a.shapeKind==='circle' && a.circle && a.circle.r>0; }
 
 function geom(a){
@@ -518,10 +546,21 @@ function plan(a){
     const zoneGPM=new Array(zones).fill(totalGPM/zones);
     const dPoly = gm.poly ? gm.poly.map(p=>({x:p.x-gm.bb.minX, y:p.y-gm.bb.minY})) : null;
     // Run direction: laterals go along the LONG axis (fewer, longer runs).
-    // 'auto' picks it from the bounding box; user can force h/v.
-    const dripDir = (a.dripDir==='h'||a.dripDir==='v') ? a.dripDir : (gm.L>=gm.W?'h':'v');
+    // 'auto' decomposes a rectilinear shape into regions and orients EACH
+    // along its own long axis (an L runs one leg horizontal, the other
+    // vertical). Forced h/v applies one direction to the whole area.
+    const forced = (a.dripDir==='h'||a.dripDir==='v');
+    let dripRects=null, dripDir;
+    if(forced){ dripDir=a.dripDir; }
+    else if(dPoly && isRectilinear(dPoly)){
+      dripRects = rectDecompose(dPoly).map(r=>({...r, dir: r.w>=r.h?'h':'v'}));
+      const dirs=new Set(dripRects.map(r=>r.dir));
+      dripDir = dirs.size>1 ? 'mixed' : (dripRects[0]?dripRects[0].dir:(gm.L>=gm.W?'h':'v'));
+    } else {
+      dripDir = gm.L>=gm.W?'h':'v';
+    }
     return {family:"drip",kind:"drip",matched:false,L:gm.L,W:gm.W,sqft:gm.sqft,heads:[],zones,zoneGPM,
-      product:d,dripLengthFt:lengthFt,dripBaseLenFt:baseLen,emitters,totalGPH,totalGPM,rowFt,dripDir,poly:dPoly};
+      product:d,dripLengthFt:lengthFt,dripBaseLenFt:baseLen,emitters,totalGPH,totalGPM,rowFt,dripDir,dripRects,poly:dPoly};
   }
 
   let heads=[];
@@ -626,19 +665,25 @@ function sketch(a,p){
   }
   const clipAttr = (p.poly && p.poly.length>=3) ? ` clip-path="url(#${clipId})"` : '';
   if(p.kind==='drip'){
-    // Dashed runs represent the dripline laterals, spaced by row spacing and
-    // oriented along the long axis ('h' = horizontal runs stacked vertically,
-    // 'v' = vertical runs stacked horizontally).
-    const dir = p.dripDir || (p.L>=p.W?'h':'v');
-    const span = dir==='h' ? p.W : p.L;               // stacking axis, in ft
-    const rows=Math.max(2, Math.min(30, Math.round(span/(p.rowFt||1))));
-    s+=`<g${clipAttr}>`;
-    for(let r=0;r<rows;r++){
-      if(dir==='h'){ const y=oy + (r+0.5)*(dh/rows);
-        s+=`<line x1="${(ox+2).toFixed(1)}" y1="${y.toFixed(1)}" x2="${(ox+dw-2).toFixed(1)}" y2="${y.toFixed(1)}" stroke="var(--z5)" stroke-width="1" stroke-dasharray="3 2" stroke-opacity="0.65"/>`;
-      } else { const x=ox + (r+0.5)*(dw/rows);
-        s+=`<line x1="${x.toFixed(1)}" y1="${(oy+2).toFixed(1)}" x2="${x.toFixed(1)}" y2="${(oy+dh-2).toFixed(1)}" stroke="var(--z5)" stroke-width="1" stroke-dasharray="3 2" stroke-opacity="0.65"/>`;
+    // Dashed runs = dripline laterals, spaced by row spacing, oriented along
+    // the long axis. Per-region rectangles (dripRects) let each part of an
+    // L/T run its own way; otherwise a single direction across the shape.
+    const rowPx=(p.rowFt||1)*unit;
+    const runLine=(dir,x0,y0,w,h)=>{
+      let out='';
+      const n=Math.max(1, Math.round((dir==='h'?h:w)/rowPx));
+      for(let k=0;k<n;k++){
+        if(dir==='h'){ const y=y0+(k+0.5)*(h/n); out+=`<line x1="${(x0+1).toFixed(1)}" y1="${y.toFixed(1)}" x2="${(x0+w-1).toFixed(1)}" y2="${y.toFixed(1)}" stroke="var(--z5)" stroke-width="1" stroke-dasharray="3 2" stroke-opacity="0.7"/>`; }
+        else { const x=x0+(k+0.5)*(w/n); out+=`<line x1="${x.toFixed(1)}" y1="${(y0+1).toFixed(1)}" x2="${x.toFixed(1)}" y2="${(y0+h-1).toFixed(1)}" stroke="var(--z5)" stroke-width="1" stroke-dasharray="3 2" stroke-opacity="0.7"/>`; }
       }
+      return out;
+    };
+    s+=`<g${clipAttr}>`;
+    if(p.dripRects && p.dripRects.length){
+      p.dripRects.forEach(r=>{ s+=runLine(r.dir, ox+r.x*unit, oy+r.y*unit, r.w*unit, r.h*unit); });
+    } else {
+      const dir=(p.dripDir==='v')?'v':'h';
+      s+=runLine(dir, ox, oy, dw, dh);
     }
     s+=`</g>`;
     s+=`<text x="${(ox+dw/2).toFixed(0)}" y="${(oy+dh/2+3).toFixed(0)}" text-anchor="middle" font-size="10" fill="#00838f">${Math.round(p.dripLengthFt)} ft dripline</text>`;
@@ -766,7 +811,7 @@ function compute(){
         <table class="spec">
           <tr><td>Dripline</td><td>${esc(p.product.label)}</td></tr>
           <tr><td>Row spacing / emitter</td><td>${a.dripRowIn==null?18:a.dripRowIn}" rows &middot; ${p.product.emitterIn}" emitters</td></tr>
-          <tr><td>Runs</td><td>${p.dripDir==='v'?'vertical':'horizontal'} (along long axis)${(a.dripDir&&a.dripDir!=='auto')?' &middot; forced':''}</td></tr>
+          <tr><td>Runs</td><td>${(a.dripDir&&a.dripDir!=='auto')?((p.dripDir==='v'?'vertical':'horizontal')+' &middot; forced'):(p.dripDir==='mixed'?`per region (${p.dripRects.length} areas, long axis each)`:(p.dripDir==='v'?'vertical':'horizontal')+' (long axis)')}</td></tr>
           <tr><td>Tube length (+${a.overagePct||0}% overage)</td><td>${Math.round(p.dripLengthFt)} ft</td></tr>
           <tr><td>Emitters (approx)</td><td>~${p.emitters.toLocaleString()}</td></tr>
           <tr><td>Flow</td><td>${Math.round(p.totalGPH)} GPH (${p.totalGPM.toFixed(1)} GPM)</td></tr>
