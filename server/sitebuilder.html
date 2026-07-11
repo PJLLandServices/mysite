@@ -398,7 +398,7 @@ function familyDefaults(a){
   if(a.family==="mp"    && !a.mpNoz)    a.mpNoz="mp2000";
   if(a.family==="spray"){ if(!a.sprayBody) a.sprayBody="b4"; if(!a.spraySeries) a.spraySeries="s12"; }
   if(a.family==="strip"){ if(!a.stripNoz) a.stripNoz="sst"; if(!a.stripBody) a.stripBody="b4"; }
-  if(a.family==="drip"){ if(!a.dripProduct) a.dripProduct="xf09"; if(a.overagePct==null) a.overagePct=10; if(a.dripRowIn==null) a.dripRowIn=18; }
+  if(a.family==="drip"){ if(!a.dripProduct) a.dripProduct="xf09"; if(a.overagePct==null) a.overagePct=10; if(a.dripRowIn==null) a.dripRowIn=18; if(!a.dripDir) a.dripDir="auto"; }
 }
 // Normalize an area (migrate legacy head key, fill family defaults).
 function ensureArea(a){
@@ -441,7 +441,7 @@ let areas=[];
 const el=id=>document.getElementById(id);
 const num=id=>parseFloat(el(id).value)||0;
 
-const STR_KEYS = new Set(["name","mode","family","rotorNoz","mpNoz","sprayBody","spraySeries","stripNoz","stripBody","dripProduct"]);
+const STR_KEYS = new Set(["name","mode","family","rotorNoz","mpNoz","sprayBody","spraySeries","stripNoz","stripBody","dripProduct","dripDir"]);
 const RENDER_KEYS = new Set(["mode","family","rotorNoz","mpNoz","sprayBody","spraySeries","stripNoz","stripBody","dripProduct"]);
 function loadDefaults(){ areas=JSON.parse(JSON.stringify(DEFAULT_AREAS)); render(); markDirty(); }
 function addArea(){ areas.push(newArea()); render(); markDirty(); }
@@ -517,8 +517,11 @@ function plan(a){
     const zones=Math.max(1, Math.ceil(totalGPM/ceiling - 1e-6));
     const zoneGPM=new Array(zones).fill(totalGPM/zones);
     const dPoly = gm.poly ? gm.poly.map(p=>({x:p.x-gm.bb.minX, y:p.y-gm.bb.minY})) : null;
+    // Run direction: laterals go along the LONG axis (fewer, longer runs).
+    // 'auto' picks it from the bounding box; user can force h/v.
+    const dripDir = (a.dripDir==='h'||a.dripDir==='v') ? a.dripDir : (gm.L>=gm.W?'h':'v');
     return {family:"drip",kind:"drip",matched:false,L:gm.L,W:gm.W,sqft:gm.sqft,heads:[],zones,zoneGPM,
-      product:d,dripLengthFt:lengthFt,dripBaseLenFt:baseLen,emitters,totalGPH,totalGPM,rowFt,poly:dPoly};
+      product:d,dripLengthFt:lengthFt,dripBaseLenFt:baseLen,emitters,totalGPH,totalGPM,rowFt,dripDir,poly:dPoly};
   }
 
   let heads=[];
@@ -623,12 +626,19 @@ function sketch(a,p){
   }
   const clipAttr = (p.poly && p.poly.length>=3) ? ` clip-path="url(#${clipId})"` : '';
   if(p.kind==='drip'){
-    // dashed rows represent the dripline runs (spaced by row spacing).
-    const rows=Math.max(2, Math.min(26, Math.round(p.W/(p.rowFt||1))));
+    // Dashed runs represent the dripline laterals, spaced by row spacing and
+    // oriented along the long axis ('h' = horizontal runs stacked vertically,
+    // 'v' = vertical runs stacked horizontally).
+    const dir = p.dripDir || (p.L>=p.W?'h':'v');
+    const span = dir==='h' ? p.W : p.L;               // stacking axis, in ft
+    const rows=Math.max(2, Math.min(30, Math.round(span/(p.rowFt||1))));
     s+=`<g${clipAttr}>`;
     for(let r=0;r<rows;r++){
-      const y=oy + (r+0.5)*(dh/rows);
-      s+=`<line x1="${(ox+2).toFixed(1)}" y1="${y.toFixed(1)}" x2="${(ox+dw-2).toFixed(1)}" y2="${y.toFixed(1)}" stroke="var(--z5)" stroke-width="1" stroke-dasharray="3 2" stroke-opacity="0.65"/>`;
+      if(dir==='h'){ const y=oy + (r+0.5)*(dh/rows);
+        s+=`<line x1="${(ox+2).toFixed(1)}" y1="${y.toFixed(1)}" x2="${(ox+dw-2).toFixed(1)}" y2="${y.toFixed(1)}" stroke="var(--z5)" stroke-width="1" stroke-dasharray="3 2" stroke-opacity="0.65"/>`;
+      } else { const x=ox + (r+0.5)*(dw/rows);
+        s+=`<line x1="${x.toFixed(1)}" y1="${(oy+2).toFixed(1)}" x2="${x.toFixed(1)}" y2="${(oy+dh-2).toFixed(1)}" stroke="var(--z5)" stroke-width="1" stroke-dasharray="3 2" stroke-opacity="0.65"/>`;
+      }
     }
     s+=`</g>`;
     s+=`<text x="${(ox+dw/2).toFixed(0)}" y="${(oy+dh/2+3).toFixed(0)}" text-anchor="middle" font-size="10" fill="#00838f">${Math.round(p.dripLengthFt)} ft dripline</text>`;
@@ -670,6 +680,11 @@ function familyFieldsHtml(a,i){
   if(a.family==="drip")  return `
         <div class="fld"><label>Dripline</label><select onchange="upd(${i},'dripProduct',this.value)">${optionList(DRIP_PRODUCTS,a.dripProduct)}</select></div>
         <div class="fld"><label>Row spacing (in)</label><input type="number" min="6" step="2" value="${a.dripRowIn==null?18:a.dripRowIn}" oninput="upd(${i},'dripRowIn',this.value)"></div>
+        <div class="fld"><label>Runs</label><select onchange="upd(${i},'dripDir',this.value)">
+          <option value="auto" ${(!a.dripDir||a.dripDir==='auto')?'selected':''}>Auto (long axis)</option>
+          <option value="h" ${a.dripDir==='h'?'selected':''}>Horizontal</option>
+          <option value="v" ${a.dripDir==='v'?'selected':''}>Vertical</option>
+        </select></div>
         <div class="fld adv"><label>Shape overage %</label><input type="number" min="0" step="5" value="${a.overagePct==null?10:a.overagePct}" oninput="upd(${i},'overagePct',this.value)"></div>`;
   return "";
 }
@@ -751,6 +766,7 @@ function compute(){
         <table class="spec">
           <tr><td>Dripline</td><td>${esc(p.product.label)}</td></tr>
           <tr><td>Row spacing / emitter</td><td>${a.dripRowIn==null?18:a.dripRowIn}" rows &middot; ${p.product.emitterIn}" emitters</td></tr>
+          <tr><td>Runs</td><td>${p.dripDir==='v'?'vertical':'horizontal'} (along long axis)${(a.dripDir&&a.dripDir!=='auto')?' &middot; forced':''}</td></tr>
           <tr><td>Tube length (+${a.overagePct||0}% overage)</td><td>${Math.round(p.dripLengthFt)} ft</td></tr>
           <tr><td>Emitters (approx)</td><td>~${p.emitters.toLocaleString()}</td></tr>
           <tr><td>Flow</td><td>${Math.round(p.totalGPH)} GPH (${p.totalGPM.toFixed(1)} GPM)</td></tr>
