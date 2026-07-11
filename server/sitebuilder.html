@@ -254,6 +254,8 @@
       <div class="sk-tools">
         <button type="button" class="ghost" id="skToolPoly" onclick="skSetTool('poly')">Polygon</button>
         <button type="button" class="ghost" id="skToolCircle" onclick="skSetTool('circle')">Circle</button>
+        <button type="button" class="ghost" id="skToolQuarter" onclick="skSetTool('quarter')">Quarter</button>
+        <button type="button" class="ghost" id="skToolHalf" onclick="skSetTool('half')">Half</button>
         <button type="button" class="ghost" onclick="skUndo()">Undo</button>
         <button type="button" class="ghost" onclick="skClear()">Clear</button>
         <button type="button" class="del" onclick="skCancel()">Cancel</button>
@@ -496,8 +498,25 @@ function rectDecompose(poly){
   return merged;
 }
 function isCircle(a){ return a.mode==='custom' && a.shapeKind==='circle' && a.circle && a.circle.r>0; }
+// Sector (pie slice): centre + arc a0..a0+sweep. 90=quarter, 180=half-disk.
+function sectorPoly(cx,cy,r,a0,sweep,n){
+  n=n||Math.max(10, Math.round(sweep/6));
+  const p=[{x:cx,y:cy}], sw=sweep*Math.PI/180;
+  for(let i=0;i<=n;i++){ const t=a0+sw*i/n; p.push({x:cx+r*Math.cos(t), y:cy+r*Math.sin(t)}); }
+  return p;
+}
+function isSector(a){ return a.mode==='custom' && a.shapeKind==='sector' && a.arc && a.arc.r>0; }
+function arcStroke(cx,cy,r,a0,a1){
+  const x0=cx+r*Math.cos(a0), y0=cy+r*Math.sin(a0), x1=cx+r*Math.cos(a1), y1=cy+r*Math.sin(a1);
+  const large=(a1-a0)>Math.PI?1:0;
+  return `M${x0.toFixed(1)},${y0.toFixed(1)} A${r.toFixed(1)},${r.toFixed(1)} 0 ${large} 1 ${x1.toFixed(1)},${y1.toFixed(1)}`;
+}
 
 function geom(a){
+  if(isSector(a)){
+    const c=a.arc, poly=sectorPoly(c.cx,c.cy,c.r,c.a0,c.sweep), bb=polyBBox(poly);
+    return {L:Math.max(bb.maxX-bb.minX,1), W:Math.max(bb.maxY-bb.minY,1), sqft:(c.sweep/360)*Math.PI*c.r*c.r, poly, bb};
+  }
   if(isCircle(a)){
     const c=a.circle, poly=circlePoly(c.cx,c.cy,c.r);
     return {L:2*c.r, W:2*c.r, sqft:Math.PI*c.r*c.r, poly, bb:polyBBox(poly)};
@@ -550,8 +569,13 @@ function plan(a){
     // along its own long axis (an L runs one leg horizontal, the other
     // vertical). Forced h/v applies one direction to the whole area.
     const forced = (a.dripDir==='h'||a.dripDir==='v');
-    let dripRects=null, dripDir;
-    if(forced){ dripDir=a.dripDir; }
+    let dripRects=null, dripDir, arcShape=null;
+    if(isSector(a) && !forced){
+      // Curved bed: dripline follows the arc as concentric rings.
+      const c=a.arc; arcShape={cx:c.cx-gm.bb.minX, cy:c.cy-gm.bb.minY, r:c.r, a0:c.a0, sweep:c.sweep};
+      dripDir='arc';
+    }
+    else if(forced){ dripDir=a.dripDir; }
     else if(dPoly && isRectilinear(dPoly)){
       dripRects = rectDecompose(dPoly).map(r=>({...r, dir: r.w>=r.h?'h':'v'}));
       const dirs=new Set(dripRects.map(r=>r.dir));
@@ -560,7 +584,7 @@ function plan(a){
       dripDir = gm.L>=gm.W?'h':'v';
     }
     return {family:"drip",kind:"drip",matched:false,L:gm.L,W:gm.W,sqft:gm.sqft,heads:[],zones,zoneGPM,
-      product:d,dripLengthFt:lengthFt,dripBaseLenFt:baseLen,emitters,totalGPH,totalGPM,rowFt,dripDir,dripRects,poly:dPoly};
+      product:d,dripLengthFt:lengthFt,dripBaseLenFt:baseLen,emitters,totalGPH,totalGPM,rowFt,dripDir,dripRects,arcShape,poly:dPoly};
   }
 
   let heads=[];
@@ -679,7 +703,14 @@ function sketch(a,p){
       return out;
     };
     s+=`<g${clipAttr}>`;
-    if(p.dripRects && p.dripRects.length){
+    if(p.arcShape){
+      // Concentric rings following the curve of a quarter/half circle.
+      const A=p.arcShape, scx=ox+A.cx*unit, scy=oy+A.cy*unit, a1=A.a0+A.sweep*Math.PI/180;
+      const n=Math.max(1, Math.round(A.r/(p.rowFt||1)));
+      for(let k=0;k<n;k++){ const ring=(k+0.5)*(A.r/n)*unit;
+        s+=`<path d="${arcStroke(scx,scy,ring,A.a0,a1)}" fill="none" stroke="var(--z5)" stroke-width="1" stroke-dasharray="3 2" stroke-opacity="0.7"/>`;
+      }
+    } else if(p.dripRects && p.dripRects.length){
       p.dripRects.forEach(r=>{ s+=runLine(r.dir, ox+r.x*unit, oy+r.y*unit, r.w*unit, r.h*unit); });
     } else {
       const dir=(p.dripDir==='v')?'v':'h';
@@ -743,7 +774,8 @@ function render(){
     const dimsHtml = custom ? (()=>{
       const g=geom(a); const hasShape=!g.noShape;
       const sq=Math.round(g.sqft);
-      const desc = isCircle(a) ? `${sq.toLocaleString()} sq ft &middot; ${Math.round(a.circle.r*2)} ft dia circle`
+      const desc = isSector(a) ? `${sq.toLocaleString()} sq ft &middot; ${a.arc.sweep>=180?'half':'quarter'} circle r${Math.round(a.arc.r)} ft`
+        : isCircle(a) ? `${sq.toLocaleString()} sq ft &middot; ${Math.round(a.circle.r*2)} ft dia circle`
         : (hasShape ? `${sq.toLocaleString()} sq ft &middot; ${Math.round(g.bb.maxX-g.bb.minX)}×${Math.round(g.bb.maxY-g.bb.minY)} ft box` : '<span style="color:var(--warn)">no shape drawn</span>');
       return `
         <div class="fld"><label>Custom shape</label>
@@ -811,7 +843,7 @@ function compute(){
         <table class="spec">
           <tr><td>Dripline</td><td>${esc(p.product.label)}</td></tr>
           <tr><td>Row spacing / emitter</td><td>${a.dripRowIn==null?18:a.dripRowIn}" rows &middot; ${p.product.emitterIn}" emitters</td></tr>
-          <tr><td>Runs</td><td>${(a.dripDir&&a.dripDir!=='auto')?((p.dripDir==='v'?'vertical':'horizontal')+' &middot; forced'):(p.dripDir==='mixed'?`per region (${p.dripRects.length} areas, long axis each)`:(p.dripDir==='v'?'vertical':'horizontal')+' (long axis)')}</td></tr>
+          <tr><td>Runs</td><td>${p.dripDir==='arc'?'concentric arcs (follow the curve)':(a.dripDir&&a.dripDir!=='auto')?((p.dripDir==='v'?'vertical':'horizontal')+' &middot; forced'):(p.dripDir==='mixed'?`per region (${p.dripRects.length} areas, long axis each)`:(p.dripDir==='v'?'vertical':'horizontal')+' (long axis)')}</td></tr>
           <tr><td>Tube length (+${a.overagePct||0}% overage)</td><td>${Math.round(p.dripLengthFt)} ft</td></tr>
           <tr><td>Emitters (approx)</td><td>~${p.emitters.toLocaleString()}</td></tr>
           <tr><td>Flow</td><td>${Math.round(p.totalGPH)} GPH (${p.totalGPM.toFixed(1)} GPM)</td></tr>
@@ -886,17 +918,20 @@ function legend(p){
 /* ════════════════ Custom-shape sketch tool ════════════════ */
 
 const sk = { areaIndex:-1, tool:'poly', poly:[], closed:false, sel:-1, dragging:-1,
-             circle:null, cDrag:null, spanFt:50, snap:1, _ppf:12 };
+             circle:null, sector:null, sweep:90, cDrag:null, spanFt:50, snap:1, _ppf:12 };
 
 function openSketch(i){
   ensureArea(areas[i]);
-  sk.areaIndex=i; sk.sel=-1; sk.dragging=-1; sk.cDrag=null;
-  if(isCircle(areas[i])){
+  sk.areaIndex=i; sk.sel=-1; sk.dragging=-1; sk.cDrag=null; sk.sector=null; sk.circle=null;
+  if(isSector(areas[i])){
+    const c=areas[i].arc; sk.tool='sector'; sk.sweep=c.sweep; sk.sector={cx:c.cx, cy:c.cy, r:c.r, a0:c.a0}; sk.poly=[]; sk.closed=false;
+    sk.spanFt=Math.max(20, Math.ceil((c.cx+c.r+4)/5)*5, Math.ceil((c.cy+c.r+4)/5)*5);
+  } else if(isCircle(areas[i])){
     sk.tool='circle'; sk.circle={cx:areas[i].circle.cx, cy:areas[i].circle.cy, r:areas[i].circle.r};
     sk.poly=[]; sk.closed=false;
     sk.spanFt=Math.max(20, Math.ceil((sk.circle.cx+sk.circle.r+4)/5)*5, Math.ceil((sk.circle.cy+sk.circle.r+4)/5)*5);
   } else {
-    sk.tool='poly'; sk.circle=null;
+    sk.tool='poly';
     sk.poly = validPoly(areas[i]) ? areas[i].poly.map(p=>({x:p.x,y:p.y})) : [];
     sk.closed = sk.poly.length>=3;
     if(sk.poly.length){ const bb=polyBBox(sk.poly); sk.spanFt=Math.max(20, Math.ceil((Math.max(bb.maxX,bb.maxY)+4)/5)*5); }
@@ -906,23 +941,33 @@ function openSketch(i){
   el('skOverlay').hidden=false;
   skDraw();
 }
-function skSetTool(t){ sk.tool=t; if(t==='circle' && !sk.circle){ /* armed to draw */ } skDraw(); }
+function skSetTool(t){
+  if(t==='quarter'){ sk.tool='sector'; sk.sweep=90; sk.sector=null; }
+  else if(t==='half'){ sk.tool='sector'; sk.sweep=180; sk.sector=null; }
+  else sk.tool=t;
+  skDraw();
+}
 function skCancel(){ el('skOverlay').hidden=true; }
-function skClear(){ sk.poly=[]; sk.closed=false; sk.sel=-1; sk.circle=null; skDraw(); }
+function skClear(){ sk.poly=[]; sk.closed=false; sk.sel=-1; sk.circle=null; sk.sector=null; skDraw(); }
 function skUndo(){
   if(sk.tool==='circle'){ sk.circle=null; }
+  else if(sk.tool==='sector'){ sk.sector=null; }
   else if(sk.closed){ sk.closed=false; } else { sk.poly.pop(); }
   sk.sel=-1; skDraw();
 }
 function skUse(){
   const a=areas[sk.areaIndex]; a.mode='custom';
-  if(sk.tool==='circle'){
+  if(sk.tool==='sector'){
+    if(!sk.sector || sk.sector.r<0.5){ alert('Press and drag from the corner to draw the arc first.'); return; }
+    delete a.circle; a.shapeKind='sector'; a.arc={cx:sk.sector.cx, cy:sk.sector.cy, r:sk.sector.r, a0:sk.sector.a0, sweep:sk.sweep};
+    a.poly=sectorPoly(sk.sector.cx, sk.sector.cy, sk.sector.r, sk.sector.a0, sk.sweep);
+  } else if(sk.tool==='circle'){
     if(!sk.circle || sk.circle.r<0.5){ alert('Press and drag on the grid to draw a circle first.'); return; }
-    a.shapeKind='circle'; a.circle={cx:sk.circle.cx, cy:sk.circle.cy, r:sk.circle.r};
+    delete a.arc; a.shapeKind='circle'; a.circle={cx:sk.circle.cx, cy:sk.circle.cy, r:sk.circle.r};
     a.poly=circlePoly(sk.circle.cx, sk.circle.cy, sk.circle.r);
   } else {
     if(sk.poly.length<3){ alert('Draw at least 3 points to make a shape.'); return; }
-    delete a.shapeKind; delete a.circle;
+    delete a.shapeKind; delete a.circle; delete a.arc;
     a.poly=sk.poly.map(p=>({x:p.x,y:p.y}));
   }
   el('skOverlay').hidden=true;
@@ -966,6 +1011,18 @@ function skDraw(){
       g+=`<circle class="sk-handle" cx="${(cx+rr).toFixed(1)}" cy="${cy.toFixed(1)}" r="7" data-h="r"/>`;
       area=Math.PI*c.r*c.r; perim=2*Math.PI*c.r;
     }
+  } else if(sk.tool==='sector'){
+    if(sk.sector){
+      const c=sk.sector, cx=c.cx*ppf, cy=c.cy*ppf, rr=c.r*ppf, swr=sk.sweep*Math.PI/180;
+      const P=sectorPoly(c.cx,c.cy,c.r,c.a0,sk.sweep).map(p=>`${(p.x*ppf).toFixed(1)},${(p.y*ppf).toFixed(1)}`).join(' ');
+      g+=`<polygon points="${P}" fill="var(--green)" fill-opacity="0.12" stroke="var(--green-d)" stroke-width="2"/>`;
+      const bis=c.a0+swr/2, hx=cx+rr*Math.cos(bis), hy=cy+rr*Math.sin(bis);
+      g+=`<line x1="${cx.toFixed(1)}" y1="${cy.toFixed(1)}" x2="${hx.toFixed(1)}" y2="${hy.toFixed(1)}" stroke="var(--green-d)" stroke-width="1" stroke-dasharray="3 2"/>`;
+      g+=`<text x="${(cx+(hx-cx)*0.5).toFixed(1)}" y="${(cy+(hy-cy)*0.5-4).toFixed(1)}" text-anchor="middle" font-size="11" font-weight="600" fill="#1b5e20" paint-order="stroke" stroke="#fff" stroke-width="3">r ${c.r.toFixed(c.r%1?1:0)} ft</text>`;
+      g+=`<circle class="sk-center" cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="7" data-h="c"/>`;
+      g+=`<circle class="sk-handle" cx="${hx.toFixed(1)}" cy="${hy.toFixed(1)}" r="7" data-h="r"/>`;
+      area=(sk.sweep/360)*Math.PI*c.r*c.r; perim=2*c.r+c.r*swr;
+    }
   } else {
     const P=sk.poly.map(p=>`${(p.x*ppf).toFixed(1)},${(p.y*ppf).toFixed(1)}`).join(' ');
     if(sk.poly.length>=2){
@@ -989,7 +1046,12 @@ function skDraw(){
   el('skPerim').textContent=Math.round(perim);
   el('skToolPoly').classList.toggle('on', sk.tool==='poly');
   el('skToolCircle').classList.toggle('on', sk.tool==='circle');
-  el('skHint').textContent = sk.tool==='circle'
+  el('skToolQuarter').classList.toggle('on', sk.tool==='sector' && sk.sweep===90);
+  el('skToolHalf').classList.toggle('on', sk.tool==='sector' && sk.sweep===180);
+  el('skHint').textContent = sk.tool==='sector'
+    ? (sk.sector ? `${sk.sweep>=180?'Half':'Quarter'} circle drawn. Drag the centre to move, the edge dot to resize + rotate. "Use shape" applies it.`
+                 : `Press at the corner/centre and drag out to draw a ${sk.sweep>=180?'half':'quarter'} circle.`)
+    : sk.tool==='circle'
     ? (sk.circle ? 'Circle drawn. Drag the centre to move, the edge dot to resize. "Use shape" applies it.'
                  : 'Press and drag on the grid to draw a circle (centre → edge).')
     : (sk.closed ? 'Shape closed. Drag any point to adjust, or Undo to reopen.'
@@ -998,11 +1060,11 @@ function skDraw(){
   el('skSvg').addEventListener('pointerdown', skPointerDown);
 }
 function skPointerDown(e){
-  if(sk.tool==='circle'){
+  if(sk.tool==='circle' || sk.tool==='sector'){
     const h=(e.target && e.target.dataset)?e.target.dataset.h:null;
     if(h==='c'){ sk.cDrag='center'; }
     else if(h==='r'){ sk.cDrag='radius'; }
-    else { const c=skXY(e); sk.circle={cx:c.x, cy:c.y, r:0}; sk.cDrag='radius'; }
+    else { const c=skXY(e); if(sk.tool==='sector') sk.sector={cx:c.x, cy:c.y, r:0, a0:0}; else sk.circle={cx:c.x, cy:c.y, r:0}; sk.cDrag='radius'; }
     window.addEventListener('pointermove', skPointerMove);
     window.addEventListener('pointerup', skPointerUp);
     e.preventDefault(); return;
@@ -1022,6 +1084,15 @@ function skPointerMove(e){
   if(sk.tool==='circle' && sk.cDrag && sk.circle){
     if(sk.cDrag==='center'){ const p=skXY(e); sk.circle.cx=p.x; sk.circle.cy=p.y; }
     else { const p=skXYraw(e); const d=Math.hypot(p.x-sk.circle.cx, p.y-sk.circle.cy); sk.circle.r=Math.max(0.5, Math.round(d/0.5)*0.5); }
+    e.preventDefault(); skDraw(); return;
+  }
+  if(sk.tool==='sector' && sk.cDrag && sk.sector){
+    if(sk.cDrag==='center'){ const p=skXY(e); sk.sector.cx=p.x; sk.sector.cy=p.y; }
+    else { // radius handle: sets radius AND rotation (handle sits at the arc bisector)
+      const p=skXYraw(e), dx=p.x-sk.sector.cx, dy=p.y-sk.sector.cy;
+      sk.sector.r=Math.max(0.5, Math.round(Math.hypot(dx,dy)/0.5)*0.5);
+      sk.sector.a0=Math.atan2(dy,dx) - (sk.sweep/2)*Math.PI/180;
+    }
     e.preventDefault(); skDraw(); return;
   }
   if(sk.dragging<0) return; sk.poly[sk.dragging]=skXY(e); e.preventDefault(); skDraw();
