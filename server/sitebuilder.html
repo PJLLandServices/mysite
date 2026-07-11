@@ -87,6 +87,27 @@
   table.cost tr.tot td{font-weight:700;border-top:2px solid var(--green);background:var(--green-l)}
   .ratebadge{display:inline-block;background:var(--green-l);border:1px solid var(--line);border-radius:6px;
     padding:2px 8px;font-size:11.5px;color:var(--green-d);font-weight:600}
+  .shape-btn{min-height:38px}
+  .shape-area{font-size:14px;font-weight:600;color:var(--green-d);padding:9px 0}
+  /* ---- Sketch overlay ---- */
+  .sk-overlay{position:fixed;inset:0;z-index:9999;background:rgba(20,35,32,.55);display:flex;
+    align-items:center;justify-content:center;padding:16px}
+  .sk-panel{background:#fff;border-radius:14px;width:min(880px,96vw);max-height:94vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 12px 40px rgba(0,0,0,.3)}
+  .sk-head{padding:12px 16px;border-bottom:1px solid var(--line);display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center}
+  .sk-head h3{margin:0;font-size:16px;color:var(--green-d)}
+  .sk-head .sk-stat{font-size:13px;color:var(--muted)}
+  .sk-head .sk-stat b{color:var(--ink);font-size:15px}
+  .sk-grow{flex:1 1 auto}
+  .sk-body{position:relative;overflow:auto;background:#fbfdfb;flex:1 1 auto;min-height:0}
+  .sk-body svg{display:block;touch-action:none}
+  .sk-foot{padding:10px 16px;border-top:1px solid var(--line);display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+  .sk-foot .hint{margin:0}
+  .sk-tools{display:flex;flex-wrap:wrap;gap:8px}
+  .sk-num{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted)}
+  .sk-num input{width:70px;padding:6px 8px;border:1px solid var(--line);border-radius:6px;font-size:15px}
+  .sk-vert{fill:#fff;stroke:var(--green-d);stroke-width:2;cursor:grab}
+  .sk-vert.first{stroke:var(--z3)}
+  .sk-vert.sel{fill:var(--green);stroke:var(--green-d)}
   /* ---- iPhone 17 Pro Max & phones (≤480px logical) ---- */
   @media(max-width:480px){
     header{padding:16px 18px 16px;padding-top:calc(16px + env(safe-area-inset-top))}
@@ -206,6 +227,28 @@
     <div class="hint" id="bomNote"></div>
   </div>
 
+</div>
+
+<div id="skOverlay" class="sk-overlay" hidden>
+  <div class="sk-panel">
+    <div class="sk-head">
+      <h3>Draw area shape</h3>
+      <span class="sk-stat"><b id="skArea">0</b> sq ft &middot; <span id="skPerim">0</span> ft outline</span>
+      <span class="sk-grow"></span>
+      <span class="sk-num">ft across <input id="skSpan" type="number" min="10" max="300" step="5" value="50"></span>
+    </div>
+    <div class="sk-body" id="skBody"></div>
+    <div class="sk-foot">
+      <p class="hint" id="skHint">Click grid corners to trace the outline (each square = 1 ft). Click the first point (orange) to close the shape. Drag any point to adjust.</p>
+      <span class="sk-grow"></span>
+      <div class="sk-tools">
+        <button type="button" class="ghost" onclick="skUndo()">Undo point</button>
+        <button type="button" class="ghost" onclick="skClear()">Clear</button>
+        <button type="button" class="del" onclick="skCancel()">Cancel</button>
+        <button type="button" onclick="skUse()">Use shape</button>
+      </div>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -360,7 +403,27 @@ function upd(i,k,v){
   markDirty();
 }
 
+// ---- Polygon geometry (custom shapes) ----
+function polyArea(poly){ let s=0; for(let i=0;i<poly.length;i++){ const a=poly[i], b=poly[(i+1)%poly.length]; s+=a.x*b.y-b.x*a.y; } return Math.abs(s)/2; }
+function polyPerim(poly){ let p=0; for(let i=0;i<poly.length;i++){ const a=poly[i], b=poly[(i+1)%poly.length]; p+=Math.hypot(b.x-a.x,b.y-a.y); } return p; }
+function polyBBox(poly){ const xs=poly.map(p=>p.x), ys=poly.map(p=>p.y); return {minX:Math.min(...xs),maxX:Math.max(...xs),minY:Math.min(...ys),maxY:Math.max(...ys)}; }
+function pointInPoly(x,y,poly){
+  let inside=false;
+  for(let i=0,j=poly.length-1;i<poly.length;j=i++){
+    const xi=poly[i].x,yi=poly[i].y,xj=poly[j].x,yj=poly[j].y;
+    if(((yi>y)!==(yj>y)) && (x < (xj-xi)*(y-yi)/((yj-yi)||1e-9)+xi)) inside=!inside;
+  }
+  return inside;
+}
+function validPoly(a){ return a.mode==='custom' && Array.isArray(a.poly) && a.poly.length>=3; }
+
 function geom(a){
+  if(validPoly(a)){
+    const bb=polyBBox(a.poly);
+    const L=Math.max(bb.maxX-bb.minX,1), W=Math.max(bb.maxY-bb.minY,1);
+    return {L,W,sqft:Math.max(polyArea(a.poly),1),poly:a.poly,bb};
+  }
+  if(a.mode==='custom'){ return {L:1,W:1,sqft:0,noShape:true}; }   // custom mode, nothing drawn yet
   if(a.mode==='rect'){ const L=Math.max(a.L,1),W=Math.max(a.W,1); return {L,W,sqft:L*W}; }
   const W=Math.max(a.avgW,1); return {L:Math.max(a.sqft/W,1),W,sqft:a.sqft};
 }
@@ -379,6 +442,7 @@ function plan(a){
   ensureArea(a);
   const h=headSpec(a), gm=geom(a);
   const ceiling=Math.max(num('ceiling'),0.1), sf=parseFloat(el('spacingFactor').value)||1;
+  if(gm.noShape){ return {family:h.family,kind:h.kind,matched:h.matched,noShape:true,L:1,W:1,sqft:0,heads:[],zones:0,zoneGPM:[],arcCount:{90:0,180:0,360:0},totalGPM:0}; }
 
   // ---- Drip: area-wide dripline (12" emitter + row spacing) ----
   if(h.kind==='drip'){
@@ -392,8 +456,9 @@ function plan(a){
     const totalGPM=totalGPH/60;
     const zones=Math.max(1, Math.ceil(totalGPM/ceiling - 1e-6));
     const zoneGPM=new Array(zones).fill(totalGPM/zones);
+    const dPoly = gm.poly ? gm.poly.map(p=>({x:p.x-gm.bb.minX, y:p.y-gm.bb.minY})) : null;
     return {family:"drip",kind:"drip",matched:false,L:gm.L,W:gm.W,sqft:gm.sqft,heads:[],zones,zoneGPM,
-      product:d,dripLengthFt:lengthFt,dripBaseLenFt:baseLen,emitters,totalGPH,totalGPM,rowFt};
+      product:d,dripLengthFt:lengthFt,dripBaseLenFt:baseLen,emitters,totalGPH,totalGPM,rowFt,poly:dPoly};
   }
 
   let heads=[];
@@ -407,17 +472,46 @@ function plan(a){
       strip:s,body:h.body,arcCount:{90:0,180:n,360:0},totalGPM:heads.reduce((t,x)=>t+x.gpm,0)};
   }
 
-  // ---- Rotor / spray: arc-aware grid ----
+  // ---- Rotor / spray: arc-aware head placement ----
   const sp=Math.max(h.r*sf,1);
-  const nx=Math.max(2,Math.round(gm.L/sp)+1), ny=Math.max(2,Math.round(gm.W/sp)+1);
-  for(let i=0;i<nx;i++)for(let j=0;j<ny;j++){
-    const oL=i===0,oR=i===nx-1,oT=j===0,oB=j===ny-1;
-    const nb=(oL||oR?1:0)+(oT||oB?1:0);
-    const arc=nb===2?90:nb===1?180:360;
-    const dx=oL?1:oR?-1:0, dy=oT?1:oB?-1:0;
-    const dir=(arc===360)?0:Math.atan2(dy,dx);
-    const gpm=h.matched? h.g*(arc/360) : h.g;
-    heads.push({xft:i*(gm.L/(nx-1)),yft:j*(gm.W/(ny-1)),arc,dir,gpm,r:h.r});
+  let outPoly=null;
+  if(gm.poly){
+    // Custom shape: sample a fine interior grid, then greedily thin to ~sp
+    // spacing (farthest-point) so even narrow strips (an L's 5ft leg) get a
+    // head row. Arc by how many orthogonal neighbours fall outside the shape
+    // (works on concave outlines); direction points inward.
+    const bb=gm.bb;
+    const spanMax=Math.max(bb.maxX-bb.minX, bb.maxY-bb.minY);
+    const fine=Math.max(sp/4, spanMax/80, 1);
+    const cand=[];
+    for(let x=bb.minX+fine/2; x<bb.maxX; x+=fine) for(let y=bb.minY+fine/2; y<bb.maxY; y+=fine){
+      if(pointInPoly(x,y,gm.poly)) cand.push({x,y});
+    }
+    const chosen=[]; const minD2=Math.pow(0.72*sp,2);
+    for(const c of cand){ let ok=true; for(const q of chosen){ if((c.x-q.x)*(c.x-q.x)+(c.y-q.y)*(c.y-q.y)<minD2){ ok=false; break; } } if(ok) chosen.push(c); }
+    if(!chosen.length && cand.length) chosen.push(cand[Math.floor(cand.length/2)]);
+    chosen.forEach(pt=>{
+      const nbrs=[[sp,0],[-sp,0],[0,sp],[0,-sp]];
+      let outside=0, vx=0, vy=0;
+      nbrs.forEach(([dx,dy])=>{ if(!pointInPoly(pt.x+dx,pt.y+dy,gm.poly)){ outside++; vx-=dx; vy-=dy; } });
+      const arc = outside>=2?90 : outside===1?180 : 360;
+      const dir = arc===360?0:Math.atan2(vy,vx);
+      const gpm = h.matched? h.g*(arc/360) : h.g;
+      heads.push({xft:pt.x-bb.minX, yft:pt.y-bb.minY, arc, dir, gpm, r:h.r});
+    });
+    outPoly = gm.poly.map(p=>({x:p.x-bb.minX, y:p.y-bb.minY}));
+  } else {
+    // Rectangle grid: corners=90, edges=180, interior=360.
+    const nx=Math.max(2,Math.round(gm.L/sp)+1), ny=Math.max(2,Math.round(gm.W/sp)+1);
+    for(let i=0;i<nx;i++)for(let j=0;j<ny;j++){
+      const oL=i===0,oR=i===nx-1,oT=j===0,oB=j===ny-1;
+      const nb=(oL||oR?1:0)+(oT||oB?1:0);
+      const arc=nb===2?90:nb===1?180:360;
+      const dx=oL?1:oR?-1:0, dy=oT?1:oB?-1:0;
+      const dir=(arc===360)?0:Math.atan2(dy,dx);
+      const gpm=h.matched? h.g*(arc/360) : h.g;
+      heads.push({xft:i*(gm.L/(nx-1)),yft:j*(gm.W/(ny-1)),arc,dir,gpm,r:h.r});
+    }
   }
   const pk=packZones(heads,ceiling);
   const zoneMixArc=Array.from({length:pk.zones},()=>new Set());
@@ -425,7 +519,7 @@ function plan(a){
   const arcCount={90:0,180:0,360:0}; heads.forEach(hd=>arcCount[hd.arc]++);
   const mixedRotor = h.family==="rotor" && !h.matched && zoneMixArc.some(x=>x.size>1);
   return {family:h.family,kind:h.kind,matched:h.matched,L:gm.L,W:gm.W,sqft:gm.sqft,heads,zones:pk.zones,zoneGPM:pk.zoneGPM,
-    arcCount,mixedRotor,body:h.body,series:h.series,noz:h.noz,totalGPM:heads.reduce((t,x)=>t+x.gpm,0)};
+    arcCount,mixedRotor,body:h.body,series:h.series,noz:h.noz,poly:outPoly,totalGPM:heads.reduce((t,x)=>t+x.gpm,0)};
 }
 
 function sector(cx,cy,r,a0,a1){
@@ -434,20 +528,32 @@ function sector(cx,cy,r,a0,a1){
   return `M${cx.toFixed(1)},${cy.toFixed(1)} L${x0.toFixed(1)},${y0.toFixed(1)} A${r.toFixed(1)},${r.toFixed(1)} 0 ${large} 1 ${x1.toFixed(1)},${y1.toFixed(1)} Z`;
 }
 
+let sketchSeq=0;
 function sketch(a,p){
   const W=320,H=Math.min(240,Math.max(150, 40+ (p.W/Math.max(p.L,0.1))*280)), pad=26;
   const iw=W-pad*2, ih=H-pad*2, ratio=p.L/Math.max(p.W,0.1);
   let dw=iw, dh=iw/ratio; if(dh>ih){dh=ih;dw=ih*ratio;}
   const ox=(W-dw)/2, oy=(H-dh)/2, unit=dw/Math.max(p.L,0.1); // uniform (aspect preserved)
   let s=`<svg viewBox="0 0 ${W} ${H}">`;
-  s+=`<rect x="${ox}" y="${oy}" width="${dw}" height="${dh}" rx="3" fill="#eef6ef" stroke="#bcd3bf" stroke-width="1.5"/>`;
+  // Background: real polygon outline for custom shapes, else a rectangle.
+  const clipId = 'clip'+(sketchSeq++);
+  if(p.poly && p.poly.length>=3){
+    const pts=p.poly.map(pt=>`${(ox+pt.x*unit).toFixed(1)},${(oy+pt.y*unit).toFixed(1)}`).join(' ');
+    s+=`<defs><clipPath id="${clipId}"><polygon points="${pts}"/></clipPath></defs>`;
+    s+=`<polygon points="${pts}" fill="#eef6ef" stroke="#bcd3bf" stroke-width="1.5"/>`;
+  } else {
+    s+=`<rect x="${ox}" y="${oy}" width="${dw}" height="${dh}" rx="3" fill="#eef6ef" stroke="#bcd3bf" stroke-width="1.5"/>`;
+  }
+  const clipAttr = (p.poly && p.poly.length>=3) ? ` clip-path="url(#${clipId})"` : '';
   if(p.kind==='drip'){
     // dashed rows represent the dripline runs (spaced by row spacing).
     const rows=Math.max(2, Math.min(26, Math.round(p.W/(p.rowFt||1))));
+    s+=`<g${clipAttr}>`;
     for(let r=0;r<rows;r++){
       const y=oy + (r+0.5)*(dh/rows);
       s+=`<line x1="${(ox+2).toFixed(1)}" y1="${y.toFixed(1)}" x2="${(ox+dw-2).toFixed(1)}" y2="${y.toFixed(1)}" stroke="var(--z5)" stroke-width="1" stroke-dasharray="3 2" stroke-opacity="0.65"/>`;
     }
+    s+=`</g>`;
     s+=`<text x="${(ox+dw/2).toFixed(0)}" y="${(oy+dh/2+3).toFixed(0)}" text-anchor="middle" font-size="10" fill="#00838f">${Math.round(p.dripLengthFt)} ft dripline</text>`;
   } else {
     p.heads.forEach(hd=>{
@@ -494,8 +600,23 @@ function render(){
   const box=el('areas'); box.innerHTML='';
   areas.forEach((a,i)=>{
     ensureArea(a);
-    const rect=a.mode==='rect';
+    const rect=a.mode==='rect', custom=a.mode==='custom';
     const famOpts=FAMILY_ORDER.map(k=>`<option value="${k}" ${a.family===k?'selected':''}>${FAMILIES[k].label}</option>`).join('');
+    const dimsHtml = custom ? (()=>{
+      const hasShape = validPoly(a);
+      const sq = hasShape ? Math.round(polyArea(a.poly)) : 0;
+      const bb = hasShape ? polyBBox(a.poly) : null;
+      return `
+        <div class="fld"><label>Custom shape</label>
+          <button type="button" class="ghost shape-btn" onclick="openSketch(${i})">${hasShape?'Edit shape':'Draw shape'}</button></div>
+        <div class="fld"><label>Area</label><div class="shape-area">${hasShape?`${sq.toLocaleString()} sq ft · ${Math.round(bb.maxX-bb.minX)}×${Math.round(bb.maxY-bb.minY)} ft box`:'<span style="color:var(--warn)">no shape drawn</span>'}</div></div>`;
+    })() : rect ? `
+          <div class="fld"><label>Length (ft)</label><input type="number" value="${a.L}" oninput="upd(${i},'L',this.value)"></div>
+          <div class="fld"><label>Width (ft)</label><input type="number" value="${a.W}" oninput="upd(${i},'W',this.value)"></div>
+        ` : `
+          <div class="fld"><label>Area (sq ft)</label><input type="number" value="${a.sqft}" oninput="upd(${i},'sqft',this.value)"></div>
+          <div class="fld"><label>Avg width (ft)</label><input type="number" value="${a.avgW}" oninput="upd(${i},'avgW',this.value)"></div>
+        `;
     const c=document.createElement('div'); c.className='areacard';
     c.innerHTML=`
       <div class="areahead">
@@ -503,15 +624,10 @@ function render(){
         <div class="fld"><label>Input mode</label>
           <select onchange="upd(${i},'mode',this.value)">
             <option value="rect" ${rect?'selected':''}>Rectangle (L x W)</option>
-            <option value="sqft" ${!rect?'selected':''}>Known sq ft + avg width</option>
+            <option value="sqft" ${a.mode==='sqft'?'selected':''}>Known sq ft + avg width</option>
+            <option value="custom" ${custom?'selected':''}>Custom shape (draw)</option>
           </select></div>
-        ${rect?`
-          <div class="fld"><label>Length (ft)</label><input type="number" value="${a.L}" oninput="upd(${i},'L',this.value)"></div>
-          <div class="fld"><label>Width (ft)</label><input type="number" value="${a.W}" oninput="upd(${i},'W',this.value)"></div>
-        `:`
-          <div class="fld"><label>Area (sq ft)</label><input type="number" value="${a.sqft}" oninput="upd(${i},'sqft',this.value)"></div>
-          <div class="fld"><label>Avg width (ft)</label><input type="number" value="${a.avgW}" oninput="upd(${i},'avgW',this.value)"></div>
-        `}
+        ${dimsHtml}
         <div class="fld"><label>Head family</label><select onchange="upd(${i},'family',this.value)">${famOpts}</select></div>
         ${familyFieldsHtml(a,i)}
         <button class="del" onclick="delArea(${i})">Remove</button>
@@ -538,6 +654,11 @@ function compute(){
     const rb=el('res'+i), sb=el('sk'+i);
     if(!rb) return;
     const h=headSpec(a);
+
+    if(p.noShape){
+      rb.innerHTML=`<div class="prescribe" style="border-style:solid;border-color:var(--warn);color:var(--warn)"><b>No shape drawn.</b> Click <b>Draw shape</b> above to sketch this area's outline.</div>`;
+      sb.innerHTML=''; return;
+    }
 
     if(p.kind==='drip'){
       rb.innerHTML=`
@@ -621,6 +742,96 @@ function legend(p){
   return l;
 }
 
+/* ════════════════ Custom-shape sketch tool ════════════════ */
+
+const sk = { areaIndex:-1, poly:[], closed:false, sel:-1, dragging:-1, spanFt:50, snap:1, _ppf:12 };
+
+function openSketch(i){
+  ensureArea(areas[i]);
+  sk.areaIndex=i;
+  sk.poly = validPoly(areas[i]) ? areas[i].poly.map(p=>({x:p.x,y:p.y})) : [];
+  sk.closed = sk.poly.length>=3;
+  sk.sel=-1; sk.dragging=-1;
+  // fit the grid span to the shape (or a sensible default)
+  if(sk.poly.length){ const bb=polyBBox(sk.poly); sk.spanFt=Math.max(20, Math.ceil((Math.max(bb.maxX,bb.maxY)+4)/5)*5); }
+  else sk.spanFt=50;
+  el('skSpan').value=sk.spanFt;
+  el('skOverlay').hidden=false;
+  skDraw();
+}
+function skCancel(){ el('skOverlay').hidden=true; }
+function skClear(){ sk.poly=[]; sk.closed=false; sk.sel=-1; skDraw(); }
+function skUndo(){ if(sk.closed){ sk.closed=false; } else { sk.poly.pop(); } sk.sel=-1; skDraw(); }
+function skUse(){
+  if(sk.poly.length<3){ alert('Draw at least 3 points to make a shape.'); return; }
+  sk.closed=true;
+  const a=areas[sk.areaIndex];
+  a.mode='custom';
+  a.poly=sk.poly.map(p=>({x:p.x,y:p.y}));
+  el('skOverlay').hidden=true;
+  render(); markDirty();
+}
+
+function skPerimNow(){
+  let p=0; const n=sk.poly.length, last=sk.closed?n:n-1;
+  for(let i=0;i<last;i++){ const A=sk.poly[i],B=sk.poly[(i+1)%n]; p+=Math.hypot(B.x-A.x,B.y-A.y); }
+  return p;
+}
+function skXY(e){
+  const svg=el('skSvg'); if(!svg) return {x:0,y:0};
+  const r=svg.getBoundingClientRect(), ppf=sk._ppf;
+  let x=(e.clientX-r.left)/ppf, y=(e.clientY-r.top)/ppf;
+  x=Math.round(x/sk.snap)*sk.snap; y=Math.round(y/sk.snap)*sk.snap;
+  x=Math.max(0,Math.min(sk.spanFt,x)); y=Math.max(0,Math.min(sk.spanFt,y));
+  return {x,y};
+}
+function skDraw(){
+  const body=el('skBody');
+  const wpx=Math.max(body.clientWidth-2, 300);
+  const ppf=wpx/sk.spanFt; sk._ppf=ppf;
+  const hpx=sk.spanFt*ppf, cell=sk.snap*ppf;
+  let g=`<svg id="skSvg" width="${wpx.toFixed(0)}" height="${hpx.toFixed(0)}" viewBox="0 0 ${wpx.toFixed(0)} ${hpx.toFixed(0)}">`;
+  g+=`<defs><pattern id="skGrid" width="${cell}" height="${cell}" patternUnits="userSpaceOnUse"><path d="M ${cell} 0 L 0 0 0 ${cell}" fill="none" stroke="#dbe4de" stroke-width="1"/></pattern></defs>`;
+  g+=`<rect width="${wpx.toFixed(0)}" height="${hpx.toFixed(0)}" fill="url(#skGrid)"/>`;
+  for(let f=0;f<=sk.spanFt;f+=5){ const x=(f*ppf).toFixed(1); g+=`<line x1="${x}" y1="0" x2="${x}" y2="${hpx.toFixed(0)}" stroke="#c2cec7" stroke-width="1.1"/><line x1="0" y1="${x}" x2="${wpx.toFixed(0)}" y2="${x}" stroke="#c2cec7" stroke-width="1.1"/>`; }
+  const P=sk.poly.map(p=>`${(p.x*ppf).toFixed(1)},${(p.y*ppf).toFixed(1)}`).join(' ');
+  if(sk.poly.length>=2){
+    if(sk.closed && sk.poly.length>=3) g+=`<polygon points="${P}" fill="var(--green)" fill-opacity="0.12" stroke="var(--green-d)" stroke-width="2"/>`;
+    else g+=`<polyline points="${P}" fill="none" stroke="var(--green-d)" stroke-width="2"/>`;
+    const n=sk.poly.length, last=sk.closed?n:n-1;
+    for(let k=0;k<last;k++){ const A=sk.poly[k],B=sk.poly[(k+1)%n]; const len=Math.hypot(B.x-A.x,B.y-A.y); if(len<0.6) continue;
+      const mx=((A.x+B.x)/2*ppf).toFixed(1), my=((A.y+B.y)/2*ppf-3).toFixed(1);
+      g+=`<text x="${mx}" y="${my}" text-anchor="middle" font-size="11" font-weight="600" fill="#1b5e20" paint-order="stroke" stroke="#fff" stroke-width="3">${len.toFixed(len%1?1:0)} ft</text>`;
+    }
+  }
+  sk.poly.forEach((p,idx)=>{
+    const cls='sk-vert'+(idx===0?' first':'')+(idx===sk.sel?' sel':'');
+    g+=`<circle class="${cls}" cx="${(p.x*ppf).toFixed(1)}" cy="${(p.y*ppf).toFixed(1)}" r="7" data-i="${idx}"/>`;
+  });
+  g+=`</svg>`;
+  body.innerHTML=g;
+  el('skArea').textContent=(sk.closed&&sk.poly.length>=3?Math.round(polyArea(sk.poly)):0).toLocaleString();
+  el('skPerim').textContent=Math.round(skPerimNow());
+  el('skHint').textContent = sk.closed
+    ? 'Shape closed. Drag any point to adjust, or Undo to reopen. "Use shape" applies it.'
+    : (sk.poly.length>=3 ? 'Click the orange first point to close the shape, or keep adding points.' : 'Click grid corners to trace the outline (each square = 1 ft).');
+  el('skSvg').addEventListener('pointerdown', skPointerDown);
+}
+function skPointerDown(e){
+  const vi=(e.target && e.target.dataset && e.target.dataset.i!=null)?parseInt(e.target.dataset.i,10):-1;
+  if(vi>=0){
+    if(vi===0 && !sk.closed && sk.poly.length>=3){ sk.closed=true; sk.sel=-1; skDraw(); return; }
+    sk.sel=vi; sk.dragging=vi;
+    window.addEventListener('pointermove', skPointerMove);
+    window.addEventListener('pointerup', skPointerUp);
+    e.preventDefault(); skDraw(); return;
+  }
+  if(!sk.closed){ sk.poly.push(skXY(e)); sk.sel=sk.poly.length-1; skDraw(); }
+  else { sk.sel=-1; skDraw(); }
+}
+function skPointerMove(e){ if(sk.dragging<0) return; sk.poly[sk.dragging]=skXY(e); e.preventDefault(); skDraw(); }
+function skPointerUp(){ sk.dragging=-1; window.removeEventListener('pointermove', skPointerMove); window.removeEventListener('pointerup', skPointerUp); }
+
 /* ════════════════ Extras — valves, pipe/wire, timing ════════════════ */
 
 function pipeForGPM(gpm){
@@ -683,6 +894,7 @@ function buildBOM(parts){
   let totalZones=0, lateralFt=0;
 
   LAST_PLANS.forEach(({area,plan:p})=>{
+    if(p.noShape) return;                 // custom area with nothing drawn yet
     totalZones+=p.zones;
     if(p.kind!=='drip' && p.heads.length){
       lateralFt += p.heads.length * Math.max(headSpec(area).r*sf,1) * 0.6;  // rough trunk+branch
@@ -1097,6 +1309,9 @@ async function initApp(){
     el(id).addEventListener('change', ()=>{ compute(); markDirty(); });
   });
   el('supply').addEventListener('change', markDirty);
+  // Sketch tool: grid-span rescale + Escape to cancel.
+  el('skSpan').addEventListener('input', ()=>{ sk.spanFt=Math.max(10, parseFloat(el('skSpan').value)||50); skDraw(); });
+  window.addEventListener('keydown', (e)=>{ if(e.key==='Escape' && !el('skOverlay').hidden) skCancel(); });
   el('wcTown').addEventListener('change', ()=>{ onTownChange(); markDirty(); });
   ['wcRun','wcCycles','wcWeeks','wcManualRate','wcManualUnit'].forEach(id=>{
     el(id).addEventListener('input', ()=>{ updateCostCells(); markDirty(); });
