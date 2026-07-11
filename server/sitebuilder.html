@@ -293,6 +293,34 @@
   </div>
 </div>
 
+<div id="trOverlay" class="sk-overlay" hidden>
+  <div class="sk-panel">
+    <div class="sk-head">
+      <h3>Place trees</h3>
+      <span class="sk-stat"><b id="trCount">0</b> trees &middot; <span id="trGpm">0</span> GPM &middot; <span id="trZones">0</span> zones</span>
+      <span class="sk-grow"></span>
+      <span class="sk-num">ft across <input id="trSpan" type="number" min="10" max="300" step="5" value="50"></span>
+    </div>
+    <div class="lo-palette" id="trPalette">
+      <span class="lo-arcs" id="trTypes"></span>
+      <span class="sk-num" id="trDiaWrap">Ring dia (ft) <input id="trDia" type="number" min="1" max="20" step="0.5" value="4"></span>
+      <span class="sk-grow"></span>
+      <span class="hint" id="trSelInfo"></span>
+    </div>
+    <div class="sk-body" id="trBody"></div>
+    <div class="sk-foot">
+      <p class="hint" id="trHint">Pick a type + ring size, then click inside the zone to drop a tree. Drag to move, click to select. Each tree = a double drip ring (or RWS units) at the base.</p>
+      <span class="sk-grow"></span>
+      <div class="sk-tools">
+        <button type="button" class="ghost" onclick="trDeleteSel()">Delete tree</button>
+        <button type="button" class="ghost" onclick="trClear()">Clear all</button>
+        <button type="button" class="del" onclick="trCancel()">Cancel</button>
+        <button type="button" onclick="trUse()">Use trees</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <script>
 /* ==== Head catalogs - manufacturer performance data ====
    HARD RULE: a zone never mixes head families. Rotor / spray / strip /
@@ -384,9 +412,16 @@ const FAMILIES = {
   mp:   {label:"MP Rotator",                     kind:"rotor"},
   spray:{label:"Pop-up spray - Pro-Spray + RB",  kind:"spray"},
   strip:{label:"Strip nozzle (narrow area)",     kind:"strip"},
-  drip: {label:"Drip line (area-wide)",          kind:"drip"}
+  drip: {label:"Drip line (area-wide)",          kind:"drip"},
+  trees:{label:"Trees (root watering)",          kind:"trees"}
 };
-const FAMILY_ORDER = ["rotor","mp","spray","strip","drip"];
+const FAMILY_ORDER = ["rotor","mp","spray","strip","drip","trees"];
+// Tree root watering. Ring = double dripline loops at the base; RWS = Rain
+// Bird Root Watering System units (2 per tree). Flow numbers below drive
+// zone sizing (RWS bubbler flow is nominal — confirm per install).
+const TREE_RWS_SKU = "RWSMBC1402";        // Rain Bird RWS 18" (2 per tree)
+const TREE_RWS_GPM_PER_UNIT = 0.5;        // nominal bubbler flow
+const TREE_RING_DEFAULT_DIA = 4;          // ft, outer ring; inner = half
 
 // Legacy v1 head keys -> v2 family selection (migrate old saved designs).
 const LEGACY_HEAD_MAP = {
@@ -401,6 +436,7 @@ function familyDefaults(a){
   if(a.family==="spray"){ if(!a.sprayBody) a.sprayBody="b4"; if(!a.spraySeries) a.spraySeries="s12"; }
   if(a.family==="strip"){ if(!a.stripNoz) a.stripNoz="sst"; if(!a.stripBody) a.stripBody="b4"; }
   if(a.family==="drip"){ if(!a.dripProduct) a.dripProduct="xf09"; if(a.overagePct==null) a.overagePct=10; if(a.dripRowIn==null) a.dripRowIn=18; if(!a.dripDir) a.dripDir="auto"; }
+  if(a.family==="trees"){ if(!a.dripProduct) a.dripProduct="xf09"; if(a.overagePct==null) a.overagePct=10; if(!Array.isArray(a.trees)) a.trees=[]; }
 }
 // Normalize an area (migrate legacy head key, fill family defaults).
 function ensureArea(a){
@@ -417,6 +453,7 @@ function headSpec(a){
   if(a.family==="mp"){    const n=MP_NOZZLES[a.mpNoz]||MP_NOZZLES.mp2000; return {family:"mp",kind:"rotor",matched:true,r:n.r,g:n.g,noz:n,label:"Hunter "+n.label}; }
   if(a.family==="spray"){ const s=SPRAY_SERIES[a.spraySeries]||SPRAY_SERIES.s12; const b=SPRAY_BODIES[a.sprayBody]||SPRAY_BODIES.b4; return {family:"spray",kind:"spray",matched:true,r:s.r,g:s.f,series:s,body:b,label:b.label.split(" ")[0]+' Pro-Spray, RB '+s.label}; }
   if(a.family==="strip"){ const s=STRIP_NOZZLES[a.stripNoz]||STRIP_NOZZLES.sst; const b=SPRAY_BODIES[a.stripBody]||SPRAY_BODIES.b4; return {family:"strip",kind:"strip",matched:false,r:s.len/2,g:s.g,strip:s,body:b,label:"RB "+s.label}; }
+  if(a.family==="trees"){ const d=DRIP_PRODUCTS[a.dripProduct]||DRIP_PRODUCTS.xf09; return {family:"trees",kind:"trees",matched:false,r:0,g:0,drip:d,label:"Tree root watering"}; }
   const d=DRIP_PRODUCTS[a.dripProduct]||DRIP_PRODUCTS.xf09; return {family:"drip",kind:"drip",matched:false,r:0,g:0,drip:d,label:d.label};
 }
 
@@ -545,7 +582,7 @@ function plan(a){
   ensureArea(a);
   const h=headSpec(a), gm=geom(a);
   const ceiling=Math.max(num('ceiling'),0.1), sf=parseFloat(el('spacingFactor').value)||1;
-  if(gm.noShape){ return {family:h.family,kind:h.kind,matched:h.matched,noShape:true,L:1,W:1,sqft:0,heads:[],zones:0,zoneGPM:[],arcCount:{90:0,180:0,360:0},totalGPM:0}; }
+  if(gm.noShape && h.family!=='trees'){ return {family:h.family,kind:h.kind,matched:h.matched,noShape:true,L:1,W:1,sqft:0,heads:[],zones:0,zoneGPM:[],arcCount:{90:0,180:0,360:0},totalGPM:0}; }
 
   // ---- Drip: area-wide dripline ----
   // Row spacing = distance between parallel tube runs (dripRowIn, default
@@ -585,6 +622,32 @@ function plan(a){
     }
     return {family:"drip",kind:"drip",matched:false,L:gm.L,W:gm.W,sqft:gm.sqft,heads:[],zones,zoneGPM,
       product:d,dripLengthFt:lengthFt,dripBaseLenFt:baseLen,emitters,totalGPH,totalGPM,rowFt,dripDir,dripRects,arcShape,poly:dPoly};
+  }
+
+  // ---- Trees: individual root watering (double drip ring or RWS units) ----
+  if(h.kind==='trees'){
+    const d=h.drip, emitFt=Math.max(d.emitterIn,1)/12;
+    const trees=Array.isArray(a.trees)?a.trees:[];
+    const orig = gm.poly ? {x:gm.bb.minX, y:gm.bb.minY} : {x:0, y:0};
+    let tube=0, rwsUnits=0, ringTrees=0, rwsTrees=0, flow=0;
+    trees.forEach(t=>{
+      if(t.type==='rws'){ rwsTrees++; rwsUnits+=2; flow+=2*TREE_RWS_GPM_PER_UNIT; }
+      else { ringTrees++; const D=t.dia||TREE_RING_DEFAULT_DIA; const loop=Math.PI*D+Math.PI*(D/2); tube+=loop; flow+=(loop/emitFt)*d.gph/60; }
+    });
+    const overage=1+((parseFloat(a.overagePct)||0)/100);
+    const tubeFt=tube*overage;
+    const emitters=Math.round(tubeFt/emitFt);
+    const totalGPM=flow;
+    const zones = trees.length? Math.max(1, Math.ceil(totalGPM/ceiling - 1e-6)) : 0;
+    const zoneGPM = zones? new Array(zones).fill(totalGPM/zones) : [];
+    const outTrees = trees.map(t=>({x:t.x-orig.x, y:t.y-orig.y, type:t.type||'ring', dia:t.dia||TREE_RING_DEFAULT_DIA}));
+    const dPoly = gm.poly ? gm.poly.map(p=>({x:p.x-orig.x, y:p.y-orig.y})) : null;
+    let L=gm.L, W=gm.W;
+    if(!gm.poly && outTrees.length){
+      L=Math.max(4, ...outTrees.map(t=>t.x+t.dia)); W=Math.max(4, ...outTrees.map(t=>t.y+t.dia));
+    }
+    return {family:"trees",kind:"trees",matched:false,L,W,sqft:gm.sqft,heads:[],zones,zoneGPM,
+      product:d,treeCount:trees.length,ringTrees,rwsTrees,rwsUnits,tubeFt,emitters,totalGPM,treesOut:outTrees,poly:dPoly};
   }
 
   let heads=[];
@@ -718,6 +781,20 @@ function sketch(a,p){
     }
     s+=`</g>`;
     s+=`<text x="${(ox+dw/2).toFixed(0)}" y="${(oy+dh/2+3).toFixed(0)}" text-anchor="middle" font-size="10" fill="#00838f">${Math.round(p.dripLengthFt)} ft dripline</text>`;
+  } else if(p.kind==='trees'){
+    (p.treesOut||[]).forEach(t=>{
+      const cx=ox+t.x*unit, cy=oy+t.y*unit;
+      if(t.type==='rws'){
+        s+=`<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${Math.max((t.dia/2)*unit,5).toFixed(1)}" fill="none" stroke="var(--z4)" stroke-width="1.2"/>`;
+        s+=`<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="3" fill="var(--z4)"/>`;
+        s+=`<text x="${cx.toFixed(1)}" y="${(cy-((t.dia/2)*unit)-2).toFixed(1)}" text-anchor="middle" font-size="8" fill="var(--z4)">RWS</text>`;
+      } else {
+        const rO=Math.max((t.dia/2)*unit,5), rI=Math.max((t.dia/4)*unit,3);
+        s+=`<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${rO.toFixed(1)}" fill="var(--z5)" fill-opacity="0.08" stroke="var(--z5)" stroke-width="1.1" stroke-dasharray="3 2"/>`;
+        s+=`<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${rI.toFixed(1)}" fill="none" stroke="var(--z5)" stroke-width="1.1" stroke-dasharray="3 2"/>`;
+        s+=`<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="2.6" fill="#5b3a1a"/>`;
+      }
+    });
   } else {
     p.heads.forEach(hd=>{
       const cx=ox+hd.xft*unit, cy=oy+hd.yft*unit, rr=Math.max((hd.r||10)*unit*0.98,4);
@@ -762,6 +839,9 @@ function familyFieldsHtml(a,i){
           <option value="v" ${a.dripDir==='v'?'selected':''}>Vertical</option>
         </select></div>
         <div class="fld adv"><label>Shape overage %</label><input type="number" min="0" step="5" value="${a.overagePct==null?10:a.overagePct}" oninput="upd(${i},'overagePct',this.value)"></div>`;
+  if(a.family==="trees") return `
+        <div class="fld"><label>Ring dripline</label><select onchange="upd(${i},'dripProduct',this.value)">${optionList(DRIP_PRODUCTS,a.dripProduct)}</select></div>
+        <div class="fld adv"><label>Overage %</label><input type="number" min="0" step="5" value="${a.overagePct==null?10:a.overagePct}" oninput="upd(${i},'overagePct',this.value)"></div>`;
   return "";
 }
 
@@ -802,6 +882,7 @@ function render(){
         <div class="fld"><label>Head family</label><select onchange="upd(${i},'family',this.value)">${famOpts}</select></div>
         ${familyFieldsHtml(a,i)}
         ${loManualCapable(a.family) ? `<div class="fld"><label>Layout</label><button type="button" class="ghost shape-btn" onclick="openLayout(${i})">${(a.layout==='manual'&&(a.manualHeads||[]).length)?`Edit ${a.manualHeads.length} heads`:'Lay out heads'}</button></div>` : ''}
+        ${a.family==='trees' ? `<div class="fld"><label>Trees</label><button type="button" class="ghost shape-btn" onclick="openTrees(${i})">${(a.trees||[]).length?`Edit ${a.trees.length} trees`:'Place trees'}</button></div>` : ''}
         <button class="del" onclick="delArea(${i})">Remove</button>
       </div>
       <div class="areabody">
@@ -853,6 +934,30 @@ function compute(){
       sb.innerHTML=sketch(a,p);
       totZones+=p.zones; maxZ=Math.max(maxZ,...p.zoneGPM);
       p.zoneGPM.forEach(g=>zoneList.push({area:a.name,gpm:g,family:'drip'}));
+      return;
+    }
+
+    if(p.kind==='trees'){
+      const methodBits=[]; if(p.ringTrees) methodBits.push(`${p.ringTrees} drip-ring`); if(p.rwsTrees) methodBits.push(`${p.rwsTrees} RWS`);
+      rb.innerHTML=`
+        <div class="big">
+          <div class="stat"><div class="n">${p.treeCount}</div><div class="l">tree${p.treeCount===1?'':'s'}</div></div>
+          <div class="stat"><div class="n">${Math.round(p.tubeFt)}</div><div class="l">ft ring drip</div></div>
+          <div class="stat"><div class="n">${p.zones}</div><div class="l">zone${p.zones===1?'':'s'}</div></div>
+          <div class="stat"><div class="n">${p.totalGPM.toFixed(1)}</div><div class="l">total GPM</div></div>
+        </div>
+        <table class="spec">
+          <tr><td>Method</td><td>${methodBits.join(' &middot; ')||'no trees placed'}</td></tr>
+          <tr><td>Ring dripline</td><td>${esc(p.product.label)} - double ring / tree</td></tr>
+          <tr><td>Ring tube (+${a.overagePct||0}%)</td><td>${Math.round(p.tubeFt)} ft &middot; ~${p.emitters.toLocaleString()} emitters</td></tr>
+          <tr><td>RWS units</td><td>${p.rwsUnits} (2 / tree)</td></tr>
+          <tr><td>Flow</td><td>${p.totalGPM.toFixed(1)} GPM</td></tr>
+          <tr><td>Zones (under ${ceiling} GPM)</td><td>${p.zones}</td></tr>
+        </table>
+        <div class="prescribe"><b>Prescription:</b> ${p.treeCount} tree${p.treeCount===1?'':'s'} on ${p.zones||1} dedicated valve${p.zones>1?'s':''} - ${methodBits.join(' + ')||'place trees to size'}. ${p.ringTrees?`~${Math.round(p.tubeFt)} ft of ${esc(p.product.label)} in double rings.`:''} ${p.rwsTrees?`${p.rwsUnits} RWS units.`:''}</div>`;
+      sb.innerHTML=sketch(a,p);
+      totZones+=p.zones; if(p.zoneGPM.length) maxZ=Math.max(maxZ,...p.zoneGPM);
+      p.zoneGPM.forEach(g=>zoneList.push({area:a.name,gpm:g,family:'trees'}));
       return;
     }
 
@@ -1219,6 +1324,93 @@ function loPointerMove(e){
 }
 function loPointerUp(){ lo.dragging=-1; lo.rotating=false; window.removeEventListener('pointermove',loPointerMove); window.removeEventListener('pointerup',loPointerUp); }
 
+/* ════════════════ Tree placement editor ════════════════ */
+
+const tr = { areaIndex:-1, trees:[], sel:-1, dragging:-1, curType:'ring', curDia:4, spanFt:50, _ppf:12, origin:{x:0,y:0}, outline:null };
+
+function trFlow(t){
+  if(t.type==='rws') return 2*TREE_RWS_GPM_PER_UNIT;
+  const d=DRIP_PRODUCTS[areas[tr.areaIndex].dripProduct]||DRIP_PRODUCTS.xf09, emitFt=d.emitterIn/12;
+  const D=t.dia||TREE_RING_DEFAULT_DIA, loop=Math.PI*D+Math.PI*(D/2);
+  return (loop/emitFt)*d.gph/60;
+}
+function openTrees(i){
+  ensureArea(areas[i]); const a=areas[i];
+  tr.areaIndex=i; tr.sel=-1; tr.dragging=-1;
+  const gm=geom(a);
+  if(gm.poly){ tr.origin={x:gm.bb.minX,y:gm.bb.minY}; tr.outline=gm.poly.map(p=>({x:p.x,y:p.y})); }
+  else if(a.mode==='custom'){ tr.origin={x:0,y:0}; tr.outline=null; }        // custom, boundary not drawn yet
+  else { tr.origin={x:0,y:0}; tr.outline=[{x:0,y:0},{x:gm.L,y:0},{x:gm.L,y:gm.W},{x:0,y:gm.W}]; }
+  tr.trees = Array.isArray(a.trees)? a.trees.map(t=>({x:t.x,y:t.y,type:t.type||'ring',dia:t.dia||TREE_RING_DEFAULT_DIA})) : [];
+  tr.curType='ring'; tr.curDia=TREE_RING_DEFAULT_DIA;
+  const pts=(tr.outline||[]).concat(tr.trees);
+  if(pts.length){ const bb=polyBBox(pts); tr.spanFt=Math.max(20, Math.ceil((Math.max(bb.maxX,bb.maxY)+6)/5)*5); } else tr.spanFt=50;
+  el('trSpan').value=tr.spanFt;
+  buildTrPalette();
+  el('trOverlay').hidden=false;
+  trDraw();
+}
+function buildTrPalette(){
+  el('trTypes').innerHTML=[['ring','Drip ring'],['rws','RWS unit']].map(([v,l])=>`<button type="button" class="${v===tr.curType?'on':''}" onclick="trSetType('${v}')">${l}</button>`).join('');
+  el('trDiaWrap').style.display = tr.curType==='ring' ? '' : 'none';
+  el('trDia').value=tr.curDia;
+}
+function trSetType(t){ tr.curType=t; if(tr.sel>=0){ tr.trees[tr.sel].type=t; } buildTrPalette(); trDraw(); }
+function trSetDia(v){ tr.curDia=Math.max(1,parseFloat(v)||4); if(tr.sel>=0 && tr.trees[tr.sel].type==='ring'){ tr.trees[tr.sel].dia=tr.curDia; } trDraw(); }
+function trCancel(){ el('trOverlay').hidden=true; }
+function trClear(){ tr.trees=[]; tr.sel=-1; trDraw(); }
+function trDeleteSel(){ if(tr.sel>=0){ tr.trees.splice(tr.sel,1); tr.sel=-1; trDraw(); } }
+function trUse(){
+  const a=areas[tr.areaIndex];
+  a.trees=tr.trees.map(t=>({x:t.x,y:t.y,type:t.type,dia:t.dia}));
+  el('trOverlay').hidden=true; render(); markDirty();
+}
+function trXYraw(e){ const svg=el('trSvg'); if(!svg) return {x:0,y:0}; const r=svg.getBoundingClientRect(), ppf=tr._ppf; return {x:(e.clientX-r.left)/ppf+tr.origin.x, y:(e.clientY-r.top)/ppf+tr.origin.y}; }
+function trXY(e){ const p=trXYraw(e); return {x:Math.round(p.x*2)/2, y:Math.round(p.y*2)/2}; }
+function trDraw(){
+  const body=el('trBody');
+  const wpx=Math.max(body.clientWidth-2,300); const ppf=wpx/tr.spanFt; tr._ppf=ppf;
+  const hpx=tr.spanFt*ppf, cell=ppf;
+  const SX=x=>((x-tr.origin.x)*ppf), SY=y=>((y-tr.origin.y)*ppf);
+  let g=`<svg id="trSvg" width="${wpx.toFixed(0)}" height="${hpx.toFixed(0)}" viewBox="0 0 ${wpx.toFixed(0)} ${hpx.toFixed(0)}">`;
+  g+=`<defs><pattern id="trGrid" width="${cell}" height="${cell}" patternUnits="userSpaceOnUse"><path d="M ${cell} 0 L 0 0 0 ${cell}" fill="none" stroke="#e2e9e4" stroke-width="1"/></pattern></defs>`;
+  g+=`<rect width="${wpx.toFixed(0)}" height="${hpx.toFixed(0)}" fill="url(#trGrid)"/>`;
+  if(tr.outline){ const OP=tr.outline.map(p=>`${SX(p.x).toFixed(1)},${SY(p.y).toFixed(1)}`).join(' '); g+=`<polygon points="${OP}" fill="#eef6ef" stroke="#bcd3bf" stroke-width="1.5"/>`; }
+  let totGpm=0;
+  tr.trees.forEach((t,idx)=>{
+    totGpm+=trFlow(t);
+    const cx=SX(t.x), cy=SY(t.y), sel=idx===tr.sel;
+    if(t.type==='rws'){
+      const rr=Math.max((t.dia/2)*ppf,7);
+      g+=`<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${rr.toFixed(1)}" fill="none" stroke="var(--z4)" stroke-width="${sel?2:1.3}"/>`;
+      g+=`<text x="${cx.toFixed(1)}" y="${(cy-rr-2).toFixed(1)}" text-anchor="middle" font-size="9" fill="var(--z4)">RWS</text>`;
+    } else {
+      const rO=Math.max((t.dia/2)*ppf,7), rI=Math.max((t.dia/4)*ppf,4);
+      g+=`<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${rO.toFixed(1)}" fill="var(--z5)" fill-opacity="0.08" stroke="var(--z5)" stroke-width="${sel?2:1.2}" stroke-dasharray="3 2"/>`;
+      g+=`<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${rI.toFixed(1)}" fill="none" stroke="var(--z5)" stroke-width="${sel?2:1.2}" stroke-dasharray="3 2"/>`;
+    }
+    g+=`<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${sel?5:3.4}" fill="${sel?'var(--z3)':'#5b3a1a'}" stroke="#fff" stroke-width="1.4" data-ti="${idx}"/>`;
+  });
+  g+=`</svg>`;
+  body.innerHTML=g;
+  const zones=tr.trees.length?packZones(tr.trees.map(t=>({gpm:trFlow(t)})),Math.max(num('ceiling'),0.1)).zones:0;
+  el('trCount').textContent=tr.trees.length; el('trGpm').textContent=totGpm.toFixed(1); el('trZones').textContent=zones;
+  if(tr.sel>=0){ const t=tr.trees[tr.sel]; el('trSelInfo').innerHTML= t.type==='rws' ? `Selected: <b>RWS</b> · 2 units · ${(2*TREE_RWS_GPM_PER_UNIT).toFixed(1)} GPM` : `Selected: <b>drip ring</b> · ${t.dia} ft dia · ${trFlow(t).toFixed(2)} GPM`; }
+  else el('trSelInfo').textContent='';
+  el('trSvg').addEventListener('pointerdown', trPointerDown);
+}
+function trPointerDown(e){
+  const ti=(e.target && e.target.dataset && e.target.dataset.ti!=null)?parseInt(e.target.dataset.ti,10):-1;
+  if(ti>=0){ tr.sel=ti; tr.dragging=ti; const t=tr.trees[ti]; tr.curType=t.type; if(t.type==='ring') tr.curDia=t.dia; buildTrPalette();
+    window.addEventListener('pointermove',trPointerMove); window.addEventListener('pointerup',trPointerUp); e.preventDefault(); trDraw(); return; }
+  const p=trXY(e);
+  tr.trees.push({x:p.x, y:p.y, type:tr.curType, dia:tr.curDia});
+  tr.sel=tr.trees.length-1; tr.dragging=tr.sel;
+  window.addEventListener('pointermove',trPointerMove); window.addEventListener('pointerup',trPointerUp); e.preventDefault(); trDraw();
+}
+function trPointerMove(e){ if(tr.dragging<0) return; const p=trXY(e); tr.trees[tr.dragging].x=p.x; tr.trees[tr.dragging].y=p.y; e.preventDefault(); trDraw(); }
+function trPointerUp(){ tr.dragging=-1; window.removeEventListener('pointermove',trPointerMove); window.removeEventListener('pointerup',trPointerUp); }
+
 /* ════════════════ Extras — valves, pipe/wire, timing ════════════════ */
 
 function pipeForGPM(gpm){
@@ -1327,6 +1519,18 @@ function buildBOM(parts){
       add('RBDXFELB',  Math.max(2,Math.round(p.dripLengthFt/40)));
       add('RBDXFFCOUP',Math.max(1,Math.round(p.dripLengthFt/250)));
       add('CTISDRIPSTAPLES25', Math.max(1,Math.ceil((p.dripLengthFt/3)/25)));
+    }
+    else if(p.family==='trees'){
+      if(p.rwsUnits>0) add(TREE_RWS_SKU, p.rwsUnits);                 // 2 RWS units per RWS tree
+      if(p.ringTrees>0){
+        const d=p.product, ft=Math.ceil(p.tubeFt);
+        if(d.roll2){ const big=Math.floor(ft/d.roll2.ft), rem=ft-big*d.roll2.ft; if(big>0) add(d.roll2.sku,big); if(rem>0) add(d.sku,Math.ceil(rem/d.rollFt)); }
+        else add(d.sku, Math.ceil(ft/d.rollFt));
+        add('RBDXFFTEE', p.ringTrees);                               // ~1 tee per tree tap
+        add('RBDXFELB',  p.ringTrees*2);                             // ring bends
+        add('CTISDRIPSTAPLES25', Math.max(1,Math.ceil((p.tubeFt/2)/25)));
+      }
+      add('RBDPSIM30X075', p.zones);                                 // pressure reg / zone
     }
   });
 
@@ -1717,9 +1921,12 @@ async function initApp(){
   // Layout tool: nozzle select, grid-span, Escape.
   el('loNoz').addEventListener('change', e=>loSetNoz(e.target.value));
   el('loSpan').addEventListener('input', ()=>{ lo.spanFt=Math.max(10, parseFloat(el('loSpan').value)||50); loDraw(); });
+  // Tree tool: ring-dia, grid-span.
+  el('trDia').addEventListener('input', e=>trSetDia(e.target.value));
+  el('trSpan').addEventListener('input', ()=>{ tr.spanFt=Math.max(10, parseFloat(el('trSpan').value)||50); trDraw(); });
   window.addEventListener('keydown', (e)=>{
-    if(e.key==='Escape'){ if(!el('skOverlay').hidden) skCancel(); else if(!el('loOverlay').hidden) loCancel(); }
-    if((e.key==='Delete'||e.key==='Backspace') && !el('loOverlay').hidden && lo.sel>=0){ e.preventDefault(); loDeleteSel(); }
+    if(e.key==='Escape'){ if(!el('skOverlay').hidden) skCancel(); else if(!el('loOverlay').hidden) loCancel(); else if(!el('trOverlay').hidden) trCancel(); }
+    if((e.key==='Delete'||e.key==='Backspace')){ if(!el('loOverlay').hidden && lo.sel>=0){ e.preventDefault(); loDeleteSel(); } else if(!el('trOverlay').hidden && tr.sel>=0){ e.preventDefault(); trDeleteSel(); } }
   });
   el('wcTown').addEventListener('change', ()=>{ onTownChange(); markDirty(); });
   ['wcRun','wcCycles','wcWeeks','wcManualRate','wcManualUnit'].forEach(id=>{
