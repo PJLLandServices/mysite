@@ -593,22 +593,30 @@ function plan(a){
     const rowFt=Math.max(parseFloat(a.dripRowIn)||18,1)/12;  // between-run spacing
     const emitFt=Math.max(d.emitterIn,1)/12;                 // emitter spacing along tube
     const overage=1+((parseFloat(a.overagePct)||0)/100);
-    const baseLen=gm.sqft/rowFt;                            // straight-run tube length
-    const lengthFt=baseLen*overage;
-    const emitters=Math.round(lengthFt/emitFt);             // one emitter every emitFt
-    const totalGPH=emitters*d.gph;
-    const totalGPM=totalGPH/60;
+    // Area-wide drip line.
+    const areaDripFt=(gm.sqft/rowFt)*overage;
+    const areaGPM=(areaDripFt/emitFt)*d.gph/60;
+    // Trees can live in the SAME zone (both are drip / same precip regime).
+    const trees=Array.isArray(a.trees)?a.trees:[];
+    const orig = gm.poly ? {x:gm.bb.minX, y:gm.bb.minY} : {x:0, y:0};
+    let treeTube=0, rwsUnits=0, ringTrees=0, rwsTrees=0, treeFlow=0;
+    trees.forEach(t=>{
+      if(t.type==='rws'){ rwsTrees++; rwsUnits+=2; treeFlow+=2*TREE_RWS_GPM_PER_UNIT; }
+      else { ringTrees++; const D=t.dia||TREE_RING_DEFAULT_DIA; const loop=Math.PI*D+Math.PI*(D/2); treeTube+=loop; treeFlow+=(loop/emitFt)*d.gph/60; }
+    });
+    const treeTubeFt=treeTube*overage;
+    const dripLengthFt=areaDripFt+treeTubeFt;
+    const emitters=Math.round(dripLengthFt/emitFt);
+    const totalGPM=areaGPM+treeFlow;
+    const totalGPH=totalGPM*60;
     const zones=Math.max(1, Math.ceil(totalGPM/ceiling - 1e-6));
     const zoneGPM=new Array(zones).fill(totalGPM/zones);
     const dPoly = gm.poly ? gm.poly.map(p=>({x:p.x-gm.bb.minX, y:p.y-gm.bb.minY})) : null;
-    // Run direction: laterals go along the LONG axis (fewer, longer runs).
-    // 'auto' decomposes a rectilinear shape into regions and orients EACH
-    // along its own long axis (an L runs one leg horizontal, the other
-    // vertical). Forced h/v applies one direction to the whole area.
+    const treesOut = trees.map(t=>({x:t.x-orig.x, y:t.y-orig.y, type:t.type||'ring', dia:t.dia||TREE_RING_DEFAULT_DIA}));
+    // Run direction for the area drip (unchanged): long-axis / per-region / arc.
     const forced = (a.dripDir==='h'||a.dripDir==='v');
     let dripRects=null, dripDir, arcShape=null;
     if(isSector(a) && !forced){
-      // Curved bed: dripline follows the arc as concentric rings.
       const c=a.arc; arcShape={cx:c.cx-gm.bb.minX, cy:c.cy-gm.bb.minY, r:c.r, a0:c.a0, sweep:c.sweep};
       dripDir='arc';
     }
@@ -621,7 +629,8 @@ function plan(a){
       dripDir = gm.L>=gm.W?'h':'v';
     }
     return {family:"drip",kind:"drip",matched:false,L:gm.L,W:gm.W,sqft:gm.sqft,heads:[],zones,zoneGPM,
-      product:d,dripLengthFt:lengthFt,dripBaseLenFt:baseLen,emitters,totalGPH,totalGPM,rowFt,dripDir,dripRects,arcShape,poly:dPoly};
+      product:d,dripLengthFt,areaDripFt,treeTubeFt,emitters,totalGPH,totalGPM,rowFt,dripDir,dripRects,arcShape,
+      treeCount:trees.length,ringTrees,rwsTrees,rwsUnits,treesOut,poly:dPoly};
   }
 
   // ---- Trees: individual root watering (double drip ring or RWS units) ----
@@ -734,6 +743,24 @@ function sector(cx,cy,r,a0,a1){
   return `M${cx.toFixed(1)},${cy.toFixed(1)} L${x0.toFixed(1)},${y0.toFixed(1)} A${r.toFixed(1)},${r.toFixed(1)} 0 ${large} 1 ${x1.toFixed(1)},${y1.toFixed(1)} Z`;
 }
 
+// Double-ring (or RWS marker) for each placed tree, in sketch pixel coords.
+function treeSvg(treesOut, ox, oy, unit){
+  let s='';
+  (treesOut||[]).forEach(t=>{
+    const cx=ox+t.x*unit, cy=oy+t.y*unit;
+    if(t.type==='rws'){
+      s+=`<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${Math.max((t.dia/2)*unit,5).toFixed(1)}" fill="none" stroke="var(--z4)" stroke-width="1.2"/>`;
+      s+=`<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="3" fill="var(--z4)"/>`;
+      s+=`<text x="${cx.toFixed(1)}" y="${(cy-((t.dia/2)*unit)-2).toFixed(1)}" text-anchor="middle" font-size="8" fill="var(--z4)">RWS</text>`;
+    } else {
+      const rO=Math.max((t.dia/2)*unit,5), rI=Math.max((t.dia/4)*unit,3);
+      s+=`<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${rO.toFixed(1)}" fill="var(--z5)" fill-opacity="0.08" stroke="var(--z5)" stroke-width="1.1" stroke-dasharray="3 2"/>`;
+      s+=`<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${rI.toFixed(1)}" fill="none" stroke="var(--z5)" stroke-width="1.1" stroke-dasharray="3 2"/>`;
+      s+=`<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="2.6" fill="#5b3a1a"/>`;
+    }
+  });
+  return s;
+}
 let sketchSeq=0;
 function sketch(a,p){
   const W=320,H=Math.min(240,Math.max(150, 40+ (p.W/Math.max(p.L,0.1))*280)), pad=26;
@@ -780,21 +807,10 @@ function sketch(a,p){
       s+=runLine(dir, ox, oy, dw, dh);
     }
     s+=`</g>`;
-    s+=`<text x="${(ox+dw/2).toFixed(0)}" y="${(oy+dh/2+3).toFixed(0)}" text-anchor="middle" font-size="10" fill="#00838f">${Math.round(p.dripLengthFt)} ft dripline</text>`;
+    if(p.areaDripFt>=1) s+=`<text x="${(ox+dw/2).toFixed(0)}" y="${(oy+dh/2+3).toFixed(0)}" text-anchor="middle" font-size="10" fill="#00838f">${Math.round(p.areaDripFt)} ft area drip</text>`;
+    s+=treeSvg(p.treesOut, ox, oy, unit);   // trees sharing this drip zone
   } else if(p.kind==='trees'){
-    (p.treesOut||[]).forEach(t=>{
-      const cx=ox+t.x*unit, cy=oy+t.y*unit;
-      if(t.type==='rws'){
-        s+=`<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${Math.max((t.dia/2)*unit,5).toFixed(1)}" fill="none" stroke="var(--z4)" stroke-width="1.2"/>`;
-        s+=`<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="3" fill="var(--z4)"/>`;
-        s+=`<text x="${cx.toFixed(1)}" y="${(cy-((t.dia/2)*unit)-2).toFixed(1)}" text-anchor="middle" font-size="8" fill="var(--z4)">RWS</text>`;
-      } else {
-        const rO=Math.max((t.dia/2)*unit,5), rI=Math.max((t.dia/4)*unit,3);
-        s+=`<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${rO.toFixed(1)}" fill="var(--z5)" fill-opacity="0.08" stroke="var(--z5)" stroke-width="1.1" stroke-dasharray="3 2"/>`;
-        s+=`<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${rI.toFixed(1)}" fill="none" stroke="var(--z5)" stroke-width="1.1" stroke-dasharray="3 2"/>`;
-        s+=`<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="2.6" fill="#5b3a1a"/>`;
-      }
-    });
+    s+=treeSvg(p.treesOut, ox, oy, unit);
   } else {
     p.heads.forEach(hd=>{
       const cx=ox+hd.xft*unit, cy=oy+hd.yft*unit, rr=Math.max((hd.r||10)*unit*0.98,4);
@@ -882,7 +898,7 @@ function render(){
         <div class="fld"><label>Head family</label><select onchange="upd(${i},'family',this.value)">${famOpts}</select></div>
         ${familyFieldsHtml(a,i)}
         ${loManualCapable(a.family) ? `<div class="fld"><label>Layout</label><button type="button" class="ghost shape-btn" onclick="openLayout(${i})">${(a.layout==='manual'&&(a.manualHeads||[]).length)?`Edit ${a.manualHeads.length} heads`:'Lay out heads'}</button></div>` : ''}
-        ${a.family==='trees' ? `<div class="fld"><label>Trees</label><button type="button" class="ghost shape-btn" onclick="openTrees(${i})">${(a.trees||[]).length?`Edit ${a.trees.length} trees`:'Place trees'}</button></div>` : ''}
+        ${(a.family==='trees'||a.family==='drip') ? `<div class="fld"><label>Trees</label><button type="button" class="ghost shape-btn" onclick="openTrees(${i})">${(a.trees||[]).length?`Edit ${a.trees.length} trees`:'+ Trees in zone'}</button></div>` : ''}
         <button class="del" onclick="delArea(${i})">Remove</button>
       </div>
       <div class="areabody">
@@ -914,10 +930,13 @@ function compute(){
     }
 
     if(p.kind==='drip'){
+      const hasTrees=p.treeCount>0;
+      const treeBits=[]; if(p.ringTrees) treeBits.push(`${p.ringTrees} drip-ring`); if(p.rwsTrees) treeBits.push(`${p.rwsTrees} RWS`);
       rb.innerHTML=`
         <div class="big">
           <div class="stat"><div class="n">${p.sqft.toFixed(0)}</div><div class="l">sq ft</div></div>
           <div class="stat"><div class="n">${Math.round(p.dripLengthFt)}</div><div class="l">ft dripline</div></div>
+          ${hasTrees?`<div class="stat"><div class="n">${p.treeCount}</div><div class="l">tree${p.treeCount===1?'':'s'}</div></div>`:''}
           <div class="stat"><div class="n">${p.zones}</div><div class="l">zone${p.zones>1?'s':''}</div></div>
           <div class="stat"><div class="n">${p.totalGPM.toFixed(1)}</div><div class="l">total GPM</div></div>
         </div>
@@ -925,12 +944,13 @@ function compute(){
           <tr><td>Dripline</td><td>${esc(p.product.label)}</td></tr>
           <tr><td>Row spacing / emitter</td><td>${a.dripRowIn==null?18:a.dripRowIn}" rows &middot; ${p.product.emitterIn}" emitters</td></tr>
           <tr><td>Runs</td><td>${p.dripDir==='arc'?'concentric arcs (follow the curve)':(a.dripDir&&a.dripDir!=='auto')?((p.dripDir==='v'?'vertical':'horizontal')+' &middot; forced'):(p.dripDir==='mixed'?`per region (${p.dripRects.length} areas, long axis each)`:(p.dripDir==='v'?'vertical':'horizontal')+' (long axis)')}</td></tr>
-          <tr><td>Tube length (+${a.overagePct||0}% overage)</td><td>${Math.round(p.dripLengthFt)} ft</td></tr>
-          <tr><td>Emitters (approx)</td><td>~${p.emitters.toLocaleString()}</td></tr>
-          <tr><td>Flow</td><td>${Math.round(p.totalGPH)} GPH (${p.totalGPM.toFixed(1)} GPM)</td></tr>
+          <tr><td>Area drip / tree rings</td><td>${Math.round(p.areaDripFt)} ft area${hasTrees?` &middot; ${Math.round(p.treeTubeFt)} ft rings (${treeBits.join(' + ')})`:''}</td></tr>
+          <tr><td>Total tube (+${a.overagePct||0}%)</td><td>${Math.round(p.dripLengthFt)} ft &middot; ~${p.emitters.toLocaleString()} emitters</td></tr>
+          ${p.rwsUnits?`<tr><td>RWS units</td><td>${p.rwsUnits} (2 / tree)</td></tr>`:''}
+          <tr><td>Flow</td><td>${p.totalGPM.toFixed(1)} GPM</td></tr>
           <tr><td>Zones (under ${ceiling} GPM)</td><td>${p.zones}</td></tr>
         </table>
-        <div class="prescribe"><b>Prescription:</b> Area-wide <b>${esc(p.product.label)}</b> - ~${Math.round(p.dripLengthFt)} ft on ${a.dripRowIn==null?18:a.dripRowIn}" rows, ${p.zones} drip zone${p.zones>1?'s':''} on ${p.zones>1?'their own':'its own'} pressure-regulated valve${p.zones>1?'s':''}.</div>`;
+        <div class="prescribe"><b>Prescription:</b> Area-wide <b>${esc(p.product.label)}</b> - ~${Math.round(p.areaDripFt)} ft on ${a.dripRowIn==null?18:a.dripRowIn}" rows${hasTrees?` + ${p.treeCount} tree${p.treeCount===1?'':'s'} (${treeBits.join(' + ')})`:''}, ${p.zones} zone${p.zones>1?'s':''} on ${p.zones>1?'their own':'its own'} pressure-regulated valve${p.zones>1?'s':''}.</div>`;
       sb.innerHTML=sketch(a,p);
       totZones+=p.zones; maxZ=Math.max(maxZ,...p.zoneGPM);
       p.zoneGPM.forEach(g=>zoneList.push({area:a.name,gpm:g,family:'drip'}));
@@ -1511,14 +1531,15 @@ function buildBOM(parts){
       else addNon('RB '+((STRIP_NOZZLES[area.stripNoz]||{}).label||area.stripNoz)+' (not stocked)', p.heads.length);
     }
     else if(p.family==='drip'){
-      const d=p.product, ft=Math.ceil(p.dripLengthFt);
+      const d=p.product, ft=Math.ceil(p.dripLengthFt);   // area drip + tree ring tube
       if(d.roll2){ const big=Math.floor(ft/d.roll2.ft), rem=ft-big*d.roll2.ft; if(big>0) add(d.roll2.sku,big); if(rem>0) add(d.sku,Math.ceil(rem/d.rollFt)); }
       else add(d.sku, Math.ceil(ft/d.rollFt));
       add('RBDPSIM30X075', p.zones);                                  // pressure reg / zone
-      add('RBDXFFTEE', Math.max(1,Math.round(p.dripLengthFt/50)));
+      add('RBDXFFTEE', Math.max(1,Math.round(p.dripLengthFt/50))+(p.ringTrees||0));  // +1 tap tee / ring tree
       add('RBDXFELB',  Math.max(2,Math.round(p.dripLengthFt/40)));
       add('RBDXFFCOUP',Math.max(1,Math.round(p.dripLengthFt/250)));
       add('CTISDRIPSTAPLES25', Math.max(1,Math.ceil((p.dripLengthFt/3)/25)));
+      if(p.rwsUnits>0) add(TREE_RWS_SKU, p.rwsUnits);                 // RWS trees in the drip zone
     }
     else if(p.family==='trees'){
       if(p.rwsUnits>0) add(TREE_RWS_SKU, p.rwsUnits);                 // 2 RWS units per RWS tree
