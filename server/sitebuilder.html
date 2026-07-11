@@ -105,7 +105,10 @@
   .sk-tools{display:flex;flex-wrap:wrap;gap:8px}
   .sk-num{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted)}
   .sk-num input{width:70px;padding:6px 8px;border:1px solid var(--line);border-radius:6px;font-size:15px}
+  .sk-tools button.on{background:var(--green);color:#fff;border-color:var(--green)}
   .sk-vert{fill:#fff;stroke:var(--green-d);stroke-width:2;cursor:grab}
+  .sk-handle{fill:var(--z3);stroke:#fff;stroke-width:2;cursor:grab}
+  .sk-center{fill:var(--green-d);stroke:#fff;stroke-width:2;cursor:grab}
   .sk-vert.first{stroke:var(--z3)}
   .sk-vert.sel{fill:var(--green);stroke:var(--green-d)}
   /* ---- iPhone 17 Pro Max & phones (≤480px logical) ---- */
@@ -242,7 +245,9 @@
       <p class="hint" id="skHint">Click grid corners to trace the outline (each square = 1 ft). Click the first point (orange) to close the shape. Drag any point to adjust.</p>
       <span class="sk-grow"></span>
       <div class="sk-tools">
-        <button type="button" class="ghost" onclick="skUndo()">Undo point</button>
+        <button type="button" class="ghost" id="skToolPoly" onclick="skSetTool('poly')">Polygon</button>
+        <button type="button" class="ghost" id="skToolCircle" onclick="skSetTool('circle')">Circle</button>
+        <button type="button" class="ghost" onclick="skUndo()">Undo</button>
         <button type="button" class="ghost" onclick="skClear()">Clear</button>
         <button type="button" class="del" onclick="skCancel()">Cancel</button>
         <button type="button" onclick="skUse()">Use shape</button>
@@ -358,7 +363,7 @@ function familyDefaults(a){
   if(a.family==="mp"    && !a.mpNoz)    a.mpNoz="mp2000";
   if(a.family==="spray"){ if(!a.sprayBody) a.sprayBody="b4"; if(!a.spraySeries) a.spraySeries="s12"; }
   if(a.family==="strip"){ if(!a.stripNoz) a.stripNoz="sst"; if(!a.stripBody) a.stripBody="b4"; }
-  if(a.family==="drip"){ if(!a.dripProduct) a.dripProduct="xf09"; if(a.overagePct==null) a.overagePct=10; }
+  if(a.family==="drip"){ if(!a.dripProduct) a.dripProduct="xf09"; if(a.overagePct==null) a.overagePct=10; if(a.dripRowIn==null) a.dripRowIn=18; }
 }
 // Normalize an area (migrate legacy head key, fill family defaults).
 function ensureArea(a){
@@ -416,8 +421,14 @@ function pointInPoly(x,y,poly){
   return inside;
 }
 function validPoly(a){ return a.mode==='custom' && Array.isArray(a.poly) && a.poly.length>=3; }
+function circlePoly(cx,cy,r,n){ n=n||48; const p=[]; for(let i=0;i<n;i++){ const t=i/n*2*Math.PI; p.push({x:cx+r*Math.cos(t), y:cy+r*Math.sin(t)}); } return p; }
+function isCircle(a){ return a.mode==='custom' && a.shapeKind==='circle' && a.circle && a.circle.r>0; }
 
 function geom(a){
+  if(isCircle(a)){
+    const c=a.circle, poly=circlePoly(c.cx,c.cy,c.r);
+    return {L:2*c.r, W:2*c.r, sqft:Math.PI*c.r*c.r, poly, bb:polyBBox(poly)};
+  }
   if(validPoly(a)){
     const bb=polyBBox(a.poly);
     const L=Math.max(bb.maxX-bb.minX,1), W=Math.max(bb.maxY-bb.minY,1);
@@ -444,14 +455,18 @@ function plan(a){
   const ceiling=Math.max(num('ceiling'),0.1), sf=parseFloat(el('spacingFactor').value)||1;
   if(gm.noShape){ return {family:h.family,kind:h.kind,matched:h.matched,noShape:true,L:1,W:1,sqft:0,heads:[],zones:0,zoneGPM:[],arcCount:{90:0,180:0,360:0},totalGPM:0}; }
 
-  // ---- Drip: area-wide dripline (12" emitter + row spacing) ----
+  // ---- Drip: area-wide dripline ----
+  // Row spacing = distance between parallel tube runs (dripRowIn, default
+  // 18"). Emitter spacing = emitters along the tube (product.emitterIn,
+  // 12"). These are different: fewer runs at 18" than 12".
   if(h.kind==='drip'){
     const d=h.drip;
-    const rowFt=Math.max(d.emitterIn,1)/12;                 // row spacing in ft
+    const rowFt=Math.max(parseFloat(a.dripRowIn)||18,1)/12;  // between-run spacing
+    const emitFt=Math.max(d.emitterIn,1)/12;                 // emitter spacing along tube
     const overage=1+((parseFloat(a.overagePct)||0)/100);
     const baseLen=gm.sqft/rowFt;                            // straight-run tube length
     const lengthFt=baseLen*overage;
-    const emitters=Math.round(lengthFt/rowFt);              // one emitter every rowFt
+    const emitters=Math.round(lengthFt/emitFt);             // one emitter every emitFt
     const totalGPH=emitters*d.gph;
     const totalGPM=totalGPH/60;
     const zones=Math.max(1, Math.ceil(totalGPM/ceiling - 1e-6));
@@ -592,6 +607,7 @@ function familyFieldsHtml(a,i){
         <div class="fld"><label>Pop-up body</label><select onchange="upd(${i},'stripBody',this.value)">${optionList(SPRAY_BODIES,a.stripBody)}</select></div>`;
   if(a.family==="drip")  return `
         <div class="fld"><label>Dripline</label><select onchange="upd(${i},'dripProduct',this.value)">${optionList(DRIP_PRODUCTS,a.dripProduct)}</select></div>
+        <div class="fld"><label>Row spacing (in)</label><input type="number" min="6" step="2" value="${a.dripRowIn==null?18:a.dripRowIn}" oninput="upd(${i},'dripRowIn',this.value)"></div>
         <div class="fld adv"><label>Shape overage %</label><input type="number" min="0" step="5" value="${a.overagePct==null?10:a.overagePct}" oninput="upd(${i},'overagePct',this.value)"></div>`;
   return "";
 }
@@ -603,13 +619,14 @@ function render(){
     const rect=a.mode==='rect', custom=a.mode==='custom';
     const famOpts=FAMILY_ORDER.map(k=>`<option value="${k}" ${a.family===k?'selected':''}>${FAMILIES[k].label}</option>`).join('');
     const dimsHtml = custom ? (()=>{
-      const hasShape = validPoly(a);
-      const sq = hasShape ? Math.round(polyArea(a.poly)) : 0;
-      const bb = hasShape ? polyBBox(a.poly) : null;
+      const g=geom(a); const hasShape=!g.noShape;
+      const sq=Math.round(g.sqft);
+      const desc = isCircle(a) ? `${sq.toLocaleString()} sq ft &middot; ${Math.round(a.circle.r*2)} ft dia circle`
+        : (hasShape ? `${sq.toLocaleString()} sq ft &middot; ${Math.round(g.bb.maxX-g.bb.minX)}×${Math.round(g.bb.maxY-g.bb.minY)} ft box` : '<span style="color:var(--warn)">no shape drawn</span>');
       return `
         <div class="fld"><label>Custom shape</label>
           <button type="button" class="ghost shape-btn" onclick="openSketch(${i})">${hasShape?'Edit shape':'Draw shape'}</button></div>
-        <div class="fld"><label>Area</label><div class="shape-area">${hasShape?`${sq.toLocaleString()} sq ft · ${Math.round(bb.maxX-bb.minX)}×${Math.round(bb.maxY-bb.minY)} ft box`:'<span style="color:var(--warn)">no shape drawn</span>'}</div></div>`;
+        <div class="fld"><label>Area</label><div class="shape-area">${desc}</div></div>`;
     })() : rect ? `
           <div class="fld"><label>Length (ft)</label><input type="number" value="${a.L}" oninput="upd(${i},'L',this.value)"></div>
           <div class="fld"><label>Width (ft)</label><input type="number" value="${a.W}" oninput="upd(${i},'W',this.value)"></div>
@@ -670,13 +687,13 @@ function compute(){
         </div>
         <table class="spec">
           <tr><td>Dripline</td><td>${esc(p.product.label)}</td></tr>
-          <tr><td>Emitter / row spacing</td><td>${p.product.emitterIn}" x ${p.product.emitterIn}"</td></tr>
+          <tr><td>Row spacing / emitter</td><td>${a.dripRowIn==null?18:a.dripRowIn}" rows &middot; ${p.product.emitterIn}" emitters</td></tr>
           <tr><td>Tube length (+${a.overagePct||0}% overage)</td><td>${Math.round(p.dripLengthFt)} ft</td></tr>
           <tr><td>Emitters (approx)</td><td>~${p.emitters.toLocaleString()}</td></tr>
           <tr><td>Flow</td><td>${Math.round(p.totalGPH)} GPH (${p.totalGPM.toFixed(1)} GPM)</td></tr>
           <tr><td>Zones (under ${ceiling} GPM)</td><td>${p.zones}</td></tr>
         </table>
-        <div class="prescribe"><b>Prescription:</b> Area-wide <b>${esc(p.product.label)}</b> - ~${Math.round(p.dripLengthFt)} ft on 12" rows, ${p.zones} drip zone${p.zones>1?'s':''} on ${p.zones>1?'their own':'its own'} pressure-regulated valve${p.zones>1?'s':''}.</div>`;
+        <div class="prescribe"><b>Prescription:</b> Area-wide <b>${esc(p.product.label)}</b> - ~${Math.round(p.dripLengthFt)} ft on ${a.dripRowIn==null?18:a.dripRowIn}" rows, ${p.zones} drip zone${p.zones>1?'s':''} on ${p.zones>1?'their own':'its own'} pressure-regulated valve${p.zones>1?'s':''}.</div>`;
       sb.innerHTML=sketch(a,p);
       totZones+=p.zones; maxZ=Math.max(maxZ,...p.zoneGPM);
       p.zoneGPM.forEach(g=>zoneList.push({area:a.name,gpm:g,family:'drip'}));
@@ -744,30 +761,46 @@ function legend(p){
 
 /* ════════════════ Custom-shape sketch tool ════════════════ */
 
-const sk = { areaIndex:-1, poly:[], closed:false, sel:-1, dragging:-1, spanFt:50, snap:1, _ppf:12 };
+const sk = { areaIndex:-1, tool:'poly', poly:[], closed:false, sel:-1, dragging:-1,
+             circle:null, cDrag:null, spanFt:50, snap:1, _ppf:12 };
 
 function openSketch(i){
   ensureArea(areas[i]);
-  sk.areaIndex=i;
-  sk.poly = validPoly(areas[i]) ? areas[i].poly.map(p=>({x:p.x,y:p.y})) : [];
-  sk.closed = sk.poly.length>=3;
-  sk.sel=-1; sk.dragging=-1;
-  // fit the grid span to the shape (or a sensible default)
-  if(sk.poly.length){ const bb=polyBBox(sk.poly); sk.spanFt=Math.max(20, Math.ceil((Math.max(bb.maxX,bb.maxY)+4)/5)*5); }
-  else sk.spanFt=50;
+  sk.areaIndex=i; sk.sel=-1; sk.dragging=-1; sk.cDrag=null;
+  if(isCircle(areas[i])){
+    sk.tool='circle'; sk.circle={cx:areas[i].circle.cx, cy:areas[i].circle.cy, r:areas[i].circle.r};
+    sk.poly=[]; sk.closed=false;
+    sk.spanFt=Math.max(20, Math.ceil((sk.circle.cx+sk.circle.r+4)/5)*5, Math.ceil((sk.circle.cy+sk.circle.r+4)/5)*5);
+  } else {
+    sk.tool='poly'; sk.circle=null;
+    sk.poly = validPoly(areas[i]) ? areas[i].poly.map(p=>({x:p.x,y:p.y})) : [];
+    sk.closed = sk.poly.length>=3;
+    if(sk.poly.length){ const bb=polyBBox(sk.poly); sk.spanFt=Math.max(20, Math.ceil((Math.max(bb.maxX,bb.maxY)+4)/5)*5); }
+    else sk.spanFt=50;
+  }
   el('skSpan').value=sk.spanFt;
   el('skOverlay').hidden=false;
   skDraw();
 }
+function skSetTool(t){ sk.tool=t; if(t==='circle' && !sk.circle){ /* armed to draw */ } skDraw(); }
 function skCancel(){ el('skOverlay').hidden=true; }
-function skClear(){ sk.poly=[]; sk.closed=false; sk.sel=-1; skDraw(); }
-function skUndo(){ if(sk.closed){ sk.closed=false; } else { sk.poly.pop(); } sk.sel=-1; skDraw(); }
+function skClear(){ sk.poly=[]; sk.closed=false; sk.sel=-1; sk.circle=null; skDraw(); }
+function skUndo(){
+  if(sk.tool==='circle'){ sk.circle=null; }
+  else if(sk.closed){ sk.closed=false; } else { sk.poly.pop(); }
+  sk.sel=-1; skDraw();
+}
 function skUse(){
-  if(sk.poly.length<3){ alert('Draw at least 3 points to make a shape.'); return; }
-  sk.closed=true;
-  const a=areas[sk.areaIndex];
-  a.mode='custom';
-  a.poly=sk.poly.map(p=>({x:p.x,y:p.y}));
+  const a=areas[sk.areaIndex]; a.mode='custom';
+  if(sk.tool==='circle'){
+    if(!sk.circle || sk.circle.r<0.5){ alert('Press and drag on the grid to draw a circle first.'); return; }
+    a.shapeKind='circle'; a.circle={cx:sk.circle.cx, cy:sk.circle.cy, r:sk.circle.r};
+    a.poly=circlePoly(sk.circle.cx, sk.circle.cy, sk.circle.r);
+  } else {
+    if(sk.poly.length<3){ alert('Draw at least 3 points to make a shape.'); return; }
+    delete a.shapeKind; delete a.circle;
+    a.poly=sk.poly.map(p=>({x:p.x,y:p.y}));
+  }
   el('skOverlay').hidden=true;
   render(); markDirty();
 }
@@ -777,11 +810,14 @@ function skPerimNow(){
   for(let i=0;i<last;i++){ const A=sk.poly[i],B=sk.poly[(i+1)%n]; p+=Math.hypot(B.x-A.x,B.y-A.y); }
   return p;
 }
-function skXY(e){
+function skXYraw(e){
   const svg=el('skSvg'); if(!svg) return {x:0,y:0};
   const r=svg.getBoundingClientRect(), ppf=sk._ppf;
-  let x=(e.clientX-r.left)/ppf, y=(e.clientY-r.top)/ppf;
-  x=Math.round(x/sk.snap)*sk.snap; y=Math.round(y/sk.snap)*sk.snap;
+  return {x:(e.clientX-r.left)/ppf, y:(e.clientY-r.top)/ppf};
+}
+function skXY(e){
+  const p=skXYraw(e);
+  let x=Math.round(p.x/sk.snap)*sk.snap, y=Math.round(p.y/sk.snap)*sk.snap;
   x=Math.max(0,Math.min(sk.spanFt,x)); y=Math.max(0,Math.min(sk.spanFt,y));
   return {x,y};
 }
@@ -794,30 +830,59 @@ function skDraw(){
   g+=`<defs><pattern id="skGrid" width="${cell}" height="${cell}" patternUnits="userSpaceOnUse"><path d="M ${cell} 0 L 0 0 0 ${cell}" fill="none" stroke="#dbe4de" stroke-width="1"/></pattern></defs>`;
   g+=`<rect width="${wpx.toFixed(0)}" height="${hpx.toFixed(0)}" fill="url(#skGrid)"/>`;
   for(let f=0;f<=sk.spanFt;f+=5){ const x=(f*ppf).toFixed(1); g+=`<line x1="${x}" y1="0" x2="${x}" y2="${hpx.toFixed(0)}" stroke="#c2cec7" stroke-width="1.1"/><line x1="0" y1="${x}" x2="${wpx.toFixed(0)}" y2="${x}" stroke="#c2cec7" stroke-width="1.1"/>`; }
-  const P=sk.poly.map(p=>`${(p.x*ppf).toFixed(1)},${(p.y*ppf).toFixed(1)}`).join(' ');
-  if(sk.poly.length>=2){
-    if(sk.closed && sk.poly.length>=3) g+=`<polygon points="${P}" fill="var(--green)" fill-opacity="0.12" stroke="var(--green-d)" stroke-width="2"/>`;
-    else g+=`<polyline points="${P}" fill="none" stroke="var(--green-d)" stroke-width="2"/>`;
-    const n=sk.poly.length, last=sk.closed?n:n-1;
-    for(let k=0;k<last;k++){ const A=sk.poly[k],B=sk.poly[(k+1)%n]; const len=Math.hypot(B.x-A.x,B.y-A.y); if(len<0.6) continue;
-      const mx=((A.x+B.x)/2*ppf).toFixed(1), my=((A.y+B.y)/2*ppf-3).toFixed(1);
-      g+=`<text x="${mx}" y="${my}" text-anchor="middle" font-size="11" font-weight="600" fill="#1b5e20" paint-order="stroke" stroke="#fff" stroke-width="3">${len.toFixed(len%1?1:0)} ft</text>`;
+
+  let area=0, perim=0;
+  if(sk.tool==='circle'){
+    if(sk.circle){
+      const c=sk.circle, cx=(c.cx*ppf), cy=(c.cy*ppf), rr=(c.r*ppf);
+      g+=`<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${rr.toFixed(1)}" fill="var(--green)" fill-opacity="0.12" stroke="var(--green-d)" stroke-width="2"/>`;
+      g+=`<line x1="${cx.toFixed(1)}" y1="${cy.toFixed(1)}" x2="${(cx+rr).toFixed(1)}" y2="${cy.toFixed(1)}" stroke="var(--green-d)" stroke-width="1" stroke-dasharray="3 2"/>`;
+      g+=`<text x="${(cx+rr/2).toFixed(1)}" y="${(cy-4).toFixed(1)}" text-anchor="middle" font-size="11" font-weight="600" fill="#1b5e20" paint-order="stroke" stroke="#fff" stroke-width="3">r ${c.r.toFixed(c.r%1?1:0)} ft</text>`;
+      g+=`<circle class="sk-center" cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="7" data-h="c"/>`;
+      g+=`<circle class="sk-handle" cx="${(cx+rr).toFixed(1)}" cy="${cy.toFixed(1)}" r="7" data-h="r"/>`;
+      area=Math.PI*c.r*c.r; perim=2*Math.PI*c.r;
     }
+  } else {
+    const P=sk.poly.map(p=>`${(p.x*ppf).toFixed(1)},${(p.y*ppf).toFixed(1)}`).join(' ');
+    if(sk.poly.length>=2){
+      if(sk.closed && sk.poly.length>=3) g+=`<polygon points="${P}" fill="var(--green)" fill-opacity="0.12" stroke="var(--green-d)" stroke-width="2"/>`;
+      else g+=`<polyline points="${P}" fill="none" stroke="var(--green-d)" stroke-width="2"/>`;
+      const n=sk.poly.length, last=sk.closed?n:n-1;
+      for(let k=0;k<last;k++){ const A=sk.poly[k],B=sk.poly[(k+1)%n]; const len=Math.hypot(B.x-A.x,B.y-A.y); if(len<0.6) continue;
+        const mx=((A.x+B.x)/2*ppf).toFixed(1), my=((A.y+B.y)/2*ppf-3).toFixed(1);
+        g+=`<text x="${mx}" y="${my}" text-anchor="middle" font-size="11" font-weight="600" fill="#1b5e20" paint-order="stroke" stroke="#fff" stroke-width="3">${len.toFixed(len%1?1:0)} ft</text>`;
+      }
+    }
+    sk.poly.forEach((p,idx)=>{
+      const cls='sk-vert'+(idx===0?' first':'')+(idx===sk.sel?' sel':'');
+      g+=`<circle class="${cls}" cx="${(p.x*ppf).toFixed(1)}" cy="${(p.y*ppf).toFixed(1)}" r="7" data-i="${idx}"/>`;
+    });
+    area = (sk.closed&&sk.poly.length>=3)?polyArea(sk.poly):0; perim=skPerimNow();
   }
-  sk.poly.forEach((p,idx)=>{
-    const cls='sk-vert'+(idx===0?' first':'')+(idx===sk.sel?' sel':'');
-    g+=`<circle class="${cls}" cx="${(p.x*ppf).toFixed(1)}" cy="${(p.y*ppf).toFixed(1)}" r="7" data-i="${idx}"/>`;
-  });
   g+=`</svg>`;
   body.innerHTML=g;
-  el('skArea').textContent=(sk.closed&&sk.poly.length>=3?Math.round(polyArea(sk.poly)):0).toLocaleString();
-  el('skPerim').textContent=Math.round(skPerimNow());
-  el('skHint').textContent = sk.closed
-    ? 'Shape closed. Drag any point to adjust, or Undo to reopen. "Use shape" applies it.'
-    : (sk.poly.length>=3 ? 'Click the orange first point to close the shape, or keep adding points.' : 'Click grid corners to trace the outline (each square = 1 ft).');
+  el('skArea').textContent=Math.round(area).toLocaleString();
+  el('skPerim').textContent=Math.round(perim);
+  el('skToolPoly').classList.toggle('on', sk.tool==='poly');
+  el('skToolCircle').classList.toggle('on', sk.tool==='circle');
+  el('skHint').textContent = sk.tool==='circle'
+    ? (sk.circle ? 'Circle drawn. Drag the centre to move, the edge dot to resize. "Use shape" applies it.'
+                 : 'Press and drag on the grid to draw a circle (centre → edge).')
+    : (sk.closed ? 'Shape closed. Drag any point to adjust, or Undo to reopen.'
+                 : (sk.poly.length>=3 ? 'Click the orange first point to close the shape, or keep adding points.'
+                                      : 'Click grid corners to trace the outline (each square = 1 ft).'));
   el('skSvg').addEventListener('pointerdown', skPointerDown);
 }
 function skPointerDown(e){
+  if(sk.tool==='circle'){
+    const h=(e.target && e.target.dataset)?e.target.dataset.h:null;
+    if(h==='c'){ sk.cDrag='center'; }
+    else if(h==='r'){ sk.cDrag='radius'; }
+    else { const c=skXY(e); sk.circle={cx:c.x, cy:c.y, r:0}; sk.cDrag='radius'; }
+    window.addEventListener('pointermove', skPointerMove);
+    window.addEventListener('pointerup', skPointerUp);
+    e.preventDefault(); return;
+  }
   const vi=(e.target && e.target.dataset && e.target.dataset.i!=null)?parseInt(e.target.dataset.i,10):-1;
   if(vi>=0){
     if(vi===0 && !sk.closed && sk.poly.length>=3){ sk.closed=true; sk.sel=-1; skDraw(); return; }
@@ -829,8 +894,18 @@ function skPointerDown(e){
   if(!sk.closed){ sk.poly.push(skXY(e)); sk.sel=sk.poly.length-1; skDraw(); }
   else { sk.sel=-1; skDraw(); }
 }
-function skPointerMove(e){ if(sk.dragging<0) return; sk.poly[sk.dragging]=skXY(e); e.preventDefault(); skDraw(); }
-function skPointerUp(){ sk.dragging=-1; window.removeEventListener('pointermove', skPointerMove); window.removeEventListener('pointerup', skPointerUp); }
+function skPointerMove(e){
+  if(sk.tool==='circle' && sk.cDrag && sk.circle){
+    if(sk.cDrag==='center'){ const p=skXY(e); sk.circle.cx=p.x; sk.circle.cy=p.y; }
+    else { const p=skXYraw(e); const d=Math.hypot(p.x-sk.circle.cx, p.y-sk.circle.cy); sk.circle.r=Math.max(0.5, Math.round(d/0.5)*0.5); }
+    e.preventDefault(); skDraw(); return;
+  }
+  if(sk.dragging<0) return; sk.poly[sk.dragging]=skXY(e); e.preventDefault(); skDraw();
+}
+function skPointerUp(){
+  sk.dragging=-1; sk.cDrag=null;
+  window.removeEventListener('pointermove', skPointerMove); window.removeEventListener('pointerup', skPointerUp);
+}
 
 /* ════════════════ Extras — valves, pipe/wire, timing ════════════════ */
 
