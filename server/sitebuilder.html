@@ -109,6 +109,13 @@
   .sk-vert{fill:#fff;stroke:var(--green-d);stroke-width:2;cursor:grab}
   .sk-handle{fill:var(--z3);stroke:#fff;stroke-width:2;cursor:grab}
   .sk-center{fill:var(--green-d);stroke:#fff;stroke-width:2;cursor:grab}
+  .lo-palette{padding:8px 16px;border-bottom:1px solid var(--line);display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center;background:#f6faf6}
+  .lo-palette select{padding:6px 8px;border:1px solid var(--line);border-radius:6px;font-size:15px;background:#fff}
+  .lo-arcs{display:inline-flex;gap:4px}
+  .lo-arcs button{font-size:12px;padding:6px 9px;border-radius:6px;border:1px solid var(--green);background:#fff;color:var(--green-d);cursor:pointer;font-weight:600}
+  .lo-arcs button.on{background:var(--green);color:#fff}
+  .lo-hd{cursor:grab}
+  .lo-aim{fill:var(--z3);stroke:#fff;stroke-width:1.5;cursor:grab}
   .sk-vert.first{stroke:var(--z3)}
   .sk-vert.sel{fill:var(--green);stroke:var(--green-d)}
   /* ---- iPhone 17 Pro Max & phones (≤480px logical) ---- */
@@ -256,6 +263,34 @@
   </div>
 </div>
 
+<div id="loOverlay" class="sk-overlay" hidden>
+  <div class="sk-panel">
+    <div class="sk-head">
+      <h3>Lay out heads</h3>
+      <span class="sk-stat"><b id="loCount">0</b> heads &middot; <span id="loGpm">0</span> GPM &middot; <span id="loZones">0</span> zones</span>
+      <span class="sk-grow"></span>
+      <span class="sk-num">ft across <input id="loSpan" type="number" min="10" max="300" step="5" value="50"></span>
+    </div>
+    <div class="lo-palette" id="loPalette">
+      <span class="sk-num">Nozzle <select id="loNoz"></select></span>
+      <span class="lo-arcs" id="loArcs"></span>
+      <span class="sk-grow"></span>
+      <span class="hint" id="loSelInfo"></span>
+    </div>
+    <div class="sk-body" id="loBody"></div>
+    <div class="sk-foot">
+      <p class="hint" id="loHint">Pick a nozzle + arc, then click inside the area to drop a head. Drag a head to move it, drag its aim dot to rotate. Click a head to select it.</p>
+      <span class="sk-grow"></span>
+      <div class="sk-tools">
+        <button type="button" class="ghost" onclick="loDeleteSel()">Delete head</button>
+        <button type="button" class="ghost" onclick="loClear()">Clear all</button>
+        <button type="button" class="del" onclick="loCancel()">Cancel</button>
+        <button type="button" onclick="loUse()">Use layout</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <script>
 /* ==== Head catalogs - manufacturer performance data ====
    HARD RULE: a zone never mixes head families. Rotor / spray / strip /
@@ -383,6 +418,16 @@ function headSpec(a){
   const d=DRIP_PRODUCTS[a.dripProduct]||DRIP_PRODUCTS.xf09; return {family:"drip",kind:"drip",matched:false,r:0,g:0,drip:d,label:d.label};
 }
 
+// One hand-placed head's radius + flow, from family + nozzle + arc (deg).
+// Spray/MP are matched precip (flow scales with arc); rotor is fixed GPM.
+function loHeadSpec(family, noz, arc){
+  if(family==="spray"){ const s=SPRAY_SERIES[noz]||SPRAY_SERIES.s12; return {r:s.r, gpm:s.f*(arc/360), matched:true, label:s.label}; }
+  if(family==="mp"){    const m=MP_NOZZLES[noz]||MP_NOZZLES.mp2000; return {r:m.r, gpm:m.g*(arc/360), matched:true, label:m.label}; }
+  const n=PGP_NOZZLES[noz]||PGP_NOZZLES.b40; return {r:n.r, gpm:n.g, matched:false, label:n.label};
+}
+function loNozzles(family){ return family==="spray"?SPRAY_SERIES : family==="mp"?MP_NOZZLES : PGP_NOZZLES; }
+function loManualCapable(family){ return family==="rotor"||family==="mp"||family==="spray"; }
+
 const DEFAULT_AREAS = [
   {name:"Front Yard (lawn)",             mode:"rect", L:60, W:40, sqft:2400, avgW:40, family:"rotor", rotorNoz:"b40"},
   {name:"Driveway Side Strips",          mode:"rect", L:158,W:4,  sqft:632,  avgW:4,  family:"strip", stripNoz:"sst", stripBody:"b4"},
@@ -403,7 +448,7 @@ function addArea(){ areas.push(newArea()); render(); markDirty(); }
 function delArea(i){ areas.splice(i,1); render(); markDirty(); }
 function upd(i,k,v){
   areas[i][k] = STR_KEYS.has(k) ? v : (parseFloat(v)||0);
-  if(k==="family") familyDefaults(areas[i]);
+  if(k==="family"){ familyDefaults(areas[i]); delete areas[i].layout; delete areas[i].manualHeads; }  // heads are family-specific
   if(RENDER_KEYS.has(k)) render(); else compute();
   markDirty();
 }
@@ -477,6 +522,23 @@ function plan(a){
   }
 
   let heads=[];
+
+  // ---- Manual layout: hand-placed heads (rotor / mp / spray) ----
+  if(a.layout==='manual' && Array.isArray(a.manualHeads) && a.manualHeads.length && loManualCapable(h.family)){
+    const orig = gm.poly ? {x:gm.bb.minX, y:gm.bb.minY} : {x:0, y:0};
+    a.manualHeads.forEach(mh=>{
+      const spec=loHeadSpec(h.family, mh.noz, mh.arc);
+      heads.push({xft:mh.x-orig.x, yft:mh.y-orig.y, arc:mh.arc, dir:mh.dir||0, gpm:spec.gpm, r:spec.r});
+    });
+    const pk=packZones(heads,ceiling);
+    const zoneMixArc=Array.from({length:pk.zones},()=>new Set()); heads.forEach(hd=>zoneMixArc[hd.zone].add(hd.arc));
+    const arcCount={90:0,180:0,270:0,360:0}; heads.forEach(hd=>arcCount[hd.arc]=(arcCount[hd.arc]||0)+1);
+    const mixedRotor = h.family==='rotor' && zoneMixArc.some(x=>x.size>1);
+    const outPoly = gm.poly ? gm.poly.map(p=>({x:p.x-orig.x, y:p.y-orig.y})) : null;
+    return {family:h.family,kind:h.kind,matched:h.matched,manual:true,L:gm.L,W:gm.W,sqft:gm.sqft,heads,zones:pk.zones,zoneGPM:pk.zoneGPM,
+      arcCount,mixedRotor,body:h.body,series:h.series,noz:h.noz,poly:outPoly,totalGPM:heads.reduce((t,x)=>t+x.gpm,0)};
+  }
+
   // ---- Strip: single run of strip nozzles along the length ----
   if(h.kind==="strip"){
     const s=h.strip, per=Math.max(s.len,1);
@@ -647,6 +709,7 @@ function render(){
         ${dimsHtml}
         <div class="fld"><label>Head family</label><select onchange="upd(${i},'family',this.value)">${famOpts}</select></div>
         ${familyFieldsHtml(a,i)}
+        ${loManualCapable(a.family) ? `<div class="fld"><label>Layout</label><button type="button" class="ghost shape-btn" onclick="openLayout(${i})">${(a.layout==='manual'&&(a.manualHeads||[]).length)?`Edit ${a.manualHeads.length} heads`:'Lay out heads'}</button></div>` : ''}
         <button class="del" onclick="delArea(${i})">Remove</button>
       </div>
       <div class="areabody">
@@ -701,8 +764,8 @@ function compute(){
     }
 
     const n=p.heads.length;
-    const arc=`${p.arcCount[90]}x90 - ${p.arcCount[180]}x180 - ${p.arcCount[360]}x360`;
-    const flowNote=h.matched?'matched precip (arc-scaled flow)':'fixed GPM at any arc';
+    const arc=`${p.arcCount[90]||0}x90 - ${p.arcCount[180]||0}x180`+((p.arcCount[270])?` - ${p.arcCount[270]}x270`:'')+` - ${p.arcCount[360]||0}x360`;
+    const flowNote=(h.matched?'matched precip (arc-scaled flow)':'fixed GPM at any arc')+(p.manual?' &middot; hand-placed layout':'');
     const zoneGpmStr=p.zoneGPM.map(g=>g.toFixed(1)).join(' / ');
     const flag=p.mixedRotor?`<div class="flag">! Zone mixes arcs on gear rotors (not matched-precip). Group same-arc heads where you can, or bump the run time for the 90 heads on Hydrawise.</div>`:'';
     rb.innerHTML=`
@@ -907,6 +970,123 @@ function skPointerUp(){
   window.removeEventListener('pointermove', skPointerMove); window.removeEventListener('pointerup', skPointerUp);
 }
 
+/* ════════════════ Manual head-layout editor ════════════════ */
+
+const LO_ARCS = [{deg:90,label:'Q'},{deg:180,label:'H'},{deg:270,label:'T'},{deg:360,label:'F'}];
+const lo = { areaIndex:-1, family:'spray', heads:[], sel:-1, dragging:-1, rotating:false,
+             curNoz:'s12', curArc:180, spanFt:50, _ppf:12, origin:{x:0,y:0}, outline:null, centroid:{x:0,y:0} };
+
+function polyCentroid(poly){ let x=0,y=0; poly.forEach(p=>{x+=p.x;y+=p.y;}); return {x:x/poly.length, y:y/poly.length}; }
+
+function openLayout(i){
+  ensureArea(areas[i]);
+  const a=areas[i];
+  if(!loManualCapable(a.family)){ alert('Manual layout is for rotor, MP, or spray areas.'); return; }
+  lo.areaIndex=i; lo.family=a.family; lo.sel=-1; lo.dragging=-1; lo.rotating=false;
+  const gm=geom(a);
+  if(gm.poly){ lo.origin={x:gm.bb.minX,y:gm.bb.minY}; lo.outline=gm.poly.map(p=>({x:p.x,y:p.y})); }
+  else { lo.origin={x:0,y:0}; lo.outline=[{x:0,y:0},{x:gm.L,y:0},{x:gm.L,y:gm.W},{x:0,y:gm.W}]; }
+  lo.centroid=polyCentroid(lo.outline);
+  lo.heads = (a.layout==='manual' && Array.isArray(a.manualHeads)) ? a.manualHeads.map(m=>({x:m.x,y:m.y,noz:m.noz,arc:m.arc,dir:m.dir||0})) : [];
+  lo.curNoz = a.family==='spray'?'s12' : a.family==='mp'?'mp2000':'b40';
+  lo.curArc = 180;
+  const bb=polyBBox(lo.outline);
+  lo.spanFt=Math.max(20, Math.ceil((Math.max(bb.maxX,bb.maxY)+4)/5)*5);
+  el('loSpan').value=lo.spanFt;
+  buildPalette();
+  el('loOverlay').hidden=false;
+  loDraw();
+}
+function buildPalette(){
+  const nz=loNozzles(lo.family);
+  el('loNoz').innerHTML=Object.entries(nz).map(([k,v])=>`<option value="${k}" ${k===lo.curNoz?'selected':''}>${v.label}</option>`).join('');
+  el('loArcs').innerHTML=LO_ARCS.map(a=>`<button type="button" class="${a.deg===lo.curArc?'on':''}" onclick="loSetArc(${a.deg})">${a.label}</button>`).join('');
+}
+function loSetNoz(v){ lo.curNoz=v; if(lo.sel>=0){ lo.heads[lo.sel].noz=v; } loDraw(); }
+function loSetArc(d){ lo.curArc=d; if(lo.sel>=0){ lo.heads[lo.sel].arc=d; } buildPalette(); loDraw(); }
+function loCancel(){ el('loOverlay').hidden=true; }
+function loClear(){ lo.heads=[]; lo.sel=-1; loDraw(); }
+function loDeleteSel(){ if(lo.sel>=0){ lo.heads.splice(lo.sel,1); lo.sel=-1; loDraw(); } }
+function loUse(){
+  const a=areas[lo.areaIndex];
+  if(lo.heads.length){ a.layout='manual'; a.manualHeads=lo.heads.map(m=>({x:m.x,y:m.y,noz:m.noz,arc:m.arc,dir:m.dir})); }
+  else { a.layout='auto'; delete a.manualHeads; }   // cleared → back to auto placement
+  el('loOverlay').hidden=true;
+  render(); markDirty();
+}
+function loXYraw(e){ const svg=el('loSvg'); if(!svg) return {x:0,y:0}; const r=svg.getBoundingClientRect(), ppf=lo._ppf; return {x:(e.clientX-r.left)/ppf+lo.origin.x, y:(e.clientY-r.top)/ppf+lo.origin.y}; }
+function loXY(e){ const p=loXYraw(e); return {x:Math.round(p.x*2)/2, y:Math.round(p.y*2)/2}; }  // snap 0.5 ft
+function loDraw(){
+  const body=el('loBody');
+  const wpx=Math.max(body.clientWidth-2, 300);
+  const ppf=wpx/lo.spanFt; lo._ppf=ppf;
+  const hpx=lo.spanFt*ppf, cell=ppf;
+  const SX=x=>((x-lo.origin.x)*ppf), SY=y=>((y-lo.origin.y)*ppf);
+  let g=`<svg id="loSvg" width="${wpx.toFixed(0)}" height="${hpx.toFixed(0)}" viewBox="0 0 ${wpx.toFixed(0)} ${hpx.toFixed(0)}">`;
+  g+=`<defs><pattern id="loGrid" width="${cell}" height="${cell}" patternUnits="userSpaceOnUse"><path d="M ${cell} 0 L 0 0 0 ${cell}" fill="none" stroke="#e2e9e4" stroke-width="1"/></pattern></defs>`;
+  g+=`<rect width="${wpx.toFixed(0)}" height="${hpx.toFixed(0)}" fill="url(#loGrid)"/>`;
+  // area outline
+  const OP=lo.outline.map(p=>`${SX(p.x).toFixed(1)},${SY(p.y).toFixed(1)}`).join(' ');
+  g+=`<polygon points="${OP}" fill="#eef6ef" stroke="#bcd3bf" stroke-width="1.5"/>`;
+  // heads: wedge + dot
+  let totGpm=0;
+  lo.heads.forEach((hd,idx)=>{
+    const spec=loHeadSpec(lo.family, hd.noz, hd.arc); totGpm+=spec.gpm;
+    const cx=SX(hd.x), cy=SY(hd.y), rr=Math.max(spec.r*ppf,6);
+    const col=idx===lo.sel?'var(--z3)':'var(--green-d)';
+    if(hd.arc>=360){
+      g+=`<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${rr.toFixed(1)}" fill="var(--green)" fill-opacity="0.12" stroke="${col}" stroke-opacity="0.5" stroke-width="1"/>`;
+    } else {
+      const half=(hd.arc*Math.PI/180)/2;
+      g+=`<path d="${sector(cx,cy,rr,hd.dir-half,hd.dir+half)}" fill="var(--green)" fill-opacity="0.15" stroke="${col}" stroke-opacity="0.5" stroke-width="1"/>`;
+    }
+  });
+  lo.heads.forEach((hd,idx)=>{
+    const cx=SX(hd.x), cy=SY(hd.y);
+    const sel=idx===lo.sel;
+    g+=`<circle class="lo-hd" cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${sel?6:4.5}" fill="${sel?'var(--z3)':'var(--green-d)'}" stroke="#fff" stroke-width="1.5" data-hi="${idx}"/>`;
+    if(sel){
+      const spec=loHeadSpec(lo.family, hd.noz, hd.arc);
+      const hd2=Math.min(spec.r*lo._ppf, 46);
+      const ax=cx+Math.cos(hd.dir)*hd2, ay=cy+Math.sin(hd.dir)*hd2;
+      g+=`<line x1="${cx.toFixed(1)}" y1="${cy.toFixed(1)}" x2="${ax.toFixed(1)}" y2="${ay.toFixed(1)}" stroke="var(--z3)" stroke-width="1.5" stroke-dasharray="3 2"/>`;
+      g+=`<circle class="lo-aim" cx="${ax.toFixed(1)}" cy="${ay.toFixed(1)}" r="6" data-h="aim"/>`;
+    }
+  });
+  g+=`</svg>`;
+  body.innerHTML=g;
+  const zones=lo.heads.length?packZones(lo.heads.map(hd=>({gpm:loHeadSpec(lo.family,hd.noz,hd.arc).gpm})), Math.max(num('ceiling'),0.1)).zones:0;
+  el('loCount').textContent=lo.heads.length;
+  el('loGpm').textContent=totGpm.toFixed(1);
+  el('loZones').textContent=zones;
+  if(lo.sel>=0){ const hd=lo.heads[lo.sel]; const sp=loHeadSpec(lo.family,hd.noz,hd.arc); const al=(LO_ARCS.find(a=>a.deg===hd.arc)||{label:hd.arc}).label;
+    el('loSelInfo').innerHTML=`Selected: <b>${esc(sp.label)} ${al}</b> · ${sp.r} ft · ${sp.gpm.toFixed(2)} GPM`; }
+  else el('loSelInfo').textContent='';
+  el('loSvg').addEventListener('pointerdown', loPointerDown);
+}
+function loPointerDown(e){
+  const t=e.target, ds=t&&t.dataset||{};
+  if(ds.h==='aim'){ lo.rotating=true; window.addEventListener('pointermove',loPointerMove); window.addEventListener('pointerup',loPointerUp); e.preventDefault(); return; }
+  if(ds.hi!=null){
+    lo.sel=parseInt(ds.hi,10); lo.dragging=lo.sel;
+    const hd=lo.heads[lo.sel]; lo.curNoz=hd.noz; lo.curArc=hd.arc; buildPalette();
+    window.addEventListener('pointermove',loPointerMove); window.addEventListener('pointerup',loPointerUp);
+    e.preventDefault(); loDraw(); return;
+  }
+  // empty → drop a new head facing the area centroid
+  const p=loXY(e);
+  const dir=Math.atan2(lo.centroid.y-p.y, lo.centroid.x-p.x);
+  lo.heads.push({x:p.x, y:p.y, noz:lo.curNoz, arc:lo.curArc, dir});
+  lo.sel=lo.heads.length-1; lo.dragging=lo.sel;
+  window.addEventListener('pointermove',loPointerMove); window.addEventListener('pointerup',loPointerUp);
+  e.preventDefault(); loDraw();
+}
+function loPointerMove(e){
+  if(lo.rotating && lo.sel>=0){ const hd=lo.heads[lo.sel]; const p=loXYraw(e); hd.dir=Math.atan2(p.y-hd.y, p.x-hd.x); e.preventDefault(); loDraw(); return; }
+  if(lo.dragging>=0){ const p=loXY(e); lo.heads[lo.dragging].x=p.x; lo.heads[lo.dragging].y=p.y; e.preventDefault(); loDraw(); }
+}
+function loPointerUp(){ lo.dragging=-1; lo.rotating=false; window.removeEventListener('pointermove',loPointerMove); window.removeEventListener('pointerup',loPointerUp); }
+
 /* ════════════════ Extras — valves, pipe/wire, timing ════════════════ */
 
 function pipeForGPM(gpm){
@@ -973,6 +1153,22 @@ function buildBOM(parts){
     totalZones+=p.zones;
     if(p.kind!=='drip' && p.heads.length){
       lateralFt += p.heads.length * Math.max(headSpec(area).r*sf,1) * 0.6;  // rough trunk+branch
+    }
+    // Manual layout: count each hand-placed head's own nozzle + arc.
+    if(p.manual){
+      const heads=area.manualHeads||[];
+      if(p.family==='rotor'){ add('HSPGPADJ', heads.length); }
+      else if(p.family==='mp'){ add('HSPROS04PRS30', heads.length); addNon('MP Rotator nozzle (various)', heads.length); }
+      else if(p.family==='spray'){
+        add((SPRAY_BODIES[area.sprayBody]||SPRAY_BODIES.b4).sku, heads.length);
+        heads.forEach(mh=>{ const sz=seriesSize(mh.noz), a=mh.arc;
+          if(a<=90){ parts['RBN'+sz+'Q']?add('RBN'+sz+'Q',1):addNon('RB nozzle '+sz+'Q',1); }
+          else if(a<=180){ parts['RBN'+sz+'H']?add('RBN'+sz+'H',1):addNon('RB nozzle '+sz+'H',1); }
+          else if(a<=270){ addNon('RB nozzle '+sz+'T (three-quarter - not stocked)',1); }
+          else { addNon('RB nozzle '+sz+'F (full circle - not stocked)',1); }
+        });
+      }
+      return;
     }
     if(p.family==='rotor'){ add('HSPGPADJ', p.heads.length); }
     else if(p.family==='mp'){ add('HSPROS04PRS30', p.heads.length); addNon('MP Rotator nozzle - '+((MP_NOZZLES[area.mpNoz]||{}).label||''), p.heads.length); }
@@ -1386,7 +1582,13 @@ async function initApp(){
   el('supply').addEventListener('change', markDirty);
   // Sketch tool: grid-span rescale + Escape to cancel.
   el('skSpan').addEventListener('input', ()=>{ sk.spanFt=Math.max(10, parseFloat(el('skSpan').value)||50); skDraw(); });
-  window.addEventListener('keydown', (e)=>{ if(e.key==='Escape' && !el('skOverlay').hidden) skCancel(); });
+  // Layout tool: nozzle select, grid-span, Escape.
+  el('loNoz').addEventListener('change', e=>loSetNoz(e.target.value));
+  el('loSpan').addEventListener('input', ()=>{ lo.spanFt=Math.max(10, parseFloat(el('loSpan').value)||50); loDraw(); });
+  window.addEventListener('keydown', (e)=>{
+    if(e.key==='Escape'){ if(!el('skOverlay').hidden) skCancel(); else if(!el('loOverlay').hidden) loCancel(); }
+    if((e.key==='Delete'||e.key==='Backspace') && !el('loOverlay').hidden && lo.sel>=0){ e.preventDefault(); loDeleteSel(); }
+  });
   el('wcTown').addEventListener('change', ()=>{ onTownChange(); markDirty(); });
   ['wcRun','wcCycles','wcWeeks','wcManualRate','wcManualUnit'].forEach(id=>{
     el(id).addEventListener('input', ()=>{ updateCostCells(); markDirty(); });
