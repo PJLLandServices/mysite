@@ -25,13 +25,34 @@
   .panel{background:#fff;border:1px solid var(--line);border-radius:12px;padding:16px 18px;margin-bottom:18px;
     box-shadow:0 1px 3px rgba(0,0,0,.04)}
   .panel h2{margin:0 0 12px;font-size:15px;color:var(--green-d);text-transform:uppercase;letter-spacing:.6px}
+  /* Collapsible major sections — header (with its number) stays visible */
+  .panel.collapsible > h2{cursor:pointer;user-select:none;display:flex;align-items:center;gap:9px;margin-bottom:12px}
+  .panel.collapsible > h2::before{content:'';flex:0 0 auto;width:0;height:0;border-left:6px solid var(--green-d);border-top:5px solid transparent;border-bottom:5px solid transparent;transform:rotate(90deg);transition:transform .15s}
+  .panel.collapsed > h2{margin-bottom:0}
+  .panel.collapsed > h2::before{transform:rotate(0deg)}
+  .panel.collapsed > :not(h2){display:none!important}
   .supply{display:flex;flex-wrap:wrap;gap:18px;align-items:flex-end}
   .fld{display:flex;flex-direction:column;gap:4px}
   .fld label{font-size:11px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.4px}
   .fld input,.fld select{padding:9px 10px;border:1px solid var(--line);border-radius:8px;font-size:16px;background:#fff}
   .fld input[type=number]{width:104px}
   .hint{font-size:12px;color:var(--muted);margin-top:8px}
+  .ws-check{display:flex;flex-wrap:wrap;gap:11px 24px;margin-top:14px;padding-top:13px;border-top:1px solid var(--line);align-items:flex-start}
+  .ws-row{display:flex;align-items:center;gap:8px;font-size:13.5px;color:var(--ink);cursor:pointer}
+  .ws-row input{width:18px;height:18px;flex:0 0 auto}
+  .ws-cost{color:var(--warn);font-size:12px}
+  .ws-slider{display:flex;flex-direction:column;gap:6px;flex:1 1 240px;min-width:220px}
+  .ws-slider label{font-size:12px;color:var(--muted)}
+  .ws-slider input[type=range]{width:100%}
+  .note-box{font-size:12px;color:#7a5a12;margin-top:11px;background:#fff8ec;border:1px solid #f0d9a8;border-radius:8px;padding:9px 11px;line-height:1.5}
   .areacard{border:1px solid var(--line);border-radius:12px;margin-bottom:16px;overflow:hidden}
+  .areatitle{display:flex;align-items:center;gap:10px;padding:11px 14px;background:var(--green-d);color:#fff;cursor:pointer;user-select:none}
+  .areatitle .chev{flex:0 0 auto;width:0;height:0;border-left:6px solid #fff;border-top:5px solid transparent;border-bottom:5px solid transparent;transform:rotate(90deg);transition:transform .15s}
+  .areacard.collapsed .areatitle .chev{transform:rotate(0deg)}
+  .areatitle b{font-size:14px}
+  .areatitle .areasum{font-size:12px;opacity:.85;flex:1 1 auto}
+  .areatitle .del{margin:0;min-height:0;width:auto;padding:6px 10px;font-size:12px}
+  .areacard.collapsed .areahead,.areacard.collapsed .areabody{display:none}
   .areahead{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;padding:14px 16px;background:var(--green-l);border-bottom:1px solid var(--line)}
   .areahead .fld input[type=text]{width:180px}
   .areabody{display:grid;grid-template-columns:1fr 380px;gap:18px;padding:16px}
@@ -212,10 +233,21 @@
         </select></div>
     </div>
     <div class="hint">Bucket test: fill a 5-gal bucket, note seconds &rarr; <b>GPM = 300 ÷ seconds</b>. Heads/zone = ceiling ÷ flow-per-head. <b>Note:</b> a PGP rotor flows the same GPM at 90° or 360° — arc changes coverage &amp; precip rate, not flow.</div>
+    <div class="ws-check">
+      <label class="ws-row"><input type="checkbox" id="wsHosebib"> Water tested at existing hosebib</label>
+      <label class="ws-row"><input type="checkbox" id="wsNewSupply"> New water supply installation required</label>
+      <label class="ws-row"><input type="checkbox" id="wsFlowSensor"> Hydrawise flow sensor required <span class="ws-cost">(adds cost)</span></label>
+      <div class="ws-slider">
+        <label for="wsDifficulty">Water-supply installation difficulty — <b><span id="wsDiffVal">0</span> / 10</b> <span class="ws-cost">(scales cost, later phase)</span></label>
+        <input type="range" id="wsDifficulty" min="0" max="10" step="1" value="0">
+      </div>
+    </div>
+    <div class="note-box">Water supply is not accurately measured unless a new water-supply installation is required — current available flow is based on a calculated formula. Additional zones (at additional cost) may be associated with under-performing supplies.</div>
   </div>
 
   <div class="panel">
     <h2>2 · Areas — Layout &amp; Prescription</h2>
+    <div class="note-box">Zone layouts and dimensions may not be exactly as displayed. Please note this is for quotation purposes only.</div>
     <div id="areas"></div>
     <div class="btnrow">
       <button onclick="addArea()">+ Add area</button>
@@ -518,9 +550,28 @@ const num=id=>parseFloat(el(id).value)||0;
 
 const STR_KEYS = new Set(["name","mode","family","rotorNoz","mpNoz","sprayBody","spraySeries","stripNoz","stripBody","dripProduct","dripDir"]);
 const RENDER_KEYS = new Set(["mode","family","rotorNoz","mpNoz","sprayBody","spraySeries","stripNoz","stripBody","dripProduct"]);
-function loadDefaults(){ areas=JSON.parse(JSON.stringify(DEFAULT_AREAS)); render(); markDirty(); }
-function addArea(){ areas.push(newArea()); render(); markDirty(); }
-function delArea(i){ areas.splice(i,1); render(); markDirty(); }
+// Make each major section collapsible; header (with its number) stays visible.
+function initCollapse(){
+  let state={}; try{ state=JSON.parse(localStorage.getItem('sb_collapse')||'{}'); }catch(e){}
+  document.querySelectorAll('.wrap > .panel').forEach(p=>{
+    const h=p.querySelector(':scope > h2'); if(!h) return;
+    p.classList.add('collapsible');
+    const key=h.textContent.trim();
+    if(state[key]) p.classList.add('collapsed');
+    h.addEventListener('click', ()=>{
+      const now=p.classList.toggle('collapsed');
+      state[key]=now; try{ localStorage.setItem('sb_collapse', JSON.stringify(state)); }catch(e){}
+    });
+  });
+}
+const collapsedZones = new Set();   // indices of collapsed area cards (transient UI state)
+function toggleAreaCollapse(i){
+  const card=el('areas').children[i]; if(!card) return;
+  if(card.classList.toggle('collapsed')) collapsedZones.add(i); else collapsedZones.delete(i);
+}
+function loadDefaults(){ collapsedZones.clear(); areas=JSON.parse(JSON.stringify(DEFAULT_AREAS)); render(); markDirty(); }
+function addArea(){ collapsedZones.clear(); areas.push(newArea()); render(); markDirty(); }
+function delArea(i){ collapsedZones.clear(); areas.splice(i,1); render(); markDirty(); }
 function upd(i,k,v){
   areas[i][k] = STR_KEYS.has(k) ? v : (parseFloat(v)||0);
   if(k==="family"){ familyDefaults(areas[i]); delete areas[i].layout; delete areas[i].manualHeads; }  // heads are family-specific
@@ -930,8 +981,16 @@ function render(){
           <div class="fld"><label>Area (sq ft)</label><input type="number" value="${a.sqft}" oninput="upd(${i},'sqft',this.value)"></div>
           <div class="fld"><label>Avg width (ft)</label><input type="number" value="${a.avgW}" oninput="upd(${i},'avgW',this.value)"></div>
         `;
-    const c=document.createElement('div'); c.className='areacard';
+    const gsum=(()=>{ try{ const g=geom(a); return g.noShape?'no shape drawn':Math.round(g.sqft).toLocaleString()+' sq ft'; }catch(e){ return ''; } })();
+    const famLabel=(FAMILIES[a.family]||{}).label||a.family;
+    const c=document.createElement('div'); c.className='areacard'+(collapsedZones.has(i)?' collapsed':'');
     c.innerHTML=`
+      <div class="areatitle" onclick="toggleAreaCollapse(${i})">
+        <span class="chev"></span>
+        <b>${esc(a.name||('Zone '+(i+1)))}</b>
+        <span class="areasum">${gsum} &middot; ${esc(famLabel)}</span>
+        <button class="del" onclick="event.stopPropagation();delArea(${i})">Remove</button>
+      </div>
       <div class="areahead">
         <div class="fld"><label>Area name</label><input type="text" value="${esc(a.name)}" oninput="upd(${i},'name',this.value)"></div>
         <div class="fld"><label>Input mode</label>
@@ -945,7 +1004,6 @@ function render(){
         ${familyFieldsHtml(a,i)}
         ${loManualCapable(a.family) ? `<div class="fld"><label>Layout</label><button type="button" class="ghost shape-btn" onclick="openLayout(${i})">${(a.layout==='manual'&&(a.manualHeads||[]).length)?`Edit ${a.manualHeads.length} heads`:'Lay out heads'}</button></div>` : ''}
         ${(a.family==='trees'||a.family==='drip') ? `<div class="fld"><label>Trees</label><button type="button" class="ghost shape-btn" onclick="openTrees(${i})">${(a.trees||[]).length?`Edit ${a.trees.length} trees`:'+ Trees in zone'}</button></div>` : ''}
-        <button class="del" onclick="delArea(${i})">Remove</button>
       </div>
       <div class="areabody">
         <div class="results" id="res${i}"></div>
@@ -1593,6 +1651,10 @@ function buildBOM(parts){
   const addNon=(label,qty)=>{ qty=Math.round(qty); if(qty>0) non.push({label,qty}); };
   const sf=parseFloat(el('spacingFactor').value)||1;
   let totalZones=0, lateralFt=0;
+  // Drip tube is bought for the WHOLE system, not per zone: accumulate all
+  // footage by product, then buy rolls once (see roll math after the loop).
+  const dripFt={};
+  const accDrip=(d,ft)=>{ if(!d||!(ft>0)) return; const k=d.sku; (dripFt[k]||(dripFt[k]={d,ft:0})).ft+=ft; };
 
   LAST_PLANS.forEach(({area,plan:p})=>{
     if(p.noShape) return;                 // custom area with nothing drawn yet
@@ -1633,9 +1695,7 @@ function buildBOM(parts){
       else addNon('RB '+((STRIP_NOZZLES[area.stripNoz]||{}).label||area.stripNoz)+' (not stocked)', p.heads.length);
     }
     else if(p.family==='drip'){
-      const d=p.product, ft=Math.ceil(p.dripLengthFt);   // area drip + tree ring tube
-      if(d.roll2){ const big=Math.floor(ft/d.roll2.ft), rem=ft-big*d.roll2.ft; if(big>0) add(d.roll2.sku,big); if(rem>0) add(d.sku,Math.ceil(rem/d.rollFt)); }
-      else add(d.sku, Math.ceil(ft/d.rollFt));
+      accDrip(p.product, p.dripLengthFt);                             // area drip + tree ring tube (rolled system-wide)
       add('RBDPSIM30X075', p.zones);                                  // pressure reg / zone
       add('RBDXFFTEE', Math.max(1,Math.round(p.dripLengthFt/50))+(p.ringTrees||0));  // +1 tap tee / ring tree
       add('RBDXFELB',  Math.max(2,Math.round(p.dripLengthFt/40)));
@@ -1646,14 +1706,28 @@ function buildBOM(parts){
     else if(p.family==='trees'){
       if(p.rwsUnits>0) add(TREE_RWS_SKU, p.rwsUnits);                 // 2 RWS units per RWS tree
       if(p.ringTrees>0){
-        const d=p.product, ft=Math.ceil(p.tubeFt);
-        if(d.roll2){ const big=Math.floor(ft/d.roll2.ft), rem=ft-big*d.roll2.ft; if(big>0) add(d.roll2.sku,big); if(rem>0) add(d.sku,Math.ceil(rem/d.rollFt)); }
-        else add(d.sku, Math.ceil(ft/d.rollFt));
+        accDrip(p.product, p.tubeFt);                                // tree-ring tube (rolled system-wide)
         add('RBDXFFTEE', p.ringTrees);                               // ~1 tee per tree tap
         add('RBDXFELB',  p.ringTrees*2);                             // ring bends
         add('CTISDRIPSTAPLES25', Math.max(1,Math.ceil((p.tubeFt/2)/25)));
       }
       add('RBDPSIM30X075', p.zones);                                 // pressure reg / zone
+    }
+  });
+
+  // Drip rolls, system-wide. Buy 500 ft rolls for the bulk; a leftover of
+  // 200 ft or more rounds UP to another 500 (Patrick's rule) rather than a
+  // 250 ft roll — only a small top-up (<200 ft) takes a 250.
+  const DRIP_ROLL500_MIN = 200;
+  Object.values(dripFt).forEach(({d,ft})=>{
+    ft=Math.ceil(ft); if(ft<=0) return;
+    if(d.roll2){
+      let n500=Math.floor(ft/d.roll2.ft), rem=ft-n500*d.roll2.ft;
+      if(rem>=DRIP_ROLL500_MIN){ n500+=1; rem=0; }
+      if(n500>0) add(d.roll2.sku, n500);
+      if(rem>0) add(d.sku, Math.ceil(rem/d.rollFt));
+    } else {
+      add(d.sku, Math.ceil(ft/d.rollFt));
     }
   });
 
@@ -1917,6 +1991,21 @@ function fmtSaved(iso){
   return d.toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'});
 }
 
+function readWaterSupply(){
+  return {
+    hosebibTested: !!el('wsHosebib')?.checked,
+    newSupplyRequired: !!el('wsNewSupply')?.checked,
+    flowSensorRequired: !!el('wsFlowSensor')?.checked,
+    installDifficulty: parseInt(el('wsDifficulty')?.value||'0',10)||0
+  };
+}
+function applyWaterSupply(ws){
+  if(!ws || typeof ws!=='object') return;
+  if(el('wsHosebib')) el('wsHosebib').checked=!!ws.hosebibTested;
+  if(el('wsNewSupply')) el('wsNewSupply').checked=!!ws.newSupplyRequired;
+  if(el('wsFlowSensor')) el('wsFlowSensor').checked=!!ws.flowSensorRequired;
+  const d=el('wsDifficulty'); if(d){ d.value=ws.installDifficulty||0; const o=el('wsDiffVal'); if(o) o.textContent=d.value; }
+}
 function serializeState(){
   const inputs = {};
   GLOBAL_INPUT_IDS.forEach(id=>{ const e = el(id); if(e) inputs[id] = e.value; });
@@ -1924,6 +2013,7 @@ function serializeState(){
     version: 2,
     savedAt: new Date().toISOString(),
     inputs,
+    waterSupply: readWaterSupply(),
     areas: JSON.parse(JSON.stringify(areas)),
     wcRunOverrides: JSON.parse(JSON.stringify(wcRunOverrides))
   };
@@ -1942,6 +2032,7 @@ function restoreState(blob){
         if(TOWNS){ el('wcTown').value = blob.inputs.wcTown; } else { pendingTownValue = blob.inputs.wcTown; }
       }
     }
+    applyWaterSupply(blob.waterSupply);
     if(Array.isArray(blob.areas)) areas = JSON.parse(JSON.stringify(blob.areas));
     if(blob.wcRunOverrides && typeof blob.wcRunOverrides === 'object'){
       Object.keys(wcRunOverrides).forEach(k=>delete wcRunOverrides[k]);
@@ -2039,6 +2130,10 @@ async function initApp(){
     el(id).addEventListener('change', ()=>{ compute(); markDirty(); });
   });
   el('supply').addEventListener('change', markDirty);
+  // Water-supply checklist (disclaimer inputs; cost impact is a later phase).
+  ['wsHosebib','wsNewSupply','wsFlowSensor'].forEach(id=>{ const e=el(id); if(e) e.addEventListener('change', markDirty); });
+  { const d=el('wsDifficulty'); if(d) d.addEventListener('input', ()=>{ const o=el('wsDiffVal'); if(o) o.textContent=d.value; markDirty(); }); }
+  initCollapse();
   // Editor zoom: "ft across" number rescales the view (keeps centre).
   el('skSpan').addEventListener('input', ()=>{ pzSetSpan(sk, parseFloat(el('skSpan').value)); skDraw(); });
   el('loSpan').addEventListener('input', ()=>{ pzSetSpan(lo, parseFloat(el('loSpan').value)); loDraw(); });
