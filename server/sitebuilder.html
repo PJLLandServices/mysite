@@ -543,6 +543,15 @@ function sectorPoly(cx,cy,r,a0,sweep,n){
   return p;
 }
 function isSector(a){ return a.mode==='custom' && a.shapeKind==='sector' && a.arc && a.arc.r>0; }
+// Bounding box of the shape PLUS any trees (which may sit outside it), so the
+// drawing frame spans everything. Returns min/max in absolute ft.
+function combinedExtent(gm, trees){
+  let minX, minY, maxX, maxY;
+  if(gm.poly){ minX=gm.bb.minX; minY=gm.bb.minY; maxX=gm.bb.maxX; maxY=gm.bb.maxY; }
+  else { minX=0; minY=0; maxX=gm.L; maxY=gm.W; }
+  (trees||[]).forEach(t=>{ const r=(t.dia||TREE_RING_DEFAULT_DIA)/2+1; minX=Math.min(minX,t.x-r); minY=Math.min(minY,t.y-r); maxX=Math.max(maxX,t.x+r); maxY=Math.max(maxY,t.y+r); });
+  return {minX,minY,maxX,maxY};
+}
 function arcStroke(cx,cy,r,a0,a1){
   const x0=cx+r*Math.cos(a0), y0=cy+r*Math.sin(a0), x1=cx+r*Math.cos(a1), y1=cy+r*Math.sin(a1);
   const large=(a1-a0)>Math.PI?1:0;
@@ -596,9 +605,12 @@ function plan(a){
     // Area-wide drip line.
     const areaDripFt=(gm.sqft/rowFt)*overage;
     const areaGPM=(areaDripFt/emitFt)*d.gph/60;
-    // Trees can live in the SAME zone (both are drip / same precip regime).
+    // Trees can live in the SAME zone (both are drip / same precip regime),
+    // and may sit inside OR outside the drawn shape.
     const trees=Array.isArray(a.trees)?a.trees:[];
-    const orig = gm.poly ? {x:gm.bb.minX, y:gm.bb.minY} : {x:0, y:0};
+    const ext=combinedExtent(gm, trees);
+    const orig={x:ext.minX, y:ext.minY};
+    const extL=Math.max(ext.maxX-ext.minX,1), extW=Math.max(ext.maxY-ext.minY,1);
     let treeTube=0, rwsUnits=0, ringTrees=0, rwsTrees=0, treeFlow=0;
     trees.forEach(t=>{
       if(t.type==='rws'){ rwsTrees++; rwsUnits+=2; treeFlow+=2*TREE_RWS_GPM_PER_UNIT; }
@@ -611,13 +623,13 @@ function plan(a){
     const totalGPH=totalGPM*60;
     const zones=Math.max(1, Math.ceil(totalGPM/ceiling - 1e-6));
     const zoneGPM=new Array(zones).fill(totalGPM/zones);
-    const dPoly = gm.poly ? gm.poly.map(p=>({x:p.x-gm.bb.minX, y:p.y-gm.bb.minY})) : null;
+    const dPoly = gm.poly ? gm.poly.map(p=>({x:p.x-orig.x, y:p.y-orig.y})) : null;
     const treesOut = trees.map(t=>({x:t.x-orig.x, y:t.y-orig.y, type:t.type||'ring', dia:t.dia||TREE_RING_DEFAULT_DIA}));
     // Run direction for the area drip (unchanged): long-axis / per-region / arc.
     const forced = (a.dripDir==='h'||a.dripDir==='v');
     let dripRects=null, dripDir, arcShape=null;
     if(isSector(a) && !forced){
-      const c=a.arc; arcShape={cx:c.cx-gm.bb.minX, cy:c.cy-gm.bb.minY, r:c.r, a0:c.a0, sweep:c.sweep};
+      const c=a.arc; arcShape={cx:c.cx-orig.x, cy:c.cy-orig.y, r:c.r, a0:c.a0, sweep:c.sweep};
       dripDir='arc';
     }
     else if(forced){ dripDir=a.dripDir; }
@@ -628,7 +640,7 @@ function plan(a){
     } else {
       dripDir = gm.L>=gm.W?'h':'v';
     }
-    return {family:"drip",kind:"drip",matched:false,L:gm.L,W:gm.W,sqft:gm.sqft,heads:[],zones,zoneGPM,
+    return {family:"drip",kind:"drip",matched:false,L:extL,W:extW,sqft:gm.sqft,heads:[],zones,zoneGPM,
       product:d,dripLengthFt,areaDripFt,treeTubeFt,emitters,totalGPH,totalGPM,rowFt,dripDir,dripRects,arcShape,
       treeCount:trees.length,ringTrees,rwsTrees,rwsUnits,treesOut,poly:dPoly};
   }
@@ -637,7 +649,9 @@ function plan(a){
   if(h.kind==='trees'){
     const d=h.drip, emitFt=Math.max(d.emitterIn,1)/12;
     const trees=Array.isArray(a.trees)?a.trees:[];
-    const orig = gm.poly ? {x:gm.bb.minX, y:gm.bb.minY} : {x:0, y:0};
+    const ext=combinedExtent(gm, trees);
+    const orig={x:ext.minX, y:ext.minY};
+    const extL=Math.max(ext.maxX-ext.minX,1), extW=Math.max(ext.maxY-ext.minY,1);
     let tube=0, rwsUnits=0, ringTrees=0, rwsTrees=0, flow=0;
     trees.forEach(t=>{
       if(t.type==='rws'){ rwsTrees++; rwsUnits+=2; flow+=2*TREE_RWS_GPM_PER_UNIT; }
@@ -651,11 +665,7 @@ function plan(a){
     const zoneGPM = zones? new Array(zones).fill(totalGPM/zones) : [];
     const outTrees = trees.map(t=>({x:t.x-orig.x, y:t.y-orig.y, type:t.type||'ring', dia:t.dia||TREE_RING_DEFAULT_DIA}));
     const dPoly = gm.poly ? gm.poly.map(p=>({x:p.x-orig.x, y:p.y-orig.y})) : null;
-    let L=gm.L, W=gm.W;
-    if(!gm.poly && outTrees.length){
-      L=Math.max(4, ...outTrees.map(t=>t.x+t.dia)); W=Math.max(4, ...outTrees.map(t=>t.y+t.dia));
-    }
-    return {family:"trees",kind:"trees",matched:false,L,W,sqft:gm.sqft,heads:[],zones,zoneGPM,
+    return {family:"trees",kind:"trees",matched:false,L:extL,W:extW,sqft:gm.sqft,heads:[],zones,zoneGPM,
       product:d,treeCount:trees.length,ringTrees,rwsTrees,rwsUnits,tubeFt,emitters,totalGPM,treesOut:outTrees,poly:dPoly};
   }
 
@@ -1358,13 +1368,17 @@ function openTrees(i){
   ensureArea(areas[i]); const a=areas[i];
   tr.areaIndex=i; tr.sel=-1; tr.dragging=-1;
   const gm=geom(a);
-  if(gm.poly){ tr.origin={x:gm.bb.minX,y:gm.bb.minY}; tr.outline=gm.poly.map(p=>({x:p.x,y:p.y})); }
-  else if(a.mode==='custom'){ tr.origin={x:0,y:0}; tr.outline=null; }        // custom, boundary not drawn yet
-  else { tr.origin={x:0,y:0}; tr.outline=[{x:0,y:0},{x:gm.L,y:0},{x:gm.L,y:gm.W},{x:0,y:gm.W}]; }
+  if(gm.poly) tr.outline=gm.poly.map(p=>({x:p.x,y:p.y}));
+  else if(a.mode==='custom') tr.outline=null;                               // custom, boundary not drawn yet
+  else tr.outline=[{x:0,y:0},{x:gm.L,y:0},{x:gm.L,y:gm.W},{x:0,y:gm.W}];
   tr.trees = Array.isArray(a.trees)? a.trees.map(t=>({x:t.x,y:t.y,type:t.type||'ring',dia:t.dia||TREE_RING_DEFAULT_DIA})) : [];
   tr.curType='ring'; tr.curDia=TREE_RING_DEFAULT_DIA;
-  const pts=(tr.outline||[]).concat(tr.trees);
-  if(pts.length){ const bb=polyBBox(pts); tr.spanFt=Math.max(20, Math.ceil((Math.max(bb.maxX,bb.maxY)+6)/5)*5); } else tr.spanFt=50;
+  // Pad the canvas around the shape so trees can be dropped OUTSIDE it too.
+  const PAD=10;
+  const pts=(tr.outline||[{x:0,y:0},{x:gm.L||30,y:gm.W||20}]).concat(tr.trees.map(t=>({x:t.x,y:t.y})));
+  const bb=polyBBox(pts);
+  tr.origin={x:bb.minX-PAD, y:bb.minY-PAD};
+  tr.spanFt=Math.max(20, Math.ceil((Math.max(bb.maxX-bb.minX, bb.maxY-bb.minY)+2*PAD)/5)*5);
   el('trSpan').value=tr.spanFt;
   buildTrPalette();
   el('trOverlay').hidden=false;
