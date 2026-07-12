@@ -117,6 +117,8 @@
   .lo-arcs{display:inline-flex;gap:4px}
   .lo-arcs button{font-size:12px;padding:6px 9px;border-radius:6px;border:1px solid var(--green);background:#fff;color:var(--green-d);cursor:pointer;font-weight:600}
   .lo-arcs button.on{background:var(--green);color:#fff}
+  .lo-snap{font-size:12px;padding:6px 10px;border-radius:6px;border:1px solid var(--green);background:#fff;color:var(--green-d);cursor:pointer;font-weight:600}
+  .lo-snap.on{background:var(--green);color:#fff}
   .lo-hd{cursor:grab}
   .lo-aim{fill:var(--z3);stroke:#fff;stroke-width:1.5;cursor:grab}
   .sk-vert.first{stroke:var(--z3)}
@@ -168,6 +170,7 @@
     .sk-num{flex:1 1 auto}
     .pz-ctrl{flex:0 0 auto}
     .pz-ctrl button{min-height:42px;min-width:52px;font-size:17px}
+    .lo-snap{flex:0 0 auto;width:auto;min-height:42px;font-size:14px;padding:9px 12px}
     .sk-body{min-height:56vh}
     .sk-hint,.lo-palette .hint,#skHint,#loHint,#trHint{font-size:12px;flex-basis:100%;margin:2px 0 0}
   }
@@ -301,6 +304,7 @@
     <div class="lo-palette" id="loPalette">
       <span class="sk-num">Nozzle <select id="loNoz"></select></span>
       <span class="lo-arcs" id="loArcs"></span>
+      <button type="button" class="lo-snap on" id="loSnap" onclick="loToggleSnap()">Snap: grid</button>
       <span class="sk-grow"></span>
       <span class="hint" id="loSelInfo"></span>
     </div>
@@ -1298,7 +1302,7 @@ const SK_HOOKS = {
 /* ════════════════ Manual head-layout editor ════════════════ */
 
 const LO_ARCS = [{deg:90,label:'Q'},{deg:180,label:'H'},{deg:270,label:'T'},{deg:360,label:'F'}];
-const lo = { areaIndex:-1, family:'spray', heads:[], sel:-1, curNoz:'s12', curArc:180,
+const lo = { areaIndex:-1, family:'spray', heads:[], sel:-1, curNoz:'s12', curArc:180, snap:true,
              outline:null, centroid:{x:0,y:0}, svgId:'loSvg', bodyId:'loBody',
              ppf:12, panX:0, panY:0, _w:0, _h:0 };
 
@@ -1330,9 +1334,11 @@ function buildPalette(){
   const nz=loNozzles(lo.family);
   el('loNoz').innerHTML=Object.entries(nz).map(([k,v])=>`<option value="${k}" ${k===lo.curNoz?'selected':''}>${v.label}</option>`).join('');
   el('loArcs').innerHTML=LO_ARCS.map(a=>`<button type="button" class="${a.deg===lo.curArc?'on':''}" onclick="loSetArc(${a.deg})">${a.label}</button>`).join('');
+  const sb=el('loSnap'); if(sb){ sb.classList.toggle('on', lo.snap); sb.textContent = lo.snap?'Snap: grid':'Snap: free'; }
 }
 function loSetNoz(v){ lo.curNoz=v; if(lo.sel>=0){ lo.heads[lo.sel].noz=v; } loDraw(); }
 function loSetArc(d){ lo.curArc=d; if(lo.sel>=0){ lo.heads[lo.sel].arc=d; } buildPalette(); loDraw(); }
+function loToggleSnap(){ lo.snap=!lo.snap; if(lo.snap && lo.sel>=0){ const hd=lo.heads[lo.sel]; hd.x=Math.round(hd.x); hd.y=Math.round(hd.y); } buildPalette(); loDraw(); }
 function loZoom(f){ pzZoomBtn(lo,f); }
 function loFit(){ pzFit(lo, loContentBBox()); loDraw(); }
 function loCancel(){ el('loOverlay').hidden=true; }
@@ -1392,16 +1398,17 @@ function loDraw(){
   svg.addEventListener('wheel', e=>pzWheel(lo,e), {passive:false});
 }
 const snapHalf=v=>Math.round(v*2)/2;
+const loSnapV=v=> lo.snap ? Math.round(v) : Math.round(v*2)/2;   // grid=1ft, free=0.5ft
 const LO_HOOKS = {
   redraw: loDraw,
   hit: t=>{ if(t&&t.dataset){ if(t.dataset.h==='aim') return 'aim'; if(t.dataset.hi!=null) return 'H:'+t.dataset.hi; } return null; },
   dragStart: (h)=>{ if(typeof h==='string' && h.startsWith('H:')){ lo.sel=parseInt(h.slice(2),10); const hd=lo.heads[lo.sel]; lo.curNoz=hd.noz; lo.curArc=hd.arc; buildPalette(); } },
   dragMove: (h,fx,fy)=>{
     if(h==='aim' && lo.sel>=0){ const hd=lo.heads[lo.sel]; hd.dir=Math.atan2(fy-hd.y, fx-hd.x); }
-    else if(typeof h==='string' && h.startsWith('H:')){ const i=parseInt(h.slice(2),10); lo.heads[i].x=snapHalf(fx); lo.heads[i].y=snapHalf(fy); }
+    else if(typeof h==='string' && h.startsWith('H:')){ const i=parseInt(h.slice(2),10); lo.heads[i].x=loSnapV(fx); lo.heads[i].y=loSnapV(fy); }
   },
   tap: (fx,fy)=>{
-    const x=snapHalf(fx), y=snapHalf(fy);
+    const x=loSnapV(fx), y=loSnapV(fy);
     const dir=Math.atan2(lo.centroid.y-y, lo.centroid.x-x);
     lo.heads.push({x, y, noz:lo.curNoz, arc:lo.curArc, dir});
     lo.sel=lo.heads.length-1;
