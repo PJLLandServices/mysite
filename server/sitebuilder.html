@@ -316,7 +316,7 @@
     </div>
     <div class="sk-body" id="loBody"></div>
     <div class="sk-foot">
-      <p class="hint" id="loHint">Pick a nozzle + arc, then click inside the area to drop a head. Drag a head to move it, drag its aim dot to rotate. Click a head to select it.</p>
+      <p class="hint" id="loHint">Pick a nozzle + arc, then click inside the area to drop a head. Drag a head to move it, drag its aim dot to rotate. Click a head to select it. Pinch/scroll to zoom, Ctrl-drag (or middle-mouse) to pan.</p>
       <span class="sk-grow"></span>
       <div class="sk-tools">
         <button type="button" class="ghost" onclick="loDeleteSel()">Delete head</button>
@@ -345,7 +345,7 @@
     </div>
     <div class="sk-body" id="trBody"></div>
     <div class="sk-foot">
-      <p class="hint" id="trHint">Pick a type + ring size, then click inside the zone to drop a tree. Drag to move, click to select. Each tree = a double drip ring (or RWS units) at the base.</p>
+      <p class="hint" id="trHint">Pick a type + ring size, then click inside the zone to drop a tree. Drag to move, click to select. Each tree = a double drip ring (or RWS units) at the base. Pinch/scroll to zoom, Ctrl-drag (or middle-mouse) to pan.</p>
       <span class="sk-grow"></span>
       <div class="sk-tools">
         <button type="button" class="ghost" onclick="trDeleteSel()">Delete tree</button>
@@ -1091,7 +1091,7 @@ function legend(p){
    _w/_h (canvas px), _ptrs (active pointers), _pinch, _drag, _tap, _hooks,
    _move/_up (bound window handlers). Coords are absolute ft; SX=x*ppf+panX. */
 const PZ={min:1.2, max:120};
-function pzInit(ed){ ed._ptrs=new Map(); ed._pinch=null; ed._drag=null; ed._tap=null;
+function pzInit(ed){ ed._ptrs=new Map(); ed._pinch=null; ed._drag=null; ed._tap=null; ed._pan=null;
   ed._move=e=>pzMove(ed,e); ed._up=e=>pzUp(ed,e); }
 function pzFit(ed, bbox){
   const body=el(ed.bodyId); const w=Math.max(body.clientWidth-2,300), h=Math.max(body.clientHeight-2,300);
@@ -1140,6 +1140,15 @@ function pzDown(ed,e){
   if(ed._ptrs.size===2){ if(ed._hooks.cancelDrag) ed._hooks.cancelDrag(); ed._drag=null; ed._tap=null; pzStartPinch(ed);
     window.addEventListener('pointermove', ed._move); window.addEventListener('pointerup', ed._up); ed._hooks.redraw(); e.preventDefault(); return; }
   if(ed._ptrs.size>1){ e.preventDefault(); return; }
+  // Hand tool: Ctrl/⌘-drag or middle-button drag pans the canvas.
+  if(e.ctrlKey || e.metaKey || e.button===1){
+    if(ed._hooks.cancelDrag) ed._hooks.cancelDrag();
+    ed._drag=null; ed._tap=null;
+    ed._pan={x0:e.clientX, y0:e.clientY, panX:ed.panX, panY:ed.panY};
+    const bd=el(ed.bodyId); if(bd) bd.style.cursor='grabbing';
+    window.addEventListener('pointermove', ed._move); window.addEventListener('pointerup', ed._up);
+    e.preventDefault(); return;
+  }
   const L=pzLocal(ed,e), fx=pzFX(ed,L.x), fy=pzFY(ed,L.y);
   const h = ed._hooks.hit ? ed._hooks.hit(e.target) : null;
   if(h!=null){ ed._drag={h, moved:false}; if(ed._hooks.dragStart) ed._hooks.dragStart(h,fx,fy); }
@@ -1152,6 +1161,7 @@ function pzDown(ed,e){
 function pzMove(ed,e){
   if(ed._ptrs.has(e.pointerId)) ed._ptrs.set(e.pointerId,{x:e.clientX,y:e.clientY});
   if(ed._pinch && ed._ptrs.size>=2){ pzPinchMove(ed); ed._hooks.redraw(); e.preventDefault(); return; }
+  if(ed._pan){ ed.panX=ed._pan.panX+(e.clientX-ed._pan.x0); ed.panY=ed._pan.panY+(e.clientY-ed._pan.y0); ed._hooks.redraw(); e.preventDefault(); return; }
   const L=pzLocal(ed,e), fx=pzFX(ed,L.x), fy=pzFY(ed,L.y);
   if(ed._drag){ ed._drag.moved=true; if(ed._hooks.dragMove) ed._hooks.dragMove(ed._drag.h,fx,fy); ed._hooks.redraw(); e.preventDefault(); return; }
   if(ed._tap && (Math.abs(L.x-ed._tap.x0)>6||Math.abs(L.y-ed._tap.y0)>6)) ed._tap.moved=true;
@@ -1161,6 +1171,7 @@ function pzUp(ed,e){
   if(ed._ptrs.size<2) ed._pinch=null;
   if(ed._ptrs.size>0) return;
   window.removeEventListener('pointermove', ed._move); window.removeEventListener('pointerup', ed._up);
+  if(ed._pan){ ed._pan=null; const bd=el(ed.bodyId); if(bd) bd.style.cursor=''; ed._hooks.redraw(); return; }
   if(ed._drag){ if(ed._hooks.dragEnd) ed._hooks.dragEnd(ed._drag.h, ed._drag.moved); }
   else if(ed._tap && !ed._tap.moved){ if(ed._hooks.tap) ed._hooks.tap(ed._tap.fx, ed._tap.fy); }
   ed._drag=null; ed._tap=null; ed._hooks.redraw();
@@ -1277,14 +1288,14 @@ function skDraw(){
   el('skToolQuarter').classList.toggle('on', sk.tool==='sector' && sk.sweep===90);
   el('skToolHalf').classList.toggle('on', sk.tool==='sector' && sk.sweep===180);
   el('skHint').textContent = sk.tool==='sector'
-    ? (sk.sector ? `${sk.sweep>=180?'Half':'Quarter'} circle. Drag centre to move, edge dot to resize + rotate. Pinch/scroll to zoom.`
+    ? (sk.sector ? `${sk.sweep>=180?'Half':'Quarter'} circle. Drag centre to move, edge dot to resize + rotate. Pinch/scroll zoom · Ctrl-drag pan.`
                  : `Press at the corner/centre and drag out to draw a ${sk.sweep>=180?'half':'quarter'} circle.`)
     : sk.tool==='circle'
-    ? (sk.circle ? 'Circle drawn. Drag centre to move, edge dot to resize. Pinch or scroll to zoom.'
+    ? (sk.circle ? 'Circle drawn. Drag centre to move, edge dot to resize. Pinch/scroll zoom · Ctrl-drag pan.'
                  : 'Press and drag on the grid to draw a circle (centre → edge).')
     : (sk.closed ? 'Shape closed. Drag any point to adjust, Undo to reopen. Pinch/scroll to zoom.'
                  : (sk.poly.length>=3 ? 'Tap the orange first point to close, or keep tapping corners.'
-                                      : 'Tap grid corners to trace the outline. Pinch or scroll to zoom.'));
+                                      : 'Tap grid corners to trace the outline. Pinch/scroll zoom · Ctrl-drag pan.'));
   pzSyncSpan(sk, 'skSpan');
   const svg=el('skSvg');
   svg.addEventListener('pointerdown', e=>pzDown(sk,e));
