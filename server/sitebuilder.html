@@ -145,6 +145,26 @@
     table.spec{font-size:13.5px}
     table.cost{font-size:12.5px;min-width:600px}
     table.cost input{width:62px;min-height:40px}
+    /* ---- Draw / layout / tree overlays on phones ---- */
+    .sk-overlay{padding:0}
+    .sk-panel{width:100%;max-width:100%;height:100%;max-height:100%;border-radius:0}
+    .sk-head,.lo-palette,.sk-foot{
+      padding-left:calc(14px + env(safe-area-inset-left));
+      padding-right:calc(14px + env(safe-area-inset-right))}
+    .sk-head{padding-top:calc(10px + env(safe-area-inset-top))}
+    .sk-foot{padding-bottom:calc(10px + env(safe-area-inset-bottom))}
+    .sk-head h3{font-size:15px}
+    .sk-num input,.lo-palette select,.lo-palette input{font-size:16px}
+    .sk-grow{display:none}          /* let rows pack tightly instead of pushing apart */
+    /* Tool + palette buttons stay inline (override the full-width button rule) */
+    .sk-tools{width:100%;gap:6px}
+    .sk-tools button{flex:1 1 auto;width:auto;min-width:62px;min-height:42px;padding:8px 6px;font-size:13px}
+    .lo-arcs{gap:6px;flex-basis:100%;width:100%}
+    .lo-arcs button{flex:1 1 auto;width:auto;min-height:42px;font-size:14px;padding:9px 6px}
+    .lo-palette select{flex:1 1 auto;min-height:42px}
+    .sk-num{flex:1 1 auto}
+    .sk-body{min-height:56vh}
+    .sk-hint,.lo-palette .hint,#skHint,#loHint,#trHint{font-size:12px;flex-basis:100%;margin:2px 0 0}
   }
   @media print{header{background:var(--green-d)!important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
     button{display:none}}
