@@ -49,6 +49,27 @@
   .bom-qty{width:64px;padding:5px 6px;border:1px solid var(--line);border-radius:6px;font-size:13px}
   .bom-del{width:26px;height:26px;min-height:0;padding:0;border-radius:6px;background:#fff;border:1px solid var(--line);color:var(--warn);cursor:pointer;font-size:16px;line-height:1}
   tr.bom-add td,tr.bom-custom td{background:#f6faf6}
+  /* Customer-facing quote sheet (print / PDF) */
+  .cust-sheet{background:#fff;color:#1a1a1a;width:min(820px,96vw);max-height:90vh;overflow:auto;border-radius:12px;padding:34px 40px;box-shadow:0 12px 40px rgba(0,0,0,.3)}
+  .cust-sheet h1{font-size:23px;margin:0 0 2px;color:var(--green-d)}
+  .cust-sheet .sub{color:#666;font-size:13px;margin-bottom:16px}
+  .cust-sheet h2{font-size:12px;text-transform:uppercase;letter-spacing:.5px;color:var(--green-d);border-bottom:1px solid #e2e9e4;padding-bottom:5px;margin:22px 0 10px}
+  .cust-sheet table{width:100%;border-collapse:collapse;font-size:13.5px}
+  .cust-sheet th,.cust-sheet td{text-align:left;padding:7px 8px;border-bottom:1px solid #eee}
+  .cust-sheet th{font-size:11px;text-transform:uppercase;color:#888}
+  .cust-sheet ul{margin:6px 0 0;padding-left:20px;font-size:13.5px}
+  .cust-sum{display:flex;gap:28px;flex-wrap:wrap;margin:12px 0 4px}
+  .cust-sum .n{font-size:24px;font-weight:700;color:var(--green-d);line-height:1}
+  .cust-sum .l{font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.4px;margin-top:3px}
+  .cust-note{font-size:11.5px;color:#7a5a12;background:#fff8ec;border:1px solid #f0d9a8;border-radius:8px;padding:9px 11px;margin-top:8px;line-height:1.5}
+  .cust-actions{position:fixed;bottom:calc(22px + env(safe-area-inset-bottom));display:flex;gap:10px;z-index:10000}
+  .cust-actions button{min-height:44px}
+  @media print{
+    body.cust-open > *:not(#custOverlay){display:none!important}
+    body.cust-open #custOverlay{position:static;display:block;background:#fff;padding:0}
+    body.cust-open .cust-sheet{box-shadow:none;width:auto;max-width:100%;max-height:none;border-radius:0;padding:0;overflow:visible}
+    body.cust-open .no-print{display:none!important}
+  }
   .areacard{border:1px solid var(--line);border-radius:12px;margin-bottom:16px;overflow:hidden}
   .areatitle{display:flex;align-items:center;gap:10px;padding:11px 14px;background:var(--green-d);color:#fff;cursor:pointer;user-select:none}
   .areatitle .chev{flex:0 0 auto;width:0;height:0;border-left:6px solid #fff;border-top:5px solid transparent;border-bottom:5px solid transparent;transform:rotate(90deg);transition:transform .15s}
@@ -256,7 +277,8 @@
     <div class="btnrow">
       <button onclick="addArea()">+ Add area</button>
       <button class="ghost" onclick="loadDefaults()">Reset to 851 Norsan Ct areas</button>
-      <button class="ghost" onclick="window.print()">Print / Save PDF</button>
+      <button class="ghost" onclick="openCustomerForm()">Customer quote sheet</button>
+      <button class="ghost" onclick="window.print()">Print full (internal)</button>
     </div>
   </div>
 
@@ -390,6 +412,14 @@
         <button type="button" onclick="trUse()">Use trees</button>
       </div>
     </div>
+  </div>
+</div>
+
+<div id="custOverlay" class="sk-overlay" hidden>
+  <div class="cust-sheet" id="custSheet"></div>
+  <div class="cust-actions no-print">
+    <button type="button" onclick="window.print()">Print / Save PDF</button>
+    <button type="button" class="del" onclick="custClose()">Close</button>
   </div>
 </div>
 
@@ -1885,6 +1915,48 @@ async function renderBOM(){
     `Lateral pipe (${lateralFt} ft, 3/4") is a layout estimate; mainline in §5 — measure on site.`;
 }
 
+/* ════════════════ Customer-facing quote sheet (print / PDF) ════════════════ */
+
+function famFriendly(a){
+  return ({rotor:'Rotor heads (lawn)', mp:'MP Rotator heads (lawn)', spray:'Spray heads (beds / lawn)',
+           strip:'Strip spray (narrow strips)', drip:'Drip line (beds & shrubs)', trees:'Tree root watering'})[a.family]
+         || ((FAMILIES[a.family]||{}).label) || a.family;
+}
+function openCustomerForm(){
+  compute();                                  // make sure LAST_PLANS is fresh
+  const plans=LAST_PLANS.filter(x=>!x.plan.noShape);
+  let totalZones=0, totalSqft=0, rows='';
+  plans.forEach(({area,plan})=>{
+    totalZones+=plan.zones;
+    let sq=0; try{ sq=Math.round(geom(area).sqft); }catch(e){}
+    totalSqft+=sq;
+    rows+=`<tr><td>${esc(area.name||'Area')}</td><td>${sq?sq.toLocaleString()+' sq ft':'—'}</td><td>${esc(famFriendly(area))}</td></tr>`;
+  });
+  const ws=readWaterSupply();
+  const scope=[];
+  if(ws.newSupplyRequired) scope.push('New water-supply line installation required.');
+  if(ws.flowSensorRequired) scope.push('Hydrawise flow sensor included for leak / flow monitoring.');
+  const cust=(linkedProject&&(linkedProject.customerName||linkedProject.name))||'';
+  el('custSheet').innerHTML=`
+    <h1>PJL Land Services</h1>
+    <div class="sub">Irrigation System — Preliminary Design &amp; Quotation${cust?' &middot; '+esc(cust):''}</div>
+    <div class="cust-sum">
+      <div><div class="n">${totalZones}</div><div class="l">watering zones</div></div>
+      <div><div class="n">${totalSqft.toLocaleString()}</div><div class="l">sq ft covered</div></div>
+      <div><div class="n">${plans.length}</div><div class="l">areas</div></div>
+    </div>
+    <h2>Areas &amp; coverage</h2>
+    <table><thead><tr><th>Area</th><th>Approx. size</th><th>Coverage type</th></tr></thead>
+      <tbody>${rows||'<tr><td colspan="3">No areas designed yet.</td></tr>'}</tbody></table>
+    ${scope.length?`<h2>Scope notes</h2><ul>${scope.map(s=>`<li>${esc(s)}</li>`).join('')}</ul>`:''}
+    <h2>Please note</h2>
+    <div class="cust-note">Zone layouts and dimensions may not be exactly as displayed — this sheet is for quotation purposes only.</div>
+    <div class="cust-note">Water supply is not accurately measured unless a new water-supply installation is required; current available flow is based on a calculated formula. Additional zones (at additional cost) may be associated with under-performing supplies.</div>`;
+  document.body.classList.add('cust-open');
+  el('custOverlay').hidden=false;
+}
+function custClose(){ el('custOverlay').hidden=true; document.body.classList.remove('cust-open'); }
+
 /* ════════════════ Water-Cost Calculator (town rates) ════════════════ */
 
 const GAL_TO_M3 = 0.00378541;   // 1 US gallon (Imperial would be 0.00454609)
@@ -2256,7 +2328,7 @@ async function initApp(){
   // Tree tool: ring-dia.
   el('trDia').addEventListener('input', e=>trSetDia(e.target.value));
   window.addEventListener('keydown', (e)=>{
-    if(e.key==='Escape'){ if(!el('skOverlay').hidden) skCancel(); else if(!el('loOverlay').hidden) loCancel(); else if(!el('trOverlay').hidden) trCancel(); }
+    if(e.key==='Escape'){ if(!el('skOverlay').hidden) skCancel(); else if(!el('loOverlay').hidden) loCancel(); else if(!el('trOverlay').hidden) trCancel(); else if(!el('custOverlay').hidden) custClose(); }
     if((e.key==='Delete'||e.key==='Backspace')){ if(!el('loOverlay').hidden && lo.sel>=0){ e.preventDefault(); loDeleteSel(); } else if(!el('trOverlay').hidden && tr.sel>=0){ e.preventDefault(); trDeleteSel(); } }
   });
   el('wcTown').addEventListener('change', ()=>{ onTownChange(); markDirty(); });
