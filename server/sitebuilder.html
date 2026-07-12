@@ -92,7 +92,7 @@
   /* ---- Sketch overlay ---- */
   .sk-overlay{position:fixed;inset:0;z-index:9999;background:rgba(20,35,32,.55);display:flex;
     align-items:center;justify-content:center;padding:16px}
-  .sk-panel{background:#fff;border-radius:14px;width:min(880px,96vw);max-height:94vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 12px 40px rgba(0,0,0,.3)}
+  .sk-panel{background:#fff;border-radius:14px;width:min(880px,96vw);height:min(860px,94vh);max-height:94vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 12px 40px rgba(0,0,0,.3)}
   .sk-head{padding:12px 16px;border-bottom:1px solid var(--line);display:flex;flex-wrap:wrap;gap:8px 14px;align-items:center}
   .sk-head h3{margin:0;font-size:16px;color:var(--green-d)}
   .sk-head .sk-stat{font-size:13px;color:var(--muted)}
@@ -108,6 +108,8 @@
   .pz-ctrl{display:inline-flex;gap:4px}
   .pz-ctrl button{width:auto;min-height:0;padding:6px 11px;font-size:15px;font-weight:600;line-height:1;border:1px solid var(--green);background:#fff;color:var(--green-d);border-radius:6px;cursor:pointer}
   .pz-ctrl button:active{background:var(--green);color:#fff}
+  .pz-span{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--muted)}
+  .pz-span input{width:56px;padding:6px 8px;border:1px solid var(--line);border-radius:6px;font-size:15px}
   .sk-tools button.on{background:var(--green);color:#fff;border-color:var(--green)}
   .sk-vert{fill:#fff;stroke:var(--green-d);stroke-width:2;cursor:grab}
   .sk-handle{fill:var(--z3);stroke:#fff;stroke-width:2;cursor:grab}
@@ -170,6 +172,8 @@
     .sk-num{flex:1 1 auto}
     .pz-ctrl{flex:0 0 auto}
     .pz-ctrl button{min-height:42px;min-width:52px;font-size:17px}
+    .pz-span{flex:0 0 auto}
+    .pz-span input{font-size:16px;min-height:42px;width:62px}
     .lo-snap{flex:0 0 auto;width:auto;min-height:42px;font-size:14px;padding:9px 12px}
     .sk-body{min-height:56vh}
     .sk-hint,.lo-palette .hint,#skHint,#loHint,#trHint{font-size:12px;flex-basis:100%;margin:2px 0 0}
@@ -274,6 +278,7 @@
       <span class="sk-stat"><b id="skArea">0</b> sq ft &middot; <span id="skPerim">0</span> ft outline</span>
       <span class="sk-grow"></span>
       <span class="pz-ctrl"><button type="button" onclick="skZoom(0.7)" aria-label="Zoom out">&minus;</button><button type="button" onclick="skFit()">Fit</button><button type="button" onclick="skZoom(1.4)" aria-label="Zoom in">+</button></span>
+      <label class="pz-span"><input id="skSpan" type="number" min="4" max="400" step="1"> ft across</label>
     </div>
     <div class="sk-body" id="skBody"></div>
     <div class="sk-foot">
@@ -300,6 +305,7 @@
       <span class="sk-stat"><b id="loCount">0</b> heads &middot; <span id="loGpm">0</span> GPM &middot; <span id="loZones">0</span> zones</span>
       <span class="sk-grow"></span>
       <span class="pz-ctrl"><button type="button" onclick="loZoom(0.7)" aria-label="Zoom out">&minus;</button><button type="button" onclick="loFit()">Fit</button><button type="button" onclick="loZoom(1.4)" aria-label="Zoom in">+</button></span>
+      <label class="pz-span"><input id="loSpan" type="number" min="4" max="400" step="1"> ft across</label>
     </div>
     <div class="lo-palette" id="loPalette">
       <span class="sk-num">Nozzle <select id="loNoz"></select></span>
@@ -329,6 +335,7 @@
       <span class="sk-stat"><b id="trCount">0</b> trees &middot; <span id="trGpm">0</span> GPM &middot; <span id="trZones">0</span> zones</span>
       <span class="sk-grow"></span>
       <span class="pz-ctrl"><button type="button" onclick="trZoom(0.7)" aria-label="Zoom out">&minus;</button><button type="button" onclick="trFit()">Fit</button><button type="button" onclick="trZoom(1.4)" aria-label="Zoom in">+</button></span>
+      <label class="pz-span"><input id="trSpan" type="number" min="4" max="400" step="1"> ft across</label>
     </div>
     <div class="lo-palette" id="trPalette">
       <span class="lo-arcs" id="trTypes"></span>
@@ -1111,6 +1118,15 @@ function pzZoomAt(ed, mx, my, factor){
   ed.ppf=np; ed.panX=mx-fx*ed.ppf; ed.panY=my-fy*ed.ppf;
 }
 function pzZoomBtn(ed, factor){ pzZoomAt(ed, ed._w/2, ed._h/2, factor); ed._hooks.redraw(); }
+function pzSpan(ed){ return ed._w/ed.ppf; }                              // feet visible across the canvas
+function pzSetSpan(ed, spanFt){
+  if(!isFinite(spanFt) || spanFt<=0) return;
+  const mx=ed._w/2, my=ed._h/2;                                          // keep canvas centre fixed
+  const fx=(mx-ed.panX)/ed.ppf, fy=(my-ed.panY)/ed.ppf;
+  ed.ppf=Math.max(PZ.min, Math.min(PZ.max, ed._w/spanFt));
+  ed.panX=mx-fx*ed.ppf; ed.panY=my-fy*ed.ppf;
+}
+function pzSyncSpan(ed, id){ const inp=el(id); if(inp && document.activeElement!==inp) inp.value=Math.round(pzSpan(ed)); }
 function pzWheel(ed, e){ e.preventDefault(); const L=pzLocal(ed,e); pzZoomAt(ed, L.x, L.y, Math.exp(-e.deltaY*0.0015)); ed._hooks.redraw(); }
 function pzStartPinch(ed){ const [a,b]=[...ed._ptrs.values()]; const r=el(ed.svgId).getBoundingClientRect();
   ed._pinch={d:Math.max(Math.hypot(a.x-b.x,a.y-b.y),1), ppf:ed.ppf, panX:ed.panX, panY:ed.panY, mx:(a.x+b.x)/2-r.left, my:(a.y+b.y)/2-r.top}; }
@@ -1269,6 +1285,7 @@ function skDraw(){
     : (sk.closed ? 'Shape closed. Drag any point to adjust, Undo to reopen. Pinch/scroll to zoom.'
                  : (sk.poly.length>=3 ? 'Tap the orange first point to close, or keep tapping corners.'
                                       : 'Tap grid corners to trace the outline. Pinch or scroll to zoom.'));
+  pzSyncSpan(sk, 'skSpan');
   const svg=el('skSvg');
   svg.addEventListener('pointerdown', e=>pzDown(sk,e));
   svg.addEventListener('wheel', e=>pzWheel(sk,e), {passive:false});
@@ -1393,6 +1410,7 @@ function loDraw(){
   if(lo.sel>=0){ const hd=lo.heads[lo.sel]; const sp=loHeadSpec(lo.family,hd.noz,hd.arc); const al=(LO_ARCS.find(a=>a.deg===hd.arc)||{label:hd.arc}).label;
     el('loSelInfo').innerHTML=`Selected: <b>${esc(sp.label)} ${al}</b> · ${sp.r} ft · ${sp.gpm.toFixed(2)} GPM`; }
   else el('loSelInfo').textContent='';
+  pzSyncSpan(lo, 'loSpan');
   const svg=el('loSvg');
   svg.addEventListener('pointerdown', e=>pzDown(lo,e));
   svg.addEventListener('wheel', e=>pzWheel(lo,e), {passive:false});
@@ -1491,6 +1509,7 @@ function trDraw(){
   el('trCount').textContent=tr.trees.length; el('trGpm').textContent=totGpm.toFixed(1); el('trZones').textContent=zones;
   if(tr.sel>=0){ const t=tr.trees[tr.sel]; el('trSelInfo').innerHTML= t.type==='rws' ? `Selected: <b>RWS</b> · 2 units · ${(2*TREE_RWS_GPM_PER_UNIT).toFixed(1)} GPM` : `Selected: <b>drip ring</b> · ${t.dia} ft dia · ${trFlow(t).toFixed(2)} GPM`; }
   else el('trSelInfo').textContent='';
+  pzSyncSpan(tr, 'trSpan');
   const svg=el('trSvg');
   svg.addEventListener('pointerdown', e=>pzDown(tr,e));
   svg.addEventListener('wheel', e=>pzWheel(tr,e), {passive:false});
@@ -2009,6 +2028,10 @@ async function initApp(){
     el(id).addEventListener('change', ()=>{ compute(); markDirty(); });
   });
   el('supply').addEventListener('change', markDirty);
+  // Editor zoom: "ft across" number rescales the view (keeps centre).
+  el('skSpan').addEventListener('input', ()=>{ pzSetSpan(sk, parseFloat(el('skSpan').value)); skDraw(); });
+  el('loSpan').addEventListener('input', ()=>{ pzSetSpan(lo, parseFloat(el('loSpan').value)); loDraw(); });
+  el('trSpan').addEventListener('input', ()=>{ pzSetSpan(tr, parseFloat(el('trSpan').value)); trDraw(); });
   // Layout tool: nozzle select.
   el('loNoz').addEventListener('change', e=>loSetNoz(e.target.value));
   // Tree tool: ring-dia.
