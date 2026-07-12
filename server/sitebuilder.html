@@ -45,6 +45,10 @@
   .ws-slider label{font-size:12px;color:var(--muted)}
   .ws-slider input[type=range]{width:100%}
   .note-box{font-size:12px;color:#7a5a12;margin-top:11px;background:#fff8ec;border:1px solid #f0d9a8;border-radius:8px;padding:9px 11px;line-height:1.5}
+  .bom-sku,#bomAddSku{max-width:220px;padding:5px 6px;border:1px solid var(--line);border-radius:6px;font-size:12px;background:#fff}
+  .bom-qty{width:64px;padding:5px 6px;border:1px solid var(--line);border-radius:6px;font-size:13px}
+  .bom-del{width:26px;height:26px;min-height:0;padding:0;border-radius:6px;background:#fff;border:1px solid var(--line);color:var(--warn);cursor:pointer;font-size:16px;line-height:1}
+  tr.bom-add td,tr.bom-custom td{background:#f6faf6}
   .areacard{border:1px solid var(--line);border-radius:12px;margin-bottom:16px;overflow:hidden}
   .areatitle{display:flex;align-items:center;gap:10px;padding:11px 14px;background:var(--green-d);color:#fff;cursor:pointer;user-select:none}
   .areatitle .chev{flex:0 0 auto;width:0;height:0;border-left:6px solid #fff;border-top:5px solid transparent;border-bottom:5px solid transparent;transform:rotate(90deg);transition:transform .15s}
@@ -1644,13 +1648,27 @@ function loadParts(){
 }
 function seriesSize(key){ return {s8:'8',s10:'10',s12:'12',s15:'15'}[key]||'12'; }
 
+// Install-material SKUs (Patrick's defaults; all editable in the interactive BOM).
+const BOM_SKU = {
+  swingArm:'SJ506',        // swing joint / swing arm, 1 per head
+  saddle:'DS75C',          // saddle tee, 1 per head
+  gearClamp:'SC6712',      // SS gear clamp
+  reducingEll:'1407130',   // poly reducing (combo) end elbow 1×0.5
+  manifoldEll:'408010',    // 1" 90° ell (sch-80 substitute) for manifold
+  manifoldTee:'405010',    // 1" tee (sch-80 substitute) for manifold
+  nipple1x2:'210020',      // 1"×2" nipple, 2 per manifold tee
+  boxJumbo:'VB10151089',   // jumbo = 12" deep square std valve box (4 valves)
+  box10:'VB111011',        // 10" round (3 valves)
+  box6:'DUVB60'            // 6" round (≤2 valves)
+};
+
 // Aggregate the parts list from the current plans.
 function buildBOM(parts){
   const cat={}, non=[];
   const add=(sku,qty)=>{ qty=Math.round(qty); if(sku && qty>0) cat[sku]=(cat[sku]||0)+qty; };
   const addNon=(label,qty)=>{ qty=Math.round(qty); if(qty>0) non.push({label,qty}); };
   const sf=parseFloat(el('spacingFactor').value)||1;
-  let totalZones=0, lateralFt=0;
+  let totalZones=0, totalHeads=0, lateralFt=0;
   // Drip tube is bought for the WHOLE system, not per zone: accumulate all
   // footage by product, then buy rolls once (see roll math after the loop).
   const dripFt={};
@@ -1659,6 +1677,8 @@ function buildBOM(parts){
   LAST_PLANS.forEach(({area,plan:p})=>{
     if(p.noShape) return;                 // custom area with nothing drawn yet
     totalZones+=p.zones;
+    const isHeadFam=(p.family==='rotor'||p.family==='mp'||p.family==='spray'||p.family==='strip');
+    if(isHeadFam) totalHeads += p.manual ? (area.manualHeads||[]).length : (p.heads?p.heads.length:0);
     if(p.kind!=='drip' && p.heads.length){
       lateralFt += p.heads.length * Math.max(headSpec(area).r*sf,1) * 0.6;  // rough trunk+branch
     }
@@ -1731,9 +1751,26 @@ function buildBOM(parts){
     }
   });
 
-  add('PGV100G', totalZones);                                          // 1" valve / zone
-  const boxes=Math.ceil(totalZones/MANIFOLD_PER_BOX);
-  add('VB111011', boxes);                                              // 10" round manifold box
+  // ── Per-head install materials (rotor/spray/mp/strip heads only) ──
+  add(BOM_SKU.swingArm, totalHeads);          // 1 swing arm / head
+  add(BOM_SKU.saddle,   totalHeads);          // 1 saddle tee / head
+
+  // ── Valves, manifold fittings & boxes ──
+  add('PGV100G', totalZones);                 // 1" valve / zone
+  add(BOM_SKU.reducingEll, 2*totalZones);     // ≥2 reducing end elbows / zone
+  add(BOM_SKU.manifoldEll, 2*totalZones);     // 2× 1" ells / valve (manifold)
+  add(BOM_SKU.manifoldTee, totalZones);       // 1× 1" tee / valve (manifold)
+  add(BOM_SKU.nipple1x2,   2*totalZones);     // 2× 1"×2" nipple / manifold tee
+
+  // Manifolds group up to MANIFOLD_PER_BOX valves; box size = valves in it.
+  const manifoldSizes=[]; { let r=totalZones; while(r>0){ manifoldSizes.push(Math.min(MANIFOLD_PER_BOX,r)); r-=MANIFOLD_PER_BOX; } }
+  const nManifolds=manifoldSizes.length;
+  manifoldSizes.forEach(sz=>{
+    add(sz>=4?BOM_SKU.boxJumbo : sz===3?BOM_SKU.box10 : BOM_SKU.box6, 1);
+  });
+  // Gear clamps: 1/head + 1/zone + 2/manifold (mainline)
+  add(BOM_SKU.gearClamp, totalHeads + totalZones + 2*nManifolds);
+
   if(lateralFt>0) add('POPO75400', Math.ceil(lateralFt/400));          // 3/4" lateral (estimate)
 
   if(totalZones>0){
@@ -1753,27 +1790,99 @@ function buildBOM(parts){
   return {lines, subtotalCents, lateralFt:Math.ceil(lateralFt)};
 }
 
+// ── Interactive BOM: manual swaps / qty / removals / added lines ──
+let bomOverrides = { edits:{}, removed:{}, custom:[] };   // edits[sku]={sku?,qty?}
+let BOM_OPTIONS = null;
+function bomOptionsHtml(parts){
+  if(BOM_OPTIONS) return BOM_OPTIONS;
+  BOM_OPTIONS = Object.entries(parts).map(([sku,p])=>({sku,desc:p.description||sku}))
+    .sort((a,b)=>a.desc.localeCompare(b.desc))
+    .map(o=>`<option value="${esc(o.sku)}">${esc(o.desc)} — ${esc(o.sku)}</option>`).join('');
+  return BOM_OPTIONS;
+}
+function bomAddLine(){
+  const sku=el('bomAddSku')&&el('bomAddSku').value, qty=Math.max(1,parseInt(el('bomAddQty')&&el('bomAddQty').value,10)||1);
+  if(sku){ bomOverrides.custom.push({sku,qty}); markDirty(); renderBOM(); }
+}
+function resetBom(){ bomOverrides={edits:{},removed:{},custom:[]}; markDirty(); renderBOM(); }
+function wireBom(){
+  const tb=el('bomTable'); if(!tb || tb._wired) return; tb._wired=true;
+  tb.addEventListener('change', e=>{
+    const t=e.target;
+    if(t.classList.contains('bom-sku')){
+      const key=t.dataset.key, ci=t.dataset.cidx;
+      if(ci!=null){ if(bomOverrides.custom[+ci]) bomOverrides.custom[+ci].sku=t.value; }
+      else (bomOverrides.edits[key]||(bomOverrides.edits[key]={})).sku=t.value;
+      markDirty(); renderBOM();
+    } else if(t.classList.contains('bom-qty')){
+      const key=t.dataset.key, ci=t.dataset.cidx, v=Math.max(0,parseInt(t.value,10)||0);
+      if(ci!=null){ if(bomOverrides.custom[+ci]) bomOverrides.custom[+ci].qty=v; }
+      else (bomOverrides.edits[key]||(bomOverrides.edits[key]={})).qty=v;
+      markDirty(); renderBOM();
+    }
+  });
+  tb.addEventListener('click', e=>{
+    const t=e.target; if(!t.classList.contains('bom-del')) return;
+    const key=t.dataset.key, ci=t.dataset.cidx;
+    if(ci!=null) bomOverrides.custom.splice(+ci,1); else bomOverrides.removed[key]=true;
+    markDirty(); renderBOM();
+  });
+}
+
 async function renderBOM(){
   const tb=el('bomTable'); if(!tb) return;
+  wireBom();
   if(!LAST_PLANS.length){ tb.innerHTML='<tbody><tr><td class="zl">Add an area above to build the parts list.</td></tr></tbody>'; el('bomGrand').innerHTML=''; el('bomNote').textContent=''; return; }
   const parts=await loadParts();
-  const {lines, subtotalCents, lateralFt}=buildBOM(parts);
-  let h='<thead><tr><th class="zl">SKU</th><th class="zl">Item</th><th>Qty</th><th>Unit</th><th>Unit $</th><th>Line $</th></tr></thead><tbody>';
-  lines.forEach(l=>{
+  const {lines:autoLines, lateralFt}=buildBOM(parts);
+  const opts=bomOptionsHtml(parts);
+  // Merge auto lines with manual overrides → display lines.
+  const disp=[];
+  autoLines.forEach(l=>{
+    if(l.sku==='-'){ disp.push(Object.assign({}, l, {editable:false})); return; }   // non-catalog flag, static
+    if(bomOverrides.removed[l.sku]) return;
+    const ed=bomOverrides.edits[l.sku]||{};
+    const sku=ed.sku||l.sku;
+    const qty=(ed.qty!=null && ed.qty!=='')?Math.max(0,parseInt(ed.qty,10)||0):l.qty;
+    const pt=parts[sku];
+    disp.push({key:l.sku, sku, desc:pt?pt.description:sku, qty, priceCents:pt?pt.priceCents:null, unit:pt?pt.unit:'each', editable:true});
+  });
+  bomOverrides.custom.forEach((c,ci)=>{ const pt=parts[c.sku];
+    disp.push({cidx:ci, sku:c.sku, desc:pt?pt.description:c.sku, qty:c.qty, priceCents:pt?pt.priceCents:null, unit:pt?pt.unit:'each', editable:true, custom:true}); });
+  const subtotalCents=disp.reduce((s,l)=>s+(l.priceCents!=null?l.priceCents*l.qty:0),0);
+
+  let h='<thead><tr><th class="zl">SKU / item</th><th class="zl">Description</th><th>Qty</th><th>Unit</th><th>Unit $</th><th>Line $</th><th></th></tr></thead><tbody>';
+  disp.forEach(l=>{
     const unitP=l.priceCents!=null?money(l.priceCents/100):'-';
     const lineP=l.priceCents!=null?money(l.priceCents*l.qty/100):'-';
-    h+=`<tr><td class="zl">${esc(l.sku)}</td><td class="area" style="max-width:280px">${esc(l.desc)}</td><td>${l.qty}</td><td>${esc(l.unit||'each')}</td><td>${unitP}</td><td>${lineP}</td></tr>`;
+    if(l.editable){
+      const ka = l.custom?`data-cidx="${l.cidx}"`:`data-key="${esc(l.key)}"`;
+      h+=`<tr${l.custom?' class="bom-custom"':''}>`+
+         `<td class="zl"><select class="bom-sku" ${ka} data-cur="${esc(l.sku)}">${opts}</select></td>`+
+         `<td class="area" style="max-width:230px">${esc(l.desc)}</td>`+
+         `<td><input class="bom-qty" type="number" min="0" step="1" ${ka} value="${l.qty}"></td>`+
+         `<td>${esc(l.unit||'each')}</td><td>${unitP}</td><td>${lineP}</td>`+
+         `<td><button type="button" class="bom-del" ${ka} title="Remove line">×</button></td></tr>`;
+    } else {
+      h+=`<tr><td class="zl">${esc(l.sku)}</td><td class="area" style="max-width:230px">${esc(l.desc)}</td><td>${l.qty}</td><td>${esc(l.unit||'each')}</td><td>${unitP}</td><td>${lineP}</td><td></td></tr>`;
+    }
   });
-  h+=`<tr class="tot"><td class="zl" colspan="5">Materials subtotal (catalog items)</td><td>${money(subtotalCents/100)}</td></tr></tbody>`;
+  h+=`<tr class="bom-add"><td class="zl"><select id="bomAddSku">${opts}</select></td><td class="area">add a material →</td><td><input id="bomAddQty" type="number" min="1" step="1" value="1"></td><td colspan="3"></td><td><button type="button" onclick="bomAddLine()">+ Add</button></td></tr>`;
+  h+=`<tr class="tot"><td class="zl" colspan="5">Materials subtotal (catalog items)</td><td>${money(subtotalCents/100)}</td><td></td></tr></tbody>`;
   tb.innerHTML=h;
-  const missing=lines.filter(l=>l.priceCents==null).length;
+  tb.querySelectorAll('select.bom-sku, #bomAddSku').forEach(s=>{ if(s.dataset.cur) s.value=s.dataset.cur; });
+
+  const missing=disp.filter(l=>l.priceCents==null).length;
+  const edited=Object.keys(bomOverrides.edits).length+Object.keys(bomOverrides.removed).length+bomOverrides.custom.length;
   el('bomGrand').innerHTML=`
     <div class="stat"><div class="n">${money(subtotalCents/100)}</div><div class="l">materials subtotal</div></div>
-    <div class="stat"><div class="n">${lines.length}</div><div class="l">line items</div></div>`;
+    <div class="stat"><div class="n">${disp.length}</div><div class="l">line items</div></div>`;
   el('bomNote').innerHTML=
-    `Priced live from the parts catalog — before tax, labour, and mainline pipe. `+
-    (missing?`<span style="color:var(--warn)">${missing} line(s) not in the catalog</span> (MP / full-circle / EST-LCS-RCS nozzles) — price separately. `:'')+
-    `Lateral pipe (${lateralFt} ft, 3/4") is a layout estimate; mainline size is in section 5 — measure runs on site.`;
+    `<b>Internal only</b> — not shown on the customer form. Swap any SKU, edit quantities, remove or add lines; `+
+    (edited?`<a href="javascript:void(0)" onclick="resetBom()">reset to auto (${edited} edit${edited>1?'s':''})</a>. `:`edits are saved with the design. `)+
+    `Priced live before tax, labour & mainline pipe. `+
+    (missing?`<span style="color:var(--warn)">${missing} line(s) not in the catalog</span> — price separately. `:'')+
+    `Lateral pipe (${lateralFt} ft, 3/4") is a layout estimate; mainline in §5 — measure on site.`;
 }
 
 /* ════════════════ Water-Cost Calculator (town rates) ════════════════ */
@@ -2014,6 +2123,7 @@ function serializeState(){
     savedAt: new Date().toISOString(),
     inputs,
     waterSupply: readWaterSupply(),
+    bomOverrides: JSON.parse(JSON.stringify(bomOverrides)),
     areas: JSON.parse(JSON.stringify(areas)),
     wcRunOverrides: JSON.parse(JSON.stringify(wcRunOverrides))
   };
@@ -2033,6 +2143,9 @@ function restoreState(blob){
       }
     }
     applyWaterSupply(blob.waterSupply);
+    bomOverrides = (blob.bomOverrides && typeof blob.bomOverrides==='object')
+      ? {edits:blob.bomOverrides.edits||{}, removed:blob.bomOverrides.removed||{}, custom:Array.isArray(blob.bomOverrides.custom)?blob.bomOverrides.custom:[]}
+      : {edits:{},removed:{},custom:[]};
     if(Array.isArray(blob.areas)) areas = JSON.parse(JSON.stringify(blob.areas));
     if(blob.wcRunOverrides && typeof blob.wcRunOverrides === 'object'){
       Object.keys(wcRunOverrides).forEach(k=>delete wcRunOverrides[k]);
