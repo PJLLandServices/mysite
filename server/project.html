@@ -260,6 +260,27 @@
           <ul class="proj-row-list" id="projMlsList"></ul>
         </section>
 
+        <section class="proj-section" id="projWaterCostSection">
+          <style>
+            .proj-wc-card{border:1px solid #dfe6e0;border-radius:10px;padding:14px 16px;background:#fff}
+            .proj-wc-head{display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px;font-size:14px;margin-bottom:12px}
+            .proj-wc-when{color:#888;font-size:12px}
+            .proj-wc-warn{color:#b26a00}
+            .proj-wc-figs{display:flex;flex-wrap:wrap;gap:24px;margin-bottom:12px}
+            .proj-wc-figs .n{display:block;font-size:20px;font-weight:700;color:#1b5e20;line-height:1.1}
+            .proj-wc-figs .l{display:block;font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.4px;margin-top:2px}
+            .proj-wc-table{width:100%;border-collapse:collapse;font-size:13px}
+            .proj-wc-table th,.proj-wc-table td{text-align:left;padding:5px 7px;border-bottom:1px solid #eee}
+            .proj-wc-table th{font-size:10.5px;text-transform:uppercase;color:#999;letter-spacing:.3px}
+          </style>
+          <div class="proj-section-head">
+            <h2>Water-cost estimate</h2>
+            <a class="pjl-btn pjl-btn-outline" id="projWaterCostLink" href="/admin/sitebuilder">Open in builder</a>
+          </div>
+          <p class="proj-empty" id="projWaterCostEmpty" hidden>No water-cost estimate saved yet. Open the builder → §4 Water Cost by Town → <strong>Save water-cost estimate to project</strong>.</p>
+          <div id="projWaterCostCard"></div>
+        </section>
+
         <section class="proj-footer-actions">
           <button type="button" class="pjl-btn pjl-btn-outline" id="archiveButton">Archive project</button>
           <button type="button" class="pjl-btn pjl-btn-outline is-danger" id="deleteButton">Delete project</button>

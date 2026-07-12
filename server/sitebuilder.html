@@ -309,7 +309,11 @@
     </div>
     <div class="grand" id="wcGrand" style="margin-top:14px"></div>
     <div class="hint" id="wcHeadline" style="font-size:13px"></div>
-    <div class="hint">Rates are the <b>combined water + sewer volumetric charge</b> on a standard residential meter (no irrigation deduct meter). GPM figures are <b>US gallons</b> (1 US gal = 0.00378541 m³). Blank run-time = the default above; type a number to override one zone. Drip zones are included at their computed flow (they run far longer at low GPM — set a realistic per-zone run time).</div>
+    <div class="btnrow" style="margin-top:12px">
+      <button class="ghost" onclick="saveWaterCostDoc()">Save water-cost estimate to project</button>
+      <span class="saved" id="wcSaveNote" style="font-size:12px;color:var(--muted);align-self:center"></span>
+    </div>
+    <div class="hint">This water-cost estimate saves as its <b>own document in the project folder</b> (separate from the system design). Rates are the <b>combined water + sewer volumetric charge</b> on a standard residential meter (no irrigation deduct meter). GPM figures are <b>US gallons</b> (1 US gal = 0.00378541 m³). Blank run-time = the default above; type a number to override one zone. Drip zones are included at their computed flow (they run far longer at low GPM — set a realistic per-zone run time).</div>
   </div>
 
   <div class="panel">
@@ -2117,6 +2121,37 @@ function updateCostCells(){
   updateRateNote();
 }
 
+// Build a self-contained water-cost document (for the project folder).
+function snapshotWaterCost(){
+  const r=currentRate(); if(!r) return null;
+  const cycles=Math.max(num('wcCycles'),0), weeks=Math.max(num('wcWeeks'),0), defRun=Math.max(num('wcRun'),0);
+  let totGal=0, totRun=0; const zones=[];
+  wcZones.forEach((z,i)=>{
+    if(z.drip){ zones.push({area:z.area, drip:true}); return; }
+    const min=zoneMinutes(i), gal=z.gpm*min, cost=toUnits(gal,r.unit)*r.rate;
+    totGal+=gal; totRun+=cost;
+    zones.push({area:z.area, gpm:+z.gpm.toFixed(1), minutes:min, gallons:Math.round(gal), cycleCost:+cost.toFixed(2), seasonCost:+(cost*cycles*weeks).toFixed(2)});
+  });
+  return {
+    savedAt:new Date().toISOString(),
+    town:el('wcTown').value, townName:r.name, rate:r.rate, rateUnit:r.unit, verified:r.verified, effective:r.effective,
+    runMin:defRun, cyclesPerWeek:cycles, weeksPerSeason:weeks, zones,
+    totals:{ cycleCost:+totRun.toFixed(2), weekCost:+(totRun*cycles).toFixed(2), seasonCost:+(totRun*cycles*weeks).toFixed(2), gallonsPerCycle:Math.round(totGal) }
+  };
+}
+async function saveWaterCostDoc(){
+  if(!linkedProject){ alert('Attach this design to a project first (Project section at the top).'); return; }
+  const snap=snapshotWaterCost();
+  if(!snap){ alert('Pick a town / rate and add at least one area first.'); return; }
+  el('wcSaveNote').textContent='Saving…';
+  try{
+    const res=await fetch('/api/projects/'+encodeURIComponent(linkedProject.id),{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({waterCostEstimate:snap})});
+    const j=await res.json().catch(()=>({}));
+    if(res.ok && j.ok){ el('wcSaveNote').textContent='✓ Saved to project folder · '+(fmtSaved(snap.savedAt)||''); }
+    else { el('wcSaveNote').textContent='Save failed'+(j.errors&&j.errors[0]?': '+j.errors[0]:(j.error?': '+j.error:' ('+res.status+')')); }
+  }catch(e){ el('wcSaveNote').textContent='Save failed: '+e.message; }
+}
+
 function updateRateNote(){
   const r = currentRate();
   if(!r){ el('wcRateNote').textContent=''; return; }
@@ -2348,6 +2383,9 @@ async function initApp(){
           if(j.project.systemDesign){
             restored = restoreState(j.project.systemDesign);
             lastSavedLabel = fmtSaved(j.project.systemDesign.savedAt);
+          }
+          if(j.project.waterCostEstimate && el('wcSaveNote')){
+            el('wcSaveNote').textContent='Last saved to project folder · '+(fmtSaved(j.project.waterCostEstimate.savedAt)||'');
           }
         }
       }

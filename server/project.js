@@ -218,8 +218,45 @@
     renderStatusUpdates();
     renderWos();
     renderMls();
+    renderWaterCost();
     renderSidebar();
     refreshBillingPreview();
+  }
+
+  function renderWaterCost() {
+    const link = document.getElementById("projWaterCostLink");
+    if (link) link.href = `/admin/sitebuilder?project=${encodeURIComponent(state.projectId)}`;
+    const empty = document.getElementById("projWaterCostEmpty");
+    const card = document.getElementById("projWaterCostCard");
+    if (!card) return;
+    const wc = state.project.waterCostEstimate;
+    if (!wc || typeof wc !== "object") {
+      if (empty) empty.hidden = false;
+      card.innerHTML = "";
+      return;
+    }
+    if (empty) empty.hidden = true;
+    const money = (n) => "$" + (Number(n) || 0).toLocaleString("en-CA", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const unit = wc.rateUnit === "m3" ? "m³" : wc.rateUnit === "1000gal" ? "1,000 gal" : "gal";
+    const t = wc.totals || {};
+    const savedStr = wc.savedAt ? new Date(wc.savedAt).toLocaleString("en-CA", { year: "numeric", month: "short", day: "numeric" }) : "—";
+    const zoneRows = (wc.zones || []).map((z) => z.drip
+      ? `<tr><td>${escapeHtml(z.area || "")}</td><td>drip</td><td>—</td><td>—</td></tr>`
+      : `<tr><td>${escapeHtml(z.area || "")}</td><td>${z.gpm || 0} GPM</td><td>${z.minutes || 0} min</td><td>${money(z.seasonCost)}</td></tr>`).join("");
+    card.innerHTML = `
+      <div class="proj-wc-card">
+        <div class="proj-wc-head">
+          <div><strong>${escapeHtml(wc.townName || "—")}</strong> · $${(Number(wc.rate) || 0).toFixed(2)}/${unit}${wc.verified === false ? ' · <span class="proj-wc-warn">unverified rate</span>' : ""}</div>
+          <div class="proj-wc-when">saved ${escapeHtml(savedStr)}</div>
+        </div>
+        <div class="proj-wc-figs">
+          <div><span class="n">${money(t.seasonCost)}</span><span class="l">per season</span></div>
+          <div><span class="n">${money(t.weekCost)}</span><span class="l">per week</span></div>
+          <div><span class="n">${money(t.cycleCost)}</span><span class="l">per cycle</span></div>
+          <div><span class="n">${wc.cyclesPerWeek || 0}×/wk · ${wc.weeksPerSeason || 0} wk</span><span class="l">schedule</span></div>
+        </div>
+        <table class="proj-wc-table"><thead><tr><th>Zone</th><th>Flow</th><th>Run</th><th>Season $</th></tr></thead><tbody>${zoneRows || '<tr><td colspan="4">No metered zones.</td></tr>'}</tbody></table>
+      </div>`;
   }
 
   function renderProposalPanel() {

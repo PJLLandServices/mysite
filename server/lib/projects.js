@@ -108,6 +108,13 @@ function blankProject() {
     // size-caps + timestamps it, never interprets the shape.
     systemDesign: null,
 
+    // waterCostEstimate — a standalone "water cost by town" document snapshot
+    // saved from the Sprinkler System Builder (§4). Separate from
+    // systemDesign so it opens as its own project-folder deliverable. Opaque
+    // JSON: town, rate, per-zone run times, computed season cost. null until
+    // saved; written whole via PATCH { waterCostEstimate: {...} }.
+    waterCostEstimate: null,
+
     // Linked work orders. Push via attachWorkOrder; remove via
     // detachWorkOrder. Order is insertion order — UI sorts as needed.
     workOrderIds: [],
@@ -224,7 +231,8 @@ function hydrate(rec) {
     invoiceGeneratedAt: typeof rec?.invoiceGeneratedAt === "string" ? rec.invoiceGeneratedAt : null,
     propertyEditsAppliedAt: typeof rec?.propertyEditsAppliedAt === "string" ? rec.propertyEditsAppliedAt : null,
     finalInvoiceId: typeof rec?.finalInvoiceId === "string" ? rec.finalInvoiceId : null,
-    systemDesign: (rec && typeof rec.systemDesign === "object") ? rec.systemDesign : null
+    systemDesign: (rec && typeof rec.systemDesign === "object") ? rec.systemDesign : null,
+    waterCostEstimate: (rec && typeof rec.waterCostEstimate === "object") ? rec.waterCostEstimate : null
   };
 }
 
@@ -413,6 +421,24 @@ async function update(id, patch = {}) {
       appendHistory(next, { action: "system_design_saved", note: `${size} bytes` });
     } else {
       throw new Error("systemDesign must be an object or null.");
+    }
+  }
+
+  // waterCostEstimate — standalone water-cost document from the builder.
+  if (Object.prototype.hasOwnProperty.call(patch, "waterCostEstimate")) {
+    const wc = patch.waterCostEstimate;
+    if (wc == null) {
+      next.waterCostEstimate = null;
+      appendHistory(next, { action: "water_cost_cleared" });
+    } else if (typeof wc === "object") {
+      const size = JSON.stringify(wc).length;
+      if (size > 128 * 1024) {
+        throw new Error("Water-cost estimate is too large to save (over 128 KB).");
+      }
+      next.waterCostEstimate = wc;
+      appendHistory(next, { action: "water_cost_saved", note: `${size} bytes` });
+    } else {
+      throw new Error("waterCostEstimate must be an object or null.");
     }
   }
 
