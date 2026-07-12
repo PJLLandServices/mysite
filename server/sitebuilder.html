@@ -98,13 +98,16 @@
   .sk-head .sk-stat{font-size:13px;color:var(--muted)}
   .sk-head .sk-stat b{color:var(--ink);font-size:15px}
   .sk-grow{flex:1 1 auto}
-  .sk-body{position:relative;overflow:auto;background:#fbfdfb;flex:1 1 auto;min-height:0}
+  .sk-body{position:relative;overflow:hidden;background:#fbfdfb;flex:1 1 auto;min-height:0}
   .sk-body svg{display:block;touch-action:none}
   .sk-foot{padding:10px 16px;border-top:1px solid var(--line);display:flex;flex-wrap:wrap;gap:8px;align-items:center}
   .sk-foot .hint{margin:0}
   .sk-tools{display:flex;flex-wrap:wrap;gap:8px}
   .sk-num{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted)}
   .sk-num input{width:70px;padding:6px 8px;border:1px solid var(--line);border-radius:6px;font-size:15px}
+  .pz-ctrl{display:inline-flex;gap:4px}
+  .pz-ctrl button{width:auto;min-height:0;padding:6px 11px;font-size:15px;font-weight:600;line-height:1;border:1px solid var(--green);background:#fff;color:var(--green-d);border-radius:6px;cursor:pointer}
+  .pz-ctrl button:active{background:var(--green);color:#fff}
   .sk-tools button.on{background:var(--green);color:#fff;border-color:var(--green)}
   .sk-vert{fill:#fff;stroke:var(--green-d);stroke-width:2;cursor:grab}
   .sk-handle{fill:var(--z3);stroke:#fff;stroke-width:2;cursor:grab}
@@ -163,6 +166,8 @@
     .lo-arcs button{flex:1 1 auto;width:auto;min-height:42px;font-size:14px;padding:9px 6px}
     .lo-palette select{flex:1 1 auto;min-height:42px}
     .sk-num{flex:1 1 auto}
+    .pz-ctrl{flex:0 0 auto}
+    .pz-ctrl button{min-height:42px;min-width:52px;font-size:17px}
     .sk-body{min-height:56vh}
     .sk-hint,.lo-palette .hint,#skHint,#loHint,#trHint{font-size:12px;flex-basis:100%;margin:2px 0 0}
   }
@@ -265,7 +270,7 @@
       <h3>Draw area shape</h3>
       <span class="sk-stat"><b id="skArea">0</b> sq ft &middot; <span id="skPerim">0</span> ft outline</span>
       <span class="sk-grow"></span>
-      <span class="sk-num">ft across <input id="skSpan" type="number" min="10" max="300" step="5" value="50"></span>
+      <span class="pz-ctrl"><button type="button" onclick="skZoom(0.7)" aria-label="Zoom out">&minus;</button><button type="button" onclick="skFit()">Fit</button><button type="button" onclick="skZoom(1.4)" aria-label="Zoom in">+</button></span>
     </div>
     <div class="sk-body" id="skBody"></div>
     <div class="sk-foot">
@@ -291,7 +296,7 @@
       <h3>Lay out heads</h3>
       <span class="sk-stat"><b id="loCount">0</b> heads &middot; <span id="loGpm">0</span> GPM &middot; <span id="loZones">0</span> zones</span>
       <span class="sk-grow"></span>
-      <span class="sk-num">ft across <input id="loSpan" type="number" min="10" max="300" step="5" value="50"></span>
+      <span class="pz-ctrl"><button type="button" onclick="loZoom(0.7)" aria-label="Zoom out">&minus;</button><button type="button" onclick="loFit()">Fit</button><button type="button" onclick="loZoom(1.4)" aria-label="Zoom in">+</button></span>
     </div>
     <div class="lo-palette" id="loPalette">
       <span class="sk-num">Nozzle <select id="loNoz"></select></span>
@@ -319,7 +324,7 @@
       <h3>Place trees</h3>
       <span class="sk-stat"><b id="trCount">0</b> trees &middot; <span id="trGpm">0</span> GPM &middot; <span id="trZones">0</span> zones</span>
       <span class="sk-grow"></span>
-      <span class="sk-num">ft across <input id="trSpan" type="number" min="10" max="300" step="5" value="50"></span>
+      <span class="pz-ctrl"><button type="button" onclick="trZoom(0.7)" aria-label="Zoom out">&minus;</button><button type="button" onclick="trFit()">Fit</button><button type="button" onclick="trZoom(1.4)" aria-label="Zoom in">+</button></span>
     </div>
     <div class="lo-palette" id="trPalette">
       <span class="lo-arcs" id="trTypes"></span>
@@ -1070,31 +1075,98 @@ function legend(p){
   return l;
 }
 
+/* ════════════════ Pan / zoom + gesture core (shared by the editors) ════════════════
+   Each editor `ed` carries: svgId, bodyId, ppf (px/ft), panX/panY (px),
+   _w/_h (canvas px), _ptrs (active pointers), _pinch, _drag, _tap, _hooks,
+   _move/_up (bound window handlers). Coords are absolute ft; SX=x*ppf+panX. */
+const PZ={min:1.2, max:120};
+function pzInit(ed){ ed._ptrs=new Map(); ed._pinch=null; ed._drag=null; ed._tap=null;
+  ed._move=e=>pzMove(ed,e); ed._up=e=>pzUp(ed,e); }
+function pzFit(ed, bbox){
+  const body=el(ed.bodyId); const w=Math.max(body.clientWidth-2,300), h=Math.max(body.clientHeight-2,300);
+  ed._w=w; ed._h=h;
+  const bw=Math.max(bbox.maxX-bbox.minX,4), bh=Math.max(bbox.maxY-bbox.minY,4);
+  ed.ppf=Math.max(PZ.min, Math.min(PZ.max, Math.min(w/bw, h/bh)*0.86));
+  const cx=(bbox.minX+bbox.maxX)/2, cy=(bbox.minY+bbox.maxY)/2;
+  ed.panX=w/2-cx*ed.ppf; ed.panY=h/2-cy*ed.ppf;
+}
+const pzSX=(ed,x)=>x*ed.ppf+ed.panX, pzSY=(ed,y)=>y*ed.ppf+ed.panY;
+const pzFX=(ed,sx)=>(sx-ed.panX)/ed.ppf, pzFY=(ed,sy)=>(sy-ed.panY)/ed.ppf;
+function pzLocal(ed,e){ const r=el(ed.svgId).getBoundingClientRect(); return {x:e.clientX-r.left, y:e.clientY-r.top}; }
+function pzGridSvg(ed){
+  const {ppf,panX,panY,_w:w,_h:h}=ed; let g=`<rect width="${w}" height="${h}" fill="#fbfdfb"/>`;
+  const minor=ppf>=7;
+  const x0=Math.floor(-panX/ppf), x1=Math.ceil((w-panX)/ppf), y0=Math.floor(-panY/ppf), y1=Math.ceil((h-panY)/ppf);
+  for(let f=x0; f<=x1; f++){ if(!minor && (f%5)) continue; const X=(f*ppf+panX).toFixed(1); g+=`<line x1="${X}" y1="0" x2="${X}" y2="${h}" stroke="${f%5?'#e2e9e4':'#c2cec7'}" stroke-width="1"/>`; }
+  for(let f=y0; f<=y1; f++){ if(!minor && (f%5)) continue; const Y=(f*ppf+panY).toFixed(1); g+=`<line x1="0" y1="${Y}" x2="${w}" y2="${Y}" stroke="${f%5?'#e2e9e4':'#c2cec7'}" stroke-width="1"/>`; }
+  return g;
+}
+function pzZoomAt(ed, mx, my, factor){
+  const np=Math.max(PZ.min, Math.min(PZ.max, ed.ppf*factor));
+  const fx=(mx-ed.panX)/ed.ppf, fy=(my-ed.panY)/ed.ppf;
+  ed.ppf=np; ed.panX=mx-fx*ed.ppf; ed.panY=my-fy*ed.ppf;
+}
+function pzZoomBtn(ed, factor){ pzZoomAt(ed, ed._w/2, ed._h/2, factor); ed._hooks.redraw(); }
+function pzWheel(ed, e){ e.preventDefault(); const L=pzLocal(ed,e); pzZoomAt(ed, L.x, L.y, Math.exp(-e.deltaY*0.0015)); ed._hooks.redraw(); }
+function pzStartPinch(ed){ const [a,b]=[...ed._ptrs.values()]; const r=el(ed.svgId).getBoundingClientRect();
+  ed._pinch={d:Math.max(Math.hypot(a.x-b.x,a.y-b.y),1), ppf:ed.ppf, panX:ed.panX, panY:ed.panY, mx:(a.x+b.x)/2-r.left, my:(a.y+b.y)/2-r.top}; }
+function pzPinchMove(ed){ const [a,b]=[...ed._ptrs.values()]; const r=el(ed.svgId).getBoundingClientRect();
+  const d=Math.hypot(a.x-b.x,a.y-b.y), mx=(a.x+b.x)/2-r.left, my=(a.y+b.y)/2-r.top;
+  ed.ppf=Math.max(PZ.min, Math.min(PZ.max, ed._pinch.ppf*(d/ed._pinch.d)));
+  const fx=(ed._pinch.mx-ed._pinch.panX)/ed._pinch.ppf, fy=(ed._pinch.my-ed._pinch.panY)/ed._pinch.ppf;
+  ed.panX=mx-fx*ed.ppf; ed.panY=my-fy*ed.ppf; }
+function pzDown(ed,e){
+  ed._ptrs.set(e.pointerId,{x:e.clientX,y:e.clientY});
+  if(ed._ptrs.size===2){ if(ed._hooks.cancelDrag) ed._hooks.cancelDrag(); ed._drag=null; ed._tap=null; pzStartPinch(ed);
+    window.addEventListener('pointermove', ed._move); window.addEventListener('pointerup', ed._up); ed._hooks.redraw(); e.preventDefault(); return; }
+  if(ed._ptrs.size>1){ e.preventDefault(); return; }
+  const L=pzLocal(ed,e), fx=pzFX(ed,L.x), fy=pzFY(ed,L.y);
+  const h = ed._hooks.hit ? ed._hooks.hit(e.target) : null;
+  if(h!=null){ ed._drag={h, moved:false}; if(ed._hooks.dragStart) ed._hooks.dragStart(h,fx,fy); }
+  else { const eh = ed._hooks.emptyDrag ? ed._hooks.emptyDrag(fx,fy) : null;
+    if(eh!=null) ed._drag={h:eh, moved:false, empty:true};
+    else ed._tap={fx,fy,x0:L.x,y0:L.y,moved:false}; }
+  window.addEventListener('pointermove', ed._move); window.addEventListener('pointerup', ed._up);
+  ed._hooks.redraw(); e.preventDefault();
+}
+function pzMove(ed,e){
+  if(ed._ptrs.has(e.pointerId)) ed._ptrs.set(e.pointerId,{x:e.clientX,y:e.clientY});
+  if(ed._pinch && ed._ptrs.size>=2){ pzPinchMove(ed); ed._hooks.redraw(); e.preventDefault(); return; }
+  const L=pzLocal(ed,e), fx=pzFX(ed,L.x), fy=pzFY(ed,L.y);
+  if(ed._drag){ ed._drag.moved=true; if(ed._hooks.dragMove) ed._hooks.dragMove(ed._drag.h,fx,fy); ed._hooks.redraw(); e.preventDefault(); return; }
+  if(ed._tap && (Math.abs(L.x-ed._tap.x0)>6||Math.abs(L.y-ed._tap.y0)>6)) ed._tap.moved=true;
+}
+function pzUp(ed,e){
+  ed._ptrs.delete(e.pointerId);
+  if(ed._ptrs.size<2) ed._pinch=null;
+  if(ed._ptrs.size>0) return;
+  window.removeEventListener('pointermove', ed._move); window.removeEventListener('pointerup', ed._up);
+  if(ed._drag){ if(ed._hooks.dragEnd) ed._hooks.dragEnd(ed._drag.h, ed._drag.moved); }
+  else if(ed._tap && !ed._tap.moved){ if(ed._hooks.tap) ed._hooks.tap(ed._tap.fx, ed._tap.fy); }
+  ed._drag=null; ed._tap=null; ed._hooks.redraw();
+}
+
 /* ════════════════ Custom-shape sketch tool ════════════════ */
 
 const sk = { areaIndex:-1, tool:'poly', poly:[], closed:false, sel:-1, dragging:-1,
-             circle:null, sector:null, sweep:90, cDrag:null, spanFt:50, snap:1, _ppf:12 };
+             circle:null, sector:null, sweep:90, snap:1, svgId:'skSvg', bodyId:'skBody',
+             ppf:12, panX:0, panY:0, _w:0, _h:0 };
 
+function skContentBBox(){
+  if(sk.tool==='circle' && sk.circle){ const c=sk.circle; return {minX:c.cx-c.r,minY:c.cy-c.r,maxX:c.cx+c.r,maxY:c.cy+c.r}; }
+  if(sk.tool==='sector' && sk.sector){ const c=sk.sector; return polyBBox(sectorPoly(c.cx,c.cy,c.r,c.a0,sk.sweep)); }
+  if(sk.poly.length) return polyBBox(sk.poly);
+  return {minX:0,minY:0,maxX:40,maxY:30};
+}
 function openSketch(i){
   ensureArea(areas[i]);
-  sk.areaIndex=i; sk.sel=-1; sk.dragging=-1; sk.cDrag=null; sk.sector=null; sk.circle=null;
-  if(isSector(areas[i])){
-    const c=areas[i].arc; sk.tool='sector'; sk.sweep=c.sweep; sk.sector={cx:c.cx, cy:c.cy, r:c.r, a0:c.a0}; sk.poly=[]; sk.closed=false;
-    sk.spanFt=Math.max(20, Math.ceil((c.cx+c.r+4)/5)*5, Math.ceil((c.cy+c.r+4)/5)*5);
-  } else if(isCircle(areas[i])){
-    sk.tool='circle'; sk.circle={cx:areas[i].circle.cx, cy:areas[i].circle.cy, r:areas[i].circle.r};
-    sk.poly=[]; sk.closed=false;
-    sk.spanFt=Math.max(20, Math.ceil((sk.circle.cx+sk.circle.r+4)/5)*5, Math.ceil((sk.circle.cy+sk.circle.r+4)/5)*5);
-  } else {
-    sk.tool='poly';
-    sk.poly = validPoly(areas[i]) ? areas[i].poly.map(p=>({x:p.x,y:p.y})) : [];
-    sk.closed = sk.poly.length>=3;
-    if(sk.poly.length){ const bb=polyBBox(sk.poly); sk.spanFt=Math.max(20, Math.ceil((Math.max(bb.maxX,bb.maxY)+4)/5)*5); }
-    else sk.spanFt=50;
-  }
-  el('skSpan').value=sk.spanFt;
+  sk.areaIndex=i; sk.sel=-1; sk.sector=null; sk.circle=null; sk.poly=[]; sk.closed=false; sk._drawing=null;
+  if(isSector(areas[i])){ const c=areas[i].arc; sk.tool='sector'; sk.sweep=c.sweep; sk.sector={cx:c.cx,cy:c.cy,r:c.r,a0:c.a0}; }
+  else if(isCircle(areas[i])){ sk.tool='circle'; sk.circle={cx:areas[i].circle.cx,cy:areas[i].circle.cy,r:areas[i].circle.r}; }
+  else { sk.tool='poly'; sk.poly = validPoly(areas[i]) ? areas[i].poly.map(p=>({x:p.x,y:p.y})) : []; sk.closed=sk.poly.length>=3; }
+  pzInit(sk); sk._hooks=SK_HOOKS;
   el('skOverlay').hidden=false;
-  skDraw();
+  pzFit(sk, skContentBBox()); skDraw();
 }
 function skSetTool(t){
   if(t==='quarter'){ sk.tool='sector'; sk.sweep=90; sk.sector=null; }
@@ -1102,6 +1174,8 @@ function skSetTool(t){
   else sk.tool=t;
   skDraw();
 }
+function skZoom(f){ pzZoomBtn(sk,f); }
+function skFit(){ pzFit(sk, skContentBBox()); skDraw(); }
 function skCancel(){ el('skOverlay').hidden=true; }
 function skClear(){ sk.poly=[]; sk.closed=false; sk.sel=-1; sk.circle=null; sk.sector=null; skDraw(); }
 function skUndo(){
@@ -1128,70 +1202,49 @@ function skUse(){
   el('skOverlay').hidden=true;
   render(); markDirty();
 }
-
 function skPerimNow(){
   let p=0; const n=sk.poly.length, last=sk.closed?n:n-1;
   for(let i=0;i<last;i++){ const A=sk.poly[i],B=sk.poly[(i+1)%n]; p+=Math.hypot(B.x-A.x,B.y-A.y); }
   return p;
 }
-function skXYraw(e){
-  const svg=el('skSvg'); if(!svg) return {x:0,y:0};
-  const r=svg.getBoundingClientRect(), ppf=sk._ppf;
-  return {x:(e.clientX-r.left)/ppf, y:(e.clientY-r.top)/ppf};
-}
-function skXY(e){
-  const p=skXYraw(e);
-  let x=Math.round(p.x/sk.snap)*sk.snap, y=Math.round(p.y/sk.snap)*sk.snap;
-  x=Math.max(0,Math.min(sk.spanFt,x)); y=Math.max(0,Math.min(sk.spanFt,y));
-  return {x,y};
-}
 function skDraw(){
-  const body=el('skBody');
-  const wpx=Math.max(body.clientWidth-2, 300);
-  const ppf=wpx/sk.spanFt; sk._ppf=ppf;
-  const hpx=sk.spanFt*ppf, cell=sk.snap*ppf;
-  let g=`<svg id="skSvg" width="${wpx.toFixed(0)}" height="${hpx.toFixed(0)}" viewBox="0 0 ${wpx.toFixed(0)} ${hpx.toFixed(0)}">`;
-  g+=`<defs><pattern id="skGrid" width="${cell}" height="${cell}" patternUnits="userSpaceOnUse"><path d="M ${cell} 0 L 0 0 0 ${cell}" fill="none" stroke="#dbe4de" stroke-width="1"/></pattern></defs>`;
-  g+=`<rect width="${wpx.toFixed(0)}" height="${hpx.toFixed(0)}" fill="url(#skGrid)"/>`;
-  for(let f=0;f<=sk.spanFt;f+=5){ const x=(f*ppf).toFixed(1); g+=`<line x1="${x}" y1="0" x2="${x}" y2="${hpx.toFixed(0)}" stroke="#c2cec7" stroke-width="1.1"/><line x1="0" y1="${x}" x2="${wpx.toFixed(0)}" y2="${x}" stroke="#c2cec7" stroke-width="1.1"/>`; }
-
+  const body=el('skBody'); sk._w=Math.max(body.clientWidth-2,300); sk._h=Math.max(body.clientHeight-2,300);
+  const SX=x=>pzSX(sk,x), SY=y=>pzSY(sk,y), U=sk.ppf;
+  let g=`<svg id="skSvg" width="${sk._w}" height="${sk._h}" viewBox="0 0 ${sk._w} ${sk._h}" style="touch-action:none">`;
+  g+=pzGridSvg(sk);
   let area=0, perim=0;
-  if(sk.tool==='circle'){
-    if(sk.circle){
-      const c=sk.circle, cx=(c.cx*ppf), cy=(c.cy*ppf), rr=(c.r*ppf);
-      g+=`<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${rr.toFixed(1)}" fill="var(--green)" fill-opacity="0.12" stroke="var(--green-d)" stroke-width="2"/>`;
-      g+=`<line x1="${cx.toFixed(1)}" y1="${cy.toFixed(1)}" x2="${(cx+rr).toFixed(1)}" y2="${cy.toFixed(1)}" stroke="var(--green-d)" stroke-width="1" stroke-dasharray="3 2"/>`;
-      g+=`<text x="${(cx+rr/2).toFixed(1)}" y="${(cy-4).toFixed(1)}" text-anchor="middle" font-size="11" font-weight="600" fill="#1b5e20" paint-order="stroke" stroke="#fff" stroke-width="3">r ${c.r.toFixed(c.r%1?1:0)} ft</text>`;
-      g+=`<circle class="sk-center" cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="7" data-h="c"/>`;
-      g+=`<circle class="sk-handle" cx="${(cx+rr).toFixed(1)}" cy="${cy.toFixed(1)}" r="7" data-h="r"/>`;
-      area=Math.PI*c.r*c.r; perim=2*Math.PI*c.r;
-    }
-  } else if(sk.tool==='sector'){
-    if(sk.sector){
-      const c=sk.sector, cx=c.cx*ppf, cy=c.cy*ppf, rr=c.r*ppf, swr=sk.sweep*Math.PI/180;
-      const P=sectorPoly(c.cx,c.cy,c.r,c.a0,sk.sweep).map(p=>`${(p.x*ppf).toFixed(1)},${(p.y*ppf).toFixed(1)}`).join(' ');
-      g+=`<polygon points="${P}" fill="var(--green)" fill-opacity="0.12" stroke="var(--green-d)" stroke-width="2"/>`;
-      const bis=c.a0+swr/2, hx=cx+rr*Math.cos(bis), hy=cy+rr*Math.sin(bis);
-      g+=`<line x1="${cx.toFixed(1)}" y1="${cy.toFixed(1)}" x2="${hx.toFixed(1)}" y2="${hy.toFixed(1)}" stroke="var(--green-d)" stroke-width="1" stroke-dasharray="3 2"/>`;
-      g+=`<text x="${(cx+(hx-cx)*0.5).toFixed(1)}" y="${(cy+(hy-cy)*0.5-4).toFixed(1)}" text-anchor="middle" font-size="11" font-weight="600" fill="#1b5e20" paint-order="stroke" stroke="#fff" stroke-width="3">r ${c.r.toFixed(c.r%1?1:0)} ft</text>`;
-      g+=`<circle class="sk-center" cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="7" data-h="c"/>`;
-      g+=`<circle class="sk-handle" cx="${hx.toFixed(1)}" cy="${hy.toFixed(1)}" r="7" data-h="r"/>`;
-      area=(sk.sweep/360)*Math.PI*c.r*c.r; perim=2*c.r+c.r*swr;
-    }
-  } else {
-    const P=sk.poly.map(p=>`${(p.x*ppf).toFixed(1)},${(p.y*ppf).toFixed(1)}`).join(' ');
+  if(sk.tool==='circle' && sk.circle){
+    const c=sk.circle, cx=SX(c.cx), cy=SY(c.cy), rr=c.r*U;
+    g+=`<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${rr.toFixed(1)}" fill="var(--green)" fill-opacity="0.12" stroke="var(--green-d)" stroke-width="2"/>`;
+    g+=`<line x1="${cx.toFixed(1)}" y1="${cy.toFixed(1)}" x2="${(cx+rr).toFixed(1)}" y2="${cy.toFixed(1)}" stroke="var(--green-d)" stroke-width="1" stroke-dasharray="3 2"/>`;
+    g+=`<text x="${(cx+rr/2).toFixed(1)}" y="${(cy-4).toFixed(1)}" text-anchor="middle" font-size="11" font-weight="600" fill="#1b5e20" paint-order="stroke" stroke="#fff" stroke-width="3">r ${c.r.toFixed(c.r%1?1:0)} ft</text>`;
+    g+=`<circle class="sk-center" cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="8" data-h="c"/>`;
+    g+=`<circle class="sk-handle" cx="${(cx+rr).toFixed(1)}" cy="${cy.toFixed(1)}" r="8" data-h="r"/>`;
+    area=Math.PI*c.r*c.r; perim=2*Math.PI*c.r;
+  } else if(sk.tool==='sector' && sk.sector){
+    const c=sk.sector, cx=SX(c.cx), cy=SY(c.cy), rr=c.r*U, swr=sk.sweep*Math.PI/180;
+    const P=sectorPoly(c.cx,c.cy,c.r,c.a0,sk.sweep).map(p=>`${SX(p.x).toFixed(1)},${SY(p.y).toFixed(1)}`).join(' ');
+    g+=`<polygon points="${P}" fill="var(--green)" fill-opacity="0.12" stroke="var(--green-d)" stroke-width="2"/>`;
+    const bis=c.a0+swr/2, hx=cx+rr*Math.cos(bis), hy=cy+rr*Math.sin(bis);
+    g+=`<line x1="${cx.toFixed(1)}" y1="${cy.toFixed(1)}" x2="${hx.toFixed(1)}" y2="${hy.toFixed(1)}" stroke="var(--green-d)" stroke-width="1" stroke-dasharray="3 2"/>`;
+    g+=`<text x="${(cx+(hx-cx)*0.5).toFixed(1)}" y="${(cy+(hy-cy)*0.5-4).toFixed(1)}" text-anchor="middle" font-size="11" font-weight="600" fill="#1b5e20" paint-order="stroke" stroke="#fff" stroke-width="3">r ${c.r.toFixed(c.r%1?1:0)} ft</text>`;
+    g+=`<circle class="sk-center" cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="8" data-h="c"/>`;
+    g+=`<circle class="sk-handle" cx="${hx.toFixed(1)}" cy="${hy.toFixed(1)}" r="8" data-h="r"/>`;
+    area=(sk.sweep/360)*Math.PI*c.r*c.r; perim=2*c.r+c.r*swr;
+  } else if(sk.tool==='poly'){
+    const P=sk.poly.map(p=>`${SX(p.x).toFixed(1)},${SY(p.y).toFixed(1)}`).join(' ');
     if(sk.poly.length>=2){
       if(sk.closed && sk.poly.length>=3) g+=`<polygon points="${P}" fill="var(--green)" fill-opacity="0.12" stroke="var(--green-d)" stroke-width="2"/>`;
       else g+=`<polyline points="${P}" fill="none" stroke="var(--green-d)" stroke-width="2"/>`;
       const n=sk.poly.length, last=sk.closed?n:n-1;
       for(let k=0;k<last;k++){ const A=sk.poly[k],B=sk.poly[(k+1)%n]; const len=Math.hypot(B.x-A.x,B.y-A.y); if(len<0.6) continue;
-        const mx=((A.x+B.x)/2*ppf).toFixed(1), my=((A.y+B.y)/2*ppf-3).toFixed(1);
+        const mx=((SX(A.x)+SX(B.x))/2).toFixed(1), my=((SY(A.y)+SY(B.y))/2-3).toFixed(1);
         g+=`<text x="${mx}" y="${my}" text-anchor="middle" font-size="11" font-weight="600" fill="#1b5e20" paint-order="stroke" stroke="#fff" stroke-width="3">${len.toFixed(len%1?1:0)} ft</text>`;
       }
     }
     sk.poly.forEach((p,idx)=>{
       const cls='sk-vert'+(idx===0?' first':'')+(idx===sk.sel?' sel':'');
-      g+=`<circle class="${cls}" cx="${(p.x*ppf).toFixed(1)}" cy="${(p.y*ppf).toFixed(1)}" r="7" data-i="${idx}"/>`;
+      g+=`<circle class="${cls}" cx="${SX(p.x).toFixed(1)}" cy="${SY(p.y).toFixed(1)}" r="8" data-i="${idx}"/>`;
     });
     area = (sk.closed&&sk.poly.length>=3)?polyArea(sk.poly):0; perim=skPerimNow();
   }
@@ -1204,85 +1257,74 @@ function skDraw(){
   el('skToolQuarter').classList.toggle('on', sk.tool==='sector' && sk.sweep===90);
   el('skToolHalf').classList.toggle('on', sk.tool==='sector' && sk.sweep===180);
   el('skHint').textContent = sk.tool==='sector'
-    ? (sk.sector ? `${sk.sweep>=180?'Half':'Quarter'} circle drawn. Drag the centre to move, the edge dot to resize + rotate. "Use shape" applies it.`
+    ? (sk.sector ? `${sk.sweep>=180?'Half':'Quarter'} circle. Drag centre to move, edge dot to resize + rotate. Pinch/scroll to zoom.`
                  : `Press at the corner/centre and drag out to draw a ${sk.sweep>=180?'half':'quarter'} circle.`)
     : sk.tool==='circle'
-    ? (sk.circle ? 'Circle drawn. Drag the centre to move, the edge dot to resize. "Use shape" applies it.'
+    ? (sk.circle ? 'Circle drawn. Drag centre to move, edge dot to resize. Pinch or scroll to zoom.'
                  : 'Press and drag on the grid to draw a circle (centre → edge).')
-    : (sk.closed ? 'Shape closed. Drag any point to adjust, or Undo to reopen.'
-                 : (sk.poly.length>=3 ? 'Click the orange first point to close the shape, or keep adding points.'
-                                      : 'Click grid corners to trace the outline (each square = 1 ft).'));
-  el('skSvg').addEventListener('pointerdown', skPointerDown);
+    : (sk.closed ? 'Shape closed. Drag any point to adjust, Undo to reopen. Pinch/scroll to zoom.'
+                 : (sk.poly.length>=3 ? 'Tap the orange first point to close, or keep tapping corners.'
+                                      : 'Tap grid corners to trace the outline. Pinch or scroll to zoom.'));
+  const svg=el('skSvg');
+  svg.addEventListener('pointerdown', e=>pzDown(sk,e));
+  svg.addEventListener('wheel', e=>pzWheel(sk,e), {passive:false});
 }
-function skPointerDown(e){
-  if(sk.tool==='circle' || sk.tool==='sector'){
-    const h=(e.target && e.target.dataset)?e.target.dataset.h:null;
-    if(h==='c'){ sk.cDrag='center'; }
-    else if(h==='r'){ sk.cDrag='radius'; }
-    else { const c=skXY(e); if(sk.tool==='sector') sk.sector={cx:c.x, cy:c.y, r:0, a0:0}; else sk.circle={cx:c.x, cy:c.y, r:0}; sk.cDrag='radius'; }
-    window.addEventListener('pointermove', skPointerMove);
-    window.addEventListener('pointerup', skPointerUp);
-    e.preventDefault(); return;
-  }
-  const vi=(e.target && e.target.dataset && e.target.dataset.i!=null)?parseInt(e.target.dataset.i,10):-1;
-  if(vi>=0){
-    if(vi===0 && !sk.closed && sk.poly.length>=3){ sk.closed=true; sk.sel=-1; skDraw(); return; }
-    sk.sel=vi; sk.dragging=vi;
-    window.addEventListener('pointermove', skPointerMove);
-    window.addEventListener('pointerup', skPointerUp);
-    e.preventDefault(); skDraw(); return;
-  }
-  if(!sk.closed){ sk.poly.push(skXY(e)); sk.sel=sk.poly.length-1; skDraw(); }
-  else { sk.sel=-1; skDraw(); }
-}
-function skPointerMove(e){
-  if(sk.tool==='circle' && sk.cDrag && sk.circle){
-    if(sk.cDrag==='center'){ const p=skXY(e); sk.circle.cx=p.x; sk.circle.cy=p.y; }
-    else { const p=skXYraw(e); const d=Math.hypot(p.x-sk.circle.cx, p.y-sk.circle.cy); sk.circle.r=Math.max(0.5, Math.round(d/0.5)*0.5); }
-    e.preventDefault(); skDraw(); return;
-  }
-  if(sk.tool==='sector' && sk.cDrag && sk.sector){
-    if(sk.cDrag==='center'){ const p=skXY(e); sk.sector.cx=p.x; sk.sector.cy=p.y; }
-    else { // radius handle: sets radius AND rotation (handle sits at the arc bisector)
-      const p=skXYraw(e), dx=p.x-sk.sector.cx, dy=p.y-sk.sector.cy;
-      sk.sector.r=Math.max(0.5, Math.round(Math.hypot(dx,dy)/0.5)*0.5);
-      sk.sector.a0=Math.atan2(dy,dx) - (sk.sweep/2)*Math.PI/180;
-    }
-    e.preventDefault(); skDraw(); return;
-  }
-  if(sk.dragging<0) return; sk.poly[sk.dragging]=skXY(e); e.preventDefault(); skDraw();
-}
-function skPointerUp(){
-  sk.dragging=-1; sk.cDrag=null;
-  window.removeEventListener('pointermove', skPointerMove); window.removeEventListener('pointerup', skPointerUp);
-}
+const SK_HOOKS = {
+  redraw: skDraw,
+  hit: t=>{ if(t&&t.dataset){ if(t.dataset.h) return 'H:'+t.dataset.h; if(t.dataset.i!=null) return 'V:'+t.dataset.i; } return null; },
+  emptyDrag: (fx,fy)=>{
+    if(sk.tool==='circle'){ sk.circle={cx:Math.round(fx),cy:Math.round(fy),r:0}; sk._drawing='circle'; return 'DRAWc'; }
+    if(sk.tool==='sector'){ sk.sector={cx:Math.round(fx),cy:Math.round(fy),r:0,a0:0}; sk._drawing='sector'; return 'DRAWs'; }
+    return null;
+  },
+  dragStart: (h)=>{ if(typeof h==='string' && h.startsWith('V:')) sk.sel=parseInt(h.slice(2),10); },
+  dragMove: (h,fx,fy)=>{
+    if(h==='DRAWc' || (h==='H:r' && sk.tool==='circle')){ const c=sk.circle; c.r=Math.max(0.5,Math.round(Math.hypot(fx-c.cx,fy-c.cy)/0.5)*0.5); }
+    else if(h==='H:c' && sk.tool==='circle'){ sk.circle.cx=Math.round(fx); sk.circle.cy=Math.round(fy); }
+    else if(h==='DRAWs' || (h==='H:r' && sk.tool==='sector')){ const c=sk.sector; c.r=Math.max(0.5,Math.round(Math.hypot(fx-c.cx,fy-c.cy)/0.5)*0.5); c.a0=Math.atan2(fy-c.cy,fx-c.cx)-(sk.sweep/2)*Math.PI/180; }
+    else if(h==='H:c' && sk.tool==='sector'){ sk.sector.cx=Math.round(fx); sk.sector.cy=Math.round(fy); }
+    else if(typeof h==='string' && h.startsWith('V:')){ const i=parseInt(h.slice(2),10); sk.poly[i]={x:Math.round(fx),y:Math.round(fy)}; }
+  },
+  dragEnd: (h,moved)=>{
+    if(typeof h==='string' && h.startsWith('V:')){ const i=parseInt(h.slice(2),10); if(i===0 && !moved && !sk.closed && sk.poly.length>=3) sk.closed=true; }
+    if(h==='DRAWc' && sk.circle && sk.circle.r<0.5) sk.circle=null;
+    if(h==='DRAWs' && sk.sector && sk.sector.r<0.5) sk.sector=null;
+    sk._drawing=null;
+  },
+  tap: (fx,fy)=>{ if(sk.tool==='poly' && !sk.closed){ sk.poly.push({x:Math.round(fx),y:Math.round(fy)}); sk.sel=sk.poly.length-1; } },
+  cancelDrag: ()=>{ if(sk._drawing==='circle') sk.circle=null; if(sk._drawing==='sector') sk.sector=null; sk._drawing=null; }
+};
 
 /* ════════════════ Manual head-layout editor ════════════════ */
 
 const LO_ARCS = [{deg:90,label:'Q'},{deg:180,label:'H'},{deg:270,label:'T'},{deg:360,label:'F'}];
-const lo = { areaIndex:-1, family:'spray', heads:[], sel:-1, dragging:-1, rotating:false,
-             curNoz:'s12', curArc:180, spanFt:50, _ppf:12, origin:{x:0,y:0}, outline:null, centroid:{x:0,y:0} };
+const lo = { areaIndex:-1, family:'spray', heads:[], sel:-1, curNoz:'s12', curArc:180,
+             outline:null, centroid:{x:0,y:0}, svgId:'loSvg', bodyId:'loBody',
+             ppf:12, panX:0, panY:0, _w:0, _h:0 };
 
 function polyCentroid(poly){ let x=0,y=0; poly.forEach(p=>{x+=p.x;y+=p.y;}); return {x:x/poly.length, y:y/poly.length}; }
 
+function loContentBBox(){
+  const pts=(lo.outline||[{x:0,y:0},{x:40,y:30}]).concat(lo.heads.map(h=>({x:h.x,y:h.y})));
+  const bb=polyBBox(pts); const PAD=3;
+  return {minX:bb.minX-PAD, minY:bb.minY-PAD, maxX:bb.maxX+PAD, maxY:bb.maxY+PAD};
+}
 function openLayout(i){
   ensureArea(areas[i]);
   const a=areas[i];
   if(!loManualCapable(a.family)){ alert('Manual layout is for rotor, MP, or spray areas.'); return; }
-  lo.areaIndex=i; lo.family=a.family; lo.sel=-1; lo.dragging=-1; lo.rotating=false;
+  lo.areaIndex=i; lo.family=a.family; lo.sel=-1;
   const gm=geom(a);
-  if(gm.poly){ lo.origin={x:gm.bb.minX,y:gm.bb.minY}; lo.outline=gm.poly.map(p=>({x:p.x,y:p.y})); }
-  else { lo.origin={x:0,y:0}; lo.outline=[{x:0,y:0},{x:gm.L,y:0},{x:gm.L,y:gm.W},{x:0,y:gm.W}]; }
+  if(gm.poly){ lo.outline=gm.poly.map(p=>({x:p.x,y:p.y})); }
+  else { lo.outline=[{x:0,y:0},{x:gm.L,y:0},{x:gm.L,y:gm.W},{x:0,y:gm.W}]; }
   lo.centroid=polyCentroid(lo.outline);
   lo.heads = (a.layout==='manual' && Array.isArray(a.manualHeads)) ? a.manualHeads.map(m=>({x:m.x,y:m.y,noz:m.noz,arc:m.arc,dir:m.dir||0})) : [];
   lo.curNoz = a.family==='spray'?'s12' : a.family==='mp'?'mp2000':'b40';
   lo.curArc = 180;
-  const bb=polyBBox(lo.outline);
-  lo.spanFt=Math.max(20, Math.ceil((Math.max(bb.maxX,bb.maxY)+4)/5)*5);
-  el('loSpan').value=lo.spanFt;
+  pzInit(lo); lo._hooks=LO_HOOKS;
   buildPalette();
   el('loOverlay').hidden=false;
-  loDraw();
+  pzFit(lo, loContentBBox()); loDraw();
 }
 function buildPalette(){
   const nz=loNozzles(lo.family);
@@ -1291,6 +1333,8 @@ function buildPalette(){
 }
 function loSetNoz(v){ lo.curNoz=v; if(lo.sel>=0){ lo.heads[lo.sel].noz=v; } loDraw(); }
 function loSetArc(d){ lo.curArc=d; if(lo.sel>=0){ lo.heads[lo.sel].arc=d; } buildPalette(); loDraw(); }
+function loZoom(f){ pzZoomBtn(lo,f); }
+function loFit(){ pzFit(lo, loContentBBox()); loDraw(); }
 function loCancel(){ el('loOverlay').hidden=true; }
 function loClear(){ lo.heads=[]; lo.sel=-1; loDraw(); }
 function loDeleteSel(){ if(lo.sel>=0){ lo.heads.splice(lo.sel,1); lo.sel=-1; loDraw(); } }
@@ -1301,17 +1345,11 @@ function loUse(){
   el('loOverlay').hidden=true;
   render(); markDirty();
 }
-function loXYraw(e){ const svg=el('loSvg'); if(!svg) return {x:0,y:0}; const r=svg.getBoundingClientRect(), ppf=lo._ppf; return {x:(e.clientX-r.left)/ppf+lo.origin.x, y:(e.clientY-r.top)/ppf+lo.origin.y}; }
-function loXY(e){ const p=loXYraw(e); return {x:Math.round(p.x*2)/2, y:Math.round(p.y*2)/2}; }  // snap 0.5 ft
 function loDraw(){
-  const body=el('loBody');
-  const wpx=Math.max(body.clientWidth-2, 300);
-  const ppf=wpx/lo.spanFt; lo._ppf=ppf;
-  const hpx=lo.spanFt*ppf, cell=ppf;
-  const SX=x=>((x-lo.origin.x)*ppf), SY=y=>((y-lo.origin.y)*ppf);
-  let g=`<svg id="loSvg" width="${wpx.toFixed(0)}" height="${hpx.toFixed(0)}" viewBox="0 0 ${wpx.toFixed(0)} ${hpx.toFixed(0)}">`;
-  g+=`<defs><pattern id="loGrid" width="${cell}" height="${cell}" patternUnits="userSpaceOnUse"><path d="M ${cell} 0 L 0 0 0 ${cell}" fill="none" stroke="#e2e9e4" stroke-width="1"/></pattern></defs>`;
-  g+=`<rect width="${wpx.toFixed(0)}" height="${hpx.toFixed(0)}" fill="url(#loGrid)"/>`;
+  const body=el('loBody'); lo._w=Math.max(body.clientWidth-2,300); lo._h=Math.max(body.clientHeight-2,300);
+  const SX=x=>pzSX(lo,x), SY=y=>pzSY(lo,y), U=lo.ppf;
+  let g=`<svg id="loSvg" width="${lo._w}" height="${lo._h}" viewBox="0 0 ${lo._w} ${lo._h}" style="touch-action:none">`;
+  g+=pzGridSvg(lo);
   // area outline
   const OP=lo.outline.map(p=>`${SX(p.x).toFixed(1)},${SY(p.y).toFixed(1)}`).join(' ');
   g+=`<polygon points="${OP}" fill="#eef6ef" stroke="#bcd3bf" stroke-width="1.5"/>`;
@@ -1319,7 +1357,7 @@ function loDraw(){
   let totGpm=0;
   lo.heads.forEach((hd,idx)=>{
     const spec=loHeadSpec(lo.family, hd.noz, hd.arc); totGpm+=spec.gpm;
-    const cx=SX(hd.x), cy=SY(hd.y), rr=Math.max(spec.r*ppf,6);
+    const cx=SX(hd.x), cy=SY(hd.y), rr=Math.max(spec.r*U,6);
     const col=idx===lo.sel?'var(--z3)':'var(--green-d)';
     if(hd.arc>=360){
       g+=`<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${rr.toFixed(1)}" fill="var(--green)" fill-opacity="0.12" stroke="${col}" stroke-opacity="0.5" stroke-width="1"/>`;
@@ -1334,10 +1372,10 @@ function loDraw(){
     g+=`<circle class="lo-hd" cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${sel?6:4.5}" fill="${sel?'var(--z3)':'var(--green-d)'}" stroke="#fff" stroke-width="1.5" data-hi="${idx}"/>`;
     if(sel){
       const spec=loHeadSpec(lo.family, hd.noz, hd.arc);
-      const hd2=Math.min(spec.r*lo._ppf, 46);
+      const hd2=Math.min(spec.r*U, 46);
       const ax=cx+Math.cos(hd.dir)*hd2, ay=cy+Math.sin(hd.dir)*hd2;
       g+=`<line x1="${cx.toFixed(1)}" y1="${cy.toFixed(1)}" x2="${ax.toFixed(1)}" y2="${ay.toFixed(1)}" stroke="var(--z3)" stroke-width="1.5" stroke-dasharray="3 2"/>`;
-      g+=`<circle class="lo-aim" cx="${ax.toFixed(1)}" cy="${ay.toFixed(1)}" r="6" data-h="aim"/>`;
+      g+=`<circle class="lo-aim" cx="${ax.toFixed(1)}" cy="${ay.toFixed(1)}" r="7" data-h="aim"/>`;
     }
   });
   g+=`</svg>`;
@@ -1349,34 +1387,31 @@ function loDraw(){
   if(lo.sel>=0){ const hd=lo.heads[lo.sel]; const sp=loHeadSpec(lo.family,hd.noz,hd.arc); const al=(LO_ARCS.find(a=>a.deg===hd.arc)||{label:hd.arc}).label;
     el('loSelInfo').innerHTML=`Selected: <b>${esc(sp.label)} ${al}</b> · ${sp.r} ft · ${sp.gpm.toFixed(2)} GPM`; }
   else el('loSelInfo').textContent='';
-  el('loSvg').addEventListener('pointerdown', loPointerDown);
+  const svg=el('loSvg');
+  svg.addEventListener('pointerdown', e=>pzDown(lo,e));
+  svg.addEventListener('wheel', e=>pzWheel(lo,e), {passive:false});
 }
-function loPointerDown(e){
-  const t=e.target, ds=t&&t.dataset||{};
-  if(ds.h==='aim'){ lo.rotating=true; window.addEventListener('pointermove',loPointerMove); window.addEventListener('pointerup',loPointerUp); e.preventDefault(); return; }
-  if(ds.hi!=null){
-    lo.sel=parseInt(ds.hi,10); lo.dragging=lo.sel;
-    const hd=lo.heads[lo.sel]; lo.curNoz=hd.noz; lo.curArc=hd.arc; buildPalette();
-    window.addEventListener('pointermove',loPointerMove); window.addEventListener('pointerup',loPointerUp);
-    e.preventDefault(); loDraw(); return;
+const snapHalf=v=>Math.round(v*2)/2;
+const LO_HOOKS = {
+  redraw: loDraw,
+  hit: t=>{ if(t&&t.dataset){ if(t.dataset.h==='aim') return 'aim'; if(t.dataset.hi!=null) return 'H:'+t.dataset.hi; } return null; },
+  dragStart: (h)=>{ if(typeof h==='string' && h.startsWith('H:')){ lo.sel=parseInt(h.slice(2),10); const hd=lo.heads[lo.sel]; lo.curNoz=hd.noz; lo.curArc=hd.arc; buildPalette(); } },
+  dragMove: (h,fx,fy)=>{
+    if(h==='aim' && lo.sel>=0){ const hd=lo.heads[lo.sel]; hd.dir=Math.atan2(fy-hd.y, fx-hd.x); }
+    else if(typeof h==='string' && h.startsWith('H:')){ const i=parseInt(h.slice(2),10); lo.heads[i].x=snapHalf(fx); lo.heads[i].y=snapHalf(fy); }
+  },
+  tap: (fx,fy)=>{
+    const x=snapHalf(fx), y=snapHalf(fy);
+    const dir=Math.atan2(lo.centroid.y-y, lo.centroid.x-x);
+    lo.heads.push({x, y, noz:lo.curNoz, arc:lo.curArc, dir});
+    lo.sel=lo.heads.length-1;
   }
-  // empty → drop a new head facing the area centroid
-  const p=loXY(e);
-  const dir=Math.atan2(lo.centroid.y-p.y, lo.centroid.x-p.x);
-  lo.heads.push({x:p.x, y:p.y, noz:lo.curNoz, arc:lo.curArc, dir});
-  lo.sel=lo.heads.length-1; lo.dragging=lo.sel;
-  window.addEventListener('pointermove',loPointerMove); window.addEventListener('pointerup',loPointerUp);
-  e.preventDefault(); loDraw();
-}
-function loPointerMove(e){
-  if(lo.rotating && lo.sel>=0){ const hd=lo.heads[lo.sel]; const p=loXYraw(e); hd.dir=Math.atan2(p.y-hd.y, p.x-hd.x); e.preventDefault(); loDraw(); return; }
-  if(lo.dragging>=0){ const p=loXY(e); lo.heads[lo.dragging].x=p.x; lo.heads[lo.dragging].y=p.y; e.preventDefault(); loDraw(); }
-}
-function loPointerUp(){ lo.dragging=-1; lo.rotating=false; window.removeEventListener('pointermove',loPointerMove); window.removeEventListener('pointerup',loPointerUp); }
+};
 
 /* ════════════════ Tree placement editor ════════════════ */
 
-const tr = { areaIndex:-1, trees:[], sel:-1, dragging:-1, curType:'ring', curDia:4, spanFt:50, _ppf:12, origin:{x:0,y:0}, outline:null };
+const tr = { areaIndex:-1, trees:[], sel:-1, curType:'ring', curDia:4, outline:null,
+             svgId:'trSvg', bodyId:'trBody', ppf:12, panX:0, panY:0, _w:0, _h:0 };
 
 function trFlow(t){
   if(t.type==='rws') return 2*TREE_RWS_GPM_PER_UNIT;
@@ -1384,25 +1419,26 @@ function trFlow(t){
   const D=t.dia||TREE_RING_DEFAULT_DIA, loop=Math.PI*D+Math.PI*(D/2);
   return (loop/emitFt)*d.gph/60;
 }
+function trContentBBox(){
+  // Pad ~10ft around the shape so trees can be dropped OUTSIDE it too.
+  const PAD=10;
+  const pts=(tr.outline||[{x:0,y:0},{x:30,y:20}]).concat(tr.trees.map(t=>({x:t.x,y:t.y})));
+  const bb=polyBBox(pts);
+  return {minX:bb.minX-PAD, minY:bb.minY-PAD, maxX:bb.maxX+PAD, maxY:bb.maxY+PAD};
+}
 function openTrees(i){
   ensureArea(areas[i]); const a=areas[i];
-  tr.areaIndex=i; tr.sel=-1; tr.dragging=-1;
+  tr.areaIndex=i; tr.sel=-1;
   const gm=geom(a);
   if(gm.poly) tr.outline=gm.poly.map(p=>({x:p.x,y:p.y}));
   else if(a.mode==='custom') tr.outline=null;                               // custom, boundary not drawn yet
   else tr.outline=[{x:0,y:0},{x:gm.L,y:0},{x:gm.L,y:gm.W},{x:0,y:gm.W}];
   tr.trees = Array.isArray(a.trees)? a.trees.map(t=>({x:t.x,y:t.y,type:t.type||'ring',dia:t.dia||TREE_RING_DEFAULT_DIA})) : [];
   tr.curType='ring'; tr.curDia=TREE_RING_DEFAULT_DIA;
-  // Pad the canvas around the shape so trees can be dropped OUTSIDE it too.
-  const PAD=10;
-  const pts=(tr.outline||[{x:0,y:0},{x:gm.L||30,y:gm.W||20}]).concat(tr.trees.map(t=>({x:t.x,y:t.y})));
-  const bb=polyBBox(pts);
-  tr.origin={x:bb.minX-PAD, y:bb.minY-PAD};
-  tr.spanFt=Math.max(20, Math.ceil((Math.max(bb.maxX-bb.minX, bb.maxY-bb.minY)+2*PAD)/5)*5);
-  el('trSpan').value=tr.spanFt;
+  pzInit(tr); tr._hooks=TR_HOOKS;
   buildTrPalette();
   el('trOverlay').hidden=false;
-  trDraw();
+  pzFit(tr, trContentBBox()); trDraw();
 }
 function buildTrPalette(){
   el('trTypes').innerHTML=[['ring','Drip ring'],['rws','RWS unit']].map(([v,l])=>`<button type="button" class="${v===tr.curType?'on':''}" onclick="trSetType('${v}')">${l}</button>`).join('');
@@ -1411,6 +1447,8 @@ function buildTrPalette(){
 }
 function trSetType(t){ tr.curType=t; if(tr.sel>=0){ tr.trees[tr.sel].type=t; } buildTrPalette(); trDraw(); }
 function trSetDia(v){ tr.curDia=Math.max(1,parseFloat(v)||4); if(tr.sel>=0 && tr.trees[tr.sel].type==='ring'){ tr.trees[tr.sel].dia=tr.curDia; } trDraw(); }
+function trZoom(f){ pzZoomBtn(tr,f); }
+function trFit(){ pzFit(tr, trContentBBox()); trDraw(); }
 function trCancel(){ el('trOverlay').hidden=true; }
 function trClear(){ tr.trees=[]; tr.sel=-1; trDraw(); }
 function trDeleteSel(){ if(tr.sel>=0){ tr.trees.splice(tr.sel,1); tr.sel=-1; trDraw(); } }
@@ -1419,16 +1457,11 @@ function trUse(){
   a.trees=tr.trees.map(t=>({x:t.x,y:t.y,type:t.type,dia:t.dia}));
   el('trOverlay').hidden=true; render(); markDirty();
 }
-function trXYraw(e){ const svg=el('trSvg'); if(!svg) return {x:0,y:0}; const r=svg.getBoundingClientRect(), ppf=tr._ppf; return {x:(e.clientX-r.left)/ppf+tr.origin.x, y:(e.clientY-r.top)/ppf+tr.origin.y}; }
-function trXY(e){ const p=trXYraw(e); return {x:Math.round(p.x*2)/2, y:Math.round(p.y*2)/2}; }
 function trDraw(){
-  const body=el('trBody');
-  const wpx=Math.max(body.clientWidth-2,300); const ppf=wpx/tr.spanFt; tr._ppf=ppf;
-  const hpx=tr.spanFt*ppf, cell=ppf;
-  const SX=x=>((x-tr.origin.x)*ppf), SY=y=>((y-tr.origin.y)*ppf);
-  let g=`<svg id="trSvg" width="${wpx.toFixed(0)}" height="${hpx.toFixed(0)}" viewBox="0 0 ${wpx.toFixed(0)} ${hpx.toFixed(0)}">`;
-  g+=`<defs><pattern id="trGrid" width="${cell}" height="${cell}" patternUnits="userSpaceOnUse"><path d="M ${cell} 0 L 0 0 0 ${cell}" fill="none" stroke="#e2e9e4" stroke-width="1"/></pattern></defs>`;
-  g+=`<rect width="${wpx.toFixed(0)}" height="${hpx.toFixed(0)}" fill="url(#trGrid)"/>`;
+  const body=el('trBody'); tr._w=Math.max(body.clientWidth-2,300); tr._h=Math.max(body.clientHeight-2,300);
+  const SX=x=>pzSX(tr,x), SY=y=>pzSY(tr,y), ppf=tr.ppf;
+  let g=`<svg id="trSvg" width="${tr._w}" height="${tr._h}" viewBox="0 0 ${tr._w} ${tr._h}" style="touch-action:none">`;
+  g+=pzGridSvg(tr);
   if(tr.outline){ const OP=tr.outline.map(p=>`${SX(p.x).toFixed(1)},${SY(p.y).toFixed(1)}`).join(' '); g+=`<polygon points="${OP}" fill="#eef6ef" stroke="#bcd3bf" stroke-width="1.5"/>`; }
   let totGpm=0;
   tr.trees.forEach((t,idx)=>{
@@ -1451,19 +1484,17 @@ function trDraw(){
   el('trCount').textContent=tr.trees.length; el('trGpm').textContent=totGpm.toFixed(1); el('trZones').textContent=zones;
   if(tr.sel>=0){ const t=tr.trees[tr.sel]; el('trSelInfo').innerHTML= t.type==='rws' ? `Selected: <b>RWS</b> · 2 units · ${(2*TREE_RWS_GPM_PER_UNIT).toFixed(1)} GPM` : `Selected: <b>drip ring</b> · ${t.dia} ft dia · ${trFlow(t).toFixed(2)} GPM`; }
   else el('trSelInfo').textContent='';
-  el('trSvg').addEventListener('pointerdown', trPointerDown);
+  const svg=el('trSvg');
+  svg.addEventListener('pointerdown', e=>pzDown(tr,e));
+  svg.addEventListener('wheel', e=>pzWheel(tr,e), {passive:false});
 }
-function trPointerDown(e){
-  const ti=(e.target && e.target.dataset && e.target.dataset.ti!=null)?parseInt(e.target.dataset.ti,10):-1;
-  if(ti>=0){ tr.sel=ti; tr.dragging=ti; const t=tr.trees[ti]; tr.curType=t.type; if(t.type==='ring') tr.curDia=t.dia; buildTrPalette();
-    window.addEventListener('pointermove',trPointerMove); window.addEventListener('pointerup',trPointerUp); e.preventDefault(); trDraw(); return; }
-  const p=trXY(e);
-  tr.trees.push({x:p.x, y:p.y, type:tr.curType, dia:tr.curDia});
-  tr.sel=tr.trees.length-1; tr.dragging=tr.sel;
-  window.addEventListener('pointermove',trPointerMove); window.addEventListener('pointerup',trPointerUp); e.preventDefault(); trDraw();
-}
-function trPointerMove(e){ if(tr.dragging<0) return; const p=trXY(e); tr.trees[tr.dragging].x=p.x; tr.trees[tr.dragging].y=p.y; e.preventDefault(); trDraw(); }
-function trPointerUp(){ tr.dragging=-1; window.removeEventListener('pointermove',trPointerMove); window.removeEventListener('pointerup',trPointerUp); }
+const TR_HOOKS = {
+  redraw: trDraw,
+  hit: t=>{ if(t&&t.dataset&&t.dataset.ti!=null) return parseInt(t.dataset.ti,10); return null; },
+  dragStart: (h)=>{ tr.sel=h; const t=tr.trees[h]; tr.curType=t.type; if(t.type==='ring') tr.curDia=t.dia; buildTrPalette(); },
+  dragMove: (h,fx,fy)=>{ tr.trees[h].x=snapHalf(fx); tr.trees[h].y=snapHalf(fy); },
+  tap: (fx,fy)=>{ tr.trees.push({x:snapHalf(fx), y:snapHalf(fy), type:tr.curType, dia:tr.curDia}); tr.sel=tr.trees.length-1; }
+};
 
 /* ════════════════ Extras — valves, pipe/wire, timing ════════════════ */
 
@@ -1971,14 +2002,10 @@ async function initApp(){
     el(id).addEventListener('change', ()=>{ compute(); markDirty(); });
   });
   el('supply').addEventListener('change', markDirty);
-  // Sketch tool: grid-span rescale + Escape to cancel.
-  el('skSpan').addEventListener('input', ()=>{ sk.spanFt=Math.max(10, parseFloat(el('skSpan').value)||50); skDraw(); });
-  // Layout tool: nozzle select, grid-span, Escape.
+  // Layout tool: nozzle select.
   el('loNoz').addEventListener('change', e=>loSetNoz(e.target.value));
-  el('loSpan').addEventListener('input', ()=>{ lo.spanFt=Math.max(10, parseFloat(el('loSpan').value)||50); loDraw(); });
-  // Tree tool: ring-dia, grid-span.
+  // Tree tool: ring-dia.
   el('trDia').addEventListener('input', e=>trSetDia(e.target.value));
-  el('trSpan').addEventListener('input', ()=>{ tr.spanFt=Math.max(10, parseFloat(el('trSpan').value)||50); trDraw(); });
   window.addEventListener('keydown', (e)=>{
     if(e.key==='Escape'){ if(!el('skOverlay').hidden) skCancel(); else if(!el('loOverlay').hidden) loCancel(); else if(!el('trOverlay').hidden) trCancel(); }
     if((e.key==='Delete'||e.key==='Backspace')){ if(!el('loOverlay').hidden && lo.sel>=0){ e.preventDefault(); loDeleteSel(); } else if(!el('trOverlay').hidden && tr.sel>=0){ e.preventDefault(); trDeleteSel(); } }
