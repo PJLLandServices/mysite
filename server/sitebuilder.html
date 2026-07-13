@@ -346,7 +346,7 @@
       <span class="saved" id="quoteGenNote" style="font-size:12px;color:var(--muted);align-self:center"></span>
     </div>
     <div class="hint" id="mlGenNote" style="min-height:0"></div>
-    <div class="hint"><b>Generate customer quote</b> builds a <b>Quote</b> (Q-…) — scope, controller, and a line per zone at your standard prices (all editable in the proposal builder) — and refreshes the project's <b>Material List</b> at the same time. Both need the design attached to a project.</div>
+    <div class="hint"><b>Generate customer quote</b> builds a <b>Quote</b> (Q-…) — scope, controller, and a line per zone at your standard prices (all editable in the proposal builder) — and refreshes the project's <b>Material List</b> at the same time. The quote stays <b>linked</b>: once it exists, every <b>Save to project</b> re-syncs it — zone names and added/removed zones flow through, and <b>any prices you edited are kept</b>. A sent quote is never overwritten. Both need the design attached to a project.</div>
   </div>
 
 </div>
@@ -2008,43 +2008,94 @@ const INSTALL_PRICING = {
   baseByZones(n){ return n<=4?585:749; },                // new_install tier base (w/ mainline); 8+ uses t2, edit in quote
   controllerByZones(n){ return n<=4?595 : n<=7?750 : 1195; }  // Hydrawise controller tiers
 };
-// Transform the design into a customer Quote (project_proposal) + keep the
-// material list in step. Seeds scope + per-zone line items, all editable in
-// the proposal builder.
+// Transform the design into a customer Quote (project_proposal). PERSISTENT
+// link (linkedQuoteId, saved in the design): re-generating UPDATES the same
+// draft quote — zone labels sync, zones add/remove — and PRESERVES any prices
+// you edited + any lines you added by hand. A sent/locked quote is never
+// overwritten.
+let linkedQuoteId = null;
+
+function desiredQuoteLines(){
+  const zones=[];
+  LAST_PLANS.filter(x=>!x.plan.noShape).forEach(({area,plan})=>{ for(let k=0;k<plan.zones;k++) zones.push(area.name||'Area'); });
+  const N=zones.length;
+  const desired=[
+    {kind:'mainline', label:'Sprinkler system — new mainline installed, complete with Hunter Hydrawise flow-meter technology', price:INSTALL_PRICING.baseByZones(N)},
+    {kind:'controller', label:`Smart controller — Hunter Hydrawise, sized for ${N} zone${N>1?'s':''}`, price:INSTALL_PRICING.controllerByZones(N)}
+  ];
+  zones.forEach((nm,i)=>desired.push({kind:'zone', num:i+1, label:`Zone ${i+1} — ${nm}`, price:INSTALL_PRICING.perZone}));
+  return {desired, N, areaNames:[...new Set(zones)].join(', ')};
+}
+function classifyQuoteLine(l){
+  const m=/^Zone\s+(\d+)\b/i.exec(l.label||''); if(m) return {t:'zone', num:+m[1]};
+  if(/mainline/i.test(l.label||'')) return {t:'mainline'};
+  if(/controller/i.test(l.label||'')) return {t:'controller'};
+  return {t:'custom'};
+}
+// Merge desired SB lines over the quote's existing lines: keep price/id of a
+// matched line + update its label; add new zones; drop removed zones; leave
+// manually-added (non-SB) lines untouched.
+function mergeQuoteLines(existing, desired){
+  const ex={mainline:null, controller:null, zones:{}, custom:[]};
+  (existing||[]).forEach(l=>{ const c=classifyQuoteLine(l); if(c.t==='zone') ex.zones[c.num]=l; else if(c.t==='mainline') ex.mainline=l; else if(c.t==='controller') ex.controller=l; else ex.custom.push(l); });
+  const keep=(prev,d)=> prev ? Object.assign({}, prev, {label:d.label}) : {source:'custom', label:d.label, qty:1, price:d.price};
+  const out=[];
+  desired.forEach(d=>{ out.push(d.kind==='mainline'?keep(ex.mainline,d):d.kind==='controller'?keep(ex.controller,d):keep(ex.zones[d.num],d)); });
+  ex.custom.forEach(l=>out.push(l));
+  return out;
+}
+function quoteSections(N, areaNames){
+  return [
+    {kind:'cover_summary', title:'Your new irrigation system', order:1, body:`A fully automatic, water-efficient sprinkler system for your property — ${N} independently controlled watering zone${N>1?'s':''} covering ${areaNames||'the property'}, installed on a new dedicated mainline with Hunter Hydrawise smart control and flow-meter technology for leak detection and weather-based watering.`},
+    {kind:'proposed_scope', title:'Scope of work', order:2, body:`• Supply & install a new irrigation mainline, complete with a Hydrawise flow-meter for leak / flow monitoring.\n• Install and program a Hunter Hydrawise smart controller sized for ${N} zone${N>1?'s':''}.\n• Build ${N} watering zone${N>1?'s':''} — ${areaNames||'the property'} — each on its own valve for independent scheduling.\n• Pressure-test, commission and walk the system through with you.`},
+    {kind:'line_items', title:'Investment', order:3, body:''},
+    {kind:'custom', title:'Additional notes & costs', order:4, body:'Site-specific work, optional upgrades, or add-ons will be itemised here.'},
+    {kind:'acceptance_block', title:'Acceptance', order:5, body:''}
+  ];
+}
+// Create the quote (first time) or update the linked draft in place.
+async function syncQuoteFromDesign(){
+  compute();
+  const {desired, N, areaNames}=desiredQuoteLines();
+  if(!N) return {action:'none'};
+  if(linkedQuoteId){
+    const gr=await fetch('/api/admin/quote-folder?id='+encodeURIComponent(linkedQuoteId),{cache:'no-store'});
+    const q = gr.ok ? (((await gr.json().catch(()=>({}))).quotes)||[]).find(x=>x.id===linkedQuoteId) : null;
+    if(q && q.status==='draft'){
+      const merged=mergeQuoteLines(q.lineItems||[], desired);
+      const pr=await fetch('/api/quotes/'+encodeURIComponent(linkedQuoteId)+'/proposal',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({lineItems:merged})});
+      const pj=await pr.json().catch(()=>({})); if(!pr.ok||!pj.ok) throw new Error((pj.errors&&pj.errors[0])||('update HTTP '+pr.status));
+      return {id:linkedQuoteId, action:'updated', N, total:pj.quote&&pj.quote.total};
+    }
+    if(q && q.status!=='draft') return {id:linkedQuoteId, action:'locked', status:q.status};
+    linkedQuoteId=null;                                  // gone/deleted → recreate
+  }
+  const cr=await fetch('/api/quotes/proposal',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({customerEmail:linkedProject.customerEmail||'', propertyId:linkedProject.propertyId||null, branch:'direct_residential', billingMode:'fixed_price', scope:`New irrigation system — ${N} zone${N>1?'s':''}: ${areaNames}`})});
+  if(cr.status===403){ const e=new Error('needs admin'); e.code=403; throw e; }
+  const cj=await cr.json().catch(()=>({})); if(!cr.ok||!cj.ok) throw new Error((cj.errors&&cj.errors[0])||('create HTTP '+cr.status));
+  const qid=cj.quote.id;
+  const li=desired.map(d=>({source:'custom', label:d.label, qty:1, price:d.price}));
+  const pr=await fetch('/api/quotes/'+encodeURIComponent(qid)+'/proposal',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({proposalSections:quoteSections(N,areaNames), lineItems:li})});
+  const pj=await pr.json().catch(()=>({})); if(!pr.ok||!pj.ok) throw new Error((pj.errors&&pj.errors[0])||('seed HTTP '+pr.status));
+  linkedQuoteId=qid;
+  return {id:qid, action:'created', N, total:pj.quote&&pj.quote.total};
+}
+async function persistDesignQuiet(){
+  if(!linkedProject) return;
+  try{ await fetch('/api/projects/'+encodeURIComponent(linkedProject.id),{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({systemDesign:serializeState()})}); }catch(_){}
+}
 async function generateQuote(){
   if(!linkedProject){ alert('Attach this design to a project first (Project section at the top).'); return; }
   const note=el('quoteGenNote'); note.textContent='Working…';
   try{
     await generateMaterialList();                        // both lists move together
-    compute();
-    const zones=[];
-    LAST_PLANS.filter(x=>!x.plan.noShape).forEach(({area,plan})=>{ for(let k=0;k<plan.zones;k++) zones.push(area.name||'Area'); });
-    const N=zones.length;
-    if(!N){ note.textContent='No zones yet — add areas first.'; return; }
-    const areaNames=[...new Set(zones)].join(', ');
-    const li=[
-      {source:'custom', label:'Sprinkler system — new mainline installed, complete with Hunter Hydrawise flow-meter technology', qty:1, price:INSTALL_PRICING.baseByZones(N)},
-      {source:'custom', label:`Smart controller — Hunter Hydrawise, sized for ${N} zone${N>1?'s':''}`, qty:1, price:INSTALL_PRICING.controllerByZones(N)}
-    ];
-    zones.forEach((nm,i)=>{ li.push({source:'custom', label:`Zone ${i+1} — ${nm}`, qty:1, price:INSTALL_PRICING.perZone}); });
-    const sections=[
-      {kind:'cover_summary', title:'Your new irrigation system', order:1, body:`A fully automatic, water-efficient sprinkler system for your property — ${N} independently controlled watering zone${N>1?'s':''} covering ${areaNames||'the property'}, installed on a new dedicated mainline with Hunter Hydrawise smart control and flow-meter technology for leak detection and weather-based watering.`},
-      {kind:'proposed_scope', title:'Scope of work', order:2, body:`• Supply & install a new irrigation mainline, complete with a Hydrawise flow-meter for leak / flow monitoring.\n• Install and program a Hunter Hydrawise smart controller sized for ${N} zone${N>1?'s':''}.\n• Build ${N} watering zone${N>1?'s':''} — ${areaNames||'the property'} — each on its own valve for independent scheduling.\n• Pressure-test, commission and walk the system through with you.`},
-      {kind:'line_items', title:'Investment', order:3, body:''},
-      {kind:'custom', title:'Additional notes & costs', order:4, body:'Site-specific work, optional upgrades, or add-ons will be itemised here.'},
-      {kind:'acceptance_block', title:'Acceptance', order:5, body:''}
-    ];
-    const cr=await fetch('/api/quotes/proposal',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({customerEmail:linkedProject.customerEmail||'', propertyId:linkedProject.propertyId||null, branch:'direct_residential', billingMode:'fixed_price', scope:`New irrigation system — ${N} zone${N>1?'s':''}: ${areaNames}`})});
-    if(cr.status===403){ note.textContent='Quote creation needs an admin login (you\'re signed in as tech).'; return; }
-    const cj=await cr.json().catch(()=>({}));
-    if(!cr.ok||!cj.ok) throw new Error((cj.errors&&cj.errors[0])||('HTTP '+cr.status));
-    const qid=cj.quote.id;
-    const pr=await fetch('/api/quotes/'+encodeURIComponent(qid)+'/proposal',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({proposalSections:sections, lineItems:li})});
-    const pj=await pr.json().catch(()=>({}));
-    if(!pr.ok||!pj.ok) throw new Error((pj.errors&&pj.errors[0])||('seed HTTP '+pr.status));
-    const total=pj.quote&&pj.quote.total;
-    note.innerHTML=`✓ Created <a href="/admin/quote/${encodeURIComponent(qid)}/proposal" target="_blank">${esc(qid)}</a> — ${N} zone${N>1?'s':''}, ${li.length} lines${total?`, $${Number(total).toLocaleString()}`:''}. Set final prices in the proposal builder.`;
-  }catch(e){ note.textContent='Failed: '+e.message; }
+    const r=await syncQuoteFromDesign();
+    if(r.action==='none'){ note.textContent='No zones yet — add areas first.'; return; }
+    if(r.action==='locked'){ note.innerHTML=`Quote <a href="/admin/quote/${encodeURIComponent(r.id)}/proposal" target="_blank">${esc(r.id)}</a> is already <b>${esc(r.status)}</b> — not overwritten (create a revision to re-price).`; return; }
+    await persistDesignQuiet();                          // remember the link across reloads
+    const verb=r.action==='updated'?'Updated':'Created';
+    note.innerHTML=`✓ ${verb} <a href="/admin/quote/${encodeURIComponent(r.id)}/proposal" target="_blank">${esc(r.id)}</a> — ${r.N} zone${r.N>1?'s':''}${r.total?`, $${Number(r.total).toLocaleString()}`:''}. ${r.action==='updated'?'Zone names synced; your edited prices kept.':'Set final prices in the proposal builder.'}`;
+  }catch(e){ if(e.code===403){ note.textContent='Quote creation needs an admin login (you\'re signed in as tech).'; return; } note.textContent='Failed: '+e.message; }
 }
 
 function wireBom(){
@@ -2454,6 +2505,7 @@ function serializeState(){
     inputs,
     waterSupply: readWaterSupply(),
     bomOverrides: JSON.parse(JSON.stringify(bomOverrides)),
+    linkedQuoteId: linkedQuoteId || null,
     areas: JSON.parse(JSON.stringify(areas)),
     wcRunOverrides: JSON.parse(JSON.stringify(wcRunOverrides))
   };
@@ -2473,6 +2525,7 @@ function restoreState(blob){
       }
     }
     applyWaterSupply(blob.waterSupply);
+    linkedQuoteId = (typeof blob.linkedQuoteId==='string' && blob.linkedQuoteId) ? blob.linkedQuoteId : null;
     bomOverrides = (blob.bomOverrides && typeof blob.bomOverrides==='object')
       ? {edits:blob.bomOverrides.edits||{}, removed:blob.bomOverrides.removed||{}, custom:Array.isArray(blob.bomOverrides.custom)?blob.bomOverrides.custom:[]}
       : {edits:{},removed:{},custom:[]};
@@ -2542,6 +2595,18 @@ async function saveDesign(){
     if(res.ok && j.ok){
       dirty = false;
       lastSavedLabel = fmtSaved(blob.savedAt) || 'just now';
+      // Keep a linked quote + material list in step on every save (no extra
+      // push). Only touches an already-linked DRAFT quote; never auto-creates.
+      if(linkedQuoteId){
+        try{
+          await generateMaterialList();
+          const r=await syncQuoteFromDesign();
+          const qn=el('quoteGenNote');
+          if(qn && r && r.id) qn.innerHTML = (r.action==='locked')
+            ? `Quote <a href="/admin/quote/${encodeURIComponent(r.id)}/proposal" target="_blank">${esc(r.id)}</a> is <b>${esc(r.status)}</b> — not auto-updated.`
+            : `✓ Synced quote <a href="/admin/quote/${encodeURIComponent(r.id)}/proposal" target="_blank">${esc(r.id)}</a> on save — your edited prices kept.`;
+        }catch(_){ /* sync is best-effort; save already succeeded */ }
+      }
     } else {
       alert('Save failed: ' + ((j.errors && j.errors[0]) || ('HTTP ' + res.status)));
     }
