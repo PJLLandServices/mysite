@@ -340,6 +340,11 @@
     </div>
     <div class="grand" id="bomGrand" style="margin-top:14px"></div>
     <div class="hint" id="bomNote"></div>
+    <div class="btnrow" style="margin-top:12px">
+      <button class="ghost" onclick="generateMaterialList()">Generate / update material list</button>
+      <span class="saved" id="mlGenNote" style="font-size:12px;color:var(--muted);align-self:center"></span>
+    </div>
+    <div class="hint">Pushes these parts onto the project's <b>Material List</b> (drives POs). A draft list is updated in place; a list that's already been ordered from is left alone and a new one is created.</div>
   </div>
 
 </div>
@@ -1910,6 +1915,50 @@ function bomAddLine(){
   bomOverrides.custom.push({sku,qty}); markDirty(); renderBOM();
 }
 function resetBom(){ bomOverrides={edits:{},removed:{},custom:[]}; markDirty(); renderBOM(); }
+
+// Final BOM lines after overrides → {catalog:[{sku,qty}], nonCatalog:[{label,qty}]}.
+function bomFinalLines(parts){
+  const {lines:autoLines}=buildBOM(parts);
+  const bySku={}, nonCatalog=[];
+  autoLines.forEach(l=>{
+    if(l.sku==='-'){ nonCatalog.push({label:l.desc, qty:l.qty}); return; }
+    if(bomOverrides.removed[l.sku]) return;
+    const ed=bomOverrides.edits[l.sku]||{};
+    const sku=ed.sku||l.sku;
+    const qty=(ed.qty!=null && ed.qty!=='')?Math.max(0,parseInt(ed.qty,10)||0):l.qty;
+    if(sku && qty>0) bySku[sku]=(bySku[sku]||0)+qty;
+  });
+  bomOverrides.custom.forEach(c=>{ if(c.sku && c.qty>0) bySku[c.sku]=(bySku[c.sku]||0)+c.qty; });
+  return { catalog:Object.entries(bySku).map(([sku,qty])=>({sku,qty})), nonCatalog };
+}
+// Push the BOM onto the project's Material List (draft → update in place; a
+// purchased list is never clobbered — a new list is made instead).
+async function generateMaterialList(){
+  if(!linkedProject){ alert('Attach this design to a project first (Project section at the top).'); return; }
+  const parts=await loadParts();
+  const {catalog, nonCatalog}=bomFinalLines(parts);
+  if(!catalog.length){ alert('No catalog materials yet — add areas first.'); return; }
+  const note=el('mlGenNote'); note.textContent='Working…';
+  const notes='Generated from the System Builder design — '+new Date().toLocaleString()
+    + (nonCatalog.length ? '\n\nNot-stocked / design-only items (price + order separately):\n'+nonCatalog.map(n=>`- ${n.qty}× ${n.label}`).join('\n') : '');
+  try{
+    const gr=await fetch('/api/material-lists?parentType=project&parentId='+encodeURIComponent(linkedProject.id));
+    const gj=await gr.json().catch(()=>({}));
+    const lists=(gj.lists||[]).filter(l=>l.status!=='archived');
+    const draft=lists.find(l=>l.status==='draft');
+    let id, verb;
+    if(draft){
+      const pr=await fetch('/api/material-lists/'+encodeURIComponent(draft.id),{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({lineItems:catalog, notes})});
+      const pj=await pr.json().catch(()=>({})); if(!pr.ok||!pj.ok) throw new Error((pj.errors&&pj.errors[0])||('HTTP '+pr.status));
+      id=draft.id; verb='Updated';
+    } else {
+      const cr=await fetch('/api/material-lists',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:((linkedProject.name||'Design')+' — materials'), parentType:'project', parentId:linkedProject.id, customerName:linkedProject.customerName||'', lineItems:catalog, notes})});
+      const cj=await cr.json().catch(()=>({})); if(!cr.ok||!cj.ok) throw new Error((cj.errors&&cj.errors[0])||('HTTP '+cr.status));
+      id=cj.list.id; verb=(lists.length?'Created new':'Created');
+    }
+    note.innerHTML=`✓ ${verb} <a href="/admin/material-list/${encodeURIComponent(id)}" target="_blank">${esc(id)}</a> — ${catalog.length} line${catalog.length>1?'s':''}${nonCatalog.length?` (+${nonCatalog.length} not-stocked → notes)`:''}.`;
+  }catch(e){ note.textContent='Failed: '+e.message; }
+}
 function wireBom(){
   const tb=el('bomTable'); if(!tb || tb._wired) return; tb._wired=true;
   tb.addEventListener('change', e=>{
