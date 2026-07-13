@@ -169,7 +169,8 @@ const SCOPE_PROTECTED_FIELDS = [
   "hst",
   "total",
   "type",
-  "pdfOptions"
+  "pdfOptions",
+  "quoteNumberDisplay"
 ];
 
 const DEFAULT_VALIDITY_DAYS = 30;
@@ -383,6 +384,13 @@ function blankQuote() {
       showProjectMap: true
     },
 
+    // quoteNumberDisplay — an OPTIONAL override for the number shown in the
+    // PDF header (e.g. a GC's own PO number). Empty = show the internal id.
+    // The internal `id` is never changed — it's the stable key for the
+    // frozen PDF file, /approve links, QuickBooks, and history. Presentation
+    // only; draft-editable, frozen with the PDF at send (Brief B).
+    quoteNumberDisplay: "",
+
     // attachments — uploaded static media (Google Earth screenshots, CAD
     // drawings, manufacturer schematics). Files live on disk under
     // server/data/quote-attachments/<quoteId>/<attId>.<ext>; this array
@@ -479,6 +487,7 @@ function hydrate(q) {
     // carry all three pdfOptions keys (Brief D). The renderer also treats a
     // missing/odd value as the itemized default, belt-and-suspenders.
     pdfOptions: { ...base.pdfOptions, ...(q?.pdfOptions && typeof q.pdfOptions === "object" ? q.pdfOptions : {}) },
+    quoteNumberDisplay: typeof q?.quoteNumberDisplay === "string" ? q.quoteNumberDisplay : "",
     customRates: { ...base.customRates, ...(q?.customRates || {}) },
     acceptanceMethod: typeof q?.acceptanceMethod === "string" ? q.acceptanceMethod : "pending",
     acceptanceEvidence: q?.acceptanceEvidence || null,
@@ -912,6 +921,12 @@ async function updateProposal(id, patch = {}, { by = "admin", note = "" } = {}) 
     // lineItems enum value and ignores any showTotals flag. This never
     // touches lineItems[], the totals math, QB, or the invoice.
     q.pdfOptions = normalizePdfOptions(patch.pdfOptions);
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "quoteNumberDisplay")) {
+    // Optional PDF-header number override — never changes the internal id.
+    // Strip control chars and cap at 40 so it can't overflow the header.
+    q.quoteNumberDisplay = String(patch.quoteNumberDisplay == null ? "" : patch.quoteNumberDisplay)
+      .replace(/[\u0000-\u001F\u007F]+/g, " ").trim().slice(0, 40);
   }
   if (Array.isArray(patch.proposalSections)) {
     const existingSections = Array.isArray(q.proposalSections) ? q.proposalSections : [];

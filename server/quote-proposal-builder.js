@@ -37,6 +37,7 @@
     customerEmail: $("pbCustomerEmail"),
     labourRate: $("pbLabourRate"),
     validUntil: $("pbValidUntil"),
+    quoteNumber: $("pbQuoteNumber"),
     scope: $("pbScope"),
     sectionList: $("pbSectionList"),
     addSection: $("pbAddSection"),
@@ -118,7 +119,8 @@
         customRates,
         proposalSections: q.proposalSections,
         lineItems: q.lineItems,
-        pdfOptions: q.pdfOptions
+        pdfOptions: q.pdfOptions,
+        quoteNumberDisplay: el.quoteNumber.value.trim()
       };
       const r = await fetch(`/api/quotes/${encodeURIComponent(q.id)}/proposal`, {
         method: "PATCH",
@@ -182,6 +184,7 @@
     if (q.validUntil) {
       el.validUntil.value = String(q.validUntil).slice(0, 10);
     }
+    el.quoteNumber.value = q.quoteNumberDisplay || "";
     el.scope.value = q.scope || "";
 
     // PDF display options (Brief D). Missing → itemized/true/true.
@@ -195,7 +198,7 @@
     // Lock UI when not in draft.
     const locked = q.status !== "draft";
     [el.branch, el.billingMode, el.customerEmail, el.labourRate, el.validUntil,
-     el.scope, el.sectionTitle, el.sectionBody, el.uploadInput,
+     el.quoteNumber, el.scope, el.sectionTitle, el.sectionBody, el.uploadInput,
      el.linePicker, el.customLine, el.anchorPicker, el.addSection,
      el.showAttachments, el.showProjectMap]
       .forEach((node) => { if (node) node.disabled = locked; });
@@ -815,7 +818,7 @@
   [el.branch, el.billingMode].forEach((node) => {
     node.addEventListener("change", markDirty);
   });
-  [el.customerEmail, el.labourRate, el.validUntil, el.scope].forEach((node) => {
+  [el.customerEmail, el.labourRate, el.validUntil, el.quoteNumber, el.scope].forEach((node) => {
     node.addEventListener("input", markDirty);
   });
 

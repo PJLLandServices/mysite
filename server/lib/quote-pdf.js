@@ -165,7 +165,7 @@ function generateQuotePdf(quote, opts = {}) {
   // ---- Header (shared layout — see renderPdfHeader) -------------------
   doc.y = renderPdfHeader(doc, {
     title: "QUOTE",
-    idText: quote.id,
+    idText: (quote.quoteNumberDisplay && String(quote.quoteNumberDisplay).trim()) || quote.id,
     issuedLine: `Issued ${fmtDate(quote.createdAt)}${quote.validUntil ? ` · Valid through ${fmtDate(quote.validUntil)}` : ""}`
   });
   doc.x = 60;
@@ -435,10 +435,15 @@ function renderProjectProposalPdf(quote, opts = {}) {
   // ---- Cover page header (shared layout — see renderPdfHeader) -------
   const branchLabel = quote.branch ? BRANCH_LABELS[quote.branch] || quote.branch : "";
   const versionTag = (Number(quote.version) || 1) > 1 ? ` · v${quote.version}` : "";
+  // Optional display-number override — shows YOUR number in the header while
+  // the internal quote.id stays the stable key (frozen PDF, links, QB).
+  const displayId = (quote.quoteNumberDisplay && String(quote.quoteNumberDisplay).trim())
+    ? String(quote.quoteNumberDisplay).trim()
+    : `${quote.id}${versionTag}`;
   let y = renderPdfHeader(doc, {
     title: "PROPOSAL",
     eyebrow: branchLabel ? branchLabel.toUpperCase() : "",
-    idText: `${quote.id}${versionTag}`,
+    idText: displayId,
     issuedLine: `Issued ${fmtDate(quote.createdAt)}${quote.validUntil ? `  ·  Valid through ${fmtDate(quote.validUntil)}` : ""}`
   });
   doc.fillColor(PJL_MUTED).fontSize(9).font("Helvetica-Bold")
@@ -488,8 +493,20 @@ function renderProjectProposalPdf(quote, opts = {}) {
   }
 
   // ---- Line items + totals -----------------------------------------
+  // The pricing heading tracks the display mode: itemized keeps "ITEMIZED
+  // PRICING" (byte-unchanged), descriptions_only → "PROJECT COST", the
+  // lump-sum summary → "PROJECT PRICE".
+  const PRICING_HEADINGS = {
+    itemized: "ITEMIZED PRICING",
+    descriptions_only: "PROJECT COST",
+    summary: "PROJECT PRICE"
+  };
   doc.moveDown(1);
-  renderProposalLineItems(doc, quote, { MARGIN_X, contentWidth, mode: pdfOpts.lineItems });
+  renderProposalLineItems(doc, quote, {
+    MARGIN_X, contentWidth,
+    mode: pdfOpts.lineItems,
+    heading: PRICING_HEADINGS[pdfOpts.lineItems] || "ITEMIZED PRICING"
+  });
 
   // ---- Acceptance block --------------------------------------------
   doc.moveDown(1.2);
@@ -1142,7 +1159,7 @@ function renderSmartControllerPdf(quote, opts = {}) {
   let y = renderPdfHeader(doc, {
     title: "QUOTE",
     eyebrow: header.eyebrow || "",
-    idText: quote.id,
+    idText: (quote.quoteNumberDisplay && String(quote.quoteNumberDisplay).trim()) || quote.id,
     issuedLine: `Issued ${fmtDate(quote.createdAt)}${quote.validUntil ? `  ·  Valid through ${fmtDate(quote.validUntil)}` : ""}`
   });
   doc.fillColor(PJL_MUTED).fontSize(9).font("Helvetica-Bold")
