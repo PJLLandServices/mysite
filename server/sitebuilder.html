@@ -341,10 +341,12 @@
     <div class="grand" id="bomGrand" style="margin-top:14px"></div>
     <div class="hint" id="bomNote"></div>
     <div class="btnrow" style="margin-top:12px">
-      <button class="ghost" onclick="generateMaterialList()">Generate / update material list</button>
-      <span class="saved" id="mlGenNote" style="font-size:12px;color:var(--muted);align-self:center"></span>
+      <button onclick="generateQuote()">Generate customer quote →</button>
+      <button class="ghost" onclick="generateMaterialList()">Material list only</button>
+      <span class="saved" id="quoteGenNote" style="font-size:12px;color:var(--muted);align-self:center"></span>
     </div>
-    <div class="hint">Pushes these parts onto the project's <b>Material List</b> (drives POs). A draft list is updated in place; a list that's already been ordered from is left alone and a new one is created.</div>
+    <div class="hint" id="mlGenNote" style="min-height:0"></div>
+    <div class="hint"><b>Generate customer quote</b> builds a <b>Quote</b> (Q-…) — scope, controller, and a line per zone at your standard prices (all editable in the proposal builder) — and refreshes the project's <b>Material List</b> at the same time. Both need the design attached to a project.</div>
   </div>
 
 </div>
@@ -1959,6 +1961,52 @@ async function generateMaterialList(){
     note.innerHTML=`✓ ${verb} <a href="/admin/material-list/${encodeURIComponent(id)}" target="_blank">${esc(id)}</a> — ${catalog.length} line${catalog.length>1?'s':''}${nonCatalog.length?` (+${nonCatalog.length} not-stocked → notes)`:''}.`;
   }catch(e){ note.textContent='Failed: '+e.message; }
 }
+// Website install pricing (mirrors pricing.json — keep in sync). All are
+// EDITABLE defaults once seeded into the quote.
+const INSTALL_PRICING = {
+  perZone: 549,                                          // new_install_per_zone
+  baseByZones(n){ return n<=4?585:749; },                // new_install tier base (w/ mainline); 8+ uses t2, edit in quote
+  controllerByZones(n){ return n<=4?595 : n<=7?750 : 1195; }  // Hydrawise controller tiers
+};
+// Transform the design into a customer Quote (project_proposal) + keep the
+// material list in step. Seeds scope + per-zone line items, all editable in
+// the proposal builder.
+async function generateQuote(){
+  if(!linkedProject){ alert('Attach this design to a project first (Project section at the top).'); return; }
+  const note=el('quoteGenNote'); note.textContent='Working…';
+  try{
+    await generateMaterialList();                        // both lists move together
+    compute();
+    const zones=[];
+    LAST_PLANS.filter(x=>!x.plan.noShape).forEach(({area,plan})=>{ for(let k=0;k<plan.zones;k++) zones.push(area.name||'Area'); });
+    const N=zones.length;
+    if(!N){ note.textContent='No zones yet — add areas first.'; return; }
+    const areaNames=[...new Set(zones)].join(', ');
+    const li=[
+      {source:'custom', label:'Sprinkler system — new mainline installed, complete with Hunter Hydrawise flow-meter technology', qty:1, price:INSTALL_PRICING.baseByZones(N)},
+      {source:'custom', label:`Smart controller — Hunter Hydrawise, sized for ${N} zone${N>1?'s':''}`, qty:1, price:INSTALL_PRICING.controllerByZones(N)}
+    ];
+    zones.forEach((nm,i)=>{ li.push({source:'custom', label:`Zone ${i+1} — ${nm}`, qty:1, price:INSTALL_PRICING.perZone}); });
+    const sections=[
+      {kind:'cover_summary', title:'Your new irrigation system', order:1, body:`A fully automatic, water-efficient sprinkler system for your property — ${N} independently controlled watering zone${N>1?'s':''} covering ${areaNames||'the property'}, installed on a new dedicated mainline with Hunter Hydrawise smart control and flow-meter technology for leak detection and weather-based watering.`},
+      {kind:'proposed_scope', title:'Scope of work', order:2, body:`• Supply & install a new irrigation mainline, complete with a Hydrawise flow-meter for leak / flow monitoring.\n• Install and program a Hunter Hydrawise smart controller sized for ${N} zone${N>1?'s':''}.\n• Build ${N} watering zone${N>1?'s':''} — ${areaNames||'the property'} — each on its own valve for independent scheduling.\n• Pressure-test, commission and walk the system through with you.`},
+      {kind:'line_items', title:'Investment', order:3, body:''},
+      {kind:'custom', title:'Additional notes & costs', order:4, body:'Site-specific work, optional upgrades, or add-ons will be itemised here.'},
+      {kind:'acceptance_block', title:'Acceptance', order:5, body:''}
+    ];
+    const cr=await fetch('/api/quotes/proposal',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({customerEmail:linkedProject.customerEmail||'', propertyId:linkedProject.propertyId||null, branch:'direct_residential', billingMode:'fixed_price', scope:`New irrigation system — ${N} zone${N>1?'s':''}: ${areaNames}`})});
+    if(cr.status===403){ note.textContent='Quote creation needs an admin login (you\'re signed in as tech).'; return; }
+    const cj=await cr.json().catch(()=>({}));
+    if(!cr.ok||!cj.ok) throw new Error((cj.errors&&cj.errors[0])||('HTTP '+cr.status));
+    const qid=cj.quote.id;
+    const pr=await fetch('/api/quotes/'+encodeURIComponent(qid)+'/proposal',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({proposalSections:sections, lineItems:li})});
+    const pj=await pr.json().catch(()=>({}));
+    if(!pr.ok||!pj.ok) throw new Error((pj.errors&&pj.errors[0])||('seed HTTP '+pr.status));
+    const total=pj.quote&&pj.quote.total;
+    note.innerHTML=`✓ Created <a href="/admin/quote/${encodeURIComponent(qid)}/proposal" target="_blank">${esc(qid)}</a> — ${N} zone${N>1?'s':''}, ${li.length} lines${total?`, $${Number(total).toLocaleString()}`:''}. Set final prices in the proposal builder.`;
+  }catch(e){ note.textContent='Failed: '+e.message; }
+}
+
 function wireBom(){
   const tb=el('bomTable'); if(!tb || tb._wired) return; tb._wired=true;
   tb.addEventListener('change', e=>{
@@ -2469,7 +2517,7 @@ async function attachToPicked(){
   const id = pick ? pick.value : '';
   if(!id){ alert('Pick a project first.'); return; }
   const p = (projectList || []).find(x=>x.id === id);
-  linkedProject = { id, name: p ? p.name : '', customerName: p ? p.customerName : '' };
+  linkedProject = { id, name: p ? p.name : '', customerName: p ? p.customerName : '', customerEmail: p ? (p.customerEmail||'') : '', propertyId: p ? (p.propertyId||null) : null, address: p ? (p.address||'') : '' };
   // Reflect the link in the URL so a refresh keeps it (and matches the
   // project-page deep link).
   const u = new URL(location.href); u.searchParams.set('project', id);
@@ -2514,7 +2562,7 @@ async function initApp(){
       if(res.ok){
         const j = await res.json();
         if(j.ok && j.project){
-          linkedProject = { id: j.project.id, name: j.project.name, customerName: j.project.customerName };
+          linkedProject = { id: j.project.id, name: j.project.name, customerName: j.project.customerName, customerEmail: j.project.customerEmail||'', propertyId: j.project.propertyId||null, address: j.project.address||'' };
           if(j.project.systemDesign){
             restored = restoreState(j.project.systemDesign);
             lastSavedLabel = fmtSaved(j.project.systemDesign.savedAt);
