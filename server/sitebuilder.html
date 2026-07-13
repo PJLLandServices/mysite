@@ -1104,6 +1104,7 @@ function compute(){
           ${hasTrees?`<div class="stat"><div class="n">${p.treeCount}</div><div class="l">tree${p.treeCount===1?'':'s'}</div></div>`:''}
           <div class="stat"><div class="n">${p.zones}</div><div class="l">zone${p.zones>1?'s':''}</div></div>
           <div class="stat"><div class="n">${p.totalGPM.toFixed(1)}</div><div class="l">total GPM</div></div>
+          <div class="stat"><div class="n">${money(areaMaterialCents(a,p)/100)}</div><div class="l">zone materials</div></div>
         </div>
         <table class="spec">
           <tr><td>Dripline</td><td>${esc(p.product.label)}</td></tr>
@@ -1130,6 +1131,7 @@ function compute(){
           <div class="stat"><div class="n">${Math.round(p.tubeFt)}</div><div class="l">ft ring drip</div></div>
           <div class="stat"><div class="n">${p.zones}</div><div class="l">zone${p.zones===1?'':'s'}</div></div>
           <div class="stat"><div class="n">${p.totalGPM.toFixed(1)}</div><div class="l">total GPM</div></div>
+          <div class="stat"><div class="n">${money(areaMaterialCents(a,p)/100)}</div><div class="l">zone materials</div></div>
         </div>
         <table class="spec">
           <tr><td>Method</td><td>${methodBits.join(' &middot; ')||'no trees placed'}</td></tr>
@@ -1157,6 +1159,7 @@ function compute(){
         <div class="stat"><div class="n">${n}</div><div class="l">head${n>1?'s':''}</div></div>
         <div class="stat"><div class="n">${p.zones}</div><div class="l">zone${p.zones>1?'s':''}</div></div>
         <div class="stat"><div class="n">${p.totalGPM.toFixed(1)}</div><div class="l">total GPM</div></div>
+        <div class="stat"><div class="n">${money(areaMaterialCents(a,p)/100)}</div><div class="l">zone materials</div></div>
       </div>
       <table class="spec">
         <tr><td>Head</td><td>${esc(h.label)}</td></tr>
@@ -1714,10 +1717,46 @@ const BOM_SKU = {
   manifoldEll:'408010',    // 1" 90° ell (sch-80 substitute) for manifold
   manifoldTee:'405010',    // 1" tee (sch-80 substitute) for manifold
   nipple1x2:'210020',      // 1"×2" nipple, 2 per manifold tee
+  maleAdapter:'1436010',   // poly 1" male adapter, 1 per zone (valve → lateral)
   boxJumbo:'VB10151089',   // jumbo = 12" deep square std valve box (4 valves)
   box10:'VB111011',        // 10" round (3 valves)
   box6:'DUVB60'            // 6" round (≤2 valves)
 };
+
+// Per-zone (per-area) material cost — a single rolled-up $ for one area's
+// heads/pipe + its zone valve & fittings kit. Uses the SAME materials as the
+// BOM so the per-area totals stay consistent with the material list / quote.
+// Prices come from the loaded catalog (0 until it's fetched).
+const partCents = sku => { const p=(PARTS_MAP||{})[sku]; return p&&p.priceCents!=null?p.priceCents:0; };
+function areaMaterialCents(area, p){
+  if(!p || p.noShape) return 0;
+  const z=p.zones||0;
+  const headFam = (p.family==='rotor'||p.family==='mp'||p.family==='spray'||p.family==='strip');
+  const nHeads = headFam ? (p.manual?(area.manualHeads||[]).length:(p.heads?p.heads.length:0)) : 0;
+  let c=0;
+  if(nHeads){
+    if(p.family==='rotor') c+=partCents('HSPGPADJ')*nHeads;
+    else if(p.family==='mp') c+=partCents('HSPROS04PRS30')*nHeads;
+    else if(p.family==='spray'){ c+=partCents((SPRAY_BODIES[area.sprayBody]||SPRAY_BODIES.b4).sku)*nHeads;
+      const sz=seriesSize(area.spraySeries); if(p.arcCount){ c+=partCents('RBN'+sz+'Q')*(p.arcCount[90]||0)+partCents('RBN'+sz+'H')*(p.arcCount[180]||0); } }
+    else if(p.family==='strip'){ c+=partCents((SPRAY_BODIES[area.stripBody]||SPRAY_BODIES.b4).sku)*nHeads;
+      const m={cst:'RBN15CST',sst:'RBN15SST'}[area.stripNoz]; if(m) c+=partCents(m)*nHeads; }
+    c+=(partCents(BOM_SKU.swingArm)+partCents(BOM_SKU.saddle)+partCents(BOM_SKU.gearClamp))*nHeads;   // swing arm + saddle + clamp / head
+  }
+  if(p.family==='drip'||p.family==='trees'){
+    const ft=(p.family==='drip'?p.dripLengthFt:p.tubeFt)||0, d=p.product;
+    if(d && ft>0) c+=Math.round(partCents(d.sku)/(d.rollFt||250)*ft);       // dripline at linear-ft cost
+    c+=partCents('RBDPSIM30X075')*z;                                        // pressure reg / zone
+    if(p.family==='drip') c+=partCents('RBDXFFTEE')*Math.max(1,Math.round(ft/50))+partCents('RBDXFELB')*Math.max(2,Math.round(ft/40))+partCents('RBDXFFCOUP')*Math.max(1,Math.round(ft/250));
+    else if(p.ringTrees>0) c+=partCents('RBDXFFTEE')*p.ringTrees+partCents('RBDXFELB')*p.ringTrees*2;
+    if(p.rwsUnits>0) c+=partCents(TREE_RWS_SKU)*p.rwsUnits;
+  }
+  // Per-zone valve kit: valve + 2 reducing ells + 2 manifold ells + tee + 2 nipples + male adapter + clamp
+  c+=z*( partCents('PGV100G') + partCents(BOM_SKU.reducingEll)*2 + partCents(BOM_SKU.manifoldEll)*2 + partCents(BOM_SKU.manifoldTee) + partCents(BOM_SKU.nipple1x2)*2 + partCents(BOM_SKU.maleAdapter) + partCents(BOM_SKU.gearClamp) );
+  // Lateral pipe estimate for this area
+  if(p.kind!=='drip' && nHeads){ const sf=parseFloat(el('spacingFactor').value)||1, lat=nHeads*Math.max(headSpec(area).r*sf,1)*0.6; c+=Math.round(partCents('POPO75400')/400*lat); }
+  return Math.round(c);
+}
 
 // Aggregate the parts list from the current plans.
 function buildBOM(parts){
@@ -1818,6 +1857,7 @@ function buildBOM(parts){
   add(BOM_SKU.manifoldEll, 2*totalZones);     // 2× 1" ells / valve (manifold)
   add(BOM_SKU.manifoldTee, totalZones);       // 1× 1" tee / valve (manifold)
   add(BOM_SKU.nipple1x2,   2*totalZones);     // 2× 1"×2" nipple / manifold tee
+  add(BOM_SKU.maleAdapter, totalZones);       // 1× 1" male adapter / zone
 
   // Manifolds group up to MANIFOLD_PER_BOX valves; box size = valves in it.
   const manifoldSizes=[]; { let r=totalZones; while(r>0){ manifoldSizes.push(Math.min(MANIFOLD_PER_BOX,r)); r-=MANIFOLD_PER_BOX; } }
@@ -2584,6 +2624,8 @@ async function initApp(){
   dirty = false;
   appReady = true;
   updateProjectBar();
+  // Prices load async; repaint the per-zone materials cost once they're in.
+  loadParts().then(()=>{ if(appReady) compute(); });
 }
 
 window.addEventListener('beforeunload', (e)=>{
