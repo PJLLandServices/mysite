@@ -48,7 +48,8 @@ The complete price list. Feeds:
 The parts catalog (~110 SKUs) plus `service_materials` mapping each priced service to its default packing list.
 
 Structure:
-- **`parts`** — the catalog. Keyed by SKU. Includes name, category, subcategory, size, price.
+- **`parts`** — the catalog. Keyed by SKU. Includes name, category, subcategory, size, price, and **`manufacturer`** (a `manufacturers[].key`, or `""` when unknown).
+- **`manufacturers`** — top-level controlled vocabulary of brands (`[{key,label}]`, e.g. Hunter, Rain Bird, Netafim, Blu-Lock, Oil Creek, Dawn, Watts), mirroring `categories`. **Manufacturer is an intrinsic catalog attribute** (a Hunter valve is made by Hunter regardless of who sells it), so it lives in `parts.json` — unlike **supplier**, which is a changing *relationship* kept in the `part-suppliers.json` override map. `/admin/parts-suppliers` shows a read-only Manufacturer column + filter (Brief B1).
 - **`service_materials`** — keyed by service ID matching `pricing.json`. Each entry has `default_parts: [{sku, quantity, note?}]`.
 
 **Hard rules:**

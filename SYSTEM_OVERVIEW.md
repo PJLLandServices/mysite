@@ -55,7 +55,7 @@ Everything else is built-in or vendored.
 │   ├── pricing-injector.js                     (HTML price spans -> pricing.json)
 │   ├── sprinkler-builder.js                    (cost-tool builder)
 │   └── chat-widget.js                          (in-page chat handoff)
-├── parts.json                                  (hardware catalog — 129 SKUs)
+├── parts.json                                  (hardware catalog — 143 SKUs; per-part manufacturer + manufacturers[] vocab)
 ├── pricing.json                                (service pricing — single source of truth)
 ├── _partials/{nav,footer}.html                 (build.js sources)
 ├── build.js                                    (partial-include sync)
@@ -211,7 +211,7 @@ Pages with their primary route + purpose:
 | `material-lists.html` | `/admin/material-lists` | Material list index with parent + status filters. |
 | `material-list.html` | `/admin/material-list/<id>` | Mobile-first builder. Search/browse catalog, qty steppers, parent picker, copy-from-past, sticky savebar with running totals, "Generate purchase orders" button. |
 | `suppliers.html` | `/admin/suppliers` | Supplier records. |
-| `parts-suppliers.html` | `/admin/parts-suppliers` | Catalog grid grouped by the 7 `parts.json` categories (collapsible category sections → subcategory sub-headers → SKU rows). Each row still has an inline per-SKU primary-supplier `<select>` (single-edit auto-save via `PATCH /api/part-suppliers`). Adds **bulk reassignment**: inline row checkboxes + per-category tri-state "select all" + a global "select all shown", then a sticky selection toolbar (supplier dropdown + "Reassign selected" + confirm dialog) that rewrites every ticked SKU's primary supplier in one batch `PATCH`. Also owns catalog CRUD + xlsx import/export. |
+| `parts-suppliers.html` | `/admin/parts-suppliers` | Catalog grid grouped by the 7 `parts.json` categories (collapsible category sections → subcategory sub-headers → SKU rows). Each row still has an inline per-SKU primary-supplier `<select>` (single-edit auto-save via `PATCH /api/part-suppliers`). Adds **bulk reassignment**: inline row checkboxes + per-category tri-state "select all" + a global "select all shown", then a sticky selection toolbar (supplier dropdown + "Reassign selected" + confirm dialog) that rewrites every ticked SKU's primary supplier in one batch `PATCH`. Also owns catalog CRUD + xlsx import/export. Read-only **Manufacturer** column + filter-by-manufacturer (Brief B1). |
 | `purchase-orders.html` | `/admin/purchase-orders` | PO index. Status filter + "Show closed" toggle. |
 | `quote-requests.html` | `/admin/quote-requests` | RFQ index. Status filter (draft/sent/quoted/applied/cancelled) + "Show closed" toggle. No prices anywhere. |
 | (Materials sub-nav) | — | The materials pages (`material-lists.html`, `quote-requests.html`, `purchase-orders.html`, `suppliers.html`, `parts-suppliers.html`) share a `.suppliers-subnav` strip duplicated by hand. Below 768px the strip collapses into a single `<details>` dropdown ("Materials → <current> ▾"); open/close behaviour lives in `crm-nav.js`. |
@@ -549,7 +549,7 @@ Suppliers + catalog assignments
   GET    /api/suppliers/:id
   PATCH  /api/suppliers/:id
   POST   /api/suppliers/:id/archive
-  GET    /api/parts                              ← parts.json + merged supplier overrides
+  GET    /api/parts                              ← parts.json (incl. manufacturer + manufacturers[]) + merged supplier overrides
   GET    /api/part-suppliers
   PATCH  /api/part-suppliers                     ← bulk { updates: { sku: [supId, ...] } }
   PATCH  /api/part-suppliers/:sku

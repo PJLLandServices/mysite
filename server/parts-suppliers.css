@@ -104,6 +104,16 @@
   font-weight: 600;
   text-transform: capitalize;
 }
+.ps-mfr {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: #1F2A22;
+  white-space: nowrap;
+}
+.ps-mfr-none {
+  font-size: 12.5px;
+  color: #B4B4AC;
+}
 .ps-price {
   font-family: "Barlow Condensed", sans-serif;
   font-weight: 700;
@@ -156,6 +166,7 @@
     grid-template-areas:
       "sku     price"
       "desc    desc"
+      "mfr     mfr"
       "sup     actions";
     column-gap: 10px;
     row-gap: 4px;
@@ -172,13 +183,15 @@
     width: auto;
   }
   /* Map cells to grid areas. Column order matches renderRow():
-   * 1=SKU, 2=Description, 3=Category, 4=Price, 5=Supplier, 6=Actions. */
+   * 1=SKU, 2=Description, 3=Category, 4=Manufacturer, 5=Price, 6=Supplier, 7=Actions. */
   .ps-table td:nth-child(1) { grid-area: sku;     align-self: center; }
   .ps-table td:nth-child(2) { grid-area: desc;    min-width: 0; }
-  .ps-table td:nth-child(3) { display: none; }
-  .ps-table td:nth-child(4) { grid-area: price;   justify-self: end; align-self: center; }
-  .ps-table td:nth-child(5) { grid-area: sup;     min-width: 0; padding-top: 4px; }
-  .ps-table td:nth-child(6) { grid-area: actions; justify-self: end; align-self: center; }
+  .ps-table td:nth-child(3) { display: none; }                       /* Category — redundant with the filter */
+  .ps-table td:nth-child(4) { grid-area: mfr; padding-top: 2px; }    /* Manufacturer */
+  .ps-table td:nth-child(4):has(.ps-mfr-none) { display: none; }     /* hide the "—" on the card; brands still show */
+  .ps-table td:nth-child(5) { grid-area: price;   justify-self: end; align-self: center; }
+  .ps-table td:nth-child(6) { grid-area: sup;     min-width: 0; padding-top: 4px; }
+  .ps-table td:nth-child(7) { grid-area: actions; justify-self: end; align-self: center; }
 
   /* Description truncates to a single line — full text on tap-through. */
   .ps-table .ps-desc { min-width: 0; }

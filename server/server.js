@@ -7690,6 +7690,7 @@ async function handleApi(req, res, pathname) {
     const payload = {
       ok: true,
       categories: PARTS.categories || [],
+      manufacturers: PARTS.manufacturers || [],
       parts: PARTS.parts || {},
       service_materials: PARTS.service_materials || {}
     };

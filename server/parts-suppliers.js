@@ -14,6 +14,7 @@
   const els = {
     search: document.getElementById("psSearch"),
     categoryFilter: document.getElementById("psCategoryFilter"),
+    manufacturerFilter: document.getElementById("psManufacturerFilter"),
     assignmentFilter: document.getElementById("psAssignmentFilter"),
     selectAllVisible: document.getElementById("psSelectAllVisible"),
     count: document.getElementById("psCount"),
@@ -195,6 +196,7 @@
       els.tableWrap.hidden = false;
       els.savebar.hidden = false;
       hydrateCategoryFilter();
+      hydrateManufacturerFilter();
       hydrateEditCategoryOptions();
       hydrateSelSupplier();
       render();
@@ -210,7 +212,9 @@
   async function reloadCatalog({ skipRender = false } = {}) {
     const partsRes = await fetch("/api/parts?admin=1", { cache: "no-store" }).then((r) => r.json());
     if (!partsRes.ok) throw new Error("Couldn't load catalog.");
-    state.catalog = { categories: partsRes.categories || [], parts: partsRes.parts || {} };
+    state.catalog = { categories: partsRes.categories || [], manufacturers: partsRes.manufacturers || [], parts: partsRes.parts || {} };
+    state.manufacturerLabels = {};
+    for (const m of state.catalog.manufacturers) state.manufacturerLabels[m.key] = m.label || m.key;
     const ov = partsRes.overrides || {};
     state.overrides.addedSkus = new Set(ov.addedSkus || []);
     state.overrides.editedSkus = new Set(ov.editedSkus || []);
@@ -234,6 +238,24 @@
       opt.textContent = cat.label || cat.key;
       els.categoryFilter.appendChild(opt);
     }
+  }
+
+  function hydrateManufacturerFilter() {
+    if (!els.manufacturerFilter) return;
+    const cur = els.manufacturerFilter.value;
+    while (els.manufacturerFilter.options.length > 1) els.manufacturerFilter.remove(1);
+    for (const m of state.catalog.manufacturers || []) {
+      const opt = document.createElement("option");
+      opt.value = m.key;
+      opt.textContent = m.label || m.key;
+      els.manufacturerFilter.appendChild(opt);
+    }
+    // Blank / unassigned bucket at the end.
+    const blank = document.createElement("option");
+    blank.value = "__blank";
+    blank.textContent = "— none —";
+    els.manufacturerFilter.appendChild(blank);
+    els.manufacturerFilter.value = cur;   // keep selection across reloads
   }
 
   function hydrateEditCategoryOptions() {
@@ -266,13 +288,16 @@
   function applyFilters(parts) {
     const q = els.search.value.trim().toLowerCase();
     const cat = els.categoryFilter.value;
+    const mfr = els.manufacturerFilter ? els.manufacturerFilter.value : "";
     const assignment = els.assignmentFilter.value;
     return parts.filter((p) => {
       if (cat && p.category !== cat) return false;
+      if (mfr === "__blank" && p.manufacturer) return false;
+      if (mfr && mfr !== "__blank" && p.manufacturer !== mfr) return false;
       if (assignment === "missing" && effectiveSupplierIds(p).length > 0) return false;
       if (assignment === "assigned" && effectiveSupplierIds(p).length === 0) return false;
       if (q) {
-        const hay = [p.sku, p.partNumber, p.description, p.subcategory, p.size]
+        const hay = [p.sku, p.partNumber, p.description, p.subcategory, p.size, state.manufacturerLabels[p.manufacturer]]
           .map((v) => String(v || "").toLowerCase()).join(" ");
         if (!hay.includes(q)) return false;
       }
@@ -298,7 +323,7 @@
       .join("");
 
     if (!visible.length) {
-      els.body.innerHTML = `<tr><td colspan="6" class="ps-empty">No parts match the current filters.</td></tr>`;
+      els.body.innerHTML = `<tr><td colspan="7" class="ps-empty">No parts match the current filters.</td></tr>`;
       refreshSelectionState();
       return;
     }
@@ -363,7 +388,7 @@
   function groupRowHtml(cat, label, count) {
     return `
       <tr class="ps-group-row" data-cat="${escapeHtml(cat)}">
-        <td class="ps-group-cell" colspan="6">
+        <td class="ps-group-cell" colspan="7">
           <div class="ps-group-head">
             <input type="checkbox" class="ps-cat-check" data-cat="${escapeHtml(cat)}" aria-label="Select all in ${escapeHtml(label)}">
             <button type="button" class="ps-group-toggle" data-cat="${escapeHtml(cat)}" aria-expanded="true">
@@ -380,7 +405,7 @@
   function subRowHtml(cat, sub, count) {
     return `
       <tr class="ps-sub-row" data-cat="${escapeHtml(cat)}">
-        <td class="ps-sub-cell" colspan="6"><span class="ps-sub-label">${escapeHtml(sub)}</span><span class="ps-sub-count">${count}</span></td>
+        <td class="ps-sub-cell" colspan="7"><span class="ps-sub-label">${escapeHtml(sub)}</span><span class="ps-sub-count">${count}</span></td>
       </tr>
     `;
   }
@@ -413,6 +438,7 @@
           </div>
         </td>
         <td><span class="ps-cat"><strong>${escapeHtml(p.category || "—")}</strong>${p.subcategory ? "<br>" + escapeHtml(p.subcategory) : ""}</span></td>
+        <td class="ps-mfr-cell">${p.manufacturer ? `<span class="ps-mfr">${escapeHtml(state.manufacturerLabels[p.manufacturer] || p.manufacturer)}</span>` : `<span class="ps-mfr-none">—</span>`}</td>
         <td class="ps-price-cell">
           ${priceIndicator}
           <button type="button" class="ps-price ps-price-edit" data-sku="${escapeHtml(p.sku)}" data-cents="${Number(p.priceCents) || 0}" aria-label="Edit price for ${escapeHtml(p.sku)}">${fmtCents(p.priceCents)}</button>
@@ -594,6 +620,7 @@
 
   els.search.addEventListener("input", () => render());
   els.categoryFilter.addEventListener("change", () => render());
+  if (els.manufacturerFilter) els.manufacturerFilter.addEventListener("change", () => render());
   els.assignmentFilter.addEventListener("change", () => render());
 
   // ===== Category collapse ===========================================
