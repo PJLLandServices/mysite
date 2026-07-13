@@ -2111,19 +2111,21 @@ function wireBom(){
   });
   tb.addEventListener('click', e=>{
     const t=e.target;
+    // The add-row button also carries .bom-sku-btn for styling, so check it
+    // FIRST — otherwise the edit branch below claims it (key=undefined).
+    const addBtn=t.closest&&t.closest('#bomAddBtn');
+    if(addBtn){
+      openPartPicker(addBtn, (sku)=>{ const p=(PARTS_MAP||{})[sku]; addBtn.dataset.sku=sku; addBtn.innerHTML=`${esc(p?p.description:sku)} <span class="bom-sku-code">${esc(sku)}</span>`; });
+      return;
+    }
     const skuBtn=t.closest&&t.closest('.bom-sku-btn');
     if(skuBtn){
       const key=skuBtn.dataset.key, ci=skuBtn.dataset.cidx;
       openPartPicker(skuBtn, (sku)=>{
         if(ci!=null){ if(bomOverrides.custom[+ci]) bomOverrides.custom[+ci].sku=sku; }
-        else (bomOverrides.edits[key]||(bomOverrides.edits[key]={})).sku=sku;
+        else if(key!=null) (bomOverrides.edits[key]||(bomOverrides.edits[key]={})).sku=sku;
         markDirty(); renderBOM();
       });
-      return;
-    }
-    if(t.id==='bomAddBtn' || (t.closest&&t.closest('#bomAddBtn'))){
-      const btn=el('bomAddBtn');
-      openPartPicker(btn, (sku)=>{ const p=(PARTS_MAP||{})[sku]; btn.dataset.sku=sku; btn.innerHTML=`${esc(p?p.description:sku)} <span class="bom-sku-code">${esc(sku)}</span>`; });
       return;
     }
     if(t.classList.contains('bom-del')){
