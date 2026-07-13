@@ -71,6 +71,13 @@ function render(q) {
   }
 
   const isProposal = q.type === "project_proposal";
+  // Display options (Brief D) — mirror what the PDF shows so this web
+  // acceptance page never leaks pricing (or sections) the PDF was told to
+  // hide. Missing/odd values fall back to the itemized defaults.
+  const opts = q.pdfOptions || {};
+  const lineMode = ["itemized", "descriptions_only", "summary"].includes(opts.lineItems) ? opts.lineItems : "itemized";
+  const showAtt = opts.showAttachments !== false;
+  const showMap = opts.showProjectMap !== false;
   // Narrative ai_repair_quotes (smart-controller upgrades) ship
   // server-synthesized sections + header copy from the content block —
   // rendered with the same section renderer proposals use, so the
@@ -100,7 +107,12 @@ function render(q) {
     const sections = (q.proposalSections || []).slice().sort((a, b) => (a.order || 0) - (b.order || 0));
     for (const s of sections) {
       if (s.kind === "line_items" || s.kind === "acceptance_block") continue;
-      if (!s.body && !(s.attachmentIds && s.attachmentIds.length)) continue;
+      if (s.include === false) continue;                    // Brief D: excluded section
+      if (s.kind === "project_map" && !showMap) continue;   // Brief D: hide project map
+      // The project-map section's own image always renders when the map is
+      // shown; other sections' attachments obey showAttachments.
+      const showThisAtt = s.kind === "project_map" ? true : showAtt;
+      if (!s.body && !(showThisAtt && s.attachmentIds && s.attachmentIds.length)) continue;
       const sectionEl = document.createElement("section");
       sectionEl.className = "approve-section";
       const title = document.createElement("h3");
@@ -120,7 +132,7 @@ function render(q) {
         }
       }
       // Anchored attachments — render images inline (PDFs surface as a link).
-      if (Array.isArray(s.attachmentIds) && s.attachmentIds.length) {
+      if (showThisAtt && Array.isArray(s.attachmentIds) && s.attachmentIds.length) {
         for (const attId of s.attachmentIds) {
           const att = (q.attachments || []).find((a) => a.id === attId);
           if (!att) continue;
@@ -160,8 +172,9 @@ function render(q) {
         document.getElementById("approvePdfReturnBlock").hidden = method !== "pdf";
       });
     });
-    // PDF-return panel meta.
-    document.getElementById("approveReturnId").textContent = q.id;
+    // PDF-return panel meta — show the display number if one is set.
+    document.getElementById("approveReturnId").textContent =
+      (q.quoteNumberDisplay && q.quoteNumberDisplay.trim()) || q.id;
   }
 
   // Strip the admin-only "[inherited from WO-XXX]" / "[from WO-XXX]"
@@ -173,23 +186,30 @@ function render(q) {
   function customerNote(raw) {
     return String(raw || "").replace(/^\[(?:inherited from|from)\s+WO-[A-Z0-9-]+\]\s*/i, "").trim();
   }
-  // Line items.
+  // Line items — mirror the PDF's display mode (Brief D). itemized shows
+  // the per-line amount; descriptions_only drops the amount column; summary
+  // shows no lines at all (the totals block below still renders the total).
+  // The itemized line data is never sent for summary — the guardrail holds
+  // on the web page too, not just the PDF.
   linesEl.innerHTML = "";
-  for (const l of q.lineItems || []) {
-    const row = document.createElement("div");
-    row.className = "approve-line";
-    const price = (l.overridePrice != null && Number.isFinite(Number(l.overridePrice))) ? Number(l.overridePrice) : Number(l.price || l.originalPrice || 0);
-    const lineTotal = Number.isFinite(Number(l.lineTotal)) ? Number(l.lineTotal) : price * (Number(l.qty) || 1);
-    const cleanNote = customerNote(l.note);
-    row.innerHTML = `
-      <div class="approve-line-desc">
-        <strong>${escapeHtml(l.label || l.key || "Line")}</strong>
-        ${cleanNote ? `<p class="approve-line-note">${escapeHtml(cleanNote)}</p>` : ""}
-      </div>
-      <div class="approve-line-qty">× ${escapeHtml(String(l.qty || 1))}</div>
-      <div class="approve-line-amount">${fmt(lineTotal)}</div>
-    `;
-    linesEl.appendChild(row);
+  if (lineMode !== "summary") {
+    for (const l of q.lineItems || []) {
+      const row = document.createElement("div");
+      row.className = "approve-line";
+      const price = (l.overridePrice != null && Number.isFinite(Number(l.overridePrice))) ? Number(l.overridePrice) : Number(l.price || l.originalPrice || 0);
+      const lineTotal = Number.isFinite(Number(l.lineTotal)) ? Number(l.lineTotal) : price * (Number(l.qty) || 1);
+      const cleanNote = customerNote(l.note);
+      const amountCol = lineMode === "itemized" ? `<div class="approve-line-amount">${fmt(lineTotal)}</div>` : "";
+      row.innerHTML = `
+        <div class="approve-line-desc">
+          <strong>${escapeHtml(l.label || l.key || "Line")}</strong>
+          ${cleanNote ? `<p class="approve-line-note">${escapeHtml(cleanNote)}</p>` : ""}
+        </div>
+        <div class="approve-line-qty">× ${escapeHtml(String(l.qty || 1))}</div>
+        ${amountCol}
+      `;
+      linesEl.appendChild(row);
+    }
   }
   // PDF download link — same quote rendered as a one-page document the
   // customer can save / print. Token in the URL gates access.

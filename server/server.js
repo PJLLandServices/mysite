@@ -7213,7 +7213,11 @@ async function handleApi(req, res, pathname) {
               .filter((a) => a.kind !== "signed_pdf_return")
               .map((a) => ({ id: a.id, kind: a.kind, filename: a.filename, mimeType: a.mimeType, caption: a.caption, order: a.order }))
           : [],
-        acceptanceMethod: q.acceptanceMethod || "pending"
+        acceptanceMethod: q.acceptanceMethod || "pending",
+        // Display options (Brief D) so the acceptance page mirrors what the
+        // PDF shows — it must never leak pricing the PDF was told to hide.
+        pdfOptions: q.pdfOptions || { lineItems: "itemized", showAttachments: true, showProjectMap: true },
+        quoteNumberDisplay: q.quoteNumberDisplay || ""
       };
       return sendJson(res, 200, { ok: true, quote: safe });
     } catch (err) {
@@ -11097,10 +11101,13 @@ async function handleApi(req, res, pathname) {
       let token = q.approval?.token || null;
       let pdfBuffer = (!wasDraftBeforeSend && q.pdfPath) ? await readFrozenQuotePdf(q) : null;
       let freezeMeta = null;
+      // Resolve customer/property once — used for the PDF render below AND
+      // the email greeting further down (so it's available on the re-send
+      // path too, not only when we re-render).
+      const parties = await quoteRenderParties(q);
       if (!(pdfBuffer && token)) {
         token = token || crypto.randomBytes(16).toString("hex");
         const pdfApproveUrl = `${resolvePublicBaseUrl()}/approve/${encodeURIComponent(q.id)}?t=${token}`;
-        const parties = await quoteRenderParties(q);
         pdfBuffer = await renderQuotePdfBuffer(q, {
           customer: { ...parties.customer, email: toEmail, phone: parties.customer.phone || toPhone },
           property: parties.property,
@@ -11128,7 +11135,12 @@ async function handleApi(req, res, pathname) {
               service: "gmail",
               auth: { user: process.env.GMAIL_USER, pass: process.env.GMAIL_APP_PASSWORD }
             });
-            const firstName = (toEmail.split("@")[0] || "there");
+            // Greet by the customer's real first name (resolved above),
+            // and show the display quote-number override on the PDF (falls
+            // back to the internal id).
+            const custName = String((parties.customer && parties.customer.name) || "").trim();
+            const firstName = (custName ? custName.split(/\s+/)[0] : "").replace(/</g, "&lt;") || "there";
+            const displayNo = (q.quoteNumberDisplay && String(q.quoteNumberDisplay).trim()) || q.id;
             const branchLabel = q.branch || "project";
             const html = `
 <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:560px;color:#1a1a1a;line-height:1.55;">
@@ -11137,8 +11149,8 @@ async function handleApi(req, res, pathname) {
     <h1 style="margin:6px 0 0;color:#fff;font-size:22px;">Your proposal — ready for review.</h1>
   </div>
   <div style="padding:24px 28px;background:#FAFAF5;border:1px solid #e5e5dd;border-top:none;border-radius:0 0 8px 8px;">
-    <p style="margin:0 0 14px;">Hi,</p>
-    <p style="margin:0 0 14px;">Your detailed proposal (<strong>${q.id}</strong>) is attached and posted at the link below. Total: <strong>$${Number(q.total || 0).toFixed(2)} CAD</strong> incl. HST.</p>
+    <p style="margin:0 0 14px;">Hi ${firstName},</p>
+    <p style="margin:0 0 14px;">Your detailed proposal (<strong>${displayNo}</strong>) is attached and posted at the link below. Total: <strong>$${Number(q.total || 0).toFixed(2)} CAD</strong> incl. HST.</p>
     <p style="margin:0 0 14px;font-size:13px;color:#555;">You can accept this proposal in either of two ways:</p>
     <ul style="margin:0 0 14px;padding-left:20px;font-size:13px;color:#333;line-height:1.7;">
       <li><strong>Sign online</strong> — tap the button below, draw your signature, done.</li>
@@ -11165,7 +11177,7 @@ async function handleApi(req, res, pathname) {
               from: `"PJL Land Services" <${process.env.CUSTOMER_EMAIL || "info@pjllandservices.com"}>`,
               to: toEmail,
               replyTo: process.env.CUSTOMER_EMAIL || "info@pjllandservices.com",
-              subject: `PJL proposal ${q.id} — your review and acceptance`,
+              subject: `PJL proposal ${displayNo} — your review and acceptance`,
               html,
               ...(attachments.length ? { attachments } : {})
             });
