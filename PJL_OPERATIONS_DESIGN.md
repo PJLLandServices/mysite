@@ -330,8 +330,30 @@ QUOTE FOLDER
     - For on_site_quote: branded PDF + email + SMS + portal page
     - For project_proposal: multi-section narrative PDF + acceptance
                             block rendering BOTH portal e-sign URL
-                            AND printed signature lines + email PDF
-                            attachment + portal page
+                            AND printed signature lines + portal page
+                            + email PDF attachment.
+                            **Custom proposal document + phone gate
+                            (Jul 2026):** a proposal can carry a designed,
+                            self-contained HTML page (uploaded from the
+                            builder → server/data/proposal-docs/<id>.html).
+                            When — and ONLY when — that document is
+                            attached, the /approve page is protected by the
+                            unguessable token PLUS a phone-number challenge:
+                            the customer types the phone we have on file
+                            (any format; server normalizes to digits-only,
+                            last-10, matched against every phone on their
+                            live record), which mints a 24h cookie scoped
+                            to that one quote, and the page then serves the
+                            designed document in place of the standard
+                            layout. For these gated sends the customer
+                            email carries a **LINK, not a PDF attachment**
+                            — gating a document and simultaneously emailing
+                            it defeats the gate; the PDF stays downloadable
+                            from behind the gate. Admin + owning-customer
+                            sessions skip the challenge. Proposals WITHOUT
+                            a custom document — and `ai_repair_quote` /
+                            `on_site_quote` — keep the original token-only
+                            links and PDF-attached emails, unchanged.
     - The generated PDF is SNAPSHOTTED to disk at send
       (server/data/quote-pdfs/<quoteId>.pdf) and is the customer's
       source of truth thereafter — the same freeze-on-send guarantee

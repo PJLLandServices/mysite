@@ -75,6 +75,7 @@ const purchaseOrders = require("./lib/purchase-orders");
 const quoteRequests = require("./lib/quote-requests");
 const users = require("./lib/users");
 const magicTokens = require("./lib/magic-tokens");
+const proposalUnlock = require("./lib/proposal-unlock");
 const rateLimit = require("./lib/rate-limit");
 const antiBot = require("./lib/anti-bot");
 const bulkActions = require("./lib/bulk-actions");
@@ -199,6 +200,13 @@ const PORTAL_LINK_LIMIT_IP = 10;
 const PORTAL_LINK_WINDOW_MS = 60 * 60 * 1000; // 1 hour
 const PASSWORD_RESET_LIMIT = 3;
 const PASSWORD_RESET_WINDOW_MS = 60 * 60 * 1000;
+// Proposal phone-gate brute-force limits (§3.5). The PER-QUOTE lock (5/hr,
+// from lib/proposal-unlock.js) is the real defense — it survives an IP
+// change. The PER-IP limit is a broader backstop against one host hammering
+// MANY proposals; deliberately higher than the per-quote cap so the
+// per-quote lock is the primary signal, not the per-IP one. Same 1h window.
+const PROPOSAL_UNLOCK_IP_LIMIT = 20;
+const PROPOSAL_UNLOCK_IP_WINDOW_MS = 60 * 60 * 1000;
 
 // PJL service catalog — drives the lead-intake forms and CRM line-item display.
 // Pricing source: master_pricing.md (locked 2026-04-28). Update there first, then mirror here.
@@ -568,6 +576,182 @@ function clearSessionCookie(req, res) {
 function callerIp(req) {
   const fwd = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim();
   return fwd || req.socket?.remoteAddress || "";
+}
+
+// ---- Proposal phone gate (Phone-Gated Proposal Access brief, 2026-07) --
+//
+// A `project_proposal` document sits behind its unguessable URL token PLUS
+// a phone-number challenge. The stateless pieces (normalization, cookie
+// mint/verify) live in lib/proposal-unlock.js; the record lookups and the
+// access decision live here because they touch the customer/lead/property
+// stores and the session gates.
+
+// Set the unlock cookie for ONE quote. Mirrors setSessionCookie's flag
+// set (HttpOnly; SameSite=Lax; Secure on https) but writes a DISTINCT
+// cookie name with a proposal-scoped payload. 24h lifetime.
+async function setProposalUnlockCookie(req, res, quoteId) {
+  const config = await readAuthConfig();
+  const value = proposalUnlock.mintCookieValue(quoteId, config.sessionSecret);
+  const maxAge = Math.floor(proposalUnlock.TTL_MS / 1000);
+  const cookie = `${proposalUnlock.COOKIE_NAME}=${encodeURIComponent(value)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${secureCookieFlag(req)}`;
+  res.setHeader("set-cookie", cookie);
+}
+
+// True when the request carries a valid unlock cookie scoped to THIS quote
+// (and only this quote — a cookie for Q-A returns false for Q-B).
+async function hasProposalUnlockCookie(req, quoteId) {
+  const raw = parseCookies(req)[proposalUnlock.COOKIE_NAME];
+  if (!raw) return false;
+  const config = await readAuthConfig();
+  return proposalUnlock.verifyCookieValue(raw, quoteId, config.sessionSecret);
+}
+
+// Every raw phone stored for the customer behind a quote — LIVE read (the
+// friendlier option, per the brief: a number updated after the quote was
+// sent works immediately). Union of the customer record (primary +
+// spouse), the quote's lead contact, and the property snapshot. Returned
+// raw/as-typed with a source label; normalization happens in the
+// comparison. The entries form feeds BOTH the gate itself and the admin
+// "Phone gate" panel in the proposal builder — one function, so what the
+// panel shows is provably what the gate checks.
+async function proposalCustomerPhoneEntries(q) {
+  const entries = [];
+  if (q?.customerId) {
+    try {
+      const c = await customers.get(q.customerId, { withProperties: false });
+      if (c) {
+        if (c.phone) entries.push({ source: "customer", label: "Customer phone", value: c.phone });
+        if (c.spousePhone) entries.push({ source: "customer_spouse", label: "Spouse phone", value: c.spousePhone });
+      }
+    } catch (_) { /* tolerate */ }
+  }
+  if (q?.leadId) {
+    try {
+      const lead = (await readLeads()).find((l) => l.id === q.leadId);
+      if (lead?.contact?.phone) entries.push({ source: "lead", label: "Lead contact", value: lead.contact.phone });
+    } catch (_) { /* tolerate */ }
+  }
+  if (q?.propertyId) {
+    try {
+      const p = await properties.get(q.propertyId);
+      if (p?.customerPhone) entries.push({ source: "property", label: "Property snapshot", value: p.customerPhone });
+    } catch (_) { /* tolerate */ }
+  }
+  return entries;
+}
+async function proposalCustomerPhones(q) {
+  return (await proposalCustomerPhoneEntries(q)).map((e) => e.value).filter(Boolean);
+}
+
+// Does a customer-portal session own this quote? The session uid is
+// "customer:<customerId>" (or, for a legacy magic-link, "customer:<leadId>").
+// A match on the quote's customerId, its leadId, or the leadId's resolved
+// customerId all count. Anything else is a DIFFERENT customer.
+async function customerSessionOwnsQuote(session, q) {
+  if (!session || typeof session.uid !== "string") return false;
+  const sid = session.uid.startsWith("customer:") ? session.uid.slice("customer:".length) : "";
+  if (!sid) return false;
+  if (q.customerId && String(q.customerId) === sid) return true;
+  if (q.leadId && String(q.leadId) === sid) return true;
+  if (q.leadId) {
+    try {
+      const lead = (await readLeads()).find((l) => l.id === q.leadId);
+      if (lead?.customerId && String(lead.customerId) === sid) return true;
+    } catch (_) { /* tolerate */ }
+  }
+  return false;
+}
+
+// The access decision for a project_proposal quote (§3.7). Returns one of:
+//   "allow"     — render immediately, no challenge (admin/tech, owning
+//                 customer session, or a valid unlock cookie)
+//   "deny"      — a DIFFERENT customer's portal session; 401, do NOT fall
+//                 through to the challenge (that would leak that the quote
+//                 belongs to someone else)
+//   "challenge" — a valid token but no session/cookie; show the phone form
+//
+// Only ever called once the token has already been verified, so the caller
+// holds a real quote. Non-proposal quotes never reach this — their /approve
+// behaviour is byte-identical to before.
+async function resolveProposalGate(req, q) {
+  const staff = await requireUser(req); // admin OR tech
+  if (staff) return "allow";
+  const customerSession = await requireCustomer(req);
+  if (customerSession) {
+    return (await customerSessionOwnsQuote(customerSession, q)) ? "allow" : "deny";
+  }
+  if (await hasProposalUnlockCookie(req, q.id)) return "allow";
+  return "challenge";
+}
+
+// 401 with no body — indistinguishable from a nonexistent quote, per §3.6.
+function sendNoBody(res, status) {
+  res.writeHead(status);
+  res.end();
+}
+
+// ---- Custom proposal document (2026-07) ------------------------------
+//
+// A project_proposal can carry a rich, SELF-CONTAINED HTML document (the
+// designed "after dark" presentation Patrick builds per property, images
+// embedded as data: URIs) at server/data/proposal-docs/<quoteId>.html.
+// When present AND the phone gate has been passed, /approve/<id> serves
+// THAT document instead of the generic approve.html render. Not unlocked →
+// the request falls through to approve.html, which shows the phone
+// challenge. So the whole phone gate sits in front of the real proposal.
+const PROPOSAL_DOCS_DIR = path.join(DATA_DIR, "proposal-docs");
+
+// Resolve the on-disk path for a quote's custom document. Sanitizes the id
+// (quote ids look like "Q-2026-0228") so a crafted id can't escape the
+// directory. Returns null for an empty/invalid id.
+function proposalDocPath(quoteId) {
+  const safe = String(quoteId || "").replace(/[^A-Za-z0-9._-]/g, "");
+  if (!safe) return null;
+  return path.join(PROPOSAL_DOCS_DIR, `${safe}.html`);
+}
+
+// Does this proposal carry a custom HTML document on disk? THIS is what
+// turns the phone gate on (Patrick, Jul 13 2026): the challenge exists
+// specifically to protect the designed HTML page. A proposal without one
+// behaves exactly as before the gate shipped — token-only /approve, PDF
+// attached to the email. The FILE is the source of truth (the
+// q.proposalDocument metadata only drives the builder card), so a
+// hand-dropped file still gates and a stale metadata stub without a file
+// does not.
+async function proposalHasCustomDoc(q) {
+  if (!q || q.type !== "project_proposal") return false;
+  const docPath = proposalDocPath(q.id);
+  if (!docPath) return false;
+  try { return (await fs.stat(docPath)).isFile(); } catch (_) { return false; }
+}
+
+// If this /approve/<id> page request is for a project_proposal that HAS a
+// custom document AND the caller has passed the gate, serve the document
+// and return true. Otherwise return false so the caller falls through to
+// approve.html (the phone challenge, or the generic render for proposals
+// without a custom doc). Admins may also open it token-lessly (Patrick's
+// own preview) since requireUser → "allow".
+async function serveProposalDocIfUnlocked(req, res, quoteId, url) {
+  const token = url.searchParams.get("t") || "";
+  let q = null;
+  try { q = await quotes.getByApprovalToken(quoteId, token); } catch (_) { q = null; }
+  if (!q) {
+    // No valid token — still let a logged-in admin/tech preview the doc.
+    const staff = await requireUser(req);
+    if (staff) { try { q = await quotes.get(quoteId); } catch (_) { q = null; } }
+  }
+  if (!(await proposalHasCustomDoc(q))) return false; // no custom doc → generic approve.html
+  // Gate: only admin / owning-customer / valid unlock cookie sees it.
+  if ((await resolveProposalGate(req, q)) !== "allow") return false;
+  let html;
+  try { html = await fs.readFile(proposalDocPath(q.id)); } catch (_) { return false; }
+  res.writeHead(200, {
+    "content-type": "text/html; charset=utf-8",
+    "content-length": html.length,
+    "cache-control": "no-store"
+  });
+  res.end(html);
+  return true;
 }
 
 // Which URLs require which level of authentication. Returns:
@@ -5970,6 +6154,14 @@ async function handleApi(req, res, pathname) {
       const attId = decodeURIComponent(approveAttachMatch[3]);
       const q = await quotes.getByApprovalToken(quoteId, token);
       if (!q) return sendJson(res, 404, { ok: false, errors: ["Not found."] });
+      // Proposal phone gate — the token in the URL is necessary but, for a
+      // doc-carrying project_proposal, NOT sufficient. Require admin/
+      // owning-customer session or a valid unlock cookie scoped to THIS
+      // quote (a cookie for another quote is rejected by
+      // resolveProposalGate → hasProposalUnlockCookie).
+      if ((await proposalHasCustomDoc(q)) && (await resolveProposalGate(req, q)) !== "allow") {
+        return sendNoBody(res, 401);
+      }
       // Don't serve the customer-uploaded signed_pdf_return back to the
       // customer-facing /approve page — it's evidence, not content.
       const att = (q.attachments || []).find((a) => a.id === attId && a.kind !== "signed_pdf_return");
@@ -5997,6 +6189,13 @@ async function handleApi(req, res, pathname) {
       const token = decodeURIComponent(approvePdfMatch[2]);
       const q = await quotes.getByApprovalToken(quoteId, token);
       if (!q) return sendJson(res, 404, { ok: false, errors: ["Approval link not found or expired."] });
+      // Proposal phone gate — for a doc-carrying project_proposal the PDF
+      // sits behind the gate too (admin/owning customer session, or a
+      // valid unlock cookie for THIS quote). Proposals without a custom
+      // document stay token-only, as before the gate shipped.
+      if ((await proposalHasCustomDoc(q)) && (await resolveProposalGate(req, q)) !== "allow") {
+        return sendNoBody(res, 401);
+      }
       // The print-to-sign download. For a sent quote this MUST be the
       // frozen bytes — what the customer prints, signs, and returns has
       // to be, provably, what we sent them (Brief B §3.5). serveQuotePdf
@@ -6012,6 +6211,108 @@ async function handleApi(req, res, pathname) {
       return;
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't generate PDF."] });
+    }
+  }
+
+  // Public: POST /api/approve/:id/:token/unlock — the phone challenge for a
+  // project_proposal (Phone-Gated Proposal Access brief, 2026-07). Body:
+  // { phone }. On a match against ANY phone on the customer's live record,
+  // mints a 24h unlock cookie scoped to this one quote. Rate-limited hard
+  // (§3.5). Every response is deliberately non-committal (§3.6): a bad token
+  // is indistinguishable from a nonexistent quote, and a wrong phone is
+  // indistinguishable from "no phone on file".
+  const approveUnlockMatch = pathname.match(/^\/api\/approve\/([^/]+)\/([^/]+)\/unlock$/);
+  if (approveUnlockMatch && req.method === "POST") {
+    const ip = callerIp(req);
+    // Same generic copy for wrong-phone AND no-phone-on-file so the two are
+    // indistinguishable — otherwise "no phone" would be an oracle.
+    const genericFail = "We couldn't verify that number. Try another number you may have given us, or call (905) 960-0181 and we'll open it for you.";
+    try {
+      const quoteId = decodeURIComponent(approveUnlockMatch[1]);
+      const token = decodeURIComponent(approveUnlockMatch[2]);
+      const q = await quotes.getByApprovalToken(quoteId, token);
+      // Bad token → 404, indistinguishable from a nonexistent quote (§3.6).
+      if (!q) return sendJson(res, 404, { ok: false, errors: ["Approval link not found or expired."] });
+      // Only a project_proposal carrying a custom HTML document uses the
+      // gate; nothing to unlock otherwise (standard proposals and every
+      // other quote type are token-only).
+      if (!(await proposalHasCustomDoc(q))) {
+        return sendJson(res, 400, { ok: false, errors: ["This link doesn't use a phone unlock."] });
+      }
+
+      // Rate limit BEFORE looking anything up (no timing side channel). Per
+      // quote AND per IP; the per-quote lock is the real brute-force defense
+      // and survives an IP change. 5/hour → a rolling 1-hour lockout.
+      const quoteKey = `proposal-unlock:quote:${q.id}`;
+      const ipKey = `proposal-unlock:ip:${ip}`;
+      if (!rateLimit.check(quoteKey, proposalUnlock.ATTEMPT_LIMIT, proposalUnlock.WINDOW_MS) ||
+          !rateLimit.check(ipKey, PROPOSAL_UNLOCK_IP_LIMIT, PROPOSAL_UNLOCK_IP_WINDOW_MS)) {
+        console.warn("[proposal-unlock] locked", { quoteId: q.id, ip, at: new Date().toISOString() });
+        // No "attempts remaining" — that would be a free oracle (§3.5).
+        return sendJson(res, 429, { ok: false, locked: true, errors: ["Too many attempts. For your security this proposal is locked for a little while — please call us at (905) 960-0181 and we'll help you open it."] });
+      }
+
+      let phone = "";
+      try {
+        const payload = await parseRequestBody(req);
+        phone = String(payload?.phone || "");
+      } catch { phone = ""; }
+
+      const stored = await proposalCustomerPhones(q);
+      const result = proposalUnlock.evaluatePhone(phone, stored);
+
+      // Malformed (< 10 digits) — a typo, not an attack. Reject WITHOUT
+      // spending an attempt (§3.3 / §3.5). Never lecture about formatting.
+      if (result.malformed) {
+        return sendJson(res, 422, { ok: false, errors: ["Please enter your 10-digit phone number."] });
+      }
+
+      // A real, well-formed attempt — it counts whether or not it matches.
+      rateLimit.record(quoteKey);
+      rateLimit.record(ipKey);
+
+      if (result.noStored) {
+        // No phone on the customer's record → the gate can NEVER pass for
+        // them. Page Patrick (once per quote per day so a retry loop can't
+        // spam him) and return the SAME generic failure as a wrong number.
+        const pageKey = `proposal-unlock:nophone:${q.id}`;
+        if (rateLimit.check(pageKey, 1, 24 * 60 * 60 * 1000)) {
+          rateLimit.record(pageKey);
+          try {
+            const baseUrl = resolvePublicBaseUrl();
+            const aliasLead = {
+              id: q.id,
+              sourceLabel: `PROPOSAL LOCKOUT — ${q.id}`,
+              contact: {
+                name: "Customer",
+                phone: "",
+                email: q.customerEmail || "",
+                address: "",
+                notes: `A customer tried to open proposal ${q.id} but there is NO phone on their record, so the phone gate can never pass. Add a phone to the customer/lead record, or get them the document another way.`
+              }
+            };
+            Promise.allSettled([sendNewLeadEmail(aliasLead, { baseUrl })]).catch(() => {});
+          } catch (_) { /* paging is best-effort */ }
+        }
+        console.warn("[proposal-unlock] no phone on record", { quoteId: q.id, ip, at: new Date().toISOString() });
+        return sendJson(res, 401, { ok: false, errors: [genericFail] });
+      }
+
+      if (!result.matched) {
+        // Generic failure — never reveal the quote's existence, owner, or
+        // any hint of the correct number (§3.6).
+        console.warn("[proposal-unlock] failed attempt", { quoteId: q.id, ip, at: new Date().toISOString() });
+        return sendJson(res, 401, { ok: false, errors: [genericFail] });
+      }
+
+      // Match — mint the 24h unlock cookie scoped to this quote; the page
+      // re-fetches and renders. renders + PDF are separate requests that
+      // ride the same cookie, so they don't re-challenge.
+      await setProposalUnlockCookie(req, res, q.id);
+      return sendJson(res, 200, { ok: true });
+    } catch (err) {
+      console.warn("[proposal-unlock] error", { ip, msg: err?.message });
+      return sendJson(res, 400, { ok: false, errors: ["Couldn't verify that number right now. Please try again."] });
     }
   }
 
@@ -7156,6 +7457,22 @@ async function handleApi(req, res, pathname) {
       const token = decodeURIComponent(approvalGetMatch[2]);
       const q = await quotes.getByApprovalToken(quoteId, token);
       if (!q) return sendJson(res, 404, { ok: false, errors: ["Approval link not found or expired."] });
+      // Proposal phone gate (§3.7) — ONLY for a project_proposal that
+      // carries a custom HTML document (the gate exists to protect the
+      // designed page; standard proposals behave exactly as before the
+      // gate shipped). Run before any record lookup so an unauthenticated
+      // caller gets the challenge signal and nothing else.
+      if (await proposalHasCustomDoc(q)) {
+        const gate = await resolveProposalGate(req, q);
+        // Different customer's portal session → 401 no body. Do NOT fall
+        // through to the challenge (that leaks the quote belongs to
+        // someone else).
+        if (gate === "deny") return sendNoBody(res, 401);
+        // Valid token, no session/cookie → tell the page to show the phone
+        // form. No quote data crosses the wire yet. `locked:true` reveals
+        // nothing the token holder didn't already have.
+        if (gate === "challenge") return sendJson(res, 200, { ok: true, locked: true });
+      }
       // Bypass safety — if the WO this quote belongs to has been
       // admin-bypassed or locked, the visit is complete and this link
       // is stale. Surface the completed message instead of a signable page.
@@ -10480,6 +10797,98 @@ async function handleApi(req, res, pathname) {
     }
   }
 
+  // GET /api/quotes/:id/gate-phones — admin. The "Phone gate" panel in the
+  // proposal builder. Returns the EXACT phone set the unlock challenge
+  // checks (same proposalCustomerPhoneEntries the gate uses — no drift),
+  // each with its source, plus the linked customer's editable fields so the
+  // panel can offer inline editing via the existing PATCH /api/customer/:id.
+  const gatePhonesMatch = pathname.match(/^\/api\/quotes\/([^/]+)\/gate-phones$/);
+  if (gatePhonesMatch && req.method === "GET") {
+    const session = await requireAdmin(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+    try {
+      const quoteId = decodeURIComponent(gatePhonesMatch[1]);
+      const q = await quotes.get(quoteId);
+      if (!q) return sendJson(res, 404, { ok: false, errors: ["Quote not found."] });
+      const entries = await proposalCustomerPhoneEntries(q);
+      const phones = entries.map((e) => {
+        const normalized = proposalUnlock.normalizePhone(e.value);
+        return { ...e, normalized, unlocks: proposalUnlock.isCompletePhone(normalized) };
+      });
+      let customer = null;
+      if (q.customerId) {
+        try {
+          const c = await customers.get(q.customerId, { withProperties: false });
+          if (c) customer = { id: c.id, name: c.name, phone: c.phone || "", spousePhone: c.spousePhone || "" };
+        } catch (_) { /* tolerate */ }
+      }
+      return sendJson(res, 200, { ok: true, phones, customer });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't load gate phones."] });
+    }
+  }
+
+  // POST /api/quotes/:id/proposal-document — admin. Upload the designed,
+  // self-contained HTML page the phone-gated /approve serves for this
+  // project_proposal (the "after dark" presentation). Body: { filename,
+  // data } where data is base64 of the HTML file (matches the attachment /
+  // WO-photo upload pattern), or { filename, html } with the raw string.
+  // Writes server/data/proposal-docs/<id>.html and stamps metadata.
+  const proposalDocMatch = pathname.match(/^\/api\/quotes\/([^/]+)\/proposal-document$/);
+  if (proposalDocMatch && req.method === "POST") {
+    const session = await requireAdmin(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+    try {
+      const quoteId = decodeURIComponent(proposalDocMatch[1]);
+      const q = await quotes.get(quoteId);
+      if (!q) return sendJson(res, 404, { ok: false, errors: ["Quote not found."] });
+      if (q.type !== "project_proposal") {
+        return sendJson(res, 422, { ok: false, errors: ["Only a project proposal can carry a custom document."] });
+      }
+      const payload = await parseRequestBody(req, { maxBytes: 30 * 1024 * 1024 });
+      const html = (typeof payload.html === "string" && payload.html)
+        ? Buffer.from(payload.html, "utf8")
+        : Buffer.from(String(payload.data || ""), "base64");
+      if (!html.length) return sendJson(res, 422, { ok: false, errors: ["The document was empty."] });
+      if (html.length > 20 * 1024 * 1024) return sendJson(res, 413, { ok: false, errors: ["Document too large — 20 MB cap."] });
+      // Light sanity check — it has to look like an HTML page.
+      const head = html.slice(0, 1024).toString("utf8").trimStart().toLowerCase();
+      if (!(head.startsWith("<!doctype") || head.startsWith("<html") || head.includes("<html"))) {
+        return sendJson(res, 422, { ok: false, errors: ["That doesn't look like an HTML page — upload the .html file."] });
+      }
+      const docPath = proposalDocPath(q.id);
+      if (!docPath) return sendJson(res, 400, { ok: false, errors: ["Bad quote id."] });
+      await fs.mkdir(PROPOSAL_DOCS_DIR, { recursive: true });
+      await fs.writeFile(docPath, html);
+      const meta = {
+        filename: String(payload.filename || `${q.id}.html`).slice(0, 200),
+        bytes: html.length,
+        uploadedAt: new Date().toISOString(),
+        uploadedBy: session.uid || "admin"
+      };
+      const updated = await quotes.setProposalDocument(q.id, meta, { by: session.uid || "admin" });
+      return sendJson(res, 201, { ok: true, proposalDocument: meta, quote: updated });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't save the document."] });
+    }
+  }
+
+  if (proposalDocMatch && req.method === "DELETE") {
+    const session = await requireAdmin(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+    try {
+      const quoteId = decodeURIComponent(proposalDocMatch[1]);
+      const q = await quotes.get(quoteId);
+      if (!q) return sendJson(res, 404, { ok: false, errors: ["Quote not found."] });
+      const docPath = proposalDocPath(quoteId);
+      if (docPath) { try { await fs.unlink(docPath); } catch (_) { /* already gone */ } }
+      const updated = await quotes.setProposalDocument(quoteId, null, { by: session.uid || "admin" });
+      return sendJson(res, 200, { ok: true, quote: updated });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't remove the document."] });
+    }
+  }
+
   // POST /api/quotes/:id/revise — create a -v2 (or -vN) revision of a
   // sent proposal. Original gets superseded, new draft returned.
   const reviseMatch = pathname.match(/^\/api\/quotes\/([^/]+)\/revise$/);
@@ -11142,6 +11551,15 @@ async function handleApi(req, res, pathname) {
             const firstName = (custName ? custName.split(/\s+/)[0] : "").replace(/</g, "&lt;") || "there";
             const displayNo = (q.quoteNumberDisplay && String(q.quoteNumberDisplay).trim()) || q.id;
             const branchLabel = q.branch || "project";
+            // Phone-Gated Proposal Access (2026-07, rescoped Jul 13): the
+            // gate exists ONLY when a custom HTML document is attached, so
+            // the email branches on the same check the /approve routes use.
+            //   gated   → link only, NO PDF attachment (gating a document
+            //             and then emailing it defeats the gate), plus the
+            //             "you'll be asked for your phone" expectation.
+            //   ungated → the classic email, PDF attached, byte-identical
+            //             to pre-gate behaviour.
+            const gated = await proposalHasCustomDoc(q);
             const html = `
 <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:560px;color:#1a1a1a;line-height:1.55;">
   <div style="padding:24px 28px;background:#1B4D2E;border-radius:8px 8px 0 0;">
@@ -11150,11 +11568,16 @@ async function handleApi(req, res, pathname) {
   </div>
   <div style="padding:24px 28px;background:#FAFAF5;border:1px solid #e5e5dd;border-top:none;border-radius:0 0 8px 8px;">
     <p style="margin:0 0 14px;">Hi ${firstName},</p>
-    <p style="margin:0 0 14px;">Your detailed proposal (<strong>${displayNo}</strong>) is attached and posted at the link below. Total: <strong>$${Number(q.total || 0).toFixed(2)} CAD</strong> incl. HST.</p>
+    ${gated
+      ? `<p style="margin:0 0 14px;">Your detailed proposal (<strong>${displayNo}</strong>) is ready to review at the link below. Total: <strong>$${Number(q.total || 0).toFixed(2)} CAD</strong> incl. HST.</p>
+    <p style="margin:0 0 14px;padding:12px 14px;background:#EAF3DE;border:1px solid #C7E0A8;border-radius:8px;font-size:13px;color:#33502f;">To open it, you'll be asked for your phone number — the one we have on file for you. Any format is fine.</p>`
+      : `<p style="margin:0 0 14px;">Your detailed proposal (<strong>${displayNo}</strong>) is attached and posted at the link below. Total: <strong>$${Number(q.total || 0).toFixed(2)} CAD</strong> incl. HST.</p>`}
     <p style="margin:0 0 14px;font-size:13px;color:#555;">You can accept this proposal in either of two ways:</p>
     <ul style="margin:0 0 14px;padding-left:20px;font-size:13px;color:#333;line-height:1.7;">
       <li><strong>Sign online</strong> — tap the button below, draw your signature, done.</li>
-      <li><strong>Print, sign, return</strong> — print the attached PDF, sign by hand, scan or photograph it, and email it back to <a href="mailto:info@pjllandservices.com" style="color:#1B4D2E;">info@pjllandservices.com</a>.</li>
+      ${gated
+        ? `<li><strong>Print, sign, return</strong> — open the proposal, download the PDF, sign by hand, scan or photograph it, and email it back to <a href="mailto:info@pjllandservices.com" style="color:#1B4D2E;">info@pjllandservices.com</a>.</li>`
+        : `<li><strong>Print, sign, return</strong> — print the attached PDF, sign by hand, scan or photograph it, and email it back to <a href="mailto:info@pjllandservices.com" style="color:#1B4D2E;">info@pjllandservices.com</a>.</li>`}
     </ul>
     <p style="margin:0 0 18px;text-align:center;">
       <a href="${approvalUrl}" style="display:inline-block;padding:14px 28px;background:#E07B24;color:#fff;text-decoration:none;border-radius:6px;font-weight:600;font-size:15px;">Review &amp; sign online</a>
@@ -11165,10 +11588,10 @@ async function handleApi(req, res, pathname) {
   <p style="margin:16px 0 0;font-size:11px;color:#999;text-align:center;">PJL Land Services · Newmarket, Ontario · pjllandservices.com</p>
 </div>`.trim();
 
-            // Attach the FROZEN bytes (Brief B) — identical to the admin
-            // download and the /approve print-to-sign page. Never a second
-            // render: pdfBuffer was frozen (or reused) above.
-            const attachments = [{
+            // Ungated → attach the FROZEN bytes (Brief B), identical to the
+            // admin download and the /approve print-to-sign page. Gated →
+            // deliberately NO attachment; the PDF lives behind the gate.
+            const attachments = gated ? [] : [{
               filename: `PJL-Proposal-${q.id}.pdf`,
               content: pdfBuffer,
               contentType: "application/pdf"
@@ -16875,6 +17298,18 @@ const server = http.createServer(async (req, res) => {
       // Fall through to serveStatic on a fatal lookup error so the
       // page itself can still load (the OG card just won't be
       // personalized).
+    }
+
+    // Custom proposal document — /approve/<id> for a project_proposal that
+    // has a self-contained HTML doc on disk serves THAT (behind the phone
+    // gate) instead of the generic approve.html render. Not unlocked / no
+    // doc → falls through to serveStatic → approve.html (the challenge).
+    if (req.method === "GET") {
+      const approvePageMatch = pathname.match(/^\/approve\/([^/]+)\/?$/);
+      if (approvePageMatch) {
+        const served = await serveProposalDocIfUnlocked(req, res, decodeURIComponent(approvePageMatch[1]), url);
+        if (served) return;
+      }
     }
 
     if (pathname.startsWith("/api/")) {

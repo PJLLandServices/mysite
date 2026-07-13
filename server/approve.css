@@ -383,3 +383,69 @@
   margin-top: 4px !important;
 }
 
+/* ---- Phone challenge gate (Phone-Gated Proposal Access, 2026-07) ----
+   One field, one button. Reuses .approve-input (16px font → no iOS zoom).
+   The submit button sits inline directly under the field so the iOS
+   keyboard never hides it (a fixed/floating confirm button has bitten
+   this codebase before — keep it in normal flow). */
+.approve-gate {
+  display: flex;
+  justify-content: center;
+  padding: 8px 0 40px;
+}
+.approve-gate-card {
+  width: 100%;
+  max-width: 440px;
+  background: #fff;
+  border: 1px solid #E5E5DD;
+  border-radius: 18px;
+  padding: 30px 26px;
+  box-shadow: 0 4px 24px rgba(15, 31, 20, 0.08);
+}
+.approve-gate-card h1 {
+  font-family: "Barlow Condensed", sans-serif;
+  margin: 0 0 10px;
+  color: #1B4D2E;
+  font-size: clamp(26px, 5vw, 34px);
+  letter-spacing: -0.01em;
+  line-height: 1.05;
+}
+.approve-gate-lede {
+  margin: 0 0 22px;
+  color: #555;
+  line-height: 1.55;
+  font-size: 14.5px;
+}
+#approveGateForm {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.approve-gate-btn {
+  font-family: inherit;
+  font-size: 16px;
+  font-weight: 700;
+  padding: 15px 16px;
+  border-radius: 10px;
+  cursor: pointer;
+  min-height: 52px;
+  background: #E07B24;
+  color: #fff;
+  border: 1px solid #E07B24;
+  margin-top: 4px;
+}
+.approve-gate-btn:disabled { opacity: 0.55; cursor: progress; }
+.approve-gate-msg {
+  margin: 4px 0 0;
+  color: #C03A2C;
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+.approve-gate-help {
+  margin: 20px 0 0;
+  font-size: 13px;
+  color: #777;
+  line-height: 1.5;
+}
+.approve-gate-help a { color: #1B4D2E; font-weight: 600; }
+

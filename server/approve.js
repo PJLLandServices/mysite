@@ -11,6 +11,7 @@ const token = params.get("t") || "";
 const loading = document.getElementById("approveLoading");
 const card = document.getElementById("approveCard");
 const errBlock = document.getElementById("approveError");
+const gateBlock = document.getElementById("approveGate");
 const linesEl = document.getElementById("approveLines");
 const signBlock = document.getElementById("approveSignBlock");
 const successBlock = document.getElementById("approveSuccess");
@@ -38,8 +39,16 @@ async function load() {
   try {
     const r = await fetch(`/api/approve/${encodeURIComponent(quoteId)}/${encodeURIComponent(token)}`, { cache: "no-store" });
     const data = await r.json().catch(() => ({}));
+    // Phone gate — a protected project_proposal we haven't unlocked yet.
+    // The server sends { ok:true, locked:true } and NO quote data; show the
+    // phone challenge instead of the document.
+    if (data && data.locked) {
+      showGate();
+      return;
+    }
     if (!r.ok || !data.ok) {
       loading.hidden = true;
+      gateBlock.hidden = true;
       errBlock.hidden = false;
       return;
     }
@@ -49,6 +58,63 @@ async function load() {
     loading.hidden = true;
     errBlock.hidden = false;
   }
+}
+
+// ---- Phone challenge (Phone-Gated Proposal Access, 2026-07) ----------
+// One field, one button. The field carries the number RAW — no client-side
+// stripping or masking is authoritative; the server normalizes (digits
+// only, last 10) and decides. Every failure shows the server's generic
+// message; we never surface a hint about the correct number.
+let gateWired = false;
+function showGate() {
+  loading.hidden = true;
+  errBlock.hidden = true;
+  card.hidden = true;
+  gateBlock.hidden = false;
+  const form = document.getElementById("approveGateForm");
+  const phoneInput = document.getElementById("approveGatePhone");
+  const submitBtn = document.getElementById("approveGateSubmit");
+  const msg = document.getElementById("approveGateMsg");
+  if (!gateWired && form) {
+    gateWired = true;
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      msg.hidden = true;
+      const phone = phoneInput.value; // raw, unmodified — server owns normalization
+      submitBtn.disabled = true;
+      const orig = submitBtn.textContent;
+      submitBtn.textContent = "Opening…";
+      try {
+        const r = await fetch(`/api/approve/${encodeURIComponent(quoteId)}/${encodeURIComponent(token)}/unlock`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ phone })
+        });
+        const data = await r.json().catch(() => ({}));
+        if (r.ok && data.ok) {
+          // Unlocked — the cookie is set. Full reload so the server can
+          // serve a custom proposal document if this quote has one;
+          // otherwise the reloaded approve.html re-fetches and renders the
+          // generic view (cookie now present, no re-challenge).
+          gateBlock.hidden = true;
+          loading.hidden = false;
+          window.location.reload();
+          return;
+        }
+        msg.textContent = (data.errors && data.errors[0]) || "We couldn't verify that number. Please try again.";
+        msg.hidden = false;
+        submitBtn.disabled = false;
+        submitBtn.textContent = orig;
+      } catch {
+        msg.textContent = "Something went wrong. Please check your connection and try again.";
+        msg.hidden = false;
+        submitBtn.disabled = false;
+        submitBtn.textContent = orig;
+      }
+    });
+  }
+  // Focus the field so the number pad comes up right away on mobile.
+  try { const p = document.getElementById("approveGatePhone"); if (p) p.focus(); } catch (_) {}
 }
 
 function render(q) {

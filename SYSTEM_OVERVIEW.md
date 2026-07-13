@@ -226,7 +226,7 @@ Pages with their primary route + purpose:
 | `reset-password.html` | `/reset-password?t=<mt_id>` | Admin/tech password reset landing page (magic-token-gated). |
 | `portal.html` | `/portal/<token>` | Customer-facing portal: project request, deferred recommendations (pre-authorize with signature), signed quotes, scheduled appointments, notification prefs. Self-service appointment moves: **Reschedule** (once per booking, >24hrs out) and **Cancel** (with captured reason, >24hrs out) — both gated server-side via `/api/portal/:token/booking-actions` preflight, with greyed buttons and a phone-fallback row when blocked. The permanent `<token>` URL stays valid; magic-link sessions redirect here after setting a `customer:<leadId>` cookie. **Server-side Open Graph substitution** (feature-seasonal-outreach-brief.md §3.8): handler reads the token + optional `?season=spring\|fall` query param, looks up lead → property → customerName, then string-replaces `{{ogTitle}}` / `{{ogDescription}}` / `{{ogImageUrl}}` / `{{canonicalUrl}}` placeholders in `portal.html` before responding. Produces a personalized iMessage / Slack / Facebook preview card per recipient. Canonical URL always uses `PUBLIC_BASE_URL` (production host), never `*.onrender.com`. |
 | `unsubscribe.html` | `/unsubscribe/<token>` | **Public** confirm-then-POST page for the CASL unsubscribe flow. Token in URL IS the credential; type comes from `?type=email\|sms\|all`. POSTs to `/api/outreach/unsubscribe` which flips the matching `commPref` off via `outreach.honorUnsubscribe`. Self-contained styles (no `/crm/` CSS dependency) so the page renders even if a carrier rewrites asset URLs. |
-| `approve.html` | `/approve/<id>?t=<token>` | Customer-facing on-site quote approval (signature canvas + PDF download). |
+| `approve.html` | `/approve/<id>?t=<token>` | Customer-facing quote approval (signature canvas + PDF download) for `ai_repair_quote`, `on_site_quote`, and `project_proposal`. **Phone gate — only for a `project_proposal` carrying a custom HTML document** (Phone-Gated Proposal Access, Jul 2026; the gate exists specifically to protect the designed page). A proposal can carry a **custom self-contained HTML document** (`server/data/proposal-docs/<id>.html`, uploaded from the proposal builder); when present, the token alone renders an inline phone challenge (`inputmode="tel"`, no client format enforcement) instead of the document, and once passed the page serves the custom document **in place of** the generic render. The server normalizes the typed number to digits-only/last-10 and compares against **every** phone on the customer's **live** record (primary + spouse + lead contact + property snapshot); on a match it mints a **24h `HttpOnly` cookie scoped to that one quote** via `POST /api/approve/:id/:token/unlock`, and the data / PDF / attachment endpoints all require it. Admin sessions and the owning customer's portal session skip the challenge; a **different** customer's session → 401 (never falls through to the challenge). **5 attempts/quote/hour** then a rolling 1-hour lock (regardless of IP), plus a broader per-IP backstop; failed attempts are logged (quote id, IP, timestamp). No-phone-on-file → generic failure **and Patrick is paged**. Bad/missing token → the same 404 as a nonexistent quote (indistinguishable). **Proposals without a custom document, and `ai_repair_quote` / `on_site_quote`, are token-only — unchanged from pre-gate behaviour.** |
 | `portal-invoice.html` | `/portal/invoice/:id?t=<portalToken>` | **Public, token-gated** read-only invoice mirror linked from the customer invoice-ready SMS. Mobile-first, no admin chrome. Renders line items, totals, and a Pay button that deep-links into `/pay/invoice/:id?t=<paymentToken>`. Shows PAID badge when the invoice is paid, a "voided" notice when voided, or a "payment link is being prepared" banner when no `paymentToken` is on the invoice yet. Wrong/missing `portalToken` → 401 with no body. |
 
 ### Identity & access — authentication model
@@ -244,6 +244,20 @@ Pages with their primary route + purpose:
   replays writes on reconnect with the cookie. A tech disabled mid-
   offline keeps working until reconnect (then queued writes 401). A
   >30-day offline gap requires re-login on reconnect.
+- **Proposal phone gate (Jul 2026).** A `project_proposal` that carries a
+  **custom HTML document** (`proposal-docs/<id>.html`) sits behind an
+  unguessable URL token **plus** a phone-number challenge — the gate
+  exists specifically to protect that designed page; proposals without
+  one stay token-only. The phone is a *second factor against accidental
+  disclosure* — a forwarded email, a shared screenshot — **not a
+  password**. A phone number is not secret; the token provides
+  unguessability, the phone provides "right human". Unlock state is a
+  signed cookie (`pjl_proposal_unlock`) scoped to a **single quote**,
+  24h, HttpOnly/SameSite=Lax/Secure. It reuses the session cookie's HMAC
+  construction (`lib/proposal-unlock.js`) but is **distinct from
+  magic-link tokens** — different name, payload, and lifetime; do not
+  conflate, and never store unlock state in `magic-tokens.json`. Never
+  described anywhere customer-facing as a password.
 - **Hard accuracy rule:** PJL is *not* a backflow tester. The auth
   refactor does not relax that — it only swaps the credential model.
 
@@ -411,7 +425,8 @@ Quotes
   POST   /api/admin/smart-controller-quote       ← "+New Smart Controller Quote" (admin, zero-typing). Body {customerId, propertyId?, zoneCount?, serviceCall:"charge"|"waive"}; 422 codes property_required / zone_count_required / service_call_required drive the modal's selectors. Auto-populates contact/address/zone count (system.zones.length → system.zoneCount), resolves the controller_* tier, mints lead + draft ai_repair_quote w/ narrativeKey:"smart-controller". serviceCall is REQUIRED (no default): "charge" adds the $95 catalog line; "waive" adds a $0 line labelled WAIVED that states the regular fee (note + description render on the approve page + rich PDF). 17+ zones → CRM lead only. Idempotent per property/customer. Manually-picked zone count saves back to property.system.zoneCount.
   POST   /api/quotes/:id/send-for-approval       ← admin "tap Send" on a draft ai_repair_quote: mints an approval token, branded email w/ rich quote PDF + SMS pointing at the /approve/<id>?t=<token> E-SIGN page; flips quote draft→sent + lead→quoted (portal Accept stays as fallback). E-sign flips quote→accepted + lead→won. Re-send allowed while still "sent". on_site_quote uses /api/work-orders/:id/on-site-quote/send-for-approval instead.
   POST   /api/approve/:id/:token/sign            ← public e-sign capture (handles project_proposal via recordPortalSignAcceptance)
-  GET    /api/approve/:id/:token/attachments/:attId ← token-gated public attachment serve (for proposal images embedded in /approve)
+  POST   /api/approve/:id/:token/unlock          ← public phone challenge, ONLY for a project_proposal carrying a custom HTML document (Jul 2026). Body { phone }; server normalizes (digits, last-10) vs every phone on the live customer record. Match → 24h HttpOnly cookie scoped to this quote. Malformed (<10 digits) → 422, no attempt spent. 5/quote/hr then 429 lock; wrong-number and no-phone-on-file return the SAME generic 401. No custom doc (or non-proposal) → 400 (nothing to unlock).
+  GET    /api/approve/:id/:token/attachments/:attId ← token-gated public attachment serve (for proposal images embedded in /approve). For a doc-carrying project_proposal, ALSO requires an admin/owning-customer session or the unlock cookie for this quote.
 
   Project Proposal — Brief 1 (May 2026):
   GET    /api/admin/project-rates                ← internal admin-only rates catalog
@@ -421,7 +436,10 @@ Quotes
   GET    /api/quotes/:id/attachments/:attId      ← admin-gated attachment serve
   DELETE /api/quotes/:id/attachments/:attId      ← remove attachment (draft only)
   POST   /api/quotes/:id/revise                  ← create -v2 revision; original gets superseded
-  POST   /api/quotes/:id/send-proposal-for-approval ← email branded PDF + acceptance URL
+  GET    /api/quotes/:id/gate-phones             ← admin: the builder's "Phone gate" panel. Returns the EXACT live phone set the unlock challenge checks (same server function — no drift), each entry with source (customer / customer_spouse / lead / property), raw value, normalized digits, and an `unlocks` flag, plus the linked customer's {id, name, phone, spousePhone} for inline editing. Edits go through the existing PATCH /api/customer/:id — the customer record stays the single source of truth.
+  POST   /api/quotes/:id/proposal-document       ← admin: upload the designed self-contained HTML page for a project_proposal (base64 in { filename, data }, or { filename, html }). Writes server/data/proposal-docs/<id>.html + stamps quote.proposalDocument. When present, the phone-gated /approve serves it instead of the generic render. 20 MB cap.
+  DELETE /api/quotes/:id/proposal-document       ← admin: remove the custom document (deletes the file + clears the metadata; /approve falls back to the generic render).
+  POST   /api/quotes/:id/send-proposal-for-approval ← branches on the custom-document check (Jul 2026): a doc-carrying proposal emails a LINK with NO PDF attachment (gating a document then emailing it defeats the gate; the PDF is downloadable from behind the gate) and tells the customer they'll be asked for their phone (any format). A proposal WITHOUT a custom doc sends the classic email — PDF attached, original copy, unchanged from pre-gate. PDF frozen either way (Brief B). `ai_repair_quote`/`on_site_quote` sends untouched.
   POST   /api/approve/:id/:token/pdf-return      ← public — customer uploads signed PDF; flips to pending_admin_attestation
   POST   /api/admin/quote-folder/:id/confirm-pdf-acceptance ← admin attests staged PDF; flips to accepted
 

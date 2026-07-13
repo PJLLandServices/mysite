@@ -29,6 +29,25 @@
       <p>This link couldn't be loaded — it may have expired, been revoked, or contains a typo. Call PJL at <a href="tel:+19059600181">(905) 960-0181</a> if you need a new one.</p>
     </div>
 
+    <!-- Phone challenge (Phone-Gated Proposal Access, 2026-07). Shown only
+         when the server returns { locked:true } for a project_proposal and
+         the visitor isn't an admin / the owning customer. One field, one
+         button. inputmode="tel" so iPhone shows the number pad; NO format
+         enforcement — the server normalizes and decides. -->
+    <section class="approve-gate" id="approveGate" hidden>
+      <div class="approve-gate-card">
+        <h1>Open your proposal</h1>
+        <p class="approve-gate-lede">For your privacy, this proposal is protected. Enter the phone number PJL has on file for you and it'll open right up — any format is fine.</p>
+        <form id="approveGateForm" novalidate>
+          <label class="approve-label" for="approveGatePhone">Your phone number</label>
+          <input type="tel" inputmode="tel" autocomplete="tel" id="approveGatePhone" class="approve-input" placeholder="(905) 555-1234" aria-describedby="approveGateMsg">
+          <button type="submit" class="approve-gate-btn" id="approveGateSubmit">Open proposal</button>
+          <p class="approve-gate-msg" id="approveGateMsg" hidden role="alert"></p>
+        </form>
+        <p class="approve-gate-help">Trouble getting in? Call us at <a href="tel:+19059600181">(905) 960-0181</a> and we'll open it for you.</p>
+      </div>
+    </section>
+
     <article class="approve-card" id="approveCard" hidden>
       <!-- Tech-only preview banner. Shown when ?preview=1 AND the quote
            is in draft_preview status. Customer URLs never get this

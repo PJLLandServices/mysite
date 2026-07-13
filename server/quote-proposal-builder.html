@@ -183,6 +183,52 @@
               <p class="pb-side-hint">PNG, JPEG, or PDF. 25 MB cap per file, 100 MB total.</p>
               <ul class="pb-attach-list" id="pbAttachList"></ul>
             </section>
+
+            <!-- Proposal document (Phone-Gated Proposal Access, 2026-07).
+                 The designed, self-contained HTML page the customer sees
+                 behind the phone gate. When attached it REPLACES the
+                 standard generated layout for this proposal. -->
+            <section class="pb-doc">
+              <h3>Proposal document</h3>
+              <p class="pb-side-hint">Optional. Drop in the designed HTML page (renders and all) and it becomes what the customer sees behind the phone gate — in place of the standard layout. Leave empty to use the standard layout.</p>
+              <label class="pb-upload-btn">
+                <input type="file" id="pbDocInput" accept="text/html,.html,.htm" hidden>
+                <span>+ Upload HTML document</span>
+              </label>
+              <div class="pb-doc-status" id="pbDocStatus" hidden>
+                <p class="pb-doc-name"><span class="pb-doc-dot" aria-hidden="true"></span><span id="pbDocName">—</span></p>
+                <p class="pb-doc-meta" id="pbDocMeta"></p>
+                <div class="pb-doc-actions">
+                  <a class="pjl-btn pjl-btn-outline pjl-btn-sm" id="pbDocPreview" href="#" target="_blank" rel="noopener">Preview</a>
+                  <button type="button" class="pjl-btn pjl-btn-outline pjl-btn-sm" id="pbDocRemove">Remove</button>
+                </div>
+              </div>
+            </section>
+
+            <!-- Phone gate (Phone-Gated Proposal Access, 2026-07). Shows
+                 the numbers that open this proposal — the SAME live set the
+                 unlock challenge checks — and lets Patrick fix the
+                 customer's phone without leaving the builder. Editing here
+                 writes to the customer record (one source of truth), so it
+                 is also the number PJL calls and texts. -->
+            <section class="pb-gate" id="pbGateCard" hidden>
+              <h3>Phone gate</h3>
+              <p class="pb-side-hint">When a proposal document is attached, the customer must type one of these numbers to open it. Read live — changes apply immediately, even after sending.</p>
+              <p class="pb-gate-off" id="pbGateOff" hidden>Gate is off — no proposal document attached. The emailed link opens the standard page directly.</p>
+              <ul class="pb-gate-list" id="pbGateList"></ul>
+              <p class="pb-gate-warn" id="pbGateWarn" hidden>⚠ No usable phone on file — the customer <strong>cannot open this proposal</strong> until one is added below.</p>
+              <div class="pb-gate-edit" id="pbGateEdit" hidden>
+                <label class="pb-gate-label">Customer phone
+                  <input type="tel" inputmode="tel" id="pbGatePhone" placeholder="(905) 555-1234">
+                </label>
+                <label class="pb-gate-label">Spouse phone (also opens it)
+                  <input type="tel" inputmode="tel" id="pbGateSpouse" placeholder="optional">
+                </label>
+                <button type="button" class="pjl-btn pjl-btn-outline" id="pbGateSave">Save phones</button>
+                <p class="pb-side-hint">Saving updates <span id="pbGateCustomerName">the customer</span>'s record — the same number you call and text.</p>
+              </div>
+              <p class="pb-gate-nocust" id="pbGateNoCust" hidden>No customer linked to this quote — these numbers come from the lead/property and can be edited on those records.</p>
+            </section>
           </aside>
         </div>
 

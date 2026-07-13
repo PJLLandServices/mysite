@@ -443,6 +443,15 @@ function blankQuote() {
     pdfGeneratedAt: null,
     pdfBackfilled: false,
 
+    // Custom proposal document (Phone-Gated Proposal Access, 2026-07).
+    // project_proposal-only: a self-contained HTML page (the designed
+    // "after dark" presentation) lives on disk at
+    // server/data/proposal-docs/<id>.html and, when present, is what the
+    // phone-gated /approve serves instead of the generic render. This field
+    // is display/metadata only — { filename, bytes, uploadedAt, uploadedBy }
+    // or null. The file on disk is the source of truth for serving.
+    proposalDocument: null,
+
     // Audit trail — every status change appends an entry.
     history: [
       { ts: created, action: "created", by: "system", note: "" }
@@ -1242,6 +1251,32 @@ async function persistFrozenPdf(id, { pdfPath, pdfSha256 = null, pdfGeneratedAt 
   return q;
 }
 
+// Stamp / clear the custom proposal-document metadata (Phone-Gated
+// Proposal Access, 2026-07). Metadata only — the caller writes/deletes the
+// actual HTML file on disk (server/data/proposal-docs/<id>.html). Allowed
+// on any status (Patrick can attach or replace the designed page after the
+// proposal was sent); it is NOT a scope-protected pricing field. Pass
+// meta=null to clear. Returns the updated record or null if not found.
+async function setProposalDocument(id, meta, { by = "admin" } = {}) {
+  if (!id) throw new Error("setProposalDocument needs id");
+  const records = await readAll();
+  const idx = records.findIndex((q) => q.id === id);
+  if (idx === -1) return null;
+  const q = records[idx];
+  const ts = nowIso();
+  q.proposalDocument = meta || null;
+  q.updatedAt = ts;
+  q.history.push({
+    ts,
+    action: meta ? "proposal_document_attached" : "proposal_document_removed",
+    by,
+    note: meta?.filename || ""
+  });
+  records[idx] = q;
+  await writeAll(records);
+  return q;
+}
+
 // Flip a draft ai_repair_quote to "sent" for the portal-based send path
 // (AI smart-controller upgrade brief, 2026-06-12). Unlike
 // markSentForApproval there is NO approval token — the customer reviews
@@ -2029,6 +2064,7 @@ module.exports = {
   markSent,
   markSentForApproval,
   persistFrozenPdf,
+  setProposalDocument,
   markAsPreview,
   markDraftPreview,
   convertPreviewToSent,

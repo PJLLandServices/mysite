@@ -71,13 +71,30 @@
     attestEmail: $("pbAttestEmail"),
     attestNote: $("pbAttestNote"),
     attestOpen: $("pbAttestOpen"),
-    attestConfirm: $("pbAttestConfirm")
+    attestConfirm: $("pbAttestConfirm"),
+    docInput: $("pbDocInput"),
+    docStatus: $("pbDocStatus"),
+    docName: $("pbDocName"),
+    docMeta: $("pbDocMeta"),
+    docPreview: $("pbDocPreview"),
+    docRemove: $("pbDocRemove"),
+    gateCard: $("pbGateCard"),
+    gateList: $("pbGateList"),
+    gateWarn: $("pbGateWarn"),
+    gateEdit: $("pbGateEdit"),
+    gatePhone: $("pbGatePhone"),
+    gateSpouse: $("pbGateSpouse"),
+    gateSave: $("pbGateSave"),
+    gateCustomerName: $("pbGateCustomerName"),
+    gateNoCust: $("pbGateNoCust"),
+    gateOff: $("pbGateOff")
   };
 
   // ---- State ---------------------------------------------------------
   const state = {
     quote: null,
     projectRates: null,
+    gatePhones: null,
     activeSectionId: null,
     saveTimer: null,
     isDirty: false,
@@ -224,6 +241,7 @@
     renderSectionList();
     renderActiveSection();
     renderAttachments();
+    renderProposalDoc();
     renderLineItems();
     renderTotals();
     refreshPreviewLink();
@@ -620,6 +638,160 @@
     }
   }
 
+  // ---- Proposal document (custom HTML page behind the phone gate) ----
+  function renderProposalDoc() {
+    const doc = state.quote && state.quote.proposalDocument;
+    if (!doc) {
+      el.docStatus.hidden = true;
+      return;
+    }
+    el.docStatus.hidden = false;
+    el.docName.textContent = doc.filename || "document.html";
+    const kb = doc.bytes ? Math.round(doc.bytes / 1024) : 0;
+    const when = doc.uploadedAt ? new Date(doc.uploadedAt).toLocaleDateString() : "";
+    el.docMeta.textContent = [kb ? `${kb} KB` : "", when ? `added ${when}` : ""].filter(Boolean).join(" · ");
+    // Admins skip the phone gate, so a tokenless /approve/<id> previews the
+    // document exactly as the unlocked customer sees it.
+    el.docPreview.href = `/approve/${encodeURIComponent(state.quote.id)}`;
+  }
+
+  el.docInput.addEventListener("change", async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!(/\.html?$/i.test(file.name) || file.type === "text/html")) {
+      showError("Upload the .html file.");
+      e.target.value = "";
+      return;
+    }
+    if (file.size > 20 * 1024 * 1024) {
+      showError("Document too large — 20 MB cap.");
+      e.target.value = "";
+      return;
+    }
+    try {
+      const dataUrl = await new Promise((resolve, reject) => {
+        const fr = new FileReader();
+        fr.onload = () => resolve(fr.result);
+        fr.onerror = () => reject(new Error("Could not read file."));
+        fr.readAsDataURL(file);
+      });
+      const base64 = String(dataUrl).split(",")[1] || "";
+      const r = await fetch(`/api/quotes/${encodeURIComponent(state.quote.id)}/proposal-document`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ filename: file.name, data: base64 })
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok || !data.ok) {
+        showError(data.errors?.[0] || `Upload failed (${r.status})`);
+        return;
+      }
+      state.quote.proposalDocument = data.proposalDocument;
+      renderProposalDoc();
+      renderGate(); // gate just turned ON — surface the phone panel state
+    } catch (err) {
+      showError(err.message || "Upload failed.");
+    } finally {
+      e.target.value = "";
+    }
+  });
+
+  el.docRemove.addEventListener("click", async () => {
+    if (!confirm("Remove the custom proposal document? The customer will see the standard layout instead.")) return;
+    try {
+      const r = await fetch(`/api/quotes/${encodeURIComponent(state.quote.id)}/proposal-document`, { method: "DELETE" });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok || !data.ok) {
+        showError(data.errors?.[0] || "Remove failed.");
+        return;
+      }
+      state.quote.proposalDocument = null;
+      renderProposalDoc();
+      renderGate(); // gate just turned OFF — clear the lockout warning
+    } catch (err) {
+      showError(err.message || "Remove failed.");
+    }
+  });
+
+  // ---- Phone gate panel ----------------------------------------------
+  // Shows the live phone set the unlock challenge checks (same server
+  // function — no drift) and edits the customer's phones inline via the
+  // existing PATCH /api/customer/:id. Loaded once after the quote mounts;
+  // reloaded after every save so the list always reflects the gate.
+  async function loadGatePhones() {
+    try {
+      const r = await fetch(`/api/quotes/${encodeURIComponent(state.quote.id)}/gate-phones`, { cache: "no-store" });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok || !data.ok) return; // panel stays hidden — never blocks the builder
+      state.gatePhones = data;
+      renderGate();
+    } catch (_) { /* panel is a convenience; failure is non-fatal */ }
+  }
+
+  function renderGate() {
+    const data = state.gatePhones;
+    if (!data) return;
+    el.gateCard.hidden = false;
+    // The gate only exists while a proposal document is attached — say so
+    // plainly, and only raise the lockout alarm when it's actually on.
+    const gateOn = !!state.quote.proposalDocument;
+    el.gateOff.hidden = gateOn;
+    const phones = data.phones || [];
+    el.gateList.innerHTML = phones.length
+      ? phones.map((p) => `
+        <li>
+          <span class="pb-gate-src">${escapeHtml(p.label)}</span>
+          <span class="pb-gate-num${p.unlocks ? "" : " is-bad"}" title="${p.unlocks ? "Opens the proposal" : "Fewer than 10 digits — will NOT open it"}">${escapeHtml(p.value)}</span>
+        </li>`).join("")
+      : "";
+    const anyUnlocks = phones.some((p) => p.unlocks);
+    el.gateWarn.hidden = !gateOn || anyUnlocks;
+    if (data.customer) {
+      el.gateEdit.hidden = false;
+      el.gateNoCust.hidden = true;
+      // Don't clobber an in-progress edit on reload — only prefill when
+      // the fields aren't focused.
+      if (document.activeElement !== el.gatePhone) el.gatePhone.value = data.customer.phone || "";
+      if (document.activeElement !== el.gateSpouse) el.gateSpouse.value = data.customer.spousePhone || "";
+      el.gateCustomerName.textContent = data.customer.name || "the customer";
+    } else {
+      el.gateEdit.hidden = true;
+      el.gateNoCust.hidden = false;
+    }
+  }
+
+  el.gateSave.addEventListener("click", async () => {
+    const customer = state.gatePhones?.customer;
+    if (!customer) return;
+    el.gateSave.disabled = true;
+    const orig = el.gateSave.textContent;
+    el.gateSave.textContent = "Saving…";
+    try {
+      const r = await fetch(`/api/customer/${encodeURIComponent(customer.id)}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          phone: el.gatePhone.value.trim(),
+          spousePhone: el.gateSpouse.value.trim()
+        })
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok || !data.ok) {
+        showError(data.errors?.[0] || data.error || "Couldn't save phones.");
+        return;
+      }
+      await loadGatePhones();
+      el.gateSave.textContent = "Saved ✓";
+      setTimeout(() => { el.gateSave.textContent = orig; }, 1600);
+      return;
+    } catch (err) {
+      showError(err.message || "Couldn't save phones.");
+    } finally {
+      el.gateSave.disabled = false;
+      if (el.gateSave.textContent === "Saving…") el.gateSave.textContent = orig;
+    }
+  });
+
   // ---- Anchor picker -------------------------------------------------
   el.anchorPicker.addEventListener("change", () => {
     const attId = el.anchorPicker.value;
@@ -939,6 +1111,7 @@
       el.app.hidden = false;
       render();
       loadProjectRates();
+      loadGatePhones();
     } catch (err) {
       el.loading.remove();
       el.error.textContent = err.message || "Could not load proposal.";
