@@ -15,7 +15,19 @@
     search: document.getElementById("psSearch"),
     categoryFilter: document.getElementById("psCategoryFilter"),
     assignmentFilter: document.getElementById("psAssignmentFilter"),
+    selectAllVisible: document.getElementById("psSelectAllVisible"),
     count: document.getElementById("psCount"),
+    // Bulk selection toolbar + confirm modal
+    selToolbar: document.getElementById("psSelToolbar"),
+    selCount: document.getElementById("psSelCount"),
+    selSupplier: document.getElementById("psSelSupplier"),
+    reassignBtn: document.getElementById("psReassignBtn"),
+    selClear: document.getElementById("psSelClear"),
+    reassignModal: document.getElementById("reassignModal"),
+    reassignCopy: document.getElementById("reassignCopy"),
+    reassignError: document.getElementById("reassignError"),
+    reassignCancel: document.getElementById("reassignCancel"),
+    reassignConfirm: document.getElementById("reassignConfirm"),
     loading: document.getElementById("psLoading"),
     error: document.getElementById("psError"),
     tableWrap: document.getElementById("psTableWrap"),
@@ -94,6 +106,9 @@
       deletedParts: {}              // baseline records for tombstoned SKUs
     },
     pending: new Map(),             // supplier-id pending edits (unchanged from Phase 3)
+    selected: new Set(),            // SKUs ticked for bulk reassignment
+    collapsed: new Set(),           // collapsed category keys
+    reassignTargetId: null,         // supplier id chosen in the confirm modal
     saveTimer: null,
     saving: false,
     pendingError: null,
@@ -181,6 +196,7 @@
       els.savebar.hidden = false;
       hydrateCategoryFilter();
       hydrateEditCategoryOptions();
+      hydrateSelSupplier();
       render();
       renderDeletedSection();
       setSaveState("saved", new Date().toISOString());
@@ -230,6 +246,16 @@
     }
   }
 
+  // Populate the bulk-reassign supplier dropdown from the active-supplier
+  // list (GET /api/suppliers already excludes archived). If the list is
+  // empty the placeholder stays and the Reassign button never enables.
+  function hydrateSelSupplier() {
+    const opts = state.suppliers
+      .map((s) => `<option value="${escapeHtml(s.id)}">${escapeHtml(s.name)}</option>`)
+      .join("");
+    els.selSupplier.innerHTML = `<option value="">Choose supplier&hellip;</option>` + opts;
+  }
+
   // ===== Main table render ============================================
 
   function effectiveSupplierIds(part) {
@@ -256,16 +282,6 @@
 
   function render() {
     const allParts = Object.values(state.catalog.parts);
-    function sizeRank(s) {
-      const m = String(s || "").match(/[\d.]+/);
-      return m ? parseFloat(m[0]) : 999;
-    }
-    allParts.sort((a, b) =>
-      (a.category || "").localeCompare(b.category || "") ||
-      (a.subcategory || "").localeCompare(b.subcategory || "") ||
-      sizeRank(a.size) - sizeRank(b.size) ||
-      (a.description || "").localeCompare(b.description || "")
-    );
     const visible = applyFilters(allParts);
 
     let assigned = 0, missing = 0;
@@ -277,16 +293,58 @@
     els.statMissing.textContent = `${missing} unassigned`;
     els.count.textContent = `${visible.length} of ${allParts.length} parts`;
 
-    if (!visible.length) {
-      els.body.innerHTML = `<tr><td colspan="6" class="ps-empty">No parts match the current filters.</td></tr>`;
-      return;
-    }
-
     const supplierOptions = state.suppliers
       .map((s) => `<option value="${escapeHtml(s.id)}">${escapeHtml(s.name)}</option>`)
       .join("");
 
-    els.body.innerHTML = visible.map((p) => renderRow(p, supplierOptions)).join("");
+    if (!visible.length) {
+      els.body.innerHTML = `<tr><td colspan="6" class="ps-empty">No parts match the current filters.</td></tr>`;
+      refreshSelectionState();
+      return;
+    }
+
+    // Group visible parts into a category → subcategory → items tree,
+    // mirroring crm-parts.js. Categories render in catalog-defined order;
+    // subcategories alphabetically; items by size then description.
+    function sizeRank(s) {
+      const m = String(s || "").match(/[\d.]+/);
+      return m ? parseFloat(m[0]) : 999;
+    }
+    const tree = new Map();
+    for (const p of visible) {
+      const cat = p.category || "other";
+      const sub = p.subcategory || "Other";
+      if (!tree.has(cat)) tree.set(cat, new Map());
+      const subs = tree.get(cat);
+      if (!subs.has(sub)) subs.set(sub, []);
+      subs.get(sub).push(p);
+    }
+    for (const subs of tree.values()) {
+      for (const items of subs.values()) {
+        items.sort((a, b) => sizeRank(a.size) - sizeRank(b.size) || (a.description || "").localeCompare(b.description || ""));
+      }
+    }
+
+    const catLabel = {};
+    for (const c of (state.catalog.categories || [])) catLabel[c.key] = c.label || c.key;
+    const orderedCats = (state.catalog.categories || []).map((c) => c.key).filter((k) => tree.has(k));
+    // Defensive: surface any category present in the data but missing from
+    // categories[] rather than silently dropping its parts.
+    for (const k of tree.keys()) if (!orderedCats.includes(k)) orderedCats.push(k);
+
+    const html = [];
+    for (const cat of orderedCats) {
+      const subs = tree.get(cat);
+      const catCount = [...subs.values()].reduce((n, items) => n + items.length, 0);
+      html.push(groupRowHtml(cat, catLabel[cat] || cat, catCount));
+      const subNames = [...subs.keys()].sort((a, b) => a.localeCompare(b));
+      for (const sub of subNames) {
+        const items = subs.get(sub);
+        html.push(subRowHtml(cat, sub, items.length));
+        for (const p of items) html.push(renderRow(p, supplierOptions));
+      }
+    }
+    els.body.innerHTML = html.join("");
 
     // After innerHTML write, set each <select>'s value (can't rely on
     // inline `selected` because the value comes from runtime state).
@@ -297,6 +355,34 @@
       const ids = effectiveSupplierIds(part);
       sel.value = ids[0] || "";
     });
+
+    applyCollapsed();
+    refreshSelectionState();
+  }
+
+  function groupRowHtml(cat, label, count) {
+    return `
+      <tr class="ps-group-row" data-cat="${escapeHtml(cat)}">
+        <td class="ps-group-cell" colspan="6">
+          <div class="ps-group-head">
+            <input type="checkbox" class="ps-cat-check" data-cat="${escapeHtml(cat)}" aria-label="Select all in ${escapeHtml(label)}">
+            <button type="button" class="ps-group-toggle" data-cat="${escapeHtml(cat)}" aria-expanded="true">
+              <span class="ps-group-caret" aria-hidden="true"></span>
+              <span class="ps-group-name">${escapeHtml(label)}</span>
+              <span class="ps-group-count">${count}</span>
+            </button>
+          </div>
+        </td>
+      </tr>
+    `;
+  }
+
+  function subRowHtml(cat, sub, count) {
+    return `
+      <tr class="ps-sub-row" data-cat="${escapeHtml(cat)}">
+        <td class="ps-sub-cell" colspan="6"><span class="ps-sub-label">${escapeHtml(sub)}</span><span class="ps-sub-count">${count}</span></td>
+      </tr>
+    `;
   }
 
   function renderRow(p, supplierOptions) {
@@ -318,8 +404,8 @@
       }
     }
     return `
-      <tr data-sku="${escapeHtml(p.sku)}" class="${isMissing ? "is-missing" : ""}">
-        <td><span class="ps-sku">${escapeHtml(p.sku)}</span>${newPill}</td>
+      <tr data-sku="${escapeHtml(p.sku)}" data-cat="${escapeHtml(p.category || "other")}" class="${isMissing ? "is-missing" : ""}">
+        <td><label class="ps-row-check-wrap"><input type="checkbox" class="ps-row-check" data-sku="${escapeHtml(p.sku)}" aria-label="Select ${escapeHtml(p.sku)}"></label><span class="ps-sku">${escapeHtml(p.sku)}</span>${newPill}</td>
         <td>
           <div class="ps-desc">
             ${sizeBadge}
@@ -445,6 +531,28 @@
 
   // ===== Body delegation =============================================
   els.body.addEventListener("change", (event) => {
+    // Row checkbox — toggle a single SKU in the selection set.
+    const rowCheck = event.target.closest(".ps-row-check");
+    if (rowCheck) {
+      const sku = rowCheck.dataset.sku;
+      if (rowCheck.checked) state.selected.add(sku);
+      else state.selected.delete(sku);
+      refreshSelectionState();
+      return;
+    }
+    // Category checkbox — select/deselect every visible SKU in that category.
+    const catCheck = event.target.closest(".ps-cat-check");
+    if (catCheck) {
+      const cat = catCheck.dataset.cat;
+      const shouldSelect = catCheck.checked;
+      els.body.querySelectorAll(`tr[data-sku][data-cat="${cssEscape(cat)}"]`).forEach((r) => {
+        if (shouldSelect) state.selected.add(r.dataset.sku);
+        else state.selected.delete(r.dataset.sku);
+      });
+      refreshSelectionState();
+      return;
+    }
+    // Per-row supplier <select> — unchanged single-SKU auto-save path.
     const sel = event.target.closest("select[data-sku]");
     if (!sel) return;
     const sku = sel.dataset.sku;
@@ -457,6 +565,11 @@
   });
 
   els.body.addEventListener("click", (event) => {
+    const groupToggle = event.target.closest(".ps-group-toggle");
+    if (groupToggle) {
+      toggleCollapse(groupToggle.dataset.cat);
+      return;
+    }
     const kebab = event.target.closest(".ps-kebab");
     if (kebab) {
       event.stopPropagation();
@@ -482,6 +595,145 @@
   els.search.addEventListener("input", () => render());
   els.categoryFilter.addEventListener("change", () => render());
   els.assignmentFilter.addEventListener("change", () => render());
+
+  // ===== Category collapse ===========================================
+  function toggleCollapse(cat) {
+    if (state.collapsed.has(cat)) state.collapsed.delete(cat);
+    else state.collapsed.add(cat);
+    applyCollapsed();
+  }
+  function applyCollapsed() {
+    els.body.querySelectorAll(".ps-group-row").forEach((gr) => {
+      const collapsed = state.collapsed.has(gr.dataset.cat);
+      gr.classList.toggle("is-collapsed", collapsed);
+      const toggle = gr.querySelector(".ps-group-toggle");
+      if (toggle) toggle.setAttribute("aria-expanded", String(!collapsed));
+    });
+    els.body.querySelectorAll("tr[data-cat]:not(.ps-group-row)").forEach((r) => {
+      r.hidden = state.collapsed.has(r.dataset.cat);
+    });
+  }
+
+  // ===== Bulk selection + reassignment ===============================
+  function visibleSkus() {
+    return [...els.body.querySelectorAll("tr[data-sku]")].map((r) => r.dataset.sku);
+  }
+
+  // Recompute every selection-driven control after the selected set or the
+  // rendered rows change: prune stale SKUs, then sync the row checkboxes,
+  // per-category tri-states, the global "select all" box, and the sticky
+  // toolbar.
+  function refreshSelectionState() {
+    for (const sku of [...state.selected]) {
+      if (!state.catalog.parts[sku]) state.selected.delete(sku);
+    }
+    els.body.querySelectorAll(".ps-row-check").forEach((cb) => {
+      cb.checked = state.selected.has(cb.dataset.sku);
+    });
+    els.body.querySelectorAll(".ps-cat-check").forEach((cb) => refreshCatCheckbox(cb));
+    refreshGlobalCheckbox();
+    refreshSelToolbar();
+  }
+
+  function refreshCatCheckbox(cb) {
+    const cat = cb.dataset.cat;
+    const rows = els.body.querySelectorAll(`tr[data-sku][data-cat="${cssEscape(cat)}"]`);
+    let total = 0, sel = 0;
+    rows.forEach((r) => { total++; if (state.selected.has(r.dataset.sku)) sel++; });
+    cb.checked = total > 0 && sel === total;
+    cb.indeterminate = sel > 0 && sel < total;
+  }
+
+  function refreshGlobalCheckbox() {
+    const skus = visibleSkus();
+    const sel = skus.filter((s) => state.selected.has(s)).length;
+    els.selectAllVisible.checked = skus.length > 0 && sel === skus.length;
+    els.selectAllVisible.indeterminate = sel > 0 && sel < skus.length;
+  }
+
+  function refreshSelToolbar() {
+    const n = state.selected.size;
+    els.selCount.textContent = `${n} selected`;
+    els.selToolbar.hidden = n === 0;
+    // Selection bar and save-status bar share the bottom edge — one at a time.
+    els.savebar.hidden = n > 0;
+    els.reassignBtn.disabled = n === 0 || !els.selSupplier.value;
+  }
+
+  els.selectAllVisible.addEventListener("change", () => {
+    const skus = visibleSkus();
+    if (els.selectAllVisible.checked) skus.forEach((s) => state.selected.add(s));
+    else skus.forEach((s) => state.selected.delete(s));
+    refreshSelectionState();
+  });
+  els.selClear.addEventListener("click", () => {
+    state.selected.clear();
+    refreshSelectionState();
+  });
+  els.selSupplier.addEventListener("change", () => refreshSelToolbar());
+
+  els.reassignBtn.addEventListener("click", () => openReassignConfirm());
+  els.reassignCancel.addEventListener("click", () => closeReassignModal());
+  els.reassignConfirm.addEventListener("click", () => doReassign());
+  els.reassignModal.addEventListener("click", (event) => {
+    if (event.target === els.reassignModal) closeReassignModal();
+  });
+
+  function openReassignConfirm() {
+    const n = state.selected.size;
+    const supId = els.selSupplier.value;
+    if (!n || !supId) return;
+    const sup = state.suppliers.find((s) => s.id === supId);
+    const name = sup ? sup.name : supId;
+    state.reassignTargetId = supId;
+    els.reassignCopy.textContent = `Reassign ${n} part${n === 1 ? "" : "s"} to ${name}?`;
+    els.reassignError.hidden = true;
+    els.reassignConfirm.disabled = false;
+    els.reassignModal.hidden = false;
+    setTimeout(() => els.reassignCancel.focus(), 0);
+  }
+  function closeReassignModal() {
+    els.reassignModal.hidden = true;
+    els.reassignConfirm.disabled = false;
+  }
+
+  async function doReassign() {
+    const supId = state.reassignTargetId;
+    const skus = [...state.selected].filter((s) => state.catalog.parts[s]);
+    if (!supId || !skus.length) { closeReassignModal(); return; }
+    const updates = {};
+    for (const sku of skus) updates[sku] = [supId];
+    els.reassignConfirm.disabled = true;
+    els.reassignError.hidden = true;
+    try {
+      const r = await fetch("/api/part-suppliers", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ updates })
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok || !data.ok) throw new Error((data.errors && data.errors[0]) || `Reassign failed (${r.status})`);
+      // The bulk write is now the source of truth for these SKUs — sync
+      // local state and drop any pending per-row edits so the debounced
+      // single-SKU save can't clobber the batch.
+      for (const sku of skus) {
+        if (state.catalog.parts[sku]) state.catalog.parts[sku].supplierIds = [supId];
+        state.pending.delete(sku);
+      }
+      const n = skus.length;
+      const sup = state.suppliers.find((s) => s.id === supId);
+      const name = sup ? sup.name : supId;
+      state.selected.clear();
+      els.selSupplier.value = "";
+      closeReassignModal();
+      render();
+      toast(`Reassigned ${n} part${n === 1 ? "" : "s"} to ${name}`);
+    } catch (err) {
+      els.reassignError.textContent = err.message || "Couldn't reassign.";
+      els.reassignError.hidden = false;
+      els.reassignConfirm.disabled = false;
+    }
+  }
 
   // ===== Inline price edit ==========================================
   function beginPriceEdit(btn) {
@@ -1258,6 +1510,7 @@
   // Esc closes the topmost open modal.
   document.addEventListener("keydown", (event) => {
     if (event.key !== "Escape") return;
+    if (!els.reassignModal.hidden) { closeReassignModal(); return; }
     if (!els.addPartsModal.hidden) { closeAddPartsModal(); return; }
     if (!els.editPartModal.hidden) { closeEditModal(); return; }
     if (!els.deletePartModal.hidden) { els.deletePartModal.hidden = true; state.pendingDeleteSku = null; return; }

@@ -116,6 +116,10 @@
           <option value="missing">Unassigned only</option>
           <option value="assigned">Assigned only</option>
         </select>
+        <label class="ps-selectall">
+          <input type="checkbox" id="psSelectAllVisible">
+          <span>Select all shown</span>
+        </label>
         <span class="ps-count" id="psCount"></span>
       </section>
 
@@ -169,6 +173,25 @@
       </div>
       <div class="mlb-savebar-status">
         <span class="mlb-savebar-savestate" id="psSaveState">Saved</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Bulk-selection toolbar — sticky bottom bar, shown only when >=1 SKU
+       is ticked. Reassigns every selected SKU's primary supplier in one
+       PATCH. Swaps in for the save-status bar while a selection is active. -->
+  <div class="ps-sel-toolbar" id="psSelToolbar" hidden>
+    <div class="ps-sel-inner">
+      <span class="ps-sel-count" id="psSelCount">0 selected</span>
+      <div class="ps-sel-actions">
+        <label class="ps-sel-supwrap">
+          <span class="ps-sel-suplabel">Reassign to</span>
+          <select id="psSelSupplier" class="ps-sel-supplier">
+            <option value="">Choose supplier&hellip;</option>
+          </select>
+        </label>
+        <button type="button" class="ps-action ps-action--primary" id="psReassignBtn" disabled>Reassign selected</button>
+        <button type="button" class="ps-sel-clear" id="psSelClear">Clear</button>
       </div>
     </div>
   </div>
@@ -286,6 +309,24 @@
       <div class="ps-modal-foot">
         <button type="button" class="pjl-btn pjl-btn-outline" id="deletePartCancel">Keep</button>
         <button type="button" class="pjl-btn pjl-btn-primary ps-danger" id="deletePartConfirm">Delete</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== Bulk reassign confirm modal ===== -->
+  <div class="ps-modal" id="reassignModal" hidden role="dialog" aria-modal="true" aria-labelledby="reassignTitle">
+    <div class="ps-modal-card ps-modal-card--narrow">
+      <div class="ps-modal-head">
+        <h2 id="reassignTitle">Reassign supplier?</h2>
+      </div>
+      <div class="ps-modal-body">
+        <p id="reassignCopy">Reassign parts?</p>
+        <p class="ps-modal-help">Updates each selected part&rsquo;s primary supplier for <strong>future</strong> purchase orders. Existing purchase orders are not changed.</p>
+        <p class="ps-modal-error" id="reassignError" hidden role="alert"></p>
+      </div>
+      <div class="ps-modal-foot">
+        <button type="button" class="pjl-btn pjl-btn-outline" id="reassignCancel">Cancel</button>
+        <button type="button" class="pjl-btn pjl-btn-primary" id="reassignConfirm">Reassign</button>
       </div>
     </div>
   </div>

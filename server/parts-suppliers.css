@@ -150,7 +150,7 @@
   .ps-table thead { display: none; }
   .ps-table, .ps-table tbody { display: block; width: 100%; }
 
-  .ps-table tr {
+  .ps-table tr[data-sku] {
     display: grid;
     grid-template-columns: 1fr auto;
     grid-template-areas:
@@ -752,4 +752,233 @@
   }
   .ps-action { justify-content: center; }
   .ps-toast { margin-left: 0; }
+}
+
+/* ============================================================
+   Bulk supplier reassignment — category grouping, inline row
+   checkboxes, per-category select-all, and the sticky selection
+   toolbar. (Bulk Supplier Reassignment brief.)
+   ============================================================ */
+
+/* Toolbar "select all shown" toggle. */
+.ps-selectall {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  color: #4A4A44;
+  cursor: pointer;
+  min-height: 44px;
+  user-select: none;
+}
+.ps-selectall input {
+  width: 18px;
+  height: 18px;
+  accent-color: #1B4D2E;
+  cursor: pointer;
+}
+
+/* Inline row checkbox — sits in the SKU cell (no reserved column) so it
+   never steals row width on the mobile card layout. */
+.ps-row-check-wrap {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 30px;
+  min-height: 30px;
+  margin-right: 2px;
+  vertical-align: middle;
+  cursor: pointer;
+}
+.ps-row-check {
+  width: 18px;
+  height: 18px;
+  accent-color: #1B4D2E;
+  cursor: pointer;
+}
+
+/* Category group header row. */
+.ps-group-row > td {
+  padding: 0;
+  background: #F2F5EC;
+  border-bottom: 1px solid #E2E0D4;
+}
+.ps-group-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 14px;
+}
+.ps-cat-check {
+  width: 18px;
+  height: 18px;
+  accent-color: #1B4D2E;
+  cursor: pointer;
+  flex: none;
+}
+.ps-group-toggle {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: 0;
+  padding: 6px 4px;
+  min-height: 34px;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.ps-group-caret {
+  flex: none;
+  width: 0;
+  height: 0;
+  border-left: 6px solid #1B4D2E;
+  border-top: 5px solid transparent;
+  border-bottom: 5px solid transparent;
+  transform: rotate(90deg);
+  transition: transform 0.15s ease;
+}
+.ps-group-row.is-collapsed .ps-group-caret { transform: rotate(0deg); }
+.ps-group-name {
+  font-family: "Barlow Condensed", sans-serif;
+  font-weight: 700;
+  font-size: 15px;
+  letter-spacing: 0.04em;
+  text-transform: capitalize;
+  color: #1B4D2E;
+}
+.ps-group-count {
+  font-size: 12px;
+  color: #7A7A72;
+  font-weight: 600;
+}
+.ps-group-toggle:hover .ps-group-name { text-decoration: underline; }
+
+/* Subcategory sub-header row. */
+.ps-sub-row > td {
+  padding: 5px 14px 5px 42px;
+  background: #FBFCF8;
+  border-bottom: 1px solid #F0EEE3;
+}
+.ps-sub-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #4A4A44;
+}
+.ps-sub-count {
+  font-size: 11px;
+  color: #9A9A90;
+  margin-left: 6px;
+}
+
+/* Sticky bottom selection toolbar. */
+.ps-sel-toolbar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 1150;
+  background: #0F1F14;
+  color: #fff;
+  padding: 12px 16px calc(12px + env(safe-area-inset-bottom));
+  box-shadow: 0 -8px 24px rgba(15,31,20,0.24);
+}
+.ps-sel-toolbar[hidden] { display: none; }
+.ps-sel-inner {
+  max-width: 1180px;
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+.ps-sel-count {
+  font-family: "Barlow Condensed", sans-serif;
+  font-weight: 700;
+  font-size: 17px;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+}
+.ps-sel-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: auto;
+  flex-wrap: wrap;
+}
+.ps-sel-supwrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ps-sel-suplabel {
+  font-size: 13px;
+  color: #CFE0C6;
+  white-space: nowrap;
+}
+.ps-sel-supplier {
+  min-height: 44px;
+  padding: 8px 12px;
+  border: 1px solid #2E4A38;
+  border-radius: 8px;
+  background: #fff;
+  color: #1F2A22;
+  font: inherit;
+  min-width: 190px;
+  cursor: pointer;
+}
+.ps-sel-supplier:focus {
+  outline: 2px solid rgba(255,255,255,0.4);
+  outline-offset: 1px;
+}
+.ps-sel-toolbar .ps-action--primary {
+  background: #EAF3DE;
+  color: #0F1F14;
+  border-color: #EAF3DE;
+  min-height: 44px;
+}
+.ps-sel-toolbar .ps-action--primary:hover { background: #fff; }
+.ps-sel-toolbar .ps-action--primary:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.ps-sel-clear {
+  background: transparent;
+  border: 0;
+  color: #CFE0C6;
+  text-decoration: underline;
+  cursor: pointer;
+  font: inherit;
+  padding: 8px 4px;
+  min-height: 44px;
+}
+.ps-sel-clear:hover { color: #fff; }
+
+/* Mobile: keep group/sub rows out of the data-row grid card, and let the
+   selection toolbar stack full-width above the safe-area inset. */
+@media (max-width: 720px) {
+  .ps-table .ps-group-row,
+  .ps-table .ps-sub-row { display: block; width: 100%; }
+  .ps-table .ps-group-row > td {
+    display: block;
+    width: 100%;
+    padding: 0;
+    border-bottom: 1px solid #E2E0D4;
+  }
+  .ps-table .ps-sub-row > td {
+    display: block;
+    width: 100%;
+    padding: 6px 14px 6px 30px;
+    border-bottom: 1px solid #F0EEE3;
+  }
+  .ps-row-check-wrap { min-width: 40px; min-height: 40px; margin-right: 4px; }
+}
+@media (max-width: 640px) {
+  .ps-sel-inner { gap: 10px; }
+  .ps-sel-actions { width: 100%; gap: 8px; }
+  .ps-sel-supwrap { flex: 1 1 100%; }
+  .ps-sel-supplier { flex: 1; min-width: 0; }
+  .ps-sel-toolbar .ps-action--primary { flex: 1 1 auto; justify-content: center; }
 }
