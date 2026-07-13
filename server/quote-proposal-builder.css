@@ -165,28 +165,89 @@
   gap: 4px;
 }
 .pb-section-list li {
-  padding: 8px 10px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 6px 4px 10px;
   border-radius: 6px;
-  cursor: pointer;
   font-size: 13px;
   color: #1F2A22;
   border: 1px solid transparent;
+  min-height: 40px;
 }
 .pb-section-list li:hover { background: #F5F4EE; }
 .pb-section-list li.is-active {
   background: #EAF3DE;
   border-color: #C5DDB1;
-  font-weight: 600;
   color: #1B4D2E;
 }
-.pb-section-list li.has-content::after {
+.pb-section-list li.is-active .pb-sec-name { font-weight: 600; }
+.pb-sec-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 6px 0;
+}
+.pb-section-list li.has-content .pb-sec-name::after {
   content: " •";
   color: #1B4D2E;
 }
+.pb-sec-controls { display: flex; gap: 2px; flex: 0 0 auto; }
+.pb-sec-req {
+  flex: 0 0 auto;
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #9A9A90;
+  padding: 2px 6px;
+  border: 1px solid #E5E5DD;
+  border-radius: 4px;
+}
+.pb-sec-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid #D6D6CD;
+  border-radius: 6px;
+  background: #FFFFFF;
+  color: #1F2A22;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+.pb-sec-btn:hover { background: #F5F4EE; }
+.pb-sec-btn.pb-sec-del { color: #B23A2E; border-color: #E7C9C4; }
+.pb-sec-btn.pb-sec-del:hover { background: #FBEBE8; }
+.pb-add-section {
+  width: 100%;
+  margin-top: 8px;
+  padding: 10px;
+  min-height: 44px;
+  border: 1px dashed #C5DDB1;
+  border-radius: 6px;
+  background: #F7FBF2;
+  color: #1B4D2E;
+  font-weight: 600;
+  font-size: 13px;
+  cursor: pointer;
+}
+.pb-add-section:hover { background: #EAF3DE; }
+.pb-add-section:disabled { opacity: 0.5; cursor: not-allowed; }
 .pb-rail-hint {
   font-size: 11px;
   color: #9A9A90;
   margin-top: 10px;
+}
+/* Touch devices — bump controls to the 44pt iOS minimum. */
+@media (pointer: coarse) {
+  .pb-sec-btn { width: 44px; height: 44px; font-size: 16px; }
+  .pb-section-list li { min-height: 48px; }
 }
 
 /* ---- Main editor pane ---- */
@@ -213,15 +274,51 @@
   text-transform: uppercase;
   color: #9A9A90;
 }
+/* ---- Formatting toolbar (Brief C2) ---- */
+.pb-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+.pb-tb-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 32px;
+  height: 32px;
+  padding: 0 8px;
+  border: 1px solid #D6D6CD;
+  border-radius: 6px;
+  background: #FFFFFF;
+  color: #1F2A22;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+.pb-tb-btn:hover { background: #F5F4EE; }
+.pb-tb-btn:active { background: #EAF3DE; }
+.pb-tb-sep { width: 1px; height: 22px; background: #E5E5DD; margin: 0 4px; }
+.pb-tb-hint { font-size: 11px; color: #9A9A90; margin-left: auto; }
+@media (pointer: coarse) {
+  .pb-tb-btn { min-width: 44px; height: 44px; font-size: 16px; }
+  .pb-tb-hint { display: none; }
+}
 .pb-section-body {
+  /* Content width ≈ PDF text column (Letter 8.5in − 0.75in margins ×2 = 7in
+     ≈ 672px @ 96dpi) in the PDF's Helvetica body face, so line wraps in the
+     editor approximate the PDF. Approximate, not pixel-exact. Scales down on
+     mobile (max-width + width:100%) — never overflows into horizontal scroll. */
   width: 100%;
+  max-width: 696px;
   min-height: 320px;
   padding: 12px;
   border: 1px solid #D6D6CD;
   border-radius: 6px;
-  font: inherit;
-  font-size: 14px;
-  line-height: 1.55;
+  font-family: Helvetica, Arial, sans-serif;
+  font-size: 13.3px;
+  line-height: 1.4;
   resize: vertical;
   background: #FAFAF5;
 }

@@ -103,6 +103,12 @@ const PROPOSAL_SECTION_KINDS = [
   "custom"
 ];
 
+// Structural section kinds are special-cased by the PDF renderer
+// (renderProposalLineItems draws the pricing table; renderAcceptanceBlock
+// draws the signature block) and always render last, regardless of order.
+// They cannot be user-deleted (Brief C1 §3.3 / Q6).
+const STRUCTURAL_SECTION_KINDS = ["line_items", "acceptance_block"];
+
 const ATTACHMENT_KINDS = [
   "site_map",
   "technical_diagram",
@@ -781,7 +787,11 @@ function normalizeProposalSection(s, idx) {
   return {
     id: typeof s.id === "string" && s.id.startsWith("sec_") ? s.id : newSectionId(),
     kind,
-    title: String(s.title || "").slice(0, 200),
+    // Title renders as an upper-cased green heading — cap at 80 so it can't
+    // overflow the PDF page width, and strip control characters (Brief C1
+    // §3.3). Stripped rather than rejected so a stray control char never
+    // fails an autosave.
+    title: String(s.title == null ? "" : s.title).replace(/[\u0000-\u001F\u007F]+/g, " ").trim().slice(0, 80),
     body: String(s.body || "").slice(0, 40000),
     order: Number.isFinite(Number(s.order)) ? Number(s.order) : idx,
     attachmentIds: Array.isArray(s.attachmentIds)
@@ -849,7 +859,47 @@ async function updateProposal(id, patch = {}, { by = "admin", note = "" } = {}) 
     q.billingMode = patch.billingMode || "fixed_price";
   }
   if (Array.isArray(patch.proposalSections)) {
-    q.proposalSections = patch.proposalSections.map((s, i) => normalizeProposalSection(s, i));
+    const existingSections = Array.isArray(q.proposalSections) ? q.proposalSections : [];
+    const existingById = new Map(existingSections.map((s) => [s.id, s]));
+
+    // Normalize incoming with kind SERVER-CONTROLLED (Brief C1 §3.3): an
+    // existing section keeps its stored kind (a client can't retype it),
+    // and any newly-introduced section is forced to "custom". kind drives
+    // layout branches in the renderer (line_items / acceptance_block), so
+    // it must never be client-writable.
+    const incoming = patch.proposalSections.map((s, i) => {
+      const norm = normalizeProposalSection(s, i);
+      const prior = existingById.get(norm.id);
+      norm.kind = prior ? prior.kind : "custom";
+      return norm;
+    });
+
+    // Structural sections present before this edit must survive — reject a
+    // client array that drops the pricing table or the acceptance block.
+    for (const s of existingSections) {
+      if (STRUCTURAL_SECTION_KINDS.includes(s.kind) && !incoming.some((n) => n.id === s.id)) {
+        const err = new Error(`The "${s.kind}" section is required and cannot be removed.`);
+        err.code = "structural_section_removed";
+        throw err;
+      }
+    }
+
+    // History (Hard Rule 4) — STRUCTURAL changes only. Body/title edits
+    // ride the single proposal_updated entry below so autosave (every
+    // ~600ms while typing) doesn't flood the log.
+    const tsSec = nowIso();
+    const beforeIds = existingSections.map((s) => s.id);
+    const afterIds = incoming.map((s) => s.id);
+    const beforeSet = new Set(beforeIds);
+    const afterSet = new Set(afterIds);
+    for (const id of afterIds) if (!beforeSet.has(id)) q.history.push({ ts: tsSec, action: "section_added", by, note: id });
+    for (const id of beforeIds) if (!afterSet.has(id)) q.history.push({ ts: tsSec, action: "section_removed", by, note: id });
+    if (beforeIds.length === afterIds.length && beforeIds.every((id) => afterSet.has(id))) {
+      const seq = (arr) => [...arr].sort((a, b) => (Number(a.order) || 0) - (Number(b.order) || 0)).map((s) => s.id).join(",");
+      if (seq(existingSections) !== seq(incoming)) q.history.push({ ts: tsSec, action: "section_reordered", by, note: "" });
+    }
+
+    q.proposalSections = incoming;
   }
   if (Array.isArray(patch.lineItems)) {
     q.lineItems = patch.lineItems.map(normalizeProposalLineItem);

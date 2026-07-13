@@ -10402,6 +10402,9 @@ async function handleApi(req, res, pathname) {
           field: err.field || null
         });
       }
+      if (err.code === "structural_section_removed") {
+        return sendJson(res, 422, { ok: false, errors: [err.message], error: "structural_section_removed" });
+      }
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't update proposal."] });
     }
   }

@@ -116,16 +116,29 @@
           <aside class="pb-rail" aria-label="Sections">
             <h3>Sections</h3>
             <ol class="pb-section-list" id="pbSectionList"></ol>
-            <p class="pb-rail-hint">Click a section to edit. Empty sections are hidden in the PDF.</p>
+            <button type="button" class="pb-add-section" id="pbAddSection">+ Add section</button>
+            <p class="pb-rail-hint">Click a section to edit. Use ↑ ↓ to reorder and ✕ to delete. Add a section for anything the standard set doesn't cover.</p>
           </aside>
 
           <!-- Main pane: section editor -->
           <section class="pb-main">
             <header class="pb-main-head">
-              <input type="text" class="pb-section-title" id="pbSectionTitle" maxlength="200" placeholder="Section title">
+              <input type="text" class="pb-section-title" id="pbSectionTitle" maxlength="80" placeholder="Section title">
               <span class="pb-section-kind" id="pbSectionKind"></span>
             </header>
-            <textarea class="pb-section-body" id="pbSectionBody" rows="14" maxlength="40000" placeholder="Section body. Plain text; paragraph breaks become spacing in the PDF."></textarea>
+            <div class="pb-toolbar" id="pbToolbar" role="toolbar" aria-label="Formatting">
+              <button type="button" class="pb-tb-btn" data-fmt="bold" title="Bold  **text**" aria-label="Bold"><b>B</b></button>
+              <button type="button" class="pb-tb-btn" data-fmt="underline" title="Underline  __text__" aria-label="Underline"><u>U</u></button>
+              <button type="button" class="pb-tb-btn" data-fmt="italic" title="Italic  *text*" aria-label="Italic"><i>I</i></button>
+              <span class="pb-tb-sep" aria-hidden="true"></span>
+              <button type="button" class="pb-tb-btn" data-fmt="bullet" title="Bullet list" aria-label="Bullet list">•</button>
+              <button type="button" class="pb-tb-btn" data-fmt="numbered" title="Numbered list" aria-label="Numbered list">1.</button>
+              <span class="pb-tb-sep" aria-hidden="true"></span>
+              <button type="button" class="pb-tb-btn" data-fmt="indent" title="Indent (sub-level)" aria-label="Indent">&#8677;</button>
+              <button type="button" class="pb-tb-btn" data-fmt="outdent" title="Outdent" aria-label="Outdent">&#8676;</button>
+              <span class="pb-tb-hint">Markers show as you type; the PDF preview shows the result.</span>
+            </div>
+            <textarea class="pb-section-body" id="pbSectionBody" rows="14" maxlength="40000" placeholder="Section body. **bold**, *italic*, __underline__, &quot;- &quot; bullets, &quot;1. &quot; numbered lists. Blank line = new paragraph."></textarea>
             <div class="pb-attach-anchor">
               <p>Attachments anchored to this section:</p>
               <div class="pb-anchor-list" id="pbAnchorList"></div>

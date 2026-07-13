@@ -39,9 +39,11 @@
     validUntil: $("pbValidUntil"),
     scope: $("pbScope"),
     sectionList: $("pbSectionList"),
+    addSection: $("pbAddSection"),
     sectionTitle: $("pbSectionTitle"),
     sectionKind: $("pbSectionKind"),
     sectionBody: $("pbSectionBody"),
+    toolbar: $("pbToolbar"),
     sectionTip: $("pbSectionTip"),
     anchorList: $("pbAnchorList"),
     anchorPicker: $("pbAnchorPicker"),
@@ -181,8 +183,9 @@
     const locked = q.status !== "draft";
     [el.branch, el.billingMode, el.customerEmail, el.labourRate, el.validUntil,
      el.scope, el.sectionTitle, el.sectionBody, el.uploadInput,
-     el.linePicker, el.customLine, el.anchorPicker]
+     el.linePicker, el.customLine, el.anchorPicker, el.addSection]
       .forEach((node) => { if (node) node.disabled = locked; });
+    if (el.toolbar) el.toolbar.querySelectorAll(".pb-tb-btn").forEach((b) => { b.disabled = locked; });
 
     el.sendBtn.hidden = q.status !== "draft";
     el.reviseBtn.hidden = !(q.status === "sent" || q.status === "expired");
@@ -208,23 +211,114 @@
     refreshPreviewLink();
   }
 
+  // Structural sections (pricing table + acceptance block) always render
+  // last in the PDF and cannot be deleted or reordered (Brief C1). They're
+  // pinned to the bottom of the nav with a "Required" tag instead of controls.
+  const STRUCTURAL_KINDS = ["line_items", "acceptance_block"];
+
   function renderSectionList() {
-    const sections = [...(state.quote.proposalSections || [])].sort(
+    const all = [...(state.quote.proposalSections || [])].sort(
       (a, b) => (a.order || 0) - (b.order || 0)
     );
-    el.sectionList.innerHTML = sections.map((s) => {
+    const narrative = all.filter((s) => !STRUCTURAL_KINDS.includes(s.kind));
+    const structural = all.filter((s) => STRUCTURAL_KINDS.includes(s.kind));
+    const locked = state.quote.status !== "draft";
+
+    const liFor = (s, isStructural, idxInNarrative, narrativeCount) => {
       const isActive = s.id === state.activeSectionId;
       const hasContent = (s.body && s.body.trim()) || (s.attachmentIds && s.attachmentIds.length);
-      return `<li data-id="${s.id}" class="${isActive ? "is-active" : ""} ${hasContent ? "has-content" : ""}">${escapeHtml(s.title || s.kind)}</li>`;
-    }).join("");
-    el.sectionList.querySelectorAll("li").forEach((li) => {
-      li.addEventListener("click", () => {
-        state.activeSectionId = li.dataset.id;
+      let controls = "";
+      if (isStructural) {
+        controls = `<span class="pb-sec-req" title="Required — auto-rendered in the PDF">Required</span>`;
+      } else if (!locked) {
+        const upDis = idxInNarrative === 0 ? "disabled" : "";
+        const downDis = idxInNarrative === narrativeCount - 1 ? "disabled" : "";
+        controls =
+          `<span class="pb-sec-controls">` +
+          `<button type="button" class="pb-sec-btn" data-move-up="${s.id}" ${upDis} aria-label="Move up" title="Move up">↑</button>` +
+          `<button type="button" class="pb-sec-btn" data-move-down="${s.id}" ${downDis} aria-label="Move down" title="Move down">↓</button>` +
+          `<button type="button" class="pb-sec-btn pb-sec-del" data-del="${s.id}" aria-label="Delete section" title="Delete section">✕</button>` +
+          `</span>`;
+      }
+      return `<li data-id="${s.id}" class="${isActive ? "is-active" : ""} ${hasContent ? "has-content" : ""} ${isStructural ? "is-structural" : ""}">` +
+        `<span class="pb-sec-name">${escapeHtml(s.title || s.kind)}</span>${controls}</li>`;
+    };
+
+    el.sectionList.innerHTML =
+      narrative.map((s, i) => liFor(s, false, i, narrative.length)).join("") +
+      structural.map((s) => liFor(s, true)).join("");
+
+    // Select on name click (control buttons stop propagation below).
+    el.sectionList.querySelectorAll(".pb-sec-name").forEach((name) => {
+      name.addEventListener("click", () => {
+        state.activeSectionId = name.closest("li").dataset.id;
         renderActiveSection();
         renderSectionList();
       });
     });
+    if (!locked) {
+      el.sectionList.querySelectorAll("[data-move-up]").forEach((b) =>
+        b.addEventListener("click", (e) => { e.stopPropagation(); moveSection(b.dataset.moveUp, -1); }));
+      el.sectionList.querySelectorAll("[data-move-down]").forEach((b) =>
+        b.addEventListener("click", (e) => { e.stopPropagation(); moveSection(b.dataset.moveDown, 1); }));
+      el.sectionList.querySelectorAll("[data-del]").forEach((b) =>
+        b.addEventListener("click", (e) => { e.stopPropagation(); removeSection(b.dataset.del); }));
+    }
   }
+
+  // Reorder a narrative section by swapping its `order` with the adjacent
+  // narrative section (dir −1 up / +1 down). Structural sections are pinned
+  // last by the renderer, so they're excluded from the swap set. Order in
+  // the array's sorted `order` sequence is order in the PDF.
+  function moveSection(id, dir) {
+    const narrative = [...(state.quote.proposalSections || [])]
+      .filter((s) => !STRUCTURAL_KINDS.includes(s.kind))
+      .sort((a, b) => (a.order || 0) - (b.order || 0));
+    const i = narrative.findIndex((s) => s.id === id);
+    const j = i + dir;
+    if (i < 0 || j < 0 || j >= narrative.length) return; // clamp — no-op at ends
+    const a = narrative[i], b = narrative[j];
+    const ao = Number(a.order) || 0, bo = Number(b.order) || 0;
+    a.order = bo; b.order = ao;
+    renderSectionList();
+    markDirty();
+  }
+
+  function removeSection(id) {
+    const sec = (state.quote.proposalSections || []).find((s) => s.id === id);
+    if (!sec || STRUCTURAL_KINDS.includes(sec.kind)) return; // structural: guarded server-side too
+    if (!confirm(`Delete section "${sec.title || sec.kind}"? This can't be undone.`)) return;
+    state.quote.proposalSections = (state.quote.proposalSections || []).filter((s) => s.id !== id);
+    if (state.activeSectionId === id) {
+      const next = (state.quote.proposalSections || [])[0];
+      state.activeSectionId = next ? next.id : null;
+    }
+    renderSectionList();
+    renderActiveSection();
+    markDirty();
+  }
+
+  // Add a new custom section. The section is appended with no id and saved
+  // immediately so the SERVER mints the sec_ id (single source — Brief C1
+  // Q4); we then read it back from the save response and focus its title.
+  async function addSection() {
+    if (!state.quote || state.quote.status !== "draft") return;
+    if (state.saveTimer) { clearTimeout(state.saveTimer); state.saveTimer = null; }
+    while (state.isSaving) await new Promise((r) => setTimeout(r, 50));
+    const beforeIds = new Set((state.quote.proposalSections || []).map((s) => s.id));
+    const maxOrder = (state.quote.proposalSections || [])
+      .reduce((m, s) => Math.max(m, Number(s.order) || 0), -1);
+    state.quote.proposalSections = [
+      ...(state.quote.proposalSections || []),
+      { kind: "custom", title: "New section", body: "", order: maxOrder + 1, attachmentIds: [] }
+    ];
+    await saveDraft();
+    const created = (state.quote.proposalSections || []).find((s) => s.id && !beforeIds.has(s.id));
+    if (created) state.activeSectionId = created.id;
+    render();
+    if (state.quote.status === "draft") { el.sectionTitle.focus(); el.sectionTitle.select(); }
+  }
+  el.addSection.addEventListener("click", addSection);
 
   function renderActiveSection() {
     const sec = (state.quote.proposalSections || []).find((s) => s.id === state.activeSectionId);
@@ -565,6 +659,89 @@
     renderSectionList();
     markDirty();
   });
+
+  // ---- Formatting toolbar (Brief C2) --------------------------------
+  // Writes the closed markup convention into the textarea. Body stays a
+  // <textarea> — no contenteditable. The renderer's parseSectionBody reads
+  // the markers back. Buttons preventDefault on mousedown so tapping one
+  // never steals the selection from the textarea before the handler runs.
+  const INLINE_MARKER = { bold: "**", underline: "__", italic: "*" };
+
+  function applyInlineMarker(ta, marker) {
+    const s = ta.value, a = ta.selectionStart, b = ta.selectionEnd;
+    const sel = s.slice(a, b);
+    const m = marker.length;
+    if (sel.length >= 2 * m && sel.startsWith(marker) && sel.endsWith(marker)) {
+      // selection includes the markers → unwrap
+      const inner = sel.slice(m, sel.length - m);
+      ta.setRangeText(inner, a, b, "select");
+    } else if (s.slice(Math.max(0, a - m), a) === marker && s.slice(b, b + m) === marker) {
+      // markers sit just outside the selection → remove them
+      ta.setRangeText(sel, a - m, b + m, "select");
+    } else {
+      ta.setRangeText(marker + sel + marker, a, b, "end");
+      ta.selectionStart = a + m;
+      ta.selectionEnd = b + m; // keep the inner text selected
+    }
+  }
+
+  function lineRange(s, a, b) {
+    const start = s.lastIndexOf("\n", a - 1) + 1;
+    let end = s.indexOf("\n", b);
+    if (end === -1) end = s.length;
+    return [start, end];
+  }
+
+  function toggleLinePrefix(ta, kind) {
+    const s = ta.value, a = ta.selectionStart, b = ta.selectionEnd;
+    const [ls, le] = lineRange(s, a, b);
+    const lines = s.slice(ls, le).split("\n");
+    const rx = kind === "bullet" ? /^(\s*)-\s+/ : /^(\s*)\d+\.\s+/;
+    const nonEmpty = lines.filter((ln) => ln.trim() !== "");
+    const allPrefixed = nonEmpty.length > 0 && nonEmpty.every((ln) => rx.test(ln));
+    const out = lines.map((ln) => {
+      if (ln.trim() === "") return ln;
+      const im = ln.match(/^(\s*)(.*)$/);
+      const indent = im[1];
+      const bare = im[2].replace(/^-\s+/, "").replace(/^\d+\.\s+/, "");
+      if (allPrefixed) return indent + bare;
+      return indent + (kind === "bullet" ? "- " : "1. ") + bare;
+    });
+    ta.setRangeText(out.join("\n"), ls, le, "select");
+  }
+
+  function indentLines(ta, dir) {
+    const s = ta.value, a = ta.selectionStart, b = ta.selectionEnd;
+    const [ls, le] = lineRange(s, a, b);
+    const lines = s.slice(ls, le).split("\n");
+    const out = lines.map((ln) => {
+      if (dir > 0) return /^\s{2,}/.test(ln) ? ln : "  " + ln; // clamp at level 1
+      return ln.replace(/^ {1,2}/, "");
+    });
+    ta.setRangeText(out.join("\n"), ls, le, "select");
+  }
+
+  function runToolbar(fmt) {
+    const ta = el.sectionBody;
+    if (!ta || ta.disabled) return;
+    if (INLINE_MARKER[fmt]) applyInlineMarker(ta, INLINE_MARKER[fmt]);
+    else if (fmt === "bullet" || fmt === "numbered") toggleLinePrefix(ta, fmt);
+    else if (fmt === "indent") indentLines(ta, 1);
+    else if (fmt === "outdent") indentLines(ta, -1);
+    const sec = (state.quote.proposalSections || []).find((x) => x.id === state.activeSectionId);
+    if (sec) { sec.body = ta.value; renderSectionList(); markDirty(); }
+    ta.focus();
+  }
+
+  if (el.toolbar) {
+    // Don't let the button take focus off the textarea (would drop the
+    // selection before the click handler runs). Brief C2 §3.5.
+    el.toolbar.addEventListener("mousedown", (e) => { if (e.target.closest(".pb-tb-btn")) e.preventDefault(); });
+    el.toolbar.addEventListener("click", (e) => {
+      const btn = e.target.closest(".pb-tb-btn");
+      if (btn) runToolbar(btn.dataset.fmt);
+    });
+  }
 
   // ---- Top-bar inputs ----------------------------------------------
   [el.branch, el.billingMode].forEach((node) => {

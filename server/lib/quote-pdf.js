@@ -500,6 +500,198 @@ function renderProjectProposalPdf(quote, opts = {}) {
   return doc;
 }
 
+// ---- Section body markup (Brief C2) ----------------------------------
+//
+// Section bodies are plain strings carrying a CLOSED markup convention.
+// No schema, no dependency: a toolbar writes the markers, these functions
+// parse them at render time. Existing unmarked bodies fall through a
+// byte-identical fast path (see renderSection). Vocabulary:
+//   **bold**  __underline__  *italic*
+//   "- " bullet, "  - " sub-bullet (2-space indent)
+//   "1. " numbered, "  1. " sub-item; blank line = paragraph break
+//   \* \_ \- \\ = literal. Max nesting depth 1.
+
+const BODY_FONT_SIZE = 10;
+const BODY_LINE_GAP = 2;
+const LIST_INDENT_L0 = 16;   // x offset of the glyph from the left margin
+const LIST_INDENT_L1 = 34;
+const LIST_TEXT_GAP = 14;    // glyph column width; text starts after it
+const SECTION_FOOTER_RESERVE = 60;
+
+// Strip the light HTML the pre-C2 renderer tolerated (admin-pasted rich
+// text), so a stray tag never reaches the markup parser.
+function stripSectionHtml(s) {
+  return String(s == null ? "" : s)
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/p>/gi, "\n\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">");
+}
+
+// Split one LINE of text into styled runs. Pure. Never throws. Unmatched
+// markers degrade to literal characters (a stray asterisk must never
+// swallow content). Inline parsing is line-scoped — markers never pair
+// across a newline.
+function parseInlineRuns(text) {
+  const s = String(text == null ? "" : text);
+  // 1. Tokenize, honouring backslash escapes for * _ - \
+  const tokens = [];
+  for (let i = 0; i < s.length; ) {
+    const c = s[i], n = s[i + 1];
+    if (c === "\\" && (n === "*" || n === "_" || n === "-" || n === "\\")) { tokens.push({ lit: n }); i += 2; continue; }
+    if (c === "*" && n === "*") { tokens.push({ marker: "**" }); i += 2; continue; }
+    if (c === "_" && n === "_") { tokens.push({ marker: "__" }); i += 2; continue; }
+    if (c === "*") { tokens.push({ marker: "*" }); i += 1; continue; }
+    tokens.push({ lit: c }); i += 1;
+  }
+  // 2. Pair markers with a stack; unmatched markers stay literal.
+  const stack = [];
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i];
+    if (!t.marker) continue;
+    const topIdx = stack.length ? stack[stack.length - 1] : -1;
+    if (topIdx >= 0 && tokens[topIdx].marker === t.marker) { tokens[topIdx].paired = true; t.paired = true; stack.pop(); }
+    else stack.push(i);
+  }
+  // 3. Emit runs, toggling state only on paired markers.
+  const runs = [];
+  let bold = false, italic = false, underline = false, cur = "";
+  const flush = () => { if (cur) { runs.push({ text: cur, bold, italic, underline }); cur = ""; } };
+  for (const t of tokens) {
+    if (t.lit != null) { cur += t.lit; continue; }
+    if (!t.paired) { cur += t.marker; continue; }   // unmatched → literal
+    flush();
+    if (t.marker === "**") bold = !bold;
+    else if (t.marker === "__") underline = !underline;
+    else if (t.marker === "*") italic = !italic;
+  }
+  flush();
+  if (!runs.length) runs.push({ text: "", bold: false, italic: false, underline: false });
+  return runs;
+}
+
+// Parse a whole body into blocks. Consecutive non-list lines group into a
+// paragraph block (each line keeps its own runs — line-scoped). Numbered
+// runs renumber from 1 and restart after any interruption.
+//   Block = { type:"paragraph", lines:[{runs}] }
+//         | { type:"bullet"|"numbered", level:0|1, index?, runs }
+function parseSectionBody(body) {
+  const lines = String(body == null ? "" : body).replace(/\r\n?/g, "\n").split("\n");
+  const blocks = [];
+  let paraLines = [];
+  let l0 = 0, l1 = 0;
+  const flushPara = () => {
+    while (paraLines.length && paraLines[0].trim() === "") paraLines.shift();
+    while (paraLines.length && paraLines[paraLines.length - 1].trim() === "") paraLines.pop();
+    if (paraLines.length) blocks.push({ type: "paragraph", lines: paraLines.map((ln) => ({ runs: parseInlineRuns(ln) })) });
+    paraLines = [];
+  };
+  for (const raw of lines) {
+    if (raw.trim() === "") { flushPara(); l0 = 0; l1 = 0; continue; }
+    const im = raw.match(/^([ \t]*)(.*)$/);
+    const level = im[1].replace(/\t/g, "  ").length >= 2 ? 1 : 0;
+    const rest = im[2];
+    const bulletM = rest.match(/^-\s+(.*)$/);
+    const numM = rest.match(/^\d+\.\s+(.*)$/);
+    if (bulletM) { flushPara(); l0 = 0; l1 = 0; blocks.push({ type: "bullet", level, runs: parseInlineRuns(bulletM[1]) }); }
+    else if (numM) {
+      flushPara();
+      if (level === 0) { l0 += 1; l1 = 0; blocks.push({ type: "numbered", level: 0, index: l0, runs: parseInlineRuns(numM[1]) }); }
+      else { l1 += 1; blocks.push({ type: "numbered", level: 1, index: l1, runs: parseInlineRuns(numM[1]) }); }
+    } else { paraLines.push(rest); }
+  }
+  flushPara();
+  return blocks;
+}
+
+// True if any block carries real formatting (a list item, or a bold /
+// italic / underlined run). Plain bodies return false and take the
+// byte-identical fast path.
+function bodyHasFormatting(blocks) {
+  for (const b of blocks) {
+    if (b.type === "bullet" || b.type === "numbered") return true;
+    if (b.type === "paragraph") for (const ln of b.lines) for (const r of ln.runs) if (r.bold || r.italic || r.underline) return true;
+  }
+  return false;
+}
+
+function fontForRun(r) {
+  if (r.bold && r.italic) return "Helvetica-BoldOblique";
+  if (r.bold) return "Helvetica-Bold";
+  if (r.italic) return "Helvetica-Oblique";
+  return "Helvetica";
+}
+
+// 1 -> "a", 26 -> "z", 27 -> "aa" — sub-list ordinals.
+function letterOrdinal(n) {
+  let x = Math.max(1, Number(n) || 1), s = "";
+  while (x > 0) { const r = (x - 1) % 26; s = String.fromCharCode(97 + r) + s; x = Math.floor((x - 1) / 26); }
+  return s;
+}
+
+// Draw a run sequence on one wrapped line starting at (x, doc.y). Font +
+// underline switch per run via pdfkit's `continued` chaining; wrapped
+// lines hang-indent back to `x`.
+function drawRuns(doc, runs, x, width) {
+  doc.fontSize(BODY_FONT_SIZE).fillColor(PJL_TEXT);
+  const nonEmpty = runs.filter((r) => r.text !== "");
+  if (!nonEmpty.length) { doc.font("Helvetica").text(" ", x, doc.y, { width }); return; }
+  nonEmpty.forEach((r, i) => {
+    doc.font(fontForRun(r));
+    const last = i === nonEmpty.length - 1;
+    if (i === 0) doc.text(r.text, x, doc.y, { width, continued: !last, underline: !!r.underline, lineGap: BODY_LINE_GAP });
+    else doc.text(r.text, { continued: !last, underline: !!r.underline, lineGap: BODY_LINE_GAP });
+  });
+}
+
+function measureRunsHeight(doc, runs, width) {
+  const text = runs.map((r) => r.text).join("") || " ";
+  doc.font("Helvetica").fontSize(BODY_FONT_SIZE);
+  return doc.heightOfString(text, { width, lineGap: BODY_LINE_GAP });
+}
+
+// Draw parsed blocks. List items are measured and kept together across a
+// page boundary (never split); paragraphs flow line by line.
+function renderBodyBlocks(doc, blocks, { MARGIN_X, contentWidth }) {
+  const pageBottom = () => doc.page.height - doc.page.margins.bottom - SECTION_FOOTER_RESERVE;
+  for (const block of blocks) {
+    if (block.type === "paragraph") {
+      for (const ln of block.lines) drawRuns(doc, ln.runs, MARGIN_X, contentWidth);
+      doc.moveDown(0.35);
+      continue;
+    }
+    // bullet / numbered
+    const indent = block.level === 1 ? LIST_INDENT_L1 : LIST_INDENT_L0;
+    const textX = MARGIN_X + indent + LIST_TEXT_GAP;
+    const textW = contentWidth - indent - LIST_TEXT_GAP;
+    const h = measureRunsHeight(doc, block.runs, textW);
+    const pageInner = pageBottom() - doc.page.margins.top;
+    // Keep the whole item together — break before it unless it's taller
+    // than a full page (then let it flow rather than loop forever).
+    if (doc.y + h > pageBottom() && h <= pageInner) doc.addPage();
+    const y0 = doc.y;
+    const glyphX = MARGIN_X + indent;
+    if (block.type === "bullet" && block.level === 1) {
+      // Hollow sub-bullet, vector-drawn: Helvetica's WinAnsi encoding has
+      // no U+25E6 (◦) glyph, so a literal one renders as garbage.
+      doc.save().circle(glyphX + 3, y0 + BODY_FONT_SIZE * 0.36, 1.8)
+        .lineWidth(0.7).strokeColor(PJL_TEXT).stroke().restore();
+    } else {
+      const glyph = block.type === "bullet"
+        ? "•"
+        : (block.level === 1 ? letterOrdinal(block.index) + "." : block.index + ".");
+      doc.font("Helvetica").fontSize(BODY_FONT_SIZE).fillColor(PJL_TEXT)
+        .text(glyph, glyphX, y0, { width: LIST_TEXT_GAP, lineBreak: false });
+    }
+    doc.y = y0;
+    drawRuns(doc, block.runs, textX, textW);
+    doc.moveDown(0.15);
+  }
+}
+
 // Render one narrative section: green section header (Barlow), body
 // prose underneath (Helvetica), then any anchored attachments. Page
 // break if there isn't room — pdfkit handles continuation automatically
@@ -527,22 +719,21 @@ function renderSection(doc, sec, quote, { MARGIN_X, contentWidth }) {
   doc.moveDown(0.4);
 
   if (hasBody) {
-    doc.fillColor(PJL_TEXT).font("Helvetica").fontSize(10);
-    // Sanitize light HTML — strip tags so admin-pasted rich text doesn't
-    // explode the PDF. We treat the body as plain text with paragraph
-    // breaks (\n\n).
-    const plain = String(sec.body)
-      .replace(/<br\s*\/?>/gi, "\n")
-      .replace(/<\/p>/gi, "\n\n")
-      .replace(/<[^>]+>/g, "")
-      .replace(/&nbsp;/g, " ")
-      .replace(/&amp;/g, "&")
-      .replace(/&lt;/g, "<")
-      .replace(/&gt;/g, ">");
-    const paragraphs = plain.split(/\n\n+/);
-    for (const p of paragraphs) {
-      doc.text(p.trim(), MARGIN_X, doc.y, { width: contentWidth, lineGap: 2 });
-      doc.moveDown(0.4);
+    doc.fillColor(PJL_TEXT).font("Helvetica").fontSize(BODY_FONT_SIZE);
+    // Strip the light HTML the old renderer tolerated, then parse the
+    // closed markup (Brief C2). A body with no working markup (no lists,
+    // no bold/italic/underline) takes the byte-identical fast path so
+    // existing plain-text proposals render exactly as before.
+    const clean = stripSectionHtml(sec.body);
+    const blocks = parseSectionBody(clean);
+    if (!bodyHasFormatting(blocks)) {
+      const paragraphs = clean.split(/\n\n+/);
+      for (const p of paragraphs) {
+        doc.text(p.trim(), MARGIN_X, doc.y, { width: contentWidth, lineGap: 2 });
+        doc.moveDown(0.4);
+      }
+    } else {
+      renderBodyBlocks(doc, blocks, { MARGIN_X, contentWidth });
     }
   }
 
@@ -998,5 +1189,7 @@ module.exports = {
   generateQuotePdf,            // unchanged — back-compat for existing callers
   renderQuotePdf,              // dispatcher — prefer this for new code
   renderProjectProposalPdf,    // exported for direct invocation if needed
-  renderSmartControllerPdf     // rich controller layout (narrativeKey quotes)
+  renderSmartControllerPdf,    // rich controller layout (narrativeKey quotes)
+  parseSectionBody,            // Brief C2 markup parser — exported for tests
+  parseInlineRuns              // line-scoped inline run parser — exported for tests
 };

@@ -341,8 +341,37 @@ QUOTE FOLDER
       document. Drafts render live. (Brief B, 2026-07)
 
   Project Proposal-only blocks
-    - proposalSections[]   — ordered narrative (cover, scope, refs,
-                              line items, acceptance, etc.)
+    - proposalSections[]   — a USER-ORDERED, USER-EXTENSIBLE array (Brief
+                              C1). The admin can add / remove / reorder /
+                              retitle sections in the builder; order in the
+                              array is order in the PDF. Each section has a
+                              server-controlled `kind` — user-added ones are
+                              `kind:"custom"`. Two kinds are STRUCTURAL and
+                              undeletable: `line_items` (renders the pricing
+                              table) and `acceptance_block` (renders the
+                              signature/acceptance block); both always render
+                              last regardless of order. The old "leave a
+                              section blank to hide it" behaviour is retired
+                              — to omit a section, delete it.
+    - section body markup  — bodies are plain strings carrying a CLOSED
+                              customer-facing markup convention (Brief C2):
+                              **bold**, __underline__, *italic*, "- " bullets
+                              (2-space-indent sub-bullets), "1." numbered
+                              lists; max nesting depth 1; \* \_ \- escape.
+                              Parsed at render time (parseSectionBody). No
+                              schema change — the body never becomes a block
+                              model. **Rejected alternative:** a structured
+                              block model edited via `contenteditable` with a
+                              WYSIWYG toolbar. It was rejected because it
+                              needs a body-schema migration, a DOM↔model
+                              serializer, and a `contenteditable` surface —
+                              the worst host on iOS Safari, where Patrick
+                              actually builds quotes. The markup convention
+                              gains formatting with zero schema/migration and
+                              keeps the body a plain <textarea>. **Alignment
+                              (centre/right) is deferred** — no natural syntax
+                              here; if added later it belongs at SECTION
+                              level (`section.align`), never per-paragraph.
     - attachments[]        — uploaded images / PDFs, anchored to
                               specific sections for inline render
     - customRates          — labour-rate snapshot from the customer
