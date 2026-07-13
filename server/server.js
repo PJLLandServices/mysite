@@ -725,6 +725,38 @@ async function proposalHasCustomDoc(q) {
   try { return (await fs.stat(docPath)).isFile(); } catch (_) { return false; }
 }
 
+// Acceptance footer injected at the bottom of every served custom document
+// (Patrick, Jul 13: "when he gets to the bottom of the webpage… how can he
+// sign this"). The designed pages end in a "call us" CTA with no e-sign
+// path, so the server appends a self-styled block linking to the STANDARD
+// accept page via ?sign=1 — scope summary, totals, signature pad, and the
+// print-and-return option all live there, and the unlock cookie carries
+// over so there's no re-challenge. Injected at serve time; Patrick's file
+// on disk is never modified. Accepted proposals get a "thank you" state
+// instead of the CTA.
+function injectProposalAcceptFooter(html, q, url) {
+  const t = url.searchParams.get("t") || q.approval?.token || "";
+  const signHref = `/approve/${encodeURIComponent(q.id)}?t=${encodeURIComponent(t)}&amp;sign=1`;
+  const accepted = !!(q.signature && q.signature.signed) ||
+    q.status === "accepted" || q.status === "pending_admin_attestation";
+  const footer = accepted
+    ? `
+<div id="pjl-accept-footer" style="background:#0F1F14;padding:40px 20px 48px;text-align:center;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
+  <p style="margin:0 0 8px;color:#EAF3DE;font-size:20px;font-weight:700;">&#10003; Accepted — thank you.</p>
+  <p style="margin:0 0 18px;color:#9FB3A6;font-size:14px;line-height:1.5;">We have your acceptance on file and we'll be in touch to schedule.</p>
+  <a href="${signHref}" style="color:#E9A93F;font-size:13px;font-weight:600;">View your acceptance record</a>
+</div>`
+    : `
+<div id="pjl-accept-footer" style="background:#0F1F14;padding:40px 20px 48px;text-align:center;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
+  <p style="margin:0 0 8px;color:#EAF3DE;font-size:20px;font-weight:700;">Ready to move ahead?</p>
+  <p style="margin:0 auto 22px;max-width:44ch;color:#9FB3A6;font-size:14px;line-height:1.55;">Review the scope &amp; pricing summary and sign online — it takes about a minute on any device. You can also download the PDF there, or print, sign, and email it back.</p>
+  <a href="${signHref}" style="display:inline-block;padding:16px 32px;background:#E07B24;color:#fff;text-decoration:none;border-radius:8px;font-weight:700;font-size:16px;">Accept &amp; sign online</a>
+  <p style="margin:20px 0 0;color:#8A9B90;font-size:13px;">Questions first? Call <a href="tel:+19059600181" style="color:#EAF3DE;font-weight:600;">(905) 960-0181</a> — or reply to the email this came from.</p>
+</div>`;
+  const idx = html.toLowerCase().lastIndexOf("</body>");
+  return idx === -1 ? html + footer : html.slice(0, idx) + footer + html.slice(idx);
+}
+
 // If this /approve/<id> page request is for a project_proposal that HAS a
 // custom document AND the caller has passed the gate, serve the document
 // and return true. Otherwise return false so the caller falls through to
@@ -732,6 +764,11 @@ async function proposalHasCustomDoc(q) {
 // without a custom doc). Admins may also open it token-lessly (Patrick's
 // own preview) since requireUser → "allow".
 async function serveProposalDocIfUnlocked(req, res, quoteId, url) {
+  // "Sign view" escape hatch — ?sign=1 forces the STANDARD accept page
+  // (line items, totals, signature pad, PDF-return) even when a custom
+  // document exists. The injected footer links here; the unlock cookie is
+  // already set so the standard page renders without a re-challenge.
+  if (url.searchParams.get("sign") === "1") return false;
   const token = url.searchParams.get("t") || "";
   let q = null;
   try { q = await quotes.getByApprovalToken(quoteId, token); } catch (_) { q = null; }
@@ -744,13 +781,14 @@ async function serveProposalDocIfUnlocked(req, res, quoteId, url) {
   // Gate: only admin / owning-customer / valid unlock cookie sees it.
   if ((await resolveProposalGate(req, q)) !== "allow") return false;
   let html;
-  try { html = await fs.readFile(proposalDocPath(q.id)); } catch (_) { return false; }
+  try { html = await fs.readFile(proposalDocPath(q.id), "utf8"); } catch (_) { return false; }
+  const body = Buffer.from(injectProposalAcceptFooter(html, q, url), "utf8");
   res.writeHead(200, {
     "content-type": "text/html; charset=utf-8",
-    "content-length": html.length,
+    "content-length": body.length,
     "cache-control": "no-store"
   });
-  res.end(html);
+  res.end(body);
   return true;
 }
 
@@ -1328,6 +1366,13 @@ function escapeHtmlServer(s) {
   return String(s == null ? "" : s)
     .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;").replace(/'/g, "&#039;");
+}
+
+// Money for customer-facing email/SMS copy — "12,068.40" (en-CA thousands
+// separators). Replaces bare toFixed(2), which printed five-figure
+// proposal totals as "12068.40" (Patrick, Jul 13 2026).
+function moneyCad(n) {
+  return Number(n || 0).toLocaleString("en-CA", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 // Brief 2 — render the project status-update email HTML. Pure
@@ -7182,7 +7227,7 @@ async function handleApi(req, res, pathname) {
 
       const results = { smsSent: false, smsError: null, emailSent: false, emailError: null, approvalUrl };
       const firstName = (wo.customerName || "").split(" ")[0] || "there";
-      const summary = `${builderLines.length} line${builderLines.length === 1 ? "" : "s"} — $${totals.total.toFixed(2)} CAD incl. HST`;
+      const summary = `${builderLines.length} line${builderLines.length === 1 ? "" : "s"} — $${moneyCad(totals.total)} CAD incl. HST`;
 
       // SMS — keep within 160 chars where possible.
       if (sendSms && process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_FROM_NUMBER) {
@@ -7217,7 +7262,7 @@ async function handleApi(req, res, pathname) {
               auth: { user: process.env.GMAIL_USER, pass: process.env.GMAIL_APP_PASSWORD }
             });
             const lineRows = acceptedSnapshot.map((l) =>
-              `<tr><td style="padding:6px 0;">${(l.label || l.key || "").replace(/</g, "&lt;")} × ${l.qty}</td><td style="text-align:right;padding:6px 0;font-variant-numeric:tabular-nums;">$${Number(l.lineTotal).toFixed(2)}</td></tr>`
+              `<tr><td style="padding:6px 0;">${(l.label || l.key || "").replace(/</g, "&lt;")} × ${l.qty}</td><td style="text-align:right;padding:6px 0;font-variant-numeric:tabular-nums;">$${moneyCad(l.lineTotal)}</td></tr>`
             ).join("");
             const html = `
 <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:560px;color:#1a1a1a;line-height:1.55;">
@@ -7229,7 +7274,7 @@ async function handleApi(req, res, pathname) {
     <p style="margin:0 0 14px;">Hi ${firstName.replace(/</g, "&lt;")},</p>
     <p style="margin:0 0 14px;">Our tech ran into something on-site at ${(wo.address || "your property").replace(/</g, "&lt;")} and recommends the following repair scope:</p>
     <table style="width:100%;border-collapse:collapse;margin:14px 0;font-size:14px;">${lineRows}</table>
-    <p style="margin:12px 0 18px;padding-top:10px;border-top:1px solid #e5e5dd;text-align:right;font-size:15px;"><strong>Total: $${totals.total.toFixed(2)} CAD</strong> (incl. HST)</p>
+    <p style="margin:12px 0 18px;padding-top:10px;border-top:1px solid #e5e5dd;text-align:right;font-size:15px;"><strong>Total: $${moneyCad(totals.total)} CAD</strong> (incl. HST)</p>
     <p style="margin:0 0 14px;font-size:13px;color:#555;">Attached: your repair quote and the on-site inspection report documenting what we found.</p>
     <p style="margin:0 0 18px;text-align:center;">
       <a href="${approvalUrl}" style="display:inline-block;padding:14px 28px;background:#E07B24;color:#fff;text-decoration:none;border-radius:6px;font-weight:600;font-size:15px;">Review &amp; approve</a>
@@ -10585,7 +10630,7 @@ async function handleApi(req, res, pathname) {
   </div>
   <div style="padding:24px 28px;background:#FAFAF5;border:1px solid #e5e5dd;border-top:none;border-radius:0 0 8px 8px;">
     <p>Hi ${escapeHtmlServer(firstName)},</p>
-    <p>Your project at ${escapeHtmlServer(project.address || "your property")} is complete. ${invoice ? `The final invoice (<strong>${invoice.id}</strong>) is attached — total <strong>$${Number(invoice.total).toFixed(2)} CAD</strong> incl. HST.` : "There's nothing to bill on this one — all work covered under the original proposal."}</p>
+    <p>Your project at ${escapeHtmlServer(project.address || "your property")} is complete. ${invoice ? `The final invoice (<strong>${invoice.id}</strong>) is attached — total <strong>$${moneyCad(invoice.total)} CAD</strong> incl. HST.` : "There's nothing to bill on this one — all work covered under the original proposal."}</p>
     <p>The work carries a <strong>3-year warranty on installs</strong>. Let us know if anything needs follow-up.</p>
     <p style="margin:24px 0 0;font-size:13px;color:#777;">Questions? Call <a href="tel:+19059600181" style="color:#1B4D2E;">(905) 960-0181</a>.</p>
     <p style="margin:18px 0 0;">Thank you,<br>Patrick<br>PJL Land Services</p>
@@ -11372,7 +11417,7 @@ async function handleApi(req, res, pathname) {
       // SMS — keep within one segment where possible.
       if (sendSms && process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_FROM_NUMBER) {
         try {
-          const smsBody = `Hi ${firstName}, PJL: your quote ${q.id} is ready — $${Number(q.total || 0).toFixed(2)} CAD incl. HST. Review + sign here: ${approveUrl}`;
+          const smsBody = `Hi ${firstName}, PJL: your quote ${q.id} is ready — $${moneyCad(q.total)} CAD incl. HST. Review + sign here: ${approveUrl}`;
           const sid = process.env.TWILIO_ACCOUNT_SID;
           const tok = process.env.TWILIO_AUTH_TOKEN;
           const url = `https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(sid)}/Messages.json`;
@@ -11402,7 +11447,7 @@ async function handleApi(req, res, pathname) {
               auth: { user: process.env.GMAIL_USER, pass: process.env.GMAIL_APP_PASSWORD }
             });
             const lineRows = (q.lineItems || []).map((l) =>
-              `<tr><td style="padding:6px 0;">${(l.label || l.key || "").replace(/</g, "&lt;")} × ${l.qty}</td><td style="text-align:right;padding:6px 0;font-variant-numeric:tabular-nums;">$${Number(l.lineTotal).toFixed(2)}</td></tr>`
+              `<tr><td style="padding:6px 0;">${(l.label || l.key || "").replace(/</g, "&lt;")} × ${l.qty}</td><td style="text-align:right;padding:6px 0;font-variant-numeric:tabular-nums;">$${moneyCad(l.lineTotal)}</td></tr>`
             ).join("");
             const html = `
 <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:560px;color:#1a1a1a;line-height:1.55;">
@@ -11414,7 +11459,7 @@ async function handleApi(req, res, pathname) {
     <p style="margin:0 0 14px;">Hi ${firstName.replace(/</g, "&lt;")},</p>
     <p style="margin:0 0 14px;">Patrick reviewed your request and your quote (<strong>${q.id}</strong>) is ready:</p>
     <table style="width:100%;border-collapse:collapse;margin:14px 0;font-size:14px;">${lineRows}</table>
-    <p style="margin:12px 0 18px;padding-top:10px;border-top:1px solid #e5e5dd;text-align:right;font-size:15px;"><strong>Total: $${Number(q.total || 0).toFixed(2)} CAD</strong> (incl. HST)</p>
+    <p style="margin:12px 0 18px;padding-top:10px;border-top:1px solid #e5e5dd;text-align:right;font-size:15px;"><strong>Total: $${moneyCad(q.total)} CAD</strong> (incl. HST)</p>
     <p style="margin:0 0 14px;font-size:13px;color:#555;">The full quote is attached as a PDF. When you're ready, sign online — it takes a minute on any device — and we'll reach out to schedule the work.</p>
     <p style="margin:0 0 18px;text-align:center;">
       <a href="${approveUrl}" style="display:inline-block;padding:14px 28px;background:#E07B24;color:#fff;text-decoration:none;border-radius:6px;font-weight:600;font-size:15px;">Review &amp; sign online</a>
@@ -11569,9 +11614,9 @@ async function handleApi(req, res, pathname) {
   <div style="padding:24px 28px;background:#FAFAF5;border:1px solid #e5e5dd;border-top:none;border-radius:0 0 8px 8px;">
     <p style="margin:0 0 14px;">Hi ${firstName},</p>
     ${gated
-      ? `<p style="margin:0 0 14px;">Your detailed proposal (<strong>${displayNo}</strong>) is ready to review at the link below. Total: <strong>$${Number(q.total || 0).toFixed(2)} CAD</strong> incl. HST.</p>
+      ? `<p style="margin:0 0 14px;">Your detailed proposal (<strong>${displayNo}</strong>) is ready to review at the link below. Total: <strong>$${moneyCad(q.total)} CAD</strong> incl. HST.</p>
     <p style="margin:0 0 14px;padding:12px 14px;background:#EAF3DE;border:1px solid #C7E0A8;border-radius:8px;font-size:13px;color:#33502f;">To open it, you'll be asked for your phone number — the one we have on file for you. Any format is fine.</p>`
-      : `<p style="margin:0 0 14px;">Your detailed proposal (<strong>${displayNo}</strong>) is attached and posted at the link below. Total: <strong>$${Number(q.total || 0).toFixed(2)} CAD</strong> incl. HST.</p>`}
+      : `<p style="margin:0 0 14px;">Your detailed proposal (<strong>${displayNo}</strong>) is attached and posted at the link below. Total: <strong>$${moneyCad(q.total)} CAD</strong> incl. HST.</p>`}
     <p style="margin:0 0 14px;font-size:13px;color:#555;">You can accept this proposal in either of two ways:</p>
     <ul style="margin:0 0 14px;padding-left:20px;font-size:13px;color:#333;line-height:1.7;">
       <li><strong>Sign online</strong> — tap the button below, draw your signature, done.</li>
@@ -13381,7 +13426,7 @@ async function handleApi(req, res, pathname) {
         // stamped on the invoice record for accounting / QB
         // reconciliation, just not surfaced in the customer email.
         const totalLine = invoice && invoice.total > 0
-          ? `<p style="margin: 0 0 14px;">Total for today's visit: <strong>$${invoice.total.toFixed(2)} CAD</strong> (incl. HST). An invoice will follow.</p>`
+          ? `<p style="margin: 0 0 14px;">Total for today's visit: <strong>$${moneyCad(invoice.total)} CAD</strong> (incl. HST). An invoice will follow.</p>`
           : "";
         const warranty = serviceRecord.warrantyExpiresAt
           ? `<p style="margin: 0 0 14px;">Today's work is covered under PJL's <strong>${serviceRecord.warrantyMonths}-month warranty</strong>, valid through ${new Date(serviceRecord.warrantyExpiresAt).toLocaleDateString("en-CA", { month: "long", day: "numeric", year: "numeric" })}.</p>`
