@@ -1990,6 +1990,98 @@ async function quoteRenderParties(q) {
   return { customer, property: property || { address: customer.address } };
 }
 
+// ---- Frozen quote PDF (Brief B, 2026-07) -----------------------------
+//
+// Sent quote PDFs are frozen to disk the moment they are sent and served
+// from disk thereafter, mirroring the PO document pattern (po-pdf.js +
+// the /purchase-orders/:id/send handler). One file per quote record —
+// revisions are new records (Hard Rule 9) and get their own file. Drafts
+// still render live so the admin previews current edits.
+const QUOTE_PDF_DIR = path.join(DATA_DIR, "quote-pdfs");
+
+// Render a quote PDF to a single Buffer (pdfkit streams; we collect so we
+// can hash + write it). Rejects on any renderer error so the caller can
+// abort the send rather than emit an unfrozen document.
+function renderQuotePdfBuffer(q, opts) {
+  return new Promise((resolve, reject) => {
+    let doc;
+    try { doc = renderQuotePdf(q, opts); }
+    catch (err) { return reject(err); }
+    const chunks = [];
+    doc.on("data", (c) => chunks.push(c));
+    doc.on("end", () => resolve(Buffer.concat(chunks)));
+    doc.on("error", reject);
+  });
+}
+
+// Read the frozen bytes for a quote, or null if it has no pdfPath or the
+// file is missing on disk. Callers distinguish "no snapshot yet" (backfill)
+// from "snapshot recorded but file gone" (honest error) via q.pdfPath.
+async function readFrozenQuotePdf(q) {
+  if (!q || !q.pdfPath) return null;
+  try { return await fs.readFile(path.join(SERVER_DIR, q.pdfPath)); }
+  catch { return null; }
+}
+
+// Write frozen bytes to server/data/quote-pdfs/<id>.pdf and return the
+// metadata to persist on the record (repo-relative path so it survives a
+// move of the install dir, sha256 for integrity, freeze timestamp).
+async function writeFrozenQuotePdf(q, buffer) {
+  await fs.mkdir(QUOTE_PDF_DIR, { recursive: true });
+  const fsPath = path.join(QUOTE_PDF_DIR, `${q.id}.pdf`);
+  await fs.writeFile(fsPath, buffer);
+  const pdfPath = path.relative(SERVER_DIR, fsPath).split(path.sep).join("/");
+  const pdfSha256 = crypto.createHash("sha256").update(buffer).digest("hex");
+  return { pdfPath, pdfSha256, pdfGeneratedAt: new Date().toISOString() };
+}
+
+// Serve a quote PDF over `res` per Brief B §3.5:
+//   - draft / draft_preview  → live render (preview of current edits)
+//   - sent (non-draft), frozen → the frozen bytes from disk
+//   - sent, no snapshot        → lazy backfill (render current data, freeze,
+//                                stamp pdfBackfilled), then serve those bytes
+//   - sent, snapshot recorded but file missing → honest 500, NEVER a silent
+//                                re-render (a fabricated "snapshot" reads as
+//                                authoritative and isn't)
+// `opts` is the renderer options for the live/backfill render paths.
+async function serveQuotePdf(res, q, opts, { by = "system" } = {}) {
+  const pdfHeaders = {
+    "content-type": "application/pdf",
+    "content-disposition": `inline; filename="${q.id}.pdf"`,
+    "cache-control": "no-store"
+  };
+  const isDraft = q.status === "draft" || q.status === "draft_preview";
+
+  if (!isDraft && q.pdfPath) {
+    const buf = await readFrozenQuotePdf(q);
+    if (!buf) {
+      return sendJson(res, 500, {
+        ok: false,
+        error: "frozen_pdf_missing",
+        errors: ["This quote's frozen PDF is missing from disk. Re-send the quote to regenerate the frozen copy — it will not be silently re-rendered."]
+      });
+    }
+    res.writeHead(200, pdfHeaders);
+    res.end(buf);
+    return;
+  }
+
+  if (!isDraft && !q.pdfPath) {
+    // Lazy backfill — freeze from current data so the document stops
+    // drifting from here forward. Honestly flagged; not a reconstruction.
+    const buffer = await renderQuotePdfBuffer(q, opts);
+    const meta = await writeFrozenQuotePdf(q, buffer);
+    await quotes.persistFrozenPdf(q.id, { ...meta, by, backfilled: true });
+    res.writeHead(200, pdfHeaders);
+    res.end(buffer);
+    return;
+  }
+
+  // Draft — live preview render (streamed).
+  res.writeHead(200, pdfHeaders);
+  renderQuotePdf(q, opts).pipe(res);
+}
+
 // Hydrate a decorated lead with its source Quote (if any) so the CRM
 // lead-detail pane can render the Quote card without a second fetch. The
 // list endpoint pre-builds a map for efficiency; single-lead responses
@@ -5849,21 +5941,18 @@ async function handleApi(req, res, pathname) {
       // record) so the PDF always states name + service address +
       // phone + email when the CRM has them.
       const parties = await quoteRenderParties(q);
-      res.writeHead(200, {
-        "content-type": "application/pdf",
-        "content-disposition": `inline; filename="${q.id}.pdf"`,
-        "cache-control": "no-store"
-      });
-      // Dispatcher — picks the proposal renderer for project_proposal,
-      // falls through to the existing one-page renderer otherwise.
-      renderQuotePdf(q, {
+      // Draft → live render; sent → the frozen bytes from disk, lazily
+      // backfilled on first read if a legacy sent quote has none (Brief B).
+      // The dispatcher inside renderQuotePdf picks the proposal renderer
+      // for project_proposal, the one-page renderer otherwise.
+      await serveQuotePdf(res, q, {
         customer: parties.customer,
         property: parties.property,
         acceptanceUrl: q.approval?.token
           ? `${resolvePublicBaseUrl()}/approve/${encodeURIComponent(q.id)}?t=${q.approval.token}`
           : null,
         returnEmail: process.env.CUSTOMER_EMAIL || "info@pjllandservices.com"
-      }).pipe(res);
+      }, { by: "admin" });
       return;
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't generate PDF."] });
@@ -5908,20 +5997,18 @@ async function handleApi(req, res, pathname) {
       const token = decodeURIComponent(approvePdfMatch[2]);
       const q = await quotes.getByApprovalToken(quoteId, token);
       if (!q) return sendJson(res, 404, { ok: false, errors: ["Approval link not found or expired."] });
-      // Same live full-info resolution as the admin PDF route — the
-      // customer's downloaded copy must carry the service address too.
+      // The print-to-sign download. For a sent quote this MUST be the
+      // frozen bytes — what the customer prints, signs, and returns has
+      // to be, provably, what we sent them (Brief B §3.5). serveQuotePdf
+      // serves the snapshot from disk; the live resolution below only
+      // feeds a draft preview or a legacy backfill render.
       const parties = await quoteRenderParties(q);
-      res.writeHead(200, {
-        "content-type": "application/pdf",
-        "content-disposition": `inline; filename="${q.id}.pdf"`,
-        "cache-control": "no-store"
-      });
-      renderQuotePdf(q, {
+      await serveQuotePdf(res, q, {
         customer: parties.customer,
         property: parties.property,
         acceptanceUrl: `${resolvePublicBaseUrl()}/approve/${encodeURIComponent(q.id)}?t=${token}`,
         returnEmail: process.env.CUSTOMER_EMAIL || "info@pjllandservices.com"
-      }).pipe(res);
+      }, { by: "customer" });
       return;
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't generate PDF."] });
@@ -10819,10 +10906,32 @@ async function handleApi(req, res, pathname) {
       const channels = [];
       if (sendEmail) channels.push("email");
       if (sendSms) channels.push("sms");
-      const token = crypto.randomBytes(16).toString("hex");
+      const sendBy = session.uid || "admin";
+
+      // Freeze-or-reuse the PDF (Brief B). Reuse the frozen bytes only for
+      // an already-sent quote (immutable — a re-send must ship the exact
+      // same document with its original token). A draft always re-renders
+      // so the freeze captures current edits. Render or disk-write failure
+      // throws here, before markSentForApproval — the outer catch aborts
+      // the send, no email goes out, and the quote stays a draft.
+      const wasDraftBeforeSend = q.status === "draft" || q.status === "draft_preview";
+      let token = q.approval?.token || null;
+      let pdfBuffer = (!wasDraftBeforeSend && q.pdfPath) ? await readFrozenQuotePdf(q) : null;
+      let freezeMeta = null;
+      if (!(pdfBuffer && token)) {
+        token = token || crypto.randomBytes(16).toString("hex");
+        const pdfApproveUrl = `${resolvePublicBaseUrl()}/approve/${encodeURIComponent(q.id)}?t=${token}`;
+        const parties = await quoteRenderParties(q);
+        pdfBuffer = await renderQuotePdfBuffer(q, {
+          customer: { ...parties.customer, email: toEmail, phone: parties.customer.phone || toPhone },
+          property: parties.property,
+          acceptanceUrl: pdfApproveUrl
+        });
+        freezeMeta = await writeFrozenQuotePdf(q, pdfBuffer);
+      }
       await quotes.markSentForApproval(q.id, {
-        token, channels, toEmail, toPhone,
-        by: session.uid || "admin"
+        token, channels, toEmail, toPhone, by: sendBy,
+        ...(freezeMeta ? { pdf: freezeMeta } : {})
       });
       const approveUrl = `${resolvePublicBaseUrl()}/approve/${encodeURIComponent(q.id)}?t=${token}`;
 
@@ -10897,36 +11006,15 @@ async function handleApi(req, res, pathname) {
   </div>
   <p style="margin:16px 0 0;font-size:11px;color:#999;text-align:center;">PJL Land Services · Newmarket, Ontario · pjllandservices.com</p>
 </div>`.trim();
-            // Quote PDF — buffered so sendMail doesn't race the stream.
-            // Dispatcher: narrativeKey quotes (smart-controller) get the
-            // rich multi-section layout with the live e-sign link baked
-            // into the acceptance block; plain repair quotes keep the
-            // one-page layout.
-            const attachments = [];
-            try {
-              // Live full-info resolution (property → lead → customer
-              // record) so the emailed PDF states the service address
-              // even when the lead's frozen contact predates it.
-              const parties = await quoteRenderParties(q);
-              const pdfDoc = renderQuotePdf(q, {
-                customer: { ...parties.customer, email: toEmail, phone: parties.customer.phone || toPhone },
-                property: parties.property,
-                acceptanceUrl: approveUrl
-              });
-              const chunks = [];
-              await new Promise((resolve, reject) => {
-                pdfDoc.on("data", (c) => chunks.push(c));
-                pdfDoc.on("end", resolve);
-                pdfDoc.on("error", reject);
-              });
-              attachments.push({
-                filename: `PJL-Quote-${q.id}.pdf`,
-                content: Buffer.concat(chunks),
-                contentType: "application/pdf"
-              });
-            } catch (err) {
-              console.warn("[quote-send] PDF attach failed:", err?.message);
-            }
+            // Attach the FROZEN bytes (Brief B) — the exact document the
+            // admin download and the /approve print-to-sign page also
+            // serve. Never a second render: pdfBuffer was frozen (or reused
+            // from a prior send) above, before this email path.
+            const attachments = [{
+              filename: `PJL-Quote-${q.id}.pdf`,
+              content: pdfBuffer,
+              contentType: "application/pdf"
+            }];
             await transporter.sendMail({
               from: `"PJL Land Services" <${process.env.CUSTOMER_EMAIL || "info@pjllandservices.com"}>`,
               to: toEmail,
@@ -10989,8 +11077,36 @@ async function handleApi(req, res, pathname) {
       const channels = [];
       if (sendEmail) channels.push("email");
       if (sendSms) channels.push("sms");
-      const token = crypto.randomBytes(16).toString("hex");
-      await quotes.markSentForApproval(q.id, { token, channels, toEmail, toPhone });
+      const sendBy = session.uid || "admin";
+
+      // Freeze-or-reuse the proposal PDF (Brief B). Reuse the frozen bytes
+      // only for an already-sent proposal (immutable); a draft re-renders
+      // so the freeze captures current edits. Params come from
+      // quoteRenderParties — the same full resolution the download routes
+      // use, fixing the prior stubbed PREPARED FOR block (blank name / no
+      // service address) that shipped on emailed proposals. Render or
+      // disk-write failure throws here, before markSentForApproval — the
+      // outer catch aborts the send and the proposal stays a draft.
+      const wasDraftBeforeSend = q.status === "draft" || q.status === "draft_preview";
+      let token = q.approval?.token || null;
+      let pdfBuffer = (!wasDraftBeforeSend && q.pdfPath) ? await readFrozenQuotePdf(q) : null;
+      let freezeMeta = null;
+      if (!(pdfBuffer && token)) {
+        token = token || crypto.randomBytes(16).toString("hex");
+        const pdfApproveUrl = `${resolvePublicBaseUrl()}/approve/${encodeURIComponent(q.id)}?t=${token}`;
+        const parties = await quoteRenderParties(q);
+        pdfBuffer = await renderQuotePdfBuffer(q, {
+          customer: { ...parties.customer, email: toEmail, phone: parties.customer.phone || toPhone },
+          property: parties.property,
+          acceptanceUrl: pdfApproveUrl,
+          returnEmail: process.env.CUSTOMER_EMAIL || "info@pjllandservices.com"
+        });
+        freezeMeta = await writeFrozenQuotePdf(q, pdfBuffer);
+      }
+      await quotes.markSentForApproval(q.id, {
+        token, channels, toEmail, toPhone, by: sendBy,
+        ...(freezeMeta ? { pdf: freezeMeta } : {})
+      });
       const approvalUrl = `${resolvePublicBaseUrl()}/approve/${encodeURIComponent(q.id)}?t=${token}`;
 
       // Email — branded with PDF attachment. SMS deferred to first
@@ -11031,29 +11147,14 @@ async function handleApi(req, res, pathname) {
   <p style="margin:16px 0 0;font-size:11px;color:#999;text-align:center;">PJL Land Services · Newmarket, Ontario · pjllandservices.com</p>
 </div>`.trim();
 
-            // Attach the proposal PDF.
-            const attachments = [];
-            try {
-              const pdfDoc = renderQuotePdf(q, {
-                customer: { name: "", email: q.customerEmail, phone: toPhone || "" },
-                property: {},
-                acceptanceUrl: approvalUrl,
-                returnEmail: process.env.CUSTOMER_EMAIL || "info@pjllandservices.com"
-              });
-              const chunks = [];
-              await new Promise((resolve, reject) => {
-                pdfDoc.on("data", (c) => chunks.push(c));
-                pdfDoc.on("end", resolve);
-                pdfDoc.on("error", reject);
-              });
-              attachments.push({
-                filename: `PJL-Proposal-${q.id}.pdf`,
-                content: Buffer.concat(chunks),
-                contentType: "application/pdf"
-              });
-            } catch (err) {
-              console.warn("[proposal-email] PDF attach failed:", err?.message);
-            }
+            // Attach the FROZEN bytes (Brief B) — identical to the admin
+            // download and the /approve print-to-sign page. Never a second
+            // render: pdfBuffer was frozen (or reused) above.
+            const attachments = [{
+              filename: `PJL-Proposal-${q.id}.pdf`,
+              content: pdfBuffer,
+              contentType: "application/pdf"
+            }];
             await transporter.sendMail({
               from: `"PJL Land Services" <${process.env.CUSTOMER_EMAIL || "info@pjllandservices.com"}>`,
               to: toEmail,

@@ -378,6 +378,19 @@ function blankQuote() {
     revisionOf: null,
     supersededBy: null,
 
+    // Frozen quote PDF (Brief B, 2026-07). On send the rendered PDF is
+    // written once to server/data/quote-pdfs/<id>.pdf and these fields
+    // record it — repo-relative path, sha256 of the bytes, freeze time.
+    // Immutable thereafter: every read (admin download, /approve
+    // print-to-sign, resend, email attachment) serves these bytes.
+    // pdfBackfilled is true only when the freeze happened lazily on a
+    // first read of an already-sent quote whose original send-time bytes
+    // were never captured — it does NOT reconstruct what was sent.
+    pdfPath: null,
+    pdfSha256: null,
+    pdfGeneratedAt: null,
+    pdfBackfilled: false,
+
     // Audit trail — every status change appends an entry.
     history: [
       { ts: created, action: "created", by: "system", note: "" }
@@ -1033,7 +1046,7 @@ async function attachWorkOrder(id, workOrderId) {
 // random hex string — sufficient entropy that brute-forcing the URL is
 // not a practical attack. Channels: ["email"], ["sms"], ["email","sms"],
 // or [] (manual share — Patrick copies the URL himself).
-async function markSentForApproval(id, { token, channels = [], toEmail = "", toPhone = "", by = "tech" } = {}) {
+async function markSentForApproval(id, { token, channels = [], toEmail = "", toPhone = "", by = "tech", pdf = null } = {}) {
   if (!id || !token) throw new Error("markSentForApproval needs id + token");
   const records = await readAll();
   const idx = records.findIndex((q) => q.id === id);
@@ -1057,6 +1070,42 @@ async function markSentForApproval(id, { token, channels = [], toEmail = "", toP
     ts, action: "sent_for_approval", by,
     note: `${wasPreview ? "Promoted from preview, " : ""}via ${q.approval.sentVia.join("+") || "manual"}`
   });
+  // Freeze the sent PDF (Brief B). Only stamps the pdf fields on the
+  // FIRST freeze (guarded by !q.pdfPath) so a re-send passing pdf again
+  // — or a double-tap — never re-appends pdf_frozen or overwrites the
+  // immutable snapshot. The caller writes the bytes to disk before this.
+  if (pdf && pdf.pdfPath && !q.pdfPath) {
+    q.pdfPath = pdf.pdfPath;
+    q.pdfSha256 = pdf.pdfSha256 || null;
+    q.pdfGeneratedAt = pdf.pdfGeneratedAt || ts;
+    q.pdfBackfilled = false;
+    q.history.push({ ts, action: "pdf_frozen", by, note: pdf.pdfSha256 || "" });
+  }
+  records[idx] = q;
+  await writeAll(records);
+  return q;
+}
+
+// Persist a lazily-backfilled frozen PDF (Brief B §3.6). Called by the
+// PDF read routes when an already-sent quote has no frozen bytes: the
+// caller renders from CURRENT data, writes the file, then records the
+// path here with pdfBackfilled = true. This does NOT reconstruct what
+// the customer originally received — that data is gone — it just stops
+// the document drifting from this read forward. Idempotent: never
+// overwrites an existing snapshot.
+async function persistFrozenPdf(id, { pdfPath, pdfSha256 = null, pdfGeneratedAt = null, by = "system", backfilled = false } = {}) {
+  if (!id || !pdfPath) throw new Error("persistFrozenPdf needs id + pdfPath");
+  const records = await readAll();
+  const idx = records.findIndex((q) => q.id === id);
+  if (idx === -1) return null;
+  const q = records[idx];
+  if (q.pdfPath) return q; // already frozen — never overwrite the snapshot
+  const ts = nowIso();
+  q.pdfPath = pdfPath;
+  q.pdfSha256 = pdfSha256;
+  q.pdfGeneratedAt = pdfGeneratedAt || ts;
+  q.pdfBackfilled = backfilled === true;
+  q.history.push({ ts, action: backfilled ? "pdf_backfilled" : "pdf_frozen", by, note: pdfSha256 || "" });
   records[idx] = q;
   await writeAll(records);
   return q;
@@ -1848,6 +1897,7 @@ module.exports = {
   attachWorkOrder,
   markSent,
   markSentForApproval,
+  persistFrozenPdf,
   markAsPreview,
   markDraftPreview,
   convertPreviewToSent,

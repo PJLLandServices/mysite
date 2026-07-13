@@ -332,6 +332,13 @@ QUOTE FOLDER
                             block rendering BOTH portal e-sign URL
                             AND printed signature lines + email PDF
                             attachment + portal page
+    - The generated PDF is SNAPSHOTTED to disk at send
+      (server/data/quote-pdfs/<quoteId>.pdf) and is the customer's
+      source of truth thereafter — the same freeze-on-send guarantee
+      WO report snapshots carry. Every read (admin download, /approve
+      print-to-sign, resend, email attachment) serves those exact
+      bytes; a later data edit or rate change never rewrites a sent
+      document. Drafts render live. (Brief B, 2026-07)
 
   Project Proposal-only blocks
     - proposalSections[]   — ordered narrative (cover, scope, refs,
@@ -1216,7 +1223,7 @@ Once that works, the rest follows the same patterns.
 These are the rules that protect the design from drift. Number them so they can be referenced ("violating rule 4").
 
 1. **One source of truth for every fact.** No duplication of pricing, parts, customer info, or property info.
-2. **Quotes snapshot prices at creation.** Future price changes never alter accepted quotes.
+2. **Quotes snapshot prices at creation — and the sent PDF is frozen at send.** Future price changes never alter accepted quotes, and never alter the document the customer received. The frozen PDF at `server/data/quote-pdfs/<quoteId>.pdf` (written once on send, `pdfPath`/`pdfSha256`/`pdfGeneratedAt` on the record — Brief B, 2026-07) is the authoritative record of what was sent and, on the `pdf_return` path, of what was signed. Every read serves those bytes; drafts render live.
 3. **Work orders pull property info fresh.** Updates flow back to property folder on completion.
 4. **All status changes logged forever.** Storage is cheap. Future-you needs the history.
    - *Scoped deviation:* Voided invoices may be hard-deleted through the tombstone flow (feature-invoice-void-delete-brief.md, 2026-07); the tombstone in `deleted-invoices.json` (frozen snapshot + reason + actor + timestamp, never pruned) is the permanent record. The operational record leaves `invoices.json`; the audit trail does not. Applies to `void` invoices only, through that one flow — no other entity inherits it. Invoice lifecycle with this flow: `draft → sent → paid → void → (deleted, tombstoned)` (delete reachable only from `void`).

@@ -197,26 +197,45 @@ function generateQuotePdf(quote, opts = {}) {
   }
 
   // ---- Line items table ---------------------------------------------
-  const tableTop = doc.y + 6;
   const colDesc = 60;
   const colQty = 320;
   const colUnit = 380;
   const colTotal = 470;
+  const QTY_W = 50, UNIT_W = 80, TOTAL_W = 80;
+  // Description column spans colDesc→colQty less a 10pt gutter (reproduces
+  // the prior hard-coded 250pt width exactly).
+  const DESC_COL_W = colQty - colDesc - 10;
+  const ROW_PAD = 8;
 
-  doc.fillColor(PJL_MUTED).fontSize(9).font("Helvetica-Bold");
-  doc.text("DESCRIPTION", colDesc, tableTop, { characterSpacing: 1 });
-  doc.text("QTY", colQty, tableTop, { width: 50, align: "right", characterSpacing: 1 });
-  doc.text("UNIT", colUnit, tableTop, { width: 80, align: "right", characterSpacing: 1 });
-  doc.text("LINE TOTAL", colTotal, tableTop, { width: 80, align: "right", characterSpacing: 1 });
-  doc.moveTo(60, tableTop + 14).lineTo(doc.page.width - 60, tableTop + 14).strokeColor(PJL_MUTED).lineWidth(0.5).stroke();
+  // Single body-line height (Helvetica 10) — the floor for every row so
+  // single-line rows keep their exact prior spacing.
+  doc.font("Helvetica").fontSize(10);
+  const MIN_ROW_H = doc.heightOfString("Ag", { width: DESC_COL_W });
 
-  let rowY = tableTop + 22;
-  doc.font("Helvetica").fontSize(10).fillColor(PJL_TEXT);
+  // The footer band is drawn once at end-of-document ~50pt above the page
+  // bottom; reserve room so rows/totals never collide with it.
+  const FOOTER_RESERVE = 60;
+  const pageBottom = () => doc.page.height - doc.page.margins.bottom - FOOTER_RESERVE;
+
+  // Column header — extracted so it repeats on every continuation page.
+  // Returns the y of the first row beneath it.
+  function drawTableHeader(topY) {
+    doc.fillColor(PJL_MUTED).fontSize(9).font("Helvetica-Bold");
+    doc.text("DESCRIPTION", colDesc, topY, { characterSpacing: 1, lineBreak: false });
+    doc.text("QTY", colQty, topY, { width: QTY_W, align: "right", characterSpacing: 1, lineBreak: false });
+    doc.text("UNIT", colUnit, topY, { width: UNIT_W, align: "right", characterSpacing: 1, lineBreak: false });
+    doc.text("LINE TOTAL", colTotal, topY, { width: TOTAL_W, align: "right", characterSpacing: 1, lineBreak: false });
+    doc.moveTo(60, topY + 14).lineTo(doc.page.width - 60, topY + 14).strokeColor(PJL_MUTED).lineWidth(0.5).stroke();
+    return topY + 22;
+  }
+
   // Strip the admin-only "[inherited from WO-XXX]" breadcrumb from
   // line.note for customer-facing PDF output. New writes (post
   // 2026-06-02) store the breadcrumb on source.inheritedFromWoId
   // instead — line.note is clean. This handles legacy polluted records.
   const customerNoteForPdf = (raw) => String(raw || "").replace(/^\[(?:inherited from|from)\s+WO-[A-Z0-9-]+\]\s*/i, "").trim();
+
+  let rowY = drawTableHeader(doc.y + 6);
   for (const line of quote.lineItems || []) {
     const label = line.label || line.key || "Line";
     const qty = Number(line.qty) || 1;
@@ -225,15 +244,50 @@ function generateQuotePdf(quote, opts = {}) {
         : Number(line.originalPrice) || 0);
     const lineTotal = Number.isFinite(Number(line.lineTotal)) ? Number(line.lineTotal) : (unitPrice * qty);
     const cleanNote = customerNoteForPdf(line.note);
-    doc.text(label, colDesc, rowY, { width: 250 });
+
+    // Measure the row (label + optional note) at the description column
+    // width, each piece in its own font size, and advance by the measured
+    // height. Fixes the fixed-height collision where the number cells
+    // reset doc.y to the row top and the next row drew over a wrapped
+    // description.
+    doc.font("Helvetica").fontSize(10);
+    const labelH = doc.heightOfString(label, { width: DESC_COL_W });
+    let noteH = 0;
     if (cleanNote) {
-      doc.fontSize(9).fillColor(PJL_MUTED).text(cleanNote, colDesc, doc.y + 1, { width: 250 });
-      doc.fontSize(10).fillColor(PJL_TEXT);
+      doc.font("Helvetica").fontSize(9);
+      noteH = 1 + doc.heightOfString(cleanNote, { width: DESC_COL_W });
     }
-    doc.text(String(qty), colQty, rowY, { width: 50, align: "right" });
-    doc.text(fmt(unitPrice), colUnit, rowY, { width: 80, align: "right" });
-    doc.text(fmt(lineTotal), colTotal, rowY, { width: 80, align: "right" });
-    rowY = doc.y + 8;
+    const rowH = Math.max(labelH + noteH, MIN_ROW_H);
+
+    // Break BEFORE drawing when the row won't fit; repeat the column
+    // header on the new page.
+    if (rowY + rowH > pageBottom()) {
+      doc.addPage();
+      rowY = drawTableHeader(doc.page.margins.top);
+    }
+
+    // All four cells share the same row top `rowY`; the numbers top-align
+    // with the FIRST line of the description.
+    doc.font("Helvetica").fontSize(10).fillColor(PJL_TEXT);
+    doc.text(label, colDesc, rowY, { width: DESC_COL_W });
+    if (cleanNote) {
+      doc.font("Helvetica").fontSize(9).fillColor(PJL_MUTED)
+        .text(cleanNote, colDesc, rowY + labelH + 1, { width: DESC_COL_W });
+    }
+    doc.font("Helvetica").fontSize(10).fillColor(PJL_TEXT);
+    doc.text(String(qty), colQty, rowY, { width: QTY_W, align: "right", lineBreak: false });
+    doc.text(fmt(unitPrice), colUnit, rowY, { width: UNIT_W, align: "right", lineBreak: false });
+    doc.text(fmt(lineTotal), colTotal, rowY, { width: TOTAL_W, align: "right", lineBreak: false });
+
+    rowY += rowH + ROW_PAD;
+  }
+
+  // Keep the whole totals block together — never strand a lone "Total
+  // CAD" on a page by itself.
+  const TOTALS_BLOCK_H = 120;
+  if (rowY + TOTALS_BLOCK_H > pageBottom()) {
+    doc.addPage();
+    rowY = doc.page.margins.top;
   }
 
   // ---- Totals --------------------------------------------------------
@@ -554,38 +608,90 @@ function renderProposalLineItems(doc, quote, { MARGIN_X, contentWidth, heading =
   const colQty = MARGIN_X + 280;
   const colUnit = MARGIN_X + 340;
   const colTotal = MARGIN_X + 420;
+  const QTY_W = 50, UNIT_W = 70, TOTAL_W = 80;
+  // Description column spans colDesc→colQty less a 20pt gutter so wrapped
+  // text can never run into the QTY column (reproduces the prior
+  // hard-coded 260pt width exactly at the default geometry).
+  const DESC_COL_W = colQty - colDesc - 20;
+  const ROW_PAD = 8;
 
-  // Table header.
-  const tableTop = doc.y + 4;
-  doc.fillColor(PJL_MUTED).fontSize(9).font("Helvetica-Bold");
-  doc.text("DESCRIPTION", colDesc, tableTop, { characterSpacing: 1 });
-  doc.text("QTY", colQty, tableTop, { width: 50, align: "right", characterSpacing: 1 });
-  doc.text("UNIT", colUnit, tableTop, { width: 70, align: "right", characterSpacing: 1 });
-  doc.text("LINE TOTAL", colTotal, tableTop, { width: 80, align: "right", characterSpacing: 1 });
-  doc.moveTo(MARGIN_X, tableTop + 14).lineTo(MARGIN_X + contentWidth, tableTop + 14)
-    .strokeColor(PJL_MUTED).lineWidth(0.5).stroke();
+  // Single body-line height (Helvetica 10) — the floor for every row so
+  // single-line rows keep their exact prior spacing.
+  doc.font("Helvetica").fontSize(10);
+  const MIN_ROW_H = doc.heightOfString("Ag", { width: DESC_COL_W });
 
-  let rowY = tableTop + 22;
-  doc.font("Helvetica").fontSize(10).fillColor(PJL_TEXT);
+  // The proposal footer band is drawn once at end-of-document ~50pt above
+  // the page bottom; reserve room so rows/totals never collide with it.
+  const FOOTER_RESERVE = 60;
+  const pageBottom = () => doc.page.height - doc.page.margins.bottom - FOOTER_RESERVE;
+
+  // Column header — extracted so it repeats on every continuation page.
+  // Returns the y of the first row beneath it.
+  function drawTableHeader(topY) {
+    doc.fillColor(PJL_MUTED).fontSize(9).font("Helvetica-Bold");
+    doc.text("DESCRIPTION", colDesc, topY, { characterSpacing: 1, lineBreak: false });
+    doc.text("QTY", colQty, topY, { width: QTY_W, align: "right", characterSpacing: 1, lineBreak: false });
+    doc.text("UNIT", colUnit, topY, { width: UNIT_W, align: "right", characterSpacing: 1, lineBreak: false });
+    doc.text("LINE TOTAL", colTotal, topY, { width: TOTAL_W, align: "right", characterSpacing: 1, lineBreak: false });
+    doc.moveTo(MARGIN_X, topY + 14).lineTo(MARGIN_X + contentWidth, topY + 14)
+      .strokeColor(PJL_MUTED).lineWidth(0.5).stroke();
+    return topY + 22;
+  }
+
+  let rowY = drawTableHeader(doc.y + 4);
   for (const li of quote.lineItems) {
-    if (rowY > doc.page.height - 120) {
-      doc.addPage();
-      rowY = 60;
-    }
     const label = li.label || li.sourceKey || "Line item";
     const qty = Number(li.qty) || 1;
     const price = Number(li.price) || 0;
     const lineTotal = Number(li.lineTotal) || (price * qty);
-    doc.text(label, colDesc, rowY, { width: 260 });
-    if (li.description) {
-      doc.fontSize(9).fillColor(PJL_MUTED).text(li.description, colDesc, doc.y + 1, { width: 260 });
-      doc.fontSize(10).fillColor(PJL_TEXT);
+    const desc = li.description ? String(li.description) : "";
+
+    // Measure the description block (label + optional sub-description) at
+    // the description column width, each piece in its own font size, so
+    // the row gets exactly the vertical space its wrapped text needs.
+    // This is the fix for the fixed-height row collision: the numbers
+    // used to reset doc.y back to the row top, so a wrapped description
+    // bled over the next row. We now advance by the measured height.
+    doc.font("Helvetica").fontSize(10);
+    const labelH = doc.heightOfString(label, { width: DESC_COL_W });
+    let descH = 0;
+    if (desc) {
+      doc.font("Helvetica").fontSize(9);
+      descH = 1 + doc.heightOfString(desc, { width: DESC_COL_W });
     }
-    doc.text(String(qty) + (li.unit ? "" : ""), colQty, rowY, { width: 50, align: "right" });
+    const rowH = Math.max(labelH + descH, MIN_ROW_H);
+
+    // Break BEFORE drawing when the row won't fit; repeat the column
+    // header on the new page.
+    if (rowY + rowH > pageBottom()) {
+      doc.addPage();
+      rowY = drawTableHeader(doc.page.margins.top);
+    }
+
+    // All four cells share the same row top `rowY`. The numbers top-align
+    // with the FIRST line of the description (not its vertical centre).
+    doc.font("Helvetica").fontSize(10).fillColor(PJL_TEXT);
+    doc.text(label, colDesc, rowY, { width: DESC_COL_W });
+    if (desc) {
+      doc.font("Helvetica").fontSize(9).fillColor(PJL_MUTED)
+        .text(desc, colDesc, rowY + labelH + 1, { width: DESC_COL_W });
+    }
+    doc.font("Helvetica").fontSize(10).fillColor(PJL_TEXT);
+    doc.text(String(qty), colQty, rowY, { width: QTY_W, align: "right", lineBreak: false });
     doc.text(fmt(price) + (li.unit ? `/${li.unit.replace("per_", "")}` : ""),
-      colUnit, rowY, { width: 70, align: "right" });
-    doc.text(fmt(lineTotal), colTotal, rowY, { width: 80, align: "right" });
-    rowY = doc.y + 8;
+      colUnit, rowY, { width: UNIT_W, align: "right", lineBreak: false });
+    doc.text(fmt(lineTotal), colTotal, rowY, { width: TOTAL_W, align: "right", lineBreak: false });
+
+    rowY += rowH + ROW_PAD;
+  }
+
+  // Keep the whole totals block together — never strand a lone "Total
+  // CAD" on a page by itself. If it won't fit under the final row, move
+  // the entire block to a fresh page.
+  const TOTALS_BLOCK_H = 130;
+  if (rowY + TOTALS_BLOCK_H > pageBottom()) {
+    doc.addPage();
+    rowY = doc.page.margins.top;
   }
 
   // Totals.
