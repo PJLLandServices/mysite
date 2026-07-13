@@ -331,7 +331,9 @@
         const v = parseFloat(input.value);
         state.quote.lineItems[i].qty = Number.isFinite(v) ? v : 0;
         recomputeLineTotal(i);
-        renderLineItems();
+        // Update this row's total + the footer IN PLACE — re-rendering the
+        // whole table here would destroy the input mid-keystroke (focus loss).
+        updateLineTotalCell(input, i);
         renderTotals();
         markDirty();
       });
@@ -342,7 +344,7 @@
         const v = parseFloat(input.value);
         state.quote.lineItems[i].price = Number.isFinite(v) ? v : 0;
         recomputeLineTotal(i);
-        renderLineItems();
+        updateLineTotalCell(input, i);   // in place — keep focus in the field
         renderTotals();
         markDirty();
       });
@@ -361,6 +363,14 @@
   function recomputeLineTotal(i) {
     const li = state.quote.lineItems[i];
     li.lineTotal = Math.round((Number(li.qty) || 0) * (Number(li.price) || 0) * 100) / 100;
+  }
+
+  // Update a single row's line-total cell without rebuilding the table, so
+  // the field the user is typing in keeps focus.
+  function updateLineTotalCell(input, i) {
+    const row = input.closest("tr");
+    const cell = row && row.querySelector(".pb-col-total");
+    if (cell) cell.textContent = "$" + (state.quote.lineItems[i].lineTotal || 0).toFixed(2);
   }
 
   function renderTotals() {
