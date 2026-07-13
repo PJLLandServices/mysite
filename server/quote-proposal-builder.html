@@ -111,6 +111,23 @@
           </div>
         </section>
 
+        <section class="pb-panel pb-pdf-options" aria-label="PDF display options">
+          <h3>PDF display — what the customer sees</h3>
+          <div class="pb-pdf-opts-row">
+            <fieldset class="pb-pdf-lineitems">
+              <legend>Pricing detail</legend>
+              <label><input type="radio" name="pbLineItems" value="itemized"> <span>Itemized — description, qty, unit, line total</span></label>
+              <label><input type="radio" name="pbLineItems" value="descriptions_only"> <span>Descriptions only — no dollar columns</span></label>
+              <label><input type="radio" name="pbLineItems" value="summary"> <span>Summary total only — one number, no breakdown</span></label>
+            </fieldset>
+            <div class="pb-pdf-checks">
+              <label><input type="checkbox" id="pbShowAttachments"> <span>Include attachments</span></label>
+              <label><input type="checkbox" id="pbShowProjectMap"> <span>Include project map</span></label>
+              <p class="pb-pdf-note">The <strong>Subtotal / HST / Total always show</strong> — there is no way to hide the total. The full itemized data stays on the record, in QuickBooks, and on the invoice no matter what the customer's PDF displays.</p>
+            </div>
+          </div>
+        </section>
+
         <div class="pb-layout">
           <!-- Left rail: section nav -->
           <aside class="pb-rail" aria-label="Sections">
@@ -125,6 +142,7 @@
             <header class="pb-main-head">
               <input type="text" class="pb-section-title" id="pbSectionTitle" maxlength="80" placeholder="Section title">
               <span class="pb-section-kind" id="pbSectionKind"></span>
+              <label class="pb-section-include" id="pbSectionIncludeWrap"><input type="checkbox" id="pbSectionInclude"> Include in PDF</label>
             </header>
             <div class="pb-toolbar" id="pbToolbar" role="toolbar" aria-label="Formatting">
               <button type="button" class="pb-tb-btn" data-fmt="bold" title="Bold  **text**" aria-label="Bold"><b>B</b></button>

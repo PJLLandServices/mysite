@@ -106,8 +106,30 @@ const PROPOSAL_SECTION_KINDS = [
 // Structural section kinds are special-cased by the PDF renderer
 // (renderProposalLineItems draws the pricing table; renderAcceptanceBlock
 // draws the signature block) and always render last, regardless of order.
-// They cannot be user-deleted (Brief C1 §3.3 / Q6).
+// They cannot be user-deleted (Brief C1 §3.3 / Q6) nor excluded from the
+// PDF (Brief D §3.4).
 const STRUCTURAL_SECTION_KINDS = ["line_items", "acceptance_block"];
+
+// pdfOptions.lineItems enum (Brief D). An enum, not two booleans, so the
+// nonsense state "no descriptions AND no pricing" is unrepresentable.
+const PDF_LINE_ITEM_MODES = ["itemized", "descriptions_only", "summary"];
+
+// Normalize pdfOptions from a client patch. PRESENTATION ONLY. Rejects an
+// unknown lineItems value (no silent default-through). Deliberately does
+// NOT read a showTotals flag — the total can never be hidden.
+function normalizePdfOptions(raw) {
+  const o = raw && typeof raw === "object" ? raw : {};
+  if (o.lineItems != null && !PDF_LINE_ITEM_MODES.includes(o.lineItems)) {
+    const err = new Error(`Unknown pdfOptions.lineItems value: ${o.lineItems}`);
+    err.code = "bad_pdf_options";
+    throw err;
+  }
+  return {
+    lineItems: PDF_LINE_ITEM_MODES.includes(o.lineItems) ? o.lineItems : "itemized",
+    showAttachments: o.showAttachments !== false,
+    showProjectMap: o.showProjectMap !== false
+  };
+}
 
 const ATTACHMENT_KINDS = [
   "site_map",
@@ -146,7 +168,8 @@ const SCOPE_PROTECTED_FIELDS = [
   "subtotal",
   "hst",
   "total",
-  "type"
+  "type",
+  "pdfOptions"
 ];
 
 const DEFAULT_VALIDITY_DAYS = 30;
@@ -342,8 +365,23 @@ function blankQuote() {
     // a kind from PROPOSAL_SECTION_KINDS + title + body (rich text /
     // markdown, sanitized server-side) + optional attachmentIds[] to
     // anchor static media at the section. order field is the canonical
-    // sort key; insertion order is the fallback.
+    // sort key; insertion order is the fallback. Each section also carries
+    // `include` (default true) — see pdfOptions.
     proposalSections: [],
+
+    // pdfOptions — PRESENTATION ONLY (Brief D, 2026-07). Controls what the
+    // customer-facing PDF displays; never affects pricing math, the
+    // accepted amount, the QuickBooks push, or the invoice. lineItems is an
+    // enum (not two booleans) so "no descriptions AND no pricing" is
+    // unrepresentable. The Subtotal/HST/Total block ALWAYS renders — there
+    // is deliberately no showTotals flag. Frozen with the PDF bytes on send
+    // (Brief B), so a later toggle can't rewrite a document the customer
+    // already holds.
+    pdfOptions: {
+      lineItems: "itemized",     // "itemized" | "descriptions_only" | "summary"
+      showAttachments: true,
+      showProjectMap: true
+    },
 
     // attachments — uploaded static media (Google Earth screenshots, CAD
     // drawings, manufacturer schematics). Files live on disk under
@@ -437,6 +475,10 @@ function hydrate(q) {
     billingMode: q?.billingMode || null,
     proposalSections: Array.isArray(q?.proposalSections) ? q.proposalSections : [],
     attachments: Array.isArray(q?.attachments) ? q.attachments : [],
+    // Defensive default so legacy records (and partial hand-edits) always
+    // carry all three pdfOptions keys (Brief D). The renderer also treats a
+    // missing/odd value as the itemized default, belt-and-suspenders.
+    pdfOptions: { ...base.pdfOptions, ...(q?.pdfOptions && typeof q.pdfOptions === "object" ? q.pdfOptions : {}) },
     customRates: { ...base.customRates, ...(q?.customRates || {}) },
     acceptanceMethod: typeof q?.acceptanceMethod === "string" ? q.acceptanceMethod : "pending",
     acceptanceEvidence: q?.acceptanceEvidence || null,
@@ -777,6 +819,7 @@ function defaultProposalSections() {
     title: s.title,
     body: "",
     order: idx,
+    include: true,
     attachmentIds: []
   }));
 }
@@ -794,6 +837,12 @@ function normalizeProposalSection(s, idx) {
     title: String(s.title == null ? "" : s.title).replace(/[\u0000-\u001F\u007F]+/g, " ").trim().slice(0, 80),
     body: String(s.body || "").slice(0, 40000),
     order: Number.isFinite(Number(s.order)) ? Number(s.order) : idx,
+    // include — draw this section in the PDF (Brief D). Default true. A
+    // false value keeps the section on the record + in the editor but hides
+    // it from the customer PDF (the honest replacement for the old
+    // "leave the body blank to hide" hack). Structural sections can never
+    // be excluded — enforced in updateProposal.
+    include: s.include === false ? false : true,
     attachmentIds: Array.isArray(s.attachmentIds)
       ? s.attachmentIds.filter((x) => typeof x === "string" && x.startsWith("att_")).slice(0, 50)
       : []
@@ -858,6 +907,12 @@ async function updateProposal(id, patch = {}, { by = "admin", note = "" } = {}) 
     }
     q.billingMode = patch.billingMode || "fixed_price";
   }
+  if (Object.prototype.hasOwnProperty.call(patch, "pdfOptions")) {
+    // PRESENTATION ONLY (Brief D). normalizePdfOptions rejects an unknown
+    // lineItems enum value and ignores any showTotals flag. This never
+    // touches lineItems[], the totals math, QB, or the invoice.
+    q.pdfOptions = normalizePdfOptions(patch.pdfOptions);
+  }
   if (Array.isArray(patch.proposalSections)) {
     const existingSections = Array.isArray(q.proposalSections) ? q.proposalSections : [];
     const existingById = new Map(existingSections.map((s) => [s.id, s]));
@@ -873,6 +928,17 @@ async function updateProposal(id, patch = {}, { by = "admin", note = "" } = {}) 
       norm.kind = prior ? prior.kind : "custom";
       return norm;
     });
+
+    // Structural sections can never be excluded from the PDF (Brief D §3.4)
+    // — hiding the signature block from a document meant to be signed is not
+    // a feature. Force include=true on them (reject a client that tries).
+    for (const n of incoming) {
+      if (STRUCTURAL_SECTION_KINDS.includes(n.kind) && n.include === false) {
+        const err = new Error(`The "${n.kind}" section is required and cannot be hidden from the PDF.`);
+        err.code = "structural_section_excluded";
+        throw err;
+      }
+    }
 
     // Structural sections present before this edit must survive — reject a
     // client array that drops the pricing table or the acceptance block.

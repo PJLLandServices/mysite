@@ -44,6 +44,10 @@
     sectionKind: $("pbSectionKind"),
     sectionBody: $("pbSectionBody"),
     toolbar: $("pbToolbar"),
+    showAttachments: $("pbShowAttachments"),
+    showProjectMap: $("pbShowProjectMap"),
+    sectionInclude: $("pbSectionInclude"),
+    sectionIncludeWrap: $("pbSectionIncludeWrap"),
     sectionTip: $("pbSectionTip"),
     anchorList: $("pbAnchorList"),
     anchorPicker: $("pbAnchorPicker"),
@@ -113,7 +117,8 @@
         scope: el.scope.value.trim(),
         customRates,
         proposalSections: q.proposalSections,
-        lineItems: q.lineItems
+        lineItems: q.lineItems,
+        pdfOptions: q.pdfOptions
       };
       const r = await fetch(`/api/quotes/${encodeURIComponent(q.id)}/proposal`, {
         method: "PATCH",
@@ -179,13 +184,23 @@
     }
     el.scope.value = q.scope || "";
 
+    // PDF display options (Brief D). Missing → itemized/true/true.
+    const opts = q.pdfOptions || {};
+    document.querySelectorAll('input[name="pbLineItems"]').forEach((r) => {
+      r.checked = r.value === (opts.lineItems || "itemized");
+    });
+    if (el.showAttachments) el.showAttachments.checked = opts.showAttachments !== false;
+    if (el.showProjectMap) el.showProjectMap.checked = opts.showProjectMap !== false;
+
     // Lock UI when not in draft.
     const locked = q.status !== "draft";
     [el.branch, el.billingMode, el.customerEmail, el.labourRate, el.validUntil,
      el.scope, el.sectionTitle, el.sectionBody, el.uploadInput,
-     el.linePicker, el.customLine, el.anchorPicker, el.addSection]
+     el.linePicker, el.customLine, el.anchorPicker, el.addSection,
+     el.showAttachments, el.showProjectMap]
       .forEach((node) => { if (node) node.disabled = locked; });
     if (el.toolbar) el.toolbar.querySelectorAll(".pb-tb-btn").forEach((b) => { b.disabled = locked; });
+    document.querySelectorAll('input[name="pbLineItems"]').forEach((r) => { r.disabled = locked; });
 
     el.sendBtn.hidden = q.status !== "draft";
     el.reviseBtn.hidden = !(q.status === "sent" || q.status === "expired");
@@ -240,8 +255,10 @@
           `<button type="button" class="pb-sec-btn pb-sec-del" data-del="${s.id}" aria-label="Delete section" title="Delete section">✕</button>` +
           `</span>`;
       }
-      return `<li data-id="${s.id}" class="${isActive ? "is-active" : ""} ${hasContent ? "has-content" : ""} ${isStructural ? "is-structural" : ""}">` +
-        `<span class="pb-sec-name">${escapeHtml(s.title || s.kind)}</span>${controls}</li>`;
+      const excluded = !isStructural && s.include === false;
+      const nameMarker = excluded ? ` <span class="pb-sec-hidden" title="Hidden from the customer PDF (Brief D)">hidden</span>` : "";
+      return `<li data-id="${s.id}" class="${isActive ? "is-active" : ""} ${hasContent ? "has-content" : ""} ${isStructural ? "is-structural" : ""} ${excluded ? "is-excluded" : ""}">` +
+        `<span class="pb-sec-name">${escapeHtml(s.title || s.kind)}${nameMarker}</span>${controls}</li>`;
     };
 
     el.sectionList.innerHTML =
@@ -327,12 +344,28 @@
       el.sectionBody.value = "";
       el.sectionKind.textContent = "—";
       el.anchorList.innerHTML = "";
+      if (el.sectionIncludeWrap) el.sectionIncludeWrap.hidden = true;
       return;
     }
     el.sectionTitle.value = sec.title || "";
     el.sectionBody.value = sec.body || "";
     el.sectionKind.textContent = sec.kind || "";
     el.sectionTip.textContent = SECTION_TIPS[sec.kind] || "";
+
+    // Include-in-PDF toggle (Brief D). Structural sections are always
+    // included and cannot be toggled off.
+    const secStructural = STRUCTURAL_KINDS.includes(sec.kind);
+    if (el.sectionIncludeWrap) {
+      el.sectionIncludeWrap.hidden = false;
+      el.sectionIncludeWrap.classList.toggle("is-structural", secStructural);
+      el.sectionIncludeWrap.title = secStructural
+        ? "Required section — always included in the PDF"
+        : "Untick to keep this section on the record but hide it from the customer PDF";
+    }
+    if (el.sectionInclude) {
+      el.sectionInclude.checked = secStructural ? true : sec.include !== false;
+      el.sectionInclude.disabled = secStructural || (state.quote.status !== "draft");
+    }
 
     // Anchor list.
     el.anchorList.innerHTML = (sec.attachmentIds || []).map((id) => {
@@ -742,6 +775,41 @@
       if (btn) runToolbar(btn.dataset.fmt);
     });
   }
+
+  // ---- PDF display options (Brief D) --------------------------------
+  // Presentation only — these never touch line items, totals math, QB, or
+  // the invoice. The server validates the enum + guards structural
+  // sections; the client just mirrors state into pdfOptions / section.include.
+  function ensurePdfOptions() {
+    if (!state.quote.pdfOptions || typeof state.quote.pdfOptions !== "object") {
+      state.quote.pdfOptions = { lineItems: "itemized", showAttachments: true, showProjectMap: true };
+    }
+  }
+  document.querySelectorAll('input[name="pbLineItems"]').forEach((r) => {
+    r.addEventListener("change", () => {
+      if (!r.checked) return;
+      ensurePdfOptions();
+      state.quote.pdfOptions.lineItems = r.value;
+      markDirty();
+    });
+  });
+  if (el.showAttachments) el.showAttachments.addEventListener("change", () => {
+    ensurePdfOptions();
+    state.quote.pdfOptions.showAttachments = el.showAttachments.checked;
+    markDirty();
+  });
+  if (el.showProjectMap) el.showProjectMap.addEventListener("change", () => {
+    ensurePdfOptions();
+    state.quote.pdfOptions.showProjectMap = el.showProjectMap.checked;
+    markDirty();
+  });
+  if (el.sectionInclude) el.sectionInclude.addEventListener("change", () => {
+    const sec = (state.quote.proposalSections || []).find((s) => s.id === state.activeSectionId);
+    if (!sec || STRUCTURAL_KINDS.includes(sec.kind)) return; // structural: never toggleable
+    sec.include = el.sectionInclude.checked;
+    renderSectionList();
+    markDirty();
+  });
 
   // ---- Top-bar inputs ----------------------------------------------
   [el.branch, el.billingMode].forEach((node) => {

@@ -10402,8 +10402,11 @@ async function handleApi(req, res, pathname) {
           field: err.field || null
         });
       }
-      if (err.code === "structural_section_removed") {
-        return sendJson(res, 422, { ok: false, errors: [err.message], error: "structural_section_removed" });
+      if (err.code === "structural_section_removed" || err.code === "structural_section_excluded") {
+        return sendJson(res, 422, { ok: false, errors: [err.message], error: err.code });
+      }
+      if (err.code === "bad_pdf_options") {
+        return sendJson(res, 400, { ok: false, errors: [err.message], error: "bad_pdf_options" });
       }
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't update proposal."] });
     }

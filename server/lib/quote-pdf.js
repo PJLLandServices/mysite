@@ -455,6 +455,17 @@ function renderProjectProposalPdf(quote, opts = {}) {
   }
   doc.moveDown(1);
 
+  // ---- Display options (Brief D) — presentation only ----------------
+  // Missing/odd pdfOptions resolves to the defaults, so a quote with no
+  // pdfOptions renders exactly as it did before Brief D.
+  const rawOpts = quote.pdfOptions && typeof quote.pdfOptions === "object" ? quote.pdfOptions : {};
+  const LINE_ITEM_MODES = ["itemized", "descriptions_only", "summary"];
+  const pdfOpts = {
+    lineItems: LINE_ITEM_MODES.includes(rawOpts.lineItems) ? rawOpts.lineItems : "itemized",
+    showAttachments: rawOpts.showAttachments !== false,
+    showProjectMap: rawOpts.showProjectMap !== false
+  };
+
   // ---- Sections -----------------------------------------------------
   const orderedSections = Array.isArray(quote.proposalSections)
     ? [...quote.proposalSections].sort((a, b) => (Number(a.order) || 0) - (Number(b.order) || 0))
@@ -466,12 +477,19 @@ function renderProjectProposalPdf(quote, opts = {}) {
   );
 
   for (const sec of narrativeSections) {
-    renderSection(doc, sec, quote, { MARGIN_X, contentWidth });
+    // Skip excluded sections (Brief D) and the project map when hidden.
+    // `include` is missing-means-true for legacy records.
+    if (sec.include === false) continue;
+    if (sec.kind === "project_map" && !pdfOpts.showProjectMap) continue;
+    // The project-map section's own image always renders when the map is
+    // shown; other sections' anchored attachments obey showAttachments.
+    const includeAttachments = sec.kind === "project_map" ? true : pdfOpts.showAttachments;
+    renderSection(doc, sec, quote, { MARGIN_X, contentWidth, includeAttachments });
   }
 
   // ---- Line items + totals -----------------------------------------
   doc.moveDown(1);
-  renderProposalLineItems(doc, quote, { MARGIN_X, contentWidth });
+  renderProposalLineItems(doc, quote, { MARGIN_X, contentWidth, mode: pdfOpts.lineItems });
 
   // ---- Acceptance block --------------------------------------------
   doc.moveDown(1.2);
@@ -696,13 +714,16 @@ function renderBodyBlocks(doc, blocks, { MARGIN_X, contentWidth }) {
 // prose underneath (Helvetica), then any anchored attachments. Page
 // break if there isn't room — pdfkit handles continuation automatically
 // when text() crosses the bottom margin.
-function renderSection(doc, sec, quote, { MARGIN_X, contentWidth }) {
+function renderSection(doc, sec, quote, { MARGIN_X, contentWidth, includeAttachments = true }) {
   // Compute section header. If the section is empty (no body, no
   // attachments), skip it — empty placeholder sections in the builder
-  // shouldn't print as blank pages in the PDF.
+  // shouldn't print as blank pages in the PDF. `includeAttachments` is the
+  // Brief D showAttachments gate: when off, a section that is only
+  // attachments renders nothing.
   const hasBody = sec.body && String(sec.body).trim();
   const hasAttachments = Array.isArray(sec.attachmentIds) && sec.attachmentIds.length;
-  if (!hasBody && !hasAttachments) return;
+  const willRenderAttachments = includeAttachments && hasAttachments;
+  if (!hasBody && !willRenderAttachments) return;
 
   // Avoid orphaned headers — if there's <80pt left on the page, break.
   if (doc.y > doc.page.height - 140) doc.addPage();
@@ -740,7 +761,7 @@ function renderSection(doc, sec, quote, { MARGIN_X, contentWidth }) {
   // Render anchored attachments inline at section end. Images get
   // embedded fit-to-width; PDFs surface a "See attached: <caption>"
   // line because pdfkit can't easily merge multi-page PDF inputs.
-  if (hasAttachments) {
+  if (willRenderAttachments) {
     for (const attId of sec.attachmentIds) {
       const att = (quote.attachments || []).find((a) => a.id === attId);
       if (!att) continue;
@@ -784,8 +805,13 @@ function renderAttachmentInline(doc, att, quote, { MARGIN_X, contentWidth }) {
   doc.moveDown(0.3);
 }
 
-function renderProposalLineItems(doc, quote, { MARGIN_X, contentWidth, heading = "ITEMIZED PRICING" }) {
-  if (!Array.isArray(quote.lineItems) || !quote.lineItems.length) return;
+function renderProposalLineItems(doc, quote, { MARGIN_X, contentWidth, heading = "ITEMIZED PRICING", mode = "itemized" }) {
+  const items = Array.isArray(quote.lineItems) ? quote.lineItems : [];
+  const showTable = mode !== "summary";  // Brief D: summary = no table, total only
+  // Back-compat: a non-summary pricing section with no line items renders
+  // nothing at all, exactly as before Brief D. Summary always shows the
+  // total (its whole purpose), even with zero items.
+  if (showTable && !items.length) return;
 
   if (doc.y > doc.page.height - 200) doc.addPage();
 
@@ -795,90 +821,97 @@ function renderProposalLineItems(doc, quote, { MARGIN_X, contentWidth, heading =
   doc.moveTo(MARGIN_X, ruleY).lineTo(MARGIN_X + 60, ruleY).strokeColor(PJL_GREEN).lineWidth(1.5).stroke();
   doc.moveDown(0.4);
 
-  const colDesc = MARGIN_X;
-  const colQty = MARGIN_X + 280;
-  const colUnit = MARGIN_X + 340;
-  const colTotal = MARGIN_X + 420;
-  const QTY_W = 50, UNIT_W = 70, TOTAL_W = 80;
-  // Description column spans colDesc→colQty less a 20pt gutter so wrapped
-  // text can never run into the QTY column (reproduces the prior
-  // hard-coded 260pt width exactly at the default geometry).
-  const DESC_COL_W = colQty - colDesc - 20;
-  const ROW_PAD = 8;
-
-  // Single body-line height (Helvetica 10) — the floor for every row so
-  // single-line rows keep their exact prior spacing.
-  doc.font("Helvetica").fontSize(10);
-  const MIN_ROW_H = doc.heightOfString("Ag", { width: DESC_COL_W });
-
+  // Totals sit at the same right-aligned position in EVERY mode, so the
+  // itemized layout is byte-unchanged and the other modes align to it.
+  const totalLabelX = MARGIN_X + 340;
+  const totalAmtX = MARGIN_X + 420;
   // The proposal footer band is drawn once at end-of-document ~50pt above
   // the page bottom; reserve room so rows/totals never collide with it.
   const FOOTER_RESERVE = 60;
   const pageBottom = () => doc.page.height - doc.page.margins.bottom - FOOTER_RESERVE;
 
-  // Column header — extracted so it repeats on every continuation page.
-  // Returns the y of the first row beneath it.
-  function drawTableHeader(topY) {
-    doc.fillColor(PJL_MUTED).fontSize(9).font("Helvetica-Bold");
-    doc.text("DESCRIPTION", colDesc, topY, { characterSpacing: 1, lineBreak: false });
-    doc.text("QTY", colQty, topY, { width: QTY_W, align: "right", characterSpacing: 1, lineBreak: false });
-    doc.text("UNIT", colUnit, topY, { width: UNIT_W, align: "right", characterSpacing: 1, lineBreak: false });
-    doc.text("LINE TOTAL", colTotal, topY, { width: TOTAL_W, align: "right", characterSpacing: 1, lineBreak: false });
-    doc.moveTo(MARGIN_X, topY + 14).lineTo(MARGIN_X + contentWidth, topY + 14)
-      .strokeColor(PJL_MUTED).lineWidth(0.5).stroke();
-    return topY + 22;
-  }
+  let rowY = doc.y + (showTable ? 0 : 6);
 
-  let rowY = drawTableHeader(doc.y + 4);
-  for (const li of quote.lineItems) {
-    const label = li.label || li.sourceKey || "Line item";
-    const qty = Number(li.qty) || 1;
-    const price = Number(li.price) || 0;
-    const lineTotal = Number(li.lineTotal) || (price * qty);
-    const desc = li.description ? String(li.description) : "";
+  if (showTable) {
+    // Column set depends on the mode (Brief D §3.5). The row-height
+    // measurement + page-break discipline from Brief A is UNCHANGED — only
+    // which columns draw, and the description width, vary.
+    const showPricing = mode === "itemized";
+    const colDesc = MARGIN_X;
+    const QTY_W = 50, UNIT_W = 70, TOTAL_W = 80;
+    // itemized: QTY at +280 (DESC width 260, the Brief A geometry).
+    // descriptions_only: QTY pinned at the right edge, DESCRIPTION re-flows
+    // into the reclaimed UNIT + LINE TOTAL width — no dead space.
+    const colQty = showPricing ? MARGIN_X + 280 : MARGIN_X + contentWidth - QTY_W;
+    const colUnit = MARGIN_X + 340;
+    const colTotal = MARGIN_X + 420;
+    const DESC_COL_W = colQty - colDesc - 20;
+    const ROW_PAD = 8;
 
-    // Measure the description block (label + optional sub-description) at
-    // the description column width, each piece in its own font size, so
-    // the row gets exactly the vertical space its wrapped text needs.
-    // This is the fix for the fixed-height row collision: the numbers
-    // used to reset doc.y back to the row top, so a wrapped description
-    // bled over the next row. We now advance by the measured height.
+    // Single body-line height (Helvetica 10) — the floor for every row so
+    // single-line rows keep their exact prior spacing.
     doc.font("Helvetica").fontSize(10);
-    const labelH = doc.heightOfString(label, { width: DESC_COL_W });
-    let descH = 0;
-    if (desc) {
-      doc.font("Helvetica").fontSize(9);
-      descH = 1 + doc.heightOfString(desc, { width: DESC_COL_W });
-    }
-    const rowH = Math.max(labelH + descH, MIN_ROW_H);
+    const MIN_ROW_H = doc.heightOfString("Ag", { width: DESC_COL_W });
 
-    // Break BEFORE drawing when the row won't fit; repeat the column
-    // header on the new page.
-    if (rowY + rowH > pageBottom()) {
-      doc.addPage();
-      rowY = drawTableHeader(doc.page.margins.top);
+    // Column header — extracted so it repeats on every continuation page.
+    function drawTableHeader(topY) {
+      doc.fillColor(PJL_MUTED).fontSize(9).font("Helvetica-Bold");
+      doc.text("DESCRIPTION", colDesc, topY, { characterSpacing: 1, lineBreak: false });
+      doc.text("QTY", colQty, topY, { width: QTY_W, align: "right", characterSpacing: 1, lineBreak: false });
+      if (showPricing) {
+        doc.text("UNIT", colUnit, topY, { width: UNIT_W, align: "right", characterSpacing: 1, lineBreak: false });
+        doc.text("LINE TOTAL", colTotal, topY, { width: TOTAL_W, align: "right", characterSpacing: 1, lineBreak: false });
+      }
+      doc.moveTo(MARGIN_X, topY + 14).lineTo(MARGIN_X + contentWidth, topY + 14)
+        .strokeColor(PJL_MUTED).lineWidth(0.5).stroke();
+      return topY + 22;
     }
 
-    // All four cells share the same row top `rowY`. The numbers top-align
-    // with the FIRST line of the description (not its vertical centre).
-    doc.font("Helvetica").fontSize(10).fillColor(PJL_TEXT);
-    doc.text(label, colDesc, rowY, { width: DESC_COL_W });
-    if (desc) {
-      doc.font("Helvetica").fontSize(9).fillColor(PJL_MUTED)
-        .text(desc, colDesc, rowY + labelH + 1, { width: DESC_COL_W });
-    }
-    doc.font("Helvetica").fontSize(10).fillColor(PJL_TEXT);
-    doc.text(String(qty), colQty, rowY, { width: QTY_W, align: "right", lineBreak: false });
-    doc.text(fmt(price) + (li.unit ? `/${li.unit.replace("per_", "")}` : ""),
-      colUnit, rowY, { width: UNIT_W, align: "right", lineBreak: false });
-    doc.text(fmt(lineTotal), colTotal, rowY, { width: TOTAL_W, align: "right", lineBreak: false });
+    rowY = drawTableHeader(doc.y + 4);
+    for (const li of items) {
+      const label = li.label || li.sourceKey || "Line item";
+      const qty = Number(li.qty) || 1;
+      const price = Number(li.price) || 0;
+      const lineTotal = Number(li.lineTotal) || (price * qty);
+      const desc = li.description ? String(li.description) : "";
 
-    rowY += rowH + ROW_PAD;
+      // Measure the description block (label + optional sub-description) at
+      // the description column width — the Brief A collision fix, unchanged.
+      doc.font("Helvetica").fontSize(10);
+      const labelH = doc.heightOfString(label, { width: DESC_COL_W });
+      let descH = 0;
+      if (desc) {
+        doc.font("Helvetica").fontSize(9);
+        descH = 1 + doc.heightOfString(desc, { width: DESC_COL_W });
+      }
+      const rowH = Math.max(labelH + descH, MIN_ROW_H);
+
+      if (rowY + rowH > pageBottom()) {
+        doc.addPage();
+        rowY = drawTableHeader(doc.page.margins.top);
+      }
+
+      doc.font("Helvetica").fontSize(10).fillColor(PJL_TEXT);
+      doc.text(label, colDesc, rowY, { width: DESC_COL_W });
+      if (desc) {
+        doc.font("Helvetica").fontSize(9).fillColor(PJL_MUTED)
+          .text(desc, colDesc, rowY + labelH + 1, { width: DESC_COL_W });
+      }
+      doc.font("Helvetica").fontSize(10).fillColor(PJL_TEXT);
+      doc.text(String(qty), colQty, rowY, { width: QTY_W, align: "right", lineBreak: false });
+      if (showPricing) {
+        doc.text(fmt(price) + (li.unit ? `/${li.unit.replace("per_", "")}` : ""),
+          colUnit, rowY, { width: UNIT_W, align: "right", lineBreak: false });
+        doc.text(fmt(lineTotal), colTotal, rowY, { width: TOTAL_W, align: "right", lineBreak: false });
+      }
+
+      rowY += rowH + ROW_PAD;
+    }
   }
 
   // Keep the whole totals block together — never strand a lone "Total
-  // CAD" on a page by itself. If it won't fit under the final row, move
-  // the entire block to a fresh page.
+  // CAD" on a page by itself. The total ALWAYS renders (Brief D §3.2 —
+  // there is no option to hide it), in every mode.
   const TOTALS_BLOCK_H = 130;
   if (rowY + TOTALS_BLOCK_H > pageBottom()) {
     doc.addPage();
@@ -886,7 +919,7 @@ function renderProposalLineItems(doc, quote, { MARGIN_X, contentWidth, heading =
   }
 
   // Totals.
-  doc.moveTo(colUnit, rowY).lineTo(MARGIN_X + contentWidth, rowY)
+  doc.moveTo(totalLabelX, rowY).lineTo(MARGIN_X + contentWidth, rowY)
     .strokeColor(PJL_MUTED).lineWidth(0.5).stroke();
   rowY += 8;
   const subtotal = Number(quote.subtotal) || 0;
@@ -894,17 +927,17 @@ function renderProposalLineItems(doc, quote, { MARGIN_X, contentWidth, heading =
   const total = Number(quote.total) || Math.round((subtotal + hst) * 100) / 100;
 
   doc.fillColor(PJL_MUTED).fontSize(10).font("Helvetica");
-  doc.text("Subtotal", colUnit, rowY, { width: 70, align: "right" });
-  doc.fillColor(PJL_TEXT).text(fmt(subtotal), colTotal, rowY, { width: 80, align: "right" });
+  doc.text("Subtotal", totalLabelX, rowY, { width: 70, align: "right" });
+  doc.fillColor(PJL_TEXT).text(fmt(subtotal), totalAmtX, rowY, { width: 80, align: "right" });
   rowY += 16;
-  doc.fillColor(PJL_MUTED).text("HST (13%)", colUnit, rowY, { width: 70, align: "right" });
-  doc.fillColor(PJL_TEXT).text(fmt(hst), colTotal, rowY, { width: 80, align: "right" });
+  doc.fillColor(PJL_MUTED).text("HST (13%)", totalLabelX, rowY, { width: 70, align: "right" });
+  doc.fillColor(PJL_TEXT).text(fmt(hst), totalAmtX, rowY, { width: 80, align: "right" });
   rowY += 18;
-  doc.moveTo(colUnit, rowY).lineTo(MARGIN_X + contentWidth, rowY).strokeColor(PJL_GREEN).lineWidth(1).stroke();
+  doc.moveTo(totalLabelX, rowY).lineTo(MARGIN_X + contentWidth, rowY).strokeColor(PJL_GREEN).lineWidth(1).stroke();
   rowY += 6;
   doc.fillColor(PJL_GREEN).font("Helvetica-Bold").fontSize(13);
-  doc.text("Total CAD", colUnit, rowY, { width: 70, align: "right" });
-  doc.text(fmt(total), colTotal, rowY, { width: 80, align: "right" });
+  doc.text("Total CAD", totalLabelX, rowY, { width: 70, align: "right" });
+  doc.text(fmt(total), totalAmtX, rowY, { width: 80, align: "right" });
   doc.y = rowY + 28;
 
   if (quote.billingMode === "time_and_material") {

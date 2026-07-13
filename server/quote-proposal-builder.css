@@ -719,3 +719,93 @@
   background: #fff;
 }
 .pb-attest-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+/* ---- PDF display options (Brief D) ---- */
+.pb-pdf-options {
+  background: #FFFFFF;
+  border: 1px solid #E5E5DD;
+  border-radius: 10px;
+  padding: 14px 16px;
+  margin-bottom: 14px;
+}
+.pb-pdf-options h3 {
+  font-family: 'Barlow Condensed', sans-serif;
+  font-size: 14px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: #1B4D2E;
+  margin: 0 0 10px;
+}
+.pb-pdf-opts-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 20px;
+}
+.pb-pdf-lineitems {
+  border: none;
+  margin: 0;
+  padding: 0;
+  min-width: 260px;
+}
+.pb-pdf-lineitems legend {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #9A9A90;
+  padding: 0;
+  margin-bottom: 6px;
+}
+.pb-pdf-lineitems label,
+.pb-pdf-checks label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: #1F2A22;
+  padding: 6px 0;
+  cursor: pointer;
+  min-height: 32px;
+}
+.pb-pdf-lineitems input,
+.pb-pdf-checks input {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+  accent-color: #1B4D2E;
+}
+.pb-pdf-checks { min-width: 240px; flex: 1 1 260px; }
+.pb-pdf-note {
+  font-size: 11px;
+  color: #6A6A60;
+  line-height: 1.5;
+  margin: 8px 0 0;
+}
+.pb-section-include {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #1F2A22;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.pb-section-include input { width: 18px; height: 18px; accent-color: #1B4D2E; }
+.pb-section-include.is-structural { color: #9A9A90; cursor: not-allowed; }
+.pb-section-list li.is-excluded .pb-sec-name { opacity: 0.55; }
+.pb-sec-hidden {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #B26B00;
+  background: #FDF3E3;
+  border: 1px solid #F0D9B5;
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+@media (pointer: coarse) {
+  .pb-pdf-lineitems input,
+  .pb-pdf-checks input,
+  .pb-section-include input { width: 24px; height: 24px; }
+  .pb-pdf-lineitems label,
+  .pb-pdf-checks label { min-height: 44px; }
+}

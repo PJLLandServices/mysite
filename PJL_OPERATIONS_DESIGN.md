@@ -372,6 +372,27 @@ QUOTE FOLDER
                               (centre/right) is deferred** — no natural syntax
                               here; if added later it belongs at SECTION
                               level (`section.align`), never per-paragraph.
+    - pdfOptions           — PRESENTATION-ONLY display controls for the
+                              customer PDF (Brief D). `lineItems` is an enum
+                              — `itemized` (four columns), `descriptions_only`
+                              (DESCRIPTION + QTY, re-flowed), or `summary`
+                              (one lump-sum number, no table) — plus
+                              `showAttachments` / `showProjectMap`. Each
+                              section also has `include` (default true);
+                              `include:false` hides a section from the PDF but
+                              keeps it on the record + in the editor (the
+                              honest replacement for the "blank body = hidden"
+                              hack). Structural sections (line_items,
+                              acceptance_block) can never be excluded. A
+                              `summary` quote displays ONE number to the
+                              customer, but still carries **full itemized line
+                              items** on the record, in QuickBooks, and on the
+                              resulting invoice — the PDF is a VIEW; the
+                              itemized data is the truth. The total is ALWAYS
+                              shown (there is no showTotals flag). Options are
+                              draft-editable and freeze at send with the PDF
+                              bytes (Brief B), so a later toggle can't rewrite
+                              a document the customer already signed.
     - attachments[]        — uploaded images / PDFs, anchored to
                               specific sections for inline render
     - customRates          — labour-rate snapshot from the customer
@@ -1262,6 +1283,7 @@ These are the rules that protect the design from drift. Number them so they can 
 8. **AI never invents prices.** `pricing.json` or it's a lead.
 9. **Quotes are versioned, not edited.** Once sent, revisions create new versions.
 10. **Customer/property separation is permanent.** Don't conflate them, ever.
+11. **PDF display options are presentation-only (Brief D).** No display setting (`pdfOptions`, per-section `include`) may alter pricing math, the accepted amount, the QuickBooks push, or invoice contents. **No display setting may hide the total from a customer-facing quote** — a `summary` quote shows one number instead of nine, never zero.
 11. **Signed or bypass-locked work order is the contract.** Locked once signed OR bypass-recorded (`wo.locked === true`). Scope-protected fields refuse PATCH with 409 — see §4.3.3 r5 for the canonical list (`SCOPE_PROTECTED_FIELDS` in `server/lib/work-orders.js`). Status, photos, materials, paidOnSite, and notes still accept edits and append to `history[]`.
     - **Signature bypass is not a signature.** Bypass records verbal acceptance at end-of-visit when the customer is not present, and unifies the on-site quote acceptance with the completion lock in a single audited event. It carries weaker legal posture than a drawn signature but the same operational lock. Admin-authorized and audited. When bypass covers a quote acceptance (`coversQuoteAcceptance: true`), no `on_site_quote` Quote record is created — the WO builder snapshot (`signatureBypass.acceptedScopeSnapshot`) is the scope record. `wo.signature` and `wo.signatureBypass` are mutually exclusive; bypass also refuses when a pending or already-accepted on-site Quote exists on the WO.
 12. **Scope changes require fresh signature.** Pre-signature scope changes (during the visit) are part of the same WO and the single completion signature covers them. Post-signature scope changes (e.g., customer asks for additional work after signing) require either (a) a fresh signature on a new scope-change record, or (b) a follow-up WO with its own signature flow. The on-site-quote endpoints all 409 once `wo.locked === true`. Post-bypass scope changes follow the same rules as post-signature scope changes — bypass locks scope identically to a signature.
