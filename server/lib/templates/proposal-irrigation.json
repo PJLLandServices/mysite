@@ -23,7 +23,7 @@
     "heading": "System schedule",
     "lead": "What goes in the ground, and what it costs. Quantities are design estimates — actual amounts may be adjusted on site to achieve proper coverage at no change to the quoted price.",
     "subtotalLabel": "Subtotal  —  complete system, installed",
-    "countNote": "The system is designed and priced as a <b>complete, hydraulically balanced unit</b>. Adding, removing, or relocating zones changes the design and is re-quoted. The price above installs the whole system as scoped."
+    "countNote": "Each zone and component above is shown for transparency — but every one is priced only as part of the <b>complete system</b>, never as a stand-alone line. The design is one hydraulically balanced build: individual zones can't be removed, swapped, or discounted on their own, and any change to the scope re-prices the whole system."
   },
   "payment": {
     "totalDue": {

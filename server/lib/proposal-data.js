@@ -21,6 +21,15 @@ const company = require("./company");
 
 const HST_RATE = 0.13;
 
+// Pricing disclaimer shown under the schedule table. Guaranteed on EVERY
+// generated proposal (Patrick, Jul 2026): the per-zone breakdown is shown
+// for transparency, but nothing on it is a stand-alone price — this closes
+// the door on a customer cherry-picking a line to argue for an à-la-carte
+// discount. A template may override it via schedule.countNote; this is the
+// floor so the protection can never be forgotten.
+const DEFAULT_PRICING_NOTE =
+  "Each line above is shown for transparency — but every item is priced only as part of the <b>complete system</b>, never as a stand-alone line. The work is quoted and installed as one integrated build, so no individual item can be removed, swapped, or discounted on its own; any change to the scope re-prices the whole system.";
+
 // ---- formatting -------------------------------------------------------
 
 function fmtMoney(n) {
@@ -215,7 +224,7 @@ function buildProposalData(quote, { customer = {}, property = {}, templateKey = 
       subtotal: fmtMoney(subtotal),
       hst: fmtMoney(hst),
       total: fmtMoney(total),
-      countNote: (t.schedule && t.schedule.countNote) || ""
+      countNote: (t.schedule && t.schedule.countNote) || DEFAULT_PRICING_NOTE
     },
     payment: payment(quote, t, total),
     scope: t.scope || { heading: "What the price covers", lead: "", includes: [], excludes: [] },

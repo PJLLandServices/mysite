@@ -61,6 +61,10 @@ ok(html1.includes("$8,268.21"), "total appears");
 ok(html1.includes("valid through October 10, 2026") || html1.includes("October 10, 2026"), "validThrough token resolved in clause");
 ok(html1.includes("Total due"), "no-deposit → total-due panel");
 ok(!html1.includes("{{"), "no unresolved {{tokens}}");
+// Pricing disclaimer under the schedule — guards against à-la-carte discount asks.
+ok(/priced only as part of the .*complete system/.test(html1) && /stand-alone line/.test(html1),
+  "schedule carries the 'priced as part of complete system' disclaimer");
+ok(d1.schedule.countNote.includes("complete system"), "disclaimer present on the schedule data");
 ok(html1.includes("data:image/svg+xml;base64,"), "logo embedded (self-contained)");
 
 // ---- a ≥$10k proposal WITH a 25% deposit -----------------------------
