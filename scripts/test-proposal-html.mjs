@@ -144,6 +144,32 @@ function proposalWithMainline(mainlineDesc) {
   ok(!/flow[\s-]?(meter|sensor)/i.test(html), "no flow meter → generated HTML has no flow-meter/sensor wording at all");
 }
 
+// ---- how-it-works cards adapt to the system --------------------------
+function proposalWithZoneDescs(descs) {
+  const li = [{ label: "System mainline", description: "New dedicated-supply mainline off the water meter", qty: 1, price: 749 }];
+  descs.forEach((dsc, i) => li.push({ label: `Zone ${i + 1} — Area`, description: dsc, qty: 1, price: 549 }));
+  const s = li.reduce((a, x) => a + x.price, 0);
+  return { id: "Q-C", type: "project_proposal", createdAt: "2026-07-14", validUntil: "2026-10-12", subtotal: s, hst: s * 0.13, total: s * 1.13, deposit: { enabled: false }, pdfOptions: { lineItems: "itemized" }, lineItems: li };
+}
+function cardsFor(descs) {
+  return buildProposalData(proposalWithZoneDescs(descs), { customer: { name: "X" }, property: { address: "Y" }, templateKey: "irrigation" }).system.cards.map((c) => `${c.title} :: ${c.body}`);
+}
+{
+  // No drip → no drip wording anywhere in the cards; pressure regulation advertised.
+  const noDrip = cardsFor(["Rotary heads · 6 heads", "Pop-up spray heads · 5 heads"]);
+  eq(noDrip.length, 4, "no-drip system → 4 cards");
+  ok(!noDrip.some((c) => /drip|root.zone/i.test(c)), "no-drip system → cards never mention drip");
+  ok(noDrip.some((c) => /pressure-regulated/i.test(c)), "no-drip system → pressure-regulated heads advertised");
+  // Drip present → drip mentioned, still 4 cards.
+  const withDrip = cardsFor(["Rotary heads · 6 heads", "Root-zone drip line"]);
+  eq(withDrip.length, 4, "drip system → 4 cards");
+  ok(withDrip.some((c) => /drip/i.test(c)), "drip system → drip mentioned");
+  ok(withDrip.some((c) => /pressure-regulated/i.test(c)), "drip+heads → still advertises pressure regulation");
+  // Full HTML for a no-drip job has zero drip wording.
+  const html = renderSprinklerProposal(buildProposalData(proposalWithZoneDescs(["Rotary heads · 6 heads"]), { customer: { name: "X" }, property: { address: "Y" }, templateKey: "irrigation" }));
+  ok(!/\bdrip\b/i.test(html), "no-drip job → generated HTML never says 'drip'");
+}
+
 // ---- report -----------------------------------------------------------
 console.log(`\nproposal-html tests: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

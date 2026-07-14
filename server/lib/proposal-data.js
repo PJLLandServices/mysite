@@ -232,16 +232,23 @@ function buildSeasonal(t, zones) {
   };
 }
 
-// ---- flow meter (conditional copy) -----------------------------------
+// ---- system features (drive conditional narrative) -------------------
 
-// Whether this system includes a Hydrawise flow meter/sensor. Driven off the
-// Site Builder's flow-sensor checkbox, which stamps the wording into the
-// mainline line — so a job WITHOUT a flow meter carries no flow wording and
-// every flow-meter mention (schedule detail, scope "included" list) drops out
-// together. "water meter" never matches (needs "flow" before meter/sensor).
-function hasFlowMeter(quote) {
-  return (Array.isArray(quote.lineItems) ? quote.lineItems : [])
-    .some((li) => /flow[\s-]?(meter|sensor)/i.test(`${li.label || ""} ${li.description || ""}`));
+// Derive which components a system actually has, from its line items, so the
+// copy never claims something the job doesn't include — a flow meter that
+// wasn't selected, or drip on a no-drip system. All detection keys off the
+// wording the Site Builder stamps into each line. "water meter" never trips
+// the flow test (needs "flow" before meter/sensor).
+function systemFeatures(quote) {
+  const text = (Array.isArray(quote.lineItems) ? quote.lineItems : [])
+    .map((li) => `${li.label || ""} ${li.description || ""}`).join(" ").toLowerCase();
+  return {
+    flowMeter: /flow[\s-]?(meter|sensor)/.test(text),
+    drip: /drip|root[\s-]?zone/.test(text),
+    heads: /head/.test(text),
+    spray: /spray/.test(text),
+    rotor: /rotar|rotor/.test(text)
+  };
 }
 
 // Assemble the scope "included" list: the base items always, plus the
@@ -253,6 +260,26 @@ function scopeIncludes(scopeTemplate, flow) {
   if (!extra.length) return base;
   const at = base.findIndex((x) => /controller/i.test(x));
   return at === -1 ? [...base, ...extra] : [...base.slice(0, at + 1), ...extra, ...base.slice(at + 1)];
+}
+
+// The "how the system works" cards: the always-on cards from the template,
+// plus ONE water-delivery card built to match what's actually installed —
+// pressure-regulated heads (turf) and/or drip (beds). Inserted before the
+// closing card so the delivery message sits in the middle. No drip mention on
+// a no-drip job; pressure regulation advertised whenever there are heads.
+function buildSystemCards(system, f) {
+  const cards = Array.isArray(system.cards) ? [...system.cards] : [];
+  const del = system.delivery;
+  if (del) {
+    const parts = [];
+    if (f.heads) parts.push(del.headsSentence);
+    if (f.drip) parts.push(del.dripSentence);
+    if (parts.length) {
+      const title = (f.drip && f.heads) ? del.titleBoth : (f.drip ? del.titleDrip : del.titleHeads);
+      cards.splice(Math.max(0, cards.length - 1), 0, { title, body: parts.filter(Boolean).join(" ") });
+    }
+  }
+  return cards;
 }
 
 // ---- main -------------------------------------------------------------
@@ -271,6 +298,7 @@ function buildProposalData(quote, { customer = {}, property = {}, templateKey = 
   const issued = fmtDate(quote.createdAt);
   const validThrough = fmtDate(quote.validUntil || quote.validUntilDate);
   const zones = countZones(quote);
+  const features = systemFeatures(quote);
 
   // Token context for the template copy.
   const ctx = {
@@ -310,7 +338,11 @@ function buildProposalData(quote, { customer = {}, property = {}, templateKey = 
       facts,
       photo: heroPhoto || null
     },
-    system: t.system || { heading: "", lead: "", cards: [] },
+    system: {
+      heading: (t.system && t.system.heading) || "How the system works",
+      lead: (t.system && t.system.lead) || "",
+      cards: buildSystemCards(t.system || {}, features)
+    },
     schedule: {
       heading: (t.schedule && t.schedule.heading) || "System schedule",
       lead: (t.schedule && t.schedule.lead) || "",
@@ -326,7 +358,7 @@ function buildProposalData(quote, { customer = {}, property = {}, templateKey = 
     scope: {
       heading: (t.scope && t.scope.heading) || "What the price covers",
       lead: (t.scope && t.scope.lead) || "",
-      includes: scopeIncludes(t.scope || {}, hasFlowMeter(quote)),
+      includes: scopeIncludes(t.scope || {}, features.flowMeter),
       excludes: (t.scope && t.scope.excludes) || []
     },
     terms: t.terms || { heading: "Site conditions & the fine print", clauses: [] },

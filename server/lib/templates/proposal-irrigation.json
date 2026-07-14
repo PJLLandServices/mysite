@@ -14,10 +14,16 @@
     "lead": "The system is designed for your property's real conditions — its flow, its planting, and its hardscape — not a generic template.",
     "cards": [
       { "title": "A controller that watches the weather", "body": "A Hunter Hydrawise smart controller pulls data from local weather stations and adjusts run times automatically — cutting back after rain, adding during heat and wind — so the landscape gets what it needs without wasting water." },
-      { "title": "Zones matched to your flow", "body": "Zones are separated by area and matched to the flow available from your plumbing, so every zone runs at the pressure it was designed for. Lawn and planted areas are zoned so each runs on its own schedule." },
-      { "title": "Water delivered to the root zone", "body": "Drip line delivers water directly to the roots of planted beds and trees, and rotary or spray heads cover the turf — each area on its own zone so nothing is over- or under-watered." },
-      { "title": "Installed with minimal disturbance", "body": "Sod-cutting and hand-trenching keep disturbance to a minimum — no open machine trenching. Lateral pipe sits below grade, drip tubing is pinned within the beds, and valve boxes are set in accessible, out-of-sight spots." }
-    ]
+      { "title": "Zones matched to your flow", "body": "Zones are separated by area and matched to the flow available from your plumbing, so every zone runs at the pressure it was designed for, each on its own schedule." },
+      { "title": "Installed with minimal disturbance", "body": "Sod-cutting and hand-trenching keep disturbance to a minimum — no open machine trenching. Lateral pipe sits below grade and valve boxes are set in accessible, out-of-sight spots." }
+    ],
+    "delivery": {
+      "titleBoth": "Water delivered where it's needed",
+      "titleHeads": "Pressure-regulated for even coverage",
+      "titleDrip": "Water delivered to the root zone",
+      "headsSentence": "Every zone runs on its own pressure-regulating valve with pressure-regulated heads, so water leaves each head at exactly its designed pressure — even coverage across the zone, less misting and wasted water, and heads that last longer.",
+      "dripSentence": "Drip line delivers water straight to the roots of planted beds and trees — nothing lost to evaporation or overspray, and pinned within the beds out of sight."
+    }
   },
   "schedule": {
     "heading": "System schedule",
@@ -60,7 +66,7 @@
     "lead": "A complete install, priced for reasonable access to all areas of the property.",
     "includes": [
       "System design matched to your property's flow and conditions",
-      "All zones, heads, drip line, valves and fittings as scheduled above",
+      "All zones, heads, pipe, valves and fittings as scheduled above",
       "Hunter Hydrawise smart controller",
       "Dedicated irrigation supply installed off the residential water meter",
       "Sod-cut and hand-trenched installation to minimize disturbance",
@@ -95,7 +101,7 @@
         "bodyHtml": "If any of these change, the design or price may need to be revisited.",
         "points": [
           "Design is based on water supply measured at the existing exterior hose bibs. If the dedicated supply delivers materially different flow or pressure once installed, zone configuration may be adjusted.",
-          "Head counts, drip footage, and final layout are design estimates; actual quantities may be adjusted on site to achieve proper coverage at no change to the quoted price.",
+          "Head and zone counts, footage, and final layout are design estimates; actual quantities may be adjusted on site to achieve proper coverage at no change to the quoted price.",
           "Work is priced assuming reasonable access to all areas of the property for equipment and materials."
         ]
       },
