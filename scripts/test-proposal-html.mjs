@@ -91,6 +91,32 @@ ok(!renderSprinklerProposal(d5).includes("undefined"), "no 'undefined' leaks whe
 // unknown template key falls back to irrigation rather than throwing
 ok(buildProposalData(baseQuote, { ...parties, templateKey: "does-not-exist" }).schedule.rows.length === 2, "unknown template key falls back gracefully");
 
+// ---- seasonal care (spring opening + fall closing, by zone count) -----
+function proposalWithZones(zoneLines) {
+  const items = [{ label: "System mainline", qty: 1, price: 749 }];
+  for (let i = 1; i <= zoneLines; i++) items.push({ label: `Zone ${i} — Area`, description: "Rotary heads · 6 heads", qty: 1, price: 549 });
+  const sub = items.reduce((s, l) => s + l.price, 0);
+  return { id: "Q-Z", type: "project_proposal", createdAt: "2026-07-14", validUntil: "2026-10-12", subtotal: sub, hst: sub * 0.13, total: sub * 1.13, deposit: { enabled: false }, pdfOptions: { lineItems: "itemized" }, lineItems: items };
+}
+function seasonalFor(zoneLines) {
+  return buildProposalData(proposalWithZones(zoneLines), { customer: { name: "X" }, property: { address: "Y" }, templateKey: "irrigation" }).seasonal;
+}
+eq(seasonalFor(4).spring.value, "$90.00", "4 zones → $90 spring opening");
+eq(seasonalFor(4).fall.value, "$90.00", "4 zones → $90 fall closing (same tier price)");
+eq(seasonalFor(5).spring.value, "$105.00", "5 zones → $105 (tier 5-6)");
+eq(seasonalFor(8).spring.value, "$120.00", "8 zones → $120 (tier 7-8)");
+eq(seasonalFor(12).spring.value, "$165.00", "12 zones → $165 (tier 9-15)");
+ok(seasonalFor(16).custom && seasonalFor(16).spring.value === "By quote", "16+ zones → custom 'By quote'");
+eq(seasonalFor(0), null, "no identifiable zones → no seasonal block");
+eq(seasonalFor(5).zones, 5, "seasonal reports the zone count");
+// The block renders and resolves the {{zoneCount}} token in its note.
+{
+  const html = renderSprinklerProposal(buildProposalData(proposalWithZones(5), { customer: { name: "X" }, property: { address: "Y" }, templateKey: "irrigation" }));
+  ok(html.includes("Spring opening") && html.includes("Fall closing"), "both seasonal services render");
+  ok(html.includes("5-zone"), "zoneCount token resolved in the seasonal note");
+  ok(!/id="seasonal"[\s\S]*\{\{/.test(html), "no unresolved tokens in the seasonal section");
+}
+
 // ---- report -----------------------------------------------------------
 console.log(`\nproposal-html tests: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

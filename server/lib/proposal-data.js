@@ -16,10 +16,20 @@
 // "complete system, installed" row, matching how the PDF hides the table in
 // that mode.
 
+const fs = require("node:fs");
+const path = require("node:path");
 const templates = require("./proposal-templates");
 const company = require("./company");
 
 const HST_RATE = 0.13;
+
+// pricing.json holds the current-year seasonal rates — same repo-root file +
+// deploy-time freshness contract as quote-narratives.js (a price edit ships
+// via git push → Render restart). Loaded once per process.
+const PRICING = (() => {
+  try { return JSON.parse(fs.readFileSync(path.resolve(__dirname, "..", "..", "pricing.json"), "utf8")); }
+  catch { return {}; }
+})();
 
 // Pricing disclaimer shown under the schedule table. Guaranteed on EVERY
 // generated proposal (Patrick, Jul 2026): the per-zone breakdown is shown
@@ -169,6 +179,59 @@ function payment(quote, t, grandTotal) {
   };
 }
 
+// ---- seasonal service (spring opening + fall closing) ----------------
+
+// Count the zones a proposal installs, from its line items: catalog zone
+// picks contribute their qty (rotor / pop-up / drip), and Site-Builder
+// "Zone N — <area>" lines contribute one each. 0 when none are identifiable
+// (→ the seasonal block is skipped rather than guessing a tier).
+const ZONE_SOURCE_KEYS = new Set(["rotor_zone_per_zone", "popup_spray_zone_per_zone", "drip_zone_per_zone"]);
+function countZones(quote) {
+  let n = 0;
+  for (const li of (Array.isArray(quote.lineItems) ? quote.lineItems : [])) {
+    if (ZONE_SOURCE_KEYS.has(li.sourceKey)) n += Number(li.qty) || 0;
+    else if (/^zone\s+\d+/i.test(li.label || "")) n += 1;
+  }
+  return n;
+}
+
+// The residential seasonal tier for a zone count, from pricing.json's
+// canonical seasonal_tiers table (spring opening + fall closing share one
+// price per tier). Ranges look like "1-4", "5-6", "16+". Returns the tier
+// object ({ price, custom? }) or null when it can't be resolved.
+function seasonalTier(zoneCount) {
+  const tiers = PRICING.seasonal_tiers && PRICING.seasonal_tiers.residential;
+  if (!Array.isArray(tiers) || !(zoneCount > 0)) return null;
+  for (const t of tiers) {
+    const band = String(t.zones).match(/^(\d+)-(\d+)$/);
+    const open = String(t.zones).match(/^(\d+)\+$/);
+    if (band && zoneCount >= +band[1] && zoneCount <= +band[2]) return t;
+    if (open && zoneCount >= +open[1]) return t;
+  }
+  return null;
+}
+
+// The "seasonal care" block — current-year spring/fall rates for this
+// system's zone count. Rendered only when the template opts in (t.seasonal)
+// AND a zone count is known. The top residential tier (16+) is a custom
+// quote (price 0) → shown as "By quote" rather than "$0".
+function buildSeasonal(t, zones) {
+  if (!t.seasonal || !(zones > 0)) return null;
+  const tier = seasonalTier(zones);
+  if (!tier) return null;
+  const custom = !!tier.custom || !(Number(tier.price) > 0);
+  const value = custom ? "By quote" : fmtMoney(tier.price);
+  return {
+    heading: t.seasonal.heading || "Keeping it running",
+    lead: t.seasonal.lead || "",
+    zones,
+    custom,
+    spring: { label: "Spring opening", value, when: "each spring", body: t.seasonal.springBody || "" },
+    fall: { label: "Fall closing", value, when: "each fall", body: t.seasonal.fallBody || "" },
+    note: t.seasonal.note || ""
+  };
+}
+
 // ---- main -------------------------------------------------------------
 
 // Build the normalized proposal-data object the generator consumes.
@@ -184,6 +247,7 @@ function buildProposalData(quote, { customer = {}, property = {}, templateKey = 
   const address = String(property.address || customer.address || "").trim();
   const issued = fmtDate(quote.createdAt);
   const validThrough = fmtDate(quote.validUntil || quote.validUntilDate);
+  const zones = countZones(quote);
 
   // Token context for the template copy.
   const ctx = {
@@ -195,6 +259,7 @@ function buildProposalData(quote, { customer = {}, property = {}, templateKey = 
     subtotal: fmtMoney(subtotal),
     hst: fmtMoney(hst),
     total: fmtMoney(total),
+    zoneCount: zones,
     companyName: company.NAME,
     companyPhone: company.PHONE
   };
@@ -234,6 +299,7 @@ function buildProposalData(quote, { customer = {}, property = {}, templateKey = 
       countNote: (t.schedule && t.schedule.countNote) || DEFAULT_PRICING_NOTE
     },
     payment: payment(quote, t, total),
+    seasonal: buildSeasonal(t, zones),
     scope: t.scope || { heading: "What the price covers", lead: "", includes: [], excludes: [] },
     terms: t.terms || { heading: "Site conditions & the fine print", clauses: [] },
     close: {

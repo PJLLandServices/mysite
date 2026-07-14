@@ -216,6 +216,31 @@ ${exc}
 </section>`;
 }
 
+// ---- seasonal care (spring opening + fall closing rates) -------------
+// Reuses the two-column payment block styling. Rendered only when the
+// adapter supplies seasonal data (irrigation proposals with a known zone
+// count). Both columns are plain pay-col (neither is a "due now" highlight).
+function renderSeasonalCol(c) {
+  return `    <div class="pay-col">
+      <p class="pay-k">${esc(c.label)}</p>
+      <p class="pay-v">${esc(c.value)}</p>
+      <p class="pay-when">${esc(c.when)}</p>
+      <p class="pay-p">${rich(c.body)}</p>
+    </div>`;
+}
+function renderSeasonal(seasonal) {
+  if (!seasonal) return "";
+  const note = seasonal.note ? `\n  <p class="count-note">${rich(seasonal.note)}</p>` : "";
+  return `<section class="sec wrap" id="seasonal">
+  <h2 class="sec-h">${esc(seasonal.heading)}</h2>
+  <p class="sec-lead">${rich(seasonal.lead)}</p>
+  <div class="pay">
+${renderSeasonalCol(seasonal.spring)}
+${renderSeasonalCol(seasonal.fall)}
+  </div>${note}
+</section>`;
+}
+
 // ---- terms / fine-print clauses --------------------------------------
 
 function renderClause(c) {
@@ -278,6 +303,8 @@ ${renderSystem(data.system || {})}
 ${renderSchedule(data.schedule || {}, renderPayment(data.payment || {}))}
 
 ${renderScope(data.scope || {})}
+
+${renderSeasonal(data.seasonal)}
 
 ${renderTerms(data.terms || {})}
 
