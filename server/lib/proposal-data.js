@@ -226,8 +226,8 @@ function buildSeasonal(t, zones) {
     lead: t.seasonal.lead || "",
     zones,
     custom,
-    spring: { label: "Spring opening", value, when: "each spring", body: t.seasonal.springBody || "" },
-    fall: { label: "Fall closing", value, when: "each fall", body: t.seasonal.fallBody || "" },
+    spring: { label: "Spring opening", value, when: "per spring visit", body: t.seasonal.springBody || "" },
+    fall: { label: "Fall closing", value, when: "per fall visit", body: t.seasonal.fallBody || "" },
     note: t.seasonal.note || ""
   };
 }

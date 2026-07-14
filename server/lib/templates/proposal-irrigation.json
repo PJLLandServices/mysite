@@ -53,7 +53,7 @@
     "lead": "Your system is opened each spring and winterized each fall. Seasonal service by PJL is also what keeps your workmanship warranty valid — so it's worth planning for from day one.",
     "springBody": "De-winterize, pressure-test, set the smart-controller schedule for the season, and check every zone for proper coverage.",
     "fallBody": "A full compressed-air blow-out before the freeze — the single most important service for preventing winter damage to the system.",
-    "note": "Current-year rates for your <b>{{zoneCount}}-zone</b> system — billed only when each service is booked, and reviewed each season."
+    "note": "Spring opening and fall closing are <b>two separate services</b> — the price shown is for <b>each</b>, not the two combined. Current-year rate for your <b>{{zoneCount}}-zone</b> system, billed only when each service is booked."
   },
   "scope": {
     "heading": "What the price covers",

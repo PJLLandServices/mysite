@@ -113,6 +113,8 @@ eq(seasonalFor(5).zones, 5, "seasonal reports the zone count");
 {
   const html = renderSprinklerProposal(buildProposalData(proposalWithZones(5), { customer: { name: "X" }, property: { address: "Y" }, templateKey: "irrigation" }));
   ok(html.includes("Spring opening") && html.includes("Fall closing"), "both seasonal services render");
+  ok(html.includes("per spring visit") && html.includes("per fall visit"), "each service priced per visit (not combined)");
+  ok(/two separate services/i.test(html) && /not the two combined/i.test(html), "note states the two services are separate, priced each");
   ok(html.includes("5-zone"), "zoneCount token resolved in the seasonal note");
   ok(!/id="seasonal"[\s\S]*\{\{/.test(html), "no unresolved tokens in the seasonal section");
 }
