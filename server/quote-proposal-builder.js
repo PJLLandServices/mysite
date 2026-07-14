@@ -489,7 +489,10 @@
         : "Custom";
       return `
         <tr class="pb-line-row" data-idx="${idx}">
-          <td class="pb-col-desc" data-label="Description"><input type="text" data-li-label="${idx}" value="${escapeAttr(li.label)}" placeholder="Description"></td>
+          <td class="pb-col-desc" data-label="Component & detail">
+            <input type="text" data-li-label="${idx}" value="${escapeAttr(li.label)}" placeholder="Component name">
+            <input type="text" class="pb-line-detail" data-li-desc="${idx}" value="${escapeAttr(li.description || "")}" placeholder="Detail line — shown under the component">
+          </td>
           <td class="pb-col-source" data-label="Source"><span class="pb-line-source-badge" data-source="${escapeAttr(li.source || "custom")}">${escapeHtml(sourceLabel)}</span></td>
           <td class="pb-col-qty" data-label="Qty"><input type="number" data-li-qty="${idx}" value="${li.qty}" min="0" step="0.01"></td>
           <td class="pb-col-unit" data-label="Unit"><input type="text" data-li-unit="${idx}" value="${escapeAttr(li.unit || "")}" placeholder="each / ft / hr"></td>
@@ -503,6 +506,14 @@
       input.addEventListener("input", () => {
         const i = Number(input.dataset.liLabel);
         state.quote.lineItems[i].label = input.value;
+        markDirty();
+      });
+    });
+    // Detail line — the text under the component in the schedule's DETAIL column.
+    el.lineList.querySelectorAll("[data-li-desc]").forEach((input) => {
+      input.addEventListener("input", () => {
+        const i = Number(input.dataset.liDesc);
+        state.quote.lineItems[i].description = input.value;
         markDirty();
       });
     });

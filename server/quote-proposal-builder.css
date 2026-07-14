@@ -541,6 +541,15 @@
 .pb-lines-grid .pb-col-qty input,
 .pb-lines-grid .pb-col-price input { text-align: right; }
 
+/* Detail sub-input under the component name (schedule DETAIL column). */
+.pb-line-detail {
+  margin-top: 4px;
+  font-size: 12px !important;
+  color: #5C6B52;
+  background: #FAFAF7 !important;
+}
+.pb-line-detail::placeholder { color: #9AA694; }
+
 .pb-line-source-badge {
   display: inline-block;
   padding: 2px 8px;
