@@ -2060,14 +2060,28 @@ function mergeQuoteLines(existing, desired){
   ex.custom.forEach(l=>out.push(l));
   return out;
 }
-function quoteSections(N, areaNames){
-  return [
-    {kind:'cover_summary', title:'Your new irrigation system', order:1, body:`A fully automatic, water-efficient sprinkler system for your property — ${N} independently controlled watering zone${N>1?'s':''} covering ${areaNames||'the property'}, installed on a new dedicated mainline with Hunter Hydrawise smart control and flow-meter technology for leak detection and weather-based watering.`},
-    {kind:'proposed_scope', title:'Scope of work', order:2, body:`• Supply & install a new irrigation mainline, complete with a Hydrawise flow-meter for leak / flow monitoring.\n• Install and program a Hunter Hydrawise smart controller sized for ${N} zone${N>1?'s':''}.\n• Build ${N} watering zone${N>1?'s':''} — ${areaNames||'the property'} — each on its own valve for independent scheduling.\n• Pressure-test, commission and walk the system through with you.`},
-    {kind:'line_items', title:'Investment', order:3, body:''},
-    {kind:'custom', title:'Additional notes & costs', order:4, body:'Site-specific work, optional upgrades, or add-ons will be itemised here.'},
-    {kind:'acceptance_block', title:'Acceptance', order:5, body:''}
-  ];
+// Build the proposal's section set for a freshly-created quote. A new
+// project_proposal is seeded server-side with a default section skeleton
+// (including the required, structural line_items + acceptance_block, each
+// with a server id). The update guard rejects any array that DROPS a
+// structural section by id — so we must reuse the seeded ones, not send a
+// fresh array. We keep this design's lean 5-section layout: reuse the seeded
+// cover_summary / proposed_scope / line_items / acceptance_block BY ID (only
+// swapping in the generated title + body), add one custom notes section, and
+// let the other (non-structural) default sections drop.
+function quoteSections(existing, N, areaNames){
+  const list = Array.isArray(existing) ? existing : [];
+  const find = k => list.find(s => s && s.kind === k);
+  const coverBody = `A fully automatic, water-efficient sprinkler system for your property — ${N} independently controlled watering zone${N>1?'s':''} covering ${areaNames||'the property'}, installed on a new dedicated mainline with Hunter Hydrawise smart control and flow-meter technology for leak detection and weather-based watering.`;
+  const scopeBody = `• Supply & install a new irrigation mainline, complete with a Hydrawise flow-meter for leak / flow monitoring.\n• Install and program a Hunter Hydrawise smart controller sized for ${N} zone${N>1?'s':''}.\n• Build ${N} watering zone${N>1?'s':''} — ${areaNames||'the property'} — each on its own valve for independent scheduling.\n• Pressure-test, commission and walk the system through with you.`;
+  const cover=find('cover_summary'), scope=find('proposed_scope'), lineItemsSec=find('line_items'), acceptSec=find('acceptance_block');
+  const out=[];
+  out.push(cover ? Object.assign({}, cover, {title:'Your new irrigation system', body:coverBody}) : {kind:'cover_summary', title:'Your new irrigation system', body:coverBody});
+  out.push(scope ? Object.assign({}, scope, {title:'Scope of work', body:scopeBody}) : {kind:'proposed_scope', title:'Scope of work', body:scopeBody});
+  out.push(lineItemsSec || {kind:'line_items', title:'Investment', body:''});          // structural — reuse seeded id
+  out.push({kind:'custom', title:'Additional notes & costs', body:'Site-specific work, optional upgrades, or add-ons will be itemised here.'});
+  out.push(acceptSec || {kind:'acceptance_block', title:'Acceptance', body:''});        // structural — reuse seeded id
+  return out;
 }
 // Create the quote (first time) or update the linked draft in place.
 async function syncQuoteFromDesign(){
@@ -2091,7 +2105,7 @@ async function syncQuoteFromDesign(){
   const cj=await cr.json().catch(()=>({})); if(!cr.ok||!cj.ok) throw new Error((cj.errors&&cj.errors[0])||('create HTTP '+cr.status));
   const qid=cj.quote.id;
   const li=desired.map(d=>({source:'custom', label:d.label, description:d.description||'', qty:1, price:d.price}));
-  const pr=await fetch('/api/quotes/'+encodeURIComponent(qid)+'/proposal',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({proposalSections:quoteSections(N,areaNames), lineItems:li})});
+  const pr=await fetch('/api/quotes/'+encodeURIComponent(qid)+'/proposal',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({proposalSections:quoteSections(cj.quote.proposalSections, N, areaNames), lineItems:li})});
   const pj=await pr.json().catch(()=>({})); if(!pr.ok||!pj.ok) throw new Error((pj.errors&&pj.errors[0])||('seed HTTP '+pr.status));
   linkedQuoteId=qid;
   return {id:qid, action:'created', N, total:pj.quote&&pj.quote.total};
