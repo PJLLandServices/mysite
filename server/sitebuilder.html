@@ -2015,16 +2015,32 @@ const INSTALL_PRICING = {
 // overwritten.
 let linkedQuoteId = null;
 
+// Human label + head count for a zone's head family — carried into the quote
+// line's `description` so the generated proposal schedule shows the zone TYPE
+// and head count straight from the design (Site Builder → proposal cross-
+// reference, Jul 2026). Drip/trees water by line, not discrete heads, so they
+// carry no head count.
+const FAMILY_DETAIL_LABEL={rotor:'Rotary heads',mp:'MP Rotator heads',spray:'Pop-up spray heads',strip:'Strip-nozzle heads',drip:'Root-zone drip line',trees:'Tree root watering'};
+function zoneFamilyDetail(family,headCount){
+  const base=FAMILY_DETAIL_LABEL[family]||'Sprinkler heads';
+  if(family==='drip'||family==='trees'||!headCount) return base;
+  return `${base} · ${headCount} head${headCount!==1?'s':''}`;
+}
 function desiredQuoteLines(){
   const zones=[];
-  LAST_PLANS.filter(x=>!x.plan.noShape).forEach(({area,plan})=>{ for(let k=0;k<plan.zones;k++) zones.push(area.name||'Area'); });
+  LAST_PLANS.filter(x=>!x.plan.noShape).forEach(({area,plan})=>{
+    for(let z=0;z<plan.zones;z++){
+      const headCount=(plan.heads||[]).filter(h=>h.zone===z).length;
+      zones.push({name:area.name||'Area', detail:zoneFamilyDetail(plan.family,headCount)});
+    }
+  });
   const N=zones.length;
   const desired=[
-    {kind:'mainline', label:'Sprinkler system — new mainline installed, complete with Hunter Hydrawise flow-meter technology', price:INSTALL_PRICING.baseByZones(N)},
-    {kind:'controller', label:`Smart controller — Hunter Hydrawise, sized for ${N} zone${N>1?'s':''}`, price:INSTALL_PRICING.controllerByZones(N)}
+    {kind:'mainline', label:'Sprinkler system — new mainline installed, complete with Hunter Hydrawise flow-meter technology', description:'New dedicated supply · Hydrawise flow-meter & leak detection', price:INSTALL_PRICING.baseByZones(N)},
+    {kind:'controller', label:`Smart controller — Hunter Hydrawise, sized for ${N} zone${N>1?'s':''}`, description:'Hunter Hydrawise · weather-based watering', price:INSTALL_PRICING.controllerByZones(N)}
   ];
-  zones.forEach((nm,i)=>desired.push({kind:'zone', num:i+1, label:`Zone ${i+1} — ${nm}`, price:INSTALL_PRICING.perZone}));
-  return {desired, N, areaNames:[...new Set(zones)].join(', ')};
+  zones.forEach((z,i)=>desired.push({kind:'zone', num:i+1, label:`Zone ${i+1} — ${z.name}`, description:z.detail, price:INSTALL_PRICING.perZone}));
+  return {desired, N, areaNames:[...new Set(zones.map(z=>z.name))].join(', ')};
 }
 function classifyQuoteLine(l){
   const m=/^Zone\s+(\d+)\b/i.exec(l.label||''); if(m) return {t:'zone', num:+m[1]};
@@ -2038,7 +2054,7 @@ function classifyQuoteLine(l){
 function mergeQuoteLines(existing, desired){
   const ex={mainline:null, controller:null, zones:{}, custom:[]};
   (existing||[]).forEach(l=>{ const c=classifyQuoteLine(l); if(c.t==='zone') ex.zones[c.num]=l; else if(c.t==='mainline') ex.mainline=l; else if(c.t==='controller') ex.controller=l; else ex.custom.push(l); });
-  const keep=(prev,d)=> prev ? Object.assign({}, prev, {label:d.label}) : {source:'custom', label:d.label, qty:1, price:d.price};
+  const keep=(prev,d)=> prev ? Object.assign({}, prev, {label:d.label, description:d.description||''}) : {source:'custom', label:d.label, description:d.description||'', qty:1, price:d.price};
   const out=[];
   desired.forEach(d=>{ out.push(d.kind==='mainline'?keep(ex.mainline,d):d.kind==='controller'?keep(ex.controller,d):keep(ex.zones[d.num],d)); });
   ex.custom.forEach(l=>out.push(l));
@@ -2074,7 +2090,7 @@ async function syncQuoteFromDesign(){
   if(cr.status===403){ const e=new Error('needs admin'); e.code=403; throw e; }
   const cj=await cr.json().catch(()=>({})); if(!cr.ok||!cj.ok) throw new Error((cj.errors&&cj.errors[0])||('create HTTP '+cr.status));
   const qid=cj.quote.id;
-  const li=desired.map(d=>({source:'custom', label:d.label, qty:1, price:d.price}));
+  const li=desired.map(d=>({source:'custom', label:d.label, description:d.description||'', qty:1, price:d.price}));
   const pr=await fetch('/api/quotes/'+encodeURIComponent(qid)+'/proposal',{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({proposalSections:quoteSections(N,areaNames), lineItems:li})});
   const pj=await pr.json().catch(()=>({})); if(!pr.ok||!pj.ok) throw new Error((pj.errors&&pj.errors[0])||('seed HTTP '+pr.status));
   linkedQuoteId=qid;
