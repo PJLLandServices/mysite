@@ -61,7 +61,7 @@ function renderDeposits() {
   threshold.value = dep.threshold != null ? dep.threshold : 10000;
   basis.value = dep.thresholdBasis || "total_incl_tax";
   type.value = dep.defaultType || "percent";
-  value.value = dep.defaultValue != null ? dep.defaultValue : 40;
+  value.value = dep.defaultValue != null ? dep.defaultValue : 25;
   autoSend.checked = dep.autoSendBalanceOnCompletion === true;
   save.disabled = true;
   if (status) status.textContent = "";

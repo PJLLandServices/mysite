@@ -596,7 +596,7 @@
   function ensureDeposit() {
     if (!state.quote.deposit || typeof state.quote.deposit !== "object") {
       state.quote.deposit = {
-        enabled: false, configured: false, type: "percent", value: 40,
+        enabled: false, configured: false, type: "percent", value: 25,
         amount: 0, balance: 0,
         dueLabel: "due at scheduling", balanceLabel: "due on completion",
         stage: null, snapshot: null, depositInvoiceId: null, balanceInvoiceId: null
@@ -625,7 +625,7 @@
       dep.configured = true;
       dep.enabled = true;
       dep.type = ds.defaultType === "fixed" ? "fixed" : "percent";
-      dep.value = Number(ds.defaultValue) || 40;
+      dep.value = Number(ds.defaultValue) || 25;
       markDirty();
     }
 
@@ -696,7 +696,7 @@
       dep.enabled = true;
       if (!dep.value) {
         dep.type = ds.defaultType === "fixed" ? "fixed" : "percent";
-        dep.value = Number(ds.defaultValue) || 40;
+        dep.value = Number(ds.defaultValue) || 25;
       }
       state.depositForceOpen = true;
       syncDepositPanel();
@@ -715,9 +715,9 @@
         const dep = ensureDeposit();
         dep.configured = true;
         dep.type = r.value;
-        // Sensible re-default when flipping type so 40 (%) doesn't become $40.
+        // Sensible re-default when flipping type so 25 (%) doesn't become $25.
         const ds = state.depositSettings || {};
-        dep.value = r.value === (ds.defaultType || "percent") ? (Number(ds.defaultValue) || 40) : (r.value === "percent" ? 40 : 0);
+        dep.value = r.value === (ds.defaultType || "percent") ? (Number(ds.defaultValue) || 25) : (r.value === "percent" ? 25 : 0);
         syncDepositPanel();
         markDirty();
       });

@@ -107,7 +107,7 @@ const DEFAULT_OUTREACH_TEMPLATES = {
 const DEFAULT_DEPOSITS = {
   threshold: 10000,                    // CAD
   defaultType: "percent",              // "percent" | "fixed"
-  defaultValue: 40,                    // 40% (or $ when fixed)
+  defaultValue: 25,                    // 25% (or $ when fixed)
   thresholdBasis: "total_incl_tax",    // "total_incl_tax" | "subtotal"
   autoSendBalanceOnCompletion: false
 };

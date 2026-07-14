@@ -38,7 +38,7 @@ const HST_RATE = 0.13;
 const round2 = (n) => Math.round(n * 100) / 100;
 const fmtMoney = (n) => "$" + (Number(n) || 0).toLocaleString("en-CA", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-// The deposit amount is a TAX-INCLUSIVE dollar figure (40% of the grand
+// The deposit amount is a TAX-INCLUSIVE dollar figure (e.g. 25% of the grand
 // total incl. HST), but invoice lines are pre-tax and the invoice module
 // adds 13% on top. Find the pre-tax line price whose price+HST rounds to
 // exactly the target. For percent deposits this is exact by construction

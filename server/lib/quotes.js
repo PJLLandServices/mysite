@@ -198,7 +198,7 @@ function blankDeposit() {
     // only pre-fills untouched quotes.
     configured: false,
     type: "percent",
-    value: 40,
+    value: 25,
     amount: 0,               // computed $ (2dp) — server math only
     balance: 0,              // grandTotal - amount, never < 0
     dueLabel: DEFAULT_DEPOSIT_DUE_LABEL,
