@@ -288,6 +288,26 @@ function render(q) {
   document.getElementById("approveHst").textContent = fmt(q.hst);
   document.getElementById("approveTotal").textContent = fmt(q.total);
 
+  // Payment terms (threshold-deposit brief). Deposit quotes show the
+  // deposit/balance split; everything else shows due-on-completion.
+  {
+    const terms = document.getElementById("approvePayTerms");
+    if (terms) {
+      const dep = q.deposit;
+      if (dep && dep.enabled) {
+        const valueBit = dep.type === "fixed" ? fmt(dep.value) : `${Number(dep.value) || 0}%`;
+        terms.innerHTML = `
+          <h3 class="approve-payterms-title">Payment terms</h3>
+          <div class="approve-payterms-row"><span>Deposit (${escapeHtml(valueBit)}, ${escapeHtml(dep.dueLabel || "due at scheduling")})</span><strong>${fmt(dep.amount)}</strong></div>
+          <div class="approve-payterms-row"><span>Balance (${escapeHtml(dep.balanceLabel || "due on completion")})</span><strong>${fmt(dep.balance)}</strong></div>
+        `;
+      } else {
+        terms.innerHTML = `<div class="approve-payterms-row approve-payterms-single"><span>Total due</span><strong>${fmt(q.total)} — due on completion</strong></div>`;
+      }
+      terms.hidden = false;
+    }
+  }
+
   // If already signed OR awaiting attestation, show success state instead of pad.
   if (q.signedAt || q.status === "pending_admin_attestation" || q.status === "accepted") {
     signBlock.hidden = true;
@@ -303,6 +323,14 @@ function render(q) {
       document.getElementById("approveSuccessMeta").textContent = q.signedAt
         ? `Signed ${new Date(q.signedAt).toLocaleString()}`
         : `Accepted`;
+      // Deposit quotes invoice the deposit right away — the default
+      // "invoice once the work is complete" copy would mislead.
+      if (q.deposit && q.deposit.enabled) {
+        const body = document.getElementById("approveSuccessBody");
+        if (body) {
+          body.innerHTML = `Thank you, <span>${escapeHtml(q.signedBy || "(customer)")}</span>. PJL has been notified and will follow up shortly. Your deposit invoice (${fmt(q.deposit.amount)}, ${escapeHtml(q.deposit.dueLabel || "due at scheduling")}) is on its way to your email; the balance of ${fmt(q.deposit.balance)} is ${escapeHtml(q.deposit.balanceLabel || "due on completion")}.`;
+        }
+      }
     }
     return;
   }
@@ -417,6 +445,15 @@ submitBtn.addEventListener("click", async () => {
     document.getElementById("approveSuccessMeta").textContent = data.alreadySigned
       ? "(this quote was already signed earlier)"
       : "Signed " + new Date().toLocaleString();
+    // Deposit quotes invoice the deposit right away — swap the default
+    // "invoice once the work is complete" copy for the real terms.
+    const dep = currentQuote && currentQuote.deposit;
+    if (dep && dep.enabled) {
+      const body = document.getElementById("approveSuccessBody");
+      if (body) {
+        body.innerHTML = `Thank you, <span>${escapeHtml(customerName)}</span>. PJL has been notified and will follow up shortly. Your deposit invoice (${fmt(dep.amount)}, ${escapeHtml(dep.dueLabel || "due at scheduling")}) is on its way to your email; the balance of ${fmt(dep.balance)} is ${escapeHtml(dep.balanceLabel || "due on completion")}.`;
+      }
+    }
   } catch (err) {
     errMsg.textContent = err.message || "Failed.";
     errMsg.hidden = false;

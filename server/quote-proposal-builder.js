@@ -60,6 +60,19 @@
     subtotal: $("pbSubtotal"),
     hst: $("pbHst"),
     total: $("pbTotal"),
+    deposit: $("pbDeposit"),
+    depUnder: $("pbDepUnder"),
+    depUnderText: $("pbDepUnderText"),
+    depAddAnyway: $("pbDepAddAnyway"),
+    depPanel: $("pbDepPanel"),
+    depHead: $("pbDepHead"),
+    depEnabled: $("pbDepEnabled"),
+    depControls: $("pbDepControls"),
+    depValue: $("pbDepValue"),
+    depDueLabel: $("pbDepDueLabel"),
+    depBalanceLabel: $("pbDepBalanceLabel"),
+    depReadout: $("pbDepReadout"),
+    depStage: $("pbDepStage"),
     saveState: $("pbSaveState"),
     previewLink: $("pbPreviewLink"),
     sendBtn: $("pbSendBtn"),
@@ -95,6 +108,10 @@
     quote: null,
     projectRates: null,
     gatePhones: null,
+    // Deposit prompt defaults from /api/settings (threshold, default
+    // type/value, basis). null until loaded — the panel stays hidden
+    // rather than guessing a threshold.
+    depositSettings: null,
     activeSectionId: null,
     saveTimer: null,
     isDirty: false,
@@ -137,7 +154,19 @@
         proposalSections: q.proposalSections,
         lineItems: q.lineItems,
         pdfOptions: q.pdfOptions,
-        quoteNumberDisplay: el.quoteNumber.value.trim()
+        quoteNumberDisplay: el.quoteNumber.value.trim(),
+        // Terms only — the server recomputes amount/balance and owns the
+        // lifecycle fields. Only included once the deposit block has been
+        // touched (configured), so opening an old draft doesn't rewrite it.
+        ...(q.deposit && q.deposit.configured ? {
+          deposit: {
+            enabled: q.deposit.enabled === true,
+            type: q.deposit.type,
+            value: q.deposit.value,
+            dueLabel: q.deposit.dueLabel,
+            balanceLabel: q.deposit.balanceLabel
+          }
+        } : {})
       };
       const r = await fetch(`/api/quotes/${encodeURIComponent(q.id)}/proposal`, {
         method: "PATCH",
@@ -243,6 +272,7 @@
     renderAttachments();
     renderProposalDoc();
     renderLineItems();
+    syncDepositPanel();
     renderTotals();
     refreshPreviewLink();
   }
@@ -522,14 +552,209 @@
   }
 
   function renderTotals() {
+    const { subtotal, hst, total } = clientTotals();
+    el.subtotal.textContent = "$" + subtotal.toFixed(2);
+    el.hst.textContent = "$" + hst.toFixed(2);
+    el.total.textContent = "$" + total.toFixed(2);
+    // Deposit prompt + readout track the live total (threshold can be
+    // crossed mid-edit; amount/balance recompute on every line change).
+    updateDepositUI();
+  }
+
+  function clientTotals() {
     let subtotal = 0;
     for (const li of (state.quote.lineItems || [])) subtotal += Number(li.lineTotal) || 0;
     subtotal = Math.round(subtotal * 100) / 100;
     const hst = Math.round(subtotal * 0.13 * 100) / 100;
     const total = Math.round((subtotal + hst) * 100) / 100;
-    el.subtotal.textContent = "$" + subtotal.toFixed(2);
-    el.hst.textContent = "$" + hst.toFixed(2);
-    el.total.textContent = "$" + total.toFixed(2);
+    return { subtotal, hst, total };
+  }
+
+  // ---- Threshold deposit (Jul 2026) ----------------------------------
+  //
+  // Client-side mirror of quotes.computeDepositFigures for instant
+  // feedback; the server recomputes on every save and its math wins.
+
+  function fmtMoney(n) {
+    return "$" + (Number(n) || 0).toLocaleString("en-CA", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+
+  function depositFigures(total, dep) {
+    const r2 = (n) => Math.round(n * 100) / 100;
+    const grand = Number(total) || 0;
+    if (!dep || dep.enabled !== true) return { amount: 0, balance: r2(grand) };
+    let amount;
+    if (dep.type === "fixed") {
+      amount = Math.min(Math.max(Number(dep.value) || 0, 0), grand);
+    } else {
+      amount = grand * (Math.min(Math.max(Number(dep.value) || 0, 0), 100) / 100);
+    }
+    amount = r2(amount);
+    return { amount, balance: Math.max(0, r2(grand - amount)) };
+  }
+
+  function ensureDeposit() {
+    if (!state.quote.deposit || typeof state.quote.deposit !== "object") {
+      state.quote.deposit = {
+        enabled: false, configured: false, type: "percent", value: 40,
+        amount: 0, balance: 0,
+        dueLabel: "due at scheduling", balanceLabel: "due on completion",
+        stage: null, snapshot: null, depositInvoiceId: null, balanceInvoiceId: null
+      };
+    }
+    return state.quote.deposit;
+  }
+
+  // Structural sync — panel visibility, toggle, inputs. Called from
+  // render() and after toggle/type changes. NOT from every keystroke
+  // (that's updateDepositUI, which never rewrites input values).
+  function syncDepositPanel() {
+    const ds = state.depositSettings;
+    const q = state.quote;
+    if (!ds || !q) { el.deposit.hidden = true; return; }
+    const dep = ensureDeposit();
+    const locked = q.status !== "draft";
+    const { subtotal, total } = clientTotals();
+    const basisValue = ds.thresholdBasis === "subtotal" ? subtotal : total;
+    const overThreshold = basisValue >= Number(ds.threshold);
+
+    // Default-ON: an untouched draft that crosses the threshold gets the
+    // deposit pre-enabled from settings (admin can toggle it off — that
+    // sticks, because the save marks it configured).
+    if (!locked && overThreshold && !dep.configured) {
+      dep.configured = true;
+      dep.enabled = true;
+      dep.type = ds.defaultType === "fixed" ? "fixed" : "percent";
+      dep.value = Number(ds.defaultValue) || 40;
+      markDirty();
+    }
+
+    el.deposit.hidden = false;
+    const showPanel = overThreshold || dep.enabled || (dep.configured && dep.enabled) || state.depositForceOpen === true;
+    el.depPanel.hidden = !showPanel;
+    el.depUnder.hidden = showPanel;
+    if (!showPanel) {
+      el.depUnderText.textContent = `Under the ${fmtMoney(ds.threshold)} deposit threshold — payment due on completion. `;
+      el.depAddAnyway.hidden = locked;
+    }
+
+    el.depHead.textContent = overThreshold
+      ? `This quote is ${fmtMoney(total)} — over the ${fmtMoney(ds.threshold)} deposit threshold. Request a deposit?`
+      : `This quote is ${fmtMoney(total)} — under the ${fmtMoney(ds.threshold)} deposit threshold. Deposit optional.`;
+
+    el.depEnabled.checked = dep.enabled === true;
+    el.depControls.hidden = dep.enabled !== true;
+    document.querySelectorAll('input[name="pbDepType"]').forEach((r) => {
+      r.checked = r.value === (dep.type || "percent");
+      r.disabled = locked;
+    });
+    el.depValue.value = dep.value != null ? dep.value : "";
+    el.depValue.step = dep.type === "fixed" ? "100" : "1";
+    el.depDueLabel.value = dep.dueLabel || "";
+    el.depBalanceLabel.value = dep.balanceLabel || "";
+    [el.depEnabled, el.depValue, el.depDueLabel, el.depBalanceLabel].forEach((n) => { n.disabled = locked; });
+
+    updateDepositUI();
+  }
+
+  // Derived-text-only refresh — safe to call on every keystroke / line
+  // edit because it never rewrites an input the admin may be typing in.
+  function updateDepositUI() {
+    const ds = state.depositSettings;
+    const q = state.quote;
+    if (!ds || !q || el.deposit.hidden) return;
+    const dep = ensureDeposit();
+    const { total } = clientTotals();
+    if (dep.enabled === true) {
+      const f = depositFigures(total, dep);
+      const valueBit = dep.type === "fixed" ? fmtMoney(dep.value) : `${Number(dep.value) || 0}%`;
+      el.depReadout.innerHTML =
+        `Deposit <strong>${fmtMoney(f.amount)}</strong> (${escapeHtml(valueBit)}, ${escapeHtml(dep.dueLabel || "due at scheduling")})` +
+        ` · Balance <strong>${fmtMoney(f.balance)}</strong> (${escapeHtml(dep.balanceLabel || "due on completion")})`;
+    } else {
+      el.depReadout.innerHTML = `Total <strong>${fmtMoney(total)}</strong> — due on completion.`;
+    }
+
+    // Post-acceptance lifecycle line.
+    const stageText = {
+      awaiting_deposit: `Deposit invoice ${dep.depositInvoiceId || ""} sent — awaiting payment.`,
+      deposit_paid: `Deposit paid — balance invoice ${dep.balanceInvoiceId || ""} held until project completion.`,
+      awaiting_balance_payment: `Balance invoice ${dep.balanceInvoiceId || ""} issued — awaiting payment.`,
+      closed: "Paid in full."
+    }[dep.stage];
+    el.depStage.hidden = !stageText;
+    if (stageText) el.depStage.textContent = stageText;
+  }
+
+  function wireDepositEvents() {
+    el.depAddAnyway.addEventListener("click", (e) => {
+      e.preventDefault();
+      if (state.quote.status !== "draft") return;
+      const dep = ensureDeposit();
+      const ds = state.depositSettings || {};
+      dep.configured = true;
+      dep.enabled = true;
+      if (!dep.value) {
+        dep.type = ds.defaultType === "fixed" ? "fixed" : "percent";
+        dep.value = Number(ds.defaultValue) || 40;
+      }
+      state.depositForceOpen = true;
+      syncDepositPanel();
+      markDirty();
+    });
+    el.depEnabled.addEventListener("change", () => {
+      const dep = ensureDeposit();
+      dep.configured = true;
+      dep.enabled = el.depEnabled.checked;
+      syncDepositPanel();
+      markDirty();
+    });
+    document.querySelectorAll('input[name="pbDepType"]').forEach((r) => {
+      r.addEventListener("change", () => {
+        if (!r.checked) return;
+        const dep = ensureDeposit();
+        dep.configured = true;
+        dep.type = r.value;
+        // Sensible re-default when flipping type so 40 (%) doesn't become $40.
+        const ds = state.depositSettings || {};
+        dep.value = r.value === (ds.defaultType || "percent") ? (Number(ds.defaultValue) || 40) : (r.value === "percent" ? 40 : 0);
+        syncDepositPanel();
+        markDirty();
+      });
+    });
+    el.depValue.addEventListener("input", () => {
+      const dep = ensureDeposit();
+      dep.configured = true;
+      const n = parseFloat(el.depValue.value);
+      dep.value = Number.isFinite(n) && n >= 0 ? n : 0;
+      updateDepositUI();
+      markDirty();
+    });
+    el.depDueLabel.addEventListener("input", () => {
+      const dep = ensureDeposit();
+      dep.configured = true;
+      dep.dueLabel = el.depDueLabel.value;
+      updateDepositUI();
+      markDirty();
+    });
+    el.depBalanceLabel.addEventListener("input", () => {
+      const dep = ensureDeposit();
+      dep.configured = true;
+      dep.balanceLabel = el.depBalanceLabel.value;
+      updateDepositUI();
+      markDirty();
+    });
+  }
+
+  async function loadDepositSettings() {
+    try {
+      const r = await fetch("/api/settings", { cache: "no-store" });
+      const data = await r.json().catch(() => ({}));
+      if (data.ok && data.settings?.deposits) {
+        state.depositSettings = data.settings.deposits;
+        syncDepositPanel();
+      }
+    } catch (_) { /* panel stays hidden without settings */ }
   }
 
   function refreshPreviewLink() {
@@ -1109,9 +1334,11 @@
 
       el.loading.hidden = true;
       el.app.hidden = false;
+      wireDepositEvents();
       render();
       loadProjectRates();
       loadGatePhones();
+      loadDepositSettings();
     } catch (err) {
       el.loading.remove();
       el.error.textContent = err.message || "Could not load proposal.";

@@ -52,6 +52,7 @@ const customers = require("./lib/customers");
 const workOrders = require("./lib/work-orders");
 const quotes = require("./lib/quotes");
 const invoices = require("./lib/invoices");
+const deposits = require("./lib/deposits");
 const completionCascade = require("./lib/completion-cascade");
 const customLineItems = require("./lib/custom-line-items");
 const settings = require("./lib/settings");
@@ -6403,6 +6404,16 @@ async function handleApi(req, res, pathname) {
       if (action === "resend" && inv.status === "void") {
         return sendJson(res, 409, { ok: false, errors: ["Cannot resend a voided invoice."] });
       }
+      // Threshold deposit — a held balance/final invoice waits for
+      // project completion (the cascade clears the hold). Admin override:
+      // body { forceHeld: true } sends it anyway.
+      if (action === "send" && inv.holdUntilCompletion && sendBody?.forceHeld !== true) {
+        return sendJson(res, 409, {
+          ok: false,
+          code: "held_until_completion",
+          errors: [`Invoice ${inv.id} is held until the project completes. Complete the project first, or retry with the override to send it now.`]
+        });
+      }
       if (!inv.customerEmail) {
         return sendJson(res, 400, { ok: false, errors: ["Invoice has no customer email — add one to the invoice before sending."] });
       }
@@ -6975,6 +6986,15 @@ async function handleApi(req, res, pathname) {
           ? `${inv.notes}\n\nCharged ${chargeResult.id} on ${new Date().toISOString()}.`
           : `Charged ${chargeResult.id} on ${new Date().toISOString()}.`
       });
+
+      // Threshold deposit — a paid deposit invoice spawns the held
+      // balance invoice; a paid balance invoice closes the quote's
+      // deposit stage. Best-effort: the charge already succeeded.
+      try {
+        await deposits.onInvoicePaid(updated);
+      } catch (depErr) {
+        console.warn(`[charge] deposit paid-hook failed for ${id}:`, depErr?.message);
+      }
 
       // Fire the payment-receipt email. Best effort — a receipt-send
       // failure does NOT roll back the charge or block the customer's
@@ -7579,7 +7599,18 @@ async function handleApi(req, res, pathname) {
         // Display options (Brief D) so the acceptance page mirrors what the
         // PDF shows — it must never leak pricing the PDF was told to hide.
         pdfOptions: q.pdfOptions || { lineItems: "itemized", showAttachments: true, showProjectMap: true },
-        quoteNumberDisplay: q.quoteNumberDisplay || ""
+        quoteNumberDisplay: q.quoteNumberDisplay || "",
+        // Deposit terms (threshold-deposit brief) — slim view, terms only.
+        // Lifecycle fields (invoice ids, snapshot) stay server-side.
+        deposit: q.deposit && q.deposit.enabled === true ? {
+          enabled: true,
+          type: q.deposit.type,
+          value: q.deposit.value,
+          amount: q.deposit.amount,
+          balance: q.deposit.balance,
+          dueLabel: q.deposit.dueLabel,
+          balanceLabel: q.deposit.balanceLabel
+        } : { enabled: false }
       };
       return sendJson(res, 200, { ok: true, quote: safe });
     } catch (err) {
@@ -7652,6 +7683,20 @@ async function handleApi(req, res, pathname) {
           customerName, imageData, decisions, ip, userAgent, partial: false,
           note: "Accepted via remote-approval link"
         });
+      }
+
+      // Threshold deposit — a deposit-enabled quote spawns its deposit
+      // invoice + customer email right here at acceptance. Failure-
+      // tolerant: an invoice/email hiccup must never un-accept the
+      // signature the customer just gave (the warning lands in Patrick's
+      // notification email + the quote history instead).
+      let depositWarning = null;
+      try {
+        const depResult = await deposits.onQuoteAccepted(updated, { by: "system" });
+        if (depResult?.warning) depositWarning = depResult.warning;
+      } catch (depErr) {
+        depositWarning = depErr?.message || "Deposit invoice creation failed.";
+        console.warn(`[approval-sign] deposit flow failed for ${updated.id}:`, depErr?.message);
       }
 
       // Find the WO this quote was attached to and flip its onSiteQuote
@@ -7727,7 +7772,12 @@ async function handleApi(req, res, pathname) {
           phone: updated.approval?.sentToPhone || "",
           email: updated.approval?.sentToEmail || updated.customerEmail || "",
           address: updated.customerAddress || "",
-          notes: `Customer approved $${Number(updated.total).toFixed(2)} CAD via remote link.`
+          notes: `Customer approved $${Number(updated.total).toFixed(2)} CAD via remote link.` +
+            (updated.deposit?.enabled
+              ? (depositWarning
+                  ? ` DEPOSIT ATTENTION: ${depositWarning}`
+                  : ` Deposit invoice for $${Number(updated.deposit.amount).toFixed(2)} sent automatically.`)
+              : "")
         }
       };
       Promise.allSettled([
@@ -7735,7 +7785,7 @@ async function handleApi(req, res, pathname) {
         sendNewLeadSms(aliasLead, { baseUrl })
       ]).catch(() => {});
 
-      return sendJson(res, 200, { ok: true, quote: { id: updated.id, status: updated.status, signedAt: updated.signature.signedAt } });
+      return sendJson(res, 200, { ok: true, quote: { id: updated.id, status: updated.status, signedAt: updated.signature.signedAt }, depositWarning });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't process signature."] });
     }
@@ -9047,6 +9097,18 @@ async function handleApi(req, res, pathname) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't update contact info."] });
     }
   }
+  // Deposits — threshold-based deposit on quotations. Threshold, default
+  // type/value, basis, auto-send-balance-on-completion. Per-quote deposit
+  // config lives on the quote record; these are the prompts' defaults.
+  if (req.method === "PATCH" && pathname === "/api/settings/deposits") {
+    try {
+      const payload = await parseRequestBody(req);
+      const updated = await settings.updateDeposits(payload, { who: "admin" });
+      return sendJson(res, 200, { ok: true, settings: updated });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't update deposit settings."] });
+    }
+  }
 
   // ---------- iCal feed (Brief C) --------------------------------------
   // Three admin actions: generate (idempotent — returns existing token
@@ -9558,6 +9620,19 @@ async function handleApi(req, res, pathname) {
       const updated = await invoices.update(id, payload);
       if (!updated) return sendJson(res, 404, { ok: false, errors: ["Invoice not found."] });
 
+      // Threshold deposit — paid/void transitions on deposit invoices
+      // drive the quote's deposit lifecycle. Best-effort.
+      try {
+        if (before && before.status !== "paid" && updated.status === "paid") {
+          await deposits.onInvoicePaid(updated);
+        }
+        if (before && before.status !== "void" && updated.status === "void") {
+          await deposits.onInvoiceVoided(updated);
+        }
+      } catch (depErr) {
+        console.warn(`[invoice-patch] deposit hook failed for ${id}:`, depErr?.message);
+      }
+
       // PR 3 — status mirror to QuickBooks. When admin sets status to
       // void in PJL, push the same change to QB. Best-effort: a QB
       // failure does NOT block the local status flip — we surface a
@@ -9613,6 +9688,15 @@ async function handleApi(req, res, pathname) {
         } catch (qbErr) {
           console.warn(`[invoice-void] QB void failed for ${id}: ${qbErr.message}`);
           qbWarning = `Voided locally, but QuickBooks rejected the void: ${qbErr.message}. Void it manually in QBO before deleting.`;
+        }
+      }
+      // Threshold deposit — voiding a deposit invoice reverts the quote
+      // to awaiting-deposit and withdraws a held balance invoice.
+      if (!result.alreadyVoid) {
+        try {
+          await deposits.onInvoiceVoided(result.invoice);
+        } catch (depErr) {
+          console.warn(`[invoice-void] deposit hook failed for ${id}:`, depErr?.message);
         }
       }
       return sendJson(res, 200, { ok: true, invoice: result.invoice, warning: qbWarning });
@@ -11749,7 +11833,17 @@ async function handleApi(req, res, pathname) {
         senderEmailOverride: payload.senderEmailOverride || ""
       });
       if (!updated) return sendJson(res, 404, { ok: false, errors: ["Proposal not found."] });
-      return sendJson(res, 200, { ok: true, quote: updated });
+      // Threshold deposit — attestation IS the acceptance for the
+      // PDF-return path, so the deposit invoice fires here too.
+      let depositWarning = null;
+      try {
+        const depResult = await deposits.onQuoteAccepted(updated, { by: session.uid || "admin" });
+        if (depResult?.warning) depositWarning = depResult.warning;
+      } catch (depErr) {
+        depositWarning = depErr?.message || "Deposit invoice creation failed.";
+        console.warn(`[confirm-pdf] deposit flow failed for ${id}:`, depErr?.message);
+      }
+      return sendJson(res, 200, { ok: true, quote: updated, depositWarning });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't confirm PDF acceptance."] });
     }

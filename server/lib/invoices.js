@@ -134,6 +134,22 @@ function hydrate(inv) {
       email: String(inv.billTo.email || "")
     } : null,
     status: STATUSES.includes(inv?.status) ? inv.status : "draft",
+    // Threshold-deposit brief (Jul 2026). invoiceRole distinguishes the
+    // deposit invoice (sent at acceptance) and the balance invoice
+    // (created when the deposit is paid, held to completion) from
+    // ordinary invoices. depositMeta is the balance invoice's display
+    // record of the deposit already paid — original grand total, deposit
+    // amount, date, and the deposit invoice id. holdUntilCompletion
+    // blocks /send until the project-completion cascade clears it.
+    invoiceRole: ["standard", "deposit", "balance"].includes(inv?.invoiceRole) ? inv.invoiceRole : "standard",
+    depositMeta: inv?.depositMeta && typeof inv.depositMeta === "object" ? {
+      quoteId: inv.depositMeta.quoteId || null,
+      depositInvoiceId: inv.depositMeta.depositInvoiceId || null,
+      depositAmount: Number(inv.depositMeta.depositAmount) || 0,
+      depositPaidAt: inv.depositMeta.depositPaidAt || null,
+      grandTotal: Number(inv.depositMeta.grandTotal) || 0
+    } : null,
+    holdUntilCompletion: inv?.holdUntilCompletion === true,
     lineItems: Array.isArray(inv?.lineItems) ? inv.lineItems : [],
     subtotal: Number(inv?.subtotal) || 0,
     hst: Number(inv?.hst) || 0,
@@ -254,7 +270,10 @@ async function createDraft({
   lineItems = [],
   notes = "",
   paidOnSiteAtCompletion = false,
-  disclaimers = []
+  disclaimers = [],
+  invoiceRole = "standard",
+  depositMeta = null,
+  holdUntilCompletion = false
 }) {
   // Brief 4 — auto-resolve customerId from email/phone if missing.
   // The completion cascade passes wo.customerId directly post-Brief 2,
@@ -335,6 +354,9 @@ async function createDraft({
     notes,
     paidOnSiteAtCompletion: paidOnSiteAtCompletion === true,
     disclaimers: Array.isArray(disclaimers) ? disclaimers : [],
+    invoiceRole,
+    depositMeta,
+    holdUntilCompletion: holdUntilCompletion === true,
     createdAt: now,
     updatedAt: now,
     history: [{
@@ -364,7 +386,7 @@ async function update(id, patch) {
   if (idx === -1) return null;
   const current = records[idx];
   const next = { ...current };
-  const allowed = ["status", "notes", "quickbooksInvoiceId", "quickbooksChargeId", "quickbooksPaymentId", "paymentToken", "portalToken", "customerSmsScheduledAt", "customerSmsSentAt", "customerReminderHistory", "customerJunkMailWarningSentAt", "customerJunkMailWarningHistory", "customerName", "customerEmail", "customerPhone", "address"];
+  const allowed = ["status", "notes", "quickbooksInvoiceId", "quickbooksChargeId", "quickbooksPaymentId", "paymentToken", "portalToken", "customerSmsScheduledAt", "customerSmsSentAt", "customerReminderHistory", "customerJunkMailWarningSentAt", "customerJunkMailWarningHistory", "customerName", "customerEmail", "customerPhone", "address", "holdUntilCompletion"];
   for (const key of allowed) {
     if (patch && Object.prototype.hasOwnProperty.call(patch, key)) next[key] = patch[key];
   }

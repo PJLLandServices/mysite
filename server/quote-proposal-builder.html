@@ -266,6 +266,35 @@
             <div><span>HST (13%)</span><strong id="pbHst">$0.00</strong></div>
             <div class="pb-total-row"><span>Total CAD</span><strong id="pbTotal">$0.00</strong></div>
           </div>
+
+          <!-- Threshold deposit (Jul 2026). Under threshold: compact note +
+               "add anyway" link. At/above: full panel, toggle defaults ON. -->
+          <div class="pb-deposit" id="pbDeposit" hidden>
+            <p class="pb-dep-under" id="pbDepUnder" hidden>
+              <span id="pbDepUnderText"></span>
+              <a href="#" id="pbDepAddAnyway">Add a deposit anyway</a>
+            </p>
+            <div class="pb-dep-panel" id="pbDepPanel" hidden>
+              <p class="pb-dep-head" id="pbDepHead"></p>
+              <label class="pb-dep-toggle">
+                <input type="checkbox" id="pbDepEnabled">
+                <span>Request deposit</span>
+              </label>
+              <div class="pb-dep-controls" id="pbDepControls" hidden>
+                <div class="pb-dep-typerow">
+                  <label><input type="radio" name="pbDepType" value="percent"> Percentage (%)</label>
+                  <label><input type="radio" name="pbDepType" value="fixed"> Fixed amount ($)</label>
+                  <input type="number" id="pbDepValue" min="0" step="1" inputmode="decimal" aria-label="Deposit value">
+                </div>
+                <div class="pb-dep-labels">
+                  <label><span>Deposit due</span><input type="text" id="pbDepDueLabel" maxlength="80" placeholder="due at scheduling"></label>
+                  <label><span>Balance due</span><input type="text" id="pbDepBalanceLabel" maxlength="80" placeholder="due on completion"></label>
+                </div>
+              </div>
+              <p class="pb-dep-readout" id="pbDepReadout"></p>
+              <p class="pb-dep-stage" id="pbDepStage" hidden></p>
+            </div>
+          </div>
         </section>
 
         <!-- Bottom action bar -->

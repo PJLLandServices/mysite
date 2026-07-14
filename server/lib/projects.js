@@ -1389,6 +1389,25 @@ async function completionPreflight(projectId) {
     }
   }
 
+  // Threshold deposit — the source quote's deposit invoice must be paid
+  // before completion can bill the balance. Blocker (not warning) so the
+  // admin has to consciously override; the existing allowOverride path
+  // is the override the brief asks for. On override, the cascade issues
+  // the balance invoice with the deposit shown as due separately.
+  if (proj.sourceQuoteId) {
+    try {
+      const quotesLib = require("./quotes");
+      const q = await quotesLib.get(proj.sourceQuoteId);
+      if (q?.deposit?.enabled === true && q.status === "accepted" &&
+          q.deposit.stage !== "deposit_paid" && q.deposit.stage !== "awaiting_balance_payment" && q.deposit.stage !== "closed") {
+        checks.blockers.push({
+          key: "deposit_unpaid",
+          message: `Deposit${q.deposit.depositInvoiceId ? ` invoice ${q.deposit.depositInvoiceId}` : ""} for quote ${q.id} hasn't been paid yet ($${(Number(q.deposit.snapshot?.amount) || Number(q.deposit.amount) || 0).toFixed(2)}).`
+        });
+      }
+    } catch (err) { /* tolerate — a quote-read hiccup must not block completion */ }
+  }
+
   return checks;
 }
 

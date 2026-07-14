@@ -554,6 +554,14 @@ async function runProjectFinalCascade(project, opts = {}) {
     }
   }
 
+  // Threshold deposit — if the source quote requested a deposit, the
+  // completion invoice must account for it: a held balance invoice
+  // (created when the deposit was paid) is REUSED as the final invoice,
+  // and a T&M rollup gets the deposit shown as a credit line. depositCtx
+  // is null for legacy quotes / disabled deposits — zero behaviour change.
+  const depositsLib = require("./deposits");
+  const depositCtx = await depositsLib.depositContextForQuote(project.sourceQuoteId);
+
   // Build the line items based on billing mode.
   let lineItems = [];
   let billingNote = "";
@@ -620,12 +628,60 @@ async function runProjectFinalCascade(project, opts = {}) {
     };
   }
 
-  // Create the invoice. Project invoices skip the WO linkage — invoice
-  // links back to the project via sourceProjectId instead.
+  // Create (or reuse) the invoice. Project invoices skip the WO linkage
+  // — invoice links back to the project via sourceProjectId instead.
   const completedAt = new Date().toISOString();
   let invoice = null;
   let invoiceDraftError = null;
-  if (lineItems.length) {
+  let reusedBalanceInvoice = false;
+
+  if (depositCtx && depositCtx.balanceInvoice && depositCtx.balanceInvoice.status !== "void") {
+    // Deposit was paid earlier → the held balance invoice IS the final
+    // invoice. Clear the hold so it becomes sendable; do NOT draft a
+    // second invoice (that would double-bill the job).
+    try {
+      invoice = (await invoices.update(depositCtx.balanceInvoice.id, { holdUntilCompletion: false })) || depositCtx.balanceInvoice;
+      reusedBalanceInvoice = true;
+      billingNote = `${billingNote}${billingNote ? " — " : ""}balance invoice ${invoice.id} (deposit ${depositCtx.depositInvoice?.id || ""} paid)`;
+    } catch (err) {
+      invoiceDraftError = err?.message || "balance-invoice reuse failed";
+      console.warn("[project-cascade] balance invoice reuse failed:", invoiceDraftError);
+    }
+  } else if (depositCtx && depositCtx.depositInvoice && project.billingMode !== "time_and_material") {
+    // Deposit invoice exists but the balance invoice doesn't yet —
+    // either the deposit is still unpaid (admin overrode the preflight
+    // blocker) or it settled between preflight and now. Issue the
+    // balance invoice from the quote snapshot, deposit shown as paid or
+    // as due separately.
+    try {
+      invoice = await depositsLib.createBalanceInvoice(depositCtx.quote, depositCtx.depositInvoice, {
+        depositPaid: depositCtx.depositInvoice.status === "paid",
+        projectId: project.id
+      });
+      invoice = (await invoices.update(invoice.id, { holdUntilCompletion: false })) || invoice;
+      billingNote = `${billingNote}${billingNote ? " — " : ""}balance invoice (deposit ${depositCtx.depositInvoice.status === "paid" ? "paid" : "still owing on " + depositCtx.depositInvoice.id})`;
+    } catch (err) {
+      invoiceDraftError = err?.message || "balance-invoice draft failed";
+      console.warn("[project-cascade] balance invoice draft failed:", invoiceDraftError);
+    }
+  } else if (lineItems.length) {
+    // T&M with a deposit: the balance couldn't be known until now, so
+    // the deposit rides the rollup as a credit line and this invoice
+    // becomes the balance invoice.
+    const tAndMDeposit = depositCtx && depositCtx.depositInvoice && project.billingMode === "time_and_material";
+    if (tAndMDeposit) {
+      const depInv = depositCtx.depositInvoice;
+      const paid = depInv.status === "paid";
+      lineItems.push({
+        key: "deposit_credit",
+        label: paid
+          ? `Less deposit paid — invoice ${depInv.id}${depInv.paidAt ? ` (paid ${String(depInv.paidAt).slice(0, 10)})` : ""}`
+          : `Less deposit — invoice ${depInv.id} (due separately)`,
+        qty: 1,
+        price: -Number(depInv.subtotal || 0),
+        lineTotal: -Number(depInv.subtotal || 0)
+      });
+    }
     try {
       invoice = await invoices.createDraft({
         woId: project.finalWoId || null,
@@ -640,12 +696,49 @@ async function runProjectFinalCascade(project, opts = {}) {
         lineItems,
         notes: `Project ${project.id} — ${billingNote}`,
         paidOnSiteAtCompletion: false,
-        disclaimers: []
+        disclaimers: [],
+        ...(tAndMDeposit ? {
+          invoiceRole: "balance",
+          depositMeta: {
+            quoteId: depositCtx.quote.id,
+            depositInvoiceId: depositCtx.depositInvoice.id,
+            depositAmount: Number(depositCtx.depositInvoice.total) || 0,
+            depositPaidAt: depositCtx.depositInvoice.paidAt || null,
+            grandTotal: Number(depositCtx.deposit?.snapshot?.grandTotal) || Number(depositCtx.quote.total) || 0
+          }
+        } : {})
       });
     } catch (err) {
       invoiceDraftError = err?.message || "createDraft threw";
       console.warn("[project-cascade] invoice draft failed:", invoiceDraftError);
     }
+  }
+
+  // Deposit lifecycle: link the balance invoice + move the stage.
+  // awaiting_balance_payment once the deposit is settled; a still-unpaid
+  // deposit (override completion) stays awaiting_deposit with both
+  // invoices outstanding.
+  if (depositCtx && invoice) {
+    try {
+      const quotesLib = require("./quotes");
+      const depositSettled = depositCtx.depositInvoice?.status === "paid";
+      await quotesLib.updateDepositLifecycle(depositCtx.quote.id, {
+        stage: depositSettled ? "awaiting_balance_payment" : "awaiting_deposit",
+        balanceInvoiceId: invoice.id
+      }, { note: `Project ${project.id} completed — balance invoice ${invoice.id}${reusedBalanceInvoice ? " released" : " created"}` });
+    } catch (err) { console.warn("[project-cascade] deposit lifecycle update failed:", err?.message); }
+  }
+
+  // Auto-send the completion invoice when the deposits setting asks for
+  // it (applies to balance invoices AND ordinary finals — the setting is
+  // off by default, so existing behaviour is unchanged until Patrick
+  // opts in). Failure-tolerant: a send hiccup leaves a normal draft.
+  if (invoice && invoice.status === "draft" && (await depositsLib.autoSendBalanceEnabled())) {
+    try {
+      const sent = await depositsLib.sendInvoiceNow(invoice.id);
+      if (sent.ok && sent.invoice) invoice = sent.invoice;
+      if (sent.warning) console.warn("[project-cascade] auto-send warning:", sent.warning);
+    } catch (err) { console.warn("[project-cascade] auto-send failed:", err?.message); }
   }
 
   // Service record on the property.

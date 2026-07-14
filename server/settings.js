@@ -34,12 +34,75 @@ async function load() {
   document.getElementById("settingsLoading").hidden = true;
   document.getElementById("adminDefaultsCard").hidden = false;
   document.getElementById("contactInfoCard").hidden = false;
+  document.getElementById("depositsCard").hidden = false;
   document.getElementById("auditCard").hidden = false;
   document.getElementById("icalCard").hidden = false;
   renderGrid();
   renderAudit();
   renderIcalFeed();
   renderContactInfo();
+  renderDeposits();
+}
+
+// Quote-deposits card. Threshold + basis + default type/value +
+// auto-send-balance toggle. Save stays disabled until something differs
+// from the loaded settings, mirroring the contact-info card's pattern.
+function renderDeposits() {
+  const dep = currentSettings?.deposits || {};
+  const threshold = document.getElementById("depThreshold");
+  const basis = document.getElementById("depBasis");
+  const type = document.getElementById("depDefaultType");
+  const value = document.getElementById("depDefaultValue");
+  const autoSend = document.getElementById("depAutoSendBalance");
+  const save = document.getElementById("depositsSave");
+  const status = document.getElementById("depositsStatus");
+  if (!threshold || !save) return;
+
+  threshold.value = dep.threshold != null ? dep.threshold : 10000;
+  basis.value = dep.thresholdBasis || "total_incl_tax";
+  type.value = dep.defaultType || "percent";
+  value.value = dep.defaultValue != null ? dep.defaultValue : 40;
+  autoSend.checked = dep.autoSendBalanceOnCompletion === true;
+  save.disabled = true;
+  if (status) status.textContent = "";
+
+  const differs = () =>
+    Number(threshold.value) !== Number(dep.threshold) ||
+    basis.value !== dep.thresholdBasis ||
+    type.value !== dep.defaultType ||
+    Number(value.value) !== Number(dep.defaultValue) ||
+    autoSend.checked !== (dep.autoSendBalanceOnCompletion === true);
+
+  [threshold, basis, type, value, autoSend].forEach((elx) => {
+    elx.oninput = elx.onchange = () => { save.disabled = !differs(); };
+  });
+
+  save.onclick = async () => {
+    save.disabled = true;
+    status.textContent = "Saving…";
+    try {
+      const r = await fetch("/api/settings/deposits", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          threshold: Number(threshold.value),
+          thresholdBasis: basis.value,
+          defaultType: type.value,
+          defaultValue: Number(value.value),
+          autoSendBalanceOnCompletion: autoSend.checked
+        })
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok || !data.ok) throw new Error((data.errors || ["Couldn't save."]).join(" "));
+      currentSettings = data.settings;
+      status.textContent = "Saved.";
+      renderDeposits();
+      renderAudit();
+    } catch (err) {
+      status.textContent = err.message || "Save failed.";
+      save.disabled = false;
+    }
+  };
 }
 
 // Contact-info card. Reads the customer-facing support phone from the

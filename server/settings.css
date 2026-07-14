@@ -149,3 +149,8 @@
 
 .settings-export-links { display: flex; gap: 10px; flex-wrap: wrap; }
 .settings-export-links .settings-save { display: inline-block; text-decoration: none; }
+
+/* Quote-deposits card — type selector + value input side by side. */
+.settings-deposit-pair { display: flex; gap: 8px; }
+.settings-deposit-pair select { flex: 0 0 auto; }
+.settings-deposit-pair input { flex: 1 1 auto; min-width: 90px; }

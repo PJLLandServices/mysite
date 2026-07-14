@@ -170,8 +170,87 @@ const SCOPE_PROTECTED_FIELDS = [
   "total",
   "type",
   "pdfOptions",
-  "quoteNumberDisplay"
+  "quoteNumberDisplay",
+  // Deposit terms are part of the offer the customer signs — frozen with
+  // the rest of the pricing once the proposal leaves draft. Lifecycle
+  // fields (stage / invoice ids) are server-managed and flow through
+  // updateDepositLifecycle, never through a client PATCH.
+  "deposit"
 ];
+
+// Deposit terms (threshold-deposit brief, Jul 2026).
+const DEPOSIT_TYPES = ["percent", "fixed"];
+const DEPOSIT_STAGES = [
+  "awaiting_deposit",       // accepted, deposit invoice sent, not yet paid
+  "deposit_paid",           // deposit invoice paid, balance invoice held
+  "awaiting_balance_payment", // project complete, balance invoice out
+  "closed"                  // balance paid
+];
+const DEFAULT_DEPOSIT_DUE_LABEL = "due at scheduling";
+const DEFAULT_DEPOSIT_BALANCE_LABEL = "due on completion";
+
+function blankDeposit() {
+  return {
+    enabled: false,
+    // configured — true once an admin save has explicitly touched the
+    // deposit block. Lets the builder distinguish "admin decided OFF"
+    // from "never looked at it" so the over-threshold default-ON prompt
+    // only pre-fills untouched quotes.
+    configured: false,
+    type: "percent",
+    value: 40,
+    amount: 0,               // computed $ (2dp) — server math only
+    balance: 0,              // grandTotal - amount, never < 0
+    dueLabel: DEFAULT_DEPOSIT_DUE_LABEL,
+    balanceLabel: DEFAULT_DEPOSIT_BALANCE_LABEL,
+    // ---- lifecycle (server-managed) ----
+    stage: null,             // one of DEPOSIT_STAGES once accepted
+    snapshot: null,          // { amount, balance, grandTotal, at } frozen at acceptance
+    depositInvoiceId: null,
+    balanceInvoiceId: null
+  };
+}
+
+// Recompute amount/balance from the quote's grand total. Percent is
+// clamped 0–100, fixed is clamped 0–grandTotal; balance can never go
+// negative. Cents-rounded. Never trusts client math (§2 of the brief).
+function computeDepositFigures(total, deposit) {
+  const round2 = (n) => Math.round(n * 100) / 100;
+  const grand = Number(total) || 0;
+  const d = deposit || {};
+  if (!d.enabled) return { amount: 0, balance: round2(grand) };
+  let amount = 0;
+  if (d.type === "fixed") {
+    amount = Math.min(Math.max(Number(d.value) || 0, 0), grand);
+  } else {
+    const pct = Math.min(Math.max(Number(d.value) || 0, 0), 100);
+    amount = grand * (pct / 100);
+  }
+  amount = round2(amount);
+  const balance = Math.max(0, round2(grand - amount));
+  return { amount, balance };
+}
+
+// Sanitize a client deposit patch onto the prior deposit block. Only the
+// TERMS move (enabled/type/value/labels) — lifecycle fields always carry
+// over from `prior` untouched.
+function normalizeDepositPatch(raw, prior) {
+  const base = prior && typeof prior === "object" ? prior : blankDeposit();
+  const r = raw && typeof raw === "object" ? raw : {};
+  const cleanLabel = (v, dflt) => {
+    const s = String(v == null ? "" : v).replace(/[\u0000-\u001F\u007F]+/g, " ").trim().slice(0, 80);
+    return s || dflt;
+  };
+  return {
+    ...base,
+    enabled: r.enabled === true,
+    configured: true,
+    type: DEPOSIT_TYPES.includes(r.type) ? r.type : base.type,
+    value: Number.isFinite(Number(r.value)) && Number(r.value) >= 0 ? Number(r.value) : base.value,
+    dueLabel: cleanLabel(r.dueLabel, DEFAULT_DEPOSIT_DUE_LABEL),
+    balanceLabel: cleanLabel(r.balanceLabel, DEFAULT_DEPOSIT_BALANCE_LABEL)
+  };
+}
 
 const DEFAULT_VALIDITY_DAYS = 30;
 // Project proposals get a longer default validity — commercial buyers
@@ -279,6 +358,14 @@ function blankQuote() {
     hst: 0,
     total: 0,
     currency: "CAD",
+
+    // Threshold-based deposit (Jul 2026). Terms (enabled/type/value/
+    // labels) are admin-set in the builder and frozen with the rest of
+    // the pricing at send; amount/balance are ALWAYS recomputed
+    // server-side from the grand total. Lifecycle fields (stage,
+    // snapshot, invoice ids) are written only by updateDepositLifecycle
+    // as the acceptance → deposit invoice → balance invoice flow runs.
+    deposit: blankDeposit(),
 
     // Narrative content block key (Smart Controller Upgrade brief,
     // 2026-06-12). When set on an ai_repair_quote (currently only
@@ -480,6 +567,10 @@ function hydrate(q) {
     signature: { ...base.signature, ...(q?.signature || {}) },
     approval: { ...base.approval, ...(q?.approval || {}), sentVia: Array.isArray(q?.approval?.sentVia) ? q.approval.sentVia : [] },
     lineItems: Array.isArray(q?.lineItems) ? q.lineItems : [],
+    // Defensive default for records that pre-date the deposit schema —
+    // legacy quotes hydrate to enabled:false / configured:false, which
+    // renders exactly the old "due on completion" behaviour.
+    deposit: { ...blankDeposit(), ...(q?.deposit && typeof q.deposit === "object" ? q.deposit : {}) },
     decisions: Array.isArray(q?.decisions) ? q.decisions : [],
     workOrderIds: Array.isArray(q?.workOrderIds) ? q.workOrderIds : [],
     history: Array.isArray(q?.history) ? q.history : [],
@@ -998,6 +1089,18 @@ async function updateProposal(id, patch = {}, { by = "admin", note = "" } = {}) 
     q.hst = totals.hst;
     q.total = totals.total;
   }
+  if (Object.prototype.hasOwnProperty.call(patch, "deposit")) {
+    // Terms only — enabled/type/value/labels. Lifecycle fields carry
+    // over untouched (normalizeDepositPatch spreads the prior block).
+    q.deposit = normalizeDepositPatch(patch.deposit, q.deposit);
+  }
+  // Deposit $ figures derive from the grand total — recompute on EVERY
+  // save so a line-item edit (or bundle discount) can never leave a
+  // stale amount/balance behind (§6 of the brief).
+  {
+    const figures = computeDepositFigures(q.total, q.deposit);
+    q.deposit = { ...(q.deposit || blankDeposit()), amount: figures.amount, balance: figures.balance };
+  }
   if (patch.customRates && typeof patch.customRates === "object") {
     q.customRates = { ...q.customRates, ...patch.customRates };
   }
@@ -1377,6 +1480,11 @@ async function refreshLineItems(id, { lineItems, subtotal, hst, total } = {}) {
   q.subtotal = Number(subtotal) || 0;
   q.hst = Number(hst) || 0;
   q.total = Number(total) || 0;
+  // Keep deposit $ figures in step with the refreshed total.
+  {
+    const figures = computeDepositFigures(q.total, q.deposit);
+    q.deposit = { ...(q.deposit || blankDeposit()), amount: figures.amount, balance: figures.balance };
+  }
   q.history.push({
     ts: nowIso(),
     action: "line_items_refreshed",
@@ -2033,6 +2141,52 @@ async function createRevision(originalId, { by = "admin", note = "" } = {}) {
   return revision;
 }
 
+// ---- Deposit lifecycle (server-managed) ------------------------------
+//
+// The ONLY writer for deposit stage / snapshot / invoice-id fields.
+// Called by lib/deposits.js as the acceptance → deposit invoice →
+// balance invoice → completion flow progresses. Deliberately separate
+// from updateProposal so a client PATCH can never move the lifecycle.
+async function updateDepositLifecycle(id, patch = {}, { by = "system", note = "" } = {}) {
+  const records = await readAll();
+  const idx = records.findIndex((q) => q.id === id);
+  if (idx === -1) return null;
+  const q = records[idx];
+  const dep = { ...(q.deposit || blankDeposit()) };
+  if (Object.prototype.hasOwnProperty.call(patch, "stage")) {
+    if (patch.stage !== null && !DEPOSIT_STAGES.includes(patch.stage)) {
+      throw new Error(`Unknown deposit stage: ${patch.stage}`);
+    }
+    dep.stage = patch.stage;
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "snapshot")) {
+    dep.snapshot = patch.snapshot && typeof patch.snapshot === "object"
+      ? {
+          amount: Number(patch.snapshot.amount) || 0,
+          balance: Number(patch.snapshot.balance) || 0,
+          grandTotal: Number(patch.snapshot.grandTotal) || 0,
+          at: patch.snapshot.at || nowIso()
+        }
+      : null;
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "depositInvoiceId")) {
+    dep.depositInvoiceId = patch.depositInvoiceId || null;
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "balanceInvoiceId")) {
+    dep.balanceInvoiceId = patch.balanceInvoiceId || null;
+  }
+  q.deposit = dep;
+  q.history.push({
+    ts: nowIso(),
+    action: "deposit_lifecycle",
+    by,
+    note: note || `stage=${dep.stage || "—"}`
+  });
+  records[idx] = q;
+  await writeAll(records);
+  return q;
+}
+
 module.exports = {
   STATUSES,
   TYPES,
@@ -2092,5 +2246,11 @@ module.exports = {
   recordPortalSignAcceptance,
   stagePdfReturn,
   recordPdfReturnAcceptance,
-  createRevision
+  createRevision,
+  // Threshold deposits
+  DEPOSIT_TYPES,
+  DEPOSIT_STAGES,
+  blankDeposit,
+  computeDepositFigures,
+  updateDepositLifecycle
 };
