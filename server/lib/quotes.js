@@ -539,6 +539,20 @@ function blankQuote() {
     // or null. The file on disk is the source of truth for serving.
     proposalDocument: null,
 
+    // Auto-generated proposal page (Proposal HTML brief, 2026-07). When
+    // Patrick clicks "Generate customer page" the server renders the designed
+    // HTML from THIS quote's data (proposal-html.js) and writes it into the
+    // proposalDocument slot above — so these two fields just drive the
+    // generator, they don't serve anything themselves.
+    //   proposalTemplateKey — which per-service copy template to use
+    //     ("irrigation" …); null falls back to the default at generate time.
+    //   proposalHeroPhoto   — metadata for the hero background photo the
+    //     generator embeds: { bytes, uploadedAt, uploadedBy } or null. The
+    //     compressed image lives on disk at server/data/proposal-hero/<id>.jpg
+    //     (the source of truth).
+    proposalTemplateKey: null,
+    proposalHeroPhoto: null,
+
     // Audit trail — every status change appends an entry.
     history: [
       { ts: created, action: "created", by: "system", note: "" }
@@ -583,6 +597,10 @@ function hydrate(q) {
     billingMode: q?.billingMode || null,
     proposalSections: Array.isArray(q?.proposalSections) ? q.proposalSections : [],
     attachments: Array.isArray(q?.attachments) ? q.attachments : [],
+    // Auto-generated proposal page config (Proposal HTML brief, 2026-07) —
+    // defensive defaults for records that pre-date it.
+    proposalTemplateKey: typeof q?.proposalTemplateKey === "string" ? q.proposalTemplateKey : null,
+    proposalHeroPhoto: q?.proposalHeroPhoto && typeof q.proposalHeroPhoto === "object" ? q.proposalHeroPhoto : null,
     // Defensive default so legacy records (and partial hand-edits) always
     // carry all three pdfOptions keys (Brief D). The renderer also treats a
     // missing/odd value as the itemized default, belt-and-suspenders.
@@ -1377,6 +1395,43 @@ async function setProposalDocument(id, meta, { by = "admin" } = {}) {
   });
   records[idx] = q;
   await writeAll(records);
+  return q;
+}
+
+// Set the auto-generated-proposal-page config (Proposal HTML brief, 2026-07).
+// Patches only the keys provided: `templateKey` (a string, or null to clear)
+// and/or `heroPhoto` (a { bytes, uploadedAt, uploadedBy } meta object, or
+// null to clear). Like setProposalDocument this is display/config metadata,
+// not a scope-protected pricing field, so it is allowed on any status. The
+// caller writes/deletes the actual hero image file on disk. Returns the
+// updated record or null if not found.
+async function setProposalPageConfig(id, { templateKey, heroPhoto } = {}, { by = "admin" } = {}) {
+  if (!id) throw new Error("setProposalPageConfig needs id");
+  const records = await readAll();
+  const idx = records.findIndex((q) => q.id === id);
+  if (idx === -1) return null;
+  const q = records[idx];
+  const ts = nowIso();
+  let changed = false;
+  if (templateKey !== undefined) {
+    q.proposalTemplateKey = templateKey ? String(templateKey) : null;
+    changed = true;
+  }
+  if (heroPhoto !== undefined) {
+    q.proposalHeroPhoto = heroPhoto || null;
+    q.history.push({
+      ts,
+      action: heroPhoto ? "proposal_hero_photo_set" : "proposal_hero_photo_removed",
+      by,
+      note: ""
+    });
+    changed = true;
+  }
+  if (changed) {
+    q.updatedAt = ts;
+    records[idx] = q;
+    await writeAll(records);
+  }
   return q;
 }
 
@@ -2219,6 +2274,7 @@ module.exports = {
   markSentForApproval,
   persistFrozenPdf,
   setProposalDocument,
+  setProposalPageConfig,
   markAsPreview,
   markDraftPreview,
   convertPreviewToSent,

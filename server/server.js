@@ -77,6 +77,9 @@ const quoteRequests = require("./lib/quote-requests");
 const users = require("./lib/users");
 const magicTokens = require("./lib/magic-tokens");
 const proposalUnlock = require("./lib/proposal-unlock");
+const proposalHtml = require("./lib/proposal-html");
+const proposalData = require("./lib/proposal-data");
+const proposalTemplates = require("./lib/proposal-templates");
 const rateLimit = require("./lib/rate-limit");
 const antiBot = require("./lib/anti-bot");
 const bulkActions = require("./lib/bulk-actions");
@@ -709,6 +712,17 @@ function proposalDocPath(quoteId) {
   const safe = String(quoteId || "").replace(/[^A-Za-z0-9._-]/g, "");
   if (!safe) return null;
   return path.join(PROPOSAL_DOCS_DIR, `${safe}.html`);
+}
+
+// Auto-generated proposal page (Proposal HTML brief, 2026-07). The hero
+// background photo Patrick uploads is compressed once and kept here; the
+// generator reads it back and embeds it as a data URI, so the served page
+// stays self-contained. Same id-sanitizing guard as proposalDocPath.
+const PROPOSAL_HERO_DIR = path.join(DATA_DIR, "proposal-hero");
+function proposalHeroPath(quoteId) {
+  const safe = String(quoteId || "").replace(/[^A-Za-z0-9._-]/g, "");
+  if (!safe) return null;
+  return path.join(PROPOSAL_HERO_DIR, `${safe}.jpg`);
 }
 
 // Does this proposal carry a custom HTML document on disk? THIS is what
@@ -11015,6 +11029,156 @@ async function handleApi(req, res, pathname) {
       return sendJson(res, 200, { ok: true, quote: updated });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't remove the document."] });
+    }
+  }
+
+  // ---- Auto-generated proposal page (Proposal HTML brief, 2026-07) ------
+  //
+  // These three endpoints let Patrick generate the designed customer page
+  // straight from a project_proposal's own data instead of hand-authoring
+  // and uploading the HTML. They are ADDITIVE: generate simply renders the
+  // page and writes it into the SAME proposal-docs slot the upload endpoint
+  // uses, so the phone-gated /approve serve path (serveProposalDocIfUnlocked
+  // + injectProposalAcceptFooter) is unchanged.
+
+  // GET /api/proposal-templates — the per-service copy templates the
+  // builder's picker offers. Admin-gated (builder config, not customer).
+  if (pathname === "/api/proposal-templates" && req.method === "GET") {
+    const session = await requireAdmin(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+    return sendJson(res, 200, { ok: true, templates: proposalTemplates.listTemplates() });
+  }
+
+  // POST /api/quotes/:id/proposal-hero-photo — admin. Upload the hero
+  // background photo (the house). Compressed once with sharp to a ~1600px
+  // JPEG and kept on disk; the generator embeds it as a data URI. Body:
+  // { filename, data } where data is base64 of the raw image (mirrors the
+  // proposal-document / attachment upload shape).
+  const heroPhotoMatch = pathname.match(/^\/api\/quotes\/([^/]+)\/proposal-hero-photo$/);
+  if (heroPhotoMatch && req.method === "POST") {
+    const session = await requireAdmin(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+    try {
+      const quoteId = decodeURIComponent(heroPhotoMatch[1]);
+      const q = await quotes.get(quoteId);
+      if (!q) return sendJson(res, 404, { ok: false, errors: ["Quote not found."] });
+      if (q.type !== "project_proposal") {
+        return sendJson(res, 422, { ok: false, errors: ["Only a project proposal can carry a hero photo."] });
+      }
+      const payload = await parseRequestBody(req, { maxBytes: 30 * 1024 * 1024 });
+      const raw = Buffer.from(String(payload.data || ""), "base64");
+      if (!raw.length) return sendJson(res, 422, { ok: false, errors: ["The image was empty."] });
+      let jpeg;
+      try {
+        // rotate() honours EXIF orientation before we strip it; resize keeps
+        // aspect and never upscales; mozjpeg keeps the file small.
+        jpeg = await sharp(raw, { failOn: "none" }).rotate()
+          .resize({ width: 1600, withoutEnlargement: true })
+          .jpeg({ quality: 72, mozjpeg: true }).toBuffer();
+      } catch (imgErr) {
+        return sendJson(res, 422, { ok: false, errors: ["That doesn't look like an image we can read — try a JPG or PNG."] });
+      }
+      const heroPath = proposalHeroPath(q.id);
+      if (!heroPath) return sendJson(res, 400, { ok: false, errors: ["Bad quote id."] });
+      await fs.mkdir(PROPOSAL_HERO_DIR, { recursive: true });
+      await fs.writeFile(heroPath, jpeg);
+      const meta = { bytes: jpeg.length, uploadedAt: new Date().toISOString(), uploadedBy: session.uid || "admin" };
+      const updated = await quotes.setProposalPageConfig(q.id, { heroPhoto: meta }, { by: session.uid || "admin" });
+      return sendJson(res, 201, { ok: true, proposalHeroPhoto: meta, quote: updated });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't save the photo."] });
+    }
+  }
+
+  if (heroPhotoMatch && req.method === "DELETE") {
+    const session = await requireAdmin(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+    try {
+      const quoteId = decodeURIComponent(heroPhotoMatch[1]);
+      const q = await quotes.get(quoteId);
+      if (!q) return sendJson(res, 404, { ok: false, errors: ["Quote not found."] });
+      const heroPath = proposalHeroPath(quoteId);
+      if (heroPath) { try { await fs.unlink(heroPath); } catch (_) { /* already gone */ } }
+      const updated = await quotes.setProposalPageConfig(quoteId, { heroPhoto: null }, { by: session.uid || "admin" });
+      return sendJson(res, 200, { ok: true, quote: updated });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't remove the photo."] });
+    }
+  }
+
+  // POST /api/quotes/:id/generate-proposal-page — admin. Render the designed
+  // customer page from THIS quote's data and write it into the proposal-docs
+  // slot (the same file the phone-gated /approve serves). Body (optional):
+  // { templateKey } to pick/override the per-service copy template.
+  const generatePageMatch = pathname.match(/^\/api\/quotes\/([^/]+)\/generate-proposal-page$/);
+  if (generatePageMatch && req.method === "POST") {
+    const session = await requireAdmin(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+    try {
+      const quoteId = decodeURIComponent(generatePageMatch[1]);
+      const q = await quotes.get(quoteId);
+      if (!q) return sendJson(res, 404, { ok: false, errors: ["Quote not found."] });
+      if (q.type !== "project_proposal") {
+        return sendJson(res, 422, { ok: false, errors: ["Only a project proposal can generate a customer page."] });
+      }
+      const payload = await parseRequestBody(req, { maxBytes: 1 * 1024 * 1024 }).catch(() => ({}));
+      const requestedKey = payload && typeof payload.templateKey === "string" ? payload.templateKey : null;
+      const templateKey = requestedKey || q.proposalTemplateKey || "irrigation";
+      if (!proposalTemplates.isKnownTemplate(templateKey)) {
+        return sendJson(res, 422, { ok: false, errors: [`Unknown proposal template: ${templateKey}`] });
+      }
+      // v1 ships the sprinkler (light) renderer; other themes land as they're built.
+      const theme = proposalTemplates.loadRaw(templateKey).theme || "sprinkler";
+      if (theme !== "sprinkler") {
+        return sendJson(res, 422, { ok: false, errors: [`The "${templateKey}" proposal design isn't available yet — only irrigation for now.`] });
+      }
+
+      // Persist the chosen template so the builder remembers it next time.
+      if (requestedKey && requestedKey !== q.proposalTemplateKey) {
+        await quotes.setProposalPageConfig(q.id, { templateKey: requestedKey }, { by: session.uid || "admin" });
+      }
+
+      // Resolve customer/property (name, service address, phone) live, same
+      // as the PDF path, and load the hero photo back as a data URI.
+      const parties = await quoteRenderParties(q);
+      let heroPhoto = null;
+      if (q.proposalHeroPhoto) {
+        try {
+          const buf = await fs.readFile(proposalHeroPath(q.id));
+          heroPhoto = "data:image/jpeg;base64," + buf.toString("base64");
+        } catch (_) { /* metadata without a file — render without the photo */ }
+      }
+
+      const data = proposalData.buildProposalData(q, {
+        customer: parties.customer,
+        property: parties.property,
+        templateKey,
+        heroPhoto
+      });
+      const html = proposalHtml.renderSprinklerProposal(data);
+      const bytes = Buffer.byteLength(html, "utf8");
+
+      const docPath = proposalDocPath(q.id);
+      if (!docPath) return sendJson(res, 400, { ok: false, errors: ["Bad quote id."] });
+      await fs.mkdir(PROPOSAL_DOCS_DIR, { recursive: true });
+      await fs.writeFile(docPath, html, "utf8");
+      const meta = {
+        filename: `${q.id}.html`,
+        bytes,
+        uploadedAt: new Date().toISOString(),
+        uploadedBy: session.uid || "admin",
+        generated: true,
+        templateKey
+      };
+      const updated = await quotes.setProposalDocument(q.id, meta, { by: session.uid || "admin" });
+      return sendJson(res, 201, {
+        ok: true,
+        proposalDocument: meta,
+        previewUrl: `/approve/${encodeURIComponent(q.id)}`,
+        quote: updated
+      });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't generate the page."] });
     }
   }
 

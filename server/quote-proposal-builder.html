@@ -184,13 +184,41 @@
               <ul class="pb-attach-list" id="pbAttachList"></ul>
             </section>
 
+            <!-- Auto-generated customer page (Proposal HTML brief, 2026-07).
+                 Renders the designed, phone-gated proposal page straight from
+                 THIS quote's data — no hand-authoring. Writes into the same
+                 proposal-document slot below, so the phone gate + /approve
+                 serve path are unchanged. -->
+            <section class="pb-doc" id="pbGenCard">
+              <h3>Customer proposal page</h3>
+              <p class="pb-side-hint">Generate the designed page the customer sees — built automatically from this quote's pricing, line items, dates, and deposit. Add a photo of the property for the header.</p>
+              <label class="pb-gen-field">Design
+                <select id="pbGenTemplate"></select>
+              </label>
+              <label class="pb-upload-btn">
+                <input type="file" id="pbHeroInput" accept="image/*" hidden>
+                <span>+ Hero photo (the house)</span>
+              </label>
+              <div class="pb-doc-status" id="pbHeroStatus" hidden>
+                <p class="pb-doc-name"><span class="pb-doc-dot" aria-hidden="true"></span><span id="pbHeroName">Hero photo attached</span></p>
+                <p class="pb-doc-meta" id="pbHeroMeta"></p>
+                <div class="pb-doc-actions">
+                  <button type="button" class="pjl-btn pjl-btn-outline pjl-btn-sm" id="pbHeroRemove">Remove photo</button>
+                </div>
+              </div>
+              <button type="button" class="pjl-btn pjl-btn-primary" id="pbGenerate">Generate customer page</button>
+              <p class="pb-gen-result" id="pbGenResult" hidden></p>
+            </section>
+
             <!-- Proposal document (Phone-Gated Proposal Access, 2026-07).
                  The designed, self-contained HTML page the customer sees
                  behind the phone gate. When attached it REPLACES the
-                 standard generated layout for this proposal. -->
+                 standard generated layout for this proposal. Generating the
+                 page above writes here automatically; this manual upload is
+                 the fallback for a bespoke, hand-authored page. -->
             <section class="pb-doc">
               <h3>Proposal document</h3>
-              <p class="pb-side-hint">Optional. Drop in the designed HTML page (renders and all) and it becomes what the customer sees behind the phone gate — in place of the standard layout. Leave empty to use the standard layout.</p>
+              <p class="pb-side-hint">Set automatically when you generate the page above. Or, for a fully bespoke page, drop in your own designed HTML here and it becomes what the customer sees behind the phone gate. Leave empty to use the standard layout.</p>
               <label class="pb-upload-btn">
                 <input type="file" id="pbDocInput" accept="text/html,.html,.htm" hidden>
                 <span>+ Upload HTML document</span>

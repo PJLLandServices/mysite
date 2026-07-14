@@ -91,6 +91,15 @@
     docMeta: $("pbDocMeta"),
     docPreview: $("pbDocPreview"),
     docRemove: $("pbDocRemove"),
+    genCard: $("pbGenCard"),
+    genTemplate: $("pbGenTemplate"),
+    heroInput: $("pbHeroInput"),
+    heroStatus: $("pbHeroStatus"),
+    heroName: $("pbHeroName"),
+    heroMeta: $("pbHeroMeta"),
+    heroRemove: $("pbHeroRemove"),
+    generate: $("pbGenerate"),
+    genResult: $("pbGenResult"),
     gateCard: $("pbGateCard"),
     gateList: $("pbGateList"),
     gateWarn: $("pbGateWarn"),
@@ -271,6 +280,7 @@
     renderActiveSection();
     renderAttachments();
     renderProposalDoc();
+    renderGeneratePanel();
     renderLineItems();
     syncDepositPanel();
     renderTotals();
@@ -932,9 +942,120 @@
       }
       state.quote.proposalDocument = null;
       renderProposalDoc();
+      renderGeneratePanel();
       renderGate(); // gate just turned OFF — clear the lockout warning
     } catch (err) {
       showError(err.message || "Remove failed.");
+    }
+  });
+
+  // ---- Auto-generate customer page (Proposal HTML brief, 2026-07) -----
+  // Renders the designed page from THIS quote's data and writes it into the
+  // proposal-document slot above. Template picker + hero-photo upload +
+  // Generate button. Loaded once (templates) after the quote mounts.
+  async function loadProposalTemplates() {
+    if (state.proposalTemplatesLoaded) return;
+    try {
+      const r = await fetch(`/api/proposal-templates`, { cache: "no-store" });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok || !data.ok || !Array.isArray(data.templates)) return;
+      state.proposalTemplatesLoaded = true;
+      el.genTemplate.innerHTML = data.templates
+        .map((t) => `<option value="${escapeHtml(t.key)}">${escapeHtml(t.label)}</option>`)
+        .join("");
+      // Reflect the quote's saved choice (default: first option).
+      if (state.quote?.proposalTemplateKey) el.genTemplate.value = state.quote.proposalTemplateKey;
+    } catch (_) { /* picker is a convenience; failure is non-fatal */ }
+  }
+
+  function renderGeneratePanel() {
+    if (!el.genCard) return;
+    if (state.quote?.proposalTemplateKey && el.genTemplate.value !== state.quote.proposalTemplateKey) {
+      el.genTemplate.value = state.quote.proposalTemplateKey;
+    }
+    const hero = state.quote && state.quote.proposalHeroPhoto;
+    el.heroStatus.hidden = !hero;
+    if (hero) {
+      const kb = hero.bytes ? Math.round(hero.bytes / 1024) : 0;
+      const when = hero.uploadedAt ? new Date(hero.uploadedAt).toLocaleDateString() : "";
+      el.heroMeta.textContent = [kb ? `${kb} KB` : "", when ? `added ${when}` : ""].filter(Boolean).join(" · ");
+    }
+    // When the current document was auto-generated, say so and offer the link.
+    const doc = state.quote && state.quote.proposalDocument;
+    if (doc && doc.generated) {
+      el.genResult.hidden = false;
+      el.genResult.innerHTML =
+        `Generated. <a href="/approve/${encodeURIComponent(state.quote.id)}" target="_blank" rel="noopener">Preview the customer page →</a>`;
+    } else if (!el.generate.dataset.justRan) {
+      el.genResult.hidden = true;
+    }
+  }
+
+  el.heroInput.addEventListener("change", async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!/^image\//.test(file.type)) { showError("Choose an image (JPG or PNG)."); e.target.value = ""; return; }
+    if (file.size > 30 * 1024 * 1024) { showError("Photo too large — 30 MB cap."); e.target.value = ""; return; }
+    try {
+      const dataUrl = await new Promise((resolve, reject) => {
+        const fr = new FileReader();
+        fr.onload = () => resolve(fr.result);
+        fr.onerror = () => reject(new Error("Could not read file."));
+        fr.readAsDataURL(file);
+      });
+      const base64 = String(dataUrl).split(",")[1] || "";
+      const r = await fetch(`/api/quotes/${encodeURIComponent(state.quote.id)}/proposal-hero-photo`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ filename: file.name, data: base64 })
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok || !data.ok) { showError(data.errors?.[0] || `Upload failed (${r.status})`); return; }
+      state.quote.proposalHeroPhoto = data.proposalHeroPhoto;
+      renderGeneratePanel();
+    } catch (err) {
+      showError(err.message || "Upload failed.");
+    } finally {
+      e.target.value = "";
+    }
+  });
+
+  el.heroRemove.addEventListener("click", async () => {
+    try {
+      const r = await fetch(`/api/quotes/${encodeURIComponent(state.quote.id)}/proposal-hero-photo`, { method: "DELETE" });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok || !data.ok) { showError(data.errors?.[0] || "Remove failed."); return; }
+      state.quote.proposalHeroPhoto = null;
+      renderGeneratePanel();
+    } catch (err) {
+      showError(err.message || "Remove failed.");
+    }
+  });
+
+  el.generate.addEventListener("click", async () => {
+    const btn = el.generate;
+    const prev = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = "Generating…";
+    try {
+      const r = await fetch(`/api/quotes/${encodeURIComponent(state.quote.id)}/generate-proposal-page`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ templateKey: el.genTemplate.value || undefined })
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok || !data.ok) { showError(data.errors?.[0] || `Generate failed (${r.status})`); return; }
+      state.quote.proposalDocument = data.proposalDocument;
+      if (data.proposalDocument?.templateKey) state.quote.proposalTemplateKey = data.proposalDocument.templateKey;
+      btn.dataset.justRan = "1";
+      renderProposalDoc();
+      renderGeneratePanel();
+      renderGate(); // gate just turned ON — surface the phone panel state
+    } catch (err) {
+      showError(err.message || "Generate failed.");
+    } finally {
+      btn.disabled = false;
+      btn.textContent = prev;
     }
   });
 
@@ -1339,6 +1460,7 @@
       loadProjectRates();
       loadGatePhones();
       loadDepositSettings();
+      loadProposalTemplates();
     } catch (err) {
       el.loading.remove();
       el.error.textContent = err.message || "Could not load proposal.";

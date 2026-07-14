@@ -1,0 +1,104 @@
+{
+  "key": "irrigation",
+  "theme": "sprinkler",
+  "label": "Irrigation system",
+  "title": "Irrigation System Proposal — PJL Land Services",
+  "kicker": "Irrigation System",
+  "hero": {
+    "h1Lead": "The property,",
+    "h1Accent": "watered right",
+    "sub": "A complete irrigation system for {{propertyAddress}} — zones matched to your property, run on a Hunter Hydrawise smart controller that waters to the weather."
+  },
+  "system": {
+    "heading": "How the system works",
+    "lead": "The system is designed for your property's real conditions — its flow, its planting, and its hardscape — not a generic template.",
+    "cards": [
+      { "title": "A controller that watches the weather", "body": "A Hunter Hydrawise smart controller pulls data from local weather stations and adjusts run times automatically — cutting back after rain, adding during heat and wind — so the landscape gets what it needs without wasting water." },
+      { "title": "Zones matched to your flow", "body": "Zones are separated by area and matched to the flow available from your plumbing, so every zone runs at the pressure it was designed for. Lawn and planted areas are zoned so each runs on its own schedule." },
+      { "title": "Water delivered to the root zone", "body": "Drip line delivers water directly to the roots of planted beds and trees, and rotary or spray heads cover the turf — each area on its own zone so nothing is over- or under-watered." },
+      { "title": "Installed with minimal disturbance", "body": "Sod-cutting and hand-trenching keep disturbance to a minimum — no open machine trenching. Lateral pipe sits below grade, drip tubing is pinned within the beds, and valve boxes are set in accessible, out-of-sight spots." }
+    ]
+  },
+  "schedule": {
+    "heading": "System schedule",
+    "lead": "What goes in the ground, and what it costs. Quantities are design estimates — actual amounts may be adjusted on site to achieve proper coverage at no change to the quoted price.",
+    "subtotalLabel": "Subtotal  —  complete system, installed",
+    "countNote": "The system is designed and priced as a <b>complete, hydraulically balanced unit</b>. Adding, removing, or relocating zones changes the design and is re-quoted. The price above installs the whole system as scoped."
+  },
+  "payment": {
+    "totalDue": {
+      "label": "Total due",
+      "when": "Due on completion",
+      "body": "Payable once the system is installed, tested, and walked through with you — every zone confirmed running at the coverage it was designed for."
+    },
+    "warranty": {
+      "label": "Warranty",
+      "value": "3 years",
+      "valueSmall": true,
+      "when": "Workmanship, from substantial completion",
+      "body": "Manufacturer warranty applies to all Hunter components as supplied. System must be seasonally maintained by PJL for warranty work to stand."
+    },
+    "deposit": {
+      "label": "Deposit to schedule",
+      "body": "Secures your install window and covers materials ordered for the job. Paid when we book the date."
+    },
+    "balance": {
+      "label": "Balance",
+      "when": "Due on completion",
+      "body": "Payable once the system is installed, tested, and walked through with you — every zone confirmed running at the coverage it was designed for."
+    }
+  },
+  "scope": {
+    "heading": "What the price covers",
+    "lead": "A complete install, priced for reasonable access to all areas of the property.",
+    "includes": [
+      "System design matched to your property's flow and conditions",
+      "All zones, heads, drip line, valves and fittings as scheduled above",
+      "Hunter Hydrawise smart controller and flow sensor",
+      "Dedicated irrigation supply installed off the residential water meter",
+      "Sod-cut and hand-trenched installation to minimize disturbance",
+      "Public utility locates arranged through Ontario One Call before work begins"
+    ],
+    "excludes": [
+      "A working exterior 120V receptacle and 2.4&nbsp;GHz Wi-Fi at the controller (by homeowner)",
+      "Marking of private underground services — pool plumbing/gas/electrical, waterfall lines, landscape lighting, invisible fence, septic (by homeowner)",
+      "Reconstruction of interlocking, retaining walls, or other hardscape removed for access",
+      "Restoration of stress or decline in existing plant material within worked beds",
+      "Seasonal winterization (available separately; required to keep warranty valid)"
+    ]
+  },
+  "terms": {
+    "heading": "Site conditions & the fine print",
+    "clauses": [
+      {
+        "title": "Working an established property",
+        "bodyHtml": "Installing irrigation into a planted property means working around established root systems and existing hardscape. Sod-cutting and hand-trenching keep disturbance to a minimum, but some is unavoidable.",
+        "points": [
+          "Minor settling and temporary turf stress along install lines is normal and typically recovers within one growing season.",
+          "Where irrigation is installed within mature beds and root zones at the homeowner's direction, PJL is not responsible for stress or decline of existing plant material from that work.",
+          "PJL is not responsible for damage to private underground services that were not marked prior to the start of work.",
+          "Hardscape removed for access may be taken up by PJL, but PJL is not responsible to recondition or reconstruct it; the area will be made safe for pedestrian traffic temporarily."
+        ]
+      },
+      {
+        "title": "Assumptions this price is based on",
+        "bodyHtml": "If any of these change, the design or price may need to be revisited.",
+        "points": [
+          "Design is based on water supply measured at the existing exterior hose bibs. If the dedicated supply delivers materially different flow or pressure once installed, zone configuration may be adjusted.",
+          "Head counts, drip footage, and final layout are design estimates; actual quantities may be adjusted on site to achieve proper coverage at no change to the quoted price.",
+          "Work is priced assuming reasonable access to all areas of the property for equipment and materials."
+        ]
+      },
+      {
+        "bodyHtml": "<b>Warranty.</b> Three (3) years on workmanship from the date of substantial completion. Manufacturer warranty applies to all Hunter components as supplied. Warranty does not cover freeze damage, damage from failure to winterize, vandalism, damage caused by third-party contractors or landscaping work, or damage from controller schedules modified by the homeowner or others. The system must be seasonally maintained by PJL Land Services for any warranty work to stand."
+      },
+      {
+        "bodyHtml": "<b>Changes to scope.</b> The system is designed and priced as a complete, hydraulically balanced unit. Any work outside the scope of this proposal will be quoted and approved in writing before it proceeds. This proposal is valid through {{validThrough}}. Prices in Canadian dollars."
+      }
+    ]
+  },
+  "close": {
+    "heading": "Ready when you are",
+    "body": "Approve this proposal and we'll book your install window and arrange utility locates before we break ground."
+  }
+}
