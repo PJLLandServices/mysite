@@ -1161,7 +1161,9 @@
       source: "project_rates",
       sourceKey: key,
       label: item.label,
-      description: "",
+      // Catalog `detail` (a short spec line) seeds the line description, which
+      // becomes the schedule's Detail column in the generated proposal. Editable.
+      description: item.detail || "",
       unit: item.unit || "",
       qty: 1,
       price: Number(item.price) || 0,

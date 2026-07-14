@@ -79,13 +79,20 @@ function glyphForIndex(i) {
   return GLYPH_CYCLE[Math.min(i, GLYPH_CYCLE.length - 1)] || "small";
 }
 
-// A line item's Qty cell: the quantity plus a de-prefixed unit ("per_ft" →
-// "ft"), e.g. "15 ft" or "1". Mirrors quote-pdf's unit handling.
+// A line item's Qty cell: the quantity plus a de-prefixed, display-friendly
+// unit ("per_ft" → "ft", "per_zone" → "zones"). "each"/"flat"/"unit" carry
+// no meaning as a count label, so those show the bare number ("1"). Count
+// units pluralize when qty ≠ 1 ("3 zones", "1 zone"). Mirrors quote-pdf's
+// per_ prefix handling but tuned for the customer-facing schedule.
+const QTY_UNIT_NOISE = new Set(["each", "flat", "unit", "ea", "lump", "lot", ""]);
+const QTY_UNIT_PLURAL = /^(zone|tree|head|hour|day|valve|controller|rotor|light|fixture)$/i;
 function qtyText(li) {
-  const qty = Number(li.qty);
-  const q = Number.isFinite(qty) ? String(qty) : String(li.qty || "");
-  const unit = li.unit ? String(li.unit).replace(/^per_/, "") : "";
-  return unit ? `${q} ${unit}` : q;
+  const n = Number(li.qty);
+  const q = Number.isFinite(n) ? String(n) : String(li.qty || "");
+  let unit = li.unit ? String(li.unit).replace(/^per_/, "").trim() : "";
+  if (QTY_UNIT_NOISE.has(unit.toLowerCase())) return q;
+  if (Number.isFinite(n) && n !== 1 && QTY_UNIT_PLURAL.test(unit)) unit += "s";
+  return `${q} ${unit}`;
 }
 
 // Build the schedule rows from the quote's line items. `summary` mode (or a

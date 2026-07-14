@@ -1,5 +1,5 @@
 {
-  "_doc": "Internal project-rates catalog. ADMIN-ONLY. NEVER exposed to public site, AI chat, customer portal, or tech mode. Used exclusively by the project_proposal quote builder for commercial / install / lighting / renovation / change-order line items. Per-customer negotiated rates (customer.negotiatedRates) override these defaults at quote creation and snapshot onto the quote (quote.customRates). Excluded from scripts/lint-no-hardcoded-prices.mjs by file extension (the lint scanner only walks root-level .html). NEVER copy these into pricing.json — pricing.json is the public catalog and must remain so. Brief 1 (May 2026).",
+  "_doc": "Internal project-rates catalog. ADMIN-ONLY. NEVER exposed to public site, AI chat, customer portal, or tech mode. Used exclusively by the project_proposal quote builder for commercial / install / lighting / renovation / change-order line items. Per-customer negotiated rates (customer.negotiatedRates) override these defaults at quote creation and snapshot onto the quote (quote.customRates). Excluded from scripts/lint-no-hardcoded-prices.mjs by file extension (the lint scanner only walks root-level .html). NEVER copy these into pricing.json — pricing.json is the public catalog and must remain so. Brief 1 (May 2026). An item may carry an optional `detail` — a short spec line copied into the line item's description and shown under the component name in the generated proposal schedule (Proposal HTML, Jul 2026). `sprinkler_inclusion` items with price 0 are selectable placeholders whose price Patrick sets per quote.",
   "currency": "CAD",
   "items": {
     "spring_open_commercial_inspection": {
@@ -37,6 +37,69 @@
       "price": 395,
       "unit": "per_zone",
       "category": "install_labour_material"
+    },
+    "rotor_zone_per_zone": {
+      "label": "Rotor zones",
+      "detail": "Rotary heads · turf & open areas",
+      "price": 395,
+      "unit": "per_zone",
+      "category": "sprinkler_inclusion"
+    },
+    "popup_spray_zone_per_zone": {
+      "label": "Pop-up spray zones",
+      "detail": "Pop-up spray heads · borders & tight areas",
+      "price": 395,
+      "unit": "per_zone",
+      "category": "sprinkler_inclusion"
+    },
+    "drip_zone_per_zone": {
+      "label": "Drip zones",
+      "detail": "Root-zone drip line · beds & trees",
+      "price": 395,
+      "unit": "per_zone",
+      "category": "sprinkler_inclusion"
+    },
+    "water_source_dedicated": {
+      "label": "Dedicated water source",
+      "detail": "New dedicated supply tapped off the water meter",
+      "price": 0,
+      "unit": "flat",
+      "category": "sprinkler_inclusion"
+    },
+    "water_source_existing": {
+      "label": "Existing water source",
+      "detail": "Tie-in to the property's existing irrigation supply",
+      "price": 0,
+      "unit": "flat",
+      "category": "sprinkler_inclusion"
+    },
+    "water_source_hose_bib": {
+      "label": "Existing hose bib",
+      "detail": "Connected to an existing exterior hose bib",
+      "price": 0,
+      "unit": "flat",
+      "category": "sprinkler_inclusion"
+    },
+    "smart_controller_hydrawise": {
+      "label": "Smart controller",
+      "detail": "Hunter Hydrawise · weather-based watering",
+      "price": 0,
+      "unit": "each",
+      "category": "sprinkler_inclusion"
+    },
+    "flow_meter_hydrawise": {
+      "label": "Flow meter",
+      "detail": "Hydrawise · real-time usage & leak flagging",
+      "price": 0,
+      "unit": "each",
+      "category": "sprinkler_inclusion"
+    },
+    "conduit_provision_per_ft": {
+      "label": "Conduit provision",
+      "detail": "Conduit sleeving run under hardscape",
+      "price": 0,
+      "unit": "per_ft",
+      "category": "sprinkler_inclusion"
     },
     "project_labour_per_hour": {
       "label": "Project labour — single-man crew, hourly",
