@@ -1116,7 +1116,7 @@ function compute(){
           <tr><td>Flow</td><td>${p.totalGPM.toFixed(1)} GPM</td></tr>
           <tr><td>Zones (under ${ceiling} GPM)</td><td>${p.zones}</td></tr>
         </table>
-        <div class="prescribe"><b>Prescription:</b> Area-wide <b>${esc(p.product.label)}</b> - ~${Math.round(p.areaDripFt)} ft on ${a.dripRowIn==null?18:a.dripRowIn}" rows${hasTrees?` + ${p.treeCount} tree${p.treeCount===1?'':'s'} (${treeBits.join(' + ')})`:''}, ${p.zones} zone${p.zones>1?'s':''} on ${p.zones>1?'their own':'its own'} pressure-regulated valve${p.zones>1?'s':''}.</div>`;
+        <div class="prescribe"><b>Prescription:</b> Area-wide <b>${esc(p.product.label)}</b> - ~${Math.round(p.areaDripFt)} ft on ${a.dripRowIn==null?18:a.dripRowIn}" rows${hasTrees?` + ${p.treeCount} tree${p.treeCount===1?'':'s'} (${treeBits.join(' + ')})`:''}, ${p.zones} zone${p.zones>1?'s':''} on ${p.zones>1?'their own':'its own'} zone valve${p.zones>1?'s':''}.</div>`;
       sb.innerHTML=sketch(a,p);
       totZones+=p.zones; maxZ=Math.max(maxZ,...p.zoneGPM);
       p.zoneGPM.forEach(g=>zoneList.push({area:a.name,gpm:g,family:'drip'}));
