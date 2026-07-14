@@ -61,10 +61,13 @@
     "includes": [
       "System design matched to your property's flow and conditions",
       "All zones, heads, drip line, valves and fittings as scheduled above",
-      "Hunter Hydrawise smart controller and flow sensor",
+      "Hunter Hydrawise smart controller",
       "Dedicated irrigation supply installed off the residential water meter",
       "Sod-cut and hand-trenched installation to minimize disturbance",
       "Public utility locates arranged through Ontario One Call before work begins"
+    ],
+    "includesFlowMeter": [
+      "Hydrawise flow sensor — real-time usage &amp; leak detection"
     ],
     "excludes": [
       "A working exterior 120V receptacle and 2.4&nbsp;GHz Wi-Fi at the controller (by homeowner)",

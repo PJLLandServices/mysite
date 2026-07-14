@@ -2035,8 +2035,15 @@ function desiredQuoteLines(){
     }
   });
   const N=zones.length;
+  // Flow-meter wording is driven entirely by the "Hydrawise flow sensor
+  // required" checkbox (readWaterSupply().flowSensorRequired), so every section
+  // stays consistent — no manual edits when a job has no flow meter.
+  const hasFlow = !!readWaterSupply().flowSensorRequired;
+  const mainlineDetail = hasFlow
+    ? 'New dedicated-supply mainline · Hunter Hydrawise flow-meter & leak detection'
+    : 'New dedicated-supply mainline off the water meter';
   const desired=[
-    {kind:'mainline', label:'System mainline', description:'New dedicated-supply mainline · Hunter Hydrawise flow-meter & leak detection', price:INSTALL_PRICING.baseByZones(N)},
+    {kind:'mainline', label:'System mainline', description:mainlineDetail, price:INSTALL_PRICING.baseByZones(N)},
     {kind:'controller', label:'Smart controller', description:`Hunter Hydrawise · sized for ${N} zone${N>1?'s':''} · weather-based watering`, price:INSTALL_PRICING.controllerByZones(N)}
   ];
   zones.forEach((z,i)=>desired.push({kind:'zone', num:i+1, label:`Zone ${i+1} — ${z.name}`, description:z.detail, price:INSTALL_PRICING.perZone}));
@@ -2072,8 +2079,13 @@ function mergeQuoteLines(existing, desired){
 function quoteSections(existing, N, areaNames){
   const list = Array.isArray(existing) ? existing : [];
   const find = k => list.find(s => s && s.kind === k);
-  const coverBody = `A fully automatic, water-efficient sprinkler system for your property — ${N} independently controlled watering zone${N>1?'s':''} covering ${areaNames||'the property'}, installed on a new dedicated mainline with Hunter Hydrawise smart control and flow-meter technology for leak detection and weather-based watering.`;
-  const scopeBody = `• Supply & install a new irrigation mainline, complete with a Hydrawise flow-meter for leak / flow monitoring.\n• Install and program a Hunter Hydrawise smart controller sized for ${N} zone${N>1?'s':''}.\n• Build ${N} watering zone${N>1?'s':''} — ${areaNames||'the property'} — each on its own valve for independent scheduling.\n• Pressure-test, commission and walk the system through with you.`;
+  const hasFlow = !!readWaterSupply().flowSensorRequired;
+  const controlBit = hasFlow ? 'and flow-meter technology for leak detection and weather-based watering' : 'for weather-based watering';
+  const coverBody = `A fully automatic, water-efficient sprinkler system for your property — ${N} independently controlled watering zone${N>1?'s':''} covering ${areaNames||'the property'}, installed on a new dedicated mainline with Hunter Hydrawise smart control ${controlBit}.`;
+  const mainlineBullet = hasFlow
+    ? '• Supply & install a new irrigation mainline, complete with a Hydrawise flow-meter for leak / flow monitoring.'
+    : '• Supply & install a new irrigation mainline off the water meter.';
+  const scopeBody = `${mainlineBullet}\n• Install and program a Hunter Hydrawise smart controller sized for ${N} zone${N>1?'s':''}.\n• Build ${N} watering zone${N>1?'s':''} — ${areaNames||'the property'} — each on its own valve for independent scheduling.\n• Pressure-test, commission and walk the system through with you.`;
   const cover=find('cover_summary'), scope=find('proposed_scope'), lineItemsSec=find('line_items'), acceptSec=find('acceptance_block');
   const out=[];
   out.push(cover ? Object.assign({}, cover, {title:'Your new irrigation system', body:coverBody}) : {kind:'cover_summary', title:'Your new irrigation system', body:coverBody});

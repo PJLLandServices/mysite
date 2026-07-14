@@ -232,6 +232,29 @@ function buildSeasonal(t, zones) {
   };
 }
 
+// ---- flow meter (conditional copy) -----------------------------------
+
+// Whether this system includes a Hydrawise flow meter/sensor. Driven off the
+// Site Builder's flow-sensor checkbox, which stamps the wording into the
+// mainline line — so a job WITHOUT a flow meter carries no flow wording and
+// every flow-meter mention (schedule detail, scope "included" list) drops out
+// together. "water meter" never matches (needs "flow" before meter/sensor).
+function hasFlowMeter(quote) {
+  return (Array.isArray(quote.lineItems) ? quote.lineItems : [])
+    .some((li) => /flow[\s-]?(meter|sensor)/i.test(`${li.label || ""} ${li.description || ""}`));
+}
+
+// Assemble the scope "included" list: the base items always, plus the
+// flow-meter items only when the system has one — inserted right after the
+// controller line so it reads naturally (falls back to appending).
+function scopeIncludes(scopeTemplate, flow) {
+  const base = Array.isArray(scopeTemplate.includes) ? [...scopeTemplate.includes] : [];
+  const extra = flow && Array.isArray(scopeTemplate.includesFlowMeter) ? scopeTemplate.includesFlowMeter : [];
+  if (!extra.length) return base;
+  const at = base.findIndex((x) => /controller/i.test(x));
+  return at === -1 ? [...base, ...extra] : [...base.slice(0, at + 1), ...extra, ...base.slice(at + 1)];
+}
+
 // ---- main -------------------------------------------------------------
 
 // Build the normalized proposal-data object the generator consumes.
@@ -300,7 +323,12 @@ function buildProposalData(quote, { customer = {}, property = {}, templateKey = 
     },
     payment: payment(quote, t, total),
     seasonal: buildSeasonal(t, zones),
-    scope: t.scope || { heading: "What the price covers", lead: "", includes: [], excludes: [] },
+    scope: {
+      heading: (t.scope && t.scope.heading) || "What the price covers",
+      lead: (t.scope && t.scope.lead) || "",
+      includes: scopeIncludes(t.scope || {}, hasFlowMeter(quote)),
+      excludes: (t.scope && t.scope.excludes) || []
+    },
     terms: t.terms || { heading: "Site conditions & the fine print", clauses: [] },
     close: {
       heading: (t.close && t.close.heading) || "Ready when you are",

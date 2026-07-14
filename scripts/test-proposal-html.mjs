@@ -119,6 +119,31 @@ eq(seasonalFor(5).zones, 5, "seasonal reports the zone count");
   ok(!/id="seasonal"[\s\S]*\{\{/.test(html), "no unresolved tokens in the seasonal section");
 }
 
+// ---- flow meter: conditional copy across sections --------------------
+function proposalWithMainline(mainlineDesc) {
+  return {
+    id: "Q-F", type: "project_proposal", createdAt: "2026-07-14", validUntil: "2026-10-12",
+    subtotal: 1000, hst: 130, total: 1130, deposit: { enabled: false }, pdfOptions: { lineItems: "itemized" },
+    lineItems: [
+      { label: "System mainline", description: mainlineDesc, qty: 1, price: 749 },
+      { label: "Zone 1 — Front", description: "Rotary heads · 6 heads", qty: 1, price: 549 }
+    ]
+  };
+}
+// WITH flow meter → mainline wording carries "flow-meter" → scope lists the flow sensor.
+{
+  const d = buildProposalData(proposalWithMainline("New dedicated-supply mainline · Hunter Hydrawise flow-meter & leak detection"), { customer: { name: "X" }, property: { address: "Y" }, templateKey: "irrigation" });
+  ok(d.scope.includes.some((i) => /flow sensor/i.test(i)), "flow present → scope lists the flow sensor");
+  ok(!d.scope.includes.some((i) => /controller and flow/i.test(i)), "controller line no longer hardcodes flow sensor");
+}
+// WITHOUT flow meter → no flow wording anywhere in the scope.
+{
+  const d = buildProposalData(proposalWithMainline("New dedicated-supply mainline off the water meter"), { customer: { name: "X" }, property: { address: "Y" }, templateKey: "irrigation" });
+  ok(!d.scope.includes.some((i) => /flow[\s-]?(meter|sensor)/i.test(i)), "no flow meter → scope has zero flow-sensor mentions");
+  const html = renderSprinklerProposal(d);
+  ok(!/flow[\s-]?(meter|sensor)/i.test(html), "no flow meter → generated HTML has no flow-meter/sensor wording at all");
+}
+
 // ---- report -----------------------------------------------------------
 console.log(`\nproposal-html tests: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
