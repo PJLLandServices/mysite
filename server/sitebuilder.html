@@ -2036,8 +2036,8 @@ function desiredQuoteLines(){
   });
   const N=zones.length;
   const desired=[
-    {kind:'mainline', label:'Sprinkler system — new mainline installed, complete with Hunter Hydrawise flow-meter technology', description:'New dedicated supply · Hydrawise flow-meter & leak detection', price:INSTALL_PRICING.baseByZones(N)},
-    {kind:'controller', label:`Smart controller — Hunter Hydrawise, sized for ${N} zone${N>1?'s':''}`, description:'Hunter Hydrawise · weather-based watering', price:INSTALL_PRICING.controllerByZones(N)}
+    {kind:'mainline', label:'System mainline', description:'New dedicated-supply mainline · Hunter Hydrawise flow-meter & leak detection', price:INSTALL_PRICING.baseByZones(N)},
+    {kind:'controller', label:'Smart controller', description:`Hunter Hydrawise · sized for ${N} zone${N>1?'s':''} · weather-based watering`, price:INSTALL_PRICING.controllerByZones(N)}
   ];
   zones.forEach((z,i)=>desired.push({kind:'zone', num:i+1, label:`Zone ${i+1} — ${z.name}`, description:z.detail, price:INSTALL_PRICING.perZone}));
   return {desired, N, areaNames:[...new Set(zones.map(z=>z.name))].join(', ')};
