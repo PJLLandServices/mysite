@@ -310,6 +310,22 @@ function generateQuotePdf(quote, opts = {}) {
   doc.text("Total CAD", colUnit, rowY, { width: 80, align: "right" });
   doc.text(fmt(total), colTotal, rowY, { width: 80, align: "right" });
 
+  // Deposit terms (threshold-deposit brief) — mirrored from the proposal
+  // renderer so a deposit-enabled repair/on-site quote states the split.
+  if (quote.deposit && quote.deposit.enabled === true) {
+    const dep = quote.deposit;
+    const valueBit = dep.type === "fixed" ? fmt(Number(dep.value) || 0) : `${Number(dep.value) || 0}%`;
+    rowY += 24;
+    doc.fillColor(PJL_MUTED).fontSize(10).font("Helvetica");
+    doc.text(`Deposit (${valueBit}, ${dep.dueLabel || "due at scheduling"})`, 60, rowY, { width: colUnit + 80 - 60, align: "right", lineBreak: false });
+    doc.fillColor(PJL_TEXT).font("Helvetica-Bold").text(fmt(dep.amount), colTotal, rowY, { width: 80, align: "right", lineBreak: false });
+    rowY += 16;
+    doc.fillColor(PJL_MUTED).font("Helvetica");
+    doc.text(`Balance (${dep.balanceLabel || "due on completion"})`, 60, rowY, { width: colUnit + 80 - 60, align: "right", lineBreak: false });
+    doc.fillColor(PJL_TEXT).font("Helvetica-Bold").text(fmt(dep.balance), colTotal, rowY, { width: 80, align: "right", lineBreak: false });
+    rowY += 4;
+  }
+
   rowY += 36;
   doc.font("Helvetica").fontSize(9).fillColor(PJL_MUTED);
   doc.text("Pricing snapshotted at quote creation. Future pricing changes do not alter accepted quotes.", 60, rowY, { width: doc.page.width - 120 });
@@ -928,8 +944,10 @@ function renderProposalLineItems(doc, quote, { MARGIN_X, contentWidth, heading =
 
   // Keep the whole totals block together — never strand a lone "Total
   // CAD" on a page by itself. The total ALWAYS renders (Brief D §3.2 —
-  // there is no option to hide it), in every mode.
-  const TOTALS_BLOCK_H = 130;
+  // there is no option to hide it), in every mode. Deposit terms add
+  // two more rows, so reserve the extra height up front.
+  const hasDeposit = quote.deposit && quote.deposit.enabled === true;
+  const TOTALS_BLOCK_H = hasDeposit ? 175 : 130;
   if (rowY + TOTALS_BLOCK_H > pageBottom()) {
     doc.addPage();
     rowY = doc.page.margins.top;
@@ -956,6 +974,33 @@ function renderProposalLineItems(doc, quote, { MARGIN_X, contentWidth, heading =
   doc.text("Total CAD", totalLabelX, rowY, { width: 70, align: "right" });
   doc.text(fmt(total), totalAmtX, rowY, { width: 80, align: "right" });
   doc.y = rowY + 28;
+
+  // Payment terms (threshold-deposit brief). Deposit quotes get the
+  // deposit/balance split under the total; everything else states the
+  // due-on-completion terms. Amounts come from the quote record —
+  // recomputed server-side on every save, frozen with the PDF at send.
+  rowY = doc.y;
+  if (hasDeposit) {
+    const dep = quote.deposit;
+    const valueBit = dep.type === "fixed" ? fmt(Number(dep.value) || 0) : `${Number(dep.value) || 0}%`;
+    // Wide right-aligned label zone — deposit labels are longer than
+    // "Subtotal", so they get the space from MARGIN_X+120 to the label
+    // edge instead of the 70pt Subtotal box.
+    const depLabelX = MARGIN_X + 120;
+    const depLabelW = (totalLabelX + 70) - depLabelX;
+    doc.fillColor(PJL_MUTED).fontSize(10).font("Helvetica");
+    doc.text(`Deposit (${valueBit}, ${dep.dueLabel || "due at scheduling"})`, depLabelX, rowY, { width: depLabelW, align: "right", lineBreak: false });
+    doc.fillColor(PJL_TEXT).font("Helvetica-Bold").text(fmt(dep.amount), totalAmtX, rowY, { width: 80, align: "right", lineBreak: false });
+    rowY += 16;
+    doc.fillColor(PJL_MUTED).font("Helvetica");
+    doc.text(`Balance (${dep.balanceLabel || "due on completion"})`, depLabelX, rowY, { width: depLabelW, align: "right", lineBreak: false });
+    doc.fillColor(PJL_TEXT).font("Helvetica-Bold").text(fmt(dep.balance), totalAmtX, rowY, { width: 80, align: "right", lineBreak: false });
+    doc.y = rowY + 24;
+  } else {
+    doc.fillColor(PJL_MUTED).fontSize(9).font("Helvetica-Oblique");
+    doc.text(`Total due: ${fmt(total)} — due on completion.`, MARGIN_X, rowY, { width: contentWidth, align: "right" });
+    doc.y = rowY + 20;
+  }
 
   if (quote.billingMode === "time_and_material") {
     doc.font("Helvetica-Oblique").fontSize(9).fillColor(PJL_MUTED);

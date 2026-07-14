@@ -657,6 +657,62 @@
   .pb-totals { max-width: none; margin-left: 0; }
 }
 
+/* ---- Threshold deposit panel (Jul 2026) ---- */
+.pb-deposit { margin-top: 14px; }
+.pb-dep-under {
+  font-size: 13px;
+  color: #6A6A60;
+  background: #FAFAF5;
+  border: 1px dashed #D8D8CE;
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin: 0;
+}
+.pb-dep-under a { color: #1B4D2E; font-weight: 600; }
+.pb-dep-panel {
+  border: 1px solid #C5DDB1;
+  background: #F4F9EE;
+  border-radius: 10px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.pb-dep-head { margin: 0; font-size: 13px; font-weight: 600; color: #1B4D2E; }
+.pb-dep-toggle { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; color: #1F2A22; cursor: pointer; }
+.pb-dep-toggle input { width: 18px; height: 18px; accent-color: #1B4D2E; cursor: pointer; }
+.pb-dep-controls { display: flex; flex-direction: column; gap: 8px; }
+.pb-dep-typerow { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; font-size: 13px; color: #1F2A22; }
+.pb-dep-typerow label { display: flex; align-items: center; gap: 5px; cursor: pointer; }
+.pb-dep-typerow input[type="radio"] { accent-color: #1B4D2E; }
+.pb-dep-typerow input[type="number"] {
+  width: 110px;
+  padding: 6px 8px;
+  border: 1px solid #D8D8CE;
+  border-radius: 6px;
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+}
+.pb-dep-labels { display: flex; gap: 10px; flex-wrap: wrap; }
+.pb-dep-labels label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: #6A6A60; flex: 1 1 180px; }
+.pb-dep-labels input {
+  padding: 6px 8px;
+  border: 1px solid #D8D8CE;
+  border-radius: 6px;
+  font-size: 13px;
+}
+.pb-dep-readout { margin: 0; font-size: 13px; color: #1F2A22; }
+.pb-dep-readout strong { color: #1B4D2E; font-variant-numeric: tabular-nums; }
+.pb-dep-stage {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: #7A5A00;
+  background: #FFF7E0;
+  border-radius: 6px;
+  padding: 6px 10px;
+}
+
 /* ---- Action bar ---- */
 .pb-actions {
   display: flex;

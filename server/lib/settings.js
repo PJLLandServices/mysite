@@ -96,6 +96,24 @@ const DEFAULT_OUTREACH_TEMPLATES = {
   fall: { ...BLANK_OUTREACH_TEMPLATE }
 };
 
+// Threshold-based deposits on quotations (Jul 2026 brief). When a
+// quote's grand total (incl. HST by default) is at/above `threshold`,
+// the proposal builder prompts to request a deposit, pre-filled from
+// `defaultType`/`defaultValue`. Admin override always wins — deposits
+// can be forced on below threshold or off above it, per quote.
+// `autoSendBalanceOnCompletion` — when the project completes, the held
+// balance/final invoice is emailed automatically instead of waiting
+// for a manual send from the invoice page.
+const DEFAULT_DEPOSITS = {
+  threshold: 10000,                    // CAD
+  defaultType: "percent",              // "percent" | "fixed"
+  defaultValue: 40,                    // 40% (or $ when fixed)
+  thresholdBasis: "total_incl_tax",    // "total_incl_tax" | "subtotal"
+  autoSendBalanceOnCompletion: false
+};
+const DEPOSIT_TYPES = ["percent", "fixed"];
+const DEPOSIT_BASES = ["total_incl_tax", "subtotal"];
+
 const DEFAULT_SETTINGS = {
   adminDefaults: {
     newLead: "email_sms",
@@ -108,6 +126,7 @@ const DEFAULT_SETTINGS = {
   quickbooks: { ...DEFAULT_QUICKBOOKS, lastSyncErrors: [] },
   icalFeed: { ...DEFAULT_ICAL_FEED },
   contactInfo: { ...DEFAULT_CONTACT_INFO },
+  deposits: { ...DEFAULT_DEPOSITS },
   invoiceSms: { ...DEFAULT_INVOICE_SMS },
   reviewRequests: { ...DEFAULT_REVIEW_REQUESTS },
   outreachTemplates: {
@@ -176,6 +195,18 @@ function hydrate(s) {
         ? contact.customerSupportPhone.trim()
         : DEFAULT_CONTACT_INFO.customerSupportPhone
     },
+    deposits: (() => {
+      const d = s?.deposits || {};
+      const num = (v, dflt, { min = 0 } = {}) =>
+        Number.isFinite(Number(v)) && Number(v) >= min ? Number(v) : dflt;
+      return {
+        threshold: num(d.threshold, DEFAULT_DEPOSITS.threshold),
+        defaultType: DEPOSIT_TYPES.includes(d.defaultType) ? d.defaultType : DEFAULT_DEPOSITS.defaultType,
+        defaultValue: num(d.defaultValue, DEFAULT_DEPOSITS.defaultValue),
+        thresholdBasis: DEPOSIT_BASES.includes(d.thresholdBasis) ? d.thresholdBasis : DEFAULT_DEPOSITS.thresholdBasis,
+        autoSendBalanceOnCompletion: d.autoSendBalanceOnCompletion === true
+      };
+    })(),
     invoiceSms: {
       enabled: ism.enabled !== false,
       delayMinutes: Number.isFinite(Number(ism.delayMinutes)) && Number(ism.delayMinutes) >= 0
@@ -330,6 +361,44 @@ async function updateContactInfo(patch, { who = "admin", note = "" } = {}) {
     action: "contactInfo",
     before,
     after: { ...settings.contactInfo },
+    note
+  });
+  if (settings.audit.length > 50) settings.audit.length = 50;
+  await writeAll(settings);
+  return settings;
+}
+
+// Update the deposits namespace (threshold-based deposit on quotations).
+// Audit-stamped. Percent defaultValue is clamped 0–100; fixed defaultValue
+// just has to be a non-negative number (per-quote clamping to the grand
+// total happens where the quote's deposit is computed).
+async function updateDeposits(patch, { who = "admin", note = "" } = {}) {
+  const settings = await readAll();
+  const before = { ...settings.deposits };
+  const next = { ...settings.deposits };
+  if (patch && typeof patch === "object") {
+    if (Object.prototype.hasOwnProperty.call(patch, "threshold")) {
+      const n = Number(patch.threshold);
+      if (Number.isFinite(n) && n >= 0) next.threshold = Math.round(n * 100) / 100;
+    }
+    if (DEPOSIT_TYPES.includes(patch.defaultType)) next.defaultType = patch.defaultType;
+    if (Object.prototype.hasOwnProperty.call(patch, "defaultValue")) {
+      const n = Number(patch.defaultValue);
+      if (Number.isFinite(n) && n >= 0) next.defaultValue = Math.round(n * 100) / 100;
+    }
+    if (DEPOSIT_BASES.includes(patch.thresholdBasis)) next.thresholdBasis = patch.thresholdBasis;
+    if (Object.prototype.hasOwnProperty.call(patch, "autoSendBalanceOnCompletion")) {
+      next.autoSendBalanceOnCompletion = patch.autoSendBalanceOnCompletion === true;
+    }
+  }
+  if (next.defaultType === "percent" && next.defaultValue > 100) next.defaultValue = 100;
+  settings.deposits = next;
+  settings.audit.unshift({
+    ts: new Date().toISOString(),
+    who,
+    action: "deposits",
+    before,
+    after: { ...next },
     note
   });
   if (settings.audit.length > 50) settings.audit.length = 50;
@@ -517,6 +586,7 @@ module.exports = {
   updateAdminDefaults,
   updateQuickbooks,
   updateContactInfo,
+  updateDeposits,
   updateReviewRequests,
   recordSyncError,
   clearSyncErrors,

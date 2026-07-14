@@ -191,6 +191,33 @@
 .approve-totals-row span, .approve-totals-row strong { color: #1B4D2E !important; }
 .approve-totals-row strong { font-size: 19px !important; }
 
+/* Payment terms — deposit/balance split (threshold-deposit brief). */
+.approve-payterms {
+  background: #F4F9EE;
+  border: 1px solid #C5DDB1;
+  border-radius: 10px;
+  padding: 14px 18px;
+  margin: -8px 0 24px;
+}
+.approve-payterms-title {
+  margin: 0 0 8px;
+  font-size: 12px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: #1B4D2E;
+}
+.approve-payterms-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  font-size: 14px;
+  color: #1F2A22;
+  padding: 3px 0;
+  font-variant-numeric: tabular-nums;
+}
+.approve-payterms-row strong { color: #1B4D2E; font-weight: 700; }
+.approve-payterms-single { font-size: 15px; }
+
 /* Sign block */
 .approve-sign {
   background: #FAFAF5;
