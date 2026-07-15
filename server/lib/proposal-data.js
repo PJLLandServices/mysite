@@ -293,9 +293,40 @@ function buildSystemCards(system, f) {
 
 // ---- lighting (dark theme) -------------------------------------------
 
-// Total fixtures across the schedule (sum of line quantities).
+// A line item is a transformer (power supply), not a light fixture, when its
+// label/description names a transformer or an In-Lite HUB model.
+function isTransformerLine(li) {
+  const t = `${li.label || ""} ${li.description || ""}`.toLowerCase();
+  return /transformer|\bhub[\s-]?\d+/.test(t);
+}
+
+// Transformer count + model for the "how it works" card and scope line.
+// In-Lite jobs run on one or more low-voltage transformers (HUB-100 is the
+// standard 120V unit). Read them off the quote when itemized — count = summed
+// qty, model = the HUB code named — otherwise default to a single HUB-100
+// (the common residential case). This keeps a one-transformer job from
+// claiming "two transformers on each side" the way the old static copy did.
+function transformerSpec(quote) {
+  const lines = (Array.isArray(quote.lineItems) ? quote.lineItems : []).filter(isTransformerLine);
+  let count = lines.reduce((n, li) => n + (Number(li.qty) || 0), 0);
+  let model = null;
+  for (const li of lines) {
+    const m = `${li.label || ""} ${li.description || ""}`.match(/hub[\s-]?(\d+)/i);
+    if (m) { model = `HUB-${m[1]}`; break; }
+  }
+  if (!lines.length || count < 1) count = 1;   // default: a single transformer
+  if (!model) model = "HUB-100";               // In-Lite's standard 120V unit
+  return { count, model, hasLine: lines.length > 0 };
+}
+
+const COUNT_WORDS = ["Zero", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight"];
+function countWord(n) { return COUNT_WORDS[n] || String(n); }
+
+// Total fixtures across the schedule (sum of line quantities) — transformers
+// are power supplies, not fixtures, so they don't count toward the total.
 function fixtureCount(quote) {
   return (Array.isArray(quote.lineItems) ? quote.lineItems : [])
+    .filter((li) => !isTransformerLine(li))
     .reduce((n, li) => n + (Number(li.qty) || 0), 0);
 }
 
@@ -325,12 +356,35 @@ function lightingRows(quote) {
 function buildLightingData(quote, t, ctx, common) {
   const { customer, displayId, issued, subtotal, hst, total, sig } = common;
   const fixtures = fixtureCount(quote);
+  const tx = common.transformer || transformerSpec(quote);
+  const many = tx.count >= 2;
   const facts = [
     { k: "Prepared for", v: customer.name || "Customer" },
     { k: "Fixtures", v: fixtures ? String(fixtures) : "—" },
     { k: "Quote", v: displayId },
     { k: "Date", v: issued || "—" }
   ];
+
+  // How-it-works cards: the always-on cards from the template plus ONE
+  // transformer card matched to the job (single HUB vs split-across-sides).
+  const cards = Array.isArray(t.system && t.system.cards) ? [...t.system.cards] : [];
+  const txCard = t.system && t.system.transformerCard;
+  if (txCard) {
+    const chosen = many ? txCard.many : txCard.one;
+    if (chosen && chosen.title) cards.push({ title: chosen.title, body: chosen.body });
+  }
+
+  // Scope "included": insert the transformer line (one vs many) right after
+  // the cable/connector line so it reads in install order.
+  const includes = (t.scope && Array.isArray(t.scope.includes)) ? [...t.scope.includes] : [];
+  const txLine = t.scope && t.scope.transformerLine;
+  if (txLine) {
+    const line = many ? txLine.many : txLine.one;
+    if (line) {
+      const at = includes.findIndex((x) => /cable|connector/i.test(x));
+      if (at === -1) includes.push(line); else includes.splice(at + 1, 0, line);
+    }
+  }
   return {
     theme: "lighting",
     meta: {
@@ -347,7 +401,7 @@ function buildLightingData(quote, t, ctx, common) {
     system: {
       heading: (t.system && t.system.heading) || "How a low-voltage system works",
       lead: (t.system && t.system.lead) || "",
-      cards: Array.isArray(t.system && t.system.cards) ? t.system.cards : []
+      cards
     },
     views: [],
     schedule: {
@@ -366,7 +420,7 @@ function buildLightingData(quote, t, ctx, common) {
       lead: (t.scope && t.scope.lead) || "",
       inHeading: (t.scope && t.scope.inHeading) || "What the price includes",
       outHeading: (t.scope && t.scope.outHeading) || "What it doesn't",
-      includes: (t.scope && t.scope.includes) || [],
+      includes,
       excludes: (t.scope && t.scope.excludes) || []
     },
     terms: t.terms || { heading: "The fine print", clauses: [] },
@@ -397,6 +451,7 @@ function buildProposalData(quote, { customer = {}, property = {}, templateKey = 
   const validThrough = fmtDate(quote.validUntil || quote.validUntilDate);
   const zones = countZones(quote);
   const features = systemFeatures(quote);
+  const transformer = transformerSpec(quote);   // lighting: count + HUB model
 
   // Token context for the template copy.
   const ctx = {
@@ -409,6 +464,8 @@ function buildProposalData(quote, { customer = {}, property = {}, templateKey = 
     hst: fmtMoney(hst),
     total: fmtMoney(total),
     zoneCount: zones,
+    transformerModel: transformer.model,
+    transformerCountWord: countWord(transformer.count),
     companyName: company.NAME,
     companyPhone: company.PHONE
   };
@@ -418,7 +475,7 @@ function buildProposalData(quote, { customer = {}, property = {}, templateKey = 
   // Theme dispatch — lighting builds a different data shape (fixture schedule
   // with Each/Line, dark-theme hero + CTA close). Everything else is sprinkler.
   if (t.theme === "lighting") {
-    return buildLightingData(quote, t, ctx, { customer, displayId, issued, subtotal, hst, total, sig, heroPhoto });
+    return buildLightingData(quote, t, ctx, { customer, displayId, issued, subtotal, hst, total, sig, heroPhoto, transformer });
   }
 
   // Hero facts — all auto-derived, four short cells like the reference.

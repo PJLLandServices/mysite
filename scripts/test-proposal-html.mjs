@@ -231,6 +231,42 @@ const lightParties = {
   eq(dOne.schedule.subtotalLabel, "Subtotal  —  1 fixture", "subtotal label singularizes at 1 fixture");
 }
 
+// ---- transformer copy adapts to the job (single vs multi) ------------
+// The dual-transformer wording must not carry over onto a one-transformer
+// job. Default (no transformer line) → a single In-Lite HUB-100; an itemized
+// transformer sets the count + model; transformers never count as fixtures.
+{
+  // Default front-yard job — fixtures only, no transformer line.
+  const d = buildProposalData(lightingQuote([
+    ["Large", "BIG SCOPE WIDE", 2, 295], ["Medium", "SCOPE", 16, 245]
+  ]), { ...lightParties, templateKey: "lighting" });
+  const card = d.system.cards[d.system.cards.length - 1];
+  const scopeLine = d.scope.includes.find((x) => /transformer/i.test(x));
+  eq(card.title, "One transformer, one outlet", "no transformer line → singular transformer card");
+  ok(/HUB-100/.test(card.body) && /120V/.test(card.body), "default names In-Lite HUB-100 @ 120V");
+  ok(/^A single In-Lite HUB-100 transformer/.test(scopeLine || ""), "scope: single HUB-100 transformer line");
+  const html = renderLightingProposal(d);
+  ok(!/two transformer/i.test(html), "single-transformer job → HTML never says 'two transformers'");
+  ok(!/on each side/i.test(html), "single-transformer job → no 'on each side' split wording");
+  ok(!html.includes("{{"), "transformer tokens all resolved");
+
+  // Itemized single transformer names its model (HUB-200) and isn't a fixture.
+  const d2 = buildProposalData(lightingQuote([
+    ["Medium", "SCOPE", 10, 245], ["Transformer", "In-Lite HUB-200 · 120V", 1, 320]
+  ], { deposit: false }), { ...lightParties, templateKey: "lighting" });
+  ok(d2.hero.facts.some((f) => f.k === "Fixtures" && f.v === "10"), "transformer line excluded from fixture count (10, not 11)");
+  ok(/HUB-200/.test(d2.system.cards[d2.system.cards.length - 1].body), "itemized transformer sets model to HUB-200");
+  eq(d2.system.cards[d2.system.cards.length - 1].title, "One transformer, one outlet", "qty-1 transformer → singular card");
+
+  // Two transformers → plural split copy.
+  const d3 = buildProposalData(lightingQuote([
+    ["Medium", "SCOPE", 30, 245], ["Transformer", "In-Lite HUB-100 · 120V", 2, 300]
+  ]), { ...lightParties, templateKey: "lighting" });
+  eq(d3.system.cards[d3.system.cards.length - 1].title, "Two transformers, one property", "qty-2 transformers → plural card");
+  ok(d3.scope.includes.some((x) => /transformers sized to the fixture count on each side/i.test(x)), "two-transformer job → split scope line");
+  ok(d3.hero.facts.some((f) => f.k === "Fixtures" && f.v === "30"), "two transformers excluded from fixture count (30, not 32)");
+}
+
 // ---- report -----------------------------------------------------------
 console.log(`\nproposal-html tests: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
