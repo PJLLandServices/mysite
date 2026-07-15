@@ -338,6 +338,15 @@ function fixtureCount(quote) {
     .reduce((n, li) => n + (Number(li.qty) || 0), 0);
 }
 
+// The fixture count to SHOW: an explicit proposalFixtureCount override (set
+// when the job is quoted as one all-inclusive line) wins; otherwise the summed
+// line-item Qtys. Used by both the standalone lighting page and the combined
+// proposal's project blurb so the two never disagree.
+function effectiveFixtureCount(quote) {
+  const override = Number(quote && quote.proposalFixtureCount);
+  return Number.isFinite(override) && override > 0 ? override : fixtureCount(quote);
+}
+
 // Fixture-schedule rows for a lighting proposal: Class · In-Lite fixture ·
 // Qty · Each · Line. The line's label is the class (Large/Medium/Small/
 // Recessed — also the glyph), its description is the In-Lite fixture code.
@@ -365,8 +374,7 @@ function buildLightingData(quote, t, ctx, common) {
   const { customer, displayId, issued, subtotal, hst, total, sig } = common;
   // Fixture count: an explicit override (set when the fixtures are quoted as
   // one all-inclusive package line) wins; otherwise sum the line-item Qtys.
-  const override = Number(quote.proposalFixtureCount);
-  const fixtures = Number.isFinite(override) && override > 0 ? override : fixtureCount(quote);
+  const fixtures = effectiveFixtureCount(quote);
   const tx = common.transformer || transformerSpec(quote);
   const many = tx.count >= 2;
   const facts = [
@@ -461,7 +469,7 @@ function combinedChildMeta(child) {
   const { subtotal, hst, total } = totals(q);
   let name, optName, optSub, glyph, blurb;
   if (theme === "lighting") {
-    const fixtures = fixtureCount(q);
+    const fixtures = effectiveFixtureCount(q);
     name = "Landscape Lighting"; optName = "Lighting only"; optSub = "Lighting design, standalone"; glyph = "medium";
     const fTxt = fixtures ? `${fixtures} fixture${fixtures === 1 ? "" : "s"}` : "a full set of fixtures";
     blurb = `Low-voltage In-Lite lighting design — ${fTxt} across the property, sealed and expandable, built to live outside.`;
