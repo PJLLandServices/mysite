@@ -11927,22 +11927,30 @@ async function handleApi(req, res, pathname) {
       // outer catch aborts the send and the proposal stays a draft.
       const wasDraftBeforeSend = q.status === "draft" || q.status === "draft_preview";
       let token = q.approval?.token || null;
-      let pdfBuffer = (!wasDraftBeforeSend && q.pdfPath) ? await readFrozenQuotePdf(q) : null;
+      let pdfBuffer = null;
       let freezeMeta = null;
       // Resolve customer/property once — used for the PDF render below AND
       // the email greeting further down (so it's available on the re-send
       // path too, not only when we re-render).
       const parties = await quoteRenderParties(q);
-      if (!(pdfBuffer && token)) {
+      // A combined ("two projects, one property") proposal is an HTML-only
+      // document behind the phone gate — it has no line items to render a PDF
+      // from (and the gated email attaches no PDF anyway). Just mint a token.
+      if (q.combined) {
         token = token || crypto.randomBytes(16).toString("hex");
-        const pdfApproveUrl = `${resolvePublicBaseUrl()}/approve/${encodeURIComponent(q.id)}?t=${token}`;
-        pdfBuffer = await renderQuotePdfBuffer(q, {
-          customer: { ...parties.customer, email: toEmail, phone: parties.customer.phone || toPhone },
-          property: parties.property,
-          acceptanceUrl: pdfApproveUrl,
-          returnEmail: process.env.CUSTOMER_EMAIL || "info@pjllandservices.com"
-        });
-        freezeMeta = await writeFrozenQuotePdf(q, pdfBuffer);
+      } else {
+        pdfBuffer = (!wasDraftBeforeSend && q.pdfPath) ? await readFrozenQuotePdf(q) : null;
+        if (!(pdfBuffer && token)) {
+          token = token || crypto.randomBytes(16).toString("hex");
+          const pdfApproveUrl = `${resolvePublicBaseUrl()}/approve/${encodeURIComponent(q.id)}?t=${token}`;
+          pdfBuffer = await renderQuotePdfBuffer(q, {
+            customer: { ...parties.customer, email: toEmail, phone: parties.customer.phone || toPhone },
+            property: parties.property,
+            acceptanceUrl: pdfApproveUrl,
+            returnEmail: process.env.CUSTOMER_EMAIL || "info@pjllandservices.com"
+          });
+          freezeMeta = await writeFrozenQuotePdf(q, pdfBuffer);
+        }
       }
       await quotes.markSentForApproval(q.id, {
         token, channels, toEmail, toPhone, by: sendBy,

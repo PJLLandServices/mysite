@@ -133,6 +133,10 @@ async function load() {
     const actions = [];
     if (isCombined) {
       actions.push(`<a href="${combinedPreviewHref}" target="_blank" rel="noopener">Preview combined</a>`);
+      if (!isDeleted) {
+        const sendLabel = (q.status === "draft" || q.status === "draft_preview") ? "Send to customer" : "Re-send";
+        actions.push(`<button type="button" class="qf-card__send" data-quote-id="${escapeHtml(q.id)}" data-action="send-combined">${sendLabel}</button>`);
+      }
     } else if (isProposal) {
       actions.push(`<a href="${proposalHref}">Edit proposal</a>`);
     } else if (leadHref) {
@@ -357,6 +361,38 @@ async function sendQuote(quoteId) {
   }
 }
 
+// Send a combined ("two projects") proposal to the customer. It's HTML-only
+// behind the phone gate, so the customer gets a link (no PDF attachment) and
+// verifies their phone to open it. Pre-fills the on-file email; editable.
+async function sendCombined(quoteId) {
+  const cached = lastLoadedQuotes.find((q) => q.id === quoteId);
+  const onFile = (cached && cached.customerEmail) || "";
+  const total = cached && Number.isFinite(Number(cached.total))
+    ? ` — $${Number(cached.total).toFixed(2)} incl. HST`
+    : "";
+  const to = prompt(`Send the combined proposal ${quoteId}${total} to the customer.\n\nThey'll get a link and verify their phone to open it.\n\nEmail address:`, onFile);
+  if (to == null) return; // cancelled
+  const email = String(to).trim();
+  if (!email) { alert("An email address is required to send."); return; }
+  try {
+    const r = await fetch(`/api/quotes/${encodeURIComponent(quoteId)}/send-proposal-for-approval`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ sendEmail: true, email })
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok || !data.ok) {
+      alert((data.errors && data.errors[0]) || `Couldn't send (${r.status})`);
+      return;
+    }
+    if (data.emailError) alert(`${quoteId} marked sent, but email failed: ${data.emailError}\n\nUse Re-send to retry.`);
+    else alert(`Sent to ${email}. The customer gets a link to the combined proposal.`);
+    load();
+  } catch (err) {
+    alert(err.message || "Couldn't send the combined proposal.");
+  }
+}
+
 // "View as customer" — opens the customer's exact e-sign page. The tab
 // is opened SYNCHRONOUSLY (before the fetch) so iOS Safari's popup
 // blocker doesn't eat it; the URL lands once the server answers.
@@ -423,6 +459,12 @@ containerEl.addEventListener("click", (event) => {
   if (sendBtn) {
     event.preventDefault();
     sendQuote(sendBtn.dataset.quoteId);
+    return;
+  }
+  const sendCombinedBtn = event.target.closest("[data-action='send-combined']");
+  if (sendCombinedBtn) {
+    event.preventDefault();
+    sendCombined(sendCombinedBtn.dataset.quoteId);
     return;
   }
   const previewBtn = event.target.closest("[data-action='preview']");
