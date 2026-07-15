@@ -6,7 +6,7 @@
 import { createRequire } from "node:module";
 const require = createRequire(import.meta.url);
 const { buildProposalData, fmtMoney, fmtDate } = require("../server/lib/proposal-data.js");
-const { renderSprinklerProposal } = require("../server/lib/proposal-html.js");
+const { renderSprinklerProposal, renderLightingProposal } = require("../server/lib/proposal-html.js");
 const templates = require("../server/lib/proposal-templates.js");
 
 let passed = 0, failed = 0;
@@ -171,6 +171,64 @@ function cardsFor(descs) {
   // Full HTML for a no-drip job has zero drip wording.
   const html = renderSprinklerProposal(buildProposalData(proposalWithZoneDescs(["Rotary heads · 6 heads"]), { customer: { name: "X" }, property: { address: "Y" }, templateKey: "irrigation" }));
   ok(!/\bdrip\b/i.test(html), "no-drip job → generated HTML never says 'drip'");
+}
+
+// ---- lighting (dark "after dark" theme) ------------------------------
+// The lighting template builds a different data shape: a fixture schedule
+// with per-fixture Each/Line pricing, Fixtures (not Zones) hero facts, a
+// dark theme, and a CTA close. Copy comes from proposal-lighting.json.
+ok(templates.isKnownTemplate("lighting"), "lighting template is known");
+ok(templates.listTemplates().some((t) => t.key === "lighting" && t.theme === "lighting"), "listTemplates includes lighting/lighting");
+
+function lightingQuote(lines, opts = {}) {
+  const lineItems = lines.map(([label, description, qty, price]) => ({
+    label, description, qty, price, lineTotal: qty * price
+  }));
+  const subtotal = lineItems.reduce((n, li) => n + li.lineTotal, 0);
+  const hst = +(subtotal * 0.13).toFixed(2), total = +(subtotal + hst).toFixed(2);
+  const q = {
+    id: opts.id || "Q-2026-0228", version: 1, type: "project_proposal",
+    createdAt: "2026-07-13T14:00:00.000Z", validUntil: "2026-10-11",
+    subtotal, hst, total, lineItems,
+    deposit: opts.deposit === false
+      ? { enabled: false }
+      : { enabled: true, type: "percent", value: 25, amount: +(total * 0.25).toFixed(2), balance: +(total * 0.75).toFixed(2), dueLabel: "due at scheduling", balanceLabel: "due on completion" }
+  };
+  return q;
+}
+const lightParties = {
+  customer: { name: "Chris Ingram", phone: "9059600181", address: "851 Norsan Ct, Newmarket ON" },
+  property: { address: "851 Norsan Ct, Newmarket ON" }
+};
+
+{
+  const q = lightingQuote([
+    ["Large", "BIG SCOPE WIDE", 2, 295],
+    ["Medium", "SCOPE", 16, 245],
+    ["Small", "MINI SCOPE", 18, 225],
+    ["Recessed", "HYVE 22", 8, 265]
+  ]);
+  const d = buildProposalData(q, { ...lightParties, templateKey: "lighting" });
+  eq(d.theme, "lighting", "lighting template → lighting theme");
+  eq(d.schedule.rows.length, 4, "one schedule row per fixture class");
+  eq(d.schedule.rows[0].each, "$295.00", "fixture row shows per-unit price (Each)");
+  eq(d.schedule.rows[0].line, "$590.00", "fixture row shows extended price (Line = qty×each)");
+  eq(d.schedule.subtotalLabel, "Subtotal  —  44 fixtures", "subtotal label counts total fixtures");
+  ok(d.hero.facts.some((f) => f.k === "Fixtures" && f.v === "44"), "hero fact: Fixtures = total qty (not Zones)");
+  eq(d.payment.mode, "deposit", "≥ threshold lighting quote → deposit/balance split");
+
+  const html = renderLightingProposal(d);
+  ok(html.startsWith("<!DOCTYPE html>"), "lighting renders a full document");
+  ok(html.includes("after dark"), "hero accent copy present");
+  ok(html.includes("In-Lite"), "In-Lite system copy present");
+  ok(html.includes("$12,068.40"), "lighting total appears");
+  ok(html.includes("BIG SCOPE WIDE") && html.includes("HYVE 22"), "In-Lite fixture codes in schedule");
+  ok(html.includes('class="cta"') && html.includes("tel:+19059600181"), "CTA close links to phone");
+  ok(html.includes("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAABW8"), "lighting uses the amber logo asset");
+  ok(!html.includes("{{"), "lighting: no unresolved tokens");
+  // Singular fixture count reads naturally.
+  const dOne = buildProposalData(lightingQuote([["Small", "MINI SCOPE", 1, 225]], { deposit: false }), { ...lightParties, templateKey: "lighting" });
+  eq(dOne.schedule.subtotalLabel, "Subtotal  —  1 fixture", "subtotal label singularizes at 1 fixture");
 }
 
 // ---- report -----------------------------------------------------------

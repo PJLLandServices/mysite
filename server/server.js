@@ -11127,10 +11127,13 @@ async function handleApi(req, res, pathname) {
       if (!proposalTemplates.isKnownTemplate(templateKey)) {
         return sendJson(res, 422, { ok: false, errors: [`Unknown proposal template: ${templateKey}`] });
       }
-      // v1 ships the sprinkler (light) renderer; other themes land as they're built.
+      // Pick the renderer by theme: sprinkler (light) or lighting (dark).
       const theme = proposalTemplates.loadRaw(templateKey).theme || "sprinkler";
-      if (theme !== "sprinkler") {
-        return sendJson(res, 422, { ok: false, errors: [`The "${templateKey}" proposal design isn't available yet — only irrigation for now.`] });
+      const renderer = theme === "lighting" ? proposalHtml.renderLightingProposal
+        : theme === "sprinkler" ? proposalHtml.renderSprinklerProposal
+        : null;
+      if (!renderer) {
+        return sendJson(res, 422, { ok: false, errors: [`The "${templateKey}" proposal design isn't available yet.`] });
       }
 
       // Persist the chosen template so the builder remembers it next time.
@@ -11155,7 +11158,7 @@ async function handleApi(req, res, pathname) {
         templateKey,
         heroPhoto
       });
-      const html = proposalHtml.renderSprinklerProposal(data);
+      const html = renderer(data);
       const bytes = Buffer.byteLength(html, "utf8");
 
       const docPath = proposalDocPath(q.id);

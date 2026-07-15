@@ -291,6 +291,95 @@ function buildSystemCards(system, f) {
   return cards;
 }
 
+// ---- lighting (dark theme) -------------------------------------------
+
+// Total fixtures across the schedule (sum of line quantities).
+function fixtureCount(quote) {
+  return (Array.isArray(quote.lineItems) ? quote.lineItems : [])
+    .reduce((n, li) => n + (Number(li.qty) || 0), 0);
+}
+
+// Fixture-schedule rows for a lighting proposal: Class · In-Lite fixture ·
+// Qty · Each · Line. The line's label is the class (Large/Medium/Small/
+// Recessed — also the glyph), its description is the In-Lite fixture code.
+function lightingRows(quote) {
+  return (Array.isArray(quote.lineItems) ? quote.lineItems : []).map((li) => {
+    const qty = Number(li.qty) || 0;
+    const price = Number(li.price) || 0;
+    const line = li.lineTotal != null ? Number(li.lineTotal) : price * qty;
+    return {
+      glyph: li.label || "",
+      cls: li.label || "Fixture",
+      fixture: li.description || "",
+      qty: String(qty),
+      each: fmtMoney(price),
+      line: fmtMoney(line)
+    };
+  });
+}
+
+// Assemble the lighting proposal data. Shares customer/totals/deposit/scope
+// with the sprinkler path; differs in the fixture schedule (Each/Line), the
+// hero facts (Fixtures instead of Zones), and the CTA close. The 7 rendered
+// "views" are attached later (Phase B) as data.views.
+function buildLightingData(quote, t, ctx, common) {
+  const { customer, displayId, issued, subtotal, hst, total, sig } = common;
+  const fixtures = fixtureCount(quote);
+  const facts = [
+    { k: "Prepared for", v: customer.name || "Customer" },
+    { k: "Fixtures", v: fixtures ? String(fixtures) : "—" },
+    { k: "Quote", v: displayId },
+    { k: "Date", v: issued || "—" }
+  ];
+  return {
+    theme: "lighting",
+    meta: {
+      title: t.title || "Landscape Lighting Proposal — PJL Land Services",
+      docKicker: `${t.kicker || "Landscape Lighting Design"}  ·  ${displayId}`
+    },
+    hero: {
+      h1Lead: (t.hero && t.hero.h1Lead) || "The property,",
+      h1Accent: (t.hero && t.hero.h1Accent) || "after dark",
+      sub: (t.hero && t.hero.sub) || "",
+      facts,
+      bgPhoto: common.heroPhoto || null
+    },
+    system: {
+      heading: (t.system && t.system.heading) || "How a low-voltage system works",
+      lead: (t.system && t.system.lead) || "",
+      cards: Array.isArray(t.system && t.system.cards) ? t.system.cards : []
+    },
+    views: [],
+    schedule: {
+      heading: (t.schedule && t.schedule.heading) || "Project fixture schedule",
+      lead: (t.schedule && t.schedule.lead) || "",
+      rows: lightingRows(quote),
+      subtotalLabel: `${(t.schedule && t.schedule.subtotalLabel) || "Subtotal"}  —  ${fixtures} fixture${fixtures === 1 ? "" : "s"}`,
+      subtotal: fmtMoney(subtotal),
+      hst: fmtMoney(hst),
+      total: fmtMoney(total),
+      countNote: (t.schedule && t.schedule.countNote) || ""
+    },
+    payment: payment(quote, t, total),
+    scope: {
+      heading: (t.scope && t.scope.heading) || "What the price covers",
+      lead: (t.scope && t.scope.lead) || "",
+      inHeading: (t.scope && t.scope.inHeading) || "What the price includes",
+      outHeading: (t.scope && t.scope.outHeading) || "What it doesn't",
+      includes: (t.scope && t.scope.includes) || [],
+      excludes: (t.scope && t.scope.excludes) || []
+    },
+    terms: t.terms || { heading: "The fine print", clauses: [] },
+    close: {
+      heading: (t.close && t.close.heading) || "Ready when you are",
+      body: (t.close && t.close.body) || "",
+      ctaLabel: (t.close && t.close.ctaLabel) || "",
+      ctaHref: (t.close && t.close.ctaHref) || "",
+      sig: `${company.CITY} &nbsp;·&nbsp; ${company.PHONE} &nbsp;·&nbsp; <b>${company.WEBSITE}</b>`
+    }
+  };
+}
+
 // ---- main -------------------------------------------------------------
 
 // Build the normalized proposal-data object the generator consumes.
@@ -324,6 +413,13 @@ function buildProposalData(quote, { customer = {}, property = {}, templateKey = 
     companyPhone: company.PHONE
   };
   const t = templates.loadResolved(key, ctx);
+  const sig = `${company.NAME} &nbsp;·&nbsp; ${company.CITY} &nbsp;·&nbsp; ${company.PHONE} &nbsp;·&nbsp; <b>${company.WEBSITE}</b>`;
+
+  // Theme dispatch — lighting builds a different data shape (fixture schedule
+  // with Each/Line, dark-theme hero + CTA close). Everything else is sprinkler.
+  if (t.theme === "lighting") {
+    return buildLightingData(quote, t, ctx, { customer, displayId, issued, subtotal, hst, total, sig, heroPhoto });
+  }
 
   // Hero facts — all auto-derived, four short cells like the reference.
   const facts = [
@@ -333,9 +429,8 @@ function buildProposalData(quote, { customer = {}, property = {}, templateKey = 
   ];
   if (validThrough) facts.push({ k: "Valid through", v: validThrough });
 
-  const sig = `${company.NAME} &nbsp;·&nbsp; ${company.CITY} &nbsp;·&nbsp; ${company.PHONE} &nbsp;·&nbsp; <b>${company.WEBSITE}</b>`;
-
   return {
+    theme: "sprinkler",
     meta: {
       title: t.title || "Irrigation System Proposal — PJL Land Services",
       docKicker: `${t.kicker || "Proposal"}  ·  ${displayId}`

@@ -25,7 +25,12 @@ const path = require("node:path");
 
 const ASSETS_DIR = path.join(__dirname, "proposal-assets");
 const SPRINKLER_CSS = fs.readFileSync(path.join(ASSETS_DIR, "sprinkler-theme.css"), "utf8");
+const LIGHTING_CSS = fs.readFileSync(path.join(ASSETS_DIR, "lighting-theme.css"), "utf8");
 const LOGO_WHITE = fs.readFileSync(path.join(ASSETS_DIR, "logo-white.datauri.txt"), "utf8").trim();
+// Amber ("lamp") logo — the dark "after dark" lighting theme uses this in the
+// hero mark and footer signoff, matching the hand-built lighting reference
+// (the white logo is for the light sprinkler theme's green band).
+const LOGO_AMBER = fs.readFileSync(path.join(ASSETS_DIR, "logo-amber.datauri.txt"), "utf8").trim();
 
 // ---- helpers ----------------------------------------------------------
 
@@ -201,13 +206,13 @@ function renderScope(scope) {
 
   <div class="scope">
     <div class="scope-col in">
-      <h3 class="scope-h in">Included</h3>
+      <h3 class="scope-h in">${esc(scope.inHeading || "Included")}</h3>
       <ul>
 ${inc}
       </ul>
     </div>
     <div class="scope-col out">
-      <h3 class="scope-h out">Not included</h3>
+      <h3 class="scope-h out">${esc(scope.outHeading || "Not included")}</h3>
       <ul>
 ${exc}
       </ul>
@@ -314,4 +319,138 @@ ${renderClose(data.close || {})}
 </html>`;
 }
 
-module.exports = { renderSprinklerProposal, esc };
+// ======================================================================
+// Lighting ("after dark") — dark theme. Shares the section markup with the
+// sprinkler artifact (renderSystem / renderScope / renderPayment) but uses
+// the dark theme CSS, a hero background render, an Each/Line fixture
+// schedule, and a CTA close. The 7 rendered "views" are Phase B.
+// ======================================================================
+
+const LIGHT_GLYPH = { large: "g-large", medium: "g-medium", small: "g-small", recessed: "g-recessed", ring: "g-ring" };
+function lightGlyph(cls) { return LIGHT_GLYPH[String(cls || "").toLowerCase().trim()] || "g-small"; }
+
+function renderLightingHero(hero, meta) {
+  const facts = (hero.facts || []).map((f) =>
+    `      <div class="fact"><span class="fact-k">${esc(f.k)}</span><span class="fact-v">${esc(f.v)}</span></div>`
+  ).join("\n");
+  const bg = hero.bgPhoto ? `\n  <div class="hero-bg"><img src="${hero.bgPhoto}" alt=""></div>` : "";
+  return `<header class="hero">${bg}
+  <div class="mark"><img src="${LOGO_AMBER}" alt="PJL Land Services"></div>
+  <div class="hero-in wrap">
+    <p class="eyebrow">${esc(meta.docKicker)}</p>
+    <h1>${esc(hero.h1Lead)}<br><em>${esc(hero.h1Accent)}</em></h1>
+    <p class="hero-sub">${rich(hero.sub)}</p>
+    <div class="facts">
+${facts}
+    </div>
+  </div>
+</header>`;
+}
+
+// Fixture schedule — Class · In-Lite fixture · Qty · Each · Line. Per-fixture
+// pricing IS shown here (unlike the sprinkler schedule). Payment block stitched
+// inside the section, same as sprinkler.
+function renderLightingSchedule(schedule, paymentHtml) {
+  const rows = (schedule.rows || []).map((r) =>
+    `          <tr>
+            <td class="t-cls"><span class="t-cls-in"><span class="g ${lightGlyph(r.glyph)}" aria-hidden="true"></span><span>${esc(r.cls)}</span></span></td>
+            <td class="t-fix">${esc(r.fixture)}</td>
+            <td class="t-num">${esc(r.qty)}</td>
+            <td class="t-num t-dim">${esc(r.each)}</td>
+            <td class="t-num t-strong">${esc(r.line)}</td>
+          </tr>`
+  ).join("\n");
+  return `<section class="sec wrap" id="schedule">
+  <h2 class="sec-h">${esc(schedule.heading)}</h2>
+  <p class="sec-lead">${rich(schedule.lead)}</p>
+  <div class="totals">
+    <div class="totals-in">
+      <table>
+        <thead>
+          <tr>
+            <th>Class</th>
+            <th class="h-fix">In-Lite fixture</th>
+            <th class="t-num">Qty</th>
+            <th class="t-num">Each</th>
+            <th class="t-num">Line</th>
+          </tr>
+        </thead>
+        <tbody>
+${rows}
+        </tbody>
+        <tfoot>
+          <tr class="f-sub">
+            <td colspan="4" class="f-lab">${rich(schedule.subtotalLabel || "Subtotal")}</td>
+            <td class="t-num t-strong">${esc(schedule.subtotal)}</td>
+          </tr>
+          <tr>
+            <td colspan="4" class="f-lab">HST 13%</td>
+            <td class="t-num t-dim">${esc(schedule.hst)}</td>
+          </tr>
+          <tr class="f-total">
+            <td colspan="4" class="f-lab">Total</td>
+            <td class="t-num">${esc(schedule.total)}</td>
+          </tr>
+        </tfoot>
+      </table>
+
+      <p class="count-note">${rich(schedule.countNote)}</p>
+    </div>
+  </div>
+
+${paymentHtml}
+</section>`;
+}
+
+function renderLightingClose(close) {
+  const cta = close.ctaLabel ? `\n  <a class="cta" href="${esc(close.ctaHref || "#")}">${esc(close.ctaLabel)}</a>` : "";
+  return `<section class="close wrap">
+  <h2>${esc(close.heading)}</h2>
+  <p>${rich(close.body)}</p>${cta}
+  <div class="signoff-mark"><img src="${LOGO_AMBER}" alt="PJL Land Services"></div>
+  <p class="sig">${rich(close.sig)}</p>
+</section>`;
+}
+
+// The rendered dusk "views" — Phase B. Returns "" until view data is authored.
+function renderLightingViews(views) {
+  if (!Array.isArray(views) || !views.length) return "";
+  return ""; // Phase B: image + per-view fixture schedule + lightbox + side nav
+}
+
+function renderLightingProposal(data) {
+  const meta = data.meta || {};
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${esc(meta.title || "Landscape Lighting Proposal — PJL Land Services")}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Barlow:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+${LIGHTING_CSS}
+</style>
+</head>
+<body>
+
+${renderLightingHero(data.hero || {}, meta)}
+
+${renderSystem(data.system || {})}
+
+${renderLightingViews(data.views)}
+
+${renderLightingSchedule(data.schedule || {}, renderPayment(data.payment || {}))}
+
+${renderScope(data.scope || {})}
+
+${renderTerms(data.terms || {})}
+
+${renderLightingClose(data.close || {})}
+
+</body>
+</html>`;
+}
+
+module.exports = { renderSprinklerProposal, renderLightingProposal, esc };

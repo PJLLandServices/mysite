@@ -1,0 +1,90 @@
+{
+  "key": "lighting",
+  "theme": "lighting",
+  "label": "Landscape lighting",
+  "title": "Landscape Lighting Proposal — PJL Land Services",
+  "kicker": "Landscape Lighting Design",
+  "hero": {
+    "h1Lead": "The property,",
+    "h1Accent": "after dark",
+    "sub": "A low-voltage In-Lite lighting design for {{propertyAddress}} — rendered to show the effect after dark, before a single fixture goes in the ground."
+  },
+  "system": {
+    "heading": "How a low-voltage system works",
+    "lead": "The whole design runs on In-Lite hardware — a Dutch low-voltage system built around one idea: keep the power down and the connections simple, and the system lasts.",
+    "cards": [
+      { "title": "Twelve volts, not one-twenty", "body": "The cable running through your garden carries low-voltage power, stepped down at a transformer that plugs into an existing exterior outlet. It's safe to work around, safe around kids and dogs, and doesn't need to be trenched to electrical depth." },
+      { "title": "Plug-and-play connectors", "body": "In-Lite fixtures clip onto the cable with sealed connectors — no wire nuts, no buried junction boxes waiting to corrode. Fixtures can be added, moved, or swapped down the road without recabling the garden." },
+      { "title": "Built to live outside", "body": "Cast, coated fixtures rated for the weather, with LED modules that sip power and last for years. The finishes are chosen to hold up outdoors and disappear into the planting by day." },
+      { "title": "Two transformers, one property", "body": "Power is split across transformers sized to the fixture count on each side of the property, mounted at existing exterior outlets — so no single run is overloaded and the light stays even." }
+    ]
+  },
+  "schedule": {
+    "heading": "Project fixture schedule",
+    "lead": "The count of record for the whole property, and what it costs.",
+    "subtotalLabel": "Subtotal",
+    "countNote": "Every fixture above is priced as part of the <b>complete design</b> — the layout is balanced across the transformers and the views. Fixtures aren't sold à la carte; adding, moving, or removing one re-prices and re-balances the design."
+  },
+  "payment": {
+    "deposit": {
+      "label": "Deposit",
+      "body": "The deposit holds your install date and releases the fixture order. In-Lite hardware is ordered against your specific design, in the finishes shown — so nothing is ordered until the deposit lands."
+    },
+    "balance": {
+      "label": "Balance",
+      "when": "Due on completion",
+      "body": "Payable once the system is in, aimed after dark, and walked through with you."
+    },
+    "totalDue": {
+      "label": "Total due",
+      "when": "Due on completion",
+      "body": "Payable once the system is installed, aimed after dark, and walked through with you."
+    },
+    "warranty": {
+      "label": "Warranty",
+      "value": "3 years",
+      "valueSmall": true,
+      "when": "Workmanship, from install",
+      "body": "Manufacturer warranty applies to all In-Lite fixtures and transformers as supplied."
+    }
+  },
+  "scope": {
+    "heading": "What the price covers",
+    "lead": "A complete install, aimed and focused after dark — because the design is only right when it's dark out.",
+    "inHeading": "What the price includes",
+    "outHeading": "What it doesn't",
+    "includes": [
+      "All fixtures listed in the project schedule, supplied and installed",
+      "Low-voltage cable runs, sealed connectors, and fixture staking",
+      "Transformers sized to the fixture count on each side, mounted at existing exterior outlets",
+      "Aiming and focus of every fixture after dark",
+      "Timer / photocell setup and a full walkthrough of the system"
+    ],
+    "excludes": [
+      "A working exterior 120V outlet at each transformer location (by homeowner)",
+      "Trenching or boring under driveways or hardscape not otherwise noted",
+      "Removal or restoration of pre-existing low-voltage or line-voltage lighting",
+      "Seasonal re-aiming after the install walkthrough (available separately)"
+    ]
+  },
+  "terms": {
+    "heading": "The fine print",
+    "clauses": [
+      {
+        "bodyHtml": "<b>Renders are illustrative.</b> The after-dark views show the intended effect — fixture placement, beam spread, and colour temperature as designed. Actual results vary with planting maturity, weather, and final on-site aiming, which is done after dark with you."
+      },
+      {
+        "bodyHtml": "<b>Warranty.</b> Three (3) years on workmanship from the date of install. Manufacturer warranty applies to all In-Lite fixtures and transformers as supplied. Warranty does not cover damage from landscaping or third-party work, vehicle or equipment impact, or fixtures relocated by others."
+      },
+      {
+        "bodyHtml": "<b>Changes to scope.</b> The design is priced and balanced as one system. Any work outside this proposal will be quoted and approved in writing before it proceeds. This proposal is valid through {{validThrough}}. Prices in Canadian dollars."
+      }
+    ]
+  },
+  "close": {
+    "heading": "Ready when you are",
+    "body": "If the design looks right, say the word and we'll book it. If you want to move a light, add one, or take one out — that's exactly what this stage is for.",
+    "ctaLabel": "Call (905) 960-0181",
+    "ctaHref": "tel:+19059600181"
+  }
+}

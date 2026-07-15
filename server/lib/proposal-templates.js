@@ -21,7 +21,8 @@ const TEMPLATES_DIR = path.join(__dirname, "templates");
 
 // Template key → filename. Add new services here (lighting, combined…).
 const PROPOSAL_TEMPLATES = {
-  irrigation: "proposal-irrigation.json"
+  irrigation: "proposal-irrigation.json",
+  lighting: "proposal-lighting.json"
 };
 
 function isKnownTemplate(key) {
