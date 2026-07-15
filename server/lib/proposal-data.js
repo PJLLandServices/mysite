@@ -363,7 +363,10 @@ function lightingRows(quote) {
 // "views" are attached later (Phase B) as data.views.
 function buildLightingData(quote, t, ctx, common) {
   const { customer, displayId, issued, subtotal, hst, total, sig } = common;
-  const fixtures = fixtureCount(quote);
+  // Fixture count: an explicit override (set when the fixtures are quoted as
+  // one all-inclusive package line) wins; otherwise sum the line-item Qtys.
+  const override = Number(quote.proposalFixtureCount);
+  const fixtures = Number.isFinite(override) && override > 0 ? override : fixtureCount(quote);
   const tx = common.transformer || transformerSpec(quote);
   const many = tx.count >= 2;
   const facts = [

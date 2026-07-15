@@ -11201,12 +11201,19 @@ async function handleApi(req, res, pathname) {
       }
       const payload = await parseRequestBody(req, { maxBytes: 1 * 1024 * 1024 }).catch(() => ({}));
       const requestedKey = payload && typeof payload.templateKey === "string" ? payload.templateKey : null;
-      // Persist the chosen template so the builder remembers it next time.
-      if (requestedKey && requestedKey !== q.proposalTemplateKey) {
-        await quotes.setProposalPageConfig(q.id, { templateKey: requestedKey }, { by: session.uid || "admin" });
+      // Persist page config (template + lighting fixture-count override) so the
+      // builder remembers it and the adapter reads it from the fresh record.
+      const cfgPatch = {};
+      if (requestedKey && requestedKey !== q.proposalTemplateKey) cfgPatch.templateKey = requestedKey;
+      if (payload && Object.prototype.hasOwnProperty.call(payload, "fixtureCount")) {
+        cfgPatch.fixtureCount = payload.fixtureCount;   // number, or blank/null to clear
       }
-      const templateKey = requestedKey || q.proposalTemplateKey || "irrigation";
-      const result = await renderAndStoreProposalPage(q, { templateKey, session });
+      if (Object.keys(cfgPatch).length) {
+        await quotes.setProposalPageConfig(q.id, cfgPatch, { by: session.uid || "admin" });
+      }
+      const fresh = await quotes.get(q.id);
+      const templateKey = requestedKey || fresh.proposalTemplateKey || "irrigation";
+      const result = await renderAndStoreProposalPage(fresh, { templateKey, session });
       return sendJson(res, 201, {
         ok: true,
         proposalDocument: result.meta,

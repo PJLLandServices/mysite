@@ -195,6 +195,10 @@
               <label class="pb-gen-field">Design
                 <select id="pbGenTemplate"></select>
               </label>
+              <label class="pb-gen-field" id="pbGenFixturesField" hidden>Fixtures
+                <input type="number" id="pbGenFixtures" min="0" step="1" placeholder="count from line items">
+              </label>
+              <p class="pb-side-hint" id="pbGenFixturesHint" hidden>Optional — set the total fixture count when the whole job is quoted as one all-inclusive line. Leave blank to count from the line-item quantities.</p>
               <label class="pb-upload-btn">
                 <input type="file" id="pbHeroInput" accept="image/*" hidden>
                 <span>+ Hero photo (the house)</span>

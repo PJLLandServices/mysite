@@ -229,6 +229,19 @@ const lightParties = {
   // Singular fixture count reads naturally.
   const dOne = buildProposalData(lightingQuote([["Small", "MINI SCOPE", 1, 225]], { deposit: false }), { ...lightParties, templateKey: "lighting" });
   eq(dOne.schedule.subtotalLabel, "Subtotal  —  1 fixture", "subtotal label singularizes at 1 fixture");
+
+  // Fixture-count OVERRIDE — when the whole job is one all-inclusive line
+  // (Qty 1), proposalFixtureCount drives the hero + subtotal instead of Qty.
+  const lump = lightingQuote([["6 Fixture Landscape Light Project", "", 1, 1869.52]], { deposit: false });
+  const dLumpNo = buildProposalData(lump, { ...lightParties, templateKey: "lighting" });
+  ok(dLumpNo.hero.facts.some((f) => f.k === "Fixtures" && f.v === "1"), "no override → lump line counts as 1 fixture");
+  const dLump = buildProposalData({ ...lump, proposalFixtureCount: 6 }, { ...lightParties, templateKey: "lighting" });
+  ok(dLump.hero.facts.some((f) => f.k === "Fixtures" && f.v === "6"), "override → hero shows 6 fixtures");
+  eq(dLump.schedule.subtotalLabel, "Subtotal  —  6 fixtures", "override → subtotal label reads 6 fixtures");
+  // A real per-type quote ignores a stray 0/invalid override and counts Qty.
+  const dCount = buildProposalData({ ...lightingQuote([["Medium", "SCOPE", 16, 245]]), proposalFixtureCount: 0 },
+    { ...lightParties, templateKey: "lighting" });
+  ok(dCount.hero.facts.some((f) => f.k === "Fixtures" && f.v === "16"), "override of 0 ignored → counts Qty (16)");
 }
 
 // ---- transformer copy adapts to the job (single vs multi) ------------

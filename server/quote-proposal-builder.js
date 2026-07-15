@@ -93,6 +93,9 @@
     docRemove: $("pbDocRemove"),
     genCard: $("pbGenCard"),
     genTemplate: $("pbGenTemplate"),
+    genFixtures: $("pbGenFixtures"),
+    genFixturesField: $("pbGenFixturesField"),
+    genFixturesHint: $("pbGenFixturesHint"),
     heroInput: $("pbHeroInput"),
     heroStatus: $("pbHeroStatus"),
     heroName: $("pbHeroName"),
@@ -976,7 +979,21 @@
         .join("");
       // Reflect the quote's saved choice (default: first option).
       if (state.quote?.proposalTemplateKey) el.genTemplate.value = state.quote.proposalTemplateKey;
+      syncFixturesField();
     } catch (_) { /* picker is a convenience; failure is non-fatal */ }
+  }
+
+  // The fixture-count field is lighting-only. Shows when the selected design
+  // is the lighting template; pre-filled from the quote's saved override.
+  function syncFixturesField() {
+    if (!el.genFixturesField) return;
+    const isLighting = el.genTemplate && el.genTemplate.value === "lighting";
+    el.genFixturesField.hidden = !isLighting;
+    if (el.genFixturesHint) el.genFixturesHint.hidden = !isLighting;
+    if (isLighting && el.genFixtures && document.activeElement !== el.genFixtures) {
+      const saved = state.quote && state.quote.proposalFixtureCount;
+      el.genFixtures.value = saved != null ? String(saved) : "";
+    }
   }
 
   function renderGeneratePanel() {
@@ -984,6 +1001,7 @@
     if (state.quote?.proposalTemplateKey && el.genTemplate.value !== state.quote.proposalTemplateKey) {
       el.genTemplate.value = state.quote.proposalTemplateKey;
     }
+    syncFixturesField();
     const hero = state.quote && state.quote.proposalHeroPhoto;
     el.heroStatus.hidden = !hero;
     if (hero) {
@@ -1001,6 +1019,9 @@
       el.genResult.hidden = true;
     }
   }
+
+  // Show/hide the fixture-count field as the design changes.
+  if (el.genTemplate) el.genTemplate.addEventListener("change", syncFixturesField);
 
   el.heroInput.addEventListener("change", async (e) => {
     const file = e.target.files?.[0];
@@ -1049,15 +1070,22 @@
     btn.disabled = true;
     btn.textContent = "Generating…";
     try {
+      const body = { templateKey: el.genTemplate.value || undefined };
+      // Lighting fixture-count override: send the typed count, or null to clear.
+      if (el.genTemplate.value === "lighting" && el.genFixtures) {
+        const v = el.genFixtures.value.trim();
+        body.fixtureCount = v === "" ? null : (Number(v) || null);
+      }
       const r = await fetch(`/api/quotes/${encodeURIComponent(state.quote.id)}/generate-proposal-page`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ templateKey: el.genTemplate.value || undefined })
+        body: JSON.stringify(body)
       });
       const data = await r.json().catch(() => ({}));
       if (!r.ok || !data.ok) { showError(data.errors?.[0] || `Generate failed (${r.status})`); return; }
       state.quote.proposalDocument = data.proposalDocument;
       if (data.proposalDocument?.templateKey) state.quote.proposalTemplateKey = data.proposalDocument.templateKey;
+      if (data.quote && "proposalFixtureCount" in data.quote) state.quote.proposalFixtureCount = data.quote.proposalFixtureCount;
       btn.dataset.justRan = "1";
       renderProposalDoc();
       renderGeneratePanel();

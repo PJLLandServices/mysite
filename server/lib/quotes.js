@@ -553,6 +553,12 @@ function blankQuote() {
     proposalTemplateKey: null,
     proposalHeroPhoto: null,
 
+    // Lighting fixture-count override (Proposal HTML brief, 2026-07). When the
+    // fixtures are quoted as one all-inclusive package line (Qty 1), this lets
+    // the generated page show the true fixture count in the hero + schedule
+    // subtotal. null = count from the line-item quantities.
+    proposalFixtureCount: null,
+
     // Combined ("two projects, one property") bundle config, or null. Present
     // only on combined proposals — a project_proposal whose numbers are MERGED
     // from two child quotes. Shape:
@@ -607,6 +613,7 @@ function hydrate(q) {
     // defensive defaults for records that pre-date it.
     proposalTemplateKey: typeof q?.proposalTemplateKey === "string" ? q.proposalTemplateKey : null,
     proposalHeroPhoto: q?.proposalHeroPhoto && typeof q.proposalHeroPhoto === "object" ? q.proposalHeroPhoto : null,
+    proposalFixtureCount: Number.isFinite(Number(q?.proposalFixtureCount)) && Number(q?.proposalFixtureCount) > 0 ? Number(q.proposalFixtureCount) : null,
     combined: q?.combined && typeof q.combined === "object" ? q.combined : null,
     // Defensive default so legacy records (and partial hand-edits) always
     // carry all three pdfOptions keys (Brief D). The renderer also treats a
@@ -1412,7 +1419,7 @@ async function setProposalDocument(id, meta, { by = "admin" } = {}) {
 // not a scope-protected pricing field, so it is allowed on any status. The
 // caller writes/deletes the actual hero image file on disk. Returns the
 // updated record or null if not found.
-async function setProposalPageConfig(id, { templateKey, heroPhoto } = {}, { by = "admin" } = {}) {
+async function setProposalPageConfig(id, { templateKey, heroPhoto, fixtureCount } = {}, { by = "admin" } = {}) {
   if (!id) throw new Error("setProposalPageConfig needs id");
   const records = await readAll();
   const idx = records.findIndex((q) => q.id === id);
@@ -1422,6 +1429,11 @@ async function setProposalPageConfig(id, { templateKey, heroPhoto } = {}, { by =
   let changed = false;
   if (templateKey !== undefined) {
     q.proposalTemplateKey = templateKey ? String(templateKey) : null;
+    changed = true;
+  }
+  if (fixtureCount !== undefined) {
+    const n = Number(fixtureCount);
+    q.proposalFixtureCount = Number.isFinite(n) && n > 0 ? Math.round(n) : null;
     changed = true;
   }
   if (heroPhoto !== undefined) {
