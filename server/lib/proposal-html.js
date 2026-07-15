@@ -580,6 +580,21 @@ ${paymentHtml}
 </section>`;
 }
 
+// Combined payment: a deposit/balance pair (reuses renderPayment) or, when
+// there's no deposit, a single full-width "Total due" panel.
+function renderCombinedPayment(payment) {
+  if (payment && payment.mode === "deposit" && payment.deposit) return renderPayment(payment);
+  const t = (payment && payment.totalDue) || {};
+  return `  <div class="pay pay-single">
+    <div class="pay-col now">
+      <p class="pay-k">${esc(t.label || "Total due")}</p>
+      <p class="pay-v">${esc(t.amount || "")}</p>
+      <p class="pay-when">${esc(t.when || "Due on completion")}</p>
+      <p class="pay-p">${rich(t.body || "")}</p>
+    </div>
+  </div>`;
+}
+
 function renderCombinedClose(close) {
   return `<section class="close wrap">
   <div class="signoff-mark"><img src="${LOGO_WHITE}" alt="PJL Land Services"></div>
@@ -610,7 +625,7 @@ ${renderCombinedHero(data.hero || {}, meta)}
 
 ${renderCombinedProjects(data.projects || {})}
 
-${renderCombinedOptions(data.options || {}, renderPayment(data.payment || {}))}
+${renderCombinedOptions(data.options || {}, renderCombinedPayment(data.payment || {}))}
 
 ${renderCombinedClose(data.close || {})}
 

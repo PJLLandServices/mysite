@@ -11259,7 +11259,9 @@ async function handleApi(req, res, pathname) {
       const HST = 0.13;
       const saving = Math.max(0, Number(payload.bundleSaving) || 0);
       const freeService = String(payload.freeService || "").trim().slice(0, 80);
-      const depositPercent = Number(payload.depositPercent) > 0 ? Math.min(100, Number(payload.depositPercent)) : 25;
+      // Honour an explicit 0 as "no deposit"; only absent/invalid → 25% default.
+      const rawDeposit = Number(payload.depositPercent);
+      const depositPercent = Number.isFinite(rawDeposit) && rawDeposit >= 0 ? Math.min(100, rawDeposit) : 25;
       const linkMode = payload.linkMode === "embed" ? "embed" : "link";
       const validityDays = Number(payload.validityDays) > 0 ? Math.min(365, Number(payload.validityDays)) : 90;
       const combinedSubtotal = children.reduce((n, c) => n + (Number(c.subtotal) || 0), 0);

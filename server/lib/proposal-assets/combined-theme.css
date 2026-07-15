@@ -150,6 +150,7 @@
   /* deposit */
   .pay { display:grid; grid-template-columns:1fr 1fr; gap:2px; background:var(--rule);
     border:1px solid var(--rule); margin-top:44px; }
+  .pay.pay-single { grid-template-columns:1fr; max-width:560px; }
   .pay-col { background:var(--panel); padding:30px 28px 34px; }
   .pay-col.now { border-top:2px solid var(--lamp); }
   .pay-k { font-family:var(--mono); font-size:10px; font-weight:600; letter-spacing:.2em;

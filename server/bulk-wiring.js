@@ -294,7 +294,7 @@
 
       form.appendChild(field("Bundle saving ($ off the combined price)", saving, "Blank or 0 = no discount"));
       form.appendChild(field("Free service included (optional)", free, "Shown as a bonus, e.g. a free seasonal service"));
-      form.appendChild(field("Deposit (%)", deposit));
+      form.appendChild(field("Deposit (%)", deposit, "0 = no deposit (due in full on completion); blank = 25%"));
       form.appendChild(field("Offer valid for (days)", validity));
       form.appendChild(field("Option buttons point to…", linkMode, "Link = the live standalone pages; Embed = a copy of each PDF baked in"));
       panel.appendChild(form);
@@ -306,13 +306,18 @@
       cancel.addEventListener("click", () => cleanup(null));
       const build = document.createElement("button");
       build.type = "button"; build.className = "pjl-bulk-modal-btn pjl-bulk-modal-btn-primary"; build.textContent = "Build proposal";
-      build.addEventListener("click", () => cleanup({
-        bundleSaving: Number(saving.value) || 0,
-        freeService: free.value.trim(),
-        depositPercent: Number(deposit.value) || 25,
-        validityDays: Number(validity.value) || 90,
-        linkMode: linkMode.value === "embed" ? "embed" : "link"
-      }));
+      build.addEventListener("click", () => {
+        // Blank deposit → 25% default; a typed 0 → genuinely no deposit.
+        const depStr = deposit.value.trim();
+        const depNum = Number(depStr);
+        cleanup({
+          bundleSaving: Number(saving.value) || 0,
+          freeService: free.value.trim(),
+          depositPercent: depStr === "" ? 25 : (Number.isFinite(depNum) && depNum >= 0 ? depNum : 25),
+          validityDays: Number(validity.value) || 90,
+          linkMode: linkMode.value === "embed" ? "embed" : "link"
+        });
+      });
       actions.appendChild(cancel);
       actions.appendChild(build);
       panel.appendChild(actions);

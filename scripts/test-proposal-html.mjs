@@ -328,6 +328,22 @@ function combinedChild(id, templateKey, subtotal, hst, total, lineItems) {
   ok(plain.options.totals.some((r) => r.lab === "Subtotal" && r.num === "$17,997.00"), "subtotal = combined subtotal when no saving");
   eq(plain.payment.deposit.amount, "$5,084.15", "deposit recomputed on undiscounted total");
 
+  // Deposit 0 → NO deposit block; a single "Total due / due on completion".
+  const noDep = buildProposalData(
+    { ...combinedQuote, combined: { ...combinedQuote.combined, depositPercent: 0 } }, opts);
+  eq(noDep.payment.mode, "total-due", "deposit 0 → total-due payment mode (no deposit)");
+  ok(!noDep.payment.deposit, "deposit 0 → no deposit column");
+  eq(noDep.payment.totalDue.amount, "$19,206.61", "no-deposit → total due = full combined total");
+  {
+    const html = renderCombinedProposal(noDep);
+    ok(!/Deposit to schedule/i.test(html), "no-deposit HTML omits the deposit panel");
+    ok(/Total due/i.test(html) && html.includes("pay-single"), "no-deposit HTML shows single total-due panel");
+  }
+  // Deposit absent/undefined still defaults to 25% (not 0).
+  const defDep = buildProposalData(
+    { ...combinedQuote, combined: { childIds: combinedQuote.combined.childIds, bundleSaving: 1000, freeService: "", linkMode: "link" } }, opts);
+  eq(defDep.payment.mode, "deposit", "absent deposit → defaults to a deposit (25%)");
+
   // Embed link mode → child buttons point at the baked-in PDF data URI.
   const embed = buildProposalData(
     { ...combinedQuote, combined: { ...combinedQuote.combined, linkMode: "embed" } },

@@ -511,7 +511,11 @@ function buildCombinedData(quote, t, ctx, common) {
 
   const saving = Math.max(0, Number(cfg.bundleSaving) || 0);
   const freeService = String(cfg.freeService || "").trim();
-  const depositPercent = Number(cfg.depositPercent) > 0 ? Number(cfg.depositPercent) : 25;
+  // Deposit: honour an explicit 0 as "no deposit". Only an absent/invalid
+  // value falls back to the 25% default.
+  const rawDeposit = Number(cfg.depositPercent);
+  const depositPercent = Number.isFinite(rawDeposit) && rawDeposit >= 0 ? Math.min(100, rawDeposit) : 25;
+  const hasDeposit = depositPercent > 0;
   const linkMode = cfg.linkMode === "embed" ? "embed" : "link";
   const validThrough = fmtDate(quote.validUntil || quote.validUntilDate) || "the date shown";
 
@@ -630,7 +634,7 @@ function buildCombinedData(quote, t, ctx, common) {
       saveNote,
       clause
     },
-    payment: {
+    payment: hasDeposit ? {
       mode: "deposit",
       deposit: {
         label: "Deposit to schedule", amount: fmtMoney(deposit),
@@ -640,6 +644,12 @@ function buildCombinedData(quote, t, ctx, common) {
       balance: {
         label: "Balance", amount: fmtMoney(balance), when: "Due on completion",
         body: "Payable once both systems are installed, tested, and walked through with you."
+      }
+    } : {
+      mode: "total-due",
+      totalDue: {
+        label: "Total due", amount: fmtMoney(total), when: "Due on completion",
+        body: "No deposit required to book — payable in full once both systems are installed, tested, and walked through with you."
       }
     },
     close: {
