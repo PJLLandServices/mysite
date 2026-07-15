@@ -17746,6 +17746,23 @@ const server = http.createServer(async (req, res) => {
       if (approvePageMatch) {
         const served = await serveProposalDocIfUnlocked(req, res, decodeURIComponent(approvePageMatch[1]), url);
         if (served) return;
+        // Bare-link recovery: a proposal link opened WITHOUT its ?t=<token>
+        // (e.g. an admin-preview URL copied by hand and sent to a customer)
+        // can't reach the phone gate — approve.js has no token to load with,
+        // so it shows "Approval link not found". If the quote exists, was
+        // sent, carries a custom doc + an approval token, redirect to the
+        // proper tokenized URL. The phone gate stays the access control.
+        if (!url.searchParams.get("t")) {
+          try {
+            const qid = decodeURIComponent(approvePageMatch[1]);
+            const q = await quotes.get(qid);
+            if (q && q.status !== "draft" && q.approval && q.approval.token && (await proposalHasCustomDoc(q))) {
+              res.writeHead(302, { Location: `/approve/${encodeURIComponent(qid)}?t=${encodeURIComponent(q.approval.token)}` });
+              res.end();
+              return;
+            }
+          } catch (_) { /* fall through to approve.html */ }
+        }
       }
     }
 
