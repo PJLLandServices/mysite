@@ -242,12 +242,17 @@ function buildSeasonal(t, zones) {
 function systemFeatures(quote) {
   const text = (Array.isArray(quote.lineItems) ? quote.lineItems : [])
     .map((li) => `${li.label || ""} ${li.description || ""}`).join(" ").toLowerCase();
+  const spray = /spray/.test(text);        // Pop-up spray  — Pro-Spray PRS body
+  const mp = /rotator/.test(text);          // MP Rotator    — Pro-Spray PRS body ("Rotator", not "Rotary")
+  const strip = /strip/.test(text);         // Strip nozzle  — Pro-Spray PRS body
+  const gearRotor = /rotary/.test(text);    // Gear rotor (PGP) — NOT pressure-regulated at the head
+  const drip = /drip|root[\s-]?zone/.test(text);
   return {
     flowMeter: /flow[\s-]?(meter|sensor)/.test(text),
-    drip: /drip|root[\s-]?zone/.test(text),
-    heads: /head/.test(text),
-    spray: /spray/.test(text),
-    rotor: /rotar|rotor/.test(text)
+    drip, spray, mp, strip, gearRotor,
+    // Heads that regulate pressure AT the head (30 PSI): spray / MP / strip.
+    prsHeads: spray || mp || strip,
+    heads: spray || mp || strip || gearRotor
   };
 }
 
@@ -272,10 +277,14 @@ function buildSystemCards(system, f) {
   const del = system.delivery;
   if (del) {
     const parts = [];
-    if (f.heads) parts.push(del.headsSentence);
-    if (f.drip) parts.push(del.dripSentence);
+    if (f.prsHeads) parts.push(del.spraySentence);                         // 30 PSI at the head
+    if (f.drip) parts.push(del.dripSentence);                              // drip pressure regulator
+    if (!f.prsHeads && !f.drip && f.gearRotor) parts.push(del.rotorSentence); // gear-rotor-only fallback
     if (parts.length) {
-      const title = (f.drip && f.heads) ? del.titleBoth : (f.drip ? del.titleDrip : del.titleHeads);
+      const title = (f.prsHeads && f.drip) ? del.titleBoth
+        : f.prsHeads ? del.titleSpray
+        : f.drip ? del.titleDrip
+        : del.titleRotor;
       cards.splice(Math.max(0, cards.length - 1), 0, { title, body: parts.filter(Boolean).join(" ") });
     }
   }

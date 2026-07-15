@@ -18,11 +18,13 @@
       { "title": "Installed with minimal disturbance", "body": "Sod-cutting and hand-trenching keep disturbance to a minimum — no open machine trenching. Lateral pipe sits below grade and valve boxes are set in accessible, out-of-sight spots." }
     ],
     "delivery": {
-      "titleBoth": "Water delivered where it's needed",
-      "titleHeads": "Pressure-regulated for even coverage",
-      "titleDrip": "Water delivered to the root zone",
-      "headsSentence": "Pressure-regulated heads deliver water at exactly their designed pressure no matter what the supply does — even coverage across every zone, less misting and wasted water, and heads that last longer.",
-      "dripSentence": "Drip line delivers water straight to the roots of planted beds and trees — nothing lost to evaporation or overspray, and pinned within the beds out of sight."
+      "titleBoth": "The right pressure, everywhere",
+      "titleSpray": "Pressure-regulated for even coverage",
+      "titleDrip": "Drip, delivered at the root",
+      "titleRotor": "Even coverage across the turf",
+      "spraySentence": "Pressure-regulated spray heads step the pressure down to 30 PSI right at the sprinkler head, so every head sprays at exactly its designed pressure — even coverage, less misting and wasted water, and heads that last longer.",
+      "dripSentence": "Drip zones run on their own pressure regulator that drops the pressure for the drip line, delivering water straight to the roots of your beds and trees — nothing lost to evaporation or overspray.",
+      "rotorSentence": "Gear-driven rotors cover the open turf evenly, each zone matched to your flow so it runs at the pressure it was designed for."
     }
   },
   "schedule": {

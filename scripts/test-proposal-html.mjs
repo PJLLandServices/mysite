@@ -155,16 +155,19 @@ function cardsFor(descs) {
   return buildProposalData(proposalWithZoneDescs(descs), { customer: { name: "X" }, property: { address: "Y" }, templateKey: "irrigation" }).system.cards.map((c) => `${c.title} :: ${c.body}`);
 }
 {
-  // No drip → no drip wording anywhere in the cards; pressure regulation advertised.
+  // No drip → no drip wording; spray heads advertised as pressure-regulated @ 30 PSI.
   const noDrip = cardsFor(["Rotary heads · 6 heads", "Pop-up spray heads · 5 heads"]);
   eq(noDrip.length, 4, "no-drip system → 4 cards");
   ok(!noDrip.some((c) => /drip|root.zone/i.test(c)), "no-drip system → cards never mention drip");
-  ok(noDrip.some((c) => /pressure-regulated/i.test(c)), "no-drip system → pressure-regulated heads advertised");
-  // Drip present → drip mentioned, still 4 cards.
-  const withDrip = cardsFor(["Rotary heads · 6 heads", "Root-zone drip line"]);
-  eq(withDrip.length, 4, "drip system → 4 cards");
-  ok(withDrip.some((c) => /drip/i.test(c)), "drip system → drip mentioned");
-  ok(withDrip.some((c) => /pressure-regulated/i.test(c)), "drip+heads → still advertises pressure regulation");
+  ok(noDrip.some((c) => /pressure-regulated/i.test(c) && /30 psi/i.test(c)), "spray present → pressure-regulated heads @ 30 PSI advertised");
+  // Spray + drip → both pressure-regulation stories, still 4 cards.
+  const both = cardsFor(["Pop-up spray heads · 5 heads", "Root-zone drip line"]);
+  eq(both.length, 4, "spray+drip system → 4 cards");
+  ok(both.some((c) => /drip/i.test(c) && /pressure regulator/i.test(c)), "drip present → drip pressure-regulator mentioned");
+  ok(both.some((c) => /30 psi/i.test(c)), "spray present → 30 PSI still advertised");
+  // Gear-rotor-only → no false 30 PSI / pressure-regulated-head claim.
+  const rotorOnly = cardsFor(["Rotary heads · 8 heads"]);
+  ok(!rotorOnly.some((c) => /30 psi/i.test(c) || /pressure-regulated (spray )?heads?/i.test(c)), "gear-rotor-only → no 30 PSI / pressure-regulated-head claim");
   // Full HTML for a no-drip job has zero drip wording.
   const html = renderSprinklerProposal(buildProposalData(proposalWithZoneDescs(["Rotary heads · 6 heads"]), { customer: { name: "X" }, property: { address: "Y" }, templateKey: "irrigation" }));
   ok(!/\bdrip\b/i.test(html), "no-drip job → generated HTML never says 'drip'");
