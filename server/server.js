@@ -3342,6 +3342,84 @@ async function handlePortalLoginApi(req, res, pathname) {
   return false;
 }
 
+// Resolve the child-quote data a combined proposal needs to render: each
+// child's quote plus (link mode) its approval token, or (embed mode) its
+// frozen PDF as a data URI. Missing children are skipped; a child without a
+// frozen PDF in embed mode falls back to link behaviour (no data URI).
+// Returns [] for a non-combined quote.
+async function resolveCombinedChildren(q) {
+  const cfg = q && q.combined;
+  if (!cfg || !Array.isArray(cfg.childIds)) return [];
+  const linkMode = cfg.linkMode === "embed" ? "embed" : "link";
+  const out = [];
+  for (const cid of cfg.childIds) {
+    let child = null;
+    try { child = await quotes.get(cid); } catch (_) { child = null; }
+    if (!child) continue;
+    const entry = { quote: child, token: (child.approval && child.approval.token) || null };
+    if (linkMode === "embed") {
+      try {
+        const buf = await readFrozenQuotePdf(child);
+        if (buf) {
+          entry.pdfDataUrl = "data:application/pdf;base64," + buf.toString("base64");
+          entry.pdfName = `${child.id}.pdf`;
+        }
+      } catch (_) { /* fall back to link for this child */ }
+    }
+    out.push(entry);
+  }
+  return out;
+}
+
+// Render a quote's designed customer page and write it into the proposal-docs
+// slot (the file the phone-gated /approve serves). Shared by the per-quote
+// "generate page" route and the combined-proposal build. Returns
+// { meta, previewUrl, quote }. Throws Error (with .statusCode) on bad input.
+async function renderAndStoreProposalPage(q, { templateKey, session } = {}) {
+  const key = templateKey || q.proposalTemplateKey || "irrigation";
+  if (!proposalTemplates.isKnownTemplate(key)) {
+    const e = new Error(`Unknown proposal template: ${key}`); e.statusCode = 422; throw e;
+  }
+  const theme = proposalTemplates.loadRaw(key).theme || "sprinkler";
+  const renderer = theme === "lighting" ? proposalHtml.renderLightingProposal
+    : theme === "combined" ? proposalHtml.renderCombinedProposal
+    : theme === "sprinkler" ? proposalHtml.renderSprinklerProposal
+    : null;
+  if (!renderer) {
+    const e = new Error(`The "${key}" proposal design isn't available yet.`); e.statusCode = 422; throw e;
+  }
+
+  const parties = await quoteRenderParties(q);
+  let heroPhoto = null;
+  if (q.proposalHeroPhoto) {
+    try { heroPhoto = "data:image/jpeg;base64," + (await fs.readFile(proposalHeroPath(q.id))).toString("base64"); }
+    catch (_) { /* metadata without a file — render without the photo */ }
+  }
+  let combinedChildren = null;
+  if (theme === "combined") {
+    combinedChildren = await resolveCombinedChildren(q);
+    if (combinedChildren.length < 2) {
+      const e = new Error("This combined proposal needs two valid child quotes."); e.statusCode = 422; throw e;
+    }
+  }
+
+  const data = proposalData.buildProposalData(q, {
+    customer: parties.customer, property: parties.property, templateKey: key, heroPhoto, combinedChildren
+  });
+  const html = renderer(data);
+  const bytes = Buffer.byteLength(html, "utf8");
+  const docPath = proposalDocPath(q.id);
+  if (!docPath) { const e = new Error("Bad quote id."); e.statusCode = 400; throw e; }
+  await fs.mkdir(PROPOSAL_DOCS_DIR, { recursive: true });
+  await fs.writeFile(docPath, html, "utf8");
+  const meta = {
+    filename: `${q.id}.html`, bytes, uploadedAt: new Date().toISOString(),
+    uploadedBy: (session && session.uid) || "admin", generated: true, templateKey: key
+  };
+  const updated = await quotes.setProposalDocument(q.id, meta, { by: (session && session.uid) || "admin" });
+  return { meta, previewUrl: `/approve/${encodeURIComponent(q.id)}`, quote: updated };
+}
+
 async function handleApi(req, res, pathname) {
   // Identity + access flows — admin user management, password reset,
   // customer magic-link. Each helper returns false when it didn't handle
@@ -11123,65 +11201,101 @@ async function handleApi(req, res, pathname) {
       }
       const payload = await parseRequestBody(req, { maxBytes: 1 * 1024 * 1024 }).catch(() => ({}));
       const requestedKey = payload && typeof payload.templateKey === "string" ? payload.templateKey : null;
-      const templateKey = requestedKey || q.proposalTemplateKey || "irrigation";
-      if (!proposalTemplates.isKnownTemplate(templateKey)) {
-        return sendJson(res, 422, { ok: false, errors: [`Unknown proposal template: ${templateKey}`] });
-      }
-      // Pick the renderer by theme: sprinkler (light) or lighting (dark).
-      const theme = proposalTemplates.loadRaw(templateKey).theme || "sprinkler";
-      const renderer = theme === "lighting" ? proposalHtml.renderLightingProposal
-        : theme === "sprinkler" ? proposalHtml.renderSprinklerProposal
-        : null;
-      if (!renderer) {
-        return sendJson(res, 422, { ok: false, errors: [`The "${templateKey}" proposal design isn't available yet.`] });
-      }
-
       // Persist the chosen template so the builder remembers it next time.
       if (requestedKey && requestedKey !== q.proposalTemplateKey) {
         await quotes.setProposalPageConfig(q.id, { templateKey: requestedKey }, { by: session.uid || "admin" });
       }
-
-      // Resolve customer/property (name, service address, phone) live, same
-      // as the PDF path, and load the hero photo back as a data URI.
-      const parties = await quoteRenderParties(q);
-      let heroPhoto = null;
-      if (q.proposalHeroPhoto) {
-        try {
-          const buf = await fs.readFile(proposalHeroPath(q.id));
-          heroPhoto = "data:image/jpeg;base64," + buf.toString("base64");
-        } catch (_) { /* metadata without a file — render without the photo */ }
-      }
-
-      const data = proposalData.buildProposalData(q, {
-        customer: parties.customer,
-        property: parties.property,
-        templateKey,
-        heroPhoto
-      });
-      const html = renderer(data);
-      const bytes = Buffer.byteLength(html, "utf8");
-
-      const docPath = proposalDocPath(q.id);
-      if (!docPath) return sendJson(res, 400, { ok: false, errors: ["Bad quote id."] });
-      await fs.mkdir(PROPOSAL_DOCS_DIR, { recursive: true });
-      await fs.writeFile(docPath, html, "utf8");
-      const meta = {
-        filename: `${q.id}.html`,
-        bytes,
-        uploadedAt: new Date().toISOString(),
-        uploadedBy: session.uid || "admin",
-        generated: true,
-        templateKey
-      };
-      const updated = await quotes.setProposalDocument(q.id, meta, { by: session.uid || "admin" });
+      const templateKey = requestedKey || q.proposalTemplateKey || "irrigation";
+      const result = await renderAndStoreProposalPage(q, { templateKey, session });
       return sendJson(res, 201, {
         ok: true,
-        proposalDocument: meta,
-        previewUrl: `/approve/${encodeURIComponent(q.id)}`,
-        quote: updated
+        proposalDocument: result.meta,
+        previewUrl: result.previewUrl,
+        quote: result.quote
       });
     } catch (err) {
-      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't generate the page."] });
+      return sendJson(res, err.statusCode || 400, { ok: false, errors: [err.message || "Couldn't generate the page."] });
+    }
+  }
+
+  // POST /api/quotes/combined — admin. Build a combined ("two projects, one
+  // property") proposal by MERGING two existing project-proposal quotes, then
+  // generate its phone-gated page in one shot. Body:
+  //   { childIds:[a,b], bundleSaving, freeService, depositPercent, validityDays, linkMode }
+  if (pathname === "/api/quotes/combined" && req.method === "POST") {
+    const session = await requireAdmin(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+    try {
+      const payload = await parseRequestBody(req, { maxBytes: 256 * 1024 }).catch(() => ({}));
+      const childIds = Array.isArray(payload.childIds) ? payload.childIds.map(String) : [];
+      if (childIds.length !== 2) {
+        return sendJson(res, 422, { ok: false, errors: ["Select exactly two quotes to combine."] });
+      }
+      if (childIds[0] === childIds[1]) {
+        return sendJson(res, 422, { ok: false, errors: ["Pick two different quotes."] });
+      }
+      const children = [];
+      for (const cid of childIds) {
+        const c = await quotes.get(cid);
+        if (!c) return sendJson(res, 404, { ok: false, errors: [`Quote ${cid} not found.`] });
+        if (c.type !== "project_proposal") {
+          return sendJson(res, 422, { ok: false, errors: [`${cid} isn't a project proposal — only proposals can be combined.`] });
+        }
+        if (c.combined) {
+          return sendJson(res, 422, { ok: false, errors: [`${cid} is already a combined proposal.`] });
+        }
+        children.push(c);
+      }
+      // Same-customer guard — a bundle can't span two clients.
+      const [a, b] = children;
+      const sameCustomer = (a.customerId && a.customerId === b.customerId) ||
+        (a.customerEmail && a.customerEmail.toLowerCase() === (b.customerEmail || "").toLowerCase());
+      if (!sameCustomer) {
+        return sendJson(res, 422, { ok: false, errors: ["Both quotes must be for the same customer to combine them."] });
+      }
+
+      // Merge figures (the page re-derives these live, but store them so the
+      // folder list shows the combined price).
+      const HST = 0.13;
+      const saving = Math.max(0, Number(payload.bundleSaving) || 0);
+      const freeService = String(payload.freeService || "").trim().slice(0, 80);
+      const depositPercent = Number(payload.depositPercent) > 0 ? Math.min(100, Number(payload.depositPercent)) : 25;
+      const linkMode = payload.linkMode === "embed" ? "embed" : "link";
+      const validityDays = Number(payload.validityDays) > 0 ? Math.min(365, Number(payload.validityDays)) : 90;
+      const combinedSubtotal = children.reduce((n, c) => n + (Number(c.subtotal) || 0), 0);
+      const discounted = Math.max(0, combinedSubtotal - saving);
+      const hst = Math.round(discounted * HST * 100) / 100;
+      const total = Math.round((discounted + hst) * 100) / 100;
+
+      const created = await quotes.create({
+        type: "project_proposal",
+        status: "draft",
+        customerId: a.customerId || null,
+        customerEmail: a.customerEmail || "",
+        propertyId: a.propertyId || null,
+        createdBy: session.uid || "admin",
+        validityDays,
+        subtotal: discounted,
+        hst,
+        total,
+        scope: "Combined proposal"
+      });
+      await quotes.setCombinedConfig(created.id, {
+        config: { childIds, bundleSaving: saving, freeService, depositPercent, linkMode },
+        subtotal: discounted, hst, total
+      }, { by: session.uid || "admin" });
+
+      const fresh = await quotes.get(created.id);
+      const result = await renderAndStoreProposalPage(fresh, { templateKey: "combined", session });
+      return sendJson(res, 201, {
+        ok: true,
+        combinedId: created.id,
+        proposalDocument: result.meta,
+        previewUrl: result.previewUrl,
+        quote: result.quote
+      });
+    } catch (err) {
+      return sendJson(res, err.statusCode || 400, { ok: false, errors: [err.message || "Couldn't build the combined proposal."] });
     }
   }
 

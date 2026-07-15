@@ -553,6 +553,12 @@ function blankQuote() {
     proposalTemplateKey: null,
     proposalHeroPhoto: null,
 
+    // Combined ("two projects, one property") bundle config, or null. Present
+    // only on combined proposals — a project_proposal whose numbers are MERGED
+    // from two child quotes. Shape:
+    //   { childIds:[a,b], bundleSaving, freeService, depositPercent, linkMode }
+    combined: null,
+
     // Audit trail — every status change appends an entry.
     history: [
       { ts: created, action: "created", by: "system", note: "" }
@@ -601,6 +607,7 @@ function hydrate(q) {
     // defensive defaults for records that pre-date it.
     proposalTemplateKey: typeof q?.proposalTemplateKey === "string" ? q.proposalTemplateKey : null,
     proposalHeroPhoto: q?.proposalHeroPhoto && typeof q.proposalHeroPhoto === "object" ? q.proposalHeroPhoto : null,
+    combined: q?.combined && typeof q.combined === "object" ? q.combined : null,
     // Defensive default so legacy records (and partial hand-edits) always
     // carry all three pdfOptions keys (Brief D). The renderer also treats a
     // missing/odd value as the itemized default, belt-and-suspenders.
@@ -1432,6 +1439,33 @@ async function setProposalPageConfig(id, { templateKey, heroPhoto } = {}, { by =
     records[idx] = q;
     await writeAll(records);
   }
+  return q;
+}
+
+// Set the combined-proposal config + merged figures on a quote (Combined
+// Proposal brief, 2026-07). Stamps templateKey "combined" and stores the
+// bundle terms + the merged subtotal/HST/total (so the folder list shows the
+// combined price). The page itself re-derives everything from the live child
+// quotes at generate time. Returns the updated record or null if not found.
+async function setCombinedConfig(id, { config = null, subtotal, hst, total } = {}, { by = "admin" } = {}) {
+  if (!id) throw new Error("setCombinedConfig needs id");
+  const records = await readAll();
+  const idx = records.findIndex((q) => q.id === id);
+  if (idx === -1) return null;
+  const q = records[idx];
+  const ts = nowIso();
+  if (config && typeof config === "object") q.combined = { ...config };
+  q.proposalTemplateKey = "combined";
+  if (typeof subtotal === "number") q.subtotal = subtotal;
+  if (typeof hst === "number") q.hst = hst;
+  if (typeof total === "number") q.total = total;
+  q.history.push({
+    ts, action: "combined_config_set", by,
+    note: config && Array.isArray(config.childIds) ? `children=${config.childIds.join(",")}` : ""
+  });
+  q.updatedAt = ts;
+  records[idx] = q;
+  await writeAll(records);
   return q;
 }
 
@@ -2275,6 +2309,7 @@ module.exports = {
   persistFrozenPdf,
   setProposalDocument,
   setProposalPageConfig,
+  setCombinedConfig,
   markAsPreview,
   markDraftPreview,
   convertPreviewToSent,

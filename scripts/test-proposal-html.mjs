@@ -6,7 +6,7 @@
 import { createRequire } from "node:module";
 const require = createRequire(import.meta.url);
 const { buildProposalData, fmtMoney, fmtDate } = require("../server/lib/proposal-data.js");
-const { renderSprinklerProposal, renderLightingProposal } = require("../server/lib/proposal-html.js");
+const { renderSprinklerProposal, renderLightingProposal, renderCombinedProposal } = require("../server/lib/proposal-html.js");
 const templates = require("../server/lib/proposal-templates.js");
 
 let passed = 0, failed = 0;
@@ -265,6 +265,77 @@ const lightParties = {
   eq(d3.system.cards[d3.system.cards.length - 1].title, "Two transformers, one property", "qty-2 transformers → plural card");
   ok(d3.scope.includes.some((x) => /transformers sized to the fixture count on each side/i.test(x)), "two-transformer job → split scope line");
   ok(d3.hero.facts.some((f) => f.k === "Fixtures" && f.v === "30"), "two transformers excluded from fixture count (30, not 32)");
+}
+
+// ---- combined (two projects, one property) ---------------------------
+// A combined proposal MERGES two child quotes into a bundle page: two project
+// summaries, three options (each standalone + both), a bundle-math table, and
+// combined deposit/balance. It's hidden from the single-quote picker but valid
+// for the combined-build flow.
+ok(!templates.listTemplates().some((t) => t.key === "combined"), "combined hidden from single-quote picker");
+ok(templates.isKnownTemplate("combined"), "combined still a known template");
+
+function combinedChild(id, templateKey, subtotal, hst, total, lineItems) {
+  return { id, type: "project_proposal", proposalTemplateKey: templateKey,
+    createdAt: "2026-07-13", validUntil: "2026-10-11", subtotal, hst, total, lineItems };
+}
+{
+  const zone = (i) => ({ label: `Zone ${i} — Area`, description: "Rotary heads", qty: 1, price: 0 });
+  const childS = combinedChild("Q-2026-0226", "irrigation", 7317.00, 951.21, 8268.21,
+    [zone(1), zone(2), zone(3), zone(4), zone(5), zone(6), zone(7)]);
+  const childL = combinedChild("Q-2026-0228", "lighting", 10680.00, 1388.40, 12068.40,
+    [{ label: "Large", description: "BIG SCOPE WIDE", qty: 2, price: 295 },
+     { label: "Medium", description: "SCOPE", qty: 16, price: 245 },
+     { label: "Small", description: "MINI SCOPE", qty: 18, price: 225 },
+     { label: "Recessed", description: "HYVE 22", qty: 8, price: 265 }]);
+  const combinedQuote = {
+    id: "Q-2026-0230", type: "project_proposal", proposalTemplateKey: "combined",
+    createdAt: "2026-07-13", validUntil: "2026-10-10", subtotal: 16997, hst: 2209.61, total: 19206.61,
+    combined: { childIds: ["Q-2026-0226", "Q-2026-0228"], bundleSaving: 1000, freeService: "Fall Closing 2026", depositPercent: 25, linkMode: "link" }
+  };
+  const opts = { customer: { name: "Chris Ingram" }, property: { address: "851 Norsan Ct, Newmarket ON" },
+    templateKey: "combined", combinedChildren: [{ quote: childS, token: "tokA" }, { quote: childL, token: "tokB" }] };
+  const d = buildProposalData(combinedQuote, opts);
+
+  eq(d.theme, "combined", "combined template → combined theme");
+  eq(d.projects.items.length, 2, "two project summaries");
+  eq(d.projects.items[0].name, "Lawn Sprinkler System", "sprinkler ordered first (Project 01)");
+  eq(d.projects.items[1].name, "Landscape Lighting", "lighting second (Project 02)");
+  eq(d.options.a.price, "$8,268.21", "Option A price = sprinkler standalone total");
+  eq(d.options.b.price, "$12,068.40", "Option B price = lighting standalone total");
+  eq(d.options.c.price, "$19,206.61", "Option C price = combined total");
+  eq(d.options.c.badge, "Save $1,000 + free Fall Closing 2026", "best-value badge (compact $, no cents)");
+  eq(d.payment.deposit.amount, "$4,801.65", "combined deposit = 25% of total");
+  eq(d.payment.balance.amount, "$14,404.96", "combined balance = total − deposit");
+  ok(d.options.totals.some((r) => r.lab === "Combined subtotal" && r.num === "$17,997.00"), "combined subtotal row");
+  ok(d.options.totals.some((r) => r.kind === "disc" && r.num === "-$1,000.00"), "bundle-saving discount row");
+  ok(d.options.totals.some((r) => r.lab === "Fall Closing 2026 service" && r.num === "Included"), "free-service row");
+  eq(d.options.a.viewHref, "/approve/Q-2026-0226?t=tokA", "Option A view → child approve page w/ token");
+  eq(d.options.a.dlHref, "/api/approve/Q-2026-0226/tokA/pdf", "Option A download → child PDF endpoint");
+
+  const html = renderCombinedProposal(d);
+  ok(html.startsWith("<!DOCTYPE html>"), "combined renders a full document");
+  ok(html.includes("Two projects") && html.includes("one property"), "hero headline present");
+  ok(html.includes("$19,206.61"), "combined total in the page");
+  ok(html.includes("How the combined offer works"), "offer clause present");
+  ok(!html.includes("{{"), "combined: no unresolved tokens");
+
+  // No saving + no free service → clean copy, no discount rows, "Best value" badge.
+  const plain = buildProposalData(
+    { ...combinedQuote, combined: { ...combinedQuote.combined, bundleSaving: 0, freeService: "" } }, opts);
+  eq(plain.options.c.badge, "Best value", "no saving/free-service → 'Best value' badge");
+  ok(!plain.options.totals.some((r) => r.kind === "disc"), "no discount rows when no saving/free-service");
+  ok(plain.options.totals.some((r) => r.lab === "Subtotal" && r.num === "$17,997.00"), "subtotal = combined subtotal when no saving");
+  eq(plain.payment.deposit.amount, "$5,084.15", "deposit recomputed on undiscounted total");
+
+  // Embed link mode → child buttons point at the baked-in PDF data URI.
+  const embed = buildProposalData(
+    { ...combinedQuote, combined: { ...combinedQuote.combined, linkMode: "embed" } },
+    { ...opts, combinedChildren: [
+      { quote: childS, token: "tokA", pdfDataUrl: "data:application/pdf;base64,AAAA", pdfName: "S.pdf" },
+      { quote: childL, token: "tokB", pdfDataUrl: "data:application/pdf;base64,BBBB", pdfName: "L.pdf" }] });
+  ok(embed.options.a.dlHref.startsWith("data:application/pdf;base64,"), "embed mode → download is a PDF data URI");
+  eq(embed.options.a.dlDownload, "S.pdf", "embed mode → download filename set");
 }
 
 // ---- report -----------------------------------------------------------

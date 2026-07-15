@@ -22,8 +22,15 @@ const TEMPLATES_DIR = path.join(__dirname, "templates");
 // Template key → filename. Add new services here (lighting, combined…).
 const PROPOSAL_TEMPLATES = {
   irrigation: "proposal-irrigation.json",
-  lighting: "proposal-lighting.json"
+  lighting: "proposal-lighting.json",
+  combined: "proposal-combined.json"
 };
+
+// Templates that merge MORE THAN ONE quote (combined) — they can't be picked
+// from a single quote's Generate panel, so they're hidden from listTemplates()
+// but remain valid for isKnownTemplate()/loadRaw() (the combined-build flow
+// selects them directly).
+const MULTI_QUOTE_TEMPLATES = new Set(["combined"]);
 
 function isKnownTemplate(key) {
   return Object.prototype.hasOwnProperty.call(PROPOSAL_TEMPLATES, key);
@@ -70,16 +77,20 @@ function loadResolved(key, ctx = {}) {
   return resolveDeep(loadRaw(key), ctx);
 }
 
-// The list the builder's template picker offers: [{ key, label, theme }].
+// The list the builder's single-quote template picker offers:
+// [{ key, label, theme }]. Multi-quote templates (combined) are excluded —
+// they're built from the quote list, not a single quote's Generate panel.
 function listTemplates() {
-  return Object.keys(PROPOSAL_TEMPLATES).map((key) => {
-    try {
-      const t = loadRaw(key);
-      return { key, label: t.label || key, theme: t.theme || "sprinkler" };
-    } catch {
-      return { key, label: key, theme: "sprinkler" };
-    }
-  });
+  return Object.keys(PROPOSAL_TEMPLATES)
+    .filter((key) => !MULTI_QUOTE_TEMPLATES.has(key))
+    .map((key) => {
+      try {
+        const t = loadRaw(key);
+        return { key, label: t.label || key, theme: t.theme || "sprinkler" };
+      } catch {
+        return { key, label: key, theme: "sprinkler" };
+      }
+    });
 }
 
 module.exports = {

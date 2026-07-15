@@ -453,4 +453,169 @@ ${renderLightingClose(data.close || {})}
 </html>`;
 }
 
-module.exports = { renderSprinklerProposal, renderLightingProposal, esc };
+// ======================================================================
+// Combined ("two projects, one property") — dark theme. A bundle page that
+// summarises two standalone proposals side by side, then offers three
+// options: each project on its own, or both together at a combined rate.
+// Its numbers are MERGED from the two child quotes by the adapter; this
+// module only lays them out. Uses its own CSS asset + the white logo.
+// ======================================================================
+
+const COMBINED_CSS = fs.readFileSync(path.join(ASSETS_DIR, "combined-theme.css"), "utf8");
+const COMBINED_GLYPH = { small: "g-small", medium: "g-medium", large: "g-large", recessed: "g-recessed", ring: "g-ring" };
+function combinedGlyph(g) { return COMBINED_GLYPH[String(g || "").toLowerCase().trim()] || "g-small"; }
+
+function renderCombinedHero(hero, meta) {
+  const facts = (hero.facts || []).map((f) =>
+    `      <div class="fact"><span class="fact-k">${esc(f.k)}</span><span class="fact-v">${esc(f.v)}</span></div>`
+  ).join("\n");
+  return `<div class="mark"><img src="${LOGO_WHITE}" alt="PJL Land Services"></div>
+
+<header class="hero">
+  <div class="hero-in wrap">
+    <p class="eyebrow">${esc(meta.docKicker)}</p>
+    <h1>${esc(hero.h1Lead)}<br><em>${esc(hero.h1Accent)}</em></h1>
+    <p class="hero-sub">${rich(hero.sub)}</p>
+    <div class="facts">
+${facts}
+    </div>
+  </div>
+</header>`;
+}
+
+// The two standalone projects, summarised side by side.
+function renderCombinedProjects(projects) {
+  const cards = (projects.items || []).map((p) =>
+    `    <div class="proj">
+      <p class="proj-tag"><span class="g ${combinedGlyph(p.glyph)}" aria-hidden="true"></span>&nbsp; ${esc(p.num)}</p>
+      <h3 class="proj-h">${esc(p.name)}</h3>
+      <p class="proj-q">${esc(p.quote)}</p>
+      <p class="proj-p">${rich(p.blurb)}</p>
+      <div class="proj-nums">
+        <div class="proj-row"><span class="proj-lab">Subtotal</span><span class="proj-val">${esc(p.subtotal)}</span></div>
+        <div class="proj-row"><span class="proj-lab">HST 13%</span><span class="proj-val">${esc(p.hst)}</span></div>
+        <div class="proj-row tot"><span class="proj-lab">Standalone total</span><span class="proj-val">${esc(p.total)}</span></div>
+      </div>
+    </div>`
+  ).join("\n");
+  return `<section class="sec wrap" id="projects">
+  <h2 class="sec-h">${esc(projects.heading)}</h2>
+  <p class="sec-lead">${rich(projects.lead)}</p>
+
+  <div class="projs">
+${cards}
+  </div>
+</section>`;
+}
+
+// One standalone option card (A / B): price + View / Download actions.
+function renderOptionCard(o) {
+  const view = o.viewHref
+    ? `\n          <a class="opt-view" href="${esc(o.viewHref)}"${o.viewNewTab ? ' target="_blank" rel="noopener"' : ""}>${rich(o.viewLabel)}</a>` : "";
+  const dl = o.dlHref
+    ? `\n          <a class="opt-dl" href="${esc(o.dlHref)}"${o.dlDownload ? ` download="${esc(o.dlDownload)}"` : ""}${o.dlNewTab ? ' target="_blank" rel="noopener"' : ""}>${rich(o.dlLabel)}</a>` : "";
+  const actions = (view || dl) ? `\n        <div class="opt-actions">${view}${dl}\n        </div>` : "";
+  return `      <div class="opt">
+        <p class="opt-tag">${esc(o.tag)}</p>
+        <h3 class="opt-h">${esc(o.name)}</h3>
+        <p class="opt-sub">${esc(o.sub)}</p>
+        <p class="opt-price">${esc(o.price)}</p>
+        <p class="opt-price-note">${esc(o.priceNote)}</p>${actions}
+      </div>`;
+}
+
+function renderCombinedTotalsRows(rows) {
+  return (rows || []).map((r) => {
+    const trClass = r.kind === "sub" ? ' class="row-sub"'
+      : r.kind === "disc" ? ' class="row-disc"'
+      : r.kind === "total" ? ' class="row-total"' : "";
+    const labDim = r.dim ? " r-dim" : "";
+    const numDim = r.dim ? " r-dim" : "";
+    const sm = r.sm ? `<span class="sm">${esc(r.sm)}</span>` : "";
+    return `            <tr${trClass}>
+              <td class="r-lab${labDim}">${esc(r.lab)}${sm}</td>
+              <td class="r-num${numDim}">${esc(r.num)}</td>
+            </tr>`;
+  }).join("\n");
+}
+
+function renderCombinedOptions(options, paymentHtml) {
+  const best = options.c;
+  const badge = best.badge ? `\n        <span class="opt-badge">${rich(best.badge)}</span>` : "";
+  return `<section class="sec pricing" id="pricing">
+  <div class="wrap">
+    <h2 class="sec-h">${esc(options.heading)}</h2>
+    <p class="sec-lead">${rich(options.lead)}</p>
+
+    <div class="opts">
+${renderOptionCard(options.a)}
+${renderOptionCard(options.b)}
+      <div class="opt best">
+        <p class="opt-tag">${esc(best.tag)}</p>
+        <h3 class="opt-h">${esc(best.name)}</h3>
+        <p class="opt-sub">${esc(best.sub)}</p>
+        <p class="opt-price">${esc(best.price)}</p>
+        <p class="opt-price-note">${esc(best.priceNote)}</p>${badge}
+      </div>
+    </div>
+
+    <div class="totals">
+      <div class="totals-in">
+        <table>
+          <tbody>
+${renderCombinedTotalsRows(options.totals)}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <p class="save-note">${rich(options.saveNote)}</p>
+
+${paymentHtml}
+
+    <div class="clause">
+    ${rich(options.clause)}
+    </div>
+  </div>
+</section>`;
+}
+
+function renderCombinedClose(close) {
+  return `<section class="close wrap">
+  <div class="signoff-mark"><img src="${LOGO_WHITE}" alt="PJL Land Services"></div>
+  <h2>${esc(close.heading)}</h2>
+  <p>${rich(close.body)}</p>
+  <p class="sig">${rich(close.sig)}</p>
+</section>`;
+}
+
+function renderCombinedProposal(data) {
+  const meta = data.meta || {};
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${esc(meta.title || "Combined Proposal — PJL Land Services")}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Barlow:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+${COMBINED_CSS}
+</style>
+</head>
+<body>
+
+${renderCombinedHero(data.hero || {}, meta)}
+
+${renderCombinedProjects(data.projects || {})}
+
+${renderCombinedOptions(data.options || {}, renderPayment(data.payment || {}))}
+
+${renderCombinedClose(data.close || {})}
+
+</body>
+</html>`;
+}
+
+module.exports = { renderSprinklerProposal, renderLightingProposal, renderCombinedProposal, esc };

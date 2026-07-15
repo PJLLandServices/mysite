@@ -122,11 +122,18 @@ async function load() {
     // proposal" link to the builder; other types keep the existing
     // "Open in CRM" lead deep-link.
     const isProposal = q.type === "project_proposal";
+    // A combined ("two projects, one property") proposal has no line-item
+    // builder — it's merged from two child quotes. Its card opens the
+    // generated preview instead of the empty builder.
+    const isCombined = isProposal && !!q.combined;
     const proposalHref = `/admin/quote/${encodeURIComponent(q.id)}/proposal`;
+    const combinedPreviewHref = `/approve/${encodeURIComponent(q.id)}`;
 
     const isDeleted = !!q.deletedAt;
     const actions = [];
-    if (isProposal) {
+    if (isCombined) {
+      actions.push(`<a href="${combinedPreviewHref}" target="_blank" rel="noopener">Preview combined</a>`);
+    } else if (isProposal) {
       actions.push(`<a href="${proposalHref}">Edit proposal</a>`);
     } else if (leadHref) {
       actions.push(`<a href="${leadHref}">Open in CRM</a>`);
@@ -147,8 +154,11 @@ async function load() {
       actions.push(`<button type="button" class="qf-card__send" data-quote-id="${escapeHtml(q.id)}" data-action="send">${sendLabel}</button>`);
     }
     // PDF download stays available on deleted rows (underlying record is
-    // still on disk; per brief §4 edge cases).
-    actions.push(`<a href="/api/admin/quote-folder/${encodeURIComponent(q.id)}/pdf" target="_blank" rel="noopener">PDF</a>`);
+    // still on disk; per brief §4 edge cases). Combined proposals are
+    // HTML-only (no PDF of their own — the children have PDFs), so skip it.
+    if (!isCombined) {
+      actions.push(`<a href="/api/admin/quote-folder/${encodeURIComponent(q.id)}/pdf" target="_blank" rel="noopener">PDF</a>`);
+    }
     if (proj) {
       actions.push(`<a href="/admin/project/${encodeURIComponent(proj.id)}">↗ ${escapeHtml(proj.id)}</a>`);
     } else if (q.status === "accepted" && !isDeleted) {
@@ -184,7 +194,7 @@ async function load() {
     // For proposals, the card itself opens the builder (not the lead).
     // Deleted rows do NOT open on tap (no card-level navigation) — Patrick
     // has to Restore first; the inner action buttons still work.
-    const cardHref = (!isDeleted && (isProposal ? proposalHref : leadHref)) || "";
+    const cardHref = (!isDeleted && (isCombined ? combinedPreviewHref : isProposal ? proposalHref : leadHref)) || "";
     const cardClass = `qf-card${isDeleted ? " qf-card--deleted" : ""}`;
     const deletedTag = isDeleted
       ? `<span class="qf-card__deleted-tag" title="Deleted ${escapeHtml(fmtDate(q.deletedAt))}${q.deletedBy ? " by " + escapeHtml(q.deletedBy) : ""}">deleted</span>`

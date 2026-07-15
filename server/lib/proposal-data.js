@@ -47,6 +47,14 @@ function fmtMoney(n) {
   return "$" + v.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
 }
 
+// Money for inline prose: drops the ".00" on whole-dollar amounts ($1,000),
+// keeps cents otherwise ($1,000.50). Tables/totals still use fmtMoney.
+function fmtMoneyCompact(n) {
+  const v = Number(n) || 0;
+  if (Number.isInteger(v)) return "$" + v.toLocaleString("en-US");
+  return fmtMoney(v);
+}
+
 const MONTHS = ["January", "February", "March", "April", "May", "June",
   "July", "August", "September", "October", "November", "December"];
 
@@ -434,6 +442,214 @@ function buildLightingData(quote, t, ctx, common) {
   };
 }
 
+// ---- combined (two projects, one property) ---------------------------
+
+// Just the street line for the compact hero "Property" fact / eyebrow.
+function shortAddress(addr) {
+  return String(addr || "").split(",")[0].trim() || "your property";
+}
+
+// Summarise ONE child quote for the combined page: its theme, a friendly
+// name + glyph, a one-line blurb derived from the design, and its standalone
+// totals. `child` is { quote, token, pdfDataUrl, pdfName } from the endpoint.
+function combinedChildMeta(child) {
+  const q = child.quote || {};
+  const theme = q.proposalTemplateKey === "lighting" ? "lighting" : "sprinkler";
+  const { subtotal, hst, total } = totals(q);
+  let name, optName, optSub, glyph, blurb;
+  if (theme === "lighting") {
+    const fixtures = fixtureCount(q);
+    name = "Landscape Lighting"; optName = "Lighting only"; optSub = "Lighting design, standalone"; glyph = "medium";
+    const fTxt = fixtures ? `${fixtures} fixture${fixtures === 1 ? "" : "s"}` : "a full set of fixtures";
+    blurb = `Low-voltage In-Lite lighting design — ${fTxt} across the property, sealed and expandable, built to live outside.`;
+  } else {
+    const zones = countZones(q);
+    name = "Lawn Sprinkler System"; optName = "Sprinklers only"; optSub = "Irrigation system, standalone"; glyph = "small";
+    const zTxt = zones ? `${zones} zone${zones === 1 ? "" : "s"}` : "a complete zone layout";
+    blurb = `New irrigation system — ${zTxt} on a smart controller with weather-based scheduling.`;
+  }
+  return {
+    id: q.id, theme, name, optName, optSub, glyph, blurb,
+    displayId: displayNumber(q),
+    subtotal: fmtMoney(subtotal), hst: fmtMoney(hst), total: fmtMoney(total),
+    subtotalNum: subtotal,
+    token: child.token || null,
+    pdfDataUrl: child.pdfDataUrl || null,
+    pdfName: child.pdfName || `${q.id}.pdf`
+  };
+}
+
+// View / Download links for one option card, per the combined offer's link
+// mode. "embed" points both at the child's PDF baked into the page as a
+// data: URI; "link" (default) points at the child's standalone /approve page
+// and its customer-side PDF endpoint (token-scoped when the child was sent).
+function combinedChildHrefs(c, linkMode) {
+  if (linkMode === "embed" && c.pdfDataUrl) {
+    return { viewHref: c.pdfDataUrl, viewNewTab: true, dlHref: c.pdfDataUrl, dlDownload: c.pdfName };
+  }
+  const view = c.token
+    ? `/approve/${encodeURIComponent(c.id)}?t=${encodeURIComponent(c.token)}`
+    : `/approve/${encodeURIComponent(c.id)}`;
+  const dl = c.token
+    ? `/api/approve/${encodeURIComponent(c.id)}/${encodeURIComponent(c.token)}/pdf`
+    : view;
+  return { viewHref: view, viewNewTab: true, dlHref: dl, dlNewTab: true };
+}
+
+// Assemble the combined proposal data by MERGING two child quotes plus the
+// bundle terms held on quote.combined. All dynamic prose (options lead,
+// save-note, offer clause) is composed here from the figures so the copy
+// always matches the actual saving / free service / validity.
+function buildCombinedData(quote, t, ctx, common) {
+  const { issued, sig } = common;
+  const cfg = quote.combined || {};
+  const address = common.address || "";
+  const children = (Array.isArray(common.children) ? common.children : []).map(combinedChildMeta);
+  // Sprinkler(s) first, lighting second — matches the reference ordering.
+  children.sort((a, b) => (a.theme === "lighting" ? 1 : 0) - (b.theme === "lighting" ? 1 : 0));
+  const [p1, p2] = children;
+
+  const saving = Math.max(0, Number(cfg.bundleSaving) || 0);
+  const freeService = String(cfg.freeService || "").trim();
+  const depositPercent = Number(cfg.depositPercent) > 0 ? Number(cfg.depositPercent) : 25;
+  const linkMode = cfg.linkMode === "embed" ? "embed" : "link";
+  const validThrough = fmtDate(quote.validUntil || quote.validUntilDate) || "the date shown";
+
+  const combinedSubtotal = children.reduce((n, c) => n + c.subtotalNum, 0);
+  const discountedSubtotal = Math.max(0, combinedSubtotal - saving);
+  const hst = +(discountedSubtotal * HST_RATE).toFixed(2);
+  const total = +(discountedSubtotal + hst).toFixed(2);
+  const deposit = +(total * depositPercent / 100).toFixed(2);
+  const balance = +(total - deposit).toFixed(2);
+
+  // Options lead — the pitch line under "Your options".
+  let lead = "Take either project on its own — or do both together";
+  const leadBits = [];
+  if (saving > 0) leadBits.push(`save ${fmtMoneyCompact(saving)} off the combined price`);
+  if (freeService) leadBits.push(`get your ${freeService} included at no charge`);
+  lead += leadBits.length ? `, ${leadBits.join(", and ")}.` : " at the combined rate.";
+
+  // Best-value badge.
+  const badgeBits = [];
+  if (saving > 0) badgeBits.push(`Save ${fmtMoneyCompact(saving)}`);
+  if (freeService) badgeBits.push(`${saving > 0 ? "free " : "Free "}${freeService}`);
+  const badge = badgeBits.length ? badgeBits.join(" + ") : "Best value";
+
+  // Totals table rows.
+  const rows = [
+    { kind: "plain", lab: p1.name, sm: p1.displayId, num: p1.subtotal, dim: true },
+    { kind: "plain", lab: p2.name, sm: p2.displayId, num: p2.subtotal, dim: true }
+  ];
+  if (saving > 0) {
+    rows.push({ kind: "sub", lab: "Combined subtotal", num: fmtMoney(combinedSubtotal) });
+    rows.push({ kind: "disc", lab: "Bundle saving", num: `-${fmtMoney(saving)}` });
+    rows.push({ kind: "sub", lab: "Subtotal", num: fmtMoney(discountedSubtotal) });
+  } else {
+    rows.push({ kind: "sub", lab: "Subtotal", num: fmtMoney(combinedSubtotal) });
+  }
+  if (freeService) rows.push({ kind: "disc", lab: `${freeService} service`, num: "Included" });
+  rows.push({ kind: "plain", lab: "HST 13%", num: fmtMoney(hst), dim: true });
+  rows.push({ kind: "total", lab: "Total", num: fmtMoney(total) });
+
+  // Save-note.
+  let saveNote;
+  if (saving > 0 && freeService) {
+    saveNote = `Booked together, you save <span class="big">${fmtMoneyCompact(saving)}</span> off the combined price — <b>and</b> your <b>${freeService}</b> is included, on us. One crew, one install window, the whole property done.`;
+  } else if (saving > 0) {
+    saveNote = `Booked together, you save <span class="big">${fmtMoneyCompact(saving)}</span> off the combined price. One crew, one install window, the whole property done.`;
+  } else if (freeService) {
+    saveNote = `Booked together, your <b>${freeService}</b> is included, on us. One crew, one install window, the whole property done.`;
+  } else {
+    saveNote = `Booked together — one crew, one install window, the whole property done.`;
+  }
+
+  // Offer clause.
+  const clauseBits = [];
+  if (saving > 0) clauseBits.push(`the ${fmtMoneyCompact(saving)} bundle saving`);
+  if (freeService) clauseBits.push(`the included ${freeService} service`);
+  let offerSentence = "";
+  if (clauseBits.length) {
+    const subject = clauseBits.join(" and ");
+    const verb = clauseBits.length > 1 ? "apply" : "applies";
+    offerSentence = ` ${subject.charAt(0).toUpperCase()}${subject.slice(1)} ${verb} only when both projects are booked together; if either is cancelled before work begins, the remaining project reverts to its standalone price.`;
+  }
+  const clause = `<b>How the combined offer works.</b> Each project keeps its own scope, warranty, and standalone proposal.${offerSentence} Prices in Canadian dollars. This combined offer is valid through ${validThrough}.`;
+
+  const opt = (c, tag) => {
+    const h = combinedChildHrefs(c, linkMode);
+    return {
+      tag, name: c.optName, sub: c.optSub, price: c.total, priceNote: (t.options && t.options.priceNote) || "Total incl. HST",
+      viewLabel: (t.options && t.options.viewLabel) || "View full proposal &rarr;",
+      dlLabel: (t.options && t.options.downloadLabel) || "Download quote PDF",
+      ...h
+    };
+  };
+
+  const facts = [
+    { k: "Prepared for", v: (common.customer && common.customer.name) || "Customer" },
+    { k: "Projects", v: String(children.length).padStart(2, "0") },
+    { k: "Property", v: shortAddress(address) },
+    { k: "Date", v: issued || "—" }
+  ];
+
+  return {
+    theme: "combined",
+    meta: {
+      title: t.title || "Combined Proposal — PJL Land Services",
+      docKicker: `${(t.kicker || "Combined Proposal")}  ·  ${shortAddress(address)}`
+    },
+    hero: {
+      h1Lead: (t.hero && t.hero.h1Lead) || "Two projects,",
+      h1Accent: (t.hero && t.hero.h1Accent) || "one property",
+      sub: (t.hero && t.hero.sub) || "",
+      facts
+    },
+    projects: {
+      heading: (t.projects && t.projects.heading) || "The two projects",
+      lead: (t.projects && t.projects.lead) || "",
+      items: children.map((c, i) => ({
+        glyph: c.glyph, num: `Project ${String(i + 1).padStart(2, "0")}`,
+        name: c.name, quote: `Quote ${c.displayId}`, blurb: c.blurb,
+        subtotal: c.subtotal, hst: c.hst, total: c.total
+      }))
+    },
+    options: {
+      heading: (t.options && t.options.heading) || "Your options",
+      lead,
+      a: opt(p1, (t.options && t.options.tagA) || "Option A"),
+      b: opt(p2, (t.options && t.options.tagB) || "Option B"),
+      c: {
+        tag: (t.options && t.options.tagC) || "Option C — Best value",
+        name: (t.options && t.options.bothLabel) || "Both together",
+        sub: (t.options && t.options.bothSub) || "Both projects, combined",
+        price: fmtMoney(total),
+        priceNote: (t.options && t.options.priceNote) || "Total incl. HST",
+        badge
+      },
+      totals: rows,
+      saveNote,
+      clause
+    },
+    payment: {
+      mode: "deposit",
+      deposit: {
+        label: "Deposit to schedule", amount: fmtMoney(deposit),
+        when: `${depositPercent}%  ·  due at scheduling`,
+        body: "The deposit holds your combined install date and releases the hardware order. Nothing is ordered until the deposit lands."
+      },
+      balance: {
+        label: "Balance", amount: fmtMoney(balance), when: "Due on completion",
+        body: "Payable once both systems are installed, tested, and walked through with you."
+      }
+    },
+    close: {
+      heading: (t.close && t.close.heading) || "Ready to do both?",
+      body: (t.close && t.close.body) || "",
+      sig
+    }
+  };
+}
+
 // ---- main -------------------------------------------------------------
 
 // Build the normalized proposal-data object the generator consumes.
@@ -442,7 +658,8 @@ function buildLightingData(quote, t, ctx, common) {
 //   property   — { address } (from quoteRenderParties)
 //   templateKey— which per-service copy template to use (default irrigation)
 //   heroPhoto  — a data: URI for the hero background, or null
-function buildProposalData(quote, { customer = {}, property = {}, templateKey = "irrigation", heroPhoto = null } = {}) {
+//   combinedChildren — for combined proposals: [{ quote, token, pdfDataUrl, pdfName }]
+function buildProposalData(quote, { customer = {}, property = {}, templateKey = "irrigation", heroPhoto = null, combinedChildren = null } = {}) {
   const key = templates.isKnownTemplate(templateKey) ? templateKey : "irrigation";
   const { subtotal, hst, total } = totals(quote);
   const displayId = displayNumber(quote);
@@ -473,9 +690,13 @@ function buildProposalData(quote, { customer = {}, property = {}, templateKey = 
   const sig = `${company.NAME} &nbsp;·&nbsp; ${company.CITY} &nbsp;·&nbsp; ${company.PHONE} &nbsp;·&nbsp; <b>${company.WEBSITE}</b>`;
 
   // Theme dispatch — lighting builds a different data shape (fixture schedule
-  // with Each/Line, dark-theme hero + CTA close). Everything else is sprinkler.
+  // with Each/Line, dark-theme hero + CTA close); combined merges two child
+  // quotes into a bundle page. Everything else is sprinkler.
   if (t.theme === "lighting") {
     return buildLightingData(quote, t, ctx, { customer, displayId, issued, subtotal, hst, total, sig, heroPhoto, transformer });
+  }
+  if (t.theme === "combined") {
+    return buildCombinedData(quote, t, ctx, { customer, displayId, issued, sig, address, children: combinedChildren });
   }
 
   // Hero facts — all auto-derived, four short cells like the reference.

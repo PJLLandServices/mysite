@@ -1,0 +1,31 @@
+{
+  "key": "combined",
+  "theme": "combined",
+  "label": "Combined (two projects)",
+  "title": "Combined Proposal — PJL Land Services",
+  "kicker": "Combined Proposal",
+  "hero": {
+    "h1Lead": "Two projects,",
+    "h1Accent": "one property",
+    "sub": "Two designs for {{propertyAddress}} — quoted separately, offered together at a combined rate."
+  },
+  "projects": {
+    "heading": "The two projects",
+    "lead": "Each system is designed, scoped, and priced on its own — a complete standalone proposal. You'll have received the full detail for each. Here's the short version of both, side by side."
+  },
+  "options": {
+    "heading": "Your options",
+    "tagA": "Option A",
+    "tagB": "Option B",
+    "tagC": "Option C — Best value",
+    "priceNote": "Total incl. HST",
+    "viewLabel": "View full proposal &rarr;",
+    "downloadLabel": "&#8595;&nbsp; Download quote PDF",
+    "bothLabel": "Both together",
+    "bothSub": "Both projects, combined"
+  },
+  "close": {
+    "heading": "Ready to do both?",
+    "body": "Approve the combined proposal and we'll lock a single install window for the whole property."
+  }
+}
