@@ -17756,10 +17756,18 @@ const server = http.createServer(async (req, res) => {
           try {
             const qid = decodeURIComponent(approvePageMatch[1]);
             const q = await quotes.get(qid);
-            if (q && q.status !== "draft" && q.approval && q.approval.token && (await proposalHasCustomDoc(q))) {
-              res.writeHead(302, { Location: `/approve/${encodeURIComponent(qid)}?t=${encodeURIComponent(q.approval.token)}` });
-              res.end();
-              return;
+            // Any non-deleted proposal that carries a generated custom doc:
+            // send them to the phone-gated page. Reuse the approval token if
+            // there is one; otherwise mint one on the spot (the link was
+            // shared before a formal send). The phone gate is the access
+            // control, so an on-demand token only unlocks the challenge.
+            if (q && !q.deletedAt && (await proposalHasCustomDoc(q))) {
+              const tok = (q.approval && q.approval.token) || (await quotes.ensureApprovalToken(qid));
+              if (tok) {
+                res.writeHead(302, { Location: `/approve/${encodeURIComponent(qid)}?t=${encodeURIComponent(tok)}` });
+                res.end();
+                return;
+              }
             }
           } catch (_) { /* fall through to approve.html */ }
         }

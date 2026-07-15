@@ -1321,6 +1321,31 @@ async function attachWorkOrder(id, workOrderId) {
 // random hex string — sufficient entropy that brute-forcing the URL is
 // not a practical attack. Channels: ["email"], ["sms"], ["email","sms"],
 // or [] (manual share — Patrick copies the URL himself).
+// Ensure a quote has an approval token WITHOUT changing its status or send
+// metadata. Used to recover a proposal link that was shared before a formal
+// send (so the phone-gated /approve page can load). Returns the token, or
+// null if the quote doesn't exist. Idempotent — reuses an existing token.
+async function ensureApprovalToken(id) {
+  if (!id) return null;
+  const records = await readAll();
+  const idx = records.findIndex((q) => q.id === id);
+  if (idx === -1) return null;
+  const q = records[idx];
+  if (q.approval && q.approval.token) return q.approval.token;
+  const token = crypto.randomBytes(16).toString("hex");
+  q.approval = {
+    token,
+    sentAt: (q.approval && q.approval.sentAt) || null,
+    sentVia: (q.approval && Array.isArray(q.approval.sentVia)) ? q.approval.sentVia : [],
+    sentToEmail: (q.approval && q.approval.sentToEmail) || "",
+    sentToPhone: (q.approval && q.approval.sentToPhone) || ""
+  };
+  q.updatedAt = nowIso();
+  records[idx] = q;
+  await writeAll(records);
+  return token;
+}
+
 async function markSentForApproval(id, { token, channels = [], toEmail = "", toPhone = "", by = "tech", pdf = null } = {}) {
   if (!id || !token) throw new Error("markSentForApproval needs id + token");
   const records = await readAll();
@@ -2318,6 +2343,7 @@ module.exports = {
   attachWorkOrder,
   markSent,
   markSentForApproval,
+  ensureApprovalToken,
   persistFrozenPdf,
   setProposalDocument,
   setProposalPageConfig,
