@@ -23,14 +23,14 @@ const TEMPLATES_DIR = path.join(__dirname, "templates");
 const PROPOSAL_TEMPLATES = {
   irrigation: "proposal-irrigation.json",
   lighting: "proposal-lighting.json",
-  combined: "proposal-combined.json"
+  combined: "proposal-combined.json",
+  "smart-controller": "proposal-smart-controller.json"
 };
 
-// Templates that merge MORE THAN ONE quote (combined) — they can't be picked
-// from a single quote's Generate panel, so they're hidden from listTemplates()
-// but remain valid for isKnownTemplate()/loadRaw() (the combined-build flow
-// selects them directly).
-const MULTI_QUOTE_TEMPLATES = new Set(["combined"]);
+// Templates NOT offered in a single project-proposal's Generate picker —
+// combined merges two quotes, smart-controller is built from its own upgrade
+// quote flow. Both remain valid for isKnownTemplate()/loadRaw().
+const MULTI_QUOTE_TEMPLATES = new Set(["combined", "smart-controller"]);
 
 function isKnownTemplate(key) {
   return Object.prototype.hasOwnProperty.call(PROPOSAL_TEMPLATES, key);

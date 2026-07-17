@@ -1,0 +1,72 @@
+{
+  "key": "smart-controller",
+  "theme": "smart-controller",
+  "label": "Smart Controller Upgrade (HCC)",
+  "title": "Smart Controller Upgrade — PJL Land Services",
+  "kicker": "Hydrawise Smart Controller Upgrade",
+  "controllerName": "Hunter HCC Wi-Fi",
+  "hero": {
+    "h1Lead": "Off the timer,",
+    "h1Accent": "onto the forecast",
+    "sub": "A complete upgrade to the Hunter Hydrawise smart controller for {{propertyAddress}} — everything below is included in the single price at the end. Review it on your own time and sign online when you're ready."
+  },
+  "why": {
+    "heading": "Why upgrade to Hydrawise",
+    "lead": "Your current controller runs on a fixed timer — it waters on its schedule whether it rained yesterday, is raining right now, or a heat wave is coming. Hydrawise replaces that guesswork with watering that reads the weather.",
+    "cards": [
+      { "title": "Predictive Watering", "body": "Hydrawise pulls real-time local weather and adjusts automatically — skipping runs when rain is forecast, throttling back on cool days, and running longer through hot stretches." },
+      { "title": "Retires the rain sensor", "body": "It does the job a manual rain sensor was supposed to do — better, and without the maintenance. If your rain sensor is aging or already dead, there's nothing to replace: the upgrade retires it entirely." },
+      { "title": "The app in your pocket", "body": "Start, stop, or override any zone from anywhere. See zone-by-zone runtime history, and get alerts when something's wrong — a wiring fault, a missed run, or a controller that dropped offline." },
+      { "title": "We watch it too", "body": "PJL can monitor your system remotely, which often means we catch a problem before you see it on the lawn." }
+    ]
+  },
+  "hardware": {
+    "heading": "The hardware in this upgrade",
+    "lead": "Real equipment, professionally installed — here's what goes on the wall and in the ground.",
+    "items": [
+      { "slot": "hero", "title": "Hunter HCC Wi-Fi controller", "body": "The Wi-Fi brain of the system, sized to your zone count with the right expansion module(s)." },
+      { "slot": "flow-meter", "title": "Flow & leak monitoring", "body": "A Hydrawise flow meter watches real water use zone-by-zone — so a broken line or a stuck valve triggers an alert instead of a surprise on your water bill." },
+      { "slot": "wireless-valves", "title": "Wireless valves", "body": "Valves that talk to the controller without new control wire run across the yard — cleaner installs and easy future expansion." },
+      { "slot": "app", "title": "The Hydrawise app", "body": "Your whole system on your phone — zone photos, runtime history, water-savings reports, and control from anywhere." }
+    ]
+  },
+  "included": {
+    "heading": "What's included in your install",
+    "lead": "One visit, typically about two hours start to finish.",
+    "inHeading": "Included",
+    "outHeading": "Good to know",
+    "includes": [
+      "Hunter HCC Hydrawise Wi-Fi controller, sized to your system with the right expansion module(s)",
+      "Removal of your existing controller and a clean swap-over of all zone wiring",
+      "Wi-Fi connection and Hydrawise app setup on your phone",
+      "Full seasonal schedule programmed for your zones and plantings",
+      "A hands-on walkthrough so you're comfortable with the app before we leave"
+    ],
+    "excludes": [
+      "Hydrawise retrofits onto most residential systems regardless of the original brand — Hunter, Rain Bird, Toro, Orbit, Irritrol, or builder-grade.",
+      "Larger panels are quoted separately after a site assessment."
+    ]
+  },
+  "savings": {
+    "kicker": "Weather-aware watering typically cuts seasonal use by 30–40%",
+    "big": "$580",
+    "unit": "/year",
+    "sub": "is what the upgrade can save on a standard 6-zone lot — it pays for itself, then keeps saving every season after. See how your own numbers land at pjllandservices.com/water-cost-calculator.html."
+  },
+  "investment": {
+    "heading": "Your investment",
+    "priceLabel": "Complete upgrade",
+    "priceNote": "Incl. HST · due on completion",
+    "priceBody": "Everything above — controller, expansion modules, flow meter, wireless valves, the swap-over, Wi-Fi and app setup, seasonal programming, and the walkthrough — in one price.",
+    "warrantyLabel": "Warranty",
+    "warrantyValue": "3 years",
+    "warrantyWhen": "Parts & labour",
+    "warrantyBody": "If the controller or our installation gives you trouble, we make it right at no charge.",
+    "credBadge": "Hunter Certified",
+    "credBody": "Patrick is <b>Hunter Hydrawise Certified</b> — trained directly by Hunter Industries on smart-controller programming, hydraulic design, and water-efficient zone configuration — and PJL is a <b>Hunter Authorized Installer</b>. The same Hydrawise controllers we install for customers run on our own systems."
+  },
+  "close": {
+    "heading": "Ready when you are",
+    "body": "Review it on your own time — when the upgrade looks right, sign online and we'll book your install."
+  }
+}

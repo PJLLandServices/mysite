@@ -633,4 +633,158 @@ ${renderCombinedClose(data.close || {})}
 </html>`;
 }
 
-module.exports = { renderSprinklerProposal, renderLightingProposal, renderCombinedProposal, esc };
+// ======================================================================
+// Smart Controller Upgrade ("off the timer, onto the forecast") — light
+// theme selling piece for a Hydrawise HCC upgrade. Reuses the sprinkler
+// theme CSS plus a few selling-piece touches (savings stat, hardware
+// showcase, credibility). Its four hardware photos are DESIGN-LEVEL shared
+// assets (same on every HCC proposal until Patrick swaps one), passed in as
+// data.photos[slot] data URIs; an empty slot renders a labeled placeholder.
+// ======================================================================
+
+const SMART_CTRL_CSS = `
+  .stat { background:var(--green); color:#fff; border-radius:16px; padding:clamp(32px,5vw,54px); margin:0 0 8px; text-align:center; }
+  .stat .stat-big { font-family:var(--disp); font-weight:700; font-size:clamp(56px,11vw,104px); line-height:.95; color:#F4CE8E; }
+  .stat .stat-big span { font-size:.34em; letter-spacing:.02em; }
+  .stat .stat-k { font-family:var(--mono); font-size:12px; letter-spacing:.16em; text-transform:uppercase; opacity:.85; margin:0 0 10px; }
+  .stat .stat-sub { font-size:clamp(16px,2vw,20px); max-width:44ch; margin:16px auto 0; opacity:.95; line-height:1.55; }
+  .cred { display:flex; gap:14px; align-items:flex-start; padding:22px 24px; border:1px solid #e5e5dd; border-radius:12px; background:#fff; margin-top:18px; }
+  .cred .cred-badge { font-family:var(--mono); font-size:11px; letter-spacing:.1em; text-transform:uppercase; color:var(--green); font-weight:600; white-space:nowrap; padding-top:2px; }
+  .cred p { margin:0; font-size:15px; line-height:1.6; color:#1a1a1a; }
+  .hw { display:grid; grid-template-columns:1fr 1fr; gap:20px; }
+  .hw-h { font-family:var(--disp); font-weight:600; text-transform:uppercase; letter-spacing:.02em; font-size:20px; color:var(--green); margin:0 0 6px; }
+  .hw-p { margin:0; font-size:14.5px; line-height:1.6; color:#3a3a3a; }
+  .hw-photo { border-radius:12px; overflow:hidden; margin-bottom:14px; aspect-ratio:16/10; background:#eef1ea; }
+  .hw-photo img { width:100%; height:100%; object-fit:cover; display:block; }
+  .ph-slot { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:8px; background:repeating-linear-gradient(45deg,#eef1ea,#eef1ea 12px,#e7ebe3 12px,#e7ebe3 24px); border:1.5px dashed #b9c3ad; border-radius:12px; aspect-ratio:16/10; margin-bottom:14px; color:#6b7a5e; font-family:var(--mono); font-size:12px; letter-spacing:.06em; text-transform:uppercase; text-align:center; padding:16px; }
+  .ph-slot .ph-cam { font-size:26px; }
+  @media(max-width:720px){ .hw{ grid-template-columns:1fr; } }
+`;
+
+// One hardware photo cell: the uploaded image, or a labeled placeholder
+// naming which shot goes there (so an un-loaded slot reads as intentional).
+function scPhotoCell(photos, slot, label) {
+  const uri = photos && photos[slot];
+  if (uri) return `<div class="hw-photo"><img src="${uri}" alt="${esc(label)}"></div>`;
+  return `<div class="ph-slot"><span class="ph-cam" aria-hidden="true">▢</span><span>${esc(label)}</span></div>`;
+}
+
+function renderSmartControllerProposal(data) {
+  const meta = data.meta || {};
+  const hero = data.hero || {};
+  const why = data.why || {};
+  const hw = data.hardware || {};
+  const inc = data.included || {};
+  const sav = data.savings || {};
+  const inv = data.investment || {};
+  const close = data.close || {};
+  const photos = data.photos || {};
+
+  const facts = (hero.facts || []).map((f) =>
+    `      <div class="fact"><span class="fact-k">${esc(f.k)}</span><span class="fact-v">${esc(f.v)}</span></div>`).join("\n");
+  const whyCards = (why.cards || []).map((c) =>
+    `    <li class="pr"><h3 class="pr-h">${esc(c.title)}</h3><p class="pr-p">${rich(c.body)}</p></li>`).join("\n");
+  const hwCards = (hw.items || []).map((it) =>
+    `    <div class="hw-card">${scPhotoCell(photos, it.slot, it.title)}<h3 class="hw-h">${esc(it.title)}</h3><p class="hw-p">${rich(it.body)}</p></div>`).join("\n");
+  const incIn = (inc.includes || []).map((s) => `        <li>${rich(s)}</li>`).join("\n");
+  const incOut = (inc.excludes || []).map((s) => `        <li>${rich(s)}</li>`).join("\n");
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${esc(meta.title || "Smart Controller Upgrade — PJL Land Services")}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Barlow:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+${SPRINKLER_CSS}
+${SMART_CTRL_CSS}
+</style>
+</head>
+<body>
+
+<div class="mark"><img src="${LOGO_WHITE}" alt="PJL Land Services"></div>
+
+<header class="hero"${heroPhotoStyle(photos.hero)}>
+  <div class="hero-in wrap">
+    <p class="eyebrow">${esc(meta.docKicker)}</p>
+    <h1>${esc(hero.h1Lead)}<br><em>${esc(hero.h1Accent)}</em></h1>
+    <p class="hero-sub">${rich(hero.sub)}</p>
+    <div class="facts">
+${facts}
+    </div>
+  </div>
+</header>
+
+<section class="sec wrap">
+  <h2 class="sec-h">${esc(why.heading)}</h2>
+  <p class="sec-lead">${rich(why.lead)}</p>
+  <ul class="prs">
+${whyCards}
+  </ul>
+</section>
+
+<section class="sec wrap">
+  <h2 class="sec-h">${esc(hw.heading)}</h2>
+  <p class="sec-lead">${rich(hw.lead)}</p>
+  <div class="hw">
+${hwCards}
+  </div>
+</section>
+
+<section class="sec wrap">
+  <h2 class="sec-h">${esc(inc.heading)}</h2>
+  <p class="sec-lead">${rich(inc.lead)}</p>
+  <div class="scope">
+    <div class="scope-col in"><h3 class="scope-h in">${esc(inc.inHeading || "Included")}</h3><ul>
+${incIn}
+    </ul></div>
+    <div class="scope-col out"><h3 class="scope-h out">${esc(inc.outHeading || "Good to know")}</h3><ul>
+${incOut}
+    </ul></div>
+  </div>
+</section>
+
+<section class="sec wrap">
+  <div class="stat">
+    <p class="stat-k">${rich(sav.kicker)}</p>
+    <div class="stat-big">${esc(sav.big)}<span>${esc(sav.unit)}</span></div>
+    <p class="stat-sub">${rich(sav.sub)}</p>
+  </div>
+</section>
+
+<section class="sec wrap">
+  <h2 class="sec-h">${esc(inv.heading)}</h2>
+  <div class="pay">
+    <div class="pay-col now">
+      <p class="pay-k">${esc(inv.priceLabel)}</p>
+      <p class="pay-v">${esc(inv.price)}</p>
+      <p class="pay-when">${esc(inv.priceNote)}</p>
+      <p class="pay-p">${rich(inv.priceBody)}</p>
+    </div>
+    <div class="pay-col">
+      <p class="pay-k">${esc(inv.warrantyLabel)}</p>
+      <p class="pay-v" style="font-size:clamp(26px,4vw,38px)">${esc(inv.warrantyValue)}</p>
+      <p class="pay-when">${esc(inv.warrantyWhen)}</p>
+      <p class="pay-p">${rich(inv.warrantyBody)}</p>
+    </div>
+  </div>
+  <div class="cred"><span class="cred-badge">${esc(inv.credBadge)}</span><p>${rich(inv.credBody)}</p></div>
+</section>
+
+<section class="close">
+  <div class="wrap">
+  <div class="signoff-mark"><img src="${LOGO_WHITE}" alt="PJL Land Services"></div>
+  <h2>${esc(close.heading)}</h2>
+  <p>${rich(close.body)}</p>
+  <p class="sig">${rich(close.sig)}</p>
+  </div>
+</section>
+
+</body>
+</html>`;
+}
+
+module.exports = { renderSprinklerProposal, renderLightingProposal, renderCombinedProposal, renderSmartControllerProposal, esc };

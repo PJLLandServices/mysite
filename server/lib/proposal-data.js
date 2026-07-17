@@ -671,6 +671,54 @@ function buildCombinedData(quote, t, ctx, common) {
   };
 }
 
+// ---- smart controller upgrade (HCC selling piece) --------------------
+
+// Assemble the smart-controller upgrade page. Almost all copy is static
+// (from the template); the quote supplies the customer, the price, and the
+// property address. The four hardware photos are DESIGN-LEVEL shared assets
+// (same on every HCC proposal) resolved by the endpoint and passed in as
+// common.designPhotos { slot: dataUri }.
+function buildSmartControllerData(quote, t, ctx, common) {
+  const { customer, displayId, issued, total, sig } = common;
+  const inv = t.investment || {};
+  // Savings headline comes from pricing.json (single source of truth) so a
+  // rate change updates every proposal; the template value is the fallback.
+  const savings = { ...(t.savings || {}) };
+  const annual = PRICING && PRICING.water_calculator && PRICING.water_calculator.headline_scenario
+    && PRICING.water_calculator.headline_scenario.annual_savings_cad;
+  if (Number.isFinite(Number(annual))) savings.big = "$" + Number(annual).toLocaleString("en-US");
+  const facts = [
+    { k: "Prepared for", v: (customer && customer.name) || "Customer" },
+    { k: "Controller", v: t.controllerName || "Hunter HCC Wi-Fi" },
+    { k: "Install", v: "~2 hours" },
+    { k: "Warranty", v: inv.warrantyValue || "3 years" }
+  ];
+  return {
+    theme: "smart-controller",
+    meta: {
+      title: t.title || "Smart Controller Upgrade — PJL Land Services",
+      docKicker: `${t.kicker || "Hydrawise Smart Controller Upgrade"}  ·  ${displayId}`
+    },
+    hero: {
+      h1Lead: (t.hero && t.hero.h1Lead) || "Off the timer,",
+      h1Accent: (t.hero && t.hero.h1Accent) || "onto the forecast",
+      sub: (t.hero && t.hero.sub) || "",
+      facts
+    },
+    why: t.why || { heading: "", lead: "", cards: [] },
+    hardware: t.hardware || { heading: "", lead: "", items: [] },
+    included: t.included || { includes: [], excludes: [] },
+    savings,
+    investment: { ...inv, price: fmtMoney(total) },
+    close: {
+      heading: (t.close && t.close.heading) || "Ready when you are",
+      body: (t.close && t.close.body) || "",
+      sig
+    },
+    photos: common.designPhotos || {}
+  };
+}
+
 // ---- main -------------------------------------------------------------
 
 // Build the normalized proposal-data object the generator consumes.
@@ -680,7 +728,7 @@ function buildCombinedData(quote, t, ctx, common) {
 //   templateKey— which per-service copy template to use (default irrigation)
 //   heroPhoto  — a data: URI for the hero background, or null
 //   combinedChildren — for combined proposals: [{ quote, token, pdfDataUrl, pdfName }]
-function buildProposalData(quote, { customer = {}, property = {}, templateKey = "irrigation", heroPhoto = null, combinedChildren = null } = {}) {
+function buildProposalData(quote, { customer = {}, property = {}, templateKey = "irrigation", heroPhoto = null, combinedChildren = null, designPhotos = null } = {}) {
   const key = templates.isKnownTemplate(templateKey) ? templateKey : "irrigation";
   const { subtotal, hst, total } = totals(quote);
   const displayId = displayNumber(quote);
@@ -718,6 +766,9 @@ function buildProposalData(quote, { customer = {}, property = {}, templateKey = 
   }
   if (t.theme === "combined") {
     return buildCombinedData(quote, t, ctx, { customer, displayId, issued, sig, address, children: combinedChildren });
+  }
+  if (t.theme === "smart-controller") {
+    return buildSmartControllerData(quote, t, ctx, { customer, displayId, issued, total, sig, designPhotos });
   }
 
   // Hero facts — all auto-derived, four short cells like the reference.

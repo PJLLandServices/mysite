@@ -6,7 +6,7 @@
 import { createRequire } from "node:module";
 const require = createRequire(import.meta.url);
 const { buildProposalData, fmtMoney, fmtDate } = require("../server/lib/proposal-data.js");
-const { renderSprinklerProposal, renderLightingProposal, renderCombinedProposal } = require("../server/lib/proposal-html.js");
+const { renderSprinklerProposal, renderLightingProposal, renderCombinedProposal, renderSmartControllerProposal } = require("../server/lib/proposal-html.js");
 const templates = require("../server/lib/proposal-templates.js");
 
 let passed = 0, failed = 0;
@@ -365,6 +365,34 @@ function combinedChild(id, templateKey, subtotal, hst, total, lineItems) {
       { quote: childL, token: "tokB", pdfDataUrl: "data:application/pdf;base64,BBBB", pdfName: "L.pdf" }] });
   ok(embed.options.a.dlHref.startsWith("data:application/pdf;base64,"), "embed mode → download is a PDF data URI");
   eq(embed.options.a.dlDownload, "S.pdf", "embed mode → download filename set");
+}
+
+// ---- smart controller upgrade (HCC selling piece) --------------------
+// Static copy from the template; the quote supplies customer + price; the
+// four hardware photos are design-level shared slots (labeled placeholder
+// when empty, image when supplied).
+ok(!templates.listTemplates().some((t) => t.key === "smart-controller"), "smart-controller hidden from standalone picker");
+ok(templates.isKnownTemplate("smart-controller"), "smart-controller is a known template");
+{
+  const q = { id: "Q-2026-0053", type: "ai_repair_quote", narrativeKey: "smart-controller",
+    createdAt: "2026-07-17", subtotal: 5309.73, hst: 690.27, total: 6000.00,
+    lineItems: [{ label: "Hydrawise HCC upgrade", description: "Complete upgrade", qty: 1, price: 5309.73 }] };
+  const d = buildProposalData(q, { customer: { name: "Sam Rivera" }, property: { address: "14 Maple Grove Ave, Newmarket ON" }, templateKey: "smart-controller", designPhotos: {} });
+  eq(d.theme, "smart-controller", "smart-controller theme");
+  eq(d.investment.price, "$6,000.00", "price from quote total");
+  eq(d.savings.big, "$580", "savings headline from pricing.json");
+  ok(d.hero.facts.some((f) => f.k === "Controller" && /HCC/.test(f.v)), "controller fact reads HCC (not HPC)");
+  eq(d.hardware.items.map((i) => i.slot).join(","), "hero,flow-meter,wireless-valves,app", "four hardware photo slots in order");
+
+  // Empty slots → labeled placeholders; supplied slot → an <img>.
+  const htmlNoPhotos = renderSmartControllerProposal(d);
+  ok(htmlNoPhotos.startsWith("<!DOCTYPE html>"), "renders a full document");
+  ok(htmlNoPhotos.includes('class="ph-slot"') && !htmlNoPhotos.includes('class="hw-photo"><img'), "no photos → labeled placeholder slots (no rendered photo cell)");
+  ok(htmlNoPhotos.includes("$6,000.00") && htmlNoPhotos.includes("Hunter HCC"), "price + HCC controller in page");
+  ok(!htmlNoPhotos.includes("{{"), "no unresolved tokens");
+  const dPhoto = buildProposalData(q, { customer: { name: "Sam Rivera" }, property: { address: "Y" }, templateKey: "smart-controller", designPhotos: { "flow-meter": "data:image/jpeg;base64,AAAA" } });
+  const htmlPhoto = renderSmartControllerProposal(dPhoto);
+  ok(htmlPhoto.includes('class="hw-photo"><img src="data:image/jpeg;base64,AAAA"'), "supplied slot renders the photo");
 }
 
 // ---- report -----------------------------------------------------------
