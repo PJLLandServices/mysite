@@ -126,6 +126,9 @@ async function load() {
     // builder — it's merged from two child quotes. Its card opens the
     // generated preview instead of the empty builder.
     const isCombined = isProposal && !!q.combined;
+    // Smart-controller upgrade: an ai_repair_quote that gets the designed HCC
+    // selling page (generate → phone-gated send), not the plain e-sign flow.
+    const isSmartController = q.type === "ai_repair_quote" && q.narrativeKey === "smart-controller";
     const proposalHref = `/admin/quote/${encodeURIComponent(q.id)}/proposal`;
     const combinedPreviewHref = `/approve/${encodeURIComponent(q.id)}`;
 
@@ -137,6 +140,14 @@ async function load() {
         const sendLabel = (q.status === "draft" || q.status === "draft_preview") ? "Send to customer" : "Re-send";
         actions.push(`<button type="button" class="qf-card__send" data-quote-id="${escapeHtml(q.id)}" data-action="send-combined">${sendLabel}</button>`);
       }
+    } else if (isSmartController) {
+      if (!isDeleted) {
+        actions.push(`<button type="button" data-quote-id="${escapeHtml(q.id)}" data-action="generate-sc">Generate page</button>`);
+        actions.push(`<a href="/approve/${encodeURIComponent(q.id)}" target="_blank" rel="noopener">Preview</a>`);
+        const sendLabel = (q.status === "draft" || q.status === "draft_preview") ? "Send to customer" : "Re-send";
+        actions.push(`<button type="button" class="qf-card__send" data-quote-id="${escapeHtml(q.id)}" data-action="send-designed">${sendLabel}</button>`);
+        actions.push(`<a href="/admin/smart-controller-photos" target="_blank" rel="noopener">Photos</a>`);
+      }
     } else if (isProposal) {
       actions.push(`<a href="${proposalHref}">Edit proposal</a>`);
     } else if (leadHref) {
@@ -147,7 +158,7 @@ async function load() {
     // portal + PDF). Already-sent ones keep a "Re-send" so a failed
     // email/SMS delivery has a retry surface. Proposals and on-site
     // quotes have their own send flows; deleted rows restore first.
-    if (!isDeleted && q.type === "ai_repair_quote" && (q.status === "draft" || q.status === "sent")) {
+    if (!isDeleted && q.type === "ai_repair_quote" && !isSmartController && (q.status === "draft" || q.status === "sent")) {
       // "View as customer" opens the exact e-sign page the customer
       // gets — drafts get a banner'd, non-signable preview link (dies
       // when the real send rotates the token); sent quotes open the
@@ -393,6 +404,48 @@ async function sendCombined(quoteId) {
   }
 }
 
+// Generate the designed smart-controller page (writes the phone-gated doc,
+// embedding the current design photos). Offers to open the preview after.
+async function generateSmartControllerPage(quoteId) {
+  try {
+    const r = await fetch(`/api/quotes/${encodeURIComponent(quoteId)}/generate-proposal-page`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({})
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok || !data.ok) { alert((data.errors && data.errors[0]) || `Couldn't generate (${r.status})`); return; }
+    if (confirm(`Page generated for ${quoteId}. Open the preview?`)) {
+      window.open(`/approve/${encodeURIComponent(quoteId)}`, "_blank");
+    }
+    load();
+  } catch (err) { alert(err.message || "Couldn't generate the page."); }
+}
+
+// Send a designed, phone-gated proposal (smart-controller upgrade) to the
+// customer — the customer gets a link and verifies their phone to open it.
+async function sendSmartController(quoteId) {
+  const cached = lastLoadedQuotes.find((q) => q.id === quoteId);
+  if (cached && !cached.proposalDocument) {
+    if (!confirm(`Heads up: the page for ${quoteId} hasn't been generated yet — the customer would get the plain quote, not the designed page.\n\nGenerate it first (click "Generate page"), or OK to send anyway.`)) return;
+  }
+  const onFile = (cached && cached.customerEmail) || "";
+  const total = cached && Number.isFinite(Number(cached.total))
+    ? ` — $${Number(cached.total).toFixed(2)} incl. HST` : "";
+  const to = prompt(`Send the smart-controller upgrade ${quoteId}${total} to the customer.\n\nThey'll get a link and verify their phone to open it.\n\nEmail address:`, onFile);
+  if (to == null) return;
+  const email = String(to).trim();
+  if (!email) { alert("An email address is required to send."); return; }
+  try {
+    const r = await fetch(`/api/quotes/${encodeURIComponent(quoteId)}/send-proposal-for-approval`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ sendEmail: true, email })
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok || !data.ok) { alert((data.errors && data.errors[0]) || `Couldn't send (${r.status})`); return; }
+    if (data.emailError) alert(`${quoteId} marked sent, but email failed: ${data.emailError}\n\nUse Re-send to retry.`);
+    else alert(`Sent to ${email}. The customer gets a link to the upgrade proposal.`);
+    load();
+  } catch (err) { alert(err.message || "Couldn't send the upgrade proposal."); }
+}
+
 // "View as customer" — opens the customer's exact e-sign page. The tab
 // is opened SYNCHRONOUSLY (before the fetch) so iOS Safari's popup
 // blocker doesn't eat it; the URL lands once the server answers.
@@ -465,6 +518,18 @@ containerEl.addEventListener("click", (event) => {
   if (sendCombinedBtn) {
     event.preventDefault();
     sendCombined(sendCombinedBtn.dataset.quoteId);
+    return;
+  }
+  const genScBtn = event.target.closest("[data-action='generate-sc']");
+  if (genScBtn) {
+    event.preventDefault();
+    generateSmartControllerPage(genScBtn.dataset.quoteId);
+    return;
+  }
+  const sendDesignedBtn = event.target.closest("[data-action='send-designed']");
+  if (sendDesignedBtn) {
+    event.preventDefault();
+    sendSmartController(sendDesignedBtn.dataset.quoteId);
     return;
   }
   const previewBtn = event.target.closest("[data-action='preview']");

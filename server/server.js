@@ -873,6 +873,7 @@ function needsAuth(method, pathname) {
   if (pathname.startsWith("/api/admin/bulk/")) return "admin";
   if (pathname.startsWith("/api/admin/trash/")) return "admin";
   if (pathname === "/admin/trash" || pathname === "/admin/trash/") return "admin";
+  if (pathname === "/admin/smart-controller-photos" || pathname === "/admin/smart-controller-photos/") return "user";
   // CRM pages — admin OR tech.
   if (pathname === "/admin" || pathname === "/admin/") return "user";
   if (pathname === "/admin/today" || pathname === "/admin/today/") return "user";
@@ -11253,6 +11254,23 @@ async function handleApi(req, res, pathname) {
     return sendJson(res, 200, { ok: true, design, slots: out });
   }
 
+  // Raw image for the management page's preview thumbnail.
+  const designPhotoImgMatch = pathname.match(/^\/api\/design-photos\/([^/]+)\/([^/]+)\/img$/);
+  if (designPhotoImgMatch && req.method === "GET") {
+    const session = await requireAdmin(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+    const design = decodeURIComponent(designPhotoImgMatch[1]);
+    const slot = decodeURIComponent(designPhotoImgMatch[2]);
+    if (!isKnownDesignSlot(design, slot)) return sendJson(res, 404, { ok: false, errors: ["Unknown slot."] });
+    const p = designPhotoPath(design, slot);
+    try {
+      const buf = await fs.readFile(p);
+      res.writeHead(200, { "content-type": "image/jpeg", "content-length": buf.length, "cache-control": "no-store" });
+      res.end(buf);
+    } catch (_) { return sendJson(res, 404, { ok: false, errors: ["No photo."] }); }
+    return;
+  }
+
   const designPhotoSlotMatch = pathname.match(/^\/api\/design-photos\/([^/]+)\/([^/]+)$/);
   if (designPhotoSlotMatch && req.method === "POST") {
     const session = await requireAdmin(req);
@@ -17289,6 +17307,9 @@ function resolveStaticTarget(pathname) {
   // soft-deleted records across resources with restore + permanent-purge.
   if (pathname === "/admin/trash" || pathname === "/admin/trash/") {
     return { dir: SERVER_DIR, relative: "/trash.html" };
+  }
+  if (pathname === "/admin/smart-controller-photos" || pathname === "/admin/smart-controller-photos/") {
+    return { dir: SERVER_DIR, relative: "/smart-controller-photos.html" };
   }
   // Materials management (Phase 1 of the BoM/PO system). Suppliers index,
   // Material Lists index, and per-list builder. The builder regex must come
