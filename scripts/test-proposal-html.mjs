@@ -371,7 +371,7 @@ function combinedChild(id, templateKey, subtotal, hst, total, lineItems) {
 // Static copy from the template; the quote supplies customer + price; the
 // four hardware photos are design-level shared slots (labeled placeholder
 // when empty, image when supplied).
-ok(!templates.listTemplates().some((t) => t.key === "smart-controller"), "smart-controller hidden from standalone picker");
+ok(templates.listTemplates().some((t) => t.key === "smart-controller"), "smart-controller selectable in the design picker");
 ok(templates.isKnownTemplate("smart-controller"), "smart-controller is a known template");
 {
   const q = { id: "Q-2026-0053", type: "ai_repair_quote", narrativeKey: "smart-controller",
