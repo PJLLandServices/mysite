@@ -725,6 +725,42 @@ function proposalHeroPath(quoteId) {
   return path.join(PROPOSAL_HERO_DIR, `${safe}.jpg`);
 }
 
+// Design-level shared photos (Smart Controller Upgrade brief, 2026-07). Unlike
+// the per-quote hero photo, these belong to a DESIGN and are the same on every
+// proposal of that design until Patrick swaps one — so they live under a
+// design key, not a quote id. server/data is gitignored + on Render disk, so
+// uploads persist across deploys.
+const DESIGN_PHOTOS_DIR = path.join(DATA_DIR, "design-photos");
+const DESIGN_PHOTO_SLOTS = {
+  "smart-controller": [
+    { key: "hero", label: "Hero — Hunter HCC controller" },
+    { key: "flow-meter", label: "Flow meter" },
+    { key: "wireless-valves", label: "Wireless valves" },
+    { key: "app", label: "Hydrawise app" }
+  ]
+};
+function designPhotoPath(design, slot) {
+  const d = String(design || "").replace(/[^A-Za-z0-9-]/g, "");
+  const s = String(slot || "").replace(/[^A-Za-z0-9-]/g, "");
+  if (!d || !s) return null;
+  return path.join(DESIGN_PHOTOS_DIR, d, `${s}.jpg`);
+}
+function isKnownDesignSlot(design, slot) {
+  return (DESIGN_PHOTO_SLOTS[design] || []).some((x) => x.key === slot);
+}
+// Read a design's uploaded photos as { slot: dataUri } for embedding. Missing
+// slots are simply absent (the generator renders a labeled placeholder).
+async function readDesignPhotos(design) {
+  const out = {};
+  for (const { key } of DESIGN_PHOTO_SLOTS[design] || []) {
+    const p = designPhotoPath(design, key);
+    if (!p) continue;
+    try { out[key] = "data:image/jpeg;base64," + (await fs.readFile(p)).toString("base64"); }
+    catch (_) { /* slot not uploaded yet */ }
+  }
+  return out;
+}
+
 // Does this proposal carry a custom HTML document on disk? THIS is what
 // turns the phone gate on (Patrick, Jul 13 2026): the challenge exists
 // specifically to protect the designed HTML page. A proposal without one
@@ -733,8 +769,17 @@ function proposalHeroPath(quoteId) {
 // q.proposalDocument metadata only drives the builder card), so a
 // hand-dropped file still gates and a stale metadata stub without a file
 // does not.
+// Which quotes can carry a designed, phone-gated custom document: every
+// project_proposal, plus the smart-controller upgrade (an ai_repair_quote
+// whose designed selling piece is generated the same way).
+function quoteCanCarryCustomDoc(q) {
+  if (!q) return false;
+  if (q.type === "project_proposal") return true;
+  if (q.type === "ai_repair_quote" && q.narrativeKey === "smart-controller") return true;
+  return false;
+}
 async function proposalHasCustomDoc(q) {
-  if (!q || q.type !== "project_proposal") return false;
+  if (!quoteCanCarryCustomDoc(q)) return false;
   const docPath = proposalDocPath(q.id);
   if (!docPath) return false;
   try { return (await fs.stat(docPath)).isFile(); } catch (_) { return false; }
@@ -3383,6 +3428,7 @@ async function renderAndStoreProposalPage(q, { templateKey, session } = {}) {
   const theme = proposalTemplates.loadRaw(key).theme || "sprinkler";
   const renderer = theme === "lighting" ? proposalHtml.renderLightingProposal
     : theme === "combined" ? proposalHtml.renderCombinedProposal
+    : theme === "smart-controller" ? proposalHtml.renderSmartControllerProposal
     : theme === "sprinkler" ? proposalHtml.renderSprinklerProposal
     : null;
   if (!renderer) {
@@ -3402,9 +3448,11 @@ async function renderAndStoreProposalPage(q, { templateKey, session } = {}) {
       const e = new Error("This combined proposal needs two valid child quotes."); e.statusCode = 422; throw e;
     }
   }
+  // Smart-controller pages embed the design-level shared hardware photos.
+  const designPhotos = theme === "smart-controller" ? await readDesignPhotos("smart-controller") : null;
 
   const data = proposalData.buildProposalData(q, {
-    customer: parties.customer, property: parties.property, templateKey: key, heroPhoto, combinedChildren
+    customer: parties.customer, property: parties.property, templateKey: key, heroPhoto, combinedChildren, designPhotos
   });
   const html = renderer(data);
   const bytes = Buffer.byteLength(html, "utf8");
@@ -11184,6 +11232,66 @@ async function handleApi(req, res, pathname) {
     }
   }
 
+  // ---- Design-level shared photos (Smart Controller Upgrade) -----------
+  // GET  /api/design-photos/:design            — slot state (present/bytes)
+  // POST /api/design-photos/:design/:slot       — upload one slot ({filename,data} base64)
+  // DEL  /api/design-photos/:design/:slot       — clear one slot
+  const designPhotoListMatch = pathname.match(/^\/api\/design-photos\/([^/]+)$/);
+  if (designPhotoListMatch && req.method === "GET") {
+    const session = await requireAdmin(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+    const design = decodeURIComponent(designPhotoListMatch[1]);
+    const slots = DESIGN_PHOTO_SLOTS[design];
+    if (!slots) return sendJson(res, 404, { ok: false, errors: ["Unknown design."] });
+    const out = [];
+    for (const { key, label } of slots) {
+      const p = designPhotoPath(design, key);
+      let present = false, bytes = 0, updatedAt = null;
+      try { const st = await fs.stat(p); present = true; bytes = st.size; updatedAt = st.mtime.toISOString(); } catch (_) { /* not uploaded */ }
+      out.push({ slot: key, label, present, bytes, updatedAt });
+    }
+    return sendJson(res, 200, { ok: true, design, slots: out });
+  }
+
+  const designPhotoSlotMatch = pathname.match(/^\/api\/design-photos\/([^/]+)\/([^/]+)$/);
+  if (designPhotoSlotMatch && req.method === "POST") {
+    const session = await requireAdmin(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+    try {
+      const design = decodeURIComponent(designPhotoSlotMatch[1]);
+      const slot = decodeURIComponent(designPhotoSlotMatch[2]);
+      if (!isKnownDesignSlot(design, slot)) return sendJson(res, 404, { ok: false, errors: ["Unknown design photo slot."] });
+      const payload = await parseRequestBody(req, { maxBytes: 30 * 1024 * 1024 });
+      const raw = Buffer.from(String(payload.data || ""), "base64");
+      if (!raw.length) return sendJson(res, 422, { ok: false, errors: ["The image was empty."] });
+      let jpeg;
+      try {
+        jpeg = await sharp(raw, { failOn: "none" }).rotate()
+          .resize({ width: 1600, withoutEnlargement: true })
+          .jpeg({ quality: 72, mozjpeg: true }).toBuffer();
+      } catch (_) {
+        return sendJson(res, 422, { ok: false, errors: ["That doesn't look like an image we can read — try a JPG or PNG."] });
+      }
+      const p = designPhotoPath(design, slot);
+      if (!p) return sendJson(res, 400, { ok: false, errors: ["Bad slot."] });
+      await fs.mkdir(path.dirname(p), { recursive: true });
+      await fs.writeFile(p, jpeg);
+      return sendJson(res, 201, { ok: true, design, slot, bytes: jpeg.length, uploadedAt: new Date().toISOString() });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't save the photo."] });
+    }
+  }
+  if (designPhotoSlotMatch && req.method === "DELETE") {
+    const session = await requireAdmin(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+    const design = decodeURIComponent(designPhotoSlotMatch[1]);
+    const slot = decodeURIComponent(designPhotoSlotMatch[2]);
+    if (!isKnownDesignSlot(design, slot)) return sendJson(res, 404, { ok: false, errors: ["Unknown design photo slot."] });
+    const p = designPhotoPath(design, slot);
+    if (p) { try { await fs.unlink(p); } catch (_) { /* already gone */ } }
+    return sendJson(res, 200, { ok: true, design, slot });
+  }
+
   // POST /api/quotes/:id/generate-proposal-page — admin. Render the designed
   // customer page from THIS quote's data and write it into the proposal-docs
   // slot (the same file the phone-gated /approve serves). Body (optional):
@@ -11196,23 +11304,28 @@ async function handleApi(req, res, pathname) {
       const quoteId = decodeURIComponent(generatePageMatch[1]);
       const q = await quotes.get(quoteId);
       if (!q) return sendJson(res, 404, { ok: false, errors: ["Quote not found."] });
-      if (q.type !== "project_proposal") {
-        return sendJson(res, 422, { ok: false, errors: ["Only a project proposal can generate a customer page."] });
+      if (!quoteCanCarryCustomDoc(q)) {
+        return sendJson(res, 422, { ok: false, errors: ["This quote can't generate a customer page."] });
       }
+      // The smart-controller upgrade always uses its own design; other quotes
+      // (project proposals) pick/keep a template via the Generate panel.
+      const isSmartCtrl = q.type === "ai_repair_quote" && q.narrativeKey === "smart-controller";
       const payload = await parseRequestBody(req, { maxBytes: 1 * 1024 * 1024 }).catch(() => ({}));
       const requestedKey = payload && typeof payload.templateKey === "string" ? payload.templateKey : null;
-      // Persist page config (template + lighting fixture-count override) so the
-      // builder remembers it and the adapter reads it from the fresh record.
-      const cfgPatch = {};
-      if (requestedKey && requestedKey !== q.proposalTemplateKey) cfgPatch.templateKey = requestedKey;
-      if (payload && Object.prototype.hasOwnProperty.call(payload, "fixtureCount")) {
-        cfgPatch.fixtureCount = payload.fixtureCount;   // number, or blank/null to clear
-      }
-      if (Object.keys(cfgPatch).length) {
-        await quotes.setProposalPageConfig(q.id, cfgPatch, { by: session.uid || "admin" });
+      if (!isSmartCtrl) {
+        // Persist page config (template + lighting fixture-count override) so the
+        // builder remembers it and the adapter reads it from the fresh record.
+        const cfgPatch = {};
+        if (requestedKey && requestedKey !== q.proposalTemplateKey) cfgPatch.templateKey = requestedKey;
+        if (payload && Object.prototype.hasOwnProperty.call(payload, "fixtureCount")) {
+          cfgPatch.fixtureCount = payload.fixtureCount;   // number, or blank/null to clear
+        }
+        if (Object.keys(cfgPatch).length) {
+          await quotes.setProposalPageConfig(q.id, cfgPatch, { by: session.uid || "admin" });
+        }
       }
       const fresh = await quotes.get(q.id);
-      const templateKey = requestedKey || fresh.proposalTemplateKey || "irrigation";
+      const templateKey = isSmartCtrl ? "smart-controller" : (requestedKey || fresh.proposalTemplateKey || "irrigation");
       const result = await renderAndStoreProposalPage(fresh, { templateKey, session });
       return sendJson(res, 201, {
         ok: true,
@@ -11899,8 +12012,8 @@ async function handleApi(req, res, pathname) {
           errors: ["This quote is in the Trash. Restore it before sending for approval."]
         });
       }
-      if (q.type !== "project_proposal") {
-        return sendJson(res, 422, { ok: false, errors: ["Quote is not a project_proposal."] });
+      if (!quoteCanCarryCustomDoc(q)) {
+        return sendJson(res, 422, { ok: false, errors: ["This quote can't be sent as a designed proposal."] });
       }
       const sendSms = payload?.sendSms === true;
       const sendEmail = payload?.sendEmail !== false;
@@ -11933,10 +12046,11 @@ async function handleApi(req, res, pathname) {
       // the email greeting further down (so it's available on the re-send
       // path too, not only when we re-render).
       const parties = await quoteRenderParties(q);
-      // A combined ("two projects, one property") proposal is an HTML-only
-      // document behind the phone gate — it has no line items to render a PDF
-      // from (and the gated email attaches no PDF anyway). Just mint a token.
-      if (q.combined) {
+      // A combined bundle, or the smart-controller designed page, is an
+      // HTML-only document behind the phone gate — the gated email attaches no
+      // PDF anyway, so skip the PDF freeze and just mint a token.
+      const isSmartCtrlSend = q.type === "ai_repair_quote" && q.narrativeKey === "smart-controller";
+      if (q.combined || isSmartCtrlSend) {
         token = token || crypto.randomBytes(16).toString("hex");
       } else {
         pdfBuffer = (!wasDraftBeforeSend && q.pdfPath) ? await readFrozenQuotePdf(q) : null;
