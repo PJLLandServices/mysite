@@ -28,9 +28,10 @@ const PROPOSAL_TEMPLATES = {
 };
 
 // Templates NOT offered in a single project-proposal's Generate picker —
-// combined merges two quotes, smart-controller is built from its own upgrade
-// quote flow. Both remain valid for isKnownTemplate()/loadRaw().
-const MULTI_QUOTE_TEMPLATES = new Set(["combined", "smart-controller"]);
+// only "combined", which merges two quotes and is built from the quote list.
+// Everything else (irrigation, lighting, smart-controller) is a normal
+// single-quote design you pick from the builder's Design dropdown.
+const MULTI_QUOTE_TEMPLATES = new Set(["combined"]);
 
 function isKnownTemplate(key) {
   return Object.prototype.hasOwnProperty.call(PROPOSAL_TEMPLATES, key);
