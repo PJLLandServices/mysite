@@ -112,7 +112,11 @@
     gateSave: $("pbGateSave"),
     gateCustomerName: $("pbGateCustomerName"),
     gateNoCust: $("pbGateNoCust"),
-    gateOff: $("pbGateOff")
+    gateOff: $("pbGateOff"),
+    deliveryCard: $("pbDeliveryCard"),
+    deliveryMode: $("pbDeliveryMode"),
+    deliveryHint: $("pbDeliveryHint"),
+    pageBlocks: $("pbProposalPageBlocks")
   };
 
   // ---- State ---------------------------------------------------------
@@ -199,6 +203,7 @@
       state.quote = data.quote;
       state.isDirty = false;
       renderTotals();
+      renderDelivery(); // branch change may have re-derived deliveryMode
       setSaveState("Saved", null);
     } catch (err) {
       setSaveState("Save failed", "dirty");
@@ -279,6 +284,7 @@
       }
     }
 
+    renderDelivery();
     renderSectionList();
     renderActiveSection();
     renderAttachments();
@@ -288,6 +294,27 @@
     syncDepositPanel();
     renderTotals();
     refreshPreviewLink();
+  }
+
+  // ---- Delivery mode (residential_repair brief) ---------------------
+  // plain_pdf → the customer gets a plain branded PDF by email, accepted at
+  // /approve, and the proposal-page / document / phone-gate blocks do not
+  // render (the server also 409s their endpoints). proposal_page → the
+  // designed, phone-gated machinery. Editable only on a draft.
+  function renderDelivery() {
+    const q = state.quote;
+    const mode = q.deliveryMode === "plain_pdf" ? "plain_pdf" : "proposal_page";
+    if (el.deliveryMode) {
+      el.deliveryMode.value = mode;
+      el.deliveryMode.disabled = q.status !== "draft";
+    }
+    if (el.deliveryHint) {
+      el.deliveryHint.textContent = mode === "plain_pdf"
+        ? "Plain branded PDF, emailed with an /approve link. No customer page, no phone gate — the homeowner opens the estimate directly."
+        : "The designed, phone-gated customer page. The homeowner types a phone number on file to open it.";
+    }
+    // The whole proposal-page block is absent under plain_pdf.
+    if (el.pageBlocks) el.pageBlocks.hidden = (mode === "plain_pdf");
   }
 
   // Structural sections (pricing table + acceptance block) always render
@@ -1374,12 +1401,98 @@
   });
 
   // ---- Top-bar inputs ----------------------------------------------
-  [el.branch, el.billingMode].forEach((node) => {
-    node.addEventListener("change", markDirty);
-  });
+  el.billingMode.addEventListener("change", markDirty);
   [el.customerEmail, el.labourRate, el.validUntil, el.quoteNumber, el.scope].forEach((node) => {
     node.addEventListener("input", markDirty);
   });
+
+  // Flush any pending/in-flight autosave, then persist once more. Used before
+  // a branch/delivery change so those actions act on fully-saved state and the
+  // server's returned record never clobbers unsaved section edits (saveDraft
+  // sends the COMPLETE draft, not a partial patch).
+  async function flushSave() {
+    if (state.saveTimer) { clearTimeout(state.saveTimer); state.saveTimer = null; }
+    for (let i = 0; i < 100 && state.isSaving; i++) {
+      await new Promise((r) => setTimeout(r, 30));
+    }
+    await saveDraft();
+  }
+
+  // Branch has its own handler (residential_repair brief): it flushes the save
+  // (which carries the new branch, so the server re-derives deliveryMode),
+  // re-renders the delivery control, reverts on a refusal (e.g. a document is
+  // attached), and offers to re-seed sections when the branch's preset
+  // actually changes (only the residential_repair preset differs from the
+  // default skeleton today).
+  el.branch.addEventListener("change", async () => {
+    const oldBranch = state.quote ? state.quote.branch : null;
+    const newBranch = el.branch.value || null;
+    await flushSave();
+    renderDelivery();
+    if ((state.quote.branch || null) !== newBranch) {
+      // Server refused the branch change (saveDraft surfaced the error) —
+      // e.g. document_attached_blocks_plain_pdf. Revert the select.
+      el.branch.value = state.quote.branch || "";
+      return;
+    }
+    const presetChanges = (oldBranch === "residential_repair") !== (newBranch === "residential_repair");
+    if (presetChanges) await maybeOfferReseed();
+  });
+
+  // Delivery-mode toggle. Draft-only; flushes pending edits first (so the
+  // returned record keeps them), then sends the dedicated deliveryMode patch.
+  // A 409 (e.g. a document is still attached) reverts the select.
+  if (el.deliveryMode) el.deliveryMode.addEventListener("change", async () => {
+    const q = state.quote;
+    if (!q || q.status !== "draft") { renderDelivery(); return; }
+    const wanted = el.deliveryMode.value;
+    await flushSave();
+    try {
+      const r = await fetch(`/api/quotes/${encodeURIComponent(q.id)}/proposal`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ deliveryMode: wanted })
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok || !data.ok) {
+        showError(data.errors?.[0] || `Couldn't change delivery (${r.status})`);
+        renderDelivery(); // revert to the stored value
+        return;
+      }
+      state.quote = data.quote;
+      renderDelivery();
+      renderProposalDoc();
+      renderGeneratePanel();
+      renderGate();
+      setSaveState("Saved", null);
+    } catch (err) {
+      showError(err.message || "Couldn't change delivery.");
+      renderDelivery();
+    }
+  });
+
+  // Offer to re-seed the section list to the current branch's preset. Never
+  // destroys silently: if any section has typed content, confirm first
+  // (residential_repair brief edge case). The server owns the preset, so the
+  // re-seed is a single authoritative call — no client-side preset copy.
+  async function maybeOfferReseed() {
+    const q = state.quote;
+    if (!q || q.status !== "draft") return;
+    const hasContent = (q.proposalSections || []).some((s) => s.body && s.body.trim());
+    if (hasContent && !confirm("Re-seed the sections to match this branch? Your typed section content will be replaced.")) {
+      return;
+    }
+    try {
+      const r = await fetch(`/api/quotes/${encodeURIComponent(q.id)}/proposal/reseed-sections`, { method: "POST" });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok || !data.ok) { showError(data.errors?.[0] || "Couldn't re-seed sections."); return; }
+      state.quote = data.quote;
+      state.activeSectionId = (state.quote.proposalSections[0] || {}).id || null;
+      render();
+    } catch (err) {
+      showError(err.message || "Couldn't re-seed sections.");
+    }
+  }
 
   // ---- Send / Revise / Convert / Attest ----------------------------
   el.sendBtn.addEventListener("click", async () => {

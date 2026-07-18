@@ -3422,6 +3422,17 @@ async function resolveCombinedChildren(q) {
 // "generate page" route and the combined-proposal build. Returns
 // { meta, previewUrl, quote }. Throws Error (with .statusCode) on bad input.
 async function renderAndStoreProposalPage(q, { templateKey, session } = {}) {
+  // Structural refusal for plain-PDF delivery (residential_repair brief).
+  // The phone gate engages by the document's PRESENCE, so the only safe way
+  // to keep a repair estimate ungated is to never let the file exist. This is
+  // the shared chokepoint for both the per-quote "Generate page" route and
+  // the combined build — belt-and-suspenders with the per-endpoint guards.
+  if (q && q.deliveryMode === "plain_pdf") {
+    const e = new Error("This proposal uses plain-PDF delivery — the customer page, proposal document, and phone gate don't apply to it.");
+    e.statusCode = 409;
+    e.code = "delivery_mode_forbids_proposal_page";
+    throw e;
+  }
   const key = templateKey || q.proposalTemplateKey || "irrigation";
   if (!proposalTemplates.isKnownTemplate(key)) {
     const e = new Error(`Unknown proposal template: ${key}`); e.statusCode = 422; throw e;
@@ -10962,7 +10973,11 @@ async function handleApi(req, res, pathname) {
         leadId: payload.leadId || null,
         scope: payload.scope || "",
         branch: payload.branch || null,
-        billingMode: payload.billingMode || "fixed_price",
+        // Pass through only an EXPLICIT billing mode; null lets quotes.create
+        // apply the branch default (T&M for residential_repair, else
+        // fixed_price). Passing "fixed_price" here would mask the branch
+        // default (residential_repair brief).
+        billingMode: payload.billingMode || null,
         createdBy: session.uid || "admin"
       });
       return sendJson(res, 201, { ok: true, quote: q });
@@ -10996,10 +11011,38 @@ async function handleApi(req, res, pathname) {
       if (err.code === "structural_section_removed" || err.code === "structural_section_excluded") {
         return sendJson(res, 422, { ok: false, errors: [err.message], error: err.code });
       }
+      if (err.code === "document_attached_blocks_plain_pdf") {
+        return sendJson(res, 409, { ok: false, errors: [err.message], error: err.code });
+      }
       if (err.code === "bad_pdf_options") {
         return sendJson(res, 400, { ok: false, errors: [err.message], error: "bad_pdf_options" });
       }
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't update proposal."] });
+    }
+  }
+
+  // POST /api/quotes/:id/proposal/reseed-sections — admin. Replace a DRAFT
+  // proposal's sections with its branch's preset (residential_repair brief).
+  // The builder calls this after the admin confirms a re-seed on branch
+  // change; the confirm (and the "don't destroy authored content" prompt)
+  // lives client-side. Draft-only — 409 once the proposal is sent.
+  const reseedMatch = pathname.match(/^\/api\/quotes\/([^/]+)\/proposal\/reseed-sections$/);
+  if (reseedMatch && req.method === "POST") {
+    const session = await requireAdmin(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+    try {
+      const id = decodeURIComponent(reseedMatch[1]);
+      const updated = await quotes.reseedProposalSections(id, { by: session.uid || "admin" });
+      if (!updated) return sendJson(res, 404, { ok: false, errors: ["Proposal not found."] });
+      return sendJson(res, 200, { ok: true, quote: updated });
+    } catch (err) {
+      if (err.code === "proposal_locked") {
+        return sendJson(res, 409, { ok: false, errors: [err.message], error: "proposal_locked" });
+      }
+      if (err.code === "wrong_quote_type") {
+        return sendJson(res, 422, { ok: false, errors: [err.message], error: "wrong_quote_type" });
+      }
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't re-seed sections."] });
     }
   }
 
@@ -11115,6 +11158,13 @@ async function handleApi(req, res, pathname) {
       if (q.type !== "project_proposal") {
         return sendJson(res, 422, { ok: false, errors: ["Only a project proposal can carry a custom document."] });
       }
+      if (q.deliveryMode === "plain_pdf") {
+        return sendJson(res, 409, {
+          ok: false,
+          errors: ["This proposal uses plain-PDF delivery — a proposal document can't be attached to it."],
+          error: "delivery_mode_forbids_proposal_page"
+        });
+      }
       const payload = await parseRequestBody(req, { maxBytes: 30 * 1024 * 1024 });
       const html = (typeof payload.html === "string" && payload.html)
         ? Buffer.from(payload.html, "utf8")
@@ -11191,6 +11241,13 @@ async function handleApi(req, res, pathname) {
       if (!q) return sendJson(res, 404, { ok: false, errors: ["Quote not found."] });
       if (q.type !== "project_proposal") {
         return sendJson(res, 422, { ok: false, errors: ["Only a project proposal can carry a hero photo."] });
+      }
+      if (q.deliveryMode === "plain_pdf") {
+        return sendJson(res, 409, {
+          ok: false,
+          errors: ["This proposal uses plain-PDF delivery — the customer page (and its hero photo) don't apply to it."],
+          error: "delivery_mode_forbids_proposal_page"
+        });
       }
       const payload = await parseRequestBody(req, { maxBytes: 30 * 1024 * 1024 });
       const raw = Buffer.from(String(payload.data || ""), "base64");
@@ -11325,6 +11382,13 @@ async function handleApi(req, res, pathname) {
       if (!quoteCanCarryCustomDoc(q)) {
         return sendJson(res, 422, { ok: false, errors: ["This quote can't generate a customer page."] });
       }
+      if (q.deliveryMode === "plain_pdf") {
+        return sendJson(res, 409, {
+          ok: false,
+          errors: ["This proposal uses plain-PDF delivery — the customer page, proposal document, and phone gate don't apply to it."],
+          error: "delivery_mode_forbids_proposal_page"
+        });
+      }
       // The smart-controller upgrade always uses its own design; other quotes
       // (project proposals) pick/keep a template via the Generate panel.
       const isSmartCtrl = q.type === "ai_repair_quote" && q.narrativeKey === "smart-controller";
@@ -11352,7 +11416,7 @@ async function handleApi(req, res, pathname) {
         quote: result.quote
       });
     } catch (err) {
-      return sendJson(res, err.statusCode || 400, { ok: false, errors: [err.message || "Couldn't generate the page."] });
+      return sendJson(res, err.statusCode || 400, { ok: false, errors: [err.message || "Couldn't generate the page."], ...(err.code ? { error: err.code } : {}) });
     }
   }
 
@@ -11435,7 +11499,7 @@ async function handleApi(req, res, pathname) {
         quote: result.quote
       });
     } catch (err) {
-      return sendJson(res, err.statusCode || 400, { ok: false, errors: [err.message || "Couldn't build the combined proposal."] });
+      return sendJson(res, err.statusCode || 400, { ok: false, errors: [err.message || "Couldn't build the combined proposal."], ...(err.code ? { error: err.code } : {}) });
     }
   }
 
@@ -12118,7 +12182,11 @@ async function handleApi(req, res, pathname) {
             //             "you'll be asked for your phone" expectation.
             //   ungated → the classic email, PDF attached, byte-identical
             //             to pre-gate behaviour.
-            const gated = await proposalHasCustomDoc(q);
+            // plain_pdf delivery (residential_repair brief) composes the
+            // plain-PDF path unconditionally — it never consults the document
+            // field, so a stray file could never gate a repair estimate the
+            // customer already has a link to.
+            const gated = q.deliveryMode === "plain_pdf" ? false : await proposalHasCustomDoc(q);
             const html = `
 <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:560px;color:#1a1a1a;line-height:1.55;">
   <div style="padding:24px 28px;background:#1B4D2E;border-radius:8px 8px 0 0;">

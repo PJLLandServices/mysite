@@ -83,6 +83,7 @@
                 <option value="lighting_design">Lighting Design</option>
                 <option value="renovation_coordination">Renovation Coordination</option>
                 <option value="change_order">Change Order</option>
+                <option value="residential_repair">Residential Repair</option>
               </select>
             </label>
             <label>
@@ -184,6 +185,29 @@
               <ul class="pb-attach-list" id="pbAttachList"></ul>
             </section>
 
+            <!-- Delivery mode (residential_repair brief, 2026-07). Chooses
+                 the customer-facing output. residential_repair defaults to a
+                 plain branded PDF (no phone gate); the other branches default
+                 to the designed, phone-gated page. Always visible so Patrick
+                 can flip a large repair back to the page. -->
+            <section class="pb-delivery" id="pbDeliveryCard">
+              <h3>Delivery</h3>
+              <label class="pb-gen-field">How the customer receives this
+                <select id="pbDeliveryMode">
+                  <option value="proposal_page">Designed proposal page (phone-gated)</option>
+                  <option value="plain_pdf">Plain branded PDF (emailed)</option>
+                </select>
+              </label>
+              <p class="pb-side-hint" id="pbDeliveryHint"></p>
+            </section>
+
+            <!-- The proposal-page machinery (customer page generator, proposal
+                 document, phone gate) renders ONLY for proposal_page delivery.
+                 For plain_pdf (repair estimates) the whole block is absent —
+                 the customer gets a plain branded PDF by email, accepted at
+                 /approve, with no phone gate anywhere in the path. -->
+            <div id="pbProposalPageBlocks">
+
             <!-- Auto-generated customer page (Proposal HTML brief, 2026-07).
                  Renders the designed, phone-gated proposal page straight from
                  THIS quote's data — no hand-authoring. Writes into the same
@@ -261,6 +285,7 @@
               </div>
               <p class="pb-gate-nocust" id="pbGateNoCust" hidden>No customer linked to this quote — these numbers come from the lead/property and can be edited on those records.</p>
             </section>
+            </div><!-- /#pbProposalPageBlocks -->
           </aside>
         </div>
 
