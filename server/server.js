@@ -7704,10 +7704,24 @@ async function handleApi(req, res, pathname) {
           } catch (_) { /* ignore */ }
         }
       }
+      // On-behalf-of acceptance (Jul 2026): resolve the account holder's name
+      // only when the estimate opts into the prompt, so the /approve page can
+      // show "on behalf of <name>". Falls back to the email on lookup miss.
+      let accountHolderName = "";
+      if (q.allowOnBehalfAcceptance === true) {
+        try {
+          const parties = await quoteRenderParties(q);
+          accountHolderName = (parties.customer && parties.customer.name) || q.customerEmail || "";
+        } catch (_) { accountHolderName = q.customerEmail || ""; }
+      }
       const safe = {
         id: q.id,
         type: q.type,
         status: q.status,
+        // on-behalf-of acceptance prompt + scheduled-date urgency (Jul 2026)
+        allowOnBehalfAcceptance: q.allowOnBehalfAcceptance === true,
+        accountHolderName,
+        scheduledServiceDate: q.scheduledServiceDate || null,
         // Preview mode flag — set for tech-only previews
         // (status === "draft_preview") AND for admin "view as customer"
         // links on still-draft ai_repair_quotes (a draft with an
@@ -7826,9 +7840,25 @@ async function handleApi(req, res, pathname) {
         // in addition to the legacy signature{} block. The WO-flip code
         // below is a no-op for proposals (workOrderIds is empty until
         // the project is later spun up).
+        // On-behalf-of acceptance (Jul 2026): honoured ONLY when the estimate
+        // has the toggle on. When the signer says they're approving on behalf
+        // of the account holder, a relationship is required and the account
+        // holder's name is resolved server-side for the durable record.
+        const wantsOnBehalf = q.allowOnBehalfAcceptance === true && payload?.onBehalf === true;
+        const signerRelationship = String(payload?.signerRelationship || "").trim();
+        if (wantsOnBehalf && !signerRelationship) {
+          return sendJson(res, 422, { ok: false, errors: ["Please add your relationship to the account holder."] });
+        }
+        let accountHolderName = "";
+        if (wantsOnBehalf) {
+          try {
+            const parties = await quoteRenderParties(q);
+            accountHolderName = (parties.customer && parties.customer.name) || q.customerEmail || "";
+          } catch (_) { accountHolderName = q.customerEmail || ""; }
+        }
         updated = await quotes.recordPortalSignAcceptance(q.id, {
           customerName, imageData, ip, userAgent,
-          note: "Accepted via portal e-sign"
+          onBehalfOf: wantsOnBehalf, signerRelationship, accountHolderName
         });
       } else {
         updated = await quotes.acceptWithSignature(q.id, {
@@ -12177,6 +12207,19 @@ async function handleApi(req, res, pathname) {
             // Customer-facing document noun (residential_repair brief): a repair
             // job reads as an "Estimate", every other branch as a "Proposal".
             const docNoun = quotes.customerDocNoun(q);
+            // "Sign ASAP to schedule" urgency (Jul 2026) — repair estimates
+            // only. Format a plain YYYY-MM-DD as a UTC calendar date so no
+            // timezone shift moves it a day.
+            const isRepairEmail = q.branch === "residential_repair";
+            const fmtSchedDate = (iso) => {
+              const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso || ""));
+              if (!m) return "";
+              const dt = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
+              const WD = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+              const MO = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+              return `${WD[dt.getUTCDay()]}, ${MO[dt.getUTCMonth()]} ${dt.getUTCDate()}`;
+            };
+            const schedLabel = isRepairEmail ? fmtSchedDate(q.scheduledServiceDate) : "";
             // Phone-Gated Proposal Access (2026-07, rescoped Jul 13): the
             // gate exists ONLY when a custom HTML document is attached, so
             // the email branches on the same check the /approve routes use.
@@ -12202,11 +12245,14 @@ async function handleApi(req, res, pathname) {
       ? `<p style="margin:0 0 14px;">Your detailed ${docNoun.lower} (<strong>${displayNo}</strong>) is ready to review at the link below. Total: <strong>$${moneyCad(q.total)} CAD</strong> incl. HST.</p>
     <p style="margin:0 0 14px;padding:12px 14px;background:#EAF3DE;border:1px solid #C7E0A8;border-radius:8px;font-size:13px;color:#33502f;">To open it, you'll be asked for your phone number — the one we have on file for you. Any format is fine.</p>`
       : `<p style="margin:0 0 14px;">Your detailed ${docNoun.lower} (<strong>${displayNo}</strong>) is attached and posted at the link below. Total: <strong>$${moneyCad(q.total)} CAD</strong> incl. HST.</p>`}
-    <p style="margin:0 0 14px;font-size:13px;color:#555;">You can accept this proposal in either of two ways:</p>
+    ${isRepairEmail
+      ? `<p style="margin:0 0 14px;padding:12px 14px;background:#FFF4E5;border:1px solid #F0C88A;border-radius:8px;font-size:14px;color:#7A4E12;"><strong>Estimate must be signed ASAP to schedule.</strong>${schedLabel ? ` This repair is scheduled for <strong>${schedLabel}</strong> — please sign your estimate before then to keep that date.` : ""}</p>`
+      : ""}
+    <p style="margin:0 0 14px;font-size:13px;color:#555;">You can accept this ${docNoun.lower} in either of two ways:</p>
     <ul style="margin:0 0 14px;padding-left:20px;font-size:13px;color:#333;line-height:1.7;">
       <li><strong>Sign online</strong> — tap the button below, draw your signature, done.</li>
       ${gated
-        ? `<li><strong>Print, sign, return</strong> — open the proposal, download the PDF, sign by hand, scan or photograph it, and email it back to <a href="mailto:info@pjllandservices.com" style="color:#1B4D2E;">info@pjllandservices.com</a>.</li>`
+        ? `<li><strong>Print, sign, return</strong> — open the ${docNoun.lower}, download the PDF, sign by hand, scan or photograph it, and email it back to <a href="mailto:info@pjllandservices.com" style="color:#1B4D2E;">info@pjllandservices.com</a>.</li>`
         : `<li><strong>Print, sign, return</strong> — print the attached PDF, sign by hand, scan or photograph it, and email it back to <a href="mailto:info@pjllandservices.com" style="color:#1B4D2E;">info@pjllandservices.com</a>.</li>`}
     </ul>
     <p style="margin:0 0 18px;text-align:center;">

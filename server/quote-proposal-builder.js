@@ -37,6 +37,8 @@
     customerEmail: $("pbCustomerEmail"),
     labourRate: $("pbLabourRate"),
     validUntil: $("pbValidUntil"),
+    scheduledDate: $("pbScheduledDate"),
+    allowOnBehalf: $("pbAllowOnBehalf"),
     quoteNumber: $("pbQuoteNumber"),
     scope: $("pbScope"),
     sectionList: $("pbSectionList"),
@@ -233,7 +235,18 @@
       el.version.hidden = false;
     }
     if (q.acceptanceMethod && q.acceptanceMethod !== "pending") {
-      el.acceptBadge.textContent = q.acceptanceMethod === "portal_esign" ? "E-signed" : "PDF returned";
+      const ev = q.acceptanceEvidence;
+      const onBehalf = ev && ev.onBehalfOf === true;
+      el.acceptBadge.textContent = q.acceptanceMethod === "portal_esign"
+        ? (onBehalf ? "E-signed (on behalf)" : "E-signed")
+        : "PDF returned";
+      // Durable on-behalf detail on hover (residential_repair follow-up):
+      // "Signed by <signer> (<relationship>) on behalf of <account holder>".
+      el.acceptBadge.title = onBehalf
+        ? `Signed by ${ev.customerPrintedName || "signer"}` +
+          `${ev.signerRelationship ? ` (${ev.signerRelationship})` : ""}` +
+          ` on behalf of ${ev.accountHolderName || "the account holder"}`
+        : "";
       el.acceptBadge.dataset.method = q.acceptanceMethod;
       el.acceptBadge.hidden = false;
     } else if (q.status === "pending_admin_attestation") {
@@ -249,6 +262,8 @@
     if (q.validUntil) {
       el.validUntil.value = String(q.validUntil).slice(0, 10);
     }
+    el.scheduledDate.value = q.scheduledServiceDate ? String(q.scheduledServiceDate).slice(0, 10) : "";
+    el.allowOnBehalf.checked = q.allowOnBehalfAcceptance === true;
     el.quoteNumber.value = q.quoteNumberDisplay || "";
     el.scope.value = q.scope || "";
 
@@ -1407,6 +1422,43 @@
   [el.customerEmail, el.labourRate, el.validUntil, el.quoteNumber, el.scope].forEach((node) => {
     node.addEventListener("input", markDirty);
   });
+
+  // Scheduled service date + on-behalf toggle (Jul 2026). Neither is
+  // scope-protected, so they patch on their own — editable even after send
+  // (a date may get booked, or Patrick may learn a family member will sign) —
+  // without carrying the locked draft fields saveDraft sends.
+  function syncAcceptanceMetaInputs() {
+    el.scheduledDate.value = state.quote && state.quote.scheduledServiceDate
+      ? String(state.quote.scheduledServiceDate).slice(0, 10) : "";
+    el.allowOnBehalf.checked = !!(state.quote && state.quote.allowOnBehalfAcceptance);
+  }
+  async function patchAcceptanceMeta(patch) {
+    const q = state.quote;
+    if (!q) return;
+    setSaveState("Saving…", "saving");
+    try {
+      const r = await fetch(`/api/quotes/${encodeURIComponent(q.id)}/proposal`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(patch)
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok || !data.ok) {
+        showError(data.errors?.[0] || `Save failed (${r.status})`);
+        setSaveState("Save failed", "dirty");
+        syncAcceptanceMetaInputs(); // revert to stored state
+        return;
+      }
+      state.quote = data.quote;
+      setSaveState("Saved", null);
+    } catch (err) {
+      showError(err.message || "Save failed.");
+      setSaveState("Save failed", "dirty");
+      syncAcceptanceMetaInputs();
+    }
+  }
+  el.scheduledDate.addEventListener("change", () => patchAcceptanceMeta({ scheduledServiceDate: el.scheduledDate.value || null }));
+  el.allowOnBehalf.addEventListener("change", () => patchAcceptanceMeta({ allowOnBehalfAcceptance: el.allowOnBehalf.checked === true }));
 
   // Flush any pending/in-flight autosave, then persist once more. Used before
   // a branch/delivery change so those actions act on fully-saved state and the

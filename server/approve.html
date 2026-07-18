@@ -68,6 +68,10 @@
       <h1 id="approveHeadline">Your tech recommends the following work.</h1>
       <p class="approve-intro" id="approveIntro">Review the scope and price below. When you're ready, sign at the bottom and PJL will get the green light to proceed.</p>
 
+      <!-- "Sign ASAP to schedule" urgency — repair estimates with a scheduled
+           service date (residential_repair brief follow-up). Populated by JS. -->
+      <p class="approve-urgent" id="approveUrgent" hidden></p>
+
       <p class="approve-pdf-link"><a id="approvePdfLink" href="#" target="_blank" rel="noopener">📄 Download PDF copy of this quote</a></p>
 
       <!-- Proposal narrative — only rendered when type === project_proposal.
@@ -98,6 +102,17 @@
       <section class="approve-sign" id="approveSignBlock">
         <h2 id="approveSignHeading">Approve this work</h2>
         <p id="approveSignIntro">Print your name and sign below. Your signature is the authorization to proceed and is the binding moment for this scope.</p>
+        <!-- On-behalf-of choice — shown only when the estimate has the toggle
+             on (allowOnBehalfAcceptance). JS fills the account-holder name. -->
+        <div class="approve-onbehalf" id="approveOnBehalf" hidden>
+          <p class="approve-label approve-onbehalf-q">Who is approving this?</p>
+          <label class="approve-onbehalf-opt"><input type="radio" name="approveSigner" value="self" checked> I am <span class="approve-acct" id="approveAcctSelf">the account holder</span></label>
+          <label class="approve-onbehalf-opt"><input type="radio" name="approveSigner" value="other"> I'm authorized to approve on behalf of <span class="approve-acct" id="approveAcctOther">the account holder</span></label>
+          <div id="approveRelWrap" hidden>
+            <label class="approve-label" for="approveRelationship">Your relationship to the account holder</label>
+            <input type="text" id="approveRelationship" class="approve-input" placeholder="e.g. son, spouse, property manager" maxlength="80">
+          </div>
+        </div>
         <label class="approve-label" for="approveName">Your name (printed)</label>
         <input type="text" id="approveName" class="approve-input" autocomplete="name" placeholder="Full name">
         <label class="approve-label">Signature</label>
