@@ -204,7 +204,8 @@
     direct_residential: "Residential",
     lighting_design: "Lighting Design",
     renovation_coordination: "Renovation Coordination",
-    change_order: "Change Order"
+    change_order: "Change Order",
+    residential_repair: "Residential Repair"
   };
 
   // ---- Render -------------------------------------------------------

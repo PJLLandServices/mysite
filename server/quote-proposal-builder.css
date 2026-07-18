@@ -881,6 +881,13 @@
   padding-top: 16px;
   border-top: 1px solid #E5E5DD;
 }
+/* Delivery mode control (residential_repair brief). Same separator rhythm as
+   .pb-doc / .pb-gate so the rail reads as one stack. */
+.pb-delivery {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid #E5E5DD;
+}
 .pb-doc-status {
   margin-top: 12px;
   padding: 12px;

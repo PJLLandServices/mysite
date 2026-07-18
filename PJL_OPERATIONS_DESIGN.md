@@ -259,10 +259,20 @@ Every box knows its parent and its child. No orphans.
 
 **Branch taxonomy** for `project_proposal`:
 - `gc_subcontract` — GC subcontract work
-- `direct_residential` — direct-to-homeowner installs/retrofits
+- `direct_residential` — direct-to-homeowner **new** installs
 - `lighting_design` — landscape lighting (owner-deferred pricing)
 - `renovation_coordination` — landscaper-led reno coordination
 - `change_order` — mid-project scope additions
+- `residential_repair` — large repairs, retrofits, revamps, and system rebuilds on residential property (residential_repair brief, Jul 2026). Distinct from `direct_residential`: that branch is a NEW install direct to a homeowner; this one names REBUILDING an existing system (e.g. a sprinkler mainline repair). The distinction is not cosmetic — the branch drives a shorter section preset, a 30-day expiry, T&M billing, and **plain-PDF delivery** (see the branch-defaults subsection and `deliveryMode` below). Existing records are untouched; no migration.
+
+**Branch defaults** (residential_repair brief) — one declared map (`PROPOSAL_BRANCH_DEFAULTS` in `server/lib/quotes.js`) drives creation-time defaults, resolved data-driven (the `resolveControllerTier` pattern), not scattered conditionals. A branch absent from the map keeps the historical behaviour. Defaults are DEFAULTS — the admin can still add sections, change billing mode, and adjust expiry on the record.
+
+| branch | section preset | expiry | billing | delivery |
+|---|---|---|---|---|
+| `residential_repair` | 5 sections: Reason for the work (`cover_summary`), Proposed scope (`proposed_scope`), Budget & assumptions (`budget_notice`), Itemized pricing (`line_items`, required), Acceptance authorization (`acceptance_block`, required) | 30 days | `time_and_material` | `plain_pdf` |
+| all others | 9-section skeleton (cover → quotation summary → proposed scope → infrastructure list → budget notice → technical reference → project map → line items → acceptance) | 90 days | `fixed_price` | `proposal_page` |
+
+The install-oriented sections (`quotation_summary`, `infrastructure_list`, `technical_reference`, `project_map`) are simply **not seeded** for `residential_repair` — they stay addable via "+ Add section" for the occasional repair that warrants one. `cover_summary` is REUSED as the opener (retitled "Reason for the work"), not a new section kind. Note the expiry exception: `project_proposal` defaults to **90 days** *except* `residential_repair`, which defaults to **30**.
 
 **Note on bypass-completed WOs:** When a work order is completed via signature bypass (admin-authorized verbal acceptance — see §4.3) AND the bypass also covers on-site quote acceptance (the builder carried lines beyond baseline), **no `on_site_quote` Quote record is created in this folder**. The WO's builder line items, snapshotted onto the bypass record (`acceptedScopeSnapshot`), are the authoritative scope record. Reporting that joins WOs to Quotes must account for this path — some WOs will not appear here.
 
@@ -287,8 +297,12 @@ QUOTE FOLDER
               a signed PDF and before admin attests)
     - Type: ai_repair_quote / on_site_quote / project_proposal
     - Branch (project_proposal only): gc_subcontract / direct_residential /
-              lighting_design / renovation_coordination / change_order
+              lighting_design / renovation_coordination / change_order /
+              residential_repair
     - Billing mode (project_proposal only): fixed_price / time_and_material
+    - Delivery mode (project_proposal only): proposal_page / plain_pdf
+              (derived from branch at creation; draft-editable; frozen at
+              send — a scope-protected field. See deliveryMode below.)
     - Acceptance method: pending / portal_esign / pdf_return
     - Created by: AI chat / Patrick / tech / system
 
@@ -354,6 +368,17 @@ QUOTE FOLDER
                             a custom document — and `ai_repair_quote` /
                             `on_site_quote` — keep the original token-only
                             links and PDF-attached emails, unchanged.
+                            **`plain_pdf` delivery (residential_repair brief,
+                            Jul 2026) STRUCTURALLY refuses this whole layer:**
+                            because the gate engages by the document's
+                            PRESENCE on disk, a `plain_pdf` quote must never
+                            have that file. The generate-page, document-upload,
+                            and hero-photo endpoints all **409
+                            `delivery_mode_forbids_proposal_page`** for such a
+                            quote, and `send-proposal-for-approval` composes the
+                            plain-PDF path without consulting the document
+                            field at all. A homeowner reading a repair estimate
+                            never meets a phone gate.
     - The generated PDF is SNAPSHOTTED to disk at send
       (server/data/quote-pdfs/<quoteId>.pdf) and is the customer's
       source of truth thereafter — the same freeze-on-send guarantee
@@ -415,6 +440,23 @@ QUOTE FOLDER
                               draft-editable and freeze at send with the PDF
                               bytes (Brief B), so a later toggle can't rewrite
                               a document the customer already signed.
+    - deliveryMode         — the customer-facing OUTPUT channel
+                              (residential_repair brief, Jul 2026):
+                              `proposal_page` (the designed, phone-gated
+                              Customer Proposal Page / Proposal Document
+                              machinery) or `plain_pdf` (a plain branded
+                              multi-section PDF, emailed, accepted at /approve,
+                              with NO customer page and NO phone gate).
+                              Derived from branch at creation (plain_pdf for
+                              residential_repair, proposal_page otherwise),
+                              draft-editable, and FROZEN at send (a
+                              scope-protected field — a change after send is a
+                              revision, not an edit). `plain_pdf` does not just
+                              hide the rail controls: the proposal-page,
+                              document-upload, and hero-photo endpoints 409
+                              `delivery_mode_forbids_proposal_page`, so the
+                              phone-gate layer is structurally unreachable for
+                              that quote (see Outputs above).
     - attachments[]        — uploaded images / PDFs, anchored to
                               specific sections for inline render
     - customRates          — labour-rate snapshot from the customer
@@ -1287,6 +1329,14 @@ Don't build everything at once. Suggested vertical slice to prove the architectu
 - AI repair quote flow end-to-end
 
 Once that works, the rest follows the same patterns.
+
+### 9.8 Commercial repair branch + "signed on behalf of" acceptance model
+
+The `residential_repair` branch (Jul 2026) deliberately covers residential property only. The commercial equivalent is a separate design pass, not a copy-paste of the branch: on commercial property the requester (a property maintainer) is rarely the accepting party (accounting/AP). Recipient identity, acceptance authority, and the evidence semantics of "signed on behalf of the company" all need thought before a `commercial_repair` branch is added. Deferred.
+
+### 9.9 Proposal SMS on send
+
+`send-proposal-for-approval` currently sends **email only** — no SMS, even when a phone is supplied (the record logs `sms` as an intended channel but nothing is dispatched). Patrick's stated requirement is email for acceptance, **text on receipt**. Wiring that touches the notify layer, comm-preferences gating, and CASL (Hard Rule 17), so it is its own change, not a rider on the delivery-mode work. Deferred.
 
 ---
 

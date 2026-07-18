@@ -79,7 +79,15 @@ const PROPOSAL_BRANCHES = [
   "direct_residential",
   "lighting_design",
   "renovation_coordination",
-  "change_order"
+  "change_order",
+  // residential_repair (residential_repair brief, 2026-07) — large repairs,
+  // retrofits, revamps and system rebuilds on residential property. Distinct
+  // from direct_residential (a NEW install direct to a homeowner): this
+  // branch names REBUILDING an existing system. Additive; existing records
+  // are untouched. Carries behaviour, not just a label — see
+  // PROPOSAL_BRANCH_DEFAULTS (five-section preset, 30-day expiry, T&M
+  // billing, plain-PDF delivery).
+  "residential_repair"
 ];
 
 const BILLING_MODES = ["fixed_price", "time_and_material"];
@@ -109,6 +117,69 @@ const PROPOSAL_SECTION_KINDS = [
 // They cannot be user-deleted (Brief C1 §3.3 / Q6) nor excluded from the
 // PDF (Brief D §3.4).
 const STRUCTURAL_SECTION_KINDS = ["line_items", "acceptance_block"];
+
+// Delivery mode (residential_repair brief, 2026-07). The customer-facing
+// OUTPUT channel for a project_proposal:
+//   proposal_page — the designed, phone-gated Customer Proposal Page /
+//     Proposal Document machinery (landscape lighting, install pitches).
+//     Default for every branch except residential_repair.
+//   plain_pdf     — a plain branded multi-section PDF, emailed and accepted
+//     at /approve. The proposal-page / proposal-document / phone-gate layer
+//     is structurally unreachable: the generate-page and document-upload
+//     endpoints 409, and the send path never composes a gated document.
+//     Default for residential_repair. A homeowner reading a $2,000 mainline
+//     repair estimate should never have to type a phone number to open it.
+// Derived from branch at creation; editable by an admin on a DRAFT (it is a
+// scope-protected field, so once the proposal is sent the mode is frozen —
+// a change after send would be a revision, not an edit).
+const DELIVERY_MODES = ["proposal_page", "plain_pdf"];
+const DEFAULT_DELIVERY_MODE = "proposal_page";
+
+// Branch-driven defaults for project_proposal. ONE declared map, resolved
+// data-driven (mirrors resolveControllerTier's "declare the map, walk it"
+// shape) so section preset, expiry, billing mode, and delivery mode all key
+// off a single place instead of conditionals scattered across call sites. A
+// branch ABSENT from this map keeps the historical behaviour exactly: the
+// full nine-section skeleton, 90-day expiry, fixed_price billing,
+// proposal_page delivery. acceptanceMethod is deliberately NOT set here — it
+// stays "pending" until the customer actually accepts, then locks to the
+// method they used (Patrick, Jul 2026); the plain-PDF /approve flow already
+// routes to portal e-sign.
+const PROPOSAL_BRANCH_DEFAULTS = {
+  residential_repair: {
+    // Five-section repair preset, in order: Reason for the work → Proposed
+    // scope of work → Budget & assumptions → Itemized pricing → Acceptance
+    // authorization. cover_summary is REUSED as the opener (retitled) rather
+    // than minting a new section kind. The install-oriented sections
+    // (quotation_summary, infrastructure_list, technical_reference,
+    // project_map) are simply not seeded — they stay addable via "+ Add
+    // section" for the occasional repair that warrants one.
+    sections: [
+      { kind: "cover_summary",    title: "Reason for the work" },
+      { kind: "proposed_scope",   title: "Proposed scope of work" },
+      { kind: "budget_notice",    title: "Budget & assumptions" },
+      { kind: "line_items",       title: "Itemized pricing" },
+      { kind: "acceptance_block", title: "Acceptance authorization" }
+    ],
+    validForDays: 30,
+    billingMode: "time_and_material",
+    deliveryMode: "plain_pdf"
+  }
+};
+
+// Resolve the declared defaults for a branch, or null for the branches that
+// keep the historical behaviour. Data-driven — a new branch preset is a map
+// entry, not a new code path.
+function resolveBranchDefaults(branch) {
+  return (branch && PROPOSAL_BRANCH_DEFAULTS[branch]) || null;
+}
+
+// The delivery mode a branch defaults to (proposal_page unless the branch's
+// declared defaults override it).
+function deliveryModeForBranch(branch) {
+  const d = resolveBranchDefaults(branch);
+  return (d && d.deliveryMode) || DEFAULT_DELIVERY_MODE;
+}
 
 // pdfOptions.lineItems enum (Brief D). An enum, not two booleans, so the
 // nonsense state "no descriptions AND no pricing" is unrepresentable.
@@ -171,6 +242,10 @@ const SCOPE_PROTECTED_FIELDS = [
   "type",
   "pdfOptions",
   "quoteNumberDisplay",
+  // deliveryMode is part of the delivery contract the customer is sent under
+  // (plain PDF vs phone-gated page) — draft-editable, frozen at send like the
+  // pricing. A change after send is a revision, not an edit.
+  "deliveryMode",
   // Deposit terms are part of the offer the customer signs — frozen with
   // the rest of the pricing once the proposal leaves draft. Lifecycle
   // fields (stage / invoice ids) are server-managed and flow through
@@ -449,6 +524,14 @@ function blankQuote() {
     // time (project.labourRateLocked) and uses it for invoice rollup.
     billingMode: null,
 
+    // deliveryMode — customer-facing output channel (residential_repair
+    // brief, 2026-07). "proposal_page" (designed, phone-gated page) or
+    // "plain_pdf" (plain branded PDF, emailed, accepted at /approve). Derived
+    // from branch at creation (see PROPOSAL_BRANCH_DEFAULTS), editable on a
+    // draft. Stays null for non-proposal types so ai_repair_quote /
+    // on_site_quote flows are untouched.
+    deliveryMode: null,
+
     // proposalSections — ordered multi-section narrative. Each section is
     // a kind from PROPOSAL_SECTION_KINDS + title + body (rich text /
     // markdown, sanitized server-side) + optional attachmentIds[] to
@@ -607,6 +690,12 @@ function hydrate(q) {
     // that pre-date the proposal schema.
     branch: q?.branch || null,
     billingMode: q?.billingMode || null,
+    // deliveryMode — defensive default for records that pre-date the
+    // residential_repair brief. A stored value wins; legacy proposals (all of
+    // which are non-repair) resolve to proposal_page, so their behaviour is
+    // unchanged. Non-proposal types stay null.
+    deliveryMode: q?.deliveryMode
+      || (q?.type === "project_proposal" ? deliveryModeForBranch(q?.branch) : null),
     proposalSections: Array.isArray(q?.proposalSections) ? q.proposalSections : [],
     attachments: Array.isArray(q?.attachments) ? q.attachments : [],
     // Auto-generated proposal page config (Proposal HTML brief, 2026-07) —
@@ -853,7 +942,15 @@ async function create({
   // Per-type defaults — proposals start in draft, other types start sent.
   const isProposal = type === "project_proposal";
   if (status == null) status = isProposal ? "draft" : "sent";
-  if (validityDays == null) validityDays = isProposal ? PROPOSAL_DEFAULT_VALIDITY_DAYS : DEFAULT_VALIDITY_DAYS;
+  // Branch-driven defaults (residential_repair brief) — one declared map
+  // drives expiry, billing mode, section preset, and delivery mode. Null for
+  // the branches that keep historical behaviour.
+  const branchDefaults = isProposal ? resolveBranchDefaults(branch) : null;
+  if (validityDays == null) {
+    validityDays = isProposal
+      ? ((branchDefaults && branchDefaults.validForDays) || PROPOSAL_DEFAULT_VALIDITY_DAYS)
+      : DEFAULT_VALIDITY_DAYS;
+  }
   if (!STATUSES.includes(status)) throw new Error(`Unknown quote status: ${status}`);
 
   if (isProposal) {
@@ -906,11 +1003,16 @@ async function create({
 
   if (isProposal) {
     q.branch = branch || null;
-    q.billingMode = billingMode || "fixed_price";
+    // billingMode: an explicit value wins; otherwise the branch default
+    // (T&M for residential_repair); otherwise fixed_price.
+    q.billingMode = billingMode || (branchDefaults && branchDefaults.billingMode) || "fixed_price";
+    // deliveryMode: derived from the branch at creation (plain_pdf for
+    // residential_repair, proposal_page otherwise). Editable on the draft.
+    q.deliveryMode = (branchDefaults && branchDefaults.deliveryMode) || DEFAULT_DELIVERY_MODE;
     if (Array.isArray(proposalSections) && proposalSections.length) {
       q.proposalSections = proposalSections.map((s, idx) => normalizeProposalSection(s, idx));
     } else {
-      q.proposalSections = defaultProposalSections();
+      q.proposalSections = defaultProposalSections(branch);
     }
     if (customRates && typeof customRates === "object") {
       q.customRates = { ...q.customRates, ...customRates };
@@ -939,21 +1041,26 @@ async function create({
   return q;
 }
 
-// Build the default 8-section skeleton for a fresh project_proposal.
-// Patrick fills in the body of each section in the builder UI. Order is
-// the canonical layout from the McDonald's Hampshire estimate.
-function defaultProposalSections() {
-  const skeleton = [
-    { kind: "cover_summary",      title: "Cover summary" },
-    { kind: "quotation_summary",  title: "Quotation summary" },
-    { kind: "proposed_scope",     title: "Proposed scope of work" },
-    { kind: "infrastructure_list", title: "Infrastructure & materials" },
-    { kind: "budget_notice",      title: "Budget & assumptions" },
-    { kind: "technical_reference", title: "Technical reference" },
-    { kind: "project_map",        title: "Project map" },
-    { kind: "line_items",         title: "Itemized pricing" },
-    { kind: "acceptance_block",   title: "Acceptance" }
-  ];
+// Build the default section skeleton for a fresh project_proposal. Patrick
+// fills in the body of each section in the builder UI. Order is the canonical
+// layout from the McDonald's Hampshire estimate. When the branch declares a
+// preset (residential_repair brief), that shorter preset seeds instead — the
+// install-oriented sections simply aren't seeded, but stay addable.
+function defaultProposalSections(branch) {
+  const bd = resolveBranchDefaults(branch);
+  const skeleton = (bd && Array.isArray(bd.sections) && bd.sections.length)
+    ? bd.sections
+    : [
+      { kind: "cover_summary",      title: "Cover summary" },
+      { kind: "quotation_summary",  title: "Quotation summary" },
+      { kind: "proposed_scope",     title: "Proposed scope of work" },
+      { kind: "infrastructure_list", title: "Infrastructure & materials" },
+      { kind: "budget_notice",      title: "Budget & assumptions" },
+      { kind: "technical_reference", title: "Technical reference" },
+      { kind: "project_map",        title: "Project map" },
+      { kind: "line_items",         title: "Itemized pricing" },
+      { kind: "acceptance_block",   title: "Acceptance" }
+    ];
   return skeleton.map((s, idx) => ({
     id: newSectionId(),
     kind: s.kind,
@@ -1037,10 +1144,41 @@ async function updateProposal(id, patch = {}, { by = "admin", note = "" } = {}) 
   }
 
   if (Object.prototype.hasOwnProperty.call(patch, "branch")) {
-    if (patch.branch && !PROPOSAL_BRANCHES.includes(patch.branch)) {
-      throw new Error(`Unknown proposal branch: ${patch.branch}`);
+    const nextBranch = patch.branch || null;
+    if (nextBranch && !PROPOSAL_BRANCHES.includes(nextBranch)) {
+      throw new Error(`Unknown proposal branch: ${nextBranch}`);
     }
-    q.branch = patch.branch || null;
+    const nextDelivery = deliveryModeForBranch(nextBranch);
+    // Refuse switching into a plain-PDF branch while a designed proposal
+    // document is still attached (residential_repair brief edge case). The
+    // phone gate is engaged by the document's PRESENCE, so silently orphaning
+    // it would leave a gated document on a quote whose delivery is meant to be
+    // plain PDF. Patrick removes the document first (DELETE proposal-document).
+    if (nextDelivery === "plain_pdf" && q.proposalDocument) {
+      const err = new Error("Remove the attached proposal document before switching this proposal to a plain-PDF repair branch.");
+      err.code = "document_attached_blocks_plain_pdf";
+      throw err;
+    }
+    const branchChanged = (q.branch || null) !== nextBranch;
+    q.branch = nextBranch;
+    // Delivery mode follows the branch's default when the branch actually
+    // changes — the branch sets the default, not a prison. An explicit
+    // deliveryMode in the same patch (handled just below) still wins.
+    if (branchChanged) q.deliveryMode = nextDelivery;
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "deliveryMode")) {
+    const dm = patch.deliveryMode || DEFAULT_DELIVERY_MODE;
+    if (!DELIVERY_MODES.includes(dm)) {
+      throw new Error(`Unknown delivery mode: ${patch.deliveryMode}`);
+    }
+    // Same guard for a direct delivery-mode flip: can't move to plain_pdf
+    // while a designed document is attached.
+    if (dm === "plain_pdf" && q.proposalDocument) {
+      const err = new Error("Remove the attached proposal document before switching this proposal to plain-PDF delivery.");
+      err.code = "document_attached_blocks_plain_pdf";
+      throw err;
+    }
+    q.deliveryMode = dm;
   }
   if (Object.prototype.hasOwnProperty.call(patch, "billingMode")) {
     if (patch.billingMode && !BILLING_MODES.includes(patch.billingMode)) {
@@ -1406,6 +1544,37 @@ async function persistFrozenPdf(id, { pdfPath, pdfSha256 = null, pdfGeneratedAt 
   q.pdfGeneratedAt = pdfGeneratedAt || ts;
   q.pdfBackfilled = backfilled === true;
   q.history.push({ ts, action: backfilled ? "pdf_backfilled" : "pdf_frozen", by, note: pdfSha256 || "" });
+  records[idx] = q;
+  await writeAll(records);
+  return q;
+}
+
+// Re-seed a draft proposal's sections to its branch's preset
+// (residential_repair brief). Used when Patrick changes the branch and opts
+// to adopt the new preset. Draft-only. This deliberately bypasses
+// updateProposal's structural-preservation guard (that guard rejects an
+// array whose ids don't match the existing structural sections — but a
+// re-seed mints fresh sections by design). The caller is responsible for
+// confirming with the user first when there is authored content to replace.
+async function reseedProposalSections(id, { by = "admin" } = {}) {
+  const records = await readAll();
+  const idx = records.findIndex((q) => q.id === id);
+  if (idx === -1) return null;
+  const q = records[idx];
+  if (q.type !== "project_proposal") {
+    const err = new Error("reseedProposalSections only applies to project_proposal quotes.");
+    err.code = "wrong_quote_type";
+    throw err;
+  }
+  if (isProposalLocked(q)) {
+    const err = new Error("Proposal is locked — sections can't be re-seeded after send.");
+    err.code = "proposal_locked";
+    throw err;
+  }
+  const ts = nowIso();
+  q.proposalSections = defaultProposalSections(q.branch);
+  q.updatedAt = ts;
+  q.history.push({ ts, action: "sections_reseeded", by, note: `branch=${q.branch || "unset"}` });
   records[idx] = q;
   await writeAll(records);
   return q;
@@ -2199,6 +2368,10 @@ async function createRevision(originalId, { by = "admin", note = "" } = {}) {
   revision.leadId = original.leadId;
   revision.branch = original.branch;
   revision.billingMode = original.billingMode;
+  // A revision keeps the original's delivery mode (a plain-PDF repair stays
+  // plain PDF). The designed proposalDocument is intentionally NOT carried
+  // forward — a revision is a fresh draft.
+  revision.deliveryMode = original.deliveryMode || deliveryModeForBranch(original.branch);
   revision.customRates = { ...original.customRates };
   revision.scope = original.scope;
   revision.proposalSections = (original.proposalSections || []).map((s, i) => ({
@@ -2215,7 +2388,10 @@ async function createRevision(originalId, { by = "admin", note = "" } = {}) {
   revision.subtotal = totals.subtotal;
   revision.hst = totals.hst;
   revision.total = totals.total;
-  revision.validUntil = plusDaysIso(PROPOSAL_DEFAULT_VALIDITY_DAYS);
+  revision.validUntil = plusDaysIso(
+    (resolveBranchDefaults(original.branch) && resolveBranchDefaults(original.branch).validForDays)
+    || PROPOSAL_DEFAULT_VALIDITY_DAYS
+  );
   revision.validUntilDate = revision.validUntil;
   revision.history = [
     { ts: revision.createdAt, action: "created", by, note: `Revision of ${original.id}` }
@@ -2319,6 +2495,10 @@ module.exports = {
   PROPOSAL_BRANCHES,
   BILLING_MODES,
   ACCEPTANCE_METHODS,
+  DELIVERY_MODES,
+  PROPOSAL_BRANCH_DEFAULTS,
+  resolveBranchDefaults,
+  deliveryModeForBranch,
   PROPOSAL_SECTION_KINDS,
   ATTACHMENT_KINDS,
   ATTACHMENT_MIME_WHITELIST,
@@ -2363,6 +2543,7 @@ module.exports = {
   isProposalLocked,
   findProtectedFieldTouched,
   updateProposal,
+  reseedProposalSections,
   defaultProposalSections,
   normalizeProposalSection,
   normalizeProposalLineItem,
