@@ -147,6 +147,28 @@
 .answer-lead{color:var(--text) !important;}
 .answer-lead strong{color:var(--green);}
 </style>
+<style>
+/* ── Picture spots — added for photo curation (Patrick supplies the photos) ──
+   Each figure below names the exact photo file to drop in. Until that file
+   exists in the repo, the figure renders a labelled placeholder describing the
+   shot. Drop a JPG with the named filename beside this HTML file and the photo
+   appears automatically — no code change needed. See BLOG-IMAGE-SHOT-LIST.md. */
+.post-hero-figure{margin:0 0 12px;border-radius:var(--r-lg);overflow:hidden;border:1px solid var(--border);box-shadow:0 8px 24px rgba(15,31,20,.08);}
+.post-inline-figure{margin:34px 0;border-radius:var(--r-lg);overflow:hidden;border:1px solid var(--border);}
+.post-portrait-figure{margin:34px auto;max-width:460px;border-radius:var(--r-lg);overflow:hidden;border:1px solid var(--border);box-shadow:0 6px 18px rgba(15,31,20,.06);background:#fff;}
+.post-hero-figure img,.post-inline-figure img,.post-portrait-figure img{display:block;width:100%;height:auto;}
+.post-hero-figure figcaption,.post-inline-figure figcaption,.post-portrait-figure figcaption{padding:12px 18px;background:var(--cream);font-size:13px;color:var(--text-muted);font-style:italic;border-top:1px solid var(--border);line-height:1.5;}
+@media(max-width:640px){.post-portrait-figure{max-width:340px;}}
+/* Placeholder state — auto-hidden the moment the real photo is present */
+.img-spot.img-missing{border:2px dashed var(--green-light);background:repeating-linear-gradient(45deg,#f6f9f5,#f6f9f5 14px,#eef4ee 14px,#eef4ee 28px);}
+.img-spot.img-missing img,.img-spot.img-missing figcaption{display:none;}
+.img-spot-note{display:none;}
+.img-spot.img-missing .img-spot-note{display:flex;flex-direction:column;gap:8px;padding:28px 26px;text-align:center;align-items:center;}
+.img-spot-note b{font-size:11px;font-weight:800;letter-spacing:.14em;text-transform:uppercase;color:var(--green);}
+.img-spot-note .img-spot-idea{font-size:15px;font-weight:600;color:var(--text);max-width:540px;line-height:1.55;}
+.img-spot-note .img-spot-file{font-size:12.5px;color:var(--text-muted);}
+.img-spot-note code{font-size:12.5px;background:#fff;border:1px solid var(--border);border-radius:6px;padding:3px 8px;color:var(--green-mid);word-break:break-all;}
+</style>
   <link rel="stylesheet" href="css/chat-widget.css">
 <script type="application/ld+json">
 {
@@ -230,6 +252,12 @@
 
         <div class="quick-answer"><span class="qa-label">Quick answer</span><p>A single dead zone — while every other zone runs fine — is almost always the valve for that zone: a failed solenoid, a broken or corroded wire, or a stuck diaphragm. It's rarely the sprinkler heads. Work from the controller to the valve, in that order, and you'll usually find it fast.</p></div>
 
+        <figure class="post-hero-figure img-spot">
+          <img src="blog-sprinkler-zone-not-working-01-one-dry-zone.jpg" alt="A lawn with one dry, browning sprinkler zone while the adjacent zones stay green" loading="lazy" width="1600" height="1000" onerror="this.closest('.img-spot').classList.add('img-missing')">
+          <figcaption>The classic symptom: one zone stays dry and browning while every zone around it runs fine.</figcaption>
+          <div class="img-spot-note"><b>📷 Picture spot 1 — the dead zone (hero)</b><span class="img-spot-idea">A lawn where one zone is visibly dry/browning while the neighbouring zones are green — ideally with adjacent heads running so the contrast reads. The "every zone but one" symptom in one frame.</span><span class="img-spot-file">Drop in file: <code>blog-sprinkler-zone-not-working-01-one-dry-zone.jpg</code> · landscape ~1600×1000</span></div>
+        </figure>
+
         <h2 id="one-or-all">Is it one zone, or the whole system?</h2>
         <p class="answer-lead"><strong>First, confirm it's really just one zone. If nothing runs at all, that's a controller, power, or water-supply problem, not a zone fault. If every zone works except one, the problem is specific to that zone's valve or the wire running to it — that's the case this guide walks through.</strong></p>
 
@@ -237,8 +265,20 @@
         <p class="answer-lead"><strong>Manually start the dead zone from the controller. On a Hydrawise system, watch for a wiring alert — it monitors the current to each valve and will often tell you the circuit's open. On any controller, if the manual start does nothing at the valve, you've narrowed it to the wire or the valve itself.</strong></p>
         <p>A Hydrawise controller's built-in current monitoring is a real advantage here: it measures the electrical draw on each zone and flags an open circuit or a shorted solenoid, so it often points you straight at the problem before you've lifted a valve-box lid.</p>
 
+        <figure class="post-inline-figure img-spot">
+          <img src="blog-sprinkler-zone-not-working-02-controller-wiring-alert.jpg" alt="Manually starting a zone at a Hunter Hydrawise controller showing a wiring alert" loading="lazy" width="1600" height="1000" onerror="this.closest('.img-spot').classList.add('img-missing')">
+          <figcaption>Step 1: start the dead zone from the controller. Hydrawise monitors current per zone and often flags an open circuit before you touch a valve box.</figcaption>
+          <div class="img-spot-note"><b>📷 Picture spot 2 — test at the controller</b><span class="img-spot-idea">A hand manually starting the zone at the controller (Hunter Hydrawise face, or the app), ideally with a wiring/current alert visible on the screen. Shows the "start from the controller first" step.</span><span class="img-spot-file">Drop in file: <code>blog-sprinkler-zone-not-working-02-controller-wiring-alert.jpg</code> · landscape ~1600×1000</span></div>
+        </figure>
+
         <h2 id="step2">Step 2 — go to the valve and listen</h2>
         <p class="answer-lead"><strong>At the valve box for that zone, start the zone and listen for a soft click or buzz — that's the solenoid energizing. Click and buzz but no water usually means a stuck diaphragm or debris. No sound at all points to a dead solenoid or a broken wire.</strong></p>
+
+        <figure class="post-inline-figure img-spot">
+          <img src="blog-sprinkler-zone-not-working-03-valve-box-solenoid.jpg" alt="Open irrigation valve box with a hand on a Hunter PGV valve solenoid" loading="lazy" width="1600" height="1000" onerror="this.closest('.img-spot').classList.add('img-missing')">
+          <figcaption>Step 2: at the valve box, listen for the solenoid's click or buzz — that tells you whether power is reaching the valve.</figcaption>
+          <div class="img-spot-note"><b>📷 Picture spot 3 — the valve box</b><span class="img-spot-idea">Open valve box, lid off, a hand on the solenoid of a Hunter PGV valve (as if twisting it to test). Clean shot showing the valves and wiring inside the box.</span><span class="img-spot-file">Drop in file: <code>blog-sprinkler-zone-not-working-03-valve-box-solenoid.jpg</code> · landscape ~1600×1000</span></div>
+        </figure>
 
         <h2 id="culprits">Step 3 — the usual culprits</h2>
         <p>In rough order of how often we find them:</p>
@@ -249,6 +289,12 @@
           <li><strong>Controller station fault</strong> — rare, but a dead output terminal will kill one zone; the controller test in Step 1 catches it.</li>
         </ul>
 
+        <figure class="post-inline-figure img-spot">
+          <img src="blog-sprinkler-zone-not-working-04-corroded-wire-solenoid.jpg" alt="A corroded wire connection and a failed solenoid in a flooded irrigation valve box" loading="lazy" width="1600" height="1000" onerror="this.closest('.img-spot').classList.add('img-missing')">
+          <figcaption>The usual culprits up close: a burned-out solenoid or a corroded wire-nut connection sitting in a wet valve box.</figcaption>
+          <div class="img-spot-note"><b>📷 Picture spot 4 — the culprit</b><span class="img-spot-idea">Macro/close-up of the actual failure: a corroded wire-nut connection, a green-crusted splice, or a burned-out solenoid — ideally in a flooded/wet box. The "here's what we usually find" shot.</span><span class="img-spot-file">Drop in file: <code>blog-sprinkler-zone-not-working-04-corroded-wire-solenoid.jpg</code> · landscape ~1600×1000</span></div>
+        </figure>
+
         <h2 id="not-heads">What it's usually NOT — the heads</h2>
         <p class="answer-lead"><strong>If a whole zone is dead, the heads are almost never the cause. No water is reaching them at all, so swapping heads won't help. Head problems look different — a head that sprays sideways, won't pop up, or mists. If that's what you're seeing, it's a head issue, not a dead zone.</strong></p>
         <p>(For that case, see <a href="blog-sprinkler-head-not-spraying.html">sprinkler head not spraying</a>. If instead water is <em>pooling</em> when the system's off, that's a valve leak — see <a href="blog-water-pooling-around-sprinkler-head.html">water pooling around a sprinkler head</a>.)</p>
@@ -256,6 +302,12 @@
         <h2 id="cost">When to call a pro — and what a valve fix costs</h2>
         <p class="answer-lead"><strong>If it's a solenoid or a wire, it's often a quick repair. If the valve itself needs replacing, we rebuild the whole manifold in that box, not a single valve — it's more reliable and it prevents the next failure. Pricing is by manifold size plus the valves, quoted before any work.</strong></p>
         <p>When a valve in a box has failed, PJL replaces the full manifold and every valve in that box together: a <span data-price="manifold_3valve">$135</span> (1–3 valve) or <span data-price="manifold_6valve">$285</span> (4–6 valve) manifold rebuild, plus <span data-price="valve_hunter_pgv">$74.95</span> per Hunter PGV valve, plus the <span data-price="service_call">$95</span> service call. Everything's quoted up front.</p>
+
+        <figure class="post-inline-figure img-spot">
+          <img src="blog-sprinkler-zone-not-working-05-manifold-rebuild.jpg" alt="A freshly rebuilt Hunter PGV valve manifold in a PJL branded valve box" loading="lazy" width="1600" height="1000" onerror="this.closest('.img-spot').classList.add('img-missing')">
+          <figcaption>When a valve fails, PJL rebuilds the whole manifold in that box — more reliable than swapping a single valve, and it heads off the next failure.</figcaption>
+          <div class="img-spot-note"><b>📷 Picture spot 5 — the fix</b><span class="img-spot-idea">A clean, freshly rebuilt Hunter PGV manifold in a valve box — new valves, tidy wiring, PJL-branded box lid if you have it. (Existing asset <code>pjl-branded-valve-box.jpg</code> could be reused here if you'd rather not reshoot.)</span><span class="img-spot-file">Drop in file: <code>blog-sprinkler-zone-not-working-05-manifold-rebuild.jpg</code> · landscape ~1600×1000</span></div>
+        </figure>
 
         <div class="callout"><div class="callout-inner"><h3>Can't get the zone to wake up?</h3><p>Run the symptom through our AI diagnostic tool first — it often pinpoints whether it's the solenoid, the wire, or the valve before we load the truck. If its call matches what we find on site, you get one hour of repair labour free.</p><a href="diagnose.html" class="callout-cta">Start the AI diagnosis <span aria-hidden="true">→</span></a></div></div>
       </article>

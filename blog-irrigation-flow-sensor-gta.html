@@ -147,6 +147,28 @@
 .answer-lead{color:var(--text) !important;}
 .answer-lead strong{color:var(--green);}
 </style>
+<style>
+/* ── Picture spots — added for photo curation (Patrick supplies the photos) ──
+   Each figure below names the exact photo file to drop in. Until that file
+   exists in the repo, the figure renders a labelled placeholder describing the
+   shot. Drop a JPG with the named filename beside this HTML file and the photo
+   appears automatically — no code change needed. See BLOG-IMAGE-SHOT-LIST.md. */
+.post-hero-figure{margin:0 0 12px;border-radius:var(--r-lg);overflow:hidden;border:1px solid var(--border);box-shadow:0 8px 24px rgba(15,31,20,.08);}
+.post-inline-figure{margin:34px 0;border-radius:var(--r-lg);overflow:hidden;border:1px solid var(--border);}
+.post-portrait-figure{margin:34px auto;max-width:460px;border-radius:var(--r-lg);overflow:hidden;border:1px solid var(--border);box-shadow:0 6px 18px rgba(15,31,20,.06);background:#fff;}
+.post-hero-figure img,.post-inline-figure img,.post-portrait-figure img{display:block;width:100%;height:auto;}
+.post-hero-figure figcaption,.post-inline-figure figcaption,.post-portrait-figure figcaption{padding:12px 18px;background:var(--cream);font-size:13px;color:var(--text-muted);font-style:italic;border-top:1px solid var(--border);line-height:1.5;}
+@media(max-width:640px){.post-portrait-figure{max-width:340px;}}
+/* Placeholder state — auto-hidden the moment the real photo is present */
+.img-spot.img-missing{border:2px dashed var(--green-light);background:repeating-linear-gradient(45deg,#f6f9f5,#f6f9f5 14px,#eef4ee 14px,#eef4ee 28px);}
+.img-spot.img-missing img,.img-spot.img-missing figcaption{display:none;}
+.img-spot-note{display:none;}
+.img-spot.img-missing .img-spot-note{display:flex;flex-direction:column;gap:8px;padding:28px 26px;text-align:center;align-items:center;}
+.img-spot-note b{font-size:11px;font-weight:800;letter-spacing:.14em;text-transform:uppercase;color:var(--green);}
+.img-spot-note .img-spot-idea{font-size:15px;font-weight:600;color:var(--text);max-width:540px;line-height:1.55;}
+.img-spot-note .img-spot-file{font-size:12.5px;color:var(--text-muted);}
+.img-spot-note code{font-size:12.5px;background:#fff;border:1px solid var(--border);border-radius:6px;padding:3px 8px;color:var(--green-mid);word-break:break-all;}
+</style>
   <link rel="stylesheet" href="css/chat-widget.css">
 <script type="application/ld+json">
 {
@@ -236,6 +258,12 @@
         <p class="answer-lead"><strong>A flow sensor (also called a flow meter) is a small inline device plumbed into your irrigation mainline. It counts the water passing through it in real time. On its own it's just a gauge — paired with a smart controller, it becomes an automatic leak-detection system that watches every zone, every cycle.</strong></p>
         <p>Physically, it sits on the mainline downstream of the shut-off — a short fitting spliced into the poly line, usually in or near the valve box. It sends a pulse signal to a sensor input on the controller. Every pulse is a known volume of water, so the controller always knows the live flow rate in litres or gallons per minute. Nothing about it is exotic; it's a metering fitting and two wires. What makes it useful is the controller reading it.</p>
 
+        <figure class="post-inline-figure img-spot">
+          <img src="blog-irrigation-flow-sensor-gta-01-flow-meter-valve-box.jpg" alt="Hunter HC flow meter installed on an irrigation mainline in a valve box" loading="lazy" width="1600" height="1000" onerror="this.closest('.img-spot').classList.add('img-missing')">
+          <figcaption>A Hunter HC Flow Meter spliced inline on the poly mainline, downstream of the shut-off — where it counts every litre the system uses.</figcaption>
+          <div class="img-spot-note"><b>📷 Picture spot 1 — flow meter in the valve box</b><span class="img-spot-idea">Close-up inside an open valve box: a Hunter HC Flow Meter spliced into the poly mainline, its two sensor wires running up toward the controller. Lid off, clean and well-lit.</span><span class="img-spot-file">Drop in file: <code>blog-irrigation-flow-sensor-gta-01-flow-meter-valve-box.jpg</code> · landscape ~1600×1000</span></div>
+        </figure>
+
         <h2 id="how">How does flow monitoring actually catch a leak?</h2>
         <p class="answer-lead"><strong>The controller learns each zone's normal flow rate over its first cycles. From then on it watches the live rate against that baseline. A rate that's too high means a break or a sheared head dumping water; too low means a clog, a closed valve, or lost pressure. Either reading trips an alert.</strong></p>
         <p>It's worth knowing that a Hydrawise system watches for faults in <em>two</em> separate ways, and they catch different problems:</p>
@@ -244,6 +272,12 @@
           <li><strong>Flow monitoring (this is the part that needs a flow meter).</strong> The current check can't see water — a pipe can burst while the wiring reads perfectly fine. That's what the flow meter is for. It catches the <em>hydraulic</em> faults: a mainline break, a zone running way over its normal flow, a head that got driven over.</li>
         </ul>
         <p>Together they cover both halves of "something's wrong": the electrical side and the water side. That distinction is the difference between a gauge and a system.</p>
+
+        <figure class="post-portrait-figure img-spot">
+          <img src="blog-irrigation-flow-sensor-gta-02-hydrawise-flow-alert.jpg" alt="Hydrawise app flow alert on a phone showing a zone using more water than normal" loading="lazy" width="1080" height="1920" onerror="this.closest('.img-spot').classList.add('img-missing')">
+          <figcaption>The alert you actually get: Hydrawise flags a zone running over its normal flow and pings your phone — on the first cycle, not three weeks later.</figcaption>
+          <div class="img-spot-note"><b>📷 Picture spot 2 — the phone alert</b><span class="img-spot-idea">Phone held in hand showing the Hydrawise app — the flow/reporting screen with a zone highlighted as using more water than normal, or a leak/flow alert notification. A clean app screenshot works too.</span><span class="img-spot-file">Drop in file: <code>blog-irrigation-flow-sensor-gta-02-hydrawise-flow-alert.jpg</code> · portrait / phone ~1080×1920</span></div>
+        </figure>
 
         <h2 id="problems">What problems does it actually catch?</h2>
         <p>The failures a flow sensor is built to catch are exactly the expensive, slow-to-notice ones:</p>
@@ -269,6 +303,12 @@
         <h2 id="retrofit">Can you add a flow sensor to a system you already have?</h2>
         <p class="answer-lead"><strong>Yes — as long as you have, or add, a compatible smart controller. The flow meter installs on the mainline and wires into a spare sensor input on a Hunter HPC-400 (Hydrawise). On an older non-smart timer, the controller comes first — the sensor is part of that same upgrade, not a separate project.</strong></p>
         <p>The good news is it reuses everything already in the ground: your pipe, your valves, your heads. It's a controller-level upgrade, not a rebuild. PJL is a Hydrawise Authorized Installer and Hunter-certified, so the meter, the wiring, and the alert setup in the app all get done in one visit. A Hydrawise retrofit starts at <span data-price="controller_1_4">$595</span> by zone count; the flow meter is added on top and quoted on site, because the price depends on your mainline size and how the valve box is laid out.</p>
+
+        <figure class="post-inline-figure img-spot">
+          <img src="blog-irrigation-flow-sensor-gta-03-tech-wiring-hpc400.jpg" alt="PJL technician wiring a flow sensor to a Hunter HPC-400 Hydrawise controller" loading="lazy" width="1600" height="1000" onerror="this.closest('.img-spot').classList.add('img-missing')">
+          <figcaption>Wiring the flow meter into a spare sensor input on a Hunter HPC-400 (Hydrawise) — a controller-level add-on, not a system rebuild.</figcaption>
+          <div class="img-spot-note"><b>📷 Picture spot 3 — the install</b><span class="img-spot-idea">PJL technician at the garage wall wiring the flow-sensor lead into a Hunter HPC-400 (Hydrawise) controller — cover open, screwdriver in hand, PJL branded shirt if possible.</span><span class="img-spot-file">Drop in file: <code>blog-irrigation-flow-sensor-gta-03-tech-wiring-hpc400.jpg</code> · landscape ~1600×1000</span></div>
+        </figure>
 
         <div class="callout"><div class="callout-inner"><h3>Turn your system into one that watches itself.</h3><p>A Hunter HPC-400 (Hydrawise) skips watering when it rains, flags a wiring fault the moment it happens, and — with a flow meter added — pings your phone when a pipe breaks. It reuses your existing wiring, valves and heads, so it's a swap at the controller, not a rebuild.</p><a href="sprinkler-hydrawise.html" class="callout-cta">See the Hydrawise WiFi upgrade <span aria-hidden="true">→</span></a></div></div>
 
