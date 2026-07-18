@@ -1026,3 +1026,27 @@
   color: #6A6A60;
   line-height: 1.5;
 }
+
+/* Scheduled-date + on-behalf toggle in the meta grid (Jul 2026). The toggle
+   is a checkbox row, so it opts out of the column/uppercase label styling. */
+.pb-meta-grid label.pb-meta-check {
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 8px;
+  text-transform: none;
+}
+.pb-meta-grid label.pb-meta-check input {
+  width: auto;
+  margin-top: 2px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+.pb-meta-grid label.pb-meta-check span {
+  font-size: 12px;
+  letter-spacing: 0;
+  text-transform: none;
+  margin: 0;
+  line-height: 1.45;
+  color: #4A4A42;
+}

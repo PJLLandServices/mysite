@@ -163,6 +163,27 @@ function render(q) {
     document.getElementById("approveIntro").textContent =
       `Review the full scope below. You can accept this ${noun} either by signing online (Option A) or by printing the PDF, signing by hand, and emailing or uploading the signed copy back (Option B). Both are binding.`;
     document.getElementById("approveMethodToggle").hidden = false;
+
+    // On-behalf-of acceptance prompt (Jul 2026) — shown only when the estimate
+    // opted in. Fills the account-holder name into both radio options.
+    const acctName = (q.accountHolderName || "").trim() || "the account holder";
+    const onBehalfBlock = document.getElementById("approveOnBehalf");
+    if (onBehalfBlock) {
+      if (q.allowOnBehalfAcceptance) {
+        document.getElementById("approveAcctSelf").textContent = acctName;
+        document.getElementById("approveAcctOther").textContent = acctName;
+      }
+      onBehalfBlock.hidden = !q.allowOnBehalfAcceptance;
+    }
+
+    // "Sign ASAP to schedule" urgency banner — repair estimates.
+    const urgent = document.getElementById("approveUrgent");
+    if (urgent && isRepair) {
+      const sched = q.scheduledServiceDate ? fmtSchedDate(q.scheduledServiceDate) : "";
+      urgent.innerHTML = "<strong>Estimate must be signed ASAP to schedule.</strong>" +
+        (sched ? ` This repair is scheduled for <strong>${escapeHtml(sched)}</strong> — please sign before then to keep that date.` : "");
+      urgent.hidden = false;
+    }
   } else if (hasNarrative) {
     const nh = q.narrativeHeader || {};
     document.getElementById("approveEyebrow").textContent = "Smart controller upgrade — your approval needed";
@@ -437,10 +458,19 @@ submitBtn.addEventListener("click", async () => {
     const customerName = nameInput.value.trim();
     const imageData = pad?.toDataURL ? pad.toDataURL() : "";
     if (!customerName || !imageData) throw new Error("Name and signature required.");
+    // On-behalf-of acceptance (Jul 2026): only meaningful when the estimate
+    // opted in. When the signer picks "on behalf of", a relationship is
+    // required — the server enforces this too.
+    const signerOther = document.querySelector('input[name="approveSigner"][value="other"]');
+    const onBehalf = !!(currentQuote && currentQuote.allowOnBehalfAcceptance && signerOther && signerOther.checked);
+    const signerRelationship = onBehalf
+      ? (document.getElementById("approveRelationship")?.value || "").trim()
+      : "";
+    if (onBehalf && !signerRelationship) throw new Error("Please add your relationship to the account holder.");
     const r = await fetch(`/api/approve/${encodeURIComponent(quoteId)}/${encodeURIComponent(token)}/sign`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ customerName, imageData })
+      body: JSON.stringify({ customerName, imageData, onBehalf, signerRelationship })
     });
     const data = await r.json().catch(() => ({}));
     if (!r.ok || !data.ok) throw new Error((data.errors && data.errors[0]) || "Couldn't process signature.");
@@ -465,6 +495,36 @@ submitBtn.addEventListener("click", async () => {
     submitBtn.disabled = false;
     submitBtn.textContent = original;
   }
+});
+
+// Format a YYYY-MM-DD as a UTC calendar date ("Thursday, July 23") — no
+// timezone shift moves it a day (residential_repair scheduled-date urgency).
+function fmtSchedDate(iso) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso || ""));
+  if (!m) return "";
+  const dt = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
+  const WD = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+  const MO = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+  return `${WD[dt.getUTCDay()]}, ${MO[dt.getUTCMonth()]} ${dt.getUTCDate()}`;
+}
+
+// On-behalf-of choice (Jul 2026): toggling to "on behalf of" reveals the
+// relationship field and swaps the sign intro to the on-behalf attestation.
+function updateOnBehalfUI() {
+  const other = document.querySelector('input[name="approveSigner"][value="other"]');
+  const isOther = !!(other && other.checked);
+  const relWrap = document.getElementById("approveRelWrap");
+  if (relWrap) relWrap.hidden = !isOther;
+  const intro = document.getElementById("approveSignIntro");
+  if (intro) {
+    const acct = ((currentQuote && currentQuote.accountHolderName) || "").trim() || "the account holder";
+    intro.textContent = isOther
+      ? `By signing, I confirm I'm authorized to approve this work on behalf of ${acct}. This signature is the binding authorization to proceed.`
+      : "Print your name and sign below. Your signature is the authorization to proceed and is the binding moment for this scope.";
+  }
+}
+document.querySelectorAll('input[name="approveSigner"]').forEach((radio) => {
+  radio.addEventListener("change", updateOnBehalfUI);
 });
 
 // Self-contained signature pad — same behaviour as the portal/tech pads,

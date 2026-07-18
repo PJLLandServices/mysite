@@ -476,3 +476,37 @@
 }
 .approve-gate-help a { color: #1B4D2E; font-weight: 600; }
 
+
+/* "Sign ASAP to schedule" urgency banner (residential_repair follow-up). */
+.approve-urgent {
+  margin: 0 0 16px;
+  padding: 12px 14px;
+  background: #FFF4E5;
+  border: 1px solid #F0C88A;
+  border-radius: 8px;
+  font-size: 15px;
+  color: #7A4E12;
+  line-height: 1.5;
+}
+
+/* On-behalf-of acceptance choice (residential_repair follow-up). */
+.approve-onbehalf {
+  margin: 4px 0 16px;
+  padding: 12px 14px;
+  background: #F4F7F2;
+  border: 1px solid #DCE5D6;
+  border-radius: 8px;
+}
+.approve-onbehalf-q { margin: 0 0 8px; font-weight: 600; }
+.approve-onbehalf-opt {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 6px 0;
+  font-size: 15px;
+  line-height: 1.4;
+  cursor: pointer;
+}
+.approve-onbehalf-opt input { margin-top: 3px; }
+.approve-acct { font-weight: 600; }
+#approveRelWrap { margin-top: 10px; }

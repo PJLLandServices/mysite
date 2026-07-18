@@ -601,6 +601,20 @@ function blankQuote() {
     // file path, sender email, admin attestation, and timestamps.
     acceptanceEvidence: null,
 
+    // allowOnBehalfAcceptance — when true, the /approve e-sign step prompts
+    // the signer to confirm whether they are the account holder or are
+    // authorized to approve ON BEHALF OF them, capturing the signer's name +
+    // relationship (on-behalf-of acceptance, Jul 2026). Off by default; set
+    // per-estimate in the builder. Editable at any status (Patrick may only
+    // learn a family member will sign after sending) — NOT scope-protected.
+    allowOnBehalfAcceptance: false,
+
+    // scheduledServiceDate — an optional ISO date (YYYY-MM-DD) Patrick sets in
+    // the builder when the work is already booked. Drives the "sign ASAP to
+    // schedule" urgency line in the estimate email (residential_repair brief
+    // follow-up, Jul 2026). Editable at any status.
+    scheduledServiceDate: null,
+
     // validUntilDate — alias of validUntil for proposals, where the
     // typical default is 90 days. validUntil (above) stays the
     // authoritative field; this field tracks the same value and exists
@@ -727,6 +741,10 @@ function hydrate(q) {
     customRates: { ...base.customRates, ...(q?.customRates || {}) },
     acceptanceMethod: typeof q?.acceptanceMethod === "string" ? q.acceptanceMethod : "pending",
     acceptanceEvidence: q?.acceptanceEvidence || null,
+    // on-behalf-of acceptance + scheduled-date urgency (Jul 2026) — defensive
+    // defaults for records that pre-date them.
+    allowOnBehalfAcceptance: q?.allowOnBehalfAcceptance === true,
+    scheduledServiceDate: typeof q?.scheduledServiceDate === "string" && q.scheduledServiceDate ? q.scheduledServiceDate : null,
     validUntilDate: q?.validUntilDate || q?.validUntil || null,
     revisionOf: q?.revisionOf || null,
     supersededBy: q?.supersededBy || null
@@ -1194,6 +1212,28 @@ async function updateProposal(id, patch = {}, { by = "admin", note = "" } = {}) 
       throw err;
     }
     q.deliveryMode = dm;
+  }
+  // on-behalf-of acceptance toggle + scheduled-date urgency (Jul 2026).
+  // Neither is scope-protected — they don't touch pricing/scope, and Patrick
+  // may set them after send (e.g. once he learns a family member will sign,
+  // or a date gets booked). So they flow through even on a sent proposal.
+  if (Object.prototype.hasOwnProperty.call(patch, "allowOnBehalfAcceptance")) {
+    q.allowOnBehalfAcceptance = patch.allowOnBehalfAcceptance === true;
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "scheduledServiceDate")) {
+    const raw = patch.scheduledServiceDate;
+    // Accept an ISO calendar date (YYYY-MM-DD) or clear it. Reject anything
+    // that isn't a real date so the email can format it safely.
+    if (raw == null || raw === "") {
+      q.scheduledServiceDate = null;
+    } else {
+      const s = String(raw).slice(0, 10);
+      const d = /^\d{4}-\d{2}-\d{2}$/.test(s) ? new Date(s + "T00:00:00Z") : null;
+      if (!d || isNaN(d.getTime())) {
+        throw new Error(`Invalid scheduled service date: ${raw}`);
+      }
+      q.scheduledServiceDate = s;
+    }
   }
   if (Object.prototype.hasOwnProperty.call(patch, "billingMode")) {
     if (patch.billingMode && !BILLING_MODES.includes(patch.billingMode)) {
@@ -2221,7 +2261,14 @@ async function recordPortalSignAcceptance(quoteId, {
   ip,
   userAgent,
   by = "customer",
-  note = ""
+  note = "",
+  // On-behalf-of acceptance (Jul 2026). When onBehalfOf is true the signer is
+  // NOT the account holder; customerName is the SIGNER, accountHolderName is
+  // the person on the bill, and signerRelationship records how they're
+  // connected. All three are captured as durable evidence.
+  onBehalfOf = false,
+  signerRelationship = "",
+  accountHolderName = ""
 } = {}) {
   const records = await readAll();
   const idx = records.findIndex((q) => q.id === quoteId);
@@ -2233,6 +2280,7 @@ async function recordPortalSignAcceptance(quoteId, {
   q.status = "accepted";
   q.acceptedAt = ts;
   q.acceptanceMethod = "portal_esign";
+  const onBehalf = onBehalfOf === true;
   q.acceptanceEvidence = {
     method: "portal_esign",
     signatureImageDataUrl: String(imageData || ""),
@@ -2240,7 +2288,12 @@ async function recordPortalSignAcceptance(quoteId, {
     signedAt: ts,
     ip: String(ip || ""),
     userAgent: String(userAgent || ""),
-    token: q.approval?.token || null
+    token: q.approval?.token || null,
+    // on-behalf-of block — present on every portal_esign record so downstream
+    // readers can rely on the shape; onBehalfOf:false is the normal case.
+    onBehalfOf: onBehalf,
+    signerRelationship: onBehalf ? String(signerRelationship || "").slice(0, 80) : "",
+    accountHolderName: onBehalf ? String(accountHolderName || "").slice(0, 120) : ""
   };
   // Mirror onto signature{} so the existing PDF renderer + approve.js
   // back-end keeps working without conditionals.
@@ -2256,7 +2309,11 @@ async function recordPortalSignAcceptance(quoteId, {
     ts,
     action: "accepted",
     by,
-    note: note || "Accepted via portal e-sign"
+    note: note || (onBehalf
+      ? `Accepted via portal e-sign by ${q.acceptanceEvidence.customerPrintedName || "signer"}` +
+        `${q.acceptanceEvidence.signerRelationship ? ` (${q.acceptanceEvidence.signerRelationship})` : ""}` +
+        ` on behalf of ${q.acceptanceEvidence.accountHolderName || "the account holder"}`
+      : "Accepted via portal e-sign")
   });
   records[idx] = q;
   await writeAll(records);
