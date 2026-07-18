@@ -222,7 +222,9 @@
   // ---- Render --------------------------------------------------------
   function render() {
     const q = state.quote;
-    el.title.textContent = `Proposal ${q.id}`;
+    // Customer-facing noun (residential_repair brief): a repair job reads as
+    // an "Estimate", every other branch as a "Proposal".
+    el.title.textContent = `${q.branch === "residential_repair" ? "Estimate" : "Proposal"} ${q.id}`;
     el.quoteId.textContent = q.id;
     el.status.textContent = q.status;
     el.status.className = `pb-status invoices-status invoices-status--${q.status}`;

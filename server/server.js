@@ -12174,6 +12174,9 @@ async function handleApi(req, res, pathname) {
             const firstName = (custName ? custName.split(/\s+/)[0] : "").replace(/</g, "&lt;") || "there";
             const displayNo = (q.quoteNumberDisplay && String(q.quoteNumberDisplay).trim()) || q.id;
             const branchLabel = q.branch || "project";
+            // Customer-facing document noun (residential_repair brief): a repair
+            // job reads as an "Estimate", every other branch as a "Proposal".
+            const docNoun = quotes.customerDocNoun(q);
             // Phone-Gated Proposal Access (2026-07, rescoped Jul 13): the
             // gate exists ONLY when a custom HTML document is attached, so
             // the email branches on the same check the /approve routes use.
@@ -12191,14 +12194,14 @@ async function handleApi(req, res, pathname) {
 <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:560px;color:#1a1a1a;line-height:1.55;">
   <div style="padding:24px 28px;background:#1B4D2E;border-radius:8px 8px 0 0;">
     <div style="color:#EAF3DE;font-size:12px;letter-spacing:0.12em;text-transform:uppercase;font-weight:600;">PJL Land Services</div>
-    <h1 style="margin:6px 0 0;color:#fff;font-size:22px;">Your proposal — ready for review.</h1>
+    <h1 style="margin:6px 0 0;color:#fff;font-size:22px;">Your ${docNoun.lower} — ready for review.</h1>
   </div>
   <div style="padding:24px 28px;background:#FAFAF5;border:1px solid #e5e5dd;border-top:none;border-radius:0 0 8px 8px;">
     <p style="margin:0 0 14px;">Hi ${firstName},</p>
     ${gated
-      ? `<p style="margin:0 0 14px;">Your detailed proposal (<strong>${displayNo}</strong>) is ready to review at the link below. Total: <strong>$${moneyCad(q.total)} CAD</strong> incl. HST.</p>
+      ? `<p style="margin:0 0 14px;">Your detailed ${docNoun.lower} (<strong>${displayNo}</strong>) is ready to review at the link below. Total: <strong>$${moneyCad(q.total)} CAD</strong> incl. HST.</p>
     <p style="margin:0 0 14px;padding:12px 14px;background:#EAF3DE;border:1px solid #C7E0A8;border-radius:8px;font-size:13px;color:#33502f;">To open it, you'll be asked for your phone number — the one we have on file for you. Any format is fine.</p>`
-      : `<p style="margin:0 0 14px;">Your detailed proposal (<strong>${displayNo}</strong>) is attached and posted at the link below. Total: <strong>$${moneyCad(q.total)} CAD</strong> incl. HST.</p>`}
+      : `<p style="margin:0 0 14px;">Your detailed ${docNoun.lower} (<strong>${displayNo}</strong>) is attached and posted at the link below. Total: <strong>$${moneyCad(q.total)} CAD</strong> incl. HST.</p>`}
     <p style="margin:0 0 14px;font-size:13px;color:#555;">You can accept this proposal in either of two ways:</p>
     <ul style="margin:0 0 14px;padding-left:20px;font-size:13px;color:#333;line-height:1.7;">
       <li><strong>Sign online</strong> — tap the button below, draw your signature, done.</li>
@@ -12219,7 +12222,7 @@ async function handleApi(req, res, pathname) {
             // admin download and the /approve print-to-sign page. Gated →
             // deliberately NO attachment; the PDF lives behind the gate.
             const attachments = gated ? [] : [{
-              filename: `PJL-Proposal-${q.id}.pdf`,
+              filename: `PJL-${docNoun.cap}-${q.id}.pdf`,
               content: pdfBuffer,
               contentType: "application/pdf"
             }];
@@ -12227,7 +12230,7 @@ async function handleApi(req, res, pathname) {
               from: `"PJL Land Services" <${process.env.CUSTOMER_EMAIL || "info@pjllandservices.com"}>`,
               to: toEmail,
               replyTo: process.env.CUSTOMER_EMAIL || "info@pjllandservices.com",
-              subject: `PJL proposal ${displayNo} — your review and acceptance`,
+              subject: `PJL ${docNoun.lower} ${displayNo} — your review and acceptance`,
               html,
               ...(attachments.length ? { attachments } : {})
             });

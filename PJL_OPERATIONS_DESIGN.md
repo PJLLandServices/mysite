@@ -274,6 +274,8 @@ Every box knows its parent and its child. No orphans.
 
 The install-oriented sections (`quotation_summary`, `infrastructure_list`, `technical_reference`, `project_map`) are simply **not seeded** for `residential_repair` — they stay addable via "+ Add section" for the occasional repair that warrants one. `cover_summary` is REUSED as the opener (retitled "Reason for the work"), not a new section kind. Note the expiry exception: `project_proposal` defaults to **90 days** *except* `residential_repair`, which defaults to **30**.
 
+**Customer-facing noun.** A `residential_repair` job is presented to the homeowner as an **"Estimate"**, not a "Proposal" — on the PDF cover/metadata/filename, the email subject + body, the `/approve` page headings, the acceptance clause, and the admin builder title. Every other branch stays a "Proposal". Branch-driven (`quotes.customerDocNoun`) so the noun reflects the nature of the work; non-repair copy is byte-identical to before.
+
 **Note on bypass-completed WOs:** When a work order is completed via signature bypass (admin-authorized verbal acceptance — see §4.3) AND the bypass also covers on-site quote acceptance (the builder carried lines beyond baseline), **no `on_site_quote` Quote record is created in this folder**. The WO's builder line items, snapshotted onto the bypass record (`acceptedScopeSnapshot`), are the authoritative scope record. Reporting that joins WOs to Quotes must account for this path — some WOs will not appear here.
 
 **Routing logic — when does AI quote vs. capture lead:**

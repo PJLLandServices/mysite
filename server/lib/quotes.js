@@ -181,6 +181,21 @@ function deliveryModeForBranch(branch) {
   return (d && d.deliveryMode) || DEFAULT_DELIVERY_MODE;
 }
 
+// Customer-facing document noun (residential_repair brief). A repair job is
+// presented to the homeowner as an "Estimate" — matching how the work is
+// actually discussed — while every other project_proposal branch stays a
+// "Proposal". Branch-driven so the noun reflects the NATURE of the work, not
+// the delivery channel. Returns the three cases used across the PDF, email,
+// /approve page, and builder title so callers don't re-implement the mapping.
+function customerDocNoun(quote) {
+  const repair = !!quote && quote.branch === "residential_repair";
+  return {
+    cap: repair ? "Estimate" : "Proposal",
+    lower: repair ? "estimate" : "proposal",
+    upper: repair ? "ESTIMATE" : "PROPOSAL"
+  };
+}
+
 // pdfOptions.lineItems enum (Brief D). An enum, not two booleans, so the
 // nonsense state "no descriptions AND no pricing" is unrepresentable.
 const PDF_LINE_ITEM_MODES = ["itemized", "descriptions_only", "summary"];
@@ -2499,6 +2514,7 @@ module.exports = {
   PROPOSAL_BRANCH_DEFAULTS,
   resolveBranchDefaults,
   deliveryModeForBranch,
+  customerDocNoun,
   PROPOSAL_SECTION_KINDS,
   ATTACHMENT_KINDS,
   ATTACHMENT_MIME_WHITELIST,

@@ -431,14 +431,20 @@ function renderProjectProposalPdf(quote, opts = {}) {
   const acceptanceUrl = opts.acceptanceUrl || null;
   const returnEmail = opts.returnEmail || "info@pjllandservices.com";
 
+  // Customer-facing document noun (residential_repair brief): a repair job
+  // reads as an "Estimate", every other branch as a "Proposal". Inlined here
+  // rather than imported from quotes.js to avoid a lib require cycle.
+  const isRepair = quote.branch === "residential_repair";
+  const DOC_CAP = isRepair ? "Estimate" : "Proposal";
+
   const doc = new PDFDocument({
     size: "LETTER",
     margins: { top: 60, bottom: 60, left: 60, right: 60 },
     info: {
-      Title: `PJL Proposal ${quote.id}`,
+      Title: `PJL ${DOC_CAP} ${quote.id}`,
       Author: "PJL Land Services",
-      Subject: quote.scope || "Project proposal",
-      Keywords: `proposal ${quote.id} pjl land services ${quote.branch || ""}`
+      Subject: quote.scope || (isRepair ? "Residential repair estimate" : "Project proposal"),
+      Keywords: `${DOC_CAP.toLowerCase()} ${quote.id} pjl land services ${quote.branch || ""}`
     }
   });
 
@@ -458,7 +464,7 @@ function renderProjectProposalPdf(quote, opts = {}) {
     ? String(quote.quoteNumberDisplay).trim()
     : `${quote.id}${versionTag}`;
   let y = renderPdfHeader(doc, {
-    title: "PROPOSAL",
+    title: DOC_CAP.toUpperCase(),
     eyebrow: branchLabel ? branchLabel.toUpperCase() : "",
     idText: displayId,
     issuedLine: `Issued ${fmtDate(quote.createdAt)}${quote.validUntil ? `  ·  Valid through ${fmtDate(quote.validUntil)}` : ""}`
@@ -528,7 +534,7 @@ function renderProjectProposalPdf(quote, opts = {}) {
   // ---- Acceptance block --------------------------------------------
   doc.moveDown(1.2);
   renderAcceptanceBlock(doc, quote, {
-    MARGIN_X, contentWidth, acceptanceUrl, returnEmail
+    MARGIN_X, contentWidth, acceptanceUrl, returnEmail, docWord: DOC_CAP.toLowerCase()
   });
 
   // ---- Footer on every page ----------------------------------------
