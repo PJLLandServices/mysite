@@ -151,12 +151,17 @@ function render(q) {
   // method for these (no PDF-return path exists for ai_repair_quote).
   const hasNarrative = !isProposal && !!q.narrativeKey && (q.proposalSections || []).length > 0;
 
-  // Header copy — proposals + narrative quotes get tailored wording.
+  // Header copy — proposals + narrative quotes get tailored wording. A
+  // residential_repair job reads as an "Estimate" to the homeowner; every
+  // other branch stays a "Proposal" (residential_repair brief).
   if (isProposal) {
-    document.getElementById("approveEyebrow").textContent = "Project proposal — your acceptance needed";
-    document.getElementById("approveHeadline").textContent = "Your detailed proposal is ready for review.";
+    const isRepair = q.branch === "residential_repair";
+    const noun = isRepair ? "estimate" : "proposal";
+    document.getElementById("approveEyebrow").textContent =
+      (isRepair ? "Repair estimate" : "Project proposal") + " — your acceptance needed";
+    document.getElementById("approveHeadline").textContent = `Your detailed ${noun} is ready for review.`;
     document.getElementById("approveIntro").textContent =
-      "Review the full scope below. You can accept this proposal either by signing online (Option A) or by printing the PDF, signing by hand, and emailing or uploading the signed copy back (Option B). Both are binding.";
+      `Review the full scope below. You can accept this ${noun} either by signing online (Option A) or by printing the PDF, signing by hand, and emailing or uploading the signed copy back (Option B). Both are binding.`;
     document.getElementById("approveMethodToggle").hidden = false;
   } else if (hasNarrative) {
     const nh = q.narrativeHeader || {};
