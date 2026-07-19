@@ -142,26 +142,13 @@
 .answer-lead strong{color:var(--green);}
 </style>
 <style>
-/* ── Picture spots — added for photo curation (Patrick supplies the photos) ──
-   Each figure below names the exact photo file to drop in. Until that file
-   exists in the repo, the figure renders a labelled placeholder describing the
-   shot. Drop a JPG with the named filename beside this HTML file and the photo
-   appears automatically — no code change needed. See BLOG-IMAGE-SHOT-LIST.md. */
+/* Inline article figures */
 .post-hero-figure{margin:0 0 12px;border-radius:var(--r-lg);overflow:hidden;border:1px solid var(--border);box-shadow:0 8px 24px rgba(15,31,20,.08);}
 .post-inline-figure{margin:34px 0;border-radius:var(--r-lg);overflow:hidden;border:1px solid var(--border);}
 .post-portrait-figure{margin:34px auto;max-width:460px;border-radius:var(--r-lg);overflow:hidden;border:1px solid var(--border);box-shadow:0 6px 18px rgba(15,31,20,.06);background:#fff;}
 .post-hero-figure img,.post-inline-figure img,.post-portrait-figure img{display:block;width:100%;height:auto;}
 .post-hero-figure figcaption,.post-inline-figure figcaption,.post-portrait-figure figcaption{padding:12px 18px;background:var(--cream);font-size:13px;color:var(--text-muted);font-style:italic;border-top:1px solid var(--border);line-height:1.5;}
 @media(max-width:640px){.post-portrait-figure{max-width:340px;}}
-/* Placeholder state — auto-hidden the moment the real photo is present */
-.img-spot.img-missing{border:2px dashed var(--green-light);background:repeating-linear-gradient(45deg,#f6f9f5,#f6f9f5 14px,#eef4ee 14px,#eef4ee 28px);}
-.img-spot.img-missing img,.img-spot.img-missing figcaption{display:none;}
-.img-spot-note{display:none;}
-.img-spot.img-missing .img-spot-note{display:flex;flex-direction:column;gap:8px;padding:28px 26px;text-align:center;align-items:center;}
-.img-spot-note b{font-size:11px;font-weight:800;letter-spacing:.14em;text-transform:uppercase;color:var(--green);}
-.img-spot-note .img-spot-idea{font-size:15px;font-weight:600;color:var(--text);max-width:540px;line-height:1.55;}
-.img-spot-note .img-spot-file{font-size:12.5px;color:var(--text-muted);}
-.img-spot-note code{font-size:12.5px;background:#fff;border:1px solid var(--border);border-radius:6px;padding:3px 8px;color:var(--green-mid);word-break:break-all;}
 </style>
   <link rel="stylesheet" href="css/chat-widget.css">
 <script type="application/ld+json">
@@ -245,20 +232,18 @@
 
         <div class="quick-answer"><span class="qa-label">Quick answer</span><p>New sod needs to stay consistently moist for the first two weeks — usually watering 2–3 times a day, then tapering off as it roots. Don't mow until it's anchored, about 2–3 weeks, when a gentle tug won't lift it. A smart controller makes the tapering schedule automatic so you don't have to think about it.</p></div>
 
-        <figure class="post-hero-figure img-spot">
-          <img src="blog-how-to-water-new-sod-ontario-01-fresh-sod-watering.jpg" alt="A sprinkler running on a healthy green lawn beside a retaining wall and cedar hedge" loading="lazy" width="2000" height="1500" onerror="this.closest('.img-spot').classList.add('img-missing')">
+        <figure class="post-hero-figure">
+          <img src="blog-how-to-water-new-sod-ontario-01-fresh-sod-watering.jpg" alt="A sprinkler running on a healthy green lawn beside a retaining wall and cedar hedge" loading="lazy" width="2000" height="1500">
           <figcaption>The same in-ground irrigation that keeps an established lawn this green can run the short, frequent cycles new sod needs to root.</figcaption>
-          <div class="img-spot-note"><b>📷 Picture spot 1 — fresh sod (hero)</b><span class="img-spot-idea">Newly laid sod rolls with the seams still visible, being watered — sprinkler spray or wet, glistening turf. Bright, fresh green. Sets up the "first two weeks" stakes.</span><span class="img-spot-file">Drop in file: <code>blog-how-to-water-new-sod-ontario-01-fresh-sod-watering.jpg</code> · landscape ~1600×1000</span></div>
         </figure>
 
         <h2 id="how-often">How often should you water new sod?</h2>
         <p class="answer-lead"><strong>Week one: water 2–3 times a day, enough to keep the sod and the soil beneath it damp — never let it dry out. Week two: drop to 1–2 times a day as roots start to grip. Week three onward: taper toward a normal deep, infrequent schedule. Heat and wind mean more; cool and cloud mean less.</strong></p>
         <p>On the heavy clay soil across most of the GTA there's a balance to strike: clay holds moisture well, so you can overdo it and drown the roots, but it also sheds water fast when it's dry and crusted. Short, frequent cycles early on beat one long soak — you want damp, not swamped.</p>
 
-        <figure class="post-portrait-figure img-spot">
-          <img src="blog-how-to-water-new-sod-ontario-02-sprinkler-short-cycle.jpg" alt="A pop-up spray head running a cycle over a green lawn in front of a stone home" loading="lazy" width="1500" height="2000" onerror="this.closest('.img-spot').classList.add('img-missing')">
+        <figure class="post-portrait-figure">
+          <img src="blog-how-to-water-new-sod-ontario-02-sprinkler-short-cycle.jpg" alt="A pop-up spray head running a cycle over a green lawn in front of a stone home" loading="lazy" width="1500" height="2000">
           <figcaption>A pop-up spray head running its cycle — for new sod you'd set several short cycles like this a day, then taper as it roots.</figcaption>
-          <div class="img-spot-note"><b>📷 Picture spot 2 — the watering cycle</b><span class="img-spot-idea">A pop-up or spray head running over new sod, early-morning light, water arcing across the seams. (Existing asset <code>backyard-sprinkler-running.jpg</code> could be reused if you'd rather not reshoot.)</span><span class="img-spot-file">Drop in file: <code>blog-how-to-water-new-sod-ontario-02-sprinkler-short-cycle.jpg</code> · landscape ~1600×1000</span></div>
         </figure>
 
         <h2 id="mow">How long before you can mow new sod?</h2>
@@ -267,20 +252,18 @@
         <h2 id="brown">Why does new sod turn brown or lift at the seams?</h2>
         <p class="answer-lead"><strong>Nine times out of ten it's underwatering — usually at the edges and seams, which dry out first. Brown, shrinking strips with gaps opening between rolls almost always mean the water isn't reaching those margins. The fix is more frequent watering and making sure coverage reaches the edges, not more water in the middle.</strong></p>
 
-        <figure class="post-inline-figure img-spot">
-          <img src="blog-sprinkler-coverage-dry-spots.jpg" alt="Sprinkler heads spraying across a lawn, showing watering coverage reaching every area" loading="lazy" width="1040" height="650" onerror="this.closest('.img-spot').classList.add('img-missing')">
+        <figure class="post-inline-figure">
+          <img src="blog-sprinkler-coverage-dry-spots.jpg" alt="Sprinkler heads spraying across a lawn, showing watering coverage reaching every area" loading="lazy" width="1040" height="650">
           <figcaption>Coverage is everything: brown, thin patches usually mean the spray isn't reaching those spots — not that the whole lawn needs more water.</figcaption>
-          <div class="img-spot-note"><b>📷 Picture spot 3 — the failure mode</b><span class="img-spot-idea">Close-up of new sod going wrong: browning, shrinking strips with gaps opening between the rolls at the seams. The "here's what underwatering looks like" reference shot.</span><span class="img-spot-file">Drop in file: <code>blog-how-to-water-new-sod-ontario-03-brown-seam-edge.jpg</code> · landscape ~1600×1000</span></div>
         </figure>
 
         <h2 id="sprinkler">Can your sprinkler system water new sod for you?</h2>
         <p class="answer-lead"><strong>Yes — and it's the easiest way to get establishment right. A sprinkler system can run a dedicated new-sod schedule of short, frequent cycles, and a smart controller like Hydrawise can automate the two-week taper and adjust for rain and heat, so the sod gets exactly what it needs without you dragging a hose at 6 a.m.</strong></p>
         <p>If you've got an irrigation system, the establishment schedule is a five-minute setup — and if it's a <a href="sprinkler-hydrawise.html">Hydrawise controller</a>, the taper and the weather adjustments run themselves.</p>
 
-        <figure class="post-portrait-figure img-spot">
-          <img src="hydrawise-display-mobile.png" alt="The Hunter Hydrawise app on a phone showing watering programs and water savings" loading="lazy" width="1197" height="1432" onerror="this.closest('.img-spot').classList.add('img-missing')">
+        <figure class="post-portrait-figure">
+          <img src="hydrawise-display-mobile.png" alt="The Hunter Hydrawise app on a phone showing watering programs and water savings" loading="lazy" width="1197" height="1432">
           <figcaption>A smart controller runs the new-sod taper for you — short, frequent cycles at first, easing off automatically — all managed from the Hydrawise app.</figcaption>
-          <div class="img-spot-note"><b>📷 Picture spot 4 — the smart schedule</b><span class="img-spot-idea">Phone showing a Hydrawise schedule set up for new-sod establishment — several short daily cycles. A clean app screenshot is perfect here.</span><span class="img-spot-file">Drop in file: <code>blog-how-to-water-new-sod-ontario-04-hydrawise-sod-schedule.jpg</code> · portrait / phone ~1080×1920</span></div>
         </figure>
 
         <div class="callout"><div class="callout-inner"><h3>We don't lay sod — but we'll dial in the watering.</h3><p>If you're putting sod in and want your irrigation set to establish it cleanly, we can program the schedule and make sure coverage reaches every seam. And if your system needs a smart controller to handle the taper automatically, that's the Hydrawise upgrade.</p><a href="sprinkler-hydrawise.html" class="callout-cta">See the Hydrawise upgrade <span aria-hidden="true">→</span></a></div></div>

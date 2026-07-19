@@ -142,26 +142,13 @@
 .answer-lead strong{color:var(--green);}
 </style>
 <style>
-/* ── Picture spots — added for photo curation (Patrick supplies the photos) ──
-   Each figure below names the exact photo file to drop in. Until that file
-   exists in the repo, the figure renders a labelled placeholder describing the
-   shot. Drop a JPG with the named filename beside this HTML file and the photo
-   appears automatically — no code change needed. See BLOG-IMAGE-SHOT-LIST.md. */
+/* Inline article figures */
 .post-hero-figure{margin:0 0 12px;border-radius:var(--r-lg);overflow:hidden;border:1px solid var(--border);box-shadow:0 8px 24px rgba(15,31,20,.08);}
 .post-inline-figure{margin:34px 0;border-radius:var(--r-lg);overflow:hidden;border:1px solid var(--border);}
 .post-portrait-figure{margin:34px auto;max-width:460px;border-radius:var(--r-lg);overflow:hidden;border:1px solid var(--border);box-shadow:0 6px 18px rgba(15,31,20,.06);background:#fff;}
 .post-hero-figure img,.post-inline-figure img,.post-portrait-figure img{display:block;width:100%;height:auto;}
 .post-hero-figure figcaption,.post-inline-figure figcaption,.post-portrait-figure figcaption{padding:12px 18px;background:var(--cream);font-size:13px;color:var(--text-muted);font-style:italic;border-top:1px solid var(--border);line-height:1.5;}
 @media(max-width:640px){.post-portrait-figure{max-width:340px;}}
-/* Placeholder state — auto-hidden the moment the real photo is present */
-.img-spot.img-missing{border:2px dashed var(--green-light);background:repeating-linear-gradient(45deg,#f6f9f5,#f6f9f5 14px,#eef4ee 14px,#eef4ee 28px);}
-.img-spot.img-missing img,.img-spot.img-missing figcaption{display:none;}
-.img-spot-note{display:none;}
-.img-spot.img-missing .img-spot-note{display:flex;flex-direction:column;gap:8px;padding:28px 26px;text-align:center;align-items:center;}
-.img-spot-note b{font-size:11px;font-weight:800;letter-spacing:.14em;text-transform:uppercase;color:var(--green);}
-.img-spot-note .img-spot-idea{font-size:15px;font-weight:600;color:var(--text);max-width:540px;line-height:1.55;}
-.img-spot-note .img-spot-file{font-size:12.5px;color:var(--text-muted);}
-.img-spot-note code{font-size:12.5px;background:#fff;border:1px solid var(--border);border-radius:6px;padding:3px 8px;color:var(--green-mid);word-break:break-all;}
 </style>
   <link rel="stylesheet" href="css/chat-widget.css">
 <script type="application/ld+json">
@@ -246,20 +233,18 @@
 
         <div class="quick-answer"><span class="qa-label">Quick answer</span><p>For most Ontario systems the best smart controller is a Hunter HPC-400 (Hydrawise). It reuses your existing wiring and heads, skips watering when it rains, handles the daylight-saving change itself, and <!-- @price-source: pricing.json#water_calculator.headline_scenario.annual_savings_cad — canonical $580; do not edit inline. -->typically saves up to $580 a year in water. But not every system needs one — a small, hand-managed lawn may never see the payback.</p></div>
 
-        <figure class="post-portrait-figure img-spot">
-          <img src="blog-best-smart-sprinkler-controller-ontario-01-hpc400-on-wall.jpg" alt="Hunter HPC-400 Hydrawise Pro-C Wi-Fi controller mounted on a wall with a PJL Land Services sticker" loading="lazy" width="1500" height="2000" onerror="this.closest('.img-spot').classList.add('img-missing')">
+        <figure class="post-portrait-figure">
+          <img src="blog-best-smart-sprinkler-controller-ontario-01-hpc400-on-wall.jpg" alt="Hunter HPC-400 Hydrawise Pro-C Wi-Fi controller mounted on a wall with a PJL Land Services sticker" loading="lazy" width="1500" height="2000">
           <figcaption>The one controller PJL installs: a Hunter HPC-400 (Hydrawise Pro-C Wi-Fi), reusing the wiring and heads already on your system.</figcaption>
-          <div class="img-spot-note"><b>📷 Picture spot 1 — the controller (hero)</b><span class="img-spot-idea">Hunter HPC-400 (Hydrawise) mounted on a garage or basement wall, screen lit, ideally a phone in the foreground showing the Hydrawise app. The signature "smart controller" shot.</span><span class="img-spot-file">Drop in file: <code>blog-best-smart-sprinkler-controller-ontario-01-hpc400-on-wall.jpg</code> · landscape ~1600×1000</span></div>
         </figure>
 
         <h2 id="what-smart">What actually makes a controller "smart"?</h2>
         <p class="answer-lead"><strong>A traditional timer runs a fixed schedule no matter the weather — it'll water in the rain because it doesn't know it's raining. A smart controller pulls live local weather data and adjusts: it skips or shortens cycles after rain, waters more in heat, and lets you change everything from your phone.</strong></p>
         <p>The features that matter in practice: weather-based (predictive) watering, rain skip, phone control from anywhere, and fault alerts — including a warning if a zone's wiring fails or, with an added flow meter, if a pipe bursts. It's the difference between a clock and a system that watches itself. (More on that leak-detection layer in our <a href="blog-irrigation-flow-sensor-gta.html">irrigation flow sensor</a> guide.)</p>
 
-        <figure class="post-portrait-figure img-spot">
-          <img src="hydrawise-display-mobile.png" alt="The Hunter Hydrawise app on a phone showing water savings and predictive watering" loading="lazy" width="1197" height="1432" onerror="this.closest('.img-spot').classList.add('img-missing')">
+        <figure class="post-portrait-figure">
+          <img src="hydrawise-display-mobile.png" alt="The Hunter Hydrawise app on a phone showing water savings and predictive watering" loading="lazy" width="1197" height="1432">
           <figcaption>Weather-based watering, from your phone: the Hydrawise app shows the cycles it skipped and the water it saved — here, 31% in a week.</figcaption>
-          <div class="img-spot-note"><b>📷 Picture spot 2 — the app</b><span class="img-spot-idea">Phone showing the Hydrawise app — the weather/forecast screen, a "rain skip" notice, or the zone schedule. Shows the "run it from your phone" benefit. A clean screenshot is fine.</span><span class="img-spot-file">Drop in file: <code>blog-best-smart-sprinkler-controller-ontario-02-hydrawise-app-weather.jpg</code> · portrait / phone ~1080×1920</span></div>
         </figure>
 
         <h2 id="need">Do you actually need a smart controller?</h2>
@@ -274,10 +259,9 @@
         <p class="answer-lead"><strong>A Hydrawise retrofit starts at <span data-price="controller_1_4">$595</span> and scales by zone count. It reuses your existing wiring, valves and heads, so it's a swap at the controller — not a system rebuild — and it's usually a single visit, with the app and schedule set up before we leave.</strong></p>
         <p>On a typical Newmarket property the water savings — <!-- @price-source: pricing.json#water_calculator.headline_scenario.annual_savings_cad — canonical $580; do not edit inline. -->up to $580 a year — often cover the controller inside a season or two. You can put real numbers to your own lawn with our <a href="water-cost-calculator.html">water cost calculator</a>.</p>
 
-        <figure class="post-portrait-figure img-spot">
-          <img src="blog-hydrawise-hpc-install.jpg" alt="A Hunter HPC Wi-Fi Hydrawise controller freshly installed on a wall with a PJL sticker" loading="lazy" width="1280" height="1707" onerror="this.closest('.img-spot').classList.add('img-missing')">
+        <figure class="post-portrait-figure">
+          <img src="blog-hydrawise-hpc-install.jpg" alt="A Hunter HPC Wi-Fi Hydrawise controller freshly installed on a wall with a PJL sticker" loading="lazy" width="1280" height="1707">
           <figcaption>A Hunter HPC Wi-Fi (Hydrawise) going in: the retrofit is a swap at the controller — the existing wiring and heads stay put.</figcaption>
-          <div class="img-spot-note"><b>📷 Picture spot 3 — the swap</b><span class="img-spot-idea">PJL technician mid-swap on a garage wall: old beige dial timer coming off, the new Hunter HPC-400 (Hydrawise) going on. A before/after pair (old unit vs. new unit) also works well here.</span><span class="img-spot-file">Drop in file: <code>blog-best-smart-sprinkler-controller-ontario-03-tech-swapping-timer.jpg</code> · landscape ~1600×1000</span></div>
         </figure>
 
         <div class="callout"><div class="callout-inner"><h3>See the retrofit for your zone count.</h3><p>The Hunter HPC-400 (Hydrawise) is the one controller we install — weather-aware watering, phone control, and fault alerts, reusing the wiring and heads already in the ground. Tell us your zone count and current brand and we'll confirm compatibility and quote it upfront.</p><a href="sprinkler-hydrawise.html" class="callout-cta">See the Hydrawise WiFi upgrade <span aria-hidden="true">→</span></a></div></div>

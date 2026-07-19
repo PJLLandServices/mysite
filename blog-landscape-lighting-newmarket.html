@@ -152,26 +152,13 @@
 .answer-lead strong{color:var(--green);}
 </style>
 <style>
-/* ── Picture spots — added for photo curation (Patrick supplies the photos) ──
-   Each figure below names the exact photo file to drop in. Until that file
-   exists in the repo, the figure renders a labelled placeholder describing the
-   shot. Drop a JPG with the named filename beside this HTML file and the photo
-   appears automatically — no code change needed. See BLOG-IMAGE-SHOT-LIST.md. */
+/* Inline article figures */
 .post-hero-figure{margin:0 0 12px;border-radius:var(--r-lg);overflow:hidden;border:1px solid var(--border);box-shadow:0 8px 24px rgba(15,31,20,.08);}
 .post-inline-figure{margin:34px 0;border-radius:var(--r-lg);overflow:hidden;border:1px solid var(--border);}
 .post-portrait-figure{margin:34px auto;max-width:460px;border-radius:var(--r-lg);overflow:hidden;border:1px solid var(--border);box-shadow:0 6px 18px rgba(15,31,20,.06);background:#fff;}
 .post-hero-figure img,.post-inline-figure img,.post-portrait-figure img{display:block;width:100%;height:auto;}
 .post-hero-figure figcaption,.post-inline-figure figcaption,.post-portrait-figure figcaption{padding:12px 18px;background:var(--cream);font-size:13px;color:var(--text-muted);font-style:italic;border-top:1px solid var(--border);line-height:1.5;}
 @media(max-width:640px){.post-portrait-figure{max-width:340px;}}
-/* Placeholder state — auto-hidden the moment the real photo is present */
-.img-spot.img-missing{border:2px dashed var(--green-light);background:repeating-linear-gradient(45deg,#f6f9f5,#f6f9f5 14px,#eef4ee 14px,#eef4ee 28px);}
-.img-spot.img-missing img,.img-spot.img-missing figcaption{display:none;}
-.img-spot-note{display:none;}
-.img-spot.img-missing .img-spot-note{display:flex;flex-direction:column;gap:8px;padding:28px 26px;text-align:center;align-items:center;}
-.img-spot-note b{font-size:11px;font-weight:800;letter-spacing:.14em;text-transform:uppercase;color:var(--green);}
-.img-spot-note .img-spot-idea{font-size:15px;font-weight:600;color:var(--text);max-width:540px;line-height:1.55;}
-.img-spot-note .img-spot-file{font-size:12.5px;color:var(--text-muted);}
-.img-spot-note code{font-size:12.5px;background:#fff;border:1px solid var(--border);border-radius:6px;padding:3px 8px;color:var(--green-mid);word-break:break-all;}
 </style>
   <link rel="stylesheet" href="css/chat-widget.css">
 <script type="application/ld+json">
@@ -241,10 +228,9 @@
 
         <div class="quick-answer"><span class="qa-label">Quick answer</span><p>Most great residential lighting designs combine four techniques — path lighting, uplighting, downlighting (moonlighting), and step/hardscape lighting — in low-voltage LED. A professional GTA install typically runs from a starter package to estate scale; see our <a href="landscape-lighting.html">lighting page</a> for current package ranges. If you already have irrigation, the smartest move is to run both in one trench.</p></div>
 
-        <figure class="post-hero-figure img-spot">
-          <img src="blog-landscape-lighting-newmarket-01-home-facade-dusk.jpg" alt="A GTA home at night with warm uplighting washing up the stone facade and lit garden beds" loading="lazy" width="1280" height="960" onerror="this.closest('.img-spot').classList.add('img-missing')">
+        <figure class="post-hero-figure">
+          <img src="blog-landscape-lighting-newmarket-01-home-facade-dusk.jpg" alt="A GTA home at night with warm uplighting washing up the stone facade and lit garden beds" loading="lazy" width="1280" height="960">
           <figcaption>After dark done right: uplighting washes up the stone, the beds read, and the property still looks like the nice house on the street.</figcaption>
-          <div class="img-spot-note"><b>📷 Picture spot 1 — after-dark hero</b><span class="img-spot-idea">A completed PJL home lit at dusk/night: façade uplighting plus path lights, layered so the house "reads" against a dark-blue sky. Your strongest finished-job photo. (Existing asset <code>landscape-lighting-hero.jpg</code> could be reused.)</span><span class="img-spot-file">Drop in file: <code>blog-landscape-lighting-newmarket-01-home-facade-dusk.jpg</code> · landscape ~1600×1000</span></div>
         </figure>
 
         <h2 id="why">What good lighting actually does for a property</h2>
@@ -286,10 +272,9 @@
           </div>
         </div>
 
-        <figure class="post-portrait-figure img-spot">
-          <img src="blog-landscape-lighting-newmarket-02-uplighting-tree.jpg" alt="A Japanese maple uplit from below at night, with the house and garden behind" loading="lazy" width="1500" height="2000" onerror="this.closest('.img-spot').classList.add('img-missing')">
+        <figure class="post-portrait-figure">
+          <img src="blog-landscape-lighting-newmarket-02-uplighting-tree.jpg" alt="A Japanese maple uplit from below at night, with the house and garden behind" loading="lazy" width="1500" height="2000">
           <figcaption>Uplighting on a Japanese maple — the biggest dramatic-impact-per-dollar move, turning a daytime tree into a night-time feature.</figcaption>
-          <div class="img-spot-note"><b>📷 Picture spot 2 — uplighting</b><span class="img-spot-idea">Night shot of uplighting on a mature tree, stone column, or façade — showing the dramatic ground-up wash. Ideally a real PJL install so the fixture quality shows.</span><span class="img-spot-file">Drop in file: <code>blog-landscape-lighting-newmarket-02-uplighting-tree.jpg</code> · landscape ~1600×1000</span></div>
         </figure>
 
         <h2 id="led">Why LED changed outdoor lighting</h2>
@@ -299,10 +284,9 @@
 
         <div class="from-the-truck"><div class="from-the-truck-label">🚐 From the truck</div><p>"We get called in every spring to replace homeowner-installed big-box-store landscape lights that didn't survive the winter. Cheap fixtures, exposed connections, the works. The 'savings' from going DIY usually evaporate after one freeze cycle. Buy quality once."</p></div>
 
-        <figure class="post-inline-figure img-spot">
-          <img src="blog-landscape-lighting-newmarket-03-path-lighting-walkway.jpg" alt="A white farmhouse-style home at night with driveway path lights and an uplit tree" loading="lazy" width="1200" height="1200" onerror="this.closest('.img-spot').classList.add('img-missing')">
+        <figure class="post-inline-figure">
+          <img src="blog-landscape-lighting-newmarket-03-path-lighting-walkway.jpg" alt="A white farmhouse-style home at night with driveway path lights and an uplit tree" loading="lazy" width="1200" height="1200">
           <figcaption>Layered lighting on a modern farmhouse: path lights along the drive, an uplit tree and washed beds — several techniques working together.</figcaption>
-          <div class="img-spot-note"><b>📷 Picture spot 3 — path lighting</b><span class="img-spot-idea">Front walkway or garden-border path lights at night, warm LED, light washing down onto the path. Shows the "warm lamplight, not parking lot" colour temperature you spec.</span><span class="img-spot-file">Drop in file: <code>blog-landscape-lighting-newmarket-03-path-lighting-walkway.jpg</code> · landscape ~1600×1000</span></div>
         </figure>
 
         <h2 id="cost">What does landscape lighting cost?</h2>
@@ -315,21 +299,14 @@
         <p class="answer-lead"><strong>If you're already putting in — or already have — a sprinkler system, yes. Lighting and irrigation share the same trenching and wire pathways, so doing them together with one crew saves the cost and disruption of opening the ground twice. On a Hydrawise system, lighting can even run on a parallel program.</strong></p>
         <p>This is the part most lighting companies can't offer and most irrigation companies don't think about. Because PJL does both, the wiring for your lights can go in the same trench as an irrigation run — one mobilization, one restoration, one crew. If you've got a Hunter <a href="sprinkler-hydrawise.html">Hydrawise controller</a>, we can tie lighting into it so it comes on with the same app you already use.</p>
 
-        <figure class="post-portrait-figure img-spot">
-          <img src="pjl-mainline-repair-overhead.jpeg" alt="A PJL technician working in an open trench beside a driveway with the sod rolled back" loading="lazy" width="1350" height="1800" onerror="this.closest('.img-spot').classList.add('img-missing')">
+        <figure class="post-portrait-figure">
+          <img src="pjl-mainline-repair-overhead.jpeg" alt="A PJL technician working in an open trench beside a driveway with the sod rolled back" loading="lazy" width="1350" height="1800">
           <figcaption>One trench, one crew: with the ground already open for irrigation like this, low-voltage lighting cable goes in the same run — the yard's opened once.</figcaption>
-          <div class="img-spot-note"><b>📷 Picture spot 4 — one trench (the differentiator)</b><span class="img-spot-idea">An open trench with both the low-voltage lighting cable and irrigation poly pipe laid in together, before backfill. This is the shot no lighting-only competitor can show — worth capturing on the next combined job.</span><span class="img-spot-file">Drop in file: <code>blog-landscape-lighting-newmarket-04-lighting-irrigation-one-trench.jpg</code> · landscape ~1600×1000</span></div>
         </figure>
 
         <h2 id="steps">What's the best way to light outdoor steps and stairs?</h2>
         <p class="answer-lead"><strong>Light steps from within the structure — recessed riser lights, or fixtures under a railing or cap — aimed low so the tread is lit without a glare in anyone's eyes. The goal is to make the edge of each step legible, not to floodlight the staircase.</strong></p>
         <p>Stair lighting is where safety and design meet: get it right and the stairs read clearly at night with no harsh glare; get it wrong and you've built a row of tiny spotlights pointed at your guests. Recessed step lights and shielded down-lights on the structure are the reliable answer, spaced so every tread edge catches light.</p>
-
-        <figure class="post-inline-figure img-spot">
-          <img src="blog-landscape-lighting-newmarket-05-step-lighting-stairs.jpg" alt="Recessed riser lights illuminating outdoor stone steps at night" loading="lazy" width="1600" height="1000" onerror="this.closest('.img-spot').classList.add('img-missing')">
-          <figcaption>Step lighting done right: recessed riser lights make each tread edge legible without a glare pointed at your guests.</figcaption>
-          <div class="img-spot-note"><b>📷 Picture spot 5 — step &amp; stair lighting</b><span class="img-spot-idea">Outdoor steps at night with recessed riser lights or under-cap lights — each tread edge lit, no harsh glare. Answers the step-lighting searches directly.</span><span class="img-spot-file">Drop in file: <code>blog-landscape-lighting-newmarket-05-step-lighting-stairs.jpg</code> · landscape ~1600×1000</span></div>
-        </figure>
 
         <h2 id="call">Want to see what your property could look like after dark?</h2>
         <p><a href="book.html">Book a dusk walk-through</a> — we'll show you the four to six highest-impact spots and quote on the spot, no commitment. Or call <a href="tel:+19059600181">(905) 960-0181</a>.</p>
