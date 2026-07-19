@@ -14,7 +14,7 @@
 <meta property="og:description" content="A flow sensor watches your sprinkler system and alerts you the moment a pipe breaks or a valve sticks. How Hydrawise flow monitoring works, and who needs it.">
 <meta property="og:url" content="https://www.pjllandservices.com/blog-irrigation-flow-sensor-gta.html">
 <meta property="og:image" content="https://www.pjllandservices.com/blog-irrigation-flow-sensor-gta.jpg">
-<meta property="article:published_time" content="2026-07-08">
+<meta property="article:published_time" content="2026-07-15">
 <meta property="article:author" content="Patrick Lalande">
 <meta name="twitter:card" content="summary_large_image">
 <title>Irrigation Flow Sensors Explained for GTA Homes | PJL</title>
@@ -32,8 +32,8 @@
   "headline": "Irrigation Flow Sensors Explained for GTA Homes",
   "description": "A flow sensor watches your sprinkler system and alerts you the moment a pipe breaks or a valve sticks. How Hydrawise flow monitoring works, and who needs it.",
   "image": "https://www.pjllandservices.com/blog-irrigation-flow-sensor-gta.jpg",
-  "datePublished": "2026-07-08",
-  "dateModified": "2026-07-08",
+  "datePublished": "2026-07-15",
+  "dateModified": "2026-07-15",
   "author": {
     "@type": "Person",
     "name": "Patrick Lalande",
@@ -147,6 +147,15 @@
 .answer-lead{color:var(--text) !important;}
 .answer-lead strong{color:var(--green);}
 </style>
+<style>
+/* Inline article figures */
+.post-hero-figure{margin:0 0 12px;border-radius:var(--r-lg);overflow:hidden;border:1px solid var(--border);box-shadow:0 8px 24px rgba(15,31,20,.08);}
+.post-inline-figure{margin:34px 0;border-radius:var(--r-lg);overflow:hidden;border:1px solid var(--border);}
+.post-portrait-figure{margin:34px auto;max-width:460px;border-radius:var(--r-lg);overflow:hidden;border:1px solid var(--border);box-shadow:0 6px 18px rgba(15,31,20,.06);background:#fff;}
+.post-hero-figure img,.post-inline-figure img,.post-portrait-figure img{display:block;width:100%;height:auto;}
+.post-hero-figure figcaption,.post-inline-figure figcaption,.post-portrait-figure figcaption{padding:12px 18px;background:var(--cream);font-size:13px;color:var(--text-muted);font-style:italic;border-top:1px solid var(--border);line-height:1.5;}
+@media(max-width:640px){.post-portrait-figure{max-width:340px;}}
+</style>
   <link rel="stylesheet" href="css/chat-widget.css">
 <script type="application/ld+json">
 {
@@ -207,7 +216,7 @@
     <h1>Irrigation flow sensors: the part that catches a leak <em>before your water bill does</em>.</h1>
     <div class="post-meta">
       <span class="post-meta-author"><span class="post-meta-author-avatar">PL</span>Patrick Lalande</span>
-      <span>•</span><span>Updated July 2026</span><span>•</span><span>6 min read</span><span>•</span><span>📍 Newmarket, Aurora &amp; the GTA</span>
+      <span>•</span><span>July 15, 2026</span><span>•</span><span>6 min read</span><span>•</span><span>📍 Newmarket, Aurora &amp; the GTA</span>
     </div>
   </div>
 </section>
@@ -236,6 +245,11 @@
         <p class="answer-lead"><strong>A flow sensor (also called a flow meter) is a small inline device plumbed into your irrigation mainline. It counts the water passing through it in real time. On its own it's just a gauge — paired with a smart controller, it becomes an automatic leak-detection system that watches every zone, every cycle.</strong></p>
         <p>Physically, it sits on the mainline downstream of the shut-off — a short fitting spliced into the poly line, usually in or near the valve box. It sends a pulse signal to a sensor input on the controller. Every pulse is a known volume of water, so the controller always knows the live flow rate in litres or gallons per minute. Nothing about it is exotic; it's a metering fitting and two wires. What makes it useful is the controller reading it.</p>
 
+        <figure class="post-inline-figure">
+          <img src="blog-irrigation-flow-sensor-gta-01-flow-meter-valve-box.jpg" alt="Flow meter in an irrigation valve box with the Hydrawise app showing live flow on a phone" loading="lazy" decoding="async" width="1600" height="1067">
+          <figcaption>A flow meter in the valve box, read live in the Hydrawise app — the controller knows every litre the system uses, in real time.</figcaption>
+        </figure>
+
         <h2 id="how">How does flow monitoring actually catch a leak?</h2>
         <p class="answer-lead"><strong>The controller learns each zone's normal flow rate over its first cycles. From then on it watches the live rate against that baseline. A rate that's too high means a break or a sheared head dumping water; too low means a clog, a closed valve, or lost pressure. Either reading trips an alert.</strong></p>
         <p>It's worth knowing that a Hydrawise system watches for faults in <em>two</em> separate ways, and they catch different problems:</p>
@@ -244,6 +258,11 @@
           <li><strong>Flow monitoring (this is the part that needs a flow meter).</strong> The current check can't see water — a pipe can burst while the wiring reads perfectly fine. That's what the flow meter is for. It catches the <em>hydraulic</em> faults: a mainline break, a zone running way over its normal flow, a head that got driven over.</li>
         </ul>
         <p>Together they cover both halves of "something's wrong": the electrical side and the water side. That distinction is the difference between a gauge and a system.</p>
+
+        <figure class="post-portrait-figure">
+          <img src="hydrawise-display-mobile.png" alt="The Hunter Hydrawise app on a phone showing water use and per-zone reports" loading="lazy" decoding="async" width="1197" height="1432">
+          <figcaption>The Hydrawise app on your phone: fault and flow alerts land here, alongside your water-use summary and every zone's report.</figcaption>
+        </figure>
 
         <h2 id="problems">What problems does it actually catch?</h2>
         <p>The failures a flow sensor is built to catch are exactly the expensive, slow-to-notice ones:</p>
@@ -269,6 +288,11 @@
         <h2 id="retrofit">Can you add a flow sensor to a system you already have?</h2>
         <p class="answer-lead"><strong>Yes — as long as you have, or add, a compatible smart controller. The flow meter installs on the mainline and wires into a spare sensor input on a Hunter HPC-400 (Hydrawise). On an older non-smart timer, the controller comes first — the sensor is part of that same upgrade, not a separate project.</strong></p>
         <p>The good news is it reuses everything already in the ground: your pipe, your valves, your heads. It's a controller-level upgrade, not a rebuild. PJL is a Hydrawise Authorized Installer and Hunter-certified, so the meter, the wiring, and the alert setup in the app all get done in one visit. A Hydrawise retrofit starts at <span data-price="controller_1_4">$595</span> by zone count; the flow meter is added on top and quoted on site, because the price depends on your mainline size and how the valve box is laid out.</p>
+
+        <figure class="post-portrait-figure">
+          <img src="blog-irrigation-flow-sensor-gta-03-tech-wiring-hpc400.jpg" alt="A PJL-installed Hunter Hydrawise controller mounted on a wall" loading="lazy" decoding="async" width="1500" height="2000">
+          <figcaption>The flow meter wires into a spare sensor input on the Hunter Hydrawise controller — a controller-level add-on, not a system rebuild.</figcaption>
+        </figure>
 
         <div class="callout"><div class="callout-inner"><h3>Turn your system into one that watches itself.</h3><p>A Hunter HPC-400 (Hydrawise) skips watering when it rains, flags a wiring fault the moment it happens, and — with a flow meter added — pings your phone when a pipe breaks. It reuses your existing wiring, valves and heads, so it's a swap at the controller, not a rebuild.</p><a href="sprinkler-hydrawise.html" class="callout-cta">See the Hydrawise WiFi upgrade <span aria-hidden="true">→</span></a></div></div>
 
