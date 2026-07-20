@@ -191,6 +191,7 @@ Confirmed list of every input channel:
 | Booking form (`book.html`) | Full structured intake |
 | Self-intake form (`new-customer.html` → `POST /api/new-customer`) | Contact + property address + notes, plus a structured **bill-to** behind a collapsed "Bill to a different person or company" disclosure (billing name/company + billing address required when used; billing email/phone optional). Lands as `lead.billing` and seeds the Customer's billing fields — no more re-keying a billing entity out of free-text notes. |
 | Admin (Patrick) | Anything — full create/edit access |
+| Admin books from lead (`/admin` lead card → "Book appointment") | An appointment **bound to an existing lead** (`POST /api/booking/reserve` with an admin-gated `leadId`) — for AI-diagnostic leads that captured a quote but didn't self-book. Attaches `lead.booking` + a canonical `BK-` to the lead already in hand (preserving its source-quote link) instead of creating a new lead. Optional per-booking "mark quote accepted (verbal)" vs. "leave open". See §4.2.1.1. |
 | Customer portal | Limited edits: phone, email, best time to reach |
 | Phone calls | Logged manually only when something significant happens |
 | Twilio inbound texts | Low priority for now |
@@ -218,6 +219,12 @@ When new info arrives, match before creating:
 **Admin edit:**
 - Portal updates immediately (no save delay)
 - Change history logged forever (who, when, old value, new value)
+
+**Admin books from lead:**
+- Binds to the existing lead (no new lead / no duplicate); activity log gets a "Service booked from lead" entry
+- Canonical `BK-` mirrors `forcedByAdmin` + `force_booked_by_admin` when custom-time; `sourceQuoteId` carried from `lead.quoteId`
+- If "mark quote accepted" chosen: quote flips to accepted (verbal, admin-recorded) with an activity entry — **no** second booking created
+- Customer gets the standard booked / site-visit notification; Patrick gets the new-lead alert stamped `BOOKED · …`
 
 **Customer portal edit:**
 - Log silently (no notification)
@@ -527,6 +534,22 @@ The override **still applies**:
 Every force-booked record carries `forcedByAdmin: true` on `lead.booking` and on the canonical Booking record in `bookings.json`, and appends a `force_booked_by_admin` entry to the Booking's `history[]`. Both the embedded read-cache and the canonical record can be queried for "was this force-booked?" without re-parsing the audit trail.
 
 The schedule modal authentcates via the existing admin session cookie (sent on every fetch by default-`same-origin` credentials). The anti-bot/Turnstile gate is bypassed for any request whose session resolves to an admin or tech user — admin auth itself is the bot filter. Honeypot, time-trap, and per-IP rate-limit checks still apply (cheap, harmless).
+
+#### 4.2.1.1 Book from an existing lead (Book-from-lead brief, Jul 2026)
+
+The `Schedule → "Book customer"` modal always resolves/creates a lead from the typed name/email/address — for an AI-diagnostic lead that already exists (captured a quote but didn't self-book), that produces a **second, disconnected lead** for the same person. The CRM lead detail card (`/admin`, `admin.html`) closes that gap with a **"Book appointment"** action that books directly against the lead in hand.
+
+It reuses the same admin custom-time path — the shared `/js/time-picker.js` in `mode: "admin", allowCustomTime: true` (identical construction to `crm-reschedule.js`), and the same `POST /api/booking/reserve` with `source: "admin_custom"`. The **only** additions are:
+
+- **`leadId` binding.** The modal sends `leadId` on the reserve POST. When present **and** the request carries a valid admin/tech session, the server writes `lead.booking` onto **that** lead and mirrors a canonical `BK-YYYY-NNNN` instead of resolving/creating a new lead. `leadId` is ignored for any non-admin session, so public + AI-chat callers are unaffected (they never send it). The lead's `contact`, `features`, `totals`, and `quoteId` are left untouched — pricing was already snapshotted at quote/lead creation.
+- **Source-quote link comes for free.** `bookings.upsertFromLead` reads `lead.quoteId` into the canonical record's `sourceQuoteId` — no new Booking field.
+- **Per-booking quote choice.** When the lead carries an `ai_repair_quote` that isn't already accepted, the modal shows a two-option control:
+  - **"Mark quote … accepted"** — customer agreed on the phone. Sends `markQuoteAccepted: true`; the server calls the **booking-neutral** `quotes.accept()` (flips status → accepted, stamps `acceptedAt`, back-links this booking as `bookingId`). `accept()` never creates a booking of its own, so there is **no** double-book. Default is **not** this — a quote's status is never flipped silently.
+  - **"Leave quote open — just book"** — creates the booking, leaves quote status untouched, keeps the source-quote link.
+
+  When the lead has no quote, the control is absent.
+- **Bonus preservation, independent of the accept choice.** The AI-Correct-Diagnosis bonus (`quote.intakeGuarantee.applies`) rides `booking → lead.quoteId → WO`: `workOrders.create` copies `intakeGuarantee` onto the WO whenever a linked quote carries `applies: true`, and it does **NOT** gate on `quote.status`. So the bonus lands on the resulting WO whether Patrick marked the quote accepted or left it open — correct, because the bonus is decided on-site (Match / Didn't Match), and the binding moment is the signed WO, not the quote status. *(Doc/code note: comments in `work-orders.js` describe this propagation as "from an accepted quote"; the code has never checked acceptance — linked-regardless-of-status is the actual and intended behavior.)*
+- **Guardrails intact.** Everything from §4.2.1 still applies: forced custom times carry `forcedByAdmin: true` + a `force_booked_by_admin` history entry, the physical-conflict 409 prevents double-submitting the same slot, and no WO is auto-created here (WO creation stays lazy — today's-schedule "open WO" / admin form — and a fresh AI lead with no property scaffolds a one-zone empty WO rather than erroring). If the lead already has a booking, the card warns before a second one is created (no silent duplicate); a deliberate second visit overwrites the read-cache and reschedules the single canonical record (multi-booking-per-lead coordination is out of scope, unchanged).
 
 #### 4.2.2 Customer-facing time window labeling
 
