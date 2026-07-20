@@ -451,6 +451,7 @@ function renderDetail() {
   renderPhotosDetail(lead);
   renderTranscriptDetail(lead);
   renderQuoteDetail(lead);
+  renderBookAction(lead);
   renderWorkOrderDetail(lead);
   renderFieldWoDetail(lead);
   renderContactPreview(lead);
@@ -1596,3 +1597,317 @@ loadLeads();
 
   load();
 })();
+
+// ===================================================================
+// Book appointment — book an existing lead directly from its card.
+// (Book-from-lead brief.) Reuses the shared month-calendar picker in
+// admin custom-time mode (same construction as crm-reschedule.js) and
+// posts to /api/booking/reserve with a `leadId` binding so the booking
+// attaches to THIS lead (+ its source quote) instead of spawning a
+// duplicate. No new picker, no new endpoint.
+// ===================================================================
+const detailBookSection  = document.getElementById("detailBookSection");
+const detailBookBtn       = document.getElementById("detailBookBtn");
+const detailBookHint      = document.getElementById("detailBookHint");
+const detailBookExisting  = document.getElementById("detailBookExisting");
+const bookLeadDialog      = document.getElementById("bookLeadDialog");
+const bookLeadClose       = document.getElementById("bookLeadClose");
+const bookLeadCancel      = document.getElementById("bookLeadCancel");
+const bookLeadSubmit      = document.getElementById("bookLeadSubmit");
+const bookLeadFor         = document.getElementById("bookLeadFor");
+const bookLeadService     = document.getElementById("bookLeadService");
+const bookLeadZonesWrap   = document.getElementById("bookLeadZonesWrap");
+const bookLeadZones       = document.getElementById("bookLeadZones");
+const bookLeadQuoteChoice = document.getElementById("bookLeadQuoteChoice");
+const bookLeadQuoteLegend = document.getElementById("bookLeadQuoteLegend");
+const bookLeadQuoteAcceptLabel = document.getElementById("bookLeadQuoteAcceptLabel");
+const bookLeadPicker      = document.getElementById("bookLeadPicker");
+const bookLeadPickHelp    = document.getElementById("bookLeadPickHelp");
+const bookLeadSlotStart   = document.getElementById("bookLeadSlotStart");
+const bookLeadSlotSource  = document.getElementById("bookLeadSlotSource");
+const bookLeadError       = document.getElementById("bookLeadError");
+const bookLeadStatus      = document.getElementById("bookLeadStatus");
+
+let bookLeadServicesCatalog = {};
+let bookLeadPickerDestroy = null;
+let bookLeadContextLead = null;
+
+function bookLeadAddressOf(lead) {
+  return (lead && lead.contact && lead.contact.address)
+    || (lead && lead.contactExport && lead.contactExport.address && lead.contactExport.address.full)
+    || "";
+}
+
+function bookServiceIsSeasonal(key) {
+  const svc = bookLeadServicesCatalog[key];
+  return Boolean(svc && (svc.family === "spring_opening" || svc.family === "fall_closing"));
+}
+
+// Show / hide the "Book appointment" section on the lead card. Always
+// visible for a real lead; when the lead already has a booking we keep
+// the button but warn (§2E) so a deliberate second visit is possible
+// without silently duplicating.
+function renderBookAction(lead) {
+  if (!detailBookSection) return;
+  if (!lead) { detailBookSection.hidden = true; return; }
+  detailBookSection.hidden = false;
+
+  const hasBooking = Boolean(lead.booking && lead.booking.start);
+  if (hasBooking && detailBookExisting) {
+    let when = "";
+    try {
+      when = new Date(lead.booking.start).toLocaleString("en-CA", {
+        weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit"
+      });
+    } catch { when = ""; }
+    detailBookExisting.textContent = `Heads up: this lead already has a booking${when ? ` on ${when}` : ""}. Booking again creates a second visit.`;
+    detailBookExisting.hidden = false;
+    if (detailBookBtn) detailBookBtn.textContent = "📅 Book another appointment";
+  } else {
+    if (detailBookExisting) detailBookExisting.hidden = true;
+    if (detailBookBtn) detailBookBtn.textContent = "📅 Book appointment";
+  }
+}
+
+async function ensureBookServicesLoaded() {
+  if (bookLeadService && bookLeadService.options.length > 0) return;
+  try {
+    const r = await fetch("/api/booking/services", { cache: "no-store" });
+    const data = await r.json();
+    bookLeadServicesCatalog = (data.ok && data.services) || {};
+    const entries = Object.entries(bookLeadServicesCatalog).filter(([, s]) => s.bookable);
+    const groups = {
+      "Spring opening (residential)":     entries.filter(([k, s]) => s.family === "spring_opening" && !k.includes("commercial")),
+      "Spring opening (commercial)":      entries.filter(([k, s]) => s.family === "spring_opening" && k.includes("commercial")),
+      "Fall winterization (residential)": entries.filter(([k, s]) => s.family === "fall_closing" && !k.includes("commercial")),
+      "Fall winterization (commercial)":  entries.filter(([k, s]) => s.family === "fall_closing" && k.includes("commercial")),
+      "Other": entries.filter(([, s]) => !["spring_opening", "fall_closing"].includes(s.family))
+    };
+    bookLeadService.innerHTML = "";
+    for (const [groupLabel, items] of Object.entries(groups)) {
+      if (!items.length) continue;
+      const og = document.createElement("optgroup");
+      og.label = groupLabel;
+      items.forEach(([key, svc]) => {
+        const o = document.createElement("option");
+        o.value = key;
+        o.textContent = svc.label || key;
+        og.appendChild(o);
+      });
+      bookLeadService.appendChild(og);
+    }
+  } catch {
+    // Leave empty — submit will catch the missing service.
+  }
+}
+
+// Seed the service dropdown from the lead. A repair lead's booked
+// service defaults to sprinkler_repair; if the lead's first feature is
+// itself a bookable service key (e.g. a seasonal self-serve lead) we use
+// that. Otherwise leave the picker on its first option.
+function seedBookService(lead) {
+  if (!bookLeadService) return;
+  const keys = new Set(Object.keys(bookLeadServicesCatalog));
+  let chosen = "";
+  const firstFeatureKey = lead && Array.isArray(lead.features) && lead.features[0] && lead.features[0].key;
+  if (firstFeatureKey && keys.has(firstFeatureKey)) {
+    chosen = firstFeatureKey;
+  } else if (lead && lead.quote && lead.quote.type === "ai_repair_quote" && keys.has("sprinkler_repair")) {
+    chosen = "sprinkler_repair";
+  }
+  if (chosen) bookLeadService.value = chosen;
+  syncBookZonesVisibility();
+}
+
+function syncBookZonesVisibility() {
+  if (!bookLeadZonesWrap || !bookLeadService) return;
+  bookLeadZonesWrap.hidden = !bookServiceIsSeasonal(bookLeadService.value);
+}
+
+function renderBookQuoteChoice(lead) {
+  if (!bookLeadQuoteChoice) return;
+  const q = lead && lead.quote;
+  const show = Boolean(q && q.type === "ai_repair_quote" && q.status !== "accepted");
+  bookLeadQuoteChoice.hidden = !show;
+  if (!show) return;
+  if (bookLeadQuoteLegend) bookLeadQuoteLegend.textContent = `This lead has quote ${q.id || "Q-—"}`;
+  if (bookLeadQuoteAcceptLabel) bookLeadQuoteAcceptLabel.textContent = `Mark quote ${q.id || ""} accepted (customer agreed on the phone)`.replace(/\s+/g, " ").trim();
+  // Default to "leave open" — never flip a quote's status silently.
+  const openRadio = bookLeadQuoteChoice.querySelector('input[value="open"]');
+  if (openRadio) openRadio.checked = true;
+}
+
+function destroyBookPicker() {
+  if (typeof bookLeadPickerDestroy === "function") {
+    try { bookLeadPickerDestroy(); } catch (_) {}
+  }
+  bookLeadPickerDestroy = null;
+}
+
+function mountBookPicker() {
+  if (!bookLeadPicker) return;
+  destroyBookPicker();
+  bookLeadSlotStart.value = "";
+  bookLeadSlotSource.value = "slot";
+  if (bookLeadSubmit) bookLeadSubmit.disabled = true;
+
+  const serviceKey = bookLeadService ? bookLeadService.value : "";
+  const address = bookLeadAddressOf(bookLeadContextLead);
+  if (!serviceKey || !address) {
+    bookLeadPicker.innerHTML = "";
+    if (bookLeadPickHelp) {
+      bookLeadPickHelp.hidden = false;
+      bookLeadPickHelp.textContent = !serviceKey
+        ? "Pick a service to load available times."
+        : "This lead has no address — add one on the lead before booking.";
+    }
+    return;
+  }
+  if (typeof window.mountTimePicker !== "function") {
+    if (bookLeadPickHelp) {
+      bookLeadPickHelp.hidden = false;
+      bookLeadPickHelp.textContent = "Time picker failed to load. Refresh the page and try again.";
+    }
+    return;
+  }
+  if (bookLeadPickHelp) bookLeadPickHelp.hidden = true;
+
+  bookLeadPickerDestroy = window.mountTimePicker(bookLeadPicker, {
+    mode: "admin",
+    allowCustomTime: true,
+    loadAvailability: async ({ from, to }) => {
+      const url = `/api/booking/availability`
+        + `?service=${encodeURIComponent(serviceKey)}`
+        + `&address=${encodeURIComponent(address)}`
+        + `&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`;
+      const r = await fetch(url, { cache: "no-store" });
+      const data = await r.json();
+      if (!data.ok) throw new Error((data.errors || ["Couldn't load times."]).join(" "));
+      return { days: data.days || [] };
+    },
+    onSelect: (iso, slotMeta) => {
+      bookLeadSlotStart.value = iso;
+      bookLeadSlotSource.value = (slotMeta && slotMeta.source === "admin_custom") ? "admin_custom" : "slot";
+      if (bookLeadSubmit) bookLeadSubmit.disabled = false;
+      if (bookLeadError) bookLeadError.hidden = true;
+    }
+  });
+}
+
+function openBookDialog() {
+  const lead = leads.find((item) => item.id === activeLeadId);
+  if (!lead || !bookLeadDialog) return;
+  bookLeadContextLead = lead;
+
+  if (bookLeadError) { bookLeadError.hidden = true; bookLeadError.textContent = ""; }
+  if (bookLeadStatus) bookLeadStatus.textContent = "";
+  if (bookLeadSubmit) { bookLeadSubmit.disabled = true; bookLeadSubmit.textContent = "Confirm booking"; }
+  if (bookLeadZones) bookLeadZones.value = "";
+
+  const name = (lead.contact && lead.contact.name) || "this lead";
+  const addr = bookLeadAddressOf(lead);
+  if (bookLeadFor) bookLeadFor.textContent = addr ? `${name} · ${addr}` : name;
+
+  ensureBookServicesLoaded().then(() => {
+    seedBookService(lead);
+    renderBookQuoteChoice(lead);
+    mountBookPicker();
+  });
+
+  if (typeof bookLeadDialog.showModal === "function") bookLeadDialog.showModal();
+  else bookLeadDialog.setAttribute("open", "");
+}
+
+function closeBookDialog() {
+  destroyBookPicker();
+  if (!bookLeadDialog) return;
+  if (typeof bookLeadDialog.close === "function" && bookLeadDialog.open) bookLeadDialog.close();
+  else bookLeadDialog.removeAttribute("open");
+}
+
+async function submitBookLead() {
+  const lead = bookLeadContextLead;
+  if (!lead || !bookLeadSubmit) return;
+  const serviceKey = bookLeadService ? bookLeadService.value : "";
+  const slotStart = bookLeadSlotStart ? bookLeadSlotStart.value : "";
+  if (bookLeadError) bookLeadError.hidden = true;
+
+  if (!serviceKey) { showBookError("Pick a service first."); return; }
+  if (!slotStart) { showBookError("Pick a time slot first."); return; }
+  const address = bookLeadAddressOf(lead);
+  if (!address) { showBookError("This lead has no address — add one before booking."); return; }
+
+  // Quote choice — only meaningful when the accept/leave-open control is shown.
+  let markQuoteAccepted = false;
+  if (bookLeadQuoteChoice && !bookLeadQuoteChoice.hidden) {
+    const picked = bookLeadQuoteChoice.querySelector('input[name="bookLeadQuote"]:checked');
+    markQuoteAccepted = Boolean(picked && picked.value === "accept");
+  }
+
+  const c = lead.contact || {};
+  const payload = {
+    leadId: lead.id,
+    serviceKey,
+    slotStart,
+    source: bookLeadSlotSource ? bookLeadSlotSource.value : "slot",
+    contact: {
+      name: c.name || "",
+      firstName: c.firstName || "",
+      lastName: c.lastName || "",
+      phone: c.phone || "",
+      email: c.email || "",
+      address,
+      notes: c.notes || ""
+    },
+    zoneCount: (bookLeadZones && bookLeadZones.value.trim()) || null,
+    markQuoteAccepted,
+    pageUrl: location.href,
+    userAgent: navigator.userAgent
+  };
+
+  bookLeadSubmit.disabled = true;
+  bookLeadSubmit.textContent = "Booking…";
+  if (bookLeadStatus) bookLeadStatus.textContent = "Creating booking…";
+  try {
+    const r = await fetch("/api/booking/reserve", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify(payload)
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok || !data.ok) {
+      const err = new Error(data.message || (data.errors || ["Booking failed."]).join(" "));
+      err.code = data.code || "";
+      throw err;
+    }
+    if (bookLeadStatus) {
+      bookLeadStatus.textContent = data.quoteAccepted
+        ? `Booked ${data.bookingId || ""} · quote marked accepted.`.trim()
+        : `Booked ${data.bookingId || ""}.`.trim();
+    }
+    closeBookDialog();
+    await loadLeads();
+  } catch (err) {
+    const codeStr = err.code ? ` (${err.code})` : "";
+    showBookError((err.message || "Booking failed.") + codeStr);
+    bookLeadSubmit.disabled = false;
+    bookLeadSubmit.textContent = "Confirm booking";
+    if (bookLeadStatus) bookLeadStatus.textContent = "";
+  }
+}
+
+function showBookError(msg) {
+  if (!bookLeadError) return;
+  bookLeadError.textContent = msg;
+  bookLeadError.hidden = false;
+}
+
+if (detailBookBtn) detailBookBtn.addEventListener("click", openBookDialog);
+if (bookLeadClose) bookLeadClose.addEventListener("click", closeBookDialog);
+if (bookLeadCancel) bookLeadCancel.addEventListener("click", closeBookDialog);
+if (bookLeadSubmit) bookLeadSubmit.addEventListener("click", submitBookLead);
+if (bookLeadService) bookLeadService.addEventListener("change", () => { syncBookZonesVisibility(); mountBookPicker(); });
+// Native <dialog> "cancel" (Esc) — clean up the picker too.
+if (bookLeadDialog) bookLeadDialog.addEventListener("cancel", () => { destroyBookPicker(); });
+if (bookLeadDialog) bookLeadDialog.addEventListener("close", () => { destroyBookPicker(); });

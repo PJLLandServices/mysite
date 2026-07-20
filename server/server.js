@@ -15928,6 +15928,163 @@ Customer signature captured at ${new Date().toISOString()}.`;
       // start + service.minutes for admin-custom precise times.
       const endDate = new Date(matched.end);
 
+      // ---- Admin: book from an EXISTING lead (Book-from-lead brief) --------
+      // When an admin session supplies `leadId`, attach the booking to THAT
+      // lead instead of resolving/creating a new one. This is the CRM "Book
+      // appointment" action on the lead detail card: Patrick phoned an
+      // AI-diagnostic lead that didn't self-book, and now books them in
+      // without spawning a duplicate lead.
+      //
+      // Gated on isAdmin: public + AI-chat callers never send `leadId`, and a
+      // spoofed `leadId` from a non-admin session is ignored (falls through
+      // to the normal new-lead path below). The booking envelope, canonical
+      // BK- mirror, forced-by-admin audit stamp, source-quote link, and the
+      // AI-Correct-Diagnosis bonus all ride the existing lead untouched:
+      //   - sourceQuoteId comes for free (upsertFromLead reads lead.quoteId)
+      //   - the bonus rides booking → lead.quoteId → WO regardless of quote
+      //     status (work-orders.js copies intakeGuarantee whenever the quote
+      //     is linked), so it lands whether or not Patrick marks the quote
+      //     accepted here.
+      const boundLeadId = isAdmin ? normalizeString(payload.leadId, 40) : "";
+      if (boundLeadId) {
+        const all = await readLeads();
+        const idx = all.findIndex((l) => l.id === boundLeadId);
+        if (idx === -1) {
+          return sendJson(res, 404, {
+            ok: false,
+            code: "lead_unknown",
+            message: "Lead not found — can't book against it.",
+            errors: ["Lead not found."]
+          });
+        }
+        const lead = all[idx];
+
+        // Customer-confirmed zone count (same parse as the new-lead path).
+        const rawZones = normalizeString(payload.zoneCount, 12);
+        let zoneCount = null;
+        if (rawZones === "unsure") {
+          zoneCount = "unsure";
+        } else if (/^\d+$/.test(rawZones)) {
+          const n = Number(rawZones);
+          if (n >= 1 && n <= 50) zoneCount = n;
+        }
+
+        const pricing = priceForBooking(serviceKey, zoneCount);
+        const now = new Date().toISOString();
+        const boundIsSiteVisit = service.category === "consult";
+
+        // Attach the booking envelope to the EXISTING lead. We deliberately
+        // do NOT overwrite lead.features / lead.totals / lead.quoteId — the
+        // repair pricing was already snapshotted on the quote at intake, and
+        // the source-quote link already lives on the lead. The workOrder
+        // envelope total prefers the lead's snapshotted total (the quote),
+        // falling back to the booked-service price for quote-less leads.
+        const envelopeTotal = (lead.totals && Number.isFinite(lead.totals.expectedTotal))
+          ? lead.totals.expectedTotal
+          : pricing.price;
+        lead.booking = {
+          start: startDate.toISOString(),
+          end: endDate.toISOString(),
+          durationMinutes: matched.durationMinutes,
+          bucketKey: matched.bucketKey || null,
+          bucketWindow: matched.bucketWindow || null,
+          bucketLabel: matched.timeLabel || null,
+          forcedByAdmin,
+          serviceKey,
+          serviceLabel: service.label,
+          zoneCount,
+          coords: { lat: customerCoords.lat, lng: customerCoords.lng, formattedAddress: customerCoords.formattedAddress },
+          workOrder: {
+            id: makeWorkOrderId(),
+            status: "scheduled",
+            total: envelopeTotal,
+            priceLabel: pricing.label,
+            priceNote: pricing.note || null,
+            custom: Boolean(pricing.custom),
+            currency: pricing.currency,
+            documentReady: false,
+            documentUrl: null,
+            diagnosis: null,
+            createdAt: now
+          }
+        };
+        lead.status = boundIsSiteVisit ? "site_visit" : "won";
+        lead.crm = lead.crm || {};
+        lead.crm.status = lead.status;
+        lead.crm.activity = Array.isArray(lead.crm.activity) ? lead.crm.activity : [];
+        lead.crm.activity.unshift({
+          at: now,
+          type: "update",
+          text: `${boundIsSiteVisit ? "Site visit booked" : "Service booked"} from lead: ${service.label} on ${matched.dayLabel} at ${matched.timeLabel}.`
+        });
+        lead.crm.lastUpdated = now;
+        all[idx] = lead;
+        await writeLeads(all);
+
+        // Mirror into the canonical Booking folder. Picks up sourceQuoteId
+        // from lead.quoteId and stamps force_booked_by_admin when forced.
+        // Best-effort — a mirror failure doesn't roll back the lead.booking.
+        let canonicalBooking = null;
+        try {
+          const liveLeads = await readLeads();
+          const fresh = liveLeads.find((l) => l.id === lead.id);
+          if (fresh) canonicalBooking = await bookings.upsertFromLead(fresh);
+        } catch (err) {
+          console.warn("[bookings] upsertFromLead (book-from-lead) failed:", err?.message);
+        }
+
+        // Optional: mark the linked AI repair quote accepted (customer agreed
+        // on the phone). accept() is booking-neutral — it flips status →
+        // accepted, stamps acceptedAt, and back-links THIS booking; it never
+        // creates a booking of its own, so there's no double-book. When left
+        // open we touch the quote at all only to keep the link (already on
+        // the lead) — the bonus rides regardless of status.
+        if (payload.markQuoteAccepted && lead.quoteId) {
+          try {
+            await quotes.accept(lead.quoteId, {
+              leadId: lead.id,
+              bookingId: canonicalBooking ? canonicalBooking.id : null,
+              by: "admin",
+              note: "Verbal acceptance recorded by admin at booking (phone)."
+            });
+            const acceptedLeads = await readLeads();
+            const ai = acceptedLeads.findIndex((l) => l.id === lead.id);
+            if (ai !== -1) {
+              acceptedLeads[ai].crm = acceptedLeads[ai].crm || {};
+              acceptedLeads[ai].crm.activity = Array.isArray(acceptedLeads[ai].crm.activity) ? acceptedLeads[ai].crm.activity : [];
+              acceptedLeads[ai].crm.activity.unshift({
+                at: new Date().toISOString(),
+                type: "update",
+                text: `Quote ${lead.quoteId} marked accepted (verbal, recorded at booking).`
+              });
+              await writeLeads(acceptedLeads);
+            }
+          } catch (err) {
+            console.warn("[quotes] accept on book-from-lead failed:", err?.message);
+          }
+        }
+
+        // Notify Patrick + the customer, same channels as the new-lead path.
+        const baseUrl = process.env.PUBLIC_BASE_URL || baseUrlFromReq(req);
+        const decorated = decorateLeadForAdmin(lead, req);
+        Promise.allSettled([
+          sendNewLeadEmail({ ...decorated, sourceLabel: `BOOKED · ${service.label} · ${matched.dayLabel} ${matched.timeLabel}` }, { baseUrl }),
+          sendNewLeadSms({ ...decorated, sourceLabel: `BOOKED ${matched.timeLabel}` }, { baseUrl }),
+          notifyCustomer(boundIsSiteVisit ? "site_visit" : "booked", decorated, { baseUrl })
+        ]).catch(() => {});
+
+        return sendJson(res, 201, {
+          ok: true,
+          leadId: lead.id,
+          bookingId: canonicalBooking ? canonicalBooking.id : null,
+          booking: lead.booking,
+          workOrderId: lead.booking.workOrder.id,
+          quoteAccepted: Boolean(payload.markQuoteAccepted && lead.quoteId),
+          boundToExistingLead: true,
+          portalUrl: decorated.portalUrl
+        });
+      }
+
       // Build the lead. Status is set to a category that maps to "scheduled" —
       // for site visits we go "site_visit", for direct work we go "won" (because
       // the customer has effectively committed to the booking).

@@ -192,7 +192,7 @@ Pages with their primary route + purpose:
 | Page | Route | What it does |
 |---|---|---|
 | `today.html` | `/admin/today` | Tech morning hub — today's confirmed bookings with navigate + notify + open-WO actions per row. |
-| `admin.html` | `/admin` | Lead pipeline / CRM dashboard. Search, filter by stage, open lead detail card. Inline quote display + property link conflict detection. |
+| `admin.html` | `/admin` | Lead pipeline / CRM dashboard. Search, filter by stage, open lead detail card. Inline quote display + property link conflict detection. **"Book appointment"** action on the lead detail card opens the shared admin time picker (custom-time enabled) pre-filled from the lead and books directly against it — for AI-diagnostic leads that didn't self-book — without creating a duplicate lead. |
 | `schedule.html` | `/admin/schedule` | Booking calendar. Block hours, manual booking creation. |
 | `handoff.html` | `/admin/handoff` | Manual handoff — admin sends a customer a booking link + portal access. |
 | `outreach.html` | `/admin/outreach` | Seasonal Outreach (feature-seasonal-outreach-brief.md). Picks Spring or Fall + year; lists every eligible property with its booking state, contact state, and opt-out state; filters; bulk-sends a portal booking link via email + SMS via `outreach.sendBulk`; per-season message template editor; backfill banner for properties with a blank `customerName`. |
@@ -338,8 +338,17 @@ Properties
 Bookings + scheduling
   POST   /api/booking/reserve                    ← public booking submit; admin sessions can additionally pass
                                                    `source: "admin_custom"` to bypass corridor + hours guardrails
-                                                   (still respects physical conflicts). Failure payload is
-                                                   `{ ok: false, code, message, details?, errors[] }` —
+                                                   (still respects physical conflicts). Admin sessions can ALSO
+                                                   pass `leadId` to bind the booking to an EXISTING lead
+                                                   ("book from lead") instead of resolving/creating a new one —
+                                                   writes `lead.booking` onto that lead + a canonical `BK-` record
+                                                   (sourceQuoteId picked up from `lead.quoteId`), no duplicate
+                                                   lead. `leadId` is honored only for a valid admin/tech session;
+                                                   public + AI-chat callers never send it. Optional
+                                                   `markQuoteAccepted: true` flips the linked AI repair quote to
+                                                   accepted (verbal, admin-recorded) via the booking-neutral
+                                                   `quotes.accept()` — it never spawns a second booking. Failure
+                                                   payload is `{ ok: false, code, message, details?, errors[] }` —
                                                    `message` is admin-grade, `errors[]` is customer-friendly
                                                    for back-compat.
   GET    /api/bookings, /api/bookings/:id
@@ -754,6 +763,29 @@ lead.booking persists with forcedByAdmin: true. Canonical BK-YYYY-NNNN
 Customer-facing email/SMS/portal show the half-day bucket
    ("Morning Appointment (8 AM – 12 PM)") derived from < 12 / ≥ 12.
 Admin surfaces show the precise minute.
+```
+
+**Book from a lead (Book-from-lead brief):** AI-diagnostic leads that captured a quote but didn't self-book land in the CRM with a lead + `ai_repair_quote` and no booking. Patrick phones them; when they say yes he books directly from the lead card — no duplicate lead.
+
+```
+/admin → open lead detail → "Book appointment" → modal reuses the shared
+   admin time picker (custom-time enabled), pre-filled from the lead
+   ↓
+POST /api/booking/reserve with { leadId, source: "admin_custom", ... } (admin-gated)
+   ↓
+Server binds the booking to THAT lead: writes lead.booking (forcedByAdmin
+   when custom-time) + a canonical BK-YYYY-NNNN whose sourceQuoteId is picked
+   up from lead.quoteId. No new lead, no new quote, pricing untouched.
+   ↓
+When the lead has an ai_repair_quote, the modal offers a per-booking choice:
+   "Mark quote accepted" (verbal, admin-recorded — flips status via the
+   booking-neutral quotes.accept(), NO second booking) OR "Leave open".
+   ↓
+The AI-Correct-Diagnosis bonus rides booking → lead.quoteId → WO regardless
+   of the accept/leave-open choice (work-orders.js copies intakeGuarantee
+   whenever the quote is linked — it does NOT gate on quote status). The WO
+   itself is still created lazily (today's-schedule "open WO" / admin form);
+   a fresh AI lead with no property scaffolds a one-zone empty WO, no error.
 ```
 
 ### 2. Materials → POs (Phase 1-4 of materials management)
