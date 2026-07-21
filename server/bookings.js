@@ -108,7 +108,7 @@ function render() {
       </header>
       <p class="bk-card__service">${esc(b.serviceLabel || b.serviceKey || "—")}</p>
       <p class="bk-card__customer">${esc(b.customerName) || "(no customer)"}</p>
-      <p class="bk-card__address">${esc(b.address) || "—"}</p>
+      <p class="bk-card__address"${b.address ? ` data-map-address="${esc(b.address)}"` : ""}>${esc(b.address) || "—"}</p>
       <p class="bk-card__datetime">${esc(formatDateTime(b.scheduledFor))}</p>
       <p class="bk-card__state">${esc(stateText)}</p>
     `;

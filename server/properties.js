@@ -106,7 +106,7 @@ function render() {
         <strong>${escapeHtml(p.customerName) || "Unnamed customer"}</strong>
         ${codeBadge}
       </div>
-      <span class="property-card-address">${escapeHtml(p.address) || "(no address on file)"}</span>
+      <span class="property-card-address"${p.address ? ` data-map-address="${escapeHtml(p.address)}"` : ""}>${escapeHtml(p.address) || "(no address on file)"}</span>
       <span class="property-card-email">${escapeHtml(p.customerEmail) || "—"}</span>
       <div class="property-card-stats">
         <span><strong>${zoneCount}</strong> zone${zoneCount === 1 ? "" : "s"}</span>

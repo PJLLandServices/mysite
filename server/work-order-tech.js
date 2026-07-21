@@ -4756,7 +4756,11 @@ function renderCheatSheet(wo, property, lastService) {
     const summary = [customerName, customerEmail].filter(Boolean).join(" · ");
     if (techCustomer && summary) techCustomer.textContent = summary;
   }
-  if (techAddress && address) techAddress.textContent = address;
+  if (techAddress && address) {
+    techAddress.textContent = address;
+    // Tap the site address → Apple/Google Maps chooser (crm-contact.js).
+    techAddress.setAttribute("data-map-address", address);
+  }
 
   // ---- System overview ----------------------------------------------
   const sysBlock = document.getElementById("techSystemBlock");
@@ -4877,6 +4881,8 @@ async function init() {
     const customer = [wo.customerName, wo.customerEmail].filter(Boolean).join(" · ");
     techCustomer.textContent = customer || "Customer details not yet captured";
     techAddress.textContent = wo.address || "—";
+    if (wo.address) techAddress.setAttribute("data-map-address", wo.address);
+    else techAddress.removeAttribute("data-map-address");
     techMeta.textContent = `Updated ${formatDateTime(wo.updatedAt)}`;
     techNotes.value = state.techNotes;
     if (techCustomerNotes) techCustomerNotes.value = state.customerNotes;

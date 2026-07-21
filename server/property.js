@@ -219,6 +219,14 @@ addValveBoxBtn.addEventListener("click", () => addValveBoxRow());
 function renderHero(property, leads) {
   propertyHero.hidden = false;
   propertyAddress.textContent = property.address || "(address not set)";
+  // Tap the address → Apple/Google Maps chooser (crm-contact.js). Only tag
+  // when there's a real address so the "(address not set)" placeholder stays
+  // inert.
+  if (property.address) {
+    propertyAddress.setAttribute("data-map-address", property.address);
+  } else {
+    propertyAddress.removeAttribute("data-map-address");
+  }
   // If the property is linked to a customer record (Brief 2 migration
   // populates customerId on every property), link the customer name to
   // the customer profile. Fall back to plain-text snapshot for legacy

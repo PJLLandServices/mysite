@@ -67,7 +67,7 @@ function renderList() {
       metaLines.push(`<div class="supplier-card-phone">${phoneInner}</div>`);
     }
     if (s.address) {
-      metaLines.push(`<div class="supplier-card-address">${escapeHtml(s.address)}</div>`);
+      metaLines.push(`<div class="supplier-card-address" data-map-address="${escapeHtml(s.address)}">${escapeHtml(s.address)}</div>`);
     }
     const metaHtml = metaLines.length
       ? metaLines.join("")

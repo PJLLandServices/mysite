@@ -407,13 +407,21 @@
 //   • voice-input.js exposes window.PJLVoice (isActive/activeField) +
 //     fires "pjl-voice-end" so deferred resyncs drain on dictation end.
 // Touches work-order-tech.js + voice-input.js (both in STATIC_ASSETS).
-const CACHE_VERSION = "pjl-tech-v49";
+// Bumped 2026-07-21 (v49 → v50): clickable-contact-actions brief — the tech
+// summary address (#techAddress) now carries data-map-address and is handled
+// by the shared crm-contact.js primitive (Apple/Google Maps chooser). Adds
+// /crm/crm-contact.js + /crm/crm-contact.css to STATIC_ASSETS so the tech page
+// keeps working offline (both launches need network and simply no-op offline,
+// which is acceptable). Touches work-order-tech.html + .js.
+const CACHE_VERSION = "pjl-tech-v50";
 const STATIC_ASSETS = [
   "/crm/work-order-tech.html",
   "/crm/work-order-tech.js",
   "/crm/work-order-tech.css",
   "/crm/offline-queue.js",
   "/crm/voice-input.js",
+  "/crm/crm-contact.js",
+  "/crm/crm-contact.css",
   "/pricing.json",
   "/parts.json"
 ];

@@ -145,19 +145,28 @@ function render(inv) {
     billToNameDiffers || Boolean(billTo.address && billTo.address !== (inv.address || ""))
   );
   const serviceCol = document.getElementById("invoiceServiceCol");
+  // Set an address cell's text and tap-to-map affordance together (only tag a
+  // real address so blanks stay inert). crm-contact.js opens the chooser.
+  const setAddr = (id, value) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.textContent = value || "";
+    if (value) el.setAttribute("data-map-address", value);
+    else el.removeAttribute("data-map-address");
+  };
   if (billToDiffers) {
     document.getElementById("invoiceCustomerName").textContent = billTo.name || inv.customerName || "—";
-    document.getElementById("invoiceCustomerAddress").textContent = billTo.address || inv.address || "";
+    setAddr("invoiceCustomerAddress", billTo.address || inv.address || "");
     // The paying entity never inherits the service contact's phone.
     document.getElementById("invoiceCustomerContact").textContent = billTo.email || "";
     if (serviceCol) {
       serviceCol.hidden = false;
       document.getElementById("invoiceServiceName").textContent = inv.customerName || "—";
-      document.getElementById("invoiceServiceAddress").textContent = inv.address || "";
+      setAddr("invoiceServiceAddress", inv.address || "");
     }
   } else {
     document.getElementById("invoiceCustomerName").textContent = inv.customerName || "—";
-    document.getElementById("invoiceCustomerAddress").textContent = inv.address || "";
+    setAddr("invoiceCustomerAddress", inv.address || "");
     const contact = [inv.customerPhone, inv.customerEmail].filter(Boolean).join(" · ");
     document.getElementById("invoiceCustomerContact").textContent = contact;
     if (serviceCol) serviceCol.hidden = true;
