@@ -364,6 +364,16 @@
               <div><dt>Price</dt><dd id="detailWorkOrderPrice">—</dd></div>
             </dl>
             <p class="detail-workorder__note" id="detailWorkOrderNote" hidden></p>
+            <!-- Change appointment type (Book-from-lead follow-up). Moves the
+                 booking's service + visit length + price envelope. Admin-only. -->
+            <div class="detail-workorder__change-type" id="detailWorkOrderChangeType" hidden>
+              <label for="detailWoServiceSelect">Change appointment type</label>
+              <div class="detail-wo-type-row">
+                <select id="detailWoServiceSelect"></select>
+                <button type="button" class="pjl-btn pjl-btn-outline" id="detailWoServiceSaveBtn">Update</button>
+              </div>
+              <p class="detail-wo-type-status" id="detailWoServiceStatus" role="status"></p>
+            </div>
             <div class="detail-workorder__diagnosis" id="detailWorkOrderDiagnosis" hidden>
               <strong>Diagnosis (captured pre-booking):</strong>
               <p id="detailWorkOrderDiagnosisSummary"></p>
@@ -530,7 +540,7 @@
       <p class="book-lead-for" id="bookLeadFor">—</p>
 
       <label class="book-lead-field">
-        <span>Service</span>
+        <span>What are you booking? <em>(required)</em></span>
         <select id="bookLeadService" required></select>
       </label>
 

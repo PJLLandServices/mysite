@@ -2427,7 +2427,26 @@ async function portalPayloadForLead(lead, req) {
     })
     .slice(0, 30);
 
+  // Is the person viewing this portal an admin/tech (Patrick), not the
+  // customer? Drives the admin-only "change appointment type" control on the
+  // portal. Resolved from the session cookie; a customer's portal-token
+  // session returns false. When admin, resolve the canonical BK- id so the
+  // control can target the change-service-type endpoint (never leaked to a
+  // customer payload).
+  let viewerIsAdmin = false;
+  try { viewerIsAdmin = Boolean(await requireUser(req)); } catch { viewerIsAdmin = false; }
+  let adminBookingId = null;
+  if (viewerIsAdmin && lead.booking) {
+    try {
+      const recs = await bookings.listByLead(lead.id);
+      const active = recs.filter((b) => b.status !== "cancelled" && b.status !== "completed" && b.status !== "no_show");
+      const exact = active.find((b) => b.scheduledFor === lead.booking.start);
+      adminBookingId = (exact && exact.id) || (active[0] && active[0].id) || null;
+    } catch { adminBookingId = null; }
+  }
+
   return {
+    viewerIsAdmin,
     customer: {
       name: contact.fullName || lead.contact?.name || "PJL Customer",
       firstName: contact.firstName,
@@ -2459,7 +2478,11 @@ async function portalPayloadForLead(lead, req) {
       start: lead.booking.start,
       end: lead.booking.end,
       durationMinutes: lead.booking.durationMinutes,
+      serviceKey: lead.booking.serviceKey || null,
       serviceLabel: lead.booking.serviceLabel,
+      // Canonical BK- id for the admin-only change-type control. Only set
+      // when the viewer is admin — never exposed to a customer payload.
+      bookingId: viewerIsAdmin ? adminBookingId : undefined,
       zoneCount: lead.booking.zoneCount,
       // Bucket-mode display fields. The portal "Your appointment is at
       // X" line uses these instead of a precise time so the customer
@@ -8194,6 +8217,97 @@ async function handleApi(req, res, pathname) {
       return sendJson(res, 200, { ok: true, booking: result.booking, slot: result.slot });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't reschedule."] });
+    }
+  }
+
+  // Change an existing booking's appointment/service type (Book-from-lead
+  // follow-up). Admin/tech only — gated by the /api/bookings path-auth level
+  // above, so a customer's portal-token session can't reach it. Moves the
+  // visit duration + end time + WO price envelope to match the new service;
+  // the WO template of an ALREADY-opened WO is left as-is (Patrick recreates
+  // it if the type change is drastic). Physical-conflict is NOT re-checked —
+  // same operator-override philosophy as admin force-booking.
+  const changeServiceMatch = pathname.match(/^\/api\/bookings\/([^/]+)\/service-type$/);
+  if (changeServiceMatch && req.method === "POST") {
+    try {
+      const bookingId = decodeURIComponent(changeServiceMatch[1]);
+      const body = await parseRequestBody(req);
+      const serviceKey = normalizeString(body.serviceKey, 60);
+      const service = BOOKABLE_SERVICES[serviceKey];
+      if (!service) {
+        return sendJson(res, 422, { ok: false, code: "service_unknown", errors: ["Unknown service type."] });
+      }
+
+      const booking = await bookings.get(bookingId);
+      if (!booking) return sendJson(res, 404, { ok: false, errors: ["Booking not found."] });
+      if (booking.status === "cancelled" || booking.status === "completed" || booking.status === "no_show") {
+        return sendJson(res, 409, { ok: false, errors: [`Can't change the type of a ${booking.status} booking.`] });
+      }
+      if (booking.serviceKey === serviceKey) {
+        return sendJson(res, 200, { ok: true, booking, serviceKey, serviceLabel: service.label, unchanged: true });
+      }
+
+      const newMinutes = service.minutes;
+      let newEndIso = null;
+      if (booking.scheduledFor) {
+        const s = new Date(booking.scheduledFor);
+        if (!Number.isNaN(s.getTime())) newEndIso = new Date(s.getTime() + newMinutes * 60 * 1000).toISOString();
+      }
+      const rawZone = booking.zoneCount;
+      const zoneForPrice = (rawZone === "unsure" || rawZone == null) ? null : rawZone;
+      const pricing = priceForBooking(serviceKey, zoneForPrice);
+
+      // Canonical record (also stamps a `service_changed` history entry).
+      const updatedBooking = await bookings.update(bookingId, {
+        serviceKey,
+        serviceLabel: service.label,
+        durationMinutes: newMinutes,
+        by: "admin"
+      });
+
+      // Mirror onto the lead.booking read-cache + WO envelope + lead status.
+      if (booking.leadId) {
+        const all = await readLeads();
+        const i = all.findIndex((l) => l.id === booking.leadId);
+        if (i !== -1 && all[i].booking) {
+          const b = all[i].booking;
+          const prevLabel = b.serviceLabel || b.serviceKey || "(unset)";
+          b.serviceKey = serviceKey;
+          b.serviceLabel = service.label;
+          b.durationMinutes = newMinutes;
+          if (newEndIso) b.end = newEndIso;
+          if (b.workOrder) {
+            b.workOrder.priceLabel = pricing.label;
+            b.workOrder.priceNote = pricing.note || null;
+            b.workOrder.custom = Boolean(pricing.custom);
+            b.workOrder.currency = pricing.currency;
+            // Keep a real quote's snapshotted total; otherwise reprice from
+            // the new service (self-serve leads carry a 0 total).
+            const snap = all[i].totals && Number.isFinite(all[i].totals.expectedTotal) ? all[i].totals.expectedTotal : 0;
+            b.workOrder.total = snap > 0 ? snap : pricing.price;
+          }
+          all[i].status = service.category === "consult" ? "site_visit" : "won";
+          all[i].crm = all[i].crm || {};
+          all[i].crm.status = all[i].status;
+          all[i].crm.activity = Array.isArray(all[i].crm.activity) ? all[i].crm.activity : [];
+          all[i].crm.activity.unshift({
+            at: new Date().toISOString(),
+            type: "update",
+            text: `Appointment type changed: ${prevLabel} → ${service.label}.`
+          });
+          all[i].crm.lastUpdated = new Date().toISOString();
+          await writeLeads(all);
+        }
+      }
+
+      return sendJson(res, 200, {
+        ok: true,
+        booking: updatedBooking,
+        serviceKey,
+        serviceLabel: service.label
+      });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't change appointment type."] });
     }
   }
 

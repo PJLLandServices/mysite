@@ -247,7 +247,7 @@ async function update(id, patch) {
   if (idx === -1) return null;
   const current = records[idx];
   const next = { ...current };
-  const allowed = ["status", "prepNotes", "scheduledFor", "durationMinutes", "address", "customerName", "customerPhone", "customerEmail", "zoneCount", "sourceQuoteId"];
+  const allowed = ["status", "prepNotes", "scheduledFor", "durationMinutes", "serviceKey", "serviceLabel", "address", "customerName", "customerPhone", "customerEmail", "zoneCount", "sourceQuoteId"];
   for (const key of allowed) {
     if (patch && Object.prototype.hasOwnProperty.call(patch, key)) next[key] = patch[key];
   }
@@ -261,6 +261,16 @@ async function update(id, patch) {
       action: `status:${patch.status}`,
       by: patch.by || "admin",
       note: patch.note || ""
+    }];
+  }
+  // Audit a service-type change (Book-from-lead follow-up: the appointment
+  // type is now editable after booking, which also moves duration + price).
+  if (patch && patch.serviceKey && patch.serviceKey !== current.serviceKey) {
+    next.history = [...(next.history || []), {
+      ts: new Date().toISOString(),
+      action: "service_changed",
+      by: patch.by || "admin",
+      note: `${current.serviceLabel || current.serviceKey || "(unset)"} → ${patch.serviceLabel || patch.serviceKey}`
     }];
   }
   next.updatedAt = new Date().toISOString();

@@ -149,6 +149,17 @@
           <button type="button" class="portal-btn portal-btn-secondary" id="rescheduleBtn">Change appointment</button>
           <button type="button" class="portal-btn portal-btn-danger" id="cancelBtn">Cancel appointment</button>
         </div>
+        <!-- Admin-only: change appointment type. Hidden for customers; shown
+             only when an admin/tech session (Patrick) is viewing this portal.
+             Changing the type moves the visit length + price envelope. -->
+        <div class="workorder-admin-change-type" id="portalAdminChangeType" hidden>
+          <label for="portalAdminServiceSelect">Change appointment type <span class="admin-only-tag">Admin</span></label>
+          <div class="portal-admin-type-row">
+            <select id="portalAdminServiceSelect"></select>
+            <button type="button" class="portal-btn portal-btn-secondary" id="portalAdminServiceSaveBtn">Update</button>
+          </div>
+          <p class="portal-admin-type-status" id="portalAdminServiceStatus" role="status"></p>
+        </div>
         <!-- Phone-fallback prompt shown when both actions are blocked
              (inside 24-hour cutoff, WO already in progress, multi-WO
              booking, etc.). Tap-to-call on iPhone via the tel: link.

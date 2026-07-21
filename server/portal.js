@@ -23,6 +23,12 @@ const workOrderDiagnosis = document.getElementById("workOrderDiagnosis");
 const workOrderDiagnosisSource = document.getElementById("workOrderDiagnosisSource");
 const workOrderDiagnosisSummary = document.getElementById("workOrderDiagnosisSummary");
 const workOrderDiagnosisDetail = document.getElementById("workOrderDiagnosisDetail");
+// Admin-only change-appointment-type control (shown only when Patrick views
+// this portal — never for the customer).
+const portalAdminChangeType = document.getElementById("portalAdminChangeType");
+const portalAdminServiceSelect = document.getElementById("portalAdminServiceSelect");
+const portalAdminServiceSaveBtn = document.getElementById("portalAdminServiceSaveBtn");
+const portalAdminServiceStatus = document.getElementById("portalAdminServiceStatus");
 const messageHeading = document.getElementById("messageHeading");
 const helpHeading = document.getElementById("helpHeading");
 const systemCard = document.getElementById("systemCard");
@@ -442,8 +448,96 @@ function renderWorkOrder(data) {
     workOrderDocStatus.textContent = "Your detailed work order will be available here closer to your appointment.";
   }
 
+  renderPortalAdminChangeType(data);
+
   workOrderCard.hidden = false;
 }
+
+// ---- Admin-only: change appointment type from the portal ---------------
+// Only rendered when an admin/tech session is viewing the portal (Patrick),
+// signalled by data.viewerIsAdmin + the admin-only booking.bookingId. A
+// customer's payload carries neither, so the control stays hidden for them.
+let portalAdminServiceCatalog = null;
+let portalAdminBookingId = null;
+let portalAdminCurrentServiceKey = null;
+
+async function ensurePortalServiceCatalog() {
+  if (portalAdminServiceCatalog) return portalAdminServiceCatalog;
+  try {
+    const r = await fetch("/api/booking/services", { cache: "no-store" });
+    const d = await r.json();
+    portalAdminServiceCatalog = (d.ok && d.services) || {};
+  } catch { portalAdminServiceCatalog = {}; }
+  return portalAdminServiceCatalog;
+}
+
+function fillPortalServiceSelect(catalog) {
+  if (!portalAdminServiceSelect) return;
+  const entries = Object.entries(catalog).filter(([, s]) => s.bookable);
+  const groups = {
+    "Spring opening (residential)":     entries.filter(([k, s]) => s.family === "spring_opening" && !k.includes("commercial")),
+    "Spring opening (commercial)":      entries.filter(([k, s]) => s.family === "spring_opening" && k.includes("commercial")),
+    "Fall winterization (residential)": entries.filter(([k, s]) => s.family === "fall_closing" && !k.includes("commercial")),
+    "Fall winterization (commercial)":  entries.filter(([k, s]) => s.family === "fall_closing" && k.includes("commercial")),
+    "Other": entries.filter(([, s]) => !["spring_opening", "fall_closing"].includes(s.family))
+  };
+  portalAdminServiceSelect.innerHTML = "";
+  for (const [groupLabel, items] of Object.entries(groups)) {
+    if (!items.length) continue;
+    const og = document.createElement("optgroup");
+    og.label = groupLabel;
+    items.forEach(([key, svc]) => {
+      const o = document.createElement("option");
+      o.value = key;
+      o.textContent = svc.label || key;
+      og.appendChild(o);
+    });
+    portalAdminServiceSelect.appendChild(og);
+  }
+}
+
+async function renderPortalAdminChangeType(data) {
+  if (!portalAdminChangeType) return;
+  const booking = data && data.booking;
+  const canEdit = Boolean(data && data.viewerIsAdmin && booking && booking.bookingId && booking.serviceKey);
+  if (!canEdit) { portalAdminChangeType.hidden = true; return; }
+  portalAdminBookingId = booking.bookingId;
+  portalAdminCurrentServiceKey = booking.serviceKey;
+  if (portalAdminServiceStatus) portalAdminServiceStatus.textContent = "";
+  const catalog = await ensurePortalServiceCatalog();
+  fillPortalServiceSelect(catalog);
+  if (portalAdminServiceSelect) portalAdminServiceSelect.value = booking.serviceKey;
+  portalAdminChangeType.hidden = false;
+}
+
+async function savePortalServiceType() {
+  if (!portalAdminServiceSelect || !portalAdminBookingId) return;
+  const serviceKey = portalAdminServiceSelect.value;
+  if (!serviceKey) return;
+  if (serviceKey === portalAdminCurrentServiceKey) {
+    if (portalAdminServiceStatus) portalAdminServiceStatus.textContent = "That's already the appointment type.";
+    return;
+  }
+  if (portalAdminServiceSaveBtn) portalAdminServiceSaveBtn.disabled = true;
+  if (portalAdminServiceStatus) portalAdminServiceStatus.textContent = "Updating…";
+  try {
+    const r = await fetch(`/api/bookings/${encodeURIComponent(portalAdminBookingId)}/service-type`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify({ serviceKey })
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok || !d.ok) throw new Error((d.errors && d.errors[0]) || `Update failed (${r.status}).`);
+    if (portalAdminServiceStatus) portalAdminServiceStatus.textContent = `Changed to ${d.serviceLabel || serviceKey}. Refreshing…`;
+    setTimeout(loadPortal, 500);
+  } catch (err) {
+    if (portalAdminServiceStatus) portalAdminServiceStatus.textContent = err.message || "Couldn't change type.";
+    if (portalAdminServiceSaveBtn) portalAdminServiceSaveBtn.disabled = false;
+  }
+}
+
+if (portalAdminServiceSaveBtn) portalAdminServiceSaveBtn.addEventListener("click", savePortalServiceType);
 
 function renderPortal(data) {
   const customer = data.customer || {};
