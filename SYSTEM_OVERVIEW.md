@@ -191,7 +191,7 @@ Pages with their primary route + purpose:
 
 | Page | Route | What it does |
 |---|---|---|
-| `today.html` | `/admin/today` | Tech morning hub — today's confirmed bookings with navigate + notify + open-WO actions per row. |
+| `today.html` | `/admin/today` | Tech morning hub — today's confirmed bookings with navigate + notify + open-WO actions per row. The Navigate action routes through the shared `crm-contact.js` primitive (Apple/Google Maps chooser, directions mode). |
 | `admin.html` | `/admin` | Lead pipeline / CRM dashboard. Search, filter by stage, open lead detail card. Inline quote display + property link conflict detection. **"Book appointment"** action on the lead detail card opens the shared admin time picker (custom-time enabled) pre-filled from the lead and books directly against it — for AI-diagnostic leads that didn't self-book — without creating a duplicate lead. |
 | `schedule.html` | `/admin/schedule` | Booking calendar. Block hours, manual booking creation. |
 | `handoff.html` | `/admin/handoff` | Manual handoff — admin sends a customer a booking link + portal access. |
@@ -286,7 +286,8 @@ Pages with their primary route + purpose:
 | `crm-followup.js` / `crm-followup.css` | Follow-up WO trigger modal (slot picker + materials selector). |
 | `crm-reschedule.js` / `crm-reschedule.css` | Admin reschedule modal. Hosts the shared month-calendar time picker (`/js/time-picker.js`) in `admin` mode with the custom-time override enabled. |
 | `voice-input.js` | Web Speech API helper. Any field with `data-voice-input` attribute gets a mic button. |
-| `tech-sw.js` | ServiceWorker scoped to `/admin/work-order/`. Caches HTML/JS/CSS/pricing.json/parts.json. Network-first WO/property GETs with cache fallback. |
+| `crm-contact.js` / `crm-contact.css` | Shared contact-affordance primitive. `data-map-address="<address>"` → small Google/Apple Maps chooser (bottom sheet on mobile, popover on desktop); `data-tel="<number>"` → `tel:` dial (normalized to E.164). Capture-phase delegated click/keydown listener (survives re-renders; `stopPropagation` short-circuits tap-navigable cards); keyboard-accessible. Consolidates the Today-hub navigate action. Admin/portal only. `tel:` dials from the device line — it does **not** set outbound caller ID (that would be a separate Twilio Voice feature). Optional `data-map-mode="directions"` + `data-map-dest="<lat,lng>"` drive turn-by-turn (used by the Today navigate button). |
+| `tech-sw.js` | ServiceWorker scoped to `/admin/work-order/`. Caches HTML/JS/CSS/pricing.json/parts.json (incl. `crm-contact.js`/`.css`). Network-first WO/property GETs with cache fallback. |
 | `offline-queue.js` | IndexedDB outbound queue. Synthesizes 202 on offline, replays FIFO on reconnect, fires a `drain` event the page uses to reconcile in place — **no reload**. The tech page defers any repaint while a field is focused, a dictation session is live, or a save debounce is pending (the human at the keyboard wins over a background server echo), and adopts the server's `updatedAt` in that window so its own replayed writes never trigger the 409 "reload now" conflict banner. |
 | `wo-materials.js` | Standalone embed for the WO desktop editor — lists material lists attached to that WO, "+ New material list" button. |
 

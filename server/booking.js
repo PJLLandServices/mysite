@@ -75,6 +75,13 @@ function applyToForm(b, ext) {
   summaryScheduledEl.textContent = formatDateTime(b.scheduledFor);
   summaryDurationEl.textContent = b.durationMinutes ? `${b.durationMinutes} min` : "—";
   summaryAddressEl.textContent = b.address || "—";
+  // Tap the dedicated Address field → maps chooser (crm-contact.js). The
+  // "Property" field above stays a link to the property profile.
+  if (b.address) {
+    summaryAddressEl.setAttribute("data-map-address", b.address);
+  } else {
+    summaryAddressEl.removeAttribute("data-map-address");
+  }
   statusSelect.value = b.status || "confirmed";
   prepNotes.value = b.prepNotes || "";
   saveBtn.disabled = true;

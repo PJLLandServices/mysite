@@ -37,7 +37,7 @@ async function load() {
       <td><a href="/admin/invoice/${encodeURIComponent(inv.id)}">${escapeHtml(inv.id)}</a></td>
       <td>
         <strong>${escapeHtml(inv.customerName || "—")}</strong>
-        ${inv.address ? `<br><span class="invoices-row-sub">${escapeHtml(inv.address)}</span>` : ""}
+        ${inv.address ? `<br><span class="invoices-row-sub" data-map-address="${escapeHtml(inv.address)}">${escapeHtml(inv.address)}</span>` : ""}
       </td>
       <td>${inv.woId ? `<a href="/admin/work-order/${encodeURIComponent(inv.woId)}">${escapeHtml(inv.woId)}</a>` : "—"}</td>
       <td class="invoices-amount">${fmt(inv.total)}</td>

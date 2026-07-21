@@ -1,0 +1,209 @@
+/* Shared contact-affordance primitive styles (feature-clickable-contact-
+   actions v2). Loaded on every admin/portal surface that opts an element in
+   with data-map-address / data-tel. Targets the attributes directly so pages
+   don't need an extra class.
+
+   Colours use var(--pjl-*, #hex) fallbacks on purpose: the admin pages define
+   the tokens in crm.css, but the customer portal loads portal.css (no crm.css),
+   so the literal fallback keeps the chooser on-brand there too. */
+
+/* ---- Affordance on the tagged value ---------------------------------- */
+[data-map-address],
+[data-tel] {
+  cursor: pointer;
+  /* A tinted underline that only shows on hover/focus keeps long address
+     lines calm at rest while still signalling "tappable". */
+  text-decoration: none;
+  border-radius: 6px;
+}
+
+/* Small trailing glyph — a pin for addresses, a handset for phones — so the
+   affordance is discoverable at rest without underlining everything. Kept
+   subtle (smaller + dimmed) and separated by a hair space. */
+[data-map-address]::after {
+  content: "\00A0\1F4CD"; /* NBSP + round pushpin */
+  font-size: 0.82em;
+  opacity: 0.55;
+}
+[data-tel]::after {
+  content: "\00A0\1F4DE"; /* NBSP + telephone receiver */
+  font-size: 0.82em;
+  opacity: 0.55;
+}
+
+/* Native interactive elements (a Today "Navigate" button, a supplier's
+   existing tel: anchor) already read as tappable and carry their own label —
+   suppress the glyph so we don't clutter them. */
+a[data-map-address]::after,
+button[data-map-address]::after,
+a[data-tel]::after,
+button[data-tel]::after { content: none; }
+
+@media (hover: hover) {
+  [data-map-address]:hover,
+  [data-tel]:hover {
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    text-decoration-color: var(--pjl-green-light, #4A8C5C);
+  }
+  [data-map-address]:hover::after,
+  [data-tel]:hover::after { opacity: 1; }
+}
+
+[data-map-address]:focus-visible,
+[data-tel]:focus-visible {
+  outline: 2px solid var(--pjl-green, #1B4D2E);
+  outline-offset: 2px;
+}
+
+/* Mobile tap target ≥44px. Padding (not line-height), per the brief. Grown to
+   an inline-block box so min-height applies; max-width:100% keeps long
+   addresses wrapping inside their container instead of overflowing. NB: this
+   assumes the tagged element is not itself a table cell — the customer detail
+   tables tag an inner <span>, not the <td>, precisely so this rule is safe. */
+@media (max-width: 640px) {
+  [data-map-address]:not(a):not(button),
+  [data-tel]:not(a):not(button) {
+    display: inline-block;
+    max-width: 100%;
+    min-height: 44px;
+    box-sizing: border-box;
+    padding-top: 10px;
+    padding-bottom: 10px;
+  }
+}
+
+/* ---- "Open in…" chooser ---------------------------------------------- */
+/* Bottom sheet on mobile, centered popover on desktop. Backdrop dims the page
+   and is itself the tap-outside target. */
+.pjl-contact-chooser {
+  position: fixed;
+  inset: 0;
+  z-index: 6000; /* above admin modals (crm.css uses ~5000) */
+  display: flex;
+  justify-content: center;
+  align-items: flex-end; /* bottom sheet on mobile */
+  background: rgba(15, 31, 20, 0.55);
+  font-family: "DM Sans", system-ui, -apple-system, sans-serif;
+  animation: pjl-contact-fade 0.14s ease-out;
+}
+
+@keyframes pjl-contact-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.pjl-contact-sheet {
+  width: 100%;
+  max-width: 520px;
+  background: #fff;
+  border-top-left-radius: 18px;
+  border-top-right-radius: 18px;
+  box-shadow: 0 -12px 40px rgba(0, 0, 0, 0.22);
+  animation: pjl-contact-slide-up 0.18s cubic-bezier(0.22, 0.61, 0.36, 1);
+  /* LONGHAND padding only. Do NOT collapse into the `padding:` shorthand —
+     the shorthand silently resets the padding-bottom env() longhand below,
+     and the iPhone home-indicator inset would be lost (a regression this
+     codebase has hit before). */
+  padding-top: 18px;
+  padding-right: 16px;
+  padding-left: 16px;
+  padding-bottom: max(18px, env(safe-area-inset-bottom));
+}
+
+@keyframes pjl-contact-slide-up {
+  from { transform: translateY(12px); }
+  to { transform: translateY(0); }
+}
+
+.pjl-contact-sheet-title {
+  margin: 0 0 2px;
+  font-family: "Barlow Condensed", "DM Sans", sans-serif;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--pjl-text-muted, #7A7A72);
+}
+
+.pjl-contact-sheet-address {
+  margin: 0 0 14px;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--pjl-text, #1A1A1A);
+}
+
+.pjl-contact-sheet-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.pjl-contact-btn {
+  width: 100%;
+  min-height: 52px; /* comfortably ≥44px */
+  border-radius: 12px;
+  border: 1.5px solid transparent;
+  font-family: inherit;
+  font-size: 16px;
+  font-weight: 700;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+.pjl-contact-btn:active { transform: scale(0.985); }
+.pjl-contact-btn:focus-visible {
+  outline: 3px solid rgba(27, 77, 46, 0.35);
+  outline-offset: 2px;
+}
+
+/* Apple Maps — primary action (device is an iPhone), solid green. */
+.pjl-contact-btn-apple {
+  background: var(--pjl-green, #1B4D2E);
+  color: #fff;
+}
+.pjl-contact-btn-apple:hover { background: var(--pjl-green-mid, #2D6A42); }
+
+/* Google Maps — secondary, outlined. */
+.pjl-contact-btn-google {
+  background: #fff;
+  color: var(--pjl-green, #1B4D2E);
+  border-color: var(--pjl-border, #E2E0D4);
+}
+.pjl-contact-btn-google:hover { background: var(--pjl-green-pale, #EAF3DE); }
+
+/* Cancel — quietest. */
+.pjl-contact-btn-cancel {
+  background: transparent;
+  color: var(--pjl-text-mid, #4A4A4A);
+  font-weight: 600;
+}
+.pjl-contact-btn-cancel:hover { background: rgba(15, 31, 20, 0.04); }
+
+/* Desktop: centered popover instead of a bottom sheet. */
+@media (min-width: 641px) {
+  .pjl-contact-chooser { align-items: center; }
+  .pjl-contact-sheet {
+    max-width: 380px;
+    border-radius: 18px;
+    box-shadow: 0 18px 48px rgba(0, 0, 0, 0.24);
+    animation: pjl-contact-pop 0.16s ease-out;
+    /* Longhand again — kept consistent; env() bottom inset is 0 on desktop. */
+    padding-top: 22px;
+    padding-right: 22px;
+    padding-left: 22px;
+    padding-bottom: 22px;
+  }
+  @keyframes pjl-contact-pop {
+    from { transform: scale(0.97); opacity: 0.6; }
+    to { transform: scale(1); opacity: 1; }
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pjl-contact-chooser,
+  .pjl-contact-sheet { animation: none; }
+}

@@ -482,8 +482,15 @@ function renderPortal(data) {
     : "PJL will follow up as soon as your request is reviewed.";
   projectTotal.textContent = money.format(Number(project.total || 0)).replace("CA", "").trim();
   customerPhone.textContent = text(customer.phone) || "Not provided";
+  // Tap-to-dial / tap-to-map the customer's own details (crm-contact.js).
+  if (customer.phone) customerPhone.setAttribute("data-tel", customer.phone);
+  else customerPhone.removeAttribute("data-tel");
   customerEmail.textContent = text(customer.email) || "Not provided";
   customerAddress.innerHTML = escapeHtml(customer.address).replace(/\n/g, "<br>") || "Not provided";
+  // innerHTML carries <br>s for multi-line display; the data attribute holds
+  // the raw single-string address the maps app should receive.
+  if (customer.address) customerAddress.setAttribute("data-map-address", customer.address);
+  else customerAddress.removeAttribute("data-map-address");
 
   serviceList.innerHTML = "";
   if (services.length) {
@@ -601,6 +608,8 @@ function renderPropertyPortal(payload) {
     : "We've got your property details on file.";
 
   addressEl.textContent = payload.address || "—";
+  if (payload.address) addressEl.setAttribute("data-map-address", payload.address);
+  else addressEl.removeAttribute("data-map-address");
   zonesEl.textContent = payload.zoneCount > 0
     ? `${payload.zoneCount} ${payload.zoneCount === 1 ? "zone" : "zones"}`
     : "Not yet confirmed";

@@ -115,7 +115,7 @@ function render() {
         </div>
         <div class="customer-card-contact">
           <span>${escapeHtml(c.email) || "—"}</span>
-          <span>${escapeHtml(c.phone) || "—"}</span>
+          ${c.phone ? `<span data-tel="${escapeHtml(c.phone)}">${escapeHtml(c.phone)}</span>` : "<span>—</span>"}
         </div>
         <span class="customer-status is-${escapeHtml(c.status || "lead")}">${escapeHtml(c.status || "lead")}</span>
       </a>

@@ -135,7 +135,7 @@ function renderProperties(properties) {
         ${properties.map((p) => `
           <tr>
             <td><a href="/admin/property/${esc(p.id)}"><strong>${esc(p.code || p.id)}</strong></a></td>
-            <td>${esc(p.address)}</td>
+            <td>${p.address ? `<span data-map-address="${esc(p.address)}">${esc(p.address)}</span>` : ""}</td>
             <td style="text-align:right">${(p.leadIds || []).length}</td>
           </tr>
         `).join("")}
@@ -182,7 +182,7 @@ function renderWorkOrders(workOrders) {
             <td><a href="/admin/work-order/${esc(w.id)}"><strong>${esc(w.id)}</strong></a></td>
             <td>${esc(w.type)}</td>
             <td>${esc(w.status)}${w.locked ? " (locked)" : ""}</td>
-            <td>${esc(w.address)}</td>
+            <td>${w.address ? `<span data-map-address="${esc(w.address)}">${esc(w.address)}</span>` : ""}</td>
             <td>${formatDateTime(w.scheduledFor)}</td>
           </tr>
         `).join("")}

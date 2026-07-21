@@ -1,8 +1,10 @@
 // Today's Schedule — the tech's morning hub. Fetches today's bookings
 // from /api/schedule/today, renders one big tap-friendly card per row,
-// and wires three actions: Navigate (deep-links to Maps), Notify on
-// route (POST /api/leads/:id/notify-on-route), Open WO (POST
-// /api/leads/:id/open-wo → redirect to the field WO tech-mode page).
+// and wires three actions: Navigate (Apple/Google Maps chooser via the
+// shared crm-contact.js primitive — the card just tags the button with
+// data-map-address), Notify on route (POST /api/leads/:id/notify-on-route),
+// Open WO (POST /api/leads/:id/open-wo → redirect to the field WO tech-mode
+// page).
 
 // Mobile nav hamburger toggle (shared pattern across all admin pages).
 (function setupNavToggle() {
@@ -80,16 +82,15 @@ function prettyShortDate(yyyymmdd) {
   });
 }
 
-function navigateUrl(booking) {
-  // Universal Maps deep-link. Google Maps URL works on iOS (offers Apple
-  // Maps via "Open in Maps" prompt) and Android natively. If we have
-  // coords, prefer them — the address geocode might be ambiguous.
+function navigateDest(booking) {
+  // The precise destination string handed to the maps app. Prefer coords
+  // when we have them — the address geocode might be ambiguous. URL
+  // construction + the Apple/Google chooser + the launch now live in the
+  // shared primitive (crm-contact.js); this only decides *where* to go.
   if (booking.coords && booking.coords.lat != null && booking.coords.lng != null) {
-    const ll = `${booking.coords.lat},${booking.coords.lng}`;
-    return `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(ll)}&travelmode=driving`;
+    return `${booking.coords.lat},${booking.coords.lng}`;
   }
-  const dest = [booking.address, booking.town, "Ontario", "Canada"].filter(Boolean).join(", ");
-  return `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(dest)}&travelmode=driving`;
+  return [booking.address, booking.town, "Ontario", "Canada"].filter(Boolean).join(", ");
 }
 
 function fullAddress(booking) {
@@ -158,10 +159,10 @@ function bookingCardHtml(booking) {
         ${customerNotes}
         ${internalNotes}
         <div class="today-card-actions">
-          <a class="today-action today-action--navigate" href="${escapeHtml(navigateUrl(booking))}" target="_blank" rel="noopener" data-action="navigate">
+          <button type="button" class="today-action today-action--navigate" data-map-address="${escapeHtml(fullAddress(booking))}" data-map-mode="directions" data-map-dest="${escapeHtml(navigateDest(booking))}">
             <span class="today-action-icon" aria-hidden="true">→</span>
             <span class="today-action-label">Navigate</span>
-          </a>
+          </button>
           <button type="button" class="today-action today-action--notify" data-action="notify" ${notified ? "data-notified" : ""}>
             <span class="today-action-icon" aria-hidden="true">${notified ? "✓" : "📣"}</span>
             <span class="today-action-label">${notified ? `Notified ${escapeHtml(notifiedTime)}` : "On route — notify"}</span>
@@ -236,11 +237,9 @@ todayList.addEventListener("click", async (event) => {
   if (!leadId) return;
   const action = actionEl.dataset.action;
 
-  if (action === "navigate") {
-    // Native <a> handles the navigate action — let the browser do its
-    // thing. Don't preventDefault; just close the nav menu if open.
-    return;
-  }
+  // Navigate is no longer handled here — the button carries data-map-address
+  // and is handled by the shared contact primitive (crm-contact.js), which
+  // opens the Apple/Google chooser. See the header note.
 
   if (action === "notify") {
     if (actionEl.dataset.notified) {
