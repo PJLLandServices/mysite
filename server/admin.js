@@ -899,6 +899,8 @@ function renderWorkOrderDetail(lead) {
   } else {
     detailWorkOrderDiagnosis.hidden = true;
   }
+
+  renderWoChangeType(lead);
 }
 
 // Field Work Orders — the tech-side per-visit document. Lists the WOs
@@ -1669,36 +1671,89 @@ function renderBookAction(lead) {
   }
 }
 
+// Fetch the bookable-services catalog once and cache it. Shared by the
+// book-from-lead modal and the Work-Order "change appointment type" control.
+let __svcCatalogPromise = null;
+async function getServiceCatalog() {
+  if (Object.keys(bookLeadServicesCatalog).length) return bookLeadServicesCatalog;
+  if (!__svcCatalogPromise) {
+    __svcCatalogPromise = (async () => {
+      try {
+        const r = await fetch("/api/booking/services", { cache: "no-store" });
+        const data = await r.json();
+        bookLeadServicesCatalog = (data.ok && data.services) || {};
+      } catch { /* leave empty — callers handle */ }
+      return bookLeadServicesCatalog;
+    })();
+  }
+  return __svcCatalogPromise;
+}
+
+function buildServiceGroups(catalog) {
+  const entries = Object.entries(catalog).filter(([, s]) => s.bookable);
+  return {
+    "Spring opening (residential)":     entries.filter(([k, s]) => s.family === "spring_opening" && !k.includes("commercial")),
+    "Spring opening (commercial)":      entries.filter(([k, s]) => s.family === "spring_opening" && k.includes("commercial")),
+    "Fall winterization (residential)": entries.filter(([k, s]) => s.family === "fall_closing" && !k.includes("commercial")),
+    "Fall winterization (commercial)":  entries.filter(([k, s]) => s.family === "fall_closing" && k.includes("commercial")),
+    "Other": entries.filter(([, s]) => !["spring_opening", "fall_closing"].includes(s.family))
+  };
+}
+
+// Fill a <select> with grouped bookable-service options. When `placeholder`
+// is passed it's prepended as a value="" option so nothing is pre-selected.
+function fillServiceSelect(selectEl, catalog, { placeholder } = {}) {
+  if (!selectEl) return;
+  selectEl.innerHTML = "";
+  if (placeholder) {
+    const o = document.createElement("option");
+    o.value = "";
+    o.textContent = placeholder;
+    selectEl.appendChild(o);
+  }
+  const groups = buildServiceGroups(catalog);
+  for (const [groupLabel, items] of Object.entries(groups)) {
+    if (!items.length) continue;
+    const og = document.createElement("optgroup");
+    og.label = groupLabel;
+    items.forEach(([key, svc]) => {
+      const o = document.createElement("option");
+      o.value = key;
+      o.textContent = svc.label || key;
+      og.appendChild(o);
+    });
+    selectEl.appendChild(og);
+  }
+}
+
 async function ensureBookServicesLoaded() {
   if (bookLeadService && bookLeadService.options.length > 0) return;
+  const catalog = await getServiceCatalog();
+  // Placeholder first so nothing is pre-selected unless we can confidently
+  // infer the service (seedBookService). Without this, an unseeded lead
+  // silently lands on the first real option (spring_open_4z) and books a
+  // 1-4 zone spring opening no one chose.
+  fillServiceSelect(bookLeadService, catalog, { placeholder: "— Choose appointment type… —" });
+}
+
+// Resolve the canonical BK- id for a lead's active booking (mirrors
+// crm-reschedule.js). Prefers an exact scheduledFor match, else the most
+// recent non-terminal record.
+async function resolveBookingIdForLead(leadId, start) {
   try {
-    const r = await fetch("/api/booking/services", { cache: "no-store" });
+    const r = await fetch(`/api/bookings?leadId=${encodeURIComponent(leadId)}`, { cache: "no-store" });
     const data = await r.json();
-    bookLeadServicesCatalog = (data.ok && data.services) || {};
-    const entries = Object.entries(bookLeadServicesCatalog).filter(([, s]) => s.bookable);
-    const groups = {
-      "Spring opening (residential)":     entries.filter(([k, s]) => s.family === "spring_opening" && !k.includes("commercial")),
-      "Spring opening (commercial)":      entries.filter(([k, s]) => s.family === "spring_opening" && k.includes("commercial")),
-      "Fall winterization (residential)": entries.filter(([k, s]) => s.family === "fall_closing" && !k.includes("commercial")),
-      "Fall winterization (commercial)":  entries.filter(([k, s]) => s.family === "fall_closing" && k.includes("commercial")),
-      "Other": entries.filter(([, s]) => !["spring_opening", "fall_closing"].includes(s.family))
-    };
-    bookLeadService.innerHTML = "";
-    for (const [groupLabel, items] of Object.entries(groups)) {
-      if (!items.length) continue;
-      const og = document.createElement("optgroup");
-      og.label = groupLabel;
-      items.forEach(([key, svc]) => {
-        const o = document.createElement("option");
-        o.value = key;
-        o.textContent = svc.label || key;
-        og.appendChild(o);
-      });
-      bookLeadService.appendChild(og);
+    if (data.ok && Array.isArray(data.bookings) && data.bookings.length) {
+      const active = data.bookings.filter((b) => b.status !== "cancelled" && b.status !== "completed" && b.status !== "no_show");
+      if (start) {
+        const exact = active.find((b) => b.scheduledFor === start);
+        if (exact) return exact.id;
+      }
+      const sorted = active.slice().sort((a, b) => new Date(b.scheduledFor || 0) - new Date(a.scheduledFor || 0));
+      return (sorted[0] && sorted[0].id) || data.bookings[0].id;
     }
-  } catch {
-    // Leave empty — submit will catch the missing service.
-  }
+  } catch { /* fall through */ }
+  return null;
 }
 
 // Seed the service dropdown from the lead. A repair lead's booked
@@ -1715,7 +1770,11 @@ function seedBookService(lead) {
   } else if (lead && lead.quote && lead.quote.type === "ai_repair_quote" && keys.has("sprinkler_repair")) {
     chosen = "sprinkler_repair";
   }
-  if (chosen) bookLeadService.value = chosen;
+  // Always set — an empty `chosen` selects the "— Choose appointment type… —"
+  // placeholder, forcing Patrick to pick rather than defaulting silently.
+  // (self-serve / new-customer leads carry no features + no quote, so they
+  // land here on the placeholder.)
+  bookLeadService.value = chosen;
   syncBookZonesVisibility();
 }
 
@@ -1911,3 +1970,57 @@ if (bookLeadService) bookLeadService.addEventListener("change", () => { syncBook
 // Native <dialog> "cancel" (Esc) — clean up the picker too.
 if (bookLeadDialog) bookLeadDialog.addEventListener("cancel", () => { destroyBookPicker(); });
 if (bookLeadDialog) bookLeadDialog.addEventListener("close", () => { destroyBookPicker(); });
+
+// ---- Change appointment type on an existing booking (admin CRM) ---------
+const detailWorkOrderChangeType = document.getElementById("detailWorkOrderChangeType");
+const detailWoServiceSelect     = document.getElementById("detailWoServiceSelect");
+const detailWoServiceSaveBtn    = document.getElementById("detailWoServiceSaveBtn");
+const detailWoServiceStatus     = document.getElementById("detailWoServiceStatus");
+let woChangeTypeLead = null;
+
+async function renderWoChangeType(lead) {
+  if (!detailWorkOrderChangeType) return;
+  woChangeTypeLead = lead || null;
+  const booking = lead && lead.booking;
+  if (!booking || !booking.serviceKey) { detailWorkOrderChangeType.hidden = true; return; }
+  detailWorkOrderChangeType.hidden = false;
+  if (detailWoServiceStatus) detailWoServiceStatus.textContent = "";
+  const catalog = await getServiceCatalog();
+  // Guard against a lead switch mid-fetch — only fill if this lead is still open.
+  if (woChangeTypeLead !== lead) return;
+  fillServiceSelect(detailWoServiceSelect, catalog, {});
+  if (detailWoServiceSelect) detailWoServiceSelect.value = booking.serviceKey;
+}
+
+async function saveWoServiceType() {
+  const lead = woChangeTypeLead;
+  if (!lead || !detailWoServiceSelect) return;
+  const serviceKey = detailWoServiceSelect.value;
+  if (!serviceKey) return;
+  if (lead.booking && serviceKey === lead.booking.serviceKey) {
+    if (detailWoServiceStatus) detailWoServiceStatus.textContent = "That's already the appointment type.";
+    return;
+  }
+  if (detailWoServiceSaveBtn) detailWoServiceSaveBtn.disabled = true;
+  if (detailWoServiceStatus) detailWoServiceStatus.textContent = "Updating…";
+  try {
+    const bid = await resolveBookingIdForLead(lead.id, lead.booking && lead.booking.start);
+    if (!bid) throw new Error("No booking record found for this lead.");
+    const r = await fetch(`/api/bookings/${encodeURIComponent(bid)}/service-type`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify({ serviceKey })
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok || !data.ok) throw new Error((data.errors && data.errors[0]) || `Update failed (${r.status}).`);
+    if (detailWoServiceStatus) detailWoServiceStatus.textContent = `Changed to ${data.serviceLabel || serviceKey}.`;
+    await loadLeads();
+  } catch (err) {
+    if (detailWoServiceStatus) detailWoServiceStatus.textContent = err.message || "Couldn't change type.";
+  } finally {
+    if (detailWoServiceSaveBtn) detailWoServiceSaveBtn.disabled = false;
+  }
+}
+
+if (detailWoServiceSaveBtn) detailWoServiceSaveBtn.addEventListener("click", saveWoServiceType);

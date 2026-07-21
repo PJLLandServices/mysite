@@ -3453,3 +3453,44 @@ body.pjl-bulk-toolbar-busy {
   .book-lead-dialog .dialog-actions .pjl-btn { flex: 1 1 100%; }
 }
 
+/* Change appointment type — Work Order section (admin CRM) */
+.detail-workorder__change-type {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(15, 31, 20, 0.10);
+}
+.detail-workorder__change-type > label {
+  display: block;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--pjl-text-muted);
+  margin-bottom: 6px;
+}
+.detail-wo-type-row {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+  flex-wrap: wrap;
+}
+.detail-wo-type-row select {
+  flex: 1 1 200px;
+  min-width: 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(15, 31, 20, 0.18);
+  font: inherit;
+  font-size: 14px;
+  min-height: 44px;
+}
+.detail-wo-type-row .pjl-btn { min-height: 44px; flex: 0 0 auto; }
+.detail-wo-type-status {
+  margin: 8px 0 0;
+  font-size: 12.5px;
+  color: var(--pjl-text-muted);
+  min-height: 1em;
+}
+@media (max-width: 600px) {
+  .detail-wo-type-row select { flex: 1 1 100%; }
+  .detail-wo-type-row .pjl-btn { flex: 1 1 100%; }
+}
+
