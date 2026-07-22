@@ -1600,3 +1600,46 @@
 @media (max-width: 480px) {
   .booking-action-dialog { width: 100vw; max-height: 100vh; border-radius: 0; padding: 16px 14px; }
 }
+
+/* Change appointment type — Manage-appointment modal (Schedule page).
+   Select + button stack full-width so the narrow dialog never overflows
+   sideways on a phone (select min-width:0 + width:100%). */
+.booking-action-change-type {
+  margin: 0 0 14px;
+  padding: 12px 14px;
+  border: 1px dashed rgba(27, 77, 46, 0.30);
+  border-radius: 10px;
+  background: rgba(27, 77, 46, 0.03);
+  min-width: 0;
+}
+.booking-action-change-type[hidden] { display: none; }
+.booking-action-change-type > label {
+  display: block;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: #4A4A4A;
+  margin-bottom: 8px;
+}
+.booking-action-type-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+.booking-action-type-row select {
+  flex: 1 1 100%;
+  min-width: 0;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+  padding: 11px 12px;
+  border-radius: 8px;
+  border: 1px solid #E2E0D4;
+  font: inherit;
+  font-size: 15px;
+  min-height: 44px;
+  background: #fff;
+}
+.booking-action-type-row .pjl-btn { flex: 1 1 100%; min-height: 44px; }
