@@ -1502,12 +1502,20 @@ body.portal-modal-open { overflow: hidden; }
 /* Admin-only "change appointment type" control on the customer portal.
    Visually fenced off from the customer content with an amber "Admin" tag
    so it's obvious this is Patrick's tool, not a customer action. */
+/* The work-order card is a grid item in .portal-grid (1fr tracks =
+   minmax(auto,1fr), which won't shrink below content). The admin
+   change-type <select>'s longest option ("Fall winterization (16+…)")
+   would force the whole card grid wider than the phone. min-width:0 lets
+   this one card shrink to its track so the page never scrolls sideways —
+   scoped to the work-order card, harmless for the customer view. */
+.portal-workorder { min-width: 0; }
 .workorder-admin-change-type {
   margin-top: 14px;
   padding: 12px 14px;
   border: 1px dashed var(--amber);
   border-radius: 10px;
   background: rgba(224, 123, 36, 0.05);
+  min-width: 0;
 }
 .workorder-admin-change-type > label {
   display: flex;
@@ -1533,10 +1541,15 @@ body.portal-modal-open { overflow: hidden; }
   gap: 8px;
   align-items: stretch;
   flex-wrap: wrap;
+  min-width: 0;
 }
 .portal-admin-type-row select {
   flex: 1 1 200px;
   min-width: 0;
+  /* Clamp to the card width so a long option label can't overflow the
+     card (native selects clip / ellipsize the visible text). */
+  width: 100%;
+  max-width: 100%;
   padding: 11px 12px;
   border-radius: 8px;
   border: 1px solid var(--border);
@@ -1544,6 +1557,7 @@ body.portal-modal-open { overflow: hidden; }
   font-size: 15px;
   min-height: 44px;
   background: #fff;
+  box-sizing: border-box;
 }
 .portal-admin-type-row .portal-btn { min-height: 44px; flex: 0 0 auto; }
 .portal-admin-type-status {
