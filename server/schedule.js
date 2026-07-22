@@ -1238,6 +1238,9 @@ const actionRescheduleBtn   = document.getElementById("bookingActionReschedule")
 const actionCancelBtn       = document.getElementById("bookingActionCancel");
 const actionDeleteBtn       = document.getElementById("bookingActionDelete");
 const actionStatus          = document.getElementById("bookingActionStatus");
+const actionChangeType      = document.getElementById("bookingActionChangeType");
+const actionServiceSelect   = document.getElementById("bookingActionServiceSelect");
+const actionServiceSave     = document.getElementById("bookingActionServiceSave");
 
 const cancelDialog          = document.getElementById("cancelBookingDialog");
 const cancelClose           = document.getElementById("cancelBookingClose");
@@ -1316,6 +1319,42 @@ async function resolveBookingByLead(leadId, scheduledFor) {
   return data.bookings[0];
 }
 
+// Ensure the bookable-services catalog is loaded (reuses the cache the
+// +Book modal fills) and populate the Manage-appointment "change type"
+// select with grouped options. Idempotent per open.
+async function fillActionServiceSelect(currentServiceKey) {
+  if (!actionServiceSelect) return;
+  if (!Object.keys(bookingServicesCatalog).length) {
+    try {
+      const r = await fetch("/api/booking/services");
+      const data = await r.json();
+      bookingServicesCatalog = (data.ok && data.services) || {};
+    } catch { /* leave empty — save will no-op */ }
+  }
+  const entries = Object.entries(bookingServicesCatalog).filter(([, s]) => s.bookable);
+  const groups = {
+    "Spring opening (residential)":     entries.filter(([k, s]) => s.family === "spring_opening" && !k.includes("commercial")),
+    "Spring opening (commercial)":      entries.filter(([k, s]) => s.family === "spring_opening" && k.includes("commercial")),
+    "Fall winterization (residential)": entries.filter(([k, s]) => s.family === "fall_closing" && !k.includes("commercial")),
+    "Fall winterization (commercial)":  entries.filter(([k, s]) => s.family === "fall_closing" && k.includes("commercial")),
+    "Other": entries.filter(([, s]) => !["spring_opening", "fall_closing"].includes(s.family))
+  };
+  actionServiceSelect.innerHTML = "";
+  for (const [groupLabel, items] of Object.entries(groups)) {
+    if (!items.length) continue;
+    const og = document.createElement("optgroup");
+    og.label = groupLabel;
+    items.forEach(([key, svc]) => {
+      const o = document.createElement("option");
+      o.value = key;
+      o.textContent = svc.label || key;
+      og.appendChild(o);
+    });
+    actionServiceSelect.appendChild(og);
+  }
+  if (currentServiceKey) actionServiceSelect.value = currentServiceKey;
+}
+
 async function openBookingActionPanel({ leadId, scheduledFor, bookingStatus }) {
   if (!leadId) return;
   // Find the matching booking row from the cached canvas state so we can
@@ -1326,7 +1365,8 @@ async function openBookingActionPanel({ leadId, scheduledFor, bookingStatus }) {
   const summary = localMatch
     ? { label: localMatch.label, customer: localMatch.customer, address: localMatch.address, scheduledFor: localMatch.start, status: localMatch.bookingStatus }
     : { label: "Booking", customer: "", address: "", scheduledFor };
-  pendingAction = { leadId, scheduledFor, bookingId: null, summary, bookingStatus: bookingStatus || "confirmed" };
+  const currentServiceKey = (localMatch && localMatch.serviceKey) || "";
+  pendingAction = { leadId, scheduledFor, bookingId: null, summary, bookingStatus: bookingStatus || "confirmed", serviceKey: currentServiceKey };
   actionSummary.innerHTML = summaryHtml(summary);
   actionStatus.textContent = "";
   // Reschedule + Cancel are meaningless on an already-cancelled booking
@@ -1335,6 +1375,12 @@ async function openBookingActionPanel({ leadId, scheduledFor, bookingStatus }) {
   actionRescheduleBtn.hidden = cancelled;
   actionCancelBtn.hidden = cancelled;
   actionDeleteBtn.hidden = viewerRole !== "admin";
+  // Change-appointment-type control — same audience as Reschedule; hidden
+  // on cancelled bookings. Populate + preselect the current type.
+  if (actionChangeType) {
+    actionChangeType.hidden = cancelled;
+    if (!cancelled) fillActionServiceSelect(currentServiceKey).catch(() => {});
+  }
   showDialog(actionDialog);
   // Resolve the canonical bookingId in the background — the user can
   // click Reschedule (which calls openCrmReschedule by leadId anyway)
@@ -1348,6 +1394,48 @@ async function openBookingActionPanel({ leadId, scheduledFor, bookingStatus }) {
 }
 
 actionClose?.addEventListener("click", () => closeDialog(actionDialog));
+
+// Change appointment type — resolves the canonical BK id (like Cancel/
+// Delete), POSTs the new serviceKey, then refreshes the calendar so the
+// event's label + colour + duration reflect the new service.
+actionServiceSave?.addEventListener("click", async () => {
+  if (!pendingAction || !actionServiceSelect) return;
+  const serviceKey = actionServiceSelect.value;
+  if (!serviceKey) return;
+  if (serviceKey === pendingAction.serviceKey) {
+    actionStatus.textContent = "That's already the appointment type.";
+    return;
+  }
+  if (!pendingAction.bookingId) {
+    actionStatus.textContent = "Resolving booking…";
+    pendingAction.bookingId = (await resolveBookingByLead(pendingAction.leadId, pendingAction.scheduledFor))?.id || null;
+  }
+  if (!pendingAction.bookingId) {
+    actionStatus.textContent = "Couldn't find the booking record — refresh and try again.";
+    return;
+  }
+  actionServiceSave.disabled = true;
+  actionStatus.textContent = "Updating…";
+  try {
+    const r = await fetch(`/api/bookings/${encodeURIComponent(pendingAction.bookingId)}/service-type`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify({ serviceKey })
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok || !data.ok) throw new Error((data.errors && data.errors[0]) || `Update failed (${r.status}).`);
+    pendingAction.serviceKey = serviceKey;
+    actionStatus.textContent = `Changed to ${data.serviceLabel || serviceKey}.`;
+    await loadAll().catch(() => {});
+    setTimeout(() => closeDialog(actionDialog), 700);
+  } catch (err) {
+    actionStatus.textContent = err.message || "Couldn't change the appointment type.";
+  } finally {
+    actionServiceSave.disabled = false;
+  }
+});
+
 actionRescheduleBtn?.addEventListener("click", () => {
   if (!pendingAction || typeof window.openCrmReschedule !== "function") return;
   const { leadId, scheduledFor } = pendingAction;

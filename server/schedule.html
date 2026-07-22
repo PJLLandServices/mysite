@@ -17,7 +17,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@400;500;600;700;800&family=DM+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/crm/crm.css">
-  <link rel="stylesheet" href="/crm/schedule.css">
+  <link rel="stylesheet" href="/crm/schedule.css?v=20260722">
   <link rel="stylesheet" href="/crm/crm-reschedule.css">
   <link rel="stylesheet" href="/js/time-picker.css?v=1">
   <link rel="stylesheet" href="/js/date-range-picker.css?v=1">
@@ -253,6 +253,15 @@
       <button type="button" class="pjl-btn pjl-btn-outline" id="bookingActionClose" aria-label="Close">×</button>
     </header>
     <dl class="booking-action-summary" id="bookingActionSummary"></dl>
+    <!-- Change appointment type — re-points this booking's service (moves
+         the visit length + price). Hidden on cancelled bookings. -->
+    <div class="booking-action-change-type" id="bookingActionChangeType">
+      <label for="bookingActionServiceSelect">Change appointment type</label>
+      <div class="booking-action-type-row">
+        <select id="bookingActionServiceSelect"></select>
+        <button type="button" class="pjl-btn pjl-btn-outline" id="bookingActionServiceSave">Update type</button>
+      </div>
+    </div>
     <div class="booking-action-buttons">
       <button type="button" class="pjl-btn pjl-btn-primary" id="bookingActionReschedule">Reschedule</button>
       <button type="button" class="pjl-btn pjl-btn-outline" id="bookingActionCancel">Cancel booking</button>
@@ -293,7 +302,7 @@
   <script src="/js/time-picker.js?v=1"></script>
   <script src="/js/date-range-picker.js?v=1"></script>
   <script src="/crm/crm-reschedule.js?v=2"></script>
-  <script src="/crm/schedule.js?v=2"></script>
+  <script src="/crm/schedule.js?v=3"></script>
   <script src="/coverage-checker.js"></script>
     <script async defer src="https://maps.googleapis.com/maps/api/js?key=AIzaSyBrORBeXbpNTJvoi2PDhDDs6Iy-BGSU30M&libraries=places&callback=initCoverageCheck&loading=async"></script>
   <script src="/crm/nav-badges.js?v=1"></script>
