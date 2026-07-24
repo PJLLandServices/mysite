@@ -34,6 +34,7 @@
 | Homepage | `index.html` | Top-level entry; hero, services, testimonial strip, blog teaser |
 | Core service pages | `sprinkler-systems.html`, `landscape-lighting.html` | Detailed service info; magazine-style spreads |
 | Conversion pages | `quote.html` (interactive builder), `estimate.html` (older form) | Lead capture |
+| Customer intake | `new-customer.html` | Structured customer self-intake, served at **two clean public links** from one file: `/new-customer` (residential) and `/commercial-new-customer` (commercial). The mode is chosen by the URL — no visible toggle. Commercial adds a billing entity + `c/o`, a PO-required flag, payment terms, a role-tagged contacts list, and an accuracy disclaimer. `noindex`; privately shared. Posts to `POST /api/new-customer`. |
 | Communication | `contact.html`, `faq.html` | Reach-out, support, objection handling |
 | Trust / E-E-A-T | `about.html`, `reviews.html` | Owner story, credentials, social proof |
 | Service-area pages | `sprinkler-service-{newmarket,aurora,king-city,richmond-hill,vaughan}.html` | Local-SEO landing pages per city |
@@ -736,12 +737,46 @@ Pattern — every form on the public site posts to `POST /api/quotes` with this 
 }
 ```
 
-Required: `contact.name`, `contact.phone`, valid `contact.email`. Everything else is optional. If `source` is missing or invalid, it defaults to `general_lead`.
+Required: `contact.name`, `contact.phone`, valid `contact.email`. Everything else is optional. If `source` is missing or invalid, it defaults to `general_lead`. (`validateLead` in `server.js` enforces the phone requirement for `POST /api/quotes` — but see the `new-customer.html` note below, whose separate endpoint does **not** require phone.)
+
+**Optional `billing` block (both intake endpoints).** When the invoice goes to a different party, a form may include a structured `billing` object, validated by `parseBillingPayload` in `server.js`:
+
+```js
+billing: {
+  billTo: "other",                  // "self" (default) persists nothing
+  name:   "YRSCC #1233",            // required when billTo === "other"
+  careOf: "RMSCO Management Ltd.",  // optional — commercial c/o line
+  address: "16775 Yonge St. …",     // required when billTo === "other"
+  email:  "ap@example.com",         // optional
+  phone:  "905-555-0100"            // optional
+}
+```
+
+`billing` is persisted on the lead **only** when `billTo === "other"` (and `careOf` only when non-empty); self-billing leads store no `billing` key, so legacy records stay byte-identical.
+
+**`new-customer.html` uses a separate endpoint.** The customer self-intake form posts to **`POST /api/new-customer`** (not `/api/quotes`), with a **flat** body — `firstName`, `lastName`, `email`, `phone`, `propertyAddress`, `notes`, `website` (honeypot), `billing`. The server composes `contact` from those flat fields and tags the lead `source: "self_serve"`. **Phone is optional on this endpoint.** Its anti-bot gate is lighter than `/api/quotes` — honeypot + per-IP rate limit only, no Turnstile / `_ts` time-trap (see §15.14).
+
+**Commercial account extension (`new-customer.html`).** The form is served at two clean routes (`resolveStaticTarget` in `server.js`): `/new-customer` renders residential, `/commercial-new-customer` renders commercial — same file, mode decided by the URL path (a `?type=commercial` query is honoured as a fallback). In commercial mode the flat body additionally carries:
+
+```js
+accountType: "commercial",           // omitted entirely for residential
+commercial: {
+  submitterRole: "property_manager", // role allow-list, coerced server-side
+  poRequired: true,
+  paymentTerms: "net_30",            // terms allow-list, coerced server-side
+  additionalContacts: [              // role-tagged; capped at 5 server-side
+    { name: "Faramarz Ossareh", role: "owner_board", email: "", phone: "(416) 302-1810" }
+  ]
+}
+```
+
+The billing entity itself reuses the `billing` block above (`billing.name` = the legal entity, `billing.careOf` = the management company). Residential submissions add **no** `accountType` / `commercial` keys. Role vocabulary: `site_contact`, `property_manager`, `accounts_payable`, `owner_board`, `other`. Payment terms: `due_on_receipt`, `net_15`, `net_30`, `net_60`, `other`. Unknown role/terms values coerce to `other` server-side rather than erroring; a malformed `commercial` block never 500s — the lead is saved with the raw block preserved in notes. See the `leads.json` schema notes in `SYSTEM_OVERVIEW.md`.
 
 **Reference implementations** (look at these to copy the pattern):
 - `contact.html` (lines ~480 + the inline `<script>` near the bottom)
 - `index.html` `quickBookForm` (lines ~1339 + the `<script>` near line ~1830)
 - `js/sprinkler-builder.js` `submitToBackend()` (more complex — interactive builder)
+- `new-customer.html` — the example of **URL-driven conditionally-revealed field groups**: `/new-customer` renders residential, `/commercial-new-customer` reveals the commercial fields (nested billing entity, PO/terms, repeatable role-tagged contacts, accuracy disclaimer). Both are the same file — one honeypot, one codebase — served at two routes via `resolveStaticTarget`; both post to `/api/new-customer`.
 
 ### 15.7 Adding a new lead source (form type)
 
