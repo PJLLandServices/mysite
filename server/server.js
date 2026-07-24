@@ -17875,6 +17875,14 @@ function resolveStaticTarget(pathname) {
   if (pathname === "/new-customer" || pathname === "/new-customer/") {
     return { dir: SITE_DIR, relative: "/new-customer.html" };
   }
+  // Commercial customer self-intake — a distinct public link that serves
+  // the SAME file but opens it in commercial mode (the page reads the URL
+  // path to decide). One source of truth, two clean URLs — no duplicated
+  // page, so the honeypot + every future change live in one place.
+  // (Commercial-intake brief, Jul 2026.)
+  if (pathname === "/commercial-new-customer" || pathname === "/commercial-new-customer/") {
+    return { dir: SITE_DIR, relative: "/new-customer.html" };
+  }
   if (pathname === "/login" || pathname === "/login/") {
     return { dir: SERVER_DIR, relative: "/login.html" };
   }

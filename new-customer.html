@@ -173,40 +173,30 @@
 .form-group[hidden],
 .nc-com-only[hidden] { display: none; }
 
-/* Account-type segmented control */
-.nc-acct { gap: 10px; }
-.nc-acct__label { font-size: 13px; font-weight: 500; color: var(--text-mid); }
-.nc-seg {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 6px;
-  background: var(--cream);
-  border: 1.5px solid var(--border);
+/* Accuracy notice (commercial intake). Shown above the submit button on
+   the commercial form; hidden on the residential form. */
+.nc-disclaimer {
+  grid-column: 1 / -1;
+  background: rgba(224,123,36,0.07);
+  border: 1px solid rgba(224,123,36,0.30);
+  border-left: 4px solid var(--amber);
   border-radius: var(--r);
-  padding: 5px;
+  padding: 16px 18px;
 }
-.nc-seg__opt {
-  position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 44px;
-  border-radius: calc(var(--r) - 4px);
-  font-size: 15px;
-  font-weight: 600;
+.nc-disclaimer strong {
+  display: block;
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #8a4a12;
+  margin-bottom: 6px;
+}
+.nc-disclaimer p {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.6;
   color: var(--text-mid);
-  cursor: pointer;
-  text-align: center;
-  -webkit-tap-highlight-color: transparent;
-  transition: background 0.15s, color 0.15s, box-shadow 0.15s;
 }
-.nc-seg__opt input { position: absolute; opacity: 0; pointer-events: none; }
-.nc-seg__opt.is-active {
-  background: var(--green);
-  color: #fff;
-  box-shadow: 0 1px 3px rgba(27,77,46,0.25);
-}
-.nc-seg__opt:focus-within { outline: 2px solid var(--green); outline-offset: 2px; }
 
 /* Selects match the input styling */
 .form-group select {
@@ -358,19 +348,6 @@
 
         <form id="newCustomerForm" novalidate>
           <div class="form-grid">
-            <div class="form-group full nc-acct" role="radiogroup" aria-label="Account type">
-              <span class="nc-acct__label">What kind of account is this?</span>
-              <div class="nc-seg" id="nc-acct-seg">
-                <label class="nc-seg__opt is-active">
-                  <input type="radio" name="accountType" value="residential" checked>
-                  <span>Residential</span>
-                </label>
-                <label class="nc-seg__opt">
-                  <input type="radio" name="accountType" value="commercial">
-                  <span>Commercial</span>
-                </label>
-              </div>
-            </div>
             <div class="form-group">
               <label for="nc-first">First name <span class="req">*</span></label>
               <input type="text" id="nc-first" name="firstName" required autocomplete="given-name">
@@ -477,6 +454,11 @@
               <input type="text" id="nc-website" name="website" tabindex="-1" autocomplete="off">
             </div>
 
+            <div class="nc-disclaimer nc-com-only" hidden>
+              <strong>Please read before submitting</strong>
+              <p>We expect that all information is entered in correctly. Incorrect information will remain billable and applicable as per input through our online information gathering tool. Please ensure as much details as possible are shared.</p>
+            </div>
+
             <div class="form-submit-row">
               <button type="submit" id="nc-submit" class="btn btn-green" style="width:100%;justify-content:center;">Send my information →</button>
             </div>
@@ -521,7 +503,6 @@
   var toggleWrap    = document.getElementById('nc-bill-toggle-wrap');
   var billNameLabel = document.getElementById('nc-bill-name-label');
   var billHint      = document.getElementById('nc-billing-hint');
-  var seg           = document.getElementById('nc-acct-seg');
   var comOnly       = form.querySelectorAll('.nc-com-only');
   var contactsList  = document.getElementById('nc-contacts-list');
   var addContactBtn = document.getElementById('nc-add-contact');
@@ -545,23 +526,22 @@
 
   function val(id) { var el = document.getElementById(id); return el ? String(el.value || '').trim() : ''; }
 
-  function currentAccountType() {
-    var checked = form.querySelector('input[name="accountType"]:checked');
-    return checked && checked.value === 'commercial' ? 'commercial' : 'residential';
-  }
+  // Account type is decided by the URL — NOT a customer-facing toggle.
+  // /commercial-new-customer (or a ?type=commercial fallback) → commercial;
+  // the residential /new-customer link is unchanged. Read defensively so a
+  // malformed URL never throws; default is residential.
+  var IS_COMMERCIAL = (function () {
+    try {
+      if (String(window.location.pathname || '').toLowerCase().indexOf('/commercial-new-customer') !== -1) return true;
+      var params = new URLSearchParams(window.location.search || '');
+      return String(params.get('type') || '').toLowerCase() === 'commercial';
+    } catch (e) { return false; }
+  })();
 
   // Show/hide the commercial-only field groups and re-label the reused
-  // billing block. Called on load and whenever the account type changes.
+  // billing block, based on which link the visitor arrived through.
   function applyMode() {
-    var commercial = currentAccountType() === 'commercial';
-
-    if (seg) {
-      var opts = seg.querySelectorAll('.nc-seg__opt');
-      for (var i = 0; i < opts.length; i++) {
-        var input = opts[i].querySelector('input');
-        opts[i].classList.toggle('is-active', !!(input && input.checked));
-      }
-    }
+    var commercial = IS_COMMERCIAL;
 
     for (var j = 0; j < comOnly.length; j++) comOnly[j].hidden = !commercial;
 
@@ -580,13 +560,11 @@
     }
   }
 
-  if (seg) seg.addEventListener('change', applyMode);
-
   // Residential billing disclosure — unchanged behaviour. No-ops in
   // commercial mode (the toggle is hidden there).
   if (billToggle && billFields) {
     billToggle.addEventListener('change', function () {
-      if (currentAccountType() === 'commercial') return;
+      if (IS_COMMERCIAL) return;
       billFields.hidden = !billToggle.checked;
       billToggle.setAttribute('aria-expanded', billToggle.checked ? 'true' : 'false');
       if (billToggle.checked) {
@@ -660,7 +638,7 @@
     e.preventDefault();
     errBox.classList.remove('is-visible');
 
-    var commercial = currentAccountType() === 'commercial';
+    var commercial = IS_COMMERCIAL;
 
     // Billing + commercial blocks — validated BEFORE the button is disabled
     // so an early return never leaves the form stuck on "Sending…".
@@ -747,15 +725,7 @@
     }
   });
 
-  // Deep link + initial mode. Read ?type=commercial defensively; any other
-  // value, no param, or a malformed query string yields Residential.
-  try {
-    var params = new URLSearchParams(window.location.search || '');
-    if (String(params.get('type') || '').toLowerCase() === 'commercial') {
-      var commercialRadio = form.querySelector('input[name="accountType"][value="commercial"]');
-      if (commercialRadio) commercialRadio.checked = true;
-    }
-  } catch (err) { /* malformed query — stay residential */ }
+  // Set the initial mode from the URL (IS_COMMERCIAL, computed above).
   applyMode();
 })();
 </script>

@@ -34,7 +34,7 @@
 | Homepage | `index.html` | Top-level entry; hero, services, testimonial strip, blog teaser |
 | Core service pages | `sprinkler-systems.html`, `landscape-lighting.html` | Detailed service info; magazine-style spreads |
 | Conversion pages | `quote.html` (interactive builder), `estimate.html` (older form) | Lead capture |
-| Customer intake | `new-customer.html` | Structured customer self-intake with **residential and commercial** account modes (commercial reveals a billing entity + `c/o`, PO-required flag, payment terms, and a repeatable role-tagged contacts list). `noindex`; a privately shared link — `?type=commercial` opens it in commercial mode. Posts to `POST /api/new-customer`. |
+| Customer intake | `new-customer.html` | Structured customer self-intake, served at **two clean public links** from one file: `/new-customer` (residential) and `/commercial-new-customer` (commercial). The mode is chosen by the URL — no visible toggle. Commercial adds a billing entity + `c/o`, a PO-required flag, payment terms, a role-tagged contacts list, and an accuracy disclaimer. `noindex`; privately shared. Posts to `POST /api/new-customer`. |
 | Communication | `contact.html`, `faq.html` | Reach-out, support, objection handling |
 | Trust / E-E-A-T | `about.html`, `reviews.html` | Owner story, credentials, social proof |
 | Service-area pages | `sprinkler-service-{newmarket,aurora,king-city,richmond-hill,vaughan}.html` | Local-SEO landing pages per city |
@@ -756,7 +756,7 @@ billing: {
 
 **`new-customer.html` uses a separate endpoint.** The customer self-intake form posts to **`POST /api/new-customer`** (not `/api/quotes`), with a **flat** body — `firstName`, `lastName`, `email`, `phone`, `propertyAddress`, `notes`, `website` (honeypot), `billing`. The server composes `contact` from those flat fields and tags the lead `source: "self_serve"`. **Phone is optional on this endpoint.** Its anti-bot gate is lighter than `/api/quotes` — honeypot + per-IP rate limit only, no Turnstile / `_ts` time-trap (see §15.14).
 
-**Commercial account extension (`new-customer.html`).** When the account-type control is set to Commercial — or the page is opened with the `?type=commercial` deep link — the flat body additionally carries:
+**Commercial account extension (`new-customer.html`).** The form is served at two clean routes (`resolveStaticTarget` in `server.js`): `/new-customer` renders residential, `/commercial-new-customer` renders commercial — same file, mode decided by the URL path (a `?type=commercial` query is honoured as a fallback). In commercial mode the flat body additionally carries:
 
 ```js
 accountType: "commercial",           // omitted entirely for residential
@@ -776,7 +776,7 @@ The billing entity itself reuses the `billing` block above (`billing.name` = the
 - `contact.html` (lines ~480 + the inline `<script>` near the bottom)
 - `index.html` `quickBookForm` (lines ~1339 + the `<script>` near line ~1830)
 - `js/sprinkler-builder.js` `submitToBackend()` (more complex — interactive builder)
-- `new-customer.html` — the example of **conditionally-revealed field groups** (a residential/commercial account-type control that reveals a nested billing entity, PO/terms, and a repeatable role-tagged contacts list; posts to `/api/new-customer`)
+- `new-customer.html` — the example of **URL-driven conditionally-revealed field groups**: `/new-customer` renders residential, `/commercial-new-customer` reveals the commercial fields (nested billing entity, PO/terms, repeatable role-tagged contacts, accuracy disclaimer). Both are the same file — one honeypot, one codebase — served at two routes via `resolveStaticTarget`; both post to `/api/new-customer`.
 
 ### 15.7 Adding a new lead source (form type)
 
