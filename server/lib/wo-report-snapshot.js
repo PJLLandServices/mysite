@@ -33,7 +33,7 @@ const crypto = require("node:crypto");
 const workOrders = require("./work-orders");
 const properties = require("./properties");
 const customers = require("./customers");
-const { generateWoReportPdf, reportFilename } = require("./wo-report-pdf");
+const { generateWoReportPdf, renderWoReportBuffer, reportFilename } = require("./wo-report-pdf");
 
 const SNAPSHOT_DIR = path.resolve(__dirname, "..", "data", "wo-reports");
 
@@ -87,25 +87,36 @@ async function createSnapshot({ woId, triggerType, quoteId = null, by = "system"
   const snapshotId = makeSnapshotId();
   const { property, customer } = await loadRenderContext(wo);
 
-  // Render — pdfkit streams, we collect to a buffer so we can hash and
-  // write atomically. Memory cost: ~2-5 MB per report (photos dominate).
-  const stream = generateWoReportPdf({ wo, property, customer, mode });
-  const chunks = [];
-  const pdfBuffer = await new Promise((resolve, reject) => {
+  // Render BOTH audiences — pdfkit streams collected to buffers so we can
+  // hash and write atomically. The internal copy is the admin/tech audit
+  // document (signature bypass + post-completion corrections); the
+  // customer copy omits those. Memory cost: ~2-5 MB per report (photos
+  // dominate); we render twice but the second render reuses the same
+  // in-memory wo/property/customer context.
+  const renderBuffer = (audience) => new Promise((resolve, reject) => {
+    const chunks = [];
+    const stream = generateWoReportPdf({ wo, property, customer, mode, audience });
     stream.on("data", (c) => chunks.push(c));
     stream.on("end", () => resolve(Buffer.concat(chunks)));
     stream.on("error", reject);
   });
+  const pdfBuffer = await renderBuffer("internal");
+  const customerBuffer = await renderBuffer("customer");
 
   const sha256 = crypto.createHash("sha256").update(pdfBuffer).digest("hex");
+  const sha256Customer = crypto.createHash("sha256").update(customerBuffer).digest("hex");
   const filename = reportFilename({ wo, mode });
 
-  // Ensure the per-WO directory exists, then write the file. Snapshots
-  // are immutable post-write — no overwrite logic, ever.
+  // Ensure the per-WO directory exists, then write both files. Snapshots
+  // are immutable post-write — no overwrite logic, ever. The internal file
+  // keeps the legacy `<id>.pdf` name so existing admin links never break;
+  // the customer file is `<id>-customer.pdf`.
   const dir = path.join(SNAPSHOT_DIR, woId);
   await fs.mkdir(dir, { recursive: true });
   const filePath = path.join(dir, `${snapshotId}.pdf`);
+  const filePathCustomer = path.join(dir, `${snapshotId}-customer.pdf`);
   await fs.writeFile(filePath, pdfBuffer);
+  await fs.writeFile(filePathCustomer, customerBuffer);
 
   const record = {
     snapshotId,
@@ -116,6 +127,9 @@ async function createSnapshot({ woId, triggerType, quoteId = null, by = "system"
     filename,
     path: filePath,
     sha256,
+    pathCustomer: filePathCustomer,
+    sha256Customer,
+    schemaVersion: 2,
     by
   };
 
@@ -127,21 +141,56 @@ async function createSnapshot({ woId, triggerType, quoteId = null, by = "system"
 // on the WO (so an attacker can't request arbitrary snapshot IDs and
 // guess existence) and that the file is actually on disk. Returns
 // { buffer, record } on success, null on miss.
-async function readSnapshot({ woId, snapshotId }) {
+async function readSnapshot({ woId, snapshotId, audience = "internal" }) {
   if (!woId || !snapshotId) return null;
   const wo = await workOrders.get(woId);
   if (!wo) return null;
   const record = (wo.reportSnapshots || []).find((s) => s.snapshotId === snapshotId);
   if (!record) return null;
-  // Resolve the path from the record but verify it lives inside the
-  // SNAPSHOT_DIR — defense against any historical record that escaped
-  // the per-WO directory.
+
+  // Customer audience — serve the customer-render file. Legacy snapshots
+  // (schemaVersion < 2) only have the single internal file; render the
+  // customer copy on demand, cache it to disk, and stamp the record so
+  // the next read is a straight file serve. Self-healing migration, no
+  // batch backfill needed.
+  if (audience === "customer") {
+    if (record.pathCustomer && record.pathCustomer.startsWith(SNAPSHOT_DIR)
+        && fsSync.existsSync(record.pathCustomer)) {
+      return { buffer: await fs.readFile(record.pathCustomer), record };
+    }
+    // Lazy migration: render + cache a customer copy from CURRENT wo state.
+    const { property, customer } = await loadRenderContext(wo);
+    const buffer = await renderWoReportBuffer({ wo, property, customer, mode: record.mode, audience: "customer" });
+    const pathCustomer = path.join(SNAPSHOT_DIR, woId, `${snapshotId}-customer.pdf`);
+    try {
+      await fs.mkdir(path.dirname(pathCustomer), { recursive: true });
+      await fs.writeFile(pathCustomer, buffer);
+      await workOrders.patchReportSnapshot(woId, snapshotId, { pathCustomer, schemaVersion: 2 });
+    } catch (err) { /* serve the render even if caching failed */ }
+    return { buffer, record: { ...record, pathCustomer, schemaVersion: 2 } };
+  }
+
+  // Internal audience — resolve the internal path but verify it lives
+  // inside SNAPSHOT_DIR (defense against any historical record that
+  // escaped the per-WO directory).
   const filePath = record.path && record.path.startsWith(SNAPSHOT_DIR)
     ? record.path
     : path.join(SNAPSHOT_DIR, woId, `${snapshotId}.pdf`);
   if (!fsSync.existsSync(filePath)) return null;
   const buffer = await fs.readFile(filePath);
   return { buffer, record };
+}
+
+// Serve the NEWEST snapshot for a WO in the requested audience. Powers
+// the customer portal's stable (snapshotId-less) report link so a
+// corrected report always resolves to the current version.
+async function readLatestSnapshot({ woId, audience = "internal" }) {
+  if (!woId) return null;
+  const wo = await workOrders.get(woId);
+  if (!wo || !Array.isArray(wo.reportSnapshots) || !wo.reportSnapshots.length) return null;
+  const latest = [...wo.reportSnapshots]
+    .sort((a, b) => String(a.ts || "").localeCompare(String(b.ts || ""))).pop();
+  return readSnapshot({ woId, snapshotId: latest.snapshotId, audience });
 }
 
 // Look up the most recent cascade-triggered snapshot on a WO. Used by
@@ -158,6 +207,7 @@ function findLatestCascadeSnapshot(wo) {
 module.exports = {
   createSnapshot,
   readSnapshot,
+  readLatestSnapshot,
   findLatestCascadeSnapshot,
   SNAPSHOT_DIR
 };

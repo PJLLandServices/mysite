@@ -628,6 +628,77 @@ async function runProjectFinalCascade(project, opts = {}) {
     };
   }
 
+  // Gap 1 — roll accepted change-order on_site_quotes into the final
+  // invoice. A project's ADDED scope lives as on_site_quotes on its build
+  // WOs; the fixed-price / T&M rollup above only covers the base proposal,
+  // so those change orders would otherwise never be billed. Merge their
+  // lines here, tagged for audit. Double-billing guard: skip any quote
+  // already referenced by an existing invoice (via quoteId or a line note).
+  // NOTE: covers the standard (non-deposit) final; a deposit-balance final
+  // that reuses a held invoice does not pick these up (edge case, flagged).
+  const mergedChangeOrders = [];
+  try {
+    const quotesLib = require("./quotes");
+    const allInvoices = await invoices.list();
+    const woIds = Array.isArray(project.workOrderIds) ? project.workOrderIds : [];
+    const seenQuote = new Set([project.sourceQuoteId].filter(Boolean));
+    for (const woId of woIds) {
+      const w = await workOrders.get(woId);
+      const qid = w && w.onSiteQuote && w.onSiteQuote.quoteId;
+      if (!qid || seenQuote.has(qid)) continue;
+      seenQuote.add(qid);
+      const q = await quotesLib.get(qid);
+      if (!q || q.type !== "on_site_quote" || q.status !== "accepted") continue;
+      const alreadyBilled = allInvoices.some((inv) =>
+        inv.quoteId === qid
+        || (Array.isArray(inv.lineItems) && inv.lineItems.some((l) => String(l.note || "").includes(qid))));
+      if (alreadyBilled) continue;
+      for (const li of (Array.isArray(q.lineItems) ? q.lineItems : [])) {
+        lineItems.push({
+          key: li.sourceKey || li.key || "custom",
+          label: li.label,
+          qty: li.qty,
+          price: li.price,
+          lineTotal: li.lineTotal,
+          note: `Change order ${qid}`
+        });
+      }
+      mergedChangeOrders.push(qid);
+    }
+  } catch (err) { console.warn("[project-cascade] change-order merge failed:", err?.message); }
+  if (mergedChangeOrders.length) {
+    billingNote = `${billingNote}${billingNote ? " — " : ""}change orders rolled in: ${mergedChangeOrders.join(", ")}`;
+  }
+
+  // Gap 3 — resolve bill-to identity robustly. Project fields can be sparse
+  // on older records (this drafted with a blank bill-to in the field), so
+  // fall back to the property record, then the customer record, so the
+  // final invoice never renders an empty "Bill To".
+  let billName = project.customerName || "";
+  let billEmail = project.customerEmail || "";
+  let billPhone = project.customerPhone || "";
+  let billAddress = project.address || "";
+  try {
+    if ((!billName || !billAddress || !billEmail || !billPhone) && project.propertyId) {
+      const prop = await properties.get(project.propertyId);
+      if (prop) {
+        billName = billName || prop.customerName || "";
+        billEmail = billEmail || prop.customerEmail || "";
+        billPhone = billPhone || prop.customerPhone || "";
+        billAddress = billAddress || prop.address || "";
+      }
+    }
+    if ((!billName || !billEmail) && project.customerId) {
+      const customersLib = require("./customers");
+      const cust = await customersLib.get(project.customerId, { withProperties: false });
+      if (cust) {
+        billName = billName || cust.name || "";
+        billEmail = billEmail || cust.email || "";
+        billPhone = billPhone || cust.phone || "";
+      }
+    }
+  } catch (err) { console.warn("[project-cascade] bill-to resolution failed:", err?.message); }
+
   // Create (or reuse) the invoice. Project invoices skip the WO linkage
   // — invoice links back to the project via sourceProjectId instead.
   const completedAt = new Date().toISOString();
@@ -689,10 +760,10 @@ async function runProjectFinalCascade(project, opts = {}) {
         projectId: project.id,
         propertyId: project.propertyId,
         customerId: project.customerId || null,
-        customerName: project.customerName || "",
-        customerEmail: project.customerEmail || "",
-        customerPhone: project.customerPhone || "",
-        address: project.address || "",
+        customerName: billName,
+        customerEmail: billEmail,
+        customerPhone: billPhone,
+        address: billAddress,
         lineItems,
         notes: `Project ${project.id} — ${billingNote}`,
         paidOnSiteAtCompletion: false,

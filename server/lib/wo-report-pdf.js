@@ -325,10 +325,16 @@ function renderPhotoRow(doc, wo, photos, opts = {}) {
 
 // ---- Renderer entry point --------------------------------------------
 
-function generateWoReportPdf({ wo, property = {}, customer = {}, mode }) {
+function generateWoReportPdf({ wo, property = {}, customer = {}, mode, audience = "internal" }) {
   if (!wo || !wo.id) throw new Error("generateWoReportPdf requires a work order with an id.");
   if (mode !== "inspection_report" && mode !== "service_report") {
     throw new Error(`generateWoReportPdf: unknown mode "${mode}".`);
+  }
+  // audience — "internal" (admin/tech, full audit incl. signature bypass +
+  // post-completion corrections) vs "customer" (omits both). Default
+  // "internal" keeps every existing call site backwards-compatible.
+  if (audience !== "internal" && audience !== "customer") {
+    throw new Error(`generateWoReportPdf: unknown audience "${audience}".`);
   }
 
   const doc = new PDFDocument({
@@ -586,8 +592,14 @@ function generateWoReportPdf({ wo, property = {}, customer = {}, mode }) {
     doc.moveDown(0.6);
   }
 
-  // ---- Signature block (service_report only) ------------------------
-  if (mode === "service_report") {
+  // ---- Signature block (service_report, INTERNAL audience only) -----
+  // Signature bypass exposes the audit reason/note ("customer not home",
+  // etc.) — that belongs on the internal copy, never on the document the
+  // customer receives. On customer audience the section is omitted
+  // entirely (a real customer signature would be theirs to see, but a
+  // bypass has no signature, so there is nothing customer-appropriate to
+  // render). Gate the whole block.
+  if (mode === "service_report" && audience === "internal") {
     sectionHeading(doc, "Customer Sign-Off");
     if (wo.signature && wo.signature.signed && wo.signature.imageData) {
       const m = String(wo.signature.imageData).match(/^data:image\/[a-z]+;base64,(.+)$/);
@@ -745,6 +757,41 @@ function generateWoReportPdf({ wo, property = {}, customer = {}, mode }) {
         doc.y = rowY + rowH;
       }
       doc.moveDown(0.3);
+    }
+  }
+
+  // ---- Post-Completion Corrections (service_report, INTERNAL only) ---
+  // Admin audit of edits made to this WO after it was signed/bypassed and
+  // locked. Derived from wo.history[] "patch" entries whose note records
+  // changed field names ("Updated: zones, customerNotes"), kept only when
+  // they post-date the completion lock (signature.signedAt or bypass ts).
+  // Lock-only toggles are excluded — they are the mechanics of making an
+  // edit, not the edit itself. Field names only, no before/after values.
+  if (mode === "service_report" && audience === "internal") {
+    const lockedAt = (wo.signature && wo.signature.signedAt)
+      || (wo.signatureBypass && wo.signatureBypass.ts) || null;
+    const corrections = (Array.isArray(wo.history) ? wo.history : [])
+      .filter((h) => h && h.action === "patch" && lockedAt && String(h.ts) > String(lockedAt))
+      .map((h) => ({
+        ts: h.ts,
+        by: h.by || "admin",
+        fields: String(h.note || "").replace(/^Updated:\s*/i, "")
+          .split(/,\s*/).map((s) => s.trim()).filter((f) => f && f !== "locked")
+      }))
+      .filter((e) => e.fields.length);
+    if (corrections.length) {
+      ensureSpace(doc, 50);
+      sectionHeading(doc, "Post-Completion Corrections");
+      doc.font("Helvetica").fontSize(9).fillColor(PJL_MUTED);
+      doc.text("Edits made to this report after completion (internal record).",
+        60, doc.y + 2, { width: doc.page.width - 120 });
+      doc.moveDown(0.3);
+      corrections.forEach((e) => {
+        doc.font("Helvetica").fontSize(9).fillColor(PJL_TEXT);
+        doc.text(`${fmtDateTime(e.ts)} · ${e.by} · ${e.fields.join(", ")}`,
+          60, doc.y + 2, { width: doc.page.width - 120 });
+      });
+      doc.moveDown(0.6);
     }
   }
 

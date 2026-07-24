@@ -750,6 +750,27 @@ async function captureSignatureBypass(woId, { reason, note, bypassedBy }, { ip, 
 // the PDF lands on disk. Also writes a paired `report_snapshot_created`
 // history entry so the audit trail records the event in one step.
 // Returns the updated WO or null if not found.
+// Patch fields onto an existing snapshot record in place (no history
+// entry — used by the lazy customer-render migration to backfill
+// pathCustomer/schemaVersion). Immutable snapshot semantics still hold
+// for the frozen PDF bytes; this only records where the render lives.
+async function patchReportSnapshot(id, snapshotId, patch = {}) {
+  if (!snapshotId) throw new Error("patchReportSnapshot requires a snapshotId.");
+  const records = await readAll();
+  const idx = records.findIndex((w) => w.id === id);
+  if (idx === -1) return null;
+  const next = { ...records[idx] };
+  if (!Array.isArray(next.reportSnapshots)) return null;
+  const sIdx = next.reportSnapshots.findIndex((s) => s.snapshotId === snapshotId);
+  if (sIdx === -1) return null;
+  next.reportSnapshots = next.reportSnapshots.map((s, i) =>
+    i === sIdx ? { ...s, ...patch } : s);
+  next.updatedAt = new Date().toISOString();
+  records[idx] = next;
+  await writeAll(records);
+  return next.reportSnapshots[sIdx];
+}
+
 async function appendReportSnapshot(id, snapshot) {
   if (!snapshot || typeof snapshot !== "object" || !snapshot.snapshotId) {
     throw new Error("appendReportSnapshot requires a snapshot record with snapshotId.");
@@ -1629,6 +1650,7 @@ module.exports = {
   summarizeScopeAdditions,
   captureSignatureBypass,
   appendReportSnapshot,
+  patchReportSnapshot,
   appendHistory,
   list,
   get,

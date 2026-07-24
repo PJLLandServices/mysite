@@ -4390,11 +4390,12 @@ async function handleApi(req, res, pathname) {
         if (r.woId) {
           try {
             const wo = await workOrders.get(r.woId);
-            const snap = wo && Array.isArray(wo.reportSnapshots)
-              ? [...wo.reportSnapshots].reverse().find((s) => s.triggerType === "cascade")
-              : null;
-            if (snap) {
-              out.reportUrl = `/api/portal/${encodeURIComponent(token)}/wo-report-snapshot/${encodeURIComponent(r.woId)}/${encodeURIComponent(snap.snapshotId)}`;
+            // ANY snapshot qualifies (not just cascade) so manual
+            // post-completion corrections surface too. Link is
+            // snapshotId-less → always resolves to the latest customer render.
+            const hasSnapshot = wo && Array.isArray(wo.reportSnapshots) && wo.reportSnapshots.length > 0;
+            if (hasSnapshot) {
+              out.reportUrl = `/api/portal/${encodeURIComponent(token)}/wo-report-snapshot/${encodeURIComponent(r.woId)}`;
             }
           } catch (_) { /* best-effort — leave reportUrl null */ }
         }
@@ -5020,12 +5021,15 @@ async function handleApi(req, res, pathname) {
   // Used by the property portal page's "Download service report" link
   // on each completed service record. Admin equivalent lives at
   // /api/work-orders/:id/report-pdf/snapshot/:snapshotId.
-  const portalReportSnapshotMatch = pathname.match(/^\/api\/portal\/([^/]+)\/wo-report-snapshot\/([^/]+)\/([^/]+)$/);
+  // snapshotId is OPTIONAL: when omitted the newest CUSTOMER render is
+  // served, so a stable portal link (from the completion email or the
+  // property portal) always resolves to the current corrected report.
+  const portalReportSnapshotMatch = pathname.match(/^\/api\/portal\/([^/]+)\/wo-report-snapshot\/([^/]+)(?:\/([^/]+))?$/);
   if (portalReportSnapshotMatch && req.method === "GET") {
     try {
       const token = decodeURIComponent(portalReportSnapshotMatch[1]);
       const woId = decodeURIComponent(portalReportSnapshotMatch[2]);
-      const snapshotId = decodeURIComponent(portalReportSnapshotMatch[3]);
+      const snapshotId = portalReportSnapshotMatch[3] ? decodeURIComponent(portalReportSnapshotMatch[3]) : null;
       // The portal-token model used elsewhere is keyed off the lead.
       // For property-portal sessions (where the customer arrived via
       // /portal/<propertyToken>), the token derives from the property ID;
@@ -5047,12 +5051,18 @@ async function handleApi(req, res, pathname) {
       if (wo.propertyId !== propertyId) {
         return sendJson(res, 403, { ok: false, errors: ["Forbidden."] });
       }
-      const found = await woReportSnapshot.readSnapshot({ woId, snapshotId });
+      // Customer audience always — the portal is customer-facing. When no
+      // snapshotId is pinned, serve the LATEST customer render.
+      const found = snapshotId
+        ? await woReportSnapshot.readSnapshot({ woId, snapshotId, audience: "customer" })
+        : await woReportSnapshot.readLatestSnapshot({ woId, audience: "customer" });
       if (!found) return sendJson(res, 404, { ok: false, errors: ["Snapshot not found."] });
       res.writeHead(200, {
         "content-type": "application/pdf",
         "content-disposition": `inline; filename="${found.record.filename}"`,
-        "cache-control": "private, max-age=86400",
+        // no-cache: a stable "latest" URL must never serve a stale
+        // corrected report from an intermediary/browser cache.
+        "cache-control": "private, no-cache, must-revalidate",
         "content-length": found.buffer.length
       });
       res.end(found.buffer);
@@ -7576,6 +7586,22 @@ async function handleApi(req, res, pathname) {
             const lineRows = acceptedSnapshot.map((l) =>
               `<tr><td style="padding:6px 0;">${(l.label || l.key || "").replace(/</g, "&lt;")} × ${l.qty}</td><td style="text-align:right;padding:6px 0;font-variant-numeric:tabular-nums;">$${moneyCad(l.lineTotal)}</td></tr>`
             ).join("");
+            // Inspection report is delivered as a PORTAL LINK, not a MIME
+            // attachment — the full-resolution report (all field photos)
+            // can exceed Gmail's 25 MB attachment ceiling, which would fail
+            // the whole send. The link resolves to the LATEST customer-
+            // audience render (no sign-off / audit sections) via the derived
+            // property-portal token; null when the WO has no property, in
+            // which case the CTA is simply omitted.
+            const reportPortalUrl = wo.propertyId
+              ? `${resolvePublicBaseUrl()}/api/portal/${portalTokenForId(wo.propertyId)}/wo-report-snapshot/${encodeURIComponent(wo.id)}`
+              : null;
+            const reportCtaHtml = reportPortalUrl
+              ? `
+    <p style="margin:0 0 18px;text-align:center;">
+      <a href="${reportPortalUrl}" style="display:inline-block;padding:12px 24px;background:#1B4D2E;color:#fff;text-decoration:none;border-radius:6px;font-weight:600;font-size:14px;">📋 View full inspection report</a>
+    </p>`
+              : "";
             const html = `
 <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:560px;color:#1a1a1a;line-height:1.55;">
   <div style="padding:24px 28px;background:#1B4D2E;border-radius:8px 8px 0 0;">
@@ -7587,10 +7613,10 @@ async function handleApi(req, res, pathname) {
     <p style="margin:0 0 14px;">Our tech ran into something on-site at ${(wo.address || "your property").replace(/</g, "&lt;")} and recommends the following repair scope:</p>
     <table style="width:100%;border-collapse:collapse;margin:14px 0;font-size:14px;">${lineRows}</table>
     <p style="margin:12px 0 18px;padding-top:10px;border-top:1px solid #e5e5dd;text-align:right;font-size:15px;"><strong>Total: $${moneyCad(totals.total)} CAD</strong> (incl. HST)</p>
-    <p style="margin:0 0 14px;font-size:13px;color:#555;">Attached: your repair quote and the on-site inspection report documenting what we found.</p>
+    <p style="margin:0 0 14px;font-size:13px;color:#555;">Attached: your repair quote (PDF). Your full on-site inspection report — zone by zone, with photos — is available at the link below.</p>
     <p style="margin:0 0 18px;text-align:center;">
       <a href="${approvalUrl}" style="display:inline-block;padding:14px 28px;background:#E07B24;color:#fff;text-decoration:none;border-radius:6px;font-weight:600;font-size:15px;">Review &amp; approve</a>
-    </p>
+    </p>${reportCtaHtml}
     <p style="margin:18px 0 0;font-size:13px;color:#777;">If the button doesn't work, paste this link:<br><span style="color:#1B4D2E;word-break:break-all;">${approvalUrl}</span></p>
     <p style="margin:24px 0 0;font-size:13px;color:#777;">Questions? Call <a href="tel:+19059600181" style="color:#1B4D2E;">(905) 960-0181</a>.</p>
   </div>
@@ -7623,28 +7649,25 @@ async function handleApi(req, res, pathname) {
               console.warn("[approval-email] PDF attach failed:", err?.message);
             }
             // Inspection Report snapshot (Service Report brief, 2026-05-19).
-            // Created per-send: if the customer asks for a revision and
-            // the tech re-sends, a NEW snapshot reflects any updates.
-            // Old snapshots are preserved on reportSnapshots[] for the
-            // legal record. Failures are logged but don't block the email
-            // — the quote PDF alone is still useful.
+            // Created per-send so the customer's portal link resolves to a
+            // fresh render; if the customer asks for a revision and the tech
+            // re-sends, a NEW snapshot reflects any updates. Old snapshots
+            // are preserved on reportSnapshots[] for the legal record.
+            //
+            // NOT attached as a MIME blob: the full-resolution report (all
+            // field photos) can exceed Gmail's 25 MB attachment ceiling,
+            // which would fail the whole send. It's delivered via the
+            // portal-link CTA above (reportPortalUrl), which streams the
+            // latest customer-audience render on demand. Snapshot failure
+            // is logged but never blocks the email — the quote PDF + approve
+            // link still go out.
             try {
-              const inspectionSnap = await woReportSnapshot.createSnapshot({
+              await woReportSnapshot.createSnapshot({
                 woId: wo.id,
                 triggerType: "quote_send",
                 quoteId: quoteRecord.id,
                 by: "tech"
               });
-              const file = await woReportSnapshot.readSnapshot({
-                woId: wo.id, snapshotId: inspectionSnap.snapshotId
-              });
-              if (file) {
-                attachments.push({
-                  filename: file.record.filename,
-                  content: file.buffer,
-                  contentType: "application/pdf"
-                });
-              }
             } catch (err) {
               console.warn("[approval-email] inspection report snapshot failed:", err?.message);
             }
@@ -11144,6 +11167,15 @@ async function handleApi(req, res, pathname) {
         }
       };
 
+      // notify flag (default TRUE — backwards compatible). notify:false runs
+      // the full cascade (invoice, service record, snapshots) but skips the
+      // customer email — the correct path for a silent billing correction.
+      // The internal admin notify always fires. The cascade already sends
+      // notifyCustomer at the END, after the invoice is finalized (line
+      // items + bill-to complete), so the customer never receives a
+      // mid-cascade or wrong-amount invoice.
+      if (payload.notify === false) delete deps.notifyCustomer;
+
       const result = await projects.completeProject(id, {
         by: session?.uid || "admin",
         allowOverride: payload.allowOverride === true,
@@ -14236,6 +14268,21 @@ async function handleApi(req, res, pathname) {
         }
       }
 
+      // Auto-snapshot on post-completion content edits. When a WO that is
+      // ALREADY completed has its report-bearing content edited (zones,
+      // customer notes, tech notes, photos, checklist), refresh the report
+      // snapshots so the customer's stable latest-snapshot link reflects
+      // the correction. Field-gated so a bare lock/unlock toggle (the
+      // mechanics of making an edit) never burns a snapshot. Fire-and-
+      // forget — never block or fail the PATCH on a snapshot error.
+      const SNAPSHOT_TRIGGER_FIELDS = ["zones", "customerNotes", "techNotes", "photos", "checklist"];
+      if (updated.status === "completed" && priorStatus === "completed"
+          && SNAPSHOT_TRIGGER_FIELDS.some((f) => Object.prototype.hasOwnProperty.call(payload, f))) {
+        setImmediate(() => woReportSnapshot
+          .createSnapshot({ woId: id, triggerType: "manual", by: payload.__by || "admin" })
+          .catch((e) => console.warn("[wo] post-completion auto-snapshot failed:", e?.message)));
+      }
+
       // Helpers extracted so the cascade can return fast while notifies
       // run on the next tick (setImmediate above). Defined inside the
       // PATCH closure so they have access to the file-level helpers
@@ -14306,8 +14353,24 @@ async function handleApi(req, res, pathname) {
         // Service report — attached when the cascade produced a snapshot
         // (Service Report brief, 2026-05-19). The line goes in the body
         // so the customer knows what the attachment is.
+        // Portal CTA — points to the PROPERTY portal (not the lead portal)
+        // because that's where the service-history list lives and where the
+        // "Download service report" link surfaces. Falls back to the lead
+        // portal if no property is linked. Declared BEFORE reportLine so the
+        // report CTA can link to it (avoids a TDZ ReferenceError).
+        const cleanBase = resolvePublicBaseUrl();
+        const portalUrl = wo.propertyId
+          ? `${cleanBase}/portal/${portalTokenForId(wo.propertyId)}`
+          : `${cleanBase}/portal`;
+        // Link-only Service Report — NO MIME PDF attachment. A frozen PDF in
+        // the customer's inbox goes stale the moment the report is corrected;
+        // the portal always serves the latest customer render instead. The
+        // report CTA is the primary action.
         const reportLine = reportSnapshot
-          ? `<p style="margin: 0 0 14px;">Attached: your Service Report — a written summary of today's visit, zone-by-zone, with photos. You can also re-download it any time from your portal under "Recent service" below.</p>`
+          ? `<p style="margin: 0 0 8px;">Your Service Report is ready — a written summary of today's visit, zone-by-zone, with photos.</p>
+    <p style="margin: 0 0 18px;">
+      <a href="${portalUrl}" style="display: inline-block; padding: 11px 20px; background: #1B4D2E; color: #fff; text-decoration: none; border-radius: 6px; font-weight: 600;">View your service report</a>
+    </p>`
           : "";
         // Bypass-specific 7-day discrepancy window — only on bypassed WOs.
         // The signed-WO path already has the customer signature as the
@@ -14316,15 +14379,6 @@ async function handleApi(req, res, pathname) {
         const bypassFollowUp = isBypassed
           ? `<p style="margin: 0 0 14px;">If anything in the visit summary or invoice does not match your understanding of what was authorized, please contact us within 7 days at <a href="tel:+19059600181" style="color: #1B4D2E;">(905) 960-0181</a> or by replying to this email.</p>`
           : "";
-        // Portal CTA — points to the PROPERTY portal (not the lead portal)
-        // because that's where the service-history list lives and that's
-        // where the "Download service report" link surfaces (Service
-        // Report brief follow-up). Falls back to the lead portal if no
-        // property is linked (defensive — shouldn't happen post-cascade).
-        const cleanBase = resolvePublicBaseUrl();
-        const portalUrl = wo.propertyId
-          ? `${cleanBase}/portal/${portalTokenForId(wo.propertyId)}`
-          : `${cleanBase}/portal`;
         // Headline + greeting body diverge between the two paths. Signed
         // WO: "Today's visit is complete." + visit summary. Bypassed WO:
         // factual "Work was completed at your property…" framing that
@@ -14358,24 +14412,10 @@ async function handleApi(req, res, pathname) {
   </div>
   <p style="margin: 16px 0 0; font-size: 11px; color: #999; text-align: center;">PJL Land Services · Newmarket, Ontario · pjllandservices.com</p>
 </div>`.trim();
-        // Attach the service report PDF if the cascade produced one.
-        // Read from disk via the snapshotter so we get the exact bytes
-        // frozen at cascade time (not a fresh re-render).
-        const attachments = [];
-        if (reportSnapshot) {
-          try {
-            const file = await woReportSnapshot.readSnapshot({
-              woId: wo.id, snapshotId: reportSnapshot.snapshotId
-            });
-            if (file) {
-              attachments.push({
-                filename: file.record.filename,
-                content: file.buffer,
-                contentType: "application/pdf"
-              });
-            }
-          } catch (err) { console.warn("[cascade] report attach failed:", err?.message); }
-        }
+        // No MIME PDF attachment — the report is delivered via the portal
+        // link (reportLine CTA above), which always serves the latest
+        // customer render. This removes the "stale frozen PDF in the
+        // customer's inbox after a correction" problem entirely.
         await transporter.sendMail({
           from: `"PJL Land Services" <${process.env.CUSTOMER_EMAIL || "info@pjllandservices.com"}>`,
           to: wo.customerEmail,
@@ -14383,8 +14423,7 @@ async function handleApi(req, res, pathname) {
           subject: isBypassed
             ? "PJL visit summary — please review"
             : "Your PJL visit is complete",
-          html,
-          ...(attachments.length ? { attachments } : {})
+          html
         });
       }
 
