@@ -793,6 +793,79 @@ body.is-nav-open .pjl-nav-toggle-bar:nth-child(3) {
 .source-seasonal { background: #DDEDF6; color: #1f4f6e; }
 .source-inquiry  { background: #EEEAF7; color: #4f3d80; }
 
+/* Commercial-account badge (commercial intake). Distinct slate-blue so it
+   reads separately from the source pills; keyed off lead.accountType, not a
+   source category. */
+.account-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 24px;
+  padding: 4px 9px;
+  border-radius: 99px;
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.account-commercial { background: #DCE6F5; color: #2b3f73; }
+
+/* Commercial / billing detail panel (commercial intake). Read-only. */
+.detail-commercial__grid {
+  margin: 0;
+  display: grid;
+  gap: 8px 20px;
+}
+.detail-commercial__row {
+  display: grid;
+  grid-template-columns: 140px 1fr;
+  gap: 4px 16px;
+  align-items: baseline;
+}
+.detail-commercial__row dt {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--pjl-text-muted);
+}
+.detail-commercial__row dd {
+  margin: 0;
+  font-size: 14px;
+  color: var(--pjl-text);
+}
+.detail-commercial__contacts {
+  margin-top: 16px;
+  border-top: 1px solid var(--pjl-border, rgba(15, 31, 20, 0.1));
+  padding-top: 12px;
+}
+.detail-commercial__contacts h4 {
+  margin: 0 0 8px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--pjl-text-muted);
+}
+.detail-commercial__contact {
+  font-size: 14px;
+  line-height: 1.5;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--pjl-border, rgba(15, 31, 20, 0.06));
+}
+.detail-commercial__contact:last-child { border-bottom: 0; }
+.detail-commercial__role {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 8px;
+  border-radius: 99px;
+  background: #DCE6F5;
+  color: #2b3f73;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+}
+
 .detail-source {
   margin: 6px 0 0;
   font-size: 12px;

@@ -162,12 +162,148 @@
 }
 .nc-thanks p:last-child { margin-bottom: 0; }
 
+/* --- Commercial intake additions ---------------------------------------
+   Residential is the default and renders exactly as before. Everything
+   below drives the account-type control and the commercial-only field
+   groups, which stay hidden until Commercial is selected. */
+
+/* Hidden groups: .form-group sets display:flex, which would otherwise beat
+   the [hidden] UA rule and leave commercial fields visible in residential
+   mode. The attribute-qualified selector restores hiding without !important. */
+.form-group[hidden],
+.nc-com-only[hidden] { display: none; }
+
+/* Account-type segmented control */
+.nc-acct { gap: 10px; }
+.nc-acct__label { font-size: 13px; font-weight: 500; color: var(--text-mid); }
+.nc-seg {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  background: var(--cream);
+  border: 1.5px solid var(--border);
+  border-radius: var(--r);
+  padding: 5px;
+}
+.nc-seg__opt {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  border-radius: calc(var(--r) - 4px);
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-mid);
+  cursor: pointer;
+  text-align: center;
+  -webkit-tap-highlight-color: transparent;
+  transition: background 0.15s, color 0.15s, box-shadow 0.15s;
+}
+.nc-seg__opt input { position: absolute; opacity: 0; pointer-events: none; }
+.nc-seg__opt.is-active {
+  background: var(--green);
+  color: #fff;
+  box-shadow: 0 1px 3px rgba(27,77,46,0.25);
+}
+.nc-seg__opt:focus-within { outline: 2px solid var(--green); outline-offset: 2px; }
+
+/* Selects match the input styling */
+.form-group select {
+  padding: 13px 16px;
+  border: 1.5px solid var(--border);
+  border-radius: var(--r);
+  font-size: 15px;
+  font-family: 'DM Sans', sans-serif;
+  color: var(--text);
+  background: var(--cream);
+  outline: none;
+  transition: border-color 0.15s;
+  width: 100%;
+  -webkit-appearance: none;
+  appearance: none;
+}
+.form-group select:focus { border-color: var(--green); background: var(--white); }
+
+.nc-subhead { font-size: 15px; font-weight: 600; color: var(--text); }
+.nc-sub-hint {
+  grid-column: 1 / -1;
+  margin: 4px 0 0;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text-mid);
+}
+.nc-check-inline {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  cursor: pointer;
+  font-size: 14.5px;
+  color: var(--text-mid);
+  -webkit-tap-highlight-color: transparent;
+}
+.nc-check-inline input[type="checkbox"] {
+  width: 20px; height: 20px; margin: 0; padding: 0;
+  flex-shrink: 0; accent-color: var(--green);
+}
+
+/* Repeatable additional-contact rows. Fields stack vertically inside each
+   row on phones so nothing overflows (mobile requirement). */
+#nc-contacts-list { display: flex; flex-direction: column; gap: 14px; }
+.nc-contact-row {
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--green);
+  border-radius: var(--r);
+  padding: 14px;
+  background: rgba(27,77,46,0.03);
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.nc-contact-row .form-group.full { grid-column: 1 / -1; }
+.nc-contact-remove {
+  grid-column: 1 / -1;
+  justify-self: start;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  background: none;
+  border: none;
+  color: var(--amber);
+  font-size: 14px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  padding: 0 2px;
+  -webkit-tap-highlight-color: transparent;
+}
+.nc-add-contact {
+  margin-top: 12px;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 18px;
+  background: var(--green-pale);
+  border: 1.5px solid rgba(27,77,46,0.28);
+  border-radius: var(--r);
+  color: var(--green);
+  font-size: 14.5px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.nc-add-contact[disabled] { opacity: 0.5; cursor: not-allowed; }
+
 @media (max-width: 760px) {
   .form-grid { grid-template-columns: 1fr; }
   .form-group.full { grid-column: 1; }
   .intake-form-section,
   .nc-thanks { padding: 28px 22px; }
   .intake-intro { padding: 22px 24px; }
+  .nc-contact-row { grid-template-columns: 1fr; }
 }
 @media (max-width: 640px) {
   .page-hero { padding: var(--hero-nav-clearance) 0 52px; }
@@ -222,6 +358,19 @@
 
         <form id="newCustomerForm" novalidate>
           <div class="form-grid">
+            <div class="form-group full nc-acct" role="radiogroup" aria-label="Account type">
+              <span class="nc-acct__label">What kind of account is this?</span>
+              <div class="nc-seg" id="nc-acct-seg">
+                <label class="nc-seg__opt is-active">
+                  <input type="radio" name="accountType" value="residential" checked>
+                  <span>Residential</span>
+                </label>
+                <label class="nc-seg__opt">
+                  <input type="radio" name="accountType" value="commercial">
+                  <span>Commercial</span>
+                </label>
+              </div>
+            </div>
             <div class="form-group">
               <label for="nc-first">First name <span class="req">*</span></label>
               <input type="text" id="nc-first" name="firstName" required autocomplete="given-name">
@@ -236,7 +385,18 @@
             </div>
             <div class="form-group">
               <label for="nc-phone">Phone</label>
-              <input type="tel" id="nc-phone" name="phone" autocomplete="tel" placeholder="(905) 555-0100">
+              <input type="tel" id="nc-phone" name="phone" inputmode="tel" autocomplete="tel" placeholder="(905) 555-0100">
+            </div>
+            <div class="form-group full nc-com-only" hidden>
+              <label for="nc-role">Your role</label>
+              <select id="nc-role" name="submitterRole">
+                <option value="">Select your role…</option>
+                <option value="property_manager">Property manager</option>
+                <option value="site_contact">Site contact</option>
+                <option value="accounts_payable">Accounts payable</option>
+                <option value="owner_board">Owner / board member</option>
+                <option value="other">Other</option>
+              </select>
             </div>
             <div class="form-group full">
               <label for="nc-address">Property address <span class="req">*</span></label>
@@ -247,12 +407,13 @@
               <textarea id="nc-notes" name="notes" placeholder="Gate code, zone count if known, anything else you'd like to mention…"></textarea>
             </div>
 
-            <!-- Separate billing party — collapsed by default. Expanding
-                 reveals billing name/address (required) + email/phone
-                 (optional). Submits as a structured `billing` object so
-                 the invoice can be issued to a company or another person
-                 without re-keying from free-text notes. -->
-            <div class="form-group full">
+            <!-- Separate billing party — collapsed by default in residential
+                 mode. In commercial mode the toggle is hidden and these
+                 fields are always shown (the billing entity is the point of
+                 a commercial account). Submits as a structured `billing`
+                 object so the invoice can be issued to a company or another
+                 person without re-keying from free-text notes. -->
+            <div class="form-group full" id="nc-bill-toggle-wrap">
               <label class="nc-billing-toggle">
                 <input type="checkbox" id="nc-bill-other" aria-controls="nc-billing-fields" aria-expanded="false">
                 <span>Bill to a different person or company</span>
@@ -260,10 +421,14 @@
             </div>
             <div class="nc-billing-fields" id="nc-billing-fields" hidden>
               <div class="form-grid">
-                <p class="nc-billing-hint">Who should the invoice be made out to? For example, a management company, a business, or a family member.</p>
+                <p class="nc-billing-hint" id="nc-billing-hint">Who should the invoice be made out to? For example, a management company, a business, or a family member.</p>
                 <div class="form-group full">
-                  <label for="nc-bill-name">Billing name / company <span class="req">*</span></label>
+                  <label for="nc-bill-name" id="nc-bill-name-label">Billing name / company <span class="req">*</span></label>
                   <input type="text" id="nc-bill-name" name="billingName" autocomplete="organization" placeholder="e.g. company name, or the person paying">
+                </div>
+                <div class="form-group full nc-com-only" hidden>
+                  <label for="nc-bill-careof">Care of (c/o)</label>
+                  <input type="text" id="nc-bill-careof" name="billingCareOf" autocomplete="organization" placeholder="e.g. the management company, if billed through one">
                 </div>
                 <div class="form-group full">
                   <label for="nc-bill-address">Billing address <span class="req">*</span></label>
@@ -271,13 +436,39 @@
                 </div>
                 <div class="form-group">
                   <label for="nc-bill-email">Billing email</label>
-                  <input type="email" id="nc-bill-email" name="billingEmail" placeholder="Where the invoice should go (optional)">
+                  <input type="email" id="nc-bill-email" name="billingEmail" inputmode="email" placeholder="Where the invoice should go (optional)">
                 </div>
                 <div class="form-group">
                   <label for="nc-bill-phone">Billing phone</label>
-                  <input type="tel" id="nc-bill-phone" name="billingPhone" placeholder="(optional)">
+                  <input type="tel" id="nc-bill-phone" name="billingPhone" inputmode="tel" placeholder="(optional)">
+                </div>
+                <div class="form-group full nc-com-only" hidden>
+                  <label class="nc-check-inline">
+                    <input type="checkbox" id="nc-po-required" name="poRequired">
+                    <span>A purchase order (PO) is required before work begins</span>
+                  </label>
+                </div>
+                <div class="form-group nc-com-only" hidden>
+                  <label for="nc-terms">Payment terms</label>
+                  <select id="nc-terms" name="paymentTerms">
+                    <option value="">Not specified</option>
+                    <option value="due_on_receipt">Due on receipt</option>
+                    <option value="net_15">Net 15</option>
+                    <option value="net_30">Net 30</option>
+                    <option value="net_60">Net 60</option>
+                    <option value="other">Other</option>
+                  </select>
                 </div>
               </div>
+            </div>
+
+            <!-- Additional role-tagged contacts (commercial only). Seeded
+                 empty; up to 5 rows. Each row stacks vertically on phones. -->
+            <div class="form-group full nc-com-only" id="nc-contacts-wrap" hidden>
+              <span class="nc-subhead">Additional contacts</span>
+              <p class="nc-sub-hint">Add anyone else involved — the site contact, a board member, or accounts payable. Optional; up to 5.</p>
+              <div id="nc-contacts-list"></div>
+              <button type="button" class="nc-add-contact" id="nc-add-contact">+ Add another contact</button>
             </div>
 
             <!-- Honeypot — real users + screen readers skip it; bots fill it. -->
@@ -325,20 +516,138 @@
   var thanks  = document.getElementById('nc-thanks');
   if (!form) return;
 
-  // Billing disclosure — collapsed by default; checkbox reveals the
-  // billing fields. Values typed then re-collapsed are NOT submitted
-  // (the toggle is the source of truth, not the inputs).
-  var billToggle = document.getElementById('nc-bill-other');
-  var billFields = document.getElementById('nc-billing-fields');
+  var billToggle    = document.getElementById('nc-bill-other');
+  var billFields    = document.getElementById('nc-billing-fields');
+  var toggleWrap    = document.getElementById('nc-bill-toggle-wrap');
+  var billNameLabel = document.getElementById('nc-bill-name-label');
+  var billHint      = document.getElementById('nc-billing-hint');
+  var seg           = document.getElementById('nc-acct-seg');
+  var comOnly       = form.querySelectorAll('.nc-com-only');
+  var contactsList  = document.getElementById('nc-contacts-list');
+  var addContactBtn = document.getElementById('nc-add-contact');
+  var MAX_CONTACTS  = 5;
+
+  // Role vocabulary — machine key + human label. Kept in sync with the
+  // server-side allow-list in server.js (parseCommercialPayload).
+  var ROLES = [
+    ['', 'Select role…'],
+    ['site_contact', 'Site contact'],
+    ['property_manager', 'Property manager'],
+    ['accounts_payable', 'Accounts payable'],
+    ['owner_board', 'Owner / board member'],
+    ['other', 'Other']
+  ];
+
+  var RES_NAME_LABEL = 'Billing name / company <span class="req">*</span>';
+  var COM_NAME_LABEL = 'Billing / legal entity name <span class="req">*</span>';
+  var RES_HINT = 'Who should the invoice be made out to? For example, a management company, a business, or a family member.';
+  var COM_HINT = 'Who legally gets billed? Enter the company or condo-corporation name exactly as it should appear on the invoice.';
+
+  function val(id) { var el = document.getElementById(id); return el ? String(el.value || '').trim() : ''; }
+
+  function currentAccountType() {
+    var checked = form.querySelector('input[name="accountType"]:checked');
+    return checked && checked.value === 'commercial' ? 'commercial' : 'residential';
+  }
+
+  // Show/hide the commercial-only field groups and re-label the reused
+  // billing block. Called on load and whenever the account type changes.
+  function applyMode() {
+    var commercial = currentAccountType() === 'commercial';
+
+    if (seg) {
+      var opts = seg.querySelectorAll('.nc-seg__opt');
+      for (var i = 0; i < opts.length; i++) {
+        var input = opts[i].querySelector('input');
+        opts[i].classList.toggle('is-active', !!(input && input.checked));
+      }
+    }
+
+    for (var j = 0; j < comOnly.length; j++) comOnly[j].hidden = !commercial;
+
+    if (commercial) {
+      // The billing entity is the point of a commercial account, so the
+      // block is always shown and the residential toggle is redundant.
+      if (toggleWrap) toggleWrap.hidden = true;
+      if (billFields) billFields.hidden = false;
+      if (billNameLabel) billNameLabel.innerHTML = COM_NAME_LABEL;
+      if (billHint) billHint.textContent = COM_HINT;
+    } else {
+      if (toggleWrap) toggleWrap.hidden = false;
+      if (billFields) billFields.hidden = !(billToggle && billToggle.checked);
+      if (billNameLabel) billNameLabel.innerHTML = RES_NAME_LABEL;
+      if (billHint) billHint.textContent = RES_HINT;
+    }
+  }
+
+  if (seg) seg.addEventListener('change', applyMode);
+
+  // Residential billing disclosure — unchanged behaviour. No-ops in
+  // commercial mode (the toggle is hidden there).
   if (billToggle && billFields) {
     billToggle.addEventListener('change', function () {
+      if (currentAccountType() === 'commercial') return;
       billFields.hidden = !billToggle.checked;
       billToggle.setAttribute('aria-expanded', billToggle.checked ? 'true' : 'false');
       if (billToggle.checked) {
-        var firstField = document.getElementById('nc-bill-name');
-        if (firstField) firstField.focus();
+        var f = document.getElementById('nc-bill-name');
+        if (f) f.focus();
       }
     });
+  }
+
+  // --- Additional contacts (commercial) ---------------------------------
+  function roleSelectHtml() {
+    var h = '<select data-c="role">';
+    for (var i = 0; i < ROLES.length; i++) {
+      h += '<option value="' + ROLES[i][0] + '">' + ROLES[i][1] + '</option>';
+    }
+    return h + '</select>';
+  }
+  function updateAddBtn() {
+    if (!addContactBtn || !contactsList) return;
+    addContactBtn.disabled = contactsList.children.length >= MAX_CONTACTS;
+  }
+  function addContactRow() {
+    if (!contactsList || contactsList.children.length >= MAX_CONTACTS) return;
+    var row = document.createElement('div');
+    row.className = 'nc-contact-row';
+    row.innerHTML =
+      '<div class="form-group full"><label>Name</label>' +
+        '<input type="text" data-c="name" autocomplete="name"></div>' +
+      '<div class="form-group"><label>Role</label>' + roleSelectHtml() + '</div>' +
+      '<div class="form-group"><label>Email</label>' +
+        '<input type="email" data-c="email" inputmode="email" autocomplete="email"></div>' +
+      '<div class="form-group full"><label>Phone</label>' +
+        '<input type="tel" data-c="phone" inputmode="tel" autocomplete="tel"></div>' +
+      '<button type="button" class="nc-contact-remove" aria-label="Remove this contact">Remove</button>';
+    row.querySelector('.nc-contact-remove').addEventListener('click', function () {
+      row.remove();
+      updateAddBtn();
+    });
+    contactsList.appendChild(row);
+    updateAddBtn();
+  }
+  if (addContactBtn) addContactBtn.addEventListener('click', addContactRow);
+
+  function fieldVal(row, k) {
+    var el = row.querySelector('[data-c="' + k + '"]');
+    return el ? String(el.value || '').trim() : '';
+  }
+  // Returns { contacts, incomplete }. `incomplete` is the name of the first
+  // row that has a name but no contact method (rejected client-side).
+  function collectContacts() {
+    var out = [];
+    var incomplete = null;
+    var rows = contactsList ? contactsList.querySelectorAll('.nc-contact-row') : [];
+    for (var i = 0; i < rows.length; i++) {
+      var name = fieldVal(rows[i], 'name'), role = fieldVal(rows[i], 'role'),
+          email = fieldVal(rows[i], 'email'), phone = fieldVal(rows[i], 'phone');
+      if (!name && !role && !email && !phone) continue; // fully empty → skip
+      if (name && !email && !phone && !incomplete) incomplete = name;
+      out.push({ name: name, role: role, email: email, phone: phone });
+    }
+    return { contacts: out, incomplete: incomplete };
   }
 
   function showError(msg) {
@@ -351,19 +660,44 @@
     e.preventDefault();
     errBox.classList.remove('is-visible');
 
-    // Billing block — validated BEFORE the button is disabled so an
-    // early return never leaves the form stuck on "Sending…".
+    var commercial = currentAccountType() === 'commercial';
+
+    // Billing + commercial blocks — validated BEFORE the button is disabled
+    // so an early return never leaves the form stuck on "Sending…".
     var billing = { billTo: 'self' };
-    if (billToggle && billToggle.checked) {
-      var billName    = String((document.getElementById('nc-bill-name')    || {}).value || '').trim();
-      var billAddress = String((document.getElementById('nc-bill-address') || {}).value || '').trim();
-      var billEmail   = String((document.getElementById('nc-bill-email')   || {}).value || '').trim();
-      var billPhone   = String((document.getElementById('nc-bill-phone')   || {}).value || '').trim();
+    var commercialBlock = null;
+
+    if (commercial) {
+      var entityName = val('nc-bill-name');
+      var billAddr   = val('nc-bill-address');
+      if (!entityName || !billAddr) {
+        showError('Please enter the billing / legal entity name and billing address for this commercial account.');
+        return;
+      }
+      billing = { billTo: 'other', name: entityName, address: billAddr, email: val('nc-bill-email'), phone: val('nc-bill-phone') };
+      var careOf = val('nc-bill-careof');
+      if (careOf) billing.careOf = careOf;
+
+      var collected = collectContacts();
+      if (collected.incomplete) {
+        showError('Please add a phone or email for ' + collected.incomplete + ', or remove that contact.');
+        return;
+      }
+      commercialBlock = {
+        submitterRole: val('nc-role'),
+        poRequired: !!(document.getElementById('nc-po-required') || {}).checked,
+        paymentTerms: val('nc-terms'),
+        additionalContacts: collected.contacts
+      };
+    } else if (billToggle && billToggle.checked) {
+      // Residential "bill to a different person" — unchanged.
+      var billName    = val('nc-bill-name');
+      var billAddress = val('nc-bill-address');
       if (!billName || !billAddress) {
         showError('Please fill in the billing name and billing address, or uncheck "Bill to a different person or company."');
         return;
       }
-      billing = { billTo: 'other', name: billName, address: billAddress, email: billEmail, phone: billPhone };
+      billing = { billTo: 'other', name: billName, address: billAddress, email: val('nc-bill-email'), phone: val('nc-bill-phone') };
     }
 
     submit.disabled = true;
@@ -381,6 +715,12 @@
       website:         String(data.get('website')         || ''),
       billing:         billing
     };
+    // Commercial-only keys are omitted entirely in residential mode, so a
+    // residential payload stays byte-identical to before this change.
+    if (commercial) {
+      payload.accountType = 'commercial';
+      payload.commercial  = commercialBlock;
+    }
 
     try {
       var res = await fetch('/api/new-customer', {
@@ -406,6 +746,17 @@
       submit.innerHTML = originalText;
     }
   });
+
+  // Deep link + initial mode. Read ?type=commercial defensively; any other
+  // value, no param, or a malformed query string yields Residential.
+  try {
+    var params = new URLSearchParams(window.location.search || '');
+    if (String(params.get('type') || '').toLowerCase() === 'commercial') {
+      var commercialRadio = form.querySelector('input[name="accountType"][value="commercial"]');
+      if (commercialRadio) commercialRadio.checked = true;
+    }
+  } catch (err) { /* malformed query — stay residential */ }
+  applyMode();
 })();
 </script>
 

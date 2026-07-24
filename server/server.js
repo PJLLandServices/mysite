@@ -1311,12 +1311,79 @@ function parseBillingPayload(raw) {
   const address = normalizeString(raw.address, 400);
   const email = normalizeEmail(raw.email);
   const phone = normalizePhone(raw.phone);
+  // careOf (commercial intake) — the management company / party the invoice
+  // is addressed through. Optional; kept ON the billing object so the whole
+  // bill-to envelope (entity + c/o + address + email) stays one structure.
+  // Omitted when empty, so residential "bill to other" records stay
+  // byte-identical to before careOf existed.
+  const careOf = normalizeString(raw.careOf, 200);
   if (!name) return { ok: false, error: "Billing name or company is required when billing someone else." };
   if (!address) return { ok: false, error: "Billing address is required when billing someone else." };
   if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
     return { ok: false, error: "Billing email doesn't look valid." };
   }
-  return { ok: true, billing: { billTo: "other", name, address, email, phone } };
+  const billing = { billTo: "other", name, address, email, phone };
+  if (careOf) billing.careOf = careOf;
+  return { ok: true, billing };
+}
+
+// Commercial-account block (commercial intake). Role + payment-terms
+// allow-lists are enforced server-side; unknown values coerce to a safe
+// default rather than erroring, per the "never lose a lead" rule. Returns
+// { commercial, warning } and NEVER throws — the caller wraps it in a
+// try/catch as belt-and-suspenders. `commercial` is null when the block is
+// absent or unusable.
+const COMMERCIAL_ROLES = new Set(["site_contact", "property_manager", "accounts_payable", "owner_board", "other"]);
+const PAYMENT_TERMS = new Set(["due_on_receipt", "net_15", "net_30", "net_60", "other"]);
+const MAX_ADDITIONAL_CONTACTS = 5;
+
+function coerceRole(value) {
+  const role = normalizeString(value, 40);
+  if (!role) return "";
+  return COMMERCIAL_ROLES.has(role) ? role : "other";
+}
+
+function coercePaymentTerms(value) {
+  const terms = normalizeString(value, 40);
+  if (!terms) return "";
+  return PAYMENT_TERMS.has(terms) ? terms : "other";
+}
+
+function parseCommercialPayload(raw) {
+  if (raw == null) return { commercial: null, warning: null };
+  if (typeof raw !== "object" || Array.isArray(raw)) {
+    return { commercial: null, warning: "commercial block was not an object" };
+  }
+  let warning = null;
+  const submitterRole = coerceRole(raw.submitterRole);
+  const poRequired = raw.poRequired === true || raw.poRequired === "true";
+  const paymentTerms = coercePaymentTerms(raw.paymentTerms);
+
+  let additionalContacts = [];
+  if (raw.additionalContacts != null) {
+    if (Array.isArray(raw.additionalContacts)) {
+      if (raw.additionalContacts.length > MAX_ADDITIONAL_CONTACTS) {
+        warning = `additionalContacts capped at ${MAX_ADDITIONAL_CONTACTS} (had ${raw.additionalContacts.length})`;
+      }
+      additionalContacts = raw.additionalContacts
+        .slice(0, MAX_ADDITIONAL_CONTACTS)
+        .map((c) => (c && typeof c === "object" && !Array.isArray(c))
+          ? {
+              name: normalizeString(c.name, 200),
+              role: coerceRole(c.role),
+              email: normalizeEmail(c.email),
+              phone: normalizePhone(c.phone)
+            }
+          : null)
+        .filter(Boolean)
+        // Drop entirely-empty rows so the array only carries real contacts.
+        .filter((c) => c.name || c.email || c.phone || c.role);
+    } else {
+      warning = "additionalContacts was not an array; ignored";
+    }
+  }
+
+  return { commercial: { submitterRole, poRequired, paymentTerms, additionalContacts }, warning };
 }
 
 // Resolve or create the canonical customer record for a freshly
@@ -4049,6 +4116,49 @@ async function handleApi(req, res, pathname) {
         return sendJson(res, 400, { ok: false, error: billingResult.error });
       }
 
+      // Account type (commercial intake). Anything other than the exact
+      // string "commercial" — including absent — is residential, which
+      // adds NO new keys and stays byte-identical to before this change.
+      const accountType = normalizeString(payload?.accountType, 20).toLowerCase() === "commercial"
+        ? "commercial"
+        : "residential";
+
+      // Commercial requires a billing entity name + address, mirroring the
+      // client. billingResult.billing is set only for billTo === "other";
+      // a commercial submission that somehow arrives without one is rejected
+      // the same way the browser would have.
+      let commercialBlock = null;
+      let commercialNoteStash = "";
+      if (accountType === "commercial") {
+        if (!billingResult.billing) {
+          return sendJson(res, 400, {
+            ok: false,
+            error: "A billing / legal entity name and billing address are required for commercial accounts."
+          });
+        }
+        // Never lose a lead: parsing coerces unknown roles/terms and caps the
+        // contact array rather than erroring. A true throw is caught, the raw
+        // block preserved in notes, and intake still succeeds (brief §4.4).
+        try {
+          const parsedCommercial = parseCommercialPayload(payload?.commercial);
+          commercialBlock = parsedCommercial.commercial;
+          if (parsedCommercial.warning) {
+            console.warn("[new-customer] commercial block:", parsedCommercial.warning);
+          }
+          // Structurally unusable block (e.g. a string) — keep the raw
+          // submission in notes so nothing a real prospect sent is silently
+          // lost, and still save the lead (brief §4.4).
+          if (!commercialBlock && payload?.commercial != null) {
+            commercialNoteStash = `\n\n[Unparsed commercial details]\n${JSON.stringify(payload.commercial).slice(0, 2000)}`;
+          }
+        } catch (commErr) {
+          console.warn("[new-customer] commercial parse threw:", commErr?.message || commErr);
+          try {
+            commercialNoteStash = `\n\n[Unparsed commercial details]\n${JSON.stringify(payload?.commercial).slice(0, 2000)}`;
+          } catch { /* raw block not serializable — skip the stash */ }
+        }
+      }
+
       // Record the rate-limit hit only after we've decided to act on a
       // well-formed submission — drops bots out of the bucket.
       rateLimit.record(rateKey);
@@ -4058,9 +4168,9 @@ async function handleApi(req, res, pathname) {
       const now = new Date().toISOString();
       // Patrick reads the lead detail view; pin the property address at
       // the top of the notes block so it's the first thing he sees.
-      const composedNotes = notes
+      const composedNotes = (notes
         ? `Property address: ${address}\n\n${notes}`
-        : `Property address: ${address}`;
+        : `Property address: ${address}`) + commercialNoteStash;
 
       const lead = {
         id,
@@ -4093,6 +4203,13 @@ async function handleApi(req, res, pathname) {
         portal: defaultPortal(id, now)
       };
       if (billingResult.billing) lead.billing = billingResult.billing;
+      // Commercial-only keys — attached ONLY for commercial accounts so a
+      // residential lead record is byte-identical to before this change.
+      // The CRM badge and detail panel key off lead.accountType.
+      if (accountType === "commercial") {
+        lead.accountType = "commercial";
+        if (commercialBlock) lead.commercial = commercialBlock;
+      }
 
       // Resolve / create the canonical customer. Failure here is logged
       // but does NOT block intake — the lead can be backfilled later.

@@ -129,6 +129,8 @@ const woWaiveFeeAmount = document.getElementById("woWaiveFeeAmount");
 const customerNotes = document.getElementById("customerNotes");
 const detailBillingSection = document.getElementById("detailBillingSection");
 const detailBilling = document.getElementById("detailBilling");
+const detailCommercialSection = document.getElementById("detailCommercialSection");
+const detailCommercial = document.getElementById("detailCommercial");
 const activityList = document.getElementById("activityList");
 const detailPhotosSection = document.getElementById("detailPhotosSection");
 const detailPhotoGrid = document.getElementById("detailPhotoGrid");
@@ -175,6 +177,29 @@ function escapeHtml(value) {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#039;");
+}
+
+// Commercial intake — machine key → human label. Store the key, render the
+// label. Unknown keys fall back to the raw key so nothing renders blank.
+const COMMERCIAL_ROLE_LABELS = {
+  site_contact: "Site contact",
+  property_manager: "Property manager",
+  accounts_payable: "Accounts payable",
+  owner_board: "Owner / board member",
+  other: "Other"
+};
+const PAYMENT_TERMS_LABELS = {
+  due_on_receipt: "Due on receipt",
+  net_15: "Net 15",
+  net_30: "Net 30",
+  net_60: "Net 60",
+  other: "Other"
+};
+function roleLabel(key) {
+  return COMMERCIAL_ROLE_LABELS[key] || (key ? text(key) : "");
+}
+function paymentTermsLabel(key) {
+  return PAYMENT_TERMS_LABELS[key] || (key ? text(key) : "");
 }
 
 function moneyText(value) {
@@ -311,6 +336,9 @@ function leadCardMarkup(lead, { withCheckbox = false } = {}) {
   const sourceCategory = lead.sourceCategory || sources[lead.source]?.category || "inquiry";
   const ageBadge = ageClass(lead);
   const archivedBadge = lead.archived ? `<span class="archive-pill">Archived</span>` : "";
+  // Commercial-account badge (commercial intake). Driven off accountType so
+  // it doesn't double-encode a distinction the source pill already carries.
+  const commercialBadge = lead.accountType === "commercial" ? `<span class="account-pill account-commercial">Commercial</span>` : "";
   const checkbox = withCheckbox
     ? `<label class="card-check" onclick="event.stopPropagation()"><input type="checkbox" data-bulk-id="${escapeHtml(lead.id)}" ${selectedIds.has(lead.id) ? "checked" : ""}><span></span></label>`
     : "";
@@ -320,6 +348,7 @@ function leadCardMarkup(lead, { withCheckbox = false } = {}) {
       <span class="stage-pill">${escapeHtml(stageLabel(status))}</span>
       <span class="priority-pill priority-${escapeHtml(lead.crm?.priority || "normal")}">${escapeHtml(lead.crm?.priority || "normal")}</span>
       <span class="source-pill source-${escapeHtml(sourceCategory)}">${escapeHtml(sourceLabel)}</span>
+      ${commercialBadge}
       ${archivedBadge}
     </span>
     <strong>${escapeHtml(lead.contact?.name)}</strong>
@@ -432,12 +461,14 @@ function renderDetail() {
 
   // Separate billing party — mirrors the "Bill to" block in the lead
   // alert email. Only rendered for billTo === "other"; self-billing
-  // leads keep the section hidden entirely.
+  // leads keep the section hidden entirely. careOf (commercial intake)
+  // renders as a "c/o …" line directly under the entity name.
   const billing = lead.billing && lead.billing.billTo === "other" ? lead.billing : null;
   detailBillingSection.hidden = !billing;
   if (billing) {
     detailBilling.innerHTML = [
       `<strong>${escapeHtml(billing.name)}</strong>`,
+      billing.careOf ? `c/o ${escapeHtml(billing.careOf)}` : "",
       escapeHtml(billing.address),
       billing.email ? `<a href="mailto:${escapeHtml(billing.email)}">${escapeHtml(billing.email)}</a>` : "",
       billing.phone ? `<a href="tel:${escapeHtml(billing.phone)}">${escapeHtml(billing.phone)}</a>` : ""
@@ -445,6 +476,8 @@ function renderDetail() {
   } else {
     detailBilling.innerHTML = "";
   }
+
+  renderCommercialDetail(lead);
 
   customerNotes.textContent = lead.contact?.notes || "No customer notes.";
   renderPropertyDetail(lead);
@@ -461,6 +494,45 @@ function renderDetail() {
     item.innerHTML = `<strong>${escapeHtml(formatDateTime(activity.at))}</strong><span>${escapeHtml(activity.text)}</span>`;
     activityList.append(item);
   });
+}
+
+// Commercial / billing panel (commercial intake). Read-only. Hidden for
+// residential leads. The billing entity, c/o, and billing address already
+// render in the "Bill to" panel above; this panel carries the commercial
+// account fields: PO flag, payment terms, submitter role, and the
+// role-tagged additional contacts, all with human-readable labels.
+function commercialRow(label, value) {
+  return `<div class="detail-commercial__row"><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd></div>`;
+}
+function renderCommercialDetail(lead) {
+  const isCommercial = Boolean(lead && lead.accountType === "commercial");
+  detailCommercialSection.hidden = !isCommercial;
+  if (!isCommercial) {
+    detailCommercial.innerHTML = "";
+    return;
+  }
+  const c = lead.commercial && typeof lead.commercial === "object" ? lead.commercial : {};
+  const rows = [commercialRow("Account type", "Commercial")];
+  if (c.submitterRole) rows.push(commercialRow("Submitted by", roleLabel(c.submitterRole)));
+  rows.push(commercialRow("PO required", c.poRequired ? "Yes" : "No"));
+  if (c.paymentTerms) rows.push(commercialRow("Payment terms", paymentTermsLabel(c.paymentTerms)));
+
+  const contacts = Array.isArray(c.additionalContacts) ? c.additionalContacts : [];
+  let contactsHtml = "";
+  if (contacts.length) {
+    contactsHtml = `<div class="detail-commercial__contacts"><h4>Additional contacts</h4>${contacts.map((ct) => {
+      const head = [
+        ct.name ? `<strong>${escapeHtml(ct.name)}</strong>` : "",
+        ct.role ? `<span class="detail-commercial__role">${escapeHtml(roleLabel(ct.role))}</span>` : ""
+      ].filter(Boolean).join(" ");
+      const methods = [
+        ct.email ? `<a href="mailto:${escapeHtml(ct.email)}">${escapeHtml(ct.email)}</a>` : "",
+        ct.phone ? `<a href="tel:${escapeHtml(ct.phone)}">${escapeHtml(ct.phone)}</a>` : ""
+      ].filter(Boolean).join(" · ");
+      return `<div class="detail-commercial__contact">${head || "<em>Unnamed contact</em>"}${methods ? `<br>${methods}` : ""}</div>`;
+    }).join("")}</div>`;
+  }
+  detailCommercial.innerHTML = `<dl class="detail-commercial__grid">${rows.join("")}</dl>${contactsHtml}`;
 }
 
 // Linked property — fetched lazily because the lead-list endpoint doesn't
