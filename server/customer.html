@@ -190,17 +190,43 @@
              customer, and — because one management company manages many
              sites — a reminder that each property carries its own billing
              entity + site contacts. Hidden entirely on residential. -->
-        <section class="customer-commercial" id="customerCommercialSection" hidden
+        <section class="customer-commercial" id="customerCommercialSection"
                  style="padding: 14px 16px; background: #f2f7f2; border: 1px solid #cfe0cf; border-radius: 8px;">
           <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-            <h3 style="margin:0;font-size:16px;">Commercial account</h3>
-            <span style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;background:#1B4D2E;color:#fff;padding:3px 8px;border-radius:10px;">Commercial</span>
+            <h3 style="margin:0;font-size:16px;">Account type &amp; contacts</h3>
+            <span id="customerCommercialBadge" hidden style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;background:#1B4D2E;color:#fff;padding:3px 8px;border-radius:10px;">Commercial</span>
           </div>
-          <p style="margin:8px 0 0;font-size:13px;color:#3d4b3f;">
-            This customer is billed as a company. Each property they manage carries its own
-            <strong>billing entity</strong> and <strong>site contacts</strong> — set those on the property page.
-          </p>
-          <div id="customerCommercialBody" style="margin-top:12px;"></div>
+          <!-- Account type is editable here: flipping to Commercial reveals the
+               contact editor. Everything in this panel is saved by the same
+               "Save changes" button as the rest of the profile. -->
+          <label style="display:flex;flex-direction:row;align-items:center;gap:8px;margin:10px 0 0;text-transform:none;font-weight:400;cursor:pointer;">
+            <input type="checkbox" id="customerIsCommercial" style="width:16px;min-width:16px;flex:0 0 16px;height:16px;margin:0;">
+            <span style="text-transform:none;">This is a commercial / company account</span>
+          </label>
+
+          <div id="customerCommercialFields" hidden style="margin-top:12px;">
+            <p style="margin:0 0 12px;font-size:13px;color:#3d4b3f;">
+              Add the people at the company. Tick <strong>Signs quotes</strong> for whoever approves quotes —
+              that person is filled in automatically when a quote is sent. Each property they manage carries its own
+              <strong>billing entity</strong> and <strong>site contacts</strong>, set on the property page.
+            </p>
+            <div style="display:flex;align-items:baseline;justify-content:space-between;gap:12px;">
+              <h4 style="margin:0;font-size:14px;">Contacts</h4>
+              <button type="button" class="pjl-btn pjl-btn-outline" id="customerAddContact" style="padding:6px 12px;font-size:13px;">+ Add contact</button>
+            </div>
+            <div id="customerContactsList" style="margin-top:10px;"></div>
+            <p id="customerContactsEmpty" style="margin:0;font-size:13px;color:#6A6A60;font-style:italic;">No contacts yet — add one so quotes know who signs.</p>
+
+            <div style="margin-top:14px;">
+              <label style="display:block;text-transform:none;font-weight:400;">
+                <span style="display:block;font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:#3d4b3f;margin-bottom:4px;">Bill "care of" this company (optional override)</span>
+                <input type="text" id="customerCareOf" maxlength="200" placeholder="Usually blank — derived from the company name" style="width:100%;">
+              </label>
+              <p style="margin:4px 0 0;font-size:12px;color:#6A6A60;">Leave blank and managed properties are billed “c/o” this company automatically, using the name above.</p>
+            </div>
+
+            <div id="customerManagedSites" style="margin-top:14px;"></div>
+          </div>
         </section>
 
         <section class="customer-tabs">

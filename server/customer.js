@@ -114,64 +114,185 @@ const COMMERCIAL_ROLE_LABELS = {
   other: "Other"
 };
 
-function renderCommercialPanel(customer) {
-  const section = document.getElementById("customerCommercialSection");
-  const body = document.getElementById("customerCommercialBody");
-  if (!section || !body) return;
-  const isCommercial = customer.accountType === "commercial";
-  section.hidden = !isCommercial;
-  if (!isCommercial) { body.innerHTML = ""; return; }
+// (uses the file's existing esc() helper — it also escapes single quotes)
 
-  const esc = (s) => String(s == null ? "" : s)
-    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  const contacts = (customer.commercial && Array.isArray(customer.commercial.contacts))
-    ? customer.commercial.contacts : [];
-  const signatories = contacts.filter((c) => c.isAuthorizedSignatory);
+// One editable contact row. Everything here is editable in place; changes
+// flow into pendingPatch via commercialChanged() so the normal Save changes /
+// Revert buttons handle them like any other field.
+function contactRowHtml(c) {
+  const opts = Object.entries(COMMERCIAL_ROLE_LABELS)
+    .map(([v, l]) => `<option value="${v}"${(c.role || "") === v ? " selected" : ""}>${l}</option>`).join("");
+  return `
+  <div class="cc-row" style="padding:10px;margin:0 0 10px;background:#fff;border:1px solid #dfe7df;border-radius:6px;">
+    <div style="display:flex;gap:8px;flex-wrap:wrap;">
+      <label style="flex:2 1 160px;text-transform:none;font-weight:400;">
+        <span style="display:block;font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:#6A6A60;">Name</span>
+        <input type="text" class="cc-name" maxlength="200" value="${esc(c.name)}" style="width:100%;"></label>
+      <label style="flex:1 1 140px;text-transform:none;font-weight:400;">
+        <span style="display:block;font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:#6A6A60;">Role</span>
+        <select class="cc-role" style="width:100%;"><option value="">Select…</option>${opts}</select></label>
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">
+      <label style="flex:2 1 180px;text-transform:none;font-weight:400;">
+        <span style="display:block;font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:#6A6A60;">Email</span>
+        <input type="email" class="cc-email" maxlength="254" value="${esc(c.email)}" style="width:100%;"></label>
+      <label style="flex:1 1 130px;text-transform:none;font-weight:400;">
+        <span style="display:block;font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:#6A6A60;">Phone</span>
+        <input type="tel" class="cc-phone" maxlength="40" value="${esc(c.phone)}" style="width:100%;"></label>
+    </div>
+    <div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:10px;align-items:center;">
+      <label style="display:flex;flex-direction:row;align-items:center;gap:6px;text-transform:none;font-weight:400;cursor:pointer;">
+        <input type="checkbox" class="cc-sig" style="width:16px;min-width:16px;flex:0 0 16px;height:16px;margin:0;"${c.isAuthorizedSignatory ? " checked" : ""}>
+        <span style="text-transform:none;">✍️ Signs quotes</span></label>
+      <label style="display:flex;flex-direction:row;align-items:center;gap:6px;text-transform:none;font-weight:400;cursor:pointer;">
+        <input type="checkbox" class="cc-site" style="width:16px;min-width:16px;flex:0 0 16px;height:16px;margin:0;"${c.isSiteContact ? " checked" : ""}>
+        <span style="text-transform:none;">📍 On-site contact</span></label>
+      <button type="button" class="pjl-btn pjl-btn-outline cc-remove" style="padding:5px 10px;font-size:12px;margin-left:auto;">Remove</button>
+    </div>
+  </div>`;
+}
 
-  let html = "";
-  html += `<h4 style="margin:0 0 6px;font-size:13px;text-transform:uppercase;letter-spacing:.05em;color:#3d4b3f;">Approves quotes</h4>`;
-  if (signatories.length) {
-    html += signatories.map((c) => {
-      const bits = [
-        c.role ? esc(COMMERCIAL_ROLE_LABELS[c.role] || c.role) : "",
-        c.email ? `<a href="mailto:${esc(c.email)}">${esc(c.email)}</a>` : "",
-        c.phone ? `<a href="tel:${esc(c.phone)}">${esc(c.phone)}</a>` : ""
-      ].filter(Boolean).join(" · ");
-      return `<div style="margin:0 0 8px;font-size:13px;">
-        <strong>${esc(c.name || "(unnamed)")}</strong>
-        <span style="font-size:11px;font-weight:700;background:#1B4D2E;color:#fff;padding:2px 6px;border-radius:8px;margin-left:6px;">✍️ Signs quotes</span>
-        ${bits ? `<br><span style="color:#4a5a4c;">${bits}</span>` : ""}
-      </div>`;
-    }).join("");
-    if (signatories.length > 1) {
-      html += `<p style="margin:0 0 8px;font-size:12px;color:#8a5a00;">More than one signatory — you'll be asked to pick when sending a quote.</p>`;
-    }
+// Read the editor back into the { poRequired, paymentTerms, careOf, contacts }
+// shape the server normalizes. Empty rows are dropped by the lib.
+function collectCommercial() {
+  const list = document.getElementById("customerContactsList");
+  const contacts = list ? Array.from(list.querySelectorAll(".cc-row")).map((row) => ({
+    name: row.querySelector(".cc-name")?.value.trim() || "",
+    role: row.querySelector(".cc-role")?.value || "",
+    email: row.querySelector(".cc-email")?.value.trim() || "",
+    phone: row.querySelector(".cc-phone")?.value.trim() || "",
+    isSiteContact: !!row.querySelector(".cc-site")?.checked,
+    isAuthorizedSignatory: !!row.querySelector(".cc-sig")?.checked
+  })).filter((c) => c.name || c.email || c.phone) : [];
+  const prior = (original && original.commercial) || {};
+  return {
+    careOf: document.getElementById("customerCareOf")?.value.trim() || "",
+    poRequired: prior.poRequired === true,
+    paymentTerms: prior.paymentTerms || "",
+    contacts
+  };
+}
+
+// Stage the panel's state into pendingPatch and enable Save/Revert. Called on
+// every edit in the panel.
+function commercialChanged() {
+  if (!original) return;
+  const isCommercial = !!document.getElementById("customerIsCommercial")?.checked;
+  const fields = document.getElementById("customerCommercialFields");
+  const badge = document.getElementById("customerCommercialBadge");
+  if (fields) fields.hidden = !isCommercial;
+  if (badge) badge.hidden = !isCommercial;
+
+  pendingPatch.accountType = isCommercial ? "commercial" : "residential";
+  pendingPatch.commercial = isCommercial ? collectCommercial() : null;
+
+  // Drop the keys again when nothing actually differs from the loaded record,
+  // so an untouched page doesn't look dirty.
+  const sameType = (original.accountType || "residential") === pendingPatch.accountType;
+  const sameBlock = JSON.stringify(original.commercial || null) === JSON.stringify(pendingPatch.commercial);
+  if (sameType) delete pendingPatch.accountType;
+  if (sameBlock) delete pendingPatch.commercial;
+
+  const hasChanges = Object.keys(pendingPatch).length > 0;
+  saveBtn.disabled = !hasChanges;
+  revertBtn.disabled = !hasChanges;
+  renderSignatoryHint();
+}
+
+// Inline guidance: who will be filled in as the acceptor when a quote is sent.
+function renderSignatoryHint() {
+  const empty = document.getElementById("customerContactsEmpty");
+  const list = document.getElementById("customerContactsList");
+  if (!list) return;
+  const rows = list.querySelectorAll(".cc-row");
+  if (empty) empty.hidden = rows.length > 0;
+  const sigs = Array.from(rows)
+    .filter((r) => r.querySelector(".cc-sig")?.checked)
+    .map((r) => r.querySelector(".cc-name")?.value.trim())
+    .filter(Boolean);
+  let hint = document.getElementById("customerSigHint");
+  if (!hint) {
+    hint = document.createElement("p");
+    hint.id = "customerSigHint";
+    hint.style.cssText = "margin:6px 0 0;font-size:12px;";
+    list.parentElement.insertBefore(hint, list.nextSibling);
+  }
+  if (sigs.length === 1) {
+    hint.style.color = "#2c5c3a";
+    hint.textContent = `Quotes will be addressed to ${sigs[0]} for approval.`;
+  } else if (sigs.length > 1) {
+    hint.style.color = "#8a5a00";
+    hint.textContent = `${sigs.length} signatories — you'll be asked to pick one when sending a quote.`;
+  } else if (rows.length) {
+    hint.style.color = "#8a5a00";
+    hint.textContent = "No one is marked “Signs quotes” — quotes will fall back to the company name.";
   } else {
-    html += `<p style="margin:0 0 8px;font-size:13px;color:#8a5a00;">No authorized signatory on file. Quotes will fall back to the account name.</p>`;
+    hint.textContent = "";
   }
+}
 
-  const other = contacts.filter((c) => !c.isAuthorizedSignatory);
-  if (other.length) {
-    html += `<h4 style="margin:12px 0 6px;font-size:13px;text-transform:uppercase;letter-spacing:.05em;color:#3d4b3f;">Other contacts</h4>`;
-    html += other.map((c) => `<div style="margin:0 0 6px;font-size:13px;">${esc(c.name || "(unnamed)")}${c.role ? ` — ${esc(COMMERCIAL_ROLE_LABELS[c.role] || c.role)}` : ""}${c.isSiteContact ? ` <span style="font-size:11px;background:#e8e8df;padding:2px 6px;border-radius:8px;">📍 On-site</span>` : ""}</div>`).join("");
-  }
+function wireContactRow(row) {
+  row.querySelectorAll("input, select").forEach((el) => {
+    el.addEventListener(el.type === "checkbox" ? "change" : "input", commercialChanged);
+  });
+  row.querySelector(".cc-remove")?.addEventListener("click", () => {
+    row.remove();
+    commercialChanged();
+  });
+}
 
-  // Managed sites — each property's own billing entity, i.e. who actually
-  // gets invoiced for that address, billed c/o this customer.
+// Managed sites are owned by the PROPERTY (each site's own legal payer), so
+// they're shown here as read-only links through to the property page where
+// they're edited — not duplicated into this form.
+function renderManagedSites(customer) {
+  const el = document.getElementById("customerManagedSites");
+  if (!el) return;
   const props = Array.isArray(customer.properties) ? customer.properties : [];
   const managed = props.filter((p) => String(p.billingEntity || "").trim());
-  if (managed.length) {
-    html += `<h4 style="margin:14px 0 6px;font-size:13px;text-transform:uppercase;letter-spacing:.05em;color:#3d4b3f;">Managed sites — billed c/o this customer</h4>`;
-    html += managed.map((p) => `<div style="margin:0 0 8px;font-size:13px;">
-      <strong>${esc(p.billingEntity)}</strong><br>
-      <span style="color:#4a5a4c;">${esc(p.address || "(no address)")}</span>
-      ${(Array.isArray(p.siteContacts) && p.siteContacts.length)
-        ? `<br><span style="color:#4a5a4c;">📍 ${p.siteContacts.map((s) => esc(s.name)).filter(Boolean).join(", ")}</span>` : ""}
-    </div>`).join("");
-  }
-
-  body.innerHTML = html;
+  if (!managed.length) { el.innerHTML = ""; return; }
+  el.innerHTML = `<h4 style="margin:0 0 6px;font-size:13px;text-transform:uppercase;letter-spacing:.05em;color:#3d4b3f;">Managed sites — billed c/o this customer</h4>`
+    + managed.map((p) => `<div style="margin:0 0 8px;font-size:13px;">
+        <strong>${esc(p.billingEntity)}</strong><br>
+        <a href="/admin/property/${encodeURIComponent(p.id)}" style="color:#1B4D2E;">${esc(p.address || "(no address)")}</a>
+        ${(Array.isArray(p.siteContacts) && p.siteContacts.length)
+          ? `<br><span style="color:#4a5a4c;">📍 ${p.siteContacts.map((s) => esc(s.name)).filter(Boolean).join(", ")}</span>` : ""}
+      </div>`).join("")
+    + `<p style="margin:2px 0 0;font-size:12px;color:#6A6A60;">Billing entity and site contacts are edited on each property page.</p>`;
 }
+
+function renderCommercialPanel(customer) {
+  const toggle = document.getElementById("customerIsCommercial");
+  const fields = document.getElementById("customerCommercialFields");
+  const badge = document.getElementById("customerCommercialBadge");
+  const list = document.getElementById("customerContactsList");
+  const careOf = document.getElementById("customerCareOf");
+  if (!toggle || !fields || !list) return;
+
+  const isCommercial = customer.accountType === "commercial";
+  toggle.checked = isCommercial;
+  fields.hidden = !isCommercial;
+  if (badge) badge.hidden = !isCommercial;
+  if (careOf) careOf.value = (customer.commercial && customer.commercial.careOf) || "";
+
+  const contacts = (customer.commercial && Array.isArray(customer.commercial.contacts))
+    ? customer.commercial.contacts : [];
+  list.innerHTML = contacts.map(contactRowHtml).join("");
+  list.querySelectorAll(".cc-row").forEach(wireContactRow);
+  renderManagedSites(customer);
+  renderSignatoryHint();
+}
+
+document.getElementById("customerIsCommercial")?.addEventListener("change", commercialChanged);
+document.getElementById("customerCareOf")?.addEventListener("input", commercialChanged);
+document.getElementById("customerAddContact")?.addEventListener("click", () => {
+  const list = document.getElementById("customerContactsList");
+  if (!list) return;
+  list.insertAdjacentHTML("beforeend", contactRowHtml({ name: "", role: "", email: "", phone: "", isSiteContact: false, isAuthorizedSignatory: false }));
+  const row = list.lastElementChild;
+  wireContactRow(row);
+  row.querySelector(".cc-name")?.focus();
+  commercialChanged();
+});
 
 function applyLinked(customer) {
   renderCommercialPanel(customer);
