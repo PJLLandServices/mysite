@@ -19,6 +19,16 @@
 //
 // The second branch is byte-identical to the pre-existing behaviour, so
 // residential invoices are untouched.
+//
+// ccEmail (addendum, Jul 2026) is resolved on BOTH branches and is
+// independent of the managed/self-billed split: the party who accepts the
+// work is often not the party who pays it. A commercial owner signs the
+// quote while a bookkeeper — or a per-site condo-corp accounts-payable
+// desk — receives the invoice. Per-site wins over account-level, mirroring
+// billingEntity's precedence. Deliberately kept SEPARATE from `email`:
+// folding them together would lose the distinction between "who we bill"
+// and "who else gets a copy", and the CC is a payments concern only (it is
+// never applied to quotes — those go to the signatory who accepts them).
 
 const crypto = require("node:crypto");
 
@@ -60,10 +70,14 @@ function coerceContactId(value) {
 }
 
 // Resolve the bill-to envelope. Both args tolerate null.
-// Returns { name, careOf, address, email, managed }
+// Returns { name, careOf, address, email, ccEmail, managed }
 //   managed — true when the c/o was derived from a managing customer, i.e.
 //             this is a property-level billing entity. Lets callers label
 //             the UI ("Managed billing") without re-deriving the rule.
+//   ccEmail — an extra address that gets a copy of the INVOICE only.
+//             Per-site (property.billingCcEmail) beats account-level
+//             (customer.billingCcEmail). Empty when neither is set, which
+//             is every residential and most commercial accounts.
 function resolveBillTo(property, customer, { fallbackAddress = "" } = {}) {
   const prop = property && typeof property === "object" ? property : {};
   const cust = customer && typeof customer === "object" ? customer : {};
@@ -74,6 +88,11 @@ function resolveBillTo(property, customer, { fallbackAddress = "" } = {}) {
   const manualCareOf = s(cust.commercial && cust.commercial.careOf, 200);
   const custAddress = s(cust.billingAddress, 400);
   const email = s(cust.billingEmail, 254).toLowerCase() || s(cust.email, 254).toLowerCase();
+  // Per-site first, then account-level. Same precedence as billingEntity, so
+  // a management company can set one bookkeeper for the whole account and
+  // still override it for the one site whose condo corp pays its own bills.
+  const ccEmail = s(prop.billingCcEmail, 254).toLowerCase()
+    || s(cust.billingCcEmail, 254).toLowerCase();
 
   // Managed: the property names its own payer AND a managing customer exists
   // to bill it through. A property whose entity matches the customer's own
@@ -86,6 +105,7 @@ function resolveBillTo(property, customer, { fallbackAddress = "" } = {}) {
       careOf: custName,
       address: custAddress || s(fallbackAddress, 400),
       email,
+      ccEmail,
       managed: true
     };
   }
@@ -95,8 +115,38 @@ function resolveBillTo(property, customer, { fallbackAddress = "" } = {}) {
     careOf: manualCareOf,
     address: custAddress || s(fallbackAddress, 400),
     email,
+    ccEmail,
     managed: false
   };
+}
+
+// Build the `cc:` list for an INVOICE email. Pure — no I/O, no transport —
+// so the dedupe rules are testable without a mail server.
+//
+// Two independent CC sources, and they can collide with each other or with
+// the primary recipient:
+//   spouseEmail     — household CC (customer.copySpouseOnInvoices)
+//   billingCcEmail  — the payer's bookkeeper / accounts-payable desk,
+//                     snapshotted onto invoice.billTo.ccEmail at draft time
+//
+// A duplicate is dropped rather than sent twice: CC'ing the primary
+// recipient on their own invoice, or listing one address under two roles,
+// reads as a bug to the customer. Comparison is case-insensitive because
+// these come from three different hand-typed fields.
+//
+// Order is deliberate — spouse first, then billing — so the existing
+// household-CC behaviour is unchanged when no billing CC is set.
+function buildInvoiceCcList({ to = "", spouseEmail = "", billingCcEmail = "" } = {}) {
+  const primary = s(to, 254).toLowerCase();
+  const out = [];
+  for (const candidate of [spouseEmail, billingCcEmail]) {
+    const addr = s(candidate, 254).toLowerCase();
+    if (!addr) continue;
+    if (addr === primary) continue;
+    if (out.includes(addr)) continue;
+    out.push(addr);
+  }
+  return out;
 }
 
 // Who signs the quote, and who do we call to get on site?
@@ -125,6 +175,7 @@ function resolveContactRoles(property, customer) {
 module.exports = {
   resolveBillTo,
   resolveContactRoles,
+  buildInvoiceCcList,
   isContactId,
   makeContactId,
   coerceContactId

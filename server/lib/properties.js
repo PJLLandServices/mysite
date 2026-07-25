@@ -193,7 +193,17 @@ function blankProperty() {
     //   billingEntity          -> "YRSCC No. 1233 …"
     //   customer.name          -> "c/o RMSCO Management Services Ltd."
     //   customer.billingAddress-> where the invoice is mailed
+    //   billingCcEmail — an extra address that gets a copy of the INVOICE
+    //                   email for THIS site (addendum, Jul 2026). The party
+    //                   that accepts the work is often not the party that
+    //                   pays: a management company signs, while each condo
+    //                   corp's own accounts-payable desk wants the bill.
+    //                   Overrides customer.billingCcEmail when set — same
+    //                   per-site-beats-account precedence as billingEntity.
+    //                   Empty = fall back to the customer's CC (usually also
+    //                   empty). Invoices only; quotes go to the signatory.
     billingEntity: "",
+    billingCcEmail: "",
     siteContacts: [],
     system: {
       controllerLocation: "",     // e.g. "Garage, north wall"
@@ -428,9 +438,32 @@ function normalizeSiteContact(raw) {
   return (c.name || c.email || c.phone || c.role) ? c : null;
 }
 
-function normalizeSiteContacts(raw) {
+// Maximum site contacts on one property. Mirrors customers.MAX_CONTACTS.
+const MAX_CONTACTS = 10;
+
+// `enforceCap` splits write from read (addendum, Jul 2026): a WRITE past
+// the cap is REJECTED with a clear error rather than silently trimmed — a
+// dropped site contact is an accuracy failure, and on a managed site it is
+// the person PJL calls to get through the gate. A READ never throws and
+// never trims, so an already-over-cap record on disk keeps every contact
+// until a human removes the extras (readAll() swallows exceptions, so
+// throwing on read would blank the entire property list).
+function normalizeSiteContacts(raw, { enforceCap = false } = {}) {
   if (!Array.isArray(raw)) return [];
-  return raw.slice(0, 10).map(normalizeSiteContact).filter(Boolean);
+  // Counted after empty rows are dropped — a blank trailing editor row
+  // shouldn't push a 10-contact list over the limit.
+  const contacts = raw.map(normalizeSiteContact).filter(Boolean);
+  if (enforceCap && contacts.length > MAX_CONTACTS) {
+    const err = new Error(
+      `A property can have at most ${MAX_CONTACTS} site contacts (received ${contacts.length}). ` +
+      `Remove the extras before saving — none were saved.`
+    );
+    err.code = "CONTACT_CAP_EXCEEDED";
+    err.limit = MAX_CONTACTS;
+    err.received = contacts.length;
+    throw err;
+  }
+  return contacts;
 }
 
 function hydrate(p) {
@@ -444,6 +477,9 @@ function hydrate(p) {
     // Defaults keep every legacy/residential property byte-identical in
     // behaviour: empty entity => customer is the payer, no site contacts.
     billingEntity: String(p?.billingEntity || "").trim().slice(0, 200),
+    // Lower-cased on read as well as write — it is fed straight to a mail
+    // transport's `cc:`, and legacy/imported rows may carry mixed case.
+    billingCcEmail: String(p?.billingCcEmail || "").trim().toLowerCase().slice(0, 254),
     siteContacts: normalizeSiteContacts(p?.siteContacts),
     system: { ...base.system, ...(p.system || {}) },
     photos: Array.isArray(p?.photos) ? p.photos : [],
@@ -817,8 +853,11 @@ async function update(id, patch) {
     billingEntity: Object.prototype.hasOwnProperty.call(patch, "billingEntity")
       ? String(patch.billingEntity || "").trim().slice(0, 200)
       : current.billingEntity,
+    billingCcEmail: Object.prototype.hasOwnProperty.call(patch, "billingCcEmail")
+      ? String(patch.billingCcEmail || "").trim().toLowerCase().slice(0, 254)
+      : current.billingCcEmail,
     siteContacts: Object.prototype.hasOwnProperty.call(patch, "siteContacts")
-      ? normalizeSiteContacts(patch.siteContacts)
+      ? normalizeSiteContacts(patch.siteContacts, { enforceCap: true })
       : current.siteContacts,
     system: { ...current.system, ...(patch.system || {}) },
     seasonalEligibility: {

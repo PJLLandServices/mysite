@@ -6311,7 +6311,7 @@ async function handleApi(req, res, pathname) {
       // billingEntity / siteContacts: commercial management-company model.
       // The lib normalizes both (entity capped, contacts validated + role
       // coerced), so the route just passes them through.
-      const allowedTop = ["customerName", "customerPhone", "address", "billingEntity", "siteContacts"];
+      const allowedTop = ["customerName", "customerPhone", "address", "billingEntity", "billingCcEmail", "siteContacts"];
       for (const key of allowedTop) {
         if (Object.prototype.hasOwnProperty.call(payload, key)) sanitized[key] = payload[key];
       }

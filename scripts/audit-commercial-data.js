@@ -48,6 +48,38 @@ const KNOWN_COMMERCIAL_KEYS = new Set([
 ]);
 const CONTACT_CAP = 10;
 const CONTACT_ID_RE = /^con_[a-z0-9]{8}$/i;
+// Deliberately loose — enough to catch "not an email at all" (a name, a
+// phone number, two addresses in one box) without pretending to validate
+// deliverability. The addendum is explicit: PJL surfaces what the owner
+// entered and does not verify beyond email format.
+const EMAIL_RE = /^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]+$/;
+
+// Shared by the customer- and property-level billing CC.
+function auditCcEmail(value, where) {
+  const issues = [];
+  if (value === undefined || value === null) return issues;
+  if (typeof value !== "string") {
+    issues.push({ severity: "error", code: "cc_email_not_a_string", where,
+      detail: `${where} is ${typeof value}, not a string — it coerces on the next read` });
+    return issues;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) return issues;
+  if (trimmed !== value || trimmed !== trimmed.toLowerCase()) {
+    issues.push({ severity: "info", code: "cc_email_unnormalized", where,
+      detail: `${where} is not trimmed/lower-cased — normalized on the next read` });
+  }
+  if (/[,;]/.test(trimmed)) {
+    // One address per field. A comma-separated pair would be handed to the
+    // mail transport as a single malformed recipient and the send would fail.
+    issues.push({ severity: "error", code: "cc_email_multiple", where,
+      detail: `${where} looks like more than one address (${JSON.stringify(trimmed)}) — only ONE is supported and the invoice send would fail` });
+  } else if (!EMAIL_RE.test(trimmed)) {
+    issues.push({ severity: "warn", code: "cc_email_malformed", where,
+      detail: `${where} ${JSON.stringify(trimmed)} does not look like an email address — the invoice send would fail` });
+  }
+  return issues;
+}
 
 function readJsonArray(file) {
   if (!fs.existsSync(file)) return { ok: false, reason: "missing", records: [] };
@@ -114,6 +146,7 @@ function auditCustomers(records) {
     if (!c || typeof c !== "object") continue;
     const label = `${c.id || "(no id)"} ${c.name || "(unnamed)"}`;
     const issues = [];
+    issues.push(...auditCcEmail(c.billingCcEmail, "billingCcEmail"));
     const isCommercialType = c.accountType === "commercial";
     const block = c.commercial;
     const hasBlock = block != null;
@@ -154,10 +187,11 @@ function auditCustomers(records) {
         const contacts = Array.isArray(block.contacts) ? block.contacts : [];
         contactCount = contacts.length;
         if (contacts.length > CONTACT_CAP) {
-          // Deliberately loud: the normalizer truncates, so this is data
-          // loss on the next write unless a human moves the extras first.
+          // Reads are lossless — every contact survives. But the record is
+          // now unsaveable: any write touching `commercial` is REJECTED
+          // until someone removes the extras. Loud, but nothing is lost.
           issues.push({ severity: "error", code: "contacts_over_cap",
-            detail: `${contacts.length} contacts exceeds the ${CONTACT_CAP}-contact cap — the extras are DROPPED on the next write` });
+            detail: `${contacts.length} contacts exceeds the ${CONTACT_CAP}-contact cap — reads keep all of them, but any edit to this customer's contacts is REJECTED (CONTACT_CAP_EXCEEDED) until the extras are removed` });
         }
         contacts.forEach((contact, i) => {
           issues.push(...auditContact(contact, `commercial.contacts[${i}]`));
@@ -176,9 +210,10 @@ function auditCustomers(records) {
         }
       }
     }
-    if (issues.length || hasBlock || isCommercialType) {
+    if (issues.length || hasBlock || isCommercialType || String(c.billingCcEmail || "").trim()) {
       rows.push({ id: c.id || null, label, accountType: c.accountType ?? null,
-        hasBlock, contactCount, signatoryCount, issues });
+        hasBlock, contactCount, signatoryCount,
+        billingCcEmail: String(c.billingCcEmail || "").trim(), issues });
     }
   }
   return rows;
@@ -194,10 +229,14 @@ function auditProperties(records, customersById, customerNames) {
     const hasEntity = Boolean(entity);
     const rawContacts = p.siteContacts;
     const hasContacts = Array.isArray(rawContacts) && rawContacts.length > 0;
-    if (!hasEntity && !hasContacts && p.billingEntity === undefined && rawContacts === undefined) continue;
+    const cc = typeof p.billingCcEmail === "string" ? p.billingCcEmail.trim() : "";
+    if (!hasEntity && !hasContacts && !cc &&
+        p.billingEntity === undefined && rawContacts === undefined &&
+        p.billingCcEmail === undefined) continue;
 
     const label = `${p.code || p.id || "(no id)"} ${p.address || "(no address)"}`;
     const issues = [];
+    issues.push(...auditCcEmail(p.billingCcEmail, "billingCcEmail"));
 
     if (p.billingEntity !== undefined && typeof p.billingEntity !== "string") {
       issues.push({ severity: "error", code: "billing_entity_not_a_string",
@@ -248,7 +287,7 @@ function auditProperties(records, customersById, customerNames) {
     const contacts = Array.isArray(rawContacts) ? rawContacts : [];
     if (contacts.length > CONTACT_CAP) {
       issues.push({ severity: "error", code: "site_contacts_over_cap",
-        detail: `${contacts.length} site contacts exceeds the ${CONTACT_CAP}-contact cap — the extras are DROPPED on the next write` });
+        detail: `${contacts.length} site contacts exceeds the ${CONTACT_CAP}-contact cap — reads keep all of them, but any edit to this property's site contacts is REJECTED (CONTACT_CAP_EXCEEDED) until the extras are removed` });
     }
     contacts.forEach((contact, i) => {
       issues.push(...auditContact(contact, `siteContacts[${i}]`));
@@ -261,7 +300,8 @@ function auditProperties(records, customersById, customerNames) {
     rows.push({
       id: p.id || null, code: p.code || null, label,
       customerId: p.customerId || null,
-      billingEntity: entity, contactCount: contacts.length, issues
+      billingEntity: entity, billingCcEmail: cc,
+      contactCount: contacts.length, issues
     });
   }
   return rows;
@@ -283,9 +323,10 @@ function printRows(title, rows) {
   }
   console.log(`  ${rows.length} record(s) inspected, ${withIssues.length} with findings.`);
   for (const row of rows) {
+    const ccPart = row.billingCcEmail ? ` cc=${row.billingCcEmail}` : "";
     const summary = row.billingEntity !== undefined
-      ? `entity=${row.billingEntity ? JSON.stringify(row.billingEntity) : "(none)"} contacts=${row.contactCount}`
-      : `accountType=${row.accountType ?? "(absent)"} block=${row.hasBlock ? "yes" : "no"} contacts=${row.contactCount} signatories=${row.signatoryCount}`;
+      ? `entity=${row.billingEntity ? JSON.stringify(row.billingEntity) : "(none)"} contacts=${row.contactCount}${ccPart}`
+      : `accountType=${row.accountType ?? "(absent)"} block=${row.hasBlock ? "yes" : "no"} contacts=${row.contactCount} signatories=${row.signatoryCount}${ccPart}`;
     const marker = row.issues.some((i) => i.severity === "error") ? "✗"
       : row.issues.some((i) => i.severity === "warn") ? "!" : " ";
     console.log(`\n  ${marker} ${row.label}`);
@@ -349,8 +390,13 @@ function main() {
   console.log("-------");
   console.log(`  errors: ${counts.error}   warnings: ${counts.warn}   info: ${counts.info}`);
   if (counts.error) {
-    console.log("\n  Errors are shapes the normalizer cannot preserve — fix these by hand");
-    console.log("  in the JSON before the next write, or the data is lost.");
+    console.log("\n  Errors need a human — the normalizer will not guess. Depending on the");
+    console.log("  code that means: a value that reads as empty and loses whatever was");
+    console.log("  meant (contacts_not_an_array, site_contacts_not_an_array), a record");
+    console.log("  whose contacts can no longer be saved until the extras are removed");
+    console.log("  (contacts_over_cap), a broken link (dangling_customer_id), or a CC");
+    console.log("  address that would fail the invoice send (cc_email_multiple).");
+    console.log("  Nothing here is fixed by reading; edit the JSON or the admin page.");
   }
   if (!counts.error && !counts.warn) {
     console.log("\n  No drift needing a human decision. Info items conform automatically.");

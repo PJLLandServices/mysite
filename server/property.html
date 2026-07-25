@@ -132,6 +132,18 @@
         </label>
         <p class="property-billto-preview" id="propertyBillToPreview" hidden style="margin: 10px 0 0; padding: 10px 12px; background: #f2f7f2; border: 1px solid #cfe0cf; border-radius: 6px; font-size: 13px; line-height: 1.5;"></p>
 
+        <!-- Billing CC (addendum Jul 2026). Per-site override of the
+             customer's billing CC — for a condo corp whose own accounts-
+             payable desk wants the bill even though the management company
+             is the customer. Invoice emails only, never quotes. -->
+        <label class="property-full" style="margin-top: 14px;">
+          <span>Billing CC email for this site (optional)</span>
+          <input type="email" name="billingCcEmail" maxlength="254" autocomplete="email" placeholder="e.g. accounts payable for this condo corporation">
+        </label>
+        <p class="property-hint" style="margin: 4px 0 0; font-size: 12px; color: var(--crm-muted, #555);">
+          Copied on this site's invoice emails only — never on quotes. Leave blank to use the customer's billing CC (if any). A single address.
+        </p>
+
         <div style="margin-top: 18px;">
           <div style="display: flex; align-items: baseline; justify-content: space-between; gap: 12px;">
             <h3 style="margin: 0; font-size: 15px;">Site contacts</h3>
