@@ -7540,6 +7540,12 @@ async function handleApi(req, res, pathname) {
       // Threaded into the quote record, the email greeting, and the quote
       // PDF's "For Approval By" block.
       let acceptor = quotes.normalizeAcceptor(payload?.acceptor);
+      // Optional customer-facing scope paragraph. When omitted the quote keeps
+      // the standard auto text; when supplied it replaces it (used for a
+      // written conclusion / findings summary on a commercial quote).
+      const scopeText = typeof payload?.scope === "string" && payload.scope.trim()
+        ? payload.scope.trim().slice(0, 4000)
+        : "";
       // c/o billing party for the quote PDF's bill-to block (commercial).
       let billCareOf = "";
       if (wo.customerId) {
@@ -7580,7 +7586,7 @@ async function handleApi(req, res, pathname) {
           propertyId: wo.propertyId,
           leadId: wo.leadId || null,
           source: { chatSessionId: null, pageUrl: null, userAgent: req.headers["user-agent"] || "" },
-          scope: `On-site quote from ${wo.id} — sent for remote approval`,
+          scope: scopeText || `On-site quote from ${wo.id} — sent for remote approval`,
           lineItems: acceptedSnapshot,
           subtotal: totals.subtotal,
           hst: totals.hst,
@@ -7607,6 +7613,16 @@ async function handleApi(req, res, pathname) {
           try { quoteRecord = await quotes.setAcceptor(quoteRecord.id, acceptor); }
           catch (_) { /* frozen — keep existing acceptor */ }
         }
+        // Scope text. A quote reused from the PREVIEW endpoint still carries
+        // "…— preview" as its scope, which would print the word "preview" on
+        // the customer's PDF. Replace it: an explicit payload.scope wins,
+        // otherwise fall back to the same text the create path uses.
+        try {
+          quoteRecord = await quotes.setScope(
+            quoteRecord.id,
+            scopeText || `On-site quote from ${wo.id} — sent for remote approval`
+          ) || quoteRecord;
+        } catch (_) { /* frozen — keep existing scope */ }
       }
       // Ensure the greeting/PDF use whatever acceptor the quote actually
       // carries (covers the already-sent reuse case where we didn't touch it).

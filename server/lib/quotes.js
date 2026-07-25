@@ -2601,6 +2601,27 @@ async function updateDepositLifecycle(id, patch = {}, { by = "system", note = ""
 // resolved from customer.primaryContact. Passing null clears it back to
 // entity-signs behaviour. Only editable while the quote is still a
 // draft/draft_preview — a sent/accepted quote's acceptor is frozen.
+// Set the customer-facing scope text on a non-proposal quote (on_site_quote
+// / ai_repair_quote). updateProposal covers project_proposals only, so this
+// is the equivalent for the on-site family: the SCOPE paragraph the quote PDF
+// and the /approve page render above the line items. Draft-only — a sent or
+// accepted quote's scope is part of the issued document and stays frozen.
+async function setScope(id, scope) {
+  if (!id) throw new Error("setScope needs id");
+  const records = await readAll();
+  const idx = records.findIndex((q) => q.id === id);
+  if (idx === -1) return null;
+  const q = records[idx];
+  if (q.status !== "draft" && q.status !== "draft_preview") {
+    throw new Error(`Quote ${id} is in status "${q.status}" — scope is frozen.`);
+  }
+  q.scope = String(scope == null ? "" : scope).trim().slice(0, 4000);
+  q.history.push({ ts: nowIso(), action: "scope_updated", by: "admin", note: q.scope.slice(0, 120) });
+  records[idx] = q;
+  await writeAll(records);
+  return q;
+}
+
 async function setAcceptor(id, acceptor) {
   if (!id) throw new Error("setAcceptor needs id");
   const records = await readAll();
@@ -2618,6 +2639,7 @@ async function setAcceptor(id, acceptor) {
 
 module.exports = {
   setAcceptor,
+  setScope,
   normalizeAcceptor,
   STATUSES,
   TYPES,
