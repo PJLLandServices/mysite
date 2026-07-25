@@ -287,6 +287,38 @@
       </div>
     </div>
 
+    <!-- Send-for-approval channel picker. Replaces the old confirm() that
+         always fired BOTH email and SMS with no way to opt out — on a
+         commercial account the SMS lands on the site contact's cell, which
+         is often not who should get the quote. Ticking channels here is the
+         isolation layer: each box maps to sendEmail / sendSms on the API. -->
+    <div class="tech-modal-backdrop" id="woSendApprovalModal" hidden role="dialog" aria-modal="true">
+      <div class="tech-modal">
+        <h3>Send quote for approval</h3>
+        <p id="woSendApprovalSummary" style="margin:0 0 12px;font-size:14px;color:#1F2A22;"></p>
+        <label style="display:flex;flex-direction:row;align-items:flex-start;gap:10px;margin:0 0 12px;cursor:pointer;text-transform:none;font-weight:400;">
+          <input type="checkbox" id="woSendApprovalEmail" checked style="width:18px;min-width:18px;flex:0 0 18px;height:18px;margin:2px 0 0;">
+          <span style="display:block;text-transform:none;">
+            <span style="display:block;font-weight:600;color:#1F2A22;">Email</span>
+            <small id="woSendApprovalEmailTo" style="display:block;color:#6A6A60;text-transform:none;"></small>
+          </span>
+        </label>
+        <label style="display:flex;flex-direction:row;align-items:flex-start;gap:10px;margin:0 0 14px;cursor:pointer;text-transform:none;font-weight:400;">
+          <input type="checkbox" id="woSendApprovalSms" style="width:18px;min-width:18px;flex:0 0 18px;height:18px;margin:2px 0 0;">
+          <span style="display:block;text-transform:none;">
+            <span style="display:block;font-weight:600;color:#1F2A22;">Text message (SMS)</span>
+            <small id="woSendApprovalSmsTo" style="display:block;color:#6A6A60;text-transform:none;"></small>
+          </span>
+        </label>
+        <p class="tech-build-tip" id="woSendApprovalHint" style="margin:0 0 8px;">Pick at least one. The customer gets a link to review and e-sign the quote.</p>
+        <p class="approve-error-msg" id="woSendApprovalErr" hidden style="color:#B3261E;font-size:13px;margin:0 0 8px;"></p>
+        <div class="tech-modal-actions">
+          <button type="button" class="pjl-btn pjl-btn-outline" id="woSendApprovalCancel">Cancel</button>
+          <button type="button" class="pjl-btn pjl-btn-primary" id="woSendApprovalConfirm">Send</button>
+        </div>
+      </div>
+    </div>
+
     <div class="tech-modal-backdrop" id="tbScopeModal" hidden role="dialog" aria-modal="true">
       <div class="tech-modal">
         <h3>Note a scope addition</h3>
@@ -456,7 +488,7 @@
              email/SMS dispatched. -->
         <div class="wo-on-site-remote" id="woOnSiteRemoteSection" hidden>
           <button type="button" class="pjl-btn pjl-btn-outline" id="woOnSitePreviewBtn">👁️ Preview as customer</button>
-          <button type="button" class="pjl-btn pjl-btn-outline" id="woOnSiteSendApprovalBtn">📨 Send for customer approval (email + SMS)</button>
+          <button type="button" class="pjl-btn pjl-btn-outline" id="woOnSiteSendApprovalBtn">📨 Send for customer approval…</button>
           <p class="wo-on-site-remote-status" id="woOnSiteRemoteStatus" hidden></p>
         </div>
       </section>

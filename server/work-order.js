@@ -1809,21 +1809,57 @@ document.getElementById("woOnSitePreviewBtn")?.addEventListener("click", async (
 // "Send for customer approval" — same endpoint tech mode uses. Reuses
 // the WO's customer email + phone snapshot. Confirm-then-fire pattern;
 // status surfaces in the wo-on-site-remote-status element.
-document.getElementById("woOnSiteSendApprovalBtn")?.addEventListener("click", async () => {
+// Opens the channel picker. The old behaviour fired BOTH email and SMS with
+// no opt-out, which on a commercial account texts the site contact a quote
+// meant for the signatory. Now the operator ticks channels and sends.
+document.getElementById("woOnSiteSendApprovalBtn")?.addEventListener("click", () => {
   if (!loadedWorkOrder) return;
-  const id = getWorkOrderId();
-  if (!id) return;
-  const btn = document.getElementById("woOnSiteSendApprovalBtn");
-  const statusEl = document.getElementById("woOnSiteRemoteStatus");
   const customerEmail = loadedWorkOrder.customerEmail || "";
   const customerPhone = loadedWorkOrder.customerPhone || "";
   if (!customerEmail && !customerPhone) {
     alert("Customer has no email or phone on file. Add one before sending an approval link.");
     return;
   }
+  const modal = document.getElementById("woSendApprovalModal");
+  const emailBox = document.getElementById("woSendApprovalEmail");
+  const smsBox = document.getElementById("woSendApprovalSms");
+  const err = document.getElementById("woSendApprovalErr");
+  if (err) err.hidden = true;
   const customerName = loadedWorkOrder.customerName || "the customer";
-  if (!confirm(`Send the on-site quote to ${customerName} via ${[customerEmail && "email", customerPhone && "SMS"].filter(Boolean).join(" + ")} for remote approval?`)) return;
+  const sum = document.getElementById("woSendApprovalSummary");
+  if (sum) sum.textContent = `Sending the on-site quote to ${customerName} for remote approval.`;
+  // Only offer a channel we actually have a destination for; default SMS OFF
+  // so a text is always a deliberate choice, never a side effect.
+  if (emailBox) { emailBox.disabled = !customerEmail; emailBox.checked = !!customerEmail; }
+  if (smsBox) { smsBox.disabled = !customerPhone; smsBox.checked = false; }
+  const emailTo = document.getElementById("woSendApprovalEmailTo");
+  const smsTo = document.getElementById("woSendApprovalSmsTo");
+  if (emailTo) emailTo.textContent = customerEmail ? `to ${customerEmail}` : "no email on file";
+  if (smsTo) smsTo.textContent = customerPhone ? `to ${customerPhone}` : "no phone on file";
+  if (modal) modal.hidden = false;
+});
 
+document.getElementById("woSendApprovalCancel")?.addEventListener("click", () => {
+  const modal = document.getElementById("woSendApprovalModal");
+  if (modal) modal.hidden = true;
+});
+
+document.getElementById("woSendApprovalConfirm")?.addEventListener("click", async () => {
+  if (!loadedWorkOrder) return;
+  const id = getWorkOrderId();
+  if (!id) return;
+  const modal = document.getElementById("woSendApprovalModal");
+  const btn = document.getElementById("woSendApprovalConfirm");
+  const statusEl = document.getElementById("woOnSiteRemoteStatus");
+  const err = document.getElementById("woSendApprovalErr");
+  const customerEmail = loadedWorkOrder.customerEmail || "";
+  const customerPhone = loadedWorkOrder.customerPhone || "";
+  const wantEmail = !!document.getElementById("woSendApprovalEmail")?.checked;
+  const wantSms = !!document.getElementById("woSendApprovalSms")?.checked;
+  if (!wantEmail && !wantSms) {
+    if (err) { err.textContent = "Pick at least one — email or text."; err.hidden = false; }
+    return;
+  }
   if (btn) btn.disabled = true;
   if (statusEl) { statusEl.hidden = false; statusEl.textContent = "Sending…"; statusEl.dataset.kind = "info"; }
   try {
@@ -1831,14 +1867,23 @@ document.getElementById("woOnSiteSendApprovalBtn")?.addEventListener("click", as
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        sendEmail: !!customerEmail,
-        sendSms: !!customerPhone,
-        email: customerEmail,
-        phone: customerPhone
+        sendEmail: wantEmail,
+        sendSms: wantSms,
+        ...(wantEmail ? { email: customerEmail } : {}),
+        ...(wantSms ? { phone: customerPhone } : {})
       })
     });
     const data = await r.json().catch(() => ({}));
-    if (!r.ok || !data.ok) throw new Error((data.errors && data.errors[0]) || "Couldn't send.");
+    if (!r.ok || !data.ok) {
+      // Multiple authorized signatories on a commercial account — the server
+      // refuses to guess. Surface who it found so the operator can pick.
+      if (Array.isArray(data.acceptorOptions) && data.acceptorOptions.length) {
+        const who = data.acceptorOptions.map((a) => a.name).filter(Boolean).join(", ");
+        throw new Error(`${(data.errors && data.errors[0]) || "Pick a signatory."} Found: ${who}.`);
+      }
+      throw new Error((data.errors && data.errors[0]) || "Couldn't send.");
+    }
+    if (modal) modal.hidden = true;
     const channels = [];
     if (data.emailSent) channels.push("email");
     if (data.smsSent) channels.push("SMS");
@@ -1860,8 +1905,11 @@ document.getElementById("woOnSiteSendApprovalBtn")?.addEventListener("click", as
       loadedWorkOrder = refreshed.workOrder;
       renderOnSiteQuote(refreshed.workOrder);
     }
-  } catch (err) {
-    if (statusEl) { statusEl.textContent = err.message || "Failed."; statusEl.dataset.kind = "error"; }
+  } catch (e) {
+    // Keep the modal OPEN on failure and show the reason inline — closing it
+    // would hide the error behind the page and lose the operator's choices.
+    if (err) { err.textContent = e.message || "Failed."; err.hidden = false; }
+    if (statusEl) { statusEl.textContent = e.message || "Failed."; statusEl.dataset.kind = "error"; }
   } finally {
     if (btn) btn.disabled = false;
   }
