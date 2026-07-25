@@ -306,10 +306,21 @@ async function createDraft({
     try {
       const customersLib = require("./customers");
       const cust = await customersLib.get(customerId, { withProperties: false });
-      billingName = cust?.billingName || "";
-      billingAddress = cust?.billingAddress || "";
-      billingEmail = cust?.billingEmail || "";
-      billingCareOf = (cust?.commercial && cust.commercial.careOf) || "";
+      // Bill-to is DERIVED from the (property, customer) pair so a managed
+      // commercial site bills its own legal entity "c/o" the management
+      // company. Residential / self-billed accounts resolve exactly as
+      // before. See lib/billing-parties.js for the rule.
+      let propForBilling = null;
+      if (propertyId) {
+        try { propForBilling = await require("./properties").get(propertyId); }
+        catch (_) { /* tolerate — fall back to customer-only resolution */ }
+      }
+      const parties = require("./billing-parties")
+        .resolveBillTo(propForBilling, cust, { fallbackAddress: address });
+      billingName = parties.name;
+      billingAddress = parties.address;
+      billingEmail = parties.email;
+      billingCareOf = parties.careOf;
     } catch (err) { /* tolerate — snapshot falls back to contact fields */ }
   }
   const billTo = {

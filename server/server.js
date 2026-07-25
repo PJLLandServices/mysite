@@ -65,6 +65,7 @@ const quoteNarratives = require("./lib/quote-narratives");
 const { generateInvoicePdf } = require("./lib/invoice-pdf");
 const { generateWoReportPdf, renderWoReportBuffer, reportFilename } = require("./lib/wo-report-pdf");
 const woReportSnapshot = require("./lib/wo-report-snapshot");
+const billingParties = require("./lib/billing-parties");
 const quickbooks = require("./lib/quickbooks");
 const bookings = require("./lib/bookings");
 const suppliers = require("./lib/suppliers");
@@ -2369,9 +2370,13 @@ async function quoteRenderParties(q) {
     phone: property?.customerPhone || leadContact?.phone || custRecord?.phone || "",
     address,
     email: q?.customerEmail || leadContact?.email || custRecord?.email || "",
-    // c/o billing party (commercial). Renderers print "c/o <name>" under the
-    // billed entity; blank on residential so their layout is unchanged.
-    careOf: (custRecord?.commercial && custRecord.commercial.careOf) || ""
+    // Bill-to envelope, derived from the (property, customer) pair: a managed
+    // commercial site shows its own legal entity with the management company
+    // as the "c/o" line. Residential resolves to the customer as before.
+    ...(() => {
+      const parties = billingParties.resolveBillTo(property, custRecord, { fallbackAddress: address });
+      return { billToName: parties.name, careOf: parties.careOf, managedBilling: parties.managed };
+    })()
   };
   // Renderers read property.address ?? customer.address — hand back a
   // property-shaped object even when only a fallback address exists.
@@ -6303,7 +6308,10 @@ async function handleApi(req, res, pathname) {
       // Guard against the admin accidentally clobbering structural fields
       // (id, leadIds, customerEmail) — only allow profile / system edits.
       const sanitized = {};
-      const allowedTop = ["customerName", "customerPhone", "address"];
+      // billingEntity / siteContacts: commercial management-company model.
+      // The lib normalizes both (entity capped, contacts validated + role
+      // coerced), so the route just passes them through.
+      const allowedTop = ["customerName", "customerPhone", "address", "billingEntity", "siteContacts"];
       for (const key of allowedTop) {
         if (Object.prototype.hasOwnProperty.call(payload, key)) sanitized[key] = payload[key];
       }
@@ -7546,29 +7554,50 @@ async function handleApi(req, res, pathname) {
       const scopeText = typeof payload?.scope === "string" && payload.scope.trim()
         ? payload.scope.trim().slice(0, 4000)
         : "";
-      // c/o billing party for the quote PDF's bill-to block (commercial).
+      // Bill-to envelope + signatory, derived from the (property, customer)
+      // pair. On a managed commercial site the quote is billed to the site's
+      // own legal entity "c/o" the management company, and the signatory is
+      // the management company's authorized person (or a site-specific one).
       let billCareOf = "";
-      if (wo.customerId) {
-        try {
-          const cRec = await customers.get(wo.customerId, { withProperties: false });
-          billCareOf = (cRec && cRec.commercial && cRec.commercial.careOf) || "";
-        } catch (_) { /* tolerate */ }
-      }
-      if (!acceptor && wo.customerId) {
-        try {
-          const custForAcceptor = await customers.get(wo.customerId, { withProperties: false });
-          if (custForAcceptor) {
-            const resolved = customers.resolveAcceptor(custForAcceptor);
-            if (resolved.ambiguous) {
-              return sendJson(res, 422, {
-                ok: false,
-                errors: ["This account has multiple authorized signatories — pick who this quote goes to."],
-                acceptorOptions: resolved.options
-              });
-            }
-            if (resolved.acceptor) acceptor = quotes.normalizeAcceptor(resolved.acceptor);
+      let billToName = "";
+      {
+        let cRec = null, pRec = null;
+        if (wo.customerId) {
+          try { cRec = await customers.get(wo.customerId, { withProperties: false }); } catch (_) {}
+        }
+        if (wo.propertyId) {
+          try { pRec = await properties.get(wo.propertyId); } catch (_) {}
+        }
+        const parties = billingParties.resolveBillTo(pRec, cRec, { fallbackAddress: wo.address || "" });
+        billCareOf = parties.careOf;
+        billToName = parties.name;
+        if (!acceptor) {
+          const roles = billingParties.resolveContactRoles(pRec, cRec);
+          const sigs = roles.signatories;
+          if (sigs.length > 1) {
+            return sendJson(res, 422, {
+              ok: false,
+              errors: ["This account has multiple authorized signatories — pick who this quote goes to."],
+              acceptorOptions: sigs.map((c) => ({
+                name: c.name || "", email: c.email || "", phone: c.phone || "",
+                role: c.role || "", organization: parties.careOf || parties.name || "",
+                isAuthorizedSignatory: true
+              }))
+            });
           }
-        } catch (_) { /* best-effort — fall back to the entity */ }
+          if (sigs.length === 1) {
+            const c = sigs[0];
+            acceptor = quotes.normalizeAcceptor({
+              name: c.name || "", email: c.email || "", phone: c.phone || "",
+              role: c.role || "",
+              // The signatory acts for whoever they belong to: a management
+              // company contact represents the manager (the c/o party); a
+              // site-level signatory represents the billed entity itself.
+              organization: c.from === "property" ? (parties.name || "") : (parties.careOf || parties.name || ""),
+              isAuthorizedSignatory: true
+            });
+          }
+        }
       }
 
       // Reuse an existing in-flight Quote on this WO if present (avoid
@@ -7722,10 +7751,12 @@ async function handleApi(req, res, pathname) {
             try {
               const pdfDoc = generateQuotePdf(quoteRecord, {
                 customer: {
-                  name: wo.customerName || "",
+                  // Billed party + c/o line, both derived above. On a managed
+                  // commercial site this is the site's legal entity rather
+                  // than the WO's contact snapshot.
+                  name: billToName || wo.customerName || "",
                   email: wo.customerEmail || "",
                   phone: wo.customerPhone || "",
-                  // c/o billing party — resolved above with the acceptor.
                   careOf: billCareOf
                 },
                 property: { address: wo.address || "" }

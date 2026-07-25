@@ -102,7 +102,79 @@ function applyToForm(customer) {
   saveErrorEl.hidden = true;
 }
 
+// Commercial account panel (management-company model). Lists who can approve
+// quotes for this customer, and the managed sites with their own billing
+// entity so the entity/c/o split is visible in one place. Hidden entirely on
+// residential accounts, so their page is unchanged.
+const COMMERCIAL_ROLE_LABELS = {
+  site_contact: "Site contact",
+  property_manager: "Property manager",
+  accounts_payable: "Accounts payable",
+  owner_board: "Owner / board member",
+  other: "Other"
+};
+
+function renderCommercialPanel(customer) {
+  const section = document.getElementById("customerCommercialSection");
+  const body = document.getElementById("customerCommercialBody");
+  if (!section || !body) return;
+  const isCommercial = customer.accountType === "commercial";
+  section.hidden = !isCommercial;
+  if (!isCommercial) { body.innerHTML = ""; return; }
+
+  const esc = (s) => String(s == null ? "" : s)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const contacts = (customer.commercial && Array.isArray(customer.commercial.contacts))
+    ? customer.commercial.contacts : [];
+  const signatories = contacts.filter((c) => c.isAuthorizedSignatory);
+
+  let html = "";
+  html += `<h4 style="margin:0 0 6px;font-size:13px;text-transform:uppercase;letter-spacing:.05em;color:#3d4b3f;">Approves quotes</h4>`;
+  if (signatories.length) {
+    html += signatories.map((c) => {
+      const bits = [
+        c.role ? esc(COMMERCIAL_ROLE_LABELS[c.role] || c.role) : "",
+        c.email ? `<a href="mailto:${esc(c.email)}">${esc(c.email)}</a>` : "",
+        c.phone ? `<a href="tel:${esc(c.phone)}">${esc(c.phone)}</a>` : ""
+      ].filter(Boolean).join(" · ");
+      return `<div style="margin:0 0 8px;font-size:13px;">
+        <strong>${esc(c.name || "(unnamed)")}</strong>
+        <span style="font-size:11px;font-weight:700;background:#1B4D2E;color:#fff;padding:2px 6px;border-radius:8px;margin-left:6px;">✍️ Signs quotes</span>
+        ${bits ? `<br><span style="color:#4a5a4c;">${bits}</span>` : ""}
+      </div>`;
+    }).join("");
+    if (signatories.length > 1) {
+      html += `<p style="margin:0 0 8px;font-size:12px;color:#8a5a00;">More than one signatory — you'll be asked to pick when sending a quote.</p>`;
+    }
+  } else {
+    html += `<p style="margin:0 0 8px;font-size:13px;color:#8a5a00;">No authorized signatory on file. Quotes will fall back to the account name.</p>`;
+  }
+
+  const other = contacts.filter((c) => !c.isAuthorizedSignatory);
+  if (other.length) {
+    html += `<h4 style="margin:12px 0 6px;font-size:13px;text-transform:uppercase;letter-spacing:.05em;color:#3d4b3f;">Other contacts</h4>`;
+    html += other.map((c) => `<div style="margin:0 0 6px;font-size:13px;">${esc(c.name || "(unnamed)")}${c.role ? ` — ${esc(COMMERCIAL_ROLE_LABELS[c.role] || c.role)}` : ""}${c.isSiteContact ? ` <span style="font-size:11px;background:#e8e8df;padding:2px 6px;border-radius:8px;">📍 On-site</span>` : ""}</div>`).join("");
+  }
+
+  // Managed sites — each property's own billing entity, i.e. who actually
+  // gets invoiced for that address, billed c/o this customer.
+  const props = Array.isArray(customer.properties) ? customer.properties : [];
+  const managed = props.filter((p) => String(p.billingEntity || "").trim());
+  if (managed.length) {
+    html += `<h4 style="margin:14px 0 6px;font-size:13px;text-transform:uppercase;letter-spacing:.05em;color:#3d4b3f;">Managed sites — billed c/o this customer</h4>`;
+    html += managed.map((p) => `<div style="margin:0 0 8px;font-size:13px;">
+      <strong>${esc(p.billingEntity)}</strong><br>
+      <span style="color:#4a5a4c;">${esc(p.address || "(no address)")}</span>
+      ${(Array.isArray(p.siteContacts) && p.siteContacts.length)
+        ? `<br><span style="color:#4a5a4c;">📍 ${p.siteContacts.map((s) => esc(s.name)).filter(Boolean).join(", ")}</span>` : ""}
+    </div>`).join("");
+  }
+
+  body.innerHTML = html;
+}
+
 function applyLinked(customer) {
+  renderCommercialPanel(customer);
   renderProperties(customer.properties || []);
   renderBookings(customer.bookings || []);
   renderWorkOrders(customer.workOrders || []);

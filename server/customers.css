@@ -294,6 +294,17 @@
   margin-top: 16px;
 }
 
+/* Right-hand column of the profile grid: the commercial panel (when shown)
+   stacked above the tabs. min-width:0 so long content can't blow the grid
+   track out; the flex column makes each child hug its own height instead of
+   stretching to the row. */
+.customer-main {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  min-width: 0;
+}
+
 @media (max-width: 800px) {
   .customer-profile { grid-template-columns: 1fr; }
 }

@@ -115,6 +115,36 @@
         </label>
       </section>
 
+      <!-- Commercial billing + site contacts (management-company model).
+           A management company can manage many properties, and each site is
+           owned by its own legal entity that gets billed. So the payer's
+           legal name and the site's own contacts live HERE, per property —
+           while the signatory who approves quotes lives on the customer. -->
+      <section class="property-section">
+        <h2>Commercial billing &amp; site contacts</h2>
+        <p class="property-hint" style="margin: 0 0 12px; font-size: 13px; color: var(--crm-muted, #555);">
+          Leave the billing entity blank for a normal residential property — the customer is billed directly.
+          Fill it in when this site is owned by its own corporation and billed through a management company.
+        </p>
+        <label class="property-full">
+          <span>Billing entity (legal payer for this site)</span>
+          <input type="text" name="billingEntity" autocomplete="organization" placeholder="e.g. YRSCC No. 1233 — Lewis Honey Condominiums">
+        </label>
+        <p class="property-billto-preview" id="propertyBillToPreview" hidden style="margin: 10px 0 0; padding: 10px 12px; background: #f2f7f2; border: 1px solid #cfe0cf; border-radius: 6px; font-size: 13px; line-height: 1.5;"></p>
+
+        <div style="margin-top: 18px;">
+          <div style="display: flex; align-items: baseline; justify-content: space-between; gap: 12px;">
+            <h3 style="margin: 0; font-size: 15px;">Site contacts</h3>
+            <button type="button" class="pjl-btn pjl-btn-outline" id="propAddSiteContact" style="padding: 6px 12px; font-size: 13px;">+ Add site contact</button>
+          </div>
+          <p style="margin: 4px 0 10px; font-size: 13px; color: var(--crm-muted, #555);">
+            Who PJL calls to schedule and meets on arrival at <em>this</em> address — often the board president or building super.
+          </p>
+          <div id="propSiteContactsList"></div>
+          <p id="propSiteContactsEmpty" style="margin: 0; font-size: 13px; color: var(--crm-muted, #888); font-style: italic;">No site contacts yet.</p>
+        </div>
+      </section>
+
       <section class="property-section">
         <h2>System overview</h2>
         <div class="property-row">

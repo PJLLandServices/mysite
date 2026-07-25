@@ -182,7 +182,11 @@ function generateQuotePdf(quote, opts = {}) {
   doc.fillColor(PJL_MUTED).fontSize(9).font("Helvetica-Bold")
     .text("BILL TO", COL_L, partiesTop, { characterSpacing: 1, width: COL_W });
   doc.fillColor(PJL_TEXT).font("Helvetica").fontSize(12);
-  const billToName = customer.customerName || customer.name || quote.customerEmail || "Customer";
+  // billToName: the DERIVED billed party wins when the caller resolved one
+  // (lib/billing-parties) — on a managed commercial site that's the property's
+  // own legal entity, not the contact snapshot. Falls back to the contact
+  // name, so residential output is unchanged.
+  const billToName = customer.billToName || customer.customerName || customer.name || quote.customerEmail || "Customer";
   doc.text(billToName, COL_L, doc.y + 4, { width: COL_W });
   // c/o line (commercial c/o billing) — the management company the document
   // is addressed THROUGH, printed under the billed entity. Standard for

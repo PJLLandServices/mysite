@@ -145,6 +145,36 @@ function blankProperty() {
     address: "",                 // free-text formatted address shown in UI
     addressNormalized: "",        // lower-cased, whitespace-collapsed for matching
     coords: null,                 // { lat, lng, formattedAddress } from geocoder
+    // ---- Commercial: per-property billing entity + site contacts --------
+    // (management-company model, Jul 2026)
+    //
+    // One management company (the CUSTOMER, e.g. "RMSCO Management Services
+    // Ltd.") can manage MANY properties, and each property is owned by its
+    // own legal entity that gets billed — a different condo corporation per
+    // site. So the payer's legal name belongs HERE, on the property, not on
+    // the customer.
+    //
+    //   billingEntity — the legal payer for THIS site
+    //                   ("YRSCC No. 1233 — Lewis Honey Condominiums").
+    //                   Empty on residential / owner-billed properties, where
+    //                   the customer IS the payer (unchanged behaviour).
+    //   siteContacts  — the people at THIS site: the president / super /
+    //                   whoever PJL calls to schedule and meets on arrival.
+    //                   Same shape as customer.commercial.contacts so one
+    //                   renderer/editor handles both:
+    //                     { name, role, email, phone,
+    //                       isSiteContact, isAuthorizedSignatory }
+    //                   Signatories normally live on the CUSTOMER (the
+    //                   management company signs for all its sites), but the
+    //                   flag exists here too for the case where a specific
+    //                   site's board member signs for that site only.
+    //
+    // Invoice bill-to is DERIVED from the pair (see lib/billing-parties.js):
+    //   billingEntity          -> "YRSCC No. 1233 …"
+    //   customer.name          -> "c/o RMSCO Management Services Ltd."
+    //   customer.billingAddress-> where the invoice is mailed
+    billingEntity: "",
+    siteContacts: [],
     system: {
       controllerLocation: "",     // e.g. "Garage, north wall"
       controllerBrand: "",        // e.g. "Hunter HPC-400"
@@ -353,6 +383,32 @@ function hydrateSeasonalPricing(raw) {
 
 // Backfill any missing keys on properties read from disk so older records
 // keep working as the schema grows. Pure shape-merge, no value mutation.
+// Site contact (commercial, management-company model). Same shape as
+// customers.normalizeCommercialContact so the two lists render and edit
+// identically. role is the shared enum; unknown values coerce to "other".
+const SITE_CONTACT_ROLES = new Set(["site_contact", "property_manager", "accounts_payable", "owner_board", "other"]);
+function normalizeSiteContact(raw) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const cap = (v, n) => String(v == null ? "" : v).trim().slice(0, n);
+  const role = cap(raw.role, 40);
+  const c = {
+    name: cap(raw.name, 200),
+    role: SITE_CONTACT_ROLES.has(role) ? role : (role ? "other" : ""),
+    email: cap(raw.email, 254).toLowerCase(),
+    phone: cap(raw.phone, 40),
+    // Default TRUE: a contact stored on a property is a site contact unless
+    // explicitly told otherwise — that's the whole point of the list.
+    isSiteContact: raw.isSiteContact === false ? false : true,
+    isAuthorizedSignatory: raw.isAuthorizedSignatory === true || raw.isAuthorizedSignatory === "true"
+  };
+  return (c.name || c.email || c.phone || c.role) ? c : null;
+}
+
+function normalizeSiteContacts(raw) {
+  if (!Array.isArray(raw)) return [];
+  return raw.slice(0, 10).map(normalizeSiteContact).filter(Boolean);
+}
+
 function hydrate(p) {
   const base = blankProperty();
   const incomingCommPrefs = p?.commPrefs || {};
@@ -360,6 +416,11 @@ function hydrate(p) {
   return {
     ...base,
     ...p,
+    // Commercial billing entity + site contacts (management-company model).
+    // Defaults keep every legacy/residential property byte-identical in
+    // behaviour: empty entity => customer is the payer, no site contacts.
+    billingEntity: String(p?.billingEntity || "").trim().slice(0, 200),
+    siteContacts: normalizeSiteContacts(p?.siteContacts),
     system: { ...base.system, ...(p.system || {}) },
     photos: Array.isArray(p?.photos) ? p.photos : [],
     leadIds: Array.isArray(p?.leadIds) ? p.leadIds : [],
@@ -725,6 +786,16 @@ async function update(id, patch) {
   const next = {
     ...current,
     ...patch,
+    // Commercial billing entity / site contacts — normalized on write so a
+    // hand-rolled PATCH can't store a malformed contact. siteContacts is a
+    // FULL REPLACE (the editor always sends the whole list); omitting the
+    // key leaves the current list untouched.
+    billingEntity: Object.prototype.hasOwnProperty.call(patch, "billingEntity")
+      ? String(patch.billingEntity || "").trim().slice(0, 200)
+      : current.billingEntity,
+    siteContacts: Object.prototype.hasOwnProperty.call(patch, "siteContacts")
+      ? normalizeSiteContacts(patch.siteContacts)
+      : current.siteContacts,
     system: { ...current.system, ...(patch.system || {}) },
     seasonalEligibility: {
       ...(current.seasonalEligibility || {}),

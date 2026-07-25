@@ -683,6 +683,12 @@ function populateForm(property, seasonalPricingResolved) {
   // the display fallback when customerId hasn't been backfilled.
   populateCustomerDisplay(property);
   propertyForm.elements.address.value = property.address || "";
+  // Commercial billing entity + site contacts (management-company model).
+  if (propertyForm.elements.billingEntity) {
+    propertyForm.elements.billingEntity.value = property.billingEntity || "";
+  }
+  renderSiteContacts(property.siteContacts || []);
+  renderBillToPreview();
   const sys = property.system || {};
   propertyForm.elements.controllerLocation.value = sys.controllerLocation || "";
   propertyForm.elements.controllerBrand.value = sys.controllerBrand || "";
@@ -798,6 +804,10 @@ function collectForm() {
   // commPrefs.optOutTokens secrets aren't wiped by a UI patch.
   return {
     address: propertyForm.elements.address.value.trim(),
+    // Commercial billing entity + site contacts (management-company model).
+    // Both are full replaces; the lib normalizes and drops empty rows.
+    billingEntity: (propertyForm.elements.billingEntity?.value || "").trim(),
+    siteContacts: collectSiteContacts(),
     system: {
       controllerLocation: propertyForm.elements.controllerLocation.value.trim(),
       controllerBrand: propertyForm.elements.controllerBrand.value.trim(),
@@ -818,6 +828,104 @@ function collectForm() {
     seasonalPricing: collectSeasonalPricing()
   };
 }
+
+// ---- Commercial site contacts (management-company model) --------------
+// Rows live on the PROPERTY: the people at this address (board president,
+// super) that PJL calls to schedule. The quote signatory normally lives on
+// the CUSTOMER instead, but a site-level signatory is allowed for a board
+// that signs only for its own building.
+const SITE_ROLES = [
+  ["", "Select role…"],
+  ["owner_board", "Owner / board member"],
+  ["site_contact", "Site contact"],
+  ["property_manager", "Property manager"],
+  ["accounts_payable", "Accounts payable"],
+  ["other", "Other"]
+];
+
+function siteContactRowHtml(c) {
+  const opts = SITE_ROLES.map(([v, l]) =>
+    `<option value="${v}"${(c.role || "") === v ? " selected" : ""}>${l}</option>`).join("");
+  const esc = (s) => String(s == null ? "" : s).replace(/"/g, "&quot;");
+  return `
+    <div class="property-row" style="gap:10px;align-items:flex-end;flex-wrap:wrap;">
+      <label style="flex:2 1 180px;"><span>Name</span>
+        <input type="text" class="sc-name" value="${esc(c.name)}"></label>
+      <label style="flex:1 1 150px;"><span>Role</span>
+        <select class="sc-role">${opts}</select></label>
+      <label style="flex:2 1 180px;"><span>Email</span>
+        <input type="email" class="sc-email" value="${esc(c.email)}"></label>
+      <label style="flex:1 1 140px;"><span>Phone</span>
+        <input type="tel" class="sc-phone" value="${esc(c.phone)}"></label>
+      <label style="flex:1 1 100%;display:flex;flex-direction:row;align-items:center;gap:8px;text-transform:none;font-weight:400;">
+        <input type="checkbox" class="sc-sig" style="width:16px;min-width:16px;flex:0 0 16px;height:16px;margin:0;"${c.isAuthorizedSignatory ? " checked" : ""}>
+        <span style="text-transform:none;">Also authorized to sign quotes for this site</span></label>
+      <button type="button" class="pjl-btn pjl-btn-outline sc-remove" style="padding:6px 12px;font-size:13px;">Remove</button>
+    </div>`;
+}
+
+function renderSiteContacts(list) {
+  const wrap = document.getElementById("propSiteContactsList");
+  const empty = document.getElementById("propSiteContactsEmpty");
+  if (!wrap) return;
+  const rows = Array.isArray(list) ? list : [];
+  wrap.innerHTML = rows.map(siteContactRowHtml).join("");
+  if (empty) empty.hidden = rows.length > 0;
+  wrap.querySelectorAll(".sc-remove").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      btn.closest(".property-row")?.remove();
+      if (empty) empty.hidden = wrap.querySelectorAll(".property-row").length > 0;
+    });
+  });
+}
+
+function collectSiteContacts() {
+  const wrap = document.getElementById("propSiteContactsList");
+  if (!wrap) return [];
+  return Array.from(wrap.querySelectorAll(".property-row")).map((row) => ({
+    name: row.querySelector(".sc-name")?.value.trim() || "",
+    role: row.querySelector(".sc-role")?.value || "",
+    email: row.querySelector(".sc-email")?.value.trim() || "",
+    phone: row.querySelector(".sc-phone")?.value.trim() || "",
+    isSiteContact: true,
+    isAuthorizedSignatory: !!row.querySelector(".sc-sig")?.checked
+  })).filter((c) => c.name || c.email || c.phone);
+}
+
+document.getElementById("propAddSiteContact")?.addEventListener("click", () => {
+  const wrap = document.getElementById("propSiteContactsList");
+  const empty = document.getElementById("propSiteContactsEmpty");
+  if (!wrap) return;
+  wrap.insertAdjacentHTML("beforeend", siteContactRowHtml({ name: "", role: "", email: "", phone: "", isAuthorizedSignatory: false }));
+  if (empty) empty.hidden = true;
+  const last = wrap.lastElementChild;
+  last?.querySelector(".sc-remove")?.addEventListener("click", () => {
+    last.remove();
+    if (empty) empty.hidden = wrap.querySelectorAll(".property-row").length > 0;
+  });
+  last?.querySelector(".sc-name")?.focus();
+});
+
+// Live preview of the invoice envelope this property will produce, so the
+// entity/c/o split is visible before anything is billed. Mirrors
+// lib/billing-parties.resolveBillTo.
+function renderBillToPreview() {
+  const el = document.getElementById("propertyBillToPreview");
+  if (!el) return;
+  const entity = (propertyForm.elements.billingEntity?.value || "").trim();
+  const custName = (loadedProperty?.customerName || "").trim();
+  if (!entity) { el.hidden = true; return; }
+  const managed = Boolean(custName && entity !== custName);
+  const lines = [`<strong>${entity}</strong>`];
+  if (managed) lines.push(`c/o ${custName}`);
+  lines.push('<span style="color:#6A6A60;">…billing address from the customer record</span>');
+  el.innerHTML = `Invoices and quotes for this property will be addressed:<br>${lines.join("<br>")}`;
+  el.hidden = false;
+}
+
+document.getElementById("propertyBillToPreview") && propertyForm.addEventListener("input", (e) => {
+  if (e.target && e.target.name === "billingEntity") renderBillToPreview();
+});
 
 // Build the seasonalPricing patch from the form. Empty override inputs
 // emit null so the server normalizes back to "use tier default."

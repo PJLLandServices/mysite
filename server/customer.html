@@ -178,6 +178,31 @@
           </div>
         </aside>
 
+        <!-- Right-hand column wrapper. The profile is a 2-column grid
+             (summary | main); wrapping the commercial panel WITH the tabs
+             keeps them in one column and lets the panel hug its content
+             instead of stretching to the grid row height. When the panel is
+             hidden (residential) the column simply contains the tabs, so
+             there's no leftover gap. -->
+        <div class="customer-main">
+        <!-- Commercial account panel (management-company model). Shows the
+             account type, the people who can approve quotes for this
+             customer, and — because one management company manages many
+             sites — a reminder that each property carries its own billing
+             entity + site contacts. Hidden entirely on residential. -->
+        <section class="customer-commercial" id="customerCommercialSection" hidden
+                 style="padding: 14px 16px; background: #f2f7f2; border: 1px solid #cfe0cf; border-radius: 8px;">
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+            <h3 style="margin:0;font-size:16px;">Commercial account</h3>
+            <span style="font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;background:#1B4D2E;color:#fff;padding:3px 8px;border-radius:10px;">Commercial</span>
+          </div>
+          <p style="margin:8px 0 0;font-size:13px;color:#3d4b3f;">
+            This customer is billed as a company. Each property they manage carries its own
+            <strong>billing entity</strong> and <strong>site contacts</strong> — set those on the property page.
+          </p>
+          <div id="customerCommercialBody" style="margin-top:12px;"></div>
+        </section>
+
         <section class="customer-tabs">
           <nav class="customer-tab-headers" role="tablist">
             <button type="button" class="customer-tab-header is-active" data-tab="properties" role="tab">Properties <span class="count" id="countProperties">0</span></button>
@@ -232,6 +257,7 @@
             <div id="panelHistory"></div>
           </div>
         </section>
+        </div><!-- /.customer-main -->
       </section>
 
       <p id="loadError" hidden style="margin: 32px; text-align: center; color: #9b2b2b;"></p>
