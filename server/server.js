@@ -1372,12 +1372,17 @@ function parseCommercialPayload(raw) {
               name: normalizeString(c.name, 200),
               role: coerceRole(c.role),
               email: normalizeEmail(c.email),
-              phone: normalizePhone(c.phone)
+              phone: normalizePhone(c.phone),
+              // Function flags (2026-07): what the contact DOES, orthogonal
+              // to their role (what they ARE). isAuthorizedSignatory drives
+              // the default quote acceptor. Both default false.
+              isSiteContact: c.isSiteContact === true || c.isSiteContact === "true",
+              isAuthorizedSignatory: c.isAuthorizedSignatory === true || c.isAuthorizedSignatory === "true"
             }
           : null)
         .filter(Boolean)
         // Drop entirely-empty rows so the array only carries real contacts.
-        .filter((c) => c.name || c.email || c.phone || c.role);
+        .filter((c) => c.name || c.email || c.phone || c.role || c.isSiteContact || c.isAuthorizedSignatory);
     } else {
       warning = "additionalContacts was not an array; ignored";
     }
@@ -1403,13 +1408,31 @@ async function resolveCustomerForLead(lead) {
   let customerId = match?.id || null;
   if (!customerId) {
     try {
+      // Commercial intake carries the account type + commercial block
+      // (contacts[] with role + function flags, PO/terms) onto the canonical
+      // customer record, so quotes later default their acceptor from the
+      // isAuthorizedSignatory contact. lead.commercial.additionalContacts maps
+      // to customer.commercial.contacts (normalizeCommercialBlock accepts
+      // either key). Residential leads pass neither (create() defaults
+      // accountType="residential", commercial=null).
+      const isCommercial = lead.accountType === "commercial";
       const created = await customers.create({
         name: contact.name || "",
         email,
         phone,
         source: lead.source || "lead",
         customerSince: lead.createdAt,
-        status: "lead"
+        status: "lead",
+        ...(isCommercial ? {
+          accountType: "commercial",
+          // careOf lives on lead.billing (the bill-to envelope) but belongs
+          // on the customer's commercial block, where invoices and the
+          // acceptor resolve it from. Merge it in at conversion.
+          commercial: {
+            ...(lead.commercial || {}),
+            ...(lead.billing && lead.billing.careOf ? { careOf: lead.billing.careOf } : {})
+          }
+        } : {})
       }, { by: "intake", note: `Auto-created from lead ${lead.id}` });
       customerId = created.id;
     } catch (err) {
@@ -1445,6 +1468,11 @@ async function resolveCustomerForLead(lead) {
         if (existing && !existing.billingName && lead.billing.name) patch.billingName = lead.billing.name;
         if (existing && !existing.billingAddress && lead.billing.address) patch.billingAddress = lead.billing.address;
         if (existing && !existing.billingEmail && lead.billing.email) patch.billingEmail = lead.billing.email;
+        // Seed careOf onto the commercial block too (same fill-empty-only
+        // rule) so a matched existing customer still gains the c/o party.
+        if (existing && lead.billing.careOf && !(existing.commercial && existing.commercial.careOf)) {
+          patch.commercial = { ...(existing.commercial || {}), careOf: lead.billing.careOf };
+        }
         if (Object.keys(patch).length) {
           await customers.update(customerId, patch, {
             by: "intake",
@@ -2340,7 +2368,10 @@ async function quoteRenderParties(q) {
     name: property?.customerName || leadContact?.name || custRecord?.name || "",
     phone: property?.customerPhone || leadContact?.phone || custRecord?.phone || "",
     address,
-    email: q?.customerEmail || leadContact?.email || custRecord?.email || ""
+    email: q?.customerEmail || leadContact?.email || custRecord?.email || "",
+    // c/o billing party (commercial). Renderers print "c/o <name>" under the
+    // billed entity; blank on residential so their layout is unchanged.
+    careOf: (custRecord?.commercial && custRecord.commercial.careOf) || ""
   };
   // Renderers read property.address ?? customer.address — hand back a
   // property-shaped object even when only a fallback address exists.
@@ -7499,6 +7530,41 @@ async function handleApi(req, res, pathname) {
         lineTotal: Math.round((line.overridePrice != null ? Number(line.overridePrice) : Number(line.originalPrice)) * (Number(line.qty) || 1) * 100) / 100
       }));
 
+      // Acceptor resolution (commercial intake, 2026-07). Who is authorized
+      // to approve/sign this quote on behalf of the billed entity. Priority:
+      //   1. payload.acceptor — admin picked it explicitly at send time
+      //   2. customer's single isAuthorizedSignatory contact → default
+      //   3. multiple signatories, none picked → 422 (admin must choose)
+      //   4. none → null → falls back to the entity (wo.customerName) in the
+      //      greeting, PDF, and /approve attribution (residential behaviour).
+      // Threaded into the quote record, the email greeting, and the quote
+      // PDF's "For Approval By" block.
+      let acceptor = quotes.normalizeAcceptor(payload?.acceptor);
+      // c/o billing party for the quote PDF's bill-to block (commercial).
+      let billCareOf = "";
+      if (wo.customerId) {
+        try {
+          const cRec = await customers.get(wo.customerId, { withProperties: false });
+          billCareOf = (cRec && cRec.commercial && cRec.commercial.careOf) || "";
+        } catch (_) { /* tolerate */ }
+      }
+      if (!acceptor && wo.customerId) {
+        try {
+          const custForAcceptor = await customers.get(wo.customerId, { withProperties: false });
+          if (custForAcceptor) {
+            const resolved = customers.resolveAcceptor(custForAcceptor);
+            if (resolved.ambiguous) {
+              return sendJson(res, 422, {
+                ok: false,
+                errors: ["This account has multiple authorized signatories — pick who this quote goes to."],
+                acceptorOptions: resolved.options
+              });
+            }
+            if (resolved.acceptor) acceptor = quotes.normalizeAcceptor(resolved.acceptor);
+          }
+        } catch (_) { /* best-effort — fall back to the entity */ }
+      }
+
       // Reuse an existing in-flight Quote on this WO if present (avoid
       // generating a new Q-YYYY-NNNN every time the tech retries the
       // send). Otherwise create one.
@@ -7519,6 +7585,7 @@ async function handleApi(req, res, pathname) {
           subtotal: totals.subtotal,
           hst: totals.hst,
           total: totals.total,
+          acceptor,
           createdBy: "tech"
         });
         await quotes.attachWorkOrder(quoteRecord.id, wo.id);
@@ -7534,7 +7601,16 @@ async function handleApi(req, res, pathname) {
           hst: totals.hst,
           total: totals.total
         });
+        // Adopt the resolved acceptor onto the reused draft/preview quote
+        // (a re-send of an already-sent quote keeps its frozen acceptor).
+        if (acceptor) {
+          try { quoteRecord = await quotes.setAcceptor(quoteRecord.id, acceptor); }
+          catch (_) { /* frozen — keep existing acceptor */ }
+        }
       }
+      // Ensure the greeting/PDF use whatever acceptor the quote actually
+      // carries (covers the already-sent reuse case where we didn't touch it).
+      if (!acceptor && quoteRecord && quoteRecord.acceptor) acceptor = quoteRecord.acceptor;
 
       // Generate the approval token + URL. Approval URL is embedded in
       // customer-facing SMS/email — must always be the canonical public
@@ -7548,7 +7624,9 @@ async function handleApi(req, res, pathname) {
       const approvalUrl = `${resolvePublicBaseUrl()}/approve/${encodeURIComponent(quoteRecord.id)}?t=${token}`;
 
       const results = { smsSent: false, smsError: null, emailSent: false, emailError: null, approvalUrl };
-      const firstName = (wo.customerName || "").split(" ")[0] || "there";
+      // Greeting personalizes to the acceptor (commercial: "Hi Gurdip,"),
+      // falling back to the entity name, then "there".
+      const firstName = ((acceptor && acceptor.name) || wo.customerName || "").split(" ")[0] || "there";
       const summary = `${builderLines.length} line${builderLines.length === 1 ? "" : "s"} — $${moneyCad(totals.total)} CAD incl. HST`;
 
       // SMS — keep within 160 chars where possible.
@@ -7630,7 +7708,9 @@ async function handleApi(req, res, pathname) {
                 customer: {
                   name: wo.customerName || "",
                   email: wo.customerEmail || "",
-                  phone: wo.customerPhone || ""
+                  phone: wo.customerPhone || "",
+                  // c/o billing party — resolved above with the acceptor.
+                  careOf: billCareOf
                 },
                 property: { address: wo.address || "" }
               });
@@ -7884,6 +7964,13 @@ async function handleApi(req, res, pathname) {
         // on-behalf-of acceptance prompt + scheduled-date urgency (Jul 2026)
         allowOnBehalfAcceptance: q.allowOnBehalfAcceptance === true,
         accountHolderName,
+        // Commercial acceptor (2026-07) — the pre-known approver. The page
+        // pre-fills the signer name with acceptor.name and renders the
+        // "Signed by X on behalf of <entity>" attribution. Phone omitted
+        // (not needed customer-side). Null → residential, entity signs.
+        acceptor: q.acceptor
+          ? { name: q.acceptor.name || "", role: q.acceptor.role || "", organization: q.acceptor.organization || "" }
+          : null,
         scheduledServiceDate: q.scheduledServiceDate || null,
         // Preview mode flag — set for tech-only previews
         // (status === "draft_preview") AND for admin "view as customer"

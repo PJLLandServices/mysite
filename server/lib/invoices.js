@@ -130,6 +130,10 @@ function hydrate(inv) {
     // change). Editable via update() only while status === "draft".
     billTo: inv?.billTo && typeof inv.billTo === "object" ? {
       name: String(inv.billTo.name || ""),
+      // careOf — the party the invoice is addressed THROUGH (management
+      // company on a commercial c/o account). Renders as a "c/o …" line
+      // under the entity name. Empty on residential / direct-billed.
+      careOf: String(inv.billTo.careOf || ""),
       address: String(inv.billTo.address || ""),
       email: String(inv.billTo.email || "")
     } : null,
@@ -297,6 +301,7 @@ async function createDraft({
   let billingName = "";
   let billingAddress = "";
   let billingEmail = "";
+  let billingCareOf = "";
   if (customerId) {
     try {
       const customersLib = require("./customers");
@@ -304,10 +309,12 @@ async function createDraft({
       billingName = cust?.billingName || "";
       billingAddress = cust?.billingAddress || "";
       billingEmail = cust?.billingEmail || "";
+      billingCareOf = (cust?.commercial && cust.commercial.careOf) || "";
     } catch (err) { /* tolerate — snapshot falls back to contact fields */ }
   }
   const billTo = {
     name: billingName || customerName || "",
+    careOf: billingCareOf,
     address: billingAddress || address || "",
     email: billingEmail || customerEmail || ""
   };
@@ -400,6 +407,7 @@ async function update(id, patch) {
     const raw = patch.billTo && typeof patch.billTo === "object" ? patch.billTo : {};
     next.billTo = {
       name: String(raw.name || "").trim().slice(0, 200),
+      careOf: String(raw.careOf || "").trim().slice(0, 200),
       address: String(raw.address || "").trim().slice(0, 400),
       email: String(raw.email || "").trim().toLowerCase().slice(0, 254)
     };

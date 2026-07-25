@@ -109,6 +109,21 @@ function blankCustomer() {
     billingName: "",
     billingEmail: "",
     billingAddress: null,
+    // Account type + commercial block (commercial intake, 2026-07).
+    // accountType mirrors lead.accountType so the customer record itself
+    // carries the residential/commercial distinction (previously only on
+    // the lead). `commercial` mirrors lead.commercial: the contacts[] list
+    // (each with a role + function flags isSiteContact / isAuthorizedSignatory)
+    // plus poRequired / paymentTerms. The contact flagged isAuthorizedSignatory
+    // becomes the default quote.acceptor at send time. Null on residential
+    // accounts, where the customer IS the signer. hydrate() spreads these
+    // blank defaults over legacy records on read, so no one-shot migration
+    // is needed.
+    //   commercial: { poRequired, paymentTerms,
+    //     contacts: [{ name, role, email, phone,
+    //                  isSiteContact, isAuthorizedSignatory }] }
+    accountType: "residential",
+    commercial: null,
     customerSince: null,
     source: "",
     status: "lead",
@@ -182,6 +197,73 @@ function hydrate(c) {
 }
 
 // Trim + cap each string field defensively.
+// Commercial contact (commercial intake). role = what they ARE (enum,
+// free-capped here — the server route coerces to the enum); the two
+// function flags = what they DO. Mirrors lead.commercial.additionalContacts.
+const COMMERCIAL_ROLE_SET = new Set(["site_contact", "property_manager", "accounts_payable", "owner_board", "other"]);
+function normalizeCommercialContact(raw) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const cap = (v, n) => String(v == null ? "" : v).trim().slice(0, n);
+  const role = cap(raw.role, 40);
+  const c = {
+    name: cap(raw.name, 200),
+    role: COMMERCIAL_ROLE_SET.has(role) ? role : (role ? "other" : ""),
+    email: cap(raw.email, 254).toLowerCase(),
+    phone: cap(raw.phone, 40),
+    isSiteContact: raw.isSiteContact === true || raw.isSiteContact === "true",
+    isAuthorizedSignatory: raw.isAuthorizedSignatory === true || raw.isAuthorizedSignatory === "true"
+  };
+  return (c.name || c.email || c.phone || c.role || c.isSiteContact || c.isAuthorizedSignatory) ? c : null;
+}
+
+// Commercial block: contacts[] + PO / payment-terms. Returns null when
+// there is nothing usable so residential accounts stay block-less.
+function normalizeCommercialBlock(raw) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const cap = (v, n) => String(v == null ? "" : v).trim().slice(0, n);
+  const contactsIn = Array.isArray(raw.contacts) ? raw.contacts
+    : (Array.isArray(raw.additionalContacts) ? raw.additionalContacts : []);
+  const contacts = contactsIn.slice(0, 10).map(normalizeCommercialContact).filter(Boolean);
+  const block = {
+    // careOf — the management company / party the invoice is addressed
+    // THROUGH ("YRSCC #1233 c/o RMSCO Management Services Ltd."). Standard
+    // for commercial: the entity legally owes, the management co receives
+    // and pays. Persisted here so invoice.billTo.careOf and the acceptor's
+    // organization both resolve from one structured field.
+    careOf: cap(raw.careOf, 200),
+    poRequired: raw.poRequired === true || raw.poRequired === "true",
+    paymentTerms: cap(raw.paymentTerms, 40),
+    contacts
+  };
+  return (contacts.length || block.careOf || block.poRequired || block.paymentTerms) ? block : null;
+}
+
+// Resolve the default quote acceptor from a customer's commercial contacts.
+// Returns { acceptor, ambiguous, options }:
+//   - exactly one isAuthorizedSignatory  → { acceptor, ambiguous:false }
+//   - multiple isAuthorizedSignatory     → { acceptor:null, ambiguous:true, options:[…] }
+//   - none                               → { acceptor:null, ambiguous:false }
+// The acceptor object matches quote.acceptor's shape; organization is
+// pulled from the customer's billing/entity name (best-effort).
+function resolveAcceptor(customer) {
+  const contacts = (customer && customer.commercial && Array.isArray(customer.commercial.contacts))
+    ? customer.commercial.contacts : [];
+  const signatories = contacts.filter((c) => c && c.isAuthorizedSignatory);
+  if (signatories.length === 0) return { acceptor: null, ambiguous: false, options: [] };
+  // Organization = the party the signatory ACTS FOR. On a c/o account the
+  // signatory works for the management company (Gurdip → RMSCO), so careOf
+  // wins; without a c/o it's the billed entity itself.
+  const organization = ((customer.commercial && customer.commercial.careOf) || customer.billingName || "").trim();
+  const toAcceptor = (c) => ({
+    name: c.name || "", email: c.email || "", phone: c.phone || "",
+    role: c.role || "", organization, isAuthorizedSignatory: true
+  });
+  if (signatories.length > 1) {
+    return { acceptor: null, ambiguous: true, options: signatories.map(toAcceptor) };
+  }
+  return { acceptor: toAcceptor(signatories[0]), ambiguous: false, options: [] };
+}
+
 function normalizePayload(payload) {
   const cap = (val, max) => String(val == null ? "" : val).trim().slice(0, max);
   return {
@@ -196,6 +278,8 @@ function normalizePayload(payload) {
     billingAddress: payload?.billingAddress == null
       ? null
       : cap(payload.billingAddress, 400),
+    accountType: payload?.accountType === "commercial" ? "commercial" : "residential",
+    commercial: normalizeCommercialBlock(payload?.commercial),
     source: cap(payload?.source, 80),
     internalNotes: cap(payload?.internalNotes, 4000)
   };
@@ -320,6 +404,8 @@ async function update(id, patch, { by = "admin", note = "", action = "updated" }
     "billingName",
     "billingEmail",
     "billingAddress",
+    "accountType",
+    "commercial",
     "customerSince",
     "source",
     "status",
@@ -377,6 +463,24 @@ async function update(id, patch, { by = "admin", note = "", action = "updated" }
       }
       changes.negotiatedRates = { before: current.negotiatedRates, after: safe };
       next.negotiatedRates = safe;
+      continue;
+    }
+    if (key === "accountType") {
+      const at = patch.accountType === "commercial" ? "commercial" : "residential";
+      if (current.accountType !== at) {
+        changes.accountType = { before: current.accountType, after: at };
+        next.accountType = at;
+      }
+      continue;
+    }
+    if (key === "commercial") {
+      // null clears the block; an object is normalized to
+      // { poRequired, paymentTerms, contacts:[{…, isSiteContact,
+      // isAuthorizedSignatory}] }. Full-replace (the admin/customer UI
+      // always sends the whole contacts list).
+      const cb = patch.commercial == null ? null : normalizeCommercialBlock(patch.commercial);
+      changes.commercial = { before: current.commercial, after: cb };
+      next.commercial = cb;
       continue;
     }
     if (current[key] !== patch[key]) {
@@ -785,6 +889,9 @@ module.exports = {
   STATUSES,
   normalizeEmail,
   normalizePhone,
+  normalizeCommercialContact,
+  normalizeCommercialBlock,
+  resolveAcceptor,
   list,
   get,
   create,

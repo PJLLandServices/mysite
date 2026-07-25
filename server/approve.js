@@ -117,6 +117,15 @@ function showGate() {
   try { const p = document.getElementById("approveGatePhone"); if (p) p.focus(); } catch (_) {}
 }
 
+// Commercial acceptor attribution (2026-07): " · on behalf of <entity>"
+// appended to the signature success meta when the quote carries an
+// acceptor and the billed entity is known. Empty on residential quotes,
+// where the signer IS the customer (today's behaviour).
+function onBehalfSuffix(q) {
+  const entity = q && q.accountHolderName;
+  return (q && q.acceptor && q.acceptor.name && entity) ? ` · on behalf of ${entity}` : "";
+}
+
 function render(q) {
   loading.hidden = true;
   card.hidden = false;
@@ -346,9 +355,9 @@ function render(q) {
         "Thanks — we've received your signed PDF. PJL is reviewing it now and will confirm acceptance shortly.";
     } else {
       document.getElementById("approveSuccessName").textContent = q.signedBy || "(customer)";
-      document.getElementById("approveSuccessMeta").textContent = q.signedAt
+      document.getElementById("approveSuccessMeta").textContent = (q.signedAt
         ? `Signed ${new Date(q.signedAt).toLocaleString()}`
-        : `Accepted`;
+        : `Accepted`) + onBehalfSuffix(q);
       // Deposit quotes invoice the deposit right away — the default
       // "invoice once the work is complete" copy would mislead.
       if (q.deposit && q.deposit.enabled) {
@@ -359,6 +368,13 @@ function render(q) {
       }
     }
     return;
+  }
+
+  // Commercial acceptor: pre-fill the signer name with the pre-known
+  // approver (e.g. "Gurdip Matharu") so they only need to sign. Editable —
+  // if someone else signs, the captured name reflects reality.
+  if (q.acceptor && q.acceptor.name && nameInput && !nameInput.value) {
+    nameInput.value = q.acceptor.name;
   }
 
   // Otherwise wire up the pad.
@@ -477,9 +493,9 @@ submitBtn.addEventListener("click", async () => {
     signBlock.hidden = true;
     successBlock.hidden = false;
     document.getElementById("approveSuccessName").textContent = customerName;
-    document.getElementById("approveSuccessMeta").textContent = data.alreadySigned
+    document.getElementById("approveSuccessMeta").textContent = (data.alreadySigned
       ? "(this quote was already signed earlier)"
-      : "Signed " + new Date().toLocaleString();
+      : "Signed " + new Date().toLocaleString()) + onBehalfSuffix(currentQuote);
     // Deposit quotes invoice the deposit right away — swap the default
     // "invoice once the work is complete" copy for the real terms.
     const dep = currentQuote && currentQuote.deposit;

@@ -406,6 +406,28 @@ function plusDaysIso(days) {
   return d.toISOString();
 }
 
+// Acceptor (commercial intake) — normalize the "who signs on behalf of
+// the entity" block. Returns null when nothing usable is present so the
+// renderer/email/attribution fall back to the entity (residential
+// behaviour). role is a free-form friendly title (e.g. "Property
+// Manager") capped for safety; organization is the c/o management co.
+function normalizeAcceptor(raw) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const s = (v, n) => String(v == null ? "" : v).trim().slice(0, n);
+  const acceptor = {
+    name: s(raw.name, 200),
+    email: s(raw.email, 254).toLowerCase(),
+    phone: s(raw.phone, 40),
+    role: s(raw.role, 120),           // enum value ("property_manager"); PDF maps to a label
+    organization: s(raw.organization, 200),
+    isAuthorizedSignatory: raw.isAuthorizedSignatory === true || raw.isAuthorizedSignatory === "true"
+  };
+  // Drop an all-empty block so downstream `quote.acceptor && …` guards
+  // treat "nothing was provided" the same as "residential, no acceptor".
+  const hasAny = acceptor.name || acceptor.email || acceptor.phone || acceptor.role || acceptor.organization;
+  return hasAny ? acceptor : null;
+}
+
 // 8-char base36 random suffix — matches the shape of work-orders.js
 // issue ids (iss_<random8>_<ts>). Used for attachment / proposal section
 // / task ids on project_proposal quotes and their derived projects.
@@ -433,6 +455,16 @@ function blankQuote() {
     leadId: null,
     bookingId: null,
     workOrderIds: [],
+
+    // Acceptor (commercial intake, 2026-07). The PERSON authorized to
+    // approve/sign this quote on behalf of the billed entity — distinct
+    // from the bill-to (which is the legal/paying entity, e.g. "YRSCC
+    // #1233 c/o RMSCO"). Defaults from customer.primaryContact at send
+    // time; null on residential quotes, where the customer IS the signer.
+    //   { name, email, phone, role, organization }
+    //   role is a friendly display title ("Property Manager") that mirrors
+    //   the commercial-intake role; organization is the c/o management co.
+    acceptor: null,
 
     // Source — for ai_repair_quote, transcript pointer is REQUIRED per spec.
     source: {
@@ -962,6 +994,7 @@ async function create({
   total = 0,
   intakeGuarantee = null,
   narrativeKey = null,
+  acceptor = null,
   createdBy = "system",
   validityDays = null,
   // project_proposal-only
@@ -1029,6 +1062,7 @@ async function create({
   if (intakeGuarantee) {
     q.intakeGuarantee = { ...q.intakeGuarantee, ...intakeGuarantee };
   }
+  q.acceptor = normalizeAcceptor(acceptor);
   if (narrativeKey) q.narrativeKey = String(narrativeKey);
   q.validUntil = plusDaysIso(validityDays);
   q.validUntilDate = q.validUntil;
@@ -2561,7 +2595,30 @@ async function updateDepositLifecycle(id, patch = {}, { by = "system", note = ""
   return q;
 }
 
+// Set/replace the acceptor on an existing quote. Used by the
+// send-for-approval reuse path, where the tech previewed (creating a
+// draft_preview quote with no acceptor) and then sends with the acceptor
+// resolved from customer.primaryContact. Passing null clears it back to
+// entity-signs behaviour. Only editable while the quote is still a
+// draft/draft_preview — a sent/accepted quote's acceptor is frozen.
+async function setAcceptor(id, acceptor) {
+  if (!id) throw new Error("setAcceptor needs id");
+  const records = await readAll();
+  const idx = records.findIndex((q) => q.id === id);
+  if (idx === -1) return null;
+  const q = records[idx];
+  if (q.status !== "draft" && q.status !== "draft_preview") {
+    throw new Error(`Quote ${id} is in status "${q.status}" — acceptor is frozen.`);
+  }
+  q.acceptor = normalizeAcceptor(acceptor);
+  records[idx] = q;
+  await writeAll(records);
+  return q;
+}
+
 module.exports = {
+  setAcceptor,
+  normalizeAcceptor,
   STATUSES,
   TYPES,
   PROPOSAL_BRANCHES,

@@ -174,15 +174,22 @@ function normalize(raw) {
   // Billing override — replaces the bill-to column with the snapshot and
   // moves the service address into the second column. The paying entity
   // never inherits the service contact's phone number.
+  // careOf (commercial c/o billing) — the management company the invoice is
+  // addressed THROUGH. Renders as a "c/o …" line directly under the billed
+  // entity's name (the `company` slot), which is the standard commercial
+  // envelope: "YRSCC #1233" / "c/o RMSCO Management Services Ltd." Empty on
+  // residential and direct-billed accounts, so their layout is unchanged.
+  const snapCareOf = String(snap?.careOf || "").trim();
+  const careOfLine = snapCareOf ? `c/o ${snapCareOf}` : "";
   const billToOut = billingDiffers ? {
     name: snapName || contactName,
-    company: "",
+    company: careOfLine,
     addrLines: snapAddr ? [snapAddr] : billAddrLines,
     phone: billingNameDiffers ? "" : billPhone,
     email: snapEmail
   } : {
     name: billName,
-    company: billCompany,
+    company: careOfLine || billCompany,
     addrLines: billAddrLines,
     phone: billPhone,
     email: billEmail

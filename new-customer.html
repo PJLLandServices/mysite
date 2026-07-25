@@ -252,6 +252,9 @@
   gap: 12px;
 }
 .nc-contact-row .form-group.full { grid-column: 1 / -1; }
+.nc-contact-flags { display: flex; flex-direction: column; gap: 6px; margin-top: 2px; }
+.nc-contact-flags .nc-check-inline { display: flex; align-items: flex-start; gap: 8px; cursor: pointer; font-size: 0.95em; }
+.nc-contact-flags .nc-check-inline input { margin-top: 3px; }
 .nc-contact-remove {
   grid-column: 1 / -1;
   justify-self: start;
@@ -375,6 +378,20 @@
                 <option value="other">Other</option>
               </select>
             </div>
+            <!-- Submitter function flags (commercial). Lets the person
+                 filling out the form mark THEMSELVES as the on-site contact
+                 and/or the authorized signatory, without re-entering their
+                 details as an "additional contact." Signatory defaults ON
+                 (the submitter is usually who accepts quotes). -->
+            <div class="form-group full nc-com-only nc-contact-flags" id="nc-me-flags" hidden>
+              <p class="nc-sub-hint" style="margin:0 0 2px;">Every commercial account needs at least one <strong>on-site contact</strong> and at least one <strong>authorized signatory</strong>. Tick the ones that are you — or assign them to a contact below.</p>
+              <label class="nc-check-inline" title="We’ll call you to schedule and coordinate on-site work.">
+                <input type="checkbox" id="nc-me-site" name="submitterIsSiteContact">
+                <span>I’m the on-site contact (call me to schedule / I meet on-site)</span></label>
+              <label class="nc-check-inline" title="You’ll receive and approve quotes on the account’s behalf.">
+                <input type="checkbox" id="nc-me-signatory" name="submitterIsAuthorizedSignatory" checked>
+                <span>I’m authorized to accept and sign quotes for this account</span></label>
+            </div>
             <div class="form-group full">
               <label for="nc-address">Property address <span class="req">*</span></label>
               <input type="text" id="nc-address" name="propertyAddress" class="js-address-autocomplete" required autocomplete="off" placeholder="Start typing your address…">
@@ -439,11 +456,13 @@
               </div>
             </div>
 
-            <!-- Additional role-tagged contacts (commercial only). Seeded
-                 empty; up to 5 rows. Each row stacks vertically on phones. -->
+            <!-- Contacts (commercial only). Each row captures a person, their
+                 role (what they are), and two function flags (what they DO):
+                 on-site contact + authorized signatory. The signatory becomes
+                 the default quote acceptor. Seeded empty; up to 5 rows. -->
             <div class="form-group full nc-com-only" id="nc-contacts-wrap" hidden>
-              <span class="nc-subhead">Additional contacts</span>
-              <p class="nc-sub-hint">Add anyone else involved — the site contact, a board member, or accounts payable. Optional; up to 5.</p>
+              <span class="nc-subhead">Contacts</span>
+              <p class="nc-sub-hint">Add the people involved — the on-site contact for scheduling, and whoever is authorized to approve and sign quotes for the account. Tick the boxes that apply to each. Up to 5.</p>
               <div id="nc-contacts-list"></div>
               <button type="button" class="nc-add-contact" id="nc-add-contact">+ Add another contact</button>
             </div>
@@ -598,6 +617,12 @@
         '<input type="email" data-c="email" inputmode="email" autocomplete="email"></div>' +
       '<div class="form-group full"><label>Phone</label>' +
         '<input type="tel" data-c="phone" inputmode="tel" autocomplete="tel"></div>' +
+      '<div class="form-group full nc-contact-flags">' +
+        '<label class="nc-check-inline" title="We’ll call this person to schedule and coordinate on-site work.">' +
+          '<input type="checkbox" data-c="isSiteContact"> <span>On-site contact (call for scheduling / meets on-site)</span></label>' +
+        '<label class="nc-check-inline" title="This person will receive and approve quotes on the entity’s behalf.">' +
+          '<input type="checkbox" data-c="isAuthorizedSignatory"> <span>Authorized signatory (accepts and signs quotes on behalf of the entity)</span></label>' +
+      '</div>' +
       '<button type="button" class="nc-contact-remove" aria-label="Remove this contact">Remove</button>';
     row.querySelector('.nc-contact-remove').addEventListener('click', function () {
       row.remove();
@@ -621,9 +646,11 @@
     for (var i = 0; i < rows.length; i++) {
       var name = fieldVal(rows[i], 'name'), role = fieldVal(rows[i], 'role'),
           email = fieldVal(rows[i], 'email'), phone = fieldVal(rows[i], 'phone');
-      if (!name && !role && !email && !phone) continue; // fully empty → skip
+      var isSite = !!(rows[i].querySelector('[data-c="isSiteContact"]') || {}).checked;
+      var isSig  = !!(rows[i].querySelector('[data-c="isAuthorizedSignatory"]') || {}).checked;
+      if (!name && !role && !email && !phone && !isSite && !isSig) continue; // fully empty → skip
       if (name && !email && !phone && !incomplete) incomplete = name;
-      out.push({ name: name, role: role, email: email, phone: phone });
+      out.push({ name: name, role: role, email: email, phone: phone, isSiteContact: isSite, isAuthorizedSignatory: isSig });
     }
     return { contacts: out, incomplete: incomplete };
   }
@@ -661,11 +688,43 @@
         showError('Please add a phone or email for ' + collected.incomplete + ', or remove that contact.');
         return;
       }
+
+      // The submitter is themselves a contact — captured as the FIRST entry,
+      // carrying the function-flag checkboxes from their own section. Added
+      // only when they gave a name/email/phone (always true here — those are
+      // required fields). Additional contacts follow.
+      var meContact = {
+        name: (val('nc-first') + ' ' + val('nc-last')).trim(),
+        role: val('nc-role'),
+        email: val('nc-email'),
+        phone: val('nc-phone'),
+        isSiteContact: !!(document.getElementById('nc-me-site') || {}).checked,
+        isAuthorizedSignatory: !!(document.getElementById('nc-me-signatory') || {}).checked
+      };
+      var allContacts = (meContact.name || meContact.email || meContact.phone)
+        ? [meContact].concat(collected.contacts)
+        : collected.contacts;
+
+      // Commercial REQUIREMENT: at least one on-site contact AND at least one
+      // authorized signatory must be designated (across the submitter + any
+      // added contacts). Hard-blocks the submit client-side. The server stays
+      // lenient (never-lose-a-lead) as a backstop.
+      var hasSignatory   = allContacts.some(function (c) { return c.isAuthorizedSignatory; });
+      var hasSiteContact = allContacts.some(function (c) { return c.isSiteContact; });
+      if (!hasSiteContact) {
+        showError('Please mark at least one on-site contact — the person we call to schedule and coordinate on-site work. Tick "I\'m the on-site contact" for yourself, or mark a contact below.');
+        return;
+      }
+      if (!hasSignatory) {
+        showError('Please mark at least one authorized signatory — the person who approves and signs quotes for the account. Tick "I\'m authorized to accept and sign quotes" for yourself, or mark a contact below.');
+        return;
+      }
+
       commercialBlock = {
         submitterRole: val('nc-role'),
         poRequired: !!(document.getElementById('nc-po-required') || {}).checked,
         paymentTerms: val('nc-terms'),
-        additionalContacts: collected.contacts
+        additionalContacts: allContacts
       };
     } else if (billToggle && billToggle.checked) {
       // Residential "bill to a different person" — unchanged.

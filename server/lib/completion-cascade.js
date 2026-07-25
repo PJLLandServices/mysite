@@ -706,6 +706,28 @@ async function runProjectFinalCascade(project, opts = {}) {
   let invoiceDraftError = null;
   let reusedBalanceInvoice = false;
 
+  // TODO (follow-up): the deposit-balance finals below bill from the quote
+  // snapshot / held balance invoice, so they do NOT pick up the change-order
+  // rollup merged into `lineItems` above. Known gap, shipped deliberately
+  // (no projects are on the deposit path today, but outstanding quotes use
+  // it). Until it's closed, emit a loud warning so a silently-unbilled
+  // change order shows up in the Render logs instead of surfacing later as
+  // a billing hole. Wire the CO lines into the balance invoice to fix.
+  const takesDepositBalancePath = Boolean(
+    (depositCtx && depositCtx.balanceInvoice && depositCtx.balanceInvoice.status !== "void")
+    || (depositCtx && depositCtx.depositInvoice && project.billingMode !== "time_and_material")
+  );
+  if (takesDepositBalancePath) {
+    console.warn(
+      `[cascade] Deposit-balance final for project ${project.id} — ` +
+      `change-order rollup NOT applied. If accepted on_site_quotes exist ` +
+      `on this project's build WOs, they must be billed manually.` +
+      (mergedChangeOrders.length
+        ? ` DROPPED change orders on this run: ${mergedChangeOrders.join(", ")} — BILL THESE MANUALLY.`
+        : "")
+    );
+  }
+
   if (depositCtx && depositCtx.balanceInvoice && depositCtx.balanceInvoice.status !== "void") {
     // Deposit was paid earlier → the held balance invoice IS the final
     // invoice. Clear the hold so it becomes sendable; do NOT draft a

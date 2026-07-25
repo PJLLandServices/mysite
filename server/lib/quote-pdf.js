@@ -170,21 +170,63 @@ function generateQuotePdf(quote, opts = {}) {
   });
   doc.x = 60;
 
-  // ---- Bill-to block -------------------------------------------------
-  doc.fillColor(PJL_MUTED).fontSize(9)
-    .font("Helvetica-Bold")
-    .text("BILL TO", 60, doc.y, { characterSpacing: 1 });
+  // ---- Bill-to + For-Approval-By (two columns) ----------------------
+  // Left column is always BILL TO (the paying/legal entity). Right column
+  // is FOR APPROVAL BY — the commercial acceptor (the person authorized to
+  // sign on the entity's behalf), rendered only when the quote carries an
+  // acceptor. Residential quotes have no acceptor → single-column bill-to,
+  // unchanged. Both columns start at the same y; we advance past the taller.
+  const partiesTop = doc.y;
+  const COL_L = 60, COL_R = 320, COL_W = 230;
+
+  doc.fillColor(PJL_MUTED).fontSize(9).font("Helvetica-Bold")
+    .text("BILL TO", COL_L, partiesTop, { characterSpacing: 1, width: COL_W });
   doc.fillColor(PJL_TEXT).font("Helvetica").fontSize(12);
   const billToName = customer.customerName || customer.name || quote.customerEmail || "Customer";
-  doc.text(billToName, 60, doc.y + 4);
+  doc.text(billToName, COL_L, doc.y + 4, { width: COL_W });
+  // c/o line (commercial c/o billing) — the management company the document
+  // is addressed THROUGH, printed under the billed entity. Standard for
+  // condo corps / subcontracted commercial work. Blank on residential.
+  const billCareOf = String(customer.careOf || "").trim();
+  if (billCareOf) {
+    doc.fontSize(10).fillColor(PJL_MUTED).text(`c/o ${billCareOf}`, COL_L, doc.y, { width: COL_W });
+  }
   if (property.address || customer.address) {
-    doc.fontSize(10).fillColor(PJL_MUTED).text(property.address || customer.address);
+    doc.fontSize(10).fillColor(PJL_MUTED).text(property.address || customer.address, COL_L, doc.y, { width: COL_W });
   }
   const contactBits = [customer.customerPhone || customer.phone, quote.customerEmail].filter(Boolean);
   if (contactBits.length) {
-    doc.fontSize(10).fillColor(PJL_MUTED).text(contactBits.join(" · "));
+    doc.fontSize(10).fillColor(PJL_MUTED).text(contactBits.join(" · "), COL_L, doc.y, { width: COL_W });
+  }
+  const leftBottom = doc.y;
+
+  let rightBottom = partiesTop;
+  const acc = quote.acceptor;
+  if (acc && (acc.name || acc.email || acc.role || acc.organization)) {
+    doc.fillColor(PJL_MUTED).fontSize(9).font("Helvetica-Bold")
+      .text("FOR APPROVAL BY", COL_R, partiesTop, { characterSpacing: 1, width: COL_W });
+    if (acc.name) {
+      doc.fillColor(PJL_TEXT).font("Helvetica").fontSize(12).text(acc.name, COL_R, doc.y + 4, { width: COL_W });
+    }
+    // role is stored as an enum ("property_manager"); show a friendly label.
+    const ROLE_LABELS = {
+      site_contact: "Site Contact", property_manager: "Property Manager",
+      accounts_payable: "Accounts Payable", owner_board: "Owner / Board Member", other: ""
+    };
+    const roleLabel = Object.prototype.hasOwnProperty.call(ROLE_LABELS, acc.role) ? ROLE_LABELS[acc.role] : acc.role;
+    const roleOrg = [roleLabel, acc.organization].filter(Boolean).join(", ");
+    if (roleOrg) {
+      doc.fontSize(10).fillColor(PJL_MUTED).text(roleOrg, COL_R, doc.y, { width: COL_W });
+    }
+    if (acc.email) {
+      doc.fontSize(10).fillColor(PJL_MUTED).text(acc.email, COL_R, doc.y, { width: COL_W });
+    }
+    rightBottom = doc.y;
   }
 
+  // Advance past whichever column is taller, then the usual gap.
+  doc.y = Math.max(leftBottom, rightBottom);
+  doc.x = 60;
   doc.moveDown(1.5);
 
   // ---- Scope description --------------------------------------------
