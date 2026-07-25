@@ -28,6 +28,9 @@ const fs = require("node:fs/promises");
 const fsSync = require("node:fs");
 const path = require("node:path");
 const crypto = require("node:crypto");
+// Contact-id helpers only — the bill-to resolver itself is not used here.
+// Safe to require at load time: billing-parties.js requires no siblings.
+const { isContactId, coerceContactId } = require("./billing-parties");
 
 const FILE = path.join(__dirname, "..", "data", "properties.json");
 
@@ -52,6 +55,15 @@ async function readAll() {
     const parsed = JSON.parse(raw || "[]");
     if (!Array.isArray(parsed)) return [];
     const hydrated = parsed.map(hydrate);
+
+    // One-time backfill: persist the con_ ids hydrate() just minted for site
+    // contacts written before ids existed. Without this write the id would be
+    // re-rolled on every read and nothing could reference a contact.
+    // Idempotent — once every contact carries an id this is false forever.
+    const needsContactIds = parsed.some((p) =>
+      Array.isArray(p?.siteContacts) &&
+      p.siteContacts.some((c) => c && typeof c === "object" && !isContactId(c.id))
+    );
 
     // One-time backfill: assign P-YYYY-NNNN codes to any legacy records
     // missing one. Sorted by createdAt so older properties get the lower
@@ -80,6 +92,10 @@ async function readAll() {
         p.code = `P-${year}-${String(next).padStart(4, "0")}`;
         maxByYear[year] = next;
       }
+    }
+    // Single write covering both backfills so a record needing each doesn't
+    // get written twice.
+    if (missing.length || needsContactIds) {
       await writeAll(hydrated);
     }
 
@@ -162,8 +178,12 @@ function blankProperty() {
     //                   whoever PJL calls to schedule and meets on arrival.
     //                   Same shape as customer.commercial.contacts so one
     //                   renderer/editor handles both:
-    //                     { name, role, email, phone,
+    //                     { id, name, role, email, phone,
     //                       isSiteContact, isAuthorizedSignatory }
+    //                   `id` is a stable con_xxxxxxxx minted by
+    //                   billing-parties.coerceContactId — shared with the
+    //                   customer-side list so Phase 1 can resolve a login to
+    //                   one contact regardless of which list it came from.
     //                   Signatories normally live on the CUSTOMER (the
     //                   management company signs for all its sites), but the
     //                   flag exists here too for the case where a specific
@@ -392,6 +412,10 @@ function normalizeSiteContact(raw) {
   const cap = (v, n) => String(v == null ? "" : v).trim().slice(0, n);
   const role = cap(raw.role, 40);
   const c = {
+    // Stable identity — same con_ scheme as customer.commercial.contacts, so
+    // Phase 1 can resolve a login to one contact regardless of which list it
+    // lives in. See billing-parties.coerceContactId.
+    id: coerceContactId(raw.id),
     name: cap(raw.name, 200),
     role: SITE_CONTACT_ROLES.has(role) ? role : (role ? "other" : ""),
     email: cap(raw.email, 254).toLowerCase(),

@@ -113,6 +113,27 @@ CUSTOMER FOLDER
       project_proposal quote's `customRates` at creation. Future-
       extensible to per-foot mainline, per-zone, etc.
 
+  Account Type
+    - residential (default) | commercial
+      Explicit, not inferred from the presence of a commercial block —
+      the admin UI and the future portal branch on this one field.
+
+  Commercial Block (null on residential accounts)
+    - c/o (careOf): manual override for the "addressed through" line.
+      Usually empty — on a managed account the c/o is DERIVED from the
+      managing customer's name, not typed here.
+    - PO required? / Payment terms
+    - Contacts (up to 10), each:
+        - id (con_xxxxxxxx — stable, survives renames)
+        - Name / role / email / phone
+        - Authorized signatory? — signs quotes for EVERY site this
+          customer manages (org-wide authority)
+        - Site contact? — see the note below; the per-site list on the
+          Property Folder is the normal home for these
+      Email matters: it is the key a Phase-1 portal login would resolve
+      on, so a signatory or site contact without one can't be given
+      access later.
+
   Communication Records
     - Date, time, source (email / phone / text / chat / in-person), what about, notes
 
@@ -128,6 +149,37 @@ CUSTOMER FOLDER
 **Why customer is separate from property:** A customer is a person. A property is a place. Most customers have one property. Some have a home and a cottage. Some sell a house and the new owner inherits the system documentation. Separating them now prevents painful untangling later.
 
 **Billing party ≠ contact ≠ property (billing-party brief, Jun 2026):** the person who books the work, the place being serviced, and the entity that pays the invoice are three independent facts — investment-owned residential and property-management work make all three differ routinely (e.g. service at a Vaughan home, invoice issued to a Thornhill numbered company). The contact stays the Customer's `name/email/phone`; the bill-to lives in `billingName/billingEmail/billingAddress` (empty = bill the contact). At intake, `new-customer.html` captures a structured bill-to behind a collapsed "Bill to a different person or company" disclosure (`lead.billing`, persisted only when used) and seeds the Customer's billing fields — never overwriting hand-curated values. Each draft invoice snapshots the resolved bill-to (`invoice.billTo`, locked after send), and the QuickBooks push bills that entity. The self-billing majority path is untouched end to end.
+
+**The management-company billing model (commercial data model, Jul 2026).** A commercial account routinely has *two* companies in play: the one that **owes** and the one that **receives the invoice**. One management company (the CUSTOMER — e.g. "RMSCO Management Services Ltd.") manages many condo corporations, and each site is owned by its own legal entity that gets billed. So the payer's legal name belongs on the **property** (`property.billingEntity`), not the customer, and the invoice reads:
+
+```
+YRSCC No. 1233 — Lewis Honey Condominiums     <- property.billingEntity
+c/o RMSCO Management Services Ltd.            <- customer.name
+1 Manager Way, Newmarket ON                   <- customer.billingAddress
+```
+
+Both cases happen and the model covers both without a flag:
+
+- **Managed** — the property names its own `billingEntity` and a differently-named customer exists to bill it through. The c/o line is derived, never typed.
+- **Self-billed** — the account pays its own invoices. Leave `billingEntity` blank and the customer is the payer, exactly as for residential. If the entity name *equals* the customer's own name the resolver already treats it as self-billed (it will not print "c/o itself"), but the record should be cleaned up to a blank entity rather than duplicating the name.
+
+**Roles are scoped by where they live, and that scoping is the point:**
+
+- **Signatories live on the CUSTOMER** — the management company's signing authority spans every site it manages (Gurdip signs for all of them).
+- **Site contacts live on the PROPERTY** — the board president or super at one building (Faramarz), naturally scoped to that address. This is what will let a Phase-1 portal contact see only their own building.
+- A customer contact flagged `isSiteContact` still applies across sites (the resolver's fallback), but property-level is the norm.
+- One person who is both a signatory and a specific site's contact appears in both lists, deduped by email at the presentation layer.
+
+The envelope itself is resolved by `server/lib/billing-parties.js` — `resolveBillTo(property, customer)` and `resolveContactRoles(property, customer)`. See Hard Rule 20: it is never hand-assembled at a call site.
+
+**Correcting the record.** The commercial layer was *not* absent before Jul 2026, and a future session should not rebuild it. What existed and what didn't:
+
+| Piece | Status |
+|---|---|
+| `billing-parties.js` resolver (`resolveBillTo` / `resolveContactRoles`) | **Existed since Jul 2026** and was correct — it already implemented both the managed and self-billed branches, including the self-bill guard. Never needed a logic change. |
+| `customer.accountType` + `customer.commercial`, and their `update()` allow-list entries | Landed with the commercial-intake and account-panel work (Jul 2026). Before the allow-list entry existed, a PATCH setting `commercial` was **silently dropped** — the UI reported success and the data vanished. That bug class is now pinned by a round-trip test. |
+| `property.billingEntity` + `property.siteContacts[]` | Landed with the per-property billing-entity work (Jul 2026), including `hydrate()` guards and explicit `update()` handling so a partial patch never blanks them. |
+| Stable `con_` contact ids, read-time normalization of `customer.commercial`, the step-0 audit script, and the integration tests | Added by the Phase 0 commercial data model brief (Jul 2026) — the remaining gaps once the above had landed. |
 
 **Implementation status (as of 2026-05-16):** The Customer Folder is live in v1 as `server/lib/customers.js` + `server/data/customers.json` with admin pages at `/admin/customers` and `/admin/customer/<id>`. Populated fields: name, spouseName, phone, spousePhone, email, spouseEmail, billingName, billingEmail, billingAddress, customerSince, source, status (`lead`/`active`/`inactive`/`lost`), quickbooksId, internalNotes, notificationPrefs, communicationRecords, vcfDownloads, history. The per-customer and bulk vCard download (`/api/customer/:id/vcard`, `POST /api/customers/vcards.vcf`) lets Patrick import customers into iPhone Contacts for Siri-based dialling from the truck; each download appends to vcfDownloads[] for audit. **Snapshots-vs-source-of-truth:** the Customer record is the source of truth for CURRENT contact info; transactional entities (WO / Quote / Invoice / Booking / Project) continue to snapshot name/email/phone at sign time and those snapshots are the source of truth for AS-OF-SIGNING info. Editing a Customer never back-rewrites historical snapshots.
 
@@ -148,6 +200,18 @@ PROPERTY FOLDER
         server/lib/invoices.js INVOICE_DISCLAIMERS.
     - Number of zones
     - Access & logistics (gate code, dog warning, parking notes, scheduling preferences)
+    - Billing entity (commercial only): this site's OWN legal payer, e.g.
+      "YRSCC No. 1233 — Lewis Honey Condominiums". Empty on residential
+      and owner-billed properties, where the customer is the payer.
+      Set it and the invoice is addressed to this entity c/o the
+      managing customer — see §2.1 "management-company billing model".
+    - Site contacts (commercial only, up to 10): the people at THIS
+      address — board president, super, whoever PJL calls to schedule
+      and meets on arrival. Same shape as the customer's commercial
+      contacts (id / name / role / email / phone / flags), but scoped to
+      this one site. Org-wide signatories belong on the CUSTOMER; the
+      signatory flag exists here only for a board that signs for its
+      own building alone.
 
   System Overview
     - Controller location (+ photo)
@@ -1402,6 +1466,7 @@ These are the rules that protect the design from drift. Number them so they can 
 17. **Marketing-style sends honor comm prefs and CASL.** Every outreach message includes an unsubscribe path (per-channel and "stop everything"). Email gets a footer link; SMS gets "Reply STOP to opt out." Per-property comm prefs (`seasonalRemindersSMS`, `seasonalRemindersEmail`) gate dispatch — `outreach.sendBulk` will not text a property whose `seasonalRemindersSMS=false`, will not email one whose `seasonalRemindersEmail=false`, and will not send anything to a property whose `seasonalOutreach[year:season].optOutThisSeason=true`. No exceptions.
 18. **Every property carries a complete customer name.** `property.customerName` is non-blank at create, update, and bulk-import. Validation hard-rejects blank patches with `code: MISSING_NAME`. Backfilled before outreach v1 ships, enforced at every write boundary going forward. The OG preview card "Hey {firstName}, …" depends on this invariant. No exceptions.
 19. **Service / Inspection Report PDFs contain no pricing.** Quote and invoice are the financial artifacts; the report is the service-narrative artifact. The renderer (`server/lib/wo-report-pdf.js`) embeds no dollar figures, no line-item costs, and no priced dispositions. Issue dispositions render as words (`Repaired on this visit` / `Deferred to next visit` / `Customer declined`), never as priced lines. Service Report brief, 2026-05-19.
+20. **Commercial bill-to is resolved, never hand-assembled.** `billing-parties.resolveBillTo(property, customer)` is the single source for the invoice / quote bill-to envelope, and `resolveContactRoles(property, customer)` for who signs and who to call. No call site may re-derive the "entity c/o manager" rule from `property.billingEntity` and `customer.name` on its own — that is how invoices, quote PDFs and the admin UI drift into disagreeing about who is being billed. The corollaries: the payer's legal name lives on the **property**, org-wide signatories on the **customer**, site contacts on the **property**; and an issued invoice keeps its snapshotted envelope forever — editing `billingEntity` later never retro-rewrites it (rules 2 and 10). Commercial data model brief, Jul 2026.
 
 ---
 

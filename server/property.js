@@ -847,8 +847,12 @@ function siteContactRowHtml(c) {
   const opts = SITE_ROLES.map(([v, l]) =>
     `<option value="${v}"${(c.role || "") === v ? " selected" : ""}>${l}</option>`).join("");
   const esc = (s) => String(s == null ? "" : s).replace(/"/g, "&quot;");
+  // data-cid carries the contact's con_ id back to the server on save. A row
+  // without one (the "+ Add contact" button) is a new contact and the server
+  // mints an id for it. Dropping this attribute would re-mint every id on
+  // every save and break anything referencing a contact.
   return `
-    <div class="property-row" style="gap:10px;align-items:flex-end;flex-wrap:wrap;">
+    <div class="property-row" data-cid="${esc(c.id || "")}" style="gap:10px;align-items:flex-end;flex-wrap:wrap;">
       <label style="flex:2 1 180px;"><span>Name</span>
         <input type="text" class="sc-name" value="${esc(c.name)}"></label>
       <label style="flex:1 1 150px;"><span>Role</span>
@@ -883,6 +887,7 @@ function collectSiteContacts() {
   const wrap = document.getElementById("propSiteContactsList");
   if (!wrap) return [];
   return Array.from(wrap.querySelectorAll(".property-row")).map((row) => ({
+    id: row.getAttribute("data-cid") || "",
     name: row.querySelector(".sc-name")?.value.trim() || "",
     role: row.querySelector(".sc-role")?.value || "",
     email: row.querySelector(".sc-email")?.value.trim() || "",

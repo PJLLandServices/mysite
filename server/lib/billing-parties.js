@@ -20,8 +20,43 @@
 // The second branch is byte-identical to the pre-existing behaviour, so
 // residential invoices are untouched.
 
+const crypto = require("node:crypto");
+
 function s(v, n = 400) {
   return String(v == null ? "" : v).trim().slice(0, n);
+}
+
+// ---- Contact identity -------------------------------------------------
+//
+// Commercial contacts live in TWO lists — customer.commercial.contacts[]
+// (org-wide signatories) and property.siteContacts[] (one building) — and
+// Phase 1 has to resolve a portal login back to exactly one of them. Name
+// and email both change over a contact's life (people get married, companies
+// switch domains), so neither is a durable key. Every contact therefore
+// carries a `con_xxxxxxxx` id.
+//
+// Minted HERE rather than in customers.js / properties.js so the two lists
+// can never drift into different id formats — this module already owns the
+// commercial-party model that both sides read. Format matches the existing
+// li_ / iss_ / att_ family: prefix + 8 random hex chars.
+//
+// These are identity helpers, not billing resolution: resolveBillTo and
+// resolveContactRoles are unchanged.
+const CONTACT_ID_RE = /^con_[a-f0-9]{8}$/i;
+
+function isContactId(value) {
+  return typeof value === "string" && CONTACT_ID_RE.test(value.trim());
+}
+
+function makeContactId() {
+  return "con_" + crypto.randomBytes(4).toString("hex");
+}
+
+// Preserve a well-formed caller-supplied id, otherwise mint a fresh one.
+// An editor that round-trips the id keeps the contact's identity across a
+// save; a contact submitted without one is, by definition, a new contact.
+function coerceContactId(value) {
+  return isContactId(value) ? value.trim().toLowerCase() : makeContactId();
 }
 
 // Resolve the bill-to envelope. Both args tolerate null.
@@ -87,4 +122,10 @@ function resolveContactRoles(property, customer) {
   };
 }
 
-module.exports = { resolveBillTo, resolveContactRoles };
+module.exports = {
+  resolveBillTo,
+  resolveContactRoles,
+  isContactId,
+  makeContactId,
+  coerceContactId
+};

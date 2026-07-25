@@ -28,6 +28,13 @@
 //                                 or company, e.g. "LCIG Investment Inc.")
 //     billingEmail:       ""     (empty = invoice email goes to `email`)
 //     billingAddress:     string | null   (null = same as primary property)
+//     accountType:        "residential" | "commercial"  (default residential)
+//     commercial:         null | { careOf, poRequired, paymentTerms,
+//                                  contacts: [...] }
+//                         Null on residential. Org-wide signatories live
+//                         here; per-site contacts live on the PROPERTY
+//                         (property.siteContacts) — see billing-parties.js
+//                         and PJL_OPERATIONS_DESIGN §2.1.
 //     customerSince:      ISO date — earliest interaction
 //     source:             ai_chat | repair_form | phone | email | import | ...
 //     status:             lead | active | inactive | lost
@@ -51,6 +58,9 @@
 const fs = require("node:fs/promises");
 const fsSync = require("node:fs");
 const path = require("node:path");
+// Contact-id helpers only — the bill-to resolver itself is not used here.
+// Safe to require at load time: billing-parties.js requires no siblings.
+const { isContactId, coerceContactId } = require("./billing-parties");
 
 const FILE = path.join(__dirname, "..", "data", "customers.json");
 
@@ -65,12 +75,32 @@ async function ensureFile() {
   }
 }
 
+// True when a raw (pre-hydrate) record carries a commercial contact that has
+// no usable con_ id. Drives the one-time backfill in readAll().
+function needsContactIdBackfill(c) {
+  const contacts = (c && c.commercial && Array.isArray(c.commercial.contacts))
+    ? c.commercial.contacts : [];
+  return contacts.some((k) => k && typeof k === "object" && !isContactId(k.id));
+}
+
 async function readAll() {
   await ensureFile();
   try {
     const raw = await fs.readFile(FILE, "utf8");
     const parsed = JSON.parse(raw || "[]");
-    return Array.isArray(parsed) ? parsed.map(hydrate) : [];
+    if (!Array.isArray(parsed)) return [];
+    const hydrated = parsed.map(hydrate);
+
+    // One-time backfill: persist the con_ ids hydrate() just minted for
+    // contacts written before ids existed. Without this write the id would
+    // be re-rolled on every read and nothing could reference a contact.
+    // Same pattern as the P-YYYY-NNNN backfill in properties.readAll().
+    // Idempotent — once every contact carries an id this does nothing.
+    if (parsed.some(needsContactIdBackfill)) {
+      await writeAll(hydrated);
+    }
+
+    return hydrated;
   } catch {
     return [];
   }
@@ -119,9 +149,12 @@ function blankCustomer() {
     // accounts, where the customer IS the signer. hydrate() spreads these
     // blank defaults over legacy records on read, so no one-shot migration
     // is needed.
-    //   commercial: { poRequired, paymentTerms,
-    //     contacts: [{ name, role, email, phone,
+    //   commercial: { careOf, poRequired, paymentTerms,
+    //     contacts: [{ id, name, role, email, phone,
     //                  isSiteContact, isAuthorizedSignatory }] }
+    // Each contact carries a stable `con_xxxxxxxx` id (minted by
+    // billing-parties.coerceContactId) so a rename doesn't change who the
+    // contact IS. Normalized on read as well as write — see hydrate().
     accountType: "residential",
     commercial: null,
     customerSince: null,
@@ -184,6 +217,13 @@ function hydrate(c) {
       ...base.negotiatedRates,
       ...(c?.negotiatedRates || {})
     },
+    // Commercial block — normalized on READ, not just on write, so a
+    // hand-edited customers.json can't serve a malformed block to the
+    // resolver (contacts as a string, role flags as "yes", unknown keys).
+    // Mirrors the siteContacts guard in properties.hydrate(). Stays null
+    // for residential accounts: normalizeCommercialBlock returns null when
+    // there is nothing usable, so residential records are untouched.
+    commercial: normalizeCommercialBlock(c?.commercial),
     communicationRecords: Array.isArray(c?.communicationRecords)
       ? c.communicationRecords
       : [],
@@ -206,6 +246,10 @@ function normalizeCommercialContact(raw) {
   const cap = (v, n) => String(v == null ? "" : v).trim().slice(0, n);
   const role = cap(raw.role, 40);
   const c = {
+    // Stable identity — see billing-parties.coerceContactId. A well-formed
+    // incoming id is kept (the editor round-trips it via data-cid), so
+    // renaming a contact doesn't make it a different person to Phase 1.
+    id: coerceContactId(raw.id),
     name: cap(raw.name, 200),
     role: COMMERCIAL_ROLE_SET.has(role) ? role : (role ? "other" : ""),
     email: cap(raw.email, 254).toLowerCase(),
@@ -213,6 +257,8 @@ function normalizeCommercialContact(raw) {
     isSiteContact: raw.isSiteContact === true || raw.isSiteContact === "true",
     isAuthorizedSignatory: raw.isAuthorizedSignatory === true || raw.isAuthorizedSignatory === "true"
   };
+  // `id` is deliberately NOT part of the "is there anything here" test — it's
+  // always populated, so counting it would keep every empty row.
   return (c.name || c.email || c.phone || c.role || c.isSiteContact || c.isAuthorizedSignatory) ? c : null;
 }
 

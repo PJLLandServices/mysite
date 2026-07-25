@@ -122,8 +122,12 @@ const COMMERCIAL_ROLE_LABELS = {
 function contactRowHtml(c) {
   const opts = Object.entries(COMMERCIAL_ROLE_LABELS)
     .map(([v, l]) => `<option value="${v}"${(c.role || "") === v ? " selected" : ""}>${l}</option>`).join("");
+  // data-cid carries the contact's con_ id back to the server on save. A row
+  // without one (the "+ Add contact" button) is a new contact and the server
+  // mints an id for it. Dropping this attribute would re-mint every id on
+  // every save and break anything referencing a contact.
   return `
-  <div class="cc-row" style="padding:10px;margin:0 0 10px;background:#fff;border:1px solid #dfe7df;border-radius:6px;">
+  <div class="cc-row" data-cid="${esc(c.id || "")}" style="padding:10px;margin:0 0 10px;background:#fff;border:1px solid #dfe7df;border-radius:6px;">
     <div style="display:flex;gap:8px;flex-wrap:wrap;">
       <label style="flex:2 1 160px;text-transform:none;font-weight:400;">
         <span style="display:block;font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:#6A6A60;">Name</span>
@@ -157,6 +161,7 @@ function contactRowHtml(c) {
 function collectCommercial() {
   const list = document.getElementById("customerContactsList");
   const contacts = list ? Array.from(list.querySelectorAll(".cc-row")).map((row) => ({
+    id: row.getAttribute("data-cid") || "",
     name: row.querySelector(".cc-name")?.value.trim() || "",
     role: row.querySelector(".cc-role")?.value || "",
     email: row.querySelector(".cc-email")?.value.trim() || "",
