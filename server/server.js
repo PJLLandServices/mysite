@@ -1392,100 +1392,75 @@ function parseCommercialPayload(raw) {
   return { commercial: { submitterRole, poRequired, paymentTerms, additionalContacts }, warning };
 }
 
-// Resolve or create the canonical customer record for a freshly
-// validated lead. Match order (spec §3.1, audit §5.4): email first,
-// phone second, create new otherwise. New customers default to
+// Resolve or create the canonical customer record for a freshly validated
+// lead. Match order (spec §3.1, audit §5.4): COMMERCIAL ADDRESS ANCHOR
+// first, then email, then phone, then create new. New customers default to
 // status="lead" — the first completed WO promotes them to "active".
+//
+// The implementation moved to server/lib/lead-customer.js with the
+// commercial-matching brief (Phase 0.5) so the rule — including the address
+// anchor that stops duplicate management-company records — can be tested at
+// an integration boundary. Imported under the original name, so every call
+// site below reads unchanged.
 //
 // Failures are logged but never block intake — a lead without
 // customerId is recoverable via `npm run migrate:customers --apply`.
-async function resolveCustomerForLead(lead) {
-  const contact = lead.contact || {};
-  const email = contact.email || "";
-  const phone = contact.phone || "";
-  let match = null;
-  if (email) match = await customers.findByEmail(email);
-  if (!match && phone) match = await customers.findByPhone(phone);
-  let customerId = match?.id || null;
-  if (!customerId) {
-    try {
-      // Commercial intake carries the account type + commercial block
-      // (contacts[] with role + function flags, PO/terms) onto the canonical
-      // customer record, so quotes later default their acceptor from the
-      // isAuthorizedSignatory contact. lead.commercial.additionalContacts maps
-      // to customer.commercial.contacts (normalizeCommercialBlock accepts
-      // either key). Residential leads pass neither (create() defaults
-      // accountType="residential", commercial=null).
-      const isCommercial = lead.accountType === "commercial";
-      const created = await customers.create({
-        name: contact.name || "",
-        email,
-        phone,
-        source: lead.source || "lead",
-        customerSince: lead.createdAt,
-        status: "lead",
-        ...(isCommercial ? {
-          accountType: "commercial",
-          // careOf lives on lead.billing (the bill-to envelope) but belongs
-          // on the customer's commercial block, where invoices and the
-          // acceptor resolve it from. Merge it in at conversion.
-          commercial: {
-            ...(lead.commercial || {}),
-            ...(lead.billing && lead.billing.careOf ? { careOf: lead.billing.careOf } : {})
-          }
-        } : {})
-      }, { by: "intake", note: `Auto-created from lead ${lead.id}` });
-      customerId = created.id;
-    } catch (err) {
-      if (err.code === "DUPLICATE_EMAIL") {
-        // Race condition or normalization edge case — fall back to the
-        // existing record rather than re-throwing.
-        customerId = err.existingId;
-      } else {
-        throw err;
-      }
-    }
+const { resolveCustomerForLead } = require("./lib/lead-customer");
+
+// "This building already belongs to an existing account" — the manual-create
+// dedup warning (commercial matching, Phase 0.5).
+//
+// Mirrors the residential ownership-conflict surface: advisory, never
+// blocking. Patrick is allowed to create a second account at one address
+// (a plaza with two tenants is legitimate); he just shouldn't do it by
+// accident because he couldn't see the existing one.
+//
+// Returns [] when there's nothing to say, so callers can spread it
+// conditionally and the response shape is unchanged in the common case.
+async function existingAccountWarnings(address, { excludeCustomerId = null, coords = null } = {}) {
+  const addr = String(address || "").trim();
+  if (!addr) return [];
+  try {
+    const existing = await properties.findByAddress(addr, coords);
+    if (!existing || !existing.customerId) return [];
+    if (excludeCustomerId && existing.customerId === excludeCustomerId) return [];
+    const owner = await customers.get(existing.customerId, { withProperties: false });
+    if (!owner) return [];
+    return [{
+      code: "existing_account_at_address",
+      existingCustomerId: owner.id,
+      existingCustomerName: owner.name || "",
+      existingPropertyId: existing.id,
+      accountType: owner.accountType || "residential",
+      address: existing.address || addr,
+      message: `${existing.address || addr} already belongs to ${owner.name || owner.id}. Link to that account instead of creating a duplicate?`
+    }];
+  } catch (err) {
+    // Advisory only — never fail a create because the warning lookup broke.
+    console.warn("[properties] existing-account warning lookup failed:", err?.message || err);
+    return [];
   }
-  if (customerId) {
-    try {
-      await customers.addCommunication(customerId, {
-        ts: lead.createdAt,
-        source: lead.source || "lead",
-        summary: `New ${lead.source || "lead"} intake`,
-        notes: contact.notes || "",
-        logId: lead.id
-      });
-    } catch (err) {
-      console.warn("[customers] addCommunication failed:", err?.message || err);
-    }
-    // Billing-party brief §3.7 — seed the customer's billing fields from
-    // the lead's structured bill-to, but ONLY into empty fields. A
-    // hand-curated billingName/billingAddress/billingEmail on the
-    // customer record is never overwritten by a later intake.
-    if (lead.billing && lead.billing.billTo === "other") {
-      try {
-        const existing = await customers.get(customerId, { withProperties: false });
-        const patch = {};
-        if (existing && !existing.billingName && lead.billing.name) patch.billingName = lead.billing.name;
-        if (existing && !existing.billingAddress && lead.billing.address) patch.billingAddress = lead.billing.address;
-        if (existing && !existing.billingEmail && lead.billing.email) patch.billingEmail = lead.billing.email;
-        // Seed careOf onto the commercial block too (same fill-empty-only
-        // rule) so a matched existing customer still gains the c/o party.
-        if (existing && lead.billing.careOf && !(existing.commercial && existing.commercial.careOf)) {
-          patch.commercial = { ...(existing.commercial || {}), careOf: lead.billing.careOf };
-        }
-        if (Object.keys(patch).length) {
-          await customers.update(customerId, patch, {
-            by: "intake",
-            note: `Billing party from lead ${lead.id}: ${lead.billing.name}`
-          });
-        }
-      } catch (err) {
-        console.warn("[customers] billing seed failed:", err?.message || err);
-      }
-    }
-  }
-  return customerId;
+}
+
+// Copy a properties.attachLead() outcome onto a lead record. Applied to
+// both the in-memory lead and its persisted copy so the two can't drift,
+// and so every intake door records the same fields.
+//
+// `commercialBind` (Phase 0.5) is present only when an intake was bound to
+// an existing commercial account by address match. The CRM reads it to
+// render the confirm-contact prompt for an unconfirmed submitter — binding
+// grants no portal access, so this is a prompt, not a grant.
+function applyLinkResultToLead(lead, linkResult) {
+  if (!lead || !linkResult || !linkResult.property) return lead;
+  lead.propertyId = linkResult.property.id;
+  lead.propertyLinkStatus = linkResult.status;
+  if (linkResult.status === "suggested") lead.propertyLinkSuggestions = linkResult.suggestions;
+  else delete lead.propertyLinkSuggestions;
+  if (linkResult.status === "conflict-ownership") lead.propertyLinkConflicts = linkResult.conflicts;
+  else delete lead.propertyLinkConflicts;
+  if (linkResult.commercialBind) lead.commercialBind = linkResult.commercialBind;
+  else delete lead.commercialBind;
+  return lead;
 }
 
 async function ensureStore() {
@@ -3878,12 +3853,30 @@ async function handleApi(req, res, pathname) {
         result.lead.contact.emailNormalized = verdict.normalizedEmail;
       }
 
+      // Geocode BEFORE customer resolution (commercial matching, Phase
+      // 0.5). resolveCustomerForLead and properties.attachLead each resolve
+      // the commercial address anchor, and they must agree — feeding both
+      // the same coords is what guarantees that. Previously this geocode
+      // ran only at attach time, which was after the duplicate customer had
+      // already been created. Reused by attachLead below, so this is not an
+      // extra API call.
+      let leadCoords = null;
+      const leadAddress = result.lead.contact?.address;
+      if (leadAddress) {
+        try {
+          const geo = await geocode(leadAddress);
+          if (geo.ok && geo.coords) leadCoords = geo.coords;
+        } catch (err) {
+          console.warn("[properties] lead geocode failed:", err?.message || err);
+        }
+      }
+
       // Brief 2 — resolve the canonical customer record before
       // persisting the lead. Soft-failure: if resolution throws,
       // the lead is still saved with customerId=null and Patrick
       // can backfill via the migration script.
       try {
-        result.lead.customerId = await resolveCustomerForLead(result.lead);
+        result.lead.customerId = await resolveCustomerForLead(result.lead, { coords: leadCoords });
       } catch (err) {
         console.error("[customers] resolveCustomerForLead failed:", err?.message || err);
       }
@@ -3920,12 +3913,7 @@ async function handleApi(req, res, pathname) {
       //               candidates so Patrick can confirm/reject the merge
       //   "new"       brand-new customer + property
       try {
-        let leadCoords = null;
-        const leadAddress = result.lead.contact?.address;
-        if (leadAddress) {
-          const geo = await geocode(leadAddress);
-          if (geo.ok && geo.coords) leadCoords = geo.coords;
-        }
+        // leadCoords resolved above, before customer resolution.
         const linkResult = await properties.attachLead({
           leadId: result.lead.id,
           customerId: result.lead.customerId || null,
@@ -3936,25 +3924,11 @@ async function handleApi(req, res, pathname) {
           coords: leadCoords
         });
         if (linkResult.property) {
-          result.lead.propertyId = linkResult.property.id;
-          result.lead.propertyLinkStatus = linkResult.status;
-          if (linkResult.status === "suggested") {
-            result.lead.propertyLinkSuggestions = linkResult.suggestions;
-          }
-          if (linkResult.status === "conflict-ownership") {
-            result.lead.propertyLinkConflicts = linkResult.conflicts;
-          }
+          applyLinkResultToLead(result.lead, linkResult);
           const liveLeads = await readLeads();
           const i = liveLeads.findIndex((l) => l.id === result.lead.id);
           if (i !== -1) {
-            liveLeads[i].propertyId = linkResult.property.id;
-            liveLeads[i].propertyLinkStatus = linkResult.status;
-            if (linkResult.status === "suggested") {
-              liveLeads[i].propertyLinkSuggestions = linkResult.suggestions;
-            }
-            if (linkResult.status === "conflict-ownership") {
-              liveLeads[i].propertyLinkConflicts = linkResult.conflicts;
-            }
+            applyLinkResultToLead(liveLeads[i], linkResult);
             await writeLeads(liveLeads);
           }
         }
@@ -4272,13 +4246,11 @@ async function handleApi(req, res, pathname) {
           coords: null
         });
         if (linkResult && linkResult.property) {
-          lead.propertyId = linkResult.property.id;
-          lead.propertyLinkStatus = linkResult.status;
+          applyLinkResultToLead(lead, linkResult);
           const liveLeads = await readLeads();
           const i = liveLeads.findIndex((l) => l.id === lead.id);
           if (i !== -1) {
-            liveLeads[i].propertyId = linkResult.property.id;
-            liveLeads[i].propertyLinkStatus = linkResult.status;
+            applyLinkResultToLead(liveLeads[i], linkResult);
             await writeLeads(liveLeads);
           }
         }
@@ -5759,6 +5731,14 @@ async function handleApi(req, res, pathname) {
       } catch (err) {
         console.warn("[properties] geocode for create failed:", err.message);
       }
+      // Non-blocking dedup warning (Phase 0.5) — resolved BEFORE the create
+      // so the new property itself can't be what the lookup finds. Excludes
+      // this customer: adding a second property at an address they already
+      // hold is a different situation (and already surfaced elsewhere).
+      const warnings = await existingAccountWarnings(address, {
+        excludeCustomerId: customerId,
+        coords
+      });
       const property = await properties.create({
         customerId,
         address,
@@ -5767,7 +5747,7 @@ async function handleApi(req, res, pathname) {
         customerPhone: customer.phone || "",
         coords
       });
-      return sendJson(res, 200, { ok: true, property });
+      return sendJson(res, 200, { ok: true, property, ...(warnings.length ? { warnings } : {}) });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't create property."] });
     }
@@ -5874,7 +5854,14 @@ async function handleApi(req, res, pathname) {
         return sendJson(res, 422, { ok: false, errors: ["Customer name is required."] });
       }
       const created = await customers.create(payload, { by: "admin", note: "Created from admin UI" });
-      return sendJson(res, 200, { ok: true, customer: created });
+      // Non-blocking dedup warning (commercial matching, Phase 0.5). If the
+      // address the admin typed already belongs to an existing account,
+      // say so — creating a second customer for a building PJL already
+      // services is the duplicate this phase exists to prevent. Advisory
+      // only: Patrick may genuinely be adding a second account at one
+      // address (a plaza with two tenants), so it never blocks.
+      const warnings = await existingAccountWarnings(payload?.address, { excludeCustomerId: created.id });
+      return sendJson(res, 200, { ok: true, customer: created, ...(warnings.length ? { warnings } : {}) });
     } catch (err) {
       if (err && err.code === "DUPLICATE_EMAIL") {
         return sendJson(res, 409, { ok: false, errors: [err.message], existingId: err.existingId });
@@ -6227,18 +6214,7 @@ async function handleApi(req, res, pathname) {
         });
       }
 
-      lead.propertyId = linkResult.property.id;
-      lead.propertyLinkStatus = linkResult.status;
-      if (linkResult.status === "suggested") {
-        lead.propertyLinkSuggestions = linkResult.suggestions;
-      } else {
-        delete lead.propertyLinkSuggestions;
-      }
-      if (linkResult.status === "conflict-ownership") {
-        lead.propertyLinkConflicts = linkResult.conflicts;
-      } else {
-        delete lead.propertyLinkConflicts;
-      }
+      applyLinkResultToLead(lead, linkResult);
       lead.crm = lead.crm || {};
       lead.crm.activity = Array.isArray(lead.crm.activity) ? lead.crm.activity : [];
       lead.crm.activity.unshift({
@@ -16662,7 +16638,11 @@ Customer signature captured at ${new Date().toISOString()}.`;
       // customers.json, so self-bookers like Virginia Lorraine were
       // invisible there and couldn't be vCard-downloaded).
       try {
-        result.lead.customerId = await resolveCustomerForLead(result.lead);
+        // Same coords the property attach uses below, so the commercial
+        // address anchor resolves identically in both (Phase 0.5).
+        result.lead.customerId = await resolveCustomerForLead(result.lead, {
+          coords: customerCoords && customerCoords.lat != null ? customerCoords : null
+        });
         const liveLeads = await readLeads();
         const i = liveLeads.findIndex((l) => l.id === result.lead.id);
         if (i !== -1) {
@@ -16684,25 +16664,11 @@ Customer signature captured at ${new Date().toISOString()}.`;
           coords: customerCoords && customerCoords.lat != null ? customerCoords : null
         });
         if (linkResult.property) {
-          result.lead.propertyId = linkResult.property.id;
-          result.lead.propertyLinkStatus = linkResult.status;
-          if (linkResult.status === "suggested") {
-            result.lead.propertyLinkSuggestions = linkResult.suggestions;
-          }
-          if (linkResult.status === "conflict-ownership") {
-            result.lead.propertyLinkConflicts = linkResult.conflicts;
-          }
+          applyLinkResultToLead(result.lead, linkResult);
           const liveLeads = await readLeads();
           const i = liveLeads.findIndex((l) => l.id === result.lead.id);
           if (i !== -1) {
-            liveLeads[i].propertyId = linkResult.property.id;
-            liveLeads[i].propertyLinkStatus = linkResult.status;
-            if (linkResult.status === "suggested") {
-              liveLeads[i].propertyLinkSuggestions = linkResult.suggestions;
-            }
-            if (linkResult.status === "conflict-ownership") {
-              liveLeads[i].propertyLinkConflicts = linkResult.conflicts;
-            }
+            applyLinkResultToLead(liveLeads[i], linkResult);
             await writeLeads(liveLeads);
           }
         }

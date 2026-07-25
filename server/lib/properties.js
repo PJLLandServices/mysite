@@ -158,6 +158,13 @@ function blankProperty() {
     // 2026-05-12 when it transferred to Y." Past WOs/invoices keep
     // their own snapshots — this log is the property's view.
     ownerHistory: [],
+    // General-purpose audit log for property-level events that aren't an
+    // ownership transfer (which has its own ownerHistory above). Same shape
+    // as customer.history: { ts, action, by, note }. First writer is the
+    // commercial intake bind (`commercial_lead_bound`, Phase 0.5) — the
+    // record that an address-anchored intake attached a lead to this
+    // building's existing account rather than creating a new one.
+    history: [],
     address: "",                 // free-text formatted address shown in UI
     addressNormalized: "",        // lower-cased, whitespace-collapsed for matching
     coords: null,                 // { lat, lng, formattedAddress } from geocoder
@@ -483,6 +490,7 @@ function hydrate(p) {
     siteContacts: normalizeSiteContacts(p?.siteContacts),
     system: { ...base.system, ...(p.system || {}) },
     photos: Array.isArray(p?.photos) ? p.photos : [],
+    history: Array.isArray(p?.history) ? p.history : [],
     leadIds: Array.isArray(p?.leadIds) ? p.leadIds : [],
     workOrderIds: Array.isArray(p?.workOrderIds) ? p.workOrderIds : [],
     deferredIssues: Array.isArray(p?.deferredIssues) ? p.deferredIssues.map(hydrateDeferred) : [],
@@ -625,9 +633,64 @@ async function applySystemUpdates(propertyId, systemPatch) {
 
 // ---- Auto-match / upsert --------------------------------------------
 
+// The address-matching core, shared by every caller so the rule can't
+// drift: exact normalized address first, then a geocoded distance match
+// within MATCH_RADIUS_METERS. Pure — takes the candidate list, returns the
+// matched property or null.
+//
+// `findMatch` passes only the submitter's own properties (email-anchored,
+// the residential rule). `findByAddress` passes everything (email-agnostic,
+// the commercial rule — the BUILDING is the identity, not the person).
+// Returns EVERY match, best first: exact normalized-address matches in list
+// order, then any remaining within-radius geocode matches sorted nearest
+// first. More than one property can legitimately sit at a single address —
+// a plaza with two tenants, or a commercial site that also has a
+// residential record — and findCommercialAnchor has to see all of them to
+// pick the commercial one rather than whichever happened to be stored first.
+function matchAllByAddress(candidates, address, coords) {
+  const targetAddrNorm = normalizeAddress(address);
+  const out = [];
+  const seen = new Set();
+
+  // 1. Exact normalized address matches.
+  if (targetAddrNorm) {
+    for (const p of candidates) {
+      if (p.addressNormalized && p.addressNormalized === targetAddrNorm) {
+        out.push(p);
+        seen.add(p.id);
+      }
+    }
+  }
+
+  // 2. Geocoded distance matches (when both sides have coords), nearest first.
+  if (coords && coords.lat != null) {
+    const within = [];
+    for (const p of candidates) {
+      if (seen.has(p.id)) continue;
+      if (!p.coords || p.coords.lat == null) continue;
+      const dist = haversineMeters(coords, p.coords);
+      if (dist <= MATCH_RADIUS_METERS) within.push({ p, dist });
+    }
+    within.sort((a, b) => a.dist - b.dist);
+    for (const w of within) out.push(w.p);
+  }
+
+  return out;
+}
+
+// Single best match — the original findMatch behaviour (first exact, else
+// nearest within radius), expressed over matchAllByAddress.
+function matchByAddress(candidates, address, coords) {
+  return matchAllByAddress(candidates, address, coords)[0] || null;
+}
+
 // Find the best property match for a new lead based on its contact email
 // + address (and optional geocoded coords). Returns the matched property
 // or null if nothing came close.
+//
+// This is the RESIDENTIAL rule and is deliberately email-anchored: the
+// person is the customer, so a property only matches if it already belongs
+// to them. Commercial intake needs the opposite anchor — see findByAddress.
 async function findMatch({ email, address, coords }) {
   const properties = await readAll();
   const targetEmail = normalizeEmail(email);
@@ -636,28 +699,138 @@ async function findMatch({ email, address, coords }) {
   const candidates = properties.filter((p) => p.customerEmail === targetEmail);
   if (!candidates.length) return null;
 
-  const targetAddrNorm = normalizeAddress(address);
+  return matchByAddress(candidates, address, coords);
+}
 
-  // 1. Exact normalized address match wins.
-  const exact = candidates.find((p) => p.addressNormalized && p.addressNormalized === targetAddrNorm);
-  if (exact) return exact;
+// Email-agnostic address lookup — "is this building already on file, no
+// matter who is asking?" (commercial matching, Phase 0.5).
+//
+// Exists because a management company's property manager churns year to
+// year while the building and its billing entity are stable. Anchoring on
+// the submitter's email meant a new PM contacting PJL about an existing
+// managed site matched nothing, created a DUPLICATE management-company
+// record, and tripped a false "new owner" ownership conflict.
+//
+// Returns the matched property or null. Soft-deleted / archived records are
+// excluded: a property in the trash shouldn't silently capture new intake.
+async function findByAddress(address, coords) {
+  const all = await findAllByAddress(address, coords);
+  return all[0] || null;
+}
 
-  // 2. Geocoded distance match (when both sides have coords).
-  if (coords && coords.lat != null) {
-    let best = null;
-    let bestDist = Infinity;
-    for (const p of candidates) {
-      if (!p.coords || p.coords.lat == null) continue;
-      const dist = haversineMeters(coords, p.coords);
-      if (dist < bestDist) {
-        best = p;
-        bestDist = dist;
-      }
-    }
-    if (best && bestDist <= MATCH_RADIUS_METERS) return best;
+// Every live property at this address, best match first.
+async function findAllByAddress(address, coords) {
+  const properties = await readAll();
+  const live = properties.filter((p) => !p.deletedAt && !p.archivedAt);
+  return matchAllByAddress(live, address, coords);
+}
+
+// Resolve the COMMERCIAL anchor for an intake: the existing account that
+// already owns this building, if there is one.
+//
+// Returns { property, customerId, customer } or null. Non-null only when
+// ALL of these hold:
+//   - the address matches a live property
+//   - that property has a customerId that resolves
+//   - that customer is accountType === "commercial"
+//
+// The `submitterEmail` guard implements the brief's edge case: when the
+// submitter ALREADY owns a property at this address (the exact
+// email+address match), that exact match wins and there is no anchor.
+// Covers the rare residential-property-at-a-commercial-address overlap —
+// without it, a homeowner could be bound to a neighbouring commercial
+// account. Residential intake never produces an anchor, so its matching is
+// untouched.
+async function findCommercialAnchor(address, coords, { submitterEmail = "" } = {}) {
+  if (!address && !(coords && coords.lat != null)) return null;
+
+  // Exact customer/email match first — it outranks the address anchor.
+  if (submitterEmail) {
+    const own = await findMatch({ email: submitterEmail, address, coords });
+    if (own) return null;
   }
 
+  // Scan EVERY property at this address for a commercial owner rather than
+  // just the best match. When a commercial site and a residential record
+  // share an address, the commercial one is the anchor — picking whichever
+  // was stored first would make the outcome depend on insertion order.
+  const candidates = await findAllByAddress(address, coords);
+  const customersLib = require("./customers");
+  for (const property of candidates) {
+    if (!property.customerId) continue;
+    let customer = null;
+    try {
+      customer = await customersLib.get(property.customerId, { withProperties: false });
+    } catch (_) {
+      continue; // tolerate — a dangling customerId is not an anchor
+    }
+    if (customer && customer.accountType === "commercial") {
+      return { property, customerId: customer.id, customer };
+    }
+  }
   return null;
+}
+
+// Which known contact does this submitter correspond to? Checks the
+// customer's org-wide contacts and the property's site contacts, matching
+// on email (the only field stable enough to key on).
+//
+// Returns { state: "known", email, matchedContactId, from } when found, or
+// { state: "unconfirmed", email } when not. An unconfirmed submitter is
+// NEVER auto-added as an authoritative contact and NEVER granted access —
+// Patrick confirms them. Binding a lead is a CRM action only.
+function resolveSubmitterContact(customer, property, submitterEmail) {
+  const email = normalizeEmail(submitterEmail);
+  if (!email) return { state: "unconfirmed", email: "" };
+  const custContacts = (customer && customer.commercial && Array.isArray(customer.commercial.contacts))
+    ? customer.commercial.contacts : [];
+  const siteContacts = Array.isArray(property?.siteContacts) ? property.siteContacts : [];
+  // Site contacts checked first: on a managed building the person reaching
+  // out about THIS site is more likely its super than an org-wide signatory.
+  for (const [list, from] of [[siteContacts, "property"], [custContacts, "customer"]]) {
+    const hit = list.find((c) => c && normalizeEmail(c.email) === email);
+    if (hit) return { state: "known", email, matchedContactId: hit.id || null, from };
+  }
+  return { state: "unconfirmed", email };
+}
+
+// Does this email already belong to a known contact on a DIFFERENT account?
+// The brief's edge case: a property manager who moved from one management
+// company to another, or one person legitimately serving two accounts. The
+// address still wins (the building is the anchor) — but Patrick should see
+// the mismatch rather than have it resolved silently.
+//
+// Returns an array of { customerId, customerName, from } — empty when the
+// email is unknown elsewhere. Linear scan; PJL-scale.
+async function findContactAccountsByEmail(email, { excludeCustomerId = null } = {}) {
+  const target = normalizeEmail(email);
+  if (!target) return [];
+  const out = [];
+  const seen = new Set();
+  const customersLib = require("./customers");
+
+  const allCustomers = await customersLib.list();
+  for (const c of allCustomers) {
+    if (!c || c.id === excludeCustomerId) continue;
+    const contacts = (c.commercial && Array.isArray(c.commercial.contacts)) ? c.commercial.contacts : [];
+    if (contacts.some((k) => k && normalizeEmail(k.email) === target)) {
+      if (!seen.has(c.id)) { seen.add(c.id); out.push({ customerId: c.id, customerName: c.name || "", from: "customer" }); }
+    }
+  }
+
+  const allProperties = await readAll();
+  for (const p of allProperties) {
+    if (!p || !p.customerId || p.customerId === excludeCustomerId) continue;
+    const contacts = Array.isArray(p.siteContacts) ? p.siteContacts : [];
+    if (contacts.some((k) => k && normalizeEmail(k.email) === target)) {
+      if (!seen.has(p.customerId)) {
+        const owner = allCustomers.find((c) => c && c.id === p.customerId);
+        seen.add(p.customerId);
+        out.push({ customerId: p.customerId, customerName: owner?.name || "", from: "property" });
+      }
+    }
+  }
+  return out;
 }
 
 // Find existing properties at this address that belong to a DIFFERENT
@@ -723,6 +896,67 @@ async function attachLead({ leadId, email, name, phone, address, coords, custome
     }
     await writeAll(properties);
     return { property, status: "linked", suggestions: [], conflicts: [] };
+  }
+
+  // ---- Commercial branch (Phase 0.5) --------------------------------
+  // No exact email+address match, but the BUILDING may already be on file
+  // under a commercial account. For commercial the building is the stable
+  // identity and the submitter is transient, so bind to the existing
+  // account instead of creating a duplicate — and do NOT run the
+  // ownership-conflict check, which would flag this as a "new owner" when
+  // it is really the same account with a new contact person.
+  //
+  // Nothing here grants portal access: binding is a CRM action, and access
+  // still requires a magic-link to a KNOWN contact (Phase 1).
+  const anchor = await findCommercialAnchor(address, coords, { submitterEmail: targetEmail });
+  if (anchor) {
+    const idx = properties.findIndex((p) => p.id === anchor.property.id);
+    if (idx !== -1) {
+      const bound = properties[idx];
+      // Deliberately does NOT touch customerName / customerEmail /
+      // customerPhone. Those are the account's canonical snapshot; letting
+      // a transient submitter overwrite them is the exact failure this
+      // branch exists to prevent (it would ride toward QuickBooks as the
+      // paying entity's contact info).
+      if (leadId && !bound.leadIds.includes(leadId)) bound.leadIds.push(leadId);
+      const ts = new Date().toISOString();
+      bound.history = [
+        ...(Array.isArray(bound.history) ? bound.history : []),
+        {
+          ts,
+          action: "commercial_lead_bound",
+          by: "intake",
+          note: `Lead ${leadId || "(no id)"} from ${targetEmail || "(no email)"} bound to existing commercial account ${anchor.customerId}${anchor.customer.name ? ` (${anchor.customer.name})` : ""} by address match.`
+        }
+      ];
+      bound.updatedAt = ts;
+      properties[idx] = bound;
+      await writeAll(properties);
+
+      const contact = resolveSubmitterContact(anchor.customer, bound, targetEmail);
+      // A submitter who is a known contact somewhere ELSE still binds here
+      // (the address wins), but the mismatch is surfaced for Patrick.
+      const otherAccounts = contact.state === "known"
+        ? []
+        : await findContactAccountsByEmail(targetEmail, { excludeCustomerId: anchor.customerId });
+
+      return {
+        property: bound,
+        // Kept as "linked" so every existing caller and CRM branch behaves
+        // exactly as it does for a normal successful link. The commercial
+        // specifics ride in `commercialBind`.
+        status: "linked",
+        suggestions: [],
+        conflicts: [],
+        commercialBind: {
+          status: "bound",
+          customerId: anchor.customerId,
+          customerName: anchor.customer.name || "",
+          contact,
+          ...(otherAccounts.length ? { contactKnownOnOtherAccounts: otherAccounts } : {})
+        }
+      };
+    }
   }
 
   // Same customer (email matches), different address — suggest manual merge.
@@ -1537,6 +1771,12 @@ module.exports = {
   attachLead,
   relinkLead,
   findMatch,
+  // Commercial matching (Phase 0.5) — address-anchored, email-agnostic.
+  findByAddress,
+  findAllByAddress,
+  findCommercialAnchor,
+  resolveSubmitterContact,
+  findContactAccountsByEmail,
   findByLeadId,
   findByCustomerEmail,
   list,

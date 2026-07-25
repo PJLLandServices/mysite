@@ -193,6 +193,7 @@ The envelope itself is resolved by `server/lib/billing-parties.js` — `resolveB
 | `property.billingEntity` + `property.siteContacts[]` | Landed with the per-property billing-entity work (Jul 2026), including `hydrate()` guards and explicit `update()` handling so a partial patch never blanks them. |
 | Stable `con_` contact ids, read-time normalization of `customer.commercial`, the step-0 audit script, and the integration tests | Added by the Phase 0 commercial data model brief (Jul 2026) — the remaining gaps once the above had landed. |
 | `billingCcEmail` (customer + property), `resolveBillTo().ccEmail`, the invoice-email CC wiring, and reject-don't-truncate on the contact cap | Added by the Phase 0 addendum (Jul 2026). The cap previously trimmed silently, which on a billing-accuracy slice could drop an authorized signatory without anyone noticing. |
+| Commercial customer MATCHING (address-anchored intake, `findCommercialAnchor`, `lead-customer.js`, the manual-create warning, the QB entity guard) | Added by the Phase 0.5 commercial-matching brief (Jul 2026), resolving the §3.1 deferral. Phase 0 made the commercial fields durable; it did **not** make matching correct, and duplicates were still being created on every commercial intake until this landed. |
 
 **Implementation status (as of 2026-05-16):** The Customer Folder is live in v1 as `server/lib/customers.js` + `server/data/customers.json` with admin pages at `/admin/customers` and `/admin/customer/<id>`. Populated fields: name, spouseName, phone, spousePhone, email, spouseEmail, billingName, billingEmail, billingAddress, customerSince, source, status (`lead`/`active`/`inactive`/`lost`), quickbooksId, internalNotes, notificationPrefs, communicationRecords, vcfDownloads, history. The per-customer and bulk vCard download (`/api/customer/:id/vcard`, `POST /api/customers/vcards.vcf`) lets Patrick import customers into iPhone Contacts for Siri-based dialling from the truck; each download appends to vcfDownloads[] for audit. **Snapshots-vs-source-of-truth:** the Customer record is the source of truth for CURRENT contact info; transactional entities (WO / Quote / Invoice / Booking / Project) continue to snapshot name/email/phone at sign time and those snapshots are the source of truth for AS-OF-SIGNING info. Editing a Customer never back-rewrites historical snapshots.
 
@@ -285,9 +286,42 @@ When new info arrives, match before creating:
 - **Property match:** address
 - **Conflict case:** known property + unknown customer → flag for Patrick's review (could be the new owner of an old customer's house). Do NOT auto-merge.
 
+**These are the RESIDENTIAL rules.** Commercial inverts the anchor — see below.
+
 **Implementation:** wired into the public lead intake (`POST /api/quotes` → `resolveCustomerForLead`) and the property auto-link cascade (`properties.attachLead`). Match failure on a real intake is a soft-warn — the lead is still saved with `customerId=null` so a public-form submission never breaks if the customer lookup throws. `customers.findByIdentifier()` is the canonical entry point; bookings, magic-link auth, and the conflict detector all funnel through it.
 
-> **⚠ The email → phone → create-new rule does NOT hold for commercial accounts.** It matches on the *submitter's* contact info, but at a company the submitter changes over time (this year's property manager is not next year's) while the account — the billing legal entity — stays the same. Matching a commercial lead on submitter email/phone therefore produces **duplicate customer records for the same account**, and can attach the wrong contact's phone to a billing entity in QuickBooks. As of the commercial-intake brief (Jul 2026), commercial intake captures `accountType` + a billing entity at the **lead** layer only; commercial customer-matching (match on the billing entity, not the submitter) is **unresolved and deferred to Brief 2**. Do not assume the matching rules above are complete for commercial work.
+#### Commercial matching — the building is the anchor (Phase 0.5, Jul 2026)
+
+> **The email → phone → create-new rule above does NOT hold for commercial accounts, and this section is the rule that replaces it.** *(This resolves the deferral previously recorded here. Commercial matching is no longer "deferred to Brief 2" — it is implemented. Do not re-defer it.)*
+
+Residential and commercial have **opposite stable identities**:
+
+| | Stable identity | Transient |
+|---|---|---|
+| Residential | the **person** — they own the house | the address (they move) |
+| Commercial | the **building** and its billing entity | the **person** — this year's property manager is not next year's |
+
+Matching commercial intake on the submitter's email therefore produced two defects at once: a new PM contacting PJL about an existing managed site matched no customer, so a **duplicate management-company record** was created; and the same-address-different-email check fired a **false "new owner" ownership conflict** when it was really the same account with a new contact. The new person's details then rode the snapshot toward QuickBooks against a stable payer.
+
+**The commercial rule, in order:**
+
+1. **Exact email + address match wins** (`properties.findMatch`). A submitter who already owns a property at this address is matched normally — this is what stops a homeowner being bound to a neighbouring commercial account at a shared address.
+2. **Otherwise, address anchor.** `properties.findCommercialAnchor(address, coords)` looks up the building **email-agnostically** and returns the account only when the matched property's customer is `accountType === "commercial"`. When it hits:
+   - The customer is resolved **via `property.customerId`** — no identifier match, no create. This happens in `lead-customer.resolveCustomerForLead`, *before* the property attach, because that is where the duplicate was being created.
+   - `properties.attachLead` binds the lead to that existing property and **skips `findOwnershipConflicts` entirely** — it is not a new owner.
+   - The submitter is resolved against `customer.commercial.contacts[]` and `property.siteContacts[]` by email: **known** → tagged with the matched `con_` id; **no match** → surfaced as an **unconfirmed contact** for Patrick to confirm. Never auto-added as authoritative.
+   - The submitter's email/phone is recorded **on the lead only**. Canonical customer and property contact fields are never overwritten by a transient person.
+   - A `commercial_lead_bound` entry is appended to `property.history`.
+3. **No address match** → the existing new-customer/new-property path, unchanged. A genuinely net-new commercial building can't be detected as commercial at the public door; Patrick tags or onboards it.
+4. **Residential is untouched** at every step — no anchor is produced for a residential-owned building, so its matching, ownership-conflict, and "suggested" behaviour are byte-identical.
+
+**Edge cases.** A submitter who is a known contact on a *different* commercial account still binds by address (the building wins), with the other account surfaced for Patrick. One person contacting PJL about several managed buildings is disambiguated by address.
+
+**Binding is not access.** Attaching a lead to an account is a CRM action and grants **no** portal access. Access requires a magic-link to a KNOWN contact (Phase 1). This is why address-anchored binding is safe even for an unconfirmed submitter — only Patrick sees it.
+
+**Manual create.** `POST /api/customer` and `POST /api/properties` run the same address lookup and return a non-blocking `warnings: [{ code: "existing_account_at_address", … }]` when the building already belongs to an account. Advisory, never blocking — a plaza with two tenants is legitimate.
+
+**QuickBooks.** For a commercial invoice the QB customer is resolved from the `resolveBillTo` snapshot on `invoice.billTo` — the site's billing entity when managed, the account itself when self-billed — **never the submitter**, and the paying entity never inherits a contact's phone. Persistent per-entity QB customer mapping is Phase 2.
 
 ### 3.2 "And then what" — cascades by door
 

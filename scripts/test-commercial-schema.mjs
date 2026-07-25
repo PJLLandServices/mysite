@@ -43,7 +43,9 @@ fs.mkdirSync(SANDBOX_LIB, { recursive: true });
 fs.mkdirSync(path.join(SANDBOX, "data"), { recursive: true });
 // invoices.js is here for the billTo.ccEmail snapshot test; like the other
 // three it requires only node builtins plus lazy relative siblings.
-for (const file of ["customers.js", "properties.js", "billing-parties.js", "invoices.js"]) {
+// lead-customer.js is the intake resolver — the place the duplicate
+// management-company record was actually created. Same dependency profile.
+for (const file of ["customers.js", "properties.js", "billing-parties.js", "invoices.js", "lead-customer.js"]) {
   fs.copyFileSync(path.join(__dirname, "..", "server", "lib", file), path.join(SANDBOX_LIB, file));
 }
 
@@ -52,6 +54,7 @@ const customers = require(path.join(SANDBOX_LIB, "customers.js"));
 const properties = require(path.join(SANDBOX_LIB, "properties.js"));
 const billingParties = require(path.join(SANDBOX_LIB, "billing-parties.js"));
 const invoices = require(path.join(SANDBOX_LIB, "invoices.js"));
+const leadCustomer = require(path.join(SANDBOX_LIB, "lead-customer.js"));
 
 const CUSTOMERS_JSON = path.join(SANDBOX, "data", "customers.json");
 const PROPERTIES_JSON = path.join(SANDBOX, "data", "properties.json");
@@ -718,6 +721,334 @@ group("contact cap — reading an already-over-cap record is lossless and never 
   }], null, 2), "utf8");
   const loadedProp = await properties.get("prop-overcap");
   eq(loadedProp.siteContacts.length, 12, "all 12 site contacts survive the read");
+}
+
+// =======================================================================
+// 4d. Commercial matching — address is the anchor (Phase 0.5)
+// =======================================================================
+//
+// The defect: intake anchored on the SUBMITTER's email. At a management
+// company the property manager churns year to year while the building and
+// its billing entity are stable, so a new PM contacting PJL about an
+// existing managed site matched nothing → a duplicate management-company
+// record was created → and findOwnershipConflicts flagged a false "new
+// owner". These tests pin the fix at the properties-lib boundary.
+
+// Build a commercial account managing one site, plus a residential
+// customer with their own property. Returns the ids.
+async function seedManagedSite() {
+  resetStore();
+  const manager = await customers.create({
+    ...MANAGER,
+    commercial: {
+      ...MANAGER.commercial,
+      contacts: [
+        { name: "Gurdip", role: "property_manager", email: "gurdip@rmsco.example", isAuthorizedSignatory: true }
+      ]
+    }
+  }, { by: "test" });
+  const site = await properties.create({
+    customerId: manager.id, address: "50 Lewis Honey Dr, Aurora ON",
+    customerName: manager.name, customerEmail: manager.email
+  });
+  await properties.update(site.id, {
+    billingEntity: ENTITY_1233,
+    siteContacts: [{ name: "Faramarz", role: "owner_board", email: "faramarz@example.com" }]
+  });
+  return { manager, siteId: site.id };
+}
+
+group("commercial matching — findByAddress is email-agnostic");
+{
+  const { manager, siteId } = await seedManagedSite();
+
+  const found = await properties.findByAddress("50 Lewis Honey Dr, Aurora ON", null);
+  eq(found?.id, siteId, "finds the building with no email at all");
+  // Whitespace/case differences must not defeat it — normalizeAddress is shared.
+  const loose = await properties.findByAddress("  50 LEWIS   Honey Dr,  Aurora ON ", null);
+  eq(loose?.id, siteId, "matches on the normalized address");
+  eq(await properties.findByAddress("999 Nowhere Rd", null), null, "unknown address → null");
+
+  // findMatch keeps its residential email anchor — this is the regression
+  // guard for the extraction into matchByAddress.
+  const wrongEmail = await properties.findMatch({
+    email: "newpm@rmsco.example", address: "50 Lewis Honey Dr, Aurora ON", coords: null
+  });
+  eq(wrongEmail, null, "findMatch still refuses a non-matching submitter email");
+  const rightEmail = await properties.findMatch({
+    email: manager.email, address: "50 Lewis Honey Dr, Aurora ON", coords: null
+  });
+  eq(rightEmail?.id, siteId, "findMatch still matches the owning customer's email");
+}
+
+group("commercial matching — a NEW property manager creates no duplicate");
+{
+  const { manager, siteId } = await seedManagedSite();
+  const customersBefore = (await customers.list()).length;
+
+  // The exact scenario from the defect report: a person PJL has never seen,
+  // emailing about a building PJL already services.
+  const result = await properties.attachLead({
+    leadId: "lead-newpm-1",
+    email: "newpm@rmsco.example",
+    name: "New Property Manager",
+    phone: "(905) 555-0199",
+    address: "50 Lewis Honey Dr, Aurora ON",
+    coords: null
+  });
+
+  eq(result.property?.id, siteId, "bound to the EXISTING property, not a new one");
+  eq(result.status, "linked", "reported as a normal successful link");
+  deepEq(result.conflicts, [], "no ownership-conflict flag — this is not a new owner");
+  eq(result.commercialBind?.status, "bound", "commercialBind reports bound");
+  eq(result.commercialBind?.customerId, manager.id, "bound to the management company");
+  eq(result.commercialBind?.contact?.state, "unconfirmed", "unknown submitter surfaces as unconfirmed");
+  eq(result.commercialBind?.contact?.email, "newpm@rmsco.example", "submitter email carried for Patrick");
+
+  eq((await customers.list()).length, customersBefore, "ZERO new customer records");
+  eq((await properties.list()).length, 1, "ZERO new property records");
+
+  // Canonical contact fields must not be overwritten by the submitter.
+  const site = await properties.get(siteId);
+  eq(site.customerName, manager.name, "property customerName still the management company");
+  eq(site.customerEmail, manager.email, "property customerEmail NOT overwritten by the submitter");
+  ok(!site.customerPhone || site.customerPhone !== "(905) 555-0199",
+    "property customerPhone NOT overwritten by the submitter");
+  ok(site.leadIds.includes("lead-newpm-1"), "the lead is attached to the building");
+
+  // The bind is auditable.
+  const bindEntry = (site.history || []).find((h) => h.action === "commercial_lead_bound");
+  ok(Boolean(bindEntry), "a commercial_lead_bound history entry was appended");
+  ok(String(bindEntry?.note || "").includes(manager.id), "the history note names the account bound to");
+
+  // And the customer record itself is untouched.
+  const cust = await customers.get(manager.id, { withProperties: false });
+  eq(cust.email, manager.email, "customer email untouched");
+  eq(cust.commercial?.contacts?.length, 1, "submitter was NOT auto-added as a contact");
+}
+
+group("commercial matching — a KNOWN contact is tagged known");
+{
+  const { manager, siteId } = await seedManagedSite();
+
+  // Org-wide signatory on the customer.
+  const asGurdip = await properties.attachLead({
+    leadId: "lead-gurdip", email: "gurdip@rmsco.example", name: "Gurdip",
+    address: "50 Lewis Honey Dr, Aurora ON", coords: null
+  });
+  eq(asGurdip.commercialBind?.contact?.state, "known", "customer-level signatory recognized");
+  eq(asGurdip.commercialBind?.contact?.from, "customer", "tagged as coming from the customer");
+  ok(billingParties.isContactId(asGurdip.commercialBind?.contact?.matchedContactId),
+    "the matched contact's con_ id is returned");
+
+  // Site contact on the property.
+  const asFaramarz = await properties.attachLead({
+    leadId: "lead-faramarz", email: "faramarz@example.com", name: "Faramarz",
+    address: "50 Lewis Honey Dr, Aurora ON", coords: null
+  });
+  eq(asFaramarz.commercialBind?.contact?.state, "known", "property-level site contact recognized");
+  eq(asFaramarz.commercialBind?.contact?.from, "property", "tagged as coming from the property");
+
+  eq((await customers.list()).length, 1, "still no duplicate customers");
+  eq(asGurdip.property?.id, siteId, "bound to the right building");
+}
+
+group("commercial matching — submitter known on a DIFFERENT account is flagged");
+{
+  const { manager } = await seedManagedSite();
+  // A PM who moved companies: still a contact on their old account.
+  const other = await customers.create({
+    name: "Other Management Inc.", email: "office@other.example", accountType: "commercial",
+    commercial: { contacts: [{ name: "Mobile PM", email: "mobilepm@example.com" }] }
+  }, { by: "test" });
+
+  const result = await properties.attachLead({
+    leadId: "lead-mobile", email: "mobilepm@example.com", name: "Mobile PM",
+    address: "50 Lewis Honey Dr, Aurora ON", coords: null
+  });
+  eq(result.commercialBind?.customerId, manager.id, "the ADDRESS wins — bound to the building's account");
+  eq(result.commercialBind?.contact?.state, "unconfirmed", "not a known contact on THIS account");
+  const flagged = result.commercialBind?.contactKnownOnOtherAccounts || [];
+  eq(flagged.length, 1, "the other account is surfaced for Patrick");
+  eq(flagged[0]?.customerId, other.id, "names the other account");
+}
+
+group("commercial matching — RESIDENTIAL intake is unchanged (regression)");
+{
+  resetStore();
+  const jane = await customers.create({ name: "Jane Homeowner", email: "jane@example.com" }, { by: "test" });
+  const janeProp = await properties.create({
+    customerId: jane.id, address: "12 Residential Rd",
+    customerName: "Jane Homeowner", customerEmail: "jane@example.com"
+  });
+
+  // Jane comes back about her own house → strong match, "linked", no bind.
+  const again = await properties.attachLead({
+    leadId: "lead-jane-2", email: "jane@example.com", name: "Jane Homeowner",
+    address: "12 Residential Rd", coords: null
+  });
+  eq(again.status, "linked", "same customer + same address still links");
+  eq(again.property?.id, janeProp.id, "linked to her existing property");
+  eq(again.commercialBind, undefined, "no commercialBind on a residential link");
+
+  // A DIFFERENT person at Jane's address → still an ownership conflict.
+  // This is the residential rule the commercial branch must not swallow.
+  const newOwner = await properties.attachLead({
+    leadId: "lead-newowner", email: "newowner@example.com", name: "New Owner",
+    address: "12 Residential Rd", coords: null
+  });
+  eq(newOwner.status, "conflict-ownership", "residential same-address different-email still conflicts");
+  eq(newOwner.commercialBind, undefined, "no commercialBind on a residential conflict");
+  eq((await properties.list()).length, 2, "a new property was still created for the new owner");
+
+  // Same customer, new address → still "suggested".
+  const cottage = await properties.attachLead({
+    leadId: "lead-jane-cottage", email: "jane@example.com", name: "Jane Homeowner",
+    address: "99 Cottage Ln", coords: null
+  });
+  eq(cottage.status, "suggested", "same customer + new address still suggests");
+  eq(cottage.commercialBind, undefined, "no commercialBind on a residential suggestion");
+
+  // No email at all → unchanged.
+  const noEmail = await properties.attachLead({ leadId: "x", email: "", address: "12 Residential Rd" });
+  eq(noEmail.status, "no-email", "no-email path unchanged");
+}
+
+group("commercial matching — the submitter's own property outranks the address anchor");
+{
+  // Edge case from the brief: a residential customer whose property shares
+  // an address with a commercial record. The exact email+address match must
+  // win, or a homeowner would be bound to a neighbouring commercial account.
+  const { manager, siteId } = await seedManagedSite();
+  const tenant = await customers.create({ name: "Tenant Co", email: "tenant@example.com" }, { by: "test" });
+  const tenantProp = await properties.create({
+    customerId: tenant.id, address: "50 Lewis Honey Dr, Aurora ON",
+    customerName: "Tenant Co", customerEmail: "tenant@example.com"
+  });
+
+  const anchor = await properties.findCommercialAnchor(
+    "50 Lewis Honey Dr, Aurora ON", null, { submitterEmail: "tenant@example.com" });
+  eq(anchor, null, "no anchor when the submitter already owns a property at this address");
+
+  const result = await properties.attachLead({
+    leadId: "lead-tenant", email: "tenant@example.com", name: "Tenant Co",
+    address: "50 Lewis Honey Dr, Aurora ON", coords: null
+  });
+  eq(result.property?.id, tenantProp.id, "linked to the submitter's OWN property");
+  eq(result.commercialBind, undefined, "no commercial bind");
+
+  // A stranger at the same address still anchors to the commercial account.
+  const stranger = await properties.findCommercialAnchor(
+    "50 Lewis Honey Dr, Aurora ON", null, { submitterEmail: "stranger@example.com" });
+  eq(stranger?.customerId, manager.id, "a stranger still anchors to the commercial account");
+  eq(stranger?.property?.id, siteId, "and to the commercial property");
+}
+
+group("commercial matching — resolveCustomerForLead creates NO duplicate account");
+{
+  // This is the acceptance item that matters most, and the path where the
+  // duplicate was actually created: customer resolution runs BEFORE
+  // attachLead, so fixing attachLead alone would not have prevented it.
+  const { manager } = await seedManagedSite();
+  const before = await customers.list();
+
+  const newPmLead = {
+    id: "lead-pm-a", createdAt: "2026-07-25T12:00:00.000Z", source: "repair_form",
+    accountType: "commercial",
+    contact: {
+      name: "Brand New PM", email: "brandnewpm@rmsco.example",
+      phone: "(905) 555-0177", address: "50 Lewis Honey Dr, Aurora ON", notes: "Zone 4 not spraying"
+    }
+  };
+  const resolvedId = await leadCustomer.resolveCustomerForLead(newPmLead);
+
+  eq(resolvedId, manager.id, "resolved to the EXISTING management company");
+  const after = await customers.list();
+  eq(after.length, before.length, "ZERO new customer records created");
+
+  // The submitter's details must not have redefined the account.
+  const cust = await customers.get(manager.id, { withProperties: false });
+  eq(cust.name, manager.name, "account name untouched by the submitter");
+  eq(cust.email, manager.email, "account email untouched by the submitter");
+  eq(cust.phone, "", "account phone NOT set from the submitter");
+  eq(cust.accountType, "commercial", "still commercial");
+  // The outreach is still logged so Patrick sees who reached out.
+  ok((cust.communicationRecords || []).some((r) => r.logId === "lead-pm-a"),
+    "the intake is recorded on the account's communication log");
+
+  // A second unknown PM later — still no duplicate.
+  await leadCustomer.resolveCustomerForLead({
+    id: "lead-pm-b", createdAt: "2026-08-01T12:00:00.000Z", source: "phone",
+    accountType: "commercial",
+    contact: { name: "Yet Another PM", email: "another@rmsco.example", address: "50 Lewis Honey Dr, Aurora ON" }
+  });
+  eq((await customers.list()).length, before.length, "still zero duplicates after a second unknown PM");
+}
+
+group("commercial matching — resolveCustomerForLead: residential unchanged (regression)");
+{
+  resetStore();
+  // Brand-new residential lead → creates a customer, exactly as before.
+  const id1 = await leadCustomer.resolveCustomerForLead({
+    id: "lead-r1", createdAt: "2026-07-25T12:00:00.000Z", source: "repair_form",
+    contact: { name: "Jane Homeowner", email: "jane@example.com", phone: "(905) 555-0101", address: "12 Residential Rd" }
+  });
+  ok(Boolean(id1), "a residential lead still creates a customer");
+  const jane = await customers.get(id1, { withProperties: false });
+  eq(jane.name, "Jane Homeowner", "name from the submitter, as before");
+  eq(jane.email, "jane@example.com", "email from the submitter, as before");
+  eq(jane.accountType, "residential", "defaults to residential");
+
+  // Same person again → matched by email, no second record.
+  const id2 = await leadCustomer.resolveCustomerForLead({
+    id: "lead-r2", createdAt: "2026-07-26T12:00:00.000Z", source: "phone",
+    contact: { name: "Jane Homeowner", email: "jane@example.com", address: "12 Residential Rd" }
+  });
+  eq(id2, id1, "email match still wins for residential");
+  eq((await customers.list()).length, 1, "no duplicate residential record");
+
+  // Phone-only match still works (email→phone order, spec §3.1).
+  const id3 = await leadCustomer.resolveCustomerForLead({
+    id: "lead-r3", createdAt: "2026-07-27T12:00:00.000Z", source: "phone",
+    contact: { name: "Jane H", email: "", phone: "(905) 555-0101", address: "12 Residential Rd" }
+  });
+  eq(id3, id1, "phone match still resolves to the same customer");
+
+  // A genuinely new commercial account (no building on file) still creates
+  // one and carries its commercial block — the anchor must not block this.
+  const id4 = await leadCustomer.resolveCustomerForLead({
+    id: "lead-c1", createdAt: "2026-07-28T12:00:00.000Z", source: "repair_form",
+    accountType: "commercial",
+    commercial: { contacts: [{ name: "Owner", email: "owner@newco.example", isAuthorizedSignatory: true }] },
+    billing: { billTo: "other", name: "NewCo Holdings", careOf: "NewCo Management" },
+    contact: { name: "Owner", email: "owner@newco.example", address: "1 Brand New Commercial Blvd" }
+  });
+  const newCo = await customers.get(id4, { withProperties: false });
+  eq(newCo.accountType, "commercial", "net-new commercial account still created");
+  eq(newCo.commercial?.contacts?.length, 1, "its commercial block carried through");
+  eq(newCo.commercial?.careOf, "NewCo Management", "careOf seeded from lead.billing");
+  eq(newCo.billingName, "NewCo Holdings", "billing name seeded from lead.billing");
+}
+
+group("commercial matching — no anchor without a commercial account");
+{
+  resetStore();
+  const jane = await customers.create({ name: "Jane Homeowner", email: "jane@example.com" }, { by: "test" });
+  await properties.create({
+    customerId: jane.id, address: "12 Residential Rd",
+    customerName: "Jane Homeowner", customerEmail: "jane@example.com"
+  });
+  eq(await properties.findCommercialAnchor("12 Residential Rd", null, { submitterEmail: "someone@example.com" }),
+    null, "a residential building never produces an anchor");
+
+  // An orphaned property (no customerId) can't anchor either.
+  resetStore();
+  fs.writeFileSync(PROPERTIES_JSON, JSON.stringify([{
+    id: "orphan", code: "P-2026-0009", address: "1 Orphan Rd", customerName: "Nobody",
+    createdAt: "2026-01-01T00:00:00.000Z", customerId: null
+  }], null, 2), "utf8");
+  eq(await properties.findCommercialAnchor("1 Orphan Rd", null, {}), null,
+    "a property with no customerId never produces an anchor");
 }
 
 // =======================================================================
