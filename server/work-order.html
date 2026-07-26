@@ -310,6 +310,19 @@
             <small id="woSendApprovalSmsTo" style="display:block;color:#6A6A60;text-transform:none;"></small>
           </span>
         </label>
+        <!-- Customer-facing scope / conclusion. Printed as the SCOPE
+             paragraph above the line items on the quote PDF and the /approve
+             page. Pre-filled with the quote's current scope, unless that's
+             the auto-generated "from WO-… — preview/sent for remote approval"
+             boilerplate, which starts blank so it never reaches a customer.
+             Lives here because whoever sends the quote is the one who knows
+             what to say about the visit. -->
+        <label style="display:block;margin:0 0 12px;text-transform:none;font-weight:400;">
+          <span style="display:block;font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:#6A6A60;margin-bottom:4px;">Scope / conclusion shown to the customer</span>
+          <textarea id="woSendApprovalScope" rows="5" maxlength="4000"
+                    placeholder="Optional. Write a short conclusion explaining what was found and why the work is recommended — it prints above the line items on the quote."
+                    style="width:100%;font:inherit;font-size:13px;padding:8px 10px;border:1px solid #D6D6CD;border-radius:4px;box-sizing:border-box;"></textarea>
+        </label>
         <p class="tech-build-tip" id="woSendApprovalHint" style="margin:0 0 8px;">Pick at least one. The customer gets a link to review and e-sign the quote.</p>
         <p class="approve-error-msg" id="woSendApprovalErr" hidden style="color:#B3261E;font-size:13px;margin:0 0 8px;"></p>
         <div class="tech-modal-actions">

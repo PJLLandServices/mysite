@@ -1836,6 +1836,15 @@ document.getElementById("woOnSiteSendApprovalBtn")?.addEventListener("click", ()
   const smsTo = document.getElementById("woSendApprovalSmsTo");
   if (emailTo) emailTo.textContent = customerEmail ? `to ${customerEmail}` : "no email on file";
   if (smsTo) smsTo.textContent = customerPhone ? `to ${customerPhone}` : "no phone on file";
+  // Pre-fill the scope box with the quote's current scope, but never with the
+  // auto-generated boilerplate ("On-site quote from WO-… — preview" / "— sent
+  // for remote approval"). Those are internal placeholders; showing them here
+  // invites sending them to a customer.
+  const scopeBox = document.getElementById("woSendApprovalScope");
+  if (scopeBox) {
+    const current = String(loadedWorkOrder.onSiteQuote?.scope || "").trim();
+    scopeBox.value = /^On-site quote from\s+WO-/i.test(current) ? "" : current;
+  }
   if (modal) modal.hidden = false;
 });
 
@@ -1856,6 +1865,7 @@ document.getElementById("woSendApprovalConfirm")?.addEventListener("click", asyn
   const customerPhone = loadedWorkOrder.customerPhone || "";
   const wantEmail = !!document.getElementById("woSendApprovalEmail")?.checked;
   const wantSms = !!document.getElementById("woSendApprovalSms")?.checked;
+  const scopeText = (document.getElementById("woSendApprovalScope")?.value || "").trim();
   if (!wantEmail && !wantSms) {
     if (err) { err.textContent = "Pick at least one — email or text."; err.hidden = false; }
     return;
@@ -1869,6 +1879,8 @@ document.getElementById("woSendApprovalConfirm")?.addEventListener("click", asyn
       body: JSON.stringify({
         sendEmail: wantEmail,
         sendSms: wantSms,
+        // Omitted when blank so the route falls back to its standard line.
+        ...(scopeText ? { scope: scopeText } : {}),
         ...(wantEmail ? { email: customerEmail } : {}),
         ...(wantSms ? { phone: customerPhone } : {})
       })
