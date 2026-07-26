@@ -33,7 +33,19 @@ const crypto = require("node:crypto");
 const workOrders = require("./work-orders");
 const properties = require("./properties");
 const customers = require("./customers");
-const { generateWoReportPdf, renderWoReportBuffer, reportFilename } = require("./wo-report-pdf");
+const { renderWoReportToFile, reportFilename } = require("./wo-report-pdf");
+
+// Hash a file by streaming it. Never read a whole report into memory just
+// to digest it — that was part of the OOM.
+function sha256OfFile(filePath) {
+  return new Promise((resolve, reject) => {
+    const hash = crypto.createHash("sha256");
+    const rs = fsSync.createReadStream(filePath);
+    rs.on("data", (c) => hash.update(c));
+    rs.on("end", () => resolve(hash.digest("hex")));
+    rs.on("error", reject);
+  });
+}
 
 const SNAPSHOT_DIR = path.resolve(__dirname, "..", "data", "wo-reports");
 
@@ -87,36 +99,24 @@ async function createSnapshot({ woId, triggerType, quoteId = null, by = "system"
   const snapshotId = makeSnapshotId();
   const { property, customer } = await loadRenderContext(wo);
 
-  // Render BOTH audiences — pdfkit streams collected to buffers so we can
-  // hash and write atomically. The internal copy is the admin/tech audit
-  // document (signature bypass + post-completion corrections); the
-  // customer copy omits those. Memory cost: ~2-5 MB per report (photos
-  // dominate); we render twice but the second render reuses the same
-  // in-memory wo/property/customer context.
-  const renderBuffer = (audience) => new Promise((resolve, reject) => {
-    const chunks = [];
-    const stream = generateWoReportPdf({ wo, property, customer, mode, audience });
-    stream.on("data", (c) => chunks.push(c));
-    stream.on("end", () => resolve(Buffer.concat(chunks)));
-    stream.on("error", reject);
-  });
-  const pdfBuffer = await renderBuffer("internal");
-  const customerBuffer = await renderBuffer("customer");
-
-  const sha256 = crypto.createHash("sha256").update(pdfBuffer).digest("hex");
-  const sha256Customer = crypto.createHash("sha256").update(customerBuffer).digest("hex");
-  const filename = reportFilename({ wo, mode });
-
-  // Ensure the per-WO directory exists, then write both files. Snapshots
-  // are immutable post-write — no overwrite logic, ever. The internal file
-  // keeps the legacy `<id>.pdf` name so existing admin links never break;
-  // the customer file is `<id>-customer.pdf`.
+  // Render the INTERNAL copy only, streamed straight to disk.
+  //
+  // Two deliberate changes after the Jul 2026 OOM (a 20-photo WO produced
+  // a ~281 MB report and killed the 512 MB instance on every render):
+  //   1. Stream to file instead of Buffer.concat. Concat held the whole
+  //      document TWICE at peak (chunk array + concatenated result).
+  //   2. Write internal only. The customer copy is rendered lazily on the
+  //      first portal read (see readSnapshot below) and cached from then
+  //      on, so a send no longer pays for two full renders back to back.
+  // renderWoReportToFile also generates the downscaled photo derivatives
+  // before rendering, which is what actually removes the bulk.
   const dir = path.join(SNAPSHOT_DIR, woId);
-  await fs.mkdir(dir, { recursive: true });
   const filePath = path.join(dir, `${snapshotId}.pdf`);
-  const filePathCustomer = path.join(dir, `${snapshotId}-customer.pdf`);
-  await fs.writeFile(filePath, pdfBuffer);
-  await fs.writeFile(filePathCustomer, customerBuffer);
+  await renderWoReportToFile({ wo, property, customer, mode, audience: "internal" }, filePath);
+
+  // Hash by streaming the finished file — never load it whole to hash it.
+  const sha256 = await sha256OfFile(filePath);
+  const filename = reportFilename({ wo, mode });
 
   const record = {
     snapshotId,
@@ -127,9 +127,13 @@ async function createSnapshot({ woId, triggerType, quoteId = null, by = "system"
     filename,
     path: filePath,
     sha256,
-    pathCustomer: filePathCustomer,
-    sha256Customer,
-    schemaVersion: 2,
+    // schemaVersion 3: internal-only at write time. A v3 record with no
+    // pathCustomer is EXPECTED, not a migration failure — readSnapshot
+    // renders and caches the customer copy on first customer-audience read
+    // (same lazy path v1 records use).
+    pathCustomer: null,
+    sha256Customer: null,
+    schemaVersion: 3,
     by
   };
 
@@ -158,16 +162,25 @@ async function readSnapshot({ woId, snapshotId, audience = "internal" }) {
         && fsSync.existsSync(record.pathCustomer)) {
       return { buffer: await fs.readFile(record.pathCustomer), record };
     }
-    // Lazy migration: render + cache a customer copy from CURRENT wo state.
+    // Lazy render + cache of the customer copy, from CURRENT wo state.
+    // Covers BOTH legacy v1 snapshots (which only ever had the internal
+    // file) and v3 snapshots (internal-only by design). Streamed to disk
+    // first, then served from disk, so we never hold the document twice.
     const { property, customer } = await loadRenderContext(wo);
-    const buffer = await renderWoReportBuffer({ wo, property, customer, mode: record.mode, audience: "customer" });
     const pathCustomer = path.join(SNAPSHOT_DIR, woId, `${snapshotId}-customer.pdf`);
+    await renderWoReportToFile(
+      { wo, property, customer, mode: record.mode, audience: "customer" },
+      pathCustomer
+    );
+    let sha256Customer = null;
+    try { sha256Customer = await sha256OfFile(pathCustomer); } catch (_) {}
     try {
-      await fs.mkdir(path.dirname(pathCustomer), { recursive: true });
-      await fs.writeFile(pathCustomer, buffer);
-      await workOrders.patchReportSnapshot(woId, snapshotId, { pathCustomer, schemaVersion: 2 });
-    } catch (err) { /* serve the render even if caching failed */ }
-    return { buffer, record: { ...record, pathCustomer, schemaVersion: 2 } };
+      await workOrders.patchReportSnapshot(woId, snapshotId, { pathCustomer, sha256Customer });
+    } catch (err) { /* serve the render even if the record patch failed */ }
+    return {
+      buffer: await fs.readFile(pathCustomer),
+      record: { ...record, pathCustomer, sha256Customer }
+    };
   }
 
   // Internal audience — resolve the internal path but verify it lives

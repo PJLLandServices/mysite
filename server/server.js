@@ -63,7 +63,7 @@ const issueRollup = require("./lib/issue-rollup");
 const { generateQuotePdf, renderQuotePdf } = require("./lib/quote-pdf");
 const quoteNarratives = require("./lib/quote-narratives");
 const { generateInvoicePdf } = require("./lib/invoice-pdf");
-const { generateWoReportPdf, renderWoReportBuffer, reportFilename } = require("./lib/wo-report-pdf");
+const { generateWoReportPdf, renderWoReportBuffer, reportFilename, ensurePhotoDerivatives } = require("./lib/wo-report-pdf");
 const woReportSnapshot = require("./lib/wo-report-snapshot");
 const billingParties = require("./lib/billing-parties");
 const quickbooks = require("./lib/quickbooks");
@@ -9562,6 +9562,11 @@ async function handleApi(req, res, pathname) {
       }
       const mode = wo.locked === true ? "service_report" : "inspection_report";
       const filename = reportFilename({ wo, mode });
+      // Generate downscaled photo derivatives before rendering. Without
+      // this a photo-heavy WO streams a ~281 MB PDF and can OOM the
+      // instance (Jul 2026). Cached after the first call.
+      try { await ensurePhotoDerivatives(wo.id, wo.photos || []); }
+      catch (err) { console.warn("[wo-report] derivative prep failed:", err?.message); }
       res.writeHead(200, {
         "content-type": "application/pdf",
         "content-disposition": `inline; filename="${filename}"`,

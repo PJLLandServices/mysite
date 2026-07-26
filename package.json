@@ -35,10 +35,10 @@
   },
   "dependencies": {
     "nodemailer": "^8.0.7",
-    "pdfkit": "^0.17.2"
+    "pdfkit": "^0.17.2",
+    "sharp": "^0.34.5"
   },
   "devDependencies": {
-    "playwright": "^1.49.1",
-    "sharp": "^0.34.5"
+    "playwright": "^1.49.1"
   }
 }
