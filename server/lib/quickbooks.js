@@ -433,7 +433,36 @@ async function pushInvoice(localInvoice) {
   // payload is byte-identical to the pre-feature push.
   const billTo = localInvoice.billTo && typeof localInvoice.billTo === "object" ? localInvoice.billTo : {};
   const billToName = String(billTo.name || "").trim();
-  const billToIsOverride = Boolean(billToName && billToName !== String(localInvoice.customerName || "").trim());
+
+  // Commercial guard (commercial matching, Phase 0.5). On a commercial
+  // account the QB customer must be the PAYER that resolveBillTo produced —
+  // the site's billing entity when managed, the account itself when
+  // self-billed — and never the submitter who happened to make contact.
+  //
+  // Without this, a commercial invoice whose billTo name coincides with the
+  // snapshotted customerName fell through to the original branch and pushed
+  // `localInvoice.customerEmail` / `customerPhone`. Those can be the
+  // submitter's — a property manager who will have moved on next
+  // year — which is exactly how a transient person's contact details get
+  // attached to a stable billing entity in QuickBooks.
+  //
+  // Residential is untouched: isCommercialAccount is false, so the
+  // expression below is identical to what it was.
+  let isCommercialAccount = false;
+  if (localInvoice.customerId) {
+    try {
+      const customersLib = require("./customers");
+      const cust = await customersLib.get(localInvoice.customerId, { withProperties: false });
+      isCommercialAccount = cust?.accountType === "commercial";
+    } catch (err) {
+      // Tolerate — fall back to the name-difference rule below.
+      console.warn("[quickbooks] accountType lookup failed:", err?.message || err);
+    }
+  }
+  const billToIsOverride = Boolean(
+    billToName &&
+    (isCommercialAccount || billToName !== String(localInvoice.customerName || "").trim())
+  );
 
   let customer;
   try {

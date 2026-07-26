@@ -28,6 +28,13 @@
 //                                 or company, e.g. "LCIG Investment Inc.")
 //     billingEmail:       ""     (empty = invoice email goes to `email`)
 //     billingAddress:     string | null   (null = same as primary property)
+//     accountType:        "residential" | "commercial"  (default residential)
+//     commercial:         null | { careOf, poRequired, paymentTerms,
+//                                  contacts: [...] }
+//                         Null on residential. Org-wide signatories live
+//                         here; per-site contacts live on the PROPERTY
+//                         (property.siteContacts) — see billing-parties.js
+//                         and PJL_OPERATIONS_DESIGN §2.1.
 //     customerSince:      ISO date — earliest interaction
 //     source:             ai_chat | repair_form | phone | email | import | ...
 //     status:             lead | active | inactive | lost
@@ -51,6 +58,9 @@
 const fs = require("node:fs/promises");
 const fsSync = require("node:fs");
 const path = require("node:path");
+// Contact-id helpers only — the bill-to resolver itself is not used here.
+// Safe to require at load time: billing-parties.js requires no siblings.
+const { isContactId, coerceContactId } = require("./billing-parties");
 
 const FILE = path.join(__dirname, "..", "data", "customers.json");
 
@@ -65,12 +75,32 @@ async function ensureFile() {
   }
 }
 
+// True when a raw (pre-hydrate) record carries a commercial contact that has
+// no usable con_ id. Drives the one-time backfill in readAll().
+function needsContactIdBackfill(c) {
+  const contacts = (c && c.commercial && Array.isArray(c.commercial.contacts))
+    ? c.commercial.contacts : [];
+  return contacts.some((k) => k && typeof k === "object" && !isContactId(k.id));
+}
+
 async function readAll() {
   await ensureFile();
   try {
     const raw = await fs.readFile(FILE, "utf8");
     const parsed = JSON.parse(raw || "[]");
-    return Array.isArray(parsed) ? parsed.map(hydrate) : [];
+    if (!Array.isArray(parsed)) return [];
+    const hydrated = parsed.map(hydrate);
+
+    // One-time backfill: persist the con_ ids hydrate() just minted for
+    // contacts written before ids existed. Without this write the id would
+    // be re-rolled on every read and nothing could reference a contact.
+    // Same pattern as the P-YYYY-NNNN backfill in properties.readAll().
+    // Idempotent — once every contact carries an id this does nothing.
+    if (parsed.some(needsContactIdBackfill)) {
+      await writeAll(hydrated);
+    }
+
+    return hydrated;
   } catch {
     return [];
   }
@@ -108,6 +138,17 @@ function blankCustomer() {
     spouseEmail: "",
     billingName: "",
     billingEmail: "",
+    // Billing CC (addendum, Jul 2026) — an extra address that gets a copy
+    // of the INVOICE email. The party who accepts the work is often not the
+    // party who pays it: a commercial owner signs the quote while his
+    // bookkeeper handles payment. Account-level default; a property can
+    // override it per site (property.billingCcEmail) for a condo corp with
+    // its own accounts-payable desk. Lives beside the other billing fields
+    // rather than inside `commercial` because `commercial` is null on
+    // residential accounts, and a residential customer can have a
+    // bookkeeper too. Blank = no CC, which is the overwhelming majority.
+    // Applies to invoices ONLY — never to quotes (see billing-parties.js).
+    billingCcEmail: "",
     billingAddress: null,
     // Account type + commercial block (commercial intake, 2026-07).
     // accountType mirrors lead.accountType so the customer record itself
@@ -119,9 +160,12 @@ function blankCustomer() {
     // accounts, where the customer IS the signer. hydrate() spreads these
     // blank defaults over legacy records on read, so no one-shot migration
     // is needed.
-    //   commercial: { poRequired, paymentTerms,
-    //     contacts: [{ name, role, email, phone,
+    //   commercial: { careOf, poRequired, paymentTerms,
+    //     contacts: [{ id, name, role, email, phone,
     //                  isSiteContact, isAuthorizedSignatory }] }
+    // Each contact carries a stable `con_xxxxxxxx` id (minted by
+    // billing-parties.coerceContactId) so a rename doesn't change who the
+    // contact IS. Normalized on read as well as write — see hydrate().
     accountType: "residential",
     commercial: null,
     customerSince: null,
@@ -184,6 +228,13 @@ function hydrate(c) {
       ...base.negotiatedRates,
       ...(c?.negotiatedRates || {})
     },
+    // Commercial block — normalized on READ, not just on write, so a
+    // hand-edited customers.json can't serve a malformed block to the
+    // resolver (contacts as a string, role flags as "yes", unknown keys).
+    // Mirrors the siteContacts guard in properties.hydrate(). Stays null
+    // for residential accounts: normalizeCommercialBlock returns null when
+    // there is nothing usable, so residential records are untouched.
+    commercial: normalizeCommercialBlock(c?.commercial),
     communicationRecords: Array.isArray(c?.communicationRecords)
       ? c.communicationRecords
       : [],
@@ -193,6 +244,10 @@ function hydrate(c) {
   // Re-normalize email/phone on read so legacy/imported records get
   // consistent join keys without a one-shot migration.
   merged.email = normalizeEmail(merged.email);
+  // Same treatment for the billing CC — it's fed straight to a mail
+  // transport's `cc:`, so it must be trimmed and lower-cased regardless of
+  // how it was typed or imported.
+  merged.billingCcEmail = normalizeEmail(merged.billingCcEmail).slice(0, 254);
   return merged;
 }
 
@@ -206,6 +261,10 @@ function normalizeCommercialContact(raw) {
   const cap = (v, n) => String(v == null ? "" : v).trim().slice(0, n);
   const role = cap(raw.role, 40);
   const c = {
+    // Stable identity — see billing-parties.coerceContactId. A well-formed
+    // incoming id is kept (the editor round-trips it via data-cid), so
+    // renaming a contact doesn't make it a different person to Phase 1.
+    id: coerceContactId(raw.id),
     name: cap(raw.name, 200),
     role: COMMERCIAL_ROLE_SET.has(role) ? role : (role ? "other" : ""),
     email: cap(raw.email, 254).toLowerCase(),
@@ -213,17 +272,49 @@ function normalizeCommercialContact(raw) {
     isSiteContact: raw.isSiteContact === true || raw.isSiteContact === "true",
     isAuthorizedSignatory: raw.isAuthorizedSignatory === true || raw.isAuthorizedSignatory === "true"
   };
+  // `id` is deliberately NOT part of the "is there anything here" test — it's
+  // always populated, so counting it would keep every empty row.
   return (c.name || c.email || c.phone || c.role || c.isSiteContact || c.isAuthorizedSignatory) ? c : null;
 }
 
+// Maximum contacts on one record. Shared with properties.MAX_CONTACTS —
+// the two lists are the same shape and are edited by the same UI patterns.
+const MAX_CONTACTS = 10;
+
 // Commercial block: contacts[] + PO / payment-terms. Returns null when
 // there is nothing usable so residential accounts stay block-less.
-function normalizeCommercialBlock(raw) {
+//
+// `enforceCap` splits the two directions deliberately (addendum, Jul 2026):
+//
+//   WRITE (create / update, enforceCap: true) — an over-cap list is
+//   REJECTED with a clear error. This used to silently trim to the first
+//   10, which on a billing/profile-accuracy slice is the wrong failure
+//   mode: the contact quietly dropped could be the authorized signatory,
+//   and nobody would learn about it until a quote had no valid acceptor.
+//
+//   READ (hydrate, enforceCap: false) — never throws and never trims. A
+//   record that is already over-cap on disk keeps every contact, so the
+//   act of reading can't destroy data; the step-0 audit reports it and a
+//   human removes the extras. Throwing here would be worse than trimming:
+//   readAll() swallows exceptions and would return an EMPTY customer list.
+function normalizeCommercialBlock(raw, { enforceCap = false } = {}) {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
   const cap = (v, n) => String(v == null ? "" : v).trim().slice(0, n);
   const contactsIn = Array.isArray(raw.contacts) ? raw.contacts
     : (Array.isArray(raw.additionalContacts) ? raw.additionalContacts : []);
-  const contacts = contactsIn.slice(0, 10).map(normalizeCommercialContact).filter(Boolean);
+  // Counted AFTER dropping empty rows, so an editor with a blank trailing
+  // row isn't rejected for a contact that was never going to be saved.
+  const contacts = contactsIn.map(normalizeCommercialContact).filter(Boolean);
+  if (enforceCap && contacts.length > MAX_CONTACTS) {
+    const err = new Error(
+      `A customer can have at most ${MAX_CONTACTS} commercial contacts (received ${contacts.length}). ` +
+      `Remove the extras before saving — none were saved.`
+    );
+    err.code = "CONTACT_CAP_EXCEEDED";
+    err.limit = MAX_CONTACTS;
+    err.received = contacts.length;
+    throw err;
+  }
   const block = {
     // careOf — the management company / party the invoice is addressed
     // THROUGH ("YRSCC #1233 c/o RMSCO Management Services Ltd."). Standard
@@ -275,11 +366,13 @@ function normalizePayload(payload) {
     spouseEmail: cap(payload?.spouseEmail, 254).toLowerCase(),
     billingName: cap(payload?.billingName, 200),
     billingEmail: cap(payload?.billingEmail, 254).toLowerCase(),
+    billingCcEmail: cap(payload?.billingCcEmail, 254).toLowerCase(),
     billingAddress: payload?.billingAddress == null
       ? null
       : cap(payload.billingAddress, 400),
     accountType: payload?.accountType === "commercial" ? "commercial" : "residential",
-    commercial: normalizeCommercialBlock(payload?.commercial),
+    // Write path — an over-cap contact list throws rather than trimming.
+    commercial: normalizeCommercialBlock(payload?.commercial, { enforceCap: true }),
     source: cap(payload?.source, 80),
     internalNotes: cap(payload?.internalNotes, 4000)
   };
@@ -403,6 +496,7 @@ async function update(id, patch, { by = "admin", note = "", action = "updated" }
     "email", "spouseEmail",
     "billingName",
     "billingEmail",
+    "billingCcEmail",
     "billingAddress",
     "accountType",
     "commercial",
@@ -434,6 +528,17 @@ async function update(id, patch, { by = "admin", note = "", action = "updated" }
       }
       changes.email = { before: current.email, after: normalized };
       next.email = normalized;
+      continue;
+    }
+    if (key === "billingCcEmail") {
+      // Normalized like `email` but deliberately WITHOUT the uniqueness
+      // check — a bookkeeper legitimately CCs on many customers' invoices,
+      // and this is not an identity/join key. Empty string clears the CC.
+      const normalized = normalizeEmail(patch.billingCcEmail).slice(0, 254);
+      if (current.billingCcEmail !== normalized) {
+        changes.billingCcEmail = { before: current.billingCcEmail, after: normalized };
+        next.billingCcEmail = normalized;
+      }
       continue;
     }
     if (key === "notificationPrefs" && patch.notificationPrefs) {
@@ -478,7 +583,13 @@ async function update(id, patch, { by = "admin", note = "", action = "updated" }
       // { poRequired, paymentTerms, contacts:[{…, isSiteContact,
       // isAuthorizedSignatory}] }. Full-replace (the admin/customer UI
       // always sends the whole contacts list).
-      const cb = patch.commercial == null ? null : normalizeCommercialBlock(patch.commercial);
+      // Write path — an over-cap contact list throws (CONTACT_CAP_EXCEEDED)
+      // and the whole PATCH fails, rather than saving a silently trimmed
+      // list. Nothing has been written at this point, so the record is
+      // untouched.
+      const cb = patch.commercial == null
+        ? null
+        : normalizeCommercialBlock(patch.commercial, { enforceCap: true });
       changes.commercial = { before: current.commercial, after: cb };
       next.commercial = cb;
       continue;

@@ -135,7 +135,13 @@ function hydrate(inv) {
       // under the entity name. Empty on residential / direct-billed.
       careOf: String(inv.billTo.careOf || ""),
       address: String(inv.billTo.address || ""),
-      email: String(inv.billTo.email || "")
+      email: String(inv.billTo.email || ""),
+      // ccEmail — an extra address copied on the invoice email (bookkeeper
+      // / per-site accounts payable). Snapshotted here with the rest of the
+      // envelope, so a later edit to the property's or customer's CC never
+      // changes who was copied on an invoice that already went out.
+      // Absent on invoices drafted before the addendum → "" → no CC.
+      ccEmail: String(inv.billTo.ccEmail || "")
     } : null,
     status: STATUSES.includes(inv?.status) ? inv.status : "draft",
     // Threshold-deposit brief (Jul 2026). invoiceRole distinguishes the
@@ -302,6 +308,7 @@ async function createDraft({
   let billingAddress = "";
   let billingEmail = "";
   let billingCareOf = "";
+  let billingCcEmail = "";
   if (customerId) {
     try {
       const customersLib = require("./customers");
@@ -321,13 +328,17 @@ async function createDraft({
       billingAddress = parties.address;
       billingEmail = parties.email;
       billingCareOf = parties.careOf;
+      billingCcEmail = parties.ccEmail;
     } catch (err) { /* tolerate — snapshot falls back to contact fields */ }
   }
   const billTo = {
     name: billingName || customerName || "",
     careOf: billingCareOf,
     address: billingAddress || address || "",
-    email: billingEmail || customerEmail || ""
+    email: billingEmail || customerEmail || "",
+    // No fallback: a CC that was never configured must stay empty. There is
+    // no sensible "default second recipient" for an invoice.
+    ccEmail: billingCcEmail
   };
 
   const records = await readAll();
@@ -420,7 +431,13 @@ async function update(id, patch) {
       name: String(raw.name || "").trim().slice(0, 200),
       careOf: String(raw.careOf || "").trim().slice(0, 200),
       address: String(raw.address || "").trim().slice(0, 400),
-      email: String(raw.email || "").trim().toLowerCase().slice(0, 254)
+      email: String(raw.email || "").trim().toLowerCase().slice(0, 254),
+      // A billTo patch that omits ccEmail keeps the snapshotted one rather
+      // than silently dropping the bookkeeper — the invoice edit UI only
+      // surfaces name/address/email.
+      ccEmail: String(
+        (Object.prototype.hasOwnProperty.call(raw, "ccEmail") ? raw.ccEmail : current.billTo?.ccEmail) || ""
+      ).trim().toLowerCase().slice(0, 254)
     };
   }
   if (patch && Array.isArray(patch.lineItems)) {
