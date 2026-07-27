@@ -1,7 +1,7 @@
 # PJL Land Services — Operations System Spec
 
-**Version:** 1.0 (Whiteboard phase complete)
-**Last updated:** May 1, 2026
+**Version:** 1.1
+**Last updated:** July 27, 2026
 **Author:** Patrick Land + Claude (whiteboard collaboration)
 **Purpose:** Single source of truth for the architecture of PJL's operations system. This document is the spec — every future feature must fit into this design, not bolt onto the side of it.
 
@@ -41,7 +41,9 @@ The complete price list. Feeds:
 - HST (13%) is always added at the end. Never quote tax-inclusive.
 - Prices are never rounded ($74.95 stays $74.95). Customers notice rounding and trust drops.
 
-**Known drift to fix at first build:** Spring opening / fall closing ≤4 zones is currently $90 on the website but $85 in the AI system prompt. Reconcile to one number when migrating.
+**Seasonal pricing — RESOLVED 2026-07-27.** Spring opening / fall closing, 1–4 zones, is **$90**. That is the number on the website, in `pricing.json`, and in the AI prompt. $85 is retired.
+
+**$90 is a floor, not just a price.** Legacy customers currently paying less keep their rate through the existing per-property override (§2.2) until it is reviewed upward. No property is ever set below $90 going forward, and every below-tier override carries a review date so the raise actually happens.
 
 ### 1.2 `parts.json`
 
@@ -206,6 +208,14 @@ PROPERTY FOLDER
     - Spring opening cost / Fall closing cost for this property
         (per-property override; falls back to pricing.json tier by zone count
          via pricing.resolveSeasonalPrice)
+        This is the ONLY home for a grandfathered seasonal rate. It is
+        READ by the quote and the work order — never typed at point of
+        sale, by anyone, on any screen (rule 21).
+    - legacyRateReviewDate: when the override sits BELOW the current
+        pricing.json tier, it carries a review date. Overrides past that
+        date surface on a pre-season list, so the raise toward $90 gets
+        actioned instead of becoming permanent by default (§1.1).
+        New below-tier overrides are not created; $90 is the floor.
     - Additional plumbing to blow out in fall? (yes/no)
         If yes: additional cost + short description (cabana, pool house,
         remote hose bib, etc.). Drives a second baseline line on
@@ -983,6 +993,24 @@ WORK ORDER FOLDER
       customer email ("Payment received in the field — thank you" vs
       "Invoice attached"). Patrick still reviews each draft invoice
       before sending or marking paid in QB.
+    - Device payment at signature (native app, 2026-07-27). Where the
+      customer is present and signing on the tech's device, the app
+      offers Apple Pay / Google Pay for the invoice total immediately
+      after signature capture. **No upper limit — offered at every
+      amount** (Patrick's ruling). Rationale: same-day funds and no
+      invoice ageing outweigh the processor spread on large jobs, and
+      wallet authentication shifts card-FRAUD liability to the issuer.
+      It does NOT cover a service dispute — the evidence package
+      (signed WO, timestamped completion, before/after photos) is the
+      only defence there, at every amount.
+    - "Arrange payment another way" is always offered alongside, for
+      e-transfer / PAD / cheque on large jobs. A manual choice by the
+      tech or customer. The app never decides by amount.
+    - Declining or skipping sets paidOnSite: false and falls through to
+      the normal invoice cascade. The pay-later link reopens the same
+      signed document (§6.1).
+    - Payment is NOT a scope field. It flows after lock, alongside
+      status and photos (rule 11 / §4.3.3 r5).
     - QuickBooks invoice ID (auto-populated post-cascade)
 
   Customer-visible notes (Service Report brief, 2026-05-19)
@@ -1458,9 +1486,9 @@ Recommended: C for long term, A for v1. Decision required before installs are ma
 
 Touched on but not formally designed. Quick pass needed. Roughly: customer link, property link, scheduled date+time, service type, status, prep notes, source quote, resulting WO(s).
 
-### 9.4 Pricing drift
+### 9.4 Pricing drift — RESOLVED 2026-07-27
 
-Spring opening / fall closing ≤4 zones is currently $90 on website but $85 in AI prompt. Reconcile to one number when migrating to `pricing.json`.
+Reconciled to **$90**. See §1.1. Legacy sub-$90 customers are carried on the per-property override (§2.2) with a review date attached; $90 is the floor for every new and reviewed rate.
 
 ### 9.5 UI design
 
@@ -1517,6 +1545,8 @@ These are the rules that protect the design from drift. Number them so they can 
 18. **Every property carries a complete customer name.** `property.customerName` is non-blank at create, update, and bulk-import. Validation hard-rejects blank patches with `code: MISSING_NAME`. Backfilled before outreach v1 ships, enforced at every write boundary going forward. The OG preview card "Hey {firstName}, …" depends on this invariant. No exceptions.
 19. **Service / Inspection Report PDFs contain no pricing.** Quote and invoice are the financial artifacts; the report is the service-narrative artifact. The renderer (`server/lib/wo-report-pdf.js`) embeds no dollar figures, no line-item costs, and no priced dispositions. Issue dispositions render as words (`Repaired on this visit` / `Deferred to next visit` / `Customer declined`), never as priced lines. Service Report brief, 2026-05-19.
 20. **Commercial bill-to is resolved, never hand-assembled.** `billing-parties.resolveBillTo(property, customer)` is the single source for the invoice / quote bill-to envelope, and `resolveContactRoles(property, customer)` for who signs and who to call. No call site may re-derive the "entity c/o manager" rule from `property.billingEntity` and `customer.name` on its own — that is how invoices, quote PDFs and the admin UI drift into disagreeing about who is being billed. The corollaries: the payer's legal name lives on the **property**, org-wide signatories on the **customer**, site contacts on the **property**; and an issued invoice keeps its snapshotted envelope forever — editing `billingEntity` later never retro-rewrites it (rules 2 and 10). Commercial data model brief, Jul 2026.
+
+21. **Prices are resolved, never typed.** Every dollar figure on a customer-facing document originates from `pricing.json`, `project-rates.json`, or a declared per-property / per-customer override — reached through a single resolver (`pricing.resolveSeasonalPrice` and its siblings), never hand-entered on a technician or admin screen. Work with no resolvable price is not priced in the field: it becomes a lead (§4.1 routing) or a deferred issue (§5), and the office prices it. A typed price is a second source of truth for a number that already has one, and the two will drift. This is rules 1 and 8 restated as a UI constraint, because the UI is where they were being broken. Batch 1 rulings, 2026-07-27.
 
 ---
 
