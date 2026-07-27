@@ -1,8 +1,15 @@
 #!/usr/bin/env node
 // scripts/generate-sitemap.mjs
 //
-// Regenerates sitemap.xml from the set of served, indexable root *.html pages
-// so the sitemap can never drift out of sync with the content again.
+// Regenerates BOTH sitemaps from the set of served, indexable root *.html
+// pages so neither can drift out of sync with the content again:
+//
+//   sitemap.xml   — the crawler sitemap (full file is generated)
+//   sitemap.html  — the human sitemap (only the page-list grid is generated;
+//                   the rest of the page is hand-authored and left alone)
+//
+// Both are driven off one walk of the same page set, so publishing a post can
+// never again land it in one sitemap but not the other.
 //
 // What it does:
 //   1. Scans the repo root for *.html files (non-recursive — same surface the
@@ -12,22 +19,31 @@
 //      (auto-detected — this is why irrigation-zone-schedule.html, review.html,
 //      new-customer.html and 404.html stay out without a hardcoded list), and
 //      the explicit EXCLUDE_FILES list (quote-legacy.html).
-//   3. Emits <loc> (index.html -> "/"), a truthful <lastmod> from each file's
-//      last git commit date (NOT filesystem mtime, which is meaningless on CI
-//      checkouts), and carries over the hand-tuned <changefreq>, <priority>,
-//      and <image:image> entries from the existing sitemap. Pages with no prior
-//      entry (brand-new pages) get sensible defaults and are reported so they
-//      can be curated.
-//   4. Sorts deterministically (homepage "/" first, then alphabetical by URL)
-//      so repeated runs produce a byte-identical file — required for an
-//      idempotent build.
+//   3. sitemap.xml: emits <loc> (index.html -> "/"), a truthful <lastmod> from
+//      each file's last git commit date (NOT filesystem mtime, which is
+//      meaningless on CI checkouts), and carries over the hand-tuned
+//      <changefreq>, <priority>, and <image:image> entries from the existing
+//      sitemap. Pages with no prior entry (brand-new pages) get sensible
+//      defaults and are reported so they can be curated.
+//   4. sitemap.html: rebuilds the <div class="sitemap-grid"> between the
+//      @@PJL:sitemap-grid markers — sections, per-section counts, and one <li>
+//      per page. Link labels and descriptions are CURATED CONTENT and are
+//      carried over from the existing file keyed by href (same contract as
+//      changefreq/priority in the XML: hand-tune them in place and they
+//      survive regeneration). A page with no prior entry gets a label/desc
+//      derived from its <title>/<meta description> and is reported so a human
+//      can write something better.
+//   5. Sorts deterministically so repeated runs produce byte-identical files —
+//      required for an idempotent build.
 //
 // Wired into `npm run build` ahead of the IndexNow ping so search engines
-// always receive the fresh file.
+// always receive the fresh file. It runs AFTER sync-prices-html.mjs, so the
+// <span data-price> markup inside sitemap.html descriptions is already synced
+// by the time it is carried forward here.
 //
 // Modes:
-//   node scripts/generate-sitemap.mjs          # regenerate sitemap.xml
-//   node scripts/generate-sitemap.mjs --check   # exit 1 if the file is stale
+//   node scripts/generate-sitemap.mjs          # regenerate both sitemaps
+//   node scripts/generate-sitemap.mjs --check   # exit 1 if either is stale
 //                                                # (does not write) — idempotency gate
 
 import fs from 'fs';
@@ -38,6 +54,7 @@ import { execFileSync } from 'child_process';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
 const SITEMAP_PATH = path.join(ROOT, 'sitemap.xml');
+const SITEMAP_HTML_PATH = path.join(ROOT, 'sitemap.html');
 const DOMAIN = 'https://www.pjllandservices.com';
 const CHECK = process.argv.includes('--check');
 
@@ -50,6 +67,80 @@ const EXCLUDE_FILES = new Set([
 // Defaults for pages that have no entry in the current sitemap (new pages).
 const DEFAULT_CHANGEFREQ = 'monthly';
 const DEFAULT_PRIORITY = '0.7';
+
+// ---------------------------------------------------------------------------
+// sitemap.html (human sitemap) configuration
+// ---------------------------------------------------------------------------
+
+// The generated region of sitemap.html. Everything outside these markers —
+// <head>, hero, the nav/footer partial markers, the closing note — is
+// hand-authored and never touched.
+const GRID_START = '<!-- @@PJL:sitemap-grid-START -->';
+const GRID_END = '<!-- @@PJL:sitemap-grid-END -->';
+
+// Indexable pages deliberately left off the human sitemap.
+const HTML_EXCLUDE_FILES = new Set([
+  'sitemap.html', // the page itself — a self-link is noise
+]);
+
+// Section layout. A page is claimed by the first section listing it in `files`
+// (which also fixes its display order); otherwise by the first section whose
+// `match` accepts it. Pattern-matched pages keep the order they already have
+// in sitemap.html, with genuinely new ones appended alphabetically — so the
+// curated ordering of the Blog and Service Areas lists survives regeneration.
+//
+// Adding a root page in an existing family (blog-*, sprinkler-service-*) needs
+// no change here. Any other new page lands in "Other Pages" with a warning —
+// visible rather than silently dropped, which is the drift this generator
+// exists to prevent. Add it to the right list below to clear the warning.
+const SECTIONS = [
+  {
+    title: 'Main Pages',
+    files: ['index.html', 'about.html', 'process.html', 'reviews.html', 'faq.html', 'contact.html'],
+  },
+  {
+    title: 'Services',
+    files: [
+      'sprinkler-systems.html',
+      'sprinkler-installation.html',
+      'sprinkler-hydrawise.html',
+      'drip-irrigation.html',
+      'commercial-irrigation.html',
+      'sprinkler-spring-opening.html',
+      'sprinkler-fall-winterization.html',
+      'sprinkler-repair.html',
+      'diagnose.html',
+      'pricing.html',
+      'coverage-map.html',
+      'landscape-lighting.html',
+    ],
+  },
+  {
+    title: 'Book / Quote / Estimate',
+    files: ['book.html', 'quote.html', 'estimate.html', 'water-cost-calculator.html'],
+  },
+  {
+    title: 'Service Areas',
+    match: (f) => f.startsWith('sprinkler-service-'),
+  },
+  {
+    title: 'Blog',
+    files: ['blog.html'],
+    match: (f) => f.startsWith('blog-'),
+  },
+  {
+    title: 'Legal &amp; Compliance',
+    files: [
+      'warranty.html',
+      'privacy-policy.html',
+      'terms-of-service.html',
+      'accessibility-statement.html',
+    ],
+  },
+];
+
+// Bucket for indexable pages no section claims. Never silently dropped.
+const FALLBACK_SECTION_TITLE = 'Other Pages';
 
 // ---------------------------------------------------------------------------
 // Parse the existing sitemap for hand-tuned metadata (changefreq / priority /
@@ -117,21 +208,25 @@ function xmlEscape(s) {
     .replace(/>/g, '&gt;');
 }
 
-function buildSitemap() {
-  const existing = parseExistingMeta();
-  const files = fs
+// The single walk both sitemaps are built from: every served, indexable root
+// page, alphabetical, as { filename, html }.
+function collectIndexablePages() {
+  return fs
     .readdirSync(ROOT)
     .filter((f) => f.toLowerCase().endsWith('.html'))
-    .sort();
+    .sort()
+    .map((filename) => ({ filename, html: fs.readFileSync(path.join(ROOT, filename), 'utf8') }))
+    .filter(({ filename, html }) => isIndexablePage(filename, html));
+}
+
+function buildSitemap(pages) {
+  const existing = parseExistingMeta();
 
   const entries = [];
   const newPages = [];
   const today = new Date().toISOString().slice(0, 10);
 
-  for (const filename of files) {
-    const html = fs.readFileSync(path.join(ROOT, filename), 'utf8');
-    if (!isIndexablePage(filename, html)) continue;
-
+  for (const { filename } of pages) {
     const loc = locForFile(filename);
     const prev = existing.get(loc);
     // lastmod: git commit date, then any prior sitemap value, then today.
@@ -186,15 +281,179 @@ function buildSitemap() {
   return { xml: lines.join(NL) + NL, count: entries.length, newPages };
 }
 
+// ---------------------------------------------------------------------------
+// sitemap.html — rebuild the page-list grid from the same page set.
+// ---------------------------------------------------------------------------
+
+// Harvest the curated link label + description for every page already listed,
+// keyed by href. This is the hand-tuned content the generator carries forward.
+function parseExistingGrid(gridHtml) {
+  const curated = new Map();
+  const liRe =
+    /<li><a href="([^"]+)">([\s\S]*?)<\/a>(?:<span class="desc">([\s\S]*?)<\/span>)?<\/li>/g;
+  let m;
+  while ((m = liRe.exec(gridHtml)) !== null) {
+    curated.set(m[1], { label: m[2], desc: m[3] != null ? m[3] : '' });
+  }
+  return curated;
+}
+
+// The order pages currently appear in, so curated ordering survives.
+function existingOrder(gridHtml) {
+  return [...parseExistingGrid(gridHtml).keys()];
+}
+
+// Fallback label for a page nobody has curated yet: the distinctive part of
+// its <title>, before the " | PJL Land Services …" boilerplate.
+function deriveLabel(html, filename) {
+  const title = (html.match(/<title>([\s\S]*?)<\/title>/i) || [])[1];
+  if (!title) return filename.replace(/\.html$/, '');
+  let label = title.split('|')[0].trim();
+  if (label.length > 60) label = label.split('—')[0].trim();
+  return htmlText(label) || filename.replace(/\.html$/, '');
+}
+
+// Derived text comes from a <title> or a meta attribute, so a bare "&" in it
+// is legal there but not in the page body. Escape it without double-escaping
+// entities the source already carries.
+function htmlText(s) {
+  return s.replace(/&(?!#?\w+;)/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+// Fallback description: the first sentence of the page's meta description.
+function deriveDesc(html) {
+  for (const tag of html.match(/<meta\b[^>]*>/gi) || []) {
+    if (!/name\s*=\s*["']description["']/i.test(tag)) continue;
+    // Backreference the opening quote — a plain [^"']* stops at the first
+    // apostrophe and truncates any description containing one ("won't" …).
+    const content = (tag.match(/content\s*=\s*(["'])([\s\S]*?)\1/i) || [])[2];
+    if (!content) return '';
+    const firstSentence = (content.match(/^[\s\S]*?[.!?](?=\s|$)/) || [content])[0].trim();
+    return htmlText(
+      firstSentence.length <= 160 ? firstSentence : content.slice(0, 157).trim() + '…'
+    );
+  }
+  return '';
+}
+
+function assignSection(filename) {
+  for (const section of SECTIONS) {
+    if (section.files && section.files.includes(filename)) return section.title;
+  }
+  for (const section of SECTIONS) {
+    if (section.match && section.match(filename)) return section.title;
+  }
+  return FALLBACK_SECTION_TITLE;
+}
+
+function buildSitemapHtml(pages) {
+  const current = fs.readFileSync(SITEMAP_HTML_PATH, 'utf8');
+  const startAt = current.indexOf(GRID_START);
+  const endAt = current.indexOf(GRID_END);
+  if (startAt === -1 || endAt === -1 || endAt < startAt) {
+    console.error(
+      `generate-sitemap: FAIL — sitemap.html is missing the ${GRID_START} / ${GRID_END} ` +
+      'markers that delimit the generated page grid. Restore them and re-run.'
+    );
+    process.exit(1);
+  }
+  const gridHtml = current.slice(startAt + GRID_START.length, endAt);
+  const curated = parseExistingGrid(gridHtml);
+  const order = existingOrder(gridHtml);
+
+  const listed = pages.filter(({ filename }) => !HTML_EXCLUDE_FILES.has(filename));
+
+  // Group into sections, honouring each section's explicit `files` order, then
+  // the order pattern-matched pages already had, then new pages alphabetically
+  // (`listed` is alphabetical, so a stable sort by rank gives exactly that).
+  const bySection = new Map();
+  for (const { filename, html } of listed) {
+    const title = assignSection(filename);
+    if (!bySection.has(title)) bySection.set(title, []);
+    bySection.get(title).push({ filename, html });
+  }
+  const newEntries = [];
+  const uncategorised = [];
+  for (const [title, items] of bySection) {
+    const section = SECTIONS.find((s) => s.title === title);
+    const explicit = (section && section.files) || [];
+    const rank = (filename) => {
+      const i = explicit.indexOf(filename);
+      if (i !== -1) return i; // curated position within the section
+      const j = order.indexOf(filename);
+      return explicit.length + (j === -1 ? order.length : j); // existing order, then new
+    };
+    items.sort((a, b) => rank(a.filename) - rank(b.filename));
+    for (const item of items) {
+      if (!curated.has(item.filename)) newEntries.push(item.filename);
+      if (title === FALLBACK_SECTION_TITLE) uncategorised.push(item.filename);
+    }
+  }
+
+  const lines = [];
+  const sectionTitles = [...SECTIONS.map((s) => s.title), FALLBACK_SECTION_TITLE];
+  for (const title of sectionTitles) {
+    const items = bySection.get(title);
+    if (!items || !items.length) continue;
+    lines.push('');
+    lines.push('      <div class="sitemap-section">');
+    lines.push(`        <h2>${title}</h2>`);
+    lines.push(
+      `        <span class="sitemap-section__count">${items.length} ` +
+      `${items.length === 1 ? 'page' : 'pages'}</span>`
+    );
+    lines.push('        <ul>');
+    for (const { filename, html } of items) {
+      const entry = curated.get(filename) || {
+        label: deriveLabel(html, filename),
+        desc: deriveDesc(html),
+      };
+      const desc = entry.desc ? `<span class="desc">${entry.desc}</span>` : '';
+      lines.push(`          <li><a href="${filename}">${entry.label}</a>${desc}</li>`);
+    }
+    lines.push('        </ul>');
+    lines.push('      </div>');
+  }
+  lines.push('');
+  lines.push('      ');
+
+  const useCRLF = current.includes('\r\n');
+  const NL = useCRLF ? '\r\n' : '\n';
+  const grid = lines.join(NL);
+  const html = current.slice(0, startAt + GRID_START.length) + grid + current.slice(endAt);
+  return { html, current, count: listed.length, newEntries, uncategorised };
+}
+
+// Warnings that apply to both modes: pages nobody has curated, and pages no
+// section claims. Printed after the OK/FAIL line so they are not buried.
+function reportHtmlNotes(page) {
+  if (page.uncategorised.length) {
+    console.log(
+      `  warning: ${page.uncategorised.length} page(s) matched no section and landed in ` +
+      `"${FALLBACK_SECTION_TITLE}" on sitemap.html — add them to a SECTIONS list in ` +
+      'scripts/generate-sitemap.mjs:'
+    );
+    page.uncategorised.forEach((f) => console.log(`    ${f}`));
+  }
+  const uncurated = page.newEntries.filter((f) => !page.uncategorised.includes(f));
+  if (uncurated.length) {
+    console.log(
+      `  note: ${uncurated.length} page(s) had no prior sitemap.html entry — label and ` +
+      'description derived from the page; edit them in sitemap.html to curate:'
+    );
+    uncurated.forEach((f) => console.log(`    ${f}`));
+  }
+}
+
 function main() {
-  const { xml, count, newPages } = buildSitemap();
+  const pages = collectIndexablePages();
+  const { xml, count, newPages } = buildSitemap(pages);
   const current = fs.existsSync(SITEMAP_PATH) ? fs.readFileSync(SITEMAP_PATH, 'utf8') : null;
+  const page = buildSitemapHtml(pages);
 
   if (CHECK) {
-    if (xml === current) {
-      console.log(`generate-sitemap: check OK — ${count} URLs, sitemap.xml up to date.`);
-      return;
-    }
+    let stale = false;
+
     // A page's <lastmod> is derived from its last git-commit date, so the very
     // commit that edits a page can never also ship a sitemap.xml carrying that
     // same commit's date — the date does not exist until the commit is made.
@@ -205,18 +464,35 @@ function main() {
     // set or changed <changefreq>/<priority>/<image:image> SEO metadata.
     const stripLastmod = (s) =>
       s == null ? s : s.replace(/<lastmod>[^<]*<\/lastmod>/g, '<lastmod/>');
-    if (stripLastmod(xml) === stripLastmod(current)) {
+    if (xml === current) {
+      console.log(`generate-sitemap: check OK — ${count} URLs, sitemap.xml up to date.`);
+    } else if (stripLastmod(xml) === stripLastmod(current)) {
       console.log(
         `generate-sitemap: check OK — ${count} URLs (lastmod timestamps differ; ` +
         `refreshed automatically on the next build).`
       );
-      return;
+    } else {
+      console.error(
+        'generate-sitemap: FAIL — sitemap.xml is structurally stale (URL set or SEO ' +
+        'metadata changed). Run `node scripts/generate-sitemap.mjs`.'
+      );
+      stale = true;
     }
-    console.error(
-      'generate-sitemap: FAIL — sitemap.xml is structurally stale (URL set or SEO ' +
-      'metadata changed). Run `node scripts/generate-sitemap.mjs`.'
-    );
-    process.exit(1);
+
+    // sitemap.html has no lastmod equivalent — any drift is structural.
+    if (page.html === page.current) {
+      console.log(`generate-sitemap: check OK — ${page.count} links, sitemap.html up to date.`);
+    } else {
+      console.error(
+        'generate-sitemap: FAIL — the sitemap.html page grid is stale (page set or section ' +
+        'layout changed). Run `node scripts/generate-sitemap.mjs`.'
+      );
+      stale = true;
+    }
+
+    reportHtmlNotes(page);
+    if (stale) process.exit(1);
+    return;
   }
 
   if (xml === current) {
@@ -230,6 +506,14 @@ function main() {
       `(changefreq=${DEFAULT_CHANGEFREQ}, priority=${DEFAULT_PRIORITY}):`);
     newPages.forEach((f) => console.log(`    ${f}`));
   }
+
+  if (page.html === page.current) {
+    console.log(`generate-sitemap: ${page.count} links, sitemap.html no change.`);
+  } else {
+    fs.writeFileSync(SITEMAP_HTML_PATH, page.html);
+    console.log(`generate-sitemap: wrote ${page.count} links to sitemap.html.`);
+  }
+  reportHtmlNotes(page);
 }
 
 main();
