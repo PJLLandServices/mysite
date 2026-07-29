@@ -368,7 +368,15 @@ async function run(wo, deps = {}) {
   // setTimeout is the primary fire path; sweepPendingInvoiceSMS catches
   // sends lost to a server restart. Best-effort: failures here log and
   // continue (the cascade itself doesn't depend on the SMS).
-  if (invoice && invoice.paidOnSiteAtCompletion === false) {
+  // deps.skipInvoiceSms — re-draft escape hatch. When an invoice has to be
+  // re-cut for a bookkeeping correction (mispriced line, voided original),
+  // the customer has usually already been told what's coming, or hasn't been
+  // contacted at all and shouldn't be by a re-run. There was previously no
+  // way to suppress this: the settings gate (invoiceSms.enabled) has no
+  // writer, clearing customerSmsScheduledAt only stops the sweep and not the
+  // in-process timer, and sendInvoiceReadySMS aborts only on
+  // sent/void/paid — so a re-draft always texted the customer.
+  if (invoice && invoice.paidOnSiteAtCompletion === false && !deps.skipInvoiceSms) {
     try {
       const settingsLib = require("./settings");
       const notifyCustomer = require("./notify-customer");

@@ -9521,7 +9521,13 @@ async function handleApi(req, res, pathname) {
       const wo = await workOrders.get(id);
       if (!wo) return sendJson(res, 404, { ok: false, errors: ["Work order not found."] });
       if (!wo.propertyId) return sendJson(res, 422, { ok: false, errors: ["WO has no linked property."] });
-      const result = await completionCascade.run(wo);
+      const payload = await parseRequestBody(req).catch(() => ({}));
+      // skipSms — for re-drafting an invoice after a correction. Without it a
+      // re-run schedules a fresh "your invoice is ready" text to a customer
+      // who either already got one or shouldn't be contacted by a re-cut.
+      const result = await completionCascade.run(wo, {
+        skipInvoiceSms: payload?.skipSms === true
+      });
       return sendJson(res, 200, { ok: true, ...result });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't run cascade."] });
