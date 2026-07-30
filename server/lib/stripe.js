@@ -211,10 +211,19 @@ async function createPaymentIntent({
   const body = {
     amount: Math.round(amountCents),
     currency: String(currency || "CAD").toLowerCase(),
-    // Lets the Payment Element offer whatever the account has enabled —
-    // cards plus Apple Pay / Google Pay on supporting devices, which is
-    // most of this page's traffic.
-    automatic_payment_methods: { enabled: true },
+    // EXPLICIT method list, deliberately not automatic_payment_methods.
+    // The first live intent (Jul 2026) proved that "automatic" pulls in
+    // whatever the Stripe account has enabled — which included Klarna, a
+    // buy-now-pay-later redirect flow nobody chose to offer on PJL
+    // invoices. Redirect methods also route the customer back through
+    // the thanks page without the confirm POST, leaving the webhook as
+    // the only finalizer. So: cards (which carries Apple Pay / Google
+    // Pay once the domain is registered with Stripe) and Link. Must
+    // stay in sync with `paymentMethodTypes` in pay.js — the Element
+    // and the intent have to agree or confirmPayment errors mid-flow.
+    // Adding a method (e.g. Klarna, ACH/PAD) is a deliberate two-file
+    // change plus a thanks-page verification pass, not a toggle.
+    payment_method_types: ["card", "link"],
     description: description || (invoiceId ? `PJL invoice ${invoiceId}` : undefined),
     // metadata is how a Stripe dashboard row or payout line is traced
     // back to a PJL invoice during reconciliation.

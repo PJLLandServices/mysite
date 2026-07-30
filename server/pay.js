@@ -185,6 +185,14 @@ async function initPaymentForm() {
       mode: "payment",
       amount: cfg.amountCents,
       currency: cfg.currency || "cad",
+      // MUST match payment_method_types on the server-created intent
+      // (stripe.js createPaymentIntent) — deferred-intent rules: if the
+      // Element offers a method the intent doesn't allow, confirmPayment
+      // fails after the customer already picked it. Card carries Apple
+      // Pay / Google Pay; Link is Stripe's one-click. No redirect-based
+      // methods (Klarna etc.) — the account has them enabled, this page
+      // does not offer them.
+      paymentMethodTypes: ["card", "link"],
       appearance: {
         variables: {
           colorPrimary: "#1B4D2E",
