@@ -230,6 +230,7 @@ Pages with their primary route + purpose:
 | `unsubscribe.html` | `/unsubscribe/<token>` | **Public** confirm-then-POST page for the CASL unsubscribe flow. Token in URL IS the credential; type comes from `?type=email\|sms\|all`. POSTs to `/api/outreach/unsubscribe` which flips the matching `commPref` off via `outreach.honorUnsubscribe`. Self-contained styles (no `/crm/` CSS dependency) so the page renders even if a carrier rewrites asset URLs. |
 | `approve.html` | `/approve/<id>?t=<token>` | Customer-facing quote approval (signature canvas + PDF download) for `ai_repair_quote`, `on_site_quote`, and `project_proposal`. **Phone gate — only for a `project_proposal` carrying a custom HTML document** (Phone-Gated Proposal Access, Jul 2026; the gate exists specifically to protect the designed page). A proposal can carry a **custom self-contained HTML document** (`server/data/proposal-docs/<id>.html`, uploaded from the proposal builder); when present, the token alone renders an inline phone challenge (`inputmode="tel"`, no client format enforcement) instead of the document, and once passed the page serves the custom document **in place of** the generic render — with a server-injected **"Accept & sign online" footer** (`#pjl-accept-footer`, added before `</body>` at serve time; the file on disk is never modified) linking to `?sign=1`, which forces the STANDARD accept page (line items, totals, signature pad, PDF download, print-and-return) with no re-challenge since the unlock cookie carries over. Accepted proposals get a "✓ Accepted — thank you" footer state instead of the CTA. The server normalizes the typed number to digits-only/last-10 and compares against **every** phone on the customer's **live** record (primary + spouse + lead contact + property snapshot); on a match it mints a **24h `HttpOnly` cookie scoped to that one quote** via `POST /api/approve/:id/:token/unlock`, and the data / PDF / attachment endpoints all require it. Admin sessions and the owning customer's portal session skip the challenge; a **different** customer's session → 401 (never falls through to the challenge). **5 attempts/quote/hour** then a rolling 1-hour lock (regardless of IP), plus a broader per-IP backstop; failed attempts are logged (quote id, IP, timestamp). No-phone-on-file → generic failure **and Patrick is paged**. Bad/missing token → the same 404 as a nonexistent quote (indistinguishable). **Proposals without a custom document, and `ai_repair_quote` / `on_site_quote`, are token-only — unchanged from pre-gate behaviour.** |
 | `portal-invoice.html` | `/portal/invoice/:id?t=<portalToken>` | **Public, token-gated** read-only invoice mirror linked from the customer invoice-ready SMS. Mobile-first, no admin chrome. Renders line items, totals, and a Pay button that deep-links into `/pay/invoice/:id?t=<paymentToken>`. Shows PAID badge when the invoice is paid, a "voided" notice when voided, or a "payment link is being prepared" banner when no `paymentToken` is on the invoice yet. Wrong/missing `portalToken` → 401 with no body. |
+| `pay.html` | `/pay/invoice/:id?t=<paymentToken>` | **Public, token-gated** card payment page — the surface the portal's Pay button deep-links into (PJL-hosted, same tab; *not* a QuickBooks-hosted page). Mobile-first: 44pt targets, 16px inputs so iOS Safari doesn't zoom on focus, safe-area insets, no horizontal scroll. Collects cardholder name, PAN, expiry, CVC/CID, **billing street address + postal code** (the AVS fields), and POSTs the card **straight to Intuit** — PJL's server sees only the resulting token. reCAPTCHA v3 on the charge. Paid → paid banner, form hidden; void → void notice. Full detail in **Payments surface** below. |
 
 ### Identity & access — authentication model
 
@@ -1155,6 +1156,51 @@ that subset.
 
 **Hard rule:** PJL is the source of truth for service + part pricing. QB items are derived state. Editing a price in QB does not flow back to PJL. The `lastPriceSynced` field in `quickbooks-items.json` lets the syncer detect drift in PJL → QB direction only.
 
+### Payments surface (card payment on an invoice)
+
+Documented here for the first time (QB Payments AVS brief, Jul 2026). This surface has been live since PR 3 and was previously undocumented — a customer-facing money-moving path with no entry in this file.
+
+**The page.** `/pay/invoice/:id?t=<paymentToken>` — public, token-gated, mobile-first. Served by `server/pay.html` + `/crm/pay.js` + `/crm/pay.css`. It is where the portal's "Pay this invoice" button deep-links (same tab, PJL-hosted — **not** a QuickBooks-hosted page). Almost all traffic is iPhone Safari opening an SMS link.
+
+**Card-data path.** The browser POSTs the card **directly** to Intuit — `https://api.intuit.com/quickbooks/v4/payments/tokens` (or `sandbox.api.intuit.com`), cross-origin, no `Authorization` header — and gets back a one-shot opaque token. PAN, CVC and expiry never touch the Node process. That is PCI **SAQ-A-EP**, and it is Hard Rule 23: routing card data through PJL's server would push the integration into SAQ-D. There is no Intuit browser SDK involved; Intuit does not publish one.
+
+**Tokenization payload — `card.address`.** Intuit accepts `streetAddress`, `city`, `region`, `country`, `postalCode`, and validates every field that is **present** (`streetAddress: ""` returns "address.streetAddress is invalid"), so only non-empty fields are sent. PJL sends `streetAddress`, `postalCode` and `country`; `city`/`region` are deliberately omitted because the page doesn't collect them. **AVS is attached to the token, not to the charge** — the charge call forwards no address at all, so an address missing here can never be recovered downstream. Until Jul 2026 the page collected postal code only; a card-not-present charge with no street address commonly clears on Visa/Mastercard and declines on Amex, which was the observed "most payments work, Amex keeps failing" pattern.
+
+**Endpoints.**
+
+| Endpoint | Auth | Purpose |
+|---|---|---|
+| `GET /api/pay/invoice/:id?t=<paymentToken>` | paymentToken | Sanitized invoice JSON + `billingPrefill: { streetAddress, postalCode }` derived from the invoice's own `billTo.address` snapshot (via `format.parseCanadianAddress`). Pre-fill only — every field stays editable, because the card's billing address is frequently not the service address. |
+| `GET /api/pay/invoice/:id/sdk-config?t=<paymentToken>` | paymentToken | `tokenizeUrl` (env-routed), `recaptchaSiteKey`, `supportPhone`, and `acceptedCardBrands` from settings. |
+| `POST /api/pay/invoice/:id/charge` | paymentToken + reCAPTCHA v3 | Charges the token via `quickbooks.chargeCard`, records the attempt, flips the invoice to paid, records the QB Payment, sends the receipt. |
+| `POST /api/webhooks/quickbooks-payments` | Intuit | Async settle / refund events. |
+| `PATCH /api/settings/payments` | admin session | `{ acceptedCardBrands: ["visa","mastercard","amex","discover"] }`. |
+
+**reCAPTCHA v3** gates the charge endpoint when `RECAPTCHA_SECRET_KEY` is set; the site key ships via `/sdk-config`. With neither var set, client and server both skip it (local dev).
+
+**Invoice fields this surface reads and writes** — these are the REAL names. (The predecessor diagnostic brief cited `qbInvoiceId`, `lastPushAt`, `lastPushStatus` and `qbSyncToken`. **No such fields exist.** Nothing reads or writes them.)
+
+| Field | Meaning |
+|---|---|
+| `quickbooksInvoiceId` | QB invoice ID from the accounting push. Absent ⇒ the charge still runs but no QB Payment is recorded (a known AR-drift risk, tracked in its own brief). |
+| `quickbooksChargeId` | Intuit charge ID from a successful capture. |
+| `quickbooksPaymentId` | QB Accounting Payment record ID, best-effort after capture. |
+| `paymentToken` | 32-char hex gating `/pay/invoice/:id`. Minted by `invoices.ensurePaymentToken`. |
+| `portalToken` | Separate 32-char hex gating the read-only `/portal/invoice/:id` mirror — independently revocable. |
+| `paymentAttempts[]` | **New.** Append-only log of every charge attempt. |
+
+**`paymentAttempts[]`** (`invoices.appendPaymentAttempt`, Hard Rule 4). One entry per call to the charges API, **success and failure alike**, written before the response goes back to the customer. Fields: `ts`, `outcome` (`success` | `failure`), `amount`, `currency`, `chargeId`, `chargeStatus`, `httpStatus`, `intuitCode` (e.g. `PMT-2002`), `intuitMessage` (verbatim gateway string — for Patrick, never the customer), `intuitTid` (quote this to Intuit support), `customerMessage` (the exact words the customer read), `cardBrand`, `cardLast4`, `avsStreet`, `avsZip`, `cvcMatch`. Each entry mirrors into `history[]` as `payment_attempt:success|failure`. The field list is an explicit allowlist, which is the structural guarantee that no PAN, CVC, expiry or card token can be persisted even if a caller passes one. `update()`'s allowlist excludes `paymentAttempts`, so no ordinary patch can rewrite the log. **Before this existed, a failed charge left no trace anywhere Patrick could see** — only a `console.warn` in Render's logs.
+
+**Failure mapping.** `describeChargeFailure()` in `server.js` maps Intuit's `code` to customer-legible copy: address/AVS (`PMT-1002`, `PMT-1003`, `PMT-2002`, `PMT-2003`), security code (`PMT-1001`, `PMT-2000`, `PMT-2001`), card type not accepted (`PMT-5001`), declined by issuer (`PMT-5000`), expired card (no code of its own — matched on the message text, checked first), temporary/processing (`PMT-3000`, `PMT-4000`–`PMT-4002`, `PMT-6000`), and an unknown fallback. **No raw Intuit string ever reaches the customer**, and every message ends with the office number from `settings.contactInfo.customerSupportPhone`. An unmapped code lands verbatim in `paymentAttempts[]`, which is how the table gets extended from real data.
+
+**Accepted card brands.** `settings.payments.acceptedCardBrands` in `server/data/settings.json`, default `["visa","mastercard","amex","discover"]`; slugs validated against `settings.CARD_BRANDS`, labels from `settings.CARD_BRAND_LABELS`. Edited via `PATCH /api/settings/payments` (admin session). Displayed on the pay page above the card number field, and used for a client-side pre-submit warning. **Display + courtesy warning only — Intuit's merchant account is the authority on what actually charges, and this list never gates the server-side charge call.** **Where brand acceptance is actually configured:** on the **Intuit merchant account**, not in this repo and not in any env var — QuickBooks Payments → account/deposit settings in the QBO company, managed through Intuit's Merchant Service Center. Amex in particular is a separate opt-in on many QBP accounts. This repo's setting exists so the customer-facing page can follow that change without a deploy; it is a mirror of the merchant-account state, not the source of it.
+
+> ⚠️ **Unverified:** which brands PJL's merchant account accepts today has *not* been confirmed against Intuit — it is not discoverable from this codebase. The default `["visa","mastercard","amex","discover"]` is carried over from the copy that was previously hardcoded in `pay.html`. Patrick should check the Merchant Service Center and, if Amex is not enabled there, either enable it (an Intuit-side action, out of scope for the code) or drop `"amex"` via `PATCH /api/settings/payments` so the page stops promising it.
+
+**Client-side validation** (`pay.js`) is brand-aware: Amex 15-digit PAN + 4-digit CID, everyone else 16 (Visa/Discover also 19) + 3-digit CVC, Luhn, and Canadian postal format (`L3X 0A5`, excluding D/F/I/O/Q/U throughout and W/Z leading). US ZIPs are accepted and flip `country` to `US` — a US billing postal sent as `CA` is a guaranteed AVS mismatch. Postal codes are uppercased and stripped of whitespace before send.
+
+**No retry, anywhere.** A capture is not idempotent (Hard Rule 22). `Request-Id` is random per call precisely so a deliberate customer re-submit is a new charge rather than a silently deduped no-op.
+
 ## Configuration (Render env vars)
 
 ```
@@ -1243,6 +1289,18 @@ These have memory entries; surface them in any AI / specialist context.
   Rule applies to force-booked custom times too. Admin-facing UIs show
   the precise minute. Labeling lives in
   `server/lib/notify-customer.js bookingDateTime()`.
+- **A capture is not idempotent** (design spec Hard Rule 22). Cascades,
+  QB pushes and recovery sweeps can all be safely re-run; a card charge
+  cannot. No automatic retry may be added anywhere in the charge path.
+  A failed attempt records to `invoice.paymentAttempts[]` and stops —
+  the customer re-submits deliberately, and that re-submit is a new
+  charge with a new random `Request-Id`.
+- **Card data never touches the server** (design spec Hard Rule 23).
+  PAN, CVC and expiry go from the browser straight to `api.intuit.com`;
+  PJL's Node process only ever sees the opaque token. This is what keeps
+  the integration in PCI SAQ-A-EP rather than SAQ-D. Billing ADDRESS
+  fields are not card data and are safe server-side — collecting them
+  is how the charge passes AVS.
 
 ## How to run locally
 

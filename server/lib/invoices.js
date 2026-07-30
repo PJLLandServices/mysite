@@ -203,6 +203,16 @@ function hydrate(inv) {
     disclaimers: Array.isArray(inv?.disclaimers)
       ? Array.from(new Set(inv.disclaimers.filter((k) => typeof k === "string" && INVOICE_DISCLAIMERS[k])))
       : [],
+    // Card-charge attempt log (QB Payments AVS brief, Jul 2026).
+    // Append-only, never pruned (Hard Rule 4). EVERY call to the QB
+    // Payments charges API lands here — success and failure alike —
+    // carrying Intuit's error code, verbatim message, and `intuitTid`.
+    // Before this existed a failed charge left no trace anywhere Patrick
+    // could see: the customer said "it won't go through" and there was
+    // nothing to look at but Render logs. Written only by
+    // appendPaymentAttempt(); update()'s allowlist deliberately excludes
+    // it so no ordinary patch can rewrite the log.
+    paymentAttempts: Array.isArray(inv?.paymentAttempts) ? inv.paymentAttempts : [],
     createdAt: inv?.createdAt || new Date().toISOString(),
     updatedAt: inv?.updatedAt || new Date().toISOString(),
     history: Array.isArray(inv?.history) ? inv.history : []
@@ -568,6 +578,82 @@ async function appendHistory(id, entry) {
   return next;
 }
 
+// Append one card-charge attempt to the invoice (QB Payments AVS brief,
+// §4.3). Called by the /charge route on BOTH outcomes, before anything
+// else is written — a charge that succeeded but whose paid-flip failed
+// still leaves a record, and so does a decline.
+//
+// Append-only and allowlisted field by field. Two reasons for the
+// allowlist rather than a spread: it is the structural guarantee that no
+// PAN, CVC, expiry, or card token can ever be persisted here even if a
+// caller passes one by mistake (PCI SAQ-A-EP — see Hard Rule 23), and it
+// keeps the record shape stable for the admin invoice view.
+//
+// `cardBrand` + `cardLast4` come from the MASKED number Intuit echoes
+// back on the charge response. Brand and last four are storable; the PAN
+// never reaches this process at all.
+const PAYMENT_ATTEMPT_OUTCOMES = ["success", "failure"];
+
+async function appendPaymentAttempt(id, attempt) {
+  const records = await readAll();
+  const idx = records.findIndex((r) => r.id === id);
+  if (idx === -1) return null;
+  const now = new Date().toISOString();
+  const cap = (v, n) => (v == null ? null : String(v).slice(0, n));
+  const outcome = PAYMENT_ATTEMPT_OUTCOMES.includes(attempt?.outcome) ? attempt.outcome : "failure";
+  const last4 = String(attempt?.cardLast4 || "");
+  const entry = {
+    ts: attempt?.ts || now,
+    outcome,
+    amount: Number(attempt?.amount) || 0,
+    currency: attempt?.currency || "CAD",
+    chargeId: cap(attempt?.chargeId, 100),
+    chargeStatus: cap(attempt?.chargeStatus, 40),
+    // null / "" must stay null — Number(null) is 0, which would record a
+    // pre-flight failure (no HTTP call made) as an HTTP 0 response.
+    httpStatus: attempt?.httpStatus != null && attempt.httpStatus !== "" && Number.isFinite(Number(attempt.httpStatus))
+      ? Number(attempt.httpStatus)
+      : null,
+    // Intuit's own error code (e.g. "PMT-2002") and verbatim message.
+    // The message is stored UNMODIFIED for Patrick — it is the raw
+    // gateway string that must never reach the customer.
+    intuitCode: cap(attempt?.intuitCode, 40),
+    intuitMessage: cap(attempt?.intuitMessage, 500),
+    // The transaction id to quote when calling Intuit support.
+    intuitTid: cap(attempt?.intuitTid, 100),
+    // What the CUSTOMER was actually shown, so a support call can start
+    // from the same words they read on their phone.
+    customerMessage: cap(attempt?.customerMessage, 300),
+    cardBrand: cap(attempt?.cardBrand, 40),
+    cardLast4: /^\d{4}$/.test(last4) ? last4 : null,
+    // AVS + CVC verification results — the whole point of collecting a
+    // billing street address. "avsStreet" failing while "avsZip" passes
+    // is the signature of the Amex pattern this brief was written for.
+    avsStreet: cap(attempt?.avsStreet, 20),
+    avsZip: cap(attempt?.avsZip, 20),
+    cvcMatch: cap(attempt?.cvcMatch, 20)
+  };
+
+  const next = { ...records[idx] };
+  next.paymentAttempts = [...(next.paymentAttempts || []), entry];
+  // Mirror into history[] so the existing invoice audit trail shows the
+  // attempt inline with sends, voids and status flips — Patrick reads
+  // that timeline, not a separate array.
+  const summary = outcome === "success"
+    ? `Card charge approved${entry.chargeId ? ` (${entry.chargeId})` : ""}.`
+    : `Card charge declined${entry.intuitCode ? ` [${entry.intuitCode}]` : ""}${entry.intuitMessage ? `: ${entry.intuitMessage}` : "."}${entry.intuitTid ? ` (intuit_tid ${entry.intuitTid})` : ""}`;
+  next.history = [...(next.history || []), {
+    ts: entry.ts,
+    action: `payment_attempt:${outcome}`,
+    by: "customer",
+    note: summary.slice(0, 500)
+  }];
+  next.updatedAt = now;
+  records[idx] = next;
+  await writeAll(records);
+  return next;
+}
+
 // Void an invoice (feature-invoice-void-delete-brief.md §4.2). Follows the
 // bookings.cancel() shape — returns { ok, status } rather than throwing so
 // the route maps codes to HTTP cleanly.
@@ -711,6 +797,7 @@ module.exports = {
   STATUSES,
   HST_RATE,
   INVOICE_DISCLAIMERS,
+  PAYMENT_ATTEMPT_OUTCOMES,
   DELETED_FILE,
   list,
   get,
@@ -719,6 +806,7 @@ module.exports = {
   createDraft,
   update,
   appendHistory,
+  appendPaymentAttempt,
   voidInvoice,
   remove,
   ensurePaymentToken,

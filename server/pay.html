@@ -64,9 +64,17 @@
         <h2 class="pay-section-title">Pay by credit card</h2>
         <p class="pay-form-help">
           Card details go directly from your browser to Intuit QuickBooks
-          Payments — our server never sees your card number. Visa,
-          Mastercard, Amex, and Discover are all accepted.
+          Payments — our server never sees your card number.
         </p>
+        <!--
+          Accepted brands are filled in by pay.js from /sdk-config, which
+          reads settings.payments.acceptedCardBrands. NOT a hardcoded
+          list: whether Amex clears is a merchant-account setting on
+          Intuit's side, and this line has to be able to follow it
+          without a deploy. Stays hidden until the real list arrives so
+          the page never asserts a brand it can't back up.
+        -->
+        <p class="pay-accepted-brands" id="payAcceptedBrands" hidden></p>
 
         <!--
           PR 3.1 — Card-entry form. Card data is POSTed directly from
@@ -104,12 +112,33 @@
                      inputmode="numeric" placeholder="123"
                      required maxlength="4">
             </label>
-            <label class="pay-field">
-              <span class="pay-field-label">Postal code</span>
-              <input type="text" id="payCardPostal" autocomplete="postal-code"
-                     placeholder="L3X 0A5" required maxlength="10">
-            </label>
           </div>
+
+          <!--
+            Billing address — the AVS fields (AVS brief §4.1). The page
+            collected postal code only until Jul 2026, and a card-not-
+            present charge with no street address is what Amex's stricter
+            address verification rejects while Visa/MC let it through.
+            Both fields ride along in the tokenization payload; they are
+            NOT card data and never gate on PJL's server.
+
+            Pre-filled by pay.js from the invoice's bill-to snapshot and
+            fully editable — the card's billing address is frequently not
+            the service address.
+          -->
+          <label class="pay-field pay-field--full">
+            <span class="pay-field-label">Billing street address</span>
+            <input type="text" id="payCardStreet" autocomplete="billing street-address"
+                   inputmode="text" autocapitalize="words" enterkeyhint="next"
+                   placeholder="123 Main St" required maxlength="120">
+            <span class="pay-field-hint">As it appears on your credit card statement.</span>
+          </label>
+          <label class="pay-field pay-field--full">
+            <span class="pay-field-label">Billing postal code</span>
+            <input type="text" id="payCardPostal" autocomplete="billing postal-code"
+                   autocapitalize="characters" autocorrect="off" spellcheck="false"
+                   enterkeyhint="done" placeholder="L3X 0A5" required maxlength="10">
+          </label>
         </form>
 
         <button type="button" id="payChargeBtn" class="pay-charge-btn">

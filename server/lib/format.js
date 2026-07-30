@@ -209,6 +209,70 @@ function splitStreetFromCity(line) {
   return [street, cityProv];
 }
 
+// parseCanadianAddress — best-effort split of a one-line (or newline-
+// delimited) Canadian address into the structured parts an address
+// verification (AVS) payload wants.
+//
+// Added for the QuickBooks Payments AVS work (Jul 2026): the pay page
+// pre-fills the billing street address from `invoice.billTo.address`,
+// which is stored as one free-form string. Parsing it here rather than
+// in the route keeps the postal-code + street-suffix knowledge in ONE
+// place — `formatVendorAddress` already owns both, and a second
+// implementation would drift.
+//
+//   parseCanadianAddress("123 Main St, Newmarket, ON L3X 0A5")
+//     -> { streetAddress: "123 Main St", city: "Newmarket",
+//          region: "ON", postalCode: "L3X 0A5" }
+//
+// Every field is best-effort and may come back "". This output is only
+// ever used to PRE-FILL an editable form — never to build a payload
+// behind the customer's back — so an imperfect split costs the customer
+// one correction, not a failed charge.
+const CANADA_POSTAL_RE = /\b([A-Za-z]\d[A-Za-z])[ ]?(\d[A-Za-z]\d)\b/;
+const PROVINCE_CODES = new Set([
+  "AB", "BC", "MB", "NB", "NL", "NS", "NT", "NU", "ON", "PE", "QC", "SK", "YT"
+]);
+
+function parseCanadianAddress(raw) {
+  const out = { streetAddress: "", city: "", region: "", postalCode: "" };
+  let text = String(raw || "").replace(/\r\n/g, "\n").trim();
+  if (!text) return out;
+
+  // Postal code first — it can sit anywhere in the blob. Lifting it out
+  // leaves a clean street/city/province remainder to split.
+  const match = text.match(CANADA_POSTAL_RE);
+  if (match) {
+    out.postalCode = `${match[1].toUpperCase()} ${match[2].toUpperCase()}`;
+    text = `${text.slice(0, match.index)}\n${text.slice(match.index + match[0].length)}`.trim();
+  }
+  // "Canada" is not a field of its own — the tokenization payload carries
+  // an explicit country code.
+  text = text.replace(/(^|[,\n\s])canada\b/gi, "$1").trim();
+
+  let lines = text
+    .split("\n")
+    .map((line) => line.trim().replace(/^[,\-\s]+|[,\-\s]+$/g, ""))
+    .filter(Boolean);
+  if (lines.length === 1) lines = splitStreetFromCity(lines[0]);
+
+  // Province rides on the last line ("Newmarket, ON"). Peel it off; if
+  // it was the whole line, drop the line entirely.
+  if (lines.length) {
+    const last = lines[lines.length - 1];
+    const provMatch = last.match(/(?:^|[,\s])([A-Za-z]{2})$/);
+    if (provMatch && PROVINCE_CODES.has(provMatch[1].toUpperCase())) {
+      out.region = provMatch[1].toUpperCase();
+      const remainder = last.slice(0, provMatch.index).replace(/[,\-\s]+$/, "").trim();
+      if (remainder) lines[lines.length - 1] = remainder;
+      else lines.pop();
+    }
+  }
+
+  out.streetAddress = lines[0] || "";
+  out.city = lines.slice(1).join(", ");
+  return out;
+}
+
 // resolveLineDescription — THE one description path for a PO line, shared
 // by every render surface (PDF, CSV, supplier email, and — mirrored — the
 // on-screen PO detail table) so they can never disagree. Pure:
@@ -235,4 +299,9 @@ function resolveLineDescription(line, partsMap) {
   return `(SKU ${sku})`;
 }
 
-module.exports = { formatUnit, formatVendorAddress, resolveLineDescription };
+module.exports = {
+  formatUnit,
+  formatVendorAddress,
+  parseCanadianAddress,
+  resolveLineDescription
+};

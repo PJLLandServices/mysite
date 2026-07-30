@@ -624,17 +624,72 @@ function paymentsBase() {
   return envCfg().environment === "production" ? PAYMENTS_BASE_PROD : PAYMENTS_BASE_SANDBOX;
 }
 
+// Build the Error thrown out of chargeCard on any failure, carrying the
+// structured Intuit detail alongside the human message (AVS brief, Jul
+// 2026). Before this, the raw Intuit string was the ONLY thing that
+// escaped — it went straight to the customer and nothing was recorded.
+// Now the caller gets `intuitCode` to map on, `intuitTid` to quote to
+// Intuit support, and the verbatim `intuitMessage` to persist on the
+// invoice. `err.message` stays operator-facing and is never shown to a
+// customer (server.js maps the code to customer copy).
+function chargeFailure(message, detail = {}) {
+  const err = new Error(message);
+  err.isChargeFailure = true;
+  err.intuitCode = detail.intuitCode || null;
+  err.intuitType = detail.intuitType || null;
+  err.intuitMessage = detail.intuitMessage || null;
+  err.intuitTid = detail.intuitTid || null;
+  err.httpStatus = Number.isFinite(Number(detail.httpStatus)) ? Number(detail.httpStatus) : null;
+  err.chargeStatus = detail.chargeStatus || null;
+  err.chargeId = detail.chargeId || null;
+  err.cardBrand = detail.cardBrand || null;
+  err.cardLast4 = detail.cardLast4 || null;
+  err.avsStreet = detail.avsStreet || null;
+  err.avsZip = detail.avsZip || null;
+  err.cvcMatch = detail.cvcMatch || null;
+  return err;
+}
+
+// Pull the AVS / card-identity facts out of a charge response. These are
+// the fields that tell Patrick WHY a charge behaved the way it did —
+// `avsStreet` / `avsZip` are exactly the signals the missing billing
+// street address was starving. `cardLast4` is derived from the masked
+// PAN Intuit echoes back ("xxxxxxxxxxxx1234"); brand + last four are
+// storable under PCI, the PAN itself never reaches this process.
+function cardFactsFrom(data) {
+  const card = data?.card || {};
+  const masked = String(card.number || "");
+  const last4 = masked.slice(-4);
+  return {
+    cardBrand: card.cardType || card.type || null,
+    cardLast4: /^\d{4}$/.test(last4) ? last4 : null,
+    avsStreet: card.avsStreet || null,
+    avsZip: card.avsZip || null,
+    cvcMatch: card.cardSecurityCodeMatch || null
+  };
+}
+
 // Charge a tokenized card. Throws on hard failure (declined, expired,
-// network error, invalid token). Returns { id, amount, currency, status }.
+// network error, invalid token) — always via chargeFailure(), so every
+// caller can rely on the structured fields being present. Returns
+// { id, amount, currency, status, intuitTid, ...card facts }.
+//
+// NOT IDEMPOTENT. A capture moves money. This function must never be
+// wrapped in an automatic retry, and the `Request-Id` below is random
+// per call precisely so a deliberate customer re-submit is a NEW charge
+// rather than a silently deduped no-op. See Hard Rule 22.
 async function chargeCard({ amountCents, currency = "CAD", cardToken, invoiceId, customerEmail }) {
-  if (!isConfigured()) throw new Error("QuickBooks credentials missing — set QB_CLIENT_ID + QB_CLIENT_SECRET in Render env vars.");
-  if (!(await isConnected())) throw new Error("QuickBooks not connected. The site administrator needs to reconnect via /admin/settings.");
+  // Pre-flight failures throw the same structured shape as an Intuit
+  // rejection (with no intuitCode) so the caller has exactly one error
+  // contract to record and map.
+  if (!isConfigured()) throw chargeFailure("QuickBooks credentials missing — set QB_CLIENT_ID + QB_CLIENT_SECRET in Render env vars.");
+  if (!(await isConnected())) throw chargeFailure("QuickBooks not connected. The site administrator needs to reconnect via /admin/settings.");
   const tokens = await getValidAccessToken();
   if (!Number.isFinite(amountCents) || amountCents <= 0) {
-    throw new Error("Charge amount must be a positive number of cents.");
+    throw chargeFailure("Charge amount must be a positive number of cents.");
   }
   if (!cardToken || typeof cardToken !== "string") {
-    throw new Error("Card token is missing.");
+    throw chargeFailure("Card token is missing.");
   }
 
   // Build the charge request. Per Intuit docs the v4 Charges API takes
@@ -674,15 +729,26 @@ async function chargeCard({ amountCents, currency = "CAD", cardToken, invoiceId,
   });
   const rawText = await r.clone().text().catch(() => "");
   const data = await r.json().catch(() => ({}));
+  const intuitTid = r.headers.get("intuit_tid") || null;
+  const facts = cardFactsFrom(data);
   if (!r.ok) {
     console.warn(
       "[charge] HTTP " + r.status +
-      " intuit_tid=" + (r.headers.get("intuit_tid") || "none") +
+      " intuit_tid=" + (intuitTid || "none") +
       " body=" + rawText.slice(0, 2000)
     );
     const detail = data?.errors?.[0] || data?.Errors?.[0] || data?.fault?.error?.[0] || data?.Fault?.Error?.[0] || data?.error || data;
     const msg = detail?.message || detail?.detail || JSON.stringify(detail).slice(0, 200);
-    throw new Error(`Charge failed (HTTP ${r.status}): ${msg}`);
+    throw chargeFailure(`Charge failed (HTTP ${r.status}): ${msg}`, {
+      ...facts,
+      intuitCode: detail?.code || null,
+      intuitType: detail?.type || null,
+      // Keep the moreInfo suffix — Intuit puts the actual reason there
+      // on several codes ("Incorrect address" carries the AVS result).
+      intuitMessage: [msg, detail?.moreInfo].filter(Boolean).join(" — ").slice(0, 500),
+      intuitTid,
+      httpStatus: r.status
+    });
   }
   const status = data?.status || data?.paymentStatus || "UNKNOWN";
   if (String(status).toUpperCase() !== "CAPTURED" && String(status).toUpperCase() !== "PAID") {
@@ -690,13 +756,30 @@ async function chargeCard({ amountCents, currency = "CAD", cardToken, invoiceId,
     // pending, etc. For PR 3 v1 we treat anything non-captured as a
     // declined charge so the customer sees a clear "try another card"
     // message rather than ambiguous "we have your money maybe."
-    throw new Error(`Charge not captured (status: ${status}).`);
+    const detail = data?.errors?.[0] || null;
+    console.warn(
+      "[charge] not captured status=" + status +
+      " intuit_tid=" + (intuitTid || "none") +
+      " body=" + rawText.slice(0, 2000)
+    );
+    throw chargeFailure(`Charge not captured (status: ${status}).`, {
+      ...facts,
+      intuitCode: detail?.code || null,
+      intuitType: detail?.type || null,
+      intuitMessage: [detail?.message || detail?.detail, detail?.moreInfo].filter(Boolean).join(" — ").slice(0, 500) || null,
+      intuitTid,
+      httpStatus: r.status,
+      chargeStatus: String(status),
+      chargeId: data?.id || data?.chargeId || null
+    });
   }
   return {
     id: data.id || data.chargeId,
     amount: data.amount,
     currency: data.currency,
-    status
+    status,
+    intuitTid,
+    ...facts
   };
 }
 

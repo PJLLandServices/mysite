@@ -2173,6 +2173,104 @@ function baseUrlFromReq(req) {
   return `${proto}://${host}`;
 }
 
+// ---------- Card-charge failure mapping (QB Payments AVS brief §4.4) ----
+//
+// Turns an Intuit charge rejection into copy a customer can act on. The
+// raw gateway string NEVER reaches the customer: it is verbatim gateway
+// jargon, it names Intuit rather than PJL, and on invoice I-2026-0044 it
+// was specific enough that the customer read it and self-diagnosed the
+// wrong cause ("it must be an Amex problem") — which is worse than an
+// honest generic message, because she stopped trying.
+//
+// Keyed on Intuit's `code`. The code table below is the published
+// QuickBooks Payments error set (PMT-1xxx fraud warnings, PMT-2xxx fraud
+// errors, PMT-3000 merchant validation, PMT-4xxx invalid request,
+// PMT-5xxx declines, PMT-6000 system). Anything unrecognized falls to
+// the generic case — and lands VERBATIM in the invoice's paymentAttempts
+// log, which is how a new code gets a mapping added here later. The
+// fallback is never a dead end: every message carries the office number.
+const CHARGE_FAILURE_KINDS = {
+  address: (phone) =>
+    "Your bank couldn't verify the billing address for this card. Please check that the " +
+    "street address and postal code match your credit card statement exactly, then try " +
+    `again. If it still won't go through, call us at ${phone} and we'll take the payment over the phone.`,
+  security_code: (phone) =>
+    "The security code didn't match. That's the 3 digits on the back of most cards, or the " +
+    "4 digits on the front of an American Express. Please re-enter it and try again, or call " +
+    `us at ${phone}.`,
+  card_not_accepted: (phone) =>
+    "We're not able to accept this card type. Please try a different card, pay by e-Transfer " +
+    `using the address below, or call us at ${phone} and we'll sort it out.`,
+  declined: (phone) =>
+    "Your bank declined the charge. Nothing was taken from your account. This is usually a " +
+    "hold your bank has placed on a larger-than-usual online purchase — a quick call to the " +
+    "number on the back of your card normally clears it. You can also try a different card, " +
+    `pay by e-Transfer using the address below, or call us at ${phone}.`,
+  expired: (phone) =>
+    "That card has expired. Please try a different card, or call us at " + phone + " and we'll " +
+    "take the payment over the phone.",
+  temporary: (phone) =>
+    "The payment processor is having a temporary problem. Nothing was charged. Please wait a " +
+    `minute and try again, or call us at ${phone}.`,
+  unknown: (phone) =>
+    "We couldn't complete this payment, and nothing was charged to your card. Please call us " +
+    `at ${phone} and we'll take it over the phone or send you an e-Transfer request — we've ` +
+    "logged the details on our side so you won't have to explain it twice."
+};
+
+const INTUIT_CODE_KINDS = {
+  // Fraud warnings — the charge went through but verification flagged.
+  // Reachable here only when the non-captured branch throws on them.
+  "PMT-1001": "security_code",
+  "PMT-1002": "address",
+  "PMT-1003": "address",
+  // Fraud errors — the charge was stopped by verification. PMT-2002 is
+  // the AVS/address mismatch this whole brief exists to prevent.
+  "PMT-2000": "security_code",
+  "PMT-2001": "security_code",
+  "PMT-2002": "address",
+  "PMT-2003": "address",
+  // Merchant account could not be validated — PJL-side, not the card.
+  "PMT-3000": "temporary",
+  // Invalid request — a bug or a malformed field on our side.
+  "PMT-4000": "temporary",
+  "PMT-4001": "temporary",
+  "PMT-4002": "temporary",
+  // Declines.
+  "PMT-5000": "declined",
+  "PMT-5001": "card_not_accepted",
+  // System error.
+  "PMT-6000": "temporary"
+};
+
+// Returns { code, kind, customerMessage }. `code` is Intuit's code (or a
+// synthetic "NO_CODE") and is returned to the client for support
+// reference only — it is an opaque token, not a gateway string.
+function describeChargeFailure(err, supportPhone) {
+  const phone = supportPhone || "(905) 960-0181";
+  const code = err?.intuitCode || null;
+  const text = `${err?.intuitMessage || ""} ${err?.message || ""}`.toLowerCase();
+
+  // Expiry has no code of its own — Intuit reports it as a decline with
+  // "expired" in the message — so the text check runs FIRST, otherwise
+  // an expired card reads as a generic bank decline and the customer
+  // calls their bank instead of grabbing their new card.
+  let kind = null;
+  if (/expir/.test(text)) kind = "expired";
+  else if (code && INTUIT_CODE_KINDS[code]) kind = INTUIT_CODE_KINDS[code];
+  else if (/\bavs\b|address/.test(text)) kind = "address";
+  else if (/security code|\bcvc\b|\bcvv\b|\bcid\b/.test(text)) kind = "security_code";
+  else if (/not supported|unsupported|payment method/.test(text)) kind = "card_not_accepted";
+  else if (/declin/.test(text)) kind = "declined";
+  else kind = "unknown";
+
+  return {
+    code: code || "NO_CODE",
+    kind,
+    customerMessage: CHARGE_FAILURE_KINDS[kind](phone)
+  };
+}
+
 // Build a URL by joining a path onto a base, using the URL constructor so
 // edge cases (trailing slash on base, leading slash on path, query strings)
 // are handled correctly. Returns a string. Used for every customer-facing
@@ -7107,9 +7205,16 @@ async function handleApi(req, res, pathname) {
   //   POST /api/webhooks/quickbooks-payments          — async settle/refund/etc
   //
   // PCI scope: card data NEVER reaches this server. The /charge endpoint
-  // accepts a tokenized card reference (from the Intuit-hosted iframe),
-  // calls the Intuit Payments API server-to-server, and records the
-  // result. We stay in PCI SAQ-A scope because we never see PAN.
+  // accepts a tokenized card reference (the browser POSTs the card
+  // straight to api.intuit.com), calls the Intuit Payments API
+  // server-to-server, and records the result. We stay in PCI SAQ-A-EP
+  // scope because we never see PAN, CVC or expiry. Billing ADDRESS
+  // fields are not card data and are safe here — they are how the
+  // charge passes AVS. See Hard Rule 23.
+  //
+  // A capture is NOT idempotent (Hard Rule 22): there is no automatic
+  // retry anywhere in this path. A failed attempt records and stops; the
+  // customer re-submits deliberately.
 
   // GET /api/pay/invoice/:id — public invoice read (sanitized).
   const publicInvoiceMatch = pathname.match(/^\/api\/pay\/invoice\/([^/]+)$/);
@@ -7139,7 +7244,26 @@ async function handleApi(req, res, pathname) {
         total: inv.total,
         currency: inv.currency,
         quickbooksChargeId: inv.quickbooksChargeId,
-        eTransferEmail: process.env.ETRANSFER_EMAIL || "info@pjllandservices.com"
+        eTransferEmail: process.env.ETRANSFER_EMAIL || "info@pjllandservices.com",
+        // Billing-address pre-fill for the AVS fields (AVS brief §4.1).
+        // Derived from the invoice's OWN bill-to snapshot, falling back
+        // to the service address — never a live customer lookup, so it
+        // matches the document the customer is holding. Every field is
+        // editable on the page: the card's billing address is often not
+        // the service address, and a wrong pre-fill that the customer
+        // can correct is strictly better than an empty field.
+        //
+        // Safe to expose: the caller already holds the paymentToken and
+        // is looking at the invoice this address was billed to.
+        billingPrefill: (() => {
+          const { parseCanadianAddress } = require("./lib/format");
+          const source = (inv.billTo && inv.billTo.address) || inv.address || "";
+          const parsed = parseCanadianAddress(source);
+          return {
+            streetAddress: parsed.streetAddress,
+            postalCode: parsed.postalCode
+          };
+        })()
       };
       return sendJson(res, 200, { ok: true, invoice: safe });
     } catch (err) {
@@ -7171,10 +7295,20 @@ async function handleApi(req, res, pathname) {
       const tokenizeUrl = cfg.environment === "production"
         ? "https://api.intuit.com/quickbooks/v4/payments/tokens"
         : "https://sandbox.api.intuit.com/quickbooks/v4/payments/tokens";
+      // Accepted card brands come from settings, never a hardcoded list
+      // (AVS brief §4.5) — Amex acceptance is a merchant-account setting
+      // on Intuit's side, and flipping it here needs no deploy.
+      const paySettings = await settings.get();
+      const acceptedCardBrands = paySettings.payments.acceptedCardBrands.map((slug) => ({
+        slug,
+        label: settings.CARD_BRAND_LABELS[slug] || slug
+      }));
       return sendJson(res, 200, {
         ok: true,
         environment: cfg.environment,
         tokenizeUrl,
+        acceptedCardBrands,
+        supportPhone: paySettings.contactInfo.customerSupportPhone,
         // ReCAPTCHA v3 site key — safe to ship publicly. Server-side
         // verification uses RECAPTCHA_SECRET_KEY which never leaves
         // Render. If neither env var is set the field is empty and
@@ -7258,8 +7392,15 @@ async function handleApi(req, res, pathname) {
       }
 
       // Charge via QB Payments. quickbooks.chargeCard handles OAuth +
-      // the charges API; throws on hard failures (declined, expired,
-      // network, etc) which we surface as 400 to the client.
+      // the charges API; throws a structured failure (declined, expired,
+      // network, etc) which we record on the invoice and surface as a
+      // MAPPED, customer-legible 400. There is no retry here and there
+      // must never be one — a capture is not idempotent (Hard Rule 22).
+      const chargeSupportPhone = await (async () => {
+        try { return (await settings.get()).contactInfo.customerSupportPhone; }
+        catch { return "(905) 960-0181"; }
+      })();
+      const chargeAmount = Number(inv.total) || 0;
       let chargeResult;
       try {
         chargeResult = await quickbooks.chargeCard({
@@ -7270,8 +7411,67 @@ async function handleApi(req, res, pathname) {
           customerEmail: inv.customerEmail
         });
       } catch (chargeErr) {
-        console.warn(`[charge] failed for ${inv.id}: ${chargeErr.message}`);
-        return sendJson(res, 400, { ok: false, errors: [chargeErr.message || "Card was declined."] });
+        console.warn(
+          `[charge] failed for ${inv.id}: ${chargeErr.message}` +
+          ` code=${chargeErr.intuitCode || "none"} intuit_tid=${chargeErr.intuitTid || "none"}`
+        );
+        const mapped = describeChargeFailure(chargeErr, chargeSupportPhone);
+        // Persist the attempt BEFORE responding. This is the record that
+        // did not exist before — a failed charge used to leave nothing
+        // behind but a Render log line.
+        try {
+          await invoices.appendPaymentAttempt(inv.id, {
+            outcome: "failure",
+            amount: chargeAmount,
+            currency: inv.currency || "CAD",
+            httpStatus: chargeErr.httpStatus,
+            chargeStatus: chargeErr.chargeStatus,
+            chargeId: chargeErr.chargeId,
+            intuitCode: chargeErr.intuitCode,
+            intuitMessage: chargeErr.intuitMessage || chargeErr.message,
+            intuitTid: chargeErr.intuitTid,
+            customerMessage: mapped.customerMessage,
+            cardBrand: chargeErr.cardBrand,
+            cardLast4: chargeErr.cardLast4,
+            avsStreet: chargeErr.avsStreet,
+            avsZip: chargeErr.avsZip,
+            cvcMatch: chargeErr.cvcMatch
+          });
+        } catch (recordErr) {
+          // Losing the audit record must not change what the customer
+          // sees, but it IS loud in the logs — this is the one write
+          // whose whole purpose is visibility.
+          console.error(`[charge] FAILED TO RECORD ATTEMPT on ${inv.id}: ${recordErr.message}`);
+        }
+        // The raw Intuit string never leaves this function.
+        return sendJson(res, 400, {
+          ok: false,
+          code: mapped.code,
+          errors: [mapped.customerMessage]
+        });
+      }
+
+      // Success — record the attempt with the same shape, so the invoice
+      // carries the complete story (three declines then an approval) and
+      // the AVS verdict on the charge that actually went through.
+      try {
+        await invoices.appendPaymentAttempt(inv.id, {
+          outcome: "success",
+          amount: chargeAmount,
+          currency: chargeResult.currency || inv.currency || "CAD",
+          httpStatus: 200,
+          chargeId: chargeResult.id,
+          chargeStatus: chargeResult.status,
+          intuitTid: chargeResult.intuitTid,
+          customerMessage: "Payment received.",
+          cardBrand: chargeResult.cardBrand,
+          cardLast4: chargeResult.cardLast4,
+          avsStreet: chargeResult.avsStreet,
+          avsZip: chargeResult.avsZip,
+          cvcMatch: chargeResult.cvcMatch
+        });
+      } catch (recordErr) {
+        console.error(`[charge] FAILED TO RECORD SUCCESSFUL ATTEMPT on ${inv.id}: ${recordErr.message}`);
       }
 
       // Record the QB Payment record so the QB invoice shows paid. Best
@@ -9630,7 +9830,14 @@ async function handleApi(req, res, pathname) {
 
   if (req.method === "GET" && pathname === "/api/settings") {
     const s = await settings.get();
-    return sendJson(res, 200, { ok: true, settings: s, modes: settings.NOTIFY_MODES });
+    return sendJson(res, 200, {
+      ok: true,
+      settings: s,
+      modes: settings.NOTIFY_MODES,
+      // Catalog for the accepted-card-brands control — the full set of
+      // slugs the pay page knows how to label, not the accepted subset.
+      cardBrands: settings.CARD_BRANDS.map((slug) => ({ slug, label: settings.CARD_BRAND_LABELS[slug] }))
+    });
   }
   if (req.method === "PATCH" && pathname === "/api/settings/admin-defaults") {
     try {
@@ -9652,6 +9859,25 @@ async function handleApi(req, res, pathname) {
       return sendJson(res, 200, { ok: true, settings: updated });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't update contact info."] });
+    }
+  }
+  // Payments — the card brands the merchant account accepts, displayed
+  // on the public pay page. Body: { acceptedCardBrands: ["visa", ...] }.
+  // Slugs come from settings.CARD_BRANDS; unknown ones are dropped and
+  // an empty result is refused. Changing Amex acceptance in QuickBooks
+  // is an Intuit-side action — this endpoint keeps the customer-facing
+  // page honest about it without a deploy.
+  if (req.method === "PATCH" && pathname === "/api/settings/payments") {
+    try {
+      const payload = await parseRequestBody(req);
+      const updated = await settings.updatePayments(payload, { who: "admin" });
+      return sendJson(res, 200, {
+        ok: true,
+        settings: updated,
+        cardBrands: settings.CARD_BRANDS.map((slug) => ({ slug, label: settings.CARD_BRAND_LABELS[slug] }))
+      });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't update payment settings."] });
     }
   }
   // Deposits — threshold-based deposit on quotations. Threshold, default
