@@ -197,6 +197,10 @@ async function initPaymentForm() {
     });
     if ($stripeMount) $stripeMount.innerHTML = "";
     paymentElement.mount("#payStripeElement");
+    // Wallet fast path — the one-tap Apple Pay / Google Pay button above
+    // the card form. Mounted from the same Elements group so it shares
+    // the amount, currency and card-only method pinning.
+    mountExpressCheckout();
   } catch (err) {
     console.error("[pay] Stripe init failed:", err);
     disablePayments(`The secure card form couldn't load. Please pay by e-Transfer below, or call us at ${supportPhone}.`);
@@ -330,77 +334,32 @@ async function reportFailure(paymentIntentId) {
   } catch { return null; }
 }
 
-// ---- Pay click: submit → intent → confirm → finalize -------------------
-$chargeBtn?.addEventListener("click", async () => {
-  if (!currentInvoice || !stripeClient || !stripeElements) {
-    setStatus(`Payment processor not ready. Use e-Transfer or call ${supportPhone}.`, "error");
-    return;
-  }
-  if (!paymentElementReady) {
-    setStatus("The card form is still loading — one moment…", "info");
-    return;
-  }
+// ---- Shared payment pipeline -------------------------------------------
+// Used by BOTH the card Pay button and the express (Apple Pay / Google
+// Pay) button — one pipeline, so the two flows can never drift in how
+// they create intents, report failures, or finalize.
 
-  $chargeBtn.disabled = true;
-  setStatus("Checking your card details…", "info");
-
-  // 1. Element-side validation (card number, expiry, CVC — including
-  //    Amex 15/4). Errors surface inline inside the Element itself.
-  const { error: submitError } = await stripeElements.submit();
-  if (submitError) {
-    setStatus(submitError.message || "Please check your card details and try again.", "error");
-    $chargeBtn.disabled = false;
-    return;
-  }
-
-  // 2. reCAPTCHA, then ask OUR server for the PaymentIntent. The amount
-  //    comes from the invoice server-side — nothing this page could lie
-  //    about.
-  let recaptchaToken = null;
-  try {
-    recaptchaToken = await getRecaptchaToken();
-  } catch (err) {
-    setStatus(err.message || "Couldn't verify you're human.", "error");
-    $chargeBtn.disabled = false;
-    return;
-  }
-
-  setStatus("Preparing your payment…", "info");
-  let clientSecret = null;
-  let paymentIntentId = null;
-  try {
-    const r = await fetch(`/api/pay/invoice/${encodeURIComponent(currentInvoice.id)}/payment-intent`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ t: token, recaptchaToken })
-    });
-    const data = await r.json().catch(() => ({}));
-    if (!r.ok || !data.ok || !data.clientSecret) {
-      throw new Error(data?.errors?.[0] || `We couldn't start the payment. Please try again, or call us at ${supportPhone}.`);
-    }
-    clientSecret = data.clientSecret;
-    paymentIntentId = data.paymentIntentId;
-  } catch (err) {
-    setStatus(err.message, "error");
-    $chargeBtn.disabled = false;
-    return;
-  }
-
-  // 3. Confirm — browser ↔ Stripe directly. Billing details (postal +
-  //    country) come from the Element's own fields, wallet flows bring
-  //    their own. redirect:"if_required" — cards and wallets settle
-  //    in-page; the server disallows redirect-based methods on the
-  //    intent.
-  setStatus("Processing your payment…", "info");
-  const { error: confirmError, paymentIntent } = await stripeClient.confirmPayment({
-    elements: stripeElements,
-    clientSecret,
-    redirect: "if_required",
-    confirmParams: {
-      return_url: `${location.origin}/pay/invoice/${encodeURIComponent(currentInvoice.id)}/thanks?t=${encodeURIComponent(token)}`
-    }
+// reCAPTCHA → ask OUR server for the PaymentIntent. The amount comes
+// from the invoice server-side — nothing this page could lie about.
+// Throws with a customer-ready message on any failure.
+async function createIntentOnServer() {
+  const recaptchaToken = await getRecaptchaToken();
+  const r = await fetch(`/api/pay/invoice/${encodeURIComponent(currentInvoice.id)}/payment-intent`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ t: token, recaptchaToken })
   });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok || !data.ok || !data.clientSecret) {
+    throw new Error(data?.errors?.[0] || `We couldn't start the payment. Please try again, or call us at ${supportPhone}.`);
+  }
+  return { clientSecret: data.clientSecret, paymentIntentId: data.paymentIntentId };
+}
 
+// Everything after stripe.confirmPayment resolves — identical for card
+// and wallet flows. Returns true when the payment reached a terminal
+// success (so callers can stop re-enabling buttons).
+async function handleConfirmOutcome(confirmError, paymentIntent, paymentIntentId) {
   if (confirmError) {
     // Stripe's card_error messages are written for customers, but our
     // mapped copy carries the office number and the next step — ask the
@@ -411,17 +370,17 @@ $chargeBtn?.addEventListener("click", async () => {
     // Deliberate-human-retry only (Hard Rule 22): re-enabling the button
     // is the one and only retry path.
     $chargeBtn.disabled = false;
-    return;
+    return false;
   }
 
   if (!paymentIntent || paymentIntent.status !== "succeeded") {
     // requires_action fell through, or processing. Don't guess — the
     // webhook will finalize if it succeeds; tell the customer the truth.
     setStatus(`Your bank is still processing this payment. Don't pay again — call us at ${supportPhone} if you don't get a receipt within a few minutes.`, "info");
-    return;
+    return false;
   }
 
-  // 4. Tell our server to verify with Stripe and flip the invoice.
+  // Tell our server to verify with Stripe and flip the invoice.
   setStatus("Payment approved — updating your invoice…", "info");
   try {
     const r = await fetch(`/api/pay/invoice/${encodeURIComponent(currentInvoice.id)}/charge`, {
@@ -441,6 +400,111 @@ $chargeBtn?.addEventListener("click", async () => {
     // the customer must hear is "do not pay twice."
     setStatus(err.message || `Your payment went through — the receipt may take a few minutes. Please DON'T pay again. Questions? ${supportPhone}.`, "info");
   }
+  return true;
+}
+
+// ---- Card Pay button: submit → intent → confirm → finalize --------------
+$chargeBtn?.addEventListener("click", async () => {
+  if (!currentInvoice || !stripeClient || !stripeElements) {
+    setStatus(`Payment processor not ready. Use e-Transfer or call ${supportPhone}.`, "error");
+    return;
+  }
+  if (!paymentElementReady) {
+    setStatus("The card form is still loading — one moment…", "info");
+    return;
+  }
+
+  $chargeBtn.disabled = true;
+  setStatus("Checking your card details…", "info");
+
+  // Element-side validation (card number, expiry, CVC — including
+  // Amex 15/4). Errors surface inline inside the Element itself.
+  const { error: submitError } = await stripeElements.submit();
+  if (submitError) {
+    setStatus(submitError.message || "Please check your card details and try again.", "error");
+    $chargeBtn.disabled = false;
+    return;
+  }
+
+  setStatus("Preparing your payment…", "info");
+  let intentRef;
+  try {
+    intentRef = await createIntentOnServer();
+  } catch (err) {
+    setStatus(err.message, "error");
+    $chargeBtn.disabled = false;
+    return;
+  }
+
+  // Confirm — browser ↔ Stripe directly. Billing details (postal +
+  // country) come from the Element's own fields. redirect:"if_required"
+  // — cards settle in-page; the server disallows redirect methods.
+  setStatus("Processing your payment…", "info");
+  const { error: confirmError, paymentIntent } = await stripeClient.confirmPayment({
+    elements: stripeElements,
+    clientSecret: intentRef.clientSecret,
+    redirect: "if_required",
+    confirmParams: {
+      return_url: `${location.origin}/pay/invoice/${encodeURIComponent(currentInvoice.id)}/thanks?t=${encodeURIComponent(token)}`
+    }
+  });
+  await handleConfirmOutcome(confirmError, paymentIntent, intentRef.paymentIntentId);
 });
+
+// ---- Express checkout (Apple Pay / Google Pay): sheet-first --------------
+// The wallet sheet opens on FIRST tap of the wallet button; the intent
+// is created while the sheet is up (deferred-intent pattern), and after
+// the customer authorizes, the same confirm/finalize pipeline runs.
+// Called from initPaymentForm once the Elements group exists.
+function mountExpressCheckout() {
+  const $section = document.getElementById("payExpressSection");
+  const $mount = document.getElementById("payExpressCheckout");
+  if (!$section || !$mount) return;
+  try {
+    const expressElement = stripeElements.create("expressCheckout", {
+      buttonHeight: 48
+    });
+    // Only reveal the block when a wallet is genuinely available on
+    // this device — availablePaymentMethods is undefined otherwise, and
+    // non-wallet users should never see an empty box or a divider.
+    expressElement.on("ready", (ev) => {
+      if (ev.availablePaymentMethods) $section.hidden = false;
+    });
+    // Apple requires the sheet to open synchronously with the tap —
+    // resolve immediately; server work happens in "confirm" below
+    // while the sheet shows its processing state.
+    expressElement.on("click", (ev) => ev.resolve());
+    expressElement.on("confirm", async (ev) => {
+      $chargeBtn.disabled = true;
+      setStatus("Processing your payment…", "info");
+      try {
+        const { error: submitError } = await stripeElements.submit();
+        if (submitError) throw new Error(submitError.message || "Please check the payment details and try again.");
+        const intentRef = await createIntentOnServer();
+        const { error: confirmError, paymentIntent } = await stripeClient.confirmPayment({
+          elements: stripeElements,
+          clientSecret: intentRef.clientSecret,
+          redirect: "if_required",
+          confirmParams: {
+            return_url: `${location.origin}/pay/invoice/${encodeURIComponent(currentInvoice.id)}/thanks?t=${encodeURIComponent(token)}`
+          }
+        });
+        await handleConfirmOutcome(confirmError, paymentIntent, intentRef.paymentIntentId);
+      } catch (err) {
+        // Pre-confirm failure (validation, reCAPTCHA, intent creation) —
+        // dismiss the wallet sheet with a failure state, then show the
+        // message on the page. No money moved.
+        try { ev.paymentFailed?.({ reason: "fail" }); } catch (_) { /* sheet already closed */ }
+        setStatus(err.message || `Payment couldn't be completed. Please call us at ${supportPhone}.`, "error");
+        $chargeBtn.disabled = false;
+      }
+    });
+    expressElement.mount("#payExpressCheckout");
+  } catch (err) {
+    // Express checkout is an enhancement — the card form below is the
+    // dependable path. Never let a wallet-button failure break the page.
+    console.warn("[pay] express checkout unavailable:", err?.message);
+  }
+}
 
 load();

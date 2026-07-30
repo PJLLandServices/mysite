@@ -300,6 +300,30 @@ a:hover { text-decoration: underline; }
 .pay-stripe-element {
   min-height: 90px;
 }
+
+/* Express checkout — the one-tap Apple Pay / Google Pay button above
+   the card form. Hidden until Stripe confirms a wallet exists on this
+   device (pay.js flips the section's hidden attribute on ready). */
+.pay-express {
+  margin: 0 0 20px;
+}
+.pay-express-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 18px 0 0;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.pay-express-divider::before,
+.pay-express-divider::after {
+  content: "";
+  flex: 1;
+  border-top: 1px solid var(--border);
+}
 .pay-stripe-loading {
   margin: 0;
   padding: 24px 0;

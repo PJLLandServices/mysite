@@ -102,6 +102,21 @@
           Google Pay render inside the Element automatically once the
           domain's wallet verification passes in Stripe.
         -->
+        <!--
+          Express checkout (Jul 2026) — a dedicated Apple Pay / Google
+          Pay button that opens the wallet sheet on FIRST tap. Inside
+          the tabbed Payment Element below, a wallet is only a method
+          *selection* and the sheet can't open until the main Pay button
+          is pressed (Apple requires a gesture on a real wallet button)
+          — a two-tap flow customers read as broken. Stays hidden until
+          Stripe confirms a wallet is actually available on this device,
+          so non-Apple users never see an empty box.
+        -->
+        <div class="pay-express" id="payExpressSection" hidden>
+          <div id="payExpressCheckout"></div>
+          <div class="pay-express-divider"><span>or pay with card</span></div>
+        </div>
+
         <form id="payCardForm" class="pay-card-form-wrap" autocomplete="on" novalidate>
           <div class="pay-field pay-field--full">
             <span class="pay-field-label">Card details</span>
