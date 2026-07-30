@@ -19081,6 +19081,44 @@ const server = http.createServer(async (req, res) => {
       }
     }
 
+    // Apple Pay domain verification (Stripe migration follow-up, Jul
+    // 2026). Stripe verifies pjllandservices.com by fetching this exact
+    // path; until it succeeds the Payment Element never shows Apple Pay.
+    // The file is Stripe's, not ours, and Stripe rotates it occasionally
+    // — a committed copy goes stale and silently breaks re-verification.
+    // So relay it live from Stripe with an in-memory cache: 24h TTL,
+    // and on a fetch failure serve the last good copy rather than 404ing
+    // a verification probe. No auth — the file is public by design.
+    if (req.method === "GET" && pathname === "/.well-known/apple-developer-merchantid-domain-association") {
+      const now = Date.now();
+      const cache = global.__applePayDomainFileCache || (global.__applePayDomainFileCache = { body: null, fetchedAt: 0 });
+      if (!cache.body || now - cache.fetchedAt > 24 * 60 * 60 * 1000) {
+        try {
+          const r = await fetch("https://stripe.com/files/apple-pay/apple-developer-merchantid-domain-association");
+          if (r.ok) {
+            cache.body = Buffer.from(await r.arrayBuffer());
+            cache.fetchedAt = now;
+          } else if (!cache.body) {
+            console.warn(`[apple-pay-domain] upstream fetch HTTP ${r.status} and no cached copy`);
+          }
+        } catch (fetchErr) {
+          console.warn(`[apple-pay-domain] upstream fetch failed: ${fetchErr.message}${cache.body ? " — serving cached copy" : " and no cached copy"}`);
+        }
+      }
+      if (!cache.body) {
+        res.writeHead(503, { "content-type": "text/plain" });
+        res.end("Verification file temporarily unavailable.");
+        return;
+      }
+      res.writeHead(200, {
+        "content-type": "text/plain",
+        "content-length": cache.body.length,
+        "cache-control": "public, max-age=3600"
+      });
+      res.end(cache.body);
+      return;
+    }
+
     // /portal/<token> — server-side Open Graph substitution before
     // serveStatic. Pasting a portal link into iMessage / Slack /
     // Facebook produces a personalized preview card with the
