@@ -3,17 +3,19 @@
 //
 // Flow (deferred-intent pattern):
 //   1. Load invoice summary from /api/pay/invoice/:id?t=<token>.
-//   2. Render the summary card; pre-fill the AVS fields from the
-//      invoice's bill-to snapshot.
+//   2. Render the summary card.
 //   3. Load /sdk-config → Stripe publishable key, amount, brands,
 //      support phone, reCAPTCHA site key.
 //   4. Mount Stripe's Payment Element (card fields live in a Stripe
-//      iframe — they never exist in this page's DOM).
-//   5. On Pay click: validate our fields → elements.submit() →
-//      reCAPTCHA → POST /payment-intent (server creates/reuses the
-//      PaymentIntent, amount comes from the INVOICE, never from here) →
-//      stripe.confirmPayment (browser ↔ Stripe directly; our name +
-//      street + postal ride along as billing_details for AVS).
+//      iframe — they never exist in this page's DOM). The Element
+//      collects card number, expiry, CVC, and billing postal + country
+//      (postal pre-filled from the invoice's bill-to snapshot via
+//      defaultValues); Apple Pay / Google Pay render inside it when the
+//      device qualifies and the domain's wallet verification passed.
+//   5. On Pay click: elements.submit() → reCAPTCHA →
+//      POST /payment-intent (server creates/reuses the PaymentIntent,
+//      amount comes from the INVOICE, never from here) →
+//      stripe.confirmPayment (browser ↔ Stripe directly).
 //   6. Decline → report the intent id to /payment-failed so the server
 //      pulls the verified failure from Stripe onto the invoice's
 //      attempt log, and show the mapped message.
@@ -45,9 +47,6 @@ const $chargeBtnAmount = document.getElementById("payChargeBtnAmount");
 const $chargeStatus = document.getElementById("payChargeStatus");
 const $testBanner = document.getElementById("payTestBanner");
 
-const $name = document.getElementById("payCardName");
-const $street = document.getElementById("payCardStreet");
-const $postal = document.getElementById("payCardPostal");
 const $acceptedBrands = document.getElementById("payAcceptedBrands");
 const $stripeMount = document.getElementById("payStripeElement");
 
@@ -93,45 +92,9 @@ function disablePayments(message) {
   $chargeBtn.disabled = true;
 }
 
-// ---- Postal code normalization ----------------------------------------
-// Uppercase, strip whitespace and hyphens, then validate. Canadian
-// postal codes exclude D, F, I, O, Q, U everywhere and additionally
-// W and Z in the leading position. US ZIPs are accepted and flip the
-// country code — a US billing postal sent as "CA" is a guaranteed AVS
-// mismatch. (Card number / CVC validation now lives inside Stripe's
-// Payment Element, including Amex 15/4 — no PAN logic in this file.)
-const CA_POSTAL_RE = /^[ABCEGHJ-NPRSTVXY]\d[ABCEGHJ-NPRSTV-Z]\d[ABCEGHJ-NPRSTV-Z]\d$/;
-function normalizePostal(raw) {
-  const compact = String(raw || "").toUpperCase().replace(/[\s\-]/g, "");
-  if (CA_POSTAL_RE.test(compact)) {
-    return {
-      ok: true,
-      country: "CA",
-      display: `${compact.slice(0, 3)} ${compact.slice(3)}`,
-      wire: compact
-    };
-  }
-  if (/^\d{5}$/.test(compact)) {
-    return { ok: true, country: "US", display: compact, wire: compact };
-  }
-  if (/^\d{9}$/.test(compact)) {
-    const zip = `${compact.slice(0, 5)}-${compact.slice(5)}`;
-    return { ok: true, country: "US", display: zip, wire: zip };
-  }
-  return { ok: false };
-}
-
-// ---- Light input handling ----------------------------------------------
-$name?.addEventListener("input", () => $name.classList.remove("pay-field--invalid"));
-$street?.addEventListener("input", () => $street.classList.remove("pay-field--invalid"));
-$postal?.addEventListener("input", () => $postal.classList.remove("pay-field--invalid"));
-// Re-render the postal code in its canonical form once the customer
-// leaves the field — "l3x0a5" becomes "L3X 0A5" in front of them, so
-// what they see is what gets sent.
-$postal?.addEventListener("blur", () => {
-  const parsed = normalizePostal($postal.value);
-  if (parsed.ok) $postal.value = parsed.display;
-});
+// All card-side input handling — number, expiry, CVC, postal format —
+// lives inside Stripe's Payment Element now (including Amex 15/4).
+// This file has no card or address fields of its own.
 
 // ---- Load invoice + payment config -------------------------------------
 async function load() {
@@ -188,11 +151,10 @@ async function initPaymentForm() {
       // MUST match payment_method_types on the server-created intent
       // (stripe.js createPaymentIntent) — deferred-intent rules: if the
       // Element offers a method the intent doesn't allow, confirmPayment
-      // fails after the customer already picked it. Card carries Apple
-      // Pay / Google Pay; Link is Stripe's one-click. No redirect-based
-      // methods (Klarna etc.) — the account has them enabled, this page
-      // does not offer them.
-      paymentMethodTypes: ["card", "link"],
+      // fails after the customer already picked it. Card only: it
+      // carries Apple Pay / Google Pay. Link was removed (Jul 2026,
+      // Patrick's request) — its save-my-info block dominated the form.
+      paymentMethodTypes: ["card"],
       appearance: {
         variables: {
           colorPrimary: "#1B4D2E",
@@ -203,19 +165,30 @@ async function initPaymentForm() {
         }
       }
     });
+    // Slim form (Jul 2026, Patrick's request): the Element collects only
+    // what Stripe requires for a card — number, expiry, CVC, and the
+    // billing postal code + country it asks for natively. The custom
+    // name/street/postal fields from the QuickBooks-era AVS work are
+    // gone: Stripe's rail runs postal-only address verification by
+    // default (the live Amex test passed full AVS), and the street
+    // field's job is done. If Amex declines ever resurface, re-add
+    // address collection with fields.billingDetails.address: "full"
+    // here — one line — rather than rebuilding custom inputs.
+    const prefillPostal = currentInvoice?.billingPrefill?.postalCode || "";
     paymentElement = stripeElements.create("payment", {
       layout: "tabs",
-      // We collect name + street + postal in OUR fields (pre-filled from
-      // the invoice, AVS brief §4.1) and pass them at confirm time.
-      // "never" tells the Element not to duplicate them — Stripe then
-      // REQUIRES them in confirmPayment's billing_details, which
-      // validate() guarantees.
-      fields: {
-        billingDetails: {
-          name: "never",
-          address: { line1: "never", postalCode: "never", country: "never" }
-        }
-      }
+      // Explicit for the next reader: wallets ride the card rail and
+      // "auto" (also the default) shows them whenever the device
+      // qualifies AND the domain's wallet verification has passed in
+      // Stripe → Settings → Payment method domains. No code can force
+      // the Apple Pay button past a failed domain verification.
+      wallets: { applePay: "auto", googlePay: "auto" },
+      // Pre-fill the Element's own postal field from the invoice's
+      // bill-to snapshot — same courtesy the custom field used to do,
+      // still fully editable by the customer.
+      defaultValues: prefillPostal ? {
+        billingDetails: { address: { postal_code: prefillPostal, country: "CA" } }
+      } : undefined
     });
     paymentElement.on("ready", () => { paymentElementReady = true; });
     paymentElement.on("loaderror", (ev) => {
@@ -242,20 +215,6 @@ function renderAcceptedBrands(brands) {
     : `${labels.slice(0, -1).join(", ")} and ${labels[labels.length - 1]}`;
   $acceptedBrands.textContent = `We accept ${list}.`;
   $acceptedBrands.hidden = false;
-}
-
-// Pre-fill the AVS fields from the invoice's bill-to snapshot. Only ever
-// fills an EMPTY field, so a customer who already started typing (or a
-// browser autofill that got there first) is never overwritten.
-function prefillBillingAddress(prefill) {
-  if (!prefill || typeof prefill !== "object") return;
-  if ($street && !$street.value.trim() && prefill.streetAddress) {
-    $street.value = String(prefill.streetAddress).slice(0, 120);
-  }
-  if ($postal && !$postal.value.trim() && prefill.postalCode) {
-    const parsed = normalizePostal(prefill.postalCode);
-    $postal.value = parsed.ok ? parsed.display : String(prefill.postalCode).slice(0, 10);
-  }
 }
 
 function render(inv) {
@@ -309,31 +268,8 @@ function render(inv) {
   }
 
   // Status is sent (or draft, edge case) — form section already visible.
-  prefillBillingAddress(inv.billingPrefill);
-}
-
-// ---- Validation -------------------------------------------------------
-// Our three fields only — card number/expiry/CVC validation (including
-// Amex's 15-digit PAN + 4-digit CID) is Stripe's job inside the Element.
-// Returns null when good, or a specific message to show.
-function validate() {
-  function flag(el, message) {
-    el.classList.add("pay-field--invalid");
-    el.focus();
-    return message;
-  }
-  if (!$name.value.trim()) {
-    return flag($name, "Please enter the cardholder name exactly as it appears on the card.");
-  }
-  if (!$street.value.trim()) {
-    return flag($street, "Please enter the billing street address for this card — your bank checks it against your statement.");
-  }
-  const postal = normalizePostal($postal.value);
-  if (!postal.ok) {
-    return flag($postal, "That postal code doesn't look right. Canadian codes look like L3X 0A5.");
-  }
-  $postal.value = postal.display;
-  return null;
+  // The Element's postal pre-fill happens at initPaymentForm() via
+  // defaultValues, from the same invoice billingPrefill.
 }
 
 // ---- ReCAPTCHA v3 ----------------------------------------------------
@@ -404,11 +340,6 @@ $chargeBtn?.addEventListener("click", async () => {
     setStatus("The card form is still loading — one moment…", "info");
     return;
   }
-  const invalidMessage = validate();
-  if (invalidMessage) {
-    setStatus(invalidMessage, "error");
-    return;
-  }
 
   $chargeBtn.disabled = true;
   setStatus("Checking your card details…", "info");
@@ -455,29 +386,18 @@ $chargeBtn?.addEventListener("click", async () => {
     return;
   }
 
-  // 3. Confirm — browser ↔ Stripe directly. Our name/street/postal ride
-  //    along as billing_details (the Element was told not to collect
-  //    them), which is what AVS checks. redirect:"if_required" — cards
-  //    and wallets settle in-page; the server disallows redirect-based
-  //    methods on the intent.
+  // 3. Confirm — browser ↔ Stripe directly. Billing details (postal +
+  //    country) come from the Element's own fields, wallet flows bring
+  //    their own. redirect:"if_required" — cards and wallets settle
+  //    in-page; the server disallows redirect-based methods on the
+  //    intent.
   setStatus("Processing your payment…", "info");
-  const postal = normalizePostal($postal.value);
   const { error: confirmError, paymentIntent } = await stripeClient.confirmPayment({
     elements: stripeElements,
     clientSecret,
     redirect: "if_required",
     confirmParams: {
-      return_url: `${location.origin}/pay/invoice/${encodeURIComponent(currentInvoice.id)}/thanks?t=${encodeURIComponent(token)}`,
-      payment_method_data: {
-        billing_details: {
-          name: $name.value.trim(),
-          address: {
-            line1: $street.value.trim(),
-            postal_code: postal.wire,
-            country: postal.country
-          }
-        }
-      }
+      return_url: `${location.origin}/pay/invoice/${encodeURIComponent(currentInvoice.id)}/thanks?t=${encodeURIComponent(token)}`
     }
   });
 

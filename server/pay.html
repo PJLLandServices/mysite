@@ -91,47 +91,24 @@
           POST card data through PJL's server — that would push us from
           SAQ-A-EP into SAQ-D scope. (Hard Rule 23.)
         -->
+        <!--
+          Slim form (Jul 2026): the Payment Element collects everything —
+          card number, expiry, CVC, and the billing postal code + country
+          Stripe requires (pre-filled from the invoice by pay.js via
+          defaultValues). The custom cardholder-name / street-address /
+          postal fields from the QuickBooks-era AVS work were removed:
+          Stripe runs postal-only address verification by default, and
+          only-required-fields was Patrick's explicit call. Apple Pay /
+          Google Pay render inside the Element automatically once the
+          domain's wallet verification passes in Stripe.
+        -->
         <form id="payCardForm" class="pay-card-form-wrap" autocomplete="on" novalidate>
-          <label class="pay-field pay-field--full">
-            <span class="pay-field-label">Cardholder name</span>
-            <input type="text" id="payCardName" autocomplete="cc-name"
-                   placeholder="Name as shown on card" required maxlength="80">
-          </label>
-
           <div class="pay-field pay-field--full">
             <span class="pay-field-label">Card details</span>
             <div id="payStripeElement" class="pay-stripe-element">
               <p class="pay-stripe-loading">Loading secure card form…</p>
             </div>
           </div>
-
-          <!--
-            Billing address — the AVS fields (AVS brief §4.1, carried
-            through the Stripe migration). A card-not-present charge with
-            no street address is what Amex's stricter address
-            verification rejects while Visa/MC let it through. The
-            Element is configured NOT to collect billing details; these
-            fields are passed to Stripe in confirmPayment's
-            billing_details instead, so the pre-fill from the invoice
-            keeps working. They are NOT card data.
-
-            Pre-filled by pay.js from the invoice's bill-to snapshot and
-            fully editable — the card's billing address is frequently not
-            the service address.
-          -->
-          <label class="pay-field pay-field--full">
-            <span class="pay-field-label">Billing street address</span>
-            <input type="text" id="payCardStreet" autocomplete="billing street-address"
-                   inputmode="text" autocapitalize="words" enterkeyhint="next"
-                   placeholder="123 Main St" required maxlength="120">
-            <span class="pay-field-hint">As it appears on your credit card statement.</span>
-          </label>
-          <label class="pay-field pay-field--full">
-            <span class="pay-field-label">Billing postal code</span>
-            <input type="text" id="payCardPostal" autocomplete="billing postal-code"
-                   autocapitalize="characters" autocorrect="off" spellcheck="false"
-                   enterkeyhint="done" placeholder="L3X 0A5" required maxlength="10">
-          </label>
         </form>
 
         <button type="button" id="payChargeBtn" class="pay-charge-btn">
