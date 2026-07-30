@@ -67,6 +67,7 @@ const { generateWoReportPdf, renderWoReportBuffer, reportFilename, ensurePhotoDe
 const woReportSnapshot = require("./lib/wo-report-snapshot");
 const billingParties = require("./lib/billing-parties");
 const quickbooks = require("./lib/quickbooks");
+const stripe = require("./lib/stripe");
 const bookings = require("./lib/bookings");
 const suppliers = require("./lib/suppliers");
 const materialLists = require("./lib/material-lists");
@@ -2209,6 +2210,14 @@ const CHARGE_FAILURE_KINDS = {
   expired: (phone) =>
     "That card has expired. Please try a different card, or call us at " + phone + " and we'll " +
     "take the payment over the phone.",
+  expired_check: (phone) =>
+    "Please double-check the expiry date on your card and try again, or call us at " + phone + ".",
+  card_number: (phone) =>
+    "That card number doesn't look right. Please re-enter it carefully and try again, or call " +
+    `us at ${phone}.`,
+  auth_failed: (phone) =>
+    "Your bank asked for extra verification and it didn't complete. Nothing was charged. Please " +
+    `try again — your bank may send you a confirmation prompt — or call us at ${phone}.`,
   temporary: (phone) =>
     "The payment processor is having a temporary problem. Nothing was charged. Please wait a " +
     `minute and try again, or call us at ${phone}.`,
@@ -2243,22 +2252,64 @@ const INTUIT_CODE_KINDS = {
   "PMT-6000": "temporary"
 };
 
-// Returns { code, kind, customerMessage }. `code` is Intuit's code (or a
-// synthetic "NO_CODE") and is returned to the client for support
-// reference only — it is an opaque token, not a gateway string.
+// Stripe error/decline codes → the same kinds table (Stripe migration,
+// Jul 2026 — Stripe is now the processor; the Intuit table above stays
+// for reading historical paymentAttempts[] and for the legacy webhook).
+// decline_code is checked before code: "card_declined" is the umbrella,
+// and the issuer's decline_code underneath it carries the real reason.
+const STRIPE_CODE_KINDS = {
+  // decline_codes (issuer-level, under card_declined)
+  incorrect_zip: "address",
+  insufficient_funds: "declined",
+  generic_decline: "declined",
+  do_not_honor: "declined",
+  transaction_not_allowed: "declined",
+  pickup_card: "declined",
+  lost_card: "declined",
+  stolen_card: "declined",
+  fraudulent: "declined",
+  card_velocity_exceeded: "declined",
+  card_not_supported: "card_not_accepted",
+  currency_not_supported: "card_not_accepted",
+  call_issuer: "declined",
+  // top-level error codes
+  card_declined: "declined",
+  expired_card: "expired",
+  incorrect_cvc: "security_code",
+  invalid_cvc: "security_code",
+  incorrect_number: "card_number",
+  invalid_number: "card_number",
+  invalid_expiry_month: "expired_check",
+  invalid_expiry_year: "expired_check",
+  processing_error: "temporary",
+  rate_limit: "temporary",
+  network_error: "temporary",
+  payment_intent_authentication_failure: "auth_failed"
+};
+
+// Returns { code, kind, customerMessage }. `code` is the processor's
+// code (or a synthetic "NO_CODE") and is returned to the client for
+// support reference only — it is an opaque token, not a gateway string.
+// Accepts both failure shapes: quickbooks.chargeCard errors (intuitCode)
+// and stripe.js paymentFailure errors (errorCode / declineCode).
 function describeChargeFailure(err, supportPhone) {
   const phone = supportPhone || "(905) 960-0181";
-  const code = err?.intuitCode || null;
-  const text = `${err?.intuitMessage || ""} ${err?.message || ""}`.toLowerCase();
+  const intuitCode = err?.intuitCode || null;
+  const stripeCode = err?.declineCode || err?.errorCode || null;
+  const code = stripeCode || intuitCode;
+  const text = `${err?.errorMessage || err?.intuitMessage || ""} ${err?.message || ""}`.toLowerCase();
 
-  // Expiry has no code of its own — Intuit reports it as a decline with
+  // Expiry has no code of its own on Intuit — reported as a decline with
   // "expired" in the message — so the text check runs FIRST, otherwise
   // an expired card reads as a generic bank decline and the customer
-  // calls their bank instead of grabbing their new card.
+  // calls their bank instead of grabbing their new card. (Stripe DOES
+  // have expired_card, which the code table catches on its own.)
   let kind = null;
-  if (/expir/.test(text)) kind = "expired";
-  else if (code && INTUIT_CODE_KINDS[code]) kind = INTUIT_CODE_KINDS[code];
-  else if (/\bavs\b|address/.test(text)) kind = "address";
+  if (stripeCode && STRIPE_CODE_KINDS[stripeCode]) kind = STRIPE_CODE_KINDS[stripeCode];
+  else if (err?.errorCode && STRIPE_CODE_KINDS[err.errorCode]) kind = STRIPE_CODE_KINDS[err.errorCode];
+  else if (/expir/.test(text)) kind = "expired";
+  else if (intuitCode && INTUIT_CODE_KINDS[intuitCode]) kind = INTUIT_CODE_KINDS[intuitCode];
+  else if (/\bavs\b|address|postal|\bzip\b/.test(text)) kind = "address";
   else if (/security code|\bcvc\b|\bcvv\b|\bcid\b/.test(text)) kind = "security_code";
   else if (/not supported|unsupported|payment method/.test(text)) kind = "card_not_accepted";
   else if (/declin/.test(text)) kind = "declined";
@@ -2269,6 +2320,199 @@ function describeChargeFailure(err, supportPhone) {
     kind,
     customerMessage: CHARGE_FAILURE_KINDS[kind](phone)
   };
+}
+
+// The customer-facing support phone, read fresh from settings with a
+// hard fallback — used across the payment routes.
+async function paymentSupportPhone() {
+  try { return (await settings.get()).contactInfo.customerSupportPhone; }
+  catch { return "(905) 960-0181"; }
+}
+
+// ReCAPTCHA v3 verification, shared by the payment routes. Returns null
+// when the request may proceed, or { status, payload } to send back.
+// If RECAPTCHA_SECRET_KEY is unset, verification is skipped entirely
+// (matching pay.js's no-recaptcha mode — useful for local dev).
+async function verifyRecaptchaOrReject(req, body, logTag) {
+  const recaptchaSecret = process.env.RECAPTCHA_SECRET_KEY || "";
+  if (!recaptchaSecret) return null;
+  const rc = body?.recaptchaToken;
+  if (!rc || typeof rc !== "string") {
+    return { status: 400, payload: { ok: false, errors: ["Missing reCAPTCHA verification token."] } };
+  }
+  try {
+    const verifyParams = new URLSearchParams({ secret: recaptchaSecret, response: rc });
+    const remoteIp = (req.headers["x-forwarded-for"] || "").split(",")[0]?.trim() || req.socket?.remoteAddress;
+    if (remoteIp) verifyParams.set("remoteip", remoteIp);
+    const verifyR = await fetch("https://www.google.com/recaptcha/api/siteverify", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: verifyParams.toString()
+    });
+    const verifyData = await verifyR.json().catch(() => ({}));
+    if (!verifyData.success) {
+      console.warn(`[${logTag}] reCAPTCHA failed: ${(verifyData["error-codes"] || []).join(", ")}`);
+      return { status: 400, payload: { ok: false, errors: ["Could not verify you're human. Please refresh and try again."] } };
+    }
+    // Score threshold — 0.5 is Google's recommended cutoff. Tunable via
+    // env var if abuse becomes a concern.
+    const minScore = Number.parseFloat(process.env.RECAPTCHA_MIN_SCORE || "0.5");
+    if (typeof verifyData.score === "number" && verifyData.score < minScore) {
+      console.warn(`[${logTag}] reCAPTCHA score too low: ${verifyData.score} < ${minScore}`);
+      const phone = await paymentSupportPhone();
+      return { status: 400, payload: { ok: false, errors: [`This request was flagged as suspicious. If you're a real customer, please call ${phone} to pay over the phone.`] } };
+    }
+  } catch (rcErr) {
+    // reCAPTCHA service unavailable — log + reject. Don't let a fraud
+    // check go unverified silently.
+    console.warn(`[${logTag}] reCAPTCHA verify call failed: ${rcErr.message}`);
+    return { status: 503, payload: { ok: false, errors: ["Fraud-prevention service is briefly unavailable. Please try again in a moment."] } };
+  }
+  return null;
+}
+
+// Read a request body as the RAW string — required for Stripe webhook
+// signature verification, where re-serializing parsed JSON changes the
+// bytes and the HMAC never matches.
+async function readRawBody(req, { maxBytes = 1_000_000 } = {}) {
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of req) {
+    size += chunk.length;
+    if (size > maxBytes) throw new Error("Request body is too large.");
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+// ---------- Stripe paid-flip finalizer (Stripe migration, Jul 2026) ----
+//
+// The single function that turns "Stripe says this intent succeeded"
+// into a paid PJL invoice: attempt record → QBO Payment record → status
+// flip → deposit hook → receipt email. Called from BOTH the customer's
+// confirm POST and the payment_intent.succeeded webhook, so a customer
+// who closes Safari the instant Stripe approves still gets their invoice
+// flipped when the webhook lands.
+//
+// IDEMPOTENT BY CHECK, not by construction: if the invoice is already
+// paid with this intent's charge recorded, it returns without side
+// effects — that's what makes the double delivery (confirm POST +
+// webhook) safe. The Stripe charge itself already happened before this
+// function is ever called; nothing here moves money (Hard Rule 22 —
+// the capture happened browser-side against Stripe, exactly once).
+//
+// `intent` MUST come from stripe.retrievePaymentIntent — never from the
+// browser. The browser's word that it paid is not evidence.
+async function finalizeStripeInvoicePayment(inv, intent, requestId, { via = "confirm" } = {}) {
+  const summary = stripe.summarizeIntent(intent, requestId);
+  const expectedCents = Math.round(Number(inv.total) * 100);
+
+  // Verification gauntlet — every check names its failure for the log.
+  if (intent?.metadata?.invoiceId !== inv.id) {
+    throw new Error(`intent ${summary.paymentIntentId} belongs to invoice "${intent?.metadata?.invoiceId}", not ${inv.id}`);
+  }
+  if (intent?.status !== "succeeded") {
+    throw new Error(`intent ${summary.paymentIntentId} status is "${intent?.status}", not succeeded`);
+  }
+  if (summary.amountCents !== expectedCents) {
+    // A succeeded intent for the WRONG amount is the one genuinely
+    // alarming branch: money moved but not the invoice's total. Do not
+    // flip paid — record it loudly and leave the invoice open for
+    // Patrick to reconcile by hand.
+    throw new Error(`intent ${summary.paymentIntentId} charged ${summary.amountCents}¢, invoice total is ${expectedCents}¢ — NOT flipping to paid, reconcile manually`);
+  }
+  if ((summary.currency || "CAD") !== (inv.currency || "CAD")) {
+    throw new Error(`intent ${summary.paymentIntentId} currency ${summary.currency} != invoice ${inv.currency || "CAD"}`);
+  }
+
+  // Idempotency check — webhook after confirm, or a double webhook.
+  const fresh = await invoices.get(inv.id);
+  if (!fresh) throw new Error(`invoice ${inv.id} vanished mid-finalize`);
+  if (fresh.status === "paid") {
+    if (fresh.stripePaymentIntentId === summary.paymentIntentId || fresh.stripeChargeId === summary.chargeId) {
+      return { invoice: fresh, alreadyPaid: true, warning: null };
+    }
+    // Paid via some OTHER charge and now a second successful intent
+    // exists — a real double payment. Loud log; refund is a manual
+    // dashboard action, deliberately not automated.
+    console.error(`[stripe] DOUBLE PAYMENT? ${inv.id} already paid but intent ${summary.paymentIntentId} also succeeded (${via}). Refund one in the Stripe dashboard.`);
+    return { invoice: fresh, alreadyPaid: true, warning: "Invoice was already paid — a second successful payment exists in Stripe and needs a manual refund." };
+  }
+
+  // Success attempt record, before anything else can fail.
+  try {
+    await invoices.appendPaymentAttempt(inv.id, {
+      outcome: "success",
+      processor: "stripe",
+      amount: (summary.amountCents ?? expectedCents) / 100,
+      currency: summary.currency || inv.currency || "CAD",
+      httpStatus: 200,
+      chargeId: summary.chargeId,
+      chargeStatus: summary.status,
+      paymentIntentId: summary.paymentIntentId,
+      processorRef: summary.processorRef,
+      customerMessage: "Payment received.",
+      cardBrand: summary.cardBrand,
+      cardLast4: summary.cardLast4,
+      avsStreet: summary.avsStreet,
+      avsZip: summary.avsZip,
+      cvcMatch: summary.cvcMatch
+    });
+  } catch (recordErr) {
+    console.error(`[stripe] FAILED TO RECORD SUCCESSFUL ATTEMPT on ${inv.id}: ${recordErr.message}`);
+  }
+
+  // QBO Payment record — QuickBooks is still the ledger. Best effort:
+  // the money is already in Stripe; a QBO hiccup must not stop the
+  // customer seeing a paid invoice. The warning surfaces to the admin.
+  let qbPaymentId = null;
+  let qbWarning = null;
+  try {
+    if (inv.quickbooksInvoiceId) {
+      const payment = await quickbooks.recordPaymentForInvoice({
+        qbInvoiceId: inv.quickbooksInvoiceId,
+        amountCents: expectedCents,
+        chargeId: summary.chargeId || summary.paymentIntentId
+      });
+      qbPaymentId = payment?.id || null;
+    }
+  } catch (paymentErr) {
+    console.warn(`[stripe] QB payment record failed for ${inv.id}: ${paymentErr.message}`);
+    qbWarning = paymentErr.message;
+  }
+
+  const updated = await invoices.update(inv.id, {
+    status: "paid",
+    stripePaymentIntentId: summary.paymentIntentId,
+    stripeChargeId: summary.chargeId,
+    quickbooksPaymentId: qbPaymentId,
+    notes: inv.notes
+      ? `${inv.notes}\n\nPaid via Stripe ${summary.chargeId || summary.paymentIntentId} on ${new Date().toISOString()}.`
+      : `Paid via Stripe ${summary.chargeId || summary.paymentIntentId} on ${new Date().toISOString()}.`
+  });
+
+  // Threshold deposit — a paid deposit invoice spawns the held balance
+  // invoice; a paid balance invoice closes the quote's deposit stage.
+  try {
+    await deposits.onInvoicePaid(updated);
+  } catch (depErr) {
+    console.warn(`[stripe] deposit paid-hook failed for ${inv.id}:`, depErr?.message);
+  }
+
+  // Receipt email. Best effort — a receipt failure does not roll back
+  // anything. Skipped when the webhook finalizes an invoice the confirm
+  // POST already handled (alreadyPaid short-circuits above), so the
+  // customer can't get two receipts.
+  let receiptWarning = null;
+  try {
+    const receiptPdf = await generateInvoicePdf(updated);
+    await sendPaymentReceipt(updated, receiptPdf);
+  } catch (receiptErr) {
+    console.warn(`[stripe] receipt email failed for ${inv.id}: ${receiptErr.message}`);
+    receiptWarning = `Payment recorded but receipt email failed to send: ${receiptErr.message}`;
+  }
+
+  return { invoice: updated, alreadyPaid: false, warning: qbWarning || receiptWarning };
 }
 
 // Build a URL by joining a path onto a base, using the URL constructor so
@@ -7204,17 +7448,22 @@ async function handleApi(req, res, pathname) {
   //   POST /api/pay/invoice/:id/charge                — process card charge
   //   POST /api/webhooks/quickbooks-payments          — async settle/refund/etc
   //
-  // PCI scope: card data NEVER reaches this server. The /charge endpoint
-  // accepts a tokenized card reference (the browser POSTs the card
-  // straight to api.intuit.com), calls the Intuit Payments API
-  // server-to-server, and records the result. We stay in PCI SAQ-A-EP
-  // scope because we never see PAN, CVC or expiry. Billing ADDRESS
-  // fields are not card data and are safe here — they are how the
-  // charge passes AVS. See Hard Rule 23.
+  // PCI scope: card data NEVER reaches this server (Hard Rule 23). The
+  // card is entered into Stripe's Payment Element iframe and confirmed
+  // browser-side against api.stripe.com; this server only ever handles
+  // PaymentIntent ids and re-reads their state from Stripe. SAQ-A-EP.
+  // Billing ADDRESS fields are not card data and are safe here — they
+  // are how the charge passes AVS.
   //
-  // A capture is NOT idempotent (Hard Rule 22): there is no automatic
-  // retry anywhere in this path. A failed attempt records and stops; the
-  // customer re-submits deliberately.
+  // A capture is NOT idempotent (Hard Rule 22): the capture happens
+  // exactly once, browser-side, when the customer confirms. Nothing on
+  // this server charges, retries, or re-confirms. A failed attempt
+  // records and stops; the customer re-submits deliberately.
+  //
+  // Processor history: QuickBooks Payments until Jul 2026 (see
+  // quickbooks.chargeCard, retained for reference but no longer routed
+  // to); Stripe thereafter. QuickBooks REMAINS THE LEDGER — the QBO
+  // Payment record is still created after every successful charge.
 
   // GET /api/pay/invoice/:id — public invoice read (sanitized).
   const publicInvoiceMatch = pathname.match(/^\/api\/pay\/invoice\/([^/]+)$/);
@@ -7271,15 +7520,11 @@ async function handleApi(req, res, pathname) {
     }
   }
 
-  // GET /api/pay/invoice/:id/sdk-config — returns the URL the browser
-  // should POST card data to for tokenization. Intuit doesn't ship a
-  // browser SDK; the page POSTs directly to api.intuit.com (or sandbox)
-  // with no auth header, gets back an opaque card token, and then sends
-  // only the token to our /charge endpoint. We expose the URL via this
-  // config call so the browser doesn't have to know about QB_ENVIRONMENT.
-  //
-  // Routing: sandbox.api.intuit.com for QB_ENVIRONMENT=sandbox,
-  // api.intuit.com for production.
+  // GET /api/pay/invoice/:id/sdk-config — payment-form bootstrap.
+  // Stripe migration (Jul 2026): returns the Stripe publishable key the
+  // browser initializes Stripe.js with, plus the settings-driven brand
+  // list, support phone and reCAPTCHA site key. The old response shipped
+  // Intuit's tokenizeUrl; QuickBooks no longer touches the card.
   const publicSdkConfigMatch = pathname.match(/^\/api\/pay\/invoice\/([^/]+)\/sdk-config$/);
   if (publicSdkConfigMatch && req.method === "GET") {
     try {
@@ -7288,27 +7533,39 @@ async function handleApi(req, res, pathname) {
       const t = url.searchParams.get("t") || "";
       const inv = await invoices.getByPaymentToken(id, t);
       if (!inv) return sendJson(res, 404, { ok: false, errors: ["Invoice not found or link expired."] });
-      const cfg = quickbooks.envCfg();
-      if (!cfg.clientId) {
-        return sendJson(res, 503, { ok: false, errors: ["Payment processor not configured. Contact PJL at (905) 960-0181 to pay another way."] });
-      }
-      const tokenizeUrl = cfg.environment === "production"
-        ? "https://api.intuit.com/quickbooks/v4/payments/tokens"
-        : "https://sandbox.api.intuit.com/quickbooks/v4/payments/tokens";
-      // Accepted card brands come from settings, never a hardcoded list
-      // (AVS brief §4.5) — Amex acceptance is a merchant-account setting
-      // on Intuit's side, and flipping it here needs no deploy.
       const paySettings = await settings.get();
+      const phone = paySettings.contactInfo.customerSupportPhone;
+      if (!stripe.isConfigured()) {
+        return sendJson(res, 503, { ok: false, errors: [`Card payment isn't available right now. Please use e-Transfer, or call PJL at ${phone} to pay another way.`] });
+      }
+      if (stripe.keyModeMismatch()) {
+        // Misconfigured keys fail HERE, before a customer types anything
+        // — not at confirm time with a card already entered.
+        console.error("[pay] STRIPE KEY MISMATCH — one key is live, the other test. Fix Render env vars.");
+        return sendJson(res, 503, { ok: false, errors: [`Card payment isn't available right now. Please use e-Transfer, or call PJL at ${phone} to pay another way.`] });
+      }
+      // Accepted card brands come from settings, never a hardcoded list
+      // (AVS brief §4.5). Stripe accounts take Amex by default, but the
+      // display stays settings-driven so the page follows any account
+      // change without a deploy.
       const acceptedCardBrands = paySettings.payments.acceptedCardBrands.map((slug) => ({
         slug,
         label: settings.CARD_BRAND_LABELS[slug] || slug
       }));
       return sendJson(res, 200, {
         ok: true,
-        environment: cfg.environment,
-        tokenizeUrl,
+        processor: "stripe",
+        stripePublishableKey: stripe.publishableKey(),
+        // Test-mode flag → pay.js shows a banner so a test link can
+        // never be mistaken for a real payment page.
+        liveMode: stripe.isLiveMode(),
+        // The Payment Element needs amount + currency up front (deferred
+        // -intent pattern: the intent itself is only created when the
+        // customer actually clicks Pay).
+        amountCents: Math.round(Number(inv.total) * 100),
+        currency: (inv.currency || "CAD").toLowerCase(),
         acceptedCardBrands,
-        supportPhone: paySettings.contactInfo.customerSupportPhone,
+        supportPhone: phone,
         // ReCAPTCHA v3 site key — safe to ship publicly. Server-side
         // verification uses RECAPTCHA_SECRET_KEY which never leaves
         // Render. If neither env var is set the field is empty and
@@ -7321,17 +7578,27 @@ async function handleApi(req, res, pathname) {
     }
   }
 
-  // POST /api/pay/invoice/:id/charge — execute the card charge.
+  // POST /api/pay/invoice/:id/payment-intent — create (or reuse) the
+  // Stripe PaymentIntent the browser's Payment Element confirms against.
   //
-  // Body: { t: <paymentToken>, cardToken: <intuit-card-token> }
-  // Card data has already been tokenized by the Intuit iframe; cardToken
-  // is the one-shot tokenized reference. We hand it to QB Payments which
-  // executes the charge, then record the charge ID + payment back on the
-  // invoice and on the QB invoice.
-  const publicChargeMatch = pathname.match(/^\/api\/pay\/invoice\/([^/]+)\/charge$/);
-  if (publicChargeMatch && req.method === "POST") {
+  // Body: { t: <paymentToken>, recaptchaToken? }
+  // Returns: { ok, clientSecret, paymentIntentId }
+  //
+  // reCAPTCHA gates THIS endpoint — intent creation is where card-testing
+  // bots have to come through, since confirmation happens against Stripe
+  // with the client secret this returns. Creating an intent moves no
+  // money (Hard Rule 22 is about the capture; that happens exactly once,
+  // browser-side, when the customer confirms).
+  //
+  // Reuse: the open intent id is persisted on the invoice. Same amount →
+  // same intent handed back (a reload or a second tap doesn't mint
+  // chargeable duplicates); amount changed since it was minted → the old
+  // intent is cancelled so its stale client secret can't be confirmed
+  // for the wrong total, and a fresh one is created.
+  const publicIntentMatch = pathname.match(/^\/api\/pay\/invoice\/([^/]+)\/payment-intent$/);
+  if (publicIntentMatch && req.method === "POST") {
     try {
-      const id = decodeURIComponent(publicChargeMatch[1]);
+      const id = decodeURIComponent(publicIntentMatch[1]);
       const body = await parseRequestBody(req);
       const inv = await invoices.getByPaymentToken(id, body?.t || "");
       if (!inv) return sendJson(res, 404, { ok: false, errors: ["Invoice not found or link expired."] });
@@ -7344,205 +7611,284 @@ async function handleApi(req, res, pathname) {
       if (inv.status !== "sent") {
         return sendJson(res, 409, { ok: false, errors: [`This invoice is "${inv.status}" and isn't ready for payment.`] });
       }
-      const cardToken = body?.cardToken;
-      if (!cardToken || typeof cardToken !== "string") {
-        return sendJson(res, 400, { ok: false, errors: ["Missing card token from the secure form."] });
-      }
 
-      // ReCAPTCHA v3 verification. If RECAPTCHA_SECRET_KEY is set on
-      // Render, the client sends a recaptchaToken in the body and we
-      // verify it with Google. We reject scores below 0.5 (Google's
-      // recommended threshold) — those requests look like bots.
-      // If RECAPTCHA_SECRET_KEY is unset, verification is skipped
-      // entirely (useful for local dev) and the integration runs the
-      // way it did before reCAPTCHA was added.
-      const recaptchaSecret = process.env.RECAPTCHA_SECRET_KEY || "";
-      if (recaptchaSecret) {
-        const rc = body?.recaptchaToken;
-        if (!rc || typeof rc !== "string") {
-          return sendJson(res, 400, { ok: false, errors: ["Missing reCAPTCHA verification token."] });
-        }
+      const rcReject = await verifyRecaptchaOrReject(req, body, "payment-intent");
+      if (rcReject) return sendJson(res, rcReject.status, rcReject.payload);
+
+      const amountCents = Math.round(Number(inv.total) * 100);
+      const phone = await paymentSupportPhone();
+
+      // Reuse the persisted open intent when it still matches.
+      if (inv.stripePaymentIntentId) {
         try {
-          const verifyParams = new URLSearchParams({ secret: recaptchaSecret, response: rc });
-          const remoteIp = (req.headers["x-forwarded-for"] || "").split(",")[0]?.trim() || req.socket?.remoteAddress;
-          if (remoteIp) verifyParams.set("remoteip", remoteIp);
-          const verifyR = await fetch("https://www.google.com/recaptcha/api/siteverify", {
-            method: "POST",
-            headers: { "Content-Type": "application/x-www-form-urlencoded" },
-            body: verifyParams.toString()
-          });
-          const verifyData = await verifyR.json().catch(() => ({}));
-          if (!verifyData.success) {
-            console.warn(`[charge] reCAPTCHA failed for ${id}: ${(verifyData["error-codes"] || []).join(", ")}`);
-            return sendJson(res, 400, { ok: false, errors: ["Could not verify you're human. Please refresh and try again."] });
+          const { intent } = await stripe.retrievePaymentIntent(inv.stripePaymentIntentId);
+          const reusable = ["requires_payment_method", "requires_confirmation", "requires_action"].includes(intent?.status);
+          if (reusable && Number(intent.amount) === amountCents) {
+            return sendJson(res, 200, { ok: true, clientSecret: intent.client_secret, paymentIntentId: intent.id });
           }
-          // Score threshold — 0.5 is Google's recommended cutoff. Tunable
-          // via env var if abuse becomes a concern.
-          const minScore = Number.parseFloat(process.env.RECAPTCHA_MIN_SCORE || "0.5");
-          if (typeof verifyData.score === "number" && verifyData.score < minScore) {
-            console.warn(`[charge] reCAPTCHA score too low for ${id}: ${verifyData.score} < ${minScore}`);
-            return sendJson(res, 400, { ok: false, errors: ["This request was flagged as suspicious. If you're a real customer, please call (905) 960-0181 to pay over the phone."] });
+          if (intent?.status === "succeeded") {
+            // Paid but our flip hasn't landed yet (webhook in flight, or
+            // it was missed). Don't mint a second chargeable intent for
+            // an invoice whose money already moved — finalize now.
+            try {
+              const result = await finalizeStripeInvoicePayment(inv, intent, null, { via: "intent-reuse" });
+              return sendJson(res, 409, { ok: false, errors: ["This invoice has already been paid."], invoiceStatus: result.invoice.status });
+            } catch (finErr) {
+              console.error(`[payment-intent] succeeded-intent finalize failed for ${inv.id}: ${finErr.message}`);
+              return sendJson(res, 409, { ok: false, errors: [`This invoice shows a completed payment. Please call us at ${phone} before paying again.`] });
+            }
           }
-        } catch (rcErr) {
-          // reCAPTCHA service unavailable — log + reject. Don't let a
-          // fraud check go unverified silently.
-          console.warn(`[charge] reCAPTCHA verify call failed for ${id}: ${rcErr.message}`);
-          return sendJson(res, 503, { ok: false, errors: ["Fraud-prevention service is briefly unavailable. Please try again in a moment."] });
+          if (reusable && Number(intent.amount) !== amountCents) {
+            // Amount changed under the open intent — kill it so the old
+            // client secret can't charge the outdated total.
+            await stripe.cancelPaymentIntent(intent.id).catch((cancelErr) => {
+              console.warn(`[payment-intent] stale-intent cancel failed for ${inv.id}: ${cancelErr.message}`);
+            });
+          }
+        } catch (lookupErr) {
+          // Stored id no longer resolves (deleted in dashboard, mode
+          // switch). Log and fall through to create a fresh intent.
+          console.warn(`[payment-intent] stored intent lookup failed for ${inv.id}: ${lookupErr.message}`);
         }
       }
 
-      // Charge via QB Payments. quickbooks.chargeCard handles OAuth +
-      // the charges API; throws a structured failure (declined, expired,
-      // network, etc) which we record on the invoice and surface as a
-      // MAPPED, customer-legible 400. There is no retry here and there
-      // must never be one — a capture is not idempotent (Hard Rule 22).
-      const chargeSupportPhone = await (async () => {
-        try { return (await settings.get()).contactInfo.customerSupportPhone; }
-        catch { return "(905) 960-0181"; }
-      })();
-      const chargeAmount = Number(inv.total) || 0;
-      let chargeResult;
+      const intent = await stripe.createPaymentIntent({
+        amountCents,
+        currency: inv.currency || "CAD",
+        invoiceId: inv.id,
+        customerEmail: (inv.billTo && inv.billTo.email) || inv.customerEmail || "",
+        description: `PJL invoice ${inv.id}`,
+        // Scoped to invoice + amount: a retry of this call reuses the
+        // same intent at Stripe's end instead of creating a twin, and an
+        // amount change gets a genuinely new key.
+        idempotencyKey: `pjl-${inv.id}-${amountCents}`
+      });
+      await invoices.update(inv.id, { stripePaymentIntentId: intent.id });
+      return sendJson(res, 200, { ok: true, clientSecret: intent.client_secret, paymentIntentId: intent.id });
+    } catch (err) {
+      console.warn(`[payment-intent] failed: ${err.message}`);
+      const phone = await paymentSupportPhone();
+      const mapped = describeChargeFailure(err, phone);
+      return sendJson(res, 502, { ok: false, code: mapped.code, errors: [mapped.customerMessage] });
+    }
+  }
+
+  // POST /api/pay/invoice/:id/charge — verify a confirmed Stripe payment
+  // and finalize the invoice.
+  //
+  // Body: { t: <paymentToken>, paymentIntentId }
+  //
+  // Stripe migration: the money already moved when the customer confirmed
+  // the Payment Element browser-side. This endpoint does NOT charge —
+  // it re-reads the intent FROM STRIPE (the browser's word is not
+  // evidence), checks it succeeded for this invoice at the right amount,
+  // and runs the paid-flip. The webhook covers the customer who closed
+  // Safari before this POST could land.
+  const publicChargeMatch = pathname.match(/^\/api\/pay\/invoice\/([^/]+)\/charge$/);
+  if (publicChargeMatch && req.method === "POST") {
+    try {
+      const id = decodeURIComponent(publicChargeMatch[1]);
+      const body = await parseRequestBody(req);
+      const inv = await invoices.getByPaymentToken(id, body?.t || "");
+      if (!inv) return sendJson(res, 404, { ok: false, errors: ["Invoice not found or link expired."] });
+      if (inv.status === "void") {
+        return sendJson(res, 409, { ok: false, errors: ["This invoice has been voided."] });
+      }
+      const paymentIntentId = body?.paymentIntentId;
+      if (!paymentIntentId || typeof paymentIntentId !== "string" || !paymentIntentId.startsWith("pi_")) {
+        return sendJson(res, 400, { ok: false, errors: ["Missing payment reference from the secure form."] });
+      }
+      const phone = await paymentSupportPhone();
+
+      const { intent, requestId } = await stripe.retrievePaymentIntent(paymentIntentId);
       try {
-        chargeResult = await quickbooks.chargeCard({
-          amountCents: Math.round(Number(inv.total) * 100),
-          currency: inv.currency || "CAD",
-          cardToken,
-          invoiceId: inv.id,
-          customerEmail: inv.customerEmail
+        const result = await finalizeStripeInvoicePayment(inv, intent, requestId, { via: "confirm" });
+        const updated = result.invoice;
+        return sendJson(res, 200, {
+          ok: true,
+          alreadyPaid: result.alreadyPaid === true,
+          invoice: {
+            id: updated.id,
+            status: updated.status,
+            paidAt: updated.paidAt,
+            total: updated.total,
+            stripeChargeId: updated.stripeChargeId
+          },
+          warning: result.warning
         });
-      } catch (chargeErr) {
-        console.warn(
-          `[charge] failed for ${inv.id}: ${chargeErr.message}` +
-          ` code=${chargeErr.intuitCode || "none"} intuit_tid=${chargeErr.intuitTid || "none"}`
-        );
-        const mapped = describeChargeFailure(chargeErr, chargeSupportPhone);
-        // Persist the attempt BEFORE responding. This is the record that
-        // did not exist before — a failed charge used to leave nothing
-        // behind but a Render log line.
-        try {
-          await invoices.appendPaymentAttempt(inv.id, {
-            outcome: "failure",
-            amount: chargeAmount,
-            currency: inv.currency || "CAD",
-            httpStatus: chargeErr.httpStatus,
-            chargeStatus: chargeErr.chargeStatus,
-            chargeId: chargeErr.chargeId,
-            intuitCode: chargeErr.intuitCode,
-            intuitMessage: chargeErr.intuitMessage || chargeErr.message,
-            intuitTid: chargeErr.intuitTid,
-            customerMessage: mapped.customerMessage,
-            cardBrand: chargeErr.cardBrand,
-            cardLast4: chargeErr.cardLast4,
-            avsStreet: chargeErr.avsStreet,
-            avsZip: chargeErr.avsZip,
-            cvcMatch: chargeErr.cvcMatch
-          });
-        } catch (recordErr) {
-          // Losing the audit record must not change what the customer
-          // sees, but it IS loud in the logs — this is the one write
-          // whose whole purpose is visibility.
-          console.error(`[charge] FAILED TO RECORD ATTEMPT on ${inv.id}: ${recordErr.message}`);
-        }
-        // The raw Intuit string never leaves this function.
-        return sendJson(res, 400, {
+      } catch (finErr) {
+        // Verification failed — wrong invoice, wrong amount, or the
+        // intent didn't actually succeed. Full detail to the log; the
+        // customer gets the safe generic. The alarming variants
+        // (succeeded-but-wrong-amount) are already logged loudly inside
+        // the finalizer's throw path.
+        console.error(`[charge] finalize refused for ${inv.id}: ${finErr.message}`);
+        return sendJson(res, 409, {
           ok: false,
-          code: mapped.code,
-          errors: [mapped.customerMessage]
+          errors: [`We couldn't confirm this payment cleanly. Please DON'T pay again — call us at ${phone} and we'll check it on the spot.`]
         });
       }
-
-      // Success — record the attempt with the same shape, so the invoice
-      // carries the complete story (three declines then an approval) and
-      // the AVS verdict on the charge that actually went through.
-      try {
-        await invoices.appendPaymentAttempt(inv.id, {
-          outcome: "success",
-          amount: chargeAmount,
-          currency: chargeResult.currency || inv.currency || "CAD",
-          httpStatus: 200,
-          chargeId: chargeResult.id,
-          chargeStatus: chargeResult.status,
-          intuitTid: chargeResult.intuitTid,
-          customerMessage: "Payment received.",
-          cardBrand: chargeResult.cardBrand,
-          cardLast4: chargeResult.cardLast4,
-          avsStreet: chargeResult.avsStreet,
-          avsZip: chargeResult.avsZip,
-          cvcMatch: chargeResult.cvcMatch
-        });
-      } catch (recordErr) {
-        console.error(`[charge] FAILED TO RECORD SUCCESSFUL ATTEMPT on ${inv.id}: ${recordErr.message}`);
-      }
-
-      // Record the QB Payment record so the QB invoice shows paid. Best
-      // effort — if this fails, the charge still went through; we log
-      // the warning and keep going so the customer sees a paid invoice.
-      let qbPaymentId = null;
-      let qbWarning = null;
-      try {
-        if (inv.quickbooksInvoiceId) {
-          const payment = await quickbooks.recordPaymentForInvoice({
-            qbInvoiceId: inv.quickbooksInvoiceId,
-            amountCents: Math.round(Number(inv.total) * 100),
-            chargeId: chargeResult.id
-          });
-          qbPaymentId = payment?.id || null;
-        }
-      } catch (paymentErr) {
-        console.warn(`[charge] QB payment record failed for ${inv.id}: ${paymentErr.message}`);
-        qbWarning = paymentErr.message;
-      }
-
-      // Flip status sent → paid + audit. invoices.update() handles the
-      // paidAt stamp + status:paid history entry automatically.
-      const updated = await invoices.update(id, {
-        status: "paid",
-        quickbooksChargeId: chargeResult.id,
-        quickbooksPaymentId: qbPaymentId,
-        notes: inv.notes
-          ? `${inv.notes}\n\nCharged ${chargeResult.id} on ${new Date().toISOString()}.`
-          : `Charged ${chargeResult.id} on ${new Date().toISOString()}.`
-      });
-
-      // Threshold deposit — a paid deposit invoice spawns the held
-      // balance invoice; a paid balance invoice closes the quote's
-      // deposit stage. Best-effort: the charge already succeeded.
-      try {
-        await deposits.onInvoicePaid(updated);
-      } catch (depErr) {
-        console.warn(`[charge] deposit paid-hook failed for ${id}:`, depErr?.message);
-      }
-
-      // Fire the payment-receipt email. Best effort — a receipt-send
-      // failure does NOT roll back the charge or block the customer's
-      // redirect to the thanks page. The PDF attachment uses the same
-      // generator as the original invoice email so the customer's
-      // email trail has both the original invoice and the paid receipt
-      // referencing the same document.
-      let receiptWarning = null;
-      try {
-        const receiptPdf = await generateInvoicePdf(updated);
-        await sendPaymentReceipt(updated, receiptPdf);
-      } catch (receiptErr) {
-        console.warn(`[charge] receipt email failed for ${id}: ${receiptErr.message}`);
-        receiptWarning = `Payment recorded but receipt email failed to send: ${receiptErr.message}`;
-      }
-
-      return sendJson(res, 200, {
-        ok: true,
-        invoice: {
-          id: updated.id,
-          status: updated.status,
-          paidAt: updated.paidAt,
-          total: updated.total,
-          quickbooksChargeId: updated.quickbooksChargeId
-        },
-        chargeId: chargeResult.id,
-        warning: qbWarning || receiptWarning
-      });
     } catch (err) {
       console.error(`[charge] unexpected:`, err);
-      return sendJson(res, 500, { ok: false, errors: [err.message || "Payment couldn't be completed."] });
+      const phone = await paymentSupportPhone();
+      const mapped = describeChargeFailure(err, phone);
+      return sendJson(res, 502, { ok: false, code: mapped.code, errors: [mapped.customerMessage] });
+    }
+  }
+
+  // POST /api/pay/invoice/:id/payment-failed — record a failed attempt.
+  //
+  // Body: { t: <paymentToken>, paymentIntentId }
+  //
+  // With Stripe, declines happen browser-side at confirmPayment — the
+  // server never sees them, which would reopen the exact visibility hole
+  // the AVS brief closed. The browser reports the intent id and the
+  // server pulls the REAL last_payment_error from Stripe — verified
+  // facts, not the browser's claim — and appends the failure attempt.
+  // The payment_intent.payment_failed webhook is the backstop for
+  // customers whose page died before this fired.
+  const publicPayFailedMatch = pathname.match(/^\/api\/pay\/invoice\/([^/]+)\/payment-failed$/);
+  if (publicPayFailedMatch && req.method === "POST") {
+    try {
+      const id = decodeURIComponent(publicPayFailedMatch[1]);
+      const body = await parseRequestBody(req);
+      const inv = await invoices.getByPaymentToken(id, body?.t || "");
+      if (!inv) return sendJson(res, 404, { ok: false, errors: ["Invoice not found or link expired."] });
+      const paymentIntentId = body?.paymentIntentId;
+      if (!paymentIntentId || typeof paymentIntentId !== "string" || !paymentIntentId.startsWith("pi_")) {
+        return sendJson(res, 400, { ok: false, errors: ["Missing payment reference."] });
+      }
+      const { intent, requestId } = await stripe.retrievePaymentIntent(paymentIntentId);
+      if (intent?.metadata?.invoiceId !== inv.id) {
+        return sendJson(res, 409, { ok: false, errors: ["Payment reference doesn't match this invoice."] });
+      }
+      const lastError = intent?.last_payment_error;
+      if (!lastError) {
+        // Nothing failed on Stripe's record — nothing to log.
+        return sendJson(res, 200, { ok: true, recorded: false });
+      }
+      const phone = await paymentSupportPhone();
+      const mapped = describeChargeFailure({
+        errorCode: lastError.code || null,
+        declineCode: lastError.decline_code || null,
+        errorMessage: lastError.message || null
+      }, phone);
+      const facts = stripe.cardFactsFrom(
+        lastError.payment_method ? null : intent?.latest_charge && typeof intent.latest_charge === "object" ? intent.latest_charge : null
+      );
+      // Dedupe: one intent can fail repeatedly, but each re-confirm asks
+      // this endpoint again with the same intent — only append when the
+      // last recorded failure for this intent has a different timestamp
+      // envelope (cheap check: same intent + same code back-to-back).
+      const prior = (inv.paymentAttempts || []).slice(-1)[0];
+      if (prior && prior.paymentIntentId === intent.id && prior.errorCode === (lastError.code || null) && prior.declineCode === (lastError.decline_code || null) && prior.outcome === "failure") {
+        return sendJson(res, 200, { ok: true, recorded: false, deduped: true });
+      }
+      await invoices.appendPaymentAttempt(inv.id, {
+        outcome: "failure",
+        processor: "stripe",
+        amount: Number(inv.total) || 0,
+        currency: inv.currency || "CAD",
+        paymentIntentId: intent.id,
+        errorCode: lastError.code || null,
+        declineCode: lastError.decline_code || null,
+        errorMessage: String(lastError.message || "").slice(0, 500),
+        processorRef: requestId,
+        customerMessage: mapped.customerMessage,
+        cardBrand: lastError.payment_method?.card?.brand || facts.cardBrand,
+        cardLast4: lastError.payment_method?.card?.last4 || facts.cardLast4,
+        avsStreet: facts.avsStreet,
+        avsZip: facts.avsZip,
+        cvcMatch: facts.cvcMatch
+      });
+      return sendJson(res, 200, { ok: true, recorded: true, code: mapped.code, errors: [mapped.customerMessage] });
+    } catch (err) {
+      console.warn(`[payment-failed] record failed: ${err.message}`);
+      return sendJson(res, 200, { ok: true, recorded: false });
+    }
+  }
+
+  // POST /api/webhooks/stripe — Stripe event delivery, signature-verified
+  // (unlike the legacy QB webhook below, which never got past its TODO).
+  //
+  //   payment_intent.succeeded      → backstop paid-flip (customer closed
+  //                                   the page before the confirm POST)
+  //   payment_intent.payment_failed → backstop failure attempt record
+  //
+  // Always 200 on handled-but-imperfect outcomes (Stripe retries non-2xx
+  // for days; a permanent condition like "invoice already paid" must not
+  // generate a retry storm). 400 only for signature failures.
+  if (req.method === "POST" && pathname === "/api/webhooks/stripe") {
+    let event;
+    try {
+      const rawBody = await readRawBody(req);
+      event = stripe.verifyWebhookSignature(rawBody, req.headers["stripe-signature"]);
+    } catch (sigErr) {
+      console.warn(`[stripe-webhook] rejected: ${sigErr.message}`);
+      return sendJson(res, 400, { ok: false, errors: ["Signature verification failed."] });
+    }
+    try {
+      const type = event?.type || "";
+      const intent = event?.data?.object;
+      const invoiceId = intent?.metadata?.invoiceId || "";
+      if (!type.startsWith("payment_intent.") || !invoiceId) {
+        return sendJson(res, 200, { ok: true, ignored: true });
+      }
+      const inv = await invoices.get(invoiceId);
+      if (!inv) {
+        console.warn(`[stripe-webhook] ${type} for unknown invoice "${invoiceId}"`);
+        return sendJson(res, 200, { ok: true, ignored: true });
+      }
+
+      if (type === "payment_intent.succeeded") {
+        // Re-retrieve rather than trusting the event body: gets the
+        // charge expanded for card facts, and means even a leaked
+        // signing secret can't forge a paid-flip — the intent must
+        // actually be succeeded at Stripe.
+        const { intent: fresh, requestId } = await stripe.retrievePaymentIntent(intent.id);
+        try {
+          const result = await finalizeStripeInvoicePayment(inv, fresh, requestId, { via: "webhook" });
+          return sendJson(res, 200, { ok: true, finalized: !result.alreadyPaid });
+        } catch (finErr) {
+          console.error(`[stripe-webhook] finalize refused for ${invoiceId}: ${finErr.message}`);
+          return sendJson(res, 200, { ok: true, refused: true });
+        }
+      }
+
+      if (type === "payment_intent.payment_failed") {
+        const lastError = intent?.last_payment_error;
+        const prior = (inv.paymentAttempts || []).slice(-1)[0];
+        if (lastError && !(prior && prior.paymentIntentId === intent.id && prior.errorCode === (lastError.code || null) && prior.outcome === "failure")) {
+          const phone = await paymentSupportPhone();
+          const mapped = describeChargeFailure({
+            errorCode: lastError.code || null,
+            declineCode: lastError.decline_code || null,
+            errorMessage: lastError.message || null
+          }, phone);
+          await invoices.appendPaymentAttempt(inv.id, {
+            outcome: "failure",
+            processor: "stripe",
+            amount: Number(inv.total) || 0,
+            currency: inv.currency || "CAD",
+            paymentIntentId: intent.id,
+            errorCode: lastError.code || null,
+            declineCode: lastError.decline_code || null,
+            errorMessage: String(lastError.message || "").slice(0, 500),
+            customerMessage: mapped.customerMessage,
+            cardBrand: lastError.payment_method?.card?.brand || null,
+            cardLast4: lastError.payment_method?.card?.last4 || null
+          }).catch((recordErr) => {
+            console.error(`[stripe-webhook] FAILED TO RECORD ATTEMPT on ${inv.id}: ${recordErr.message}`);
+          });
+        }
+        return sendJson(res, 200, { ok: true });
+      }
+
+      return sendJson(res, 200, { ok: true, ignored: true });
+    } catch (err) {
+      // Transient processing error — non-2xx so Stripe redelivers.
+      console.error(`[stripe-webhook] processing error:`, err);
+      return sendJson(res, 500, { ok: false });
     }
   }
 

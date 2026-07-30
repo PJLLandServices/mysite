@@ -1,31 +1,35 @@
-// Public payment page client.
+// Public payment page client — Stripe Payment Element (Stripe migration,
+// Jul 2026; replaces the QuickBooks Payments direct-tokenization flow).
 //
-// Flow (corrected in PR 3.1 — Intuit doesn't ship a JS SDK):
+// Flow (deferred-intent pattern):
 //   1. Load invoice summary from /api/pay/invoice/:id?t=<token>.
-//   2. Render the summary card.
-//   3. If status is paid → show the paid banner, hide the form.
-//   4. Customer enters card details + billing address into a normal HTML
-//      form on this page. The address fields (street + postal) ride in
-//      the tokenization payload as card.address so the charge can pass
-//      AVS — they are not card data, but they travel WITH the card
-//      because Intuit attaches AVS to the token, not to the charge.
-//   5. On Pay click, this JS POSTs the card payload DIRECTLY to Intuit's
-//      tokenization endpoint (api.intuit.com or sandbox.api.intuit.com),
-//      cross-origin, with NO Authorization header. The endpoint accepts
-//      unauthenticated POSTs by design (same model as Stripe.js).
-//   6. Intuit returns a one-shot card token in field `value`.
-//   7. We POST { t, cardToken } to /api/pay/invoice/:id/charge.
-//   8. Server uses its OAuth bearer to actually charge via /v4/payments/charges.
-//   9. Redirect to /pay/invoice/:id/thanks?t=<token>.
+//   2. Render the summary card; pre-fill the AVS fields from the
+//      invoice's bill-to snapshot.
+//   3. Load /sdk-config → Stripe publishable key, amount, brands,
+//      support phone, reCAPTCHA site key.
+//   4. Mount Stripe's Payment Element (card fields live in a Stripe
+//      iframe — they never exist in this page's DOM).
+//   5. On Pay click: validate our fields → elements.submit() →
+//      reCAPTCHA → POST /payment-intent (server creates/reuses the
+//      PaymentIntent, amount comes from the INVOICE, never from here) →
+//      stripe.confirmPayment (browser ↔ Stripe directly; our name +
+//      street + postal ride along as billing_details for AVS).
+//   6. Decline → report the intent id to /payment-failed so the server
+//      pulls the verified failure from Stripe onto the invoice's
+//      attempt log, and show the mapped message.
+//   7. Success → POST /charge { paymentIntentId } — the server re-reads
+//      the intent FROM STRIPE, verifies it, flips the invoice paid.
+//   8. Redirect to /pay/invoice/:id/thanks?t=<token>.
 //
-// PCI scope: SAQ-A-EP. Card PAN/CVC never reach pjllandservices.com's
-// server. They go directly from the user's browser to api.intuit.com.
-// PJL's server only ever sees the opaque token. DO NOT change this to
+// PCI scope: SAQ-A-EP. Card PAN/CVC/expiry live inside Stripe's iframe
+// and go straight to api.stripe.com. PJL's server only ever sees the
+// PaymentIntent id. DO NOT replace the Element with raw card inputs or
 // POST card data through pjllandservices.com — that pushes the
-// integration into SAQ-D scope (a much heavier compliance burden).
+// integration into SAQ-D scope (Hard Rule 23).
 //
-// Verified against Intuit's official Node.js sample app:
-// https://github.com/IntuitDeveloper/SampleApp-Payments-Nodejs
+// NO automatic retry anywhere (Hard Rule 22): a failed attempt records
+// and stops; re-enabling the Pay button is the only "retry" — a
+// deliberate human one.
 
 const matchPath = location.pathname.match(/^\/pay\/invoice\/([^/]+)\/?$/);
 const invoiceId = matchPath ? decodeURIComponent(matchPath[1]) : null;
@@ -39,24 +43,23 @@ const $formSection = document.getElementById("payFormSection");
 const $chargeBtn = document.getElementById("payChargeBtn");
 const $chargeBtnAmount = document.getElementById("payChargeBtnAmount");
 const $chargeStatus = document.getElementById("payChargeStatus");
+const $testBanner = document.getElementById("payTestBanner");
 
 const $name = document.getElementById("payCardName");
-const $number = document.getElementById("payCardNumber");
-const $exp = document.getElementById("payCardExp");
-const $cvc = document.getElementById("payCardCvc");
 const $street = document.getElementById("payCardStreet");
 const $postal = document.getElementById("payCardPostal");
 const $acceptedBrands = document.getElementById("payAcceptedBrands");
+const $stripeMount = document.getElementById("payStripeElement");
 
 let currentInvoice = null;
-let tokenizeUrl = null; // Filled from /sdk-config response
-let recaptchaSiteKey = null; // Filled from /sdk-config response (may stay null in dev)
-let recaptchaReady = false; // True once grecaptcha global is loaded
-// Accepted brands + support phone, both from /sdk-config (settings-driven,
-// never hardcoded here). acceptedBrands stays null until the config lands,
-// which means "we don't know yet" — the brand pre-check is skipped rather
-// than guessing and blocking a card that would have worked.
-let acceptedBrands = null;
+let stripeClient = null;   // Stripe(publishableKey) once config lands
+let stripeElements = null; // Elements group the Payment Element lives in
+let paymentElement = null;
+let paymentElementReady = false;
+let recaptchaSiteKey = null;
+let recaptchaReady = false;
+// Support phone + accepted brands from /sdk-config (settings-driven,
+// never hardcoded here).
 let supportPhone = "(905) 960-0181";
 
 function escapeHtml(s) {
@@ -85,31 +88,18 @@ function setStatus(msg, kind) {
   $chargeStatus.dataset.kind = kind || "";
 }
 
-// ---- Card brand detection ---------------------------------------------
-// Drives three things: the CVC length rule (Amex uses a 4-digit CID, the
-// others a 3-digit code), the PAN length rule (Amex is 15 digits, not
-// 16), and the pre-submit check against the accepted-brands list. IIN
-// ranges only — no network call, no dependency.
-const CARD_BRANDS = [
-  { slug: "amex",       label: "American Express", test: /^3[47]/,                                       panLengths: [15], cvcLength: 4 },
-  { slug: "visa",       label: "Visa",             test: /^4/,                                           panLengths: [13, 16, 19], cvcLength: 3 },
-  { slug: "mastercard", label: "Mastercard",       test: /^(5[1-5]|2(2[2-9]|[3-6]\d|7[01]|720))/,        panLengths: [16], cvcLength: 3 },
-  { slug: "discover",   label: "Discover",         test: /^(6011|64[4-9]|65|622)/,                       panLengths: [16, 19], cvcLength: 3 }
-];
-function brandFor(digits) {
-  return CARD_BRANDS.find((b) => b.test.test(digits)) || null;
+function disablePayments(message) {
+  setStatus(message, "error");
+  $chargeBtn.disabled = true;
 }
 
 // ---- Postal code normalization ----------------------------------------
 // Uppercase, strip whitespace and hyphens, then validate. Canadian
 // postal codes exclude D, F, I, O, Q, U everywhere and additionally
-// W and Z in the leading position — a rule the old "is it non-empty"
-// check couldn't catch, so a typo'd code went to Intuit as-is and came
-// back an AVS failure the customer had no way to interpret.
-//
-// US ZIPs are accepted too and flip the country code. A US billing
-// postal sent with country "CA" is a guaranteed AVS mismatch, which is
-// exactly the failure mode this brief is closing.
+// W and Z in the leading position. US ZIPs are accepted and flip the
+// country code — a US billing postal sent as "CA" is a guaranteed AVS
+// mismatch. (Card number / CVC validation now lives inside Stripe's
+// Payment Element, including Amex 15/4 — no PAN logic in this file.)
 const CA_POSTAL_RE = /^[ABCEGHJ-NPRSTVXY]\d[ABCEGHJ-NPRSTV-Z]\d[ABCEGHJ-NPRSTV-Z]\d$/;
 function normalizePostal(raw) {
   const compact = String(raw || "").toUpperCase().replace(/[\s\-]/g, "");
@@ -117,9 +107,6 @@ function normalizePostal(raw) {
     return {
       ok: true,
       country: "CA",
-      // Display gets the familiar spaced form; the wire gets the compact
-      // 6-character form, which is the shape card networks match on for
-      // Canadian AVS.
       display: `${compact.slice(0, 3)} ${compact.slice(3)}`,
       wire: compact
     };
@@ -134,39 +121,7 @@ function normalizePostal(raw) {
   return { ok: false };
 }
 
-// ---- Light input formatting -------------------------------------------
-// Card number: insert spaces every 4 digits as the user types, and keep
-// the CVC field's length rule in step with the detected brand.
-$number?.addEventListener("input", () => {
-  const digits = $number.value.replace(/\D/g, "").slice(0, 19);
-  const grouped = digits.replace(/(.{4})/g, "$1 ").trim();
-  if (grouped !== $number.value) $number.value = grouped;
-  $number.classList.remove("pay-field--invalid");
-  syncCvcToBrand(digits);
-});
-
-// Amex prints a 4-digit CID on the FRONT of the card; everyone else
-// prints 3 on the back. Retitle the field so the customer isn't hunting
-// the back of an Amex for a code that isn't there.
-function syncCvcToBrand(digits) {
-  if (!$cvc) return;
-  const brand = brandFor(digits);
-  const isAmex = brand?.slug === "amex";
-  $cvc.placeholder = isAmex ? "1234" : "123";
-  const label = $cvc.closest(".pay-field")?.querySelector(".pay-field-label");
-  if (label) label.textContent = isAmex ? "CID (4 digits)" : "CVC";
-}
-// Expiry: auto-insert / after MM. Accept "MM/YY" or "MMYY".
-$exp?.addEventListener("input", () => {
-  const digits = $exp.value.replace(/\D/g, "").slice(0, 4);
-  const formatted = digits.length >= 3 ? digits.slice(0, 2) + "/" + digits.slice(2) : digits;
-  if (formatted !== $exp.value) $exp.value = formatted;
-  $exp.classList.remove("pay-field--invalid");
-});
-$cvc?.addEventListener("input", () => {
-  $cvc.value = $cvc.value.replace(/\D/g, "").slice(0, 4);
-  $cvc.classList.remove("pay-field--invalid");
-});
+// ---- Light input handling ----------------------------------------------
 $name?.addEventListener("input", () => $name.classList.remove("pay-field--invalid"));
 $street?.addEventListener("input", () => $street.classList.remove("pay-field--invalid"));
 $postal?.addEventListener("input", () => $postal.classList.remove("pay-field--invalid"));
@@ -178,7 +133,7 @@ $postal?.addEventListener("blur", () => {
   if (parsed.ok) $postal.value = parsed.display;
 });
 
-// ---- Load invoice ----------------------------------------------------
+// ---- Load invoice + payment config -------------------------------------
 async function load() {
   if (!invoiceId || !token) return showError();
   try {
@@ -188,42 +143,92 @@ async function load() {
     if (!r.ok || !data.ok || !data.invoice) return showError();
     currentInvoice = data.invoice;
     render(currentInvoice);
-    // Fetch the tokenization URL only if the form section is visible
-    // (i.e. the invoice is unpaid and chargeable).
-    if (!$formSection.hidden) {
-      try {
-        const r2 = await fetch(`/api/pay/invoice/${encodeURIComponent(invoiceId)}/sdk-config?t=${encodeURIComponent(token)}`);
-        const d2 = await r2.json().catch(() => ({}));
-        if (r2.ok && d2.ok && d2.tokenizeUrl) {
-          tokenizeUrl = d2.tokenizeUrl;
-          recaptchaSiteKey = d2.recaptchaSiteKey || null;
-          if (d2.supportPhone) supportPhone = d2.supportPhone;
-          renderAcceptedBrands(d2.acceptedCardBrands);
-          if (recaptchaSiteKey) loadRecaptchaScript(recaptchaSiteKey);
-        } else {
-          setStatus(d2?.errors?.[0] || "Card payment is not available right now. Use e-Transfer or call us.", "error");
-          $chargeBtn.disabled = true;
-        }
-      } catch (err) {
-        setStatus("Couldn't reach the payment processor. Use e-Transfer or call us.", "error");
-        $chargeBtn.disabled = true;
-      }
-    }
+    if (!$formSection.hidden) await initPaymentForm();
   } catch (err) {
     console.error("[pay] load failed:", err);
     showError();
   }
 }
 
-// Render the accepted-brand line from the settings-driven list. Called
-// with whatever /sdk-config returned; anything malformed leaves the line
-// hidden rather than printing a half-list the merchant account may not
-// honour.
+async function initPaymentForm() {
+  let cfg;
+  try {
+    const r = await fetch(`/api/pay/invoice/${encodeURIComponent(invoiceId)}/sdk-config?t=${encodeURIComponent(token)}`);
+    cfg = await r.json().catch(() => ({}));
+    if (!r.ok || !cfg.ok || !cfg.stripePublishableKey) {
+      return disablePayments(cfg?.errors?.[0] || "Card payment is not available right now. Use e-Transfer or call us.");
+    }
+  } catch (err) {
+    return disablePayments("Couldn't reach the payment processor. Use e-Transfer or call us.");
+  }
+
+  if (cfg.supportPhone) supportPhone = cfg.supportPhone;
+  renderAcceptedBrands(cfg.acceptedCardBrands);
+  if ($testBanner && cfg.liveMode === false) $testBanner.hidden = false;
+  recaptchaSiteKey = cfg.recaptchaSiteKey || null;
+  if (recaptchaSiteKey) loadRecaptchaScript(recaptchaSiteKey);
+
+  // Stripe.js is loaded from js.stripe.com by a static tag in pay.html.
+  // If it didn't load (blocker, network), fail toward the e-Transfer
+  // path rather than a dead Pay button with no explanation.
+  if (typeof window.Stripe !== "function") {
+    return disablePayments(`The secure card form couldn't load. Please pay by e-Transfer below, or call us at ${supportPhone}.`);
+  }
+
+  try {
+    stripeClient = window.Stripe(cfg.stripePublishableKey);
+    // Deferred-intent mode: the Element renders from amount + currency
+    // alone; the PaymentIntent is only created server-side when the
+    // customer actually clicks Pay. Amount here is display/validation
+    // only — the server always prices the intent from the invoice.
+    stripeElements = stripeClient.elements({
+      mode: "payment",
+      amount: cfg.amountCents,
+      currency: cfg.currency || "cad",
+      appearance: {
+        variables: {
+          colorPrimary: "#1B4D2E",
+          colorText: "#1A1A1A",
+          colorDanger: "#B23A3A",
+          fontFamily: "'DM Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+          borderRadius: "8px"
+        }
+      }
+    });
+    paymentElement = stripeElements.create("payment", {
+      layout: "tabs",
+      // We collect name + street + postal in OUR fields (pre-filled from
+      // the invoice, AVS brief §4.1) and pass them at confirm time.
+      // "never" tells the Element not to duplicate them — Stripe then
+      // REQUIRES them in confirmPayment's billing_details, which
+      // validate() guarantees.
+      fields: {
+        billingDetails: {
+          name: "never",
+          address: { line1: "never", postalCode: "never", country: "never" }
+        }
+      }
+    });
+    paymentElement.on("ready", () => { paymentElementReady = true; });
+    paymentElement.on("loaderror", (ev) => {
+      console.warn("[pay] Payment Element load error:", ev?.error?.message);
+      disablePayments(`The secure card form couldn't load. Please pay by e-Transfer below, or call us at ${supportPhone}.`);
+    });
+    if ($stripeMount) $stripeMount.innerHTML = "";
+    paymentElement.mount("#payStripeElement");
+  } catch (err) {
+    console.error("[pay] Stripe init failed:", err);
+    disablePayments(`The secure card form couldn't load. Please pay by e-Transfer below, or call us at ${supportPhone}.`);
+  }
+}
+
+// Render the accepted-brand line from the settings-driven list. Anything
+// malformed leaves the line hidden rather than printing a half-list the
+// merchant account may not honour.
 function renderAcceptedBrands(brands) {
   if (!$acceptedBrands || !Array.isArray(brands) || !brands.length) return;
   const labels = brands.map((b) => String(b?.label || b?.slug || "").trim()).filter(Boolean);
   if (!labels.length) return;
-  acceptedBrands = brands.map((b) => String(b?.slug || "").toLowerCase()).filter(Boolean);
   const list = labels.length === 1
     ? labels[0]
     : `${labels.slice(0, -1).join(", ")} and ${labels[labels.length - 1]}`;
@@ -300,93 +305,30 @@ function render(inv) {
 }
 
 // ---- Validation -------------------------------------------------------
-// Returns null when the form is good, or a specific message to show.
-// Generic "check the highlighted field" copy is a dead end on a phone —
-// every rejection below names what is wrong and what to do about it.
+// Our three fields only — card number/expiry/CVC validation (including
+// Amex's 15-digit PAN + 4-digit CID) is Stripe's job inside the Element.
+// Returns null when good, or a specific message to show.
 function validate() {
   function flag(el, message) {
     el.classList.add("pay-field--invalid");
     el.focus();
     return message;
   }
-
   if (!$name.value.trim()) {
     return flag($name, "Please enter the cardholder name exactly as it appears on the card.");
   }
-
-  const digits = $number.value.replace(/\D/g, "");
-  if (digits.length < 13 || digits.length > 19) {
-    return flag($number, "That card number looks incomplete — please check it and try again.");
-  }
-  // Luhn check — fast sanity to fail invalid card numbers before
-  // we waste a tokenization call.
-  if (!luhnValid(digits)) {
-    return flag($number, "That card number doesn't look right — please double-check the digits.");
-  }
-
-  // Brand-specific length. Amex is 15 digits and the rest are 16 (Visa
-  // and Discover also issue 19); an unrecognized brand keeps the loose
-  // 13–19 rule above rather than being rejected on a guess.
-  const brand = brandFor(digits);
-  if (brand && !brand.panLengths.includes(digits.length)) {
-    return flag($number, `${brand.label} card numbers are ${brand.panLengths.join(" or ")} digits — please check the number.`);
-  }
-  // Brand acceptance, when we know the list. Advisory only: Intuit's
-  // merchant account is the authority, this just saves the customer a
-  // decline they can't act on.
-  if (brand && acceptedBrands && !acceptedBrands.includes(brand.slug)) {
-    return flag($number, `We're not able to accept ${brand.label} right now. Please use another card, pay by e-Transfer below, or call us at ${supportPhone}.`);
-  }
-
-  const expMatch = $exp.value.match(/^(\d{2})\s*\/?\s*(\d{2})$/);
-  if (!expMatch) {
-    return flag($exp, "Please enter the expiry as MM/YY.");
-  }
-  const expMonth = parseInt(expMatch[1], 10);
-  if (expMonth < 1 || expMonth > 12) {
-    return flag($exp, "That expiry month isn't valid — please enter it as MM/YY.");
-  }
-
-  // CVC: 4 digits on Amex (the CID on the front), 3 on the other
-  // brands. Unknown brand keeps the permissive 3-or-4 rule.
-  const cvc = $cvc.value.trim();
-  if (brand) {
-    if (cvc.length !== brand.cvcLength) {
-      return flag($cvc, brand.slug === "amex"
-        ? "American Express uses a 4-digit code printed on the FRONT of the card."
-        : `${brand.label} security codes are ${brand.cvcLength} digits, on the back of the card.`);
-    }
-  } else if (!/^\d{3,4}$/.test(cvc)) {
-    return flag($cvc, "Please enter the 3- or 4-digit security code from your card.");
-  }
-
   if (!$street.value.trim()) {
     return flag($street, "Please enter the billing street address for this card — your bank checks it against your statement.");
   }
-
   const postal = normalizePostal($postal.value);
   if (!postal.ok) {
     return flag($postal, "That postal code doesn't look right. Canadian codes look like L3X 0A5.");
   }
   $postal.value = postal.display;
-
   return null;
-}
-function luhnValid(num) {
-  let sum = 0, alt = false;
-  for (let i = num.length - 1; i >= 0; i--) {
-    let n = parseInt(num.charAt(i), 10);
-    if (alt) { n *= 2; if (n > 9) n -= 9; }
-    sum += n;
-    alt = !alt;
-  }
-  return sum % 10 === 0;
 }
 
 // ---- ReCAPTCHA v3 ----------------------------------------------------
-// Loads Google's reCAPTCHA script with the site key from /sdk-config.
-// The script exposes window.grecaptcha; we wait for `ready()` then
-// flag recaptchaReady so the Pay click can request a token.
 function loadRecaptchaScript(siteKey) {
   if (document.querySelector('script[data-recaptcha]')) return;
   const s = document.createElement("script");
@@ -398,7 +340,6 @@ function loadRecaptchaScript(siteKey) {
     if (window.grecaptcha?.ready) {
       window.grecaptcha.ready(() => { recaptchaReady = true; });
     } else {
-      // Older API — flag ready immediately if `ready` isn't present.
       recaptchaReady = true;
     }
   };
@@ -408,11 +349,8 @@ function loadRecaptchaScript(siteKey) {
   document.head.appendChild(s);
 }
 
-// Request a v3 reCAPTCHA token. Returns null if reCAPTCHA wasn't
-// configured (server didn't ship a site key). Throws on failure.
 async function getRecaptchaToken() {
   if (!recaptchaSiteKey) return null;
-  // Wait up to 5s for grecaptcha.ready() to fire if it hasn't yet.
   const startedAt = Date.now();
   while (!recaptchaReady && Date.now() - startedAt < 5000) {
     await new Promise(r => setTimeout(r, 100));
@@ -430,31 +368,32 @@ async function getRecaptchaToken() {
   });
 }
 
-// Map an Intuit tokenization rejection onto the field the customer can
-// actually fix. Same principle as the server-side charge-failure map: no
-// gateway string reaches the page, and every message ends somewhere the
-// customer can go next.
-function tokenizationMessage(raw) {
-  const text = String(raw || "").toLowerCase();
-  if (/streetaddress|address/.test(text)) {
-    return "Your bank couldn't read that billing address. Please check the street address and postal code against your credit card statement.";
-  }
-  if (/expmonth|expyear|expir/.test(text)) {
-    return "Please check the expiry date on your card and try again.";
-  }
-  if (/cvc|securitycode/.test(text)) {
-    return "Please check the security code on your card and try again.";
-  }
-  if (/number|card/.test(text)) {
-    return "Please double-check the card number and try again.";
-  }
-  return `We couldn't read those card details. Please check them and try again, or call us at ${supportPhone}.`;
+// Report a failed confirm to the server, which pulls the VERIFIED
+// failure detail from Stripe onto the invoice's attempt log — so a
+// browser-side decline is still visible to Patrick. If the server has a
+// better (mapped) message for the failure, prefer it. Best-effort:
+// logging must never block the customer's next attempt.
+async function reportFailure(paymentIntentId) {
+  if (!paymentIntentId) return null;
+  try {
+    const r = await fetch(`/api/pay/invoice/${encodeURIComponent(invoiceId)}/payment-failed`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ t: token, paymentIntentId })
+    });
+    const data = await r.json().catch(() => ({}));
+    return data?.errors?.[0] || null;
+  } catch { return null; }
 }
 
-// ---- Tokenize → charge -----------------------------------------------
+// ---- Pay click: submit → intent → confirm → finalize -------------------
 $chargeBtn?.addEventListener("click", async () => {
-  if (!currentInvoice || !tokenizeUrl) {
+  if (!currentInvoice || !stripeClient || !stripeElements) {
     setStatus(`Payment processor not ready. Use e-Transfer or call ${supportPhone}.`, "error");
+    return;
+  }
+  if (!paymentElementReady) {
+    setStatus("The card form is still loading — one moment…", "info");
     return;
   }
   const invalidMessage = validate();
@@ -464,71 +403,20 @@ $chargeBtn?.addEventListener("click", async () => {
   }
 
   $chargeBtn.disabled = true;
-  setStatus("Securing your card details with QuickBooks…", "info");
+  setStatus("Checking your card details…", "info");
 
-  // Parse expiry MM/YY → 4-digit year.
-  const expMatch = $exp.value.match(/^(\d{2})\s*\/?\s*(\d{2})$/);
-  const expMonth = expMatch[1];
-  const expYear = "20" + expMatch[2];
-
-  // Address: the AVS payload. Intuit's tokenization endpoint accepts
-  // `streetAddress`, `city`, `region`, `country` and `postalCode` on
-  // card.address, and runs validation on every field that is PRESENT —
-  // sending streetAddress: "" returns "address.streetAddress is
-  // invalid" — so only fields with a real value are shipped.
-  //
-  // Until Jul 2026 this was postal code + country only. A card-not-
-  // present charge with no street address is what Amex's stricter
-  // address verification declines while Visa and Mastercard let it
-  // through; that asymmetry is the whole "most payments work, Amex
-  // keeps failing" pattern. `city` and `region` are deliberately NOT
-  // sent: we don't collect them, and inventing them from a pre-fill the
-  // customer never saw would fail AVS on its own terms.
-  const postal = normalizePostal($postal.value);
-  const address = {
-    streetAddress: $street.value.trim(),
-    postalCode: postal.wire,
-    country: postal.country
-  };
-  const cardPayload = {
-    card: {
-      number: $number.value.replace(/\D/g, ""),
-      expMonth,
-      expYear,
-      cvc: $cvc.value,
-      name: $name.value.trim(),
-      address
-    }
-  };
-
-  let cardToken;
-  try {
-    // Direct cross-origin POST to Intuit. NO Authorization header.
-    const r = await fetch(tokenizeUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(cardPayload)
-    });
-    const data = await r.json().catch(() => ({}));
-    if (!r.ok) {
-      const raw = data?.errors?.[0]?.message || data?.message || "";
-      // Intuit's tokenization errors are field-path jargon
-      // ("address.streetAddress is invalid"). They go to the console for
-      // debugging; the customer gets the field named in plain language.
-      console.warn("[pay] tokenization rejected:", raw || `HTTP ${r.status}`);
-      throw new Error(tokenizationMessage(raw));
-    }
-    cardToken = data.value;
-    if (!cardToken) throw new Error("Card couldn't be tokenized — please double-check the number and try again.");
-  } catch (err) {
-    setStatus(err.message || `Couldn't process the card. Please call us at ${supportPhone}.`, "error");
+  // 1. Element-side validation (card number, expiry, CVC — including
+  //    Amex 15/4). Errors surface inline inside the Element itself.
+  const { error: submitError } = await stripeElements.submit();
+  if (submitError) {
+    setStatus(submitError.message || "Please check your card details and try again.", "error");
     $chargeBtn.disabled = false;
     return;
   }
 
-  // Get a reCAPTCHA token (if reCAPTCHA is configured). The token is
-  // single-use, expires in 2 minutes; the server forwards it to Google
-  // for verification before processing the charge.
+  // 2. reCAPTCHA, then ask OUR server for the PaymentIntent. The amount
+  //    comes from the invoice server-side — nothing this page could lie
+  //    about.
   let recaptchaToken = null;
   try {
     recaptchaToken = await getRecaptchaToken();
@@ -538,33 +426,92 @@ $chargeBtn?.addEventListener("click", async () => {
     return;
   }
 
-  // Now hand the (opaque) token off to our server to actually charge.
+  setStatus("Preparing your payment…", "info");
+  let clientSecret = null;
+  let paymentIntentId = null;
+  try {
+    const r = await fetch(`/api/pay/invoice/${encodeURIComponent(currentInvoice.id)}/payment-intent`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ t: token, recaptchaToken })
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok || !data.ok || !data.clientSecret) {
+      throw new Error(data?.errors?.[0] || `We couldn't start the payment. Please try again, or call us at ${supportPhone}.`);
+    }
+    clientSecret = data.clientSecret;
+    paymentIntentId = data.paymentIntentId;
+  } catch (err) {
+    setStatus(err.message, "error");
+    $chargeBtn.disabled = false;
+    return;
+  }
+
+  // 3. Confirm — browser ↔ Stripe directly. Our name/street/postal ride
+  //    along as billing_details (the Element was told not to collect
+  //    them), which is what AVS checks. redirect:"if_required" — cards
+  //    and wallets settle in-page; the server disallows redirect-based
+  //    methods on the intent.
   setStatus("Processing your payment…", "info");
+  const postal = normalizePostal($postal.value);
+  const { error: confirmError, paymentIntent } = await stripeClient.confirmPayment({
+    elements: stripeElements,
+    clientSecret,
+    redirect: "if_required",
+    confirmParams: {
+      return_url: `${location.origin}/pay/invoice/${encodeURIComponent(currentInvoice.id)}/thanks?t=${encodeURIComponent(token)}`,
+      payment_method_data: {
+        billing_details: {
+          name: $name.value.trim(),
+          address: {
+            line1: $street.value.trim(),
+            postal_code: postal.wire,
+            country: postal.country
+          }
+        }
+      }
+    }
+  });
+
+  if (confirmError) {
+    // Stripe's card_error messages are written for customers, but our
+    // mapped copy carries the office number and the next step — ask the
+    // server to record the failure (verified against Stripe) and hand
+    // back the mapped message; fall back to Stripe's own text.
+    const mapped = await reportFailure(confirmError.payment_intent?.id || paymentIntentId);
+    setStatus(mapped || confirmError.message || `Payment couldn't be completed. Please call us at ${supportPhone}.`, "error");
+    // Deliberate-human-retry only (Hard Rule 22): re-enabling the button
+    // is the one and only retry path.
+    $chargeBtn.disabled = false;
+    return;
+  }
+
+  if (!paymentIntent || paymentIntent.status !== "succeeded") {
+    // requires_action fell through, or processing. Don't guess — the
+    // webhook will finalize if it succeeds; tell the customer the truth.
+    setStatus(`Your bank is still processing this payment. Don't pay again — call us at ${supportPhone} if you don't get a receipt within a few minutes.`, "info");
+    return;
+  }
+
+  // 4. Tell our server to verify with Stripe and flip the invoice.
+  setStatus("Payment approved — updating your invoice…", "info");
   try {
     const r = await fetch(`/api/pay/invoice/${encodeURIComponent(currentInvoice.id)}/charge`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ t: token, cardToken, recaptchaToken })
+      body: JSON.stringify({ t: token, paymentIntentId: paymentIntent.id })
     });
     const data = await r.json().catch(() => ({}));
-    // The server maps Intuit's error code to customer-legible copy before
-    // it gets here (AVS brief §4.4) — errors[0] is safe to render
-    // verbatim and always names a next step. No retry happens on this
-    // path, deliberately: a capture is not idempotent, so the customer
-    // re-submits by hand or not at all.
-    if (!r.ok || !data.ok) {
-      throw new Error(data?.errors?.[0] || `Payment couldn't be completed. Please call us at ${supportPhone}.`);
-    }
+    if (!r.ok || !data.ok) throw new Error(data?.errors?.[0] || "");
     setStatus("✓ Payment received. Redirecting…", "ok");
     setTimeout(() => {
       location.href = `/pay/invoice/${encodeURIComponent(currentInvoice.id)}/thanks?t=${encodeURIComponent(token)}`;
     }, 1000);
   } catch (err) {
-    setStatus(err.message || `Payment couldn't be completed. Please call us at ${supportPhone}.`, "error");
-    // Re-enabling the button lets the customer make a DELIBERATE second
-    // attempt. That is the only retry in this flow — nothing re-submits
-    // on its own.
-    $chargeBtn.disabled = false;
+    // The MONEY MOVED — Stripe said succeeded — only our bookkeeping
+    // call failed. The webhook will finalize the invoice; the one thing
+    // the customer must hear is "do not pay twice."
+    setStatus(err.message || `Your payment went through — the receipt may take a few minutes. Please DON'T pay again. Questions? ${supportPhone}.`, "info");
   }
 });
 

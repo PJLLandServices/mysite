@@ -230,7 +230,7 @@ Pages with their primary route + purpose:
 | `unsubscribe.html` | `/unsubscribe/<token>` | **Public** confirm-then-POST page for the CASL unsubscribe flow. Token in URL IS the credential; type comes from `?type=email\|sms\|all`. POSTs to `/api/outreach/unsubscribe` which flips the matching `commPref` off via `outreach.honorUnsubscribe`. Self-contained styles (no `/crm/` CSS dependency) so the page renders even if a carrier rewrites asset URLs. |
 | `approve.html` | `/approve/<id>?t=<token>` | Customer-facing quote approval (signature canvas + PDF download) for `ai_repair_quote`, `on_site_quote`, and `project_proposal`. **Phone gate — only for a `project_proposal` carrying a custom HTML document** (Phone-Gated Proposal Access, Jul 2026; the gate exists specifically to protect the designed page). A proposal can carry a **custom self-contained HTML document** (`server/data/proposal-docs/<id>.html`, uploaded from the proposal builder); when present, the token alone renders an inline phone challenge (`inputmode="tel"`, no client format enforcement) instead of the document, and once passed the page serves the custom document **in place of** the generic render — with a server-injected **"Accept & sign online" footer** (`#pjl-accept-footer`, added before `</body>` at serve time; the file on disk is never modified) linking to `?sign=1`, which forces the STANDARD accept page (line items, totals, signature pad, PDF download, print-and-return) with no re-challenge since the unlock cookie carries over. Accepted proposals get a "✓ Accepted — thank you" footer state instead of the CTA. The server normalizes the typed number to digits-only/last-10 and compares against **every** phone on the customer's **live** record (primary + spouse + lead contact + property snapshot); on a match it mints a **24h `HttpOnly` cookie scoped to that one quote** via `POST /api/approve/:id/:token/unlock`, and the data / PDF / attachment endpoints all require it. Admin sessions and the owning customer's portal session skip the challenge; a **different** customer's session → 401 (never falls through to the challenge). **5 attempts/quote/hour** then a rolling 1-hour lock (regardless of IP), plus a broader per-IP backstop; failed attempts are logged (quote id, IP, timestamp). No-phone-on-file → generic failure **and Patrick is paged**. Bad/missing token → the same 404 as a nonexistent quote (indistinguishable). **Proposals without a custom document, and `ai_repair_quote` / `on_site_quote`, are token-only — unchanged from pre-gate behaviour.** |
 | `portal-invoice.html` | `/portal/invoice/:id?t=<portalToken>` | **Public, token-gated** read-only invoice mirror linked from the customer invoice-ready SMS. Mobile-first, no admin chrome. Renders line items, totals, and a Pay button that deep-links into `/pay/invoice/:id?t=<paymentToken>`. Shows PAID badge when the invoice is paid, a "voided" notice when voided, or a "payment link is being prepared" banner when no `paymentToken` is on the invoice yet. Wrong/missing `portalToken` → 401 with no body. |
-| `pay.html` | `/pay/invoice/:id?t=<paymentToken>` | **Public, token-gated** card payment page — the surface the portal's Pay button deep-links into (PJL-hosted, same tab; *not* a QuickBooks-hosted page). Mobile-first: 44pt targets, 16px inputs so iOS Safari doesn't zoom on focus, safe-area insets, no horizontal scroll. Collects cardholder name, PAN, expiry, CVC/CID, **billing street address + postal code** (the AVS fields), and POSTs the card **straight to Intuit** — PJL's server sees only the resulting token. reCAPTCHA v3 on the charge. Paid → paid banner, form hidden; void → void notice. Full detail in **Payments surface** below. |
+| `pay.html` | `/pay/invoice/:id?t=<paymentToken>` | **Public, token-gated** card payment page — the surface the portal's Pay button deep-links into (PJL-hosted, same tab). Mobile-first: 44pt targets, 16px inputs so iOS Safari doesn't zoom on focus, safe-area insets, no horizontal scroll. Card entry happens in **Stripe's Payment Element** (iframe from js.stripe.com — card data never in the page DOM); the page's own fields collect cardholder name + **billing street address + postal code** (the AVS fields, pre-filled from the invoice's bill-to snapshot) and pass them at confirm. reCAPTCHA v3 gates intent creation. Test-mode banner on pk_test keys. Paid → paid banner, form hidden; void → void notice. Full detail in **Payments surface** below. |
 
 ### Identity & access — authentication model
 
@@ -1145,6 +1145,7 @@ that subset.
 | **Google Geocoding** | Property coordinates + drive-time analysis (admin only) | Property creation, today schedule | `GOOGLE_MAPS_SERVER_KEY` |
 | **QuickBooks Online** | Push invoices, items, customers, and (Phase 4) estimates to QB. **Live** in production: invoice push fires during the admin "Send to customer" flow and writes the QB invoice ID + payment link back onto the local record. Configure HST tax code + default income account once in `/admin/settings` (hard-fails until set). | Invoice push: admin clicks "Send to customer" on `/admin/invoice/:id`. Item / customer push: manual triggers from `/admin/settings`. Auto-push toggles in `settings.quickbooks` (`invoiceAutoPushOnCascade`, `estimateAutoPushOnAccept`) gate any future fire-on-event behaviour. | `QB_CLIENT_ID`, `QB_CLIENT_SECRET`, optional `QB_ENVIRONMENT` (sandbox/production), optional `TOKEN_ENCRYPTION_KEY` |
 | **Twilio (customer SMS)** | Customer-facing SMS for lifecycle events (booking confirmed, on-the-way, rescheduled) and the invoice-ready nudge that fires ~5 min after WO completion. | Cascade-scheduled (`setTimeout` + sweep recovery) from `completion-cascade.js`; honors `customer.notificationPrefs.textReminders` and `settings.invoiceSms.enabled`. | Same Twilio creds as the admin row above. |
+| **Stripe** | Card processing on `/pay/invoice/:id` (Payment Element, browser-side confirm; replaced QuickBooks Payments Jul 2026). QBO stays the ledger — the QBO Payment record is still created after each Stripe charge. Money lands in the Stripe balance and pays out to the bank on Stripe's payout schedule (batched, net of fees) — payouts do NOT auto-reconcile in QBO. | Customer pays on the pay page; webhook backstop finalizes missed confirms. | `STRIPE_SECRET_KEY`, `STRIPE_PUBLISHABLE_KEY`, `STRIPE_WEBHOOK_SECRET` (see env-var block) |
 
 ### QuickBooks integration details (Customer + Item handling)
 
@@ -1158,48 +1159,52 @@ that subset.
 
 ### Payments surface (card payment on an invoice)
 
-Documented here for the first time (QB Payments AVS brief, Jul 2026). This surface has been live since PR 3 and was previously undocumented — a customer-facing money-moving path with no entry in this file.
+**Processor: Stripe** (migration Jul 2026 — replaced QuickBooks Payments after persistent Amex charge failures; see history note at the end of this section). **QuickBooks remains the ledger**: invoices are still drafted locally, still pushed to QBO, and after every successful Stripe charge the server still creates the QBO Payment record via `quickbooks.recordPaymentForInvoice`, so the QBO invoice flips to paid exactly as before. Only the card rail changed.
 
-**The page.** `/pay/invoice/:id?t=<paymentToken>` — public, token-gated, mobile-first. Served by `server/pay.html` + `/crm/pay.js` + `/crm/pay.css`. It is where the portal's "Pay this invoice" button deep-links (same tab, PJL-hosted — **not** a QuickBooks-hosted page). Almost all traffic is iPhone Safari opening an SMS link.
+**The page.** `/pay/invoice/:id?t=<paymentToken>` — public, token-gated, mobile-first. Served by `server/pay.html` + `/crm/pay.js` + `/crm/pay.css`. It is where the portal's "Pay this invoice" button deep-links (same tab, PJL-hosted). Almost all traffic is iPhone Safari opening an SMS link.
 
-**Card-data path.** The browser POSTs the card **directly** to Intuit — `https://api.intuit.com/quickbooks/v4/payments/tokens` (or `sandbox.api.intuit.com`), cross-origin, no `Authorization` header — and gets back a one-shot opaque token. PAN, CVC and expiry never touch the Node process. That is PCI **SAQ-A-EP**, and it is Hard Rule 23: routing card data through PJL's server would push the integration into SAQ-D. There is no Intuit browser SDK involved; Intuit does not publish one.
+**Card-data path.** Card number, expiry and CVC are entered into **Stripe's Payment Element** — an iframe served from `js.stripe.com`, mounted into the PJL-branded page — and the browser confirms the payment directly with `api.stripe.com`. PAN, CVC and expiry never exist in the page's DOM and never touch the Node process; the server only ever handles PaymentIntent ids (`pi_…`). That is PCI **SAQ-A-EP**, and it is Hard Rule 23: routing card data through PJL's server would push the integration into SAQ-D. Stripe.js MUST load from `js.stripe.com` (Stripe's terms prohibit self-hosting); it and reCAPTCHA are the only external scripts on the page. When Stripe.js can't load (blocker, network), the page degrades to the e-Transfer + phone path with an explicit message — never a dead Pay button.
 
-**Tokenization payload — `card.address`.** Intuit accepts `streetAddress`, `city`, `region`, `country`, `postalCode`, and validates every field that is **present** (`streetAddress: ""` returns "address.streetAddress is invalid"), so only non-empty fields are sent. PJL sends `streetAddress`, `postalCode` and `country`; `city`/`region` are deliberately omitted because the page doesn't collect them. **AVS is attached to the token, not to the charge** — the charge call forwards no address at all, so an address missing here can never be recovered downstream. Until Jul 2026 the page collected postal code only; a card-not-present charge with no street address commonly clears on Visa/Mastercard and declines on Amex, which was the observed "most payments work, Amex keeps failing" pattern.
+**Charge flow (deferred-intent pattern).** Pay click → `elements.submit()` (Element validates the card, including Amex 15-digit PAN / 4-digit CID) → reCAPTCHA → `POST /payment-intent` (server creates or reuses the intent; **the amount always comes from the invoice server-side**, never from the browser) → `stripe.confirmPayment` (browser ↔ Stripe; the money moves HERE, exactly once) → `POST /charge` with the intent id → server **re-reads the intent from Stripe** and finalizes. The browser's claim of success is never trusted: `finalizeStripeInvoicePayment` verifies `metadata.invoiceId`, `status === "succeeded"`, amount, and currency against the invoice before flipping paid — a succeeded intent for the *wrong amount* refuses the flip and demands manual reconciliation. The `payment_intent.succeeded` webhook runs the same finalizer as a backstop for customers who close Safari before the confirm POST lands; the finalizer is idempotent, so double delivery is safe and can't double-send receipts.
+
+**Billing address / AVS** (AVS brief §4.1, carried through the migration). The Element is configured NOT to collect billing details; the page's own name + street + postal fields — pre-filled from the invoice's `billTo.address` snapshot via `format.parseCanadianAddress`, always editable — are passed to Stripe in `confirmPayment`'s `billing_details`. Stripe reports AVS results as `checks.address_line1_check` / `address_postal_code_check` (`pass`/`fail`/`unavailable`/`unchecked`) on the charge, recorded per attempt. Postal validation: Canadian format (excluding D/F/I/O/Q/U throughout, W/Z leading), US ZIPs accepted and flip country to `US`.
 
 **Endpoints.**
 
 | Endpoint | Auth | Purpose |
 |---|---|---|
-| `GET /api/pay/invoice/:id?t=<paymentToken>` | paymentToken | Sanitized invoice JSON + `billingPrefill: { streetAddress, postalCode }` derived from the invoice's own `billTo.address` snapshot (via `format.parseCanadianAddress`). Pre-fill only — every field stays editable, because the card's billing address is frequently not the service address. |
-| `GET /api/pay/invoice/:id/sdk-config?t=<paymentToken>` | paymentToken | `tokenizeUrl` (env-routed), `recaptchaSiteKey`, `supportPhone`, and `acceptedCardBrands` from settings. |
-| `POST /api/pay/invoice/:id/charge` | paymentToken + reCAPTCHA v3 | Charges the token via `quickbooks.chargeCard`, records the attempt, flips the invoice to paid, records the QB Payment, sends the receipt. |
-| `POST /api/webhooks/quickbooks-payments` | Intuit | Async settle / refund events. |
+| `GET /api/pay/invoice/:id?t=<paymentToken>` | paymentToken | Sanitized invoice JSON + `billingPrefill: { streetAddress, postalCode }`. |
+| `GET /api/pay/invoice/:id/sdk-config?t=<paymentToken>` | paymentToken | `stripePublishableKey`, `liveMode`, `amountCents`, `currency`, `recaptchaSiteKey`, `supportPhone`, `acceptedCardBrands` from settings. 503 if Stripe isn't configured or the keys are mode-mismatched (one live, one test) — that misconfiguration fails HERE, before a customer types anything. |
+| `POST /api/pay/invoice/:id/payment-intent` | paymentToken + reCAPTCHA v3 | Creates/reuses the PaymentIntent (idempotency key `pjl-<invoiceId>-<amountCents>`; open intent persisted on the invoice and reused while the amount matches; cancelled + re-minted if the amount changed; a stray already-succeeded intent triggers finalize instead of minting a duplicate). |
+| `POST /api/pay/invoice/:id/charge` | paymentToken | Verifies the confirmed intent against Stripe and finalizes (attempt record → QBO Payment → paid flip → deposit hook → receipt). Does **not** charge. |
+| `POST /api/pay/invoice/:id/payment-failed` | paymentToken | Browser reports a declined intent id; server pulls the **verified** `last_payment_error` from Stripe and appends the failure attempt (deduped per intent+code). Closes the visibility gap left by declines happening browser-side. |
+| `POST /api/webhooks/stripe` | Stripe signature | `payment_intent.succeeded` → backstop finalize; `payment_intent.payment_failed` → backstop attempt record. Signature (`t`/`v1` HMAC-SHA256 over the RAW body, 5-min replay window) verified by `stripe.verifyWebhookSignature`; refuses to run with no `STRIPE_WEBHOOK_SECRET`. Returns 200 even for handled-but-refused outcomes so Stripe doesn't retry permanent conditions. |
+| `POST /api/webhooks/quickbooks-payments` | Intuit | **Legacy** — retained for any in-flight Intuit events; no longer part of the charge path. |
 | `PATCH /api/settings/payments` | admin session | `{ acceptedCardBrands: ["visa","mastercard","amex","discover"] }`. |
 
-**reCAPTCHA v3** gates the charge endpoint when `RECAPTCHA_SECRET_KEY` is set; the site key ships via `/sdk-config`. With neither var set, client and server both skip it (local dev).
-
-**Invoice fields this surface reads and writes** — these are the REAL names. (The predecessor diagnostic brief cited `qbInvoiceId`, `lastPushAt`, `lastPushStatus` and `qbSyncToken`. **No such fields exist.** Nothing reads or writes them.)
+**Invoice fields this surface reads and writes.**
 
 | Field | Meaning |
 |---|---|
-| `quickbooksInvoiceId` | QB invoice ID from the accounting push. Absent ⇒ the charge still runs but no QB Payment is recorded (a known AR-drift risk, tracked in its own brief). |
-| `quickbooksChargeId` | Intuit charge ID from a successful capture. |
-| `quickbooksPaymentId` | QB Accounting Payment record ID, best-effort after capture. |
-| `paymentToken` | 32-char hex gating `/pay/invoice/:id`. Minted by `invoices.ensurePaymentToken`. |
-| `portalToken` | Separate 32-char hex gating the read-only `/portal/invoice/:id` mirror — independently revocable. |
-| `paymentAttempts[]` | **New.** Append-only log of every charge attempt. |
+| `stripePaymentIntentId` | Open (or settled) PaymentIntent for this invoice. Persisted at intent creation for reuse + verification. |
+| `stripeChargeId` | Stripe charge (`ch_…`) from the successful payment. |
+| `quickbooksInvoiceId` | QBO invoice ID from the accounting push. Absent ⇒ payment still completes but no QBO Payment is recorded (known AR-drift risk, own brief). |
+| `quickbooksPaymentId` | QBO Payment record ID, best-effort after the Stripe charge. |
+| `quickbooksChargeId` | **Legacy** — Intuit charge ID on invoices paid before the migration. Not written anymore. |
+| `paymentToken` / `portalToken` | Independent 32-char hex tokens gating the pay page / the read-only portal mirror. |
+| `paymentAttempts[]` | Append-only log of every charge attempt (below). |
 
-**`paymentAttempts[]`** (`invoices.appendPaymentAttempt`, Hard Rule 4). One entry per call to the charges API, **success and failure alike**, written before the response goes back to the customer. Fields: `ts`, `outcome` (`success` | `failure`), `amount`, `currency`, `chargeId`, `chargeStatus`, `httpStatus`, `intuitCode` (e.g. `PMT-2002`), `intuitMessage` (verbatim gateway string — for Patrick, never the customer), `intuitTid` (quote this to Intuit support), `customerMessage` (the exact words the customer read), `cardBrand`, `cardLast4`, `avsStreet`, `avsZip`, `cvcMatch`. Each entry mirrors into `history[]` as `payment_attempt:success|failure`. The field list is an explicit allowlist, which is the structural guarantee that no PAN, CVC, expiry or card token can be persisted even if a caller passes one. `update()`'s allowlist excludes `paymentAttempts`, so no ordinary patch can rewrite the log. **Before this existed, a failed charge left no trace anywhere Patrick could see** — only a `console.warn` in Render's logs.
+**`paymentAttempts[]`** (`invoices.appendPaymentAttempt`, Hard Rule 4). One entry per attempt, **success and failure alike**. Fields: `ts`, `outcome`, `processor` (`stripe` | `quickbooks`; records from before the migration used Intuit-named columns `intuitCode`/`intuitMessage`/`intuitTid` and hydrate verbatim — read a missing `processor` as `quickbooks`), `amount`, `currency`, `chargeId`, `chargeStatus`, `httpStatus`, `paymentIntentId`, `errorCode` (Stripe `card_declined` / Intuit `PMT-2002`), `declineCode` (Stripe's issuer-level reason — `insufficient_funds`, `incorrect_zip`; the AVS signature), `errorMessage` (verbatim gateway string — for Patrick, never the customer), `processorRef` (Stripe `req_…` / `intuit_tid` — quote this to processor support), `customerMessage` (the exact words the customer read), `cardBrand`, `cardLast4`, `avsStreet`, `avsZip`, `cvcMatch`. Mirrors into `history[]` as `payment_attempt:success|failure`. The field list is an explicit allowlist — the structural guarantee that no PAN, CVC, expiry or secret can be persisted even by mistake; `update()`'s allowlist excludes `paymentAttempts`.
 
-**Failure mapping.** `describeChargeFailure()` in `server.js` maps Intuit's `code` to customer-legible copy: address/AVS (`PMT-1002`, `PMT-1003`, `PMT-2002`, `PMT-2003`), security code (`PMT-1001`, `PMT-2000`, `PMT-2001`), card type not accepted (`PMT-5001`), declined by issuer (`PMT-5000`), expired card (no code of its own — matched on the message text, checked first), temporary/processing (`PMT-3000`, `PMT-4000`–`PMT-4002`, `PMT-6000`), and an unknown fallback. **No raw Intuit string ever reaches the customer**, and every message ends with the office number from `settings.contactInfo.customerSupportPhone`. An unmapped code lands verbatim in `paymentAttempts[]`, which is how the table gets extended from real data.
+**Failure mapping.** `describeChargeFailure()` in `server.js` accepts both processors' failure shapes and maps to one kinds table: address/AVS (`incorrect_zip`, Intuit `PMT-2002`…), security code, card number, card type not accepted, declined, expired, bank-auth failed, temporary, unknown fallback. **No raw gateway string ever reaches the customer**; every message carries the office number from `settings.contactInfo.customerSupportPhone`. Unmapped codes land verbatim in `paymentAttempts[]`, which is how the table grows from real data.
 
-**Accepted card brands.** `settings.payments.acceptedCardBrands` in `server/data/settings.json`, default `["visa","mastercard","amex","discover"]`; slugs validated against `settings.CARD_BRANDS`, labels from `settings.CARD_BRAND_LABELS`. Edited via `PATCH /api/settings/payments` (admin session). Displayed on the pay page above the card number field, and used for a client-side pre-submit warning. **Display + courtesy warning only — Intuit's merchant account is the authority on what actually charges, and this list never gates the server-side charge call.** **Where brand acceptance is actually configured:** on the **Intuit merchant account**, not in this repo and not in any env var — QuickBooks Payments → account/deposit settings in the QBO company, managed through Intuit's Merchant Service Center. Amex in particular is a separate opt-in on many QBP accounts. This repo's setting exists so the customer-facing page can follow that change without a deploy; it is a mirror of the merchant-account state, not the source of it.
+**Accepted card brands.** `settings.payments.acceptedCardBrands`, edited via `PATCH /api/settings/payments`, displayed on the page. Display only — the Stripe account is the authority on what charges. Stripe accepts Amex by default (much of why the migration happened), so the default full list is accurate unless the Stripe account is configured otherwise.
 
-> ⚠️ **Unverified:** which brands PJL's merchant account accepts today has *not* been confirmed against Intuit — it is not discoverable from this codebase. The default `["visa","mastercard","amex","discover"]` is carried over from the copy that was previously hardcoded in `pay.html`. Patrick should check the Merchant Service Center and, if Amex is not enabled there, either enable it (an Intuit-side action, out of scope for the code) or drop `"amex"` via `PATCH /api/settings/payments` so the page stops promising it.
+**No retry, anywhere.** A capture is not idempotent (Hard Rule 22). The capture happens exactly once, browser-side, at `confirmPayment`; nothing server-side charges or re-confirms. The `Idempotency-Key` on intent *creation* dedupes double-taps into one intent — it protects creation, not capture.
 
-**Client-side validation** (`pay.js`) is brand-aware: Amex 15-digit PAN + 4-digit CID, everyone else 16 (Visa/Discover also 19) + 3-digit CVC, Luhn, and Canadian postal format (`L3X 0A5`, excluding D/F/I/O/Q/U throughout and W/Z leading). US ZIPs are accepted and flip `country` to `US` — a US billing postal sent as `CA` is a guaranteed AVS mismatch. Postal codes are uppercased and stripped of whitespace before send.
+**Test mode.** `sk_test_`/`pk_test_` keys work end-to-end against Stripe's test cards; the page shows a "Test mode" banner whenever the publishable key is a test key, so a test link can never pass for a real bill. A live/test key mismatch is detected at `sdk-config` and disables the form.
 
-**No retry, anywhere.** A capture is not idempotent (Hard Rule 22). `Request-Id` is random per call precisely so a deliberate customer re-submit is a new charge rather than a silently deduped no-op.
+**History.** Until Jul 2026 this surface charged through QuickBooks Payments (browser tokenized directly against `api.intuit.com`, server charged via `/quickbooks/v4/payments/charges` — see `quickbooks.chargeCard`, retained but no longer routed to). The AVS work (billing street address, postal normalization, attempt log, failure mapping) was built on that rail days before the migration and carried over intact — it is processor-agnostic. The predecessor diagnostic brief cited invoice fields `qbInvoiceId`/`lastPushAt`/`lastPushStatus`/`qbSyncToken`; **no such fields exist.**
 
 ## Configuration (Render env vars)
 
@@ -1234,6 +1239,24 @@ GOOGLE_MAPS_SERVER_KEY = (server-side geocoding only — not the browser key)
 QB_CLIENT_ID          = (optional — enables QB push)
 QB_CLIENT_SECRET      = (optional)
 QB_ENVIRONMENT        = sandbox | production (defaults to sandbox)
+STRIPE_SECRET_KEY     = sk_live_… (server-side; enables card payment on
+                                   /pay/invoice. sk_test_ for test mode.)
+STRIPE_PUBLISHABLE_KEY = pk_live_… (shipped to the browser via /sdk-config.
+                                   MUST match the secret key's mode — a
+                                   live/test mismatch disables the form
+                                   with a loud log line.)
+STRIPE_WEBHOOK_SECRET = whsec_…   (signing secret for /api/webhooks/stripe.
+                                   Create the endpoint in the Stripe
+                                   dashboard → Webhooks, events:
+                                   payment_intent.succeeded,
+                                   payment_intent.payment_failed. Without
+                                   it, webhook delivery is REFUSED — the
+                                   paid-flip then relies solely on the
+                                   customer's confirm POST.)
+STRIPE_API_VERSION    = (optional pin, e.g. 2025-06-30.basil; unset =
+                                   account default)
+RECAPTCHA_SITE_KEY    = (optional — reCAPTCHA v3 on the pay page)
+RECAPTCHA_SECRET_KEY  = (optional — server-side verify; unset skips)
 ```
 
 ## Hard accuracy rules (DO NOT VIOLATE)
@@ -1292,15 +1315,19 @@ These have memory entries; surface them in any AI / specialist context.
 - **A capture is not idempotent** (design spec Hard Rule 22). Cascades,
   QB pushes and recovery sweeps can all be safely re-run; a card charge
   cannot. No automatic retry may be added anywhere in the charge path.
-  A failed attempt records to `invoice.paymentAttempts[]` and stops —
-  the customer re-submits deliberately, and that re-submit is a new
-  charge with a new random `Request-Id`.
+  Since the Stripe migration the capture happens exactly once,
+  browser-side, at `confirmPayment` — nothing server-side charges,
+  retries, or re-confirms. A failed attempt records to
+  `invoice.paymentAttempts[]` and stops; the customer re-submits
+  deliberately. (The paid-flip *finalizer* is idempotent — that is
+  bookkeeping, not a capture.)
 - **Card data never touches the server** (design spec Hard Rule 23).
-  PAN, CVC and expiry go from the browser straight to `api.intuit.com`;
-  PJL's Node process only ever sees the opaque token. This is what keeps
-  the integration in PCI SAQ-A-EP rather than SAQ-D. Billing ADDRESS
-  fields are not card data and are safe server-side — collecting them
-  is how the charge passes AVS.
+  PAN, CVC and expiry live inside Stripe's Payment Element iframe and go
+  straight to `api.stripe.com` (previously: direct tokenization against
+  `api.intuit.com`); PJL's Node process only ever sees opaque
+  PaymentIntent ids. This is what keeps the integration in PCI SAQ-A-EP
+  rather than SAQ-D. Billing ADDRESS fields are not card data and are
+  safe server-side — collecting them is how the charge passes AVS.
 
 ## How to run locally
 

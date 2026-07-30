@@ -170,6 +170,16 @@ function hydrate(inv) {
     paymentToken: inv?.paymentToken || null,
     quickbooksChargeId: inv?.quickbooksChargeId || null,
     quickbooksPaymentId: inv?.quickbooksPaymentId || null,
+    // Stripe migration (Jul 2026): Stripe processes the card; QuickBooks
+    // stays the ledger (quickbooksInvoiceId/quickbooksPaymentId above are
+    // still live — the QBO Payment record is still created after a
+    // successful Stripe charge). stripePaymentIntentId is the open
+    // intent for this invoice — persisted so a page reload reuses one
+    // intent instead of minting chargeable duplicates, and so the paid
+    // flip can verify the intent it expects. stripeChargeId is the
+    // settled charge (ch_/py_) from the successful payment.
+    stripePaymentIntentId: inv?.stripePaymentIntentId || null,
+    stripeChargeId: inv?.stripeChargeId || null,
     sentAt: inv?.sentAt || null,
     paidAt: inv?.paidAt || null,
     voidedAt: inv?.voidedAt || null,
@@ -425,7 +435,7 @@ async function update(id, patch) {
   if (idx === -1) return null;
   const current = records[idx];
   const next = { ...current };
-  const allowed = ["status", "notes", "quickbooksInvoiceId", "quickbooksChargeId", "quickbooksPaymentId", "paymentToken", "portalToken", "customerSmsScheduledAt", "customerSmsSentAt", "customerReminderHistory", "customerJunkMailWarningSentAt", "customerJunkMailWarningHistory", "customerName", "customerEmail", "customerPhone", "address", "holdUntilCompletion"];
+  const allowed = ["status", "notes", "quickbooksInvoiceId", "quickbooksChargeId", "quickbooksPaymentId", "stripePaymentIntentId", "stripeChargeId", "paymentToken", "portalToken", "customerSmsScheduledAt", "customerSmsSentAt", "customerReminderHistory", "customerJunkMailWarningSentAt", "customerJunkMailWarningHistory", "customerName", "customerEmail", "customerPhone", "address", "holdUntilCompletion"];
   for (const key of allowed) {
     if (patch && Object.prototype.hasOwnProperty.call(patch, key)) next[key] = patch[key];
   }
@@ -605,6 +615,12 @@ async function appendPaymentAttempt(id, attempt) {
   const entry = {
     ts: attempt?.ts || now,
     outcome,
+    // Which rail processed the attempt. Records written before the
+    // Stripe migration have no processor field and used Intuit-named
+    // columns (intuitCode/intuitMessage/intuitTid) — those hydrate
+    // verbatim and stay readable; treat a missing processor as
+    // "quickbooks" when displaying.
+    processor: attempt?.processor === "stripe" ? "stripe" : "quickbooks",
     amount: Number(attempt?.amount) || 0,
     currency: attempt?.currency || "CAD",
     chargeId: cap(attempt?.chargeId, 100),
@@ -614,21 +630,30 @@ async function appendPaymentAttempt(id, attempt) {
     httpStatus: attempt?.httpStatus != null && attempt.httpStatus !== "" && Number.isFinite(Number(attempt.httpStatus))
       ? Number(attempt.httpStatus)
       : null,
-    // Intuit's own error code (e.g. "PMT-2002") and verbatim message.
-    // The message is stored UNMODIFIED for Patrick — it is the raw
-    // gateway string that must never reach the customer.
-    intuitCode: cap(attempt?.intuitCode, 40),
-    intuitMessage: cap(attempt?.intuitMessage, 500),
-    // The transaction id to quote when calling Intuit support.
-    intuitTid: cap(attempt?.intuitTid, 100),
+    // The processor's own error code and verbatim message — Intuit's
+    // "PMT-2002" or Stripe's "card_declined". The message is stored
+    // UNMODIFIED for Patrick — it is the raw gateway string that must
+    // never reach the customer. declineCode is Stripe's finer-grained
+    // issuer reason ("insufficient_funds", "incorrect_zip") when the
+    // issuer supplied one; null on QuickBooks records.
+    errorCode: cap(attempt?.errorCode ?? attempt?.intuitCode, 40),
+    declineCode: cap(attempt?.declineCode, 40),
+    errorMessage: cap(attempt?.errorMessage ?? attempt?.intuitMessage, 500),
+    // The processor-side reference to quote to support: intuit_tid on
+    // QuickBooks records, the req_… request id on Stripe records.
+    processorRef: cap(attempt?.processorRef ?? attempt?.intuitTid, 100),
+    // Stripe payment intent (pi_…) the attempt belongs to, when known.
+    paymentIntentId: cap(attempt?.paymentIntentId, 100),
     // What the CUSTOMER was actually shown, so a support call can start
     // from the same words they read on their phone.
     customerMessage: cap(attempt?.customerMessage, 300),
     cardBrand: cap(attempt?.cardBrand, 40),
     cardLast4: /^\d{4}$/.test(last4) ? last4 : null,
     // AVS + CVC verification results — the whole point of collecting a
-    // billing street address. "avsStreet" failing while "avsZip" passes
-    // is the signature of the Amex pattern this brief was written for.
+    // billing street address. Stripe reports pass/fail/unavailable/
+    // unchecked; Intuit reported Pass/Fail. "avsStreet" failing while
+    // "avsZip" passes is the signature of the Amex pattern the AVS
+    // brief was written for.
     avsStreet: cap(attempt?.avsStreet, 20),
     avsZip: cap(attempt?.avsZip, 20),
     cvcMatch: cap(attempt?.cvcMatch, 20)
@@ -641,7 +666,7 @@ async function appendPaymentAttempt(id, attempt) {
   // that timeline, not a separate array.
   const summary = outcome === "success"
     ? `Card charge approved${entry.chargeId ? ` (${entry.chargeId})` : ""}.`
-    : `Card charge declined${entry.intuitCode ? ` [${entry.intuitCode}]` : ""}${entry.intuitMessage ? `: ${entry.intuitMessage}` : "."}${entry.intuitTid ? ` (intuit_tid ${entry.intuitTid})` : ""}`;
+    : `Card charge declined${entry.errorCode ? ` [${entry.errorCode}${entry.declineCode ? `/${entry.declineCode}` : ""}]` : ""}${entry.errorMessage ? `: ${entry.errorMessage}` : "."}${entry.processorRef ? ` (ref ${entry.processorRef})` : ""}`;
   next.history = [...(next.history || []), {
     ts: entry.ts,
     action: `payment_attempt:${outcome}`,

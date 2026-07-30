@@ -114,16 +114,17 @@ const DEFAULT_DEPOSITS = {
 const DEPOSIT_TYPES = ["percent", "fixed"];
 const DEPOSIT_BASES = ["total_incl_tax", "subtotal"];
 
-// Card brands the merchant account accepts (QB Payments AVS brief, Jul
-// 2026). Displayed on the public pay page BEFORE the customer types 15
-// or 16 digits, so an unsupported card is discovered up front rather
-// than as a decline. Deliberately settings-driven and not a hardcoded
-// list: whether Amex clears is a merchant-account setting on Intuit's
-// side, and when Patrick changes it there he flips it here — no deploy.
+// Card brands the payment processor accepts (QB Payments AVS brief, Jul
+// 2026; processor is Stripe since the Jul 2026 migration). Displayed on
+// the public pay page BEFORE the customer types 15 or 16 digits, so an
+// unsupported card is discovered up front rather than as a decline.
+// Deliberately settings-driven and not a hardcoded list: brand
+// acceptance is a processor-account setting, and when Patrick changes
+// it there he flips it here — no deploy. (Stripe accepts Amex by
+// default, which is much of why the migration happened.)
 //
-// Display only + a client-side pre-submit warning. Intuit's merchant
-// account remains the authority on what actually charges; this list
-// never gates the server-side charge call.
+// Display only. The processor account remains the authority on what
+// actually charges; this list never gates the server-side flow.
 const CARD_BRANDS = ["visa", "mastercard", "amex", "discover"];
 const CARD_BRAND_LABELS = {
   visa: "Visa",

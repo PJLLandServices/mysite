@@ -295,6 +295,33 @@ a:hover { text-decoration: underline; }
   color: var(--green);
 }
 
+/* Stripe Payment Element mount. The iframe sizes itself; min-height
+   reserves space so the form doesn't jump when it loads. */
+.pay-stripe-element {
+  min-height: 90px;
+}
+.pay-stripe-loading {
+  margin: 0;
+  padding: 24px 0;
+  font-size: 13px;
+  font-style: italic;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+/* Test-mode banner — shown by pay.js when /sdk-config reports a test
+   publishable key, so a test link can never pass for a real bill. */
+.pay-test-banner {
+  margin: 0 0 18px;
+  padding: 10px 14px;
+  background: var(--amber-pale);
+  border: 1px solid var(--amber);
+  border-radius: var(--r);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--amber-hover);
+}
+
 .pay-charge-btn {
   width: 100%;
   background: var(--amber);
