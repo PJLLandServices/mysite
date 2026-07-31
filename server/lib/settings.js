@@ -114,6 +114,28 @@ const DEFAULT_DEPOSITS = {
 const DEPOSIT_TYPES = ["percent", "fixed"];
 const DEPOSIT_BASES = ["total_incl_tax", "subtotal"];
 
+// Card brands the payment processor accepts (QB Payments AVS brief, Jul
+// 2026; processor is Stripe since the Jul 2026 migration). Displayed on
+// the public pay page BEFORE the customer types 15 or 16 digits, so an
+// unsupported card is discovered up front rather than as a decline.
+// Deliberately settings-driven and not a hardcoded list: brand
+// acceptance is a processor-account setting, and when Patrick changes
+// it there he flips it here — no deploy. (Stripe accepts Amex by
+// default, which is much of why the migration happened.)
+//
+// Display only. The processor account remains the authority on what
+// actually charges; this list never gates the server-side flow.
+const CARD_BRANDS = ["visa", "mastercard", "amex", "discover"];
+const CARD_BRAND_LABELS = {
+  visa: "Visa",
+  mastercard: "Mastercard",
+  amex: "American Express",
+  discover: "Discover"
+};
+const DEFAULT_PAYMENTS = {
+  acceptedCardBrands: [...CARD_BRANDS]
+};
+
 const DEFAULT_SETTINGS = {
   adminDefaults: {
     newLead: "email_sms",
@@ -128,6 +150,7 @@ const DEFAULT_SETTINGS = {
   contactInfo: { ...DEFAULT_CONTACT_INFO },
   deposits: { ...DEFAULT_DEPOSITS },
   invoiceSms: { ...DEFAULT_INVOICE_SMS },
+  payments: { acceptedCardBrands: [...DEFAULT_PAYMENTS.acceptedCardBrands] },
   reviewRequests: { ...DEFAULT_REVIEW_REQUESTS },
   outreachTemplates: {
     spring: { ...BLANK_OUTREACH_TEMPLATE },
@@ -216,6 +239,23 @@ function hydrate(s) {
         ? Number(ism.maxAgeHours)
         : DEFAULT_INVOICE_SMS.maxAgeHours
     },
+    payments: (() => {
+      const p = s?.payments || {};
+      const brands = Array.isArray(p.acceptedCardBrands)
+        ? Array.from(new Set(
+            p.acceptedCardBrands
+              .map((b) => String(b || "").trim().toLowerCase())
+              .filter((b) => CARD_BRANDS.includes(b))
+          ))
+        : [];
+      return {
+        // An empty/garbage list falls back to the full default rather
+        // than rendering "we accept nothing" on a live payment page.
+        // Dropping ONE brand (the Amex case this was built for) works
+        // exactly as intended.
+        acceptedCardBrands: brands.length ? brands : [...DEFAULT_PAYMENTS.acceptedCardBrands]
+      };
+    })(),
     reviewRequests: {
       enabled: rr.enabled === true,
       delayDays: Number.isFinite(Number(rr.delayDays)) && Number(rr.delayDays) >= 0
@@ -361,6 +401,40 @@ async function updateContactInfo(patch, { who = "admin", note = "" } = {}) {
     action: "contactInfo",
     before,
     after: { ...settings.contactInfo },
+    note
+  });
+  if (settings.audit.length > 50) settings.audit.length = 50;
+  await writeAll(settings);
+  return settings;
+}
+
+// Update the payments namespace — currently just the accepted card
+// brands shown on the public pay page. Audit-trailed. Unknown brand
+// slugs are dropped rather than stored, so the pay page can only ever
+// render names it has a label for. Rejects an empty result: the caller
+// asked to accept nothing, which is never what they meant.
+async function updatePayments(patch, { who = "admin", note = "" } = {}) {
+  const settings = await readAll();
+  const before = { ...settings.payments, acceptedCardBrands: [...settings.payments.acceptedCardBrands] };
+  if (patch && Array.isArray(patch.acceptedCardBrands)) {
+    const brands = Array.from(new Set(
+      patch.acceptedCardBrands
+        .map((b) => String(b || "").trim().toLowerCase())
+        .filter((b) => CARD_BRANDS.includes(b))
+    ));
+    if (!brands.length) {
+      throw new Error("At least one card brand must be accepted.");
+    }
+    // Keep the canonical CARD_BRANDS order so the page reads the same
+    // way regardless of the order they arrived in.
+    settings.payments.acceptedCardBrands = CARD_BRANDS.filter((b) => brands.includes(b));
+  }
+  settings.audit.unshift({
+    ts: new Date().toISOString(),
+    who,
+    action: "payments",
+    before,
+    after: { ...settings.payments, acceptedCardBrands: [...settings.payments.acceptedCardBrands] },
     note
   });
   if (settings.audit.length > 50) settings.audit.length = 50;
@@ -581,11 +655,14 @@ module.exports = {
   NOTIFY_MODES,
   DEFAULT_SETTINGS,
   DEFAULT_CONTACT_INFO,
+  CARD_BRANDS,
+  CARD_BRAND_LABELS,
   SYNC_ERRORS_CAP,
   get,
   updateAdminDefaults,
   updateQuickbooks,
   updateContactInfo,
+  updatePayments,
   updateDeposits,
   updateReviewRequests,
   recordSyncError,

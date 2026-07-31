@@ -1,27 +1,37 @@
-// Public payment page client.
+// Public payment page client — Stripe Payment Element (Stripe migration,
+// Jul 2026; replaces the QuickBooks Payments direct-tokenization flow).
 //
-// Flow (corrected in PR 3.1 — Intuit doesn't ship a JS SDK):
+// Flow (deferred-intent pattern):
 //   1. Load invoice summary from /api/pay/invoice/:id?t=<token>.
 //   2. Render the summary card.
-//   3. If status is paid → show the paid banner, hide the form.
-//   4. Customer enters card details into a normal HTML form on this page.
-//   5. On Pay click, this JS POSTs the card payload DIRECTLY to Intuit's
-//      tokenization endpoint (api.intuit.com or sandbox.api.intuit.com),
-//      cross-origin, with NO Authorization header. The endpoint accepts
-//      unauthenticated POSTs by design (same model as Stripe.js).
-//   6. Intuit returns a one-shot card token in field `value`.
-//   7. We POST { t, cardToken } to /api/pay/invoice/:id/charge.
-//   8. Server uses its OAuth bearer to actually charge via /v4/payments/charges.
-//   9. Redirect to /pay/invoice/:id/thanks?t=<token>.
+//   3. Load /sdk-config → Stripe publishable key, amount, brands,
+//      support phone, reCAPTCHA site key.
+//   4. Mount Stripe's Payment Element (card fields live in a Stripe
+//      iframe — they never exist in this page's DOM). The Element
+//      collects card number, expiry, CVC, and billing postal + country
+//      (postal pre-filled from the invoice's bill-to snapshot via
+//      defaultValues); Apple Pay / Google Pay render inside it when the
+//      device qualifies and the domain's wallet verification passed.
+//   5. On Pay click: elements.submit() → reCAPTCHA →
+//      POST /payment-intent (server creates/reuses the PaymentIntent,
+//      amount comes from the INVOICE, never from here) →
+//      stripe.confirmPayment (browser ↔ Stripe directly).
+//   6. Decline → report the intent id to /payment-failed so the server
+//      pulls the verified failure from Stripe onto the invoice's
+//      attempt log, and show the mapped message.
+//   7. Success → POST /charge { paymentIntentId } — the server re-reads
+//      the intent FROM STRIPE, verifies it, flips the invoice paid.
+//   8. Redirect to /pay/invoice/:id/thanks?t=<token>.
 //
-// PCI scope: SAQ-A-EP. Card PAN/CVC never reach pjllandservices.com's
-// server. They go directly from the user's browser to api.intuit.com.
-// PJL's server only ever sees the opaque token. DO NOT change this to
+// PCI scope: SAQ-A-EP. Card PAN/CVC/expiry live inside Stripe's iframe
+// and go straight to api.stripe.com. PJL's server only ever sees the
+// PaymentIntent id. DO NOT replace the Element with raw card inputs or
 // POST card data through pjllandservices.com — that pushes the
-// integration into SAQ-D scope (a much heavier compliance burden).
+// integration into SAQ-D scope (Hard Rule 23).
 //
-// Verified against Intuit's official Node.js sample app:
-// https://github.com/IntuitDeveloper/SampleApp-Payments-Nodejs
+// NO automatic retry anywhere (Hard Rule 22): a failed attempt records
+// and stops; re-enabling the Pay button is the only "retry" — a
+// deliberate human one.
 
 const matchPath = location.pathname.match(/^\/pay\/invoice\/([^/]+)\/?$/);
 const invoiceId = matchPath ? decodeURIComponent(matchPath[1]) : null;
@@ -35,17 +45,21 @@ const $formSection = document.getElementById("payFormSection");
 const $chargeBtn = document.getElementById("payChargeBtn");
 const $chargeBtnAmount = document.getElementById("payChargeBtnAmount");
 const $chargeStatus = document.getElementById("payChargeStatus");
+const $testBanner = document.getElementById("payTestBanner");
 
-const $name = document.getElementById("payCardName");
-const $number = document.getElementById("payCardNumber");
-const $exp = document.getElementById("payCardExp");
-const $cvc = document.getElementById("payCardCvc");
-const $postal = document.getElementById("payCardPostal");
+const $acceptedBrands = document.getElementById("payAcceptedBrands");
+const $stripeMount = document.getElementById("payStripeElement");
 
 let currentInvoice = null;
-let tokenizeUrl = null; // Filled from /sdk-config response
-let recaptchaSiteKey = null; // Filled from /sdk-config response (may stay null in dev)
-let recaptchaReady = false; // True once grecaptcha global is loaded
+let stripeClient = null;   // Stripe(publishableKey) once config lands
+let stripeElements = null; // Elements group the Payment Element lives in
+let paymentElement = null;
+let paymentElementReady = false;
+let recaptchaSiteKey = null;
+let recaptchaReady = false;
+// Support phone + accepted brands from /sdk-config (settings-driven,
+// never hardcoded here).
+let supportPhone = "(905) 960-0181";
 
 function escapeHtml(s) {
   return String(s == null ? "" : s)
@@ -73,29 +87,16 @@ function setStatus(msg, kind) {
   $chargeStatus.dataset.kind = kind || "";
 }
 
-// ---- Light input formatting -------------------------------------------
-// Card number: insert spaces every 4 digits as the user types.
-$number?.addEventListener("input", () => {
-  const digits = $number.value.replace(/\D/g, "").slice(0, 19);
-  const grouped = digits.replace(/(.{4})/g, "$1 ").trim();
-  if (grouped !== $number.value) $number.value = grouped;
-  $number.classList.remove("pay-field--invalid");
-});
-// Expiry: auto-insert / after MM. Accept "MM/YY" or "MMYY".
-$exp?.addEventListener("input", () => {
-  const digits = $exp.value.replace(/\D/g, "").slice(0, 4);
-  const formatted = digits.length >= 3 ? digits.slice(0, 2) + "/" + digits.slice(2) : digits;
-  if (formatted !== $exp.value) $exp.value = formatted;
-  $exp.classList.remove("pay-field--invalid");
-});
-$cvc?.addEventListener("input", () => {
-  $cvc.value = $cvc.value.replace(/\D/g, "").slice(0, 4);
-  $cvc.classList.remove("pay-field--invalid");
-});
-$name?.addEventListener("input", () => $name.classList.remove("pay-field--invalid"));
-$postal?.addEventListener("input", () => $postal.classList.remove("pay-field--invalid"));
+function disablePayments(message) {
+  setStatus(message, "error");
+  $chargeBtn.disabled = true;
+}
 
-// ---- Load invoice ----------------------------------------------------
+// All card-side input handling — number, expiry, CVC, postal format —
+// lives inside Stripe's Payment Element now (including Amex 15/4).
+// This file has no card or address fields of its own.
+
+// ---- Load invoice + payment config -------------------------------------
 async function load() {
   if (!invoiceId || !token) return showError();
   try {
@@ -105,29 +106,119 @@ async function load() {
     if (!r.ok || !data.ok || !data.invoice) return showError();
     currentInvoice = data.invoice;
     render(currentInvoice);
-    // Fetch the tokenization URL only if the form section is visible
-    // (i.e. the invoice is unpaid and chargeable).
-    if (!$formSection.hidden) {
-      try {
-        const r2 = await fetch(`/api/pay/invoice/${encodeURIComponent(invoiceId)}/sdk-config?t=${encodeURIComponent(token)}`);
-        const d2 = await r2.json().catch(() => ({}));
-        if (r2.ok && d2.ok && d2.tokenizeUrl) {
-          tokenizeUrl = d2.tokenizeUrl;
-          recaptchaSiteKey = d2.recaptchaSiteKey || null;
-          if (recaptchaSiteKey) loadRecaptchaScript(recaptchaSiteKey);
-        } else {
-          setStatus(d2?.errors?.[0] || "Card payment is not available right now. Use e-Transfer or call us.", "error");
-          $chargeBtn.disabled = true;
-        }
-      } catch (err) {
-        setStatus("Couldn't reach the payment processor. Use e-Transfer or call us.", "error");
-        $chargeBtn.disabled = true;
-      }
-    }
+    if (!$formSection.hidden) await initPaymentForm();
   } catch (err) {
     console.error("[pay] load failed:", err);
     showError();
   }
+}
+
+async function initPaymentForm() {
+  let cfg;
+  try {
+    const r = await fetch(`/api/pay/invoice/${encodeURIComponent(invoiceId)}/sdk-config?t=${encodeURIComponent(token)}`);
+    cfg = await r.json().catch(() => ({}));
+    if (!r.ok || !cfg.ok || !cfg.stripePublishableKey) {
+      return disablePayments(cfg?.errors?.[0] || "Card payment is not available right now. Use e-Transfer or call us.");
+    }
+  } catch (err) {
+    return disablePayments("Couldn't reach the payment processor. Use e-Transfer or call us.");
+  }
+
+  if (cfg.supportPhone) supportPhone = cfg.supportPhone;
+  renderAcceptedBrands(cfg.acceptedCardBrands);
+  if ($testBanner && cfg.liveMode === false) $testBanner.hidden = false;
+  recaptchaSiteKey = cfg.recaptchaSiteKey || null;
+  if (recaptchaSiteKey) loadRecaptchaScript(recaptchaSiteKey);
+
+  // Stripe.js is loaded from js.stripe.com by a static tag in pay.html.
+  // If it didn't load (blocker, network), fail toward the e-Transfer
+  // path rather than a dead Pay button with no explanation.
+  if (typeof window.Stripe !== "function") {
+    return disablePayments(`The secure card form couldn't load. Please pay by e-Transfer below, or call us at ${supportPhone}.`);
+  }
+
+  try {
+    stripeClient = window.Stripe(cfg.stripePublishableKey);
+    // Deferred-intent mode: the Element renders from amount + currency
+    // alone; the PaymentIntent is only created server-side when the
+    // customer actually clicks Pay. Amount here is display/validation
+    // only — the server always prices the intent from the invoice.
+    stripeElements = stripeClient.elements({
+      mode: "payment",
+      amount: cfg.amountCents,
+      currency: cfg.currency || "cad",
+      // MUST match payment_method_types on the server-created intent
+      // (stripe.js createPaymentIntent) — deferred-intent rules: if the
+      // Element offers a method the intent doesn't allow, confirmPayment
+      // fails after the customer already picked it. Card only: it
+      // carries Apple Pay / Google Pay. Link was removed (Jul 2026,
+      // Patrick's request) — its save-my-info block dominated the form.
+      paymentMethodTypes: ["card"],
+      appearance: {
+        variables: {
+          colorPrimary: "#1B4D2E",
+          colorText: "#1A1A1A",
+          colorDanger: "#B23A3A",
+          fontFamily: "'DM Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+          borderRadius: "8px"
+        }
+      }
+    });
+    // Slim form (Jul 2026, Patrick's request): the Element collects only
+    // what Stripe requires for a card — number, expiry, CVC, and the
+    // billing postal code + country it asks for natively. The custom
+    // name/street/postal fields from the QuickBooks-era AVS work are
+    // gone: Stripe's rail runs postal-only address verification by
+    // default (the live Amex test passed full AVS), and the street
+    // field's job is done. If Amex declines ever resurface, re-add
+    // address collection with fields.billingDetails.address: "full"
+    // here — one line — rather than rebuilding custom inputs.
+    const prefillPostal = currentInvoice?.billingPrefill?.postalCode || "";
+    paymentElement = stripeElements.create("payment", {
+      layout: "tabs",
+      // Explicit for the next reader: wallets ride the card rail and
+      // "auto" (also the default) shows them whenever the device
+      // qualifies AND the domain's wallet verification has passed in
+      // Stripe → Settings → Payment method domains. No code can force
+      // the Apple Pay button past a failed domain verification.
+      wallets: { applePay: "auto", googlePay: "auto" },
+      // Pre-fill the Element's own postal field from the invoice's
+      // bill-to snapshot — same courtesy the custom field used to do,
+      // still fully editable by the customer.
+      defaultValues: prefillPostal ? {
+        billingDetails: { address: { postal_code: prefillPostal, country: "CA" } }
+      } : undefined
+    });
+    paymentElement.on("ready", () => { paymentElementReady = true; });
+    paymentElement.on("loaderror", (ev) => {
+      console.warn("[pay] Payment Element load error:", ev?.error?.message);
+      disablePayments(`The secure card form couldn't load. Please pay by e-Transfer below, or call us at ${supportPhone}.`);
+    });
+    if ($stripeMount) $stripeMount.innerHTML = "";
+    paymentElement.mount("#payStripeElement");
+    // Wallet fast path — the one-tap Apple Pay / Google Pay button above
+    // the card form. Mounted from the same Elements group so it shares
+    // the amount, currency and card-only method pinning.
+    mountExpressCheckout();
+  } catch (err) {
+    console.error("[pay] Stripe init failed:", err);
+    disablePayments(`The secure card form couldn't load. Please pay by e-Transfer below, or call us at ${supportPhone}.`);
+  }
+}
+
+// Render the accepted-brand line from the settings-driven list. Anything
+// malformed leaves the line hidden rather than printing a half-list the
+// merchant account may not honour.
+function renderAcceptedBrands(brands) {
+  if (!$acceptedBrands || !Array.isArray(brands) || !brands.length) return;
+  const labels = brands.map((b) => String(b?.label || b?.slug || "").trim()).filter(Boolean);
+  if (!labels.length) return;
+  const list = labels.length === 1
+    ? labels[0]
+    : `${labels.slice(0, -1).join(", ")} and ${labels[labels.length - 1]}`;
+  $acceptedBrands.textContent = `We accept ${list}.`;
+  $acceptedBrands.hidden = false;
 }
 
 function render(inv) {
@@ -181,41 +272,11 @@ function render(inv) {
   }
 
   // Status is sent (or draft, edge case) — form section already visible.
-}
-
-// ---- Validation -------------------------------------------------------
-function validate() {
-  let ok = true;
-  function flag(el) { el.classList.add("pay-field--invalid"); ok = false; el.focus(); }
-  if (!$name.value.trim()) { flag($name); return false; }
-  const digits = $number.value.replace(/\D/g, "");
-  if (digits.length < 13 || digits.length > 19) { flag($number); return false; }
-  // Luhn check — fast sanity to fail invalid card numbers before
-  // we waste a tokenization call.
-  if (!luhnValid(digits)) { flag($number); return false; }
-  const expMatch = $exp.value.match(/^(\d{2})\s*\/?\s*(\d{2})$/);
-  if (!expMatch) { flag($exp); return false; }
-  const expMonth = parseInt(expMatch[1], 10);
-  if (expMonth < 1 || expMonth > 12) { flag($exp); return false; }
-  if (!/^\d{3,4}$/.test($cvc.value)) { flag($cvc); return false; }
-  if (!$postal.value.trim()) { flag($postal); return false; }
-  return ok;
-}
-function luhnValid(num) {
-  let sum = 0, alt = false;
-  for (let i = num.length - 1; i >= 0; i--) {
-    let n = parseInt(num.charAt(i), 10);
-    if (alt) { n *= 2; if (n > 9) n -= 9; }
-    sum += n;
-    alt = !alt;
-  }
-  return sum % 10 === 0;
+  // The Element's postal pre-fill happens at initPaymentForm() via
+  // defaultValues, from the same invoice billingPrefill.
 }
 
 // ---- ReCAPTCHA v3 ----------------------------------------------------
-// Loads Google's reCAPTCHA script with the site key from /sdk-config.
-// The script exposes window.grecaptcha; we wait for `ready()` then
-// flag recaptchaReady so the Pay click can request a token.
 function loadRecaptchaScript(siteKey) {
   if (document.querySelector('script[data-recaptcha]')) return;
   const s = document.createElement("script");
@@ -227,7 +288,6 @@ function loadRecaptchaScript(siteKey) {
     if (window.grecaptcha?.ready) {
       window.grecaptcha.ready(() => { recaptchaReady = true; });
     } else {
-      // Older API — flag ready immediately if `ready` isn't present.
       recaptchaReady = true;
     }
   };
@@ -237,11 +297,8 @@ function loadRecaptchaScript(siteKey) {
   document.head.appendChild(s);
 }
 
-// Request a v3 reCAPTCHA token. Returns null if reCAPTCHA wasn't
-// configured (server didn't ship a site key). Throws on failure.
 async function getRecaptchaToken() {
   if (!recaptchaSiteKey) return null;
-  // Wait up to 5s for grecaptcha.ready() to fire if it hasn't yet.
   const startedAt = Date.now();
   while (!recaptchaReady && Date.now() - startedAt < 5000) {
     await new Promise(r => setTimeout(r, 100));
@@ -259,98 +316,195 @@ async function getRecaptchaToken() {
   });
 }
 
-// ---- Tokenize → charge -----------------------------------------------
-$chargeBtn?.addEventListener("click", async () => {
-  if (!currentInvoice || !tokenizeUrl) {
-    setStatus("Payment processor not ready. Use e-Transfer or call (905) 960-0181.", "error");
-    return;
-  }
-  if (!validate()) {
-    setStatus("Please check the highlighted field(s) and try again.", "error");
-    return;
-  }
-
-  $chargeBtn.disabled = true;
-  setStatus("Securing your card details with QuickBooks…", "info");
-
-  // Parse expiry MM/YY → 4-digit year.
-  const expMatch = $exp.value.match(/^(\d{2})\s*\/?\s*(\d{2})$/);
-  const expMonth = expMatch[1];
-  const expYear = "20" + expMatch[2];
-
-  // Address: only ship fields that have a value. Intuit's tokenization
-  // endpoint runs validation on every present field — sending
-  // streetAddress: "" returns "address.streetAddress is invalid", same
-  // for city / region. Omitting empty fields entirely is what Intuit
-  // expects when the merchant only collects postal code (the typical
-  // Canadian AVS pattern: PAN + postal is enough for card-not-present).
-  const address = {
-    postalCode: $postal.value.trim(),
-    country: "CA"
-  };
-  const cardPayload = {
-    card: {
-      number: $number.value.replace(/\D/g, ""),
-      expMonth,
-      expYear,
-      cvc: $cvc.value,
-      name: $name.value.trim(),
-      address
-    }
-  };
-
-  let cardToken;
+// Report a failed confirm to the server, which pulls the VERIFIED
+// failure detail from Stripe onto the invoice's attempt log — so a
+// browser-side decline is still visible to Patrick. If the server has a
+// better (mapped) message for the failure, prefer it. Best-effort:
+// logging must never block the customer's next attempt.
+async function reportFailure(paymentIntentId) {
+  if (!paymentIntentId) return null;
   try {
-    // Direct cross-origin POST to Intuit. NO Authorization header.
-    const r = await fetch(tokenizeUrl, {
+    const r = await fetch(`/api/pay/invoice/${encodeURIComponent(invoiceId)}/payment-failed`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(cardPayload)
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ t: token, paymentIntentId })
     });
     const data = await r.json().catch(() => ({}));
-    if (!r.ok) {
-      const msg = data?.errors?.[0]?.message || data?.message
-        || `Tokenization failed (HTTP ${r.status}).`;
-      throw new Error(msg);
-    }
-    cardToken = data.value;
-    if (!cardToken) throw new Error("Card couldn't be tokenized — please double-check the number and try again.");
-  } catch (err) {
-    setStatus(err.message || "Couldn't process the card.", "error");
+    return data?.errors?.[0] || null;
+  } catch { return null; }
+}
+
+// ---- Shared payment pipeline -------------------------------------------
+// Used by BOTH the card Pay button and the express (Apple Pay / Google
+// Pay) button — one pipeline, so the two flows can never drift in how
+// they create intents, report failures, or finalize.
+
+// reCAPTCHA → ask OUR server for the PaymentIntent. The amount comes
+// from the invoice server-side — nothing this page could lie about.
+// Throws with a customer-ready message on any failure.
+async function createIntentOnServer() {
+  const recaptchaToken = await getRecaptchaToken();
+  const r = await fetch(`/api/pay/invoice/${encodeURIComponent(currentInvoice.id)}/payment-intent`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ t: token, recaptchaToken })
+  });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok || !data.ok || !data.clientSecret) {
+    throw new Error(data?.errors?.[0] || `We couldn't start the payment. Please try again, or call us at ${supportPhone}.`);
+  }
+  return { clientSecret: data.clientSecret, paymentIntentId: data.paymentIntentId };
+}
+
+// Everything after stripe.confirmPayment resolves — identical for card
+// and wallet flows. Returns true when the payment reached a terminal
+// success (so callers can stop re-enabling buttons).
+async function handleConfirmOutcome(confirmError, paymentIntent, paymentIntentId) {
+  if (confirmError) {
+    // Stripe's card_error messages are written for customers, but our
+    // mapped copy carries the office number and the next step — ask the
+    // server to record the failure (verified against Stripe) and hand
+    // back the mapped message; fall back to Stripe's own text.
+    const mapped = await reportFailure(confirmError.payment_intent?.id || paymentIntentId);
+    setStatus(mapped || confirmError.message || `Payment couldn't be completed. Please call us at ${supportPhone}.`, "error");
+    // Deliberate-human-retry only (Hard Rule 22): re-enabling the button
+    // is the one and only retry path.
     $chargeBtn.disabled = false;
-    return;
+    return false;
   }
 
-  // Get a reCAPTCHA token (if reCAPTCHA is configured). The token is
-  // single-use, expires in 2 minutes; the server forwards it to Google
-  // for verification before processing the charge.
-  let recaptchaToken = null;
-  try {
-    recaptchaToken = await getRecaptchaToken();
-  } catch (err) {
-    setStatus(err.message || "Couldn't verify you're human.", "error");
-    $chargeBtn.disabled = false;
-    return;
+  if (!paymentIntent || paymentIntent.status !== "succeeded") {
+    // requires_action fell through, or processing. Don't guess — the
+    // webhook will finalize if it succeeds; tell the customer the truth.
+    setStatus(`Your bank is still processing this payment. Don't pay again — call us at ${supportPhone} if you don't get a receipt within a few minutes.`, "info");
+    return false;
   }
 
-  // Now hand the (opaque) token off to our server to actually charge.
-  setStatus("Processing your payment…", "info");
+  // Tell our server to verify with Stripe and flip the invoice.
+  setStatus("Payment approved — updating your invoice…", "info");
   try {
     const r = await fetch(`/api/pay/invoice/${encodeURIComponent(currentInvoice.id)}/charge`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ t: token, cardToken, recaptchaToken })
+      body: JSON.stringify({ t: token, paymentIntentId: paymentIntent.id })
     });
     const data = await r.json().catch(() => ({}));
-    if (!r.ok || !data.ok) throw new Error(data?.errors?.[0] || "Payment couldn't be completed.");
+    if (!r.ok || !data.ok) throw new Error(data?.errors?.[0] || "");
     setStatus("✓ Payment received. Redirecting…", "ok");
     setTimeout(() => {
       location.href = `/pay/invoice/${encodeURIComponent(currentInvoice.id)}/thanks?t=${encodeURIComponent(token)}`;
     }, 1000);
   } catch (err) {
-    setStatus(err.message || "Payment couldn't be completed.", "error");
-    $chargeBtn.disabled = false;
+    // The MONEY MOVED — Stripe said succeeded — only our bookkeeping
+    // call failed. The webhook will finalize the invoice; the one thing
+    // the customer must hear is "do not pay twice."
+    setStatus(err.message || `Your payment went through — the receipt may take a few minutes. Please DON'T pay again. Questions? ${supportPhone}.`, "info");
   }
+  return true;
+}
+
+// ---- Card Pay button: submit → intent → confirm → finalize --------------
+$chargeBtn?.addEventListener("click", async () => {
+  if (!currentInvoice || !stripeClient || !stripeElements) {
+    setStatus(`Payment processor not ready. Use e-Transfer or call ${supportPhone}.`, "error");
+    return;
+  }
+  if (!paymentElementReady) {
+    setStatus("The card form is still loading — one moment…", "info");
+    return;
+  }
+
+  $chargeBtn.disabled = true;
+  setStatus("Checking your card details…", "info");
+
+  // Element-side validation (card number, expiry, CVC — including
+  // Amex 15/4). Errors surface inline inside the Element itself.
+  const { error: submitError } = await stripeElements.submit();
+  if (submitError) {
+    setStatus(submitError.message || "Please check your card details and try again.", "error");
+    $chargeBtn.disabled = false;
+    return;
+  }
+
+  setStatus("Preparing your payment…", "info");
+  let intentRef;
+  try {
+    intentRef = await createIntentOnServer();
+  } catch (err) {
+    setStatus(err.message, "error");
+    $chargeBtn.disabled = false;
+    return;
+  }
+
+  // Confirm — browser ↔ Stripe directly. Billing details (postal +
+  // country) come from the Element's own fields. redirect:"if_required"
+  // — cards settle in-page; the server disallows redirect methods.
+  setStatus("Processing your payment…", "info");
+  const { error: confirmError, paymentIntent } = await stripeClient.confirmPayment({
+    elements: stripeElements,
+    clientSecret: intentRef.clientSecret,
+    redirect: "if_required",
+    confirmParams: {
+      return_url: `${location.origin}/pay/invoice/${encodeURIComponent(currentInvoice.id)}/thanks?t=${encodeURIComponent(token)}`
+    }
+  });
+  await handleConfirmOutcome(confirmError, paymentIntent, intentRef.paymentIntentId);
 });
+
+// ---- Express checkout (Apple Pay / Google Pay): sheet-first --------------
+// The wallet sheet opens on FIRST tap of the wallet button; the intent
+// is created while the sheet is up (deferred-intent pattern), and after
+// the customer authorizes, the same confirm/finalize pipeline runs.
+// Called from initPaymentForm once the Elements group exists.
+function mountExpressCheckout() {
+  const $section = document.getElementById("payExpressSection");
+  const $mount = document.getElementById("payExpressCheckout");
+  if (!$section || !$mount) return;
+  try {
+    const expressElement = stripeElements.create("expressCheckout", {
+      buttonHeight: 48
+    });
+    // Only reveal the block when a wallet is genuinely available on
+    // this device — availablePaymentMethods is undefined otherwise, and
+    // non-wallet users should never see an empty box or a divider.
+    expressElement.on("ready", (ev) => {
+      if (ev.availablePaymentMethods) $section.hidden = false;
+    });
+    // Apple requires the sheet to open synchronously with the tap —
+    // resolve immediately; server work happens in "confirm" below
+    // while the sheet shows its processing state.
+    expressElement.on("click", (ev) => ev.resolve());
+    expressElement.on("confirm", async (ev) => {
+      $chargeBtn.disabled = true;
+      setStatus("Processing your payment…", "info");
+      try {
+        const { error: submitError } = await stripeElements.submit();
+        if (submitError) throw new Error(submitError.message || "Please check the payment details and try again.");
+        const intentRef = await createIntentOnServer();
+        const { error: confirmError, paymentIntent } = await stripeClient.confirmPayment({
+          elements: stripeElements,
+          clientSecret: intentRef.clientSecret,
+          redirect: "if_required",
+          confirmParams: {
+            return_url: `${location.origin}/pay/invoice/${encodeURIComponent(currentInvoice.id)}/thanks?t=${encodeURIComponent(token)}`
+          }
+        });
+        await handleConfirmOutcome(confirmError, paymentIntent, intentRef.paymentIntentId);
+      } catch (err) {
+        // Pre-confirm failure (validation, reCAPTCHA, intent creation) —
+        // dismiss the wallet sheet with a failure state, then show the
+        // message on the page. No money moved.
+        try { ev.paymentFailed?.({ reason: "fail" }); } catch (_) { /* sheet already closed */ }
+        setStatus(err.message || `Payment couldn't be completed. Please call us at ${supportPhone}.`, "error");
+        $chargeBtn.disabled = false;
+      }
+    });
+    expressElement.mount("#payExpressCheckout");
+  } catch (err) {
+    // Express checkout is an enhancement — the card form below is the
+    // dependable path. Never let a wallet-button failure break the page.
+    console.warn("[pay] express checkout unavailable:", err?.message);
+  }
+}
 
 load();

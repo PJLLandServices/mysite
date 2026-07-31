@@ -687,6 +687,9 @@ function populateForm(property, seasonalPricingResolved) {
   if (propertyForm.elements.billingEntity) {
     propertyForm.elements.billingEntity.value = property.billingEntity || "";
   }
+  if (propertyForm.elements.billingCcEmail) {
+    propertyForm.elements.billingCcEmail.value = property.billingCcEmail || "";
+  }
   renderSiteContacts(property.siteContacts || []);
   renderBillToPreview();
   const sys = property.system || {};
@@ -807,6 +810,9 @@ function collectForm() {
     // Commercial billing entity + site contacts (management-company model).
     // Both are full replaces; the lib normalizes and drops empty rows.
     billingEntity: (propertyForm.elements.billingEntity?.value || "").trim(),
+    // Per-site billing CC — lower-cased server-side too, but normalize here
+    // so the value the operator sees echoed back matches what was stored.
+    billingCcEmail: (propertyForm.elements.billingCcEmail?.value || "").trim().toLowerCase(),
     siteContacts: collectSiteContacts(),
     system: {
       controllerLocation: propertyForm.elements.controllerLocation.value.trim(),
@@ -847,8 +853,12 @@ function siteContactRowHtml(c) {
   const opts = SITE_ROLES.map(([v, l]) =>
     `<option value="${v}"${(c.role || "") === v ? " selected" : ""}>${l}</option>`).join("");
   const esc = (s) => String(s == null ? "" : s).replace(/"/g, "&quot;");
+  // data-cid carries the contact's con_ id back to the server on save. A row
+  // without one (the "+ Add contact" button) is a new contact and the server
+  // mints an id for it. Dropping this attribute would re-mint every id on
+  // every save and break anything referencing a contact.
   return `
-    <div class="property-row" style="gap:10px;align-items:flex-end;flex-wrap:wrap;">
+    <div class="property-row" data-cid="${esc(c.id || "")}" style="gap:10px;align-items:flex-end;flex-wrap:wrap;">
       <label style="flex:2 1 180px;"><span>Name</span>
         <input type="text" class="sc-name" value="${esc(c.name)}"></label>
       <label style="flex:1 1 150px;"><span>Role</span>
@@ -883,6 +893,7 @@ function collectSiteContacts() {
   const wrap = document.getElementById("propSiteContactsList");
   if (!wrap) return [];
   return Array.from(wrap.querySelectorAll(".property-row")).map((row) => ({
+    id: row.getAttribute("data-cid") || "",
     name: row.querySelector(".sc-name")?.value.trim() || "",
     role: row.querySelector(".sc-role")?.value || "",
     email: row.querySelector(".sc-email")?.value.trim() || "",
@@ -913,18 +924,34 @@ function renderBillToPreview() {
   const el = document.getElementById("propertyBillToPreview");
   if (!el) return;
   const entity = (propertyForm.elements.billingEntity?.value || "").trim();
+  const ccEmail = (propertyForm.elements.billingCcEmail?.value || "").trim();
   const custName = (loadedProperty?.customerName || "").trim();
-  if (!entity) { el.hidden = true; return; }
-  const managed = Boolean(custName && entity !== custName);
-  const lines = [`<strong>${entity}</strong>`];
-  if (managed) lines.push(`c/o ${custName}`);
-  lines.push('<span style="color:#6A6A60;">…billing address from the customer record</span>');
-  el.innerHTML = `Invoices and quotes for this property will be addressed:<br>${lines.join("<br>")}`;
+  // Either field alone is worth previewing: a site can have a bookkeeper CC
+  // without being separately incorporated.
+  if (!entity && !ccEmail) { el.hidden = true; return; }
+  const esc = (s) => String(s == null ? "" : s)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const parts = [];
+  if (entity) {
+    const managed = Boolean(custName && entity !== custName);
+    const lines = [`<strong>${esc(entity)}</strong>`];
+    if (managed) lines.push(`c/o ${esc(custName)}`);
+    lines.push('<span style="color:#6A6A60;">…billing address from the customer record</span>');
+    parts.push(`Invoices and quotes for this property will be addressed:<br>${lines.join("<br>")}`);
+  }
+  if (ccEmail) {
+    // Spelled out because the scope is the surprising part: the CC rides
+    // invoices only, never the quote the signatory accepts.
+    parts.push(`<span style="color:#6A6A60;">Invoice emails (not quotes) will also copy <strong>${esc(ccEmail)}</strong>.</span>`);
+  }
+  el.innerHTML = parts.join("<br><br>");
   el.hidden = false;
 }
 
 document.getElementById("propertyBillToPreview") && propertyForm.addEventListener("input", (e) => {
-  if (e.target && e.target.name === "billingEntity") renderBillToPreview();
+  if (e.target && (e.target.name === "billingEntity" || e.target.name === "billingCcEmail")) {
+    renderBillToPreview();
+  }
 });
 
 // Build the seasonalPricing patch from the form. Empty override inputs

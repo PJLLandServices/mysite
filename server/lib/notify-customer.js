@@ -23,6 +23,10 @@
 // subdomain.
 
 const { resolvePublicBaseUrl } = require("./public-base-url");
+// Invoice CC assembly (spouse + billing CC, deduped) lives with the rest of
+// the billing-party model. Pure helper — billing-parties.js requires no
+// siblings, so this is safe at load time.
+const { buildInvoiceCcList } = require("./billing-parties");
 
 let nodemailerCache = null;
 function getNodemailer() {
@@ -504,8 +508,18 @@ async function sendInvoiceToCustomer(invoice, pdfBuffer, opts = {}) {
   // Spouse CC — opts.includeSpouse can override the profile flag
   // (true / false / null = use profile default).
   const spouseRecip = await resolveSpouseRecipients(invoice, opts.includeSpouse);
-  const ccList = [];
-  if (spouseRecip.spouseEmail) ccList.push(spouseRecip.spouseEmail);
+  // Billing CC (addendum, Jul 2026) — the bookkeeper / accounts-payable desk
+  // the payer nominated. Read from the invoice's OWN billTo snapshot, never
+  // re-resolved live: an issued invoice keeps whatever envelope it was sent
+  // with, so editing the property's CC later can't change who was copied on
+  // an invoice already sitting in the customer's inbox. Invoice path only —
+  // quotes go to the signatory who accepts them, not the payer.
+  const billingCc = String(invoice?.billTo?.ccEmail || "").trim().toLowerCase();
+  const ccList = buildInvoiceCcList({
+    to,
+    spouseEmail: spouseRecip.spouseEmail,
+    billingCcEmail: billingCc
+  });
 
   try {
     const info = await transporter.sendMail({
@@ -523,7 +537,19 @@ async function sendInvoiceToCustomer(invoice, pdfBuffer, opts = {}) {
       }]
     });
     console.log(`[invoice-email] sent invoice=${invoice.id} to=${to}${ccList.length ? ` cc=${ccList.join(",")}` : ""} id=${info.messageId}${opts.resend ? " (resend)" : ""}`);
-    return { ok: true, messageId: info.messageId, ccSpouse: ccList.length > 0 };
+    // Both flags report what actually shipped, not what was configured — an
+    // address deduped away (spouse same as the primary recipient, bookkeeper
+    // same as the spouse) was NOT copied, and saying otherwise would make the
+    // admin UI claim a delivery that never happened. ccSpouse keeps its
+    // original meaning (a spouse was copied) rather than turning true for a
+    // bookkeeper-only CC.
+    const landed = (addr) => Boolean(addr) && ccList.includes(String(addr).trim().toLowerCase());
+    return {
+      ok: true,
+      messageId: info.messageId,
+      ccSpouse: landed(spouseRecip.spouseEmail),
+      ccBilling: landed(billingCc)
+    };
   } catch (error) {
     console.error(`[invoice-email] failed for invoice=${invoice.id}:`, error.message);
     throw new Error(`Email send failed: ${error.message}`);

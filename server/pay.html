@@ -63,52 +63,66 @@
       <section class="pay-form-section" id="payFormSection">
         <h2 class="pay-section-title">Pay by credit card</h2>
         <p class="pay-form-help">
-          Card details go directly from your browser to Intuit QuickBooks
-          Payments — our server never sees your card number. Visa,
-          Mastercard, Amex, and Discover are all accepted.
+          Card details go directly from your browser to Stripe — our
+          server never sees your card number.
+        </p>
+        <!--
+          Accepted brands are filled in by pay.js from /sdk-config, which
+          reads settings.payments.acceptedCardBrands. NOT a hardcoded
+          list: whether Amex clears is a merchant-account setting on
+          Intuit's side, and this line has to be able to follow it
+          without a deploy. Stays hidden until the real list arrives so
+          the page never asserts a brand it can't back up.
+        -->
+        <p class="pay-accepted-brands" id="payAcceptedBrands" hidden></p>
+
+        <p class="pay-test-banner" id="payTestBanner" hidden>
+          ⚠ Test mode — no real money moves on this page.
         </p>
 
         <!--
-          PR 3.1 — Card-entry form. Card data is POSTed directly from
-          this browser to https://api.intuit.com/quickbooks/v4/payments/tokens
-          (or sandbox equivalent), with no Authorization header. The
-          response token is the only thing that goes to PJL's server.
-          That's the SAQ-A-EP pattern and the architecture Intuit's own
-          sample app uses (IntuitDeveloper/SampleApp-Payments-Nodejs).
+          Stripe migration (Jul 2026) — card entry happens inside Stripe's
+          Payment Element (an iframe served by js.stripe.com), mounted
+          into #payStripeElement below. Card number, expiry and CVC never
+          exist in this page's DOM, and never touch PJL's server; the
+          browser confirms the payment directly with Stripe. SAQ-A-EP.
 
-          Do NOT change this to POST card data through PJL's server —
-          that would push us from SAQ-A-EP into SAQ-D scope.
+          Do NOT replace the Element with raw card inputs, and do NOT
+          POST card data through PJL's server — that would push us from
+          SAQ-A-EP into SAQ-D scope. (Hard Rule 23.)
         -->
+        <!--
+          Slim form (Jul 2026): the Payment Element collects everything —
+          card number, expiry, CVC, and the billing postal code + country
+          Stripe requires (pre-filled from the invoice by pay.js via
+          defaultValues). The custom cardholder-name / street-address /
+          postal fields from the QuickBooks-era AVS work were removed:
+          Stripe runs postal-only address verification by default, and
+          only-required-fields was Patrick's explicit call. Apple Pay /
+          Google Pay render inside the Element automatically once the
+          domain's wallet verification passes in Stripe.
+        -->
+        <!--
+          Express checkout (Jul 2026) — a dedicated Apple Pay / Google
+          Pay button that opens the wallet sheet on FIRST tap. Inside
+          the tabbed Payment Element below, a wallet is only a method
+          *selection* and the sheet can't open until the main Pay button
+          is pressed (Apple requires a gesture on a real wallet button)
+          — a two-tap flow customers read as broken. Stays hidden until
+          Stripe confirms a wallet is actually available on this device,
+          so non-Apple users never see an empty box.
+        -->
+        <div class="pay-express" id="payExpressSection" hidden>
+          <div id="payExpressCheckout"></div>
+          <div class="pay-express-divider"><span>or pay with card</span></div>
+        </div>
+
         <form id="payCardForm" class="pay-card-form-wrap" autocomplete="on" novalidate>
-          <label class="pay-field pay-field--full">
-            <span class="pay-field-label">Cardholder name</span>
-            <input type="text" id="payCardName" autocomplete="cc-name"
-                   placeholder="Name as shown on card" required maxlength="80">
-          </label>
-          <label class="pay-field pay-field--full">
-            <span class="pay-field-label">Card number</span>
-            <input type="text" id="payCardNumber" autocomplete="cc-number"
-                   inputmode="numeric" placeholder="1234 5678 9012 3456"
-                   required maxlength="23">
-          </label>
-          <div class="pay-field-row">
-            <label class="pay-field">
-              <span class="pay-field-label">Expiry (MM/YY)</span>
-              <input type="text" id="payCardExp" autocomplete="cc-exp"
-                     inputmode="numeric" placeholder="MM/YY"
-                     required maxlength="5">
-            </label>
-            <label class="pay-field">
-              <span class="pay-field-label">CVC</span>
-              <input type="text" id="payCardCvc" autocomplete="cc-csc"
-                     inputmode="numeric" placeholder="123"
-                     required maxlength="4">
-            </label>
-            <label class="pay-field">
-              <span class="pay-field-label">Postal code</span>
-              <input type="text" id="payCardPostal" autocomplete="postal-code"
-                     placeholder="L3X 0A5" required maxlength="10">
-            </label>
+          <div class="pay-field pay-field--full">
+            <span class="pay-field-label">Card details</span>
+            <div id="payStripeElement" class="pay-stripe-element">
+              <p class="pay-stripe-loading">Loading secure card form…</p>
+            </div>
           </div>
         </form>
 
@@ -120,7 +134,7 @@
 
         <p class="pay-trust">
           <span aria-hidden="true">🔒</span>
-          Secured by Intuit QuickBooks Payments. PJL never sees your card number.
+          Secured by Stripe. PJL never sees your card number.
         </p>
       </section>
 
@@ -146,18 +160,20 @@
   </footer>
 
   <!--
-    PR 3.1 — No Intuit SDK script. Intuit doesn't publish a browser
-    SDK; tokenization is a direct HTTPS POST from this page to
-    api.intuit.com (or sandbox.api.intuit.com), handled in pay.js.
-    The merchant server is never in the card-data path.
+    Stripe.js — MUST load from js.stripe.com (Stripe's terms prohibit
+    self-hosting or bundling it, and the hosted copy is how they ship
+    fraud-detection updates). This is the one external script on the
+    page besides reCAPTCHA. The publishable key it's initialized with
+    comes from /sdk-config, fetched by pay.js — never hardcoded here.
 
-    Google reCAPTCHA v3 — invisible fraud check. The site key is
-    fetched dynamically by pay.js from /sdk-config and the script tag
-    is injected then to avoid hardcoding the key in HTML. If
-    RECAPTCHA_SITE_KEY isn't set on the server, pay.js skips reCAPTCHA
-    entirely and the charge endpoint also skips verification (matching
-    behaviors).
+    Google reCAPTCHA v3 — invisible fraud check gating payment-intent
+    creation. The site key is fetched dynamically by pay.js from
+    /sdk-config and the script tag is injected then to avoid hardcoding
+    the key in HTML. If RECAPTCHA_SITE_KEY isn't set on the server,
+    pay.js skips reCAPTCHA and the intent endpoint skips verification
+    (matching behaviors).
   -->
+  <script src="https://js.stripe.com/v3/"></script>
   <script src="/crm/pay.js" defer></script>
 </body>
 </html>

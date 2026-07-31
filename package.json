@@ -9,7 +9,7 @@
     "create-user": "node scripts/create-user.js",
     "setup-password": "node scripts/create-user.js",
     "build": "node build.js && node scripts/sync-prices-html.mjs && node scripts/sync-meta-prices.mjs && node scripts/generate-sitemap.mjs && node worker/rebuild.mjs",
-    "build:check": "node build.js --check && node scripts/sync-meta-prices.mjs --check && node scripts/generate-sitemap.mjs --check && node scripts/lint-no-hardcoded-prices.mjs && node scripts/lint-qb-mappings.mjs && node scripts/test-pricing.mjs && node scripts/test-proposal-unlock.mjs && node scripts/test-proposal-html.mjs",
+    "build:check": "node build.js --check && node scripts/sync-meta-prices.mjs --check && node scripts/generate-sitemap.mjs --check && node scripts/lint-no-hardcoded-prices.mjs && node scripts/lint-qb-mappings.mjs && node scripts/test-pricing.mjs && node scripts/test-proposal-unlock.mjs && node scripts/test-proposal-html.mjs && node scripts/test-commercial-schema.mjs && node scripts/test-stripe.mjs",
     "build:worker": "node worker/rebuild.mjs",
     "sync:meta-prices": "node scripts/sync-meta-prices.mjs",
     "sync:meta-prices:check": "node scripts/sync-meta-prices.mjs --check",
@@ -26,17 +26,19 @@
     "migrate:customers:renumber:apply": "node scripts/migrate-customers.js --renumber --apply",
     "backfill-booking-customers": "node scripts/backfill-booking-customers.js",
     "backfill-booking-customers:apply": "node scripts/backfill-booking-customers.js --apply",
-    "audit:ui": "node scripts/ui-audit.js"
+    "audit:ui": "node scripts/ui-audit.js",
+    "audit:commercial": "node scripts/audit-commercial-data.js",
+    "test:commercial": "node scripts/test-commercial-schema.mjs"
   },
   "engines": {
     "node": ">=18"
   },
   "dependencies": {
     "nodemailer": "^8.0.7",
-    "pdfkit": "^0.17.2"
+    "pdfkit": "^0.17.2",
+    "sharp": "^0.34.5"
   },
   "devDependencies": {
-    "playwright": "^1.49.1",
-    "sharp": "^0.34.5"
+    "playwright": "^1.49.1"
   }
 }

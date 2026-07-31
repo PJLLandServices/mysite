@@ -1,7 +1,7 @@
 # PJL Land Services — Operations System Spec
 
-**Version:** 1.0 (Whiteboard phase complete)
-**Last updated:** May 1, 2026
+**Version:** 1.1
+**Last updated:** July 27, 2026
 **Author:** Patrick Land + Claude (whiteboard collaboration)
 **Purpose:** Single source of truth for the architecture of PJL's operations system. This document is the spec — every future feature must fit into this design, not bolt onto the side of it.
 
@@ -41,7 +41,9 @@ The complete price list. Feeds:
 - HST (13%) is always added at the end. Never quote tax-inclusive.
 - Prices are never rounded ($74.95 stays $74.95). Customers notice rounding and trust drops.
 
-**Known drift to fix at first build:** Spring opening / fall closing ≤4 zones is currently $90 on the website but $85 in the AI system prompt. Reconcile to one number when migrating.
+**Seasonal pricing — RESOLVED 2026-07-27.** Spring opening / fall closing, 1–4 zones, is **$90**. That is the number on the website, in `pricing.json`, and in the AI prompt. $85 is retired.
+
+**$90 is a floor, not just a price.** Legacy customers currently paying less keep their rate through the existing per-property override (§2.2) until it is reviewed upward. No property is ever set below $90 going forward, and every below-tier override carries a review date so the raise actually happens.
 
 ### 1.2 `parts.json`
 
@@ -103,6 +105,10 @@ CUSTOMER FOLDER
       than the contact — e.g. a numbered company, property manager, or
       family member; empty = bill to the contact)
     - Billing email (if the invoice goes to a different inbox)
+    - Billing CC email (optional) — ONE extra address copied on invoice
+      emails. The bookkeeper / accounts-payable desk that settles the
+      bill, which is often not the person who accepted the work.
+      Invoices only, never quotes. A property can override it per site.
     - Billing address (if different from any service address)
     - Customer since (date)
     - How did they find PJL Land Services
@@ -112,6 +118,27 @@ CUSTOMER FOLDER
       (e.g. $85/hr GreenTree fair-trade agreement). Snapshots onto a
       project_proposal quote's `customRates` at creation. Future-
       extensible to per-foot mainline, per-zone, etc.
+
+  Account Type
+    - residential (default) | commercial
+      Explicit, not inferred from the presence of a commercial block —
+      the admin UI and the future portal branch on this one field.
+
+  Commercial Block (null on residential accounts)
+    - c/o (careOf): manual override for the "addressed through" line.
+      Usually empty — on a managed account the c/o is DERIVED from the
+      managing customer's name, not typed here.
+    - PO required? / Payment terms
+    - Contacts (up to 10), each:
+        - id (con_xxxxxxxx — stable, survives renames)
+        - Name / role / email / phone
+        - Authorized signatory? — signs quotes for EVERY site this
+          customer manages (org-wide authority)
+        - Site contact? — see the note below; the per-site list on the
+          Property Folder is the normal home for these
+      Email matters: it is the key a Phase-1 portal login would resolve
+      on, so a signatory or site contact without one can't be given
+      access later.
 
   Communication Records
     - Date, time, source (email / phone / text / chat / in-person), what about, notes
@@ -129,6 +156,47 @@ CUSTOMER FOLDER
 
 **Billing party ≠ contact ≠ property (billing-party brief, Jun 2026):** the person who books the work, the place being serviced, and the entity that pays the invoice are three independent facts — investment-owned residential and property-management work make all three differ routinely (e.g. service at a Vaughan home, invoice issued to a Thornhill numbered company). The contact stays the Customer's `name/email/phone`; the bill-to lives in `billingName/billingEmail/billingAddress` (empty = bill the contact). At intake, `new-customer.html` captures a structured bill-to behind a collapsed "Bill to a different person or company" disclosure (`lead.billing`, persisted only when used) and seeds the Customer's billing fields — never overwriting hand-curated values. Each draft invoice snapshots the resolved bill-to (`invoice.billTo`, locked after send), and the QuickBooks push bills that entity. The self-billing majority path is untouched end to end.
 
+**The management-company billing model (commercial data model, Jul 2026).** A commercial account routinely has *two* companies in play: the one that **owes** and the one that **receives the invoice**. One management company (the CUSTOMER — e.g. "RMSCO Management Services Ltd.") manages many condo corporations, and each site is owned by its own legal entity that gets billed. So the payer's legal name belongs on the **property** (`property.billingEntity`), not the customer, and the invoice reads:
+
+```
+YRSCC No. 1233 — Lewis Honey Condominiums     <- property.billingEntity
+c/o RMSCO Management Services Ltd.            <- customer.name
+1 Manager Way, Newmarket ON                   <- customer.billingAddress
+```
+
+Both cases happen and the model covers both without a flag:
+
+- **Managed** — the property names its own `billingEntity` and a differently-named customer exists to bill it through. The c/o line is derived, never typed.
+- **Self-billed** — the account pays its own invoices. Leave `billingEntity` blank and the customer is the payer, exactly as for residential. If the entity name *equals* the customer's own name the resolver already treats it as self-billed (it will not print "c/o itself"), but the record should be cleaned up to a blank entity rather than duplicating the name.
+
+**Roles are scoped by where they live, and that scoping is the point.** Patrick confirmed this split on 2026-07-25 — it is a settled decision, not a proposal, and Phase 1 builds on it:
+
+- **Signatories live on the CUSTOMER** — the management company's signing authority spans every site it manages (Gurdip signs for all of them).
+- **Site contacts live on the PROPERTY** — the board president or super at one building (Faramarz), naturally scoped to that address. This is what will let a Phase-1 portal contact see only their own building.
+- A customer contact flagged `isSiteContact` still applies across sites (the resolver's fallback), but property-level is the norm.
+- One person who is both a signatory and a specific site's contact appears in both lists, deduped by email at the presentation layer. This was the explicit trade-off accepted in preference to a single richer contact record carrying a `sites: []` scope array.
+
+**Who signs is not who pays (addendum, Jul 2026).** The third independent party in a commercial account is the one that settles the invoice. The owner accepts the quote; a bookkeeper — or the site's own accounts-payable desk — handles payment. That is `billingCcEmail`: a single extra address copied on **invoice emails only**.
+
+- Per-site (`property.billingCcEmail`) beats account-level (`customer.billingCcEmail`), the same precedence as `billingEntity`, so one bookkeeper can serve a whole management account while a single condo corp still routes its own bills.
+- **Never applied to quotes.** A quote goes to the signatory who accepts it; the CC is a payments concern. Sending pricing to a bookkeeper who has no authority to accept it invites confusion about who agreed to what.
+- Resolved as `resolveBillTo(...).ccEmail` and **snapshotted onto `invoice.billTo.ccEmail` at draft time**, so editing a CC later never changes who was copied on an invoice already sent (rules 2, 10 and 20).
+- Blank everywhere by default. Residential and non-CC accounts send byte-identically.
+- PJL surfaces what was entered and validates format only — it does not verify that the address is monitored or authorized. One address per field; the step-0 audit flags a comma-separated pair, since that would fail the send.
+
+The envelope itself is resolved by `server/lib/billing-parties.js` — `resolveBillTo(property, customer)` and `resolveContactRoles(property, customer)`. See Hard Rule 20: it is never hand-assembled at a call site.
+
+**Correcting the record.** The commercial layer was *not* absent before Jul 2026, and a future session should not rebuild it. What existed and what didn't:
+
+| Piece | Status |
+|---|---|
+| `billing-parties.js` resolver (`resolveBillTo` / `resolveContactRoles`) | **Existed since Jul 2026** and was correct — it already implemented both the managed and self-billed branches, including the self-bill guard. Never needed a logic change. |
+| `customer.accountType` + `customer.commercial`, and their `update()` allow-list entries | Landed with the commercial-intake and account-panel work (Jul 2026). Before the allow-list entry existed, a PATCH setting `commercial` was **silently dropped** — the UI reported success and the data vanished. That bug class is now pinned by a round-trip test. |
+| `property.billingEntity` + `property.siteContacts[]` | Landed with the per-property billing-entity work (Jul 2026), including `hydrate()` guards and explicit `update()` handling so a partial patch never blanks them. |
+| Stable `con_` contact ids, read-time normalization of `customer.commercial`, the step-0 audit script, and the integration tests | Added by the Phase 0 commercial data model brief (Jul 2026) — the remaining gaps once the above had landed. |
+| `billingCcEmail` (customer + property), `resolveBillTo().ccEmail`, the invoice-email CC wiring, and reject-don't-truncate on the contact cap | Added by the Phase 0 addendum (Jul 2026). The cap previously trimmed silently, which on a billing-accuracy slice could drop an authorized signatory without anyone noticing. |
+| Commercial customer MATCHING (address-anchored intake, `findCommercialAnchor`, `lead-customer.js`, the manual-create warning, the QB entity guard) | Added by the Phase 0.5 commercial-matching brief (Jul 2026), resolving the §3.1 deferral. Phase 0 made the commercial fields durable; it did **not** make matching correct, and duplicates were still being created on every commercial intake until this landed. |
+
 **Implementation status (as of 2026-05-16):** The Customer Folder is live in v1 as `server/lib/customers.js` + `server/data/customers.json` with admin pages at `/admin/customers` and `/admin/customer/<id>`. Populated fields: name, spouseName, phone, spousePhone, email, spouseEmail, billingName, billingEmail, billingAddress, customerSince, source, status (`lead`/`active`/`inactive`/`lost`), quickbooksId, internalNotes, notificationPrefs, communicationRecords, vcfDownloads, history. The per-customer and bulk vCard download (`/api/customer/:id/vcard`, `POST /api/customers/vcards.vcf`) lets Patrick import customers into iPhone Contacts for Siri-based dialling from the truck; each download appends to vcfDownloads[] for audit. **Snapshots-vs-source-of-truth:** the Customer record is the source of truth for CURRENT contact info; transactional entities (WO / Quote / Invoice / Booking / Project) continue to snapshot name/email/phone at sign time and those snapshots are the source of truth for AS-OF-SIGNING info. Editing a Customer never back-rewrites historical snapshots.
 
 ### 2.2 Property Folder (the place)
@@ -140,6 +208,14 @@ PROPERTY FOLDER
     - Spring opening cost / Fall closing cost for this property
         (per-property override; falls back to pricing.json tier by zone count
          via pricing.resolveSeasonalPrice)
+        This is the ONLY home for a grandfathered seasonal rate. It is
+        READ by the quote and the work order — never typed at point of
+        sale, by anyone, on any screen (rule 21).
+    - legacyRateReviewDate: when the override sits BELOW the current
+        pricing.json tier, it carries a review date. Overrides past that
+        date surface on a pre-season list, so the raise toward $90 gets
+        actioned instead of becoming permanent by default (§1.1).
+        New below-tier overrides are not created; $90 is the floor.
     - Additional plumbing to blow out in fall? (yes/no)
         If yes: additional cost + short description (cabana, pool house,
         remote hose bib, etc.). Drives a second baseline line on
@@ -148,6 +224,21 @@ PROPERTY FOLDER
         server/lib/invoices.js INVOICE_DISCLAIMERS.
     - Number of zones
     - Access & logistics (gate code, dog warning, parking notes, scheduling preferences)
+    - Billing entity (commercial only): this site's OWN legal payer, e.g.
+      "YRSCC No. 1233 — Lewis Honey Condominiums". Empty on residential
+      and owner-billed properties, where the customer is the payer.
+      Set it and the invoice is addressed to this entity c/o the
+      managing customer — see §2.1 "management-company billing model".
+    - Billing CC email for this site (optional): overrides the customer's
+      billing CC when this site's own accounts-payable desk should get
+      the bill. Invoice emails only. Blank = use the customer's CC.
+    - Site contacts (commercial only, up to 10): the people at THIS
+      address — board president, super, whoever PJL calls to schedule
+      and meets on arrival. Same shape as the customer's commercial
+      contacts (id / name / role / email / phone / flags), but scoped to
+      this one site. Org-wide signatories belong on the CUSTOMER; the
+      signatory flag exists here only for a board that signs for its
+      own building alone.
 
   System Overview
     - Controller location (+ photo)
@@ -205,9 +296,42 @@ When new info arrives, match before creating:
 - **Property match:** address
 - **Conflict case:** known property + unknown customer → flag for Patrick's review (could be the new owner of an old customer's house). Do NOT auto-merge.
 
+**These are the RESIDENTIAL rules.** Commercial inverts the anchor — see below.
+
 **Implementation:** wired into the public lead intake (`POST /api/quotes` → `resolveCustomerForLead`) and the property auto-link cascade (`properties.attachLead`). Match failure on a real intake is a soft-warn — the lead is still saved with `customerId=null` so a public-form submission never breaks if the customer lookup throws. `customers.findByIdentifier()` is the canonical entry point; bookings, magic-link auth, and the conflict detector all funnel through it.
 
-> **⚠ The email → phone → create-new rule does NOT hold for commercial accounts.** It matches on the *submitter's* contact info, but at a company the submitter changes over time (this year's property manager is not next year's) while the account — the billing legal entity — stays the same. Matching a commercial lead on submitter email/phone therefore produces **duplicate customer records for the same account**, and can attach the wrong contact's phone to a billing entity in QuickBooks. As of the commercial-intake brief (Jul 2026), commercial intake captures `accountType` + a billing entity at the **lead** layer only; commercial customer-matching (match on the billing entity, not the submitter) is **unresolved and deferred to Brief 2**. Do not assume the matching rules above are complete for commercial work.
+#### Commercial matching — the building is the anchor (Phase 0.5, Jul 2026)
+
+> **The email → phone → create-new rule above does NOT hold for commercial accounts, and this section is the rule that replaces it.** *(This resolves the deferral previously recorded here. Commercial matching is no longer "deferred to Brief 2" — it is implemented. Do not re-defer it.)*
+
+Residential and commercial have **opposite stable identities**:
+
+| | Stable identity | Transient |
+|---|---|---|
+| Residential | the **person** — they own the house | the address (they move) |
+| Commercial | the **building** and its billing entity | the **person** — this year's property manager is not next year's |
+
+Matching commercial intake on the submitter's email therefore produced two defects at once: a new PM contacting PJL about an existing managed site matched no customer, so a **duplicate management-company record** was created; and the same-address-different-email check fired a **false "new owner" ownership conflict** when it was really the same account with a new contact. The new person's details then rode the snapshot toward QuickBooks against a stable payer.
+
+**The commercial rule, in order:**
+
+1. **Exact email + address match wins** (`properties.findMatch`). A submitter who already owns a property at this address is matched normally — this is what stops a homeowner being bound to a neighbouring commercial account at a shared address.
+2. **Otherwise, address anchor.** `properties.findCommercialAnchor(address, coords)` looks up the building **email-agnostically** and returns the account only when the matched property's customer is `accountType === "commercial"`. When it hits:
+   - The customer is resolved **via `property.customerId`** — no identifier match, no create. This happens in `lead-customer.resolveCustomerForLead`, *before* the property attach, because that is where the duplicate was being created.
+   - `properties.attachLead` binds the lead to that existing property and **skips `findOwnershipConflicts` entirely** — it is not a new owner.
+   - The submitter is resolved against `customer.commercial.contacts[]` and `property.siteContacts[]` by email: **known** → tagged with the matched `con_` id; **no match** → surfaced as an **unconfirmed contact** for Patrick to confirm. Never auto-added as authoritative.
+   - The submitter's email/phone is recorded **on the lead only**. Canonical customer and property contact fields are never overwritten by a transient person.
+   - A `commercial_lead_bound` entry is appended to `property.history`.
+3. **No address match** → the existing new-customer/new-property path, unchanged. A genuinely net-new commercial building can't be detected as commercial at the public door; Patrick tags or onboards it.
+4. **Residential is untouched** at every step — no anchor is produced for a residential-owned building, so its matching, ownership-conflict, and "suggested" behaviour are byte-identical.
+
+**Edge cases.** A submitter who is a known contact on a *different* commercial account still binds by address (the building wins), with the other account surfaced for Patrick. One person contacting PJL about several managed buildings is disambiguated by address.
+
+**Binding is not access.** Attaching a lead to an account is a CRM action and grants **no** portal access. Access requires a magic-link to a KNOWN contact (Phase 1). This is why address-anchored binding is safe even for an unconfirmed submitter — only Patrick sees it.
+
+**Manual create.** `POST /api/customer` and `POST /api/properties` run the same address lookup and return a non-blocking `warnings: [{ code: "existing_account_at_address", … }]` when the building already belongs to an account. Advisory, never blocking — a plaza with two tenants is legitimate.
+
+**QuickBooks.** For a commercial invoice the QB customer is resolved from the `resolveBillTo` snapshot on `invoice.billTo` — the site's billing entity when managed, the account itself when self-billed — **never the submitter**, and the paying entity never inherits a contact's phone. Persistent per-entity QB customer mapping is Phase 2.
 
 ### 3.2 "And then what" — cascades by door
 
@@ -869,6 +993,24 @@ WORK ORDER FOLDER
       customer email ("Payment received in the field — thank you" vs
       "Invoice attached"). Patrick still reviews each draft invoice
       before sending or marking paid in QB.
+    - Device payment at signature (native app, 2026-07-27). Where the
+      customer is present and signing on the tech's device, the app
+      offers Apple Pay / Google Pay for the invoice total immediately
+      after signature capture. **No upper limit — offered at every
+      amount** (Patrick's ruling). Rationale: same-day funds and no
+      invoice ageing outweigh the processor spread on large jobs, and
+      wallet authentication shifts card-FRAUD liability to the issuer.
+      It does NOT cover a service dispute — the evidence package
+      (signed WO, timestamped completion, before/after photos) is the
+      only defence there, at every amount.
+    - "Arrange payment another way" is always offered alongside, for
+      e-transfer / PAD / cheque on large jobs. A manual choice by the
+      tech or customer. The app never decides by amount.
+    - Declining or skipping sets paidOnSite: false and falls through to
+      the normal invoice cascade. The pay-later link reopens the same
+      signed document (§6.1).
+    - Payment is NOT a scope field. It flows after lock, alongside
+      status and photos (rule 11 / §4.3.3 r5).
     - QuickBooks invoice ID (auto-populated post-cascade)
 
   Customer-visible notes (Service Report brief, 2026-05-19)
@@ -1214,7 +1356,8 @@ gated at 3/hour per user.
 - View upcoming bookings
 - **Reschedule** an upcoming booking once, up to 24 hours before the appointment (one self-service reschedule per booking; admin can move it further from the CRM)
 - **Cancel** an upcoming booking up to 24 hours before the appointment, with a captured reason (reason chip + optional free-text, "Other" requires free-text)
-- **View an individual invoice** (read-only) via the SMS deep-link at `/portal/invoice/:id?t=<portalToken>` — line items, totals, status, and a "Pay this invoice" button that opens the QB payment page in a new tab. Mirrors the formal invoice without exposing internal notes or audit trail.
+- **View an individual invoice** (read-only) via the SMS deep-link at `/portal/invoice/:id?t=<portalToken>` — line items, totals, status, and a "Pay this invoice" button. Mirrors the formal invoice without exposing internal notes or audit trail.
+  - **The Pay button deep-links to PJL's own payment page** at `/pay/invoice/:id?t=<paymentToken>`, in the same tab. It does **not** open a processor-hosted payment page in a new tab — that was never how it was built, and this line said otherwise until Jul 2026. The page is PJL-branded and PJL-served; card entry happens in Stripe's embedded Payment Element and the confirm goes direct from the customer's browser to Stripe (processor was QuickBooks Payments until the Jul 2026 migration; QBO remains the ledger either way). `paymentToken` is a separate secret from `portalToken` so the two surfaces revoke independently. See `SYSTEM_OVERVIEW.md` → **Payments surface** for the endpoints, the AVS billing-details payload, and the `paymentAttempts[]` log.
 
 ### 6.2 What customers cannot do
 
@@ -1344,9 +1487,9 @@ Recommended: C for long term, A for v1. Decision required before installs are ma
 
 Touched on but not formally designed. Quick pass needed. Roughly: customer link, property link, scheduled date+time, service type, status, prep notes, source quote, resulting WO(s).
 
-### 9.4 Pricing drift
+### 9.4 Pricing drift — RESOLVED 2026-07-27
 
-Spring opening / fall closing ≤4 zones is currently $90 on website but $85 in AI prompt. Reconcile to one number when migrating to `pricing.json`.
+Reconciled to **$90**. See §1.1. Legacy sub-$90 customers are carried on the per-property override (§2.2) with a review date attached; $90 is the floor for every new and reviewed rate.
 
 ### 9.5 UI design
 
@@ -1402,6 +1545,15 @@ These are the rules that protect the design from drift. Number them so they can 
 17. **Marketing-style sends honor comm prefs and CASL.** Every outreach message includes an unsubscribe path (per-channel and "stop everything"). Email gets a footer link; SMS gets "Reply STOP to opt out." Per-property comm prefs (`seasonalRemindersSMS`, `seasonalRemindersEmail`) gate dispatch — `outreach.sendBulk` will not text a property whose `seasonalRemindersSMS=false`, will not email one whose `seasonalRemindersEmail=false`, and will not send anything to a property whose `seasonalOutreach[year:season].optOutThisSeason=true`. No exceptions.
 18. **Every property carries a complete customer name.** `property.customerName` is non-blank at create, update, and bulk-import. Validation hard-rejects blank patches with `code: MISSING_NAME`. Backfilled before outreach v1 ships, enforced at every write boundary going forward. The OG preview card "Hey {firstName}, …" depends on this invariant. No exceptions.
 19. **Service / Inspection Report PDFs contain no pricing.** Quote and invoice are the financial artifacts; the report is the service-narrative artifact. The renderer (`server/lib/wo-report-pdf.js`) embeds no dollar figures, no line-item costs, and no priced dispositions. Issue dispositions render as words (`Repaired on this visit` / `Deferred to next visit` / `Customer declined`), never as priced lines. Service Report brief, 2026-05-19.
+20. **Commercial bill-to is resolved, never hand-assembled.** `billing-parties.resolveBillTo(property, customer)` is the single source for the invoice / quote bill-to envelope, and `resolveContactRoles(property, customer)` for who signs and who to call. No call site may re-derive the "entity c/o manager" rule from `property.billingEntity` and `customer.name` on its own — that is how invoices, quote PDFs and the admin UI drift into disagreeing about who is being billed. The corollaries: the payer's legal name lives on the **property**, org-wide signatories on the **customer**, site contacts on the **property**; and an issued invoice keeps its snapshotted envelope forever — editing `billingEntity` later never retro-rewrites it (rules 2 and 10). Commercial data model brief, Jul 2026.
+
+21. **Prices are resolved, never typed.** Every dollar figure on a customer-facing document originates from `pricing.json`, `project-rates.json`, or a declared per-property / per-customer override — reached through a single resolver (`pricing.resolveSeasonalPrice` and its siblings), never hand-entered on a technician or admin screen. Work with no resolvable price is not priced in the field: it becomes a lead (§4.1 routing) or a deferred issue (§5), and the office prices it. A typed price is a second source of truth for a number that already has one, and the two will drift. This is rules 1 and 8 restated as a UI constraint, because the UI is where they were being broken. Batch 1 rulings, 2026-07-27.
+
+22. **A capture is not idempotent.** Every other recovery path in this system is safe to re-run — cascades are idempotent, QB pushes re-resolve, the SMS sweep re-checks, a failed sync retries. **A card charge is not.** It moves money on the first call and again on the second. So: no automatic retry, no backoff loop, no "try once more before showing the error" anywhere in the charge path. A failed attempt records to `invoice.paymentAttempts[]` and **stops**; the customer decides whether to try again. The corollary is that the failure must be legible enough for them to decide — which is why the processor's error code is mapped to plain language and why the raw gateway string is logged instead of displayed. *Stripe migration note (Jul 2026): the capture now happens exactly once, browser-side, at `confirmPayment` — nothing server-side charges or re-confirms. Stripe's `Idempotency-Key` is used on PaymentIntent **creation** only (double-taps reuse one intent instead of minting two chargeable ones); that protects creation, not capture, and does not soften this rule. The paid-flip finalizer IS idempotent — that is bookkeeping after the money moved, not a capture.* QB Payments AVS brief + Stripe migration, Jul 2026.
+
+23. **Card data never reaches PJL's server.** PAN, CVC and expiry live inside Stripe's Payment Element iframe and go from the customer's browser **directly** to `api.stripe.com`; the Node process only ever handles opaque PaymentIntent ids. (Original formulation, pre-migration: direct browser tokenization against `api.intuit.com`. Same principle, different processor.) This is what keeps the integration in PCI **SAQ-A-EP** instead of SAQ-D, a materially heavier compliance burden. No change may route card data through `pjllandservices.com` — not "temporarily for debugging", not through a log line, not through an error message — and the Payment Element may not be replaced with raw card inputs. The `paymentAttempts[]` writer is an explicit field allowlist for exactly this reason: card data cannot be persisted even by mistake. **Billing address fields are NOT card data** and are safe server-side — collecting a billing street address is how a card-not-present charge passes AVS, and its absence is what made Amex charges fail while Visa and Mastercard cleared on the old rail. This rule was in force in the code from PR 3 but had never been written down; the AVS brief cited it as "r16", which is a different rule entirely (self-service portal enforcement). QB Payments AVS brief + Stripe migration, Jul 2026.
+
+*Numbering note (Jul 2026): there are **two rules numbered 11** above — "PDF display options are presentation-only" and "Signed or bypass-locked work order is the contract." Both are load-bearing and both are cited elsewhere by number, so neither has been renumbered; a bare "rule 11" reference is ambiguous and should be read from context.*
 
 ---
 
