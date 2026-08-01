@@ -20,6 +20,13 @@ function fmtDate(iso) {
   return new Date(iso).toLocaleDateString("en-CA", { month: "short", day: "numeric", year: "numeric" });
 }
 
+// Status pill text. Every status except partially_paid is a single
+// lowercase word that reads fine raw, so only the one that doesn't gets
+// a label — no visual change to the existing pills.
+function statusLabel(status) {
+  return status === "partially_paid" ? "partly paid" : String(status || "");
+}
+
 async function load() {
   const url = currentFilter ? `/api/invoices?status=${encodeURIComponent(currentFilter)}` : "/api/invoices";
   const r = await fetch(url, { cache: "no-store" });
@@ -41,7 +48,7 @@ async function load() {
       </td>
       <td>${inv.woId ? `<a href="/admin/work-order/${encodeURIComponent(inv.woId)}">${escapeHtml(inv.woId)}</a>` : "—"}</td>
       <td class="invoices-amount">${fmt(inv.total)}</td>
-      <td><span class="invoices-status invoices-status--${escapeHtml(inv.status)}">${escapeHtml(inv.status)}</span></td>
+      <td><span class="invoices-status invoices-status--${escapeHtml(inv.status)}">${escapeHtml(statusLabel(inv.status))}</span></td>
       <td>${escapeHtml(fmtDate(inv.createdAt))}</td>
     </tr>
   `).join("");

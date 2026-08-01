@@ -207,6 +207,7 @@ function render(inv) {
   document.getElementById("invoiceSubtotal").textContent = fmt(inv.subtotal);
   document.getElementById("invoiceHst").textContent = fmt(inv.hst);
   document.getElementById("invoiceTotal").textContent = fmt(inv.total);
+  renderPaymentTotals(inv);
   document.getElementById("invoiceNotes").value = inv.notes || "";
 
   // Disclaimer callouts (e.g. fall_additional_plumbing). Server returns
@@ -892,6 +893,319 @@ document.getElementById("invoiceJunkWarningBtn")?.addEventListener("click", asyn
   }
 });
 
+// ---- Payment ledger (invoice payment ledger, Jul 2026) ---------------
+//
+// Money arrives two ways: through the online pay page (which records a
+// card_qb payment for itself) and by hand — cash on site, e-transfer, a
+// cheque. This block is the by-hand half: the totals rows, the recorded-
+// payments table, and the record / edit / reverse modal.
+//
+// Every mutation posts to the payment routes and re-renders from the
+// invoice the server returns, so amountPaid, balanceDue and the derived
+// paid / partially_paid status always come from the lib rather than being
+// recomputed here. The client-side validation below is a typo-catcher,
+// not the authority.
+//
+// An invoice with no payments renders exactly as it did before this
+// existed: both totals rows and the whole table stay hidden.
+
+const PAYMENT_METHOD_LABELS = {
+  cash: "Cash",
+  e_transfer: "e-Transfer",
+  cheque: "Cheque",
+  card_qb: "Card",
+  other: "Other"
+};
+
+// Payment dates are stored as bare "YYYY-MM-DD" (that's what the date
+// input produces and what the PDF renderer expects). new Date("2026-07-30")
+// parses as UTC midnight, which renders as the 29th in Toronto — the same
+// off-by-one that had to be fixed in the invoice PDF. Parse the parts by
+// hand so a bare date is treated as a local calendar day.
+function fmtPaymentDate(value) {
+  if (!value) return "—";
+  const raw = String(value).trim();
+  const bare = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  const d = bare
+    ? new Date(Number(bare[1]), Number(bare[2]) - 1, Number(bare[3]))
+    : new Date(raw);
+  if (Number.isNaN(d.getTime())) return raw;
+  return d.toLocaleDateString("en-CA", { dateStyle: "medium" });
+}
+
+// The <input type="date"> value for an existing payment. Bare dates pass
+// through; a full ISO timestamp gets sliced to its date part.
+function paymentDateInputValue(value) {
+  const raw = String(value || "").trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+  const d = new Date(raw);
+  if (Number.isNaN(d.getTime())) return todayInputValue();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function todayInputValue() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function paymentsOf(inv) {
+  return Array.isArray(inv?.payments) ? inv.payments : [];
+}
+
+// Amount paid / balance due rows under the total. Both hidden when the
+// ledger is empty so an ordinary unpaid invoice looks untouched. Balance
+// due also stays hidden when it equals the total — that's the "payments
+// exist but net to nothing" case, which can't currently happen but would
+// otherwise print a redundant second total.
+function renderPaymentTotals(inv) {
+  const paidRow = document.getElementById("invoiceAmountPaidRow");
+  const paidEl = document.getElementById("invoiceAmountPaid");
+  const balRow = document.getElementById("invoiceBalanceDueRow");
+  const balEl = document.getElementById("invoiceBalanceDue");
+  if (!paidRow || !paidEl || !balRow || !balEl) return;
+
+  const amountPaid = Number(inv?.amountPaid) || 0;
+  const total = Number(inv?.total) || 0;
+  const balanceDue = inv?.balanceDue == null ? total : Number(inv.balanceDue) || 0;
+
+  if (amountPaid > 0) {
+    paidRow.hidden = false;
+    paidEl.textContent = "−" + fmt(amountPaid);
+  } else {
+    paidRow.hidden = true;
+  }
+
+  if (amountPaid > 0 && balanceDue !== total) {
+    balRow.hidden = false;
+    balEl.textContent = fmt(balanceDue);
+  } else {
+    balRow.hidden = true;
+  }
+}
+
+// The recorded-payments table. Card payments came in through the online
+// pay page; editing one here would desync the admin ledger from the money
+// that actually moved, so those rows are read-only.
+function renderPaymentsTable(inv) {
+  const section = document.getElementById("invoicePaymentsSection");
+  const body = document.getElementById("invoicePaymentsBody");
+  if (!section || !body) return;
+
+  const list = paymentsOf(inv);
+  if (!list.length) {
+    section.hidden = true;
+    body.innerHTML = "";
+    return;
+  }
+  section.hidden = false;
+
+  const locked = inv?.status === "void";
+  body.innerHTML = list.map((p) => {
+    const isCard = p.method === "card_qb";
+    const label = PAYMENT_METHOD_LABELS[p.method] || p.method || "Other";
+    const canEdit = !locked && !isCard;
+    return `
+      <tr data-payment-id="${escapeHtml(p.id)}">
+        <td>${escapeHtml(fmtPaymentDate(p.receivedAt))}</td>
+        <td>${escapeHtml(label)}${isCard ? `<br><span class="invoice-doc-payment-note">online</span>` : ""}</td>
+        <td class="num"><span class="invoice-doc-payment-amount">−${escapeHtml(fmt(p.amount))}</span></td>
+        <td class="invoice-doc-payment-note">${escapeHtml(p.notes || "—")}</td>
+        <td class="num">
+          <button type="button" class="invoice-doc-payment-action" data-payment-edit="${escapeHtml(p.id)}"${canEdit ? "" : " disabled"}>Edit</button>
+          <button type="button" class="invoice-doc-payment-action invoice-doc-payment-action--danger" data-payment-reverse="${escapeHtml(p.id)}"${locked ? " disabled" : ""}>Reverse</button>
+        </td>
+      </tr>
+    `;
+  }).join("");
+}
+
+// Right-rail card: the running balance line plus the Record payment
+// button. Hidden on paid and void — the server refuses both, and offering
+// a button that always errors is worse than not offering one.
+function renderPaymentCard(inv) {
+  const meta = document.getElementById("invoicePaymentMeta");
+  const btn = document.getElementById("invoiceRecordPaymentBtn");
+  const status = document.getElementById("invoicePaymentStatus");
+  if (!meta || !btn) return;
+  if (status) { status.textContent = ""; status.dataset.kind = ""; }
+
+  const count = paymentsOf(inv).length;
+  const amountPaid = Number(inv?.amountPaid) || 0;
+  const total = Number(inv?.total) || 0;
+  const balanceDue = inv?.balanceDue == null ? total : Number(inv.balanceDue) || 0;
+
+  if (inv?.status === "void") {
+    btn.hidden = true;
+    meta.textContent = count
+      ? `${count} payment${count === 1 ? "" : "s"} on a voided invoice — reverse them if the money was returned.`
+      : "Voided — no payments can be recorded.";
+    return;
+  }
+  if (inv?.status === "paid" && balanceDue <= 0) {
+    btn.hidden = true;
+    meta.textContent = count
+      ? `Paid in full — ${fmt(amountPaid)} across ${count} payment${count === 1 ? "" : "s"}.`
+      : "Marked paid. No payment records on file.";
+    return;
+  }
+
+  btn.hidden = false;
+  meta.textContent = count
+    ? `${fmt(amountPaid)} received across ${count} payment${count === 1 ? "" : "s"} — ${fmt(balanceDue)} still owing.`
+    : `Nothing recorded yet — ${fmt(balanceDue)} owing.`;
+}
+
+// --- Record / edit modal ---
+// paymentEditingId is null for a new payment, a pmt_ id when correcting
+// an existing one. It drives the title, the confirm label, the allowed
+// maximum, and which HTTP verb fires on confirm.
+let paymentEditingId = null;
+
+// The most this payment is allowed to be. For a new payment that's the
+// balance due; for an edit it's the balance ignoring the payment being
+// edited, which is exactly what the server checks against.
+function paymentMaxAmount(inv, editingId) {
+  const total = Number(inv?.total) || 0;
+  const others = paymentsOf(inv)
+    .filter((p) => p.id !== editingId)
+    .reduce((a, p) => a + (Number(p.amount) || 0), 0);
+  return Math.max(0, Math.round((total - others) * 100) / 100);
+}
+
+function openPaymentModal(editingId) {
+  if (!currentInvoice) return;
+  paymentEditingId = editingId || null;
+  const existing = paymentEditingId
+    ? paymentsOf(currentInvoice).find((p) => p.id === paymentEditingId)
+    : null;
+  if (paymentEditingId && !existing) return;
+
+  const max = paymentMaxAmount(currentInvoice, paymentEditingId);
+  document.getElementById("paymentModalTitle").textContent = existing ? "Edit payment" : "Record payment";
+  document.getElementById("paymentModalIntro").textContent = existing
+    ? `Correcting a payment on ${currentInvoice.id}. Up to ${fmt(max)} can sit on this record without exceeding the invoice total.`
+    : `Recording money already received against ${currentInvoice.id}. Balance due is ${fmt(max)}. This does not charge the customer — it records a payment that has already arrived.`;
+  document.getElementById("paymentConfirmBtn").textContent = existing ? "Save changes" : "Record payment";
+
+  const amountEl = document.getElementById("paymentAmountInput");
+  amountEl.value = existing ? String(existing.amount) : "";
+  amountEl.max = String(max);
+  document.getElementById("paymentMethodInput").value = existing ? (existing.method || "cash") : "cash";
+  document.getElementById("paymentDateInput").value = existing
+    ? paymentDateInputValue(existing.receivedAt)
+    : todayInputValue();
+  document.getElementById("paymentNotesInput").value = existing ? (existing.notes || "") : "";
+  const err = document.getElementById("paymentModalError");
+  if (err) err.textContent = "";
+
+  openModal("paymentModal");
+  setTimeout(() => amountEl.focus(), 0);
+}
+
+document.getElementById("invoiceRecordPaymentBtn")?.addEventListener("click", () => openPaymentModal(null));
+document.getElementById("paymentCancelBtn")?.addEventListener("click", () => closeModal("paymentModal"));
+document.getElementById("paymentModal")?.addEventListener("click", (e) => {
+  if (e.target === document.getElementById("paymentModal")) closeModal("paymentModal");
+});
+
+document.getElementById("paymentConfirmBtn")?.addEventListener("click", async () => {
+  if (!currentInvoice) return;
+  const btn = document.getElementById("paymentConfirmBtn");
+  const err = document.getElementById("paymentModalError");
+  const setError = (msg) => { if (err) err.textContent = msg; };
+  setError("");
+
+  // Client-side validation mirroring the lib: positive amount, known
+  // method, a date, and not more than the invoice still allows.
+  const amount = Math.round(Number(document.getElementById("paymentAmountInput").value) * 100) / 100;
+  const method = document.getElementById("paymentMethodInput").value;
+  const receivedAt = document.getElementById("paymentDateInput").value;
+  const notes = document.getElementById("paymentNotesInput").value.trim();
+
+  if (!Number.isFinite(amount) || amount <= 0) return setError("Enter a payment amount greater than zero.");
+  const max = paymentMaxAmount(currentInvoice, paymentEditingId);
+  if (amount > Math.round((max + 0.01) * 100) / 100) {
+    return setError(`${fmt(amount)} is more than the ${fmt(max)} owing on this invoice.`);
+  }
+  if (!PAYMENT_METHOD_LABELS[method]) return setError("Choose a payment method.");
+  if (!receivedAt) return setError("Enter the date the payment was received.");
+
+  const editingId = paymentEditingId;
+  const url = editingId
+    ? `/api/invoices/${encodeURIComponent(idFromPath)}/payments/${encodeURIComponent(editingId)}`
+    : `/api/invoices/${encodeURIComponent(idFromPath)}/payments`;
+
+  btn.disabled = true;
+  try {
+    const r = await fetch(url, {
+      method: editingId ? "PATCH" : "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ amount, method, receivedAt, notes })
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok || !data.ok) throw new Error((data.errors && data.errors[0]) || "Couldn't save the payment.");
+    currentInvoice = data.invoice;
+    closeModal("paymentModal");
+    paymentEditingId = null;
+    render(data.invoice);
+    const status = document.getElementById("invoicePaymentStatus");
+    if (status) {
+      status.textContent = editingId
+        ? `✓ Payment updated — ${fmt(data.invoice.balanceDue)} still owing.`
+        : `✓ ${fmt(amount)} recorded — ${fmt(data.invoice.balanceDue)} still owing.`;
+      status.dataset.kind = "ok";
+    }
+  } catch (e) {
+    setError(e.message || "Failed.");
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+// Row actions. Delegated off the table body because the rows are
+// re-rendered on every invoice render.
+document.getElementById("invoicePaymentsBody")?.addEventListener("click", async (e) => {
+  const editBtn = e.target.closest("[data-payment-edit]");
+  if (editBtn) { openPaymentModal(editBtn.getAttribute("data-payment-edit")); return; }
+
+  const reverseBtn = e.target.closest("[data-payment-reverse]");
+  if (!reverseBtn || !currentInvoice) return;
+  const paymentId = reverseBtn.getAttribute("data-payment-reverse");
+  const payment = paymentsOf(currentInvoice).find((p) => p.id === paymentId);
+  if (!payment) return;
+
+  // A card payment came through the online pay page — reversing the
+  // record here does NOT refund the customer's card, and saying so is the
+  // difference between an accounting correction and a support call.
+  const cardWarning = payment.method === "card_qb"
+    ? "\n\nThis was an online card payment. Reversing it here removes the record only — it does NOT refund the customer. Refund in Stripe first."
+    : "";
+  const label = PAYMENT_METHOD_LABELS[payment.method] || payment.method;
+  if (!confirm(`Reverse the ${label} payment of ${fmt(payment.amount)} received ${fmtPaymentDate(payment.receivedAt)}?${cardWarning}`)) return;
+
+  const status = document.getElementById("invoicePaymentStatus");
+  reverseBtn.disabled = true;
+  try {
+    const r = await fetch(`/api/invoices/${encodeURIComponent(idFromPath)}/payments/${encodeURIComponent(paymentId)}`, {
+      method: "DELETE",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ reason: "Reversed from the admin invoice page." })
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok || !data.ok) throw new Error((data.errors && data.errors[0]) || "Couldn't reverse the payment.");
+    currentInvoice = data.invoice;
+    render(data.invoice);
+    if (status) {
+      status.textContent = `✓ Reversed ${fmt(payment.amount)} — ${fmt(data.invoice.balanceDue)} now owing.`;
+      status.dataset.kind = "ok";
+    }
+  } catch (err) {
+    reverseBtn.disabled = false;
+    if (status) { status.textContent = err.message || "Failed."; status.dataset.kind = "error"; }
+    else alert(err.message || "Failed.");
+  }
+});
+
 // ---- Void + delete (feature-invoice-void-delete-brief.md §4.4) --------
 //
 // Void is offered on draft/sent; Delete is offered ONLY once the invoice
@@ -923,6 +1237,11 @@ function renderVoidDeleteCard(inv) {
     // empty card.
     meta.hidden = false;
     meta.textContent = "Paid invoices can’t be voided or deleted here (that’s a QuickBooks credit-memo).";
+  } else if (status === "partially_paid") {
+    // Void is blocked server-side while any payment is on the ledger
+    // (invoice_has_payments), so point at the fix instead of a dead card.
+    meta.hidden = false;
+    meta.textContent = "Money has been received against this invoice. Reverse the payments below before voiding it.";
   } else {
     meta.hidden = true;
     meta.textContent = "";
@@ -1109,8 +1428,8 @@ document.addEventListener("keydown", (e) => {
 });
 
 // Wire QB block refresh + reminder card + junk-warning card + void/delete
-// card render into the existing invoice render path so all update whenever
-// the invoice is loaded.
+// card + payment ledger render into the existing invoice render path so
+// all update whenever the invoice is loaded.
 const origRender = render;
 render = function (inv) {
   origRender(inv);
@@ -1118,6 +1437,8 @@ render = function (inv) {
   renderReminderCard(inv);
   renderJunkWarningCard(inv);
   renderVoidDeleteCard(inv);
+  renderPaymentsTable(inv);
+  renderPaymentCard(inv);
 };
 
 // ---- Authorization posture (admin-only) -----------------------------

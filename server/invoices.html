@@ -72,6 +72,9 @@
         <button type="button" data-status-filter="" class="is-active">All</button>
         <button type="button" data-status-filter="draft">Drafts</button>
         <button type="button" data-status-filter="sent">Sent</button>
+        <!-- Partly-paid invoices drop out of both Sent and Paid, so
+             without this filter they are only findable under All. -->
+        <button type="button" data-status-filter="partially_paid">Partly paid</button>
         <button type="button" data-status-filter="paid">Paid</button>
         <button type="button" data-status-filter="void">Void</button>
       </section>

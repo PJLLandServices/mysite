@@ -117,6 +117,37 @@
               <div><span>Subtotal</span><strong id="invoiceSubtotal">$0.00</strong></div>
               <div><span>HST (13%)</span><strong id="invoiceHst">$0.00</strong></div>
               <div class="invoice-doc-totals-row"><span>Total CAD</span><strong id="invoiceTotal">$0.00</strong></div>
+              <!-- Payment ledger rows (invoice payment ledger, Jul 2026).
+                   Both stay hidden on an invoice with no payments, so a
+                   normal unpaid invoice renders exactly as it did before
+                   the ledger existed. Amount paid is shown as a negative
+                   because it is money already taken off the total. -->
+              <div class="invoice-doc-totals-paid" id="invoiceAmountPaidRow" hidden>
+                <span>Amount paid</span><strong id="invoiceAmountPaid">$0.00</strong>
+              </div>
+              <div class="invoice-doc-totals-balance" id="invoiceBalanceDueRow" hidden>
+                <span>Balance due</span><strong id="invoiceBalanceDue">$0.00</strong>
+              </div>
+            </section>
+
+            <!-- Recorded payments (invoice payment ledger, Jul 2026).
+                 Cash / e-transfer / cheque taken on site plus card charges
+                 landed by the online pay page. Hidden entirely when the
+                 ledger is empty. Edit and Reverse hit the PATCH / DELETE
+                 payment routes; the lib re-derives amountPaid, balanceDue
+                 and the paid / partially_paid status on every mutation. -->
+            <section class="invoice-doc-payments" id="invoicePaymentsSection" hidden>
+              <h3 class="invoice-doc-payments-title">Payments received</h3>
+              <!-- The table scrolls sideways on a phone; the heading sits
+                   outside the scroller so it stays put while it does. -->
+              <div class="invoice-doc-payments-scroll">
+                <table>
+                  <thead>
+                    <tr><th>Date</th><th>Method</th><th class="num">Amount</th><th>Notes</th><th class="num">Actions</th></tr>
+                  </thead>
+                  <tbody id="invoicePaymentsBody"></tbody>
+                </table>
+              </div>
             </section>
 
             <!-- Disclaimers — keyed callouts attached at cascade time
@@ -138,10 +169,25 @@
             <select id="invoiceStatus" class="invoice-action-select">
               <option value="draft">Draft</option>
               <option value="sent">Sent</option>
+              <!-- Partially paid is DERIVED from the payment ledger, never
+                   chosen by hand — disabled so the select can display it
+                   without offering it as a manual transition. -->
+              <option value="partially_paid" disabled>Partially paid</option>
               <option value="paid">Paid</option>
               <option value="void">Void</option>
             </select>
             <p class="invoice-action-meta" id="invoiceStatusMeta"></p>
+          </section>
+
+          <!-- Payment ledger (invoice payment ledger, Jul 2026). Records
+               money that arrived outside the online pay page — cash on
+               site, e-transfer, cheque. The button is hidden on paid and
+               void invoices; the server refuses those anyway. -->
+          <section class="invoice-action-card" id="invoicePaymentCard">
+            <span class="invoice-action-label">Payments</span>
+            <p class="invoice-action-meta" id="invoicePaymentMeta">—</p>
+            <button type="button" id="invoiceRecordPaymentBtn" class="invoice-action-btn invoice-action-btn--primary">＋ Record payment</button>
+            <p class="invoice-action-status" id="invoicePaymentStatus"></p>
           </section>
 
           <!-- Void + delete (feature-invoice-void-delete-brief.md §4.4).
@@ -327,6 +373,43 @@
       <div class="invoice-modal-actions">
         <button type="button" class="invoice-action-btn" id="deleteCancelBtn">Cancel</button>
         <button type="button" class="invoice-action-btn invoice-action-btn--danger" id="deleteConfirmBtn" disabled>Delete invoice</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Record / edit payment modal (invoice payment ledger, Jul 2026).
+       One modal serves both: the title, the intro line and the confirm
+       button label flip based on whether a payment id is being edited.
+       Client-side validation mirrors the lib's guards (positive amount,
+       not over the balance, known method) so a typo is caught before the
+       round-trip — the server stays the authority either way. -->
+  <div class="invoice-modal" id="paymentModal" role="dialog" aria-modal="true" aria-labelledby="paymentModalTitle" hidden>
+    <div class="invoice-modal-sheet">
+      <h2 id="paymentModalTitle">Record payment</h2>
+      <p class="invoice-modal-intro" id="paymentModalIntro"></p>
+
+      <label class="invoice-modal-label" for="paymentAmountInput">Amount (CAD)</label>
+      <input type="number" class="invoice-modal-input" id="paymentAmountInput" min="0.01" step="0.01" inputmode="decimal" placeholder="0.00">
+
+      <label class="invoice-modal-label" for="paymentMethodInput">Method</label>
+      <select class="invoice-modal-input" id="paymentMethodInput">
+        <option value="cash">Cash</option>
+        <option value="e_transfer">e-Transfer</option>
+        <option value="cheque">Cheque</option>
+        <option value="card_qb">Card</option>
+        <option value="other">Other</option>
+      </select>
+
+      <label class="invoice-modal-label" for="paymentDateInput">Received on</label>
+      <input type="date" class="invoice-modal-input" id="paymentDateInput">
+
+      <label class="invoice-modal-label" for="paymentNotesInput">Notes (optional)</label>
+      <textarea class="invoice-modal-textarea" id="paymentNotesInput" maxlength="500" placeholder="Cheque number, who handed it over, …"></textarea>
+
+      <p class="invoice-modal-error" id="paymentModalError"></p>
+      <div class="invoice-modal-actions">
+        <button type="button" class="invoice-action-btn" id="paymentCancelBtn">Cancel</button>
+        <button type="button" class="invoice-action-btn invoice-action-btn--primary" id="paymentConfirmBtn">Record payment</button>
       </div>
     </div>
   </div>

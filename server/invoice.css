@@ -164,6 +164,87 @@
 .invoice-doc-totals-row strong { color: #1B4D2E !important; }
 .invoice-doc-totals-row strong { font-size: 19px !important; }
 
+/* Payment ledger rows (invoice payment ledger, Jul 2026).
+   `.invoice-doc-totals div { display: flex }` above is an AUTHOR rule, so
+   it beats the UA stylesheet's [hidden] { display: none } no matter the
+   specificity — these rows need their own hidden rule or they render on
+   every invoice, paid or not. */
+.invoice-doc-totals-paid[hidden],
+.invoice-doc-totals-balance[hidden] { display: none !important; }
+.invoice-doc-totals-paid span,
+.invoice-doc-totals-paid strong { color: #8A5313 !important; }
+.invoice-doc-totals-balance {
+  border-top: 1px solid #1B4D2E;
+  padding-top: 10px;
+  margin-top: 6px;
+  font-size: 17px !important;
+  font-weight: 700;
+}
+.invoice-doc-totals-balance span,
+.invoice-doc-totals-balance strong { color: #1B4D2E !important; }
+.invoice-doc-totals-balance strong { font-size: 19px !important; }
+
+/* Recorded-payments table. Same visual language as the line-item table
+   above it, one shade quieter — it is a ledger, not the invoice itself. */
+/* Five columns don't fit a 300px phone column — without the scroll
+   container the Actions cell is clipped off the right edge and Edit /
+   Reverse become unreachable on a phone, which is where most of the
+   cash-on-site recording actually happens. */
+.invoice-doc-payments { margin: 0 0 24px; }
+.invoice-doc-payments[hidden] { display: none !important; }
+.invoice-doc-payments-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.invoice-doc-payments table { min-width: 460px; }
+.invoice-doc-payments-title {
+  margin: 0 0 10px;
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #6F7566;
+}
+.invoice-doc-payments table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.invoice-doc-payments th {
+  text-align: left;
+  padding: 8px 10px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #6F7566;
+  background: #FAFAF5;
+  border-bottom: 1px solid #E5E5DD;
+}
+.invoice-doc-payments td {
+  padding: 10px;
+  border-bottom: 1px solid #EFEFE7;
+  color: #1F2A22;
+  vertical-align: top;
+}
+.invoice-doc-payments th.num,
+.invoice-doc-payments td.num { text-align: right; font-variant-numeric: tabular-nums; }
+.invoice-doc-payments td:first-child,
+.invoice-doc-payments .invoice-doc-payment-amount { white-space: nowrap; }
+.invoice-doc-payments .invoice-doc-payment-amount { color: #8A5313; font-weight: 600; }
+.invoice-doc-payments .invoice-doc-payment-note { color: #6F7566; }
+.invoice-doc-payment-action {
+  border: none;
+  background: none;
+  padding: 0 0 0 12px;
+  font: inherit;
+  font-size: 12px;
+  color: #1B4D2E;
+  text-decoration: underline;
+  cursor: pointer;
+}
+.invoice-doc-payment-action:first-child { padding-left: 0; }
+.invoice-doc-payment-action--danger { color: #9B1C1C; }
+.invoice-doc-payment-action:disabled { opacity: 0.45; cursor: not-allowed; }
+
 .invoice-doc-terms {
   padding: 16px 18px;
   background: #FAFAF5;
