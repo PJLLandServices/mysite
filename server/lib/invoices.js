@@ -558,6 +558,21 @@ async function update(id, patch) {
   if (patch && patch.status === "sent" && !current.sentAt) next.sentAt = new Date().toISOString();
   if (patch && patch.status === "paid" && !current.paidAt) next.paidAt = new Date().toISOString();
   if (patch && patch.status === "void" && !current.voidedAt) next.voidedAt = new Date().toISOString();
+
+  // Re-derive the status from the ledger when an invoice is SENT.
+  // statusForPayments only ran on payment mutations, so cash collected
+  // on site — recorded while the invoice was still a draft, which is the
+  // normal order of events — left the invoice sitting at "sent" with a
+  // balance owing. It should read partially_paid (or paid, if the
+  // on-site payment covered the whole thing).
+  //
+  // Deliberately scoped to the sent transition: re-deriving on EVERY
+  // update would fight a manual "paid" that an admin set on an invoice
+  // with no payment records, which is a legitimate thing to do.
+  if (patch && patch.status === "sent") {
+    next.status = statusForPayments(next, "sent");
+    if (next.status === "paid" && !next.paidAt) next.paidAt = new Date().toISOString();
+  }
   next.updatedAt = new Date().toISOString();
   if (patch && patch.status && patch.status !== current.status) {
     next.history = [...(next.history || []), {
@@ -1052,6 +1067,10 @@ module.exports = {
   removePayment,
   amountPaidOf,
   balanceDueOf,
+  // Exported for the balance-surface regression tests: the send-time
+  // re-derive is the rule that decides whether a customer who paid a
+  // deposit on site sees "partially paid" or a stale "sent".
+  statusForPayments,
   HST_RATE,
   INVOICE_DISCLAIMERS,
   PAYMENT_ATTEMPT_OUTCOMES,

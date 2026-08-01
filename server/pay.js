@@ -243,7 +243,31 @@ function render(inv) {
   document.getElementById("paySubtotal").textContent = fmt(inv.subtotal);
   document.getElementById("payHst").textContent = fmt(inv.hst);
   document.getElementById("payTotal").textContent = fmt(inv.total);
-  $chargeBtnAmount.textContent = fmt(inv.total);
+
+  // MONEY-CRITICAL: the card charge is the OUTSTANDING BALANCE, not the
+  // invoice total — the sdk-config and payment-intent routes both derive
+  // amountCents from balanceDue. This page used to print inv.total on the
+  // charge button, so an invoice with $500 already paid on site offered
+  // "Pay $2,260.00" against a $1,760.00 charge. The button must state the
+  // amount that will actually leave the customer's card.
+  const total = Number(inv.total) || 0;
+  const amountPaid = Number(inv.amountPaid) || 0;
+  const balanceDue = inv.balanceDue == null ? total : Number(inv.balanceDue) || 0;
+
+  const paidRow = document.getElementById("payAmountPaidRow");
+  const dueRow = document.getElementById("payAmountDueRow");
+  const totalRow = document.getElementById("payTotalRow");
+  const hasPayments = amountPaid > 0 && balanceDue !== total;
+  if (paidRow && dueRow && totalRow) {
+    paidRow.hidden = !hasPayments;
+    dueRow.hidden = !hasPayments;
+    totalRow.classList.toggle("is-superseded", hasPayments);
+    if (hasPayments) {
+      document.getElementById("payAmountPaid").textContent = "−" + fmt(amountPaid);
+      document.getElementById("payAmountDue").textContent = fmt(balanceDue);
+    }
+  }
+  $chargeBtnAmount.textContent = fmt(balanceDue);
 
   if (inv.eTransferEmail) {
     const link = document.getElementById("payETransferEmail");
@@ -271,9 +295,23 @@ function render(inv) {
     return;
   }
 
-  // Status is sent (or draft, edge case) — form section already visible.
-  // The Element's postal pre-fill happens at initPaymentForm() via
-  // defaultValues, from the same invoice billingPrefill.
+  // Nothing left owing, but the invoice isn't flagged paid — e.g. the
+  // balance was settled by cash / e-transfer recorded against it. The
+  // payment-intent route refuses a zero charge, so showing a live card
+  // form here would only produce an error the customer can't act on.
+  if (balanceDue <= 0) {
+    $paidBanner.hidden = false;
+    $formSection.hidden = true;
+    const banner = $paidBanner.querySelector("h2");
+    if (banner) banner.textContent = "Nothing left to pay ✓";
+    document.getElementById("payPaidMessage").textContent =
+      "Your payments cover this invoice in full — there's nothing outstanding. Questions? Call (905) 960-0181.";
+    return;
+  }
+
+  // Status is sent / partially_paid (or draft, edge case) — form section
+  // already visible. The Element's postal pre-fill happens at
+  // initPaymentForm() via defaultValues, from the same billingPrefill.
 }
 
 // ---- ReCAPTCHA v3 ----------------------------------------------------

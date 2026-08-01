@@ -110,6 +110,27 @@
     document.getElementById("pinvHst").textContent = fmtMoney(invoice.hst);
     document.getElementById("pinvTotal").textContent = fmtMoney(invoice.total);
 
+    // Payment ledger. The Pay button below must quote what will actually
+    // be charged (the outstanding balance), not the invoice total — an
+    // invoice with cash already collected on site would otherwise offer
+    // "Pay $2,260.00" and hand the customer to a $1,760.00 card charge.
+    const pinvTotal = Number(invoice.total) || 0;
+    const pinvPaid = Number(invoice.amountPaid) || 0;
+    const pinvDue = invoice.balanceDue == null ? pinvTotal : Number(invoice.balanceDue) || 0;
+    const pinvHasPayments = pinvPaid > 0 && pinvDue !== pinvTotal;
+    const pinvPaidRow = document.getElementById("pinvAmountPaidRow");
+    const pinvDueRow = document.getElementById("pinvAmountDueRow");
+    const pinvTotalRow = document.getElementById("pinvTotalRow");
+    if (pinvPaidRow && pinvDueRow && pinvTotalRow) {
+      pinvPaidRow.hidden = !pinvHasPayments;
+      pinvDueRow.hidden = !pinvHasPayments;
+      pinvTotalRow.classList.toggle("is-superseded", pinvHasPayments);
+      if (pinvHasPayments) {
+        document.getElementById("pinvAmountPaid").textContent = "−" + fmtMoney(pinvPaid);
+        document.getElementById("pinvAmountDue").textContent = fmtMoney(pinvDue);
+      }
+    }
+
     // Pay block. Four states:
     //   1. paid       → hide the whole section
     //   2. void       → "This invoice has been voided" notice
@@ -118,7 +139,9 @@
     const paySection = document.getElementById("pinvPaySection");
     const payBlock = document.getElementById("pinvPayBlock");
     const payHeading = document.getElementById("pinvPayHeading");
-    if (invoice.status === "paid") {
+    if (invoice.status === "paid" || pinvDue <= 0) {
+      // Nothing owing — either flagged paid, or the recorded payments
+      // cover it in full. Either way there is nothing to send them to.
       paySection.hidden = true;
     } else if (invoice.status === "void") {
       paySection.hidden = false;
@@ -131,7 +154,7 @@
     } else {
       paySection.hidden = false;
       payHeading.textContent = "Pay this invoice";
-      payBlock.innerHTML = `<a class="pinv-pay-btn" href="${escapeHtml(invoice.payUrl)}" target="_blank" rel="noopener">Pay ${escapeHtml(fmtMoney(invoice.total))} →</a>`;
+      payBlock.innerHTML = `<a class="pinv-pay-btn" href="${escapeHtml(invoice.payUrl)}" target="_blank" rel="noopener">Pay ${escapeHtml(fmtMoney(pinvDue))} →</a>`;
     }
 
     document.title = `Invoice ${invoice.id || ""} — PJL Land Services`;

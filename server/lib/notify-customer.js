@@ -454,6 +454,28 @@ async function sendInvoiceToCustomer(invoice, pdfBuffer, opts = {}) {
   const { html: htmlTpl, text: textTpl } = loadTemplate();
   const firstName = (invoice.customerName || "").trim().split(/\s+/)[0] || "there";
   const totalFormatted = moneyTextCurrency(invoice.total);
+  // Amount due ≠ invoice total once anything has been paid against it.
+  // The email used to quote the total everywhere, so an invoice with
+  // $500 collected on site went out asking for the full $2,260 while the
+  // attached PDF and the pay page both said $1,760 — the customer's own
+  // documents contradicted each other. "Total" survives where it really
+  // means the value of the work; everywhere the copy means "what you
+  // owe", it is amountDue.
+  const invTotal = Number(invoice.total) || 0;
+  const invAmountPaid = Number(invoice.amountPaid) || 0;
+  const invAmountDue = invoice.balanceDue == null ? invTotal : Number(invoice.balanceDue) || 0;
+  const amountDueFormatted = moneyTextCurrency(invAmountDue);
+  const amountPaidFormatted = moneyTextCurrency(invAmountPaid);
+  // The template engine does substitution only — no conditionals — so a
+  // block that should appear on some invoices is toggled with a display
+  // value, the same trick viewLinkVisible already uses below.
+  const hasPayments = invAmountPaid > 0 && invAmountDue !== invTotal;
+  const paidBlockVisible = hasPayments ? "block" : "none";
+  const paidLineText = hasPayments
+    ? `Invoice total:     ${totalFormatted}\n` +
+      `Payments received: -${amountPaidFormatted}\n` +
+      `Amount due:        ${amountDueFormatted}\n\n`
+    : "";
   const eTransferEmail = (opts.eTransferEmail || process.env.ETRANSFER_EMAIL || "info@pjllandservices.com").trim();
   const viewLink = (opts.viewLink || "").trim();
   const viewLinkVisible = viewLink ? "block" : "none";
@@ -483,7 +505,10 @@ async function sendInvoiceToCustomer(invoice, pdfBuffer, opts = {}) {
     customer: { firstName: escapeHtml(firstName) },
     invoice: {
       number: escapeHtml(invoice.id || ""),
-      totalFormatted: escapeHtml(totalFormatted)
+      totalFormatted: escapeHtml(totalFormatted),
+      amountDueFormatted: escapeHtml(amountDueFormatted),
+      amountPaidFormatted: escapeHtml(amountPaidFormatted),
+      paidBlockVisible
     },
     paymentInstructions: paymentInstructionsHtml,
     viewLink: escapeHtml(viewLink),
@@ -493,7 +518,13 @@ async function sendInvoiceToCustomer(invoice, pdfBuffer, opts = {}) {
   // Plain-text variant uses non-escaped content (no HTML rendering).
   const textVars = {
     customer: { firstName },
-    invoice: { number: invoice.id || "", totalFormatted },
+    invoice: {
+      number: invoice.id || "",
+      totalFormatted,
+      amountDueFormatted,
+      amountPaidFormatted,
+      paidLineText
+    },
     paymentInstructions: paymentInstructionsText,
     viewLinkText,
     publicBaseUrl
@@ -503,7 +534,9 @@ async function sendInvoiceToCustomer(invoice, pdfBuffer, opts = {}) {
   const text = renderTemplate(textTpl, textVars);
 
   const subjectPrefix = opts.resend ? "Invoice reminder" : "Your invoice";
-  const subject = `${subjectPrefix} ${invoice.id || ""} — ${totalFormatted} — PJL Land Services`;
+  // The subject line is read as "what do I owe", so it carries the amount
+  // due. Identical to the total on every invoice with no payments.
+  const subject = `${subjectPrefix} ${invoice.id || ""} — ${amountDueFormatted} — PJL Land Services`;
 
   // Spouse CC — opts.includeSpouse can override the profile flag
   // (true / false / null = use profile default).

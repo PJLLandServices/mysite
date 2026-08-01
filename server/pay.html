@@ -50,7 +50,13 @@
           <tfoot>
             <tr><td colspan="2">Subtotal</td><td class="num" id="paySubtotal">$0.00</td></tr>
             <tr><td colspan="2">HST (13%)</td><td class="num" id="payHst">$0.00</td></tr>
-            <tr class="pay-summary-total"><td colspan="2">Total</td><td class="num" id="payTotal">$0.00</td></tr>
+            <tr class="pay-summary-total" id="payTotalRow"><td colspan="2">Total</td><td class="num" id="payTotal">$0.00</td></tr>
+            <!-- Payment ledger rows. Hidden unless money has already been
+                 received, so an ordinary unpaid invoice renders exactly as
+                 it did before. When they show, the emphasis moves off Total
+                 and onto Amount due — that is the number being charged. -->
+            <tr class="pay-summary-paid" id="payAmountPaidRow" hidden><td colspan="2">Amount paid</td><td class="num" id="payAmountPaid">$0.00</td></tr>
+            <tr class="pay-summary-total" id="payAmountDueRow" hidden><td colspan="2">Amount due</td><td class="num" id="payAmountDue">$0.00</td></tr>
           </tfoot>
         </table>
       </section>

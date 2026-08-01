@@ -7,6 +7,15 @@
   {{viewLink}}, {{viewLinkVisible}} (CSS display value, "block" or
   "none" — hides the View and pay row when no link is available).
 
+  Payment ledger: {{invoice.amountDueFormatted}} is what the customer
+  owes (total minus anything already received) and is what every "what
+  you owe" spot uses; {{invoice.totalFormatted}} survives only where the
+  copy genuinely means the value of the work. {{invoice.amountPaidFormatted}}
+  and {{invoice.paidBlockVisible}} (display value) drive the breakdown
+  block, which appears only when a payment exists. The plain-text body
+  uses {{invoice.paidLineText}} — a pre-rendered block, empty when there
+  are no payments.
+
   The HTML body and plain-text fallback are in the same file separated
   by an HTML "TEXT" comment marker (see below). The renderer splits on
   the FIRST occurrence of that marker, so don't reference the literal
@@ -38,7 +47,7 @@
                     Your invoice {{invoice.number}}
                   </h1>
                   <div style="margin-top:6px;font-size:14px;color:#EAF3DE;">
-                    {{invoice.totalFormatted}} · due on completion
+                    {{invoice.amountDueFormatted}} · due on completion
                   </div>
                 </td>
                 <td valign="middle" align="right" width="200" style="width:200px;">
@@ -60,10 +69,39 @@
             <p style="margin:0 0 16px;">
               Thanks for trusting PJL Land Services. Your invoice
               <strong>{{invoice.number}}</strong> for
-              <strong>{{invoice.totalFormatted}}</strong> is attached as a
+              <strong>{{invoice.amountDueFormatted}}</strong> is attached as a
               PDF. The same details are summarised below for quick
               reference.
             </p>
+
+            <!-- Payment-ledger breakdown. Shown only when money has already
+                 been received against this invoice (paidBlockVisible is
+                 "none" otherwise), so it explains why the amount asked for
+                 is less than the invoice total instead of leaving the
+                 customer to reconcile it against the attached PDF. The
+                 template engine has no conditionals — the display value is
+                 the switch, same as viewLinkVisible below. -->
+            <table cellpadding="0" cellspacing="0" border="0" width="100%"
+                   style="display:{{invoice.paidBlockVisible}};margin:0 0 16px;border:1px solid #E5E5DD;border-radius:6px;background:#FAFAF5;">
+              <tr>
+                <td style="padding:12px 16px;font-size:14px;color:#1A1A1A;">
+                  <table cellpadding="0" cellspacing="0" border="0" width="100%">
+                    <tr>
+                      <td style="padding:3px 0;color:#5a5f57;">Invoice total</td>
+                      <td align="right" style="padding:3px 0;">{{invoice.totalFormatted}}</td>
+                    </tr>
+                    <tr>
+                      <td style="padding:3px 0;color:#8A5313;">Payments received</td>
+                      <td align="right" style="padding:3px 0;color:#8A5313;">-{{invoice.amountPaidFormatted}}</td>
+                    </tr>
+                    <tr>
+                      <td style="padding:8px 0 3px;border-top:1px solid #E5E5DD;font-weight:700;color:#1B4D2E;">Amount due</td>
+                      <td align="right" style="padding:8px 0 3px;border-top:1px solid #E5E5DD;font-weight:700;color:#1B4D2E;">{{invoice.amountDueFormatted}}</td>
+                    </tr>
+                  </table>
+                </td>
+              </tr>
+            </table>
 
             <!-- View and pay CTA — hidden when viewLink is empty (PR 2 default).
                  PR 3 swaps in the embedded /pay/invoice/:id?t=... URL. -->
@@ -129,9 +167,9 @@
 Hi {{customer.firstName}},
 
 Thanks for trusting PJL Land Services. Your invoice {{invoice.number}}
-for {{invoice.totalFormatted}} is attached as a PDF.
+for {{invoice.amountDueFormatted}} is attached as a PDF.
 
-WAYS TO PAY
+{{invoice.paidLineText}}WAYS TO PAY
 {{paymentInstructions}}
 
 {{viewLinkText}}

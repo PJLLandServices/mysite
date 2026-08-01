@@ -7454,6 +7454,13 @@ async function handleApi(req, res, pathname) {
         subtotal: inv.subtotal,
         hst: inv.hst,
         total: inv.total,
+        // Payment ledger — the two scalars the customer needs to know what
+        // they still owe. The raw payments[] is deliberately NOT exposed:
+        // it carries the staff uid that took the money and internal notes
+        // ("On-site payment, pre-invoice"), neither of which belongs on a
+        // token-gated public surface.
+        amountPaid: Number(inv.amountPaid) || 0,
+        balanceDue: inv.balanceDue == null ? inv.total : Number(inv.balanceDue),
         currency: inv.currency,
         payUrl,
         quickbooksInvoiceId: inv.quickbooksInvoiceId || null
@@ -7520,6 +7527,13 @@ async function handleApi(req, res, pathname) {
         subtotal: inv.subtotal,
         hst: inv.hst,
         total: inv.total,
+        // Payment ledger. The page charges balanceDue (see the sdk-config
+        // and payment-intent routes below) — without these two fields the
+        // page could only display the total, which is how it came to say
+        // "Pay $2,260.00" on a card charge of $1,760.00. Scalars only: the
+        // raw payments[] carries staff uids and internal notes.
+        amountPaid: Number(inv.amountPaid) || 0,
+        balanceDue: inv.balanceDue == null ? inv.total : Number(inv.balanceDue),
         currency: inv.currency,
         quickbooksChargeId: inv.quickbooksChargeId,
         eTransferEmail: process.env.ETRANSFER_EMAIL || "info@pjllandservices.com",
@@ -7645,7 +7659,12 @@ async function handleApi(req, res, pathname) {
       if (inv.status === "void") {
         return sendJson(res, 409, { ok: false, errors: ["This invoice has been voided."] });
       }
-      if (inv.status !== "sent") {
+      // partially_paid is a payable state, not a blocked one — it is
+      // literally "sent, with money still owing". Before the send-time
+      // status re-derive existed this gate only ever saw "sent", so
+      // admitting partially_paid here is what keeps a customer who paid
+      // a deposit on site able to pay the rest online.
+      if (inv.status !== "sent" && inv.status !== "partially_paid") {
         return sendJson(res, 409, { ok: false, errors: [`This invoice is "${inv.status}" and isn't ready for payment.`] });
       }
 

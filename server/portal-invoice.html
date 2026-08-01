@@ -108,7 +108,11 @@
           <tfoot>
             <tr><td colspan="3">Subtotal</td><td class="num" id="pinvSubtotal">$0.00</td></tr>
             <tr><td colspan="3">HST (13%)</td><td class="num" id="pinvHst">$0.00</td></tr>
-            <tr class="pay-summary-total"><td colspan="3">Total CAD</td><td class="num" id="pinvTotal">$0.00</td></tr>
+            <tr class="pay-summary-total" id="pinvTotalRow"><td colspan="3">Total CAD</td><td class="num" id="pinvTotal">$0.00</td></tr>
+            <!-- Payment ledger rows — hidden unless money has already been
+                 received, so an unpaid invoice renders as it always did. -->
+            <tr class="pay-summary-paid" id="pinvAmountPaidRow" hidden><td colspan="3">Amount paid</td><td class="num" id="pinvAmountPaid">$0.00</td></tr>
+            <tr class="pay-summary-total" id="pinvAmountDueRow" hidden><td colspan="3">Amount due</td><td class="num" id="pinvAmountDue">$0.00</td></tr>
           </tfoot>
         </table>
       </section>

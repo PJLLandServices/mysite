@@ -187,6 +187,22 @@ a:hover { text-decoration: underline; }
   color: var(--green);
   letter-spacing: 0.005em;
 }
+/* Payment ledger rows. Belt-and-braces [hidden] rule: no author rule sets
+   `display` on these today, but the failure mode is a wrong dollar figure
+   on a payment page, so it is not worth relying on that staying true. */
+.pay-summary-table tfoot tr[hidden] { display: none !important; }
+.pay-summary-table tfoot tr.pay-summary-paid td { color: #8A5313; font-weight: 600; }
+/* When a balance is showing, Total is context and Amount due is the
+   number being charged — drop Total back to a normal row so the two
+   big green figures don't compete. */
+.pay-summary-table tfoot tr.pay-summary-total.is-superseded td {
+  border-top: 1px solid var(--line, #E5E5DD);
+  padding-top: 8px;
+  font-family: inherit;
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--text-muted);
+}
 
 /* ---- Paid banner -------------------------------------------------- */
 .pay-paid-banner {
