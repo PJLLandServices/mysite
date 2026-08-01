@@ -19,6 +19,7 @@
 const fs = require("node:fs/promises");
 const fsSync = require("node:fs");
 const path = require("node:path");
+const crypto = require("node:crypto");
 
 const FILE = path.join(__dirname, "..", "data", "invoices.json");
 // Tombstone log for hard-deleted void invoices (feature-invoice-void-delete-
@@ -29,7 +30,68 @@ const FILE = path.join(__dirname, "..", "data", "invoices.json");
 const DELETED_FILE = path.join(__dirname, "..", "data", "deleted-invoices.json");
 const HST_RATE = 0.13;
 
-const STATUSES = ["draft", "sent", "paid", "void"];
+const STATUSES = ["draft", "sent", "partially_paid", "paid", "void"];
+
+// Payment methods. card_qb is the online QuickBooks card charge; the rest
+// are recorded by hand after the money arrives some other way.
+const PAYMENT_METHODS = ["cash", "e_transfer", "cheque", "card_qb", "other"];
+const PAYMENT_METHOD_LABELS = {
+  cash: "Cash",
+  e_transfer: "e-Transfer",
+  cheque: "Cheque",
+  card_qb: "Card",
+  other: "Other"
+};
+
+// Money helper — every amount in this module rounds to cents the same way.
+// Float drift on a balance is the difference between "$0.00 due" and a
+// customer being asked to pay one more cent.
+function round2(n) {
+  return Math.round((Number(n) || 0) * 100) / 100;
+}
+
+// Normalize one payment record. Amounts are forced positive: a refund or a
+// correction is a DELETE of the payment, not a negative amount, so the
+// ledger can never silently net out to something unexplainable.
+function normalizePayment(raw) {
+  if (!raw || typeof raw !== "object") return null;
+  const amount = round2(raw.amount);
+  if (!Number.isFinite(amount) || amount <= 0) return null;
+  const method = PAYMENT_METHODS.includes(raw.method) ? raw.method : "other";
+  return {
+    id: String(raw.id || "").trim() || ("pmt_" + crypto.randomBytes(4).toString("hex")),
+    amount,
+    method,
+    receivedAt: raw.receivedAt || new Date().toISOString(),
+    receivedBy: String(raw.receivedBy || "admin").slice(0, 80),
+    notes: String(raw.notes || "").slice(0, 500)
+  };
+}
+
+// Sum of recorded payments. Single source of truth for "how much has come in".
+function amountPaidOf(inv) {
+  const list = Array.isArray(inv?.payments) ? inv.payments : [];
+  return round2(list.reduce((a, p) => a + (Number(p?.amount) || 0), 0));
+}
+
+// What the customer still owes — and therefore what the pay-online page is
+// allowed to charge. Never negative: an overpayment shows as $0 due, not a
+// negative charge.
+function balanceDueOf(inv) {
+  return Math.max(0, round2((Number(inv?.total) || 0) - amountPaidOf(inv)));
+}
+
+// Derive the status from the money, without clobbering the states that
+// aren't about money (draft / void) or regressing a manual "paid".
+// Tolerance: a balance within a cent counts as settled.
+function statusForPayments(inv, currentStatus) {
+  if (currentStatus === "draft" || currentStatus === "void") return currentStatus;
+  const paid = amountPaidOf(inv);
+  const total = Number(inv?.total) || 0;
+  if (paid <= 0) return currentStatus === "partially_paid" ? "sent" : currentStatus;
+  if (paid >= round2(total - 0.01)) return "paid";
+  return "partially_paid";
+}
 
 // Invoice disclaimers — keyed by stable slug, rendered verbatim below
 // the line items in both the admin editor and the customer PDF.
@@ -112,6 +174,13 @@ async function appendDeletedTombstone(entry) {
 }
 
 function hydrate(inv) {
+  // Derive the money once per read. amountPaid / balanceDue are always
+  // recomputed from the ledger, so a stale value written into invoices.json
+  // (by an older build, or by hand) self-heals on the next read.
+  const normalizedPayments = Array.isArray(inv?.payments)
+    ? inv.payments.map(normalizePayment).filter(Boolean)
+    : [];
+  const paidSoFar = round2(normalizedPayments.reduce((a, p) => a + p.amount, 0));
   return {
     id: inv?.id || "",
     woId: inv?.woId || null,
@@ -166,6 +235,15 @@ function hydrate(inv) {
     total: Number(inv?.total) || 0,
     currency: inv?.currency || "CAD",
     notes: inv?.notes || "",
+    // Payment ledger (Jul 2026). Append-only in practice: corrections go
+    // through PATCH/DELETE on a specific payment id so the audit trail keeps
+    // its shape. amountPaid / balanceDue are DERIVED on every read rather
+    // than stored, so a hand-edited invoices.json can never leave a balance
+    // that disagrees with its own ledger. balanceDue is what the pay-online
+    // page is allowed to charge — never `total`.
+    payments: normalizedPayments,
+    amountPaid: paidSoFar,
+    balanceDue: Math.max(0, round2((Number(inv?.total) || 0) - paidSoFar)),
     quickbooksInvoiceId: inv?.quickbooksInvoiceId || null,
     paymentToken: inv?.paymentToken || null,
     quickbooksChargeId: inv?.quickbooksChargeId || null,
@@ -711,6 +789,19 @@ async function voidInvoice(id, { reason = "", by = "admin" } = {}) {
       errors: ["A paid invoice can't be voided here — that's a QuickBooks credit-memo. Only draft or sent invoices can be voided."]
     };
   }
+  // Money has already come in against this invoice. Voiding would erase the
+  // record of a payment we actually received, so the payments have to be
+  // reversed deliberately first — that way the reversal is its own audited
+  // decision rather than a side effect of voiding.
+  const paidAlready = amountPaidOf(current);
+  if (paidAlready > 0) {
+    return {
+      ok: false,
+      status: 409,
+      code: "invoice_has_payments",
+      errors: [`This invoice has $${paidAlready.toFixed(2)} in recorded payments. Reverse them before voiding.`]
+    };
+  }
   // Only draft / sent remain (paid + void handled above), but guard the
   // enum explicitly so a future status can't fall through to void.
   if (current.status !== "draft" && current.status !== "sent") {
@@ -818,8 +909,149 @@ async function remove(id, { reason = "", by = "admin", qbVoidConfirmed = false }
   return { ok: true, deletedId: id, tombstone };
 }
 
+// ---- Payment ledger ---------------------------------------------------
+//
+// Payments are allowed on draft as well as sent/partially_paid: cash is
+// routinely collected on site BEFORE the invoice is drafted, and refusing
+// to record it until the invoice is sent is what pushed people to fake it
+// with a negative line item. Void is the only hard block.
+//
+// Every mutation appends to the invoice history, so the ledger can be
+// reconstructed even if a payment is later corrected or reversed.
+const PAYABLE_STATUSES = new Set(["draft", "sent", "partially_paid", "paid"]);
+
+async function addPayment(id, { amount, method, receivedAt, notes, by = "admin" } = {}) {
+  const records = await readAll();
+  const idx = records.findIndex((r) => r.id === id);
+  if (idx === -1) return { ok: false, status: 404, errors: ["Invoice not found."] };
+  const current = records[idx];
+  if (current.status === "void") {
+    return { ok: false, status: 409, code: "invoice_void", errors: ["Can't record a payment against a void invoice."] };
+  }
+  if (!PAYABLE_STATUSES.has(current.status)) {
+    return { ok: false, status: 409, code: "bad_status", errors: [`Can't record a payment on a "${current.status}" invoice.`] };
+  }
+  const payment = normalizePayment({ amount, method, receivedAt, notes, receivedBy: by });
+  if (!payment) {
+    return { ok: false, status: 422, code: "bad_amount", errors: ["Payment amount must be a positive number."] };
+  }
+  if (method && !PAYMENT_METHODS.includes(method)) {
+    return { ok: false, status: 422, code: "bad_method", errors: [`Unknown payment method "${method}". Use one of: ${PAYMENT_METHODS.join(", ")}.`] };
+  }
+  // Overpayment guard — a cent of tolerance for rounding, otherwise refuse.
+  // Recording more than is owed is nearly always a typo, and it would drive
+  // balanceDue to 0 while hiding the discrepancy.
+  const balance = balanceDueOf(current);
+  if (payment.amount > round2(balance + 0.01)) {
+    return {
+      ok: false, status: 422, code: "over_balance",
+      errors: [`Payment of $${payment.amount.toFixed(2)} exceeds the balance due of $${balance.toFixed(2)}.`]
+    };
+  }
+
+  const next = { ...current, payments: [...(current.payments || []), payment] };
+  next.amountPaid = amountPaidOf(next);
+  next.balanceDue = balanceDueOf(next);
+  next.status = statusForPayments(next, current.status);
+  if (next.status === "paid" && !next.paidAt) next.paidAt = new Date().toISOString();
+  next.updatedAt = new Date().toISOString();
+  next.history = [...(current.history || []), {
+    ts: next.updatedAt,
+    action: "payment_recorded",
+    by,
+    note: `${PAYMENT_METHOD_LABELS[payment.method] || payment.method} $${payment.amount.toFixed(2)} — balance now $${next.balanceDue.toFixed(2)}${payment.notes ? ` · ${payment.notes}` : ""}`
+  }];
+  records[idx] = next;
+  await writeAll(records);
+  return { ok: true, invoice: hydrate(next), payment };
+}
+
+async function updatePayment(id, paymentId, patch = {}, { by = "admin" } = {}) {
+  const records = await readAll();
+  const idx = records.findIndex((r) => r.id === id);
+  if (idx === -1) return { ok: false, status: 404, errors: ["Invoice not found."] };
+  const current = records[idx];
+  if (current.status === "void") {
+    return { ok: false, status: 409, code: "invoice_void", errors: ["Can't edit payments on a void invoice."] };
+  }
+  const list = Array.isArray(current.payments) ? current.payments : [];
+  const pIdx = list.findIndex((p) => p.id === paymentId);
+  if (pIdx === -1) return { ok: false, status: 404, errors: ["Payment not found."] };
+  const before = list[pIdx];
+  const merged = normalizePayment({ ...before, ...patch, id: before.id, receivedBy: before.receivedBy });
+  if (!merged) return { ok: false, status: 422, code: "bad_amount", errors: ["Payment amount must be a positive number."] };
+  if (patch.method && !PAYMENT_METHODS.includes(patch.method)) {
+    return { ok: false, status: 422, code: "bad_method", errors: [`Unknown payment method "${patch.method}".`] };
+  }
+  // Balance excluding THIS payment, so an edit is checked against what the
+  // rest of the ledger leaves owing.
+  const others = list.filter((p) => p.id !== paymentId);
+  const balanceWithoutThis = Math.max(0, round2((Number(current.total) || 0) - round2(others.reduce((a, p) => a + p.amount, 0))));
+  if (merged.amount > round2(balanceWithoutThis + 0.01)) {
+    return {
+      ok: false, status: 422, code: "over_balance",
+      errors: [`Payment of $${merged.amount.toFixed(2)} exceeds the $${balanceWithoutThis.toFixed(2)} left owing on this invoice.`]
+    };
+  }
+
+  const nextPayments = [...list];
+  nextPayments[pIdx] = merged;
+  const next = { ...current, payments: nextPayments };
+  next.amountPaid = amountPaidOf(next);
+  next.balanceDue = balanceDueOf(next);
+  next.status = statusForPayments(next, current.status);
+  if (next.status !== "paid") next.paidAt = null;
+  next.updatedAt = new Date().toISOString();
+  next.history = [...(current.history || []), {
+    ts: next.updatedAt,
+    action: "payment_updated",
+    by,
+    note: `$${before.amount.toFixed(2)} → $${merged.amount.toFixed(2)} (${PAYMENT_METHOD_LABELS[merged.method] || merged.method}) — balance now $${next.balanceDue.toFixed(2)}`
+  }];
+  records[idx] = next;
+  await writeAll(records);
+  return { ok: true, invoice: hydrate(next), payment: merged };
+}
+
+async function removePayment(id, paymentId, { by = "admin", reason = "" } = {}) {
+  const records = await readAll();
+  const idx = records.findIndex((r) => r.id === id);
+  if (idx === -1) return { ok: false, status: 404, errors: ["Invoice not found."] };
+  const current = records[idx];
+  if (current.status === "void") {
+    return { ok: false, status: 409, code: "invoice_void", errors: ["Can't edit payments on a void invoice."] };
+  }
+  const list = Array.isArray(current.payments) ? current.payments : [];
+  const gone = list.find((p) => p.id === paymentId);
+  if (!gone) return { ok: false, status: 404, errors: ["Payment not found."] };
+
+  const next = { ...current, payments: list.filter((p) => p.id !== paymentId) };
+  next.amountPaid = amountPaidOf(next);
+  next.balanceDue = balanceDueOf(next);
+  next.status = statusForPayments(next, current.status);
+  // Reversing the payment that settled the invoice un-settles it.
+  if (next.status !== "paid") next.paidAt = null;
+  next.updatedAt = new Date().toISOString();
+  next.history = [...(current.history || []), {
+    ts: next.updatedAt,
+    action: "payment_reversed",
+    by,
+    note: `Reversed ${PAYMENT_METHOD_LABELS[gone.method] || gone.method} $${gone.amount.toFixed(2)}${reason ? ` — ${reason}` : ""} — balance now $${next.balanceDue.toFixed(2)}`
+  }];
+  records[idx] = next;
+  await writeAll(records);
+  return { ok: true, invoice: hydrate(next), removed: gone };
+}
+
 module.exports = {
   STATUSES,
+  PAYMENT_METHODS,
+  PAYMENT_METHOD_LABELS,
+  addPayment,
+  updatePayment,
+  removePayment,
+  amountPaidOf,
+  balanceDueOf,
   HST_RATE,
   INVOICE_DISCLAIMERS,
   PAYMENT_ATTEMPT_OUTCOMES,

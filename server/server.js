@@ -2405,7 +2405,15 @@ async function readRawBody(req, { maxBytes = 1_000_000 } = {}) {
 // browser. The browser's word that it paid is not evidence.
 async function finalizeStripeInvoicePayment(inv, intent, requestId, { via = "confirm" } = {}) {
   const summary = stripe.summarizeIntent(intent, requestId);
-  const expectedCents = Math.round(Number(inv.total) * 100);
+  // What this intent SHOULD have charged: the outstanding balance at the
+  // time it was created. Intents are created for balanceDue, so that's the
+  // primary expectation. `total` is still accepted because an intent
+  // created before the payment ledger existed — or on an invoice with no
+  // payments, where the two are equal — is equally legitimate. Anything
+  // else is the alarming "succeeded for the wrong amount" branch below.
+  const balanceCents = Math.round(Number(inv.balanceDue) * 100);
+  const totalCents = Math.round(Number(inv.total) * 100);
+  const expectedCents = summary.amountCents === totalCents ? totalCents : balanceCents;
 
   // Verification gauntlet — every check names its failure for the log.
   if (intent?.metadata?.invoiceId !== inv.id) {
@@ -2481,8 +2489,29 @@ async function finalizeStripeInvoicePayment(inv, intent, requestId, { via = "con
     qbWarning = paymentErr.message;
   }
 
+  // Record the card payment in OUR ledger so amountPaid / balanceDue stay
+  // truthful and the status derives correctly. On an invoice that already
+  // had cash against it this settles the remainder rather than pretending
+  // the card covered the whole total.
+  try {
+    await invoices.addPayment(inv.id, {
+      amount: (summary.amountCents ?? expectedCents) / 100,
+      method: "card_qb",
+      receivedAt: new Date().toISOString(),
+      by: "customer",
+      notes: `Online card payment · ${summary.chargeId || summary.paymentIntentId}`
+    });
+  } catch (ledgerErr) {
+    console.warn(`[stripe] ledger record failed for ${inv.id}: ${ledgerErr?.message}`);
+  }
+
+  // Status comes from the ledger; only force "paid" if the ledger didn't
+  // settle it (e.g. addPayment failed), so a successful charge can never
+  // leave the invoice looking unpaid.
+  const afterLedger = await invoices.get(inv.id);
+  const settled = afterLedger && Number(afterLedger.balanceDue) <= 0.01;
   const updated = await invoices.update(inv.id, {
-    status: "paid",
+    ...(settled && afterLedger.status !== "paid" ? { status: "paid" } : {}),
     stripePaymentIntentId: summary.paymentIntentId,
     stripeChargeId: summary.chargeId,
     quickbooksPaymentId: qbPaymentId,
@@ -7562,7 +7591,15 @@ async function handleApi(req, res, pathname) {
         // The Payment Element needs amount + currency up front (deferred
         // -intent pattern: the intent itself is only created when the
         // customer actually clicks Pay).
-        amountCents: Math.round(Number(inv.total) * 100),
+        // MONEY-CRITICAL: the OUTSTANDING BALANCE, not the invoice total.
+        // Cash / e-transfer already recorded against this invoice has
+        // reduced what's owed; quoting `total` here would charge the
+        // customer for money they already handed over.
+        amountCents: Math.round(Number(inv.balanceDue) * 100),
+        // Shown alongside so the pay page can explain the difference
+        // ("Total $2,260 · Paid $500 · Due now $1,760").
+        invoiceTotalCents: Math.round(Number(inv.total) * 100),
+        amountPaidCents: Math.round(Number(inv.amountPaid) * 100),
         currency: (inv.currency || "CAD").toLowerCase(),
         acceptedCardBrands,
         supportPhone: phone,
@@ -7615,7 +7652,17 @@ async function handleApi(req, res, pathname) {
       const rcReject = await verifyRecaptchaOrReject(req, body, "payment-intent");
       if (rcReject) return sendJson(res, rcReject.status, rcReject.payload);
 
-      const amountCents = Math.round(Number(inv.total) * 100);
+      // MONEY-CRITICAL: create the intent for the OUTSTANDING BALANCE, not
+      // the invoice total — see the note on the sdk-config payload above.
+      // Refuse outright when nothing is owed rather than creating a
+      // zero/negative intent.
+      const amountCents = Math.round(Number(inv.balanceDue) * 100);
+      if (!Number.isFinite(amountCents) || amountCents <= 0) {
+        return sendJson(res, 409, {
+          ok: false,
+          errors: ["This invoice is already paid in full — there's nothing left to pay."]
+        });
+      }
       const phone = await paymentSupportPhone();
 
       // Reuse the persisted open intent when it still matches.
@@ -10726,6 +10773,71 @@ async function handleApi(req, res, pathname) {
     if (woId) all = all.filter((i) => i.woId === woId);
     all.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
     return sendJson(res, 200, { ok: true, invoices: all });
+  }
+
+  // ---- Invoice payment ledger ----------------------------------------
+  //   POST   /api/invoices/:id/payments             record a payment
+  //   PATCH  /api/invoices/:id/payments/:paymentId  correct one
+  //   DELETE /api/invoices/:id/payments/:paymentId  reverse one
+  // Payments are allowed on draft as well as sent — cash is routinely
+  // collected on site before the invoice is drafted. Void is blocked.
+  // The lib owns the guards (status, over-balance, method enum) and the
+  // status transition (partially_paid / paid); these routes just translate
+  // its result envelope into HTTP.
+  const invoicePaymentsMatch = pathname.match(/^\/api\/invoices\/([^/]+)\/payments$/);
+  if (invoicePaymentsMatch && req.method === "POST") {
+    try {
+      const id = decodeURIComponent(invoicePaymentsMatch[1]);
+      const payload = await parseRequestBody(req);
+      const session = await requireUser(req);
+      const result = await invoices.addPayment(id, {
+        amount: payload?.amount,
+        method: payload?.method,
+        receivedAt: payload?.receivedAt,
+        notes: payload?.notes,
+        by: session?.uid || "admin"
+      });
+      if (!result.ok) return sendJson(res, result.status || 400, { ok: false, code: result.code, errors: result.errors });
+      return sendJson(res, 201, { ok: true, invoice: result.invoice, payment: result.payment });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't record the payment."] });
+    }
+  }
+
+  const invoicePaymentMatch = pathname.match(/^\/api\/invoices\/([^/]+)\/payments\/([^/]+)$/);
+  if (invoicePaymentMatch && req.method === "PATCH") {
+    try {
+      const id = decodeURIComponent(invoicePaymentMatch[1]);
+      const paymentId = decodeURIComponent(invoicePaymentMatch[2]);
+      const payload = await parseRequestBody(req);
+      const session = await requireUser(req);
+      const result = await invoices.updatePayment(id, paymentId, {
+        amount: payload?.amount,
+        method: payload?.method,
+        receivedAt: payload?.receivedAt,
+        notes: payload?.notes
+      }, { by: session?.uid || "admin" });
+      if (!result.ok) return sendJson(res, result.status || 400, { ok: false, code: result.code, errors: result.errors });
+      return sendJson(res, 200, { ok: true, invoice: result.invoice, payment: result.payment });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't update the payment."] });
+    }
+  }
+  if (invoicePaymentMatch && req.method === "DELETE") {
+    try {
+      const id = decodeURIComponent(invoicePaymentMatch[1]);
+      const paymentId = decodeURIComponent(invoicePaymentMatch[2]);
+      const payload = await parseRequestBody(req).catch(() => ({}));
+      const session = await requireUser(req);
+      const result = await invoices.removePayment(id, paymentId, {
+        by: session?.uid || "admin",
+        reason: payload?.reason || ""
+      });
+      if (!result.ok) return sendJson(res, result.status || 400, { ok: false, code: result.code, errors: result.errors });
+      return sendJson(res, 200, { ok: true, invoice: result.invoice, removed: result.removed });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't reverse the payment."] });
+    }
   }
 
   const invoiceMatch = pathname.match(/^\/api\/invoices\/([^/]+)$/);

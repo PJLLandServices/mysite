@@ -33,6 +33,17 @@ const TEXT = "#1A1A1A";
 const TEXT_MUTED = "#7A7A72";
 const BORDER = "#E2E0D4";
 const HAIRLINE = "#EFEDE3";
+
+// Customer-facing payment-method labels. Kept here rather than imported
+// from invoices.js so the renderer stays free of lib dependencies, and so
+// the wording can differ from the internal enum if it ever needs to.
+const PDF_METHOD_LABELS = {
+  cash: "Cash",
+  e_transfer: "e-Transfer",
+  cheque: "Cheque",
+  card_qb: "Card",
+  other: "Payment"
+};
 const AMBER = "#E07B24";
 const DANGER = "#B23A3A";
 const SUCCESS = "#2F7A4A";
@@ -258,6 +269,17 @@ function normalize(raw) {
     taxRate,
     taxAmount,
     total,
+    // Payment ledger. Rendered only when there is at least one payment, so
+    // an unpaid invoice's totals block is byte-identical to before.
+    payments: (Array.isArray(inv.payments) ? inv.payments : []).map((p) => ({
+      amount: Number(p.amount) || 0,
+      method: String(p.method || "other"),
+      receivedAt: p.receivedAt || null
+    })),
+    amountPaid: Number(inv.amountPaid) || 0,
+    balanceDue: Number.isFinite(Number(inv.balanceDue))
+      ? Number(inv.balanceDue)
+      : Math.max(0, Math.round((total - (Number(inv.amountPaid) || 0)) * 100) / 100),
     noteToCustomer,
     disclaimers,
     portalToken: inv.portalToken || null,
@@ -680,6 +702,37 @@ function drawBottomSplit(doc, inv) {
   totalsRow("Subtotal", fmtMoney(inv.subtotal));
   totalsRow(`HST (ON) @ ${(inv.taxRate * 100).toFixed(0)}%`, fmtMoney(inv.taxAmount));
   totalsRow("Total", fmtMoney(inv.total), { isTotal: true });
+
+  // Payments — only when money has actually come in, so an unpaid invoice
+  // renders exactly as it always has. "Balance Due" is the number the
+  // customer should act on, so it gets the same visual weight as Total.
+  const pmts = Array.isArray(inv.payments) ? inv.payments : [];
+  if (pmts.length && inv.amountPaid > 0) {
+    ry += 6;
+    // Amount paid, shown as a credit so it reads as money already handled.
+    // ASCII hyphen, NOT U+2212 — the embedded font has no minus glyph and
+    // substitutes a double-quote, which on an invoice reads as garbage.
+    // Label stays short ("Amount Paid", or "(N)" for many) because the
+    // label column is 110pt and a longer string wraps into the payment
+    // lines below it.
+    totalsRow(
+      pmts.length > 3 ? `Amount Paid (${pmts.length})` : "Amount Paid",
+      "-" + fmtMoney(inv.amountPaid)
+    );
+    // One compact line per payment: method + date. Skipped when the list is
+    // long enough to crowd the column — the Payment History section below
+    // the totals carries the detail in that case.
+    if (pmts.length <= 3) {
+      doc.font(fontBody()).fontSize(8).fillColor(TEXT_MUTED);
+      for (const p of pmts) {
+        const label = `${PDF_METHOD_LABELS[p.method] || p.method}${p.receivedAt ? " · " + fmtDate(p.receivedAt) : ""}`;
+        doc.text(label, rightX + 8, ry, { width: rightW - 8 });
+        ry = doc.y + 2;
+      }
+      ry += 4;
+    }
+    totalsRow("Balance Due", fmtMoney(inv.balanceDue), { isTotal: true });
+  }
 
   // Status pill
   ry += 8;
