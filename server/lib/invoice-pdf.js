@@ -105,6 +105,14 @@ function fmtMoney(n) { return CAD.format(Number(n) || 0); }
 // own if ever re-used.
 function fmtDate(input) {
   if (!input) return "—";
+  // A bare YYYY-MM-DD is a CALENDAR date, not an instant. `new Date()`
+  // parses it as UTC midnight, and rendering that in America/Toronto
+  // (UTC-4/-5) rolls it back a day — a payment recorded "2026-07-30"
+  // printed as 2026-07-29 on the invoice. en-CA output is already
+  // YYYY-MM-DD, so pass it straight through untouched.
+  if (typeof input === "string" && /^\d{4}-\d{2}-\d{2}$/.test(input.trim())) {
+    return input.trim();
+  }
   const d = input instanceof Date ? input : new Date(input);
   if (Number.isNaN(d.getTime())) return "—";
   return d.toLocaleDateString("en-CA", {
