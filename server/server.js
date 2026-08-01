@@ -1123,6 +1123,24 @@ function defaultCrm(now = new Date().toISOString()) {
   };
 }
 
+// Self-intake duplicate guard (CRM-01). Given the full leads array and a
+// normalized (lowercased, trimmed) email, return the lead a repeat
+// /api/new-customer submission should update instead of duplicating:
+// the newest non-deleted lead with that email, preferring leads that
+// aren't archived. Returns null when nothing matches — the caller then
+// creates a new lead exactly as before.
+function selfIntakeExistingLead(leads, email) {
+  if (!email) return null;
+  const matches = (leads || []).filter((l) =>
+    l && !l.deletedAt &&
+    String(l.contact?.email || "").trim().toLowerCase() === email
+  );
+  if (!matches.length) return null;
+  const byNewest = (a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || ""));
+  const active = matches.filter((l) => !l.archived).sort(byNewest);
+  return active[0] || matches.sort(byNewest)[0];
+}
+
 function hydrateLead(lead) {
   const now = lead.createdAt || new Date().toISOString();
   const crm = lead.crm && typeof lead.crm === "object" ? lead.crm : {};
@@ -4429,6 +4447,12 @@ async function handleApi(req, res, pathname) {
   // Honeypot + per-IP rate limit guard against bots; the response is
   // intentionally always the same generic 200 on bot/limit hits so
   // attackers can't probe the gate.
+  //
+  // Duplicate guard (CRM-01): a submission whose email matches an existing
+  // lead UPDATES that lead in place instead of creating a second record.
+  // The HTTP response is identical on both paths — only Patrick's
+  // notification says which one happened, so the endpoint can't be used
+  // to probe which emails are in the CRM.
   if (req.method === "POST" && pathname === "/api/new-customer") {
     const ip = callerIp(req);
     const rateKey = `new-customer:${ip}`;
@@ -4516,8 +4540,74 @@ async function handleApi(req, res, pathname) {
       rateLimit.record(rateKey);
 
       const fullName = `${firstName} ${lastName}`.trim();
-      const id = crypto.randomUUID();
       const now = new Date().toISOString();
+
+      // Duplicate guard (CRM-01) — match by email against existing leads.
+      // No awaits between this read and the write below, so the update
+      // can't clobber a concurrent intake's append.
+      const existingLeads = await readLeads();
+      const existing = selfIntakeExistingLead(existingLeads, email);
+      if (existing) {
+        const contact = existing.contact && typeof existing.contact === "object"
+          ? existing.contact
+          : (existing.contact = {});
+        const changes = [];
+        if (fullName && contact.name !== fullName) {
+          changes.push(`name "${contact.name || "—"}" → "${fullName}"`);
+          contact.name = fullName;
+          contact.firstName = firstName;
+          contact.lastName = lastName;
+        }
+        if (phone && contact.phone !== phone) {
+          changes.push(`phone "${contact.phone || "—"}" → "${phone}"`);
+          contact.phone = phone;
+        }
+        if (address && contact.address !== address) {
+          changes.push(`address "${contact.address || "—"}" → "${address}"`);
+          contact.address = address;
+        }
+        if (billingResult.billing) {
+          existing.billing = billingResult.billing;
+          changes.push("billing party details");
+        }
+        // Commercial tag is sticky: a commercial submission sets it, a
+        // residential resubmission never strips it (acceptance test 3).
+        if (accountType === "commercial") {
+          if (existing.accountType !== "commercial") changes.push("account type → commercial");
+          existing.accountType = "commercial";
+          if (commercialBlock) existing.commercial = commercialBlock;
+        }
+
+        if (!existing.crm || typeof existing.crm !== "object") existing.crm = defaultCrm(now);
+        const activity = Array.isArray(existing.crm.activity) ? existing.crm.activity.slice(0, 100) : [];
+        const activityLines = [
+          `Self-intake form submitted again (${accountType}) — matched this record by email; no new lead created.`,
+          changes.length ? `Updated: ${changes.join("; ")}.` : "No contact details changed."
+        ];
+        if (notes) activityLines.push(`Submitted notes: ${notes}`);
+        if (commercialNoteStash) activityLines.push(commercialNoteStash.trim());
+        activity.unshift({ at: now, type: "update", text: activityLines.join("\n") });
+        existing.crm.activity = activity;
+        existing.crm.lastUpdated = now;
+        await writeLeads(existingLeads);
+
+        // Same alert pair as the create path; intakeOutcome flips the
+        // wording to "existing record updated" (notify-email / notify-sms
+        // render it only when the field is present).
+        const updatedDecorated = decorateLeadForAdmin(existing, req);
+        updatedDecorated.intakeOutcome = "updated_existing";
+        sendNewLeadEmail(updatedDecorated).catch((err) => {
+          console.error("[new-customer] admin email failed:", err?.message || err);
+        });
+        sendNewLeadSms(updatedDecorated).catch((err) => {
+          console.error("[new-customer] admin SMS failed:", err?.message || err);
+        });
+
+        // Byte-identical to the create-path response — see route comment.
+        return sendJson(res, 200, { ok: true });
+      }
+
+      const id = crypto.randomUUID();
       // Patrick reads the lead detail view; pin the property address at
       // the top of the notes block so it's the first thing he sees.
       const composedNotes = (notes
@@ -4608,6 +4698,9 @@ async function handleApi(req, res, pathname) {
       // SMS body + email subject) + the CRM "Open in CRM" link target.
       const baseUrl = process.env.PUBLIC_BASE_URL || baseUrlFromReq(req);
       const decorated = decorateLeadForAdmin(lead, req);
+      // States the duplicate-guard outcome in the alert (CRM-01) — the
+      // update path sends "updated_existing" instead.
+      decorated.intakeOutcome = "created_new";
       sendNewLeadEmail(decorated, { baseUrl }).catch((err) => {
         console.error("[new-customer] admin email failed:", err?.message || err);
       });

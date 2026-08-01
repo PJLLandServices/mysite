@@ -39,6 +39,17 @@ function buildSmsBody(lead) {
   const where = town ? ` in ${town}` : "";
   // Twilio SMS segments are 160 GSM-7 chars or 70 UCS-2 chars. Keep it short to
   // stay in a single segment (avoids surprise per-message charges).
+  //
+  // Self-intake duplicate guard (CRM-01): when the intake route sets
+  // lead.intakeOutcome, say whether this updated an existing record or
+  // created a new one. Plain ASCII only — an em dash would flip the
+  // message to UCS-2 and triple the segment count.
+  if (lead.intakeOutcome === "updated_existing") {
+    return `PJL ${sourceLabel} UPDATED existing record (no new lead): ${name}${where} - ${lead.contact?.phone || ""}${link}`.trim();
+  }
+  if (lead.intakeOutcome === "created_new") {
+    return `New PJL ${sourceLabel} (new record): ${name}${where} - ${lead.contact?.phone || ""}${link}`.trim();
+  }
   return `New PJL ${sourceLabel}: ${name}${where} - ${lead.contact?.phone || ""}${link}`.trim();
 }
 

@@ -1,7 +1,7 @@
 # PJL Backend Flow Register
 
 **Source of truth for customer-facing backend processes.**
-Last updated: 2026-07-30
+Last updated: 2026-08-01 (JOB-001)
 
 This file replaces scattered chat context. If a flow isn't in here with a status,
 it is not known to work. Update this file, not a chat thread.
@@ -102,23 +102,43 @@ Not a code defect. A process defect. Needs either a habit, a reminder, or automa
 
 ---
 
-## UNMAPPED — customer intake flows
+## Customer intake flows
 
-Patrick has confirmed **multiple** intake avenues exist: online booking, contact forms, and
-others. Each is a separate flow with its own hop chain and must be mapped and walked separately.
+Intake avenues enumerated by the 2026-08-01 form-handler audit. IDs follow the JOB-001
+job sheet, which reassigned FLOW-04/05/07 to specific pages; the flows those IDs used to
+name were renumbered to FLOW-08/09/10 below (nothing was deleted).
 
 Known notification behaviour: quote arrivals do generate email and text notifications.
 That is the alerting layer — it does not prove each intake path completes correctly.
 
 | ID | Flow | Status |
 |---|---|---|
-| FLOW-03 | Online booking | UNMAPPED |
-| FLOW-04 | Contact form(s) — count unknown | UNMAPPED |
-| FLOW-05 | Quote request → quote delivered to customer | UNMAPPED |
+| FLOW-03 | Online booking (`/book.html` → `POST /api/booking/reserve`) | UNMAPPED |
+| FLOW-04 | Sprinkler quote builder (`/quote.html` → `POST /api/quotes`) | UNMAPPED — JOB-001 Task B demoted its sitewide CTA (see CRM-02); page stays live; flow itself unchanged. Awaiting Patrick's acceptance test |
+| FLOW-05 | Estimate wizard (`/estimate.html` → **Formspree**, bypasses the CRM entirely — leads exist only as Formspree emails, which is why the CRM export shows 0 identifiable leads) | UNMAPPED — JOB-001 Task B demoted its footer CTA; page stays live. Awaiting Patrick's acceptance test |
 | FLOW-06 | Invoice generation → delivery | UNMAPPED |
-| FLOW-07 | Payment capture → receipt → work order marked paid | UNMAPPED |
+| FLOW-07 | Customer self-intake (`/new-customer`, `/commercial-new-customer` → `POST /api/new-customer`) | PARTIAL — JOB-001 Task A duplicate guard implemented; server-side hops verified by simulation (create / update / commercial / distinct-email). Awaiting Patrick's live acceptance test before PASS |
+| FLOW-08 | Contact form (`/contact.html` → `POST /api/quotes`) | UNMAPPED (was FLOW-04 before JOB-001) |
+| FLOW-09 | Quote request → quote delivered to customer | UNMAPPED (was FLOW-05 before JOB-001) |
+| FLOW-10 | Payment capture → receipt → work order marked paid | UNMAPPED (was FLOW-07 before JOB-001) |
 
-*Fill this list in with the actual named avenues, then work down it one at a time.*
+**Portal-login lookup note (JOB-001 investigation, report-only — not fixed):**
+`/api/portal/request-link` matches the typed identifier against **leads** (`resolveLoginIdentifier`,
+server.js), dedupes matches by `customerId`, and emails ONE magic link whose subject is the
+customer id. On redemption (`/portal/login/verify`) the server gathers all leads with that
+customerId and lands the customer on the **newest lead's** portal. Consequence: before the
+CRM-01 fix, a repeat self-intake submission minted a fresh empty lead, which became the newest —
+so an existing customer logging in afterwards landed on the empty duplicate instead of their
+real history. Legacy leads with `customerId: null` are not deduped and each get their own
+lead-scoped link. The CRM-01 duplicate guard stops NEW duplicates; existing duplicates still
+sit in the CRM and still win the "newest lead" pick until cleaned up (separate job).
+
+**Defects:**
+
+| ID | Severity | Finding |
+|---|---|---|
+| CRM-01 | **High** | Self-intake created a duplicate lead on every submission from a known email — 14 of 16 self-intake records frozen at "new"/$0 while the real job ran on a separate booking record. **Fix implemented** (JOB-001 Task A, 2026-08-01): `/api/new-customer` now matches existing non-deleted leads by trimmed, case-insensitive email; a match updates the existing record (contact fields, sticky Commercial tag, billing block) and appends the submission to its activity — no new lead. Patrick's email/SMS alert states "updated existing record" vs "new record created". HTTP response is identical on both paths so the endpoint can't be used to probe which emails are in the CRM. Existing duplicates NOT cleaned up (deliberately out of scope). **OPEN until Patrick's acceptance test passes.** |
+| CRM-02 | Medium | Three competing estimate paths; `/quote.html` held the strongest sitewide placement (header + footer CTA on every page) and converted worst (4 leads / 0 won over 3 months vs booking's 29 / 28). **Fix implemented** (JOB-001 Task B, 2026-08-01): sitewide "Get a Free Estimate" header CTA (desktop + mobile) and footer "Get an Estimate" link repointed to `/book.html` via `_partials/nav.html` + `_partials/footer.html` + rebuild (83 pages). No redirects; `/quote.html` and `/estimate.html` remain live. In-body CTAs on ~30 pages still point at the old paths (list in JOB-001 report). **OPEN until Patrick's acceptance test passes.** |
 
 ---
 

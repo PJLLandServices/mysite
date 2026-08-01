@@ -64,7 +64,20 @@ function escapeHtml(value) {
 function buildLeadEmail(lead) {
   const sourceLabel = lead.sourceLabel || lead.source || "General Lead";
   const town = (lead.contact?.address || "").split(",")[1]?.trim() || lead.contact?.address || "";
-  const subject = `New PJL Lead — ${sourceLabel} — ${lead.contact?.name || "Unknown"}`;
+  // Self-intake duplicate guard (CRM-01): when the intake route sets
+  // lead.intakeOutcome, the alert must state whether an existing record
+  // was updated or a new one created. Absent the field (every other
+  // caller), subject and body are unchanged.
+  const outcome = lead.intakeOutcome === "updated_existing" ? "updated"
+    : lead.intakeOutcome === "created_new" ? "created" : null;
+  const subject = outcome === "updated"
+    ? `PJL Lead UPDATED — ${sourceLabel} — ${lead.contact?.name || "Unknown"}`
+    : `New PJL Lead — ${sourceLabel} — ${lead.contact?.name || "Unknown"}`;
+  const outcomeHtml = outcome === "updated"
+    ? `<p style="margin: 0 0 18px; padding: 10px 14px; background: #fdf3d7; border-radius: 6px;"><strong>Existing record updated</strong> — this email matched a lead already in the CRM. No new lead was created; the submission is in the record's activity.</p>`
+    : outcome === "created"
+      ? `<p style="margin: 0 0 18px; padding: 10px 14px; background: #e8f1e8; border-radius: 6px;"><strong>New record created</strong> — no existing CRM record matched this email.</p>`
+      : "";
   // resolvePublicBaseUrl strips trailing slashes and never returns the
   // request's .onrender.com host — see public-base-url.js for the order.
   const cleanBase = resolvePublicBaseUrl();
@@ -90,9 +103,9 @@ function buildLeadEmail(lead) {
 
   const html = `
 <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 560px; color: #1a1a1a;">
-  <h2 style="margin: 0 0 8px; font-size: 22px;">New ${escapeHtml(sourceLabel)} lead</h2>
+  <h2 style="margin: 0 0 8px; font-size: 22px;">${outcome === "updated" ? "Updated" : "New"} ${escapeHtml(sourceLabel)} lead</h2>
   <p style="margin: 0 0 18px; color: #555;">${escapeHtml(lead.contact?.name || "")} ${town ? `· ${escapeHtml(town)}` : ""}</p>
-
+  ${outcomeHtml}
   <table style="border-collapse: collapse; margin-bottom: 18px;">
     <tr><td style="padding: 4px 14px 4px 0; color: #777;">Phone</td><td style="padding: 4px 0;"><a href="tel:${escapeHtml(lead.contact?.phone || "")}">${escapeHtml(lead.contact?.phone || "")}</a></td></tr>
     <tr><td style="padding: 4px 14px 4px 0; color: #777;">Email</td><td style="padding: 4px 0;"><a href="mailto:${escapeHtml(lead.contact?.email || "")}">${escapeHtml(lead.contact?.email || "")}</a></td></tr>
@@ -118,8 +131,13 @@ function buildLeadEmail(lead) {
 
   // Plain-text fallback for email clients that block HTML.
   const textLines = [
-    `New ${sourceLabel} lead`,
+    `${outcome === "updated" ? "Updated" : "New"} ${sourceLabel} lead`,
     `${lead.contact?.name || ""}${town ? " · " + town : ""}`,
+    outcome === "updated"
+      ? "EXISTING RECORD UPDATED — this email matched a lead already in the CRM. No new lead was created."
+      : outcome === "created"
+        ? "NEW RECORD CREATED — no existing CRM record matched this email."
+        : "",
     "",
     `Phone:   ${lead.contact?.phone || ""}`,
     `Email:   ${lead.contact?.email || ""}`,
