@@ -104,9 +104,9 @@ not 50 flows. Fix the destination and every door is fixed.
 
 | ID | Destination | Placement |
 |---|---|---|
-| FLOW-03 | `/book.html` — Book Online, real-time availability | Contact page, footer |
-| FLOW-04 | `/quote.html` — 4-step Sprinkler Quote Builder | Header + footer, **sitewide** |
-| FLOW-05 | `/estimate.html` — Free Installation Estimate | Footer |
+| FLOW-03 | `/book.html` — Book Online, real-time availability | Contact page, footer, **and since 2026-08-02 the sitewide header + footer "Get a Free Estimate" CTA** |
+| FLOW-04 | `/quote.html` — 4-step Sprinkler Quote Builder | In-body links only (held header + footer sitewide until 2026-08-02; that CTA now points to `/book.html`) |
+| FLOW-05 | `/estimate.html` — Free Installation Estimate | In-body links only (held a footer link until 2026-08-02; that link now points to `/book.html`) |
 | FLOW-06 | `/contact.html` — enquiry form | Nav, sitewide |
 | FLOW-07 | `/new-customer` — self-intake (unlisted, sent by Patrick) | Private link |
 | FLOW-08 | `/commercial-new-customer` — commercial self-intake (unlisted) | Private link |
@@ -122,6 +122,15 @@ Commercial · AI Diagnostic Chat · General Contact · Spring Opening · Fall Cl
 **Commercial tagging works** — records show Customer Self Intake + Commercial together.
 Previously logged as a change order; **closed, already built.**
 
+**JOB-001 verified 2026-08-02** — both acceptance tests walked by Patrick against live data:
+
+| ID | Status | What was walked |
+|---|---|---|
+| FLOW-07 | **PASS** | Self-intake walked end to end. Existing email → existing record updated, no duplicate, alert says "existing record updated". Unknown email → new lead tagged Customer Self Intake, alert says "new record". Commercial variant (`/commercial-new-customer`, FLOW-08) same behaviour, Commercial tag retained. |
+| FLOW-04 | **PARTIAL** | Page verified live at its URL; sitewide CTA repointed to `/book.html`. The 4-step quote-builder flow itself was not walked end to end — only its reachability was verified. |
+| FLOW-05 | **PARTIAL** | Same: page verified live, footer link repointed to `/book.html`, estimator flow not walked end to end. |
+| FLOW-03 | **PASS** (re-verified) | Real booking completed through `/book.html` after the CTA change: $105 Spring Opening, work order WO-ZDQL272C, correct source tag and dollar value in CRM, phone + email notifications fired. |
+
 ## Evidence — CRM export, 56 records, 2026-04-30 to 2026-07-29
 
 | Path | Records | Won | Revenue |
@@ -136,7 +145,7 @@ Previously logged as a change order; **closed, already built.**
 | ID | Severity | Finding |
 |---|---|---|
 | CRM-01 | **CLOSED** 2026-08-02 | **Self-intake creates duplicates.** Was: sending `/new-customer` to someone already in the CRM created a second lead instead of matching the existing record; 14 of 16 self-intake records frozen at "new", $0. **Fixed by JOB-001 Task A:** `/api/new-customer` (both residential and commercial) now matches submissions against existing lead records by email (case-insensitive, trimmed) and updates the matched record + logs activity instead of creating a duplicate; notifications state updated-vs-created. Acceptance test run by Patrick against live data 2026-08-02 — all three scenarios passed (56 → 57 records, exactly one new lead from the unknown-email case). The portal-login consequence for the seven pre-existing duplicate pairs is now tracked as CRM-07. |
-| CRM-02 | **High** | **`/quote.html` is the weakest path despite the strongest placement.** Sitewide header + footer button; 4 leads in 3 months; one is Patrick's own test; zero converted. `/estimate.html` produced no identifiable records at all. Three competing estimate paths, one of which earns nothing. |
+| CRM-02 | **CLOSED** 2026-08-02 | **`/quote.html` was the weakest path despite the strongest placement.** 4 leads in 3 months (one Patrick's own test), zero converted; `/estimate.html` produced no identifiable records. **Fixed by JOB-001 Task B:** the sitewide header + footer "Get a Free Estimate" CTA now points to `/book.html` on every page (83 templated pages + `quote-legacy.html`). `/quote.html` and `/estimate.html` remain live at their URLs — no redirects — and keep their in-body links (inventoried in the JOB-001 report). Acceptance test passed 2026-08-02: CTA verified on three page types, both old pages load, and a real booking completed end to end ($105 Spring Opening, WO-ZDQL272C, correct source tag, notifications fired). |
 | CRM-03 | Medium | **Follow-up and owner fields never used.** Zero of 56 records have a follow-up date or owner assigned. Mechanism is built and unused — directly related to the six-day-stale request found 2026-07-30. |
 | CRM-04 | Low | Test data live in pipeline: `John Charette — "Test booking with a fake address"`, site_visit, since 2026-04-30. |
 | CRM-05 | Low | Two SEO-spam submissions via contact form. Honeypot catches bots, not human-sent spam. |
