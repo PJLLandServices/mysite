@@ -169,15 +169,19 @@ order, not to individual components. Expiry is computed from the work order's `c
 type — single implementation in `server/lib/warranty.js` (`warrantyForWorkOrder`), shared with
 the completion cascade's snapshot so the two cannot drift.
 
-**JOB-002 Part A (completedAt foundation) — code shipped 2026-08-02, awaiting acceptance test.**
-`completedAt` is now a first-class field, server-stamped in `workOrders.update()` on every
+**JOB-002 Part A (completedAt foundation) — COMPLETE, acceptance test passed 2026-08-02.**
+`completedAt` is a first-class field, server-stamped in `workOrders.update()` on every
 completion path (tech UI, admin status change, bulk) at the same instant as the `status_change`
-history entry; not client-patchable; preserved once set. Live measurement 2026-08-02: 44 work
-orders, 25 completed, 10 missing `departedAt`, all 10 recoverable from history.
-`scripts/backfill-wo-completedat.js` (dry-run default, `--apply` backs up
-`server/data-backup-<stamp>-wo-completedat/` first) promotes the earliest history completion ts.
-Backfill count to be confirmed by the acceptance run on Render. CRM-07 and CRM-08 stay open —
-Part A is a prerequisite, not a fix.
+history entry; not client-patchable; preserved once set. Backfill applied on Render 2026-08-02
+via `scripts/backfill-wo-completedat.js`: **25 records promoted from history timestamps, 0
+unrecoverable** (all 25 completed records — the field was new, so every one qualified, not only
+the 10 that also lacked `departedAt`). Backup:
+`server/data-backup-2026-08-02T15-44-55-816Z-wo-completedat/`. Post-apply count verified:
+completed 25, missing `completedAt` 0. Write-path verified live on both branches of the old
+gap: tech-flow completion (WO-PEDFQN32) stamped `completedAt` + `departedAt`; admin status
+change (WO-PJNZKTWP) stamped `completedAt` with `departedAt` null — the server-side stamp
+works. CRM-07 and CRM-08 stay open — Part A is a prerequisite, not a fix; Part B (portal
+rebuild) consumes it.
 
 ---
 
