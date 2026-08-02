@@ -315,6 +315,12 @@ function blankWorkOrder() {
     // anything→completed stamps departedAt.
     arrivedAt: null,
     departedAt: null,
+    // Completion timestamp (JOB-002 Part A). Server-stamped by update()
+    // the moment status transitions into "completed" — on EVERY path,
+    // unlike departedAt which only the tech UI supplies. Never patchable
+    // from a client (not in allowedTop); null until completed. Warranty
+    // expiry is computed from this + type via lib/warranty.js.
+    completedAt: null,
     // Materials packed checklist (spec §4.3.2). Map of sku → bool.
     // Populated as the tech taps each row in the materials list.
     materialsPacked: {},
@@ -492,6 +498,7 @@ function hydrate(w) {
     completionReportSnapshotAt: typeof w?.completionReportSnapshotAt === "string"
       ? w.completionReportSnapshotAt
       : null,
+    completedAt: typeof w?.completedAt === "string" ? w.completedAt : null,
     // Brief 2 — build-mode pointers. parentProjectId stays null for
     // non-build WOs; dailyLog stays null until the WO is build-mode.
     parentProjectId: typeof w?.parentProjectId === "string" ? w.parentProjectId : null,
@@ -1223,6 +1230,17 @@ async function update(id, patch) {
       before: current.status,
       after: patch.status
     });
+    // completedAt (JOB-002 Part A) — stamped here, at the same moment as
+    // the status_change history entry, so every completion path gets it
+    // (tech UI, admin status change, bulk actions). Same ts as the
+    // history entry. Preserve-if-set: an already-stamped completedAt is
+    // never overwritten, matching the backfill's earliest-entry rule.
+    // ("completed" is terminal — the guard above throws on any attempt
+    // to leave it — so a re-completion can only follow a manual data
+    // edit, and the original date still wins.)
+    if (patch.status === "completed" && !current.completedAt) {
+      next.completedAt = next.updatedAt;
+    }
   }
   // Signature capture (lock flip) — a separate, distinct event from
   // status_change so the audit trail is unambiguous about WHEN the WO
