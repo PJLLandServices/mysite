@@ -185,6 +185,12 @@ function hydrate(inv) {
     id: inv?.id || "",
     woId: inv?.woId || null,
     quoteId: inv?.quoteId || null,
+    // projectId — written by createDraft since the project cascade, but
+    // previously dropped by this read normalizer. Passed through so the
+    // portal can attach a project's deposit/final invoices to its card
+    // (JOB-002 Part B). Pure passthrough; nothing money-related derives
+    // from it.
+    projectId: inv?.projectId || null,
     propertyId: inv?.propertyId || null,
     customerId: inv?.customerId || null,
     customerName: inv?.customerName || "",

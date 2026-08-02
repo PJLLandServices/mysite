@@ -1570,3 +1570,33 @@ body.portal-modal-open { overflow: hidden; }
   .portal-admin-type-row select { flex: 1 1 100%; }
   .portal-admin-type-row .portal-btn { flex: 1 1 100%; }
 }
+
+/* ---- JOB-002 Part B — service history + projects (read-only) -------- */
+.portal-history { grid-column: 1 / -1; }
+.portal-history-sub { margin: 4px 0 12px; color: var(--muted, #667); font-size: 14px; }
+.portal-history-list { list-style: none; margin: 0; padding: 0; }
+.portal-history-item { padding: 12px 0; border-top: 1px solid var(--border, #e3e1d8); }
+.portal-history-item:first-child { border-top: 0; }
+.portal-history-main { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 14px; }
+.portal-history-date, .portal-history-status { color: var(--muted, #667); font-size: 14px; }
+.portal-history-warranty { font-size: 13px; padding: 2px 10px; border-radius: 99px; white-space: nowrap; }
+.portal-history-warranty.is-covered { background: rgba(27, 77, 46, 0.10); color: #1b4d2e; }
+.portal-history-warranty.is-expired { background: rgba(0, 0, 0, 0.06); color: #666; }
+.portal-history-links { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-top: 6px; font-size: 14px; }
+.portal-history-link { color: #1f4f6e; font-weight: 600; text-decoration: none; }
+.portal-history-link:hover { text-decoration: underline; }
+.portal-history-invoice { color: var(--muted, #667); }
+.portal-projects { grid-column: 1 / -1; }
+.portal-project { padding: 14px 0; border-top: 1px solid var(--border, #e3e1d8); }
+.portal-project:first-child { border-top: 0; }
+.portal-project-head { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px 14px; }
+.portal-project-meta { color: var(--muted, #667); font-size: 14px; }
+.portal-project-rail { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; margin: 10px 0 8px; font-size: 13px; }
+.portal-project-stage { color: #999; }
+.portal-project-stage.is-reached { color: #1b4d2e; font-weight: 600; }
+.portal-project-stage.is-current { background: rgba(27, 77, 46, 0.10); padding: 2px 10px; border-radius: 99px; }
+.portal-project-stage-sep { color: #bbb; }
+.portal-project-bar { height: 6px; border-radius: 4px; background: rgba(0, 0, 0, 0.07); overflow: hidden; }
+.portal-project-bar-fill { height: 100%; background: #1b4d2e; border-radius: 4px; }
+.portal-project-invoices { list-style: none; margin: 10px 0 0; padding: 0; font-size: 14px; color: var(--muted, #667); }
+.portal-project-invoice { padding: 3px 0; }

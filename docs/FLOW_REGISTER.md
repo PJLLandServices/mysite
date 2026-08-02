@@ -183,6 +183,22 @@ change (WO-PJNZKTWP) stamped `completedAt` with `departedAt` null — the server
 works. CRM-07 and CRM-08 stay open — Part A is a prerequisite, not a fix; Part B (portal
 rebuild) consumes it.
 
+**JOB-002 Part B (portal renders by customer) — code shipped 2026-08-02, awaiting acceptance
+test.** Touches FLOW-01 hop 7 and FLOW-02's page (hops 1–6, magic-link mechanics, message send,
+prefs untouched in code and re-verified locally) — both flows require re-verification per rule 5
+before CRM-08 closes. What shipped: the portal payload now carries `serviceHistory` (every
+non-build work order for the customer, live from work-orders.json, newest first, warranty
+labels from `warrantyForWorkOrder`, report PDF + read-only invoice per line) and `projects`
+(stage rail Accepted→Deposit→Scheduled→Complete→Invoiced, day count, percent complete, project
+invoices — no dailyLog/notes/materials/crew data, verified by sentinel leak-test). Magic-link
+landing now prefers the newest lead WITH a booking. New token-gated downloads:
+`/api/portal/:token/wo-report-snapshot/:woId` extended with customer-union authorization + live
+customer-audience render fallback for pre-snapshot completions; new
+`/api/portal/:token/invoice/:invoiceId/pdf` (drafts/voids never serve; cross-customer requests
+403 — verified). Payments untouched per HANDOFF_STRIPE_PAYMENTS §6 — display only, no pay
+controls in the new cards. CRM-07 finding recorded in the Part B report: with customer-scoped
+rendering the duplicate pairs no longer produce a customer-visible failure.
+
 ---
 
 # Part 4 — Unmapped

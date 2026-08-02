@@ -539,6 +539,88 @@ async function savePortalServiceType() {
 
 if (portalAdminServiceSaveBtn) portalAdminServiceSaveBtn.addEventListener("click", savePortalServiceType);
 
+// JOB-002 Part B — customer-wide service history. One line per work
+// order: type, date, status, warranty label ("Covered until <Month Year>"
+// / "Warranty expired" — a label, never a filter), report download, and
+// the visit's invoice (amount, status, date, download). Strictly
+// read-only: no pay controls here, ever — paying happens only through
+// the invoice link PJL sends.
+function renderServiceHistory(items) {
+  const card = document.getElementById("historyCard");
+  const list = document.getElementById("historyList");
+  if (!card || !list) return;
+  const rows = Array.isArray(items) ? items : [];
+  if (!rows.length) { card.hidden = true; return; }
+  card.hidden = false;
+  const statusLabel = (s) => String(s || "scheduled").replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+  // NOT formatDate() — that helper expects date-only strings (it appends
+  // T12:00:00) and throws on the full ISO timestamps these records carry.
+  const isoDay = (iso) => {
+    const d = new Date(iso);
+    return Number.isNaN(d.getTime()) ? "" : d.toLocaleDateString("en-CA", { dateStyle: "long" });
+  };
+  const monthYear = (iso) => {
+    const d = new Date(iso);
+    return Number.isNaN(d.getTime()) ? "" : d.toLocaleDateString("en-CA", { month: "long", year: "numeric" });
+  };
+  list.innerHTML = rows.map((w) => {
+    const when = w.completedAt || w.scheduledFor;
+    const warranty = w.warranty
+      ? (w.warranty.covered
+          ? `<span class="portal-history-warranty is-covered">Covered until ${escapeHtml(monthYear(w.warranty.expiresAt))}</span>`
+          : `<span class="portal-history-warranty is-expired">Warranty expired</span>`)
+      : "";
+    const report = w.reportUrl
+      ? `<a class="portal-history-link" href="${escapeHtml(w.reportUrl)}" target="_blank" rel="noopener">Service report (PDF)</a>`
+      : "";
+    const inv = w.invoice
+      ? `<span class="portal-history-invoice">Invoice ${escapeHtml(w.invoice.id)} · ${escapeHtml(money.format(Number(w.invoice.total || 0)).replace("CA", "").trim())} · ${escapeHtml(statusLabel(w.invoice.status))} · ${escapeHtml(isoDay(w.invoice.createdAt))} · <a class="portal-history-link" href="${escapeHtml(w.invoice.pdfUrl)}" target="_blank" rel="noopener">Download</a></span>`
+      : "";
+    return `<li class="portal-history-item">
+      <div class="portal-history-main">
+        <strong>${escapeHtml(w.typeLabel || "Service Visit")}</strong>
+        <span class="portal-history-date">${when ? escapeHtml(isoDay(when)) : "—"}</span>
+        <span class="portal-history-status">${escapeHtml(statusLabel(w.status))}</span>
+        ${warranty}
+      </div>
+      <div class="portal-history-links">${report}${inv}</div>
+    </li>`;
+  }).join("");
+}
+
+// JOB-002 Part B — projects at stage level only: rail, day count, percent
+// complete, and the project's own invoices. Nothing from the daily logs
+// is ever sent to this page, so nothing internal can render here.
+function renderProjects(items) {
+  const card = document.getElementById("projectsCard");
+  const wrap = document.getElementById("projectsList");
+  if (!card || !wrap) return;
+  const rows = Array.isArray(items) ? items : [];
+  if (!rows.length) { card.hidden = true; return; }
+  card.hidden = false;
+  const STAGE_LABELS = { accepted: "Accepted", deposit: "Deposit", scheduled: "Scheduled", complete: "Complete", invoiced: "Invoiced" };
+  const statusLabel = (s) => String(s || "").replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+  wrap.innerHTML = rows.map((p) => {
+    const stages = Array.isArray(p.stages) && p.stages.length ? p.stages : ["accepted", "deposit", "scheduled", "complete", "invoiced"];
+    const reachedIdx = stages.indexOf(p.stage);
+    const rail = stages.map((s, i) =>
+      `<span class="portal-project-stage${i <= reachedIdx ? " is-reached" : ""}${s === p.stage ? " is-current" : ""}">${escapeHtml(STAGE_LABELS[s] || s)}</span>`
+    ).join(`<span class="portal-project-stage-sep" aria-hidden="true">→</span>`);
+    const invoicesHtml = (p.invoices || []).map((inv) =>
+      `<li class="portal-project-invoice">${escapeHtml(inv.role === "deposit" ? "Deposit invoice" : "Invoice")} ${escapeHtml(inv.id)} · ${escapeHtml(money.format(Number(inv.total || 0)).replace("CA", "").trim())} · ${escapeHtml(statusLabel(inv.status))} · <a class="portal-history-link" href="${escapeHtml(inv.pdfUrl)}" target="_blank" rel="noopener">Download</a></li>`
+    ).join("");
+    return `<div class="portal-project">
+      <div class="portal-project-head">
+        <strong>${escapeHtml(p.name || "Your project")}</strong>
+        <span class="portal-project-meta">${p.daysLogged ? `${escapeHtml(String(p.daysLogged))} day${p.daysLogged === 1 ? "" : "s"} on site · ` : ""}${escapeHtml(String(p.percentComplete || 0))}% complete</span>
+      </div>
+      <div class="portal-project-rail">${rail}</div>
+      <div class="portal-project-bar"><div class="portal-project-bar-fill" style="width:${Math.max(0, Math.min(100, Number(p.percentComplete) || 0))}%"></div></div>
+      ${invoicesHtml ? `<ul class="portal-project-invoices">${invoicesHtml}</ul>` : ""}
+    </div>`;
+  }).join("");
+}
+
 function renderPortal(data) {
   const customer = data.customer || {};
   const project = data.project || {};
@@ -620,6 +702,8 @@ function renderPortal(data) {
   renderMessageThread(Array.isArray(data.messages) ? data.messages : []);
   renderSystem(data.property);
   renderWorkOrder(data);
+  renderServiceHistory(data.serviceHistory);
+  renderProjects(data.projects);
   // Preflight for the work-order action buttons — runs in parallel with
   // recommendations and prefs. Decides which buttons appear active
   // (>24hrs out, never rescheduled, WO modifiable, single-WO booking)

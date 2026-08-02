@@ -65,6 +65,7 @@ const quoteNarratives = require("./lib/quote-narratives");
 const { generateInvoicePdf } = require("./lib/invoice-pdf");
 const { generateWoReportPdf, renderWoReportBuffer, reportFilename, ensurePhotoDerivatives } = require("./lib/wo-report-pdf");
 const woReportSnapshot = require("./lib/wo-report-snapshot");
+const { warrantyForWorkOrder } = require("./lib/warranty");
 const billingParties = require("./lib/billing-parties");
 const quickbooks = require("./lib/quickbooks");
 const stripe = require("./lib/stripe");
@@ -2837,6 +2838,130 @@ async function hydrateLeadQuote(decorated) {
   return decorated;
 }
 
+// JOB-002 Part B — customer-scoped portal sections (CRM-08). The portal's
+// unit of identity is the CUSTOMER: whatever lead the token opens, the
+// customer sees the union of their history, live from the canonical
+// stores, not the lead's booking-time snapshot.
+//
+// Union rule: a work order belongs to this portal's customer when its
+// customerId matches, OR its leadId is one of the customer's leads
+// (covers legacy WOs created before customerId existed). Without a
+// customerId the union collapses to just this lead's own WOs.
+//
+// What is deliberately NOT here (Part B §B2 — internal, unflagged):
+// dailyLog anything (dailyNotes, sessions/labourerNote, nextDay*,
+// materialsConsumed), project.notes, task notes/descriptions, techNotes.
+// Projects surface at stage level only. Build-day WOs are day-slices of
+// a project and carry that same internal data — they are represented by
+// their project's stage rail, never listed as individual visits.
+async function customerPortalSections(lead) {
+  const token = lead.portal?.token || portalTokenForId(lead.id);
+  const customerId = lead.customerId || null;
+
+  const leadIds = new Set([lead.id]);
+  if (customerId) {
+    try {
+      (await readLeads())
+        .filter((l) => l.customerId === customerId)
+        .forEach((l) => leadIds.add(l.id));
+    } catch (err) { console.warn("[portal] customer lead union failed:", err?.message); }
+  }
+
+  let allInvoices = [];
+  try { allInvoices = await invoices.list(); }
+  catch (err) { console.warn("[portal] invoices read failed:", err?.message); }
+  // Customer-visible invoice states only: drafts are internal working
+  // copies and voids are dead paper. Read-only display — the pay-online
+  // token link stays the ONLY payment path (Stripe handoff §6).
+  const visibleInvoice = (inv) => inv && inv.status !== "draft" && inv.status !== "void";
+  const invoiceView = (inv) => ({
+    id: inv.id,
+    total: inv.total,
+    amountPaid: inv.amountPaid,
+    balanceDue: inv.balanceDue,
+    status: inv.status,
+    createdAt: inv.createdAt,
+    pdfUrl: `/api/portal/${encodeURIComponent(token)}/invoice/${encodeURIComponent(inv.id)}/pdf`
+  });
+
+  // ---- Service history: every non-build WO, full history, newest first.
+  let serviceHistory = [];
+  try {
+    const wos = (await workOrders.list()).filter((w) =>
+      !w.deletedAt
+      && w.type !== "build"
+      && ((customerId && w.customerId === customerId) || (w.leadId && leadIds.has(w.leadId))));
+    wos.sort((a, b) => String(b.completedAt || b.scheduledFor || b.createdAt || "")
+      .localeCompare(String(a.completedAt || a.scheduledFor || a.createdAt || "")));
+    serviceHistory = wos.map((w) => {
+      const wr = warrantyForWorkOrder(w);
+      const inv = allInvoices
+        .filter((i) => i.woId === w.id && visibleInvoice(i))
+        .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")))[0] || null;
+      return {
+        id: w.id,
+        type: w.type,
+        typeLabel: workOrders.TEMPLATES[w.type]?.label || "Service Visit",
+        status: w.status,
+        completedAt: w.completedAt || null,
+        scheduledFor: w.scheduledFor || null,
+        // Warranty is a LABEL, not a filter — expired WOs stay listed.
+        warranty: wr.ok ? { covered: wr.active, months: wr.months, expiresAt: wr.expiresAt } : null,
+        // Download on every completed WO regardless of warranty state —
+        // the route falls back to a live customer-audience render when
+        // no snapshot exists (legacy completions), so the link is
+        // present whenever there is a report to give.
+        reportUrl: (w.status === "completed" || (Array.isArray(w.reportSnapshots) && w.reportSnapshots.length))
+          ? `/api/portal/${encodeURIComponent(token)}/wo-report-snapshot/${encodeURIComponent(w.id)}`
+          : null,
+        invoice: inv ? invoiceView(inv) : null
+      };
+    });
+  } catch (err) { console.warn("[portal] service history build failed:", err?.message); }
+
+  // ---- Projects: stage level only.
+  let projectCards = [];
+  if (customerId) {
+    try {
+      const projs = (await projects.list({ includeArchived: false }))
+        .filter((p) => p.customerId === customerId && !p.deletedAt);
+      projectCards = await Promise.all(projs.map(async (p) => {
+        let metrics = null;
+        try { metrics = await projects.computeProjectMetrics(p.id); } catch (_) { metrics = null; }
+        const projInvoices = allInvoices
+          .filter((i) => i.projectId === p.id && visibleInvoice(i))
+          .sort((a, b) => String(a.createdAt || "").localeCompare(String(b.createdAt || "")));
+        // Customer-facing stage rail. Derived, furthest-reached wins:
+        //   accepted  — project exists (converted from an accepted quote)
+        //   deposit   — a deposit invoice has been paid
+        //   scheduled — build underway or work orders attached
+        //   complete  — project status flipped to complete
+        //   invoiced  — a non-deposit invoice exists post-completion
+        const depositPaid = projInvoices.some((i) => i.invoiceRole === "deposit" && i.status === "paid");
+        const finalInvoiced = projInvoices.some((i) => i.invoiceRole !== "deposit");
+        const stage =
+          p.status === "complete" ? (finalInvoiced ? "invoiced" : "complete")
+          : (p.status === "active" || (metrics?.buildWoIds || []).length || (p.workOrderIds || []).length) ? "scheduled"
+          : depositPaid ? "deposit"
+          : "accepted";
+        return {
+          id: p.id,
+          name: p.name || "Your project",
+          stage,
+          stages: ["accepted", "deposit", "scheduled", "complete", "invoiced"],
+          daysLogged: metrics?.daysLogged || 0,
+          percentComplete: metrics?.percentComplete || 0,
+          totalTasks: metrics?.totalTasks || 0,
+          doneTasks: metrics?.doneTasks || 0,
+          invoices: projInvoices.map((i) => ({ ...invoiceView(i), role: i.invoiceRole || "standard" }))
+        };
+      }));
+    } catch (err) { console.warn("[portal] projects build failed:", err?.message); }
+  }
+
+  return { serviceHistory, projects: projectCards };
+}
+
 async function portalPayloadForLead(lead, req) {
   const contact = contactRecordForLead(lead, req);
   // Pull the linked property so the customer can see their system profile
@@ -2974,7 +3099,12 @@ async function portalPayloadForLead(lead, req) {
     // zone list, controller / shutoff / blowout locations, valve boxes —
     // everything Patrick needs to remember about the system, the customer
     // also gets to see and verify is right.
-    property: propertyForCustomer
+    property: propertyForCustomer,
+    // JOB-002 Part B — customer-scoped history, live from the canonical
+    // stores. serviceHistory: every non-build WO for this customer with
+    // warranty label + report/invoice downloads. projects: stage-level
+    // cards only. Both read-only.
+    ...(await customerPortalSections(lead))
   };
 }
 
@@ -3824,7 +3954,14 @@ async function handlePortalLoginApi(req, res, pathname) {
         const customerLeads = leads
           .filter((l) => l.customerId === subjectId)
           .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
-        lead = customerLeads[0] || null;
+        // JOB-002 Part B (CRM-07): land on the newest lead that carries a
+        // booking — a real engagement — before falling back to newest
+        // overall. For the duplicate-pair customers the newest lead is a
+        // frozen $0 self-intake record; landing there showed an empty
+        // portal. The portal now renders customer-wide history whichever
+        // lead it opens, but the lead-scoped cards (booking, messages)
+        // should anchor on the record with substance.
+        lead = customerLeads.find((l) => l.booking) || customerLeads[0] || null;
       } else {
         // subjectId is a lead id (legacy magic link, or a customer
         // whose record has since been renumbered/merged).
@@ -5538,25 +5675,55 @@ async function handleApi(req, res, pathname) {
       const leads = await readLeads();
       let lead = leads.find((l) => (l.portal?.token || portalTokenForId(l.id)) === token);
       let propertyId = lead?.propertyId || null;
-      if (!propertyId) {
+      if (!lead && !propertyId) {
         // Try property-portal token (derived from property.id).
         const allProperties = await properties.list();
         const property = allProperties.find((p) => p.id && portalTokenForId(p.id) === token) || null;
         if (property) propertyId = property.id;
       }
-      if (!propertyId) {
+      if (!lead && !propertyId) {
         return sendJson(res, 404, { ok: false, errors: ["Portal not found."] });
       }
       const wo = await workOrders.get(woId);
       if (!wo) return sendJson(res, 404, { ok: false, errors: ["Work order not found."] });
-      if (wo.propertyId !== propertyId) {
+      // Authorization — the WO must belong to this portal's customer.
+      // Property match is the original rule; JOB-002 Part B adds the
+      // customer union (same customerId, or a WO on any of the customer's
+      // leads) so the customer-wide service history can download every
+      // report the customer is entitled to — and nothing else.
+      let authorized = Boolean(propertyId && wo.propertyId === propertyId);
+      if (!authorized && lead) {
+        authorized = wo.leadId === lead.id
+          || Boolean(lead.customerId && wo.customerId === lead.customerId);
+        if (!authorized && lead.customerId && wo.leadId) {
+          authorized = leads.some((l) => l.id === wo.leadId && l.customerId === lead.customerId);
+        }
+      }
+      if (!authorized) {
         return sendJson(res, 403, { ok: false, errors: ["Forbidden."] });
       }
       // Customer audience always — the portal is customer-facing. When no
       // snapshotId is pinned, serve the LATEST customer render.
-      const found = snapshotId
+      let found = snapshotId
         ? await woReportSnapshot.readSnapshot({ woId, snapshotId, audience: "customer" })
         : await woReportSnapshot.readLatestSnapshot({ woId, audience: "customer" });
+      // JOB-002 Part B: completed WOs from before the snapshot feature
+      // have no frozen copy — render live at CUSTOMER audience (internal
+      // notes and signature audit omitted by the renderer) so the
+      // download works on every completed WO, warranty state regardless.
+      // Only for pin-less requests: a pinned snapshotId that's missing is
+      // a real 404, never silently substituted.
+      if (!found && !snapshotId && wo.status === "completed") {
+        let woProperty = null;
+        let woCustomer = null;
+        if (wo.propertyId) { try { woProperty = await properties.get(wo.propertyId); } catch (_) {} }
+        if (wo.customerId) { try { woCustomer = await customers.get(wo.customerId, { withProperties: false }); } catch (_) {} }
+        const mode = wo.locked === true ? "service_report" : "inspection_report";
+        const buffer = await renderWoReportBuffer({
+          wo, property: woProperty || {}, customer: woCustomer || {}, mode, audience: "customer"
+        });
+        found = { buffer, record: { filename: reportFilename({ wo, mode }) } };
+      }
       if (!found) return sendJson(res, 404, { ok: false, errors: ["Snapshot not found."] });
       res.writeHead(200, {
         "content-type": "application/pdf",
@@ -5570,6 +5737,62 @@ async function handleApi(req, res, pathname) {
       return;
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't read snapshot."] });
+    }
+  }
+
+  // Customer-facing invoice PDF (JOB-002 Part B) —
+  //   GET /api/portal/<token>/invoice/<invoiceId>/pdf
+  // Read-only download for the portal's service-history and project
+  // cards. Token-gated to the invoice's OWN customer via the same union
+  // rule as the report route: matching customerId, an invoice on one of
+  // the customer's work orders/leads, or the customer's project. Drafts
+  // and voided invoices never serve (internal working copies). This is a
+  // DISPLAY surface only — the pay-online token link remains the only
+  // payment path (docs/HANDOFF_STRIPE_PAYMENTS.md §6).
+  const portalInvoicePdfMatch = pathname.match(/^\/api\/portal\/([^/]+)\/invoice\/([^/]+)\/pdf$/);
+  if (portalInvoicePdfMatch && req.method === "GET") {
+    try {
+      const token = decodeURIComponent(portalInvoicePdfMatch[1]);
+      const invId = decodeURIComponent(portalInvoicePdfMatch[2]);
+      const leads = await readLeads();
+      const lead = leads.find((l) => (l.portal?.token || portalTokenForId(l.id)) === token);
+      if (!lead) return sendJson(res, 404, { ok: false, errors: ["Portal not found."] });
+      const inv = await invoices.get(invId);
+      if (!inv || inv.status === "draft" || inv.status === "void") {
+        return sendJson(res, 404, { ok: false, errors: ["Invoice not found."] });
+      }
+      const customerId = lead.customerId || null;
+      const customerLeadIds = new Set(
+        customerId ? leads.filter((l) => l.customerId === customerId).map((l) => l.id) : [lead.id]
+      );
+      customerLeadIds.add(lead.id);
+      let authorized = Boolean(customerId && inv.customerId === customerId);
+      if (!authorized && inv.woId) {
+        try {
+          const wo = await workOrders.get(inv.woId);
+          authorized = Boolean(wo && (
+            (customerId && wo.customerId === customerId)
+            || (wo.leadId && customerLeadIds.has(wo.leadId))));
+        } catch (_) { /* stay unauthorized */ }
+      }
+      if (!authorized && inv.projectId && customerId) {
+        try {
+          const proj = await projects.get(inv.projectId);
+          authorized = Boolean(proj && proj.customerId === customerId);
+        } catch (_) { /* stay unauthorized */ }
+      }
+      if (!authorized) return sendJson(res, 403, { ok: false, errors: ["Forbidden."] });
+      const buffer = await generateInvoicePdf(inv);
+      res.writeHead(200, {
+        "content-type": "application/pdf",
+        "content-disposition": `inline; filename="${inv.id}.pdf"`,
+        "content-length": buffer.length,
+        "cache-control": "private, no-cache, must-revalidate"
+      });
+      res.end(buffer);
+      return;
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't generate invoice PDF."] });
     }
   }
 
