@@ -18,7 +18,6 @@ const workOrderWhen = document.getElementById("workOrderWhen");
 const workOrderDuration = document.getElementById("workOrderDuration");
 const workOrderPrice = document.getElementById("workOrderPrice");
 const workOrderNote = document.getElementById("workOrderNote");
-const workOrderDocStatus = document.getElementById("workOrderDocStatus");
 const workOrderDiagnosis = document.getElementById("workOrderDiagnosis");
 const workOrderDiagnosisSource = document.getElementById("workOrderDiagnosisSource");
 const workOrderDiagnosisSummary = document.getElementById("workOrderDiagnosisSummary");
@@ -441,12 +440,10 @@ function renderWorkOrder(data) {
     workOrderDiagnosis.hidden = true;
   }
 
-  // Document state — placeholder messaging until we attach a real doc.
-  if (wo.documentReady && wo.documentUrl) {
-    workOrderDocStatus.innerHTML = `<a href="${wo.documentUrl}" target="_blank" rel="noopener">Open work order document →</a>`;
-  } else {
-    workOrderDocStatus.textContent = "Your detailed work order will be available here closer to your appointment.";
-  }
+  // CRM-10: the "Work order document" placeholder panel is gone — it
+  // promised a document nothing ever delivered (the envelope's
+  // documentReady never flips). Completed service reports surface in the
+  // Service History card instead.
 
   renderPortalAdminChangeType(data);
 
