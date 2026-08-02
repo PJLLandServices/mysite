@@ -311,6 +311,10 @@ const BLOCK_REASON_COPY = {
 };
 
 let lastPreflight = null; // cached so reschedule/cancel handlers can read phoneFallback synchronously
+// JOB-005: true when the rendered appointment's date is in the past —
+// set by renderWorkOrder, read by applyPreflightToButtons so the async
+// preflight can never re-reveal action buttons on a past appointment.
+let appointmentPast = false;
 
 // Single round-trip on portal load. Decides which action buttons appear
 // active, greyed out, or hidden entirely on the work order card. The
@@ -335,6 +339,7 @@ async function loadBookingActions() {
 
 function applyPreflightToButtons(preflight) {
   if (!preflight || !preflight.hasBooking) return;
+  if (appointmentPast) return; // past appointment — actions stay removed
   const reschedule = document.getElementById("rescheduleBtn");
   const cancel = document.getElementById("cancelBtn");
   const blocked = document.getElementById("workOrderBlocked");
@@ -385,6 +390,19 @@ function renderWorkOrder(data) {
     workOrderCard.hidden = true;
     return;
   }
+  // JOB-005 added scope: Change/Cancel only make sense for an UPCOMING
+  // appointment. Past is decided by the appointment DATE against now —
+  // never by envelope existence. On a past appointment the action
+  // buttons and the phone-fallback row are removed entirely (a greyed
+  // "already underway — call us" on a months-old visit was the defect).
+  appointmentPast = (() => {
+    const t = Date.parse(booking.end || booking.start || "");
+    return Number.isFinite(t) && t < Date.now();
+  })();
+  const actionsEl = document.getElementById("workOrderActions");
+  const blockedEl = document.getElementById("workOrderBlocked");
+  if (actionsEl) actionsEl.hidden = appointmentPast;
+  if (blockedEl && appointmentPast) blockedEl.hidden = true;
   workOrderId.textContent = wo.id || "WO-—";
   workOrderStatus.textContent = (wo.status || "scheduled").replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
   workOrderService.textContent = booking.serviceLabel || "—";
@@ -626,15 +644,49 @@ function renderPortal(data) {
   const hasBooking = Boolean(data.booking);
   customerFirstName = customer.firstName || "";
 
-  portalTitle.textContent = customerFirstName
-    ? (hasBooking
-        ? `Hi ${customerFirstName}, your service is scheduled.`
-        : `Hi ${customerFirstName}, your PJL request is open.`)
-    : (hasBooking ? "Your service is scheduled." : "Your PJL request is open.");
-  portalIntro.textContent = hasBooking
-    ? "Your appointment details are below. Anything you need to share before we arrive, drop us a message."
-    : "Track your project below. Anything you need to share, drop us a message and we'll get back to you.";
-  projectStatus.textContent = statusLabelFor(project.status, hasBooking);
+  // JOB-005 (CRM-09) — headline, current-stage card, and follow-up line
+  // derive from data.derived (canonical-store state computed server-side)
+  // instead of the frozen booking envelope + hand-advanced CRM stage.
+  // request_open keeps the hand-advanced intake labels — that's the one
+  // state where they are the truth. Falls back to the legacy binary if
+  // the payload predates the feature.
+  const derived = data.derived || null;
+  const HEADLINES = {
+    project_underway: { title: "your project is underway.", bare: "Your project is underway.",
+      intro: "Track progress on your project card below. Questions any time — just send a message.",
+      stage: "Project underway", follow: "Progress updates appear on your project card below." },
+    quote_ready: { title: "your quote is ready.", bare: "Your quote is ready.",
+      intro: "Review the scope and price below, and accept online when you're ready.",
+      stage: "Quote ready to review", follow: "Accept online below, or message us with any questions." },
+    service_scheduled: { title: "your service is scheduled.", bare: "Your service is scheduled.",
+      intro: "Your appointment details are below. Anything you need to share before we arrive, drop us a message.",
+      stage: "Service scheduled", follow: "Your appointment details are below." },
+    service_complete: { title: "your service is complete.", bare: "Your service is complete.",
+      intro: "Reports and invoices for every visit are in your Service History below. Book again any time.",
+      stage: "Service complete", follow: "Warranty and reports for every visit live in Service History below." },
+    closed: { title: "this request is closed.", bare: "This request is closed.",
+      intro: "No action needed. Call or message us any time and we'll pick things right back up.",
+      stage: "Closed", follow: "" },
+    request_open: { title: "your PJL request is open.", bare: "Your PJL request is open.",
+      intro: "Track your project below. Anything you need to share, drop us a message and we'll get back to you.",
+      stage: null, follow: null }
+  };
+  const view = derived && HEADLINES[derived.state] ? HEADLINES[derived.state] : null;
+  if (view) {
+    portalTitle.textContent = customerFirstName ? `Hi ${customerFirstName}, ${view.title}` : view.bare;
+    portalIntro.textContent = view.intro;
+    projectStatus.textContent = view.stage !== null ? view.stage : statusLabelFor(project.status, false);
+  } else {
+    portalTitle.textContent = customerFirstName
+      ? (hasBooking
+          ? `Hi ${customerFirstName}, your service is scheduled.`
+          : `Hi ${customerFirstName}, your PJL request is open.`)
+      : (hasBooking ? "Your service is scheduled." : "Your PJL request is open.");
+    portalIntro.textContent = hasBooking
+      ? "Your appointment details are below. Anything you need to share before we arrive, drop us a message."
+      : "Track your project below. Anything you need to share, drop us a message and we'll get back to you.";
+    projectStatus.textContent = statusLabelFor(project.status, hasBooking);
+  }
 
   // Personalize the secondary card headings when we know who they are.
   // The "Send PJL a message" + "Need to update something?" cards both work
@@ -652,7 +704,9 @@ function renderPortal(data) {
   }
   followUpText.textContent = project.nextFollowUp
     ? `Next follow-up: ${formatDate(project.nextFollowUp)}`
-    : "PJL will follow up as soon as your request is reviewed.";
+    : (view && view.follow !== null
+        ? view.follow
+        : "PJL will follow up as soon as your request is reviewed.");
   projectTotal.textContent = money.format(Number(project.total || 0)).replace("CA", "").trim();
   customerPhone.textContent = text(customer.phone) || "Not provided";
   // Tap-to-dial / tap-to-map the customer's own details (crm-contact.js).
@@ -682,7 +736,13 @@ function renderPortal(data) {
   }
 
   acceptCard.hidden = !project.canAccept;
-  if (project.status === "won") {
+  // JOB-005: the "quote accepted — Patrick will confirm your arrival
+  // window" thank-you reads as an upcoming promise. Once the derived
+  // state says the work is done (or the request closed), it stops
+  // rendering — same stale-envelope family as the headline fix.
+  const acceptThanksStale = derived
+    && (derived.state === "service_complete" || derived.state === "closed");
+  if (project.status === "won" && !acceptThanksStale) {
     acceptCard.hidden = false;
     acceptCard.classList.add("is-accepted");
     acceptCard.querySelector("h2").textContent = customerFirstName
@@ -693,7 +753,15 @@ function renderPortal(data) {
     acceptButton.hidden = true;
   }
 
-  renderTimeline(project.status);
+  // JOB-005 Task 3: the rail is an intake pipeline — meaningful only
+  // before the customer's first booking or completed work. Outside
+  // intake it is retired; the Current-stage card above carries the
+  // derived state in its place.
+  if (derived && !derived.showIntakeRail) {
+    portalTimeline.hidden = true;
+  } else {
+    renderTimeline(project.status);
+  }
   renderPhotos(project.photos);
   renderActivity(project.activity);
   renderMessageThread(Array.isArray(data.messages) ? data.messages : []);

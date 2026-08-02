@@ -2859,11 +2859,15 @@ async function customerPortalSections(lead) {
   const customerId = lead.customerId || null;
 
   const leadIds = new Set([lead.id]);
+  const unionLeads = [lead];
   if (customerId) {
     try {
       (await readLeads())
         .filter((l) => l.customerId === customerId)
-        .forEach((l) => leadIds.add(l.id));
+        .forEach((l) => {
+          if (!leadIds.has(l.id)) unionLeads.push(l);
+          leadIds.add(l.id);
+        });
     } catch (err) { console.warn("[portal] customer lead union failed:", err?.message); }
   }
 
@@ -2959,7 +2963,22 @@ async function customerPortalSections(lead) {
     } catch (err) { console.warn("[portal] projects build failed:", err?.message); }
   }
 
-  return { serviceHistory, projects: projectCards };
+  // JOB-005 (CRM-09) — facts for the derived header state, from the same
+  // canonical reads as the sections above. "Upcoming" is DATE-based
+  // (booking end/start still ahead of now), never mere envelope
+  // existence — envelope presence is exactly the bug being fixed.
+  const nowMs = Date.now();
+  const upcomingBooking = unionLeads.some((l) => {
+    const t = Date.parse(l.booking?.end || l.booking?.start || "");
+    return Number.isFinite(t) && t >= nowMs;
+  });
+  const derivedFacts = {
+    upcomingBooking,
+    hasCompletedWork: serviceHistory.some((w) => w.status === "completed"),
+    projectUnderway: projectCards.some((p) => p.stage === "scheduled")
+  };
+
+  return { serviceHistory, projects: projectCards, derivedFacts };
 }
 
 async function portalPayloadForLead(lead, req) {
@@ -3018,6 +3037,27 @@ async function portalPayloadForLead(lead, req) {
       adminBookingId = (exact && exact.id) || (active[0] && active[0].id) || null;
     } catch { adminBookingId = null; }
   }
+
+  const sections = await customerPortalSections(lead);
+  const facts = sections.derivedFacts || { upcomingBooking: false, hasCompletedWork: false, projectUnderway: false };
+  delete sections.derivedFacts;
+  // Priority order (JOB-005, adopted 2026-08-02 with Patrick's two
+  // additions): project underway > quote ready > scheduled > complete >
+  // closed (quiet) > request open.
+  const derived = {
+    state:
+      facts.projectUnderway ? "project_underway"
+      : status === "quoted" ? "quote_ready"
+      : facts.upcomingBooking ? "service_scheduled"
+      : facts.hasCompletedWork ? "service_complete"
+      : status === "lost" ? "closed"
+      : "request_open",
+    upcomingBooking: facts.upcomingBooking,
+    hasCompletedWork: facts.hasCompletedWork,
+    projectUnderway: facts.projectUnderway,
+    showIntakeRail: !facts.hasCompletedWork && !facts.upcomingBooking
+      && !facts.projectUnderway && status !== "lost"
+  };
 
   return {
     viewerIsAdmin,
@@ -3104,7 +3144,17 @@ async function portalPayloadForLead(lead, req) {
     // stores. serviceHistory: every non-build WO for this customer with
     // warranty label + report/invoice downloads. projects: stage-level
     // cards only. Both read-only.
-    ...(await customerPortalSections(lead))
+    serviceHistory: sections.serviceHistory,
+    projects: sections.projects,
+    // JOB-005 (CRM-09) — the header/stage state, derived from canonical
+    // stores in priority order. The CRM stage field is untouched — it
+    // still drives the admin list, the accept-card gate (canAccept
+    // above), and the customer notification transitions; this block
+    // changes only what the portal RENDERS. showIntakeRail: the intake
+    // pipeline rail is meaningful only before first booking/completed
+    // work — afterwards the Current-stage card carries the derived
+    // state and the rail is retired.
+    derived
   };
 }
 
