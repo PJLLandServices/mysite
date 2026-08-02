@@ -8015,69 +8015,83 @@ async function handleApi(req, res, pathname) {
       console.warn(`[stripe-webhook] rejected: ${sigErr.message}`);
       return sendJson(res, 400, { ok: false, errors: ["Signature verification failed."] });
     }
-    try {
-      const type = event?.type || "";
-      const intent = event?.data?.object;
-      const invoiceId = intent?.metadata?.invoiceId || "";
-      if (!type.startsWith("payment_intent.") || !invoiceId) {
-        return sendJson(res, 200, { ok: true, ignored: true });
-      }
-      const inv = await invoices.get(invoiceId);
-      if (!inv) {
-        console.warn(`[stripe-webhook] ${type} for unknown invoice "${invoiceId}"`);
-        return sendJson(res, 200, { ok: true, ignored: true });
-      }
-
-      if (type === "payment_intent.succeeded") {
-        // Re-retrieve rather than trusting the event body: gets the
-        // charge expanded for card facts, and means even a leaked
-        // signing secret can't forge a paid-flip — the intent must
-        // actually be succeeded at Stripe.
-        const { intent: fresh, requestId } = await stripe.retrievePaymentIntent(intent.id);
-        try {
-          const result = await finalizeStripeInvoicePayment(inv, fresh, requestId, { via: "webhook" });
-          return sendJson(res, 200, { ok: true, finalized: !result.alreadyPaid });
-        } catch (finErr) {
-          console.error(`[stripe-webhook] finalize refused for ${invoiceId}: ${finErr.message}`);
-          return sendJson(res, 200, { ok: true, refused: true });
+    // ACK FAST, PROCESS ASYNC (webhook-delivery hardening, Aug 2026).
+    // Stripe reported "errors while sending" on every delivery since the
+    // endpoint was created — and separately, the original inline handler
+    // did QBO + PDF + SMTP work BEFORE responding, which can outrun
+    // Stripe's delivery timeout on a slow email send. Now the 200 goes
+    // out the moment the signature verifies; the heavy work runs on the
+    // next tick with its own error logging.
+    //
+    // Trade-off, accepted deliberately: a crash mid-processing after the
+    // 200 means Stripe will NOT redeliver that event. The webhook is the
+    // BACKSTOP, not the primary path — the customer's confirm POST does
+    // the same finalize, and the payment-intent route re-finalizes any
+    // stray succeeded intent on the next page visit — so losing one
+    // redelivery is strictly better than the endpoint being disabled for
+    // chronic delivery failures (Stripe's Aug 8 2026 warning email).
+    sendJson(res, 200, { ok: true, accepted: true });
+    setImmediate(async () => {
+      try {
+        const type = event?.type || "";
+        const intent = event?.data?.object;
+        const invoiceId = intent?.metadata?.invoiceId || "";
+        if (!type.startsWith("payment_intent.") || !invoiceId) return;
+        const inv = await invoices.get(invoiceId);
+        if (!inv) {
+          console.warn(`[stripe-webhook] ${type} for unknown invoice "${invoiceId}"`);
+          return;
         }
-      }
 
-      if (type === "payment_intent.payment_failed") {
-        const lastError = intent?.last_payment_error;
-        const prior = (inv.paymentAttempts || []).slice(-1)[0];
-        if (lastError && !(prior && prior.paymentIntentId === intent.id && prior.errorCode === (lastError.code || null) && prior.outcome === "failure")) {
-          const phone = await paymentSupportPhone();
-          const mapped = describeChargeFailure({
-            errorCode: lastError.code || null,
-            declineCode: lastError.decline_code || null,
-            errorMessage: lastError.message || null
-          }, phone);
-          await invoices.appendPaymentAttempt(inv.id, {
-            outcome: "failure",
-            processor: "stripe",
-            amount: Number(inv.total) || 0,
-            currency: inv.currency || "CAD",
-            paymentIntentId: intent.id,
-            errorCode: lastError.code || null,
-            declineCode: lastError.decline_code || null,
-            errorMessage: String(lastError.message || "").slice(0, 500),
-            customerMessage: mapped.customerMessage,
-            cardBrand: lastError.payment_method?.card?.brand || null,
-            cardLast4: lastError.payment_method?.card?.last4 || null
-          }).catch((recordErr) => {
-            console.error(`[stripe-webhook] FAILED TO RECORD ATTEMPT on ${inv.id}: ${recordErr.message}`);
-          });
+        if (type === "payment_intent.succeeded") {
+          // Re-retrieve rather than trusting the event body: gets the
+          // charge expanded for card facts, and means even a leaked
+          // signing secret can't forge a paid-flip — the intent must
+          // actually be succeeded at Stripe.
+          const { intent: fresh, requestId } = await stripe.retrievePaymentIntent(intent.id);
+          try {
+            const result = await finalizeStripeInvoicePayment(inv, fresh, requestId, { via: "webhook" });
+            if (!result.alreadyPaid) console.log(`[stripe-webhook] finalized ${invoiceId} via webhook backstop`);
+          } catch (finErr) {
+            console.error(`[stripe-webhook] finalize refused for ${invoiceId}: ${finErr.message}`);
+          }
+          return;
         }
-        return sendJson(res, 200, { ok: true });
-      }
 
-      return sendJson(res, 200, { ok: true, ignored: true });
-    } catch (err) {
-      // Transient processing error — non-2xx so Stripe redelivers.
-      console.error(`[stripe-webhook] processing error:`, err);
-      return sendJson(res, 500, { ok: false });
-    }
+        if (type === "payment_intent.payment_failed") {
+          const lastError = intent?.last_payment_error;
+          const prior = (inv.paymentAttempts || []).slice(-1)[0];
+          if (lastError && !(prior && prior.paymentIntentId === intent.id && prior.errorCode === (lastError.code || null) && prior.outcome === "failure")) {
+            const phone = await paymentSupportPhone();
+            const mapped = describeChargeFailure({
+              errorCode: lastError.code || null,
+              declineCode: lastError.decline_code || null,
+              errorMessage: lastError.message || null
+            }, phone);
+            await invoices.appendPaymentAttempt(inv.id, {
+              outcome: "failure",
+              processor: "stripe",
+              amount: Number(inv.total) || 0,
+              currency: inv.currency || "CAD",
+              paymentIntentId: intent.id,
+              errorCode: lastError.code || null,
+              declineCode: lastError.decline_code || null,
+              errorMessage: String(lastError.message || "").slice(0, 500),
+              customerMessage: mapped.customerMessage,
+              cardBrand: lastError.payment_method?.card?.brand || null,
+              cardLast4: lastError.payment_method?.card?.last4 || null
+            }).catch((recordErr) => {
+              console.error(`[stripe-webhook] FAILED TO RECORD ATTEMPT on ${inv.id}: ${recordErr.message}`);
+            });
+          }
+        }
+      } catch (err) {
+        // Already 200'd — log loudly; the confirm-POST and intent-reuse
+        // paths are the recovery routes for anything lost here.
+        console.error(`[stripe-webhook] async processing error:`, err);
+      }
+    });
+    return;
   }
 
   // POST /api/webhooks/quickbooks-payments — receives async events
