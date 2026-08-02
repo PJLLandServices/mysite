@@ -56,7 +56,10 @@ Domain authentication is correctly configured. This is why mail reaches inbox, n
 
 ## FLOW-01 — Existing customer portal login — **PASS**
 
-Verified end to end 2026-07-30.
+Verified end to end 2026-07-30. **Re-verified 2026-08-02** after JOB-002 Part B changed hop 7:
+the portal now renders customer-wide data (service history, projects) and the magic link lands
+on the newest lead with a booking. Hops 1–6 unchanged in code; walked anyway — link arrives,
+30-minute expiry and single-use behaviour confirmed intact.
 
 | # | Hop | Result |
 |---|---|---|
@@ -78,6 +81,9 @@ Verified end to end 2026-07-30.
 
 ## FLOW-02 — Portal in-session actions — **PASS** (one MANUAL dependency)
 
+**Re-verified 2026-08-02** after JOB-002 Part B: "Send PJL a Message" still delivers to phone
+and email; notification preferences still save and persist across reload.
+
 | Action | Result |
 |---|---|
 | "Send PJL a Message" → submit | PASS — notification to phone **and** email |
@@ -91,6 +97,15 @@ being ignored, from the customer's side.
 | ID | Severity | Finding |
 |---|---|---|
 | UI-01 | Low | Empty unlabeled input above "Your Zones" in the "Your System" card. Orphaned field, origin unknown. Find what writes to it before deleting. |
+
+## FLOW-23 — Payment captured → receipt → marked paid — **PASS**
+
+Verified 2026-08-02 during the Stripe migration (see `docs/HANDOFF_STRIPE_PAYMENTS.md` §7:
+5 live captures, ~$2,300 CAD, zero declines, webhook 200s, ledger entries automatic).
+**Re-verified 2026-08-02** during JOB-002 Part B acceptance: one live payment captured through
+the existing token link, no discrepancies. The invariants in the handoff §6 are binding on any
+payment-adjacent change. (This section was intended by the 2026-08-02 handoff commit but the
+register row was left in Part 4 — corrected here.)
 
 ---
 
@@ -150,8 +165,8 @@ Previously logged as a change order; **closed, already built.**
 | CRM-04 | Low | Test data live in pipeline: `John Charette — "Test booking with a fake address"`, site_visit, since 2026-04-30. |
 | CRM-05 | Low | Two SEO-spam submissions via contact form. Honeypot catches bots, not human-sent spam. |
 | CRM-06 | Low | `/commercial-new-customer` serves the residential canonical tag, title, and meta description. Page content differs (rendered client-side); metadata was never differentiated. |
-| CRM-07 | **High** | **Portal login lands duplicate-pair customers on an empty portal.** Verified in code 2026-08-02: magic-link lookup (`resolveLoginIdentifier`, server.js) keeps the *most recently created* lead per email, and verification lands the session on the newest lead for the customer. For the seven confirmed duplicate pairs — Ravka, Dhesi, Gullo, Schwarz, Schafler, Mangos, Leung — the newest record is the frozen $0 self-intake duplicate, so login opens an empty portal instead of their real history. CRM-01's fix stops new duplicates from forming; the existing pairs still need a separate merge/cleanup job. **Shares its root cause with CRM-08** (portal identity is a single lead, not the customer) — scope any fix for the two together. |
-| CRM-08 | **High** | **Completed work orders not visible in the customer portal.** Observed three times; one property with two work orders showed the invoice apparently linked to the spring opening rather than the correct work order, forcing manual PDF delivery. Root cause verified in code 2026-08-02, three layers, same underlying flaw as CRM-07: **(1)** the portal is lead-scoped and renders at most ONE work order — the `lead.booking.workOrder` envelope embedded in the single lead the portal token opens (server.js `buildPortalPayload`); a customer with two visits has the second WO on a different lead (public bookings mint a lead each) or overwritten in place (admin book-from-lead replaces `lead.booking` wholesale). **(2)** Nothing ever writes back to that envelope after booking — no code path updates its `status`/`documentReady`/`documentUrl` when the canonical WO (work-orders.json) completes, so even the right lead's portal card reads "Scheduled" forever with no report. **(3)** Invoices never appear in the main portal at all — `invoices.json` records carry the correct `woId`, but the only customer-facing surface is the separate token-gated `/portal/invoice/:id` link; inside the portal the only WO card the customer can see is whichever lead they landed on (the newest, per CRM-07), so the invoice "appears linked to" that visit. The data layer is correctly linked throughout — this is purely a portal-surface scoping problem: the unit of portal identity is a lead record, while the customer's real history spans leads + work orders + invoices keyed by customerId. Fix direction: portal should render by customer, not by lead. |
+| CRM-07 | Low (demoted from High 2026-08-02) | **Duplicate-pair lead records — residual admin hygiene only.** Was: portal login landed the seven duplicate-pair customers (Ravka, Dhesi, Gullo, Schwarz, Schafler, Mangos, Leung) on the frozen $0 self-intake record. **Resolved customer-side by JOB-002 Part B:** login lands on the newest lead with a booking, and the portal renders the customer-wide union of history whichever lead the token opens — verified in Part B acceptance (step 2, duplicate-pair login shows full history; no empty portal). What remains is admin-side: doubled records clutter the CRM list, and portal message threads are split per lead (a reply sent on the old record's thread doesn't surface on the landed one). A merge/cleanup job is optional housekeeping, not a customer fix. CRM-01 stops new pairs forming. |
+| CRM-08 | **CLOSED** 2026-08-02 | **Completed work orders not visible in the customer portal.** Observed three times; one property with two work orders showed the invoice apparently linked to the spring opening rather than the correct work order, forcing manual PDF delivery. Root cause verified in code 2026-08-02, three layers, same underlying flaw as CRM-07: **(1)** the portal is lead-scoped and renders at most ONE work order — the `lead.booking.workOrder` envelope embedded in the single lead the portal token opens (server.js `buildPortalPayload`); a customer with two visits has the second WO on a different lead (public bookings mint a lead each) or overwritten in place (admin book-from-lead replaces `lead.booking` wholesale). **(2)** Nothing ever writes back to that envelope after booking — no code path updates its `status`/`documentReady`/`documentUrl` when the canonical WO (work-orders.json) completes, so even the right lead's portal card reads "Scheduled" forever with no report. **(3)** Invoices never appear in the main portal at all — `invoices.json` records carry the correct `woId`, but the only customer-facing surface is the separate token-gated `/portal/invoice/:id` link; inside the portal the only WO card the customer can see is whichever lead they landed on (the newest, per CRM-07), so the invoice "appears linked to" that visit. The data layer is correctly linked throughout — this was purely a portal-surface scoping problem. **Fixed by JOB-002 Part B** (portal renders by customer: full service history live from the canonical stores, warranty labels, report + invoice downloads on every visit including expired warranty, projects at stage level). **CLOSED 2026-08-02 — acceptance test passed, all 14 steps**, including duplicate-pair and multi-visit logins, expired-WO PDF download, read-only invoices with no pay controls, no internal data in the project view, and a live payment through the token link (FLOW-23 re-verified). |
 | CRM-09 | Medium | **Portal hero/stage/work-order cards reflect lead-level booking state only, never completed work.** Verified 2026-08-02 with a seeded customer whose only visit completed three months prior, nothing upcoming: header reads "Hi &lt;name&gt;, your service is scheduled" with "before we arrive" copy; the timeline rail ends at "Booked"; the stage card reads "Service Confirmed / PJL will follow up"; and the work-order card shows the completed visit as "SCHEDULED" for its months-past date with live Change/Cancel-appointment buttons and an "appointment already underway — please call us" notice. All four surfaces read from the lead's frozen `booking.workOrder` envelope and `crm.status` — the same never-updated snapshot behind CRM-08 — while the Part B service-history card directly below correctly shows the same WO as Completed with warranty. The page contradicts itself. Fix direction: derive hero/stage/WO-card state from the canonical stores (completedAt, upcoming bookings) like the history card does; suppress Change/Cancel controls when nothing is upcoming. |
 | CRM-10 | Low — fix shipped 2026-08-02 | **"Work Order Document" placeholder panel removed from the portal's appointment card.** It promised "your detailed work order will be available here closer to your appointment" with no mechanism ever delivering one (the envelope's `documentReady` has no writer — confirmed in the CRM-08 investigation). Verified on three customer portals 2026-08-02. Completed service reports now live in the Service History card (JOB-002 Part B). Panel + driving JS removed; card verified rendering cleanly without it. Close on next portal view. |
 
@@ -185,21 +200,20 @@ change (WO-PJNZKTWP) stamped `completedAt` with `departedAt` null — the server
 works. CRM-07 and CRM-08 stay open — Part A is a prerequisite, not a fix; Part B (portal
 rebuild) consumes it.
 
-**JOB-002 Part B (portal renders by customer) — code shipped 2026-08-02, awaiting acceptance
-test.** Touches FLOW-01 hop 7 and FLOW-02's page (hops 1–6, magic-link mechanics, message send,
-prefs untouched in code and re-verified locally) — both flows require re-verification per rule 5
-before CRM-08 closes. What shipped: the portal payload now carries `serviceHistory` (every
-non-build work order for the customer, live from work-orders.json, newest first, warranty
-labels from `warrantyForWorkOrder`, report PDF + read-only invoice per line) and `projects`
+**JOB-002 Part B (portal renders by customer) — COMPLETE, acceptance test passed 2026-08-02,
+all 14 steps.** The portal payload carries `serviceHistory` (every non-build work order for the
+customer, live from work-orders.json, newest first, warranty labels from `warrantyForWorkOrder`,
+report PDF + read-only invoice per line — full history, no retention cut-off) and `projects`
 (stage rail Accepted→Deposit→Scheduled→Complete→Invoiced, day count, percent complete, project
-invoices — no dailyLog/notes/materials/crew data, verified by sentinel leak-test). Magic-link
-landing now prefers the newest lead WITH a booking. New token-gated downloads:
-`/api/portal/:token/wo-report-snapshot/:woId` extended with customer-union authorization + live
-customer-audience render fallback for pre-snapshot completions; new
-`/api/portal/:token/invoice/:invoiceId/pdf` (drafts/voids never serve; cross-customer requests
-403 — verified). Payments untouched per HANDOFF_STRIPE_PAYMENTS §6 — display only, no pay
-controls in the new cards. CRM-07 finding recorded in the Part B report: with customer-scoped
-rendering the duplicate pairs no longer produce a customer-visible failure.
+invoices — no dailyLog/notes/materials/crew data, verified by sentinel leak-test and confirmed
+in acceptance step 11). Magic-link landing prefers the newest lead WITH a booking. Token-gated
+downloads: `/api/portal/:token/wo-report-snapshot/:woId` with customer-union authorization +
+live customer-audience render fallback for pre-snapshot completions;
+`/api/portal/:token/invoice/:invoiceId/pdf` (drafts/voids never serve; cross-customer 403).
+Payments untouched per HANDOFF_STRIPE_PAYMENTS §6 — verified live in acceptance step 9.
+Outcomes: CRM-08 closed; CRM-07 demoted to Low; FLOW-01, FLOW-02, FLOW-23 re-verified PASS.
+Follow-ups spun out: CRM-09 (stale hero/stage/appointment cards), CRM-10 (placeholder panel —
+fix already shipped).
 
 ---
 
@@ -212,7 +226,6 @@ Nothing below has been walked. Assume nothing works until verified.
 | FLOW-20 | Quote written → delivered to customer | Money moves here |
 | FLOW-21 | Quote viewed → accepted | |
 | FLOW-22 | Invoice generated → delivered | |
-| FLOW-23 | Payment captured → receipt → marked paid | |
 | FLOW-24 | Form failure → does anything alert Patrick? | Contact page shows "Your message didn't send." Unknown whether that failure is logged anywhere. |
 | FLOW-25 | AI diagnostic tool (`/sprinkler-repair.html`) | Carries a financial promise: "correct diagnosis = 1 hr labour free." Runs on Cloudflare Worker + API key — a dependency chain separate from Render and from email. |
 | MISC-01 | Footer links to Toronto, North York, Lawrence Park, Forest Hill are absent from `sitemap.html`. Four taps to confirm whether they 404. Sitewide footer links. |
