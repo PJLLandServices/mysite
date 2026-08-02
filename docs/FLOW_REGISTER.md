@@ -153,6 +153,32 @@ Previously logged as a change order; **closed, already built.**
 | CRM-07 | **High** | **Portal login lands duplicate-pair customers on an empty portal.** Verified in code 2026-08-02: magic-link lookup (`resolveLoginIdentifier`, server.js) keeps the *most recently created* lead per email, and verification lands the session on the newest lead for the customer. For the seven confirmed duplicate pairs — Ravka, Dhesi, Gullo, Schwarz, Schafler, Mangos, Leung — the newest record is the frozen $0 self-intake duplicate, so login opens an empty portal instead of their real history. CRM-01's fix stops new duplicates from forming; the existing pairs still need a separate merge/cleanup job. **Shares its root cause with CRM-08** (portal identity is a single lead, not the customer) — scope any fix for the two together. |
 | CRM-08 | **High** | **Completed work orders not visible in the customer portal.** Observed three times; one property with two work orders showed the invoice apparently linked to the spring opening rather than the correct work order, forcing manual PDF delivery. Root cause verified in code 2026-08-02, three layers, same underlying flaw as CRM-07: **(1)** the portal is lead-scoped and renders at most ONE work order — the `lead.booking.workOrder` envelope embedded in the single lead the portal token opens (server.js `buildPortalPayload`); a customer with two visits has the second WO on a different lead (public bookings mint a lead each) or overwritten in place (admin book-from-lead replaces `lead.booking` wholesale). **(2)** Nothing ever writes back to that envelope after booking — no code path updates its `status`/`documentReady`/`documentUrl` when the canonical WO (work-orders.json) completes, so even the right lead's portal card reads "Scheduled" forever with no report. **(3)** Invoices never appear in the main portal at all — `invoices.json` records carry the correct `woId`, but the only customer-facing surface is the separate token-gated `/portal/invoice/:id` link; inside the portal the only WO card the customer can see is whichever lead they landed on (the newest, per CRM-07), so the invoice "appears linked to" that visit. The data layer is correctly linked throughout — this is purely a portal-surface scoping problem: the unit of portal identity is a lead record, while the customer's real history spans leads + work orders + invoices keyed by customerId. Fix direction: portal should render by customer, not by lead. |
 
+## Warranty policy — authoritative (recorded 2026-08-02, JOB-002)
+
+| Work order type | Warranty |
+|---|---|
+| `build` (installation) | **3 years** |
+| `service_visit` | 1 year |
+| `spring_opening` | 1 year |
+| `fall_closing` | 1 year |
+
+Installations carry 3 years; everything else 1 year. Hydrawise controller retrofits are
+**service**, not installation — their `service_visit` typing is correct and must not be changed.
+Parts replaced during a service call inherit the service warranty; warranty attaches to the work
+order, not to individual components. Expiry is computed from the work order's `completedAt` +
+type — single implementation in `server/lib/warranty.js` (`warrantyForWorkOrder`), shared with
+the completion cascade's snapshot so the two cannot drift.
+
+**JOB-002 Part A (completedAt foundation) — code shipped 2026-08-02, awaiting acceptance test.**
+`completedAt` is now a first-class field, server-stamped in `workOrders.update()` on every
+completion path (tech UI, admin status change, bulk) at the same instant as the `status_change`
+history entry; not client-patchable; preserved once set. Live measurement 2026-08-02: 44 work
+orders, 25 completed, 10 missing `departedAt`, all 10 recoverable from history.
+`scripts/backfill-wo-completedat.js` (dry-run default, `--apply` backs up
+`server/data-backup-<stamp>-wo-completedat/` first) promotes the earliest history completion ts.
+Backfill count to be confirmed by the acceptance run on Render. CRM-07 and CRM-08 stay open —
+Part A is a prerequisite, not a fix.
+
 ---
 
 # Part 4 — Unmapped

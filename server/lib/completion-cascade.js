@@ -20,21 +20,12 @@ const invoices = require("./invoices");
 const workOrders = require("./work-orders");
 const woReportSnapshot = require("./wo-report-snapshot");
 
-// Warranty defaults by service type. Spec §4.3.4 says 1yr repairs / 3yr
-// installs. Map service_visit + spring/fall openings to "repair" tier;
-// install-style WO types (none yet) get the longer warranty.
-const WARRANTY_MONTHS = {
-  service_visit: 12,
-  spring_opening: 12,
-  fall_closing: 12,
-  install: 36
-};
-
-function addMonths(iso, months) {
-  const d = new Date(iso);
-  d.setUTCMonth(d.getUTCMonth() + months);
-  return d.toISOString();
-}
+// Warranty months + month arithmetic now live in lib/warranty.js (JOB-002
+// Part A) — the single authoritative policy table, shared with the
+// warrantyForWorkOrder() helper so the snapshot written here and any
+// later computation can never drift. Values are unchanged: 12mo for
+// service_visit / spring_opening / fall_closing, 36mo for installs.
+const { WARRANTY_MONTHS, addMonths } = require("./warranty");
 
 // Pull a one-line summary from the WO. Prefers tech notes, falls back to
 // type label + zone count.
