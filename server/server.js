@@ -1406,7 +1406,7 @@ function parseCommercialPayload(raw) {
 //
 // Failures are logged but never block intake — a lead without
 // customerId is recoverable via `npm run migrate:customers --apply`.
-const { resolveCustomerForLead } = require("./lib/lead-customer");
+const { resolveCustomerForLead, finishCustomerForLead } = require("./lib/lead-customer");
 
 // "This building already belongs to an existing account" — the manual-create
 // dedup warning (commercial matching, Phase 0.5).
@@ -4458,6 +4458,10 @@ async function handleApi(req, res, pathname) {
   // Honeypot + per-IP rate limit guard against bots; the response is
   // intentionally always the same generic 200 on bot/limit hits so
   // attackers can't probe the gate.
+  // CRM-01: a submission whose email matches an existing lead record
+  // UPDATES that record (and logs activity) instead of creating a
+  // duplicate; only unmatched emails create a new lead. Patrick's
+  // email/SMS alert states which of the two happened.
   if (req.method === "POST" && pathname === "/api/new-customer") {
     const ip = callerIp(req);
     const rateKey = `new-customer:${ip}`;
@@ -4545,8 +4549,125 @@ async function handleApi(req, res, pathname) {
       rateLimit.record(rateKey);
 
       const fullName = `${firstName} ${lastName}`.trim();
-      const id = crypto.randomUUID();
       const now = new Date().toISOString();
+
+      // CRM-01 — self-intake duplicate guard. Match this submission against
+      // existing lead records by normalized email (normalizeEmail trims and
+      // lowercases both sides) BEFORE creating anything. A match means this
+      // is a contact already in the CRM: update their record and log the
+      // submission as activity instead of minting a second record that
+      // freezes at "new"/$0 while the real job runs elsewhere.
+      // Soft-deleted (Trash) records never match. Archived records match
+      // only when no live record does, and are un-archived so the update
+      // is visible in the CRM again.
+      const allLeads = await readLeads();
+      const emailMatches = allLeads.filter((l) => !l.deletedAt && normalizeEmail(l.contact?.email) === email);
+      const matched = emailMatches.find((l) => !l.archived) || emailMatches[0] || null;
+
+      if (matched) {
+        const lead = matched;
+        const changes = [];
+
+        const contact = lead.contact && typeof lead.contact === "object" ? lead.contact : {};
+        lead.contact = contact;
+        if (fullName && fullName !== (contact.name || "")) {
+          changes.push(`name "${contact.name || "—"}" → "${fullName}"`);
+          contact.name = fullName;
+          contact.firstName = firstName;
+          contact.lastName = lastName;
+        }
+        if (phone && phone !== (contact.phone || "")) {
+          changes.push(`phone "${contact.phone || "—"}" → "${phone}"`);
+          contact.phone = phone;
+        }
+        if (address && address !== (contact.address || "")) {
+          changes.push(`address "${contact.address || "—"}" → "${address}"`);
+          contact.address = address;
+        }
+        if (notes) {
+          contact.notes = contact.notes
+            ? `${contact.notes}\n\n[Self-intake ${now.slice(0, 10)}] ${notes}`
+            : notes;
+          changes.push("notes added");
+        }
+        if (commercialNoteStash) {
+          contact.notes = (contact.notes || "") + commercialNoteStash;
+        }
+
+        // The Commercial tag sticks: an update never removes it, and a
+        // commercial submission adds it to a record that lacked it. The
+        // commercial block itself is fill-empty only — a curated block on
+        // the record is never overwritten by a later intake.
+        if (accountType === "commercial") {
+          if (lead.accountType !== "commercial") {
+            lead.accountType = "commercial";
+            changes.push("account type → commercial");
+          }
+          if (commercialBlock && !lead.commercial) {
+            lead.commercial = commercialBlock;
+            changes.push("commercial details added");
+          }
+        }
+        // Billing envelope: same fill-empty rule as the customer record
+        // (billing-party brief §3.7).
+        if (billingResult.billing && !lead.billing) {
+          lead.billing = billingResult.billing;
+          changes.push("billing party added");
+        }
+
+        if (lead.archived) {
+          lead.archived = false;
+          changes.push("record un-archived");
+        }
+
+        lead.crm = lead.crm && typeof lead.crm === "object" ? lead.crm : defaultCrm(lead.createdAt || now);
+        lead.crm.activity = Array.isArray(lead.crm.activity) ? lead.crm.activity : [];
+        lead.crm.activity.unshift({
+          at: now,
+          type: "update",
+          text: `Customer self-intake submitted (${accountType}) — matched this record by email; no new lead created.`
+            + (changes.length ? ` Updated: ${changes.join("; ")}.` : " No field changes.")
+            + (notes ? `\nCustomer notes: ${notes}` : "")
+        });
+        lead.crm.lastUpdated = now;
+
+        // Log the outreach on the canonical customer record (and backfill
+        // customerId on legacy leads that predate it). Same soft-failure
+        // rule as the create path — never block intake.
+        try {
+          const leadForCustomer = { ...lead, createdAt: now, source: "self_serve" };
+          if (lead.customerId) {
+            await finishCustomerForLead(lead.customerId, leadForCustomer, { notes });
+          } else {
+            lead.customerId = await resolveCustomerForLead(leadForCustomer);
+          }
+        } catch (err) {
+          console.error("[new-customer] customer resolve on update failed:", err?.message || err);
+        }
+
+        await writeLeads(allLeads);
+
+        // Same alert pair as the create path, flagged so the email + SMS
+        // say an existing record was updated (no new lead). sourceLabel
+        // reflects the EVENT (a self-intake submission); the matched
+        // record's own source tag is unchanged.
+        const baseUrl = process.env.PUBLIC_BASE_URL || baseUrlFromReq(req);
+        const decorated = decorateLeadForAdmin(lead, req);
+        decorated.sourceLabel = SOURCES.self_serve.label;
+        decorated.intakeOutcome = "updated_existing";
+        sendNewLeadEmail(decorated, { baseUrl }).catch((err) => {
+          console.error("[new-customer] admin email failed:", err?.message || err);
+        });
+        sendNewLeadSms(decorated, { baseUrl }).catch((err) => {
+          console.error("[new-customer] admin SMS failed:", err?.message || err);
+        });
+
+        // Public response is byte-identical to the create path — whether
+        // an email is already in the CRM is never revealed to the browser.
+        return sendJson(res, 200, { ok: true });
+      }
+
+      const id = crypto.randomUUID();
       // Patrick reads the lead detail view; pin the property address at
       // the top of the notes block so it's the first thing he sees.
       const composedNotes = (notes
@@ -4637,6 +4758,7 @@ async function handleApi(req, res, pathname) {
       // SMS body + email subject) + the CRM "Open in CRM" link target.
       const baseUrl = process.env.PUBLIC_BASE_URL || baseUrlFromReq(req);
       const decorated = decorateLeadForAdmin(lead, req);
+      decorated.intakeOutcome = "created_new";
       sendNewLeadEmail(decorated, { baseUrl }).catch((err) => {
         console.error("[new-customer] admin email failed:", err?.message || err);
       });

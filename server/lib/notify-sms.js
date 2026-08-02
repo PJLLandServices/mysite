@@ -37,9 +37,18 @@ function buildSmsBody(lead) {
   const town = addressParts[1] ? addressParts[1].replace(/\s+ON\b.*/i, "").trim() : "";
   const link = `\n${resolvePublicBaseUrl()}/admin`;
   const where = town ? ` in ${town}` : "";
+  // intakeOutcome (CRM-01, self-intake dedup) is set only by the
+  // /api/new-customer handler: say whether the submission updated an
+  // existing record or created a new one. Absent on every other intake
+  // path, which keeps those SMS bodies byte-identical.
+  const head = lead.intakeOutcome === "updated_existing"
+    ? `PJL ${sourceLabel} - existing record updated`
+    : lead.intakeOutcome === "created_new"
+      ? `New PJL ${sourceLabel} (new record)`
+      : `New PJL ${sourceLabel}`;
   // Twilio SMS segments are 160 GSM-7 chars or 70 UCS-2 chars. Keep it short to
   // stay in a single segment (avoids surprise per-message charges).
-  return `New PJL ${sourceLabel}: ${name}${where} - ${lead.contact?.phone || ""}${link}`.trim();
+  return `${head}: ${name}${where} - ${lead.contact?.phone || ""}${link}`.trim();
 }
 
 async function sendNewLeadSms(lead) {

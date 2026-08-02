@@ -64,7 +64,19 @@ function escapeHtml(value) {
 function buildLeadEmail(lead) {
   const sourceLabel = lead.sourceLabel || lead.source || "General Lead";
   const town = (lead.contact?.address || "").split(",")[1]?.trim() || lead.contact?.address || "";
-  const subject = `New PJL Lead — ${sourceLabel} — ${lead.contact?.name || "Unknown"}`;
+  // intakeOutcome (CRM-01, self-intake dedup) — set only by the
+  // /api/new-customer handler. "updated_existing" means the submission
+  // matched a record already in the CRM and that record was updated;
+  // "created_new" means no match and a fresh lead was created. Absent on
+  // every other intake path, which keeps those emails byte-identical.
+  const outcome = lead.intakeOutcome === "updated_existing"
+    ? { updated: true, line: "This submission matched an existing record by email. The existing record was updated — no new lead was created." }
+    : lead.intakeOutcome === "created_new"
+      ? { updated: false, line: "No existing record matched this email — a new lead was created." }
+      : null;
+  const subject = outcome?.updated
+    ? `PJL Lead Updated — ${sourceLabel} — ${lead.contact?.name || "Unknown"}`
+    : `New PJL Lead — ${sourceLabel} — ${lead.contact?.name || "Unknown"}`;
   // resolvePublicBaseUrl strips trailing slashes and never returns the
   // request's .onrender.com host — see public-base-url.js for the order.
   const cleanBase = resolvePublicBaseUrl();
@@ -90,8 +102,9 @@ function buildLeadEmail(lead) {
 
   const html = `
 <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 560px; color: #1a1a1a;">
-  <h2 style="margin: 0 0 8px; font-size: 22px;">New ${escapeHtml(sourceLabel)} lead</h2>
+  <h2 style="margin: 0 0 8px; font-size: 22px;">${outcome?.updated ? `${escapeHtml(sourceLabel)} — existing record updated` : `New ${escapeHtml(sourceLabel)} lead`}</h2>
   <p style="margin: 0 0 18px; color: #555;">${escapeHtml(lead.contact?.name || "")} ${town ? `· ${escapeHtml(town)}` : ""}</p>
+  ${outcome ? `<p style="margin: 0 0 18px; padding: 10px 14px; background: ${outcome.updated ? "#eef4f8" : "#f1f0e8"}; border-left: 3px solid #1f4f6e; border-radius: 4px;">${escapeHtml(outcome.line)}</p>` : ""}
 
   <table style="border-collapse: collapse; margin-bottom: 18px;">
     <tr><td style="padding: 4px 14px 4px 0; color: #777;">Phone</td><td style="padding: 4px 0;"><a href="tel:${escapeHtml(lead.contact?.phone || "")}">${escapeHtml(lead.contact?.phone || "")}</a></td></tr>
@@ -118,8 +131,9 @@ function buildLeadEmail(lead) {
 
   // Plain-text fallback for email clients that block HTML.
   const textLines = [
-    `New ${sourceLabel} lead`,
+    outcome?.updated ? `${sourceLabel} — existing record updated` : `New ${sourceLabel} lead`,
     `${lead.contact?.name || ""}${town ? " · " + town : ""}`,
+    ...(outcome ? ["", outcome.line] : []),
     "",
     `Phone:   ${lead.contact?.phone || ""}`,
     `Email:   ${lead.contact?.email || ""}`,
