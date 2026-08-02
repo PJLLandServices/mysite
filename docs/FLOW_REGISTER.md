@@ -1,7 +1,7 @@
 # PJL Backend Flow Register
 
 **Source of truth for customer-facing backend processes.**
-Last updated: 2026-08-01 — supersedes the 2026-07-30 version.
+Last updated: 2026-08-02 — supersedes the 2026-08-01 version.
 
 If a flow isn't in here with a status, it is not known to work.
 Update this file, not a chat thread.
@@ -135,12 +135,13 @@ Previously logged as a change order; **closed, already built.**
 
 | ID | Severity | Finding |
 |---|---|---|
-| CRM-01 | **High** | **Self-intake creates duplicates.** Sending `/new-customer` to someone already in the CRM creates a second lead instead of matching the existing record. 14 of 16 self-intake records are frozen at "new", $0, permanently — the real job lives on a separate booking record. Confirmed pairs: Ravka, Dhesi, Gullo, Schwarz, Schafler, Mangos, Leung. **Untested consequence:** portal login matches on email; with two records per email, the magic link may open the empty record instead of real history. |
+| CRM-01 | **CLOSED** 2026-08-02 | **Self-intake creates duplicates.** Was: sending `/new-customer` to someone already in the CRM created a second lead instead of matching the existing record; 14 of 16 self-intake records frozen at "new", $0. **Fixed by JOB-001 Task A:** `/api/new-customer` (both residential and commercial) now matches submissions against existing lead records by email (case-insensitive, trimmed) and updates the matched record + logs activity instead of creating a duplicate; notifications state updated-vs-created. Acceptance test run by Patrick against live data 2026-08-02 — all three scenarios passed (56 → 57 records, exactly one new lead from the unknown-email case). The portal-login consequence for the seven pre-existing duplicate pairs is now tracked as CRM-07. |
 | CRM-02 | **High** | **`/quote.html` is the weakest path despite the strongest placement.** Sitewide header + footer button; 4 leads in 3 months; one is Patrick's own test; zero converted. `/estimate.html` produced no identifiable records at all. Three competing estimate paths, one of which earns nothing. |
 | CRM-03 | Medium | **Follow-up and owner fields never used.** Zero of 56 records have a follow-up date or owner assigned. Mechanism is built and unused — directly related to the six-day-stale request found 2026-07-30. |
 | CRM-04 | Low | Test data live in pipeline: `John Charette — "Test booking with a fake address"`, site_visit, since 2026-04-30. |
 | CRM-05 | Low | Two SEO-spam submissions via contact form. Honeypot catches bots, not human-sent spam. |
 | CRM-06 | Low | `/commercial-new-customer` serves the residential canonical tag, title, and meta description. Page content differs (rendered client-side); metadata was never differentiated. |
+| CRM-07 | **High** | **Portal login lands duplicate-pair customers on an empty portal.** Verified in code 2026-08-02: magic-link lookup (`resolveLoginIdentifier`, server.js) keeps the *most recently created* lead per email, and verification lands the session on the newest lead for the customer. For the seven confirmed duplicate pairs — Ravka, Dhesi, Gullo, Schwarz, Schafler, Mangos, Leung — the newest record is the frozen $0 self-intake duplicate, so login opens an empty portal instead of their real history. CRM-01's fix stops new duplicates from forming; the existing pairs still need a separate merge/cleanup job. |
 
 ---
 
