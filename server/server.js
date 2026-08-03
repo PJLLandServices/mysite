@@ -2964,16 +2964,28 @@ async function customerPortalSections(lead) {
   }
 
   // JOB-005 (CRM-09) — facts for the derived header state, from the same
-  // canonical reads as the sections above. "Upcoming" is DATE-based
-  // (booking end/start still ahead of now), never mere envelope
-  // existence — envelope presence is exactly the bug being fixed.
+  // canonical reads as the sections above. "Upcoming" means either:
+  //   1. a lead booking envelope whose end/start is still ahead of now
+  //      (public booking flow), or
+  //   2. any of the customer's work orders in a PRE-TERMINAL status
+  //      (admin-side advance bookings). Measured live 2026-08-02: 12 of
+  //      14 open WOs are dateless — dateless seasonal bookings are the
+  //      NORMAL shape, so a WO's mere pre-terminal status counts as
+  //      upcoming, date or no date. Past-dated stragglers count too
+  //      (Patrick's ruling, option (a)): booked work that never got
+  //      closed out is still pending work — a stale "scheduled" is a
+  //      truthful nag, a wrong "complete" is the CRM-09 defect class.
+  //      (Stranded non-terminal WOs themselves are tracked as CRM-11.)
+  // Never mere envelope existence — that was the original bug.
   const nowMs = Date.now();
-  const upcomingBooking = unionLeads.some((l) => {
+  const envelopeUpcoming = unionLeads.some((l) => {
     const t = Date.parse(l.booking?.end || l.booking?.start || "");
     return Number.isFinite(t) && t >= nowMs;
   });
+  const WO_TERMINAL = new Set(["completed", "cancelled", "no_show"]);
+  const woUpcoming = serviceHistory.some((w) => !WO_TERMINAL.has(w.status));
   const derivedFacts = {
-    upcomingBooking,
+    upcomingBooking: envelopeUpcoming || woUpcoming,
     hasCompletedWork: serviceHistory.some((w) => w.status === "completed"),
     projectUnderway: projectCards.some((p) => p.stage === "scheduled")
   };
