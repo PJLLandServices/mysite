@@ -381,66 +381,74 @@ function applyPreflightToButtons(preflight) {
 }
 
 function renderWorkOrder(data) {
-  // Surface the work-order envelope when the lead came in via the booking
-  // flow. Older leads (Formspree-era contact requests) don't have one and
-  // the card stays hidden.
+  // JOB-006 (CRM-12): this card renders GENUINELY UPCOMING work from
+  // data.nextVisit (canonical-store derived, server-side), never the
+  // frozen booking envelope. No upcoming work → hidden; past visits
+  // live in Service History and nowhere else.
+  const nv = data.nextVisit;
   const wo = data.workOrder;
   const booking = data.booking;
-  if (!wo || !booking) {
+  if (!nv) {
     workOrderCard.hidden = true;
     return;
   }
-  // JOB-005 added scope: Change/Cancel only make sense for an UPCOMING
-  // appointment. Past is decided by the appointment DATE against now —
-  // never by envelope existence. On a past appointment the action
-  // buttons and the phone-fallback row are removed entirely (a greyed
-  // "already underway — call us" on a months-old visit was the defect).
-  appointmentPast = (() => {
-    const t = Date.parse(booking.end || booking.start || "");
-    return Number.isFinite(t) && t < Date.now();
-  })();
+  // Actions (Change/Cancel) exist only for the landing lead's own
+  // future-dated booking — those endpoints act on this portal's lead.
+  // appointmentPast stays as a belt for the async preflight, but a
+  // rendered nextVisit is upcoming by construction.
+  appointmentPast = !nv.actionable;
   const actionsEl = document.getElementById("workOrderActions");
   const blockedEl = document.getElementById("workOrderBlocked");
-  if (actionsEl) actionsEl.hidden = appointmentPast;
-  if (blockedEl && appointmentPast) blockedEl.hidden = true;
-  workOrderId.textContent = wo.id || "WO-—";
-  workOrderStatus.textContent = (wo.status || "scheduled").replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
-  workOrderService.textContent = booking.serviceLabel || "—";
-  workOrderPrice.textContent = wo.priceLabel || (wo.total ? `$${wo.total}` : "Custom quote");
-  // Bucket-mode hides the on-site duration line in favour of the bucket
-  // window ("8 AM – 12 PM"). Legacy bookings without a bucket fall back
-  // to the old "<N> min" display.
-  workOrderDuration.textContent = booking.bucketWindow
-    || (booking.durationMinutes ? `${booking.durationMinutes} min` : "—");
+  if (actionsEl) actionsEl.hidden = !nv.actionable;
+  if (blockedEl && !nv.actionable) blockedEl.hidden = true;
 
-  if (booking.start) {
-    const start = new Date(booking.start);
-    if (booking.bucketLabel) {
+  workOrderId.textContent = nv.woId || "Booked";
+  workOrderStatus.textContent = nv.dateTBC ? "Booked" : "Scheduled";
+  workOrderService.textContent = nv.serviceLabel || "—";
+
+  // Duration + price rows: shown for booking-envelope visits (we know
+  // them), hidden for canonical-WO advance bookings (we don't — never
+  // render an empty field).
+  const durationRow = workOrderDuration ? workOrderDuration.parentElement : null;
+  const priceRow = workOrderPrice ? workOrderPrice.parentElement : null;
+  if (nv.source === "booking") {
+    if (durationRow) durationRow.hidden = false;
+    if (priceRow) priceRow.hidden = false;
+    workOrderPrice.textContent = nv.priceLabel || "Custom quote";
+    workOrderDuration.textContent = nv.bucketWindow
+      || (nv.durationMinutes ? `${nv.durationMinutes} min` : "—");
+  } else {
+    if (durationRow) durationRow.hidden = true;
+    if (priceRow) priceRow.hidden = true;
+  }
+
+  if (nv.dateTBC || !nv.start) {
+    workOrderWhen.textContent = "Date to be confirmed — we'll reach out to schedule your visit.";
+  } else {
+    const start = new Date(nv.start);
+    if (nv.bucketLabel) {
       // "Tuesday, May 14 — Morning Appointment"
       const dayPart = start.toLocaleDateString("en-CA", {
         weekday: "long", month: "long", day: "numeric"
       });
-      workOrderWhen.textContent = `${dayPart} — ${booking.bucketLabel}`;
+      workOrderWhen.textContent = `${dayPart} — ${nv.bucketLabel}`;
     } else {
-      // Legacy bookings (pre-bucket): still show precise time.
       workOrderWhen.textContent = start.toLocaleString("en-CA", {
         weekday: "long", month: "long", day: "numeric", hour: "numeric", minute: "2-digit"
       });
     }
-  } else {
-    workOrderWhen.textContent = "—";
   }
 
-  if (wo.priceNote) {
-    workOrderNote.textContent = wo.priceNote;
+  if (nv.source === "booking" && nv.priceNote) {
+    workOrderNote.textContent = nv.priceNote;
     workOrderNote.hidden = false;
   } else {
     workOrderNote.hidden = true;
   }
 
-  // Diagnosis block — present when this booking came from an AI-chat
-  // handoff or other pre-booking diagnostic flow. Hidden otherwise.
-  const diagnosis = wo.diagnosis;
+  // Diagnosis block — only meaningful on the landing lead's own booking
+  // (it hangs off that envelope's AI-handoff capture). Hidden otherwise.
+  const diagnosis = (nv.source === "booking" && nv.actionable && wo && booking) ? wo.diagnosis : null;
   if (diagnosis && (diagnosis.summary || diagnosis.text)) {
     const sourceLabel = (diagnosis.source || "ai_chat")
       .replace(/_/g, " ")
@@ -463,7 +471,9 @@ function renderWorkOrder(data) {
   // documentReady never flips). Completed service reports surface in the
   // Service History card instead.
 
-  renderPortalAdminChangeType(data);
+  // Admin-only change-appointment-type control operates on the landing
+  // lead's booking — only meaningful when that's what we're showing.
+  if (nv.source === "booking" && nv.actionable) renderPortalAdminChangeType(data);
 
   workOrderCard.hidden = false;
 }
@@ -594,7 +604,7 @@ function renderServiceHistory(items) {
     return `<li class="portal-history-item">
       <div class="portal-history-main">
         <strong>${escapeHtml(w.typeLabel || "Service Visit")}</strong>
-        <span class="portal-history-date">${when ? escapeHtml(isoDay(when)) : "—"}</span>
+        <span class="portal-history-date">${when ? escapeHtml(isoDay(when)) : (["completed", "cancelled", "no_show"].includes(w.status) ? "—" : "date to be confirmed")}</span>
         <span class="portal-history-status">${escapeHtml(statusLabel(w.status))}</span>
         ${warranty}
       </div>
@@ -735,35 +745,33 @@ function renderPortal(data) {
     serviceList.append(item);
   }
 
+  // JOB-006 (CRM-12): the permanent "quote accepted — Patrick will
+  // confirm your arrival window" thank-you variant is RETIRED — it
+  // rendered forever on won leads, attached to whatever engagement the
+  // landing lead happened to be. The card now exists only in its live
+  // form: a real quote awaiting action (canAccept, status === "quoted").
   acceptCard.hidden = !project.canAccept;
-  // JOB-005: the "quote accepted — Patrick will confirm your arrival
-  // window" thank-you reads as an upcoming promise. Once the derived
-  // state says the work is done (or the request closed), it stops
-  // rendering — same stale-envelope family as the headline fix.
-  const acceptThanksStale = derived
-    && (derived.state === "service_complete" || derived.state === "closed");
-  if (project.status === "won" && !acceptThanksStale) {
-    acceptCard.hidden = false;
-    acceptCard.classList.add("is-accepted");
-    acceptCard.querySelector("h2").textContent = customerFirstName
-      ? `Thank you, ${customerFirstName} — quote accepted.`
-      : "Quote accepted — thank you";
-    const p = acceptCard.querySelector("p");
-    if (p) p.textContent = "Your project is booked. Patrick will confirm the exact arrival window with you directly.";
-    acceptButton.hidden = true;
-  }
 
   // JOB-005 Task 3: the rail is an intake pipeline — meaningful only
   // before the customer's first booking or completed work. Outside
   // intake it is retired; the Current-stage card above carries the
   // derived state in its place.
-  if (derived && !derived.showIntakeRail) {
+  const inIntake = !derived || derived.showIntakeRail;
+  if (!inIntake) {
     portalTimeline.hidden = true;
   } else {
     renderTimeline(project.status);
   }
   renderPhotos(project.photos);
   renderActivity(project.activity);
+  // JOB-006 (CRM-12): the lead's intake snapshots — Project request
+  // (features + estimated value) and Project activity (intake
+  // breadcrumbs) — render only during intake, same predicate as the
+  // rail. Once bookings or completed work exist, Service History and
+  // invoices are the truth.
+  const requestCard = document.getElementById("projectRequestCard");
+  if (requestCard) requestCard.hidden = !inIntake;
+  if (!inIntake && activityCard) activityCard.hidden = true;
   renderMessageThread(Array.isArray(data.messages) ? data.messages : []);
   renderSystem(data.property);
   renderWorkOrder(data);

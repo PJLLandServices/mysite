@@ -207,7 +207,9 @@
         <p class="portal-accept-note" id="acceptStatus" role="status"></p>
       </article>
 
-      <article class="portal-card">
+      <!-- JOB-006 (CRM-12): intake snapshot — renders only while the
+           customer is genuinely in intake (same predicate as the rail). -->
+      <article class="portal-card" id="projectRequestCard">
         <h2>Project request</h2>
         <ul class="portal-services" id="serviceList"></ul>
         <div class="portal-total">

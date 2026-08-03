@@ -2990,7 +2990,60 @@ async function customerPortalSections(lead) {
     projectUnderway: projectCards.some((p) => p.stage === "scheduled")
   };
 
-  return { serviceHistory, projects: projectCards, derivedFacts };
+  // JOB-006 (CRM-12) — the "Next visit" card, replacing the frozen
+  // booking-envelope Work Order card. Sourcing, in order:
+  //   1. A FUTURE-DATED booking envelope (public booking flow) — full
+  //      details; actionable (Change/Cancel + admin change-type) only
+  //      when it's the landing lead's own booking, because those
+  //      endpoints act on the token's lead.
+  //   2. Any pre-terminal canonical work order — future-dated shows its
+  //      date; dateless or past-dated-but-still-open (the normal
+  //      advance-booking shape, JOB-005 option (a)) shows "date to be
+  //      confirmed". Never a fabricated or empty date.
+  //   3. Nothing upcoming → null → the card hides. Completed work is
+  //      the disqualifier and lives in Service History only.
+  const envelopeVisit = (l) => {
+    const b = l.booking;
+    if (!b) return null;
+    const t = Date.parse(b.end || b.start || "");
+    if (!Number.isFinite(t) || t < nowMs) return null;
+    return {
+      source: "booking",
+      actionable: l.id === lead.id,
+      woId: b.workOrder?.id || null,
+      serviceLabel: b.serviceLabel || "Service visit",
+      start: b.start,
+      durationMinutes: b.durationMinutes || null,
+      bucketLabel: b.bucketLabel || null,
+      bucketWindow: b.bucketWindow || null,
+      priceLabel: b.workOrder?.priceLabel || null,
+      priceNote: b.workOrder?.priceNote || null,
+      dateTBC: false
+    };
+  };
+  let nextVisit = envelopeVisit(lead) || unionLeads.map(envelopeVisit).find(Boolean) || null;
+  if (!nextVisit) {
+    const open = serviceHistory.filter((w) => !WO_TERMINAL.has(w.status));
+    const future = open
+      .filter((w) => {
+        const t = Date.parse(w.scheduledFor || "");
+        return Number.isFinite(t) && t >= nowMs;
+      })
+      .sort((a, b) => String(a.scheduledFor).localeCompare(String(b.scheduledFor)));
+    const cand = future[0] || open[0] || null;
+    if (cand) {
+      nextVisit = {
+        source: "wo",
+        actionable: false,
+        woId: cand.id,
+        serviceLabel: cand.typeLabel,
+        start: future[0] ? cand.scheduledFor : null,
+        dateTBC: !future[0]
+      };
+    }
+  }
+
+  return { serviceHistory, projects: projectCards, derivedFacts, nextVisit };
 }
 
 async function portalPayloadForLead(lead, req) {
@@ -3158,6 +3211,10 @@ async function portalPayloadForLead(lead, req) {
     // cards only. Both read-only.
     serviceHistory: sections.serviceHistory,
     projects: sections.projects,
+    // JOB-006 (CRM-12) — genuinely-upcoming work for the Next-visit
+    // card; null hides the card. Past visits render in serviceHistory
+    // and nowhere else.
+    nextVisit: sections.nextVisit || null,
     // JOB-005 (CRM-09) — the header/stage state, derived from canonical
     // stores in priority order. The CRM stage field is untouched — it
     // still drives the admin list, the accept-card gate (canAccept
