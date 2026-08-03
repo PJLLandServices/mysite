@@ -234,6 +234,37 @@ fix already shipped).
 
 ---
 
+# Part 3.5 — Verification debt (parked 2026-08-03)
+
+Everything shipped-but-not-walked, in one place so it stops living in chat threads.
+Tick items off here as they're confirmed; nothing below blocks new work.
+
+## Do soon — small and real
+
+| # | Check | Why it matters | Effort |
+|---|---|---|---|
+| VD-1 | Review-request queue: confirm the accidental WO-AZABTKPH completion (Aug 2) did not leave a review-ask scheduled — **timer fires ~Aug 9** | A review request for a June job reads as spam | One glance at `/api/review-requests` |
+| VD-2 | Submit one test quote through `/quote.html` → appears in CRM, tagged | FLOW-04 has been PARTIAL since Aug 2; the form still gets in-body traffic and could be silently broken | 5 min |
+| VD-3 | Submit one test through `/estimate.html` → same check | FLOW-05, same reasoning | 5 min |
+
+## Self-verifying — let normal business tick these off, just record when it happens
+
+| # | Check | Ticks itself off when… |
+|---|---|---|
+| VD-4 | FLOW-02 message-send + prefs regression (JOB-005 step 7 / JOB-006 step 8) | the next real customer sends a portal message and Patrick's phone+email both ring |
+| VD-5 | Live accept card renders + works post-JOB-006 (JOB-006 step 7) | the next real quote goes out and the customer accepts online |
+| VD-6 | "Your project is underway" state (JOB-005 step 3) | GreenTree (active PROJ-2026-0002/0003) next opens their portal — or mint a token any time |
+| VD-7 | No-upcoming customer: appointment card hidden entirely (JOB-006 step 5) | any completed-only customer's portal is next viewed (Ravka) |
+| VD-8 | Virgin-lead intake state: "request is open" + rail + request/activity cards (JOB-005 step 4 / JOB-006 step 6) | the next genuine new lead arrives and their portal is glanced at |
+| VD-9 | CRM-10 close-on-sight: "Work Order Document" panel gone | already observable on Paolo's walked portal — close on Patrick's say-so |
+
+## Parked — real jobs, not debt
+
+- FLOW-01 edge cases: unrecognised email, expired token, reused token (listed untested since 2026-07-30).
+- Part 4 unmapped chains: FLOW-20/21/22 (quote → delivered → accepted — the money path upstream of verified payments), FLOW-24 (form-failure alerting), FLOW-25 (AI diagnostic + its financial promise), MISC-01/02.
+
+---
+
 # Part 4 — Unmapped
 
 Nothing below has been walked. Assume nothing works until verified.
