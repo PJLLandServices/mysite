@@ -189,7 +189,12 @@ async function run(wo, deps = {}) {
     return { ok: true, serviceRecord: existing, invoice: existing.invoiceId ? await invoices.get(existing.invoiceId) : null, alreadyRan: true };
   }
 
-  const completedAt = new Date().toISOString();
+  // JOB-007 (CRM-11): honour the WO's own completion stamp. On the
+  // normal path completedAt was server-stamped by workOrders.update()
+  // milliseconds before this runs (JOB-002 Part A), so this is a no-op;
+  // on a BACK-DATED completion the service record and warranty derive
+  // from the actual visit date, not the day the record was closed out.
+  const completedAt = wo.completedAt || new Date().toISOString();
   const lineItems = lineItemsFromWo(wo);
   const summary = summarizeWo(wo);
   const warrantyMonths = WARRANTY_MONTHS[wo.type] || 12;
@@ -443,7 +448,11 @@ async function run(wo, deps = {}) {
   // scheduleForWo carries its own gates (feature enabled, customer
   // email present, per-property opt-out, one-per-customer-per-6-months,
   // idempotent per WO) and never throws into the cascade.
-  try {
+  // deps.suppressReviewRequest (JOB-007): back-dated completions skip
+  // the review ask entirely — a review request landing weeks after a
+  // months-old visit reads as spam, and anchoring it to the true date
+  // would fire it immediately, which is no better.
+  if (deps.suppressReviewRequest !== true) try {
     const reviewRequests = require("./review-requests");
     const rr = await reviewRequests.scheduleForWo(wo);
     if (rr?.scheduled) {

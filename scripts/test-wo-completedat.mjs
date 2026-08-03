@@ -160,6 +160,37 @@ const fakeLead = { id: "L-TEST", customerId: "1", contact: { name: "Test Custome
   fs.rmSync(SB, { recursive: true, force: true });
 }
 
+// ---- completeBackdated (JOB-007 / CRM-11) ----------------------------
+async function throws(fn, label) {
+  try { await fn(); ok(false, `${label} (expected a throw, got none)`); }
+  catch { ok(true, label); }
+}
+{
+  const hourAgo = new Date(Date.now() - 3600000).toISOString();
+  const wo = await workOrders.create({ type: "fall_closing", lead: fakeLead });
+  const done = await workOrders.completeBackdated(wo.id, { completedAt: hourAgo });
+  ok(done.status === "completed", "backdated: status flips to completed");
+  ok(done.completedAt === hourAgo, "backdated: completedAt is the supplied date, not now");
+  ok(done.scheduledFor === hourAgo && done.departedAt === hourAgo, "backdated: dateless WO gets scheduledFor + departedAt back-filled");
+  const h = done.history.find((e) => e.action === "status_change" && e.after === "completed");
+  ok(h && h.note.includes("Back-dated") && h.note.includes(hourAgo.slice(0, 10)), "backdated: history records both dates");
+  ok(Date.parse(h.ts) > Date.parse(hourAgo), "backdated: history ts is honest (recorded now, not then)");
+
+  await throws(() => workOrders.completeBackdated(wo.id, { completedAt: hourAgo }), "backdated: refuses an already-terminal WO");
+  const wo2 = await workOrders.create({ type: "service_visit", lead: fakeLead });
+  await throws(() => workOrders.completeBackdated(wo2.id, { completedAt: new Date(Date.now() + 86400000).toISOString() }), "backdated: refuses a future date");
+  await throws(() => workOrders.completeBackdated(wo2.id, { completedAt: "2020-01-01T00:00:00.000Z" }), "backdated: refuses a date before the WO existed");
+  await throws(() => workOrders.completeBackdated(wo2.id, { completedAt: "not-a-date" }), "backdated: refuses garbage input");
+
+  // Existing scheduledFor is preserved, never overwritten.
+  const wo3 = await workOrders.create({ type: "service_visit", lead: fakeLead });
+  const priorSched = new Date(Date.now() - 7200000).toISOString();
+  await workOrders.update(wo3.id, { scheduledFor: priorSched });
+  const done3 = await workOrders.completeBackdated(wo3.id, { completedAt: hourAgo });
+  ok(done3.scheduledFor === priorSched, "backdated: existing scheduledFor preserved");
+  ok(done3.completedAt === hourAgo, "backdated: completedAt still the supplied date");
+}
+
 fs.rmSync(SANDBOX, { recursive: true, force: true });
 console.log(`\nwo-completedat: ${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

@@ -1260,6 +1260,61 @@ async function update(id, patch) {
   return next;
 }
 
+// JOB-007 (CRM-11 cleanup) — complete a stranded WO with its ACTUAL
+// completion date instead of now. Server-side callers only (the CLI
+// backfill script); deliberately NOT reachable through the HTTP PATCH
+// route, so completedAt stays structurally un-patchable from clients
+// (JOB-002 Part A's guarantee).
+//
+// What it does, and why each piece:
+//   - scheduledFor / departedAt back-filled with the actual date when
+//     null, so the customer-visible report's "Conducted on" line and the
+//     history sort read the true visit date.
+//   - completedAt = the actual date (preserve-if-set, matching update()).
+//   - history entry records BOTH dates — the audit trail never pretends
+//     the entry was made back then.
+// The completion cascade is NOT run here — the caller runs it (with
+// customer notifications and the review-request suppressed) so dry-run
+// tooling can inspect the WO between the two steps.
+async function completeBackdated(id, { completedAt, by = "admin" } = {}) {
+  const ts = Date.parse(completedAt || "");
+  if (!Number.isFinite(ts)) throw new Error("completeBackdated needs a valid completedAt date.");
+  if (ts > Date.now()) throw new Error("Back-dated completion must not be in the future.");
+  const records = await readAll();
+  const idx = records.findIndex((w) => w.id === id);
+  if (idx === -1) return null;
+  const current = hydrate(records[idx]);
+  const TERMINAL = new Set(["completed", "cancelled", "no_show"]);
+  if (TERMINAL.has(current.status)) {
+    throw new Error(`Work order is already terminal ("${current.status}").`);
+  }
+  // A completion before the WO existed is a data error, not a backfill.
+  // One day of slack covers timezone edges on same-day create+visit.
+  if (current.createdAt && ts < Date.parse(current.createdAt) - 86400000) {
+    throw new Error(`Completion date ${completedAt} is before the work order was created (${current.createdAt.slice(0, 10)}).`);
+  }
+  const iso = new Date(ts).toISOString();
+  const nowIso = new Date().toISOString();
+  const next = { ...current };
+  if (!next.scheduledFor) next.scheduledFor = iso;
+  if (!next.departedAt) next.departedAt = iso;
+  next.status = "completed";
+  next.completedAt = current.completedAt || iso;
+  next.updatedAt = nowIso;
+  if (!Array.isArray(next.history)) next.history = [];
+  next.history.push({
+    ts: nowIso,
+    action: "status_change",
+    by,
+    note: `Back-dated completion: actual completion ${iso.slice(0, 10)}, recorded ${nowIso.slice(0, 10)}.`,
+    before: current.status,
+    after: "completed"
+  });
+  records[idx] = next;
+  await writeAll(records);
+  return next;
+}
+
 async function remove(id) {
   const records = await readAll();
   const idx = records.findIndex((w) => w.id === id);
@@ -1676,6 +1731,7 @@ module.exports = {
   listByLead,
   create,
   update,
+  completeBackdated,
   remove,
   softDelete,
   restore,
