@@ -119,6 +119,80 @@
       <div id="conflictList" style="display: flex; flex-direction: column; gap: 8px;"></div>
     </section>
 
+    <!-- Email health (JOB-008) — reads /api/admin/email-health. Admin-only
+         endpoint; the section stays hidden for techs or on any error.
+         Shows last-7-day sent/failed by kind, the most recent failures,
+         and the last SUCCESSFUL send timestamp — during a total outage,
+         zero-sent/zero-failed looks like a quiet day; a stale "last
+         success" is the tell. -->
+    <section id="emailHealth" hidden style="margin: 16px 0; padding: 14px 18px; background: #f4f7f4; border: 1px solid #cfdccf; border-radius: 8px;">
+      <strong style="display: block; margin-bottom: 6px; color: #1B4D2E;">✉️ Email health <span id="emailHealthBadge" style="font-weight:600;"></span></strong>
+      <p style="margin: 0 0 8px; font-size: 13px; color: #444;">
+        Last successful send: <strong id="emailHealthLastOk">—</strong>
+      </p>
+      <div id="emailHealthKinds" style="font-size: 13px; color: #444; margin-bottom: 8px;"></div>
+      <details id="emailHealthFailWrap" hidden>
+        <summary style="cursor: pointer; font-size: 13px; color: #8a1f1f; font-weight: 600;">Recent failures (<span id="emailHealthFailCount">0</span>)</summary>
+        <div id="emailHealthFailures" style="display: flex; flex-direction: column; gap: 4px; margin-top: 8px; font-size: 12px; color: #6b1a1a;"></div>
+      </details>
+    </section>
+    <script>
+      (function () {
+        function ago(ts) {
+          if (!ts) return "never";
+          var ms = Date.now() - Date.parse(ts);
+          if (!isFinite(ms) || ms < 0) return new Date(ts).toLocaleString("en-CA");
+          var mins = Math.floor(ms / 60000);
+          if (mins < 1) return "just now";
+          if (mins < 60) return mins + " min ago";
+          var hrs = Math.floor(mins / 60);
+          if (hrs < 48) return hrs + " h ago";
+          return Math.floor(hrs / 24) + " days ago";
+        }
+        fetch("/api/admin/email-health", { credentials: "same-origin" })
+          .then(function (r) { return r.ok ? r.json() : null; })
+          .then(function (data) {
+            if (!data || !data.ok) return; // tech role or error — stay hidden
+            var section = document.getElementById("emailHealth");
+            section.hidden = false;
+            document.getElementById("emailHealthLastOk").textContent = ago(data.lastSuccessAt);
+            var kinds = Object.keys(data.last7d || {}).sort();
+            var totalFailed = 0;
+            document.getElementById("emailHealthKinds").innerHTML = kinds.length
+              ? kinds.map(function (k) {
+                  var b = data.last7d[k];
+                  totalFailed += b.failed;
+                  var lastOk = (data.lastSuccessByKind || {})[k];
+                  return "<span style=\"display:inline-block;margin:0 14px 4px 0;\">" +
+                    k + ": <strong>" + b.sent + "</strong> sent" +
+                    (b.failed ? ", <strong style=\"color:#8a1f1f;\">" + b.failed + " failed</strong>" : "") +
+                    (lastOk ? " <span style=\"color:#888;\">(last ok " + ago(lastOk) + ")</span>" : "") +
+                    "</span>";
+                }).join("")
+              : "<em>No sends recorded in the last 7 days.</em>";
+            var failures = data.recentFailures || [];
+            if (failures.length) {
+              document.getElementById("emailHealthFailWrap").hidden = false;
+              document.getElementById("emailHealthFailCount").textContent = failures.length;
+              document.getElementById("emailHealthFailures").innerHTML = failures.map(function (f) {
+                var div = document.createElement("div");
+                div.textContent = new Date(f.ts).toLocaleString("en-CA") + " · " + f.kind + " · " + f.to +
+                  (f.refId ? " · " + f.refId : "") + (f.error ? " — " + f.error : "");
+                return "<div>" + div.textContent.replace(/&/g, "&amp;").replace(/</g, "&lt;") + "</div>";
+              }).join("");
+            }
+            var badge = document.getElementById("emailHealthBadge");
+            if (totalFailed > 0) {
+              badge.textContent = "· " + totalFailed + " failure" + (totalFailed === 1 ? "" : "s") + " (7d)";
+              badge.style.color = "#8a1f1f";
+              section.style.background = "#fdf2f2";
+              section.style.borderColor = "#d9a0a0";
+            }
+          })
+          .catch(function () { /* stay hidden */ });
+      })();
+    </script>
+
     <div class="lead-detail-backdrop" id="detailBackdrop" hidden></div>
 
     <section class="crm-workspace" id="crmWorkspace">

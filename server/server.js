@@ -87,6 +87,7 @@ const rateLimit = require("./lib/rate-limit");
 const antiBot = require("./lib/anti-bot");
 const bulkActions = require("./lib/bulk-actions");
 const { sendCustomerLoginLink, sendAdminPasswordResetLink } = require("./lib/notify-customer");
+const mailerLog = require("./lib/mailer-log");
 
 // Short, customer-friendly work order ID. Eight chars from a UUIDv4 base32-ish
 // alphabet (no I/O/0/1 to keep them unambiguous when read aloud or hand-written).
@@ -875,6 +876,8 @@ function needsAuth(method, pathname) {
   // truth. Techs see a 403 if they hit these endpoints.
   if (pathname.startsWith("/api/admin/bulk/")) return "admin";
   if (pathname.startsWith("/api/admin/trash/")) return "admin";
+  // Email-health view (JOB-008) — admin-cookie gated, admin only.
+  if (pathname === "/api/admin/email-health") return "admin";
   if (pathname === "/admin/trash" || pathname === "/admin/trash/") return "admin";
   if (pathname === "/admin/smart-controller-photos" || pathname === "/admin/smart-controller-photos/") return "user";
   // CRM pages — admin OR tech.
@@ -4013,9 +4016,23 @@ async function requestPortalMagicLink(identifier, ip) {
       try {
         const token = await magicTokens.issue("customer_login", subjectId, { requestIp: ip });
         const link = joinUrl(baseUrl, "/portal/login/verify", { t: token.id });
-        // Fire-and-forget. Failure is logged but never surfaced.
-        sendCustomerLoginLink(lead, link).catch((err) => {
+        // Fire-and-forget for the CUSTOMER — the response stays the generic
+        // "If we found you…" either way. But the resolved result is no longer
+        // returned to nobody (JOB-008 Task 2): sendCustomerLoginLink resolves
+        // {ok:false} instead of throwing, so a plain .catch() missed every
+        // real failure. Both the resolved failure and a thrown one now land
+        // in the send ledger, which raises the digest SMS alert.
+        sendCustomerLoginLink(lead, link).then((result) => {
+          if (result?.ok) {
+            return mailerLog.logSend({ kind: "magic_link", to: lead?.contact?.email || "", ok: true, refId: lead.id });
+          }
+          const error = result?.error
+            || (result?.skipped ? `skipped: ${result?.reason || "email not configured"}` : "unknown failure");
+          console.warn("[portal-login] send failed:", error);
+          return mailerLog.logSend({ kind: "magic_link", to: lead?.contact?.email || "", ok: false, error, refId: lead.id });
+        }).catch((err) => {
           console.warn("[portal-login] send failed:", err?.message);
+          return mailerLog.logSend({ kind: "magic_link", to: lead?.contact?.email || "", ok: false, error: err?.message, refId: lead.id });
         });
       } catch (err) {
         console.warn("[portal-login] issue failed:", err?.message);
@@ -5496,6 +5513,19 @@ async function handleApi(req, res, pathname) {
     } catch (error) {
       console.error("[bulk-actions] dispatch error:", error);
       return sendJson(res, 500, { ok: false, error: error?.message || "Bulk action failed." });
+    }
+  }
+
+  // GET /api/admin/email-health — JOB-008 Task 4. Last-7-day sent/failed
+  // counts by kind, the 20 most recent failures (masked recipients), and
+  // the last-successful-send timestamps (overall + per kind) so a total
+  // outage is distinguishable from a quiet day. Admin-only (needsAuth).
+  if (pathname === "/api/admin/email-health" && req.method === "GET") {
+    try {
+      const summary = await mailerLog.healthSummary();
+      return sendJson(res, 200, { ok: true, ...summary });
+    } catch (error) {
+      return sendJson(res, 500, { ok: false, error: error?.message || "Email health read failed." });
     }
   }
 
@@ -8871,7 +8901,11 @@ async function handleApi(req, res, pathname) {
               subject: "PJL: please approve today's repair quote",
               html,
               ...(attachments.length ? { attachments } : {})
+            }).catch(async (err) => {
+              await mailerLog.logSend({ kind: "other", to: toEmail, ok: false, error: err.message, refId: wo.id });
+              throw err;
             });
+            await mailerLog.logSend({ kind: "other", to: toEmail, ok: true, refId: wo.id });
             results.emailSent = true;
           } else {
             results.emailError = "nodemailer not installed";
@@ -12237,7 +12271,11 @@ async function handleApi(req, res, pathname) {
               replyTo: process.env.CUSTOMER_EMAIL || "info@pjllandservices.com",
               subject: scr.draftEmail.subject,
               text: scr.draftEmail.body
+            }).catch(async (err) => {
+              await mailerLog.logSend({ kind: "other", to: scr.draftEmail.to, ok: false, error: err.message, refId: scrId });
+              throw err;
             });
+            await mailerLog.logSend({ kind: "other", to: scr.draftEmail.to, ok: true, refId: scrId });
           }
         } catch (err) {
           console.warn("[scope-change send] email failed:", err?.message);
@@ -12330,7 +12368,11 @@ async function handleApi(req, res, pathname) {
               replyTo: process.env.CUSTOMER_EMAIL || "info@pjllandservices.com",
               subject: `Project update — ${entry.snapshot.projectName} — ${new Date().toLocaleDateString("en-CA")}`,
               html
+            }).catch(async (err) => {
+              await mailerLog.logSend({ kind: "other", to: recipient.email, ok: false, error: err.message, refId: id });
+              throw err;
             });
+            await mailerLog.logSend({ kind: "other", to: recipient.email, ok: true, refId: id });
             emailSent = true;
           } else emailError = "nodemailer not installed";
         } catch (err) { emailError = err.message; }
@@ -12407,7 +12449,11 @@ async function handleApi(req, res, pathname) {
             to: process.env.GMAIL_USER,
             subject,
             html
+          }).catch(async (err) => {
+            await mailerLog.logSend({ kind: "other", to: process.env.GMAIL_USER, ok: false, error: err.message, refId: project.id });
+            throw err;
           });
+          await mailerLog.logSend({ kind: "other", to: process.env.GMAIL_USER, ok: true, refId: project.id });
         },
         notifyCustomer: async ({ project, invoice }) => {
           if (!project.customerEmail) return;
@@ -12465,7 +12511,11 @@ async function handleApi(req, res, pathname) {
             subject: `PJL: project complete — ${project.name || project.id}`,
             html,
             ...(attachments.length ? { attachments } : {})
+          }).catch(async (err) => {
+            await mailerLog.logSend({ kind: "completion", to: project.customerEmail, ok: false, error: err.message, refId: project.id });
+            throw err;
           });
+          await mailerLog.logSend({ kind: "completion", to: project.customerEmail, ok: true, refId: project.id });
         }
       };
 
@@ -13650,7 +13700,11 @@ async function handleApi(req, res, pathname) {
               subject: `PJL quote ${q.id} — ready for your review`,
               html,
               ...(attachments.length ? { attachments } : {})
+            }).catch(async (err) => {
+              await mailerLog.logSend({ kind: "other", to: toEmail, ok: false, error: err.message, refId: q.id });
+              throw err;
             });
+            await mailerLog.logSend({ kind: "other", to: toEmail, ok: true, refId: q.id });
             results.emailSent = true;
           } else {
             results.emailError = "nodemailer not installed";
@@ -13844,7 +13898,11 @@ async function handleApi(req, res, pathname) {
               subject: `PJL ${docNoun.lower} ${displayNo} — your review and acceptance`,
               html,
               ...(attachments.length ? { attachments } : {})
+            }).catch(async (err) => {
+              await mailerLog.logSend({ kind: "other", to: toEmail, ok: false, error: err.message, refId: q.id });
+              throw err;
             });
+            await mailerLog.logSend({ kind: "other", to: toEmail, ok: true, refId: q.id });
             results.emailSent = true;
           } else {
             results.emailError = "nodemailer not installed";
@@ -15726,7 +15784,11 @@ async function handleApi(req, res, pathname) {
             ? "PJL visit summary — please review"
             : "Your PJL visit is complete",
           html
+        }).catch(async (err) => {
+          await mailerLog.logSend({ kind: "completion", to: wo.customerEmail, ok: false, error: err.message, refId: wo.id });
+          throw err;
         });
+        await mailerLog.logSend({ kind: "completion", to: wo.customerEmail, ok: true, refId: wo.id });
       }
 
       // Sign-time sweep: if THIS PATCH just signed the WO, find every
@@ -17228,7 +17290,11 @@ Customer signature captured at ${new Date().toISOString()}.`;
               subject: "Your PJL booking link is ready",
               html,
               text
+            }).catch(async (err) => {
+              await mailerLog.logSend({ kind: "other", to: email, ok: false, error: err.message });
+              throw err;
             });
+            await mailerLog.logSend({ kind: "other", to: email, ok: true });
             results.emailSent = true;
           } else {
             results.emailError = "nodemailer not installed";

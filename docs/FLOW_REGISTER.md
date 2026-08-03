@@ -43,10 +43,17 @@ Update this file, not a chat thread.
 
 Domain authentication is correctly configured. This is why mail reaches inbox, not spam.
 
+**Email health surface (JOB-008, 2026-08-03):** `GET /api/admin/email-health`
+(admin-cookie gated) + a section on `/admin` — last-7-day sent/failed counts by
+kind, the 20 most recent failures with masked recipients, and the timestamp of
+the last successful send (overall and per kind). Backed by the send ledger in
+`server/lib/mailer-log.js`; customer-facing failures additionally trigger a
+digest-limited (max one per hour) SMS alert via the existing Twilio plumbing.
+
 | ID | Severity | Finding |
 |---|---|---|
 | INF-01 | Medium | App sends `From: info@`, Google rewrites to `patrick@` (proof: header `X-Google-Original-From`). Cause: `info@` is not a verified send-as alias on the authenticating account. Fix: verify `info@` as a send-as identity, or authenticate SMTP as `info@`. |
-| INF-02 | **High** | **Single point of failure.** All customer email — login links, quote notifications, invoices, receipts — depends on one Workspace mailbox and its app password. Password rotation, 2FA change, revoked app password, or a Google flag stops all customer email at once. Unknown whether failures are logged or silent. |
+| INF-02 | **High** | **Single point of failure.** All customer email — login links, quote notifications, invoices, receipts — depends on one Workspace mailbox and its app password. Password rotation, 2FA change, revoked app password, or a Google flag stops all customer email at once. **Phase one complete — failures visible (JOB-008, 2026-08-03):** every send attempt lands in the ledger (`server/lib/mailer-log.js` → `server/data/email-log.json`, 90 d / 5 000-entry self-pruning), customer-facing failures page Patrick by SMS (one digest per hour), and Admin → Email health shows 7-day sent/failed by kind, recent failures (masked recipients), and the last-successful-send timestamp overall + per kind — a total outage no longer looks like a quiet day. Controlled-failure acceptance steps 2–4 run **locally with test env vars** per Patrick's 2026-08-03 ruling (no deliberate outage window on production); recorded as locally verified in the JOB-008 file. Stays open until phase two resolves the single-transport risk (INF-01 / send-as alias, transport resilience). |
 | INF-03 | Low | DMARC is `p=NONE` — monitoring only, not enforcing. No spoofing protection. |
 | INF-04 | Low | Workspace SMTP has a daily send cap. Not a constraint now, but a known ceiling before any bulk/seasonal sending. |
 
@@ -60,6 +67,17 @@ Verified end to end 2026-07-30. **Re-verified 2026-08-02** after JOB-002 Part B 
 the portal now renders customer-wide data (service history, projects) and the magic link lands
 on the newest lead with a booking. Hops 1–6 unchanged in code; walked anyway — link arrives,
 30-minute expiry and single-use behaviour confirmed intact.
+
+**JOB-008 re-verification (2026-08-03) — PARTIAL, locally verified.** Hop 5 gained
+observability only: the send attempt now lands in the email ledger, and a resolved
+`{ok:false}` from `sendCustomerLoginLink` — previously returned to nobody — is routed to the
+ledger + SMS digest alert. Token generation, expiry, single-use, the generic "If we found
+you…" response, and every other hop are untouched. Verified locally per the amended JOB-008
+acceptance test (steps 2–4): induced send failure → customer response unchanged (generic
+`{ok:true}`), exactly ONE digest SMS dispatched, both failures visible in Email health with
+masked recipients, and the success path advances the last-successful-send timestamp.
+**Live re-verify pending:** amended steps 1 and 6 (a real portal-login request and lead-alert
+delivery on both channels) remain Patrick's walk — hop 5's live send was not re-walked.
 
 | # | Hop | Result |
 |---|---|---|
@@ -121,6 +139,14 @@ Verified 2026-08-02 during the Stripe migration (see `docs/HANDOFF_STRIPE_PAYMEN
 the existing token link, no discrepancies. The invariants in the handoff §6 are binding on any
 payment-adjacent change. (This section was intended by the 2026-08-02 handoff commit but the
 register row was left in Part 4 — corrected here.)
+
+**JOB-008 note (2026-08-03) — re-verification PENDING the next real payment.** The receipt
+send gained ledger log lines inside `sendPaymentReceipt` only (success and failure paths);
+`finalizeStripeInvoicePayment`, `stripe.js`, `pay.js`, and every payment route are untouched
+per handoff §6 (Patrick's ruling 2026-08-03). Per the amended JOB-008 acceptance step 5, the
+next real payment through the token link is the re-verification: receipt arrives, ledger shows
+`receipt ok`, ledger and payment record agree. Until that payment lands this flow's PASS
+carries the pending-recheck flag, not a regression.
 
 ---
 

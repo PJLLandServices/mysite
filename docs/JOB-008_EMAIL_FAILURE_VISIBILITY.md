@@ -110,6 +110,32 @@ local-only per the ruling above — do not run a deliberate outage window on pro
 
 ---
 
+## Verification record — 2026-08-03
+
+**Steps 2–4 run locally with test env vars, per the ruling above. LOCALLY VERIFIED.**
+Local server on port 4599 with a deliberately unusable Gmail transport (the induced failure
+surfaced as `Connection timeout` rather than an auth reject — same failure class, same code
+path: `transporter.sendMail` rejects), fake Twilio creds, and a seeded test lead + admin user
+(gitignored `server/data/`, removed after the run):
+
+- **Step 2:** `POST /api/portal/request-link` returned the generic `{ok:true}` (customer-facing
+  behaviour unchanged); the ledger recorded `magic_link ok:false` with the error and lead id;
+  exactly ONE digest SMS was dispatched (observed as the Twilio API attempt in the local log —
+  fake creds, so rejected at Twilio, which proves dispatch).
+- **Step 3:** second induced failure in the same hour → second ledger row, NO second SMS
+  dispatch. Digest limiter holds.
+- **Step 4 (module level):** a success entry advances `lastSuccessAt` overall and per kind and
+  counts flip to sent — the true SMTP success path is unchanged production behaviour and is
+  covered live by step 1.
+- **Endpoint gating:** `GET /api/admin/email-health` unauthenticated → 401; authenticated
+  admin → correct counts, masked recipients (`p***@example.com`), `lastSuccessAt: null`
+  during the outage window (the "outage looks like an outage" property).
+
+**Steps 1, 5, 6 remain live checks for Patrick** (normal-traffic rows, next real payment's
+receipt, lead alert on both channels).
+
+---
+
 ## On completion
 
 Update `docs/FLOW_REGISTER.md`: INF-02 annotated "phase one complete — failures visible"

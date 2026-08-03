@@ -36,6 +36,7 @@ const path = require("node:path");
 const crypto = require("node:crypto");
 
 const { resolvePublicBaseUrl } = require("./public-base-url");
+const { logSend } = require("./mailer-log");
 
 const FILE = path.join(__dirname, "..", "data", "review-requests.json");
 const TEMPLATE_1 = path.join(__dirname, "templates", "review-request-email-1.html");
@@ -497,7 +498,11 @@ async function sendEmail(which, record, settings) {
     subject,
     html,
     text
+  }).catch(async (error) => {
+    await logSend({ kind: "review_ask", to: record.email, ok: false, error: error.message, refId: record.woId });
+    throw error;
   });
+  await logSend({ kind: "review_ask", to: record.email, ok: true, refId: record.woId });
   return { ok: true, messageId: info.messageId };
 }
 
@@ -1104,7 +1109,11 @@ async function sendTest({ which = 1, to = null } = {}) {
     subject: `[TEST] ${subject}`,
     html,
     text
+  }).catch(async (error) => {
+    await logSend({ kind: "other", to: recipient, ok: false, error: error.message });
+    throw error;
   });
+  await logSend({ kind: "other", to: recipient, ok: true });
   return { ok: true, to: recipient, messageId: info.messageId };
 }
 

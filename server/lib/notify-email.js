@@ -19,6 +19,7 @@
 // configured email, and starts emailing the moment you set the env vars.
 
 const { resolvePublicBaseUrl } = require("./public-base-url");
+const { logSend } = require("./mailer-log");
 
 let nodemailerCache = null;
 function getNodemailer() {
@@ -182,9 +183,11 @@ async function sendNewLeadEmail(lead) {
       text
     });
     console.log("[email] Sent lead notification:", info.messageId);
+    await logSend({ kind: "lead_alert", to, ok: true, refId: lead.id });
     return { ok: true, messageId: info.messageId };
   } catch (error) {
     console.error("[email] Failed to send notification:", error.message);
+    await logSend({ kind: "lead_alert", to, ok: false, error: error.message, refId: lead.id });
     return { ok: false, error: error.message };
   }
 }
@@ -320,9 +323,11 @@ async function sendVoicemailEmail({ from, durationSeconds, recordingUrl, listenU
       attachments: attachment ? [attachment] : []
     });
     console.log("[email] Sent voicemail email:", info.messageId, attachment ? "(with audio)" : "(link only)");
+    await logSend({ kind: "other", to, ok: true });
     return { ok: true, messageId: info.messageId, attached: Boolean(attachment) };
   } catch (error) {
     console.error("[email] Failed to send voicemail email:", error.message);
+    await logSend({ kind: "other", to, ok: false, error: error.message });
     return { ok: false, error: error.message };
   }
 }
