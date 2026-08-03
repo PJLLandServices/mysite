@@ -158,7 +158,7 @@ Previously logged as a change order; **closed, already built.**
 |---|---|---|
 | FLOW-07 | **PASS** | Self-intake walked end to end. Existing email → existing record updated, no duplicate, alert says "existing record updated". Unknown email → new lead tagged Customer Self Intake, alert says "new record". Commercial variant (`/commercial-new-customer`, FLOW-08) same behaviour, Commercial tag retained. |
 | FLOW-04 | **PARTIAL** | Page verified live at its URL; sitewide CTA repointed to `/book.html`. The 4-step quote-builder flow itself was not walked end to end — only its reachability was verified. |
-| FLOW-05 | **PARTIAL** | Same: page verified live, footer link repointed to `/book.html`, estimator flow not walked end to end. |
+| FLOW-05 | **PARTIAL** — submission walked 2026-08-03 | Page live, footer link repointed to `/book.html` (2026-08-02). **Submission walked 2026-08-03: `/estimate.html` submits successfully.** Finding: it is an old form-builder flow that generates and sends an **external quotation combination** on submit — a capability the customer portal's quote-request flow does not have. Capability gap noted for future consideration; deliberately no job scoped (2026-08-03). CRM arrival/tagging for this path not re-verified — stays PARTIAL. |
 | FLOW-03 | **PASS** (re-verified) | Real booking completed through `/book.html` after the CTA change: $105 Spring Opening, work order WO-ZDQL272C, correct source tag and dollar value in CRM, phone + email notifications fired. |
 
 ## Evidence — CRM export, 56 records, 2026-04-30 to 2026-07-29
@@ -244,8 +244,8 @@ Tick items off here as they're confirmed; nothing below blocks new work.
 | # | Check | Why it matters | Effort |
 |---|---|---|---|
 | VD-1 | Review-request queue: confirm the accidental WO-AZABTKPH completion (Aug 2) did not leave a review-ask scheduled — **timer fires ~Aug 9** | A review request for a June job reads as spam | One glance at `/api/review-requests` |
-| VD-2 | Submit one test quote through `/quote.html` → appears in CRM, tagged | FLOW-04 has been PARTIAL since Aug 2; the form still gets in-body traffic and could be silently broken | 5 min |
-| VD-3 | Submit one test through `/estimate.html` → same check | FLOW-05, same reasoning | 5 min |
+| VD-2 | Submit one test quote through `/quote.html` → appears in CRM, tagged | FLOW-04 has been PARTIAL since Aug 2; the form still gets in-body traffic and could be silently broken | **Result pending 2026-08-03** |
+| VD-3 | ~~Submit one test through `/estimate.html`~~ | **DONE 2026-08-03** — submits successfully; finding recorded on FLOW-05 below | ✓ |
 
 ## Self-verifying — let normal business tick these off, just record when it happens
 
