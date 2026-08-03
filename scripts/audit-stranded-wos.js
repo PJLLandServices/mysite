@@ -64,7 +64,7 @@ for (const w of open) {
   else if (proj && proj.status === "active") { cls = "(a) leave alone"; why = "build day under an active project"; }
   else if (futureDated) { cls = "(a) leave alone"; why = "future-dated"; }
   else if (w.type === "fall_closing") { cls = "(a) leave alone (likely)"; why = "dateless fall closing — booked for the season ahead"; }
-  else if (w.status === "on_site" || w.status === "in_progress") { cls = "(c) back-date candidate"; why = "visit started and never closed out; no paper anywhere"; }
+  else if (w.status === "on_site" || w.status === "in_progress") { cls = "(a)/(c) VERIFY with the field"; why = "on_site with no paper — could be genuinely in progress right now (e.g. multi-visit commercial work), or a visit that was never closed out. Only the calendar knows."; }
   else { cls = "(c) back-date candidate — CONFIRM visit happened"; why = `past/dateless ${w.type}, no invoice, no service record`; }
   tally[cls[1]] = (tally[cls[1]] || 0) + 1;
   console.log(`  -> suggested: ${cls} — ${why}\n`);
