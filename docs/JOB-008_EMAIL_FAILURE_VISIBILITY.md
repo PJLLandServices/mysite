@@ -62,6 +62,10 @@ If the Workspace app password dies, the first symptom is silence.
 
 - `GET /api/admin/email-health` (admin-cookie gated): last-7-day counts by kind
   (sent / failed), plus the most recent 20 failures with ts, kind, masked recipient, error.
+- **The view must also show the timestamp of the last successful send** — overall and
+  per kind — not just counts. During a total outage, zero-sent/zero-failed is
+  indistinguishable from a quiet day; "last successful send: 3 days ago" is the signal
+  that the transport itself is dead. (Patrick's ruling 2026-08-03.)
 - Minimal admin surface: a row/section on the existing admin page reading that endpoint.
   No new page, no styling project.
 
@@ -83,21 +87,26 @@ If the Workspace app password dies, the first symptom is silence.
 
 1. **Normal traffic logs.** Request a portal login for your own email; send yourself a test
    invoice. → Both appear in Admin → Email health as `ok` entries with the right kinds.
-2. **Controlled failure window (~2 min, quiet hour).** Temporarily set a wrong
-   `GMAIL_APP_PASSWORD` on Render, request a portal login for your own email. →
+2. **Controlled failure test — run LOCALLY, not on live.** (Patrick's ruling 2026-08-03:
+   a deliberate outage window on production risks the exact silent failure this job exists
+   to catch. Steps 2–4 run against a local server with test env vars — a deliberately wrong
+   `GMAIL_APP_PASSWORD` — and are recorded as **locally verified**.) Request a portal login
+   for a test email. →
    (a) the customer-facing page still says "If we found you…" (no behaviour change);
-   (b) within a minute you get ONE Twilio SMS naming the failure;
+   (b) ONE failure SMS is dispatched naming the failure (observable in the local log /
+   Twilio request, or delivered if test Twilio creds are set);
    (c) Email health shows the failed `magic_link` row with the error.
-3. **Digest limiter.** Trigger a second failure inside the same hour. → No second SMS;
-   both failures visible in Email health.
-4. **Restore the password.** Request a login again → email arrives; health shows `ok`.
+3. **Digest limiter (local).** Trigger a second failure inside the same hour. → No second
+   SMS; both failures visible in Email health.
+4. **Restore the password (local).** With correct/normal env, request a login again →
+   send succeeds; health shows `ok` and the last-successful-send timestamp advances.
 5. **FLOW-23 re-verification** (rule 5 — the receipt helper gained log lines): next real
    payment through the token link → receipt arrives, ledger shows `receipt ok`, ledger and
    payment record agree. No behaviour difference anywhere in the pay flow.
 6. Confirm admin lead alerts still arrive on both channels (email + SMS) for a new lead.
 
-If the controlled-failure window is unacceptable on live, steps 2–3 may be run against a
-local server with test env vars instead — record which was done.
+Steps 1, 5 and 6 remain live checks (they require no induced failure). Steps 2–4 are
+local-only per the ruling above — do not run a deliberate outage window on production.
 
 ---
 
