@@ -243,7 +243,7 @@ Tick items off here as they're confirmed; nothing below blocks new work.
 
 | # | Check | Why it matters | Effort |
 |---|---|---|---|
-| VD-1 | Review-request queue: confirm the accidental WO-AZABTKPH completion (Aug 2) did not leave a review-ask scheduled — **timer fires ~Aug 9** | A review request for a June job reads as spam | One glance at `/api/review-requests` |
+| VD-1 | ~~Review-request queue check (WO-AZABTKPH / Adam Sorrenti)~~ | **DONE 2026-08-03** — nothing queued, nothing to cancel | ✓ |
 | VD-2 | ~~Submit one test quote through `/quote.html`~~ | **DONE 2026-08-03** — submits, reaches CRM tagged "New Sprinkler Quote"; FLOW-04 → PASS | ✓ |
 | VD-3 | ~~Submit one test through `/estimate.html`~~ | **DONE 2026-08-03** — submits, but routes to an external quotation, NOT the CRM; finding + capability gap on FLOW-05 | ✓ |
 
