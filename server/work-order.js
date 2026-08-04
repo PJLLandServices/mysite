@@ -3573,14 +3573,35 @@ function closeWoOfflineAcceptModal() {
   const modal = document.getElementById("woOfflineAcceptModal");
   if (modal) modal.hidden = true;
 }
-function readFileAsBase64(file) {
+// Convert any browser-decodable image (incl. iPhone HEIC) to a JPEG via a
+// canvas — the WO photo grid renders every tile as <img>, and browsers can't
+// display HEIC there, so a raw upload showed as a broken tile. Higher quality
+// + larger cap than the visit-photo pipeline, and no watermark, to keep a
+// signed document legible and unaltered.
+function imageFileToJpegBase64(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
+    reader.onerror = () => reject(new Error("Couldn't read that file."));
     reader.onload = () => {
-      const url = String(reader.result || "");
-      resolve({ base64: url.split(",", 2)[1] || "", mediaType: file.type || "application/octet-stream" });
+      const img = new Image();
+      img.onerror = () => reject(new Error("Couldn't read that image — try photographing the signed page again."));
+      img.onload = () => {
+        const longest = Math.max(img.width, img.height) || 1;
+        const scale = longest > 2000 ? 2000 / longest : 1;
+        const w = Math.max(1, Math.round(img.width * scale));
+        const h = Math.max(1, Math.round(img.height * scale));
+        const canvas = document.createElement("canvas");
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(img, 0, 0, w, h);
+        let dataUrl;
+        try { dataUrl = canvas.toDataURL("image/jpeg", 0.9); }
+        catch (e) { reject(new Error("Couldn't process that image.")); return; }
+        resolve({ base64: dataUrl.split(",", 2)[1] || "", mediaType: "image/jpeg" });
+      };
+      img.src = reader.result;
     };
-    reader.onerror = () => reject(new Error("Couldn't read the file."));
     reader.readAsDataURL(file);
   });
 }
@@ -3604,8 +3625,13 @@ async function submitWoOfflineAccept() {
   if (err) { err.hidden = true; err.textContent = ""; }
 
   try {
-    // 1) Upload the signed copy through the existing WO photo endpoint.
-    const { base64, mediaType } = await readFileAsBase64(f);
+    // Guard: PDFs can't preview in the photo grid on this page (it renders
+    // every tile as <img>), so ask for a photo instead of storing a broken tile.
+    if (f.type === "application/pdf") {
+      throw new Error("Please upload a photo of the signed page (not a PDF) so it displays here.");
+    }
+    // 1) Convert to JPEG (fixes HEIC), then upload via the existing WO photo endpoint.
+    const { base64, mediaType } = await imageFileToJpegBase64(f);
     const upRes = await fetch(`/api/work-orders/${encodeURIComponent(id)}/photos`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
