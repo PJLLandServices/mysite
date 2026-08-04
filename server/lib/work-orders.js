@@ -722,6 +722,53 @@ async function recordOfflineQuoteAcceptance(woId, { acceptedByName, acceptedAt, 
   return next;
 }
 
+// Reference the signed-copy attachment on the WO's on-site-quote acceptance
+// evidence (offline-acceptance brief, follow-up). The file itself lives as a
+// quote attachment (quote-attachments/<quoteId>/<attId>); this just records
+// the pointer so the WO page can render an "Open signed copy" link. Merges
+// into existing acceptanceEvidence when acceptance was already recorded, and
+// stands alone when it wasn't (attach-first flows). Replacing an earlier
+// signed copy is allowed — the newest pointer wins, history records both.
+async function attachSignedCopyRef(woId, { quoteId, attachmentId, filename, recordedBy } = {}) {
+  const records = await readAll();
+  const idx = records.findIndex((w) => w.id === woId);
+  if (idx === -1) {
+    const err = new Error("Work order not found.");
+    err.code = "wo_not_found";
+    throw err;
+  }
+  const current = records[idx];
+  const now = new Date().toISOString();
+  const next = { ...current };
+  const existingEvidence = (current.onSiteQuote && typeof current.onSiteQuote.acceptanceEvidence === "object")
+    ? current.onSiteQuote.acceptanceEvidence
+    : null;
+  next.onSiteQuote = {
+    ...current.onSiteQuote,
+    acceptanceEvidence: {
+      ...(existingEvidence || { method: "offline_signed_copy", recordedBy: recordedBy || "admin" }),
+      signedCopy: {
+        quoteId: quoteId || null,
+        attachmentId: attachmentId || null,
+        filename: String(filename || "").slice(0, 200),
+        attachedAt: now,
+        attachedBy: recordedBy || "admin"
+      }
+    }
+  };
+  next.updatedAt = now;
+  if (!Array.isArray(next.history)) next.history = [];
+  next.history.push({
+    ts: now,
+    action: "signed_copy_attached",
+    by: recordedBy || "admin",
+    note: `Signed acceptance copy attached${filename ? ` — ${filename}` : ""}`
+  });
+  records[idx] = next;
+  await writeAll(records);
+  return next;
+}
+
 // Capture a signature bypass — absolute admin override (Patrick 2026-05-23).
 // Sets wo.locked = true and writes signatureBypass with server-stamped
 // audit metadata. Only refuses for idempotency (already_signed,
@@ -1806,6 +1853,7 @@ module.exports = {
   summarizeScopeAdditions,
   captureSignatureBypass,
   recordOfflineQuoteAcceptance,
+  attachSignedCopyRef,
   appendReportSnapshot,
   patchReportSnapshot,
   appendHistory,

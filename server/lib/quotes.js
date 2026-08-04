@@ -226,7 +226,10 @@ const ATTACHMENT_KINDS = [
   // Used internally when a customer uploads their signed PDF via the
   // /pdf-return flow — kept in the same attachments[] array but
   // displayed separately in the admin attestation UI.
-  "signed_pdf_return"
+  "signed_pdf_return",
+  // Admin-uploaded signed copy backing an offline on-site-quote acceptance
+  // (customer signed a printed copy; admin attaches the returned PDF/photo).
+  "signed_offline_acceptance"
 ];
 
 const ATTACHMENT_MIME_WHITELIST = new Set([

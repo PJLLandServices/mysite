@@ -800,9 +800,9 @@
       <div class="wo-bypass-body">
         <p class="wo-bypass-help">Use when the customer accepted the quote by returning a hand-signed copy instead of signing the online link. This records the acceptance and attaches the copy — it does <strong>not</strong> complete the visit or capture the completion signature (that stays separate).</p>
 
-        <label class="wo-bypass-label" for="woOfflineAcceptFile">Signed copy (photo)</label>
-        <input type="file" id="woOfflineAcceptFile" accept="image/*">
-        <p class="wo-bypass-hint">A clear photo of the signed page. iPhone (HEIC) photos are converted automatically so they display correctly.</p>
+        <label class="wo-bypass-label" for="woOfflineAcceptFile">Signed copy (PDF or photo)</label>
+        <input type="file" id="woOfflineAcceptFile" accept="application/pdf,image/*">
+        <p class="wo-bypass-hint">The returned signed PDF, or a clear photo of the signed page. Stored with the quote as its acceptance document — not in Visit Photos.</p>
 
         <label class="wo-bypass-label" for="woOfflineAcceptName">Accepted by</label>
         <input type="text" id="woOfflineAcceptName" class="wo-bypass-select" placeholder="Name of the person who signed" autocomplete="off">

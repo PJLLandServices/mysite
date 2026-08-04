@@ -16277,6 +16277,60 @@ async function handleApi(req, res, pathname) {
     }
   }
 
+  // POST /api/work-orders/:id/on-site-quote/attach-signed-copy — admin
+  // uploads the customer's returned signed copy (PDF or photo) as a QUOTE
+  // ATTACHMENT (quote-attachments/<quoteId>/), NOT a visit photo — the visit
+  // photo grid is an <img> gallery and can't present documents. Allowed at
+  // any quote status, including after acceptance, so an already-accepted
+  // quote can still get (or replace) its signed copy. Body:
+  // { filename, data: <base64>, mediaType }. Responds with the attachment
+  // meta + its admin URL for the "Open signed copy" link.
+  const woAttachSignedCopyMatch = pathname.match(/^\/api\/work-orders\/([^/]+)\/on-site-quote\/attach-signed-copy$/);
+  if (woAttachSignedCopyMatch && req.method === "POST") {
+    const session = await requireAdmin(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+    try {
+      const id = decodeURIComponent(woAttachSignedCopyMatch[1]);
+      const wo = await workOrders.get(id);
+      if (!wo) return sendJson(res, 404, { ok: false, errors: ["Work order not found."] });
+      const quoteId = wo.onSiteQuote?.quoteId || null;
+      if (!quoteId) {
+        return sendJson(res, 422, { ok: false, errors: ["This work order has no quote record yet — send the quote for approval first, then attach the signed copy."] });
+      }
+      const payload = await parseRequestBody(req, { maxBytes: quotes.MAX_ATTACHMENT_BYTES + 10_000_000 });
+      const buffer = Buffer.from(String(payload?.data || ""), "base64");
+      if (!buffer.length) return sendJson(res, 422, { ok: false, errors: ["No file data received."] });
+      const mediaType = String(payload?.mediaType || "application/pdf").toLowerCase();
+      const filename = String(payload?.filename || `signed-${quoteId}.pdf`).slice(0, 200);
+
+      const meta = await quotes.addAttachment(quoteId, {
+        buffer,
+        mimeType: mediaType,
+        filename,
+        kind: "signed_offline_acceptance",
+        caption: "Signed quote acceptance (returned copy)",
+        uploadedBy: session.uid || "admin"
+      });
+
+      // Pointer on the WO so the editor renders the "Open signed copy" link.
+      const updated = await workOrders.attachSignedCopyRef(id, {
+        quoteId,
+        attachmentId: meta.id,
+        filename: meta.filename,
+        recordedBy: session.uid || "admin"
+      });
+
+      return sendJson(res, 201, {
+        ok: true,
+        workOrder: updated,
+        attachment: meta,
+        url: `/api/quotes/${encodeURIComponent(quoteId)}/attachments/${encodeURIComponent(meta.id)}`
+      });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't attach the signed copy."] });
+    }
+  }
+
   // Set / clear the service-call fee waiver on an existing WO (Patrick
   // 2026-06-06). Lets him bypass the $95 on a WO that's already created —
   // regardless of which creation form spawned it (property page, handoff,
