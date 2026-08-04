@@ -386,6 +386,21 @@ function woPhotoUrl(n) {
 }
 
 function photoThumbHtml(photo) {
+  // PDFs can't render in an <img> — a raw tile shows as a broken image and
+  // its delete × can become unclickable. Render documents as an openable
+  // file card instead; the × keeps the same delete wiring.
+  const isPdf = photo.kind === "pdf" || String(photo.mediaType || "").toLowerCase() === "application/pdf";
+  if (isPdf) {
+    return `
+    <div class="wo-photo-thumb" data-photo-n="${escapeHtml(String(photo.n))}" style="display:flex;align-items:center;justify-content:center;background:#f4f2ea;border:1px solid #dcd8cb;">
+      <a href="${escapeHtml(woPhotoUrl(photo.n))}" target="_blank" rel="noopener" style="display:flex;flex-direction:column;align-items:center;gap:4px;padding:8px;text-decoration:none;color:#1B4D2E;max-width:100%;">
+        <span style="font-size:28px;line-height:1;" aria-hidden="true">📄</span>
+        <span style="font-size:10px;font-weight:600;text-align:center;word-break:break-word;overflow:hidden;max-height:3em;">${escapeHtml(photo.label || "PDF document")}</span>
+      </a>
+      <button type="button" class="wo-photo-thumb-remove" data-action="delete-photo" aria-label="Remove file">×</button>
+    </div>
+  `;
+  }
   return `
     <div class="wo-photo-thumb" data-photo-n="${escapeHtml(String(photo.n))}">
       <img src="${escapeHtml(woPhotoUrl(photo.n))}" alt="${escapeHtml(photo.label || ("Photo " + photo.n))}" loading="lazy">
@@ -1502,22 +1517,44 @@ function renderOnSiteQuote(wo) {
   if (buildBtn) buildBtn.hidden = false;
   if (lines.length) {
     if (addBtn) addBtn.hidden = false;
+    const previewBtn = document.getElementById("woOnSitePreviewBtn");
+    const sendBtn = document.getElementById("woOnSiteSendApprovalBtn");
+    const attachBtn = document.getElementById("woOnSiteAcceptOfflineBtn");
     // Accepted (offline signed copy OR remote link) but not yet completed:
-    // show an acceptance banner and hide the send / record-offline controls.
-    // The completion sign-off is a separate step further down the page.
+    // show an acceptance banner with an "Open signed copy" link when one is
+    // on file, hide preview/send, but KEEP the attach control visible so the
+    // signed copy can be added or replaced after acceptance. Completion
+    // sign-off is a separate step further down the page.
     if (status === "accepted") {
       const ev = wo.onSiteQuote && wo.onSiteQuote.acceptanceEvidence;
+      const copy = ev && ev.signedCopy && ev.signedCopy.attachmentId ? ev.signedCopy : null;
       if (statusEl) {
         let when = "";
         try { if (ev && ev.acceptedAt) when = ` · ${new Date(ev.acceptedAt).toLocaleDateString("en-CA")}`; } catch (_) { /* tolerate */ }
-        statusEl.textContent = (ev && ev.method === "offline_signed_copy")
-          ? `Quote accepted — signed copy on file${ev.acceptedByName ? ` · ${ev.acceptedByName}` : ""}${when}. Not yet completed.`
+        const baseText = (ev && ev.method === "offline_signed_copy")
+          ? `Quote accepted — signed copy${ev.acceptedByName ? ` · ${ev.acceptedByName}` : ""}${when}. Not yet completed.`
           : `Quote accepted${quoteId ? ` · Quote ${quoteId} on file` : ""}. Not yet completed.`;
+        const copyLink = copy
+          ? ` <a href="/api/quotes/${encodeURIComponent(copy.quoteId || quoteId)}/attachments/${encodeURIComponent(copy.attachmentId)}" target="_blank" rel="noopener">📄 Open signed copy${copy.filename ? ` (${escapeHtml(copy.filename)})` : ""}</a>`
+          : "";
+        statusEl.innerHTML = escapeHtml(baseText) + copyLink;
         statusEl.hidden = false;
       }
-      if (remoteEl) remoteEl.hidden = true;
-    } else if (remoteEl) {
-      remoteEl.hidden = false;
+      if (remoteEl) remoteEl.hidden = false;
+      if (previewBtn) previewBtn.hidden = true;
+      if (sendBtn) sendBtn.hidden = true;
+      if (attachBtn) {
+        attachBtn.hidden = false;
+        attachBtn.textContent = copy ? "📎 Replace signed copy" : "📎 Attach signed copy";
+      }
+    } else {
+      if (remoteEl) remoteEl.hidden = false;
+      if (previewBtn) previewBtn.hidden = false;
+      if (sendBtn) sendBtn.hidden = false;
+      if (attachBtn) {
+        attachBtn.hidden = false;
+        attachBtn.textContent = "🖊️ Customer accepted offline? Record signed copy";
+      }
     }
   }
   renderOnSiteLines(lines, { readonly: false });
@@ -3625,32 +3662,45 @@ async function submitWoOfflineAccept() {
   if (err) { err.hidden = true; err.textContent = ""; }
 
   try {
-    // Guard: PDFs can't preview in the photo grid on this page (it renders
-    // every tile as <img>), so ask for a photo instead of storing a broken tile.
-    if (f.type === "application/pdf") {
-      throw new Error("Please upload a photo of the signed page (not a PDF) so it displays here.");
+    // 1) If the quote isn't accepted yet, record the acceptance first.
+    //    (Already-accepted quotes skip straight to attaching the copy.)
+    const alreadyAccepted = loadedWorkOrder?.onSiteQuote?.status === "accepted";
+    if (!alreadyAccepted) {
+      const accRes = await fetch(`/api/work-orders/${encodeURIComponent(id)}/on-site-quote/accept-offline`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ acceptedByName: name, acceptedAt, note })
+      });
+      const accData = await accRes.json().catch(() => ({}));
+      if (!accRes.ok || !accData.ok) throw new Error((accData.errors && accData.errors[0]) || "Couldn't record acceptance.");
+      loadedWorkOrder = accData.workOrder;
     }
-    // 1) Convert to JPEG (fixes HEIC), then upload via the existing WO photo endpoint.
-    const { base64, mediaType } = await imageFileToJpegBase64(f);
-    const upRes = await fetch(`/api/work-orders/${encodeURIComponent(id)}/photos`, {
+
+    // 2) Attach the signed copy as a QUOTE ATTACHMENT (not a visit photo) —
+    //    PDFs upload as-is; images convert to JPEG so they open everywhere.
+    let base64, mediaType, filename;
+    if (f.type === "application/pdf") {
+      const raw = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onerror = () => reject(new Error("Couldn't read that file."));
+        reader.onload = () => resolve(String(reader.result || "").split(",", 2)[1] || "");
+        reader.readAsDataURL(f);
+      });
+      base64 = raw; mediaType = "application/pdf"; filename = f.name || "signed-acceptance.pdf";
+    } else {
+      const converted = await imageFileToJpegBase64(f);
+      base64 = converted.base64; mediaType = converted.mediaType;
+      filename = (f.name || "signed-acceptance").replace(/\.[a-z0-9]+$/i, "") + ".jpg";
+    }
+    const attRes = await fetch(`/api/work-orders/${encodeURIComponent(id)}/on-site-quote/attach-signed-copy`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ photos: [{ data: base64, mediaType, category: "general", label: "Signed quote acceptance" }] })
+      body: JSON.stringify({ filename, data: base64, mediaType })
     });
-    const upData = await upRes.json().catch(() => ({}));
-    if (!upRes.ok || !upData.ok) throw new Error((upData.errors && upData.errors[0]) || "Couldn't upload the signed copy.");
-    const photoN = Array.isArray(upData.added) && upData.added[0] ? upData.added[0].n : null;
+    const attData = await attRes.json().catch(() => ({}));
+    if (!attRes.ok || !attData.ok) throw new Error((attData.errors && attData.errors[0]) || "Couldn't attach the signed copy.");
 
-    // 2) Record the acceptance, referencing the uploaded copy.
-    const accRes = await fetch(`/api/work-orders/${encodeURIComponent(id)}/on-site-quote/accept-offline`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ acceptedByName: name, acceptedAt, note, evidencePhotoN: photoN })
-    });
-    const accData = await accRes.json().catch(() => ({}));
-    if (!accRes.ok || !accData.ok) throw new Error((accData.errors && accData.errors[0]) || "Couldn't record acceptance.");
-
-    loadedWorkOrder = accData.workOrder;
+    loadedWorkOrder = attData.workOrder;
     closeWoOfflineAcceptModal();
     populateForm(loadedWorkOrder);
   } catch (e) {
