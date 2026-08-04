@@ -1502,7 +1502,23 @@ function renderOnSiteQuote(wo) {
   if (buildBtn) buildBtn.hidden = false;
   if (lines.length) {
     if (addBtn) addBtn.hidden = false;
-    if (remoteEl) remoteEl.hidden = false;
+    // Accepted (offline signed copy OR remote link) but not yet completed:
+    // show an acceptance banner and hide the send / record-offline controls.
+    // The completion sign-off is a separate step further down the page.
+    if (status === "accepted") {
+      const ev = wo.onSiteQuote && wo.onSiteQuote.acceptanceEvidence;
+      if (statusEl) {
+        let when = "";
+        try { if (ev && ev.acceptedAt) when = ` · ${new Date(ev.acceptedAt).toLocaleDateString("en-CA")}`; } catch (_) { /* tolerate */ }
+        statusEl.textContent = (ev && ev.method === "offline_signed_copy")
+          ? `Quote accepted — signed copy on file${ev.acceptedByName ? ` · ${ev.acceptedByName}` : ""}${when}. Not yet completed.`
+          : `Quote accepted${quoteId ? ` · Quote ${quoteId} on file` : ""}. Not yet completed.`;
+        statusEl.hidden = false;
+      }
+      if (remoteEl) remoteEl.hidden = true;
+    } else if (remoteEl) {
+      remoteEl.hidden = false;
+    }
   }
   renderOnSiteLines(lines, { readonly: false });
   renderOnSiteTotals(lines);
@@ -3520,6 +3536,109 @@ async function submitWoBypass(acknowledgeWarning) {
     submitBtn.textContent = orig;
   }
 }
+
+// ---- Offline quote-acceptance modal (customer returned a signed copy) ----
+// Two-call flow: upload the signed copy through the existing WO photo
+// endpoint, then POST the acceptance referencing it. Records acceptance +
+// attaches the copy WITHOUT locking/completing the WO.
+function updateWoOfflineAcceptSubmitState() {
+  const submit = document.getElementById("woOfflineAcceptSubmit");
+  if (!submit) return;
+  const file = document.getElementById("woOfflineAcceptFile");
+  const ack = document.getElementById("woOfflineAcceptAck");
+  const hasFile = !!(file && file.files && file.files.length);
+  submit.disabled = !(hasFile && ack && ack.checked);
+}
+function openWoOfflineAcceptModal() {
+  if (!loadedWorkOrder) return;
+  if (loadedWorkOrder.locked || loadedWorkOrder.signature?.signed) return;
+  const modal = document.getElementById("woOfflineAcceptModal");
+  if (!modal) return;
+  const file = document.getElementById("woOfflineAcceptFile");
+  const name = document.getElementById("woOfflineAcceptName");
+  const date = document.getElementById("woOfflineAcceptDate");
+  const note = document.getElementById("woOfflineAcceptNote");
+  const ack = document.getElementById("woOfflineAcceptAck");
+  const err = document.getElementById("woOfflineAcceptError");
+  if (file) file.value = "";
+  if (name) name.value = loadedWorkOrder.customerName || "";
+  if (date) { try { date.value = new Date().toISOString().slice(0, 10); } catch (_) {} }
+  if (note) note.value = "";
+  if (ack) ack.checked = false;
+  if (err) { err.hidden = true; err.textContent = ""; }
+  modal.hidden = false;
+  updateWoOfflineAcceptSubmitState();
+}
+function closeWoOfflineAcceptModal() {
+  const modal = document.getElementById("woOfflineAcceptModal");
+  if (modal) modal.hidden = true;
+}
+function readFileAsBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const url = String(reader.result || "");
+      resolve({ base64: url.split(",", 2)[1] || "", mediaType: file.type || "application/octet-stream" });
+    };
+    reader.onerror = () => reject(new Error("Couldn't read the file."));
+    reader.readAsDataURL(file);
+  });
+}
+async function submitWoOfflineAccept() {
+  const submit = document.getElementById("woOfflineAcceptSubmit");
+  const err = document.getElementById("woOfflineAcceptError");
+  const fileEl = document.getElementById("woOfflineAcceptFile");
+  if (!submit) return;
+  const f = fileEl && fileEl.files && fileEl.files[0];
+  if (!f) { if (err) { err.hidden = false; err.textContent = "Attach the signed copy first."; } return; }
+  const id = getWorkOrderId();
+  const name = (document.getElementById("woOfflineAcceptName")?.value || "").trim();
+  const date = document.getElementById("woOfflineAcceptDate")?.value || "";
+  const note = (document.getElementById("woOfflineAcceptNote")?.value || "").trim();
+  let acceptedAt = "";
+  try { acceptedAt = date ? new Date(date + "T12:00:00").toISOString() : ""; } catch (_) { acceptedAt = ""; }
+
+  const orig = submit.textContent;
+  submit.disabled = true;
+  submit.textContent = "Recording…";
+  if (err) { err.hidden = true; err.textContent = ""; }
+
+  try {
+    // 1) Upload the signed copy through the existing WO photo endpoint.
+    const { base64, mediaType } = await readFileAsBase64(f);
+    const upRes = await fetch(`/api/work-orders/${encodeURIComponent(id)}/photos`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ photos: [{ data: base64, mediaType, category: "general", label: "Signed quote acceptance" }] })
+    });
+    const upData = await upRes.json().catch(() => ({}));
+    if (!upRes.ok || !upData.ok) throw new Error((upData.errors && upData.errors[0]) || "Couldn't upload the signed copy.");
+    const photoN = Array.isArray(upData.added) && upData.added[0] ? upData.added[0].n : null;
+
+    // 2) Record the acceptance, referencing the uploaded copy.
+    const accRes = await fetch(`/api/work-orders/${encodeURIComponent(id)}/on-site-quote/accept-offline`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ acceptedByName: name, acceptedAt, note, evidencePhotoN: photoN })
+    });
+    const accData = await accRes.json().catch(() => ({}));
+    if (!accRes.ok || !accData.ok) throw new Error((accData.errors && accData.errors[0]) || "Couldn't record acceptance.");
+
+    loadedWorkOrder = accData.workOrder;
+    closeWoOfflineAcceptModal();
+    populateForm(loadedWorkOrder);
+  } catch (e) {
+    if (err) { err.hidden = false; err.textContent = e?.message || "Network error. Try again."; }
+    submit.disabled = false;
+    submit.textContent = orig;
+  }
+}
+document.getElementById("woOnSiteAcceptOfflineBtn")?.addEventListener("click", openWoOfflineAcceptModal);
+document.getElementById("woOfflineAcceptClose")?.addEventListener("click", closeWoOfflineAcceptModal);
+document.getElementById("woOfflineAcceptCancel")?.addEventListener("click", closeWoOfflineAcceptModal);
+document.getElementById("woOfflineAcceptFile")?.addEventListener("change", updateWoOfflineAcceptSubmitState);
+document.getElementById("woOfflineAcceptAck")?.addEventListener("change", updateWoOfflineAcceptSubmitState);
+document.getElementById("woOfflineAcceptSubmit")?.addEventListener("click", submitWoOfflineAccept);
 
 document.getElementById("woBypassOpenBtn")?.addEventListener("click", openWoBypassModal);
 document.getElementById("woBypassClose")?.addEventListener("click", closeWoBypassModal);

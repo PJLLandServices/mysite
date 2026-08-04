@@ -92,7 +92,7 @@ const PROPOSAL_BRANCHES = [
 
 const BILLING_MODES = ["fixed_price", "time_and_material"];
 
-const ACCEPTANCE_METHODS = ["pending", "portal_esign", "pdf_return"];
+const ACCEPTANCE_METHODS = ["pending", "portal_esign", "pdf_return", "offline_signed_copy"];
 
 // Section kinds correspond to the McDonald's Hampshire estimate as the
 // reference real-world layout. The proposal builder UI offers these in
@@ -1493,6 +1493,59 @@ async function acceptWithSignature(id, {
   return q;
 }
 
+// Record a quote as accepted from a returned SIGNED COPY (offline-acceptance
+// brief, Aug 2026). The on-site-quote sibling of the proposal PDF-return
+// path: flips status → accepted with acceptanceMethod "offline_signed_copy"
+// and a durable `offlineAcceptance` evidence block, in place of a drawn
+// signature. The signed copy itself lives on the work order (evidenceRef
+// points to it). Idempotent — a quote already accepted (any method) is
+// returned untouched.
+async function recordOfflineAcceptance(id, {
+  customerName = "",
+  decisions,
+  acceptedAt,
+  recordedBy = "admin",
+  note = "",
+  evidenceRef = null,
+  ip,
+  userAgent
+} = {}) {
+  const records = await readAll();
+  const idx = records.findIndex((q) => q.id === id);
+  if (idx === -1) return null;
+  const q = records[idx];
+  if (q.status === "accepted" || (q.signature && q.signature.signed)) return q; // idempotent
+
+  const ts = nowIso();
+  const acceptedIso = acceptedAt || ts;
+  q.status = "accepted";
+  q.acceptedAt = acceptedIso;
+  q.acceptanceMethod = "offline_signed_copy";
+  // NOT an on-screen signature — an honest record that the customer returned
+  // a hand-signed copy, recorded by an admin.
+  q.offlineAcceptance = {
+    method: "offline_signed_copy",
+    customerName: String(customerName || "").slice(0, 120),
+    acceptedAt: acceptedIso,
+    recordedBy: String(recordedBy || "admin").slice(0, 80),
+    note: String(note || "").slice(0, 2000),
+    evidenceRef: evidenceRef || null,
+    ip: String(ip || ""),
+    userAgent: String(userAgent || ""),
+    ts
+  };
+  if (Array.isArray(decisions)) q.decisions = decisions;
+  q.history.push({
+    ts,
+    action: "accepted",
+    by: recordedBy || "admin",
+    note: note ? `Accepted offline (signed copy) — ${note}` : "Accepted offline — customer returned a signed copy."
+  });
+  records[idx] = q;
+  await writeAll(records);
+  return q;
+}
+
 async function decline(id, { reason = "", by = "customer" } = {}) {
   const records = await readAll();
   const idx = records.findIndex((q) => q.id === id);
@@ -2669,6 +2722,7 @@ module.exports = {
   create,
   accept,
   acceptWithSignature,
+  recordOfflineAcceptance,
   decline,
   expire,
   expireStaleQuotes,

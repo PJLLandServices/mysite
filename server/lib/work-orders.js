@@ -639,6 +639,89 @@ function summarizeScopeAdditions(wo) {
   };
 }
 
+// Record an on-site quote as accepted from a returned SIGNED COPY
+// (offline-acceptance brief, Aug 2026). The on-site-quote sibling of the
+// proposal PDF-return path: flips onSiteQuote.status → "accepted" and writes
+// durable acceptanceEvidence WITHOUT locking or completing the WO — the
+// completion sign-off stays a separate event (Faramarz signs "work done"
+// later). Direct read/write (not update()) so the scope-protected onSiteQuote
+// field can be set. Idempotent — a quote already accepted is returned as-is.
+// The signed copy is uploaded separately via the WO photos endpoint; its `n`
+// rides in as evidencePhotoN.
+async function recordOfflineQuoteAcceptance(woId, { acceptedByName, acceptedAt, note, evidencePhotoN, recordedBy } = {}, { ip, userAgent } = {}) {
+  const records = await readAll();
+  const idx = records.findIndex((w) => w.id === woId);
+  if (idx === -1) {
+    const err = new Error("Work order not found.");
+    err.code = "wo_not_found";
+    throw err;
+  }
+  const current = records[idx];
+  if (current.signature && current.signature.signed === true) {
+    const err = new Error("Work order is already signed.");
+    err.code = "already_signed";
+    throw err;
+  }
+  if (current.onSiteQuote && current.onSiteQuote.status === "accepted") {
+    return current; // idempotent — already accepted
+  }
+  const builderLines = Array.isArray(current.onSiteQuote?.builderLineItems)
+    ? current.onSiteQuote.builderLineItems
+    : [];
+  if (!builderLines.length) {
+    const err = new Error("No on-site quote to accept — build the quote first.");
+    err.code = "no_quote";
+    throw err;
+  }
+
+  // Freeze the accepted scope/price into an immutable snapshot (same shape
+  // the bypass path writes). Acceptance does NOT lock the builder — that
+  // matches the remote-approval path; on-site changes tomorrow are scope
+  // additions billed on the completion sign-off.
+  const snapshotLines = builderLines.map((l) => JSON.parse(JSON.stringify(l)));
+  let subtotal = 0;
+  for (const l of snapshotLines) {
+    const qty = Number(l.qty) || 0;
+    const price = Number(l.overridePrice != null ? l.overridePrice : l.originalPrice) || 0;
+    subtotal += qty * price;
+  }
+  subtotal = Math.round(subtotal * 100) / 100;
+  const hst = Math.round(subtotal * 0.13 * 100) / 100;
+  const total = Math.round((subtotal + hst) * 100) / 100;
+
+  const now = new Date().toISOString();
+  const acceptedIso = (typeof acceptedAt === "string" && acceptedAt.trim()) ? acceptedAt.trim() : now;
+  const nPhoto = Number(evidencePhotoN);
+  const next = { ...current };
+  next.onSiteQuote = {
+    ...current.onSiteQuote,
+    status: "accepted",
+    acceptanceEvidence: {
+      method: "offline_signed_copy",
+      acceptedByName: String(acceptedByName || "").slice(0, 120),
+      acceptedAt: acceptedIso,
+      recordedBy: recordedBy || "admin",
+      note: String(note || "").slice(0, 2000),
+      evidencePhotoN: Number.isFinite(nPhoto) ? nPhoto : null,
+      ip: ip || "",
+      userAgent: userAgent || "",
+      ts: now
+    },
+    acceptedScopeSnapshot: { builderLineItems: snapshotLines, subtotal, hst, total }
+  };
+  next.updatedAt = now;
+  if (!Array.isArray(next.history)) next.history = [];
+  next.history.push({
+    ts: now,
+    action: "on_site_quote_accepted_offline",
+    by: recordedBy || "admin",
+    note: `On-site quote accepted offline (signed copy) — $${total.toFixed(2)}${acceptedByName ? ` by ${acceptedByName}` : ""}${note ? ` — ${note}` : ""}`
+  });
+  records[idx] = next;
+  await writeAll(records);
+  return next;
+}
+
 // Capture a signature bypass — absolute admin override (Patrick 2026-05-23).
 // Sets wo.locked = true and writes signatureBypass with server-stamped
 // audit metadata. Only refuses for idempotency (already_signed,
@@ -1722,6 +1805,7 @@ module.exports = {
   findProtectedFieldTouched,
   summarizeScopeAdditions,
   captureSignatureBypass,
+  recordOfflineQuoteAcceptance,
   appendReportSnapshot,
   patchReportSnapshot,
   appendHistory,

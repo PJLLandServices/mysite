@@ -16202,6 +16202,81 @@ async function handleApi(req, res, pathname) {
     }
   }
 
+  // POST /api/work-orders/:id/on-site-quote/accept-offline — admin records
+  // that the customer accepted the on-site quote via a returned SIGNED COPY
+  // (printed, signed by hand, returned as a photo/scan) instead of the remote
+  // e-sign link. Flips onSiteQuote.status → accepted + stores durable
+  // acceptanceEvidence, WITHOUT locking or completing the WO — the completion
+  // sign-off stays a separate event. The signed copy is uploaded FIRST via
+  // POST /photos; its `n` rides in here as evidencePhotoN. Offline-acceptance
+  // brief, Aug 2026 — the on-site-quote sibling of the proposal PDF-return.
+  const woOnSiteAcceptOfflineMatch = pathname.match(/^\/api\/work-orders\/([^/]+)\/on-site-quote\/accept-offline$/);
+  if (woOnSiteAcceptOfflineMatch && req.method === "POST") {
+    const session = await requireAdmin(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+    try {
+      const id = decodeURIComponent(woOnSiteAcceptOfflineMatch[1]);
+      const payload = await parseRequestBody(req);
+      const wo = await workOrders.get(id);
+      if (!wo) return sendJson(res, 404, { ok: false, errors: ["Work order not found."] });
+      if (wo.locked || wo.signature?.signed) {
+        return sendJson(res, 409, { ok: false, errors: ["Work order is locked."] });
+      }
+      const ip = (req.headers["x-forwarded-for"] || "").split(",")[0].trim() || req.socket?.remoteAddress || "";
+      const userAgent = req.headers["user-agent"] || "";
+
+      let updated;
+      try {
+        updated = await workOrders.recordOfflineQuoteAcceptance(id, {
+          acceptedByName: typeof payload?.acceptedByName === "string" ? payload.acceptedByName.trim() : "",
+          acceptedAt: typeof payload?.acceptedAt === "string" ? payload.acceptedAt : "",
+          note: typeof payload?.note === "string" ? payload.note : "",
+          evidencePhotoN: payload?.evidencePhotoN,
+          recordedBy: session.uid || "admin"
+        }, { ip, userAgent });
+      } catch (err) {
+        const code = err?.code || "";
+        if (code === "wo_not_found") return sendJson(res, 404, { ok: false, errors: [err.message] });
+        if (code === "already_signed") return sendJson(res, 409, { ok: false, errors: [err.message] });
+        if (code === "no_quote") return sendJson(res, 422, { ok: false, errors: [err.message] });
+        return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't record acceptance."] });
+      }
+
+      // Mirror the remote-approval side effects — MINUS lock/complete — so the
+      // CRM stays consistent. Both are failure-tolerant: a hiccup here must
+      // never un-accept the quote the customer already signed on paper.
+      const quoteId = updated?.onSiteQuote?.quoteId || null;
+      if (quoteId) {
+        try {
+          const q = await quotes.get(quoteId);
+          if (q) {
+            const decisions = (q.lineItems || []).map((_l, idx) => ({ lineItemIdx: idx, accepted: true, deferredId: null }));
+            const acceptedQuote = await quotes.recordOfflineAcceptance(quoteId, {
+              customerName: typeof payload?.acceptedByName === "string" ? payload.acceptedByName.trim() : "",
+              decisions,
+              acceptedAt: updated.onSiteQuote?.acceptanceEvidence?.acceptedAt,
+              recordedBy: session.uid || "admin",
+              note: typeof payload?.note === "string" ? payload.note : "",
+              evidenceRef: { woId: id, photoN: updated.onSiteQuote?.acceptanceEvidence?.evidencePhotoN ?? null },
+              ip, userAgent
+            });
+            try {
+              if (acceptedQuote) await deposits.onQuoteAccepted(acceptedQuote, { by: session.uid || "admin" });
+            } catch (depErr) {
+              console.warn(`[accept-offline] deposit flow failed for ${quoteId}:`, depErr?.message);
+            }
+          }
+        } catch (qErr) {
+          console.warn(`[accept-offline] linked quote flip failed for ${quoteId}:`, qErr?.message);
+        }
+      }
+
+      return sendJson(res, 200, { ok: true, workOrder: updated });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't record offline acceptance."] });
+    }
+  }
+
   // Set / clear the service-call fee waiver on an existing WO (Patrick
   // 2026-06-06). Lets him bypass the $95 on a WO that's already created —
   // regardless of which creation form spawned it (property page, handoff,
