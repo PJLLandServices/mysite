@@ -502,6 +502,10 @@
         <div class="wo-on-site-remote" id="woOnSiteRemoteSection" hidden>
           <button type="button" class="pjl-btn pjl-btn-outline" id="woOnSitePreviewBtn">👁️ Preview as customer</button>
           <button type="button" class="pjl-btn pjl-btn-outline" id="woOnSiteSendApprovalBtn">📨 Send for customer approval…</button>
+          <!-- Offline acceptance — customer signed a printed copy instead of
+               the remote link. Records acceptance + attaches the signed copy,
+               WITHOUT locking/completing the WO (offline-acceptance brief). -->
+          <button type="button" class="pjl-btn pjl-btn-outline" id="woOnSiteAcceptOfflineBtn">🖊️ Customer accepted offline? Record signed copy</button>
           <p class="wo-on-site-remote-status" id="woOnSiteRemoteStatus" hidden></p>
         </div>
       </section>
@@ -784,6 +788,46 @@
        scope_additions_require_acknowledgement from the server, the
        body swaps to the warning state with a second ack + the "Send
        for remote approval" escape hatch. -->
+  <!-- Offline quote-acceptance modal — records that the customer accepted the
+       on-site quote via a returned signed copy (not the remote link). Reuses
+       the wo-bypass-* styling. -->
+  <div class="wo-bypass-modal" id="woOfflineAcceptModal" hidden role="dialog" aria-modal="true" aria-labelledby="woOfflineAcceptTitle">
+    <div class="wo-bypass-card">
+      <header class="wo-bypass-head">
+        <h2 id="woOfflineAcceptTitle">Record signed-copy acceptance</h2>
+        <button type="button" class="wo-bypass-close" id="woOfflineAcceptClose" aria-label="Cancel">×</button>
+      </header>
+      <div class="wo-bypass-body">
+        <p class="wo-bypass-help">Use when the customer accepted the quote by returning a hand-signed copy instead of signing the online link. This records the acceptance and attaches the copy — it does <strong>not</strong> complete the visit or capture the completion signature (that stays separate).</p>
+
+        <label class="wo-bypass-label" for="woOfflineAcceptFile">Signed copy (photo or PDF)</label>
+        <input type="file" id="woOfflineAcceptFile" accept="image/jpeg,image/png,image/webp,image/heic,image/heif,application/pdf">
+        <p class="wo-bypass-hint">A clear photo of the signed pages is fine.</p>
+
+        <label class="wo-bypass-label" for="woOfflineAcceptName">Accepted by</label>
+        <input type="text" id="woOfflineAcceptName" class="wo-bypass-select" placeholder="Name of the person who signed" autocomplete="off">
+
+        <label class="wo-bypass-label" for="woOfflineAcceptDate">Accepted on</label>
+        <input type="date" id="woOfflineAcceptDate" class="wo-bypass-select">
+
+        <label class="wo-bypass-label" for="woOfflineAcceptNote">Note</label>
+        <textarea id="woOfflineAcceptNote" class="wo-bypass-textarea" rows="2" maxlength="2000" placeholder="e.g. Signed copy returned by RMSCO (Faramarz, board president)." data-voice-input></textarea>
+
+        <label class="wo-bypass-ack">
+          <input type="checkbox" id="woOfflineAcceptAck">
+          <span>I confirm the customer accepted this quote and returned a signed copy.</span>
+        </label>
+
+        <p class="wo-bypass-error" id="woOfflineAcceptError" hidden role="alert"></p>
+
+        <div class="wo-bypass-actions">
+          <button type="button" class="pjl-btn pjl-btn-outline" id="woOfflineAcceptCancel">Cancel</button>
+          <button type="button" class="pjl-btn pjl-btn-primary" id="woOfflineAcceptSubmit" disabled>Record acceptance</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <div class="wo-bypass-modal" id="woBypassModal" hidden role="dialog" aria-modal="true" aria-labelledby="woBypassTitle">
     <div class="wo-bypass-card">
       <header class="wo-bypass-head">
