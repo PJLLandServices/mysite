@@ -76,6 +76,17 @@ async function load() {
   render();
 }
 
+// Was this WO unlocked by an admin and left that way? Read from history
+// rather than from the signature record: history is the only field that
+// distinguishes "unlocked after acceptance" from "never signed in the
+// first place", and both look like locked===false on the record itself.
+// Last lock event wins — unlock → relock → unlock reads as unlocked.
+function isUnlockedByAdmin(wo) {
+  const events = (Array.isArray(wo?.history) ? wo.history : [])
+    .filter((h) => h && (h.action === "wo_unlocked" || h.action === "wo_relocked"));
+  return events.length > 0 && events[events.length - 1].action === "wo_unlocked";
+}
+
 function applyFilters(items) {
   let result = items;
   // Status filter — pill row.
@@ -93,6 +104,15 @@ function applyFilters(items) {
     // failed case (status="completed" but no invoice). Brief: WO
     // Field-Readiness §6.6.
     result = result.filter((w) => w.locked === true && !invoicedWoIds.has(w.id));
+  } else if (currentStatus === "unlocked") {
+    // "Unlocked" (2026-08-06) — WOs an admin unlocked for editing and
+    // hasn't re-locked. This filter exists because admin unlock created a
+    // new way for a WO to go quietly stranded: unlocking clears
+    // `locked`, which drops the WO out of BOTH recovery filters above
+    // (each requires locked===true). Without this, an unlocked contract
+    // left half-edited is invisible everywhere. Same lesson as CRM-11 —
+    // a state nothing surfaces is a state nobody fixes.
+    result = result.filter((w) => w.locked !== true && isUnlockedByAdmin(w));
   } else if (currentStatus) {
     result = result.filter((w) => w.status === currentStatus);
   } else {
@@ -129,7 +149,9 @@ function render() {
       ? "No stuck completions. Every signed work order has fired its cascade."
       : showNeedsInvoice
         ? "No signed work orders are missing an invoice. Cascade is healthy."
-        : "No work orders match the current filter.";
+        : currentStatus === "unlocked"
+          ? "Nothing left unlocked. Every accepted work order is locked."
+          : "No work orders match the current filter.";
     return;
   }
   els.empty.hidden = true;

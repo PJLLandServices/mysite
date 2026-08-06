@@ -141,6 +141,21 @@
       <span class="wo-locked-icon" aria-hidden="true">🔒</span>
       <strong>Signed and locked</strong>
       <span id="woLockedMeta"></span>
+      <!-- Admin unlock (2026-08-06). Injected only for role=admin — techs
+           never see it. Clears wo.locked so scope becomes editable again;
+           the signature/bypass record is kept either way. -->
+      <button type="button" class="wo-locked-unlock-btn" id="woUnlockBtn" hidden>Unlock for editing</button>
+    </div>
+
+    <!-- Unlocked-but-accepted banner. The counterpart to the locked one:
+         a WO that carries an acceptance record but is currently open for
+         admin editing. Loud on purpose — this is a contract with its
+         scope temporarily unfrozen, and it should not be left this way. -->
+    <div class="wo-unlocked-banner" id="woUnlockedBanner" hidden role="status">
+      <span class="wo-unlocked-icon" aria-hidden="true">🔓</span>
+      <strong>Unlocked for editing</strong>
+      <span id="woUnlockedMeta"></span>
+      <button type="button" class="wo-locked-unlock-btn" id="woRelockBtn">Re-lock</button>
     </div>
 
     <!-- Service-call fee waiver control. Three states (only one visible):

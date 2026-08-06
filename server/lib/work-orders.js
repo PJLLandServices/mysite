@@ -581,6 +581,27 @@ const SCOPE_PROTECTED_FIELDS = [
   "customerNotes"
 ];
 
+// Is this WO's scope frozen? `wo.locked` is the single authority.
+//
+// Every lock path sets it: drawn signature (server.js sets payload.locked
+// = true at fresh-sign) and admin signature bypass (captureSignatureBypass
+// sets next.locked = true). Guards used to read
+// `wo.locked || wo.signature?.signed` — belt-and-suspenders that was
+// always redundant, because a signed WO is a locked WO.
+//
+// It stopped being redundant when admin unlock landed (2026-08-06).
+// Unlock clears `locked` and PRESERVES the signature / signatureBypass
+// record as history (Patrick's ruling: flip the flag, keep the record).
+// Under the old OR-form a drawn-signature WO would stay frozen after an
+// unlock — the button would appear to work and change nothing. Reading
+// `locked` alone is what makes unlock mean something on both lock paths.
+//
+// Behaviour is identical for every WO that hasn't been explicitly
+// unlocked, which is every WO in the store before this shipped.
+function isScopeFrozen(wo) {
+  return wo?.locked === true;
+}
+
 // Returns the protected field path that a payload would touch on a
 // locked WO, or null if no protected fields are touched. Caller decides
 // whether to 409 (most routes) or silently drop (legacy signature
@@ -875,6 +896,142 @@ async function captureSignatureBypass(woId, { reason, note, bypassedBy }, { ip, 
       },
       locked: true
     }
+  });
+
+  records[idx] = next;
+  await writeAll(records);
+  return next;
+}
+
+// ---- Admin unlock / re-lock (2026-08-06) ------------------------------
+//
+// Why this exists. WO-BF86TWRW completed without its $95 service call
+// charged, and it had been bypass-locked, so the scope was frozen with
+// the fee missing. Before this there was no way back: no unlock route, no
+// admin control, and the only workaround (PATCH locked:false) worked on
+// bypassed WOs but silently did nothing on signed ones. Patrick's call —
+// admin needs a real way in, even on a locked WO.
+//
+// What it does and doesn't do:
+//   - Flips `locked` and nothing else. The signature / signatureBypass
+//     record is PRESERVED verbatim (Patrick's ruling 2026-08-06) — the
+//     visit really was accepted, and erasing that record would lose the
+//     fact. `locked` carries the frozen-ness; the signature carries the
+//     history. isScopeFrozen() reads the former.
+//   - Never touches the invoice. A completed WO's invoice is a separate
+//     record with its own line items, copied at cascade time. Editing WO
+//     scope after unlock does NOT re-bill the customer — that's a
+//     deliberate boundary (HANDOFF_STRIPE_PAYMENTS §6: nothing here goes
+//     near payments). Re-cutting a bill stays a separate, explicit act.
+//   - Requires a reason. This is an override of a customer-accepted
+//     contract; an unexplained one is worse than none. The reason lands
+//     in WO history where the audit trail already lives.
+//
+// Admin-only is enforced at the route (requireAdmin + a needsAuth
+// "admin" entry), not here — this layer is reachable by CLI scripts too.
+const UNLOCK_MIN_REASON_LEN = 10;
+
+async function unlockWorkOrder(woId, { reason, unlockedBy } = {}, { ip, userAgent } = {}) {
+  const records = await readAll();
+  const idx = records.findIndex((w) => w.id === woId);
+  if (idx === -1) {
+    const err = new Error("Work order not found.");
+    err.code = "wo_not_found";
+    throw err;
+  }
+  const current = records[idx];
+
+  if (current.locked !== true) {
+    const err = new Error(`Work order ${woId} is not locked.`);
+    err.code = "wo_not_locked";
+    throw err;
+  }
+
+  const trimmedReason = String(reason || "").trim();
+  if (trimmedReason.length < UNLOCK_MIN_REASON_LEN) {
+    const err = new Error(`Give a reason for unlocking (at least ${UNLOCK_MIN_REASON_LEN} characters) — it goes in the work order's history.`);
+    err.code = "reason_required";
+    throw err;
+  }
+
+  const now = new Date().toISOString();
+  const next = { ...current };
+  next.locked = false;
+  next.updatedAt = now;
+
+  // How it was locked, recorded so the history entry is readable years
+  // later without cross-referencing the signature blob.
+  const lockSource = current.signature?.signed === true
+    ? "customer signature"
+    : current.signatureBypass
+      ? `signature bypass (${current.signatureBypass.reason || "—"})`
+      : "locked with no signature record";
+
+  if (!Array.isArray(next.history)) next.history = [];
+  next.history.push({
+    ts: now,
+    action: "wo_unlocked",
+    by: unlockedBy || "admin",
+    note: `Unlocked for editing — ${trimmedReason} (was locked by ${lockSource})`,
+    before: { locked: true },
+    after: {
+      locked: false,
+      reason: trimmedReason.slice(0, 2000),
+      lockSource,
+      // The signature record is untouched — say so explicitly so a
+      // reader doesn't have to infer it from an absence.
+      signatureRetained: current.signature?.signed === true || !!current.signatureBypass,
+      ip: ip || "",
+      userAgent: userAgent || ""
+    }
+  });
+
+  records[idx] = next;
+  await writeAll(records);
+  return next;
+}
+
+// Restore the lock after editing. Deliberately NOT a fresh acceptance —
+// it re-freezes scope against the signature/bypass record already on
+// file. A WO with no acceptance record on it was never locked by a
+// customer-facing event, so there's nothing to restore and this refuses;
+// use the signature or bypass path instead.
+async function relockWorkOrder(woId, { relockedBy } = {}, { ip, userAgent } = {}) {
+  const records = await readAll();
+  const idx = records.findIndex((w) => w.id === woId);
+  if (idx === -1) {
+    const err = new Error("Work order not found.");
+    err.code = "wo_not_found";
+    throw err;
+  }
+  const current = records[idx];
+
+  if (current.locked === true) {
+    const err = new Error(`Work order ${woId} is already locked.`);
+    err.code = "wo_already_locked";
+    throw err;
+  }
+
+  const hasAcceptance = current.signature?.signed === true || !!current.signatureBypass;
+  if (!hasAcceptance) {
+    const err = new Error("This work order has no signature or bypass on file — capture one instead of re-locking.");
+    err.code = "no_acceptance_record";
+    throw err;
+  }
+
+  const now = new Date().toISOString();
+  const next = { ...current };
+  next.locked = true;
+  next.updatedAt = now;
+
+  if (!Array.isArray(next.history)) next.history = [];
+  next.history.push({
+    ts: now,
+    action: "wo_relocked",
+    by: relockedBy || "admin",
+    note: "Re-locked after admin edit — scope frozen again against the acceptance already on file",
+    before: { locked: false },
+    after: { locked: true, ip: ip || "", userAgent: userAgent || "" }
   });
 
   records[idx] = next;
@@ -1847,11 +2004,15 @@ module.exports = {
   PHOTO_REQUIREMENT_BY_TYPE,
   SCOPE_PROTECTED_FIELDS,
   BYPASS_REASONS,
+  UNLOCK_MIN_REASON_LEN,
   templateForServiceKey,
   canBuildOnSiteQuote,
+  isScopeFrozen,
   findProtectedFieldTouched,
   summarizeScopeAdditions,
   captureSignatureBypass,
+  unlockWorkOrder,
+  relockWorkOrder,
   recordOfflineQuoteAcceptance,
   attachSignedCopyRef,
   appendReportSnapshot,

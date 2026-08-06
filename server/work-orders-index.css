@@ -71,6 +71,19 @@
   color: #fff !important;
 }
 .ml-card.is-stuck { border-left: 3px solid #E0A85A; }
+
+/* "Unlocked" filter (2026-08-06) — WOs an admin unlocked and hasn't
+   re-locked. Red rather than the recovery-amber above: those two filters
+   surface work the system failed to finish, this one surfaces a frozen
+   contract someone deliberately opened. It should read as louder. */
+.wo-filter-unlocked {
+  border: 1px solid #B13A3A !important;
+  color: #B13A3A !important;
+}
+.wo-filter-unlocked.is-active {
+  background: #B13A3A !important;
+  color: #fff !important;
+}
 .wo-card-stuck-action {
   padding: 10px 14px 14px;
   display: flex;

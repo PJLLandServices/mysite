@@ -878,6 +878,13 @@ function needsAuth(method, pathname) {
   if (pathname.startsWith("/api/admin/trash/")) return "admin";
   // Email-health view (JOB-008) — admin-cookie gated, admin only.
   if (pathname === "/api/admin/email-health") return "admin";
+  // WO unlock / re-lock — ADMIN ONLY, deliberately above the generic
+  // "/api/work-orders" → "user" rule further down (first match wins, and
+  // that rule would otherwise hand this to techs too). Overriding a
+  // customer-accepted contract is Patrick's call, not a field decision.
+  // The routes also call requireAdmin directly — the gate is the fence,
+  // the route check is the lock.
+  if (/^\/api\/work-orders\/[^/]+\/(unlock|relock)$/.test(pathname)) return "admin";
   if (pathname === "/admin/trash" || pathname === "/admin/trash/") return "admin";
   if (pathname === "/admin/smart-controller-photos" || pathname === "/admin/smart-controller-photos/") return "user";
   // CRM pages — admin OR tech.
@@ -8609,7 +8616,7 @@ async function handleApi(req, res, pathname) {
       const payload = await parseRequestBody(req);
       const wo = await workOrders.get(id);
       if (!wo) return sendJson(res, 404, { ok: false, errors: ["Work order not found."] });
-      if (wo.locked || wo.signature?.signed) {
+      if (workOrders.isScopeFrozen(wo)) {
         return sendJson(res, 409, { ok: false, errors: ["Work order is locked."] });
       }
       const builderLines = Array.isArray(wo.onSiteQuote?.builderLineItems) ? wo.onSiteQuote.builderLineItems : [];
@@ -8963,7 +8970,7 @@ async function handleApi(req, res, pathname) {
       const id = decodeURIComponent(woQuotePreviewMatch[1]);
       const wo = await workOrders.get(id);
       if (!wo) return sendJson(res, 404, { ok: false, errors: ["Work order not found."] });
-      if (wo.locked || wo.signature?.signed) {
+      if (workOrders.isScopeFrozen(wo)) {
         return sendJson(res, 409, { ok: false, errors: ["Work order is locked — preview not available."] });
       }
       const builderLines = Array.isArray(wo.onSiteQuote?.builderLineItems) ? wo.onSiteQuote.builderLineItems : [];
@@ -9083,6 +9090,10 @@ async function handleApi(req, res, pathname) {
       // Bypass safety — if the WO this quote belongs to has been
       // admin-bypassed or locked, the visit is complete and this link
       // is stale. Surface the completed message instead of a signable page.
+      // Deliberately NOT isScopeFrozen() — this reads signatureBypass
+      // too, so an admin unlock (which preserves the acceptance record)
+      // never re-opens a stale customer approval link for a visit that
+      // already happened. Customer-facing staleness !51 admin editability.
       {
         const woIds = Array.isArray(q.workOrderIds) ? q.workOrderIds : [];
         for (const woId of woIds) {
@@ -9209,6 +9220,10 @@ async function handleApi(req, res, pathname) {
       // to has been admin-bypassed or otherwise locked, the visit is
       // complete and this remote-sign link is stale. Reject before
       // capturing a signature that would conflict with the bypass record.
+      // Deliberately NOT isScopeFrozen() — this reads signatureBypass too,
+      // so an admin unlock (which preserves the acceptance record) never
+      // re-opens a stale remote-sign link for a visit that already
+      // happened. Customer-facing staleness ≠ admin editability.
       {
         const woIds = Array.isArray(q.workOrderIds) ? q.workOrderIds : [];
         for (const woId of woIds) {
@@ -10513,7 +10528,7 @@ async function handleApi(req, res, pathname) {
       const id = decodeURIComponent(woPullBaselineMatch[1]);
       const child = await workOrders.get(id);
       if (!child) return sendJson(res, 404, { ok: false, errors: ["Work order not found."] });
-      if (child.locked || child.signature?.signed) {
+      if (workOrders.isScopeFrozen(child)) {
         return sendJson(res, 409, { ok: false, errors: ["Work order is signed and locked — can't modify line items."] });
       }
       if (!child.followupOfWoId) {
@@ -15497,7 +15512,7 @@ async function handleApi(req, res, pathname) {
       // dedicated route, materials, paidOnSite, departure stamp,
       // techNotes, serviceChecklist) keep flowing — the WO continues
       // operationally; only the scope is frozen.
-      if (existing.locked === true || existing.signature?.signed === true) {
+      if (workOrders.isScopeFrozen(existing)) {
         const touched = workOrders.findProtectedFieldTouched(payload);
         if (touched) {
           return sendJson(res, 409, {
@@ -16110,6 +16125,59 @@ async function handleApi(req, res, pathname) {
     }
   }
 
+  // ======== Admin unlock / re-lock (2026-08-06) =========================
+  // POST /api/work-orders/:id/unlock   — clear wo.locked so scope can be
+  //                                      edited. Reason required.
+  // POST /api/work-orders/:id/relock   — re-freeze against the acceptance
+  //                                      record already on file.
+  //
+  // ADMIN ONLY, twice over: needsAuth() maps both paths to "admin" (above
+  // the generic /api/work-orders "user" rule) and each handler re-checks
+  // requireAdmin. Techs get 403, not a 404 — a tech hitting this has made
+  // an honest mistake and deserves to be told what happened.
+  //
+  // Motivating case: WO-BF86TWRW bypass-locked with the $95 service call
+  // missing from scope. Neither of these routes touches the WO's invoice
+  // — see the note on unlockWorkOrder() in lib/work-orders.js.
+  const woUnlockMatch = pathname.match(/^\/api\/work-orders\/([^/]+)\/(unlock|relock)$/);
+  if (woUnlockMatch && req.method === "POST") {
+    const action = woUnlockMatch[2];
+    try {
+      const session = await requireAdmin(req);
+      if (!session) {
+        return sendJson(res, 403, {
+          ok: false,
+          error: "admin_required",
+          errors: [`Only an admin can ${action === "unlock" ? "unlock" : "re-lock"} a work order.`]
+        });
+      }
+      const id = decodeURIComponent(woUnlockMatch[1]);
+      const payload = await parseRequestBody(req).catch(() => ({}));
+      const ip = (req.headers["x-forwarded-for"] || "").split(",")[0].trim() || req.socket?.remoteAddress || "";
+      const userAgent = req.headers["user-agent"] || "";
+      const by = session.uid || "admin";
+
+      try {
+        const updated = action === "unlock"
+          ? await workOrders.unlockWorkOrder(id, { reason: payload?.reason, unlockedBy: by }, { ip, userAgent })
+          : await workOrders.relockWorkOrder(id, { relockedBy: by }, { ip, userAgent });
+        return sendJson(res, 200, { ok: true, workOrder: updated });
+      } catch (err) {
+        const code = err?.code || "";
+        if (code === "wo_not_found") return sendJson(res, 404, { ok: false, error: code, errors: [err.message] });
+        if (code === "wo_not_locked" || code === "wo_already_locked") {
+          return sendJson(res, 409, { ok: false, error: code, errors: [err.message] });
+        }
+        if (code === "reason_required" || code === "no_acceptance_record") {
+          return sendJson(res, 422, { ok: false, error: code, errors: [err.message] });
+        }
+        throw err;
+      }
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || `Couldn't ${action} work order.`] });
+    }
+  }
+
   // ======== AI Correct Diagnosis Bonus (Brief F / spec §4.3.3 r6) ========
   // Tech taps "Diagnosis matched" or "Didn't match" on the cheat-sheet
   // bonus card BEFORE customer signature. On match: credit a -1 hour
@@ -16123,7 +16191,7 @@ async function handleApi(req, res, pathname) {
       const payload = await parseRequestBody(req);
       const wo = await workOrders.get(id);
       if (!wo) return sendJson(res, 404, { ok: false, errors: ["Work order not found."] });
-      if (wo.locked || wo.signature?.signed) {
+      if (workOrders.isScopeFrozen(wo)) {
         return sendJson(res, 409, {
           ok: false,
           errors: ["Work order is signed and locked. Bonus decision is final."],
@@ -16221,7 +16289,7 @@ async function handleApi(req, res, pathname) {
       const id = decodeURIComponent(woOnSiteBuildMatch[1]);
       const wo = await workOrders.get(id);
       if (!wo) return sendJson(res, 404, { ok: false, errors: ["Work order not found."] });
-      if (wo.locked || wo.signature?.signed) {
+      if (workOrders.isScopeFrozen(wo)) {
         return sendJson(res, 409, { ok: false, errors: ["Work order is signed and locked. Unlock first to build a new quote."] });
       }
       if (!workOrders.canBuildOnSiteQuote(wo)) {
@@ -16281,7 +16349,7 @@ async function handleApi(req, res, pathname) {
       const payload = await parseRequestBody(req);
       const wo = await workOrders.get(id);
       if (!wo) return sendJson(res, 404, { ok: false, errors: ["Work order not found."] });
-      if (wo.locked || wo.signature?.signed) {
+      if (workOrders.isScopeFrozen(wo)) {
         return sendJson(res, 409, { ok: false, errors: ["Work order is locked."] });
       }
       const ip = (req.headers["x-forwarded-for"] || "").split(",")[0].trim() || req.socket?.remoteAddress || "";
@@ -16408,7 +16476,7 @@ async function handleApi(req, res, pathname) {
       const payload = await parseRequestBody(req);
       const wo = await workOrders.get(id);
       if (!wo) return sendJson(res, 404, { ok: false, errors: ["Work order not found."] });
-      if (wo.locked || wo.signature?.signed) {
+      if (workOrders.isScopeFrozen(wo)) {
         return sendJson(res, 409, { ok: false, errors: ["Work order is signed and locked — the waiver can't change."] });
       }
 
@@ -16482,7 +16550,7 @@ async function handleApi(req, res, pathname) {
       const payload = await parseRequestBody(req);
       const wo = await workOrders.get(id);
       if (!wo) return sendJson(res, 404, { ok: false, errors: ["Work order not found."] });
-      if (wo.locked || wo.signature?.signed) {
+      if (workOrders.isScopeFrozen(wo)) {
         return sendJson(res, 409, { ok: false, errors: ["Work order is locked."] });
       }
       const inLines = Array.isArray(payload?.lineItems) ? payload.lineItems : null;
@@ -16583,7 +16651,7 @@ async function handleApi(req, res, pathname) {
       const payload = await parseRequestBody(req);
       const wo = await workOrders.get(id);
       if (!wo) return sendJson(res, 404, { ok: false, errors: ["Work order not found."] });
-      if (wo.locked || wo.signature?.signed) {
+      if (workOrders.isScopeFrozen(wo)) {
         return sendJson(res, 409, { ok: false, errors: ["Work order is locked."] });
       }
       if (!workOrders.canBuildOnSiteQuote(wo)) {
@@ -16864,7 +16932,7 @@ async function handleApi(req, res, pathname) {
       const id = decodeURIComponent(woOnSiteDeclineAllMatch[1]);
       const wo = await workOrders.get(id);
       if (!wo) return sendJson(res, 404, { ok: false, errors: ["Work order not found."] });
-      if (wo.locked || wo.signature?.signed) {
+      if (workOrders.isScopeFrozen(wo)) {
         return sendJson(res, 409, { ok: false, errors: ["Work order is locked."] });
       }
       const builderLines = Array.isArray(wo.onSiteQuote?.builderLineItems) ? wo.onSiteQuote.builderLineItems : [];
@@ -16975,7 +17043,7 @@ async function handleApi(req, res, pathname) {
       const payload = await parseRequestBody(req).catch(() => ({}));
       const wo = await workOrders.get(id);
       if (!wo) return sendJson(res, 404, { ok: false, errors: ["Work order not found."] });
-      if (wo.locked || wo.signature?.signed) {
+      if (workOrders.isScopeFrozen(wo)) {
         return sendJson(res, 409, { ok: false, errors: ["Work order is locked."] });
       }
       const propertyId = wo.propertyId || null;
@@ -17030,7 +17098,7 @@ async function handleApi(req, res, pathname) {
       const payload = await parseRequestBody(req);
       const wo = await workOrders.get(id);
       if (!wo) return sendJson(res, 404, { ok: false, errors: ["Work order not found."] });
-      if (wo.locked || wo.signature?.signed) {
+      if (workOrders.isScopeFrozen(wo)) {
         return sendJson(res, 409, { ok: false, errors: ["Work order is locked."] });
       }
       if (wo.type !== "fall_closing") {
@@ -17211,7 +17279,7 @@ Customer signature captured at ${new Date().toISOString()}.`;
 
       const wo = await workOrders.get(woId);
       if (!wo) return sendJson(res, 404, { ok: false, errors: ["Work order not found."] });
-      if (wo.locked || wo.signature?.signed) {
+      if (workOrders.isScopeFrozen(wo)) {
         return sendJson(res, 409, { ok: false, errors: ["Work order is locked."] });
       }
       const propertyId = wo.propertyId;
