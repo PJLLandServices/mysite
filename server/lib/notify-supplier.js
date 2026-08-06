@@ -20,6 +20,7 @@
 
 const company = require("./company");
 const { formatUnit } = require("./format");
+const { logSend } = require("./mailer-log");
 
 let nodemailerCache = null;
 function getNodemailer() {
@@ -313,8 +314,12 @@ async function sendQuoteRequestEmail({
         contentType: "text/csv; charset=utf-8"
       }
     ]
+  }).catch(async (error) => {
+    await logSend({ kind: "supplier", to: toEmail, ok: false, error: error.message, refId: rfq.id });
+    throw error;
   });
   console.log("[rfq-email] Sent", rfq.id, "to", toEmail, "—", info.messageId);
+  await logSend({ kind: "supplier", to: toEmail, ok: true, refId: rfq.id });
   return { ok: true, messageId: info.messageId };
 }
 
@@ -370,8 +375,12 @@ async function sendPurchaseOrderEmail({
         contentType: "text/csv; charset=utf-8"
       }
     ]
+  }).catch(async (error) => {
+    await logSend({ kind: "supplier", to: toEmail, ok: false, error: error.message, refId: po.id });
+    throw error;
   });
   console.log("[po-email] Sent", po.id, "to", toEmail, "—", info.messageId);
+  await logSend({ kind: "supplier", to: toEmail, ok: true, refId: po.id });
   return { ok: true, messageId: info.messageId };
 }
 

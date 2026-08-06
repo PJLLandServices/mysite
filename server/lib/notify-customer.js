@@ -23,6 +23,7 @@
 // subdomain.
 
 const { resolvePublicBaseUrl } = require("./public-base-url");
+const { logSend } = require("./mailer-log");
 // Invoice CC assembly (spouse + billing CC, deduped) lives with the rest of
 // the billing-party model. Pure helper — billing-parties.js requires no
 // siblings, so this is safe at load time.
@@ -302,9 +303,11 @@ async function sendCustomerEmail(event, lead) {
       text: built.text
     });
     console.log(`[customer-email] event=${event} sent to=${to} id=${info.messageId}`);
+    await logSend({ kind: "stage_notice", to, ok: true, refId: lead.id });
     return { ok: true, messageId: info.messageId };
   } catch (error) {
     console.error(`[customer-email] event=${event} failed:`, error.message);
+    await logSend({ kind: "stage_notice", to, ok: false, error: error.message, refId: lead.id });
     return { ok: false, error: error.message };
   }
 }
@@ -570,6 +573,7 @@ async function sendInvoiceToCustomer(invoice, pdfBuffer, opts = {}) {
       }]
     });
     console.log(`[invoice-email] sent invoice=${invoice.id} to=${to}${ccList.length ? ` cc=${ccList.join(",")}` : ""} id=${info.messageId}${opts.resend ? " (resend)" : ""}`);
+    await logSend({ kind: "invoice", to, ok: true, refId: invoice.id });
     // Both flags report what actually shipped, not what was configured — an
     // address deduped away (spouse same as the primary recipient, bookkeeper
     // same as the spouse) was NOT copied, and saying otherwise would make the
@@ -585,6 +589,7 @@ async function sendInvoiceToCustomer(invoice, pdfBuffer, opts = {}) {
     };
   } catch (error) {
     console.error(`[invoice-email] failed for invoice=${invoice.id}:`, error.message);
+    await logSend({ kind: "invoice", to, ok: false, error: error.message, refId: invoice.id });
     throw new Error(`Email send failed: ${error.message}`);
   }
 }
@@ -702,9 +707,11 @@ async function sendPaymentReceipt(invoice, pdfBuffer, opts = {}) {
       attachments
     });
     console.log(`[payment-receipt] sent invoice=${invoice.id} to=${to} id=${info.messageId}`);
+    await logSend({ kind: "receipt", to, ok: true, refId: invoice.id });
     return { ok: true, messageId: info.messageId };
   } catch (error) {
     console.error(`[payment-receipt] failed for invoice=${invoice.id}:`, error.message);
+    await logSend({ kind: "receipt", to, ok: false, error: error.message, refId: invoice.id });
     throw new Error(`Receipt email send failed: ${error.message}`);
   }
 }
@@ -849,9 +856,11 @@ async function sendAdminPasswordResetLink(user, magicLink) {
       text
     });
     console.log(`[admin-reset] sent userId=${user.id} to=${to} id=${info.messageId}`);
+    await logSend({ kind: "other", to, ok: true, refId: user.id });
     return { ok: true, messageId: info.messageId };
   } catch (error) {
     console.error(`[admin-reset] failed userId=${user?.id}:`, error.message);
+    await logSend({ kind: "other", to, ok: false, error: error.message, refId: user?.id });
     return { ok: false, error: error.message };
   }
 }
@@ -923,9 +932,11 @@ async function sendBookingCancellation(booking, { reason = "", notify = true } =
       text
     });
     console.log(`[booking-cancel] sent bookingId=${booking.id} to=${to} id=${info.messageId}`);
+    await logSend({ kind: "booking_cancel", to, ok: true, refId: booking.id });
     return { ok: true, messageId: info.messageId };
   } catch (error) {
     console.error(`[booking-cancel] failed bookingId=${booking?.id}:`, error.message);
+    await logSend({ kind: "booking_cancel", to, ok: false, error: error.message, refId: booking?.id });
     return { ok: false, error: error.message };
   }
 }
@@ -974,9 +985,11 @@ async function sendPortalMessageAlertEmail(lead, message) {
       text
     });
     console.log(`[portal-msg-alert] sent leadId=${lead.id} to=${to} id=${info.messageId}`);
+    await logSend({ kind: "other", to, ok: true, refId: lead.id });
     return { ok: true, messageId: info.messageId };
   } catch (error) {
     console.error(`[portal-msg-alert] failed leadId=${lead?.id}:`, error.message);
+    await logSend({ kind: "other", to, ok: false, error: error.message, refId: lead?.id });
     return { ok: false, error: error.message };
   }
 }
@@ -1030,9 +1043,11 @@ async function sendPortalReplyToCustomer(lead, replyBody) {
       text
     });
     console.log(`[portal-reply] sent leadId=${lead.id} to=${to} id=${info.messageId}`);
+    await logSend({ kind: "portal_reply", to, ok: true, refId: lead.id });
     return { ok: true, messageId: info.messageId };
   } catch (error) {
     console.error(`[portal-reply] failed leadId=${lead?.id}:`, error.message);
+    await logSend({ kind: "portal_reply", to, ok: false, error: error.message, refId: lead?.id });
     return { ok: false, error: error.message };
   }
 }
@@ -1178,9 +1193,11 @@ async function sendOutreachEmail({
       text
     });
     console.log(`[outreach-email] sent to=${toAddr} id=${info.messageId}`);
+    await logSend({ kind: "outreach", to: toAddr, ok: true });
     return { ok: true, messageId: info.messageId };
   } catch (error) {
     console.error(`[outreach-email] failed:`, error.message);
+    await logSend({ kind: "outreach", to: toAddr, ok: false, error: error.message });
     return { ok: false, error: error.message };
   }
 }

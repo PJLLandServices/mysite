@@ -203,4 +203,46 @@ async function sendVoicemailAlertSms({ from, durationSeconds, listenUrl } = {}) 
   }
 }
 
-module.exports = { sendNewLeadSms, sendPortalMessageSms, sendVoicemailAlertSms };
+// Email-failure digest alert (JOB-008 Task 3). The mailer ledger
+// (lib/mailer-log.js) composes the body — "⚠ N customer email(s) failed
+// in the last hour…" — and rate-limits itself to one SMS per hour; this
+// function is just the dispatch, using the SAME Twilio creds +
+// NOTIFY_TO_PHONE destination as every other admin alert. Recipient
+// addresses in the body are already masked by the caller.
+async function sendEmailFailureAlertSms(body) {
+  if (!isConfigured()) {
+    console.warn("[sms] Twilio env vars not set — skipping email-failure alert SMS.");
+    return { ok: false, skipped: true };
+  }
+  const sid = process.env.TWILIO_ACCOUNT_SID;
+  const token = process.env.TWILIO_AUTH_TOKEN;
+  const url = `https://api.twilio.com/2010-04-01/Accounts/${encodeURIComponent(sid)}/Messages.json`;
+  const auth = Buffer.from(`${sid}:${token}`).toString("base64");
+
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Authorization": `Basic ${auth}`,
+        "Content-Type": "application/x-www-form-urlencoded"
+      },
+      body: new URLSearchParams({
+        To: process.env.NOTIFY_TO_PHONE,
+        From: process.env.TWILIO_FROM_NUMBER,
+        Body: String(body || "").trim()
+      }).toString()
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      console.error("[sms] Twilio rejected email-failure alert:", response.status, data?.message || data?.code || "(no detail)");
+      return { ok: false, error: data?.message || `Twilio HTTP ${response.status}` };
+    }
+    console.log("[sms] Sent email-failure alert:", data.sid);
+    return { ok: true, sid: data.sid };
+  } catch (error) {
+    console.error("[sms] Network or runtime error sending email-failure alert:", error.message);
+    return { ok: false, error: error.message };
+  }
+}
+
+module.exports = { sendNewLeadSms, sendPortalMessageSms, sendVoicemailAlertSms, sendEmailFailureAlertSms };
