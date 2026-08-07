@@ -19494,6 +19494,36 @@ async function serveNotFound(req, res) {
 }
 
 async function serveStatic(req, res, pathname) {
+  // /commercial-new-customer serves the SAME new-customer.html as the
+  // residential route (one source of truth — the page picks commercial mode
+  // client-side from the URL path), which left it shipping the residential
+  // <title>, canonical, and meta description (CRM-06). Rewrite just those
+  // three head tags here. Exact-string matches: if the source page's tags
+  // ever drift, the replacements no-op and the page serves unmodified —
+  // never broken. The /new-customer route's bytes are untouched.
+  if (pathname === "/commercial-new-customer" || pathname === "/commercial-new-customer/") {
+    try {
+      const html = (await fs.readFile(path.join(SITE_DIR, "new-customer.html"), "utf8"))
+        .replace(
+          "<title>New customer intake — PJL Land Services</title>",
+          "<title>Commercial customer intake — PJL Land Services</title>")
+        .replace(
+          '<link rel="canonical" href="https://www.pjllandservices.com/new-customer">',
+          '<link rel="canonical" href="https://www.pjllandservices.com/commercial-new-customer">')
+        .replace(
+          '<meta name="description" content="New customer intake — share your contact and property details with PJL Land Services so we can get you set up.">',
+          '<meta name="description" content="Commercial customer intake — set up your condo corporation, retail plaza, church, or professional building for irrigation service with PJL Land Services.">');
+      res.writeHead(200, {
+        "content-type": "text/html; charset=utf-8",
+        "cache-control": "no-store"
+      });
+      res.end(req.method === "HEAD" ? undefined : html);
+      return;
+    } catch {
+      // Fall through to the generic path — worst case the page serves with
+      // residential metadata, exactly as it did before this rewrite existed.
+    }
+  }
   const { dir, relative } = resolveStaticTarget(pathname);
   // decodeURIComponent throws on a malformed percent-escape (e.g. a bare "%").
   // Treat that as an unmatched route → branded 404, rather than letting the
