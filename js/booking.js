@@ -586,6 +586,19 @@
         : `<strong>${escapeHtml(state.selectedSlot.dayLabel)}</strong> at <strong>${escapeHtml(state.selectedSlot.timeLabel)}</strong>`;
       confirmDetail.innerHTML = `${detailIntro}${escapeHtml(state.serviceMeta.label)} is set for ${bucketTail}.`;
       portalCta.href = data.portalUrl || "#";
+      // ── "Booking Request (Website)" conversion ──
+      // Success path only: the !response.ok / !data.ok branch above throws
+      // before reaching here, so a failed reserve can never fire this.
+      // Wrapped so a blocked, missing, or misbehaving tag can never reach
+      // the catch below and show a booked customer an error. Tracking must
+      // never break the booking.
+      try {
+        if (typeof gtag === "function") {
+          gtag("event", "conversion", {
+            send_to: "AW-11358637592/YtmLCOCulN0cEJicnKgq"
+          });
+        }
+      } catch (e) { /* non-fatal — booking already succeeded */ }
       showStep("confirm");
     } catch (error) {
       contactError.textContent = error.message || "Couldn't reserve. Please try a different slot or call (905) 960-0181.";
