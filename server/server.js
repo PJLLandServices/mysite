@@ -19512,7 +19512,10 @@ async function serveStatic(req, res, pathname) {
           '<link rel="canonical" href="https://www.pjllandservices.com/commercial-new-customer">')
         .replace(
           '<meta name="description" content="New customer intake — share your contact and property details with PJL Land Services so we can get you set up.">',
-          '<meta name="description" content="Commercial customer intake — set up your condo corporation, retail plaza, church, or professional building for irrigation service with PJL Land Services.">');
+          '<meta name="description" content="Commercial customer intake — set up your condo corporation, retail plaza, church, or professional building for irrigation service with PJL Land Services.">')
+        .replace(
+          "<h1>New customer intake</h1>",
+          "<h1>New commercial customer intake</h1>");
       res.writeHead(200, {
         "content-type": "text/html; charset=utf-8",
         "cache-control": "no-store"
