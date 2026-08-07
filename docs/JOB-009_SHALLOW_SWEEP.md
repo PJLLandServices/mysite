@@ -49,6 +49,15 @@ for their own cycles, bundled into one sweep. None touches a PASS flow.
    before Bolton), descriptions sourced from each page's own meta description.
 5. **MISC-02 — counters.** Services → 11, Book/Quote/Estimate → 4, Service Areas → 18.
 
+### Addendum (2026-08-07, during acceptance)
+
+Patrick's step-2 walk surfaced that the change was invisible on the page itself — the
+hero still read "New customer intake" on the commercial route (the visible heading was
+never part of the registered defect). Per his ruling, the same server-side rewrite now
+also swaps the `<h1>` to **"New commercial customer intake"** on
+`/commercial-new-customer`. Residential route unchanged. Acceptance step 2 gains: the
+green banner on the commercial URL reads "New commercial customer intake".
+
 ## Constraints
 
 - No PASS flow is touched. The only backend change is the head rewrite in the static
