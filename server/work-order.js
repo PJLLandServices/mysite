@@ -1069,7 +1069,10 @@ function renderServiceFeeWaiver(wo) {
 
   const w = wo && wo.serviceFeeWaiver;
   const isWaived = !!(w && w.waived === true);
-  const locked = !!(wo && (wo.locked === true || wo.signature?.signed === true || wo.signatureBypass));
+  // wo.locked alone — see the note in renderOnSiteQuote(). An unlocked
+  // WO must expose the waiver control again, or the admin can unlock and
+  // still not fix the fee.
+  const locked = wo?.locked === true;
   const applies = !!(wo && wo.type === "service_visit");
 
   if (!applies || (locked && !isWaived)) {
@@ -1191,7 +1194,7 @@ function renderIntakeGuarantee(wo) {
   if (source) {
     source.textContent = ig.sourceQuoteId ? `Source: ${ig.sourceQuoteId}` : "";
   }
-  const isLocked = wo.locked === true || wo.signature?.signed === true;
+  const isLocked = wo.locked === true;
   if (ig.matched === true) {
     banner.dataset.decision = "matched";
     if (eyebrow) eyebrow.textContent = "AI-Correct-Diagnosis Bonus — 1 Hour Labour Credited";
@@ -1275,7 +1278,7 @@ function populateForm(wo) {
   renderPostSigBanner(wo);
   renderHistory(wo);
   renderReportControls(wo);
-  applyLockState(wo.locked === true, wo.signature);
+  applyLockState(wo.locked === true, wo.signature, wo);
   // Build-WO chrome (work-order-build.js) re-applies its section hiding on
   // this event so it survives this re-render.
   document.dispatchEvent(new CustomEvent("wo:rendered"));
@@ -1443,7 +1446,12 @@ function renderOnSiteQuote(wo) {
   const isFallClosing = wo.type === "fall_closing";
   // "Signed" here means "locked by any path" — both drawn signature and
   // signature bypass freeze the on-site quote builder per hard rule §11.
-  const isSigned = wo.locked === true || wo.signature?.signed === true || !!wo.signatureBypass;
+  // Reads wo.locked ALONE (mirrors isScopeFrozen() server-side): both
+  // paths set it at capture, and an admin unlock clears it while keeping
+  // the signature record. Re-adding the signature/bypass terms here would
+  // leave the builder read-only after an unlock — which is the whole
+  // point of unlocking.
+  const isSigned = wo.locked === true;
   const lines = (wo.onSiteQuote && wo.onSiteQuote.builderLineItems) || [];
   const status = wo.onSiteQuote?.status;
   const quoteId = wo.onSiteQuote?.quoteId;
@@ -2489,7 +2497,7 @@ document.getElementById("woSignoffSubmit")?.addEventListener("click", async () =
     renderSignoff(data.workOrder);
     renderPostSigBanner(data.workOrder);
     renderHistory(data.workOrder);
-    applyLockState(data.workOrder.locked === true, data.workOrder.signature);
+    applyLockState(data.workOrder.locked === true, data.workOrder.signature, data.workOrder);
     // Status dropdown reflects the new completed state.
     const woStatus = document.getElementById("woStatus");
     if (woStatus && data.workOrder.status) woStatus.value = data.workOrder.status;
@@ -2545,7 +2553,11 @@ document.getElementById("woPhotoLightbox")?.addEventListener("click", () => {
 // Apply locked / unlocked state to the desktop form. The save and
 // delete buttons stay enabled — Patrick is admin-side and can always
 // override; the visual cue is the banner + greyed-out form sections.
-function applyLockState(locked, signature) {
+// `wo` is passed explicitly rather than read from loadedWorkOrder — the
+// unlock/re-lock buttons depend on the record's history and acceptance
+// fields, and every caller already has the WO in hand at this point.
+// Falls back to the module global for any caller that doesn't.
+function applyLockState(locked, signature, wo) {
   document.body.dataset.locked = locked ? "true" : "false";
   const banner = document.getElementById("woLockedBanner");
   const meta = document.getElementById("woLockedMeta");
@@ -2556,7 +2568,109 @@ function applyLockState(locked, signature) {
     if (signature.signedAt) parts.push(formatDateTime(signature.signedAt));
     meta.textContent = parts.length ? `· ${parts.join(" · ")}` : "";
   }
+  renderUnlockControls(wo || loadedWorkOrder);
 }
+
+// ---- Admin unlock / re-lock (2026-08-06) ------------------------------
+// Two buttons, never both: "Unlock for editing" on a locked WO, "Re-lock"
+// on one that's been unlocked but still carries an acceptance record.
+// Unlock is admin-only (viewerIsAdmin, resolved once from /api/session);
+// the server enforces it independently via requireAdmin — this just keeps
+// a button a tech can't use off their screen.
+let viewerIsAdmin = false;
+
+async function resolveViewerRole() {
+  try {
+    const r = await fetch("/api/session", { cache: "no-store", credentials: "same-origin" });
+    const data = await r.json().catch(() => ({}));
+    viewerIsAdmin = data?.role === "admin";
+  } catch (_) {
+    viewerIsAdmin = false; // fail closed — no button rather than a 403 on click
+  }
+  // The WO usually loads before this resolves; re-render so the buttons
+  // appear once the role is known. Harmless no-op if it hasn't loaded yet.
+  renderUnlockControls(loadedWorkOrder);
+}
+
+function renderUnlockControls(wo) {
+  const unlockBtn = document.getElementById("woUnlockBtn");
+  const unlockedBanner = document.getElementById("woUnlockedBanner");
+  const unlockedMeta = document.getElementById("woUnlockedMeta");
+  if (!wo) {
+    if (unlockBtn) unlockBtn.hidden = true;
+    if (unlockedBanner) unlockedBanner.hidden = true;
+    return;
+  }
+
+  const locked = wo.locked === true;
+  const hasAcceptance = wo.signature?.signed === true || !!wo.signatureBypass;
+
+  // Unlock: admin, on a locked WO.
+  if (unlockBtn) unlockBtn.hidden = !(viewerIsAdmin && locked);
+
+  // Re-lock: admin, on an unlocked WO that WAS accepted. An ordinary
+  // never-signed WO isn't "unlocked" — it just hasn't been signed yet,
+  // and showing a re-lock button there would be nonsense.
+  const showRelock = viewerIsAdmin && !locked && hasAcceptance;
+  if (unlockedBanner) unlockedBanner.hidden = !showRelock;
+  if (showRelock && unlockedMeta) {
+    const lastUnlock = (Array.isArray(wo.history) ? wo.history : [])
+      .filter((h) => h && h.action === "wo_unlocked")
+      .pop();
+    unlockedMeta.textContent = lastUnlock
+      ? `· ${formatDateTime(lastUnlock.ts)}${lastUnlock.after?.reason ? ` · ${lastUnlock.after.reason}` : ""}`
+      : "";
+  }
+}
+
+async function postLockAction(action, body) {
+  const id = getWorkOrderId();
+  if (!id) return;
+  const btn = document.getElementById(action === "unlock" ? "woUnlockBtn" : "woRelockBtn");
+  if (btn) btn.disabled = true;
+  try {
+    const r = await fetch(`/api/work-orders/${encodeURIComponent(id)}/${action}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify(body || {})
+    });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok || !data.ok) throw new Error((data.errors && data.errors[0]) || `Couldn't ${action} this work order.`);
+    if (data.workOrder) {
+      loadedWorkOrder = data.workOrder;
+      populateForm(data.workOrder);
+    }
+  } catch (err) {
+    alert(err.message || `Couldn't ${action} this work order.`);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+document.getElementById("woUnlockBtn")?.addEventListener("click", async () => {
+  if (!loadedWorkOrder || loadedWorkOrder.locked !== true) return;
+  const reason = prompt(
+    "Unlocking a signed/bypassed work order re-opens its scope for editing.\n"
+    + "The signature or bypass record is kept — only the lock is lifted.\n\n"
+    + "Why are you unlocking it? (recorded in the work order's history)",
+    ""
+  );
+  if (reason === null) return; // cancelled
+  if (String(reason).trim().length < 10) {
+    alert("Give a bit more detail — the reason is the audit trail for overriding a signed contract.");
+    return;
+  }
+  await postLockAction("unlock", { reason: String(reason).trim() });
+});
+
+document.getElementById("woRelockBtn")?.addEventListener("click", async () => {
+  if (!loadedWorkOrder || loadedWorkOrder.locked === true) return;
+  if (!confirm("Re-lock this work order? Scope freezes again against the signature/bypass already on file.")) return;
+  await postLockAction("relock", {});
+});
+
+resolveViewerRole();
 
 function collectForm() {
   const zones = Array.from(woZones.querySelectorAll(".wo-zone-row"))
