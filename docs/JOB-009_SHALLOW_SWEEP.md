@@ -207,7 +207,7 @@ today; the recommendation only adds setting it automatically at intake.
    description mentions commercial properties. Open `/new-customer`, view source:
    unchanged residential metadata. Both forms still render and (optionally) submit.
 3. **MISC-01:** from any page footer, tap Toronto, North York, Lawrence Park, Forest
-   Hill — all four load.
+   Hill — all four load. ✅ **WALKED 2026-08-09 — all four load, no 404s. MISC-01 CLOSED.**
 4. **MISC-02:** open `/sitemap.html` — Service Areas lists 18 cities including the four
    above; every section counter matches a hand count of its list.
 
