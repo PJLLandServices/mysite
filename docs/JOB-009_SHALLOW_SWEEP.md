@@ -58,6 +58,84 @@ also swaps the `<h1>` to **"New commercial customer intake"** on
 `/commercial-new-customer`. Residential route unchanged. Acceptance step 2 gains: the
 green banner on the commercial URL reads "New commercial customer intake".
 
+### Addendum 2 (2026-08-09) — re-verification + scanner hardening
+
+Stage-1 re-dispatch. The four code items were already shipped; this pass verified them
+against a running server rather than by reading the diff, and hardened the one piece that
+had never been exercised.
+
+**Verified locally (server booted, routes actually requested):**
+
+| Item | Check | Result |
+|---|---|---|
+| CRM-06 | `/commercial-new-customer` head tags + `<h1>` | All four rewritten — title, canonical, description, hero |
+| CRM-06 | `/new-customer` response vs `new-customer.html` on disk | **Byte-identical** — residential route untouched |
+| CRM-06 | The four exact-match source strings still present in `new-customer.html` | All 4 present — no silent no-op |
+| MISC-01 | The four city pages requested over HTTP | **200 each** (see finding below) |
+| MISC-02 | Declared counter vs hand-counted `<li>` per section | 6/11/4/18/15/4 — **all six match** |
+| — | `npm run build:check` | Green (86 files in sync; 757 assertions, 0 failures) |
+
+**MISC-01 — settled, not a broken link.** All four pages exist, return **200** from the
+same server that serves production, are referenced by **84 pages** each (the sitewide
+footer), and appear in `sitemap.xml`. The register's "four taps to confirm whether they
+404" is answered: they do not 404. The only real gap was the `sitemap.html` omission,
+already fixed. *Caveat unchanged from the first pass:* outbound to
+`www.pjllandservices.com` is blocked from the sandbox by proxy policy, so this is a local
+200, not a production 200. Patrick's footer taps remain the production confirmation.
+
+**Scanner hardening (CRM-04/05) — a real false positive, found by testing it.** The
+scanner had never been run against data. Exercised against a fixture of nine leads
+covering every bucket, it flagged **a real, won customer as spam**: a contact-form message
+reading *"Saw your review page at https://g.page/pjllandservices and wanted to ask about a
+drip retrofit"* matched the bare-URL pattern. Bulk-deleting the `spam` bucket on that
+output would have deleted a paying customer. Fixed, still read-only and still deleting
+nothing:
+
+- **`WHY` column** — names the matched signal (`link-building`, `guest-post`, `url-only`…),
+  so a row can be judged without opening the record. Bare-URL patterns are ordered last, so
+  a row reading `url-only` matched *nothing but a link*.
+- **`KEEP?` column + a loud footer block** — a spam-bucket row carrying a booking, a
+  customer record, or a CRM status past `new` is called out by name as a probable real
+  customer. Flag, not filter: the row still prints, the judgement stays Patrick's.
+- Name-match and `+`-tag buckets are deliberately **not** flagged — those are deliberate
+  acts, not inference, so they cannot misfire on a stranger.
+
+Confirmed against the fixture: already-trashed records skipped; `\bseo\b` does not match
+"season" in a real note ("come in the season opener window" — not flagged).
+
+**`sitemap.xml` vs `sitemap.html` — raised 2026-08-09, no repo defect found.** Patrick
+checked `https://www.pjllandservices.com/sitemap.xml` and read it as missing the four city
+URLs. In the repo they are all present and have been for weeks:
+
+- All **18** city pages appear in `sitemap.xml` (81 `<url>` entries total), the four
+  included, each with `lastmod 2026-07-08`.
+- They entered the file in **ccf7604, 2026-07-15** — on `main`, 109 commits back. Not new,
+  not pending.
+- `sitemap.xml` has **no server route** — `grep sitemap server/server.js` returns nothing.
+  It is served as a plain static file straight off the deployed tree, so whatever is on
+  `main` is what ships. Requested over HTTP from a locally booted server it returns **200**
+  with all four `<loc>` entries.
+- `generate-sitemap --check` is green — the file matches what the generator would produce.
+
+**MISC-01 was never about `sitemap.xml`.** The register entry, the closeout plan, and the
+fix all concern **`sitemap.html`** — the human-readable Site Map page, whose Service Areas
+list omitted the four. `sitemap.xml` already had them; that is why the JOB-009 diff touched
+`sitemap.html` only. The two files are easy to conflate when checking the fix.
+
+If the *live* `sitemap.xml` genuinely lacks the four URLs, the repo is not the cause and the
+next place to look is delivery, not content: a stale deploy on Render (compare the live
+file against `main`), a CDN/browser cache (hard-reload, or fetch with cache disabled), or —
+if this came from Search Console rather than the raw URL — Google showing its own last-read
+copy, which lags the file. Outbound HTTPS to the live host is blocked from this sandbox
+(CONNECT refused 403), so the live file could not be fetched here to settle it directly.
+
+**The delete list itself is still un-generated.** `server/data/leads.json` is runtime data
+that lives only on Render (gitignored, absent from the repo), and outbound HTTPS to the
+live host is blocked from the sandbox by proxy policy — the CONNECT is refused 403. No
+session running here can produce the list of records to delete. Patrick runs
+`node scripts/find-test-leads.js` on the Render shell; the table it prints **is** the
+confirmation list, and deletion stays in the CRM's bulk-delete → Trash flow.
+
 ## Constraints
 
 - No PASS flow is touched. The only backend change is the head rewrite in the static
