@@ -39,8 +39,29 @@ const saveBtn = document.getElementById("saveBtn");
 const revertBtn = document.getElementById("revertBtn");
 const saveError = document.getElementById("saveError");
 const logoutButton = document.getElementById("logoutButton");
+const deleteZone = document.getElementById("deleteZone");
+const deleteBookingBtn = document.getElementById("deleteBookingBtn");
+const deleteBookingError = document.getElementById("deleteBookingError");
 
 let original = null;
+
+// Delete is admin-only (resolved once from /api/session); the server
+// enforces it independently via requireAdmin — hiding the button just
+// keeps a control a tech can't use off their screen. Fail closed: no
+// button rather than a 403 on click.
+let viewerIsAdmin = false;
+
+async function resolveViewerRole() {
+  try {
+    const r = await fetch("/api/session", { cache: "no-store", credentials: "same-origin" });
+    const data = await r.json().catch(() => ({}));
+    viewerIsAdmin = data?.role === "admin";
+  } catch (_) {
+    viewerIsAdmin = false;
+  }
+  // The booking usually loads before this resolves; reveal once known.
+  if (deleteZone) deleteZone.hidden = !viewerIsAdmin;
+}
 
 function esc(v) {
   return String(v == null ? "" : v)
@@ -189,6 +210,46 @@ Array.from(document.querySelectorAll(".customer-tab-header")).forEach((h) => {
   });
 });
 
+// Hard delete. Native confirm() rather than an HTML dialog — same level of
+// friction as the schedule canvas's delete, and nothing to fail to wire up.
+if (deleteBookingBtn) {
+  deleteBookingBtn.addEventListener("click", async () => {
+    if (!bookingId || !original) return;
+    const lines = [
+      "Permanently delete this booking? There is no undo.",
+      "",
+      original.serviceLabel || original.serviceKey || "Booking",
+      original.customerName || "",
+      original.address || "",
+      original.scheduledFor ? formatDateTime(original.scheduledFor) : ""
+    ].filter(Boolean).join("\n");
+    if (!window.confirm(lines)) return;
+
+    deleteBookingError.hidden = true;
+    deleteBookingBtn.disabled = true;
+    deleteBookingBtn.textContent = "Deleting…";
+    try {
+      const res = await fetch(`/api/bookings/${encodeURIComponent(bookingId)}`, {
+        method: "DELETE",
+        credentials: "same-origin"
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok) {
+        // Surface the server's own reason — an in-progress work order
+        // names the WO so it can be dealt with directly.
+        const msg = (data.errors || ["Couldn't delete this booking."]).join(" ");
+        throw new Error(msg + (data.linkedWoId ? ` (Linked: ${data.linkedWoId})` : ""));
+      }
+      location.href = "/admin/bookings";
+    } catch (err) {
+      deleteBookingError.textContent = err?.message || "Couldn't delete this booking.";
+      deleteBookingError.hidden = false;
+      deleteBookingBtn.disabled = false;
+      deleteBookingBtn.textContent = "Delete this booking";
+    }
+  });
+}
+
 if (logoutButton) {
   logoutButton.addEventListener("click", async () => {
     try { await fetch("/api/logout", { method: "POST" }); } catch {}
@@ -234,3 +295,4 @@ async function load() {
 }
 
 load();
+resolveViewerRole();
