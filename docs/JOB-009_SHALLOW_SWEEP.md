@@ -169,6 +169,32 @@ option short of a gate that also taxes real customers:
 At two spam submissions total, the recommendation is option 1 or nothing: the volume
 doesn't yet justify even its own job. Patrick decides.
 
+### CRM-05 sourcing (2026-08-09) — two corrections to the report above
+
+The spam-defense report was written from the prior session's summary. Read against the
+source, two things in it are wrong:
+
+1. **Four blocking checks, not five.** `checkSubmission()` (`server/lib/anti-bot.js:230`):
+   honeypot (233), time-trap (240), per-IP rate limit (258), Turnstile (268). Email
+   normalization (292) is labelled in its own comment *"informational, not a reject path"* —
+   it computes a dedupe key and blocks nothing. Wired at two call sites only:
+   `server.js:4448` (`POST /api/quotes`, where `contact.html:595` posts — CRM-05's path) and
+   `server.js:17607` (booking).
+2. **`POST /api/new-customer` is not gated at all** — recorded as **CRM-14**. Found while
+   checking call sites for claim 1.
+
+**Turnstile confirmed armed 2026-08-09.** Patrick verified both `TURNSTILE_SECRET_KEY` and
+`TURNSTILE_SITE_KEY` are present in the Render environment. The check mattered because of
+the asymmetry in how that layer fails: a **missing** secret disables Turnstile silently
+(`anti-bot.js:272` short-circuits with no error, no log entry), while a **wrong** secret
+fails closed and rejects every submission — visible immediately. Only the silent mode could
+have been hiding, and it wasn't.
+
+`botFlagged` (the flag-don't-block recommendation's target) is already fully plumbed: read
+at `server.js:1153`, written at `:1244`, set by the `bot-spam` bulk tag
+(`lib/bulk-actions.js:142`) whose button is `admin.html:718`. Leads can be flagged by hand
+today; the recommendation only adds setting it automatically at intake.
+
 ## Acceptance test (Patrick walks it)
 
 1. **CRM-04/05:** on the Render shell run `node scripts/find-test-leads.js`. Review the
