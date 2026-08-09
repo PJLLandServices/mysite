@@ -11,20 +11,41 @@
 //
 // This script deletes NOTHING. Review the table, then delete the records in
 // the CRM UI (bulk delete → Trash) — they stay recoverable in /admin/trash
-// for 30 days before purge. Records already in Trash are skipped here.
+// for 30 days before purge. Records already in Trash are skipped by default.
 //
 // A LINKED column warns when a candidate carries a booking envelope or a
 // customerId — those deserve a second look before deletion, because they
 // were far enough along to touch other stores.
 //
+// ALWAYS prints what it read — absolute path, total records, how many are in
+// Trash, how many live records were actually scanned — BEFORE any verdict.
+// A bare "pipeline is clean" is ambiguous three ways and cost a round trip
+// once already: it reads the same whether the records are genuinely gone,
+// already sitting in Trash (skipped), or the file is empty because the wrong
+// path was read. The header tells those three apart at a glance.
+//
 // Run on the Render shell:  node scripts/find-test-leads.js
+//   --include-trashed   also list matches already in Trash (answers "did I
+//                       already delete these?" without touching anything)
 
 const path = require("path");
 const fs = require("fs");
 
 const FILE = path.join(__dirname, "..", "server", "data", "leads.json");
 
+const INCLUDE_TRASHED = process.argv.includes("--include-trashed");
+
 const TEST_NAMES = ["john charette", "jeff john"];
+
+// A lead's display name can live in contact.name, or only as
+// contact.firstName + contact.lastName (the self-intake path writes all
+// three, older records may not). Collapse internal whitespace so "John
+// Charette" still matches "John  Charette".
+function displayName(lead) {
+  const c = lead.contact || {};
+  const composed = [c.firstName, c.lastName].filter(Boolean).join(" ");
+  return String(c.name || c.fullName || composed || "").replace(/\s+/g, " ").trim();
+}
 
 // \b keeps "seo" from matching inside ordinary words ("season").
 //
@@ -64,7 +85,7 @@ function realCustomerSignals(lead) {
 }
 
 function bucketFor(lead) {
-  const name = String(lead.contact?.name || "").trim().toLowerCase();
+  const name = displayName(lead).toLowerCase();
   if (TEST_NAMES.includes(name)) return { bucket: "test-name", why: "known test record" };
   const email = String(lead.contact?.email || "");
   if (/\+[^@]*@/.test(email)) return { bucket: "plus-tag", why: "+tag in email" };
@@ -79,10 +100,34 @@ function main() {
     console.error(`leads.json not found at ${FILE} — run this on the server.`);
     process.exit(1);
   }
-  const leads = JSON.parse(fs.readFileSync(FILE, "utf8"));
+  const parsed = JSON.parse(fs.readFileSync(FILE, "utf8") || "[]");
+  if (!Array.isArray(parsed)) {
+    console.error(`${FILE} did not contain a JSON array (got ${typeof parsed}).`);
+    console.error("The store shape changed — this script needs updating before you trust it.");
+    process.exit(1);
+  }
+  const leads = parsed;
+  const trashed = leads.filter((l) => l.deletedAt);
+  const live = leads.filter((l) => !l.deletedAt);
+
+  // Always say what was read, before any verdict. "Clean" means nothing
+  // without these numbers.
+  console.log(`file:    ${FILE}`);
+  console.log(`records: ${leads.length} total — ${live.length} live, ${trashed.length} in Trash`);
+  console.log(`scanned: ${INCLUDE_TRASHED ? leads.length : live.length}` +
+    (INCLUDE_TRASHED ? " (including Trash)" : " live records (Trash skipped; --include-trashed to see them)"));
+  console.log("");
+
+  if (!leads.length) {
+    console.log("!! leads.json is EMPTY — 0 records.");
+    console.log("   That is almost certainly the wrong file, not an empty CRM. Check that the");
+    console.log("   Render persistent disk is mounted at server/data, and that you are in the");
+    console.log("   service's project root. Do NOT read this as 'nothing to delete'.");
+    return;
+  }
+
   const rows = [];
-  for (const lead of leads) {
-    if (lead.deletedAt) continue; // already in Trash
+  for (const lead of INCLUDE_TRASHED ? leads : live) {
     const match = bucketFor(lead);
     if (!match) continue;
     const linked = [
@@ -96,7 +141,8 @@ function main() {
       keep: signals.length ? "KEEP?" : "",
       bucket: match.bucket,
       id: lead.id,
-      name: String(lead.contact?.name || "").slice(0, 24),
+      trash: lead.deletedAt ? "TRASH" : "",
+      name: displayName(lead).slice(0, 24),
       email: String(lead.contact?.email || "").slice(0, 32),
       source: String(lead.sourceLabel || lead.source || "").slice(0, 20),
       status: String(lead.crm?.status || lead.status || ""),
@@ -108,12 +154,24 @@ function main() {
   }
 
   if (!rows.length) {
-    console.log("No test, plus-tagged, or spam-flagged leads found. Pipeline is clean.");
+    console.log(`No test, plus-tagged, or spam-flagged leads among the ${INCLUDE_TRASHED ? leads.length : live.length} record(s) scanned.`);
+    if (!INCLUDE_TRASHED && trashed.length) {
+      console.log("");
+      console.log(`NOTE: ${trashed.length} record(s) are in Trash and were NOT scanned. If you already`);
+      console.log("      deleted the test records, they are in there and this is the expected result.");
+      console.log("      Re-run with --include-trashed to confirm that rather than assume it.");
+    } else if (!INCLUDE_TRASHED) {
+      console.log("");
+      console.log("Trash is empty too, so the records were not simply deleted earlier. If CRM-04/05");
+      console.log("say they should be here, the mismatch is real — check the names in the CRM against");
+      console.log(`TEST_NAMES in this script (${TEST_NAMES.join(", ")}); a record stored under a`);
+      console.log("different spelling will not match.");
+    }
     return;
   }
 
   rows.sort((a, b) => a.bucket.localeCompare(b.bucket) || a.created.localeCompare(b.created));
-  const cols = ["keep", "bucket", "id", "name", "email", "source", "status", "created", "linked", "why"];
+  const cols = ["keep", "trash", "bucket", "id", "name", "email", "source", "status", "created", "linked", "why"];
   const widths = cols.map((c) => Math.max(c.length, ...rows.map((r) => String(r[c]).length)));
   const line = (vals) => vals.map((v, i) => String(v).padEnd(widths[i])).join("  ");
   console.log(line(cols));

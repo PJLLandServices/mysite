@@ -211,6 +211,53 @@ at `server.js:1153`, written at `:1244`, set by the `bot-spam` bulk tag
 (`lib/bulk-actions.js:142`) whose button is `admin.html:718`. Leads can be flagged by hand
 today; the recommendation only adds setting it automatically at intake.
 
+### Scanner run on Render (2026-08-09) — "pipeline is clean", and why that wasn't an answer
+
+First run on the Render shell returned:
+
+```
+No test, plus-tagged, or spam-flagged leads found. Pipeline is clean.
+```
+
+(A first attempt failed with `MODULE_NOT_FOUND` on `find-test-leads.js~` — a stray `~` from
+the paste, not a real error. The second run is the one above.)
+
+That contradicts CRM-04/05, which say the records are in the pipeline — **and the script
+could not say which of three very different things had happened**, because all three print
+that same line:
+
+1. the records are genuinely gone;
+2. they are **already in Trash** — the scan skips `deletedAt` records silently, so
+   previously-deleted test data reads as "clean";
+3. it read an **empty or wrong `leads.json`** — an empty array prints "clean" too.
+
+Same silent-empty failure class as the Turnstile secret. Fixed — the script now **always
+prints what it read before any verdict**: absolute path, total records, live vs in-Trash
+counts, and how many were actually scanned. The three cases are now distinguishable:
+
+- **empty file** → a loud "that is almost certainly the wrong file, not an empty CRM", with
+  the Render persistent-disk mount as the thing to check. Explicitly *not* to be read as
+  "nothing to delete".
+- **matches exist but sit in Trash** → "N record(s) are in Trash and were NOT scanned",
+  pointing at the new `--include-trashed` flag, which lists them with a `TRASH` column.
+- **genuinely clean** → says Trash is empty too, so the records weren't deleted earlier, and
+  names `TEST_NAMES` as the next thing to check against the CRM's actual spelling.
+
+Also widened: a lead's name may live only in `contact.firstName`/`lastName` (the self-intake
+path writes `name` too, older records may not), so `displayName()` now falls back to
+`firstName + lastName` and collapses internal whitespace — `"John  Charette"` with a double
+space matched nothing before. Both shapes verified against fixtures. A non-array
+`leads.json` now exits 1 rather than silently scanning nothing.
+
+**Still read-only. Still deletes nothing.** Re-run on Render:
+
+```
+node scripts/find-test-leads.js                    # the header tells you what it read
+node scripts/find-test-leads.js --include-trashed  # if the header shows records in Trash
+```
+
+The header line is the finding, whatever the table says.
+
 ## Acceptance test (Patrick walks it)
 
 1. **CRM-04/05:** on the Render shell run `node scripts/find-test-leads.js`. Review the
