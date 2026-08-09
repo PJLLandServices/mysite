@@ -1,7 +1,9 @@
 # PJL Backend Flow Register
 
 **Source of truth for customer-facing backend processes.**
-Last updated: 2026-08-02 — supersedes the 2026-08-01 version.
+Last updated: 2026-08-09 — supersedes the 2026-08-02 version.
+**2026-08-09 (JOB-009 close):** CRM-04, CRM-05, CRM-06, MISC-01, MISC-02 CLOSED on walked
+acceptance. CRM-15 opened and closed the same day (booking-delete control). CRM-14 opened.
 
 If a flow isn't in here with a status, it is not known to work.
 Update this file, not a chat thread.
@@ -291,7 +293,7 @@ Tick items off here as they're confirmed; nothing below blocks new work.
 ## Parked — real jobs, not debt
 
 - FLOW-01 edge cases: unrecognised email, expired token, reused token (listed untested since 2026-07-30).
-- Part 4 unmapped chains: FLOW-20/21/22 (quote → delivered → accepted — the money path upstream of verified payments), FLOW-24 (form-failure alerting), FLOW-25 (AI diagnostic + its financial promise), MISC-02. (MISC-01 closed 2026-08-09 — four footer taps walked, all load.)
+- Part 4 unmapped chains: FLOW-20/21/22 (quote → delivered → accepted — the money path upstream of verified payments), FLOW-24 (form-failure alerting), FLOW-25 (AI diagnostic + its financial promise). **MISC-01 and MISC-02 both closed 2026-08-09** — footer taps and sitemap counters walked live; they are no longer parked.
 
 ---
 

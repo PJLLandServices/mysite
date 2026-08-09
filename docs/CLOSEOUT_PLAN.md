@@ -26,6 +26,47 @@ is too small to justify its own cycle and none of them touch a PASS flow.
 **Acceptance:** pipeline contains no test or spam records; the four city links either load or are
 gone; sitemap counters match reality; commercial page has its own metadata.
 
+### ✅ STAGE 1 COMPLETE — 2026-08-09
+
+All five items closed on walks Patrick performed against production. Full record in
+`docs/JOB-009_SHALLOW_SWEEP.md`; register rows carry the acceptance evidence.
+
+| Item | Outcome |
+|---|---|
+| CRM-04 | **CLOSED.** Test leads deleted 08-07 via bulk delete → Trash; the residue — booking `BK-2026-0014` and the John Charette customer record — 08-09, once CRM-15 made the stranded booking reachable. |
+| CRM-05 | **CLOSED.** Spam leads deleted 08-07; Kelly Dorji confirmed gone from every store. Spam-defense report written: the gate is four blocking checks (honeypot, time-trap, per-IP rate limit, Turnstile — confirmed armed on Render), none of which stops a human typing a pitch. **No CAPTCHA added.** |
+| CRM-06 | **CLOSED.** `serveStatic` rewrites title, canonical, description and `<h1>` on the commercial route; residential bytes untouched. Confirmed live. |
+| MISC-01 | **CLOSED — they never 404'd.** All four pages existed, were linked from 84 pages each, and were already in `sitemap.xml`. The only real gap was `sitemap.html`'s Service Areas list. Four footer taps walked live. |
+| MISC-02 | **CLOSED.** Counters corrected and walked live — and they survived PR #47 adding a service page, which bumped the count with the entry. |
+
+**One estimate to correct for future planning:** this was scoped at "~1 hour, no investigation
+needed." It took two sessions across three days. The four code items were genuinely shallow;
+the deletions were not, because they surfaced a missing feature (CRM-15) that nothing in the
+plan anticipated.
+
+**Spun out of Stage 1 — carried forward, not done:**
+
+- **CRM-15** — deleting a lead stranded its booking with no UI able to delete it. Found *and
+  fixed* inside JOB-009 (delete control on `/admin/booking/:id`), walked live the same day.
+  It is what unblocked CRM-04. **Closed**, and listed here because it is the reason Stage 1
+  ran long.
+- **CRM-14** — `POST /api/new-customer` has no anti-bot gate at all. Found while sourcing
+  CRM-05's claims. **Open, unscoped** — Patrick's call whether it earns a job.
+- **CRM-05's flag-don't-block recommendation** — set the existing `botFlagged` at intake using
+  the scanner's vocabulary, so suspect leads arrive pre-flagged and no customer is ever
+  blocked. **An open decision, not a defect.** Unbuilt, and closing CRM-05 did not presume it.
+- **JOB-011 needs re-scoping before anyone builds it.** It was scoped on the premise that test
+  records like John Charette are "locked in forever." That premise is now false — Charette
+  came out in two clicks once the booking control existed. Its remaining value is the *safe
+  general* case: money-line guard, preview, snapshot.
+
+**The method lesson, recorded because it cost the most time.** JOB-009 designed CRM-04/05
+around a read-only scanner run on the Render shell. Every other job in this register shipped
+as code → merge → deploy → Patrick clicks in the CRM. That framing hid a missing feature
+behind a diagnostic that kept truthfully reporting "pipeline is clean" while the real blocker
+sat in a store it never read. **When a cleanup tool reports absence, the answer is usually a
+control in the product, not a better script.**
+
 ---
 
 ## Stage 2 — JOB-004, the presentation fixes (small, visible)
