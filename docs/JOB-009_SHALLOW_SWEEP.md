@@ -265,6 +265,12 @@ The header line is the finding, whatever the table says.
    the two SEO-spam submissions, and nothing you recognize as a real customer. Delete the
    listed records in the CRM (bulk delete). Confirm the pipeline list no longer shows
    them and `/admin/trash` does.
+   ✅ **WALKED — leads deleted 2026-08-07; residue cleared 2026-08-09.** The lead deletions
+   went through the Trash flow on 08-07. That left two records the scanner never covers:
+   booking `BK-2026-0014` and the John Charette *customer* record — the booking stranded
+   and unreachable until CRM-15 shipped its delete control on 08-09, after which Patrick
+   deleted booking then customer. Kelly Dorji confirmed fully removed. **CRM-04 and CRM-05
+   CLOSED.**
 2. **CRM-06:** open `/commercial-new-customer`, view source: title reads "Commercial
    customer intake — PJL Land Services", canonical ends `/commercial-new-customer`,
    description mentions commercial properties. Open `/new-customer`, view source:
