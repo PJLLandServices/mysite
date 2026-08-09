@@ -279,6 +279,12 @@ The header line is the finding, whatever the table says.
    Hill — all four load. ✅ **WALKED 2026-08-09 — all four load, no 404s. MISC-01 CLOSED.**
 4. **MISC-02:** open `/sitemap.html` — Service Areas lists 18 cities including the four
    above; every section counter matches a hand count of its list.
+   ✅ **WALKED 2026-08-09 — passes. MISC-02 CLOSED.** Service Areas shows 18 with Toronto,
+   North York, Lawrence Park and Forest Hill among them (MISC-01's sitemap.html side,
+   visually confirmed on the same page). Counters audited against the deployed file:
+   6 / 12 / 4 / 18 / 15 / 4, all matching. Services reads **12**, not JOB-009's 11 — PR #47
+   (The PJL Water Promise) added a service page and bumped the counter with it. The fix held
+   through a change made by another hand, which is the only real test of a counter.
 
 **Register on close:** CRM-04, CRM-05, CRM-06, MISC-01, MISC-02 closed with this
 acceptance record; CRM-05 carries the spam-defense finding and Patrick's decision.
