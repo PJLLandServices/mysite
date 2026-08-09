@@ -122,12 +122,28 @@ fix all concern **`sitemap.html`** — the human-readable Site Map page, whose S
 list omitted the four. `sitemap.xml` already had them; that is why the JOB-009 diff touched
 `sitemap.html` only. The two files are easy to conflate when checking the fix.
 
-If the *live* `sitemap.xml` genuinely lacks the four URLs, the repo is not the cause and the
-next place to look is delivery, not content: a stale deploy on Render (compare the live
-file against `main`), a CDN/browser cache (hard-reload, or fetch with cache disabled), or —
-if this came from Search Console rather than the raw URL — Google showing its own last-read
-copy, which lags the file. Outbound HTTPS to the live host is blocked from this sandbox
-(CONNECT refused 403), so the live file could not be fetched here to settle it directly.
+**SETTLED 2026-08-09 against the live file.** Outbound to the host is blocked from the
+sandbox, so Patrick supplied `https://www.pjllandservices.com/sitemap.xml` as a PDF capture.
+Extracted and diffed against the repo:
+
+- **81 page URLs live, 81 in the repo, sets identical** — zero differences either direction.
+- All **18** city pages present live, **including all four**: `forest-hill`,
+  `lawrence-park`, `north-york`, `toronto`.
+
+So the live XML is not stale, not cached wrong, and not missing anything — the earlier
+delivery hypotheses (stale deploy, CDN, Search Console lag) are all ruled out. Nothing to
+fix.
+
+Two things explain why they read as absent, and both are worth knowing before the next
+person checks:
+
+1. **The slugs are hyphenated.** A browser find for `Lawrence Park` or `Forest Hill` — with
+   a space, as the footer renders them — matches nothing. The URLs are
+   `sprinkler-service-lawrence-park.html`.
+2. **They are not grouped.** Sorted alphabetically among the 18 they land at positions 6, 9,
+   12 and 17, interleaved with the rest, and carry the same `lastmod 2026-07-08` as every
+   other city. Nothing marks them as recently added, so scanning for a new block at the end
+   finds nothing.
 
 **The delete list itself is still un-generated.** `server/data/leads.json` is runtime data
 that lives only on Render (gitignored, absent from the repo), and outbound HTTPS to the
