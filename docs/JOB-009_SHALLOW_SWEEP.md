@@ -275,6 +275,12 @@ The header line is the finding, whatever the table says.
    customer intake — PJL Land Services", canonical ends `/commercial-new-customer`,
    description mentions commercial properties. Open `/new-customer`, view source:
    unchanged residential metadata. Both forms still render and (optionally) submit.
+   ✅ **WALKED 2026-08-09 — passes. CRM-06 CLOSED.** Patrick confirmed the live commercial
+   route renders the hero "New commercial customer intake" and the form intact, which proves
+   the `serveStatic` rewrite branch executes in production. The three head tags verified
+   against the deployed `main` the same day, plus `/new-customer` byte-identical to disk.
+   Re-checked after PR #47 touched `new-customer.html` — its edit was confined to the footer
+   block and an appended script tag, so all four exact-match source strings survive.
 3. **MISC-01:** from any page footer, tap Toronto, North York, Lawrence Park, Forest
    Hill — all four load. ✅ **WALKED 2026-08-09 — all four load, no 404s. MISC-01 CLOSED.**
 4. **MISC-02:** open `/sitemap.html` — Service Areas lists 18 cities including the four
@@ -288,3 +294,35 @@ The header line is the finding, whatever the table says.
 
 **Register on close:** CRM-04, CRM-05, CRM-06, MISC-01, MISC-02 closed with this
 acceptance record; CRM-05 carries the spam-defense finding and Patrick's decision.
+
+## JOB-009 COMPLETE — 2026-08-09
+
+All five register items closed, every one on a walk Patrick performed against production:
+
+| Item | Closed | On what evidence |
+|---|---|---|
+| CRM-04 | 2026-08-09 | Test leads deleted 08-07; booking `BK-2026-0014` + Charette customer record 08-09 |
+| CRM-05 | 2026-08-09 | Spam leads deleted 08-07; Kelly Dorji confirmed gone from every store; report written |
+| CRM-06 | 2026-08-09 | Live commercial route renders the commercial hero; head tags + byte-identical residential verified |
+| MISC-01 | 2026-08-09 | Four footer taps walked live, no 404s |
+| MISC-02 | 2026-08-09 | Live sitemap walked, every counter matches (6/12/4/18/15/4) |
+
+**Spun out, still open — none of these is JOB-009 work:**
+
+- **CRM-14** — `POST /api/new-customer` has no anti-bot gate at all. Found while sourcing
+  CRM-05's claims. Logged, unscoped, Patrick's call.
+- **CRM-15** — deleting a lead stranded its booking with no UI to delete it. **Found and
+  fixed inside this job** (the delete control on `/admin/booking/:id`), walked live the same
+  day, and it is what unblocked CRM-04. Closed.
+- **CRM-05's flag-don't-block recommendation** — an open decision, not a defect. Unbuilt.
+- **JOB-011 needs re-scoping.** It was scoped on the premise that test records like John
+  Charette are "locked in forever." That premise is now false — Charette was deletable in two
+  clicks once the booking control existed. JOB-011's remaining value is the *safe general*
+  case (money-line guard, preview, snapshot), not unblocking CRM-04.
+
+**The lesson worth carrying out of this job,** because it cost the most time: JOB-009 designed
+CRM-04/05 around a scanner run on the Render shell, when every other job in this register
+shipped as code → merge → deploy → Patrick clicks. The shell framing hid a missing feature
+(CRM-15) behind a diagnostic that kept truthfully reporting "pipeline is clean" while the
+actual blocker sat in a store it never read. When a cleanup tool reports absence, the fix is
+usually a control in the product, not a better script.
