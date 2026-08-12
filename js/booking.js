@@ -109,7 +109,11 @@
     // loadAvailability. Both check state.customerFirstName at render time.
   }
 
-  function showStep(name) {
+  // `scroll` defaults to true because every customer-driven step change
+  // (Next, Back, service-card click) should pull the new step into view.
+  // The one caller that passes false is the deep-link bootstrap in init() —
+  // see the note at the scrollIntoView call below.
+  function showStep(name, { scroll = true } = {}) {
     state.step = name;
     steps.forEach((s) => { s.hidden = s.dataset.step !== name; });
 
@@ -152,9 +156,17 @@
       }
     }
 
-    // Scroll to the active step on mobile so the user always sees it.
+    // Scroll to the active step on mobile so the user always sees it — but
+    // only when the customer caused the step change. On first paint we leave
+    // the viewport alone: a deep link like ?service=sprinkler_repair lands
+    // mid-flow, and yanking the page down a fifth of a second after load
+    // reads as a broken page rather than a helpful shortcut.
     const active = steps.find((s) => s.dataset.step === name);
-    if (active) active.scrollIntoView({ behavior: "smooth", block: "start" });
+    if (scroll && active) {
+      const reduceMotion = window.matchMedia
+        && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      active.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth", block: "start" });
+    }
   }
 
   // ===== Service catalog =====
@@ -728,11 +740,13 @@
             // still needs the customer's input. With a fully-populated
             // handoff (service + zones + address), this drops them straight
             // on the time picker and triggers the availability fetch.
+            // Synchronous, and explicitly without the scroll. The old 200ms
+            // defer existed to let the paint settle before the smooth scroll
+            // ran; with no scroll it only bought a visible flash of the
+            // service picker before the real landing step swapped in.
             const landing = bestLandingStep();
-            setTimeout(() => {
-              showStep(landing);
-              if (landing === "when") loadAvailability();
-            }, 200);
+            showStep(landing, { scroll: false });
+            if (landing === "when") loadAvailability();
             return;
           }
 
