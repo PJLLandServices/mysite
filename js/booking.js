@@ -109,7 +109,7 @@
     // loadAvailability. Both check state.customerFirstName at render time.
   }
 
-  function showStep(name) {
+  function showStep(name, { scroll = true } = {}) {
     state.step = name;
     steps.forEach((s) => { s.hidden = s.dataset.step !== name; });
 
@@ -152,9 +152,16 @@
       }
     }
 
-    // Scroll to the active step on mobile so the user always sees it.
+    // Scroll to the active step on mobile so the user always sees it. This is
+    // wanted for customer-driven step changes (Next, Back, service-card click)
+    // and opt-out via { scroll: false } for the deep-link bootstrap, which
+    // otherwise lurches the page on first paint.
     const active = steps.find((s) => s.dataset.step === name);
-    if (active) active.scrollIntoView({ behavior: "smooth", block: "start" });
+    if (scroll && active) {
+      const reduceMotion = window.matchMedia
+        && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      active.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth", block: "start" });
+    }
   }
 
   // ===== Service catalog =====
@@ -742,10 +749,8 @@
             // handoff (service + zones + address), this drops them straight
             // on the time picker and triggers the availability fetch.
             const landing = bestLandingStep();
-            setTimeout(() => {
-              showStep(landing);
-              if (landing === "when") loadAvailability();
-            }, 200);
+            showStep(landing, { scroll: false });
+            if (landing === "when") loadAvailability();
             return;
           }
 
