@@ -4,6 +4,9 @@
 Last updated: 2026-08-09 — supersedes the 2026-08-02 version.
 **2026-08-09 (JOB-009 close):** CRM-04, CRM-05, CRM-06, MISC-01, MISC-02 CLOSED on walked
 acceptance. CRM-15 opened and closed the same day (booking-delete control). CRM-14 opened.
+**2026-08-13 (Site Plan Underlay):** FLOW-26 opened (Site Builder design → Quote + Material
+List) — UNMAPPED, awaiting a walked acceptance. Part 6 added to record architectural
+deviations DEV-01 / DEV-02 / DEV-03.
 
 If a flow isn't in here with a status, it is not known to work.
 Update this file, not a chat thread.
@@ -308,6 +311,7 @@ Nothing below has been walked. Assume nothing works until verified.
 | FLOW-22 | Invoice generated → delivered | |
 | FLOW-24 | Form failure → does anything alert Patrick? | Contact page shows "Your message didn't send." Unknown whether that failure is logged anywhere. |
 | FLOW-25 | AI diagnostic tool (`/sprinkler-repair.html`) | Carries a financial promise: "correct diagnosis = 1 hr labour free." Runs on Cloudflare Worker + API key — a dependency chain separate from Render and from email. |
+| FLOW-26 | **Site Builder design → Quote + Material List** — **UNMAPPED** (opened 2026-08-13, Site Plan Underlay brief) | Hop chain: **traced geometry → `compute()` → `desiredQuoteLines()` → `syncQuoteFromDesign()` → Q-… → `generateMaterialList()` → ML-…**. This is the design half of the money path and it feeds **FLOW-20** (quote written → delivered), also UNMAPPED. Every hop exists in code and each was exercised in a scripted browser walk of `/admin/sitebuilder` (see the acceptance notes below), but **that is not a walked flow** — mark PASS only after Patrick has walked it end to end and observed each hop with a real tender. **What the scripted walk did establish, on a synthetic known-scale sheet:** a 100.0 ft × 60.0 ft rectangle uploads, calibrates and traces to **6,000.0 sq ft (0.000% error)**; the same drawing exported at a different DPI calibrates to the same real-world dimensions; a deliberately 2×-mistyped calibration dimension produces a **failed** verification and **blocks tracing**; the stated-scale cross-check agrees on a to-scale sheet and flags a fit-to-page export; traced geometry flows into head count, zone count and GPM; the design saves and restores across a reload; recalibrating a traced-over sheet is refused naming the dependent area; and the customer quote sheet renders the traced geometry with **no underlay**. **What is NOT covered and needs Patrick:** a real multi-page tender PDF (thumbnail legibility, sheet choice, underlay readability at working zoom); a traced area against a **hand-measured real bed** agreeing within 2%; and the full hop out to a live Q-… and ML-… on a real project. |
 | MISC-01 | **CLOSED 2026-08-09 — they do not 404. Never was a broken link.** **Acceptance walked by Patrick 2026-08-09: all four footer links tapped on the live site, all load, no 404s.** That closes the one gap the sandbox couldn't: outbound to the live host is blocked from the build environment, so JOB-009's evidence was four local 200s off a booted server plus the static facts — all four pages exist, each is referenced by **84 pages** (the sitewide footer), and all appear in `sitemap.xml`. Production now confirms it directly. The only real defect was that **`sitemap.html`** — the human-readable Site Map page, *not* `sitemap.xml` — omitted them from Service Areas; added in JOB-009 (footer ordering, descriptions from each page's own meta description). **`sitemap.xml` was never part of this defect** and has carried all 18 city URLs since ccf7604 (2026-07-15); it has no server route and ships as a static file. **Verified against production 2026-08-09** (Patrick supplied the live file as a PDF; outbound is blocked from the sandbox): **81 live URLs vs 81 in the repo, sets identical, all four cities present** — the live XML is not stale and never was. Worth keeping on record: checking the XML to verify an HTML-page fix is an easy wrong turn, and the four are easy to miss in it — the slugs are hyphenated (`lawrence-park`, not "Lawrence Park", so a find-in-page for the footer's label fails) and they sort alphabetically among the 18 rather than appearing as a new block. |
 | MISC-02 | **CLOSED 2026-08-09 — walked live.** `sitemap.html` section counters were stale: "Services · 10 pages" listed 11; "Book / Quote / Estimate · 3 pages" listed 4. Corrected in JOB-009 (Services 11, Book/Quote/Estimate 4, Service Areas 18 after the MISC-01 rows). **Patrick walked the live page 2026-08-09: every section counter matches its list.** Audited against the deployed file the same day — 6 / 12 / 4 / 18 / 15 / 4, all six matching. **Services now reads 12, not the 11 JOB-009 set:** PR #47 (The PJL Water Promise) added a service page and correctly bumped the counter with it — the discipline survived a change by another hand, which is the real test of this fix. Blog's 15 is a deliberately curated subset (~39 blog pages exist; `blog.html` is the full index), left as is. |
 
@@ -322,3 +326,46 @@ The drift came from delegated jobs shipping changes nobody read or verified.
 3. **Every job ships with a written acceptance test** — the exact taps Patrick performs, as a customer.
 4. **A job is not done** until Patrick has run that test and updated this file.
 5. **No job touches a flow marked PASS** without re-verifying it afterward.
+
+---
+
+# Part 6 — Recorded architectural deviations
+
+Conscious departures from the codebase's own conventions. Recorded so they
+are decisions with owners rather than drift someone finds later.
+
+> **DEV-01 — Hardcoded install pricing (accepted 2026-08-13).**
+> `INSTALL_PRICING` in `server/sitebuilder.html` hardcodes `perZone: 549`,
+> base `585` / `749`, and controller `595` / `750` / `1195`, duplicating the
+> `pricing.json` keys `new_install_per_zone`, `new_install_t1_base`,
+> `new_install_t2_base`, `controller_1_4`, `controller_5_7`,
+> `controller_8_16`. **All six values re-verified against `pricing.json` on
+> 2026-08-13 and matching** (549 / 585 / 749 / 595 / 750 / 1195). Note separately
+> that the builder's `baseByZones` is `n<=4 ? 585 : 749`, so an 8+ zone job is
+> quoted the Tier 2 (5-7 zone) base — the code comments this ("8+ uses t2, edit in
+> quote") and it is priced by hand in the proposal, but it is a second way this
+> block can disagree with `pricing.json`, and not one the linter would catch either.
+> `scripts/lint-no-hardcoded-prices.mjs` scans **root-level `*.html` only**,
+> so `server/` sits outside the build gate and drift here will NOT be caught.
+> Any change to those `pricing.json` keys must be mirrored into that block by
+> hand. Remediation deferred by owner decision; the durable fix is to read
+> `pricing.json` at runtime and widen the linter's scope to `server/*.html`.
+> Untouched by the Site Plan Underlay work — recorded, not introduced, by it.
+
+> **DEV-02 — First vendored front-end library (accepted 2026-08-13).**
+> Mozilla **pdf.js 4.10.38** (legacy build) is vendored as a static asset at
+> `server/vendor/pdfjs/` to enable client-side PDF rasterization for the Site
+> Builder's site-plan underlay. It introduces **no build step, no npm runtime
+> dependency, and no server-side code path** — it executes only in the browser,
+> only in the upload dialog. The alternative, server-side rasterization,
+> requires a native binary (poppler / ghostscript) on Render Starter and was
+> judged materially worse. Version, file checksums and the re-verification
+> command are pinned in `server/vendor/pdfjs/VENDORED.md`; the tarball was
+> checked against the npm registry's own `dist.shasum` before vendoring.
+
+> **DEV-03 — `sitebuilder.html` is still monolithic (recorded 2026-08-13).**
+> It is the only admin page carrying its CSS and JS inline instead of split
+> into `.css` / `.js` siblings. The site-plan underlay work grew it rather
+> than splitting it: a split is the right change, but not one to make on a
+> tender deadline and not in the same commit as a new feature, where it would
+> hide the feature diff inside a whole-file move. Its own piece of work.

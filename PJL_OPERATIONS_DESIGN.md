@@ -1129,6 +1129,56 @@ When tech taps "Complete":
 
 ---
 
+### 4.3b Site Builder → Quote + Material List
+
+**Where install designs actually come from.** `/admin/sitebuilder`
+(`server/sitebuilder.html`, staff-gated) is the internal design tool that
+turns a property's geometry into a priced system. It sits upstream of the
+Quote Folder for new installs and retrofits — the design is the thing the
+proposal is built from, not a separate artefact.
+
+```
+water supply  →  areas (dimensions, drawn shapes, or TRACED OVER A SITE PLAN)
+              →  head layout + arc-aware zone packing  →  GPM, zone count
+              →  bill of materials
+              →  MATERIAL LIST (ML-…)  +  project_proposal QUOTE (Q-…)
+```
+
+The design saves onto the project as `project.systemDesign`. Once a quote
+has been generated it stays **linked**: every save re-syncs it — zone names
+and added/removed zones flow through, **prices Patrick has edited are
+kept**, and a quote that has already been sent is never overwritten. This
+is the same "the record is the contract once it leaves" discipline as the
+signed work order.
+
+**Site plans (Aug 2026).** For a tendered job, Patrick uploads the supplied
+PDF or an image of the plan, calibrates each sheet against a dimension
+printed on it, **verifies that calibration against a second dimension**, and
+then traces beds, lawns and planters directly over the drawing. Areas,
+zone counts, GPM, the bill of materials, the material list and the linked
+proposal all flow from that traced geometry through machinery that already
+existed — the tool became scale-aware, it did not become a CAD program.
+
+Three operational rules, and they are not preferences:
+
+1. **No tracing on an uncalibrated sheet.** A hard block, not a warning.
+2. **One control measurement is not a measurement.** A second, independent
+   known dimension must agree before the sheet can be used. Over 2% out and
+   tracing stays blocked.
+3. **A number a bid depends on is never silently changed.** Re-scaling a
+   sheet that areas are already traced on is refused, naming them.
+
+The reason is commercial, not technical: a scale error does not look like a
+bug. It produces a plan that reads perfectly and a price that is half or
+double what it should be, and nobody finds out until the job is won at the
+wrong number.
+
+**The tender drawing is a third party's document.** It is stored internally,
+served only to a signed-in staff session, and never appears on the customer
+quote sheet, in the proposal PDF, in the portal, or in the `/approve` flow.
+The traced geometry does reach the customer — that is the point. The
+drawing underneath it does not.
+
 ### 4.4 Project Folder Execution (Brief 2, May 2026)
 
 A Project (`PROJ-YYYY-NNNN`) groups multi-day build work under a single accepted proposal. Brief 1 set up the proposal-to-project handshake; this section covers the execution loop.
@@ -1413,6 +1463,16 @@ gated at 3/hour per user.
        │
        └── (1+ properties per customer)
 
+
+  DESIGN (installs / retrofits / tenders)
+    SITE BUILDER  ──→ areas (typed, drawn, or traced over a calibrated site plan)
+                  ──→ zones + GPM + BOM
+                  ──→ MATERIAL LIST (ML-…) ──┐
+                                             ├──→ feeds the QUOTE below
+                  ──→ project_proposal  ──────┘   (stays linked; re-syncs on
+                                                   every save, keeps edited
+                                                   prices, never overwrites
+                                                   a sent quote)
 
   TRANSACTION FLOW
     LEAD ──→ QUOTE ──→ BOOKING ──→ WORK ORDER ──→ SERVICE RECORD ──→ INVOICE

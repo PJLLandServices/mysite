@@ -29,8 +29,24 @@
 const fs = require("node:fs/promises");
 const fsSync = require("node:fs");
 const path = require("node:path");
+const crypto = require("node:crypto");
+
+const calibration = require("./site-plan-calibration");
 
 const FILE = path.join(__dirname, "..", "data", "projects.json");
+
+// Site-plan rasters. Mirrors the quote-attachment layout
+// (server/data/quote-attachments/<quoteId>/<attId>.<ext>) deliberately —
+// same on-disk shape, same base64-in / Buffer-out handling, same
+// per-file + aggregate caps. See lib/quotes.js addAttachment.
+const SITE_PLANS_DIR = path.join(__dirname, "..", "data", "site-plans");
+const SITE_PLAN_MIME_WHITELIST = new Set(["image/png", "image/jpeg"]);
+const MAX_SITE_PLAN_PAGE_BYTES = 16 * 1024 * 1024;   // 16 MB per rasterized sheet
+const MAX_SITE_PLAN_TOTAL_BYTES = 64 * 1024 * 1024;  // 64 MB per project
+// The sitePlan field itself holds METADATA ONLY — never a raster. 64 KB
+// accommodates ~40 pages with room to spare, so exceeding it means
+// something is wrong and failing loudly is correct.
+const MAX_SITE_PLAN_META_BYTES = 64 * 1024;
 
 const STATUSES = ["planning", "active", "complete", "archived"];
 
@@ -115,6 +131,24 @@ function blankProject() {
     // JSON: town, rate, per-zone run times, computed season cost. null until
     // saved; written whole via PATCH { waterCostEstimate: {...} }.
     waterCostEstimate: null,
+
+    // sitePlan — the uploaded, scale-calibrated site-plan sheets the
+    // Sprinkler System Builder traces areas over. Metadata only; the
+    // rasters live on disk under server/data/site-plans/<projectId>/.
+    //
+    // Why this is a top-level field and NOT nested inside systemDesign:
+    //   - systemDesign is capped at 512 KB and rewritten WHOLE on every
+    //     save. Site-plan metadata is stable and must not compete for
+    //     that budget, nor be lost when a design-blob overwrite lands.
+    //   - The plan outlives any single design revision. It is a property
+    //     of the job, not of one iteration of the layout.
+    //   - waterCostEstimate already establishes the precedent of a second,
+    //     independently-capped builder-owned document on this record.
+    //
+    // Written by addSitePlanPage / setSitePlanCalibration /
+    // removeSitePlanPage below — NOT by the generic update() patch path,
+    // which only accepts null (to clear). null until a plan is uploaded.
+    sitePlan: null,
 
     // Linked work orders. Push via attachWorkOrder; remove via
     // detachWorkOrder. Order is insertion order — UI sorts as needed.
@@ -233,7 +267,8 @@ function hydrate(rec) {
     propertyEditsAppliedAt: typeof rec?.propertyEditsAppliedAt === "string" ? rec.propertyEditsAppliedAt : null,
     finalInvoiceId: typeof rec?.finalInvoiceId === "string" ? rec.finalInvoiceId : null,
     systemDesign: (rec && typeof rec.systemDesign === "object") ? rec.systemDesign : null,
-    waterCostEstimate: (rec && typeof rec.waterCostEstimate === "object") ? rec.waterCostEstimate : null
+    waterCostEstimate: (rec && typeof rec.waterCostEstimate === "object") ? rec.waterCostEstimate : null,
+    sitePlan: (rec && typeof rec.sitePlan === "object") ? rec.sitePlan : null
   };
 }
 
@@ -355,7 +390,44 @@ async function buildCustomerSnapshot(customerId) {
 // completedAt the first time a project enters those states. Archived is
 // sticky unless the caller explicitly moves it back to a non-archived
 // status (which re-derives via the ordinary status path).
+// ---- Write serialization ---------------------------------------------
+//
+// Every mutator in this file is a read-modify-write over the whole
+// projects.json array: readAll() -> mutate -> writeAll(). There are awaits
+// between the read and the write, so two concurrent callers CAN interleave
+// and the second writeAll silently discards the first caller's change.
+//
+// That is not theoretical here. The Sprinkler System Builder autosaves
+// `systemDesign` on a dirty flag while the user is working, and the
+// site-plan calibration PATCH writes `sitePlan` on the same record. Those
+// two land on the same project seconds apart, and a lost calibration write
+// would leave a traced design pointing at an uncalibrated page — exactly
+// the silent-wrong-number failure this feature exists to prevent.
+//
+// So all read-modify-write cycles queue behind one another. Node is
+// single-threaded, so a plain promise chain is a sufficient mutex; there is
+// no cross-process writer. Reads (list/get) are deliberately NOT locked —
+// they never write, and blocking them would serialize the whole CRM behind
+// one slow save.
+//
+// Deadlock note: nothing inside a locked callback may call another locked
+// function. Verified — every _mutate() call site is a top-level exported
+// verb, and the two async _mutate callbacks only call read-only helpers.
+let _writeQueue = Promise.resolve();
+
+function withWriteLock(fn) {
+  const result = _writeQueue.then(fn);
+  // Keep the queue alive when a caller throws — one failed save must not
+  // wedge every subsequent write on the process.
+  _writeQueue = result.then(() => {}, () => {});
+  return result;
+}
+
 async function update(id, patch = {}) {
+  return withWriteLock(() => _updateUnlocked(id, patch));
+}
+
+async function _updateUnlocked(id, patch = {}) {
   const records = await readAll();
   const idx = records.findIndex((r) => r.id === id);
   if (idx === -1) return null;
@@ -440,6 +512,27 @@ async function update(id, patch = {}) {
       appendHistory(next, { action: "water_cost_saved", note: `${size} bytes` });
     } else {
       throw new Error("waterCostEstimate must be an object or null.");
+    }
+  }
+
+  // sitePlan — CLEAR ONLY through the generic patch path.
+  //
+  // Unlike systemDesign / waterCostEstimate, this field is not opaque to
+  // the server: calibration.ftPerPx is the number a tender depends on, and
+  // it is DERIVED server-side from the clicked points by
+  // lib/site-plan-calibration.js. Accepting a whole sitePlan object here
+  // would let a caller post an arbitrary ftPerPx straight past that
+  // derivation, which is precisely the silent-wrong-number failure the
+  // feature exists to prevent. Real writes go through addSitePlanPage /
+  // setSitePlanCalibration / removeSitePlanPage below.
+  if (Object.prototype.hasOwnProperty.call(patch, "sitePlan")) {
+    if (patch.sitePlan == null) {
+      next.sitePlan = null;
+      appendHistory(next, { action: "site_plan_cleared" });
+    } else {
+      throw new Error(
+        "sitePlan can't be written directly. Use the site-plan page and calibration endpoints."
+      );
     }
   }
 
@@ -680,6 +773,10 @@ const TASK_STATUSES = ["pending", "in_progress", "done"];
 
 // Helper — load a project, mutate via callback, write back, return next.
 async function _mutate(projectId, fn) {
+  return withWriteLock(() => _mutateUnlocked(projectId, fn));
+}
+
+async function _mutateUnlocked(projectId, fn) {
   const records = await readAll();
   const idx = records.findIndex((r) => r.id === projectId);
   if (idx === -1) {
@@ -1466,6 +1563,493 @@ async function completeProject(projectId, { by = "admin", allowOverride = false,
   });
 }
 
+// ══════════════════════════════════════════════════════════════════════
+// Site plan — rasterized sheets + scale calibration
+// ══════════════════════════════════════════════════════════════════════
+//
+// Storage split, and why:
+//   - The RASTER lives on disk at
+//     server/data/site-plans/<projectId>/<pageId>.<png|jpg>, exactly like a
+//     quote attachment. It never enters projects.json.
+//   - The METADATA (label, dimensions, calibration record with full
+//     provenance) lives on project.sitePlan, capped at 64 KB.
+//
+// The original PDF is NEVER uploaded or stored. Rasterization happens
+// entirely in the browser (vendored pdf.js); the server only ever sees
+// PNG/JPEG. That means no server-side PDF dependency of any kind, and no
+// third party's tender document retained on PJL's disk. The deliberate
+// trade-off: an underlay can't be re-rendered at higher resolution later
+// without re-uploading, which is why the client renders at ~5000 px on the
+// long edge up front.
+
+function newSitePlanPageId() { return "spp_" + random8(); }
+
+function extForSitePlanMime(mime) {
+  if (mime === "image/png") return "png";
+  if (mime === "image/jpeg") return "jpg";
+  return "bin";
+}
+
+// Path safety. `pageId` and `projectId` arrive from a request path, so both
+// are validated against anchored patterns BEFORE any path.join — never
+// after. "../../etc/passwd", "spp_../.." and "spp_ABCDEFGH" all throw here
+// and never reach the filesystem.
+function sitePlanPagePath(projectId, pageId, mimeType) {
+  if (!calibration.isValidProjectId(projectId)) {
+    throw Object.assign(new Error("Invalid project id."), { code: "bad_id" });
+  }
+  if (!calibration.isValidPageId(pageId)) {
+    throw Object.assign(new Error("Invalid site-plan page id."), { code: "bad_id" });
+  }
+  return path.join(SITE_PLANS_DIR, projectId, `${pageId}.${extForSitePlanMime(mimeType)}`);
+}
+
+async function ensureSitePlanDir(projectId) {
+  if (!calibration.isValidProjectId(projectId)) {
+    throw Object.assign(new Error("Invalid project id."), { code: "bad_id" });
+  }
+  const dir = path.join(SITE_PLANS_DIR, projectId);
+  await fs.mkdir(dir, { recursive: true });
+  return dir;
+}
+
+function blankSitePlan(sourceFilename, sourceMimeType, uploadedBy) {
+  return {
+    version: 1,
+    sourceFilename: String(sourceFilename || "").slice(0, 200),
+    sourceMimeType: String(sourceMimeType || "").slice(0, 100),
+    // Tender drawings come from a GC or consultant and are a third party's
+    // document. Default closed: the raster is admin/user-session gated and
+    // is never rendered into any customer-facing surface.
+    confidential: true,
+    uploadedAt: nowIso(),
+    uploadedBy: String(uploadedBy || "admin").slice(0, 80),
+    pages: []
+  };
+}
+
+function guardSitePlanSize(sitePlan) {
+  const size = JSON.stringify(sitePlan).length;
+  if (size > MAX_SITE_PLAN_META_BYTES) {
+    throw new Error(
+      `Site-plan metadata is too large to save (${Math.round(size / 1024)} KB over a ` +
+      `${Math.round(MAX_SITE_PLAN_META_BYTES / 1024)} KB cap). This field holds metadata only — ` +
+      `if it's this big, something is wrong.`
+    );
+  }
+  return size;
+}
+
+function sitePlanPages(project) {
+  return Array.isArray(project && project.sitePlan && project.sitePlan.pages)
+    ? project.sitePlan.pages
+    : [];
+}
+
+function findSitePlanPage(project, pageId) {
+  return sitePlanPages(project).find((pg) => pg && pg.id === pageId) || null;
+}
+
+// Areas in the saved design that trace over a given page. This is what
+// makes a page's calibration LOCKED (Phase 1) and what makes a delete
+// refuse without ?force=1. Returns display names so the refusal can name
+// the areas rather than saying "some areas depend on this".
+function sitePlanDependents(project, pageId) {
+  const areas = Array.isArray(project && project.systemDesign && project.systemDesign.areas)
+    ? project.systemDesign.areas
+    : [];
+  const out = [];
+  areas.forEach((a, i) => {
+    if (a && a.planRef && a.planRef.pageId === pageId) {
+      out.push(String((a.name || "").trim() || `Area ${i + 1}`).slice(0, 80));
+    }
+  });
+  return out;
+}
+
+// ---- Upload one rasterized page --------------------------------------
+
+async function addSitePlanPage(projectId, {
+  buffer,
+  mimeType,
+  label = "",
+  pdfPageNumber = null,
+  rasterWidthPx = 0,
+  rasterHeightPx = 0,
+  renderScale = null,
+  sourceFilename = "",
+  sourceMimeType = "",
+  uploadedBy = "admin"
+} = {}) {
+  if (!buffer || !buffer.length) throw new Error("Site-plan page has no image data.");
+  if (!SITE_PLAN_MIME_WHITELIST.has(mimeType)) {
+    throw new Error(`Unsupported site-plan image type: ${mimeType}. The builder uploads PNG or JPEG only.`);
+  }
+  if (buffer.length > MAX_SITE_PLAN_PAGE_BYTES) {
+    throw new Error(
+      `This sheet is ${(buffer.length / 1_000_000).toFixed(1)} MB and the per-sheet limit is ` +
+      `${MAX_SITE_PLAN_PAGE_BYTES / 1024 / 1024} MB. Re-render it at a lower resolution and try again.`
+    );
+  }
+  const w = Math.round(Number(rasterWidthPx) || 0);
+  const h = Math.round(Number(rasterHeightPx) || 0);
+  if (w <= 0 || h <= 0) {
+    throw new Error("Site-plan page is missing its pixel dimensions.");
+  }
+
+  return withWriteLock(async () => {
+    const records = await readAll();
+    const idx = records.findIndex((r) => r.id === projectId);
+    if (idx === -1) throw Object.assign(new Error("Project not found."), { code: "project_not_found" });
+    const proj = { ...records[idx] };
+
+    const existing = sitePlanPages(proj);
+    const existingBytes = existing.reduce((sum, pg) => sum + (Number(pg.sizeBytes) || 0), 0);
+    if (existingBytes + buffer.length > MAX_SITE_PLAN_TOTAL_BYTES) {
+      throw new Error(
+        `Adding this sheet would put the project over its ` +
+        `${MAX_SITE_PLAN_TOTAL_BYTES / 1024 / 1024} MB total site-plan limit ` +
+        `(${(existingBytes / 1_000_000).toFixed(1)} MB already stored). Delete a sheet you no longer need.`
+      );
+    }
+
+    const pageId = newSitePlanPageId();
+    // Validate the minted id against the same pattern the serve path uses,
+    // so a malformed id can never be written into the record in the first
+    // place.
+    const onDiskPath = sitePlanPagePath(projectId, pageId, mimeType);
+
+    const page = {
+      id: pageId,
+      label: String(label || "").trim().slice(0, 120) || `Sheet ${existing.length + 1}`,
+      pdfPageNumber: Number.isFinite(Number(pdfPageNumber)) ? Number(pdfPageNumber) : null,
+      mimeType,
+      rasterWidthPx: w,
+      rasterHeightPx: h,
+      renderScale: Number.isFinite(Number(renderScale)) ? Number(renderScale) : null,
+      sizeBytes: buffer.length,
+      sha256: crypto.createHash("sha256").update(buffer).digest("hex"),
+      calibration: {
+        // Hard gate, not a warning: the builder refuses to open an underlay
+        // whose state is not "calibrated" (or whose verify failed).
+        state: "uncalibrated",
+        method: null,
+        p1: null, p2: null,
+        knownFt: null,
+        ftPerPx: null,
+        rotationDeg: 0,     // reserved — must stay 0 in Phase 1
+        statedScale: null,
+        verify: null,
+        calibratedAt: null,
+        calibratedBy: null
+      },
+      uploadedAt: nowIso(),
+      uploadedBy: String(uploadedBy || "admin").slice(0, 80)
+    };
+
+    if (!proj.sitePlan) {
+      proj.sitePlan = blankSitePlan(sourceFilename, sourceMimeType, uploadedBy);
+    } else {
+      proj.sitePlan = { ...proj.sitePlan, pages: existing.slice() };
+      // First named source wins; later uploads from a different file just
+      // note the newest so the header shows something truthful.
+      if (sourceFilename) proj.sitePlan.sourceFilename = String(sourceFilename).slice(0, 200);
+      if (sourceMimeType) proj.sitePlan.sourceMimeType = String(sourceMimeType).slice(0, 100);
+    }
+    proj.sitePlan.pages = [...sitePlanPages(proj), page];
+    guardSitePlanSize(proj.sitePlan);
+
+    appendHistory(proj, {
+      action: "site_plan_page_added",
+      by: String(uploadedBy || "admin").slice(0, 80),
+      note: `${pageId} ${page.label} ${w}x${h}px ${(buffer.length / 1_000_000).toFixed(1)}MB`
+    });
+    proj.updatedAt = nowIso();
+    records[idx] = proj;
+    await writeAll(records);
+
+    // Record first, THEN the file — and roll the record back if the write
+    // fails. An orphaned raster is invisible garbage; a record pointing at
+    // a file that isn't there is a broken underlay. Neither is acceptable,
+    // so we make sure we end with neither.
+    try {
+      await ensureSitePlanDir(projectId);
+      await fs.writeFile(onDiskPath, buffer);
+    } catch (err) {
+      try {
+        const rollback = await readAll();
+        const ri = rollback.findIndex((r) => r.id === projectId);
+        if (ri !== -1 && rollback[ri].sitePlan) {
+          rollback[ri].sitePlan.pages = sitePlanPages(rollback[ri]).filter((pg) => pg.id !== pageId);
+          rollback[ri].updatedAt = nowIso();
+          await writeAll(rollback);
+        }
+      } catch (rollbackErr) {
+        console.error(`[projects] site-plan rollback failed for ${projectId}/${pageId}:`, rollbackErr && rollbackErr.message);
+      }
+      throw new Error(`Couldn't write the site-plan image to disk: ${err && err.message}`);
+    }
+
+    return page;
+  });
+}
+
+// ---- Serve one raster -------------------------------------------------
+
+async function readSitePlanRaster(projectId, pageId) {
+  const proj = await get(projectId);
+  if (!proj) return null;
+  const page = findSitePlanPage(proj, pageId);
+  if (!page) return null;
+  // Throws on a malformed id before touching the filesystem.
+  const onDiskPath = sitePlanPagePath(projectId, pageId, page.mimeType);
+  try {
+    const buf = await fs.readFile(onDiskPath);
+    return { buffer: buf, meta: page };
+  } catch {
+    // Disk cleared, or the project was restored from a metadata-only
+    // backup. The caller 404s and the builder degrades to a plain grid
+    // with a visible notice rather than throwing.
+    return null;
+  }
+}
+
+// ---- Calibration ------------------------------------------------------
+//
+// The server derives ftPerPx and the verification verdict from the raw
+// clicked points. It does NOT accept a client-supplied ftPerPx — see the
+// header of lib/site-plan-calibration.js for why.
+
+function sameCalibrationInputs(cal, input) {
+  if (!cal || cal.state !== "calibrated") return false;
+  const near = (a, b) => Number.isFinite(a) && Number.isFinite(b) && Math.abs(a - b) < 1e-9;
+  const samePt = (a, b) => a && b && near(Number(a.x), Number(b.x)) && near(Number(a.y), Number(b.y));
+  if (!samePt(cal.p1, input.p1) || !samePt(cal.p2, input.p2)) return false;
+  if (!near(Number(cal.knownFt), Number(input.knownFt))) return false;
+  const v = cal.verify, iv = input.verify || {};
+  if (!v) return false;
+  if (!samePt(v.p1, iv.p1) || !samePt(v.p2, iv.p2)) return false;
+  if (!near(Number(v.expectedFt), Number(iv.expectedFt))) return false;
+  return (cal.statedScale || null) === (input.statedScale || null);
+}
+
+async function setSitePlanCalibration(projectId, pageId, input = {}, { by = "admin" } = {}) {
+  if (!calibration.isValidPageId(pageId)) {
+    throw Object.assign(new Error("Invalid site-plan page id."), { code: "bad_id" });
+  }
+
+  const p1 = input.p1, p2 = input.p2;
+  const knownFt = input.knownFt;
+  const verifyIn = input.verify || {};
+  const statedScale = input.statedScale ? String(input.statedScale).slice(0, 40) : null;
+
+  // Everything below runs inside the write lock, and the ORDER matters.
+  //
+  //   1. Idempotency first. Re-running the same PATCH with identical values
+  //      changes no number a bid depends on, so it must be a clean no-op —
+  //      including on a page that has since been traced over.
+  //   2. The recalibration lock second, BEFORE any measurement validation.
+  //      If this page is frozen, that is the real reason the caller can't
+  //      proceed; telling them "verification failed" would send them off to
+  //      re-click points on a sheet that was never going to accept them.
+  //   3. Only then derive and verify the measurement itself.
+  //
+  // The checks live inside the lock rather than in front of it so there is
+  // no window between reading the dependents and writing the calibration.
+  return withWriteLock(async () => {
+    const records = await readAll();
+    const idx = records.findIndex((r) => r.id === projectId);
+    if (idx === -1) throw Object.assign(new Error("Project not found."), { code: "project_not_found" });
+    const proj = { ...records[idx] };
+    const pages = sitePlanPages(proj);
+    const pageIdx = pages.findIndex((pg) => pg && pg.id === pageId);
+    if (pageIdx === -1) throw Object.assign(new Error("Site-plan page not found."), { code: "page_not_found" });
+
+    const existingCal = pages[pageIdx].calibration || {};
+
+    // (1) Idempotent no-op.
+    if (sameCalibrationInputs(existingCal, { p1, p2, knownFt, verify: verifyIn, statedScale })) {
+      return { page: pages[pageIdx], changed: false };
+    }
+
+    // (2) Recalibration lock (Phase 1). Once an area traces over this page,
+    // its scale is frozen. Silently rescaling a tender is the failure mode
+    // this whole feature is built to prevent, so refusing is the correct
+    // answer; Phase 3 replaces this with a diff-and-confirm flow.
+    if (existingCal.state === "calibrated") {
+      const dependents = sitePlanDependents(proj, pageId);
+      if (dependents.length) {
+        throw Object.assign(new Error(
+          `This sheet is already calibrated and ${dependents.length} traced ` +
+          `${dependents.length === 1 ? "area depends" : "areas depend"} on that scale: ` +
+          `${dependents.join(", ")}. Re-scaling now would change ` +
+          `${dependents.length === 1 ? "its" : "their"} square footage without telling you. ` +
+          `Delete or detach ${dependents.length === 1 ? "that area" : "those areas"} first, then recalibrate.`
+        ), { code: "calibration_locked", dependents });
+      }
+    }
+
+    // (3) Verification is MANDATORY. One control measurement is not a
+    // measurement, so there is no code path that produces a calibrated page
+    // without a second independent dimension behind it.
+    if (!verifyIn || verifyIn.p1 == null || verifyIn.p2 == null || verifyIn.expectedFt == null) {
+      throw new Error(
+        "Calibration needs a second, independent known dimension to verify against before this sheet can be used."
+      );
+    }
+
+    const independent = calibration.verifyPointsAreIndependent({
+      calP1: p1, calP2: p2, verP1: verifyIn.p1, verP2: verifyIn.p2
+    });
+    if (!independent.ok) throw new Error(independent.reason);
+
+    const { ftPerPx } = calibration.deriveFtPerPx({ p1, p2, knownFt });
+    const verdict = calibration.verifyCalibration({
+      ftPerPx, p1: verifyIn.p1, p2: verifyIn.p2, expectedFt: verifyIn.expectedFt
+    });
+
+    // A warned calibration is usable only with an explicit, recorded
+    // acknowledgment. A failed one is not usable at all.
+    if (verdict.state === "failed") {
+      throw Object.assign(new Error(calibration.failureAdvice(verdict.residualPct)), {
+        code: "verification_failed",
+        residualPct: verdict.residualPct,
+        measuredFt: verdict.measuredFt
+      });
+    }
+    const acknowledgedBy = verdict.state === "warned"
+      ? (input.acknowledge ? String(by || "admin").slice(0, 80) : null)
+      : null;
+    if (verdict.state === "warned" && !acknowledgedBy) {
+      throw Object.assign(new Error(
+        `The second dimension came out ${verdict.residualPct}% off — inside tolerance but not clean ` +
+        `(under 0.5% is clean). Re-click more precisely, or acknowledge the residual to trace on this sheet anyway.`
+      ), { code: "verification_warned", residualPct: verdict.residualPct, measuredFt: verdict.measuredFt });
+    }
+
+    const cross = statedScale
+      ? calibration.statedScaleCrossCheck({
+          statedScale, ftPerPx, renderScale: pages[pageIdx].renderScale
+        })
+      : null;
+
+    const nextPage = {
+      ...pages[pageIdx],
+      calibration: {
+        state: "calibrated",
+        method: "two_point",
+        p1: { x: Number(p1.x), y: Number(p1.y) },
+        p2: { x: Number(p2.x), y: Number(p2.y) },
+        knownFt: Number(knownFt),
+        // The authoritative number. Derived here, never accepted from a client.
+        ftPerPx,
+        rotationDeg: 0,
+        statedScale,
+        statedScaleCheck: cross,       // advisory only — never gates anything
+        verify: {
+          state: verdict.state,
+          p1: { x: Number(verifyIn.p1.x), y: Number(verifyIn.p1.y) },
+          p2: { x: Number(verifyIn.p2.x), y: Number(verifyIn.p2.y) },
+          expectedFt: Number(verifyIn.expectedFt),
+          measuredFt: verdict.measuredFt,
+          residualPct: verdict.residualPct,
+          acknowledgedBy,
+          verifiedAt: nowIso()
+        },
+        calibratedAt: nowIso(),
+        calibratedBy: String(by || "admin").slice(0, 80)
+      }
+    };
+
+    const nextPages = pages.slice();
+    nextPages[pageIdx] = nextPage;
+    proj.sitePlan = { ...proj.sitePlan, pages: nextPages };
+    guardSitePlanSize(proj.sitePlan);
+
+    appendHistory(proj, {
+      action: "site_plan_calibrated",
+      by: String(by || "admin").slice(0, 80),
+      note: `${pageId} ${ftPerPx.toFixed(6)} ft/px · verify ${verdict.state} ${verdict.residualPct}%`
+    });
+    proj.updatedAt = nowIso();
+    records[idx] = proj;
+    await writeAll(records);
+    return { page: nextPage, changed: true };
+  });
+}
+
+// ---- Delete a page ----------------------------------------------------
+
+async function removeSitePlanPage(projectId, pageId, { force = false, by = "admin" } = {}) {
+  if (!calibration.isValidPageId(pageId)) {
+    throw Object.assign(new Error("Invalid site-plan page id."), { code: "bad_id" });
+  }
+  return withWriteLock(async () => {
+    const records = await readAll();
+    const idx = records.findIndex((r) => r.id === projectId);
+    if (idx === -1) throw Object.assign(new Error("Project not found."), { code: "project_not_found" });
+    const proj = { ...records[idx] };
+    const pages = sitePlanPages(proj);
+    const pageIdx = pages.findIndex((pg) => pg && pg.id === pageId);
+    if (pageIdx === -1) throw Object.assign(new Error("Site-plan page not found."), { code: "page_not_found" });
+
+    const dependents = sitePlanDependents(proj, pageId);
+    if (dependents.length && !force) {
+      throw Object.assign(new Error(
+        `${dependents.length} traced ${dependents.length === 1 ? "area is" : "areas are"} drawn on this ` +
+        `sheet: ${dependents.join(", ")}. Deleting it removes the drawing you traced them against. ` +
+        `Confirm to delete anyway — the traced shapes are kept (they're already in feet), they just ` +
+        `lose their underlay.`
+      ), { code: "page_has_dependents", dependents });
+    }
+
+    const removed = pages[pageIdx];
+    const nextPages = pages.filter((pg) => pg.id !== pageId);
+    proj.sitePlan = nextPages.length
+      ? { ...proj.sitePlan, pages: nextPages }
+      : null;
+
+    // Forced delete detaches the dependent areas but KEEPS their geometry —
+    // traced polys are already in feet and stand on their own.
+    if (dependents.length && force && proj.systemDesign && Array.isArray(proj.systemDesign.areas)) {
+      const areas = proj.systemDesign.areas.map((a) => {
+        if (a && a.planRef && a.planRef.pageId === pageId) {
+          const copy = { ...a };
+          delete copy.planRef;
+          return copy;
+        }
+        return a;
+      });
+      proj.systemDesign = { ...proj.systemDesign, areas };
+    }
+
+    if (proj.sitePlan) guardSitePlanSize(proj.sitePlan);
+    appendHistory(proj, {
+      action: "site_plan_page_removed",
+      by: String(by || "admin").slice(0, 80),
+      note: `${pageId} ${removed.label || ""}${dependents.length ? ` · detached ${dependents.length} area(s)` : ""}`
+    });
+    proj.updatedAt = nowIso();
+    records[idx] = proj;
+    await writeAll(records);
+
+    // Best-effort file removal — the metadata is already gone, so a failed
+    // unlink must not fail the API call. Same posture as quotes.removeAttachment.
+    try {
+      await fs.unlink(sitePlanPagePath(projectId, pageId, removed.mimeType));
+    } catch (err) {
+      if (err && err.code !== "ENOENT") {
+        console.warn(`[projects] couldn't delete site-plan raster ${projectId}/${pageId}:`, err.message);
+      }
+    }
+    // Last page gone → drop the now-empty project directory too.
+    if (!nextPages.length) {
+      try { await fs.rmdir(path.join(SITE_PLANS_DIR, projectId)); } catch { /* not empty or absent — fine */ }
+    }
+    return { id: pageId, detached: dependents };
+  });
+}
+
 module.exports = {
   STATUSES,
   BRANCHES,
@@ -1506,5 +2090,20 @@ module.exports = {
   // Brief 2 — project completion
   markFinalWo,
   completionPreflight,
-  completeProject
+  completeProject,
+  // Site plan — rasterized sheets + scale calibration
+  SITE_PLANS_DIR,
+  SITE_PLAN_MIME_WHITELIST,
+  MAX_SITE_PLAN_PAGE_BYTES,
+  MAX_SITE_PLAN_TOTAL_BYTES,
+  MAX_SITE_PLAN_META_BYTES,
+  sitePlanPagePath,
+  ensureSitePlanDir,
+  sitePlanPages,
+  findSitePlanPage,
+  sitePlanDependents,
+  addSitePlanPage,
+  readSitePlanRaster,
+  setSitePlanCalibration,
+  removeSitePlanPage
 };

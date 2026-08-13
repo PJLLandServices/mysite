@@ -35,10 +35,24 @@ on a persistent disk.
 Public deps (from `package.json`):
 
 ```json
-"dependencies": { "nodemailer": "^8.0.7", "pdfkit": "^0.17.2" }
+"dependencies": { "nodemailer": "^8.0.7", "pdfkit": "^0.17.2", "sharp": "^0.34.5" }
 ```
 
 Everything else is built-in or vendored.
+
+**Vendored front-end libraries — one, and only one (DEV-02, 2026-08-13).**
+`server/vendor/pdfjs/` holds Mozilla **pdf.js 4.10.38** (legacy build:
+`pdf.min.mjs` + `pdf.worker.min.mjs`), served at
+`/crm/vendor/pdfjs/…`. It is **not** an npm dependency and never runs on
+the server. It executes in the browser only, on one code path — the Sprinkler
+System Builder's site-plan upload dialog — where it rasterizes a PDF page to
+a canvas so the original tender PDF never has to be uploaded or stored. No
+build step: the files are served verbatim. Version, checksums and the
+verification command are pinned in `server/vendor/pdfjs/VENDORED.md`. The
+alternative (server-side rasterization) needs a native binary
+(poppler/ghostscript) on Render Starter and was judged materially worse.
+`.mjs` is registered in `MIME_TYPES` so the dynamic `import()` and the module
+worker are both accepted.
 
 ## Repository layout
 
@@ -98,7 +112,8 @@ form except where noted.
 | `quotes.js` | Quote | `Q-YYYY-NNNN` | Versioned, signed estimate. Three flavours: `ai_repair_quote` (AI chat), `on_site_quote` (tech-built), `project_proposal` (admin-authored multi-section narrative, Brief 1 May 2026). `ai_repair_quote` has TWO creation modes (controller brief, 2026-06-12): repairs are created `sent` + auto-accepted at booking-form submit (unchanged), while **smart-controller upgrades 1-16 zones** (`[QUOTE_JSON]` carrying `kind:"controller_upgrade"` + `zones`) are created as **drafts** — Patrick reviews in admin and taps Send (`/api/quotes/:id/send-for-approval`) before the customer sees a formal quote; acceptance then rides the portal (lead quoted→won, which also flips the Quote record). `validateQuotePayload` rejects `quoteType:"custom"` items outright (no $0 quotes) and re-resolves the controller tier from the zone count via `resolveControllerTier` (reads `minZones`/`maxZones` bounds in pricing.json — data-driven, tested by `scripts/test-pricing.mjs`); 17+ zones / accessories degrade to a plain lead. `markSent` is the portal-send sibling of `markSentForApproval` (no token). Proposal type carries `branch` (six buckets — `gc_subcontract`, `direct_residential`, `lighting_design`, `renovation_coordination`, `change_order`, `residential_repair`), `billingMode`, `deliveryMode` (`proposal_page` / `plain_pdf` — the customer-facing output channel, residential_repair brief), `proposalSections[]`, `attachments[]`, `customRates`, dual `acceptanceMethod` (`portal_esign` / `pdf_return`), and revision lineage (`revisionOf` / `supersededBy`). Branch drives creation defaults via `PROPOSAL_BRANCH_DEFAULTS` (section preset, expiry, billing mode, delivery mode) — resolved data-driven, not scattered conditionals. Scope-protected fields (`SCOPE_PROTECTED_FIELDS`, now including `deliveryMode`) refuse PATCH once past draft. Helpers: `updateProposal`, `reseedProposalSections`, `resolveBranchDefaults` / `deliveryModeForBranch`, `addAttachment` / `removeAttachment` / `readAttachmentBuffer`, `recordPortalSignAcceptance`, `stagePdfReturn`, `recordPdfReturnAcceptance`, `createRevision`, `snapshotRatesFromCustomer`. |
 | `invoices.js` | Invoice | `I-YYYY-NNNN` | Auto-drafted by completion cascade, lifecycle draft → sent → paid → void. Carries `disclaimers: [...keys]` array — text bodies in the `INVOICE_DISCLAIMERS` constant (currently only `fall_additional_plumbing`). `update()` merges via Set semantics so cascade re-fires never duplicate keys. **Billing-party brief (Jun 2026):** `createDraft` stamps a `billTo { name, address, email }` snapshot, resolved override-or-fallback from the customer record (`billingName \|\| customerName`, `billingAddress \|\| address`, `billingEmail \|\| customerEmail`). The PDF + QB push read the snapshot, never live data; `update()` accepts `billTo` only while `status === "draft"` (throws after send — financial-snapshot lock). **Addendum (Jul 2026):** `billTo` also carries `ccEmail`, snapshotted from `resolveBillTo().ccEmail`, which `notify-customer.sendInvoiceToCustomer` adds as a real `cc:` on the outgoing invoice email. A `billTo` patch that omits `ccEmail` preserves the snapshotted one (the invoice edit UI only surfaces name/address/email); an explicit `""` clears it while still a draft. Legacy invoices have `billTo: null` and behave exactly as before. **Void+delete brief (Jul 2026):** `voidInvoice(id, {reason?, by})` flips draft/sent → void (refuses paid, idempotent on void, cancels pending unsent SMS, stamps `voidedAt/By/voidReason` — reason optional). `remove(id, {reason, by, qbVoidConfirmed})` hard-deletes a VOID invoice — void-first is the only road; appends a frozen snapshot to `deleted-invoices.json` (tombstone) BEFORE removing from `invoices.json`, both writes atomic; refuses non-void (409), empty reason (400), or a QB-pushed invoice without `qbVoidConfirmed` (409). |
 | `bookings.js` | Booking | `BK-YYYY-NNNN` | First-class appointment record. Mirrors `lead.booking` but is canonical. Exposes `cancel()` (soft, adds `cancelledAt/By/Reason` + history), `reschedule()` (sets `scheduledFor` + bumps `rescheduleCount` + history), and `remove()` (hard delete; refuses when a linked WO is past `scheduled` — caller passes `isActiveWo` to gate without coupling to work-orders.js). Schema includes `rescheduleCount` (capped at 1 for customer self-service via the portal endpoint; admin bypasses the cap). |
-| `projects.js` | Project | `PROJ-YYYY-NNNN` | Multi-WO container for named jobs. Lifecycle planning → active → complete → archived. `createFromProposal(quote, …)` (Brief 1) enriches a project at conversion time from a `project_proposal` quote: `branch`, `billingMode`, `labourRateLocked` (snapshotted from `quote.customRates.labour`), `tasks[]` (seeded from line items — one task per line, status `pending`, `sourceLineItemId` set), `attachments[]` (references to the quote's attachments by id), and a frozen `proposalSnapshot` mirroring the accepted proposal at that instant. **Brief 2** adds execution ops: task CRUD (`addTask`, `updateTask`, `removeTask`, `markTaskComplete`, `unmarkTaskComplete`, `seedTasksFromQuote`); scope changes (`createScopeChangeRequest`, `updateScopeChangeRequest`, `sendScopeChangeRequest`, `resolveScopeChangeRequest`, `generateQuoteRevisionFromScopeChange`); status updates (`generateStatusUpdate`); project completion (`markFinalWo`, `completionPreflight`, `completeProject`); metrics + billing rollup (`computeProjectMetrics`, `computeTAndMBilling`). Schema additions: `scopeChangeRequests[]`, `statusUpdates[]`, `finalWoId`, `projectCompletionAt`, `invoiceGeneratedAt`, `finalInvoiceId`. **Customer-link brief (Jun 2026):** `customerId` references `customers.json` (numeric id); the project page Customer field is **pick-from-existing** (no free text). `update()` accepts `customerId` and snapshots the customer's name/email/phone + negotiated labour rate (→ `labourRateLocked`, never clobbering a T&M proposal-locked rate) via the shared `buildCustomerSnapshot(customerId)` helper — the manual-project parallel to `createFromProposal`. Billing entity is shown live from the linked customer (no project-level `billTo`). Property/Address stay manual. Legacy projects (`customerId` null) keep their stored `customerName` and offer a link-upgrade prompt; unlinking never blanks the snapshot. |
+| `site-plan-calibration.js` | — | — | **Pure math for site-plan scale calibration** (Site Plan Underlay brief, Aug 2026). No fs, no network, no dependencies. Owns the numbers a tender depends on: `deriveFtPerPx` (two-point calibration), `verifyCalibration` + `classifyResidual` (the mandatory second-dimension check and its pass/warn/fail bands), `verifyPointsAreIndependent`, `parseStatedScale` + `statedScaleCrossCheck` (advisory title-block comparison), `checkSheetCoverage` (order-of-magnitude sanity), the vertex/payload budget helpers, and `isValidPageId` / `isValidProjectId` (the path-traversal guard). `server.js` **derives** `ftPerPx` here from the raw clicked points on the way in — it never accepts a client-computed scale. Exercised by `scripts/test-siteplan-calibration.mjs` on every `build:check`. |
+| `projects.js` | Project | `PROJ-YYYY-NNNN` | Multi-WO container for named jobs. Lifecycle planning → active → complete → archived. `createFromProposal(quote, …)` (Brief 1) enriches a project at conversion time from a `project_proposal` quote: `branch`, `billingMode`, `labourRateLocked` (snapshotted from `quote.customRates.labour`), `tasks[]` (seeded from line items — one task per line, status `pending`, `sourceLineItemId` set), `attachments[]` (references to the quote's attachments by id), and a frozen `proposalSnapshot` mirroring the accepted proposal at that instant. **Brief 2** adds execution ops: task CRUD (`addTask`, `updateTask`, `removeTask`, `markTaskComplete`, `unmarkTaskComplete`, `seedTasksFromQuote`); scope changes (`createScopeChangeRequest`, `updateScopeChangeRequest`, `sendScopeChangeRequest`, `resolveScopeChangeRequest`, `generateQuoteRevisionFromScopeChange`); status updates (`generateStatusUpdate`); project completion (`markFinalWo`, `completionPreflight`, `completeProject`); metrics + billing rollup (`computeProjectMetrics`, `computeTAndMBilling`). Schema additions: `scopeChangeRequests[]`, `statusUpdates[]`, `finalWoId`, `projectCompletionAt`, `invoiceGeneratedAt`, `finalInvoiceId`. **Customer-link brief (Jun 2026):** `customerId` references `customers.json` (numeric id); the project page Customer field is **pick-from-existing** (no free text). `update()` accepts `customerId` and snapshots the customer's name/email/phone + negotiated labour rate (→ `labourRateLocked`, never clobbering a T&M proposal-locked rate) via the shared `buildCustomerSnapshot(customerId)` helper — the manual-project parallel to `createFromProposal`. Billing entity is shown live from the linked customer (no project-level `billTo`). Property/Address stay manual. Legacy projects (`customerId` null) keep their stored `customerName` and offer a link-upgrade prompt; unlinking never blanks the snapshot. **Site Plan Underlay brief (Aug 2026):** adds the `sitePlan` durable field plus `addSitePlanPage`, `readSitePlanRaster`, `setSitePlanCalibration`, `removeSitePlanPage`, `sitePlanDependents`, `sitePlanPagePath` / `ensureSitePlanDir` — the raster half mirrors `quotes.addAttachment` exactly. Also introduces a module-level **write lock** (`withWriteLock`): every read-modify-write in this file now queues, because the builder autosaves `systemDesign` while the calibration PATCH writes `sitePlan` on the same record, and the interleaved `readAll → … → writeAll` cycles could silently drop one of them. Reads are deliberately unlocked. |
 | `material-lists.js` | Material List | `ML-YYYY-NNNN` | Bill of materials. Line items reference parts.json SKUs + quantities + status (`need` / `ordered` / `have`). Attachable to a project / WO / quote / standalone. **Pricing:** a line's unit price resolves **live from parts.json until its PO is sent** (catalog edits show on the next load), then **locks** to the PO-snapshotted price — `frozenPriceCents` is stamped onto the line at send and cleared if the PO is cancelled (a received line keeps the price paid). One pure resolver, `resolveLineUnitPriceCents(line, partsMap)`, feeds **both** read paths — the builder's per-line render/savebar and the `?withTotals=1` server totals — so they can't disagree. The builder fetches `/api/parts` `no-store` (not force-cache) so live prices aren't stale. |
 | `purchase-orders.js` | Purchase Order | `PO-YYYY-NNNN` | One supplier's slice of a material list's `need` lines. Lifecycle draft → sent → partially_received → received → cancelled. |
 | `quote-requests.js` | Quote Request (RFQ) | `RFQ-YYYY-NNNN` | The **"ask for a price" sibling of the PO** — asks a supplier to quote, commits to nothing. Generated from a material list's `need` lines grouped by primary supplier (same grouping as PO generation) but **never changes line status** (lines stay `need`) and **never snapshots prices** — lines carry `{ sku, description (snapshot via resolveLineDescription), quantity, unit, quotedPriceCents:null }`. Lifecycle draft → sent → quoted → applied (+ cancelled). Generation is idempotent: re-running **refreshes** the existing draft for (list, supplier) instead of duplicating; non-drafts are never touched. Sent docs frozen at `data/quote-requests/files/`. **Phase B (the return loop):** `recordQuotedPrices(id, {lineId: cents\|null})` records the vendor's reply on a sent/quoted RFQ (partial quotes fine; status follows the data — any priced line → `quoted`, all cleared → back to `sent`); `markApplied` flips quoted → applied and is the double-apply guard (second apply throws). The apply route writes the quoted prices to the parts catalog via the **existing** parts edit path (`partsLib.update` → `rebuildCatalogFromOverrides` → one batched `catalog.rfq-apply` audit entry), skipping deleted SKUs and counting already-matching prices as applied-without-write; open material lists pick the new prices up immediately (live pricing). Never touches `pricing.json`. Retires the old workaround of sending a $0 PO as a "Quotation Request". |
@@ -165,6 +180,7 @@ wo-photos/<woId>/<n>.<ext> ← work-order photos (pre/in/post-work + per-issue)
 wo-reports/<woId>/<snapshotId>.pdf ← Service / Inspection Report PDF snapshots (Service Report brief, 2026-05-19)
 project-rates.json         ← internal admin-only project-scale rates catalog (Brief 1, May 2026). Mirrors pricing.json item shape. Reads ONLY by /api/admin/project-rates and the quote-proposal-builder line-items picker. NEVER exposed publicly. Excluded from public hardcoded-price lint scope by virtue of being under server/data/ rather than a root *.html.
 quote-attachments/<quoteId>/<attId>.<ext>  ← per-quote uploaded attachments for project_proposal quotes (Brief 1). PNG / JPEG / PDF. 25 MB per file, 100 MB per quote. Customer-uploaded signed_pdf_return PDFs live here too as evidence for admin attestation.
+site-plans/<projectId>/<pageId>.png|jpg  ← rasterized site-plan sheets for the Sprinkler System Builder underlay (Site Plan Underlay brief, Aug 2026). PNG / JPEG only — 16 MB per sheet, 64 MB per project. Rasterized IN THE BROWSER by the vendored pdf.js; the original PDF is never uploaded or stored, so no third party's tender document is retained on PJL's disk. `pageId` is `spp_` + random8 and is validated against `/^spp_[a-z0-9]{8}$/` before any `path.join`. Served ONLY through the session-gated `GET /api/projects/:id/site-plan/pages/:pageId/raster` — there is deliberately no tokenized public serve (unlike quote attachments), because these are confidential third-party drawings.
 quote-pdfs/<quoteId>.pdf   ← frozen quote/proposal PDF, written once on send (Brief B, 2026-07). Immutable; every read (admin download, /approve print-to-sign, resend, email attachment) serves these bytes. One file per quote record — revisions are new records (Hard Rule 9) and get their own file. Legacy sent quotes lazily backfill on first read (pdfBackfilled flag).
 ```
 
@@ -221,6 +237,7 @@ Pages with their primary route + purpose:
 | (Materials sub-nav) | — | The materials pages (`material-lists.html`, `quote-requests.html`, `purchase-orders.html`, `suppliers.html`, `parts-suppliers.html`) share a `.suppliers-subnav` strip duplicated by hand. Below 768px the strip collapses into a single `<details>` dropdown ("Materials → <current> ▾"); open/close behaviour lives in `crm-nav.js`. |
 | `purchase-order.html` | `/admin/purchase-order/<id>` | PO detail. Send modal (email + PDF), partial-receive modal, reorder, cancel. |
 | `quote-request.html` | `/admin/quote-request/<id>` | RFQ detail. Draft line trim (qty/remove) + notes with auto-save, send modal (emails the vendor a request for pricing — explicitly not an order), resend, cancel, PDF/CSV downloads. On sent/quoted: the **quoted-price quick-grid** (dollars in, cents stored; partial quotes fine; auto-saves changed entries only) and, once quoted, **Review & apply to catalog** — a confirm modal showing current catalog price → quoted with deltas before any write. |
+| `sitebuilder.html` | `/admin/sitebuilder` | **Sprinkler System Builder.** Internal install-design tool. Water supply → per-area shape (rectangle / known sq ft / drawn polygon, circle, sector, or **traced over a calibrated site plan**) → manual head layout → tree/drip rings → arc-aware zone packing → BOM → linked **Material List** + `project_proposal` **Quote**, plus a standalone water-cost-by-town estimate. Designs save to `project.systemDesign` (512 KB cap) via `PATCH /api/projects/:id`; every save re-syncs an already-linked DRAFT quote, keeping edited prices and never overwriting a sent one. **Site-plan underlay (Aug 2026):** upload a tender PDF or image, pick sheets, calibrate each against a printed dimension, verify against a second one, then trace areas directly over the drawing. See **Site plan calibration** below. Role gate: `user` (admin OR tech). The only admin page still carrying its CSS and JS inline rather than split into `.css`/`.js` siblings — known, deliberate, and its own separate piece of work. |
 | `chats.html` | `/admin/chats` | AI chat transcripts (booked + abandoned). |
 | `settings.html` | `/admin/settings` | Notification defaults, audit trail, QB connect, exports. |
 | `login.html` | `/login` | **Unified sign-in door** (Jul 2026): staff email + password AND customer magic-link requests on one page. Password-first server logic — staff credentials match → CRM session; every other outcome (blank/wrong password, unknown email, customer email) falls through to the magic-link path and returns one generic "check your email" response (no staff-email enumeration). Button reads "Login Now". Staff credentials live in `users.json`; `auth.json` is the session-secret store only. `/portal/login` 301s here; the emailed `/portal/login/verify` links and permanent `/portal/<token>` URLs are unchanged. |
@@ -554,6 +571,33 @@ Projects
   DELETE /api/projects/:id                       ← detaches attached lists
   POST   /api/projects/:id/attach-work-order
   POST   /api/projects/:id/detach-work-order
+
+  Site plan underlay (Sprinkler System Builder) — all internal, never customer-facing
+  POST   /api/projects/:id/site-plan/pages                        ← admin. Upload ONE rasterized sheet:
+                                                                    { label, pdfPageNumber, mimeType, data (base64
+                                                                    PNG/JPEG), rasterWidthPx, rasterHeightPx,
+                                                                    renderScale, sourceFilename, sourceMimeType }.
+                                                                    Body cap SITE_PLAN_POST_MAX_BYTES = 24 MB, passed
+                                                                    EXPLICITLY (parseRequestBody defaults to 1 MB and
+                                                                    would reject every real plan). 201 { ok, page }.
+                                                                    413 names the actual limit.
+  GET    /api/projects/:id/site-plan/pages/:pageId/raster         ← session (admin OR tech). Serves the image with
+                                                                    `cache-control: private, max-age=300`. NO tokenized
+                                                                    public variant — do not copy that part of the quote-
+                                                                    attachment pattern. Missing file → 404, and the
+                                                                    builder degrades to a plain grid with a notice.
+  PATCH  /api/projects/:id/site-plan/pages/:pageId/calibration    ← admin. Body is POINTS AND TYPED DISTANCES ONLY —
+                                                                    { p1, p2, knownFt, verify:{p1,p2,expectedFt},
+                                                                    statedScale?, acknowledge? }. ftPerPx is DERIVED
+                                                                    server-side; a client-supplied one is ignored.
+                                                                    Failed verification → 400. Warned without
+                                                                    acknowledge → 400. Page locked by traced areas →
+                                                                    409 with `dependents[]`. Identical values → 200
+                                                                    { changed:false }, no duplicate history entry.
+  DELETE /api/projects/:id/site-plan/pages/:pageId[?force=1]      ← admin. 409 + `dependents[]` if traced areas depend
+                                                                    on it; with force=1 the raster and metadata go and
+                                                                    each dependent area's `planRef` is cleared —
+                                                                    geometry is KEPT (it is already in feet).
 
   Project Execution — Brief 2 (May 2026):
   GET    /api/projects/:id/tasks                 ← list tasks
@@ -1064,6 +1108,132 @@ Build completion cascade fires:
   - Idempotent — re-running returns same invoice ID, no duplicates
 ```
 
+### 3b. Site Builder design → Quote + Material List (FLOW-26)
+
+`server/sitebuilder.html` at `/admin/sitebuilder`, role gate `user`. The
+chain, each hop a real function:
+
+```
+area geometry (typed dims, drawn shape, or traced over a calibrated site plan)
+   → compute()              per-area head layout, arc-aware zone packing, GPM
+   → desiredQuoteLines()    scope + controller + one line per zone
+   → syncQuoteFromDesign()  creates or re-syncs a project_proposal Q-…
+   → generateMaterialList() refreshes the linked ML-…
+```
+
+Once a quote exists it stays **linked**: every "Save to project" re-syncs
+it — zone names and added/removed zones flow through, **edited prices are
+kept**, and a sent quote is never overwritten. Both the quote and the
+material list require the design to be attached to a project.
+
+**Three builder-owned durable fields on the project record**, each capped
+independently and each written whole:
+
+| Field | Cap | What it holds |
+|---|---|---|
+| `systemDesign` | **512 KB** | The design blob — supply inputs, per-area spec, computed zones, BOM overrides, `linkedQuoteId`. Opaque to the server. Now at `version: 3`; `version: 2` blobs load byte-identically. |
+| `waterCostEstimate` | **128 KB** | Standalone water-cost-by-town snapshot; opens as its own project-folder deliverable. |
+| `sitePlan` | **64 KB** | Site-plan **metadata only** — sheets, dimensions, and each sheet's calibration record with full provenance. Rasters live on disk (see Data files). Not writable through the generic `PATCH` (see below). |
+
+`sitePlan` is a top-level sibling rather than a nesting inside
+`systemDesign` because `systemDesign` is rewritten whole on every save and
+capped at 512 KB — a plan must not compete for that budget or be lost to a
+design-blob overwrite, and it outlives any single design revision. The
+generic `PATCH /api/projects/:id` accepts `sitePlan: null` (clear) and
+**refuses** an object: `calibration.ftPerPx` is derived server-side, and
+accepting a whole object would let a caller post an arbitrary scale past
+that derivation.
+
+### Site plan calibration
+
+**This is business logic, not implementation detail.** It exists because
+the builder's output goes into competitive tenders, and a scale error does
+not produce a visibly broken screen — it produces a confidently wrong bid.
+A factor-of-two confusion (1:100 read as 1:200) yields a plan that looks
+entirely plausible and a price that is half or double what it should be.
+
+**Ingestion.** Patrick uploads a tender PDF or an image. PDFs are
+rasterized **in the browser** by the vendored pdf.js at ~5000 px on the
+long edge (clamped at 8000 px), PNG first and JPEG q0.85 when the PNG
+exceeds 6 MB, stepping the scale down 25% up to three times if the result
+is still over the 16 MB per-sheet cap. Only the raster is uploaded — **the
+original PDF is never stored.** The trade-off is deliberate: an underlay
+cannot be re-rendered at higher resolution later without re-uploading,
+which is why the render targets high resolution up front.
+
+**Page coordinate model.** Each sheet defines its own world space in feet:
+
+```
+world_ft = raster_px * ftPerPx        raster (0,0) → world (0,0)
+```
+
+`rotationDeg` is stored and must be **0** — reserved so adding rotation
+later is not a schema migration. Areas traced on the *same* page share one
+frame and keep true relative position on the site (useful later for
+mainline routing). Areas traced on *different* pages are **not** in a
+common frame — nothing downstream uses cross-area geometry today, so this
+is safe, but it is written down rather than discovered.
+
+**Calibration, in this order, all of it mandatory:**
+
+1. **Set scale.** Click two points on a dimension printed on the sheet — a
+   dimension string, a property line, a building face — and type the true
+   distance in feet. `ftPerPx = knownFt / hypot(p2 − p1)`.
+2. **Verify.** Click a *second, independent* known dimension (ideally on
+   the other axis) and type what it should measure. A verify point within
+   5 px of a calibration point is rejected — re-measuring the same two
+   clicks agrees with itself by construction and proves nothing.
+
+| Residual | State | Behaviour |
+|---|---|---|
+| < 0.5 % | `passed` | Green. Tracing unlocked. |
+| 0.5 – 2.0 % | `warned` | Amber. Tracing unlocked **only** after explicit acknowledgment, recorded in `verify.acknowledgedBy`. The state stays `warned` — it is never laundered to `passed`. |
+| > 2.0 % | `failed` | Red. **Tracing blocked.** The message names the likely causes, and calls out a near-2× residual as a scale misread by name. |
+
+The residual is classified on the **raw** value and only then rounded to
+3 dp for storage — rounding first would let 0.4996 % round to 0.5 % and
+silently cross a band.
+
+3. **Stated-scale cross-check (optional, advisory).** Type the sheet's
+   printed scale (`1:200`, `1"=20'`, `1/8"=1'`). The raster carries
+   `72 × renderScale` pixels per inch of paper, so the printed scale
+   converts to an expected `ftPerPx` and the delta is shown. A sheet
+   exported "fit to page" surfaces here immediately. It **never gates
+   anything**: the physical file is the truth, the title block is only a
+   claim about it. Image uploads have no paper space, so the cross-check
+   reports itself unavailable rather than inventing a number.
+
+**Always visible while an underlay is shown:** a scale bar drawn in world
+units with 10 ft / 50 ft ticks (so it is a live check on the calibration,
+not decoration), the `ft/px` readout, and the passed/warned chip.
+
+**Recalibration lock.** Once any area references a page, that page's
+calibration is frozen; recalibrating is refused with the dependent areas
+named. Deleting such a page is refused without `?force=1`; forcing clears
+each dependent `planRef` but keeps the geometry, which is already in feet.
+An identical calibration PATCH stays a clean no-op even on a locked page —
+it changes no number a bid depends on. (A diff-and-confirm flow replaces
+the lock in a later phase.)
+
+**Aggregate sanity check.** Traced area summing past **80 %** of a sheet's
+own calibrated extents raises a non-blocking warning — that is the
+signature of an order-of-magnitude scale error.
+
+**Vertex budget.** Traced outlines are stored at 3 dp (~0.012 inch; finer
+than a raster can express, and full float precision would waste the 512 KB
+budget on noise digits). A live counter warns at **3,000** points and hard-
+stops at **4,000**. Before any save the builder measures the serialized
+blob and refuses locally above **480 KB** — 32 KB under the server cap — so
+the user never learns about the limit from a failed request that has
+already cost them their work.
+
+**Confidentiality.** A tender drawing is a third party's document.
+`sitePlan.confidential` defaults `true`, the raster endpoint is
+session-gated with no tokenized public variant, and the underlay is never
+rendered into the customer quote sheet, the proposal PDF, the portal, or
+the `/approve` flow. The traced *geometry* still flows to customer-facing
+output — that is the point; only the underlying drawing is suppressed.
+
 ### 4. Customer self-service booking changes (portal)
 
 ```
@@ -1281,6 +1451,15 @@ These have memory entries; surface them in any AI / specialist context.
   must use `var(--hero-nav-clearance)`. Never hardcode.
 - **Brand:** Logo is the full "PJL Land Services" lockup; don't strip
   the wordmark. Headings use Barlow Condensed.
+- **Site-plan scale (Site Plan Underlay brief, Aug 2026):** three rules,
+  and they are correctness requirements, not preferences. **(1)** No
+  tracing on an uncalibrated sheet — a hard gate, never a warning.
+  **(2)** Calibration must be verified against a *second, independent*
+  known dimension before the sheet is usable; one control measurement is
+  not a measurement. **(3)** A number a bid depends on is never silently
+  changed — recalibrating a sheet that traced areas already reference is
+  refused, naming them. Thresholds and rationale in **Site plan
+  calibration** below.
 - **Property name invariant** (feature-seasonal-outreach-brief.md §3.9):
   every property carries a non-blank `customerName`. Enforced at
   `properties.create`, `properties.update`, and `properties.bulkUpsert`
@@ -1390,10 +1569,28 @@ purchase order) auto-resolve a representative ID from the most recently
 updated record in the corresponding `server/data/<entity>.json` file.
 Empty entity files are skipped with a warning, not a hard failure.
 
+`sitebuilder` (`/admin/sitebuilder`) was **added to the audited set in Aug
+2026** with the site-plan underlay work — it had never been captured before,
+in line with the Sprinkler System Builder being absent from this document
+entirely until the same change.
+
 Run before merging any layout-touching change. Re-run after the merge to
 verify the fix and catch regressions. Prior captures are cleared at the
 start of every run so the folder always reflects the latest state.
 Playwright is `devDependencies` only — it does not ship to production.
+
+### Build gate (`npm run build:check`)
+
+Chains the static-content checks (`build.js --check`, meta-price sync,
+sitemap, the hardcoded-price and QB-mapping linters) with the integration
+suites: `test-pricing`, `test-proposal-unlock`, `test-proposal-html`,
+`test-commercial-schema`, `test-stripe`, `test-invoice-balance-surfaces`,
+`test-wo-completedat`, `test-wo-unlock`, `test-mailer-log`, and
+**`test-siteplan-calibration`** (Aug 2026 — calibration math, residual
+bands, the factor-of-two catch, `version: 2` backward compatibility, the
+vertex/payload budget, and path-traversal rejection). Each suite copies the
+libs it exercises into a temp directory, so a build gate can never read or
+write real data.
 
 ## Glossary of IDs
 
@@ -1414,6 +1611,7 @@ Playwright is `devDependencies` only — it does not ship to production.
 | `poli_xxxxxxxx` | Purchase order line | `poli_QU1cN3Jz` (random) |
 | `iss_xxxxxxxx_<ts>` | Zone issue inside a WO | `iss_a1b2c3_1730000000` |
 | `att_xxxxxxxx` | Quote attachment / project attachment reference (Brief 1) | `att_K9pQrZ7m` (random) |
+| `spp_xxxxxxxx` | Site-plan page inside `project.sitePlan.pages[]` (Site Plan Underlay brief, Aug 2026). Minted server-side as `"spp_" + random8()` — lowercase base36, 8 chars. **Validated against `/^spp_[a-z0-9]{8}$/` BEFORE any `path.join`**, because it arrives as a request path segment and names a file on disk. | `spp_a1b2c3d4` (random) |
 | `con_xxxxxxxx` | Commercial contact — in `customer.commercial.contacts[]` (org-wide) **or** `property.siteContacts[]` (one site). Minted by `billing-parties.coerceContactId` (8 random hex chars) so both lists share one format; a well-formed incoming id is preserved, so an admin edit never changes a contact's identity. Both admin editors round-trip it through a `data-cid` attribute — **dropping that attribute would re-mint every id on every save.** Legacy contacts written before ids existed are backfilled once on read by `customers.readAll()` / `properties.readAll()`. | `con_a1b2c3d4` (random) |
 | `sec_xxxxxxxx` | Proposal section inside a project_proposal quote (Brief 1). Sections may now be user-created with `kind:"custom"` (Brief C1); the `sec_` id is minted server-side by `newSectionId()` — no client-side generator. Each section carries `include` (default true); `include:false` hides it from the PDF while keeping it on the record + editor (Brief D) — this **supersedes** the legacy "leave the body blank to hide it" behaviour. | `sec_x8WqLP3a` (random) |
 | `pdfOptions` | Per-quote PROPOSAL PDF display object (Brief D, 2026-07): `{ lineItems: "itemized"\|"descriptions_only"\|"summary", showAttachments, showProjectMap }`. **Presentation only** — never affects pricing math, the accepted amount, the QuickBooks push, or the invoice; the total is always shown (no `showTotals`). Draft-editable, frozen at send with the PDF bytes. | `{ lineItems: "summary", showAttachments: false, showProjectMap: true }` |

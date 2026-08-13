@@ -61,6 +61,9 @@ const INDEX_PAGES = [
   ["parts-suppliers", "/admin/parts-suppliers"],
   ["users", "/admin/users"],
   ["settings", "/admin/settings"],
+  // Sprinkler System Builder. Previously missing from this list, so its
+  // layout was never audited — added with the site-plan underlay work.
+  ["sitebuilder", "/admin/sitebuilder"],
 ];
 
 // Detail pages — resolve a representative ID from the corresponding

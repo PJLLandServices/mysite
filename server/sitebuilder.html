@@ -168,6 +168,58 @@
   .pz-span{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--muted)}
   .pz-span input{width:56px;padding:6px 8px;border:1px solid var(--line);border-radius:6px;font-size:15px}
   .sk-tools button.on{background:var(--green);color:#fff;border-color:var(--green)}
+
+  /* ---- Site plan underlay (upload / calibrate / trace) ---- */
+  .sp-list{display:flex;flex-direction:column;gap:10px}
+  .sp-card{display:flex;gap:12px;align-items:flex-start;border:1px solid var(--line);border-radius:10px;padding:10px 12px;background:#fcfdfc}
+  .sp-card .sp-meta{flex:1 1 auto;min-width:0}
+  .sp-card .sp-name{font-weight:600;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .sp-card .sp-sub{font-size:12px;color:var(--muted);margin-top:2px}
+  .sp-card .sp-acts{display:flex;gap:6px;flex-wrap:wrap;flex:0 0 auto}
+  .sp-card .sp-acts button{width:auto;min-height:34px;padding:6px 11px;font-size:13px}
+  .sp-empty{font-size:13px;color:var(--muted);padding:8px 0}
+  .chip{display:inline-block;padding:2px 9px;border-radius:999px;font-size:11px;font-weight:700;
+    letter-spacing:.3px;text-transform:uppercase;vertical-align:middle}
+  .chip.ok{background:#e8f5e9;color:#1b5e20;border:1px solid #a5d6a7}
+  .chip.warn{background:#fff8e1;color:#a15c00;border:1px solid #ffcc80}
+  .chip.bad{background:var(--warnbg);color:var(--warn);border:1px solid #ef9a9a}
+  .chip.none{background:#eceff1;color:#546e7a;border:1px solid #cfd8dc}
+  /* PDF page picker */
+  .sp-pick{padding:14px;overflow:auto;height:100%}
+  .sp-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px;margin-top:12px}
+  .sp-thumb{border:2px solid var(--line);border-radius:8px;padding:6px;background:#fff;cursor:pointer;text-align:center}
+  .sp-thumb.on{border-color:var(--green);box-shadow:0 0 0 2px var(--green-l)}
+  .sp-thumb canvas,.sp-thumb img{width:100%;height:auto;display:block;border-radius:4px;background:#f4f7f5}
+  .sp-thumb .sp-lab{font-size:11px;color:var(--muted);margin-top:5px;font-weight:600}
+  .sp-drop{border:2px dashed var(--line);border-radius:12px;padding:26px 18px;text-align:center;background:#fbfdfb}
+  .sp-drop.on{border-color:var(--green);background:var(--green-l)}
+  .sp-err{background:var(--warnbg);border:1px solid #ef9a9a;color:var(--warn);border-radius:8px;
+    padding:10px 12px;font-size:13px;margin-top:12px;white-space:pre-wrap}
+  .sp-prog{font-size:13px;color:var(--muted);margin-top:12px}
+  /* Calibration overlay */
+  .cal-steps{padding:10px 16px;border-bottom:1px solid var(--line);display:flex;flex-wrap:wrap;
+    gap:8px 16px;align-items:center;background:#fbfdfb}
+  .cal-steps .cal-num{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--muted)}
+  .cal-steps .cal-num input{width:96px;padding:6px 8px;border:1px solid var(--line);border-radius:6px;font-size:15px}
+  .cal-steps .cal-num input.wide{width:120px}
+  .cal-step{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:var(--muted)}
+  .cal-step .dot{width:20px;height:20px;border-radius:50%;background:#eceff1;color:#546e7a;
+    display:inline-flex;align-items:center;justify-content:center;font-size:11px;font-weight:700}
+  .cal-step.on{color:var(--green-d)}
+  .cal-step.on .dot{background:var(--green);color:#fff}
+  .cal-step.done .dot{background:#a5d6a7;color:#1b5e20}
+  .cal-read{font-size:12px;color:var(--muted)}
+  .cal-read b{color:var(--ink)}
+  .cal-verdict{font-size:13px;padding:8px 12px;border-radius:8px;margin:0}
+  .cal-verdict.ok{background:#e8f5e9;color:#1b5e20;border:1px solid #a5d6a7}
+  .cal-verdict.warn{background:#fff8e1;color:#8a4b00;border:1px solid #ffcc80}
+  .cal-verdict.bad{background:var(--warnbg);color:var(--warn);border:1px solid #ef9a9a}
+  /* Underlay controls inside the sketch tool */
+  .sk-under{display:inline-flex;align-items:center;gap:7px;font-size:12px;color:var(--muted)}
+  .sk-under input[type=range]{width:96px}
+  .sk-vcount{font-size:12px;color:var(--muted)}
+  .sk-vcount.warn{color:#a15c00;font-weight:600}
+  .sk-vcount.bad{color:var(--warn);font-weight:700}
   .sk-vert{fill:#fff;stroke:var(--green-d);stroke-width:2;cursor:grab}
   .sk-handle{fill:var(--z3);stroke:#fff;stroke-width:2;cursor:grab}
   .sk-center{fill:var(--green-d);stroke:#fff;stroke-width:2;cursor:grab}
@@ -251,6 +303,15 @@
   <div class="panel" id="projectPanel">
     <h2>Project</h2>
     <div class="projbar" id="projectBar"><span class="saved">Loading…</span></div>
+  </div>
+
+  <div class="panel" id="sitePlanPanel">
+    <h2>Site Plan (underlay)</h2>
+    <div id="spList" class="sp-list"></div>
+    <div class="btnrow">
+      <button onclick="spOpenUpload()" id="spUploadBtn">Upload site plan</button>
+    </div>
+    <div class="hint" id="spHint">Upload a tender PDF or an image of the plan, calibrate it against a dimension printed on the sheet, then trace your areas straight over the drawing. <b>A sheet must be calibrated and verified before you can trace on it</b> — an underlay you can trace without a checked scale is worse than no underlay, because it looks authoritative. The drawing is internal only: it never appears on the customer quote sheet, the proposal PDF, or the portal.</div>
   </div>
 
   <div class="panel">
@@ -351,12 +412,60 @@
 
 </div>
 
+<div id="spOverlay" class="sk-overlay" hidden>
+  <div class="sk-panel">
+    <div class="sk-head">
+      <h3>Upload site plan</h3>
+      <span class="sk-stat" id="spStat"></span>
+      <span class="sk-grow"></span>
+    </div>
+    <div class="sk-body sp-pick" id="spPickBody"></div>
+    <div class="sk-foot">
+      <p class="hint" id="spPickHint">PDF, PNG or JPEG. The PDF is rasterized here in your browser — the original file is never uploaded or stored.</p>
+      <span class="sk-grow"></span>
+      <div class="sk-tools">
+        <button type="button" class="del" onclick="spCancel()">Cancel</button>
+        <button type="button" id="spAddBtn" onclick="spUploadSelected()" hidden>Add selected sheets</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="calOverlay" class="sk-overlay" hidden>
+  <div class="sk-panel">
+    <div class="sk-head">
+      <h3>Calibrate sheet scale</h3>
+      <span class="sk-stat" id="calStat"></span>
+      <span class="sk-grow"></span>
+      <span class="pz-ctrl"><button type="button" onclick="calZoom(0.7)" aria-label="Zoom out">&minus;</button><button type="button" onclick="calFit()">Fit</button><button type="button" onclick="calZoom(1.4)" aria-label="Zoom in">+</button></span>
+    </div>
+    <div class="cal-steps" id="calSteps"></div>
+    <div class="sk-body" id="calBody"></div>
+    <div class="sk-foot">
+      <p class="hint" id="calHint"></p>
+      <span class="sk-grow"></span>
+      <div class="sk-tools">
+        <button type="button" class="ghost" onclick="calUndo()">Undo point</button>
+        <button type="button" class="ghost" onclick="calRestart()">Start over</button>
+        <button type="button" class="del" onclick="calCancel()">Cancel</button>
+        <button type="button" id="calSaveBtn" onclick="calSave()">Save calibration</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <div id="skOverlay" class="sk-overlay" hidden>
   <div class="sk-panel">
     <div class="sk-head">
       <h3>Draw area shape</h3>
       <span class="sk-stat"><b id="skArea">0</b> sq ft &middot; <span id="skPerim">0</span> ft outline</span>
+      <span class="sk-vcount" id="skVCount"></span>
       <span class="sk-grow"></span>
+      <span class="sk-under" id="skUnderCtl" hidden>
+        <label for="skUnderOpacity">Plan</label>
+        <input id="skUnderOpacity" type="range" min="0" max="100" step="5" value="65" aria-label="Underlay opacity">
+        <span id="skUnderPct">65%</span>
+      </span>
       <span class="pz-ctrl"><button type="button" onclick="skZoom(0.7)" aria-label="Zoom out">&minus;</button><button type="button" onclick="skFit()">Fit</button><button type="button" onclick="skZoom(1.4)" aria-label="Zoom in">+</button></span>
       <label class="pz-span"><input id="skSpan" type="number" min="4" max="400" step="1"> ft across</label>
     </div>
@@ -1031,9 +1140,21 @@ function render(){
       const desc = isSector(a) ? `${sq.toLocaleString()} sq ft &middot; ${a.arc.sweep>=180?'half':'quarter'} circle r${Math.round(a.arc.r)} ft`
         : isCircle(a) ? `${sq.toLocaleString()} sq ft &middot; ${Math.round(a.circle.r*2)} ft dia circle`
         : (hasShape ? `${sq.toLocaleString()} sq ft &middot; ${Math.round(g.bb.maxX-g.bb.minX)}×${Math.round(g.bb.maxY-g.bb.minY)} ft box` : '<span style="color:var(--warn)">no shape drawn</span>');
+      // "Trace on" only appears once at least one sheet has a VERIFIED
+      // scale — offering an uncalibrated sheet here would be offering a
+      // trap.
+      const traceable = spCalibratedPages();
+      const ref = a.planRef && a.planRef.pageId;
+      const planHtml = traceable.length ? `
+        <div class="fld"><label>Trace on</label>
+          <select onchange="setAreaPlan(${i}, this.value)">
+            <option value="">— grid (no plan) —</option>
+            ${traceable.map(pg=>`<option value="${esc(pg.id)}" ${ref===pg.id?'selected':''}>${esc(pg.label)}</option>`).join('')}
+          </select></div>` : '';
       return `
         <div class="fld"><label>Custom shape</label>
-          <button type="button" class="ghost shape-btn" onclick="openSketch(${i})">${hasShape?'Edit shape':'Draw shape'}</button></div>
+          <button type="button" class="ghost shape-btn" onclick="openSketch(${i})">${hasShape?'Edit shape':(ref?'Trace on plan':'Draw shape')}</button></div>
+        ${planHtml}
         <div class="fld"><label>Area</label><div class="shape-area">${desc}</div></div>`;
     })() : rect ? `
           <div class="fld"><label>Length (ft)</label><input type="number" value="${a.L}" oninput="upd(${i},'L',this.value)"></div>
@@ -1213,29 +1334,44 @@ function legend(p){
    _w/_h (canvas px), _ptrs (active pointers), _pinch, _drag, _tap, _hooks,
    _move/_up (bound window handlers). Coords are absolute ft; SX=x*ppf+panX. */
 const PZ={min:1.2, max:120};
+// PZ.min / PZ.max are expressed in SCREEN PIXELS PER WORLD UNIT, and their
+// values (1.2 - 120) are chosen for editors whose world unit is a FOOT.
+// The calibration canvas is the one editor whose world unit is a raster
+// PIXEL: a 5000 px sheet needs roughly 0.13 px-per-unit to fit on screen,
+// which the 1.2 floor would clamp away — leaving the user zoomed 10x into
+// one corner of their own site plan with no way out. So each editor may
+// carry its own bounds; anything that doesn't set them keeps PZ exactly.
+const pzMin = ed => (ed && Number.isFinite(ed.ppfMin)) ? ed.ppfMin : PZ.min;
+const pzMax = ed => (ed && Number.isFinite(ed.ppfMax)) ? ed.ppfMax : PZ.max;
+const pzClamp = (ed, v) => Math.max(pzMin(ed), Math.min(pzMax(ed), v));
 function pzInit(ed){ ed._ptrs=new Map(); ed._pinch=null; ed._drag=null; ed._tap=null; ed._pan=null;
   ed._move=e=>pzMove(ed,e); ed._up=e=>pzUp(ed,e); }
 function pzFit(ed, bbox){
   const body=el(ed.bodyId); const w=Math.max(body.clientWidth-2,300), h=Math.max(body.clientHeight-2,300);
   ed._w=w; ed._h=h;
   const bw=Math.max(bbox.maxX-bbox.minX,4), bh=Math.max(bbox.maxY-bbox.minY,4);
-  ed.ppf=Math.max(PZ.min, Math.min(PZ.max, Math.min(w/bw, h/bh)*0.86));
+  ed.ppf=pzClamp(ed, Math.min(w/bw, h/bh)*0.86);
   const cx=(bbox.minX+bbox.maxX)/2, cy=(bbox.minY+bbox.maxY)/2;
   ed.panX=w/2-cx*ed.ppf; ed.panY=h/2-cy*ed.ppf;
 }
 const pzSX=(ed,x)=>x*ed.ppf+ed.panX, pzSY=(ed,y)=>y*ed.ppf+ed.panY;
 const pzFX=(ed,sx)=>(sx-ed.panX)/ed.ppf, pzFY=(ed,sy)=>(sy-ed.panY)/ed.ppf;
 function pzLocal(ed,e){ const r=el(ed.svgId).getBoundingClientRect(); return {x:e.clientX-r.left, y:e.clientY-r.top}; }
-function pzGridSvg(ed){
-  const {ppf,panX,panY,_w:w,_h:h}=ed; let g=`<rect width="${w}" height="${h}" fill="#fbfdfb"/>`;
+// Split into layers so a site-plan underlay can be drawn BETWEEN the
+// background and the grid (draw order: background -> underlay -> grid ->
+// geometry -> handles). pzGridSvg concatenates them, so every existing
+// caller gets byte-identical output.
+function pzGridSvg(ed){ const L=pzGridLayers(ed); return L.bg+L.grid; }
+function pzGridLayers(ed){
+  const {ppf,panX,panY,_w:w,_h:h}=ed; const bg=`<rect width="${w}" height="${h}" fill="#fbfdfb"/>`; let g='';
   const minor=ppf>=7;
   const x0=Math.floor(-panX/ppf), x1=Math.ceil((w-panX)/ppf), y0=Math.floor(-panY/ppf), y1=Math.ceil((h-panY)/ppf);
   for(let f=x0; f<=x1; f++){ if(!minor && (f%5)) continue; const X=(f*ppf+panX).toFixed(1); g+=`<line x1="${X}" y1="0" x2="${X}" y2="${h}" stroke="${f%5?'#e2e9e4':'#c2cec7'}" stroke-width="1"/>`; }
   for(let f=y0; f<=y1; f++){ if(!minor && (f%5)) continue; const Y=(f*ppf+panY).toFixed(1); g+=`<line x1="0" y1="${Y}" x2="${w}" y2="${Y}" stroke="${f%5?'#e2e9e4':'#c2cec7'}" stroke-width="1"/>`; }
-  return g;
+  return {bg, grid:g};
 }
 function pzZoomAt(ed, mx, my, factor){
-  const np=Math.max(PZ.min, Math.min(PZ.max, ed.ppf*factor));
+  const np=pzClamp(ed, ed.ppf*factor);
   const fx=(mx-ed.panX)/ed.ppf, fy=(my-ed.panY)/ed.ppf;
   ed.ppf=np; ed.panX=mx-fx*ed.ppf; ed.panY=my-fy*ed.ppf;
 }
@@ -1245,7 +1381,7 @@ function pzSetSpan(ed, spanFt){
   if(!isFinite(spanFt) || spanFt<=0) return;
   const mx=ed._w/2, my=ed._h/2;                                          // keep canvas centre fixed
   const fx=(mx-ed.panX)/ed.ppf, fy=(my-ed.panY)/ed.ppf;
-  ed.ppf=Math.max(PZ.min, Math.min(PZ.max, ed._w/spanFt));
+  ed.ppf=pzClamp(ed, ed._w/spanFt);
   ed.panX=mx-fx*ed.ppf; ed.panY=my-fy*ed.ppf;
 }
 function pzSyncSpan(ed, id){ const inp=el(id); if(inp && document.activeElement!==inp) inp.value=Math.round(pzSpan(ed)); }
@@ -1254,7 +1390,7 @@ function pzStartPinch(ed){ const [a,b]=[...ed._ptrs.values()]; const r=el(ed.svg
   ed._pinch={d:Math.max(Math.hypot(a.x-b.x,a.y-b.y),1), ppf:ed.ppf, panX:ed.panX, panY:ed.panY, mx:(a.x+b.x)/2-r.left, my:(a.y+b.y)/2-r.top}; }
 function pzPinchMove(ed){ const [a,b]=[...ed._ptrs.values()]; const r=el(ed.svgId).getBoundingClientRect();
   const d=Math.hypot(a.x-b.x,a.y-b.y), mx=(a.x+b.x)/2-r.left, my=(a.y+b.y)/2-r.top;
-  ed.ppf=Math.max(PZ.min, Math.min(PZ.max, ed._pinch.ppf*(d/ed._pinch.d)));
+  ed.ppf=pzClamp(ed, ed._pinch.ppf*(d/ed._pinch.d));
   const fx=(ed._pinch.mx-ed._pinch.panX)/ed._pinch.ppf, fy=(ed._pinch.my-ed._pinch.panY)/ed._pinch.ppf;
   ed.panX=mx-fx*ed.ppf; ed.panY=my-fy*ed.ppf; }
 function pzDown(ed,e){
@@ -1299,26 +1435,867 @@ function pzUp(ed,e){
   ed._drag=null; ed._tap=null; ed._hooks.redraw();
 }
 
+/* ════════════════ Site plan underlay — upload, calibrate, trace ════════════════
+
+   Accuracy contract (mirrors server/lib/site-plan-calibration.js — read that
+   file's header before changing anything here):
+
+     1. No tracing on an uncalibrated sheet. Hard gate, not a warning.
+     2. Calibration is verified against a SECOND known dimension before the
+        sheet is usable. One control measurement is not a measurement.
+     3. A number a bid depends on is never silently changed. Recalibration
+        after tracing is refused, not quietly applied.
+
+   The numbers shown here while you are picking points are a live PREVIEW.
+   What gets persisted — and therefore what the bid depends on — is always
+   what the server derived from the raw clicked points and handed back in
+   the PATCH response. This file never invents an authoritative ftPerPx.
+
+   Page world-coordinate model (no rotation in Phase 1):
+       world_ft = raster_px * ftPerPx,  raster (0,0) -> world (0,0)
+   Areas traced on the SAME page therefore share one coordinate frame and
+   keep true relative position on the site. Areas traced on DIFFERENT pages
+   are NOT in a common frame — nothing downstream uses cross-area geometry
+   today, so that is safe, but it is documented rather than discovered.
+   Traced polys carry large coordinates (hundreds of feet from the page
+   origin); polyArea / polyPerim / pointInPoly are all translation-invariant
+   and pzFit centres on each area's own bbox, so that is harmless.          */
+
+let sitePlan = null;          // project.sitePlan, or null
+let PDFJS = null;             // lazily imported pdf.js module
+
+const SP_PDFJS_URL  = '/crm/vendor/pdfjs/pdf.min.mjs';
+const SP_WORKER_URL = '/crm/vendor/pdfjs/pdf.worker.min.mjs';
+
+// Render targets. 5000 px on the long edge of a typical 1"=20' sheet is
+// about 0.15 ft/px — roughly two inches of real-world resolution per pixel,
+// ample for head placement, which is meaningful to +/- 1 ft.
+const SP_TARGET_LONG_EDGE = 5000;
+const SP_MAX_EDGE         = 8000;
+const SP_PNG_MAX_BYTES    = 6 * 1024 * 1024;    // above this, re-encode as JPEG
+const SP_PAGE_MAX_BYTES   = 16 * 1024 * 1024;   // server's per-sheet cap
+const SP_JPEG_QUALITY     = 0.85;
+const SP_MAX_PICKER_PAGES = 40;
+
+// Vertex budget — protects the 512 KB systemDesign cap. Kept in lockstep
+// with lib/site-plan-calibration.js; the server-side test asserts these.
+const SP_VERTEX_SOFT = 3000;
+const SP_VERTEX_HARD = 4000;
+const SP_DESIGN_PREFLIGHT_MAX = 480 * 1024;
+
+const round3 = n => Number((Number(n) || 0).toFixed(3));
+
+// ---- Page lookup + gating --------------------------------------------
+
+function spPages(){ return (sitePlan && Array.isArray(sitePlan.pages)) ? sitePlan.pages : []; }
+function spPage(pageId){ return spPages().find(p => p && p.id === pageId) || null; }
+
+// The hard gate. A page is traceable only when it is calibrated AND its
+// second-dimension verification did not fail. A "warned" verification is
+// traceable only because the user explicitly acknowledged the residual,
+// which the server recorded in verify.acknowledgedBy.
+function spTraceable(page){
+  const c = page && page.calibration;
+  if(!c || c.state !== 'calibrated') return false;
+  if(!c.verify || c.verify.state === 'failed' || c.verify.state === 'pending') return false;
+  if(c.verify.state === 'warned' && !c.verify.acknowledgedBy) return false;
+  return Number(c.ftPerPx) > 0;
+}
+function spCalibratedPages(){ return spPages().filter(spTraceable); }
+
+function spChip(page){
+  const c = page && page.calibration;
+  if(!c || c.state !== 'calibrated') return '<span class="chip none">not calibrated</span>';
+  const v = c.verify || {};
+  if(v.state === 'failed') return '<span class="chip bad">verification failed</span>';
+  if(v.state === 'warned') return `<span class="chip warn">calibration: warned ${esc(String(v.residualPct))}%</span>`;
+  return '<span class="chip ok">calibration: passed</span>';
+}
+
+// Areas currently traced on a page — used to name dependents in refusals.
+function spDependentAreaNames(pageId){
+  return areas
+    .map((a,i) => (a && a.planRef && a.planRef.pageId === pageId) ? ((a.name||'').trim() || ('Area '+(i+1))) : null)
+    .filter(Boolean);
+}
+
+// ---- Panel -----------------------------------------------------------
+
+function renderSitePlan(){
+  const box = el('spList');
+  if(!box) return;
+  const btn = el('spUploadBtn');
+  if(btn) btn.disabled = !linkedProject;
+  if(!linkedProject){
+    box.innerHTML = '<div class="sp-empty">Attach this design to a project before uploading a site plan — the sheets are stored on the project record.</div>';
+    return;
+  }
+  const pages = spPages();
+  if(!pages.length){
+    box.innerHTML = '<div class="sp-empty">No site plan uploaded yet.</div>';
+    return;
+  }
+  box.innerHTML = pages.map(pg => {
+    const c = pg.calibration || {};
+    const deps = spDependentAreaNames(pg.id);
+    const bits = [`${pg.rasterWidthPx.toLocaleString()} × ${pg.rasterHeightPx.toLocaleString()} px`];
+    if(pg.pdfPageNumber) bits.push(`PDF page ${pg.pdfPageNumber}`);
+    bits.push(`${(pg.sizeBytes/1_000_000).toFixed(1)} MB`);
+    if(c.state === 'calibrated' && c.ftPerPx > 0){
+      bits.push(`${c.ftPerPx.toFixed(4)} ft/px`);
+      const w = pg.rasterWidthPx * c.ftPerPx, h = pg.rasterHeightPx * c.ftPerPx;
+      bits.push(`sheet covers ${Math.round(w).toLocaleString()} × ${Math.round(h).toLocaleString()} ft`);
+    }
+    if(deps.length) bits.push(`${deps.length} traced ${deps.length===1?'area':'areas'}`);
+    const cross = c.statedScaleCheck;
+    const crossNote = (cross && cross.available && !cross.agrees)
+      ? `<div class="sp-sub" style="color:#a15c00"><b>Stated scale ${esc(cross.statedScale)}:</b> measured scale is ${esc(String(cross.deltaPct))}% off it. ${esc(cross.note)}</div>` : '';
+    return `<div class="sp-card">
+      <div class="sp-meta">
+        <div class="sp-name">${esc(pg.label)} ${spChip(pg)}</div>
+        <div class="sp-sub">${esc(bits.join(' · '))}</div>
+        ${crossNote}
+      </div>
+      <div class="sp-acts">
+        <button type="button" class="ghost" onclick="calOpen('${esc(pg.id)}')">${c.state==='calibrated'?'Recalibrate':'Calibrate scale'}</button>
+        <button type="button" class="del" onclick="spDeletePage('${esc(pg.id)}')">Delete</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// ---- pdf.js, loaded lazily -------------------------------------------
+//
+// Imported only when the upload dialog is first opened, so the builder's
+// initial paint never pays for it. See server/vendor/pdfjs/VENDORED.md.
+async function loadPdfJs(){
+  if(PDFJS) return PDFJS;
+  const mod = await import(SP_PDFJS_URL);
+  mod.GlobalWorkerOptions.workerSrc = SP_WORKER_URL;
+  PDFJS = mod;
+  return mod;
+}
+
+// ---- Upload dialog ---------------------------------------------------
+
+const spUp = { doc:null, file:null, pages:[], selected:new Set(), busy:false };
+
+function spOpenUpload(){
+  if(!linkedProject){ alert('Attach this design to a project first — site plans are stored on the project record.'); return; }
+  spUp.doc = null; spUp.file = null; spUp.pages = []; spUp.selected.clear(); spUp.busy = false;
+  el('spStat').textContent = '';
+  el('spAddBtn').hidden = true;
+  el('spPickBody').innerHTML = `
+    <div class="sp-drop" id="spDrop">
+      <p style="margin:0 0 12px;font-size:14px"><b>Drop a site plan here</b>, or choose a file.</p>
+      <input type="file" id="spFile" accept="application/pdf,image/png,image/jpeg">
+      <p class="hint" style="margin:12px 0 0">Multi-page tender PDFs are fine — you'll pick the sheets you want next.</p>
+    </div>
+    <div id="spMsg"></div>`;
+  el('spOverlay').hidden = false;
+  const inp = el('spFile');
+  inp.addEventListener('change', () => { if(inp.files && inp.files[0]) spHandleFile(inp.files[0]); });
+  const drop = el('spDrop');
+  ['dragenter','dragover'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add('on'); }));
+  ['dragleave','drop'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove('on'); }));
+  drop.addEventListener('drop', e => { const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0]; if(f) spHandleFile(f); });
+}
+
+function spCancel(){
+  // Release the pdf.js document so its worker memory goes back promptly.
+  try{ if(spUp.doc) spUp.doc.destroy(); }catch(_){ }
+  spUp.doc = null; spUp.pages = []; spUp.selected.clear();
+  el('spOverlay').hidden = true;
+}
+
+function spErr(message){
+  const box = el('spMsg');
+  if(box) box.innerHTML = `<div class="sp-err">${esc(message)}</div>`;
+}
+function spProgress(message){
+  const box = el('spMsg');
+  if(box) box.innerHTML = message ? `<div class="sp-prog">${esc(message)}</div>` : '';
+}
+
+async function spHandleFile(file){
+  const mime = (file.type || '').toLowerCase();
+  spUp.file = file;
+  el('spMsg').innerHTML = '';
+  if(mime === 'image/png' || mime === 'image/jpeg'){
+    // Image files skip the PDF path entirely and land as a single page.
+    return spHandleImageFile(file, mime);
+  }
+  if(mime !== 'application/pdf'){
+    return spErr(`That's a ${mime || 'file of unknown type'}. Upload a PDF, PNG or JPEG.`);
+  }
+  spProgress('Reading PDF…');
+  try{
+    const lib = await loadPdfJs();
+    const buf = await file.arrayBuffer();
+    const doc = await lib.getDocument({ data: new Uint8Array(buf) }).promise;
+    spUp.doc = doc;
+    await spBuildPicker(doc);
+  } catch(err){
+    // Each failure gets a distinct, actionable message. "Couldn't open the
+    // file" tells the user nothing they can act on.
+    if(err && err.name === 'PasswordException'){
+      return spErr('This PDF is password-protected. Remove the password or export the sheet as an image (PNG or JPEG) and upload that instead.');
+    }
+    if(err && (err.name === 'InvalidPDFException' || /invalid|corrupt|structure/i.test(err.message||''))){
+      return spErr('This PDF couldn’t be read — it looks corrupt or truncated.\nWork around it by opening the plan in a PDF viewer, exporting the sheet you need as a PNG or JPEG, and uploading that image here instead.');
+    }
+    return spErr('Couldn’t open that PDF: ' + (err && err.message ? err.message : String(err)) + '\nYou can also export the sheet as a PNG or JPEG and upload the image instead.');
+  }
+}
+
+async function spHandleImageFile(file, mime){
+  spProgress('Reading image…');
+  try{
+    const url = URL.createObjectURL(file);
+    const img = await new Promise((resolve, reject) => {
+      const im = new Image();
+      im.onload = () => resolve(im);
+      im.onerror = () => reject(new Error('The image couldn’t be decoded.'));
+      im.src = url;
+    });
+    spUp.pages = [{
+      kind: 'image',
+      index: 1,
+      label: file.name.replace(/\.[^.]+$/, '').slice(0, 120) || 'Site plan',
+      width: img.naturalWidth,
+      height: img.naturalHeight,
+      img, objectUrl: url
+    }];
+    spUp.selected = new Set([0]);
+    spRenderPicker(`1 image · ${img.naturalWidth} × ${img.naturalHeight} px`);
+  } catch(err){
+    spErr('Couldn’t read that image: ' + (err.message || err));
+  }
+}
+
+async function spBuildPicker(doc){
+  const total = doc.numPages;
+  const shown = Math.min(total, SP_MAX_PICKER_PAGES);
+  spUp.pages = [];
+  for(let i = 1; i <= shown; i++){
+    spProgress(`Rendering thumbnail ${i} of ${shown}…`);
+    const page = await doc.getPage(i);
+    const vp = page.getViewport({ scale: 0.3 });
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(vp.width));
+    canvas.height = Math.max(1, Math.round(vp.height));
+    await page.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise;
+    const full = page.getViewport({ scale: 1 });
+    spUp.pages.push({
+      kind: 'pdf', index: i,
+      label: `Page ${i}`,
+      width: full.width, height: full.height,
+      thumb: canvas.toDataURL('image/png')
+    });
+    page.cleanup();
+  }
+  // Never silently truncate — say what was left out.
+  const note = total > shown
+    ? `Showing the first ${shown} of ${total} pages. If the sheet you need is past page ${shown}, split the PDF or export that sheet as an image.`
+    : `${total} page${total===1?'':'s'}`;
+  spRenderPicker(note);
+}
+
+function spRenderPicker(note){
+  const cards = spUp.pages.map((p, i) => {
+    const src = p.kind === 'pdf' ? p.thumb : (p.objectUrl || '');
+    return `<div class="sp-thumb${spUp.selected.has(i)?' on':''}" data-i="${i}" onclick="spToggleSel(${i})">
+      <img src="${esc(src)}" alt="${esc(p.label)}">
+      <div class="sp-lab">${esc(p.label)}</div>
+    </div>`;
+  }).join('');
+  el('spPickBody').innerHTML = `
+    <p class="hint" style="margin:0">${esc(note)}</p>
+    <p class="hint" style="margin:6px 0 0">Pick the sheet(s) you want as an underlay. Each is rendered here at high resolution and uploaded as an image — the PDF itself never leaves your browser.</p>
+    <div class="sp-grid">${cards}</div>
+    <div id="spMsg"></div>`;
+  el('spAddBtn').hidden = false;
+  spUpdateAddBtn();
+}
+
+function spToggleSel(i){
+  if(spUp.busy) return;
+  if(spUp.selected.has(i)) spUp.selected.delete(i); else spUp.selected.add(i);
+  const node = el('spPickBody').querySelector(`.sp-thumb[data-i="${i}"]`);
+  if(node) node.classList.toggle('on', spUp.selected.has(i));
+  spUpdateAddBtn();
+}
+
+function spUpdateAddBtn(){
+  const btn = el('spAddBtn');
+  const n = spUp.selected.size;
+  btn.disabled = n === 0 || spUp.busy;
+  btn.textContent = spUp.busy ? 'Uploading…' : (n === 1 ? 'Add this sheet' : `Add ${n} sheets`);
+}
+
+// Render one page to a blob at the target resolution, stepping the encoding
+// down until it fits the server's per-sheet cap.
+async function spRenderPageBlob(entry){
+  const baseW = entry.width, baseH = entry.height;
+  const longEdge = Math.max(baseW, baseH);
+  let scale = SP_TARGET_LONG_EDGE / longEdge;
+  // Clamp so neither dimension exceeds SP_MAX_EDGE.
+  scale = Math.min(scale, SP_MAX_EDGE / baseW, SP_MAX_EDGE / baseH);
+
+  for(let attempt = 0; attempt < 4; attempt++){
+    let canvas = null;
+    try{
+      canvas = document.createElement('canvas');
+      canvas.width = Math.max(1, Math.round(baseW * scale));
+      canvas.height = Math.max(1, Math.round(baseH * scale));
+      const ctx = canvas.getContext('2d');
+      if(!ctx) throw new Error('canvas-context');
+      // White ground — a transparent PNG under a light UI reads as a blank
+      // sheet, and JPEG has no alpha to fall back on.
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      if(entry.kind === 'pdf'){
+        const page = await spUp.doc.getPage(entry.index);
+        await page.render({ canvasContext: ctx, viewport: page.getViewport({ scale }) }).promise;
+        page.cleanup();
+      } else {
+        ctx.drawImage(entry.img, 0, 0, canvas.width, canvas.height);
+      }
+
+      let blob = await new Promise(r => canvas.toBlob(r, 'image/png'));
+      let mimeType = 'image/png';
+      // Line-art plans compress well as PNG; scanned or photographic sheets
+      // do not, so those fall back to JPEG.
+      if(!blob || blob.size > SP_PNG_MAX_BYTES){
+        const jpeg = await new Promise(r => canvas.toBlob(r, 'image/jpeg', SP_JPEG_QUALITY));
+        if(jpeg && (!blob || jpeg.size < blob.size)){ blob = jpeg; mimeType = 'image/jpeg'; }
+      }
+      if(!blob) throw new Error('encode-failed');
+
+      if(blob.size > SP_PAGE_MAX_BYTES && attempt < 3){
+        scale *= 0.75;                                  // reduce 25% and retry
+        continue;
+      }
+      const out = {
+        blob, mimeType,
+        widthPx: canvas.width, heightPx: canvas.height,
+        renderScale: entry.kind === 'pdf' ? scale : null
+      };
+      // Free the backing store immediately so a multi-sheet upload doesn't
+      // hold several 5000 px canvases at once.
+      canvas.width = 0; canvas.height = 0;
+      return out;
+    } catch(err){
+      if(canvas){ canvas.width = 0; canvas.height = 0; }
+      const oom = /canvas|memory|allocat|context/i.test(err && err.message || '');
+      if(oom && attempt === 0){
+        scale *= 0.6;                                   // one retry at 60%
+        continue;
+      }
+      if(oom){
+        throw new Error(
+          `Couldn’t allocate a canvas for this sheet at ${Math.round(baseW*scale)} × ${Math.round(baseH*scale)} px — ` +
+          `the browser ran out of memory. Close other tabs and try again, or export this sheet as a JPEG and upload the image.`
+        );
+      }
+      throw err;
+    }
+  }
+  throw new Error('This sheet is still over the size limit after three attempts at lower resolution. Export it as a JPEG and upload the image instead.');
+}
+
+function spBlobToBase64(blob){
+  return new Promise((resolve, reject) => {
+    const fr = new FileReader();
+    fr.onload = () => resolve(String(fr.result).split(',')[1] || '');
+    fr.onerror = () => reject(new Error('Couldn’t read the rendered image.'));
+    fr.readAsDataURL(blob);
+  });
+}
+
+async function spUploadSelected(){
+  if(spUp.busy || !spUp.selected.size) return;
+  spUp.busy = true; spUpdateAddBtn();
+  const picks = [...spUp.selected].sort((a,b) => a-b);
+  const srcName = spUp.file ? spUp.file.name : '';
+  const srcMime = spUp.file ? spUp.file.type : '';
+  let added = 0;
+  try{
+    for(let n = 0; n < picks.length; n++){
+      const entry = spUp.pages[picks[n]];
+      spProgress(`Rendering ${entry.label} at full resolution (${n+1} of ${picks.length})…`);
+      const rendered = await spRenderPageBlob(entry);
+      spProgress(`Uploading ${entry.label} (${(rendered.blob.size/1_000_000).toFixed(1)} MB)…`);
+      const data = await spBlobToBase64(rendered.blob);
+      const res = await fetch(`/api/projects/${encodeURIComponent(linkedProject.id)}/site-plan/pages`, {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({
+          label: entry.kind === 'pdf'
+            ? `${(srcName||'Site plan').replace(/\.pdf$/i,'')} — p${entry.index}`.slice(0,120)
+            : entry.label,
+          pdfPageNumber: entry.kind === 'pdf' ? entry.index : null,
+          mimeType: rendered.mimeType,
+          data,
+          rasterWidthPx: rendered.widthPx,
+          rasterHeightPx: rendered.heightPx,
+          renderScale: rendered.renderScale,
+          sourceFilename: srcName,
+          sourceMimeType: srcMime
+        })
+      });
+      const j = await res.json().catch(() => ({}));
+      if(!res.ok || !j.ok){
+        // Surface the server's ACTUAL limit rather than a generic failure.
+        throw new Error((j.errors && j.errors[0]) || `Upload failed (HTTP ${res.status}).`);
+      }
+      if(!sitePlan) sitePlan = { version:1, pages:[] };
+      if(!Array.isArray(sitePlan.pages)) sitePlan.pages = [];
+      sitePlan.pages.push(j.page);
+      added++;
+    }
+    spCancel();
+    renderSitePlan();
+    render();   // area cards gain the new sheet in their "trace on" picker
+    if(added) alert(`${added} sheet${added===1?'':'s'} added. Calibrate ${added===1?'it':'each one'} against a dimension printed on the drawing before you can trace on it.`);
+  } catch(err){
+    spProgress('');
+    spErr(String(err && err.message || err) + (added ? `\n\n${added} sheet${added===1?'':'s'} uploaded before this failed — those are saved.` : ''));
+    if(added){ renderSitePlan(); render(); }
+  } finally {
+    spUp.busy = false;
+    spUpdateAddBtn();
+  }
+}
+
+async function spDeletePage(pageId){
+  const pg = spPage(pageId);
+  if(!pg) return;
+  const deps = spDependentAreaNames(pageId);
+  let force = false;
+  if(deps.length){
+    const ok = confirm(
+      `${deps.length} traced ${deps.length===1?'area is':'areas are'} drawn on "${pg.label}":\n\n` +
+      `${deps.join('\n')}\n\n` +
+      `Deleting the sheet removes the drawing you traced them against. The traced shapes are KEPT — ` +
+      `they're already in feet — they just lose their underlay.\n\nDelete anyway?`
+    );
+    if(!ok) return;
+    force = true;
+  } else if(!confirm(`Delete "${pg.label}"? The image is removed from the project.`)){
+    return;
+  }
+  try{
+    const res = await fetch(
+      `/api/projects/${encodeURIComponent(linkedProject.id)}/site-plan/pages/${encodeURIComponent(pageId)}${force?'?force=1':''}`,
+      { method:'DELETE' }
+    );
+    const j = await res.json().catch(() => ({}));
+    if(!res.ok || !j.ok) throw new Error((j.errors && j.errors[0]) || `HTTP ${res.status}`);
+    sitePlan.pages = spPages().filter(p => p.id !== pageId);
+    if(!sitePlan.pages.length) sitePlan = null;
+    // Server cleared planRef on dependents; mirror that locally so the two
+    // don't drift until the next reload.
+    areas.forEach(a => { if(a.planRef && a.planRef.pageId === pageId) delete a.planRef; });
+    renderSitePlan(); render();
+  } catch(err){
+    alert('Couldn’t delete that sheet: ' + (err.message || err));
+  }
+}
+
+/* ──────────────── Calibration overlay ────────────────
+   World units on THIS canvas are RASTER PIXELS, not feet — the whole point
+   of the exercise is that we don't have a scale yet. pzFit / pzSX / pzSY
+   are unit-agnostic, so the shared viewport layer is reused as-is.        */
+
+const cal = {
+  pageId:null, page:null,
+  pts:[],                    // up to 4 raster-px points: 2 scale, 2 verify
+  knownFt:'', expectedFt:'', statedScale:'',
+  acknowledge:false, saving:false, hover:null, lastError:'',
+  svgId:'calSvg', bodyId:'calBody', ppf:1, panX:0, panY:0, _w:0, _h:0,
+  // World unit here is one RASTER PIXEL, not one foot — see the note on
+  // pzMin/pzMax. 0.02 fits an 8000 px sheet on screen; 40 lets the user zoom
+  // right into an individual pixel, which is the whole point when the
+  // accuracy of the bid rides on where these four clicks land.
+  ppfMin:0.02, ppfMax:40
+};
+
+function calRasterUrl(pageId){
+  return `/api/projects/${encodeURIComponent(linkedProject.id)}/site-plan/pages/${encodeURIComponent(pageId)}/raster`;
+}
+
+function calOpen(pageId){
+  const pg = spPage(pageId);
+  if(!pg) return;
+  // Rule 3 — a number a bid depends on is never silently changed. Refuse up
+  // front, naming the areas, rather than letting the user do the work and
+  // then bouncing them at save.
+  const deps = spDependentAreaNames(pageId);
+  if(pg.calibration && pg.calibration.state === 'calibrated' && deps.length){
+    alert(
+      `"${pg.label}" is already calibrated and ${deps.length} traced ${deps.length===1?'area depends':'areas depend'} on that scale:\n\n` +
+      `${deps.join('\n')}\n\n` +
+      `Re-scaling now would change ${deps.length===1?'its':'their'} square footage — and therefore the bid — without telling you. ` +
+      `Delete or detach ${deps.length===1?'that area':'those areas'} first, then recalibrate.`
+    );
+    return;
+  }
+  cal.pageId = pageId; cal.page = pg;
+  cal.pts = []; cal.acknowledge = false; cal.saving = false; cal.hover = null; cal.lastError = '';
+  const c = pg.calibration || {};
+  // Pre-fill from an existing calibration so a re-run is a nudge, not a redo.
+  cal.knownFt = (c.knownFt != null) ? String(c.knownFt) : '';
+  cal.expectedFt = (c.verify && c.verify.expectedFt != null) ? String(c.verify.expectedFt) : '';
+  cal.statedScale = c.statedScale || '';
+  if(c.state === 'calibrated' && c.p1 && c.p2 && c.verify){
+    cal.pts = [c.p1, c.p2, c.verify.p1, c.verify.p2].map(p => ({x:Number(p.x), y:Number(p.y)}));
+  }
+  pzInit(cal); cal._hooks = CAL_HOOKS;
+  el('calOverlay').hidden = false;
+  calFit();
+}
+
+function calCancel(){ el('calOverlay').hidden = true; }
+function calZoom(f){ pzZoomBtn(cal, f); }
+function calFit(){
+  pzFit(cal, {minX:0, minY:0, maxX:cal.page.rasterWidthPx, maxY:cal.page.rasterHeightPx});
+  calDraw();
+}
+function calUndo(){ cal.pts.pop(); cal.lastError=''; calDraw(); }
+function calRestart(){ cal.pts = []; cal.acknowledge = false; cal.lastError=''; calDraw(); }
+
+// Live PREVIEW only. The persisted numbers come back from the server.
+function calPreview(){
+  const out = { ftPerPx:null, measuredFt:null, residualPct:null, state:null };
+  if(cal.pts.length >= 2){
+    const d = Math.hypot(cal.pts[1].x-cal.pts[0].x, cal.pts[1].y-cal.pts[0].y);
+    const known = parseFloat(cal.knownFt);
+    if(d >= 1 && known > 0) out.ftPerPx = known / d;
+  }
+  if(out.ftPerPx && cal.pts.length >= 4){
+    const d2 = Math.hypot(cal.pts[3].x-cal.pts[2].x, cal.pts[3].y-cal.pts[2].y);
+    const exp = parseFloat(cal.expectedFt);
+    if(d2 >= 1 && exp > 0){
+      out.measuredFt = d2 * out.ftPerPx;
+      const r = Math.abs(out.measuredFt - exp) / exp * 100;
+      out.residualPct = r;
+      out.state = r < 0.5 ? 'passed' : (r <= 2 ? 'warned' : 'failed');
+    }
+  }
+  return out;
+}
+
+function calStage(){
+  if(cal.pts.length < 2) return 'scale';
+  if(!(parseFloat(cal.knownFt) > 0)) return 'scale-ft';
+  if(cal.pts.length < 4) return 'verify';
+  if(!(parseFloat(cal.expectedFt) > 0)) return 'verify-ft';
+  return 'review';
+}
+
+function calDraw(){
+  const body = el('calBody');
+  cal._w = Math.max(body.clientWidth-2, 300);
+  cal._h = Math.max(body.clientHeight-2, 300);
+  const SX = x => pzSX(cal,x), SY = y => pzSY(cal,y);
+  const pg = cal.page;
+  const iw = pg.rasterWidthPx * cal.ppf, ih = pg.rasterHeightPx * cal.ppf;
+  const ix = SX(0), iy = SY(0);
+  const url = calRasterUrl(cal.pageId);
+
+  let g = `<svg id="calSvg" width="${cal._w}" height="${cal._h}" viewBox="0 0 ${cal._w} ${cal._h}" style="touch-action:none">`;
+  g += `<rect width="${cal._w}" height="${cal._h}" fill="#eceff1"/>`;
+  g += `<image href="${esc(url)}" x="${ix.toFixed(1)}" y="${iy.toFixed(1)}" width="${iw.toFixed(1)}" height="${ih.toFixed(1)}" preserveAspectRatio="none"/>`;
+
+  const pairs = [[0,1,'#1565c0','Scale'], [2,3,'#e65100','Verify']];
+  pairs.forEach(([a,b,color,label]) => {
+    const A = cal.pts[a], B = cal.pts[b];
+    if(A && B){
+      g += `<line x1="${SX(A.x).toFixed(1)}" y1="${SY(A.y).toFixed(1)}" x2="${SX(B.x).toFixed(1)}" y2="${SY(B.y).toFixed(1)}" stroke="${color}" stroke-width="2.5"/>`;
+      const mx = (SX(A.x)+SX(B.x))/2, my = (SY(A.y)+SY(B.y))/2 - 6;
+      const px = Math.hypot(B.x-A.x, B.y-A.y);
+      g += `<text x="${mx.toFixed(1)}" y="${my.toFixed(1)}" text-anchor="middle" font-size="12" font-weight="700" fill="${color}" paint-order="stroke" stroke="#fff" stroke-width="4">${label} · ${Math.round(px)} px</text>`;
+    }
+  });
+  cal.pts.forEach((p,i) => {
+    const color = i < 2 ? '#1565c0' : '#e65100';
+    const X = SX(p.x), Y = SY(p.y);
+    // Crosshair, not a blob — the centre of the mark has to be readable at
+    // the pixel the user actually clicked.
+    g += `<g><line x1="${(X-9).toFixed(1)}" y1="${Y.toFixed(1)}" x2="${(X+9).toFixed(1)}" y2="${Y.toFixed(1)}" stroke="#fff" stroke-width="4"/>` +
+         `<line x1="${X.toFixed(1)}" y1="${(Y-9).toFixed(1)}" x2="${X.toFixed(1)}" y2="${(Y+9).toFixed(1)}" stroke="#fff" stroke-width="4"/>` +
+         `<line x1="${(X-9).toFixed(1)}" y1="${Y.toFixed(1)}" x2="${(X+9).toFixed(1)}" y2="${Y.toFixed(1)}" stroke="${color}" stroke-width="1.6"/>` +
+         `<line x1="${X.toFixed(1)}" y1="${(Y-9).toFixed(1)}" x2="${X.toFixed(1)}" y2="${(Y+9).toFixed(1)}" stroke="${color}" stroke-width="1.6"/>` +
+         `<circle class="cal-pt" cx="${X.toFixed(1)}" cy="${Y.toFixed(1)}" r="10" fill="transparent" data-i="${i}" style="cursor:grab"/></g>`;
+  });
+
+  // Magnifier loupe — click precision is an accuracy requirement, so the
+  // exact pixel under the cursor has to be visible while placing a point.
+  if(cal.hover && cal.pts.length < 4){
+    const LZ = 5, R = 62, cxs = cal._w - R - 14, cys = R + 14;
+    const sx = cxs - cal.hover.x * cal.ppf * LZ, sy = cys - cal.hover.y * cal.ppf * LZ;
+    g += `<defs><clipPath id="calLoupe"><circle cx="${cxs}" cy="${cys}" r="${R}"/></clipPath></defs>`;
+    g += `<g clip-path="url(#calLoupe)"><rect x="${cxs-R}" y="${cys-R}" width="${R*2}" height="${R*2}" fill="#fff"/>` +
+         `<image href="${esc(url)}" x="${sx.toFixed(1)}" y="${sy.toFixed(1)}" width="${(iw*LZ).toFixed(1)}" height="${(ih*LZ).toFixed(1)}" preserveAspectRatio="none"/>` +
+         `<line x1="${cxs-14}" y1="${cys}" x2="${cxs+14}" y2="${cys}" stroke="#c62828" stroke-width="1"/>` +
+         `<line x1="${cxs}" y1="${cys-14}" x2="${cxs}" y2="${cys+14}" stroke="#c62828" stroke-width="1"/></g>`;
+    g += `<circle cx="${cxs}" cy="${cys}" r="${R}" fill="none" stroke="#546e7a" stroke-width="2"/>`;
+  }
+  g += `</svg>`;
+  body.innerHTML = g;
+
+  calRenderSteps();
+  const svg = el('calSvg');
+  svg.addEventListener('pointerdown', e => pzDown(cal, e));
+  svg.addEventListener('wheel', e => pzWheel(cal, e), {passive:false});
+  svg.addEventListener('pointermove', e => {
+    if(cal._drag || cal._pan || cal._pinch) return;
+    const L = pzLocal(cal, e);
+    cal.hover = { x: pzFX(cal, L.x), y: pzFY(cal, L.y) };
+    calDrawLoupeOnly();
+  });
+  svg.addEventListener('pointerleave', () => { if(cal.hover){ cal.hover = null; calDraw(); } });
+}
+
+// The loupe follows the cursor; repainting the whole SVG on every move
+// would re-insert the full-size <image> each frame. Redraw is throttled to
+// an animation frame instead.
+let calLoupeRaf = 0;
+function calDrawLoupeOnly(){
+  if(calLoupeRaf) return;
+  calLoupeRaf = requestAnimationFrame(() => { calLoupeRaf = 0; calDraw(); });
+}
+
+function calRenderSteps(){
+  const stage = calStage();
+  const pv = calPreview();
+  const step = (n, label, active, done) =>
+    `<span class="cal-step${active?' on':''}${done?' done':''}"><span class="dot">${done?'✓':n}</span>${label}</span>`;
+  const scaleDone = cal.pts.length >= 2 && parseFloat(cal.knownFt) > 0;
+  const verifyDone = cal.pts.length >= 4 && parseFloat(cal.expectedFt) > 0;
+  el('calSteps').innerHTML =
+    step(1, 'Set scale', !scaleDone, scaleDone) +
+    `<span class="cal-num">true distance <input id="calKnown" type="number" min="0" step="0.01" value="${esc(cal.knownFt)}" placeholder="ft"> ft</span>` +
+    step(2, 'Verify', scaleDone && !verifyDone, verifyDone) +
+    `<span class="cal-num">expected <input id="calExpected" type="number" min="0" step="0.01" value="${esc(cal.expectedFt)}" placeholder="ft"> ft</span>` +
+    `<span class="cal-num">printed scale <input id="calStated" class="wide" type="text" value="${esc(cal.statedScale)}" placeholder="1:200 (optional)"></span>`;
+
+  ['calKnown','calExpected','calStated'].forEach(id => {
+    const inp = el(id);
+    if(!inp) return;
+    inp.addEventListener('input', () => {
+      if(id === 'calKnown') cal.knownFt = inp.value;
+      else if(id === 'calExpected') cal.expectedFt = inp.value;
+      else cal.statedScale = inp.value;
+      calRenderStatus();
+    });
+  });
+  calRenderStatus();
+}
+
+function calRenderStatus(){
+  const pv = calPreview();
+  const stage = calStage();
+  const stat = el('calStat');
+  const hint = el('calHint');
+  if(!stat || !hint) return;
+
+  let statHtml = '';
+  if(pv.ftPerPx) statHtml += `<b>${pv.ftPerPx.toFixed(5)}</b> ft/px`;
+  if(pv.measuredFt != null){
+    const cls = pv.state === 'passed' ? 'ok' : pv.state === 'warned' ? 'warn' : 'bad';
+    statHtml += ` &middot; measured <b>${pv.measuredFt.toFixed(2)}</b> ft &middot; ` +
+      `<span class="chip ${cls}">${esc(pv.state)} ${pv.residualPct.toFixed(2)}%</span>`;
+  }
+  stat.innerHTML = statHtml;
+
+  const HINTS = {
+    'scale': 'Step 1 — click the two ends of a dimension you know on this sheet (a printed dimension string, a property line, a building face). Zoom in first: click precision is the whole game here. Scroll/pinch to zoom, Ctrl-drag to pan.',
+    'scale-ft': 'Now type the TRUE distance between those two points, in feet.',
+    'verify': 'Step 2 — now click a SECOND, independent dimension somewhere else on the sheet. Prefer one on the other axis. This is what catches a mistyped or misread scale, so it is not optional.',
+    'verify-ft': 'Type what that second dimension SHOULD measure, in feet.',
+    'review': ''
+  };
+  let hintHtml = esc(HINTS[stage] || '');
+  if(stage === 'review'){
+    if(pv.state === 'passed'){
+      hintHtml = `<span class="cal-verdict ok">Verification passed — the second dimension agrees to within ${pv.residualPct.toFixed(2)}%. Save to unlock tracing on this sheet.</span>`;
+    } else if(pv.state === 'warned'){
+      hintHtml = `<span class="cal-verdict warn"><b>Residual ${pv.residualPct.toFixed(2)}%</b> — inside tolerance but not clean (under 0.5% is clean). Re-click the points more precisely, or acknowledge the residual below to trace on this sheet anyway.<br>` +
+        `<label style="display:inline-flex;gap:6px;align-items:center;margin-top:6px;font-weight:600">` +
+        `<input type="checkbox" id="calAck" ${cal.acknowledge?'checked':''}> I've checked this and accept the residual</label></span>`;
+    } else if(pv.state === 'failed'){
+      hintHtml = `<span class="cal-verdict bad"><b>Verification failed — ${pv.residualPct.toFixed(2)}% off.</b> ` +
+        (pv.residualPct > 45 && pv.residualPct < 105
+          ? 'An error this close to a factor of two almost always means the scale was read one step out (1:100 taken as 1:200, or the sheet exported at half size). '
+          : '') +
+        `Tracing stays blocked. Check the dimension you typed matches the one you clicked, re-click more precisely, or accept that this sheet isn't drawn to scale.</span>`;
+    }
+  }
+  if(cal.lastError) hintHtml += `<span class="cal-verdict bad" style="display:block;margin-top:6px">${esc(cal.lastError)}</span>`;
+  hint.innerHTML = hintHtml;
+
+  const ack = el('calAck');
+  if(ack) ack.addEventListener('change', () => { cal.acknowledge = ack.checked; calRenderStatus(); });
+
+  const btn = el('calSaveBtn');
+  if(btn){
+    const blocked = cal.saving || stage !== 'review' || pv.state === 'failed' ||
+                    (pv.state === 'warned' && !cal.acknowledge);
+    btn.disabled = blocked;
+    btn.textContent = cal.saving ? 'Saving…' : 'Save calibration';
+  }
+}
+
+const CAL_HOOKS = {
+  redraw: calDraw,
+  hit: t => (t && t.dataset && t.dataset.i != null) ? 'P:'+t.dataset.i : null,
+  dragStart: () => {},
+  dragMove: (h, fx, fy) => {
+    if(typeof h === 'string' && h.startsWith('P:')){
+      const i = parseInt(h.slice(2), 10);
+      // No snapping anywhere in calibration — snapping a control point to a
+      // grid would quietly move the measurement the scale is derived from.
+      cal.pts[i] = { x: fx, y: fy };
+    }
+  },
+  dragEnd: () => { cal.lastError=''; },
+  tap: (fx, fy) => {
+    if(cal.pts.length >= 4) return;
+    cal.pts.push({ x: fx, y: fy });
+    cal.lastError = '';
+  }
+};
+
+async function calSave(){
+  const pv = calPreview();
+  if(cal.saving || calStage() !== 'review') return;
+  cal.saving = true; cal.lastError = ''; calRenderStatus();
+  try{
+    const res = await fetch(
+      `/api/projects/${encodeURIComponent(linkedProject.id)}/site-plan/pages/${encodeURIComponent(cal.pageId)}/calibration`,
+      {
+        method:'PATCH',
+        headers:{'Content-Type':'application/json'},
+        // Points and the typed distances only. ftPerPx is DERIVED on the
+        // server — see lib/site-plan-calibration.js. Anything this client
+        // computed above is preview.
+        body: JSON.stringify({
+          p1: cal.pts[0], p2: cal.pts[1],
+          knownFt: parseFloat(cal.knownFt),
+          verify: { p1: cal.pts[2], p2: cal.pts[3], expectedFt: parseFloat(cal.expectedFt) },
+          statedScale: cal.statedScale || null,
+          acknowledge: cal.acknowledge
+        })
+      }
+    );
+    const j = await res.json().catch(() => ({}));
+    if(!res.ok || !j.ok) throw new Error((j.errors && j.errors[0]) || `HTTP ${res.status}`);
+    // Adopt the SERVER's record wholesale — its ftPerPx is authoritative.
+    const idx = spPages().findIndex(p => p.id === cal.pageId);
+    if(idx >= 0) sitePlan.pages[idx] = j.page;
+    el('calOverlay').hidden = true;
+    renderSitePlan(); render();
+    const v = j.page.calibration.verify || {};
+    if(!j.changed){
+      // Nothing moved. Say so rather than implying a fresh calibration.
+      alert('Calibration is unchanged — same points, same distances. Nothing was rewritten.');
+    } else {
+      alert(
+        `"${j.page.label}" calibrated at ${j.page.calibration.ftPerPx.toFixed(5)} ft/px.\n` +
+        `Verification ${v.state} at ${v.residualPct}% residual.\n\n` +
+        `You can now trace areas on this sheet — pick it in an area's "Trace on" box.`
+      );
+    }
+  } catch(err){
+    cal.lastError = String(err && err.message || err);
+  } finally {
+    cal.saving = false;
+    calRenderStatus();
+  }
+}
+
 /* ════════════════ Custom-shape sketch tool ════════════════ */
 
 const sk = { areaIndex:-1, tool:'poly', poly:[], closed:false, sel:-1, dragging:-1,
              circle:null, sector:null, sweep:90, snap:1, svgId:'skSvg', bodyId:'skBody',
-             ppf:12, panX:0, panY:0, _w:0, _h:0 };
+             ppf:12, panX:0, panY:0, _w:0, _h:0,
+             // Site-plan tracing. planPage is the calibrated page this area
+             // is traced over (null = ordinary grid sketching). When it is
+             // set, world feet are the PAGE's frame: raster_px * ftPerPx.
+             planPage:null, underOpacity:0.65, underHidden:false };
+
+// Grid snapping is 1 ft for freehand sketching — a sensible default when
+// the user is estimating. It is WRONG when tracing a real drawing: a bed
+// edge does not land on whole feet, and rounding every traced vertex to the
+// nearest foot would inject up to 6" of error per point into a tender.
+// So tracing keeps full precision and rounds only at save time (3 dp).
+function skSnapCoord(v){ return sk.planPage ? v : Math.round(v); }
+
+// Live vertex total across ALL areas, counting the area being edited from
+// the in-progress sketch rather than its saved poly.
+function skVertexTotal(){
+  return areas.reduce((sum, a, i) => {
+    if(i === sk.areaIndex) return sum + sk.poly.length;
+    return sum + (Array.isArray(a.poly) ? a.poly.length : 0);
+  }, 0);
+}
 
 function skContentBBox(){
   if(sk.tool==='circle' && sk.circle){ const c=sk.circle; return {minX:c.cx-c.r,minY:c.cy-c.r,maxX:c.cx+c.r,maxY:c.cy+c.r}; }
   if(sk.tool==='sector' && sk.sector){ const c=sk.sector; return polyBBox(sectorPoly(c.cx,c.cy,c.r,c.a0,sk.sweep)); }
   if(sk.poly.length) return polyBBox(sk.poly);
+  // Tracing a fresh area — frame the whole sheet so the user can see what
+  // they're tracing, rather than a 40x30 ft box somewhere near the origin.
+  if(sk.planPage){
+    const f = sk.planPage.calibration.ftPerPx;
+    return {minX:0, minY:0, maxX:sk.planPage.rasterWidthPx*f, maxY:sk.planPage.rasterHeightPx*f};
+  }
   return {minX:0,minY:0,maxX:40,maxY:30};
 }
 function openSketch(i){
   ensureArea(areas[i]);
+  // Hard gate (accuracy rule 1). An underlay you can trace on without a
+  // verified scale is worse than no underlay, because it looks
+  // authoritative. Refuse to open rather than warn.
+  const ref = areas[i].planRef;
+  let page = null;
+  if(ref && ref.pageId){
+    page = spPage(ref.pageId);
+    if(!page){
+      alert('The sheet this area was traced on is no longer on the project. The shape is kept (it is already in feet) — it just has no underlay now.');
+      delete areas[i].planRef;
+    } else if(!spTraceable(page)){
+      const v = (page.calibration && page.calibration.verify) || {};
+      alert(
+        `"${page.label}" isn't ready to trace on.\n\n` +
+        (page.calibration.state !== 'calibrated'
+          ? 'It has no verified scale yet. Calibrate it against a dimension printed on the drawing first.'
+          : v.state === 'failed'
+            ? `Its scale verification FAILED (${v.residualPct}% off the second dimension). Tracing stays blocked until that is resolved — a wrong scale here produces a confidently wrong bid.`
+            : 'Its scale verification is warned and hasn\'t been acknowledged. Re-open the calibration to review it.')
+      );
+      return;
+    }
+  }
+  sk.planPage = page;
+  sk.underHidden = false;
+  if(page) skProbeRaster(page.id);
   sk.areaIndex=i; sk.sel=-1; sk.sector=null; sk.circle=null; sk.poly=[]; sk.closed=false; sk._drawing=null;
   if(isSector(areas[i])){ const c=areas[i].arc; sk.tool='sector'; sk.sweep=c.sweep; sk.sector={cx:c.cx,cy:c.cy,r:c.r,a0:c.a0}; }
   else if(isCircle(areas[i])){ sk.tool='circle'; sk.circle={cx:areas[i].circle.cx,cy:areas[i].circle.cy,r:areas[i].circle.r}; }
   else { sk.tool='poly'; sk.poly = validPoly(areas[i]) ? areas[i].poly.map(p=>({x:p.x,y:p.y})) : []; sk.closed=sk.poly.length>=3; }
+  // Tracing is polygon work — a circle/sector tool over a real drawing is
+  // not what the plan is for, and its exact-formula path would ignore the
+  // traced outline anyway.
+  if(sk.planPage) sk.tool='poly';
   pzInit(sk); sk._hooks=SK_HOOKS;
   el('skOverlay').hidden=false;
+  const ctl=el('skUnderCtl'); if(ctl) ctl.hidden = !sk.planPage;
+  const op=el('skUnderOpacity'); if(op) op.value=String(Math.round(sk.underOpacity*100));
+  const pct=el('skUnderPct'); if(pct) pct.textContent=Math.round(sk.underOpacity*100)+'%';
   pzFit(sk, skContentBBox()); skDraw();
 }
 function skSetTool(t){
@@ -1350,9 +2327,72 @@ function skUse(){
   } else {
     if(sk.poly.length<3){ alert('Draw at least 3 points to make a shape.'); return; }
     delete a.shapeKind; delete a.circle; delete a.arc;
-    a.poly=sk.poly.map(p=>({x:p.x,y:p.y}));
+    // 3 dp of a foot is ~0.012 inch — far finer than a raster underlay can
+    // express, and full float precision would burn a meaningful slice of
+    // the 512 KB budget on noise digits.
+    a.poly=sk.poly.map(p=>({x:round3(p.x),y:round3(p.y)}));
   }
   el('skOverlay').hidden=true;
+  render(); markDirty();
+  if(sk.planPage) skCheckSheetCoverage(sk.planPage.id);
+}
+
+// Aggregate sanity check. Traced area summing past 80% of the sheet's own
+// calibrated extents is the signature of an order-of-magnitude scale error.
+// A real site CAN cover most of its sheet, so this warns and never blocks.
+function skCheckSheetCoverage(pageId){
+  const pg = spPage(pageId);
+  if(!pg || !pg.calibration || !(pg.calibration.ftPerPx > 0)) return;
+  const f = pg.calibration.ftPerPx;
+  const extent = pg.rasterWidthPx * pg.rasterHeightPx * f * f;
+  if(!(extent > 0)) return;
+  let traced = 0;
+  areas.forEach(a => {
+    if(a && a.planRef && a.planRef.pageId === pageId){
+      try{ const g = geom(a); if(!g.noShape) traced += g.sqft; }catch(_){ }
+    }
+  });
+  const fraction = traced / extent;
+  if(fraction > 0.8){
+    alert(
+      `Heads-up on "${pg.label}".\n\n` +
+      `Traced areas on this sheet now total ${Math.round(traced).toLocaleString()} sq ft — ` +
+      `${Math.round(fraction*100)}% of the whole sheet's calibrated extents ` +
+      `(${Math.round(extent).toLocaleString()} sq ft).\n\n` +
+      `That is usually the signature of a scale error an order of magnitude out. ` +
+      `Worth re-checking the calibration before this goes into a bid.`
+    );
+  }
+}
+
+// Attach / detach an area from a calibrated sheet.
+function setAreaPlan(i, pageId){
+  const a = areas[i];
+  if(!pageId){
+    if(a.planRef){ delete a.planRef; render(); markDirty(); }
+    return;
+  }
+  const pg = spPage(pageId);
+  if(!pg || !spTraceable(pg)){
+    alert('That sheet doesn\'t have a verified scale yet. Calibrate it first.');
+    render();
+    return;
+  }
+  // Changing the sheet under an existing trace keeps the geometry (it is
+  // already in feet, so square footage is unchanged) but the outline will
+  // no longer sit where it was drawn, because each page has its own
+  // coordinate frame. Say that plainly rather than let it be discovered.
+  if(a.planRef && a.planRef.pageId !== pageId && validPoly(a)){
+    const ok = confirm(
+      `"${(a.name||'This area')}" is already traced on another sheet.\n\n` +
+      `Moving it to "${pg.label}" keeps the shape and its square footage — the outline is stored ` +
+      `in feet — but each sheet has its own coordinate frame, so the shape will not line up with ` +
+      `the new drawing until you re-trace it.\n\nMove it anyway?`
+    );
+    if(!ok){ render(); return; }
+  }
+  a.planRef = { pageId };
+  a.mode = 'custom';
   render(); markDirty();
 }
 function skPerimNow(){
@@ -1364,7 +2404,13 @@ function skDraw(){
   const body=el('skBody'); sk._w=Math.max(body.clientWidth-2,300); sk._h=Math.max(body.clientHeight-2,300);
   const SX=x=>pzSX(sk,x), SY=y=>pzSY(sk,y), U=sk.ppf;
   let g=`<svg id="skSvg" width="${sk._w}" height="${sk._h}" viewBox="0 0 ${sk._w} ${sk._h}" style="touch-action:none">`;
-  g+=pzGridSvg(sk);
+  // Draw order is deliberate: background -> underlay -> grid -> geometry ->
+  // handles. The grid sits ABOVE the image at reduced opacity so it stays
+  // readable without obscuring the drawing being traced.
+  const L=pzGridLayers(sk);
+  g+=L.bg;
+  g+=skUnderlaySvg();
+  g+= sk.planPage ? `<g opacity="0.35">${L.grid}</g>` : L.grid;
   let area=0, perim=0;
   if(sk.tool==='circle' && sk.circle){
     const c=sk.circle, cx=SX(c.cx), cy=SY(c.cy), rr=c.r*U;
@@ -1401,10 +2447,12 @@ function skDraw(){
     });
     area = (sk.closed&&sk.poly.length>=3)?polyArea(sk.poly):0; perim=skPerimNow();
   }
+  g+=skScaleBarSvg();
   g+=`</svg>`;
   body.innerHTML=g;
   el('skArea').textContent=Math.round(area).toLocaleString();
   el('skPerim').textContent=Math.round(perim);
+  skRenderVertexCount();
   el('skToolPoly').classList.toggle('on', sk.tool==='poly');
   el('skToolCircle').classList.toggle('on', sk.tool==='circle');
   el('skToolQuarter').classList.toggle('on', sk.tool==='sector' && sk.sweep===90);
@@ -1415,6 +2463,10 @@ function skDraw(){
     : sk.tool==='circle'
     ? (sk.circle ? 'Circle drawn. Drag centre to move, edge dot to resize. Pinch/scroll zoom · Ctrl-drag pan.'
                  : 'Press and drag on the grid to draw a circle (centre → edge).')
+    : sk.planPage
+    ? (sk.closed ? 'Shape closed. Drag any point to adjust, Undo to reopen. Hold H to flash the plan off and check your trace against the drawing.'
+                 : (sk.poly.length>=3 ? 'Tap the orange first point to close, or keep tapping corners along the edge.'
+                                      : 'Tap along the edge of the bed / lawn on the drawing. Zoom in for accuracy — points are kept at full precision, not snapped to the foot. Hold H to flash the plan off.'))
     : (sk.closed ? 'Shape closed. Drag any point to adjust, Undo to reopen. Pinch/scroll to zoom.'
                  : (sk.poly.length>=3 ? 'Tap the orange first point to close, or keep tapping corners.'
                                       : 'Tap grid corners to trace the outline. Pinch/scroll zoom · Ctrl-drag pan.'));
@@ -1423,6 +2475,100 @@ function skDraw(){
   svg.addEventListener('pointerdown', e=>pzDown(sk,e));
   svg.addEventListener('wheel', e=>pzWheel(sk,e), {passive:false});
 }
+// ---- Underlay + on-canvas verification aids --------------------------
+//
+// Performance note: skDraw() rebuilds the whole SVG via innerHTML on every
+// pointer move, which re-inserts this <image> each frame. The browser
+// serves the bytes from its HTTP cache (the raster endpoint sends
+// `cache-control: private, max-age=300`) and reuses the decoded bitmap, so
+// dragging a vertex over a 5000 px sheet stays smooth. If that ever stops
+// being true, the fallback is to hoist this element into a persistent
+// sibling layer behind the SVG, positioned with a CSS transform updated on
+// pan/zoom, so the innerHTML rebuild never touches it. Keeping the markup
+// generated by this one function is what makes that swap contained.
+// Rasters can go missing — the disk was cleared, or the project came back
+// from a metadata-only backup. An SVG <image> pointing at a 404 renders
+// NOTHING and says nothing, which would leave the user tracing confidently
+// over blank space. So probe once per page and show a plain notice instead.
+const skRasterOk = new Map();   // pageId -> true | false | undefined (unprobed)
+function skProbeRaster(pageId){
+  if(skRasterOk.has(pageId)) return;
+  skRasterOk.set(pageId, undefined);
+  const im = new Image();
+  im.onload  = () => { skRasterOk.set(pageId, true); };
+  im.onerror = () => { skRasterOk.set(pageId, false); if(!el('skOverlay').hidden) skDraw(); };
+  im.src = calRasterUrl(pageId);
+}
+
+function skUnderlaySvg(){
+  const pg = sk.planPage;
+  if(!pg || sk.underHidden) return '';
+  if(skRasterOk.get(pg.id) === false){
+    // Degrade to the plain grid with a visible notice rather than throwing
+    // or, worse, silently showing nothing.
+    const cx = sk._w/2;
+    return `<g><rect x="${(cx-250).toFixed(1)}" y="14" width="500" height="46" rx="8" fill="#fdecea" stroke="#ef9a9a"/>` +
+      `<text x="${cx.toFixed(1)}" y="34" text-anchor="middle" font-size="12.5" font-weight="700" fill="#c62828">Site-plan image for "${esc(pg.label)}" couldn’t be loaded.</text>` +
+      `<text x="${cx.toFixed(1)}" y="51" text-anchor="middle" font-size="11.5" fill="#c62828">Drawing on the plain grid. The scale is still ${pg.calibration.ftPerPx.toFixed(4)} ft/px — re-upload the sheet to get the underlay back.</text></g>`;
+  }
+  const f = pg.calibration.ftPerPx;
+  const wFt = pg.rasterWidthPx * f, hFt = pg.rasterHeightPx * f;
+  const x = pzSX(sk, 0), y = pzSY(sk, 0);
+  const w = wFt * sk.ppf, h = hFt * sk.ppf;
+  // preserveAspectRatio="none" is deliberate: width and height are computed
+  // FROM the calibrated scale, so the browser must not re-fit the image and
+  // silently change what a pixel is worth.
+  return `<image href="${esc(calRasterUrl(pg.id))}" x="${x.toFixed(1)}" y="${y.toFixed(1)}" ` +
+         `width="${w.toFixed(1)}" height="${h.toFixed(1)}" opacity="${sk.underOpacity.toFixed(2)}" ` +
+         `preserveAspectRatio="none"/>`;
+}
+
+// Permanent on-canvas verification aids, always visible while an underlay
+// is shown: a scale bar drawn in WORLD units (so it is a live check on the
+// calibration, not a decoration), the ft/px readout, and the verification
+// residual + state chip.
+function skScaleBarSvg(){
+  const pg = sk.planPage;
+  if(!pg) return '';
+  const c = pg.calibration, v = c.verify || {};
+  const x0 = 16, y0 = sk._h - 20;
+  // Prefer a 50 ft bar; fall back to 10 ft when 50 ft won't fit on screen.
+  const majorFt = (50 * sk.ppf < sk._w * 0.5) ? 50 : 10;
+  const minorFt = majorFt / 5;
+  const barPx = majorFt * sk.ppf;
+  let g = `<g font-family="inherit">`;
+  g += `<rect x="${x0-8}" y="${y0-30}" width="${(barPx+120).toFixed(1)}" height="42" rx="6" fill="#fff" opacity="0.86"/>`;
+  g += `<line x1="${x0}" y1="${y0}" x2="${(x0+barPx).toFixed(1)}" y2="${y0}" stroke="#1a2320" stroke-width="2"/>`;
+  for(let t = 0; t <= majorFt; t += minorFt){
+    const X = x0 + t * sk.ppf;
+    const tall = (t === 0 || t === majorFt);
+    g += `<line x1="${X.toFixed(1)}" y1="${y0}" x2="${X.toFixed(1)}" y2="${(y0-(tall?9:5)).toFixed(1)}" stroke="#1a2320" stroke-width="${tall?2:1}"/>`;
+  }
+  g += `<text x="${x0}" y="${(y0+13).toFixed(1)}" font-size="11" font-weight="700" fill="#1a2320">0</text>`;
+  g += `<text x="${(x0+barPx).toFixed(1)}" y="${(y0+13).toFixed(1)}" font-size="11" font-weight="700" fill="#1a2320" text-anchor="middle">${majorFt} ft</text>`;
+  const chipFill = v.state === 'warned' ? '#a15c00' : '#1b5e20';
+  g += `<text x="${(x0+barPx+14).toFixed(1)}" y="${(y0-12).toFixed(1)}" font-size="10.5" font-weight="700" fill="${chipFill}">` +
+       `calibration: ${esc(v.state === 'warned' ? 'warned' : 'passed')}</text>`;
+  g += `<text x="${(x0+barPx+14).toFixed(1)}" y="${(y0+1).toFixed(1)}" font-size="10.5" fill="#5b6b63">` +
+       `${c.ftPerPx.toFixed(4)} ft/px · residual ${esc(String(v.residualPct != null ? v.residualPct : '—'))}%</text>`;
+  g += `</g>`;
+  return g;
+}
+
+function skRenderVertexCount(){
+  const node = el('skVCount');
+  if(!node) return;
+  const n = skVertexTotal();
+  const cls = n >= SP_VERTEX_HARD ? 'bad' : n >= SP_VERTEX_SOFT ? 'warn' : '';
+  node.className = 'sk-vcount' + (cls ? ' ' + cls : '');
+  node.textContent = n >= SP_VERTEX_SOFT
+    ? `${n.toLocaleString()} / ${SP_VERTEX_HARD.toLocaleString()} points`
+    : (n ? `${n.toLocaleString()} points` : '');
+  node.title = n >= SP_VERTEX_SOFT
+    ? `Saved designs are capped at 512 KB. Detailed traces are cheap individually but add up — past ${SP_VERTEX_HARD.toLocaleString()} points the builder stops adding more so a save can't fail.`
+    : '';
+}
+
 const SK_HOOKS = {
   redraw: skDraw,
   hit: t=>{ if(t&&t.dataset){ if(t.dataset.h) return 'H:'+t.dataset.h; if(t.dataset.i!=null) return 'V:'+t.dataset.i; } return null; },
@@ -1437,7 +2583,7 @@ const SK_HOOKS = {
     else if(h==='H:c' && sk.tool==='circle'){ sk.circle.cx=Math.round(fx); sk.circle.cy=Math.round(fy); }
     else if(h==='DRAWs' || (h==='H:r' && sk.tool==='sector')){ const c=sk.sector; c.r=Math.max(0.5,Math.round(Math.hypot(fx-c.cx,fy-c.cy)/0.5)*0.5); c.a0=Math.atan2(fy-c.cy,fx-c.cx)-(sk.sweep/2)*Math.PI/180; }
     else if(h==='H:c' && sk.tool==='sector'){ sk.sector.cx=Math.round(fx); sk.sector.cy=Math.round(fy); }
-    else if(typeof h==='string' && h.startsWith('V:')){ const i=parseInt(h.slice(2),10); sk.poly[i]={x:Math.round(fx),y:Math.round(fy)}; }
+    else if(typeof h==='string' && h.startsWith('V:')){ const i=parseInt(h.slice(2),10); sk.poly[i]={x:skSnapCoord(fx),y:skSnapCoord(fy)}; }
   },
   dragEnd: (h,moved)=>{
     if(typeof h==='string' && h.startsWith('V:')){ const i=parseInt(h.slice(2),10); if(i===0 && !moved && !sk.closed && sk.poly.length>=3) sk.closed=true; }
@@ -1445,7 +2591,21 @@ const SK_HOOKS = {
     if(h==='DRAWs' && sk.sector && sk.sector.r<0.5) sk.sector=null;
     sk._drawing=null;
   },
-  tap: (fx,fy)=>{ if(sk.tool==='poly' && !sk.closed){ sk.poly.push({x:Math.round(fx),y:Math.round(fy)}); sk.sel=sk.poly.length-1; } },
+  tap: (fx,fy)=>{
+    if(sk.tool!=='poly' || sk.closed) return;
+    // Hard stop, not a warning. Refusing a point costs one click; a save
+    // that fails at the 512 KB cap costs the whole tracing session.
+    if(skVertexTotal() >= SP_VERTEX_HARD){
+      alert(
+        `This design is at ${SP_VERTEX_HARD.toLocaleString()} outline points, which is the limit.\n\n` +
+        `Saved designs are capped at 512 KB on the project record and every point costs space. ` +
+        `Simplify the most detailed areas — long straight runs rarely need more than two points — ` +
+        `and you can keep tracing.`
+      );
+      return;
+    }
+    sk.poly.push({x:skSnapCoord(fx),y:skSnapCoord(fy)}); sk.sel=sk.poly.length-1;
+  },
   cancelDrag: ()=>{ if(sk._drawing==='circle') sk.circle=null; if(sk._drawing==='sector') sk.sector=null; sk._drawing=null; }
 };
 
@@ -2543,16 +3703,31 @@ function applyWaterSupply(ws){
 function serializeState(){
   const inputs = {};
   GLOBAL_INPUT_IDS.forEach(id=>{ const e = el(id); if(e) inputs[id] = e.value; });
+  // version 3 adds `area.planRef = {pageId}` on areas traced over a site
+  // plan. Nothing else about the blob changed, and restoreState() still
+  // reads a version-2 blob unchanged — an absent planRef simply means a
+  // hand-sketched area, which is exactly what every existing design is.
   return {
-    version: 2,
+    version: 3,
     savedAt: new Date().toISOString(),
     inputs,
     waterSupply: readWaterSupply(),
     bomOverrides: JSON.parse(JSON.stringify(bomOverrides)),
     linkedQuoteId: linkedQuoteId || null,
-    areas: JSON.parse(JSON.stringify(areas)),
+    areas: serializeAreas(),
     wcRunOverrides: JSON.parse(JSON.stringify(wcRunOverrides))
   };
+}
+
+// Round traced coordinates on the way out. Kept here rather than in the
+// editor so an in-progress drag never fights the rounding, and so an area
+// that was never traced round-trips byte-identically.
+function serializeAreas(){
+  return areas.map(a => {
+    const copy = JSON.parse(JSON.stringify(a));
+    if(Array.isArray(copy.poly)) copy.poly = copy.poly.map(pt => ({x:round3(pt.x), y:round3(pt.y)}));
+    return copy;
+  });
 }
 
 function restoreState(blob){
@@ -2598,6 +3773,7 @@ async function loadProjectList(){
 function updateProjectBar(){
   const bar = el('projectBar');
   if(!bar) return;
+  renderSitePlan();   // upload is only available once a project is attached
   if(linkedProject){
     const cust = linkedProject.customerName ? ' · ' + esc(linkedProject.customerName) : '';
     let status;
@@ -2630,6 +3806,20 @@ async function saveDesign(){
   if(btn){ btn.disabled = true; btn.textContent = 'Saving…'; }
   try{
     const blob = serializeState();
+    // Pre-flight the payload. The user must never learn about the 512 KB
+    // server cap from a failed request — by then they have lost the save
+    // and have no idea what to cut. Refuse locally, 32 KB under the cap,
+    // with a message that says what to do.
+    const bytes = JSON.stringify(blob).length;
+    if(bytes > SP_DESIGN_PREFLIGHT_MAX){
+      alert(
+        `This design is ${(bytes/1024).toFixed(0)} KB and the project record caps saved designs at 512 KB.\n\n` +
+        `Nothing has been lost — this refused before sending, so your work is still on screen. ` +
+        `Simplify the most detailed traced areas (long straight runs rarely need more than two points) ` +
+        `and save again. The point counter in the shape editor shows where the weight is.`
+      );
+      return;
+    }
     const res = await fetch('/api/projects/' + encodeURIComponent(linkedProject.id), {
       method:'PATCH',
       headers:{'Content-Type':'application/json'},
@@ -2694,9 +3884,24 @@ async function initApp(){
   el('loNoz').addEventListener('change', e=>loSetNoz(e.target.value));
   // Tree tool: ring-dia.
   el('trDia').addEventListener('input', e=>trSetDia(e.target.value));
+  // Underlay opacity + the hold-to-flash key. Flashing the plan off is how
+  // you check a trace against the drawing underneath it.
+  { const op=el('skUnderOpacity');
+    if(op) op.addEventListener('input', ()=>{
+      sk.underOpacity=Math.max(0,Math.min(1,(parseFloat(op.value)||0)/100));
+      const pct=el('skUnderPct'); if(pct) pct.textContent=Math.round(sk.underOpacity*100)+'%';
+      skDraw();
+    }); }
   window.addEventListener('keydown', (e)=>{
-    if(e.key==='Escape'){ if(!el('skOverlay').hidden) skCancel(); else if(!el('loOverlay').hidden) loCancel(); else if(!el('trOverlay').hidden) trCancel(); else if(!el('custOverlay').hidden) custClose(); }
+    if(e.key==='Escape'){ if(!el('calOverlay').hidden) calCancel(); else if(!el('spOverlay').hidden) spCancel(); else if(!el('skOverlay').hidden) skCancel(); else if(!el('loOverlay').hidden) loCancel(); else if(!el('trOverlay').hidden) trCancel(); else if(!el('custOverlay').hidden) custClose(); }
+    if((e.key==='h'||e.key==='H') && !el('skOverlay').hidden && sk.planPage && !sk.underHidden
+       && !/^(INPUT|TEXTAREA|SELECT)$/.test((document.activeElement||{}).tagName||'')){
+      sk.underHidden=true; skDraw();
+    }
     if((e.key==='Delete'||e.key==='Backspace')){ if(!el('loOverlay').hidden && lo.sel>=0){ e.preventDefault(); loDeleteSel(); } else if(!el('trOverlay').hidden && tr.sel>=0){ e.preventDefault(); trDeleteSel(); } }
+  });
+  window.addEventListener('keyup', (e)=>{
+    if((e.key==='h'||e.key==='H') && sk.underHidden){ sk.underHidden=false; if(!el('skOverlay').hidden) skDraw(); }
   });
   el('wcTown').addEventListener('change', ()=>{ onTownChange(); markDirty(); });
   ['wcRun','wcCycles','wcWeeks','wcManualRate','wcManualUnit'].forEach(id=>{
@@ -2712,6 +3917,10 @@ async function initApp(){
         const j = await res.json();
         if(j.ok && j.project){
           linkedProject = { id: j.project.id, name: j.project.name, customerName: j.project.customerName, customerEmail: j.project.customerEmail||'', propertyId: j.project.propertyId||null, address: j.project.address||'' };
+          // Load the site plan BEFORE restoring the design — restoreState
+          // triggers render(), and the area cards need the page list to
+          // draw their "Trace on" pickers.
+          sitePlan = (j.project.sitePlan && typeof j.project.sitePlan === 'object') ? j.project.sitePlan : null;
           if(j.project.systemDesign){
             restored = restoreState(j.project.systemDesign);
             lastSavedLabel = fmtSaved(j.project.systemDesign.savedAt);
@@ -2733,6 +3942,7 @@ async function initApp(){
   dirty = false;
   appReady = true;
   updateProjectBar();
+  renderSitePlan();
   // Prices load async; repaint the per-zone materials cost once they're in.
   loadParts().then(()=>{ if(appReady) compute(); });
 }

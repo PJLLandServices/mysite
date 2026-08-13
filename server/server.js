@@ -139,6 +139,14 @@ const QUOTE_POST_MAX_BYTES = 12_000_000; // 12 MB cap for the /api/quotes POST (
 // constraints — chat intake is high-volume and bandwidth-sensitive.
 const MAX_WO_MEDIA_BYTES = 25_000_000;        // 25 MB per file
 const WO_UPLOAD_POST_MAX_BYTES = 40_000_000;  // ~33 MB base64 + JSON wrapper headroom
+
+// Site-plan page upload (Sprinkler System Builder underlay). A sheet is
+// rasterized IN THE BROWSER by the vendored pdf.js and posted as base64
+// PNG/JPEG — the original PDF is never uploaded. Base64 inflates by ~33%,
+// so the 16 MB per-sheet cap in lib/projects.js needs ~21.3 MB of body.
+// parseRequestBody defaults to 1 MB and would reject every real plan, so
+// this MUST be passed explicitly at the call site.
+const SITE_PLAN_POST_MAX_BYTES = 24 * 1024 * 1024;  // 24 MB
 const WO_MEDIA_MIME_WHITELIST = new Set([
   "image/jpeg",
   "image/png",
@@ -383,6 +391,9 @@ const MIME_TYPES = {
   ".html": "text/html; charset=utf-8",
   ".css": "text/css; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
+  // ES modules — the vendored pdf.js build (server/vendor/pdfjs/) ships .mjs.
+  // Both the dynamic import() and the module worker require a JS MIME type.
+  ".mjs": "text/javascript; charset=utf-8",
   ".json": "application/json; charset=utf-8",
   ".xml": "application/xml; charset=utf-8",
   ".txt": "text/plain; charset=utf-8",
@@ -11780,6 +11791,151 @@ async function handleApi(req, res, pathname) {
       return sendJson(res, 201, { ok: true, project: created });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't create project."] });
+    }
+  }
+
+  // ══════════════════════════════════════════════════════════════════
+  // Site plan — rasterized sheets + scale calibration
+  // ══════════════════════════════════════════════════════════════════
+  //
+  // Confidentiality (brief §3.8): a tender drawing received from a GC or
+  // consultant is a third party's document. The raster serve endpoint is
+  // SESSION-GATED ONLY. There is deliberately no tokenized public serve
+  // here — unlike quote attachments, which have one so the customer
+  // /approve flow can show them. Do not copy that part of the pattern:
+  // no site-plan raster may ever reach a customer-facing surface.
+
+  // POST /api/projects/:id/site-plan/pages — upload one rasterized page.
+  const sitePlanPagesMatch = pathname.match(/^\/api\/projects\/([^/]+)\/site-plan\/pages$/);
+  if (sitePlanPagesMatch && req.method === "POST") {
+    const session = await requireAdmin(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+    try {
+      const projectId = decodeURIComponent(sitePlanPagesMatch[1]);
+      // Explicit maxBytes — the 1 MB default would reject every real plan.
+      const payload = await parseRequestBody(req, { maxBytes: SITE_PLAN_POST_MAX_BYTES });
+      const proj = await projects.get(projectId);
+      if (!proj) return sendJson(res, 404, { ok: false, errors: ["Project not found."] });
+      const buffer = Buffer.from(String(payload.data || ""), "base64");
+      const page = await projects.addSitePlanPage(projectId, {
+        buffer,
+        mimeType: String(payload.mimeType || "").toLowerCase(),
+        label: payload.label || "",
+        pdfPageNumber: payload.pdfPageNumber,
+        rasterWidthPx: payload.rasterWidthPx,
+        rasterHeightPx: payload.rasterHeightPx,
+        renderScale: payload.renderScale,
+        sourceFilename: payload.sourceFilename || "",
+        sourceMimeType: payload.sourceMimeType || "",
+        uploadedBy: session.uid || "admin"
+      });
+      return sendJson(res, 201, { ok: true, page });
+    } catch (err) {
+      // "Request body is too large" from parseRequestBody must surface the
+      // ACTUAL limit — a generic failure leaves the user guessing whether
+      // to re-render at 80% or 20%.
+      const tooBig = /too large/i.test(err.message || "");
+      const status = err.code === "project_not_found" ? 404 : tooBig ? 413 : 400;
+      const msg = tooBig && /Request body/i.test(err.message || "")
+        ? `That upload is over the ${Math.round(SITE_PLAN_POST_MAX_BYTES / 1024 / 1024)} MB request limit ` +
+          `(sheets are capped at ${Math.round(projects.MAX_SITE_PLAN_PAGE_BYTES / 1024 / 1024)} MB each ` +
+          `before base64 encoding). Re-render this sheet at a lower resolution.`
+        : (err.message || "Couldn't save the site-plan page.");
+      return sendJson(res, status, { ok: false, errors: [msg] });
+    }
+  }
+
+  // GET /api/projects/:id/site-plan/pages/:pageId/raster — serve the image.
+  // Session-gated (admin OR tech), never public, never tokenized.
+  const sitePlanRasterMatch = pathname.match(/^\/api\/projects\/([^/]+)\/site-plan\/pages\/([^/]+)\/raster$/);
+  if (sitePlanRasterMatch && req.method === "GET") {
+    const session = await requireUser(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Sign-in required."] });
+    try {
+      const projectId = decodeURIComponent(sitePlanRasterMatch[1]);
+      const pageId = decodeURIComponent(sitePlanRasterMatch[2]);
+      // readSitePlanRaster validates both ids against anchored patterns
+      // before any path.join, and returns null on a missing file rather
+      // than throwing — the builder degrades to a plain grid on a 404.
+      const file = await projects.readSitePlanRaster(projectId, pageId);
+      if (!file) return sendJson(res, 404, { ok: false, errors: ["Site-plan image not found."] });
+      res.writeHead(200, {
+        "content-type": file.meta.mimeType || "application/octet-stream",
+        "content-length": file.buffer.length,
+        "cache-control": "private, max-age=300"
+      });
+      res.end(file.buffer);
+      return;
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't read the site-plan image."] });
+    }
+  }
+
+  // PATCH /api/projects/:id/site-plan/pages/:pageId/calibration
+  // DELETE /api/projects/:id/site-plan/pages/:pageId
+  const sitePlanCalMatch = pathname.match(/^\/api\/projects\/([^/]+)\/site-plan\/pages\/([^/]+)\/calibration$/);
+  if (sitePlanCalMatch && req.method === "PATCH") {
+    const session = await requireAdmin(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+    try {
+      const projectId = decodeURIComponent(sitePlanCalMatch[1]);
+      const pageId = decodeURIComponent(sitePlanCalMatch[2]);
+      const payload = await parseRequestBody(req);
+      // NOTE: ftPerPx is DERIVED server-side from the clicked points by
+      // lib/site-plan-calibration.js. Any ftPerPx in the payload is ignored
+      // — the number a bid depends on is computed in one tested place.
+      const result = await projects.setSitePlanCalibration(projectId, pageId, {
+        p1: payload.p1,
+        p2: payload.p2,
+        knownFt: payload.knownFt,
+        verify: payload.verify,
+        statedScale: payload.statedScale,
+        acknowledge: payload.acknowledge === true
+      }, { by: session.uid || "admin" });
+      return sendJson(res, 200, { ok: true, page: result.page, changed: result.changed });
+    } catch (err) {
+      const status =
+        err.code === "calibration_locked" ? 409 :
+        err.code === "project_not_found" || err.code === "page_not_found" ? 404 :
+        err.code === "bad_id" ? 400 : 400;
+      return sendJson(res, status, {
+        ok: false,
+        code: err.code || null,
+        dependents: err.dependents || undefined,
+        residualPct: err.residualPct,
+        measuredFt: err.measuredFt,
+        errors: [err.message || "Couldn't save the calibration."]
+      });
+    }
+  }
+
+  const sitePlanPageMatch = pathname.match(/^\/api\/projects\/([^/]+)\/site-plan\/pages\/([^/]+)$/);
+  if (sitePlanPageMatch && req.method === "DELETE") {
+    const session = await requireAdmin(req);
+    if (!session) return sendJson(res, 403, { ok: false, errors: ["Admin role required."] });
+    try {
+      const projectId = decodeURIComponent(sitePlanPageMatch[1]);
+      const pageId = decodeURIComponent(sitePlanPageMatch[2]);
+      // handleApi() takes (req, res, pathname) — there is no `url` in scope
+      // here, so build one the same way the neighbouring handlers do.
+      const reqUrl = new URL(req.url, baseUrlFromReq(req));
+      const force = reqUrl.searchParams.get("force") === "1";
+      const result = await projects.removeSitePlanPage(projectId, pageId, {
+        force,
+        by: session.uid || "admin"
+      });
+      return sendJson(res, 200, { ok: true, removed: result.id, detached: result.detached });
+    } catch (err) {
+      const status =
+        err.code === "page_has_dependents" ? 409 :
+        err.code === "project_not_found" || err.code === "page_not_found" ? 404 :
+        err.code === "bad_id" ? 400 : 400;
+      return sendJson(res, status, {
+        ok: false,
+        code: err.code || null,
+        dependents: err.dependents || undefined,
+        errors: [err.message || "Couldn't delete the site-plan page."]
+      });
     }
   }
 
