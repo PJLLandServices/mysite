@@ -227,6 +227,13 @@
   .sk-vcount.bad{color:var(--warn);font-weight:700}
   .lo-edge{fill:#fff;stroke:var(--z3);stroke-width:2;cursor:grab}
   .lo-rad{fill:var(--z3);stroke:#fff;stroke-width:2;cursor:grab}
+  .mp-legend{padding:8px 16px;border-bottom:1px solid var(--line);display:flex;flex-wrap:wrap;
+    gap:6px 14px;align-items:center;background:#fbfdfb;font-size:12px;max-height:96px;overflow:auto}
+  .mp-legend .mpz{display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+  .mp-legend .mpz i{width:11px;height:11px;border-radius:3px;display:inline-block;flex:0 0 auto}
+  .mp-legend .mpz b{font-weight:700}
+  .mp-legend .mpz span{color:var(--muted)}
+  .mp-off{color:var(--warn);font-weight:600}
   .sk-vert{fill:#fff;stroke:var(--green-d);stroke-width:2;cursor:grab}
   .sk-handle{fill:var(--z3);stroke:#fff;stroke-width:2;cursor:grab}
   .sk-center{fill:var(--green-d);stroke:#fff;stroke-width:2;cursor:grab}
@@ -416,6 +423,32 @@
     <div class="hint"><b>Generate customer quote</b> builds a <b>Quote</b> (Q-…) — scope, controller, and a line per zone at your standard prices (all editable in the proposal builder) — and refreshes the project's <b>Material List</b> at the same time. The quote stays <b>linked</b>: once it exists, every <b>Save to project</b> re-syncs it — zone names and added/removed zones flow through, and <b>any prices you edited are kept</b>. A sent quote is never overwritten. Both need the design attached to a project.</div>
   </div>
 
+</div>
+
+<div id="mpOverlay" class="sk-overlay" hidden>
+  <div class="sk-panel" style="width:min(1240px,98vw);height:min(940px,96vh)">
+    <div class="sk-head">
+      <h3>Master plan</h3>
+      <span class="sk-stat" id="mpStat"></span>
+      <span class="sk-grow"></span>
+      <span class="sk-under">
+        <label for="mpUnderOpacity">Plan</label>
+        <input id="mpUnderOpacity" type="range" min="0" max="100" step="5" value="45" aria-label="Underlay opacity">
+        <span id="mpUnderPct">45%</span>
+      </span>
+      <span class="pz-ctrl"><button type="button" onclick="mpZoom(0.7)" aria-label="Zoom out">&minus;</button><button type="button" onclick="mpFit()">Fit</button><button type="button" onclick="mpZoom(1.4)" aria-label="Zoom in">+</button></span>
+    </div>
+    <div class="mp-legend" id="mpLegend"></div>
+    <div class="sk-body" id="mpBody"></div>
+    <div class="sk-foot">
+      <p class="hint" id="mpHint">Every traced area on this sheet, at its true position, coloured by the valve it runs on. Hold H to flash the drawing off. Scroll/pinch to zoom, Ctrl-drag to pan.</p>
+      <span class="sk-grow"></span>
+      <div class="sk-tools">
+        <button type="button" onclick="window.print()" class="ghost">Print</button>
+        <button type="button" class="del" onclick="mpCancel()">Close</button>
+      </div>
+    </div>
+  </div>
 </div>
 
 <div id="spOverlay" class="sk-overlay" hidden>
@@ -1415,6 +1448,9 @@ function computeZonePlan(){
         dripFt: plan.family === 'drip' ? (plan.dripLengthFt||0)/Math.max(plan.zones,1) : 0,
         headCount: (plan.heads||[]).filter(h => h.zone === z).length,
         members: [area.name || 'Area'],
+        // Which area, and which of ITS zones — so the master plan can colour
+        // each head and each bed by the valve it actually runs on.
+        parts: [{ areaIdx: areas.indexOf(area), localZone: z }],
         grouped: false
       });
     }
@@ -1441,11 +1477,22 @@ function computeZonePlan(){
         dripFt: bin.dripFt,
         headCount: 0,
         members: bin.beds.map(b => b.area.name || 'Area'),
+        parts: bin.beds.map(b => ({ areaIdx: areas.indexOf(b.area), localZone: 0 })),
         grouped: true
       });
     });
   });
   return zones;
+}
+
+// Global zone index for (area, its own zone number) — the master plan uses
+// it to colour every head and bed by the valve it runs on.
+function zoneIndexOf(areaIdx, localZone){
+  for(let i=0;i<LAST_ZONES.length;i++){
+    const parts=LAST_ZONES[i].parts||[];
+    if(parts.some(pt => pt.areaIdx===areaIdx && pt.localZone===localZone)) return i;
+  }
+  return -1;
 }
 
 // Which valve group an area sits on, and every group currently in use.
@@ -1878,6 +1925,7 @@ function renderSitePlan(){
         ${crossNote}
       </div>
       <div class="sp-acts">
+        ${spTraceable(pg) ? `<button type="button" onclick="openMasterPlan('${esc(pg.id)}')">Master plan</button>` : ''}
         <button type="button" class="ghost" onclick="calOpen('${esc(pg.id)}')">${c.state==='calibrated'?'Recalibrate':'Calibrate scale'}</button>
         <button type="button" class="del" onclick="spDeletePage('${esc(pg.id)}')">Delete</button>
       </div>
@@ -2575,6 +2623,143 @@ async function calSave(){
     cal.saving = false;
     calRenderStatus();
   }
+}
+
+/* ════════════════ Master plan — the whole site on one sheet ════════════════
+
+   Every traced area already lives in the SAME coordinate frame: the page's
+   world space in feet (raster_px * ftPerPx), set when the sheet was
+   calibrated. Head positions are stored in that same frame — openLayout()
+   seeds the editor straight from the area's poly. So no transform is needed
+   to put the whole design on one drawing; the geometry is already in the
+   right place. This view is the payoff for that decision.
+
+   Areas that were never traced onto a plan have polys in their own private
+   frame with no relationship to the sheet, so they cannot be placed. They
+   are listed in the legend as off-plan rather than drawn somewhere wrong.  */
+
+const mp = { pageId:null, page:null, svgId:'mpSvg', bodyId:'mpBody',
+             ppf:1, panX:0, panY:0, _w:0, _h:0,
+             planPage:null, underOpacity:0.45, underHidden:false };
+
+// Areas traced onto a given sheet, with their index.
+function mpAreasOn(pageId){
+  const out=[];
+  areas.forEach((a,i)=>{
+    if(a && a.planRef && a.planRef.pageId===pageId && validPoly(a)) out.push({a,i});
+  });
+  return out;
+}
+
+function openMasterPlan(pageId){
+  const pg = spPage(pageId);
+  if(!pg || !spTraceable(pg)){ alert('Calibrate this sheet before opening the master plan.'); return; }
+  const on = mpAreasOn(pageId);
+  if(!on.length){ alert('Nothing is traced on this sheet yet. Trace an area onto it first.'); return; }
+  compute();                                  // make sure LAST_ZONES is current
+  mp.pageId=pageId; mp.page=pg; mp.planPage=pg; mp.underHidden=false;
+  skProbeRaster(pg.id);
+  pzInit(mp); mp._hooks=MP_HOOKS;
+  el('mpOverlay').hidden=false;
+  const op=el('mpUnderOpacity'); if(op) op.value=String(Math.round(mp.underOpacity*100));
+  const pc=el('mpUnderPct'); if(pc) pc.textContent=Math.round(mp.underOpacity*100)+'%';
+  mpFit();
+}
+function mpCancel(){ el('mpOverlay').hidden=true; }
+function mpZoom(f){ pzZoomBtn(mp,f); }
+function mpFit(){
+  // Frame what is actually drawn, not the whole sheet — a bed cluster in one
+  // corner of a 595 ft sheet should fill the view.
+  const on=mpAreasOn(mp.pageId);
+  let bb=null;
+  on.forEach(({a})=>{ const b=polyBBox(a.poly);
+    bb = bb ? {minX:Math.min(bb.minX,b.minX), minY:Math.min(bb.minY,b.minY),
+               maxX:Math.max(bb.maxX,b.maxX), maxY:Math.max(bb.maxY,b.maxY)} : b; });
+  const pad = bb ? Math.max(10, (bb.maxX-bb.minX+bb.maxY-bb.minY)*0.04) : 0;
+  pzFit(mp, bb ? {minX:bb.minX-pad, minY:bb.minY-pad, maxX:bb.maxX+pad, maxY:bb.maxY+pad}
+               : {minX:0,minY:0,maxX:mp.page.rasterWidthPx*mp.page.calibration.ftPerPx,
+                  maxY:mp.page.rasterHeightPx*mp.page.calibration.ftPerPx});
+  mpDraw();
+}
+
+const MP_HOOKS = { redraw: mpDraw, hit: ()=>null, tap: ()=>{} };
+
+function mpZoneColour(zi){ return zi>=0 ? `var(${ZC[zi%ZC.length]})` : '#9aa5a0'; }
+
+function mpDraw(){
+  const body=el('mpBody');
+  mp._w=Math.max(body.clientWidth-2,300); mp._h=Math.max(body.clientHeight-2,300);
+  const SX=x=>pzSX(mp,x), SY=y=>pzSY(mp,y), U=mp.ppf;
+  const L=pzGridLayers(mp);
+  let g=`<svg id="mpSvg" width="${mp._w}" height="${mp._h}" viewBox="0 0 ${mp._w} ${mp._h}" style="touch-action:none">`;
+  g+=L.bg;
+  g+=underlaySvg(mp);
+  g+=`<g opacity="0.22">${L.grid}</g>`;
+
+  const on=mpAreasOn(mp.pageId);
+  let heads=0, beds=0, dripFt=0;
+
+  // ---- areas, filled by the valve they run on ----
+  on.forEach(({a,i})=>{
+    const pts=a.poly.map(p=>`${SX(p.x).toFixed(1)},${SY(p.y).toFixed(1)}`).join(' ');
+    const zi=zoneIndexOf(i,0);
+    const col=mpZoneColour(zi);
+    g+=`<polygon points="${pts}" fill="${col}" fill-opacity="0.14" stroke="${col}" stroke-width="2"/>`;
+  });
+
+  // ---- drip runs + heads, on top ----
+  on.forEach(({a,i})=>{
+    if(a.family==='drip'){
+      beds++;
+      const rowFt=Math.max((a.dripRowIn==null?18:a.dripRowIn)/12, 0.25);
+      const zi=zoneIndexOf(i,0), col=mpZoneColour(zi);
+      const segs=dripRunSegments(a.poly, rowFt);
+      segs.forEach(r=>{
+        dripFt += Math.hypot(r.x1-r.x0, r.y1-r.y0);
+        g+=`<line x1="${SX(r.x0).toFixed(1)}" y1="${SY(r.y0).toFixed(1)}" x2="${SX(r.x1).toFixed(1)}" y2="${SY(r.y1).toFixed(1)}" stroke="${col}" stroke-width="1.1" stroke-dasharray="4 3" stroke-opacity="0.85"/>`;
+      });
+      return;
+    }
+    const hs=(a.layout==='manual' && Array.isArray(a.manualHeads)) ? a.manualHeads : [];
+    hs.forEach(hd=>{
+      heads++;
+      const spec=loHeadSpec(a.family, hd.noz, hd.arc);
+      const pct=loRadiusPct(hd);
+      const zi=zoneIndexOf(i, hd.zone||0), col=mpZoneColour(zi>=0?zi:zoneIndexOf(i,0));
+      const cx=SX(hd.x), cy=SY(hd.y), rr=Math.max(spec.r*pct*U, 3);
+      if(hd.arc>=360){
+        g+=`<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${rr.toFixed(1)}" fill="${col}" fill-opacity="0.13" stroke="${col}" stroke-opacity="0.45" stroke-width="0.8"/>`;
+      } else {
+        const half=(hd.arc*Math.PI/180)/2;
+        g+=`<path d="${sector(cx,cy,rr,(hd.dir||0)-half,(hd.dir||0)+half)}" fill="${col}" fill-opacity="0.15" stroke="${col}" stroke-opacity="0.45" stroke-width="0.8"/>`;
+      }
+      g+=`<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="2.6" fill="${col}" stroke="#fff" stroke-width="0.9"/>`;
+    });
+  });
+
+  g+=scaleBarSvg(mp);
+  g+=`</svg>`;
+  body.innerHTML=g;
+
+  // ---- legend + header stats ----
+  const used=new Set();
+  on.forEach(({i})=>{ const z=zoneIndexOf(i,0); if(z>=0) used.add(z); });
+  areas.forEach((a,i)=>{ (a.manualHeads||[]).forEach(hd=>{ const z=zoneIndexOf(i,hd.zone||0); if(z>=0) used.add(z); }); });
+  const offPlan = areas.filter(a=>a && !(a.planRef && a.planRef.pageId===mp.pageId) && !( a.mode==='custom' && !validPoly(a) )).length;
+  el('mpLegend').innerHTML =
+    [...used].sort((x,y)=>x-y).map(zi=>{
+      const z=LAST_ZONES[zi]; if(!z) return '';
+      return `<span class="mpz"><i style="background:${mpZoneColour(zi)}"></i><b>${esc(z.name)}</b><span>${z.gpm.toFixed(1)} GPM${z.grouped?` · ${z.members.length} beds`:(z.headCount?` · ${z.headCount} heads`:'')}</span></span>`;
+    }).join('') +
+    (offPlan ? `<span class="mpz mp-off">${offPlan} area${offPlan===1?'':'s'} not traced on this sheet — not shown</span>` : '');
+  el('mpStat').innerHTML =
+    `${on.length} area${on.length===1?'':'s'} · ${heads} head${heads===1?'':'s'} · ${beds} drip bed${beds===1?'':'s'}` +
+    (dripFt?` · ${Math.round(dripFt)} ft dripline`:'') +
+    ` · ${used.size} valve${used.size===1?'':'s'}`;
+
+  const svg=el('mpSvg');
+  svg.addEventListener('pointerdown', e=>pzDown(mp,e));
+  svg.addEventListener('wheel', e=>pzWheel(mp,e), {passive:false});
 }
 
 /* ════════════════ Custom-shape sketch tool ════════════════ */
@@ -4457,15 +4642,17 @@ async function initApp(){
   };
   bindOpacity('skUnderOpacity','skUnderPct',sk,skDraw);
   bindOpacity('loUnderOpacity','loUnderPct',lo,loDraw);
+  bindOpacity('mpUnderOpacity','mpUnderPct',mp,mpDraw);
   // Whichever editor is open and showing a plan is the one H flashes off.
   const activeUnderlayEditor=()=>{
     if(!el('skOverlay').hidden && sk.planPage) return {ed:sk, redraw:skDraw};
     if(!el('loOverlay').hidden && lo.planPage) return {ed:lo, redraw:loDraw};
     if(!el('trOverlay').hidden && tr.planPage) return {ed:tr, redraw:trDraw};
+    if(!el('mpOverlay').hidden && mp.planPage) return {ed:mp, redraw:mpDraw};
     return null;
   };
   window.addEventListener('keydown', (e)=>{
-    if(e.key==='Escape'){ if(!el('calOverlay').hidden) calCancel(); else if(!el('spOverlay').hidden) spCancel(); else if(!el('skOverlay').hidden) skCancel(); else if(!el('loOverlay').hidden) loCancel(); else if(!el('trOverlay').hidden) trCancel(); else if(!el('custOverlay').hidden) custClose(); }
+    if(e.key==='Escape'){ if(!el('mpOverlay').hidden) mpCancel(); else if(!el('calOverlay').hidden) calCancel(); else if(!el('spOverlay').hidden) spCancel(); else if(!el('skOverlay').hidden) skCancel(); else if(!el('loOverlay').hidden) loCancel(); else if(!el('trOverlay').hidden) trCancel(); else if(!el('custOverlay').hidden) custClose(); }
     if((e.key==='h'||e.key==='H')
        && !/^(INPUT|TEXTAREA|SELECT)$/.test((document.activeElement||{}).tagName||'')){
       const a=activeUnderlayEditor();
@@ -4475,7 +4662,7 @@ async function initApp(){
   });
   window.addEventListener('keyup', (e)=>{
     if(e.key!=='h' && e.key!=='H') return;
-    [[sk,skDraw,'skOverlay'],[lo,loDraw,'loOverlay'],[tr,trDraw,'trOverlay']].forEach(([ed,redraw,ov])=>{
+    [[sk,skDraw,'skOverlay'],[lo,loDraw,'loOverlay'],[tr,trDraw,'trOverlay'],[mp,mpDraw,'mpOverlay']].forEach(([ed,redraw,ov])=>{
       if(ed.underHidden){ ed.underHidden=false; if(!el(ov).hidden) redraw(); }
     });
   });
