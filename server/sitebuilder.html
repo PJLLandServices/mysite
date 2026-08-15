@@ -1286,7 +1286,13 @@ function familyFieldsHtml(a,i){
           <option value="h" ${a.dripDir==='h'?'selected':''}>Horizontal</option>
           <option value="v" ${a.dripDir==='v'?'selected':''}>Vertical</option>
         </select></div>
-        <div class="fld adv"><label>Shape overage %</label><input type="number" min="0" step="5" value="${a.overagePct==null?10:a.overagePct}" oninput="upd(${i},'overagePct',this.value)"></div>`;
+        <div class="fld adv"><label>Shape overage %</label><input type="number" min="0" step="5" value="${a.overagePct==null?10:a.overagePct}" oninput="upd(${i},'overagePct',this.value)"></div>
+        <div class="fld"><label>Valve</label>
+          <select onchange="setValveGroup(${i}, this.value)">
+            <option value="" ${!a.valveGroup?'selected':''}>— its own valve —</option>
+            ${valveGroupsInUse().map(g=>`<option value="${esc(g)}" ${a.valveGroup===g?'selected':''}>${esc(g)}</option>`).join('')}
+            <option value="__new__">+ New shared valve…</option>
+          </select></div>`;
   if(a.family==="trees") return `
         <div class="fld"><label>Ring dripline</label><select onchange="upd(${i},'dripProduct',this.value)">${optionList(DRIP_PRODUCTS,a.dripProduct)}</select></div>
         <div class="fld adv"><label>Overage %</label><input type="number" min="0" step="5" value="${a.overagePct==null?10:a.overagePct}" oninput="upd(${i},'overagePct',this.value)"></div>`;
@@ -1366,6 +1372,90 @@ function render(){
 }
 
 let LAST_PLANS = [];   // [{area, plan}] — consumed by extras + BOM
+let LAST_ZONES = [];   // design-level zones — see computeZonePlan()
+
+/* ════════════ Zones as a design decision, not an accumulator ════════════
+
+   A zone is ONE VALVE. Until now it was whatever fell out of packZones()
+   walking heads in click order inside a single area, which meant a valve
+   could never serve more than one area — so twelve traced drip beds became
+   twelve valves, twelve zone line items and a twenty-station controller,
+   when together they draw 20.5 GPM and belong on two.
+
+   `area.valveGroup` is the fix: give several drip beds the same group name
+   and they share a valve. The beds are packed onto as few valves as the GPM
+   ceiling allows, which is a real hydraulic limit, not a preference.
+
+   What stays per BED rather than per valve: the Xeri pressure regulator.
+   Each bed gets its own (Patrick's spec — one valve, a regulator on each),
+   so grouping must NOT collapse the regulator count. Getting that wrong
+   would under-spec the install while the quote got cheaper, which is the
+   worst direction for an error to run.
+
+   An area with no valveGroup behaves exactly as before.                  */
+function computeZonePlan(){
+  const ceiling = Math.max(num('ceiling'), 0.1);
+  const zones = [];
+  const groups = new Map();
+
+  LAST_PLANS.forEach(({area, plan}) => {
+    if(plan.noShape) return;
+    const g = (plan.family === 'drip' && area.valveGroup) ? String(area.valveGroup) : null;
+    if(g){
+      if(!groups.has(g)) groups.set(g, []);
+      groups.get(g).push({area, plan});
+      return;
+    }
+    // Ungrouped: exactly the zones this area computed for itself.
+    for(let z=0; z<plan.zones; z++){
+      zones.push({
+        name: area.name || 'Area',
+        family: plan.family,
+        gpm: plan.zoneGPM[z] || 0,
+        dripFt: plan.family === 'drip' ? (plan.dripLengthFt||0)/Math.max(plan.zones,1) : 0,
+        headCount: (plan.heads||[]).filter(h => h.zone === z).length,
+        members: [area.name || 'Area'],
+        grouped: false
+      });
+    }
+  });
+
+  // Grouped drip beds: pack onto as few valves as the ceiling allows.
+  // Largest bed first so a big one never strands a valve that could have
+  // carried it.
+  groups.forEach((list, g) => {
+    const beds = list.slice().sort((a,b) => b.plan.totalGPM - a.plan.totalGPM);
+    const bins = [];
+    beds.forEach(b => {
+      let bin = bins.find(x => x.gpm + b.plan.totalGPM <= ceiling + 0.001);
+      if(!bin){ bin = {gpm:0, dripFt:0, beds:[]}; bins.push(bin); }
+      bin.gpm    += b.plan.totalGPM;
+      bin.dripFt += b.plan.dripLengthFt || 0;
+      bin.beds.push(b);
+    });
+    bins.forEach((bin, i) => {
+      zones.push({
+        name: bins.length > 1 ? `${g} — valve ${i+1} of ${bins.length}` : g,
+        family: 'drip',
+        gpm: bin.gpm,
+        dripFt: bin.dripFt,
+        headCount: 0,
+        members: bin.beds.map(b => b.area.name || 'Area'),
+        grouped: true
+      });
+    });
+  });
+  return zones;
+}
+
+// Which valve group an area sits on, and every group currently in use.
+function valveGroupsInUse(){
+  const seen = [];
+  areas.forEach(a => {
+    if(a && a.family === 'drip' && a.valveGroup && !seen.includes(a.valveGroup)) seen.push(a.valveGroup);
+  });
+  return seen;
+}
 
 function compute(){
   let totZones=0, totHeads=0, maxZ=0;
@@ -1404,7 +1494,7 @@ function compute(){
           <tr><td>Total tube (+${a.overagePct||0}%)</td><td>${Math.round(p.dripLengthFt)} ft &middot; ~${p.emitters.toLocaleString()} emitters</td></tr>
           ${p.rwsUnits?`<tr><td>RWS units</td><td>${p.rwsUnits} (2 / tree)</td></tr>`:''}
           <tr><td>Flow</td><td>${p.totalGPM.toFixed(1)} GPM</td></tr>
-          <tr><td>Zones (under ${ceiling} GPM)</td><td>${p.zones}</td></tr>
+          <tr><td>${a.valveGroup?'Valve':'Zones (under '+ceiling+' GPM)'}</td><td>${a.valveGroup?`shares <b>${esc(a.valveGroup)}</b> with other beds`:p.zones}</td></tr>
         </table>
         <div class="prescribe"><b>Prescription:</b> Area-wide <b>${esc(p.product.label)}</b> - ~${Math.round(p.areaDripFt)} ft on ${a.dripRowIn==null?18:a.dripRowIn}" rows${hasTrees?` + ${p.treeCount} tree${p.treeCount===1?'':'s'} (${treeBits.join(' + ')})`:''}, ${p.zones} zone${p.zones>1?'s':''} on ${p.zones>1?'their own':'its own'} zone valve${p.zones>1?'s':''}.</div>`;
       sb.innerHTML=sketch(a,p);
@@ -1478,10 +1568,11 @@ function compute(){
   el('grand').innerHTML=`
     <div class="stat"><div class="n">${areas.length}</div><div class="l">areas</div></div>
     <div class="stat"><div class="n">${totHeads}</div><div class="l">spray/rotor heads</div></div>
-    <div class="stat"><div class="n">${totZones}</div><div class="l">total zones</div></div>
+    <div class="stat"><div class="n">${LAST_ZONES.length||totZones}</div><div class="l">total zones</div></div>
     <div class="stat"><div class="n">${maxZ.toFixed(1)}</div><div class="l">peak zone GPM</div></div>
     <div class="stat"><div class="n">${avail.toFixed(1)}</div><div class="l">avail GPM</div></div>`;
-  const ctrl=totZones<=6?"6-station":totZones<=12?"12-station":`${totZones}-station (HPC + PCM modules)`;
+  const zoneCount=LAST_ZONES.length||totZones;
+  const ctrl=zoneCount<=6?"6-station":zoneCount<=12?"12-station":`${zoneCount}-station (HPC + PCM modules)`;
   const ok=maxZ<=avail+0.001;
   el('grandNote').innerHTML=
     `Recommended controller: <b>Hydrawise ${ctrl}</b> (Pro-HC / HPC). `+
@@ -1490,6 +1581,7 @@ function compute(){
     `<br><span style="color:var(--ok)">Zone integrity OK - rotor / spray / strip / drip never share a valve${famSummary?' ('+famSummary+')':''}.</span>`;
 
   wcZones=zoneList;
+  LAST_ZONES = computeZonePlan();
   if(typeof renderExtras==='function') renderExtras();
   if(typeof renderBOM==='function') renderBOM();
   renderCosts(false);
@@ -3274,8 +3366,10 @@ function renderExtras(){
   const box=el('extras'); if(!box) return;
   const plans=LAST_PLANS.map(x=>x.plan);
   if(!plans.length){ box.innerHTML=''; el('extrasNote').textContent=''; return; }
-  const totalZones=plans.reduce((s,p)=>s+p.zones,0);
-  const allZoneGPM=plans.flatMap(p=>p.zoneGPM);
+  // Valve count comes from the design-level zone plan, so drip beds sharing
+  // a valve are counted ONCE — not once per bed.
+  const totalZones=LAST_ZONES.length;
+  const allZoneGPM=LAST_ZONES.map(z=>z.gpm);
   const peakZoneGPM=allZoneGPM.length?Math.max(...allZoneGPM):0;
   const valves=totalZones;
   const boxes=Math.max(1,Math.ceil(valves/MANIFOLD_PER_BOX));
@@ -3299,6 +3393,22 @@ function renderExtras(){
 /* ════════════════ Bill of Materials (priced from /api/parts) ════════════════ */
 
 let PARTS_MAP=null, partsLoading=null;
+// Put a drip bed on a shared valve. Several beds on one group = one valve,
+// packed under the GPM ceiling by computeZonePlan(). Each bed keeps its own
+// pressure regulator.
+function setValveGroup(i, v){
+  if(v === '__new__'){
+    const name = (prompt('Name this shared valve (e.g. "Drip A", "Bldg face drip"):', 'Drip '+String.fromCharCode(65+valveGroupsInUse().length)) || '').trim();
+    if(!name){ render(); return; }
+    areas[i].valveGroup = name.slice(0,60);
+  } else if(v){
+    areas[i].valveGroup = v;
+  } else {
+    delete areas[i].valveGroup;
+  }
+  render(); markDirty();
+}
+
 function loadParts(){
   if(PARTS_MAP) return Promise.resolve(PARTS_MAP);
   if(!partsLoading){
@@ -3366,7 +3476,11 @@ function buildBOM(parts){
   const add=(sku,qty)=>{ qty=Math.round(qty); if(sku && qty>0) cat[sku]=(cat[sku]||0)+qty; };
   const addNon=(label,qty)=>{ qty=Math.round(qty); if(qty>0) non.push({label,qty}); };
   const sf=parseFloat(el('spacingFactor').value)||1;
-  let totalZones=0, totalHeads=0, lateralFt=0;
+  // Per-valve hardware (valve, manifold fittings, box, wire, controller
+  // sizing) is counted from the design-level zone plan. Per-bed hardware —
+  // notably the Xeri pressure regulator — is still counted per area below,
+  // because grouping beds onto one valve does NOT remove their regulators.
+  let totalZones=LAST_ZONES.length, totalHeads=0, lateralFt=0;
   // Drip tube is bought for the WHOLE system, not per zone: accumulate all
   // footage by product, then buy rolls once (see roll math after the loop).
   const dripFt={};
@@ -3374,7 +3488,6 @@ function buildBOM(parts){
 
   LAST_PLANS.forEach(({area,plan:p})=>{
     if(p.noShape) return;                 // custom area with nothing drawn yet
-    totalZones+=p.zones;
     const isHeadFam=(p.family==='rotor'||p.family==='mp'||p.family==='spray'||p.family==='strip');
     if(isHeadFam) totalHeads += p.manual ? (area.manualHeads||[]).length : (p.heads?p.heads.length:0);
     if(p.kind!=='drip' && p.heads.length){
@@ -3414,7 +3527,10 @@ function buildBOM(parts){
     }
     else if(p.family==='drip'){
       accDrip(p.product, p.dripLengthFt);                             // area drip + tree ring tube (rolled system-wide)
-      add('RBDPSIM30X075', p.zones);                                  // pressure reg / zone
+      // One pressure regulator PER BED. A bed sharing a valve still needs
+      // its own; only a bed big enough to need several valves of its own
+      // takes more than one.
+      add('RBDPSIM30X075', area.valveGroup ? 1 : p.zones);
       add('RBDXFFTEE', Math.max(1,Math.round(p.dripLengthFt/50))+(p.ringTrees||0));  // +1 tap tee / ring tree
       add('RBDXFELB',  Math.max(2,Math.round(p.dripLengthFt/40)));
       add('RBDXFFCOUP',Math.max(1,Math.round(p.dripLengthFt/250)));
@@ -3629,13 +3745,15 @@ function zoneFamilyDetail(family,headCount){
   return `${base} · ${headCount} head${headCount!==1?'s':''}`;
 }
 function desiredQuoteLines(){
-  const zones=[];
-  LAST_PLANS.filter(x=>!x.plan.noShape).forEach(({area,plan})=>{
-    for(let z=0;z<plan.zones;z++){
-      const headCount=(plan.heads||[]).filter(h=>h.zone===z).length;
-      zones.push({name:area.name||'Area', detail:zoneFamilyDetail(plan.family,headCount)});
-    }
-  });
+  // One line per VALVE, from the design-level zone plan — so drip beds that
+  // share a valve are one line, not one each. A grouped zone names the beds
+  // it feeds so the customer can see what is on it.
+  const zones=LAST_ZONES.map(z=>({
+    name: z.name,
+    detail: z.grouped
+      ? `${z.members.length} bed${z.members.length===1?'':'s'} on one valve — ${z.members.join(', ')} · ~${Math.round(z.dripFt)} ft dripline · ${z.gpm.toFixed(1)} GPM`
+      : zoneFamilyDetail(z.family, z.headCount)
+  }));
   const N=zones.length;
   // Flow-meter wording is driven entirely by the "Hydrawise flow sensor
   // required" checkbox (readWaterSupply().flowSensorRequired), so every section
@@ -4145,12 +4263,13 @@ function applyWaterSupply(ws){
 function serializeState(){
   const inputs = {};
   GLOBAL_INPUT_IDS.forEach(id=>{ const e = el(id); if(e) inputs[id] = e.value; });
-  // version 3 adds `area.planRef = {pageId}` on areas traced over a site
-  // plan. Nothing else about the blob changed, and restoreState() still
-  // reads a version-2 blob unchanged — an absent planRef simply means a
-  // hand-sketched area, which is exactly what every existing design is.
+  // version 4 adds `area.valveGroup` — drip beds sharing one valve.
+  // version 3 added `area.planRef = {pageId}` for areas traced over a site
+  // plan. restoreState() still reads a version-2 or -3 blob unchanged: an
+  // absent valveGroup means the bed is on its own valve, exactly as before,
+  // and an absent planRef means a hand-sketched area.
   return {
-    version: 3,
+    version: 4,
     savedAt: new Date().toISOString(),
     inputs,
     waterSupply: readWaterSupply(),
