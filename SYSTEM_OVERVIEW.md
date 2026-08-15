@@ -1152,6 +1152,27 @@ list still prices pipe as an on-site figure, exactly as before, and the
 readout says so on screen. Wiring measured pipe and wire into the bid is a
 separate, deliberate step — see rule 3 under Site plan calibration.
 
+Layer 3 routes the **laterals**. Each valve's run is a minimum spanning
+tree (`mstFrom()`, Prim) rooted at that valve's manifold over everything it
+feeds — every head on the zone, and for a drip valve the point on each
+bed's outline nearest the manifold. A tree, not a pipe per head, because
+that is what actually gets trenched; on a four-head lawn it is 91.6 ft
+against 107.8 ft for a star. Being rooted, every segment knows its
+**downstream flow** — the sum of everything past it — so each is sized on
+its own load rather than the zone being drawn at one thickness, with a
+floor of 3/4" because that is the lateral pipe actually stocked
+(`POPO75400`), not 1/2" that would never be ordered.
+
+Two honesty details fall out of it. Heads are read from `plan.heads` +
+`plan.orig`, **not** `area.manualHeads` — the layout editor never writes a
+`zone` onto a hand-placed head (packZones decides that downstream), so
+reading manualHeads had put every head of a multi-valve lawn in one colour
+and drew nothing at all for auto-laid-out areas. And a bed over the GPM
+ceiling splits across several valves, each needing its own supply back to
+the manifold: those runs are fanned a few screen pixels apart and named in
+the readout, because three identical lines to one tap would otherwise read
+as one pipe while the footage counted three.
+
 **Three builder-owned durable fields on the project record**, each capped
 independently and each written whole:
 

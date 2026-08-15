@@ -1191,6 +1191,14 @@ be ordered and the trench can be dug from the same picture the design came
 from. Areas that were never traced are listed as off-plan; they are not
 drawn somewhere plausible-looking.
 
+From each manifold the **laterals** are routed out to the heads and beds
+that valve feeds — as a branching trunk, which is how it gets trenched, not
+a separate pipe to every head. Each segment is sized on the water actually
+passing through it, so the run leaves the box carrying the whole zone and
+arrives at the last head carrying one nozzle. A bed too big for one valve
+shows one supply line per valve, drawn side by side and named, rather than
+three pipes hidden under one line.
+
 Rule 3 above applies to this too, and it is why the measured length is
 **shown but not pushed into the bill of materials**. Pipe and wire are still
 priced as an on-site figure, and the master plan says so on screen. Moving

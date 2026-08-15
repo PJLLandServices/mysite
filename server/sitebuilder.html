@@ -454,13 +454,14 @@
         <button type="button" class="ghost" onclick="mpAutoRoute()">Auto-route</button>
         <button type="button" class="ghost" onclick="mpUndoPoint()">Undo point</button>
         <button type="button" class="del" onclick="mpClearRouting()">Clear routing</button>
+        <button type="button" id="mpToolLat" class="on" onclick="mpToggleLaterals()">Laterals</button>
       </div>
       <span class="sk-grow"></span>
       <span class="mp-route" id="mpRoute"></span>
     </div>
     <div class="sk-body" id="mpBody"></div>
     <div class="sk-foot">
-      <p class="hint" id="mpHint">Every traced area on this sheet, at its true position, coloured by the valve it runs on. Pick a tool, then click the plan to place the <b>point of connection</b>, a <b>manifold</b>, or a <b>mainline bend</b>; drag any marker to move it, Delete to remove the selected one. Mainline length is measured off the calibrated sheet. Hold H to flash the drawing off. Scroll/pinch to zoom, Ctrl-drag to pan.</p>
+      <p class="hint" id="mpHint">Every traced area on this sheet, at its true position, coloured by the valve it runs on. Pick a tool, then click the plan to place the <b>point of connection</b>, a <b>manifold</b>, or a <b>mainline bend</b>; drag any marker to move it, Delete to remove the selected one. Mainline and lateral lengths are measured off the calibrated sheet; each lateral branches off its manifold and every segment is sized on the flow passing through it. Hold H to flash the drawing off. Scroll/pinch to zoom, Ctrl-drag to pan.</p>
       <span class="sk-grow"></span>
       <div class="sk-tools">
         <button type="button" onclick="window.print()" class="ghost">Print</button>
@@ -2660,7 +2661,7 @@ async function calSave(){
 const mp = { pageId:null, page:null, svgId:'mpSvg', bodyId:'mpBody',
              ppf:1, panX:0, panY:0, _w:0, _h:0,
              planPage:null, underOpacity:0.45, underHidden:false,
-             tool:'pan', sel:null };
+             tool:'pan', sel:null, laterals:true };
 
 // Areas traced onto a given sheet, with their index.
 function mpAreasOn(pageId){
@@ -2680,7 +2681,7 @@ function openMasterPlan(pageId){
   mp.pageId=pageId; mp.page=pg; mp.planPage=pg; mp.underHidden=false;
   skProbeRaster(pg.id);
   pzInit(mp); mp._hooks=MP_HOOKS;
-  mp.tool='pan'; mp.sel=null; mpPaintTools();
+  mp.tool='pan'; mp.sel=null; mp.laterals=true; mpPaintTools();
   el('mpOverlay').hidden=false;
   const op=el('mpUnderOpacity'); if(op) op.value=String(Math.round(mp.underOpacity*100));
   const pc=el('mpUnderPct'); if(pc) pc.textContent=Math.round(mp.underOpacity*100)+'%';
@@ -2834,6 +2835,7 @@ function mpPaintTools(){
   ['pan','poc','manifold','bend'].forEach(t=>{
     const b=el('mpTool'+t); if(b) b.classList.toggle('on', mp.tool===t);
   });
+  const lb=el('mpToolLat'); if(lb) lb.classList.toggle('on', mp.laterals);
   const bd=el('mpBody'); if(bd) bd.style.cursor = (mp.tool==='pan') ? '' : 'crosshair';
 }
 
@@ -2910,9 +2912,9 @@ function mpAutoRoute(){
 /* ---- drawing ---- */
 
 const MP_LINE='#1f2d3d';
-function mpHalo(x, y, txt, size, anchor){
+function mpHalo(x, y, txt, size, anchor, fill){
   return '<text x="'+x.toFixed(1)+'" y="'+y.toFixed(1)+'" text-anchor="'+(anchor||'middle')+'" font-size="'+size+'" '+
-         'font-weight="700" fill="'+MP_LINE+'" stroke="#fff" stroke-width="3.2" paint-order="stroke" '+
+         'font-weight="700" fill="'+(fill||MP_LINE)+'" stroke="#fff" stroke-width="3.2" paint-order="stroke" '+
          'pointer-events="none">'+txt+'</text>';
 }
 
@@ -2948,14 +2950,18 @@ function mpRoutingSvg(){
   (r.manifolds||[]).forEach((m,i)=>{
     const X=SX(m.x), Y=SY(m.y), sel=(mp.sel==='m'+i);
     const n=(asg.byManifold[i]||[]).length;
-    if(sel) g+='<rect x="'+(X-16).toFixed(1)+'" y="'+(Y-13).toFixed(1)+'" width="32" height="26" rx="7" fill="none" stroke="'+MP_LINE+'" stroke-width="1.2" stroke-dasharray="3 3"/>';
+    // MANIFOLD_PER_BOX is the house rule, not a law of physics — an overfull
+    // box is drawn in red and named in the readout so it is a decision, not
+    // a silent overflow.
+    const over=n>MANIFOLD_PER_BOX, ink=over?'#c62828':MP_LINE;
+    if(sel) g+='<rect x="'+(X-16).toFixed(1)+'" y="'+(Y-13).toFixed(1)+'" width="32" height="26" rx="7" fill="none" stroke="'+ink+'" stroke-width="1.2" stroke-dasharray="3 3"/>';
     g+='<rect data-mph="m'+i+'" x="'+(X-12).toFixed(1)+'" y="'+(Y-9).toFixed(1)+'" width="24" height="18" rx="4" '+
-       'fill="#fff" stroke="'+MP_LINE+'" stroke-width="2.4" style="cursor:pointer"/>';
+       'fill="#fff" stroke="'+ink+'" stroke-width="2.4" style="cursor:pointer"/>';
     for(let k=0;k<3;k++){
       const vx=X-6+k*6;
-      g+='<line x1="'+vx.toFixed(1)+'" y1="'+(Y-4).toFixed(1)+'" x2="'+vx.toFixed(1)+'" y2="'+(Y+4).toFixed(1)+'" stroke="'+MP_LINE+'" stroke-width="1.6" pointer-events="none"/>';
+      g+='<line x1="'+vx.toFixed(1)+'" y1="'+(Y-4).toFixed(1)+'" x2="'+vx.toFixed(1)+'" y2="'+(Y+4).toFixed(1)+'" stroke="'+ink+'" stroke-width="1.6" pointer-events="none"/>';
     }
-    g+=mpHalo(X, Y+23, 'M'+(i+1)+' · '+n+' valve'+(n===1?'':'s'), 11);
+    g+=mpHalo(X, Y+23, 'M'+(i+1)+' · '+n+' valve'+(n===1?'':'s')+(over?' · over '+MANIFOLD_PER_BOX:''), 11, 'middle', ink);
   });
 
   // Mainline bends.
@@ -2991,10 +2997,189 @@ function mpRouteReadout(){
   else bits.push('<span class="mp-warnpipe">No point of connection</span>');
   if(nMan) bits.push('<b>'+nMan+'</b> manifold'+(nMan===1?'':'s')+(st.teeFt>=0.5?' · '+Math.round(st.teeFt)+' ft of tees':''));
   if(asg.unplaced.length) bits.push('<span class="mp-warnpipe">'+asg.unplaced.length+' valve'+(asg.unplaced.length===1?'':'s')+' not on this sheet</span>');
+  const over=asg.byManifold.map((l,i)=>({i,n:l.length})).filter(x=>x.n>MANIFOLD_PER_BOX);
+  if(over.length) bits.push('<span class="mp-warnpipe">'+over.map(x=>'M'+(x.i+1)+' holds '+x.n).join(', ')+' — house limit is '+MANIFOLD_PER_BOX+'</span>');
+  if(mp.laterals){
+    const lat=mpLateralPlan();
+    if(lat.totalFt>0.5){
+      const sizes=Object.keys(lat.bySize).sort((a,b)=>lat.bySize[b]-lat.bySize[a])
+        .map(k=>k+' '+Math.round(lat.bySize[k])).join(' · ');
+      bits.push('Laterals <b>'+Math.round(lat.totalFt)+' ft</b> ('+sizes+')');
+      // A bed over the GPM ceiling splits across several valves, and each
+      // one needs its own supply back to the manifold. That is real pipe,
+      // but it looks like one line on a plan, so it gets said out loud.
+      const shared=new Map();
+      lat.runs.forEach(run=>{ const z=LAST_ZONES[run.zi]; if(!z) return;
+        (z.parts||[]).forEach(pt=>{ const k=pt.areaIdx; shared.set(k,(shared.get(k)||0)+1); }); });
+      const multi=[...shared.entries()].filter(([,n])=>n>1)
+        .map(([i,n])=>(areas[i]&&areas[i].name||'Area')+' \u00d7'+n);
+      if(multi.length) bits.push('supplied by several valves: '+multi.join(', '));
+    }
+  }
   bits.push('measured here, still an on-site figure in the BOM');
   box.innerHTML=bits.join(' · ');
 }
 
+/* ── Layer 3: laterals from each manifold out to what it feeds ────────────
+
+   A lateral is not one pipe per head — it is a trunk that branches, which
+   is also what actually gets trenched. So the run for a valve is a minimum
+   spanning tree rooted at that valve's manifold over the things it feeds:
+   every head on the zone, and for a drip valve the point on each bed's
+   outline nearest the manifold (the tap).
+
+   Because it is a rooted tree, every segment knows how much water passes
+   through it — the sum of the flow of everything downstream — so each one
+   is sized on its own load rather than the whole zone being drawn as one
+   thickness. Near the manifold a segment carries the entire zone; out at
+   the last head it carries one nozzle.
+
+   Same rule as layer 2: the footage is MEASURED and SHOWN, and it does not
+   touch the bill of materials. `buildBOM` still estimates lateral pipe from
+   head count × radius, exactly as it did before.                          */
+
+// Every head of an area in SHEET feet, hand-placed or auto-laid-out alike,
+// each carrying the zone packZones actually assigned it.
+//
+// This deliberately reads plan.heads rather than area.manualHeads. The
+// layout editor never writes a `zone` onto a hand-placed head — zones are
+// worked out downstream by packZones — so colouring off manualHeads put
+// every head of a three-valve lawn in one colour, and auto-laid-out areas
+// (no manualHeads at all) drew no heads whatsoever.
+function mpHeadsOf(a, p){
+  if(!p || !Array.isArray(p.heads) || !p.heads.length) return [];
+  // No plan.poly means the head coordinates were computed in the area's own
+  // rectangle frame, not the sheet's, so they cannot honestly be placed.
+  if(!p.poly || !p.orig) return [];
+  const o=p.orig;
+  return p.heads.map(h=>({x:o.x+h.xft, y:o.y+h.yft, arc:h.arc, dir:h.dir||0,
+                          zone:h.zone||0, r:h.r, gpm:h.gpm}));
+}
+function mpPlanFor(a){ const e=LAST_PLANS.find(x=>x.area===a); return e?e.plan:null; }
+
+// What a valve physically feeds on this sheet, given where its manifold is.
+// A drip bed taps the point on its outline nearest the manifold, which is
+// where the supply would actually be cut in.
+function mpZoneNodes(zi, root){
+  const z=LAST_ZONES[zi]; if(!z || !root) return [];
+  const out=[];
+  (z.parts||[]).forEach(pt=>{
+    const a=areas[pt.areaIdx];
+    if(!a || !validPoly(a) || !(a.planRef && a.planRef.pageId===mp.pageId)) return;
+    const p=mpPlanFor(a); if(!p || p.noShape) return;
+    if(p.family==='drip' || p.family==='trees'){
+      const ring=[...a.poly, a.poly[0]];
+      const tap=nearestOnPath(ring, root.x, root.y);
+      if(tap) out.push({x:tap.x, y:tap.y, kind:'bed',
+                        gpm:(p.zoneGPM && p.zoneGPM[pt.localZone]!=null) ? p.zoneGPM[pt.localZone] : (p.totalGPM||0)});
+      return;
+    }
+    mpHeadsOf(a,p).forEach(h=>{ if((h.zone||0)===pt.localZone) out.push({x:h.x, y:h.y, kind:'head', gpm:h.gpm||0}); });
+  });
+  return out;
+}
+
+// Prim from the root, then one reverse pass over the insertion order to
+// accumulate downstream flow. Prim only ever adds a node whose parent is
+// already in the tree, so walking that order backwards always resolves
+// children before their parent.
+function mstFrom(root, nodes){
+  const n=nodes.length; if(!n) return [];
+  const pts=[root, ...nodes];
+  const inTree=new Array(n+1).fill(false); inTree[0]=true;
+  const parent=new Array(n+1).fill(0), best=new Array(n+1).fill(Infinity);
+  for(let i=1;i<=n;i++) best[i]=Math.hypot(pts[i].x-root.x, pts[i].y-root.y);
+  const order=[];
+  for(let k=0;k<n;k++){
+    let bi=-1, bd=Infinity;
+    for(let i=1;i<=n;i++) if(!inTree[i] && best[i]<bd){ bd=best[i]; bi=i; }
+    if(bi<0) break;
+    inTree[bi]=true; order.push(bi);
+    for(let i=1;i<=n;i++) if(!inTree[i]){
+      const d=Math.hypot(pts[i].x-pts[bi].x, pts[i].y-pts[bi].y);
+      if(d<best[i]){ best[i]=d; parent[i]=bi; }
+    }
+  }
+  const flow=new Array(n+1).fill(0);
+  for(let i=1;i<=n;i++) flow[i]=nodes[i-1].gpm||0;
+  for(let k=order.length-1;k>=0;k--){ const i=order[k]; if(parent[i]>0) flow[parent[i]]+=flow[i]; }
+  return order.map(i=>({a:pts[parent[i]], b:pts[i], gpm:flow[i],
+                        ft:Math.hypot(pts[i].x-pts[parent[i]].x, pts[i].y-pts[parent[i]].y)}));
+}
+
+// Hydraulically a 2 GPM tail only needs 1/2", but nobody trenches 1/2"
+// lateral — the stocked lateral pipe is 3/4" poly (POPO75400, the same SKU
+// the BOM orders). Reporting a size that will never be bought would make
+// the breakdown useless for ordering, so the floor is the real one.
+const LATERAL_MIN_SIZE = '3/4"';
+function lateralSizeForGPM(gpm){
+  const s = pipeForGPM(gpm);
+  return (s === '1/2"') ? LATERAL_MIN_SIZE : s;
+}
+
+function mpLateralPlan(){
+  const r=routingRO(mp.pageId);
+  const asg=mpManifoldAssign();
+  const runs=[];
+  let totalFt=0;
+  const bySize={};
+  LAST_ZONES.forEach((z,zi)=>{
+    let root=null;
+    const mi=asg.byManifold.findIndex(list=>list.includes(zi));
+    if(mi>=0) root=r.manifolds[mi];
+    else if(!(r.manifolds||[]).length && r.poc) root=r.poc;   // no boxes yet: run off the POC
+    if(!root) return;
+    const nodes=mpZoneNodes(zi, root);
+    if(!nodes.length) return;
+    const edges=mstFrom(root, nodes);
+    let ft=0;
+    edges.forEach(e=>{ ft+=e.ft; const sz=lateralSizeForGPM(e.gpm); bySize[sz]=(bySize[sz]||0)+e.ft; });
+    totalFt+=ft;
+    runs.push({zi, edges, ft, nodes:nodes.length, rootKey:(mi>=0?'m'+mi:'poc')});
+  });
+  return {runs, totalFt, bySize};
+}
+
+function mpLateralSvg(){
+  if(!mp.laterals) return '';
+  const SX=x=>pzSX(mp,x), SY=y=>pzSY(mp,y);
+  const lat=mpLateralPlan();
+  if(!lat.runs.length) return '';
+  // Runs sharing a manifold are fanned a couple of screen pixels apart.
+  // Without this, a bed split across three valves draws three IDENTICAL
+  // lines to the same tap and only the last colour survives — the plan
+  // would show one pipe where the material list counts three.
+  const perRoot=new Map();
+  lat.runs.forEach(run=>{ const k=run.rootKey; if(!perRoot.has(k)) perRoot.set(k,[]); perRoot.get(k).push(run.zi); });
+  let g='<g>';
+  lat.runs.forEach(run=>{
+    const sibs=perRoot.get(run.rootKey)||[run.zi];
+    const off=(sibs.indexOf(run.zi)-(sibs.length-1)/2)*2.8;   // screen px, perpendicular
+    const col=mpZoneColour(run.zi);
+    run.edges.forEach(e=>{
+      // Width tracks the pipe the segment needs, so the trunk reads heavier
+      // than the last hop to a single head.
+      const w = e.gpm>13 ? 3.2 : e.gpm>8 ? 2.5 : e.gpm>4 ? 1.9 : 1.4;
+      let x1=SX(e.a.x), y1=SY(e.a.y), x2=SX(e.b.x), y2=SY(e.b.y);
+      if(off){
+        const dx=x2-x1, dy=y2-y1, L=Math.hypot(dx,dy)||1;
+        const nx=-dy/L*off, ny=dx/L*off;
+        x1+=nx; y1+=ny; x2+=nx; y2+=ny;
+      }
+      g+='<line x1="'+x1.toFixed(1)+'" y1="'+y1.toFixed(1)+'" x2="'+x2.toFixed(1)+'" y2="'+y2.toFixed(1)+
+         '" stroke="#fff" stroke-width="'+(w+2.2).toFixed(1)+'" stroke-opacity="0.7" stroke-linecap="round"/>';
+      g+='<line class="mp-lat" x1="'+x1.toFixed(1)+'" y1="'+y1.toFixed(1)+'" x2="'+x2.toFixed(1)+'" y2="'+y2.toFixed(1)+
+         '" stroke="'+col+'" stroke-width="'+w.toFixed(1)+'" stroke-opacity="0.9" stroke-linecap="round"/>';
+    });
+  });
+  return g+'</g>';
+}
+
+function mpToggleLaterals(){
+  mp.laterals=!mp.laterals;
+  const b=el('mpToolLat'); if(b) b.classList.toggle('on', mp.laterals);
+  mpDraw();
+}
 function mpDraw(){
   const body=el('mpBody');
   mp._w=Math.max(body.clientWidth-2,300); mp._h=Math.max(body.clientHeight-2,300);
@@ -3029,13 +3214,11 @@ function mpDraw(){
       });
       return;
     }
-    const hs=(a.layout==='manual' && Array.isArray(a.manualHeads)) ? a.manualHeads : [];
+    const hs=mpHeadsOf(a, mpPlanFor(a));
     hs.forEach(hd=>{
       heads++;
-      const spec=loHeadSpec(a.family, hd.noz, hd.arc);
-      const pct=loRadiusPct(hd);
       const zi=zoneIndexOf(i, hd.zone||0), col=mpZoneColour(zi>=0?zi:zoneIndexOf(i,0));
-      const cx=SX(hd.x), cy=SY(hd.y), rr=Math.max(spec.r*pct*U, 3);
+      const cx=SX(hd.x), cy=SY(hd.y), rr=Math.max((hd.r||1)*U, 3);
       if(hd.arc>=360){
         g+=`<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${rr.toFixed(1)}" fill="${col}" fill-opacity="0.13" stroke="${col}" stroke-opacity="0.45" stroke-width="0.8"/>`;
       } else {
@@ -3046,6 +3229,7 @@ function mpDraw(){
     });
   });
 
+  g+=mpLateralSvg();
   g+=mpRoutingSvg();
   g+=scaleBarSvg(mp);
   g+=`</svg>`;
@@ -3054,7 +3238,7 @@ function mpDraw(){
   // ---- legend + header stats ----
   const used=new Set();
   on.forEach(({i})=>{ const z=zoneIndexOf(i,0); if(z>=0) used.add(z); });
-  areas.forEach((a,i)=>{ (a.manualHeads||[]).forEach(hd=>{ const z=zoneIndexOf(i,hd.zone||0); if(z>=0) used.add(z); }); });
+  areas.forEach((a,i)=>{ mpHeadsOf(a, mpPlanFor(a)).forEach(hd=>{ const z=zoneIndexOf(i,hd.zone||0); if(z>=0) used.add(z); }); });
   const offPlan = areas.filter(a=>a && !(a.planRef && a.planRef.pageId===mp.pageId) && !( a.mode==='custom' && !validPoly(a) )).length;
   el('mpLegend').innerHTML =
     [...used].sort((x,y)=>x-y).map(zi=>{
