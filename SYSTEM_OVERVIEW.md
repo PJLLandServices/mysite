@@ -1181,6 +1181,23 @@ printed beside the number because it is a starting figure, not a calculation
 for a specific solenoid's inrush. A mainline stub past the last box carries
 no wire at all.
 
+**Valves are assigned to boxes**, not just dropped in the nearest one.
+Nearest-box-wins is still the default, but any valve can be put in a
+specific box: select it, then click the box. That needed real identity —
+array position is not identity, because deleting an area renumbers
+everything after it — so version 7 gives every area a stable `aid`, every
+manifold an `id`, and every valve a `key` (`z:<aid>:<localZone>`, or
+`g:<group>:<bin>` for a shared drip valve). Assignments live in
+`routing[page].pins` as `key -> manifold id`.
+
+Everything that can go stale is reported rather than obeyed. An assignment
+pointing at a deleted box falls back to nearest **and says so** in the
+readout; deleting a box warns first and releases its valves; an assignment
+for a valve that no longer exists is dropped on save so it can never later
+latch onto a new valve that happens to reuse the key. This is rule 3
+applied to a layout decision: the box a valve lives in is a thing Patrick
+decided, so it does not change quietly underneath him.
+
 Two honesty details fall out of it. Heads are read from `plan.heads` +
 `plan.orig`, **not** `area.manualHeads` — the layout editor never writes a
 `zone` onto a hand-placed head (packZones decides that downstream), so

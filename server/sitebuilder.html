@@ -243,8 +243,10 @@
   .mp-bar .sk-tools button{min-height:32px;padding:5px 10px;font-size:12.5px}
   .mp-route{font-size:12px;color:var(--muted);text-align:right}
   .mp-route b{color:var(--ink);font-weight:700}
-  .mp-route .lnk{background:none;border:0;padding:0;min-height:0;font:inherit;
+  .mp-route .lnk{background:none;border:0;padding:0 3px;min-height:0;font:inherit;
     color:var(--green);text-decoration:underline;cursor:pointer}
+  .mp-route .lnk.cur{font-weight:700;text-decoration:none;
+    border:1px solid var(--green);border-radius:5px;background:var(--green-l)}
   .mp-route .mp-warnpipe{color:var(--warn);font-weight:600}
   .sk-vert{fill:#fff;stroke:var(--green-d);stroke-width:2;cursor:grab}
   .sk-handle{fill:var(--z3);stroke:#fff;stroke-width:2;cursor:grab}
@@ -749,8 +751,15 @@ function familyDefaults(a){
   if(a.family==="drip"){ if(!a.dripProduct) a.dripProduct="xf09"; if(a.overagePct==null) a.overagePct=10; if(a.dripRowIn==null) a.dripRowIn=18; if(!a.dripDir) a.dripDir="auto"; }
   if(a.family==="trees"){ if(!a.dripProduct) a.dripProduct="xf09"; if(a.overagePct==null) a.overagePct=10; if(!Array.isArray(a.trees)) a.trees=[]; }
 }
+// Stable identity, minted once and then carried in the saved design.
+// Array position is NOT identity: deleting area 1 renumbers everything
+// after it, and anything remembered by index would then point at the wrong
+// area. Valve-box assignments are remembered, so they need a real id.
+const mintId = p => p + Math.random().toString(36).slice(2,10).padEnd(8,'0');
+
 // Normalize an area (migrate legacy head key, fill family defaults).
 function ensureArea(a){
+  if(!a.aid) a.aid = mintId('a_');
   if(!a.family){ const m = LEGACY_HEAD_MAP[a.head] || ["rotor","rotorNoz","b40"]; a.family=m[0]; a[m[1]]=m[2]; }
   if(!FAMILIES[a.family]) a.family="rotor";
   delete a.head; delete a.r; delete a.g;   // drop legacy v1 fields once migrated
@@ -1480,6 +1489,10 @@ function computeZonePlan(){
         // Which area, and which of ITS zones — so the master plan can colour
         // each head and each bed by the valve it actually runs on.
         parts: [{ areaIdx: areas.indexOf(area), localZone: z }],
+        // Stable across a recompute, unlike the index into this array, so a
+        // hand-assigned valve box survives adding an area or nudging the
+        // GPM ceiling.
+        key: 'z:' + (area.aid||'?') + ':' + z,
         grouped: false
       });
     }
@@ -1507,6 +1520,7 @@ function computeZonePlan(){
         headCount: 0,
         members: bin.beds.map(b => b.area.name || 'Area'),
         parts: bin.beds.map(b => ({ areaIdx: areas.indexOf(b.area), localZone: 0 })),
+        key: 'g:' + g + ':' + i,
         grouped: true
       });
     });
@@ -2726,7 +2740,17 @@ const MP_HOOKS = {
   hit: t => (t && t.dataset && t.dataset.mph) ? t.dataset.mph : null,
   dragStart: h => { mp.sel = h; },
   dragMove: (h, fx, fy) => mpMoveHandle(h, fx, fy),
-  dragEnd: (h, moved) => { if(moved) markDirty(); },
+  dragEnd: (h, moved) => {
+    if(moved){ markDirty(); return; }
+    // A click (not a drag) on a box while a valve is selected assigns it.
+    // Pick the valve, then point at the box it goes in — the same order you
+    // would say it out loud.
+    if(mp.zoneSel!=null && h && h[0]==='m'){
+      const mi=parseInt(h.slice(1),10);
+      if(mpPinnedBoxOf(mp.zoneSel)===mi) mpUnpinZone(mp.zoneSel);
+      else mpPinZone(mp.zoneSel, mi);
+    }
+  },
   tap: (fx, fy) => mpTap(fx, fy)
 };
 
@@ -2802,13 +2826,19 @@ function mpZoneColour(zi){ return zi>=0 ? `var(${ZC[zi%ZC.length]})` : '#9aa5a0'
    Wiring measured pipe into the bid is a separate, deliberate step.       */
 
 let routing = {};                       // pageId -> {poc, main[], manifolds[]}
-const EMPTY_ROUTING = Object.freeze({poc:null, main:Object.freeze([]), manifolds:Object.freeze([])});
+const EMPTY_ROUTING = Object.freeze({poc:null, main:Object.freeze([]), manifolds:Object.freeze([]), pins:Object.freeze({})});
 function routingRO(pageId){ return (pageId && routing[pageId]) || EMPTY_ROUTING; }
 function routingFor(pageId){
   if(!pageId) return null;
-  if(!routing[pageId]) routing[pageId] = {poc:null, main:[], manifolds:[]};
-  return routing[pageId];
+  if(!routing[pageId]) routing[pageId] = {poc:null, main:[], manifolds:[], pins:{}};
+  const r=routing[pageId];
+  if(!r.pins) r.pins={};
+  // Backfill ids for boxes placed before assignments existed, so an old
+  // sheet can be hand-assigned without being re-drawn.
+  (r.manifolds||[]).forEach(m=>{ if(!m.id) m.id=mintId('m_'); });
+  return r;
 }
+function manifoldIdxById(r, id){ return (r.manifolds||[]).findIndex(m=>m && m.id===id); }
 
 // Closest point on a polyline, and how far off it the query point sits.
 // Used for the manifold tees, so the tee is always the shortest honest
@@ -2911,19 +2941,60 @@ function mpZoneAnchors(){
 // Every valve goes to its nearest manifold. Valves with no geometry on this
 // sheet are reported, not silently dropped — a manifold count that quietly
 // ignored half the system would be worse than no count at all.
+// Nearest box wins UNLESS the valve has been assigned by hand. A pin whose
+// box has since been deleted is reported and falls back to nearest — never
+// silently applied to whichever box inherited that array position, which is
+// the whole reason boxes carry an id instead of being known by index.
 function mpManifoldAssign(){
   const r=routingRO(mp.pageId);
   const anchors=mpZoneAnchors();
   const byManifold=(r.manifolds||[]).map(()=>[]);
-  const unplaced=[];
+  const unplaced=[], pinned=[], staleP=[];
+  const pins=r.pins||{};
   LAST_ZONES.forEach((z,zi)=>{
     const p=anchors.get(zi);
     if(!p || !byManifold.length){ unplaced.push(zi); return; }
+    const want=z.key ? pins[z.key] : null;
+    if(want){
+      const mi=manifoldIdxById(r, want);
+      if(mi>=0){ byManifold[mi].push(zi); pinned.push(zi); return; }
+      staleP.push(zi);                       // box is gone — fall through to nearest
+    }
     let best=0, bd=Infinity;
     r.manifolds.forEach((m,i)=>{ const d=Math.hypot(m.x-p.x, m.y-p.y); if(d<bd){ bd=d; best=i; } });
     byManifold[best].push(zi);
   });
-  return {byManifold, unplaced, anchors};
+  return {byManifold, unplaced, anchors, pinned, stalePins:staleP};
+}
+
+function mpPinnedBoxOf(zi){
+  const r=routingRO(mp.pageId), z=LAST_ZONES[zi];
+  if(!z || !z.key) return -1;
+  const id=(r.pins||{})[z.key];
+  return id ? manifoldIdxById(r, id) : -1;
+}
+function mpPinZone(zi, manifoldIdx){
+  const r=routingFor(mp.pageId), z=LAST_ZONES[zi];
+  if(!r || !z || !z.key) return;
+  const m=r.manifolds[manifoldIdx];
+  if(!m) return;
+  if(!m.id) m.id=mintId('m_');
+  r.pins[z.key]=m.id;
+  markDirty(); mpDraw();
+}
+function mpUnpinZone(zi){
+  const r=routingFor(mp.pageId), z=LAST_ZONES[zi];
+  if(!r || !z || !z.key) return;
+  if(r.pins[z.key]==null) return;
+  delete r.pins[z.key];
+  markDirty(); mpDraw();
+}
+// Assignments whose valve no longer exists — an area deleted, a drip group
+// repacked into fewer valves. Dropped on save rather than left to rot.
+function mpOrphanPins(){
+  const r=routingRO(mp.pageId), pins=r.pins||{};
+  const live=new Set(LAST_ZONES.map(z=>z.key).filter(Boolean));
+  return Object.keys(pins).filter(k=>!live.has(k));
 }
 
 /* ---- tools ---- */
@@ -2941,7 +3012,7 @@ function mpPaintTools(){
 function mpTap(fx, fy){
   const r=routingFor(mp.pageId); if(!r) return;
   if(mp.tool==='poc'){ r.poc={x:fx, y:fy}; mp.sel='poc'; markDirty(); return; }
-  if(mp.tool==='manifold'){ r.manifolds.push({x:fx, y:fy}); mp.sel='m'+(r.manifolds.length-1); markDirty(); return; }
+  if(mp.tool==='manifold'){ r.manifolds.push({x:fx, y:fy, id:mintId('m_')}); mp.sel='m'+(r.manifolds.length-1); markDirty(); return; }
   if(mp.tool==='bend'){
     if(!r.poc){ alert('Place the point of connection first — the mainline starts there.'); return; }
     // The new node hangs off whatever is selected, so selecting a node part
@@ -2990,7 +3061,13 @@ function mpDeleteSel(){
   } else {
     const i=parseInt(h.slice(1), 10);
     if(h[0]==='b') mpRemoveMainNode(r, i);
-    else if(h[0]==='m') r.manifolds.splice(i,1);
+    else if(h[0]==='m'){
+      const gone=r.manifolds[i];
+      const held=Object.keys(r.pins||{}).filter(k=>r.pins[k]===(gone&&gone.id));
+      if(held.length && !confirm(held.length+' valve'+(held.length===1?'':'s')+' assigned to this box will go back to their nearest box. Remove it?')) return;
+      held.forEach(k=>delete r.pins[k]);
+      r.manifolds.splice(i,1);
+    }
   }
   mp.sel=null; markDirty(); mpDraw();
 }
@@ -3091,6 +3168,9 @@ function mpRoutingSvg(){
     // box is drawn in red and named in the readout so it is a decision, not
     // a silent overflow.
     const over=n>MANIFOLD_PER_BOX, ink=over?'#c62828':MP_LINE;
+    const holdsSel = mp.zoneSel!=null && (asg.byManifold[i]||[]).includes(mp.zoneSel);
+    const isPinTarget = mp.zoneSel!=null && mpPinnedBoxOf(mp.zoneSel)===i;
+    const nPinned = (asg.byManifold[i]||[]).filter(z=>asg.pinned.includes(z)).length;
     if(sel) g+='<rect x="'+(X-16).toFixed(1)+'" y="'+(Y-13).toFixed(1)+'" width="32" height="26" rx="7" fill="none" stroke="'+ink+'" stroke-width="1.2" stroke-dasharray="3 3"/>';
     g+='<rect data-mph="m'+i+'" x="'+(X-12).toFixed(1)+'" y="'+(Y-9).toFixed(1)+'" width="24" height="18" rx="4" '+
        'fill="#fff" stroke="'+ink+'" stroke-width="2.4" style="cursor:pointer"/>';
@@ -3098,7 +3178,13 @@ function mpRoutingSvg(){
       const vx=X-6+k*6;
       g+='<line x1="'+vx.toFixed(1)+'" y1="'+(Y-4).toFixed(1)+'" x2="'+vx.toFixed(1)+'" y2="'+(Y+4).toFixed(1)+'" stroke="'+ink+'" stroke-width="1.6" pointer-events="none"/>';
     }
-    g+=mpHalo(X, Y+23, 'M'+(i+1)+' · '+n+' valve'+(n===1?'':'s')+(over?' · over '+MANIFOLD_PER_BOX:''), 11, 'middle', ink);
+    // While a valve is selected, ring the box that currently holds it so
+    // "where does this one live" is answerable at a glance.
+    if(holdsSel)
+      g+='<circle cx="'+X.toFixed(1)+'" cy="'+Y.toFixed(1)+'" r="19" fill="none" stroke="'+(isPinTarget?'#2e7d32':ink)+
+         '" stroke-width="2" stroke-dasharray="'+(isPinTarget?'':'4 3')+'"/>';
+    g+=mpHalo(X, Y+23, 'M'+(i+1)+' · '+n+' valve'+(n===1?'':'s')+
+              (nPinned?' · '+nPinned+' set':'')+(over?' · over '+MANIFOLD_PER_BOX:''), 11, 'middle', ink);
   });
 
   // Mainline bends.
@@ -3245,6 +3331,12 @@ function mpRouteReadout(){
   if(st.branchCount) bits.push('<b>'+st.branchCount+'</b> tee'+(st.branchCount===1?'':'s'));
   if(nMan) bits.push('<b>'+nMan+'</b> manifold'+(nMan===1?'':'s')+(st.teeFt>=0.5?' · '+Math.round(st.teeFt)+' ft of drops':''));
   if(asg.unplaced.length) bits.push('<span class="mp-warnpipe">'+asg.unplaced.length+' valve'+(asg.unplaced.length===1?'':'s')+' not on this sheet</span>');
+  if(asg.pinned.length) bits.push('<b>'+asg.pinned.length+'</b> set by hand');
+  if(asg.stalePins.length) bits.push('<span class="mp-warnpipe">'+asg.stalePins.length+
+    ' assignment'+(asg.stalePins.length===1?'':'s')+' pointed at a deleted box — back on nearest</span>');
+  const orph=mpOrphanPins();
+  if(orph.length) bits.push('<span class="mp-warnpipe">'+orph.length+
+    ' assignment'+(orph.length===1?'':'s')+' for valves that no longer exist</span>');
   const over=asg.byManifold.map((l,i)=>({i,n:l.length})).filter(x=>x.n>MANIFOLD_PER_BOX);
   if(over.length) bits.push('<span class="mp-warnpipe">'+over.map(x=>'M'+(x.i+1)+' holds '+x.n).join(', ')+' — house limit is '+MANIFOLD_PER_BOX+'</span>');
   if(mp.laterals){
@@ -3734,9 +3826,23 @@ function mpDraw(){
   const zs=el('mpZoneSel');
   if(zs){
     const z = mp.zoneSel!=null ? LAST_ZONES[mp.zoneSel] : null;
-    zs.innerHTML = z
-      ? `Working on <b>${esc(z.name)}</b> — ${z.gpm.toFixed(1)} GPM. <button type="button" class="lnk" onclick="mpClearZoneSel()">show all</button>`
-      : '';
+    if(!z){ zs.innerHTML=''; }
+    else {
+      const r=routingRO(mp.pageId);
+      const pinIdx=mpPinnedBoxOf(mp.zoneSel);
+      const asg2=mpManifoldAssign();
+      const inIdx=asg2.byManifold.findIndex(l=>l.includes(mp.zoneSel));
+      const where = inIdx>=0
+        ? (pinIdx>=0 ? `in <b>M${inIdx+1}</b> because you put it there`
+                     : `in <b>M${inIdx+1}</b> (nearest box)`)
+        : 'not in a box yet';
+      const boxes=(r.manifolds||[]).map((m,i)=>
+        `<button type="button" class="lnk${i===inIdx?' cur':''}" onclick="mpPinZone(${mp.zoneSel},${i})">M${i+1}</button>`).join(' ');
+      zs.innerHTML = `Working on <b>${esc(z.name)}</b> — ${z.gpm.toFixed(1)} GPM, ${where}.` +
+        (boxes?` Put it in: ${boxes}`:' Place a manifold to assign it.') +
+        (pinIdx>=0?` <button type="button" class="lnk" onclick="mpUnpinZone(${mp.zoneSel})">back to nearest</button>`:'') +
+        ` <button type="button" class="lnk" onclick="mpClearZoneSel()">show all</button>`;
+    }
   }
 
   const svg=el('mpSvg');
@@ -5453,6 +5559,12 @@ function applyWaterSupply(ws){
 function serializeState(){
   const inputs = {};
   GLOBAL_INPUT_IDS.forEach(id=>{ const e = el(id); if(e) inputs[id] = e.value; });
+  // version 7 gives every area a stable `aid` and every valve box an `id`,
+  // and adds `routing[page].pins` — valve-to-box assignments made by hand.
+  // Identity has to be stable because a pin outlives a recompute: array
+  // position does not survive deleting an area or repacking a drip group.
+  // A version-6 blob has neither, so ids are minted on load and the pin map
+  // starts empty, which is exactly the all-automatic behaviour it had.
   // version 6 gives every mainline node a parent (`p`), turning the run
   // from a chain into a tree so it can tee. A version-5 blob's `main` was
   // a chain, so it migrates by giving node i the parent i-1 — the same
@@ -5467,7 +5579,7 @@ function serializeState(){
   // means a hand-sketched area. Wire is derived from the routing and the
   // zone plan, so it is never stored — there is no second copy to drift.
   return {
-    version: 6,
+    version: 7,
     savedAt: new Date().toISOString(),
     inputs,
     waterSupply: readWaterSupply(),
@@ -5488,11 +5600,18 @@ function serializeRouting(){
     const r=routing[id];
     if(!r) return;
     const main=Array.isArray(r.main)?r.main:[], man=Array.isArray(r.manifolds)?r.manifolds:[];
-    if(!r.poc && !main.length && !man.length) return;
+    const hasPins = r.pins && Object.keys(r.pins).length;
+    if(!r.poc && !main.length && !man.length && !hasPins) return;
     out[id]={
       poc: r.poc ? {x:round3(r.poc.x), y:round3(r.poc.y)} : null,
       main: main.map((p,i)=>({x:round3(p.x), y:round3(p.y), p:(p.p==null?i-1:p.p)})),
-      manifolds: man.map(p=>({x:round3(p.x), y:round3(p.y)}))
+      manifolds: man.map(p=>({x:round3(p.x), y:round3(p.y), id:p.id||mintId('m_')})),
+      // Assignments for valves that no longer exist are dropped on save
+      // rather than kept as rot that could later latch onto a new valve
+      // that happens to reuse the key.
+      pins: (()=>{ const live=new Set(LAST_ZONES.map(z=>z.key).filter(Boolean)), out={};
+        Object.keys(r.pins||{}).forEach(k=>{ if(live.has(k)) out[k]=r.pins[k]; });
+        return out; })()
     };
   });
   return out;
@@ -5515,8 +5634,18 @@ function restoreRouting(blob){
       q.p = (parent>=0 && parent<raw.length) ? parent : -1;
       main.push(q);
     });
-    routing[id]={ poc: pt(r.poc), main,
-      manifolds: (Array.isArray(r.manifolds)?r.manifolds:[]).map(pt).filter(Boolean) };
+    const man=[];
+    (Array.isArray(r.manifolds)?r.manifolds:[]).forEach(m=>{
+      const q=pt(m); if(!q) return;
+      q.id = (typeof m.id==='string' && m.id) ? m.id : mintId('m_');
+      man.push(q);
+    });
+    const pins={};
+    if(r.pins && typeof r.pins==='object'){
+      const ids=new Set(man.map(m=>m.id));
+      Object.keys(r.pins).forEach(k=>{ if(ids.has(r.pins[k])) pins[k]=r.pins[k]; });
+    }
+    routing[id]={ poc: pt(r.poc), main, manifolds:man, pins };
   });
 }
 

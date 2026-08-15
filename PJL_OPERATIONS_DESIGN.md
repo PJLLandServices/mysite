@@ -1208,6 +1208,18 @@ plan gives the footage per cable size and a gauge off the longest run to a
 valve, with the assumption it used printed next to it — a starting figure to
 argue with, not a number to trust blindly on someone else's solenoid.
 
+**Which valve goes in which box is a decision, not an accident.** The plan
+starts by putting every valve in its nearest box, which is right most of
+the time and wrong exactly when it matters — two boxes close together, or a
+zone that has to be manifolded with its neighbours for a reason the geometry
+cannot see. So a valve can be assigned: pick it, click the box. The house
+limit of four to a box is a warning, not a wall, because Patrick dabbles
+past it deliberately.
+
+The assignment shows its own cost immediately: put a lawn in the far box and
+its lateral stretches across the site on screen and in the footage. That is
+the point of doing it on a measured drawing rather than in your head.
+
 Rule 3 above applies to this too, and it is why the measured length is
 **shown but not pushed into the bill of materials**. Pipe and wire are still
 priced as an on-site figure, and the master plan says so on screen. Moving
