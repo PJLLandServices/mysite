@@ -1820,6 +1820,20 @@ async function readSitePlanRaster(projectId, pageId) {
 // clicked points. It does NOT accept a client-supplied ftPerPx — see the
 // header of lib/site-plan-calibration.js for why.
 
+// Accept either a typed string ("5.75 m") or a bare number of feet. Returns
+// { feet, input, unit } with feet always authoritative.
+function resolveDistance(typed, numericFeet, label) {
+  if (typed != null && String(typed).trim() !== "") {
+    const parsed = calibration.parseDistance(typed);
+    return { feet: parsed.feet, input: String(typed).trim().slice(0, 40), unit: parsed.unit };
+  }
+  const n = Number(numericFeet);
+  if (!Number.isFinite(n) || n <= 0) {
+    throw new Error(`The ${label} must be a positive distance.`);
+  }
+  return { feet: n, input: null, unit: "ft" };
+}
+
 function sameCalibrationInputs(cal, input) {
   if (!cal || cal.state !== "calibrated") return false;
   const near = (a, b) => Number.isFinite(a) && Number.isFinite(b) && Math.abs(a - b) < 1e-9;
@@ -1839,9 +1853,20 @@ async function setSitePlanCalibration(projectId, pageId, input = {}, { by = "adm
   }
 
   const p1 = input.p1, p2 = input.p2;
-  const knownFt = input.knownFt;
   const verifyIn = input.verify || {};
   const statedScale = input.statedScale ? String(input.statedScale).slice(0, 40) : null;
+
+  // Distances arrive either as a plain number of FEET (the original contract,
+  // still honoured) or as a typed string carrying its own unit — 18' 10",
+  // 5.75 m, 226.4". Parsing happens HERE, in the same tested module that
+  // derives ftPerPx, because a units slip is the one error the second-
+  // dimension verification cannot catch: it scales both measurements equally
+  // and so agrees with itself at 0% residual. The stored knownFt is always
+  // feet; the raw text and unit ride along as provenance so a sheet remembers
+  // it was measured in metres.
+  const known = resolveDistance(input.knownDistance, input.knownFt, "known distance");
+  const expected = resolveDistance(verifyIn.expectedDistance, verifyIn.expectedFt, "expected distance");
+  const knownFt = known.feet;
 
   // Everything below runs inside the write lock, and the ORDER matters.
   //
@@ -1867,8 +1892,12 @@ async function setSitePlanCalibration(projectId, pageId, input = {}, { by = "adm
 
     const existingCal = pages[pageIdx].calibration || {};
 
-    // (1) Idempotent no-op.
-    if (sameCalibrationInputs(existingCal, { p1, p2, knownFt, verify: verifyIn, statedScale })) {
+    // (1) Idempotent no-op. Compared in FEET, so re-saving the same
+    // calibration typed as "5.75 m" instead of "18.8648" is still a no-op —
+    // it is the same measurement, differently spelled.
+    if (sameCalibrationInputs(existingCal, {
+      p1, p2, knownFt, verify: { ...verifyIn, expectedFt: expected.feet }, statedScale
+    })) {
       return { page: pages[pageIdx], changed: false };
     }
 
@@ -1892,7 +1921,7 @@ async function setSitePlanCalibration(projectId, pageId, input = {}, { by = "adm
     // (3) Verification is MANDATORY. One control measurement is not a
     // measurement, so there is no code path that produces a calibrated page
     // without a second independent dimension behind it.
-    if (!verifyIn || verifyIn.p1 == null || verifyIn.p2 == null || verifyIn.expectedFt == null) {
+    if (!verifyIn || verifyIn.p1 == null || verifyIn.p2 == null) {
       throw new Error(
         "Calibration needs a second, independent known dimension to verify against before this sheet can be used."
       );
@@ -1905,7 +1934,7 @@ async function setSitePlanCalibration(projectId, pageId, input = {}, { by = "adm
 
     const { ftPerPx } = calibration.deriveFtPerPx({ p1, p2, knownFt });
     const verdict = calibration.verifyCalibration({
-      ftPerPx, p1: verifyIn.p1, p2: verifyIn.p2, expectedFt: verifyIn.expectedFt
+      ftPerPx, p1: verifyIn.p1, p2: verifyIn.p2, expectedFt: expected.feet
     });
 
     // A warned calibration is usable only with an explicit, recorded
@@ -1941,6 +1970,10 @@ async function setSitePlanCalibration(projectId, pageId, input = {}, { by = "adm
         p1: { x: Number(p1.x), y: Number(p1.y) },
         p2: { x: Number(p2.x), y: Number(p2.y) },
         knownFt: Number(knownFt),
+        // Provenance: what was typed and in which unit. knownFt above stays
+        // the authoritative number; these only record how it was arrived at.
+        knownInput: known.input,
+        knownUnit: known.unit,
         // The authoritative number. Derived here, never accepted from a client.
         ftPerPx,
         rotationDeg: 0,
@@ -1950,7 +1983,9 @@ async function setSitePlanCalibration(projectId, pageId, input = {}, { by = "adm
           state: verdict.state,
           p1: { x: Number(verifyIn.p1.x), y: Number(verifyIn.p1.y) },
           p2: { x: Number(verifyIn.p2.x), y: Number(verifyIn.p2.y) },
-          expectedFt: Number(verifyIn.expectedFt),
+          expectedFt: expected.feet,
+          expectedInput: expected.input,
+          expectedUnit: expected.unit,
           measuredFt: verdict.measuredFt,
           residualPct: verdict.residualPct,
           acknowledgedBy,

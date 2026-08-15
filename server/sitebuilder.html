@@ -204,6 +204,9 @@
   .cal-steps .cal-num{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--muted)}
   .cal-steps .cal-num input{width:96px;padding:6px 8px;border:1px solid var(--line);border-radius:6px;font-size:15px}
   .cal-steps .cal-num input.wide{width:120px}
+  .cal-steps .cal-num input{width:132px}
+  .cal-echo{font-size:11px;font-weight:700;color:var(--green-d);white-space:nowrap}
+  .cal-echo.bad{color:var(--warn)}
   .cal-step{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:var(--muted)}
   .cal-step .dot{width:20px;height:20px;border-radius:50%;background:#eceff1;color:#546e7a;
     display:inline-flex;align-items:center;justify-content:center;font-size:11px;font-weight:700}
@@ -1487,6 +1490,56 @@ const SP_DESIGN_PREFLIGHT_MAX = 480 * 1024;
 
 const round3 = n => Number((Number(n) || 0).toFixed(3));
 
+/* Distance entry. PJL works in feet and inches and everything downstream of
+   calibration is feet — that does not change. But the DRAWING varies: a
+   Canadian commercial tender is usually metric (1:200, dimensions in metres),
+   a residential sheet is imperial. So the box takes whatever the sheet says
+   and converts once.
+
+   This is the PREVIEW parser. The server re-parses the same string with
+   lib/site-plan-calibration.js parseDistance() and its answer is the one
+   that gets stored — the number a bid depends on is still derived in one
+   tested place. Keep the two in step; the shapes accepted are identical.   */
+const SP_FT_PER_M = 3.280839895013123;
+const SP_UNITS = { ft:1, foot:1, feet:1, in:1/12, inch:1/12, inches:1/12,
+  m:SP_FT_PER_M, metre:SP_FT_PER_M, metres:SP_FT_PER_M, meter:SP_FT_PER_M, meters:SP_FT_PER_M,
+  cm:SP_FT_PER_M/100, mm:SP_FT_PER_M/1000 };
+
+function spMixed(t){
+  t = String(t).trim(); if(!t) return null;
+  let m = t.match(/^(\d+(?:\.\d+)?)[\s-]+(\d+)\/(\d+)$/);
+  if(m){ const d=Number(m[3]); return d ? Number(m[1]) + Number(m[2])/d : null; }
+  m = t.match(/^(\d+)\/(\d+)$/);
+  if(m){ const d=Number(m[2]); return d ? Number(m[1])/d : null; }
+  return /^\d+(?:\.\d+)?$/.test(t) ? Number(t) : null;
+}
+
+// Returns feet, or null when the text isn't a distance yet (mid-typing).
+function spParseDistance(input){
+  const raw = String(input == null ? '' : input).trim();
+  if(!raw) return null;
+  const s = raw.replace(/[′’´]/g,"'").replace(/[″”]/g,'"').replace(/\s+/g,' ').trim().toLowerCase();
+  let m = s.match(/^(\d+(?:\.\d+)?)\s*(?:'|ft|feet|foot)\s*(?:-\s*)?(.*?)\s*(?:"|in|inch|inches)?$/);
+  if(m && m[2]){ const inch = spMixed(m[2]); if(inch != null){ const f = Number(m[1]) + inch/12; if(f>0) return f; } }
+  m = s.match(/^(\d+(?:\.\d+)?)\s*(?:'|ft|feet|foot)$/);
+  if(m && Number(m[1])>0) return Number(m[1]);
+  m = s.match(/^(\d+)\s*-\s*(\d+(?:\.\d+)?(?:[\s-]\d+\/\d+)?)$/);
+  if(m){ const inch = spMixed(m[2]); if(inch != null && inch < 12){ const f = Number(m[1]) + inch/12; if(f>0) return f; } }
+  m = s.match(/^(\d+(?:\.\d+)?(?:[\s-]\d+\/\d+)?)\s*(''|"|[a-z]+)$/);
+  if(m){ const v = spMixed(m[1]); const key = (m[2]==='"'||m[2]==="''") ? 'in' : m[2]; const k = SP_UNITS[key];
+    if(v != null && k){ const f = v*k; if(f>0) return f; } }
+  if(/^\d+(?:\.\d+)?$/.test(s) && Number(s)>0) return Number(s);
+  return null;
+}
+
+// Feet as a feet-and-inches label — the units the work is actually in.
+function spFeetInches(feet){
+  const v = Number(feet); if(!isFinite(v)) return '';
+  let ft = Math.floor(Math.abs(v)), inch = (Math.abs(v)-ft)*12;
+  if(Number(inch.toFixed(1)) >= 12){ ft += 1; inch = 0; }
+  return `${v<0?'-':''}${ft}'-${inch.toFixed(1)}"`;
+}
+
 // ---- Page lookup + gating --------------------------------------------
 
 function spPages(){ return (sitePlan && Array.isArray(sitePlan.pages)) ? sitePlan.pages : []; }
@@ -1995,12 +2048,12 @@ function calPreview(){
   const out = { ftPerPx:null, measuredFt:null, residualPct:null, state:null };
   if(cal.pts.length >= 2){
     const d = Math.hypot(cal.pts[1].x-cal.pts[0].x, cal.pts[1].y-cal.pts[0].y);
-    const known = parseFloat(cal.knownFt);
+    const known = spParseDistance(cal.knownFt);
     if(d >= 1 && known > 0) out.ftPerPx = known / d;
   }
   if(out.ftPerPx && cal.pts.length >= 4){
     const d2 = Math.hypot(cal.pts[3].x-cal.pts[2].x, cal.pts[3].y-cal.pts[2].y);
-    const exp = parseFloat(cal.expectedFt);
+    const exp = spParseDistance(cal.expectedFt);
     if(d2 >= 1 && exp > 0){
       out.measuredFt = d2 * out.ftPerPx;
       const r = Math.abs(out.measuredFt - exp) / exp * 100;
@@ -2013,9 +2066,9 @@ function calPreview(){
 
 function calStage(){
   if(cal.pts.length < 2) return 'scale';
-  if(!(parseFloat(cal.knownFt) > 0)) return 'scale-ft';
+  if(!(spParseDistance(cal.knownFt) > 0)) return 'scale-ft';
   if(cal.pts.length < 4) return 'verify';
-  if(!(parseFloat(cal.expectedFt) > 0)) return 'verify-ft';
+  if(!(spParseDistance(cal.expectedFt) > 0)) return 'verify-ft';
   return 'review';
 }
 
@@ -2097,13 +2150,23 @@ function calRenderSteps(){
   const pv = calPreview();
   const step = (n, label, active, done) =>
     `<span class="cal-step${active?' on':''}${done?' done':''}"><span class="dot">${done?'✓':n}</span>${label}</span>`;
-  const scaleDone = cal.pts.length >= 2 && parseFloat(cal.knownFt) > 0;
-  const verifyDone = cal.pts.length >= 4 && parseFloat(cal.expectedFt) > 0;
+  const scaleDone = cal.pts.length >= 2 && spParseDistance(cal.knownFt) > 0;
+  const verifyDone = cal.pts.length >= 4 && spParseDistance(cal.expectedFt) > 0;
+  // Echo what the typed text was understood as, in feet AND feet-inches. On a
+  // metric sheet this is the whole safety net: a units slip is invisible to
+  // the verification (it scales both measurements equally and agrees with
+  // itself), so seeing «5.75 m = 18.865 ft = 18'-10.4"» as you type is what
+  // actually catches it.
+  const echo = (text) => {
+    const f = spParseDistance(text);
+    if(f == null) return String(text||'').trim() ? `<span class="cal-echo bad">not a distance</span>` : `<span class="cal-echo"></span>`;
+    return `<span class="cal-echo">= ${f.toFixed(3)} ft · ${spFeetInches(f)}</span>`;
+  };
   el('calSteps').innerHTML =
     step(1, 'Set scale', !scaleDone, scaleDone) +
-    `<span class="cal-num">true distance <input id="calKnown" type="number" min="0" step="0.01" value="${esc(cal.knownFt)}" placeholder="ft"> ft</span>` +
+    `<span class="cal-num">true distance <input id="calKnown" type="text" autocomplete="off" value="${esc(cal.knownFt)}" placeholder="18' 10&quot; or 5.75 m"> ${echo(cal.knownFt)}</span>` +
     step(2, 'Verify', scaleDone && !verifyDone, verifyDone) +
-    `<span class="cal-num">expected <input id="calExpected" type="number" min="0" step="0.01" value="${esc(cal.expectedFt)}" placeholder="ft"> ft</span>` +
+    `<span class="cal-num">expected <input id="calExpected" type="text" autocomplete="off" value="${esc(cal.expectedFt)}" placeholder="9' or 2.75 m"> ${echo(cal.expectedFt)}</span>` +
     `<span class="cal-num">printed scale <input id="calStated" class="wide" type="text" value="${esc(cal.statedScale)}" placeholder="1:200 (optional)"></span>`;
 
   ['calKnown','calExpected','calStated'].forEach(id => {
@@ -2113,6 +2176,16 @@ function calRenderSteps(){
       if(id === 'calKnown') cal.knownFt = inp.value;
       else if(id === 'calExpected') cal.expectedFt = inp.value;
       else cal.statedScale = inp.value;
+      // Repaint only the echo beside this field, never the whole bar — a
+      // full rebuild would drop the caret mid-word.
+      const ec = inp.parentElement && inp.parentElement.querySelector('.cal-echo');
+      if(ec && id !== 'calStated'){
+        const f = spParseDistance(inp.value);
+        ec.className = 'cal-echo' + (f == null && inp.value.trim() ? ' bad' : '');
+        ec.textContent = f == null
+          ? (inp.value.trim() ? 'not a distance' : '')
+          : `= ${f.toFixed(3)} ft · ${spFeetInches(f)}`;
+      }
       calRenderStatus();
     });
   });
@@ -2137,9 +2210,9 @@ function calRenderStatus(){
 
   const HINTS = {
     'scale': 'Step 1 — click the two ends of a dimension you know on this sheet (a printed dimension string, a property line, a building face). Zoom in first: click precision is the whole game here. Scroll/pinch to zoom, Ctrl-drag to pan.',
-    'scale-ft': 'Now type the TRUE distance between those two points, in feet.',
+    'scale-ft': 'Now type the TRUE distance between those two points. Feet and inches (18\' 10") or metric (5.75 m) — a plain number is read as feet. The green echo shows what it understood.',
     'verify': 'Step 2 — now click a SECOND, independent dimension somewhere else on the sheet. Prefer one on the other axis. This is what catches a mistyped or misread scale, so it is not optional.',
-    'verify-ft': 'Type what that second dimension SHOULD measure, in feet.',
+    'verify-ft': 'Type what that second dimension SHOULD measure. Same units as before — check the green echo agrees with the drawing.',
     'review': ''
   };
   let hintHtml = esc(HINTS[stage] || '');
@@ -2206,10 +2279,13 @@ async function calSave(){
         // Points and the typed distances only. ftPerPx is DERIVED on the
         // server — see lib/site-plan-calibration.js. Anything this client
         // computed above is preview.
+        // Send the RAW typed text. The server re-parses it with the same
+        // rules and stores the feet IT derived, so the unit conversion lives
+        // in one tested place rather than being trusted from the browser.
         body: JSON.stringify({
           p1: cal.pts[0], p2: cal.pts[1],
-          knownFt: parseFloat(cal.knownFt),
-          verify: { p1: cal.pts[2], p2: cal.pts[3], expectedFt: parseFloat(cal.expectedFt) },
+          knownDistance: String(cal.knownFt || '').trim(),
+          verify: { p1: cal.pts[2], p2: cal.pts[3], expectedDistance: String(cal.expectedFt || '').trim() },
           statedScale: cal.statedScale || null,
           acknowledge: cal.acknowledge
         })

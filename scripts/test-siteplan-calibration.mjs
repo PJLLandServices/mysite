@@ -141,6 +141,73 @@ group("1. Calibration math round-trip");
 }
 
 // ══════════════════════════════════════════════════════════════════════
+// 1b. Distance entry — feet, feet-and-inches, and metric
+// ══════════════════════════════════════════════════════════════════════
+//
+// PJL works in feet and inches; everything downstream of calibration is
+// feet. The DRAWING varies — Canadian commercial tenders are usually metric.
+// This is the one conversion in the system, so it is pinned hard: a units
+// slip is the single error class the second-dimension verification CANNOT
+// catch, because it scales both measurements equally and agrees with itself.
+group("1b. Distance entry");
+{
+  const FT = 3.280839895013123;
+  const cases = [
+    ["18.865", 18.865, "ft", "a bare number is decimal FEET — unchanged behaviour"],
+    ["9", 9, "ft", "a bare integer is feet"],
+    ["18 ft", 18, "ft", "explicit ft"],
+    ["18'", 18, "ft", "foot mark"],
+    ["18' 10\"", 18 + 10 / 12, "ft_in", "feet and inches"],
+    ["18'10\"", 18 + 10 / 12, "ft_in", "feet and inches, no space"],
+    ["18-10", 18 + 10 / 12, "ft_in", "construction shorthand 18'-10\""],
+    ["18ft 10in", 18 + 10 / 12, "ft_in", "worded feet and inches"],
+    ["18' 10-1/2\"", 18 + 10.5 / 12, "ft_in", "mixed fraction inches"],
+    ["226.4\"", 226.4 / 12, "in", "inches only"],
+    ["226.4 in", 226.4 / 12, "in", "worded inches"],
+    ["5.75 m", 5.75 * FT, "m", "metres — the McDonald's Dundalk case"],
+    ["5.75m", 5.75 * FT, "m", "metres, no space"],
+    ["2.75 metres", 2.75 * FT, "m", "worded metres"],
+    ["5750 mm", 5.75 * FT, "mm", "millimetres"],
+    ["575 cm", 5.75 * FT, "cm", "centimetres"],
+    ["18\u2032 10\u2033", 18 + 10 / 12, "ft_in", "typographic prime marks from a PDF"]
+  ];
+  for (const [input, wantFt, wantUnit, label] of cases) {
+    const r = cal.parseDistance(input);
+    ok(Math.abs(r.feet - wantFt) < 1e-9 && r.unit === wantUnit,
+       `${JSON.stringify(input)} -> ${wantFt.toFixed(4)} ft [${wantUnit}] — ${label} (got ${r.feet.toFixed(4)} [${r.unit}])`);
+  }
+
+  // The standard Ontario parking stall, which is what identified the
+  // McDonald's sheet as metric in the first place.
+  ok(Math.abs(cal.parseDistance("2.75 m").feet - 9.0223) < 0.0001, "2.75 m is a 9'-0\" stall width");
+  ok(Math.abs(cal.parseDistance("5.75 m").feet - 18.8648) < 0.0001, "5.75 m is an 18'-10\" stall depth");
+
+  // Garbage must throw with a message naming what the box accepts — never
+  // return NaN, which would become a silently wrong bid.
+  for (const bad of ["", "   ", "abc", "0", "-5", "five feet", "18\" 10'", "1/0", "m", "5.75 furlongs"]) {
+    let threw = false;
+    try { cal.parseDistance(bad); } catch { threw = true; }
+    ok(threw, `parseDistance rejects ${JSON.stringify(bad)}`);
+  }
+  let msg = "";
+  try { cal.parseDistance("banana"); } catch (e) { msg = e.message; }
+  ok(/feet and inches/.test(msg) && /5\.75 m/.test(msg) && /read as feet/.test(msg),
+     "the rejection message names every accepted form");
+
+  // Feet-and-inches formatting, including the rounding boundary.
+  eq(cal.formatFeetInches(18.8648), "18'-10.4\"", "18.8648 ft reads as 18'-10.4\"");
+  eq(cal.formatFeetInches(9.0223), "9'-0.3\"", "9.0223 ft reads as 9'-0.3\"");
+  eq(cal.formatFeetInches(0.5), "0'-6.0\"", "half a foot reads as 6 inches");
+  eq(cal.formatFeetInches(11.9975), "12'-0.0\"", "11.9975 ft rounds to 12'-0\", never 11'-12\"");
+
+  // Round-trip: whatever unit it was typed in, the feet are the same number.
+  const spellings = ["18.8648", "18' 10.378\"", "5.75 m", "5750 mm"];
+  const feet = spellings.map((t) => cal.parseDistance(t).feet);
+  ok(Math.max(...feet) - Math.min(...feet) < 0.001,
+     "the same measurement typed four different ways lands within 0.001 ft");
+}
+
+// ══════════════════════════════════════════════════════════════════════
 // 2. Verification residual classification
 // ══════════════════════════════════════════════════════════════════════
 group("2. Verification residual classification");
@@ -249,6 +316,61 @@ group("3. Factor-of-two catch (end to end through the storage layer)");
   );
   eq(acked.page.calibration.verify.state, "warned", "acknowledged: state stays warned (not laundered to passed)");
   eq(acked.page.calibration.verify.acknowledgedBy, "USR-001", "...and who accepted the residual is recorded");
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// 3b. Metric entry reaches the record as FEET
+// ══════════════════════════════════════════════════════════════════════
+group("3b. Metric entry stores feet");
+{
+  fs.writeFileSync(PROJECTS_JSON, "[]\n", "utf8");
+  const proj = await projects.create({ name: "Metric tender", address: "Dundalk ON" });
+  const page = await projects.addSitePlanPage(proj.id, {
+    buffer: PNG, mimeType: "image/png", label: "Metric 1:200",
+    rasterWidthPx: 5000, rasterHeightPx: 3333, renderScale: 6, uploadedBy: "USR-001"
+  });
+  // 5.75 m spans 500 px; 2.75 m spans 500*(2.75/5.75) px at the same scale.
+  const r = await projects.setSitePlanCalibration(proj.id, page.id, {
+    p1: { x: 0, y: 0 }, p2: { x: 500, y: 0 }, knownDistance: "5.75 m",
+    verify: { p1: { x: 0, y: 900 }, p2: { x: 500 * (2.75 / 5.75), y: 900 }, expectedDistance: "2.75 m" }
+  }, { by: "USR-001" });
+  const c = r.page.calibration;
+  ok(Math.abs(c.knownFt - 18.8648) < 0.0001, `metres in, FEET stored (${c.knownFt.toFixed(4)} ft)`);
+  eq(c.knownInput, "5.75 m", "the raw entry is kept as provenance");
+  eq(c.knownUnit, "m", "so is the unit it was typed in");
+  ok(Math.abs(c.verify.expectedFt - 9.0223) < 0.0001, "the verify distance converts too");
+  eq(c.verify.state, "passed", "and the pair verifies clean");
+  ok(Math.abs(c.ftPerPx - 18.8648 / 500) < 1e-6, "ftPerPx derives from the CONVERTED feet");
+
+  // The numeric contract still works — nothing that already worked changed.
+  const page2 = await projects.addSitePlanPage(proj.id, {
+    buffer: PNG, mimeType: "image/png", label: "Imperial",
+    rasterWidthPx: 1000, rasterHeightPx: 1000, renderScale: 1, uploadedBy: "USR-001"
+  });
+  const r2 = await projects.setSitePlanCalibration(proj.id, page2.id, {
+    p1: { x: 0, y: 0 }, p2: { x: 500, y: 0 }, knownFt: 100,
+    verify: { p1: { x: 0, y: 900 }, p2: { x: 200, y: 900 }, expectedFt: 40 }
+  }, { by: "USR-001" });
+  eq(r2.page.calibration.ftPerPx, 0.2, "a numeric knownFt still works exactly as before");
+  eq(r2.page.calibration.knownInput, null, "…and records no typed input");
+
+  // THE POINT OF ALL THIS: verification cannot catch a units slip, because
+  // the error is consistent. Prove it, so nobody later assumes it can.
+  const page3 = await projects.addSitePlanPage(proj.id, {
+    buffer: PNG, mimeType: "image/png", label: "Units trap",
+    rasterWidthPx: 5000, rasterHeightPx: 3333, renderScale: 6, uploadedBy: "USR-001"
+  });
+  const trap = await projects.setSitePlanCalibration(proj.id, page3.id, {
+    p1: { x: 0, y: 0 }, p2: { x: 500, y: 0 }, knownDistance: "5.75",       // metres typed as FEET
+    verify: { p1: { x: 0, y: 900 }, p2: { x: 500 * (2.75 / 5.75), y: 900 }, expectedDistance: "2.75" },
+    statedScale: "1:200"
+  }, { by: "USR-001" });
+  eq(trap.page.calibration.verify.state, "passed",
+     "a units slip PASSES verification — it is consistent, so it agrees with itself");
+  eq(trap.page.calibration.statedScaleCheck.agrees, false,
+     "…and only the printed-scale cross-check catches it");
+  ok(trap.page.calibration.statedScaleCheck.deltaPct > 60,
+     `…at a ~69.5% delta, the metres-as-feet signature (${trap.page.calibration.statedScaleCheck.deltaPct}%)`);
 }
 
 // ══════════════════════════════════════════════════════════════════════

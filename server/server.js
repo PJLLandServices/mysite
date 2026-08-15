@@ -11887,6 +11887,11 @@ async function handleApi(req, res, pathname) {
       const result = await projects.setSitePlanCalibration(projectId, pageId, {
         p1: payload.p1,
         p2: payload.p2,
+        // Distances may arrive as a typed string carrying its own unit
+        // ("18' 10\"", "5.75 m") or as a bare number of feet. Either way the
+        // conversion to feet happens server-side in
+        // lib/site-plan-calibration.js — see the note in setSitePlanCalibration.
+        knownDistance: payload.knownDistance,
         knownFt: payload.knownFt,
         verify: payload.verify,
         statedScale: payload.statedScale,

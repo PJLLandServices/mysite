@@ -120,6 +120,172 @@ function distancePx(a, b) {
   return Math.hypot(b.x - a.x, b.y - a.y);
 }
 
+// ---- Distance entry --------------------------------------------------
+//
+// PJL works in feet and inches, and everything downstream of calibration is
+// feet: polyArea, head spacing, GPM, the BOM, the quote. That does not
+// change and is not negotiable.
+//
+// What DOES vary is the drawing. A Canadian commercial tender is very often
+// metric (1:200, dimension strings in metres), while a residential sheet is
+// imperial. Forcing every sheet through a hand conversion to decimal feet
+// put a calculator between the drawing and the bid — and a units slip is
+// the one error class the second-dimension verification CANNOT catch,
+// because it is consistent: it scales both measurements equally and so
+// agrees with itself at 0% residual.
+//
+// So the entry box accepts whatever the sheet actually says, and converts
+// once, here, in tested code. A bare number is still decimal feet, so every
+// existing habit and every stored calibration keeps working unchanged.
+//
+//   18.865        -> 18.865 ft   (bare number = feet; unchanged behaviour)
+//   18' 10"       -> 18.833 ft
+//   18-10         -> 18.833 ft   (construction shorthand for 18'-10")
+//   18' 10-1/2"   -> 18.875 ft
+//   226.4"        -> 18.867 ft
+//   5.75 m        -> 18.865 ft
+//   5750 mm       -> 18.865 ft
+const FT_PER_M = 3.280839895013123;
+
+const DISTANCE_UNITS = {
+  ft: 1, foot: 1, feet: 1,
+  in: 1 / 12, inch: 1 / 12, inches: 1 / 12,
+  m: FT_PER_M, metre: FT_PER_M, metres: FT_PER_M, meter: FT_PER_M, meters: FT_PER_M,
+  cm: FT_PER_M / 100, centimetre: FT_PER_M / 100, centimetres: FT_PER_M / 100,
+  centimeter: FT_PER_M / 100, centimeters: FT_PER_M / 100,
+  mm: FT_PER_M / 1000, millimetre: FT_PER_M / 1000, millimetres: FT_PER_M / 1000,
+  millimeter: FT_PER_M / 1000, millimeters: FT_PER_M / 1000
+};
+
+// Every spelling collapses to one canonical token, so a record never
+// carries two names for the same unit.
+const CANONICAL_UNIT = {
+  ft: "ft", foot: "ft", feet: "ft",
+  in: "in", inch: "in", inches: "in",
+  m: "m", metre: "m", metres: "m", meter: "m", meters: "m",
+  cm: "cm", centimetre: "cm", centimetres: "cm", centimeter: "cm", centimeters: "cm",
+  mm: "mm", millimetre: "mm", millimetres: "mm", millimeter: "mm", millimeters: "mm"
+};
+
+// "10", "10.5", "10-1/2", "1/2" -> number. Mixed fractions are ordinary in
+// imperial dimension strings, so they are supported rather than rejected.
+function parseMixedNumber(text) {
+  const t = String(text).trim();
+  if (!t) return null;
+  let m = t.match(/^(\d+(?:\.\d+)?)[\s-]+(\d+)\/(\d+)$/);   // 10-1/2, 10 1/2
+  if (m) {
+    const den = Number(m[3]);
+    if (!den) return null;
+    return Number(m[1]) + Number(m[2]) / den;
+  }
+  m = t.match(/^(\d+)\/(\d+)$/);                            // 1/2
+  if (m) {
+    const den = Number(m[2]);
+    if (!den) return null;
+    return Number(m[1]) / den;
+  }
+  m = t.match(/^\d+(?:\.\d+)?$/);
+  return m ? Number(t) : null;
+}
+
+// Returns { feet, unit, normalized } or throws with a message naming what
+// the box will accept. Never returns NaN — a NaN here becomes a silently
+// wrong bid.
+function parseDistance(input) {
+  const raw = String(input == null ? "" : input).trim();
+  if (!raw) throw new Error("Enter a distance.");
+
+  // Normalize the typographic marks a PDF or a Mac keyboard produces, so
+  // 18′ 10″ and 18' 10" are the same thing.
+  const s = raw
+    .replace(/[′’´]/g, "'")
+    .replace(/[″”]/g, '"')
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+
+  // --- feet + inches: 18' 10", 18'10-1/2", 18ft 10in ---
+  let m = s.match(/^(\d+(?:\.\d+)?)\s*(?:'|ft|feet|foot)\s*(?:-\s*)?(.*?)\s*(?:"|in|inch|inches)?$/);
+  if (m && m[2]) {
+    const ft = Number(m[1]);
+    const inches = parseMixedNumber(m[2]);
+    if (inches != null && Number.isFinite(ft)) {
+      const feet = ft + inches / 12;
+      if (feet > 0) return { feet, unit: "ft_in", normalized: `${ft}' ${trimNum(inches)}"` };
+    }
+  }
+
+  // --- feet only: 18', 18 ft ---
+  m = s.match(/^(\d+(?:\.\d+)?)\s*(?:'|ft|feet|foot)$/);
+  if (m) {
+    const feet = Number(m[1]);
+    if (feet > 0) return { feet, unit: "ft", normalized: `${trimNum(feet)} ft` };
+  }
+
+  // --- construction shorthand 18-10 meaning 18'-10" ---
+  // Only when there is no unit marker at all and both parts are integers,
+  // so "18-10" reads as feet-inches but "18.5" stays decimal feet.
+  m = s.match(/^(\d+)\s*-\s*(\d+(?:\.\d+)?(?:[\s-]\d+\/\d+)?)$/);
+  if (m) {
+    const inches = parseMixedNumber(m[2]);
+    if (inches != null && inches < 12) {
+      const feet = Number(m[1]) + inches / 12;
+      if (feet > 0) return { feet, unit: "ft_in", normalized: `${m[1]}' ${trimNum(inches)}"` };
+    }
+  }
+
+  // --- a single value with an explicit unit: 226.4", 5.75 m, 5750 mm ---
+  m = s.match(/^(\d+(?:\.\d+)?(?:[\s-]\d+\/\d+)?)\s*(''|"|[a-z]+)$/);
+  if (m) {
+    const value = parseMixedNumber(m[1]);
+    const key = m[2] === '"' || m[2] === "''" ? "in" : m[2];
+    const factor = DISTANCE_UNITS[key];
+    if (value != null && factor) {
+      const feet = value * factor;
+      if (feet > 0) {
+        // Canonicalize the stored unit so "5.75 metres" and "5.75 m" leave
+        // the same mark on the record — the raw text is kept separately.
+        const unit = CANONICAL_UNIT[key] || key;
+        return { feet, unit, normalized: `${trimNum(value)} ${unit === "in" ? '"' : unit}` };
+      }
+    }
+  }
+
+  // --- bare number = decimal feet. The long-standing behaviour, kept so
+  //     nothing anyone already types changes meaning. ---
+  m = s.match(/^\d+(?:\.\d+)?$/);
+  if (m) {
+    const feet = Number(s);
+    if (feet > 0) return { feet, unit: "ft", normalized: `${trimNum(feet)} ft` };
+  }
+
+  throw new Error(
+    `Couldn't read "${raw}" as a distance. Type feet (18.865), feet and inches ` +
+    `(18' 10" or 18-10), inches (226.4"), or metric (5.75 m, 5750 mm). ` +
+    `A plain number is read as feet.`
+  );
+}
+
+function trimNum(n) {
+  const v = Number(n);
+  if (!Number.isFinite(v)) return String(n);
+  return String(Number(v.toFixed(4)));
+}
+
+// Feet as a feet-and-inches label, for echoing a parsed value back and for
+// reading out a measurement in the units PJL actually works in.
+function formatFeetInches(feet, { inchDecimals = 1 } = {}) {
+  const v = Number(feet);
+  if (!Number.isFinite(v)) return "";
+  const sign = v < 0 ? "-" : "";
+  const abs = Math.abs(v);
+  let ft = Math.floor(abs);
+  let inches = (abs - ft) * 12;
+  // Guard the rounding boundary: 11.97" must read 1'-0", not 0'-12".
+  if (Number(inches.toFixed(inchDecimals)) >= 12) { ft += 1; inches = 0; }
+  return `${sign}${ft}'-${inches.toFixed(inchDecimals)}"`;
+}
+
 // ---- Two-point calibration -------------------------------------------
 //
 // The user clicks two points on a dimension printed on the plan — a stated
@@ -426,6 +592,14 @@ module.exports = {
   DESIGN_PREFLIGHT_MAX_BYTES,
   DESIGN_SERVER_MAX_BYTES,
   COORD_DECIMALS,
+
+  // distance entry
+  FT_PER_M,
+  DISTANCE_UNITS,
+  CANONICAL_UNIT,
+  parseMixedNumber,
+  parseDistance,
+  formatFeetInches,
 
   // math
   round3,

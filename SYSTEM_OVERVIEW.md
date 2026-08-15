@@ -1178,7 +1178,27 @@ is safe, but it is written down rather than discovered.
 
 1. **Set scale.** Click two points on a dimension printed on the sheet — a
    dimension string, a property line, a building face — and type the true
-   distance in feet. `ftPerPx = knownFt / hypot(p2 − p1)`.
+   distance. `ftPerPx = knownFt / hypot(p2 − p1)`.
+
+   **The box takes the drawing's own units.** PJL works in feet and inches
+   and everything downstream of calibration is feet — that does not change —
+   but a Canadian commercial tender is usually metric (1:200, dimensions in
+   metres) while a residential sheet is imperial. So the entry accepts
+   `18.865` (a bare number is still decimal feet), `18' 10"`, `18-10`,
+   `226.4"`, `5.75 m`, `5750 mm`, converting once via
+   `calibration.parseDistance()`. The client parses live only for the echo;
+   the **server re-parses the raw string and stores the feet IT derived**, so
+   the conversion sits in the same tested place as `ftPerPx`. The record keeps
+   `knownFt` (authoritative feet) plus `knownInput` / `knownUnit` as
+   provenance, so a sheet remembers it was measured in metres.
+
+   **A units slip is the one error verification cannot catch.** Typing metric
+   numbers into a feet box scales *both* measurements equally, so the second
+   dimension agrees with the first and reports `passed` at 0% residual. Only
+   the stated-scale cross-check (step 3) sees it — metres-as-feet shows a
+   ~69.5% delta, its signature. That is why the printed scale, though
+   advisory, is worth filling in on any metric sheet, and why the entry
+   echoes `= 18.865 ft · 18'-10.4"` as you type.
 2. **Verify.** Click a *second, independent* known dimension (ideally on
    the other axis) and type what it should measure. A verify point within
    5 px of a calibration point is rejected — re-measuring the same two
