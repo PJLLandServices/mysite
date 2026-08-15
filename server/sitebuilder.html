@@ -775,74 +775,133 @@ function pointInPoly(x,y,poly){
 }
 function validPoly(a){ return a.mode==='custom' && Array.isArray(a.poly) && a.poly.length>=3; }
 function circlePoly(cx,cy,r,n){ n=n||48; const p=[]; for(let i=0;i<n;i++){ const t=i/n*2*Math.PI; p.push({x:cx+r*Math.cos(t), y:cy+r*Math.sin(t)}); } return p; }
-// A polygon is rectilinear if every edge is axis-aligned (L / T / step beds).
-// Is this outline made of axis-aligned edges, within a tolerance?
+// ---- Drip run layout -------------------------------------------------
 //
-// The test is ANGULAR, not absolute, and that matters. It used to ask
-// whether each edge moved less than 0.05 ft off-axis, which is a fixed
-// distance and therefore a much harsher angular standard on a long edge
-// than on a short one. That was fine while every shape was drawn on the
-// 1 ft grid with integer snapping — those edges are exactly axis-aligned.
+// Which way does the dripline run through each part of a bed?
 //
-// Traced shapes are not. A bed traced off a real drawing keeps full
-// sub-foot precision (deliberately — snapping traced vertices to the foot
-// would inject up to 6" of error per point into a tender), so an edge that
-// is plainly meant to be horizontal lands a few tenths off. Under the old
-// absolute test EVERY traced L or T failed, which silently switched the
-// area drip from per-leg runs to one direction across the whole shape.
-// 3 degrees accepts a hand-traced orthogonal bed and still rejects a
-// genuinely angled one.
-function isRectilinear(poly, tolDeg = 3){
-  const tol = Math.tan(tolDeg * Math.PI / 180);
+// NOTE: isRectilinear / rectifyPoly / rectDecompose used to live here. They
+// decided drip run direction by cutting the outline into rectangles, which
+// required every edge to sit on an axis. That holds for a shape drawn on the
+// 1 ft grid and essentially never for a bed traced off a real drawing, so
+// traced L and T beds silently lost their per-leg runs. Replaced by the
+// local-chord layout in dripRunSegments() (see plan()), which works on any
+// outline and needs no such gate. Removed 2026-08-15 rather than left
+// sitting unused — a dead decomposition that looks live is what made the
+// original defect hard to see.
+
+// Decide LOCALLY instead. At any point in the bed the dripline should run
+// whichever way the bed is longer there — that is what an installer does,
+// and it is well defined for any outline. Walk rows across the bed; for each
+// chord of the outline, keep the spans where this direction wins locally.
+// Then do the same for columns. The result follows each leg of an L or T and
+// handles chamfers, curves and diagonals with no special cases.
+//
+// DRAWING ONLY. Square footage, dripline footage and every number that
+// reaches a bid are untouched by any of this.
+const DRIP_MAX_SCANLINES = 400;   // guard against a huge area with fine rows
+
+// Chords of the polygon along one axis at a fixed coordinate.
+// axis 'h' -> horizontal chords at y = at; 'v' -> vertical chords at x = at.
+function polyChords(poly, at, axis){
+  const hits=[];
   for(let i=0;i<poly.length;i++){
     const A=poly[i], B=poly[(i+1)%poly.length];
-    const dx=Math.abs(A.x-B.x), dy=Math.abs(A.y-B.y);
-    if(dx < 1e-9 && dy < 1e-9) continue;                 // duplicate point
-    if(Math.min(dx,dy) > tol * Math.max(dx,dy)) return false;
+    const a = axis==='h' ? A.y : A.x;
+    const b = axis==='h' ? B.y : B.x;
+    if((a>at)!==(b>at)){
+      const t=(at-a)/((b-a)||1e-9);
+      hits.push(axis==='h' ? A.x+(B.x-A.x)*t : A.y+(B.y-A.y)*t);
+    }
   }
-  return true;
+  hits.sort((p,q)=>p-q);
+  const out=[];
+  for(let k=0;k+1<hits.length;k+=2){ if(hits[k+1]-hits[k] > 1e-6) out.push([hits[k], hits[k+1]]); }
+  return out;
 }
 
-// Snap a NEAR-rectilinear outline so its edges are exactly axis-aligned.
-// rectDecompose slices on exact coordinates, so it needs a clean input.
-//
-// Used ONLY to choose drip run directions and to draw the runs. Square
-// footage, perimeter and every number that reaches a bid still come from
-// the true traced outline — this never touches them.
-function rectifyPoly(poly){
-  const xs=poly.map(p=>p.x), ys=poly.map(p=>p.y);
+// Length of the chord through (px,py) along `axis`, or 0 if outside.
+function chordThrough(poly, px, py, axis){
+  const iv=polyChords(poly, axis==='h'?py:px, axis);
+  const v = axis==='h' ? px : py;
+  for(const [a,b] of iv){ if(v>=a-1e-9 && v<=b+1e-9) return b-a; }
+  return 0;
+}
+
+// A convex bed has no legs to follow, so local direction has nothing to add
+// and would just produce a pinwheel of alternating runs. Rectangles, circles
+// and angled quadrilaterals get one direction across the whole bed, the way
+// they would actually be installed. An L or T is not convex, so it still
+// gets the local treatment. Tolerant of the small reflex wobbles a traced
+// outline picks up along a straight edge.
+function isConvexish(poly, tolFrac = 0.02){
+  if(poly.length < 4) return true;
+  let pos=0, neg=0, total=0;
   for(let i=0;i<poly.length;i++){
-    const j=(i+1)%poly.length;
-    const dx=Math.abs(poly[i].x-poly[j].x), dy=Math.abs(poly[i].y-poly[j].y);
-    // A horizontal edge fixes its two vertices' y; a vertical edge fixes
-    // their x. In a rectilinear ring the two alternate, so each vertex
-    // takes its y from one neighbour edge and its x from the other.
-    if(dx >= dy){ const m=(poly[i].y+poly[j].y)/2; ys[i]=m; ys[j]=m; }
-    else        { const m=(poly[i].x+poly[j].x)/2; xs[i]=m; xs[j]=m; }
+    const A=poly[i], B=poly[(i+1)%poly.length], C=poly[(i+2)%poly.length];
+    const cross=(B.x-A.x)*(C.y-B.y)-(B.y-A.y)*(C.x-B.x);
+    total+=Math.abs(cross);
+    if(cross>0) pos+=cross; else neg-=cross;
   }
-  return poly.map((p,i)=>({x:xs[i], y:ys[i]}));
+  if(total<=0) return true;
+  return Math.min(pos,neg)/total <= tolFrac;
 }
-// Decompose a rectilinear polygon into tiling rectangles (horizontal bands,
-// then merge vertically-adjacent bands of equal x/width into maximal rects).
-function rectDecompose(poly){
-  const ys=[...new Set(poly.map(p=>Math.round(p.y*100)/100))].sort((a,b)=>a-b);
-  const bands=[];
-  for(let i=0;i<ys.length-1;i++){
-    const y0=ys[i], y1=ys[i+1], ym=(y0+y1)/2, xs=[];
-    for(let j=0;j<poly.length;j++){ const A=poly[j], B=poly[(j+1)%poly.length];
-      if((A.y>ym)!==(B.y>ym)){ xs.push(A.x+(B.x-A.x)*(ym-A.y)/((B.y-A.y)||1e-9)); }
+
+// Actual dripline run segments, in area-local feet.
+//
+// Each chord is classified ALONG ITS LENGTH, not just at its midpoint. A
+// midpoint-only test collapses on a round bed — only the diameter row
+// survives — because every perpendicular chord through the middle is the
+// full diameter. Sampling along the chord and keeping the maximal winning
+// spans gives every point exactly one direction: full coverage, nothing
+// drawn twice.
+function dripRunSegments(poly, rowFt){
+  if(!Array.isArray(poly) || poly.length<3) return [];
+  const row=Math.max(0.25, rowFt||1);
+  const bb=polyBBox(poly);
+  const segs=[];
+  const convex=isConvexish(poly);
+  const globalDir=(bb.maxX-bb.minX) >= (bb.maxY-bb.minY) ? 'h' : 'v';
+  const scan=(axis)=>{
+    const acrossMin= axis==='h' ? bb.minY : bb.minX;
+    const acrossMax= axis==='h' ? bb.maxY : bb.maxX;
+    const n=Math.min(DRIP_MAX_SCANLINES, Math.max(1, Math.floor((acrossMax-acrossMin)/row)));
+    const d=(acrossMax-acrossMin)/n;
+    for(let i=0;i<n;i++){
+      const at=acrossMin+(i+0.5)*d;
+      for(const [a,b] of polyChords(poly, at, axis)){
+        const steps=Math.min(60, Math.max(2, Math.ceil((b-a)/(row/2))));
+        const st=(b-a)/steps;
+        let spanStart=null;
+        for(let k=0;k<=steps;k++){
+          const v=a+k*st;
+          const px = axis==='h' ? v : at;
+          const py = axis==='h' ? at : v;
+          let wins;
+          if(convex){ wins = (axis===globalDir); }
+          else {
+            const mine = chordThrough(poly,px,py,axis);
+            const other= chordThrough(poly,px,py, axis==='h'?'v':'h');
+            // Ties go to horizontal so a square patch picks one, not both.
+            wins = axis==='h' ? (mine >= other) : (mine > other);
+          }
+          if(wins && spanStart===null) spanStart=v;
+          if((!wins || k===steps) && spanStart!==null){
+            const end = wins ? v : a+(k-1)*st;
+            if(end-spanStart > row*0.4){
+              segs.push(axis==='h'
+                ? {x0:spanStart, y0:at, x1:end, y1:at, dir:'h'}
+                : {x0:at, y0:spanStart, x1:at, y1:end, dir:'v'});
+            }
+            spanStart=null;
+          }
+        }
+      }
     }
-    xs.sort((a,b)=>a-b);
-    for(let k=0;k+1<xs.length;k+=2){ if(xs[k+1]-xs[k]>0.05) bands.push({x:xs[k], y:y0, w:xs[k+1]-xs[k], h:y1-y0}); }
-  }
-  bands.sort((a,b)=>a.x-b.x || a.y-b.y);
-  const merged=[];
-  for(const b of bands){
-    const prev=merged.find(m=>Math.abs(m.x-b.x)<0.05 && Math.abs(m.w-b.w)<0.05 && Math.abs((m.y+m.h)-b.y)<0.05);
-    if(prev) prev.h+=b.h; else merged.push({x:b.x,y:b.y,w:b.w,h:b.h});
-  }
-  return merged;
+  };
+  scan('h'); scan('v');
+  return segs;
 }
+
 function isCircle(a){ return a.mode==='custom' && a.shapeKind==='circle' && a.circle && a.circle.r>0; }
 // Sector (pie slice): centre + arc a0..a0+sweep. 90=quarter, 180=half-disk.
 function sectorPoly(cx,cy,r,a0,sweep,n){
@@ -936,24 +995,22 @@ function plan(a){
     const treesOut = trees.map(t=>({x:t.x-orig.x, y:t.y-orig.y, type:t.type||'ring', dia:t.dia||TREE_RING_DEFAULT_DIA}));
     // Run direction for the area drip (unchanged): long-axis / per-region / arc.
     const forced = (a.dripDir==='h'||a.dripDir==='v');
-    let dripRects=null, dripDir, arcShape=null;
+    let dripRuns=null, dripDir, arcShape=null;
     if(isSector(a) && !forced){
       const c=a.arc; arcShape={cx:c.cx-orig.x, cy:c.cy-orig.y, r:c.r, a0:c.a0, sweep:c.sweep};
       dripDir='arc';
     }
     else if(forced){ dripDir=a.dripDir; }
-    else if(dPoly && isRectilinear(dPoly)){
-      // Rectify first — a traced outline is only NEARLY axis-aligned, and
-      // rectDecompose slices on exact coordinates. Run layout only; the
-      // area itself is still the true traced polygon.
-      dripRects = rectDecompose(rectifyPoly(dPoly)).map(r=>({...r, dir: r.w>=r.h?'h':'v'}));
-      const dirs=new Set(dripRects.map(r=>r.dir));
-      dripDir = dirs.size>1 ? 'mixed' : (dripRects[0]?dripRects[0].dir:(gm.L>=gm.W?'h':'v'));
+    else if(dPoly){
+      // Local run direction — works on ANY traced outline, no tidiness gate.
+      dripRuns = dripRunSegments(dPoly, rowFt);
+      const dirs=new Set(dripRuns.map(r=>r.dir));
+      dripDir = dirs.size>1 ? 'mixed' : (dirs.size===1 ? [...dirs][0] : (gm.L>=gm.W?'h':'v'));
     } else {
       dripDir = gm.L>=gm.W?'h':'v';
     }
     return {family:"drip",kind:"drip",matched:false,L:extL,W:extW,sqft:gm.sqft,heads:[],zones,zoneGPM,
-      product:d,dripLengthFt,areaDripFt,treeTubeFt,emitters,totalGPH,totalGPM,rowFt,dripDir,dripRects,arcShape,
+      product:d,dripLengthFt,areaDripFt,treeTubeFt,emitters,totalGPH,totalGPM,rowFt,dripDir,dripRuns,arcShape,
       treeCount:trees.length,ringTrees,rwsTrees,rwsUnits,treesOut,poly:dPoly};
   }
 
@@ -1149,9 +1206,9 @@ function sketch(a,p){
   }
   const clipAttr = (p.poly && p.poly.length>=3) ? ` clip-path="url(#${clipId})"` : '';
   if(p.kind==='drip'){
-    // Dashed runs = dripline laterals, spaced by row spacing, oriented along
-    // the long axis. Per-region rectangles (dripRects) let each part of an
-    // L/T run its own way; otherwise a single direction across the shape.
+    // Dashed runs = dripline laterals. dripRuns carries real segments, each
+    // already following the local long direction of the bed (dripRunSegments).
+    // The plain-rectangle path below is for an area with no drawn outline.
     const rowPx=(p.rowFt||1)*unit;
     const runLine=(dir,x0,y0,w,h)=>{
       let out='';
@@ -1170,8 +1227,13 @@ function sketch(a,p){
       for(let k=0;k<n;k++){ const ring=(k+0.5)*(A.r/n)*unit;
         s+=`<path d="${arcStroke(scx,scy,ring,A.a0,a1)}" fill="none" stroke="var(--z5)" stroke-width="1" stroke-dasharray="3 2" stroke-opacity="0.7"/>`;
       }
-    } else if(p.dripRects && p.dripRects.length){
-      p.dripRects.forEach(r=>{ s+=runLine(r.dir, ox+r.x*unit, oy+r.y*unit, r.w*unit, r.h*unit); });
+    } else if(p.dripRuns && p.dripRuns.length){
+      // Real run segments, each already following the local long direction.
+      p.dripRuns.forEach(r=>{
+        s+=`<line x1="${(ox+r.x0*unit).toFixed(1)}" y1="${(oy+r.y0*unit).toFixed(1)}" `+
+           `x2="${(ox+r.x1*unit).toFixed(1)}" y2="${(oy+r.y1*unit).toFixed(1)}" `+
+           `stroke="var(--z5)" stroke-width="1" stroke-dasharray="3 2" stroke-opacity="0.7"/>`;
+      });
     } else {
       const dir=(p.dripDir==='v')?'v':'h';
       s+=runLine(dir, ox, oy, dw, dh);
@@ -1337,7 +1399,7 @@ function compute(){
         <table class="spec">
           <tr><td>Dripline</td><td>${esc(p.product.label)}</td></tr>
           <tr><td>Row spacing / emitter</td><td>${a.dripRowIn==null?18:a.dripRowIn}" rows &middot; ${p.product.emitterIn}" emitters</td></tr>
-          <tr><td>Runs</td><td>${p.dripDir==='arc'?'concentric arcs (follow the curve)':(a.dripDir&&a.dripDir!=='auto')?((p.dripDir==='v'?'vertical':'horizontal')+' &middot; forced'):(p.dripDir==='mixed'?`per region (${p.dripRects.length} areas, long axis each)`:(p.dripDir==='v'?'vertical':'horizontal')+' (single run direction — outline is not orthogonal)')}</td></tr>
+          <tr><td>Runs</td><td>${p.dripDir==='arc'?'concentric arcs (follow the curve)':(a.dripDir&&a.dripDir!=='auto')?((p.dripDir==='v'?'vertical':'horizontal')+' &middot; forced'):(p.dripDir==='mixed'?`follows each leg (${(p.dripRuns||[]).length} runs)`:(p.dripDir==='v'?'vertical':'horizontal')+' (single run direction — outline is not orthogonal)')}</td></tr>
           <tr><td>Area drip / tree rings</td><td>${Math.round(p.areaDripFt)} ft area${hasTrees?` &middot; ${Math.round(p.treeTubeFt)} ft rings (${treeBits.join(' + ')})`:''}</td></tr>
           <tr><td>Total tube (+${a.overagePct||0}%)</td><td>${Math.round(p.dripLengthFt)} ft &middot; ~${p.emitters.toLocaleString()} emitters</td></tr>
           ${p.rwsUnits?`<tr><td>RWS units</td><td>${p.rwsUnits} (2 / tree)</td></tr>`:''}
