@@ -178,6 +178,8 @@
   .sp-card .sp-acts{display:flex;gap:6px;flex-wrap:wrap;flex:0 0 auto}
   .sp-card .sp-acts button{width:auto;min-height:34px;padding:6px 11px;font-size:13px}
   .sp-empty{font-size:13px;color:var(--muted);padding:8px 0}
+  .sp-need-project{font-size:13px;line-height:1.5;background:#fff8e1;border:1px solid #ffcc80;
+    color:#7a4a00;border-radius:8px;padding:11px 13px}
   .chip{display:inline-block;padding:2px 9px;border-radius:999px;font-size:11px;font-weight:700;
     letter-spacing:.3px;text-transform:uppercase;vertical-align:middle}
   .chip.ok{background:#e8f5e9;color:#1b5e20;border:1px solid #a5d6a7}
@@ -1524,10 +1526,16 @@ function spDependentAreaNames(pageId){
 function renderSitePlan(){
   const box = el('spList');
   if(!box) return;
-  const btn = el('spUploadBtn');
-  if(btn) btn.disabled = !linkedProject;
+  // The button is NEVER disabled. A disabled button gives no feedback when
+  // you press it — it just reads as broken — and it put the explanation
+  // below out of reach of the only gesture anyone tries. Clicking with no
+  // project attached explains the problem and jumps to the fix instead.
   if(!linkedProject){
-    box.innerHTML = '<div class="sp-empty">Attach this design to a project before uploading a site plan — the sheets are stored on the project record.</div>';
+    box.innerHTML = '<div class="sp-need-project">' +
+      '<b>Attach this design to a project first.</b> Site plans are stored on the project ' +
+      'record, alongside the design itself — so there has to be a project to store them on. ' +
+      'Pick one in the <b>Project</b> box at the top of the page, then come back here.' +
+      '</div>';
     return;
   }
   const pages = spPages();
@@ -1581,7 +1589,23 @@ async function loadPdfJs(){
 const spUp = { doc:null, file:null, pages:[], selected:new Set(), busy:false };
 
 function spOpenUpload(){
-  if(!linkedProject){ alert('Attach this design to a project first — site plans are stored on the project record.'); return; }
+  if(!linkedProject){
+    alert(
+      'Attach this design to a project first.\n\n' +
+      'Site plans are stored on the project record, so there has to be a project to store ' +
+      'them on. Use the Project box at the top of the page — pick a project, then ' +
+      '"Attach & save" — and the upload will be ready.'
+    );
+    // Take them to the control that fixes it rather than leaving them to hunt.
+    const panel = el('projectPanel');
+    if(panel){
+      panel.classList.remove('collapsed');
+      panel.scrollIntoView({behavior:'smooth', block:'center'});
+    }
+    const pick = el('projPick');
+    if(pick) setTimeout(()=>{ try{ pick.focus(); }catch(_){ } }, 400);
+    return;
+  }
   spUp.doc = null; spUp.file = null; spUp.pages = []; spUp.selected.clear(); spUp.busy = false;
   el('spStat').textContent = '';
   el('spAddBtn').hidden = true;
