@@ -969,7 +969,7 @@ function plan(a){
     const mixedRotor = h.family==='rotor' && zoneMixArc.some(x=>x.size>1);
     const outPoly = gm.poly ? gm.poly.map(p=>({x:p.x-orig.x, y:p.y-orig.y})) : null;
     return {family:h.family,kind:h.kind,matched:h.matched,manual:true,L:gm.L,W:gm.W,sqft:gm.sqft,heads,zones:pk.zones,zoneGPM:pk.zoneGPM,
-      arcCount,mixedRotor,body:h.body,series:h.series,noz:h.noz,poly:outPoly,totalGPM:heads.reduce((t,x)=>t+x.gpm,0)};
+      arcCount,mixedRotor,body:h.body,series:h.series,noz:h.noz,poly:outPoly,orig,totalGPM:heads.reduce((t,x)=>t+x.gpm,0)};
   }
 
   // ---- Strip: single run of strip nozzles along the length ----
@@ -984,7 +984,7 @@ function plan(a){
 
   // ---- Rotor / spray: arc-aware head placement ----
   const sp=Math.max(h.r*sf,1);
-  let outPoly=null;
+  let outPoly=null, autoOrig={x:0,y:0};
   if(gm.poly){
     // Custom shape: sample a fine interior grid, then greedily thin to ~sp
     // spacing (farthest-point) so even narrow strips (an L's 5ft leg) get a
@@ -1010,6 +1010,7 @@ function plan(a){
       heads.push({xft:pt.x-bb.minX, yft:pt.y-bb.minY, arc, dir, gpm, r:h.r});
     });
     outPoly = gm.poly.map(p=>({x:p.x-bb.minX, y:p.y-bb.minY}));
+    autoOrig = {x:bb.minX, y:bb.minY};
   } else {
     // Rectangle grid: corners=90, edges=180, interior=360.
     const nx=Math.max(2,Math.round(gm.L/sp)+1), ny=Math.max(2,Math.round(gm.W/sp)+1);
@@ -1029,7 +1030,7 @@ function plan(a){
   const arcCount={90:0,180:0,360:0}; heads.forEach(hd=>arcCount[hd.arc]++);
   const mixedRotor = h.family==="rotor" && !h.matched && zoneMixArc.some(x=>x.size>1);
   return {family:h.family,kind:h.kind,matched:h.matched,L:gm.L,W:gm.W,sqft:gm.sqft,heads,zones:pk.zones,zoneGPM:pk.zoneGPM,
-    arcCount,mixedRotor,body:h.body,series:h.series,noz:h.noz,poly:outPoly,totalGPM:heads.reduce((t,x)=>t+x.gpm,0)};
+    arcCount,mixedRotor,body:h.body,series:h.series,noz:h.noz,poly:outPoly,orig:autoOrig,totalGPM:heads.reduce((t,x)=>t+x.gpm,0)};
 }
 
 function sector(cx,cy,r,a0,a1){
@@ -1057,6 +1058,16 @@ function treeSvg(treesOut, ox, oy, unit){
   return s;
 }
 let sketchSeq=0;
+// The calibrated sheet behind an area's card thumbnail, or null. Separate
+// from planPageForArea() because that one also primes the raster probe for
+// the editors; here we only want a lookup.
+function thumbPlanPage(a){
+  const ref = a && a.planRef && a.planRef.pageId;
+  if(!ref || !linkedProject) return null;
+  const pg = spPage(ref);
+  return (pg && spTraceable(pg)) ? pg : null;
+}
+
 function sketch(a,p){
   const W=320,H=Math.min(240,Math.max(150, 40+ (p.W/Math.max(p.L,0.1))*280)), pad=26;
   const iw=W-pad*2, ih=H-pad*2, ratio=p.L/Math.max(p.W,0.1);
@@ -1069,6 +1080,27 @@ function sketch(a,p){
     const pts=p.poly.map(pt=>`${(ox+pt.x*unit).toFixed(1)},${(oy+pt.y*unit).toFixed(1)}`).join(' ');
     s+=`<defs><clipPath id="${clipId}"><polygon points="${pts}"/></clipPath></defs>`;
     s+=`<polygon points="${pts}" fill="#eef6ef" stroke="#bcd3bf" stroke-width="1.5"/>`;
+    // Site-plan underlay on the card thumbnail, CLIPPED to the traced
+    // outline. Clipping is the whole trick: the sheet is hundreds of feet
+    // across and the card is 320 px, so an unclipped image would bury the
+    // thumbnail in mostly-irrelevant drawing. Clipped, you get exactly the
+    // piece of plan your area sits on.
+    //
+    // Internal only. sketch() is never called by openCustomerForm(), and the
+    // print rule hides everything but #custOverlay while the customer sheet
+    // is open — so this cannot reach a customer-facing surface. Do not wire
+    // sketch() into custSheet without revisiting that.
+    const pgT = thumbPlanPage(a);
+    if(pgT){
+      const f=pgT.calibration.ftPerPx, og=p.orig||{x:0,y:0};
+      const ix=ox+(0-og.x)*unit, iy=oy+(0-og.y)*unit;
+      const iwT=pgT.rasterWidthPx*f*unit, ihT=pgT.rasterHeightPx*f*unit;
+      s+=`<image href="${esc(calRasterUrl(pgT.id))}" x="${ix.toFixed(1)}" y="${iy.toFixed(1)}" `+
+         `width="${iwT.toFixed(1)}" height="${ihT.toFixed(1)}" opacity="0.55" `+
+         `preserveAspectRatio="none" clip-path="url(#${clipId})"/>`;
+      // Re-stroke the outline so the traced edge still reads over the plan.
+      s+=`<polygon points="${pts}" fill="none" stroke="var(--green-d)" stroke-width="1.5"/>`;
+    }
   } else {
     s+=`<rect x="${ox}" y="${oy}" width="${dw}" height="${dh}" rx="3" fill="#eef6ef" stroke="#bcd3bf" stroke-width="1.5"/>`;
   }
