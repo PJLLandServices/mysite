@@ -1179,6 +1179,24 @@ quote sheet, in the proposal PDF, in the portal, or in the `/approve` flow.
 The traced geometry does reach the customer — that is the point. The
 drawing underneath it does not.
 
+**The master plan.** Because every traced area sits in the same calibrated
+frame, the whole job can be shown on one sheet: each area at its true
+position, drip runs and spray arcs drawn in, **coloured by the valve it
+actually runs on**. On top of that goes the supply route — the point of
+connection, the valve manifolds, and the mainline between them — and
+because the sheet is calibrated, the length of that mainline is a
+**measurement off the customer's own drawing**, not the usual "allow 200 ft
+of main". Each manifold shows how many valves land in it, so the boxes can
+be ordered and the trench can be dug from the same picture the design came
+from. Areas that were never traced are listed as off-plan; they are not
+drawn somewhere plausible-looking.
+
+Rule 3 above applies to this too, and it is why the measured length is
+**shown but not pushed into the bill of materials**. Pipe and wire are still
+priced as an on-site figure, and the master plan says so on screen. Moving
+a measurement into the price is a decision Patrick makes, once, on purpose
+— not a side effect of dragging a line on a drawing.
+
 ### 4.4 Project Folder Execution (Brief 2, May 2026)
 
 A Project (`PROJ-YYYY-NNNN`) groups multi-day build work under a single accepted proposal. Brief 1 set up the proposal-to-project handshake; this section covers the execution loop.

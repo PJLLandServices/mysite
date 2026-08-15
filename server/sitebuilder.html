@@ -234,6 +234,12 @@
   .mp-legend .mpz b{font-weight:700}
   .mp-legend .mpz span{color:var(--muted)}
   .mp-off{color:var(--warn);font-weight:600}
+  .mp-bar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+          padding:7px 16px;border-bottom:1px solid var(--line);background:#fbfdfb}
+  .mp-bar .sk-tools button{min-height:32px;padding:5px 10px;font-size:12.5px}
+  .mp-route{font-size:12px;color:var(--muted);text-align:right}
+  .mp-route b{color:var(--ink);font-weight:700}
+  .mp-route .mp-warnpipe{color:var(--warn);font-weight:600}
   .sk-vert{fill:#fff;stroke:var(--green-d);stroke-width:2;cursor:grab}
   .sk-handle{fill:var(--z3);stroke:#fff;stroke-width:2;cursor:grab}
   .sk-center{fill:var(--green-d);stroke:#fff;stroke-width:2;cursor:grab}
@@ -439,9 +445,22 @@
       <span class="pz-ctrl"><button type="button" onclick="mpZoom(0.7)" aria-label="Zoom out">&minus;</button><button type="button" onclick="mpFit()">Fit</button><button type="button" onclick="mpZoom(1.4)" aria-label="Zoom in">+</button></span>
     </div>
     <div class="mp-legend" id="mpLegend"></div>
+    <div class="mp-bar">
+      <div class="sk-tools" id="mpTools">
+        <button type="button" id="mpToolpan" class="on" onclick="mpSetTool('pan')">Move</button>
+        <button type="button" id="mpToolpoc" onclick="mpSetTool('poc')">Point of connection</button>
+        <button type="button" id="mpToolmanifold" onclick="mpSetTool('manifold')">Manifold</button>
+        <button type="button" id="mpToolbend" onclick="mpSetTool('bend')">Mainline bend</button>
+        <button type="button" class="ghost" onclick="mpAutoRoute()">Auto-route</button>
+        <button type="button" class="ghost" onclick="mpUndoPoint()">Undo point</button>
+        <button type="button" class="del" onclick="mpClearRouting()">Clear routing</button>
+      </div>
+      <span class="sk-grow"></span>
+      <span class="mp-route" id="mpRoute"></span>
+    </div>
     <div class="sk-body" id="mpBody"></div>
     <div class="sk-foot">
-      <p class="hint" id="mpHint">Every traced area on this sheet, at its true position, coloured by the valve it runs on. Hold H to flash the drawing off. Scroll/pinch to zoom, Ctrl-drag to pan.</p>
+      <p class="hint" id="mpHint">Every traced area on this sheet, at its true position, coloured by the valve it runs on. Pick a tool, then click the plan to place the <b>point of connection</b>, a <b>manifold</b>, or a <b>mainline bend</b>; drag any marker to move it, Delete to remove the selected one. Mainline length is measured off the calibrated sheet. Hold H to flash the drawing off. Scroll/pinch to zoom, Ctrl-drag to pan.</p>
       <span class="sk-grow"></span>
       <div class="sk-tools">
         <button type="button" onclick="window.print()" class="ghost">Print</button>
@@ -784,7 +803,7 @@ function toggleAreaCollapse(i){
   const card=el('areas').children[i]; if(!card) return;
   if(card.classList.toggle('collapsed')) collapsedZones.add(i); else collapsedZones.delete(i);
 }
-function startEmptyDesign(){ collapsedZones.clear(); areas=[]; render(); }
+function startEmptyDesign(){ collapsedZones.clear(); areas=[]; routing={}; render(); }
 function addArea(){ collapsedZones.clear(); areas.push(newArea()); render(); markDirty(); }
 function delArea(i){ collapsedZones.clear(); areas.splice(i,1); render(); markDirty(); }
 function upd(i,k,v){
@@ -2640,7 +2659,8 @@ async function calSave(){
 
 const mp = { pageId:null, page:null, svgId:'mpSvg', bodyId:'mpBody',
              ppf:1, panX:0, panY:0, _w:0, _h:0,
-             planPage:null, underOpacity:0.45, underHidden:false };
+             planPage:null, underOpacity:0.45, underHidden:false,
+             tool:'pan', sel:null };
 
 // Areas traced onto a given sheet, with their index.
 function mpAreasOn(pageId){
@@ -2660,6 +2680,7 @@ function openMasterPlan(pageId){
   mp.pageId=pageId; mp.page=pg; mp.planPage=pg; mp.underHidden=false;
   skProbeRaster(pg.id);
   pzInit(mp); mp._hooks=MP_HOOKS;
+  mp.tool='pan'; mp.sel=null; mpPaintTools();
   el('mpOverlay').hidden=false;
   const op=el('mpUnderOpacity'); if(op) op.value=String(Math.round(mp.underOpacity*100));
   const pc=el('mpUnderPct'); if(pc) pc.textContent=Math.round(mp.underOpacity*100)+'%';
@@ -2672,9 +2693,17 @@ function mpFit(){
   // corner of a 595 ft sheet should fill the view.
   const on=mpAreasOn(mp.pageId);
   let bb=null;
+  const grow=p=>{ bb = bb ? {minX:Math.min(bb.minX,p.x), minY:Math.min(bb.minY,p.y),
+                             maxX:Math.max(bb.maxX,p.x), maxY:Math.max(bb.maxY,p.y)}
+                          : {minX:p.x, minY:p.y, maxX:p.x, maxY:p.y}; };
   on.forEach(({a})=>{ const b=polyBBox(a.poly);
     bb = bb ? {minX:Math.min(bb.minX,b.minX), minY:Math.min(bb.minY,b.minY),
                maxX:Math.max(bb.maxX,b.maxX), maxY:Math.max(bb.maxY,b.maxY)} : b; });
+  // A meter out at the road is part of the plan — Fit must not crop it off.
+  const rt=routingRO(mp.pageId);
+  if(rt.poc) grow(rt.poc);
+  (rt.main||[]).forEach(grow);
+  (rt.manifolds||[]).forEach(grow);
   const pad = bb ? Math.max(10, (bb.maxX-bb.minX+bb.maxY-bb.minY)*0.04) : 0;
   pzFit(mp, bb ? {minX:bb.minX-pad, minY:bb.minY-pad, maxX:bb.maxX+pad, maxY:bb.maxY+pad}
                : {minX:0,minY:0,maxX:mp.page.rasterWidthPx*mp.page.calibration.ftPerPx,
@@ -2682,9 +2711,289 @@ function mpFit(){
   mpDraw();
 }
 
-const MP_HOOKS = { redraw: mpDraw, hit: ()=>null, tap: ()=>{} };
+const MP_HOOKS = {
+  redraw: mpDraw,
+  hit: t => (t && t.dataset && t.dataset.mph) ? t.dataset.mph : null,
+  dragStart: h => { mp.sel = h; },
+  dragMove: (h, fx, fy) => mpMoveHandle(h, fx, fy),
+  dragEnd: (h, moved) => { if(moved) markDirty(); },
+  tap: (fx, fy) => mpTap(fx, fy)
+};
 
 function mpZoneColour(zi){ return zi>=0 ? `var(${ZC[zi%ZC.length]})` : '#9aa5a0'; }
+
+/* ── Layer 2: point of connection, valve manifolds, mainline ──────────────
+
+   The whole site is already in one coordinate frame (see the header above),
+   so a mainline drawn on this sheet has a REAL length: every vertex is in
+   calibrated feet, not screen pixels. That is the point of this layer —
+   the number on screen is a measurement off the customer's own drawing,
+   not the usual "allow 200 ft of main" guess.
+
+   What is stored (per SHEET, because the coordinates only mean anything in
+   that sheet's frame):
+     poc        the point of connection — meter, or the tee off the service
+     main       the bends AFTER the poc. The full polyline is [poc, ...main],
+                so the poc is the single source of truth for where the run
+                starts and dragging it can never orphan the line.
+     manifolds  valve-box locations. Each one tees off the NEAREST point on
+                the mainline; that tee is measured too.
+
+   Rule 3 of the accuracy contract applies: this measurement does NOT get
+   quietly pushed into the BOM. The material list still prices pipe as an
+   on-site measurement, exactly as it did before, and the readout says so.
+   Wiring measured pipe into the bid is a separate, deliberate step.       */
+
+let routing = {};                       // pageId -> {poc, main[], manifolds[]}
+const EMPTY_ROUTING = Object.freeze({poc:null, main:Object.freeze([]), manifolds:Object.freeze([])});
+function routingRO(pageId){ return (pageId && routing[pageId]) || EMPTY_ROUTING; }
+function routingFor(pageId){
+  if(!pageId) return null;
+  if(!routing[pageId]) routing[pageId] = {poc:null, main:[], manifolds:[]};
+  return routing[pageId];
+}
+
+// Closest point on a polyline, and how far off it the query point sits.
+// Used for the manifold tees, so the tee is always the shortest honest
+// connection rather than a run back to the start of the main.
+function nearestOnPath(path, x, y){
+  if(!path || !path.length) return null;
+  if(path.length===1) return {x:path[0].x, y:path[0].y, dist:Math.hypot(x-path[0].x, y-path[0].y)};
+  let best={x:path[0].x, y:path[0].y, dist:Infinity};
+  for(let i=1;i<path.length;i++){
+    const a=path[i-1], b=path[i];
+    const dx=b.x-a.x, dy=b.y-a.y, L2=dx*dx+dy*dy;
+    let t = L2>0 ? ((x-a.x)*dx + (y-a.y)*dy)/L2 : 0;
+    t = Math.max(0, Math.min(1, t));
+    const px=a.x+dx*t, py=a.y+dy*t, d=Math.hypot(x-px, y-py);
+    if(d<best.dist) best={x:px, y:py, dist:d};
+  }
+  return best;
+}
+
+function mpRouteStats(){
+  const r = routingRO(mp.pageId);
+  const path = r.poc ? [r.poc, ...(r.main||[])] : [];
+  const segs=[];
+  let mainFt=0;
+  for(let i=1;i<path.length;i++){
+    const L=Math.hypot(path[i].x-path[i-1].x, path[i].y-path[i-1].y);
+    mainFt+=L; segs.push({a:path[i-1], b:path[i], ft:L});
+  }
+  let teeFt=0;
+  const tees=(r.manifolds||[]).map(m=>{
+    const n=nearestOnPath(path, m.x, m.y);
+    if(n) teeFt+=n.dist;
+    return n;
+  });
+  return {path, segs, tees, mainFt, teeFt, totalFt:mainFt+teeFt};
+}
+
+// Where each valve's water is actually needed, in sheet feet: the
+// area-weighted centroid of the geometry that valve feeds ON THIS SHEET.
+// A valve whose areas are all off-plan has no anchor and stays unassigned
+// rather than being pinned somewhere arbitrary.
+function mpZoneAnchors(){
+  const out=new Map();
+  LAST_ZONES.forEach((z,zi)=>{
+    let ax=0, ay=0, w=0;
+    (z.parts||[]).forEach(pt=>{
+      const a=areas[pt.areaIdx];
+      if(!a || !validPoly(a)) return;
+      if(!(a.planRef && a.planRef.pageId===mp.pageId)) return;
+      const c=polyCentroid(a.poly), ar=Math.max(polyArea(a.poly), 1);
+      ax+=c.x*ar; ay+=c.y*ar; w+=ar;
+    });
+    if(w>0) out.set(zi, {x:ax/w, y:ay/w});
+  });
+  return out;
+}
+
+// Every valve goes to its nearest manifold. Valves with no geometry on this
+// sheet are reported, not silently dropped — a manifold count that quietly
+// ignored half the system would be worse than no count at all.
+function mpManifoldAssign(){
+  const r=routingRO(mp.pageId);
+  const anchors=mpZoneAnchors();
+  const byManifold=(r.manifolds||[]).map(()=>[]);
+  const unplaced=[];
+  LAST_ZONES.forEach((z,zi)=>{
+    const p=anchors.get(zi);
+    if(!p || !byManifold.length){ unplaced.push(zi); return; }
+    let best=0, bd=Infinity;
+    r.manifolds.forEach((m,i)=>{ const d=Math.hypot(m.x-p.x, m.y-p.y); if(d<bd){ bd=d; best=i; } });
+    byManifold[best].push(zi);
+  });
+  return {byManifold, unplaced, anchors};
+}
+
+/* ---- tools ---- */
+
+function mpSetTool(t){ mp.tool=t; mp.sel=null; mpPaintTools(); mpDraw(); }
+function mpPaintTools(){
+  ['pan','poc','manifold','bend'].forEach(t=>{
+    const b=el('mpTool'+t); if(b) b.classList.toggle('on', mp.tool===t);
+  });
+  const bd=el('mpBody'); if(bd) bd.style.cursor = (mp.tool==='pan') ? '' : 'crosshair';
+}
+
+function mpTap(fx, fy){
+  const r=routingFor(mp.pageId); if(!r) return;
+  if(mp.tool==='poc'){ r.poc={x:fx, y:fy}; mp.sel='poc'; markDirty(); return; }
+  if(mp.tool==='manifold'){ r.manifolds.push({x:fx, y:fy}); mp.sel='m'+(r.manifolds.length-1); markDirty(); return; }
+  if(mp.tool==='bend'){
+    if(!r.poc){ alert('Place the point of connection first — the mainline starts there.'); return; }
+    r.main.push({x:fx, y:fy}); mp.sel='b'+(r.main.length-1); markDirty(); return;
+  }
+  mp.sel=null;                                   // Move tool: tapping empty space deselects
+}
+
+function mpMoveHandle(h, fx, fy){
+  const r=routingFor(mp.pageId); if(!r || !h) return;
+  if(h==='poc'){ if(r.poc){ r.poc.x=fx; r.poc.y=fy; } return; }
+  const i=parseInt(h.slice(1), 10);
+  if(h[0]==='b' && r.main[i]){ r.main[i].x=fx; r.main[i].y=fy; }
+  else if(h[0]==='m' && r.manifolds[i]){ r.manifolds[i].x=fx; r.manifolds[i].y=fy; }
+}
+
+function mpDeleteSel(){
+  const r=routingFor(mp.pageId); if(!r || !mp.sel) return;
+  const h=mp.sel;
+  if(h==='poc'){
+    if(r.main.length && !confirm('Removing the point of connection also drops the '+r.main.length+' mainline bend'+(r.main.length===1?'':'s')+' that hang off it. Remove it?')) return;
+    r.poc=null; r.main=[];
+  } else {
+    const i=parseInt(h.slice(1), 10);
+    if(h[0]==='b') r.main.splice(i,1);
+    else if(h[0]==='m') r.manifolds.splice(i,1);
+  }
+  mp.sel=null; markDirty(); mpDraw();
+}
+
+function mpUndoPoint(){
+  const r=routingFor(mp.pageId); if(!r) return;
+  if(r.main.length) r.main.pop();
+  else if(r.manifolds.length) r.manifolds.pop();
+  else if(r.poc) r.poc=null;
+  else return;
+  mp.sel=null; markDirty(); mpDraw();
+}
+
+function mpClearRouting(){
+  const r=routingFor(mp.pageId); if(!r) return;
+  if(!r.poc && !r.main.length && !r.manifolds.length) return;
+  if(!confirm('Clear the point of connection, every manifold and the whole mainline on this sheet?')) return;
+  r.poc=null; r.main=[]; r.manifolds=[];
+  mp.sel=null; markDirty(); mpDraw();
+}
+
+// Chain the main through the manifolds nearest-first. This is a starting
+// point, not a survey: it runs in straight lines through whatever is in the
+// way, so the bends still have to be dragged onto the real trench route.
+function mpAutoRoute(){
+  const r=routingFor(mp.pageId); if(!r) return;
+  if(!r.poc){ alert('Place the point of connection first — auto-route starts there.'); return; }
+  if(!r.manifolds.length){ alert('Place at least one manifold — auto-route runs the main to the manifolds.'); return; }
+  if(r.main.length && !confirm('Replace the '+r.main.length+' mainline bend'+(r.main.length===1?'':'s')+' you placed with a straight run through the manifolds?')) return;
+  const left=r.manifolds.map((m,i)=>i);
+  const path=[]; let cur=r.poc;
+  while(left.length){
+    let bestK=0, bd=Infinity;
+    left.forEach((idx,k)=>{ const d=Math.hypot(r.manifolds[idx].x-cur.x, r.manifolds[idx].y-cur.y); if(d<bd){ bd=d; bestK=k; } });
+    const idx=left.splice(bestK,1)[0];
+    cur=r.manifolds[idx];
+    path.push({x:cur.x, y:cur.y});
+  }
+  r.main=path; mp.sel=null; markDirty(); mpDraw();
+}
+
+/* ---- drawing ---- */
+
+const MP_LINE='#1f2d3d';
+function mpHalo(x, y, txt, size, anchor){
+  return '<text x="'+x.toFixed(1)+'" y="'+y.toFixed(1)+'" text-anchor="'+(anchor||'middle')+'" font-size="'+size+'" '+
+         'font-weight="700" fill="'+MP_LINE+'" stroke="#fff" stroke-width="3.2" paint-order="stroke" '+
+         'pointer-events="none">'+txt+'</text>';
+}
+
+function mpRoutingSvg(){
+  const r=routingRO(mp.pageId);
+  if(!r.poc && !(r.manifolds||[]).length) return '';
+  const SX=x=>pzSX(mp,x), SY=y=>pzSY(mp,y);
+  const st=mpRouteStats(), asg=mpManifoldAssign();
+  let g='<g>';
+
+  // Manifold tees first, so the main draws over them.
+  (r.manifolds||[]).forEach((m,i)=>{
+    const t=st.tees[i];
+    if(!t || t.dist<0.25) return;
+    g+='<line x1="'+SX(m.x).toFixed(1)+'" y1="'+SY(m.y).toFixed(1)+'" x2="'+SX(t.x).toFixed(1)+'" y2="'+SY(t.y).toFixed(1)+
+       '" stroke="'+MP_LINE+'" stroke-width="2" stroke-dasharray="6 4" stroke-opacity="0.75"/>';
+  });
+
+  // Mainline: white casing under a dark line so it reads over the drawing.
+  if(st.path.length>1){
+    const d=st.path.map((p,i)=>(i?'L':'M')+SX(p.x).toFixed(1)+' '+SY(p.y).toFixed(1)).join(' ');
+    g+='<path d="'+d+'" fill="none" stroke="#fff" stroke-width="7.5" stroke-opacity="0.9" stroke-linejoin="round" stroke-linecap="round"/>';
+    g+='<path d="'+d+'" fill="none" stroke="'+MP_LINE+'" stroke-width="3.4" stroke-linejoin="round" stroke-linecap="round"/>';
+    // Leg lengths, where the leg is long enough on screen to read.
+    st.segs.forEach(sg=>{
+      const px=Math.hypot((sg.b.x-sg.a.x)*mp.ppf, (sg.b.y-sg.a.y)*mp.ppf);
+      if(px<52) return;
+      g+=mpHalo((SX(sg.a.x)+SX(sg.b.x))/2, (SY(sg.a.y)+SY(sg.b.y))/2 - 7, Math.round(sg.ft)+' ft', 11);
+    });
+  }
+
+  // Manifolds.
+  (r.manifolds||[]).forEach((m,i)=>{
+    const X=SX(m.x), Y=SY(m.y), sel=(mp.sel==='m'+i);
+    const n=(asg.byManifold[i]||[]).length;
+    if(sel) g+='<rect x="'+(X-16).toFixed(1)+'" y="'+(Y-13).toFixed(1)+'" width="32" height="26" rx="7" fill="none" stroke="'+MP_LINE+'" stroke-width="1.2" stroke-dasharray="3 3"/>';
+    g+='<rect data-mph="m'+i+'" x="'+(X-12).toFixed(1)+'" y="'+(Y-9).toFixed(1)+'" width="24" height="18" rx="4" '+
+       'fill="#fff" stroke="'+MP_LINE+'" stroke-width="2.4" style="cursor:pointer"/>';
+    for(let k=0;k<3;k++){
+      const vx=X-6+k*6;
+      g+='<line x1="'+vx.toFixed(1)+'" y1="'+(Y-4).toFixed(1)+'" x2="'+vx.toFixed(1)+'" y2="'+(Y+4).toFixed(1)+'" stroke="'+MP_LINE+'" stroke-width="1.6" pointer-events="none"/>';
+    }
+    g+=mpHalo(X, Y+23, 'M'+(i+1)+' · '+n+' valve'+(n===1?'':'s'), 11);
+  });
+
+  // Mainline bends.
+  (r.main||[]).forEach((p,i)=>{
+    const X=SX(p.x), Y=SY(p.y), sel=(mp.sel==='b'+i);
+    g+='<circle data-mph="b'+i+'" cx="'+X.toFixed(1)+'" cy="'+Y.toFixed(1)+'" r="'+(sel?6.5:5)+'" fill="#fff" stroke="'+MP_LINE+
+       '" stroke-width="'+(sel?3:2)+'" style="cursor:pointer"/>';
+  });
+
+  // Point of connection, drawn last so it is never buried.
+  if(r.poc){
+    const X=SX(r.poc.x), Y=SY(r.poc.y), sel=(mp.sel==='poc');
+    if(sel) g+='<circle cx="'+X.toFixed(1)+'" cy="'+Y.toFixed(1)+'" r="14" fill="none" stroke="'+MP_LINE+'" stroke-width="1.2" stroke-dasharray="3 3"/>';
+    g+='<circle data-mph="poc" cx="'+X.toFixed(1)+'" cy="'+Y.toFixed(1)+'" r="9.5" fill="#fff" stroke="'+MP_LINE+'" stroke-width="2.8" style="cursor:pointer"/>';
+    g+='<circle cx="'+X.toFixed(1)+'" cy="'+Y.toFixed(1)+'" r="3.4" fill="'+MP_LINE+'" pointer-events="none"/>';
+    g+=mpHalo(X, Y-15, 'POC', 11);
+  }
+  return g+'</g>';
+}
+
+function mpRouteReadout(){
+  const box=el('mpRoute'); if(!box) return;
+  const r=routingRO(mp.pageId), st=mpRouteStats(), asg=mpManifoldAssign();
+  const nMan=(r.manifolds||[]).length;
+  if(!r.poc && !nMan){
+    box.innerHTML='No supply routed yet — pick <b>Point of connection</b> and click the meter on the plan.';
+    return;
+  }
+  const peak=LAST_ZONES.length ? Math.max(...LAST_ZONES.map(z=>z.gpm)) : 0;
+  const bits=[];
+  if(r.poc && st.mainFt>0) bits.push('Mainline <b>'+pipeForGPM(peak)+'</b> · <b>'+Math.round(st.mainFt)+' ft</b> measured');
+  else if(r.poc) bits.push('POC placed — no mainline run yet');
+  else bits.push('<span class="mp-warnpipe">No point of connection</span>');
+  if(nMan) bits.push('<b>'+nMan+'</b> manifold'+(nMan===1?'':'s')+(st.teeFt>=0.5?' · '+Math.round(st.teeFt)+' ft of tees':''));
+  if(asg.unplaced.length) bits.push('<span class="mp-warnpipe">'+asg.unplaced.length+' valve'+(asg.unplaced.length===1?'':'s')+' not on this sheet</span>');
+  bits.push('measured here, still an on-site figure in the BOM');
+  box.innerHTML=bits.join(' · ');
+}
 
 function mpDraw(){
   const body=el('mpBody');
@@ -2737,6 +3046,7 @@ function mpDraw(){
     });
   });
 
+  g+=mpRoutingSvg();
   g+=scaleBarSvg(mp);
   g+=`</svg>`;
   body.innerHTML=g;
@@ -2756,6 +3066,7 @@ function mpDraw(){
     `${on.length} area${on.length===1?'':'s'} · ${heads} head${heads===1?'':'s'} · ${beds} drip bed${beds===1?'':'s'}` +
     (dripFt?` · ${Math.round(dripFt)} ft dripline`:'') +
     ` · ${used.size} valve${used.size===1?'':'s'}`;
+  mpRouteReadout();
 
   const svg=el('mpSvg');
   svg.addEventListener('pointerdown', e=>pzDown(mp,e));
@@ -4448,21 +4759,58 @@ function applyWaterSupply(ws){
 function serializeState(){
   const inputs = {};
   GLOBAL_INPUT_IDS.forEach(id=>{ const e = el(id); if(e) inputs[id] = e.value; });
-  // version 4 adds `area.valveGroup` — drip beds sharing one valve.
+  // version 5 adds `routing` — the point of connection, valve manifolds and
+  // mainline drawn on a calibrated sheet, keyed by page id.
+  // version 4 added `area.valveGroup` — drip beds sharing one valve.
   // version 3 added `area.planRef = {pageId}` for areas traced over a site
-  // plan. restoreState() still reads a version-2 or -3 blob unchanged: an
-  // absent valveGroup means the bed is on its own valve, exactly as before,
-  // and an absent planRef means a hand-sketched area.
+  // plan. restoreState() still reads a version-2, -3 or -4 blob unchanged:
+  // an absent routing means nothing was piped up, an absent valveGroup means
+  // the bed is on its own valve, exactly as before, and an absent planRef
+  // means a hand-sketched area.
   return {
-    version: 4,
+    version: 5,
     savedAt: new Date().toISOString(),
     inputs,
     waterSupply: readWaterSupply(),
     bomOverrides: JSON.parse(JSON.stringify(bomOverrides)),
     linkedQuoteId: linkedQuoteId || null,
     areas: serializeAreas(),
+    routing: serializeRouting(),
     wcRunOverrides: JSON.parse(JSON.stringify(wcRunOverrides))
   };
+}
+
+// Sheets that were never piped up are dropped rather than saved as empty
+// husks, so a design that has no routing round-trips to the same blob it
+// would have produced before this existed.
+function serializeRouting(){
+  const out={};
+  Object.keys(routing).forEach(id=>{
+    const r=routing[id];
+    if(!r) return;
+    const main=Array.isArray(r.main)?r.main:[], man=Array.isArray(r.manifolds)?r.manifolds:[];
+    if(!r.poc && !main.length && !man.length) return;
+    out[id]={
+      poc: r.poc ? {x:round3(r.poc.x), y:round3(r.poc.y)} : null,
+      main: main.map(p=>({x:round3(p.x), y:round3(p.y)})),
+      manifolds: man.map(p=>({x:round3(p.x), y:round3(p.y)}))
+    };
+  });
+  return out;
+}
+
+function restoreRouting(blob){
+  routing={};
+  if(!blob || typeof blob!=='object') return;
+  const pt=p=>(p && Number.isFinite(+p.x) && Number.isFinite(+p.y)) ? {x:+p.x, y:+p.y} : null;
+  Object.keys(blob).forEach(id=>{
+    const r=blob[id]; if(!r || typeof r!=='object') return;
+    routing[id]={
+      poc: pt(r.poc),
+      main: (Array.isArray(r.main)?r.main:[]).map(pt).filter(Boolean),
+      manifolds: (Array.isArray(r.manifolds)?r.manifolds:[]).map(pt).filter(Boolean)
+    };
+  });
 }
 
 // Round traced coordinates on the way out. Kept here rather than in the
@@ -4495,6 +4843,7 @@ function restoreState(blob){
       ? {edits:blob.bomOverrides.edits||{}, removed:blob.bomOverrides.removed||{}, custom:Array.isArray(blob.bomOverrides.custom)?blob.bomOverrides.custom:[]}
       : {edits:{},removed:{},custom:[]};
     if(Array.isArray(blob.areas)) areas = JSON.parse(JSON.stringify(blob.areas));
+    restoreRouting(blob.routing);
     if(blob.wcRunOverrides && typeof blob.wcRunOverrides === 'object'){
       Object.keys(wcRunOverrides).forEach(k=>delete wcRunOverrides[k]);
       Object.assign(wcRunOverrides, blob.wcRunOverrides);
@@ -4658,7 +5007,7 @@ async function initApp(){
       const a=activeUnderlayEditor();
       if(a && !a.ed.underHidden){ a.ed.underHidden=true; a.redraw(); }
     }
-    if((e.key==='Delete'||e.key==='Backspace')){ if(!el('loOverlay').hidden && lo.sel>=0){ e.preventDefault(); loDeleteSel(); } else if(!el('trOverlay').hidden && tr.sel>=0){ e.preventDefault(); trDeleteSel(); } }
+    if((e.key==='Delete'||e.key==='Backspace')){ if(!el('mpOverlay').hidden && mp.sel){ e.preventDefault(); mpDeleteSel(); } else if(!el('loOverlay').hidden && lo.sel>=0){ e.preventDefault(); loDeleteSel(); } else if(!el('trOverlay').hidden && tr.sel>=0){ e.preventDefault(); trDeleteSel(); } }
   });
   window.addEventListener('keyup', (e)=>{
     if(e.key!=='h' && e.key!=='H') return;

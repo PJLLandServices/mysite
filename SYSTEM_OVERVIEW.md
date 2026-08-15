@@ -237,7 +237,7 @@ Pages with their primary route + purpose:
 | (Materials sub-nav) | — | The materials pages (`material-lists.html`, `quote-requests.html`, `purchase-orders.html`, `suppliers.html`, `parts-suppliers.html`) share a `.suppliers-subnav` strip duplicated by hand. Below 768px the strip collapses into a single `<details>` dropdown ("Materials → <current> ▾"); open/close behaviour lives in `crm-nav.js`. |
 | `purchase-order.html` | `/admin/purchase-order/<id>` | PO detail. Send modal (email + PDF), partial-receive modal, reorder, cancel. |
 | `quote-request.html` | `/admin/quote-request/<id>` | RFQ detail. Draft line trim (qty/remove) + notes with auto-save, send modal (emails the vendor a request for pricing — explicitly not an order), resend, cancel, PDF/CSV downloads. On sent/quoted: the **quoted-price quick-grid** (dollars in, cents stored; partial quotes fine; auto-saves changed entries only) and, once quoted, **Review & apply to catalog** — a confirm modal showing current catalog price → quoted with deltas before any write. |
-| `sitebuilder.html` | `/admin/sitebuilder` | **Sprinkler System Builder.** Internal install-design tool. Water supply → per-area shape (rectangle / known sq ft / drawn polygon, circle, sector, or **traced over a calibrated site plan**) → manual head layout (free arc + reduced throw per head, see below) → tree/drip rings → arc-aware zone packing → BOM → linked **Material List** + `project_proposal` **Quote**, plus a standalone water-cost-by-town estimate. Designs save to `project.systemDesign` (512 KB cap) via `PATCH /api/projects/:id`; every save re-syncs an already-linked DRAFT quote, keeping edited prices and never overwriting a sent one. **Site-plan underlay (Aug 2026):** upload a tender PDF or image, pick sheets, calibrate each against a printed dimension, verify against a second one, then trace areas directly over the drawing. See **Site plan calibration** below. Role gate: `user` (admin OR tech). The only admin page still carrying its CSS and JS inline rather than split into `.css`/`.js` siblings — known, deliberate, and its own separate piece of work. |
+| `sitebuilder.html` | `/admin/sitebuilder` | **Sprinkler System Builder.** Internal install-design tool. Water supply → per-area shape (rectangle / known sq ft / drawn polygon, circle, sector, or **traced over a calibrated site plan**) → manual head layout (free arc + reduced throw per head, see below) → tree/drip rings → arc-aware zone packing → BOM → linked **Material List** + `project_proposal` **Quote**, plus a standalone water-cost-by-town estimate. Designs save to `project.systemDesign` (512 KB cap) via `PATCH /api/projects/:id`; every save re-syncs an already-linked DRAFT quote, keeping edited prices and never overwriting a sent one. **Site-plan underlay (Aug 2026):** upload a tender PDF or image, pick sheets, calibrate each against a printed dimension, verify against a second one, then trace areas directly over the drawing. See **Site plan calibration** below. **Master plan (Aug 2026):** one sheet showing every traced area at its true position, coloured by valve, with the point of connection, valve manifolds and a measured mainline drawn over it. Role gate: `user` (admin OR tech). The only admin page still carrying its CSS and JS inline rather than split into `.css`/`.js` siblings — known, deliberate, and its own separate piece of work. |
 | `chats.html` | `/admin/chats` | AI chat transcripts (booked + abandoned). |
 | `settings.html` | `/admin/settings` | Notification defaults, audit trail, QB connect, exports. |
 | `login.html` | `/login` | **Unified sign-in door** (Jul 2026): staff email + password AND customer magic-link requests on one page. Password-first server logic — staff credentials match → CRM session; every other outcome (blank/wrong password, unknown email, customer email) falls through to the magic-link path and returns one generic "check your email" response (no staff-email enumeration). Button reads "Login Now". Staff credentials live in `users.json`; `auth.json` is the session-secret store only. `/portal/login` 301s here; the emailed `/portal/login/verify` links and permanent `/portal/<token>` URLs are unchanged. |
@@ -1126,12 +1126,38 @@ it — zone names and added/removed zones flow through, **edited prices are
 kept**, and a sent quote is never overwritten. Both the quote and the
 material list require the design to be attached to a project.
 
+**Master plan (Aug 2026).** Every area traced onto a calibrated sheet is
+already in that sheet's world frame — `world_ft = raster_px × ftPerPx`,
+and `openLayout()` seeds head positions from the area's own poly — so the
+whole design can be drawn on one drawing with **no transform at all**. The
+"Master plan" button on a calibrated sheet card opens that view: every
+traced area at its true position, drip runs and head arcs, each coloured
+by the valve it actually runs on (`zoneIndexOf()` → `LAST_ZONES`). Areas
+that were never traced have polys in their own private frame with no
+relationship to the sheet, so they are **listed as off-plan rather than
+drawn somewhere wrong**.
+
+Layer 2 adds the supply route on the same canvas: a **point of connection**,
+**valve manifolds**, and a **mainline** polyline whose length is measured off
+the calibrated sheet rather than guessed. It is stored per sheet in the
+design blob as `routing[pageId] = {poc, main[], manifolds[]}`; the full
+mainline is `[poc, ...main]`, so the POC is the single source of truth for
+where the run starts and dragging it can never orphan the line. Each
+manifold tees off the *nearest point* on that polyline (`nearestOnPath()`),
+and every valve is assigned to its nearest manifold — valves whose geometry
+is not on this sheet are reported, not silently dropped. Mainline size comes
+from `pipeForGPM(peak single-zone GPM)`, the same function the Extras panel
+uses. **The measurement deliberately does not reach the BOM**: the material
+list still prices pipe as an on-site figure, exactly as before, and the
+readout says so on screen. Wiring measured pipe and wire into the bid is a
+separate, deliberate step — see rule 3 under Site plan calibration.
+
 **Three builder-owned durable fields on the project record**, each capped
 independently and each written whole:
 
 | Field | Cap | What it holds |
 |---|---|---|
-| `systemDesign` | **512 KB** | The design blob — supply inputs, per-area spec, computed zones, BOM overrides, `linkedQuoteId`. Opaque to the server. Now at `version: 3`; `version: 2` blobs load byte-identically. |
+| `systemDesign` | **512 KB** | The design blob — supply inputs, per-area spec, computed zones, BOM overrides, `linkedQuoteId`, and (v5) the master-plan `routing` per sheet. Opaque to the server. Now at `version: 5`; `version: 2` / `3` / `4` blobs load unchanged — v3 added `area.planRef`, v4 `area.valveGroup`, v5 `routing`, and an absent field means exactly what the older blob meant. |
 | `waterCostEstimate` | **128 KB** | Standalone water-cost-by-town snapshot; opens as its own project-folder deliverable. |
 | `sitePlan` | **64 KB** | Site-plan **metadata only** — sheets, dimensions, and each sheet's calibration record with full provenance. Rasters live on disk (see Data files). Not writable through the generic `PATCH` (see below). |
 
