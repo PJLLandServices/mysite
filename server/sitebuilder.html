@@ -776,11 +776,51 @@ function pointInPoly(x,y,poly){
 function validPoly(a){ return a.mode==='custom' && Array.isArray(a.poly) && a.poly.length>=3; }
 function circlePoly(cx,cy,r,n){ n=n||48; const p=[]; for(let i=0;i<n;i++){ const t=i/n*2*Math.PI; p.push({x:cx+r*Math.cos(t), y:cy+r*Math.sin(t)}); } return p; }
 // A polygon is rectilinear if every edge is axis-aligned (L / T / step beds).
-function isRectilinear(poly){
-  for(let i=0;i<poly.length;i++){ const A=poly[i],B=poly[(i+1)%poly.length];
-    if(Math.abs(A.x-B.x)>0.05 && Math.abs(A.y-B.y)>0.05) return false;
+// Is this outline made of axis-aligned edges, within a tolerance?
+//
+// The test is ANGULAR, not absolute, and that matters. It used to ask
+// whether each edge moved less than 0.05 ft off-axis, which is a fixed
+// distance and therefore a much harsher angular standard on a long edge
+// than on a short one. That was fine while every shape was drawn on the
+// 1 ft grid with integer snapping — those edges are exactly axis-aligned.
+//
+// Traced shapes are not. A bed traced off a real drawing keeps full
+// sub-foot precision (deliberately — snapping traced vertices to the foot
+// would inject up to 6" of error per point into a tender), so an edge that
+// is plainly meant to be horizontal lands a few tenths off. Under the old
+// absolute test EVERY traced L or T failed, which silently switched the
+// area drip from per-leg runs to one direction across the whole shape.
+// 3 degrees accepts a hand-traced orthogonal bed and still rejects a
+// genuinely angled one.
+function isRectilinear(poly, tolDeg = 3){
+  const tol = Math.tan(tolDeg * Math.PI / 180);
+  for(let i=0;i<poly.length;i++){
+    const A=poly[i], B=poly[(i+1)%poly.length];
+    const dx=Math.abs(A.x-B.x), dy=Math.abs(A.y-B.y);
+    if(dx < 1e-9 && dy < 1e-9) continue;                 // duplicate point
+    if(Math.min(dx,dy) > tol * Math.max(dx,dy)) return false;
   }
   return true;
+}
+
+// Snap a NEAR-rectilinear outline so its edges are exactly axis-aligned.
+// rectDecompose slices on exact coordinates, so it needs a clean input.
+//
+// Used ONLY to choose drip run directions and to draw the runs. Square
+// footage, perimeter and every number that reaches a bid still come from
+// the true traced outline — this never touches them.
+function rectifyPoly(poly){
+  const xs=poly.map(p=>p.x), ys=poly.map(p=>p.y);
+  for(let i=0;i<poly.length;i++){
+    const j=(i+1)%poly.length;
+    const dx=Math.abs(poly[i].x-poly[j].x), dy=Math.abs(poly[i].y-poly[j].y);
+    // A horizontal edge fixes its two vertices' y; a vertical edge fixes
+    // their x. In a rectilinear ring the two alternate, so each vertex
+    // takes its y from one neighbour edge and its x from the other.
+    if(dx >= dy){ const m=(poly[i].y+poly[j].y)/2; ys[i]=m; ys[j]=m; }
+    else        { const m=(poly[i].x+poly[j].x)/2; xs[i]=m; xs[j]=m; }
+  }
+  return poly.map((p,i)=>({x:xs[i], y:ys[i]}));
 }
 // Decompose a rectilinear polygon into tiling rectangles (horizontal bands,
 // then merge vertically-adjacent bands of equal x/width into maximal rects).
@@ -903,7 +943,10 @@ function plan(a){
     }
     else if(forced){ dripDir=a.dripDir; }
     else if(dPoly && isRectilinear(dPoly)){
-      dripRects = rectDecompose(dPoly).map(r=>({...r, dir: r.w>=r.h?'h':'v'}));
+      // Rectify first — a traced outline is only NEARLY axis-aligned, and
+      // rectDecompose slices on exact coordinates. Run layout only; the
+      // area itself is still the true traced polygon.
+      dripRects = rectDecompose(rectifyPoly(dPoly)).map(r=>({...r, dir: r.w>=r.h?'h':'v'}));
       const dirs=new Set(dripRects.map(r=>r.dir));
       dripDir = dirs.size>1 ? 'mixed' : (dripRects[0]?dripRects[0].dir:(gm.L>=gm.W?'h':'v'));
     } else {
@@ -1177,7 +1220,7 @@ function familyFieldsHtml(a,i){
         <div class="fld"><label>Dripline</label><select onchange="upd(${i},'dripProduct',this.value)">${optionList(DRIP_PRODUCTS,a.dripProduct)}</select></div>
         <div class="fld"><label>Row spacing (in)</label><input type="number" min="6" step="2" value="${a.dripRowIn==null?18:a.dripRowIn}" oninput="upd(${i},'dripRowIn',this.value)"></div>
         <div class="fld"><label>Runs</label><select onchange="upd(${i},'dripDir',this.value)">
-          <option value="auto" ${(!a.dripDir||a.dripDir==='auto')?'selected':''}>Auto (long axis)</option>
+          <option value="auto" ${(!a.dripDir||a.dripDir==='auto')?'selected':''}>Auto (follow each leg)</option>
           <option value="h" ${a.dripDir==='h'?'selected':''}>Horizontal</option>
           <option value="v" ${a.dripDir==='v'?'selected':''}>Vertical</option>
         </select></div>
@@ -1294,7 +1337,7 @@ function compute(){
         <table class="spec">
           <tr><td>Dripline</td><td>${esc(p.product.label)}</td></tr>
           <tr><td>Row spacing / emitter</td><td>${a.dripRowIn==null?18:a.dripRowIn}" rows &middot; ${p.product.emitterIn}" emitters</td></tr>
-          <tr><td>Runs</td><td>${p.dripDir==='arc'?'concentric arcs (follow the curve)':(a.dripDir&&a.dripDir!=='auto')?((p.dripDir==='v'?'vertical':'horizontal')+' &middot; forced'):(p.dripDir==='mixed'?`per region (${p.dripRects.length} areas, long axis each)`:(p.dripDir==='v'?'vertical':'horizontal')+' (long axis)')}</td></tr>
+          <tr><td>Runs</td><td>${p.dripDir==='arc'?'concentric arcs (follow the curve)':(a.dripDir&&a.dripDir!=='auto')?((p.dripDir==='v'?'vertical':'horizontal')+' &middot; forced'):(p.dripDir==='mixed'?`per region (${p.dripRects.length} areas, long axis each)`:(p.dripDir==='v'?'vertical':'horizontal')+' (single run direction — outline is not orthogonal)')}</td></tr>
           <tr><td>Area drip / tree rings</td><td>${Math.round(p.areaDripFt)} ft area${hasTrees?` &middot; ${Math.round(p.treeTubeFt)} ft rings (${treeBits.join(' + ')})`:''}</td></tr>
           <tr><td>Total tube (+${a.overagePct||0}%)</td><td>${Math.round(p.dripLengthFt)} ft &middot; ~${p.emitters.toLocaleString()} emitters</td></tr>
           ${p.rwsUnits?`<tr><td>RWS units</td><td>${p.rwsUnits} (2 / tree)</td></tr>`:''}
