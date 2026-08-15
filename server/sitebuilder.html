@@ -230,6 +230,10 @@
   .mp-legend{padding:8px 16px;border-bottom:1px solid var(--line);display:flex;flex-wrap:wrap;
     gap:6px 14px;align-items:center;background:#fbfdfb;font-size:12px;max-height:96px;overflow:auto}
   .mp-legend .mpz{display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+  .mp-legend button.mpz{background:none;border:1px solid transparent;border-radius:7px;
+    padding:3px 8px;min-height:0;font:inherit;font-size:12.5px;color:inherit;cursor:pointer}
+  .mp-legend button.mpz:hover{border-color:var(--line);background:#fff}
+  .mp-legend button.mpz.on{border-color:var(--green);background:var(--green-l)}
   .mp-legend .mpz i{width:11px;height:11px;border-radius:3px;display:inline-block;flex:0 0 auto}
   .mp-legend .mpz b{font-weight:700}
   .mp-legend .mpz span{color:var(--muted)}
@@ -239,6 +243,8 @@
   .mp-bar .sk-tools button{min-height:32px;padding:5px 10px;font-size:12.5px}
   .mp-route{font-size:12px;color:var(--muted);text-align:right}
   .mp-route b{color:var(--ink);font-weight:700}
+  .mp-route .lnk{background:none;border:0;padding:0;min-height:0;font:inherit;
+    color:var(--green);text-decoration:underline;cursor:pointer}
   .mp-route .mp-warnpipe{color:var(--warn);font-weight:600}
   .sk-vert{fill:#fff;stroke:var(--green-d);stroke-width:2;cursor:grab}
   .sk-handle{fill:var(--z3);stroke:#fff;stroke-width:2;cursor:grab}
@@ -458,6 +464,7 @@
       </div>
       <span class="sk-grow"></span>
       <span class="mp-route" id="mpRoute"></span>
+      <span class="mp-route" id="mpZoneSel"></span>
     </div>
     <div class="sk-body" id="mpBody"></div>
     <div class="sk-foot">
@@ -2661,7 +2668,7 @@ async function calSave(){
 const mp = { pageId:null, page:null, svgId:'mpSvg', bodyId:'mpBody',
              ppf:1, panX:0, panY:0, _w:0, _h:0,
              planPage:null, underOpacity:0.45, underHidden:false,
-             tool:'pan', sel:null, laterals:true };
+             tool:'pan', sel:null, laterals:true, zoneSel:null };
 
 // Areas traced onto a given sheet, with their index.
 function mpAreasOn(pageId){
@@ -2681,7 +2688,7 @@ function openMasterPlan(pageId){
   mp.pageId=pageId; mp.page=pg; mp.planPage=pg; mp.underHidden=false;
   skProbeRaster(pg.id);
   pzInit(mp); mp._hooks=MP_HOOKS;
-  mp.tool='pan'; mp.sel=null; mp.laterals=true; mpPaintTools();
+  mp.tool='pan'; mp.sel=null; mp.laterals=true; mp.zoneSel=null; mpPaintTools();
   el('mpOverlay').hidden=false;
   const op=el('mpUnderOpacity'); if(op) op.value=String(Math.round(mp.underOpacity*100));
   const pc=el('mpUnderPct'); if(pc) pc.textContent=Math.round(mp.underOpacity*100)+'%';
@@ -2720,6 +2727,50 @@ const MP_HOOKS = {
   dragEnd: (h, moved) => { if(moved) markDirty(); },
   tap: (fx, fy) => mpTap(fx, fy)
 };
+
+/* ---- working on one valve at a time ----
+   Selecting a valve dims everything else rather than hiding it, so the rest
+   of the site stays as context — you are picking a zone out of a plan, not
+   looking at a different plan. Selection is view state only: it is never
+   serialised and it changes no number. */
+function mpZoneAt(fx, fy){
+  // A head first (they sit on top and are what you point at), then any area
+  // whose outline contains the point.
+  let best=null, bd=Infinity;
+  for(let i=0;i<areas.length;i++){
+    const a=areas[i];
+    if(!a || !validPoly(a) || !(a.planRef && a.planRef.pageId===mp.pageId)) continue;
+    const p=mpPlanFor(a);
+    mpHeadsOf(a,p).forEach(h=>{
+      const d=Math.hypot(h.x-fx, h.y-fy);
+      if(d < Math.max(4, 10/mp.ppf) && d<bd){ bd=d; best=zoneIndexOf(i, h.zone||0); }
+    });
+  }
+  if(best!=null && best>=0) return best;
+  for(let i=areas.length-1;i>=0;i--){
+    const a=areas[i];
+    if(!a || !validPoly(a) || !(a.planRef && a.planRef.pageId===mp.pageId)) continue;
+    if(pointInPoly(fx, fy, a.poly)){
+      const p=mpPlanFor(a);
+      // inside a multi-valve area: whichever of its heads is nearest
+      const hs=mpHeadsOf(a,p);
+      if(hs.length){
+        let hb=hs[0], hd=Infinity;
+        hs.forEach(h=>{ const d=Math.hypot(h.x-fx, h.y-fy); if(d<hd){ hd=d; hb=h; } });
+        const zi=zoneIndexOf(i, hb.zone||0); if(zi>=0) return zi;
+      }
+      const zi=zoneIndexOf(i, 0); if(zi>=0) return zi;
+    }
+  }
+  return null;
+}
+function mpSelectZone(zi){
+  mp.zoneSel = (mp.zoneSel===zi) ? null : zi;
+  mpDraw();
+}
+function mpClearZoneSel(){ if(mp.zoneSel!=null){ mp.zoneSel=null; mpDraw(); } }
+// Opacity multiplier for anything belonging to valve `zi`.
+function mpDim(zi){ return (mp.zoneSel==null || mp.zoneSel===zi) ? 1 : 0.16; }
 
 function mpZoneColour(zi){ return zi>=0 ? `var(${ZC[zi%ZC.length]})` : '#9aa5a0'; }
 
@@ -2847,7 +2898,11 @@ function mpTap(fx, fy){
     if(!r.poc){ alert('Place the point of connection first — the mainline starts there.'); return; }
     r.main.push({x:fx, y:fy}); mp.sel='b'+(r.main.length-1); markDirty(); return;
   }
-  mp.sel=null;                                   // Move tool: tapping empty space deselects
+  // Move tool: tapping picks the valve under the pointer to work on, and
+  // tapping bare ground clears both selections.
+  mp.sel=null;
+  const zi=mpZoneAt(fx, fy);
+  mp.zoneSel = (zi!=null && mp.zoneSel!==zi) ? zi : null;
 }
 
 function mpMoveHandle(h, fx, fy){
@@ -3117,6 +3172,194 @@ function lateralSizeForGPM(gpm){
   return (s === '1/2"') ? LATERAL_MIN_SIZE : s;
 }
 
+/* ── Spine + spurs: how a lateral is actually trenched ────────────────────
+
+   A minimum spanning tree is the SHORTEST pipe, and it is the wrong shape.
+   It runs diagonally across the middle of a lawn, because that is where the
+   short edges are. Nobody trenches that. The pipe goes round the inside of
+   the area and each head takes a short spur off it.
+
+   So: inset the area's own traced outline a couple of feet, project every
+   head onto that loop, and pipe the loop. On a rectangle that IS a run down
+   either side. On an L, a kidney bed or a curved lawn it follows the shape,
+   which is the entire reason the outline was traced off the plan.
+
+   The loop is not piped whole. Connecting a set of points on a cycle needs
+   the cycle MINUS its single largest empty gap, which is exactly what gets
+   drawn — so a lawn with all its heads along one side gets a run down that
+   side, not a pointless lap of the garden.                                */
+
+const SPINE_INSET_FT = 2;
+
+function polySignedArea(poly){
+  let s2=0;
+  for(let i=0;i<poly.length;i++){ const a=poly[i], b=poly[(i+1)%poly.length]; s2+=a.x*b.y-b.x*a.y; }
+  return s2/2;
+}
+
+// Inward offset of a simple polygon. Each vertex moves to the intersection
+// of its two offset edges (the angle-bisector point); near-parallel edges
+// fall back to the averaged normal. If the result folds through itself —
+// which a thin bed will do — the inset is halved and retried, and if there
+// is genuinely no room the outline itself is used. A wrong-side spine would
+// put pipe outside the property, so failing back to the outline is the only
+// honest floor.
+function insetPoly(poly, d){
+  if(!Array.isArray(poly) || poly.length<3 || !(d>0)) return poly;
+  const n=poly.length;
+  // For a counter-clockwise ring (positive signed area) the inside lies to
+  // the LEFT of each edge, so the inward normal is (-ey, ex); clockwise is
+  // the mirror. Getting this backwards silently offsets outward, which the
+  // validation below then rejects — the symptom is a spine that never moves
+  // off the outline, not a spine outside the property, but fix it at source.
+  const inward = polySignedArea(poly) > 0 ? 1 : -1;
+  const build = (dd) => {
+    const lines=[];
+    for(let i=0;i<n;i++){
+      const a=poly[i], b=poly[(i+1)%n];
+      const ex=b.x-a.x, ey=b.y-a.y, L=Math.hypot(ex,ey);
+      if(L<1e-9){ lines.push(null); continue; }
+      const nx=inward*(-ey/L), ny=inward*(ex/L);
+      lines.push({px:a.x+nx*dd, py:a.y+ny*dd, dx:ex/L, dy:ey/L, nx, ny});
+    }
+    const out=[];
+    for(let i=0;i<n;i++){
+      const l1=lines[(i-1+n)%n], l2=lines[i];
+      if(!l1 || !l2){ out.push({x:poly[i].x, y:poly[i].y}); continue; }
+      const det=l1.dx*(-l2.dy) - l1.dy*(-l2.dx);
+      if(Math.abs(det)<1e-9){
+        // Collinear edges: no corner to mitre, just push the vertex in.
+        const ax=(l1.nx+l2.nx)/2, ay=(l1.ny+l2.ny)/2, m=Math.hypot(ax,ay)||1;
+        out.push({x:poly[i].x+ax/m*dd, y:poly[i].y+ay/m*dd});
+      } else {
+        const rx=l2.px-l1.px, ry=l2.py-l1.py;
+        const t=(rx*(-l2.dy) - ry*(-l2.dx))/det;
+        out.push({x:l1.px+l1.dx*t, y:l1.py+l1.dy*t});
+      }
+    }
+    return out;
+  };
+  let dd=d;
+  for(let k=0;k<4;k++){
+    const cand=build(dd);
+    const okInside = cand.every(p=>pointInPoly(p.x,p.y,poly));
+    const sameWind = Math.sign(polySignedArea(cand))===Math.sign(polySignedArea(poly));
+    const shrank   = Math.abs(polySignedArea(cand)) < Math.abs(polySignedArea(poly));
+    if(okInside && sameWind && shrank) return cand;
+    dd/=2;
+  }
+  return poly.map(p=>({x:p.x, y:p.y}));
+}
+
+// Cumulative arc positions round a closed loop, so a point can be described
+// by one number and the arcs between points can be added up.
+function loopMetrics(loop){
+  const n=loop.length, cum=[0];
+  for(let i=0;i<n;i++) cum.push(cum[i]+Math.hypot(loop[(i+1)%n].x-loop[i].x, loop[(i+1)%n].y-loop[i].y));
+  return {cum, total:cum[n]};
+}
+function loopProject(loop, met, x, y){
+  const n=loop.length;
+  let best={s:0, x:loop[0].x, y:loop[0].y, dist:Infinity};
+  for(let i=0;i<n;i++){
+    const a=loop[i], b=loop[(i+1)%n];
+    const dx=b.x-a.x, dy=b.y-a.y, L2=dx*dx+dy*dy;
+    let t = L2>0 ? ((x-a.x)*dx+(y-a.y)*dy)/L2 : 0;
+    t=Math.max(0,Math.min(1,t));
+    const px=a.x+dx*t, py=a.y+dy*t, dist=Math.hypot(x-px, y-py);
+    if(dist<best.dist) best={s:met.cum[i]+Math.sqrt(L2)*t, x:px, y:py, dist};
+  }
+  return best;
+}
+function loopPointAt(loop, met, s){
+  const n=loop.length, T=met.total;
+  let ss=((s%T)+T)%T;
+  for(let i=0;i<n;i++){
+    if(ss<=met.cum[i+1] || i===n-1){
+      const a=loop[i], b=loop[(i+1)%n];
+      const segL=met.cum[i+1]-met.cum[i];
+      const t = segL>1e-9 ? (ss-met.cum[i])/segL : 0;
+      return {x:a.x+(b.x-a.x)*t, y:a.y+(b.y-a.y)*t};
+    }
+  }
+  return {x:loop[0].x, y:loop[0].y};
+}
+// Walk the loop from s0 to s1 the "short way round" the piped arc, emitting
+// the real vertices in between so the drawn pipe follows the outline rather
+// than cutting the corner.
+function loopWalk(loop, met, s0, s1){
+  const n=loop.length, T=met.total;
+  const pts=[loopPointAt(loop,met,s0)];
+  // s0/s1 are UNROLLED positions — s1 can sit past the end of the loop when
+  // the piped arc wraps the seam. Enumerating vertex positions in the same
+  // unrolled space, ascending, is what keeps the walk from doubling back and
+  // billing the same edge twice. s1-s0 never exceeds one lap, so two laps of
+  // candidates is more than enough.
+  const base=Math.floor(s0/T)*T;
+  for(let k=0;k<=1;k++) for(let i=0;i<n;i++){
+    const v=base+k*T+met.cum[i];
+    if(v>s0+1e-9 && v<s1-1e-9) pts.push(loopPointAt(loop,met,v));
+  }
+  pts.push(loopPointAt(loop,met,s1));
+  return pts;
+}
+
+// The pipe for one valve's heads: a spine round the inset outline plus one
+// spur per head. Returns segments already carrying their downstream flow.
+function spineRun(poly, heads, root){
+  const segs=[];
+  if(!heads.length) return segs;
+  const loop=insetPoly(poly, Math.min(SPINE_INSET_FT, Math.sqrt(Math.abs(polySignedArea(poly)))/6));
+  const met=loopMetrics(loop);
+  if(!(met.total>0.5)) return segs;
+
+  const att=heads.map(h=>{ const pr=loopProject(loop,met,h.x,h.y); return {h, s:pr.s, x:pr.x, y:pr.y}; });
+  const feed=loopProject(loop, met, root.x, root.y);
+
+  // Minimal connected arc set on a cycle = the cycle less its largest gap.
+  const marks=[...att.map(a=>a.s), feed.s].sort((a,b)=>a-b);
+  let gapAt=0, gapLen=-1;
+  for(let i=0;i<marks.length;i++){
+    const a=marks[i], b=(i===marks.length-1) ? marks[0]+met.total : marks[i+1];
+    if(b-a>gapLen){ gapLen=b-a; gapAt=i; }
+  }
+  // Path runs from the mark after the gap, forward, to the mark before it.
+  const startS=marks[(gapAt+1)%marks.length];
+  const ordered=[]; 
+  for(let k=0;k<marks.length;k++){
+    let v=marks[(gapAt+1+k)%marks.length];
+    if(v<startS) v+=met.total;
+    ordered.push(v);
+  }
+  // load at each ordered position (feed carries none of its own)
+  const loadAt=ordered.map(v=>{
+    let g=0;
+    att.forEach(a=>{ let s2=a.s; if(s2<startS) s2+=met.total; if(Math.abs(s2-v)<1e-6) g+=a.h.gpm||0; });
+    return g;
+  });
+  let fIdx=0, fs=feed.s; if(fs<startS) fs+=met.total;
+  ordered.forEach((v,i)=>{ if(Math.abs(v-fs)<1e-6) fIdx=i; });
+
+  for(let i=0;i<ordered.length-1;i++){
+    // everything past this segment, on the side away from the feed
+    let gpm=0;
+    if(i>=fIdx) for(let k=i+1;k<ordered.length;k++) gpm+=loadAt[k];
+    else        for(let k=0;k<=i;k++)               gpm+=loadAt[k];
+    const pts=loopWalk(loop, met, ordered[i], ordered[i+1]);
+    for(let k=0;k<pts.length-1;k++)
+      segs.push({a:pts[k], b:pts[k+1], gpm, kind:'spine'});
+  }
+  att.forEach(a=>{
+    const d=Math.hypot(a.h.x-a.x, a.h.y-a.y);
+    if(d>0.05) segs.push({a:{x:a.x,y:a.y}, b:{x:a.h.x,y:a.h.y}, gpm:a.h.gpm||0, kind:'spur'});
+  });
+  // manifold out to where the spine is fed
+  const zoneGpm=heads.reduce((t,h)=>t+(h.gpm||0),0);
+  if(Math.hypot(feed.x-root.x, feed.y-root.y)>0.05)
+    segs.push({a:{x:root.x,y:root.y}, b:{x:feed.x,y:feed.y}, gpm:zoneGpm, kind:'feed'});
+  return segs;
+}
+
 function mpLateralPlan(){
   const r=routingRO(mp.pageId);
   const asg=mpManifoldAssign();
@@ -3129,13 +3372,41 @@ function mpLateralPlan(){
     if(mi>=0) root=r.manifolds[mi];
     else if(!(r.manifolds||[]).length && r.poc) root=r.poc;   // no boxes yet: run off the POC
     if(!root) return;
-    const nodes=mpZoneNodes(zi, root);
-    if(!nodes.length) return;
-    const edges=mstFrom(root, nodes);
+    let segs=[], nodes=0;
+    const taps=[];
+    (z.parts||[]).forEach(pt=>{
+      const a=areas[pt.areaIdx];
+      if(!a || !validPoly(a) || !(a.planRef && a.planRef.pageId===mp.pageId)) return;
+      const p=mpPlanFor(a); if(!p || p.noShape) return;
+      if(p.family==='drip' || p.family==='trees'){
+        // A bed is fed at one point on its edge; the dripline inside it is
+        // already drawn, so there is no spine to run.
+        const ring=[...a.poly, a.poly[0]];
+        const tap=nearestOnPath(ring, root.x, root.y);
+        if(tap) taps.push({x:tap.x, y:tap.y,
+          gpm:(p.zoneGPM && p.zoneGPM[pt.localZone]!=null) ? p.zoneGPM[pt.localZone] : (p.totalGPM||0)});
+        return;
+      }
+      const hs=mpHeadsOf(a,p).filter(h=>(h.zone||0)===pt.localZone);
+      if(!hs.length) return;
+      nodes+=hs.length;
+      segs=segs.concat(spineRun(a.poly, hs, root));
+    });
+    // Several beds on one valve still chain manifold -> bed -> bed, which is
+    // both the shortest and how it is dug.
+    if(taps.length){
+      nodes+=taps.length;
+      mstFrom(root, taps).forEach(e=>segs.push({a:e.a, b:e.b, gpm:e.gpm, kind:'drip'}));
+    }
+    if(!segs.length) return;
     let ft=0;
-    edges.forEach(e=>{ ft+=e.ft; const sz=lateralSizeForGPM(e.gpm); bySize[sz]=(bySize[sz]||0)+e.ft; });
+    segs.forEach(e=>{
+      e.ft=Math.hypot(e.b.x-e.a.x, e.b.y-e.a.y);
+      ft+=e.ft;
+      const sz=lateralSizeForGPM(e.gpm); bySize[sz]=(bySize[sz]||0)+e.ft;
+    });
     totalFt+=ft;
-    runs.push({zi, edges, ft, nodes:nodes.length, rootKey:(mi>=0?'m'+mi:'poc')});
+    runs.push({zi, edges:segs, ft, nodes, rootKey:(mi>=0?'m'+mi:'poc')});
   });
   return {runs, totalFt, bySize};
 }
@@ -3155,7 +3426,7 @@ function mpLateralSvg(){
   lat.runs.forEach(run=>{
     const sibs=perRoot.get(run.rootKey)||[run.zi];
     const off=(sibs.indexOf(run.zi)-(sibs.length-1)/2)*2.8;   // screen px, perpendicular
-    const col=mpZoneColour(run.zi);
+    const col=mpZoneColour(run.zi), dm=mpDim(run.zi);
     run.edges.forEach(e=>{
       // Width tracks the pipe the segment needs, so the trunk reads heavier
       // than the last hop to a single head.
@@ -3167,9 +3438,9 @@ function mpLateralSvg(){
         x1+=nx; y1+=ny; x2+=nx; y2+=ny;
       }
       g+='<line x1="'+x1.toFixed(1)+'" y1="'+y1.toFixed(1)+'" x2="'+x2.toFixed(1)+'" y2="'+y2.toFixed(1)+
-         '" stroke="#fff" stroke-width="'+(w+2.2).toFixed(1)+'" stroke-opacity="0.7" stroke-linecap="round"/>';
+         '" stroke="#fff" stroke-width="'+(w+2.2).toFixed(1)+'" stroke-opacity="'+(0.7*dm).toFixed(3)+'" stroke-linecap="round"/>';
       g+='<line class="mp-lat" x1="'+x1.toFixed(1)+'" y1="'+y1.toFixed(1)+'" x2="'+x2.toFixed(1)+'" y2="'+y2.toFixed(1)+
-         '" stroke="'+col+'" stroke-width="'+w.toFixed(1)+'" stroke-opacity="0.9" stroke-linecap="round"/>';
+         '" stroke="'+col+'" stroke-width="'+w.toFixed(1)+'" stroke-opacity="'+(0.9*dm).toFixed(3)+'" stroke-linecap="round"/>';
     });
   });
   return g+'</g>';
@@ -3197,8 +3468,8 @@ function mpDraw(){
   on.forEach(({a,i})=>{
     const pts=a.poly.map(p=>`${SX(p.x).toFixed(1)},${SY(p.y).toFixed(1)}`).join(' ');
     const zi=zoneIndexOf(i,0);
-    const col=mpZoneColour(zi);
-    g+=`<polygon points="${pts}" fill="${col}" fill-opacity="0.14" stroke="${col}" stroke-width="2"/>`;
+    const col=mpZoneColour(zi), dm=mpDim(zi);
+    g+=`<polygon points="${pts}" fill="${col}" fill-opacity="${(0.14*dm).toFixed(3)}" stroke="${col}" stroke-width="2" stroke-opacity="${dm.toFixed(2)}"/>`;
   });
 
   // ---- drip runs + heads, on top ----
@@ -3206,11 +3477,11 @@ function mpDraw(){
     if(a.family==='drip'){
       beds++;
       const rowFt=Math.max((a.dripRowIn==null?18:a.dripRowIn)/12, 0.25);
-      const zi=zoneIndexOf(i,0), col=mpZoneColour(zi);
+      const zi=zoneIndexOf(i,0), col=mpZoneColour(zi), dm=mpDim(zi);
       const segs=dripRunSegments(a.poly, rowFt);
       segs.forEach(r=>{
         dripFt += Math.hypot(r.x1-r.x0, r.y1-r.y0);
-        g+=`<line x1="${SX(r.x0).toFixed(1)}" y1="${SY(r.y0).toFixed(1)}" x2="${SX(r.x1).toFixed(1)}" y2="${SY(r.y1).toFixed(1)}" stroke="${col}" stroke-width="1.1" stroke-dasharray="4 3" stroke-opacity="0.85"/>`;
+        g+=`<line x1="${SX(r.x0).toFixed(1)}" y1="${SY(r.y0).toFixed(1)}" x2="${SX(r.x1).toFixed(1)}" y2="${SY(r.y1).toFixed(1)}" stroke="${col}" stroke-width="1.1" stroke-dasharray="4 3" stroke-opacity="${(0.85*dm).toFixed(3)}"/>`;
       });
       return;
     }
@@ -3218,14 +3489,15 @@ function mpDraw(){
     hs.forEach(hd=>{
       heads++;
       const zi=zoneIndexOf(i, hd.zone||0), col=mpZoneColour(zi>=0?zi:zoneIndexOf(i,0));
+      const dm=mpDim(zi>=0?zi:zoneIndexOf(i,0));
       const cx=SX(hd.x), cy=SY(hd.y), rr=Math.max((hd.r||1)*U, 3);
       if(hd.arc>=360){
-        g+=`<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${rr.toFixed(1)}" fill="${col}" fill-opacity="0.13" stroke="${col}" stroke-opacity="0.45" stroke-width="0.8"/>`;
+        g+=`<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${rr.toFixed(1)}" fill="${col}" fill-opacity="${(0.13*dm).toFixed(3)}" stroke="${col}" stroke-opacity="${(0.45*dm).toFixed(3)}" stroke-width="0.8"/>`;
       } else {
         const half=(hd.arc*Math.PI/180)/2;
-        g+=`<path d="${sector(cx,cy,rr,(hd.dir||0)-half,(hd.dir||0)+half)}" fill="${col}" fill-opacity="0.15" stroke="${col}" stroke-opacity="0.45" stroke-width="0.8"/>`;
+        g+=`<path d="${sector(cx,cy,rr,(hd.dir||0)-half,(hd.dir||0)+half)}" fill="${col}" fill-opacity="${(0.15*dm).toFixed(3)}" stroke="${col}" stroke-opacity="${(0.45*dm).toFixed(3)}" stroke-width="0.8"/>`;
       }
-      g+=`<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="2.6" fill="${col}" stroke="#fff" stroke-width="0.9"/>`;
+      g+=`<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="2.6" fill="${col}" fill-opacity="${dm.toFixed(2)}" stroke="#fff" stroke-width="0.9" stroke-opacity="${dm.toFixed(2)}"/>`;
     });
   });
 
@@ -3243,7 +3515,8 @@ function mpDraw(){
   el('mpLegend').innerHTML =
     [...used].sort((x,y)=>x-y).map(zi=>{
       const z=LAST_ZONES[zi]; if(!z) return '';
-      return `<span class="mpz"><i style="background:${mpZoneColour(zi)}"></i><b>${esc(z.name)}</b><span>${z.gpm.toFixed(1)} GPM${z.grouped?` · ${z.members.length} beds`:(z.headCount?` · ${z.headCount} heads`:'')}</span></span>`;
+      const on = mp.zoneSel===zi;
+      return `<button type="button" class="mpz${on?' on':''}" onclick="mpSelectZone(${zi})" aria-pressed="${on}"><i style="background:${mpZoneColour(zi)}"></i><b>${esc(z.name)}</b><span>${z.gpm.toFixed(1)} GPM${z.grouped?` · ${z.members.length} beds`:(z.headCount?` · ${z.headCount} heads`:'')}</span></button>`;
     }).join('') +
     (offPlan ? `<span class="mpz mp-off">${offPlan} area${offPlan===1?'':'s'} not traced on this sheet — not shown</span>` : '');
   el('mpStat').innerHTML =
@@ -3251,6 +3524,13 @@ function mpDraw(){
     (dripFt?` · ${Math.round(dripFt)} ft dripline`:'') +
     ` · ${used.size} valve${used.size===1?'':'s'}`;
   mpRouteReadout();
+  const zs=el('mpZoneSel');
+  if(zs){
+    const z = mp.zoneSel!=null ? LAST_ZONES[mp.zoneSel] : null;
+    zs.innerHTML = z
+      ? `Working on <b>${esc(z.name)}</b> — ${z.gpm.toFixed(1)} GPM. <button type="button" class="lnk" onclick="mpClearZoneSel()">show all</button>`
+      : '';
+  }
 
   const svg=el('mpSvg');
   svg.addEventListener('pointerdown', e=>pzDown(mp,e));
@@ -3731,8 +4011,17 @@ function openLayout(i){
   else { lo.outline=[{x:0,y:0},{x:gm.L,y:0},{x:gm.L,y:gm.W},{x:0,y:gm.W}]; }
   lo.centroid=polyCentroid(lo.outline);
   // rPct absent on every head saved before free radius existed -> full throw.
-  lo.heads = (a.layout==='manual' && Array.isArray(a.manualHeads))
-    ? a.manualHeads.map(m=>({x:m.x,y:m.y,noz:m.noz,arc:m.arc,dir:m.dir||0,rPct:loRadiusPct(m)})) : [];
+  if(a.layout==='manual' && Array.isArray(a.manualHeads)){
+    lo.heads = a.manualHeads.map(m=>({x:m.x,y:m.y,noz:m.noz,arc:m.arc,dir:m.dir||0,rPct:loRadiusPct(m)}));
+  } else {
+    // Opening the editor on an auto-laid-out area used to hand back a BLANK
+    // canvas — the automatic placement was discarded and there was nothing
+    // to move, delete or add to. Seed from what the auto layout actually
+    // produced so it becomes a starting point you edit, not a mode you have
+    // to abandon. Nothing is saved onto the area until the editor is saved,
+    // so merely looking does not silently convert the area to manual.
+    lo.heads = loSeedFromAuto(a);
+  }
   lo.curNoz = a.family==='spray'?'s12' : a.family==='mp'?'mp2000':'b40';
   lo.curArc = 180;
   // Heads get placed against the DRAWING, not a bare outline — a bed edge,
@@ -3745,6 +4034,20 @@ function openLayout(i){
   el('loOverlay').hidden=false;
   pzFit(lo, loContentBBox()); loDraw();
 }
+// The auto layout's heads, expressed in the same shape the editor uses.
+// plan.heads are relative to plan.orig; the editor works in the area's own
+// frame (the traced page frame when it is traced), which is what orig is
+// measured in — so adding it back puts them exactly where they are drawn.
+function loSeedFromAuto(a){
+  const p=mpPlanFor(a);
+  if(!p || !Array.isArray(p.heads) || !p.heads.length) return [];
+  const o=p.orig || {x:0, y:0};
+  const nozFor = () => a.family==='spray' ? (a.spraySeries||'s12')
+                     : a.family==='mp'    ? (a.mpNoz||'mp2000')
+                     : (a.rotorNoz||'b40');
+  return p.heads.map(h=>({x:o.x+h.xft, y:o.y+h.yft, noz:nozFor(), arc:h.arc, dir:h.dir||0, rPct:1}));
+}
+
 function buildPalette(){
   const nz=loNozzles(lo.family);
   const uc=el('loUnderCtl'); if(uc) uc.hidden = !lo.planPage;

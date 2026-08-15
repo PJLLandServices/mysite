@@ -58,3 +58,6 @@ worker/.wrangler/
 
 # Design / smoke-test PDF outputs — regenerated on demand
 _design/_smoke/
+
+# Scratch browser-walk harnesses (dotfile .mjs at the repo root)
+/.*.mjs
