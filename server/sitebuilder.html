@@ -355,7 +355,6 @@
     <div id="areas"></div>
     <div class="btnrow">
       <button onclick="addArea()">+ Add area</button>
-      <button class="ghost" onclick="loadDefaults()">Reset to 851 Norsan Ct areas</button>
       <button class="ghost" onclick="openCustomerForm()">Customer quote sheet</button>
       <button class="ghost" onclick="window.print()">Print full (internal)</button>
     </div>
@@ -717,12 +716,13 @@ function loHeadSpec(family, noz, arc){
 function loNozzles(family){ return family==="spray"?SPRAY_SERIES : family==="mp"?MP_NOZZLES : PGP_NOZZLES; }
 function loManualCapable(family){ return family==="rotor"||family==="mp"||family==="spray"; }
 
-const DEFAULT_AREAS = [
-  {name:"Front Yard (lawn)",             mode:"rect", L:60, W:40, sqft:2400, avgW:40, family:"rotor", rotorNoz:"b40"},
-  {name:"Driveway Side Strips",          mode:"rect", L:158,W:4,  sqft:632,  avgW:4,  family:"strip", stripNoz:"sst", stripBody:"b4"},
-  {name:"Backyard By House (grass)",     mode:"rect", L:55, W:44, sqft:2420, avgW:44, family:"rotor", rotorNoz:"b40"},
-  {name:"Backyard Behind House (grass)", mode:"rect", L:70, W:40, sqft:2800, avgW:40, family:"rotor", rotorNoz:"b40"}
-];
+// A NEW DESIGN STARTS EMPTY. It used to be seeded with four areas copied
+// from one real residential job (851 Norsan Ct), which meant every fresh
+// project — including a commercial tender — opened pre-filled with another
+// customer's front yard, side strips and backyard. Those areas are
+// indistinguishable from real ones once saved, so they flowed into the zone
+// count, the BOM and the quote as if they belonged to the job. Removed
+// 2026-08-15. Start from "+ Add area" instead; nothing to notice and delete.
 function newArea(){ return {name:"New Area", mode:"rect", L:40, W:30, sqft:1200, avgW:30, family:"spray", sprayBody:"b4", spraySeries:"s12"}; }
 
 const ZC=["--z1","--z2","--z3","--z4","--z5","--z6","--z7","--z8"];
@@ -751,7 +751,7 @@ function toggleAreaCollapse(i){
   const card=el('areas').children[i]; if(!card) return;
   if(card.classList.toggle('collapsed')) collapsedZones.add(i); else collapsedZones.delete(i);
 }
-function loadDefaults(){ collapsedZones.clear(); areas=JSON.parse(JSON.stringify(DEFAULT_AREAS)); render(); markDirty(); }
+function startEmptyDesign(){ collapsedZones.clear(); areas=[]; render(); }
 function addArea(){ collapsedZones.clear(); areas.push(newArea()); render(); markDirty(); }
 function delArea(i){ collapsedZones.clear(); areas.splice(i,1); render(); markDirty(); }
 function upd(i,k,v){
@@ -1190,6 +1190,10 @@ function familyFieldsHtml(a,i){
 
 function render(){
   const box=el('areas'); box.innerHTML='';
+  if(!areas.length){
+    box.innerHTML='<div class="sp-empty">No areas yet. Click <b>+ Add area</b> below to start — '
+      + 'or upload a site plan above and trace them straight off the drawing.</div>';
+  }
   areas.forEach((a,i)=>{
     ensureArea(a);
     const rect=a.mode==='rect', custom=a.mode==='custom';
@@ -4279,11 +4283,11 @@ async function initApp(){
         }
       }
     } catch(_){ /* fall through to defaults */ }
-    if(!restored) loadDefaults();
+    if(!restored) startEmptyDesign();
     // If PROJECT_ID was bad/unknown, leave linkedProject null → free sketch.
     if(!linkedProject) loadProjectList();
   } else {
-    loadDefaults();
+    startEmptyDesign();
     loadProjectList();
   }
 
