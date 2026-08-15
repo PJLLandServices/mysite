@@ -225,6 +225,8 @@
   .sk-vcount{font-size:12px;color:var(--muted)}
   .sk-vcount.warn{color:#a15c00;font-weight:600}
   .sk-vcount.bad{color:var(--warn);font-weight:700}
+  .lo-edge{fill:#fff;stroke:var(--z3);stroke-width:2;cursor:grab}
+  .lo-rad{fill:var(--z3);stroke:#fff;stroke-width:2;cursor:grab}
   .sk-vert{fill:#fff;stroke:var(--green-d);stroke-width:2;cursor:grab}
   .sk-handle{fill:var(--z3);stroke:#fff;stroke-width:2;cursor:grab}
   .sk-center{fill:var(--green-d);stroke:#fff;stroke-width:2;cursor:grab}
@@ -943,11 +945,27 @@ function plan(a){
     const orig = gm.poly ? {x:gm.bb.minX, y:gm.bb.minY} : {x:0, y:0};
     a.manualHeads.forEach(mh=>{
       const spec=loHeadSpec(h.family, mh.noz, mh.arc);
-      heads.push({xft:mh.x-orig.x, yft:mh.y-orig.y, arc:mh.arc, dir:mh.dir||0, gpm:spec.gpm, r:spec.r});
+      // Radius may be reduced per head; flow deliberately is NOT (see the
+      // flow-model note by LO_MIN_ARC — budgeting full flow is the
+      // conservative side of a valve-sizing decision).
+      const pct=loRadiusPct(mh);
+      heads.push({xft:mh.x-orig.x, yft:mh.y-orig.y, arc:mh.arc, dir:mh.dir||0, gpm:spec.gpm, r:spec.r*pct});
     });
     const pk=packZones(heads,ceiling);
-    const zoneMixArc=Array.from({length:pk.zones},()=>new Set()); heads.forEach(hd=>zoneMixArc[hd.zone].add(hd.arc));
-    const arcCount={90:0,180:0,270:0,360:0}; heads.forEach(hd=>arcCount[hd.arc]=(arcCount[hd.arc]||0)+1);
+    // Arcs are free-form now, so bucket before counting. The buckets are the
+    // SAME thresholds the BOM uses to pick a nozzle SKU below, which is what
+    // keeps a 137-degree head from falling out of the parts list and out of
+    // the material cost. arcCount is read by the zone legend and by
+    // areaMaterialCents; an unbucketed key would be silently ignored by both.
+    const arcBucket = (deg) => deg<=90 ? 90 : deg<=180 ? 180 : deg<=270 ? 270 : 360;
+    const arcCount={90:0,180:0,270:0,360:0};
+    heads.forEach(hd=>{ arcCount[arcBucket(hd.arc)]++; });
+    // Mixing arcs on a gear-rotor zone is a genuine precip mismatch (a PGP
+    // flows the same GPM at any arc, so a narrow head lays down far more
+    // water per sq ft). Compare to the nearest 15 degrees so a free arc of
+    // 179 vs 180 doesn't cry wolf while 90 vs 180 still does.
+    const zoneMixArc=Array.from({length:pk.zones},()=>new Set());
+    heads.forEach(hd=>zoneMixArc[hd.zone].add(Math.round(hd.arc/15)*15));
     const mixedRotor = h.family==='rotor' && zoneMixArc.some(x=>x.size>1);
     const outPoly = gm.poly ? gm.poly.map(p=>({x:p.x-orig.x, y:p.y-orig.y})) : null;
     return {family:h.family,kind:h.kind,matched:h.matched,manual:true,L:gm.L,W:gm.W,sqft:gm.sqft,heads,zones:pk.zones,zoneGPM:pk.zoneGPM,
@@ -1280,7 +1298,11 @@ function compute(){
     }
 
     const n=p.heads.length;
-    const arc=`${p.arcCount[90]||0}x90 - ${p.arcCount[180]||0}x180`+((p.arcCount[270])?` - ${p.arcCount[270]}x270`:'')+` - ${p.arcCount[360]||0}x360`;
+    // Buckets, not exact angles — free arcs are grouped by the nozzle they
+    // need, so the label matches what actually gets ordered.
+    const freeArcs = p.manual ? (p.heads||[]).filter(hd=>![90,180,270,360].includes(hd.arc)).length : 0;
+    const arc=`${p.arcCount[90]||0}x90 - ${p.arcCount[180]||0}x180`+((p.arcCount[270])?` - ${p.arcCount[270]}x270`:'')+` - ${p.arcCount[360]||0}x360`
+      + (freeArcs ? ` (${freeArcs} set to a custom arc)` : '');
     const flowNote=(h.matched?'matched precip (arc-scaled flow)':'fixed GPM at any arc')+(p.manual?' &middot; hand-placed layout':'');
     const zoneGpmStr=p.zoneGPM.map(g=>g.toFixed(1)).join(' / ');
     const flag=p.mixedRotor?`<div class="flag">! Zone mixes arcs on gear rotors (not matched-precip). Group same-arc heads where you can, or bump the run time for the 90 heads on Hydrawise.</div>`:'';
@@ -2731,6 +2753,48 @@ const SK_HOOKS = {
 /* ════════════════ Manual head-layout editor ════════════════ */
 
 const LO_ARCS = [{deg:90,label:'Q'},{deg:180,label:'H'},{deg:270,label:'T'},{deg:360,label:'F'}];
+
+/* Free arc + radius on a hand-placed head.
+   The Q/H/T/F buttons stay as fast presets; the two edge handles set any
+   arc between them, and a radius handle pulls the throw in the way a
+   radius-reduction screw does on a real head.
+
+   FLOW MODEL — the part that reaches a bid:
+     - Arc DOES scale flow on matched-precip families (spray, MP): those
+       nozzle families are built so gpm is proportional to arc, which is
+       what "matched precipitation" means. loHeadSpec already does this and
+       it works at any angle, not just the four presets.
+     - Arc does NOT change flow on a gear rotor (PGP) — same nozzle, same
+       orifice, same pressure. Long-standing behaviour, unchanged.
+     - Radius reduction does NOT reduce the GPM we budget. A reduction screw
+       throttles the stream but does not rebalance the nozzle, so treating
+       flow as unchanged is the CONSERVATIVE choice: we never under-count
+       flow and so never pack a valve past its ceiling. The real consequence
+       of pulling a head in is a higher precipitation rate over the smaller
+       wetted area, which is a run-time matter, not a valve-sizing one. */
+const LO_MIN_ARC = 30;      // degrees — narrower than this is not a sprinkler
+const LO_MIN_RPCT = 0.3;    // 30% of nominal throw, per the field request
+const TWO_PI = Math.PI*2;
+
+function loRadiusPct(hd){
+  const v = Number(hd && hd.rPct);
+  if(!Number.isFinite(v)) return 1;                 // absent = full throw (every pre-existing head)
+  return Math.max(LO_MIN_RPCT, Math.min(1, v));
+}
+
+// Nominal spec plus the effective (possibly reduced) radius.
+function loHeadEffective(hd){
+  const spec = loHeadSpec(lo.family, hd.noz, hd.arc);
+  const pct = loRadiusPct(hd);
+  return { ...spec, rFull: spec.r, r: spec.r*pct, pct };
+}
+
+// Normalize a sweep into (0, 360].
+function loSweepDeg(fromRad, toRad){
+  let d = (toRad - fromRad) * 180/Math.PI;
+  d = ((d % 360) + 360) % 360;
+  return d === 0 ? 360 : d;
+}
 const lo = { areaIndex:-1, family:'spray', heads:[], sel:-1, curNoz:'s12', curArc:180, snap:true,
              outline:null, centroid:{x:0,y:0}, svgId:'loSvg', bodyId:'loBody',
              ppf:12, panX:0, panY:0, _w:0, _h:0,
@@ -2753,7 +2817,9 @@ function openLayout(i){
   if(gm.poly){ lo.outline=gm.poly.map(p=>({x:p.x,y:p.y})); }
   else { lo.outline=[{x:0,y:0},{x:gm.L,y:0},{x:gm.L,y:gm.W},{x:0,y:gm.W}]; }
   lo.centroid=polyCentroid(lo.outline);
-  lo.heads = (a.layout==='manual' && Array.isArray(a.manualHeads)) ? a.manualHeads.map(m=>({x:m.x,y:m.y,noz:m.noz,arc:m.arc,dir:m.dir||0})) : [];
+  // rPct absent on every head saved before free radius existed -> full throw.
+  lo.heads = (a.layout==='manual' && Array.isArray(a.manualHeads))
+    ? a.manualHeads.map(m=>({x:m.x,y:m.y,noz:m.noz,arc:m.arc,dir:m.dir||0,rPct:loRadiusPct(m)})) : [];
   lo.curNoz = a.family==='spray'?'s12' : a.family==='mp'?'mp2000':'b40';
   lo.curArc = 180;
   // Heads get placed against the DRAWING, not a bare outline — a bed edge,
@@ -2777,6 +2843,16 @@ function buildPalette(){
 }
 function loSetNoz(v){ lo.curNoz=v; if(lo.sel>=0){ lo.heads[lo.sel].noz=v; } loDraw(); }
 function loSetArc(d){ lo.curArc=d; if(lo.sel>=0){ lo.heads[lo.sel].arc=d; } buildPalette(); loDraw(); }
+// Put a reduced head back to full throw without hunting for the handle.
+function loResetRadius(){ if(lo.sel>=0){ lo.heads[lo.sel].rPct=1; loDraw(); } }
+// Angles snap to 5 degrees while "Snap: grid" is on, free when it is off —
+// the same toggle that governs head positions, so there is one control to
+// think about rather than two.
+function loSnapAngle(rad){
+  if(!lo.snap) return rad;
+  const step=5*Math.PI/180;
+  return Math.round(rad/step)*step;
+}
 function loToggleSnap(){ lo.snap=!lo.snap; if(lo.snap && lo.sel>=0){ const hd=lo.heads[lo.sel]; hd.x=Math.round(hd.x); hd.y=Math.round(hd.y); } buildPalette(); loDraw(); }
 function loZoom(f){ pzZoomBtn(lo,f); }
 function loFit(){ pzFit(lo, loContentBBox()); loDraw(); }
@@ -2785,7 +2861,13 @@ function loClear(){ lo.heads=[]; lo.sel=-1; loDraw(); }
 function loDeleteSel(){ if(lo.sel>=0){ lo.heads.splice(lo.sel,1); lo.sel=-1; loDraw(); } }
 function loUse(){
   const a=areas[lo.areaIndex];
-  if(lo.heads.length){ a.layout='manual'; a.manualHeads=lo.heads.map(m=>({x:m.x,y:m.y,noz:m.noz,arc:m.arc,dir:m.dir})); }
+  // Only write rPct when it is actually reduced, so a design of full-throw
+  // heads serializes byte-identically to how it always has.
+  if(lo.heads.length){ a.layout='manual'; a.manualHeads=lo.heads.map(m=>{
+    const o={x:m.x,y:m.y,noz:m.noz,arc:m.arc,dir:m.dir};
+    const pct=loRadiusPct(m); if(pct < 0.999) o.rPct=Number(pct.toFixed(3));
+    return o;
+  }); }
   else { a.layout='auto'; delete a.manualHeads; }   // cleared → back to auto placement
   el('loOverlay').hidden=true;
   render(); markDirty();
@@ -2809,7 +2891,7 @@ function loDraw(){
   // heads: wedge + dot
   let totGpm=0;
   lo.heads.forEach((hd,idx)=>{
-    const spec=loHeadSpec(lo.family, hd.noz, hd.arc); totGpm+=spec.gpm;
+    const spec=loHeadEffective(hd); totGpm+=spec.gpm;
     const cx=SX(hd.x), cy=SY(hd.y), rr=Math.max(spec.r*U,6);
     const col=idx===lo.sel?'var(--z3)':'var(--green-d)';
     if(hd.arc>=360){
@@ -2824,11 +2906,51 @@ function loDraw(){
     const sel=idx===lo.sel;
     g+=`<circle class="lo-hd" cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${sel?6:4.5}" fill="${sel?'var(--z3)':'var(--green-d)'}" stroke="#fff" stroke-width="1.5" data-hi="${idx}"/>`;
     if(sel){
-      const spec=loHeadSpec(lo.family, hd.noz, hd.arc);
-      const hd2=Math.min(spec.r*U, 46);
-      const ax=cx+Math.cos(hd.dir)*hd2, ay=cy+Math.sin(hd.dir)*hd2;
-      g+=`<line x1="${cx.toFixed(1)}" y1="${cy.toFixed(1)}" x2="${ax.toFixed(1)}" y2="${ay.toFixed(1)}" stroke="var(--z3)" stroke-width="1.5" stroke-dasharray="3 2"/>`;
-      g+=`<circle class="lo-aim" cx="${ax.toFixed(1)}" cy="${ay.toFixed(1)}" r="7" data-h="aim"/>`;
+      const spec=loHeadEffective(hd);
+      const rr=Math.max(spec.r*U,6);
+      const full=hd.arc>=360;
+      const half=(hd.arc*Math.PI/180)/2;
+      const a0=hd.dir-half, a1=hd.dir+half;
+
+      // Direction arrow down the centre of the throw. Purely a read — it
+      // says which way this head sprays at a glance, which matters most on
+      // a narrow arc where the wedge alone is hard to read.
+      const arrowEnd=rr*0.72;
+      const ax=cx+Math.cos(hd.dir)*arrowEnd, ay=cy+Math.sin(hd.dir)*arrowEnd;
+      g+=`<line x1="${cx.toFixed(1)}" y1="${cy.toFixed(1)}" x2="${ax.toFixed(1)}" y2="${ay.toFixed(1)}" stroke="var(--z3)" stroke-width="1.6"/>`;
+      const ah=Math.max(7, Math.min(12, rr*0.16));
+      const p1x=ax+Math.cos(hd.dir)*ah, p1y=ay+Math.sin(hd.dir)*ah;
+      const p2x=ax+Math.cos(hd.dir+2.5)*ah*0.55, p2y=ay+Math.sin(hd.dir+2.5)*ah*0.55;
+      const p3x=ax+Math.cos(hd.dir-2.5)*ah*0.55, p3y=ay+Math.sin(hd.dir-2.5)*ah*0.55;
+      g+=`<polygon points="${p1x.toFixed(1)},${p1y.toFixed(1)} ${p2x.toFixed(1)},${p2y.toFixed(1)} ${p3x.toFixed(1)},${p3y.toFixed(1)}" fill="var(--z3)"/>`;
+
+      // Rotate handle — sits inside the wedge, on the centre line.
+      const rotR=rr*0.45;
+      const rx=cx+Math.cos(hd.dir)*rotR, ry=cy+Math.sin(hd.dir)*rotR;
+      g+=`<circle class="lo-aim" cx="${rx.toFixed(1)}" cy="${ry.toFixed(1)}" r="7" data-h="aim"><title>Drag to rotate</title></circle>`;
+
+      // Radius handle — at the tip of the throw, on the centre line.
+      const tx=cx+Math.cos(hd.dir)*rr, ty=cy+Math.sin(hd.dir)*rr;
+      g+=`<circle class="lo-rad" cx="${tx.toFixed(1)}" cy="${ty.toFixed(1)}" r="7" data-h="rad"><title>Drag in/out to set throw</title></circle>`;
+      if(spec.pct < 0.999){
+        // Show the throw you gave up, so a reduced head is obvious at a glance.
+        const fr=Math.max(spec.rFull*U,6);
+        if(full){
+          g+=`<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${fr.toFixed(1)}" fill="none" stroke="var(--z3)" stroke-opacity="0.35" stroke-width="1" stroke-dasharray="3 3"/>`;
+        } else {
+          g+=`<path d="${sector(cx,cy,fr,a0,a1)}" fill="none" stroke="var(--z3)" stroke-opacity="0.35" stroke-width="1" stroke-dasharray="3 3"/>`;
+        }
+      }
+
+      // Edge handles — one per side of the wedge, each moving its own edge
+      // so you can set where the spray starts and stops independently.
+      if(!full){
+        [[a0,'e0'],[a1,'e1']].forEach(([ang,key])=>{
+          const ex=cx+Math.cos(ang)*rr, ey=cy+Math.sin(ang)*rr;
+          g+=`<line x1="${cx.toFixed(1)}" y1="${cy.toFixed(1)}" x2="${ex.toFixed(1)}" y2="${ey.toFixed(1)}" stroke="var(--z3)" stroke-width="1.2" stroke-dasharray="2 3"/>`;
+          g+=`<circle class="lo-edge" cx="${ex.toFixed(1)}" cy="${ey.toFixed(1)}" r="7" data-h="${key}"><title>Drag to move this edge of the spray</title></circle>`;
+        });
+      }
     }
   });
   g+=scaleBarSvg(lo);
@@ -2838,8 +2960,13 @@ function loDraw(){
   el('loCount').textContent=lo.heads.length;
   el('loGpm').textContent=totGpm.toFixed(1);
   el('loZones').textContent=zones;
-  if(lo.sel>=0){ const hd=lo.heads[lo.sel]; const sp=loHeadSpec(lo.family,hd.noz,hd.arc); const al=(LO_ARCS.find(a=>a.deg===hd.arc)||{label:hd.arc}).label;
-    el('loSelInfo').innerHTML=`Selected: <b>${esc(sp.label)} ${al}</b> · ${sp.r} ft · ${sp.gpm.toFixed(2)} GPM`; }
+  if(lo.sel>=0){ const hd=lo.heads[lo.sel]; const sp=loHeadEffective(hd);
+    const preset=LO_ARCS.find(a=>a.deg===hd.arc);
+    const al=preset?preset.label:`${Math.round(hd.arc)}&deg;`;
+    const red = sp.pct<0.999
+      ? ` · <b>${sp.r.toFixed(1)} ft</b> <span style="color:var(--warn)">(${Math.round(sp.pct*100)}% of ${sp.rFull} ft)</span> <button type="button" class="ghost" style="width:auto;min-height:0;padding:2px 7px;font-size:11px" onclick="loResetRadius()">full</button>`
+      : ` · ${sp.r} ft`;
+    el('loSelInfo').innerHTML=`Selected: <b>${esc(sp.label)} ${al}</b>${red} · ${sp.gpm.toFixed(2)} GPM`; }
   else el('loSelInfo').textContent='';
   pzSyncSpan(lo, 'loSpan');
   const svg=el('loSvg');
@@ -2850,16 +2977,40 @@ const snapHalf=v=>Math.round(v*2)/2;
 const loSnapV=v=> lo.snap ? Math.round(v) : Math.round(v*2)/2;   // grid=1ft, free=0.5ft
 const LO_HOOKS = {
   redraw: loDraw,
-  hit: t=>{ if(t&&t.dataset){ if(t.dataset.h==='aim') return 'aim'; if(t.dataset.hi!=null) return 'H:'+t.dataset.hi; } return null; },
+  hit: t=>{ if(t&&t.dataset){ if(t.dataset.h) return t.dataset.h; if(t.dataset.hi!=null) return 'H:'+t.dataset.hi; } return null; },
   dragStart: (h)=>{ if(typeof h==='string' && h.startsWith('H:')){ lo.sel=parseInt(h.slice(2),10); const hd=lo.heads[lo.sel]; lo.curNoz=hd.noz; lo.curArc=hd.arc; buildPalette(); } },
   dragMove: (h,fx,fy)=>{
-    if(h==='aim' && lo.sel>=0){ const hd=lo.heads[lo.sel]; hd.dir=Math.atan2(fy-hd.y, fx-hd.x); }
+    const hd = lo.sel>=0 ? lo.heads[lo.sel] : null;
+    // Rotate the whole wedge, arc unchanged.
+    if(h==='aim' && hd){ hd.dir=loSnapAngle(Math.atan2(fy-hd.y, fx-hd.x)); }
+    // Pull the throw in or push it back out, between 30% and full.
+    else if(h==='rad' && hd){
+      const spec=loHeadSpec(lo.family, hd.noz, hd.arc);
+      const d=Math.hypot(fx-hd.x, fy-hd.y);
+      let pct = spec.r>0 ? d/spec.r : 1;
+      if(lo.snap) pct = Math.round(pct*20)/20;                 // 5% steps when snapped
+      hd.rPct = Math.max(LO_MIN_RPCT, Math.min(1, pct));
+    }
+    // Move ONE edge of the wedge; the other stays put. Between them they set
+    // both how wide the spray is and which way it faces.
+    else if((h==='e0' || h==='e1') && hd && hd.arc < 360){
+      const half=(hd.arc*Math.PI/180)/2;
+      const fixed = h==='e0' ? hd.dir+half : hd.dir-half;      // the edge NOT being dragged
+      const moved = loSnapAngle(Math.atan2(fy-hd.y, fx-hd.x));
+      let deg = h==='e0' ? loSweepDeg(moved, fixed) : loSweepDeg(fixed, moved);
+      deg = Math.max(LO_MIN_ARC, Math.min(360, deg));
+      const a0 = h==='e0' ? fixed - deg*Math.PI/180 : fixed;
+      hd.arc = Math.round(deg*10)/10;
+      hd.dir = a0 + (deg/2)*Math.PI/180;
+      lo.curArc = hd.arc;
+      buildPalette();
+    }
     else if(typeof h==='string' && h.startsWith('H:')){ const i=parseInt(h.slice(2),10); lo.heads[i].x=loSnapV(fx); lo.heads[i].y=loSnapV(fy); }
   },
   tap: (fx,fy)=>{
     const x=loSnapV(fx), y=loSnapV(fy);
     const dir=Math.atan2(lo.centroid.y-y, lo.centroid.x-x);
-    lo.heads.push({x, y, noz:lo.curNoz, arc:lo.curArc, dir});
+    lo.heads.push({x, y, noz:lo.curNoz, arc:lo.curArc, dir, rPct:1});
     lo.sel=lo.heads.length-1;
   }
 };

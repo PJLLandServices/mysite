@@ -237,7 +237,7 @@ Pages with their primary route + purpose:
 | (Materials sub-nav) | — | The materials pages (`material-lists.html`, `quote-requests.html`, `purchase-orders.html`, `suppliers.html`, `parts-suppliers.html`) share a `.suppliers-subnav` strip duplicated by hand. Below 768px the strip collapses into a single `<details>` dropdown ("Materials → <current> ▾"); open/close behaviour lives in `crm-nav.js`. |
 | `purchase-order.html` | `/admin/purchase-order/<id>` | PO detail. Send modal (email + PDF), partial-receive modal, reorder, cancel. |
 | `quote-request.html` | `/admin/quote-request/<id>` | RFQ detail. Draft line trim (qty/remove) + notes with auto-save, send modal (emails the vendor a request for pricing — explicitly not an order), resend, cancel, PDF/CSV downloads. On sent/quoted: the **quoted-price quick-grid** (dollars in, cents stored; partial quotes fine; auto-saves changed entries only) and, once quoted, **Review & apply to catalog** — a confirm modal showing current catalog price → quoted with deltas before any write. |
-| `sitebuilder.html` | `/admin/sitebuilder` | **Sprinkler System Builder.** Internal install-design tool. Water supply → per-area shape (rectangle / known sq ft / drawn polygon, circle, sector, or **traced over a calibrated site plan**) → manual head layout → tree/drip rings → arc-aware zone packing → BOM → linked **Material List** + `project_proposal` **Quote**, plus a standalone water-cost-by-town estimate. Designs save to `project.systemDesign` (512 KB cap) via `PATCH /api/projects/:id`; every save re-syncs an already-linked DRAFT quote, keeping edited prices and never overwriting a sent one. **Site-plan underlay (Aug 2026):** upload a tender PDF or image, pick sheets, calibrate each against a printed dimension, verify against a second one, then trace areas directly over the drawing. See **Site plan calibration** below. Role gate: `user` (admin OR tech). The only admin page still carrying its CSS and JS inline rather than split into `.css`/`.js` siblings — known, deliberate, and its own separate piece of work. |
+| `sitebuilder.html` | `/admin/sitebuilder` | **Sprinkler System Builder.** Internal install-design tool. Water supply → per-area shape (rectangle / known sq ft / drawn polygon, circle, sector, or **traced over a calibrated site plan**) → manual head layout (free arc + reduced throw per head, see below) → tree/drip rings → arc-aware zone packing → BOM → linked **Material List** + `project_proposal` **Quote**, plus a standalone water-cost-by-town estimate. Designs save to `project.systemDesign` (512 KB cap) via `PATCH /api/projects/:id`; every save re-syncs an already-linked DRAFT quote, keeping edited prices and never overwriting a sent one. **Site-plan underlay (Aug 2026):** upload a tender PDF or image, pick sheets, calibrate each against a printed dimension, verify against a second one, then trace areas directly over the drawing. See **Site plan calibration** below. Role gate: `user` (admin OR tech). The only admin page still carrying its CSS and JS inline rather than split into `.css`/`.js` siblings — known, deliberate, and its own separate piece of work. |
 | `chats.html` | `/admin/chats` | AI chat transcripts (booked + abandoned). |
 | `settings.html` | `/admin/settings` | Notification defaults, audit trail, QB connect, exports. |
 | `login.html` | `/login` | **Unified sign-in door** (Jul 2026): staff email + password AND customer magic-link requests on one page. Password-first server logic — staff credentials match → CRM session; every other outcome (blank/wrong password, unknown email, customer email) falls through to the magic-link path and returns one generic "check your email" response (no staff-email enumeration). Button reads "Login Now". Staff credentials live in `users.json`; `auth.json` is the session-secret store only. `/portal/login` 301s here; the emailed `/portal/login/verify` links and permanent `/portal/<token>` URLs are unchanged. |
@@ -1238,6 +1238,38 @@ the lock in a later phase.)
 **Aggregate sanity check.** Traced area summing past **80 %** of a sheet's
 own calibrated extents raises a non-blocking warning — that is the
 signature of an order-of-magnitude scale error.
+
+### Hand-placed head geometry (Aug 2026)
+
+A hand-placed head carries `{x, y, noz, arc, dir, rPct?}` on `area.manualHeads[]`.
+Q/H/T/F stay as presets, and on the selected head four handles set the rest:
+rotate (centre line), two **edge handles** that move each side of the wedge
+independently, and a **radius handle** that pulls the throw in to as little as
+**30%** of nominal — what a radius-reduction screw does on a real head. Arc is
+free between **30° and 360°**; angles snap to 5° and radius to 5% while
+"Snap: grid" is on. A direction arrow runs down the centre of the throw.
+
+**Flow model — this reaches the bid, so it is deliberate:**
+- **Arc scales flow on matched-precip families** (spray, MP): those nozzles are
+  built so GPM ∝ arc. `loHeadSpec` already did this and works at any angle.
+- **Arc does not change flow on a gear rotor** (PGP) — same nozzle, same
+  orifice, same pressure. Unchanged, long-standing behaviour.
+- **Radius reduction does NOT reduce the GPM budgeted.** A reduction screw
+  throttles the stream without rebalancing the nozzle, so treating flow as
+  unchanged is the conservative side of a valve-sizing decision — it never
+  under-counts flow and so never packs a valve past its ceiling. The real
+  consequence of pulling a head in is a higher precipitation rate over the
+  smaller wetted area, which is a run-time matter.
+
+**Downstream integrity.** Free arcs are **bucketed** (≤90 → Q, ≤180 → H,
+≤270 → T, else F) before they reach `arcCount`, using the same thresholds the
+manual-layout BOM already used to pick a nozzle SKU. That is what keeps a
+137° head from falling out of the parts list and out of `areaMaterialCents` —
+an unbucketed `arcCount` key is silently ignored by both. The gear-rotor
+"zone mixes arcs" warning compares arcs rounded to 15°, so a free 179° vs 180°
+does not cry wolf while 90° vs 180° still does. `rPct` is written only when a
+head is actually reduced, so a full-throw design serializes byte-identically
+to before the feature existed, and an absent `rPct` reads as full throw.
 
 **Vertex budget.** Traced outlines are stored at 3 dp (~0.012 inch; finer
 than a raster can express, and full float precision would waste the 512 KB
