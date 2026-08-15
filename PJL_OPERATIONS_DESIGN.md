@@ -1199,6 +1199,15 @@ arrives at the last head carrying one nozzle. A bed too big for one valve
 shows one supply line per valve, drawn side by side and named, rather than
 three pipes hidden under one line.
 
+The mainline **tees** — it is a branching run, not one line — and the
+**control wire** goes in beside it, because if we are measuring the trench
+we are measuring both. Each leg of wire only has to carry the valves beyond
+it: one shared common plus one switched leg per zone, so the branch out to a
+two-valve box is a three-core, not a cable sized for the whole property. The
+plan gives the footage per cable size and a gauge off the longest run to a
+valve, with the assumption it used printed next to it — a starting figure to
+argue with, not a number to trust blindly on someone else's solenoid.
+
 Rule 3 above applies to this too, and it is why the measured length is
 **shown but not pushed into the bill of materials**. Pipe and wire are still
 priced as an on-site figure, and the master plan says so on screen. Moving

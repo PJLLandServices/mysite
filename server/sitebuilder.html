@@ -461,14 +461,16 @@
         <button type="button" class="ghost" onclick="mpUndoPoint()">Undo point</button>
         <button type="button" class="del" onclick="mpClearRouting()">Clear routing</button>
         <button type="button" id="mpToolLat" class="on" onclick="mpToggleLaterals()">Laterals</button>
+        <button type="button" id="mpToolWire" class="on" onclick="mpToggleWire()">Wire</button>
       </div>
       <span class="sk-grow"></span>
       <span class="mp-route" id="mpRoute"></span>
+      <span class="mp-route" id="mpWireRead"></span>
       <span class="mp-route" id="mpZoneSel"></span>
     </div>
     <div class="sk-body" id="mpBody"></div>
     <div class="sk-foot">
-      <p class="hint" id="mpHint">Every traced area on this sheet, at its true position, coloured by the valve it runs on. Pick a tool, then click the plan to place the <b>point of connection</b>, a <b>manifold</b>, or a <b>mainline bend</b>; drag any marker to move it, Delete to remove the selected one. Mainline and lateral lengths are measured off the calibrated sheet; each lateral branches off its manifold and every segment is sized on the flow passing through it. Hold H to flash the drawing off. Scroll/pinch to zoom, Ctrl-drag to pan.</p>
+      <p class="hint" id="mpHint">Every traced area on this sheet, at its true position, coloured by the valve it runs on. Pick a tool, then click the plan to place the <b>point of connection</b>, a <b>manifold</b>, or a <b>mainline bend</b>; drag any marker to move it, Delete to remove the selected one. <b>Select a node before placing a bend to tee off it.</b> Click an area or head to work on that valve alone. Mainline, lateral and wire lengths are all measured off the calibrated sheet; laterals follow the inside of each outline and every segment is sized on the flow passing through it. Hold H to flash the drawing off. Scroll/pinch to zoom, Ctrl-drag to pan.</p>
       <span class="sk-grow"></span>
       <div class="sk-tools">
         <button type="button" onclick="window.print()" class="ghost">Print</button>
@@ -2668,7 +2670,7 @@ async function calSave(){
 const mp = { pageId:null, page:null, svgId:'mpSvg', bodyId:'mpBody',
              ppf:1, panX:0, panY:0, _w:0, _h:0,
              planPage:null, underOpacity:0.45, underHidden:false,
-             tool:'pan', sel:null, laterals:true, zoneSel:null };
+             tool:'pan', sel:null, laterals:true, wire:true, zoneSel:null };
 
 // Areas traced onto a given sheet, with their index.
 function mpAreasOn(pageId){
@@ -2688,7 +2690,7 @@ function openMasterPlan(pageId){
   mp.pageId=pageId; mp.page=pg; mp.planPage=pg; mp.underHidden=false;
   skProbeRaster(pg.id);
   pzInit(mp); mp._hooks=MP_HOOKS;
-  mp.tool='pan'; mp.sel=null; mp.laterals=true; mp.zoneSel=null; mpPaintTools();
+  mp.tool='pan'; mp.sel=null; mp.laterals=true; mp.wire=true; mp.zoneSel=null; mpPaintTools();
   el('mpOverlay').hidden=false;
   const op=el('mpUnderOpacity'); if(op) op.value=String(Math.round(mp.underOpacity*100));
   const pc=el('mpUnderPct'); if(pc) pc.textContent=Math.round(mp.underOpacity*100)+'%';
@@ -2785,9 +2787,12 @@ function mpZoneColour(zi){ return zi>=0 ? `var(${ZC[zi%ZC.length]})` : '#9aa5a0'
    What is stored (per SHEET, because the coordinates only mean anything in
    that sheet's frame):
      poc        the point of connection — meter, or the tee off the service
-     main       the bends AFTER the poc. The full polyline is [poc, ...main],
-                so the poc is the single source of truth for where the run
-                starts and dragging it can never orphan the line.
+     main       the mainline nodes AFTER the poc, each carrying `p`, the
+                index of its parent node (-1 = the poc). That makes the
+                mainline a TREE, not a chain, so it can tee: a node with
+                more than one child is a branch. The poc is still the single
+                source of truth for where the run starts, so dragging it can
+                never orphan the line.
      manifolds  valve-box locations. Each one tees off the NEAREST point on
                 the mainline; that tee is measured too.
 
@@ -2808,6 +2813,46 @@ function routingFor(pageId){
 // Closest point on a polyline, and how far off it the query point sits.
 // Used for the manifold tees, so the tee is always the shortest honest
 // connection rather than a run back to the start of the main.
+// Resolve a mainline node index: -1 means the point of connection.
+function mpNodePt(r, i){ return (i==null || i<0) ? r.poc : (r.main||[])[i]; }
+// Mainline as parent -> child segments. A node whose parent is missing or
+// circular is reattached to the poc rather than dropped, so a corrupt blob
+// degrades to a visible straight run instead of silently losing pipe.
+function mpMainEdges(r){
+  const out=[];
+  if(!r || !r.poc) return out;
+  const main=r.main||[];
+  main.forEach((n,i)=>{
+    // A node with no parent is a version-5 chain node, so it continues from
+    // the one before it. restoreRouting() migrates the same way; defaulting
+    // to the poc here instead would silently turn an old chain into a star
+    // and inflate the measured run.
+    let pi = (n.p==null) ? i-1 : n.p;
+    if(pi>=main.length || pi===i) pi=-1;
+    // walk up to prove it terminates at the poc
+    let cur=pi, guard=0;
+    while(cur>=0 && guard++<=main.length){ const nx=main[cur]; cur = (nx && nx.p!=null) ? nx.p : -1; }
+    if(guard>main.length) pi=-1;
+    const a=mpNodePt(r, pi);
+    if(a) out.push({a, b:n, ai:pi, bi:i});
+  });
+  return out;
+}
+function mpNearestNodeIdx(r, x, y){
+  let bi=-1, bd=r.poc ? Math.hypot(r.poc.x-x, r.poc.y-y) : Infinity;
+  (r.main||[]).forEach((n,i)=>{ const d=Math.hypot(n.x-x, n.y-y); if(d<bd){ bd=d; bi=i; } });
+  return bi;
+}
+// Closest point across a set of parent->child segments.
+function nearestOnEdges(edges, x, y){
+  let best=null;
+  edges.forEach((e,i)=>{
+    const p=nearestOnPath([e.a, e.b], x, y);
+    if(p && (!best || p.dist<best.dist)) best={x:p.x, y:p.y, dist:p.dist, edge:i};
+  });
+  return best;
+}
+
 function nearestOnPath(path, x, y){
   if(!path || !path.length) return null;
   if(path.length===1) return {x:path[0].x, y:path[0].y, dist:Math.hypot(x-path[0].x, y-path[0].y)};
@@ -2825,20 +2870,22 @@ function nearestOnPath(path, x, y){
 
 function mpRouteStats(){
   const r = routingRO(mp.pageId);
-  const path = r.poc ? [r.poc, ...(r.main||[])] : [];
-  const segs=[];
-  let mainFt=0;
-  for(let i=1;i<path.length;i++){
-    const L=Math.hypot(path[i].x-path[i-1].x, path[i].y-path[i-1].y);
-    mainFt+=L; segs.push({a:path[i-1], b:path[i], ft:L});
-  }
+  const edges = mpMainEdges(r);
+  const segs = edges.map(e=>({a:e.a, b:e.b, ai:e.ai, bi:e.bi,
+                              ft:Math.hypot(e.b.x-e.a.x, e.b.y-e.a.y)}));
+  const mainFt = segs.reduce((t,x)=>t+x.ft, 0);
+  // A node feeding more than one child is a tee.
+  const childCount=new Map();
+  edges.forEach(e=>childCount.set(e.ai, (childCount.get(e.ai)||0)+1));
+  const tees_ = [...childCount.values()].filter(n=>n>1).length;
   let teeFt=0;
   const tees=(r.manifolds||[]).map(m=>{
-    const n=nearestOnPath(path, m.x, m.y);
+    const n = edges.length ? nearestOnEdges(edges, m.x, m.y)
+            : (r.poc ? {x:r.poc.x, y:r.poc.y, dist:Math.hypot(m.x-r.poc.x, m.y-r.poc.y), edge:-1} : null);
     if(n) teeFt+=n.dist;
     return n;
   });
-  return {path, segs, tees, mainFt, teeFt, totalFt:mainFt+teeFt};
+  return {edges, segs, tees, mainFt, teeFt, branchCount:tees_, totalFt:mainFt+teeFt};
 }
 
 // Where each valve's water is actually needed, in sheet feet: the
@@ -2887,6 +2934,7 @@ function mpPaintTools(){
     const b=el('mpTool'+t); if(b) b.classList.toggle('on', mp.tool===t);
   });
   const lb=el('mpToolLat'); if(lb) lb.classList.toggle('on', mp.laterals);
+  const wb=el('mpToolWire'); if(wb) wb.classList.toggle('on', mp.wire);
   const bd=el('mpBody'); if(bd) bd.style.cursor = (mp.tool==='pan') ? '' : 'crosshair';
 }
 
@@ -2896,7 +2944,16 @@ function mpTap(fx, fy){
   if(mp.tool==='manifold'){ r.manifolds.push({x:fx, y:fy}); mp.sel='m'+(r.manifolds.length-1); markDirty(); return; }
   if(mp.tool==='bend'){
     if(!r.poc){ alert('Place the point of connection first — the mainline starts there.'); return; }
-    r.main.push({x:fx, y:fy}); mp.sel='b'+(r.main.length-1); markDirty(); return;
+    // The new node hangs off whatever is selected, so selecting a node part
+    // way along the run and clicking gives you a TEE. With nothing selected
+    // it continues from the nearest node, which is the common case.
+    let parent;
+    if(mp.sel==='poc') parent=-1;
+    else if(mp.sel && mp.sel[0]==='b') parent=parseInt(mp.sel.slice(1),10);
+    else parent=mpNearestNodeIdx(r, fx, fy);
+    if(!(parent>=-1) || parent>=r.main.length) parent=-1;
+    r.main.push({x:fx, y:fy, p:parent});
+    mp.sel='b'+(r.main.length-1); markDirty(); return;
   }
   // Move tool: tapping picks the valve under the pointer to work on, and
   // tapping bare ground clears both selections.
@@ -2913,15 +2970,26 @@ function mpMoveHandle(h, fx, fy){
   else if(h[0]==='m' && r.manifolds[i]){ r.manifolds[i].x=fx; r.manifolds[i].y=fy; }
 }
 
+// Removing a node from the middle of a branch splices it out — its
+// children reattach to its parent — rather than cutting everything past
+// it loose. Deleting one bend should not silently delete the run beyond it.
+function mpRemoveMainNode(r, i){
+  const gone=r.main[i]; if(!gone) return;
+  const gp = (gone.p==null) ? -1 : gone.p;
+  r.main.forEach(n=>{ if(n.p===i) n.p=gp; });
+  r.main.splice(i,1);
+  // indices above i shift down by one
+  r.main.forEach(n=>{ if(n.p!=null && n.p>i) n.p-=1; });
+}
 function mpDeleteSel(){
   const r=routingFor(mp.pageId); if(!r || !mp.sel) return;
   const h=mp.sel;
   if(h==='poc'){
-    if(r.main.length && !confirm('Removing the point of connection also drops the '+r.main.length+' mainline bend'+(r.main.length===1?'':'s')+' that hang off it. Remove it?')) return;
+    if(r.main.length && !confirm('Removing the point of connection also drops the '+r.main.length+' mainline node'+(r.main.length===1?'':'s')+' that hang off it. Remove it?')) return;
     r.poc=null; r.main=[];
   } else {
     const i=parseInt(h.slice(1), 10);
-    if(h[0]==='b') r.main.splice(i,1);
+    if(h[0]==='b') mpRemoveMainNode(r, i);
     else if(h[0]==='m') r.manifolds.splice(i,1);
   }
   mp.sel=null; markDirty(); mpDraw();
@@ -2929,7 +2997,7 @@ function mpDeleteSel(){
 
 function mpUndoPoint(){
   const r=routingFor(mp.pageId); if(!r) return;
-  if(r.main.length) r.main.pop();
+  if(r.main.length) mpRemoveMainNode(r, r.main.length-1);
   else if(r.manifolds.length) r.manifolds.pop();
   else if(r.poc) r.poc=null;
   else return;
@@ -2951,15 +3019,16 @@ function mpAutoRoute(){
   const r=routingFor(mp.pageId); if(!r) return;
   if(!r.poc){ alert('Place the point of connection first — auto-route starts there.'); return; }
   if(!r.manifolds.length){ alert('Place at least one manifold — auto-route runs the main to the manifolds.'); return; }
-  if(r.main.length && !confirm('Replace the '+r.main.length+' mainline bend'+(r.main.length===1?'':'s')+' you placed with a straight run through the manifolds?')) return;
+  if(r.main.length && !confirm('Replace the '+r.main.length+' mainline node'+(r.main.length===1?'':'s')+' you placed — including any tees — with a single straight run through the manifolds?')) return;
   const left=r.manifolds.map((m,i)=>i);
-  const path=[]; let cur=r.poc;
+  const path=[]; let cur=r.poc, parent=-1;
   while(left.length){
     let bestK=0, bd=Infinity;
     left.forEach((idx,k)=>{ const d=Math.hypot(r.manifolds[idx].x-cur.x, r.manifolds[idx].y-cur.y); if(d<bd){ bd=d; bestK=k; } });
     const idx=left.splice(bestK,1)[0];
     cur=r.manifolds[idx];
-    path.push({x:cur.x, y:cur.y});
+    path.push({x:cur.x, y:cur.y, p:parent});
+    parent=path.length-1;
   }
   r.main=path; mp.sel=null; markDirty(); mpDraw();
 }
@@ -2967,6 +3036,7 @@ function mpAutoRoute(){
 /* ---- drawing ---- */
 
 const MP_LINE='#1f2d3d';
+const MP_WIRE='#a15c00';
 function mpHalo(x, y, txt, size, anchor, fill){
   return '<text x="'+x.toFixed(1)+'" y="'+y.toFixed(1)+'" text-anchor="'+(anchor||'middle')+'" font-size="'+size+'" '+
          'font-weight="700" fill="'+(fill||MP_LINE)+'" stroke="#fff" stroke-width="3.2" paint-order="stroke" '+
@@ -2989,15 +3059,27 @@ function mpRoutingSvg(){
   });
 
   // Mainline: white casing under a dark line so it reads over the drawing.
-  if(st.path.length>1){
-    const d=st.path.map((p,i)=>(i?'L':'M')+SX(p.x).toFixed(1)+' '+SY(p.y).toFixed(1)).join(' ');
-    g+='<path d="'+d+'" fill="none" stroke="#fff" stroke-width="7.5" stroke-opacity="0.9" stroke-linejoin="round" stroke-linecap="round"/>';
-    g+='<path d="'+d+'" fill="none" stroke="'+MP_LINE+'" stroke-width="3.4" stroke-linejoin="round" stroke-linecap="round"/>';
-    // Leg lengths, where the leg is long enough on screen to read.
-    st.segs.forEach(sg=>{
-      const px=Math.hypot((sg.b.x-sg.a.x)*mp.ppf, (sg.b.y-sg.a.y)*mp.ppf);
-      if(px<52) return;
-      g+=mpHalo((SX(sg.a.x)+SX(sg.b.x))/2, (SY(sg.a.y)+SY(sg.b.y))/2 - 7, Math.round(sg.ft)+' ft', 11);
+  // Drawn edge by edge because the run is a tree — a single polyline would
+  // have to double back through a tee and bill the pipe twice.
+  st.segs.forEach(sg=>{
+    const d='M'+SX(sg.a.x).toFixed(1)+' '+SY(sg.a.y).toFixed(1)+'L'+SX(sg.b.x).toFixed(1)+' '+SY(sg.b.y).toFixed(1);
+    g+='<path d="'+d+'" fill="none" stroke="#fff" stroke-width="7.5" stroke-opacity="0.9" stroke-linecap="round"/>';
+    g+='<path d="'+d+'" fill="none" stroke="'+MP_LINE+'" stroke-width="3.4" stroke-linecap="round"/>';
+  });
+  st.segs.forEach(sg=>{
+    const px=Math.hypot((sg.b.x-sg.a.x)*mp.ppf, (sg.b.y-sg.a.y)*mp.ppf);
+    if(px<52) return;
+    g+=mpHalo((SX(sg.a.x)+SX(sg.b.x))/2, (SY(sg.a.y)+SY(sg.b.y))/2 - 7, Math.round(sg.ft)+' ft', 11);
+  });
+  // A node with more than one child is a tee — mark it so a branch is
+  // obvious rather than something you have to trace with your eye.
+  {
+    const kids=new Map();
+    st.segs.forEach(sg=>kids.set(sg.ai, (kids.get(sg.ai)||0)+1));
+    kids.forEach((n,ai)=>{
+      if(n<2) return;
+      const p=mpNodePt(r, ai); if(!p) return;
+      g+='<circle cx="'+SX(p.x).toFixed(1)+'" cy="'+SY(p.y).toFixed(1)+'" r="7" fill="none" stroke="'+MP_LINE+'" stroke-width="1.6" pointer-events="none"/>';
     });
   }
 
@@ -3037,6 +3119,116 @@ function mpRoutingSvg(){
   return g+'</g>';
 }
 
+/* ── Control wire, run with the mainline ──────────────────────────────────
+
+   If we are measuring the mainline we are measuring the wire, because it
+   goes in the same trench. An ICV solenoid takes two conductors: one
+   COMMON shared by every valve on the controller, and one switched leg per
+   zone. So a cable only has to carry the valves DOWNSTREAM of it — the leg
+   out to a two-valve box needs three conductors, not one per valve on the
+   property — which is the same downstream accumulation the pipe already
+   does, walked up the tree from each manifold to the controller.
+
+   Cable is bought in fixed conductor counts, so the requirement is rounded
+   up to a real spool. One spare conductor is carried on every leg that
+   serves anything: pulling a second cable later costs a trench.
+
+   Gauge is the conventional 24 VAC table (one solenoid energised, about
+   10% drop) against the longest controller-to-valve run. It is a starting
+   figure, not a calculation for a specific solenoid's inrush — the basis
+   is printed next to the number so it can be argued with.                */
+
+const WIRE_SPARES = 1;
+const CABLE_CONDUCTORS = [2, 3, 5, 7, 9, 13];
+// [max run ft, gauge] — 24 VAC, one solenoid, ~10% drop.
+const WIRE_GAUGE_TABLE = [[700,'18 AWG'], [1100,'16 AWG'], [1800,'14 AWG'], [2800,'12 AWG']];
+function cableForConductors(n){
+  for(const c of CABLE_CONDUCTORS) if(c>=n) return c;
+  return n;                                   // past 13-core: multiple cables
+}
+function wireGaugeForRun(ft){
+  for(const [maxFt, g] of WIRE_GAUGE_TABLE) if(ft<=maxFt) return g;
+  return 'over ' + WIRE_GAUGE_TABLE[WIRE_GAUGE_TABLE.length-1][0] + ' ft — size on site';
+}
+
+function mpWirePlan(){
+  const r=routingRO(mp.pageId);
+  const st=mpRouteStats();
+  const edges=st.segs;
+  const asg=mpManifoldAssign();
+  const valvesAt=edges.map(()=>0);
+  const edgeOfNode=new Map(); edges.forEach((e,i)=>edgeOfNode.set(e.bi, i));
+
+  // distance from the poc to each mainline node, along the tree
+  const depth=new Map(); depth.set(-1, 0);
+  let settled=true, guard=0;
+  do{
+    settled=true;
+    edges.forEach(e=>{ if(depth.has(e.ai) && !depth.has(e.bi)){ depth.set(e.bi, depth.get(e.ai)+e.ft); settled=false; } });
+  } while(!settled && guard++ < edges.length+2);
+
+  let longest=0, teeFt=0;
+  (r.manifolds||[]).forEach((m,mi)=>{
+    const n=(asg.byManifold[mi]||[]).length;
+    const tee=st.tees[mi];
+    if(tee) teeFt+=tee.dist;
+    if(!n) return;
+    const ei = tee && tee.edge>=0 ? tee.edge : -1;
+    if(ei<0){ longest=Math.max(longest, tee?tee.dist:0); return; }
+    longest=Math.max(longest, (depth.get(edges[ei].bi)||0) + (tee?tee.dist:0));
+    // charge this box's valves to its edge and every edge back to the poc
+    let cur=ei, g2=0;
+    while(cur>=0 && g2++ <= edges.length+1){
+      valvesAt[cur]+=n;
+      const pn=edges[cur].ai;
+      cur = (pn<0) ? -1 : (edgeOfNode.has(pn) ? edgeOfNode.get(pn) : -1);
+    }
+  });
+
+  const byCable={};
+  let totalFt=0, maxCond=0;
+  edges.forEach((e,i)=>{
+    if(!valvesAt[i]) return;                            // a stub past the last box carries no wire
+    const cond=cableForConductors(valvesAt[i] + 1 + WIRE_SPARES);   // + common + spare
+    maxCond=Math.max(maxCond, cond);
+    byCable[cond]=(byCable[cond]||0)+e.ft;
+    totalFt+=e.ft;
+  });
+  (r.manifolds||[]).forEach((m,mi)=>{
+    const n=(asg.byManifold[mi]||[]).length, tee=st.tees[mi];
+    if(!n || !tee || tee.dist<=0.01) return;
+    const cond=cableForConductors(n + 1 + WIRE_SPARES);
+    maxCond=Math.max(maxCond, cond);
+    byCable[cond]=(byCable[cond]||0)+tee.dist;
+    totalFt+=tee.dist;
+  });
+  return {edges, valvesAt, byCable, totalFt, maxCond, longestRunFt:longest,
+          gauge:wireGaugeForRun(longest), teeFt};
+}
+
+function mpWireSvg(){
+  if(!mp.wire) return '';
+  const w=mpWirePlan();
+  if(!w.totalFt) return '';
+  const SX=x=>pzSX(mp,x), SY=y=>pzSY(mp,y);
+  let g='<g>';
+  w.edges.forEach((e,i)=>{
+    if(!w.valvesAt[i]) return;
+    // Offset off the pipe so both are readable; same trench, two lines.
+    const dx=SX(e.b.x)-SX(e.a.x), dy=SY(e.b.y)-SY(e.a.y), L=Math.hypot(dx,dy)||1;
+    const nx=-dy/L*5.5, ny=dx/L*5.5;
+    g+='<line x1="'+(SX(e.a.x)+nx).toFixed(1)+'" y1="'+(SY(e.a.y)+ny).toFixed(1)+
+       '" x2="'+(SX(e.b.x)+nx).toFixed(1)+'" y2="'+(SY(e.b.y)+ny).toFixed(1)+
+       '" stroke="'+MP_WIRE+'" stroke-width="1.7" stroke-dasharray="2 3" stroke-opacity="0.95"/>';
+  });
+  return g+'</g>';
+}
+function mpToggleWire(){
+  mp.wire=!mp.wire;
+  const b=el('mpToolWire'); if(b) b.classList.toggle('on', mp.wire);
+  mpDraw();
+}
+
 function mpRouteReadout(){
   const box=el('mpRoute'); if(!box) return;
   const r=routingRO(mp.pageId), st=mpRouteStats(), asg=mpManifoldAssign();
@@ -3050,7 +3242,8 @@ function mpRouteReadout(){
   if(r.poc && st.mainFt>0) bits.push('Mainline <b>'+pipeForGPM(peak)+'</b> · <b>'+Math.round(st.mainFt)+' ft</b> measured');
   else if(r.poc) bits.push('POC placed — no mainline run yet');
   else bits.push('<span class="mp-warnpipe">No point of connection</span>');
-  if(nMan) bits.push('<b>'+nMan+'</b> manifold'+(nMan===1?'':'s')+(st.teeFt>=0.5?' · '+Math.round(st.teeFt)+' ft of tees':''));
+  if(st.branchCount) bits.push('<b>'+st.branchCount+'</b> tee'+(st.branchCount===1?'':'s'));
+  if(nMan) bits.push('<b>'+nMan+'</b> manifold'+(nMan===1?'':'s')+(st.teeFt>=0.5?' · '+Math.round(st.teeFt)+' ft of drops':''));
   if(asg.unplaced.length) bits.push('<span class="mp-warnpipe">'+asg.unplaced.length+' valve'+(asg.unplaced.length===1?'':'s')+' not on this sheet</span>');
   const over=asg.byManifold.map((l,i)=>({i,n:l.length})).filter(x=>x.n>MANIFOLD_PER_BOX);
   if(over.length) bits.push('<span class="mp-warnpipe">'+over.map(x=>'M'+(x.i+1)+' holds '+x.n).join(', ')+' — house limit is '+MANIFOLD_PER_BOX+'</span>');
@@ -3073,6 +3266,19 @@ function mpRouteReadout(){
   }
   bits.push('measured here, still an on-site figure in the BOM');
   box.innerHTML=bits.join(' · ');
+
+  const wbox=el('mpWireRead');
+  if(wbox){
+    const w=mpWirePlan();
+    if(!w.totalFt){ wbox.innerHTML=''; }
+    else {
+      const spools=Object.keys(w.byCable).sort((a,b)=>a-b)
+        .map(c=>c+'-core '+Math.round(w.byCable[c])+' ft').join(' · ');
+      wbox.innerHTML='Wire <b>'+Math.round(w.totalFt)+' ft</b> ('+spools+') · <b>'+esc(w.gauge)+'</b>'+
+        ' <span title="Conventional 24 VAC table: one solenoid energised, about 10% drop. A starting figure, not a calculation for your solenoid.">'+
+        'on a '+Math.round(w.longestRunFt)+' ft longest run</span> · one common + '+WIRE_SPARES+' spare';
+    }
+  }
 }
 
 /* ── Layer 3: laterals from each manifold out to what it feeds ────────────
@@ -3502,6 +3708,7 @@ function mpDraw(){
   });
 
   g+=mpLateralSvg();
+  g+=mpWireSvg();
   g+=mpRoutingSvg();
   g+=scaleBarSvg(mp);
   g+=`</svg>`;
@@ -5246,16 +5453,21 @@ function applyWaterSupply(ws){
 function serializeState(){
   const inputs = {};
   GLOBAL_INPUT_IDS.forEach(id=>{ const e = el(id); if(e) inputs[id] = e.value; });
-  // version 5 adds `routing` — the point of connection, valve manifolds and
+  // version 6 gives every mainline node a parent (`p`), turning the run
+  // from a chain into a tree so it can tee. A version-5 blob's `main` was
+  // a chain, so it migrates by giving node i the parent i-1 — the same
+  // geometry, described the new way.
+  // version 5 added `routing` — the point of connection, valve manifolds and
   // mainline drawn on a calibrated sheet, keyed by page id.
   // version 4 added `area.valveGroup` — drip beds sharing one valve.
   // version 3 added `area.planRef = {pageId}` for areas traced over a site
   // plan. restoreState() still reads a version-2, -3 or -4 blob unchanged:
   // an absent routing means nothing was piped up, an absent valveGroup means
   // the bed is on its own valve, exactly as before, and an absent planRef
-  // means a hand-sketched area.
+  // means a hand-sketched area. Wire is derived from the routing and the
+  // zone plan, so it is never stored — there is no second copy to drift.
   return {
-    version: 5,
+    version: 6,
     savedAt: new Date().toISOString(),
     inputs,
     waterSupply: readWaterSupply(),
@@ -5279,7 +5491,7 @@ function serializeRouting(){
     if(!r.poc && !main.length && !man.length) return;
     out[id]={
       poc: r.poc ? {x:round3(r.poc.x), y:round3(r.poc.y)} : null,
-      main: main.map(p=>({x:round3(p.x), y:round3(p.y)})),
+      main: main.map((p,i)=>({x:round3(p.x), y:round3(p.y), p:(p.p==null?i-1:p.p)})),
       manifolds: man.map(p=>({x:round3(p.x), y:round3(p.y)}))
     };
   });
@@ -5292,11 +5504,19 @@ function restoreRouting(blob){
   const pt=p=>(p && Number.isFinite(+p.x) && Number.isFinite(+p.y)) ? {x:+p.x, y:+p.y} : null;
   Object.keys(blob).forEach(id=>{
     const r=blob[id]; if(!r || typeof r!=='object') return;
-    routing[id]={
-      poc: pt(r.poc),
-      main: (Array.isArray(r.main)?r.main:[]).map(pt).filter(Boolean),
-      manifolds: (Array.isArray(r.manifolds)?r.manifolds:[]).map(pt).filter(Boolean)
-    };
+    // A version-5 chain has no `p` on its nodes. Defaulting to i-1 restores
+    // exactly the run it described; mpMainEdges then re-roots anything that
+    // still does not terminate at the poc.
+    const raw=(Array.isArray(r.main)?r.main:[]);
+    const main=[];
+    raw.forEach((n,i)=>{
+      const q=pt(n); if(!q) return;
+      const parent = Number.isInteger(n && n.p) ? n.p : (main.length-1);
+      q.p = (parent>=0 && parent<raw.length) ? parent : -1;
+      main.push(q);
+    });
+    routing[id]={ poc: pt(r.poc), main,
+      manifolds: (Array.isArray(r.manifolds)?r.manifolds:[]).map(pt).filter(Boolean) };
   });
 }
 

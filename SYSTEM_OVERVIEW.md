@@ -1163,6 +1163,24 @@ its own load rather than the zone being drawn at one thickness, with a
 floor of 3/4" because that is the lateral pipe actually stocked
 (`POPO75400`), not 1/2" that would never be ordered.
 
+Layer 4 tees the mainline and runs the wire with it. `routing[pageId].main`
+is now a **tree**: every node carries `p`, the index of its parent (-1 = the
+POC), so a node with more than one child is a branch. Selecting a node before
+placing a bend tees off it; deleting a node in the middle of a branch splices
+it out and reattaches its children rather than cutting the run beyond it loose.
+
+The **control wire** shares the trench, so it is derived from the same tree
+and never stored. An ICV solenoid takes one shared COMMON plus one switched
+leg per zone, so a cable only has to carry the valves DOWNSTREAM of it —
+the leg to a two-valve box needs three conductors, not one per valve on the
+property. Each manifold's valve count is walked up the tree to the POC,
+`+1` common `+1` spare, rounded up to a real spool (2/3/5/7/9/13-core).
+Gauge comes off the longest controller-to-valve run against the conventional
+24 VAC table (18 AWG ≤700 ft, 16 ≤1100, 14 ≤1800, 12 ≤2800), with the basis
+printed beside the number because it is a starting figure, not a calculation
+for a specific solenoid's inrush. A mainline stub past the last box carries
+no wire at all.
+
 Two honesty details fall out of it. Heads are read from `plan.heads` +
 `plan.orig`, **not** `area.manualHeads` — the layout editor never writes a
 `zone` onto a hand-placed head (packZones decides that downstream), so
