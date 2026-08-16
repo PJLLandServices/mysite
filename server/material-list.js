@@ -43,6 +43,14 @@
     posConfirm: document.getElementById("mlbPosConfirm"),
     posCancel: document.getElementById("mlbPosCancel"),
     requestRfqButton: document.getElementById("mlbRequestRfqButton"),
+    compareButton: document.getElementById("mlbCompareButton"),
+    compareModal: document.getElementById("mlbCompareModal"),
+    comparePlan: document.getElementById("mlbComparePlan"),
+    compareError: document.getElementById("mlbCompareError"),
+    compareCancel: document.getElementById("mlbCompareCancel"),
+    compareApply: document.getElementById("mlbCompareApply"),
+    rfqModeShop: document.getElementById("mlbRfqModeShop"),
+    rfqModeAssigned: document.getElementById("mlbRfqModeAssigned"),
     rfqModal: document.getElementById("mlbRfqModal"),
     rfqPlan: document.getElementById("mlbRfqPlan"),
     rfqError: document.getElementById("mlbRfqError"),
@@ -858,13 +866,19 @@
   // Same plan-then-confirm shape as Generate POs, but the RFQ path asks
   // suppliers for pricing without committing: it never snapshots prices
   // and never flips line status (lines stay "need").
+  // Shop mode is the default: it is the one that answers "who is cheaper",
+  // and it is the only one that cannot be blocked by a missing supplier
+  // assignment. Switching the radio re-plans so the dialog always shows
+  // what Generate will actually do.
+  function rfqShopping() { return !els.rfqModeAssigned || !els.rfqModeAssigned.checked; }
   async function openRfqModal() {
     els.rfqError.hidden = true;
     els.rfqConfirm.hidden = true;
     els.rfqModal.hidden = false;
     els.rfqPlan.innerHTML = `<p class="proj-empty">Planning…</p>`;
     try {
-      const r = await fetch(`/api/material-lists/${encodeURIComponent(state.listId)}/plan-quote-requests`, { method: "POST" });
+      const q = rfqShopping() ? "?shop=all" : "";
+      const r = await fetch(`/api/material-lists/${encodeURIComponent(state.listId)}/plan-quote-requests${q}`, { method: "POST" });
       const data = await r.json().catch(() => ({}));
       if (!r.ok || !data.ok && !data.previews) {
         els.rfqError.textContent = (data.errors && data.errors[0]) || `Couldn't plan (${r.status})`;
@@ -884,7 +898,8 @@
     const missing = plan.missingSupplier || [];
     let html = "";
     if (previews.length) {
-      html += `<div style="margin:0 0 12px"><strong>${previews.length} quote request${previews.length === 1 ? "" : "s"} will be created:</strong></div>`;
+      const shopping = plan.mode === "shop";
+      html += `<div style="margin:0 0 12px"><strong>${previews.length} quote request${previews.length === 1 ? "" : "s"} will be created${shopping ? ", each carrying the whole list" : ""}:</strong></div>`;
       html += `<ul style="list-style:none;margin:0 0 12px;padding:0;display:flex;flex-direction:column;gap:8px">`;
       for (const p of previews) {
         html += `
@@ -906,21 +921,31 @@
         <div style="padding:10px 12px;background:#FFF1D6;border:1px solid #E0CB8E;border-radius:8px;color:#7A5500;margin-top:8px">
           <strong>${missing.length} SKU${missing.length === 1 ? "" : "s"} blocked — no supplier assigned:</strong>
           <div style="font-family:ui-monospace,monospace;font-size:12px;margin-top:4px">${missing.map(escapeHtml).join(", ")}</div>
-          <div style="margin-top:8px;font-size:12px"><a href="/admin/parts-suppliers" style="color:#7A5500;font-weight:700">→ Open Catalog assignments</a> to fix, then re-open this dialog.</div>
+          <div style="margin-top:8px;font-size:12px">Switch to <strong>Shop the whole list</strong> above to ask everyone anyway, or <a href="/admin/parts-suppliers" style="color:#7A5500;font-weight:700">open Catalog assignments</a> to fix it.</div>
         </div>
       `;
+    }
+    if (plan.mode === "shop" && previews.length === 1) {
+      html += `
+        <div style="padding:10px 12px;background:#FFF1D6;border:1px solid #E0CB8E;border-radius:8px;color:#7A5500;margin-top:8px">
+          Only one supplier is on file, so there is nothing to compare. Add a second on the Suppliers page first.
+        </div>`;
     }
     if (!previews.length && !missing.length) {
       html = `<p class="proj-empty">No <em>need</em> lines on this list. Mark some lines as need, then come back.</p>`;
     }
     els.rfqPlan.innerHTML = html;
-    els.rfqConfirm.hidden = !plan.canGenerate;
+    els.rfqConfirm.hidden = !plan.canGenerate || (plan.mode === "shop" && previews.length < 2);
   }
   async function confirmGenerateRfqs() {
     els.rfqError.hidden = true;
     els.rfqConfirm.disabled = true;
     try {
-      const r = await fetch(`/api/material-lists/${encodeURIComponent(state.listId)}/generate-quote-requests`, { method: "POST" });
+      const r = await fetch(`/api/material-lists/${encodeURIComponent(state.listId)}/generate-quote-requests`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(rfqShopping() ? { shopAll: true } : {})
+      });
       const data = await r.json().catch(() => ({}));
       if (!r.ok || !data.ok) {
         els.rfqError.textContent = (data.errors && data.errors[0]) || `Generate failed (${r.status})`;
@@ -934,6 +959,99 @@
       els.rfqError.hidden = false;
     } finally {
       els.rfqConfirm.disabled = false;
+    }
+  }
+
+  // ---- Quote comparison ----------------------------------------------
+  async function openCompareModal() {
+    els.compareError.hidden = true;
+    els.compareApply.hidden = true;
+    els.compareModal.hidden = false;
+    els.comparePlan.innerHTML = `<p class="proj-empty">Loading…</p>`;
+    try {
+      const r = await fetch(`/api/material-lists/${encodeURIComponent(state.listId)}/quote-comparison`);
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok || !data.ok) {
+        els.compareError.textContent = (data.errors && data.errors[0]) || `Couldn't load (${r.status})`;
+        els.compareError.hidden = false;
+        els.comparePlan.innerHTML = "";
+        return;
+      }
+      renderCompare(data);
+    } catch (err) {
+      els.compareError.textContent = err.message || "Couldn't load.";
+      els.compareError.hidden = false;
+      els.comparePlan.innerHTML = "";
+    }
+  }
+  function renderCompare(data) {
+    const rows = data.rows || [];
+    const rfqs = data.rfqs || [];
+    if (!rows.length) {
+      els.comparePlan.innerHTML = `<p class="proj-empty">No prices back yet. Send the quote requests, then record each supplier's reply on its RFQ page.</p>`;
+      return;
+    }
+    const cols = rfqs.map((r) => r.supplierId);
+    const nameById = Object.fromEntries(rfqs.map((r) => [r.supplierId, r.supplierName || r.supplierId]));
+    let saving = 0;
+    for (const row of rows) saving += row.savingCents || 0;
+    let html = `<div style="margin:0 0 10px;font-size:13px">
+      ${rows.length} SKU${rows.length === 1 ? "" : "s"} quoted by ${rfqs.length} supplier${rfqs.length === 1 ? "" : "s"}.
+      ${saving > 0 ? `Taking the cheapest of each saves <strong>${fmtCents(saving)}</strong> against always buying the dearest.` : ""}
+    </div>`;
+    html += `<div style="max-height:46vh;overflow:auto;border:1px solid #E8E5D7;border-radius:8px">
+      <table style="width:100%;border-collapse:collapse;font-size:12.5px">
+      <thead><tr style="background:#FCFBF4">
+        <th style="text-align:left;padding:7px 10px">SKU</th>
+        <th style="text-align:left;padding:7px 10px">Description</th>
+        <th style="text-align:right;padding:7px 10px">Qty</th>
+        ${cols.map((c) => `<th style="text-align:right;padding:7px 10px">${escapeHtml(nameById[c])}</th>`).join("")}
+      </tr></thead><tbody>`;
+    for (const row of rows) {
+      const byS = Object.fromEntries(row.quotes.map((q) => [q.supplierId, q]));
+      html += `<tr style="border-top:1px solid #EFEDE2">
+        <td style="padding:6px 10px;font-family:ui-monospace,monospace">${escapeHtml(row.sku)}</td>
+        <td style="padding:6px 10px">${escapeHtml(row.description || "")}</td>
+        <td style="padding:6px 10px;text-align:right">${row.quantity}</td>`;
+      for (const c of cols) {
+        const q = byS[c];
+        if (!q) { html += `<td style="padding:6px 10px;text-align:right;color:#B4B0A0">—</td>`; continue; }
+        const win = row.cheapest && row.cheapest.supplierId === c;
+        // A single quote is not a comparison, so it is never dressed up as
+        // a winner — it is just the only number we have.
+        const mark = win && row.comparable;
+        html += `<td style="padding:6px 10px;text-align:right;${mark ? "font-weight:700;color:#1B5E20;background:#EEF6EE" : ""}">${fmtCents(q.priceCents)}${mark ? " ✓" : ""}</td>`;
+      }
+      html += `</tr>`;
+    }
+    html += `</tbody></table></div>`;
+    const single = rows.filter((r) => !r.comparable).length;
+    if (single) {
+      html += `<p style="margin:10px 0 0;font-size:12px;color:#7A5500">${single} SKU${single === 1 ? " has" : "s have"} only one price back — nothing to compare on ${single === 1 ? "it" : "those"} yet.</p>`;
+    }
+    els.comparePlan.innerHTML = html;
+    els.compareApply.hidden = false;
+  }
+  async function applyCheapest() {
+    els.compareError.hidden = true;
+    els.compareApply.disabled = true;
+    try {
+      const r = await fetch(`/api/material-lists/${encodeURIComponent(state.listId)}/apply-cheapest-quotes`, { method: "POST" });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok || !data.ok) {
+        els.compareError.textContent = (data.errors && data.errors[0]) || `Apply failed (${r.status})`;
+        els.compareError.hidden = false;
+        return;
+      }
+      const n = (data.applied || []).length;
+      els.comparePlan.innerHTML = `<p class="proj-empty">${n} catalog price${n === 1 ? "" : "s"} updated to the cheapest quote${(data.skipped || []).length ? ` · ${data.skipped.length} skipped` : ""}. Reloading the list…</p>`;
+      els.compareApply.hidden = true;
+      setTimeout(() => location.reload(), 900);
+    } catch (err) {
+      els.compareError.textContent = err.message || "Apply failed.";
+      els.compareError.hidden = false;
+    } finally {
+      els.compareApply.disabled = false;
     }
   }
 
@@ -1048,6 +1166,14 @@
     // Request Quotation — mirrors the PO plan/confirm wiring.
     els.requestRfqButton.addEventListener("click", openRfqModal);
     els.rfqCancel.addEventListener("click", () => { els.rfqModal.hidden = true; });
+    els.compareButton.addEventListener("click", openCompareModal);
+    els.compareCancel.addEventListener("click", () => { els.compareModal.hidden = true; });
+    els.compareApply.addEventListener("click", applyCheapest);
+    // Re-plan on mode change so the preview is never stale about what
+    // Generate is about to do.
+    for (const el of [els.rfqModeShop, els.rfqModeAssigned]) {
+      if (el) el.addEventListener("change", openRfqModal);
+    }
     els.rfqModal.addEventListener("click", (event) => {
       if (event.target === els.rfqModal) els.rfqModal.hidden = true;
     });

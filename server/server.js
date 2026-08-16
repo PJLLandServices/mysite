@@ -14761,8 +14761,19 @@ async function handleApi(req, res, pathname) {
       const list = await materialLists.get(id);
       if (!list) return sendJson(res, 404, { ok: false, errors: ["Material list not found."] });
       const partsMap = (PARTS && PARTS.parts) || {};
-      const plan = quoteRequests.planFromMaterialList(list, partsMap);
+      // The dialog can preview SHOP mode too, so what it shows is what
+      // Generate will actually do: ?shop=all, or ?shop=SUP-001,SUP-002.
+      const planUrl = new URL(req.url, baseUrlFromReq(req));
+      const shopParam = planUrl.searchParams.get("shop");
       const allSuppliers = await suppliers.list({ includeArchived: true });
+      let shopIds = null;
+      if (shopParam) {
+        const active = allSuppliers.filter((x) => !x.archived);
+        shopIds = shopParam === "all"
+          ? active.map((x) => x.id)
+          : active.filter((x) => shopParam.split(",").map((t) => t.trim()).includes(x.id)).map((x) => x.id);
+      }
+      const plan = quoteRequests.planFromMaterialList(list, partsMap, shopIds ? { shopSupplierIds: shopIds } : {});
       const supplierById = new Map(allSuppliers.map((s) => [s.id, s]));
       // Surface an existing draft per supplier so the modal can say
       // "refreshes RFQ-…" instead of implying a duplicate gets created.
@@ -14778,6 +14789,8 @@ async function handleApi(req, res, pathname) {
       return sendJson(res, 200, {
         ok: true,
         canGenerate: plan.ok,
+        mode: plan.mode,
+        supplierCount: allSuppliers.filter((x) => !x.archived).length,
         previews,
         missingSupplier: plan.missingSupplier,
         missingSupplierLines: plan.missingSupplierLines
@@ -14787,10 +14800,29 @@ async function handleApi(req, res, pathname) {
     }
   }
 
+  // Which suppliers a shop-mode request goes to. `shopAll` means every
+  // active supplier on file; an explicit list is filtered against real,
+  // non-archived ids so a stale id from the browser cannot mint an RFQ
+  // addressed to nobody. Returns null when the caller did not ask to shop.
+  function resolveShopSupplierIds(body, allSuppliers) {
+    if (!body || typeof body !== "object") return null;
+    const active = allSuppliers.filter((x) => !x.archived);
+    if (body.shopAll === true) return active.map((x) => x.id);
+    if (!Array.isArray(body.shopSupplierIds) || !body.shopSupplierIds.length) return null;
+    const wanted = new Set(body.shopSupplierIds.map((x) => String(x || "").trim()).filter(Boolean));
+    return active.filter((x) => wanted.has(x.id)).map((x) => x.id);
+  }
+
   // POST /api/material-lists/:id/generate-quote-requests — create (or
-  // refresh) one draft RFQ per supplier. Idempotent: an existing DRAFT for
-  // (list, supplier) gets its lines replaced; non-drafts are never touched.
-  // The material list itself is NOT modified — lines stay "need".
+  // refresh) draft RFQs. Idempotent: an existing DRAFT for (list, supplier)
+  // gets its lines replaced; non-drafts are never touched. The material
+  // list itself is NOT modified — lines stay "need".
+  //
+  // Body { shopSupplierIds: [...] } or { shopAll: true } switches to SHOP
+  // mode: the same whole list to every named supplier, ignoring the
+  // catalog's per-part assignment, so the replies can be compared. In that
+  // mode an unassigned SKU is shopped rather than blocking, because not
+  // caring what the catalog lists is the point of asking.
   const listGenRfqMatch = pathname.match(/^\/api\/material-lists\/([^/]+)\/generate-quote-requests$/);
   if (listGenRfqMatch && req.method === "POST") {
     try {
@@ -14798,20 +14830,87 @@ async function handleApi(req, res, pathname) {
       const list = await materialLists.get(id);
       if (!list) return sendJson(res, 404, { ok: false, errors: ["Material list not found."] });
       const partsMap = (PARTS && PARTS.parts) || {};
-      const plan = quoteRequests.planFromMaterialList(list, partsMap);
+      const body = await parseRequestBody(req).catch(() => ({}));
+      const allSuppliers = await suppliers.list({ includeArchived: true });
+      const shopSupplierIds = resolveShopSupplierIds(body, allSuppliers);
+      if (shopSupplierIds && shopSupplierIds.length === 1) {
+        return sendJson(res, 422, {
+          ok: false,
+          errors: ["Shopping a list needs at least two suppliers to compare — only one is available."]
+        });
+      }
+      const opts = shopSupplierIds ? { shopSupplierIds } : {};
+      const plan = quoteRequests.planFromMaterialList(list, partsMap, opts);
       if (!plan.ok) {
         return sendJson(res, 422, {
           ok: false,
-          errors: ["Cannot generate quote requests — some need-line SKUs have no supplier assigned."],
+          errors: [plan.mode === "shop"
+            ? "Nothing to shop — this list has no lines marked need."
+            : "Cannot generate quote requests — some need-line SKUs have no supplier assigned."],
           missingSupplier: plan.missingSupplier
         });
       }
-      const allSuppliers = await suppliers.list({ includeArchived: true });
       const supplierById = new Map(allSuppliers.map((s) => [s.id, s]));
-      const result = await quoteRequests.generateFromMaterialList(list, partsMap, supplierById);
-      return sendJson(res, 201, { ok: true, created: result.created, refreshed: result.refreshed });
+      const result = await quoteRequests.generateFromMaterialList(list, partsMap, supplierById, opts);
+      return sendJson(res, 201, { ok: true, mode: plan.mode, created: result.created, refreshed: result.refreshed });
     } catch (err) {
       return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't generate quote requests."] });
+    }
+  }
+
+  // GET /api/material-lists/:id/quote-comparison — every quote that came
+  // back for this list, lined up by SKU with the cheapest marked.
+  const listCmpMatch = pathname.match(/^\/api\/material-lists\/([^/]+)\/quote-comparison$/);
+  if (listCmpMatch && req.method === "GET") {
+    const id = decodeURIComponent(listCmpMatch[1]);
+    const list = await materialLists.get(id);
+    if (!list) return sendJson(res, 404, { ok: false, errors: ["Material list not found."] });
+    const rfqs = await quoteRequests.list({ sourceMaterialListId: id });
+    const cmp = quoteRequests.compareQuotes(rfqs, { listId: id });
+    return sendJson(res, 200, { ok: true, ...cmp });
+  }
+
+  // POST /api/material-lists/:id/apply-cheapest-quotes — write the LOWEST
+  // quoted price per SKU into the parts catalog, across every RFQ raised
+  // from this list.
+  //
+  // This exists because applying RFQs one at a time is last-write-wins:
+  // apply the dearer supplier second and the catalog quietly carries the
+  // dearer price. Choosing per SKU is the only way "go with the cheapest"
+  // is actually true.
+  const listApplyCheapMatch = pathname.match(/^\/api\/material-lists\/([^/]+)\/apply-cheapest-quotes$/);
+  if (listApplyCheapMatch && req.method === "POST") {
+    if (!BASELINE_PARTS) return sendJson(res, 503, { ok: false, errors: ["Parts baseline not loaded."] });
+    try {
+      const id = decodeURIComponent(listApplyCheapMatch[1]);
+      const list = await materialLists.get(id);
+      if (!list) return sendJson(res, 404, { ok: false, errors: ["Material list not found."] });
+      const rfqs = await quoteRequests.list({ sourceMaterialListId: id });
+      const cmp = quoteRequests.compareQuotes(rfqs, { listId: id });
+      const winners = cmp.rows.filter((r) => r.cheapest);
+      if (!winners.length) {
+        return sendJson(res, 422, { ok: false, errors: ["No quoted prices yet — record at least one supplier's reply first."] });
+      }
+      const applied = [], unchanged = [], skipped = [];
+      for (const row of winners) {
+        const toCents = row.cheapest.priceCents;
+        const current = PARTS && PARTS.parts && PARTS.parts[row.sku];
+        if (!current) { skipped.push(row.sku); continue; }
+        const fromCents = Number(current.priceCents);
+        if (fromCents === toCents) { unchanged.push(row.sku); continue; }
+        try {
+          await partsLib.update(BASELINE_PARTS, row.sku, { priceCents: toCents }, { allowedCategories: categoriesAllowedSet() });
+          applied.push({ sku: row.sku, fromCents: Number.isFinite(fromCents) ? fromCents : null, toCents,
+                         supplierId: row.cheapest.supplierId, rfqId: row.cheapest.rfqId });
+        } catch (err) {
+          console.warn(`[rfq-apply-cheapest] ${id}: ${row.sku} skipped — ${err.message}`);
+          skipped.push(row.sku);
+        }
+      }
+      if (applied.length) rebuildCatalogFromOverrides();
+      return sendJson(res, 200, { ok: true, applied, unchanged, skipped, rows: winners.length });
+    } catch (err) {
+      return sendJson(res, 400, { ok: false, errors: [err.message || "Couldn't apply the cheapest quotes."] });
     }
   }
 
@@ -15024,6 +15123,37 @@ async function handleApi(req, res, pathname) {
       if (!rfq) return sendJson(res, 404, { ok: false, errors: ["Quote request not found."] });
       if (rfq.status !== "quoted") {
         return sendJson(res, 422, { ok: false, errors: [`Can only apply a quoted request. This one is "${rfq.status}".`] });
+      }
+
+      // Applying RFQs one at a time is last-write-wins. If another RFQ from
+      // the same material list quoted a SKU CHEAPER, applying this one
+      // would quietly RAISE the catalog price and every bid built off it —
+      // the exact opposite of "go with the cheapest". Refuse and name the
+      // cheaper source. ?force=1 overrides deliberately; apply-cheapest-
+      // quotes takes the best of each instead.
+      if (rfq.sourceMaterialListId) {
+        const applyUrl = new URL(req.url, baseUrlFromReq(req));
+        const forced = applyUrl.searchParams.get("force") === "1";
+        const sibling = await quoteRequests.list({ sourceMaterialListId: rfq.sourceMaterialListId });
+        const cmp = quoteRequests.compareQuotes(sibling, { listId: rfq.sourceMaterialListId });
+        const dearer = [];
+        for (const row of cmp.rows) {
+          if (!row.cheapest || row.cheapest.rfqId === rfq.id) continue;
+          const mine = (rfq.lines || []).find((l) => l.sku === row.sku && l.quotedPriceCents != null);
+          if (mine && mine.quotedPriceCents > row.cheapest.priceCents) {
+            dearer.push({ sku: row.sku, thisCents: mine.quotedPriceCents,
+                          cheapestCents: row.cheapest.priceCents,
+                          cheapestRfqId: row.cheapest.rfqId,
+                          cheapestSupplierName: row.cheapest.supplierName });
+          }
+        }
+        if (dearer.length && !forced) {
+          return sendJson(res, 409, {
+            ok: false,
+            dearerThanBest: dearer,
+            errors: [`${dearer.length} SKU${dearer.length === 1 ? " on this quote is" : "s on this quote are"} dearer than a quote already recorded for the same material list. Use "Apply cheapest across all quotes", or re-send with force=1 to take this one anyway.`]
+          });
+        }
       }
 
       // One price per SKU — last priced line wins if a degenerate record

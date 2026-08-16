@@ -157,6 +157,7 @@
         <section class="mlb-footer-actions">
           <button type="button" class="pjl-btn pjl-btn-primary" id="mlbGeneratePosButton">Generate purchase orders</button>
           <button type="button" class="pjl-btn pjl-btn-outline" id="mlbRequestRfqButton">Request quotation</button>
+          <button type="button" class="pjl-btn pjl-btn-outline" id="mlbCompareButton">Compare quotes</button>
           <button type="button" class="pjl-btn pjl-btn-outline" id="mlbArchiveButton">Archive list</button>
           <button type="button" class="pjl-btn pjl-btn-outline is-danger" id="mlbDeleteButton">Delete list</button>
         </section>
@@ -198,12 +199,42 @@
   <div class="proj-modal-backdrop" id="mlbRfqModal" hidden role="dialog" aria-modal="true">
     <div class="proj-modal" style="max-width:600px">
       <h3>Request quotation</h3>
-      <p style="margin:0 0 12px;color:#4A4A44;font-size:13px">PJL groups the outstanding <em>need</em> lines by their assigned supplier and creates one draft <strong>request for quotation</strong> per supplier — an ask for current pricing, <em>not</em> an order. Lines stay marked <em>need</em>; nothing is committed until you generate purchase orders later.</p>
+      <p style="margin:0 0 10px;color:#4A4A44;font-size:13px">A <strong>request for quotation</strong> asks for current pricing — it is <em>not</em> an order. Lines stay marked <em>need</em>; nothing is committed until you generate purchase orders later.</p>
+      <fieldset style="border:1px solid #E8E5D7;border-radius:8px;padding:10px 12px;margin:0 0 12px">
+        <legend style="font-size:12px;color:#7A7A72;padding:0 4px">Who to ask</legend>
+        <label style="display:flex;gap:8px;align-items:flex-start;font-size:13px;cursor:pointer">
+          <input type="radio" name="mlbRfqMode" value="shop" id="mlbRfqModeShop" checked style="margin-top:3px">
+          <span><strong>Shop the whole list to every supplier</strong><br>
+          <span style="color:#7A7A72;font-size:12px">Each supplier gets every <em>need</em> line, whatever the catalog lists them against, so the prices can be compared. Neither request mentions the other, or which supplier a part is normally bought from.</span></span>
+        </label>
+        <label style="display:flex;gap:8px;align-items:flex-start;font-size:13px;cursor:pointer;margin-top:8px">
+          <input type="radio" name="mlbRfqMode" value="assigned" id="mlbRfqModeAssigned" style="margin-top:3px">
+          <span><strong>Split by assigned supplier</strong><br>
+          <span style="color:#7A7A72;font-size:12px">Each supplier is asked only about the parts the catalog lists them for. A part with no supplier assigned blocks this.</span></span>
+        </label>
+      </fieldset>
       <div id="mlbRfqPlan"></div>
       <p class="supplier-form-error" id="mlbRfqError" role="alert" hidden></p>
       <div class="proj-modal-actions">
         <button type="button" class="pjl-btn pjl-btn-outline" id="mlbRfqCancel">Close</button>
         <button type="button" class="pjl-btn pjl-btn-primary" id="mlbRfqConfirm" hidden>Create drafts</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Quote comparison — what came back, lined up by SKU with the cheapest
+       marked. Applying writes the LOWEST price per SKU into the catalog;
+       applying quotes one at a time is last-write-wins and would otherwise
+       let the dearer supplier set the price just by being clicked second. -->
+  <div class="proj-modal-backdrop" id="mlbCompareModal" hidden role="dialog" aria-modal="true">
+    <div class="proj-modal" style="max-width:860px">
+      <h3>Compare quotes</h3>
+      <p style="margin:0 0 12px;color:#4A4A44;font-size:13px">Every price that came back for this list. <strong>Apply cheapest</strong> writes the lowest price per SKU into the parts catalog, which is what material lists and quotes price from.</p>
+      <div id="mlbComparePlan"></div>
+      <p class="supplier-form-error" id="mlbCompareError" role="alert" hidden></p>
+      <div class="proj-modal-actions">
+        <button type="button" class="pjl-btn pjl-btn-outline" id="mlbCompareCancel">Close</button>
+        <button type="button" class="pjl-btn pjl-btn-primary" id="mlbCompareApply" hidden>Apply cheapest</button>
       </div>
     </div>
   </div>
