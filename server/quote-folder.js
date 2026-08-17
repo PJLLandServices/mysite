@@ -19,7 +19,8 @@ const BRANCH_LABELS = {
   lighting_design: "Lighting Design",
   renovation_coordination: "Renovation",
   change_order: "Change Order",
-  residential_repair: "Residential Repair"
+  residential_repair: "Residential Repair",
+  lighting_repair: "Landscape Lighting Repairs"
 };
 
 const ACCEPTANCE_LABELS = {

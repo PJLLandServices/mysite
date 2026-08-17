@@ -58,7 +58,8 @@ const BRANCHES = [
   "lighting_design",
   "renovation_coordination",
   "change_order",
-  "residential_repair"
+  "residential_repair",
+  "lighting_repair"
 ];
 const BILLING_MODES = ["fixed_price", "time_and_material"];
 

@@ -71,9 +71,11 @@ const STATUSES = [
 // records but is no longer emitted; project_proposal supersedes it.
 const TYPES = ["ai_repair_quote", "formal_quote", "on_site_quote", "project_proposal"];
 
-// Branch taxonomy for project_proposal. Five real-world buckets that
-// share the skeleton but differ in templated narrative and
-// responsibility splits. Brief 1 §3.1A.
+// Branch taxonomy for project_proposal. Real-world buckets that share the
+// skeleton but differ in templated narrative and responsibility splits.
+// Brief 1 §3.1A seeded the first five; the list has grown since — count it,
+// don't trust a number written here. Mirrored by BRANCHES in lib/projects.js;
+// adding one here means adding it there too.
 const PROPOSAL_BRANCHES = [
   "gc_subcontract",
   "direct_residential",
@@ -87,7 +89,16 @@ const PROPOSAL_BRANCHES = [
   // are untouched. Carries behaviour, not just a label — see
   // PROPOSAL_BRANCH_DEFAULTS (five-section preset, 30-day expiry, T&M
   // billing, plain-PDF delivery).
-  "residential_repair"
+  "residential_repair",
+  // lighting_repair (2026-08) — repairs, troubleshooting and fixture
+  // replacement on an EXISTING landscape lighting system. Distinct from
+  // lighting_design (designing and installing a new one): this branch names
+  // fixing what is already in the ground. Additive; existing records are
+  // untouched. Deliberately label-only — it is ABSENT from
+  // PROPOSAL_BRANCH_DEFAULTS, so it keeps the historical behaviour (full
+  // nine-section skeleton, 90-day expiry, fixed_price billing, proposal_page
+  // delivery, "Proposal" as the customer-facing noun).
+  "lighting_repair"
 ];
 
 const BILLING_MODES = ["fixed_price", "time_and_material"];
@@ -565,7 +576,7 @@ function blankQuote() {
     // (null/empty) for ai_repair_quote and on_site_quote so the existing
     // flows are untouched.
 
-    // Branch — five real-world buckets (see PROPOSAL_BRANCHES). Drives
+    // Branch — the real-world buckets in PROPOSAL_BRANCHES. Drives
     // the proposal builder's templated narrative and the PDF header tag.
     branch: null,
 

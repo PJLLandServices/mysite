@@ -205,7 +205,8 @@
     lighting_design: "Lighting Design",
     renovation_coordination: "Renovation Coordination",
     change_order: "Change Order",
-    residential_repair: "Residential Repair"
+    residential_repair: "Residential Repair",
+    lighting_repair: "Landscape Lighting Repairs"
   };
 
   // ---- Render -------------------------------------------------------
