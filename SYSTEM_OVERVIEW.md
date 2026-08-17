@@ -1119,7 +1119,7 @@ chain, each hop a real function:
 
 ```
 area geometry (typed dims, drawn shape, or traced over a calibrated site plan)
-   → compute()              per-area head layout, arc-aware zone packing, GPM
+   → compute()              per-area head layout, balanced zone packing, GPM
    → desiredQuoteLines()    scope + controller + one line per zone
    → syncQuoteFromDesign()  creates or re-syncs a project_proposal Q-…
    → generateMaterialList() refreshes the linked ML-…
@@ -1129,6 +1129,28 @@ Once a quote exists it stays **linked**: every "Save to project" re-syncs
 it — zone names and added/removed zones flow through, **edited prices are
 kept**, and a sent quote is never overwritten. Both the quote and the
 material list require the design to be attached to a project.
+
+**Zone packing is balanced, not filled (Aug 2026).** `packZones()` used to
+fill each valve to the GPM ceiling and start a new one on overflow. That
+uses the fewest valves — the thing that costs money — but strands the
+remainder: ten equal heads under a four-head ceiling came out **4 / 4 / 2**.
+It now takes the greedy fill's valve count as fixed (`pzMinZones`) and then
+chooses where to CUT the head sequence so the valves come out as even as the
+ceiling allows (`pzBalancedCuts`, an exact O(k·n²) DP scoring squared
+distance from the ideal share). Ten over four becomes **3 / 3 / 4**.
+
+Three properties it must keep, all covered by test: the **valve count never
+changes** (checked over 4,000 random areas — one extra valve is a valve, a
+box slot, a wire core and a quote line); no multi-head zone exceeds the
+ceiling, with the single-head-heavier-than-the-ceiling escape hatch the
+greedy fill always had; and heads keep their **order**, which is spatial, so
+a zone stays a contiguous run of the shape and its lateral does not zig-zag
+across the property. Minimising only the worst zone is not enough — 4/4/2
+and 4/3/3 both peak at 4 — which is why the DP scores deviation rather than
+the maximum. Beyond a budget of `k·n² > 3e6` it degrades to the old fill
+rather than stalling the page. Evenness is measured on GPM, not head count,
+because GPM is what the valve carries; with one nozzle type they are the
+same thing.
 
 **Master plan (Aug 2026).** Every area traced onto a calibrated sheet is
 already in that sheet's world frame — `world_ft = raster_px × ftPerPx`,

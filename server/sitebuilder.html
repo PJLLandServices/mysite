@@ -1017,12 +1017,117 @@ function geom(a){
 }
 
 // Greedy-pack heads into zones by the GPM ceiling (insertion order).
+/* Split an area's heads across valves.
+
+   Filling each valve to the ceiling and starting a new one when it
+   overflows uses the FEWEST valves, which is the thing that costs money —
+   but it leaves whatever is left over stranded on the last one. Ten equal
+   heads under a four-head ceiling came out 4 / 4 / 2: a valve doing half
+   the work of its neighbours, watering unevenly and needing its own run
+   time, for no reason other than the order the heads happened to be in.
+
+   So: work out the fewest valves the greedy fill would use, then spread
+   the heads as evenly as the ceiling allows across exactly that many. The
+   valve count never changes, so nothing on the bid moves.
+
+   Two constraints the balancing must respect:
+
+     Heads keep their ORDER, and that order is spatial — the auto layout
+     walks the shape, and a hand-placed layout is in the order it was
+     drawn. Balancing by shuffling heads between valves would scatter a
+     zone across the property and send its lateral zig-zagging; balancing
+     by choosing where to CUT the sequence keeps every zone a contiguous
+     run of the lawn.
+
+     A single head heavier than the ceiling still gets its own valve —
+     it cannot be split, and that is the one case where a zone is allowed
+     over the ceiling. Same as the greedy fill always did.
+
+   Evenness is measured on GPM, not head count, because GPM is what the
+   valve actually has to carry. With one nozzle type throughout they are
+   the same thing.                                                        */
+
+// Is a run of heads a legal zone? Anything up to the ceiling, plus the
+// single-head escape hatch above.
+function pzZoneOk(sum, count, cap){ return count === 1 || sum <= cap + 0.001; }
+
+// Fewest valves, by the original greedy fill. This is the number the BOM,
+// the quote and the valve-box plan are all built on, so the balancing pass
+// below is not allowed to change it.
+function pzMinZones(gpm, cap){
+  let k = 1, acc = 0;
+  for(const g of gpm){ if(acc > 0 && acc + g > cap + 0.001){ k++; acc = 0; } acc += g; }
+  return k;
+}
+
+// Where to cut the sequence into exactly k runs so the runs come out as
+// close to equal as the ceiling allows. Exact, by dynamic programming over
+// cut positions, scoring squared distance from the ideal share — minimising
+// the WORST zone alone is not enough (4/4/2 and 4/3/3 both peak at 4, and
+// only one of them is what you want).
+function pzBalancedCuts(gpm, cap, k){
+  const n = gpm.length;
+  const pre = new Array(n + 1).fill(0);
+  for(let i = 0; i < n; i++) pre[i + 1] = pre[i] + gpm[i];
+  const target = pre[n] / k;
+  const INF = Infinity;
+  // dp[j][i] — best score for the first i heads in j zones.
+  let prev = new Array(n + 1).fill(INF), cur;
+  const from = [];                       // back-pointers, one row per zone
+  prev[0] = 0;
+  for(let j = 1; j <= k; j++){
+    cur = new Array(n + 1).fill(INF);
+    const back = new Array(n + 1).fill(-1);
+    for(let i = j; i <= n; i++){
+      for(let sIdx = j - 1; sIdx < i; sIdx++){
+        if(prev[sIdx] === INF) continue;
+        const sum = pre[i] - pre[sIdx];
+        if(!pzZoneOk(sum, i - sIdx, cap)) continue;
+        const d = sum - target;
+        const score = prev[sIdx] + d * d;
+        if(score < cur[i]){ cur[i] = score; back[i] = sIdx; }
+      }
+    }
+    from.push(back);
+    prev = cur;
+  }
+  if(prev[n] === INF) return null;       // no exact-k split — caller falls back
+  const cuts = [];
+  let i = n;
+  for(let j = k; j >= 1; j--){ const sIdx = from[j - 1][i]; cuts.unshift(sIdx); i = sIdx; }
+  return cuts;                            // cuts[j] = first head index of zone j
+}
+
+// The DP is O(k·n²). Per-area head counts are tens, so it is microseconds —
+// but a pathological area should degrade to the old fill rather than hang
+// the page on every keystroke.
+const PZ_BALANCE_BUDGET = 3e6;
+
 function packZones(heads, ceiling){
-  let z=0, acc=0;
-  heads.forEach(hd=>{ if(acc>0 && acc+hd.gpm>ceiling+0.001){ z++; acc=0; } hd.zone=z; acc+=hd.gpm; });
-  const zones=z+1;
-  const zoneGPM=new Array(zones).fill(0);
-  heads.forEach(hd=>{ zoneGPM[hd.zone]+=hd.gpm; });
+  const n = heads.length;
+  if(!n) return {zones: 0, zoneGPM: []};
+  const cap = Math.max(ceiling, 0.001);
+  const gpm = heads.map(hd => hd.gpm || 0);
+  const k = pzMinZones(gpm, cap);
+
+  let cuts = null;
+  if(k > 1 && k * n * n <= PZ_BALANCE_BUDGET) cuts = pzBalancedCuts(gpm, cap, k);
+
+  if(cuts){
+    let j = 0;
+    for(let i = 0; i < n; i++){
+      while(j + 1 < k && i >= cuts[j + 1]) j++;
+      heads[i].zone = j;
+    }
+  } else {
+    // Original greedy fill — one valve at a time, up to the ceiling.
+    let z = 0, acc = 0;
+    heads.forEach(hd => { if(acc > 0 && acc + hd.gpm > cap + 0.001){ z++; acc = 0; } hd.zone = z; acc += hd.gpm; });
+  }
+
+  const zones = heads.reduce((m, hd) => Math.max(m, hd.zone), 0) + 1;
+  const zoneGPM = new Array(zones).fill(0);
+  heads.forEach(hd => { zoneGPM[hd.zone] += hd.gpm; });
   return {zones, zoneGPM};
 }
 

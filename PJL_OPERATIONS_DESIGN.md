@@ -1183,6 +1183,22 @@ quote sheet, in the proposal PDF, in the portal, or in the `/approve` flow.
 The traced geometry does reach the customer — that is the point. The
 drawing underneath it does not.
 
+**Zones come out even, not filled-then-leftovers.** The builder used to load
+one valve up to its flow ceiling, start the next, and repeat — so the last
+valve got whatever was left. Ten heads under a four-head ceiling came out
+4 / 4 / 2: one valve doing half the work of its neighbours, watering
+unevenly and needing its own run time, purely because of the order the heads
+were in. It now works out the fewest valves the job needs and then spreads
+the heads across exactly that many, so the same ten come out 3 / 3 / 4. The
+valve count is unchanged, so nothing on the bid moves — this is the same
+split Patrick was doing by hand afterwards.
+
+One knock-on worth knowing: a balanced system has a **lower peak zone flow**,
+and the mainline is sized off the peak. So on some jobs the suggested
+mainline size will now come out a size smaller. That is correct — the peak
+really is lower — but it is a number that moved, so it is called out here
+rather than left to be noticed.
+
 **The master plan.** Because every traced area sits in the same calibrated
 frame, the whole job can be shown on one sheet: each area at its true
 position, drip runs and spray arcs drawn in, **coloured by the valve it
