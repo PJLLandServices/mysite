@@ -7,6 +7,9 @@ acceptance. CRM-15 opened and closed the same day (booking-delete control). CRM-
 **2026-08-13 (Site Plan Underlay):** FLOW-26 opened (Site Builder design → Quote + Material
 List) — UNMAPPED, awaiting a walked acceptance. Part 6 added to record architectural
 deviations DEV-01 / DEV-02 / DEV-03.
+**2026-08-18 (Prepared-for address):** QUOTE-01 opened and fixed under FLOW-20 — the
+proposal PDF addressed the customer at a SITE address belonging to a different project.
+FLOW-20 stays UNMAPPED; it was UNMAPPED before this change and no PASS flow was touched.
 
 If a flow isn't in here with a status, it is not known to work.
 Update this file, not a chat thread.
@@ -306,7 +309,7 @@ Nothing below has been walked. Assume nothing works until verified.
 
 | ID | Flow | Note |
 |---|---|---|
-| FLOW-20 | Quote written → delivered to customer | Money moves here |
+| FLOW-20 | Quote written → delivered to customer | Money moves here. **QUOTE-01 (found + fixed 2026-08-18, still UNMAPPED — needs a walked acceptance):** the customer-facing **PREPARED FOR** block on the proposal PDF took its address from the SERVICE-address chain in `quoteRenderParties` (`server/server.js:2697`) — property → lead → most recent lead/work order by email → billing address — and `quote-pdf.js` then re-applied the same bias with `property.address \|\| customer.address`. Every rung above the last is a project/site address, so the customer's own address could never win. On an account with several concurrent sites the document was addressed to whichever OTHER site had been adopted or worked most recently. **Observed on Q-2026-0067:** a Norwood site address (`4293 ON-7`) printed on a Dundalk McDonald's proposal for GreenTree Construction Inc.; the NAME was correct, only the address was wrong. **Not a regression** — `git log -L` puts both the renderer block and the resolver at the repo's root commit (`a9f17de`, 2026-08-01) with no edit since; the recent `80d12b0` touched only a `BRANCH_LABELS` entry. It is a latent design flaw that only surfaces once a customer has more than one site. **Fixed:** a new draft-editable `quote.preparedForAddress` field, resolved by `billingParties.resolvePreparedForAddress()` in the inverse order — explicit override → the customer's OWN address → the service address only as a last resort, never a property record. Presentation only: no change to the service address a crew works from, pricing, totals, HST, QuickBooks, or the frozen-PDF contract. Draft-only (in `SCOPE_PROTECTED_FIELDS`), so it freezes at send with the rest of the document. Covered by `scripts/test-prepared-for-address.mjs` (23 assertions, in `build:check`). **What still needs Patrick:** open Q-2026-0067 in the builder, confirm the field defaults to GreenTree's own address, and download the PDF to see the Norwood address gone. |
 | FLOW-21 | Quote viewed → accepted | |
 | FLOW-22 | Invoice generated → delivered | |
 | FLOW-24 | Form failure → does anything alert Patrick? | Contact page shows "Your message didn't send." Unknown whether that failure is logged anywhere. |

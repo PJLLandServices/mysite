@@ -40,6 +40,7 @@
     scheduledDate: $("pbScheduledDate"),
     allowOnBehalf: $("pbAllowOnBehalf"),
     quoteNumber: $("pbQuoteNumber"),
+    preparedFor: $("pbPreparedFor"),
     scope: $("pbScope"),
     sectionList: $("pbSectionList"),
     addSection: $("pbAddSection"),
@@ -173,6 +174,7 @@
         lineItems: q.lineItems,
         pdfOptions: q.pdfOptions,
         quoteNumberDisplay: el.quoteNumber.value.trim(),
+        preparedForAddress: el.preparedFor.value.trim(),
         // Terms only — the server recomputes amount/balance and owns the
         // lifecycle fields. Only included once the deposit block has been
         // touched (configured), so opening an old draft doesn't rewrite it.
@@ -265,6 +267,7 @@
     el.scheduledDate.value = q.scheduledServiceDate ? String(q.scheduledServiceDate).slice(0, 10) : "";
     el.allowOnBehalf.checked = q.allowOnBehalfAcceptance === true;
     el.quoteNumber.value = q.quoteNumberDisplay || "";
+    el.preparedFor.value = q.preparedForAddress || "";
     el.scope.value = q.scope || "";
 
     // PDF display options (Brief D). Missing → itemized/true/true.
@@ -278,7 +281,7 @@
     // Lock UI when not in draft.
     const locked = q.status !== "draft";
     [el.branch, el.billingMode, el.customerEmail, el.labourRate, el.validUntil,
-     el.quoteNumber, el.scope, el.sectionTitle, el.sectionBody, el.uploadInput,
+     el.quoteNumber, el.preparedFor, el.scope, el.sectionTitle, el.sectionBody, el.uploadInput,
      el.linePicker, el.customLine, el.anchorPicker, el.addSection,
      el.showAttachments, el.showProjectMap]
       .forEach((node) => { if (node) node.disabled = locked; });
@@ -1419,7 +1422,7 @@
 
   // ---- Top-bar inputs ----------------------------------------------
   el.billingMode.addEventListener("change", markDirty);
-  [el.customerEmail, el.labourRate, el.validUntil, el.quoteNumber, el.scope].forEach((node) => {
+  [el.customerEmail, el.labourRate, el.validUntil, el.quoteNumber, el.preparedFor, el.scope].forEach((node) => {
     node.addEventListener("input", markDirty);
   });
 

@@ -521,8 +521,14 @@ function renderProjectProposalPdf(quote, opts = {}) {
   doc.fillColor(PJL_TEXT).font("Helvetica").fontSize(12);
   const billToName = customer.name || customer.customerName || quote.customerEmail || "Customer";
   doc.text(billToName, MARGIN_X, doc.y + 4);
-  if (property.address || customer.address) {
-    doc.fontSize(10).fillColor(PJL_MUTED).text(property.address || customer.address);
+  // PREPARED FOR address — the party the document is addressed to, NOT the
+  // site the work happens at. quoteRenderParties resolves it (explicit
+  // quote.preparedForAddress → the customer's own address → the service
+  // address as a last resort); the trailing fallback keeps direct callers
+  // that hand in bare {customer, property} rendering as they always did.
+  const preparedForAddress = customer.preparedForAddress || property.address || customer.address;
+  if (preparedForAddress) {
+    doc.fontSize(10).fillColor(PJL_MUTED).text(preparedForAddress);
   }
   const contactBits = [customer.phone || customer.customerPhone, quote.customerEmail].filter(Boolean);
   if (contactBits.length) {
@@ -1266,8 +1272,14 @@ function renderSmartControllerPdf(quote, opts = {}) {
   doc.fillColor(PJL_TEXT).font("Helvetica").fontSize(12);
   const billToName = customer.name || customer.customerName || quote.customerEmail || "Customer";
   doc.text(billToName, MARGIN_X, doc.y + 4);
-  if (property.address || customer.address) {
-    doc.fontSize(10).fillColor(PJL_MUTED).text(property.address || customer.address);
+  // PREPARED FOR address — the party the document is addressed to, NOT the
+  // site the work happens at. quoteRenderParties resolves it (explicit
+  // quote.preparedForAddress → the customer's own address → the service
+  // address as a last resort); the trailing fallback keeps direct callers
+  // that hand in bare {customer, property} rendering as they always did.
+  const preparedForAddress = customer.preparedForAddress || property.address || customer.address;
+  if (preparedForAddress) {
+    doc.fontSize(10).fillColor(PJL_MUTED).text(preparedForAddress);
   }
   const contactBits = [customer.phone || customer.customerPhone, quote.customerEmail].filter(Boolean);
   if (contactBits.length) {

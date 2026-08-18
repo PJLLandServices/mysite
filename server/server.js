@@ -2733,10 +2733,21 @@ async function quoteRenderParties(q) {
   let address = String(property?.address || leadContact?.address || "").trim();
   if (!address) address = await lastKnownAddressForEmail(q?.customerEmail);
   if (!address) address = billingStr;
+  // preparedForAddress — the address printed in the customer-facing PREPARED
+  // FOR block, resolved SEPARATELY from the service `address` above (2026-08).
+  // `address` answers "where does the crew go"; this answers "who is this
+  // addressed to". Conflating them put a Norwood site address on a Dundalk
+  // proposal for the same GC (Q-2026-0067). See billing-parties.js for the
+  // precedence — explicit override → the customer's OWN address → the
+  // service address as a last resort, never a property/site record.
+  const preparedForAddress = billingParties.resolvePreparedForAddress(
+    q, custRecord, { serviceAddress: address }
+  );
   const customer = {
     name: property?.customerName || leadContact?.name || custRecord?.name || "",
     phone: property?.customerPhone || leadContact?.phone || custRecord?.phone || "",
     address,
+    preparedForAddress,
     email: q?.customerEmail || leadContact?.email || custRecord?.email || "",
     // Bill-to envelope, derived from the (property, customer) pair: a managed
     // commercial site shows its own legal entity with the management company

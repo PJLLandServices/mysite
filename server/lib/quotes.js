@@ -271,6 +271,9 @@ const SCOPE_PROTECTED_FIELDS = [
   "type",
   "pdfOptions",
   "quoteNumberDisplay",
+  // preparedForAddress is part of how the offer is addressed — draft-editable,
+  // frozen at send with the rest of the document (Brief B).
+  "preparedForAddress",
   // deliveryMode is part of the delivery contract the customer is sent under
   // (plain PDF vs phone-gated page) — draft-editable, frozen at send like the
   // pricing. A change after send is a revision, not an edit.
@@ -622,6 +625,15 @@ function blankQuote() {
     // only; draft-editable, frozen with the PDF at send (Brief B).
     quoteNumberDisplay: "",
 
+    // preparedForAddress — an OPTIONAL override for the address printed in
+    // the customer-facing PREPARED FOR block. Empty = the customer's OWN
+    // address (their billing address), never a project/site address. Set
+    // this when the document should be addressed somewhere other than the
+    // account's address — e.g. a GC's head office while the work happens
+    // at a site. Presentation only: it never touches the property record,
+    // the service address a crew works from, pricing, or QuickBooks.
+    preparedForAddress: "",
+
     // attachments — uploaded static media (Google Earth screenshots, CAD
     // drawings, manufacturer schematics). Files live on disk under
     // server/data/quote-attachments/<quoteId>/<attId>.<ext>; this array
@@ -784,6 +796,7 @@ function hydrate(q) {
     // missing/odd value as the itemized default, belt-and-suspenders.
     pdfOptions: { ...base.pdfOptions, ...(q?.pdfOptions && typeof q.pdfOptions === "object" ? q.pdfOptions : {}) },
     quoteNumberDisplay: typeof q?.quoteNumberDisplay === "string" ? q.quoteNumberDisplay : "",
+    preparedForAddress: typeof q?.preparedForAddress === "string" ? q.preparedForAddress : "",
     customRates: { ...base.customRates, ...(q?.customRates || {}) },
     acceptanceMethod: typeof q?.acceptanceMethod === "string" ? q.acceptanceMethod : "pending",
     acceptanceEvidence: q?.acceptanceEvidence || null,
@@ -1300,6 +1313,18 @@ async function updateProposal(id, patch = {}, { by = "admin", note = "" } = {}) 
     // Strip control chars and cap at 40 so it can't overflow the header.
     q.quoteNumberDisplay = String(patch.quoteNumberDisplay == null ? "" : patch.quoteNumberDisplay)
       .replace(/[\u0000-\u001F\u007F]+/g, " ").trim().slice(0, 40);
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "preparedForAddress")) {
+    // Optional PREPARED-FOR address override. Newlines are legitimate in a
+    // postal address, so keep \n and strip only the other control chars;
+    // collapse runs of blank lines and cap at 200 so it can't push the
+    // cover block into the sections below it.
+    q.preparedForAddress = String(patch.preparedForAddress == null ? "" : patch.preparedForAddress)
+      .replace(/\r\n?/g, "\n")
+      .replace(/[\u0000-\u0009\u000B-\u001F\u007F]+/g, " ")
+      .replace(/\n{3,}/g, "\n\n")
+      .split("\n").map((line) => line.trim()).join("\n")
+      .trim().slice(0, 200);
   }
   if (Array.isArray(patch.proposalSections)) {
     const existingSections = Array.isArray(q.proposalSections) ? q.proposalSections : [];
