@@ -645,7 +645,7 @@
     <h1>Fall sprinkler winterization — <em>from <span data-price="spring_open_4z">$90</span>.</em></h1>
     <p>Professional fall blow-out for residential lawn sprinkler systems across Newmarket, Aurora, Markham, Richmond Hill, Vaughan, King City and the broader GTA. Pro low-pressure compressor, zone-by-zone line clearing, Hydrawise winter mode — the difference between a <span data-price="spring_open_4z">$90</span> service and a $400-$1,800 spring repair bill.</p>
     <div class="fall-hero-actions">
-      <a href="book.html?service=fall_close_6z" class="btn-amber">Book your fall winterization <span aria-hidden="true">→</span></a>
+      <a href="book.html?service=fall_close_4z" data-seasonal-cta class="btn-amber">Book your fall winterization <span aria-hidden="true">→</span></a>
       <a href="tel:+19059600181" class="btn-ghost">📞 (905) 960-0181</a>
     </div>
     <div class="fall-hero-meta">
@@ -660,7 +660,7 @@
 <section class="urgency-strip">
   <div class="container">
     First frost in Newmarket lands between <strong>Sept 28 and Oct 10</strong>. Fall slots fill up faster than spring — book in <strong>August or September</strong> for the best dates.
-    <a href="book.html?service=fall_close_6z">Book now →</a>
+    <a href="book.html?service=fall_close_4z" data-seasonal-cta>Book now →</a>
   </div>
 </section>
 
@@ -671,7 +671,7 @@
     <p style="max-width:620px; margin:0 auto 28px;">Same fixed-price logic as our spring opening. Tell us your zone count and we'll show you the exact winterization price — no on-site quote needed for standard residential systems.</p>
 
     <!-- Zone price estimator -->
-    <div class="sprk-zone">
+    <div class="sprk-zone" data-seasonal-calc="fall" data-season-label="Fall winterization">
       <div class="sprk-zone__inputs">
         <div class="sprk-zone__field">
           <label class="sprk-zone__field-label">Property Type</label>
@@ -714,7 +714,7 @@
         <li>Hydrawise controller suspended for winter</li>
         <li>Final report — anything we flagged for next spring</li>
       </ul>
-      <a href="book.html?service=fall_close_6z" class="pc-cta">Book my fall winterization →</a>
+      <a href="book.html?service=fall_close_4z" data-seasonal-cta class="pc-cta">Book my fall winterization →</a>
       <div class="pc-fineprint">Servicing Newmarket, Aurora, King City, Richmond Hill, Vaughan, Markham &amp; the GTA · September through November.<br><strong>Backflow Cert. Extra Charge.</strong> Backflow assembly testing / municipal cross-connection compliance is a separately certified Ontario trade — not included in fall winterization. We'll refer you to a certified backflow tester if needed.</div>
     </div>
   </div>
@@ -818,7 +818,7 @@
       <p>Pick a date, we confirm within one business day. Same crew that closes it opens it next spring.</p>
     </div>
     <div class="cta-strip-actions pjl-cta-row">
-      <a href="book.html?service=fall_close_6z" class="primary">Book my fall winterization →</a>
+      <a href="book.html?service=fall_close_4z" data-seasonal-cta class="primary">Book my fall winterization →</a>
       <a href="tel:+19059600181" class="ghost">📞 (905) 960-0181</a>
     </div>
   </div>
@@ -846,88 +846,8 @@
 <!-- @@PJL:footer-END -->
 
 <script src="nav.js?v=2"></script>
-<script>
-/* Zone price estimator — same logic as sprinkler-systems.html / spring-opening.
-   Updates every data-zone-display element on the page when the user steps
-   zones up/down or toggles property type. */
-(function(){
-  var MIN = 1, MAX = 16;
-  var zones = 4;
-  var mode = 'residential';
-
-  function priceFor(n){
-    if (mode === 'commercial') {
-      if (n <= 4) return { price: 145, tier: "Commercial • Up to 4 zones", quote: false };
-      if (n <= 8) return { price: 255, tier: "Commercial • 5–8 zones", quote: false };
-      return { price: null, tier: "Commercial • 9+ zones", quote: true };
-    }
-    if (n <= 4)  return { price: 90,  tier: "Residential • Up to 4 zones", quote: false };
-    if (n <= 6)  return { price: 105, tier: "Residential • 5–6 zones",    quote: false };
-    if (n <= 8)  return { price: 120, tier: "Residential • 7–8 zones",    quote: false };
-    if (n <= 15) return { price: 165, tier: "Residential • 9–15 zones",   quote: false, timeNote: n > 10 };
-    return { price: null, tier: "Residential • 16+ zones", quote: true };
-  }
-
-  function update(){
-    var r = priceFor(zones);
-
-    var countEl = document.querySelector('[data-zone-count]');
-    if (countEl) countEl.textContent = zones >= MAX ? '16+' : zones;
-
-    var all = document.querySelectorAll('[data-zone-display]');
-    all.forEach(function(el){
-      el.textContent = r.quote ? '—' : r.price;
-    });
-
-    var prefixes = document.querySelectorAll('[data-zone-prefix]');
-    prefixes.forEach(function(el){ el.textContent = ''; });
-
-    var amount = document.querySelector('.sprk-zone__amount');
-    if (amount) {
-      amount.innerHTML = r.quote
-        ? 'Custom Quote<span class="sprk-zone__per">contact us</span>'
-        : '$<span data-zone-display>' + r.price + '</span><span class="sprk-zone__per">/service</span>';
-    }
-    var toolEl = document.querySelector('.sprk-zone');
-    if (toolEl) toolEl.classList.toggle('sprk-zone--quote', !!r.quote);
-
-    var note = document.querySelector('[data-zone-note]');
-    if (note) {
-      if (r.quote)  note.textContent = "For systems beyond 15 zones, we'll price it right — just contact us.";
-      else if (r.timeNote) note.textContent = r.tier + " • Extended-time fees may apply for 10+ zone systems.";
-      else note.textContent = r.tier + " • Fall winterization at this zone count.";
-    }
-
-    var heroTierMeta = document.querySelector('[data-zone-tier-meta]');
-    if (heroTierMeta) {
-      heroTierMeta.textContent = r.quote ? '— call for a custom quote' : '(' + r.tier + ')';
-    }
-
-    var dec = document.querySelector('[data-zone-dec]');
-    var inc = document.querySelector('[data-zone-inc]');
-    if (dec) dec.disabled = zones <= MIN;
-    if (inc) inc.disabled = zones >= MAX;
-  }
-
-  document.addEventListener('click', function(e){
-    if (e.target.closest('[data-zone-dec]') && zones > MIN) { zones--; update(); }
-    if (e.target.closest('[data-zone-inc]') && zones < MAX) { zones++; update(); }
-    var tab = e.target.closest('.sprk-zone__tab');
-    if (tab) {
-      mode = tab.getAttribute('data-mode');
-      document.querySelectorAll('.sprk-zone__tab').forEach(function(t){
-        var active = t === tab;
-        t.classList.toggle('is-active', active);
-        t.setAttribute('aria-selected', active ? 'true' : 'false');
-      });
-      update();
-    }
-  });
-
-  update();
-})();
-</script>
   <script src="js/pricing-injector.js" defer></script>
+  <script src="js/seasonal-zone-calculator.js" defer></script>
   <script src="js/chat-widget.js" defer></script>
 </body>
 </html>
