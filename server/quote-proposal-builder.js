@@ -528,17 +528,69 @@
     });
   }
 
+  // Line items in DISPLAY order (the sequence Patrick arranged), each paired
+  // with the index it occupies in the STORED array. Mirrors
+  // server/lib/line-item-order.js — a line's own `order` when it has one,
+  // array position otherwise, position as the tiebreaker — so the table, the
+  // PDF and the proposal page can never disagree. The stored index has to
+  // ride along because every row control addresses
+  // state.quote.lineItems[i] directly.
+  function orderedLinesWithIndex() {
+    const lines = state.quote.lineItems || [];
+    const key = (li, idx) => {
+      const n = Number(li && li.order);
+      return Number.isFinite(n) ? n : idx;
+    };
+    return lines
+      .map((li, idx) => ({ li, idx }))
+      .sort((a, b) => (key(a.li, a.idx) - key(b.li, b.idx)) || (a.idx - b.idx));
+  }
+
+  // Move a line one slot up (dir −1) or down (+1) by swapping its `order`
+  // with its neighbour in the displayed sequence — the same swap
+  // moveSection() uses for narrative sections. Display only: nothing here
+  // touches qty, price, lineTotal, the zone number or the zone label, and
+  // the totals are summed from the array, so no arrangement can move them.
+  function moveLineItem(storedIdx, dir) {
+    if (state.quote.status !== "draft") return;      // draft-only, like every lineItems edit
+    const ordered = orderedLinesWithIndex();
+    const at = ordered.findIndex((e) => e.idx === storedIdx);
+    const to = at + dir;
+    if (at < 0 || to < 0 || to >= ordered.length) return;   // clamp — no-op at the ends
+    const a = ordered[at], b = ordered[to];
+    // Normalize first: a legacy record whose lines have no `order` yet would
+    // otherwise swap two undefineds and appear to do nothing.
+    ordered.forEach((e, i) => { if (!Number.isFinite(Number(e.li.order))) e.li.order = i; });
+    const ao = Number(a.li.order), bo = Number(b.li.order);
+    a.li.order = bo; b.li.order = ao;
+    renderLineItems();
+    markDirty();
+  }
+
   function renderLineItems() {
     const lines = state.quote.lineItems || [];
+    const ordered = orderedLinesWithIndex();
+    const locked = state.quote.status !== "draft";
     const emptyEl = document.getElementById("pbLinesEmpty");
     if (emptyEl) emptyEl.hidden = lines.length > 0;
-    el.lineList.innerHTML = lines.map((li, idx) => {
+    el.lineList.innerHTML = ordered.map(({ li, idx }, pos) => {
       const sourceLabel = li.source === "pricing" ? "Pricing.json"
         : li.source === "project_rates" ? "Project rates"
         : li.source === "labour" ? "Labour"
         : "Custom";
+      // Reorder controls, mirroring the section list's ↑/↓ (disabled at the
+      // ends, hidden entirely once the proposal leaves draft).
+      const upDis = pos === 0 ? "disabled" : "";
+      const downDis = pos === ordered.length - 1 ? "disabled" : "";
+      const moveCell = locked
+        ? `<td class="pb-col-move"></td>`
+        : `<td class="pb-col-move" data-label="Order">` +
+          `<button type="button" class="pb-line-move" data-li-up="${idx}" ${upDis} aria-label="Move line up" title="Move up">↑</button>` +
+          `<button type="button" class="pb-line-move" data-li-down="${idx}" ${downDis} aria-label="Move line down" title="Move down">↓</button>` +
+          `</td>`;
       return `
         <tr class="pb-line-row" data-idx="${idx}">
+          ${moveCell}
           <td class="pb-col-desc" data-label="Component & detail">
             <input type="text" data-li-label="${idx}" value="${escapeAttr(li.label)}" placeholder="Component name">
             <input type="text" class="pb-line-detail" data-li-desc="${idx}" value="${escapeAttr(li.description || "")}" placeholder="Detail line — shown under the component">
@@ -606,6 +658,12 @@
         renderTotals();
         markDirty();
       });
+    });
+    el.lineList.querySelectorAll("[data-li-up]").forEach((btn) => {
+      btn.addEventListener("click", () => moveLineItem(Number(btn.dataset.liUp), -1));
+    });
+    el.lineList.querySelectorAll("[data-li-down]").forEach((btn) => {
+      btn.addEventListener("click", () => moveLineItem(Number(btn.dataset.liDown), 1));
     });
   }
 

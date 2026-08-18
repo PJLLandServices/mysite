@@ -530,6 +530,27 @@
   width: 100%;
   box-sizing: border-box;
 }
+/* Display-order controls. Sequence only — moving a line changes nothing
+   about its zone number, qty, price or the totals. */
+.pb-col-move { width: 54px; text-align: center; white-space: nowrap; }
+.pb-line-move {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid #D6D6CD;
+  border-radius: 5px;
+  background: #FFFFFF;
+  color: #1F2A22;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+}
+.pb-line-move + .pb-line-move { margin-left: 2px; }
+.pb-line-move:hover:not(:disabled) { background: #F5F4EE; }
+.pb-line-move:disabled { opacity: 0.3; cursor: default; }
 .pb-col-desc { width: 38%; }
 .pb-col-source { width: 12%; }
 .pb-col-qty { width: 80px; text-align: right; }
@@ -609,7 +630,7 @@
       "source source"
       "qty unit"
       "price total"
-      "remove remove";
+      "move remove";
     gap: 8px;
   }
   .pb-lines-grid td { padding: 0; }
@@ -620,6 +641,10 @@
   .pb-col-price { grid-area: price; text-align: left; }
   .pb-col-total { grid-area: total; text-align: right; align-self: end; }
   .pb-col-remove { grid-area: remove; text-align: right; }
+  .pb-col-move { grid-area: move; text-align: left; }
+  /* Touch targets on the phone/iPad — the 22px desktop buttons are too small
+     to hit reliably in the truck. */
+  .pb-line-move { width: 40px; height: 40px; font-size: 15px; }
   .pb-col-qty::before,
   .pb-col-unit::before,
   .pb-col-price::before,

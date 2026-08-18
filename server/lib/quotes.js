@@ -1381,7 +1381,7 @@ async function updateProposal(id, patch = {}, { by = "admin", note = "" } = {}) 
     q.proposalSections = incoming;
   }
   if (Array.isArray(patch.lineItems)) {
-    q.lineItems = patch.lineItems.map(normalizeProposalLineItem);
+    q.lineItems = normalizeProposalLineItems(patch.lineItems);
     const totals = computeProposalTotals(q.lineItems);
     q.subtotal = totals.subtotal;
     q.hst = totals.hst;
@@ -1436,7 +1436,7 @@ async function updateProposal(id, patch = {}, { by = "admin", note = "" } = {}) 
 // Line items on a proposal carry a `source` discriminator so the UI
 // knows whether they came from the public pricing catalog, the
 // internal project-rates catalog, or were authored ad-hoc.
-function normalizeProposalLineItem(raw) {
+function normalizeProposalLineItem(raw, idx) {
   if (!raw || typeof raw !== "object") raw = {};
   const source = ["pricing", "project_rates", "custom"].includes(raw.source) ? raw.source : "custom";
   const sourceKey = source === "custom" ? null : (typeof raw.sourceKey === "string" ? raw.sourceKey : null);
@@ -1455,8 +1455,62 @@ function normalizeProposalLineItem(raw) {
     qty: safeQty,
     price: safePrice,
     priceAtCreation: Number.isFinite(Number(raw.priceAtCreation)) ? Number(raw.priceAtCreation) : safePrice,
-    lineTotal: Math.round(safePrice * safeQty * 100) / 100
+    lineTotal: Math.round(safePrice * safeQty * 100) / 100,
+    // order — DISPLAY sequence on the quotation and the PDF, set by the
+    // reorder controls in the proposal builder. Presentation only: never read
+    // by the totals, the deposit figures, QuickBooks or the invoice, and it
+    // never renumbers a zone (see lib/line-item-order.js).
+    //
+    // Falls back to array position, so a record that pre-dates the field
+    // renders exactly as it always did and gets real values stamped on it by
+    // the next save. Called WITHOUT an index (projects.js seeding scope-change
+    // lines onto a revision) the key is omitted rather than defaulted to 0 —
+    // a line with no opinion about where it goes must not claim the top slot
+    // ahead of an already-arranged stack. normalizeProposalLineItems then
+    // appends it, and the renderers' positional fallback covers it meanwhile.
+    ...(Number.isFinite(Number(raw.order)) ? { order: Number(raw.order) }
+      : Number.isFinite(Number(idx)) ? { order: Number(idx) }
+        : {})
   };
+}
+
+// Normalize an incoming lineItems[] and settle its display order.
+//
+// Two things happen here that the per-item normalizer cannot do, because
+// both need to see the whole set:
+//
+//   1. A line arriving with NO order is APPENDED after the highest existing
+//      one rather than taking a position index that would collide with an
+//      arranged line. This is the case that matters in practice: a Site
+//      Builder re-sync adds a new zone to a stack Patrick has already
+//      arranged, and the new zone belongs at the end, not wherever it
+//      happened to land in the merge. Mirrors addSection's `maxOrder + 1`.
+//   2. Orders are renumbered densely to 0..n-1 by sorted position and the
+//      array is STORED in that order, so array position and `order` always
+//      agree. That keeps the stored record readable, leaves no gaps for
+//      repeated edits to drift into, and means any consumer that does not
+//      sort still sees the right sequence.
+function normalizeProposalLineItems(rawItems) {
+  const list = Array.isArray(rawItems) ? rawItems : [];
+  // Which entries carried an explicit order, before the per-item fallback
+  // masks the distinction.
+  const hadOrder = list.map((raw) => Number.isFinite(Number(raw && raw.order)));
+  const maxOrder = list.reduce(
+    (m, raw, i) => (hadOrder[i] ? Math.max(m, Number(raw.order)) : m),
+    Number.NEGATIVE_INFINITY
+  );
+  let appendAt = Number.isFinite(maxOrder) ? maxOrder + 1 : 0;
+
+  const normalized = list.map((raw, i) => {
+    const li = normalizeProposalLineItem(raw, i);
+    if (!hadOrder[i]) li.order = appendAt++;   // new lines land at the end, in arrival order
+    return li;
+  });
+
+  return normalized
+    .map((li, idx) => ({ li, idx }))
+    .sort((a, b) => (a.li.order - b.li.order) || (a.idx - b.idx))
+    .map((e, i) => { e.li.order = i; return e.li; });
 }
 
 function computeProposalTotals(lineItems) {
@@ -2792,6 +2846,7 @@ module.exports = {
   defaultProposalSections,
   normalizeProposalSection,
   normalizeProposalLineItem,
+  normalizeProposalLineItems,
   computeProposalTotals,
   addAttachment,
   removeAttachment,

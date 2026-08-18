@@ -14,6 +14,7 @@
 const PDFDocument = require("pdfkit");
 const fsSync = require("node:fs");
 const path = require("node:path");
+const { orderedLineItems } = require("./line-item-order");
 
 const PJL_GREEN = "#1B4D2E";
 const PJL_AMBER = "#E07B24";
@@ -899,7 +900,10 @@ function renderAttachmentInline(doc, att, quote, { MARGIN_X, contentWidth }) {
 }
 
 function renderProposalLineItems(doc, quote, { MARGIN_X, contentWidth, heading = "ITEMIZED PRICING", mode = "itemized" }) {
-  const items = Array.isArray(quote.lineItems) ? quote.lineItems : [];
+  // Display order as arranged in the proposal builder (lib/line-item-order.js).
+  // Sequence only — the totals below are summed from the quote record and are
+  // unaffected by how the rows are arranged.
+  const items = orderedLineItems(quote);
   const showTable = mode !== "summary";  // Brief D: summary = no table, total only
   // Back-compat: a non-summary pricing section with no line items renders
   // nothing at all, exactly as before Brief D. Summary always shows the
