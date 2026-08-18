@@ -34,10 +34,15 @@ jobs:
         with:
           node-version: '20'
 
-      # No `npm ci` needed: every script in `build:check` (build.js and the
-      # scripts/*.mjs checks) uses only Node built-ins. Skipping install keeps
-      # CI fast and avoids pulling native deps (sharp, playwright) that these
-      # checks never touch. If a future check gains a real dependency, add an
-      # `npm ci` step here.
+      # `build:check` used to need no install — every script used only Node
+      # built-ins. That stopped being true in 2026-08: test-prepared-for-address
+      # and test-line-item-order render a REAL proposal PDF to assert what the
+      # customer actually receives (the address block, the line-item order), and
+      # that pulls in pdfkit. Without this step both crash on MODULE_NOT_FOUND
+      # at server/lib/quote-pdf.js. Taking the honest option the note here always
+      # pointed at, rather than weakening the tests to dodge the dependency.
+      - name: Install dependencies
+        run: npm ci
+
       - name: Run build + price-lint checks
         run: npm run build:check
