@@ -441,6 +441,13 @@ const LEGACY_REDIRECTS = {
   // Ontario cost guide (the SEO survivor). 301 the retired slug to it.
   "/blog-sprinkler-cost-gta.html": "/blog-sprinkler-system-cost-ontario.html",
   "/blog": "/blog.html",
+  // Legacy Wix blog slug with no flat equivalent (Aug 2026). Wix derived post
+  // slugs from titles, so "Lawn Sprinkler Installation in Newmarket & the GTA"
+  // became /blog/lawn-sprinkler-installation-newmarket-gta, while the ported
+  // page kept a shortened filename. The /blog/<slug> rule further down only
+  // 301s when the flattened target exists on disk, so without this explicit
+  // entry that URL stays a 404. Checked before that rule, so it wins.
+  "/blog/lawn-sprinkler-installation-newmarket-gta": "/blog-sprinkler-installation-newmarket.html",
   // Retired Toronto neighbourhood pages (Jul 2026): removed from the site;
   // 301 to their North York parent so the indexed URLs don't 404.
   "/sprinkler-service-bayview-village.html": "/sprinkler-service-north-york.html",

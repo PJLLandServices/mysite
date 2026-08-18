@@ -8,6 +8,9 @@
 /terms-of-service   /terms-of-service.html   301
 /blog-sprinkler-cost-gta.html  /blog-sprinkler-system-cost-ontario.html  301
 /blog               /blog.html               301
+# Renamed on the port off Wix; no flat /blog-<slug>.html equivalent exists.
+# Must precede /blog/* — these rules are first-match-wins.
+/blog/lawn-sprinkler-installation-newmarket-gta  /blog-sprinkler-installation-newmarket.html  301
 /blog/*             /blog-:splat.html        301
 # Retired Toronto neighbourhood pages (Jul 2026) → their North York parent.
 /sprinkler-service-bayview-village.html  /sprinkler-service-north-york.html  301
