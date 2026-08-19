@@ -166,8 +166,13 @@ const BOOKABLE_SERVICES = {
     minutes: 90, requiresAddress: true, bookable: true,
     category: "controller", family: "hydrawise_retrofit"
   },
+  // Free because it scopes NEW work — an install, drip, lighting, a
+  // retrofit. Looking at an EXISTING system is a chargeable service call:
+  // that's sprinkler_repair, which prices through service_call and covers
+  // the on-site assessment. Keep the label explicit so a customer with a
+  // dead zone doesn't book a free visit for a diagnostic.
   site_visit: {
-    label: "Site visit (consult / scope)",
+    label: "Site visit — new work (consult / scope)",
     minutes: 30, requiresAddress: true, bookable: true,
     category: "consult", family: "site_visit"
   }

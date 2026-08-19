@@ -71,7 +71,7 @@ function priceForBooking(serviceKey /*, zoneCountInput — no longer used */) {
     case "site_visit":
       return {
         price: 0, label: "Free", currency: "CAD", custom: false,
-        note: "Free walk-around with a written quote — no obligation."
+        note: "Scoping new work — an install, drip, lighting or an upgrade. Free walk-around with a written quote, no obligation. Diagnosing an existing system is a service call, not this."
       };
 
     default:

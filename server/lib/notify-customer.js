@@ -129,9 +129,9 @@ const TEMPLATES = {
     headline: "Your site visit is scheduled.",
     body:
       "Hi {firstName}, your PJL Land Services site visit is scheduled for {dateStr} at {timeStr}. " +
-      "Patrick will walk your property, scope the work, and follow up with a written quote. " +
-      "Your work order ({workOrderId}) is in your portal — no charge for the visit.",
-    sms: "{namePrefix}your PJL site visit is scheduled: {dateStr} at {timeStr}. Free walkaround. Details: {portalUrl}"
+      "Patrick will walk your property, scope the new work, and follow up with a written quote. " +
+      "Your work order ({workOrderId}) is in your portal — no charge for scoping new work.",
+    sms: "{namePrefix}your PJL site visit is scheduled: {dateStr} at {timeStr}. No charge to scope new work. Details: {portalUrl}"
   },
   // Sent when a booking is rescheduled — fires regardless of who
   // initiated (customer self-serve via portal, or Patrick from the CRM).

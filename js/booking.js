@@ -203,7 +203,10 @@
     // Repair / retrofit / consult
     sprinkler_repair:                { icon: "🔧", blurb: "Diagnose + fix on the spot" },
     hydrawise_retrofit:              { icon: "📡", blurb: "Smart controller upgrade with app + WiFi setup" },
-    site_visit:                      { icon: "📋", blurb: "Free walkaround · we scope and quote new installs" }
+    // Free applies to NEW work only. An existing system that isn't working
+    // is a repair visit ($95 service call) — say so here, or this card
+    // reads as a free diagnostic and gets booked as one.
+    site_visit:                      { icon: "📋", blurb: "New installs, lighting & upgrades · free to scope and quote" }
   };
 
   // Property-type heuristic — the booking key naming convention is
@@ -229,7 +232,7 @@
     },
     sprinkler_repair: {
       heading: "Book a sprinkler repair.",
-      lead: "Standard 90-minute block. If we need more time on the day, we'll let you know on arrival."
+      lead: "For an existing system — a dead zone, a leak, a controller that's lost the plot. Standard 90-minute block, and the service call covers the on-site assessment. If we need more time on the day, we'll let you know on arrival."
     },
     hydrawise_retrofit: {
       heading: "Book your Hydrawise retrofit.",
@@ -237,7 +240,7 @@
     },
     site_visit: {
       heading: "Book a site visit.",
-      lead: "Free 30-minute walkaround. Patrick scopes the work and follows up with a written quote."
+      lead: "For new work — an install, drip, lighting or an upgrade. Free 30-minute walkaround, and Patrick follows up with a written quote. If an existing system isn't working, book a sprinkler repair instead — that visit is a service call."
     }
   };
 
