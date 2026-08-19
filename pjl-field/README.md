@@ -1,7 +1,38 @@
 # PJL Field
 
-Expo (React Native) app for field work. Right now it's a blank screen that
-says "PJL Field" — the scaffold only, no features yet.
+Expo (React Native) app for field work — the iPhone shell for PJL's
+tech mode.
+
+## What this app is
+
+A **shell** around the existing tech-mode web UI, not a second copy of it.
+
+`App.js` loads `https://www.pjllandservices.com/admin/today` — the tech's
+morning hub — in a WebView. Tapping through to a work order lands on the
+same `/admin/work-order/:id/tech` page the techs already use. One codebase
+for the screens; no flow in `docs/FLOW_REGISTER.md` moves because of this
+app.
+
+Links that leave the site are handed to iOS rather than loaded in the
+WebView: the Navigate button's Apple/Google Maps chooser, `tel:` links,
+`mailto:`. Loading those in here would strand the tech away from the work
+order.
+
+The host and landing page are the `HOST` and `START_URL` constants at the
+top of `App.js`.
+
+### What this does NOT do yet
+
+The point of going native is **storage durability**, and that part is not
+built. Today the offline queue still lives in the WebView's own storage,
+with the same exposure `OFFLINE_QUEUE_RECOVERY.md` documents — force-quit,
+cleared website data, and some iOS updates can still wipe it. Moving the
+queue to native storage via a bridge is the next step, and the reason this
+shell exists at all.
+
+Two diagnosed bugs in `server/offline-queue.js` (see
+`OFFLINE_QUEUE_INVESTIGATION.md`) are logic bugs, not storage bugs. Neither
+is fixed by this app.
 
 ## Run it
 
@@ -69,4 +100,5 @@ https://code.claude.com/docs/en/claude-code-on-the-web
 - `eas.json` — build profiles, for the TestFlight step later.
 - `assets/` — icon and splash images (still the Expo defaults).
 
-Expo SDK 54 / React Native 0.81.
+Expo SDK 54 / React Native 0.81 / react-native-webview 13.15.0 (pinned to
+what Expo Go bundles for SDK 54).
