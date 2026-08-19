@@ -647,6 +647,7 @@ function renderProjects(items) {
 }
 
 function renderPortal(data) {
+  renderPortalBooking(data.bookableProperties);
   const customer = data.customer || {};
   const project = data.project || {};
   const services = Array.isArray(project.services) ? project.services : [];
@@ -819,6 +820,95 @@ async function loadPortal() {
     portalTitle.textContent = "Portal unavailable";
     portalIntro.textContent = "Please contact PJL Land Services directly.";
   }
+}
+
+// Book-a-service card (customer portal). One row per property the
+// customer owns, each starting a booking for that property.
+//
+// Two shapes of row:
+//   • Seasonal express — the property has a zone count on file and isn't
+//     already booked for the season, so we POST begin-booking and land the
+//     customer on book.html with the right tier, zone count and address
+//     already filled in. Same handoff the outreach email gives, reached by
+//     simply logging in.
+//   • Plain — no zone count on file, or already booked for the season. A
+//     direct link to book.html where they pick from the menu. We do not
+//     guess a tier for a system we have no zone count for.
+//
+// The property's own portal token is never sent to the browser; the POST
+// carries THIS portal's token plus a propertyId and the server re-checks
+// that the property belongs to this customer.
+function renderPortalBooking(propertiesList) {
+  const section = document.getElementById("portalBookSection");
+  const list = document.getElementById("portalBookList");
+  const heading = document.getElementById("portalBookHeading");
+  if (!section || !list) return;
+
+  const rows = Array.isArray(propertiesList) ? propertiesList : [];
+  if (!rows.length) { section.hidden = true; return; }
+
+  const seasonal = rows.filter((r) => r.season);
+  heading.textContent = (rows.length === 1 && seasonal.length === 1)
+    ? `Book your ${seasonal[0].seasonLabel.toLowerCase()}`
+    : "Book a service";
+
+  list.innerHTML = "";
+  rows.forEach((row) => {
+    const li = document.createElement("li");
+    li.className = "portal-book-row";
+
+    const where = document.createElement("div");
+    where.className = "portal-book-where";
+    const addr = document.createElement("span");
+    addr.className = "portal-book-address";
+    addr.textContent = row.address || "Your property";
+    where.append(addr);
+
+    const meta = document.createElement("span");
+    meta.className = "portal-book-meta";
+    if (row.alreadyBooked) {
+      meta.textContent = "Already booked this season — book anything else here.";
+    } else if (row.zoneCount > 0) {
+      meta.textContent = `${row.zoneCount}-zone system on file`;
+    } else {
+      meta.textContent = "We'll confirm your zone count when you book.";
+    }
+    where.append(meta);
+    li.append(where);
+
+    const btn = document.createElement(row.season ? "button" : "a");
+    btn.className = "portal-btn portal-btn-primary";
+    if (row.season) {
+      btn.type = "button";
+      btn.textContent = `Book my ${row.seasonLabel.toLowerCase()} →`;
+      btn.onclick = async () => {
+        const original = btn.textContent;
+        btn.disabled = true;
+        btn.textContent = "Opening booking…";
+        try {
+          const token = tokenFromLocation();
+          const qs = `?season=${encodeURIComponent(row.season)}&propertyId=${encodeURIComponent(row.propertyId)}`;
+          const r = await fetch(`/api/portal/${encodeURIComponent(token)}/begin-booking${qs}`, {
+            method: "POST", cache: "no-store"
+          });
+          const d = await r.json();
+          if (!r.ok || !d.ok || !d.redirect) throw new Error("Booking session failed to start.");
+          window.location.assign(d.redirect);
+        } catch (err) {
+          // Never dead-end the customer: fall through to the plain booking
+          // page rather than leaving them on a button that did nothing.
+          window.location.assign("/book.html");
+        }
+      };
+    } else {
+      btn.href = "/book.html";
+      btn.textContent = "Book a service →";
+    }
+    li.append(btn);
+    list.append(li);
+  });
+
+  section.hidden = false;
 }
 
 // Property-portal render path (seasonal outreach). Swaps the hero

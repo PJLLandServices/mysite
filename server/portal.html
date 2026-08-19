@@ -124,6 +124,24 @@
       </ol>
     </section>
 
+    <!-- Book a service. One card per property this customer owns. The
+         portal previously said "Book again any time" and offered nothing
+         to tap — the seasonal Book button lives on the property portal,
+         a different surface reached from an outreach email. Populated by
+         renderPortalBooking() in portal.js. -->
+    <section class="portal-book" id="portalBookSection" hidden aria-label="Book a service">
+      <article class="portal-card portal-book-card">
+        <header class="portal-book-head">
+          <span class="portal-book-eyebrow">Need us again?</span>
+          <h2 id="portalBookHeading">Book a service</h2>
+        </header>
+        <ul class="portal-book-list" id="portalBookList"></ul>
+        <p class="portal-book-note">
+          Or call <a href="tel:+19059600181">(905) 960-0181</a> and we'll set it up by phone.
+        </p>
+      </article>
+    </section>
+
     <section class="portal-grid" id="portalContent" hidden>
       <article class="portal-card portal-status">
         <span>Current stage</span>

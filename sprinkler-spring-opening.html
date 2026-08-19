@@ -636,7 +636,7 @@
     <h1>Spring sprinkler opening — <em>from <span data-price="spring_open_4z">$90</span>.</em></h1>
     <p>Professional spring activation for residential lawn sprinkler systems across Newmarket, Aurora, Markham, Richmond Hill, Vaughan, King City and the broader GTA. Slow pressure-up, full leak inspection, zone-by-zone test, Hydrawise programming for the season — all done in 35-50 minutes for a typical 4-zone home.</p>
     <div class="spring-hero-actions">
-      <a href="book.html?service=spring_open_4z" class="btn-amber">Book your spring opening <span aria-hidden="true">→</span></a>
+      <a href="book.html?service=spring_open_4z&amp;zones=4" data-seasonal-cta class="btn-amber">Book your spring opening <span aria-hidden="true">→</span></a>
       <a href="tel:+19059600181" class="btn-ghost">📞 (905) 960-0181</a>
     </div>
     <div class="spring-hero-meta">
@@ -651,7 +651,7 @@
 <section class="urgency-strip">
   <div class="container">
     Spring slots fill fast — homeowners who book in <strong>March</strong> get late-April dates. Wait until April and you're on a 2-3 week list.
-    <a href="book.html?service=spring_open_4z">Book now →</a>
+    <a href="book.html?service=spring_open_4z&amp;zones=4" data-seasonal-cta>Book now →</a>
   </div>
 </section>
 
@@ -662,7 +662,7 @@
     <p style="max-width:620px; margin:0 auto 28px;">Tell us your zone count and we'll show you the exact spring-opening price — no on-site quote needed for standard residential systems. Same fixed-price logic we use across the rest of the site.</p>
 
     <!-- Zone price estimator -->
-    <div class="sprk-zone">
+    <div class="sprk-zone" data-seasonal-calc="spring" data-season-label="Spring Opening">
       <div class="sprk-zone__inputs">
         <div class="sprk-zone__field">
           <label class="sprk-zone__field-label">Property Type</label>
@@ -705,7 +705,7 @@
         <li>Hydrawise smart-controller programming</li>
         <li>Final pressure test &amp; written report</li>
       </ul>
-      <a href="book.html?service=spring_open_4z" class="pc-cta">Book my spring opening →</a>
+      <a href="book.html?service=spring_open_4z&amp;zones=4" data-seasonal-cta class="pc-cta">Book my spring opening →</a>
       <div class="pc-fineprint">Servicing Newmarket, Aurora, King City, Richmond Hill, Vaughan, Markham &amp; the GTA · April through May.<br><strong>Backflow Cert. Extra Charge.</strong> Backflow assembly testing / municipal cross-connection compliance is a separately certified Ontario trade — not included in spring opening. We'll refer you to a certified backflow tester if needed.</div>
     </div>
   </div>
@@ -802,7 +802,7 @@
       <p>Pick a date, we confirm within one business day. Same crew that opens it knows the system come summer.</p>
     </div>
     <div class="cta-strip-actions pjl-cta-row">
-      <a href="book.html?service=spring_open_4z" class="primary">Book my spring opening →</a>
+      <a href="book.html?service=spring_open_4z&amp;zones=4" data-seasonal-cta class="primary">Book my spring opening →</a>
       <a href="tel:+19059600181" class="ghost">📞 (905) 960-0181</a>
     </div>
   </div>
@@ -830,95 +830,9 @@
 <!-- @@PJL:footer-END -->
 
 <script src="nav.js?v=2"></script>
-<script>
-/* Zone price estimator — ported from sprinkler-systems.html so the spring-opening
-   page uses the same residential / commercial pricing tiers. Updates every
-   data-zone-display element on the page when the user steps zones up/down. */
-(function(){
-  var MIN = 1, MAX = 16; // 16 = "16+"
-  var zones = 4;
-  var mode = 'residential';
-
-  function priceFor(n){
-    if (mode === 'commercial') {
-      if (n <= 4) return { price: 145, tier: "Commercial • Up to 4 zones", quote: false };
-      if (n <= 8) return { price: 255, tier: "Commercial • 5–8 zones", quote: false };
-      return { price: null, tier: "Commercial • 9+ zones", quote: true };
-    }
-    if (n <= 4)  return { price: 90,  tier: "Residential • Up to 4 zones", quote: false };
-    if (n <= 6)  return { price: 105, tier: "Residential • 5–6 zones",    quote: false };
-    if (n <= 8)  return { price: 120, tier: "Residential • 7–8 zones",    quote: false };
-    if (n <= 15) return { price: 165, tier: "Residential • 9–15 zones",   quote: false, timeNote: n > 10 };
-    return { price: null, tier: "Residential • 16+ zones", quote: true };
-  }
-
-  function update(){
-    var r = priceFor(zones);
-
-    // Stepper count
-    var countEl = document.querySelector('[data-zone-count]');
-    if (countEl) countEl.textContent = zones >= MAX ? '16+' : zones;
-
-    // All zone-display spans (hero meta + readout amount)
-    var all = document.querySelectorAll('[data-zone-display]');
-    all.forEach(function(el){
-      el.textContent = r.quote ? '—' : r.price;
-    });
-
-    // "From " prefix becomes empty once a specific zone count is selected
-    var prefixes = document.querySelectorAll('[data-zone-prefix]');
-    prefixes.forEach(function(el){ el.textContent = ''; });
-
-    // Readout amount — switches to "Custom Quote" if quote-only tier
-    var amount = document.querySelector('.sprk-zone__amount');
-    if (amount) {
-      amount.innerHTML = r.quote
-        ? 'Custom Quote<span class="sprk-zone__per">contact us</span>'
-        : '$<span data-zone-display>' + r.price + '</span><span class="sprk-zone__per">/service</span>';
-    }
-    var toolEl = document.querySelector('.sprk-zone');
-    if (toolEl) toolEl.classList.toggle('sprk-zone--quote', !!r.quote);
-
-    // Tier pill on the readout
-    var note = document.querySelector('[data-zone-note]');
-    if (note) {
-      if (r.quote)  note.textContent = "For systems beyond 15 zones, we'll price it right — just contact us.";
-      else if (r.timeNote) note.textContent = r.tier + " • Extended-time fees may apply for 10+ zone systems.";
-      else note.textContent = r.tier + " • Spring Opening at this zone count.";
-    }
-
-    // Hero meta tier label — drops the "(up to 4 zones residential)" hint once zones change
-    var heroTierMeta = document.querySelector('[data-zone-tier-meta]');
-    if (heroTierMeta) {
-      heroTierMeta.textContent = r.quote ? '— call for a custom quote' : '(' + r.tier + ')';
-    }
-
-    // Disable stepper at limits
-    var dec = document.querySelector('[data-zone-dec]');
-    var inc = document.querySelector('[data-zone-inc]');
-    if (dec) dec.disabled = zones <= MIN;
-    if (inc) inc.disabled = zones >= MAX;
-  }
-
-  document.addEventListener('click', function(e){
-    if (e.target.closest('[data-zone-dec]') && zones > MIN) { zones--; update(); }
-    if (e.target.closest('[data-zone-inc]') && zones < MAX) { zones++; update(); }
-    var tab = e.target.closest('.sprk-zone__tab');
-    if (tab) {
-      mode = tab.getAttribute('data-mode');
-      document.querySelectorAll('.sprk-zone__tab').forEach(function(t){
-        var active = t === tab;
-        t.classList.toggle('is-active', active);
-        t.setAttribute('aria-selected', active ? 'true' : 'false');
-      });
-      update();
-    }
-  });
-
-  update();
-})();
-</script>
   <script src="js/pricing-injector.js" defer></script>
+  <script src="js/seasonal-tiers.js" defer></script>
+  <script src="js/seasonal-zone-calculator.js" defer></script>
   <script src="js/chat-widget.js" defer></script>
 </body>
 </html>

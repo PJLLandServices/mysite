@@ -3075,7 +3075,54 @@ async function customerPortalSections(lead) {
     }
   }
 
-  return { serviceHistory, projects: projectCards, derivedFacts, nextVisit };
+  // ---- Bookable properties: one "Book a service" CTA per property.
+  // The customer portal used to tell people "Book again any time" and give
+  // them nothing to tap — no seasonal CTA, no link to book.html at all. The
+  // "Book your seasonal service" button lives only on the PROPERTY portal,
+  // which is a separate surface reached from a seasonal outreach email, so
+  // a customer who simply logs in had no route into booking.
+  //
+  // Scoped by customerId — a customer only ever sees their own properties.
+  // The property token is deliberately NOT sent to the browser: booking is
+  // started by POSTing this lead's own token plus a propertyId, and the
+  // server re-checks ownership there (see begin-booking below).
+  let bookableProperties = [];
+  try {
+    const season = outreach.seasonForBooking();
+    const year = new Date().getFullYear();
+    const all = await properties.list();
+    const owned = customerId
+      ? all.filter((prop) => prop.customerId === customerId)
+      : all.filter((prop) => prop.id && prop.id === lead.propertyId);
+    bookableProperties = await Promise.all(owned.map(async (prop) => {
+      const zoneCount = Array.isArray(prop.system?.zones) ? prop.system.zones.length : 0;
+      // Already booked for this season? Then a seasonal CTA would be
+      // nagging about work that's on the calendar — offer the plain
+      // "book a service" route instead, in case they want something else.
+      let booked = false;
+      try {
+        const st = await outreach.deriveBookingState(prop.id, season, year);
+        booked = Boolean(st && st.hasBooking);
+      } catch (err) {
+        console.warn("[portal] seasonal booking state failed:", err?.message);
+      }
+      return {
+        propertyId: prop.id,
+        address: String(prop.address || "").trim(),
+        zoneCount,
+        // A seasonal express handoff needs a zone count to resolve a tier.
+        // Without one, send them to the full menu rather than guess.
+        season: (zoneCount > 0 && !booked) ? season : null,
+        seasonLabel: (zoneCount > 0 && !booked) ? outreach.seasonLabel(season) : "",
+        alreadyBooked: booked
+      };
+    }));
+  } catch (err) {
+    console.warn("[portal] bookable properties build failed:", err?.message);
+    bookableProperties = [];
+  }
+
+  return { serviceHistory, projects: projectCards, derivedFacts, nextVisit, bookableProperties };
 }
 
 async function portalPayloadForLead(lead, req) {
@@ -3247,6 +3294,7 @@ async function portalPayloadForLead(lead, req) {
     // card; null hides the card. Past visits render in serviceHistory
     // and nowhere else.
     nextVisit: sections.nextVisit || null,
+    bookableProperties: sections.bookableProperties || [],
     // JOB-005 (CRM-09) — the header/stage state, derived from canonical
     // stores in priority order. The CRM stage field is untouched — it
     // still drives the admin list, the accept-card gate (canAccept
@@ -5255,20 +5303,78 @@ async function handleApi(req, res, pathname) {
   const beginBookingMatch = pathname.match(/^\/api\/portal\/([^/]+)\/begin-booking$/);
   if (beginBookingMatch && req.method === "POST") {
     const token = decodeURIComponent(beginBookingMatch[1]);
+    const url = new URL(req.url, baseUrlFromReq(req));
     const allProperties = await properties.list();
-    const property = allProperties.find((p) => p.id && portalTokenForId(p.id) === token) || null;
+
+    // Two token shapes reach this route, matching GET /api/portal/:token:
+    //
+    //   PROPERTY token — the seasonal outreach link. The token IS the
+    //     property, no propertyId needed. Original behaviour, unchanged.
+    //
+    //   LEAD token — the customer portal. One customer can have several
+    //     properties, so the caller names which one with ?propertyId=, and
+    //     we verify it belongs to the customer this token opens. The
+    //     property's own token is never sent to the browser, so a customer
+    //     portal link can only ever start a booking for that customer's
+    //     own properties.
+    //
+    // Lead first, so a lead token can never be misread as a property one.
+    let property = null;
+    const leads = await readLeads();
+    const lead = leads.find((item) => (item.portal?.token || portalTokenForId(item.id)) === token) || null;
+    if (lead) {
+      const propertyId = String(url.searchParams.get("propertyId") || "").trim();
+      if (!propertyId) {
+        return sendJson(res, 400, { ok: false, errors: ["Which property? propertyId is required."] });
+      }
+      const candidate = allProperties.find((p) => p.id === propertyId) || null;
+      const ownsIt = candidate && (
+        (lead.customerId && candidate.customerId === lead.customerId)
+        || (lead.propertyId && candidate.id === lead.propertyId)
+      );
+      if (!ownsIt) {
+        // Same 404 whether it doesn't exist or isn't theirs — a portal link
+        // must not become a way to probe which property ids are real.
+        return sendJson(res, 404, { ok: false, errors: ["Property not found."] });
+      }
+      property = candidate;
+    } else {
+      property = allProperties.find((p) => p.id && portalTokenForId(p.id) === token) || null;
+    }
     if (!property) {
       return sendJson(res, 404, { ok: false, errors: ["Property not found."] });
     }
-    const url = new URL(req.url, baseUrlFromReq(req));
     const seasonRaw = String(url.searchParams.get("season") || "").trim().toLowerCase();
     const season = (seasonRaw === "spring" || seasonRaw === "fall") ? seasonRaw : null;
     const fullName = String(property.customerName || "").trim();
     const firstName = fullName ? fullName.split(/\s+/)[0] : "";
     const lastName = fullName ? fullName.split(/\s+/).slice(1).join(" ") : "";
     const zoneCount = Array.isArray(property.system?.zones) ? property.system.zones.length : 0;
+    // Resolve the tier through deriveSeasonalKey (pricing.json seasonal_tiers)
+    // rather than composing `..._${zoneCount}z` by hand. Only 4/6/8/15 ever
+    // produced a real key that way — 46 of 50 zone counts built a key
+    // book.html cannot resolve, and an unresolvable suggestedService silently
+    // drops the customer on the unfiltered service catalog instead of the
+    // express handoff this endpoint exists to give them.
+    //
+    // accountType decides the tier table. It matters: booking.js LOCKS the
+    // service in on a session handoff, so a commercial customer suggested a
+    // residential key is booked at the residential price with no chance to
+    // correct it (live today for commercial properties with exactly 4 zones,
+    // the one count the old expression got "right").
+    let commercialAccount = false;
+    if (property.customerId) {
+      try {
+        const owner = await customers.get(property.customerId, { withProperties: false });
+        commercialAccount = owner?.accountType === "commercial";
+      } catch (err) {
+        // Unresolvable customer — fall back to residential, the same
+        // assumption every other deriveSeasonalKey caller makes.
+        console.warn("[begin-booking] accountType lookup failed:", err?.message || err);
+      }
+    }
     const suggestedService = (season && zoneCount > 0)
-      ? `${season === "spring" ? "spring_open" : "fall_close"}_${zoneCount}z`
+      ? (deriveSeasonalKey(season === "spring" ? "spring_opening" : "fall_closing", zoneCount, commercialAccount) || "")
       : "";
     try {
       const session = await bookingSessions.createSession({
