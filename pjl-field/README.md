@@ -6,61 +6,62 @@ says "PJL Field" — the scaffold only, no features yet.
 ## How this app reaches the phone
 
 There is no computer in this setup. Builds run on Expo's cloud servers
-(EAS Build) and land on the iPhone through Apple's TestFlight app. Nothing
-is compiled locally, and no Mac is involved.
+(EAS Build), which pull the code straight from GitHub, and land on the
+iPhone through Apple's TestFlight app. Nothing is compiled locally, and no
+Mac is involved.
 
-    code in this repo  →  EAS Build (Expo's servers)  →  TestFlight  →  iPhone
+    this repo on GitHub  →  EAS Build  →  TestFlight  →  iPhone
 
-After the first build, most changes are JavaScript only. Those ship over the
-air with EAS Update — no rebuild, no new TestFlight version; the app picks
-them up on relaunch. A new build is only needed when native code or app
-config changes (new permissions, a new native library, icon, app name).
+Builds are started from the Expo dashboard in a browser — including a phone
+browser. That matters, because the Claude Code sandbox this project is
+developed in **cannot reach Expo's servers**: `api.expo.dev`, `expo.dev` and
+`exp.host` are all refused by the environment's network egress policy (403
+on CONNECT). So `eas build`, `eas submit` and `eas login` cannot be run from
+a session here, and an `EXPO_TOKEN` would not help. Expo's GitHub
+integration sidesteps this entirely: Expo does the fetching, so nothing has
+to reach out from the sandbox.
 
-## One-time setup
+If that ever becomes limiting, the environment's network policy can be
+widened to allow those hosts — see
+https://code.claude.com/docs/en/claude-code-on-the-web. Then the CLI route
+below works from a session too.
 
-Two accounts are needed before the first build. Both are set up from the
-phone's browser.
+## Setup
 
-1. **Expo account** — free. Sign up at https://expo.dev.
-2. **Apple Developer Program** — **$99 USD/year**, at
-   https://developer.apple.com/programs/. This is not optional: Apple
-   requires a paid membership to install a build on a real device, whether
-   through TestFlight or any other route. Enrollment is not instant — expect
-   at least a day, sometimes longer if Apple asks for ID.
-
-Then, so builds can be triggered without a computer:
-
-3. **Expo access token** — expo.dev → account settings → Access Tokens →
-   create one. This lets a Claude Code session run builds on your behalf.
+1. **Expo account** — free, https://expo.dev.
+2. **Apple Developer Program** — $99 USD/year,
+   https://developer.apple.com/programs/. Required by Apple to install on a
+   real device, TestFlight included.
+3. **Connect GitHub** — in the Expo dashboard, on the project page, use
+   "Connect GitHub" and point it at this repository. Set the build's **base
+   directory to `pjl-field`**, since the app is a subdirectory of a repo
+   whose root is the website.
 4. **App Store Connect API key** — App Store Connect → Users and Access →
    Integrations → App Store Connect API → generate a key with **App Manager**
-   access. This is what uploads builds to TestFlight. Prefer this over
-   handing over an Apple ID password: it is scoped, and it can be revoked on
-   its own without touching the Apple account.
+   access. Upload it in the Expo dashboard under the project's credentials.
+   Preferred over an Apple ID password: scoped, and revocable on its own.
 
-Treat both of those as passwords. Neither belongs in this repo — `.gitignore`
-covers `.env*.local`, and they should be revoked once they are no longer
-needed.
+Secrets from step 4 never belong in this repo.
 
 ## Building and shipping
 
-Run from a machine (or a Claude Code session) that has the repo and is
-logged in to Expo:
+From the Expo dashboard: start a build against the `production` profile, then
+submit it to TestFlight. Apple takes a few minutes to process before it
+appears. Install the **TestFlight** app on the iPhone; the build shows up
+there once you're added as an internal tester.
+
+The equivalent from a command line, on any machine that can reach Expo:
 
 ```
-npx eas-cli build   --platform ios --profile production   # ~15-30 min, on Expo's servers
-npx eas-cli submit  --platform ios --latest               # uploads to TestFlight
+npx eas-cli build   --platform ios --profile production
+npx eas-cli submit  --platform ios --latest
+npx eas-cli update  --branch production --message "what changed"   # JS-only
 ```
 
-Apple then takes a few minutes to process the build before it appears in
-TestFlight. Install the **TestFlight** app from the App Store on the iPhone;
-the build shows up there once you've been added as an internal tester.
-
-For a JavaScript-only change afterwards:
-
-```
-npx eas-cli update --branch production --message "what changed"
-```
+After the first build, JavaScript-only changes ship over the air with
+`update` — no rebuild, no new TestFlight version; the app picks them up on
+relaunch. A new build is only needed when native code or app config changes
+(new permissions, a new native library, icon, app name).
 
 ## Layout
 
