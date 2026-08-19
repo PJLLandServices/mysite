@@ -21,6 +21,18 @@ order.
 The host and landing page are the `HOST` and `START_URL` constants at the
 top of `App.js`.
 
+Landing on the hub rather than jumping straight into a work order is
+deliberate. The card's Open WO button posts to `/api/leads/:id/open-wo`,
+which **creates** the work order when the lead has none
+(`server.js:18657`). Opening one must stay a deliberate press, or launching
+the app would create work orders on its own.
+
+Walked on a real iPhone 2026-08-19, all six: login renders and succeeds;
+/admin/today lays out correctly; a work order opens into tech mode; the
+Navigate button hands off to the maps chooser and comes back; the session
+survives a force-quit (30-day rolling cookie, `server.js:209`); photo
+capture reaches a WO.
+
 ### What this does NOT do yet
 
 The point of going native is **storage durability**, and that part is not
