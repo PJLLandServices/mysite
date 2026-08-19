@@ -94,7 +94,18 @@ offline queue below being the obvious candidate.
 
 **TestFlight builds expire after 90 days.** A tool meant to stay on the
 phone indefinitely needs a rebuild each quarter, or ad-hoc distribution
-instead.
+instead. First build shipped 2026-08-19, so the clock runs to around
+17 Nov 2026.
+
+Walked end to end 2026-08-19: `eas build` → `eas submit` → Apple
+processing → installed from TestFlight onto a real iPhone. App icon reads
+correctly at home-screen size and tech mode still loads from inside the
+installed app. Signing credentials live on Expo's servers and are good
+until 18 Aug 2027, and submission uses a stored App Store Connect API key,
+so neither a rebuild nor a resubmit needs an Apple login.
+
+ASC app id 6803004540. Apple's "processing complete" email is unreliable —
+check the TestFlight app on the phone instead.
 
 ## Later: a real installed app
 
