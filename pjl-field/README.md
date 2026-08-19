@@ -77,6 +77,25 @@ breaks Expo Go on the phone, so leave it unless the app has moved to
 development builds or TestFlight — where the SDK ceiling doesn't apply,
 since the Expo Go app is no longer in the picture.
 
+## Getting it onto the phone for real: TestFlight, not the App Store
+
+**TestFlight internal testing.** Internal testers are App Store Connect
+users on the account, up to 100 of them, and their builds need no Beta App
+Review — an upload is installable within minutes. That is the whole
+distribution story for a private tool used by the people who own it.
+
+**Not the public App Store.** This app is a WebView pointed at
+pjllandservices.com, which is precisely what guideline 4.2 (minimum
+functionality) exists to reject: "not sufficiently different from a web
+browsing experience." Submitting it publicly would probably earn a
+rejection, and there is no reason to list an internal field tool publicly
+anyway. If that ever changes, it needs real native capability first — the
+offline queue below being the obvious candidate.
+
+**TestFlight builds expire after 90 days.** A tool meant to stay on the
+phone indefinitely needs a rebuild each quarter, or ad-hoc distribution
+instead.
+
 ## Later: a real installed app
 
 Expo Go is a viewer for development. A standalone "PJL Field" on the home
