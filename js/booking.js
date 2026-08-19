@@ -113,6 +113,12 @@
     state.step = name;
     steps.forEach((s) => { s.hidden = s.dataset.step !== name; });
 
+    // A zone count can arrive pre-filled (?zones= on a seasonal CTA, or a
+    // session handoff), which fires no change event. Re-check it on entry so
+    // a mismatched tier is announced here rather than swapped silently when
+    // the customer taps Continue.
+    if (name === "zones" && typeof reviewZoneAnswer === "function") reviewZoneAnswer();
+
     // Hide the whole progress strip on the confirm/success state — the
     // "You're booked!" card already says everything the strip would
     // (and Patrick rightly pointed out the duplicate steps drove him
@@ -269,7 +275,12 @@
     if (state.familyFilter && FAMILY_COPY[state.familyFilter]) {
       const family = FAMILY_COPY[state.familyFilter];
       serviceHeading.textContent = name ? `Hi ${name} — ${lowerFirst(family.heading)}` : family.heading;
-      serviceLead.textContent = family.lead;
+      // When the customer arrived on a link that already names a tier, the
+      // matching card is rendered active — say so, rather than showing a
+      // pre-ticked box with no explanation.
+      serviceLead.textContent = (state.serviceKey && filtered.some(([k]) => k === state.serviceKey))
+        ? "We've carried over the size from the page you came from — change it here if that's not right."
+        : family.lead;
     } else {
       serviceHeading.textContent = name
         ? `Hi ${name}, what can we help with today?`
@@ -313,6 +324,7 @@
       const btn = document.createElement("button");
       btn.type = "button";
       btn.className = "service-card";
+      if (key === state.serviceKey) btn.classList.add("is-active");
       btn.dataset.serviceKey = key;
       const blurb = friendly.blurb || `${meta.minutes} min`;
       btn.innerHTML = `
@@ -335,9 +347,14 @@
   bookOtherLink.addEventListener("click", (event) => {
     event.preventDefault();
     state.familyFilter = null;
+    // Backing out of a deep link drops its tier as well — otherwise the full
+    // catalog renders with a card still ticked from the page they left.
+    state.serviceKey = null;
+    state.serviceMeta = null;
     // Strip the ?service= param from the URL so refreshing doesn't re-filter.
     const next = new URL(window.location.href);
     next.searchParams.delete("service");
+    next.searchParams.delete("zones");
     window.history.replaceState({}, "", next.toString());
     renderServiceCards();
   });
@@ -370,12 +387,80 @@
     }
   })();
 
+  // ===== Zone confirmation vs. the tier that was picked =====
+  // The service card names a zone bracket and the next step asks for the
+  // zone count, so the two can disagree. Nothing used to reconcile them:
+  // priceForBooking() ignores the zone count outright (its second argument
+  // is marked "no longer used"), so tier, price and on-site duration all
+  // followed the card while the real number went to the booking notes. A
+  // customer could pick the 5-6 zone card, answer 12, and be booked and
+  // priced as a 5-6 zone job.
+  //
+  // Resolving through pricing.json's seasonal_tiers — the same rows the
+  // spring and fall page estimators price from — keeps the promise those
+  // pages make: the tier you are shown is the tier you book.
+  let pendingTierKey = null;
+
+  function tierNoteEl() {
+    return document.getElementById("zonesTierNote");
+  }
+
+  function clearTierNote() {
+    pendingTierKey = null;
+    const el = tierNoteEl();
+    if (el) { el.hidden = true; el.textContent = ""; }
+  }
+
+  // Returns the service key the chosen zone count actually belongs to, or
+  // null when we can't tell (non-seasonal service, "I'm not sure", or
+  // pricing.json not loaded — in which case we leave the booking alone
+  // rather than guessing).
+  function tierKeyForZoneAnswer(value) {
+    if (!state.serviceKey || !serviceNeedsZones()) return null;
+    if (!value || value === "unsure") return null;
+    const helper = window.PJLSeasonalTiers;
+    const pricing = window.__pjlPricing;
+    if (!helper || !pricing) return null;
+    const tier = helper.tierForKeyAndZones(pricing.seasonal_tiers, state.serviceKey, value);
+    if (!tier || !tier.key || tier.key === state.serviceKey) return null;
+    return state.services[tier.key] ? tier.key : null;
+  }
+
+  function reviewZoneAnswer() {
+    const key = tierKeyForZoneAnswer(bookZones.value);
+    if (!key) { clearTierNote(); return; }
+    pendingTierKey = key;
+    const el = tierNoteEl();
+    if (el) {
+      el.textContent = `${zoneCountLabel(bookZones.value)} puts you in a different size — we'll book ${state.services[key].label} so the price matches your system.`;
+      el.hidden = false;
+    }
+  }
+
+  bookZones.addEventListener("change", reviewZoneAnswer);
+
+  // The tier check needs pricing.json, which js/pricing-injector.js fetches
+  // asynchronously. A customer who reaches this step before that resolves
+  // would otherwise get no check at all, so re-run it when the rows land.
+  document.addEventListener("pjl:pricing-loaded", () => {
+    if (state.step === "zones") reviewZoneAnswer();
+  });
+
   zonesNextBtn.addEventListener("click", () => {
     if (!bookZones.value) {
       bookZones.focus();
       return;
     }
     state.zoneCount = bookZones.value;
+    // Apply the corrected tier before moving on: availability is fetched
+    // against the service's duration, so this has to settle first.
+    const corrected = pendingTierKey || tierKeyForZoneAnswer(bookZones.value);
+    if (corrected && state.services[corrected]) {
+      state.serviceKey = corrected;
+      state.serviceMeta = state.services[corrected];
+      renderServiceCards();
+    }
+    clearTierNote();
     showStep("address");
   });
 
@@ -726,6 +811,19 @@
         // Pick the deep-link service from the URL OR the session's
         // suggestedService. URL wins if both present (manual override).
         const preselect = params.get("service") || suggestedService;
+
+        // ?zones= travels with the seasonal pages' booking CTAs so the count
+        // the visitor already dialled in on the estimator isn't asked for
+        // again from scratch. Same treatment as a session hint: pre-select,
+        // don't assume — they still confirm.
+        const zonesParam = params.get("zones");
+        if (zonesParam && !state.zoneCount) {
+          const n = Math.floor(Number(zonesParam));
+          if (isFinite(n) && n >= 1 && n <= 50) {
+            state.zoneCount = String(n);
+            if (bookZones) bookZones.value = String(n);
+          }
+        }
         // A "session handoff" is when the AI / admin has explicitly chosen
         // the service for this customer. Trust their choice — lock the
         // service in and skip the family picker entirely.
@@ -756,7 +854,17 @@
 
           // Multi-variant family without a session-locked choice: show the
           // family-filtered picker so the customer picks the right size.
+          // The link already named a tier, so mark that card chosen — the
+          // customer confirms or corrects instead of choosing from scratch.
+          // Advancing still needs a card tap; nothing auto-submits.
           state.familyFilter = family;
+          state.serviceKey = preselect;
+          state.serviceMeta = state.services[preselect];
+          // Open on the tab the link belongs to. The grid filters by
+          // property type and defaults to residential, so without this a
+          // commercial link renders the residential cards with the chosen
+          // tier nowhere on screen.
+          state.propertyType = propertyTypeForKey(preselect);
         }
         renderServiceCards();
       }

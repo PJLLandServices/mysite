@@ -61,7 +61,6 @@
   if (!root) return;
 
   var season = root.getAttribute("data-seasonal-calc") === "fall" ? "fall" : "spring";
-  var KEY_FIELD = season === "fall" ? "key_fall" : "key_spring";
   var SEASON_LABEL = root.getAttribute("data-season-label") || "Service";
 
   // Where a custom-quote tier sends the visitor instead of book.html.
@@ -96,55 +95,18 @@
   var maxZones = FALLBACK_MAX_ZONES;
 
   // ---- Tier rows -----------------------------------------------------
-
-  // "1-4" / "5–6" / "16+" / "7" -> { min, max }. Anything else is skipped
-  // rather than guessed at, so a malformed row can't silently mis-price.
-  function parseRange(text) {
-    var m = /^(\d+)\s*\+$/.exec(text);
-    if (m) return { min: +m[1], max: Infinity };
-    m = /^(\d+)\s*[-–—]\s*(\d+)$/.exec(text);
-    if (m) return { min: +m[1], max: +m[2] };
-    m = /^(\d+)$/.exec(text);
-    if (m) return { min: +m[1], max: +m[1] };
-    return null;
-  }
-
-  // Reproduces the tier-pill wording the pages shipped with:
-  // "Up to 4 zones" / "5–6 zones" / "16+ zones".
-  function rangeLabel(range) {
-    if (range.max === Infinity) return range.min + "+ zones";
-    if (range.min <= 1) return "Up to " + range.max + " zones";
-    return range.min + "–" + range.max + " zones";
-  }
-
-  function normaliseRows(rows) {
-    var out = [];
-    (rows || []).forEach(function (row) {
-      if (!row) return;
-      var range = parseRange(String(row.zones || "").trim());
-      if (!range) return;
-      var price = Number(row.price);
-      var custom = row.custom === true || !(price > 0);
-      out.push({
-        min: range.min,
-        max: range.max,
-        price: custom ? null : price,
-        key: row[KEY_FIELD] || null,
-        custom: custom,
-        label: rangeLabel(range)
-      });
-    });
-    out.sort(function (a, b) { return a.min - b.min; });
-    return out.length ? out : null;
-  }
+  // Range parsing, tier labelling and row normalisation live in
+  // js/seasonal-tiers.js so book.html's zone-confirmation step resolves
+  // brackets through exactly the same code this readout does.
 
   function adoptTiers(seasonal, live) {
-    var residential = normaliseRows(seasonal && seasonal.residential);
-    var commercial = normaliseRows(seasonal && seasonal.commercial);
-    if (!residential || !commercial) return false;
+    var built = window.PJLSeasonalTiers && window.PJLSeasonalTiers.build(seasonal, season);
+    if (!built) return false;
 
-    tiers = { residential: residential, commercial: commercial };
+    tiers = built;
     tiersAreLive = !!live;
+
+    var residential = tiers.residential;
 
     // The stepper caps at the first open-ended residential tier ("16+"),
     // which is also the "16+" the counter shows at the top of its range.
@@ -158,11 +120,7 @@
   }
 
   function tierFor(n) {
-    var rows = tiers[mode] || tiers.residential;
-    for (var i = 0; i < rows.length; i++) {
-      if (n <= rows[i].max) return rows[i];
-    }
-    return rows[rows.length - 1];
+    return window.PJLSeasonalTiers.tierFor(tiers, mode, n);
   }
 
   // ---- Render --------------------------------------------------------
@@ -170,7 +128,11 @@
   function ctaHref(row) {
     if (row.custom) return CUSTOM_QUOTE_HREF;
     if (!row.key) return null;
-    return "book.html?service=" + encodeURIComponent(row.key);
+    // Carry the zone count as well as the tier. book.html confirms the count
+    // on its own step; without this the visitor re-enters a number they just
+    // dialled in here, and the two surfaces can disagree about the answer.
+    return "book.html?service=" + encodeURIComponent(row.key) +
+           "&zones=" + encodeURIComponent(zones);
   }
 
   function updateCtas(row) {

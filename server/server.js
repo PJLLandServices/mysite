@@ -5267,8 +5267,31 @@ async function handleApi(req, res, pathname) {
     const firstName = fullName ? fullName.split(/\s+/)[0] : "";
     const lastName = fullName ? fullName.split(/\s+/).slice(1).join(" ") : "";
     const zoneCount = Array.isArray(property.system?.zones) ? property.system.zones.length : 0;
+    // Resolve the tier through deriveSeasonalKey (pricing.json seasonal_tiers)
+    // rather than composing `..._${zoneCount}z` by hand. Only 4/6/8/15 ever
+    // produced a real key that way — 46 of 50 zone counts built a key
+    // book.html cannot resolve, and an unresolvable suggestedService silently
+    // drops the customer on the unfiltered service catalog instead of the
+    // express handoff this endpoint exists to give them.
+    //
+    // accountType decides the tier table. It matters: booking.js LOCKS the
+    // service in on a session handoff, so a commercial customer suggested a
+    // residential key is booked at the residential price with no chance to
+    // correct it (live today for commercial properties with exactly 4 zones,
+    // the one count the old expression got "right").
+    let commercialAccount = false;
+    if (property.customerId) {
+      try {
+        const owner = await customers.get(property.customerId, { withProperties: false });
+        commercialAccount = owner?.accountType === "commercial";
+      } catch (err) {
+        // Unresolvable customer — fall back to residential, the same
+        // assumption every other deriveSeasonalKey caller makes.
+        console.warn("[begin-booking] accountType lookup failed:", err?.message || err);
+      }
+    }
     const suggestedService = (season && zoneCount > 0)
-      ? `${season === "spring" ? "spring_open" : "fall_close"}_${zoneCount}z`
+      ? (deriveSeasonalKey(season === "spring" ? "spring_opening" : "fall_closing", zoneCount, commercialAccount) || "")
       : "";
     try {
       const session = await bookingSessions.createSession({
