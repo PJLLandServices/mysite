@@ -1600,3 +1600,55 @@ body.portal-modal-open { overflow: hidden; }
 .portal-project-bar-fill { height: 100%; background: #1b4d2e; border-radius: 4px; }
 .portal-project-invoices { list-style: none; margin: 10px 0 0; padding: 0; font-size: 14px; color: var(--muted, #667); }
 .portal-project-invoice { padding: 3px 0; }
+
+
+/* Book-a-service card (customer portal). One row per property the
+   customer owns. Fills the gap where the portal told people to "book
+   again any time" without giving them anywhere to do it — the seasonal
+   Book button lives on the property portal, a surface most customers
+   never see. Rows are anchors, not buttons, so the seasonal express
+   handoff and the plain book.html route look and behave the same. */
+.portal-book { margin: 0 0 22px; }
+.portal-book-card { display: flex; flex-direction: column; gap: 16px; }
+.portal-book-head { display: flex; flex-direction: column; gap: 4px; }
+.portal-book-eyebrow {
+  color: var(--text-muted, #6a7368);
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+.portal-book-card h2 {
+  margin: 0;
+  font-size: 28px;
+  color: var(--green, #1B4D2E);
+  line-height: 1.15;
+}
+.portal-book-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.portal-book-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  flex-wrap: wrap;
+  padding: 14px 16px;
+  border: 1px solid var(--border, rgba(27,77,46,0.18));
+  border-radius: 12px;
+  background: rgba(27,77,46,0.03);
+}
+.portal-book-where { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.portal-book-address { font-weight: 700; color: var(--green, #1B4D2E); }
+.portal-book-meta { font-size: 13px; color: #555; }
+.portal-book-row .portal-btn { white-space: nowrap; text-align: center; }
+/* The plain route is an <a>, the seasonal one a <button>. Reset the anchor
+   so both read as the same control — .portal-btn assumes a button and
+   inherits none of the browser's link colour or underline. */
+a.portal-btn { text-decoration: none; }
+a.portal-btn-primary, a.portal-btn-primary:visited, a.portal-btn-primary:hover { color: #fff; }
+@media (max-width: 520px) {
+  .portal-book-row { align-items: stretch; }
+  .portal-book-row .portal-btn { width: 100%; }
+}
+.portal-book-note { margin: 0; font-size: 13px; color: var(--text-muted, #555); }
+.portal-book-note a { color: var(--green, #1B4D2E); font-weight: 600; text-decoration: none; }

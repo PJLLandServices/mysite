@@ -210,6 +210,36 @@ async function deriveBookingState(propertyId, season, year) {
   };
 }
 
+// Which seasonal service should a customer be offered right now?
+// Inside a season window, that season. Outside one — the gap between
+// Jul 1 and Aug 31, and again Dec 16 to Feb 28 — the NEXT window to
+// open, because someone opening their portal in August is thinking
+// about fall, and the fall page itself tells them to book in August.
+//
+// Reads SEASON_WINDOWS so the portal CTA, the outreach candidate list
+// and the season labels can never drift apart on where a season starts.
+//
+// `now` is injectable for tests. Returns "spring" | "fall".
+function seasonForBooking(now = new Date()) {
+  const month = now.getMonth() + 1;   // 1-indexed, matching SEASON_WINDOWS
+  const day = now.getDate();
+  const after = (m, d, win) =>
+    m > win.startMonth || (m === win.startMonth && d >= win.startDay);
+  const before = (m, d, win) =>
+    m < win.endMonth || (m === win.endMonth && d <= win.endDay);
+
+  for (const season of ["spring", "fall"]) {
+    const win = SEASON_WINDOWS[season];
+    if (after(month, day, win) && before(month, day, win)) return season;
+  }
+  // Not in either window. Spring opens Mar 1 and fall Sep 1, so the gap
+  // before spring belongs to spring and everything after it to fall,
+  // wrapping back to spring once fall's window has closed for the year.
+  if (!after(month, day, SEASON_WINDOWS.spring)) return "spring";
+  if (!after(month, day, SEASON_WINDOWS.fall)) return "fall";
+  return "spring";
+}
+
 // ---- Public: candidate listing -----------------------------------
 
 // Build the property + state list for a given season + year, then
@@ -756,6 +786,7 @@ module.exports = {
   seasonLabel: (season) => SEASON_LABEL[season] || "appointment",
   // Test/diagnostic surface.
   isInSeasonWindow,
+  seasonForBooking,
   firstNameOf,
   streetAddressOf,
   buildPortalLink,

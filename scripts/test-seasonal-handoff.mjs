@@ -129,6 +129,85 @@ check(
 //    customer pick) rather than a guessed key.
 check(deriveSeasonalKey('not_a_season', 6, false) === null, 'unknown WO type should derive no key');
 
+// ---- Portal booking entry points -----------------------------------------
+//
+// 7. seasonForBooking() must always name a season the tier tables can serve,
+//    at every calendar boundary. The portal CTA reads it, so a null or a
+//    stray value would render a button that books nothing.
+const { seasonForBooking, SEASON_WINDOWS } = require(path.join(ROOT, 'server/lib/outreach.js'));
+
+for (let month = 1; month <= 12; month += 1) {
+  for (const day of [1, 15, 28]) {
+    const season = seasonForBooking(new Date(2026, month - 1, day));
+    check(
+      season === 'spring' || season === 'fall',
+      `seasonForBooking(2026-${month}-${day}) returned ${season}`
+    );
+    // Whatever it names must resolve to a real key for a real zone count.
+    check(
+      Boolean(BOOKABLE_SERVICES[deriveSeasonalKey(woTypeFor(season), 7, false)]),
+      `seasonForBooking(2026-${month}-${day}) -> ${season} does not resolve a bookable key`
+    );
+  }
+}
+
+// 8. Inside a window, the season IS that window — the portal must not offer
+//    fall in April.
+check(seasonForBooking(new Date(2026, 3, 15)) === 'spring', 'April should offer spring');
+check(seasonForBooking(new Date(2026, 9, 15)) === 'fall', 'October should offer fall');
+// Boundary days of each window, read straight off SEASON_WINDOWS.
+const springWin = SEASON_WINDOWS.spring;
+const fallWin = SEASON_WINDOWS.fall;
+check(
+  seasonForBooking(new Date(2026, springWin.startMonth - 1, springWin.startDay)) === 'spring',
+  'spring window opening day should offer spring'
+);
+check(
+  seasonForBooking(new Date(2026, springWin.endMonth - 1, springWin.endDay)) === 'spring',
+  'spring window closing day should offer spring'
+);
+check(
+  seasonForBooking(new Date(2026, fallWin.startMonth - 1, fallWin.startDay)) === 'fall',
+  'fall window opening day should offer fall'
+);
+check(
+  seasonForBooking(new Date(2026, fallWin.endMonth - 1, fallWin.endDay)) === 'fall',
+  'fall window closing day should offer fall'
+);
+// Between the windows, look forward: August belongs to fall, January to spring.
+check(seasonForBooking(new Date(2026, 7, 19)) === 'fall', 'August should look ahead to fall');
+check(seasonForBooking(new Date(2026, 0, 10)) === 'spring', 'January should look ahead to spring');
+
+// 9. The customer-portal booking route must never let one portal token start
+//    a booking for a property it doesn't own. Pinned against the source so
+//    the ownership check can't be dropped without failing the build.
+const beginBooking = serverSrc.slice(
+  serverSrc.indexOf('const beginBookingMatch'),
+  serverSrc.indexOf('const leadMatch = pathname.match')
+);
+check(beginBooking.length > 0, 'begin-booking handler not found — this test needs updating');
+check(
+  /candidate\.customerId === lead\.customerId/.test(beginBooking),
+  'begin-booking no longer checks that the property belongs to the token holder'
+);
+check(
+  /propertyId/.test(beginBooking) && /400/.test(beginBooking),
+  'begin-booking should reject a lead token with no propertyId'
+);
+// A missing property and someone else's property must be indistinguishable,
+// or the endpoint becomes a way to probe which property ids exist.
+check(
+  (beginBooking.match(/Property not found/g) || []).length >= 2,
+  'begin-booking should answer "not found" identically for unknown and unowned properties'
+);
+// The property token must not travel to the browser in the portal payload.
+check(
+  !/portalToken|propertyToken/.test(
+    serverSrc.slice(serverSrc.indexOf('let bookableProperties'), serverSrc.indexOf('return { serviceHistory'))
+  ),
+  'the portal payload must not expose property portal tokens'
+);
+
 if (failures.length) {
   console.error(`seasonal-handoff: ${passed} passed, ${failures.length} FAILED\n`);
   failures.slice(0, 25).forEach((f) => console.error('  ' + f));
