@@ -107,17 +107,38 @@ so neither a rebuild nor a resubmit needs an Apple login.
 ASC app id 6803004540. Apple's "processing complete" email is unreliable —
 check the TestFlight app on the phone instead.
 
-## Later: a real installed app
+## Shipping a change: update, or rebuild?
 
-Expo Go is a viewer for development. A standalone "PJL Field" on the home
-screen, working without a computer running, is a separate step: EAS Build
-compiles it on Expo's servers and TestFlight installs it. That needs an
-Apple Developer Program membership ($99/year) and an Expo project created
-with `eas init`.
+Most changes do NOT need a build. `expo-updates` is installed and the
+production build profile is on the `production` channel, so a JavaScript
+change ships over the air in about a minute:
 
-`eas.json` already carries build profiles for this. Bundle identifier is
-`com.pjllandservices.field` — permanent from the first submission to Apple,
-so change it before then or not at all.
+```
+git pull
+npx eas-cli@latest update --branch production -m "what changed"
+```
+
+Reopen the app and it's there. No build, no TestFlight, no Apple.
+
+A **rebuild** is needed only when the native side changes: a new native
+library, the icon or splash, the app name, iOS permissions, an SDK bump.
+Then it's the full round again — `eas build`, `eas submit`, install from
+TestFlight.
+
+`runtimeVersion` is on the **fingerprint** policy, which is what keeps that
+distinction safe. The fingerprint is computed from the native side, so
+adding a native module changes it, and an update built against the new
+fingerprint is simply never delivered to a binary carrying the old one. The
+symptom of forgetting to rebuild is therefore "my update didn't show up",
+which is diagnosable. Under the `appVersion` policy the same mistake ships
+a JS bundle the installed binary cannot run — a crash, in the field, on the
+phone the work is being done from.
+
+So: if an update doesn't appear, check whether the change touched anything
+native before assuming the update failed.
+
+Bundle identifier is `com.pjllandservices.field` — permanent from the first
+submission to Apple, so change it before then or not at all.
 
 ## Working on this from a Claude Code web session
 
