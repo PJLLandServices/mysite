@@ -16,8 +16,10 @@
 //
 // The failure is invisible at runtime, so it has to be caught at build time.
 //
-// Scope: ROOT-level *.html plus js/*.js, so both hand-written links and any
-// link built in page script are covered.
+// Scope: ROOT-level *.html, js/*.js, and server/*.{html,js} — the public
+// pages, the shared page scripts, and the logged-in surfaces (the customer
+// portal books services too, and its links were outside this gate until the
+// portal gained booking routes).
 //
 // Modes:
 //   node scripts/lint-booking-links.mjs            # exit 1 on any bad key
@@ -44,11 +46,18 @@ const BOOKABLE = new Set(
 // in absolute URLs. Stops at whatever ends the value.
 const LINK_RE = /book\.html\?service=([^"'\s&#<>)}]+)/g;
 
+function filesIn(dir, exts) {
+  const full = path.join(ROOT, dir);
+  if (!fs.existsSync(full)) return [];
+  return fs.readdirSync(full)
+    .filter((f) => exts.some((e) => f.endsWith(e)))
+    .map((f) => (dir ? path.join(dir, f) : f));
+}
+
 const files = [
-  ...fs.readdirSync(ROOT).filter((f) => f.endsWith('.html')).map((f) => f),
-  ...(fs.existsSync(path.join(ROOT, 'js'))
-    ? fs.readdirSync(path.join(ROOT, 'js')).filter((f) => f.endsWith('.js')).map((f) => path.join('js', f))
-    : []),
+  ...filesIn('', ['.html']),
+  ...filesIn('js', ['.js']),
+  ...filesIn('server', ['.html', '.js']),
 ].sort();
 
 const problems = [];

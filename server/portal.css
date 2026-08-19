@@ -41,6 +41,20 @@ body {
   padding: 12px clamp(18px, 4vw, 42px);
   background: rgba(15,31,20,0.97);
   box-shadow: 0 2px 24px rgba(0,0,0,0.22);
+  /* Honor iOS safe areas. portal.html opts into viewport-fit=cover with a
+     black-translucent status bar, so without this the page paints UNDER the
+     status bar and the phone's clock lands on the logo while the carrier and
+     battery sit on the call button. Every other CRM stylesheet already does
+     this; portal.css was the one that missed it. max() keeps the normal
+     12px on hardware with no inset. */
+  padding-top: max(12px, env(safe-area-inset-top));
+  padding-left: max(clamp(18px, 4vw, 42px), env(safe-area-inset-left));
+  padding-right: max(clamp(18px, 4vw, 42px), env(safe-area-inset-right));
+}
+
+/* Same reason, other end: keeps the last card clear of the home indicator. */
+.portal-body {
+  padding-bottom: env(safe-area-inset-bottom);
 }
 
 .portal-logo img {
@@ -245,6 +259,7 @@ h1 {
 @media (max-width: 760px) {
   .portal-nav {
     min-height: 92px;
+    padding-top: max(12px, env(safe-area-inset-top));
   }
 
   .portal-logo img {
@@ -1650,5 +1665,34 @@ a.portal-btn-primary, a.portal-btn-primary:visited, a.portal-btn-primary:hover {
   .portal-book-row { align-items: stretch; }
   .portal-book-row .portal-btn { width: 100%; }
 }
+/* Secondary routes — deliberately quieter than the property CTAs above.
+   These are links, not orange buttons, so the seasonal action stays the
+   obvious one while everything else is still one tap away. */
+.portal-book-other {
+  border-top: 1px solid var(--border, rgba(27,77,46,0.14));
+  padding-top: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.portal-book-other-label {
+  color: var(--text-muted, #6a7368);
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+.portal-book-other-links { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.portal-book-other-links a {
+  display: inline-block;
+  color: var(--green, #1B4D2E);
+  font-weight: 600;
+  font-size: 15px;
+  text-decoration: none;
+  padding: 6px 0;          /* keeps the tap target comfortable on a phone */
+}
+.portal-book-other-links a:hover { text-decoration: underline; }
+
 .portal-book-note { margin: 0; font-size: 13px; color: var(--text-muted, #555); }
 .portal-book-note a { color: var(--green, #1B4D2E); font-weight: 600; text-decoration: none; }

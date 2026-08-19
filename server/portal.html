@@ -136,6 +136,21 @@
           <h2 id="portalBookHeading">Book a service</h2>
         </header>
         <ul class="portal-book-list" id="portalBookList"></ul>
+
+        <!-- Everything that isn't a seasonal service. Each of these three is
+             the only member of its family, so book.html locks the service in
+             on arrival and goes straight to the address step — one tap, no
+             menu. That also sidesteps the unfiltered step-1 catalog, which
+             lists the five Spring Opening cards first whatever the season. -->
+        <div class="portal-book-other">
+          <span class="portal-book-other-label">Something else?</span>
+          <ul class="portal-book-other-links">
+            <li><a href="/book.html?service=sprinkler_repair">Sprinkler repair <span aria-hidden="true">&rarr;</span></a></li>
+            <li><a href="/book.html?service=hydrawise_retrofit">Smart controller upgrade <span aria-hidden="true">&rarr;</span></a></li>
+            <li><a href="/book.html?service=site_visit">Free site visit &mdash; lighting, new install, anything <span aria-hidden="true">&rarr;</span></a></li>
+          </ul>
+        </div>
+
         <p class="portal-book-note">
           Or call <a href="tel:+19059600181">(905) 960-0181</a> and we'll set it up by phone.
         </p>
