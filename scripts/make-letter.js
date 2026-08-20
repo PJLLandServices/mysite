@@ -22,7 +22,7 @@
 // Every header is optional. Repeat "Address:" for each address line.
 // Omit Date and it uses today. Recognized headers:
 //   To, Company, Attn, Address, Email, Phone, Subject, Date, Heading,
-//   Label, Reference, Closing, Signer, SignerTitle
+//   Label, Reference, Closing ("none" drops it), Signer, SignerTitle
 
 const fs = require("node:fs");
 const path = require("node:path");
@@ -76,7 +76,9 @@ function parseLetterFile(raw) {
       case "heading": out.heading = val; break;
       case "label": out.label = val; break;
       case "phone": out.to.phone = val; break;
-      case "closing": out.closing = val; break;
+      // "Closing: none" drops the closing line entirely — the signature
+      // block still gets its space.
+      case "closing": out.closing = /^(none|no|-)$/i.test(val) ? "" : val; break;
       case "signer": out.signer = { ...(out.signer || {}), name: val }; break;
       case "signertitle": out.signer = { ...(out.signer || {}), title: val }; break;
     }

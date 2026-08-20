@@ -289,7 +289,9 @@ function drawRecipientBand(doc, { to = {}, date, heading, label = "PREPARED FOR"
   // Height: padding + label + each line + optional heading.
   let bandH = padY * 2 + 14 + lines.reduce((h, l) => h + l.size + 3, 0);
   if (heading) bandH += 24;
-  if (bandH < 78) bandH = 78;
+  // Floor sized to the DATE column (label + value + padding), so a
+  // single-line recipient gives a snug band rather than a hollow one.
+  if (bandH < 60) bandH = 60;
 
   doc.save();
   doc.rect(0, bandTop, PAGE_W, bandH).fill(BAND);
@@ -365,10 +367,17 @@ function drawSignOff(doc, { closing = "Sincerely,", signer = SIGNER } = {}) {
   const needed = 96;
   if (doc.y + needed > PAGE_H - FOOTER_H) doc.addPage();
 
+  // A closing line is conventional but not compulsory — plenty of letters
+  // just end and sign. Pass closing: "" to drop it and keep the signature
+  // space.
   let y = doc.y + 26;
-  doc.font("Helvetica").fontSize(10.5).fillColor(TEXT);
-  doc.text(closing, MARGIN_X, y, { width: CONTENT_W, lineBreak: false });
-  y = doc.y + 34;   // room for a wet signature
+  if (closing) {
+    doc.font("Helvetica").fontSize(10.5).fillColor(TEXT);
+    doc.text(closing, MARGIN_X, y, { width: CONTENT_W, lineBreak: false });
+    y = doc.y + 34;   // room for a wet signature
+  } else {
+    y += 34;
+  }
 
   doc.font("Helvetica-Bold").fontSize(10.5).fillColor(TEXT);
   doc.text(signer.name || SIGNER.name, MARGIN_X, y, { width: CONTENT_W, lineBreak: false });
