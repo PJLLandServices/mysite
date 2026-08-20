@@ -62,6 +62,23 @@ const PAGE_H = 792;
 const MARGIN_X = 40;               // matches invoice-pdf.js — the house letterhead margin
 const CONTENT_W = PAGE_W - MARGIN_X * 2;
 const BODY_TOP = 72;               // where continuation pages start
+
+// ---- Title fitting --------------------------------------------------
+// The title is one line, always. It shrinks to fit rather than wrapping
+// onto a second row, which would push the sender block down and unsettle
+// the whole letterhead.
+//
+// TITLE_W runs to 16pt short of the logo's left edge. invoice-pdf.js caps
+// at CONTENT_W - 200 (= 332), but its title is always the single word
+// "INVOICE" (93.6pt at 30) so the cap never bites there. A letter's title
+// is the subject, so it gets the real available width — 24pt more before
+// any shrinking starts. Nothing an invoice would print is affected.
+const LOGO_W = 160;
+const TITLE_W = PAGE_W - MARGIN_X * 2 - LOGO_W - 16;   // 356
+const TITLE_MAX = 30;              // matches invoice-pdf.js
+const TITLE_MIN = 16;              // below this, wrap instead of shrink
+const TITLE_TRACK = 1.5;           // letterspacing at TITLE_MAX
+const TITLE_BOTTOM = 76;           // title sits on this line whatever its size
 const FOOTER_H = 62;              // reserved band at the page bottom
 
 // ---- Brand assets ---------------------------------------------------
@@ -83,6 +100,28 @@ function logoBuffer() {
   return _logoBuf;
 }
 function fontHeading() { return barlowBuffer() ? "Barlow-Bold" : "Helvetica-Bold"; }
+
+// Largest size at or below TITLE_MAX that fits `title` on one line within
+// TITLE_W. Letterspacing scales with the size so the tracking stays
+// proportional — at TITLE_MAX it is exactly the invoice's 1.5. Returns
+// TITLE_MIN if even that overflows, and the caller lets it wrap.
+function fitTitle(doc, title) {
+  doc.font(fontHeading());
+  for (let size = TITLE_MAX; size >= TITLE_MIN; size -= 0.25) {
+    const track = TITLE_TRACK * (size / TITLE_MAX);
+    doc.fontSize(size);
+    // Measure with heightOfString, not widthOfString. pdfkit's LineWrapper
+    // does not break where widthOfString says it should — at 23.5pt this
+    // title measures 355.95 against a 356 limit and still wraps.
+    // heightOfString runs the same wrapper that draws, so it is the only
+    // measurement that agrees with the output. One line or keep shrinking.
+    const h = doc.heightOfString(title, {
+      width: TITLE_W, characterSpacing: track, lineGap: 0
+    });
+    if (h <= doc.currentLineHeight() * 1.2) return { size, track };
+  }
+  return { size: TITLE_MIN, track: TITLE_TRACK * (TITLE_MIN / TITLE_MAX) };
+}
 
 // Logo aspect from the PNG's IHDR, so a logo re-export can't distort the
 // lockup. Falls back to the known 1000×574 ratio.
@@ -169,13 +208,17 @@ function parseBody(body) {
 // schedule. With no title the sender block moves up to fill the space.
 function drawLetterhead(doc, title) {
   const top = 40;
-  const LOGO_W = 160;
 
   if (title) {
-    doc.font(fontHeading()).fontSize(30).fillColor(GREEN);
-    doc.text(title, MARGIN_X, top, {
-      characterSpacing: 1.5,
-      width: CONTENT_W - 200,   // hard cap — never runs under the logo
+    const { size, track } = fitTitle(doc, title);
+    doc.font(fontHeading()).fontSize(size).fillColor(GREEN);
+    // Bottom-aligned to TITLE_BOTTOM, so a shrunken title sits just above
+    // the sender block instead of stranding a gap under the page top. At
+    // TITLE_MAX this lands on y = top, exactly where the invoice puts it.
+    const titleY = TITLE_BOTTOM - doc.currentLineHeight();
+    doc.text(title, MARGIN_X, titleY, {
+      characterSpacing: track,
+      width: TITLE_W,
       lineGap: 0
     });
   }
@@ -190,16 +233,16 @@ function drawLetterhead(doc, title) {
   // printing on top of it.
   let y = title ? Math.max(doc.y + 2, top + 38) : top + 2;
   doc.font("Helvetica-Bold").fontSize(10).fillColor(TEXT);
-  doc.text(company.NAME, MARGIN_X, y, { width: CONTENT_W - 200 });
+  doc.text(company.NAME, MARGIN_X, y, { width: TITLE_W });
   y = doc.y + 1;
   doc.font("Helvetica").fontSize(9).fillColor(MUTED);
-  doc.text(STREET_LINE, MARGIN_X, y, { width: CONTENT_W - 200 });
+  doc.text(STREET_LINE, MARGIN_X, y, { width: TITLE_W });
   y = doc.y;
   doc.text(`${CONTACT_EMAIL}  ·  ${company.PHONE}  ·  ${company.WEBSITE}`,
-    MARGIN_X, y, { width: CONTENT_W - 200 });
+    MARGIN_X, y, { width: TITLE_W });
   y = doc.y + 2;
   doc.fontSize(8).fillColor(MUTED);
-  doc.text(GST_LINE, MARGIN_X, y, { characterSpacing: 0.3, width: CONTENT_W - 200 });
+  doc.text(GST_LINE, MARGIN_X, y, { characterSpacing: 0.3, width: TITLE_W });
 
   // Logo, right edge pinned to the content margin so it lines up with
   // the rules and the footer below.
