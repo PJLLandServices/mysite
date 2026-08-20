@@ -8,7 +8,17 @@
 // the actual need — "put something on PJL letterhead" — without any of it.
 //
 // Structure, top to bottom:
-//   letterhead (logo + sender identity) → date → addressee → rule → body
+//   title → sender identity → logo (right) → date → addressee → rule → body
+//
+// The letterhead is the house one: geometry transcribed from
+// invoice-pdf.js drawHeader, so a letter sits alongside an invoice, a
+// quote or the Lewis Honey schedule rather than looking like a different
+// company. Verified by extracting text positions from a real invoice
+// render and this one — title, sender name, street, contact and GST
+// lines all land on identical x/top/size.
+//
+// The big green title slot is the subject, upper-cased — the same slot
+// that reads "INVOICE" on an invoice.
 //
 // Body is plain text. Blank line = new paragraph. A line starting with
 // "- " is a bullet. That is the whole markup vocabulary, on purpose.
@@ -33,8 +43,7 @@ const company = require("./company");
 // address and the GST/HST registration. Kept here rather than pushed
 // into company.js so this file cannot perturb the PO/RFQ renderers that
 // read from it.
-const STREET = "1118 Cenotaph Blvd.";
-const CITY_LINE = "Newmarket, ON  L3X 0A5";
+const STREET_LINE = "1118 Cenotaph Blvd., Newmarket, ON  L3X 0A5";
 const GST_LINE = "GST/HST Reg. No. 757080940 RT0001";
 const CONTACT_EMAIL = "info@pjllandservices.com";
 
@@ -49,9 +58,9 @@ const RULE = "#EFEDE3";
 // ---- Page geometry --------------------------------------------------
 const PAGE_W = 612;                // US Letter @ 72pt/in
 const PAGE_H = 792;
-const MARGIN_X = 54;               // 0.75" — a letter margin, not a form margin
+const MARGIN_X = 40;               // matches invoice-pdf.js — the house letterhead margin
 const CONTENT_W = PAGE_W - MARGIN_X * 2;
-const BODY_TOP = 76;               // where continuation pages start
+const BODY_TOP = 72;               // where continuation pages start
 const FOOTER_H = 62;              // reserved band at the page bottom
 
 // ---- Brand assets ---------------------------------------------------
@@ -148,61 +157,71 @@ function parseBody(body) {
 }
 
 // ---- Letterhead -----------------------------------------------------
-// Logo left, sender identity right-aligned opposite it, green hairline
-// underneath. Returns the y to continue from.
-function drawLetterhead(doc) {
-  const top = 44;
-  const LOGO_W = 168;
+// The house letterhead, matching invoice-pdf.js drawHeader and the
+// Lewis Honey schedule: big green title left, sender identity stacked
+// beneath it, logo pinned to the right margin. Geometry is transcribed
+// from invoice-pdf.js so a letter sits alongside the rest of PJL's
+// paperwork rather than looking like a different company.
+//
+// The title is the subject, upper-cased — the same slot that reads
+// "INVOICE" on an invoice and "SPRINKLER SYSTEM SCHEDULE" on the
+// schedule. With no title the sender block moves up to fill the space.
+function drawLetterhead(doc, title) {
+  const top = 40;
+  const LOGO_W = 160;
 
-  const logo = logoBuffer();
-  let leftBottom;
-  if (logo) {
-    doc.image(logo, MARGIN_X, top, { width: LOGO_W });
-    leftBottom = top + logoHeightAt(LOGO_W);
-  } else {
-    doc.font(fontHeading()).fontSize(24).fillColor(GREEN);
-    doc.text("PJL", MARGIN_X, top, { characterSpacing: 1, lineBreak: false });
-    doc.font(fontHeading()).fontSize(12).fillColor(GREEN);
-    doc.text("LAND SERVICES", MARGIN_X, top + 28, { characterSpacing: 3, lineBreak: false });
-    leftBottom = top + 44;
+  if (title) {
+    doc.font(fontHeading()).fontSize(30).fillColor(GREEN);
+    doc.text(title, MARGIN_X, top, {
+      characterSpacing: 1.5,
+      width: CONTENT_W - 200,   // hard cap — never runs under the logo
+      lineGap: 0
+    });
   }
 
-  // Sender identity — right-aligned block opposite the logo.
-  const colW = 240;
-  const colX = PAGE_W - MARGIN_X - colW;
-  const opts = { width: colW, align: "right", lineBreak: false };
-  let y = top + 2;
-
-  doc.font("Helvetica-Bold").fontSize(9.5).fillColor(TEXT);
-  doc.text(company.NAME, colX, y, opts);
+  // Sender identity — three stacked lines plus the GST registration.
+  //
+  // The invoice hardcodes this at `top + 38`, which is only safe because
+  // its title is always the single word "INVOICE". A letter's title is
+  // the subject and can wrap, so flow from the title's real bottom and
+  // keep `top + 38` as the floor — a one-line title lands at exactly the
+  // invoice's y, a wrapping one pushes the block down instead of
+  // printing on top of it.
+  let y = title ? Math.max(doc.y + 2, top + 38) : top + 2;
+  doc.font("Helvetica-Bold").fontSize(10).fillColor(TEXT);
+  doc.text(company.NAME, MARGIN_X, y, { width: CONTENT_W - 200 });
+  y = doc.y + 1;
+  doc.font("Helvetica").fontSize(9).fillColor(MUTED);
+  doc.text(STREET_LINE, MARGIN_X, y, { width: CONTENT_W - 200 });
+  y = doc.y;
+  doc.text(`${CONTACT_EMAIL}  ·  ${company.PHONE}  ·  ${company.WEBSITE}`,
+    MARGIN_X, y, { width: CONTENT_W - 200 });
   y = doc.y + 2;
+  doc.fontSize(8).fillColor(MUTED);
+  doc.text(GST_LINE, MARGIN_X, y, { characterSpacing: 0.3, width: CONTENT_W - 200 });
 
-  doc.font("Helvetica").fontSize(8.5).fillColor(MUTED);
-  for (const line of [
-    STREET,
-    CITY_LINE,
-    `${company.PHONE}  ·  ${CONTACT_EMAIL}`,
-    company.WEBSITE
-  ]) {
-    doc.text(line, colX, y, opts);
-    y = doc.y + 1;
+  // Logo, right edge pinned to the content margin so it lines up with
+  // the rules and the footer below.
+  const logo = logoBuffer();
+  if (logo) {
+    doc.image(logo, PAGE_W - MARGIN_X - LOGO_W, top - 12, { width: LOGO_W });
+  } else {
+    doc.font(fontHeading()).fontSize(22).fillColor(GREEN);
+    doc.text("PJL", PAGE_W - MARGIN_X - 200, top + 6,
+      { width: 200, align: "right", characterSpacing: 1 });
+    doc.fontSize(11).fillColor(GREEN);
+    doc.text("LAND SERVICES", PAGE_W - MARGIN_X - 200, top + 32,
+      { width: 200, align: "right", characterSpacing: 3 });
   }
-  doc.fontSize(7.5);
-  doc.text(GST_LINE, colX, y + 2, opts);
 
-  // Green hairline under the whole lockup.
-  const ruleY = Math.max(leftBottom, doc.y) + 14;
-  doc.save()
-    .moveTo(MARGIN_X, ruleY).lineTo(PAGE_W - MARGIN_X, ruleY)
-    .strokeColor(GREEN).lineWidth(1).stroke()
-    .restore();
-
-  return ruleY + 26;
+  // Whichever column is taller wins. 124 is the invoice's floor — the
+  // logo bottom sits at top - 12 + ~92.
+  return Math.max(doc.y, 124) + 24;
 }
 
 // ---- Addressee ------------------------------------------------------
 // Date, then who the letter is for, then the rule that closes the block.
-function drawAddressee(doc, { to = {}, date, subject, reference }, startY) {
+function drawAddressee(doc, { to = {}, date, reference }, startY) {
   let y = startY;
 
   doc.font("Helvetica").fontSize(9.5).fillColor(MUTED);
@@ -225,19 +244,13 @@ function drawAddressee(doc, { to = {}, date, subject, reference }, startY) {
     y = doc.y + 1;
   }
 
-  // Optional subject / reference sit with the addressee, above the rule.
-  if (subject || reference) {
-    y += 16;
-    if (reference) {
-      doc.font("Helvetica").fontSize(8.5).fillColor(MUTED);
-      doc.text(reference, MARGIN_X, y, { width: CONTENT_W });
-      y = doc.y + 3;
-    }
-    if (subject) {
-      doc.font(fontHeading()).fontSize(13).fillColor(GREEN);
-      doc.text(subject, MARGIN_X, y, { width: CONTENT_W, characterSpacing: 0.3 });
-      y = doc.y + 2;
-    }
+  // Optional reference line sits with the addressee, above the rule.
+  // The subject is not repeated here — it is the letterhead title.
+  if (reference) {
+    y += 12;
+    doc.font("Helvetica").fontSize(8.5).fillColor(MUTED);
+    doc.text(reference, MARGIN_X, y, { width: CONTENT_W });
+    y = doc.y + 2;
   }
 
   // The rule that closes the header block and opens the body.
@@ -357,7 +370,14 @@ function generateLetterPdf(opts = {}) {
       doc.on("end", () => resolve(Buffer.concat(chunks)));
       doc.on("error", reject);
 
-      const afterHead = drawLetterhead(doc);
+      // Title slot: an explicit title wins, else the subject upper-cased
+      // (Barlow Condensed is a display face — it is set in caps on every
+      // other PJL document). Neither given → no title, sender block up.
+      const title = opts.title !== undefined
+        ? opts.title
+        : (opts.subject ? String(opts.subject).toUpperCase() : "");
+
+      const afterHead = drawLetterhead(doc, title);
       const afterTo = drawAddressee(doc, opts, afterHead);
       drawBody(doc, parseBody(opts.body), afterTo);
       if (opts.signOff !== false) {
