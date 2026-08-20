@@ -53,6 +53,22 @@ function round2(n) {
 // Normalize one payment record. Amounts are forced positive: a refund or a
 // correction is a DELETE of the payment, not a negative amount, so the
 // ledger can never silently net out to something unexplainable.
+// Accompanying-letter shape. `enabled` is the deliberate on/off switch:
+// a body can sit saved on the record without being attached to anything,
+// so drafting one is never the same act as deciding to send it.
+function normalizeLetter(raw) {
+  if (!raw || typeof raw !== "object") {
+    return { enabled: false, subject: "", body: "", updatedAt: null, updatedBy: null };
+  }
+  return {
+    enabled: raw.enabled === true,
+    subject: String(raw.subject || "").trim().slice(0, 200),
+    body: String(raw.body || "").slice(0, 20000),
+    updatedAt: raw.updatedAt || null,
+    updatedBy: raw.updatedBy || null
+  };
+}
+
 function normalizePayment(raw) {
   if (!raw || typeof raw !== "object") return null;
   const amount = round2(raw.amount);
@@ -235,6 +251,12 @@ function hydrate(inv) {
       grandTotal: Number(inv.depositMeta.grandTotal) || 0
     } : null,
     holdUntilCompletion: inv?.holdUntilCompletion === true,
+    // Accompanying letter (repair summary / report). Optional prose that
+    // rides along with the invoice email as a second PDF attachment on
+    // PJL letterhead. Carries NO financial content — it never touches
+    // line items, totals, tax or the QuickBooks push, and an invoice
+    // without one behaves exactly as before.
+    letter: normalizeLetter(inv?.letter),
     lineItems: Array.isArray(inv?.lineItems) ? inv.lineItems : [],
     subtotal: Number(inv?.subtotal) || 0,
     hst: Number(inv?.hst) || 0,
@@ -542,6 +564,21 @@ async function update(id, patch) {
       ccEmail: String(
         (Object.prototype.hasOwnProperty.call(raw, "ccEmail") ? raw.ccEmail : current.billTo?.ccEmail) || ""
       ).trim().toLowerCase().slice(0, 254)
+    };
+  }
+  // Letter — editable on any invoice that is not void. Unlike billTo it
+  // is not part of the issued financial document, so it does not lock at
+  // send; a report can legitimately be written or corrected after the
+  // invoice has gone out. Every write re-stamps who and when.
+  if (patch && Object.prototype.hasOwnProperty.call(patch, "letter")) {
+    if (current.status === "void") {
+      throw new Error("Can't edit the letter on a void invoice.");
+    }
+    const incoming = normalizeLetter(patch.letter);
+    next.letter = {
+      ...incoming,
+      updatedAt: new Date().toISOString(),
+      updatedBy: patch.letterBy || "admin"
     };
   }
   if (patch && Array.isArray(patch.lineItems)) {

@@ -36,6 +36,12 @@ const fsSync = require("node:fs");
 const path = require("node:path");
 
 const company = require("./company");
+// Body markup parser, borrowed from the quote renderer. Pure function,
+// already exported for its own tests (scripts/test-section-markup.mjs),
+// and reused here so a letter and a proposal section speak the same
+// markup rather than PJL carrying two dialects. Requiring the module
+// runs no rendering and cannot affect quote output.
+const { parseSectionBody } = require("./quote-pdf");
 
 // ---- Identity -------------------------------------------------------
 // Sender identity beyond what company.js carries today. company.js owns
@@ -80,6 +86,13 @@ const TITLE_MIN = 16;              // below this, wrap instead of shrink
 const TITLE_TRACK = 1.5;           // letterspacing at TITLE_MAX
 const TITLE_BOTTOM = 76;           // title sits on this line whatever its size
 const FOOTER_H = 62;              // reserved band at the page bottom
+
+// ---- Body type ------------------------------------------------------
+const BODY_SIZE = 10.5;
+const BODY_LINE_GAP = 3.5;
+const LIST_INDENT_L0 = 4;          // bullet glyph x, relative to MARGIN_X
+const LIST_INDENT_L1 = 22;         // sub-bullet glyph x
+const LIST_TEXT_GAP = 16;          // glyph column width
 
 // ---- Brand assets ---------------------------------------------------
 const BARLOW_BOLD_PATH = path.resolve(__dirname, "..", "assets", "fonts", "BarlowCondensed-Bold.ttf");
@@ -154,46 +167,6 @@ function fmtLetterDate(input) {
   return d.toLocaleDateString("en-CA", {
     timeZone: "America/Toronto", year: "numeric", month: "long", day: "numeric"
   });
-}
-
-// Body text → blocks. Blank line separates paragraphs; a run of "- "
-// lines becomes one bullet list. Everything else is a paragraph.
-function parseBody(body) {
-  const raw = Array.isArray(body) ? body.join("\n\n") : String(body || "");
-  const blocks = [];
-  let bullets = null;
-
-  const flushBullets = () => {
-    if (bullets && bullets.length) blocks.push({ type: "bullets", items: bullets });
-    bullets = null;
-  };
-
-  for (const chunk of raw.replace(/\r\n/g, "\n").split(/\n\s*\n/)) {
-    const lines = chunk.split("\n").map((l) => l.trim()).filter(Boolean);
-    if (!lines.length) continue;
-    for (const line of lines) {
-      if (/^[-*]\s+/.test(line)) {
-        if (!bullets) bullets = [];
-        bullets.push(line.replace(/^[-*]\s+/, ""));
-      } else {
-        flushBullets();
-        // Consecutive non-bullet lines inside one chunk are a single
-        // paragraph — a hard-wrapped source file shouldn't become a
-        // dozen one-line paragraphs.
-        const prev = blocks[blocks.length - 1];
-        if (prev && prev.type === "para" && prev.pendingJoin) {
-          prev.text += " " + line;
-        } else {
-          blocks.push({ type: "para", text: line, pendingJoin: true });
-        }
-      }
-    }
-    flushBullets();
-    const last = blocks[blocks.length - 1];
-    if (last && last.type === "para") last.pendingJoin = false;
-  }
-  flushBullets();
-  return blocks;
 }
 
 // ---- Letterhead -----------------------------------------------------
@@ -335,30 +308,95 @@ function drawRecipientBand(doc, { to = {}, date, heading, label = "PREPARED FOR"
 }
 
 // ---- Body -----------------------------------------------------------
-// Plain text, generously leaded. pdfkit paginates on overflow by itself;
-// margins.top is set so continuation pages start at BODY_TOP.
+// Plain prose with light markup: **bold**, __underline__, *italic*,
+// "- " bullets and "1." numbered lists, two-space indent for one level
+// of nesting. Same vocabulary as a proposal section body.
+//
+// pdfkit paginates on overflow by itself; margins.top puts continuation
+// pages at BODY_TOP.
+
+function fontForRun(r) {
+  if (r.bold && r.italic) return "Helvetica-BoldOblique";
+  if (r.bold) return "Helvetica-Bold";
+  if (r.italic) return "Helvetica-Oblique";
+  return "Helvetica";
+}
+
+// 1 -> "a", 27 -> "aa" — ordinals for a nested numbered list.
+function letterOrdinal(n) {
+  let x = Math.max(1, Number(n) || 1), out = "";
+  while (x > 0) { const r = (x - 1) % 26; out = String.fromCharCode(97 + r) + out; x = Math.floor((x - 1) / 26); }
+  return out;
+}
+
+// Draw one wrapped line built from styled runs. Font and underline switch
+// per run through pdfkit's `continued` chaining; wrapped lines hang back
+// to `x`.
+function drawRuns(doc, runs, x, width) {
+  doc.fontSize(BODY_SIZE).fillColor(TEXT);
+  const parts = runs.filter((r) => r.text !== "");
+  if (!parts.length) { doc.font("Helvetica").text(" ", x, doc.y, { width }); return; }
+  parts.forEach((r, i) => {
+    const last = i === parts.length - 1;
+    doc.font(fontForRun(r));
+    const opts = { width, continued: !last, underline: !!r.underline, lineGap: BODY_LINE_GAP };
+    if (i === 0) doc.text(r.text, x, doc.y, opts);
+    else doc.text(r.text, opts);
+  });
+}
+
+function measureRuns(doc, runs, width) {
+  const text = runs.map((r) => r.text).join("") || " ";
+  doc.font("Helvetica").fontSize(BODY_SIZE);
+  return doc.heightOfString(text, { width, lineGap: BODY_LINE_GAP });
+}
+
 function drawBody(doc, blocks, startY) {
   doc.x = MARGIN_X;
   doc.y = startY;
+  const pageBottom = () => PAGE_H - FOOTER_H;
 
+  let prevType = null;
   blocks.forEach((block, i) => {
-    if (block.type === "bullets") {
-      doc.font("Helvetica").fontSize(10.5).fillColor(TEXT);
-      for (const item of block.items) {
-        const y0 = doc.y;
-        doc.text("•", MARGIN_X + 4, y0, { width: 12, lineBreak: false });
-        doc.text(item, MARGIN_X + 20, y0, {
-          width: CONTENT_W - 20, align: "left", lineGap: 3
-        });
-        doc.y += 4;
-      }
-    } else {
-      doc.font("Helvetica").fontSize(10.5).fillColor(TEXT);
-      doc.text(block.text, MARGIN_X, doc.y, {
-        width: CONTENT_W, align: "left", lineGap: 3.5
-      });
+    // A list butting straight up against a paragraph reads as one run-on
+    // block. Open a little air whenever the block type changes.
+    if (prevType && prevType !== block.type) doc.y += 5;
+    prevType = block.type;
+
+    if (block.type === "paragraph") {
+      for (const ln of block.lines) drawRuns(doc, ln.runs, MARGIN_X, CONTENT_W);
+      if (i < blocks.length - 1) doc.y += 7;
+      return;
     }
-    if (i < blocks.length - 1) doc.y += 11;
+
+    // bullet / numbered
+    const indent = block.level === 1 ? LIST_INDENT_L1 : LIST_INDENT_L0;
+    const textX = MARGIN_X + indent + LIST_TEXT_GAP;
+    const textW = CONTENT_W - indent - LIST_TEXT_GAP;
+    const h = measureRuns(doc, block.runs, textW);
+
+    // Keep a list item whole across a page break, unless it is taller
+    // than a page on its own — then let it flow rather than loop.
+    const pageInner = pageBottom() - doc.page.margins.top;
+    if (doc.y + h > pageBottom() && h <= pageInner) doc.addPage();
+
+    const y0 = doc.y;
+    const glyphX = MARGIN_X + indent;
+    if (block.type === "bullet" && block.level === 1) {
+      // Hollow sub-bullet drawn as a vector — Helvetica's WinAnsi
+      // encoding has no U+25E6, so a literal one renders as garbage.
+      doc.save().circle(glyphX + 3, y0 + BODY_SIZE * 0.36, 1.8)
+        .lineWidth(0.7).strokeColor(TEXT).stroke().restore();
+    } else {
+      const glyph = block.type === "bullet"
+        ? "\u2022"
+        : (block.level === 1 ? letterOrdinal(block.index) + "." : block.index + ".");
+      doc.font("Helvetica").fontSize(BODY_SIZE).fillColor(TEXT)
+        .text(glyph, glyphX, y0, { width: LIST_TEXT_GAP, lineBreak: false });
+    }
+    doc.y = y0;
+    drawRuns(doc, block.runs, textX, textW);
+    doc.y += 3;
   });
 }
 
@@ -457,7 +495,7 @@ function generateLetterPdf(opts = {}) {
 
       const afterHead = drawLetterhead(doc, title);
       const afterTo = drawRecipientBand(doc, opts, afterHead);
-      drawBody(doc, parseBody(opts.body), afterTo);
+      drawBody(doc, parseSectionBody(opts.body), afterTo);
       if (opts.signOff !== false) {
         drawSignOff(doc, {
           closing: opts.closing,
@@ -473,4 +511,4 @@ function generateLetterPdf(opts = {}) {
   });
 }
 
-module.exports = { generateLetterPdf, parseBody };
+module.exports = { generateLetterPdf };

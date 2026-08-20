@@ -329,6 +329,7 @@ function render(inv) {
       sentMeta.textContent = sentBit + toBit;
     }
   }
+  renderLetterCard(inv);
 }
 
 document.getElementById("invoiceStatus")?.addEventListener("change", async (event) => {
@@ -1515,3 +1516,289 @@ function bypassReasonLabel(slug) {
 }
 
 load();
+
+// ---- Accompanying letter (repair summary / written record) -----------
+//
+// A contenteditable rather than a textarea, so formatting is applied to
+// selected text the way it is in a word processor instead of the admin
+// typing markup by hand.
+//
+// Storage stays a plain string. The editor serializes its HTML down to
+// the SAME markup vocabulary quote-pdf.js already parses -- **bold**,
+// __underline__, *italic*, "- " bullets, "1." numbered -- which is what
+// server/lib/letter-pdf.js renders. One dialect across the whole system,
+// and the stored record never becomes a rich-text schema nobody can read.
+
+// Private-use sentinels for parking backslash escapes during conversion.
+// Nothing a human types will collide with these.
+var LETTER_ESC_OPEN = "";
+var LETTER_ESC_CLOSE = "";
+
+// ---- markup -> HTML (loading the editor) ----
+function letterInlineToHtml(src) {
+  var held = [];
+  // Pull backslash escapes out before the markup regexes run, so an
+  // escaped \* is never mistaken for an emphasis marker.
+  var t = String(src == null ? "" : src).replace(/\\([*_\-\\])/g, function (_m, c) {
+    held.push(c);
+    return LETTER_ESC_OPEN + (held.length - 1) + LETTER_ESC_CLOSE;
+  });
+  t = escapeHtml(t);
+  t = t.replace(/\*\*([\s\S]+?)\*\*/g, "<b>$1</b>");
+  t = t.replace(/__([\s\S]+?)__/g, "<u>$1</u>");
+  t = t.replace(/\*([\s\S]+?)\*/g, "<i>$1</i>");
+  return t.replace(
+    new RegExp(LETTER_ESC_OPEN + "(\\d+)" + LETTER_ESC_CLOSE, "g"),
+    function (_m, n) { return escapeHtml(held[Number(n)]); }
+  );
+}
+
+function letterMarkupToHtml(markup) {
+  var lines = String(markup == null ? "" : markup).replace(/\r\n?/g, "\n").split("\n");
+  var html = "";
+  var listTag = null;
+  var para = [];
+  function flushPara() {
+    if (para.length) { html += "<p>" + para.join("<br>") + "</p>"; para = []; }
+  }
+  function closeList() {
+    if (listTag) { html += "</" + listTag + ">"; listTag = null; }
+  }
+  function openList(tag) {
+    if (listTag !== tag) { closeList(); html += "<" + tag + ">"; listTag = tag; }
+  }
+  for (var i = 0; i < lines.length; i++) {
+    var line = lines[i].trim();
+    if (!line) { flushPara(); closeList(); continue; }
+    var bullet = line.match(/^-\s+([\s\S]*)$/);
+    var numbered = line.match(/^\d+\.\s+([\s\S]*)$/);
+    if (bullet) { flushPara(); openList("ul"); html += "<li>" + letterInlineToHtml(bullet[1]) + "</li>"; continue; }
+    if (numbered) { flushPara(); openList("ol"); html += "<li>" + letterInlineToHtml(numbered[1]) + "</li>"; continue; }
+    closeList();
+    para.push(letterInlineToHtml(line));
+  }
+  flushPara();
+  closeList();
+  return html;
+}
+
+// ---- HTML -> markup (saving) ----
+function letterEscapeMarkup(s) {
+  // contenteditable sprays non-breaking spaces in as you type; they must
+  // not survive into the stored markup or the PDF gets rivers of them.
+  return String(s == null ? "" : s)
+    .replace(/\u00A0/g, " ")
+    .replace(/([*_\\])/g, "\\$1");
+}
+
+// Walk one node's inline content, wrapping it in markers for whatever
+// styling it carries. execCommand is asked for tags rather than CSS
+// (styleWithCSS false), but a paste or an older engine can still produce
+// styled spans, so both forms are read.
+function letterInlineMarkup(node) {
+  if (node.nodeType === 3) return letterEscapeMarkup(node.nodeValue);
+  if (node.nodeType !== 1) return "";
+  var tag = node.nodeName.toLowerCase();
+  if (tag === "br") return "\n";
+  var inner = "";
+  node.childNodes.forEach(function (c) { inner += letterInlineMarkup(c); });
+  if (!inner.trim()) return inner;
+
+  var st = node.style || {};
+  var weight = String(st.fontWeight || "");
+  var deco = String(st.textDecoration || "") + " " + String(st.textDecorationLine || "");
+  var bold = tag === "b" || tag === "strong" || weight === "bold" || /^[6-9]00$/.test(weight);
+  var italic = tag === "i" || tag === "em" || String(st.fontStyle || "") === "italic";
+  var underline = tag === "u" || deco.indexOf("underline") !== -1;
+
+  var out = inner;
+  if (bold) out = "**" + out + "**";
+  if (italic) out = "*" + out + "*";
+  if (underline) out = "__" + out + "__";
+  return out;
+}
+
+function letterHtmlToMarkup(root) {
+  var out = [];
+  function pushBlock(text) {
+    var parts = String(text).split("\n").map(function (l) {
+      return l.replace(/ /g, " ").replace(/\s+$/, "");
+    });
+    while (parts.length && !parts[0].trim()) parts.shift();
+    while (parts.length && !parts[parts.length - 1].trim()) parts.pop();
+    if (!parts.length) return;
+    out.push(parts.join("\n"), "");
+  }
+
+  root.childNodes.forEach(function (node) {
+    if (node.nodeType === 3) { pushBlock(letterEscapeMarkup(node.nodeValue)); return; }
+    if (node.nodeType !== 1) return;
+    var tag = node.nodeName.toLowerCase();
+
+    if (tag === "ul" || tag === "ol") {
+      var n = 0;
+      Array.prototype.forEach.call(node.children, function (li) {
+        if (li.nodeName.toLowerCase() !== "li") return;
+        n += 1;
+        // A list item is one line -- a stray <br> inside it would
+        // otherwise break the item in half and orphan the tail as a
+        // paragraph.
+        var text = letterInlineMarkup(li).replace(/\s*\n\s*/g, " ").trim();
+        if (text) out.push(tag === "ul" ? "- " + text : n + ". " + text);
+      });
+      out.push("");
+      return;
+    }
+
+    pushBlock(letterInlineMarkup(node));
+  });
+
+  return out.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+// ---- Card wiring ----
+function letterEls() {
+  return {
+    card: document.getElementById("invoiceLetterCard"),
+    enabled: document.getElementById("invoiceLetterEnabled"),
+    subject: document.getElementById("invoiceLetterSubject"),
+    body: document.getElementById("invoiceLetterBody"),
+    save: document.getElementById("invoiceLetterSave"),
+    preview: document.getElementById("invoiceLetterPreview"),
+    status: document.getElementById("invoiceLetterStatus")
+  };
+}
+
+function renderLetterCard(inv) {
+  var el = letterEls();
+  if (!el.card) return;
+  // Void invoices cannot be edited at all -- the server refuses the
+  // patch, so do not offer a surface that will only fail.
+  var readOnly = inv.status === "void";
+  el.card.hidden = false;
+
+  var letter = inv.letter || {};
+  el.enabled.checked = letter.enabled === true;
+  el.subject.value = letter.subject || "";
+  el.body.innerHTML = letterMarkupToHtml(letter.body || "");
+
+  el.enabled.disabled = readOnly;
+  el.subject.disabled = readOnly;
+  el.body.setAttribute("contenteditable", readOnly ? "false" : "true");
+  el.save.disabled = readOnly;
+
+  el.preview.href = "/api/invoices/" + encodeURIComponent(inv.id) + "/letter.pdf";
+  var hasBody = String(letter.body || "").trim().length > 0;
+  el.preview.classList.toggle("invoice-action-btn--outline", !hasBody);
+
+  if (readOnly) {
+    el.status.textContent = "Voided - the letter is locked.";
+    el.status.dataset.kind = "info";
+  } else if (letter.updatedAt) {
+    el.status.textContent = "Saved " + fmtDate(letter.updatedAt) +
+      (letter.enabled ? "" : " - not attached to this invoice") + ".";
+    el.status.dataset.kind = "info";
+  } else {
+    el.status.textContent = "";
+  }
+}
+
+(function wireLetterEditor() {
+  var el = letterEls();
+  if (!el.card) return;
+
+  // Ask the engine for <b>/<i>/<u> tags rather than styled spans -- it
+  // makes the round trip to markup lossless in the common case.
+  try { document.execCommand("styleWithCSS", false, false); } catch (_) { /* older engines */ }
+
+  function syncToolStates() {
+    document.querySelectorAll(".invoice-letter-tool").forEach(function (btn) {
+      var cmd = btn.dataset.cmd;
+      if (cmd === "removeFormat") return;
+      var on = false;
+      try { on = document.queryCommandState(cmd); } catch (_) { on = false; }
+      btn.setAttribute("aria-pressed", on ? "true" : "false");
+    });
+  }
+
+  document.querySelectorAll(".invoice-letter-tool").forEach(function (btn) {
+    // mousedown, not click -- the editor must not lose its selection
+    // before the command runs.
+    btn.addEventListener("mousedown", function (e) {
+      e.preventDefault();
+      el.body.focus();
+      try { document.execCommand(btn.dataset.cmd, false, null); } catch (_) { /* ignore */ }
+      syncToolStates();
+    });
+  });
+
+  ["keyup", "mouseup", "focus"].forEach(function (ev) {
+    el.body.addEventListener(ev, syncToolStates);
+  });
+
+  // Paste as plain text. Pasting from Word or a browser drags in a wall
+  // of markup this editor has no vocabulary for; taking the text keeps
+  // what is stored predictable and readable.
+  el.body.addEventListener("paste", function (e) {
+    e.preventDefault();
+    var text = (e.clipboardData || window.clipboardData).getData("text/plain");
+    document.execCommand("insertText", false, text);
+  });
+
+  el.save.addEventListener("click", async function () {
+    if (!currentInvoice) return;
+    var payload = {
+      letter: {
+        enabled: el.enabled.checked,
+        subject: el.subject.value.trim(),
+        body: letterHtmlToMarkup(el.body)
+      }
+    };
+    if (payload.letter.enabled && !payload.letter.body.trim()) {
+      el.status.textContent = "Nothing to attach - write the letter first, or untick the box.";
+      el.status.dataset.kind = "error";
+      return;
+    }
+    var wasLabel = el.save.textContent;
+    el.save.disabled = true;
+    el.save.textContent = "Saving...";
+    el.status.textContent = "";
+    try {
+      var r = await fetch("/api/invoices/" + encodeURIComponent(idFromPath), {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      var data = await r.json().catch(function () { return {}; });
+      if (!r.ok || !data.ok) throw new Error((data.errors && data.errors[0]) || "Save failed.");
+      currentInvoice = data.invoice;
+      renderLetterCard(data.invoice);
+      el.status.textContent = payload.letter.enabled
+        ? "Saved - this letter will be attached when the invoice is sent."
+        : "Saved. Not attached - tick Attach to this invoice to send it.";
+      el.status.dataset.kind = "ok";
+    } catch (err) {
+      el.status.textContent = err.message || "Failed.";
+      el.status.dataset.kind = "error";
+    } finally {
+      el.save.disabled = currentInvoice && currentInvoice.status === "void";
+      el.save.textContent = wasLabel;
+    }
+  });
+
+  // Preview renders server-side from the SAVED record, so an unsaved
+  // edit would preview stale text. Say so rather than open a stale PDF.
+  el.preview.addEventListener("click", function (e) {
+    var savedBody = String((currentInvoice && currentInvoice.letter && currentInvoice.letter.body) || "");
+    if (!savedBody.trim()) {
+      e.preventDefault();
+      el.status.textContent = "Save the letter first - the preview renders what is on the record.";
+      el.status.dataset.kind = "error";
+      return;
+    }
+    if (letterHtmlToMarkup(el.body) !== savedBody) {
+      el.status.textContent = "Heads up: you have unsaved edits. The preview shows the last saved version.";
+      el.status.dataset.kind = "info";
+    }
+  });
+})();
