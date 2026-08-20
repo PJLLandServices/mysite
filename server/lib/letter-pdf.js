@@ -54,6 +54,7 @@ const GREEN = company.GREEN_HEX;   // #1B4D2E
 const TEXT = "#1A1A1A";
 const MUTED = "#7A7A72";
 const RULE = "#EFEDE3";
+const BAND = "#F4F8EE";     // recipient band fill
 
 // ---- Page geometry --------------------------------------------------
 const PAGE_W = 612;                // US Letter @ 72pt/in
@@ -219,48 +220,73 @@ function drawLetterhead(doc, title) {
   return Math.max(doc.y, 124) + 24;
 }
 
-// ---- Addressee ------------------------------------------------------
-// Date, then who the letter is for, then the rule that closes the block.
-function drawAddressee(doc, { to = {}, date, reference }, startY) {
-  let y = startY;
+// ---- Recipient band -------------------------------------------------
+// The full-bleed green-tint band that carries who the document is for —
+// same one on the invoice and the Lewis Honey schedule. Geometry from
+// invoice-pdf.js drawCustomerBand. Its bottom hairline is the rule that
+// separates the header from the body, so nothing else draws one.
+//
+// Left column is the recipient, right column the date. An optional
+// heading (a managing company, "c/o ...") sits above both in green.
+function drawRecipientBand(doc, { to = {}, date, heading, label = "PREPARED FOR" }, startY) {
+  const padX = MARGIN_X;
+  const padY = 14;
+  const bandTop = startY;
 
-  doc.font("Helvetica").fontSize(9.5).fillColor(MUTED);
-  doc.text(fmtLetterDate(date), MARGIN_X, y, { width: CONTENT_W, lineBreak: false });
-  y = doc.y + 16;
-
+  // Compose the recipient lines first so the band can be sized to fit.
   const lines = [];
-  if (to.attn) lines.push({ text: `Attn: ${to.attn}`, muted: true });
-  if (to.name) lines.push({ text: to.name, bold: true });
-  if (to.company) lines.push({ text: to.company, bold: !to.name });
-  for (const l of (to.lines || [])) lines.push({ text: l });
-  if (to.email) lines.push({ text: to.email, muted: true });
+  if (to.attn) lines.push({ text: `Attn: ${to.attn}`, size: 9, muted: true });
+  if (to.name) lines.push({ text: to.name, size: 11, bold: true });
+  if (to.company) lines.push({ text: to.company, size: to.name ? 10 : 11, bold: !to.name });
+  for (const l of (to.lines || [])) lines.push({ text: l, size: 10 });
+  const contact = [to.phone, to.email].filter(Boolean).join(" · ");
+  if (contact) lines.push({ text: contact, size: 9, muted: true });
+  if (!lines.length) lines.push({ text: "To whom it may concern", size: 11, bold: true });
 
-  if (!lines.length) lines.push({ text: "To whom it may concern", bold: true });
+  // Height: padding + label + each line + optional heading.
+  let bandH = padY * 2 + 14 + lines.reduce((h, l) => h + l.size + 3, 0);
+  if (heading) bandH += 24;
+  if (bandH < 78) bandH = 78;
 
+  doc.save();
+  doc.rect(0, bandTop, PAGE_W, bandH).fill(BAND);
+  doc.restore();
+  doc.save();
+  doc.strokeColor(RULE).lineWidth(0.5);
+  doc.moveTo(0, bandTop).lineTo(PAGE_W, bandTop).stroke();
+  doc.moveTo(0, bandTop + bandH).lineTo(PAGE_W, bandTop + bandH).stroke();
+  doc.restore();
+
+  let y = bandTop + padY;
+
+  if (heading) {
+    doc.font(fontHeading()).fontSize(14).fillColor(GREEN);
+    doc.text(heading, padX, y, { width: PAGE_W - padX * 2 });
+    y = doc.y + 8;
+  }
+
+  const colW = (PAGE_W - padX * 2 - 40) / 2;
+  const rightX = padX + colW + 40;
+  const labelY = y;
+
+  // Left column — the recipient.
+  doc.font("Helvetica-Bold").fontSize(8).fillColor(MUTED);
+  doc.text(label, padX, labelY, { characterSpacing: 1.4, width: colW });
+  y = doc.y + 4;
   for (const l of lines) {
-    doc.font(l.bold ? "Helvetica-Bold" : "Helvetica").fontSize(l.bold ? 10.5 : 10);
+    doc.font(l.bold ? "Helvetica-Bold" : "Helvetica").fontSize(l.size);
     doc.fillColor(l.muted ? MUTED : TEXT);
-    doc.text(l.text, MARGIN_X, y, { width: CONTENT_W * 0.62 });
+    doc.text(l.text, padX, y, { width: colW });
     y = doc.y + 1;
   }
 
-  // Optional reference line sits with the addressee, above the rule.
-  // The subject is not repeated here — it is the letterhead title.
-  if (reference) {
-    y += 12;
-    doc.font("Helvetica").fontSize(8.5).fillColor(MUTED);
-    doc.text(reference, MARGIN_X, y, { width: CONTENT_W });
-    y = doc.y + 2;
-  }
+  // Right column — the date.
+  doc.font("Helvetica-Bold").fontSize(8).fillColor(MUTED);
+  doc.text("DATE", rightX, labelY, { characterSpacing: 1.4, width: colW });
+  doc.font("Helvetica-Bold").fontSize(11).fillColor(TEXT);
+  doc.text(fmtLetterDate(date), rightX, doc.y + 4, { width: colW });
 
-  // The rule that closes the header block and opens the body.
-  y += 14;
-  doc.save()
-    .moveTo(MARGIN_X, y).lineTo(PAGE_W - MARGIN_X, y)
-    .strokeColor(RULE).lineWidth(0.75).stroke()
-    .restore();
-
-  return y + 22;
+  return bandTop + bandH + 26;
 }
 
 // ---- Body -----------------------------------------------------------
@@ -378,7 +404,7 @@ function generateLetterPdf(opts = {}) {
         : (opts.subject ? String(opts.subject).toUpperCase() : "");
 
       const afterHead = drawLetterhead(doc, title);
-      const afterTo = drawAddressee(doc, opts, afterHead);
+      const afterTo = drawRecipientBand(doc, opts, afterHead);
       drawBody(doc, parseBody(opts.body), afterTo);
       if (opts.signOff !== false) {
         drawSignOff(doc, {

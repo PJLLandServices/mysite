@@ -21,8 +21,8 @@
 //
 // Every header is optional. Repeat "Address:" for each address line.
 // Omit Date and it uses today. Recognized headers:
-//   To, Company, Attn, Address, Email, Subject, Date, Reference,
-//   Closing, Signer, SignerTitle
+//   To, Company, Attn, Address, Email, Phone, Subject, Date, Heading,
+//   Label, Reference, Closing, Signer, SignerTitle
 
 const fs = require("node:fs");
 const path = require("node:path");
@@ -30,7 +30,7 @@ const { generateLetterPdf } = require("../server/lib/letter-pdf");
 
 const HEADER_KEYS = new Set([
   "to", "company", "attn", "address", "email", "subject", "date",
-  "reference", "closing", "signer", "signertitle"
+  "reference", "closing", "signer", "signertitle", "heading", "label", "phone"
 ]);
 
 function parseLetterFile(raw) {
@@ -73,6 +73,9 @@ function parseLetterFile(raw) {
       case "subject": out.subject = val; break;
       case "date": out.date = val; break;
       case "reference": out.reference = val; break;
+      case "heading": out.heading = val; break;
+      case "label": out.label = val; break;
+      case "phone": out.to.phone = val; break;
       case "closing": out.closing = val; break;
       case "signer": out.signer = { ...(out.signer || {}), name: val }; break;
       case "signertitle": out.signer = { ...(out.signer || {}), title: val }; break;
