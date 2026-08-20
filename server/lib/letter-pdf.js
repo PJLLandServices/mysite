@@ -402,6 +402,12 @@ function drawBody(doc, blocks, startY) {
 
 // ---- Sign-off -------------------------------------------------------
 function drawSignOff(doc, { closing = "Sincerely,", signer = SIGNER } = {}) {
+  // Fill each half of the signature from the default independently. A
+  // caller that names a signer but no title means "sign it from someone
+  // else at PJL", not "drop the company line" — which is what merging
+  // the whole object did, silently.  Passing title: "" still drops it.
+  const name = signer.name || SIGNER.name;
+  const title = signer.title === undefined ? SIGNER.title : signer.title;
   const needed = 96;
   if (doc.y + needed > PAGE_H - FOOTER_H) doc.addPage();
 
@@ -418,10 +424,10 @@ function drawSignOff(doc, { closing = "Sincerely,", signer = SIGNER } = {}) {
   }
 
   doc.font("Helvetica-Bold").fontSize(10.5).fillColor(TEXT);
-  doc.text(signer.name || SIGNER.name, MARGIN_X, y, { width: CONTENT_W, lineBreak: false });
-  if (signer.title) {
+  doc.text(name, MARGIN_X, y, { width: CONTENT_W, lineBreak: false });
+  if (title) {
     doc.font("Helvetica").fontSize(9).fillColor(MUTED);
-    doc.text(signer.title, MARGIN_X, doc.y + 2, { width: CONTENT_W, lineBreak: false });
+    doc.text(title, MARGIN_X, doc.y + 2, { width: CONTENT_W, lineBreak: false });
   }
 }
 

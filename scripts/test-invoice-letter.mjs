@@ -86,6 +86,20 @@ for (const [label, body] of [
   );
 }
 
+// ---- 4b. Sign-off falls back field by field --------------------------
+{
+  const src = readFileSync(path.join(ROOT, "server/lib/letter-pdf.js"), "utf8");
+  ok(
+    "signer name and title fall back independently",
+    /const name = signer\.name \|\| SIGNER\.name/.test(src) &&
+    /const title = signer\.title === undefined \? SIGNER\.title : signer\.title/.test(src)
+  );
+  ok(
+    "the canonical business name carries no Inc.",
+    !/Land Services,? Inc/i.test(src) && src.includes('title: "PJL Land Services"')
+  );
+}
+
 // ---- 5. Server guards -----------------------------------------------
 {
   const src = readFileSync(path.join(ROOT, "server/server.js"), "utf8");
