@@ -566,13 +566,24 @@ async function sendInvoiceToCustomer(invoice, pdfBuffer, opts = {}) {
       subject,
       html,
       text,
-      attachments: [{
-        filename: `${invoice.id || "invoice"}.pdf`,
-        content: pdfBuffer,
-        contentType: "application/pdf"
-      }]
+      // The invoice PDF always leads. `extraAttachments` carries the
+      // optional accompanying letter (a repair summary / written record)
+      // built by the caller; anything malformed is dropped rather than
+      // handed to nodemailer, so a bad attachment can never stop an
+      // invoice from reaching the customer.
+      attachments: [
+        {
+          filename: `${invoice.id || "invoice"}.pdf`,
+          content: pdfBuffer,
+          contentType: "application/pdf"
+        },
+        ...(Array.isArray(opts.extraAttachments) ? opts.extraAttachments : [])
+          .filter((a) => a && a.filename && Buffer.isBuffer(a.content) && a.content.length > 0)
+      ]
     });
-    console.log(`[invoice-email] sent invoice=${invoice.id} to=${to}${ccList.length ? ` cc=${ccList.join(",")}` : ""} id=${info.messageId}${opts.resend ? " (resend)" : ""}`);
+    const extraCount = (Array.isArray(opts.extraAttachments) ? opts.extraAttachments : [])
+      .filter((a) => a && a.filename && Buffer.isBuffer(a.content) && a.content.length > 0).length;
+    console.log(`[invoice-email] sent invoice=${invoice.id} to=${to}${ccList.length ? ` cc=${ccList.join(",")}` : ""}${extraCount ? ` +${extraCount} attachment(s)` : ""} id=${info.messageId}${opts.resend ? " (resend)" : ""}`);
     await logSend({ kind: "invoice", to, ok: true, refId: invoice.id });
     // Both flags report what actually shipped, not what was configured — an
     // address deduped away (spouse same as the primary recipient, bookkeeper

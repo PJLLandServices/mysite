@@ -2854,6 +2854,56 @@ async function serveQuotePdf(res, q, opts, { by = "system" } = {}) {
   renderQuotePdf(q, opts).pipe(res);
 }
 
+// ---- Accompanying invoice letter -------------------------------------
+// Optional prose that ships with an invoice as a second PDF on PJL
+// letterhead — a repair summary, a scope note, a written record to sit
+// alongside the numbers. Presentation only: it carries no financial
+// content and never touches line items, totals, tax, the payment ledger
+// or the QuickBooks push.
+//
+// Addressed from the invoice's own billTo snapshot so the letter and the
+// invoice can never name different parties.
+function letterOptsForInvoice(inv) {
+  const billTo = inv?.billTo && typeof inv.billTo === "object" ? inv.billTo : {};
+  const addressLines = String(billTo.address || inv?.address || "")
+    .split(/\n+/).map((l) => l.trim()).filter(Boolean);
+  return {
+    heading: billTo.careOf ? `c/o ${billTo.careOf}` : "",
+    to: {
+      name: billTo.name || inv?.customerName || "",
+      lines: addressLines,
+      email: billTo.email || inv?.customerEmail || ""
+    },
+    // The letter is dated with the invoice, not with the moment the PDF
+    // happens to be rendered — a resend in November must not re-date an
+    // August document.
+    date: inv?.sentAt || inv?.issuedAt || inv?.createdAt || null,
+    reference: inv?.id ? `Invoice ${inv.id}` : "",
+    subject: inv?.letter?.subject || "",
+    body: inv?.letter?.body || "",
+    closing: "",
+    signer: { name: "Patrick Lalande", title: "PJL Land Services" }
+  };
+}
+
+// True when this invoice has a letter worth attaching — switched on AND
+// with something in it. An enabled-but-empty letter attaches nothing
+// rather than mailing a blank page.
+function invoiceHasLetter(inv) {
+  return Boolean(inv?.letter?.enabled) && String(inv?.letter?.body || "").trim().length > 0;
+}
+
+async function renderInvoiceLetterPdf(inv) {
+  const { generateLetterPdf } = require("./lib/letter-pdf");
+  return generateLetterPdf(letterOptsForInvoice(inv));
+}
+
+// Filename the customer sees on the attachment. Derived from the invoice
+// id so a saved copy is self-identifying in a download folder.
+function invoiceLetterFilename(inv) {
+  return `${inv?.id || "invoice"}-report.pdf`;
+}
+
 // Hydrate a decorated lead with its source Quote (if any) so the CRM
 // lead-detail pane can render the Quote card without a second fetch. The
 // list endpoint pre-builds a map for efficiency; single-lead responses
@@ -7740,6 +7790,8 @@ async function handleApi(req, res, pathname) {
       // skipped silently. On a real failure (network, 401 after refresh,
       // etc.) we log + warn but keep going so the email still ships.
       let qbWarning = null;
+      // Set when a letter was meant to ride along but could not be built.
+      let letterWarning = null;
       let qbAction = null;
       let qbInvoiceId = inv.quickbooksInvoiceId || null;
       if (action === "send") {
@@ -7782,7 +7834,26 @@ async function handleApi(req, res, pathname) {
 
       // Send the email. If this throws, the call returns 500 and the
       // admin sees the underlying error. Status is NOT flipped on failure.
+      // Accompanying letter, when one is written and switched on. Built
+      // here so a failure is caught before the email goes out rather than
+      // half-way through it. Best-effort: a letter that fails to render
+      // must not stop the invoice itself from reaching the customer.
+      let letterAttachment = null;
+      if (invoiceHasLetter(renderInv)) {
+        try {
+          letterAttachment = {
+            filename: invoiceLetterFilename(renderInv),
+            content: await renderInvoiceLetterPdf(renderInv),
+            contentType: "application/pdf"
+          };
+        } catch (letterErr) {
+          console.warn(`[invoice-${action}] letter render failed for ${invId}:`, letterErr?.message);
+          letterWarning = `The invoice was sent, but its accompanying letter failed to render and was NOT attached: ${letterErr.message}`;
+        }
+      }
+
       await sendInvoiceToCustomer(renderInv, pdfBuffer, {
+        extraAttachments: letterAttachment ? [letterAttachment] : [],
         resend: action === "resend",
         viewLink,
         includeSpouse
@@ -7847,7 +7918,8 @@ async function handleApi(req, res, pathname) {
         action,
         qbAction,
         qbInvoiceId,
-        warning: qbWarning
+        warning: [qbWarning, letterWarning].filter(Boolean).join(" ") || null,
+        letterAttached: Boolean(letterAttachment)
       });
     } catch (err) {
       console.error(`[invoice-${action}] failed for ${invId}:`, err.message);
@@ -8630,6 +8702,42 @@ async function handleApi(req, res, pathname) {
   //
   // Auth: gated by isAdminPath() above (/api/invoices is admin-only).
   // Layout: server/lib/invoice-pdf.js, modeled on _design/invoice-pdf-preview.html.
+  // ---------- Accompanying letter PDF (admin-gated) -------------------
+  // GET /api/invoices/:id/letter.pdf — render the invoice's accompanying
+  // letter so the admin can read exactly what the customer will receive
+  // before deciding to send it. ?download=1 for a save-as dialog.
+  //
+  // 409 when there is no body to render: previewing a blank letter would
+  // show a letterhead with nothing on it and read as a bug.
+  const invoiceLetterPdfMatch = pathname.match(/^\/api\/invoices\/([^/]+)\/letter\.pdf$/);
+  if (invoiceLetterPdfMatch && req.method === "GET") {
+    try {
+      const id = decodeURIComponent(invoiceLetterPdfMatch[1]);
+      const inv = await invoices.get(id);
+      if (!inv) return sendJson(res, 404, { ok: false, errors: ["Invoice not found."] });
+      if (!String(inv.letter?.body || "").trim()) {
+        return sendJson(res, 409, {
+          ok: false, code: "letter_empty",
+          errors: ["This invoice has no letter written yet."]
+        });
+      }
+      const url = new URL(req.url, baseUrlFromReq(req));
+      const isDownload = url.searchParams.get("download") === "1";
+      const buffer = await renderInvoiceLetterPdf(inv);
+      res.writeHead(200, {
+        "content-type": "application/pdf",
+        "content-disposition": `${isDownload ? "attachment" : "inline"}; filename="${invoiceLetterFilename(inv)}"`,
+        "content-length": buffer.length,
+        "cache-control": "no-store"
+      });
+      res.end(buffer);
+      return;
+    } catch (err) {
+      console.error("[invoice-letter-pdf] failed:", err.message);
+      return sendJson(res, 500, { ok: false, errors: ["Couldn't render the letter."] });
+    }
+  }
+
   const adminInvoicePdfMatch = pathname.match(/^\/api\/invoices\/([^/]+)\/pdf$/);
   if (adminInvoicePdfMatch && req.method === "GET") {
     try {
