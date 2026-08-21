@@ -472,10 +472,42 @@ document.getElementById("invoiceSendBtn")?.addEventListener("click", async () =>
   }
   // Confirm with the recipient + total in the prompt so the admin can
   // catch a wrong email or wrong invoice before anything goes out.
+  // What actually ships is decided by the RECORD, not by what the letter
+  // editor happens to be showing. Block on unsaved edits rather than
+  // sending a state the admin can see but the server has never been told
+  // about — that is exactly how an invoice goes out with the letter
+  // silently missing.
+  const letterEditor = document.getElementById("invoiceLetterBody");
+  const letterToggle = document.getElementById("invoiceLetterEnabled");
+  const savedLetter = currentInvoice.letter || {};
+  if (letterEditor && letterToggle && currentInvoice.status !== "void") {
+    const editorBody = letterHtmlToMarkup(letterEditor);
+    const editorSubject = (document.getElementById("invoiceLetterSubject")?.value || "").trim();
+    const dirty = editorBody !== String(savedLetter.body || "")
+      || editorSubject !== String(savedLetter.subject || "")
+      || letterToggle.checked !== (savedLetter.enabled === true);
+    if (dirty) {
+      alert(
+        "The accompanying letter has unsaved changes.\n\n" +
+        "Save it first — what gets attached is what's on the record, not what's " +
+        "on screen. Sending now would go out with the last saved version."
+      );
+      document.getElementById("invoiceLetterCard")?.scrollIntoView({ behavior: "smooth", block: "center" });
+      return;
+    }
+  }
+
+  // Say plainly whether a second PDF is riding along, at the one moment
+  // it can still be changed.
+  const willAttachLetter = savedLetter.enabled === true && String(savedLetter.body || "").trim().length > 0;
+  const letterLine = willAttachLetter
+    ? `\n\nATTACHED: the accompanying letter "${savedLetter.subject || "(no subject)"}" will be sent as a second PDF.`
+    : `\n\nNo accompanying letter will be attached — the invoice PDF only.`;
+
   const confirmMsg = isResend
-    ? `Resend invoice ${currentInvoice.id} (${fmt(currentInvoice.total)}) to ${recipient}?`
+    ? `Resend invoice ${currentInvoice.id} (${fmt(currentInvoice.total)}) to ${recipient}?${letterLine}`
     : `Send invoice ${currentInvoice.id} (${fmt(currentInvoice.total)}) to ${recipient}?\n\n` +
-      `Status will flip from Draft to Sent and the customer will receive the branded PDF by email.`;
+      `Status will flip from Draft to Sent and the customer will receive the branded PDF by email.${letterLine}`;
   if (!confirm(confirmMsg)) return;
 
   const btn = document.getElementById("invoiceSendBtn");
@@ -505,7 +537,10 @@ document.getElementById("invoiceSendBtn")?.addEventListener("click", async () =>
       status.textContent = `✓ Sent. QuickBooks invoice ${data.qbInvoiceId} (${data.qbAction}).`;
       status.dataset.kind = "ok";
     } else {
-      status.textContent = isResend ? "✓ Re-sent to customer." : "✓ Sent to customer.";
+      // Report what actually shipped, from the server's own answer —
+      // not from what the editor was showing.
+      const attachedBit = data.letterAttached ? " Letter attached." : "";
+      status.textContent = (isResend ? "✓ Re-sent to customer." : "✓ Sent to customer.") + attachedBit;
       status.dataset.kind = "ok";
     }
     render(data.invoice);
@@ -1745,8 +1780,11 @@ function renderLetterCard(inv) {
     document.execCommand("insertText", false, text);
   });
 
-  el.save.addEventListener("click", async function () {
-    if (!currentInvoice) return;
+  // One save path for both the button and the switch. Whatever is in the
+  // editor right now is what gets stored — the switch is not a separate
+  // setting from the text it applies to.
+  async function saveLetter(reason) {
+    if (!currentInvoice) return false;
     var payload = {
       letter: {
         enabled: el.enabled.checked,
@@ -1755,9 +1793,10 @@ function renderLetterCard(inv) {
       }
     };
     if (payload.letter.enabled && !payload.letter.body.trim()) {
-      el.status.textContent = "Nothing to attach - write the letter first, or untick the box.";
+      el.enabled.checked = false;
+      el.status.textContent = "Nothing to attach - write the letter first, then tick the box.";
       el.status.dataset.kind = "error";
-      return;
+      return false;
     }
     var wasLabel = el.save.textContent;
     el.save.disabled = true;
@@ -1774,17 +1813,31 @@ function renderLetterCard(inv) {
       currentInvoice = data.invoice;
       renderLetterCard(data.invoice);
       el.status.textContent = payload.letter.enabled
-        ? "Saved - this letter will be attached when the invoice is sent."
+        ? "Saved - this letter WILL be attached when the invoice is sent."
         : "Saved. Not attached - tick Attach to this invoice to send it.";
       el.status.dataset.kind = "ok";
+      return true;
     } catch (err) {
-      el.status.textContent = err.message || "Failed.";
+      el.status.textContent = (err.message || "Failed.") +
+        (reason === "toggle" ? " The switch was not saved." : "");
       el.status.dataset.kind = "error";
+      // Put the switch back to whatever the record actually says, so it
+      // never shows a state the server did not accept.
+      el.enabled.checked = Boolean(currentInvoice && currentInvoice.letter && currentInvoice.letter.enabled);
+      return false;
     } finally {
       el.save.disabled = currentInvoice && currentInvoice.status === "void";
       el.save.textContent = wasLabel;
     }
-  });
+  }
+
+  el.save.addEventListener("click", function () { saveLetter("button"); });
+
+  // The switch saves itself. It reads as a switch, so ticking it and
+  // hitting Send is the natural sequence — and before this, that sent the
+  // invoice with no letter and said nothing. A control that looks live
+  // must be live.
+  el.enabled.addEventListener("change", function () { saveLetter("toggle"); });
 
   // Preview renders server-side from the SAVED record, so an unsaved
   // edit would preview stale text. Say so rather than open a stale PDF.

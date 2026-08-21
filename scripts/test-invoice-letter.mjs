@@ -149,6 +149,40 @@ for (const [label, body] of [
   );
 }
 
+// ---- 7. The send path cannot silently drop a letter -----------------
+// A ticked-but-unsaved "Attach to this invoice" box sent the invoice with
+// no letter and said nothing. Three guards now stand between that and a
+// customer; all three are pinned here.
+{
+  const src = readFileSync(path.join(ROOT, "server/invoice.js"), "utf8");
+  ok(
+    "the attach switch saves itself on change",
+    /el\.enabled\.addEventListener\("change"[\s\S]{0,120}saveLetter\("toggle"\)/.test(src)
+  );
+  ok(
+    "a failed toggle save reverts the switch to what the record says",
+    /el\.enabled\.checked = Boolean\(currentInvoice && currentInvoice\.letter && currentInvoice\.letter\.enabled\)/.test(src)
+  );
+  ok(
+    "send is blocked while the letter has unsaved changes",
+    /const dirty = editorBody !== String\(savedLetter\.body/.test(src) &&
+    /if \(dirty\) \{[\s\S]{0,400}return;/.test(src)
+  );
+  ok(
+    "the send confirmation states whether a letter is attached",
+    /willAttachLetter[\s\S]{0,300}No accompanying letter will be attached/.test(src)
+  );
+  ok(
+    "what shipped is reported from the server's answer, not the editor",
+    /data\.letterAttached \? " Letter attached\."/.test(src)
+  );
+  ok(
+    "the button and the switch share one save path",
+    /async function saveLetter\(reason\)/.test(src) &&
+    /el\.save\.addEventListener\("click", function \(\) \{ saveLetter\("button"\); \}\)/.test(src)
+  );
+}
+
 console.log(`\n${pass} passed, ${failures.length} failed`);
 if (failures.length) {
   for (const f of failures) console.error("  FAIL " + f);
