@@ -17,9 +17,8 @@ const fs = require("node:fs");
 const path = require("node:path");
 const {
   Document, Packer, Paragraph, TextRun, ImageRun,
-  Table, TableRow, TableCell, WidthType, ShadingType, BorderStyle,
-  AlignmentType, VerticalAlign, Footer, PageNumber,
-  PositionalTab, PositionalTabAlignment, PositionalTabRelativeTo, PositionalTabLeader
+  Table, TableRow, TableCell, WidthType, ShadingType, BorderStyle, TableLayoutType,
+  AlignmentType, VerticalAlign, Footer, SimpleField
 } = require("docx");
 
 // ---- Palette (matches letter-pdf.js / style.css :root) --------------
@@ -91,6 +90,11 @@ function letterheadRow() {
   return new Table({
     columnWidths: [leftW, rightW],
     width: { size: CONTENT_W, type: WidthType.DXA },
+    // FIXED, not the Word default of autofit. Without this a renderer is
+    // free to shrink columns to their content — which is exactly what a
+    // phone previewer did, collapsing the whole lockup to a third of the
+    // page. Declaring a width is not the same as enforcing one.
+    layout: TableLayoutType.FIXED,
     borders: NO_BORDERS,
     rows: [new TableRow({ children: [
       new TableCell({ width: { size: leftW, type: WidthType.DXA }, borders: NO_BORDERS,
@@ -123,6 +127,14 @@ function recipientBand() {
   return new Table({
     columnWidths: [leftW, rightW],
     width: { size: CONTENT_W, type: WidthType.DXA },
+    layout: TableLayoutType.FIXED,
+    // Table-level borders must be stated too. Setting them only on the
+    // cells leaves a renderer free to draw its own default grid, which
+    // is where the black box around the band came from.
+    borders: {
+      top: hair, bottom: hair, left: NO_BORDER, right: NO_BORDER,
+      insideHorizontal: NO_BORDER, insideVertical: NO_BORDER
+    },
     rows: [new TableRow({ children: [
       cell([
         label("PREPARED FOR"),
@@ -141,27 +153,48 @@ function recipientBand() {
 }
 
 // ---- Footer: repeats on every page, with the page count -------------
+//
+// Laid out as a borderless two-column table, not a positional tab. ptab
+// is valid OOXML and Word honours it, but several viewers ignore it and
+// run the two halves together into "pjllandservices.comPage of". A table
+// splits left from right in everything.
+//
+// PAGE / NUMPAGES are `w:fldSimple` with a cached result inside. Word
+// recalculates them on open; the cached value is what a viewer that does
+// not compute fields falls back to. (docx-preview drops cached results
+// entirely — verified with a probe — so page numbers look blank in the
+// dev render but are correct in Word.)
 function pjlFooter() {
+  const half = Math.round(CONTENT_W / 2);
+  const cell = (children, align) => new TableCell({
+    width: { size: half, type: WidthType.DXA },
+    borders: NO_BORDERS,
+    margins: { top: 0, bottom: 0, left: 0, right: 0 },
+    children: [new Paragraph({ children, alignment: align, spacing: { before: 0, after: 0 } })]
+  });
+
   return new Footer({
     children: [
       // Hairline above the footer text, as a paragraph border rather
       // than a table — a one-row table used as a rule misbehaves when
       // the footer reflows.
       para([], { border: { bottom: { style: BorderStyle.SINGLE, size: 4, color: RULE, space: 6 } }, after: 100 }),
-      para([
-        txt("PJL Land Services  ·  (905) 960-0181  ·  pjllandservices.com", { size: 15, color: MUTED }),
-        new TextRun({
-          children: [
-            new PositionalTab({
-              alignment: PositionalTabAlignment.RIGHT,
-              relativeTo: PositionalTabRelativeTo.MARGIN,
-              leader: PositionalTabLeader.NONE
-            }),
-            "Page ", PageNumber.CURRENT, " of ", PageNumber.TOTAL_PAGES
-          ],
-          font: BODY_FONT, size: 15, color: MUTED
-        })
-      ])
+      new Table({
+        columnWidths: [half, CONTENT_W - half],
+        width: { size: CONTENT_W, type: WidthType.DXA },
+        layout: TableLayoutType.FIXED,
+        borders: NO_BORDERS,
+        rows: [new TableRow({ children: [
+          cell([txt("PJL Land Services  ·  (905) 960-0181  ·  pjllandservices.com", { size: 15, color: MUTED })],
+            AlignmentType.LEFT),
+          cell([
+            txt("Page ", { size: 15, color: MUTED }),
+            new SimpleField("PAGE", "1"),
+            txt(" of ", { size: 15, color: MUTED }),
+            new SimpleField("NUMPAGES", "1")
+          ], AlignmentType.RIGHT)
+        ] })]
+      })
     ]
   });
 }
@@ -210,5 +243,24 @@ function build() {
   const out = outFlag !== -1 ? process.argv[outFlag + 1] : "PJL-letterhead-template.docx";
   const buf = await Packer.toBuffer(build());
   fs.writeFileSync(out, buf);
-  console.log(`✓  ${out}  (${(buf.length / 1024).toFixed(1)} KB)`);
+
+  // Embed Barlow Condensed so the file carries its own heading face.
+  // Word substitutes an unavailable font, and its pick for an unknown
+  // condensed sans is a serif — the template came out looking like Times
+  // on a machine without it installed. Embedding makes the document
+  // correct wherever it is emailed. Skipped, with a warning, if the TTF
+  // is missing: a template with the wrong heading font still beats no
+  // template.
+  const ttf = path.resolve(__dirname, "..", "server", "assets", "fonts", "BarlowCondensed-Bold.ttf");
+  if (fs.existsSync(ttf)) {
+    const { execFileSync } = require("node:child_process");
+    execFileSync(process.execPath, [
+      path.join(__dirname, "embed-docx-font.js"), out, HEAD_FONT, ttf, "--bold"
+    ], { stdio: "inherit" });
+  } else {
+    console.warn(`!  ${ttf} not found — heading font not embedded.`);
+  }
+
+  const finalSize = fs.statSync(out).size;
+  console.log(`✓  ${out}  (${(finalSize / 1024).toFixed(1)} KB)`);
 })();
