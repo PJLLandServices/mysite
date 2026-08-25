@@ -321,10 +321,15 @@ function blankProperty() {
     commPrefs: {
       seasonalRemindersSMS: true,
       seasonalRemindersEmail: true,
+      // Review-request emails are their own consent channel (Jul 2026) —
+      // opting out of seasonal reminders doesn't kill review asks and
+      // vice versa, so the flag and its token get their own slots.
+      reviewRequestsEmail: true,
       optOutTokens: {
         seasonalSMS: null,
         seasonalEmail: null,
-        seasonalAll: null
+        seasonalAll: null,
+        reviewEmail: null
       }
     },
     // Bulk-operations soft state (admin CRM § Bulk operations).
@@ -503,13 +508,24 @@ function hydrate(p) {
     seasonalOutreach: (p?.seasonalOutreach && typeof p.seasonalOutreach === "object")
       ? p.seasonalOutreach
       : {},
+    // This block is rebuilt key by key, so anything missing from the
+    // list is DROPPED on every read — and readAll() writes hydrated
+    // records back, so an omission doesn't just hide a stored value,
+    // it deletes it. `reviewRequestsEmail` + `optOutTokens.reviewEmail`
+    // were missing until 2026-08-25: a review-email unsubscribe was
+    // erased on the next read (re-subscribing the customer) and the
+    // token in every review email already sent went dead. Keep this in
+    // step with COMM_PREF_KEYS below, and with the token slots
+    // mintOptOutTokensIfMissing() writes.
     commPrefs: {
       seasonalRemindersSMS: incomingCommPrefs.seasonalRemindersSMS !== false,
       seasonalRemindersEmail: incomingCommPrefs.seasonalRemindersEmail !== false,
+      reviewRequestsEmail: incomingCommPrefs.reviewRequestsEmail !== false,
       optOutTokens: {
         seasonalSMS: typeof incomingTokens.seasonalSMS === "string" ? incomingTokens.seasonalSMS : null,
         seasonalEmail: typeof incomingTokens.seasonalEmail === "string" ? incomingTokens.seasonalEmail : null,
-        seasonalAll: typeof incomingTokens.seasonalAll === "string" ? incomingTokens.seasonalAll : null
+        seasonalAll: typeof incomingTokens.seasonalAll === "string" ? incomingTokens.seasonalAll : null,
+        reviewEmail: typeof incomingTokens.reviewEmail === "string" ? incomingTokens.reviewEmail : null
       }
     },
     deletedAt: typeof p?.deletedAt === "string" ? p.deletedAt : null,
@@ -1731,6 +1747,61 @@ async function setSeasonalCommPref(propertyId, type, value) {
   return target;
 }
 
+// ---- Untrusted-patch sanitation for the consent flags ---------------
+//
+// The admin property page sends eligibility + comm prefs on the same
+// PATCH as the rest of the profile. The route can't pass them straight
+// to update(): `commPrefs.optOutTokens` are unsubscribe-link secrets
+// that must never be settable from a request body, and a consent flag
+// needs a coercion that respects BOTH directions.
+
+// Keys a client is allowed to set. optOutTokens is deliberately absent.
+const ELIGIBILITY_KEYS = ["springOpening", "fallClosing"];
+const COMM_PREF_KEYS = ["seasonalRemindersSMS", "seasonalRemindersEmail", "reviewRequestsEmail"];
+
+// `false` is the meaningful value here — it IS the opt-out — so the
+// usual Boolean() coercion is the wrong tool: Boolean("false") is true,
+// which would silently re-subscribe someone who just asked to be left
+// alone. Take real booleans and the two spellings a form encoder can
+// produce; throw on anything else rather than guessing a consent state.
+function consentFlag(value, label) {
+  if (value === true || value === "true") return true;
+  if (value === false || value === "false") return false;
+  const err = new Error(`${label} must be true or false.`);
+  err.code = "BAD_CONSENT_FLAG";
+  throw err;
+}
+
+// Returns only the keys actually present in the payload, so a partial
+// patch stays partial and update()'s one-level merge preserves the rest.
+// Throws BAD_CONSENT_FLAG on an unparseable value.
+function sanitizeSeasonalConsent(payload) {
+  const src = (payload && typeof payload === "object") ? payload : {};
+  const out = {};
+
+  if (src.seasonalEligibility && typeof src.seasonalEligibility === "object") {
+    const elig = {};
+    for (const key of ELIGIBILITY_KEYS) {
+      if (Object.prototype.hasOwnProperty.call(src.seasonalEligibility, key)) {
+        elig[key] = consentFlag(src.seasonalEligibility[key], key);
+      }
+    }
+    if (Object.keys(elig).length) out.seasonalEligibility = elig;
+  }
+
+  if (src.commPrefs && typeof src.commPrefs === "object") {
+    const prefs = {};
+    for (const key of COMM_PREF_KEYS) {
+      if (Object.prototype.hasOwnProperty.call(src.commPrefs, key)) {
+        prefs[key] = consentFlag(src.commPrefs[key], key);
+      }
+    }
+    if (Object.keys(prefs).length) out.commPrefs = prefs;
+  }
+
+  return out;
+}
+
 // Toggle a single seasonal eligibility flag (springOpening / fallClosing).
 // When false, the property is excluded from outreach candidates lists
 // entirely for that season (not just opted out — it's marked as "this
@@ -1808,5 +1879,6 @@ module.exports = {
   setSeasonalOptOut,
   setSeasonalCommPref,
   setSeasonalEligibility,
+  sanitizeSeasonalConsent,
   auditMissingCustomerName
 };
