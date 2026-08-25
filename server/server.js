@@ -7390,6 +7390,18 @@ async function handleApi(req, res, pathname) {
         }
         sanitized.seasonalPricing = sp;
       }
+      // Seasonal outreach consent (feature-seasonal-outreach-brief.md
+      // §3.1 + §3.4). The property page sends `seasonalEligibility` and
+      // `commPrefs` on this same PATCH, but neither key was in the
+      // allow-list above — so every Save profile dropped them in
+      // silence, the save reported success, and populateForm() redrew
+      // the boxes from the unchanged record. Patrick could not opt a
+      // property out of spring/fall reminders from the CRM at all; the
+      // only working opt-out was the customer's own unsubscribe link.
+      // properties.sanitizeSeasonalConsent() keeps optOutTokens
+      // unsettable from a request body and rejects a flag it can't read
+      // rather than defaulting it to opted-in.
+      Object.assign(sanitized, properties.sanitizeSeasonalConsent(payload));
       let updated = await properties.update(id, sanitized);
       if (!updated) return sendJson(res, 404, { ok: false, errors: ["Property not found."] });
 
