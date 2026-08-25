@@ -156,18 +156,12 @@ body.sheet-open{overflow:hidden;}
   letter-spacing:-0.01em;
   text-transform:uppercase;
 }
-.lh-eyebrow{
-  font-size:11px;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;
-  color:var(--amber);
-  display:inline-flex;align-items:center;gap:6px;
-}
-.lh-eyebrow::before{content:'';display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--amber);}
 @media (max-width:768px){
   .lh-title-row{flex-direction:column;align-items:flex-start;gap:6px;margin-top:14px;}
   .lh-title{font-size:26px;}
 }
 
-/* ============ Doc row (Project / Controller / Date Created / Drawn By) ============ */
+/* ============ Doc row (Project / Controller / Date Revised / Drawn By) ============ */
 .doc-row{
   display:grid;grid-template-columns:repeat(4,1fr);gap:12px;
   margin-top:20px;
@@ -949,6 +943,35 @@ body.sheet-open{overflow:hidden;}
 .zsheet-delete:hover{background:rgba(192,58,44,0.06);border-color:var(--red);}
 .zsheet-delete:active{transform:scale(0.98);}
 
+/* ============ Notes on today's visit ============ */
+/* Ruled writing area that prints whether or not anything was typed: type it
+   before printing, or hand the crew a printed sheet with lines to fill in on
+   site. Round-trips through docMeta like the other editables. */
+.visit-notes{
+  margin-top:16px;
+  border:1px solid var(--border);
+  border-radius:10px;
+  background:var(--paper);
+  padding:12px 14px;
+  display:flex;flex-direction:column;gap:6px;
+}
+.visit-notes-label{
+  font-family:'Barlow Condensed',sans-serif;
+  font-size:11px;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;
+  color:var(--green);
+}
+.visit-notes-field{
+  display:block;
+  min-height:88px;
+  font-size:14px;
+  line-height:22px;
+  white-space:pre-wrap;
+  outline:none;
+  background:repeating-linear-gradient(to bottom,transparent 0 21px,var(--border) 21px 22px);
+}
+.visit-notes-field:empty::before{content:attr(data-placeholder);color:var(--text-muted);}
+.visit-notes-field:focus{background-color:var(--green-tint);}
+
 /* Footer note (legend / hints) */
 .sheet-footer{
   margin-top:24px;padding-top:14px;border-top:1px solid var(--border);
@@ -1020,7 +1043,6 @@ body.sheet-open{overflow:hidden;}
   .lh-contact .sched-print{font-size:9.5pt;}
   .lh-title-row{margin-top:10px;flex-direction:row;align-items:baseline;justify-content:space-between;}
   .lh-title{font-size:22pt;letter-spacing:0;}
-  .lh-eyebrow{font-size:8pt;}
 
   /* ===== Project metadata grid ===== */
   .doc-row{
@@ -1214,6 +1236,24 @@ body.sheet-open{overflow:hidden;}
     border-top:1px solid var(--green-pale);
   }
   .sheet-footer .legend{display:none;}
+
+  /* ===== Notes on today's visit =====
+     Always prints, ruled, and never splits across a page. The .editable is
+     hidden print-wide; the .sched-print mirror carries the text, promoted to
+     a block so typed line breaks render. */
+  .visit-notes{
+    break-inside:avoid;page-break-inside:avoid;
+    margin-top:14px;padding:10px 12px;
+    border:1px solid var(--border-strong);border-radius:8px;
+  }
+  .visit-notes-label{font-size:8.5pt;}
+  .visit-notes .sched-print{
+    display:block !important;
+    white-space:pre-wrap;
+    min-height:78pt;
+    font-size:10pt;line-height:16pt;
+    background:repeating-linear-gradient(to bottom,transparent 0 15pt,var(--border) 15pt 16pt);
+  }
 }
 </style>
 </head>
@@ -1250,10 +1290,9 @@ body.sheet-open{overflow:hidden;}
   </header>
   <div class="lh-title-row">
     <h1 class="lh-title">Irrigation Zone Schedule</h1>
-    <span class="lh-eyebrow">Field-ready · Customer-shareable</span>
   </div>
 
-  <!-- Project / Controller / Date Created / Drawn By -->
+  <!-- Project / Controller / Date Revised / Drawn By -->
   <section class="doc-row" aria-label="Document metadata">
     <div class="doc-cell">
       <span class="doc-cell-label">Project / Site</span>
@@ -1264,7 +1303,7 @@ body.sheet-open{overflow:hidden;}
       <span class="editable" contenteditable="true" data-print="doc-controller" data-placeholder="e.g. Hunter HPC-400 Hydrawise">Hunter HPC-400 Hydrawise</span>
     </div>
     <div class="doc-cell">
-      <span class="doc-cell-label">Date Created</span>
+      <span class="doc-cell-label">Date Revised</span>
       <span class="editable" contenteditable="true" data-print="doc-date" id="docDate" data-placeholder="YYYY-MM-DD">—</span>
     </div>
     <div class="doc-cell">
@@ -1366,6 +1405,13 @@ body.sheet-open{overflow:hidden;}
     <div class="add-zone-row">
       <button type="button" class="add-zone-btn" id="btnAddZoneInline">+ Add zone</button>
     </div>
+  </section>
+
+  <!-- Notes on today's visit -->
+  <section class="visit-notes" aria-label="Notes on today's visit">
+    <span class="visit-notes-label">Notes on Today&rsquo;s Visit</span>
+    <span class="editable visit-notes-field" contenteditable="true" data-print="visit-notes"
+          data-placeholder="What was checked, adjusted or flagged on site today…"></span>
   </section>
 
   <!-- Footer / legend -->
@@ -2781,9 +2827,9 @@ body.sheet-open{overflow:hidden;}
   document.querySelectorAll('[contenteditable="true"]').forEach(function(el){
     var mirror = document.createElement('span');
     mirror.className = 'sched-print';
-    mirror.textContent = el.textContent;
+    mirror.textContent = el.innerText;
     el.parentNode.insertBefore(mirror, el.nextSibling);
-    el.addEventListener('input', function(){ mirror.textContent = el.textContent; });
+    el.addEventListener('input', function(){ mirror.textContent = el.innerText; });
   });
 
   // ============ Print prep ============
@@ -3105,7 +3151,10 @@ body.sheet-open{overflow:hidden;}
   function readDocMeta(){
     var map = {};
     document.querySelectorAll('[contenteditable="true"][data-print]').forEach(function(el){
-      map[el.dataset.print] = (el.textContent || '').trim();
+      // innerText (not textContent) so newlines inside a multi-line field
+      // — the visit-notes block — survive the save/load round-trip.
+      var v = (el.innerText != null) ? el.innerText : (el.textContent || '');
+      map[el.dataset.print] = v.trim();
     });
     return map;
   }
