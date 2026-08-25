@@ -4,9 +4,24 @@
 //   node scripts/make-letter-template-docx.js [-o out.docx]
 //
 // Mirrors server/lib/letter-pdf.js: same palette, same lockup, same
-// recipient band, same footer. The difference is what happens after —
-// the PDF renderer is fed a finished letter, this is a blank Patrick
-// types into.
+// full-bleed recipient band, same footer. The difference is what happens
+// after — the PDF renderer is fed a finished letter, this is a blank
+// Patrick types into.
+//
+// FULL BLEED WITHOUT NEGATIVE INDENTS. The band has to run edge to edge
+// of the paper. The usual Word trick is a page-width table pulled left by
+// a negative `tblInd`, but table indent is unevenly supported (the dev
+// renderer ignores it outright, positive and negative — probed, not
+// assumed), and an unverifiable layout is how the first two versions of
+// this file went out wrong.
+//
+// So the page carries NO side margins at all. Every inset is explicit:
+//   - the default paragraph style indents body text by MARGIN, so what
+//     Patrick types sits where it should and new paragraphs inherit it;
+//   - tables are the full width of the paper and pad their outer cells
+//     by MARGIN, so their text lines up with the body while their
+//     shading runs to the edge.
+// Nothing depends on a property a renderer might skip.
 //
 // Fill-in points are the parenthesised placeholders. Everything else
 // (sender identity, GST registration, logo, footer) is fixed, so a
@@ -29,170 +44,171 @@ const RULE = "EFEDE3";
 const BAND = "F4F8EE";
 
 // ---- Geometry -------------------------------------------------------
-// DXA: 1440 per inch, 20 per point. US Letter, 40pt margins to match
-// the PDF's MARGIN_X.
+// DXA: 1440 per inch, 20 per point. US Letter; MARGIN matches the PDF's
+// 40pt but is applied as indents and padding, not as a page margin.
 const PT = 20;
 const PAGE_W = 12240;
 const PAGE_H = 15840;
 const MARGIN = 40 * PT;                    // 800
 const CONTENT_W = PAGE_W - MARGIN * 2;     // 10640
+const TOP_MARGIN = 40 * PT;
+const BOTTOM_MARGIN = 55 * PT;             // room for the footer band
 
-// Fonts. Barlow Condensed is PJL's heading face; Word has no fallback
-// chain, so a machine without it substitutes. Body text is Arial, which
-// is what Helvetica resolves to on Windows anyway.
 const HEAD_FONT = "Barlow Condensed";
 const BODY_FONT = "Arial";
 
 const NO_BORDER = { style: BorderStyle.NONE, size: 0, color: "auto" };
 const NO_BORDERS = { top: NO_BORDER, bottom: NO_BORDER, left: NO_BORDER, right: NO_BORDER,
                      insideHorizontal: NO_BORDER, insideVertical: NO_BORDER };
+const HAIR = { style: BorderStyle.SINGLE, size: 4, color: RULE };
 
 const txt = (text, o = {}) => new TextRun({
   text, font: o.font || BODY_FONT, size: o.size || 20,
   bold: !!o.bold, color: o.color || TEXT, characterSpacing: o.spacing || 0
 });
 
-const para = (runs, o = {}) => new Paragraph({
+// Paragraphs inside table cells must cancel the default style's indent,
+// or they inherit it on top of the cell padding and sit twice as far in.
+const cellPara = (runs, o = {}) => new Paragraph({
   children: Array.isArray(runs) ? runs : [runs],
-  spacing: { before: o.before || 0, after: o.after == null ? 0 : o.after, line: o.line },
+  spacing: { before: o.before || 0, after: o.after == null ? 0 : o.after },
   alignment: o.align,
-  border: o.border
+  indent: { left: 0, right: 0 }
 });
 
-// ---- Letterhead: title + sender on the left, logo on the right ------
+// ---- Letterhead: title + sender left, logo right --------------------
 function letterheadRow() {
   const logoPath = path.resolve(__dirname, "..", "server", "assets", "logo-dark.png");
   const logo = fs.existsSync(logoPath) ? fs.readFileSync(logoPath) : null;
 
-  const leftW = Math.round(CONTENT_W * 0.62);
-  const rightW = CONTENT_W - leftW;
+  const leftW = Math.round(PAGE_W * 0.62);
+  const rightW = PAGE_W - leftW;
 
   const left = [
-    // The title. Typed over per letter — this is the slot that reads
-    // "INVOICE" on an invoice.
-    para(txt("SUBJECT / TITLE", { font: HEAD_FONT, size: 60, bold: true, color: GREEN, spacing: 30 }),
-      { after: 60 }),
-    para(txt("PJL Land Services", { size: 20, bold: true }), { after: 20 }),
-    para(txt("1118 Cenotaph Blvd., Newmarket, ON  L3X 0A5", { size: 18, color: MUTED }), { after: 20 }),
-    para(txt("info@pjllandservices.com  ·  (905) 960-0181  ·  pjllandservices.com", { size: 18, color: MUTED }), { after: 20 }),
-    para(txt("GST/HST Reg. No. 757080940 RT0001", { size: 16, color: MUTED, spacing: 6 }))
+    // The title. Typed over per letter — the slot that reads "INVOICE"
+    // on an invoice and "SPRINKLER SYSTEM SCHEDULE" on the schedule.
+    cellPara(txt("SUBJECT / TITLE", { font: HEAD_FONT, size: 60, bold: true, color: GREEN, spacing: 30 }), { after: 60 }),
+    cellPara(txt("PJL Land Services", { size: 20, bold: true }), { after: 20 }),
+    cellPara(txt("1118 Cenotaph Blvd., Newmarket, ON  L3X 0A5", { size: 18, color: MUTED }), { after: 20 }),
+    cellPara(txt("info@pjllandservices.com  ·  (905) 960-0181  ·  pjllandservices.com", { size: 18, color: MUTED }), { after: 20 }),
+    cellPara(txt("GST/HST Reg. No. 757080940 RT0001", { size: 16, color: MUTED, spacing: 6 }))
   ];
 
   const right = logo
-    ? [para(new ImageRun({
+    ? [cellPara(new ImageRun({
         data: logo, type: "png",
         // 160pt wide at the PNG's own 1000x574 aspect, matching the PDF.
         transformation: { width: 213, height: 122 }
       }), { align: AlignmentType.RIGHT })]
-    : [para(txt("PJL LAND SERVICES", { font: HEAD_FONT, size: 28, bold: true, color: GREEN }),
+    : [cellPara(txt("PJL LAND SERVICES", { font: HEAD_FONT, size: 28, bold: true, color: GREEN }),
         { align: AlignmentType.RIGHT })];
 
   return new Table({
     columnWidths: [leftW, rightW],
-    width: { size: CONTENT_W, type: WidthType.DXA },
-    // FIXED, not the Word default of autofit. Without this a renderer is
-    // free to shrink columns to their content — which is exactly what a
-    // phone previewer did, collapsing the whole lockup to a third of the
-    // page. Declaring a width is not the same as enforcing one.
+    width: { size: PAGE_W, type: WidthType.DXA },
     layout: TableLayoutType.FIXED,
     borders: NO_BORDERS,
     rows: [new TableRow({ children: [
       new TableCell({ width: { size: leftW, type: WidthType.DXA }, borders: NO_BORDERS,
-        margins: { top: 0, bottom: 0, left: 0, right: 0 }, children: left }),
+        margins: { top: 0, bottom: 0, left: MARGIN, right: 0 }, children: left }),
       new TableCell({ width: { size: rightW, type: WidthType.DXA }, borders: NO_BORDERS,
-        margins: { top: 0, bottom: 0, left: 0, right: 0 },
+        margins: { top: 0, bottom: 0, left: 0, right: MARGIN },
         verticalAlign: VerticalAlign.TOP, children: right })
     ] })]
   });
 }
 
 // ---- Recipient band -------------------------------------------------
-// The green-tint block. Left column is the four fill-in lines Patrick
-// asked for; right column is the date. Hairline rules top and bottom
-// come from the cell borders rather than drawn lines.
+// Full bleed: the tint runs to both edges of the paper while its text
+// stays on the body's margin, because the table is page-width and the
+// outer cells carry the inset as padding.
+//
+// The column split matches letter-pdf.js — the date starts 326pt from
+// the paper's edge.
 function recipientBand() {
-  const leftW = Math.round(CONTENT_W * 0.62);
-  const rightW = CONTENT_W - leftW;
-  const hair = { style: BorderStyle.SINGLE, size: 4, color: RULE };
-  const cell = (children, w) => new TableCell({
+  const leftW = 326 * PT;                  // 6520
+  const rightW = PAGE_W - leftW;
+
+  const cell = (children, w, pad) => new TableCell({
     width: { size: w, type: WidthType.DXA },
     shading: { type: ShadingType.CLEAR, fill: BAND, color: "auto" },
-    borders: { top: hair, bottom: hair, left: NO_BORDER, right: NO_BORDER },
-    margins: { top: 200, bottom: 200, left: 0, right: 0 },
+    borders: { top: HAIR, bottom: HAIR, left: NO_BORDER, right: NO_BORDER },
+    margins: { top: 200, bottom: 200, left: pad.left, right: pad.right },
     children
   });
 
-  const label = (t) => para(txt(t, { size: 16, bold: true, color: MUTED, spacing: 28 }), { after: 60 });
+  const label = (t) => cellPara(txt(t, { size: 16, bold: true, color: MUTED, spacing: 28 }), { after: 60 });
 
   return new Table({
     columnWidths: [leftW, rightW],
-    width: { size: CONTENT_W, type: WidthType.DXA },
+    width: { size: PAGE_W, type: WidthType.DXA },
     layout: TableLayoutType.FIXED,
-    // Table-level borders must be stated too. Setting them only on the
-    // cells leaves a renderer free to draw its own default grid, which
-    // is where the black box around the band came from.
     borders: {
-      top: hair, bottom: hair, left: NO_BORDER, right: NO_BORDER,
+      top: HAIR, bottom: HAIR, left: NO_BORDER, right: NO_BORDER,
       insideHorizontal: NO_BORDER, insideVertical: NO_BORDER
     },
     rows: [new TableRow({ children: [
       cell([
         label("PREPARED FOR"),
         // Four lines, exactly as specified. Type over each one.
-        para(txt("(Name of Address)", { size: 22, bold: true }), { after: 20 }),
-        para(txt("(Address Street & Number)", { size: 20 }), { after: 20 }),
-        para(txt("(Town/City, Province) (Country)", { size: 20 }), { after: 20 }),
-        para(txt("(email)", { size: 18, color: MUTED }))
-      ], leftW),
+        cellPara(txt("(Name of Address)", { size: 22, bold: true }), { after: 20 }),
+        cellPara(txt("(Address Street & Number)", { size: 20 }), { after: 20 }),
+        cellPara(txt("(Town/City, Province) (Country)", { size: 20 }), { after: 20 }),
+        cellPara(txt("(email)", { size: 18, color: MUTED }))
+      ], leftW, { left: MARGIN, right: 0 }),
       cell([
         label("DATE"),
-        para(txt("(Date)", { size: 22, bold: true }))
-      ], rightW)
+        cellPara(txt("(Date)", { size: 22, bold: true }))
+      ], rightW, { left: 0, right: MARGIN })
     ] })]
   });
 }
 
 // ---- Footer: repeats on every page, with the page count -------------
 //
-// Laid out as a borderless two-column table, not a positional tab. ptab
-// is valid OOXML and Word honours it, but several viewers ignore it and
-// run the two halves together into "pjllandservices.comPage of". A table
-// splits left from right in everything.
+// Four columns: a margin spacer, the contact line, the page count, a
+// margin spacer. The separating rule is the top border of the two middle
+// cells, so it sits inset from the paper's edge exactly as it does on the
+// PDF — and it is a cell border rather than an empty bordered paragraph,
+// which Word is free to collapse.
 //
-// PAGE / NUMPAGES are `w:fldSimple` with a cached result inside. Word
-// recalculates them on open; the cached value is what a viewer that does
-// not compute fields falls back to. (docx-preview drops cached results
-// entirely — verified with a probe — so page numbers look blank in the
-// dev render but are correct in Word.)
+// PAGE / NUMPAGES are w:fldSimple with a cached result. Word recalculates
+// on open; the cached value is what a viewer that does not compute fields
+// falls back to. (The dev renderer drops cached results — probed — so the
+// numbers look blank there and are correct in Word.)
 function pjlFooter() {
   const half = Math.round(CONTENT_W / 2);
-  const cell = (children, align) => new TableCell({
-    width: { size: half, type: WidthType.DXA },
+  const spacer = () => new TableCell({
+    width: { size: MARGIN, type: WidthType.DXA },
     borders: NO_BORDERS,
     margins: { top: 0, bottom: 0, left: 0, right: 0 },
-    children: [new Paragraph({ children, alignment: align, spacing: { before: 0, after: 0 } })]
+    children: [cellPara([])]
+  });
+  const cell = (children, w, align) => new TableCell({
+    width: { size: w, type: WidthType.DXA },
+    borders: { top: HAIR, bottom: NO_BORDER, left: NO_BORDER, right: NO_BORDER },
+    margins: { top: 120, bottom: 0, left: 0, right: 0 },
+    children: [cellPara(children, { align })]
   });
 
   return new Footer({
     children: [
-      // Hairline above the footer text, as a paragraph border rather
-      // than a table — a one-row table used as a rule misbehaves when
-      // the footer reflows.
-      para([], { border: { bottom: { style: BorderStyle.SINGLE, size: 4, color: RULE, space: 6 } }, after: 100 }),
       new Table({
-        columnWidths: [half, CONTENT_W - half],
-        width: { size: CONTENT_W, type: WidthType.DXA },
+        columnWidths: [MARGIN, half, CONTENT_W - half, MARGIN],
+        width: { size: PAGE_W, type: WidthType.DXA },
         layout: TableLayoutType.FIXED,
         borders: NO_BORDERS,
         rows: [new TableRow({ children: [
+          spacer(),
           cell([txt("PJL Land Services  ·  (905) 960-0181  ·  pjllandservices.com", { size: 15, color: MUTED })],
-            AlignmentType.LEFT),
+            half, AlignmentType.LEFT),
           cell([
             txt("Page ", { size: 15, color: MUTED }),
             new SimpleField("PAGE", "1"),
             txt(" of ", { size: 15, color: MUTED }),
             new SimpleField("NUMPAGES", "1")
-          ], AlignmentType.RIGHT)
+          ], CONTENT_W - half, AlignmentType.RIGHT),
+          spacer()
         ] })]
       })
     ]
@@ -200,10 +216,15 @@ function pjlFooter() {
 }
 
 // ---- Body -----------------------------------------------------------
+// Ordinary paragraphs. They pick up the MARGIN indent from the default
+// style, as will every paragraph Patrick adds.
 function bodyBlock() {
-  const body = (t, o = {}) => para(txt(t, { size: 21, ...o }), { after: 200, line: 300 });
+  const body = (t) => new Paragraph({
+    children: [txt(t, { size: 21 })],
+    spacing: { before: 0, after: 200, line: 300 }
+  });
   return [
-    para([], { after: 240 }),
+    new Paragraph({ children: [], spacing: { after: 240 } }),
     body("Start the letter here."),
     body("Type as you normally would — paragraphs, bullets, bold and italic all behave the way Word behaves. Delete this block before sending."),
     body("The letterhead above, the footer and the page count are fixed. The four lines in the green band and the date are yours to fill in.")
@@ -217,20 +238,25 @@ function build() {
     description: "Editable letterhead template",
     styles: {
       default: {
-        document: { run: { font: BODY_FONT, size: 21, color: TEXT } }
+        document: {
+          run: { font: BODY_FONT, size: 21, color: TEXT },
+          // The page has no side margins — this indent is what keeps body
+          // text off the paper's edge, and new paragraphs inherit it.
+          paragraph: { indent: { left: MARGIN, right: MARGIN } }
+        }
       }
     },
     sections: [{
       properties: {
         page: {
           size: { width: PAGE_W, height: PAGE_H },
-          margin: { top: MARGIN, right: MARGIN, bottom: 1100, left: MARGIN }
+          margin: { top: TOP_MARGIN, right: 0, bottom: BOTTOM_MARGIN, left: 0 }
         }
       },
       footers: { default: pjlFooter() },
       children: [
         letterheadRow(),
-        para([], { after: 200 }),
+        new Paragraph({ children: [], spacing: { after: 200 } }),
         recipientBand(),
         ...bodyBlock()
       ]
@@ -247,10 +273,7 @@ function build() {
   // Embed Barlow Condensed so the file carries its own heading face.
   // Word substitutes an unavailable font, and its pick for an unknown
   // condensed sans is a serif — the template came out looking like Times
-  // on a machine without it installed. Embedding makes the document
-  // correct wherever it is emailed. Skipped, with a warning, if the TTF
-  // is missing: a template with the wrong heading font still beats no
-  // template.
+  // on a machine without it installed.
   const ttf = path.resolve(__dirname, "..", "server", "assets", "fonts", "BarlowCondensed-Bold.ttf");
   if (fs.existsSync(ttf)) {
     const { execFileSync } = require("node:child_process");
@@ -261,6 +284,5 @@ function build() {
     console.warn(`!  ${ttf} not found — heading font not embedded.`);
   }
 
-  const finalSize = fs.statSync(out).size;
-  console.log(`✓  ${out}  (${(finalSize / 1024).toFixed(1)} KB)`);
+  console.log(`✓  ${out}  (${(fs.statSync(out).size / 1024).toFixed(1)} KB)`);
 })();
